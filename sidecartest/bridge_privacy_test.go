@@ -10,8 +10,11 @@
 //   - I-18: the contract fields the bridge adds to connect, CreateContract.window_delegation and C13's seals in
 //     StoredContract, are §2.8's connect-1, and the guard's map says so.
 //
-// After C6a's drop, public exits refuse 100.64/10 (the public-exits assert) is connect's own test today (BRIDGE-M4-03),
-// and the pin rows through real links wait for a sender's links here; both are in the task's report.
+//   - CC2 on a sender's real link: every frame its window client and the host exchanged is sealed;
+//   - public-exits: after C6a's drop a public exit refuses 100.64/10 and RFC 1918 destinations, while the release
+//     before, counting only, carries the overlay flow.
+//
+// The pin rows through real links (§22.7's flow-pins) are in the task's report.
 
 package sidecartest_test
 
@@ -187,5 +190,100 @@ func TestBridgeContractFieldsAreConnect1(t *testing.T) {
 		return strings.HasPrefix(strings.TrimSpace(line), "WindowDelegation:") && strings.Contains(line, "connect-1")
 	}) {
 		t.Error("the guard's map files WindowDelegation under no connect-1")
+	}
+}
+
+// CC2 on a sender's real link (§17.5's links row: Required, PostQuantumEncryption): every frame the link's window
+// client and the host exchanged is sealed, and the scan finds neither the connection's canary nor the host's address
+// in any capture.
+func TestBridgeSenderLinkFramesAreSealed(t *testing.T) {
+	net := sidecartest.NewNet(t.Context(), nil)
+	defer net.Close()
+	world := sidecartest.NewBridgeNet(t, net, nil)
+	defer world.Close()
+	hostDevice := world.AddDevice("host")
+	senderDevice := world.AddDevice("sender")
+	host := world.StartHost(hostDevice, &sidecartest.BridgeNetHostSettings{Address: netip.MustParseAddr("100.80.7.20")})
+	sender := world.StartSender(senderDevice, nil)
+	capture := net.Capture()
+	capture.Forbid("the host's address", []byte(host.Address.String()))
+	conn, err := sender.DialTcp(netip.AddrPortFrom(host.Address, host.Upstream.TcpPort()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := capture.Canary("bridge link payload")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if !host.Upstream.WaitFor(world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return bytes.Equal(accept.Bytes, payload) })
+	}) {
+		t.Fatal("the payload never reached the host")
+	}
+	carried := false
+	for _, windowClientId := range sender.WindowClientIds() {
+		carried = carried || 0 < len(capture.FrameSizes(windowClientId, host.Client.ClientId))
+	}
+	if !carried {
+		t.Fatal("no frame of the link crossed to the host: the scan reads nothing of it")
+	}
+	for _, finding := range capture.Scan() {
+		t.Errorf("%s", finding)
+	}
+}
+
+// §22.7's public-exits (C6a, §17.6, owner decision 132): once the release turns DropSharedAddressSpace on, a public
+// exit drops a Public flow to the overlay's 100.64/10 by SecurityPolicyReasonSharedAddressSpace, and RFC 1918 is
+// refused as not public, by the client's own policy before the exit sees it; neither dials anything. The release before,
+// which only counts the reason, carried the same overlay flow to its target, so the drop is what refuses it.
+func TestBridgePublicExitsRefuseOverlayAndPrivateDestinations(t *testing.T) {
+	net := sidecartest.NewNet(t.Context(), nil)
+	defer net.Close()
+	world := sidecartest.NewBridgeNet(t, net, nil)
+	defer world.Close()
+	subject := world.AddDevice("subject")
+	overlay, private := netip.MustParseAddr("100.80.7.20"), netip.MustParseAddr("192.168.9.10")
+	dropping := world.StartExit("dropping exit", true)
+	counting := world.StartExit("counting exit", false)
+	for _, exit := range []*sidecartest.BridgeNetExit{dropping, counting} {
+		exit.AddLan(overlay)
+		exit.AddLan(private)
+	}
+
+	before := world.OpenWindow("before the drop", subject, nil, &sidecartest.BridgeNetWindowArgs{Exit: counting})
+	conn, err := before.DialTcp(netip.AddrPortFrom(overlay, counting.Upstream.TcpPort()))
+	if err != nil {
+		t.Fatalf("the overlay flow before the drop: %v", err)
+	}
+	payload := []byte("before the drop")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if !counting.Upstream.WaitFor(world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return bytes.Equal(accept.Bytes, payload) })
+	}) {
+		t.Fatal("the overlay flow before the drop never reached its target")
+	}
+	if counting.ReasonCount(connect.SecurityPolicyReasonSharedAddressSpace, counting.Upstream.TcpPort()) == 0 {
+		t.Fatal("the release before the drop counted no overlay packet")
+	}
+
+	after := world.OpenWindow("after the drop", subject, nil, &sidecartest.BridgeNetWindowArgs{Exit: dropping})
+	if err := after.SendSyn(netip.AddrPortFrom(overlay, dropping.Upstream.TcpPort())); err != nil {
+		t.Fatal(err)
+	}
+	if !dropping.WaitReason(connect.SecurityPolicyReasonSharedAddressSpace, dropping.Upstream.TcpPort()) {
+		t.Fatal("the exit judged no overlay packet by the shared address space")
+	}
+	// a public client's own policy refuses RFC 1918 before the exit sees it; one it sent anyway, the exit refuses as
+	// not public
+	if err := after.SendSyn(netip.AddrPortFrom(private, dropping.Upstream.TcpPort())); err == nil &&
+		!dropping.WaitReason(connect.SecurityPolicyReasonNotPublic, dropping.Upstream.TcpPort()) {
+		t.Fatal("an RFC 1918 packet the client sent was judged nothing by the exit")
+	}
+	if dials := dropping.Dials(); 0 < len(dials) {
+		t.Fatalf("the dropping exit dialed %+v", dials)
 	}
 }

@@ -7,9 +7,10 @@
 // each on T2 here; server/controller/connect_bridge_m4_test.go runs the same builders on T3 over server's
 // CreateContract (BridgeNetSettings.Platform, through SetNetBridgeSettings):
 //
-//   - FS-38, its M4 part: a window client whose subject signed its delegation opens sockets over TCP, UDP and ICMP
-//     (the twin); one whose delegation names another key, has lapsed, names another target or another network opens
-//     none, each refused before data at the host's verify.
+//   - FS-38, its M4 part: a window client whose subject signed its delegation opens sockets over TCP, UDP and ICMP,
+//     and a sender's router reaches the host over a real link (the twin); one whose delegation names another key, has
+//     lapsed, names another target or another network opens none, each refused before data at the host's verify, and
+//     a sender's link refuses the operator's contracts naming another key as the host's (§17.9's target row).
 //   - FS-38's forged case, the operator's (T2 alone; its twin carries T3): a window client the operator minted, its
 //     contract correctly HMACed under the host's provide secret and sealed to claim subject S, opens no socket over
 //     TCP, UDP or ICMP, whether it carries no delegation, one the operator signed, or S's own delegation of another
@@ -18,11 +19,10 @@
 //   - FS-56 through the whole stack: a flow resolved and its dial held at the NAT's gate; S revoked by an admin's
 //     SidecarRevoke, which the component hands the role through Bridge.Revoke at its own position; the dial then
 //     completes into a reset: for TCP the source never sees a SYN-ACK and the upstream socket closes having carried no
-//     byte, for UDP the datagram is never written. An ICMP flow of a revoked subject is a silent drop. The twin, no
-//     revocation, forwards each.
+//     byte, for UDP the datagram is never written. An ICMP flow of a revoked subject is a silent drop. A sender's
+//     bridged TCP/25 gets its router's reset and enters no link. The twin, no revocation, forwards each.
 //
-// What these do not cover, each in the task's report: FS-38's sender row, a substituted target key, and FS-56's
-// bridged TCP/25, both on the sender's real link, and FS-56's ICMP case held mid-open, which connect exports no gate
+// What these do not cover, each in the task's report: FS-56's ICMP case held mid-open, which connect exports no gate
 // for (BRIDGE-M4-02's report), so the ICMP case revokes an answered flow instead. FI-11's oracle is TEST-M4-01's and
 // unbuilt; FsBridgePathIntegrity stands in for its bridge half.
 
@@ -244,7 +244,10 @@ func (self *fsBridgeFlows) expectRefused(payload string) error {
 func Fs38ValidDelegation(net *Net) *Schedule {
 	world := newFsBridgeWorld()
 	return fsBridgeSchedule("FS-38", "", world,
-		fsBridgeSetup(world, "subject"),
+		fsBridgeSetup(world, "subject", "sender"),
+		fsBridgeDo("sender", world, func() error {
+			return fs38SenderRow(world, false)
+		}),
 		fsBridgeDo("window", world, func() error {
 			subject := world.subjects["subject"]
 			window := world.world.OpenWindow("fs38 window", subject, world.host, nil)
@@ -286,7 +289,12 @@ func Fs38DelegationRefusals(net *Net) *Schedule {
 			delegation.NetworkId = bytes.Repeat([]byte{0x38}, len(delegation.NetworkId))
 		}},
 	}
-	steps := []*Step{fsBridgeSetup(world, "subject")}
+	steps := []*Step{
+		fsBridgeSetup(world, "subject", "sender"),
+		fsBridgeDo("sender", world, func() error {
+			return fs38SenderRow(world, true)
+		}),
+	}
 	for _, refusal := range cases {
 		steps = append(steps, fsBridgeDo("window", world, func() error {
 			window := world.world.OpenWindow("fs38 "+refusal.name, world.subjects["subject"], world.host, &sidecartest.BridgeNetWindowArgs{Edit: refusal.edit})
@@ -297,7 +305,7 @@ func Fs38DelegationRefusals(net *Net) *Schedule {
 			return nil
 		}))
 	}
-	return fsBridgeSchedule("FS-38", "a window client whose delegation names another key, has lapsed, or names another target or network opens no socket", world, steps...)
+	return fsBridgeSchedule("FS-38", "a window client whose delegation names another key, has lapsed, or names another target or network opens no socket, and a sender's link refuses a contract naming another key as its host's", world, steps...)
 }
 
 // FS-38's forged case: the operator's window clients, each contract minted to claim S, open nothing.
@@ -393,6 +401,101 @@ func fsBridgeOperatorKey() ed25519.PrivateKey {
 	return sidecartest.BridgeFixtureIdentityKey(0x0e)
 }
 
+// FS-38's sender row (§17.9's target row) on a sender's real link to the host: its router carries a TCP connection
+// to the host's address over a link whose window client the generator wrapper signed for by the sender's identity key
+// and holds to the host's bound key. Honest, the payload reaches the host's service, the host admits the window
+// client as the sender, and no contract is refused. substituted, the operator answers every contract with one naming
+// another key as the host's, correctly HMACed: the sender's check refuses it, a Trust status, the connection never
+// opens, and the host decides no flow of the sender's window clients and dials nothing.
+func fs38SenderRow(world *fsBridgeWorld, substituted bool) error {
+	host := world.host
+	settings := &sidecartest.BridgeNetSenderSettings{}
+	if substituted {
+		settings.SubstitutedTargetKey = sidecartest.BridgeFixtureIdentityKey(0x38).Public().(ed25519.PublicKey)
+	}
+	sender := world.world.StartSender(world.subjects["sender"], settings)
+	dialCount := len(host.Dials())
+	address := netip.AddrPortFrom(host.Address, host.Upstream.TcpPort())
+	if substituted {
+		ctx, cancel := context.WithCancel(world.world.Net().Context())
+		dialed := make(chan error, 1)
+		go func() {
+			conn, err := sender.DialTcpContext(ctx, address)
+			if conn != nil {
+				conn.Close()
+			}
+			dialed <- err
+		}()
+		refused := sender.WaitTrustRefusals(1)
+		cancel()
+		if err := <-dialed; err == nil {
+			return errors.New("the sender's connection opened on a contract naming another key as the host's")
+		}
+		if !refused {
+			return errors.New("no window client of the sender's refused the operator's contract")
+		}
+		for _, windowClientId := range sender.WindowClientIds() {
+			if decisions := host.Decisions(windowClientId); 0 < len(decisions) {
+				return fmt.Errorf("the host decided %d flows of a window client the sender's check held back", len(decisions))
+			}
+		}
+		if dials := host.Dials(); dialCount < len(dials) {
+			return fmt.Errorf("the host dialed %d upstream sockets", len(dials)-dialCount)
+		}
+		return nil
+	}
+	conn, err := sender.DialTcp(address)
+	if err != nil {
+		return fmt.Errorf("the sender's connection: %w", err)
+	}
+	payload := []byte("fs38 over the sender's link")
+	_, err = conn.Write(payload)
+	conn.Close()
+	if err != nil {
+		return err
+	}
+	if !host.Upstream.WaitFor(world.world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return bytes.Equal(accept.Bytes, payload) })
+	}) {
+		return errors.New("the sender's payload never reached the host's service")
+	}
+	if refused := sender.TrustRefusalCount(); refused != 0 {
+		return fmt.Errorf("the sender's check refused %d contracts naming the host's own key", refused)
+	}
+	for _, windowClientId := range sender.WindowClientIds() {
+		for _, principal := range host.Principals(windowClientId) {
+			if principal.Principal != nil && principal.Principal.Subject == connect.Id(sender.Device.SidecarId()) {
+				return nil
+			}
+		}
+	}
+	return errors.New("the host admitted no window client of the sender's as the sender")
+}
+
+// FS-56's bridged TCP/25 (plan-BRIDGE-small-readings #3): a sender's SYN to port 25 of the host's address, a link
+// entry, gets the router's reject client's reset and enters no link: the host decides nothing for it, and no link's
+// own local NAT dials it on the sender's network.
+func fs56BridgedSmtp(world *fsBridgeWorld) error {
+	host := world.host
+	sender := world.world.StartSender(world.subjects["smtp sender"], nil)
+	if conn, err := sender.DialTcp(netip.AddrPortFrom(host.Address, 25)); err == nil {
+		conn.Close()
+		return errors.New("a bridged TCP/25 connection opened")
+	}
+	for _, decision := range host.AllDecisions() {
+		if decision.To.Port() == 25 {
+			return fmt.Errorf("a bridged TCP/25 flow reached the host: %+v", decision)
+		}
+	}
+	if dials := sender.LocalDials(); 0 < len(dials) {
+		return fmt.Errorf("a link's local NAT dialed %v", dials)
+	}
+	if status := sender.Bridge.Status(); status.RejectSentCount == 0 {
+		return errors.New("the reject client sent nothing")
+	}
+	return nil
+}
+
 // FS-56's refusal: for TCP and for UDP a flow resolves and its dial is held at the NAT's gate; its subject is revoked
 // by an admin's SidecarRevoke, which reaches the role through Bridge.Revoke at its own position; the dial completes,
 // and the flow is reset before any byte reaches the target. For ICMP, an answered flow's subject is revoked, and its
@@ -400,7 +503,10 @@ func fsBridgeOperatorKey() ed25519.PrivateKey {
 func Fs56RevokedDuringDial(net *Net) *Schedule {
 	world := newFsBridgeWorld()
 	steps := []*Step{
-		fsBridgeSetup(world, "tcp subject", "udp subject", "icmp subject"),
+		fsBridgeSetup(world, "tcp subject", "udp subject", "icmp subject", "smtp sender"),
+		fsBridgeDo("smtp", world, func() error {
+			return fs56BridgedSmtp(world)
+		}),
 		fsBridgeDo("tcp", world, func() error {
 			return fs56HeldDial(world, "tcp subject", connect.IpProtocolTcp, true)
 		}),
