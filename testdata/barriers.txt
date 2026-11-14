@@ -450,6 +450,8 @@ barrier sidecar.generation.start.after sidecar_generation.go
 barrier sidecar.generation.start.before sidecar_generation.go
 barrier sidecar.generation.stop.after sidecar_generation.go
 barrier sidecar.generation.stop.before sidecar_generation.go
+barrier sidecar_config_follower.stand.after sidecar_config_follower.go
+barrier sidecar_config_follower.stand.before sidecar_config_follower.go
 barrier smtp.dkim_publish.after smtp_dkim_rotate.go
 barrier smtp.dkim_publish.before smtp_dkim_rotate.go
 barrier smtp.dkim_retire.after smtp_dkim_rotate.go
