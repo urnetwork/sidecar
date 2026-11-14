@@ -5,8 +5,10 @@
 // in one request, each version's files rebuilt and its new slot carried; a second read from the pins answers nothing;
 // a stream past the window answers behind and one past the reply's budget answers more, the next read going on from
 // there; a stream whose head does not extend the reader's pin is refused; the moved listing names only the streams a
-// commit raised past the value, and every ref for a value before a restart or a head cache that lost a ref. FS-86's
-// scale case and its DirectoryCostOracle run are the review phase's (RECORD-M6-24); FS-99's evs half is erase's.
+// commit raised past the value, reading only their heads, and every ref for a value before a restart or a head cache
+// that lost a ref; a slot served empty with no ERASE naming it alarms and refuses; and FS-99's evs half, a non-admin's
+// ERASE of another writer's entry slots refused SCOPE with every slot as it was. FS-86's scale case and its
+// DirectoryCostOracle run are the review phase's (RECORD-M6-24).
 
 package sidecar_test
 
@@ -18,6 +20,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -294,8 +297,9 @@ func TestEvsReadStreamsRefusesASlotEmptiedWithNoErase(t *testing.T) {
 	if _, err := world.world.cluster.PutIfMatch(ctx, key, stored.Etag, []byte{}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// a writer of its own stream, as the directory's daemons are, so the owner-bound read needs no receipt
 	readerId := sidecar.NewId()
-	if err := world.world.Grant(world.repoId, readerId, sidecartest.RecordStreamsScope{Read: true}); err != nil {
+	if err := world.world.Grant(world.repoId, readerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
 		t.Fatal(err)
 	}
 	alarms := []sidecar.SidecarEvent{}
@@ -311,5 +315,58 @@ func TestEvsReadStreamsRefusesASlotEmptiedWithNoErase(t *testing.T) {
 	}
 	if len(alarms) != 1 || alarms[0].EvsAlarm != sidecar.SidecarEvsAlarmTamper {
 		t.Fatalf("alarms %+v", alarms)
+	}
+}
+
+// FS-99's evs half (I-EVS-16): in a record-class repo, a writer with rw and no admin whose ERASE names another
+// writer's entry slots is refused SCOPE at arrival: every slot's ETag stands, the erasure ref holds nothing, and the
+// entry still reads. The directory's own legs (its kind, consent, holds and the CLOSURE and closure-upload forms) are
+// RECORD-M6's schedule.
+func TestEvsReadStreamsNonAdminErasureRefused(t *testing.T) {
+	world := newEvsStreamsWorld(t, 2)
+	writer, other := world.writers[0], world.writers[1]
+	world.append(t, writer, 1, 1)
+	ctx := t.Context()
+	admin := world.world.newClient(world.world.ownerId, sidecartest.NewFakeStore().Root())
+	first, err := sidecar.RecordStreamPath(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := admin.Repo(world.repoId).History(ctx, &sidecar.EvsReadArgs{RefName: sidecar.RecordStreamRefName(writer), Path: first})
+	if err != nil || len(history.Versions) != 1 || len(history.Versions[0].SlotIds) == 0 {
+		t.Fatalf("the entry's history %+v %v", history, err)
+	}
+	etags := map[sidecar.Id]string{}
+	keys := []*sidecar.EvsErasedKey{}
+	for _, slotId := range history.Versions[0].SlotIds {
+		stored, err := world.world.cluster.Get(ctx, evsservice.SlotKey(world.repoId, slotId))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored.Body.Close()
+		etags[slotId] = stored.Etag
+		keys = append(keys, &sidecar.EvsErasedKey{SlotId: slotId, KeyIndex: 0})
+	}
+	eraser := world.world.newClient(other, sidecartest.NewFakeStore().Root())
+	_, err = eraser.Repo(world.repoId).Erase(ctx, &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(), Keys: keys, Complete: true})
+	if !sidecar.IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE) {
+		t.Fatalf("a non-admin's erasure: %v", err)
+	}
+	for slotId, etag := range etags {
+		stored, err := world.world.cluster.Get(ctx, evsservice.SlotKey(world.repoId, slotId))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored.Body.Close()
+		if stored.Etag != etag {
+			t.Fatalf("slot %s rewritten by a refused erasure", slotId)
+		}
+	}
+	if erasures, err := admin.Repo(world.repoId).ReadErasures(ctx, 0); err != nil || len(erasures) != 0 {
+		t.Fatalf("the erasure ref after the refusal %+v %v", erasures, err)
+	}
+	answers, err := world.reader.Repo(world.repoId).ReadStreams(ctx, world.reads()[:1])
+	if err != nil || len(answers[0].Versions) != 1 || answers[0].Versions[0].Files[0].Erased {
+		t.Fatalf("the entry after the refused erasure %+v %v", answers, err)
 	}
 }
