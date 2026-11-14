@@ -9,7 +9,9 @@
 // (SidecarApi's transport, a gate's source) sends real requests with no socket. It answers at two origins, api's and
 // the issuer's (SidecarSettings.ApiUrl and AuthUrl), as one api process answers both names. Each request first takes a
 // fault plan of FaultOpHttp keyed by its path: ApplyThenDrop serves it and loses the answer, FailBeforeApply loses the
-// request, and the crash results serve it or not and never answer, until the request's context ends.
+// request, and the crash results serve it or not and never answer, until the request's context ends. A service origin a
+// test hands an engine's handler (ServeService), evs's or gkm's, is served by that handler on the same transport, as
+// the lb routes each service's host, so a sidecar whose clients dial with api's transport reaches the engines too.
 //
 // A bearer names a client of a network, which ClientToken and the core routes mint as a sidecar's strict_exp token
 // (§7.4), JWT-shaped so a sidecar reads its claims as it reads server's: a request without one known here, with one
@@ -160,6 +162,38 @@ type FakeApi struct {
 	refusedRoutes []string
 	// counts every client token minted, for a test waiting on one
 	mints *sidecar.MonitorValue[uint64]
+	// each service origin's handler, by its host (ServeService)
+	serviceHostHandlers map[string]http.Handler
+}
+
+// Serves the service origin of audience (ServiceOrigin) through handler on this api's transport, as the lb routes the
+// service's host to its block; nil stops serving it. Requests to it take no fault plan of api's: the service's own
+// stores and barriers fault it.
+func (self *FakeApi) ServeService(audience string, handler http.Handler) {
+	origin, err := url.Parse(self.ServiceOrigin(audience))
+	if err != nil {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.serviceHostHandlers == nil {
+		self.serviceHostHandlers = map[string]http.Handler{}
+	}
+	if handler == nil {
+		delete(self.serviceHostHandlers, origin.Host)
+		return
+	}
+	self.serviceHostHandlers[origin.Host] = handler
+}
+
+// The handler serving request's host as a service origin, nil for none.
+func (self *FakeApi) serviceHandler(request *http.Request) http.Handler {
+	if request.URL.Scheme != "https" {
+		return nil
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.serviceHostHandlers[request.URL.Host]
 }
 
 // Holds every request a strict_exp bearer makes to allowed, as route_authz.go's fail-closed allowlist does: a route
@@ -355,7 +389,15 @@ func (self fakeApiTransport) RoundTrip(request *http.Request) (*http.Response, e
 		}
 	}
 	if !served {
-		return nil, fmt.Errorf("no route to %s", request.URL.Host)
+		handler := self.api.serviceHandler(request)
+		if handler == nil {
+			return nil, fmt.Errorf("no route to %s", request.URL.Host)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		response := recorder.Result()
+		response.Request = request
+		return response, nil
 	}
 	if request.Body != nil {
 		body, err := io.ReadAll(request.Body)
