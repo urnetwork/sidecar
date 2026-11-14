@@ -160,6 +160,8 @@ type RestorePoint struct {
 	foreignPending bool
 	// by tool_use_id
 	holds map[string]*restoreHold
+	// the tool calls under way, by tool_use_id: each PreToolUse's time (ToolInFlight)
+	inFlight map[string]time.Time
 }
 
 // What a restore point needs: the daemon's clock and settings, git, and the OS's clock for ctimes.

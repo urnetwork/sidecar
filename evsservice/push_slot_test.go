@@ -3,9 +3,10 @@
 // SLOT_STALE past it; its own origin with other bytes alarms and is refused; another statement's object is refused
 // whatever the bytes, and so are an object with no origin and a re-seeded one; a retoken takes over the slot its
 // refused statement left once the settle age has passed, waiting on the fake clock when it has not and answering 503
-// when that clock turns unsure; and each of the takeover's five conditions failing alone refuses it. Then the record
-// before every slot, an ERASE's rewrite keeping the origin (14.2.6), 5h's deposit rule (QD-768), and schedules C and
-// D. The rows whose schedule holds an attempt between two of its steps are push_slot_testhooks_test.go's.
+// when that clock turns unsure; and each of the takeover's five conditions failing alone refuses it. Then QD-806's
+// step 6, the slots before a record that keeps no slot body, and a statement's retry taking the slots an attempt
+// left with no record; an ERASE's rewrite keeping the origin (14.2.6), 5h's deposit rule (QD-768), and schedules C
+// and D. The rows whose schedule holds an attempt between two of its steps are push_slot_testhooks_test.go's.
 
 package evsservice
 
@@ -494,9 +495,105 @@ func TestPushSlotTakeoverRefusesUnderAHold(t *testing.T) {
 	fixture.requireSlotOrigin(takeover.slotId, takeover.slotBody, takeover.refused)
 }
 
-// The rule EvsSlotTwin-StampBeforeRecord breaks (S4): step 6 appends the record before any slot, so an attempt whose
-// batch is never written stores no slot and no origin without a record evacuation would resolve.
-func TestPushSlotNotWrittenWithoutItsRecord(t *testing.T) {
+// The batch records under pb/ on the repo's cluster, each record's bytes as its batch holds them.
+func (self *pushFixture) batchRecords() [][]byte {
+	self.t.Helper()
+	records := [][]byte{}
+	infos, _, err := self.cluster.List(self.ctx, batchKeyPrefix, "", 1000)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	for _, info := range infos {
+		object, err := self.cluster.Get(self.ctx, info.Key)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		batchBytes, err := readAllLimited(object, 4*1024*1024)
+		object.Body.Close()
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		batch, err := sidecar.ParseEvsBatch(batchBytes)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		for _, place := range batch.Places {
+			records = append(records, batchBytes[place.GetOffset():place.GetOffset()+place.GetLength()])
+		}
+	}
+	return records
+}
+
+// QD-806's step 6 (question record-slot-104-push-record-slot-bodies): the slots, from the request's section 7, then
+// a record that keeps every section of the payload but section 7. A push of two new slots commits; its record at the
+// place its window entry names holds neither body nor any key of them, its payload is the request's with section 7
+// taken out, and it checks against its statement as a record; the slots hold the bodies under the statement's origin.
+func TestPushRecordKeepsNoSlotBody(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	plan := fixture.plan()
+	slotIds, slotBodies := []sidecar.Id{}, [][]byte{}
+	for _, label := range []string{"a", "b"} {
+		slotId, _, slotBody := checkTestSlot(t, "record keeps none "+label)
+		fixture.createWithSlot(plan, checkTestPath(label), slotId, slotBody)
+		slotIds, slotBodies = append(slotIds, slotId), append(slotBodies, slotBody)
+	}
+	body, origin := fixture.bodyAndOrigin(plan)
+	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.signerId), body), 1)
+	fixture.awaitStepEights()
+	for i, slotId := range slotIds {
+		fixture.requireSlotOrigin(slotId, slotBodies[i], origin)
+	}
+
+	window, err := EvsHeadWindow(fixture.head().Head)
+	if err != nil || len(window) != 1 {
+		t.Fatalf("window %v", err)
+	}
+	recordBytes, err := NewRecordLocator(fixture.host.Blobs, nil).ReadRecord(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, window[0].Place)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := sidecar.ParseEvsBatchRecord(recordBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statementBytes, payloadBytes, err := sidecar.ParseEvsPushRecordBody(record.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPayload, err := sidecar.EvsRecordPayload(body.GetPayload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(statementBytes, body.GetStatement()) || !bytes.Equal(payloadBytes, wantPayload) || len(payloadBytes) == len(body.GetPayload()) {
+		t.Fatalf("the record holds a payload of %d bytes, the request's %d", len(payloadBytes), len(body.GetPayload()))
+	}
+	statement, err := sidecar.ParseEvsStatement(statementBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked, err := sidecar.EvsCheckRecordPayload(statement, payloadBytes); err != nil || checked.SlotBodies != nil || len(checked.NewObjects) != 2 {
+		t.Fatalf("the record's payload: %v", err)
+	}
+	for _, stored := range fixture.batchRecords() {
+		for _, slotBody := range slotBodies {
+			slot, err := sidecar.EvsDecodeSlotObject(slotBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, slotKey := range slot.GetKeys() {
+				if bytes.Contains(stored, slotKey.GetWrapped()) {
+					t.Fatal("a batch record holds a new slot's key")
+				}
+			}
+		}
+	}
+}
+
+// QD-806's order, the slots before the record, where the record is never written: the attempt's slots stand under its
+// statement's origin with no record naming them (question push-record-no-slot-bodies-slots-before-record), and it
+// answers 503, nothing having reached a head. The statement's retry carries its bodies again, finds its own object of
+// equal bytes, appends its record and commits; the slot stands under the origin and the record keeps no body.
+func TestPushSlotsStandForTheRetryOfAStatementWhoseRecordWasNotWritten(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
 		Op: sidecartest.FaultOpPut, KeyPrefix: batchKeyPrefix, Result: sidecartest.FailBeforeApply, Repeat: -1,
@@ -506,9 +603,26 @@ func TestPushSlotNotWrittenWithoutItsRecord(t *testing.T) {
 	slotId, _, slotBody := checkTestSlot(t, "no record")
 	plan := fixture.plan()
 	fixture.createWithSlot(plan, checkTestPath("a"), slotId, slotBody)
-	requireRefusal(t, fixture.push(plan), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
-	if _, _, _, found := fixture.slotObject(slotId); found {
-		t.Fatal("a slot was stored with no record written")
+	body, origin := fixture.bodyAndOrigin(plan)
+	token := fixture.token(fixture.check.signerId)
+	requireRefusal(t, fixture.post(token, body), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	fixture.requireSlotOrigin(slotId, slotBody, origin)
+	if records := fixture.batchRecords(); len(records) != 0 {
+		t.Fatalf("%d records written", len(records))
+	}
+	if head := fixture.head(); !head.Absent() && head.Version() != 0 {
+		t.Fatalf("the head moved to %d", head.Version())
+	}
+
+	fixture.host.Blobs.Faults().Clear()
+	fixture.requireCommitted(fixture.post(token, body), 1)
+	fixture.requireSlotOrigin(slotId, slotBody, origin)
+	records := fixture.batchRecords()
+	if len(records) != 1 || bytes.Contains(records[0], slotBody) {
+		t.Fatalf("%d records after the retry, or one holding the slot's body", len(records))
+	}
+	if foreign, mismatch := fixture.slotCounts(); foreign != 0 || mismatch != 0 {
+		t.Fatalf("counted %v foreign and %v mismatched", foreign, mismatch)
 	}
 }
 

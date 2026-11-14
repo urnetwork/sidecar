@@ -369,6 +369,8 @@ func (self *Ingest) captureScanWithLock(ctx context.Context, run *ingestRun, red
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
 		return
 	}
+	// the run's worktree, watched for file events once its point holds one (ingest_fsevents.go)
+	self.watchRunRoot(ctx, run)
 	if scan == nil {
 		return
 	}

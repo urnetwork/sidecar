@@ -217,6 +217,8 @@ barrier evs.purge.delete.before evsservice/purge.go
 barrier evs.purge.holds.after evsservice/purge.go
 barrier evs.purge.holds.before evsservice/purge.go
 barrier evs.push.arrive evsservice/push.go
+barrier evs.push.record.after evsservice/push_commit.go
+barrier evs.push.record.before evsservice/push_commit.go
 barrier evs.push.refuse.after evsservice/refuse.go
 barrier evs.push.refuse.before evsservice/refuse.go
 barrier evs.push.slot_put.after evsservice/push_commit.go

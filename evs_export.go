@@ -888,7 +888,8 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 	if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 		return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
 	}
-	return EvsCheckPayload(statement.Statement, payload)
+	// as evs keeps it, with no slot body: keys come from slot reads alone (QD-806)
+	return EvsCheckRecordPayload(statement.Statement, payload)
 }
 
 // One entry of a push reconstructed into a blob written to sink, its oid checked by reconstruction, and the file's

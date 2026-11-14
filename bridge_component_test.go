@@ -11,6 +11,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -421,4 +422,36 @@ func TestTheGateWaitsForALaggingStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	world.events.waitFor(t, "the provider", func(event string) bool { return event == "provider" })
+}
+
+// A bridge_alarm raised for the daemon's part of the bridge reaches the Sidecar's events with its reason and the
+// sidecar it names; one with no reason is refused and raises nothing.
+func TestSidecarRaisesBridgeAlarms(t *testing.T) {
+	sidecar := newSidecarBase(nil, cheapKeychainSettings())
+	received := make(chan SidecarEvent, 4)
+	sidecar.AddEventCallback(func(event SidecarEvent) {
+		received <- event
+	})
+	if err := sidecar.RaiseBridgeAlarm(SidecarBridgeAlarmSharedBlock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if event := <-received; event.Kind != SidecarEventBridgeAlarm || event.BridgeAlarm != SidecarBridgeAlarmSharedBlock ||
+		event.SidecarId != nil {
+		t.Fatalf("shared_block: %+v", event)
+	}
+	named := NewId()
+	if err := sidecar.RaiseBridgeAlarm(SidecarBridgeAlarmPrincipalMismatch, &named); err != nil {
+		t.Fatal(err)
+	}
+	if event := <-received; event.BridgeAlarm != SidecarBridgeAlarmPrincipalMismatch || event.SidecarId == nil || *event.SidecarId != named {
+		t.Fatalf("principal_mismatch: %+v", event)
+	}
+	if err := sidecar.RaiseBridgeAlarm("", nil); !errors.Is(err, ErrSidecarEventInvalid) {
+		t.Fatalf("no reason: %v", err)
+	}
+	select {
+	case event := <-received:
+		t.Fatalf("a refused alarm was raised: %+v", event)
+	default:
+	}
 }

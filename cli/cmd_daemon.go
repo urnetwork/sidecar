@@ -711,6 +711,14 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Settings:       settings,
 		Log:            log,
 	})
+	// sidecar.json's order of enrollment, which decides who routes a block two networks hold (§17.4)
+	bridgeArgs.JoinOrder = func() []sidecar.Id {
+		order := []sidecar.Id{}
+		for _, record := range instance.Networks() {
+			order = append(order, record.NetworkId)
+		}
+		return order
+	}
 	network.bridges = newUrBridgeDaemon(ctx, bridgeArgs)
 	defer network.bridges.close()
 	if urlsErr != nil {
@@ -777,6 +785,8 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Restore: mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log}),
 		Home:    home,
 		Record:  settings.Record,
+		// §16.18's file events, which Ingest.FileEvents turns on (M6's, off by default): fsnotify on each run's worktree
+		FileWatch: urFsnotifyWatch,
 		// §16.7's Run announcement row: a run's start, activity and end to its network's team directory, under the
 		// claims value its session starts under (mcp's ingest_directory.go); a network with no directory hears nothing
 		Lifecycle: mcp.NewDirectoryLifecycle(&mcp.DirectoryLifecycleArgs{

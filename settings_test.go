@@ -135,6 +135,12 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				HarnessEvidenceTimeout:      10 * time.Minute,
 				HarnessEvidenceEventCount:   1024,
 				HarnessPromptingModes:       []string{"default", "acceptEdits", "plan"},
+				// §16.18's v1 capture (MCP-M6-03), off by default
+				FileEvents:              false,
+				FileEventDirectoryCount: 4096,
+				ModelCalls:              false,
+				TelemetryByteCount:      4 * 1024 * 1024,
+				ModelCallFieldByteCount: 128,
 			},
 		},
 		// §16.8

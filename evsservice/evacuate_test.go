@@ -149,13 +149,18 @@ func (self *evacuateFixture) commit(label string) (*protocol.EvsPlace, []byte) {
 	return place, recordBytes
 }
 
-// A push record of plan, built and signed but never posted.
+// A push record of plan, built and signed but never posted, its payload as evs keeps it, with no slot body (QD-806).
 func (self *evacuateFixture) unposted(plan *sidecar.EvsPushPlan) *sidecar.EvsBatchRecord {
+	self.t.Helper()
 	body := self.body(plan)
+	recordPayload, err := sidecar.EvsRecordPayload(body.Payload)
+	if err != nil {
+		self.t.Fatal(err)
+	}
 	return &sidecar.EvsBatchRecord{
 		Type: protocol.EvsBatchRecordType_EVS_BATCH_PUSH, RepoId: plan.RepoId, RefId: plan.RefId,
 		PushId: plan.PushId, SignerSidecarId: self.check.signerId, TimeMs: plan.TimeMs,
-		Body: sidecar.EvsPushRecordBody(body.Statement, body.Payload),
+		Body: sidecar.EvsPushRecordBody(body.Statement, recordPayload),
 	}
 }
 

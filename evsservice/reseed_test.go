@@ -212,6 +212,41 @@ func TestReseedCommitsAKeptPushAsAReseedRecord(t *testing.T) {
 	}
 }
 
+// A re-seeded push's record keeps no slot body either (QD-806), whatever the mirror sends: one kept from a record
+// that still held section 7 commits with its record's payload taken out, and one as evs serves its record now, with
+// no section 7 beside its new slot, is taken as a record and commits. Neither writes its slot, which comes last.
+func TestReseedRecordKeepsNoSlotBodyWhateverTheMirrorSends(t *testing.T) {
+	fixture := newReseedFixture(t)
+	slotId, slotObject, slot := checkTestSlot(t, "reseed carried")
+	carried := fixture.keptWithSlot(slotId, slotObject, slot, "a")
+	fixture.requireCommitted(fixture.reseed(carried), 1)
+	wantPayload, err := sidecar.EvsRecordPayload(carried.GetPayload())
+	if err != nil || len(wantPayload) == len(carried.GetPayload()) {
+		t.Fatalf("the mirror's payload carries no section 7: %v", err)
+	}
+	record := fixture.recordAt(fixture.check.refId, 1)
+	statementBytes, payloadBytes, err := sidecar.ParseEvsPushRecordBody(record.Body)
+	if err != nil || record.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED || !bytes.Equal(statementBytes, carried.GetStatement()) || !bytes.Equal(payloadBytes, wantPayload) {
+		t.Fatalf("the reseed record holds other bytes than the payload without section 7: %v", err)
+	}
+	if bytes.Contains(record.Body, slot) {
+		t.Fatal("the reseed record holds the slot's body")
+	}
+
+	servedId, servedObject, servedSlot := checkTestSlot(t, "reseed served")
+	served := fixture.keptWithSlot(servedId, servedObject, servedSlot, "b")
+	if served.Payload, err = sidecar.EvsRecordPayload(served.GetPayload()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.requireCommitted(fixture.reseed(served), 2)
+	if record := fixture.recordAt(fixture.check.refId, 2); bytes.Contains(record.Body, servedSlot) {
+		t.Fatal("the second reseed record holds a slot's body")
+	}
+	if indexes := fixture.slotIndexes(slotId); indexes != nil {
+		t.Fatalf("step 6 of a re-seeded push wrote its slot: keys %v", indexes)
+	}
+}
+
 // Outside a recovery the route takes nothing, and a token below admin is refused.
 func TestReseedIsClosedOutsideARecovery(t *testing.T) {
 	fixture := newReseedFixture(t)

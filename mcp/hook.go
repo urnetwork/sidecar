@@ -56,6 +56,8 @@ const (
 	HookEventStop              HookEventKind = "stop"
 	HookEventCompact           HookEventKind = "compact"
 	HookEventNotification      HookEventKind = "notification"
+	// A model call the harness reports: Codex's PostModelRequest (§16.18; MCP-M6-03).
+	HookEventModelCall HookEventKind = "model_call"
 	// An event the adapter's version reads only for coverage, or one it does not read at all (HookEvent.Unknown): it
 	// still binds.
 	HookEventOther HookEventKind = "other"

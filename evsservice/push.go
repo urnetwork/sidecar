@@ -162,8 +162,11 @@ type pushAttempt struct {
 	payloadBytes  []byte
 	payload       *sidecar.EvsCheckedPayload
 	formatRefusal *EvsCheckRefusal
-	needsFormat2  bool
-	receipts      []*protocol.EvsUploadReceipt
+	// a one-part push's payload as its record keeps it, set beside payload: payloadBytes with section 7, the slot
+	// bodies, taken out (QD-806), which step 6 writes to their slots before it appends the record
+	recordPayloadBytes []byte
+	needsFormat2       bool
+	receipts           []*protocol.EvsUploadReceipt
 	// format 2: the request's staged bytes as received, which ride the record's tail outside every hash, and the
 	// record's purge list once computed at its first write, which a rerun keeps (push_staged.go, push_purge.go)
 	staged []byte
@@ -328,6 +331,15 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 		refusal := newEvsCheckRefusal(EvsCheckReasonFormatUnsupported, "staged segments")
 		refusal.NeedsFormat = 2
 		attempt.formatRefusal = refusal
+	}
+	if attempt.payload != nil {
+		// the payload just checked, so only a fault here fails it
+		recordPayload, err := sidecar.EvsRecordPayload(body.GetPayload())
+		if err != nil {
+			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(attempt.pushId))
+			return nil, false
+		}
+		attempt.recordPayloadBytes = recordPayload
 	}
 
 	if !attempt.bind() {
