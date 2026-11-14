@@ -13,6 +13,9 @@
 //     advertises Hello feature bit 0, serving remote search (rpc_features.go);
 //   - responses: their replies, HelloResult, Pong, HeadCheckResult and HeadCheckProof, SEARCH_RESULT, and
 //     the Error any of them may be answered with, which carries a code and no data;
+//   - a StreamReject, an open's answer, which carries a code and no data as an Error does, so an opener
+//     whose StreamOpen rode control learns its DENIED over the reverse contract, control too where
+//     neither end reaches the other, rather than waiting out its call (FS-21);
 //   - any other request is refused PERMISSION_DENIED, a StreamOpen StreamReject{DENIED}, and anything
 //     else, a response, a Cancel or a stream frame, dropped and counted.
 //
@@ -79,6 +82,8 @@ func contractClassAdmits(class connectprotocol.ContractClass, messageType uint32
 		}
 	case protocol.MessageType_STREAM_OPEN:
 		return contractClassRejectStream
+	case protocol.MessageType_STREAM_REJECT:
+		return contractClassPass
 	}
 	if flags&EnvelopeFlagNoReply != 0 {
 		return contractClassDrop
