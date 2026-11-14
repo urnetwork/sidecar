@@ -9,6 +9,8 @@
 // The bridge's resolver passes the names its zone does not hold, a published app.<net>.<root> among them, to this
 // host's own resolvers (urLinuxResolverUpstream): resolved's uplinks where it runs, else /etc/resolv.conf's, never
 // resolved's stub, which would route the zone straight back to the bridge, and never an address routed into the tun.
+// Its queries ride connect's dialer, so while the default route rides the tun under exits they carry connect's egress
+// mark and keep the host's own route, as the daemon's transport does (QD-800).
 
 package main
 
@@ -26,6 +28,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/urnetwork/connect"
 	"golang.org/x/sys/unix"
 
 	"github.com/urnetwork/sidecar"
@@ -133,6 +136,10 @@ func urTunResolverStep(name string, resolver netip.Addr, zones []string) string 
 // The bridge's pass-through (device.BridgeResolverUpstream): query to each of this host's resolvers in turn until one
 // answers, over UDP, and over TCP when the answer is truncated. routed says which addresses the tun carries.
 func urLinuxResolverUpstream(routed func(address netip.Addr) bool) device.BridgeResolverUpstream {
+	// connect's egress machinery: the mark on each socket it makes while one is set, nothing otherwise. A dial of an
+	// address needs none of a strategy's settings, its TLS roots among them, so a zero ConnectSettings makes it, and the
+	// query's context bounds it
+	dialer := (&connect.ConnectSettings{}).NetDialer()
 	return func(ctx context.Context, query []byte) ([]byte, error) {
 		servers := urLinuxUpstreamServers(routed)
 		if len(servers) == 0 {
@@ -140,7 +147,7 @@ func urLinuxResolverUpstream(routed func(address netip.Addr) bool) device.Bridge
 		}
 		var lastErr error
 		for _, server := range servers {
-			answer, err := urDnsExchange(ctx, server, query)
+			answer, err := urDnsExchange(ctx, dialer, server, query)
 			if err == nil {
 				return answer, nil
 			}
@@ -171,9 +178,9 @@ func urLinuxUpstreamServers(routed func(address netip.Addr) bool) []netip.Addr {
 	return servers
 }
 
-// One DNS exchange with server on port 53 (RFC 1035 4.2): over UDP, again over TCP for an answer whose TC bit is set.
-// The answer must carry the query's id and the response bit.
-func urDnsExchange(ctx context.Context, server netip.Addr, query []byte) ([]byte, error) {
+// One DNS exchange with server on port 53 (RFC 1035 4.2) through dialer: over UDP, again over TCP for an answer whose TC
+// bit is set. The answer must carry the query's id and the response bit.
+func urDnsExchange(ctx context.Context, dialer *net.Dialer, server netip.Addr, query []byte) ([]byte, error) {
 	const dnsHeaderByteCount = 12
 	if len(query) < dnsHeaderByteCount {
 		return nil, errors.New("not a query")
@@ -185,7 +192,6 @@ func urDnsExchange(ctx context.Context, server netip.Addr, query []byte) ([]byte
 		}
 		return nil
 	}
-	dialer := &net.Dialer{}
 	deadline, hasDeadline := ctx.Deadline()
 	udp, err := dialer.DialContext(ctx, "udp", address)
 	if err != nil {
