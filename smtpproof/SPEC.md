@@ -498,9 +498,11 @@ Measured from the code with gnark v0.15.0, and held to these figures by `TestGad
 | ChaCha20 block, private key and nonce | 21,664 | 64 octets | |
 | AES-128-GCM keystream, Z2's nonce included | 11,665 | per 16 octets, about 729 an octet, plus the schedule once per key | about 11,600, 725 an octet |
 | ChaCha20 keystream, Z2's nonce included | 21,825 | per 64 octets, about 341 an octet | about 22,000, 340 an octet |
-| Z1, TLS 1.3, client keys only (21 compressions) | 515,322 | per π1 | |
-| Z1, TLS 1.3, both directions (29 compressions) | 708,498 | per later part, either suite | about 768,000 |
-| Z1, TLS 1.2 (25 compressions, SF's AES block and its schedule) | 669,147 | per part | about 675,000 |
+| Z1, TLS 1.3, both directions (29 compressions) | 708,498 | once a connection, in the key part, either suite | about 768,000 |
+| Z1, TLS 1.2 (25 compressions, SF's AES block and its schedule) | 669,147 | once a connection, in the key part | about 675,000 |
+| Z1's commitment, AES-128-GCM's keys and IVs (448 bits) and a blind | 3,026 | per part, booleans included | 3,261, DESIGN-DETAILS 3.2.2's prototype |
+| Z1's commitment, ChaCha20's keys and IVs (704 bits) and a blind | 4,133 | per part, booleans included | 4,453, the same |
+| A scan's carry (24 bits) and a blind | 1,186 | per carry, booleans included | 1,279, the same |
 | Z2-Z4, a pool block with the local table (π2's envelope) | 12,545 under AES, 25,345 under ChaCha20 | per block, about 55 an octet beyond the keystream | |
 | Z2-Z4, a pool block of literals only (π1, and π3's commands) | 11,969 under AES, 23,041 under ChaCha20 | per block, about 19 an octet beyond the keystream | |
 | Z5, the header scan with its keystream | 58,071 under AES, 33,236 under ChaCha20 | per 64 header octets, about 178 an octet beyond the keystream | well under AES's 725 an octet |
@@ -511,7 +513,7 @@ Some readings of these:
 
 - A key's length does not move Z1: AES's 16-octet key and ChaCha20's 32-octet key each come from one HMAC, so both suites' Z1 cost the same.
 - A compression over the constant initial state, as each HMAC pad state is, costs a little less than one over a private state, since gnark folds the constant terms.
-- Each part re-proves Z1 (D-SMTP-22), so a BDAT send spends 515,322 + 2 × 708,498 = 1,932,318 constraints on it under 1.3, a little under 11.3's 2.3M.
+- Z1 is proven once a connection, in the key part, which derives both directions and publishes a perfectly hiding commitment C to their keys and IVs; every later part opens C instead (DESIGN-DETAILS 3.2.3; QD-712). Where each part re-proved Z1, a BDAT send spent 515,322 + 2 × 708,498 = 1,932,318 constraints on it under 1.3; it now spends 708,498 once and an opening a part. The commitment's gadget adds a window's point by the complete law in six constraints, where DESIGN-DETAILS 3.2.2's prototype took seven.
 - H_sh and H_sf enter HMAC messages, and gnark's `Xor` asserts its inputs boolean, so 512 constraints of 1.3's Z1 are booleans on public wires the verifier computes. Marking those wires boolean without a constraint would save them; it is not done.
 - The 1.2 figure adds back what the twin's private IV costs over the real one: a 1.2 IV is the salt and 8 zero octets, so the real shape's nonce takes the explicit nonce without a XOR, 64 constraints a pool block.
 - The pool, header and server rows are each two test shapes a few blocks apart, Z1 left out, so a row is whole blocks: keystream, opening and what the octets are checked against. `TestRecordPoolCostIsSpecMds`, `TestHeaderScanCostIsSpecMds` and `TestReplyScanCostIsSpecMds` hold them. They are 1.3's; under 1.2 a pool block costs 64 fewer, as above.

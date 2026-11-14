@@ -297,11 +297,13 @@ func TestAKeySetRefusesAManifestOutOfShape(t *testing.T) {
 	// before anything reads a file it names
 	for name, edit := range map[string]func(manifest *keySetManifest){
 		"a hash that walks out of the cache": func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey.Sha256 = "../../outside" },
-		"an upper-case hash":                 func(manifest *keySetManifest) { manifest.Shapes[0].VerifyingKey.Sha256 = strings.ToUpper(manifest.Shapes[0].VerifyingKey.Sha256) },
-		"no proving key":                     func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey = nil },
-		"no contribution":                    func(manifest *keySetManifest) { manifest.Shapes[1].Contributions = nil },
-		"a shape twice":                      func(manifest *keySetManifest) { manifest.Shapes[1].Name = manifest.Shapes[0].Name },
-		"a phase 1 with no contribution":     func(manifest *keySetManifest) { manifest.Phase1[0].Contributions = nil },
+		"an upper-case hash": func(manifest *keySetManifest) {
+			manifest.Shapes[0].VerifyingKey.Sha256 = strings.ToUpper(manifest.Shapes[0].VerifyingKey.Sha256)
+		},
+		"no proving key":                 func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey = nil },
+		"no contribution":                func(manifest *keySetManifest) { manifest.Shapes[1].Contributions = nil },
+		"a shape twice":                  func(manifest *keySetManifest) { manifest.Shapes[1].Name = manifest.Shapes[0].Name },
+		"a phase 1 with no contribution": func(manifest *keySetManifest) { manifest.Phase1[0].Contributions = nil },
 	} {
 		keySet, _ := testKeySet(t)
 		encoded, err := os.ReadFile(filepath.Join(keySet.directory, keySetManifestName))

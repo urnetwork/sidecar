@@ -421,13 +421,23 @@ func TestZ1CircuitRefusesTheKeyThatOpensARecordBenignly(t *testing.T) {
 		substitute := testCloneWitness(witness)
 		substitute.clientKey[0] ^= 1
 		testSeal(t, statement, statement.clientRecords[0], substitute.clientKey, bytes.Clone(witness.clientIv), witness.clientPlaintexts[0])
+		// the key part publishes its own C, so the sidecar commits to the key it chose
+		forged, err := commitKeys(substitute.clientKey, substitute.clientIv, substitute.serverKey, substitute.serverIv, substitute.keyBlind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		statement.keyCommitment = encodeCommitment(forged)
 
 		quick := testQuickShape(c.leg.suites[0], false)
 		if err := testPartSolved(t, testCompileShape(t, quick), testPartAssignment(t, quick, statement, substitute)); err != nil {
 			t.Errorf("%s: the substitute did not open the record: %v", c.leg.name, err)
 		}
+		// the handshake's secret gives the honest key, whichever key the witness claims beside it
 		if err := testPartSolved(t, testCompileShape(t, c.full), testPartAssignment(t, c.full, statement, witness)); err == nil {
 			t.Errorf("%s: Z1 let the record through under the handshake's key", c.leg.name)
+		}
+		if err := testPartSolved(t, testCompileShape(t, c.full), testPartAssignment(t, c.full, statement, substitute)); err == nil {
+			t.Errorf("%s: Z1 let the record through under the substitute's commitment", c.leg.name)
 		}
 	}
 }

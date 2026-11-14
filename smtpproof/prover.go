@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"strconv"
 	"sync"
@@ -93,6 +94,10 @@ type proverRun struct {
 	result   *tlsHandshakeResult
 	preamble *sessionPreamble
 	session  *sessionStatement
+	// rho, drawn once for the connection, and C, the commitment to both directions' keys under it that
+	// part 1 publishes and every later part opens (DESIGN-DETAILS 3.2.2).
+	keyBlind      *big.Int
+	keyCommitment []byte
 
 	serverIn chan *proverServerEvent
 	records  []*proverServerRecord
@@ -211,6 +216,14 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	if self.session, err = newProverSessionStatement(result, self.preamble); err != nil {
 		return nil, err
 	}
+	if self.keyBlind, err = newCommitBlind("smtp_key_blind"); err != nil {
+		return nil, err
+	}
+	commitment, err := commitKeys(result.clientKey, result.clientIv, result.serverKey, result.serverIv, self.keyBlind)
+	if err != nil {
+		return nil, err
+	}
+	self.keyCommitment = encodeCommitment(commitment)
 	if result.version == tlsVersion13 {
 		if err := self.channel.DiscloseShts(ctx, result.shts); err != nil {
 			return nil, err
@@ -678,6 +691,10 @@ func (self *proverRun) prove(ctx context.Context, mode uint32, last bool, sealed
 		ServerRecordCount: uint64(len(self.records)),
 		Records:           raws,
 	}
+	// the key part publishes C; every later part opens the C the edge kept from it
+	if part.Index == 1 {
+		part.KeyCommitment = self.keyCommitment
+	}
 	if err := self.proveAndSubmit(ctx, part, self.covered, sealed, plaintexts); err != nil {
 		return err
 	}
@@ -713,6 +730,7 @@ func (self *proverRun) proveAgain(ctx context.Context) error {
 func (self *proverRun) proveAndSubmit(ctx context.Context, part *sidecar.SmtpProofPart, priorCount uint64, sealed []*tlsSealedRecord, plaintexts [][]byte) error {
 	statement := &partStatement{
 		session:                   self.session,
+		keyCommitment:             self.keyCommitment,
 		index:                     part.Index,
 		mode:                      part.Mode,
 		firstRecord:               part.FirstRecord,
@@ -730,6 +748,7 @@ func (self *proverRun) proveAndSubmit(ctx context.Context, part *sidecar.SmtpPro
 		clientIv:         self.result.clientIv,
 		serverKey:        self.result.serverKey,
 		serverIv:         self.result.serverIv,
+		keyBlind:         self.keyBlind,
 		clientPlaintexts: plaintexts,
 	}
 	if self.result.version == tlsVersion12 {

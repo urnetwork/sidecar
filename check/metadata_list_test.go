@@ -107,6 +107,13 @@ var metadataListAdditions = []metadataListAddition{
 		list:     "folded access log with its versioning lock (its rules stay sealed), each repo admin's add position and a removed one's removal position until a later base drops it, the newest RepoDelete's entry time, each EvsShare's signer, position and expiry",
 	},
 	{
+		// QD-798: the deletion row keeps its RepoDelete's signer too, already visible as the statement's signer, so
+		// only the wording changes, on the text QD-743's addition wrote
+		question: "acl-repo-delete-times-deletion-signer",
+		block:    "the newest RepoDelete's entry time, each EvsShare's signer",
+		list:     "the newest RepoDelete's entry time and signer, each EvsShare's signer",
+	},
+	{
 		// QD-746: a base's header names the repos its own config head change shrinks, which every verifier already
 		// held as those repos' holders_shrunk_at at the base's position, so only the wording changes
 		question: "team-m2-09-base-shrinks",

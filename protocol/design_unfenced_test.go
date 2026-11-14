@@ -1026,6 +1026,13 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "deleted_time_ms", number: 5, typeName: "int64"},
 		question: "acl-m2-06-access-log-positions",
 	},
+	// QD-798: the deletion row keeps its RepoDelete's signer, as every access-log row keeps its signer, which repo/'s
+	// deleted state names once the entry leaves the log's retention
+	{
+		message:  "AclRepoDeletionRow",
+		field:    testFenceField{name: "signer", number: 6, typeName: "bytes"},
+		question: "acl-repo-delete-times-deletion-signer",
+	},
 	{
 		message:  "Announcement",
 		field:    testFenceField{name: "pad", number: 14, typeName: "bytes"},
