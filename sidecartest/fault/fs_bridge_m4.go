@@ -384,7 +384,7 @@ func fsBridgeDelegationOf(world *fsBridgeWorld, window *sidecartest.BridgeNetWin
 		WindowClientId:        window.Client.ClientId.Bytes(),
 		WindowClientPublicKey: window.Client.Client.ClientKeyManager().PublicKey(),
 		TargetSidecarId:       world.host.Device.SidecarId().Bytes(),
-		NotAfterMs:            world.world.Net().Clock().Now().Add(time.Hour).UnixMilli(),
+		NotAfterMs:            world.world.Net().Clock().Now().Add(world.world.Settings().DelegationLifetime).UnixMilli(),
 	}
 }
 
