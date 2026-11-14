@@ -14,8 +14,42 @@ import (
 // fails, and returns every check failing there, so a mutation that breaks one check names one check.
 // An empty result is an honest connection.
 func Check(transcript *Transcript, witnesses map[int]*PartWitness) []*Failure {
-	run := &checkRun{transcript: transcript, witnesses: witnesses, shake: &handshake{preamble: transcript.Preamble}}
-	if err := checkPreambleForms(transcript.Preamble); err != nil {
+	return CheckWith(DefaultCheckSettings(), transcript, witnesses)
+}
+
+// The limits the checker reads a connection by (QD-702): protocol and format values, each set only by
+// DefaultCheckSettings to the value SPEC.md and DESIGN-DETAILS 3.2.5 state, so a caller that changes one
+// passes the whole.
+type CheckSettings struct {
+	// RFC 5321's: a local part, a domain and a label.
+	LocalMaxByteCount  int
+	DomainMaxByteCount int
+	LabelMaxByteCount  int
+	// DESIGN-DETAILS 3.2.5's: the records one part opens, the records a header block takes, and the
+	// least a header record holds, the block's last and any other.
+	PartRecordMaxCount           int
+	HeaderRecordMaxCount         int
+	HeaderRecordMinByteCount     int
+	HeaderLastRecordMinByteCount int
+}
+
+// A fresh value each call.
+func DefaultCheckSettings() *CheckSettings {
+	return &CheckSettings{
+		LocalMaxByteCount:            64,
+		DomainMaxByteCount:           255,
+		LabelMaxByteCount:            63,
+		PartRecordMaxCount:           64,
+		HeaderRecordMaxCount:         16,
+		HeaderRecordMinByteCount:     128,
+		HeaderLastRecordMinByteCount: 4,
+	}
+}
+
+// Check under the given settings.
+func CheckWith(settings *CheckSettings, transcript *Transcript, witnesses map[int]*PartWitness) []*Failure {
+	run := &checkRun{settings: settings, transcript: transcript, witnesses: witnesses, shake: &handshake{preamble: transcript.Preamble}}
+	if err := checkPreambleForms(settings, transcript.Preamble); err != nil {
 		return []*Failure{{Check: "preamble", Reason: err.Error()}}
 	}
 	for i, event := range transcript.Events {
@@ -55,6 +89,7 @@ type acceptedPart struct {
 }
 
 type checkRun struct {
+	settings   *CheckSettings
 	transcript *Transcript
 	witnesses  map[int]*PartWitness
 	shake      *handshake
@@ -248,8 +283,8 @@ func (self *checkRun) acceptPart(part *Part) (*acceptedPart, error) {
 		if finished {
 			return nil, errors.New("a part that opens a record after the last")
 		}
-		if 64 < len(part.Records) {
-			return nil, errors.New("more than 64 records in one part")
+		if self.settings.PartRecordMaxCount < len(part.Records) {
+			return nil, fmt.Errorf("more than %d records in one part", self.settings.PartRecordMaxCount)
 		}
 		for i, record := range part.Records {
 			recordType, _, payload, err := splitRecord(record)
@@ -300,7 +335,7 @@ func (self *checkRun) acceptPart(part *Part) (*acceptedPart, error) {
 		}
 	}
 	switch {
-	case accepted.opensFirst && (part.HeaderRecordCount < 1 || 16 < part.HeaderRecordCount):
+	case accepted.opensFirst && (part.HeaderRecordCount < 1 || uint32(self.settings.HeaderRecordMaxCount) < part.HeaderRecordCount):
 		return nil, fmt.Errorf("header_record_count %d", part.HeaderRecordCount)
 	case !accepted.opensFirst && part.HeaderRecordCount != 0:
 		return nil, errors.New("header_record_count away from the header block's first record")
@@ -359,14 +394,14 @@ func (self *checkRun) acceptPart(part *Part) (*acceptedPart, error) {
 	// lengths: each record a template can fill, header records their least, DATA's count
 	for i, r := range roles {
 		content := self.contentBytes(part.Records[i])
-		if !templateFits(r, preamble, content) {
+		if !templateFits(self.settings, r, preamble, content) {
 			return nil, fmt.Errorf("no template of record %d's length", accepted.seqs[i])
 		}
 		switch r {
 		case roleHeader:
-			least := 128
+			least := self.settings.HeaderRecordMinByteCount
 			if accepted.seqs[i] == headerFirst+uint64(accepted.k)-1 {
-				least = 4
+				least = self.settings.HeaderLastRecordMinByteCount
 			}
 			if content < least {
 				return nil, fmt.Errorf("a header record of %d octets", content)
@@ -481,7 +516,7 @@ func (self *checkRun) relation(accepted *acceptedPart) []*Failure {
 		}
 		switch r {
 		case roleEhlo, roleMail, roleRcpt, roleBdat, roleData:
-			if err := checkCommand(r, preamble, content); err != nil {
+			if err := checkCommand(self.settings, r, preamble, content); err != nil {
 				fail("Z4", err)
 			}
 		case roleHeader:
@@ -499,10 +534,10 @@ func (self *checkRun) relation(accepted *acceptedPart) []*Failure {
 			if ordinal == 1 {
 				firstEnd = len(header)
 			}
-			if err := checkHeaderSoFar(preamble, header, firstEnd); err != nil {
+			if err := checkHeaderSoFar(self.settings, preamble, header, firstEnd); err != nil {
 				fail("Z5", err)
 			} else if ordinal == uint64(accepted.k) {
-				if err := checkHeaderBlock(preamble, header); err != nil {
+				if err := checkHeaderBlock(self.settings, preamble, header); err != nil {
 					fail("Z5", err)
 				}
 			}

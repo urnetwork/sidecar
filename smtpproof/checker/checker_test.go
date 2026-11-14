@@ -175,34 +175,34 @@ func TestTheCheckerReadsTheHeaderBlockAsSpecDoes(t *testing.T) {
 		"Feedback-ID: n:c:token:urnetwork\r\n" +
 		"DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; d=net.root.example; s=s1; b=x\r\n" +
 		"\r\n"
-	if err := checkHeaderBlock(preamble, []byte(header)); err != nil {
+	if err := checkHeaderBlock(DefaultCheckSettings(), preamble, []byte(header)); err != nil {
 		t.Fatalf("an honest header block: %v", err)
 	}
 	for name, block := range map[string]string{
-		"From :":             strings.Replace(header, "From: ", "From : ", 1),
-		"a second From":      "From: <x@victim.example>\r\n" + header,
-		"a folded From":      strings.Replace(header, "example>\r\n", "example>\r\n <x@victim.example>\r\n", 1),
-		"a field behind .":   ".From: <x@victim.example>\r\n" + header,
-		"a bare LF":          strings.Replace(header, "X-UR-Ref", "X:\nX-UR-Ref", 1),
-		"an early end":       "X: y\r\n\r\n" + header,
-		"no Feedback-ID":     strings.Replace(header, "Feedback-ID: n:c:token:urnetwork\r\n", "", 1),
-		"another s=":         strings.Replace(header, "s=s1", "s=s2", 1),
-		"two addresses":      strings.Replace(header, "<alice@", "<a@b>, <alice@", 1),
-		"an address phrase":  strings.Replace(header, "Alice Example ", "x@victim.example ", 1),
-		"a lowercase from:":  strings.Replace(header, "From: ", "from: ", 1),
+		"From :":              strings.Replace(header, "From: ", "From : ", 1),
+		"a second From":       "From: <x@victim.example>\r\n" + header,
+		"a folded From":       strings.Replace(header, "example>\r\n", "example>\r\n <x@victim.example>\r\n", 1),
+		"a field behind .":    ".From: <x@victim.example>\r\n" + header,
+		"a bare LF":           strings.Replace(header, "X-UR-Ref", "X:\nX-UR-Ref", 1),
+		"an early end":        "X: y\r\n\r\n" + header,
+		"no Feedback-ID":      strings.Replace(header, "Feedback-ID: n:c:token:urnetwork\r\n", "", 1),
+		"another s=":          strings.Replace(header, "s=s1", "s=s2", 1),
+		"two addresses":       strings.Replace(header, "<alice@", "<a@b>, <alice@", 1),
+		"an address phrase":   strings.Replace(header, "Alice Example ", "x@victim.example ", 1),
+		"a lowercase from:":   strings.Replace(header, "From: ", "from: ", 1),
 		"a DKIM prefix twice": header[:len(header)-2] + "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; d=net.root.example; s=s1; \r\n\r\n",
 	} {
-		if err := checkHeaderBlock(preamble, []byte(block)); err == nil {
+		if err := checkHeaderBlock(DefaultCheckSettings(), preamble, []byte(block)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	// BULK wants its header once
 	bulk := *preamble
 	bulk.Flags = flagBulk
-	if err := checkHeaderBlock(&bulk, []byte(header)); err == nil {
+	if err := checkHeaderBlock(DefaultCheckSettings(), &bulk, []byte(header)); err == nil {
 		t.Error("BULK without List-Unsubscribe-Post")
 	}
-	if err := checkHeaderBlock(&bulk, []byte("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"+header)); err != nil {
+	if err := checkHeaderBlock(DefaultCheckSettings(), &bulk, []byte("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"+header)); err != nil {
 		t.Errorf("BULK with it: %v", err)
 	}
 }
@@ -262,7 +262,7 @@ func TestTheCheckerHoldsTheIssuedValuesToTheirSpelling(t *testing.T) {
 			XUrRef: "1.aeibceqtcqkrmfyydenbxifbukr2jjngu4", FeedbackId: "n:c:gaytemzugu3doobzhi5typj6h4:urnetwork",
 		}
 	}
-	if err := checkPreambleForms(preamble()); err != nil {
+	if err := checkPreambleForms(DefaultCheckSettings(), preamble()); err != nil {
 		t.Fatalf("honest values: %v", err)
 	}
 	for name, mutate := range map[string]func(p *Preamble){
@@ -274,7 +274,7 @@ func TestTheCheckerHoldsTheIssuedValuesToTheirSpelling(t *testing.T) {
 	} {
 		value := preamble()
 		mutate(value)
-		if checkPreambleForms(value) == nil {
+		if checkPreambleForms(DefaultCheckSettings(), value) == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
