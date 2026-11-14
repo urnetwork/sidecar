@@ -30,7 +30,8 @@
 // The repo (§11.13, §11.12's refused row): evs takes re-seeds only for repos the projection lists live or restorable.
 // One whose newest RepoDelete carries now, or is past ReseedRestoreWindow, is refused 409 SHREDDING; one whose
 // RepoDelete is unrestored and inside the window has repo/ moved to deleted{deletion_id, its entry's time} before
-// anything is taken, and then takes its history and slots while deleted.
+// anything is taken, and then takes its history and slots while deleted, and its admin's segments at PUT .../segments
+// (reseedAdmitsDeleted).
 //
 // Not built here, each refused before anything is written: a push in parts (question
 // evs-reseed-route-part-records), a push carrying format 2 (EVS2-M10-13), and a statement at an auth pin evs's state
@@ -47,6 +48,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -150,15 +152,10 @@ func (self *EvsEngine) reseedRepo(request *EvsRequest) (*EvsRepoDeletionFacts, b
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		return nil, false
 	}
-	var deletion *EvsRepoDeletionFacts
-	if facts.Deletion != nil && facts.Deletion.DeletionId != (sidecar.Id{}) && !facts.Deletion.Restored {
-		deletion = facts.Deletion
-		// with now, or past the window a RepoRestore can still land in: never restorable, so nothing comes back. A
-		// RepoDelete the projection does not date is not known to be inside the window
-		if deletion.Now || deletion.Time.IsZero() || self.settings.ReseedRestoreWindow <= request.Now().Sub(deletion.Time) {
-			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)
-			return nil, false
-		}
+	deletion, restorable := self.reseedDeletion(facts, request.Now())
+	if !restorable {
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)
+		return nil, false
 	}
 	read, err := self.repos.Read(request.Ctx, request.Cluster, request.RepoId)
 	if !self.answerTransition(request, err) {
@@ -189,6 +186,33 @@ func (self *EvsEngine) reseedRepo(request *EvsRequest) (*EvsRepoDeletionFacts, b
 	// keying, shredding or shredded: nothing is taken
 	request.RefuseCode(repoStateRefusal(object).Code)
 	return nil, false
+}
+
+// The unrestored RepoDelete the projection's facts end in, nil for a live or restored repo, and whether the repo may
+// still take its history back (§11.13, §11.12's re-seed exception): false for a RepoDelete with now or past
+// ReseedRestoreWindow, the window a RepoRestore can still land in, after which nothing comes back. A RepoDelete the
+// projection does not date is not known to be inside the window.
+func (self *EvsEngine) reseedDeletion(facts *EvsRepoFacts, now time.Time) (*EvsRepoDeletionFacts, bool) {
+	if facts == nil || facts.Deletion == nil || facts.Deletion.DeletionId == (sidecar.Id{}) || facts.Deletion.Restored {
+		return nil, true
+	}
+	deletion := facts.Deletion
+	if deletion.Now || deletion.Time.IsZero() || self.settings.ReseedRestoreWindow <= now.Sub(deletion.Time) {
+		return deletion, false
+	}
+	return deletion, true
+}
+
+// §11.12's re-seed exception for a route that refuses a deleted repo (PUT .../segments): while sidecar.yml's reseed
+// is on, a repo admin's request is taken for a repo whose repo/ reads deleted under the unrestored RepoDelete the
+// projection ends in, inside the restore window, since its history, its segments with it, returns while it stays
+// deleted. Everything else of a deleted repo stays refused.
+func (self *EvsEngine) reseedAdmitsDeleted(request *EvsRequest, facts *EvsRepoFacts, object *protocol.EvsRepoObject) bool {
+	if object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED || !self.host.GatesOrClosed().Reseed() || !request.Rights.Has(sidecar.AclEvsAdmin) {
+		return false
+	}
+	deletion, restorable := self.reseedDeletion(facts, request.Now())
+	return deletion != nil && restorable && evsRepoNamesDeletion(object, deletion.DeletionId)
 }
 
 // The attempt for a re-seeded push, or false once the request has been answered. A statement or payload that does
@@ -572,9 +596,9 @@ func (self *pushAttempt) checkReseedObjects(view *PushView) *EvsCheckRefusal {
 	return nil
 }
 
-// A slot call: see the file header. 200 with an empty EvsPushReply once the slot stands, or holds no key and is not
-// stored; 409 SLOT_UNKNOWN while no re-seeded version names it, and 409 SLOT_STALE when the cluster already holds
-// another object at its id, which is left as it is.
+// A slot call: see the file header. 200 with an empty EvsPushReply once the slot stands without any key an ERASE evs
+// holds covers, or holds no key and is not stored; 409 SLOT_UNKNOWN while no re-seeded version names it, and 409
+// SLOT_STALE when the cluster already holds another object at its id, which is left as it is.
 func (self *EvsEngine) serveReseedSlot(request *EvsRequest, body *protocol.EvsReseedRequest) {
 	invalid := func(detail string) {
 		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, detail).Reply(sidecar.Id{}))
@@ -646,37 +670,58 @@ func (self *EvsEngine) serveReseedSlot(request *EvsRequest, body *protocol.EvsRe
 	}
 	defer grant.Close()
 	key := SlotKey(request.RepoId, slotId)
+	barrierKey := barrierSlotKey(request.RepoId, slotId)
+	testHookBarrier(BarrierReseedSlotPutBefore, barrierKey)
 	_, err = request.Cluster.PutIfNoneMatch(grant.Context(), key, stripped, &sidecar.BlobPutOptions{Metadata: metadata})
+	testHookBarrier(BarrierReseedSlotPutAfter, barrierKey)
+	// the bytes that stand at the id once this call may answer 200
+	standing := stripped
 	var unknown *sidecar.BlobUnknownError
 	switch {
 	case err == nil:
-		request.Reply(&protocol.EvsPushReply{})
-		return
 	case errors.Is(err, sidecar.ErrBlobPrecondition), errors.As(err, &unknown):
+		// the cluster holds the id, or the create's answer was lost: the object decides, compared after stripping
+		// (DESIGN-DETAILS 14.2.6)
+		object, err := request.Cluster.Get(request.Ctx, key)
+		if err != nil {
+			// a 404 after a lost answer: by the settle rule the create never landed, and the device sends it again
+			request.Unavailable(nil)
+			return
+		}
+		stored, err := readAllLimited(object, self.settings.SlotMaxByteCount)
+		object.Body.Close()
+		if err != nil {
+			request.Unavailable(nil)
+			return
+		}
+		storedStripped, _, err := sidecar.EvsSlotWithoutKeys(stored, erasedIndexes)
+		if err != nil || !bytes.Equal(storedStripped, stripped) {
+			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_STALE)
+			return
+		}
+		standing = stored
 	default:
 		request.Unavailable(nil)
 		return
 	}
-	// the cluster holds the id, or the create's answer was lost: the object decides, compared after stripping, and
-	// is left as it is either way (DESIGN-DETAILS 14.2.6)
-	object, err := request.Cluster.Get(request.Ctx, key)
-	if err != nil {
-		// a 404 after a lost answer: by the settle rule the create never landed, and the device sends it again
-		request.Unavailable(nil)
-		return
-	}
-	stored, err := readAllLimited(object, self.settings.SlotMaxByteCount)
-	object.Body.Close()
+	// An ERASE that committed after the list above was read found no slot to rewrite, so the slot may stand with a
+	// key it covers. The list is read again now that the slot stands, and the keys it covers are dropped as that
+	// ERASE's own rewrite drops them; an ERASE that commits after this read finds the slot and rewrites it itself.
+	// A read or rewrite that does not finish answers 503, and the device's next call for the slot ends here again.
+	erasedIndexes, err = self.reseedErasedIndexes(request.Ctx, request.Cluster, request.RepoId, slotId)
 	if err != nil {
 		request.Unavailable(nil)
 		return
 	}
-	storedStripped, _, err := sidecar.EvsSlotWithoutKeys(stored, erasedIndexes)
-	if err == nil && bytes.Equal(storedStripped, stripped) {
-		request.Reply(&protocol.EvsPushReply{})
-		return
+	if _, removedCount, err := sidecar.EvsSlotWithoutKeys(standing, erasedIndexes); err != nil || 0 < removedCount {
+		rewriter := &slotRewriter{budget: self.budget, priceTable: self.priceTable, settings: self.settings}
+		if err := rewriter.rewriteSlot(request.Ctx, request.Cluster, request.RepoId, slotId, erasedIndexes); err != nil {
+			self.log.Warningf("[evs] repo %s: a re-seeded slot's erased keys were not dropped: %v", sidecar.EvsKeyId(request.RepoId), err)
+			request.Unavailable(nil)
+			return
+		}
 	}
-	request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_STALE)
+	request.Reply(&protocol.EvsPushReply{})
 }
 
 // Whether statement's push stands committed in refId's history as a re-seeded version whose payload names slotId: a
@@ -824,8 +869,11 @@ func (self *EvsEngine) serveReseedStatement(request *EvsRequest, body *protocol.
 	}
 	defer grant.Close()
 	key := ReseedKey(request.RepoId, statement.RefId)
+	barrierKey := barrierRefKey(request.RepoId, statement.RefId)
 	for attempt := 0; attempt <= self.settings.ReseedStatementRetryCount; attempt += 1 {
+		testHookBarrier(BarrierReseedStatementPutBefore, barrierKey)
 		_, err := request.Cluster.PutIfNoneMatch(grant.Context(), key, statement.Bytes, nil)
+		testHookBarrier(BarrierReseedStatementPutAfter, barrierKey)
 		var unknown *sidecar.BlobUnknownError
 		switch {
 		case err == nil:
@@ -856,7 +904,9 @@ func (self *EvsEngine) serveReseedStatement(request *EvsRequest, body *protocol.
 		}
 		// an earlier statement of the ref: the one naming the head evs serves now replaces it, since a reader accepts
 		// only that one
+		testHookBarrier(BarrierReseedStatementPutBefore, barrierKey)
 		_, err = request.Cluster.PutIfMatch(grant.Context(), key, object.Etag, statement.Bytes, nil)
+		testHookBarrier(BarrierReseedStatementPutAfter, barrierKey)
 		switch {
 		case err == nil:
 			request.Reply(&protocol.EvsPushReply{Version: statement.Version})

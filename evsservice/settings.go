@@ -342,7 +342,7 @@ func DefaultEvsSettings() *EvsSettings {
 		PushAttemptTimeout:          25 * time.Second,
 		PushBodyMaxByteCount:        2 * 1024 * 1024,
 		ReseedBodyMaxByteCount:      2 * 1024 * 1024,
-		ReseedStatementMaxByteCount: 4 * 1024,
+		ReseedStatementMaxByteCount: sidecar.DefaultEvsFormatSettings().ReseedStatementMaxByteCount,
 		ReseedRestoreWindow:         7 * 24 * time.Hour,
 		ReseedStatementRetryCount:   4,
 		GenerationCacheCount:        100 * 1000,

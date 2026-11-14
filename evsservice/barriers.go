@@ -227,6 +227,19 @@ const (
 	BarrierSweepDeleteAfter  = "evs.sweep.delete.after"
 )
 
+// EVSB-M2-20: POST .../reseed (§11.13's re-seed row; QD-725). A re-seeded push runs the push route's steps and is held
+// at their barriers, and a restorable repo's move to deleted at the repo CAS's.
+const (
+	// Around a re-seeded slot's If-None-Match, keyed by <repo>:<slot>, after the route read the ERASEs evs holds: an
+	// ERASE that commits while the create is held finds no slot to rewrite.
+	BarrierReseedSlotPutBefore = "evs.reseed.slot_put.before"
+	BarrierReseedSlotPutAfter  = "evs.reseed.slot_put.after"
+	// Around reseed/<repo>/<ref>'s write, the create or the replacement of an earlier statement, keyed by
+	// <repo>:<ref>, after the route read the head the statement names.
+	BarrierReseedStatementPutBefore = "evs.reseed.statement_put.before"
+	BarrierReseedStatementPutAfter  = "evs.reseed.statement_put.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)
