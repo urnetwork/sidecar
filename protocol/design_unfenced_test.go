@@ -430,7 +430,7 @@ message BridgeRuleEntry {
 message BridgeRuleLink {
   bytes target_client_id = 1; bytes target_sidecar_id = 2; bytes target_identity_public_key = 3;
   bytes target_member_id = 4; bytes rule_id = 5; uint32 weight = 6; bytes site_id = 7; int64 draining_since = 8;
-  int64 drain_until = 9;
+  int64 drain_until = 9; bytes target_client_public_key = 12;
 }
 message BridgeRuleMap {
   bytes map_id = 1; BridgeIpv4Prefix match_prefix = 2; uint32 protocol = 3; repeated BridgePortRange ports = 4;

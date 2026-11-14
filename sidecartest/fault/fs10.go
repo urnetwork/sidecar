@@ -18,8 +18,8 @@
 // accepted as §2.8 publishes; a 100,000-change push's adjacent-leaf proofs with no change list fetched and an unsorted
 // change list refused; a reader 10,000 versions behind re-pinning with a gap mark; P read at v20 at pin 25 with the pin
 // moved to 30 and P changed at v28 by a rooted statement, and an evicted read record reading as never read) are
-// EVS1-M2-41's report's; FI-3's oracle is not bound (TEST-M2-05), so the schedules check the readers' answers and
-// alarms in its place.
+// EVS1-M2-41's report's; FI-3 holds through the world's checks where a schedule names them (TEST-M2-05), and the
+// forged schedules check the readers' answers and alarms.
 
 package fault
 

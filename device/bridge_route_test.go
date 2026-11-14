@@ -9,9 +9,12 @@ package device_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -465,5 +468,30 @@ func TestBridgeRouteAllocatesNothing(t *testing.T) {
 		if allocs := testing.AllocsPerRun(1000, func() { test.bridge.Route(packet) }); allocs != 0 {
 			t.Fatalf("%s: %v allocations a route", name, allocs)
 		}
+	}
+}
+
+// A link entry to an app host carries the client key the rules pin (BridgeRuleLink.target_client_public_key) into
+// its link, which is then built with no binding fetched (§17.9's target row; owner decision 197).
+func TestBridgeRouteBuildsAnAppHostsLinkFromThePinnedClientKey(t *testing.T) {
+	fixture := routeTestFixture()
+	fixture.Entries[2].Links[0].HostClientKey = linkTestClientKey(4).Public().(ed25519.PublicKey)
+	var fetchCount atomic.Int64
+	test := newRouteTest(t, fixture, func(settings *device.BridgeSettings) {
+		settings.LinkTargetKey = func(ctx context.Context, targetSidecarId connect.Id, targetClientId connect.Id) ([]byte, error) {
+			fetchCount.Add(1)
+			return nil, errors.New("an app host's binding is never fetched")
+		}
+	})
+	packet := routeTestUdp(routeTestSource, "100.80.1.4", 9)
+	if client := test.bridge.Route(packet); !routeTestRefuses(client) {
+		t.Fatalf("the first packet routed to %T, not a refusal", client)
+	}
+	link := test.awaitLink(packet)
+	if link.Target != sidecartest.BridgeFixtureClientId(4) {
+		t.Fatalf("carried to %v", link.Target)
+	}
+	if fetchCount.Load() != 0 {
+		t.Fatalf("%d bindings fetched for an app host", fetchCount.Load())
 	}
 }

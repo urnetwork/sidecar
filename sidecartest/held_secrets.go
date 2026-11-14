@@ -59,3 +59,10 @@ func (self *HeldSecrets) Actors() []string {
 	defer self.stateLock.Unlock()
 	return slices.Sorted(maps.Keys(self.actorKindSecrets))
 }
+
+// Every kind of secret actor held, sorted.
+func (self *HeldSecrets) Kinds(actor string) []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Sorted(maps.Keys(self.actorKindSecrets[actor]))
+}

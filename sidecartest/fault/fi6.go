@@ -21,9 +21,9 @@
 //     DESIGN-DETAILS 2.2.4's horizon passed its LastModified + 24 h 2 min, which is at least 25 h past that bound.
 //
 // Unknown is read from durable state, so it spans a kill: a record in a batch whose push the head history neither
-// commits nor shows dead is pending, whatever the process that wrote it saw. FI-2's ledger (TEST-M2-04's
-// fault.Ledger, not landed) is the client's view of the same operations; until it lands, FI-6 holds no client-side
-// unknown that left no record, such as an upload whose response was lost, beyond the segment horizon rule.
+// commits nor shows dead is pending, whatever the process that wrote it saw. FI-2's ledger (ledger.go) is the
+// client's view of the same operations; it holds pushes and reads, not segment uploads, so FI-6 still holds no
+// client-side unknown that left no record, such as an upload whose response was lost, beyond the segment horizon rule.
 //
 // Deferred, failing closed or unchecked as each says: a table's rows across a path-epoch cut-over are checked by
 // names_through alone; QD-011's orphan markers under idx/<repo>/<ref>/_o/, which carry format 2's ids, are left to
@@ -554,8 +554,24 @@ func sortedTokenPaths(path *fi6Path) []sidecar.EvsTokenPath {
 }
 
 // Every record of every batch on every metadata cluster, with the objects it lists as new, and the oldest batch's
-// minute. A batch of format 2 is FI-16's and FI-27's to read (TEST-M10-01).
+// minute. A batch of format 2 is FI-16's and FI-27's to read (TEST-M10-01). One check reads them once: FI-2 and FI-6
+// at one check share what the first read.
 func fi6Batches(ctx context.Context, oracle *Oracle, memory *evsOracleMemory) ([]*fi6BatchRecord, time.Time, []error) {
+	memory.stateLock.Lock()
+	if memory.batchOracle == oracle {
+		records, oldest, errs := memory.batchRecords, memory.batchOldest, memory.batchErrs
+		memory.stateLock.Unlock()
+		return records, oldest, errs
+	}
+	memory.stateLock.Unlock()
+	records, oldest, errs := fi6ReadBatches(ctx, oracle, memory)
+	memory.stateLock.Lock()
+	memory.batchOracle, memory.batchRecords, memory.batchOldest, memory.batchErrs = oracle, records, oldest, errs
+	memory.stateLock.Unlock()
+	return records, oldest, errs
+}
+
+func fi6ReadBatches(ctx context.Context, oracle *Oracle, memory *evsOracleMemory) ([]*fi6BatchRecord, time.Time, []error) {
 	records := []*fi6BatchRecord{}
 	var oldest time.Time
 	errs := []error{}
