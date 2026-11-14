@@ -64,6 +64,7 @@ type DnsWatchSettings struct {
 	NameMaxCount int
 }
 
+// D-TRUST-9's 6 hours, jittered by half an hour either way.
 func DefaultDnsWatchSettings() *DnsWatchSettings {
 	return &DnsWatchSettings{
 		Interval:      6 * time.Hour,
@@ -110,6 +111,7 @@ const dnsWatchFileName = "watch.json"
 // The format of the watch's file.
 const dnsWatchFileFormat = 1
 
+// The watch's file: the RRsets this device asked for and the names components added.
 type dnsWatchFile struct {
 	Format   int                 `json:"format"`
 	Expected []*DnsWatchExpected `json:"expected"`
@@ -195,6 +197,7 @@ func NewDnsWatch(ctx context.Context, args *DnsWatchArgs) (*DnsWatch, error) {
 	return self, nil
 }
 
+// The watch's file in store, empty when there is none, refused when it is not this release's.
 func readDnsWatchFile(store SidecarStore) (*dnsWatchFile, error) {
 	file := &dnsWatchFile{Format: dnsWatchFileFormat}
 	reader, err := store.Open(dnsWatchFileName)

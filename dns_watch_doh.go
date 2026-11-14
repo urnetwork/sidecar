@@ -40,6 +40,7 @@ type DnsWatchDohSettings struct {
 	ResolverUrls []string
 }
 
+// Two of connect's default remote DoH servers, each a different operator.
 func DefaultDnsWatchDohSettings() *DnsWatchDohSettings {
 	urls := connect.DefaultDnsResolverSettings().RemoteDohUrlsIpv4
 	return &DnsWatchDohSettings{ResolverUrls: slices.Clone(urls[:min(2, len(urls))])}
@@ -86,6 +87,7 @@ func (self *DnsWatchDohResolver) Close() {
 	}
 }
 
+// The resolvers' count: one a url.
 func (self *DnsWatchDohResolver) ResolverCount() int {
 	return len(self.forwarders)
 }
@@ -93,6 +95,7 @@ func (self *DnsWatchDohResolver) ResolverCount() int {
 // A resolver that gave no usable answer.
 var errDnsWatchResolverFailed = errors.New("dns watch: the resolver gave no answer")
 
+// resolver's own answer for name and qType, through its cache's raw forward alone, in the watch's form.
 func (self *DnsWatchDohResolver) Lookup(ctx context.Context, resolver int, name string, qType uint16) (*DnsWatchAnswer, error) {
 	if resolver < 0 || len(self.forwarders) <= resolver {
 		return nil, errDnsWatchResolverFailed

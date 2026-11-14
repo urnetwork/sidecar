@@ -49,6 +49,7 @@ type DnsClientSettings struct {
 	HintRefetchMinInterval time.Duration
 }
 
+// §6.8's hourly resync, a request's 30 s and an answer's 4 MiB.
 func DefaultDnsClientSettings() *DnsClientSettings {
 	return &DnsClientSettings{
 		RequestTimeout:         30 * time.Second,
@@ -300,6 +301,7 @@ func (self *DnsClient) DeleteRecord(ctx context.Context, recordDelete *DnsRecord
 	return parseDnsRecordsAnswer(answer)
 }
 
+// A write's answer, or ErrDnsClientReply for one that is not the route's.
 func parseDnsRecordsAnswer(answer []byte) (*DnsRecordsAnswer, error) {
 	parsed := &DnsRecordsAnswer{}
 	if err := json.Unmarshal(answer, parsed); err != nil {
