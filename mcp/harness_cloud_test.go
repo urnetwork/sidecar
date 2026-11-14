@@ -2,7 +2,8 @@
 
 // Cloud agents (MCP-M4-02): the key rule of harness_cloud.go and what §16.9 holds beside it. No key is read from the
 // environment, by behavior and by a scan of every environment read in ur's own source (CC4); the key file is taken
-// once and removed, and refused unless it is its owner's alone; the committed connect step is one fixed command;
+// once and removed, and refused unless it is its owner's alone; the committed connect step is one fixed command,
+// which a project install with a key file writes at the head of the session-start step and seals;
 // server/mcp imports no sidecar package (D-MCP-7); and a session captured with nothing reachable spools, without a
 // gap or a failed hook, and seals again once the writer does.
 
@@ -245,6 +246,148 @@ func TestCloudConnectCommand(t *testing.T) {
 	}
 	if strings.Contains(got, harnessCloudKeyPrefix) {
 		t.Error("the committed command holds a key's prefix")
+	}
+}
+
+// The key file's path a project install of args takes, named as the VM reads it.
+const testCloudKeyFile = "/run/ur/authkey"
+
+// The cloud profile (§16.9; QD-041): a project install with a key file commits one session-start step that takes the
+// key file with ur connect --token-file --ephemeral and then runs ur hook, every other step ur hook alone; no
+// committed file holds a key; the seal holds the path, so the daemon's check reads the install unchanged, a
+// session-start step with its connect cut reads changed, and running the install again restores it.
+func TestProjectCloudProfileCommitsConnectStep(t *testing.T) {
+	for _, harness := range []string{"claude-code", "codex"} {
+		home := testHarnessHome(t, harness)
+		project := t.TempDir()
+		state := t.TempDir()
+		args := testHarnessArgs(harness, home, state)
+		args.ProjectDirectory = project
+		args.CloudKeyFile = testCloudKeyFile
+		plan := testInstallHarness(t, args)
+		if plan.Seal.CloudKeyFile != testCloudKeyFile {
+			t.Errorf("%s: the seal's key file: %q", harness, plan.Seal.CloudKeyFile)
+		}
+		connect := HarnessCloudConnectCommand(testHarnessUrPath, testCloudKeyFile, "")
+		start := connect + " </dev/null >/dev/null 2>&1; " + testHarnessUrPath + " hook " + harness
+		holders := 0
+		for _, file := range plan.Files {
+			content, err := os.ReadFile(file.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(content), harnessCloudKeyPrefix) {
+				t.Errorf("%s: %s holds an auth key's prefix", harness, file.Path)
+			}
+			if count := strings.Count(string(content), "connect "+HarnessCloudKeyFileFlag); count != 0 {
+				holders += count
+				encoded, err := harnessJsonEncode(start, "", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(content), encoded) {
+					t.Errorf("%s: %s holds no session-start step %s:\n%s", harness, file.Path, encoded, content)
+				}
+			}
+		}
+		if holders != 1 {
+			t.Errorf("%s: %d connect steps committed, want the session start's one", harness, holders)
+		}
+		if words := harnessShellWords(start); !harnessUrStepWords(words) || !plan.template.ownsCommand(start) {
+			t.Errorf("%s: the session-start step is not read as ur's: %q", harness, words)
+		}
+		check := testHarnessCheck(state)
+		if testHarnessChanged(t, check, harness, project) {
+			t.Errorf("%s: the cloud profile as installed reads changed", harness)
+		}
+		again, err := PlanHarnessInstall(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := again.Changed(); err != nil || changed {
+			t.Errorf("%s: a second install changes something: %t %v", harness, changed, err)
+		}
+
+		// the connect step cut from the committed file: the check reads it changed, and the install restores it
+		var hooksPath string
+		for _, file := range plan.Files {
+			if content, _ := os.ReadFile(file.Path); strings.Contains(string(content), "connect "+HarnessCloudKeyFileFlag) {
+				hooksPath = file.Path
+			}
+		}
+		encodedStart, _ := harnessJsonEncode(start, "", "")
+		encodedHook, _ := harnessJsonEncode(testHarnessUrPath+" hook "+harness, "", "")
+		content, err := os.ReadFile(hooksPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cut := strings.Replace(string(content), encodedStart, encodedHook, 1)
+		if err := os.WriteFile(hooksPath, []byte(cut), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !testHarnessChanged(t, check, harness, project) {
+			t.Errorf("%s: a session-start step with its connect cut reads unchanged", harness)
+		}
+		testInstallHarness(t, args)
+		restored, err := os.ReadFile(hooksPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(restored) != string(content) {
+			t.Errorf("%s: the install did not restore the session-start step:\n%s", harness, restored)
+		}
+		if testHarnessChanged(t, check, harness, project) {
+			t.Errorf("%s: the restored profile reads changed", harness)
+		}
+
+		// without a key file the same project commits ur hook alone, and the seal changes with it
+		args.CloudKeyFile = ""
+		plain := testInstallHarness(t, args)
+		if plain.Seal.ConfigSha256 == plan.Seal.ConfigSha256 {
+			t.Errorf("%s: the seal is the same with and without the connect step", harness)
+		}
+		after, err := os.ReadFile(hooksPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(after), "connect") {
+			t.Errorf("%s: an install with no key file left a connect step:\n%s", harness, after)
+		}
+	}
+}
+
+// What the cloud profile refuses, each beside the install that passes: a key file with no project, a harness that
+// reports no session start, a path the VM would read against a working directory, one holding a control character,
+// and a key pasted where the path belongs.
+func TestProjectCloudProfileRefusals(t *testing.T) {
+	plan := func(harness string, update func(args *HarnessInstallArgs)) error {
+		args := testHarnessArgs(harness, testHarnessHome(t, harness), t.TempDir())
+		args.ProjectDirectory = t.TempDir()
+		args.CloudKeyFile = testCloudKeyFile
+		update(args)
+		_, err := PlanHarnessInstall(args)
+		return err
+	}
+	if err := plan("claude-code", func(args *HarnessInstallArgs) {}); err != nil {
+		t.Fatalf("the twin: %v", err)
+	}
+	refusals := map[string]func(args *HarnessInstallArgs){
+		"no project":          func(args *HarnessInstallArgs) { args.ProjectDirectory = "" },
+		"a relative path":     func(args *HarnessInstallArgs) { args.CloudKeyFile = "run/ur/authkey" },
+		"a directory's path":  func(args *HarnessInstallArgs) { args.CloudKeyFile = "/run/ur/" },
+		"a control character": func(args *HarnessInstallArgs) { args.CloudKeyFile = "/run/ur/auth\nkey" },
+		"a key as the path":   func(args *HarnessInstallArgs) { args.CloudKeyFile = "/" + testCloudKey },
+	}
+	for name, update := range refusals {
+		if err := plan("claude-code", update); !errors.Is(err, ErrHarnessCloudProfile) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := plan("cursor", func(args *HarnessInstallArgs) {}); !errors.Is(err, ErrHarnessCloudProfile) {
+		t.Errorf("a harness with no session start: %v", err)
+	}
+	if err := plan("cursor", func(args *HarnessInstallArgs) { args.CloudKeyFile = "" }); err != nil {
+		t.Errorf("cursor's twin, with no key file: %v", err)
 	}
 }
 
