@@ -126,10 +126,16 @@ type EvsPathWrite struct {
 	// The version's versioning, EvsVersioningFor's answer (evs_versioning.go): 0 keeps every version, 1 and 2 are
 	// versionless, format 2's (evs_plan_versionless.go). The planner never picks one of its own.
 	Versioning uint32
-	// What the write asks of its versioning, nil for a caller that set Versioning itself: each plan then takes the
-	// version's setting from EvsVersioningFor over its own read of the path (evs_write_versionless.go; EVS2-M10-16),
-	// so a path keeps the setting of the version the push is held to.
-	Options *EvsWriteOptions
+	// What the write asks of its versioning, an *EvsWriteOptions, nil for a caller that set Versioning itself: each
+	// plan then takes the version's setting from EvsVersioningFor over its own read of the path
+	// (evs_write_versionless.go; EVS2-M10-16), so a path keeps the setting of the version the push is held to.
+	Options evsWriteVersioning
+}
+
+// What decides a written version's versioning on a plan's own read of its path: *EvsWriteOptions, on every leg that
+// writes (evs_write_versionless.go). The ios_extension leg links the planner and plans no write, so it has none.
+type evsWriteVersioning interface {
+	writeVersioning(repo *EvsRepo, plan *EvsWritePlan, write *EvsPathWrite, verified *EvsVerifiedPath) (uint32, error)
 }
 
 // A write evs's path CAS refused, with the written paths it names (QD-721). The planner's own: a write held to a
@@ -706,7 +712,7 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	}
 	if write.Options != nil {
 		// the setting the write asks for, decided on this read of the path (EVS2-M10-16)
-		versioning, err := self.writeVersioning(plan, write, verified)
+		versioning, err := write.Options.writeVersioning(self, plan, write, verified)
 		if err != nil {
 			return nil, err
 		}

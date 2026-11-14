@@ -57,26 +57,27 @@ func (self *EvsClient) SetVersioningRules(rules func(repoId Id, filePath string,
 	self.versioningRules = rules
 }
 
-// The versioning of the version write makes over what the plan read of its path: EvsVersioningFor's answer.
-func (self *EvsRepo) writeVersioning(plan *EvsWritePlan, write *EvsPathWrite, verified *EvsVerifiedPath) (uint32, error) {
-	admitted := self.client.Format2Admitted()
-	if write.Options.Versioning == EvsVersioningOff && !admitted {
+// The versioning of the version write makes over what the plan read of its path: EvsVersioningFor's answer for these
+// options (evs_plan.go's evsWriteVersioning).
+func (self *EvsWriteOptions) writeVersioning(repo *EvsRepo, plan *EvsWritePlan, write *EvsPathWrite, verified *EvsVerifiedPath) (uint32, error) {
+	admitted := repo.client.Format2Admitted()
+	if self.Versioning == EvsVersioningOff && !admitted {
 		return 0, fmt.Errorf("%w: versioning off is format 2's, outside this network's gate", ErrEvsFormatUnsupported)
 	}
-	state, err := self.client.verifier.config()
+	state, err := repo.client.verifier.config()
 	if err != nil {
 		return 0, err
 	}
 	rules := func() func(repoId Id, filePath string, size uint64) (uint32, error) {
-		self.client.stateLock.Lock()
-		defer self.client.stateLock.Unlock()
-		return self.client.versioningRules
+		repo.client.stateLock.Lock()
+		defer repo.client.stateLock.Unlock()
+		return repo.client.versioningRules
 	}()
 	args := &EvsVersioningArgs{
-		Options: write.Options, RepoId: self.repoId, RepoKind: plan.repoKind, RefName: plan.refName, RefMode: plan.RefMode,
+		Options: self, RepoId: repo.repoId, RepoKind: plan.repoKind, RefName: plan.refName, RefMode: plan.RefMode,
 		CreatesOnly:     evsEpochExempt(plan.RefKind) || (plan.RefKind == protocol.EvsRefKind_EVS_REF_OWNED && EvsRepoKindRecordClass(plan.repoKind)),
 		Path:            write.Path,
-		Locked:          state.Repo(self.repoId).GetLock() == protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED,
+		Locked:          state.Repo(repo.repoId).GetLock() == protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED,
 		Format2Admitted: admitted,
 		Rules:           rules,
 	}
