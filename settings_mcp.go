@@ -181,6 +181,15 @@ type SidecarIngestSettings struct {
 	// evidence until hook conformance (MCP-M3-28) names them. Cursor reports none: its beforeMCPExecution counts only
 	// where `ur hook cursor` answered ask, which makes Cursor prompt.
 	HarnessPromptingModes []string
+	// §16.18's filesystem capture (MCP-M6-03): file events narrow a run's scan intervals. Off by default, M6's.
+	FileEvents bool
+	// The most directories one worktree's watch holds: 4096. A worktree past it is not watched, a missed_event gap.
+	FileEventDirectoryCount int
+	// §16.18's model calls (MCP-M6-03): Codex's PostModelRequest and harness OpenTelemetry as model_call entries. Off by
+	// default, M6's.
+	ModelCalls bool
+	// The largest OTLP export the telemetry receiver reads, in bytes: 4 MiB. A larger one is a dropped export, a gap.
+	TelemetryByteCount int64
 }
 
 // §16.8's record defaults, with RECORD.md section 18's fields below the first six, whose names stand
@@ -234,6 +243,9 @@ type SidecarRecordSettings struct {
 	WitnessMissCount int
 	// Leaves one checkpoint batch takes at most: 32,768 (section 10.2).
 	LeafBatchCount int
+	// A model_call entry's model, provider and request id each, in bytes: RECORD.md's ModelCallBody, 128 B, which a
+	// longer value is cut to, a truncation gap (MCP-M6-03).
+	ModelCallFieldByteCount int64
 }
 
 // A fresh value each call, as DefaultSidecarSettings's is.
@@ -308,6 +320,11 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		HarnessEvidenceTimeout:      10 * time.Minute,
 		HarnessEvidenceEventCount:   1024,
 		HarnessPromptingModes:       []string{"default", "acceptEdits", "plan"},
+		// §16.18's v1 capture (MCP-M6-03), off until M6's rollout turns it on
+		FileEvents:              false,
+		FileEventDirectoryCount: 4096,
+		ModelCalls:              false,
+		TelemetryByteCount:      4 * 1024 * 1024,
 	}
 }
 
@@ -318,6 +335,7 @@ func defaultSidecarRecordSettings() *SidecarRecordSettings {
 		PushCoalesce:             1 * time.Second,
 		ReachReceiptCoalesce:     5 * time.Minute,
 		CoverageIdleTimeout:      10 * time.Minute,
+		ModelCallFieldByteCount:  128,
 		TeamRecordKeepDays:       400,
 		TeamRecordSearchableDays: 90,
 		DepositInterval:          5 * time.Minute,

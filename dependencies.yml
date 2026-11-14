@@ -78,6 +78,10 @@ modules:
     spdx: BSD-2-Clause AND ISC
     reason: go-git's commit walkers, linked by the object package for mlsinterop's oracle
     leg: [test]
+  - module: github.com/fsnotify/fsnotify
+    spdx: BSD-3-Clause
+    reason: §16.18's filesystem capture in ur's daemon (MCP-M6-03), at v1.9.0 as server holds it; read from its LICENSE
+    leg: [cli]
   - module: github.com/fxamacker/cbor/v2
     spdx: MIT
     reason: through gnark, for smtpproof's prover (§14)

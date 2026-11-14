@@ -757,6 +757,8 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Restore: mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log}),
 		Home:    home,
 		Record:  settings.Record,
+		// §16.18's file events, which Ingest.FileEvents turns on (M6's, off by default): fsnotify on each run's worktree
+		FileWatch: urFsnotifyWatch,
 		// §16.7's Run announcement row: a run's start, activity and end to its network's team directory, under the
 		// claims value its session starts under (mcp's ingest_directory.go); a network with no directory hears nothing
 		Lifecycle: mcp.NewDirectoryLifecycle(&mcp.DirectoryLifecycleArgs{

@@ -118,6 +118,8 @@ type IngestArgs struct {
 	Lifecycle RunLifecycle
 	// The person's home, for the instruction files there and `.ur`; empty reads none.
 	Home string
+	// §16.18's file events' watch (ingest_fsevents.go), cli's fsnotify; nil watches nothing.
+	FileWatch IngestFileWatch
 	// §16.8's record settings, for CoverageIdleTimeout. Nil takes the defaults.
 	Record *sidecar.SidecarRecordSettings
 }
@@ -139,6 +141,9 @@ type Ingest struct {
 	restore   *RestorePoints
 	lifecycle RunLifecycle
 	home      string
+	fileWatch IngestFileWatch
+	// the worktrees watched for file events
+	fileEvents ingestFileEvents
 
 	stateLock sync.Mutex
 	runs      map[restorePointKey]*ingestRun
@@ -192,6 +197,8 @@ func NewIngest(args *IngestArgs) *Ingest {
 		restore:      args.Restore,
 		lifecycle:    args.Lifecycle,
 		home:         args.Home,
+		fileWatch:    args.FileWatch,
+		fileEvents:   ingestFileEvents{rootWatches: map[string]*ingestRootWatch{}},
 		runs:         map[restorePointKey]*ingestRun{},
 		lockedEvents: map[restoreLockedKey]int{},
 	}
@@ -504,6 +511,7 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 	default:
 		captured.EventLeaf = self.captureHookEventWithLock(ctx, run, redactor, event, captured.Payload)
 	}
+	self.captureHookModelCallWithLock(ctx, run, redactor, event, captured.Payload)
 	if event.Kind == HookEventPermissionRequest {
 		self.capturePermissionWithLock(ctx, run, event)
 	}

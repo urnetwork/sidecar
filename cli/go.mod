@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815
 	github.com/ebitengine/purego v0.11.2
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/sidecar v0.0.0

@@ -190,9 +190,13 @@ func (self *RestorePoints) NoteEvent(ctx context.Context, network McpNetwork, ne
 	if err != nil {
 		return nil, err
 	}
+	if event.Kind == HookEventPreToolUse && event.ToolUseId != "" {
+		point.noteInFlight(event.ToolUseId, self.clock.Now())
+	}
 	if event.Kind != HookEventPostToolUse {
 		return nil, nil
 	}
+	point.clearInFlight(event.ToolUseId)
 	seq := self.takeSeq()
 	now := self.clock.Now()
 	activity := &restoreActivity{seq: seq, runId: runId, kind: restoreActivityTool}
@@ -216,6 +220,45 @@ func (self *RestorePoints) NoteEvent(ctx context.Context, network McpNetwork, ne
 	defer self.stateLock.Unlock()
 	self.pruneActivitiesWithLock(root)
 	return scan, nil
+}
+
+// A tool call of the run began: its PreToolUse, held until its PostToolUse or RestoreHoldTimeout (ToolInFlight).
+func (self *RestorePoint) noteInFlight(toolUseId string, now time.Time) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.inFlight == nil {
+		self.inFlight = map[string]time.Time{}
+	}
+	self.inFlight[toolUseId] = now
+}
+
+// A tool call of the run ended: its PostToolUse.
+func (self *RestorePoint) clearInFlight(toolUseId string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.inFlight, toolUseId)
+}
+
+// Whether a tool call of the run is under way: a PreToolUse seen with no PostToolUse, under RestoreHoldTimeout old,
+// whose change a file event must leave to that call's own PostToolUse (ingest_fsevents.go). False for a run this
+// process holds no point of.
+func (self *RestorePoints) ToolInFlight(networkId sidecar.Id, runId sidecar.Id) bool {
+	point, ok := self.Point(networkId, runId)
+	if !ok {
+		return false
+	}
+	now := self.clock.Now()
+	point.stateLock.Lock()
+	defer point.stateLock.Unlock()
+	inFlight := false
+	for toolUseId, started := range point.inFlight {
+		if now.Before(started.Add(self.settings.RestoreHoldTimeout)) {
+			inFlight = true
+		} else {
+			delete(point.inFlight, toolUseId)
+		}
+	}
+	return inFlight
 }
 
 // The run's point scans now, outside a hook: what Ingest calls at a run's end.
