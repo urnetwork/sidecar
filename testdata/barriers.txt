@@ -100,6 +100,8 @@ barrier directory.run.after directory_run.go
 barrier directory.run.before directory_run.go
 barrier directory.sync.after directory_sync.go
 barrier directory.sync.before directory_sync.go
+barrier directory.worker.after directory_worker.go
+barrier directory.worker.before directory_worker.go
 barrier dnsservice.edge_publish dnsservice/edge.go
 barrier dnsservice.edge_publish.after dnsservice/edge.go
 barrier dnsservice.edge_publish.before dnsservice/edge.go
@@ -446,6 +448,10 @@ barrier record.log.sign.after record_log.go
 barrier record.log.sign.before record_log.go
 barrier record.log.witness.after record_log.go
 barrier record.log.witness.before record_log.go
+barrier record.mirror.keep.after record_mirror.go
+barrier record.mirror.keep.before record_mirror.go
+barrier record.mirror.redeposit.after record_mirror.go
+barrier record.mirror.redeposit.before record_mirror.go
 barrier record.outcome.after record_gate_spend.go
 barrier record.outcome.before record_gate_spend.go
 barrier record.plan.after record_slot.go
