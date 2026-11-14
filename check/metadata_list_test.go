@@ -273,6 +273,45 @@ var metadataListAdditions = []metadataListAddition{
 			"  owner: §11.13\n" +
 			"gkm-1:\n",
 	},
+	{
+		// QD-724's list version, after v17's
+		question: "team-m3-02-reseed-upload-store",
+		block:    "# metadata_list.yml v17;",
+		list:     "# metadata_list.yml v18;",
+	},
+	{
+		// QD-724: v18's line, after v17's
+		question: "team-m3-02-reseed-upload-store",
+		block:    "# EvsReseed statements evs keeps at reseed/<repo>/<ref> and serves with the head after a site loss.\n",
+		list: "# EvsReseed statements evs keeps at reseed/<repo>/<ref> and serves with the head after a site loss.\n" +
+			"# v18, updated 2026-11-14 for the owner's answer QD-724 (team-m3-02-reseed-upload-store), adds api-7's\n" +
+			"# {acl_<networkId>}r, the re-seed uploads api keeps after a site loss until two members agree, with the resumed\n" +
+			"# marker where re-seed mode ends for a network.\n",
+	},
+	{
+		// QD-724: api-7's store gains the Redis soft-state family {acl_<networkId>}r, in {acl_}v's hash tag
+		question: "team-m3-02-reseed-upload-store",
+		block:    "and {acl_<networkId>}q (the append limiter's counters; §7.9)\n",
+		list:     "and {acl_<networkId>}q (the append limiter's counters; §7.9); while a site-loss restore runs, Redis {acl_<networkId>}r (members' devices' re-seed uploads and the resumed marker; §7.9, QD-724)\n",
+	},
+	{
+		// QD-724: what the family holds, all of it entries, rows and pins of the log api-7 already shows
+		question: "team-m3-02-reseed-upload-store",
+		block:    "the config repo itself only as evs ciphertext\"\n",
+		list:     "the config repo itself only as evs ciphertext; after a site loss, until the network's log resumes, each uploading sidecar's newest re-seed upload (the Signed Genesis, the entries and bases' rows it keeps, verbatim, or a phone's position and chain digest pins, all of it what the log itself shows), the order the uploads came in, the position the adopted run was written through, and the position of the base that resumed the log\"\n",
+	},
+	{
+		// QD-724: why api keeps it
+		question: "team-m3-02-reseed-upload-store",
+		block:    "spares cluster reads and decides nothing\n",
+		list:     "spares cluster reads and decides nothing; after a site loss, two members' uploads that reach different api instances adopt, and re-seed mode ends for each network at its resumed marker (§7.8, §19.10; QD-724)\n",
+	},
+	{
+		// QD-724: the key's ttl, 24 h, a settings field
+		question: "team-m3-02-reseed-upload-store",
+		block:    "{acl_}e 10 min after the network's last append; {acl_}q 25 h\n",
+		list:     "{acl_}e 10 min after the network's last append; {acl_}q 25 h; {acl_}r 24 h after its last write or the last token exchange that read its resumed marker, its uploads dropped when the network's resume base lands\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
