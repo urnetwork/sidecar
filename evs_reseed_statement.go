@@ -1,10 +1,14 @@
+//go:build !ios_extension
+
 // A Signed EvsReseed (§11.6, §11.13's re-seed row, §19.10; D-EVS-17): after a site loss, where every surviving copy of
 // a ref ends below a reader's pin, a repo admin signs {repo, ref, version, C_v, incident} over the re-seeded head, and
 // a reader that verifies it accepts the shorter history, shown as a loss (EvsVerifier.AcceptReseed). evs keeps the
 // statement at reseed/<repo>/<ref> and serves it with the head (QD-725); it holds only what evs-29's row lists.
 //
 // The statement is a §6 Signed of purpose evs-reseed and type SIGNED_EVS_RESEED, by the admin's identity key. It is
-// never re-signed: evs stores and serves the bytes it was sent.
+// never re-signed: evs stores and serves the bytes it was sent. The reader's check, EvsVerifier.AcceptReseed, is on
+// every leg (evs_verify.go); signing one and evs's parse of it are not the iOS extension's, so this file is off its
+// leg.
 
 package sidecar
 
