@@ -5053,11 +5053,15 @@ func (x *EvsHistoryLocator) GetLength() uint32 {
 }
 
 type EvsProvenance struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       []byte                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // §5.5's; absent reads agent_asserted
-	Tainted       bool                   `protobuf:"varint,2,opt,name=tainted,proto3" json:"tainted,omitempty"`               // the writing run's (format 2), which format 1 ignores
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	AgentId   []byte                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`       // §5.5's; absent reads agent_asserted
+	Tainted   bool                   `protobuf:"varint,2,opt,name=tainted,proto3" json:"tainted,omitempty"`                     // the writing run's (format 2), which format 1 ignores
+	AgentCert []byte                 `protobuf:"bytes,3,opt,name=agent_cert,json=agentCert,proto3" json:"agent_cert,omitempty"` // from v1 (QD-159): the Signed AgentCert the subkey's signature checks under,
+	// empty with no subkey signature (agent_asserted)
+	AgentKeyId     []byte `protobuf:"bytes,4,opt,name=agent_key_id,json=agentKeyId,proto3" json:"agent_key_id,omitempty"`           // SHA-256 of the subkey's public key
+	AgentSignature []byte `protobuf:"bytes,5,opt,name=agent_signature,json=agentSignature,proto3" json:"agent_signature,omitempty"` // the subkey's Ed25519 signature over EVS-FORMAT.md's push provenance bytes
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *EvsProvenance) Reset() {
@@ -5102,6 +5106,27 @@ func (x *EvsProvenance) GetTainted() bool {
 		return x.Tainted
 	}
 	return false
+}
+
+func (x *EvsProvenance) GetAgentCert() []byte {
+	if x != nil {
+		return x.AgentCert
+	}
+	return nil
+}
+
+func (x *EvsProvenance) GetAgentKeyId() []byte {
+	if x != nil {
+		return x.AgentKeyId
+	}
+	return nil
+}
+
+func (x *EvsProvenance) GetAgentSignature() []byte {
+	if x != nil {
+		return x.AgentSignature
+	}
+	return nil
 }
 
 type EvsSealedCommit struct {
@@ -7370,6 +7395,7 @@ type EvsRefsReply struct {
 	Format        uint32                 `protobuf:"varint,1,opt,name=format,proto3" json:"format,omitempty"`                                 // repo/'s object format (11.6)
 	PushSequence  uint64                 `protobuf:"varint,2,opt,name=push_sequence,json=pushSequence,proto3" json:"push_sequence,omitempty"` // {evsq_<repo_id>}
 	Refs          []*EvsHeadSummary      `protobuf:"bytes,3,rep,name=refs,proto3" json:"refs,omitempty"`                                      // a placeholder head is absent
+	All           bool                   `protobuf:"varint,4,opt,name=all,proto3" json:"all,omitempty"`                                       // every ref is listed: no moved_after, or one {evsh_} cannot place (11.9)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7423,6 +7449,13 @@ func (x *EvsRefsReply) GetRefs() []*EvsHeadSummary {
 		return x.Refs
 	}
 	return nil
+}
+
+func (x *EvsRefsReply) GetAll() bool {
+	if x != nil {
+		return x.All
+	}
+	return false
 }
 
 type EvsLogReply struct {
@@ -8397,10 +8430,15 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x11EvsHistoryLocator\x12\x18\n" +
 	"\asegment\x18\x01 \x01(\rR\asegment\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\rR\x06offset\x12\x16\n" +
-	"\x06length\x18\x03 \x01(\rR\x06length\"D\n" +
+	"\x06length\x18\x03 \x01(\rR\x06length\"\xae\x01\n" +
 	"\rEvsProvenance\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\fR\aagentId\x12\x18\n" +
-	"\atainted\x18\x02 \x01(\bR\atainted\"\x9f\x01\n" +
+	"\atainted\x18\x02 \x01(\bR\atainted\x12\x1d\n" +
+	"\n" +
+	"agent_cert\x18\x03 \x01(\fR\tagentCert\x12 \n" +
+	"\fagent_key_id\x18\x04 \x01(\fR\n" +
+	"agentKeyId\x12'\n" +
+	"\x0fagent_signature\x18\x05 \x01(\fR\x0eagentSignature\"\x9f\x01\n" +
 	"\x0fEvsSealedCommit\x12\x16\n" +
 	"\x06object\x18\x01 \x01(\fR\x06object\x12<\n" +
 	"\achanges\x18\x02 \x03(\v2\".urnetwork.sidecar.EvsSealedChangeR\achanges\x126\n" +
@@ -8600,11 +8638,12 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x06number\x18\x03 \x01(\x04R\x06number\x12\x16\n" +
 	"\x06offset\x18\x04 \x01(\rR\x06offset\x12\x12\n" +
 	"\x04body\x18\x05 \x01(\fR\x04body\x12\x18\n" +
-	"\amissing\x18\x06 \x01(\bR\amissing\"\x82\x01\n" +
+	"\amissing\x18\x06 \x01(\bR\amissing\"\x94\x01\n" +
 	"\fEvsRefsReply\x12\x16\n" +
 	"\x06format\x18\x01 \x01(\rR\x06format\x12#\n" +
 	"\rpush_sequence\x18\x02 \x01(\x04R\fpushSequence\x125\n" +
-	"\x04refs\x18\x03 \x03(\v2!.urnetwork.sidecar.EvsHeadSummaryR\x04refs\"u\n" +
+	"\x04refs\x18\x03 \x03(\v2!.urnetwork.sidecar.EvsHeadSummaryR\x04refs\x12\x10\n" +
+	"\x03all\x18\x04 \x01(\bR\x03all\"u\n" +
 	"\vEvsLogReply\x12C\n" +
 	"\n" +
 	"statements\x18\x01 \x03(\v2#.urnetwork.sidecar.EvsReadStatementR\n" +

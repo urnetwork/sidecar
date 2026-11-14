@@ -87,7 +87,7 @@ func (self *bridgeCompiler) reachPass() {
 		reach := &bridgeCompileReach{sidecarId: sidecarId, row: row, tagged: 0 < len(row.GetTagIds()), memberId: bridgeCompileMember(row)}
 		reach.dial = self.acl.DialRules(subject, self.selfSubject, self.now)
 		reach.route = self.acl.RouteRules(subject, self.selfSubject, self.now)
-		reach.exit = self.acl.ExitRules(subject, self.selfSubject, self.now)
+		reach.exit = self.exitRules(self.acl.ExitRules(subject, self.selfSubject, self.now))
 		reach.in = 0 < len(reach.dial)+len(reach.route)+len(reach.exit) || (!self.hasDocument && !reach.tagged)
 		if !self.selfDenied {
 			reach.out = 0 < len(self.acl.DialRules(self.selfSubject, subject, self.now)) || (!self.hasDocument && !self.selfTagged)
@@ -100,10 +100,33 @@ func (self *bridgeCompiler) reachPass() {
 	untagged := &bridge.BridgeRuleSubject{}
 	untagged.Dial = self.reachRows(self.acl.DialRules(other, self.selfSubject, self.now), false)
 	untagged.Route = self.reachRows(self.acl.RouteRules(other, self.selfSubject, self.now), true)
-	untagged.Exit = self.reachRows(self.acl.ExitRules(other, self.selfSubject, self.now), false)
+	untagged.Exit = self.reachRows(self.exitRules(self.acl.ExitRules(other, self.selfSubject, self.now)), false)
 	if 0 < len(untagged.Dial)+len(untagged.Route)+len(untagged.Exit) {
 		self.untagged = untagged
 	}
+}
+
+// The rules of an exit's rows: those that reach public destinations, an autogroup:internet one or one whose prefixes
+// hold IPv4's 0.0.0.0/0, as a standing exit's cover reads them (StandingCovers). Rows hold no prefix, so ExitRules
+// answers every route rule through its vias, a rule of 10.0.0.0/8 among them, whose via an advertiser of a no-via rule
+// is too (QD-764): its rows here are route rows alone. A rule whose prefixes the device does not hold, an activated
+// grant's (QD-003), reaches no public destination here, the closed direction.
+func (self *bridgeCompiler) exitRules(rules []AclReachRule) []AclReachRule {
+	exits := []AclReachRule{}
+	for _, rule := range rules {
+		if rule.Internet {
+			exits = append(exits, rule)
+			continue
+		}
+		local := self.aclLocal.Rule(rule.RuleId)
+		if local == nil && !self.hasDocument {
+			local = aclImplicitLocalPolicy().Rule(rule.RuleId)
+		}
+		if local != nil && slices.ContainsFunc(local.Cidrs, func(cidr netip.Prefix) bool { return cidr.Bits() == 0 && cidr.Addr().Is4() }) {
+			exits = append(exits, rule)
+		}
+	}
+	return exits
 }
 
 // The reach of one sidecar, nil for one the pass left out.

@@ -17,11 +17,21 @@ option go_package = "github.com/urnetwork/sidecar/protocol/bridge";
 
 message BridgeRows {                      // acl.proto's AclRows.bridge (§8)
   repeated BridgeEgressRow egress = 1;    // ids only
+  repeated BridgeRouteRow routes = 2;     // ids only: every approved route in force at the fold, then each BridgeRoute
+                                          //   and binding BridgeWithdraw since, in log order (QD-764)
 }
 
 message BridgeEgressRow {
   bytes subject = 1;                      // sidecar_id or keyed atom
   BridgeEgressMode mode = 2;
+}
+
+// An approved route's ids, as §17.8 shows them: AclState adds its advertiser to the via subjects of the route rules it
+// names that name no via of their own (QD-004's second half, QD-764). Never a prefix, site, weight or kind.
+message BridgeRouteRow {
+  bytes route_id = 1;                     // §17.8's rule id, 32 B
+  bytes advertiser = 2;                   // the sidecar_id that filed it
+  repeated bytes route_rule_ids = 3;      // the §8 route rules it serves: a policy rule's 16 B, a requested grant's 32
 }
 
 // DeviceLocalRpc.SetBridgeState carries this, or it stays in process; auth only rises, and verified

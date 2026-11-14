@@ -5,15 +5,17 @@
 //
 //	DialRules(s, d)   MayDial(s, d): dial rules from s whose subject targets name d, autogroup:self where the two share
 //	                  an owner or sponsor; a socket dial reaches no subject here, as in MayDial
-//	RouteRules(s, v)  MayRoute(s, a, v) for an address a that is no public one: route rules from s whose via subjects,
-//	                  their subject targets, hold v
-//	ExitRules(s, v)   MayRoute(s, a, v) for a public address a: those, and autogroup:internet's through any via
+//	RouteRules(s, v)  MayRoute(s, a, v) for an address a that is no public one: route rules from s whose via subjects
+//	                  hold v, their AclRule.via or, for a rule that names none, the advertisers whose approved routes
+//	                  name it in the rows' BridgeRows (QD-004, QD-764)
+//	ExitRules(s, v)   MayRoute(s, a, v) for a public address a: the same rules, an autogroup:internet one included only
+//	                  through its own vias (QD-764), since rows hold no prefix to tell a rule's public destinations
+//	                  from its private ones; a compile holds a rule to its public part by Internet and its prefixes
 //
 // Each answers in rule id order, every rule and activated grant in force at now, and nothing for a hard-denied end. A
 // rule's ports and prefixes are the device's, from AclLocalPolicy.Rule by RuleId (plan-BRIDGE-gate-row-prefixes #1). A
-// route rule with no via reaches no via here, as in MayRoute and at the contract gate: its via subjects are the
-// advertisers whose BridgeRoute.route_rule_ids name it (QD-004), which rows do not carry yet, so it opens nothing until
-// they do (question acl-m2-17-no-via-route-advertisers).
+// route rule with no via reaches exactly its advertisers here, as in MayRoute and at the contract gate, and nothing
+// before an approved route names it.
 //
 // EgressMode exports the mode the contract gate's egressRestricted reads (§17.9's egress spec, D-BRIDGE-13), and
 // StandingCovers answers 12.2.4's "in force" for a bridge rule filed with no approval.
@@ -49,8 +51,8 @@ type AclReachRule struct {
 	ExpiresMs int64
 	// Whether the rule's ip field names ports, which only AclLocalPolicy holds.
 	PortsLimited bool
-	// Whether its dst names autogroup:internet, which takes public destinations through any via; any other exit rule
-	// stands on its via subjects and its prefixes.
+	// Whether its dst names autogroup:internet, which takes public destinations through its via subjects; any other
+	// rule takes them only by a prefix that holds them, 0.0.0.0/0, which only AclLocalPolicy holds.
 	Internet bool
 }
 
@@ -98,24 +100,26 @@ func (self *AclState) DialRules(source AclSubject, destination AclSubject, now t
 // Every rule in force at now by which source may route through via to an address that is no public one, in rule id
 // order: MayRoute's search to its end. The prefixes are the device's to meet (AclLocalPolicy).
 func (self *AclState) RouteRules(source AclSubject, via AclSubject, now time.Time) []AclReachRule {
-	return self.routeRules(source, via, now.UnixMilli(), false)
+	return self.routeRules(source, via, now.UnixMilli())
 }
 
 // Every rule in force at now by which source may reach public destinations through via, an exit, in rule id order:
-// MayRoute's search to its end for a public address.
+// MayRoute's search to its end for a public address. Rows tell no public destination from a private one, so these are
+// RouteRules' rules; an autogroup:internet one answers Internet, and any other reaches public destinations only by a
+// prefix that holds them, which AclLocalPolicy holds.
 func (self *AclState) ExitRules(source AclSubject, via AclSubject, now time.Time) []AclReachRule {
-	return self.routeRules(source, via, now.UnixMilli(), true)
+	return self.routeRules(source, via, now.UnixMilli())
 }
 
-// RouteRules and ExitRules, by whether the destination is public.
-func (self *AclState) routeRules(source AclSubject, via AclSubject, nowMs int64, public bool) []AclReachRule {
+// RouteRules' and ExitRules' search.
+func (self *AclState) routeRules(source AclSubject, via AclSubject, nowMs int64) []AclReachRule {
 	sourceResolved := self.resolve(&source, nowMs)
 	viaResolved := self.resolve(&via, nowMs)
 	if sourceResolved.deny != 0 || viaResolved.deny != 0 {
 		return nil
 	}
 	match := func(rule *aclRule) bool {
-		return self.routeTakes(&sourceResolved, &viaResolved, public, rule)
+		return self.routeTakes(&sourceResolved, &viaResolved, rule)
 	}
 	var reach []AclReachRule
 	next := func(from int32) *aclRule {
@@ -131,8 +135,8 @@ func (self *AclState) routeRules(source AclSubject, via AclSubject, nowMs int64,
 // client id, else of the first row, in the rows' subject order, naming an atom it holds, which is the spec whose exits
 // 12.2.4's step 7 takes; auto where no row names it. Every row is exits or none, since auto removes a subject's row
 // (bridge_rows.go), so a mode other than auto is what the contract gate refuses Public contracts on (§8.10). Bytes no
-// verifier folded, or a field this build cannot name, anywhere in the section read as none, the closed direction
-// ParseBridgeRows takes. A hard-denied subject is answered too: every gate refuses it on its own.
+// verifier folded, or a field this build cannot name, anywhere in the section, its route rows included, read as none,
+// the closed direction ParseBridgeRows takes. A hard-denied subject is answered too: every gate refuses it on its own.
 func (self *AclState) EgressMode(subject AclSubject) bridge.BridgeEgressMode {
 	resolved := self.resolve(&subject, 0)
 	return self.egressMode(&resolved)
@@ -152,11 +156,14 @@ func (self *AclState) egressMode(resolved *aclResolved) bridge.BridgeEgressMode 
 		}
 		return self.holdsAtom(resolved, index)
 	}
+	if self.bridgeMalformed {
+		return bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE
+	}
 	var direct, held bridge.BridgeEgressMode
 	data := self.rows.GetBridge()
 	for 0 < len(data) {
 		number, wireType, n := protowire.ConsumeTag(data)
-		if n < 0 || number != 1 || wireType != protowire.BytesType {
+		if n < 0 || (number != 1 && number != 2) || wireType != protowire.BytesType {
 			return bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE
 		}
 		data = data[n:]
@@ -165,6 +172,10 @@ func (self *AclState) egressMode(resolved *aclResolved) bridge.BridgeEgressMode 
 			return bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE
 		}
 		data = data[n:]
+		if number == 2 {
+			// a route row (QD-764), which the state's build read whole
+			continue
+		}
 		subject, mode, ok := aclEgressRow(row)
 		if !ok || (mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS && mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE) {
 			return bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE
@@ -223,8 +234,8 @@ func aclEgressRow(row []byte) (Id, bridge.BridgeEgressMode, bool) {
 //
 //	route   a route rule of the head among the ids its route_rule_ids name, in force at now, whose prefixes hold every
 //	        prefix of a subnet route, or for an exit route reach public destinations (autogroup:internet, or a /0 such as
-//	        a bare * gives), and whose via subjects hold its advertiser; a rule with no via is held by every advertiser
-//	        whose route names it (QD-004)
+//	        a bare * gives), and whose via, AclRule.via, holds its advertiser; a rule that names no via is held by every
+//	        advertiser whose route names it (QD-004, QD-764)
 //	map     a dial rule of the head in force at now whose subject targets name its host, autogroup:self naming any host
 //	        with an owner or sponsor, and whose ports cover the map's protocol and ports
 //
@@ -305,7 +316,7 @@ func (self *AclLocalPolicy) routeCovered(state *AclState, advertiser *aclSidecar
 			if !bytes.Equal(rule.row.GetRuleId(), routeRuleId) || !state.standingRule(rule, nowMs, protocol.AclAction_ACL_ACTION_ROUTE) {
 				continue
 			}
-			if rule.hasSubjectTargets() && !state.namesTarget(advertiser, rule) {
+			if rule.viaNamed && !state.namesVia(advertiser, rule) {
 				continue
 			}
 			local := self.Rule(rule.row.GetRuleId())
@@ -391,6 +402,21 @@ func (self *AclState) standingRule(rule *aclRule, nowMs int64, action protocol.A
 // names it for the sources sharing its owner or sponsor.
 func (self *AclState) namesTarget(sidecar *aclSidecarState, rule *aclRule) bool {
 	return (rule.selfTarget && sidecar.hasOwner) || self.sidecarIsSubjectTarget(sidecar, rule)
+}
+
+// Whether a rule's via names a sidecar for some source: an atom it holds, its id, or autogroup:self, which names it for
+// the sources sharing its owner or sponsor. A rule's advertisers are no via it names: routeCovered reads them off the
+// route it judges.
+func (self *AclState) namesVia(sidecar *aclSidecarState, rule *aclRule) bool {
+	if rule.viaSelf && sidecar.hasOwner {
+		return true
+	}
+	for _, atomIndex := range rule.viaAtoms {
+		if _, found := slices.BinarySearch(sidecar.atoms, atomIndex); found {
+			return true
+		}
+	}
+	return slices.Contains(rule.viaSidecars, sidecar.id)
 }
 
 // The implicit document's local policy, compiled once from the binary's own document, which never changes (acl_implicit.go):

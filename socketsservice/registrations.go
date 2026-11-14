@@ -10,7 +10,8 @@
 //     inside the range, each field within §9.5's sizes. A page that fails is invalid and writes nothing
 //  4. the network's view S, taken once for the page: unloaded or behind answers unavailable
 //  5. per entry, in memory: the entry's own values (invalid, and never passed to the store); the namespace,
-//     plaintext only for tls/, smtp/ and ur/; the kill set; MayListen for the caller's subject; the claim
+//     plaintext only for tls/, smtp/ and ur/; the kill set; MayListen for the caller's subject, on §13.9's system
+//     publish its smtp/25/mx listen standing in (system_publish.go); the claim
 //     under the caller's sidecar's identity key in S, verified once per (client, claim bytes, key) and then
 //     remembered; the namespace's ValidateListen, where an undecided one makes the page unavailable. Every
 //     refusal is the same refusal, so the checks run cheapest first and the signature check after the gate's,
@@ -407,7 +408,8 @@ func (self *SocketsService) judgeEntry(
 		entry.verdict = socketEntryAllowed
 		return entry
 	}
-	listen := view.MayListen(caller.gateRequest(networkId, name), now)
+	// on §13.9's system publish, the caller's own smtp/25/mx listen stands in (system_publish.go)
+	listen := socketEntryListen(view, caller.gateRequest(networkId, name), name, stored, now)
 	if listen == nil || !listen.Allowed {
 		return entry
 	}

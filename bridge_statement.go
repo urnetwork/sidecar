@@ -25,8 +25,9 @@
 // An admin is an Owner's or Admin's standing member device, the roles that sign ServiceSettings (§7.9).
 //
 // BridgeLog is the id-level fold a ConfigState holds: the bridge statements that took effect since the newest base's
-// folded_through, in log order. A base's rows carry none of them but BridgeRows' egress modes, so a base empties the
-// fold and its tail re-applies, and a new device and a long-running reader hold one BridgeLog (FS-14's shape). The
+// folded_through, in log order. A base's rows carry none of them but BridgeRows' egress modes and approved routes' ids
+// (QD-764), so a base empties the fold and its tail re-applies, and a new device and a long-running reader hold one
+// BridgeLog and one BridgeRows (FS-14's shape). The
 // traps that read the fold, a withdrawn id and a held id, therefore see the unfolded tail alone at id level; a full
 // reader's ledger runs them over the config head's ledger rows too (bridge_ledger.go, OpenBridgeLedger).
 //
@@ -305,10 +306,11 @@ func configCheckBridgeStatement(state *ConfigState, statement *configStatement) 
 	return state.Bridge().judge(logStatement)
 }
 
-// A bridge statement's id-level effect: it joins the fold, and a BridgeEgress writes its subject's mode into the rows'
-// BridgeRows, as gates and api apply each entry over a base's rows (bridge_rows.go). Whether its signer was an admin,
-// and a route's or map's body-level verdict, are read on the state the entry lands on, so a base's re-application
-// follows the rebuilt rows; next holds nothing of the entry yet when this runs.
+// A bridge statement's id-level effect: it joins the fold, and the rows' BridgeRows take it as gates and api apply each
+// entry over a base's rows (bridge_rows.go): a BridgeEgress writes its subject's mode, a BridgeRoute its route's ids and
+// a BridgeWithdraw that binds a route's advertiser removes them (QD-764). Whether its signer was an admin, and a route's
+// or map's body-level verdict, are read on the state the entry lands on, so a base's re-application follows the rebuilt
+// rows; next holds nothing of the entry yet when this runs.
 func configApplyBridgeStatement(next *configStateBuilder, statement *configStatement) error {
 	logStatement, err := bridgeLogStatementOf(statement)
 	if err != nil {
@@ -318,11 +320,20 @@ func configApplyBridgeStatement(next *configStateBuilder, statement *configState
 	if judge := next.state.bridgeBodyJudge(); judge != nil && logStatement.filesRule() {
 		logStatement.Approval = judge.Judge(bridgeStateBefore(next.state, statement.n, statement.timeMs), logStatement)
 	}
-	if logStatement.SignedType == bridge.SignedType_SIGNED_BRIDGE_EGRESS {
-		bridgeRows, err := bridgeRowsWithEgress(next.state.aclRows.GetBridge(), logStatement.Subject, logStatement.EgressMode)
-		if err != nil {
-			return fmt.Errorf("%w: %w", ErrConfigRule, err)
-		}
+	held := next.state.aclRows.GetBridge()
+	bridgeRows := held
+	switch logStatement.SignedType {
+	case bridge.SignedType_SIGNED_BRIDGE_EGRESS:
+		bridgeRows, err = bridgeRowsWithEgress(held, logStatement.Subject, logStatement.EgressMode)
+	case bridge.SignedType_SIGNED_BRIDGE_ROUTE:
+		bridgeRows, err = bridgeRowsWithRoute(held, logStatement)
+	case bridge.SignedType_SIGNED_BRIDGE_WITHDRAW:
+		bridgeRows, err = bridgeRowsWithoutRoute(held, logStatement)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	if !bytes.Equal(bridgeRows, held) {
 		aclRows := aclRowsCopy(next.state.aclRows)
 		aclRows.Bridge = bridgeRows
 		next.setAclRows(aclRows)
