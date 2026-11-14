@@ -114,38 +114,89 @@ func TestSweepRemovesTheRefusedAndHintsThem(t *testing.T) {
 	}
 }
 
-// Queued twice before it runs, a network is swept once, at its newest position; queued again within
-// SweepMinInterval, it waits out the interval, always at the newest position.
+// Queued within SweepMinInterval of its last sweep, a network waits out the interval; queued twice before it runs, it
+// is swept once, at its newest position.
+//
+// The dispatcher reads the clock, works out its wait and then arms it, so a clock moved between the two leaves it a
+// wait that ends late. The test therefore moves the clock to a millisecond short of the interval's end with nothing
+// queued, when the dispatcher has no wait to arm; queues the network there, and takes the dispatcher's wait to the
+// interval's end, set on the clock, for its having seen the queue and held the sweep back; and after its last move
+// follows the one wait a pass caught across that move can have armed, a millisecond past the interval's end. The
+// interval is shorter than the probe's, so no other wait of the process ends, and none is armed, as the clock moves.
 func TestSweepRunsOnceForACoalescedQueueAndOncePerInterval(t *testing.T) {
 	world := newTestSocketWorld(t)
-	process := world.newProcess(nil)
+	interval := socketsservice.DefaultSocketsSettings().ProbeInterval / 2
+	process := world.newProcess(func(settings *socketsservice.SocketsSettings) {
+		settings.SweepMinInterval = interval
+	})
 	listener := testSocketEnrolledListener(world, process)
 	networkId := listener.networkId
 	process.registerOk(listener, 1, listener.blindedRegistration(t, testSocketTokenPath(t, 1)))
 	first := process.gate.Load(networkId)
-	second := process.gate.Load(networkId)
 	process.service.QueueSweepForTest(networkId, first)
-	process.service.QueueSweepForTest(networkId, second)
 	if err := process.service.AwaitSweeps(world.ctx, 1); err != nil {
 		t.Fatal(err)
 	}
 	if count := world.fakeStore.OpCount("ClaimSweep"); count != 1 {
-		t.Fatalf("a coalesced queue claimed %d times", count)
+		t.Fatalf("the first sweep claimed %d times", count)
 	}
 
+	second := process.gate.Load(networkId)
 	third := process.gate.Load(networkId)
-	process.service.QueueSweepForTest(networkId, third)
-	interval := socketsservice.DefaultSocketsSettings().SweepMinInterval
+	intervalEnd := world.clock.Now().Add(interval)
 	world.clock.Advance(interval - time.Millisecond)
-	if count := process.service.SweepCount(); count != 1 {
-		t.Fatalf("%d sweeps inside the interval", count)
+	waitCount := testTimerCountAt(world.clock.PendingTimers(), intervalEnd)
+	process.service.QueueSweepForTest(networkId, second)
+	process.service.QueueSweepForTest(networkId, third)
+	for {
+		count, swept := process.service.Sweeps()
+		if count != 1 {
+			t.Fatalf("%d sweeps inside the interval", count)
+		}
+		pending, added := world.clock.WatchTimers()
+		if waitCount < testTimerCountAt(pending, intervalEnd) {
+			break
+		}
+		select {
+		case <-swept:
+		case <-added:
+		case <-world.ctx.Done():
+			t.Fatalf("the dispatcher set no wait to the interval's end: %v", world.ctx.Err())
+		}
 	}
+	if count := world.fakeStore.OpCount("ClaimSweep"); count != 1 {
+		t.Fatalf("%d claims inside the interval", count)
+	}
+
+	lateEnd := intervalEnd.Add(time.Millisecond)
+	lateWaitCount := testTimerCountAt(world.clock.PendingTimers(), lateEnd)
 	world.clock.Advance(time.Millisecond)
-	if err := process.service.AwaitSweeps(world.ctx, 2); err != nil {
-		t.Fatal(err)
+	for {
+		count, swept := process.service.Sweeps()
+		if 2 <= count {
+			break
+		}
+		pending, added := world.clock.WatchTimers()
+		if lateWaitCount < testTimerCountAt(pending, lateEnd) {
+			// a pass that read the clock before the move and armed its wait after it; the clock once there, every
+			// later pass finds the network due
+			world.clock.AdvanceTo(lateEnd)
+			continue
+		}
+		select {
+		case <-swept:
+		case <-added:
+		case <-world.ctx.Done():
+			t.Fatalf("no sweep once the interval ended: %v", world.ctx.Err())
+		}
 	}
 	if count := world.fakeStore.OpCount("ClaimSweep"); count != 2 {
-		t.Fatalf("%d claims after the interval", count)
+		t.Fatalf("two queues inside the interval claimed %d times after it", count-1)
+	}
+	// the one sweep was of the newest position: its claim holds the network there
+	claim, claimed, err := world.fakeStore.ClaimSweep(world.ctx, networkId, third, time.Minute, nil)
+	if err != nil || claimed || claim.PolicyVersion != third {
+		t.Fatalf("the sweep's claim: %+v, taken again %v, %v", claim, claimed, err)
 	}
 }
 
