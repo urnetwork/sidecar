@@ -8,8 +8,9 @@
 // Redis's loss healed by one heartbeat, a looping client shed before anything is signed while another client's
 // calls go on, a spent network's quota from the over-limit list, and the one-dialer clamp on a fake clock.
 //
-// Nothing sleeps: the engine's first probe and the gate's first over-limit read are awaited by count, loads by the
-// gate's own count, and time moves on the Net's FakeClock.
+// Nothing sleeps: the engine's first probe, the gate's first over-limit read and its worker's first pass are awaited
+// by count, loads by the gate's own count against the loads its cache has started, and time moves on the Net's
+// FakeClock.
 
 package sidecartest_test
 
@@ -200,26 +201,32 @@ func socketSuiteAwait[T int | uint64](t *testing.T, ctx context.Context, what st
 	}
 }
 
-// Waits for the engine's first probe and the gate's first over-limit read.
+// Waits for the engine's first probe, the gate's first over-limit read and the gate worker's first pass. The pass
+// runs on a goroutine of its own and asks for a load of every network it finds behind, so it ends before a test
+// gives the gate any evidence: one that came late would add a load to those the test triggers.
 func (self *socketSuiteWorld) awaitStarted() {
 	self.t.Helper()
 	socketSuiteAwait(self.t, self.ctx, "the engine's first probe", self.engine.Probes, 0)
 	socketSuiteAwait(self.t, self.ctx, "the gate's first over-limit read", self.gate.OverLimitReads, 0)
+	socketSuiteAwait(self.t, self.ctx, "the gate worker's first pass", self.gate.Passes, 0)
 }
 
-// Asks the gate for the network until a load lands and it serves.
+// Asks the gate for the network, awaiting the load each refused ask starts, until it serves, and returns with every
+// load the cache has started taken in by the gate: the cache installs a state before it tells the gate of the load,
+// so a view served is not yet a load counted, and a test that read the gate's count then and awaited one more would
+// be answered by this load, not the one it triggered. An ask comes only with no load running, since an ask of a
+// network still loading can mark another load due behind the running one.
 func (self *socketSuiteWorld) awaitLoaded() {
 	self.t.Helper()
 	for {
-		_, changed := self.gate.Loads()
+		started := self.gate.Stats().LoadCount
 		if _, err := self.gate.View(self.networkId); err == nil {
-			return
+			break
 		}
-		select {
-		case <-changed:
-		case <-self.ctx.Done():
-			self.t.Fatal("the network never served")
-		}
+		self.awaitLoadsPast(started)
+	}
+	if started := self.gate.Stats().LoadCount; 0 < started {
+		self.awaitLoadsPast(started - 1)
 	}
 }
 

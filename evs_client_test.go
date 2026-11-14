@@ -266,7 +266,8 @@ func TestEvsTransportMapsEveryRefusalClass(t *testing.T) {
 	}
 }
 
-// A 401 is ErrEvsUnauthorized, and a proxy's page under a 502 reads as no code at all.
+// A 401 is ErrEvsUnauthorized, and a proxy's page under a 502 reads as no code at all, and as no answer from evs
+// (QD-758; evs_http_test.go).
 func TestEvsTransportUnauthorizedAndForeignBodies(t *testing.T) {
 	test := newEvsTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusUnauthorized)
@@ -282,7 +283,8 @@ func TestEvsTransportUnauthorizedAndForeignBodies(t *testing.T) {
 	}), newEvsTestStore(t))
 	err := test.client.http.callMessage(context.Background(), call, nil)
 	evsError, ok := EvsErrorOf(err)
-	if !ok || evsError.Status != http.StatusBadGateway || evsError.Code != protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED {
+	if !ok || evsError.Status != http.StatusBadGateway || evsError.Code != protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED ||
+		!evsError.OutcomeUnknown {
 		t.Errorf("502: %#v", err)
 	}
 }
