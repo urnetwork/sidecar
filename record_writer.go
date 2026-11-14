@@ -157,6 +157,13 @@ type SidecarRecordArgs struct {
 	Log    Logger
 	// Reaches the verifiable log's witnesses (record_log_witness.go); the HTTPS client when nil.
 	Witness RecordLogWitness
+	// The config's indexers and this device's mirrors (record_mirror.go); nil is RecordMirrorViewUnavailable until
+	// SidecarRecord.Mirrors().Bind.
+	Mirrors RecordMirrorView
+	// Where a depositor keeps its deposits until consumed, §16.7's spool; nil keeps none, which status names.
+	Kept RecordDepositSpool
+	// DefaultRecordMirrorSettings when nil.
+	MirrorSettings *RecordMirrorSettings
 }
 
 // One network's record on this sidecar: its writer, its reader, its ingester, its read receipts, the approval family's
@@ -171,6 +178,7 @@ type SidecarRecord struct {
 	accounting *RecordAccounting
 	log        *RecordLog
 	export     *RecordExport
+	mirrors    *RecordMirrors
 
 	stateLock sync.Mutex
 	// one erasure at a time (record_erase.go, which no ios_extension leg links)
@@ -207,6 +215,8 @@ func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
 		accounting: &RecordAccounting{writer: writer, reader: reader},
 		ingestDue:  true,
 	}
+	self.mirrors = newRecordMirrors(writer, args.Mirrors, args.Kept, args.MirrorSettings)
+	writer.setDepositKeeper(self.mirrors.depositCommitted)
 	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
 	self.log = newRecordLog(self, args.Witness)
 	reader.addSyncHook(self.log.monitor)
@@ -249,6 +259,11 @@ func (self *SidecarRecord) Accounting() *RecordAccounting {
 	return self.accounting
 }
 
+// Which indexer mirrors each log, and the deposits this device keeps until consumed (RECORD-M3-10).
+func (self *SidecarRecord) Mirrors() *RecordMirrors {
+	return self.mirrors
+}
+
 // Notes that a deposit may wait, and wakes the loop.
 func (self *SidecarRecord) markIngestDue() {
 	func() {
@@ -288,6 +303,9 @@ func (self *SidecarRecord) tend(ctx context.Context) {
 	self.accounting.mirrorQueued(ctx)
 	self.log.Tick(ctx)
 	self.export.Tick(ctx)
+	if err := self.mirrors.Tend(ctx); err != nil && self.writer.log.V(1).Enabled() {
+		self.writer.log.Infof("[record]%s", err)
+	}
 	logIds := self.ingestedLogs()
 	if len(logIds) == 0 || !self.takeIngestDue() {
 		return
@@ -421,6 +439,8 @@ type recordWriter struct {
 	spoolOther  func(id SpoolRecordId, record *SpoolRecord) error
 	commitHooks []func(logId Id)
 	adoptedLogs map[Id]bool
+	// keeps each committed deposit until it is consumed (record_mirror.go); nil keeps none
+	depositKeeper func(logId Id, commit *RecordStreamCommit, batch []byte) error
 }
 
 // A writer over args, reading nothing until its first Append or pump.
@@ -505,6 +525,13 @@ func (self *recordWriter) setSpoolHandlers(taint func(id SpoolRecordId, record *
 	defer self.stateLock.Unlock()
 	self.spoolTaint = taint
 	self.spoolOther = other
+}
+
+// Installs the keeper each committed deposit goes to before its plan is acknowledged (record_mirror.go).
+func (self *recordWriter) setDepositKeeper(keeper func(logId Id, commit *RecordStreamCommit, batch []byte) error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.depositKeeper = keeper
 }
 
 // Called after each commit of a push or deposit to logId, with no lock held: the ingester's cue (RECORD-M3-04).
@@ -1166,8 +1193,10 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 	}
 	// each takes the records' lock itself, so before it is taken here
 	var spool RecordSpool
+	var kept RecordDepositSpool
 	if built, err := self.Spool(); err == nil {
 		spool = built
+		kept = built
 	}
 	runs, runsErr := self.Runs()
 	self.records.stateLock.Lock()
@@ -1191,6 +1220,8 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 		Clock:    self.settings.ClockOrReal(),
 		Settings: self.settings.Record,
 		Log:      self.log,
+		// a depositor's deposits, kept until consumed (D-MCP-10)
+		Kept: kept,
 	}
 	if runsErr == nil {
 		args.Gap = func(runId Id, code string) {

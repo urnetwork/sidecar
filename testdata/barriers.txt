@@ -440,6 +440,10 @@ barrier record.log.sign.after record_log.go
 barrier record.log.sign.before record_log.go
 barrier record.log.witness.after record_log.go
 barrier record.log.witness.before record_log.go
+barrier record.mirror.keep.after record_mirror.go
+barrier record.mirror.keep.before record_mirror.go
+barrier record.mirror.redeposit.after record_mirror.go
+barrier record.mirror.redeposit.before record_mirror.go
 barrier record.outcome.after record_gate_spend.go
 barrier record.outcome.before record_gate_spend.go
 barrier record.plan.after record_slot.go
