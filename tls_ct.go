@@ -5,6 +5,12 @@
 // sidecar reads two CT sources for its zone, its aliases and its custom hosts about every 6 hours, jittered, and
 // reads each logged certificate back against the network's rows (GET /tls/certs) and its own verified config.
 //
+// Only a host that stays up runs it (TLS-M8-01): a desktop or CLI daemon, whose tls component Sidecar.TlsComponentArgs
+// makes. An app's sidecar role runs only while the app is open (§18.4, owner decision 197), so a pass every ~6 hours
+// would wait on foregrounds and ask the sources at each one: its component, from TlsForegroundComponentArgs, runs no
+// watch and makes no CT client, and the network's other listening devices that stay up keep the watch over its names
+// too, since every device of a network watches the same zone.
+//
 // A logged certificate is known when some row is a certificate for exactly its key and its names, and that row's
 // attestation verifies here, under the identity key verified config pins for the row's sidecar: the rows are a
 // server's answer, so a row alone proves nothing. It alarms (ct_alarm) when
