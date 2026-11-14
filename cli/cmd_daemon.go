@@ -490,6 +490,11 @@ func urDaemonCoreMethods(instance string, target urDaemonTarget, keyStoreKind os
 				if err := decodeUrParams(call, params); err != nil || params.AuthKey == "" {
 					return nil, errors.New("enroll takes an auth key")
 				}
+				if mcp.HarnessCloudEnvironmentHoldsKey(urEnviron()) {
+					// the daemon's own environment, which its children inherit, holds a key (QD-041)
+					params.AuthKey = ""
+					return nil, mcp.ErrHarnessCloudKeyEnvironment
+				}
 				credential := &sidecar.SidecarEnrollCredential{
 					AuthKey:        params.AuthKey,
 					Ephemeral:      params.Ephemeral,
