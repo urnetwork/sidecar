@@ -12,7 +12,12 @@
 //	              copy read is erased, the closed direction. The caller erases what it is handed once the enrollment
 //	              has it.
 //	hook          HarnessCloudConnectCommand is the committed SessionStart step, `ur connect --token-file <path>
-//	              --ephemeral`, which runs before any other `ur` step of a cloud session.
+//	              --ephemeral`, which runs before any other `ur` step of a cloud session. `ur install-harness
+//	              --project --cloud-key-file <path>` writes it (harness_install.go's cloud row) as the head of the
+//	              session-start hook's one command, HarnessCloudStartCommand: a harness runs one event's hooks side
+//	              by side, so only one command orders the enrollment before ur hook. The connect step reads nothing
+//	              from the hook's input and writes nothing to its output, which a harness may hand the agent, and its
+//	              failure, a file already taken by an earlier session of the same VM, leaves ur hook to run
 //
 // Until a person passes a key this way `ur` in a VM stays Unenrolled and its capture spools (plan-MCP-cloud-auth-key's
 // interim): nothing here enrolls by itself, and no committed file holds a key.
@@ -24,6 +29,7 @@ package mcp
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -107,6 +113,51 @@ func TakeHarnessCloudKeyFile(path string, settings *sidecar.AuthKeySettings) ([]
 // the line end after it.
 func harnessCloudKeyFileUsable(info os.FileInfo, settings *sidecar.AuthKeySettings) bool {
 	return info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0 && info.Size() <= int64(settings.MaxByteCount)+1
+}
+
+// A cloud key file the install cannot name: not a project install, a harness that reports no session start, or a path
+// that is not an absolute POSIX path of plain text.
+var ErrHarnessCloudProfile = errors.New("the cloud profile cannot be installed")
+
+// Whether args' cloud key file can be installed for adapter: a project install, of a harness one of whose hooked
+// events is the session's start, the path absolute as the VM reads it, a Linux path whatever machine runs the
+// install, and holding no control byte, so the committed command is one line.
+func checkHarnessCloudKeyFile(args *HarnessInstallArgs, adapter harnessInstallAdapter) error {
+	if args.ProjectDirectory == "" {
+		return fmt.Errorf("%w: a key file is a project install's, with --project", ErrHarnessCloudProfile)
+	}
+	if !strings.HasPrefix(args.CloudKeyFile, "/") || strings.HasSuffix(args.CloudKeyFile, "/") {
+		return fmt.Errorf("%w: the key file's path is not an absolute file path", ErrHarnessCloudProfile)
+	}
+	for _, r := range args.CloudKeyFile {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%w: the key file's path holds a control character", ErrHarnessCloudProfile)
+		}
+	}
+	if HarnessCloudEnvironmentHoldsKey([]string{args.CloudKeyFile}) {
+		// a key pasted where its file's path belongs would be committed
+		return fmt.Errorf("%w: the key file's path holds an auth key's prefix", ErrHarnessCloudProfile)
+	}
+	for _, file := range adapter.files(args.Home, args.ProjectDirectory) {
+		hooks, ok := file.kind.(*harnessHooksFile)
+		if !ok {
+			continue
+		}
+		for _, event := range hooks.events {
+			if event.start {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: %s reports no session start to run the connect step at", ErrHarnessCloudProfile, args.Harness)
+}
+
+// The session-start hook's command under the cloud profile: the connect step, then hookCommand, ur's own hook step, in
+// one command so they run in that order. The connect step's input is /dev/null, so the hook's payload reaches ur hook
+// whole, and its output is dropped, so nothing it prints reaches what a harness reads from a hook; whatever it
+// answers, ur hook runs.
+func HarnessCloudStartCommand(urPath string, keyFile string, instance string, hookCommand string) string {
+	return HarnessCloudConnectCommand(urPath, keyFile, instance) + " </dev/null >/dev/null 2>&1; " + hookCommand
 }
 
 // The committed SessionStart step of a cloud session: `ur connect --token-file <keyFile> --ephemeral`, ur named as

@@ -64,6 +64,8 @@ type HarnessSeal struct {
 	Agent        string   `json:"agent,omitempty"`
 	Instance     string   `json:"instance,omitempty"`
 	OutwardTools []string `json:"outward_tools"`
+	// The cloud profile's key file, a path and never a key; "" for none.
+	CloudKeyFile string `json:"cloud_key_file,omitempty"`
 	// In the install's order.
 	Files []*HarnessSealFile `json:"files"`
 	// SHA-256 over the files' hashes in order, hex: RECORD.md's config_sha256.
@@ -86,6 +88,7 @@ func newHarnessSeal(args *HarnessInstallArgs, template *harnessTemplate, adapter
 		Agent:            template.agent,
 		Instance:         template.instance,
 		OutwardTools:     slices.Clone(template.outwardTools),
+		CloudKeyFile:     template.cloudKeyFile,
 	}
 	if args.ProjectDirectory == "" {
 		seal.Home = args.Home
@@ -329,7 +332,9 @@ func harnessDirectoryHolds(directory string, path string) bool {
 
 // The template a seal's inputs render.
 func (self *HarnessConfigHashes) templateOf(seal *HarnessSeal) *harnessTemplate {
-	return newHarnessTemplate(seal.Harness, seal.UrPath, seal.Agent, seal.Instance, seal.OutwardTools, self.args.Ingest)
+	template := newHarnessTemplate(seal.Harness, seal.UrPath, seal.Agent, seal.Instance, seal.OutwardTools, self.args.Ingest)
+	template.cloudKeyFile = seal.CloudKeyFile
+	return template
 }
 
 // Whether one seal's files no longer hold what it sealed: see the file header.

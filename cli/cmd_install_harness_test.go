@@ -87,3 +87,42 @@ func TestInstallHarnessRefusesUnknown(t *testing.T) {
 		t.Errorf("asked or wrote: %s", tty.written.String())
 	}
 }
+
+// The cloud profile (MCP-M4-02; QD-041): --project with --cloud-key-file commits a session-start step that takes the
+// key file before ur hook runs, shown in the diff before it is written, and the flag without --project is refused
+// with nothing asked.
+func TestInstallHarnessCloudKeyFile(t *testing.T) {
+	home := t.TempDir()
+	state := t.TempDir()
+	project := t.TempDir()
+	cli, tty := newTestInstallHarnessCli(t, home, state, "y")
+	cli.cwd = func() (string, error) { return project, nil }
+	args := []string{"ur", "install-harness", "claude-code", "--project", "--cloud-key-file=/run/ur/authkey"}
+	if code := cli.main(context.Background(), args); code != urExitOk {
+		t.Fatalf("exit %d:\n%s", code, tty.written.String())
+	}
+	step := "/opt/ur/bin/ur connect --token-file /run/ur/authkey --ephemeral </dev/null >/dev/null 2>&1; /opt/ur/bin/ur hook claude-code"
+	log := tty.written.String()
+	if diffAt, questionAt := strings.Index(log, "connect --token-file /run/ur/authkey"), strings.Index(log, "write these changes"); diffAt < 0 || questionAt < diffAt {
+		t.Errorf("the connect step is not in the diff before the question:\n%s", log)
+	}
+	settings, err := os.ReadFile(filepath.Join(project, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// JSON writes < and > escaped or plain; the command's words either way
+	if !strings.Contains(string(settings), "connect --token-file /run/ur/authkey --ephemeral") || !strings.Contains(string(settings), "; /opt/ur/bin/ur hook claude-code") {
+		t.Errorf("the committed settings hold no session-start step %q:\n%s", step, settings)
+	}
+	if strings.Contains(string(settings), "ur-authkey-") {
+		t.Error("a committed file holds an auth key's prefix")
+	}
+
+	cli, tty = newTestInstallHarnessCli(t, home, state, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "claude-code", "--cloud-key-file=/run/ur/authkey"}); code != urExitFailed {
+		t.Fatalf("a key file with no project: exit %d", code)
+	}
+	if strings.Contains(tty.written.String(), "write these changes") {
+		t.Errorf("a refused install asked:\n%s", tty.written.String())
+	}
+}

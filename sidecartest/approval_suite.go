@@ -24,6 +24,10 @@
 // Reserve once seen never goes, its use stays consumed (AU3); the run's taint never clears; and at the end every
 // Reserve has its Outcome, done, not_done or uncertain, once the daemon has reconciled.
 //
+// MCP-M3-25's rows build on the same world (approval_world_devices.go): the member's host pairing, the governing
+// evidence list, a presence key, standing grants and a harness's evidence, each what a test sets, the run store and
+// local state the daemon's hooks bind runs in, and FI-7's taint clause read over every run file.
+//
 // Safe for concurrent use: the world's own state is under stateLock, and the gate is the root's.
 
 package sidecartest
@@ -179,6 +183,17 @@ type ApprovalWorldDevice struct {
 	SidecarId sidecar.Id
 	MemberId  sidecar.Id
 	Key       ed25519.PrivateKey
+	// The identity key's public half for a device whose private half the world does not hold, a real Sidecar a test
+	// admits: Key is nil then, and the world signs nothing as it.
+	PublicKey ed25519.PublicKey
+}
+
+// The identity key's public half.
+func (self *ApprovalWorldDevice) identityKey() ed25519.PublicKey {
+	if self.Key == nil {
+		return self.PublicKey
+	}
+	return self.Key.Public().(ed25519.PublicKey)
 }
 
 // A device from a fixed seed, so a world repeats.
@@ -200,9 +215,15 @@ type ApprovalWorldState struct {
 	capable  map[sidecar.Id]bool
 	eligible []sidecar.Id
 	k        int
+	// the governing evidence list, nil for device alone, and whether a requests rule of its own names harness
+	evidence         []protocol.ApprovalChannel
+	ruleNamesHarness bool
+	// the presence keys live at P
+	presenceKeys []*bridge.KeyRow
 }
 
 var _ sidecar.ApprovalStates = (*ApprovalWorldState)(nil)
+var _ sidecar.HarnessStates = (*ApprovalWorldState)(nil)
 
 func (self *ApprovalWorldState) Pin() *bridge.AuthPin {
 	return self.pin
@@ -223,7 +244,7 @@ func (self *ApprovalWorldState) Forked() bool {
 func (self *ApprovalWorldState) IdentityKey(sidecarId sidecar.Id) []byte {
 	for _, device := range self.devices {
 		if device.SidecarId == sidecarId {
-			return device.Key.Public().(ed25519.PublicKey)
+			return device.identityKey()
 		}
 	}
 	return nil
@@ -242,6 +263,11 @@ func (self *ApprovalWorldState) ApprovalCapable(sidecarId sidecar.Id, memberId s
 }
 
 func (self *ApprovalWorldState) PresenceKey(keyId []byte, memberId sidecar.Id) *bridge.KeyRow {
+	for _, key := range self.presenceKeys {
+		if bytes.Equal(key.GetKeyId(), keyId) && bytes.Equal(key.GetMemberId(), memberId.Bytes()) {
+			return key
+		}
+	}
 	return nil
 }
 
@@ -259,11 +285,14 @@ func (self *ApprovalWorldState) Approvers(action *sidecar.StoredCanonicalAction,
 }
 
 func (self *ApprovalWorldState) RuleNamesHarness(action *sidecar.StoredCanonicalAction) bool {
-	return false
+	return self.ruleNamesHarness
 }
 
 func (self *ApprovalWorldState) Evidence() []protocol.ApprovalChannel {
-	return []protocol.ApprovalChannel{protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE}
+	if self.evidence == nil {
+		return []protocol.ApprovalChannel{protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE}
+	}
+	return slices.Clone(self.evidence)
 }
 
 func (self *ApprovalWorldState) ApproverCount() int {
@@ -366,6 +395,8 @@ type approvalWorldDaemon struct {
 	ledger *sidecar.ApprovalLedger
 	runs   *sidecar.RunStore
 	gate   *sidecar.ApprovalGate
+	// the daemon's fault-taking view of its local state
+	local sidecar.SidecarStore
 }
 
 // One requesting daemon's gate and what it reads. See the file's header.
@@ -390,9 +421,11 @@ type ApprovalWorld struct {
 	daemon    *approvalWorldDaemon
 	// the daemon's actor context, for its store's faults
 	daemonCtx context.Context
-	// FI-7's memory between checks: each approval's Reserves seen, and whether the run was seen tainted
+	// FI-7's memory between checks: each approval's Reserves seen, and each run seen tainted
 	approvalReserveCounts map[sidecar.Id]int
-	taintSeen             bool
+	taintSeenRunIds       map[sidecar.Id]bool
+	// what the daemon is built with beyond the defaults, nil for none (approval_world_devices.go)
+	options *ApprovalWorldOptions
 }
 
 // A world on net, its daemon a process named name, started: a member with the requesting laptop and an
@@ -400,6 +433,11 @@ type ApprovalWorld struct {
 // rule names, one rule needing one of the first member alone, the run created untainted. Registered with the Net for
 // FI-7's oracle.
 func NewApprovalWorld(net *Net, name string) (*ApprovalWorld, error) {
+	return NewApprovalWorldWith(net, name, nil)
+}
+
+// NewApprovalWorld with what options add to its daemon, nil for nothing.
+func NewApprovalWorldWith(net *Net, name string, options *ApprovalWorldOptions) (*ApprovalWorld, error) {
 	member := NewApprovalWorldIdOf("member " + name)
 	otherMember := NewApprovalWorldIdOf("other member " + name)
 	strangerMember := NewApprovalWorldIdOf("stranger " + name)
@@ -417,6 +455,8 @@ func NewApprovalWorld(net *Net, name string) (*ApprovalWorld, error) {
 		RunId:                 NewApprovalWorldIdOf("run " + name),
 		AgentId:               NewApprovalWorldIdOf("agent " + name),
 		approvalReserveCounts: map[sidecar.Id]int{},
+		taintSeenRunIds:       map[sidecar.Id]bool{},
+		options:               options,
 	}
 	for _, kind := range []sidecar.SidecarActionKind{sidecar.SidecarActionMail, sidecar.SidecarActionDnsSet, sidecar.SidecarActionDnsDelete} {
 		world.sinks[kind] = NewEffectSink()
@@ -491,25 +531,38 @@ func (self *ApprovalWorld) open(ctx context.Context, instance string) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	gate, err := sidecar.NewApprovalGate(args, inbox, router, &sidecar.ApprovalGateArgs{
-		Lookups: func(kind sidecar.SidecarActionKind) sidecar.SidecarEffectLookup {
-			sink, ok := self.sinks[kind]
-			if !ok {
-				return nil
-			}
-			return sink.Lookup
-		},
-	})
+	gateArgs := &sidecar.ApprovalGateArgs{}
+	if self.options != nil {
+		gateArgs.Grants = self.options.Grants
+		if self.options.Harness != nil {
+			gateArgs.Harness = self.options.Harness(ctx, self, args.Runs)
+		}
+	}
+	gateArgs.Lookups = func(kind sidecar.SidecarActionKind) sidecar.SidecarEffectLookup {
+		sink, ok := self.sinks[kind]
+		if !ok {
+			return nil
+		}
+		return sink.Lookup
+	}
+	gate, err := sidecar.NewApprovalGate(args, inbox, router, gateArgs)
 	if err != nil {
 		return nil, err
 	}
 	// a use Reconcile could not record, a lost write's, stays for the next Reconcile or a retry of its action to
 	// complete, as on a host, so the daemon serves either way
 	gate.Reconcile(ctx)
-	daemon := &approvalWorldDaemon{ledger: ledger, runs: runs, gate: gate}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.daemon = daemon
+	daemon := &approvalWorldDaemon{ledger: ledger, runs: runs, gate: gate, local: local}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.daemon = daemon
+	}()
+	if self.options != nil && self.options.Opened != nil {
+		if err := self.options.Opened(ctx, self); err != nil {
+			return nil, err
+		}
+	}
 	return daemon, nil
 }
 
@@ -573,6 +626,10 @@ func (self *ApprovalWorld) MovePin(dropApprover bool) {
 		capable:       map[sidecar.Id]bool{},
 		eligible:      slices.Clone(old.eligible),
 		k:             old.k,
+
+		evidence:         old.evidence,
+		ruleNamesHarness: old.ruleNamesHarness,
+		presenceKeys:     old.presenceKeys,
 	}
 	for version, chain := range old.versionChains {
 		moved.versionChains[version] = chain
@@ -621,7 +678,11 @@ func (self *ApprovalWorld) DnsAction(value string) (*sidecar.StoredCanonicalActi
 
 // stored as the O tool hands it to Authorize: the world's run and agent, the kind's sink its effect.
 func (self *ApprovalWorld) Action(stored *sidecar.StoredCanonicalAction) *sidecar.SidecarAction {
-	runId := self.RunId
+	return self.ActionIn(stored, self.RunId)
+}
+
+// Action in runId, a run the daemon's hooks bound.
+func (self *ApprovalWorld) ActionIn(stored *sidecar.StoredCanonicalAction, runId sidecar.Id) *sidecar.SidecarAction {
 	agentId := self.AgentId
 	kind := sidecar.SidecarActionKind(stored.Action.GetKind())
 	return &sidecar.SidecarAction{
@@ -674,21 +735,28 @@ func (self *ApprovalWorld) SignDecision(approvalId sidecar.Id, uses uint32, notA
 	if request == nil {
 		return nil, fmt.Errorf("no request filed under approval %s", approvalId)
 	}
+	return approvalWorldSigned(signer, bridge.SignedType_SIGNED_APPROVAL_DECISION,
+		self.decisionOf(request, uses, notAfter, signer.MemberId, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, pin))
+}
+
+// An approving decision on request: for uses, until notAfter, by memberId on channel, under pin, the laptop its
+// requester.
+func (self *ApprovalWorld) decisionOf(request *sidecar.StoredApprovalRequest, uses uint32, notAfter time.Time, memberId sidecar.Id, channel protocol.ApprovalChannel, pin *bridge.AuthPin) *protocol.ApprovalDecision {
 	requestSha256 := request.Sha256()
 	payloadSha256 := request.Action.PayloadSha256()
-	return approvalWorldSigned(signer, bridge.SignedType_SIGNED_APPROVAL_DECISION, &protocol.ApprovalDecision{
-		ApprovalId:         approvalId.Bytes(),
+	return &protocol.ApprovalDecision{
+		ApprovalId:         request.Request.GetApprovalId(),
 		RequestSha256:      requestSha256[:],
 		PayloadSha256:      payloadSha256[:],
 		Decision:           uint32(protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE),
 		Uses:               uses,
 		NotAfterMillis:     notAfter.UnixMilli(),
-		ApproverMemberId:   signer.MemberId.Bytes(),
-		Channel:            uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE),
+		ApproverMemberId:   memberId.Bytes(),
+		Channel:            uint32(channel),
 		RequesterSidecarId: self.Laptop.SidecarId.Bytes(),
 		AuthPin:            pin,
 		Version:            1,
-	})
+	}
 }
 
 // The inbox's next poll of the log, as its Run makes one every ApprovalPollInterval: what counts a decision whose row
@@ -734,6 +802,11 @@ func approvalWorldSigned(device *ApprovalWorldDevice, signedType bridge.SignedTy
 	if err != nil {
 		return nil, err
 	}
+	return approvalWorldSignedBody(device, signedType, bodyBytes)
+}
+
+// A body's deterministic bytes signed by device under purpose approval, as stored.
+func approvalWorldSignedBody(device *ApprovalWorldDevice, signedType bridge.SignedType, bodyBytes []byte) ([]byte, error) {
 	return proto.Marshal(&bridge.Signed{
 		Body:      bodyBytes,
 		SignerId:  device.SidecarId.Bytes(),
@@ -818,13 +891,26 @@ func (self *ApprovalWorld) CheckEffects(final bool) error {
 			return fmt.Errorf("approval %s had %d effects under %d Reserves (AU1)", approvalId, effectCount, len(state.Reserves))
 		}
 	}
-	tainted := runs.Tainted(self.RunId)
+	// the world's own run and every run the daemon's hooks opened: a file that does not read is tainted
+	runIds := []sidecar.Id{self.RunId}
+	if runDirectory, err := self.store.Root().Directory(approvalWorldRunDirectory, approvalWorldRunClass); err == nil {
+		if entries, err := runDirectory.List(""); err == nil {
+			for _, entry := range entries {
+				if runId, err := sidecar.ParseId(entry.Name); err == nil && runId != self.RunId {
+					runIds = append(runIds, runId)
+				}
+			}
+		}
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if self.taintSeen && !tainted {
-		return errors.New("the run's taint cleared")
+	for _, runId := range runIds {
+		tainted := runs.Tainted(runId)
+		if self.taintSeenRunIds[runId] && !tainted {
+			return fmt.Errorf("run %s's taint cleared", runId)
+		}
+		self.taintSeenRunIds[runId] = self.taintSeenRunIds[runId] || tainted
 	}
-	self.taintSeen = self.taintSeen || tainted
 	return nil
 }
 

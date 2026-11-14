@@ -8,7 +8,10 @@
 // Every command it writes names ur by this binary's absolute path (§4.10), and --instance, which ur takes anywhere,
 // the daemon it reaches. --project writes the files a cloud session loads into the working directory, to be committed,
 // and §5.8's `.ur` where the project has none. A file already holding ur's entries is left as it is, so running it
-// again changes nothing, and running it after an edit restores ur's entries.
+// again changes nothing, and running it after an edit restores ur's entries. --cloud-key-file, with --project, is the
+// cloud profile (§16.9; QD-041; MCP-M4-02): the committed SessionStart step then first runs ur connect --token-file
+// <path> --ephemeral on the owner-only file a cloud environment's setup step leaves the auth key in, the path as the
+// session's VM reads it. The path is committed; no key ever is.
 
 package main
 
@@ -27,7 +30,7 @@ import (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "install-harness",
-		usage:   "  ur install-harness <harness> [--agent=<name>] [--project]",
+		usage:   "  ur install-harness <harness> [--agent=<name>] [--project] [--cloud-key-file=<path>]",
 		summary: "install ur's MCP entry, outward-tool ask rule and hooks in a harness: " + strings.Join(mcp.HarnessNames(), ", "),
 		run:     runUrInstallHarness,
 	})
@@ -49,6 +52,7 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 	harness, _ := options.String("<harness>")
 	agent, _ := options.String("--agent")
 	project, _ := options.Bool("--project")
+	cloudKeyFile, _ := options.String("--cloud-key-file")
 	urPath, err := urHarnessExecutable()
 	if err != nil {
 		return fmt.Errorf("ur's own path: %w", err)
@@ -68,6 +72,7 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 		Home:           home,
 		UrPath:         urPath,
 		StateDirectory: stateDirectory,
+		CloudKeyFile:   cloudKeyFile,
 		Ingest:         cli.ingest,
 	}
 	if project {
