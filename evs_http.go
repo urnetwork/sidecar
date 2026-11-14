@@ -10,9 +10,11 @@
 //
 // Answers map to typed errors: every answer but a 200 is an *EvsError, its code from §11.8's fixed table with
 // recorded, retry_after_ms, outcome unknown, the paths a 409 names, needs_format, §20.7's QuotaRefusal and a
-// depositor's head, as EvsRefusalReply carries them. A read retries a 429 or a 503 that refuses nothing, after
-// retry_after_ms; nothing else retries here, since a push's retries are the push sender's, under its one push id
-// (§11.8's retry id row).
+// depositor's head, as EvsRefusalReply carries them. A 502 or 504 whose body is not an evs refusal is the lb's
+// answer, no answer from evs at all, so its outcome is unknown (QD-758): the lb answers a streamed segment PUT whose
+// upstream died so, since it cannot send a body it has begun streaming to another block. A read retries a 429 or a
+// 503 that refuses nothing, after retry_after_ms; nothing else retries here, since a push's retries are the push
+// sender's, under its one push id, and the uploads', each with its same bytes (§11.8's retry id row).
 //
 // The read reply is a stream of u32be(length) | EvsReadFrame (plan-EVS1-format-bytes#8), which EvsReadFrames reads one
 // frame at a time, so a reply of 32 MiB of ranges is never held whole (R-EVS-14), a directory's delta frames folded
@@ -76,7 +78,9 @@ type EvsError struct {
 	Recorded bool
 	// A 429's, or a 503's where it applies; Retry-After's when the body names none.
 	RetryAfter time.Duration
-	// A 503 {outcome: unknown}: the attempt may yet have committed, which a retry of the same push id resolves.
+	// A 503 {outcome: unknown}: the attempt may yet have committed, which a retry of the same push id resolves. So is
+	// a 502 or 504 whose body is not an evs refusal, which is the lb's answer and none from evs (QD-758): the push
+	// sender and the uploads send that attempt's bytes again, as when nothing answered.
 	OutcomeUnknown bool
 	// What a 409 names, in the push's path epoch.
 	Paths []EvsTokenPath
@@ -303,10 +307,24 @@ func (self *evsHttpBody) Close() error {
 
 // The *EvsError a refusal's status and body give. A body that does not parse leaves the code the status's own:
 // UNAVAILABLE for a 503, WAIT for a 429, else unspecified, so a proxy's error page is never read as a code.
+//
+// A 502 or 504 whose body is not an evs refusal, an EvsRefusalReply naming a code of §11.8's table, is the lb's
+// answer and no answer from evs at all (QD-758): nginx's, when the block a request reached died or went silent
+// under it and it could not pass the request on, as with a streamed segment PUT once its body has begun, or when
+// its tries ran out. Nothing of its body is read, and its outcome is unknown, so retryRefusingNothing sends the same
+// bytes again after ReadRetryWait, as for no answer, until §11.8's 200, 409 or 412; a read, which retries no lost
+// answer here, takes it as it took one before. An evs refusal a 502 or 504 carries keeps its meaning, as any other
+// answer's does.
 func evsErrorOfAnswer(response *http.Response, body []byte) *EvsError {
-	evsError := &EvsError{Status: response.StatusCode}
 	reply := &protocol.EvsRefusalReply{}
-	if err := proto.Unmarshal(body, reply); err == nil && len(body) != 0 {
+	parsed := len(body) != 0 && proto.Unmarshal(body, reply) == nil
+	if response.StatusCode == http.StatusBadGateway || response.StatusCode == http.StatusGatewayTimeout {
+		if _, refusal := EvsRefusalStatus(reply.GetCode()); !parsed || !refusal {
+			return &EvsError{Status: response.StatusCode, OutcomeUnknown: true}
+		}
+	}
+	evsError := &EvsError{Status: response.StatusCode}
+	if parsed {
 		if status, ok := EvsRefusalStatus(reply.GetCode()); ok && status == response.StatusCode {
 			evsError.Code = reply.GetCode()
 		}

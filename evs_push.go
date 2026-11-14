@@ -11,8 +11,9 @@
 //	send     a one-part push posts {statement, payload, receipts} once every upload answered 200; a push over 1 MiB or
 //	         1,024 entry writes goes in parts (evs_push_parts.go), git mode taking its seal lease first
 //	retry    one push id names one statement, retried one attempt at a time, the same bytes, until 200, 409 or 412:
-//	         a 429 and a 503, an unknown outcome among them, and no answer at all go again after retry_after_ms
-//	         (TIME_AHEAD's 429 included, unchanged), so a dropped answer's retry returns the original version (FS-1)
+//	         a 429 and a 503, an unknown outcome among them, and no answer at all, the lb's 502 or 504 among them
+//	         (QD-758), go again after retry_after_ms (TIME_AHEAD's 429 included, unchanged), so a dropped answer's
+//	         retry returns the original version (FS-1)
 //	rebuild  a new push id, sealed afresh from a fresh read, never a second statement under one push id: 409
 //	         SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, BASE_STALE and TIME_STALE, and 412 GATE_CLOSED (EnsureWritable
 //	         again, so the next seal is to the next generation)
