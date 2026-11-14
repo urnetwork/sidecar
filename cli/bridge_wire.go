@@ -48,7 +48,10 @@ type urBridgeSink struct {
 	bridge *device.Bridge
 }
 
-var _ sidecar.BridgeStateSink = (*urBridgeSink)(nil)
+var (
+	_ sidecar.BridgeStateSink   = (*urBridgeSink)(nil)
+	_ sidecar.BridgeReachSource = (*urBridgeSink)(nil)
+)
 
 func (self *urBridgeSink) SetPending(pending *bridge.Pending) error {
 	return self.bridge.SetPending(pending)
@@ -89,6 +92,28 @@ func (self *urBridgeSink) Revoke(statementType bridge.SignedType, id []byte, n u
 
 func (self *urBridgeSink) EgressHook() connect.EgressHook {
 	return self.bridge.EgressHook()
+}
+
+// sidecar.BridgeReachSource: the bridge's reach events (§16.8), each in the root's types.
+func (self *urBridgeSink) AddReachCallback(callback sidecar.BridgeReachFunction) func() {
+	return self.bridge.AddReachCallback(func(event device.BridgeReachEvent) {
+		callback(urBridgeReachEvent(event))
+	})
+}
+
+// A device role's reach event as the root reads it. The kinds share RECORD.md section 6.2's numbers, and the root
+// refuses one that is no forward or route.
+func urBridgeReachEvent(event device.BridgeReachEvent) *sidecar.BridgeReachEvent {
+	return &sidecar.BridgeReachEvent{
+		Kind:            sidecar.RecordReachKind(event.Kind),
+		GrantId:         event.GrantId[:],
+		Peer:            sidecar.Id(event.Peer),
+		SourceNetworkId: sidecar.Id(event.SourceNetwork),
+		TargetPort:      uint32(event.TargetPort),
+		PolicyVersion:   event.PolicyVersion,
+		GrantEndMillis:  event.GrantExpiresMillis,
+		StreamCount:     event.StreamCount,
+	}
 }
 
 // A log run as the posture reads it.
@@ -172,6 +197,8 @@ func newUrBridgeWire(ctx context.Context, args *urBridgeWireArgs) (*urBridgeWire
 		DaemonListeners: args.DaemonListeners,
 		Log:             args.Log,
 		OnAttach:        self.attach,
+		Reach:           self.noteReach,
+		ReachManifest:   self.reachManifest,
 		Emit:            self.emit,
 		Settings:        self.componentSettings,
 	})
@@ -207,6 +234,25 @@ func (self *urBridgeWire) attach(env *sidecar.SidecarEnv) {
 		apiUrl:         self.args.SidecarSettings.ApiUrl,
 		platformUrl:    self.args.SidecarSettings.PlatformUrl,
 	})
+}
+
+// §16.8's reach receipt for the flows a grant admitted here, noted to the network's record, which coalesces them
+// (sidecar.RecordReach). An error where the Sidecar has no record yet, which the component counts.
+func (self *urBridgeWire) noteReach(note *sidecar.RecordReachNote) error {
+	record, err := self.args.Sidecar.Record()
+	if err != nil {
+		return err
+	}
+	return record.Reach().Note(note)
+}
+
+// The model manifest in force for a forward's port on this host (RECORD.md section 12), nil for none or no record.
+func (self *urBridgeWire) reachManifest(port uint32) *sidecar.RecordContentRef {
+	record, err := self.args.Sidecar.Record()
+	if err != nil {
+		return nil
+	}
+	return record.Models().InForce(port)
 }
 
 // The component's bridge_alarm, raised on the network's Sidecar, whose events the daemon's callers read.

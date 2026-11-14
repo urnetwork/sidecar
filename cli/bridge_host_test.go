@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -123,5 +124,46 @@ func TestBridgeSinkReadsTheDeviceRolesDecision(t *testing.T) {
 	}
 	if sink.EgressHook() != deviceBridge.EgressHook() {
 		t.Error("the adapter hands another hook")
+	}
+}
+
+// The sink adapter hands the root a device role's reach event with every field carried over: the kind by RECORD.md's
+// number, the grant, the peer, a share's source network, the forward's port, the judged position, the grant's end
+// and the flows; and the note the root makes of it names the peer and the network, never more.
+func TestBridgeSinkCarriesAReachEventToTheRoot(t *testing.T) {
+	deviceEvent := device.BridgeReachEvent{
+		Kind:               device.BridgeReachKindForward,
+		Peer:               connect.NewId(),
+		SourceNetwork:      connect.NewId(),
+		TargetPort:         11434,
+		PolicyVersion:      9,
+		GrantExpiresMillis: 1_800_000_000_000,
+		StreamCount:        4,
+	}
+	for i := range deviceEvent.GrantId {
+		deviceEvent.GrantId[i] = byte(i + 1)
+	}
+	event := urBridgeReachEvent(deviceEvent)
+	if event.Kind != sidecar.RecordReachKindForward || !bytes.Equal(event.GrantId, deviceEvent.GrantId[:]) ||
+		event.Peer != sidecar.Id(deviceEvent.Peer) || event.SourceNetworkId != sidecar.Id(deviceEvent.SourceNetwork) ||
+		event.TargetPort != 11434 || event.PolicyVersion != 9 || event.GrantEndMillis != 1_800_000_000_000 || event.StreamCount != 4 {
+		t.Fatalf("the root's event %+v", event)
+	}
+	note, err := sidecar.BridgeReachNote(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.Kind != sidecar.RecordReachKindForward || len(note.Peers) != 2 || !bytes.Equal(note.Peers[0], deviceEvent.Peer[:]) ||
+		!bytes.Equal(note.Peers[1], deviceEvent.SourceNetwork[:]) || note.StreamCount != 4 {
+		t.Fatalf("the note %+v", note)
+	}
+	deviceEvent.Kind = device.BridgeReachKindRoute
+	if event := urBridgeReachEvent(deviceEvent); event.Kind != sidecar.RecordReachKindRoute {
+		t.Fatalf("a route's kind %d", event.Kind)
+	}
+	// a kind the device role does not name is carried as it is, and the root refuses it
+	deviceEvent.Kind = 1
+	if _, err := sidecar.BridgeReachNote(urBridgeReachEvent(deviceEvent)); !errors.Is(err, sidecar.ErrBridgeReachEventInvalid) {
+		t.Fatalf("a kind that is no forward or route: %v", err)
 	}
 }
