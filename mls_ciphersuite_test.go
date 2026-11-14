@@ -87,6 +87,7 @@ func TestMlsCryptoBasicsVectors(t *testing.T) {
 
 		expanded, err := suite.expandWithLabel(
 			"test",
+			true,
 			vector.ExpandWithLabel.Secret,
 			vector.ExpandWithLabel.Label,
 			vector.ExpandWithLabel.Context,
@@ -109,6 +110,7 @@ func TestMlsCryptoBasicsVectors(t *testing.T) {
 
 		treeSecret, err := suite.deriveTreeSecret(
 			"test",
+			true,
 			vector.DeriveTreeSecret.Secret,
 			vector.DeriveTreeSecret.Label,
 			vector.DeriveTreeSecret.Generation,
@@ -198,19 +200,19 @@ func TestMlsSuiteMatchesTheRegistry(t *testing.T) {
 func TestMlsLabelsSeparateDerivations(t *testing.T) {
 	secret := bytes.Repeat([]byte{0x11}, mlsSuite.hashLength)
 	for _, suite := range mlsTestSuites {
-		first, err := suite.expandWithLabel("test", secret, "one", []byte("context"), 32)
+		first, err := suite.expandWithLabel("test", true, secret, "one", []byte("context"), 32)
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := suite.expandWithLabel("test", secret, "two", []byte("context"), 32)
+		second, err := suite.expandWithLabel("test", true, secret, "two", []byte("context"), 32)
 		if err != nil {
 			t.Fatal(err)
 		}
-		third, err := suite.expandWithLabel("test", secret, "one", []byte("other"), 32)
+		third, err := suite.expandWithLabel("test", true, secret, "one", []byte("other"), 32)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fourth, err := suite.expandWithLabel("test", secret, "one", []byte("context"), 16)
+		fourth, err := suite.expandWithLabel("test", true, secret, "one", []byte("context"), 16)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,12 +229,12 @@ func TestMlsLabelsSeparateDerivations(t *testing.T) {
 func TestMlsExpandRefusesLengthsPastItsField(t *testing.T) {
 	secret := make([]byte, mlsSuite.hashLength)
 	for _, length := range []int{-1, 0x10000} {
-		if _, err := mlsSuite.expandWithLabel("test", secret, "label", nil, length); err == nil {
+		if _, err := mlsSuite.expandWithLabel("test", true, secret, "label", nil, length); err == nil {
 			t.Errorf("length %d expanded", length)
 		}
 	}
 	// past HKDF's own limit of 255 hash outputs
-	if _, err := mlsSuite.expandWithLabel("test", secret, "label", nil, 255*sha256.Size+1); err == nil {
+	if _, err := mlsSuite.expandWithLabel("test", true, secret, "label", nil, 255*sha256.Size+1); err == nil {
 		t.Error("expanded past hkdf's limit")
 	}
 }

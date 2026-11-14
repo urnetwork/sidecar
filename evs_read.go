@@ -299,6 +299,12 @@ func (self *EvsRepo) read(ctx context.Context, refId Id, paths []string, version
 // the pin, or from the oldest read record's pin of the paths asked, so every statement since is walked. The paths'
 // checks, the pin and the records are the loop's.
 func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys, paths []*evsReadPath, fresh bool) (*evsReadRound, error) {
+	return self.readRoundFromPin(ctx, refId, keys, paths, fresh, true)
+}
+
+// readRound, taking a head below the pin under the ref's EvsReseed at most once (reseed): the round after one reads
+// from the lowered pin and refuses a head below that.
+func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsReadKeys, paths []*evsReadPath, fresh bool, reseed bool) (*evsReadRound, error) {
 	fromVersion := uint64(0)
 	fromChain := EvsChainStart(self.repoId, refId)
 	pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
@@ -330,6 +336,18 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 	if err != nil {
 		return nil, err
 	}
+	if reseed && pinned && reply.head.GetVersion() < pin.Version {
+		again, err := self.acceptReseedBelowPin(ctx, refId, pin, reply, fromVersion)
+		if err != nil {
+			objects.close()
+			return nil, err
+		}
+		if again {
+			// the pin now stands at the re-seeded head, or the head has passed the pin since: the round again
+			objects.close()
+			return self.readRoundFromPin(ctx, refId, keys, paths, fresh, false)
+		}
+	}
 	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
 		RepoId:      self.repoId,
 		RefId:       refId,
@@ -346,12 +364,49 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 	return &evsReadRound{reply: reply, objects: objects, head: head, keys: keys, refPinVersion: refPinVersion}, nil
 }
 
+// A head served below this device's pin of the ref (§11.9's reader row; §11.13's re-seed row, §19.10): the shorter
+// history a site loss left, which the device takes only under the ref's Signed EvsReseed, a repo admin's, naming
+// exactly the head served (EvsVerifier.AcceptReseed). evs serves the statement after a head below the request's
+// pin_version (QD-725), so a round that asked from an older path record's pin asks once more from the ref's. True
+// when the caller is to read again: the pin stands lowered to the re-seeded head, kept as a loss, or the head has
+// passed the pin while this asked. False with no statement or one that does not verify: nothing changed, and the
+// caller's own check refuses the head and alarms, as it does without this.
+func (self *EvsRepo) acceptReseedBelowPin(ctx context.Context, refId Id, pin *EvsPin, reply *evsReadReply, askedVersion uint64) (bool, error) {
+	head, statement := reply.head, reply.reseed
+	if statement == nil && askedVersion < pin.Version {
+		again, objects, err := self.client.postRead(ctx, self.repoId, &protocol.EvsReadRequest{RefId: refId.Bytes(), PinVersion: pin.Version, Fresh: true})
+		if err != nil {
+			return false, err
+		}
+		objects.close()
+		head, statement = again.head, again.reseed
+		if pin.Version <= head.GetVersion() {
+			return true, nil
+		}
+	}
+	if statement == nil {
+		return false, nil
+	}
+	if err := self.client.verifier.AcceptReseed(statement, self.repoId, refId, head); err != nil {
+		if errors.Is(err, ErrEvsStatementRefused) {
+			self.client.log.Warningf("[evs]the reseed served for repo %s ref %s is refused: %v", self.repoId, refId, err)
+			return false, nil
+		}
+		return false, err
+	}
+	self.client.forgetRefHead(self.repoId, refId)
+	return true, nil
+}
+
 // A read reply's parts as they arrived.
 type evsReadReply struct {
 	head       *protocol.EvsHeadSummary
 	statements []*protocol.EvsReadStatement
 	behind     uint64
 	paths      []*protocol.EvsReadPathReply
+	// The ref's Signed EvsReseed as evs keeps it, served after a head below the request's pin_version (§11.13;
+	// QD-725); nil when the reply carried none. Unverified: EvsVerifier.AcceptReseed checks it.
+	reseed []byte
 }
 
 // POST /evs/v1/repos/<id>/read, its frames read one at a time: the head first, then statements, paths and objects,
@@ -398,8 +453,16 @@ func (self *EvsClient) postRead(ctx context.Context, repoId Id, request *protoco
 		if frame.GetPath() != nil {
 			reply.paths = append(reply.paths, frame.GetPath())
 		}
-		if frame.GetObject() != nil {
-			if err := objects.add(frame.GetObject()); err != nil {
+		if object := frame.GetObject(); object != nil && object.GetKind() == protocol.EvsReadObjectKind_EVS_READ_OBJECT_RESEED {
+			// one frame, whole, within the statement's bound: never spilled, and never read as a path's object
+			if reply.reseed != nil || object.GetMissing() || object.GetOffset() != 0 || len(object.GetBody()) == 0 ||
+				frames.format.ReseedStatementMaxByteCount < len(object.GetBody()) {
+				objects.close()
+				return nil, nil, fmt.Errorf("%w: a reseed frame", ErrEvsReplyInvalid)
+			}
+			reply.reseed = object.GetBody()
+		} else if object != nil {
+			if err := objects.add(object); err != nil {
 				objects.close()
 				return nil, nil, err
 			}

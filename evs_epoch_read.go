@@ -184,6 +184,16 @@ func (self *EvsClient) noteVerifiedHead(repoId Id, refId Id, head *protocol.EvsH
 	}
 }
 
+// Drops what memory holds of a ref's head, its epoch state and its hinted version: after a verified EvsReseed lowered
+// the ref's pin (§11.13), so the re-seeded head, below both, is noted as the next read verifies it.
+func (self *EvsClient) forgetRefHead(repoId Id, refId Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	key := evsRefKey{repoId: repoId, refId: refId}
+	delete(self.refEpochs, key)
+	delete(self.hintedVersions, key)
+}
+
 // Whether a state was verified within EpochFreshFor.
 func (self *EvsClient) epochFresh(state *evsRefEpoch) bool {
 	return state != nil && self.clock.Now().Sub(state.verifiedAt) <= self.settings.EpochFreshFor
@@ -193,6 +203,11 @@ func (self *EvsClient) epochFresh(state *evsRefEpoch) bool {
 // kept: what a read does first when it holds no epoch state for the ref or a new name needs a fresh one, and what a
 // retoken waits on.
 func (self *EvsRepo) readHeadAlone(ctx context.Context, refId Id, fresh bool) (*EvsVerifiedHead, error) {
+	return self.readHeadAloneFromPin(ctx, refId, fresh, true)
+}
+
+// readHeadAlone, taking a head below the pin under the ref's EvsReseed at most once (reseed).
+func (self *EvsRepo) readHeadAloneFromPin(ctx context.Context, refId Id, fresh bool, reseed bool) (*EvsVerifiedHead, error) {
 	fromVersion := uint64(0)
 	fromChain := EvsChainStart(self.repoId, refId)
 	pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
@@ -210,6 +225,16 @@ func (self *EvsRepo) readHeadAlone(ctx context.Context, refId Id, fresh bool) (*
 		return nil, err
 	}
 	objects.close()
+	if reseed && pinned && reply.head.GetVersion() < pin.Version {
+		// the shorter history a site loss left, taken only under the ref's Signed EvsReseed (evs_read.go)
+		again, err := self.acceptReseedBelowPin(ctx, refId, pin, reply, fromVersion)
+		if err != nil {
+			return nil, err
+		}
+		if again {
+			return self.readHeadAloneFromPin(ctx, refId, fresh, false)
+		}
+	}
 	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
 		RepoId:      self.repoId,
 		RefId:       refId,
