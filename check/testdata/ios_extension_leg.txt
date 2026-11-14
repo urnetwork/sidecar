@@ -200,6 +200,7 @@ gkm_verify_commit.go
 gkm_verify_credential.go
 gkm_verify_delivery.go
 gkm_verify_rotation.go
+gkm_welcome_watch.go
 gkm_yield.go
 id.go
 identity_act.go

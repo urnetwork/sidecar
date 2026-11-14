@@ -70,18 +70,30 @@ var _ = RegisterInvariant(1, func(ctx context.Context, oracle *Oracle) error {
 
 // Names the authorization state FI-1 checks an erasure's or a shred's authority against for one network: §7.9's
 // state as the network's readers verify it. A schedule whose log lives outside the store, as a FakeGkmAuthLog does,
-// names it here; with none named, no erasure or shred is excused.
+// names it here; with none named, no erasure or shred is excused. Each state named is kept with when it was named on
+// the Net's clock, which FI-3 judges a head CAS against (fi3.go) and FI-4 authenticates gen/ by (fi4.go), so a
+// schedule names each state as it becomes current.
 func SetAuthorizationView(net *Net, networkId sidecar.Id, view sidecar.GkmAuthView) {
+	at := net.Clock().Now()
 	memory := evsOracleMemoryOf(net)
 	memory.stateLock.Lock()
 	defer memory.stateLock.Unlock()
 	memory.authorizationViews[networkId] = view
+	memory.authorizationHistory[networkId] = append(memory.authorizationHistory[networkId], &evsAuthorizationAt{view: view, at: at})
+}
+
+// One authorization state a schedule named, and when, on the Net's clock.
+type evsAuthorizationAt struct {
+	view sidecar.GkmAuthView
+	at   time.Time
 }
 
 // What the evs oracles keep from one check to the next on one Net. Safe for concurrent use.
 type evsOracleMemory struct {
 	stateLock          sync.Mutex
 	authorizationViews map[sidecar.Id]sidecar.GkmAuthView
+	// every state named, by network, in the order named
+	authorizationHistory map[sidecar.Id][]*evsAuthorizationAt
 	// immutable objects as decoded, by cluster, key and ETag
 	decoded map[string]any
 	// each repo's walk at its last check, by repo id
@@ -99,6 +111,11 @@ type evsOracleMemory struct {
 	newestWraps       map[sidecar.Id]map[string]bool
 	// FI-6's memory (fi6.go)
 	fi6 *fi6Memory
+	// the batch records the check batchOracle read, which FI-2 and FI-6 share (fi6Batches)
+	batchOracle  *Oracle
+	batchRecords []*fi6BatchRecord
+	batchOldest  time.Time
+	batchErrs    []error
 }
 
 var evsOracleMemories sync.Map
@@ -110,15 +127,16 @@ func evsOracleMemoryOf(net *Net) *evsOracleMemory {
 		return memory.(*evsOracleMemory)
 	}
 	memory := &evsOracleMemory{
-		authorizationViews: map[sidecar.Id]sidecar.GkmAuthView{},
-		decoded:            map[string]any{},
-		repoWalks:          map[sidecar.Id]*evsStoreRepo{},
-		batchRepos:         map[string]map[sidecar.Id]bool{},
-		groupRepos:         map[string]map[sidecar.Id]bool{},
-		headVersions:       map[string]uint64{},
-		newestGenerations:  map[sidecar.Id]uint64{},
-		newestWraps:        map[sidecar.Id]map[string]bool{},
-		fi6:                newFi6Memory(),
+		authorizationViews:   map[sidecar.Id]sidecar.GkmAuthView{},
+		authorizationHistory: map[sidecar.Id][]*evsAuthorizationAt{},
+		decoded:              map[string]any{},
+		repoWalks:            map[sidecar.Id]*evsStoreRepo{},
+		batchRepos:           map[string]map[sidecar.Id]bool{},
+		groupRepos:           map[string]map[sidecar.Id]bool{},
+		headVersions:         map[string]uint64{},
+		newestGenerations:    map[sidecar.Id]uint64{},
+		newestWraps:          map[sidecar.Id]map[string]bool{},
+		fi6:                  newFi6Memory(),
 	}
 	actual, loaded := evsOracleMemories.LoadOrStore(key, memory)
 	if !loaded {
@@ -133,6 +151,24 @@ func (self *evsOracleMemory) authorizationView(networkId sidecar.Id) sidecar.Gkm
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.authorizationViews[networkId]
+}
+
+// Every state named for the network, in the order named.
+func (self *evsOracleMemory) authorizationHistoryOf(networkId sidecar.Id) []*evsAuthorizationAt {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.authorizationHistory[networkId])
+}
+
+// Every network a state was named for, with its newest state.
+func (self *evsOracleMemory) authorizationViewsNamed() map[sidecar.Id]sidecar.GkmAuthView {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	views := map[sidecar.Id]sidecar.GkmAuthView{}
+	for networkId, view := range self.authorizationViews {
+		views[networkId] = view
+	}
+	return views
 }
 
 // The refs of the repo whose heads an earlier check saw, from headVersions' keys.

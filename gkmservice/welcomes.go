@@ -17,21 +17,25 @@
 // 6.2.2): one Welcome, one key, so a last-resort KeyPackage that served two Adds leaves two pointers, and the ref
 // rides in the pointer for the joiner to open the Welcome with. A pointer key that holds other bytes is the same
 // epoch's Welcome naming another KeyPackage for the recipient, which only its one uploader could send: 409.
+//
+// HEAD /gkm/groups/<id>/welcome/<n> (QD-747) answers whether epoch n's Welcome stands, 200 or 404 with no body, under
+// rw: what a writer leaf that adopted an Add another leaf uploaded asks once after WelcomeTimeout, before it removes
+// and adds the joiner again (§10.6's Welcomes row). It discloses nothing beyond gkm-5's Welcome objects, whose keys
+// every reader can compute. gkm originates nothing here that a client acts on unchecked: a false 200 leaves the
+// joiner waiting, and a false 404 costs one Remove and Add, which every member checks as any commit.
 
 package gkmservice
 
 import (
 	"bytes"
 	"errors"
+	"net/http"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// The most keys one sidecar's welcome/ prefix may hold before a read of it alarms.
-const gkmWelcomePointerListMaxCount = 64 * 1024
 
 // GET /gkm/welcomes: a GkmWelcomesReply.
 func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
@@ -41,7 +45,7 @@ func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
 		return
 	}
 	prefix := GkmWelcomePointerPrefix(request.SidecarId)
-	infos, err := listGkmKeys(request.Ctx, cluster, prefix, self.settings.ListPageCount, gkmWelcomePointerListMaxCount)
+	infos, err := listGkmKeys(request.Ctx, cluster, prefix, self.settings.ListPageCount, self.settings.WelcomePointerListMaxCount)
 	if err != nil {
 		self.answerStoreError(request, err)
 		return
@@ -118,6 +122,27 @@ func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
 		})
 	}
 	request.Reply(reply)
+}
+
+// HEAD /gkm/groups/<id>/welcome/<n>: 200 when gkm/<group_id>/welcome/<n> exists, 404 when it does not, no body
+// either way. A store that does not answer is 503, never a 404, so a leaf removes no joiner on a fault.
+func (self *GkmEngine) serveWelcomeStands(request *GkmRequest) {
+	groupId := *request.GroupId
+	epoch, err := parseGkmNumber(request.Http.PathValue(gkmPathValueEpoch))
+	if err != nil || epoch == 0 {
+		// epoch 0 is a creation's, which adds no one
+		request.BadRequest()
+		return
+	}
+	_, err = request.Cluster.Head(request.Ctx, GkmWelcomeKey(groupId, epoch))
+	switch {
+	case err == nil:
+		request.ReplyBytes(http.StatusOK, nil)
+	case errors.Is(err, sidecar.ErrBlobNotFound):
+		request.NotFound()
+	default:
+		self.answerStoreError(request, err)
+	}
 }
 
 // POST /gkm/groups/<id>/welcome/<n>: a GkmWelcomeRequest, epoch n's Welcome and its recipients, by n's uploader.

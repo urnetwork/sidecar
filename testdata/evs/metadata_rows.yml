@@ -65,6 +65,11 @@ EvsPartRequest.statement: {number: 1, type: bytes, row: evs-12, sees: "Signed Ev
 EvsPartRequest.part: {number: 2, type: bytes, row: evs-12, sees: "its EvsPushPart"}
 EvsPartRequest.receipts: {number: 3, type: repeated EvsUploadReceipt, row: evs-4, sees: "upload receipts"}
 EvsPartRequest.staged: {number: 4, type: bytes, row: evs-12, sees: "the staged segments' bytes"}
+EvsReseedRequest.statement: {number: 1, type: bytes, row: evs-12, sees: "Signed EvsPush cleartext"}
+EvsReseedRequest.payload: {number: 2, type: bytes, row: evs-12, sees: "cleartext entry versions"}
+EvsReseedRequest.parts: {number: 3, type: repeated bytes, row: evs-12, sees: "its EvsPushPart"}
+EvsReseedRequest.slot_id: {number: 4, type: bytes, row: evs-5, sees: "slot id"}
+EvsReseedRequest.slot: {number: 5, type: bytes, row: evs-5, sees: "up to 64 wrapped object keys (ciphertext)"}
 EvsLeaseRequest.ref_id: {number: 1, type: bytes, row: evs-2, sees: "ref ids"}
 EvsLeaseRequest.base_version: {number: 2, type: uint64, row: evs-12, sees: "base version and chain"}
 EvsLeaseRequest.ms: {number: 3, type: uint32, row: evs-3, sees: "any seal lease"}

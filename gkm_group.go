@@ -7,7 +7,8 @@
 //	<repo_id>/draft      a rotation's RK' and its Signed GenRotate, written before anything is staged
 //	<repo_id>/pins       the group, the newest epoch adopted with its epoch_authenticator and header, and the
 //	                     newest generation held with its C_g; they never fall (R8, I-16)
-//	<repo_id>/pending    KF1's draft and the Welcomes this device committed and has not yet written
+//	<repo_id>/pending    KF1's draft, the Welcomes this device committed and has not yet written, and the Adds of
+//	                     other leaves' commits whose Welcomes it watches for (QD-747, gkm_welcome_watch.go)
 //
 // A flow is a method that runs to its end or to an error, and every transition it makes is fenced by the object it
 // writes at gkm, each an If-None-Match create, and by the member checks (gkm_verify_*.go) at this device's own
@@ -64,6 +65,7 @@ type GkmGroupApi interface {
 	GroupInfo(ctx context.Context, repoId Id, groupId Id, want *uint64) (*protocol.GkmGroupInfoObject, error)
 	UploadGroupInfo(ctx context.Context, repoId Id, groupId Id, object *protocol.GkmGroupInfoObject) error
 	UploadWelcome(ctx context.Context, repoId Id, groupId Id, epoch uint64, request *protocol.GkmWelcomeRequest) error
+	WelcomeStands(ctx context.Context, repoId Id, groupId Id, epoch uint64) (bool, error)
 	Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, error)
 	DropKeys(ctx context.Context, repoId Id, since uint64) (*protocol.GkmGenerationsReply, error)
 }
@@ -180,6 +182,9 @@ type GkmGroupClient struct {
 	// the newest state at which this device alarmed a refused RepoCreate of a repo an agent created, by repo
 	// (FormAgentRepos)
 	agentRepoRefusedVersions map[Id]uint64
+	// AttachHints' ctx, which the Welcome watches' timers run under; nil until hints are attached, and then no
+	// timer runs and the engine asks when its driver next runs it (gkm_welcome_watch.go)
+	hintsCtx context.Context
 }
 
 var _ GkmClient = (*GkmGroupClient)(nil)
@@ -628,13 +633,20 @@ type gkmOwedWelcome struct {
 	request []byte
 }
 
-// A repo's pending-change record: KF1's draft until the group stands with its deliveries, and the Welcomes owed.
+// A repo's pending-change record: KF1's draft until the group stands with its deliveries, the Welcomes owed, and the
+// Welcomes of other leaves' Adds this device watches for, with the group and epoch they are current at.
 type gkmPendingRecord struct {
 	create       *gkmCreateDraft
 	owedWelcomes []*gkmOwedWelcome
+	// the watches hold only while this device's group is watchGroupId at watchEpoch (gkm_welcome_watch.go)
+	watchGroupId   Id
+	watchEpoch     uint64
+	welcomeWatches []*gkmWelcomeWatch
 }
 
-// version | u32 length | [group_id | RK_1 | request] | u16 count | { u64 epoch | commit hash | u32 length | request }.
+// version | u32 length | [group_id | RK_1 | request] | u16 count | { u64 epoch | commit hash | u32 length | request }
+// | group_id | u64 epoch | u16 count | { u64 epoch | u64 time_ms | u8 flags | u16 count | { sidecar_id } }. A record
+// that ends after its owed Welcomes holds no watch.
 func (self *gkmPendingRecord) encode() []byte {
 	encoded := []byte{gkmRecordVersion}
 	create := []byte{}
@@ -651,6 +663,25 @@ func (self *gkmPendingRecord) encode() []byte {
 		encoded = append(encoded, owed.commitSha256...)
 		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(owed.request)))
 		encoded = append(encoded, owed.request...)
+	}
+	if len(self.welcomeWatches) == 0 {
+		return encoded
+	}
+	encoded = append(encoded, self.watchGroupId.Bytes()...)
+	encoded = binary.BigEndian.AppendUint64(encoded, self.watchEpoch)
+	encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(self.welcomeWatches)))
+	for _, watch := range self.welcomeWatches {
+		encoded = binary.BigEndian.AppendUint64(encoded, watch.epoch)
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(watch.timeMs))
+		flags := byte(0)
+		if watch.unwelcomed {
+			flags |= gkmWelcomeWatchUnwelcomed
+		}
+		encoded = append(encoded, flags)
+		encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(watch.sidecarIds)))
+		for _, sidecarId := range watch.sidecarIds {
+			encoded = append(encoded, sidecarId.Bytes()...)
+		}
 	}
 	return encoded
 }
@@ -702,6 +733,27 @@ func decodeGkmPendingRecord(encoded []byte) (*gkmPendingRecord, error) {
 		owed.request = bytes.Clone(take(int(takeUint(4))))
 		record.owedWelcomes = append(record.owedWelcomes, owed)
 	}
+	if !failed && 0 < len(remaining) {
+		groupId, err := IdFromBytes(take(gkmIdByteCount))
+		if err != nil {
+			return nil, malformed
+		}
+		record.watchGroupId = groupId
+		record.watchEpoch = takeUint(8)
+		for count := takeUint(2); 0 < count && !failed; count -= 1 {
+			watch := &gkmWelcomeWatch{epoch: takeUint(8), timeMs: int64(takeUint(8))}
+			flags := take(1)
+			watch.unwelcomed = flags != nil && flags[0]&gkmWelcomeWatchUnwelcomed != 0
+			for idCount := takeUint(2); 0 < idCount && !failed; idCount -= 1 {
+				sidecarId, err := IdFromBytes(take(gkmIdByteCount))
+				if err != nil {
+					return nil, malformed
+				}
+				watch.sidecarIds = append(watch.sidecarIds, sidecarId)
+			}
+			record.welcomeWatches = append(record.welcomeWatches, watch)
+		}
+	}
 	if failed || len(remaining) != 0 {
 		return nil, malformed
 	}
@@ -724,7 +776,7 @@ func (self *gkmGroupManager) pendingRecord() (*gkmPendingRecord, error) {
 // Keeps the repo's pending record, or removes it once it holds nothing.
 func (self *gkmGroupManager) putPendingRecord(record *gkmPendingRecord) error {
 	name := gkmRepoRecordName(self.repoId, "pending")
-	if record.create == nil && len(record.owedWelcomes) == 0 {
+	if record.create == nil && len(record.owedWelcomes) == 0 && len(record.welcomeWatches) == 0 {
 		return self.client.args.Secrets.Delete(name)
 	}
 	encoded := record.encode()
@@ -1061,6 +1113,11 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 	if hints == nil {
 		return
 	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.hintsCtx = ctx
+	}()
 	pending := func(repoId Id) {
 		self.hintWork(ctx, "pending", repoId, func() {
 			changes, granting, err := self.Pending(ctx, repoId)

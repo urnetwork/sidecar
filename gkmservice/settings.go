@@ -121,6 +121,9 @@ type GkmServiceSettings struct {
 	DelegationKeysMaxCount int
 	// The most Welcomes one GET /gkm/welcomes answers. The client asks again once it has joined or acked them.
 	WelcomesReplyMaxCount int
+	// The most keys one sidecar's welcome/ prefix may hold before a read of it alarms: 65,536, far past what 90 days
+	// of Adds leave one device.
+	WelcomePointerListMaxCount int
 
 	// The most epoch objects one GET .../epochs answers, and the most of their bytes: the answer stops at the first
 	// bound it meets, and the client asks again after its last epoch until none comes (QD-526 row 7). One epoch
@@ -226,6 +229,8 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 		ReaderKeysReadConcurrency: 16,
 		WelcomesReplyMaxCount:     1024,
 
+		WelcomePointerListMaxCount: 64 * 1024,
+
 		DelegationKeysReadConcurrency: 16,
 		DelegationKeysMaxCount:        256,
 
@@ -303,6 +308,7 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "DelegationKeysReadConcurrency", value: int64(self.DelegationKeysReadConcurrency)},
 		{name: "DelegationKeysMaxCount", value: int64(self.DelegationKeysMaxCount)},
 		{name: "WelcomesReplyMaxCount", value: int64(self.WelcomesReplyMaxCount)},
+		{name: "WelcomePointerListMaxCount", value: int64(self.WelcomePointerListMaxCount)},
 		{name: "EpochsReplyMaxCount", value: int64(self.EpochsReplyMaxCount)},
 		{name: "EpochsReplyMaxByteCount", value: self.EpochsReplyMaxByteCount},
 		{name: "EpochGroupInfoMaxByteCount", value: self.EpochGroupInfoMaxByteCount},

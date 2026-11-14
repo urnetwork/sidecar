@@ -608,6 +608,8 @@ enum EvsReadPathState {
 enum EvsReadObjectKind {
   EVS_READ_OBJECT_KIND_UNSPECIFIED = 0; EVS_READ_OBJECT_SEGMENT = 1; EVS_READ_OBJECT_SLOT = 2;
   EVS_READ_OBJECT_MAP_PART = 3; EVS_READ_OBJECT_LOG_PAGE = 4; EVS_READ_OBJECT_BATCH_RECORD = 5;
+  // QD-725 (question evsb-m2-19-reseed-route-body): the ref's Signed EvsReseed, served with the head.
+  EVS_READ_OBJECT_RESEED = 6;
 }
 // 11.8's repo/, place and slot/ rows, by plan-EVS1-format-bytes#9 and plan-EVSB-repo-network.
 message EvsRepoObject {
@@ -679,6 +681,10 @@ message EvsPushRequest {
 }
 message EvsPartRequest {
   bytes statement = 1; bytes part = 2; repeated EvsUploadReceipt receipts = 3; bytes staged = 4;
+}
+// 11.13's re-seed row's body, the owner's answer to evsb-m2-19-reseed-route-body (QD-725).
+message EvsReseedRequest {
+  bytes statement = 1; bytes payload = 2; repeated bytes parts = 3; bytes slot_id = 4; bytes slot = 5;
 }
 message EvsLeaseRequest { bytes ref_id = 1; uint64 base_version = 2; uint32 ms = 3; }
 // 11.6's map and block rows and 11.10's lease row, whose bodies plan-EVS1-format-bytes#8 does not list: proposed by

@@ -50,6 +50,7 @@ var gkmMatrixAllowed = map[string][]gkmMatrixClass{
 	"GET /gkm/groups/{group_id}/epochs":                   {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
 	"POST /gkm/groups/{group_id}/epochs/{n}":              {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
 	"POST /gkm/groups/{group_id}/welcome/{n}":             {gkmClassWrite, gkmClassAdmin},
+	"HEAD /gkm/groups/{group_id}/welcome/{n}":             {gkmClassWrite, gkmClassAdmin},
 	"GET /gkm/groups/{group_id}/group-info":               {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
 	"POST /gkm/groups/{group_id}/group-info":              {gkmClassRead, gkmClassWrite, gkmClassAdmin},
 	"POST /gkm/groups/{group_id}/ack":                     {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
