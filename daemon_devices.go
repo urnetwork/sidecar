@@ -222,6 +222,22 @@ func daemonDeviceRevokeItems(items []DeviceRevokeItem) []*DaemonDeviceRevokeItem
 	return replyItems
 }
 
+// A plan as a reply carries it: what devices.preview answers, and what `ur approve <id> --revoke` shows of an alarm's
+// revoke answer (PreviewApprovalRevoke).
+func NewDaemonDeviceRevokePlan(plan *DeviceRevokePlan) *DaemonDeviceRevokePlan {
+	return &DaemonDeviceRevokePlan{
+		PlanId:      plan.PlanId,
+		SidecarId:   plan.SidecarId,
+		Name:        plan.Name,
+		Reason:      plan.Reason,
+		SinceN:      plan.SinceN,
+		SinceTimeMs: daemonDevicesMs(plan.SinceTime),
+		Items:       daemonDeviceRevokeItems(plan.Items),
+		Signatures:  plan.Signatures,
+		Presence:    plan.Presence,
+	}
+}
+
 // §5.6's refusal in err, nil for any other error.
 func daemonDeviceRefusal(err error) *DaemonDeviceRefusal {
 	var revokeError *DeviceRevokeError
@@ -328,17 +344,7 @@ func DaemonDevicesMethods(daemon *Daemon) []*DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				return &DaemonDevicesPreviewReply{Plan: &DaemonDeviceRevokePlan{
-					PlanId:      plan.PlanId,
-					SidecarId:   plan.SidecarId,
-					Name:        plan.Name,
-					Reason:      plan.Reason,
-					SinceN:      plan.SinceN,
-					SinceTimeMs: daemonDevicesMs(plan.SinceTime),
-					Items:       daemonDeviceRevokeItems(plan.Items),
-					Signatures:  plan.Signatures,
-					Presence:    plan.Presence,
-				}}, nil
+				return &DaemonDevicesPreviewReply{Plan: NewDaemonDeviceRevokePlan(plan)}, nil
 			},
 		},
 		{
