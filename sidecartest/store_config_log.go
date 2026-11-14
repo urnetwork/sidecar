@@ -336,8 +336,10 @@ func (self *configLogSuiteEnv) genesis(owner configLogSuiteDevice, configRepo *c
 	})
 }
 
-// Base 1's rows: the owner an Owner and its first device.
-func (self *configLogSuiteEnv) baseOneRows(owner configLogSuiteDevice) []byte {
+// Base 1's rows: the owner an Owner and its first device, whose admission is signedGenesis, the Genesis it signed
+// (A_0, as base 1's compile gives the row).
+func (self *configLogSuiteEnv) baseOneRows(owner configLogSuiteDevice, signedGenesis []byte) []byte {
+	genesisChain := bridge.GenesisChain(signedGenesis)
 	rows, _ := proto.MarshalOptions{Deterministic: true}.Marshal(&bridge.ProjectionRows{
 		Members: []*bridge.MemberRow{{MemberId: owner.memberId.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_OWNER}},
 		Sidecars: []*bridge.SidecarRow{{
@@ -346,6 +348,7 @@ func (self *configLogSuiteEnv) baseOneRows(owner configLogSuiteDevice) []byte {
 			IdentityPublicKey: owner.key.Public().(ed25519.PublicKey),
 			IdentityAlg:       "ed25519",
 			MemberId:          owner.memberId.Bytes(),
+			AdmissionSha256:   genesisChain[:],
 		}},
 	})
 	return rows
@@ -486,8 +489,8 @@ func (self *configLogSuiteEnv) sequencer() ConfigLogSequencer {
 func (self *configLogSuiteEnv) start(sequencer ConfigLogSequencer) error {
 	genesisChain := bridge.GenesisChain(self.signedGenesis)
 	self.tip = &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}
-	pin, err := sequencer.AppendBase(self.ctx, self.networkId, self.base(self.owner, self.tip, self.baseOneRows(self.owner), 0, 1),
-		self.baseOneRows(self.owner), self.signedGenesis, self.configRepo.pushes(0, 1))
+	pin, err := sequencer.AppendBase(self.ctx, self.networkId, self.base(self.owner, self.tip, self.baseOneRows(self.owner, self.signedGenesis), 0, 1),
+		self.baseOneRows(self.owner, self.signedGenesis), self.signedGenesis, self.configRepo.pushes(0, 1))
 	if err != nil {
 		return fmt.Errorf("base 1: %w", err)
 	}
@@ -560,7 +563,7 @@ func caseConfigLogGenesis(env *configLogSuiteEnv) error {
 	if entry.GetKind() != bridge.AuthEntryKindBase || !bytes.Equal(entry.GetPrevChain(), genesisChain[:]) {
 		return errors.New("entry 1 is no base on A_0")
 	}
-	rows := env.baseOneRows(env.owner)
+	rows := env.baseOneRows(env.owner, env.signedGenesis)
 	rowsSha256 := sha256.Sum256(rows)
 	held, err := env.read(sidecar.ConfigRowsKey(env.networkId, rowsSha256[:]))
 	if err != nil {
@@ -760,7 +763,7 @@ func caseConfigLogBases(env *configLogSuiteEnv) error {
 		return err
 	}
 	oldTip := env.tip
-	rows := env.baseOneRows(env.owner)
+	rows := env.baseOneRows(env.owner, env.signedGenesis)
 	if _, err := env.post(sequencer, env.memberAdmit()); err != nil {
 		return err
 	}
@@ -809,7 +812,7 @@ func caseConfigLogDescent(env *configLogSuiteEnv) error {
 	if err := env.start(sequencer); err != nil {
 		return err
 	}
-	rows := env.baseOneRows(env.owner)
+	rows := env.baseOneRows(env.owner, env.signedGenesis)
 	before, err := env.positions()
 	if err != nil {
 		return err
@@ -865,7 +868,7 @@ func caseConfigLogGenesisRace(env *configLogSuiteEnv) error {
 	rivalRepo := newConfigLogSuiteConfigRepo(rival)
 	rivalGenesis := env.genesis(rival, rivalRepo)
 	rivalChain := bridge.GenesisChain(rivalGenesis)
-	rows := env.baseOneRows(rival)
+	rows := env.baseOneRows(rival, rivalGenesis)
 	rivalBase := env.baseNaming(rival, &bridge.AuthPin{Version: 0, Chain: rivalChain[:]}, rows, 0, 1, rivalRepo.head(1))
 	_, err := second.AppendBase(env.ctx, env.networkId, rivalBase, rows, rivalGenesis, rivalRepo.pushes(0, 1))
 	if err == nil {
@@ -1003,7 +1006,7 @@ func NewConfigLogSuiteWorldFor(ctx context.Context, cluster sidecar.BlobCluster,
 // push.
 func (self *ConfigLogSuiteWorld) BaseOne() (signedHeader []byte, rows []byte, signedGenesis []byte, configPushes [][]byte) {
 	genesisChain := bridge.GenesisChain(self.env.signedGenesis)
-	rows = self.env.baseOneRows(self.env.owner)
+	rows = self.env.baseOneRows(self.env.owner, self.env.signedGenesis)
 	signedHeader = self.env.base(self.env.owner, &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}, rows, 0, 1)
 	return signedHeader, rows, self.env.signedGenesis, self.env.configRepo.pushes(0, 1)
 }
