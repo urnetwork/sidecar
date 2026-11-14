@@ -4,7 +4,11 @@
 // connection over IOTransport on the session's stream. go-sdk copies ServerOptions at NewServer, so a session cannot
 // carry instructions of its own (D-MCP-29's trap): the server keeps one go-sdk Server per instructions text, each with
 // the same static tool table, and connects a session to the one its text picks at its start, which then stays fixed.
-// M3 has one text, empty; MCP-M6-01 sets the rule that picks one by the session's claims value.
+// The text is §16.11's for the session's claims value (MCP-M6-01; D-MCP-29, R-MCP-16): the session's claims are read
+// once, at its start, for the network it starts in (McpSessionClaims, the daemon's DaemonSessionClaims), and the
+// texts are RECORD-M6-22's, set through SetClaimsInstructions or registered from their file's init. A later change of
+// `.ur`, the harness config, the team's default or the member's choice leaves an open session on its Server and its
+// value. With no texts set there is one text, empty.
 //
 // Every request passes the server's middleware, which puts its McpSession in the context. A tools/call or a
 // resources/read is a call: it runs under the session's limits (limits.go), after its network resolves by §5.8's
@@ -65,6 +69,37 @@ type McpDaemon interface {
 	Agent(hello *sidecar.DaemonHello) (*sidecar.SidecarAgent, error)
 }
 
+// One session's claims values (§16.11; D-CORE-18): each network's resolved at its first ask and the same for the
+// session's life, whatever changes after. *sidecar.DaemonSessionClaims is one. Safe for concurrent use.
+type McpSessionClaims interface {
+	For(ctx context.Context, networkId sidecar.Id) *sidecar.SidecarClaimsResolution
+}
+
+// A daemon that reads its sessions' claims, which an McpDaemon may also be: DaemonOf's is one. A daemon that is none
+// gives its sessions no claims, and each then runs on the one empty instructions text.
+type McpClaimsDaemon interface {
+	// The claims of a session of hello's caller, its `.ur` read now, at the session's start.
+	SessionClaims(hello *sidecar.DaemonHello) McpSessionClaims
+}
+
+// §16.11's instructions text for the claims value a session starts under (RECORD-M6-22's DirectoryInstructions): one
+// constant text per value, never a variable (D-MCP-3), since each distinct text is one go-sdk Server kept for the
+// daemon's life.
+type McpClaimsInstructions func(resolution *sidecar.SidecarClaimsResolution) string
+
+// The texts a build links, which every McpServer starts with: their owner's file's init registers them.
+var mcpClaimsInstructionsRegistered struct {
+	stateLock sync.Mutex
+	texts     McpClaimsInstructions
+}
+
+// Registers the build's instructions texts by claims value. Call from the texts' owner's file's init.
+func registerMcpClaimsInstructions(texts McpClaimsInstructions) {
+	mcpClaimsInstructionsRegistered.stateLock.Lock()
+	defer mcpClaimsInstructionsRegistered.stateLock.Unlock()
+	mcpClaimsInstructionsRegistered.texts = texts
+}
+
 // *sidecar.Daemon as an McpDaemon.
 type daemonMcpDaemon struct {
 	daemon *sidecar.Daemon
@@ -89,6 +124,10 @@ func (self *daemonMcpDaemon) Network(networkId sidecar.Id) (McpNetwork, bool) {
 
 func (self *daemonMcpDaemon) Agent(hello *sidecar.DaemonHello) (*sidecar.SidecarAgent, error) {
 	return self.daemon.Agent(hello)
+}
+
+func (self *daemonMcpDaemon) SessionClaims(hello *sidecar.DaemonHello) McpSessionClaims {
+	return self.daemon.SessionClaims(hello)
 }
 
 // What the server runs with: §16's settings, the daemon's line bound, and the seams a test replaces.
@@ -150,6 +189,8 @@ type McpServer struct {
 	subscribeCheck McpSubscribeCheck
 	// run_restore's points (tools_restore.go); nil answers unavailable
 	restorePoints *RestorePoints
+	// the bridge tools' filings and listing (tools_bridge.go); nil answers unavailable
+	bridges McpBridges
 }
 
 // A server for daemon.
@@ -176,6 +217,14 @@ func NewMcpServer(daemon McpDaemon, settings *McpServerSettings) *McpServer {
 		serverSessions:      map[*gomcp.ServerSession]*McpSession{},
 	}
 	self.binder = newRunBinder(self)
+	registered := func() McpClaimsInstructions {
+		mcpClaimsInstructionsRegistered.stateLock.Lock()
+		defer mcpClaimsInstructionsRegistered.stateLock.Unlock()
+		return mcpClaimsInstructionsRegistered.texts
+	}()
+	if registered != nil {
+		self.SetClaimsInstructions(registered)
+	}
 	return self
 }
 
@@ -208,6 +257,24 @@ func (self *McpServer) SetInstructionsFor(instructionsFor func(session *McpSessi
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.instructionsFor = instructionsFor
+}
+
+// Sets §16.11's texts as the rule: each new session's text is texts' for the claims value it starts under, in the
+// network it starts in (McpSession.StartClaims). A session with no such value, since its daemon reads no claims or no
+// network resolves at its start, takes the empty text, as every session does once texts is nil. A session started
+// already keeps its text and its Server (D-MCP-29).
+func (self *McpServer) SetClaimsInstructions(texts McpClaimsInstructions) {
+	if texts == nil {
+		self.SetInstructionsFor(nil)
+		return
+	}
+	self.SetInstructionsFor(func(session *McpSession) string {
+		resolution := session.StartClaims()
+		if resolution == nil {
+			return ""
+		}
+		return texts(resolution)
+	})
 }
 
 // Sets what admits a subscription (MCP-M3-14). Nil refuses every one.
@@ -292,6 +359,11 @@ func (self *McpServer) Sessions() []*McpSession {
 
 // A session for hello: its agent and instructions read now, and fixed for its life.
 func (self *McpServer) newSession(hello *sidecar.DaemonHello) *McpSession {
+	return self.newSessionAt(context.Background(), hello)
+}
+
+// newSession, its claims read under ctx.
+func (self *McpServer) newSessionAt(ctx context.Context, hello *sidecar.DaemonHello) *McpSession {
 	session := &McpSession{
 		server:            self,
 		hello:             *hello,
@@ -301,6 +373,16 @@ func (self *McpServer) newSession(hello *sidecar.DaemonHello) *McpSession {
 	// the relay's place in the process tree, read once: a session's ancestry does not change
 	session.caller = self.binder.callerProcessOf(hello)
 	session.agent, session.agentErr = self.daemon.Agent(hello)
+	// the session's claims, its `.ur` read here, and the value of the network it starts in resolved here, so that
+	// nothing after the start moves either (§16.10's claims row: the value is fixed for each session)
+	if claimsDaemon, ok := self.daemon.(McpClaimsDaemon); ok {
+		session.claims = claimsDaemon.SessionClaims(hello)
+		if session.claims != nil {
+			if networkId, err := self.daemon.ResolveNetwork(hello, ""); err == nil {
+				session.startClaims = session.claims.For(ctx, networkId)
+			}
+		}
+	}
 	instructionsFor := func() func(session *McpSession) string {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -315,7 +397,7 @@ func (self *McpServer) newSession(hello *sidecar.DaemonHello) *McpSession {
 // The daemon's mcp mode (sidecar.DaemonModeHandler): one go-sdk session over stream, which ends when the relay
 // closes it, when a line passes RequestByteCount, or when ctx ends.
 func (self *McpServer) Serve(ctx context.Context, hello *sidecar.DaemonHello, stream io.ReadWriter) error {
-	session := self.newSession(hello)
+	session := self.newSessionAt(ctx, hello)
 	server := self.ServerFor(session.instructions)
 	// no request reaches the middleware before the session is known by its go-sdk session
 	gate := make(chan struct{})

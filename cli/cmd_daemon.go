@@ -171,6 +171,8 @@ type urDaemonNetwork struct {
 
 	stateLock sync.Mutex
 	further   *sidecar.Sidecar
+	// the root's bridge methods over bridges (bridge_forward.go), built once and shared by ur bridge and the MCP tools
+	daemonBridges *sidecar.DaemonBridges
 }
 
 // The hosted Sidecars, in network order.
@@ -750,6 +752,27 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Restore: mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log}),
 		Home:    home,
 		Record:  settings.Record,
+		// §16.7's Run announcement row: a run's start, activity and end to its network's team directory, under the
+		// claims value its session starts under (mcp's ingest_directory.go); a network with no directory hears nothing
+		Lifecycle: mcp.NewDirectoryLifecycle(&mcp.DirectoryLifecycleArgs{
+			Runs: func(networkId sidecar.Id) (mcp.McpDirectoryRuns, error) {
+				hosted, ok := daemon.SidecarForNetwork(networkId)
+				if !ok {
+					return nil, nil
+				}
+				directory := hosted.Directory()
+				if directory == nil {
+					return nil, nil
+				}
+				runs := directory.Runs()
+				if runs == nil {
+					return nil, nil
+				}
+				return runs, nil
+			},
+			Claims: daemon.ResolveClaims,
+			Log:    log,
+		}),
 	})
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), cli.settings.CloseTimeout)
@@ -780,6 +803,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	if err := registerUrDaemonMethods(daemon, cli.instance, network, keyStoreKind, sidecar.HostCredentialStores); err != nil {
 		daemon.Close()
 		return err
+	}
+	// the MCP bridge tools file and forward through the bridges ur bridge's methods use (MCP-M4-01)
+	if bridges := network.sharedDaemonBridges(); bridges != nil {
+		mcpServer.SetBridges(bridges)
 	}
 	// a sandboxed macOS app pairs and calls through its app-group container's socket (§5.9; CORE-M8-02); the paths
 	// name the user's home, so only their count is logged

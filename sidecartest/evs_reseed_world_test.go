@@ -134,6 +134,24 @@ func (self *epochWorld) slotBytes(slotId sidecar.Id) []byte {
 	return stored
 }
 
+// A re-seed from device's mirror, and then the step 8s of the commits it made, waited out. The world's transport
+// waits them out after a push; a re-seeded push is committed by the reseed route, whose reply, like a push's, comes
+// before its step 8 (the push sequence and hints, then the head cache). While a commit's step 8 has not cached its
+// head, a read that is not fresh, from a device pinned no higher than the head an earlier commit cached, is served
+// that earlier head (§11.9's cache row): it verifies, and what the later commit wrote reads as absent. A device that
+// needs the newest reads fresh or past a hint; these tests read what the re-seed returned, so they wait.
+func (self *epochWorld) reseed(device *epochDevice, args *sidecar.EvsReseedArgs) (*sidecar.EvsReseedResult, error) {
+	result, err := device.repo.Reseed(self.ctx, args)
+	for {
+		started, finished, changed := self.engine.StepEights()
+		if started == finished {
+			break
+		}
+		<-changed
+	}
+	return result, err
+}
+
 // A ref of a re-seed's result.
 func reseedRefOf(t *testing.T, result *sidecar.EvsReseedResult, refId sidecar.Id) *sidecar.EvsReseedRef {
 	t.Helper()
@@ -187,7 +205,7 @@ func TestEvsReseedReturnsAMirroredRepoEndToEnd(t *testing.T) {
 
 	world.loseSite()
 	// the history first, with no EvsReseed over it
-	result, err := writer.repo.Reseed(world.ctx, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41")})
+	result, err := world.reseed(writer, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +288,7 @@ func TestEvsReseedReturnsAMirroredRepoEndToEnd(t *testing.T) {
 	}
 
 	// the admin files the EvsReseed over the returned head: everything is there already, and nothing else changes
-	again, err := writer.repo.Reseed(world.ctx, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41"), SignReseed: true})
+	again, err := world.reseed(writer, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41"), SignReseed: true})
 	if err != nil || !again.Whole() {
 		t.Fatalf("a second re-seed: %+v, %v", again, err)
 	}
@@ -340,7 +358,7 @@ func TestEvsReseedKeepsAnErasedKeyOutOfAStaleMirrorsSlotEndToEnd(t *testing.T) {
 	mirrored := world.head(refId)
 
 	world.loseSite()
-	result, err := writer.repo.Reseed(world.ctx, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41")})
+	result, err := world.reseed(writer, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +378,7 @@ func TestEvsReseedKeepsAnErasedKeyOutOfAStaleMirrorsSlotEndToEnd(t *testing.T) {
 	}
 
 	// the stale mirror: its history is there already, and its slot copy still holds the erased key
-	staleResult, err := stale.repo.Reseed(world.ctx, &sidecar.EvsReseedArgs{})
+	staleResult, err := world.reseed(stale, &sidecar.EvsReseedArgs{})
 	if err != nil {
 		t.Fatal(err)
 	}

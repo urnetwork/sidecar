@@ -385,5 +385,6 @@ func (self *McpServer) HandleHook(ctx context.Context, hello *sidecar.DaemonHell
 		}
 		return err
 	}
-	return self.binder.ingestEvent(ctx, network, networkId, adapter, caller, event, params.Payload)
+	// the caller's hello rides with the event: the directory lifecycle reads the session's claims from it
+	return self.binder.ingestEvent(withHookHello(ctx, hello), network, networkId, adapter, caller, event, params.Payload)
 }

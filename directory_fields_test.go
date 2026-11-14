@@ -1446,9 +1446,9 @@ func TestDirectoryDecodeRequestKeepsItsApprovalAsReceived(t *testing.T) {
 	if ApprovalRequestSha256(stored.ApprovalBytes) == ApprovalRequestSha256(testDirectoryMarshal(t, stored.Request.GetApproval())) {
 		t.Error("a re-marshal hashed as the received bytes do, so this test shows nothing")
 	}
-	// version 3 is MCP-M6-01's: until it lands, an approver refuses the approval and never the request
-	if _, err := stored.Approval(); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
-		t.Errorf("an approval of version 3 parsed for an approver: %v", err)
+	// an approver parses the approval, version 3 (MCP-M6-01), from the bytes as received
+	if approval, err := stored.Approval(); err != nil || approval == nil {
+		t.Errorf("an approval of version 3 did not parse for an approver: %v", err)
 	}
 
 	twice := protowire.AppendBytes(protowire.AppendTag(bytes.Clone(body), 14, protowire.BytesType), reversed)
