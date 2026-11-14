@@ -8,6 +8,12 @@
 // context, and for Cursor's beforeMCPExecution it prints permission ask for ur's outward tools from the catalog built
 // into this binary, which needs no daemon (mcp.CursorHookAnswer). A payload past Ingest.PayloadByteCount goes as its
 // size alone, a gap; what goes wrong goes to stderr, without the payload's text.
+//
+// --required, which the fail-closed form ur install-harness writes for a Team's record_required puts on each command
+// (MCP-M6-04; plan-MCP-record-required), makes a hook whose event the daemon could not take exit 2, which Claude
+// Code's onFailure block and Cursor's failClosed read as stop, and which blocks a Codex PreToolUse while it runs: no
+// daemon answering, a refusal, an answer past the bound or a failed call. A payload that could not be read is not
+// the daemon's to take, so it fails open as before.
 
 package main
 
@@ -29,15 +35,25 @@ import (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "hook",
-		usage:   "  ur hook <harness>",
+		usage:   "  ur hook <harness> [--required]",
 		summary: "pass a harness hook's payload to the daemon: " + strings.Join(mcp.HookHarnesses(), ", "),
 		run:     runUrHook,
 	})
 }
 
-// A hook's run. Every outcome but a usage error exits 0.
+// The exit a --required hook gives when the daemon could not take its event: the code the harnesses read as block.
+const urExitHookRequired = 2
+
+// A hook's run. Every outcome but a usage error exits 0, but a --required hook's event the daemon could not take.
 func runUrHook(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	harness, _ := options.String("<harness>")
+	required, _ := options.Bool("--required")
+	blocked := func(reason string) error {
+		if !required {
+			return nil
+		}
+		return &urExitError{code: urExitHookRequired, err: fmt.Errorf("ur hook --required: %s", reason)}
+	}
 	ingest := cli.ingest
 	start := time.Now()
 	deadline := start.Add(ingest.HookExitTimeout)
@@ -68,7 +84,7 @@ func runUrHook(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	socketPath, err := cli.socketPath(cli.instance)
 	if err != nil {
 		fmt.Fprintf(cli.stderr, "ur hook: %s\n", err)
-		return nil
+		return blocked("no daemon socket")
 	}
 	hello := cli.hello(sidecar.DaemonModeHook)
 	hello.Harness = harness
@@ -77,17 +93,18 @@ func runUrHook(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		var refusal *sidecar.DaemonHelloRefusal
 		if errors.As(err, &refusal) {
 			fmt.Fprintf(cli.stderr, "ur hook: the daemon refused the hook: %s\n", refusal.Code)
-			return nil
+			return blocked("the daemon refused the hook")
 		}
-		// none answers: one starts for the next event, and this one fails open
+		// none answers: one starts for the next event, and this one fails open, or, required, stops the harness
 		if err := cli.spawnDaemon([]string{"--instance", cli.instance, "--auto-spawned"}); err != nil {
 			fmt.Fprintf(cli.stderr, "ur hook: no daemon answers and none could start: %s\n", err)
 		}
-		return nil
+		return blocked("no daemon answers")
 	}
 	defer client.Close()
 	if err := client.Call(callCtx, mcp.McpHookMethod, params, false, nil); err != nil {
 		fmt.Fprintf(cli.stderr, "ur hook: the daemon did not take the event: %s\n", urHookCallError(err))
+		return blocked("the daemon did not take the event")
 	}
 	return nil
 }

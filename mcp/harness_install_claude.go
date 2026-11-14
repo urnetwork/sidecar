@@ -208,11 +208,12 @@ type harnessHookGroup struct {
 	Hooks   []*harnessHookEntry `json:"hooks"`
 }
 
-// One hook entry, as written.
+// One hook entry, as written. OnFailure is Claude Code's, the fail-closed form's block (harness_install.go).
 type harnessHookEntry struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"`
+	Type      string `json:"type"`
+	Command   string `json:"command"`
+	Timeout   int    `json:"timeout,omitempty"`
+	OnFailure string `json:"onFailure,omitempty"`
 }
 
 // One of ur's entries as the seal reads it: the entry and its group's matcher.
@@ -249,6 +250,10 @@ func (self *harnessHooksFile) group(event harnessHookEvent, template *harnessTem
 	}
 	if event.permission {
 		entry.Timeout = template.permissionTimeoutSeconds
+	}
+	if template.recordRequired && template.harness == claudeHookHarness {
+		// Codex shares the shape and documents no such setting
+		entry.OnFailure = claudeHookOnFailureBlock
 	}
 	return &harnessHookGroup{Matcher: event.matcher, Hooks: []*harnessHookEntry{entry}}
 }

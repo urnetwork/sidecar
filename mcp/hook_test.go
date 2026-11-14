@@ -629,7 +629,8 @@ func TestUnseenHistoryStartsTainted(t *testing.T) {
 	}
 }
 
-// A payload past the cap, or one no adapter reads, is a gap on its harness process's runs, never a taint.
+// A payload past the cap, or one no adapter reads, is a missed event: a gap on its harness process's runs, which
+// taints them (I-9), and never an error to the harness.
 func TestUnreadablePayloadIsGap(t *testing.T) {
 	env := newHookTestEnv(t)
 	claude := env.harness(sidecartest.FakeHarnessClaudeCode)
@@ -642,7 +643,7 @@ func TestUnreadablePayloadIsGap(t *testing.T) {
 	}
 	env.server.HandleHook(context.Background(), hello, env.networkId, env.network, &HookEventParams{Payload: json.RawMessage(`{"cwd":"x"}`)})
 	run, _ := env.network.runs.Get(runId)
-	if run.Tainted || !slices.Contains(run.Gaps, "oversize") || !slices.Contains(run.Gaps, "hook_failure") {
+	if !run.Tainted || !slices.Contains(run.TaintReasons, sidecar.RunTaintCoverageLapse) || !slices.Contains(run.Gaps, "oversize") || !slices.Contains(run.Gaps, "hook_failure") {
 		t.Errorf("the run's file: %+v", run)
 	}
 }
