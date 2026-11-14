@@ -308,7 +308,8 @@ func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.Sid
 		self.further = nil
 		self.stateLock.Unlock()
 	}
-	return target.Status().Generation, nil
+	// the keychain's, which the enrollment wrote: Status names it only once the run loop has moved to it
+	return target.BoundGeneration(), nil
 }
 
 // §5.8's pair (CORE-M8-02): the child's token goes to the hosted Sidecar of its network, else the unenrolled one, which
