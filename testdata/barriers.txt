@@ -340,6 +340,8 @@ barrier identity.recover.file.after identity_recover.go
 barrier identity.recover.file.before identity_recover.go
 barrier identity.recovery_bind.after identity_recovery_bind.go
 barrier identity.recovery_bind.before identity_recovery_bind.go
+barrier identity.revoke.cosign.after identity_revoke_cosign.go
+barrier identity.revoke.cosign.before identity_revoke_cosign.go
 barrier identity.revoke.effects.after identity_revoke_device.go
 barrier identity.revoke.effects.before identity_revoke_device.go
 barrier identity.revoke.sign.after identity_revoke_device.go

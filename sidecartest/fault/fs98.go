@@ -1,3 +1,5 @@
+//go:build !js && !ios && !android && !sdk_mobile_bind
+
 // FS-98's and FS-124's CLI cases (§22.8; §5.6's revocation, D-CORE-20, D-CORE-13; CORE-M3-04): a member's laptop, a
 // real Sidecar in a real Daemon (sidecartest.Fs98World), revokes another of the member's devices the way
 // `ur devices revoke` does, by the daemon's devices methods, the signing one as the confirmed control call ur sends
@@ -22,12 +24,17 @@
 // Suspend, another admin's laptop approving it as `ur approve <proposal_id>` does, and a proposal that expires
 // unsigned at its not_after leaving the phone suspended.
 //
-// What waits: the phone and remote-mode rows (CORE-M8-03), the Team rows with self_admit on and off (the rows' team
-// case, M6-out), and FS-124's admission, OwnerConfirm and recovery-rotate cases through the prompt.
+// FS-124's other CLI acts run the same way through the daemon's prompt: an admission and an alarm's OwnerConfirm as
+// `ur approve` signs them (Fs124CliApprovals), `ur approve <proposal_id>`'s cosign (Fs124CliCosign), and
+// `ur keychain recovery-rotate` (Fs124CliRecoveryRotate).
+//
+// What waits: the phone and remote-mode rows (CORE-M8-03), and the Team rows with self_admit on and off (the rows' team
+// case, M6-out).
 
 package fault
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -551,6 +558,149 @@ func Fs124CliCheckRefused(net *Net) *Schedule {
 	)
 	schedule.Refuses = "a covered revocation, key registration and key removal whose presence check the person refused"
 	return schedule
+}
+
+// FS-124's cli, the approvals: with the laptop's presence key registered, a new device's admission and the
+// OwnerConfirm of a device an admin admitted for the member are each signed by `ur approve` under the daemon's
+// prompt, and neither while the authenticator refuses.
+func Fs124CliApprovals(net *Net) *Schedule {
+	world := newFs98World()
+	return fs98Schedule("FS-124 cli the approvals", world,
+		fs124CliStart(world),
+		fs98Do("laptop", world, func() error {
+			net := world.net()
+			laptop := world.hosts["laptop"]
+			memberId := laptop.Device.MemberId
+			// the member's new tablet asks this laptop to admit it
+			tablet := net.Device("m tablet", memberId)
+			admissionId := laptop.OpenAdmission(tablet, 0)
+			// an admin admits a watch for the member, which the member never confirmed
+			watch := net.Device("m watch", memberId)
+			net.AdmitDevice(net.Owner(), watch, 0)
+			world.world.Settle()
+			if net.Consented(watch, memberId) {
+				return errors.New("an admin's admission is consented before the member's OwnerConfirm")
+			}
+			alarmId, found := sidecar.Id{}, false
+			for _, item := range laptop.Pending() {
+				if item.Kind == sidecar.SidecarApprovalAdmissionAlarm && item.SidecarId != nil && *item.SidecarId == watch.SidecarId {
+					alarmId, found = item.ApprovalId, true
+				}
+			}
+			if !found {
+				return fmt.Errorf("the laptop lists no alarm for the watch: %+v", laptop.Pending())
+			}
+			before, asked := net.Tip().GetVersion(), laptop.Presence.AssertCount()
+			laptop.Presence.Refuse(errors.New("the person refused"))
+			if err := laptop.Decide(admissionId, sidecar.SidecarDecisionApprove); err == nil {
+				return errors.New("an admission signed with its check refused")
+			}
+			if err := laptop.Decide(alarmId, sidecar.SidecarDecisionApprove); err == nil {
+				return errors.New("an OwnerConfirm signed with its check refused")
+			}
+			if net.Tip().GetVersion() != before || laptop.Presence.AssertCount() == asked {
+				return fmt.Errorf("refused checks moved the log from %d to %d, or asked nothing", before, net.Tip().GetVersion())
+			}
+			laptop.Presence.Refuse(nil)
+			if err := laptop.Decide(admissionId, sidecar.SidecarDecisionApprove); err != nil {
+				return fmt.Errorf("the admission under the check: %w", err)
+			}
+			if !net.Admitted(tablet) {
+				return errors.New("the tablet is not admitted after ur approve")
+			}
+			if err := laptop.Decide(alarmId, sidecar.SidecarDecisionApprove); err != nil {
+				return fmt.Errorf("the OwnerConfirm under the check: %w", err)
+			}
+			if !net.Consented(watch, memberId) {
+				return errors.New("the watch is not consented after the member's OwnerConfirm")
+			}
+			return nil
+		}),
+	)
+}
+
+// FS-124's cli, `ur approve <proposal_id>`: admin b's laptop registered a presence key, so its cosign of the phone's
+// revocation is covered: REVOKE_CANCELLED with nothing signed while the authenticator refuses, and under the check it
+// lands and revokes the phone.
+func Fs124CliCosign(net *Net) *Schedule {
+	world := newFs98World()
+	return fs98Schedule("FS-124 cli a cosign", world,
+		fs98Team(world),
+		fs98Do("desk", world, func() error {
+			if _, err := world.hosts["desk"].AddPresenceKey(); err != nil {
+				return fmt.Errorf("the desk's presence key: %w", err)
+			}
+			return nil
+		}),
+		fs98Propose(world),
+		fs98Do("desk", world, func() error {
+			net := world.net()
+			desk, phone := world.hosts["desk"], world.devices["phone"]
+			proposalId := hex.EncodeToString(world.ids["proposal"])
+			if shown := desk.Proposal(proposalId); shown.Proposal == nil || !shown.Proposal.Presence {
+				return fmt.Errorf("the proposal's plan does not ask the check: %+v", shown.Proposal)
+			}
+			before, asked := net.Tip().GetVersion(), desk.Presence.AssertCount()
+			desk.Presence.Refuse(errors.New("the person refused"))
+			if reply := desk.Cosign(proposalId); reply.Refusal == nil || reply.Refusal.Code != sidecar.DeviceRevokeCodeCancelled {
+				return fmt.Errorf("a cosign whose check was refused: %+v", reply)
+			}
+			if net.Tip().GetVersion() != before || !net.Admitted(phone) || desk.Presence.AssertCount() == asked {
+				return fmt.Errorf("a refused check moved the log from %d to %d, or asked nothing", before, net.Tip().GetVersion())
+			}
+			desk.Presence.Refuse(nil)
+			if reply := desk.Cosign(proposalId); reply.Refusal != nil || reply.Position == 0 {
+				return fmt.Errorf("the cosign under the check: %+v", reply)
+			}
+			if net.Admitted(phone) {
+				return errors.New("the phone stands after the countersigned cosign")
+			}
+			return nil
+		}),
+	)
+}
+
+// FS-124's cli, the recovery code: `ur keychain recovery-rotate` binds a first code with no check, the member holding
+// no presence key yet; once the laptop registered one, a rotation is refused while the authenticator refuses, and
+// under the check the rebind lands and the member's binding is the new one.
+func Fs124CliRecoveryRotate(net *Net) *Schedule {
+	world := newFs98World()
+	world.settings = &sidecartest.Fs98Settings{RecoveryBindings: true}
+	return fs98Schedule("FS-124 cli a recovery rotation", world,
+		fs98Member(world),
+		fs98Do("laptop", world, func() error {
+			net := world.net()
+			laptop := world.hosts["laptop"]
+			memberId := laptop.Device.MemberId
+			first, err := laptop.RotateRecovery(false)
+			if err != nil || first == nil || first.Entry == nil || first.PreviousKeySha256 != nil {
+				return fmt.Errorf("the first binding: %+v %v", first, err)
+			}
+			if laptop.Presence.AssertCount() != 0 {
+				return errors.New("a member with no presence key was asked a check")
+			}
+			if _, err := laptop.AddPresenceKey(); err != nil {
+				return fmt.Errorf("the laptop's presence key: %w", err)
+			}
+			before, asked := net.Tip().GetVersion(), laptop.Presence.AssertCount()
+			laptop.Presence.Refuse(errors.New("the person refused"))
+			if rotation, err := laptop.RotateRecovery(false); err == nil {
+				return fmt.Errorf("a rotation signed with its check refused: %+v", rotation)
+			}
+			if net.Tip().GetVersion() != before || laptop.Presence.AssertCount() == asked {
+				return fmt.Errorf("a refused check moved the log from %d to %d, or asked nothing", before, net.Tip().GetVersion())
+			}
+			laptop.Presence.Refuse(nil)
+			second, err := laptop.RotateRecovery(false)
+			if err != nil || second == nil || second.Entry == nil || !bytes.Equal(second.PreviousKeySha256, first.KeySha256) {
+				return fmt.Errorf("the rotation under the check: %+v %v", second, err)
+			}
+			if bound := net.State().Member(memberId).GetRecoveryKeySha256(); !bytes.Equal(bound, second.KeySha256) {
+				return fmt.Errorf("the member's binding is %x, not the rotation's %x", bound, second.KeySha256)
+			}
+			return nil
+		}),
+	)
 }
 
 // FS-124's cli twin: under the daemon's prompt the laptop revokes the phone and the key the phone registered in one

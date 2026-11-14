@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The cosign side of §5.6's revocation at k > 1 (CORE-M3-04, D-CORE-20, D-CORE-13, I-4, FS-98, FS-124): another
 // AdminSet member's device reads an open revocation proposal's plan and signs its AuthorityCosign, what
 // `ur approve <proposal_id>` confirmed on /dev/tty and §18.5's Decide reach, never MCP.
@@ -23,7 +25,7 @@
 //
 // testHookBarrier brackets the signing point; each post has identity.post's.
 //
-// On every leg: root Id, no connect type.
+// On every leg but the iOS extension, where no person decides anything (§18.5): root Id, no connect type.
 
 package sidecar
 

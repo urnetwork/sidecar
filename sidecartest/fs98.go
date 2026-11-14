@@ -1,3 +1,5 @@
+//go:build !js && !ios && !android && !sdk_mobile_bind
+
 // FS-98's and FS-124's CLI world (CORE-M3-04; §5.6's revocation, D-CORE-20, D-CORE-13): real Sidecars, each hosted in
 // a real Daemon serving the devices methods `ur devices`, `ur devices revoke` and `ur approve <proposal_id>` call, in
 // one network of the admission suite's world (AdmissionNet), so on the tier's api: a FakeApi on T2, server's
@@ -33,6 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -141,8 +144,52 @@ func (self fs98Authority) ProposalRequired(statement *sidecar.SidecarStatement) 
 	return err == nil && 1 < self.RevokeSignatures(targetId)
 }
 
+// The config repo's keys as a host's recovery reads them, which KEYS installs from the device's GkmClient: here one
+// generation's key of a group on a fake gkm, so a binding's body seals as it does in the product.
+type fs98ConfigKeys struct {
+	key *sidecar.EvsRepoKey
+}
+
+func (self *fs98ConfigKeys) CurrentConfigKey(ctx context.Context) (*sidecar.EvsRepoKey, error) {
+	return self.key, nil
+}
+
+func (self *fs98ConfigKeys) ConfigKeyAt(generation uint64) *sidecar.EvsRepoKey {
+	if generation != self.key.Generation() {
+		return nil
+	}
+	return self.key
+}
+
+// A config repo's first key for one device of a member, from a fake gkm of its own.
+func newFs98ConfigKeys(ctx context.Context, clock Clock, networkId sidecar.Id, configRepoId sidecar.Id, memberId sidecar.Id, sidecarId sidecar.Id) (*fs98ConfigKeys, error) {
+	gkm := NewFakeGkm(clock, NewFakeBlobs(clock, nil, nil, nil), nil)
+	signer := NewFakeGkmSigner()
+	signer.SidecarId = sidecarId
+	sidecarRows, memberRow := FakeGkmAuthMemberDevices(memberId, sidecarId)
+	rows := FakeGkmAuthRows(&protocol.AclRepo{RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG})
+	rows.Sidecars = sidecarRows
+	rows.Members = []*bridge.MemberRow{memberRow}
+	view := NewFakeGkmAuthLog().Append(&FakeGkmAuthFixture{
+		Rows:         rows,
+		IdentityKeys: map[sidecar.Id][]byte{sidecarId: signer.PublicKey()},
+		RepoReaders:  map[sidecar.Id][]sidecar.Id{configRepoId: {sidecarId}},
+		RepoWriters:  map[sidecar.Id][]sidecar.Id{configRepoId: {sidecarId}},
+	})
+	client := gkm.Client(sidecarId, signer.Sign)
+	client.AuthAdvanced(view)
+	key, err := client.CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{NetworkId: networkId, RepoId: configRepoId, Kind: protocol.RepoKind_REPO_KIND_CONFIG})
+	if err != nil {
+		return nil, err
+	}
+	return &fs98ConfigKeys{key: key}, nil
+}
+
 // A world's tunables.
 type Fs98Settings struct {
+	// Whether each host signs recovery bindings (SidecarSettings.RecoveryBindings, off by default in the product):
+	// the host then anchors the network's genesis on first use and holds a config key to seal a binding's body under.
+	RecoveryBindings bool
 	// How long a statement a host signs lives, so when a proposal it files expires: SidecarSettings.StatementTimeout
 	// of every host. Zero keeps the Sidecar's default.
 	StatementTimeout time.Duration
@@ -254,6 +301,7 @@ func (self *Fs98World) AddHost(name string, memberId sidecar.Id, admitter *Admis
 	if 0 < self.settings.StatementTimeout {
 		sidecarSettings.StatementTimeout = self.settings.StatementTimeout
 	}
+	sidecarSettings.RecoveryBindings = self.settings.RecoveryBindings
 	testSidecar, err := self.net.AddSidecarIn(name, admission.NetworkId(), sidecarSettings)
 	if err != nil {
 		self.t.Fatal(err)
@@ -262,7 +310,20 @@ func (self *Fs98World) AddHost(name string, memberId sidecar.Id, admitter *Admis
 	if identity == nil {
 		self.t.Fatalf("%s holds no identity", name)
 	}
+	if self.settings.RecoveryBindings {
+		if err := testSidecar.Sidecar().TrustFirstUse(admission.genesisChain[:]); err != nil {
+			self.t.Fatalf("%s anchors no genesis: %v", name, err)
+		}
+		configKeys, err := newFs98ConfigKeys(admission.ctx, admission.clock, admission.networkId, admission.configRepoId, memberId, identity.SidecarId)
+		if err != nil {
+			self.t.Fatalf("%s's config key: %v", name, err)
+		}
+		// held for the Sidecar's life, which ends with the Net
+		testSidecar.Sidecar().InstallConfigKeys(configKeys)
+	}
 	device := &AdmissionDevice{Name: name, SidecarId: identity.SidecarId, MemberId: memberId}
+	// the admission names the Sidecar's own identity key, which only its keychain holds: the admitter's stands in
+	// while the statement is shaped, then gives way
 	admit := admission.Admission(&AdmissionDevice{Name: name, SidecarId: identity.SidecarId, MemberId: memberId, Key: admitter.Key}, nil, false, 0, capabilities)
 	admit.IdentityPublicKey = bytes.Clone(identity.IdentityPublicKey)
 	admission.MustLand(admission.Sign(admitter, bridge.SignedType_SIGNED_SIDECAR_ADMIT, admit))
@@ -427,6 +488,58 @@ func (self *Fs98Host) RemovePresenceKey(keyId []byte) error {
 	err := running.RevokePresenceKey(self.world.admission.ctx, keyId, self.Presence, sidecar.SidecarActConfirmed, self.Daemon.PresencePrompt(running))
 	self.world.Settle()
 	return err
+}
+
+// A new device of the host's member asking to be admitted, as its `ur login` surfaces it on this host: an admission
+// item `ur approve` lists. Answers the item's id.
+func (self *Fs98Host) OpenAdmission(device *AdmissionDevice, capabilities uint32) sidecar.Id {
+	self.world.t.Helper()
+	approvalId, err := self.Sidecar.Sidecar().OpenAdmission(&sidecar.SidecarAdmissionRequest{
+		SidecarId:         device.SidecarId,
+		MemberId:          device.MemberId,
+		IdentityPublicKey: device.PublicKey(),
+		Capabilities:      capabilities,
+	})
+	if err != nil {
+		self.world.t.Fatalf("%s: opening %s's admission: %v", self.Name, device.Name, err)
+	}
+	return approvalId
+}
+
+// `ur approve`: what waits for this device's decision.
+func (self *Fs98Host) Pending() []*sidecar.SidecarApprovalItem {
+	self.world.t.Helper()
+	self.world.catchUp()
+	items, err := self.Sidecar.Sidecar().PendingApprovals()
+	if err != nil {
+		self.world.t.Fatalf("%s: the pending approvals: %v", self.Name, err)
+	}
+	return items
+}
+
+// `ur approve <id>`, `--deny` or `--revoke` after the person's yes: the decision as ur daemon's approvals.decide
+// makes it, a person's confirmation under the daemon's presence prompt.
+func (self *Fs98Host) Decide(approvalId sidecar.Id, decision string) error {
+	self.world.t.Helper()
+	self.world.catchUp()
+	running := self.Sidecar.Sidecar()
+	err := running.DecideApproval(self.world.admission.ctx, approvalId, decision, sidecar.SidecarActConfirmed, self.Daemon.PresencePrompt(running))
+	self.world.Settle()
+	return err
+}
+
+// `ur keychain recovery-rotate` after the person's yes: a fresh code's binding signed for the member under the
+// daemon's presence prompt. Answers what the rotation did, its words dropped.
+func (self *Fs98Host) RotateRecovery(compromise bool) (*sidecar.RecoveryRotation, error) {
+	self.world.t.Helper()
+	self.world.catchUp()
+	running := self.Sidecar.Sidecar()
+	rotation, err := running.RotateRecovery(self.world.admission.ctx, compromise, sidecar.SidecarActConfirmed, self.Daemon.PresencePrompt(running))
+	if rotation != nil {
+		rotation.Words = nil
+	}
+	self.world.Settle()
+	return rotation, err
 }
 
 // What a caller of origin reaches past the daemon, an MCP tool's handler or a harness hook's: the Sidecar's own
