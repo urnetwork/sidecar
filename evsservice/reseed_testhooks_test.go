@@ -1,13 +1,17 @@
 //go:build sidecar_testhooks
 
-// EVSB-M2-20's schedules at the reseed route's barriers (reseed.go; QD-096, QD-725): an ERASE that commits while a
-// re-seeded slot's create is held, before it and after it, never leaves the key it covers in the slot; and a head
-// that moves while a Signed EvsReseed's write is held leaves a statement no reader takes for the new head.
+// EVSB-M2-20's schedules at the reseed route's barriers (reseed.go; QD-096, QD-725, QD-815): an ERASE that commits
+// while a re-seeded slot's create is held, before it and after it, never leaves the key it covers in the slot; a head
+// that moves while a Signed EvsReseed's write is held leaves a statement no reader takes for the new head; and a
+// writer's push that commits while a re-seeded file-mode push waits at its head CAS sends it through 5f and 5g again
+// on the new head, where it lands one version past the mirror's, which the device's walk stops at, or is refused for
+// a path the writer changed, recording nothing.
 
 package evsservice
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -166,4 +170,84 @@ func TestReseedStatementHeldWhileTheHeadMovesIsReplacedByTheNext(t *testing.T) {
 	}
 	// and the older one, sent again, names no head evs serves
 	requireRefusal(t, fixture.reseed(&protocol.EvsReseedRequest{Statement: older}), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+}
+
+// The new site's ref holding the two-device history through version 4, from a walk of a mirror that held no more,
+// and the device's mirror then holding all six versions: the next walk's first commit is the other device's push, at
+// version 5, on a base 3 below the head.
+func newReseedLivePushRace(t *testing.T) (*reseedFixture, *reseedDevice, *reseedTwoDeviceHistory) {
+	t.Helper()
+	history := newReseedTwoDeviceHistory(t)
+	fixture := newReseedFixture(t)
+	device := fixture.device()
+	device.holds(history, 4)
+	if ref := device.reseed(); ref.Stopped != nil || ref.Version != 4 {
+		t.Fatalf("the first walk ended at %d, stopped by %v", ref.Version, ref.Stopped)
+	}
+	device.holds(history, 6)
+	device.reseedCallCount = 0
+	return fixture, device, history
+}
+
+// The device's walk, with a writer's push on the head the first walk left committing at the walk's first head CAS:
+// the writer's plan, under a push id of its own, as change makes it. What the walk did to the ref, the writer's
+// status, and how many head CASes the walk reached.
+func (self *reseedFixture) walkPastALivePush(device *reseedDevice, change func(plan *sidecar.EvsPushPlan)) (*sidecar.EvsReseedRef, int, int) {
+	t := self.t
+	t.Helper()
+	status := 0
+	reached := atBarrierOnce(t, BarrierHeadCasBefore, barrierRefKey(self.check.repoId, self.check.refId), func() {
+		live := self.plan()
+		live.PushId = testId("reseed live push")
+		change(live)
+		status = self.push(live).Code
+	})
+	ref := device.reseed()
+	sidecar.SetTestHooks(nil)
+	return ref, status, *reached
+}
+
+// A writer's push on another path commits while the walk's re-seeded file-mode push waits at its head CAS: the
+// re-seeded push's If-Match fails, and its rerun runs 5a, 5f and 5g again on the head the writer left, where its base
+// 1 stays inside the window with nothing it changes written since, so it commits at 6, one past where the mirror held
+// it. The walk stops the ref at 4 with ErrEvsReseedVersion and sends nothing past it.
+func TestReseedRerunPastALivePushLandsAtAnotherVersion(t *testing.T) {
+	fixture, device, history := newReseedLivePushRace(t)
+	ref, status, reached := fixture.walkPastALivePush(device, func(plan *sidecar.EvsPushPlan) {
+		fixture.create(plan, "z")
+	})
+	if status != http.StatusOK || reached != 2 {
+		t.Fatalf("the writer's push answered %d, and the walk reached %d head CASes", status, reached)
+	}
+	if !errors.Is(ref.Stopped, sidecar.ErrEvsReseedVersion) || ref.Version != 4 || device.reseedCallCount != 5 {
+		t.Fatalf("the walk ended at %d after %d reseed calls, stopped by %v", ref.Version, device.reseedCallCount, ref.Stopped)
+	}
+	head := fixture.head()
+	if head.Version() != 6 || !bytes.Equal(head.Head.GetPushId(), history.statement(t, 5).Push.GetPushId()) || len(head.Head.GetRefused()) != 0 {
+		t.Fatalf("head at %d with push %x", head.Version(), head.Head.GetPushId())
+	}
+}
+
+// The twin: the writer's push writes a, which the re-seeded push writes on a's version 1, so the rerun's 5g refuses
+// it 409 PATH_CONFLICT, recording nothing, and the walk stops the ref at 4 with that refusal; sent again, it answers
+// the same.
+func TestReseedRerunPastAConflictingLivePushIsRefused(t *testing.T) {
+	fixture, device, history := newReseedLivePushRace(t)
+	check := fixture.check
+	ref, status, reached := fixture.walkPastALivePush(device, func(plan *sidecar.EvsPushPlan) {
+		plan.Changes = append(plan.Changes, check.change(plan, checkTestPath("a"), 1, 2))
+	})
+	if status != http.StatusOK || reached != 1 {
+		t.Fatalf("the writer's push answered %d, and the walk reached %d head CASes", status, reached)
+	}
+	evsError, ok := sidecar.EvsErrorOf(ref.Stopped)
+	if !ok || evsError.Status != http.StatusConflict || evsError.Code != protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT || evsError.Recorded ||
+		ref.Version != 4 || device.reseedCallCount != 5 {
+		t.Fatalf("the walk ended at %d after %d reseed calls, stopped by %v", ref.Version, device.reseedCallCount, ref.Stopped)
+	}
+	head := fixture.head()
+	if head.Version() != 5 || !bytes.Equal(head.Head.GetPushId(), testId("reseed live push").Bytes()) || len(head.Head.GetRefused()) != 0 {
+		t.Fatalf("head at %d with push %x and %d bytes of refusals", head.Version(), head.Head.GetPushId(), len(head.Head.GetRefused()))
+	}
+	requireRefusal(t, fixture.reseed(history.bodies[4]), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
 }
