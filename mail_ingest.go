@@ -695,6 +695,15 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 	content = append(content, message...)
 	messagePath := MailMessagePath(month, messageId)
 
+	// the erasure ref once more, just before the write: an ERASE that committed while this deposit was open
+	// (FS-13). One that commits after this read and took only a deposit, no m/ version standing, is not seen here
+	if _, err := self.erased.refresh(ctx, self.repo.Erasures); err != nil {
+		return false, err
+	}
+	if _, erased := self.erased.erased(messageId); erased {
+		pass.Erased += 1
+		return true, nil
+	}
 	testHookBarrier("mail.ingest.push.before", "")
 	_, err = self.index.Append(ctx, entry, &mailStoreWrite{Path: messagePath, Content: content})
 	testHookBarrier("mail.ingest.push.after", "")
