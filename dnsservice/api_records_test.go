@@ -98,6 +98,10 @@ func newTestRecordsApi(t testing.TB, store *fakeRecordStore, gate dnsservice.Dns
 			deps.RecordGate = gate
 		}
 	})
+	// every network admitted, as preview_networks or the percent admits one
+	if err := api.host.Gates.Set("sidecar:\n  dns: {enabled: true, percent: 100}\n"); err != nil {
+		t.Fatal(err)
+	}
 	networkId := sidecar.NewId()
 	sidecarId := connect.NewId()
 	token := api.host.Authenticator.Issue(&sidecar.Principal{
@@ -339,12 +343,13 @@ func TestDnsZoneRouteShowsOnlyTheCallersHosts(t *testing.T) {
 	}
 }
 
-// §19.11's dns gate: writes: false refuses POST and leaves GET, and a disabled gate refuses both.
+// §19.11's dns gate: writes: false refuses POST and leaves GET, a disabled gate refuses both, and a network the
+// gate does not admit is refused.
 func TestDnsRecordsRoutesFollowTheDnsGate(t *testing.T) {
 	store := &fakeRecordStore{answer: []byte(`{"version":7}`), zone: &sidecar.DnsZone{Root: edgeTestRoot, Label: "label0001"}}
 	api := newTestRecordsApi(t, store, &fakeRecordGate{adminHosts: []string{"www"}})
 	body := testRecordsBody(t, "www.label0001."+edgeTestRoot)
-	if err := api.host.Gates.Set("sidecar:\n  dns: {enabled: true, writes: false}\n"); err != nil {
+	if err := api.host.Gates.Set("sidecar:\n  dns: {enabled: true, writes: false, percent: 100}\n"); err != nil {
 		t.Fatal(err)
 	}
 	if recorder := api.serve(api.recordsRequest(http.MethodPost, sidecar.DnsRecordsPath, api.token, body)); recorder.Code != http.StatusServiceUnavailable {
@@ -358,6 +363,12 @@ func TestDnsRecordsRoutesFollowTheDnsGate(t *testing.T) {
 	}
 	if recorder := api.serve(api.recordsRequest(http.MethodGet, sidecar.DnsZonePath, api.token, "")); recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("a read with the gate off: %d", recorder.Code)
+	}
+	if err := api.host.Gates.Set("sidecar:\n  dns: {enabled: true}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if recorder := api.serve(api.recordsRequest(http.MethodPost, sidecar.DnsRecordsPath, api.token, body)); recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a network the gate does not admit: %d", recorder.Code)
 	}
 	if count := store.callCount(); count != 0 {
 		t.Fatalf("the store was called %d times", count)
