@@ -151,59 +151,137 @@ func clientContent(version uint16, plaintext []byte) ([]byte, error) {
 	return plaintext[:len(plaintext)-1], nil
 }
 
-// The roles a part's records play (SPEC.md 4.3's table), and the check a part outside it fails. Roles
-// follow from public values alone, so a part with a record count its index has no roles for is refused
-// before any verification, which is the edge's refusal, E3, as for a template no plaintext of a
-// record's length can fill (SPEC.md readings 23 and 28).
-func partRoles(preamble *Preamble, part *Part) ([]role, string, error) {
-	count := len(part.Records)
-	repeat := func(r role, times int) []role {
-		roles := make([]role, times)
-		for i := range roles {
-			roles[i] = r
+// The first application record's sequence number: 0 under 1.3, and 1 under 1.2, whose Finished took 0.
+func firstApplicationSeq(version uint16) uint64 {
+	if version == versionTls12 {
+		return 1
+	}
+	return 0
+}
+
+// The role a client record plays by its position alone (DESIGN-DETAILS 3.2.5's table): EHLO at f, MAIL
+// at f+1, R RCPTs, then BDAT's command or DATA, then k header records, then the body; k is 0 until the
+// part that opens the header block's first record names it.
+func roleAt(offset uint64, recipients uint32, mode uint32, k uint32) (role, error) {
+	envelopeEnd := 2 + uint64(recipients)
+	switch {
+	case recipients == 0:
+		return 0, errors.New("a transaction names no recipient")
+	case offset == 0:
+		return roleEhlo, nil
+	case offset == 1:
+		return roleMail, nil
+	case offset < envelopeEnd:
+		return roleRcpt, nil
+	case offset == envelopeEnd && mode == modeBdat:
+		return roleBdat, nil
+	case offset == envelopeEnd && mode == modeData:
+		return roleData, nil
+	case offset == envelopeEnd:
+		return 0, fmt.Errorf("no record of mode %d at the envelope's end", mode)
+	case k == 0:
+		return 0, errors.New("a message record before the header block's record count is named")
+	case offset <= envelopeEnd+uint64(k):
+		return roleHeader, nil
+	default:
+		return roleBody, nil
+	}
+}
+
+// What one part opens, in its order, and the kind of part that makes it (DESIGN-DETAILS 3.2.5 step 8):
+// "key", "env", "msg", "hdr" or "body". On the last part the final record is QUIT and, in DATA mode, the
+// one before it the end mark, each past the header block.
+func partShape(preamble *Preamble, version uint16, part *Part, seqs []uint64, k uint32) ([]role, string, error) {
+	first := firstApplicationSeq(version)
+	headerFirst := first + 3 + uint64(preamble.RecipientCount)
+	roles := make([]role, len(seqs))
+	for i, seq := range seqs {
+		if seq < first {
+			return nil, "", errors.New("a record before the first application record")
 		}
-		return roles
+		at, err := roleAt(seq-first, preamble.RecipientCount, part.Mode, k)
+		if err != nil {
+			return nil, "", err
+		}
+		switch {
+		case part.Last && i == len(seqs)-1:
+			if at != roleBody {
+				return nil, "", errors.New("QUIT before the message's body")
+			}
+			roles[i] = roleQuit
+		case part.Last && part.Mode == modeData && i == len(seqs)-2:
+			if at != roleBody {
+				return nil, "", errors.New("the end mark before the message's body")
+			}
+			roles[i] = roleEndMark
+		default:
+			roles[i] = at
+		}
+	}
+	if part.Index == 1 {
+		if len(roles) != 1 || roles[0] != roleEhlo {
+			return nil, "", errors.New("the key part opens EHLO alone")
+		}
+		return roles, "key", nil
+	}
+	kind := ""
+	headers, bodies, quit, endMark, bdat := 0, 0, false, false, false
+	lastHeader := false
+	for i, r := range roles {
+		var this string
+		switch r {
+		case roleMail, roleRcpt, roleData:
+			this = "env"
+		case roleBdat:
+			this = "msg"
+			bdat = true
+		case roleHeader:
+			headers += 1
+			this = "hdr"
+			if seqs[i] == headerFirst {
+				this = "msg"
+			}
+			lastHeader = seqs[i] == headerFirst+uint64(k)-1
+		case roleBody:
+			bodies += 1
+			this = "body"
+		case roleEndMark:
+			endMark = true
+			this = "body"
+		case roleQuit:
+			quit = true
+			continue
+		default:
+			return nil, "", errors.New("EHLO after the key part")
+		}
+		if kind != "" && kind != this {
+			return nil, "", errors.New("records of more than one kind in one part")
+		}
+		kind = this
 	}
 	switch {
-	case part.Index == 1:
-		if count != 1 {
-			return nil, "E3", errors.New("pi1 opens one record, EHLO")
-		}
-		return []role{roleEhlo}, "", nil
-	case part.Index == 2:
-		roles := append([]role{roleMail}, repeat(roleRcpt, int(min(preamble.RecipientCount, uint32(count))))...)
-		if part.Mode == modeData {
-			roles = append(roles, roleData)
-		}
-		if uint64(count) != 1+uint64(preamble.RecipientCount)+map[bool]uint64{true: 1}[part.Mode == modeData] {
-			return nil, "E3", fmt.Errorf("pi2 opens %d records for %d recipients", count, preamble.RecipientCount)
-		}
-		return roles, "", nil
-	case part.Index == 3 && part.Mode == modeBdat:
-		if count != 3 || !part.Last {
-			return nil, "E3", errors.New("BDAT's pi3 opens BDAT, the header block and QUIT, and is the last")
-		}
-		return []role{roleBdat, roleHeader, roleQuit}, "", nil
-	case part.Mode == modeData && 3 <= part.Index:
-		var roles []role
-		if part.Index == 3 {
-			roles = append(roles, roleHeader)
-		}
-		ends := 0
-		if part.Last {
-			ends = 2
-		}
-		if count < len(roles)+ends || (!part.Last && count == len(roles) && part.Index != 3) || count == 0 {
-			return nil, "E3", errors.New("a DATA part without its records or its end")
-		}
-		roles = append(roles, repeat(roleBody, count-len(roles)-ends)...)
-		if part.Last {
-			roles = append(roles, roleEndMark, roleQuit)
-		}
-		return roles, "", nil
-	default:
-		return nil, "E3", fmt.Errorf("no part %d in mode %d", part.Index, part.Mode)
+	case kind == "" && quit:
+		return nil, "", errors.New("QUIT alone")
+	case kind == "":
+		return roles, "env", nil
+	case 1 < headers+bodies:
+		return nil, "", errors.New("more than one header or body record in one part")
+	case kind == "env" && quit:
+		return nil, "", errors.New("QUIT in an envelope part")
+	case kind == "msg" && headers != 1:
+		return nil, "", errors.New("BDAT's command without the header block's first record")
+	case kind == "msg" && part.Mode == modeBdat && (!bdat || roles[0] != roleBdat):
+		return nil, "", errors.New("the header block's first record without BDAT's command before it")
+	case kind == "body" && part.Mode != modeData:
+		return nil, "", errors.New("a body record outside DATA mode")
+	case kind == "body" && bodies == 0 && !endMark:
+		return nil, "", errors.New("a body part with neither a body record nor the end mark")
+	case part.Mode == modeBdat && (kind == "msg" || kind == "hdr") && lastHeader != quit:
+		return nil, "", errors.New("BDAT's QUIT rides the header block's last record, and nothing else")
+	case part.Mode == modeData && quit && !endMark:
+		return nil, "", errors.New("DATA's QUIT without the end mark")
 	}
+	return roles, kind, nil
 }
 
 // Z4: a command record against its literal form (SPEC.md 4.2). The local part is the template's
@@ -274,6 +352,29 @@ func templateFits(r role, preamble *Preamble, contentBytes int) bool {
 	}
 }
 
+// Z5.4's From line, without its CRLF: "From: ", a phrase of the local set and SP ending in SP or none, then
+// "<", a local part, and "@" the declared domain ">".
+func fromForm(preamble *Preamble, line string) bool {
+	rest, found := strings.CutPrefix(line, "From: ")
+	if found {
+		rest, found = strings.CutSuffix(rest, "@"+preamble.HeaderFromDomain+">")
+	}
+	if !found {
+		return false
+	}
+	phrase, local, found := strings.Cut(rest, "<")
+	if !found || !localForm(local) {
+		return false
+	}
+	for i := range len(phrase) {
+		if phrase[i] != ' ' && !localOctet(phrase[i]) {
+			return false
+		}
+	}
+	// Reading: SPEC.md writes the optional phrase as "phrase SP", so a phrase ends in SP
+	return phrase == "" || phrase[len(phrase)-1] == ' '
+}
+
 // Z5 over the header block, as SPEC.md section 7 states it, item by item.
 func checkHeaderBlock(preamble *Preamble, block []byte) error {
 	// 1: the octet class, CR only before LF, LF only after CR
@@ -325,26 +426,7 @@ func checkHeaderBlock(preamble *Preamble, block []byte) error {
 	}
 	// 4: from, message-id, x-ur-ref and feedback-id once each, uncontinued, in their literal forms
 	literals := map[string]func(line string) bool{
-		"from": func(line string) bool {
-			rest, found := strings.CutPrefix(line, "From: ")
-			if found {
-				rest, found = strings.CutSuffix(rest, "@"+preamble.HeaderFromDomain+">")
-			}
-			if !found {
-				return false
-			}
-			phrase, local, found := strings.Cut(rest, "<")
-			if !found || !localForm(local) {
-				return false
-			}
-			for i := range len(phrase) {
-				if phrase[i] != ' ' && !localOctet(phrase[i]) {
-					return false
-				}
-			}
-			// Reading: SPEC.md writes the optional phrase as "phrase SP", so a phrase ends in SP
-			return phrase == "" || phrase[len(phrase)-1] == ' '
-		},
+		"from":        func(line string) bool { return fromForm(preamble, line) },
 		"message-id":  func(line string) bool { return line == "Message-ID: <"+preamble.MessageId+">" },
 		"x-ur-ref":    func(line string) bool { return line == "X-UR-Ref: "+preamble.XUrRef },
 		"feedback-id": func(line string) bool { return line == "Feedback-ID: "+preamble.FeedbackId },
@@ -517,4 +599,267 @@ func offersChunking(records [][]byte) bool {
 		}
 	}
 	return false
+}
+
+// The scan state between records (DESIGN-DETAILS 3.2.4): pos in bits 0 and 1 (0 in a line, 1 after CR,
+// 2 after LF, 3 after a "." that began a body line), an unfinished field name in bit 2, the line's
+// octets so far in bits 3 to 9, a bit from 10 for each literal the line so far begins, and in bit 16
+// whether the line that just ended was a single field's.
+const (
+	scanPosLine = 0
+	scanPosCr   = 1
+	scanPosLf   = 2
+	scanPosDot  = 3
+	scanRunMore = 127
+)
+
+// The literals a line may begin, in the state's bit order, and whether each is a field name compared
+// without case. Each is SPEC.md's.
+var scanLiterals = []struct {
+	text   string
+	folded bool
+}{
+	{text: "from:", folded: true},
+	{text: "message-id:", folded: true},
+	{text: "x-ur-ref:", folded: true},
+	{text: "feedback-id:", folded: true},
+	{text: "list-unsubscribe-post:", folded: true},
+	{text: "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; "},
+}
+
+// Whether line begins with a literal's first count octets: a name's letters without case, as bit 5
+// forced compares them, the signature's prefix exactly.
+func beginsLiteral(line []byte, literal int, count int) bool {
+	text := scanLiterals[literal].text
+	if len(line) < count {
+		return false
+	}
+	for i := range count {
+		octet := line[i]
+		if scanLiterals[literal].folded {
+			octet |= 0x20
+		}
+		if octet != text[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Whether a literal counts in this message: all but the one-click field, which counts on BULK alone.
+func literalCounts(literal int, bulk bool) bool {
+	return literal != 4 || bulk
+}
+
+// The state after the header block's first records, header, the last of which starts at recordStart:
+// read from the definition over the octets themselves. first says the last record is the block's
+// first, the only one a single field may end in.
+func headerState(header []byte, recordStart int, first bool, bulk bool) uint32 {
+	n := len(header)
+	state := uint32(scanPosLine)
+	switch header[n-1] {
+	case '\r':
+		state = scanPosCr
+	case '\n':
+		state = scanPosLf
+	}
+	if state == scanPosLf {
+		// the line that ended: a single field's, in the first record only
+		start := bytes.LastIndexByte(header[:n-1], '\n') + 1
+		line := header[start:n]
+		if first {
+			for literal := range 5 {
+				if literalCounts(literal, bulk) && beginsLiteral(line, literal, len(scanLiterals[literal].text)) {
+					state |= 1 << 16
+				}
+			}
+		}
+		return state
+	}
+	start := bytes.LastIndexByte(header, '\n') + 1
+	line := header[start:]
+	if line[0] == ' ' || line[0] == '\t' {
+		// a continuation: no name, no run
+		return state
+	}
+	if !bytes.Contains(line, []byte(":")) {
+		state |= 1 << 2
+	}
+	run := scanRunMore
+	if recordStart <= start {
+		run = min(len(line), scanRunMore)
+	}
+	state |= uint32(run) << 3
+	for literal := range scanLiterals {
+		if run < len(scanLiterals[literal].text) && beginsLiteral(line, literal, run) {
+			state |= 1 << (10 + literal)
+		}
+	}
+	return state
+}
+
+// The state after DATA's body octets so far: pos alone, the body starting at a line's start.
+func bodyState(body []byte) uint32 {
+	n := len(body)
+	switch {
+	case n == 0:
+		return scanPosLf
+	case body[n-1] == '\r':
+		return scanPosCr
+	case body[n-1] == '\n':
+		return scanPosLf
+	case body[n-1] == '.' && (n == 1 || body[n-2] == '\n'):
+		return scanPosDot
+	default:
+		return scanPosLine
+	}
+}
+
+// Z5's placement over the header block's records so far (DESIGN-DETAILS 3.2.4): the single fields and the
+// fixed signature's prefix begin lines of the first record only, each literal whole inside it; and the
+// first record holds each exactly once, in its literal form, every such line ending inside it and not
+// continued there. header holds the records so far, the first firstEnd octets long.
+func checkHeaderPlacement(preamble *Preamble, header []byte, firstEnd int) error {
+	bulk := preamble.Flags&flagBulk != 0
+	counts := make([]int, len(scanLiterals))
+	starts := make([]int, len(scanLiterals))
+	for start := 0; start < len(header); {
+		end := bytes.IndexByte(header[start:], '\n')
+		next := len(header)
+		if 0 <= end {
+			next = start + end + 1
+		}
+		line := header[start:next]
+		if line[0] != ' ' && line[0] != '\t' {
+			for literal := range scanLiterals {
+				length := len(scanLiterals[literal].text)
+				if !literalCounts(literal, bulk) || !beginsLiteral(line, literal, length) {
+					continue
+				}
+				if firstEnd < start+length {
+					return fmt.Errorf("Z5: %q begins a line past the header block's first record", scanLiterals[literal].text)
+				}
+				counts[literal] += 1
+				starts[literal] = start
+			}
+		}
+		start = next
+	}
+	if len(header) != firstEnd {
+		return nil
+	}
+	// the first record alone: each once, in its literal form, whole inside it
+	for literal := range scanLiterals {
+		if literalCounts(literal, bulk) && counts[literal] != 1 {
+			return fmt.Errorf("Z5: %d lines begin %q in the header block's first record", counts[literal], scanLiterals[literal].text)
+		}
+	}
+	lineAt := func(literal int) ([]byte, bool) {
+		start := starts[literal]
+		end := bytes.Index(header[start:], []byte(crlf))
+		if end < 0 {
+			return nil, false
+		}
+		return header[start : start+end], true
+	}
+	forms := map[int]string{
+		1: "Message-ID: <" + preamble.MessageId + ">",
+		2: "X-UR-Ref: " + preamble.XUrRef,
+		3: "Feedback-ID: " + preamble.FeedbackId,
+	}
+	if bulk {
+		forms[4] = "List-Unsubscribe-Post: List-Unsubscribe=One-Click"
+	}
+	for literal, form := range forms {
+		if line, ok := lineAt(literal); !ok || string(line) != form {
+			return fmt.Errorf("Z5: %q is not whole and in its literal form inside the first record", scanLiterals[literal].text)
+		}
+	}
+	if line, ok := lineAt(0); !ok || !fromForm(preamble, string(line)) {
+		return errors.New("Z5: From is not whole and in its form inside the first record")
+	}
+	tags := scanLiterals[5].text + "d=" + preamble.HeaderFromDomain + "; s=" + preamble.DkimSelector + "; "
+	if start := starts[5]; len(header) < start+len(tags) || string(header[start:start+len(tags)]) != tags {
+		return errors.New("Z5: the fixed signature's d= and s= are not inside the first record")
+	}
+	// a single field's line is not continued where the record shows what follows it
+	for literal := range 5 {
+		if !literalCounts(literal, bulk) {
+			continue
+		}
+		line, _ := lineAt(literal)
+		after := starts[literal] + len(line) + len(crlf)
+		if after < len(header) && (header[after] == ' ' || header[after] == '\t') {
+			return fmt.Errorf("Z5: %q is continued", scanLiterals[literal].text)
+		}
+	}
+	return nil
+}
+
+// Z5's rules over the header records so far that a whole block's check cannot wait for: no leading
+// continuation, no empty line, each line a field or a continuation whose name holds 21-7E but ':' and
+// does not start with '.', CR and LF in pairs but for a CR the next record answers, and a single field's
+// line not continued in a later record.
+func checkHeaderSoFar(preamble *Preamble, header []byte, firstEnd int) error {
+	for i, octet := range header {
+		switch {
+		case octet == '\t' || ' ' <= octet && octet <= '~':
+		case octet == '\r':
+			if i+1 < len(header) && header[i+1] != '\n' {
+				return errors.New("Z5.1: a bare CR")
+			}
+		case octet == '\n':
+			if i == 0 || header[i-1] != '\r' {
+				return errors.New("Z5.1: a bare LF")
+			}
+		default:
+			return fmt.Errorf("Z5.1: octet %#x", octet)
+		}
+	}
+	if header[0] == ' ' || header[0] == '\t' {
+		return errors.New("Z5.3: the first line is a continuation")
+	}
+	for start := 0; start < len(header); {
+		end := bytes.IndexByte(header[start:], '\n')
+		next := len(header)
+		if 0 <= end {
+			next = start + end + 1
+		}
+		line := header[start:next]
+		start = next
+		if line[0] == ' ' || line[0] == '\t' {
+			continue
+		}
+		if line[0] == '\r' {
+			// the block's final empty line ends it, and the whole block's check reads that
+			continue
+		}
+		name, _, found := bytes.Cut(line, []byte(":"))
+		complete := bytes.HasSuffix(line, []byte(crlf))
+		if (complete && !found) || name[0] == '.' || (found && len(name) == 0) {
+			return fmt.Errorf("Z5.3: %q has no field name", line)
+		}
+		for _, octet := range name {
+			if octet < 0x21 || 0x7e < octet {
+				return fmt.Errorf("Z5.3: %q has no field name", line)
+			}
+		}
+	}
+	return checkHeaderPlacement(preamble, header, firstEnd)
+}
+
+// Z6's rules over DATA's body records so far that the whole body's check cannot wait for: CR and LF in
+// pairs but for a CR the next record answers, and no "." at a line's start followed by CR.
+func checkBodySoFar(body []byte) error {
+	for i, octet := range body {
+		switch {
+		case octet == '\r' && i+1 < len(body) && body[i+1] != '\n':
+			return errors.New("a bare CR in DATA")
+		case octet == '\n' && (i == 0 || body[i-1] != '\r'):
+			return errors.New("a bare LF in DATA")
+		case octet == '.' && (i == 0 || body[i-1] == '\n') && i+1 < len(body) && body[i+1] == '\r':
+			return errors.New("a line of one dot in DATA")
+		}
+	}
+	return nil
 }
