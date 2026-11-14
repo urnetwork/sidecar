@@ -1,4 +1,4 @@
-//go:build !ios_extension
+//go:build !ios_extension && !js
 
 // The CT client on fixtures (§22.9: staging CT is unreliable): each source's own listing form, Cert Spotter's paging
 // and crt.sh's fetch a certificate, the cursors, and every way a source fails. The fixtures' certificates are

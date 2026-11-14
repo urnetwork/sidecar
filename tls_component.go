@@ -48,6 +48,11 @@ type TlsComponentArgs struct {
 	SetCtWatch func(watch sidecarCtWatch)
 	// Called at Close, after the watch has ended: what releases the CT client the args' Sources came from.
 	CloseCtSources func()
+	// What §13.10's publishes need beyond the Sidecar: the grant filer, the client names and the daemon's ports
+	// (tls_publish.go). nil leaves every publish refused.
+	Publish *TlsPublishArgs
+	// The Sidecar the publishes run on, which Sidecar.TlsComponentArgs sets. nil runs no publisher.
+	sidecar *Sidecar
 }
 
 // The tls component.
@@ -59,6 +64,8 @@ type TlsComponent struct {
 	ctWatch        *tlsCtWatch
 	setCtWatch     func(watch sidecarCtWatch)
 	closeCtSources func()
+	// §13.10's publishes; nil for a component made without its Sidecar
+	publisher *tlsPublisher
 
 	stateLock sync.Mutex
 	// raised for each generation attached, so an older one's end does not detach a newer one's api
@@ -172,14 +179,13 @@ func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
 		},
 		SetCtWatch:     self.setTlsCtWatch,
 		CloseCtSources: ctClient.Close,
+		sidecar:        self,
 	}, nil
 }
 
-// Whether this sidecar listens on a published name now, which is when D-TLS-8 has it watch CT. It watches always
-// until §13.10's publishing keeps its hosts (TLS-M5-23's TlsPublishedHosts): a device that watches without listening
-// costs two queries a pass and misses nothing.
+// Whether this sidecar listens on a published name now, which is when D-TLS-8 has it watch CT.
 func (self *Sidecar) tlsListening() bool {
-	return true
+	return 0 < len(self.TlsPublishedHosts())
 }
 
 // A component whose manager runs until Close or ctx ends, attached to no generation yet, installed behind
@@ -204,6 +210,9 @@ func NewTlsComponent(ctx context.Context, args *TlsComponentArgs) (*TlsComponent
 		setSource:      args.SetSource,
 		setCtWatch:     args.SetCtWatch,
 		closeCtSources: args.CloseCtSources,
+	}
+	if args.sidecar != nil {
+		self.publisher = newTlsPublisher(&sidecarTlsPublishBackend{sidecar: args.sidecar, args: args.Publish}, args.Manager.Settings)
 	}
 	if args.CtWatch != nil {
 		watchArgs := *args.CtWatch
@@ -291,6 +300,9 @@ func (self *TlsComponent) CertManager() *TlsCertManager {
 
 // Ends the manager and takes it from behind TlsDeviceCertificate, after the Sidecar's last generation.
 func (self *TlsComponent) Close() {
+	if self.publisher != nil {
+		self.publisher.close()
+	}
 	if self.setSource != nil {
 		self.setSource(nil)
 	}

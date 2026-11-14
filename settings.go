@@ -387,6 +387,13 @@ type SidecarTlsSettings struct {
 	CtKnownMaxCount int
 	// The most bytes the watch's cursors, known certificates and alarms may take in its store: 1 MiB.
 	CtStateMaxByteCount int
+	// How long §13.10's target probe waits for the local service to take a connection and answer: 3 s.
+	ProbeTimeout time.Duration
+	// The most bytes of the local service's answer the probe reads: 64 KiB, the start of a page.
+	ProbeResponseMaxByteCount int
+	// How long a raw link's client certificate is valid when the publish names no expiry: 7 days, the longest a
+	// Community grant lasts (§13.9).
+	PublishLinkCertificateLifetime time.Duration
 }
 
 // §5.5's agent subkeys (identity_agent.go): each agent registration's Ed25519 subkey, which the daemon holds and
@@ -420,20 +427,23 @@ func DefaultSidecarTlsSettings() *SidecarTlsSettings {
 		SelfSignedLifetime:  30 * 24 * time.Hour,
 		SelfSignedBackdate:  1 * time.Hour,
 
-		CertResyncInterval:       time.Hour,
-		CertHintMinInterval:      time.Second,
-		CertOrderPollInterval:    5 * time.Second,
-		CertOrderPollMinInterval: time.Second,
-		CertOrderPollMaxInterval: 5 * time.Minute,
-		CertRetryMinInterval:     time.Minute,
-		CertRetryMaxInterval:     time.Hour,
-		CertChainMaxCount:        8,
-		CertStateMaxByteCount:    1024 * 1024,
-		CtWatchInterval:          6 * time.Hour,
-		CtWatchJitter:            30 * time.Minute,
-		CtIdentityPinMinAge:      24 * time.Hour,
-		CtKnownMaxCount:          4096,
-		CtStateMaxByteCount:      1024 * 1024,
+		CertResyncInterval:             time.Hour,
+		CertHintMinInterval:            time.Second,
+		CertOrderPollInterval:          5 * time.Second,
+		CertOrderPollMinInterval:       time.Second,
+		CertOrderPollMaxInterval:       5 * time.Minute,
+		CertRetryMinInterval:           time.Minute,
+		CertRetryMaxInterval:           time.Hour,
+		CertChainMaxCount:              8,
+		CertStateMaxByteCount:          1024 * 1024,
+		CtWatchInterval:                6 * time.Hour,
+		CtWatchJitter:                  30 * time.Minute,
+		CtIdentityPinMinAge:            24 * time.Hour,
+		CtKnownMaxCount:                4096,
+		CtStateMaxByteCount:            1024 * 1024,
+		ProbeTimeout:                   3 * time.Second,
+		ProbeResponseMaxByteCount:      64 * 1024,
+		PublishLinkCertificateLifetime: 7 * 24 * time.Hour,
 	}
 }
 
