@@ -198,3 +198,39 @@ func TestEvsMirrorSettingsRefuseNonPositiveBounds(t *testing.T) {
 		}
 	}
 }
+
+// The record's view of the same state (RECORD-M3-10): the designated indexers, the network's `record` repos, and no
+// coverage for a repo this device keeps no mirror of; with no state, unknown.
+func TestRecordEvsMirrorViewReadsTheDesignations(t *testing.T) {
+	test := newEvsMirrorTestNet(t)
+	state := test.net.log.State()
+	view := NewRecordEvsMirrorView(&RecordEvsMirrorViewArgs{
+		State:    func() *ConfigState { return state },
+		Services: test.services,
+		Mirror:   func(repoId Id) *EvsMirror { return nil },
+	})
+	indexerIds, ok := view.Indexers()
+	want := []Id{test.net.owner.sidecarId, test.laptopA.sidecarId}
+	slices.SortFunc(want, func(a Id, b Id) int { return a.Cmp(b) })
+	if !ok || !slices.Equal(indexerIds, want) {
+		t.Fatalf("indexers %v, %t", indexerIds, ok)
+	}
+	if ledgerIds := view.Ledgers(); !slices.Equal(ledgerIds, []Id{test.unwatched}) {
+		t.Fatalf("ledgers %v", ledgerIds)
+	}
+	if coverage, err := view.Coverage(t.Context(), test.teamRecord); coverage != nil || err != nil {
+		t.Fatalf("coverage of a repo with no mirror: %v, %v", coverage, err)
+	}
+	// an indexer whose services name no mirror is not one
+	test.designation[test.laptopA.sidecarId] = []protocol.IndexerService{protocol.IndexerService_INDEXER_SERVICE_SEARCH}
+	if indexerIds, _ := view.Indexers(); !slices.Equal(indexerIds, []Id{test.net.owner.sidecarId}) {
+		t.Fatalf("indexers %v with one serving search alone", indexerIds)
+	}
+	unknown := NewRecordEvsMirrorView(&RecordEvsMirrorViewArgs{})
+	if _, ok := unknown.Indexers(); ok {
+		t.Fatal("indexers known with no state")
+	}
+	if ledgerIds := unknown.Ledgers(); len(ledgerIds) != 0 {
+		t.Fatalf("ledgers %v with no state", ledgerIds)
+	}
+}

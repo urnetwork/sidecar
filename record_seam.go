@@ -101,6 +101,11 @@ type RecordStreamPush struct {
 type RecordStreamCommit struct {
 	Version    uint64
 	TimeMillis int64
+	// A deposit's commit alone: the deposit ref's consumed_through as evs answers it beside the version, the highest
+	// version at or below which an ingester's CONSUME left nothing unconsumed, never falling (QD-176). A depositor
+	// prunes what it keeps at or below it (record_mirror.go). 0 from a ref no CONSUME has marked, and from a
+	// binding that does not state it, so nothing is pruned on it.
+	ConsumedThrough uint64
 }
 
 // One ref of a log: a writer's stream, or a depositor's deposit ref.
@@ -166,6 +171,10 @@ type RecordStreamConsume struct {
 	PushId             Id
 	DepositorSidecarId Id
 	DepositIds         []Id
+	// The ingester's mark (EvsPush.consumed_through, QD-176): the highest version of this deposit ref at or below
+	// which its own read left no deposit unconsumed once this CONSUME commits. evs keeps the highest any CONSUME
+	// carried, never past the ref's version, and a depositor learns it at its next deposit.
+	ConsumedThrough uint64
 }
 
 // An ERASE push on the repo's erasure ref (§11.12): the slot keys it destroys, and its note, which the binding seals
