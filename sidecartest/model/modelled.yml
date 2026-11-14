@@ -80,8 +80,8 @@ models:
   - spec: IndexRollup
     owners: [SEARCH-M10-02, SEARCH-M10-46]
     milestones: [M10]
-    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and kept slots and large entries on its own bases under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written"
-    companions: [details/IndexMerge]
+    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and kept slots and large entries on its own bases under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written, and details/IndexErase.tla keeps an erasure under them, of a path document whose edit may rest on the version a CUT lists and of a run card, beside the writers that keep pushing (DESIGN-DETAILS.md section 15)"
+    companions: [details/IndexMerge, details/IndexErase]
     sources:
       - sidecar/sidecartest/model/IndexRollup.tla
       - sidecar/sidecartest/model/IndexRollup.cfg
@@ -89,6 +89,9 @@ models:
       - sidecar/sidecartest/model/details/IndexMerge.tla
       - sidecar/sidecartest/model/details/IndexMerge*.cfg
       - sidecar/sidecartest/model/details/run-indexmerge.sh
+      - sidecar/sidecartest/model/details/IndexErase.tla
+      - sidecar/sidecartest/model/details/IndexErase*.cfg
+      - sidecar/sidecartest/model/details/run-indexerase.sh
       - sidecar/evs_index_*.go
       - sidecar/search_*.go
       - sidecar/indexer_*.go
