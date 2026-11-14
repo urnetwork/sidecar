@@ -222,6 +222,9 @@ type EvsSettings struct {
 	LeaseMaxPrefixCount int
 	// A lease's life after its last write, which a renewal repeats, 7 d; and {evsl_<repo_id>}'s own ttl, past every
 	// lease's life so that a repo nobody renews leaves nothing, 8 d. Both positive, the hash's the longer.
+	// {evsc_<client_id>} keeps the same two: a repo leaves its client's count a lease's life after the client's last
+	// subscribe or renewal on it, and the set lives the hash's ttl after its last write
+	// (plan-EVS1-subscription-caps#2).
 	LeaseLife   time.Duration
 	LeaseKeyTtl time.Duration
 	// A lease request's body: 16 prefixes of at most 32 tokens, and the ids, 16 KiB. Positive.
