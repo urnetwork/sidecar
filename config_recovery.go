@@ -34,6 +34,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -41,9 +42,54 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// §7.9's Recovery window, a protocol constant every reader holds alike: an activation needs a tick at least this long
-// after the entry of the proposal's newest recovery-key signature.
-const configRecoveryWindowMs = int64(72 * 60 * 60 * 1000)
+// §7.9's Recovery values, which api and every reader must hold alike, since each judges an activation by them: a
+// verifier that held another window would refuse a tick the rest take, or take one they refuse, and fork.
+type ConfigRecoverySettings struct {
+	// How long after the entry of a proposal's newest recovery-key signature its activation's tick must come, by
+	// entry times: 72 h (D-TEAM-21), the time admins have to veto the last recovery signature.
+	Window time.Duration
+}
+
+// §7.9's values.
+func DefaultConfigRecoverySettings() *ConfigRecoverySettings {
+	return &ConfigRecoverySettings{
+		Window: 72 * time.Hour,
+	}
+}
+
+// The log's Recovery values, the defaults for settings that set none.
+func (self *ConfigLogSettings) recovery() *ConfigRecoverySettings {
+	if self == nil || self.Recovery == nil {
+		return DefaultConfigRecoverySettings()
+	}
+	return self.Recovery
+}
+
+// The Recovery values this log judges activations by. api's activation task waits out their window before it ticks
+// (server's config_log_tick.go).
+func (self *ConfigLog) RecoverySettings() *ConfigRecoverySettings {
+	return self.settings.recovery()
+}
+
+// What a tick's content comes to at the next position, sequenced at timeMs, judged on the current state as every reader
+// judges it there (configCheckTick, then its effect): nil when the tick takes effect, else the refusal each reader
+// gives it. api appends only a tick this takes (§7.9's tick row), so an activation is judged from its proposal's row at
+// api as at every reader. Nothing is kept and no state changes. A reader's held veto is not asked: api holds none. For
+// the goroutine that applies, as Apply is.
+func (self *ConfigLog) CheckTick(tick *bridge.ApiTick, timeMs int64) error {
+	if self.fork != nil {
+		return fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
+	}
+	state := self.state.Load()
+	n := state.n + 1
+	activations, err := configCheckTick(state, tick, n, timeMs, self.settings.recovery())
+	if err != nil {
+		return err
+	}
+	// the effect too: an activation's own effect can close a proposal the same tick activates after it, which
+	// refuses the whole tick at every reader
+	return configApplyTick(newConfigStateBuilder(state, n, [sha256.Size]byte{}, timeMs), tick, activations)
+}
 
 // Why a proposal closed.
 type ConfigProposalClose int
@@ -428,8 +474,9 @@ func (self *ConfigState) PendingProposals() []*bridge.ProposalRow {
 // An ApiTick's activation of a proposal (§7.9's activation row) at the tick's state: open and unexpired at the tick's
 // time, held by Recovery's window, the tick at least 72 h after its newest recovery-key signature, k counted for an
 // authority one or, for a restored binding's admission with self_admit off, one admission signer's cosign, and its
-// statement's rule holding at the tick. Returns the statement as it takes effect there.
-func (self *ConfigState) checkActivation(proposalId []byte, n uint64, timeMs int64) (*configStatement, error) {
+// statement's rule holding at the tick. recovery is the log's Recovery values. Returns the statement as it takes effect
+// there.
+func (self *ConfigState) checkActivation(proposalId []byte, n uint64, timeMs int64, recovery *ConfigRecoverySettings) (*configStatement, error) {
 	if len(proposalId) != sha256.Size {
 		return nil, fmt.Errorf("%w: an activated id of %d bytes", ErrConfigRule, len(proposalId))
 	}
@@ -439,7 +486,7 @@ func (self *ConfigState) checkActivation(proposalId []byte, n uint64, timeMs int
 		return nil, fmt.Errorf("%w: an activation of no open proposal", ErrConfigRule)
 	case !proposal.windowed():
 		return nil, fmt.Errorf("%w: an activation of a proposal no window holds", ErrConfigRule)
-	case timeMs < proposal.row.GetWindowTimeMs()+configRecoveryWindowMs:
+	case timeMs < proposal.row.GetWindowTimeMs()+recovery.Window.Milliseconds():
 		return nil, fmt.Errorf("%w: an activation before the window ran", ErrConfigRule)
 	}
 	statement := *proposal.statement

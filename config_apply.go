@@ -717,7 +717,7 @@ func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) (*Co
 		kept.verdict.Refusal = fmt.Errorf("%w: tick: %w", ErrConfigRule, err)
 		return next.finish(), nil
 	}
-	activations, err := configCheckTick(state, tick, kept.n, kept.entry.GetTimeMs())
+	activations, err := configCheckTick(state, tick, kept.n, kept.entry.GetTimeMs(), self.settings.recovery())
 	if err != nil {
 		kept.verdict.Refusal = err
 		return next.finish(), nil
@@ -735,8 +735,9 @@ func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) (*Co
 }
 
 // The checks a tick's content passes at state, for a tick at position n and time timeMs: each reaped id an ephemeral
-// admission, and each activation, none repeated, as checkActivation says. Returns the activations.
-func configCheckTick(state *ConfigState, tick *bridge.ApiTick, n uint64, timeMs int64) ([]configActivation, error) {
+// admission, and each activation, none repeated, as checkActivation says by the log's Recovery values. Returns the
+// activations.
+func configCheckTick(state *ConfigState, tick *bridge.ApiTick, n uint64, timeMs int64, recovery *ConfigRecoverySettings) ([]configActivation, error) {
 	for _, reapedBytes := range tick.GetReapedSidecarIds() {
 		sidecarId, err := IdFromBytes(reapedBytes)
 		if err != nil {
@@ -749,7 +750,7 @@ func configCheckTick(state *ConfigState, tick *bridge.ApiTick, n uint64, timeMs 
 	}
 	activations := []configActivation{}
 	for _, proposalId := range tick.GetActivatedProposalIds() {
-		statement, err := state.checkActivation(proposalId, n, timeMs)
+		statement, err := state.checkActivation(proposalId, n, timeMs, recovery)
 		if err != nil {
 			return nil, err
 		}
