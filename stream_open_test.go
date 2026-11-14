@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -434,9 +435,39 @@ func testFirstSent(sent []*protocol.Envelope, messageType protocol.MessageType) 
 	return nil
 }
 
+// Waits until stream has ended, by a reset, a reject or both closes.
+func testAwaitStreamEnded(t *testing.T, stream *SubprotocolStream) {
+	t.Helper()
+	guard := time.After(testSubprotocolAwaitTimeout)
+	for {
+		var ended bool
+		var changed chan struct{}
+		func() {
+			stream.stateLock.Lock()
+			defer stream.stateLock.Unlock()
+			ended = stream.state.phase == streamPhaseDone
+			changed = stream.changed
+		}()
+		if ended {
+			return
+		}
+		select {
+		case <-changed:
+		case <-guard:
+			t.Fatal("the stream never ended")
+		}
+	}
+}
+
 // A key change under a stream (§6.4): a frame on it under another C15 key resets every stream with that
 // peer with IDENTITY, here and at the peer, and a new open under that key is rejected INVALID.
-func TestStreamIdentityMismatchResets(t *testing.T) {
+//
+// The acceptor resets as the frame arrives, so its StreamReset races the Write that sent the frame, and
+// §6.4 orders neither. Each order is run, held by the pair's delivery: with resetFirst the Write's frame
+// is delivered and the Write held until the reset has ended the opener's stream, so the Write, every byte
+// sent, answers the peer's reset; without it the reset waits for the Write, which answers nil.
+func testStreamIdentityMismatch(t *testing.T, resetFirst bool) {
+	t.Helper()
 	_, a, b := newTestStreamSides(t, nil)
 	incomings := testStreamAccepting(t, a, testStreamTarget)
 	opened, accepted := testStreamOpen(t, b, a, incomings, nil)
@@ -449,26 +480,80 @@ func TestStreamIdentityMismatchResets(t *testing.T) {
 		defer b.stateLock.Unlock()
 		b.presentedKey = &otherKey
 	}()
-	if _, err := opened.Write([]byte("under another key")); err != nil {
-		t.Fatal(err)
+	written := make(chan struct{})
+	var writtenOnce sync.Once
+	writeReturned := func() {
+		writtenOnce.Do(func() { close(written) })
 	}
+	t.Cleanup(writeReturned)
+	a.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		switch {
+		case resetFirst && from == b && envelope.Type == uint32(protocol.MessageType_STREAM_DATA):
+			// on the Write's goroutine: the frame reaches the acceptor here, and the Write goes on only once
+			// the acceptor's reset has come back and ended the opener's stream
+			to.subprotocol.receive(connect.SourceId(from.clientId), envelope, from.peerTo(to))
+			testAwaitStreamEnded(t, opened)
+			return nil
+		case !resetFirst && from == a && envelope.Type == uint32(protocol.MessageType_STREAM_RESET):
+			// on the acceptor's stream sender: the reset leaves once the Write has returned
+			select {
+			case <-written:
+			case <-time.After(testSubprotocolAwaitTimeout):
+			}
+		}
+		return envelope
+	})
+	payload := []byte("under another key")
+	n, err := opened.Write(payload)
+	writeReturned()
 	var resetErr *StreamResetError
+	switch {
+	case n != len(payload):
+		t.Fatalf("the write sent %d B: %v", n, err)
+	case resetFirst:
+		if !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_IDENTITY || resetErr.Local {
+			t.Fatalf("the write the reset beat answered %v", err)
+		}
+	case err != nil:
+		t.Fatalf("the write ahead of the reset answered %v", err)
+	}
+	a.setDeliver(nil)
 	if _, err := accepted.Read(make([]byte, 64)); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_IDENTITY || !resetErr.Local {
 		t.Errorf("the acceptor read %v", err)
 	}
 	if _, err := opened.Read(make([]byte, 64)); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_IDENTITY || resetErr.Local {
 		t.Errorf("the opener read %v", err)
 	}
+	if _, err := opened.Write(payload); !errors.As(err, &resetErr) || resetErr.Code != protocol.StreamResetCode_RST_IDENTITY || resetErr.Local {
+		t.Errorf("the opener's next write answered %v", err)
+	}
 	if stats := a.subprotocol.StreamStats(); stats.IdentityResetCount != 1 {
 		t.Errorf("identity resets %d", stats.IdentityResetCount)
 	}
 	// the gate closed on the other key, so an open under it is rejected, never accepted
-	_, err := b.subprotocol.OpenStream(t.Context(), Id(a.clientId), &StreamOpenRequest{Target: testStreamTarget})
-	if err == nil {
-		t.Fatal("an open under another key was accepted")
+	var rejectErr *StreamRejectError
+	_, err = b.subprotocol.OpenStream(t.Context(), Id(a.clientId), &StreamOpenRequest{Target: testStreamTarget})
+	if !errors.As(err, &rejectErr) || rejectErr.Code != protocol.StreamRejectCode_SR_INVALID || rejectErr.Local {
+		t.Fatalf("an open under another key answered %v", err)
+	}
+	select {
+	case incoming := <-incomings:
+		t.Fatalf("an open under another key reached the function: %+v", incoming)
+	default:
 	}
 	testStreamsSettled(t, a)
 	testStreamsSettled(t, b)
+}
+
+// The opener's Write returns before the acceptor's reset reaches it: nil, and the reset ends both ends.
+func TestStreamIdentityMismatchResets(t *testing.T) {
+	testStreamIdentityMismatch(t, false)
+}
+
+// The acceptor's reset reaches the opener before its Write returns: the Write, its bytes all sent, answers
+// the peer's IDENTITY reset, and everything else holds as when the Write returned first.
+func TestStreamIdentityMismatchResetBeatsWrite(t *testing.T) {
+	testStreamIdentityMismatch(t, true)
 }
 
 // An edge sends no Hello and carries no binding (§6.4, §9.6's step 3): its open reaches the accept
