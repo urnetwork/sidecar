@@ -120,7 +120,7 @@ func TestMetadataListKeepsRedisSuffixesApart(t *testing.T) {
 	}
 	names := testFamilyNames(list, MetadataFamilyRedis)
 	for _, name := range []string{
-		"{acl_}v", "{acl_}e", "{acl_}q",
+		"{acl_}v", "{acl_}e", "{acl_}q", "{acl_}r",
 		"{scp_}ver", "{scp_}hint", "{scp_}n", "{scp_}tok", "{scp_}tokrev", "{scp_}ack", "{scp_}live", "{scp_}hb",
 		"{wake_}", "{wakeq_}", "{tokgen_}", "{sg_}", "{sg_}ix", "{svc_}", "{sn_}names", "{sc_}set",
 		"{evsl_}v", "{tes_}", "{tes_}n", "{sq_}", "{smq_}", "{mxr_}", "{mxc_}", "{dns}serial:",
