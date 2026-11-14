@@ -1,6 +1,7 @@
-// A later DATA part over a late NewSessionTicket: the body's parts go on behind it, since a ticket is
-// no reply, while any reply in a later part stays unprovable (Z7, Z8). The circuit runs on a quick
-// shape with the same blocks, and the production shapes are checked to hold such a part.
+// A late NewSessionTicket during DATA's body: the message's parts cover no server record, so a part that
+// opens no client record, of the env kind, covers it, since a ticket is no reply, while any reply there
+// stays unprovable (Z7, Z8; DESIGN-DETAILS 3.2.3's last row). The circuit runs on a quick env shape, and
+// the production shapes are checked to hold such a part.
 
 package smtpproof
 
@@ -13,7 +14,7 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// A DATA send cut into several later parts, so part 4 is a body part that is not the last.
+// A DATA send cut into several body parts, so part 4 is a body part that is not the last.
 func testLaterPartCapture(t *testing.T, leg *testTlsLeg) *testCapturedParts {
 	t.Helper()
 	settings := DefaultProverSettings()
@@ -22,15 +23,22 @@ func testLaterPartCapture(t *testing.T, leg *testTlsLeg) *testCapturedParts {
 	return testCapture(t, leg, testMxDefaults(), settings, testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol"))
 }
 
-// Part 4 with one more server record after its count, holding plaintext as the MX would have sealed it.
-func testLaterPartWithServerRecord(t *testing.T, capture *testCapturedParts, plaintext []byte) (*partStatement, *partWitness) {
+// A part that opens no client record after part 4, covering one more server record that holds
+// plaintext as the MX would have sealed it.
+func testLateRecordPart(t *testing.T, capture *testCapturedParts, plaintext []byte) (*partStatement, *partWitness) {
 	t.Helper()
 	statement, witness := capture.part(t, 4)
 	if statement.last || 0 < len(statement.serverRecords) {
 		t.Fatalf("part 4 is the last or covers %d server records", len(statement.serverRecords))
 	}
+	statement.index = 5
+	statement.firstRecord = statement.lastRecord + 1
+	statement.clientRecords = nil
+	statement.carryIn = nil
+	statement.carryOut = nil
 	statement.serverRecords = []*partRecord{{seq: statement.previousServerRecordCount, raw: tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 1))}}
 	statement.serverRecordCount = statement.previousServerRecordCount + 1
+	witness.clientPlaintexts = nil
 	witness.serverPlaintexts = [][]byte{nil}
 	testAuthorServerRecord(t, statement, witness, 0, plaintext)
 	return statement, witness
@@ -43,13 +51,14 @@ func testTicket(bodyBytes int) []byte {
 	return append(ticket, tlsRecordHandshake)
 }
 
-func TestALaterDataPartCoversALateTicketAndNoReply(t *testing.T) {
+func TestAPartThatOpensNoRecordCoversALateTicketAndNoReply(t *testing.T) {
 	t.Parallel()
 	for _, leg := range testTlsLegs()[:2] {
-		shape := &partShape{kind: partKindBody, version: tlsVersion13, suite: leg.suites[0], clientBlocks: 2, serverBlocks: 7, bodyBlocks: 2, withoutKeySchedule: true}
+		shape := testPartShape(partKindEnvelope, suiteFamily(leg.suites[0]), 0)
+		shape.clientBlocks = 1
+		shape.serverBlocks = 7
 		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
 			shape.serverBlocks = 2
-			shape.bodyBlocks = 1
 		}
 		compiled := testCompileShape(t, shape)
 		capture := testLaterPartCapture(t, leg)
@@ -64,7 +73,7 @@ func TestALaterDataPartCoversALateTicketAndNoReply(t *testing.T) {
 			{name: "a padded ticket", plaintext: append(testTicket(96), 0, 0), check: checkZ7},
 		}
 		for _, c := range cases {
-			statement, witness := testLaterPartWithServerRecord(t, capture, c.plaintext)
+			statement, witness := testLateRecordPart(t, capture, c.plaintext)
 			failures := relationCheckPart(statement, witness)
 			if c.check == "" && len(failures) != 0 || c.check != "" && (len(failures) != 1 || failures[0].check != c.check) {
 				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, failures)
@@ -85,24 +94,24 @@ func TestALaterDataPartCoversALateTicketAndNoReply(t *testing.T) {
 	}
 }
 
-func TestProductionShapesHoldALateTicketInALaterDataPart(t *testing.T) {
+func TestProductionShapesHoldALateTicketInAPartOfItsOwn(t *testing.T) {
 	// finding a shape builds an assignment and compiles nothing, so this runs in both legs
 	for _, leg := range testTlsLegs()[:2] {
 		capture := testLaterPartCapture(t, leg)
 		plain, _ := capture.part(t, 4)
-		withTicket, _ := testLaterPartWithServerRecord(t, capture, testTicket(250))
-		plainShape, err := partShapeFor(plain)
-		if err != nil || plainShape.serverBlocks != 0 {
-			t.Errorf("%s: a part with no server record takes %+v, %v", leg.name, plainShape, err)
+		withTicket, _ := testLateRecordPart(t, capture, testTicket(250))
+		plainShape, err := partShapeFor(DefaultProofSettings(), plain)
+		if err != nil || plainShape.kind != partKindBody || plainShape.serverBlocks != 0 {
+			t.Errorf("%s: a body part takes %+v, %v", leg.name, plainShape, err)
 		}
-		ticketShape, err := partShapeFor(withTicket)
-		if err != nil || ticketShape.serverBlocks == 0 || ticketShape.kind != partKindBody {
+		ticketShape, err := partShapeFor(DefaultProofSettings(), withTicket)
+		if err != nil || ticketShape.kind != partKindEnvelope {
 			t.Errorf("%s: a part over a ticket takes %+v, %v", leg.name, ticketShape, err)
 		}
-		// past one ticket of 255 octets there is no shape, and the send fails closed
-		tooLong, _ := testLaterPartWithServerRecord(t, capture, testTicket(300))
-		if shape, err := partShapeFor(tooLong); err == nil {
-			t.Errorf("%s: a 300-octet ticket took %+v", leg.name, shape)
+		// past the env shape's server blocks there is no shape, and the send fails closed
+		tooLong, _ := testLateRecordPart(t, capture, testTicket(2000))
+		if shape, err := partShapeFor(DefaultProofSettings(), tooLong); err == nil {
+			t.Errorf("%s: a 2000-octet ticket took %+v", leg.name, shape)
 		}
 	}
 }
@@ -122,18 +131,23 @@ func testProverAfterPart4(t *testing.T, capture *testCapturedParts, plaintext []
 		session:  session,
 		preamble: session.preamble,
 		// the connection's C and rho, as the run drew them after the handshake
-		keyCommitment: statement.keyCommitment,
-		keyBlind:      witness.keyBlind,
-		serverIn:      make(chan *proverServerEvent, 1),
-		records:       make([]*proverServerRecord, statement.serverRecordCount),
-		covered:       statement.serverRecordCount,
-		nextPart:      5,
+		keyCommitment:     statement.keyCommitment,
+		keyBlind:          witness.keyBlind,
+		serverIn:          make(chan *proverServerEvent, 1),
+		records:           make([]*proverServerRecord, statement.serverRecordCount),
+		nextPart:          5,
+		nextRecord:        statement.lastRecord + 1,
+		covered:           statement.serverRecordCount,
+		repliesProven:     statement.repliesProven,
+		mode:              statement.mode,
+		headerRecordCount: statement.headerRecordCount,
+		messageStarted:    true,
 		result: &tlsHandshakeResult{
 			version: session.version, handshakeSecret: witness.handshakeSecret,
 			clientKey: witness.clientKey, clientIv: witness.clientIv, serverKey: witness.serverKey, serverIv: witness.serverIv,
 		},
 	}
-	// the records before pi4's count are covered already; only their number matters from here
+	// the records before part 4's count are covered already; only their number matters from here
 	for i := range run.records {
 		run.records[i] = &proverServerRecord{public: &partRecord{}}
 	}
@@ -145,32 +159,42 @@ func testProverAfterPart4(t *testing.T, capture *testCapturedParts, plaintext []
 	return run, backend, channel
 }
 
-func TestTheNextDataPartCoversATicketReadDuringTheBody(t *testing.T) {
+func TestATicketReadDuringTheBodyTakesAPartBeforeTheNext(t *testing.T) {
 	for _, leg := range testTlsLegs()[:2] {
 		capture := testLaterPartCapture(t, leg)
 		run, backend, channel := testProverAfterPart4(t, capture, testTicket(96))
-		if reply, err := run.drainServerRecords(); reply != nil || err != nil {
-			t.Fatalf("%s: reply %v, %v", leg.name, reply, err)
-		}
-		// part 5 as the capture sealed it, now over the ticket as well
+		// part 5 as the capture sealed it, which now goes after a part over the ticket
 		next, witness := capture.part(t, 5)
-		var sealed []*tlsSealedRecord
+		spec := &proverPart{
+			last:          next.last,
+			plaintexts:    witness.clientPlaintexts,
+			carryIn:       next.carryIn,
+			carryInState:  witness.carryInState,
+			carryInBlind:  witness.carryInBlind,
+			carryOut:      next.carryOut,
+			carryOutBlind: witness.carryOutBlind,
+			wireCarry:     true,
+		}
 		for _, record := range next.clientRecords {
-			sealed = append(sealed, &tlsSealedRecord{seq: record.seq, raw: record.raw})
+			spec.sealed = append(spec.sealed, &tlsSealedRecord{seq: record.seq, raw: record.raw})
 		}
-		if err := run.prove(context.Background(), partModeData, next.last, sealed, next.lastRecord, witness.clientPlaintexts); err != nil {
-			t.Fatalf("%s: part 5 over the ticket: %v", leg.name, err)
+		if err := run.proveAfterLateRecords(context.Background(), spec); err != nil {
+			t.Fatalf("%s: %v", leg.name, err)
 		}
-		part := channel.parts[len(channel.parts)-1]
-		if part.ServerRecordCount != next.previousServerRecordCount+1 {
-			t.Errorf("%s: part 5 covers %d server records, want %d", leg.name, part.ServerRecordCount, next.previousServerRecordCount+1)
+		if len(channel.parts) != 2 {
+			t.Fatalf("%s: %d parts, want one over the ticket and then part 5's records", leg.name, len(channel.parts))
 		}
-		statement := backend.statements[len(backend.statements)-1]
-		if len(statement.serverRecords) != 1 {
-			t.Errorf("%s: the statement holds %d server records", leg.name, len(statement.serverRecords))
+		cover, body := channel.parts[0], channel.parts[1]
+		if cover.Index != 5 || len(cover.Records) != 0 || cover.ServerRecordCount != next.previousServerRecordCount+1 {
+			t.Errorf("%s: the part over the ticket is %+v", leg.name, cover)
 		}
-		if _, err := partShapeFor(statement); err != nil {
-			t.Errorf("%s: no production shape for the part: %v", leg.name, err)
+		if body.Index != 6 || body.ServerRecordCount != cover.ServerRecordCount || len(body.Records) != len(next.clientRecords) {
+			t.Errorf("%s: the body part is %+v", leg.name, body)
+		}
+		for _, statement := range backend.statements {
+			if _, err := partShapeFor(DefaultProofSettings(), statement); err != nil {
+				t.Errorf("%s: no production shape for part %d: %v", leg.name, statement.index, err)
+			}
 		}
 	}
 }
@@ -208,15 +232,17 @@ func TestSendDataOf100KiBInPartsThroughTheGate(t *testing.T) {
 		if send.result.Mode != partModeData {
 			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
 		}
-		// pi1, pi2, then parts of at most DataPartBytes of the stuffed message, the end mark and QUIT on
-		// the last
+		// the key part, the envelope's, the header block's, then a body part each body record the body
+		// shape holds, the end mark and QUIT on the last
 		parts := len(send.backend.statements)
-		least := 2 + (int(job.Preamble.MessageByteCount)+settings.DataPartBytes-1)/settings.DataPartBytes
+		family := suiteFamily(leg.suites[0])
+		body := settings.Proof.shape(ShapeKindBody, family, 0)
+		least := 3 + (int(job.Preamble.MessageByteCount)+body.BodyBlocks*body.blockBytes()-1)/(body.BodyBlocks*body.blockBytes())
 		if parts < least {
 			t.Errorf("%s: %d parts for %d octets, want at least %d", leg.name, parts, job.Preamble.MessageByteCount, least)
 		}
 		for _, statement := range send.backend.statements {
-			if _, err := partShapeFor(statement); err != nil {
+			if _, err := partShapeFor(DefaultProofSettings(), statement); err != nil {
 				t.Errorf("%s: part %d: %v", leg.name, statement.index, err)
 			}
 		}

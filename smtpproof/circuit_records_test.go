@@ -31,16 +31,33 @@ func testFitShape(t *testing.T, statement *partStatement, slack int) *partShape 
 	return shape
 }
 
+// A test shape of a kind and family with no blocks yet, its scan sized by the default settings, Z1
+// left out.
+func testPartShape(kind partKind, family ShapeFamily, version uint16) *partShape {
+	proof := DefaultProofSettings()
+	shape := newPartShape(proof, &ShapeSettings{Family: family})
+	shape.kind = kind
+	shape.withoutKeySchedule = true
+	if kind == partKindKey {
+		shape.version = version
+	}
+	return shape
+}
+
 // As testFitShape, each count of blocks then rounded up to a multiple of round, or an error for a
 // statement whose records have no roles, which no shape could take.
 func testShapeFitting(statement *partStatement, slack int, round int) (*partShape, error) {
 	session := statement.session
-	shape := &partShape{kind: partKindOf(statement), version: session.version, suite: session.suite, withoutKeySchedule: true}
-	blockBytes := shape.blockBytes()
 	roles, err := partRoles(statement)
 	if err != nil {
 		return nil, err
 	}
+	kind, err := partKindOf(statement, roles)
+	if err != nil {
+		return nil, err
+	}
+	shape := testPartShape(kind, suiteFamily(session.suite), session.version)
+	blockBytes := shape.blockBytes()
 	blocks := func(record *partRecord) (int, error) {
 		ciphertext, err := recordCiphertext(session.version, record.raw)
 		if err != nil {
@@ -53,10 +70,12 @@ func testShapeFitting(statement *partStatement, slack int, round int) (*partShap
 		if err != nil {
 			return nil, err
 		}
-		switch role {
-		case recordRoleHeaderBlock:
-			shape.headerBlocks += count
-		case recordRoleBody:
+		switch {
+		case role == recordRoleHeaderBlock && kind == partKindMessage:
+			shape.headBlocks += count
+		case role == recordRoleHeaderBlock:
+			shape.restBlocks += count
+		case role == recordRoleBody:
 			shape.bodyBlocks += count
 		default:
 			shape.clientBlocks += count
@@ -65,6 +84,10 @@ func testShapeFitting(statement *partStatement, slack int, round int) (*partShap
 			}
 		}
 	}
+	// an empty body's last part opens no body record, and its shape still has one
+	if kind == partKindBody && shape.bodyBlocks == 0 {
+		shape.bodyBlocks = 1
+	}
 	for _, record := range statement.serverRecords {
 		count, err := blocks(record)
 		if err != nil {
@@ -72,7 +95,11 @@ func testShapeFitting(statement *partStatement, slack int, round int) (*partShap
 		}
 		shape.serverBlocks += count
 	}
-	for _, count := range []*int{&shape.clientBlocks, &shape.serverBlocks, &shape.headerBlocks, &shape.bodyBlocks} {
+	// an env or msg part names its replies by its flags, which a shape has only with server blocks
+	if (kind == partKindEnvelope || kind == partKindMessage) && shape.serverBlocks == 0 {
+		shape.serverBlocks = 1
+	}
+	for _, count := range []*int{&shape.clientBlocks, &shape.serverBlocks, &shape.headBlocks, &shape.restBlocks, &shape.bodyBlocks} {
 		if 0 < *count {
 			*count = (*count + slack + round - 1) / round * round
 		}
@@ -129,15 +156,14 @@ func testRecipientLocals(count int) []string {
 	return locals
 }
 
-func TestEnvelopeCircuitAcceptsOneTenAndAHundredRecipients(t *testing.T) {
+func TestEnvelopeCircuitAcceptsOneTenAndElevenRecipients(t *testing.T) {
 	t.Parallel()
-	// D-SMTP-16's ten, one, and smtp_recipients_per_message's most, 100 on Team (§20.4). A shape for
-	// 100 is a test's here: partShapes holds about ten (SPEC.md 10.4), and this shows that nothing in
-	// the pool or its templates depends on the count. A hundred under AES is a 3.8M-constraint compile,
-	// so those circuits are dropped after use rather than kept for other tests, and run on one leg of
-	// each block size: 1.2 frames each record as 1.3 does but for its nonce, which ten already cover
+	// D-SMTP-16's ten, one, and eleven, the most the env shapes hold in one group under ChaCha20
+	// (DESIGN-DETAILS 3.2.6), each through the solver on a shape sized to the part: nothing in the pool or
+	// its templates depends on the count. Past one group the envelope goes in groups of parts, the
+	// planner's (SMTP-M9-39), so a hundred recipients is no one part's any more
 	testNeedCircuits(t)
-	for _, count := range []int{1, 10, 100} {
+	for _, count := range []int{1, 10, 11} {
 		legs := testTlsLegs()
 		if 10 < count {
 			legs = legs[:2]
@@ -230,7 +256,7 @@ func TestRecordCircuitAgreesWithTheRelation(t *testing.T) {
 	t.Parallel()
 	for _, leg := range testTlsLegs() {
 		envelope, envelopeCompiled := testEnvelopeCircuit(t, leg)
-		message := testQuickMessageShape(leg.suites[0], 0)
+		message := testQuickMessageShape(leg.suites[0])
 		messageCompiled := testCompileShape(t, message)
 		ehlo := testQuickShape(leg.suites[0], false)
 		ehloCompiled := testCompileShape(t, ehlo)
@@ -263,7 +289,7 @@ func TestRecordCircuitChecksTheChunkCount(t *testing.T) {
 	// Z4's BDAT n is message_byte_count's decimal: another count of the same length is a literal off,
 	// and one of another length no template of that length can hold
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		honest, _ := capture.part(t, 3)
@@ -307,7 +333,7 @@ func TestRecordTemplatesHoldALocalPartOfOneToSixtyFourOctets(t *testing.T) {
 			if (err == nil) != c.assign {
 				t.Errorf("%s: a %d-octet local part: template %v", leg.name, c.local, err)
 			}
-			if _, err := partShapeFor(statement); (err == nil) != c.assign {
+			if _, err := partShapeFor(DefaultProofSettings(), statement); (err == nil) != c.assign {
 				t.Errorf("%s: a %d-octet local part: shape %v", leg.name, c.local, err)
 			}
 			if failures := relationCheckPart(statement, witness); (len(failures) == 0) != c.assign {
@@ -331,7 +357,8 @@ func TestRecordPoolCostIsSpecMds(t *testing.T) {
 	t.Parallel()
 	for _, suite := range []uint16{tlsSuiteAes128GcmSha256, tlsSuiteChacha20Poly1305Sha256} {
 		for _, local := range []bool{true, false} {
-			shape := &partShape{kind: partKindKey, version: tlsVersion13, suite: suite, clientBlocks: 2, withoutKeySchedule: true}
+			shape := testPartShape(partKindKey, suiteFamily(suite), tlsVersion13)
+			shape.clientBlocks = 2
 			name := "aes"
 			keystream := testSpecGadgetSizes["aes keystream block"]
 			if suite == tlsSuiteChacha20Poly1305Sha256 {
@@ -358,8 +385,8 @@ func TestRecordPoolCostIsSpecMds(t *testing.T) {
 }
 
 func TestSpecMdNamesEveryProductionShape(t *testing.T) {
-	// SMTP-M9-22: the classes are stated in SPEC.md 10.4, one row per shape by its KeySet name, and the
-	// count in its first paragraph, so the document cannot drift from partShapes unseen
+	// SPEC.md 10.4 states the catalog, one row per shape by its KeySet name, and its count, so the
+	// document cannot drift from ProofSettings.Shapes unseen (SMTP-M9-37)
 	spec, err := os.ReadFile("SPEC.md")
 	if err != nil {
 		t.Fatal(err)
@@ -371,11 +398,11 @@ func TestSpecMdNamesEveryProductionShape(t *testing.T) {
 	}
 	section := string(spec[start:end])
 	var stated []string
-	for _, match := range regexp.MustCompile("`(kind[0-9]+-v[0-9a-f]{4}-s[0-9a-f]{4}-client[0-9]+-server[0-9]+-header[0-9]+-body[0-9]+-local(?:true|false))`").FindAllStringSubmatch(section, -1) {
+	for _, match := range regexp.MustCompile("`((?:key-v[0-9a-f]{4}|env|msg|hdr|body)-(?:aes128gcm|chacha20)(?:-[schrb][0-9]+)+)`").FindAllStringSubmatch(section, -1) {
 		stated = append(stated, match[1])
 	}
 	var built []string
-	for _, shape := range partShapes() {
+	for _, shape := range partShapes(DefaultProofSettings()) {
 		built = append(built, partShapeName(shape))
 	}
 	slices.Sort(stated)

@@ -8,7 +8,9 @@ import (
 	"testing"
 )
 
-// The eleven shapes, by the KeySet names 3.2.6 writes, in its order.
+// The eleven shapes, by their KeySet names in 3.2.6's order, at the pools the fill rule gave the compiled
+// circuits (TestProductionShapesFillOneDomain): msg one server block more than 3.2.6's table under each
+// family, and hdr one rest block more under AES-128-GCM.
 func TestProofSettingsHoldTheElevenShapes(t *testing.T) {
 	settings := DefaultProofSettings()
 	var names []string
@@ -17,13 +19,13 @@ func TestProofSettingsHoldTheElevenShapes(t *testing.T) {
 	}
 	want := []string{
 		"key-v0304-aes128gcm-c8", "key-v0304-chacha20-c2", "key-v0303-aes128gcm-c8",
-		"env-aes128gcm-s40-c40", "msg-aes128gcm-s16-c4-h52", "hdr-aes128gcm-c2-r75", "body-aes128gcm-c2-b81",
-		"env-chacha20-s19-c20", "msg-chacha20-s12-c2-h19", "hdr-chacha20-c1-r35", "body-chacha20-c2-b40",
+		"env-aes128gcm-s40-c40", "msg-aes128gcm-s17-c4-h52", "hdr-aes128gcm-c2-r76", "body-aes128gcm-c2-b81",
+		"env-chacha20-s19-c20", "msg-chacha20-s13-c2-h19", "hdr-chacha20-c1-r35", "body-chacha20-c2-b40",
 	}
 	if !slices.Equal(names, want) {
 		t.Errorf("catalog %q", names)
 	}
-	// what 3.2.6 says each holds under 1.3, a record's type octet off
+	// what each holds under 1.3, a record's type octet off: 3.2.6's but for AES's hdr, a block more
 	for _, c := range []struct {
 		kind   ShapeKind
 		family ShapeFamily
@@ -31,7 +33,7 @@ func TestProofSettingsHoldTheElevenShapes(t *testing.T) {
 		holds  int
 	}{
 		{kind: ShapeKindMessage, family: ShapeFamilyAes128Gcm, blocks: func(shape *ShapeSettings) int { return shape.HeadBlocks }, holds: 831},
-		{kind: ShapeKindHeader, family: ShapeFamilyAes128Gcm, blocks: func(shape *ShapeSettings) int { return shape.RestBlocks }, holds: 1199},
+		{kind: ShapeKindHeader, family: ShapeFamilyAes128Gcm, blocks: func(shape *ShapeSettings) int { return shape.RestBlocks }, holds: 1215},
 		{kind: ShapeKindBody, family: ShapeFamilyAes128Gcm, blocks: func(shape *ShapeSettings) int { return shape.BodyBlocks }, holds: 1295},
 		{kind: ShapeKindMessage, family: ShapeFamilyChacha20, blocks: func(shape *ShapeSettings) int { return shape.HeadBlocks }, holds: 1215},
 		{kind: ShapeKindHeader, family: ShapeFamilyChacha20, blocks: func(shape *ShapeSettings) int { return shape.RestBlocks }, holds: 2239},
@@ -69,9 +71,9 @@ func TestHeaderSplitCutsByLengthAlone(t *testing.T) {
 		{length: 831, family: ShapeFamilyAes128Gcm, version: tlsVersion13, want: []int{831}},
 		{length: 832, family: ShapeFamilyAes128Gcm, version: tlsVersion13, want: []int{828, 4}},
 		{length: 832, family: ShapeFamilyAes128Gcm, version: tlsVersion12, want: []int{832}},
-		{length: 4095, family: ShapeFamilyAes128Gcm, version: tlsVersion13, want: []int{831, 1199, 1199, 866}},
+		{length: 4095, family: ShapeFamilyAes128Gcm, version: tlsVersion13, want: []int{831, 1215, 1215, 834}},
 		{length: 4095, family: ShapeFamilyChacha20, version: tlsVersion13, want: []int{1215, 2239, 641}},
-		{length: 2032, family: ShapeFamilyAes128Gcm, version: tlsVersion13, want: []int{831, 1197, 4}},
+		{length: 2048, family: ShapeFamilyAes128Gcm, version: tlsVersion13, want: []int{831, 1213, 4}},
 	} {
 		sizes, err := settings.headerSplit(c.length, c.family, c.version)
 		if err != nil || !slices.Equal(sizes, c.want) {

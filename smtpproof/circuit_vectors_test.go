@@ -124,7 +124,7 @@ func testAeadKeystream(t testing.TB, suite uint16, key []byte, nonce []byte, siz
 const testKeystreamBlocks = 3
 
 func testKeystreamShape(suite uint16) *partShape {
-	return &partShape{version: testVersionOf(suite), suite: suite}
+	return testPartShape(partKindEnvelope, suiteFamily(suite), 0)
 }
 
 func testCompileKeystream(t testing.TB, shape *partShape) (constraint.ConstraintSystem, error) {
@@ -173,13 +173,13 @@ func TestKeystreamGadgetMatchesTheAeads(t *testing.T) {
 		for i := range iv {
 			iv[i] = byte(29*i + 3)
 		}
-		if shape.version == tlsVersion12 {
+		if testVersionOf(suite) == tlsVersion12 {
 			// a 1.2 IV is the salt, and the wires' other 8 octets stay zero
 			clear(iv[tlsSalt12Bytes:])
 		}
 		for _, high := range []uint64{0, 1, 1 << 32} {
 			var nonce []byte
-			if shape.version == tlsVersion13 {
+			if testVersionOf(suite) == tlsVersion13 {
 				nonce = tls13Nonce(iv, high)
 			} else {
 				nonce = binary.BigEndian.AppendUint64(bytes.Clone(iv[:tlsSalt12Bytes]), high)
@@ -413,7 +413,7 @@ func TestZ1CircuitRefusesTheKeyThatOpensARecordBenignly(t *testing.T) {
 		leg  *testTlsLeg
 		full *partShape
 	}{
-		{leg: testTlsLegs()[1], full: partShapes()[1]},
+		{leg: testTlsLegs()[1], full: partShapes(DefaultProofSettings())[1]},
 		{leg: testTlsLegs()[2], full: test12Shape()},
 	} {
 		capture := testBdatCapture(t, c.leg)

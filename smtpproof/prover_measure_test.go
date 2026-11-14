@@ -61,63 +61,55 @@ func testMeasuringProver(costs map[uint16]time.Duration) (*Prover, *testClockedB
 	return &Prover{settings: DefaultProverSettings(), backend: backend, clock: clock.read}, backend
 }
 
+// What one body record of a family's body shape carries under 1.3, which Measure rates a part by.
+func testMeasureCapacity(family ShapeFamily) int {
+	shape := DefaultProofSettings().shape(ShapeKindBody, family, 0)
+	return shape.recordContentBytes(shape.BodyBlocks, tlsVersion13)
+}
+
 func TestMeasurePartsFillTheirShapesAndSatisfyTheRelation(t *testing.T) {
-	// a measuring part is a real later DATA part of its shape, so its cost is that shape's
-	for _, shape := range partShapes() {
-		if shape.kind != partKindBody || 0 < shape.serverBlocks {
+	// a measuring part is a real body part of its shape, so its cost is that shape's, and its msg part a
+	// real one of the msg shape's
+	proof := DefaultProofSettings()
+	for _, shape := range partShapes(proof) {
+		var statement *partStatement
+		var witness *partWitness
+		var err error
+		switch shape.kind {
+		case partKindBody:
+			statement, witness, err = newMeasurePart(proof, shape)
+		case partKindMessage:
+			statement, witness, err = newMeasureMessagePart(proof, shape)
+		default:
 			continue
 		}
-		statement, witness, err := newMeasurePart(shape)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
-			t.Errorf("%#x %#x: %v", shape.version, shape.suite, failures)
+			t.Errorf("%s: %v", partShapeName(shape), failures)
 		}
-		found, err := partShapeFor(statement)
+		found, err := partShapeFor(proof, statement)
 		if err != nil || *found != *shape {
-			t.Errorf("%#x %#x: found %+v, %v", shape.version, shape.suite, found, err)
-		}
-	}
-	// and so is each suite's DATA pi3, the largest of its shapes
-	largest := measureLargestShapes()
-	if len(largest) != 4 {
-		t.Fatalf("%d suites' largest shapes", len(largest))
-	}
-	for _, shape := range largest {
-		if shape.kind != partKindMessage || shape.bodyBlocks == 0 {
-			t.Errorf("%#x: the largest shape is %+v, not DATA's pi3", shape.suite, *shape)
-		}
-		statement, witness, err := newMeasureMessagePart(shape)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
-			t.Errorf("%#x %#x: pi3: %v", shape.version, shape.suite, failures)
-		}
-		found, err := partShapeFor(statement)
-		if err != nil || *found != *shape {
-			t.Errorf("%#x %#x: pi3 found %+v, %v", shape.version, shape.suite, found, err)
+			t.Errorf("%s: found %+v, %v", partShapeName(shape), found, err)
 		}
 	}
 }
 
-func TestMeasureProvesEachSuitesLargestShapeFirst(t *testing.T) {
+func TestMeasureProvesEachFamilysMessagePartFirst(t *testing.T) {
 	prover, backend := testMeasuringProver(map[uint16]time.Duration{
-		tlsSuiteAes128GcmSha256:           10 * time.Second,
-		tlsSuiteChacha20Poly1305Sha256:    5 * time.Second,
-		tlsSuiteEcdheRsaAes128GcmSha256:   20 * time.Second,
-		tlsSuiteEcdheEcdsaAes128GcmSha256: 20 * time.Second,
+		tlsSuiteAes128GcmSha256:        10 * time.Second,
+		tlsSuiteChacha20Poly1305Sha256: 5 * time.Second,
 	})
 	if _, err := prover.Measure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(backend.statements) != 8 {
-		t.Fatalf("proved %d parts, want each suite's pi3 and then its later part", len(backend.statements))
+	if len(backend.statements) != 4 {
+		t.Fatalf("proved %d parts, want each family's msg part and then its body part", len(backend.statements))
 	}
 	for i, statement := range backend.statements {
 		want := uint32(measurePartIndex)
-		if i < 4 {
+		if i < 2 {
 			want = 3
 		}
 		if statement.index != want || statement.mode != partModeData {
@@ -126,9 +118,9 @@ func TestMeasureProvesEachSuitesLargestShapeFirst(t *testing.T) {
 	}
 }
 
-func TestMeasureRecordsNothingWhereTheLargestShapeCannotProve(t *testing.T) {
-	// plan-SMTP-small-readings #19: a host that cannot prove its largest shape records no p/ and only
-	// queues. A host out of memory dies in the attempt; any other failure ends Measure with no result
+func TestMeasureRecordsNothingWhereAUnitCannotProve(t *testing.T) {
+	// plan-SMTP-small-readings #19: a host that cannot prove a unit records no p/ and only queues. A host
+	// out of memory dies in the attempt; any other failure ends Measure with no result
 	prover, backend := testMeasuringProver(map[uint16]time.Duration{tlsSuiteAes128GcmSha256: time.Second})
 	backend.refuse = func(statement *partStatement) error {
 		if statement.index == 3 {
@@ -140,40 +132,38 @@ func TestMeasureRecordsNothingWhereTheLargestShapeCannotProve(t *testing.T) {
 		t.Fatalf("measured %+v", measure)
 	}
 	if len(backend.statements) != 1 {
-		t.Errorf("proved %d parts after the largest failed", len(backend.statements))
+		t.Errorf("proved %d parts after the msg part failed", len(backend.statements))
 	}
 	if settings := prover.sendSettings(); settings.DataProofBytes != DefaultProverSettings().DataProofBytes || settings.DataPartBytes != DefaultProverSettings().DataPartBytes {
 		t.Errorf("a failed measure set part %d and cap %d", settings.DataPartBytes, settings.DataProofBytes)
 	}
 }
 
-func TestMeasureSetsTheDataLimitsByTheSlowestSuite(t *testing.T) {
+func TestMeasureSetsTheDataLimitsByTheSlowestFamily(t *testing.T) {
 	prover, backend := testMeasuringProver(map[uint16]time.Duration{
-		tlsSuiteAes128GcmSha256:           10 * time.Second,
-		tlsSuiteChacha20Poly1305Sha256:    5 * time.Second,
-		tlsSuiteEcdheRsaAes128GcmSha256:   20 * time.Second,
-		tlsSuiteEcdheEcdsaAes128GcmSha256: 20 * time.Second,
+		tlsSuiteAes128GcmSha256:        20 * time.Second,
+		tlsSuiteChacha20Poly1305Sha256: 5 * time.Second,
 	})
 	measure, err := prover.Measure(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(backend.statements) != 8 {
-		t.Errorf("proved %d parts, want each suite's largest and one per later-part shape", len(backend.statements))
+	if len(backend.statements) != 4 {
+		t.Errorf("proved %d parts, want each family's msg part and body part", len(backend.statements))
 	}
-	// 1.3's part carries one octet fewer, for its inner type, so the smallest part is 2047 octets, and
-	// the slowest suite takes 20 s for one
-	if measure.DataBytesPerSecond != 2047/20 {
+	// the smaller family's body record, AES-128-GCM's, and the slowest family's 20 s for one
+	capacity := min(testMeasureCapacity(ShapeFamilyAes128Gcm), testMeasureCapacity(ShapeFamilyChacha20))
+	if measure.DataBytesPerSecond != uint64(capacity/20) {
 		t.Errorf("rate %d", measure.DataBytesPerSecond)
 	}
-	if measure.DataProofBytes != 2047/20*2*60*60 {
+	if measure.DataProofBytes != uint64(capacity/20*2*60*60) {
 		t.Errorf("cap %d", measure.DataProofBytes)
 	}
 	if !measure.MeasureTime.Equal(backend.clock.read()) {
 		t.Errorf("measured at %v", measure.MeasureTime)
 	}
 	settings := prover.sendSettings()
-	if settings.DataPartBytes != 2047 || uint64(settings.DataProofBytes) != measure.DataProofBytes {
+	if settings.DataPartBytes != capacity || uint64(settings.DataProofBytes) != measure.DataProofBytes {
 		t.Errorf("a send would run with part %d and cap %d", settings.DataPartBytes, settings.DataProofBytes)
 	}
 	// the Prover's own settings are untouched: only its sends see the measure
@@ -212,13 +202,13 @@ func TestMeasureClosesDataWhereAPartCannotProveInTime(t *testing.T) {
 	}
 }
 
-func TestMeasureSkipsSuitesWithoutKeysAndFailsWithNone(t *testing.T) {
+func TestMeasureSkipsFamiliesWithoutKeysAndFailsWithNone(t *testing.T) {
 	prover, backend := testMeasuringProver(map[uint16]time.Duration{tlsSuiteChacha20Poly1305Sha256: 4 * time.Second})
 	measure, err := prover.Measure(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(backend.statements) != 2 || measure.DataBytesPerSecond != 2047/4 {
+	if len(backend.statements) != 2 || measure.DataBytesPerSecond != uint64(testMeasureCapacity(ShapeFamilyChacha20)/4) {
 		t.Errorf("%d parts, rate %d", len(backend.statements), measure.DataBytesPerSecond)
 	}
 

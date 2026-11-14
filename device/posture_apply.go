@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"time"
 
@@ -198,41 +199,132 @@ func (self *Posture) publishWithLock(held *postureHeld, alarms []PostureAlarm, c
 }
 
 // The decision in force with its Overdue at now, raising PostureAlarmCompileOverdue among its alarms, and keeping it
-// there until the next call, when the alarm's schedule has passed a point it has not raised: the oldest waiting
-// entry's first sight plus each whole NarrowingOverdueTimeout.
+// there until the next call, when the alarm's schedule (postureOverdueScheduleAt) has passed a point newer than the
+// last one this process raised: once a point, and once for the newest when several passed since the last decision.
+// A process that has just started has raised nothing, so its first decision while the condition stands raises once.
 func (self *Posture) overdueWithLock(now time.Time) PostureDecision {
 	decision := self.decision
-	timeout := self.settings.NarrowingOverdueTimeout
-	if timeout <= 0 || !decision.State.Enforcing() || len(decision.Waiting) == 0 {
+	if !decision.State.Enforcing() {
 		return decision
 	}
-	oldest := decision.Waiting[0]
-	for _, entry := range decision.Waiting[1:] {
-		if entry.FirstSeen.Before(oldest.FirstSeen) {
-			oldest = entry
-		}
-	}
-	age := now.Sub(oldest.FirstSeen)
-	if age < timeout {
+	schedule, ok := postureOverdueScheduleAt(decision.Waiting, now, self.settings.NarrowingOverdueTimeout, self.settings.NarrowingOverdueRepeatMaxInterval)
+	if !ok {
 		return decision
 	}
-	due := oldest.FirstSeen.Add((age / timeout) * timeout)
-	decision.Overdue = &PostureOverdue{N: oldest.N, Age: age, NextAlarmAt: due.Add(timeout)}
-	if due.After(self.overdueRaisedAt) {
-		self.overdueRaisedAt = due
+	decision.Overdue = &PostureOverdue{N: schedule.oldest.N, Age: now.Sub(schedule.oldest.FirstSeen), NextAlarmAt: schedule.next}
+	if schedule.last.After(self.overdueRaisedAt) {
+		self.overdueRaisedAt = schedule.last
+		age := now.Sub(schedule.lastEntry.FirstSeen)
 		// the newest raise stands in for the ones before it, so the alarms a device that never compiles holds stay one
 		alarms := slices.DeleteFunc(slices.Clone(decision.Alarms), func(alarm PostureAlarm) bool {
 			return alarm.Kind == PostureAlarmCompileOverdue
 		})
 		decision.Alarms = append(alarms, PostureAlarm{
 			Kind:   PostureAlarmCompileOverdue,
-			N:      oldest.N,
+			N:      schedule.lastEntry.N,
 			Age:    age,
 			Reason: fmt.Sprintf("a narrowing entry has waited %v for a compile", age.Truncate(time.Second)),
 		})
 		self.decision.Alarms = decision.Alarms
 	}
 	return decision
+}
+
+// Where the overdue alarm's schedule stands at a time (DESIGN-DETAILS 4.2.5, QD-696).
+type postureOverdueSchedule struct {
+	// the oldest waiting entry, by first sight and then position: what Overdue reports
+	oldest PostureWaitingEntry
+	// the newest point at or before the time, and the entry a raise there names
+	last      time.Time
+	lastEntry PostureWaitingEntry
+	// the first point after the time
+	next time.Time
+}
+
+// The overdue alarm's points among waiting at now, T being timeout and M maxInterval, and false while no waiting
+// entry has waited T, the condition not standing. Every point is a function of the waiting entries' first sights,
+// which the manifest holds, so a restart keeps the schedule:
+//
+//	an entry's own   its first sight plus T, raised at once whatever the repeats' interval has grown to and naming
+//	                 that entry; entries first seen at one time share one, which names the first by position
+//	the repeats      from the oldest entry's first sight F: F + T, then each the one before plus min(2^k T, M), naming
+//	                 the oldest; with the defaults 10, 30, 70, 150 ... min of its age, then every 24 h
+//
+// A point that is both an entry's own and a repeat names that entry, since only its own is news (the reading this
+// file follows). When a state judges the oldest entry and others still wait, the repeats follow the new oldest's
+// first sight, and a point the process raised already is not raised again (overdueWithLock's watermark).
+func postureOverdueScheduleAt(waiting []PostureWaitingEntry, now time.Time, timeout time.Duration, maxInterval time.Duration) (*postureOverdueSchedule, bool) {
+	if timeout <= 0 || len(waiting) == 0 {
+		return nil, false
+	}
+	oldest := waiting[0]
+	for _, entry := range waiting[1:] {
+		if entry.FirstSeen.Before(oldest.FirstSeen) {
+			oldest = entry
+		}
+	}
+	lastRepeat, nextRepeat, ok := postureOverdueRepeats(now.Sub(oldest.FirstSeen), timeout, maxInterval)
+	if !ok {
+		return nil, false
+	}
+	schedule := &postureOverdueSchedule{
+		oldest:    oldest,
+		last:      oldest.FirstSeen.Add(lastRepeat),
+		lastEntry: oldest,
+		next:      oldest.FirstSeen.Add(nextRepeat),
+	}
+	// each entry's own point; the oldest's is the first repeat, at or before last
+	var lastOwn time.Time
+	var lastOwnEntry PostureWaitingEntry
+	for _, entry := range waiting {
+		own := entry.FirstSeen.Add(timeout)
+		if own.After(now) {
+			if own.Before(schedule.next) {
+				schedule.next = own
+			}
+			continue
+		}
+		// strictly newer, so entries first seen at one time share the first by position
+		if lastOwn.IsZero() || own.After(lastOwn) {
+			lastOwn = own
+			lastOwnEntry = entry
+		}
+	}
+	if !lastOwn.Before(schedule.last) {
+		schedule.last = lastOwn
+		schedule.lastEntry = lastOwnEntry
+	}
+	return schedule, true
+}
+
+// The repeats of an entry that has waited age, as offsets from its first sight, T being timeout and M maxInterval:
+// the newest point at or before age and the first after it, p(0) = T and p(k) = p(k-1) + min(2^k T, M), and false
+// before p(0). A non-positive M leaves the intervals doubling, saturating rather than overflowing.
+func postureOverdueRepeats(age time.Duration, timeout time.Duration, maxInterval time.Duration) (time.Duration, time.Duration, bool) {
+	if timeout <= 0 || age < timeout {
+		return 0, timeout, false
+	}
+	saturatingAdd := func(a time.Duration, b time.Duration) time.Duration {
+		if time.Duration(math.MaxInt64)-b < a {
+			return time.Duration(math.MaxInt64)
+		}
+		return a + b
+	}
+	last := timeout
+	interval := timeout
+	for {
+		interval = saturatingAdd(interval, interval)
+		if 0 < maxInterval && maxInterval <= interval {
+			// past the cap every interval is M, so the whole ones before age are skipped at once
+			interval = maxInterval
+			last += ((age - last) / interval) * interval
+			return last, saturatingAdd(last, interval), true
+		}
+		if age-last < interval {
+			return last, saturatingAdd(last, interval), true
+		}
+		last += interval
+	}
 }
 
 // Whether two overlay entries say the same.

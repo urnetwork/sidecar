@@ -42,7 +42,8 @@ func testCheckerInput(capture *smtpproof.ExportedCapture) (*checker.Transcript, 
 			converted.Part = &checker.Part{
 				Index: part.Index, Mode: part.Mode, FirstRecord: part.FirstRecord, LastRecord: part.LastRecord,
 				Last: part.Last, ServerRecordCount: part.ServerRecordCount, Records: part.Records,
-				KeyCommitment: part.KeyCommitment,
+				KeyCommitment: part.KeyCommitment, ReplyCount: part.ReplyCount, HeaderRecordCount: part.HeaderRecordCount,
+				Carry: part.Carry,
 			}
 		}
 		transcript.Events = append(transcript.Events, converted)
@@ -52,7 +53,8 @@ func testCheckerInput(capture *smtpproof.ExportedCapture) (*checker.Transcript, 
 		witnesses[i] = &checker.PartWitness{
 			HandshakeSecret: witness.HandshakeSecret, MasterSecret: witness.MasterSecret,
 			ClientKey: witness.ClientKey, ClientIv: witness.ClientIv, ServerKey: witness.ServerKey, ServerIv: witness.ServerIv,
-			KeyBlind: witness.KeyBlind, ClientPlaintexts: witness.ClientPlaintexts, ServerPlaintexts: witness.ServerPlaintexts,
+			KeyBlind: witness.KeyBlind, CarryInState: witness.CarryInState, CarryInBlind: witness.CarryInBlind,
+			CarryOutBlind: witness.CarryOutBlind, ClientPlaintexts: witness.ClientPlaintexts, ServerPlaintexts: witness.ServerPlaintexts,
 		}
 	}
 	return transcript, witnesses
@@ -432,14 +434,16 @@ func TestCheckerAgreesOnHonestSendsThroughSidecartestsMxs(t *testing.T) {
 }
 
 // What only RecordMx sends: a NewSessionTicket the client never asked for, which Z7 skips, ahead of
-// each of the first replies, and replies split across records. The gate and the checker pass each.
+// each of the first replies, and replies split across records. The gate and the checker pass each. The
+// split is into records of 16 octets, which every env shape's server blocks hold as the EHLO reply's;
+// finer, ChaCha20's env shape holds too few, and the send ends before MAIL by design (DESIGN-DETAILS 3.5).
 func TestCheckerAgreesThroughALateTicketAndSplitReplies(t *testing.T) {
 	for _, leg := range smtpproof.ExportMxLegs() {
 		if leg.Version != tls.VersionTLS13 {
 			continue
 		}
 		for _, settings := range []*sidecartest.RecordMxSettings{
-			{TicketBeforeReply: 1}, {TicketBeforeReply: 2}, {TicketBeforeReply: 3}, {SplitRepliesAt: 5},
+			{TicketBeforeReply: 1}, {TicketBeforeReply: 2}, {TicketBeforeReply: 3}, {SplitRepliesAt: 16},
 		} {
 			settings.Version, settings.Suite = leg.Version, leg.Suite
 			mx, err := sidecartest.NewRecordMx("mx.recipient.example", nil, settings)

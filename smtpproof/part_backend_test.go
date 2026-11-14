@@ -37,7 +37,7 @@ func testRealEhloKeys(t *testing.T) *shapeKeys {
 	testRealEhloLock.Lock()
 	defer testRealEhloLock.Unlock()
 	if testRealEhlo == nil {
-		testRealEhlo = testSetup(t, partShapes()[1])
+		testRealEhlo = testSetup(t, partShapes(DefaultProofSettings())[1])
 	}
 	return testRealEhlo
 }
@@ -48,7 +48,7 @@ func TestGroth16RefusesEachPublicInputOneBitOff(t *testing.T) {
 		t.Skip("runs a real setup")
 	}
 	keys := testRealEhloKeys(t)
-	backend := newGroth16Backend()
+	backend := newGroth16Backend(DefaultProofSettings())
 	backend.addKeys(keys)
 	capture := testBdatCapture(t, testTlsLegs()[1])
 	statement, witness := capture.part(t, 1)
@@ -95,20 +95,30 @@ func TestGroth16RefusesEachPublicInputOneBitOff(t *testing.T) {
 
 // The public positions a test shape leaves to Z1, which it leaves out: 1.3's three hashes first, or
 // 1.2's handshake inputs and SF last.
-func testZ1InputPositions(shape *partShape, publics int) (int, int) {
-	if !shape.withoutKeySchedule {
-		return 0, 0
+// The public inputs no constraint reads, by position in the statement. Wire 0 is the constant one, and
+// the statement's elements are the public wires after it.
+func testUnreadPublicInputs(t *testing.T, compiled constraint.ConstraintSystem) []int {
+	t.Helper()
+	system, ok := compiled.(interface{ GetR1Cs() []constraint.R1C })
+	if !ok {
+		t.Fatalf("%T is no R1CS", compiled)
 	}
-	if shape.version == tlsVersion13 {
-		return 0, 3 * 8 * tlsSecretBytes
+	read := map[uint32]bool{}
+	for _, r1c := range system.GetR1Cs() {
+		for _, expression := range []constraint.LinearExpression{r1c.L, r1c.R, r1c.O} {
+			for _, term := range expression {
+				read[term.VID] = true
+			}
+		}
 	}
-	inputs := 8 * (2*tlsRandomBytes + 2*tlsSecretBytes + 2*sha256BlockBytes)
-	inputs += 6 + 1 + 1 + shapeBlockBytes12
-	return publics - inputs, publics
+	var unread []int
+	for position := range compiled.GetNbPublicVariables() - 1 {
+		if !read[uint32(position+1)] {
+			unread = append(unread, position)
+		}
+	}
+	return unread
 }
-
-// A 1.2 shape's blocks are AES's.
-const shapeBlockBytes12 = 16
 
 // The test shapes the mutation table's circuits solve a DATA send's later parts on, which compile once
 // for both tests.
@@ -140,53 +150,23 @@ func TestEveryPublicWireIsConstrained(t *testing.T) {
 	// blocks, each a shape other tests compile too; the test shapes leave Z1 out, so their handshake
 	// inputs are the two pi1 shapes' to show
 	shapes := []*partShape{
-		partShapes()[1],
+		partShapes(DefaultProofSettings())[1],
 		test12Shape(),
 	}
 	for _, leg := range testTlsLegs() {
 		suite := leg.suites[0]
-		bodyBlocks := 6
-		if suite == tlsSuiteChacha20Poly1305Sha256 {
-			bodyBlocks = 2
-		}
 		shapes = append(shapes,
 			testQuickShape(suite, false),
 			testQuickShape(suite, true),
 			testQuickEnvelopeShape(suite),
-			testQuickMessageShape(suite, 0),
-			testQuickMessageShape(suite, bodyBlocks),
+			testQuickMessageShape(suite),
+			testQuickHeaderShape(suite),
+			testQuickBodyShape(suite),
 		)
 		shapes = append(shapes, testLaterPartShapes(t, leg)...)
 	}
-	// a later part over a late ticket, as part_data_test.go's
-	shapes = append(shapes,
-		&partShape{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, serverBlocks: 7, bodyBlocks: 2, withoutKeySchedule: true},
-		&partShape{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 2, bodyBlocks: 1, withoutKeySchedule: true},
-	)
 	for _, shape := range shapes {
-		compiled := testCompileShape(t, shape)
-		system, ok := compiled.(interface{ GetR1Cs() []constraint.R1C })
-		if !ok {
-			t.Fatalf("%T is no R1CS", compiled)
-		}
-		read := map[uint32]bool{}
-		for _, r1c := range system.GetR1Cs() {
-			for _, expression := range []constraint.LinearExpression{r1c.L, r1c.R, r1c.O} {
-				for _, term := range expression {
-					read[term.VID] = true
-				}
-			}
-		}
-		// wire 0 is the constant one; the statement's elements are the public wires after it
-		publics := compiled.GetNbPublicVariables() - 1
-		z1From, z1To := testZ1InputPositions(shape, publics)
-		var unread []int
-		for position := range publics {
-			if !read[uint32(position+1)] && (position < z1From || z1To <= position) {
-				unread = append(unread, position)
-			}
-		}
-		if len(unread) != 0 {
+		if unread := testUnreadPublicInputs(t, testCompileShape(t, shape)); len(unread) != 0 {
 			t.Errorf("%s: public inputs %v appear in no constraint", partShapeName(shape), unread)
 		}
 	}
@@ -254,7 +234,7 @@ func TestPreparePi3(t *testing.T) {
 			if statement.index != 3 {
 				continue
 			}
-			shape, err := partShapeFor(statement)
+			shape, err := partShapeFor(DefaultProofSettings(), statement)
 			if err != nil {
 				t.Fatal(err)
 			}

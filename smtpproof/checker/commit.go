@@ -174,3 +174,44 @@ func checkKeyCommitment(witness *PartWitness, encoded []byte) error {
 	}
 	return nil
 }
+
+// A commitment as the wire carries it, checked as the gate checks C and a carry: 64 octets, each
+// coordinate below r, on the curve.
+func parseCommitment(encoded []byte) (*commitPoint, error) {
+	return parseKeyCommitment(encoded)
+}
+
+// A carry over a scan's 24-bit state (DESIGN-DETAILS 3.2.2): S = state T + sigma U, with T the generator
+// tagged "scan" and U "scan blind", the state one run of 24 bits.
+func carryCommitment(state uint32, blind *big.Int) *commitPoint {
+	return commitGenerator("scan", 0).times(new(big.Int).SetUint64(uint64(state))).add(commitGenerator("scan blind", 0).times(blind))
+}
+
+// The carry the edge holds where a scan starts: the start state, pos 2 alone, under a zero blind.
+func startCarry() []byte {
+	return encodeCommitment(carryCommitment(scanPosLf, new(big.Int)))
+}
+
+// A point as the wire carries it: x then y, 32 octets each, big-endian.
+func encodeCommitment(point *commitPoint) []byte {
+	encoded := make([]byte, 2*commitCoordinateLen)
+	point.x.FillBytes(encoded[:commitCoordinateLen])
+	point.y.FillBytes(encoded[commitCoordinateLen:])
+	return encoded
+}
+
+// Whether a carry on the wire opens to state under a blind below l.
+func checkCarry(encoded []byte, state uint32, blindOctets []byte) error {
+	want, err := parseCommitment(encoded)
+	if err != nil {
+		return err
+	}
+	blind := new(big.Int).SetBytes(blindOctets)
+	if commitInteger(commitOrderDecimal).Cmp(blind) <= 0 {
+		return errors.New("the carry's blind is not below l")
+	}
+	if !carryCommitment(state, blind).equal(want) {
+		return errors.New("the carry does not open to the scan's state there")
+	}
+	return nil
+}

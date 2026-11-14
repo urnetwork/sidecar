@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -519,7 +518,7 @@ func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSetting
 	}()
 
 	edge := &testEdge{
-		session:     newEdgeSession(defaultEdgeSettings(), newSessionPreamble(job.Preamble), job.Preamble.MxHost, partVerifier),
+		session:     newEdgeSession(defaultEdgeSettings(), newSessionPreamble(job.Preamble, DefaultProofSettings()), job.Preamble.MxHost, partVerifier),
 		sidecarConn: edgeSidecarConn,
 		mxConn:      edgeMxConn,
 		forgesFrom:  mxSettings.edgeForgesFrom,
@@ -759,48 +758,46 @@ func (self *testChannelLog) SubmitPart(ctx context.Context, part *sidecar.SmtpPr
 	return nil
 }
 
-func TestALateTicketIsProvenAgainOverItsRecord(t *testing.T) {
-	// a ticket arriving after pi3 holds its message records at the edge (E3 step 5), so the part must
-	// be proven again over it. Go's server sends no ticket to this client, so the record comes straight
-	// to the prover's reader, here as the MX would have sealed it under the real server key
+func TestALateTicketIsCoveredByAPartThatOpensNoRecord(t *testing.T) {
+	// a ticket arriving after the message's parts began holds their message records at the edge (E3
+	// step 5), and no message part covers a server record, so an env part that opens no client record
+	// covers it (DESIGN-DETAILS 3.2.6): no part is proven again. Go's server sends no ticket to this
+	// client, so the record comes straight to the prover's reader, here as the MX would have sealed it
+	// under the real server key
 	for _, leg := range testTlsLegs()[:2] {
 		capture := testBdatCapture(t, leg)
 		statement, witness := capture.part(t, 3)
 		session := statement.session
 
-		// the run as it stands just after pi3, whose records are known and whose count is covered
+		// the run as it stands just after the msg part, the last, whose records are known and covered
 		backend := newTestWitnessBackend()
 		channel := &testChannelLog{}
-		records := []*proverServerRecord{}
+		records := make([]*proverServerRecord, 0, statement.serverRecordCount)
+		for range statement.previousServerRecordCount {
+			records = append(records, &proverServerRecord{public: &partRecord{}})
+		}
 		for i, record := range statement.serverRecords {
 			records = append(records, &proverServerRecord{public: record, plaintext: witness.serverPlaintexts[i]})
-		}
-		original := &sidecar.SmtpProofPart{
-			Index:             3,
-			Mode:              statement.mode,
-			FirstRecord:       statement.firstRecord,
-			LastRecord:        statement.lastRecord,
-			Last:              true,
-			ServerRecordCount: uint64(len(records)),
-		}
-		for _, record := range statement.clientRecords {
-			original.Records = append(original.Records, record.raw)
 		}
 		run := &proverRun{
 			settings: DefaultProverSettings(),
 			backend:  backend,
 			channel:  channel,
+			job:      &sidecar.SmtpProofJob{SendId: []byte("synthetic-send-id")},
 			session:  session,
 			preamble: session.preamble,
 			// the connection's C and rho, as the run drew them after the handshake
-			keyCommitment: statement.keyCommitment,
-			keyBlind:      witness.keyBlind,
-			serverIn:      make(chan *proverServerEvent, 2),
-			records:       records,
-			covered:       uint64(len(records)),
-			lastPart:      original,
-			lastOpen:      witness.clientPlaintexts,
-			lastPrior:     0,
+			keyCommitment:     statement.keyCommitment,
+			keyBlind:          witness.keyBlind,
+			serverIn:          make(chan *proverServerEvent, 2),
+			records:           records,
+			nextPart:          4,
+			nextRecord:        statement.lastRecord + 1,
+			covered:           uint64(len(records)),
+			repliesProven:     statement.repliesProven + statement.replyCount,
+			mode:              statement.mode,
+			headerRecordCount: statement.headerRecordCount,
+			messageStarted:    true,
 			result: &tlsHandshakeResult{
 				version:         session.version,
 				handshakeSecret: witness.handshakeSecret,
@@ -831,20 +828,17 @@ func TestALateTicketIsProvenAgainOverItsRecord(t *testing.T) {
 			t.Errorf("%s: %+v", leg.name, replies)
 		}
 		if len(channel.parts) != 1 {
-			t.Fatalf("%s: %d parts submitted, want the part proven again", leg.name, len(channel.parts))
+			t.Fatalf("%s: %d parts submitted, want one over the ticket", leg.name, len(channel.parts))
 		}
-		again := channel.parts[0]
-		if again.Index != 3 || again.ServerRecordCount != original.ServerRecordCount+1 {
-			t.Errorf("%s: %+v", leg.name, again)
+		cover := channel.parts[0]
+		if cover.Index != 4 || len(cover.Records) != 0 || cover.FirstRecord != statement.lastRecord+1 || cover.LastRecord != statement.lastRecord ||
+			cover.ServerRecordCount != statement.serverRecordCount+1 || cover.ReplyCount != 0 || cover.Last || len(cover.Carry) != 0 {
+			t.Errorf("%s: %+v", leg.name, cover)
 		}
-		// the edge's rule: a part proven again opens the same records
-		if !slices.EqualFunc(again.Records, original.Records, bytes.Equal) || again.FirstRecord != original.FirstRecord || again.LastRecord != original.LastRecord {
-			t.Errorf("%s: the part proven again changed what it opens", leg.name)
-		}
-		// and what was proven satisfies the relation over the new count: its statement holds the ticket
+		// what was proven satisfies the relation over the ticket alone
 		proved := backend.statements[0]
-		if proved.serverRecordCount != again.ServerRecordCount || len(proved.serverRecords) != len(statement.serverRecords)+1 {
-			t.Errorf("%s: statement covers %d records", leg.name, len(proved.serverRecords))
+		if len(proved.clientRecords) != 0 || len(proved.serverRecords) != 1 {
+			t.Errorf("%s: the statement opens %d records over %d", leg.name, len(proved.clientRecords), len(proved.serverRecords))
 		}
 	}
 }
