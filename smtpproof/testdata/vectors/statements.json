@@ -3,9 +3,9 @@
   {
    "index": 1,
    "mode": 0,
-   "shape": "kind1-v0303-sc02b-client4-server0-header0-body0-localfalse",
-   "public_inputs": 2273,
-   "sha256": "1fe16b6f1ffd7b509bf970b595e362ef4f8308ba159a0ddbc70934f4471c5ec4",
+   "shape": "key-v0303-aes128gcm-c8",
+   "public_inputs": 2466,
+   "sha256": "e20787941534ff00e00a0cf0ac46677fddbdfb89c04ad0b6ef56daf80750c1db",
    "templates": [
     "EHLO o1.out.relay.example\r\n"
    ]
@@ -13,9 +13,9 @@
   {
    "index": 2,
    "mode": 1,
-   "shape": "kind2-v0303-sc02b-client48-server24-header0-body0-localtrue",
-   "public_inputs": 5094,
-   "sha256": "1cddc2b720a9173fb20487dfd9b6a22f7aa58926ead978662b85587e65b2fb30",
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "dd97499148c60602dc515bb3cb301c022332a4d9ac3e0d194d7603274265c157",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n",
@@ -25,9 +25,9 @@
   {
    "index": 3,
    "mode": 1,
-   "shape": "kind3-v0303-sc02b-client4-server24-header256-body0-localfalse",
-   "public_inputs": 24023,
-   "sha256": "2bb413ffc9145670e900446a2afe0c832451efb4504dbcf04435045dd4ba8e3f",
+   "shape": "msg-aes128gcm-s17-c4-h52",
+   "public_inputs": 6928,
+   "sha256": "1956d01ba81e9b9fe8b93908c2b7ece4d0ab43bede3f7c415342eeefc8e775a0",
    "templates": [
     "BDAT 497 LAST\r\n",
     "QUIT\r\n"
@@ -38,9 +38,9 @@
   {
    "index": 1,
    "mode": 0,
-   "shape": "kind1-v0303-sc02b-client4-server0-header0-body0-localfalse",
-   "public_inputs": 2273,
-   "sha256": "9b2c9457d6f4e41593bec0afbf7f951b78e2225787e86ee8811d54a4d16f02c8",
+   "shape": "key-v0303-aes128gcm-c8",
+   "public_inputs": 2466,
+   "sha256": "fdc894020c62f22f4394a11f083bcc11528895c1862d28d6978a45c2eda52f4a",
    "templates": [
     "EHLO o1.out.relay.example\r\n"
    ]
@@ -48,9 +48,9 @@
   {
    "index": 2,
    "mode": 2,
-   "shape": "kind2-v0303-sc02b-client48-server24-header0-body0-localtrue",
-   "public_inputs": 5094,
-   "sha256": "6ad893e92ccda91bc25963efe498e09c9d41f258c6af4109e3c7e9f139d64ce2",
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "96b32023afe3d1cefb41631cfc380064eb61ce0ee32796ba54e2ae338e2e3161",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n",
@@ -61,23 +61,37 @@
   {
    "index": 3,
    "mode": 2,
-   "shape": "kind3-v0303-sc02b-client4-server24-header256-body128-localfalse",
-   "public_inputs": 36439,
-   "sha256": "583e41771730190cbdb752f3f09c9e1b11e3dc8798a982f997dab5835450c1f3"
+   "shape": "msg-aes128gcm-s17-c4-h52",
+   "public_inputs": 6928,
+   "sha256": "090789a3cc09136c6e14ffee71f34b16277d8153d5e5e385d63cc6d1afa15ebe"
   },
   {
    "index": 4,
    "mode": 2,
-   "shape": "kind4-v0303-sc02b-client2-server0-header0-body128-localfalse",
-   "public_inputs": 12520,
-   "sha256": "9fc45f59bc10e3d7a55e1b6d86a40f62dc46f367799ce497024f417d501a5a83"
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "cf4a4d8901f82f69ade4e3ac10040b5d4ebf96c38535ed69084d8d956238d701"
   },
   {
    "index": 5,
    "mode": 2,
-   "shape": "kind4-v0303-sc02b-client2-server0-header0-body128-localfalse",
-   "public_inputs": 12520,
-   "sha256": "73488a3fc0142fcccfb064b3382229419e5bc68a39dad442c8551e2cafb9ec96",
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "6187f4c6c76f5640bc89cd9a09deb8d0ee04029b2999e49ce37fba8d69046e1f"
+  },
+  {
+   "index": 6,
+   "mode": 2,
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "dda3456b40fa4c73931c8dcaec4db3dc740f872d2dad3c3a1f15418c285ef893"
+  },
+  {
+   "index": 7,
+   "mode": 2,
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "32426b6666a0087825da9df9373fdbc05efe02475a04e53bca6b569314343364",
    "templates": [
     ".\r\n",
     "QUIT\r\n"
@@ -88,9 +102,9 @@
   {
    "index": 1,
    "mode": 0,
-   "shape": "kind1-v0304-s1301-client4-server0-header0-body0-localfalse",
-   "public_inputs": 970,
-   "sha256": "649dfee4a970499ca23b275bde8dd79e633b97efbcc4c01c8bdc2621a7404e92",
+   "shape": "key-v0304-aes128gcm-c8",
+   "public_inputs": 1162,
+   "sha256": "47f2761378edc5816eda2888d7df83392f6345c72edd77e6e04646a878fa0417",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -98,9 +112,9 @@
   {
    "index": 2,
    "mode": 1,
-   "shape": "kind2-v0304-s1301-client48-server24-header0-body0-localtrue",
-   "public_inputs": 5094,
-   "sha256": "929f04d999d49e777eab46ca391a887bb94b8a913e8184a299ba33fc4d5b9d24",
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "611905f3336e4081efcec6b7c8f2f2f55fd861673d0fe046f8a4cadb725b4381",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -110,9 +124,9 @@
   {
    "index": 3,
    "mode": 1,
-   "shape": "kind3-v0304-s1301-client4-server24-header256-body0-localfalse",
-   "public_inputs": 24023,
-   "sha256": "9b7fc5ecbdeab6bd0251a9df99abb15b87316eec12078edb421c5814f950c283",
+   "shape": "msg-aes128gcm-s17-c4-h52",
+   "public_inputs": 6928,
+   "sha256": "193efc8d754be26393332e7cbe9cee881ad28df893b24b9fbc3d092f35902ec7",
    "templates": [
     "BDAT 497 LAST\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -123,9 +137,9 @@
   {
    "index": 1,
    "mode": 0,
-   "shape": "kind1-v0304-s1301-client4-server0-header0-body0-localfalse",
-   "public_inputs": 970,
-   "sha256": "254b93dd206dc2f2b33ebb7ae180394797f1f830b349dcc1f293110eda4d48f3",
+   "shape": "key-v0304-aes128gcm-c8",
+   "public_inputs": 1162,
+   "sha256": "b1b87ef5ae1b612dde5d8b07ea2c0b67db56beabe7b2ae52d6e46a8fcb8e4f42",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -133,9 +147,9 @@
   {
    "index": 2,
    "mode": 2,
-   "shape": "kind2-v0304-s1301-client48-server24-header0-body0-localtrue",
-   "public_inputs": 5094,
-   "sha256": "7b9c0429e8eb8ed9f15560520317531b971d71aec661eb10db696125c31ac854",
+   "shape": "env-aes128gcm-s40-c40",
+   "public_inputs": 5887,
+   "sha256": "a5a0b057a66f12964249f6c3646221f869c929548ee9a1bb2927d8abb26472f3",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -146,23 +160,37 @@
   {
    "index": 3,
    "mode": 2,
-   "shape": "kind3-v0304-s1301-client4-server24-header256-body128-localfalse",
-   "public_inputs": 36439,
-   "sha256": "ed3f9cf086ecf090b7381b6511c49a22121f6f3cce65354367fb43cfd41cace6"
+   "shape": "msg-aes128gcm-s17-c4-h52",
+   "public_inputs": 6928,
+   "sha256": "095057c09de4039453549eaedb29f60f2eae74bf9c4e73fba01467d212742977"
   },
   {
    "index": 4,
    "mode": 2,
-   "shape": "kind4-v0304-s1301-client2-server0-header0-body128-localfalse",
-   "public_inputs": 12520,
-   "sha256": "25df0c61fdded54c6644432d21228a1adb97304d7dddc476e2d530b9d8aa30aa"
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "0589dc173e140bc66c916303b0475b74e5b408ede64173d619356f8527cc28b4"
   },
   {
    "index": 5,
    "mode": 2,
-   "shape": "kind4-v0304-s1301-client2-server0-header0-body128-localfalse",
-   "public_inputs": 12520,
-   "sha256": "4338cc664da4498ea1d479488251b9566f39d4aacf4ab12d37c829244f8169d5",
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "6c91f1917393f9600fb66315515ff28808248b0240b5df29286c617424bef191"
+  },
+  {
+   "index": 6,
+   "mode": 2,
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "e996c41d5b9021475b14eaf610bad3f9036ed3e36f74c5e7c3b7bda6ec41ad00"
+  },
+  {
+   "index": 7,
+   "mode": 2,
+   "shape": "body-aes128gcm-c2-b81",
+   "public_inputs": 6665,
+   "sha256": "5b80509c554a72fff5d1f4f044a7f5fcb2c354e4048d3c16186d543657e667b1",
    "templates": [
     ".\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -173,9 +201,9 @@
   {
    "index": 1,
    "mode": 0,
-   "shape": "kind1-v0304-s1303-client1-server0-header0-body0-localfalse",
-   "public_inputs": 967,
-   "sha256": "92a87f14cce9971a35c4f5bf09750993d756b55c86230d9633e904b21702601a",
+   "shape": "key-v0304-chacha20-c2",
+   "public_inputs": 1156,
+   "sha256": "f7a185117717f6ccd49d87843e07a70adce203faed95915a61e4235675389435",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -183,9 +211,9 @@
   {
    "index": 2,
    "mode": 1,
-   "shape": "kind2-v0304-s1303-client12-server12-header0-body0-localtrue",
-   "public_inputs": 6954,
-   "sha256": "caee8e1ced908b922cc8d0eb5a0c6372b020e69b73c9657080fc076399dd6fe7",
+   "shape": "env-chacha20-s19-c20",
+   "public_inputs": 11265,
+   "sha256": "ad8545e97b880e13dda29cca4c9f7fd26268392d92d39ebe02e8873eff363390",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -195,9 +223,9 @@
   {
    "index": 3,
    "mode": 1,
-   "shape": "kind3-v0304-s1303-client2-server12-header64-body0-localfalse",
-   "public_inputs": 25917,
-   "sha256": "bb776097a83f2765c3e580262af9eef45cf8dfa0e1c1bad64bfdda6e216e79db",
+   "shape": "msg-chacha20-s13-c2-h19",
+   "public_inputs": 11797,
+   "sha256": "6b8c48494ed2158859fb01ccd340ca25f457258d55e4982c3618ccb45a7e2748",
    "templates": [
     "BDAT 497 LAST\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -208,9 +236,9 @@
   {
    "index": 1,
    "mode": 0,
-   "shape": "kind1-v0304-s1303-client1-server0-header0-body0-localfalse",
-   "public_inputs": 967,
-   "sha256": "ddd0e406591dd96ef6b62e6ab89a304b57b646c77476e3314b5c0dabdcbf8c51",
+   "shape": "key-v0304-chacha20-c2",
+   "public_inputs": 1156,
+   "sha256": "ebfdf572c4cf6aea5b2db3ba919f48e681c35c464f50f42fa255ce2c9593aabd",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -218,9 +246,9 @@
   {
    "index": 2,
    "mode": 2,
-   "shape": "kind2-v0304-s1303-client12-server12-header0-body0-localtrue",
-   "public_inputs": 6954,
-   "sha256": "e3cc77127b91aa9ea527c2b1d0383e8aa8d49bd9999c69b584b48f058c83a4ef",
+   "shape": "env-chacha20-s19-c20",
+   "public_inputs": 11265,
+   "sha256": "90838349eafbf2fa88449e749e1bb87c701d1128ebc7b17588b68c2087933d1a",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -231,23 +259,37 @@
   {
    "index": 3,
    "mode": 2,
-   "shape": "kind3-v0304-s1303-client2-server12-header64-body32-localfalse",
-   "public_inputs": 38237,
-   "sha256": "d93bb067ae393678254ab80f0d1372d2f08a9d12d449efed8f5eb7e627fef38d"
+   "shape": "msg-chacha20-s13-c2-h19",
+   "public_inputs": 11797,
+   "sha256": "3cafbb27311ba03c68b4186df92df01bbbcc34e5f05ca2f3a2225c7c36f3d4bc"
   },
   {
    "index": 4,
    "mode": 2,
-   "shape": "kind4-v0304-s1303-client2-server0-header0-body32-localfalse",
-   "public_inputs": 12712,
-   "sha256": "0a97bf1452598e311a3fdeb954a46f1c0c0a5af019061a293d6982a66934dfec"
+   "shape": "body-chacha20-c2-b40",
+   "public_inputs": 13232,
+   "sha256": "7b5389307f5723f83a522cbaa8f8368460988e1829d4bd55ea9ccc9b34b91bd1"
   },
   {
    "index": 5,
    "mode": 2,
-   "shape": "kind4-v0304-s1303-client2-server0-header0-body32-localfalse",
-   "public_inputs": 12712,
-   "sha256": "394850191a885738ed54a61fde1a460b0cacb9196143ac8644f3b31961071077",
+   "shape": "body-chacha20-c2-b40",
+   "public_inputs": 13232,
+   "sha256": "5a2c14168c63560742759e7e8b4d839eeafa499e97cae98ab23d262d9abd1bdf"
+  },
+  {
+   "index": 6,
+   "mode": 2,
+   "shape": "body-chacha20-c2-b40",
+   "public_inputs": 13232,
+   "sha256": "f6276f12363cc658d3f9eb5fbb279f22868361a8ec3fe4a10a39b4008f4dff05"
+  },
+  {
+   "index": 7,
+   "mode": 2,
+   "shape": "body-chacha20-c2-b40",
+   "public_inputs": 13232,
+   "sha256": "de0c2e87c9a7145371e2d01536c9a9b8dc5b39bb6726272034dc4c93cf197061",
    "templates": [
     ".\r\n\u0017",
     "QUIT\r\n\u0017"

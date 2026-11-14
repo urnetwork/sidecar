@@ -152,8 +152,9 @@ func (self *EvsRepo) buildErase(ctx context.Context, args *EvsEraseArgs, pushId 
 	if args == nil || len(args.Keys) == 0 {
 		return nil, fmt.Errorf("%w: an ERASE of no key", ErrEvsWriteInvalid)
 	}
+	slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 	for _, key := range args.Keys {
-		if EvsSlotMaxKeyCount <= key.KeyIndex {
+		if slotMaxKeyCount <= int(key.KeyIndex) {
 			return nil, fmt.Errorf("%w: key index %d", ErrEvsWriteInvalid, key.KeyIndex)
 		}
 	}

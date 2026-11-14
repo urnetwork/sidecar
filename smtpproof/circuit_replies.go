@@ -25,9 +25,23 @@ const (
 	replyWindowBytes = 16
 	replySepOffset   = 5
 	replyWordOffset  = 6
-	// Octets between pinning a scanner's running sums to single wires.
-	pinInterval = 32
 )
+
+// The public values a shape with server blocks reads its replies by (DESIGN-DETAILS 3.2.3): how many
+// replies the part's server records hold, and the rules they are held to.
+type replyFlags struct {
+	// The replies the part covers: exactly this many, each whole (Z8).
+	ReplyCount frontend.Variable `gnark:",public"`
+	// Part 2 alone: the one reply is the post-TLS EHLO's, every line coded 250 (Z8).
+	EhloRule frontend.Variable `gnark:",public"`
+	// Part 2 in BDAT mode: the EHLO reply offers CHUNKING (Z9).
+	RequireChunking frontend.Variable `gnark:",public"`
+	// DATA mode, on the part whose replies complete the envelope's: the last is 354 (Z8).
+	Last354 frontend.Variable `gnark:",public"`
+	// 1 under TLS 1.3, where a late NewSessionTicket may be among the records; 0 under 1.2, which has none
+	// here, so a block's private ticket flag is 0 (Z7).
+	Tls13 frontend.Variable `gnark:",public"`
+}
 
 // The octet of a reply stream as a wire value and its bits.
 type replyOctet struct {
@@ -61,16 +75,16 @@ func replyWindowFingerprint() *big.Int {
 	return fingerprint
 }
 
-// Decrypts server blocks, checks each record's framing (Z7) and parses the reply stream (Z8, Z9).
+// Decrypts server blocks, checks each record's framing (Z7) and parses the reply stream (Z8, Z9) by the
+// part's flags.
 func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, circuit *partCircuit) {
+	flags := circuit.Flags
 	var octets []*replyOctet
 	previousTicket := frontend.Variable(0)
 	for _, block := range circuit.Server {
 		api.AssertIsBoolean(block.Ticket)
-		if shape.version == tlsVersion12 {
-			// 1.2 offers no ticket here, and its records carry their type in the clear (E1)
-			api.AssertIsEqual(block.Ticket, 0)
-		}
+		// 1.2 offers no ticket here, and its records carry their type in the clear (E1)
+		api.AssertIsEqual(api.Mul(block.Ticket, api.Sub(1, flags.Tls13)), 0)
 		// a record's blocks share its kind
 		api.AssertIsEqual(api.Mul(block.Continues, api.Sub(block.Ticket, previousTicket)), 0)
 		previousTicket = block.Ticket
@@ -108,7 +122,7 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 	replies := frontend.Variable(0)
 	for position, octet := range octets {
 		// a bound on how far these sums run before a constraint must carry all their terms
-		if position%pinInterval == 0 {
+		if position%shape.pinInterval == 0 {
 			for i := range state {
 				state[i] = pinWire(api, state[i])
 			}
@@ -145,21 +159,18 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 		// a line ends at the LF in state 5
 		ended := stepped[5]
 		replyEnded := api.Mul(ended, finalLine)
-		switch shape.kind {
-		case partKindEnvelope:
-			// every line of the EHLO reply is coded 250 (Z8)
-			api.AssertIsEqual(api.Mul(ended, api.Sub(code[0], '2')), 0)
-			api.AssertIsEqual(api.Mul(ended, api.Sub(code[1], '5')), 0)
-			api.AssertIsEqual(api.Mul(ended, api.Sub(code[2], '0')), 0)
-		case partKindMessage:
-			// each reply is 2xx, but in DATA mode the last is 354 (Z8)
-			isLast := api.IsZero(api.Sub(api.Add(replies, 1), circuit.ExpectedReplies))
-			wants354 := api.Mul(isLast, circuit.DataMode)
-			api.AssertIsEqual(api.Mul(replyEnded, api.Sub(code[0], api.Add('2', wants354))), 0)
-			ended354 := api.Mul(replyEnded, wants354)
-			api.AssertIsEqual(api.Mul(ended354, api.Sub(code[1], '5')), 0)
-			api.AssertIsEqual(api.Mul(ended354, api.Sub(code[2], '4')), 0)
-		}
+		// with EhloRule every line of the reply is coded 250 (Z8)
+		ehloEnded := api.Mul(ended, flags.EhloRule)
+		api.AssertIsEqual(api.Mul(ehloEnded, api.Sub(code[0], '2')), 0)
+		api.AssertIsEqual(api.Mul(ehloEnded, api.Sub(code[1], '5')), 0)
+		api.AssertIsEqual(api.Mul(ehloEnded, api.Sub(code[2], '0')), 0)
+		// each reply is 2xx, but with Last354 the last is 354 (Z8)
+		isLast := api.IsZero(api.Sub(api.Add(replies, 1), flags.ReplyCount))
+		wants354 := api.Mul(isLast, flags.Last354)
+		api.AssertIsEqual(api.Mul(replyEnded, api.Sub(code[0], api.Add('2', wants354))), 0)
+		ended354 := api.Mul(replyEnded, wants354)
+		api.AssertIsEqual(api.Mul(ended354, api.Sub(code[1], '5')), 0)
+		api.AssertIsEqual(api.Mul(ended354, api.Sub(code[2], '4')), 0)
 		replies = api.Add(replies, replyEnded)
 
 		toText := api.Mul(api.Add(stepped[3], stepped[4]), isCr)
@@ -175,7 +186,7 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 	}
 	// the stream ends between lines, with exactly the replies the part expects
 	api.AssertIsEqual(state[0], 1)
-	api.AssertIsEqual(replies, circuit.ExpectedReplies)
+	api.AssertIsEqual(replies, flags.ReplyCount)
 
 	// Z9: a whole line that is CHUNKING, and never the first, since CR LF precedes it. Letters compare
 	// without case by forcing bit 5, which is exact for letters; the rest compare exactly.
@@ -198,7 +209,7 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 		hit := api.Mul(api.Mul(matched, octets[i+replySepOffset].sepOk), octets[i].windowOk)
 		hits = api.Add(hits, hit)
 	}
-	api.AssertIsEqual(api.Mul(circuit.RequireChunking, api.IsZero(hits)), 0)
+	api.AssertIsEqual(api.Mul(flags.RequireChunking, api.IsZero(hits)), 0)
 }
 
 // The public wires of every server record the part covers.

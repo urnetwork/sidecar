@@ -607,8 +607,9 @@ func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *E
 	if err != nil {
 		return err
 	}
+	slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 	for _, item := range erasedItems {
-		if len(item) != evsErasedItemByteCount || EvsSlotMaxKeyCount <= binary.BigEndian.Uint16(item[16:18]) {
+		if len(item) != evsErasedItemByteCount || slotMaxKeyCount <= int(binary.BigEndian.Uint16(item[16:18])) {
 			return fmt.Errorf("%w: an erased item out of shape", ErrEvsPushInvalid)
 		}
 		checked.Erased = append(checked.Erased, &EvsErasedKey{SlotId: Id(item[0:16]), KeyIndex: binary.BigEndian.Uint16(item[16:18])})

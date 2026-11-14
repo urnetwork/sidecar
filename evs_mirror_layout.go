@@ -114,7 +114,7 @@ func (self EvsMirrorFamily) maxByteCount() int64 {
 	case EvsMirrorSegments:
 		return EvsSegmentMaxByteCount
 	case EvsMirrorSlots:
-		return evsSlotMaxByteCount
+		return int64(DefaultEvsFormatSettings().SlotMaxByteCount)
 	case EvsMirrorMapParts:
 		return int64(DefaultEvsFormatSettings().PathMapMaxByteCount)
 	}

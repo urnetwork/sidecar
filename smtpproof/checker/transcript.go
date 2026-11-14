@@ -51,6 +51,12 @@ type Part struct {
 	Records           [][]byte
 	// Part 1 only: C, 64 octets.
 	KeyCommitment []byte
+	// The replies the server records it covers hold (DESIGN-DETAILS 3.2.5).
+	ReplyCount uint32
+	// On the part that opens the header block's first record alone: the records the block takes.
+	HeaderRecordCount uint32
+	// On a part that opens a header or body record: the scan state it leaves, committed, 64 octets.
+	Carry []byte
 }
 
 // One thing the edge saw, in the order it saw it. Exactly one field is set.
@@ -80,6 +86,11 @@ type PartWitness struct {
 	ServerIv  []byte
 	// rho, C's blind, big-endian.
 	KeyBlind []byte
+	// The scan state a part starts from, opening the carry the edge kept, and the blinds of that carry
+	// and of the part's own, big-endian (DESIGN-DETAILS 3.2.4).
+	CarryInState  uint32
+	CarryInBlind  []byte
+	CarryOutBlind []byte
 	// Each opened client record's plaintext, in 1.3 with its inner type octet.
 	ClientPlaintexts [][]byte
 	// Each covered server record's plaintext, likewise.

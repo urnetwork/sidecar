@@ -108,7 +108,7 @@ func TestKeyPartBindsBothDirections(t *testing.T) {
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)
 		statement, witness := capture.part(t, 1)
-		shape, err := partShapeFor(statement)
+		shape, err := partShapeFor(DefaultProofSettings(), statement)
 		if err != nil {
 			t.Fatal(err)
 		}
