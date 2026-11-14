@@ -308,6 +308,37 @@ func (self *DirectoryClient) BindRequests(binding *DirectoryRequestsBinding) *Di
 	return requests
 }
 
+// Binds this Sidecar's directory requests: binding's seams, with the ones this Sidecar itself is filled where binding
+// leaves them nil: the decider's journal over its approval ledger, the action detail's sealer and opener, and the
+// access_request and access_decided events. The limits, the endorsement, the statement signer and the receipts are
+// the composition's to pass; each left nil refuses what needs it. What the daemon's composition calls beside the
+// directory's component; nil in a network whose client cannot be made yet.
+func (self *Sidecar) BindDirectoryRequests(binding *DirectoryRequestsBinding) *DirectoryAccessRequests {
+	client, err := self.DirectoryClient()
+	if err != nil {
+		return nil
+	}
+	bound := DirectoryRequestsBinding{}
+	if binding != nil {
+		bound = *binding
+	}
+	if bound.Journal == nil {
+		if ledger, err := self.ApprovalLedger(); err == nil {
+			bound.Journal = ledger
+		}
+	}
+	if bound.Sealer == nil {
+		bound.Sealer = self
+	}
+	if bound.Opener == nil {
+		bound.Opener = self
+	}
+	if bound.Events == nil {
+		bound.Events = self
+	}
+	return client.BindRequests(&bound)
+}
+
 // Files a request: see the file's header. Answers once the request entry is appended; ErrDirectoryReadOnly on a
 // read_only client, ErrDirectoryNone without a directory, a *DirectoryLimitError past a limit,
 // ErrDirectoryRequestsClosed for a closed target and *ApprovalPendingError while an endorsement is awaited.
