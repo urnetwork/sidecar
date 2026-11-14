@@ -19,13 +19,26 @@
 // rule; an ERASE's NOTHING_TO_ERASE and a CLOSURE's slot rules, since slots come last; and the refuse row's recording,
 // so every refusal refuses nothing and the device sends the push again once what it lacked is there.
 //
-// What it keeps: 5a, so a retry answers the version the push committed at; the fence row; the signature under the
-// identity key the state at the statement's own auth pin admits for its signer; §11.8's refs table at that state,
-// read for the signer as readers read it (evs_verify.go); the pins never falling below the head's; 5e; the chain
-// onto the current head, base_version and base_chain equal to it, so only versions past the head go and no stale
-// mirror returns what a later version replaced; 5f's lease; 5g; and 5h's rules for segments and slots, a new
-// segment counting only once PUT seg/ holds it at its padded size (EVSB-M2-09 takes re-seed uploads while reseed is
-// on). Step 6 writes no slot: the bodies a payload carries are as old as the push, and slots come last, stripped.
+// What it keeps: 5a, so a retry answers the version the push committed at and no version commits twice; the fence
+// row; the signature under the identity key the state at the statement's own auth pin admits for its signer; §11.8's
+// refs table at that state, read for the signer as readers read it (evs_verify.go); the pins never falling below the
+// head's; 5e; 5f and 5g as the push route runs them, its own CheckBase and CheckPaths (QD-815); and 5h's rules for
+// segments and slots, a new segment counting only once PUT seg/ holds it at its padded size (EVSB-M2-09 takes
+// re-seed uploads while reseed is on). Step 6 writes no slot: the bodies a payload carries are as old as the push,
+// and slots come last, stripped.
+//
+// So a git-mode push, and a file-mode push on the head, chain onto the current head, base_version and base_chain
+// equal to it (QD-725), a git-mode one also waiting out another push's live seal lease. A file-mode push that a
+// concurrent writer built on an older base commits on that base as it first did: inside 5f's window below the head,
+// with base_chain the C_b the history holds and no path a version after its base changed (5g), so a ref several
+// devices wrote re-seeds as far as the mirror holds it. A re-seed only adds versions past the head, and 5g refuses a
+// push whose path a version after its base changed, so no stale mirror returns what a later version replaced. Where
+// the new site's head is not the version before the one a push first committed at, after a sender skipped a version
+// or another push landed first, the push lands at another version than it first held: evs takes it there, and the
+// device, which sends in version order and checks the version each statement lands at, stops its ref
+// (ErrEvsReseedVersion). BASE_STALE answers where the push route would, and carries the ref's head only on the
+// caller's own deposit ref (plan-EVS1-deposit-head), as a 200 does: the checks judge the statement's signer, and the
+// caller is the repo admin re-seeding it.
 //
 // The repo (§11.13, §11.12's refused row): evs takes re-seeds only for repos the projection lists live or restorable.
 // One whose newest RepoDelete carries now, or is past ReseedRestoreWindow, is refused 409 SHREDDING; one whose
@@ -35,9 +48,8 @@
 //
 // Not built here, each refused before anything is written: a push in parts (question
 // evs-reseed-route-part-records), a push carrying format 2 (EVS2-M10-13), and a statement at an auth pin evs's state
-// does not retain. Two readings wait on their questions: the base equal to the head holds for file mode too, so a
-// push a concurrent writer built on an older base ends its ref's re-seed (evs-reseed-route-file-mode-base), and a
-// slot call names its version by the statement it carries (evs-reseed-route-slot-naming).
+// does not retain. A reading waits on its question: a slot call names its version by the statement it carries
+// (evs-reseed-route-slot-naming).
 
 package evsservice
 
@@ -370,13 +382,17 @@ func (self *pushAttempt) checkReseed() *EvsCheckRefusal {
 		checkRefTable,
 		checkReseedPins,
 		CheckPathEpoch,
-		checkReseedBase,
+		// the push route's own 5f and 5g, its window included (QD-815)
 		CheckBase,
 		CheckPaths,
 		self.checkReseedObjects,
 	}
 	for _, check := range checks {
 		if refusal := check(&view); refusal != nil {
+			if refusal.DepositHead != nil && !self.ownDepositRef() {
+				// the view's token is the statement's signer: a deposit ref's head goes to its own depositor alone
+				refusal.DepositHead = nil
+			}
 			return refusal
 		}
 	}
@@ -453,32 +469,6 @@ func checkReseedPins(view *PushView) *EvsCheckRefusal {
 		case push.GetGeneration() == head.GetGeneration() && !bytes.Equal(push.GetGenerationCommitment(), head.GetGenerationCommitment()):
 			return pinBelow("the head's generation under another commitment")
 		}
-	}
-	return nil
-}
-
-// The chain onto the current head (QD-725): base_version is the head's version and base_chain its C_v, C_0 for a ref
-// with none, so a re-seed takes only the version right past the head. Final for this head: the device sends the
-// history in version order.
-func checkReseedBase(view *PushView) *EvsCheckRefusal {
-	push := view.Statement.Push
-	version := view.headVersion()
-	stale := func(detail string) *EvsCheckRefusal {
-		if protocol.EvsRefMode(push.GetRefMode()) == protocol.EvsRefMode_EVS_REF_GIT {
-			return newEvsCheckRefusal(EvsCheckReasonNonFastForward, detail)
-		}
-		return newEvsCheckRefusal(EvsCheckReasonBaseStale, detail)
-	}
-	if push.GetBaseVersion() != version {
-		return stale(fmt.Sprintf("a re-seeded push on base %d at version %d", push.GetBaseVersion(), version))
-	}
-	chain := sidecar.EvsChainStart(view.RepoId, sidecar.Id(push.GetRefId()))
-	headChain := chain[:]
-	if 0 < version {
-		headChain = view.Head.GetChain()
-	}
-	if !bytes.Equal(push.GetBaseChain(), headChain) {
-		return stale("a re-seeded push whose base chain is not the head's")
 	}
 	return nil
 }

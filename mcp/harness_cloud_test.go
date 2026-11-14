@@ -2,13 +2,17 @@
 
 // Cloud agents (MCP-M4-02): the key rule of harness_cloud.go and what §16.9 holds beside it. No key is read from the
 // environment, by behavior and by a scan of every environment read in ur's own source (CC4); the key file is taken
-// once and removed, and refused unless it is its owner's alone; the committed connect step is one fixed command;
+// once and removed, and refused unless it is its owner's alone; the committed connect step is one fixed command,
+// which a project install with a key file writes at the head of the session-start step and seals;
 // server/mcp imports no sidecar package (D-MCP-7); and a session captured with nothing reachable spools, without a
 // gap or a failed hook, and seals again once the writer does.
 
 package mcp
 
 import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -23,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -248,6 +253,148 @@ func TestCloudConnectCommand(t *testing.T) {
 	}
 }
 
+// The key file's path a project install of args takes, named as the VM reads it.
+const testCloudKeyFile = "/run/ur/authkey"
+
+// The cloud profile (§16.9; QD-041): a project install with a key file commits one session-start step that takes the
+// key file with ur connect --token-file --ephemeral and then runs ur hook, every other step ur hook alone; no
+// committed file holds a key; the seal holds the path, so the daemon's check reads the install unchanged, a
+// session-start step with its connect cut reads changed, and running the install again restores it.
+func TestProjectCloudProfileCommitsConnectStep(t *testing.T) {
+	for _, harness := range []string{"claude-code", "codex"} {
+		home := testHarnessHome(t, harness)
+		project := t.TempDir()
+		state := t.TempDir()
+		args := testHarnessArgs(harness, home, state)
+		args.ProjectDirectory = project
+		args.CloudKeyFile = testCloudKeyFile
+		plan := testInstallHarness(t, args)
+		if plan.Seal.CloudKeyFile != testCloudKeyFile {
+			t.Errorf("%s: the seal's key file: %q", harness, plan.Seal.CloudKeyFile)
+		}
+		connect := HarnessCloudConnectCommand(testHarnessUrPath, testCloudKeyFile, "")
+		start := connect + " </dev/null >/dev/null 2>&1; " + testHarnessUrPath + " hook " + harness
+		holders := 0
+		for _, file := range plan.Files {
+			content, err := os.ReadFile(file.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(content), harnessCloudKeyPrefix) {
+				t.Errorf("%s: %s holds an auth key's prefix", harness, file.Path)
+			}
+			if count := strings.Count(string(content), "connect "+HarnessCloudKeyFileFlag); count != 0 {
+				holders += count
+				encoded, err := harnessJsonEncode(start, "", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(content), encoded) {
+					t.Errorf("%s: %s holds no session-start step %s:\n%s", harness, file.Path, encoded, content)
+				}
+			}
+		}
+		if holders != 1 {
+			t.Errorf("%s: %d connect steps committed, want the session start's one", harness, holders)
+		}
+		if words := harnessShellWords(start); !harnessUrStepWords(words) || !plan.template.ownsCommand(start) {
+			t.Errorf("%s: the session-start step is not read as ur's: %q", harness, words)
+		}
+		check := testHarnessCheck(state)
+		if testHarnessChanged(t, check, harness, project) {
+			t.Errorf("%s: the cloud profile as installed reads changed", harness)
+		}
+		again, err := PlanHarnessInstall(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := again.Changed(); err != nil || changed {
+			t.Errorf("%s: a second install changes something: %t %v", harness, changed, err)
+		}
+
+		// the connect step cut from the committed file: the check reads it changed, and the install restores it
+		var hooksPath string
+		for _, file := range plan.Files {
+			if content, _ := os.ReadFile(file.Path); strings.Contains(string(content), "connect "+HarnessCloudKeyFileFlag) {
+				hooksPath = file.Path
+			}
+		}
+		encodedStart, _ := harnessJsonEncode(start, "", "")
+		encodedHook, _ := harnessJsonEncode(testHarnessUrPath+" hook "+harness, "", "")
+		content, err := os.ReadFile(hooksPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cut := strings.Replace(string(content), encodedStart, encodedHook, 1)
+		if err := os.WriteFile(hooksPath, []byte(cut), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !testHarnessChanged(t, check, harness, project) {
+			t.Errorf("%s: a session-start step with its connect cut reads unchanged", harness)
+		}
+		testInstallHarness(t, args)
+		restored, err := os.ReadFile(hooksPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(restored) != string(content) {
+			t.Errorf("%s: the install did not restore the session-start step:\n%s", harness, restored)
+		}
+		if testHarnessChanged(t, check, harness, project) {
+			t.Errorf("%s: the restored profile reads changed", harness)
+		}
+
+		// without a key file the same project commits ur hook alone, and the seal changes with it
+		args.CloudKeyFile = ""
+		plain := testInstallHarness(t, args)
+		if plain.Seal.ConfigSha256 == plan.Seal.ConfigSha256 {
+			t.Errorf("%s: the seal is the same with and without the connect step", harness)
+		}
+		after, err := os.ReadFile(hooksPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(after), "connect") {
+			t.Errorf("%s: an install with no key file left a connect step:\n%s", harness, after)
+		}
+	}
+}
+
+// What the cloud profile refuses, each beside the install that passes: a key file with no project, a harness that
+// reports no session start, a path the VM would read against a working directory, one holding a control character,
+// and a key pasted where the path belongs.
+func TestProjectCloudProfileRefusals(t *testing.T) {
+	plan := func(harness string, update func(args *HarnessInstallArgs)) error {
+		args := testHarnessArgs(harness, testHarnessHome(t, harness), t.TempDir())
+		args.ProjectDirectory = t.TempDir()
+		args.CloudKeyFile = testCloudKeyFile
+		update(args)
+		_, err := PlanHarnessInstall(args)
+		return err
+	}
+	if err := plan("claude-code", func(args *HarnessInstallArgs) {}); err != nil {
+		t.Fatalf("the twin: %v", err)
+	}
+	refusals := map[string]func(args *HarnessInstallArgs){
+		"no project":          func(args *HarnessInstallArgs) { args.ProjectDirectory = "" },
+		"a relative path":     func(args *HarnessInstallArgs) { args.CloudKeyFile = "run/ur/authkey" },
+		"a directory's path":  func(args *HarnessInstallArgs) { args.CloudKeyFile = "/run/ur/" },
+		"a control character": func(args *HarnessInstallArgs) { args.CloudKeyFile = "/run/ur/auth\nkey" },
+		"a key as the path":   func(args *HarnessInstallArgs) { args.CloudKeyFile = "/" + testCloudKey },
+	}
+	for name, update := range refusals {
+		if err := plan("claude-code", update); !errors.Is(err, ErrHarnessCloudProfile) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := plan("cursor", func(args *HarnessInstallArgs) {}); !errors.Is(err, ErrHarnessCloudProfile) {
+		t.Errorf("a harness with no session start: %v", err)
+	}
+	if err := plan("cursor", func(args *HarnessInstallArgs) { args.CloudKeyFile = "" }); err != nil {
+		t.Errorf("cursor's twin, with no key file: %v", err)
+	}
+}
+
 // D-MCP-7: no URnetwork-hosted MCP serves sidecar tools, so server/mcp imports no sidecar package. The server
 // repository is this one's sibling in every checkout that builds both; where it is absent there is nothing to read.
 func TestServerMcpImportsNoSidecar(t *testing.T) {
@@ -365,5 +512,135 @@ func TestOfflinePhaseSpools(t *testing.T) {
 	}
 	if env.hasGap(runId, sidecar.RecordCoverageGapMissedEvent) {
 		t.Error("an event was counted as missed")
+	}
+}
+
+// §16.9's witness bound (owner decision 129; D-TRUST-10): from witness_bound_hours a cloud sidecar's shared-group
+// writes stop, which reaches its record writer as evs refusing its deposits. Through RECORD's own writer, depositing
+// to its sponsor's vault as a tagged sidecar does: while evs refuses, every hook still succeeds, each entry is sealed
+// and kept in the writer's journal, nothing reaches evs, and the run counts no missed event; once evs takes deposits
+// again the same entries land, none lost. The twin, a gate never closed, lands them at the first flush.
+func TestWitnessBoundSpoolsCapture(t *testing.T) {
+	for _, bound := range []bool{true, false} {
+		env := newIngestTestEnv(t)
+		ctx := context.Background()
+		streams := sidecartest.NewFakeRecordStreams(env.clock, nil, nil)
+		vaultId, err := streams.NewRepo(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publicKey, key, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// the cloud agent: tagged, so it has a sponsor and no member, and the sponsor's vault takes its deposits alone
+		agentId := sidecar.NewId()
+		sponsorId := sidecar.NewId()
+		ownerDeviceId := sidecar.NewId()
+		if err := streams.Grant(vaultId, agentId, sidecartest.RecordStreamsScope{Deposit: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := streams.Grant(vaultId, ownerDeviceId, sidecartest.RecordStreamsScope{Read: true, Write: true, Deposit: true}); err != nil {
+			t.Fatal(err)
+		}
+		auth := sidecartest.NewFakeRecordAuth()
+		auth.Append(&sidecartest.FakeRecordAuthFixture{
+			TimeMillis:   env.clock.Now().UnixMilli(),
+			IdentityKeys: map[sidecar.Id][]byte{agentId: publicKey},
+			Members:      map[sidecar.Id]sidecar.Id{ownerDeviceId: sponsorId},
+			Sponsors:     map[sidecar.Id]sidecar.Id{agentId: sponsorId},
+			Repos: map[sidecar.Id]*sidecartest.FakeRecordRepoAuth{vaultId: {
+				Readers:    []sidecar.Id{ownerDeviceId},
+				Writers:    []sidecar.Id{ownerDeviceId},
+				Consented:  []sidecar.Id{ownerDeviceId},
+				Depositors: []sidecar.Id{agentId},
+			}},
+			Vaults: map[sidecar.Id]sidecar.Id{sponsorId: vaultId},
+		})
+		store, err := env.network.LocalStore().Directory("record", "record")
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+			SidecarId:         agentId,
+			IdentityPublicKey: publicKey,
+			Store:             store,
+			Sign: func(purpose string, signedType bridge.SignedType, body []byte, signAgentId *sidecar.Id) (*bridge.Signed, error) {
+				return &bridge.Signed{
+					Body:      bytes.Clone(body),
+					SignerId:  agentId.Bytes(),
+					Signature: ed25519.Sign(key, bridge.SignedBytes(purpose, signedType, body)),
+					Type:      uint32(signedType),
+				}, nil
+			},
+			Runs:     &ingestTestRunView{network: env.network},
+			Streams:  streams.For(agentId),
+			Auth:     func() sidecar.RecordAuthView { return auth.Tip() },
+			Clock:    env.clock,
+			Settings: sidecar.DefaultSidecarSettings().Record,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		env.ingest.detach()
+		env.ingest = NewIngest(&IngestArgs{
+			Server:    env.server,
+			Writers:   func(network McpNetwork) (sidecar.RecordWriter, error) { return record.Writer(), nil },
+			Redactors: func(network McpNetwork) (*sidecar.Redactor, error) { return env.redactor, nil },
+			Record:    sidecar.DefaultSidecarSettings().Record,
+		})
+		deposited := func() int {
+			heads, err := streams.For(ownerDeviceId).DepositRefs(ctx, vaultId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return len(heads)
+		}
+
+		streams.SetGateClosed(vaultId, bound)
+		harness := env.harnessIn(sidecartest.FakeHarnessCodex)
+		steps := []error{
+			harness.Hook(harness.Payload("s1", "UserPromptSubmit", map[string]any{"prompt": "Fix the build"})),
+			harness.ToolCall("s1", true, "Bash", map[string]any{"command": "make"}),
+			harness.ToolCall("s1", false, "Bash", map[string]any{"command": "make"}),
+		}
+		for index, err := range steps {
+			if err != nil {
+				t.Fatalf("bound %t: step %d failed its hook: %v", bound, index, err)
+			}
+		}
+		runId := env.runOf("codex", "s1")
+		flushErr := record.Flush(ctx)
+		if bound {
+			if flushErr == nil || deposited() != 0 {
+				t.Errorf("past the bound: the flush answered %v with %d deposit refs", flushErr, deposited())
+			}
+			if code, refused := sidecar.RecordStreamRefusalCode(flushErr); !refused {
+				t.Errorf("the stop did not arrive as an evs refusal: %v (%v)", flushErr, code)
+			}
+			if env.hasGap(runId, sidecar.RecordCoverageGapMissedEvent) {
+				t.Error("an entry evs refused was counted as a missed event")
+			}
+			// a hook past the bound still succeeds, its entry kept behind the others
+			if err := harness.ToolCall("s1", false, "Bash", map[string]any{"command": "make test"}); err != nil {
+				t.Fatalf("a hook past the bound failed: %v", err)
+			}
+			// the witness returns: evs takes the deposits, the kept entries among them
+			streams.SetGateClosed(vaultId, false)
+			flushErr = record.Flush(ctx)
+		}
+		if flushErr != nil {
+			t.Fatalf("bound %t: the flush once evs takes deposits: %v", bound, flushErr)
+		}
+		if deposited() == 0 {
+			t.Errorf("bound %t: nothing was deposited", bound)
+		}
+		if env.hasGap(runId, sidecar.RecordCoverageGapMissedEvent) {
+			t.Errorf("bound %t: an event was counted as missed", bound)
+		}
+		if violations := streams.Violations(); len(violations) != 0 {
+			t.Errorf("bound %t: %v", bound, violations)
+		}
+		env.ingest.detach()
 	}
 }

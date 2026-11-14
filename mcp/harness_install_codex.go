@@ -29,7 +29,7 @@ type codexInstallAdapter struct{}
 
 // The events ur hooks in Codex, in the order they are written.
 var codexHookEvents = []harnessHookEvent{
-	{name: "SessionStart"},
+	{name: "SessionStart", start: true},
 	{name: "UserPromptSubmit"},
 	{name: "PreToolUse", matcher: "*"},
 	{name: "PermissionRequest", matcher: "*", permission: true},
