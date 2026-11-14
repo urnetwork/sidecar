@@ -62,8 +62,9 @@ func (self *GkmDeliveryCheckArgs) bodyGroupId() []byte {
 
 // §10.9's delivery checks of one delivery at its own state. The error is a wait or a state that cannot answer, never
 // a refusal: ErrGkmAuthAhead while its pin is above view, ErrGkmTimeAhead while a LATE delivery's time is past this
-// clock. A refused STAGED delivery poisons its generation, which the rotation check reports; a refused LATE one
-// poisons nothing but itself.
+// clock. A refused delivery poisons its generation (§10.9's poisoned row): the rotation check reports a STAGED one,
+// and the flow that read a LATE one, the recipient's fetch or a late deliverer's 412, holds the generation as
+// poisoned and alarms naming the signer (FS-104).
 func CheckDelivery(view GkmAuthView, args *GkmDeliveryCheckArgs) (GkmVerdict, error) {
 	if args == nil || args.Delivery == nil || args.Delivery.Body == nil || args.Generation == nil || args.Generation.Rotate == nil || args.Now.IsZero() {
 		return GkmVerdict{}, fmt.Errorf("%w: a delivery check needs the delivery, gen/<g> and a clock", ErrGkmMalformed)
@@ -141,6 +142,10 @@ func CheckDelivery(view GkmAuthView, args *GkmDeliveryCheckArgs) (GkmVerdict, er
 	switch delivery.Type {
 	case GkmWrapTypeReader:
 		if !holders.Contains(GkmHolderLeaf, recipient) && !holders.Contains(GkmHolderAgent, recipient) {
+			if verdict, audit := gkmAuditRefusal(view, stateAt, args.RepoId, recipient, at, args.Now); audit {
+				// §10.8: never silent (gkm_audit.go)
+				return verdict, nil
+			}
 			return gkmRefuse(GkmRefusalDelivery, "a ReaderWrap to no key holder at its state"), nil
 		}
 	case GkmWrapTypeDelegation:

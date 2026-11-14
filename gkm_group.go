@@ -161,6 +161,9 @@ type GkmGroupClient struct {
 	log      Logger
 	lateAsks *GkmLateAsks
 
+	// who waits for a repo's next held generation; its own lock
+	generationWaits gkmGenerationWaits
+
 	stateLock sync.Mutex
 	// the newest verified state the log applier gave
 	state          GkmAuthView
@@ -472,7 +475,12 @@ func (self *GkmGroupClient) putHeldGeneration(repoId Id, held *gkmHeldGeneration
 		return err
 	}
 	defer clear(encoded)
-	return self.args.Secrets.Put(gkmGenerationRecordName(repoId, rotate.GetGeneration()), encoded)
+	if err := self.args.Secrets.Put(gkmGenerationRecordName(repoId, rotate.GetGeneration()), encoded); err != nil {
+		return err
+	}
+	// a directory writer that waits before its rotation looks again (gkm_directory.go)
+	self.generationWaits.held(repoId)
+	return nil
 }
 
 // A repo's pins (R8, 6.2.6): its group, the newest epoch this device adopted with its epoch_authenticator and its

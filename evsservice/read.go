@@ -66,6 +66,7 @@ package evsservice
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -170,6 +171,8 @@ type readAttempt struct {
 	head   *EvsStoredHead
 	pushes *readPushes
 	source *RecordPushSource
+	// format 2: the staged segments the served versions name, for the ranges that follow (read_staged.go)
+	staged map[[sha256.Size]byte]*readStagedSegment
 }
 
 // The attempt for body, its paths parsed and its bounds held.
@@ -290,6 +293,7 @@ func (self *readAttempt) readAt() (*readReply, error) {
 		path.stale = path.tokens.Current == nil
 	}
 	reply := &readReply{head: self.headSummary()}
+	self.staged = nil
 	if self.head.Absent() || !evsHeadExists(head) {
 		// no commit yet: every path is absent, and nothing is after any pin
 		for _, path := range self.paths {
@@ -328,6 +332,7 @@ func (self *readAttempt) readAt() (*readReply, error) {
 		if err != nil {
 			return nil, err
 		}
+		self.noteStaged(path, pathReply)
 		reply.paths = append(reply.paths, pathReply)
 	}
 	return reply, nil
@@ -557,6 +562,10 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 		// removed path's life rather than meeting its removal again (QD-672); the removal's own path version and any
 		// past it still answer the removal
 		if err := self.olderVersion(path, reply); err != nil {
+			return nil, err
+		}
+		// format 2: a replaced versionless version answers `collected` from its T (read_collected.go)
+		if err := self.answerCollected(path, reply); err != nil {
 			return nil, err
 		}
 		return reply, nil

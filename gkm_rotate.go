@@ -506,21 +506,23 @@ func (self *gkmGroupManager) holdGenerationInFlow(ctx context.Context, state Gkm
 		return nil, err
 	}
 
-	key, err := self.openGenerationKey(state, groupId, generation, deliveries, now)
+	key, refusedDeliveries, err := self.openGenerationKey(state, groupId, generation, deliveries, now)
 	if err != nil {
 		return nil, err
 	}
 
-	held := &gkmHeldGeneration{generation: generation, key: key, poisoned: verdict.Refused}
+	// §10.9's poisoned row: a rotation its checks refuse, or a LATE delivery to this device its checks refuse
+	held := &gkmHeldGeneration{generation: generation, key: key, poisoned: verdict.Refused || 0 < len(refusedDeliveries)}
 	if err := client.putHeldGeneration(self.repoId, held); err != nil {
 		return nil, err
 	}
+	self.alarmRefusedDeliveries(groupId, generation, refusedDeliveries)
 	if verdict.Refused {
 		client.alarm(&GkmAlarm{
 			Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: groupId, Generation: generationNumber,
 			SidecarId: generation.SignerId, Reason: verdict.Reason, Detail: verdict.Detail,
 		})
-	} else {
+	} else if len(refusedDeliveries) == 0 {
 		err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
 			pins.groupId = groupId
 			if pins.generation < generationNumber {
@@ -540,24 +542,36 @@ func (self *gkmGroupManager) holdGenerationInFlow(ctx context.Context, state Gkm
 
 // RK_g of a generation this device parsed, by its leaf_wrap where this device's engine holds that epoch, else by a
 // delivery to a ReaderKey it holds, each delivery judged at its own pin before its key is used (GkmUseDelivery). Nil
-// when nothing this device holds opens it.
-func (self *gkmGroupManager) openGenerationKey(state GkmAuthView, groupId Id, generation *GkmGeneration, deliveries []*GkmDelivery, now time.Time) (*EvsRepoKey, error) {
+// when nothing this device holds opens it. Every LATE delivery to this device is judged, opened or not, and those
+// its checks refuse are returned, each a poison of the generation (§10.9's poisoned row; FS-104); a STAGED one is
+// the rotation check's. One that waits, or whose pin this device no longer retains, is refused nothing.
+func (self *gkmGroupManager) openGenerationKey(state GkmAuthView, groupId Id, generation *GkmGeneration, deliveries []*GkmDelivery, now time.Time) (*EvsRepoKey, []*gkmRefusedDelivery, error) {
 	client := self.client
+	refusedDeliveries := []*gkmRefusedDelivery{}
+	for _, delivery := range deliveries {
+		if GkmDeliveryKind(delivery.Body.GetDeliveryKind()) != GkmDeliveryLate {
+			continue
+		}
+		deliveryArgs := &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: generation, GroupId: groupId, Now: now}
+		if deliveryVerdict, err := CheckDelivery(state, deliveryArgs); err == nil && deliveryVerdict.Refused {
+			refusedDeliveries = append(refusedDeliveries, &gkmRefusedDelivery{delivery: delivery, verdict: deliveryVerdict})
+		}
+	}
 	if leafWrap := generation.Rotate.GetLeafWrap(); leafWrap != nil {
 		if group, err := client.loadGroup(groupId); err == nil && group.Epoch() == leafWrap.GetEpoch() {
 			kek, err := MlsKek(group, self.repoId)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			opened, err := OpenGkmLeafWrap(generation, kek)
 			clear(kek)
 			if err == nil {
-				return opened, nil
+				return opened, refusedDeliveries, nil
 			}
 		}
 	}
 	if client.args.ReaderPrivateKey == nil {
-		return nil, nil
+		return nil, refusedDeliveries, nil
 	}
 	yield := client.newYield()
 	for _, delivery := range deliveries {
@@ -570,10 +584,48 @@ func (self *gkmGroupManager) openGenerationKey(state GkmAuthView, groupId Id, ge
 		deliveryArgs := &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: generation, GroupId: groupId, Now: now}
 		opened, deliveryVerdict, err := GkmUseDelivery(state, deliveryArgs, client.args.SidecarId.Bytes(), privateKey)
 		if err == nil && deliveryVerdict.Passed() && opened != nil {
-			return opened, nil
+			return opened, refusedDeliveries, nil
 		}
 	}
-	return nil, nil
+	return nil, refusedDeliveries, nil
+}
+
+// A delivery this device read whose checks refuse it.
+type gkmRefusedDelivery struct {
+	delivery *GkmDelivery
+	verdict  GkmVerdict
+}
+
+// The alarms of deliveries this device's checks refuse, each naming its signer, with head_alarm for a pin off the
+// chain (§10.9's poisoned and judged rows).
+func (self *gkmGroupManager) alarmRefusedDeliveries(groupId Id, generation *GkmGeneration, refusedDeliveries []*gkmRefusedDelivery) {
+	client := self.client
+	for _, refused := range refusedDeliveries {
+		client.alarm(&GkmAlarm{
+			Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: groupId, Generation: generation.Rotate.GetGeneration(),
+			SidecarId: refused.delivery.SignerId, Reason: refused.verdict.Reason, Detail: refused.verdict.Detail,
+		})
+		if refused.verdict.Fork {
+			client.alarm(&GkmAlarm{
+				Kind: GkmAlarmHead, RepoId: self.repoId, GroupId: groupId, Generation: generation.Rotate.GetGeneration(),
+				SidecarId: refused.delivery.SignerId, Reason: GkmRefusalFork, Detail: refused.verdict.Detail,
+			})
+		}
+	}
+}
+
+// §10.9's poisoned row for deliveries this device read and its checks refuse: the generation is held as poisoned,
+// so this device seals nothing more to it and its pending engine rotates past it with cause REMOVE, and each alarm
+// names the delivery's signer. Nothing with no refused delivery.
+func (self *gkmGroupManager) poisonForDeliveries(groupId Id, generation *GkmGeneration, refusedDeliveries []*gkmRefusedDelivery) error {
+	if len(refusedDeliveries) == 0 {
+		return nil
+	}
+	if err := self.client.putHeldGeneration(self.repoId, &gkmHeldGeneration{generation: generation, poisoned: true}); err != nil {
+		return err
+	}
+	self.alarmRefusedDeliveries(groupId, generation, refusedDeliveries)
+	return nil
 }
 
 // A generation this device holds without its key, tried again: a late delivery, or its leaf_wrap's epoch, may have
@@ -586,9 +638,14 @@ func (self *gkmGroupManager) openHeldGenerationInFlow(ctx context.Context, state
 	if err != nil {
 		return err
 	}
-	key, err := self.openGenerationKey(state, groupId, held.generation, deliveries, now)
+	key, refusedDeliveries, err := self.openGenerationKey(state, groupId, held.generation, deliveries, now)
 	if err != nil {
 		return err
+	}
+	if !held.poisoned {
+		if err := self.poisonForDeliveries(groupId, held.generation, refusedDeliveries); err != nil {
+			return err
+		}
 	}
 	if key == nil {
 		self.askLate(ctx, groupId, generationNumber, now)

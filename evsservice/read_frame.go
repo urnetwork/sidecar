@@ -8,7 +8,8 @@
 //	records   a push's record at the place its version's entry names, as stored, with no slot body (QD-806), or a
 //	          part's at the place its seal names
 //	ranges    a segment through SegmentLocator: up to 256 KiB read whole from offset 0, larger ones in 64 KiB-aligned
-//	          ranges covering what was asked, each range over frames past 1 MiB, offset naming each frame's first byte
+//	          ranges covering what was asked, each range over frames past 1 MiB, offset naming each frame's first byte;
+//	          a staged segment a path of the request stages, from its push's record or seg/ (read_staged.go)
 //
 // A path goes in one frame, but for a directory's deltas, which follow its path frame one a frame, each a path frame
 // of the same token path with continues set, carrying that delta alone with its delta_proofs entry beside it (QD-662,
@@ -295,6 +296,10 @@ func (self *readAttempt) streamPushRecord(stream *readStream, readPush *protocol
 // One segment range: whole up to ReadSegmentWholeByteCount, else the aligned range covering it (§11.9's rounds
 // row). A segment evs holds no copy of answers missing.
 func (self *readAttempt) streamRange(stream *readStream, readRange *protocol.EvsReadRange) bool {
+	// format 2: a staged segment one of the request's paths stages is read in its push's record (read_staged.go)
+	if handled, ok := self.streamStagedRange(stream, readRange); handled || !ok {
+		return ok
+	}
 	kind := protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT
 	segmentId := [32]byte(readRange.GetSegmentId())
 	offset := int64(readRange.GetOffset())
