@@ -1332,7 +1332,7 @@ func (self *EvsGitSyncEngine) Ref(ctx context.Context, refId Id) (*EvsGitRefStat
 func evsGitRefStateOf(ref *EvsGitRef) *EvsGitRefState {
 	return &EvsGitRefState{
 		Version: ref.Version, Chain: ref.Chain, Tip: ref.Tip, LastTip: ref.LastTip, Deleted: ref.Deleted, Base: ref.Base,
-		StuckAt: ref.StuckAt,
+		StuckAt: ref.StuckAt, Tainted: slices.Clone(ref.Tainted),
 	}
 }
 

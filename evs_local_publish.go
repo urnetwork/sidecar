@@ -11,7 +11,10 @@
 //	           with its changes against its first parent by the tree reader, a new one held to 8.2.3's rule and an
 //	           import's to git's graph alone
 //	3 changes  the net change from the tree the path state stands at (old's, a deleted ref's last tip's) to new's
-//	           (evs_local_tree.go), none on a tag ref; PlanGitUpdate plans it, and its entries are sealed
+//	           (evs_local_tree.go), none on a tag ref; PlanGitUpdate plans it, and its entries are sealed. A branch's
+//	           re-creating push writes or removes each tainted token path beside it (8.5; 8.2.4's chain row), named
+//	           in the new tree, which PlanGitUpdate walks: a taint below the epoch this client last saw the ref in,
+//	           or below another taint's, matches no push's epoch, and is refused before any request
 //	4 history  every blob a carried commit's change names that B holds and no entry carries, one record each in
 //	           order: a diff against the same path's blob in the commit's first parent where it is smaller, else a
 //	           checkpoint, or chunks past 8 MiB; each in a history segment of 8 MiB, Padmé-padded, uploaded with the
@@ -45,6 +48,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 
@@ -75,6 +79,11 @@ type EvsLocalPublishArgs struct {
 	// re-creating push states its net change against (8.2.4's branch row), nil for one deleted with no tip.
 	Deleted bool
 	LastTip *EvsGitOid
+	// The ref's tainted token paths (EvsGitRef.Tainted), read under the apply lock with Old and BaseVersion: the
+	// token paths a version stopped at, and those after it until the DELETE, changed (8.5). A branch's re-creating push
+	// writes or removes each beside its net change (PlanGitUpdate's tainted row); a DELETE and a tag ref, which hold
+	// no change, take none, and any other update of a ref holding them is refused. Nil for none.
+	Tainted []EvsTaintedPath
 	// An overlay's base as replay holds it from the head (EvsGitRef.base), for a push that does not create its ref or
 	// re-creates it after a DELETE; a new branch's is chosen here by the base search (evs_local_overlay.go), nil for
 	// none.
@@ -138,6 +147,9 @@ func EvsLocalPublish(ctx context.Context, args *EvsLocalPublishArgs) (*EvsLocalP
 	case args.New == nil && (args.BaseVersion == 0 || args.Deleted):
 		return nil, fmt.Errorf("%w: a deletion of a ref that does not stand", ErrEvsGitUpdateInvalid)
 	}
+	if err := evsGitCheckTaints(repo, refId, args); err != nil {
+		return nil, err
+	}
 	objects, err := mount.Objects(ctx)
 	if err != nil {
 		return nil, err
@@ -195,6 +207,41 @@ func EvsLocalPublish(ctx context.Context, args *EvsLocalPublishArgs) (*EvsLocalP
 	}
 }
 
+// The tainted token paths a publish plans: a branch's, on an update with a new tip, none for a DELETE, which carries
+// nothing to check, or a tag ref, which holds no path state (8.2.4, 8.5).
+func evsGitPublishTaints(args *EvsLocalPublishArgs) []EvsTaintedPath {
+	if args.New == nil || bytes.HasPrefix(args.RefName, []byte(evsGitTagRefPrefix)) {
+		return nil
+	}
+	return args.Tainted
+}
+
+// What a publish refuses of the ref's taints before any request (8.5): an update other than the push that re-creates
+// the ref after its DELETE, since a stopped ref takes its deletion and nothing else; and a taint below the epoch this
+// client last verified the ref's head in, or below another taint's, since a ref's epoch never falls, so no push of it
+// can be in that taint's epoch, on which every replaying reader fails closed. PlanGitUpdate holds each taint to the
+// push's own epoch once it has read the head.
+func evsGitCheckTaints(repo *EvsRepo, refId Id, args *EvsLocalPublishArgs) error {
+	tainted := evsGitPublishTaints(args)
+	if len(tainted) == 0 {
+		return nil
+	}
+	if !args.Deleted {
+		return fmt.Errorf("%w: a ref stopped at a refused version takes only its deletion", ErrEvsGitUpdateInvalid)
+	}
+	least, most := tainted[0].Epoch, tainted[0].Epoch
+	for _, path := range tainted[1:] {
+		least, most = min(least, path.Epoch), max(most, path.Epoch)
+	}
+	if state := repo.client.refEpochState(repo.repoId, refId); state != nil {
+		most = max(most, evsCurrentEpoch(state.epoch))
+	}
+	if least < most {
+		return fmt.Errorf("%w: %w: a taint of path epoch %d, where the ref has reached %d", ErrEvsGitUpdateInvalid, ErrEvsGitTaintedPath, least, most)
+	}
+	return nil
+}
+
 // One update as publish builds it: what steps 1 and 2 fixed, which every attempt seals again.
 type evsGitPublishUpdate struct {
 	args    *EvsLocalPublishArgs
@@ -215,6 +262,9 @@ type evsGitPublishUpdate struct {
 	pushIds map[Id]bool
 	// an overlay's base, the head's or the one the base search chose
 	base *protocol.EvsOverlay
+	// a branch update's new tree, and the tainted token paths its re-creating push writes or removes (8.5)
+	nextTree EvsGitOid
+	tainted  []EvsTaintedPath
 }
 
 // Steps 1 and 2 of the file header, and the net change, which no attempt changes.
@@ -364,6 +414,7 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 		if err := self.markReuses(ctx); err != nil {
 			return nil, err
 		}
+		self.nextTree, self.tainted = nextTree, evsGitPublishTaints(args)
 	}
 	if evsLocalPublishUpdateHook != nil {
 		evsLocalPublishUpdateHook(self)
@@ -431,6 +482,40 @@ func (self *evsGitPublishUpdate) markReuses(ctx context.Context) error {
 	return nil
 }
 
+// A branch update's new tree, read by the tree reader through source: what its plan names a tainted token path in
+// (EvsGitTreeEntries).
+type evsGitPublishTree struct {
+	source EvsGitObjectSource
+	root   EvsGitOid
+}
+
+// See EvsGitTreeEntries.
+func (self *evsGitPublishTree) EntriesAt(ctx context.Context, path string) ([]EvsGitRawEntry, bool, error) {
+	at := self.root
+	if path != "" {
+		names, err := evsPathNames(path)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, name := range names {
+			entries, err := evsGitSortedEntries(ctx, self.source, &at)
+			if err != nil {
+				return nil, false, err
+			}
+			index, found := slices.BinarySearchFunc(entries, name, func(entry EvsGitRawEntry, name []byte) int { return bytes.Compare(entry.Name, name) })
+			if !found || entries[index].CanonMode != EvsGitModeDirectory {
+				return nil, false, nil
+			}
+			at = entries[index].Oid
+		}
+	}
+	entries, err := evsGitSortedEntries(ctx, self.source, &at)
+	if err != nil {
+		return nil, false, err
+	}
+	return entries, true, nil
+}
+
 // One attempt on base version baseVersion: steps 3 to 6 of the file header, under a fresh generation and push ids.
 func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion uint64, rebuilds *int) (*EvsLocalPublishResult, error) {
 	repo := self.repo
@@ -442,10 +527,17 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 		repo.client.NoteGeneration(repo.repoId)
 	}
 	git := proto.Clone(self.git).(*protocol.EvsGitUpdate)
-	plan, err := repo.PlanGitUpdate(ctx, &EvsGitPlanArgs{
+	planArgs := &EvsGitPlanArgs{
 		RefName: self.args.RefName, RefId: self.refId, Update: git, Changes: self.changes, BaseVersion: baseVersion,
 		Base: self.base, Blobs: self.objects, Generation: repoKey.Generation(),
-	})
+	}
+	if 0 < len(self.tainted) {
+		planArgs.Tainted = self.tainted
+		planArgs.NextTree = &evsGitPublishTree{
+			source: newEvsGitCachedTrees(self.objects, repo.client.settings.TreeCacheByteCount), root: self.nextTree,
+		}
+	}
+	plan, err := repo.PlanGitUpdate(ctx, planArgs)
 	if err != nil {
 		return nil, err
 	}

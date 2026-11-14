@@ -480,7 +480,7 @@ func (self *EvsGitReceiver) receiveShared(ctx context.Context, session *EvsGitRe
 	result, err := EvsLocalPublish(publishCtx, &EvsLocalPublishArgs{
 		Mount: self.mount, Repo: self.repo, RefName: refName, Old: old, New: command.new,
 		BaseVersion: record.Version, BaseChain: record.Chain, Deleted: record.Deleted, LastTip: record.LastTip,
-		Base: record.Base, State: self.engine, OwnClient: self.ownClient(),
+		Tainted: record.Tainted, Base: record.Base, State: self.engine, OwnClient: self.ownClient(),
 		OnAttempt: func(attempt *EvsGitPublishAttempt) error {
 			sent = true
 			if err := self.journalAttempt(ctx, refId, attempt); err != nil {
@@ -783,8 +783,8 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 	}
 	result, err := EvsLocalPublish(ctx, &EvsLocalPublishArgs{
 		Mount: self.mount, Repo: self.repo, RefName: refName, Old: record.Tip, New: local, BaseVersion: record.Version,
-		BaseChain: record.Chain, Deleted: record.Deleted, LastTip: record.LastTip, Base: record.Base, State: self.engine,
-		OwnClient: self.ownClient(),
+		BaseChain: record.Chain, Deleted: record.Deleted, LastTip: record.LastTip, Tainted: record.Tainted, Base: record.Base,
+		State: self.engine, OwnClient: self.ownClient(),
 		OnAttempt: func(attempt *EvsGitPublishAttempt) error {
 			return self.journalAttempt(ctx, refId, attempt)
 		},
@@ -804,7 +804,8 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 	if evsError, ok := EvsErrorOf(err); ok && slices.Contains(evsLocalQueueHoldCodes, evsError.Code) {
 		return self.hold(ctx, refId, strings.TrimPrefix(evsError.Code.String(), "EVS_REFUSAL_"), local)
 	}
-	if errors.Is(err, ErrEvsDirectoryFull) || errors.Is(err, ErrEvsGitUpdateInvalid) {
+	if errors.Is(err, ErrEvsDirectoryFull) || errors.Is(err, ErrEvsGitUpdateInvalid) || errors.Is(err, ErrEvsGitTaintedPath) {
+		// refused for good on these inputs: held until the local ref moves or `ur evs retry`
 		return self.hold(ctx, refId, evsOneLine(err.Error()), local)
 	}
 	return err

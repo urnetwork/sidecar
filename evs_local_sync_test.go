@@ -4,7 +4,10 @@
 // its sync engine with equal oids and a clean git fsck; a branch and an annotated tag replayed with their source first;
 // each broken line of the check refused with its alarm and the ref left; a committed FORCE and a git-mode PATH_EPOCH
 // raising no alarm; a source the ref waits on; a stopped ref resuming at a DELETE, its re-creating push held to the
-// tainted token paths; the tips log and tip index; and the replayed name index of a branch and of an overlay.
+// tainted token paths; the tips log and tip index; and the replayed name index of a branch and of an overlay. And the
+// fix track evs1-m2-34-tainted-recreate's (8.5; 8.2.4's chain row): a design device's re-creation writing and removing
+// each tainted path, applied by a stopped device and by one mounted afterwards in one replay; and a stopped removal the
+// new tree keeps away, refused before any evs write.
 
 package sidecar
 
@@ -12,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -309,7 +313,8 @@ func TestEvsLocalSyncWaitsOnASourceItCannotReplay(t *testing.T) {
 
 // 8.5's stop and resume: a refused version stops main with its token paths tainted; a DELETE resumes it, the local
 // ref deleted; a re-creating push that neither writes nor removes a tainted path is refused, and one that writes each
-// applies, the taints cleared.
+// applies, the taints cleared. The writer here is given no taint, so its first re-creation leaves a.txt alone as a
+// hand-built push would; a design device's, given them, is TestEvsLocalSyncReCreationWritesAndRemovesTaintedPaths.
 func TestEvsLocalSyncResumesAtADeleteHeldToTaintedPaths(t *testing.T) {
 	publisher := newEvsTestPublisher(t)
 	c1 := publisher.commit(map[string]string{"a.txt": "a\n", "b.txt": "b\n"})
@@ -432,5 +437,142 @@ func TestEvsLocalSyncNameIndex(t *testing.T) {
 	mapper.stateLock.Unlock()
 	if !registered {
 		t.Fatal("the branches' indexes are not registered")
+	}
+}
+
+// Stops the ref of name at a forged version on before, of files and committed by another client, which every honest
+// reader refuses: device b replays it and holds its token paths tainted. Then beforeDelete runs, if any, and the
+// writer, stopped as b is and so holding before as the tip, deletes the ref on the head, which b applies. Answers b,
+// whose record holds the taints the re-creating push takes.
+func (self *evsTestPublisher) stopAndDelete(name string, before EvsGitOid, files map[string]string, beforeDelete func()) *evsTestDevice {
+	self.t.Helper()
+	forged, _ := self.mount.history.commit(self.tree(files), evsTestId("another client").String()+evsCommitterDomain, before)
+	if _, err := self.publish(name, &forged, func(args *EvsLocalPublishArgs) { args.OwnClient = func(Id) bool { return true } }); err != nil {
+		self.t.Fatal(err)
+	}
+	device := newEvsTestDevice(self.t, self, "device b")
+	device.replay(name)
+	if ref := device.ref(name); ref.StuckAt == 0 || len(ref.Tainted) == 0 {
+		self.t.Fatalf("not stopped: %+v", ref)
+	}
+	if beforeDelete != nil {
+		beforeDelete()
+	}
+	ref := self.ref(name)
+	ref.tip = &before
+	self.mount.evsTip(ref.refId, before)
+	if _, err := self.publish(name, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	device.replay(name)
+	if ref := device.ref(name); !ref.Deleted || ref.StuckAt != 0 || len(ref.Tainted) == 0 {
+		self.t.Fatalf("after the DELETE %+v", ref)
+	}
+	return device
+}
+
+// 8.6's re-creating push at M2 (DESIGN-DETAILS 8.5; 8.2.4's chain row, amendment 16-D): main is stopped at a forged
+// version that changes a.txt, plants x.txt at the top and docs/y.md below, and is deleted. A design device re-creates
+// it with a change to b.txt alone, so its net change leaves every tainted path alone: it writes a.txt again where its
+// file stands, one checkpoint of the tree's blob; removes x.txt and docs/y.md where they do not; and gives the root and
+// docs the tables the tree gives them. Device b, which stopped, applies the push and its taints clear, and a device
+// mounted afterwards, whose one replay runs from the first version through the stop, the DELETE and the re-creation,
+// reaches the same tip.
+func TestEvsLocalSyncReCreationWritesAndRemovesTaintedPaths(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	text := strings.Repeat("a line of a.txt that a diff would rest on\n", 64)
+	c1 := publisher.commit(map[string]string{"a.txt": text, "b.txt": "b\n", "docs/keep.md": "k\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	device := publisher.stopAndDelete("main", c1, map[string]string{
+		"a.txt": text + "forged\n", "b.txt": "b\n", "x.txt": "planted\n", "docs/keep.md": "k\n", "docs/y.md": "planted\n",
+	}, nil)
+	// a.txt, x.txt, docs/y.md, and the root's and docs's deltas that added the two planted names
+	tainted := device.ref("main").Tainted
+	if len(tainted) != 5 {
+		t.Fatalf("taints %v", tainted)
+	}
+	next := publisher.commit(map[string]string{"a.txt": text, "b.txt": "b two\n", "docs/keep.md": "k\n"}, c1)
+	result, err := publisher.publish("main", &next, func(args *EvsLocalPublishArgs) { args.Tainted = tainted })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changes := publisher.payload("main", result.Version).Changes; len(changes) != 6 {
+		t.Fatalf("the re-creation states %d changes", len(changes))
+	}
+	if chain := publisher.writer.entry(t, "a.txt").GetChain(); len(chain) != 1 {
+		t.Fatalf("a.txt written again as a chain of %d", len(chain))
+	}
+	world := publisher.writer.world
+	world.stateLock.Lock()
+	removed := world.paths["x.txt"].removal != nil && world.paths["docs/y.md"].removal != nil
+	rootRows, docsRows := len(world.paths[""].rows), len(world.paths["docs"].rows)
+	world.stateLock.Unlock()
+	if !removed || rootRows != 3 || docsRows != 1 {
+		t.Fatalf("the planted paths removed %v; the root's rows %d, docs's %d", removed, rootRows, docsRows)
+	}
+	device.replay("main")
+	ref := device.ref("main")
+	if ref.StuckAt != 0 || ref.Deleted || !evsOidEqual(ref.Tip, &next) || len(ref.Tainted) != 0 {
+		t.Fatalf("device b after the re-creation %+v", ref)
+	}
+	if local := device.local("refs/heads/main"); local == nil || *local != next {
+		t.Fatalf("device b's main is %v", local)
+	}
+	late := newEvsTestDevice(t, publisher, "device c")
+	late.replay("main")
+	if ref := late.ref("main"); ref.StuckAt != 0 || !evsOidEqual(ref.Tip, &next) || len(ref.Tainted) != 0 || len(ref.Stopped) != 1 {
+		t.Fatalf("a later mount %+v", ref)
+	}
+	if content := evsTestGit(t, late.mount.BareDir, "cat-file", "-p", hex.EncodeToString(next[:])+":a.txt"); content != text {
+		t.Fatalf("a.txt on a later mount %q", content)
+	}
+	if fsck := evsTestFsck(t, late.mount.BareDir); strings.Join(fsck, "") != "" {
+		t.Fatalf("fsck %v", fsck)
+	}
+	if len(device.alarms()) != 1 || len(late.alarms()) != 1 {
+		t.Fatalf("alarms %v and %v", device.alarms(), late.alarms())
+	}
+}
+
+// A stopped version removed b.txt. A re-creation whose tree lacks it too can neither remove it, which evs refuses on
+// a path that does not stand, nor write it, and is refused before any evs write (question
+// evs1-m2-34-tainted-recreate-removed-taint). One whose tree keeps it writes it again, a creation over the removal
+// with its row restored in the root's table, and device b applies it, its taints cleared.
+func TestEvsLocalSyncReCreationOfAPathTheStopRemoved(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	c1 := publisher.commit(map[string]string{"a.txt": "a\n", "b.txt": "b\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	device := publisher.stopAndDelete("main", c1, map[string]string{"a.txt": "a\n"}, nil)
+	tainted := device.ref("main").Tainted
+	if len(tainted) != 2 {
+		t.Fatalf("taints %v", tainted)
+	}
+	posted, uploads := publisher.posted(), len(publisher.writer.server.uploads)
+	lacking := publisher.commit(map[string]string{"a.txt": "a two\n"}, c1)
+	if _, err := publisher.publish("main", &lacking, func(args *EvsLocalPublishArgs) { args.Tainted = tainted }); !errors.Is(err, ErrEvsGitTaintedPath) ||
+		publisher.posted() != posted || len(publisher.writer.server.uploads) != uploads {
+		t.Fatalf("a re-creation lacking the removed path: %v", err)
+	}
+	kept := publisher.commit(map[string]string{"a.txt": "a two\n", "b.txt": "b\n"}, c1)
+	if _, err := publisher.publish("main", &kept, func(args *EvsLocalPublishArgs) { args.Tainted = tainted }); err != nil {
+		t.Fatal(err)
+	}
+	world := publisher.writer.world
+	world.stateLock.Lock()
+	restored := world.paths["b.txt"].removal == nil && len(world.paths[""].rows) == 2
+	world.stateLock.Unlock()
+	if !restored {
+		t.Fatal("b.txt is not written again with its row")
+	}
+	device.replay("main")
+	if ref := device.ref("main"); ref.StuckAt != 0 || !evsOidEqual(ref.Tip, &kept) || len(ref.Tainted) != 0 {
+		t.Fatalf("device b %+v", ref)
+	}
+	if content := evsTestGit(t, device.mount.BareDir, "cat-file", "-p", hex.EncodeToString(kept[:])+":b.txt"); content != "b\n" {
+		t.Fatalf("b.txt %q", content)
 	}
 }
