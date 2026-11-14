@@ -625,6 +625,7 @@ secret record_entry_salt record_chain.go
 secret record_entry_salt record_deposit.go
 secret record_entry_salt record_seal.go
 secret record_log_key record_log.go
+secret record_reach_visitor_key record_reach.go
 secret record_slot_row evs_slot.go
 secret recovery_code keys_recovery.go
 secret recovery_ed25519_seed keys_recovery.go

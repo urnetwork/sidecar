@@ -61,9 +61,9 @@ type AdmissionSuiteSettings struct {
 	// since every wait is a monitor's. 120 s, past a T3 row's store round trips.
 	RowTimeout time.Duration
 	// Whether api appends a tick that activates a recovery window its verifier holds due (§7.9's Recovery). T2's
-	// FakeApi appends every tick and leaves the judgment to readers; server's sequencer refuses every activation until
-	// its checkConfigLogTick takes them (TEAM-M2-14), so a T3 run sets this false and a row's activation clauses run
-	// on T2 alone, which the T3 test logs.
+	// FakeApi appends every tick and leaves the judgment to readers; server's sequencer judges one as readers do
+	// (ConfigLog.CheckTick; TEAM-M2-14), appends it when due and refuses it before. Both are true; a tier whose api
+	// takes none sets this false, and a row's activation clauses are then skipped and logged there.
 	ApiTakesActivations bool
 	// Whether the tier's api can append what its own check refuses, as a malicious sequencer does (AdmissionApi's
 	// SequenceAnyway). A forged clause runs on T2 alone (plan-TEST-small-readings reading 6), so T3 sets this false and

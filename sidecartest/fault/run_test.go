@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -925,10 +926,9 @@ func TestEveryWriteUnknownLeavesARowsOwnHold(t *testing.T) {
 // it runs out of the schedule's order. The run fails rather than pass under an order it did not choose.
 func TestARunInWhichAnActorStalledFails(t *testing.T) {
 	settings := sidecartest.DefaultNetSettings()
-	// writerA stalls however long this is. writerB only closes the gate, but on a loaded machine it can
-	// keep the baton past a 1 ms timeout and be named as well, so it gets room here, and the check asks
-	// only that writerA is among those named.
+	// writerA stalls however long this is, and writerB, which only closes the gate, is never blocked
 	settings.Barriers.StallTimeout = 50 * time.Millisecond
+	settings.Barriers.StallSampleInterval = 10 * time.Millisecond
 	net := sidecartest.NewNet(t.Context(), settings)
 	defer net.Close()
 	gate := make(chan struct{})
@@ -953,8 +953,98 @@ func TestARunInWhichAnActorStalledFails(t *testing.T) {
 			stalled = stalled[i+2:]
 		}
 	}
-	if !slices.Contains(strings.Split(stalled, ", "), "writerA") {
+	if stalled != "writerA" {
 		t.Errorf("%s", result)
+	}
+	if !slices.Contains(result.Trace, "ran      writerB    ") {
+		t.Errorf("writerB never took the baton writerA lost: %s", result)
+	}
+}
+
+// An actor busy between two barriers for longer than the stall timeout is slow, not blocked, as any actor
+// is on a loaded machine. It keeps the baton, the actor behind it runs after it as the schedule has it, and
+// the run passes.
+func TestARunInWhichAnActorIsSlowPasses(t *testing.T) {
+	settings := sidecartest.DefaultNetSettings()
+	settings.Barriers.StallTimeout = 20 * time.Millisecond
+	settings.Barriers.StallSampleInterval = 5 * time.Millisecond
+	net := sidecartest.NewNet(t.Context(), settings)
+	defer net.Close()
+	stop := &atomic.Bool{}
+	defer stop.Store(true)
+	result := Run(t.Context(), &Schedule{
+		Id: "slow",
+		Steps: []*Step{
+			// started first, so it takes the baton first, and works with it past the bound, until the
+			// driver has looked and found it working
+			{Actor: "writerA", Background: true, Action: func(ctx context.Context, net *Net) error {
+				for !stop.Load() && !slices.Contains(net.Barriers().SlowActors(), "writerA") {
+				}
+				net.Barriers().Hit("fault.slow.worked", "")
+				return nil
+			}},
+			{Actor: "writerB", Action: func(ctx context.Context, net *Net) error {
+				net.Barriers().Hit("fault.slow.behind", "")
+				return nil
+			}},
+		},
+	}, net)
+	if result.Err != nil {
+		t.Fatalf("%s", result)
+	}
+	want := []string{
+		"ran      writerA    ",
+		"passed   writerA    fault.slow.worked",
+		"ran      writerB    ",
+		"passed   writerB    fault.slow.behind",
+	}
+	if !slices.Equal(result.Trace, want) {
+		t.Errorf("%s", result)
+	}
+	if !slices.Equal(result.Slow, []string{"writerA"}) {
+		t.Errorf("slow %v", result.Slow)
+	}
+}
+
+// A busy actor keeps the baton only as long as §22.8 lets a schedule wait: the wait behind it fails the
+// run with its trace, as a wait's error and not as a stall, and nothing ran out of the schedule's order.
+func TestARunInWhichAnActorWorksPastTheWaitFails(t *testing.T) {
+	settings := sidecartest.DefaultNetSettings()
+	settings.Barriers.StallTimeout = 20 * time.Millisecond
+	settings.Barriers.StallSampleInterval = 5 * time.Millisecond
+	settings.Barriers.AwaitTimeout = 300 * time.Millisecond
+	net := sidecartest.NewNet(t.Context(), settings)
+	defer net.Close()
+	stop := &atomic.Bool{}
+	worked := make(chan struct{})
+	result := Run(t.Context(), &Schedule{
+		Id: "busy",
+		Steps: []*Step{
+			{Actor: "writerA", Background: true, Action: func(ctx context.Context, net *Net) error {
+				defer close(worked)
+				for !stop.Load() {
+				}
+				return nil
+			}},
+			{Actor: "writerB", Action: func(ctx context.Context, net *Net) error {
+				return nil
+			}},
+		},
+	}, net)
+	// the actor works on until here, so it was working at every look the driver took
+	stop.Store(true)
+	<-worked
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "waited 300ms for actor writerB to end, with writerA holding the baton") {
+		t.Errorf("%s", result)
+	}
+	if result.Err != nil && strings.Contains(result.Err.Error(), "stalled") {
+		t.Errorf("%s", result)
+	}
+	if !slices.Equal(result.Trace, []string{"ran      writerA    "}) {
+		t.Errorf("%s", result)
+	}
+	if !slices.Equal(result.Slow, []string{"writerA"}) {
+		t.Errorf("slow %v", result.Slow)
 	}
 }
 
