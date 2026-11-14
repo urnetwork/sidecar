@@ -13,12 +13,80 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
+
+// The kinds of admission a test hosts a Sidecar under.
+type testUrAdmission int
+
+const (
+	testUrMemberDevice testUrAdmission = iota
+	testUrEphemeral
+	testUrTagged
+)
+
+// A Sidecar enrolled in network on the instance and admitted there by its owner's device as kind says: a member device
+// of the owner, an ephemeral sidecar of the owner, or one tagged with a tag of the network's, the last two for a day.
+func (self *testUrFollowWorld) hostAs(network *sidecartest.AdmissionNet, kind testUrAdmission) *sidecar.Sidecar {
+	self.t.Helper()
+	if kind == testUrMemberDevice {
+		return self.host(network, nil)
+	}
+	running, err := self.instance.AddSidecarIn(network.NetworkId(), nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	identity := running.Identity()
+	admit := &protocol.SidecarAdmit{
+		Header:            network.Header(),
+		NetworkId:         network.NetworkId().Bytes(),
+		SidecarId:         identity.SidecarId.Bytes(),
+		IdentityPublicKey: identity.IdentityPublicKey,
+		IdentityAlg:       "ed25519",
+		NotAfter:          network.Clock().Now().Add(24 * time.Hour).UnixMilli(),
+	}
+	switch kind {
+	case testUrEphemeral:
+		admit.MemberId, admit.Ephemeral = network.Owner().MemberId.Bytes(), true
+	case testUrTagged:
+		// a policy whose tag the network's admins own, so the owner's device admits under it: its first rule keeps the
+		// implicit document's member reach, and its second names the tag, since the compile writes an atom only for a tag
+		// a rule names
+		plan, _ := network.SaveAclPolicy([]byte(`{
+			"tagOwners": { "tag:agents": ["autogroup:admin"] },
+			"grants": [
+				{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["*"], "allow": ["*"] },
+				{ "src": ["tag:agents"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
+			],
+		}`), nil)
+		tagId, ok := sidecartest.AclTagAtom(plan, "agents")
+		if !ok {
+			self.t.Fatal("the policy's tag has no atom")
+		}
+		admit.Header = network.Header()
+		admit.TagIds = [][]byte{tagId.Bytes()}
+	}
+	network.MustLand(network.Sign(network.Owner(), bridge.SignedType_SIGNED_SIDECAR_ADMIT, admit))
+	return running
+}
+
+// running's clients as the hooks made them, nil for none.
+func testUrClientsOf(running *sidecar.Sidecar) *urNetworkClients {
+	urNetworkClientsLock.Lock()
+	defer urNetworkClientsLock.Unlock()
+	return urNetworkClientsBySidecar[running]
+}
 
 // A head reader that hands each read's answer, and what the network's follower held as its newest verified state at
 // the read, to answers, reading through next.
@@ -156,7 +224,8 @@ func TestDaemonBuildsEachNetworksClients(t *testing.T) {
 
 // urDaemonEvsClient refuses a network whose follower refused its log, naming the refusal, and git's service through the
 // daemon answers that network's session with git's ERR line saying so; a standing network's session goes to its own
-// evs client's git service, which answers with its local tier's own reason where evs serves nothing.
+// evs client's git service, which answers with its local tier's own reason where evs serves nothing, its mount's hooks
+// exec'ing the daemon's own ur git-hook under its instance, so a push there reaches the daemon.
 func TestDaemonEvsClientWaitsForTheFollowerToStand(t *testing.T) {
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
@@ -164,7 +233,11 @@ func TestDaemonEvsClientWaitsForTheFollowerToStand(t *testing.T) {
 	}
 	held := urDaemonClients
 	t.Cleanup(func() { urDaemonClients = held })
-	urDaemonClients = &urDaemonClientsArgs{StateDirectory: t.TempDir(), GitPath: gitPath, Log: sidecar.NewNoopLogger()}
+	hookCommand, hookEnvironment := urDaemonGitHookCommand("/opt/ur/bin/ur", "work")
+	urDaemonClients = &urDaemonClientsArgs{
+		StateDirectory: t.TempDir(), GitPath: gitPath, HookCommand: hookCommand, HookEnvironment: hookEnvironment,
+		Log: sidecar.NewNoopLogger(),
+	}
 
 	world := newTestUrFollowWorld(t, 2)
 	good, refused := world.networks[0], world.networks[1]
@@ -182,6 +255,7 @@ func TestDaemonEvsClientWaitsForTheFollowerToStand(t *testing.T) {
 		t.Fatalf("the refused network's evs client: %v", err)
 	}
 	// the session the daemon's git mode hands its service once <net> resolves (sidecar.NewDaemonGitMode)
+	repoId := sidecar.NewId()
 	session := func(running *sidecar.Sidecar) string {
 		t.Helper()
 		stream := &bytes.Buffer{}
@@ -189,7 +263,7 @@ func TestDaemonEvsClientWaitsForTheFollowerToStand(t *testing.T) {
 			Hello:     &sidecar.DaemonHello{Mode: sidecar.DaemonModeGit},
 			NetworkId: *running.NetworkId(),
 			Sidecar:   running,
-			Repo:      "id:" + sidecar.NewId().String(),
+			Repo:      "id:" + repoId.String(),
 			Service:   "git-upload-pack",
 			Stream:    stream,
 		})
@@ -206,6 +280,27 @@ func TestDaemonEvsClientWaitsForTheFollowerToStand(t *testing.T) {
 	answer := session(goodSidecar)
 	if !strings.Contains(answer, "ERR ur: the repo cannot be read from evs now") {
 		t.Fatalf("the standing network's session: %q", answer)
+	}
+	client, err := urDaemonEvsClient(goodSidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mounts, err := client.Mounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mount, ok := mounts.Get(repoId)
+	if !ok {
+		t.Fatal("the session made no mount")
+	}
+	for _, hook := range []string{sidecar.EvsGitHookPreReceive, sidecar.EvsGitHookProcReceive} {
+		script, err := os.ReadFile(filepath.Join(mount.HooksDir, hook))
+		if err != nil || !strings.Contains(string(script), "exec '/opt/ur/bin/ur' 'git-hook' '"+hook+"'") {
+			t.Fatalf("the mount's %s hook: %q %v", hook, script, err)
+		}
+	}
+	if environment := mounts.ReceiveEnvironment(&sidecar.EvsGitReceiveSession{Id: "s"}); !slices.Contains(environment, "UR_INSTANCE=work") {
+		t.Fatalf("a push's hooks run with %v", environment)
 	}
 }
 
@@ -228,7 +323,12 @@ func TestDaemonWithholdsEveryBaseWithEitherHookUnset(t *testing.T) {
 		t.Fatal("a follower with no key client stood")
 	}
 
+	// the clients took the hook once, when they were made, so its restoring, which a follower's retry may meet on another
+	// goroutine, changes nothing of theirs
 	urDaemonGkmClient = held
+	if _, err := testUrClientsOf(running).evsClient(); !errors.Is(err, errUrNoKeyClient) {
+		t.Fatalf("the clients made with no key client hook, after it was set: %v", err)
+	}
 	urDaemonConfigHeads = nil
 	unread := world.host(world.networks[1], nil)
 	if follower := unread.ConfigFollower(); follower == nil || follower.Heads() != nil {
@@ -255,5 +355,67 @@ func TestDaemonReadsBaseOneAtTheStartsState(t *testing.T) {
 	}
 	if running.ConfigFollower().Client() != nil {
 		t.Fatal("a follower stood on a base its head reader withheld")
+	}
+	// the start's genesis state names neither this sidecar's row nor it as the Genesis's owner, so no key client is
+	// chosen for it, and none answers a generation from the keychain
+	if !errors.Is(read.err, errUrKeysUnchosen) {
+		t.Fatalf("base 1's read stopped at %v, not at the unchosen key client", read.err)
+	}
+	if clients := testUrClientsOf(running); clients == nil || clients.builtGroup() != nil {
+		t.Fatal("a group client was built before a state named this sidecar")
+	}
+}
+
+// Each network's key client is chosen from its sidecar's row at the first verified state that names it: a member
+// device's holds a leaf, its MLS engine built under the admission its row names; an ephemeral sidecar's and a tagged
+// one's hold wraps only, built with no MLS engine, so a group creation refuses as one that holds no leaf, the network's
+// engine is never built, and the upkeep keeps no KeyPackage for them.
+func TestDaemonChoosesEachKeyClientFromItsRow(t *testing.T) {
+	world := newTestUrFollowWorld(t, 3)
+	kinds := []testUrAdmission{testUrMemberDevice, testUrEphemeral, testUrTagged}
+	for i, network := range world.networks {
+		running := world.hostAs(network, kinds[i])
+		world.standing(running, network)
+		gkm, err := urDaemonGkmClient(running)
+		if err != nil {
+			t.Fatalf("network %d's key client: %v", i, err)
+		}
+		clients := testUrClientsOf(running)
+		group, err := clients.groupClient()
+		if err != nil {
+			t.Fatalf("network %d's group client: %v", i, err)
+		}
+		if again, _ := clients.groupClient(); again != group {
+			t.Fatalf("network %d built two group clients", i)
+		}
+		member := kinds[i] == testUrMemberDevice
+		if clients.leaf != member || clients.upkeepRole().MemberDevice != member {
+			t.Fatalf("network %d (kind %d): leaf %t, member device %t", i, kinds[i], clients.leaf, clients.upkeepRole().MemberDevice)
+		}
+		configRepoId := network.ConfigRepoId()
+		_, created := gkm.CreateGroup(world.ctx, &sidecar.GkmCreateGroupArgs{
+			NetworkId: network.NetworkId(), RepoId: configRepoId, Kind: protocol.RepoKind_REPO_KIND_CONFIG,
+		})
+		if member {
+			engine, err := clients.mls.get()
+			row := clients.sidecarRow()
+			if err != nil || engine == nil || !bytes.Equal(clients.mls.admissionSha256, row.GetAdmissionSha256()) {
+				t.Fatalf("network %d's MLS engine: %v", i, err)
+			}
+			continue
+		}
+		// the group client's own refusal, which it answers before any state or engine is asked: it holds no engine
+		if !errors.Is(created, sidecar.ErrGkmUnavailable) || !strings.Contains(created.Error(), "creates no group") {
+			t.Fatalf("network %d's group creation by a sidecar with no leaf: %v", i, created)
+		}
+		if _, err := clients.mls.get(); !errors.Is(err, sidecar.ErrGkmUnavailable) {
+			t.Fatalf("network %d's MLS engine for a sidecar with no leaf: %v", i, err)
+		}
+		clients.mls.stateLock.Lock()
+		engine := clients.mls.engine
+		clients.mls.stateLock.Unlock()
+		if engine != nil {
+			t.Fatalf("network %d built an MLS engine for a sidecar with no leaf", i)
+		}
 	}
 }
