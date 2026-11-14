@@ -4179,7 +4179,7 @@ type EvsSlotKey struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	KeyIndex      uint32                 `protobuf:"varint,1,opt,name=key_index,json=keyIndex,proto3" json:"key_index,omitempty"` // 0 to 63, never reused within its slot
 	Generation    uint64                 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`             // g: fek_g wraps it, or, for a deposit, g's drop key
-	Wrapped       []byte                 `protobuf:"bytes,3,opt,name=wrapped,proto3" json:"wrapped,omitempty"`                    // EVS-FORMAT.md's wrapped-key block under fek_g, or a deposit's HPKE bytes
+	Wrapped       []byte                 `protobuf:"bytes,3,opt,name=wrapped,proto3" json:"wrapped,omitempty"`                    // EVS-FORMAT.md's 72 B key or 104 B record slot row block under fek_g, or HPKE
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

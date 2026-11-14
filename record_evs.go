@@ -1191,8 +1191,9 @@ func (self *RecordEvsStreams) Erase(ctx context.Context, repoId Id, erase *Recor
 	}
 	if journal == nil {
 		args := &EvsEraseArgs{ErasureId: erase.ErasureId, Complete: erase.Complete, Note: erase.SealedNote}
+		slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 		for _, key := range erase.Keys {
-			if EvsSlotMaxKeyCount <= key.KeyIndex {
+			if uint64(slotMaxKeyCount) <= uint64(key.KeyIndex) {
 				return nil, fmt.Errorf("%w: key index %d", ErrRecordDraftInvalid, key.KeyIndex)
 			}
 			args.Keys = append(args.Keys, &EvsErasedKey{SlotId: key.SlotId, KeyIndex: uint16(key.KeyIndex)})

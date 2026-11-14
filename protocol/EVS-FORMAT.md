@@ -151,6 +151,8 @@ EVS1-M2-04 owns the record and segment codecs and pins these in `testdata/evs/re
 
 A deposit's slot key is HPKE in base mode with §10.6's wraps' suite, X-Wing (`MLKEM768X25519`), HKDF-SHA256 and AES-128-GCM, info "UR evs 1.0 deposit key" and AAD repo_id || u64be(g), g the drop key's generation, which `EvsSlotKey.generation` carries: enc 1,120 B | the 32 B key sealed | 16 B tag, 1,168 B. A **slot object** lists its keys in ascending `key_index`, all wrapped one way, under fek or to a drop key; a slot every key of which was erased stays, holding none.
 
+**Record slot rows** (QD-739; question record-m2-01-slot-row-salt, option 1). A record log's stream push keeps its entries' keys in its one slot as rows, not object keys: a row is an entry's 32 B key || its 256-bit salt, 64 B (RECORD.md section 5.2), and the slot holds it as a 104 B **record slot row block**: 24 B nonce | the 64 B row sealed | 16 B tag, under fek_g, g the `EvsSlotKey.generation`, AAD "UR evs 1.0 record slot row" || repo_id || u64be(g). The key and the salt share one block, so the ERASE naming the row's `(slot_id, key_index)` destroys both at once, and neither sits in the entry file, whose own key is another slot's. The label keeps a row from opening as an object key and a key as a row; a slot-keyed record header names an object key's 72 B block, never a row. A slot's keys are all of one width, 72 B, 104 B or 1,168 B, which is all evs checks of them: it opens none (I-1). 64 rows are 6,656 B of blocks, and their slot, each key's index, generation and framing included, stays within §11.8's 8 KiB at any generation.
+
 ## Sealed values and names
 
 - `EvsEntryVersion.sealed_fields` opens to `EvsSealedFields`, and a push's sealed metadata to `EvsSealedMetadata`. Each is sealed as 24 B nonce | ciphertext | 16 B tag under manifest_g, g the push's generation, AAD "UR evs 1.0 fields" or "UR evs 1.0 metadata" || repo_id || u64be(g) (#9). `content_sha256` is set for versioning 1 and 2 only, which are format 2's.
@@ -228,7 +230,7 @@ A record's body is its items in the order §11.8's record row lists them, each u
 | `head/<repo>/<ref>` | `EvsHead` | server-internal: readers get `EvsHeadSummary` |
 | `log/<repo>/<ref>/<n>` | `EvsLogPage` | built alike by any writer, so a 412 on equal bytes is success; this message is this file's |
 | `idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e` | `EvsIndexEntry` | per file up to four `EvsIndexVersion`s, newest first, the newest whole and every other with its inline records elided (Inline records, above); a directory's table with `names_through`; a removal's marker; a drop mark, which format-1 writers keep |
-| `slot/<repo>/<slot_id>` | `EvsSlotObject` | up to 64 keys in ascending index; an erased key leaves the list and no index shifts (#9); a key's `wrapped` is the 72 B wrapped-key block a segment carries, under fek of the key's generation, and a deposit's is HPKE-XWing to that generation's drop key, as above |
+| `slot/<repo>/<slot_id>` | `EvsSlotObject` | up to 64 keys in ascending index; an erased key leaves the list and no index shifts (#9); a key's `wrapped` is the 72 B wrapped-key block a segment carries, under fek of the key's generation, a record log's row the 104 B record slot row block under the same fek (QD-739), and a deposit's is HPKE-XWing to that generation's drop key, as above; one width a slot |
 | `pmap/<repo>/<ref>/<p>/<map>/<part>/_` | a Signed `EvsPathMap` part | |
 
 | `pidx/<repo>/<ref>/<v_first>-<id>` | `EvsPidxEntry` | create-only, never extended: one container's records of one ref, each with its version (a part its seal's), batch record type, offset and length in the container and its batch `EvsPlace`, the log pages a pack holds and the segment ids its records introduce; `v_first` zero-padded to 20 digits and `<id>` the container's id, so keys under a ref share one length (EVSB-M2-10) |
@@ -339,7 +341,7 @@ For design-records, each is a reading that changes no D- item:
 | Segment public header | "URvs" \| format u8 \| flags u8 \| 2 zero bytes \| repo_id \| u64 generation; flags 0 |
 | Frame AAD widths | u64 generation, u32 frame index |
 | Names | Under manifest_p, p the row's path epoch; AAD repo_id \| u64 p \| parent token \| child token |
-| Slot keys | A fek-wrapped key is the segment's 72 B wrapped-key block, its AAD included |
+| Slot keys | A fek-wrapped key is the segment's 72 B wrapped-key block, its AAD included; a record slot row is QD-739's 104 B block under its own label |
 | Payload items | Sections 7, 8, 12, 13 and 14 as tabled above |
 | Batch record bodies | Items in §11.8's order, each u32 length \| bytes |
 | `log/` | `EvsLogPage` |
