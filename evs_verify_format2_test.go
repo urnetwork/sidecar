@@ -601,7 +601,13 @@ func TestEvsFormat2CollectedVerdicts(t *testing.T) {
 	world.push(&evsTestChange{path: "big.bin", content: []byte("two"), format2: evsTestVersionless(versionless, "two")})
 	world.push(&evsTestChange{path: "kept.txt", content: []byte("one")})
 	world.push(&evsTestChange{path: "kept.txt", content: []byte("two")})
-	world.mutatePath = collected
+	// evs as it is: the replaced version alone answers collected, and the fresh read the reader's gone row makes
+	// (evs_read_versionless.go) finds the path's newest version served
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		if reply.GetVersion().GetCommitVersion() == 1 {
+			reply.State = protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED
+		}
+	}
 
 	// the replaced version, by number
 	reader := evsTestFormat2Reader(t, world)
@@ -619,6 +625,7 @@ func TestEvsFormat2CollectedVerdicts(t *testing.T) {
 	}
 
 	// the path's newest version
+	world.mutatePath = collected
 	reader = evsTestFormat2Reader(t, world)
 	if _, err := evsTestVerifiedPath(t, reader, world, nil, "big.bin", 0); !errors.Is(err, ErrEvsObjectMissing) {
 		t.Fatalf("collected for a newest version: %v", err)

@@ -17,7 +17,10 @@
 // statement alone, which the reader takes as E4 when its push id is the prev_push_id the newer version names, and
 // asks again naming that statement's epoch (evs_epoch_read.go), one more round per epoch boundary the walk crosses.
 //
-// Format 1's versions are all kept, so each reads state kept; collected, drop_pending and dropped are format 2's.
+// Format 1's versions are all kept, so each reads state kept. A format-2 reader reports each version's versioning and
+// reads a replaced versionless version as collected once evs answers so (EVS2-M10-18); when that is the first version
+// the walk reads, nothing newer has shown its replacement, and the reader's gone row decides (evs_read_versionless.go).
+// drop_pending and dropped are EVS2-M10-22's.
 // Each version carries the slot ids its entry names, read from the verified entry without opening a key, so an
 // erasing device names every retained version's slot keys from History even once some are gone (§11.12).
 //
@@ -28,6 +31,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -105,6 +109,15 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, args.Path, nil)
 			return nil, fmt.Errorf("%w: a version its successor does not name", ErrEvsEntryRefused)
 		}
+		state := "kept"
+		if verified.Collected {
+			if len(history.Versions) == 0 {
+				if err := self.versionlessGone(ctx, result, verified); !errors.Is(err, ErrEvsCollected) {
+					return nil, err
+				}
+			}
+			state = "collected"
+		}
 		info := evsFileInfoOf(refId, result.head, verified)
 		slotIds := []Id{}
 		for _, slotIdBytes := range entry.GetSlotIds() {
@@ -122,7 +135,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			ClientId:        info.ClientId,
 			Time:            info.Time,
 			Versioning:      entry.GetVersioning(),
-			State:           "kept",
+			State:           state,
 			SlotIds:         slotIds,
 		})
 		if len(entry.GetPrevPushId()) == 0 || entry.GetVersion() <= 1 {
