@@ -31,6 +31,7 @@ type RecordEvsMirrorView struct {
 	args *RecordEvsMirrorViewArgs
 }
 
+// A view over args, reading the state and the mirrors anew at each call.
 func NewRecordEvsMirrorView(args *RecordEvsMirrorViewArgs) *RecordEvsMirrorView {
 	return &RecordEvsMirrorView{args: args}
 }
