@@ -5,8 +5,8 @@
 // carries a copy of ur.exe named git-remote-ur.exe, which commands.go's argv[0] check takes in any case.
 //
 // The daemon's side is the git service this file assigns: EvsClient.ServeGit on the session's network's evs client,
-// which ur daemon's composition builds once a host makes an evs client per network (CORE's). Until it does
-// (urDaemonEvsClient is nil) every git session gets git's ERR line saying so.
+// which ur daemon's composition builds per network (daemon_clients.go) and answers once the network's config follower
+// stands. Before that, or with urDaemonEvsClient unset, a git session gets git's ERR line saying why.
 
 package main
 
@@ -24,8 +24,9 @@ func init() {
 	urDaemonGitService = urServeGit
 }
 
-// A hosted Sidecar's evs client, which the daemon's composition assigns once it builds one for each network (CORE's).
-// Nil: git sessions are refused with git's ERR line, and ur mount and the ur evs commands refuse, saying so.
+// A hosted Sidecar's evs client: the daemon's composition's (daemon_clients.go), once the network's config follower
+// stands. Nil, as a test may set it: git sessions are refused with git's ERR line, and ur mount and the ur evs commands
+// refuse, saying so.
 var urDaemonEvsClient func(running *sidecar.Sidecar) (*sidecar.EvsClient, error)
 
 // What the evs commands answer while the daemon builds no evs client.

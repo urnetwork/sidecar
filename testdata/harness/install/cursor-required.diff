@@ -1,0 +1,61 @@
+--- a/$HOME/.cursor/mcp.json
++++ b/$HOME/.cursor/mcp.json
+@@ -1,5 +1,11 @@
+ {
+   "mcpServers": {
+-    "search": { "command": "/opt/search/bin/search-mcp", "args": [] }
++    "search": { "command": "/opt/search/bin/search-mcp", "args": [] },
++    "ur": {
++      "command": "/opt/ur/bin/ur",
++      "args": [
++        "mcp"
++      ]
++    }
+   }
+ }
+--- a/$HOME/.cursor/hooks.json
++++ b/$HOME/.cursor/hooks.json
+@@ -2,7 +2,42 @@
+   "version": 1,
+   "hooks": {
+     "afterFileEdit": [
+-      { "command": "/opt/fmt/bin/format-on-save" }
++      { "command": "/opt/fmt/bin/format-on-save" },
++      {
++        "command": "/opt/ur/bin/ur hook cursor --required",
++        "failClosed": true
++      }
++    ],
++    "beforeSubmitPrompt": [
++      {
++        "command": "/opt/ur/bin/ur hook cursor --required",
++        "failClosed": true
++      }
++    ],
++    "beforeMCPExecution": [
++      {
++        "command": "/opt/ur/bin/ur hook cursor --required",
++        "timeout": 75,
++        "failClosed": true
++      }
++    ],
++    "afterShellExecution": [
++      {
++        "command": "/opt/ur/bin/ur hook cursor --required",
++        "failClosed": true
++      }
++    ],
++    "afterMCPExecution": [
++      {
++        "command": "/opt/ur/bin/ur hook cursor --required",
++        "failClosed": true
++      }
++    ],
++    "stop": [
++      {
++        "command": "/opt/ur/bin/ur hook cursor --required",
++        "failClosed": true
++      }
+     ]
+   }
+ }

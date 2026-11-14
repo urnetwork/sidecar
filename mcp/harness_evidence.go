@@ -107,9 +107,13 @@ func (self *HarnessEvidenceStore) Install(server *McpServer) {
 }
 
 // Whether event is one that asked the person about a call of ur's tools: Claude Code's and Codex's PermissionRequest,
-// or Cursor's beforeMCPExecution where ur hook answered ask.
+// or Cursor's beforeMCPExecution where ur hook answered ask. An event its adapter does not read, or whose payload
+// drifted from the schema its adapter pins, never is (MCP-M3-28).
 func harnessAskingEvent(event *HookEvent) bool {
-	if event == nil || event.ToolServer != urMcpServerName || event.ToolName == "" || event.HarnessEvent != harnessEvidenceEvents[event.Harness] {
+	if event == nil || event.Unknown || event.Drifted {
+		return false
+	}
+	if event.ToolServer != urMcpServerName || event.ToolName == "" || event.HarnessEvent != harnessEvidenceEvents[event.Harness] {
 		return false
 	}
 	if event.Harness == cursorHookHarness {

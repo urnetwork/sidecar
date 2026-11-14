@@ -4,9 +4,9 @@
 // network's bridge over it when ur tun or ur tun ip first asks (newUrBridgeBuild over bridge_wire.go's
 // newUrBridgeWire): the bridge follows no log of its own.
 //
-// A follower takes what the daemon gives it: the config repo's head reader over evs (urDaemonConfigHeads, nil until an
-// EvsClient reads a file-mode ref at a config version, so every base stays withheld and nothing past the genesis
-// installs) and the network's key client (cmd_keys.go's urDaemonGkmClient, nil until one is wired). A ur device whose
+// A follower takes what the daemon's composition gives it (daemon_clients.go): the config repo's head reader over evs
+// (urDaemonConfigHeads), on the network's EvsClient over its key client (cmd_keys.go's urDaemonGkmClient); with either
+// unset every base stays withheld and nothing past the genesis installs. A ur device whose
 // enrollment recorded no anchor trusts the first genesis api serves (§5.6's genesis row), and keeps the log's full tail
 // in authlog/, as §7.9's retain row has a CLI host's member device do. A network whose follower does not start runs on
 // unjudged, nothing admitted on it, and the daemon's other networks follow on (CORE-M6-01).
@@ -21,8 +21,9 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// The config repo's head reader over evs for a hosted network's Sidecar, nil for none: no host has one until an
-// EvsClient reads a file-mode ref at a config version (TEAM-M2-10's report), and every base is withheld until then.
+// The config repo's head reader over evs for a hosted network's Sidecar: the daemon's composition's
+// (daemon_clients.go), sidecar.EvsConfigHeadReader over the network's EvsClient. Nil for none, which withholds every
+// base.
 var urDaemonConfigHeads func(running *sidecar.Sidecar) sidecar.ConfigHeadReader
 
 // ur tun's answer for a network whose follower does not stand: it names what the follower waits for, or why it refused.

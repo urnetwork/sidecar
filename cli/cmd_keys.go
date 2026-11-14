@@ -32,8 +32,9 @@ import (
 // The control method ur keys rotate calls.
 const urMethodKeysRotate = "keys.rotate"
 
-// A hosted Sidecar's key client, which the daemon's composition assigns once it builds one for each network. No host
-// does yet (the client's wiring into NewSidecar is CORE's), so it is nil and ur keys rotate refuses, saying so.
+// A hosted Sidecar's key client: the daemon's composition's (daemon_clients.go), the network's GkmGroupClient, which
+// refuses until the network's config follower stands and hands it a state. Nil, as a test may set it, and ur keys
+// rotate refuses, saying so.
 var urDaemonGkmClient func(running *sidecar.Sidecar) (sidecar.GkmClient, error)
 
 // What ur keys rotate answers while the daemon builds no key client.
