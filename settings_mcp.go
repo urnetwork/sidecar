@@ -190,6 +190,9 @@ type SidecarIngestSettings struct {
 	ModelCalls bool
 	// The largest OTLP export the telemetry receiver reads, in bytes: 4 MiB. A larger one is a dropped export, a gap.
 	TelemetryByteCount int64
+	// A model_call entry's model, provider and request id each, in bytes: RECORD.md's ModelCallBody, 128 B, which a
+	// longer value is cut to, a truncation gap. The format's value, which every writer of the entry shares.
+	ModelCallFieldByteCount int64
 }
 
 // §16.8's record defaults, with RECORD.md section 18's fields below the first six, whose names stand
@@ -243,9 +246,6 @@ type SidecarRecordSettings struct {
 	WitnessMissCount int
 	// Leaves one checkpoint batch takes at most: 32,768 (section 10.2).
 	LeafBatchCount int
-	// A model_call entry's model, provider and request id each, in bytes: RECORD.md's ModelCallBody, 128 B, which a
-	// longer value is cut to, a truncation gap (MCP-M6-03).
-	ModelCallFieldByteCount int64
 }
 
 // A fresh value each call, as DefaultSidecarSettings's is.
@@ -325,6 +325,7 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		FileEventDirectoryCount: 4096,
 		ModelCalls:              false,
 		TelemetryByteCount:      4 * 1024 * 1024,
+		ModelCallFieldByteCount: 128,
 	}
 }
 
@@ -335,7 +336,6 @@ func defaultSidecarRecordSettings() *SidecarRecordSettings {
 		PushCoalesce:             1 * time.Second,
 		ReachReceiptCoalesce:     5 * time.Minute,
 		CoverageIdleTimeout:      10 * time.Minute,
-		ModelCallFieldByteCount:  128,
 		TeamRecordKeepDays:       400,
 		TeamRecordSearchableDays: 90,
 		DepositInterval:          5 * time.Minute,

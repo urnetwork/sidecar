@@ -14,7 +14,7 @@
 // A record is a model call when it names an API request (event.name api_request, any harness's prefix) or carries
 // gen_ai.usage tokens: model, provider, request id, tokens, the harness's own cost and the duration, under the
 // harness's names and the GenAI semantic conventions' (RECORD.md's otel row). Every string passes the redactor and is
-// cut to Record.ModelCallFieldByteCount, RECORD.md's 128 B. An export that cannot be read whole, past
+// cut to Ingest.ModelCallFieldByteCount, RECORD.md's 128 B. An export that cannot be read whole, past
 // Ingest.TelemetryByteCount or not OTLP JSON, and a call that names no live run, are dropped exports: a missed_event
 // gap on the runs of its harness, or on every live run when the harness is unknown, since a lost call may hide cost.
 // Off unless Ingest.ModelCalls is set: M6's capture, off by default.
@@ -88,7 +88,7 @@ func codexModelCall(payload []byte) (*ingestModelCall, bool) {
 func (self *Ingest) captureModelCallWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, call *ingestModelCall, coverageSource string) {
 	text := func(value string) string {
 		redacted := self.redact(ctx, run, redactor, []byte(value))
-		cut, truncated := ingestCut(redacted, self.record.ModelCallFieldByteCount)
+		cut, truncated := ingestCut(redacted, self.settings.ModelCallFieldByteCount)
 		if truncated {
 			self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapTruncation)
 		}
