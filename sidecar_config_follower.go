@@ -24,9 +24,11 @@
 // on its store. A follower that cannot stand leaves its own network unjudged, nothing admitted there, and the daemon's
 // other networks follow on (CORE-M6-01). A refusal lasts the follower's life: a restart anchors again.
 //
-// What this does not build is the host's to give: the config repo's head reader over evs, which needs a read of a
-// file-mode ref at a config version that no EvsClient has yet, and the network's key client. With no head reader every
-// base is withheld, so nothing past the genesis installs and nothing is admitted: the closed direction.
+// What this does not build is the host's to give: the config repo's head reader over evs and the network's key client,
+// which ur daemon composes per network (QD-804; cli/daemon_clients.go) over an EvsClient that judges statements at
+// VerifiedState, the client's newest state whether or not the follower stands, since a base's head is checked on the
+// state the base lands on. With no head reader every base is withheld, so nothing past the genesis installs and nothing
+// is admitted: the closed direction.
 //
 // Safe for concurrent use.
 
@@ -383,6 +385,25 @@ func (self *SidecarConfigFollower) Heads() ConfigHeadReader {
 	return self.args.Heads
 }
 
+// The client's newest verified state whether or not the follower stands, a start's own included
+// (ConfigClient.VerifiedState): what evs's verifier judges the config repo's pushes at while the follower catches up to
+// its anchor (QD-804). Nil before its client starts, after a refusal and once closed, so nothing is judged by it then.
+func (self *SidecarConfigFollower) VerifiedState() *ConfigState {
+	client := func() *ConfigClient {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		switch self.state.Value() {
+		case SidecarConfigFollowerRefused, SidecarConfigFollowerClosed:
+			return nil
+		}
+		return self.client
+	}()
+	if client == nil {
+		return nil
+	}
+	return client.VerifiedState()
+}
+
 // A base's rows as the client keeps them, the current and previous bases', for the log runs a device role verifies,
 // and a base's head checked as the client checks one.
 func (self *SidecarConfigFollower) Rows() ConfigRowsSource {
@@ -626,16 +647,24 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 	if settings.Log == nil {
 		settings.Log = self.log
 	}
+	// the client's first read waits until the follower holds it, so VerifiedState answers for every base it checks
+	kept := make(chan struct{})
+	defer close(kept)
 	clientArgs := &ConfigClientArgs{
 		NetworkId:    networkId,
 		GenesisChain: genesisChain,
-		Projection:   &sidecarConfigFollowerProjection{follower: self, reader: self.sidecar.sidecarApi, genesisChain: genesisChain},
-		Heads:        self.args.Heads,
-		Store:        store,
-		Emit:         self.sidecar.emitEvent,
-		ReportFork:   self.args.ReportFork,
-		Clock:        self.clock,
-		Settings:     settings,
+		Projection: &sidecarConfigFollowerProjection{
+			follower:     self,
+			reader:       self.sidecar.sidecarApi,
+			genesisChain: genesisChain,
+			kept:         kept,
+		},
+		Heads:      self.args.Heads,
+		Store:      store,
+		Emit:       self.sidecar.emitEvent,
+		ReportFork: self.args.ReportFork,
+		Clock:      self.clock,
+		Settings:   settings,
 	}
 	if self.gkm != nil {
 		clientArgs.Gkm = self.gkm
@@ -644,7 +673,7 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 	if err != nil {
 		return nil, err
 	}
-	kept := func() bool {
+	held := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		switch self.state.Value() {
@@ -656,7 +685,7 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 		self.state.Set(SidecarConfigFollowerCatchingUp)
 		return true
 	}()
-	if !kept {
+	if !held {
 		client.Close()
 		return nil, ErrSidecarClosed
 	}
@@ -802,10 +831,17 @@ type sidecarConfigFollowerProjection struct {
 	follower     *SidecarConfigFollower
 	reader       ConfigProjectionReader
 	genesisChain [sha256.Size]byte
+	// closes once the follower holds the client, or never will: no read comes before it
+	kept <-chan struct{}
 }
 
-// The Sidecar api's read, its genesis checked first.
+// The Sidecar api's read, once the follower holds the client, its genesis checked first.
 func (self *sidecarConfigFollowerProjection) ReadConfigProjection(ctx context.Context, after uint64) (*ConfigProjection, error) {
+	select {
+	case <-self.kept:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	projection, err := self.reader.ReadConfigProjection(ctx, after)
 	if err == nil && len(projection.SignedGenesis) != 0 {
 		if served := bridge.GenesisChain(projection.SignedGenesis); served != self.genesisChain {

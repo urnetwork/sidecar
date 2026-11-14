@@ -665,3 +665,117 @@ func TestAgentConfigPaths(t *testing.T) {
 		}
 	}
 }
+
+// The fail-closed form a record_required install writes (MCP-M6-04; plan-MCP-record-required), one golden diff per
+// harness against its fixtures: Claude Code's entries with onFailure block, Cursor's with failClosed, Codex's with
+// neither, and every hook command with --required.
+func TestFailClosedFormsAreGolden(t *testing.T) {
+	for _, harness := range HarnessNames() {
+		home := testHarnessHome(t, harness)
+		args := testHarnessArgs(harness, home, t.TempDir())
+		args.RecordRequired = true
+		plan, err := PlanHarnessInstall(args)
+		if err != nil {
+			t.Fatalf("%s: %v", harness, err)
+		}
+		diff := strings.ReplaceAll(plan.Diff(), filepath.ToSlash(home), "/$HOME")
+		golden := filepath.Join("..", "testdata", "harness", "install", harness+"-required.diff")
+		if *updateHarnessInstall {
+			if err := os.WriteFile(golden, []byte(diff), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		want, err := os.ReadFile(golden)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff != string(want) {
+			t.Errorf("%s's fail-closed diff:\n%s\nwant:\n%s", harness, diff, want)
+		}
+		hookCommands := strings.Count(diff, "hook "+harness)
+		if hookCommands == 0 || strings.Count(diff, "hook "+harness+" "+HarnessHookRequiredFlag) != hookCommands {
+			t.Errorf("%s: a hook command without %s", harness, HarnessHookRequiredFlag)
+		}
+		switch harness {
+		case claudeHookHarness:
+			if strings.Count(diff, `"onFailure": "block"`) != hookCommands {
+				t.Errorf("claude-code: an entry without onFailure block")
+			}
+		case cursorHookHarness:
+			if strings.Count(diff, `"failClosed": true`) != hookCommands {
+				t.Errorf("cursor: an entry without failClosed")
+			}
+		default:
+			if strings.Contains(diff, "onFailure") || strings.Contains(diff, "failClosed") {
+				t.Errorf("%s writes a setting it does not document", harness)
+			}
+		}
+	}
+}
+
+// With no record_required, every install writes the fail-open form: no onFailure, failClosed or --required anywhere,
+// and its seal names no fail-closed form.
+func TestFailOpenStaysDefault(t *testing.T) {
+	for _, harness := range HarnessNames() {
+		home := testHarnessHome(t, harness)
+		state := t.TempDir()
+		plan := testInstallHarness(t, testHarnessArgs(harness, home, state))
+		for _, file := range plan.Files {
+			content, err := os.ReadFile(file.Path)
+			if err != nil {
+				continue
+			}
+			for _, form := range []string{"onFailure", "failClosed", HarnessHookRequiredFlag} {
+				if strings.Contains(string(content), form) {
+					t.Errorf("%s: %s holds %s", harness, file.Path, form)
+				}
+			}
+		}
+		seals, unreadable, err := ReadHarnessSeals(state, sidecar.DefaultSidecarSettings().Ingest.HarnessConfigByteCount)
+		if err != nil || unreadable != 0 || len(seals) != 1 || seals[0].RecordRequired || HarnessFailClosedNote(seals[0]) != "" {
+			t.Errorf("%s: the seals %+v %d %v", harness, seals, unreadable, err)
+		}
+	}
+}
+
+// A fail-closed install whose entry is put back to the fail-open form reads as a changed config, which taints; the
+// seal names the form, and `ur status`'s note says what it does in each harness.
+func TestFailOpenEntryUnderARequiredSealReadsChanged(t *testing.T) {
+	for _, harness := range HarnessNames() {
+		home := testHarnessHome(t, harness)
+		state := t.TempDir()
+		args := testHarnessArgs(harness, home, state)
+		args.RecordRequired = true
+		plan := testInstallHarness(t, args)
+		check := testHarnessCheck(state)
+		if testHarnessChanged(t, check, harness, home) {
+			t.Fatalf("%s: the fresh fail-closed install reads changed", harness)
+		}
+		seals, _, err := ReadHarnessSeals(state, sidecar.DefaultSidecarSettings().Ingest.HarnessConfigByteCount)
+		if err != nil || len(seals) != 1 || !seals[0].RecordRequired || HarnessFailClosedNote(seals[0]) == "" {
+			t.Errorf("%s: the seal %+v %v", harness, seals, err)
+		}
+		hooks := ""
+		for _, file := range plan.Files {
+			if strings.Contains(file.Path, "hooks.json") || strings.HasSuffix(file.Path, filepath.Join(".claude", "settings.json")) {
+				hooks = file.Path
+			}
+		}
+		if hooks == "" {
+			t.Fatalf("%s: no hooks file in %+v", harness, plan.Files)
+		}
+		content, err := os.ReadFile(hooks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// the first hook entry put back to the fail-open form: its --required dropped
+		failOpen := strings.Replace(string(content), " "+HarnessHookRequiredFlag, "", 1)
+		if err := os.WriteFile(hooks, []byte(failOpen), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !testHarnessChanged(t, testHarnessCheck(state), harness, home) {
+			t.Errorf("%s: a fail-open entry under a fail-closed seal reads unchanged", harness)
+		}
+	}
+}

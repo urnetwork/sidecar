@@ -7,7 +7,8 @@
 // afterFileEdit's file_path and edits. The conversation is the session. Version 1.
 //
 // Cursor reports no session's start, so a conversation's first event opens its run, which inherits its harness
-// process's taint (plan-MCP-taint-new-session). beforeMCPExecution answers `ask` for ur's outward tools from the
+// process's taint (plan-MCP-taint-new-session). An event this version does not name reads other, Unknown, and a field
+// outside its event's schema below is drift (MCP-M3-28). beforeMCPExecution answers `ask` for ur's outward tools from the
 // catalog built into this binary, so the answer needs no daemon (CursorHookAnswer).
 
 package mcp
@@ -44,6 +45,22 @@ func (self *cursorHookAdapter) Version() int {
 // Cursor's hooks name no session start.
 func (self *cursorHookAdapter) ReportsSessionStart() bool {
 	return false
+}
+
+// The schema this version was written to (§16.7's sources, read 2026-11-03 and 2026-11-05; MCP-M3-28's recorded
+// payloads, testdata/harness/cursor/): the fields every event carries, then each event's own, by the event's name.
+var cursorHookCommonFields = []string{
+	"conversation_id", "generation_id", "model", "hook_event_name", "cursor_version", "workspace_roots", "user_email", "transcript_path",
+}
+
+var cursorHookEventFields = map[string][]string{
+	"beforeMCPExecution":   {"tool_name", "tool_input", "url", "command", "server"},
+	"afterMCPExecution":    {"tool_name", "tool_input", "result_json", "duration", "url", "command", "server"},
+	"beforeShellExecution": {"command", "cwd"},
+	"afterShellExecution":  {"command", "output", "duration", "cwd"},
+	"afterFileEdit":        {"file_path", "edits"},
+	"beforeSubmitPrompt":   {"prompt", "attachments"},
+	"stop":                 {"status", "loop_count"},
 }
 
 // The fields this version reads.
@@ -86,6 +103,9 @@ func (self *cursorHookAdapter) Parse(payload []byte, ingest *sidecar.SidecarInge
 	if read.TranscriptPath != nil {
 		event.TranscriptPath = *read.TranscriptPath
 	}
+	fields, known := cursorHookEventFields[read.HookEventName]
+	event.Unknown = !known
+	event.Drifted = known && hookPayloadDrifted(payload, cursorHookCommonFields, fields)
 	switch read.HookEventName {
 	case "beforeMCPExecution", "afterMCPExecution":
 		event.Kind = HookEventPreToolUse

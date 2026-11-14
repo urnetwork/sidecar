@@ -12,9 +12,14 @@
 //	edits      each file is brought to hold the template's entries by exact edits (harness_config.go): a missing
 //	           entry inserted, a changed one replaced in place, a stale or second one of ur's removed, and nothing
 //	           else touched, so a person's settings stay byte for byte; a file already holding them is left as it is
-//	hooks      fail open (D-MCP-5): ur hook exits 0 whatever happens, and a lapse taints the run instead
-//	           (hook_coverage.go). The fail-closed form a Team's record_required asks for is M6's (plan-MCP-record-
-//	           required), so no hook entry carries onFailure, failClosed or --required yet
+//	hooks      fail open by default (D-MCP-5): ur hook exits 0 whatever happens, and a lapse taints the run instead
+//	           (hook_coverage.go). The fail-closed form, which a Team's record_required asks for (plan-MCP-record-
+//	           required; MCP-M6-04), puts Claude Code's onFailure block and Cursor's failClosed on every ur hook entry
+//	           and --required on every hook command, so ur hook exits 2 when the daemon cannot take an event and the
+//	           harness stops; Codex documents no fail-closed setting, so there --required's exit 2 blocks a
+//	           PreToolUse only while the hook runs. The form is a template input, so the seal holds it and a fail-open
+//	           entry where the seal names the fail-closed one reads as a changed config, which taints. Until a reader
+//	           of ServiceSettings.record_required (config.proto field 9) lands, a local flag asks for it
 //	write      each file by a temporary file in its own directory, synced, then renamed over it; a file the harness
 //	           rewrote between the plan and the write is planned again from its new bytes, up to
 //	           Ingest.HarnessInstallRetryCount times, since only ur's entries change and the person saw those
@@ -114,8 +119,17 @@ type HarnessInstallArgs struct {
 	// setup step leaves the auth key in, which the committed SessionStart step takes with `ur connect --token-file`.
 	// "" writes no connect step. A project install's alone, of a harness that reports a session's start.
 	CloudKeyFile string
-	Ingest       *sidecar.SidecarIngestSettings
+	// The fail-closed form (see the file header): a Team's ServiceSettings.record_required from M6, and until a reader
+	// of it lands `ur install-harness --record-required`, a local flag. False writes the fail-open form, the default.
+	RecordRequired bool
+	Ingest         *sidecar.SidecarIngestSettings
 }
+
+// `ur hook`'s flag on the fail-closed form's commands: exit 2 when the daemon cannot take the event.
+const HarnessHookRequiredFlag = "--required"
+
+// Claude Code's onFailure value that stops the harness when its hook fails (§16.7's table, v2.1.295 on).
+const claudeHookOnFailureBlock = "block"
 
 // The template's inputs: what ur writes into a harness's files is a function of these alone.
 type harnessTemplate struct {
@@ -129,6 +143,8 @@ type harnessTemplate struct {
 	permissionTimeoutSeconds int
 	// The cloud profile's key file, "" for none: the session-start step takes it before ur hook runs.
 	cloudKeyFile string
+	// The fail-closed form (HarnessInstallArgs.RecordRequired).
+	recordRequired bool
 }
 
 // The template of args, its outward tools the catalog's.
@@ -165,6 +181,9 @@ func (self *harnessTemplate) hookCommand() string {
 	command := harnessShellQuote(self.urPath) + " hook " + self.harness
 	if self.instance != "" {
 		command += " --instance " + harnessShellQuote(self.instance)
+	}
+	if self.recordRequired {
+		command += " " + HarnessHookRequiredFlag
 	}
 	return command
 }
@@ -427,6 +446,7 @@ func PlanHarnessInstall(args *HarnessInstallArgs) (*HarnessInstallPlan, error) {
 		return nil, errors.New("the project's directory is not absolute")
 	}
 	template := newHarnessTemplate(args.Harness, args.UrPath, args.Agent, args.Instance, McpOutwardToolNames(), args.Ingest)
+	template.recordRequired = args.RecordRequired
 	if args.CloudKeyFile != "" {
 		if err := checkHarnessCloudKeyFile(args, adapter); err != nil {
 			return nil, err

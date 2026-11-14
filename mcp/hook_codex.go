@@ -36,6 +36,21 @@ func (self *codexHookAdapter) ReportsSessionStart() bool {
 	return false
 }
 
+// The schema this version was written to (§16.7's sources, read 2026-11-03 and 2026-11-05; MCP-M3-28's recorded
+// payloads, testdata/harness/codex/): the fields every event carries, then each event's own, by the event's name. An
+// event this version does not name reads other, Unknown, and a field outside its event's lists is drift.
+var codexHookCommonFields = []string{"session_id", "transcript_path", "cwd", "hook_event_name", "permission_mode", "model"}
+
+var codexHookEventFields = map[string][]string{
+	"SessionStart":      {"source"},
+	"SessionEnd":        {"reason"},
+	"UserPromptSubmit":  {"prompt"},
+	"PreToolUse":        {"tool_name", "tool_input", "tool_use_id"},
+	"PostToolUse":       {"tool_name", "tool_input", "tool_response", "tool_use_id"},
+	"PermissionRequest": {"tool_name", "tool_input", "tool_use_id"},
+	"Stop":              {"stop_hook_active"},
+}
+
 // Codex's events by its names.
 var codexHookEventKinds = map[string]HookEventKind{
 	"SessionStart":      HookEventSessionStart,
@@ -71,6 +86,9 @@ func (self *codexHookAdapter) Parse(payload []byte, ingest *sidecar.SidecarInges
 	if kind, ok := codexHookEventKinds[read.HookEventName]; ok {
 		event.Kind = kind
 	}
+	fields, known := codexHookEventFields[read.HookEventName]
+	event.Unknown = !known
+	event.Drifted = known && hookPayloadDrifted(payload, codexHookCommonFields, fields)
 	model := ""
 	if json.Unmarshal(read.Model, &model) == nil {
 		event.Model = model

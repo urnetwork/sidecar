@@ -1,0 +1,71 @@
+[
+  {
+    "file": "01-beforeSubmitPrompt.json",
+    "kind": "user_prompt",
+    "harness_event": "beforeSubmitPrompt",
+    "session_id": "conf-cursor-0001",
+    "cwd": "/work/project",
+    "model": "conformance-model",
+    "transcript": true
+  },
+  {
+    "file": "02-afterFileEdit.json",
+    "kind": "post_tool_use",
+    "harness_event": "afterFileEdit",
+    "session_id": "conf-cursor-0001",
+    "tool_kind": "edit",
+    "tool_name": "edit",
+    "paths": [
+      "/work/project/src/main.go"
+    ],
+    "cwd": "/work/project",
+    "model": "conformance-model",
+    "transcript": true
+  },
+  {
+    "file": "03-afterShellExecution.json",
+    "kind": "post_tool_use",
+    "harness_event": "afterShellExecution",
+    "session_id": "conf-cursor-0001",
+    "tool_kind": "shell",
+    "tool_name": "shell",
+    "cwd": "/work/project",
+    "model": "conformance-model",
+    "transcript": true
+  },
+  {
+    "file": "04-beforeMCPExecution-mail_send.json",
+    "kind": "pre_tool_use",
+    "harness_event": "beforeMCPExecution",
+    "session_id": "conf-cursor-0001",
+    "tool_kind": "mcp",
+    "tool_name": "mail_send",
+    "tool_server": "ur",
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "model": "conformance-model",
+    "transcript": true
+  },
+  {
+    "file": "05-afterMCPExecution-mail_send.json",
+    "kind": "post_tool_use",
+    "harness_event": "afterMCPExecution",
+    "session_id": "conf-cursor-0001",
+    "tool_kind": "mcp",
+    "tool_name": "mail_send",
+    "tool_server": "ur",
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "model": "conformance-model",
+    "transcript": true
+  },
+  {
+    "file": "06-stop.json",
+    "kind": "stop",
+    "harness_event": "stop",
+    "session_id": "conf-cursor-0001",
+    "cwd": "/work/project",
+    "model": "conformance-model",
+    "transcript": true
+  }
+]

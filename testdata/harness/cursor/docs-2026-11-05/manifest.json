@@ -1,0 +1,27 @@
+{
+  "harness": "cursor",
+  "version": "docs-2026-11-05",
+  "pinned": "no Cursor release named: the hook schema as published on the read date",
+  "schema": "https://cursor.com/docs/agent/hooks",
+  "read": "2026-11-05",
+  "recorded": "synthetic in every value, written from the published hook schema",
+  "cwd": "/work/project",
+  "files": {
+    "src/main.go": "package main\n\nfunc main() {\n\tprintln(\"before\")\n}\n"
+  },
+  "edit": {
+    "path": "src/main.go",
+    "after": "package main\n\nfunc main() {\n\tprintln(\"after\")\n}\n",
+    "before_event": "02-afterFileEdit.json"
+  },
+  "gaps": [
+    "no_tool_id",
+    "redaction"
+  ],
+  "coverage": false,
+  "home": "/work/home",
+  "transcript": {
+    "path": "/work/home/.cursor/transcripts/conf-cursor-0001.jsonl",
+    "content": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"change the greeting, run the tests and mail the report\"}}\n"
+  }
+}
