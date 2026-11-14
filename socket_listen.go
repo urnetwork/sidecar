@@ -7,9 +7,12 @@
 // Which names. An application name listens as its token paths, so it needs the K_sock ring (D-SOCK-13). tls/ and smtp/
 // are outward (I-8): Listen calls §5.4's Authorize first, which may answer *ApprovalPendingError, and holds the
 // dispatcher's Service mode only while the registration is held (§13.6), so edges' contracts reach it; the action is
-// kind listen naming the socket, the weight it registers with riding the request beside it (QD-740). share/ is
-// `ur share add`'s alone (SOCK-M5-15), ur/ the platform's (SOCK-M9-01), and a reserved name has no owner: each is
-// refused here. A <net> must be this sidecar's own network.
+// kind listen naming the socket, the weight it registers with riding the request beside it (QD-740). §13.9's system
+// publish, tls/443/mta-sts, is the exception: it takes no tls/ grant or approval of its own, so Listen asks this
+// device's config for its receiver's approved smtp/25/mx listen grant instead, which stands in (SOCK-M8-01;
+// socket_admission.go), and refuses it with no approval filed. share/ is `ur share add`'s alone (SOCK-M5-15), ur/ the
+// platform's (SOCK-M9-01), and a reserved name has no owner: each is refused here. A <net> must be this sidecar's own
+// network.
 //
 // smtp/ is a receiver's (§15.5; SOCK-M7-01): smtp/25/mx, or a Team scope's smtp/25/mx.<scope>, protocol smtp-starttls,
 // 16 streams unless the settings say otherwise. A receiver listens not serving, so its lease takes no ticket until §15
@@ -758,7 +761,7 @@ func (self *SocketComponent) listen(ctx context.Context, address *SocketAddress,
 		// ur/ is the platform's (SOCK-M9-01), and a reserved name has no owner
 		return nil, &SocketCodeError{Err: ErrSocketDenied}
 	}
-	generation, _, labels := self.current()
+	generation, policy, labels := self.current()
 	if labels == nil {
 		return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 	}
@@ -776,8 +779,13 @@ func (self *SocketComponent) listen(ctx context.Context, address *SocketAddress,
 	if err != nil {
 		return nil, err
 	}
-	// an outward name goes through §5.4's gate first (I-8)
-	if socketNamespaceProvidesService(namespace) {
+	// an outward name goes through §5.4's gate first (I-8), except §13.9's system publish, whose receiver's approved
+	// smtp/25/mx listen grant stands in for its tls/ grants and their approval (socket_admission.go)
+	if name == SocketSystemPublishName {
+		if err := socketSystemPublishListenable(generation, policy, args, self.clock.Now()); err != nil {
+			return nil, err
+		}
+	} else if socketNamespaceProvidesService(namespace) {
 		if generation == nil || generation.authorize == nil {
 			return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 		}
