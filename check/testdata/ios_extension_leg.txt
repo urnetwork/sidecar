@@ -178,6 +178,7 @@ gkm_client.go
 gkm_create.go
 gkm_deliver.go
 gkm_delivery.go
+gkm_directory.go
 gkm_dropkey.go
 gkm_gate.go
 gkm_group.go
