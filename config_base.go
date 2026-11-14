@@ -97,6 +97,10 @@ type ConfigHeadCheck struct {
 	FoldedFrom     uint64
 	FirstPrevChain [sha256.Size]byte
 	Floor          *bridge.AuthPin
+	// Without Previous: the genesis this reader trusts and the admissions of the base's own rows, under which a
+	// ConfigHeadAnchorReader judges the signers of the head's pushes (QD-814), since this reader holds no state at
+	// their pins. Nil leaves each push to the reader's judgment at its own pin, which withholds an anchor's head.
+	Anchor ConfigHeadAnchor
 	// With Previous: the bridge ledger's check of the head (CheckBridgeLedgerFold, DESIGN-DETAILS 12.2.3), which
 	// CheckConfigBase calls, an error being ErrConfigHeadMismatch's fork, or ErrConfigHeadUnavailable's wait. Nil
 	// checks no ledger: a reader with no BridgeBodyJudge.
