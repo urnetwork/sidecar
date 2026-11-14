@@ -160,6 +160,12 @@ type EvsWorldSettings struct {
 	AdjustEngine func(instance string, settings *evsservice.EvsSettings)
 	// A device's client settings past the defaults, nil for none.
 	AdjustClient func(device string, settings *sidecar.EvsSettings)
+	// A device's transport in front of the world's model of the lb, nil for the model alone: given the device's
+	// name and the model, it answers what the device's client sends, passing the model what it does not take. A T3
+	// row sends a device's segment PUTs through real nginx in front of the instances' handlers so (InstanceHandler;
+	// §22.8's lb drain row, TEST-M2-15). The world notes a push's attempts only as its model carries them, so a push
+	// sent past the model is in no history a check reads.
+	DeviceTransport func(device string, lb http.RoundTripper) http.RoundTripper
 	// Every instance's handler serves through the Net's privacy capture (CC1) and logs to it (§22.7), for a
 	// scenario that scans what servers held.
 	Capture bool
@@ -912,6 +918,25 @@ func (self *EvsWorld) handlerOf(instance string, host EvsTierHost) http.Handler 
 	return host.Handler()
 }
 
+// What instance serves a request that reaches it from outside the world's model of the lb, as a block behind a real
+// lb does (EvsWorldSettings.DeviceTransport): its block's handler while it runs, through the Net's capture when the
+// settings ask, the answer returning once the instance's step 8s are done, as the model's do. The request runs on
+// the caller's goroutine, which no actor owns, so a schedule holds none of it and a barrier it reaches passes
+// (barrier.go). While the instance is killed, crashed or never started, or when its step 8s outlive
+// StepEightTimeout, the connection is cut with no answer, as a process that died gives none.
+func (self *EvsWorld) InstanceHandler(instance string) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		host := self.instanceHost(instance)
+		if host == nil {
+			panic(http.ErrAbortHandler)
+		}
+		self.handlerOf(instance, host).ServeHTTP(writer, request)
+		if err := self.awaitStepEights(host.Engine()); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+	})
+}
+
 // The engine of a running instance, for a step that drives its parts.
 func (self *EvsWorld) Engine(instance string) (*evsservice.EvsEngine, error) {
 	host := self.instanceHost(instance)
@@ -939,10 +964,14 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 	if self.settings.AdjustClient != nil {
 		self.settings.AdjustClient(device.Name, settings)
 	}
+	var transport http.RoundTripper = device.transport
+	if self.settings.DeviceTransport != nil {
+		transport = self.settings.DeviceTransport(device.Name, device.transport)
+	}
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.NetworkId,
 		EvsUrl:    "https://evs.example",
-		Transport: device.transport,
+		Transport: transport,
 		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
 			return self.issueToken(device, scopes)
 		},
