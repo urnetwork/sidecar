@@ -340,6 +340,16 @@ func (self *DnsApi) guard(route *dnsApiRoute) http.HandlerFunc {
 			if request = self.authenticateServiceToken(writer, request); request == nil {
 				return
 			}
+			// sidecar.yml's dns gate admits networks one by one (preview_networks and the percent)
+			principal, _ := dnsRequestPrincipal(request)
+			gates := self.host.GatesOrClosed()
+			if !gates.Service(sidecar.ServiceGateDns).Admits(principal.NetworkId) {
+				self.metrics.refused.Add(1, dnsApiRefusedGate)
+				retryAfter := int(math.Ceil(gates.RetryAfter().Seconds()))
+				writer.Header().Set("Retry-After", strconv.Itoa(max(retryAfter, 1)))
+				http.Error(writer, "service unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			self.serveGated(route, writer, request)
 			return
 		}

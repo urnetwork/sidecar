@@ -62,10 +62,10 @@ func NewDnsWatchDohResolver(settings *DnsWatchDohSettings) (*DnsWatchDohResolver
 	self := &DnsWatchDohResolver{}
 	for _, resolverUrl := range settings.ResolverUrls {
 		dohSettings := connect.DefaultDohSettings()
+		// the url alone, listed once, and no fallback to local DoH or plain DNS
 		dohSettings.DnsResolverSettings = &connect.DnsResolverSettings{
 			EnableRemoteDoh:   true,
 			RemoteDohUrlsIpv4: []string{resolverUrl},
-			RemoteDohUrlsIpv6: []string{resolverUrl},
 		}
 		cache := connect.NewDohCache(dohSettings)
 		self.caches = append(self.caches, cache)

@@ -197,6 +197,24 @@ func TestDnsWatchResolversDisagreeingWithTheZoneAlarm(t *testing.T) {
 	}
 }
 
+// A published host the edge answers through *, which the device's view of the zone does not show, passes on the
+// edge's addresses and alarms on a CNAME or on no address at all.
+func TestDnsWatchPublishedHostAnsweredThroughTheWildcard(t *testing.T) {
+	resolver := newTestDnsWatchResolver()
+	testDnsWatchHealthy(resolver)
+	blog := "blog.lbl0000001.root.example."
+	resolver.set(blog, DnsWatchTypeA, "11.22.33.44", "11.22.33.45")
+	resolver.set(blog, DnsWatchTypeAaaa, "2001:db8::44")
+	watch, alarms := newTestDnsWatch(t, resolver, []string{testDnsWatchHost, blog})
+	if watch.Pass(context.Background()) || len(*alarms) != 0 {
+		t.Fatalf("the edge's addresses alarmed: %v", *alarms)
+	}
+	resolver.set(blog, DnsWatchTypeAaaa)
+	if !watch.Pass(context.Background()) || len(*alarms) != 1 || (*alarms)[0] != SidecarDnsAlarmZoneMismatch {
+		t.Fatalf("a published host with no address: %v", *alarms)
+	}
+}
+
 // A sidecar with no published name and nothing it asked for watches nothing and asks no resolver.
 func TestDnsWatchWatchesNothingWithoutAPublishedName(t *testing.T) {
 	resolver := newTestDnsWatchResolver()

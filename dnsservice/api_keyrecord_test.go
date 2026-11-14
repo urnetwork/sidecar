@@ -77,6 +77,9 @@ func newTestKeyRecordApi(t testing.TB, store *fakeKeyRecordStore, allow bool) (*
 		}
 		deps.KeyRecordGate = gate
 	})
+	if err := api.host.Gates.Set("sidecar:\n  dns: {enabled: true, percent: 100}\n"); err != nil {
+		t.Fatal(err)
+	}
 	token := api.host.Authenticator.Issue(&sidecar.Principal{
 		NetworkId: connect.Id(networkId),
 		ClientId:  connect.NewId(),

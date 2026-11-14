@@ -315,6 +315,9 @@ type dnsWatchItem struct {
 	expected *DnsWatchExpected
 	// the zone's RRset there, nil for none
 	zone *DnsZoneRecordSet
+	// A or AAAA at a host this sidecar publishes and the zone holds no row at, which the edge answers through *
+	// (§12.7)
+	edge bool
 }
 
 // Runs one pass now and answers whether it alarmed. A pass with nothing to watch asks nothing.
@@ -415,6 +418,11 @@ func (self *DnsWatch) items(ctx context.Context) ([]*dnsWatchItem, error) {
 			names = append(names, name)
 		}
 	}
+	// owners the zone holds rows at, which * does not cover (RFC 4592)
+	ownersWithRows := map[string]bool{}
+	for _, recordSet := range zone.RecordSets {
+		ownersWithRows[CanonicalDnsRecordName(recordSet.Name)] = true
+	}
 	keys := map[string]bool{}
 	items := []*dnsWatchItem{}
 	add := func(name string, qType uint16) {
@@ -424,6 +432,7 @@ func (self *DnsWatch) items(ctx context.Context) ([]*dnsWatchItem, error) {
 		}
 		keys[key] = true
 		item := &dnsWatchItem{name: name, qType: qType}
+		item.edge = slices.Contains(hosts, name) && !ownersWithRows[name] && (qType == DnsWatchTypeA || qType == DnsWatchTypeAaaa)
 		for _, expected := range file.Expected {
 			if expected.Name == name && expected.Type == qType {
 				item.expected = expected
@@ -495,8 +504,9 @@ func judgeDnsWatchAnswer(item *dnsWatchItem, answer *DnsWatchAnswer) (SidecarDns
 		}
 		return "", true
 	}
-	if item.zone != nil {
-		// an edge or router row: the healthy interfaces' addresses, never a CNAME, which the device cannot know apart
+	if item.zone != nil || item.edge {
+		// an edge or router row, or a published host the edge answers through * or @: the healthy interfaces'
+		// addresses, never a CNAME, and which of them the device cannot know apart
 		if answer.Cname != "" || answer.NameError || len(answer.Values) == 0 {
 			return SidecarDnsAlarmZoneMismatch, false
 		}
