@@ -3,7 +3,8 @@
 // hint (MembershipChanged, ApprovalRequested, AuthorityHeadChanged, whose version is a log position) and hourly, the
 // pass that recovers a lost hint, and applies what it reads to its ConfigLog as a full reader: every base's config head
 // checked through ConfigHeadReader, and a reader that starts at a base, first or after it fell behind api's retention
-// point, starts there by the base's verdicts and anchor (DESIGN-DETAILS 5.2.4's StartAtBase), never below a pin it held.
+// point, starts there by the base's verdicts and anchor (DESIGN-DETAILS 5.2.4's StartAtBase), never below a pin it held,
+// reading the anchor's head through ConfigHeadAnchorReader under the base's own rows where its reader is one (QD-814).
 //
 // It neither signs nor posts (C-01): CORE-M2-02's acts do, and read back what landed through State and WaitFor. After
 // each applied entry it calls GkmClient.AuthAdvanced and every AddEntryCallback once, in log order, with the entry's
@@ -72,6 +73,39 @@ type ConfigProjectionReader interface {
 // the one named, which forks the base.
 type ConfigHeadReader interface {
 	ReadConfigHead(ctx context.Context, configVersion uint64, configHeadSha256 []byte) (*ConfigHead, error)
+}
+
+// What a reader starting at a base b judges b's config head by, its anchor (DESIGN-DETAILS 5.2.4's StartAtBase;
+// QD-814): the genesis it trusts and the identity keys b's own rows admit. Such a reader holds no state before b, so
+// none at the authorization pins of that head's pushes. *ConfigState is one: StartAtBase passes the state b's rows
+// give, before b's tail re-applies.
+type ConfigHeadAnchor interface {
+	// The Genesis A_0 hashes, whose config_repo_id names the repo the head is read from.
+	Genesis() *bridge.Genesis
+	// The identity key the rows admit for a sidecar, a revoked one's included; nil for none.
+	IdentityKey(sidecarId Id) []byte
+}
+
+// A ConfigHeadReader that also reads an anchor's head (QD-814): the head the base a reader starts at names, judged by
+// descent, as api judges a head: the chain from C_0 to C_v, each push's signature under the identity key anchor
+// admits for its signer, and no config-writer role at a push's own pin. A push whose signer anchor does not admit
+// withholds (ErrConfigHeadUnavailable), as does a repo other than the config repo anchor's genesis names. Every push
+// after the anchor is ReadConfigHead's, judged in full at its own pin. A head reader that judges no push's signer,
+// one reading heads by hash, need not be one.
+type ConfigHeadAnchorReader interface {
+	ConfigHeadReader
+	ReadConfigHeadAtAnchor(ctx context.Context, configVersion uint64, configHeadSha256 []byte, anchor ConfigHeadAnchor) (*ConfigHead, error)
+}
+
+// The config head check names, read through heads: an anchor's, a check with no Previous, through
+// ReadConfigHeadAtAnchor under check.Anchor where heads reads anchors; every other through ReadConfigHead, which
+// judges each push at its own pin and so withholds an anchor's head whose pushes predate this reader's state.
+func readConfigHeadForCheck(ctx context.Context, heads ConfigHeadReader, check *ConfigHeadCheck) (*ConfigHead, error) {
+	configVersion, configHeadSha256 := check.Header.GetConfigVersion(), check.Header.GetConfigHeadSha256()
+	if anchorHeads, ok := heads.(ConfigHeadAnchorReader); ok && check.Previous == nil && check.Anchor != nil {
+		return anchorHeads.ReadConfigHeadAtAnchor(ctx, configVersion, configHeadSha256, check.Anchor)
+	}
+	return heads.ReadConfigHead(ctx, configVersion, configHeadSha256)
 }
 
 // Tunables of a ConfigClient.
@@ -794,7 +828,8 @@ func (self *configClientRowsSource) Rows(networkId Id, rowsSha256 []byte) ([]byt
 }
 
 // The base's head, read and checked (CheckConfigBase), and remembered as verified. A head this device verified before
-// at the same version stands for a restart's anchor; every other check reads it.
+// at the same version stands for a restart's anchor; every other check reads it, an anchor's under the base's own rows
+// (readConfigHeadForCheck).
 func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
 	headSha256 := check.Header.GetConfigHeadSha256()
 	if len(headSha256) != sha256.Size {
@@ -808,7 +843,7 @@ func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHe
 	if self.client.args.Heads == nil {
 		return nil, fmt.Errorf("%w: no config head reader", ErrConfigHeadUnavailable)
 	}
-	head, err := self.client.args.Heads.ReadConfigHead(self.ctx, check.Header.GetConfigVersion(), headSha256)
+	head, err := readConfigHeadForCheck(self.ctx, self.client.args.Heads, check)
 	if err != nil {
 		return nil, err
 	}
