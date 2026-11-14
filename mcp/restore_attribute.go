@@ -222,12 +222,18 @@ func (self *RestorePoints) NoteEvent(ctx context.Context, network McpNetwork, ne
 	return scan, nil
 }
 
-// A tool call of the run began: its PreToolUse, held until its PostToolUse or RestoreHoldTimeout (ToolInFlight).
+// A tool call of the run began: its PreToolUse, held until its PostToolUse or RestoreHoldTimeout (ToolInFlight). A
+// call a person denied never ends with a PostToolUse, so each one past the timeout goes here too.
 func (self *RestorePoint) noteInFlight(toolUseId string, now time.Time) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.inFlight == nil {
 		self.inFlight = map[string]time.Time{}
+	}
+	for stale, started := range self.inFlight {
+		if !now.Before(started.Add(self.points.settings.RestoreHoldTimeout)) {
+			delete(self.inFlight, stale)
+		}
 	}
 	self.inFlight[toolUseId] = now
 }

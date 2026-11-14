@@ -153,3 +153,37 @@ func TestFileEventNeverAttributesEdit(t *testing.T) {
 		t.Errorf("the watch stopped %d times at the ingest's close", watch.stopped)
 	}
 }
+
+// A tool call whose PostToolUse never comes, as one a person denied, stops counting as in flight past
+// RestoreHoldTimeout, and the next call's PreToolUse drops it.
+func TestDeniedCallLeavesFlightAtTheTimeout(t *testing.T) {
+	env, _ := newFileEventEnv(t, true)
+	claude := sidecartest.FakeHarnessClaudeCode
+	a := env.start(claude, "sA")
+	runId := env.runOf(claude, "sA")
+	pre := func(toolUseId string) {
+		t.Helper()
+		if err := a.Hook(a.Payload("sA", "PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "make"}, "tool_use_id": toolUseId})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pre("toolu_denied")
+	if !env.restore.ToolInFlight(env.networkId, runId) {
+		t.Fatal("a call under way is not in flight")
+	}
+	env.clock.Advance(env.server.settings.Ingest.RestoreHoldTimeout)
+	// the next call's PreToolUse drops the denied one
+	pre("toolu_next")
+	point, _ := env.restore.Point(env.networkId, runId)
+	point.stateLock.Lock()
+	_, stale := point.inFlight["toolu_denied"]
+	count := len(point.inFlight)
+	point.stateLock.Unlock()
+	if stale || count != 1 {
+		t.Errorf("%d calls in flight, the denied one among them %t", count, stale)
+	}
+	env.clock.Advance(env.server.settings.Ingest.RestoreHoldTimeout)
+	if env.restore.ToolInFlight(env.networkId, runId) {
+		t.Error("a call stays in flight past the timeout")
+	}
+}
