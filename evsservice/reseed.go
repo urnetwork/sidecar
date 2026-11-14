@@ -30,7 +30,8 @@
 // The repo (§11.13, §11.12's refused row): evs takes re-seeds only for repos the projection lists live or restorable.
 // One whose newest RepoDelete carries now, or is past ReseedRestoreWindow, is refused 409 SHREDDING; one whose
 // RepoDelete is unrestored and inside the window has repo/ moved to deleted{deletion_id, its entry's time} before
-// anything is taken, and then takes its history and slots while deleted.
+// anything is taken, and then takes its history and slots while deleted, and its admin's segments at PUT .../segments
+// (reseedAdmitsDeleted).
 //
 // Not built here, each refused before anything is written: a push in parts (question
 // evs-reseed-route-part-records), a push carrying format 2 (EVS2-M10-13), and a statement at an auth pin evs's state
@@ -47,6 +48,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -150,15 +152,10 @@ func (self *EvsEngine) reseedRepo(request *EvsRequest) (*EvsRepoDeletionFacts, b
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		return nil, false
 	}
-	var deletion *EvsRepoDeletionFacts
-	if facts.Deletion != nil && facts.Deletion.DeletionId != (sidecar.Id{}) && !facts.Deletion.Restored {
-		deletion = facts.Deletion
-		// with now, or past the window a RepoRestore can still land in: never restorable, so nothing comes back. A
-		// RepoDelete the projection does not date is not known to be inside the window
-		if deletion.Now || deletion.Time.IsZero() || self.settings.ReseedRestoreWindow <= request.Now().Sub(deletion.Time) {
-			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)
-			return nil, false
-		}
+	deletion, restorable := self.reseedDeletion(facts, request.Now())
+	if !restorable {
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)
+		return nil, false
 	}
 	read, err := self.repos.Read(request.Ctx, request.Cluster, request.RepoId)
 	if !self.answerTransition(request, err) {
@@ -189,6 +186,33 @@ func (self *EvsEngine) reseedRepo(request *EvsRequest) (*EvsRepoDeletionFacts, b
 	// keying, shredding or shredded: nothing is taken
 	request.RefuseCode(repoStateRefusal(object).Code)
 	return nil, false
+}
+
+// The unrestored RepoDelete the projection's facts end in, nil for a live or restored repo, and whether the repo may
+// still take its history back (§11.13, §11.12's re-seed exception): false for a RepoDelete with now or past
+// ReseedRestoreWindow, the window a RepoRestore can still land in, after which nothing comes back. A RepoDelete the
+// projection does not date is not known to be inside the window.
+func (self *EvsEngine) reseedDeletion(facts *EvsRepoFacts, now time.Time) (*EvsRepoDeletionFacts, bool) {
+	if facts == nil || facts.Deletion == nil || facts.Deletion.DeletionId == (sidecar.Id{}) || facts.Deletion.Restored {
+		return nil, true
+	}
+	deletion := facts.Deletion
+	if deletion.Now || deletion.Time.IsZero() || self.settings.ReseedRestoreWindow <= now.Sub(deletion.Time) {
+		return deletion, false
+	}
+	return deletion, true
+}
+
+// §11.12's re-seed exception for a route that refuses a deleted repo (PUT .../segments): while sidecar.yml's reseed
+// is on, a repo admin's request is taken for a repo whose repo/ reads deleted under the unrestored RepoDelete the
+// projection ends in, inside the restore window, since its history, its segments with it, returns while it stays
+// deleted. Everything else of a deleted repo stays refused.
+func (self *EvsEngine) reseedAdmitsDeleted(request *EvsRequest, facts *EvsRepoFacts, object *protocol.EvsRepoObject) bool {
+	if object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED || !self.host.GatesOrClosed().Reseed() || !request.Rights.Has(sidecar.AclEvsAdmin) {
+		return false
+	}
+	deletion, restorable := self.reseedDeletion(facts, request.Now())
+	return deletion != nil && restorable && evsRepoNamesDeletion(object, deletion.DeletionId)
 }
 
 // The attempt for a re-seeded push, or false once the request has been answered. A statement or payload that does

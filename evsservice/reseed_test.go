@@ -6,7 +6,9 @@ package evsservice
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -590,6 +592,77 @@ func TestReseedOfADeletedRepoPlacesTheMarkerFirst(t *testing.T) {
 	requireRefusal(t, fixture.reseed(thirdBody), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)
 	if fixture.head().Version() != 2 {
 		t.Fatalf("head at %d", fixture.head().Version())
+	}
+}
+
+// A deleted repo's segments (§11.12's re-seed exception at PUT .../segments): refused 409 REPO_DELETED as §11.12's
+// refused row has it, to a writer, outside a recovery, under another RepoDelete than the projection ends in and past
+// the restore window; taken from a repo admin while reseed is on and the repo is taking its history back; and a
+// repo past deleted takes none.
+func TestReseedTakesADeletedReposSegmentsFromItsAdmin(t *testing.T) {
+	fixture := newUploadFixture(t)
+	network := fixture.networkId.String()
+	gate := func(reseed bool) {
+		t.Helper()
+		text := "sidecar:\n  evs:\n    enabled: true\n    networks: [\"" + network + "\"]\n"
+		if reseed {
+			text += "  reseed: true\n"
+		}
+		if err := fixture.host.Gates.Set(text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deletionId := testId("upload deletion")
+	entryTime := fixture.clock.Now().Add(-3 * 24 * time.Hour)
+	project := func(deletion *EvsRepoDeletionFacts) {
+		fixture.auth.setRepo(fixture.repoId, &EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_GENERAL, NetworkId: sidecar.Id(fixture.networkId), Deletion: deletion})
+	}
+	restorable := &EvsRepoDeletionFacts{DeletionId: deletionId, Time: entryTime, SignerSidecarId: fixture.admin}
+	cluster, err := fixture.host.Blobs.Cluster("meta-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the repo active, then deleted under the RepoDelete, as the reseed route places it before any history
+	classify := func(ctx context.Context, objectByteCount int) context.Context { return ctx }
+	if _, err := transitionRepo(fixture.ctx, cluster, fixture.engine.repos, fixture.repoId, fixture.engine.settings.RepoTransitionRetryCount,
+		classify, decideActivate(func() (bool, error) { return true, nil }, fixture.clock.Now())); err != nil {
+		t.Fatalf("repo/ to active: %v", err)
+	}
+	moved, err := transitionRepo(fixture.ctx, cluster, fixture.engine.repos, fixture.repoId, fixture.engine.settings.RepoTransitionRetryCount,
+		classify, decideDelete(restorable, fixture.clock.Now()))
+	if err != nil || moved.Object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED {
+		t.Fatalf("repo/ to deleted: %v", err)
+	}
+	project(restorable)
+	segment := testSegment(fixture.repoId, 4096, 6)
+	segmentId := sha256.Sum256(segment)
+	refused := func(what string, sidecarId sidecar.Id, role string, code protocol.EvsRefusalCode) {
+		t.Helper()
+		requireRefusal(t, fixture.upload(sidecarId, role, segment, segmentId, false), http.StatusConflict, code)
+		if fixture.object("seg-1", SegmentKey(fixture.repoId, segmentId)) != nil {
+			t.Fatalf("%s: a refused upload wrote", what)
+		}
+	}
+
+	gate(false)
+	refused("outside a recovery", fixture.admin, "admin", protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+	gate(true)
+	refused("a writer's upload", fixture.writer, "rw", protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+	project(&EvsRepoDeletionFacts{DeletionId: testId("another deletion"), Time: entryTime, SignerSidecarId: fixture.admin})
+	refused("under another RepoDelete", fixture.admin, "admin", protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+	project(&EvsRepoDeletionFacts{DeletionId: deletionId, Time: fixture.clock.Now().Add(-fixture.engine.settings.ReseedRestoreWindow), SignerSidecarId: fixture.admin})
+	refused("past the restore window", fixture.admin, "admin", protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+	project(&EvsRepoDeletionFacts{DeletionId: deletionId, Now: true, Time: entryTime, SignerSidecarId: fixture.admin})
+	refused("a RepoDelete with now", fixture.admin, "admin", protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+	project(&EvsRepoDeletionFacts{DeletionId: deletionId, Time: entryTime, Restored: true, SignerSidecarId: fixture.admin})
+	refused("a restored RepoDelete repo/ has not followed", fixture.admin, "admin", protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+
+	// the repo admin's upload while its history returns, a closure upload never
+	project(restorable)
+	requireRefusal(t, fixture.upload(fixture.admin, "admin", segment, segmentId, true), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED)
+	receipt := fixture.receipt(fixture.upload(fixture.admin, "admin", segment, segmentId, false))
+	if receipt.GetPaddedSize() != uint64(len(segment)) || !bytes.Equal(fixture.object("seg-1", SegmentKey(fixture.repoId, segmentId)), segment) {
+		t.Fatalf("the admin's segment: receipt of %d bytes", receipt.GetPaddedSize())
 	}
 }
 
