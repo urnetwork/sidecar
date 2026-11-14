@@ -308,7 +308,7 @@ func TestSmtpDnssecRefusesMalformedChains(t *testing.T) {
 	compressed := []byte{0xc0, 0x0c, 0, 15, 0, 1, 0, 0, 0, 1, 0, 0}
 	unknownType := append([]byte{0}, binary.BigEndian.AppendUint16(binary.BigEndian.AppendUint16(nil, 99), 1)...)
 	unknownType = append(unknownType, 0, 0, 0, 1, 0, 0)
-	for _, input := range [][]byte{compressed, unknownType, make([]byte, sidecar.SmtpDnssecChainMaxByteCount+1), nil} {
+	for _, input := range [][]byte{compressed, unknownType, make([]byte, sidecar.DefaultSmtpDaneSettings().MaxChainByteCount+1), nil} {
 		if !refused(input) {
 			t.Errorf("%x passed", input[:min(len(input), 16)])
 		}

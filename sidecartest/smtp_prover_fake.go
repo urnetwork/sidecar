@@ -7,10 +7,15 @@
 // the client's application records from 1 in its own count, one record per 16 KiB of a write, which
 // is how FakeSmtpProofVerifier's credit reads them.
 //
-// The dialog keeps the real one's order and refusals: SHTS disclosed after a 1.3 handshake; pi1 before
-// EHLO; the mode from the post-TLS keywords; too_large and a mismatched count decided before MAIL;
-// pi2 before MAIL, RCPT and DATA, pipelined only under PIPELINING; pi3, the last, before the message,
-// and QUIT once the MX took it. A DATA send is one part here, where the real prover splits it.
+// The dialog keeps the real one's order and refusals: SHTS disclosed after a 1.3 handshake; pi1, the key
+// part, before EHLO; the mode from the post-TLS keywords; too_large and a mismatched count decided before
+// MAIL; pi2 before MAIL, RCPT and DATA, pipelined only under PIPELINING; pi3, the last, before the
+// message, and QUIT once the MX took it. A DATA send is one part here, and the envelope one group, where
+// the real prover splits both (DESIGN-DETAILS 3.2.6). Parts carry DESIGN-DETAILS 3.2.5's fields with
+// markers where a commitment goes, and reply counts as the parts' server records hold them.
+//
+// It names fixed key sets, ready after a scripted number of PrepareKeys calls, and refuses a job naming
+// any other with ErrSmtpProofKeySet. A script can end a send after the envelope with EnvelopeRetry.
 // It records every send. Safe for concurrent use.
 
 package sidecartest
@@ -19,12 +24,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,11 +46,19 @@ var (
 	errFakeSmtpProverNoMeasure = errors.New("fake smtp prover: no measure loaded")
 )
 
-// A record's most plaintext octets, as crypto/tls writes them with dynamic sizing off.
-const fakeSmtpProverRecordByteCount = 16 * 1024
+// The marker in place of a commitment, the length of one on the wire (DESIGN-DETAILS 3.2.2).
+const fakeSmtpCommitmentByteCount = 64
+
+// The key set every default fake names, an id of keyset.json's width.
+func FakeSmtpProverKeySet() []byte {
+	keySet := sha256.Sum256([]byte("urnetwork fake smtp key set"))
+	return keySet[:]
+}
 
 // What the fake offers and allows.
 type FakeSmtpProverSettings struct {
+	// A record's most plaintext octets, as crypto/tls writes them with dynamic sizing off: TLS's 16 KiB.
+	RecordContentMaxByteCount int
 	// The highest TLS version offered: tls.VersionTLS13, or tls.VersionTLS12 to hold a send there.
 	MaxVersion uint16
 	// The DATA cap in dot-stuffed octets, past which a DATA send is too_large: 1 MiB, the M1
@@ -54,12 +69,25 @@ type FakeSmtpProverSettings struct {
 	ForceData bool
 	// What Measure returns. Nil fails Measure, as on a host with no keys.
 	Measure *sidecar.SmtpProverMeasure
+	// The key sets the fake is pinned to, newest first, each with every family ready once PrepareKeys has
+	// been called PrepareShapeCount times. None: KeySet is empty and every named set is refused.
+	KeySets [][]byte
+	// The suites each key set has ready.
+	ReadySuites []uint16
+	// PrepareKeys calls, one shape each, before the key sets are ready; 0 has them ready at once.
+	PrepareShapeCount int
+	// Decides per send whether the MX's replies to the envelope overflow every shape, which ends the
+	// send after MAIL, the RCPTs and their replies with EnvelopeRetry and no message record. Nil never.
+	EnvelopeRetry func(job *sidecar.SmtpProofJob) bool
 }
 
 func DefaultFakeSmtpProverSettings() *FakeSmtpProverSettings {
 	return &FakeSmtpProverSettings{
-		MaxVersion:         tls.VersionTLS13,
-		DataProofByteCount: 1024 * 1024,
+		RecordContentMaxByteCount: 16 * 1024,
+		MaxVersion:                tls.VersionTLS13,
+		DataProofByteCount:        1024 * 1024,
+		KeySets:                   [][]byte{FakeSmtpProverKeySet()},
+		ReadySuites:               []uint16{tls.TLS_CHACHA20_POLY1305_SHA256, tls.TLS_AES_128_GCM_SHA256, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
 	}
 }
 
@@ -85,6 +113,9 @@ type FakeSmtpProver struct {
 
 	stateLock sync.Mutex
 	sends     []*FakeSmtpProverSend
+	// PrepareKeys calls that advanced a shape
+	preparedShapeCount int
+	prepareCallCount   int
 }
 
 // A nil settings takes DefaultFakeSmtpProverSettings.
@@ -108,6 +139,70 @@ func (self *FakeSmtpProver) Measure(ctx context.Context) (*sidecar.SmtpProverMea
 	}
 	measure := *self.settings.Measure
 	return &measure, nil
+}
+
+func (self *FakeSmtpProver) readyWithLock() bool {
+	return 0 < len(self.settings.KeySets) && self.settings.PrepareShapeCount <= self.preparedShapeCount
+}
+
+// KeySet of sidecar.SmtpProver: the newest key set, once ready.
+func (self *FakeSmtpProver) KeySet() []byte {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !self.readyWithLock() {
+		return nil
+	}
+	return bytes.Clone(self.settings.KeySets[0])
+}
+
+// PrepareKeys of sidecar.SmtpProver: one shape a call, until PrepareShapeCount. A cancelled ctx
+// advances nothing.
+func (self *FakeSmtpProver) PrepareKeys(ctx context.Context) (*sidecar.SmtpProverReadiness, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.prepareCallCount += 1
+	if self.preparedShapeCount < self.settings.PrepareShapeCount {
+		self.preparedShapeCount += 1
+	}
+	readiness := &sidecar.SmtpProverReadiness{Done: self.readyWithLock() || len(self.settings.KeySets) == 0}
+	if self.readyWithLock() {
+		for _, keySet := range self.settings.KeySets {
+			readiness.KeySets = append(readiness.KeySets, &sidecar.SmtpProverKeySet{
+				Id:          bytes.Clone(keySet),
+				ReadySuites: slices.Clone(self.settings.ReadySuites),
+			})
+		}
+	}
+	return readiness, nil
+}
+
+// How many times PrepareKeys ran past a live ctx.
+func (self *FakeSmtpProver) PrepareCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.prepareCallCount
+}
+
+// Whether a job's key set is one the fake can prove under now. An empty one is a job from before the
+// field, which the fake takes, since it proves nothing either way.
+func (self *FakeSmtpProver) acceptsKeySet(keySet []byte) bool {
+	if len(keySet) == 0 {
+		return true
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !self.readyWithLock() {
+		return false
+	}
+	for _, held := range self.settings.KeySets {
+		if bytes.Equal(held, keySet) {
+			return true
+		}
+	}
+	return false
 }
 
 // Takes 1.3's SHTS from the key log, the one secret a real prover discloses (E2).
@@ -206,7 +301,14 @@ func (self *FakeSmtpProver) SendSmtp(ctx context.Context, conn net.Conn, job *si
 		self.sends = append(self.sends, send)
 	}()
 	run := &fakeSmtpProverRun{prover: self, job: job, channel: channel, send: send, nextIndex: 1}
-	result, err := run.run(ctx, conn)
+	var result *sidecar.SmtpProofResult
+	var err error
+	if job != nil && !self.acceptsKeySet(job.KeySet) {
+		// refused before any octet goes to the MX
+		err = sidecar.ErrSmtpProofKeySet
+	} else {
+		result, err = run.run(ctx, conn)
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -280,9 +382,9 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 		}
 	}
 
-	// pi1: EHLO
+	// pi1, the key part: EHLO
 	ehlo := "EHLO " + job.Preamble.HeloName + "\r\n"
-	if err := self.submit(ctx, sidecar.SmtpModeUnknown, false, fakeSmtpRecordCount(ehlo)); err != nil {
+	if err := self.submit(ctx, &fakeSmtpPart{mode: sidecar.SmtpModeUnknown, recordCount: self.recordCountOf(ehlo), keyPart: true}); err != nil {
 		return nil, err
 	}
 	if err := self.command(ehlo); err != nil {
@@ -333,9 +435,10 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 	}
 	envelopeRecords := uint64(0)
 	for _, command := range commands {
-		envelopeRecords += fakeSmtpRecordCount(command)
+		envelopeRecords += self.recordCountOf(command)
 	}
-	if err := self.submit(ctx, mode, false, envelopeRecords); err != nil {
+	// the EHLO reply's one reply
+	if err := self.submit(ctx, &fakeSmtpPart{mode: mode, recordCount: envelopeRecords, replyCount: 1}); err != nil {
 		return nil, err
 	}
 	refuses := func(i int, reply *fakeSmtpReply) bool {
@@ -379,6 +482,12 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 		}
 	}
 
+	// replies to the envelope that no shape holds end the send here, MAIL gone and no message record
+	// sent (DESIGN-DETAILS 3.2.4)
+	if self.prover.settings.EnvelopeRetry != nil && self.prover.settings.EnvelopeRetry(job) {
+		return &sidecar.SmtpProofResult{Mode: uint32(mode), EnvelopeRetry: true}, nil
+	}
+
 	// pi3, the last: the message, then QUIT once the MX took it
 	var message []string
 	switch mode {
@@ -387,11 +496,12 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 	default:
 		message = []string{string(stuffed), ".\r\n"}
 	}
-	messageRecords := fakeSmtpRecordCount("QUIT\r\n")
+	messageRecords := self.recordCountOf("QUIT\r\n")
 	for _, content := range message {
-		messageRecords += fakeSmtpRecordCount(content)
+		messageRecords += self.recordCountOf(content)
 	}
-	if err := self.submit(ctx, mode, true, messageRecords); err != nil {
+	// it covers the envelope's replies and opens the whole header block
+	if err := self.submit(ctx, &fakeSmtpPart{mode: mode, recordCount: messageRecords, last: true, replyCount: uint32(len(commands)), opensHeader: true}); err != nil {
 		return nil, err
 	}
 	for i, content := range message {
@@ -419,20 +529,43 @@ func (self *fakeSmtpProverRun) run(ctx context.Context, conn net.Conn) (*sidecar
 }
 
 // The records crypto/tls writes for content, with dynamic sizing off.
-func fakeSmtpRecordCount(content string) uint64 {
-	return uint64((len(content) + fakeSmtpProverRecordByteCount - 1) / fakeSmtpProverRecordByteCount)
+func (self *fakeSmtpProverRun) recordCountOf(content string) uint64 {
+	recordByteCount := self.prover.settings.RecordContentMaxByteCount
+	return uint64((len(content) + recordByteCount - 1) / recordByteCount)
+}
+
+// What one part covers.
+type fakeSmtpPart struct {
+	mode        sidecar.SmtpMode
+	recordCount uint64
+	last        bool
+	// the key part, which carries the key commitment
+	keyPart bool
+	// replies its server records hold
+	replyCount uint32
+	// it opens the header block, so it names the block's records and carries a scan's state
+	opensHeader bool
 }
 
 // Submits the next part, covering the next recordCount application records.
-func (self *fakeSmtpProverRun) submit(ctx context.Context, mode sidecar.SmtpMode, last bool, recordCount uint64) error {
+func (self *fakeSmtpProverRun) submit(ctx context.Context, covered *fakeSmtpPart) error {
 	part := &sidecar.SmtpProofPart{
 		SendId:      bytes.Clone(self.job.SendId),
 		Index:       self.nextIndex,
-		Mode:        uint32(mode),
+		Mode:        uint32(covered.mode),
 		FirstRecord: self.recordCount + 1,
-		LastRecord:  self.recordCount + recordCount,
+		LastRecord:  self.recordCount + covered.recordCount,
 		Proof:       []byte("fake smtp proof"),
-		Last:        last,
+		Last:        covered.last,
+		ReplyCount:  covered.replyCount,
+	}
+	if covered.keyPart {
+		part.KeyCommitment = bytes.Repeat([]byte{0xc0}, fakeSmtpCommitmentByteCount)
+	}
+	if covered.opensHeader {
+		// the fake's message is one record
+		part.HeaderRecordCount = 1
+		part.Carry = bytes.Repeat([]byte{0xca}, fakeSmtpCommitmentByteCount)
 	}
 	self.nextIndex += 1
 	func() {
@@ -454,7 +587,7 @@ func (self *fakeSmtpProverRun) command(line string) error {
 }
 
 func (self *fakeSmtpProverRun) write(content string) error {
-	self.recordCount += fakeSmtpRecordCount(content)
+	self.recordCount += self.recordCountOf(content)
 	_, err := self.conn.Write([]byte(content))
 	return err
 }

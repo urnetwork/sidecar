@@ -150,8 +150,28 @@ func newProverSessionStatement(result *tlsHandshakeResult, preamble *sessionPrea
 	return session, nil
 }
 
+// KeySet of sidecar.SmtpProver. Until key sets of version 2 and their pins exist (SMTP-M9-40) this
+// prover is pinned to none, so it names none and a host with it only queues (D-SMTP-18).
+func (self *Prover) KeySet() []byte {
+	return nil
+}
+
+// PrepareKeys of sidecar.SmtpProver. With no pinned key set of version 2 (SMTP-M9-40) there is nothing to
+// check: nothing is ready, and nothing is left to do until a release pins a set.
+func (self *Prover) PrepareKeys(ctx context.Context) (*sidecar.SmtpProverReadiness, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &sidecar.SmtpProverReadiness{Done: true}, nil
+}
+
 // SendSmtp of sidecar.SmtpProver.
 func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.SmtpProofJob, channel sidecar.SmtpProofChannel) (*sidecar.SmtpProofResult, error) {
+	// a set this prover cannot prove under is refused before any octet goes out; until SMTP-M9-40 that is
+	// every named set, and a job naming none proves as before
+	if len(job.KeySet) != 0 {
+		return nil, sidecar.ErrSmtpProofKeySet
+	}
 	if job.Preamble == nil || uint32(len(job.RecipientLocals)) != job.Preamble.RecipientCount || len(job.RecipientLocals) == 0 {
 		return nil, errors.New("smtpproof: job's recipients do not match its preamble")
 	}
