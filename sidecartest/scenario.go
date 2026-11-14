@@ -420,21 +420,6 @@ func RunScenarioReport(t testing.TB, scenario *Scenario, settings *ScenarioSetti
 	return runScenario(t, scenario, settings)
 }
 
-// Whether every finding the scan made is a refused secret of one of kinds (a value the capture would not search
-// for), and there is at least one: what a scenario waiting on a question about such secrets checks before it reads
-// open.
-func (self *ScenarioReport) OnlyRefusedSecrets(kinds ...string) bool {
-	if len(self.Findings) == 0 {
-		return false
-	}
-	for _, finding := range self.Findings {
-		if finding.NeedleKind != privacyNeedleRefused || !slices.Contains(kinds, finding.Needle) {
-			return false
-		}
-	}
-	return true
-}
-
 func runScenario(t testing.TB, scenario *Scenario, settings *ScenarioSettings) *ScenarioReport {
 	t.Helper()
 	if settings == nil {

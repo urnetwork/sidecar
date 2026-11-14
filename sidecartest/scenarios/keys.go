@@ -28,8 +28,8 @@
 //     Not composed yet: the gates' 412 until a covering generation, members refusing a bad commit, tokens failing in
 //     their windows, the path epoch and the first-write checkpoint, which TEST-M2-12's revocation suite holds whole.
 //
-// RunOnTheMlsSubset judges a run under sidecar_testhooks, where the MLS subset hooks its 12-byte AEAD nonces and the
-// capture refuses them (questions/test-m2-11-mls-nonce-hooks.md): any other finding fails, and those alone read open.
+// Both run whole under sidecar_testhooks, every key the MLS subset hooks searched for in every store: the subset
+// hands the hook no AEAD nonce, which the capture would refuse as too short to search for (ledger QD-755).
 
 package scenarios
 
@@ -38,7 +38,6 @@ import (
 	"crypto/hpke"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -51,9 +50,6 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/sidecartest/gkmschedule"
 )
-
-// The 12-byte AEAD nonces the MLS subset hooks, which the capture refuses to search for.
-var mlsNonceKinds = []string{"ratchet_nonce", "sender_data_nonce", "welcome_nonce"}
 
 // gkm worlds on the scenario's Net, their engine's stores those of the host the run gives gkm.
 func gkmWorlds(t testing.TB, run *sidecartest.ScenarioRun) gkmschedule.FsKeysNewWorld {
@@ -261,32 +257,4 @@ func S4a(t testing.TB) *sidecartest.Scenario {
 		gkmschedule.FsKeysScheduleKillsBetweenWrites(t, newWorld)
 		return nil
 	}}
-}
-
-// Runs a scenario whose worlds run the real MLS subset, on settings' tier (nil: T2): without the hooks it passes
-// whole or fails t; with them it fails t on any finding but the refused MLS nonces, and on those alone returns why
-// the test reads open, naming the question that waits on them, which the caller skips with, never passing. It
-// returns "" otherwise. The caller skips, since a skip inside server's TestEnv reads as an attempt that never
-// returned.
-func RunOnTheMlsSubset(t testing.TB, scenario *sidecartest.Scenario, settings *sidecartest.ScenarioSettings) string {
-	t.Helper()
-	if !sidecartest.HooksLinked {
-		sidecartest.RunScenario(t, scenario, settings)
-		return ""
-	}
-	report := sidecartest.RunScenarioReport(t, scenario, settings)
-	if report.FlowErr != nil || 0 < len(report.GuardFindings) || 0 < len(report.StoredFindings) || 0 < len(report.Problems) {
-		t.Errorf("%s: flow %v, guard %q, stored %q, problems %q", scenario.Id, report.FlowErr, report.GuardFindings, report.StoredFindings, report.Problems)
-		return ""
-	}
-	if len(report.Findings) == 0 {
-		return ""
-	}
-	if !report.OnlyRefusedSecrets(mlsNonceKinds...) {
-		for _, finding := range report.Findings {
-			t.Errorf("%s: %s", scenario.Id, finding)
-		}
-		return ""
-	}
-	return fmt.Sprintf("%s: every hooked key and canary was searched for and found in no store, but the capture refused %d of the MLS subset's 12-byte nonces, which waits on questions/test-m2-11-mls-nonce-hooks.md", scenario.Id, len(report.Findings))
 }
