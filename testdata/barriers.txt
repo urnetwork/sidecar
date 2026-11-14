@@ -53,8 +53,8 @@ barrier bridge_forward.fork.before bridge_forward_follow.go
 barrier bridge_forward.generation.store bridge_forward_keys.go
 barrier bridge_forward.pending.before bridge_forward.go
 barrier bridge_forward.sign bridge_forward_sign.go
-barrier bridge_forward_setup.step.after bridge_forward_setup.go
-barrier bridge_forward_setup.step.before bridge_forward_setup.go
+barrier bridge_forward_setup.step.after bridge_setup_forward.go
+barrier bridge_forward_setup.step.before bridge_setup_forward.go
 barrier bridge_link.close.after device/bridge_link.go
 barrier bridge_link.close.before device/bridge_link.go
 barrier bridge_link.publish.after device/bridge_link.go
