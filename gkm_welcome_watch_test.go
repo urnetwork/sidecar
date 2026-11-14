@@ -5,7 +5,8 @@
 // that stands leaves the joiner alone; a leaf that does not write never asks, and one gkm refuses stops asking; an
 // ask gkm does not answer is asked again; a joiner that committed is asked after no more; a joiner with no
 // KeyPackage keeps its leaf; the hint intake's timer runs the ask when it falls due; and a leaf that reached its
-// epoch by a resync, by a join or in a re-formed group holds no watch from before it and asks nothing.
+// epoch by a resync, by a join or in a re-formed group, or that processed its own Remove, holds no watch from before
+// it and asks nothing.
 
 package sidecar_test
 
@@ -492,5 +493,40 @@ func TestAReformForgetsTheWelcomeWatches(t *testing.T) {
 	}
 	if _, _, watchEpochs := world.welcomeWatches(world.b); len(watchEpochs) != 0 {
 		t.Errorf("b's watches after the re-form and a run of its engine: %v", watchEpochs)
+	}
+}
+
+// A leaf that processes its own Remove holds no leaf to re-add from: its keychain holds no watch after it, and it
+// asks nothing once WelcomeTimeout has passed.
+func TestARemovedLeafForgetsItsWelcomeWatches(t *testing.T) {
+	world, _ := newGkmWelcomeWatchWorld(t, 2, true)
+	a, b := world.flows[world.a], world.flows[world.b]
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if _, epoch, watchEpochs := world.welcomeWatches(world.b); epoch != 2 || !slices.Equal(watchEpochs, []uint64{2}) {
+		t.Fatalf("b's watches after it adopted the Add: %v at epoch %d", watchEpochs, epoch)
+	}
+	world.drop(world.b)
+	world.repo.HoldersShrunkAt = world.nextPosition()
+	world.stateFor()
+	if err := a.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("a removes b: %v", err)
+	}
+	if labels := world.rosterLabels(world.engineGroup(world.a)); slices.Contains(labels, "b") {
+		t.Fatalf("b kept its leaf: %v", labels)
+	}
+	world.advance(2 * sidecar.DefaultGkmSettings().WelcomeTimeout)
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("b processes its Remove: %v", err)
+	}
+	if world.engineGroup(world.b) != nil && slices.Contains(world.rosterLabels(world.engineGroup(world.b)), "b") {
+		t.Fatalf("b still holds its leaf")
+	}
+	if _, _, watchEpochs := world.welcomeWatches(world.b); len(watchEpochs) != 0 {
+		t.Errorf("b's watches after its Remove: %v", watchEpochs)
+	}
+	if world.store.callCount("WelcomeStands") != 0 {
+		t.Errorf("a removed leaf asked %d times", world.store.callCount("WelcomeStands"))
 	}
 }
