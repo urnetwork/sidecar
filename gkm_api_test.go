@@ -433,6 +433,45 @@ func TestGkmApiMapsAnswers(t *testing.T) {
 	}
 }
 
+// QD-747: HEAD welcome/<n> goes under rw with no body and opaque ids, and its status is the whole answer: a 200 is a
+// Welcome that stands and a 404 one that does not; a refusal, or a success of another status, says nothing of the
+// Welcome and is an error.
+func TestGkmApiWelcomeStandsReadsTheHeadsStatus(t *testing.T) {
+	transport := &gkmTestTransport{}
+	status := http.StatusOK
+	transport.serve = func(request *gkmTestRequest) (int, http.Header, []byte) {
+		return status, nil, nil
+	}
+	tokens := newGkmTestTokens()
+	api := newGkmTestApi(t, transport, tokens, nil)
+	repoId, groupId := NewId(), NewId()
+	api.SetRepoScopes(append(gkmTestScopes(2, GkmScopeRoleRead), GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleRead}))
+	ctx := context.Background()
+	if stands, err := api.WelcomeStands(ctx, repoId, groupId, 7); err != nil || !stands {
+		t.Fatalf("a 200: %v %v", stands, err)
+	}
+	asked := transport.taken()[0]
+	if asked.method != http.MethodHead || asked.path != "/gkm/groups/"+gkmUrlId(groupId)+"/welcome/7" || asked.query != "" || len(asked.body) != 0 {
+		t.Errorf("the ask: %s %s, a body of %d bytes", asked.method, asked.path, len(asked.body))
+	}
+	// the batch carries r, so the ask takes the repo's rw scope alone
+	if got := tokens.scopesOf(asked.token); !slices.Equal(got, []string{GkmRepoScope{RepoId: repoId, Role: GkmScopeRoleWrite}.scope()}) {
+		t.Errorf("the ask's token holds %v", got)
+	}
+	status = http.StatusNotFound
+	if stands, err := api.WelcomeStands(ctx, repoId, groupId, 7); err != nil || stands {
+		t.Errorf("a 404: %v %v", stands, err)
+	}
+	status = http.StatusForbidden
+	if stands, err := api.WelcomeStands(ctx, repoId, groupId, 7); !IsGkmStatus(err, http.StatusForbidden) || stands {
+		t.Errorf("a 403: %v %v", stands, err)
+	}
+	status = http.StatusCreated
+	if stands, err := api.WelcomeStands(ctx, repoId, groupId, 7); !errors.Is(err, ErrGkmReplyInvalid) || stands {
+		t.Errorf("a 201: %v %v", stands, err)
+	}
+}
+
 // GET /gkm/welcomes answers per token, so the client asks with each batch and takes each Welcome once, by its
 // pointer's group and epoch.
 func TestGkmApiWelcomesAskWithEachToken(t *testing.T) {

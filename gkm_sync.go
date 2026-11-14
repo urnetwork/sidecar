@@ -407,7 +407,7 @@ func (self *GkmGroupClient) AnswerWant(ctx context.Context, repoId Id) error {
 	if err != nil {
 		return errors.Join(pendingErr, err)
 	}
-	if len(group.Roster()) <= gkmGroupInfoInlineLeafCount || group.Epoch() != pins.epoch {
+	if len(group.Roster()) <= self.settings.GroupInfoInlineLeafCount || group.Epoch() != pins.epoch {
 		return pendingErr
 	}
 	top, err := self.newestHeldGeneration(repoId)
