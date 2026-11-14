@@ -1035,6 +1035,19 @@ func TestIndexRollupGroundsReachEveryState(t *testing.T) {
 	t.Logf("%s: %d grounds, reach states %v", spec, len(grounds), reachStates)
 }
 
+// StoreSettle's cfg runs only the first of §22.8's breadth-first runs, so run-tlc.sh's design grounds
+// carry the rest, bounded as details/Settle.tla's configurations are, and the two traces of the question
+// its DELETE rule answered (QD-744); its liveness rows, which live mode runs, are grounds too. Each row
+// ends as a ground can and sets only constants the cfg has. The spec defines no reach state.
+func TestStoreSettleGroundsSetOnlyItsConstants(t *testing.T) {
+	spec := "StoreSettle"
+	grounds := groundTable(t, spec)
+	for _, finding := range groundFindings(spec, grounds, nil, cfgInvariants(t, spec), cfgConstants(t, spec)) {
+		t.Error(finding)
+	}
+	t.Logf("%s: %d grounds", spec, len(grounds))
+}
+
 // The grounds rule catches a reach state no row checks, a constant the cfg lacks, two rows of one name, a
 // row that ends as no ground can and a table with no liveness row, and passes a table with none of them.
 func TestGroundsRuleCatchesAnUncheckedReachState(t *testing.T) {

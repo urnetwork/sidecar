@@ -67,7 +67,7 @@ models:
   - spec: StoreSettle
     owners: [EVS1-M2-02]
     milestones: [M2]
-    objects: "one key on 8 drives at EC:4 (4 hosts of 2): each drive's version and its own lock on the key, each write's coordinator and its drive commits, the settler and heal (D-OPS-20's settle rule)"
+    objects: "one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and its own lock on the key, each write's coordinator and its drive commits, a failed DELETE's key held until each of its commits has answered and each that landed is reverted (QD-744), the settler and heal, whose commit is checked at its drive like any other (D-OPS-20's settle rule)"
     sources:
       - sidecar/sidecartest/model/StoreSettle.tla
       - sidecar/sidecartest/model/StoreSettle.cfg
