@@ -13,7 +13,8 @@
 //	hooks      hooks in the same file: SessionStart to SessionEnd, the tool events matching every tool, and
 //	           PermissionRequest with Ingest.PermissionHookTimeout, which may wait on a presence prompt
 //	           (plan-MCP-presence-hook-timing); each runs `<ur> hook claude-code`. SessionEnd's 1.5 s is the harness's
-//	           own bound, which ur hook's 300 ms meets, so nothing is written for it
+//	           own bound, which ur hook's 300 ms meets, so nothing is written for it. Under the cloud profile
+//	           SessionStart's one command takes the key file first (harness_cloud.go)
 //
 // The same hooks shape serves Codex's hooks.json (harness_install_codex.go), its events its own and no ask rule.
 //
@@ -39,7 +40,7 @@ type claudeInstallAdapter struct{}
 
 // The events ur hooks in Claude Code, in the order they are written.
 var claudeHookEvents = []harnessHookEvent{
-	{name: "SessionStart"},
+	{name: "SessionStart", start: true},
 	{name: "InstructionsLoaded"},
 	{name: "UserPromptSubmit"},
 	{name: "PreToolUse", matcher: "*"},
@@ -75,12 +76,14 @@ func (self *claudeInstallAdapter) projectSettingsFiles(cwd string) []*harnessFil
 	}
 }
 
-// One event ur hooks: its name, the matcher its group carries ("" for none), and whether its entry may wait on a
-// presence prompt and so carries Ingest.PermissionHookTimeout.
+// One event ur hooks: its name, the matcher its group carries ("" for none), whether its entry may wait on a
+// presence prompt and so carries Ingest.PermissionHookTimeout, and whether it is the session's start, whose step the
+// cloud profile's connect comes before.
 type harnessHookEvent struct {
 	name       string
 	matcher    string
 	permission bool
+	start      bool
 }
 
 // The events whose hooks can answer for a tool call before it runs, where another's hook counts as competing
@@ -241,6 +244,9 @@ func (self *harnessHooksFile) askRulesOf(template *harnessTemplate) []string {
 // The template's group for event.
 func (self *harnessHooksFile) group(event harnessHookEvent, template *harnessTemplate) *harnessHookGroup {
 	entry := &harnessHookEntry{Type: "command", Command: template.hookCommand()}
+	if event.start {
+		entry.Command = template.startCommand()
+	}
 	if event.permission {
 		entry.Timeout = template.permissionTimeoutSeconds
 	}

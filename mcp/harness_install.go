@@ -19,6 +19,11 @@
 //	           rewrote between the plan and the write is planned again from its new bytes, up to
 //	           Ingest.HarnessInstallRetryCount times, since only ur's entries change and the person saw those
 //	--project  the files a cloud session loads, committed in the project, and §5.8's `.ur` where none is
+//	cloud      with a key file named (HarnessInstallArgs.CloudKeyFile; --project alone), the cloud profile: the
+//	           committed SessionStart step first takes the auth key a setup step left in that file, `ur connect
+//	           --token-file <path> --ephemeral`, then runs ur hook, in one command, since a harness runs an event's
+//	           hooks side by side and the enrollment comes before any other ur step (§16.9; QD-041). The file names a
+//	           path, never a key, and the seal holds it with the template's other inputs
 //
 // The vault-synced global harness config is plan-MCP-harness-config-schema's: until a reader of the vault's
 // harness/config.json lands, the install takes local defaults and reads no vault (QD-116's interim).
@@ -105,7 +110,11 @@ type HarnessInstallArgs struct {
 	UrPath string
 	// The instance's <state>, where the seal goes.
 	StateDirectory string
-	Ingest         *sidecar.SidecarIngestSettings
+	// The cloud profile's key file (§16.9; QD-041): the absolute path, in the session's VM, of the owner-only file a
+	// setup step leaves the auth key in, which the committed SessionStart step takes with `ur connect --token-file`.
+	// "" writes no connect step. A project install's alone, of a harness that reports a session's start.
+	CloudKeyFile string
+	Ingest       *sidecar.SidecarIngestSettings
 }
 
 // The template's inputs: what ur writes into a harness's files is a function of these alone.
@@ -118,6 +127,8 @@ type harnessTemplate struct {
 	outwardTools []string
 	// in whole seconds
 	permissionTimeoutSeconds int
+	// The cloud profile's key file, "" for none: the session-start step takes it before ur hook runs.
+	cloudKeyFile string
 }
 
 // The template of args, its outward tools the catalog's.
@@ -156,6 +167,15 @@ func (self *harnessTemplate) hookCommand() string {
 		command += " --instance " + harnessShellQuote(self.instance)
 	}
 	return command
+}
+
+// The session-start step: ur hook, and under the cloud profile the key file's connect step before it in the same
+// command (HarnessCloudStartCommand).
+func (self *harnessTemplate) startCommand() string {
+	if self.cloudKeyFile == "" {
+		return self.hookCommand()
+	}
+	return HarnessCloudStartCommand(self.urPath, self.cloudKeyFile, self.instance, self.hookCommand())
 }
 
 // text as one shell word: bare where it holds only safe bytes, else in single quotes.
@@ -222,21 +242,30 @@ func harnessShellWords(command string) []string {
 	return words
 }
 
-// Whether a hook command is any ur's `ur hook`: its first word's base name ur, its second hook. The install replaces
-// every one of these, an older ur's included.
+// Whether words, a command's, are a step ur installs: ur hook, or the cloud profile's session-start step, which begins
+// ur connect --token-file.
+func harnessUrStepWords(words []string) bool {
+	if len(words) < 2 {
+		return false
+	}
+	return words[1] == "hook" || (words[1] == "connect" && 3 <= len(words) && words[2] == HarnessCloudKeyFileFlag)
+}
+
+// Whether a hook command is any ur's step: its first word's base name ur, then hook, or the cloud profile's connect.
+// The install replaces every one of these, an older ur's included.
 func harnessUrishCommand(command string) bool {
 	words := harnessShellWords(command)
-	if len(words) < 2 || words[1] != "hook" {
+	if !harnessUrStepWords(words) {
 		return false
 	}
 	base := strings.ToLower(filepath.Base(strings.ReplaceAll(words[0], `\`, "/")))
 	return strings.TrimSuffix(base, ".exe") == urBinaryName
 }
 
-// Whether a hook command is this ur's: its first word ur's absolute path exactly, its second hook.
+// Whether a hook command is this ur's: its first word ur's absolute path exactly, then one of ur's steps.
 func (self *harnessTemplate) ownsCommand(command string) bool {
 	words := harnessShellWords(command)
-	return 2 <= len(words) && words[0] == self.urPath && words[1] == "hook"
+	return harnessUrStepWords(words) && words[0] == self.urPath
 }
 
 // One kind of file ur writes entries into.
@@ -398,6 +427,12 @@ func PlanHarnessInstall(args *HarnessInstallArgs) (*HarnessInstallPlan, error) {
 		return nil, errors.New("the project's directory is not absolute")
 	}
 	template := newHarnessTemplate(args.Harness, args.UrPath, args.Agent, args.Instance, McpOutwardToolNames(), args.Ingest)
+	if args.CloudKeyFile != "" {
+		if err := checkHarnessCloudKeyFile(args, adapter); err != nil {
+			return nil, err
+		}
+		template.cloudKeyFile = args.CloudKeyFile
+	}
 	plan := &HarnessInstallPlan{args: args, template: template}
 	for _, file := range adapter.files(args.Home, args.ProjectDirectory) {
 		filePlan, err := planHarnessFile(file, template, args.Ingest)

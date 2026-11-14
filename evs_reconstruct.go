@@ -332,9 +332,10 @@ func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, ver
 	return info, nil
 }
 
-// A verified file version's content in a spill the caller closes, after the receipt gate, its size and oid checked
-// against its sealed fields, which it gives with the oid. onRecord, when set, sees each record's opened header and
-// locator in chain order, which the write planner reads the chain's facts from.
+// A verified file version's content in a spill the caller closes, after the receipt gate (unless the read is exempt
+// from it, evsReadResult's receiptExempt), its size and oid checked against its sealed fields, which it gives with the
+// oid. onRecord, when set, sees each record's opened header and locator in chain order, which the write planner reads
+// the chain's facts from.
 func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath, onRecord func(header *EvsRecordHeader, locator *protocol.EvsLocator)) (*evsSpill, *protocol.EvsSealedFields, EvsGitOid, error) {
 	entry := verified.Entry
 	push := verified.Statement.Push
@@ -350,8 +351,10 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 		}
 	}
 	objectIds = append(objectIds, entry.GetSlotIds()...)
-	if err := self.client.preDecrypt(ctx, self.repoId, result.refId, objectIds); err != nil {
-		return nil, nil, EvsGitOid{}, err
+	if !result.receiptExempt {
+		if err := self.client.preDecrypt(ctx, self.repoId, result.refId, objectIds); err != nil {
+			return nil, nil, EvsGitOid{}, err
+		}
 	}
 	keys := result.keys
 	manifest, err := keys.manifest(ctx, push.GetGeneration())

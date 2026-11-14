@@ -17,6 +17,14 @@
 //	         authorization pin: its signature under its signer's admitted identity key, and §11.8's refs table, where
 //	         a shared ref of the config repo takes pushes from config writers alone (ACL's kind default). A main ref
 //	         that is not a shared file-mode ref is no config head's
+//	anchor   a reader that starts at a base b (DESIGN-DETAILS 5.2.4's StartAtBase) holds no state before b, so none at
+//	         the pins of the pushes of the head b names, and reads that head through ReadConfigHeadAtAnchor, which
+//	         judges those statements by descent under b's own rows, as api judges a head (QD-814; judgeAtAnchor): the
+//	         chain from C_0 to C_v under §11.7's version rules, and each push's signature under the identity key b's
+//	         rows admit for its signer. The config-writer role at each push's own pin is left unjudged. Every push
+//	         after the anchor is judged in full at its own pin, by ReadConfigHead. The repo must be the config repo
+//	         the trusted genesis names, whose kind no read receipt covers, so an anchor's files are decrypted without
+//	         the receipt gate, which asks a verified state such a reader does not hold yet
 //	tree     each push's record is read by its push id and version and checked against its signed statement, then
 //	         applied in order: a directory's delta names its children, each name opened under the push's epoch and
 //	         checked against its token, a file's entry stands until a later push writes or removes it, and a removal
@@ -30,8 +38,9 @@
 //	the head          C_v is the ref's at v, through config writers' pushes; the pin is raised to (v, C_v) first
 //	unavailable       evs serves no version v yet, or a log that does not pass through this device's pin, or a
 //	                  record that is not its statement's; this device's state is behind a push's authorization pin or
-//	                  no longer retains it, which is unjudged and never allowed (§7.9's state by pin); a key it does
-//	                  not hold; a push this reader does not replay (below). Each withholds the base
+//	                  no longer retains it, which is unjudged and never allowed (§7.9's state by pin); at an anchor, a
+//	                  push whose signer the base's rows do not admit, which is as unjudged; a key it does not hold; a
+//	                  push this reader does not replay (below). Each withholds the base
 //	mismatch          the verified chain holds another value at v, or the chain the base names holds a push the
 //	                  verifier refuses, a non-writer's among them: the base is a fork
 //	malformed         the files at v are no config head (NewConfigHead's refusals)
@@ -39,8 +48,9 @@
 // Not replayed, so unavailable: a FORCE, BASE, IMMUTABLE, CONSUME, ERASE, CLOSURE, DROP or CUT push on the ref, and a
 // format-2 statement. A DELETE empties the tree, and a PATH_EPOCH push changes none of it.
 //
-// A reader that starts at a base holds no state before it, so it judges no push there and this reader withholds its
-// anchor's head (question config-head-reader-anchor-push-signers).
+// A device following in order whose base names a head with a push pinned before its window, its previous base, still
+// withholds that base: ReadConfigHead never judges by descent. It heals by starting again at a later base, as one that
+// fell behind api's retention point does, where ReadConfigHeadAtAnchor takes the head.
 //
 // The replay is kept in memory between reads, the tree at the last version read with the bytes of the files it read,
 // so a follower checking bases in order reads each push once and each file version once; a read of an older version
@@ -68,8 +78,12 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A push on the config repo's main ref that is no config head's, or that this reader does not replay.
-var errEvsConfigHeadPush = errors.New("evs config head: push not replayed")
+var (
+	// A push on the config repo's main ref that is no config head's, or that this reader does not replay.
+	errEvsConfigHeadPush = errors.New("evs config head: push not replayed")
+	// At an anchor, a push whose signer the base's rows do not admit: no key to judge it by, so it withholds.
+	errEvsConfigHeadUnadmitted = errors.New("evs config head: a signer the base's rows do not admit")
+)
 
 // Tunables of an EvsConfigHeadReader.
 type EvsConfigHeadSettings struct {
@@ -166,7 +180,7 @@ type EvsConfigHeadReader struct {
 	cachedHeads []*evsConfigCachedHead
 }
 
-var _ ConfigHeadReader = (*EvsConfigHeadReader)(nil)
+var _ ConfigHeadAnchorReader = (*EvsConfigHeadReader)(nil)
 
 // A reader of args.Repo's main ref as config heads.
 func NewEvsConfigHeadReader(args *EvsConfigHeadReaderArgs) (*EvsConfigHeadReader, error) {
@@ -211,6 +225,24 @@ func (self *EvsConfigHeadReader) cacheHead(configVersion uint64, chain [sha256.S
 
 // ConfigHeadReader: see the file header for what each answer means.
 func (self *EvsConfigHeadReader) ReadConfigHead(ctx context.Context, configVersion uint64, configHeadSha256 []byte) (*ConfigHead, error) {
+	return self.read(ctx, configVersion, configHeadSha256, nil)
+}
+
+// ConfigHeadAnchorReader: ReadConfigHead's answers for the head the base a reader starts at names, its pushes after
+// this device's pin judged by descent under anchor, the admissions of the base's own rows (the file header's anchor
+// row). A nil anchor, or one whose genesis names another config repo than this reader's, withholds.
+func (self *EvsConfigHeadReader) ReadConfigHeadAtAnchor(ctx context.Context, configVersion uint64, configHeadSha256 []byte, anchor ConfigHeadAnchor) (*ConfigHead, error) {
+	if anchor == nil {
+		return nil, fmt.Errorf("%w: no base rows to judge the anchor's pushes by", ErrConfigHeadUnavailable)
+	}
+	if configRepoId, err := IdFromBytes(anchor.Genesis().GetConfigRepoId()); err != nil || configRepoId != self.repo.repoId {
+		return nil, fmt.Errorf("%w: the repo read is not the config repo the anchor's genesis names", ErrConfigHeadUnavailable)
+	}
+	return self.read(ctx, configVersion, configHeadSha256, anchor)
+}
+
+// One read of the head at configVersion: at an anchor when anchor is set, else judged at each push's own pin.
+func (self *EvsConfigHeadReader) read(ctx context.Context, configVersion uint64, configHeadSha256 []byte, anchor ConfigHeadAnchor) (*ConfigHead, error) {
 	named, err := EvsChainFromBytes(configHeadSha256)
 	if err != nil {
 		return nil, fmt.Errorf("%w: a config_head_sha256 of %d bytes", ErrConfigHeadMismatch, len(configHeadSha256))
@@ -232,7 +264,7 @@ func (self *EvsConfigHeadReader) ReadConfigHead(ctx context.Context, configVersi
 	if head := self.cachedHead(configVersion, named); head != nil {
 		return head, nil
 	}
-	head, err := self.readWithTurn(ctx, configVersion, named)
+	head, err := self.readWithTurn(ctx, configVersion, named, anchor)
 	if err != nil {
 		return nil, err
 	}
@@ -240,8 +272,9 @@ func (self *EvsConfigHeadReader) ReadConfigHead(ctx context.Context, configVersi
 	return head, nil
 }
 
-// One read, by the turn's holder: the chain and its writers through version, the pin, the tree and its files.
-func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint64, named [sha256.Size]byte) (*ConfigHead, error) {
+// One read, by the turn's holder: the chain and its writers through version, the pin, the tree and its files. With
+// anchor, the pushes after the trusted point are judged at the anchor (judgeAtAnchor), else at each one's own pin.
+func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint64, named [sha256.Size]byte, anchor ConfigHeadAnchor) (*ConfigHead, error) {
 	repo := self.repo
 	client := repo.client
 	unavailable := func(what string, err error) error {
@@ -326,13 +359,20 @@ func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint6
 		return nil, fmt.Errorf("%w: the log evs serves does not pass through this device's pin at version %d", ErrConfigHeadUnavailable, pin.Version)
 	}
 
-	// every push after the trusted point through the version asked, judged at its own authorization pin
+	// every push after the trusted point through the version asked: at an anchor by descent under the base's rows,
+	// else each at its own authorization pin
 	if trustedVersion < version {
-		judged := read[trustedVersion-replay.version : version-replay.version]
-		if _, err := client.verifier.walk(repo.repoId, refId, trustedVersion, trustedChain, judged, version); err != nil {
+		var err error
+		if anchor != nil {
+			err = self.judgeAtAnchor(anchor, refId, statements[trustedVersion-replay.version:version-replay.version], trustedVersion, trustedChain)
+		} else {
+			judged := read[trustedVersion-replay.version : version-replay.version]
+			_, err = client.verifier.walk(repo.repoId, refId, trustedVersion, trustedChain, judged, version)
+		}
+		if err != nil {
 			// what proves nothing against a signer withholds; anything else is a push no config writer validly signed
 			quiet := errors.Is(err, ErrEvsFormatUnsupported) || errors.Is(err, ErrEvsNoConfig) ||
-				errors.Is(err, ErrGkmAuthAhead) || errors.Is(err, ErrGkmAuthNotRetained)
+				errors.Is(err, ErrGkmAuthAhead) || errors.Is(err, ErrGkmAuthNotRetained) || errors.Is(err, errEvsConfigHeadUnadmitted)
 			if quiet {
 				return nil, unavailable("the pushes after this device's pin", err)
 			}
@@ -388,7 +428,7 @@ func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint6
 		}
 	}
 
-	files, err := self.readFiles(ctx, pinnedHead, keys, replay)
+	files, err := self.readFiles(ctx, pinnedHead, keys, replay, anchor != nil)
 	// the replay stands as far as it came, with the files it read, whatever the files' read came to
 	self.replay = replay
 	if err != nil {
@@ -398,6 +438,42 @@ func (self *EvsConfigHeadReader) readWithTurn(ctx context.Context, version uint6
 		return nil, unavailable("the head's files", err)
 	}
 	return NewConfigHead(files)
+}
+
+// The anchor's judgment (QD-814; the file header's anchor row) of statements, the pushes after the trusted point
+// (fromVersion, fromChain) through the version asked, for a reader starting at a base b, which holds no state at
+// their authorization pins: the head's descent, as api judges it. Each push's signature must verify under the identity
+// key b's rows admit for its signer, a revoked sidecar's included, and the pushes must keep §11.7's version rules on
+// the chain they make, whose value at the version asked the caller holds to the C_v b names. Nothing judges the
+// config-writer role at a push's own pin, which needs the state there. A signer b's rows do not admit leaves the push
+// unjudgeable, errEvsConfigHeadUnadmitted, which withholds; a signature that fails, or a rule broken, is a push no
+// config writer validly signed, alarmed as walk alarms one.
+//
+// The accepted gap: a config writer removed before b, whose identity b's rows still admit, could have a past push
+// taken here as a writer's. Its push stands inside a head that b's signer, a config writer at b, signed for, and what
+// it wrote is bound by the compile check from the next base on; every push after the anchor is judged in full at its
+// own pin.
+func (self *EvsConfigHeadReader) judgeAtAnchor(anchor ConfigHeadAnchor, refId Id, statements []*EvsVerifiedStatement, fromVersion uint64, fromChain [sha256.Size]byte) error {
+	client := self.repo.client
+	for _, statement := range statements {
+		signerId, err := IdFromBytes(statement.Statement.Push.GetSignerSidecarId())
+		if err != nil {
+			return fmt.Errorf("%w: the push at version %d names no signer", ErrEvsStatementRefused, statement.Version)
+		}
+		identityKey := anchor.IdentityKey(signerId)
+		if len(identityKey) == 0 {
+			return fmt.Errorf("%w: the push at version %d, by %s", errEvsConfigHeadUnadmitted, statement.Version, signerId)
+		}
+		if err := statement.Statement.Verify(identityKey); err != nil {
+			client.alarm(self.repo.repoId, refId, SidecarEvsAlarmTamper, "", &signerId)
+			return fmt.Errorf("%w: the push at version %d: its signature: %w", ErrEvsStatementRefused, statement.Version, err)
+		}
+	}
+	if err := evsCheckWalkRules(statements, fromVersion, fromChain); err != nil {
+		client.alarm(self.repo.repoId, refId, SidecarEvsAlarmVersionRule, "", nil)
+		return err
+	}
+	return nil
 }
 
 // The checked payload of each push of batch that carries one, by its version: a one-part push's record read with the
@@ -597,8 +673,10 @@ func (self *evsConfigHeadReplay) apply(ctx context.Context, keys *evsReadKeys, s
 }
 
 // The bytes of every file standing in the tree, by its path, each version read once and kept on the tree. A file a
-// directory's row names and no push wrote is not a head's.
-func (self *EvsConfigHeadReader) readFiles(ctx context.Context, head *EvsVerifiedHead, keys *evsReadKeys, replay *evsConfigHeadReplay) (map[string][]byte, error) {
+// directory's row names and no push wrote is not a head's. atAnchor reads them past the receipt gate, which asks a
+// state an anchor's reader does not hold yet: the repo is the config repo the anchor's genesis names, whose kind no
+// read receipt covers (§16.8's owner-bound kinds).
+func (self *EvsConfigHeadReader) readFiles(ctx context.Context, head *EvsVerifiedHead, keys *evsReadKeys, replay *evsConfigHeadReplay, atAnchor bool) (map[string][]byte, error) {
 	repo := self.repo
 	files := map[string][]byte{}
 	byteCount := int64(0)
@@ -619,7 +697,7 @@ func (self *EvsConfigHeadReader) readFiles(ctx context.Context, head *EvsVerifie
 		}
 		if !path.contentRead {
 			content, err := func() ([]byte, error) {
-				result := &evsReadResult{refId: head.RefId, head: head, keys: keys, objects: newEvsReadObjects(repo.client)}
+				result := &evsReadResult{refId: head.RefId, head: head, keys: keys, objects: newEvsReadObjects(repo.client), receiptExempt: atAnchor}
 				defer result.objects.close()
 				verified := &EvsVerifiedPath{
 					TokenPath: path.tokenPath, EntryBytes: path.entryBytes, Entry: path.entry,
