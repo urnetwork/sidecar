@@ -2,7 +2,7 @@
 // changed after the pin refused; a never-read path's older version accepted, as §2.8 publishes; a reader far behind
 // re-pinning with a gap mark; a fork and a rollback of the head refused and alarmed; a statement by a non-writer, a
 // broken chain and a git-mode push off its tip refused; adjacent-leaf proofs for a large push; a reseed lowering a pin
-// as a loss; and HeadCheck's ref source.
+// as a loss, and the ref's read records with it (QD-816); and HeadCheck's ref source.
 
 package sidecar
 
@@ -11,11 +11,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -362,6 +364,202 @@ func TestEvsReseedLowersThePinAsALoss(t *testing.T) {
 	pin, _, _ := reader.client.pins.Pin(world.repoId, world.refId)
 	if pin.Version != 1 || pin.Loss == nil || pin.Loss.FromVersion != 2 {
 		t.Errorf("after the reseed: %+v", pin)
+	}
+}
+
+// A verified EvsReseed takes the ref's read records with its pin (QD-816): a record whose entry was committed above
+// the re-seeded head is dropped; one committed at or below it keeps its entry and commit versions, its pin lowered to
+// the head, C there and the head's current epoch, and a floor the lost versions raised past that epoch lowered to it;
+// one pinned at or below the head stands as it was; a record stored before the commit version was kept is dropped
+// when pinned above the head and kept when not; another ref's records, and another repo's, do not change. The records
+// stand so when the store opens again; a read that pinned a lost head raises no record once the pin fell; the
+// listings cached at lost heads and the version this device committed at above the head go; and the same reseed
+// again keeps the loss.
+func TestEvsReseedDropsTheLostRecordsAndLowersTheRest(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.config.repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: world.signer.sidecarId.Bytes()}}
+	store := newEvsTestStore(t)
+	reader := evsTestReaderThrough(t, world, world, store, world.gkm, evsTestId("reader"))
+	pins := reader.client.pins
+	repoId, refId := world.repoId, world.refId
+	otherRepoId, otherRefId := evsTestId("other repo"), evsTestId("other ref")
+	at := time.Date(2026, time.November, 14, 0, 0, 0, 0, time.UTC)
+	chainAt := func(version uint64) [sha256.Size]byte {
+		return [sha256.Size]byte(evsTestBytes(fmt.Sprint("chain ", version), sha256.Size))
+	}
+	for _, pin := range []*EvsPin{{RepoId: repoId, RefId: refId}, {RepoId: repoId, RefId: otherRefId}, {RepoId: otherRepoId, RefId: refId}} {
+		pin.Version, pin.Chain, pin.PinnedAt, pin.GroupId = 9, chainAt(9), at, evsTestId("group")
+		if err := pins.Raise(pin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := func(refId Id, path string, entryVersion uint64, commitVersion uint64, pinVersion uint64, floor uint64, pinEpoch uint64) *EvsReadRecord {
+		chain := chainAt(pinVersion)
+		return &EvsReadRecord{RefId: refId, Path: path, EntryVersion: entryVersion, CommitVersion: commitVersion,
+			PinVersion: pinVersion, PinChain: &chain, UsedAt: at, Floor: floor, PinEpoch: pinEpoch}
+	}
+	if err := pins.RaiseReadRecords(repoId, []*EvsReadRecord{
+		record(refId, "lost.txt", 7, 7, 9, 3, 3),
+		record(refId, "kept.txt", 4, 4, 9, 3, 3),
+		record(refId, "head.txt", 5, 5, 9, 1, 3),
+		record(refId, "below.txt", 2, 2, 4, 1, 1),
+		record(refId, "no-floor.txt", 3, 3, 9, 0, 3),
+		record(refId, "old-above.txt", 3, 0, 9, 1, 3),
+		record(refId, "old-at.txt", 3, 0, 5, 1, 2),
+		record(otherRefId, "lost.txt", 7, 7, 9, 3, 3),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pins.RaiseReadRecords(otherRepoId, []*EvsReadRecord{record(refId, "lost.txt", 7, 7, 9, 3, 3)}); err != nil {
+		t.Fatal(err)
+	}
+	epochs := reader.client.epochs
+	epochs.noteCommitted(repoId, refId, 9)
+	for _, listed := range []struct {
+		refId   Id
+		version uint64
+	}{{refId: refId, version: 4}, {refId: refId, version: 7}, {refId: otherRefId, version: 7}} {
+		epochs.cacheListing(repoId, listed.refId, "d", &evsListedDirectory{headVersion: listed.version}, reader.client.settings.ListingCacheCount)
+	}
+
+	// the re-seeded head at 5, in path epoch 2, where the lost versions had cut the ref over to 3
+	headChain := chainAt(5)
+	head := &protocol.EvsHeadSummary{RefId: refId.Bytes(), Version: 5, Chain: headChain[:], PathEpoch: &protocol.EvsPathEpoch{Current: 2}}
+	statement, err := SignEvsReseed(world.signer.sign, repoId, refId, 5, headChain, []byte("incident"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.client.verifier.AcceptReseed(statement, repoId, refId, head); err != nil {
+		t.Fatal(err)
+	}
+	expect := func(store *EvsPinStore, repoId Id, refId Id, path string, want *EvsReadRecord) {
+		t.Helper()
+		got, ok, err := store.ReadRecord(repoId, refId, path)
+		switch {
+		case err != nil:
+			t.Fatal(err)
+		case want == nil && ok:
+			t.Errorf("%s stands: %+v", path, got)
+		case want != nil && !ok:
+			t.Errorf("%s is gone", path)
+		case want != nil && (got.EntryVersion != want.EntryVersion || got.CommitVersion != want.CommitVersion ||
+			got.PinVersion != want.PinVersion || got.PinChain == nil || *got.PinChain != *want.PinChain ||
+			got.Floor != want.Floor || got.PinEpoch != want.PinEpoch):
+			t.Errorf("%s: %+v, want %+v", path, got, want)
+		}
+	}
+	expectAll := func(store *EvsPinStore) {
+		t.Helper()
+		expect(store, repoId, refId, "lost.txt", nil)
+		expect(store, repoId, refId, "kept.txt", record(refId, "kept.txt", 4, 4, 5, 2, 2))
+		expect(store, repoId, refId, "head.txt", record(refId, "head.txt", 5, 5, 5, 1, 2))
+		expect(store, repoId, refId, "below.txt", record(refId, "below.txt", 2, 2, 4, 1, 1))
+		expect(store, repoId, refId, "no-floor.txt", record(refId, "no-floor.txt", 3, 3, 5, 0, 2))
+		expect(store, repoId, refId, "old-above.txt", nil)
+		expect(store, repoId, refId, "old-at.txt", record(refId, "old-at.txt", 3, 0, 5, 1, 2))
+		expect(store, repoId, otherRefId, "lost.txt", record(otherRefId, "lost.txt", 7, 7, 9, 3, 3))
+		expect(store, otherRepoId, refId, "lost.txt", record(refId, "lost.txt", 7, 7, 9, 3, 3))
+		for _, pinned := range []struct {
+			repoId  Id
+			refId   Id
+			version uint64
+		}{{repoId: repoId, refId: refId, version: 5}, {repoId: repoId, refId: otherRefId, version: 9}, {repoId: otherRepoId, refId: refId, version: 9}} {
+			pin, ok, err := store.Pin(pinned.repoId, pinned.refId)
+			if err != nil || !ok || pin.Version != pinned.version || pin.Chain != chainAt(pinned.version) {
+				t.Errorf("the pin of %s: %+v %v", pinned.refId, pin, err)
+			}
+		}
+	}
+	expectAll(pins)
+	expectAll(NewEvsPinStore(store, DefaultEvsSettings()))
+	pin, _, _ := pins.Pin(repoId, refId)
+	if pin.Loss == nil || pin.Loss.FromVersion != 9 || pin.GroupId != evsTestId("group") {
+		t.Fatalf("the lowered pin: %+v, loss %+v", pin, pin.Loss)
+	}
+
+	// a read that pinned the lost head before the reseed and raises its records after it raises none of that head's
+	if err := pins.RaiseReadRecords(repoId, []*EvsReadRecord{record(refId, "late.txt", 8, 8, 9, 3, 3), record(refId, "after.txt", 2, 2, 5, 1, 2)}); err != nil {
+		t.Fatal(err)
+	}
+	expect(pins, repoId, refId, "late.txt", nil)
+	expect(pins, repoId, refId, "after.txt", record(refId, "after.txt", 2, 2, 5, 1, 2))
+
+	if committed := epochs.committedVersion(repoId, refId); committed != 5 {
+		t.Errorf("the version this device committed at after the reseed: %d", committed)
+	}
+	if epochs.cachedListing(repoId, refId, 4, "d") == nil || epochs.cachedListing(repoId, refId, 7, "d") != nil ||
+		epochs.cachedListing(repoId, otherRefId, 7, "d") == nil {
+		t.Errorf("the listings after the reseed: at the head's 4 %v, at a lost 7 %v, another ref's 7 %v",
+			epochs.cachedListing(repoId, refId, 4, "d") != nil, epochs.cachedListing(repoId, refId, 7, "d") != nil,
+			epochs.cachedListing(repoId, otherRefId, 7, "d") != nil)
+	}
+
+	// a second read that met the same head before the first lowered the pin keeps the loss
+	if err := reader.client.verifier.AcceptReseed(statement, repoId, refId, head); err != nil {
+		t.Fatal(err)
+	}
+	pin, _, _ = pins.Pin(repoId, refId)
+	if pin.Version != 5 || pin.Loss == nil || pin.Loss.FromVersion != 9 || pin.GroupId != evsTestId("group") {
+		t.Fatalf("the pin after the same reseed again: %+v, loss %+v", pin, pin.Loss)
+	}
+	expect(pins, repoId, refId, "kept.txt", record(refId, "kept.txt", 4, 4, 5, 2, 2))
+	if pins.reseedCount(repoId, refId) != 2 || pins.reseedCount(repoId, otherRefId) != 0 {
+		t.Errorf("reseeds counted: %d, another ref's %d", pins.reseedCount(repoId, refId), pins.reseedCount(repoId, otherRefId))
+	}
+}
+
+// A read record stored before the commit version was kept opens with none and its other fields as stored, and a
+// verified EvsReseed takes it by its pin alone (QD-816's fallback): pinned above the re-seeded head it is dropped, at
+// or below it kept as it is.
+func TestEvsReadRecordsStoredBeforeTheCommitVersionOpenAndFallBack(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.config.repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: world.signer.sidecarId.Bytes()}}
+	store := newEvsTestStore(t)
+	chain := evsTestBytes("chain 9", sha256.Size)
+	// the stored form as it was before commit_version
+	stored := fmt.Sprintf(`[{"ref_id":%q,"path":"above.txt","entry_version":3,"pin_version":9,"pin_chain":%q,"used_at_ms":1767225600000,"floor":1,"pin_epoch":1},`+
+		`{"ref_id":%q,"path":"below.txt","entry_version":2,"pin_version":4,"used_at_ms":1767225600000}]`,
+		world.refId.String(), hex.EncodeToString(chain), world.refId.String())
+	writer, err := store.Create(evsReadDirectory + world.repoId.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte(stored)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	reader := evsTestReaderThrough(t, world, world, store, world.gkm, evsTestId("reader"))
+	pins := reader.client.pins
+	above, ok, err := pins.ReadRecord(world.repoId, world.refId, "above.txt")
+	if err != nil || !ok || above.CommitVersion != 0 || above.EntryVersion != 3 || above.PinVersion != 9 || above.PinChain == nil ||
+		!bytes.Equal(above.PinChain[:], chain) || above.Floor != 1 || above.PinEpoch != 1 || !above.UsedAt.Equal(time.UnixMilli(1767225600000)) {
+		t.Fatalf("a record stored before the commit version: %+v %v %v", above, ok, err)
+	}
+	below, ok, err := pins.ReadRecord(world.repoId, world.refId, "below.txt")
+	if err != nil || !ok || below.CommitVersion != 0 || below.EntryVersion != 2 || below.PinVersion != 4 || below.PinChain != nil || below.Floor != 0 {
+		t.Fatalf("a record stored before the chain and the commit version: %+v %v %v", below, ok, err)
+	}
+	if err := pins.Raise(&EvsPin{RepoId: world.repoId, RefId: world.refId, Version: 9, Chain: [sha256.Size]byte(chain)}); err != nil {
+		t.Fatal(err)
+	}
+	headChain := [sha256.Size]byte(evsTestBytes("chain 5", sha256.Size))
+	statement, err := SignEvsReseed(world.signer.sign, world.repoId, world.refId, 5, headChain, []byte("incident"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := &protocol.EvsHeadSummary{RefId: world.refId.Bytes(), Version: 5, Chain: headChain[:]}
+	if err := reader.client.verifier.AcceptReseed(statement, world.repoId, world.refId, head); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := pins.ReadRecord(world.repoId, world.refId, "above.txt"); ok {
+		t.Errorf("a record of no commit version read above the head stands")
+	}
+	if record, ok, _ := pins.ReadRecord(world.repoId, world.refId, "below.txt"); !ok || record.EntryVersion != 2 || record.PinVersion != 4 || record.PinChain != nil {
+		t.Errorf("a record of no commit version read below the head: %+v %v", record, ok)
 	}
 }
 
