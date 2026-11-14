@@ -15,12 +15,17 @@
  }
 --- a/$HOME/.cursor/hooks.json
 +++ b/$HOME/.cursor/hooks.json
-@@ -2,7 +2,26 @@
+@@ -2,7 +2,36 @@
    "version": 1,
    "hooks": {
      "afterFileEdit": [
 -      { "command": "/opt/fmt/bin/format-on-save" }
 +      { "command": "/opt/fmt/bin/format-on-save" },
++      {
++        "command": "/opt/ur/bin/ur hook cursor"
++      }
++    ],
++    "beforeSubmitPrompt": [
 +      {
 +        "command": "/opt/ur/bin/ur hook cursor"
 +      }
@@ -37,6 +42,11 @@
 +      }
 +    ],
 +    "afterMCPExecution": [
++      {
++        "command": "/opt/ur/bin/ur hook cursor"
++      }
++    ],
++    "stop": [
 +      {
 +        "command": "/opt/ur/bin/ur hook cursor"
 +      }

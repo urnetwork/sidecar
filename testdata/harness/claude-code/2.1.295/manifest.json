@@ -1,0 +1,26 @@
+{
+  "harness": "claude-code",
+  "version": "2.1.295",
+  "pinned": "the first Claude Code release §16.7 names, with onFailure: block",
+  "schema": "https://code.claude.com/docs/en/hooks",
+  "read": "2026-11-05",
+  "recorded": "synthetic in every value, written from the published hook schema",
+  "cwd": "/work/project",
+  "files": {
+    "src/main.go": "package main\n\nfunc main() {\n\tprintln(\"before\")\n}\n"
+  },
+  "edit": {
+    "path": "src/main.go",
+    "after": "package main\n\nfunc main() {\n\tprintln(\"after\")\n}\n",
+    "before_event": "04-PostToolUse-Edit.json"
+  },
+  "gaps": [
+    "redaction"
+  ],
+  "coverage": true,
+  "home": "/work/home",
+  "transcript": {
+    "path": "/work/project/.transcripts/conf-claude-0001.jsonl",
+    "content": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"change the greeting, run the tests and mail the report\"}}\n"
+  }
+}

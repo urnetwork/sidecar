@@ -310,10 +310,12 @@ func TestEvsReseedReturnsAMirroredRepoEndToEnd(t *testing.T) {
 	if pin.Loss == nil || pin.Loss.FromVersion != lostVersion || !bytes.Equal(pin.Loss.IncidentId, []byte("incident 41")) {
 		t.Fatalf("the loss the pin keeps: %+v", pin.Loss)
 	}
-	// the entry the incident lost does not come back. The writer's read record of it, made at the lost head, still
-	// refuses the path: whether an EvsReseed lowers a ref's read records with its pin is not settled (question
-	// evs-reseed-route-read-records), so the record stands and the read fails closed
-	if _, _, err := writer.read("ledger/c"); !errors.Is(err, sidecar.ErrEvsEntryRefused) {
+	// the entry the incident lost does not come back. The writer's read record of it, made at the lost head, went with
+	// the EvsReseed (QD-816), so the path reads as absent, part of the loss, and is no rollback refused and alarmed
+	if _, held, err := writer.client.Pins().ReadRecord(world.repoId, refId, "ledger/c"); err != nil || held {
+		t.Fatalf("the writer's record of the lost entry under the EvsReseed: %v %v", held, err)
+	}
+	if _, _, err := writer.read("ledger/c"); !errors.Is(err, sidecar.ErrEvsPathAbsent) {
 		t.Fatalf("the lost entry's read by its writer: %v", err)
 	}
 	if content, _, err := writer.read("ledger/b"); err != nil || !bytes.Equal(content, large) {

@@ -1,0 +1,139 @@
+[
+  {
+    "file": "01-SessionStart.json",
+    "kind": "session_start",
+    "harness_event": "SessionStart",
+    "session_id": "conf-claude-0001",
+    "start": "fresh",
+    "model": "conformance-model",
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "02-UserPromptSubmit.json",
+    "kind": "user_prompt",
+    "harness_event": "UserPromptSubmit",
+    "session_id": "conf-claude-0001",
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "03-PreToolUse-Edit.json",
+    "kind": "pre_tool_use",
+    "harness_event": "PreToolUse",
+    "session_id": "conf-claude-0001",
+    "tool_kind": "edit",
+    "tool_name": "Edit",
+    "tool_use_id": "toolu_conf_edit",
+    "paths": [
+      "/work/project/src/main.go"
+    ],
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "04-PostToolUse-Edit.json",
+    "kind": "post_tool_use",
+    "harness_event": "PostToolUse",
+    "session_id": "conf-claude-0001",
+    "tool_kind": "edit",
+    "tool_name": "Edit",
+    "tool_use_id": "toolu_conf_edit",
+    "paths": [
+      "/work/project/src/main.go"
+    ],
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "05-PreToolUse-Bash.json",
+    "kind": "pre_tool_use",
+    "harness_event": "PreToolUse",
+    "session_id": "conf-claude-0001",
+    "tool_kind": "shell",
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_conf_bash",
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "06-PostToolUse-Bash.json",
+    "kind": "post_tool_use",
+    "harness_event": "PostToolUse",
+    "session_id": "conf-claude-0001",
+    "tool_kind": "shell",
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_conf_bash",
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "07-PermissionRequest-mail_send.json",
+    "kind": "permission_request",
+    "harness_event": "PermissionRequest",
+    "session_id": "conf-claude-0001",
+    "tool_kind": "mcp",
+    "tool_name": "mail_send",
+    "tool_server": "ur",
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "08-PreToolUse-mail_send.json",
+    "kind": "pre_tool_use",
+    "harness_event": "PreToolUse",
+    "session_id": "conf-claude-0001",
+    "tool_kind": "mcp",
+    "tool_name": "mail_send",
+    "tool_server": "ur",
+    "tool_use_id": "toolu_conf_mail",
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "09-PostToolUse-mail_send.json",
+    "kind": "post_tool_use",
+    "harness_event": "PostToolUse",
+    "session_id": "conf-claude-0001",
+    "tool_kind": "mcp",
+    "tool_name": "mail_send",
+    "tool_server": "ur",
+    "tool_use_id": "toolu_conf_mail",
+    "input_hashed": true,
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "10-Stop.json",
+    "kind": "stop",
+    "harness_event": "Stop",
+    "session_id": "conf-claude-0001",
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  },
+  {
+    "file": "11-SessionEnd.json",
+    "kind": "session_end",
+    "harness_event": "SessionEnd",
+    "session_id": "conf-claude-0001",
+    "cwd": "/work/project",
+    "permission_mode": "default",
+    "transcript": true
+  }
+]

@@ -429,7 +429,7 @@ func TestEvsPinStoreSurvivesRestartAndNeverFalls(t *testing.T) {
 		t.Errorf("a fork: %v", err)
 	}
 	lowChain := [32]byte(evsTestBytes("chain 3", 32))
-	if err := reopened.lowerByReseed(&EvsPin{RepoId: repoId, RefId: refId, Version: 3, Chain: lowChain}, []byte("incident"), pinnedAt); err != nil {
+	if err := reopened.lowerByReseed(&EvsPin{RepoId: repoId, RefId: refId, Version: 3, Chain: lowChain}, []byte("incident"), pinnedAt, 1); err != nil {
 		t.Fatal(err)
 	}
 	pin, _, _ = reopened.Pin(repoId, refId)

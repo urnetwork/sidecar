@@ -1,0 +1,1 @@
+{"session_id":"conf-claude-0001","transcript_path":"/work/project/.transcripts/conf-claude-0001.jsonl","cwd":"/work/project","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"go test ./...","description":"run the tests"},"tool_use_id":"toolu_conf_bash"}

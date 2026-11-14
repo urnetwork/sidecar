@@ -1,0 +1,1 @@
+{"session_id":"conf-codex-0001","transcript_path":"/work/home/.codex/sessions/conf-codex-0001.jsonl","cwd":"/work/project","hook_event_name":"PreToolUse","tool_name":"shell","tool_input":{"command":["bash","-lc","go test ./..."],"workdir":"/work/project"},"tool_use_id":"call_conf_shell"}
