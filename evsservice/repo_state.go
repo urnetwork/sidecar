@@ -150,8 +150,10 @@ func decideActivate(groupReady func() (bool, error), at time.Time) repoDecide {
 // shredding{its id, at}; a deleted one under a newer RepoDelete{now} to shredding; the deletion repo/
 // already shows is done, a retry's answer; a keying repo refuses REPO_KEYING, a deleted one under any other RepoDelete
 // REPO_DELETED, and a repo shredding or shredded for another deletion SHREDDING. An active repo's deleted state names
-// the entry's time and signer, so a projection that no longer tells either refuses STATEMENT_MISSING and writes no
-// guessed value: rows date a RepoDelete on any day (QD-743), and its signer only the entry names.
+// the entry's time and signer, which rows carry on any day (QD-743, QD-798), the signer from the log's entry or else
+// the row's, so a RepoDelete whose entry the gate's log no longer keeps, or never held, is applied all the same, as
+// taskworker's reconciler applies one the route never got; a projection that tells neither, from a row no fold writes,
+// refuses STATEMENT_MISSING and writes no guessed value.
 func decideDelete(deletion *EvsRepoDeletionFacts, at time.Time) repoDecide {
 	return func(read *EvsRepoRead) (*protocol.EvsRepoObject, error) {
 		object := read.Object
@@ -169,7 +171,7 @@ func decideDelete(deletion *EvsRepoDeletionFacts, at time.Time) repoDecide {
 				next.State = protocol.EvsRepoState_EVS_REPO_SHREDDING
 			} else {
 				if deletion.Time.IsZero() || deletion.SignerSidecarId == (sidecar.Id{}) {
-					return nil, newEvsRepoRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING, "the projection no longer names the RepoDelete's time and signer")
+					return nil, newEvsRepoRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING, "neither the projection's log nor its row names the RepoDelete's time and signer")
 				}
 				next.State = protocol.EvsRepoState_EVS_REPO_DELETED
 				next.StateMs = deletion.Time.UnixMilli()
