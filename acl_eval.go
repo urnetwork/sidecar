@@ -82,6 +82,9 @@ const (
 	AclReasonUnconsented
 	// refused: an AclEngine with no state installed
 	AclReasonNoState
+	// decided by a repo's prefix rules (DESIGN-DETAILS 16.2.7): a write they allow or leave outside, or
+	// EVS_PREFIX_RULE's refusal, which AclPrefixWriteDecision details
+	AclReasonPrefixRule
 )
 
 // A short name for logs and refusals.
@@ -131,6 +134,8 @@ func (self AclReason) String() string {
 		return "unconsented"
 	case AclReasonNoState:
 		return "no_state"
+	case AclReasonPrefixRule:
+		return "prefix_rule"
 	}
 	return "unknown"
 }
