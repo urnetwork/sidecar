@@ -19,7 +19,7 @@
 // Today the bootstrap stops at KF1: a GenRotate's auth pin must be past position 0, and the genesis state is the only
 // state before base 1, whose head the first generation must key (question
 // daemon-evs-gkm-clients-first-device-config-generation). Bootstrap answers that refusal, the window closed and base 1
-// unlanded; what it does up to KF1 runs as written, and once the question is answered the rest follows its order.
+// unlanded. What it does up to KF1 runs as written; the answer decides the order of the rest.
 //
 // Every request outside a bootstrap window is judged by the real gate. Not safe for concurrent use with itself on one
 // network.
