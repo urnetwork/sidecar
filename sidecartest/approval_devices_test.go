@@ -70,7 +70,6 @@ type approvalDevicesWorld struct {
 func newApprovalDevicesWorld(t *testing.T, pairing *approvalDevicesPairing) *approvalDevicesWorld {
 	t.Helper()
 	net := NewNet(t.Context(), nil)
-	t.Cleanup(net.Close)
 	world, err := NewApprovalWorldWith(net, "daemon", &ApprovalWorldOptions{Harness: NewApprovalWorldHarness})
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +96,18 @@ func newApprovalDevicesWorld(t *testing.T, pairing *approvalDevicesPairing) *app
 		world.SetPresenceKeys(devices.key.KeyRow(world.Member.Bytes(), world.Laptop.SidecarId.Bytes(), 3))
 	}
 	return devices
+}
+
+// Runs body on a world of each pairing, one world at a time: a Net holds the process's test hooks while it is open.
+func forEachApprovalDevicesPairing(t *testing.T, body func(pairing *approvalDevicesPairing, devices *approvalDevicesWorld)) {
+	t.Helper()
+	for _, pairing := range approvalDevicesPairings() {
+		func() {
+			devices := newApprovalDevicesWorld(t, pairing)
+			defer devices.net.Close()
+			body(pairing, devices)
+		}()
+	}
 }
 
 // The mail to recipient, called once: nil with its outcome where harness evidence spent it at once, or the approval
@@ -155,20 +166,19 @@ func approvalDevicesSignerRefused(err error) bool {
 // the CLI alone, a Worker or a burner beside it or nothing, and no presence key; in every other pairing it waits for a
 // person and nothing runs.
 func TestPairingsReachHarness(t *testing.T) {
-	for _, pairing := range approvalDevicesPairings() {
-		devices := newApprovalDevicesWorld(t, pairing)
+	forEachApprovalDevicesPairing(t, func(pairing *approvalDevicesPairing, devices *approvalDevicesWorld) {
 		_, action, approvalId := devices.call("someone@recipient.example")
 		sink := devices.world.Sink(sidecar.SidecarActionMail)
 		allowed := !pairing.secondCli && !pairing.presenceKey
 		if allowed {
 			if approvalId != (sidecar.Id{}) || action.Outcome == nil || action.Outcome.State != sidecar.ApprovalOutcomeDone || sink.EffectCount() != 1 {
 				t.Errorf("%s: harness evidence did not spend: pending %s, outcome %+v, %d effects", pairing.name, approvalId, action.Outcome, sink.EffectCount())
-				continue
+				return
 			}
 			ids := devices.world.Log().ApprovalIds()
 			if len(ids) != 1 {
 				t.Errorf("%s: %d requests", pairing.name, len(ids))
-				continue
+				return
 			}
 			channels := devices.channels(ids[0])
 			if len(channels) != 1 || channels[0] != protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS {
@@ -182,14 +192,13 @@ func TestPairingsReachHarness(t *testing.T) {
 		if err := devices.world.CheckEffects(true); err != nil {
 			t.Errorf("%s: %v", pairing.name, err)
 		}
-	}
+	})
 }
 
 // The device channel across the pairings, a harness that never asks beside it so the request waits: a second CLI's
 // decision spends; the requester's own, a Worker's and a burner's are each refused and run nothing.
 func TestPairingsReachDevice(t *testing.T) {
-	for _, pairing := range approvalDevicesPairings() {
-		devices := newApprovalDevicesWorld(t, pairing)
+	forEachApprovalDevicesPairing(t, func(pairing *approvalDevicesPairing, devices *approvalDevicesWorld) {
 		// no harness: every pairing's request waits for a device
 		devices.world.SetEvidence(false, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE)
 		sink := devices.world.Sink(sidecar.SidecarActionMail)
@@ -205,7 +214,7 @@ func TestPairingsReachDevice(t *testing.T) {
 		}
 
 		if devices.second == nil {
-			continue
+			return
 		}
 		stored, _, approvalId = devices.call("second@recipient.example")
 		signed, err := devices.world.SignDecision(approvalId, 1, devices.deadline(), devices.second, devices.world.State().Pin())
@@ -223,15 +232,14 @@ func TestPairingsReachDevice(t *testing.T) {
 		if err := devices.world.CheckEffects(true); err != nil {
 			t.Errorf("%s: %v", pairing.name, err)
 		}
-	}
+	})
 }
 
 // The presence channel across the pairings: where the member holds a key, a decision the key signs on the CLI's own
 // request spends, whatever else the member has; where the member holds none, the same decision under a key P does not
 // hold is refused and runs nothing.
 func TestPairingsReachPresence(t *testing.T) {
-	for _, pairing := range approvalDevicesPairings() {
-		devices := newApprovalDevicesWorld(t, pairing)
+	forEachApprovalDevicesPairing(t, func(pairing *approvalDevicesPairing, devices *approvalDevicesWorld) {
 		devices.world.SetEvidence(false, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE)
 		sink := devices.world.Sink(sidecar.SidecarActionMail)
 		stored, _, approvalId := devices.call("someone@recipient.example")
@@ -247,7 +255,7 @@ func TestPairingsReachPresence(t *testing.T) {
 		if pairing.presenceKey {
 			if err != nil || action.Outcome == nil || action.Outcome.State != sidecar.ApprovalOutcomeDone || sink.EffectCount() != 1 {
 				t.Errorf("%s: the presence decision: %v %+v, %d effects", pairing.name, err, action.Outcome, sink.EffectCount())
-				continue
+				return
 			}
 			channels := devices.channels(approvalId)
 			if len(channels) != 1 || channels[0] != protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE {
@@ -259,13 +267,14 @@ func TestPairingsReachPresence(t *testing.T) {
 		if err := devices.world.CheckEffects(true); err != nil {
 			t.Errorf("%s: %v", pairing.name, err)
 		}
-	}
+	})
 }
 
 // harness_ok as devices are admitted to one world: the CLI alone has it; a page Worker admitted beside it keeps it; a
 // second CLI admitted clears it, and the next call waits for a person; with the second CLI gone it holds again.
 func TestWorkerKeepsHarnessSecondCliClearsIt(t *testing.T) {
 	devices := newApprovalDevicesWorld(t, &approvalDevicesPairing{name: "one CLI"})
+	defer devices.net.Close()
 	sink := devices.world.Sink(sidecar.SidecarActionMail)
 	worker := NewApprovalWorldDevice("worker", devices.world.Member)
 	secondCli := NewApprovalWorldDevice("second cli", devices.world.Member)
@@ -318,6 +327,7 @@ func (self *approvalDevicesLog) FileCancel(ctx context.Context, logId sidecar.Id
 // the first daemon spends it. Before the second CLI is the member's consented device it signs nothing.
 func TestSecondCliApprovalAccepted(t *testing.T) {
 	devices := newApprovalDevicesWorld(t, &approvalDevicesPairing{name: "one CLI"})
+	defer devices.net.Close()
 	world := devices.world
 	second, err := devices.net.AddSidecar("second", nil)
 	if err != nil {
