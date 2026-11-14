@@ -70,8 +70,8 @@ rows:
     owner: RECORD-M3-03
     milestone: M3
     targets:
-      - {name: FuzzRecordHeader, package: "."}
-      - {name: FuzzRecordEntry, package: ".", owner: RECORD-M3-11}
+      - {name: FuzzRecordHeader, package: ".", seeds: [testdata/fuzz/FuzzRecordHeader], second: [google.golang.org/protobuf/proto]}
+      - {name: FuzzRecordEntry, package: ".", owner: RECORD-M3-11, seeds: [testdata/fuzz/FuzzRecordEntry], second: [google.golang.org/protobuf/proto]}
 
   - id: state-machines
     bullet: "Stream, push and config-delta state machines"
