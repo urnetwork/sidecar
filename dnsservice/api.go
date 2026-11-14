@@ -48,9 +48,6 @@ const (
 	DnsReadyPath          = DnsInternalPathPrefix + "ready"
 )
 
-// The lb's proxy_read_timeout on the block (warp's config), which every long-poll stays under.
-const dnsLbProxyReadTimeoutSeconds = 30
-
 // RFC 4648 §5 with no padding: how a 256-bit bearer is written.
 var dnsCredentialEncoding = base64.RawURLEncoding
 
@@ -226,19 +223,26 @@ type DnsApiDeps struct {
 	// keeps no verdict, so ready answers canary_failing: plan-DNS-canary-route-state's interim until the
 	// table's §2.8 row lands.
 	CanaryVerdicts DnsCanaryVerdictStore
+	// §12.8's record write and GET /dns/zone's read through the model (DNS-M5-12). nil answers both 503.
+	Records DnsRecordStore
+	// §8.10's gate on dns:<host> for the record routes (DNS-M5-12). nil refuses every write under a grant
+	// with 503 and shows no RRset.
+	RecordGate DnsRecordGate
 	// Lifecycle only. nil discards.
 	Log sidecar.Logger
 }
 
-// One internal route: its method, path, the class it takes, a second class for the one route two
-// callers share (canary-report), whether it changes zone data, and its handler.
+// One route: its method, path, the class it takes, a second class for the one route two callers share
+// (canary-report), whether it takes a sidecar's service token in place of an internal bearer, whether it
+// changes zone data, and its handler.
 type dnsApiRoute struct {
-	method    string
-	path      string
-	class     DnsCallerClass
-	alsoClass DnsCallerClass
-	write     bool
-	serve     func(writer http.ResponseWriter, request *http.Request)
+	method       string
+	path         string
+	class        DnsCallerClass
+	alsoClass    DnsCallerClass
+	serviceToken bool
+	write        bool
+	serve        func(writer http.ResponseWriter, request *http.Request)
 }
 
 // The block. Safe for concurrent use.
@@ -318,12 +322,20 @@ func NewDnsApi(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 
 // Every route the block serves. A later task adds its own list here.
 func (self *DnsApi) routes() []*dnsApiRoute {
-	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes(), self.canaryRoutes())
+	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes(), self.canaryRoutes(), self.recordRoutes())
 }
 
-// The handler every route runs behind: the bearer's class, then the gate.
+// The handler every route runs behind: the bearer's class, or a sidecar's service token for the record
+// routes, then the gate.
 func (self *DnsApi) guard(route *dnsApiRoute) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
+		if route.serviceToken {
+			if request = self.authenticateServiceToken(writer, request); request == nil {
+				return
+			}
+			self.serveGated(route, writer, request)
+			return
+		}
 		if self.deps.Auth == nil {
 			self.metrics.refused.Add(1, dnsApiRefusedNoVerifier)
 			http.Error(writer, "forbidden", http.StatusForbidden)
@@ -335,17 +347,23 @@ func (self *DnsApi) guard(route *dnsApiRoute) http.HandlerFunc {
 			http.Error(writer, "forbidden", http.StatusForbidden)
 			return
 		}
-		gates := self.host.GatesOrClosed()
-		gate := gates.Service(sidecar.ServiceGateDns)
-		if !gate.Enabled() || (route.write && !gate.Writes()) {
-			self.metrics.refused.Add(1, dnsApiRefusedGate)
-			retryAfter := int(math.Ceil(gates.RetryAfter().Seconds()))
-			writer.Header().Set("Retry-After", strconv.Itoa(max(retryAfter, 1)))
-			http.Error(writer, "service unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		route.serve(writer, request)
+		self.serveGated(route, writer, request)
 	}
+}
+
+// §19.11's dns gate, then the route: disabled answers 503 with Retry-After, and writes: false refuses a
+// route that changes zone data.
+func (self *DnsApi) serveGated(route *dnsApiRoute, writer http.ResponseWriter, request *http.Request) {
+	gates := self.host.GatesOrClosed()
+	gate := gates.Service(sidecar.ServiceGateDns)
+	if !gate.Enabled() || (route.write && !gate.Writes()) {
+		self.metrics.refused.Add(1, dnsApiRefusedGate)
+		retryAfter := int(math.Ceil(gates.RetryAfter().Seconds()))
+		writer.Header().Set("Retry-After", strconv.Itoa(max(retryAfter, 1)))
+		http.Error(writer, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	route.serve(writer, request)
 }
 
 // One handler for every route.
@@ -475,6 +493,8 @@ type dnsApiMetrics struct {
 	challenges sidecar.MetricsCounter
 	// The monitors' canary writes and reports, by result.
 	canaries sidecar.MetricsCounter
+	// Sidecars' record writes, by result.
+	records sidecar.MetricsCounter
 }
 
 func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
@@ -484,5 +504,6 @@ func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
 		soaReads:   metrics.Counter("urnetwork_dns_soa_reads_total", "SOA reads of an NS, by result.", "result"),
 		challenges: metrics.Counter("urnetwork_dns_challenges_total", "Challenge writes certs asked for, by result.", "result"),
 		canaries:   metrics.Counter("urnetwork_dns_canaries_total", "Canary writes and verdict reports the monitors sent, by result.", "result"),
+		records:    metrics.Counter("urnetwork_dns_record_writes_total", "Record writes sidecars sent, by result.", "result"),
 	}
 }
