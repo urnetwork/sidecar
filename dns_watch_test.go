@@ -110,7 +110,7 @@ func newTestDnsWatch(t *testing.T, resolver *testDnsWatchResolver, hosts []strin
 
 // The edge's addresses at the published host and @'s answers, as both resolvers give them.
 func testDnsWatchHealthy(resolver *testDnsWatchResolver) {
-	resolver.set(testDnsWatchHost, DnsWatchTypeA, "11.22.33.44", "11.22.33.45")
+	resolver.set(testDnsWatchHost, DnsWatchTypeA, "192.0.2.44", "192.0.2.45")
 	resolver.set(testDnsWatchHost, DnsWatchTypeAaaa, "2001:db8::44")
 }
 
@@ -165,7 +165,7 @@ func TestDnsWatchOneResolverFailingDegradesWithoutAlarm(t *testing.T) {
 func TestDnsWatchSplitAnswersAlarm(t *testing.T) {
 	resolver := newTestDnsWatchResolver()
 	testDnsWatchHealthy(resolver)
-	resolver.setOne(1, testDnsWatchHost, DnsWatchTypeA, "11.22.33.99")
+	resolver.setOne(1, testDnsWatchHost, DnsWatchTypeA, "192.0.2.99")
 	watch, alarms := newTestDnsWatch(t, resolver, []string{testDnsWatchHost})
 	if !watch.Pass(context.Background()) || len(*alarms) != 1 || (*alarms)[0] != SidecarDnsAlarmSplit {
 		t.Fatalf("alarms %v", *alarms)
@@ -178,18 +178,18 @@ func TestDnsWatchResolversDisagreeingWithTheZoneAlarm(t *testing.T) {
 	resolver := newTestDnsWatchResolver()
 	testDnsWatchHealthy(resolver)
 	blog := "blog.lbl0000001.root.example."
-	resolver.set(blog, DnsWatchTypeA, "11.22.33.99")
+	resolver.set(blog, DnsWatchTypeA, "192.0.2.99")
 	watch, alarms := newTestDnsWatch(t, resolver, []string{testDnsWatchHost, blog},
-		DnsZoneRecordSet{Name: blog, Type: "A", Ttl: 300, Kind: "user", Values: []string{"11.22.33.50"}})
+		DnsZoneRecordSet{Name: blog, Type: "A", Ttl: 300, Kind: "user", Values: []string{"192.0.2.50"}})
 	if !watch.Pass(context.Background()) || len(*alarms) != 1 || (*alarms)[0] != SidecarDnsAlarmZoneMismatch {
 		t.Fatalf("alarms %v", *alarms)
 	}
-	resolver.set(blog, DnsWatchTypeA, "11.22.33.50")
+	resolver.set(blog, DnsWatchTypeA, "192.0.2.50")
 	func() {
 		resolver.stateLock.Lock()
 		defer resolver.stateLock.Unlock()
 		for index := range 2 {
-			resolver.answers[index][testDnsWatchKey(testDnsWatchHost, DnsWatchTypeA)] = &DnsWatchAnswer{Cname: "elsewhere.example.", Values: []string{"11.22.33.44"}}
+			resolver.answers[index][testDnsWatchKey(testDnsWatchHost, DnsWatchTypeA)] = &DnsWatchAnswer{Cname: "elsewhere.example.", Values: []string{"192.0.2.44"}}
 		}
 	}()
 	if !watch.Pass(context.Background()) || len(*alarms) != 2 || (*alarms)[1] != SidecarDnsAlarmZoneMismatch {
@@ -203,7 +203,7 @@ func TestDnsWatchPublishedHostAnsweredThroughTheWildcard(t *testing.T) {
 	resolver := newTestDnsWatchResolver()
 	testDnsWatchHealthy(resolver)
 	blog := "blog.lbl0000001.root.example."
-	resolver.set(blog, DnsWatchTypeA, "11.22.33.44", "11.22.33.45")
+	resolver.set(blog, DnsWatchTypeA, "192.0.2.44", "192.0.2.45")
 	resolver.set(blog, DnsWatchTypeAaaa, "2001:db8::44")
 	watch, alarms := newTestDnsWatch(t, resolver, []string{testDnsWatchHost, blog})
 	if watch.Pass(context.Background()) || len(*alarms) != 0 {
@@ -234,7 +234,7 @@ func TestDnsWatchValuesCompareInOneForm(t *testing.T) {
 		presentation string
 		canonical    string
 	}{
-		{qType: DnsWatchTypeA, presentation: "11.22.33.44", canonical: "11.22.33.44"},
+		{qType: DnsWatchTypeA, presentation: "192.0.2.44", canonical: "192.0.2.44"},
 		{qType: DnsWatchTypeAaaa, presentation: "2001:DB8::44", canonical: "2001:db8::44"},
 		{qType: DnsWatchTypeTxt, presentation: `"two " "strings"`, canonical: "two strings"},
 		{qType: DnsWatchTypeMx, presentation: "10 MX.Example.", canonical: "10 mx.example."},

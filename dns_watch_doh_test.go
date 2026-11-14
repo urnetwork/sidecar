@@ -66,19 +66,19 @@ func TestDnsWatchDohParsesEachType(t *testing.T) {
 		{
 			qType: DnsWatchTypeA,
 			add: func(builder *dnsmessage.Builder, owner dnsmessage.Name) {
-				builder.AResource(testDnsWatchHeader(owner, dnsmessage.TypeA), dnsmessage.AResource{A: netip.MustParseAddr("11.22.33.45").As4()})
-				builder.AResource(testDnsWatchHeader(owner, dnsmessage.TypeA), dnsmessage.AResource{A: netip.MustParseAddr("11.22.33.44").As4()})
+				builder.AResource(testDnsWatchHeader(owner, dnsmessage.TypeA), dnsmessage.AResource{A: netip.MustParseAddr("192.0.2.45").As4()})
+				builder.AResource(testDnsWatchHeader(owner, dnsmessage.TypeA), dnsmessage.AResource{A: netip.MustParseAddr("192.0.2.44").As4()})
 			},
-			values: []string{"11.22.33.44", "11.22.33.45"},
+			values: []string{"192.0.2.44", "192.0.2.45"},
 		},
 		{
 			qType: DnsWatchTypeA,
 			add: func(builder *dnsmessage.Builder, owner dnsmessage.Name) {
 				builder.CNAMEResource(testDnsWatchHeader(owner, dnsmessage.TypeCNAME), dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("elsewhere.example.")})
-				builder.AResource(testDnsWatchHeader(dnsmessage.MustNewName("elsewhere.example."), dnsmessage.TypeA), dnsmessage.AResource{A: netip.MustParseAddr("11.22.33.46").As4()})
+				builder.AResource(testDnsWatchHeader(dnsmessage.MustNewName("elsewhere.example."), dnsmessage.TypeA), dnsmessage.AResource{A: netip.MustParseAddr("192.0.2.46").As4()})
 			},
 			cname:  "elsewhere.example.",
-			values: []string{"11.22.33.46"},
+			values: []string{"192.0.2.46"},
 		},
 		{
 			qType: DnsWatchTypeTxt,

@@ -310,7 +310,7 @@ func TestDnsClientRetryAfterALostAnswerReadsTheStoredResult(t *testing.T) {
 	block := newTestDnsBlock(testDnsClientZone(networkId, 3))
 	block.loseFirst = true
 	client := newTestDnsClient(t, block, nil, networkId)
-	action := testDnsClientAction(t, "shop.lbl0000001.root.example.", "11.22.33.44")
+	action := testDnsClientAction(t, "shop.lbl0000001.root.example.", "192.0.2.44")
 	approvalId := NewId()
 	effectKey := ApprovalEffectKey(approvalId, action.ActionId(approvalId))
 	ctx := withApprovalSpend(context.Background(), &ApprovalSpend{ApprovalId: approvalId, Decisions: [][]byte{[]byte("synthetic decision")}, Action: action.Bytes})
@@ -331,7 +331,7 @@ func TestDnsClientRetryAfterALostAnswerReadsTheStoredResult(t *testing.T) {
 	}
 	last := block.requests[len(block.requests)-1]
 	if last.Approval == nil || !bytes.Equal(last.Approval.Action, action.Bytes) || last.Approval.Template != nil ||
-		len(last.Upserts) != 1 || last.Upserts[0].Values[0] != "11.22.33.44" || last.Upserts[0].Ttl != 300 {
+		len(last.Upserts) != 1 || last.Upserts[0].Values[0] != "192.0.2.44" || last.Upserts[0].Ttl != 300 {
 		t.Fatalf("the request %+v", last)
 	}
 	key := block.bearers[len(block.bearers)-1]
@@ -358,7 +358,7 @@ func TestDnsClientSurfacesRefusals(t *testing.T) {
 		block.refusal = refusal
 		client := newTestDnsClient(t, block, nil, networkId)
 		version := uint64(2)
-		_, err := client.SetRecord(context.Background(), &DnsRecordUpsert{Name: "shop.lbl0000001.root.example.", Type: "A", Values: []string{"11.22.33.44"}}, &version)
+		_, err := client.SetRecord(context.Background(), &DnsRecordUpsert{Name: "shop.lbl0000001.root.example.", Type: "A", Values: []string{"192.0.2.44"}}, &version)
 		apiError := &DnsApiError{}
 		if !errors.As(err, &apiError) || apiError.Status != refusal.Status || apiError.Code != refusal.Code {
 			t.Errorf("%s: %v", refusal.Code, err)
@@ -370,7 +370,7 @@ func TestDnsClientSurfacesRefusals(t *testing.T) {
 		if strings.Contains(err.Error(), testDnsClientToken) {
 			t.Errorf("%s: the error names the token", refusal.Code)
 		}
-		action := testDnsClientAction(t, "shop.lbl0000001.root.example.", "11.22.33.44")
+		action := testDnsClientAction(t, "shop.lbl0000001.root.example.", "192.0.2.44")
 		if _, err := client.RecordEffect(action.Bytes, nil).Run(context.Background(), nil); !errors.Is(err, ErrSidecarEffectNotDone) || strings.Contains(err.Error(), testDnsClientToken) {
 			t.Errorf("%s: the effect: %v", refusal.Code, err)
 		}
