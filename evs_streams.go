@@ -11,7 +11,8 @@
 //	verify   each stream's statements walked from the caller's pin (its version and C there) by the verifying
 //	         reader's rules, every signature, ref rule and chain step, so a head that does not extend the pin is
 //	         refused (ErrEvsHeadForked, ErrEvsChainBroken); each push's record held to its statement and its payload
-//	         checked (EvsCheckPayload, a sealed push's parts EvsCheckStoredSeal); each file a version creates rebuilt
+//	         checked as a record keeps it, with no slot body (EvsCheckRecordPayload, QD-806; a sealed push's parts
+//	         EvsCheckStoredSeal), each key taken from a slot the reply carried; each file a version creates rebuilt
 //	         from the ranges and slots the reply carried, through the receipt gate, and held to its sealed fields;
 //	         a stream read to its head is pinned, as a head read is
 //	moved    GET .../refs?moved_after=<the sequence the caller last listed at>: the refs past it, or every ref with
@@ -233,7 +234,8 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 		if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 			return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
 		}
-		if payload, err = EvsCheckPayload(statement.Statement, payloadBytes); err != nil {
+		// a record keeps no slot body (QD-806): the keys come from the slots the reply carried
+		if payload, err = EvsCheckRecordPayload(statement.Statement, payloadBytes); err != nil {
 			return nil, err
 		}
 	case batchRecord.Type == protocol.EvsBatchRecordType_EVS_BATCH_SEAL && 0 < push.GetPartCount():
