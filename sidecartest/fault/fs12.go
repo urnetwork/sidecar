@@ -32,15 +32,19 @@ import (
 
 var Fs12 = Register("FS-12", "", []Tier{TierT2, TierT3}, Fs12LeaseCrashAndReread)
 
-// §20.4's evs_subscribers_per_repo for the world's network, which the lease route reads before it writes.
-const fs12SubscribersPerRepo = 16
+// §20.4's evs_subscribers_per_repo and evs_repos_per_client for the world's network, which the lease route reads
+// before it writes.
+const (
+	fs12SubscribersPerRepo = 16
+	fs12ReposPerClient     = 500
+)
 
 // See the file header.
 func Fs12LeaseCrashAndReread(net *Net) *Schedule {
 	world := NewEvsWorld(net, nil)
 	steps := []*Step{
 		{Actor: "writerA", Action: world.Setup},
-		{Actor: "admin", Action: world.SetQuotaLimits(map[string]int64{"evs_subscribers_per_repo": fs12SubscribersPerRepo})},
+		{Actor: "admin", Action: world.SetQuotaLimits(map[string]int64{"evs_subscribers_per_repo": fs12SubscribersPerRepo, "evs_repos_per_client": fs12ReposPerClient})},
 		{Actor: "writerA", Action: world.Write("writerA", "a.txt", EvsWorldContent("fs12 a", 100))},
 		// the lease's write lands and evsr dies before its 200
 		{Fault: &FaultPlan{Op: sidecartest.FaultOpRedis, KeyPrefix: evsservice.LeaseKey(world.RepoId), Result: CrashAfterApply, Actor: "evsr", WritesOnly: true}},

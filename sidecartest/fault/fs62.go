@@ -38,7 +38,7 @@ func Fs62LeaseHolderResync(net *Net) *Schedule {
 	world := NewEvsWorld(net, nil)
 	steps := []*Step{
 		{Actor: "writerA", Action: world.Setup},
-		{Actor: "admin", Action: world.SetQuotaLimits(map[string]int64{"evs_subscribers_per_repo": fs12SubscribersPerRepo})},
+		{Actor: "admin", Action: world.SetQuotaLimits(map[string]int64{"evs_subscribers_per_repo": fs12SubscribersPerRepo, "evs_repos_per_client": fs12ReposPerClient})},
 		{Actor: "writerA", Action: world.Write("writerA", "a.txt", EvsWorldContent("fs62 resync a", 200))},
 		{Actor: "reader", Action: world.Subscribe("reader")},
 		{Actor: "check", Action: world.ExpectLease("reader", true)},

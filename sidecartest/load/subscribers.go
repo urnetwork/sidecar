@@ -369,7 +369,11 @@ func NewEvsSubscriberWorld(ctx context.Context, fakes *sidecartest.FakeHost, hos
 		return nil, err
 	}
 	fakes.Quota.SetBalance(connect.Id(world.networkId), 1<<40)
-	fakes.Quota.SetLimits(connect.Id(world.networkId), &sidecar.QuotaLimits{Tier: "pro", Limits: map[string]int64{"evs_subscribers_per_repo": SubscribersPerRepo}})
+	fakes.Quota.SetLimits(connect.Id(world.networkId), &sidecar.QuotaLimits{Tier: "pro", Limits: map[string]int64{
+		"evs_subscribers_per_repo": SubscribersPerRepo,
+		// §20.4's default: each subscriber here is its own client, following the one repo
+		"evs_repos_per_client": 500,
+	}})
 
 	readers := []sidecar.Id{world.writer.SidecarId}
 	subscriberSidecars := make([]sidecar.Id, settings.Subscribers)
