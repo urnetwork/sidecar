@@ -61,6 +61,25 @@ type EvsDeposit struct {
 	SlotId       Id
 }
 
+// A standing deposit that did not open, so its visit never ran: which one, by its id and the version its push
+// committed at, and why. An ingester reads on after it with ReadDeposits' afterVersion, and decides what a deposit
+// whose slot an erasure took becomes (§15.7: consumed with no message). errors.Is and errors.As reach Err.
+type EvsDepositOpenError struct {
+	// Its EntryId, Version, PushId, SignerSidecarId, Time and AuthPin; nothing an open would have set.
+	Deposit *EvsDeposit
+	Err     error
+}
+
+// Err's text: a deposit's id is never logged (I-13).
+func (self *EvsDepositOpenError) Error() string {
+	return fmt.Sprintf("a deposit did not open: %v", self.Err)
+}
+
+// The failure itself.
+func (self *EvsDepositOpenError) Unwrap() error {
+	return self.Err
+}
+
 // Where an ingester keeps each deposit ref's cursor, and a CONSUME it sent and has not seen answered: one file a ref.
 const (
 	evsDepositCursorDirectory  = "deposits/cursor/"
@@ -187,7 +206,8 @@ func (self *evsDepositStanding) deposit() (*EvsDeposit, error) {
 }
 
 // A deposit ref's standing deposits after afterVersion, oldest first, each opened and given to visit with its body,
-// which visit reads before it returns. visit's error ends the read. A CONSUME of the ref this device sent and saw no
+// which visit reads before it returns. visit's error ends the read, and so does a deposit that does not open, as an
+// *EvsDepositOpenError naming it. A CONSUME of the ref this device sent and saw no
 // answer to goes again first.
 func (self *EvsRepo) ReadDeposits(ctx context.Context, depositorId Id, afterVersion uint64, visit func(deposit *EvsDeposit, body io.Reader) error) error {
 	refId := EvsDepositRefId(self.repoId, depositorId)
@@ -236,7 +256,16 @@ func (self *EvsRepo) ReadDeposits(ctx context.Context, depositorId Id, afterVers
 		if err != nil {
 			return err
 		}
-		if err := self.openDeposit(ctx, refId, deposit, visit); err != nil {
+		visited := false
+		err = self.openDeposit(ctx, refId, deposit, func(deposit *EvsDeposit, body io.Reader) error {
+			visited = true
+			return visit(deposit, body)
+		})
+		if err != nil && !visited {
+			// the deposit did not open: its ingester learns which, and reads on after it (EvsDepositOpenError)
+			return &EvsDepositOpenError{Deposit: deposit, Err: err}
+		}
+		if err != nil {
 			return err
 		}
 	}
