@@ -1,7 +1,9 @@
 // ur connect --token (§5.6, R-CORE-9): enrolls the instance's sidecar from a §7 auth key, which the daemon spends in
 // D-CORE-7's order (Sidecar.Enroll). The key is single use: once the enrollment spends it, it admits nothing, so the
 // argv that carried it holds no live credential (S1). --ephemeral needs an ephemeral daemon, which a connect that
-// finds none spawns, and --replace takes restored state as this machine's (plan-CORE-cli-ui-missing #4).
+// finds none spawns, and --replace takes restored state as this machine's (plan-CORE-cli-ui-missing #4). --token-file
+// names a file holding the key instead, read once and removed, and no key in ur's environment enrolls anything
+// (cmd_connect_cloud.go; QD-041).
 
 package main
 
@@ -14,14 +16,19 @@ import (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "connect",
-		usage:   "  ur connect --token=<key> [--ephemeral] [--replace] [--network=<name>]",
+		usage:   "  ur connect (--token=<key> | --token-file=<path>) [--ephemeral] [--replace] [--network=<name>]",
 		summary: "enroll this device's sidecar with an auth key",
 		run:     runUrConnect,
 	})
 }
 
 func runUrConnect(ctx context.Context, cli *urCli, options docopt.Opts) error {
-	authKey, _ := options.String("--token")
+	token, _ := options.String("--token")
+	tokenFile, _ := options.String("--token-file")
+	authKey, err := urConnectAuthKey(token, tokenFile)
+	if err != nil {
+		return err
+	}
 	ephemeral, _ := options.Bool("--ephemeral")
 	replace, _ := options.Bool("--replace")
 	network, _ := options.String("--network")

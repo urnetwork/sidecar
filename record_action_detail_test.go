@@ -506,7 +506,8 @@ func TestCanonicalActionDetailHeldToItsAction(t *testing.T) {
 
 // A version-3 access request to a worker's port carries the port and its sidecar:<id>:tcp:<port> text in
 // sealed_detail: its clear bytes name the worker alone, a server path takes them, and the port opens on a device that
-// holds the key. Version 3 itself stays unknown until MCP-M6-01, so the production builder still refuses it.
+// holds the key. Approvers know version 3 (MCP-M6-01), so the production builder stores the same bytes and the
+// production parser reads them.
 func TestAccessRequestPortRidesSealed(t *testing.T) {
 	known := testRecordVersionsKnown(1, 3, 4)
 	clear := testRecordAccessRequestAction()
@@ -553,12 +554,14 @@ func TestAccessRequestPortRidesSealed(t *testing.T) {
 	if _, err := parseStoredCanonicalAction(testRecordStored(t, numbered), known); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a stored clear target_port: %v", err)
 	}
-	// this build's approvers do not know version 3 yet
-	if _, err := NewSealedCanonicalAction(clear, testRecordAccessRequestDetail(), testConfigSealKey(testActionDetailGeneration),
-		testActionDetailNetworkId(), testActionDetailRandom()); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+	// this build's approvers know version 3 (MCP-M6-01): the production builder and parser agree with the above
+	built, err := NewSealedCanonicalAction(clear, testRecordAccessRequestDetail(), testConfigSealKey(testActionDetailGeneration),
+		testActionDetailNetworkId(), testActionDetailRandom())
+	if err != nil || !bytes.Equal(built.Bytes, stored.Bytes) {
 		t.Errorf("version 3 in production: %v", err)
 	}
-	if _, err := ParseStoredCanonicalAction(stored.Bytes); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+	parsed, err := ParseStoredCanonicalAction(stored.Bytes)
+	if err != nil || parsed.Action.GetVersion() != 3 || !bytes.Equal(parsed.Bytes, stored.Bytes) {
 		t.Errorf("version 3 parsed in production: %v", err)
 	}
 }
