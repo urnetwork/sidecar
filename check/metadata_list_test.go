@@ -245,6 +245,34 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)\n  why: send, verify proofs",
 		list:     "so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)\"\n  why: send, verify proofs",
 	},
+	{
+		// QD-725's list version, after v16's
+		question: "evsb-m2-19-reseed-route-body",
+		block:    "# metadata_list.yml v16;",
+		list:     "# metadata_list.yml v17;",
+	},
+	{
+		// QD-725: v17's line, after v16's
+		question: "evsb-m2-19-reseed-route-body",
+		block:    "# scan-state commitments the sidecar publishes, uniformly random group elements (DESIGN-DETAILS 3.2.2, 3.2.5).\n",
+		list: "# scan-state commitments the sidecar publishes, uniformly random group elements (DESIGN-DETAILS 3.2.2, 3.2.5).\n" +
+			"# v17, updated 2026-11-13 for the owner's answer QD-725 (evsb-m2-19-reseed-route-body), adds evs-29, the Signed\n" +
+			"# EvsReseed statements evs keeps at reseed/<repo>/<ref> and serves with the head after a site loss.\n",
+	},
+	{
+		// QD-725: evs-29, the Signed EvsReseed statements evs keeps per ref, after evs-28's row
+		question: "evsb-m2-19-reseed-route-body",
+		block:    "  owner: §11.13\ngkm-1:\n",
+		list: "  owner: §11.13\n" +
+			"evs-29:\n" +
+			"  service: evs\n" +
+			"  store: reseed/<repo>/<ref> (the repo's metadata cluster)\n" +
+			"  sees: \"after a site loss, per ref the Signed EvsReseed statements its repo admins filed: repo_id, ref_id, the re-seeded head's version and chain, the recovery's incident id, and the signing sidecar\"\n" +
+			"  why: a reader whose pin lies above every surviving copy accepts the shorter history only under a repo admin's EvsReseed, shown as a loss (§11.13, §19.10; QD-725)\n" +
+			"  ttl: the ref's life; deleted with the repo at its shred (§11.12's phase 5)\n" +
+			"  owner: §11.13\n" +
+			"gkm-1:\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
