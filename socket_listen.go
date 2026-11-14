@@ -8,11 +8,11 @@
 // are outward (I-8): Listen calls §5.4's Authorize first, which may answer *ApprovalPendingError, and holds the
 // dispatcher's Service mode only while the registration is held (§13.6), so edges' contracts reach it; the action is
 // kind listen naming the socket, the weight it registers with riding the request beside it (QD-740). §13.9's system
-// publish, tls/443/mta-sts, is the exception: it takes no tls/ grant or approval of its own, so Listen asks this
-// device's config for its receiver's approved smtp/25/mx listen grant instead, which stands in (SOCK-M8-01;
-// socket_admission.go), and refuses it with no approval filed. share/ is `ur share add`'s alone (SOCK-M5-15), ur/ the
-// platform's (SOCK-M9-01), and a reserved name has no owner: each is refused here. A <net> must be this sidecar's own
-// network.
+// publish, tls/443/mta-sts, is a mail receiver's own component's alone, through ListenSystemPublish: it takes no tls/
+// grant or approval of its own, so that entry asks this device's config for the receiver's approved smtp/25/mx listen
+// grant instead, which stands in (SOCK-M8-01; socket_admission.go), and refuses with no approval filed. share/ is
+// `ur share add`'s alone (SOCK-M5-15), ur/ the platform's (SOCK-M9-01), the system publish its entry's, and a reserved
+// name has no owner: each is refused here. A <net> must be this sidecar's own network.
 //
 // smtp/ is a receiver's (§15.5; SOCK-M7-01): smtp/25/mx, or a Team scope's smtp/25/mx.<scope>, protocol smtp-starttls,
 // 16 streams unless the settings say otherwise. A receiver listens not serving, so its lease takes no ticket until §15
@@ -742,8 +742,21 @@ func socketListenArgs(name string, namespace SocketNamespace, settings *SocketLi
 	return args, nil
 }
 
-// A Listen on this component; allowShare lets share/ through for `ur share add` (SOCK-M5-15).
+// A Listen on this component; allowShare lets share/ through for `ur share add` (SOCK-M5-15). §13.9's system publish
+// is refused here: only listenSystemPublish takes it.
 func (self *SocketComponent) listen(ctx context.Context, address *SocketAddress, settings *SocketListenSettings, allowShare bool) (*SocketListener, error) {
+	return self.listenAs(ctx, address, settings, allowShare, false)
+}
+
+// §13.9's system publish on this component (SOCK-M8-01): tls/443/mta-sts in this network, on this sidecar's own
+// approved smtp/25/mx listen grant (socket_admission.go).
+func (self *SocketComponent) listenSystemPublish(ctx context.Context, settings *SocketListenSettings) (*SocketListener, error) {
+	return self.listenAs(ctx, &SocketAddress{Name: SocketSystemPublishName}, settings, false, true)
+}
+
+// listen's body: allowShare lets share/ through, and systemPublish is the system publish's own entry, the one way to
+// its name, which takes no other.
+func (self *SocketComponent) listenAs(ctx context.Context, address *SocketAddress, settings *SocketListenSettings, allowShare bool, systemPublish bool) (*SocketListener, error) {
 	if settings == nil {
 		settings = &SocketListenSettings{}
 	}
@@ -759,6 +772,10 @@ func (self *SocketComponent) listen(ctx context.Context, address *SocketAddress,
 		}
 	default:
 		// ur/ is the platform's (SOCK-M9-01), and a reserved name has no owner
+		return nil, &SocketCodeError{Err: ErrSocketDenied}
+	}
+	if (name == SocketSystemPublishName) != systemPublish {
+		// the system publish is a mail receiver's own component's, which no other caller reaches
 		return nil, &SocketCodeError{Err: ErrSocketDenied}
 	}
 	generation, policy, labels := self.current()
@@ -781,7 +798,7 @@ func (self *SocketComponent) listen(ctx context.Context, address *SocketAddress,
 	}
 	// an outward name goes through §5.4's gate first (I-8), except §13.9's system publish, whose receiver's approved
 	// smtp/25/mx listen grant stands in for its tls/ grants and their approval (socket_admission.go)
-	if name == SocketSystemPublishName {
+	if systemPublish {
 		if err := socketSystemPublishListenable(generation, policy, args, self.clock.Now()); err != nil {
 			return nil, err
 		}
@@ -863,8 +880,9 @@ func (self *SocketComponent) listen(ctx context.Context, address *SocketAddress,
 }
 
 // §9.9's Listen (§9.5): a registration on address in this sidecar's network, live once the service's first verdict
-// takes it. On tls/ and smtp/ it calls §5.4's Authorize first (I-8), which may answer *ApprovalPendingError. Other
-// errors are *net.OpError with Net "ur", which never repeat the address (I-13).
+// takes it. On tls/ and smtp/ it calls §5.4's Authorize first (I-8), which may answer *ApprovalPendingError. §13.9's
+// system publish, tls/443/mta-sts, is refused: it is ListenSystemPublish's. Other errors are *net.OpError with Net
+// "ur", which never repeat the address (I-13).
 func (self *Sidecar) Listen(ctx context.Context, address string, settings *SocketListenSettings) (*SocketListener, error) {
 	opError := func(err error) error {
 		return &net.OpError{Op: "listen", Net: "ur", Err: err}
@@ -883,6 +901,29 @@ func (self *Sidecar) Listen(ctx context.Context, address string, settings *Socke
 		if errors.As(err, &pending) {
 			return nil, err
 		}
+		return nil, opError(err)
+	}
+	return listener, nil
+}
+
+// §13.9's system publish (§9.10, §15.5; SOCK-M8-01): tls/443/mta-sts in this sidecar's network, where a mail
+// receiver's own component serves its network's MTA-STS policy, audience public. It registers on this sidecar's own
+// approved smtp/25/mx listen grant, which stands in for the name's tls/ listen and publish grants and their approval
+// (I-8 was that grant's), so it asks no approval and files none: with no such grant in this device's config it is
+// denied, and settings must leave app mode http, the publish's one mode. Listen and the daemon's sockets refuse the
+// name, so only the component the daemon composes for a receiver reaches it. The grant's expiry or revocation ends
+// the publish: the service answers revoked, which closes the listener, and its streams reset (socket_admission.go).
+// Errors are as Listen's.
+func (self *Sidecar) ListenSystemPublish(ctx context.Context, settings *SocketListenSettings) (*SocketListener, error) {
+	opError := func(err error) error {
+		return &net.OpError{Op: "listen", Net: "ur", Err: err}
+	}
+	component := self.socketComponent()
+	if component == nil {
+		return nil, opError(&SocketCodeError{Err: ErrSocketUnavailable})
+	}
+	listener, err := component.listenSystemPublish(ctx, settings)
+	if err != nil {
 		return nil, opError(err)
 	}
 	return listener, nil

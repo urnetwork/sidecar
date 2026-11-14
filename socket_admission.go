@@ -27,8 +27,9 @@
 // listen grant standing in for the tls/ listen and publish grants. So step 6, and each live stream's re-check, ask
 // that listen alone, and its expiry or revocation ends the publish here: a ticket's grant_expire_time_millis is the
 // grant's (the service signs it from the same stand-in), and PolicyChanged resets the streams of a receiver that lost
-// it. The listener's registration takes the same stand-in in place of §5.4's gate (socketSystemPublishListenable): the
-// grant's I-8 approval is the publish's, and the name serves app mode http alone. No other name takes this path, a
+// it. The listener's registration, through Sidecar.ListenSystemPublish alone (a receiver's own component's; Listen
+// refuses the name), takes the same stand-in in place of §5.4's gate (socketSystemPublishListenable): the grant's I-8
+// approval is the publish's, and the name serves app mode http alone. No other name takes this path, a
 // tls/443/mta-sts listener's own tls/ grants count for nothing, and the service holds its half (socketsservice's
 // system_publish.go).
 //

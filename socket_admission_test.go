@@ -543,17 +543,20 @@ func TestSocketAdmissionSystemPublishStandsOnTheReceiversListen(t *testing.T) {
 	}
 }
 
-// The system publish's listener (SOCK-M8-01): Listen on a receiver registers tls/443/mta-sts in app mode http with no
-// call to §5.4's gate and no tls/ grant, and edges' splices are admitted; a stream ends at its ticket's grant expiry,
-// which the service signs from the receiver's listen grant; once that grant is revoked, PolicyChanged resets the live
-// stream and the next open is denied.
+// The system publish's listener (SOCK-M8-01): its own entry on a receiver registers tls/443/mta-sts in app mode http
+// with no call to §5.4's gate and no tls/ grant, and edges' splices are admitted; a stream ends at its ticket's grant
+// expiry, which the service signs from the receiver's listen grant; once that grant is revoked, PolicyChanged resets the
+// live stream and the next open is denied.
 func TestSocketListenSystemPublishStandsOnTheReceiversListen(t *testing.T) {
 	fixture := newTestListenFixture(t)
 	fixture.policy.set(func(policy *testSocketPolicy) {
 		policy.listenNames = map[string]bool{SocketSystemPublishListenName: true}
 		policy.publish = map[Id]bool{}
 	})
-	listener := fixture.listen(t, SocketSystemPublishName, nil)
+	listener, err := fixture.component.listenSystemPublish(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("a receiver's system publish: %v", err)
+	}
 	defer listener.Close()
 	if len(fixture.authorized) != 0 {
 		t.Fatalf("the system publish went through §5.4's gate: %+v", fixture.authorized)
@@ -607,9 +610,10 @@ func TestSocketListenSystemPublishStandsOnTheReceiversListen(t *testing.T) {
 	}
 }
 
-// A non-receiver's Listen on the system publish is denied, with no approval filed and nothing registered, whatever
-// tls/ grants it holds, and the system publish in app mode raw is invalid; a receiver's Listen on tls/443/other goes
-// through §5.4's gate as any tls/ name does.
+// The system publish's entry denies a non-receiver, with no approval filed and nothing registered, whatever tls/
+// grants it holds, and refuses app mode raw as invalid; an ordinary Listen of tls/443/mta-sts, the daemon's included,
+// is denied on a receiver too, the name being the entry's alone; and a receiver's Listen of tls/443/other goes through
+// §5.4's gate as any tls/ name does.
 func TestSocketListenSystemPublishRefusesANonReceiver(t *testing.T) {
 	fixture := newTestListenFixture(t)
 	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {
@@ -620,21 +624,26 @@ func TestSocketListenSystemPublishRefusesANonReceiver(t *testing.T) {
 		fixture.authorized = append(fixture.authorized, action)
 		return refused
 	}
-	parsed, err := ParseSocketAddress(SocketSystemPublishName)
-	if err != nil {
-		t.Fatal(err)
-	}
 	fixture.policy.set(func(policy *testSocketPolicy) {
 		policy.listenNames = map[string]bool{SocketSystemPublishName: true}
 	})
-	if _, err := fixture.component.listen(t.Context(), parsed, nil, false); !errors.Is(err, ErrSocketDenied) {
+	if _, err := fixture.component.listenSystemPublish(t.Context(), nil); !errors.Is(err, ErrSocketDenied) {
 		t.Fatalf("a non-receiver's system publish: %v", err)
 	}
 	fixture.policy.set(func(policy *testSocketPolicy) {
 		policy.listenNames = map[string]bool{SocketSystemPublishListenName: true}
 	})
-	if _, err := fixture.component.listen(t.Context(), parsed, &SocketListenSettings{AppMode: "raw"}, false); !errors.Is(err, errSocketRegistrationInvalid) {
+	if _, err := fixture.component.listenSystemPublish(t.Context(), &SocketListenSettings{AppMode: "raw"}); !errors.Is(err, errSocketRegistrationInvalid) {
 		t.Fatalf("the system publish in app mode raw: %v", err)
+	}
+	for _, address := range []string{SocketSystemPublishName, "abcdefghij:" + SocketSystemPublishName, "TLS/443/MTA-STS"} {
+		parsed, err := ParseSocketAddress(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.component.listen(t.Context(), parsed, nil, false); !errors.Is(err, ErrSocketDenied) {
+			t.Fatalf("an ordinary Listen of %s on a receiver: %v", address, err)
+		}
 	}
 	if len(fixture.authorized) != 0 {
 		t.Fatalf("the system publish went through §5.4's gate: %+v", fixture.authorized)
