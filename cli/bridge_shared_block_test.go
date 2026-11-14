@@ -124,6 +124,10 @@ func newTestSharedBlockWorld(t *testing.T) *testSharedBlockWorld {
 		JoinOrder: func() []sidecar.Id {
 			return []sidecar.Id{world.first, world.second}
 		},
+		// each sync's end is an event, after the tun holds what it applied
+		OnTunSync: func(err error) {
+			world.system.iface.announce("synced")
+		},
 	})
 	t.Cleanup(world.bridges.close)
 	for _, network := range []*urBridgeNetwork{

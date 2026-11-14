@@ -336,6 +336,8 @@ type urBridgeDaemonArgs struct {
 	JoinOrder func() []sidecar.Id
 	Settings  *urTunSettings
 	Log       sidecar.Logger
+	// Called after each of the tun's syncs has applied, with its error; nil for none. A test's barrier.
+	OnTunSync func(err error)
 }
 
 // The daemon's bridges and the instance's one OS tun (the file's comment). Safe for concurrent use.
@@ -348,6 +350,7 @@ type urBridgeDaemon struct {
 	joinOrder func() []sidecar.Id
 	settings  *urTunSettings
 	log       sidecar.Logger
+	onTunSync func(err error)
 
 	// serializes what starts or ends the tun and builds a bridge, which do I/O, so two ur tun calls cannot race
 	operationLock sync.Mutex
@@ -394,6 +397,7 @@ func newUrBridgeDaemon(ctx context.Context, args *urBridgeDaemonArgs) *urBridgeD
 		system:     args.System,
 		build:      args.Build,
 		joinOrder:  args.JoinOrder,
+		onTunSync:  args.OnTunSync,
 		settings:   settings,
 		log:        log,
 		sharedWake: make(chan struct{}, 1),
@@ -520,6 +524,7 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 			return self.sharedBlocksFor(networkId)
 		},
 		OnClose: self.forgetTun,
+		OnSync:  self.onTunSync,
 	})
 	if err != nil {
 		return nil, err
