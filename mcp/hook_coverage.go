@@ -10,8 +10,13 @@
 //	config       a harness config hash changed, checked at each run's start and SessionStart, and again at an event or
 //	             a call once Ingest.ConfigCheckInterval has passed: the members tainted, config_changed; with no check
 //	             installed every config reads changed until MCP-M3-16 seals hashes, the closed direction
-//	payload      a payload past Ingest.PayloadByteCount, or one its adapter cannot read: oversize or hook_failure on
-//	             the hook's harness process's runs, never an error to the harness
+//	payload      a payload past Ingest.PayloadByteCount, or one its adapter cannot read: the event is missed, so the
+//	             hook's harness process's runs are tainted with an oversize or hook_failure gap (I-9's "lacks full hook
+//	             coverage"), never an error to the harness
+//	unknown      an event of a name the adapter's version does not read (HookEvent.Unknown): missed, so the run's
+//	             members are tainted with a missed_event gap; the event still binds
+//	drift        a payload naming a field its event's pinned schema does not (HookEvent.Drifted): what was read may not
+//	             be all it meant, so the members are tainted with a hook_failure gap; the event still binds (MCP-M3-28)
 //
 // A web tool's taint is fsynced before the hook's ack, and a failure fails the ack (§16.6's write-ahead row); while the
 // network is Locked it goes to the spool instead, fsynced, and to this process's memory where the run is known. Time
@@ -75,6 +80,19 @@ func (self *RunBinder) ingestEvent(ctx context.Context, network McpNetwork, netw
 	members := self.members(index, runId, caller)
 	if event.WebTool {
 		if err := self.taintMembers(ctx, runs, members, sidecar.RunTaintWebTool); err != nil {
+			return err
+		}
+	}
+	if event.Unknown || event.Drifted {
+		// a missed or misread event: a lapse in the run's coverage, never an error to the harness (D-MCP-5)
+		code := sidecar.RecordCoverageGapHookFailure
+		if event.Unknown {
+			code = sidecar.RecordCoverageGapMissedEvent
+		}
+		if err := self.taintMembers(ctx, runs, members, sidecar.RunTaintCoverageLapse); err != nil {
+			return err
+		}
+		if err := runs.AddGap(ctx, runId, code); err != nil {
 			return err
 		}
 	}
@@ -145,7 +163,8 @@ func (self *RunBinder) ingestLocked(ctx context.Context, network McpNetwork, cal
 	return nil
 }
 
-// Counts a coverage gap on every run of a hook's harness process, as a payload no adapter could read is. Nothing
+// Counts a coverage gap on every run of a hook's harness process, as a payload no adapter could read is, and taints
+// each, since the event is missed and a run that lacks full hook coverage loses its outward actions (I-9). Nothing
 // while the network is Locked or the process unknown, since no run can be named.
 func (self *RunBinder) gapProcess(ctx context.Context, network McpNetwork, caller mcpCallerProcess, code string) error {
 	if !caller.harness.Known() || network.Status().State == sidecar.SidecarStateLocked {
@@ -161,7 +180,7 @@ func (self *RunBinder) gapProcess(ctx context.Context, network McpNetwork, calle
 	}
 	errs := []error{}
 	for _, runId := range self.processRuns(index, caller.harness) {
-		errs = append(errs, runs.AddGap(ctx, runId, code))
+		errs = append(errs, runs.Taint(ctx, runId, sidecar.RunTaintCoverageLapse), runs.AddGap(ctx, runId, code))
 	}
 	return errors.Join(errs...)
 }

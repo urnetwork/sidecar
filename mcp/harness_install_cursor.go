@@ -23,12 +23,17 @@ import (
 // Cursor's install.
 type cursorInstallAdapter struct{}
 
-// The events ur hooks in Cursor, in the order they are written.
+// The events ur hooks in Cursor, in the order they are written. beforeSubmitPrompt opens a conversation's run before
+// its first edit, since Cursor reports no session's start and the run's restore point takes its base at the run's
+// first event: without it a conversation's first edit would be read into its base (MCP-M3-28's conformance replay);
+// stop ends each turn, where the transcript is tailed.
 var cursorHookEvents = []harnessHookEvent{
+	{name: "beforeSubmitPrompt"},
 	{name: "beforeMCPExecution", permission: true},
 	{name: "afterShellExecution"},
 	{name: "afterMCPExecution"},
 	{name: "afterFileEdit"},
+	{name: "stop"},
 }
 
 // The hooks.json version ur writes and reads.
