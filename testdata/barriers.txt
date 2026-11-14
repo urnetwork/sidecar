@@ -80,6 +80,8 @@ barrier directory.announce.after directory_repo.go
 barrier directory.announce.before directory_repo.go
 barrier directory.fold.after directory_fold.go
 barrier directory.fold.before directory_fold.go
+barrier directory.run.after directory_run.go
+barrier directory.run.before directory_run.go
 barrier directory.sync.after directory_sync.go
 barrier directory.sync.before directory_sync.go
 barrier dnsservice.edge_publish dnsservice/edge.go
@@ -368,6 +370,13 @@ barrier pushservice.publisher.tail.after pushservice/publisher.go
 barrier pushservice.publisher.tail.before pushservice/publisher.go
 barrier pushservice.wake.after pushservice/wake_enqueue.go
 barrier pushservice.wake.before pushservice/wake_enqueue.go
+barrier pushservice.wake_sender.ack pushservice/wake_sender.go
+barrier pushservice.wake_sender.claim pushservice/wake_sender.go
+barrier pushservice.wake_sender.read pushservice/wake_sender.go
+barrier pushservice.wake_sender.send pushservice/wake_sender.go
+barrier pushservice.wake_sender.sent pushservice/wake_sender.go
+barrier pushservice.wake_sender.window pushservice/wake_sender.go
+barrier pushservice.wake_sender.window_set pushservice/wake_sender.go
 barrier quota.usage_report.after host_quota_batcher.go
 barrier quota.usage_report.before host_quota_batcher.go
 barrier record.chain.fsync.after record_chain.go
@@ -606,6 +615,11 @@ secret measure_server_key smtpproof/prover_measure.go
 secret member_invite config_invite.go
 secret object_key evs_slot.go
 secret path_secret mls_welcome.go
+secret pushservice.apns_key pushservice/wake_vendor_apns.go
+secret pushservice.apns_provider_token pushservice/wake_vendor_apns.go
+secret pushservice.fcm_access_token pushservice/wake_vendor_fcm.go
+secret pushservice.fcm_assertion pushservice/wake_vendor_fcm.go
+secret pushservice.fcm_key pushservice/wake_vendor_fcm.go
 secret record_entry_key record_chain.go
 secret record_entry_key record_deposit.go
 secret record_entry_key record_seal.go
@@ -613,6 +627,7 @@ secret record_entry_salt record_chain.go
 secret record_entry_salt record_deposit.go
 secret record_entry_salt record_seal.go
 secret record_log_key record_log.go
+secret record_reach_visitor_key record_reach.go
 secret record_slot_row evs_slot.go
 secret recovery_code keys_recovery.go
 secret recovery_ed25519_seed keys_recovery.go

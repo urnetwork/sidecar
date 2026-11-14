@@ -14,7 +14,8 @@ import (
 )
 
 // Numbers as the design writes them, or for 0x10xx, 0x13xx and 0x14xx as §6.11's list orders them, with §10's two and
-// §11.6's two more statements after it, 0x11xx and 0x12xx as §8.8's and §7.9's rows do, 0x15xx as
+// §11.6's two more statements after it, 0x11xx and 0x12xx as §8.8's and §7.9's rows do, with 0x1111 as DESIGN-DETAILS
+// 16.2.2 numbers RepoPrefixRules (QD-212), 0x1110 left for QD-013's ApprovalDelivery, 0x15xx as
 // plan-TLS-small-readings#2 numbers §13.8's attestation and M6's edge login and QD-134 the link token, and
 // 0x1Axx as plan-CORE-binding-wire #1 numbers the binding and QD-159 the agent certificate.
 // Values are permanent once released, so a change here is a change to the wire.
@@ -41,6 +42,7 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_REPO_VERSIONING, number: 0x110D},
 		{signedType: SignedType_SIGNED_AUDIT_OPT_IN, number: 0x110E},
 		{signedType: SignedType_SIGNED_AUDIT_OPT_OUT, number: 0x110F},
+		{signedType: SignedType_SIGNED_REPO_PREFIX_RULES, number: 0x1111},
 
 		{signedType: SignedType_SIGNED_GENESIS, number: 0x1201},
 		{signedType: SignedType_SIGNED_ADMIN_SET, number: 0x1202},

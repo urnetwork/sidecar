@@ -33,10 +33,13 @@
 // of no forwarding Delegation in the state, and every AuthorityProposal, AuthorityCosign, RecoveryRebind, AdminSet,
 // BridgeEgress, tick and base of another config head) waits for the compile: Waiting holds it with the time it was
 // first seen, and once one has waited NarrowingOverdueTimeout the decision reports Overdue and the posture raises
-// PostureAlarmCompileOverdue, again each NarrowingOverdueTimeout while one waits. A waiting entry never changes what is
-// enforced: the last compiled state stays in force and the component never goes pending for one, at the accepted cost
-// that a revocation the posture cannot check does not apply on a device that cannot compile (QD-621). Verification is
-// offline: it reads the anchor, the store and what it is given, never a network, and the clock only for Waiting.
+// PostureAlarmCompileOverdue. While the condition lasts it raises it again at doubling intervals from the oldest
+// waiting entry's first sight, 20 min after the first raise, then 40, 80 and so on up to once a day
+// (NarrowingOverdueRepeatMaxInterval), and at once for each further entry that becomes overdue (QD-696, DESIGN-DETAILS
+// 4.2.5's schedule). A waiting entry never changes what is enforced: the last compiled state stays in force and the
+// component never goes pending for one, at the accepted cost that a revocation the posture cannot check does not apply
+// on a device that cannot compile (QD-621). Verification is offline: it reads the anchor, the store and what it is
+// given, never a network, and the clock only for Waiting.
 //
 // The overlay holds OverlayMaxCount entries, and a device that never compiles can fill it. A denial the posture
 // verified and cannot hold then makes it pending, persisted, until a state at or past the newest such denial, rather
@@ -198,7 +201,9 @@ type PostureOverdue struct {
 	N uint64
 	// How long it has waited.
 	Age time.Duration
-	// When the posture raises PostureAlarmCompileOverdue next, if no state has judged it by then.
+	// When the posture raises PostureAlarmCompileOverdue next if no state has judged what waits by then: the earlier
+	// of the repeats' next point and the next waiting entry's own NarrowingOverdueTimeout, which a host's timer wakes
+	// at to read Decision.
 	NextAlarmAt time.Time
 }
 
@@ -281,9 +286,15 @@ type PostureSettings struct {
 	// The share certificates a posture keeps.
 	ShareCertMaxCount int
 	// How long a narrowing entry the posture cannot apply waits before the decision reports it Overdue and the
-	// posture raises PostureAlarmCompileOverdue, and the period at which it raises that again while one waits
-	// (DESIGN-DETAILS 4.2.5): 10 min, many times a compile's delay. Nothing enforces it. Non-positive reports nothing.
+	// posture raises PostureAlarmCompileOverdue (DESIGN-DETAILS 4.2.5): 10 min, many times a compile's delay. It is
+	// also the repeats' first step, the n-th repeat coming 2^n times it after the one before, until
+	// NarrowingOverdueRepeatMaxInterval caps that. Nothing enforces it. Non-positive reports nothing.
 	NarrowingOverdueTimeout time.Duration
+	// The longest interval between two repeats of PostureAlarmCompileOverdue while the condition lasts (QD-696): 24 h,
+	// so a device that can never compile raises it daily rather than every NarrowingOverdueTimeout for good, an alarm
+	// people would learn to ignore. With the defaults the raises fall at 10, 30, 70, 150, 310, 630, 1,270 and 2,550
+	// min of the oldest waiting entry's age, then every 24 h. Non-positive leaves the intervals doubling with no cap.
+	NarrowingOverdueRepeatMaxInterval time.Duration
 	// The waiting entries a posture keeps apart, 1,024, bounding the manifest on a device that never compiles: past
 	// it the newest two merge, waiting from the older's time through the newer's position, so the report only errs
 	// early and a state never clears one too soon. Below 1 keeps one.
@@ -297,16 +308,17 @@ type PostureSettings struct {
 // The defaults: room for §7.9's tails at two fold spans and a Team's 5,000 admissions.
 func DefaultPostureSettings() *PostureSettings {
 	return &PostureSettings{
-		EntryMaxByteCount:       256 * 1024,
-		EntriesMaxCount:         16 * 1024,
-		RowMaxByteCount:         64 * 1024,
-		ReadByteCount:           32 * 1024,
-		ManifestMaxByteCount:    1024 * 1024,
-		StateMaxByteCount:       8 * 1024 * 1024,
-		OverlayMaxCount:         4 * 1024,
-		ShareCertMaxCount:       1024,
-		NarrowingOverdueTimeout: 10 * time.Minute,
-		WaitingMaxCount:         1024,
+		EntryMaxByteCount:                 256 * 1024,
+		EntriesMaxCount:                   16 * 1024,
+		RowMaxByteCount:                   64 * 1024,
+		ReadByteCount:                     32 * 1024,
+		ManifestMaxByteCount:              1024 * 1024,
+		StateMaxByteCount:                 8 * 1024 * 1024,
+		OverlayMaxCount:                   4 * 1024,
+		ShareCertMaxCount:                 1024,
+		NarrowingOverdueTimeout:           10 * time.Minute,
+		NarrowingOverdueRepeatMaxInterval: 24 * time.Hour,
+		WaitingMaxCount:                   1024,
 	}
 }
 

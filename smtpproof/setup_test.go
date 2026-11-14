@@ -243,7 +243,7 @@ func TestACachedKeyIsTrustedOnlyWhileItIsTheVerifiedOne(t *testing.T) {
 
 func TestProductionShapesHaveDistinctKeySetNames(t *testing.T) {
 	seen := map[string]bool{}
-	for _, circuit := range productionKeySetCircuits() {
+	for _, circuit := range productionKeySetCircuits(DefaultProofSettings()) {
 		if seen[circuit.name] {
 			t.Errorf("%s twice", circuit.name)
 		}
@@ -259,8 +259,8 @@ func TestAKeySetProvesARealEhlo(t *testing.T) {
 		t.Skip("set SMTPPROOF_FULL to run a ceremony at a real shape's size")
 	}
 	testNeedCircuits(t)
-	shape := partShapes()[1]
-	circuits := []*keySetCircuit{productionKeySetCircuits()[1]}
+	shape := partShapes(DefaultProofSettings())[1]
+	circuits := []*keySetCircuit{productionKeySetCircuits(DefaultProofSettings())[1]}
 	directory := t.TempDir()
 	pin, err := runKeySetSetup(context.Background(), directory, []byte("a synthetic beacon"), circuits)
 	if err != nil {
@@ -280,7 +280,7 @@ func TestAKeySetProvesARealEhlo(t *testing.T) {
 		t.Fatal(err)
 	}
 	statement, witness := testBdatCapture(t, testTlsLegs()[1]).part(t, 1)
-	if found, err := partShapeFor(statement); err != nil || *found != *shape {
+	if found, err := partShapeFor(DefaultProofSettings(), statement); err != nil || *found != *shape {
 		t.Fatalf("pi1 fits %+v, %v", found, err)
 	}
 	proof, err := prover.backend.provePart(context.Background(), statement, witness)

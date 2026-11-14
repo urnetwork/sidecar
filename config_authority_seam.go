@@ -34,6 +34,22 @@ type SidecarAuthorityProposals interface {
 	Settings() *bridge.ProjectionSettings
 }
 
+// The Recovery values an authority's verifier judges activations by (ConfigRecoverySettings), which a device shows a
+// pending recovery's window from. Optional beside SidecarAuthority; one without it is read at the defaults.
+type SidecarAuthorityRecovery interface {
+	RecoverySettings() *ConfigRecoverySettings
+}
+
+// The Recovery values of an authority: its own, or the defaults where it names none.
+func sidecarAuthorityRecoverySettings(authority SidecarAuthority) *ConfigRecoverySettings {
+	if recovery, ok := authority.(SidecarAuthorityRecovery); ok {
+		if settings := recovery.RecoverySettings(); settings != nil {
+			return settings
+		}
+	}
+	return DefaultConfigRecoverySettings()
+}
+
 // The authority a ConfigClient's verified state gives.
 type ConfigAuthority struct {
 	client *ConfigClient
@@ -45,6 +61,7 @@ var (
 	_ SidecarAuthority          = (*ConfigAuthority)(nil)
 	_ SidecarIndexerAuthority   = (*ConfigAuthority)(nil)
 	_ SidecarAuthorityProposals = (*ConfigAuthority)(nil)
+	_ SidecarAuthorityRecovery  = (*ConfigAuthority)(nil)
 )
 
 // The authority over this client's verified state, which a host installs with Sidecar.InstallAuthority.
@@ -188,6 +205,11 @@ func (self *ConfigAuthority) PendingProposal(proposalId []byte) *bridge.Proposal
 		return nil
 	}
 	return proto.Clone(proposal.row).(*bridge.ProposalRow)
+}
+
+// The Recovery values this client's log judges activations by.
+func (self *ConfigAuthority) RecoverySettings() *ConfigRecoverySettings {
+	return self.client.logSettings.recovery()
 }
 
 // The ServiceSettings values every verifier judges by.

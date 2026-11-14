@@ -293,6 +293,7 @@ var aclFuzzStatementTypes = []bridge.SignedType{
 	bridge.SignedType_SIGNED_REPO_CREATE, bridge.SignedType_SIGNED_REPO_ADMIN, bridge.SignedType_SIGNED_REPO_GRANT,
 	bridge.SignedType_SIGNED_REPO_REVOKE, bridge.SignedType_SIGNED_REPO_DELETE, bridge.SignedType_SIGNED_REPO_RESTORE,
 	bridge.SignedType_SIGNED_REPO_VERSIONING, bridge.SignedType_SIGNED_AUDIT_OPT_IN, bridge.SignedType_SIGNED_AUDIT_OPT_OUT,
+	bridge.SignedType_SIGNED_REPO_PREFIX_RULES,
 }
 
 // The fuzz cast's state, rebuilt per input, with a vault, a general repo and a grant to judge statements against.
