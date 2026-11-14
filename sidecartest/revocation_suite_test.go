@@ -17,12 +17,14 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest/scenarios"
 )
 
-// The device form, whole: every way of it named by some check, none failing, and under the hooks none open.
+// The device form, whole: every way of it named by some check and none failing; under the hooks the composed checks
+// judge, and the clauses not composed yet read open in every way, never passed.
 func TestRevocationSuiteDeviceForm(t *testing.T) {
 	report := sidecartest.RunRevocationSuite(t, sidecartest.RevocationFormDevice, nil)
 	if 0 < len(report.Missing) {
 		t.Fatalf("ways no check names: %v", report.Missing)
 	}
+	composed := []string{scenarios.RevocationKeysNextGeneration.Id, scenarios.RevocationEvsNewContent.Id}
 	for _, way := range sidecartest.RevocationFormDevice.Ways() {
 		results := report.Of(way)
 		if !slices.ContainsFunc(results, func(result *sidecartest.RevocationResult) bool {
@@ -31,11 +33,15 @@ func TestRevocationSuiteDeviceForm(t *testing.T) {
 			t.Errorf("%s: the keys check did not run", way)
 		}
 		for _, result := range results {
-			if sidecartest.HooksLinked && result.Open != "" {
+			switch {
+			case !slices.Contains(composed, result.CheckId):
+				if result.Open == "" || result.Err != nil {
+					t.Errorf("%s: a clause not composed did not read open: %s", way, result)
+				}
+			case sidecartest.HooksLinked && result.Open != "":
 				t.Errorf("%s: open under the hooks: %s", way, result)
-			}
-			if !sidecartest.HooksLinked && result.Err == nil && result.Open == "" && result.CheckId == scenarios.RevocationKeysNextGeneration.Id {
-				t.Errorf("%s: passed without the hooks, which hold none of X's keys to judge", way)
+			case !sidecartest.HooksLinked && result.Err == nil && result.Open == "":
+				t.Errorf("%s: passed without the hooks, which hold none of X's keys to judge: %s", way, result)
 			}
 		}
 	}

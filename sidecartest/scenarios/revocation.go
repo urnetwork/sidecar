@@ -16,13 +16,14 @@
 // RevocationKeysCheck's mutant, a writer sealing to the generation it held before X's loss, is the suite's own
 // test that a writer sealing to an old generation fails.
 //
-// Not composed yet, each reading missing in its way's report only where no other check names that way: the gates'
-// 412 GATE_CLOSED and deposits until a covering generation is claimed (FS-3's, on the evs world, gate on), receivers'
-// 451, members refusing a commit that adds a non-reader or omits a Remove (KEYS-M2-28's revocation_test.go, a _test
-// file nothing can register), tokens failing in their windows at api, sockets, edges, evs, gkm and connect, path
-// tokens, first-write checkpoints, five ephemeral agents through a reap with a covered agent's reap starting no
-// generation, a Delegation's reader key, a reader-only holder with evs's help, a withheld Remove, and SOCK's, TLS's,
-// TEAM's SCIM and CORE's FS-98 checks, which their areas register.
+// Not composed yet, and registered as checks that read open in every device way, so each run's report names them
+// rather than counting the way covered by what did run: the gates' 412 GATE_CLOSED and deposits until a covering
+// generation is claimed, receivers' 451 (FS-3's on the evs world, gate on); members refusing a commit that adds a
+// non-reader or omits a Remove (KEYS-M2-28's revocation_test.go, a _test file nothing can register, KEYS's to
+// register); tokens failing in their windows at api, sockets, edges, evs, gkm and connect (SOCK's, TLS's, TEAM's and
+// CORE's, the areas registering them); path tokens, first-write checkpoints, five ephemeral agents through a reap
+// with a covered agent's reap starting no generation, a Delegation's reader key, a reader-only holder with evs's
+// help and a withheld Remove.
 
 package scenarios
 
@@ -43,7 +44,27 @@ import (
 var (
 	RevocationKeysNextGeneration = sidecartest.RegisterRevocationCheck(RevocationKeysCheck(false))
 	RevocationEvsNewContent      = sidecartest.RegisterRevocationCheck(RevocationEvsCheck())
+
+	// see the file header: each reads open, naming who composes it
+	RevocationGateRefusals = sidecartest.RegisterRevocationCheck(revocationNotComposed("evs/gate-refusals-until-a-covering-generation", "EVS",
+		"heads and deposits not covering X answer 412 GATE_CLOSED and receivers 451 until a covering generation is claimed: FS-3's refusal on the evs world, gate on, not composed into the suite yet"))
+	RevocationBadCommits = sidecartest.RegisterRevocationCheck(revocationNotComposed("keys/members-refuse-a-bad-commit", "KEYS",
+		"members refuse a commit that adds a non-reader or omits a Remove: KEYS-M2-28's schedule is a _test function, which KEYS registers as a check"))
+	RevocationTokenWindows = sidecartest.RegisterRevocationCheck(revocationNotComposed("tokens/fail-in-their-windows", "TEAM",
+		"X's tokens fail at once at api, sockets and edges, within 15 min at evs and gkm and 90 s at connect: SOCK's, TLS's, TEAM's and CORE's checks, which those areas register"))
+	RevocationPathsAndCheckpoints = sidecartest.RegisterRevocationCheck(revocationNotComposed("evs/path-tokens-and-first-write-checkpoints", "EVS",
+		"path tokens rotate and each file's first write after the new generation is a full checkpoint: not composed into the suite yet"))
+	RevocationAgentsAndDelegations = sidecartest.RegisterRevocationCheck(revocationNotComposed("keys/agents-delegations-and-withheld-removes", "KEYS",
+		"five ephemeral agents through a reap, a covered agent's reap starting no generation, a Delegation's reader key, a reader-only holder with evs's help and a withheld Remove: not composed into the suite yet"))
 )
+
+// A check of the device form that judges nothing and says why, so a report never counts its clause as passed.
+func revocationNotComposed(id string, area string, why string) *sidecartest.RevocationCheck {
+	return &sidecartest.RevocationCheck{
+		Id: id, Area: area, Ways: sidecartest.RevocationFormDevice.Ways(),
+		Run: func(run *sidecartest.RevocationRun) (string, error) { return "not composed: " + why, nil },
+	}
+}
 
 // Why a held-key clause cannot run on a leg without the hooks.
 const revocationOpenWithoutHooks = "the keys X held reach no record without sidecar_testhooks, so whether they open the new generation is not judged"
