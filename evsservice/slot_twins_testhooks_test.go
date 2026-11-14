@@ -16,15 +16,20 @@
 //	                     under the committed version (ClosureHolds)
 //	TakesUnsettled       two retokens with no settle wait: the first's DELETE takes the second's object, created
 //	                     within the second it names, and the first dies holding the slot (OriginStands)
-//	NoOriginAtDelete     evacuation deletes a re-lister's dead record's slot whatever its origin (CreatorKept)
+//	NoOriginAtDelete     evacuation deletes a dead record's slot whatever its origin: A's refused statement's, under
+//	                     the retoken's commit (AdopterKept)
 //	UnconditionalDelete  a run stalled between its HEAD and its DELETE deletes the object a later commit created
 //	                     (ClosureHolds)
 //	NoSettle             two runs judge a late slot settled; the stalled one's DELETE takes the object a later
 //	                     commit created within the second it names (ClosureHolds)
 //
-// The model's other two twins rest on rules this track does not change: StampBeforeRecord on step 6's order, record
-// then slots, which TestPushSlotNotWrittenWithoutItsRecord holds, and DeadUnfenced on 2.2.3's fence, which
-// evacuate_test.go's fence tests hold.
+// In QD-806's order step 6 writes the slots before the record, so a statement the design refuses in its slot round
+// leaves no record at all, and only a twin whose broken rule lets it through its slot round leaves the dead record
+// evacuation then judges (deadWant). A re-lister (B) is refused in its slot round and so leaves no record either:
+// NoOriginAtDelete is shown on A's dead record instead, whose slot the retoken took over. The model's other two twins
+// are not run here: StampBeforeRecord is QD-806's order now (question push-record-no-slot-bodies-slots-before-record),
+// and push_slot_test.go's TestPushSlotsStandForTheRetryOfAStatementWhoseRecordWasNotWritten holds what that order
+// keeps; DeadUnfenced rests on 2.2.3's fence, which evacuate_test.go's fence tests hold.
 
 package evsservice
 
@@ -54,6 +59,15 @@ func requireSlotTwin(t *testing.T, rule evsSlotTwin, schedule func(t *testing.T,
 	if !run(rule) {
 		t.Fatal("the twin lost no committed version's slot")
 	}
+}
+
+// The dead records a schedule's evacuation finds: none where the design refuses the taker in its slot round, before
+// its record (QD-806's order), and the taker's one where the twin's broken rule lets it through to its record.
+func deadWant(rule evsSlotTwin) int {
+	if rule == evsSlotTwinNone {
+		return 0
+	}
+	return 1
 }
 
 // Whether the committed version that names slotId under origin has lost its slot: the object gone, or another
@@ -137,7 +151,7 @@ func TestSlotTwinTakesForeignConsume(t *testing.T) {
 
 // o, a push of the writer's, passes step 6 and is held before step 7; another statement of the writer's in o's own
 // epoch lists o's slot, takes it over or is refused, and then dies, every step 7 of its losing its race; o commits.
-// 26 h on, evacuation drops the dead statement's record.
+// 26 h on, evacuation drops the dead statement's record, which only a statement through its slot round left.
 func slotTwinTakesLiveSchedule(t *testing.T, rule evsSlotTwin) bool {
 	fixture := newSlotEvacuateFixture(t)
 	fixture.commitCached("x")
@@ -165,7 +179,7 @@ func slotTwinTakesLiveSchedule(t *testing.T, rule evsSlotTwin) bool {
 	fixture.requireCommitted(fixture.post(token, liveBody), 2)
 	sidecar.SetTestHooks(nil)
 	fixture.awaitStepEights()
-	fixture.requireEvacuated(func(result *EvacuationResult) bool { return result.DeadCount == 1 })
+	fixture.requireEvacuated(func(result *EvacuationResult) bool { return result.DeadCount == deadWant(rule) })
 	return fixture.slotLost(slotId, liveOrigin)
 }
 
@@ -174,7 +188,8 @@ func TestSlotTwinTakesLive(t *testing.T) {
 }
 
 // o commits its slot in epoch 1 and a PATH_EPOCH cuts the ref over; a statement of epoch 2 lists o's slot, takes it
-// over or is refused, and dies, every step 7 of its losing its race. 26 h on, evacuation drops its record.
+// over or is refused, and dies, every step 7 of its losing its race. 26 h on, evacuation drops its record, if its
+// slot round let it append one.
 func slotTwinTakesCommittedSchedule(t *testing.T, rule evsSlotTwin) bool {
 	fixture := newSlotEvacuateFixture(t)
 	commitment := fixture.crossRemove(false)
@@ -202,7 +217,7 @@ func slotTwinTakesCommittedSchedule(t *testing.T, rule evsSlotTwin) bool {
 	}
 	faults.Clear()
 	fixture.awaitStepEights()
-	fixture.requireEvacuated(func(result *EvacuationResult) bool { return result.DeadCount == 1 })
+	fixture.requireEvacuated(func(result *EvacuationResult) bool { return result.DeadCount == deadWant(rule) })
 	return fixture.slotLost(slotId, committedOrigin)
 }
 
@@ -213,7 +228,8 @@ func TestSlotTwinTakesCommitted(t *testing.T) {
 // Two retokens of one refused statement whose object was stored just before them: the first reaches its takeover's
 // DELETE, waiting out the settle age as the design has it, and is held there while the second, half a second on,
 // takes the object over and commits creating path t; the first, creating t too, then sends its DELETE and dies at
-// its step 7 if its slot round went on. 26 h on, evacuation drops the first's record.
+// its step 7 if its slot round went on. 26 h on, evacuation drops the first's record, if its slot round let it
+// append one.
 func slotTwinTakesUnsettledSchedule(t *testing.T, rule evsSlotTwin) bool {
 	takeover := newTakeoverCase(t, "twin unsettled", false, nil)
 	fixture := takeover.fixture
@@ -246,7 +262,7 @@ func slotTwinTakesUnsettledSchedule(t *testing.T, rule evsSlotTwin) bool {
 		t.Fatal("both retokens committed")
 	}
 	fixture.awaitStepEights()
-	evacuation.requireEvacuated(func(result *EvacuationResult) bool { return result.DeadCount == 1 })
+	evacuation.requireEvacuated(func(result *EvacuationResult) bool { return result.DeadCount == deadWant(rule) })
 	return fixture.slotLost(takeover.slotId, secondOrigin)
 }
 
@@ -254,25 +270,10 @@ func TestSlotTwinTakesUnsettled(t *testing.T) {
 	requireSlotTwin(t, evsSlotTwinTakesUnsettled, slotTwinTakesUnsettledSchedule)
 }
 
-// B: another writer lists a committed version's slot as new with its bytes and is refused; 26 h on, evacuation drops
-// its record.
-func slotTwinRelistSchedule(t *testing.T, rule evsSlotTwin) bool {
-	fixture := newSlotEvacuateFixture(t)
-	slotId, _, slotBody := checkTestSlot(t, "twin relisted")
-	committed := fixture.plan()
-	fixture.createWithSlot(committed, checkTestPath("a"), slotId, slotBody)
-	committedBody, committedOrigin := fixture.bodyAndOrigin(committed)
-	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.signerId), committedBody), 1)
-	fixture.awaitStepEights()
-	relisting := fixture.plan()
-	fixture.createWithSlot(relisting, checkTestPath("b"), slotId, slotBody)
-	requireRefusal(t, fixture.pushAsOther(relisting), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_STALE)
-	fixture.requireEvacuated(func(result *EvacuationResult) bool { return result.DeadCount == 1 })
-	return fixture.slotLost(slotId, committedOrigin)
-}
-
+// A's dead record lists the slot its retoken took over and committed: the design keeps the object, another
+// statement's, and the twin, deleting a dead record's slot whatever its origin, takes it from under the commit.
 func TestSlotTwinNoOriginAtDelete(t *testing.T) {
-	requireSlotTwin(t, evsSlotTwinNoOriginAtDelete, slotTwinRelistSchedule)
+	requireSlotTwin(t, evsSlotTwinNoOriginAtDelete, slotTwinRetokenSchedule)
 }
 
 // A run stalled between its HEAD and its DELETE beside a second run, as in evacuate_slot_test.go: the dead

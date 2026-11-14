@@ -4,16 +4,22 @@
 //	        full price, its own writes and the P2 work it causes (§11.13's push row), so one grant pays the record,
 //	        the slots, the page-out and the head; a budget past its shed delay answers 429 RESOURCE_EXHAUSTED, which
 //	        refuses nothing
-//	6       the record joins this process's open batch for the repo's cluster and waits for its write (batch.go);
-//	        then, for a push with new slots, the slot round (DESIGN-DETAILS 14.2.3): each slot is created If-None-Match
-//	        with the statement as its origin (slot_origin.go), and on a 412 or a lost answer the object's origin
-//	        decides. The statement's own with equal bytes is success under 23 h old, older 409 SLOT_STALE, recorded;
-//	        its own with other bytes sends the attempt to a cluster read of the head, where 5a finds the push
-//	        committed if an ERASE rewrote the slot, else an alarm and SLOT_STALE. A retoken takes over the object of
-//	        the statement it replaces, which can never commit (14.2.4): a settled DELETE naming its LastModified, then
-//	        the create again. Any other object, one with no origin among them, is a cluster read of the head and 5a,
-//	        then SLOT_STALE, recorded. So the record names every slot written, and a slot object is held by one
-//	        statement. A window about to pass 127 versions pages out first (logpage.go)
+//	6       for a push with new slots, the slot round first (DESIGN-DETAILS 14.2.3, in QD-806's order): each slot is
+//	        created If-None-Match from the request's section 7 with the statement as its origin (slot_origin.go), and
+//	        on a 412 or a lost answer the object's origin decides. The statement's own with equal bytes is success
+//	        under 23 h old, older 409 SLOT_STALE, recorded; its own with other bytes sends the attempt to a cluster
+//	        read of the head, where 5a finds the push committed if an ERASE rewrote the slot, else an alarm and
+//	        SLOT_STALE. A retoken takes over the object of the statement it replaces, which can never commit (14.2.4):
+//	        a settled DELETE naming its LastModified, then the create again. Any other object, one with no origin
+//	        among them, is a cluster read of the head and 5a, then SLOT_STALE, recorded. So a slot object is held by
+//	        one statement. Then the record joins this process's open batch for the repo's cluster and waits for its
+//	        write (batch.go), its payload with section 7 taken out (sidecar.EvsRecordPayload), so the slot objects are
+//	        the one stored copy of the push's keys and an ERASE's rewrite leaves none in a record a reader can fetch
+//	        (QD-806). A refusal in the slot round appends no record. A crash between the two leaves slots no record
+//	        names, under the statement's origin: the statement's retry carries its bodies again and finds its own
+//	        objects, and a statement never retried leaves them as a leak of at most 8 KiB each, never a loss
+//	        (question push-record-no-slot-bodies-slots-before-record). A window about to pass 127 versions pages out first
+//	        (logpage.go)
 //	7       the head If-Match step 4's ETag (If-None-Match for a ref with none): version v+1, C_{v+1}, the push, its
 //	        pins, the window with the push's entry and without what was paged, folded_through as this process's
 //	        folds raise it, the lease cleared, deleted for a DELETE; issued only within PushStepSevenWindow of step
@@ -169,8 +175,9 @@ func (self *pushAttempt) committed(written *EvsStoredHead) *pushOutcome {
 	return outcome
 }
 
-// Step 6, once per attempt: the budget, the record and the new slots. A rerun of step 7 on a reread head keeps all
-// three, since the record and the slots are this statement's whatever head it commits on.
+// Step 6, once per attempt: the budget, the new slots, then the record (QD-806): the record keeps no slot body, so
+// the slots are written from the request before it. A rerun of step 7 on a reread head keeps all three, since the
+// slots and the record are this statement's whatever head it commits on.
 func (self *pushAttempt) step6() *pushOutcome {
 	// the tail first, so the push's price counts its purge list (push_staged.go)
 	tail, err := self.recordTail()
@@ -180,25 +187,28 @@ func (self *pushAttempt) step6() *pushOutcome {
 	if outcome := self.admit(); outcome != nil {
 		return outcome
 	}
-	if self.place == nil {
-		place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), self.batchRecord(), tail)
-		if err != nil {
-			// nothing this attempt carried reached a head
-			return self.unavailable()
-		}
-		self.place = place
-	}
 	if !self.slotsWritten {
 		if outcome := self.writeSlots(); outcome != nil {
 			return outcome
 		}
 		self.slotsWritten = true
 	}
+	if self.place == nil {
+		barrierKey := barrierRefKey(self.repoId, self.refId)
+		testHookBarrier(BarrierPushRecordBefore, barrierKey)
+		place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), self.batchRecord(), tail)
+		testHookBarrier(BarrierPushRecordAfter, barrierKey)
+		if err != nil {
+			// nothing this attempt carried reached a head; its slots stand under its origin for the retry
+			return self.unavailable()
+		}
+		self.place = place
+	}
 	return nil
 }
 
-// The batch record this attempt appends at step 6: a push's statement and payload, or a seal's statement and parts
-// (push_seal.go); a part's is push_part.go's.
+// The batch record this attempt appends at step 6: a push's statement and its payload with no slot body (QD-806),
+// or a seal's statement and parts (push_seal.go); a part's is push_part.go's.
 func (self *pushAttempt) batchRecord() *sidecar.EvsBatchRecord {
 	record := &sidecar.EvsBatchRecord{
 		Type:            protocol.EvsBatchRecordType_EVS_BATCH_PUSH,
@@ -207,7 +217,7 @@ func (self *pushAttempt) batchRecord() *sidecar.EvsBatchRecord {
 		PushId:          self.pushId,
 		SignerSidecarId: sidecar.Id(self.statement.Push.GetSignerSidecarId()),
 		TimeMs:          self.statement.Push.GetTimeMs(),
-		Body:            sidecar.EvsPushRecordBody(self.statement.Bytes, self.payloadBytes),
+		Body:            sidecar.EvsPushRecordBody(self.statement.Bytes, self.recordPayloadBytes),
 	}
 	if self.seal != nil {
 		record.Type = protocol.EvsBatchRecordType_EVS_BATCH_SEAL
@@ -314,8 +324,9 @@ func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
 	})
 }
 
-// Step 6's new slots, the slot round of DESIGN-DETAILS 14.2.3, once per attempt. The slots go in parallel, and a
-// takeover's wait is per slot. See the file header.
+// Step 6's new slots, the slot round of DESIGN-DETAILS 14.2.3, once per attempt and before the record, each body from
+// the request's section 7, which the record does not keep (QD-806). The slots go in parallel, and a takeover's wait
+// is per slot. See the file header.
 func (self *pushAttempt) writeSlots() *pushOutcome {
 	if self.payload == nil {
 		return nil

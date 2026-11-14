@@ -754,6 +754,23 @@ func TestReadStreamsObjects(t *testing.T) {
 	if err != nil || parsed.PushId != plan.PushId {
 		t.Fatalf("record bytes: %v", err)
 	}
+	// served as stored, with no slot body (QD-806): the slot read is the one copy of its keys, and the record checks
+	// against its statement as a record
+	if bytes.Contains(record.GetBody(), slotBody) {
+		t.Fatal("the served push record holds the slot's body")
+	}
+	statementBytes, payloadBytes, err := sidecar.ParseEvsPushRecordBody(parsed.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := sidecar.ParseEvsStatement(statementBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, err := sidecar.EvsCheckRecordPayload(statement, payloadBytes)
+	if err != nil || checked.SlotBodies != nil || len(checked.NewObjects) != 1 || len(checked.Changes) != 1 {
+		t.Fatalf("the served record's payload: %v", err)
+	}
 	if !reply.objects[3].GetMissing() || !reply.objects[4].GetMissing() {
 		t.Fatal("an unknown push or segment not missing")
 	}
