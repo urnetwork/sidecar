@@ -274,8 +274,10 @@ func TestZ2BindsTheSequenceNumberIn13(t *testing.T) {
 	for _, leg := range testTlsLegs()[:2] {
 		capture := testBdatCapture(t, leg)
 		statement, witness := capture.part(t, 2)
-		// a record proved at one position opens differently at another, so it cannot be replayed there
-		statement.clientRecords[0].seq += 1
+		// a record proved at one position opens differently at another, so it cannot be replayed there:
+		// the two RCPT records traded, each still at a RCPT's position and its own length's template
+		records := statement.clientRecords
+		records[1].seq, records[2].seq = records[2].seq, records[1].seq
 		testExpectOnly(t, leg.name, statement, witness, checkZ2)
 	}
 }
@@ -458,6 +460,7 @@ func TestZ5RequiresUnsubscribeOnBulk(t *testing.T) {
 
 func TestZ5AcceptsFormsAnHonestMessageUses(t *testing.T) {
 	preamble := &sessionPreamble{
+		proof:     DefaultProofSettings(),
 		messageId: testMessageId, headerFromDomain: testNetworkDomain, dkimSelector: testSelector,
 		xUrRef: testXUrRef, feedbackId: testFeedbackId,
 	}
@@ -518,8 +521,9 @@ func TestZ6RefusesEverySmuggledDataEnd(t *testing.T) {
 	for _, leg := range testTlsLegs() {
 		capture := testDataCapture(t, leg)
 		for _, c := range cases {
-			statement, witness := capture.part(t, 3)
-			testAuthorClientRecord(t, statement, witness, 1, []byte(c.content))
+			// the body's one record, in the last part beside the end mark and QUIT
+			statement, witness := capture.part(t, 4)
+			testAuthorClientRecord(t, statement, witness, 0, []byte(c.content))
 			testExpectOnly(t, leg.name+": "+c.name, statement, witness, checkZ6)
 		}
 	}
@@ -528,7 +532,7 @@ func TestZ6RefusesEverySmuggledDataEnd(t *testing.T) {
 func TestZ6RefusesABadEndOfData(t *testing.T) {
 	for _, leg := range testTlsLegs() {
 		capture := testDataCapture(t, leg)
-		statement, witness := capture.part(t, 3)
+		statement, witness := capture.part(t, 4)
 		end := len(statement.clientRecords) - 2
 		testAuthorClientRecord(t, statement, witness, end, []byte(".\n"))
 		testExpectOnly(t, leg.name, statement, witness, checkZ6)
@@ -744,7 +748,7 @@ func TestZ9LeavesDataToAnyMx(t *testing.T) {
 func TestAnEmptyWitnessSatisfiesNothing(t *testing.T) {
 	for _, index := range []uint32{1, 2, 3, 4} {
 		statement := &partStatement{
-			session: &sessionStatement{version: tlsVersion13, preamble: &sessionPreamble{}},
+			session: &sessionStatement{version: tlsVersion13, preamble: &sessionPreamble{proof: DefaultProofSettings()}},
 			index:   index,
 		}
 		if len(relationCheckPart(statement, &partWitness{})) == 0 {

@@ -456,6 +456,9 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestRefreshNotSentWithoutSigner",
 		"TestEnrollRefusesBundle",
 		"TestExchangeTokenPostsItsFormAndProof",
+		// the Worker's clock is the api's only where the lb exposes Date (QD-776)
+		"TestSkewedPageWorkerRenewsExchangesAndMintsWithDateExposed",
+		"TestSkewedPageWorkerStaysRefusedWithDateNotExposed",
 		// §6's wire freeze, byte-equal on this leg too (PROTO-M2-06)
 		"TestWireGoldensAreByteEqual",
 		"TestWireDecodersSkipUnknownFields",

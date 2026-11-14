@@ -73,6 +73,8 @@ func aclFuzzBody(cast *aclStatementCast, signedType bridge.SignedType) proto.Mes
 		return &protocol.RepoVersioning{RepoId: repoId, Lock: protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED}
 	case bridge.SignedType_SIGNED_AUDIT_OPT_IN:
 		return &protocol.AuditOptIn{}
+	case bridge.SignedType_SIGNED_REPO_PREFIX_RULES:
+		return &protocol.RepoPrefixRules{RepoId: repoId, SealedRules: aclTestSealedRules(aclTestSealedRulesByteCount)}
 	}
 	return &protocol.AuditOptOut{}
 }
@@ -86,6 +88,9 @@ func FuzzAclStatement(f *testing.F) {
 	f.Add(uint8(8), []byte{0xF8, 0x07, 0x01}, uint16(7))
 	f.Add(uint8(12), []byte{0x18, 0x09}, uint16(1))
 	f.Add(uint8(0), []byte{0x22}, uint16(0))
+	// a RepoPrefixRules' sealed_rules of 47 B, and a stray field on one
+	f.Add(uint8(15), append([]byte{0x1A, 47}, make([]byte, 47)...), uint16(5))
+	f.Add(uint8(15), []byte{0xF8, 0x07, 0x01}, uint16(9))
 	f.Fuzz(func(t *testing.T, typeIndex uint8, body []byte, flip uint16) {
 		if aclFuzzMaxByteCount < len(body) {
 			return

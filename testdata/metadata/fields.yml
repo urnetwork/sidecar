@@ -146,6 +146,7 @@ roots:
   RepoDelete: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
   RepoRestore: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
   RepoVersioning: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoPrefixRules: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
   AuditOptIn: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
   AuditOptOut: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
   # protocol/bridge/bridge.proto
@@ -171,6 +172,7 @@ seals:
   RecoveryRebind.sealed_body: RecoveryBindBody
   IndexerSet.sealed_services: IndexerServices
   RepoVersioning.sealed_rules: VersioningRules
+  RepoPrefixRules.sealed_rules: PrefixRuleSet
   EvsPushPart.sealed_metadata: EvsSealedMetadata
   EvsEntryVersion.sealed_fields: EvsSealedFields
   CanonicalAction.sealed_detail: CanonicalActionDetail
@@ -612,6 +614,8 @@ fields:
   RepoVersioning.repo_id: api-7
   RepoVersioning.lock: api-7
   RepoVersioning.sealed_rules: api-7
+  RepoPrefixRules.header: api-7
+  RepoPrefixRules.repo_id: api-7
   AuditOptIn.header: api-7
   AuditOptIn.reader_atoms: api-7
   AuditOptIn.not_after: api-7

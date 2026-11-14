@@ -181,7 +181,7 @@ func testHeaderBlockCases(t *testing.T) []*testHeaderBlockCase {
 func TestHeaderCircuitAgreesWithTheRelation(t *testing.T) {
 	t.Parallel()
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		for _, c := range testHeaderBlockCases(t) {
@@ -203,8 +203,7 @@ func TestHeaderCircuitAgreesWithTheRelationInDataMode(t *testing.T) {
 	// framing fail both, and the rest Z5 alone. One leg: the automaton is the one the BDAT table runs
 	// on every leg, and what DATA adds is the framing beside it
 	for _, leg := range testTlsLegs()[1:2] {
-		bodyBlocks := 2
-		shape := testQuickMessageShape(leg.suites[0], bodyBlocks)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testDataCapture(t, leg)
 		cases := append(testHeaderBlockCases(t), &testHeaderBlockCase{name: "a bare LF", block: strings.Replace(testHeaderBlock(), "Subject: A", "Subject:\nA", 1)})
@@ -219,30 +218,52 @@ func TestHeaderCircuitAgreesWithTheRelationInDataMode(t *testing.T) {
 	}
 }
 
-// What the header scan costs, SPEC.md 11.2's measured rows, held here: two message shapes 64 header
-// octets apart, Z1 left out, so the difference is 64 octets of Z5's automaton and Z2's keystream.
-var testSpecHeaderOctetCosts = map[uint16]int{
-	tlsSuiteAes128GcmSha256:        58071,
-	tlsSuiteChacha20Poly1305Sha256: 33236,
+// What the header scans cost, SPEC.md 11.2's measured rows, held here: two shapes 64 header octets
+// apart, Z1 left out, so the difference is 64 octets of Z5's scan and Z2's keystream. The first record's
+// scan reads the single fields' literal forms and From's parts; a later record's reads none.
+var testSpecHeaderOctetCosts = map[string]int{
+	"aes first":      57264,
+	"chacha20 first": 32429,
+	"aes later":      52513,
+	"chacha20 later": 27678,
 }
 
 func TestHeaderScanCostIsSpecMds(t *testing.T) {
 	t.Parallel()
 	for _, suite := range []uint16{tlsSuiteAes128GcmSha256, tlsSuiteChacha20Poly1305Sha256} {
-		shape := &partShape{kind: partKindMessage, version: tlsVersion13, suite: suite, clientBlocks: 1, serverBlocks: 1, headerBlocks: 16, withoutKeySchedule: true}
-		if suite == tlsSuiteChacha20Poly1305Sha256 {
-			shape.headerBlocks = 4
-		}
-		wider := *shape
-		wider.headerBlocks += 64 / shape.blockBytes()
-		cost := testCompileShape(t, &wider).GetNbConstraints() - testCompileShape(t, shape).GetNbConstraints()
-		keystream := testSpecGadgetSizes["aes keystream block"] * 4
-		if suite == tlsSuiteChacha20Poly1305Sha256 {
-			keystream = testSpecGadgetSizes["chacha20 keystream block"]
-		}
-		t.Logf("suite %#x: 64 header octets cost %d constraints, %d beyond the keystream, %.1f an octet", suite, cost, cost-keystream, float64(cost-keystream)/64)
-		if want := testSpecHeaderOctetCosts[suite]; cost != want {
-			t.Errorf("suite %#x: 64 header octets cost %d constraints, SPEC.md 11.2 says %d", suite, cost, want)
+		for _, first := range []bool{true, false} {
+			name := "aes"
+			keystream := testSpecGadgetSizes["aes keystream block"] * 4
+			if suite == tlsSuiteChacha20Poly1305Sha256 {
+				name = "chacha20"
+				keystream = testSpecGadgetSizes["chacha20 keystream block"]
+			}
+			blocks := 16
+			if suite == tlsSuiteChacha20Poly1305Sha256 {
+				blocks = 4
+			}
+			shape := testPartShape(partKindHeader, suiteFamily(suite), 0)
+			shape.clientBlocks = 1
+			shape.restBlocks = blocks
+			name += " later"
+			if first {
+				shape = testPartShape(partKindMessage, suiteFamily(suite), 0)
+				shape.clientBlocks = 1
+				shape.serverBlocks = 1
+				shape.headBlocks = blocks
+				name = strings.Replace(name, "later", "first", 1)
+			}
+			wider := *shape
+			if first {
+				wider.headBlocks += 64 / shape.blockBytes()
+			} else {
+				wider.restBlocks += 64 / shape.blockBytes()
+			}
+			cost := testCompileShape(t, &wider).GetNbConstraints() - testCompileShape(t, shape).GetNbConstraints()
+			t.Logf("%s: 64 header octets cost %d constraints, %d beyond the keystream, %.1f an octet", name, cost, cost-keystream, float64(cost-keystream)/64)
+			if want := testSpecHeaderOctetCosts[name]; cost != want {
+				t.Errorf("%s: 64 header octets cost %d constraints, SPEC.md 11.2 says %d", name, cost, want)
+			}
 		}
 	}
 }

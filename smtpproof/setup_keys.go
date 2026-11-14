@@ -71,16 +71,16 @@ type keySetCircuit struct {
 	compile func() (constraint.ConstraintSystem, error)
 }
 
-// A shape's name in keyset.json: every dimension, so that a changed shape has another name.
+// A shape's name in keyset.json, its catalog entry's (DESIGN-DETAILS 3.2.6): kind, family, version for a
+// key shape, and every pool, so that a changed shape has another name.
 func partShapeName(shape *partShape) string {
-	return fmt.Sprintf("kind%d-v%04x-s%04x-client%d-server%d-header%d-body%d-local%t",
-		shape.kind, shape.version, shape.suite, shape.clientBlocks, shape.serverBlocks, shape.headerBlocks, shape.bodyBlocks, shape.localOctets)
+	return shape.entry().Name()
 }
 
-// The circuits this build proves: partShapes, compiled from this build's own source.
-func productionKeySetCircuits() []*keySetCircuit {
+// The circuits this build proves: the catalog's shapes, compiled from this build's own source.
+func productionKeySetCircuits(proof *ProofSettings) []*keySetCircuit {
 	var circuits []*keySetCircuit
-	for _, shape := range partShapes() {
+	for _, shape := range partShapes(proof) {
 		circuits = append(circuits, &keySetCircuit{
 			name:  partShapeName(shape),
 			shape: shape,
@@ -103,7 +103,7 @@ type KeySet struct {
 // Opens a KeySet directory whose keyset.json hashes to pin. A release pins it; with no pin there is
 // no KeySet, and a host with none proves and passes nothing.
 func OpenKeySet(directory string, pin []byte) (*KeySet, error) {
-	return openKeySet(directory, pin, productionKeySetCircuits())
+	return openKeySet(directory, pin, productionKeySetCircuits(DefaultProofSettings()))
 }
 
 func openKeySet(directory string, pin []byte, circuits []*keySetCircuit) (*KeySet, error) {
@@ -403,7 +403,7 @@ func (self *cachedProvingKeys) load(shape *partShape) (*shapeKeys, error) {
 // VerifySetupTranscript derives them. It returns keyset.json's hash, which a release pins. A
 // production run takes hours and gigabytes, and belongs on the controlled host.
 func RunSetup(ctx context.Context, directory string, beacon []byte) ([]byte, error) {
-	return runKeySetSetup(ctx, directory, beacon, productionKeySetCircuits())
+	return runKeySetSetup(ctx, directory, beacon, productionKeySetCircuits(DefaultProofSettings()))
 }
 
 func runKeySetSetup(ctx context.Context, directory string, beacon []byte, circuits []*keySetCircuit) ([]byte, error) {

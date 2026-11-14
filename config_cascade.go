@@ -21,7 +21,8 @@
 // until a signer outside P signs it again (CascadeVoids): its recovery bindings, so a member's binding in effect falls
 // back to its newest one not void, its registered keys, its EvsShares (ACL's VoidEvsShares) and its Delegations, which
 // end; while grants, approvals, suspensions, access-log statements, SponsorSets, IndexerSets, MemberAdmits and config
-// heads it signed stand.
+// heads it signed stand. The plan lists what stands, a repo's prefix rule sets among them, which stay in force until an
+// admin files the next (DESIGN-DETAILS 16.2.3, QD-795).
 //
 // A lift: an AdmissionConfirm by one allowed to admit the sidecar, or its member's OwnerConfirm, from a standing
 // signer, so one outside P, unparks it there, the device live again from that position; what it signed in P stays
@@ -476,7 +477,7 @@ type ConfigCascadeBinding struct {
 
 // One record a cascade leaves standing though a sidecar then in P signed it (§7.9's cascade row).
 type ConfigCascadeStanding struct {
-	// suspension, repo_admin, repo_grant or repo_revoke
+	// suspension, repo_admin, repo_grant, repo_revoke or repo_prefix_rules
 	Kind string
 	// The suspension's subject or the repo the row is of.
 	Id     Id
@@ -591,7 +592,9 @@ func (self *ConfigState) CascadePlan(targetId Id, sinceN uint64) (*ConfigCascade
 	return plan, nil
 }
 
-// The suspensions and access-log rows a sidecar then in P signed, which stand until revoked.
+// The suspensions and access-log rows a sidecar then in P signed, which stand until revoked. A prefix rule set P
+// signed is listed for an admin to replace with a set of its own, and stays in force until one does: the cascade voids
+// no set, as it voids no grant, since pushes pinned in its span are judged by it (DESIGN-DETAILS 16.2.3, 16.5; QD-795).
 func configCascadeStands(rows *protocol.AclRows, closure *ConfigCascadeClosure) []ConfigCascadeStanding {
 	stands := []ConfigCascadeStanding{}
 	add := func(kind string, id []byte, signer []byte, at uint64) {
@@ -615,6 +618,10 @@ func configCascadeStands(rows *protocol.AclRows, closure *ConfigCascadeClosure) 
 		}
 		for _, revoke := range repo.GetRevokes() {
 			add("repo_revoke", repo.GetRepoId(), revoke.GetSigner(), revoke.GetAt())
+		}
+		// only a general repo's rows hold sets (16.2.2's repo row), so every repo's are read
+		for _, prefixRules := range repo.GetPrefixRules() {
+			add("repo_prefix_rules", repo.GetRepoId(), prefixRules.GetSigner(), prefixRules.GetAt())
 		}
 	}
 	slices.SortStableFunc(stands, func(a ConfigCascadeStanding, b ConfigCascadeStanding) int {

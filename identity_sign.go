@@ -39,7 +39,7 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 		bridge.SignedType_SIGNED_UNSUSPEND, bridge.SignedType_SIGNED_EVS_SHARE, bridge.SignedType_SIGNED_OWNER_CONFIRM,
 		bridge.SignedType_SIGNED_REPO_CREATE, bridge.SignedType_SIGNED_REPO_ADMIN, bridge.SignedType_SIGNED_REPO_GRANT,
 		bridge.SignedType_SIGNED_REPO_REVOKE, bridge.SignedType_SIGNED_REPO_DELETE, bridge.SignedType_SIGNED_REPO_RESTORE,
-		bridge.SignedType_SIGNED_REPO_VERSIONING:
+		bridge.SignedType_SIGNED_REPO_VERSIONING, bridge.SignedType_SIGNED_REPO_PREFIX_RULES:
 		return bridge.SignedPurposeAcl, true
 	case bridge.SignedType_SIGNED_AUDIT_OPT_IN, bridge.SignedType_SIGNED_AUDIT_OPT_OUT:
 		return bridge.SignedPurposeAuthority, true

@@ -167,17 +167,14 @@ func TestGadgetSizesAreSpecMds(t *testing.T) {
 		without.withoutKeySchedule = true
 		keyBooleans := 2 * 8 * (shape.keyBytes() + tlsIv13Bytes)
 		twinNonceXors := 0
-		twinBindings := 0
 		if shape.version == tlsVersion12 {
 			twinNonceXors = 8 * tlsExplicitNonceBytes * shape.clientBlocks
-			// the twin reads no 1.2 input, so it binds ResumeTwoBlocks, a wire of every shape, to 0
-			twinBindings = 1
 		}
-		return testCompileShape(t, shape).GetNbConstraints() - testCompileShape(t, &without).GetNbConstraints() + keyBooleans + twinNonceXors + twinBindings
+		return testCompileShape(t, shape).GetNbConstraints() - testCompileShape(t, &without).GetNbConstraints() + keyBooleans + twinNonceXors
 	}
 	// the key part's shapes, which other tests compile too: the key part derives both directions always,
 	// since C commits to both (DESIGN-DETAILS 3.2.3), and no later part derives anything
-	expect("z1 tls13 both directions", z1(partShapes()[1]))
+	expect("z1 tls13 both directions", z1(partShapes(DefaultProofSettings())[1]))
 	// a 1.2 key part's IVs end in 8 zero octets its derivation makes constants, so its opening of C is
 	// cheaper than its twin's, whose IVs are private bits: that saving comes off what z1 reads
 	keyGenerators, scanGenerators := commitGeneratorSets()
@@ -243,4 +240,34 @@ func (self *testCommitLayoutCircuit) Define(api frontend.API) error {
 	}
 	assertCommitment(api, self.generators, bits, self.BlindBits, self.Commitment)
 	return nil
+}
+
+// Every catalog shape fills one domain (DESIGN-DETAILS 3.2.6's fill rule): its constraints and public
+// inputs at or under DomainSize less DomainHeadroomCount, and, but for the key shapes, at least 90% of
+// that, so that a unit is spent on what it proves. Each is compiled once here and dropped, which bounds
+// the memory this takes, and while it is held its public inputs are each held to a constraint too
+// (reading 29), so TestEveryPublicWireIsConstrained's rule covers the eleven. Its log is SPEC.md 10.4's
+// and 11.4's figures.
+func TestProductionShapesFillOneDomain(t *testing.T) {
+	testNeedCircuits(t)
+	proof := DefaultProofSettings()
+	bound := proof.DomainSize - proof.DomainHeadroomCount
+	for _, shape := range partShapes(proof) {
+		compiled, err := compilePartShape(shape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		used := compiled.GetNbConstraints() + compiled.GetNbPublicVariables()
+		t.Logf("%s: %d constraints, %d public inputs, %.1f%% of 2^20", partShapeName(shape), compiled.GetNbConstraints(),
+			compiled.GetNbPublicVariables(), 100*float64(used)/float64(proof.DomainSize))
+		if bound < used {
+			t.Errorf("%s: %d constraints and public inputs, over %d", partShapeName(shape), used, bound)
+		}
+		if shape.kind != partKindKey && used < bound*9/10 {
+			t.Errorf("%s: %d constraints and public inputs, under 90%% of %d", partShapeName(shape), used, bound)
+		}
+		if unread := testUnreadPublicInputs(t, compiled); len(unread) != 0 {
+			t.Errorf("%s: public inputs %v appear in no constraint", partShapeName(shape), unread)
+		}
+	}
 }
