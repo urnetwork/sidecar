@@ -9,6 +9,13 @@
 //	          that drops an entry passes when its merged record crosses a padding step; else 409 naming the paths,
 //	          final. At the storage limit or while spent its inline records count against its eraser's own allowance
 //	          (QuotaGate.ChargeClosureRecords), 429 past it, refusing nothing
+//	versionless  a CLOSURE over a versionless version (§11.12's versionless row; EVS2-M10-12) rewrites it in place
+//	          under a fresh key in a new slot: in a slot-keyed repo the new version names none of the slots the
+//	          version it replaces names, which its list names and the ERASE after it destroys, so a rewrite that
+//	          kept its path's one key is refused 409 with the paths before the ERASE could take the new content
+//	          with the old; its staged bytes count as inline records, in the Padmé bound through their locators'
+//	          lengths and in the eraser's allowance by their segments' bytes. The purge deletes the replaced
+//	          ciphertext and slot from the commit's candidates, as for any replacement (push_purge.go)
 //	consume   a CONSUME (rw) commits its removals, then deletes the slots the versions it removes name, before its
 //	          200, as an ERASE rewrites them; a crash between leaves its retry, which finds it committed and deletes
 //	          again. The head keeps the highest consumed_through any CONSUME carried, never falling
@@ -28,7 +35,9 @@
 package evsservice
 
 import (
+	"bytes"
 	"errors"
+	"slices"
 
 	"github.com/urnetwork/connect"
 
@@ -81,6 +90,17 @@ func closureRules(view *PushView) *EvsCheckRefusal {
 			if !erasedSlots[sidecar.Id(slotId)] {
 				refuse(change, "a CLOSURE whose list omits a slot the replaced version names")
 				break
+			}
+		}
+		if replaced.GetVersioning() != uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT) {
+			// a versionless path's one key goes with the list: its rewrite draws a fresh one in a new slot
+			kept := false
+			for _, slotId := range entry.GetSlotIds() {
+				kept = kept || slices.ContainsFunc(replaced.GetSlotIds(), func(replacedSlotId []byte) bool { return bytes.Equal(replacedSlotId, slotId) })
+			}
+			if kept {
+				refuse(change, "a CLOSURE of a versionless version that keeps its slot")
+				continue
 			}
 		}
 		if sidecar.EvsPadme(evsChainRecordByteCount(replaced)) < evsChainRecordByteCount(entry) {
@@ -151,6 +171,10 @@ func (self *pushAttempt) chargeClosureRecords() *pushOutcome {
 				}
 			}
 		}
+	}
+	// a versionless rewrite's staged segments ride the push as inline records do, and count as them
+	for _, staged := range self.payload.Staged {
+		inline += int64(len(staged.Bytes))
 	}
 	// a cluster at its cohort limit holds the records to the eraser's allowance as the storage limit does
 	clusterFull := self.reads.view != nil && self.reads.view.ClusterFull
@@ -244,4 +268,3 @@ func (self *pushAttempt) finishConsume() *pushOutcome {
 func consumedThroughOf(prior *protocol.EvsHead, push *protocol.EvsPush) uint64 {
 	return max(prior.GetConsumedThrough(), min(push.GetConsumedThrough(), prior.GetVersion()))
 }
-

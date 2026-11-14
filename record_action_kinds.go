@@ -26,7 +26,9 @@
 // which agrees with that entry: a parse holds what needs no key (approvalRequestDetailCheck), and an approver's
 // device the token path under its K_sock (ApprovalApprover). A template names its socket too, so no multi-use
 // decision covers every listen. Kinds 6, 7 and 16 have no O tool and no row, so they are refused until their owners
-// name their fields (plan-MCP-wire-enum-numbers).
+// name their fields (plan-MCP-wire-enum-numbers). §8.11's share between networks needs no row of kind 7's: its grant
+// is a dial or route grant, bridge_forward's row, with share_network_id, 40, naming the other network (the owner's
+// answer to acl-m6-03-share-grant-subject, QD-820), and the grant's subject stays the requesting sidecar.
 //
 // Kind 5, egress_change, is the owner's answer to bridge-m4-19-egress-change-action (QD-799): §17.9's egress spec, an
 // outward act that only a person's confirmed command asks for. It names its subject and egress_mode, 39, a
@@ -146,12 +148,16 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 	{
 		// bridge_forward: a dial or route grant (§17), so version 4: the grant's fields, its destination a subject
 		// alone, and the target's port sealed in sealed_detail; its request binds the local port. A template fills
-		// its sealed_detail too, so no multi-use decision leaves a grant's ports and prefixes open
-		Kind:             SidecarActionForward,
-		Required:         []protoreflect.FieldNumber{canonicalActionFieldGrantDst, 11, 28, 29, canonicalActionFieldSealedDetail},
-		Optional:         []protoreflect.FieldNumber{8},
-		Versions:         []uint32{canonicalActionVersionSealedGrant},
-		Server:           []protoreflect.FieldNumber{8, canonicalActionFieldGrantDst, 11, 28, 29, canonicalActionFieldSealedDetail},
+		// its sealed_detail too, so no multi-use decision leaves a grant's ports and prefixes open. A share's grant
+		// (§8.11) is this kind's, since a share is a dial or route grant, and names the other network in
+		// share_network_id (QD-820), which a server path sees as it sees the grant's other fields
+		Kind:     SidecarActionForward,
+		Required: []protoreflect.FieldNumber{canonicalActionFieldGrantDst, 11, 28, 29, canonicalActionFieldSealedDetail},
+		Optional: []protoreflect.FieldNumber{8, canonicalActionFieldShareNetworkId},
+		Versions: []uint32{canonicalActionVersionSealedGrant},
+		Server: []protoreflect.FieldNumber{
+			8, canonicalActionFieldGrantDst, 11, 28, 29, canonicalActionFieldSealedDetail, canonicalActionFieldShareNetworkId,
+		},
 		Request:          []protoreflect.FieldNumber{approvalRequestFieldLocalPort},
 		TemplateRequired: []protoreflect.FieldNumber{canonicalActionFieldSealedDetail},
 	},

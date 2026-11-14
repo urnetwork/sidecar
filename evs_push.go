@@ -81,6 +81,10 @@ type evsPushAttempt struct {
 	built  *EvsBuiltPush
 	// a one-part push's receipts: every new segment's
 	receipts []*protocol.EvsUploadReceipt
+	// format 2: a one-part push's staged bytes, and each part's, for the staged segments its entry versions name;
+	// the same bytes on every retry of the push id (evs_write_versionless.go)
+	staged     []byte
+	partStaged [][]byte
 	// a push in parts: each part's, for the segments its entry versions name
 	partReceipts [][]*protocol.EvsUploadReceipt
 	refMode      protocol.EvsRefMode
@@ -177,24 +181,66 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		pushPlan.NewObjects = append(pushPlan.NewObjects, &EvsNewObject{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT, Id: slot.Id.Bytes()})
 		pushPlan.SlotBodies = append(pushPlan.SlotBodies, slot.Body)
 	}
+	format2 := sealed.format2()
+	if format2 && sealed.kind5PushId != pushId && 0 < len(sealed.kind5) {
+		return nil, fmt.Errorf("%w: versionless records sealed for another push", ErrEvsWriteInvalid)
+	}
+	idStaged, pathStaged := sealed.stagedOf()
+	// the staged segments' items go in the changes' order, a part's contiguous run of it, so the parts' staged bytes
+	// joined in part order are the items in order (evs_staged.go)
+	stagedPaths := slices.Clone(sealed.Paths)
+	slices.SortStableFunc(stagedPaths, func(a *EvsSealedPath, b *EvsSealedPath) int {
+		return a.Planned.TokenPath.Compare(b.Planned.TokenPath)
+	})
+	allStaged := [][]byte{}
+	for _, path := range stagedPaths {
+		for _, segmentBytes := range pathStaged[path] {
+			staged, err := EvsStagedSegmentOf(segmentBytes, plan.RepoId, pushId)
+			if err != nil {
+				return nil, err
+			}
+			pushPlan.NewObjects = append(pushPlan.NewObjects, staged.NewObject())
+			allStaged = append(allStaged, segmentBytes)
+		}
+	}
 	for _, path := range sealed.Paths {
 		change, err := path.change(pushId, plan.BaseVersion, timeMs)
 		if err != nil {
 			return nil, err
 		}
+		change.StagedByteCount = evsStagedByteCount(pathStaged[path])
 		pushPlan.Changes = append(pushPlan.Changes, change)
 	}
-	built, err := NewEvsStatementBuilder(self.client.args.Sign).Build(pushPlan)
+	builder := NewEvsStatementBuilder(self.client.args.Sign)
+	var built *EvsBuiltPush
+	if format2 {
+		built, err = builder.BuildFormat2(pushPlan)
+	} else {
+		built, err = builder.Build(pushPlan)
+	}
 	if err != nil {
 		return nil, err
 	}
 	attempt.built = built
+	if len(built.Parts) == 0 {
+		attempt.staged = EvsEncodeStaged(allStaged)
+	}
 	partNamed := map[string]bool{}
 	for _, partBytes := range built.Parts {
-		checked, err := EvsCheckPart(built.Statement, partBytes)
+		var checked *EvsCheckedPart
+		if format2 {
+			checked, err = EvsCheckStoredPart(built.Statement, partBytes)
+		} else {
+			checked, err = EvsCheckPart(built.Statement, partBytes)
+		}
 		if err != nil {
 			return nil, err
 		}
+		partSegments, err := evsChangesStaged(checked.Changes, idStaged)
+		if err != nil {
+			return nil, err
+		}
+		attempt.partStaged = append(attempt.partStaged, EvsEncodeStaged(partSegments))
 		receipts := []*protocol.EvsUploadReceipt{}
 		named := map[string]bool{}
 		for _, change := range checked.Changes {
@@ -254,6 +300,8 @@ func (self *EvsSealedPath) change(pushId Id, baseVersion uint64, timeMs int64) (
 		entry.PaddedSize = self.PaddedSize
 		entry.SealedFields = self.SealedFields
 		entry.Chain = self.Chain
+		// format 2's setting (evs_plan_versionless.go); 0, every version kept, is format 1's absent field
+		entry.Versioning = planned.Versioning
 		for _, slotId := range self.SlotIds {
 			entry.SlotIds = append(entry.SlotIds, slotId.Bytes())
 		}
@@ -278,6 +326,7 @@ func (self *EvsRepo) sendPush(ctx context.Context, attempt *evsPushAttempt) (*pr
 	}
 	request := &protocol.EvsPushRequest{
 		Statement: attempt.built.Statement.Bytes, Payload: attempt.built.Payload, Receipts: attempt.receipts,
+		Staged: attempt.staged,
 	}
 	return self.postPushAs(ctx, attempt.pushId, request, attempt.scope)
 }
@@ -329,6 +378,10 @@ func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrit
 		pushId := NewEvsPushId()
 		if note != nil {
 			note(pushId)
+		}
+		// a versionless record's kind-5 segment names this push: sealed under it, and uploaded again for it
+		if err := self.client.bindPush(sealed, pushId); err != nil {
+			return pushId, nil, err
 		}
 		if err := self.uploadSegments(ctx, sealed, pushId); err != nil {
 			return pushId, nil, err

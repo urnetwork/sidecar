@@ -12,6 +12,9 @@
 // push id again, at most PartsMissingRetryCount times. A kill between parts leaves records no seal names, which
 // evacuation drops; nothing of them is visible (§11.8's linearizability).
 //
+// A format-2 part carries the staged segments its entry versions name beside it (evs_write_versionless.go), which the
+// statement builder counted against its 1 MiB, the same bytes each time the part is posted.
+//
 // On every leg.
 
 package sidecar
@@ -133,6 +136,7 @@ func (self *EvsRepo) postPart(ctx context.Context, attempt *evsPushAttempt, inde
 		role:   attempt.scope,
 		body: &protocol.EvsPartRequest{
 			Statement: attempt.built.Statement.Bytes, Part: attempt.built.Parts[index], Receipts: attempt.partReceipts[index],
+			Staged: attempt.partStaged[index],
 		},
 	}
 	reply := &protocol.EvsPushReply{}

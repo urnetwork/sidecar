@@ -33,6 +33,7 @@ package sidecar
 import (
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -142,7 +143,8 @@ func approvalKindName(kind SidecarActionKind) string {
 }
 
 // What approving action allows, in words around its daemon-built fields: mail_tls_unauthenticated's sentence
-// (QD-729) and egress_change's (QD-799), and empty for a kind whose fields say it themselves.
+// (QD-729), egress_change's (QD-799) and a share's, which half it is and the other network (QD-820), and empty for a
+// kind whose fields say it themselves.
 func approvalRenderMeaning(action *protocol.CanonicalAction) string {
 	switch SidecarActionKind(action.GetKind()) {
 	case SidecarActionMailTlsUnauthenticated:
@@ -158,6 +160,17 @@ func approvalRenderMeaning(action *protocol.CanonicalAction) string {
 				subject, ApprovalPrintable(strings.Join(action.GetGrantDst(), ", ")))
 		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:
 			return fmt.Sprintf("Give sidecar %s no route to the internet", subject)
+		}
+	case SidecarActionForward:
+		// a share's grant (§8.11; QD-820): the other network, which the fields below name again by id
+		if shareNetworkId := action.GetShareNetworkId(); len(shareNetworkId) != 0 {
+			network := hex.EncodeToString(shareNetworkId)
+			if !slices.ContainsFunc(action.GetGrantDst(), func(dst string) bool { return dst != "network:"+network }) {
+				// its outbound half: every destination is the other network
+				return fmt.Sprintf("Share with another network: let sidecar %s reach network %s", hex.EncodeToString(action.GetSubject()), network)
+			}
+			return fmt.Sprintf("Share with another network: let network %s reach %s", network,
+				ApprovalPrintable(strings.Join(action.GetGrantDst(), ", ")))
 		}
 	}
 	return ""

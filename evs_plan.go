@@ -126,6 +126,16 @@ type EvsPathWrite struct {
 	// The version's versioning, EvsVersioningFor's answer (evs_versioning.go): 0 keeps every version, 1 and 2 are
 	// versionless, format 2's (evs_plan_versionless.go). The planner never picks one of its own.
 	Versioning uint32
+	// What the write asks of its versioning, an *EvsWriteOptions, nil for a caller that set Versioning itself: each
+	// plan then takes the version's setting from EvsVersioningFor over its own read of the path
+	// (evs_write_versionless.go; EVS2-M10-16), so a path keeps the setting of the version the push is held to.
+	Options evsWriteVersioning
+}
+
+// What decides a written version's versioning on a plan's own read of its path: *EvsWriteOptions, on every leg that
+// writes (evs_write_versionless.go). The ios_extension leg links the planner and plans no write, so it has none.
+type evsWriteVersioning interface {
+	writeVersioning(repo *EvsRepo, plan *EvsWritePlan, write *EvsPathWrite, verified *EvsVerifiedPath) (uint32, error)
 }
 
 // A write evs's path CAS refused, with the written paths it names (QD-721). The planner's own: a write held to a
@@ -227,6 +237,9 @@ type EvsWritePlan struct {
 	firstPush bool
 	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
 	slotKeyed bool
+	// the ref's name bytes and the repo's kind, which a write's versioning is decided from (evs_write_versionless.go)
+	refName  []byte
+	repoKind protocol.RepoKind
 	// a git plan's: where its writes' bytes come from, the spills they are held in until sealed, and what the push
 	// seals beside its update (evs_push.go's evsGitPushExtras)
 	blobs     EvsGitBlobSource
@@ -237,7 +250,7 @@ type EvsWritePlan struct {
 	// a git-mode plan's effective base version: its own base plus each version its overlay chain names (DESIGN-DETAILS
 	// 8.2.2's versions row), what a creation's version is one past
 	effectiveBaseVersion uint64
-	reuse       []*EvsReuse
+	reuse                []*EvsReuse
 }
 
 // What a git-mode push seals beside its update (DESIGN-DETAILS 8.2.2; 8.2.5's step 5): its carried commits and its
@@ -293,6 +306,8 @@ type EvsPlannedPath struct {
 	// records of the locators this version keeps name, in chain order
 	chainKey    *evsChainKey
 	keptSlotIds []Id
+	// the version the change is held to is versionless: a conflict on it is never rebased (evs_write_versionless.go)
+	baseVersionless bool
 }
 
 // A slot-keyed chain's object key and where its slot holds it.
@@ -417,6 +432,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
 					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted, AgentId: args.AgentId,
+					refName: args.RefName, repoKind: repoKind,
 				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err
@@ -603,6 +619,7 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	if stands {
 		planned.PrevPushId = verified.Statement.Push.GetPushId()
 		planned.PrevCommitVersion = verified.CommitVersion
+		planned.baseVersionless = verified.Entry.GetVersioning() != uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT)
 	}
 	if write.IfVersion != nil {
 		// the version the caller read against what this read shows: 0 for a path absent or removed (QD-721)
@@ -692,6 +709,16 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	}
 	if !evsFileModeValid(planned.Fields.GetMode()) {
 		return nil, fmt.Errorf("%w: mode %o is no file's", ErrEvsWriteInvalid, planned.Fields.GetMode())
+	}
+	if write.Options != nil {
+		// the setting the write asks for, decided on this read of the path (EVS2-M10-16)
+		versioning, err := write.Options.writeVersioning(self, plan, write, verified)
+		if err != nil {
+			return nil, err
+		}
+		resolved := *write
+		resolved.Versioning = versioning
+		write = &resolved
 	}
 	if evsPlanIsFormat2(write, verified) {
 		// a versionless version, or one over versionless content (EVS2-M10-15)

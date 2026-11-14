@@ -2,7 +2,7 @@
 // word; each part lives in its own cmd_evs_<part>.go and adds its usage line and its case here. rekey is KEYS-M2-26's
 // (cmd_evs_rekey.go), lock and unlock ACL-M10-01's (cmd_evs_lock.go); §11's own parts, ls, log, delete, restore,
 // import, export, retry and status, are EVS1-M2-38's (cmd_evs_repo.go), reseed EVSB-M2-20's (evs_reseed.go, the name
-// its plan entry gives it), and EVS2's add the rest.
+// its plan entry gives it), versioning and ls -l EVS2-M10-16's (cmd_evs_versioning.go), and EVS2's add the rest.
 
 package main
 
@@ -22,7 +22,8 @@ func init() {
 			"  ur evs rekey <repo_id> --status",
 			"  ur evs lock <repo_id>",
 			"  ur evs unlock <repo_id>",
-			"  ur evs ls <repo_id> [--ref=<ref>]... [<path>...]",
+			"  ur evs ls <repo_id> [-l] [--ref=<ref>]... [<path>...]",
+			"  ur evs versioning <repo_id> (on|off) [--ref=<ref>]... <path>...",
 			"  ur evs log <repo_id> [--ref=<ref>]... <path>...",
 			"  ur evs delete <repo_id>",
 			"  ur evs restore <repo_id>",
@@ -33,7 +34,7 @@ func init() {
 			"  ur evs status <repo_id>",
 			"  ur evs reseed <repo_id> [--incident=<id>] [--sign]",
 		}, "\n"),
-		summary: "a repo in evs: its files, history, life, imports and exports; rekey; lock and unlock its versioning; a mount's open work; its re-seed after a site loss",
+		summary: "a repo in evs: its files, history, life, imports and exports; rekey; each file's versioning, and its lock; a mount's open work; its re-seed after a site loss",
 		run:     runUrEvs,
 	})
 }
@@ -47,6 +48,8 @@ func runUrEvs(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return runUrEvsLock(ctx, cli, options, true)
 	case urOptionBool(options, "unlock"):
 		return runUrEvsLock(ctx, cli, options, false)
+	case urOptionBool(options, "versioning"):
+		return runUrEvsVersioning(ctx, cli, options)
 	case urOptionBool(options, "ls"):
 		return runUrEvsRepo(ctx, cli, options, urMethodEvsLs)
 	case urOptionBool(options, "log"):
@@ -66,5 +69,5 @@ func runUrEvs(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	case urOptionBool(options, "reseed"):
 		return runUrEvsReseed(ctx, cli, options)
 	}
-	return errors.New("ur evs takes rekey, lock, unlock, ls, log, delete, restore, import, export, retry, status or reseed")
+	return errors.New("ur evs takes rekey, lock, unlock, ls, versioning, log, delete, restore, import, export, retry, status or reseed")
 }
