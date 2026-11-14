@@ -18,8 +18,8 @@
 //	        (QD-806). A refusal in the slot round appends no record. A crash between the two leaves slots no record
 //	        names, under the statement's origin: the statement's retry carries its bodies again and finds its own
 //	        objects, and a statement never retried leaves them as a leak of at most 8 KiB each, never a loss
-//	        (question push-record-no-slot-bodies-slots-before-record). A window about to pass 127 versions pages out first
-//	        (logpage.go)
+//	        (question push-record-no-slot-bodies-slots-before-record). A window about to pass 127 versions pages
+//	        out first (logpage.go)
 //	7       the head If-Match step 4's ETag (If-None-Match for a ref with none): version v+1, C_{v+1}, the push, its
 //	        pins, the window with the push's entry and without what was paged, folded_through as this process's
 //	        folds raise it, the lease cleared, deleted for a DELETE; issued only within PushStepSevenWindow of step

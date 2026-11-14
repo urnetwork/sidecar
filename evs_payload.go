@@ -30,8 +30,8 @@
 // ERASE leaves the keys it destroyed in no record a reader can fetch. No hash covers the section, so the record still
 // verifies. A push's checks (EvsCheckPayload and the rest) hold section 7 to the new slots, one body each; a stored
 // record's (EvsCheckRecordPayload, EvsCheckStoredPayload, EvsCheckStoredSeal) take it absent, and check one a record
-// still carries as a push's are checked. A push in parts carries its bodies inside its parts, which parts_sha256 covers,
-// so their records keep them (question push-record-no-slot-bodies-part-slot-bodies).
+// still carries as a push's are checked. A push in parts carries its bodies inside its parts, which parts_sha256
+// covers, so their records keep them (question push-record-no-slot-bodies-part-slot-bodies).
 //
 // Format 2 (EVS-FORMAT.md's format 2 chapter) runs the same checks through EvsCheckPayloadFormat2, EvsCheckPartFormat2
 // and EvsCheckSealFormat2, which take what format 1 refuses as needing format 2: versioning 1 and 2, kind-5 and staged
@@ -1105,8 +1105,8 @@ func EvsCheckSealFormat2(statement *EvsStatement, parts [][]byte, partStaged [][
 // A committed push's seal over its parts as their records store them, of either format, as EvsCheckStoredPayload
 // reads a one-part push's: EvsCheckSealFormat2's checks without the staged bytes, which ride outside every hash and
 // outside packs and parcels, so a fold or a reader takes back what step 7 committed and judges none of format 2's
-// values (§11.6's format row). The joined section 7 is taken absent, as a one-part record's is (QD-806); parts
-// today still carry their bodies (question push-record-no-slot-bodies-part-slot-bodies), which are checked as at the seal.
+// values (§11.6's format row). The joined section 7 is taken absent, as a one-part record's is (QD-806); parts today
+// still carry their bodies (question push-record-no-slot-bodies-part-slot-bodies), which are checked as at the seal.
 func EvsCheckStoredSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
 	return evsCheckSealOf(statement, parts, nil, true)
 }
