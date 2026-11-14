@@ -386,6 +386,76 @@ func TestARedisCallDelayedThenDeliveredServesThen(t *testing.T) {
 	}
 }
 
+// A Redis Delay fires once its call is parked and its caller's timeout is on the clock, as a store's does
+// (TestADelayFiresOnceItsRequestIsParked), so a delivery made as the plan fires reaches the call.
+func TestARedisDelayFiresOnceItsCallIsParked(t *testing.T) {
+	fakeClock := NewFakeClock(DefaultClockStart())
+	clock := &timerWatchClock{Clock: fakeClock}
+	faults := NewFaultQueue()
+	redis := NewFakeRedis(t.Context(), clock, faults, nil, nil)
+	t.Cleanup(redis.Close)
+	fired, err := faults.Add(&FaultPlan{Op: FaultOpRedis, Result: Delay, Delay: DelayInNetwork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parkedCount := func() int {
+		redis.stateLock.Lock()
+		defer redis.stateLock.Unlock()
+		return len(redis.parked)
+	}
+	moment := func() delayMoment {
+		return delayMoment{fired: isClosed(fired), parkedCount: parkedCount(), timerCount: len(fakeClock.PendingTimers())}
+	}
+	// both run on the call's own goroutine, the first with the call parked and its timeout not yet set
+	atTimer, atFire := make(chan delayMoment, 1), make(chan delayMoment, 1)
+	clock.onAfter = func() {
+		atTimer <- moment()
+	}
+	faults.SetOnFire(func(plan *FaultPlan) {
+		atFire <- moment()
+	})
+	answered := make(chan error, 1)
+	go func() {
+		answered <- redis.Set(t.Context(), "{a}1", []byte("v"), 0)
+	}()
+	<-fired
+	// nothing but the plan's firing was waited for
+	if delivered := redis.DeliverDelayed(); delivered != 1 {
+		t.Errorf("delivered %d of a call whose plan fired", delivered)
+	}
+	if err := <-answered; err != nil {
+		t.Errorf("the caller got %v", err)
+	}
+	if got := <-atTimer; got != (delayMoment{fired: false, parkedCount: 1, timerCount: 0}) {
+		t.Errorf("parked, before its timeout is set: %+v", got)
+	}
+	if got := <-atFire; got != (delayMoment{fired: true, parkedCount: 1, timerCount: 1}) {
+		t.Errorf("as the plan fires: %+v", got)
+	}
+}
+
+// A call armed never to land parks nowhere, and its plan fires with its timeout on the clock, so the clock
+// can move past it as soon as the plan fired.
+func TestARedisDelayThatNeverLandsFiresWithItsTimeoutSet(t *testing.T) {
+	fixture := newRedisFixture(t, nil)
+	fired, err := fixture.faults.Add(&FaultPlan{Op: FaultOpRedis, Result: Delay, Delay: DelayNeverLands})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan error, 1)
+	go func() {
+		answered <- fixture.redis.Set(t.Context(), "{a}1", []byte("v"), 0)
+	}()
+	<-fired
+	if delivered := fixture.redis.DeliverDelayed(); delivered != 0 {
+		t.Errorf("delivered %d of a call armed never to land", delivered)
+	}
+	fixture.clock.Advance(DefaultFakeRedisSettings().RequestTimeout)
+	if err := <-answered; err == nil {
+		t.Error("a call that never landed succeeded")
+	}
+}
+
 func TestARedisCallDelayedPastItsTimeoutFails(t *testing.T) {
 	fixture := newRedisFixture(t, nil)
 	if _, err := fixture.faults.Add(&FaultPlan{Op: FaultOpRedis, Result: Delay, Delay: DelayNeverLands}); err != nil {
