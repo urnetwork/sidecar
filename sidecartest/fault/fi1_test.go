@@ -733,16 +733,21 @@ func (self *fiHandWorld) build(refId sidecar.Id, refKind protocol.EvsRefKind, fl
 	return &fiHandPush{refId: refId, statement: built.Statement, payload: built.Payload, signerId: signer.SidecarId}, nil
 }
 
-// Step 6: the push's record alone in a batch of the clock's minute.
+// Step 6's record: the push's alone in a batch of the clock's minute, its payload with no slot body, as evs keeps it
+// (QD-806).
 func (self *fiHandWorld) writeRecord(ctx context.Context, push *fiHandPush) error {
 	now := self.net.Clock().Now()
 	minute := evsservice.BatchMinute(now)
 	self.batchSeq += 1
+	recordPayload, err := sidecar.EvsRecordPayload(push.payload)
+	if err != nil {
+		return err
+	}
 	writer := sidecar.NewEvsBatchWriter(0xf1f6, minute, self.batchSeq, now.UnixMilli())
 	place, err := writer.Add(&sidecar.EvsBatchRecord{
 		Type: protocol.EvsBatchRecordType_EVS_BATCH_PUSH, RepoId: self.repoId, RefId: push.refId,
 		PushId: sidecar.Id(push.statement.Push.GetPushId()), SignerSidecarId: push.signerId, TimeMs: now.UnixMilli(),
-		Body: sidecar.EvsPushRecordBody(push.statement.Bytes, push.payload),
+		Body: sidecar.EvsPushRecordBody(push.statement.Bytes, recordPayload),
 	})
 	if err != nil {
 		return err
@@ -922,8 +927,9 @@ func (self *fiHandWorld) slotBody(keyCount int) ([]byte, error) {
 	return sidecar.EvsEncodeSlotObject(slot)
 }
 
-// A push on main creating one file whose version names a new slot of two keys, its slot written after its record,
-// as step 6 writes it, and committed unless pending. Returns the slot id and the push.
+// A push on main creating one file whose version names a new slot of two keys, its slot written before its record,
+// which keeps no slot body, as step 6 writes them (QD-806), and committed unless pending. Returns the slot id and the
+// push.
 func (self *fiHandWorld) slotPush(ctx context.Context, refId sidecar.Id, pending bool) (sidecar.Id, *fiHandPush, error) {
 	slotId := sidecar.NewEvsSlotId()
 	body, err := self.slotBody(2)
@@ -940,10 +946,10 @@ func (self *fiHandWorld) slotPush(ctx context.Context, refId sidecar.Id, pending
 	if err != nil {
 		return slotId, nil, err
 	}
-	if err := self.writeRecord(ctx, push); err != nil {
+	if _, err := self.cluster.PutIfNoneMatch(ctx, evsOracleSlotKey(self.repoId, slotId.Bytes()), body, nil); err != nil {
 		return slotId, nil, err
 	}
-	if _, err := self.cluster.PutIfNoneMatch(ctx, evsOracleSlotKey(self.repoId, slotId.Bytes()), body, nil); err != nil {
+	if err := self.writeRecord(ctx, push); err != nil {
 		return slotId, nil, err
 	}
 	if pending {

@@ -530,7 +530,8 @@ func (self *EvsConfigHeadReader) readPayloads(ctx context.Context, head *EvsVeri
 		if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 			return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
 		}
-		payload, err := EvsCheckPayload(statement.Statement, payloadBytes)
+		// as evs keeps it, with no slot body (QD-806)
+		payload, err := EvsCheckRecordPayload(statement.Statement, payloadBytes)
 		if err != nil {
 			return nil, err
 		}

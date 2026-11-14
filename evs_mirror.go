@@ -619,7 +619,8 @@ func evsMirrorCheckRecords(statement *EvsStatement, records [][]byte) (*EvsCheck
 		if err != nil || !bytes.Equal(statementBytes, statement.Bytes) {
 			return nil, ErrEvsMirrorRecordInvalid
 		}
-		return EvsCheckPayload(statement, payload)
+		// as evs keeps it, with no slot body: the mirror takes slots from slot reads (QD-806)
+		return EvsCheckRecordPayload(statement, payload)
 	}
 	if first.Type != protocol.EvsBatchRecordType_EVS_BATCH_SEAL {
 		return nil, fmt.Errorf("%w: a sealed push's part 0 of type %d", ErrEvsMirrorRecordInvalid, first.Type)
