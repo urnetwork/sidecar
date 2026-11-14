@@ -133,6 +133,17 @@ func newAclReachTestWorld(seed uint64) *aclReachTestWorld {
 				rule.Targets = append(rule.Targets, &protocol.AclTarget{ClientId: legacyId.Bytes()})
 			}
 		}
+		// a via on some, apart from the targets (QD-764), autogroup:self among them
+		for range pick(3) {
+			switch pick(4) {
+			case 0, 1:
+				rule.Via = append(rule.Via, aclAtomTarget(atoms[pick(len(atoms))]))
+			case 2:
+				rule.Via = append(rule.Via, aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_SELF))
+			case 3:
+				rule.Via = append(rule.Via, aclSidecarTarget(sidecarIds[pick(len(sidecarIds))]))
+			}
+		}
 		for _, action := range actions {
 			if pick(2) == 0 {
 				rule.Actions = append(rule.Actions, uint32(action))
@@ -153,6 +164,21 @@ func newAclReachTestWorld(seed uint64) *aclReachTestWorld {
 			}
 		}
 		fixture.rows.Rules = append(fixture.rows.Rules, rule)
+	}
+	// approved routes naming some rules, those with a via among them, which take no advertiser (QD-004, QD-764)
+	for i := range pick(4) {
+		advertiser := sidecarIds[pick(len(sidecarIds))]
+		ruleIds := [][]byte{}
+		for range 1 + pick(3) {
+			ruleIds = append(ruleIds, fixture.rows.Rules[pick(len(fixture.rows.Rules))].GetRuleId())
+		}
+		statement := &BridgeLogStatement{SignedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE, RuleId: testBridgeRuleId(string(rune('a' + i))),
+			Subject: advertiser, RouteRuleIds: ruleIds}
+		data, err := bridgeRowsWithRoute(fixture.rows.Bridge, statement)
+		if err != nil {
+			panic(err)
+		}
+		fixture.rows.Bridge = data
 	}
 	return world
 }
@@ -277,6 +303,7 @@ func TestAclReachAnswersInRuleIdOrder(t *testing.T) {
 	for _, first := range []byte{0xc0, 0x40, 0x80} {
 		rule := fixture.rule(member, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)},
 			protocol.AclAction_ACL_ACTION_DIAL, protocol.AclAction_ACL_ACTION_ROUTE)
+		rule.Via = []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}
 		rule.RuleId[0] = first
 	}
 	state := fixture.state(t)
@@ -306,6 +333,8 @@ func TestAclReachLeavesOutWhatHasEnded(t *testing.T) {
 	expiring := fixture.rule([]Id{member}, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_INTERNET)},
 		protocol.AclAction_ACL_ACTION_ROUTE)
 	expiring.Expires = aclTestNow.UnixMilli() + 1000
+	// no via, so the phone's exit is its via (QD-764)
+	fixture.routeRow(t, testBridgeRuleId("phone exit"), cast.phone, expiring.GetRuleId())
 	state := fixture.state(t)
 	laptop, phone := AclSidecarSubject(cast.laptop), AclSidecarSubject(cast.phone)
 	if rules := state.DialRules(laptop, phone, aclTestNow); len(rules) != 0 {
@@ -345,8 +374,8 @@ func TestAclReachLeavesOutWhatHasEnded(t *testing.T) {
 	if rules := state.ExitRules(laptop, phone, time.UnixMilli(expiring.Expires)); len(rules) != 0 {
 		t.Errorf("a rule at exactly its expiry: %d rules", len(rules))
 	}
-	if rules := state.RouteRules(laptop, phone, aclTestNow); len(rules) != 0 {
-		t.Errorf("an internet rule routes to a private address: %d rules", len(rules))
+	if rules := state.ExitRules(phone, laptop, aclTestNow); len(rules) != 0 {
+		t.Errorf("the internet rule through a sidecar no exit names: %d rules", len(rules))
 	}
 
 	revoke := fixture.statement(bridge.SignedType_SIGNED_GRANT_REVOKE, &bridge.GrantRevoke{GrantId: activate.GetGrantId()}, cast.laptop)
@@ -367,8 +396,9 @@ func TestAclReachLeavesOutWhatHasEnded(t *testing.T) {
 	}
 }
 
-// With no document the implicit document's rows answer: untagged sidecars dial and route anything and exit through
-// any sidecar by its first rule, tagged ones dial their sponsor's subjects on tcp:443 alone, and route nothing.
+// With no document the implicit document's rows answer: untagged sidecars dial anything by its first rule, which names
+// no via, so they route and exit through the advertisers whose approved routes name it (QD-764), and through no other
+// sidecar; tagged ones dial their sponsor's subjects on tcp:443 alone, and route nothing.
 func TestAclReachImplicitDocument(t *testing.T) {
 	world := newAclCompileWorld("reach implicit")
 	owner := world.member("owner@acme.example", bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -376,6 +406,8 @@ func TestAclReachImplicitDocument(t *testing.T) {
 	phone := AclSidecarSubject(world.device("phone", owner))
 	agent := AclSidecarSubject(world.agent("agent", owner, "worker"))
 	other := AclSidecarSubject(world.agent("other agent", owner, "worker"))
+	world.ledgerRoute("agent's subnet", agent.Id, true, aclImplicitRuleId(0))
+	world.ledgerRoute("phone's exit", phone.Id, true, aclImplicitRuleId(0))
 	state := world.state(t)
 	if state.HasDocument() {
 		t.Fatal("the world holds a document")
@@ -396,6 +428,9 @@ func TestAclReachImplicitDocument(t *testing.T) {
 	}
 	if reach := state.RouteRules(agent, laptop, aclTestNow); len(reach) != 0 {
 		t.Errorf("the agent routes: %+v", reach)
+	}
+	if reach := state.RouteRules(laptop, other, aclTestNow); len(reach) != 0 {
+		t.Errorf("the laptop routes through a sidecar no route names: %+v", reach)
 	}
 	if reach := state.ExitRules(agent, laptop, aclTestNow); len(reach) != 0 {
 		t.Errorf("the agent exits: %+v", reach)

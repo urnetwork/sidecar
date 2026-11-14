@@ -27,7 +27,8 @@ const (
 	// A PUT's condition fails, whatever the key holds, and nothing applies.
 	Precondition
 	// The request is parked. FaultPlan.Delay says what becomes of it, and its caller waits as a client
-	// does: until it lands, its ctx ends, or the request's timeout passes on the clock.
+	// does: until it lands, its ctx ends, or the request's timeout passes on the clock. The plan fires
+	// once the request is parked and that timeout is set, not when the request is taken (FaultQueue.Add).
 	Delay
 	// §19.6's settle holds the key: nothing applies and the caller gets ErrBlobHeld.
 	Held
@@ -206,6 +207,7 @@ func NewFaultQueue() *FaultQueue {
 }
 
 // Called with each plan as it fires, on the goroutine of the operation it hit, and with no lock held.
+// A Delay fires once its request is parked, as its channel says (Add).
 func (self *FaultQueue) SetOnFire(onFire func(plan *FaultPlan)) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -234,7 +236,10 @@ func (self *FaultQueue) SetRealStore(admit func(plan *FaultPlan) error) {
 }
 
 // Arms plan. A plan a fake cannot carry out is an error here, so a schedule fails where it was
-// written. The returned channel closes when the plan first fires.
+// written. The returned channel closes when the plan first fires. For a Delay that is once the fake
+// has parked the request and set its caller's timeout on the clock, so a test that waited for the
+// channel can deliver the request (DeliverDelayed) or move the clock past the timeout, and never meets
+// a request taken and not yet parked.
 func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) {
 	validateErr := plan.validate()
 	self.stateLock.Lock()
@@ -261,21 +266,45 @@ func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) 
 // For a store, Redis or api wrapper outside this package, such as server's T3 wrappers (sidecart3):
 // the plan one operation gets, or nil, exactly as a fake here takes one. op is a FaultOp, clusterId the
 // operation's cluster or empty, key its key or what stands for one, and write whether it writes. Under
-// InspectContext nothing is taken or counted.
+// InspectContext nothing is taken or counted. A plan fires as it is taken here, a Delay too, since
+// nothing outside this package parks a request.
 func (self *FaultQueue) Take(ctx context.Context, op string, clusterId string, key string, write bool) *FaultPlan {
 	return self.take(ctx, op, clusterId, key, write)
 }
 
+// For one operation, the plan it gets, or nil, fired as it is taken. What a fake that parks no request
+// calls: a Delay it is handed has fired by the time it refuses it.
+func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, key string, write bool) *FaultPlan {
+	taken, fire := self.takeUnfired(ctx, op, clusterId, key, write)
+	fire()
+	return taken
+}
+
+// As take, for a fake that parks a Delay's request. Any other plan has fired when this returns. A Delay
+// has not: the fake calls parked once the request is on its parked list and its caller's timeout is set,
+// with no lock held, and the plan fires there. parked is never nil, and does nothing for another plan.
+func (self *FaultQueue) takeParking(ctx context.Context, op string, clusterId string, key string, write bool) (taken *FaultPlan, parked func()) {
+	taken, fire := self.takeUnfired(ctx, op, clusterId, key, write)
+	if taken != nil && taken.Result == Delay {
+		return taken, fire
+	}
+	fire()
+	return taken, func() {}
+}
+
 // For one operation, the plan it gets, or nil. Reading counts a match on every armed plan the
 // operation fits, so Nth means the same whatever else is armed. The oldest plan that fires wins,
-// unless a plan that Displaces fires too. write says whether the operation writes.
-func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, key string, write bool) *FaultPlan {
+// unless a plan that Displaces fires too. write says whether the operation writes. The operation is
+// counted here, and fire tells who waits: it closes the channel of each plan this operation fired for
+// the first time and calls onFire, once, with no lock held.
+func (self *FaultQueue) takeUnfired(ctx context.Context, op string, clusterId string, key string, write bool) (taken *FaultPlan, fire func()) {
 	if isInspecting(ctx) {
-		return nil
+		return nil, func() {}
 	}
 	actorName := ActorName(ctx)
-	var taken *FaultPlan
 	var onFire func(plan *FaultPlan)
+	// the plans this operation fired first
+	firstFired := []*armedFault{}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -304,10 +333,10 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 			}
 			firing = append(firing, armed)
 		}
-		fire := func(armed *armedFault) {
+		count := func(armed *armedFault) {
 			armed.fireCount += 1
 			if armed.fireCount == 1 {
-				close(armed.fired)
+				firstFired = append(firstFired, armed)
 			}
 		}
 		winner := slices.IndexFunc(firing, func(armed *armedFault) bool { return armed.plan.Displaces })
@@ -318,12 +347,12 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 		if 0 <= winner {
 			taken = firing[winner].plan
 			result = taken.Result
-			fire(firing[winner])
+			count(firing[winner])
 			if taken.Displaces {
 				// what it displaced fired here as its schedule armed it to, only without its result
 				for index, armed := range firing {
 					if index != winner {
-						fire(armed)
+						count(armed)
 					}
 				}
 			}
@@ -338,10 +367,17 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 		}
 		onFire = self.onFire
 	}()
-	if taken != nil && onFire != nil {
-		onFire(taken)
+	return taken, func() {
+		// each plan is in one operation's firstFired alone, so its channel closes once
+		for _, armed := range firstFired {
+			close(armed.fired)
+		}
+		firstFired = nil
+		if taken != nil && onFire != nil {
+			onFire(taken)
+			onFire = nil
+		}
 	}
-	return taken
 }
 
 // Each operation of op that reached the queue, in order, with the result its plan gave, zero for none.

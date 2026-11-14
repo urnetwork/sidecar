@@ -261,23 +261,28 @@ func aclLocalSocketMatch(local *AclLocalRule, name string) bool {
 	return false
 }
 
-// Whether the source may route to the address on the port via a subject: a route rule reaching the via, or
-// autogroup:internet for a public address, whose prefixes, where the device holds any, take the address, and whose
-// ports take the port.
+// Whether the source may route to the address on the port via a subject: a route rule whose via subjects hold the via,
+// its AclRule.via or, where it names none, the advertisers whose approved routes name it (QD-764), whose ports take the
+// port and which takes the address: a public one by its autogroup:internet, through those vias alone, and any by a
+// prefix of the device's that holds it.
 func (self *AclEngine) AllowRoute(source AclSubject, address netip.Addr, ipProtocol uint32, port uint32, via AclSubject, now time.Time) AclDecision {
 	installed := self.installed.Load()
 	if installed == nil {
 		return aclDeny(AclReasonNoState)
 	}
 	address = address.Unmap()
+	public := aclAddressPublic(address)
 	return installed.state.mayRoute(source, address, via, self.checkMs(now), func(rule *aclRule) bool {
 		local := installed.localRules[rule.index]
 		if !aclLocalPortsMatch(rule, local, ipProtocol, port) {
 			return false
 		}
-		if local == nil || len(local.Cidrs) == 0 {
-			// the via's own addresses (§8.4), or autogroup:internet, which mayRoute checks
+		if rule.internetTarget && public {
 			return true
+		}
+		if local == nil || len(local.Cidrs) == 0 {
+			// the via's own addresses (§8.4); an autogroup:internet rule with no prefix takes no other
+			return !rule.internetTarget
 		}
 		for _, cidr := range local.Cidrs {
 			if aclCidrCovers(cidr, address) {
