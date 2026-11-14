@@ -50,16 +50,24 @@ import (
 type EnginesSettings struct {
 	// The evs storage balance each opened network starts with: 1 TiB, so no test write meets quota.
 	NetworkBalanceByteCount int64
-	// The 15-minute life a world's own lifecycle calls ask service tokens for is the Sidecar's; this is how long a
-	// wait on the gate's load of a log may take in real time: 60 s, only a failure's bound.
+	// How long a wait on the gate's load of a log may take in real time: 60 s, only a failure's bound.
 	SyncTimeout time.Duration
+	// How far before the Net's clock evs's receipt key may issue from: 48 h, so a receipt is issued at once.
+	ReceiptKeyAge time.Duration
+	// How long a statement PostStatement files lives, its header's not_after past the Net's clock: 1 h.
+	StatementLife time.Duration
+	// How many head/ objects one list of a repo's heads reads (RefHeads): 1,000, past any test's refs.
+	HeadListPageCount int
 }
 
-// 1 TiB a network, 60 s a load.
+// 1 TiB a network, 60 s a load, a receipt key 48 h old, statements for an hour and 1,000 heads a list.
 func DefaultEnginesSettings() *EnginesSettings {
 	return &EnginesSettings{
 		NetworkBalanceByteCount: 1024 * 1024 * 1024 * 1024,
 		SyncTimeout:             60 * time.Second,
+		ReceiptKeyAge:           48 * time.Hour,
+		StatementLife:           time.Hour,
+		HeadListPageCount:       1000,
 	}
 }
 
@@ -142,7 +150,7 @@ func NewEngines(t testing.TB, net *sidecartest.Net, settings *EnginesSettings) *
 	self.evsState = &enginesEvsAuthState{engines: self, real: evsservice.NewAclEvsAuthState(self.cache, revocations)}
 	self.evsViews = &enginesEvsGateViews{engines: self, real: evsservice.NewAclGateViews(self.cache)}
 	evsEngine, err := net.AddEngine("evs", func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
-		return newEnginesEvsHost(ctx, host, net.Clock(), self.evsState, self.evsViews)
+		return newEnginesEvsHost(ctx, host, net.Clock(), settings.ReceiptKeyAge, self.evsState, self.evsViews)
 	})
 	if err != nil {
 		t.Fatalf("evs: %v", err)
@@ -215,7 +223,7 @@ func (self *Engines) RefHeads(ctx context.Context, repoId sidecar.Id) ([]*protoc
 		if err != nil {
 			return nil, err
 		}
-		infos, _, err := cluster.List(ctx, evsservice.HeadRepoPrefix(repoId), "", 1000)
+		infos, _, err := cluster.List(ctx, evsservice.HeadRepoPrefix(repoId), "", self.settings.HeadListPageCount)
 		if err != nil {
 			return nil, err
 		}
@@ -543,7 +551,7 @@ type enginesEvsHost struct {
 	closers []func()
 }
 
-func newEnginesEvsHost(ctx context.Context, host *sidecar.ServiceHost, clock sidecar.Clock, state evsservice.EvsAuthState, views evsservice.EvsGateViews) (evsHost *enginesEvsHost, returnErr error) {
+func newEnginesEvsHost(ctx context.Context, host *sidecar.ServiceHost, clock sidecar.Clock, receiptKeyAge time.Duration, state evsservice.EvsAuthState, views evsservice.EvsGateViews) (evsHost *enginesEvsHost, returnErr error) {
 	evsHost = &enginesEvsHost{}
 	defer func() {
 		if returnErr != nil {
@@ -551,7 +559,7 @@ func newEnginesEvsHost(ctx context.Context, host *sidecar.ServiceHost, clock sid
 		}
 	}()
 	receiptKey := sha256.Sum256([]byte("enginenet receipt key"))
-	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: clock.Now().Add(-48 * time.Hour)}}, nil)
+	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: clock.Now().Add(-receiptKeyAge)}}, nil)
 	if err != nil {
 		return nil, err
 	}

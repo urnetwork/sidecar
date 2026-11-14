@@ -35,7 +35,6 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -466,7 +465,7 @@ func (self *Engines) PostStatement(ctx context.Context, running *sidecar.Sidecar
 		NetworkId:  networkId.Bytes(),
 		At:         proto.Clone(client.Pin()).(*bridge.AuthPin),
 		Nonce:      nonce,
-		NotAfterMs: self.net.Clock().Now().Add(time.Hour).UnixMilli(),
+		NotAfterMs: self.net.Clock().Now().Add(self.settings.StatementLife).UnixMilli(),
 	}
 	bodyBytes, err := enginesMarshal(body(header))
 	if err != nil {
