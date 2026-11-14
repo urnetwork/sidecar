@@ -42,7 +42,7 @@ func testVersionOf(suite uint16) uint16 {
 
 // A small shape with Z1 left out: everything but the key schedule, in milliseconds.
 func testQuickShape(suite uint16, localOctets bool) *partShape {
-	shape := &partShape{kind: partKindEhlo, version: testVersionOf(suite), suite: suite, clientBlocks: 4, localOctets: localOctets, withoutKeySchedule: true}
+	shape := &partShape{kind: partKindKey, version: testVersionOf(suite), suite: suite, clientBlocks: 4, localOctets: localOctets, withoutKeySchedule: true}
 	if suite == tlsSuiteChacha20Poly1305Sha256 {
 		shape.clientBlocks = 1
 	}
@@ -162,9 +162,12 @@ func TestPartCircuitChecksALocalPartsOctets(t *testing.T) {
 			witness.clientPlaintexts = witness.clientPlaintexts[:1]
 			testAuthorClientRecord(t, statement, witness, 0, []byte(content))
 			circuit := newZeroAssignment(shape)
-			circuit.ShtsHash = assignBits(statement.session.shtsHash)
-			circuit.HelloHash = assignBits(statement.session.helloHash)
-			circuit.FinishedHash = assignBits(statement.session.finishedHash)
+			// the quick shape takes the keys as private wires that open C, as a later part's do
+			keyCommitment, err := assignCommitment(statement.keyCommitment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			circuit.KeyCommitment = keyCommitment
 			template, err := clientRecordTemplate(statement.session, recordRoleMail, statement.clientRecords[0])
 			if err != nil {
 				t.Fatal(err)
@@ -703,7 +706,7 @@ func TestMessageCircuitRequiresThe354(t *testing.T) {
 
 // A real TLS 1.2 connection's shape, with Z1 in it: the key schedule is what is under test.
 func test12Shape() *partShape {
-	return &partShape{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4}
+	return &partShape{kind: partKindKey, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4}
 }
 
 func TestZ1CircuitIn12DerivesARealConnectionsKeys(t *testing.T) {

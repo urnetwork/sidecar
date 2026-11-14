@@ -203,6 +203,14 @@ func (self *checkRun) acceptPart(part *Part) (*acceptedPart, error) {
 		}
 	}
 	switch {
+	case part.Index == 1:
+		if _, err := parseKeyCommitment(part.KeyCommitment); err != nil {
+			return nil, err
+		}
+	case len(part.KeyCommitment) != 0:
+		return nil, errors.New("a part after the key part carries a key commitment")
+	}
+	switch {
 	case part.Index == 1 && part.Mode != 0:
 		return nil, errors.New("pi1 carries a mode")
 	case 2 <= part.Index && part.Mode != modeBdat && part.Mode != modeData:
@@ -333,10 +341,15 @@ func (self *checkRun) relation(accepted *acceptedPart) []*Failure {
 	shake := self.shake
 	preamble := self.transcript.Preamble
 	serverRecords := self.serverRecords[accepted.previousCount:part.ServerRecordCount]
-	needServerKeys := 0 < len(serverRecords)
 
-	// Z1
-	if err := self.checkKeys(witness, needServerKeys); err != nil {
+	// Z1: the key part derives both directions and commits to them; every part's keys open the key
+	// part's C (DESIGN-DETAILS 3.2.3)
+	if part.Index == 1 {
+		if err := self.checkKeys(witness); err != nil {
+			fail("Z1", err)
+		}
+	}
+	if err := checkKeyCommitment(witness, self.parts[0].part.KeyCommitment); err != nil {
 		fail("Z1", err)
 	}
 
@@ -450,8 +463,9 @@ func (self *checkRun) relation(accepted *acceptedPart) []*Failure {
 	return failures
 }
 
-// Z1: the witness's keys are those its secret gives under the edge's own handshake inputs.
-func (self *checkRun) checkKeys(witness *PartWitness, needServerKeys bool) error {
+// Z1's first step: the witness's keys, both directions, are those its secret gives under the edge's own
+// handshake inputs.
+func (self *checkRun) checkKeys(witness *PartWitness) error {
 	shake := self.shake
 	if shake.version == versionTls13 {
 		if len(witness.HandshakeSecret) != secretBytes {
@@ -466,11 +480,9 @@ func (self *checkRun) checkKeys(witness *PartWitness, needServerKeys bool) error
 		if !bytes.Equal(key, witness.ClientKey) || !bytes.Equal(iv, witness.ClientIv) {
 			return errors.New("the client key is not MS's under H_sf")
 		}
-		if needServerKeys {
-			key, iv = trafficKeys13(shake.suite, expandLabel(ms, "s ap traffic", shake.finishedHash, secretBytes))
-			if !bytes.Equal(key, witness.ServerKey) || !bytes.Equal(iv, witness.ServerIv) {
-				return errors.New("the server key is not MS's under H_sf")
-			}
+		key, iv = trafficKeys13(shake.suite, expandLabel(ms, "s ap traffic", shake.finishedHash, secretBytes))
+		if !bytes.Equal(key, witness.ServerKey) || !bytes.Equal(iv, witness.ServerIv) {
+			return errors.New("the server key is not MS's under H_sf")
 		}
 		return nil
 	}
@@ -482,7 +494,7 @@ func (self *checkRun) checkKeys(witness *PartWitness, needServerKeys bool) error
 	if !bytes.Equal(block[0:16], witness.ClientKey) || !bytes.Equal(block[32:36], witness.ClientIv) {
 		return errors.New("the client key is not the key block's")
 	}
-	if needServerKeys && (!bytes.Equal(block[16:32], witness.ServerKey) || !bytes.Equal(block[36:40], witness.ServerIv)) {
+	if !bytes.Equal(block[16:32], witness.ServerKey) || !bytes.Equal(block[36:40], witness.ServerIv) {
 		return errors.New("the server key is not the key block's")
 	}
 	finishedHash := sha256.Sum256(shake.preFinished)

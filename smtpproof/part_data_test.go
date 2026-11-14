@@ -121,10 +121,13 @@ func testProverAfterPart4(t *testing.T, capture *testCapturedParts, plaintext []
 		job:      &sidecar.SmtpProofJob{SendId: []byte("synthetic-send-id")},
 		session:  session,
 		preamble: session.preamble,
-		serverIn: make(chan *proverServerEvent, 1),
-		records:  make([]*proverServerRecord, statement.serverRecordCount),
-		covered:  statement.serverRecordCount,
-		nextPart: 5,
+		// the connection's C and rho, as the run drew them after the handshake
+		keyCommitment: statement.keyCommitment,
+		keyBlind:      witness.keyBlind,
+		serverIn:      make(chan *proverServerEvent, 1),
+		records:       make([]*proverServerRecord, statement.serverRecordCount),
+		covered:       statement.serverRecordCount,
+		nextPart:      5,
 		result: &tlsHandshakeResult{
 			version: session.version, handshakeSecret: witness.handshakeSecret,
 			clientKey: witness.clientKey, clientIv: witness.clientIv, serverKey: witness.serverKey, serverIv: witness.serverIv,

@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -290,12 +291,15 @@ type partRecord struct {
 
 // The public statement of one part (SPEC.md section 5).
 type partStatement struct {
-	session     *sessionStatement
-	index       uint32
-	mode        uint32
-	firstRecord uint64
-	lastRecord  uint64
-	last        bool
+	session *sessionStatement
+	// C, 64 octets: the key part's own, which it carries, or for every later part the one the edge kept
+	// from the key part, never a value the part carries (DESIGN-DETAILS 3.2.5).
+	keyCommitment []byte
+	index         uint32
+	mode          uint32
+	firstRecord   uint64
+	lastRecord    uint64
+	last          bool
 	// The count this part's server records start from, and the count it reaches.
 	previousServerRecordCount uint64
 	serverRecordCount         uint64
@@ -316,6 +320,8 @@ type partWitness struct {
 	clientIv  []byte
 	serverKey []byte
 	serverIv  []byte
+	// rho: C's blind, drawn once for the connection (DESIGN-DETAILS 3.2.2).
+	keyBlind *big.Int
 
 	// Plaintext of each client record the part opens: in 1.3 the inner plaintext, type octet included.
 	clientPlaintexts [][]byte
@@ -479,13 +485,39 @@ func recordKeystream(suite uint16, key []byte, nonce []byte, size int) ([]byte, 
 	return keystream, nil
 }
 
-// Whether a part opens server records and so needs the server direction's keys. Only pi1 does not.
-func partNeedsServerKeys(statement *partStatement) bool {
-	return statement.index != 1
+// Z1 in two steps (DESIGN-DETAILS 3.2.3): the key part's keys are the ones the observed handshake
+// fixes, both directions always, and C commits to them under rho; every later part's keys open the C
+// the edge kept, and nothing of the handshake enters it.
+func relationZ1(statement *partStatement, witness *partWitness) error {
+	if statement.index == 1 {
+		if err := relationZ1Derive(statement, witness); err != nil {
+			return err
+		}
+	}
+	return relationZ1Open(statement, witness)
 }
 
-// Z1: the witness's keys are the ones the observed handshake fixes.
-func relationZ1(statement *partStatement, witness *partWitness) error {
+// Z1's second step: the witness's keys and IVs, under its blind, are what C commits to.
+func relationZ1Open(statement *partStatement, witness *partWitness) error {
+	want, err := decodeCommitment(statement.keyCommitment)
+	if err != nil {
+		return fmt.Errorf("the statement's key commitment: %w", err)
+	}
+	if witness.keyBlind == nil {
+		return errors.New("no blind")
+	}
+	commitment, err := commitKeys(witness.clientKey, witness.clientIv, witness.serverKey, witness.serverIv, witness.keyBlind)
+	if err != nil {
+		return err
+	}
+	if !commitment.Equal(&want) {
+		return errors.New("the keys and blind do not open the key commitment")
+	}
+	return nil
+}
+
+// Z1's first step, the key part's: the witness's keys are the ones the observed handshake fixes.
+func relationZ1Derive(statement *partStatement, witness *partWitness) error {
 	session := statement.session
 	if session.version == tlsVersion13 {
 		shts := tls13TrafficSecret(witness.handshakeSecret, "s hs traffic", session.helloHash)
@@ -499,12 +531,10 @@ func relationZ1(statement *partStatement, witness *partWitness) error {
 		if !bytes.Equal(clientKey, witness.clientKey) || !bytes.Equal(clientIv, witness.clientIv) {
 			return errors.New("client key or IV is not HS's")
 		}
-		if partNeedsServerKeys(statement) {
-			sats := tls13TrafficSecret(masterSecret, "s ap traffic", session.finishedHash)
-			serverKey, serverIv := tls13TrafficKeys(session.suite, sats)
-			if !bytes.Equal(serverKey, witness.serverKey) || !bytes.Equal(serverIv, witness.serverIv) {
-				return errors.New("server key or IV is not HS's")
-			}
+		sats := tls13TrafficSecret(masterSecret, "s ap traffic", session.finishedHash)
+		serverKey, serverIv := tls13TrafficKeys(session.suite, sats)
+		if !bytes.Equal(serverKey, witness.serverKey) || !bytes.Equal(serverIv, witness.serverIv) {
+			return errors.New("server key or IV is not HS's")
 		}
 		return nil
 	}

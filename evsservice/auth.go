@@ -56,9 +56,9 @@ type EvsRepoFacts struct {
 	Deletion *EvsRepoDeletionFacts
 }
 
-// A repo's newest RepoDelete as the projection holds it, with its entry's time, which its row carries
-// (AclRepoDeletionRow.deleted_time_ms, QD-743), and its signer, which the entry at the row's position names
-// (AclRepoDeletionRow.deleted_at) while the projection's log keeps it.
+// A repo's newest RepoDelete as the projection holds it, with its entry's time and its signer, which its row carries
+// (AclRepoDeletionRow.deleted_time_ms, QD-743, and AclRepoDeletionRow.signer, QD-798), the signer also named by the
+// entry at the row's position (AclRepoDeletionRow.deleted_at) while the projection's log keeps it.
 type EvsRepoDeletionFacts struct {
 	DeletionId sidecar.Id
 	// RepoDelete{now}: straight to shredding, never restorable.
@@ -66,8 +66,8 @@ type EvsRepoDeletionFacts struct {
 	// The RepoDelete entry's time: repo/'s state_ms while deleted, and what the 7-day start counts from. Zero where the
 	// projection does not date it.
 	Time time.Time
-	// The entry's signer: repo/'s state_signer while deleted. The zero id once the projection's log no longer keeps
-	// the entry, which DELETE without now refuses (decideDelete).
+	// The entry's signer: repo/'s state_signer while deleted. The zero id only where neither the projection's log nor
+	// the row names it, a row no fold writes, which DELETE without now refuses (decideDelete).
 	SignerSidecarId sidecar.Id
 	// A RepoRestore of DeletionId is projected, which api takes only within 7 d (§8.8).
 	Restored bool

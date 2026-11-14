@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -153,6 +154,7 @@ func testReplayStatements(t *testing.T, capture *ExportedCapture) ([]*partStatem
 				clientIv:         witness.ClientIv,
 				serverKey:        witness.ServerKey,
 				serverIv:         witness.ServerIv,
+				keyBlind:         new(big.Int).SetBytes(witness.KeyBlind),
 				clientPlaintexts: witness.ClientPlaintexts,
 				serverPlaintexts: witness.ServerPlaintexts,
 			}
@@ -352,9 +354,10 @@ func TestSpecPi1ProofVectorVerifies(t *testing.T) {
 	if err := groth16.Verify(proof, verifyingKey, public); err != nil {
 		t.Fatalf("the kept proof does not verify: %v", err)
 	}
-	// and nothing but its statement: the first ciphertext octet, then the last public input
+	// and nothing but its statement: C's x, the first ciphertext octet, then the last public input. In
+	// order: the three hashes, ResumeTwoBlocks, C, then the first pool block's counter and octets
 	vector := public.Vector().(fr.Vector)
-	for _, position := range []int{3*8*tlsSecretBytes + 1, len(inputs) - 1} {
+	for _, position := range []int{3*8*tlsSecretBytes + 1, 3*8*tlsSecretBytes + 4, len(inputs) - 1} {
 		original := vector[position]
 		var one fr.Element
 		one.SetOne()

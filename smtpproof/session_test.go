@@ -787,17 +787,20 @@ func TestALateTicketIsProvenAgainOverItsRecord(t *testing.T) {
 			original.Records = append(original.Records, record.raw)
 		}
 		run := &proverRun{
-			settings:  DefaultProverSettings(),
-			backend:   backend,
-			channel:   channel,
-			session:   session,
-			preamble:  session.preamble,
-			serverIn:  make(chan *proverServerEvent, 2),
-			records:   records,
-			covered:   uint64(len(records)),
-			lastPart:  original,
-			lastOpen:  witness.clientPlaintexts,
-			lastPrior: 0,
+			settings: DefaultProverSettings(),
+			backend:  backend,
+			channel:  channel,
+			session:  session,
+			preamble: session.preamble,
+			// the connection's C and rho, as the run drew them after the handshake
+			keyCommitment: statement.keyCommitment,
+			keyBlind:      witness.keyBlind,
+			serverIn:      make(chan *proverServerEvent, 2),
+			records:       records,
+			covered:       uint64(len(records)),
+			lastPart:      original,
+			lastOpen:      witness.clientPlaintexts,
+			lastPrior:     0,
 			result: &tlsHandshakeResult{
 				version:         session.version,
 				handshakeSecret: witness.handshakeSecret,

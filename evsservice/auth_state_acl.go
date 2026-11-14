@@ -10,10 +10,11 @@
 //	HonorScope       AclGateCache.HonorScope for the evs audience (D-ACL-21, QD-070), so a subject a group edit, a
 //	                 Suspend or an expiry drops loses the scope within §8.9's 5 s, not at the token's 15 minutes
 //	Repo             the repo's AclRepo row in the token's network's state: its kind, owner and newest RepoDelete, with
-//	                 the RepoDelete's time from its row (QD-743) and its signer only while the gate's log keeps that
-//	                 entry
+//	                 the RepoDelete's time (QD-743) and signer (QD-798) from its row, the signer the log's entry while
+//	                 the gate's log keeps it
 //	RepoDeletion     the same RepoDelete by network rather than by token, so the state is also taskworker's
-//	                 EvsRepoDeletionSource: §11.12's shred start and reconciler judge from rows alone
+//	                 EvsRepoDeletionSource: §11.12's shred start and reconciler judge from rows alone, the reconciler
+//	                 applying a RepoDelete whose entry the gate's log no longer keeps, or never held
 //
 // A sidecar rebound to a new client leaves its old client's tokens reading for at most a token's life (15 minutes);
 // the old client's writes are voided by the rev/ object every write reads (CheckRevocation).
@@ -141,11 +142,12 @@ func (self *AclEvsAuthState) HonorScope(principal *sidecar.Principal, repoId sid
 	return EvsAuthUnknown
 }
 
-// See EvsAuthState. The newest RepoDelete comes dated by its row's own time on any day of its window (QD-743), and with
-// its signer only while the gate's log keeps its entry: restore needs neither, and DELETE without now refuses one whose
-// signer it lacks (decideDelete), the closed direction. A RepoDelete without now that its row does not date, which no
-// fold writes, is left out of the facts, so DELETE and restore answer 409 STATEMENT_MISSING for it; a RepoDelete{now}
-// needs no date.
+// See EvsAuthState. The newest RepoDelete comes dated by its row's own time (QD-743) and signed by its row's signer
+// (QD-798) on any day of its window, the log's entry naming the same signer while the gate's log keeps it: restore
+// needs neither, and DELETE without now refuses one whose signer neither names (decideDelete), the closed direction,
+// which only a row no fold writes leaves. A RepoDelete without now that its row does not date, which no fold writes
+// either, is left out of the facts, so DELETE and restore answer 409 STATEMENT_MISSING for it; a RepoDelete{now} needs
+// no date.
 func (self *AclEvsAuthState) Repo(principal *sidecar.Principal, repoId sidecar.Id) (*EvsRepoFacts, EvsAuthAnswer) {
 	snapshot, answer := self.snapshot(principal)
 	if answer != EvsAuthAllowed {
@@ -191,7 +193,8 @@ func aclEvsDeletionFacts(deletion *sidecar.AclRepoDeletion) *EvsRepoDeletionFact
 
 // See EvsRepoDeletionSource: the repo's newest RepoDelete in networkId's newest verified state, for §11.12's shred start
 // and reconciler, judged from its rows alone, so a start 7 d 10 min after the entry finds the deletion dated and its
-// RepoRestore, if any, though the gate's log no longer keeps either entry (QD-743). nil when the state holds no
+// RepoRestore, if any, though the gate's log no longer keeps either entry (QD-743), and the reconciler applies a
+// RepoDelete the route never got with the row's signer on any day (QD-798). nil when the state holds no
 // RepoDelete of the repo. An error, which leaves the repo as it is to be asked again, while the network's state is not
 // loaded (a network the cache has not heard of is told to it, which starts its load), and for a RepoDelete without now
 // that its row does not date, which neither a start nor the reconciler may take for no deletion.

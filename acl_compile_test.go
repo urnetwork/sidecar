@@ -718,9 +718,9 @@ func TestCompileAclCarriesTheLogsGrants(t *testing.T) {
 	}
 }
 
-// The log's folded access logs ride the rows whole (QD-743): a RepoDelete's entry time, and a removed admin's row with
-// its removal's position beside the standing ones, which the base compile's retention rule drops (aclRowsKeptAt), never
-// CompileAcl; and the bytes stay equal for equal input.
+// The log's folded access logs ride the rows whole: a RepoDelete's entry time (QD-743) and signer (QD-798), and a
+// removed admin's row with its removal's position beside the standing ones, which the base compile's retention rule
+// drops (aclRowsKeptAt), never CompileAcl; and the bytes stay equal for equal input.
 func TestCompileAclCarriesTheAccessLogsTimesAndRemovals(t *testing.T) {
 	world := newAclCompileWorld("access log")
 	owner := world.member("owner@acme.example", bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -733,7 +733,9 @@ func TestCompileAclCarriesTheAccessLogsTimesAndRemovals(t *testing.T) {
 			{SidecarId: laptop.Bytes(), Signer: laptop.Bytes(), At: 3},
 			{SidecarId: phone.Bytes(), Signer: laptop.Bytes(), At: 4, RemovedAt: 6},
 		},
-		Deletion: &protocol.AclRepoDeletionRow{DeletionId: world.id("deletion").Bytes(), DeletedAt: 7, DeletedTimeMs: world.headTimeMs - 1000},
+		Deletion: &protocol.AclRepoDeletionRow{
+			DeletionId: world.id("deletion").Bytes(), DeletedAt: 7, DeletedTimeMs: world.headTimeMs - 1000, Signer: laptop.Bytes(),
+		},
 	}}
 	given := proto.Clone(world.statements).(*protocol.AclRows)
 	rows := world.compile(t)

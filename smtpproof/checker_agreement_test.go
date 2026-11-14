@@ -42,6 +42,7 @@ func testCheckerInput(capture *smtpproof.ExportedCapture) (*checker.Transcript, 
 			converted.Part = &checker.Part{
 				Index: part.Index, Mode: part.Mode, FirstRecord: part.FirstRecord, LastRecord: part.LastRecord,
 				Last: part.Last, ServerRecordCount: part.ServerRecordCount, Records: part.Records,
+				KeyCommitment: part.KeyCommitment,
 			}
 		}
 		transcript.Events = append(transcript.Events, converted)
@@ -51,7 +52,7 @@ func testCheckerInput(capture *smtpproof.ExportedCapture) (*checker.Transcript, 
 		witnesses[i] = &checker.PartWitness{
 			HandshakeSecret: witness.HandshakeSecret, MasterSecret: witness.MasterSecret,
 			ClientKey: witness.ClientKey, ClientIv: witness.ClientIv, ServerKey: witness.ServerKey, ServerIv: witness.ServerIv,
-			ClientPlaintexts: witness.ClientPlaintexts, ServerPlaintexts: witness.ServerPlaintexts,
+			KeyBlind: witness.KeyBlind, ClientPlaintexts: witness.ClientPlaintexts, ServerPlaintexts: witness.ServerPlaintexts,
 		}
 	}
 	return transcript, witnesses
