@@ -1,9 +1,10 @@
 //go:build !sidecar_http && !ios_extension
 
-// The tls SidecarComponent (§5.4, §13.7, §13.8; TLS-M5-18): the device's certificate manager on a Sidecar's client
-// generations, and what Sidecar.EnsureTlsCertificate, TlsCertificates and TlsSignLabelReclaim run on. The manager and
-// what it installed live for the network across generations, since a certificate outlives a reconnect; each
-// generation lends it the SidecarApi's routes and the push feed's topic tls, and takes them back when it ends.
+// The tls SidecarComponent (§5.4, §13.7, §13.8; TLS-M5-18, TLS-M8-01): the device's certificate manager on a Sidecar's
+// client generations, and what Sidecar.EnsureTlsCertificate, TlsCertificates, TlsSignLabelReclaim and ListenTls run
+// on. The manager and what it installed live for the network across generations, since a certificate outlives a
+// reconnect; each generation lends it the SidecarApi's routes and the push feed's topic tls, and takes them back when
+// it ends.
 //
 // The component installs the manager behind Sidecar.TlsDeviceCertificate as it is made, so an issued chain answers
 // from then on and the self-signed leaf only where none covers the names. Its keychain namespace is the device key's
@@ -15,7 +16,24 @@
 // (TLS-M6-03) and the custom hosts this device may serve, which DnsClient.Zone lists once DNS-M6-02 has landed and
 // whose grant test is verified config's (DESIGN-DETAILS 17.2.5). A host that knows them passes its own Names.
 //
-// Nothing adds this component to a Sidecar yet: the daemon's composition does, beside the sockets component's.
+// Two kinds of host make one (§18.4). A host that stays up, a desktop or CLI daemon, takes TlsComponentArgs, which runs
+// D-TLS-8's CT watch while it listens (tls_ct.go). An app's sidecar role runs only while the app is open (owner
+// decision 197), so it takes TlsForegroundComponentArgs, which runs no watch and makes no CT client: the network's
+// other listening devices that stay up keep the watch (TLS-M8-01). sdk/sidecar_tls.go makes the one its host class
+// asks for; nothing in the daemon adds this component yet, beside the sockets component's.
+//
+// An app listener (ListenTls, §13.17's app listeners): a tls/ name this process serves itself rather than through a
+// local port, as sdk's SidecarSockets.Listen does on a tls/ name (§18.5). Its registration goes through Sidecar.Listen,
+// so §5.4's gate holds it as any tls/ listen, and §13.7's front runs on it, TLS ending on this device's key. The
+// front's target is the listener's Accept: each connection the front opens to its target, which only an audience
+// check's pass opens (TlsFrontConn.openTarget, FI-11), is one end of an in-memory pipe whose other end Accept answers,
+// so the app reads the requests of visitors its grant admits, as the HTTP front forwards them over HTTP/1.1, and
+// nothing before. The registration takes §9.5's default app mode, http, with h2 and http/1.1; raw is a desktop
+// publish's (`ur bridge public-tls --tcp`). The front's target probe is off, since no probe can ask an Accept, so the
+// registration serves as it began. No timer here closes or unlistens a listener: an app the OS suspends stops sending
+// heartbeats, its registration lapses by the sockets service's 45 s lease (§9.5), and on resume the registrar sends
+// its whole set again, which registers the name anew while the listener's Accept waits on as before.
+//
 // connect legs only: the sidecar_http leg runs no component (§18.10). Safe for concurrent use.
 
 package sidecar
@@ -26,14 +44,31 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // Its keychain namespace and its sealed directory (§5.9): the device key's namespace, tlsSecretsNamespace.
 const tlsComponentName = "tls"
 
-// No tls component is attached to this Sidecar, so nothing orders or holds an issued certificate.
-var ErrTlsComponentAbsent = errors.New("tls: this sidecar runs no tls component")
+var (
+	// No tls component is attached to this Sidecar, so nothing orders or holds an issued certificate.
+	ErrTlsComponentAbsent = errors.New("tls: this sidecar runs no tls component")
+	// A name an app listener cannot serve: no tls/<port>/<host> name, a Team scope's host before scopes land
+	// (TLS-M6-03), or §13.9's system publish, which is a mail receiver's alone.
+	ErrTlsListenInvalid = errors.New("tls listen refused")
+	// The tls component has closed, so it serves no new listener.
+	errTlsComponentClosed = errors.New("tls: the component has closed")
+	// No client generation is attached, so the network's tier cannot be read.
+	errTlsComponentOffline = errors.New("tls: offline")
+)
+
+// The local address an app listener's front names for its target, which names no service: every connection to the
+// target goes through the listener's own dial, and the HTTP front only keys its target connections by it.
+const tlsListenerTargetAddress = "0.0.0.0:0"
 
 // What NewTlsComponent takes. Sidecar.TlsComponentArgs fills it for the network a Sidecar is enrolled in.
 type TlsComponentArgs struct {
@@ -57,8 +92,12 @@ type TlsComponentArgs struct {
 
 // The tls component.
 type TlsComponent struct {
+	// ends with the component's maker; its app listeners' fronts run under it
+	ctx       context.Context
 	manager   *TlsCertManager
 	networkId Id
+	// the names the manager orders for, which an app listener's server names come from
+	names     func(ctx context.Context) (*TlsCertNames, error)
 	setSource func(source TlsCertificateSource) error
 	// nil when the component runs no CT watch
 	ctWatch        *tlsCtWatch
@@ -72,6 +111,11 @@ type TlsComponent struct {
 	generationSeq uint64
 	// closed once the newest generation's end has been followed: its hints removed and its api taken back
 	generationEnded chan struct{}
+	// the newest generation's api, which an app listener reads the network's tier from; nil between generations
+	api *SidecarApi
+	// the app listeners serving on this component (ListenTls)
+	listeners map[*TlsListener]bool
+	closed    bool
 }
 
 // The device key as the keychain's record holds it, through this Sidecar's key lock.
@@ -133,9 +177,22 @@ func (self *Sidecar) tlsCertNames(ctx context.Context) (*TlsCertNames, error) {
 	return names, nil
 }
 
-// The args a TlsComponent takes from this Sidecar for the network it is enrolled in: its settings, device key, Sign,
-// ServiceToken, zone, sealed directory, clock and log.
+// The args a TlsComponent takes from this Sidecar for the network it is enrolled in, on a host that stays up (a
+// desktop or CLI daemon): its settings, device key, Sign, ServiceToken, zone, sealed directory, clock and log, and
+// D-TLS-8's CT watch on a keyless client, which passes while this sidecar listens.
 func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
+	return self.tlsComponentArgs(true)
+}
+
+// TlsComponentArgs for a host that does not stay up, an app's sidecar role, which runs only while the app is open
+// (§18.4, owner decision 197): no CT watch and no CT client, since a pass about every 6 hours means nothing to a host
+// that is suspended between foregrounds, and the network's listening devices that stay up keep the watch (TLS-M8-01).
+func (self *Sidecar) TlsForegroundComponentArgs() (*TlsComponentArgs, error) {
+	return self.tlsComponentArgs(false)
+}
+
+// The args for this Sidecar's network, with D-TLS-8's watch when watchCt.
+func (self *Sidecar) tlsComponentArgs(watchCt bool) (*TlsComponentArgs, error) {
 	networkId := self.enrolledNetworkId()
 	identity := self.currentIdentity()
 	if networkId == nil || identity == nil || self.instance == nil {
@@ -148,12 +205,7 @@ func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
 	if err != nil {
 		return nil, err
 	}
-	// keyless: a Team's Cert Spotter key has no place to be read from yet
-	ctClient, err := NewTlsCtClient(nil)
-	if err != nil {
-		return nil, err
-	}
-	return &TlsComponentArgs{
+	args := &TlsComponentArgs{
 		Manager: &TlsCertManagerArgs{
 			NetworkId:    *networkId,
 			SidecarId:    identity.SidecarId,
@@ -167,25 +219,39 @@ func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
 			Log:          self.log,
 		},
 		SetSource: self.setTlsCertificateSource,
-		CtWatch: &TlsCtWatchArgs{
-			Sources: ctClient.Sources(),
-			Identities: func() TlsCtIdentities {
-				return NewTlsCtAuthorityIdentities(self.authority())
-			},
-			Listening: self.tlsListening,
-			Event: func(event SidecarEvent) {
-				self.Alarm(event)
-			},
+		sidecar:   self,
+	}
+	if !watchCt {
+		return args, nil
+	}
+	// keyless: a Team's Cert Spotter key has no place to be read from yet
+	ctClient, err := NewTlsCtClient(nil)
+	if err != nil {
+		return nil, err
+	}
+	args.CtWatch = &TlsCtWatchArgs{
+		Sources: ctClient.Sources(),
+		Identities: func() TlsCtIdentities {
+			return NewTlsCtAuthorityIdentities(self.authority())
 		},
-		SetCtWatch:     self.setTlsCtWatch,
-		CloseCtSources: ctClient.Close,
-		sidecar:        self,
-	}, nil
+		Listening: self.tlsListening,
+		Event: func(event SidecarEvent) {
+			self.Alarm(event)
+		},
+	}
+	args.SetCtWatch = self.setTlsCtWatch
+	args.CloseCtSources = ctClient.Close
+	return args, nil
 }
 
-// Whether this sidecar listens on a published name now, which is when D-TLS-8 has it watch CT.
+// Whether this sidecar listens on a published name now, a publish's or an app listener's, which is when D-TLS-8 has
+// it watch CT.
 func (self *Sidecar) tlsListening() bool {
-	return 0 < len(self.TlsPublishedHosts())
+	if 0 < len(self.TlsPublishedHosts()) {
+		return true
+	}
+	component := self.tlsComponent()
+	return component != nil && component.listening()
 }
 
 // A component whose manager runs until Close or ctx ends, attached to no generation yet, installed behind
@@ -205,11 +271,14 @@ func NewTlsComponent(ctx context.Context, args *TlsComponentArgs) (*TlsComponent
 		}
 	}
 	self := &TlsComponent{
+		ctx:            ctx,
 		manager:        manager,
 		networkId:      args.Manager.NetworkId,
+		names:          args.Manager.Names,
 		setSource:      args.SetSource,
 		setCtWatch:     args.SetCtWatch,
 		closeCtSources: args.CloseCtSources,
+		listeners:      map[*TlsListener]bool{},
 	}
 	if args.sidecar != nil {
 		self.publisher = newTlsPublisher(&sidecarTlsPublishBackend{sidecar: args.sidecar, args: args.Publish}, args.Manager.Settings)
@@ -271,6 +340,7 @@ func (self *TlsComponent) Attach(env *SidecarEnv) error {
 		defer self.stateLock.Unlock()
 		self.generationSeq += 1
 		self.generationEnded = generationEnded
+		self.api = env.SidecarApi
 		return self.generationSeq
 	}()
 	self.manager.SetApi(env.SidecarApi)
@@ -288,6 +358,7 @@ func (self *TlsComponent) Attach(env *SidecarEnv) error {
 		defer self.stateLock.Unlock()
 		if self.generationSeq == generationSeq {
 			self.manager.SetApi(nil)
+			self.api = nil
 		}
 	}()
 	return nil
@@ -298,8 +369,36 @@ func (self *TlsComponent) CertManager() *TlsCertManager {
 	return self.manager
 }
 
-// Ends the manager and takes it from behind TlsDeviceCertificate, after the Sidecar's last generation.
+// GET /sidecar/limits on the newest generation's api: the network's tier, which an app listener's front reads for
+// the Community notice. Offline between generations, which the front reads as Community.
+func (self *TlsComponent) limits(ctx context.Context) (*QuotaLimits, error) {
+	api := func() *SidecarApi {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.api
+	}()
+	if api == nil {
+		return nil, errTlsComponentOffline
+	}
+	return api.Limits(ctx)
+}
+
+// Ends the app listeners, their registrations with them, then the manager, and takes it from behind
+// TlsDeviceCertificate, after the Sidecar's last generation.
 func (self *TlsComponent) Close() {
+	listeners := func() []*TlsListener {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.closed = true
+		listeners := make([]*TlsListener, 0, len(self.listeners))
+		for listener := range self.listeners {
+			listeners = append(listeners, listener)
+		}
+		return listeners
+	}()
+	for _, listener := range listeners {
+		listener.Close()
+	}
 	if self.publisher != nil {
 		self.publisher.close()
 	}
@@ -372,4 +471,307 @@ func (self *Sidecar) TlsSignLabelReclaim(ctx context.Context, name string, incid
 		return nil, ErrTlsComponentAbsent
 	}
 	return component.manager.SignLabelReclaim(ctx, &DnsReclaimProof{Name: name, NetworkId: *networkId, IncidentId: incidentId})
+}
+
+// What ListenTls takes beyond the name: §9.5's weight and §5.4's decision.
+type TlsListenSettings struct {
+	// The registration's share, 1 to 1000. 0 takes 100 (§9.5).
+	Weight int
+	// The ApprovalDecision for the listen, when the caller holds one. Nil lets the gate find a grant or a recorded
+	// decision, or file the request and answer *ApprovalPendingError.
+	Decision *bridge.Signed
+	// §13.7's limits on the endpoint. Nil takes DefaultTlsFrontSettings. Its target probe is off whatever it says,
+	// since the target is the listener's Accept.
+	Front *TlsFrontSettings
+}
+
+// A registration as an app listener runs on it: what the front accepts from, and its address. *SocketListener is one.
+type tlsListenRegistration interface {
+	tlsFrontListener
+	Addr() net.Addr
+}
+
+// What an app listener runs on beyond the component: the Sidecar's parts (ListenTls), or a test's.
+type tlsListenParts struct {
+	// This sidecar's network and sidecar, the subject of the endpoint's own grant.
+	NetworkId Id
+	SidecarId Id
+	// Sidecar.Listen: the registration, through §5.4's gate, which may answer *ApprovalPendingError.
+	Register func(ctx context.Context, address string, settings *SocketListenSettings) (tlsListenRegistration, error)
+	// This device's own evaluation of its config (NewTlsFrontConfigPolicy).
+	Policy TlsFrontPolicy
+	// The tls namespace of the network's keychain.ur, which holds the key sessions are sealed under.
+	Secrets SidecarSecrets
+	// The edge-login issuer, SidecarSettings.AuthUrl.
+	IssuerUrl string
+	// Nil is real time.
+	Clock Clock
+	// Nil is the default logger.
+	Log Logger
+}
+
+// Counts listener among the component's, false once the component has closed.
+func (self *TlsComponent) track(listener *TlsListener) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return false
+	}
+	self.listeners[listener] = true
+	return true
+}
+
+// Takes listener out of the component's.
+func (self *TlsComponent) untrack(listener *TlsListener) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.listeners, listener)
+}
+
+// Whether an app listener serves on this component now.
+func (self *TlsComponent) listening() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return 0 < len(self.listeners)
+}
+
+// An app listener on address: the name checked, its server names from the network's own, the network's certificate
+// ensured (§13.10's step 3), then the registration through parts, then the front on it. Nothing is ordered for a name
+// refused here, and nothing registers without the certificate.
+func (self *TlsComponent) listen(ctx context.Context, address string, settings *TlsListenSettings, parts *tlsListenParts) (*TlsListener, error) {
+	if settings == nil {
+		settings = &TlsListenSettings{}
+	}
+	parsed, err := ParseSocketAddress(address)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrTlsListenInvalid, err)
+	}
+	name, namespace, err := ParseSocketName(parsed.Name)
+	if err != nil || namespace != SocketNamespaceTls {
+		return nil, fmt.Errorf("%w: a tls/<port>/<host> name, on port 443, 8443, 8883 or 5671", ErrTlsListenInvalid)
+	}
+	host := socketTlsHost(name)
+	switch {
+	case strings.Contains(host, "."):
+		return nil, fmt.Errorf("%w: a scoped host waits on Team scopes", ErrTlsListenInvalid)
+	case name == tlsSystemPublishName:
+		// §13.9: a receiver's system publish, which no listener takes
+		return nil, fmt.Errorf("%w: the system publish's", ErrTlsListenInvalid)
+	}
+	names, err := self.names(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serverNames, err := tlsPublishServerNames(host, names)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := self.manager.EnsureTlsCertificate(ctx); err != nil {
+		return nil, err
+	}
+	target := &TlsFrontTarget{
+		Name:         name,
+		ServerNames:  serverNames,
+		AppMode:      socketListenDefaultTlsAppMode,
+		LocalAddress: tlsListenerTargetAddress,
+	}
+	listenSettings := TlsFrontListenSettings(target, false)
+	listenSettings.Weight = settings.Weight
+	listenSettings.Decision = settings.Decision
+	registration, err := parts.Register(ctx, address, listenSettings)
+	if err != nil {
+		return nil, err
+	}
+	listener, err := newTlsListener(self.ctx, &TlsFrontArgs{
+		Settings:  settings.Front,
+		Target:    target,
+		NetworkId: parts.NetworkId,
+		SidecarId: parts.SidecarId,
+		Policy:    parts.Policy,
+		Certificate: func(serverName string) (*tls.Certificate, error) {
+			// an issued certificate alone: a visitor is never shown the self-signed leaf
+			return self.manager.PublishCertificate([]string{serverName})
+		},
+		Secrets:   parts.Secrets,
+		IssuerUrl: parts.IssuerUrl,
+		Limits:    self.limits,
+		Clock:     parts.Clock,
+		Log:       parts.Log,
+	}, registration, self.untrack)
+	if err != nil {
+		registration.Close()
+		return nil, err
+	}
+	if !self.track(listener) {
+		listener.Close()
+		return nil, errTlsComponentClosed
+	}
+	return listener, nil
+}
+
+// Serves a tls/ name in this process (TLS-M8-01; §13.17's app listeners): see the file header. address is
+// tls/<port>/<host>, its host a label or @, never a scoped host until Team scopes land, nor §13.9's mta-sts. The
+// network's certificate on this device's key is ensured first, ordered through certs if it is missing, then the name
+// registers through Listen, whose §5.4 gate may answer *ApprovalPendingError, the same call made again after the
+// decision carrying on. ErrTlsComponentAbsent on a Sidecar that runs no tls component.
+func (self *Sidecar) ListenTls(ctx context.Context, address string, settings *TlsListenSettings) (*TlsListener, error) {
+	component := self.tlsComponent()
+	if component == nil {
+		return nil, ErrTlsComponentAbsent
+	}
+	networkId := self.enrolledNetworkId()
+	identity := self.currentIdentity()
+	if networkId == nil || identity == nil {
+		return nil, ErrSidecarNoIdentity
+	}
+	_, secrets, err := self.tlsDevice()
+	if err != nil {
+		return nil, err
+	}
+	sidecarId := identity.SidecarId
+	return component.listen(ctx, address, settings, &tlsListenParts{
+		NetworkId: *networkId,
+		SidecarId: sidecarId,
+		Register: func(ctx context.Context, address string, settings *SocketListenSettings) (tlsListenRegistration, error) {
+			listener, err := self.Listen(ctx, address, settings)
+			if err != nil {
+				return nil, err
+			}
+			return listener, nil
+		},
+		Policy: NewTlsFrontConfigPolicy(sidecarId, func() *ConfigState {
+			state, err := self.configState()
+			if err != nil {
+				return nil
+			}
+			return state
+		}),
+		Secrets:   secrets,
+		IssuerUrl: self.settings.AuthUrl,
+		Clock:     self.clock,
+		Log:       self.log,
+	})
+}
+
+// An app listener: a tls/ registration whose front hands each connection it opens to the target to Accept. Its
+// net.Listener's Accept and AcceptContext answer connections that carry plaintext HTTP/1.1, the visitor's Host kept,
+// and its visitor's address never (§13.7's visitor address row: only on request, which an app listener makes none
+// of). Safe for concurrent use.
+type TlsListener struct {
+	front        *TlsFront
+	registration tlsListenRegistration
+	// each connection the front opens, waiting for an Accept: unbuffered, so the front's dial waits for one, at most
+	// its TargetDialTimeout, as a socket with no backlog would
+	accepted chan net.Conn
+	// closed once the listener has ended, by its Close or its registration's
+	closed    chan struct{}
+	closeOnce sync.Once
+	// takes the listener out of its component's, at its end
+	untrack func(listener *TlsListener)
+}
+
+var _ net.Listener = (*TlsListener)(nil)
+
+// The registration as the front owns it: closing it, whoever does, ends the listener's Accepts.
+type tlsListenerFrontListener struct {
+	tlsListenRegistration
+	listener *TlsListener
+}
+
+// See tlsFrontListener. The listener ends first, so no Accept waits on a registration that is gone.
+func (self *tlsListenerFrontListener) Close() error {
+	self.listener.end()
+	return self.tlsListenRegistration.Close()
+}
+
+// A listener running §13.7's front on registration, which it owns from here, with frontArgs' parts: everything but
+// its listener, dial and probe, which are the listener's own. untrack, when set, runs once at the listener's end. A
+// front refused leaves registration to its caller.
+func newTlsListener(ctx context.Context, frontArgs *TlsFrontArgs, registration tlsListenRegistration, untrack func(listener *TlsListener)) (*TlsListener, error) {
+	self := &TlsListener{
+		registration: registration,
+		accepted:     make(chan net.Conn),
+		closed:       make(chan struct{}),
+		untrack:      untrack,
+	}
+	settings := DefaultTlsFrontSettings()
+	if frontArgs.Settings != nil {
+		copied := *frontArgs.Settings
+		settings = &copied
+	}
+	// the target is this listener's Accept, which no probe can ask: the registration serves as it began
+	settings.TargetProbeInterval = 0
+	args := *frontArgs
+	args.Settings = settings
+	args.Listener = &tlsListenerFrontListener{tlsListenRegistration: registration, listener: self}
+	args.DialTarget = self.handOff
+	front, err := NewTlsFront(ctx, &args)
+	if err != nil {
+		return nil, err
+	}
+	self.front = front
+	return self, nil
+}
+
+// The front's dial of its target, which only an audience check's pass for one visitor's connection makes
+// (TlsFrontConn.openTarget, FI-11): one end of a pipe for the front, the other for an Accept. Waits for an Accept,
+// ctx, which the front's TargetDialTimeout bounds, or the listener's end.
+func (self *TlsListener) handOff(ctx context.Context) (net.Conn, error) {
+	frontEnd, appEnd := net.Pipe()
+	select {
+	case self.accepted <- appEnd:
+		return frontEnd, nil
+	case <-self.closed:
+		frontEnd.Close()
+		appEnd.Close()
+		return nil, net.ErrClosed
+	case <-ctx.Done():
+		frontEnd.Close()
+		appEnd.Close()
+		return nil, ctx.Err()
+	}
+}
+
+// The next visitor's connection the front hands over, or ctx's error, or net.ErrClosed once the listener has ended.
+func (self *TlsListener) AcceptContext(ctx context.Context) (net.Conn, error) {
+	select {
+	case <-self.closed:
+		return nil, net.ErrClosed
+	default:
+	}
+	select {
+	case conn := <-self.accepted:
+		return conn, nil
+	case <-self.closed:
+		return nil, net.ErrClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// See net.Listener: AcceptContext with no bound but the listener's end.
+func (self *TlsListener) Accept() (net.Conn, error) {
+	return self.AcceptContext(context.Background())
+}
+
+// See net.Listener: the registration's network and client, as ids (I-13).
+func (self *TlsListener) Addr() net.Addr {
+	return self.registration.Addr()
+}
+
+// Unlistens at once (§9.9) and ends every visitor's connection: the front's Close, which closes the registration. A
+// second Close does nothing.
+func (self *TlsListener) Close() error {
+	self.end()
+	return self.front.Close()
+}
+
+// Ends the Accepts and takes the listener out of its component's, once.
+func (self *TlsListener) end() {
+	self.closeOnce.Do(func() {
+		close(self.closed)
+		if self.untrack != nil {
+			self.untrack(self)
+		}
+	})
 }
