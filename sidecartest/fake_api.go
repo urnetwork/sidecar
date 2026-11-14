@@ -148,6 +148,8 @@ type FakeApi struct {
 	removedClientIds map[sidecar.Id]bool
 	// §7.9's log per network, fake_api_config.go's
 	configLogs map[sidecar.Id]*fakeApiConfigLog
+	// networks whose posted statements go to another api's log (RouteConfigDelta)
+	configDeltaRoutes map[sidecar.Id]fakeApiConfigDeltaRoute
 	// fake_api_exchange.go's state
 	exchange fakeApiExchangeState
 	// fake_api_core.go's state

@@ -11,11 +11,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol/bridge"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // One devices call the daemon took.
@@ -445,5 +448,129 @@ func TestDevicesSigningMethodsAreConfirmOnly(t *testing.T) {
 			}
 		}
 		client.Close()
+	}
+}
+
+// FS-98's CLI row end to end on T2: ur itself, against a real daemon hosting a real Sidecar admitted in a log the fake
+// api sequences and verifies (sidecartest.Fs98World). `ur devices` lists the member's devices; `ur devices revoke`
+// signs nothing with no terminal or on a no, and after a yes on the terminal the revocation is one entry every reader
+// applies.
+func TestUrDevicesRevokeLandsInTheLog(t *testing.T) {
+	net := sidecartest.NewNet(t.Context(), nil)
+	defer net.Close()
+	world := sidecartest.NewFs98World(t, net, nil)
+	defer world.Close()
+	admission := world.Admission()
+	memberId, first := admission.ConsentedMember("m")
+	laptop := world.AddHost("laptop", memberId, first, 0)
+	phone := admission.Device("m phone", memberId)
+	admission.AdmitDevice(first, phone, 0)
+	world.Settle()
+
+	cli, stdout, stderr := newTestUrCli(laptop.SocketPath)
+	if code := cli.main(context.Background(), []string{"ur", "devices"}); code != urExitOk {
+		t.Fatalf("ur devices: exit %d: %q", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], laptop.Device.SidecarId.String()) || !strings.Contains(lines[0], "this device") ||
+		!strings.Contains(stdout.String(), phone.SidecarId.String()) {
+		t.Fatalf("ur devices: %q", stdout.String())
+	}
+	before := admission.Tip().GetVersion()
+	args := []string{"ur", "devices", "revoke", phone.SidecarId.String()}
+	cli.stdin = strings.NewReader("yes\n")
+	if code := cli.main(context.Background(), args); code != urExitFailed {
+		t.Fatalf("with no terminal: exit %d", code)
+	}
+	tty := &testTty{lines: []string{"no"}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(context.Background(), args); code != urExitOk {
+		t.Fatalf("a no: exit %d: %q", code, stderr.String())
+	}
+	world.Settle()
+	if admission.Tip().GetVersion() != before || !admission.Admitted(phone) {
+		t.Fatalf("the log moved from %d to %d before a yes on the terminal", before, admission.Tip().GetVersion())
+	}
+	if shown := tty.written.String(); !strings.Contains(shown, "Revoke device - "+phone.SidecarId.String()+" as lost") {
+		t.Errorf("the terminal showed %q", shown)
+	}
+	// its own revocation is refused before any question
+	tty = &testTty{lines: []string{"yes"}}
+	stderr.Reset()
+	if code := cli.main(context.Background(), []string{"ur", "devices", "revoke", laptop.Device.SidecarId.String()}); code != urExitFailed ||
+		!strings.Contains(stderr.String(), "REVOKE_SELF") || tty.written.Len() != 0 {
+		t.Errorf("this device's own revocation: exit %d: %q", code, stderr.String())
+	}
+	stdout.Reset()
+	if code := cli.main(context.Background(), args); code != urExitOk {
+		t.Fatalf("a yes: exit %d: %q", code, stderr.String())
+	}
+	world.Settle()
+	if admission.Tip().GetVersion() != before+1 || admission.Admitted(phone) {
+		t.Fatalf("after a yes the tip is %d, from %d, the phone admitted %t", admission.Tip().GetVersion(), before, admission.Admitted(phone))
+	}
+	if !strings.Contains(stdout.String(), fmt.Sprintf("device %s revoked at entry %d", phone.SidecarId, before+1)) {
+		t.Errorf("the result: %q", stdout.String())
+	}
+}
+
+// FS-98's CLI row at k = 2 end to end on T2: the owner's `ur devices revoke` files the proposal and suspends the
+// phone, printing the proposal's id; another admin's `ur approve <proposal_id>` shows the proposal and, after a yes on
+// its terminal, revokes the phone.
+func TestUrApproveProposalRevokesAtK2(t *testing.T) {
+	net := sidecartest.NewNet(t.Context(), nil)
+	defer net.Close()
+	world := sidecartest.NewFs98World(t, net, nil)
+	defer world.Close()
+	admission := world.Admission()
+	owner := admission.Owner()
+	memberB := admission.AdmitMember(owner, "admin b", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	memberC := admission.AdmitMember(owner, "admin c", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	adminB, adminC := admission.Device("admin b first device", memberB), admission.Device("admin c first device", memberC)
+	admission.AdmitDevice(owner, adminB, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_INVITED))
+	admission.AdmitDevice(owner, adminC, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_INVITED))
+	laptop := world.AddHost("laptop", owner.MemberId, owner, 0)
+	desk := world.AddHost("desk", memberB, adminB, 0)
+	phone := admission.Device("phone", owner.MemberId)
+	admission.AdmitDevice(owner, phone, 0)
+	admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_ADMIN_SET, admission.AdminSet([]sidecar.Id{owner.MemberId}, []sidecar.Id{memberB, memberC}, 0)))
+	world.Settle()
+
+	cli, stdout, stderr := newTestUrCli(laptop.SocketPath)
+	tty := &testTty{lines: []string{"yes"}}
+	cli.openTty = func() (urTty, error) { return tty, nil }
+	if code := cli.main(context.Background(), []string{"ur", "devices", "revoke", phone.SidecarId.String()}); code != urExitOk {
+		t.Fatalf("ur devices revoke: exit %d: %q", code, stderr.String())
+	}
+	world.Settle()
+	_, proposalId, found := strings.Cut(stdout.String(), "ur approve ")
+	proposalId = strings.TrimSpace(proposalId)
+	if !found || len(proposalId) != 64 || !strings.Contains(tty.written.String(), "it takes 2 admins") {
+		t.Fatalf("the proposal: %q, terminal %q", stdout.String(), tty.written.String())
+	}
+	if !admission.Admitted(phone) || !admission.State().Suspended(phone.SidecarId) {
+		t.Fatal("the phone should stand admitted and suspended while the proposal waits")
+	}
+
+	deskCli, deskStdout, deskStderr := newTestUrCli(desk.SocketPath)
+	if code := deskCli.main(context.Background(), []string{"ur", "approve", proposalId}); code != urExitFailed {
+		t.Fatalf("ur approve with no terminal: exit %d", code)
+	}
+	world.Settle()
+	if !admission.Admitted(phone) {
+		t.Fatal("ur approve with no terminal revoked the phone")
+	}
+	deskTty := &testTty{lines: []string{"yes"}}
+	deskCli.openTty = func() (urTty, error) { return deskTty, nil }
+	if code := deskCli.main(context.Background(), []string{"ur", "approve", proposalId}); code != urExitOk {
+		t.Fatalf("ur approve: exit %d: %q", code, deskStderr.String())
+	}
+	world.Settle()
+	if shown := deskTty.written.String(); !strings.Contains(shown, "A proposal to revoke device - "+phone.SidecarId.String()) ||
+		!strings.Contains(shown, hex.EncodeToString(laptop.Device.SidecarId.Bytes())) || !strings.Contains(shown, "suspended while the proposal waits") {
+		t.Errorf("the terminal showed %q", shown)
+	}
+	if admission.Admitted(phone) || !strings.Contains(deskStdout.String(), "approved at entry") {
+		t.Fatalf("after the approval the phone is admitted %t: %q", admission.Admitted(phone), deskStdout.String())
 	}
 }
