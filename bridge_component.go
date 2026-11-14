@@ -904,6 +904,22 @@ func (self *BridgeComponent) raiseAlarms(alarms []BridgeAlarm) {
 	self.raisedAlarms = slices.Clone(alarms)
 }
 
+// Raises bridge_alarm for a part of the bridge the Sidecar does not run itself: a daemon's component, whose Emit this
+// is, and §17.4's shared block, which the daemon judges across its networks (BRIDGE-M6-06). sidecarId names the sidecar
+// the alarm concerns, nil for none; an alarm never names a prefix, an address or a name (I-13).
+func (self *Sidecar) RaiseBridgeAlarm(alarm SidecarBridgeAlarm, sidecarId *Id) error {
+	if alarm == "" {
+		return fmt.Errorf("%w: bridge_alarm names no reason", ErrSidecarEventInvalid)
+	}
+	event := SidecarEvent{Kind: SidecarEventBridgeAlarm, BridgeAlarm: alarm}
+	if sidecarId != nil {
+		id := *sidecarId
+		event.SidecarId = &id
+	}
+	self.emitEvent(event)
+	return nil
+}
+
 // Raises one bridge_alarm.
 func (self *BridgeComponent) emitAlarm(alarm BridgeAlarm) {
 	self.log.Warningf("[bridge]%s %s at %d: %s", self.args.NetworkId, alarm.Reason, alarm.N, alarm.Detail)

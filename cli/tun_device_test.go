@@ -426,6 +426,7 @@ func testUrTunSettings() *urTunSettings {
 	settings.LocalDelay = time.Millisecond
 	settings.LocalPollInterval = time.Hour
 	settings.SyncRetryInterval = time.Hour
+	settings.SharedBlockInterval = time.Hour
 	return settings
 }
 
@@ -1108,7 +1109,7 @@ func TestTunCommandRefusesWithNoPlatform(t *testing.T) {
 	if code := cli.main(context.Background(), []string{"ur", "tun"}); code != urExitFailed {
 		t.Fatalf("ur tun exited %d", code)
 	}
-	if !strings.Contains(stderr.String(), "Linux and WSL2") {
+	if !strings.Contains(stderr.String(), "Linux, WSL2, macOS and Windows") {
 		t.Fatalf("stderr: %s", stderr.String())
 	}
 }

@@ -15,22 +15,17 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"net/netip"
 	"os"
 	"slices"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
-// The resolver files: the system's, and systemd-resolved's list of its uplinks, which its stub's own file hides.
-const (
-	urResolvConfPath         = "/etc/resolv.conf"
-	urResolvedUplinkConfPath = "/run/systemd/resolve/resolv.conf"
-)
+// systemd-resolved's list of its uplinks, which its stub's own file hides; the system's is bridge_dns.go's.
+const urResolvedUplinkConfPath = "/run/systemd/resolve/resolv.conf"
 
 // This host's addresses: every interface's but name's, every gateway not through name, and every resolver, but
 // exclude, sorted with no repeats.
@@ -72,32 +67,6 @@ func (self *urTunLinuxSystem) LocalAddresses(name string, exclude []netip.Addr) 
 	}
 	slices.SortFunc(addresses, netip.Addr.Compare)
 	return addresses, nil
-}
-
-// The nameservers path lists, in its order; none for a file that is absent or unreadable.
-func urReadResolvConf(path string) []netip.Addr {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-	return urParseResolvConf(file)
-}
-
-// The nameserver lines' addresses, a zone kept for a link-local one.
-func urParseResolvConf(file *os.File) []netip.Addr {
-	nameservers := []netip.Addr{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 2 || fields[0] != "nameserver" {
-			continue
-		}
-		if address, err := netip.ParseAddr(fields[1]); err == nil {
-			nameservers = append(nameservers, address)
-		}
-	}
-	return nameservers
 }
 
 // Calls changed on each link, address or route message of either family until ctx ends, and once as soon as it

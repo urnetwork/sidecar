@@ -59,7 +59,7 @@ func init() {
 			"  ur tun down",
 			"  ur tun ip [<ip>] [--network=<name>]",
 		}, "\n"),
-		summary: "carry the network's private addresses through an OS tun (Linux)",
+		summary: "carry the network's private addresses through an OS tun (Linux, macOS, Windows)",
 		run:     runUrTun,
 	})
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urTunMethods)
@@ -276,6 +276,11 @@ func printUrTunStatus(cli *urCli, status *urTunStatus) {
 	}
 	if status.PreviousBlock != "" {
 		cli.printf("  draining   %s\n", status.PreviousBlock)
+	}
+	for _, withheld := range status.Withheld {
+		cli.printf("  shared     %s is network %s's on this device too, which joined it first and alone routes it here: "+
+			"this network's hosts there are not reached until an admin of either cycles one (ur bridge block cycle)\n",
+			withheld.Block, withheld.OwnerNetworkId)
 	}
 	if len(status.Addresses) == 0 {
 		cli.printf("  address    none: ur tun ip <ip> claims one\n")
