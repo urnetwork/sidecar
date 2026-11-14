@@ -499,6 +499,7 @@ func testStreamIdentityMismatch(t *testing.T, resetFirst bool) {
 			select {
 			case <-written:
 			case <-time.After(testSubprotocolAwaitTimeout):
+				t.Errorf("the write never returned")
 			}
 		}
 		return envelope
