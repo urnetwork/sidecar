@@ -166,3 +166,31 @@ func (self *ForwardingSigner) sign(purpose string, signedType bridge.SignedType,
 		Type:      uint32(signedType),
 	}, nil
 }
+
+// A signer over the Forwarder's current key set and its last compile: it signs only while the state in force is one
+// the Forwarder compiled and that state shows the key set's forwarding Delegation live for its sidecar, so a key set
+// not yet promoted, superseded or revoked signs nothing here (DESIGN-DETAILS 4.2.6's active). An error while no key
+// set is current. A host builds a new one when it promotes a key set.
+func (self *Forwarder) NewSigner(settings *ForwardingSignerSettings) (*ForwardingSigner, error) {
+	delegationId, publicKey, ok := self.args.Keys.Delegation()
+	if !ok {
+		return nil, fmt.Errorf("%w: no forwarding key set is current", ErrForwardingDelegationRefused)
+	}
+	return NewForwardingSigner(&ForwardingSignerArgs{
+		NetworkId:    self.args.NetworkId,
+		SidecarId:    self.args.SidecarId,
+		DelegationId: delegationId,
+		PublicKey:    publicKey,
+		Sign:         self.args.Keys.Sign,
+		LinkTargets: func() ([]Id, bool) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if !self.compiledInForceWithLock() || !slices.Equal(self.compiled.ForwardDelegationId, delegationId[:]) {
+				return nil, false
+			}
+			return slices.Clone(self.compiled.LinkTargets), true
+		},
+		Clock:    self.args.Clock,
+		Settings: settings,
+	})
+}
