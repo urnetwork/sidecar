@@ -437,44 +437,35 @@ Where the bytes live is the owner's answer to `smtpproof-start-key-distribution`
 
 ### 10.4 Shapes
 
-A circuit is fixed, so a part proves under a shape: pools of keystream blocks of each kind, sized ahead, that the part's records must fit. `partShapes()` lists this build's 22. A part takes the first shape of its kind and suite that its records fit (`partShapeFor`), and one that fits none is refused on both sides: the prover cannot prove it, so nothing it would open is forwarded, and the edge refuses it unverified.
+A circuit is fixed, so a part proves under a shape: pools of keystream blocks of each kind, sized ahead, that the part's records must fit (DESIGN-DETAILS 3.2.6). `ProofSettings.Shapes` lists this build's 11, each one 2^20 domain, a unit, in two families: AES-128-GCM's, which serves TLS 1.3's AES-128-GCM and both TLS 1.2 suites, and ChaCha20-Poly1305's. Only the key part's shape differs by version; every other circuit takes the version's differences, the type octet, the explicit nonce and the lengths, as public wires the edge assigns. A part's kind follows from the roles of the records it opens, which follow from their positions alone (`partKindOf`, `recordRoleAt`), and it takes the first shape of its kind and family whose pools hold its records (`partShapeFor`). One that fits none is refused on both sides: the prover cannot prove it, so nothing it would open is forwarded, and the edge refuses it unverified (DESIGN-DETAILS 3.2.5 step 12).
 
-Every record starts a fresh keystream block, so a shape counts records as well as octets. A record of c content octets takes ⌈(c + 1) / 16⌉ blocks under 1.3's AES-128-GCM, its type octet included, ⌈(c + 1) / 64⌉ under ChaCha20, and ⌈c / 16⌉ under 1.2. That makes recipient count and record length the two dimensions a class is chosen by (SMTP-M9-22): a recipient costs π2 its RCPT record's blocks and π3 its reply's, and a longer address or reply costs more blocks of the same pool. Unused blocks cost as much as used ones.
+Every record starts a fresh keystream block, so a pool counts records as well as octets. A record of c content octets takes ⌈(c + 1) / 16⌉ blocks under 1.3's AES-128-GCM, its type octet included, ⌈(c + 1) / 64⌉ under ChaCha20, and ⌈c / 16⌉ under 1.2. Unused blocks cost as much as used ones.
 
-This build has one class of each part, sized for D-SMTP-16's speed-gate send of a 4 KiB header block and 10 recipients, which `TestProductionShapesHoldTheSpeedGatesSends` holds on every leg:
+Each shape's data pools are the largest counts that keep its compiled constraints and public inputs at or under 2^20 less 10,486 (`DomainHeadroomCount`, 1%), in the order the table lists them; a client pool that holds only BDAT's command, QUIT and the end mark keeps DESIGN-DETAILS 3.2.6's count. `TestProductionShapesFillOneDomain` compiles each, holds it to that bound and, but for the key shapes, to 90% of it, and holds every public input to a constraint. Compiled with gnark v0.15.0:
 
-| Part | TLS and suite | Holds | KeySet name |
-|---|---|---|---|
-| π1 | 1.3, AES-128-GCM | an EHLO record of up to 63 octets | `kind1-v0304-s1301-client4-server0-header0-body0-localfalse` |
-| π1 | 1.3, ChaCha20 | an EHLO record of up to 63 octets | `kind1-v0304-s1303-client1-server0-header0-body0-localfalse` |
-| π2 | 1.3, AES-128-GCM | MAIL and DATA beside 14 RCPTs of up to 47 octets each, or fewer longer ones; an EHLO reply of 12 records under 32 octets, or one record of up to 383 | `kind2-v0304-s1301-client48-server24-header0-body0-localtrue` |
-| π2 | 1.3, ChaCha20 | MAIL and DATA beside 10 RCPTs of up to 63 octets each; an EHLO reply of 12 records of up to 63 octets, or one of up to 767 | `kind2-v0304-s1303-client12-server12-header0-body0-localtrue` |
-| π3, BDAT | 1.3, AES-128-GCM | BDAT and QUIT; a header block of up to 4,095 octets; the envelope's replies in 12 records under 32 octets, or one of up to 383 | `kind3-v0304-s1301-client4-server24-header256-body0-localfalse` |
-| π3, BDAT | 1.3, ChaCha20 | BDAT and QUIT; a header block of up to 4,095 octets; 12 records of replies of up to 63 octets, or one of up to 767 | `kind3-v0304-s1303-client2-server12-header64-body0-localfalse` |
-| π3, DATA | 1.3, AES-128-GCM | as BDAT's π3, with a first body part of up to 2,047 octets and DATA's end | `kind3-v0304-s1301-client4-server24-header256-body128-localfalse` |
-| π3, DATA | 1.3, ChaCha20 | as BDAT's π3, with a first body part of up to 2,047 octets and DATA's end | `kind3-v0304-s1303-client2-server12-header64-body32-localfalse` |
-| Later DATA part | 1.3, AES-128-GCM | a body part of up to 2,047 octets, then the end mark and QUIT on the last | `kind4-v0304-s1301-client2-server0-header0-body128-localfalse` |
-| Later DATA part | 1.3, ChaCha20 | a body part of up to 2,047 octets, then the end mark and QUIT on the last | `kind4-v0304-s1303-client2-server0-header0-body32-localfalse` |
-| Later DATA part over a ticket | 1.3, AES-128-GCM | the same beside one late ticket of up to 255 octets | `kind4-v0304-s1301-client2-server16-header0-body128-localfalse` |
-| Later DATA part over a ticket | 1.3, ChaCha20 | the same beside one late ticket of up to 255 octets | `kind4-v0304-s1303-client2-server4-header0-body32-localfalse` |
-| π1 | 1.2, ECDHE-RSA | an EHLO record of up to 64 octets | `kind1-v0303-sc02f-client4-server0-header0-body0-localfalse` |
-| π1 | 1.2, ECDHE-ECDSA | an EHLO record of up to 64 octets | `kind1-v0303-sc02b-client4-server0-header0-body0-localfalse` |
-| π2 | 1.2, ECDHE-RSA | MAIL and DATA beside 14 RCPTs of up to 48 octets each; an EHLO reply of 12 records of up to 32 octets, or one of up to 384 | `kind2-v0303-sc02f-client48-server24-header0-body0-localtrue` |
-| π2 | 1.2, ECDHE-ECDSA | the same | `kind2-v0303-sc02b-client48-server24-header0-body0-localtrue` |
-| π3, BDAT | 1.2, ECDHE-RSA | BDAT and QUIT; a header block of up to 4,096 octets; replies in 12 records of up to 32 octets, or one of up to 384 | `kind3-v0303-sc02f-client4-server24-header256-body0-localfalse` |
-| π3, BDAT | 1.2, ECDHE-ECDSA | the same | `kind3-v0303-sc02b-client4-server24-header256-body0-localfalse` |
-| π3, DATA | 1.2, ECDHE-RSA | as BDAT's π3, with a first body part of up to 2,048 octets and DATA's end | `kind3-v0303-sc02f-client4-server24-header256-body128-localfalse` |
-| π3, DATA | 1.2, ECDHE-ECDSA | the same | `kind3-v0303-sc02b-client4-server24-header256-body128-localfalse` |
-| Later DATA part | 1.2, ECDHE-RSA | a body part of up to 2,048 octets, then the end mark and QUIT on the last | `kind4-v0303-sc02f-client2-server0-header0-body128-localfalse` |
-| Later DATA part | 1.2, ECDHE-ECDSA | the same | `kind4-v0303-sc02b-client2-server0-header0-body128-localfalse` |
+| KeySet name | Pools, in blocks | Constraints | Public inputs | Of 2^20 | Holds (TLS 1.3; 1.2 holds one octet more a record) |
+|---|---|---|---|---|---|
+| `key-v0304-aes128gcm-c8` | client 8 | 809,966 | 1,163 | 77.4% | an EHLO record of up to 127 octets, Z1 and C |
+| `key-v0304-chacha20-c2` | client 2 | 758,011 | 1,157 | 72.4% | the same |
+| `key-v0303-aes128gcm-c8` | client 8 | 769,679 | 2,467 | 73.6% | the same, under either TLS 1.2 suite |
+| `env-aes128gcm-s40-c40` | server 40, client 40 with locals | 1,028,511 | 5,888 | 98.6% | MAIL and 12 RCPT of up to 47 octets; a reply record of 639 octets, or 40 of up to 15 |
+| `msg-aes128gcm-s17-c4-h52` | server 17, client 4, head 52 | 1,026,444 | 6,929 | 98.6% | BDAT's command and QUIT; a first header record of 831 octets; replies in a record of 271 octets, or 17 of up to 15 |
+| `hdr-aes128gcm-c2-r76` | client 2, rest 76 | 1,030,860 | 6,262 | 98.9% | a later header record of 1,215 octets; QUIT |
+| `body-aes128gcm-c2-b81` | client 2, body 81 | 1,022,521 | 6,666 | 98.2% | a body record of 1,295 octets; the end mark and QUIT |
+| `env-chacha20-s19-c20` | server 19, client 20 with locals | 1,022,120 | 11,266 | 98.6% | 20 commands of up to 63 octets; a reply record of 1,215 octets, or 19 of up to 63 |
+| `msg-chacha20-s13-c2-h19` | server 13, client 2, head 19 | 1,021,207 | 11,798 | 98.5% | BDAT's command and QUIT; a first header record of 1,215 octets; replies in a record of 831 octets, or 13 of up to 63 |
+| `hdr-chacha20-c1-r35` | client 1, rest 35 | 999,488 | 11,436 | 96.4% | a later header record of 2,239 octets; QUIT |
+| `body-chacha20-c2-b40` | client 2, body 40 | 1,015,011 | 13,233 | 98.1% | a body record of 2,559 octets; the end mark and QUIT |
 
-A shape's KeySet name spells its kind, version, suite, client, server, header and body blocks and whether its pool carries the local table; `TestSpecMdNamesEveryProductionShape` holds this table to `partShapes()`.
+`TestSpecMdNamesEveryProductionShape` holds this table to the catalog, and the table counts this build's 11. A KeySet name spells kind, version for a key shape, family and every pool, so a changed pool is another name and another key.
 
-What no class holds yet, each failing closed as above:
+Against DESIGN-DETAILS 3.2.6's table, built from compiled gadgets and estimates before these circuits existed, the compiled circuits moved three pools by a block: each msg shape holds one more server block, and AES's hdr shape one more rest block, 16 more header octets a record. No unit count of 3.2.6 or 3.4 moves.
 
-- **More recipients.** §20.4's `smtp_recipients_per_message` allows 50 on Pro and 100 on Team, one message per connection. A class for them, or a sender that splits a domain's recipients over connections, is the owner's call (section 14), with what each recipient costs in 11.2. `TestEnvelopeCircuitAcceptsOneTenAndAHundredRecipients` solves a 100-recipient π2 on a test shape, so the pool and its templates do not depend on the count.
-- **Longer replies.** An MX whose RCPT replies carry a queue or trace id writes replies of 60 to 70 octets, so under AES π3's 24 server blocks hold about 5 of them. M7's census should size this dimension.
-- **Longer header blocks.** The relation allows a header block of up to 16 KiB (reading 2), and SMTP-M9-23's plan asks for classes up to it. Z5 and its keystream cost about 900 constraints an octet under AES (11.2), so a 16 KiB header block alone is about 15M constraints, past D-SMTP-16's budgets and an 8 GB prover. A class past 4 KiB waits for the census to show such messages are sent.
+What no shape holds, each failing closed as above:
+
+- **An envelope past one group.** An env part holds MAIL and 12 RCPTs of short addresses under AES, 19 commands under ChaCha20. DESIGN-DETAILS 3.2.4's envelope groups, one env part a group, are the planner's (SMTP-M9-39); until it lands the prover sends one group, and a send whose envelope one env shape cannot hold is refused before MAIL.
+- **A reply record past the env shape's server blocks**, 639 octets under AES or 1,215 under ChaCha20, or an EHLO reply in more records than the env shape's server blocks: no shape, and the send ends before MAIL (DESIGN-DETAILS 3.5).
+- **A header block past 16,384 octets** (`HeaderBlockMaxByteCount`), which assembly refuses; and a header block whose single fields and fixed signature do not lie in its first record, which Z5 refuses (DESIGN-DETAILS 3.2.3).
 
 ## 11. Costs
 
@@ -505,9 +496,9 @@ Measured from the code with gnark v0.15.0, and held to these figures by `TestGad
 | A scan's carry (24 bits) and a blind | 1,186 | per carry, booleans included | 1,279, the same |
 | Z2-Z4, a pool block with the local table (π2's envelope) | 12,545 under AES, 25,345 under ChaCha20 | per block, about 55 an octet beyond the keystream | |
 | Z2-Z4, a pool block of literals only (π1, and π3's commands) | 11,969 under AES, 23,041 under ChaCha20 | per block, about 19 an octet beyond the keystream | |
-| Z5, the header scan with its keystream | 58,071 under AES, 33,236 under ChaCha20 | per 64 header octets, about 178 an octet beyond the keystream | well under AES's 725 an octet |
-| Z7-Z9, π2's server records with their keystream | 51,046 under AES, 26,202 under ChaCha20 | per 64 octets, about 68 an octet beyond the keystream, Z9's window included | |
-| Z7-Z8, π3's server records with their keystream | 51,302 under AES, 26,458 under ChaCha20 | per 64 octets, about 72 an octet beyond the keystream | |
+| Z5, the header block's first record with its keystream | 57,264 under AES, 32,429 under ChaCha20 | per 64 header octets, about 166 an octet beyond the keystream | well under AES's 725 an octet |
+| Z5, a later header record with its keystream | 52,513 under AES, 27,678 under ChaCha20 | per 64 header octets, about 91 an octet beyond the keystream | 90, DESIGN-DETAILS 3.2.4's prototype |
+| Z7-Z9, a part's server records with their keystream | 51,758 under AES, 26,908 under ChaCha20 | per 64 octets, about 80 an octet beyond the keystream, Z9's window and the public flags' rules included | |
 
 Some readings of these:
 
@@ -538,6 +529,8 @@ Draft 1 drew its budgets from this run and from ORIGO's own m5.large figure, 400
 Levers, none taken: a hiding commitment to the keys, proven once, so that later parts skip Z1 (saves about 1.4M of a BDAT send's constraints, but D-SMTP-22 forbids it as written, and the owner kept it so); lookups under a reviewed commitment argument (10.1, 10.2); sharing AES's first round across blocks of a record; a designated-verifier prover (Later). See section 14.
 
 ### 11.4 Whole sends, measured
+
+These measurements are of the retired catalog of 22 shapes over four domain sizes, π1 to π3 with Z1 in each, before the key commitment and unit shapes (DESIGN-DETAILS 3.2). They stand as that catalog's record and as the figures DESIGN-DETAILS 3.1 and 3.4 compare against. The eleven unit shapes' compiled sizes are 10.4's; their times, a unit each part, are SMTP-M9-32's bench on both reference machines, and `TestMeasureWholeSend` has not been run under them.
 
 `TestMeasureWholeSend` sends `testSpeedGateJob`'s messages through the real prover, gate and a `crypto/tls` MX under real Groth16 and a single-party test setup. The header block is 3,979 octets, with 10 recipients. The machine is the shared M4 Pro of 11.3, with 14 cores and 64 GiB. Wall time depends on what else it runs, so CPU time is the steadier figure. Peak memory comes from a separate process that loads one key and proves, as a prover host would.
 

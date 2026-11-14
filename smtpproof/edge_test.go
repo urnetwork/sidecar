@@ -39,7 +39,7 @@ func testGateCapture(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, 
 	t.Helper()
 	send := testRunSend(t, leg, mxSettings, settings, job)
 	testExpectOneTransaction(t, leg, send, job)
-	return &testGateFixture{leg: leg, preamble: newSessionPreamble(job.Preamble), trace: send.edge.trace, parts: send.edge.parts}
+	return &testGateFixture{leg: leg, preamble: newSessionPreamble(job.Preamble, DefaultProofSettings()), trace: send.edge.trace, parts: send.edge.parts}
 }
 
 func testBdatGateCapture(t *testing.T, leg *testTlsLeg) *testGateFixture {
@@ -161,7 +161,7 @@ func testServerHelloRecord(random []byte, suite uint16, extensions []byte) []byt
 }
 
 func testEmptyPreamble() *sessionPreamble {
-	return &sessionPreamble{}
+	return &sessionPreamble{proof: DefaultProofSettings()}
 }
 
 // E1
@@ -714,8 +714,8 @@ func TestE3CutsARecordUnequalToWhatItsPartProved(t *testing.T) {
 }
 
 func TestE3HoldsAMessageRecordBehindAnUncoveredServerRecord(t *testing.T) {
-	// a late ticket relayed after pi3's count: its records wait, are not cut, and go once the part is
-	// proven again over it
+	// a late ticket relayed after the msg part's count: its records wait, are not cut, and go once a part
+	// that opens no client record covers it (DESIGN-DETAILS 3.2.5)
 	for _, leg := range testTlsLegs() {
 		open := testOpen(t, testBdatGateCapture(t, leg), &testFixedVerifier{})
 		open.verifyThrough(t, 3)
@@ -734,12 +734,19 @@ func TestE3HoldsAMessageRecordBehindAnUncoveredServerRecord(t *testing.T) {
 		if err != nil || len(forwarded) != 0 {
 			t.Fatalf("%s: BDAT passed an uncovered server record: %d forwarded, %v", leg.name, len(forwarded), err)
 		}
-		again := *open.fixture.parts[2]
-		again.ServerRecordCount += 1
-		again.Proof = []byte("proven again")
-		forwarded, err = open.gate.VerifyPart(context.Background(), &again)
+		msg := open.fixture.parts[2]
+		cover := &sidecar.SmtpProofPart{
+			SendId:            msg.SendId,
+			Index:             4,
+			Mode:              msg.Mode,
+			FirstRecord:       msg.LastRecord + 1,
+			LastRecord:        msg.LastRecord,
+			ServerRecordCount: msg.ServerRecordCount + 1,
+			Proof:             []byte("over the ticket"),
+		}
+		forwarded, err = open.gate.VerifyPart(context.Background(), cover)
 		if err != nil || len(forwarded) != 1 || !bytes.Equal(forwarded[0], bdat) {
-			t.Fatalf("%s: %d forwarded after the part was proven again, %v", leg.name, len(forwarded), err)
+			t.Fatalf("%s: %d forwarded after a part covered the ticket, %v", leg.name, len(forwarded), err)
 		}
 	}
 }
@@ -1010,8 +1017,10 @@ func TestE3APartVerifiedBesideAnotherCannotReplaceIt(t *testing.T) {
 	}
 }
 
-func TestE3AResendBesideItsOriginalIsIdempotent(t *testing.T) {
-	// a retried RPC can overlap the call it retries, and an honest send must survive that
+func TestE3AResendBesideItsOriginalEndsTheConnection(t *testing.T) {
+	// DESIGN-DETAILS 3.2.5 step 14: two parts that verified against one state cannot both stand, and the
+	// second ends the connection, even an exact resend; a retry is a new connection (3.5). A resend that
+	// arrives once its original has landed is a no-op (step 3), as TestE3ResendingAPartIsIdempotent shows
 	for _, leg := range testTlsLegs() {
 		fixture := testBdatGateCapture(t, leg)
 		open, verifier, done := testHeldPart(t, fixture, fixture.parts[2])
@@ -1019,9 +1028,7 @@ func TestE3AResendBesideItsOriginalIsIdempotent(t *testing.T) {
 			t.Fatalf("%s: %v", leg.name, err)
 		}
 		close(verifier.release)
-		if err := <-done; err != nil {
-			t.Errorf("%s: %v", leg.name, err)
-		}
+		testExpectCheck(t, leg.name, <-done, checkE3)
 		if len(open.gate.parts) != 3 {
 			t.Errorf("%s: %d parts", leg.name, len(open.gate.parts))
 		}
@@ -1079,14 +1086,16 @@ func TestE3RefusesDataOctetsPastTheDeclaredCount(t *testing.T) {
 		short.messageByteCount -= 1
 		fixture.preamble = &short
 		open := testOpen(t, fixture, &testFixedVerifier{})
-		open.verifyThrough(t, 2)
-		for uint64(len(open.gate.serverRecords)) < fixture.parts[2].ServerRecordCount {
+		// the parts before the last carry fewer octets than the count; the last reaches past it
+		last := len(fixture.parts)
+		open.verifyThrough(t, uint32(last-1))
+		for uint64(len(open.gate.serverRecords)) < fixture.parts[last-1].ServerRecordCount {
 			if err := open.gate.ServerRecord(open.server[0]); err != nil {
 				t.Fatal(err)
 			}
 			open.server = open.server[1:]
 		}
-		_, err := open.gate.VerifyPart(context.Background(), fixture.parts[2])
+		_, err := open.gate.VerifyPart(context.Background(), fixture.parts[last-1])
 		testExpectCheck(t, leg.name, err, checkE3)
 	}
 }

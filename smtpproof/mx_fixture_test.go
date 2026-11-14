@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -66,7 +67,7 @@ func testRunSendToMx(t *testing.T, suites []uint16, mx sidecartest.MxServer, set
 	testMxPreTls(t, edgeMxConn)
 	backend := newTestWitnessBackend()
 	edge := &testEdge{
-		session:     newEdgeSession(defaultEdgeSettings(), newSessionPreamble(job.Preamble), job.Preamble.MxHost, backend),
+		session:     newEdgeSession(defaultEdgeSettings(), newSessionPreamble(job.Preamble, DefaultProofSettings()), job.Preamble.MxHost, backend),
 		sidecarConn: edgeSidecarConn,
 		mxConn:      edgeMxConn,
 	}
@@ -199,7 +200,9 @@ func TestTlsClientSendsPastALateTicket(t *testing.T) {
 // read as one keyword, so the send takes DATA (SPEC.md reading 17), and goes through.
 func TestTlsClientSendsThroughRepliesSplitAcrossRecords(t *testing.T) {
 	for _, leg := range testMxLegs()[:2] {
-		mx, err := sidecartest.NewRecordMx(testMxHost, nil, &sidecartest.RecordMxSettings{Version: leg.version, Suite: leg.suite, SplitRepliesAt: 5})
+		// each reply in records of 16 octets: the EHLO reply then takes seven, which every env shape's
+		// server blocks hold
+		mx, err := sidecartest.NewRecordMx(testMxHost, nil, &sidecartest.RecordMxSettings{Version: leg.version, Suite: leg.suite, SplitRepliesAt: 16})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,6 +212,25 @@ func TestTlsClientSendsThroughRepliesSplitAcrossRecords(t *testing.T) {
 		if send.result.Mode != partModeData {
 			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
 		}
+	}
+}
+
+// An EHLO reply in more records than the env shape's server blocks has no shape, so the send ends before
+// MAIL with no effect (DESIGN-DETAILS 3.5): ChaCha20's env shape holds 19 records, and records of 5
+// octets make the reply 21.
+func TestTlsClientEndsBeforeMailWhereNoShapeHoldsTheEhloReply(t *testing.T) {
+	leg := testMxLegs()[1]
+	mx, err := sidecartest.NewRecordMx(testMxHost, nil, &sidecartest.RecordMxSettings{Version: leg.version, Suite: leg.suite, SplitRepliesAt: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := testJob("one line\r\n", "bob")
+	send := testRunSendToMx(t, leg.suites, mx, DefaultProverSettings(), job)
+	if send.err == nil || !errors.Is(send.err, errNoCircuit) {
+		t.Errorf("%s: %+v, %v", leg.name, send.result, send.err)
+	}
+	if transactions := mx.Transactions(); len(transactions) != 0 {
+		t.Errorf("%s: %d transactions", leg.name, len(transactions))
 	}
 }
 

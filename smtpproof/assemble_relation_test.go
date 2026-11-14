@@ -73,6 +73,7 @@ func TestAssembledMessagesSatisfyTheRelation(t *testing.T) {
 			t.Fatal(err)
 		}
 		preamble := &sessionPreamble{
+			proof:            DefaultProofSettings(),
 			recipientDomain:  "shopping.example",
 			recipientCount:   1,
 			messageId:        wire.MessageId(),

@@ -11,10 +11,8 @@ import (
 // and a deployment never changes one on one side alone: a prover and a verifier each carry a value of
 // DefaultProofSettings.
 //
-// This is SMTP-M9-37's first step. The catalog, headerSplit and recordRoleAt read these settings; the
-// landed shapes (partShapes) and the constants circuit_message.go, circuit_replies.go and relation.go still
-// hold are replaced by them when the unit shapes' circuits land, and until then nothing proves under this
-// catalog.
+// The catalog's circuits are partShape's (circuit_part.go), each a 2^20 domain, a unit; prover and edge
+// both take a part's shape from it by partShapeFor.
 
 // A shape's kind, as its KeySet name spells it (DESIGN-DETAILS 3.2.6).
 type ShapeKind string
@@ -107,7 +105,10 @@ func (self *ShapeSettings) recordContentBytes(blocks int, version uint16) int {
 
 type ProofSettings struct {
 	// The catalog of DESIGN-DETAILS 3.2.6, in the order a part takes the first of its kind and family
-	// that holds it. Set only here; every shape fills one domain.
+	// that holds it. Set only here; every shape fills one domain by the fill rule, each data pool the
+	// largest count that keeps the compiled constraints and public inputs at or under DomainSize less
+	// DomainHeadroomCount, in the table's pool order; a client pool that holds only BDAT's command, QUIT
+	// and the end mark keeps the table's count. SPEC.md 10.4 has the compiled figures.
 	Shapes []*ShapeSettings
 	// The points of the domain every shape proves over: 2^20.
 	DomainSize int
@@ -148,11 +149,11 @@ func DefaultProofSettings() *ProofSettings {
 			{Kind: ShapeKindKey, Family: ShapeFamilyChacha20, Version: tlsVersion13, ClientBlocks: 2},
 			{Kind: ShapeKindKey, Family: ShapeFamilyAes128Gcm, Version: tlsVersion12, ClientBlocks: 8},
 			{Kind: ShapeKindEnvelope, Family: ShapeFamilyAes128Gcm, ServerBlocks: 40, ClientBlocks: 40, Locals: true},
-			{Kind: ShapeKindMessage, Family: ShapeFamilyAes128Gcm, ServerBlocks: 16, ClientBlocks: 4, HeadBlocks: 52},
-			{Kind: ShapeKindHeader, Family: ShapeFamilyAes128Gcm, ClientBlocks: 2, RestBlocks: 75},
+			{Kind: ShapeKindMessage, Family: ShapeFamilyAes128Gcm, ServerBlocks: 17, ClientBlocks: 4, HeadBlocks: 52},
+			{Kind: ShapeKindHeader, Family: ShapeFamilyAes128Gcm, ClientBlocks: 2, RestBlocks: 76},
 			{Kind: ShapeKindBody, Family: ShapeFamilyAes128Gcm, ClientBlocks: 2, BodyBlocks: 81},
 			{Kind: ShapeKindEnvelope, Family: ShapeFamilyChacha20, ServerBlocks: 19, ClientBlocks: 20, Locals: true},
-			{Kind: ShapeKindMessage, Family: ShapeFamilyChacha20, ServerBlocks: 12, ClientBlocks: 2, HeadBlocks: 19},
+			{Kind: ShapeKindMessage, Family: ShapeFamilyChacha20, ServerBlocks: 13, ClientBlocks: 2, HeadBlocks: 19},
 			{Kind: ShapeKindHeader, Family: ShapeFamilyChacha20, ClientBlocks: 1, RestBlocks: 35},
 			{Kind: ShapeKindBody, Family: ShapeFamilyChacha20, ClientBlocks: 2, BodyBlocks: 40},
 		},

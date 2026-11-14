@@ -64,11 +64,7 @@ const (
 	preambleFlagRequireTls uint32 = 2
 	preambleFlagBurner     uint32 = 4
 
-	localMaxBytes = 64
-	// RFC 5321 §4.5.3.1.2 and RFC 1035 §2.3.4.
-	domainMaxBytes = 255
-	labelMaxBytes  = 63
-	// What every 1.3 server record after Finished holds as its first octet if it is a ticket.
+	// What every 1.3 record holds after its content: its inner type octet.
 	tlsInnerTypeBytes = 1
 
 	// X-UR-Ref's bytes (§14.6, plan-SMTP-small-readings #3): the version, then lowercase unpadded
@@ -141,8 +137,10 @@ const (
 	keywordChunking        = "chunking"
 )
 
-// The declared and issued values every part of a connection shares (SPEC.md section 5).
+// The declared and issued values every part of a connection shares (SPEC.md section 5), and the
+// settings their forms and every template are checked against.
 type sessionPreamble struct {
+	proof            *ProofSettings
 	recipientDomain  string
 	recipientCount   uint32
 	messageId        string
@@ -157,13 +155,14 @@ type sessionPreamble struct {
 }
 
 // Whether a name is RFC 5321's Domain: labels of letters, digits and hyphens, with a letter or digit
-// at each end, so that nothing in it can close a path or end a line.
-func domainForm(name string) bool {
-	if name == "" || domainMaxBytes < len(name) {
+// at each end, so that nothing in it can close a path or end a line. RFC 5321 §4.5.3.1.2 and RFC 1035
+// §2.3.4 bound the name and each label (ProofSettings).
+func domainForm(proof *ProofSettings, name string) bool {
+	if name == "" || proof.DomainMaxByteCount < len(name) {
 		return false
 	}
 	for label := range strings.SplitSeq(name, ".") {
-		if label == "" || labelMaxBytes < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || proof.LabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := range len(label) {
@@ -180,8 +179,14 @@ func domainForm(name string) bool {
 // the circuit proves a record equals it, so a declared value holding the end of a path or a line
 // would have the proof vouch for a command of the sidecar's own.
 func checkSessionPreamble(preamble *sessionPreamble) error {
+	if preamble.proof == nil {
+		return errors.New("preamble has no settings to check it by")
+	}
 	if preamble.recipientCount == 0 {
 		return errors.New("preamble declares no recipient")
+	}
+	if uint32(preamble.proof.RecipientMaxCount) < preamble.recipientCount {
+		return fmt.Errorf("preamble declares %d recipients, more than a connection holds", preamble.recipientCount)
 	}
 	// without its angle brackets: one @, with a run of the local set on either side
 	messageIdForm := func(value string) bool {
@@ -202,11 +207,11 @@ func checkSessionPreamble(preamble *sessionPreamble) error {
 		name string
 		ok   bool
 	}{
-		{name: "recipient_domain", ok: domainForm(preamble.recipientDomain)},
-		{name: "header_from_domain", ok: domainForm(preamble.headerFromDomain)},
-		{name: "dkim_selector", ok: domainForm(preamble.dkimSelector)},
-		{name: "envelope_domain", ok: domainForm(preamble.envelopeDomain)},
-		{name: "helo_name", ok: domainForm(preamble.heloName)},
+		{name: "recipient_domain", ok: domainForm(preamble.proof, preamble.recipientDomain)},
+		{name: "header_from_domain", ok: domainForm(preamble.proof, preamble.headerFromDomain)},
+		{name: "dkim_selector", ok: domainForm(preamble.proof, preamble.dkimSelector)},
+		{name: "envelope_domain", ok: domainForm(preamble.proof, preamble.envelopeDomain)},
+		{name: "helo_name", ok: domainForm(preamble.proof, preamble.heloName)},
 		{name: "message_id", ok: messageIdForm(preamble.messageId)},
 		// the edge issues both, so these check the edge itself; their exact forms keep each line's
 		// length fixed before the mode is known (plan-SMTP-preamble-byte-count)
@@ -303,10 +308,37 @@ type partStatement struct {
 	// The count this part's server records start from, and the count it reaches.
 	previousServerRecordCount uint64
 	serverRecordCount         uint64
+	// The replies this part's server records hold (Z8), and the replies the parts before it proved.
+	replyCount    uint32
+	repliesProven uint32
+	// k: the client records the header block takes, as the part that opens its first record names it; 0
+	// before that part.
+	headerRecordCount uint32
+	// The gate's carry, which a hdr or body part opens to the state it starts from, never a value the
+	// part carries; and the part's own, of the state it leaves, on a part that opens a header or body
+	// record (DESIGN-DETAILS 3.2.4). 64 octets each.
+	carryIn  []byte
+	carryOut []byte
 	// Ciphertext of each client record the part opens, in sequence order.
 	clientRecords []*partRecord
 	// Each server record past previousServerRecordCount, in sequence order.
 	serverRecords []*partRecord
+}
+
+// Part 2 alone covers the post-TLS EHLO reply, every line of it coded 250 (Z8).
+func (self *partStatement) ehloRule() bool {
+	return self.index == 2
+}
+
+// Part 2 names the mode, and in BDAT mode its EHLO reply offers CHUNKING (Z9).
+func (self *partStatement) requireChunking() bool {
+	return self.index == 2 && self.mode == partModeBdat
+}
+
+// In DATA mode the replies that complete the envelope's, 3 + R with the EHLO reply's, end in 354 (Z8).
+func (self *partStatement) last354() bool {
+	want := 3 + uint64(self.session.preamble.recipientCount)
+	return self.mode == partModeData && 0 < self.replyCount && uint64(self.repliesProven)+uint64(self.replyCount) == want
 }
 
 // A part's private witness.
@@ -322,6 +354,11 @@ type partWitness struct {
 	serverIv  []byte
 	// rho: C's blind, drawn once for the connection (DESIGN-DETAILS 3.2.2).
 	keyBlind *big.Int
+	// The state a hdr or body part starts from, which the gate's carry opens to under carryInBlind, and
+	// the blind of the part's own carry. Each blind is drawn once a carry.
+	carryInState  scanState
+	carryInBlind  *big.Int
+	carryOutBlind *big.Int
 
 	// Plaintext of each client record the part opens: in 1.3 the inner plaintext, type octet included.
 	clientPlaintexts [][]byte
@@ -344,67 +381,150 @@ const (
 	recordRoleQuit
 )
 
-// The role of each client record a part opens, from public values alone. A part whose record count
-// does not fit its index has no roles, and so no satisfying witness.
+// The first application record's sequence number in each direction: 0 in TLS 1.3, and 1 in 1.2, whose
+// Finished took 0.
+func firstApplicationSeq(version uint16) uint64 {
+	if version == tlsVersion12 {
+		return 1
+	}
+	return 0
+}
+
+// The role of each client record a part opens, by its position alone (DESIGN-DETAILS 3.2.5): the edge
+// assigns every template with no word from the prover but k. On the last part the final record is QUIT
+// and, in DATA mode, the one before it the end mark; each sits where the message's body does, past the
+// header block.
 func partRoles(statement *partStatement) ([]recordRole, error) {
-	recordCount := len(statement.clientRecords)
 	preamble := statement.session.preamble
 	// BDAT with no RCPT draws a refusal, and an MX that then reads the chunk as commands would run an
 	// unopened body, so a transaction holds a recipient whatever else its statement says
 	if preamble.recipientCount == 0 {
 		return nil, errors.New("a transaction names at least one recipient")
 	}
-	switch {
-	case statement.index == 1:
-		if recordCount != 1 {
-			return nil, errors.New("pi1 opens exactly the EHLO record")
+	first := firstApplicationSeq(statement.session.version)
+	count := len(statement.clientRecords)
+	roles := make([]recordRole, count)
+	for i, record := range statement.clientRecords {
+		if record.seq < first {
+			return nil, fmt.Errorf("record %d precedes the first application record", record.seq)
 		}
-		return []recordRole{recordRoleEhlo}, nil
-	case statement.index == 2:
-		// compared before anything is built: the count is a preamble's, which a sidecar wrote
-		want := 1 + uint64(preamble.recipientCount)
-		if statement.mode == partModeData {
-			want += 1
+		position, err := recordRoleAt(record.seq-first, preamble.recipientCount, statement.mode, statement.headerRecordCount)
+		if err != nil {
+			return nil, err
 		}
-		if uint64(recordCount) != want {
-			return nil, fmt.Errorf("pi2 opens %d records, want %d", recordCount, want)
-		}
-		roles := make([]recordRole, 0, recordCount)
-		roles = append(roles, recordRoleMail)
-		for range preamble.recipientCount {
-			roles = append(roles, recordRoleRcpt)
-		}
-		if statement.mode == partModeData {
-			roles = append(roles, recordRoleData)
-		}
-		return roles, nil
-	case statement.index == 3 && statement.mode == partModeBdat:
-		if recordCount != 3 || !statement.last {
-			return nil, errors.New("pi3 in BDAT mode opens BDAT, the header block and QUIT, and is last")
-		}
-		return []recordRole{recordRoleBdat, recordRoleHeaderBlock, recordRoleQuit}, nil
-	case 3 <= statement.index && statement.mode == partModeData:
-		if recordCount == 0 {
-			return nil, errors.New("a DATA part opens at least one record")
-		}
-		roles := make([]recordRole, recordCount)
-		for i := range roles {
-			roles[i] = recordRoleBody
-		}
-		if statement.index == 3 {
-			roles[0] = recordRoleHeaderBlock
-		}
-		if statement.last {
-			if recordCount < 2 || (statement.index == 3 && recordCount < 3) {
-				return nil, errors.New("the last DATA part ends with the end mark and QUIT")
+		switch {
+		case statement.last && i == count-1:
+			if position != recordRoleBody {
+				return nil, errors.New("QUIT before the message's body")
 			}
-			roles[recordCount-2] = recordRoleEndMark
-			roles[recordCount-1] = recordRoleQuit
+			roles[i] = recordRoleQuit
+		case statement.last && statement.mode == partModeData && i == count-2:
+			if position != recordRoleBody {
+				return nil, errors.New("the end mark before the message's body")
+			}
+			roles[i] = recordRoleEndMark
+		default:
+			roles[i] = position
 		}
-		return roles, nil
-	default:
-		return nil, fmt.Errorf("part %d has no shape in mode %d", statement.index, statement.mode)
 	}
+	return roles, nil
+}
+
+// A header record's ordinal in the header block, from 1.
+func headerOrdinal(statement *partStatement, seq uint64) int {
+	offset := seq - firstApplicationSeq(statement.session.version)
+	return int(offset - 2 - uint64(statement.session.preamble.recipientCount))
+}
+
+// A part's kind by what it opens (DESIGN-DETAILS 3.2.5 step 8). Part 1 opens EHLO. Any other part opens
+// records of one kind: envelope commands, or none, is env; header record 1, after BDAT's command in BDAT
+// mode, is msg; a later header record is hdr; a body record, or an empty body's end mark, is body. A part
+// opens at most one header or body record. QUIT rides the last part of the three message kinds: in BDAT
+// mode the one that opens the header block's last record, which must, and in DATA mode a body part after
+// the end mark.
+func partKindOf(statement *partStatement, roles []recordRole) (partKind, error) {
+	if statement.index == 1 {
+		if len(roles) != 1 || roles[0] != recordRoleEhlo {
+			return 0, errors.New("the key part opens exactly the EHLO record")
+		}
+		return partKindKey, nil
+	}
+	kind := partKind(0)
+	records := 0
+	ordinal := 0
+	bdat := false
+	endMark := false
+	quit := false
+	for i, role := range roles {
+		var roleKind partKind
+		switch role {
+		case recordRoleMail, recordRoleRcpt, recordRoleData:
+			roleKind = partKindEnvelope
+		case recordRoleBdat:
+			roleKind = partKindMessage
+			bdat = true
+		case recordRoleHeaderBlock:
+			records += 1
+			ordinal = headerOrdinal(statement, statement.clientRecords[i].seq)
+			roleKind = partKindHeader
+			if ordinal == 1 {
+				roleKind = partKindMessage
+			}
+		case recordRoleBody:
+			records += 1
+			roleKind = partKindBody
+		case recordRoleEndMark:
+			endMark = true
+			roleKind = partKindBody
+		case recordRoleQuit:
+			quit = true
+			continue
+		default:
+			return 0, fmt.Errorf("a later part opens a record of role %d", role)
+		}
+		if kind != 0 && kind != roleKind {
+			return 0, errors.New("a part opens records of more than one kind")
+		}
+		kind = roleKind
+	}
+	if kind == 0 {
+		if quit {
+			return 0, errors.New("QUIT rides a message part")
+		}
+		// a part that opens no client record covers server records alone
+		return partKindEnvelope, nil
+	}
+	if 1 < records {
+		return 0, errors.New("a part opens at most one header or body record")
+	}
+	headerLast := ordinal != 0 && ordinal == int(statement.headerRecordCount)
+	switch kind {
+	case partKindEnvelope:
+		if quit {
+			return 0, errors.New("QUIT rides a message part")
+		}
+	case partKindMessage:
+		if records != 1 {
+			return 0, errors.New("BDAT's command is opened with the header block's first record")
+		}
+		if statement.mode == partModeBdat && (!bdat || roles[0] != recordRoleBdat) {
+			return 0, errors.New("in BDAT mode the header block's first record follows BDAT's command in its part")
+		}
+	case partKindBody:
+		if statement.mode != partModeData {
+			return 0, errors.New("body records are opened in DATA mode alone")
+		}
+		if records == 0 && !endMark {
+			return 0, errors.New("a body part opens a body record or the end mark")
+		}
+	}
+	if statement.mode == partModeBdat && (kind == partKindMessage || kind == partKindHeader) && headerLast != quit {
+		return 0, errors.New("in BDAT mode the part that opens the header block's last record opens QUIT, and no other")
+	}
+	if statement.mode == partModeData && quit && !endMark {
+		return 0, errors.New("in DATA mode QUIT follows the end mark")
+	}
+	return kind, nil
 }
 
 // Whether an octet may appear in a path's local part or a phrase (SPEC.md 4.2). This is RFC 5321's
@@ -663,10 +783,10 @@ func templateOf(literal string) []templateOctet {
 }
 
 // prefix, then a local part filling the record, then suffix. No template exists if the record's
-// length leaves the local part outside 1 to 64 octets.
-func localTemplate(contentBytes int, prefix string, suffix string) ([]templateOctet, error) {
+// length leaves the local part outside 1 to LocalMaxByteCount octets.
+func localTemplate(proof *ProofSettings, contentBytes int, prefix string, suffix string) ([]templateOctet, error) {
 	localBytes := contentBytes - len(prefix) - len(suffix)
-	if localBytes < 1 || localMaxBytes < localBytes {
+	if localBytes < 1 || proof.LocalMaxByteCount < localBytes {
 		return nil, fmt.Errorf("a %d-octet record leaves %d octets for a local part", contentBytes, localBytes)
 	}
 	template := templateOf(prefix)
@@ -693,9 +813,9 @@ func commandTemplate(role recordRole, preamble *sessionPreamble, contentBytes in
 		if preamble.flags&preambleFlagRequireTls != 0 {
 			suffix += literalRequireTls
 		}
-		return localTemplate(contentBytes, literalMailPrefix, suffix+literalCrlf)
+		return localTemplate(preamble.proof, contentBytes, literalMailPrefix, suffix+literalCrlf)
 	case recordRoleRcpt:
-		return localTemplate(contentBytes, literalRcptPrefix, "@"+preamble.recipientDomain+">"+literalCrlf)
+		return localTemplate(preamble.proof, contentBytes, literalRcptPrefix, "@"+preamble.recipientDomain+">"+literalCrlf)
 	case recordRoleBdat:
 		return literal(literalBdatPrefix + strconv.FormatUint(preamble.messageByteCount, 10) + literalBdatSuffix)
 	case recordRoleData:
@@ -729,10 +849,14 @@ func templateMatches(template []templateOctet, content []byte) error {
 	return nil
 }
 
-// Z4: the opened records are the envelope's commands.
+// Z4: the opened records are the envelope's commands, each where its position puts it, in a part of one
+// kind (DESIGN-DETAILS 3.2.5).
 func relationZ4(statement *partStatement, witness *partWitness) error {
 	roles, err := partRoles(statement)
 	if err != nil {
+		return err
+	}
+	if _, err := partKindOf(statement, roles); err != nil {
 		return err
 	}
 	if len(roles) != len(witness.clientPlaintexts) {
@@ -887,7 +1011,7 @@ func checkFromLine(line []byte, preamble *sessionPreamble) error {
 		return errors.New("from has no angle address")
 	}
 	local := value[angle+1:]
-	if len(local) < 1 || localMaxBytes < len(local) {
+	if len(local) < 1 || preamble.proof.LocalMaxByteCount < len(local) {
 		return errors.New("from's local part has the wrong length")
 	}
 	for _, octet := range local {
@@ -908,27 +1032,330 @@ func checkFromLine(line []byte, preamble *sessionPreamble) error {
 	return nil
 }
 
-// Z5: the header block.
-func relationZ5(statement *partStatement, witness *partWitness) error {
-	roles, err := partRoles(statement)
+// Whether a carry on the wire opens to state under blind.
+func checkCarryOpens(encoded []byte, state scanState, blind *big.Int) error {
+	want, err := decodeCommitment(encoded)
 	if err != nil {
-		// the part's shape is Z4's to refuse
-		return nil
+		return err
 	}
-	session := statement.session
-	for i, role := range roles {
-		if role != recordRoleHeaderBlock {
-			continue
-		}
-		if len(witness.clientPlaintexts) <= i {
-			return errors.New("witness holds no header block")
-		}
-		return checkHeaderBlock(clientContent(session.version, witness.clientPlaintexts[i]), session.preamble)
+	if blind == nil {
+		return errors.New("no blind")
+	}
+	commitment, err := commitCarry(uint32(state), blind)
+	if err != nil {
+		return err
+	}
+	if !commitment.Equal(&want) {
+		return errors.New("the state and blind do not open the carry")
 	}
 	return nil
 }
 
-// Z6's scan of one DATA record: whole lines, no bare CR or LF, no line that is exactly ".".
+// Whether two octets agree as Z5 compares a field name: bit 5 forced on the record's octet, which
+// lowercases a letter and keeps each octet rule 1 and H4 let a name hold. The literal's names are
+// lowercase already.
+func scanOctetMatches(octet byte, want byte, folded bool) bool {
+	if folded {
+		return octet|0x20 == want
+	}
+	return octet == want
+}
+
+// Whether content from start holds a literal's first count octets, every one inside the content.
+func scanMatches(content []byte, start int, literal scanLiteral, count int) bool {
+	if len(content) < start+count {
+		return false
+	}
+	for j := range count {
+		if !scanOctetMatches(content[start+j], literal.octets[j], literal.folded) {
+			return false
+		}
+	}
+	return true
+}
+
+// Z5 over one header record, DESIGN-DETAILS 3.2.4's H1 to H13, from the state in; the state it leaves.
+// first is the header block's first record and last its last. The circuit computes the same state from
+// the same octets, octet for octet, so a carry this commits to is the one the circuit opens.
+func scanHeaderRecord(preamble *sessionPreamble, content []byte, in scanState, first bool, last bool) (scanState, error) {
+	n := len(content)
+	if n == 0 {
+		return 0, errors.New("an empty header record")
+	}
+	// H13: the block ends in CR LF CR LF, the last two outside Field
+	if last && !bytes.HasSuffix(content, []byte(literalCrlf+literalCrlf)) {
+		return 0, errors.New("the header block does not end in CRLF CRLF")
+	}
+	field := func(i int) bool {
+		return !last || i < n-len(literalCrlf)
+	}
+	bulk := preamble.flags&preambleFlagBulk != 0
+	isWsp := func(octet byte) bool {
+		return octet == ' ' || octet == '\t'
+	}
+	for i, octet := range content {
+		// H1: HTAB, SP through ~, CR or LF
+		switch {
+		case octet == '\t', ' ' <= octet && octet <= '~', octet == '\r', octet == '\n':
+		default:
+			return 0, fmt.Errorf("octet %#x in the header block", octet)
+		}
+		// H2: LF exactly after CR, across the boundary by in's pos
+		previousCr := in.pos() == scanPosCr
+		if 0 < i {
+			previousCr = content[i-1] == '\r'
+		}
+		if (octet == '\n') != previousCr {
+			return 0, errors.New("a bare CR or LF")
+		}
+	}
+	// H6, and H8 in the first record: no continuation after a single field or at the block's start
+	if (in.single() || first) && isWsp(content[0]) {
+		return 0, errors.New("a continuation where a field must start")
+	}
+
+	// H3 and H4
+	lineStart := make([]bool, n)
+	nameStart := make([]bool, n)
+	inName := in.name()
+	for i, octet := range content {
+		previousLf := in.pos() == scanPosLf
+		if 0 < i {
+			previousLf = content[i-1] == '\n'
+		}
+		lineStart[i] = field(i) && previousLf
+		if lineStart[i] && octet == '\r' {
+			return 0, errors.New("an empty line before the end of the header block")
+		}
+		nameStart[i] = lineStart[i] && !isWsp(octet)
+		// an MX reading DATA deletes a line's leading dot (RFC 5321 §4.5.2), so what Z5 read as some other
+		// field would reach it as the field after the dot
+		if nameStart[i] && (octet == ':' || octet == '.') {
+			return 0, errors.New("a field name starts with a colon or a dot")
+		}
+		naming := inName || nameStart[i]
+		if naming && (isWsp(octet) || octet == '\r') {
+			return 0, errors.New("a field name holds SP, HTAB or CR before its colon")
+		}
+		inName = naming && octet != ':'
+	}
+
+	// H5: each literal at each name start, whole inside the record or running off its end
+	var full, partial [scanLiteralCount][]bool
+	for literal, entry := range scanLiterals {
+		full[literal] = make([]bool, n)
+		partial[literal] = make([]bool, n)
+		for i := range n {
+			if !nameStart[i] {
+				continue
+			}
+			if i+len(entry.octets) <= n {
+				full[literal][i] = scanMatches(content, i, entry, len(entry.octets))
+			} else {
+				partial[literal][i] = scanMatches(content, i, entry, n-i)
+			}
+		}
+	}
+
+	single := false
+	if first {
+		var err error
+		if single, err = scanFirstHeaderRecord(preamble, content, &full, bulk); err != nil {
+			return 0, err
+		}
+	} else {
+		// H12: no literal whole in a later record, and none crossing in from the record before
+		for literal, entry := range scanLiterals {
+			if !scanLiteralCounts(literal, bulk) {
+				continue
+			}
+			for i := range n {
+				if full[literal][i] {
+					return 0, fmt.Errorf("%q begins a line past the header block's first record", entry.octets)
+				}
+			}
+			run := in.run()
+			if in.prefix(literal) && 1 <= run && run < len(entry.octets) {
+				rest := scanLiteral{octets: entry.octets[run:], folded: entry.folded}
+				if scanMatches(content, 0, rest, len(rest.octets)) {
+					return 0, fmt.Errorf("%q crosses into a later header record", entry.octets)
+				}
+			}
+		}
+	}
+
+	// H7: the state after the last octet
+	pos := uint32(scanPosLine)
+	switch content[n-1] {
+	case '\r':
+		pos = scanPosCr
+	case '\n':
+		pos = scanPosLf
+	}
+	run := 0
+	if pos != scanPosLf {
+		lastStart := -1
+		for i := range n {
+			if lineStart[i] {
+				lastStart = i
+			}
+		}
+		switch {
+		case 0 <= lastStart && nameStart[lastStart]:
+			run = min(n-lastStart, scanRunMore)
+		case lastStart < 0 && in.run() != 0:
+			// a line that began in an earlier record and is no continuation
+			run = scanRunMore
+		}
+	}
+	var prefix [scanLiteralCount]bool
+	for literal := range scanLiterals {
+		for i := range n {
+			if partial[literal][i] {
+				prefix[literal] = true
+			}
+		}
+	}
+	return newScanState(pos, inName, run, prefix, single), nil
+}
+
+// H9 to H11 over the header block's first record: each single field and the fixed signature's prefix
+// begins exactly one of its lines (the one-click field on a BULK message alone), each in its literal
+// form, every such line whole inside the record and uncontinued there. Returns whether a single field's
+// line ends at the record's last octet.
+func scanFirstHeaderRecord(preamble *sessionPreamble, content []byte, full *[scanLiteralCount][]bool, bulk bool) (bool, error) {
+	n := len(content)
+	for literal, entry := range scanLiterals {
+		if !scanLiteralCounts(literal, bulk) {
+			continue
+		}
+		count := 0
+		for i := range n {
+			if full[literal][i] {
+				count += 1
+			}
+		}
+		if count != 1 {
+			return false, fmt.Errorf("%d lines begin %q in the header block's first record, want 1", count, entry.octets)
+		}
+	}
+	// H10: each literal form whole inside the record, at its one position
+	at := func(literal int) int {
+		for i := range n {
+			if full[literal][i] {
+				return i
+			}
+		}
+		return -1
+	}
+	exact := func(start int, literal string) error {
+		if start < 0 || n < start+len(literal) || string(content[start:start+len(literal)]) != literal {
+			return fmt.Errorf("%q is not in its literal form inside the header block's first record", strings.TrimSuffix(literal, literalCrlf))
+		}
+		return nil
+	}
+	forms := []struct {
+		literal int
+		form    string
+	}{
+		{literal: scanLiteralMessageId, form: literalMessageIdPrefix + preamble.messageId + ">" + literalCrlf},
+		{literal: scanLiteralXUrRef, form: literalXUrRefPrefix + preamble.xUrRef + literalCrlf},
+		{literal: scanLiteralFeedbackId, form: literalFeedbackPrefix + preamble.feedbackId + literalCrlf},
+	}
+	if bulk {
+		forms = append(forms, struct {
+			literal int
+			form    string
+		}{literal: scanLiteralUnsubscribe, form: literalUnsubscribePost + literalCrlf})
+	}
+	for _, entry := range forms {
+		if err := exact(at(entry.literal), entry.form); err != nil {
+			return false, err
+		}
+	}
+	if err := exact(at(scanLiteralDkim)+len(literalDkimPrefix), dkimTags(preamble)); err != nil {
+		return false, errors.New("the fixed DKIM signature has another d= or s=, or runs past the first record")
+	}
+	from := at(scanLiteralFrom)
+	fromEnd := bytes.Index(content[from:], []byte(literalCrlf))
+	if fromEnd < 0 {
+		return false, errors.New("From's line runs past the header block's first record")
+	}
+	if err := checkFromLine(content[from:from+fromEnd], preamble); err != nil {
+		return false, err
+	}
+
+	// H11: a single field's line is not continued inside the record; whether one ends at its end
+	inField := false
+	single := false
+	for i, octet := range content {
+		for literal := range scanLiterals {
+			if full[literal][i] && scanLiteralSingle(literal, bulk) {
+				inField = true
+			}
+		}
+		if octet != '\n' || !inField {
+			continue
+		}
+		inField = false
+		if i+1 == n {
+			single = true
+		} else if content[i+1] == ' ' || content[i+1] == '\t' {
+			return false, errors.New("a single field is continued")
+		}
+	}
+	return single, nil
+}
+
+// Z6 over one DATA body record, DESIGN-DETAILS 3.2.4's B1 to B3, from the state in; the state it leaves.
+// last is the body's last record, which ends in LF so that the end mark starts a line.
+func scanBodyRecord(content []byte, in scanState, last bool) (scanState, error) {
+	if in != newScanState(in.pos(), false, 0, [scanLiteralCount]bool{}, false) {
+		return 0, errors.New("a body's scan state holds its pos alone")
+	}
+	n := len(content)
+	// B2 at the boundary: a "." that began the record before's last line is not followed by CR
+	if 0 < n && in.pos() == scanPosDot && content[0] == '\r' {
+		return 0, errors.New("a line that is exactly the end mark")
+	}
+	pos := in.pos()
+	for i, octet := range content {
+		// B1: LF exactly after CR, across the boundary by in's pos
+		previousCr := in.pos() == scanPosCr
+		lineStart := in.pos() == scanPosLf
+		if 0 < i {
+			previousCr = content[i-1] == '\r'
+			lineStart = content[i-1] == '\n'
+		}
+		if (octet == '\n') != previousCr {
+			return 0, errors.New("a bare CR or LF")
+		}
+		// B2: a "." at a line's start is not followed by CR
+		dotStart := lineStart && octet == '.'
+		if dotStart && i+1 < n && content[i+1] == '\r' {
+			return 0, errors.New("a line that is exactly the end mark")
+		}
+		// B3
+		switch {
+		case octet == '\r':
+			pos = scanPosCr
+		case octet == '\n':
+			pos = scanPosLf
+		case dotStart:
+			pos = scanPosDot
+		default:
+			pos = scanPosLine
+		}
+	}
+	if last && (n == 0 || content[n-1] != '\n') {
+		return 0, errors.New("the body does not end in CRLF")
+	}
+	return newScanState(pos, false, 0, [scanLiteralCount]bool{}, false), nil
+}
+
+// Z6's rules over a whole DATA body in one pass: it ends in CRLF, holds no bare CR or LF, and no line
+// that is exactly ".". The relation checks a body a record at a time (scanBodyRecord); this is the
+// definition those records must agree with, across every cut, which the tests hold them to.
 func checkDataLines(content []byte) error {
 	if len(content) < len(literalCrlf) || !bytes.HasSuffix(content, []byte(literalCrlf)) {
 		return errors.New("record does not end in CRLF")
@@ -954,7 +1381,45 @@ func checkDataLines(content []byte) error {
 	return nil
 }
 
-// Z6: the end of the message.
+// Z5: the header record a part opens, scanned from the start state or the gate's carry, leaving the
+// state the part's own carry commits to (DESIGN-DETAILS 3.2.4).
+func relationZ5(statement *partStatement, witness *partWitness) error {
+	roles, err := partRoles(statement)
+	if err != nil {
+		// the part's shape is Z4's to refuse
+		return nil
+	}
+	session := statement.session
+	for i, role := range roles {
+		if role != recordRoleHeaderBlock {
+			continue
+		}
+		if len(witness.clientPlaintexts) <= i {
+			return errors.New("witness holds no header record")
+		}
+		ordinal := headerOrdinal(statement, statement.clientRecords[i].seq)
+		in := scanStart
+		if 1 < ordinal {
+			in = witness.carryInState
+			if err := checkCarryOpens(statement.carryIn, in, witness.carryInBlind); err != nil {
+				return fmt.Errorf("the carry in: %w", err)
+			}
+		}
+		content := clientContent(session.version, witness.clientPlaintexts[i])
+		out, err := scanHeaderRecord(session.preamble, content, in, ordinal == 1, ordinal == int(statement.headerRecordCount))
+		if err != nil {
+			return err
+		}
+		if err := checkCarryOpens(statement.carryOut, out, witness.carryOutBlind); err != nil {
+			return fmt.Errorf("the carry out: %w", err)
+		}
+	}
+	return nil
+}
+
+// Z6: the end of the message. QUIT and the end mark are exact; in BDAT mode the header block alone
+// stays within the declared count; DATA's body records scan across their boundaries by the carries, the
+// last ending in CRLF, and an empty body's end mark starts a line.
 func relationZ6(statement *partStatement, witness *partWitness) error {
 	roles, err := partRoles(statement)
 	if err != nil || len(roles) != len(witness.clientPlaintexts) {
@@ -962,6 +1427,7 @@ func relationZ6(statement *partStatement, witness *partWitness) error {
 		return nil
 	}
 	session := statement.session
+	opened := false
 	for i, role := range roles {
 		content := clientContent(session.version, witness.clientPlaintexts[i])
 		switch role {
@@ -974,18 +1440,33 @@ func relationZ6(statement *partStatement, witness *partWitness) error {
 				return err
 			}
 		case recordRoleHeaderBlock:
-			if session.preamble.messageByteCount < uint64(len(content)) {
-				return errors.New("the header block alone passes the declared octet count")
-			}
-			if statement.mode == partModeData {
-				if err := checkDataLines(content); err != nil {
-					return err
-				}
+			if statement.mode == partModeBdat && session.preamble.messageByteCount < uint64(len(content)) {
+				return errors.New("a header record alone passes the declared octet count")
 			}
 		case recordRoleBody:
-			if err := checkDataLines(content); err != nil {
+			opened = true
+			if err := checkCarryOpens(statement.carryIn, witness.carryInState, witness.carryInBlind); err != nil {
+				return fmt.Errorf("the carry in: %w", err)
+			}
+			out, err := scanBodyRecord(content, witness.carryInState, statement.last)
+			if err != nil {
 				return err
 			}
+			if err := checkCarryOpens(statement.carryOut, out, witness.carryOutBlind); err != nil {
+				return fmt.Errorf("the carry out: %w", err)
+			}
+		}
+	}
+	// an empty body's last part opens the end mark alone, at a line's start, and leaves the state as it was
+	if statement.mode == partModeData && statement.last && !opened {
+		if err := checkCarryOpens(statement.carryIn, witness.carryInState, witness.carryInBlind); err != nil {
+			return fmt.Errorf("the carry in: %w", err)
+		}
+		if witness.carryInState.pos() != scanPosLf {
+			return errors.New("the end mark does not start a line")
+		}
+		if err := checkCarryOpens(statement.carryOut, witness.carryInState, witness.carryOutBlind); err != nil {
+			return fmt.Errorf("the carry out: %w", err)
 		}
 	}
 	return nil
@@ -1089,7 +1570,9 @@ func parseReplies(stream []byte) ([]*smtpReply, error) {
 	return replies, nil
 }
 
-// Z8: the replies are the ones the flow treats as accepted.
+// Z8, per part (DESIGN-DETAILS 3.2.3): the server records the part covers hold exactly its reply_count
+// whole replies; part 2's one reply has every line coded 250; every reply is coded 2xx, except that on
+// the part whose replies complete DATA mode's envelope the last is coded 354.
 func relationZ8(statement *partStatement, witness *partWitness) error {
 	session := statement.session
 	stream, err := serverContents(session.version, witness.serverPlaintexts)
@@ -1101,40 +1584,23 @@ func relationZ8(statement *partStatement, witness *partWitness) error {
 	if err != nil {
 		return err
 	}
-	switch {
-	case statement.index == 1:
-		if len(replies) != 0 {
-			return errors.New("pi1 covers no reply")
-		}
-	case statement.index == 2:
-		if len(replies) != 1 {
-			return errors.New("pi2 covers exactly one reply")
-		}
-		for _, code := range replies[0].lineCodes {
-			if code != "250" {
-				return fmt.Errorf("EHLO reply line coded %s, want 250", code)
-			}
-		}
-	case statement.index == 3:
-		want := 1 + int(session.preamble.recipientCount)
-		if statement.mode == partModeData {
-			want += 1
-		}
-		if len(replies) != want {
-			return fmt.Errorf("pi3 covers %d replies, want %d", len(replies), want)
-		}
-		for i, reply := range replies {
-			if statement.mode == partModeData && i == want-1 {
-				if reply.code != "354" {
-					return fmt.Errorf("DATA got %s, want 354", reply.code)
+	if uint64(len(replies)) != uint64(statement.replyCount) {
+		return fmt.Errorf("the server records hold %d replies, the part names %d", len(replies), statement.replyCount)
+	}
+	for i, reply := range replies {
+		if statement.ehloRule() {
+			for _, code := range reply.lineCodes {
+				if code != "250" {
+					return fmt.Errorf("EHLO reply line coded %s, want 250", code)
 				}
-			} else if reply.code[0] != '2' {
-				return fmt.Errorf("reply %d is %s, want 2xx", i, reply.code)
 			}
 		}
-	default:
-		if len(replies) != 0 {
-			return errors.New("a reply arrived during the message")
+		if statement.last354() && i == len(replies)-1 {
+			if reply.code != "354" {
+				return fmt.Errorf("DATA got %s, want 354", reply.code)
+			}
+		} else if reply.code[0] != '2' {
+			return fmt.Errorf("reply %d is %s, want 2xx", i, reply.code)
 		}
 	}
 	return nil
@@ -1172,7 +1638,7 @@ func offersChunking(version uint16, plaintexts [][]byte) bool {
 
 // Z9: BDAT only to an MX whose post-TLS EHLO reply offers CHUNKING.
 func relationZ9(statement *partStatement, witness *partWitness) error {
-	if statement.index != 2 || statement.mode != partModeBdat {
+	if !statement.requireChunking() {
 		return nil
 	}
 	stream, err := serverContents(statement.session.version, witness.serverPlaintexts)

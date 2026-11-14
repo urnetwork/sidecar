@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -42,7 +41,9 @@ func testVersionOf(suite uint16) uint16 {
 
 // A small shape with Z1 left out: everything but the key schedule, in milliseconds.
 func testQuickShape(suite uint16, localOctets bool) *partShape {
-	shape := &partShape{kind: partKindKey, version: testVersionOf(suite), suite: suite, clientBlocks: 4, localOctets: localOctets, withoutKeySchedule: true}
+	shape := testPartShape(partKindKey, suiteFamily(suite), testVersionOf(suite))
+	shape.clientBlocks = 4
+	shape.localOctets = localOctets
 	if suite == tlsSuiteChacha20Poly1305Sha256 {
 		shape.clientBlocks = 1
 	}
@@ -120,11 +121,15 @@ func TestPartCircuitRefusesWhatTheRelationRefuses(t *testing.T) {
 		}
 
 		if statement.session.version == tlsVersion13 {
-			// Z2: a record at another sequence number. 1.2 carries its nonce in the record
+			// Z2: a record at another sequence number. 1.2 carries its nonce in the record. A record's role
+			// is its position, so EHLO at another has no template, and the part is refused before any proof
 			statement, witness = capture.part(t, 1)
 			statement.clientRecords[0].seq += 1
-			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
-				t.Errorf("%s: another sequence number: accepted", leg.name)
+			if circuit, err := partAssignment(shape, statement); err == nil {
+				assignWitness(circuit, statement, witness)
+				if err := testPartSolved(t, compiled, circuit); err == nil {
+					t.Errorf("%s: another sequence number: accepted", leg.name)
+				}
 			}
 
 			// Z3: another inner type, authored under the true key. 1.2 has none
@@ -192,7 +197,10 @@ func TestPartCircuitChecksALocalPartsOctets(t *testing.T) {
 
 // An envelope shape with Z1 left out, sized to the test connection.
 func testQuickEnvelopeShape(suite uint16) *partShape {
-	shape := &partShape{kind: partKindEnvelope, version: testVersionOf(suite), suite: suite, clientBlocks: 12, serverBlocks: 8, localOctets: true, withoutKeySchedule: true}
+	shape := testPartShape(partKindEnvelope, suiteFamily(suite), 0)
+	shape.clientBlocks = 12
+	shape.serverBlocks = 8
+	shape.localOctets = true
 	if suite == tlsSuiteChacha20Poly1305Sha256 {
 		shape.clientBlocks = 4
 		shape.serverBlocks = 3
@@ -459,13 +467,39 @@ func TestEnvelopeCircuitChecksTheEnvelope(t *testing.T) {
 	}
 }
 
-// A message shape with Z1 left out, sized to the test connection's header block.
-func testQuickMessageShape(suite uint16, bodyBlocks int) *partShape {
-	shape := &partShape{kind: partKindMessage, version: testVersionOf(suite), suite: suite, clientBlocks: 4, serverBlocks: 12, headerBlocks: 40, bodyBlocks: bodyBlocks, withoutKeySchedule: true}
+// A msg shape with Z1 left out, sized to the test connection's header block in one record.
+func testQuickMessageShape(suite uint16) *partShape {
+	shape := testPartShape(partKindMessage, suiteFamily(suite), 0)
+	shape.clientBlocks = 4
+	shape.serverBlocks = 12
+	shape.headBlocks = 40
 	if suite == tlsSuiteChacha20Poly1305Sha256 {
 		shape.clientBlocks = 2
 		shape.serverBlocks = 5
-		shape.headerBlocks = 10
+		shape.headBlocks = 10
+	}
+	return shape
+}
+
+// A hdr shape with Z1 left out, sized to a header record of a few hundred octets.
+func testQuickHeaderShape(suite uint16) *partShape {
+	shape := testPartShape(partKindHeader, suiteFamily(suite), 0)
+	shape.clientBlocks = 2
+	shape.restBlocks = 24
+	if suite == tlsSuiteChacha20Poly1305Sha256 {
+		shape.clientBlocks = 1
+		shape.restBlocks = 6
+	}
+	return shape
+}
+
+// A body shape with Z1 left out, sized to the test connection's body records.
+func testQuickBodyShape(suite uint16) *partShape {
+	shape := testPartShape(partKindBody, suiteFamily(suite), 0)
+	shape.clientBlocks = 2
+	shape.bodyBlocks = 6
+	if suite == tlsSuiteChacha20Poly1305Sha256 {
+		shape.bodyBlocks = 2
 	}
 	return shape
 }
@@ -473,7 +507,7 @@ func testQuickMessageShape(suite uint16, bodyBlocks int) *partShape {
 func TestMessageCircuitAcceptsARealMessage(t *testing.T) {
 	t.Parallel()
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		t.Logf("%s: %d constraints", leg.name, compiled.GetNbConstraints())
 		capture := testBdatCapture(t, leg)
@@ -488,7 +522,7 @@ func TestMessageCircuitAgreesWithTheRelationOnHeaders(t *testing.T) {
 	t.Parallel()
 	// Z5 differentially: every smuggled header is refused by the relation and by the circuit alike
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		for _, c := range testSmuggledHeaders(t) {
@@ -518,7 +552,7 @@ func TestMessageCircuitRefusesAnyPositionsForAHostileFrom(t *testing.T) {
 		strings.Replace(header, fromLine, "From: <alice@"+testNetworkDomain+"> <x@victim.example>\r\n", 1),
 	}
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		for _, block := range blocks {
@@ -536,12 +570,12 @@ func TestMessageCircuitRefusesAnyPositionsForAHostileFrom(t *testing.T) {
 			for _, angle := range angles {
 				for _, at := range ats {
 					circuit := testPartAssignment(t, shape, statement, witness)
-					for i := range circuit.Header.FromAngle {
-						circuit.Header.FromAngle[i] = 0
-						circuit.Header.FromAt[i] = 0
+					for i := range circuit.Head.FromAngle {
+						circuit.Head.FromAngle[i] = 0
+						circuit.Head.FromAt[i] = 0
 					}
-					circuit.Header.FromAngle[angle] = 1
-					circuit.Header.FromAt[at] = 1
+					circuit.Head.FromAngle[angle] = 1
+					circuit.Head.FromAt[at] = 1
 					if err := testPartSolved(t, compiled, circuit); err == nil {
 						t.Errorf("%s: %q: accepted with < at %d and @ at %d", leg.name, block[:40], angle, at)
 					}
@@ -562,7 +596,7 @@ func TestMessageCircuitAcceptsFormsAnHonestMessageUses(t *testing.T) {
 		"Received: by example\r\n" + header,
 	}
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		for i, block := range blocks {
@@ -596,7 +630,7 @@ func TestMessageCircuitChecksTheReplies(t *testing.T) {
 		{name: "a truncated reply", content: "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n250 2.1"},
 	}
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		for _, c := range cases {
@@ -617,7 +651,7 @@ func TestMessageCircuitChecksTheReplies(t *testing.T) {
 func TestMessageCircuitChecksTheBdatEnd(t *testing.T) {
 	t.Parallel()
 	for _, leg := range testTlsLegs() {
-		shape := testQuickMessageShape(leg.suites[0], 0)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		// same-length records, so only their octets differ from what the public template wants
@@ -655,16 +689,13 @@ func TestMessageCircuitChecksDataFraming(t *testing.T) {
 		{name: "a record ending inside a line", content: "first\r\nunfinished"},
 	}
 	for _, leg := range testTlsLegs() {
-		bodyBlocks := 6
-		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
-			bodyBlocks = 2
-		}
-		shape := testQuickMessageShape(leg.suites[0], bodyBlocks)
+		shape := testQuickBodyShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testDataCapture(t, leg)
 		for _, c := range cases {
-			statement, witness := capture.part(t, 3)
-			testAuthorClientRecord(t, statement, witness, 1, []byte(c.content))
+			// the body's one record, in the last part beside the end mark and QUIT
+			statement, witness := capture.part(t, 4)
+			testAuthorClientRecord(t, statement, witness, 0, []byte(c.content))
 			// the declared count follows the body, so Z6's framing alone decides this
 			if reference := relationZ6(statement, witness) == nil; reference != c.accept {
 				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, reference)
@@ -679,11 +710,7 @@ func TestMessageCircuitChecksDataFraming(t *testing.T) {
 func TestMessageCircuitRequiresThe354(t *testing.T) {
 	t.Parallel()
 	for _, leg := range testTlsLegs() {
-		bodyBlocks := 6
-		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
-			bodyBlocks = 2
-		}
-		shape := testQuickMessageShape(leg.suites[0], bodyBlocks)
+		shape := testQuickMessageShape(leg.suites[0])
 		compiled := testCompileShape(t, shape)
 		capture := testDataCapture(t, leg)
 		solve := func(content string) error {
@@ -706,7 +733,10 @@ func TestMessageCircuitRequiresThe354(t *testing.T) {
 
 // A real TLS 1.2 connection's shape, with Z1 in it: the key schedule is what is under test.
 func test12Shape() *partShape {
-	return &partShape{kind: partKindKey, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4}
+	shape := testPartShape(partKindKey, ShapeFamilyAes128Gcm, tlsVersion12)
+	shape.withoutKeySchedule = false
+	shape.clientBlocks = 4
+	return shape
 }
 
 func TestZ1CircuitIn12DerivesARealConnectionsKeys(t *testing.T) {
@@ -760,12 +790,12 @@ type testResumeCircuit struct {
 	Chaining        []frontend.Variable `gnark:",public"`
 	ResumeBase      []frontend.Variable `gnark:",public"`
 	ResumeShift     []frontend.Variable `gnark:",public"`
-	ResumeTwoBlocks frontend.Variable   `gnark:",public"`
+	ResumeTwoBlocks []frontend.Variable `gnark:",public"`
 	Digest          []frontend.Variable `gnark:",public"`
 }
 
 func (self *testResumeCircuit) Define(api frontend.API) error {
-	inputs := &circuitInputs12{resumeBase: publicBytes(self.ResumeBase), resumeShift: self.ResumeShift, resumeTwoBlocks: self.ResumeTwoBlocks}
+	inputs := &circuitInputs12{resumeBase: publicBytes(self.ResumeBase), resumeShift: self.ResumeShift, resumeTwoBlocks: self.ResumeTwoBlocks[0]}
 	for i := range inputs.chaining {
 		copy(inputs.chaining[i][:], self.Chaining[32*i:32*i+32])
 	}
@@ -782,11 +812,12 @@ func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 	shape := test12Shape()
 	compiled := testCompileShape(t, shape)
 	resume := testCompile(t, &testResumeCircuit{
-		ClientFinished: make([]frontend.Variable, 8*(4+tlsVerifyData12Bytes)),
-		Chaining:       make([]frontend.Variable, 8*tlsSecretBytes),
-		ResumeBase:     make([]frontend.Variable, 8*2*sha256BlockBytes),
-		ResumeShift:    make([]frontend.Variable, 6),
-		Digest:         make([]frontend.Variable, 8*tlsSecretBytes),
+		ClientFinished:  make([]frontend.Variable, 8*(4+tlsVerifyData12Bytes)),
+		Chaining:        make([]frontend.Variable, 8*tlsSecretBytes),
+		ResumeBase:      make([]frontend.Variable, 8*2*sha256BlockBytes),
+		ResumeShift:     make([]frontend.Variable, 6),
+		ResumeTwoBlocks: make([]frontend.Variable, 1),
+		Digest:          make([]frontend.Variable, 8*tlsSecretBytes),
 	})
 	leg := testTlsLegs()[2]
 	capture := testBdatCapture(t, leg)
@@ -862,7 +893,7 @@ func TestAShapeWithoutTheLocalTableRefusesATemplateThatNeedsIt(t *testing.T) {
 }
 
 func TestProductionShapesProveZ1(t *testing.T) {
-	for _, shape := range partShapes() {
+	for _, shape := range partShapes(DefaultProofSettings()) {
 		if shape.withoutKeySchedule {
 			t.Errorf("a production shape leaves Z1 out: %+v", shape)
 		}
@@ -876,7 +907,9 @@ func TestCircuitsUseNoCommitments(t *testing.T) {
 	// shapes, and TestMeasureShapes covers the production ones.
 	for _, shape := range []*partShape{
 		testQuickEnvelopeShape(tlsSuiteAes128GcmSha256),
-		testQuickMessageShape(tlsSuiteChacha20Poly1305Sha256, 2),
+		testQuickMessageShape(tlsSuiteChacha20Poly1305Sha256),
+		testQuickHeaderShape(tlsSuiteChacha20Poly1305Sha256),
+		testQuickBodyShape(tlsSuiteChacha20Poly1305Sha256),
 		test12Shape(),
 	} {
 		commitments := testCompileShape(t, shape).GetCommitments()
@@ -887,7 +920,7 @@ func TestCircuitsUseNoCommitments(t *testing.T) {
 }
 
 func TestUnknownPartsFailClosed(t *testing.T) {
-	backend := newGroth16Backend()
+	backend := newGroth16Backend(DefaultProofSettings())
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)
 		// these parts have circuits, and no keys are loaded here
@@ -903,11 +936,11 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 
 		// keys that hold neither half refuse too, rather than reach gnark with a nil key
 		statement, witness := capture.part(t, 1)
-		shape, err := partShapeFor(statement)
+		shape, err := partShapeFor(DefaultProofSettings(), statement)
 		if err != nil {
 			t.Fatal(err)
 		}
-		halfLoaded := newGroth16Backend()
+		halfLoaded := newGroth16Backend(DefaultProofSettings())
 		halfLoaded.addKeys(&shapeKeys{shape: shape})
 		if _, err := halfLoaded.provePart(context.Background(), statement, witness); !errors.Is(err, errNoKeys) {
 			t.Errorf("%s: proving with no key: %v", leg.name, err)
@@ -999,7 +1032,7 @@ func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
 	// what cli/ and server get today: an injected module that sends and passes no mail
 	for _, leg := range testTlsLegs() {
 		job := testJob("one line\r\n", "bob")
-		backend := newGroth16Backend()
+		backend := newGroth16Backend(DefaultProofSettings())
 		send := testRunSendWith(t, leg, testMxDefaults(), DefaultProverSettings(), job, backend, backend)
 		if send.err == nil || !strings.Contains(send.err.Error(), errNoKeys.Error()) {
 			t.Errorf("%s: %v", leg.name, send.err)
@@ -1040,7 +1073,7 @@ func TestGroth16ProofOfARealEhlo(t *testing.T) {
 	}
 	leg := testTlsLegs()[1]
 	keys := testRealEhloKeys(t)
-	backend := newGroth16Backend()
+	backend := newGroth16Backend(DefaultProofSettings())
 	backend.addKeys(keys)
 
 	capture := testBdatCapture(t, leg)
@@ -1246,19 +1279,16 @@ func (self *testCommittingCircuit) Define(api frontend.API) error {
 }
 
 // Compiles every production shape, which takes minutes, so it stays out of the ordinary run: set
-// SMTPPROOF_MEASURE_SHAPES, to a suite's number such as 0x1303 to compile that suite's alone. It holds
-// each to SPEC.md 10.2's rule, and its output is SPEC.md 11.2's.
+// SMTPPROOF_MEASURE_SHAPES, to a family's name such as chacha20 to compile that family's alone, or to
+// all. It holds each to SPEC.md 10.2's rule, and its output is SPEC.md 10.4's and 11.4's.
 func TestMeasureShapes(t *testing.T) {
 	only := os.Getenv("SMTPPROOF_MEASURE_SHAPES")
 	if only == "" {
 		t.Skip("set SMTPPROOF_MEASURE_SHAPES to run")
 	}
-	suite, err := strconv.ParseUint(only, 0, 16)
-	if err != nil {
-		suite = 0
-	}
-	for _, shape := range partShapes() {
-		if suite != 0 && uint64(shape.suite) != suite {
+	proof := DefaultProofSettings()
+	for _, shape := range partShapes(proof) {
+		if only != "all" && string(shape.family) != only {
 			continue
 		}
 		compiled, err := compilePartShape(shape)
@@ -1266,11 +1296,11 @@ func TestMeasureShapes(t *testing.T) {
 			t.Fatal(err)
 		}
 		if commitments := compiled.GetCommitments(); commitments != nil && len(commitments.CommitmentIndexes()) != 0 {
-			t.Errorf("%+v carries %d commitments", *shape, len(commitments.CommitmentIndexes()))
+			t.Errorf("%s carries %d commitments", partShapeName(shape), len(commitments.CommitmentIndexes()))
 		}
-		t.Logf("kind %d version %#x suite %#x client %d server %d header %d body %d: %d constraints, %d public inputs",
-			shape.kind, shape.version, shape.suite, shape.clientBlocks, shape.serverBlocks, shape.headerBlocks, shape.bodyBlocks,
-			compiled.GetNbConstraints(), compiled.GetNbPublicVariables())
+		used := compiled.GetNbConstraints() + compiled.GetNbPublicVariables()
+		t.Logf("%s: %d constraints, %d public inputs, %.1f%% of the domain", partShapeName(shape),
+			compiled.GetNbConstraints(), compiled.GetNbPublicVariables(), 100*float64(used)/float64(proof.DomainSize))
 	}
 }
 
@@ -1289,7 +1319,7 @@ func TestMeasureWholeSend(t *testing.T) {
 		if !strings.Contains(legs, strings.ReplaceAll(leg.name, " ", "-")) {
 			continue
 		}
-		measuring := &testMeasuringBackend{t: t, backend: newGroth16Backend(), kinds: map[partShape]bool{}}
+		measuring := &testMeasuringBackend{t: t, backend: newGroth16Backend(DefaultProofSettings()), kinds: map[partShape]bool{}}
 		modes := []uint32{partModeBdat, partModeData}
 		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") != "" {
 			modes = modes[:1]
@@ -1319,7 +1349,9 @@ func testSpeedGateJob(mode uint32) (*sidecar.SmtpProofJob, *ProverSettings) {
 		settings.ForceData = true
 		body = strings.Repeat("a line of body text, whole and ending as a DATA record must\r\n", 100)
 	}
-	message := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58) + testHeaderBlock() + body
+	// the single fields and the fixed signature first, where the header block's first record holds them
+	// (DESIGN-DETAILS 3.2.3; SMTP-M9-04's order), then the filler that brings the block to the gate's size
+	message := strings.TrimSuffix(testHeaderBlock(), "\r\n") + strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58) + "\r\n" + body
 	job := testJob("", "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9")
 	job.Message = []byte(message)
 	job.Preamble.MessageByteCount = uint64(len(message))
@@ -1339,7 +1371,7 @@ func TestProductionShapesHoldTheSpeedGatesSends(t *testing.T) {
 				t.Errorf("%s: mode %d, want %d", leg.name, send.result.Mode, mode)
 			}
 			for _, statement := range send.backend.statements {
-				if _, err := partShapeFor(statement); err != nil {
+				if _, err := partShapeFor(DefaultProofSettings(), statement); err != nil {
 					t.Errorf("%s mode %d: part %d: %v", leg.name, mode, statement.index, err)
 				}
 			}
@@ -1361,7 +1393,7 @@ func TestProductionShapesHoldAnEhloReplyWrittenALinePerRecord(t *testing.T) {
 			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
 		}
 		for _, statement := range send.backend.statements {
-			if _, err := partShapeFor(statement); err != nil {
+			if _, err := partShapeFor(DefaultProofSettings(), statement); err != nil {
 				t.Errorf("%s: part %d: %v", leg.name, statement.index, err)
 			}
 		}
@@ -1400,7 +1432,7 @@ func (self *testByteCounter) Write(data []byte) (int, error) {
 }
 
 func (self *testMeasuringBackend) provePart(ctx context.Context, statement *partStatement, witness *partWitness) ([]byte, error) {
-	shape, err := partShapeFor(statement)
+	shape, err := partShapeFor(DefaultProofSettings(), statement)
 	if err != nil {
 		return nil, err
 	}
@@ -1521,4 +1553,80 @@ func (self *testMeasuringBackend) verifyPart(ctx context.Context, statement *par
 		return fmt.Errorf("measuring: %w", err)
 	}
 	return nil
+}
+
+// One family of circuits serves TLS 1.3's AES-128-GCM and both TLS 1.2 suites (DESIGN-DETAILS 3.2.3): a
+// single compiled env, msg, hdr and body circuit, sized to hold both versions' parts, solves every such
+// part of both versions' fixed connections and of a two-record header block's send under each.
+func TestAesShapesServeTls12AndTls13(t *testing.T) {
+	t.Parallel()
+	testNeedCircuits(t)
+	type solved struct {
+		name      string
+		statement *partStatement
+		witness   *partWitness
+	}
+	var parts []*solved
+	for _, connection := range testVectorConnections() {
+		if !strings.Contains(connection.name, "aes") {
+			continue
+		}
+		statements, witnesses := testReplayStatements(t, connection.capture(t))
+		for i, statement := range statements {
+			parts = append(parts, &solved{name: fmt.Sprintf("%s part %d", connection.name, statement.index), statement: statement, witness: witnesses[i]})
+		}
+	}
+	for _, leg := range []*testTlsLeg{testTlsLegs()[0], testTlsLegs()[2]} {
+		capture := testTwoRecordHeaderCapture(t, leg)
+		for i, statement := range capture.statements {
+			parts = append(parts, &solved{name: fmt.Sprintf("%s two records part %d", leg.name, statement.index), statement: statement, witness: capture.witnesses[i]})
+		}
+	}
+	// a shape a kind, its pools the most any part of either version needs
+	shapes := map[partKind]*partShape{}
+	versions := map[partKind]map[uint16]bool{}
+	for _, part := range parts {
+		fitted, err := testShapeFitting(part.statement, 0, 1)
+		if err != nil {
+			t.Fatalf("%s: %v", part.name, err)
+		}
+		if fitted.kind == partKindKey {
+			continue
+		}
+		shape, ok := shapes[fitted.kind]
+		if !ok {
+			shape = fitted
+			shapes[fitted.kind] = shape
+			versions[fitted.kind] = map[uint16]bool{}
+		}
+		shape.clientBlocks = max(shape.clientBlocks, fitted.clientBlocks)
+		shape.serverBlocks = max(shape.serverBlocks, fitted.serverBlocks)
+		shape.headBlocks = max(shape.headBlocks, fitted.headBlocks)
+		shape.restBlocks = max(shape.restBlocks, fitted.restBlocks)
+		shape.bodyBlocks = max(shape.bodyBlocks, fitted.bodyBlocks)
+		shape.localOctets = shape.localOctets || fitted.localOctets
+		versions[fitted.kind][part.statement.session.version] = true
+	}
+	for _, kind := range []partKind{partKindEnvelope, partKindMessage, partKindHeader, partKindBody} {
+		if !versions[kind][tlsVersion13] || !versions[kind][tlsVersion12] {
+			t.Fatalf("kind %d: parts of %v alone", kind, versions[kind])
+		}
+	}
+	compiled := map[partKind]constraint.ConstraintSystem{}
+	for kind, shape := range shapes {
+		compiled[kind] = testCompileShape(t, shape)
+	}
+	for _, part := range parts {
+		roles, err := partRoles(part.statement)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kind, err := partKindOf(part.statement, roles)
+		if err != nil || kind == partKindKey {
+			continue
+		}
+		if err := testPartSolved(t, compiled[kind], testPartAssignment(t, shapes[kind], part.statement, part.witness)); err != nil {
+			t.Errorf("%s under the one %s circuit: %v", part.name, partShapeName(shapes[kind]), err)
+		}
+	}
 }
