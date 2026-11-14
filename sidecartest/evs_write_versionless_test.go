@@ -39,7 +39,13 @@ import (
 // The epoch world with its network in the format2 gate.
 func newVersionlessWorld(t *testing.T) *epochWorld {
 	t.Helper()
-	world := newEpochWorld(t)
+	return newVersionlessWorldOf(t, protocol.RepoKind_REPO_KIND_GENERAL)
+}
+
+// newVersionlessWorld with a repo of kind.
+func newVersionlessWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
+	t.Helper()
+	world := newEpochWorldOf(t, kind)
 	network := connect.Id(world.networkId).String()
 	gates := fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n  format2: {enabled: true, networks: [%q]}\n", network, network)
 	if err := world.host.Gates.Set(gates); err != nil {

@@ -60,6 +60,8 @@ type epochWorld struct {
 	engine    *evsservice.EvsEngine
 	gate      *epochGateViews
 	signers   map[string]*FakeGkmSigner
+	// the engine's purge sink, which queues nothing until a test starts a purge (evs_erase_versionless_test.go)
+	purge *epochPurgeSink
 
 	stateLock sync.Mutex
 	view      *FakeGkmAuthView
@@ -138,6 +140,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 		t: t, ctx: ctx, clock: clock, host: host,
 		networkId: sidecar.NewId(), repoId: sidecar.NewId(), clientId: sidecar.NewId(), memberId: sidecar.NewId(),
 		kind: kind, log: NewFakeGkmAuthLog(), signers: map[string]*FakeGkmSigner{},
+		purge: &epochPurgeSink{},
 	}
 	for _, label := range epochWorldLabels {
 		world.signers[label] = NewFakeGkmSigner()
@@ -183,6 +186,7 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 		AuthState: &depositAuthState{networkId: world.networkId, kind: kind},
 		Uploads:   &evsservice.EvsUploadDeps{Keys: receiptKeys, Quota: quota, Usage: usage},
 		GateViews: world.gate,
+		Purge:     world.purge,
 	})
 	if err != nil {
 		t.Fatal(err)

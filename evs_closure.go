@@ -17,6 +17,13 @@
 // In a record-class repo the new chain's key goes in a new slot, which the CLOSURE introduces, and the old chain's
 // slot key is what its erased list names (evs_plan.go's slot-keyed chains).
 //
+// A versionless file (§11.12's versionless row; EVS2-M10-12) is rewritten in place: the write keeps its path's
+// setting, and its forced checkpoint re-encrypts every chunk under a fresh key, in a slot-keyed repo in a new slot
+// rather than the path's one key, which the list names with the key of every slot a stored version of the file names
+// (EvsRepo.SlotKeysOf). A rewrite within 16 KiB stages in the CLOSURE, which evs counts as an inline record. The purge
+// deletes the old ciphertext and slot a minute after the CLOSURE commits. In a general repo a versionless segment's
+// key rides its header, so it goes only with the segment, at that purge.
+//
 // Not built here, and failing closed: ?closure=1 uploads at the storage limit; and reading a CLOSURE that went in
 // parts, whose note ReadClosures does not reach.
 //
@@ -80,6 +87,10 @@ func (self *EvsRepo) Closure(ctx context.Context, args *EvsClosureArgs) (*EvsWri
 		}
 		forced := *write
 		forced.ForceCheckpoint = true
+		if forced.Options == nil && forced.Versioning == uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT) {
+			// a re-checkpoint changes no setting: a versionless file stays versionless, rewritten in place
+			forced.Options = &EvsWriteOptions{}
+		}
 		writes = append(writes, &forced)
 	}
 	return self.writePaths(ctx, &EvsWritePathsArgs{RefName: args.RefName, Writes: writes}, &evsPushExtras{
