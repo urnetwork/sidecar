@@ -173,6 +173,7 @@ evs_window.go
 evs_witness.go
 gkm_access.go
 gkm_api.go
+gkm_audit.go
 gkm_client.go
 gkm_create.go
 gkm_deliver.go
