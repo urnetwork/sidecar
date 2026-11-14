@@ -104,10 +104,19 @@ func (self *RecordIngester) Ingest(ctx context.Context, logId Id) error {
 			return err
 		}
 		settled := []Id{}
+		// the mark a depositor prunes by (QD-176): the highest version at or below which this read leaves nothing
+		// unconsumed, so it stops below the first deposit that stays
+		consumedThrough := uint64(0)
+		anyLeft := false
 		for _, deposit := range deposits {
 			done := self.ingestDeposit(auth, logId, ref.SidecarId, deposit)
-			if done {
-				settled = append(settled, deposit.DepositId)
+			if !done {
+				anyLeft = true
+				continue
+			}
+			settled = append(settled, deposit.DepositId)
+			if !anyLeft {
+				consumedThrough = max(consumedThrough, deposit.Version)
 			}
 		}
 		if len(settled) == 0 {
@@ -117,7 +126,7 @@ func (self *RecordIngester) Ingest(ctx context.Context, logId Id) error {
 		if err != nil {
 			return err
 		}
-		consume := &RecordStreamConsume{PushId: pushId, DepositorSidecarId: ref.SidecarId, DepositIds: settled}
+		consume := &RecordStreamConsume{PushId: pushId, DepositorSidecarId: ref.SidecarId, DepositIds: settled, ConsumedThrough: consumedThrough}
 		testHookBarrier("record.consume.before", recordChainIdText(logId))
 		_, err = streams.Consume(ctx, logId, consume)
 		testHookBarrier("record.consume.after", recordChainIdText(logId))

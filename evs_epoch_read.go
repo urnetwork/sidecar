@@ -978,6 +978,14 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 	}
 	sources := evsSourceEpochs(state.epoch)
 	again := false
+	reserved := EvsReservedRefNone
+	if reader := self.client.format2Reader(); reader != nil && 0 < len(asked) {
+		// which of ur/index and ur/lfs the ref is, if either: format 2's ignored rows turn on it
+		var err error
+		if reserved, err = reader.reservedRef(ctx, self, refId); err != nil {
+			return false, err
+		}
+	}
 	for i, path := range asked {
 		// evs answered a request naming the path in each of these epochs (E3)
 		for _, epoch := range path.epochs {
@@ -1001,6 +1009,14 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 			Named:       path.named,
 			History:     path.version != 0,
 			Since:       since,
+			Reserved:    reserved,
+		}
+		if path.token == nil {
+			epochs.Names = path.names
+			if epochs.Names == nil {
+				// the root, which a read names by no name
+				epochs.Names = [][]byte{}
+			}
 		}
 		verified, more, err := self.client.verifier.VerifyPath(round.head, epochs, round.reply.paths[i])
 		if err != nil {

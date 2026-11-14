@@ -212,6 +212,9 @@ type EvsSettings struct {
 	// How many times a read goes to a newer head from the cluster when an entry holds a version past the head it
 	// read (§11.9's newest row), 2. Positive.
 	ReadHeadRetryCount int
+	// Format 2: how long past the end of the replacing record's batch minute a replaced versionless version still
+	// reads before it answers `collected` (§11.7's reads row; plan-EVS2-small-readings#5), 60 s. Positive.
+	ReadCollectedAfter time.Duration
 	// GET .../log's page: at most this many statements an answer, 1,000. Positive, at most 1,000.
 	LogReplyStatementCount int
 	// GET .../refs: the keys one LIST of head/<repo>/ returns, 1,000. Positive.
@@ -367,6 +370,7 @@ func DefaultEvsSettings() *EvsSettings {
 		ReadSegmentWholeByteCount:       256 * 1024,
 		ReadSegmentRangeAlign:           64 * 1024,
 		ReadHeadRetryCount:              2,
+		ReadCollectedAfter:              60 * time.Second,
 		LogReplyStatementCount:          evsLogReplyMaxStatementCount,
 		RefsListPageCount:               1000,
 		ReadStreamRefMaxCount:           sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount,
@@ -487,7 +491,7 @@ func (self *EvsSettings) Validate() error {
 		return fmt.Errorf("%w: a lease bound %s, outside (0, %s]", ErrEvsSettings, self.LeaseMaxDuration, evsLeaseMaxDuration)
 	}
 	if self.ReadPathMaxCount <= 0 || self.ReadRangeMaxCount <= 0 || self.ReadRangeMaxByteCount <= 0 || self.ReadObjectMaxCount <= 0 ||
-		self.ReadSegmentWholeByteCount <= 0 || self.ReadSegmentRangeAlign <= 0 || self.ReadHeadRetryCount <= 0 || self.RefsListPageCount <= 0 {
+		self.ReadSegmentWholeByteCount <= 0 || self.ReadSegmentRangeAlign <= 0 || self.ReadHeadRetryCount <= 0 || self.ReadCollectedAfter <= 0 || self.RefsListPageCount <= 0 {
 		return fmt.Errorf("%w: a read's bounds, segment sizes, head retries and refs page must be positive", ErrEvsSettings)
 	}
 	if frameMax := sidecar.DefaultEvsFormatSettings().ReadFrameMaxByteCount; self.ReadFrameByteCount <= 0 || frameMax <= self.ReadFrameByteCount {

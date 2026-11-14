@@ -526,6 +526,13 @@ func (self *recordWriter) refused(plan *recordPushPlan, err error) {
 
 // A plan committed: the chain's records acknowledged, the counter written, the plan dropped, then the hooks.
 func (self *recordWriter) committed(plan *recordPushPlan, commit *RecordStreamCommit) error {
+	if plan.Deposit {
+		// kept before the plan is acknowledged, so a failure sends the plan again, to the same commit (D-MCP-10)
+		if err := self.keepDeposit(plan, commit); err != nil {
+			self.backoff(plan.LogId)
+			return err
+		}
+	}
 	if err := self.finishCommittedPlan(plan); err != nil {
 		return err
 	}
@@ -533,6 +540,26 @@ func (self *recordWriter) committed(plan *recordPushPlan, commit *RecordStreamCo
 		self.log.Infof("[record]log %s took %d entries at version %d", plan.LogId, len(plan.Entries), commit.Version)
 	}
 	return nil
+}
+
+// Hands a committed deposit to the depositor's keeper (record_mirror.go): the batch as it went, kept until an
+// ingester's mark passes it. No keeper keeps nothing.
+func (self *recordWriter) keepDeposit(plan *recordPushPlan, commit *RecordStreamCommit) error {
+	keeper := func() func(logId Id, commit *RecordStreamCommit, batch []byte) error {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.depositKeeper
+	}()
+	if keeper == nil {
+		return nil
+	}
+	deposit, err := self.depositOf(plan)
+	if err != nil {
+		return err
+	}
+	// the batch holds its entries' keys and salts
+	defer clear(deposit.Batch)
+	return keeper(plan.LogId, commit, deposit.Batch)
 }
 
 // Settles a committed plan: the journal acknowledged, the counter raised, the plan file removed, the queue cleared and

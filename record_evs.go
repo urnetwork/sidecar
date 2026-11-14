@@ -1109,7 +1109,7 @@ func (self *RecordEvsStreams) Deposit(ctx context.Context, repoId Id, deposit *R
 		return nil, err
 	}
 	self.notify(repoId)
-	return &RecordStreamCommit{Version: reply.GetVersion(), TimeMillis: journal.TimeMs}, nil
+	return &RecordStreamCommit{Version: reply.GetVersion(), TimeMillis: journal.TimeMs, ConsumedThrough: reply.GetDepositHead().GetConsumedThrough()}, nil
 }
 
 // The repo's deposit refs, one a depositor, as evs lists them.
@@ -1166,7 +1166,9 @@ func (self *RecordEvsStreams) Consume(ctx context.Context, repoId Id, consume *R
 	for _, depositId := range consume.DepositIds {
 		entryIds = append(entryIds, EvsToken(depositId))
 	}
-	result, err := self.client.Repo(repoId).Consume(ctx, &EvsConsumeArgs{DepositRefId: EvsDepositRefId(repoId, consume.DepositorSidecarId), EntryIds: entryIds})
+	result, err := self.client.Repo(repoId).Consume(ctx, &EvsConsumeArgs{
+		DepositRefId: EvsDepositRefId(repoId, consume.DepositorSidecarId), EntryIds: entryIds, ConsumedThrough: consume.ConsumedThrough,
+	})
 	if err != nil {
 		return nil, recordEvsRefusal(err)
 	}

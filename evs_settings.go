@@ -218,6 +218,11 @@ type EvsSettings struct {
 	// How many of a path's versions Lookup walks back from its newest for the first after an action's base_version
 	// (§16.6's evs row): 10,000. Past it Lookup answers ErrEvsLookupUnknown, which leaves the use uncertain.
 	LookupVersionCount int
+	// The newest storage format this client reads (§11.6's format row; D-EVS-39): 2. At 1 it reads as a format-1
+	// client does, answering every format-2 construct FORMAT_UNSUPPORTED, which a rollback and FS-72's tests run
+	// (EVS2-M10-30). Reading format 2 also needs its reader installed (EvsClient.EnableFormat2Reader), and writing it
+	// §19.11's format2 gate (Format2Admitted).
+	MaxFormat int
 }
 
 // The desktop daemon's evs settings.
@@ -301,5 +306,6 @@ func DefaultEvsSettings() *EvsSettings {
 		SubscribeBackground:      true,
 		WriteAtTipTryCount:       3,
 		LookupVersionCount:       10000,
+		MaxFormat:                2,
 	}
 }

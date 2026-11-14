@@ -9,7 +9,7 @@
 //	Sidecar          the row's standing as members read it (sidecar.GkmSidecarStandingAt), and the acl part's Suspend
 //	RepoReaders      §8.12's RepoReaders at now
 //	RepoWriters      the repo's writers at now, or in the directory group the config's (§10.9's directory row)
-//	PendingTargets   each repo the sidecar reads at now with those writers (§10.6's KeyPackages row)
+//	PendingTargets   each repo the sidecar reads at now with those writers, and in the directory group its admission's signer first (§10.6's KeyPackages row)
 //	CheckPin         the pin on the state's chain within what it retains; above the state, not reached yet
 //	DelegationReads  sidecar.GkmDelegationHolds: a live Delegation whose reach holds the repo, or in the config a
 //	                 sidecar's live forwarding Delegation (owner decision 197)
@@ -195,7 +195,9 @@ func (self *AclGkmAuthState) PendingTargets(principal *sidecar.Principal, sideca
 		if sidecar.AclHonorScope(snapshot.Acl, sidecarId, repoId, sidecar.AclEvsRead, sidecar.AclTokenAudienceGkm, now) != sidecar.AclScopeHonored {
 			continue
 		}
-		targets = append(targets, &GkmPendingTarget{RepoId: repoId, SidecarIds: gkmAclHintWriters(snapshot, repoId, now)})
+		// in the directory group the uploader's admission's signer too (directory.go)
+		sidecarIds := GkmFirstUploadAudience(snapshot.Config, repoId, sidecarId, gkmAclHintWriters(snapshot, repoId, now), now)
+		targets = append(targets, &GkmPendingTarget{RepoId: repoId, SidecarIds: sidecarIds})
 	}
 	return targets, GkmAuthAllowed
 }
