@@ -1351,13 +1351,13 @@ func TestTunLinuxSyncKeepsTheCarveInTheExitsTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(tun.close)
-	waitSync := func(what string, done func(sync testTunCarveSync) bool) {
+	waitSync := func(what string, done func(carveSync testTunCarveSync) bool) {
 		t.Helper()
 		deadline := time.After(urTestTimeout)
 		for {
 			select {
-			case sync := <-syncs:
-				if done(sync) {
+			case carveSync := <-syncs:
+				if done(carveSync) {
 					return
 				}
 			case <-deadline:
@@ -1379,8 +1379,8 @@ func TestTunLinuxSyncKeepsTheCarveInTheExitsTable(t *testing.T) {
 	}
 
 	// the first sync runs before the first local read, so the one after it puts the throws on
-	waitSync("the carve's throws", func(sync testTunCarveSync) bool {
-		return sync.err == nil && slices.Equal(sync.throwAddrs, []netip.Addr{gateway, resolver})
+	waitSync("the carve's throws", func(carveSync testTunCarveSync) bool {
+		return carveSync.err == nil && slices.Equal(carveSync.throwAddrs, []netip.Addr{gateway, resolver})
 	})
 	events, _ := netlink.take()
 	if addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable); !slices.Equal(addedAddrs,
@@ -1393,8 +1393,8 @@ func TestTunLinuxSyncKeepsTheCarveInTheExitsTable(t *testing.T) {
 
 	// a resolver dropped from the host's addresses: the next sync takes its throw off
 	readLocal([]netip.Addr{gateway})
-	waitSync("the dropped address's throw to come off", func(sync testTunCarveSync) bool {
-		return slices.Equal(sync.throwAddrs, []netip.Addr{gateway})
+	waitSync("the dropped address's throw to come off", func(carveSync testTunCarveSync) bool {
+		return slices.Equal(carveSync.throwAddrs, []netip.Addr{gateway})
 	})
 	events, _ = netlink.take()
 	if addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable); len(addedAddrs) != 0 ||
@@ -1405,7 +1405,7 @@ func TestTunLinuxSyncKeepsTheCarveInTheExitsTable(t *testing.T) {
 	// a throw the kernel refuses is the sync's error, not a hold, and goes on at a later sync
 	netlink.setThrowErr(unix.ENOBUFS)
 	readLocal([]netip.Addr{gateway, resolver})
-	waitSync("a sync whose throw is refused", func(sync testTunCarveSync) bool { return sync.err != nil })
+	waitSync("a sync whose throw is refused", func(carveSync testTunCarveSync) bool { return carveSync.err != nil })
 	status := tun.status()
 	if !status.DefaultRoute || status.ExitsHeld || !strings.Contains(status.SyncError, "did not go on") ||
 		strings.Contains(status.SyncError, resolver.String()) {
@@ -1413,8 +1413,8 @@ func TestTunLinuxSyncKeepsTheCarveInTheExitsTable(t *testing.T) {
 	}
 	netlink.setThrowErr(nil)
 	tunBridge.changed()
-	waitSync("the refused throw on a later sync", func(sync testTunCarveSync) bool {
-		return sync.err == nil && slices.Equal(sync.throwAddrs, []netip.Addr{gateway, resolver})
+	waitSync("the refused throw on a later sync", func(carveSync testTunCarveSync) bool {
+		return carveSync.err == nil && slices.Equal(carveSync.throwAddrs, []netip.Addr{gateway, resolver})
 	})
 	if status := tun.status(); status.SyncError != "" || !status.DefaultRoute {
 		t.Fatalf("retried: %+v", status)
