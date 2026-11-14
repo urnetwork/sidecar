@@ -341,6 +341,14 @@ barrier mail.config.remove.after mail_config_write.go
 barrier mail.config.remove.before mail_config_write.go
 barrier mail.config.write.after mail_config_write.go
 barrier mail.config.write.before mail_config_write.go
+barrier mail.erase.closure.after mail_erase_closure.go
+barrier mail.erase.closure.before mail_erase_closure.go
+barrier mail.erase.keys.after mail_erase_closure.go
+barrier mail.erase.keys.before mail_erase_closure.go
+barrier mail.erase.message.after mail_erase.go
+barrier mail.erase.message.before mail_erase.go
+barrier mail.erase.orphan.after mail_erase.go
+barrier mail.erase.orphan.before mail_erase.go
 barrier mail.flags.write.after mail_flags.go
 barrier mail.flags.write.before mail_flags.go
 barrier mail.group.ref.remove.after mail_ingest_group.go
