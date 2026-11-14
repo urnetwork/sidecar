@@ -21,11 +21,12 @@
 // generation's gkm hints to the key client and ends them with the Sidecar.
 //
 // Not built here, each failing closed: the statement poster (CORE-M2-02's evs FileStatement), so a repo's create,
-// delete and restore refuse; the HeadCheck witness stop (SealAllowed, ReportFork) and the readers' committer lookup;
+// delete and restore refuse; the readers' committer lookup, so a commit by another of this sidecar's clients is refused;
 // a member's recovery key, so a rotation refuses where a member holds a recovery identity; the current ReaderKey's
 // digest, so a late ask names none; a tagged or ephemeral sidecar's wraps-only key client, whose MLS engine refuses; and
 // a new member device's first config head, whose key it takes only from a state the follower gives once it stands
-// (question daemon-evs-gkm-clients-new-device-config-key).
+// (question daemon-evs-gkm-clients-new-device-config-key). Not built and open: HeadCheck's witness stop (the key
+// client's SealAllowed and ReportFork), which no host runs yet, so an unwitnessed device's sealing does not stop.
 
 package main
 
