@@ -452,13 +452,13 @@ func startUrTun(ctx context.Context, args *urTunArgs) (*urTun, error) {
 		onSync:     args.OnSync,
 		withheldOf: args.Withheld,
 		ctx:        cancelCtx,
-		cancel:    cancel,
-		readDone:  make(chan struct{}),
-		syncDone:  make(chan struct{}),
-		localDone: make(chan struct{}),
-		syncWake:  make(chan struct{}, 1),
-		localWake: make(chan struct{}, 1),
-		writeBufs: make([][]byte, 1),
+		cancel:     cancel,
+		readDone:   make(chan struct{}),
+		syncDone:   make(chan struct{}),
+		localDone:  make(chan struct{}),
+		syncWake:   make(chan struct{}, 1),
+		localWake:  make(chan struct{}, 1),
+		writeBufs:  make([][]byte, 1),
 	}
 	if self.log == nil {
 		self.log = sidecar.NewNoopLogger()
