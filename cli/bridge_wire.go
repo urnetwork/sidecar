@@ -5,7 +5,9 @@
 // network's ConfigClient, compiles and serves bridge flows on each client generation (bridge_component.go).
 //
 // urBridgeDaemon holds the daemon's bridges, one a network, and the instance's one OS tun over one of them (ur tun,
-// tun_device.go), which it closes with the daemon, so routes are restored on every path the daemon ends by.
+// tun_device.go), which it closes with the daemon, so routes are restored on every path the daemon ends by. It judges
+// which of its networks routes a block two of them hold, the first this device joined (bridge_shared_block.go), and
+// the tun leaves a block it does not own off the device.
 //
 // What the wiring needs of the network's config, the ConfigClient and the head, rows, keys and local policy beside
 // it, comes from the daemon's config follower, which no task builds yet (question bridge-m4-16-daemon-config-follower).
@@ -170,6 +172,7 @@ func newUrBridgeWire(ctx context.Context, args *urBridgeWireArgs) (*urBridgeWire
 		DaemonListeners: args.DaemonListeners,
 		Log:             args.Log,
 		OnAttach:        self.attach,
+		Emit:            self.emit,
 		Settings:        self.componentSettings,
 	})
 	if err != nil {
@@ -204,6 +207,21 @@ func (self *urBridgeWire) attach(env *sidecar.SidecarEnv) {
 		apiUrl:         self.args.SidecarSettings.ApiUrl,
 		platformUrl:    self.args.SidecarSettings.PlatformUrl,
 	})
+}
+
+// The component's bridge_alarm, raised on the network's Sidecar, whose events the daemon's callers read.
+func (self *urBridgeWire) emit(event sidecar.SidecarEvent) {
+	if event.Kind != sidecar.SidecarEventBridgeAlarm {
+		return
+	}
+	self.raise(event.BridgeAlarm, event.SidecarId)
+}
+
+// Raises bridge_alarm on the network's Sidecar.
+func (self *urBridgeWire) raise(alarm sidecar.SidecarBridgeAlarm, sidecarId *sidecar.Id) {
+	if err := self.args.Sidecar.RaiseBridgeAlarm(alarm, sidecarId); err != nil && self.args.Log != nil {
+		self.args.Log.Warningf("[bridge]%s an alarm did not raise: %v", self.args.NetworkId, err)
+	}
 }
 
 // device.BridgeSignFunction over the Sidecar's signer (§17.9's sign row): it refuses what it would not sign.
@@ -281,7 +299,10 @@ func (self *urBridgeWire) network() *urBridgeNetwork {
 		links:             self.host,
 		paired:            self.args.Sidecar.Paired,
 		componentSettings: self.componentSettings,
-		close:             self.close,
+		alarm: func(alarm sidecar.SidecarBridgeAlarm) {
+			self.raise(alarm, nil)
+		},
+		close: self.close,
 	}
 }
 
@@ -293,6 +314,8 @@ type urBridgeNetwork struct {
 	// whether the network's sidecar is a paired child, whose app's device role may hold the block (§17.11's yield)
 	paired            func() bool
 	componentSettings *sidecar.BridgeComponentSettings
+	// raises bridge_alarm on the network's Sidecar, nil for none: the daemon's shared_block (bridge_shared_block.go)
+	alarm func(alarm sidecar.SidecarBridgeAlarm)
 	// ends the bridge, nil for none
 	close func()
 }
@@ -307,28 +330,39 @@ type urBridgeDaemonArgs struct {
 	System urTunSystem
 	// Builds a network's bridge on demand. Nil until the daemon follows a network's config (the file's comment), and
 	// every network then answers errUrBridgeUnwired.
-	Build    urBridgeBuildFunction
-	Settings *urTunSettings
-	Log      sidecar.Logger
+	Build urBridgeBuildFunction
+	// The networks in the order this device joined them, oldest first, which decides who routes a shared block
+	// (bridge_shared_block.go): sidecar.json's. Nil ranks every network by its id.
+	JoinOrder func() []sidecar.Id
+	Settings  *urTunSettings
+	Log       sidecar.Logger
 }
 
 // The daemon's bridges and the instance's one OS tun (the file's comment). Safe for concurrent use.
 type urBridgeDaemon struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	instance string
-	system   urTunSystem
-	build    urBridgeBuildFunction
-	settings *urTunSettings
-	log      sidecar.Logger
+	ctx       context.Context
+	cancel    context.CancelFunc
+	instance  string
+	system    urTunSystem
+	build     urBridgeBuildFunction
+	joinOrder func() []sidecar.Id
+	settings  *urTunSettings
+	log       sidecar.Logger
 
 	// serializes what starts or ends the tun and builds a bridge, which do I/O, so two ur tun calls cannot race
 	operationLock sync.Mutex
+	// serializes the shared blocks' judgments
+	sharedJudgeLock sync.Mutex
+	// wakes the shared blocks' judgment; closed when it has returned
+	sharedWake chan struct{}
+	sharedDone chan struct{}
 
 	stateLock sync.Mutex
 	networks  map[sidecar.Id]*urBridgeNetwork
 	tun       *urTun
 	closed    bool
+	// what the last judgment found
+	sharedBlocks []urSharedBlock
 }
 
 // A daemon's bridges' args: the platform's half of ur tun where it runs, and no builder, since the daemon follows no
@@ -353,34 +387,57 @@ func newUrBridgeDaemon(ctx context.Context, args *urBridgeDaemonArgs) *urBridgeD
 	if log == nil {
 		log = sidecar.NewNoopLogger()
 	}
-	return &urBridgeDaemon{
-		ctx:      cancelCtx,
-		cancel:   cancel,
-		instance: args.Instance,
-		system:   args.System,
-		build:    args.Build,
-		settings: settings,
-		log:      log,
-		networks: map[sidecar.Id]*urBridgeNetwork{},
+	self := &urBridgeDaemon{
+		ctx:        cancelCtx,
+		cancel:     cancel,
+		instance:   args.Instance,
+		system:     args.System,
+		build:      args.Build,
+		joinOrder:  args.JoinOrder,
+		settings:   settings,
+		log:        log,
+		sharedWake: make(chan struct{}, 1),
+		sharedDone: make(chan struct{}),
+		networks:   map[sidecar.Id]*urBridgeNetwork{},
 	}
+	go self.runSharedBlocks()
+	return self
 }
 
-// Holds a network's bridge, which the daemon's composition built; the returned function forgets it again.
+// Holds a network's bridge, which the daemon's composition built, and judges the shared blocks on each of its changes;
+// the returned function forgets it again.
 func (self *urBridgeDaemon) addNetwork(network *urBridgeNetwork) (func(), error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.closed {
-		return nil, errUrTunClosed
-	}
-	if _, held := self.networks[network.networkId]; held {
-		return nil, fmt.Errorf("a bridge runs for network %s already", network.networkId)
-	}
-	self.networks[network.networkId] = network
-	return func() {
+	err := func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.networks[network.networkId] == network {
-			delete(self.networks, network.networkId)
+		if self.closed {
+			return errUrTunClosed
+		}
+		if _, held := self.networks[network.networkId]; held {
+			return fmt.Errorf("a bridge runs for network %s already", network.networkId)
+		}
+		self.networks[network.networkId] = network
+		return nil
+	}()
+	if err != nil {
+		return nil, err
+	}
+	// each change of the bridge's, a block among them, has the shared blocks judged again
+	removeChange := network.bridge.AddChangeCallback(self.wantSharedBlocks)
+	self.wantSharedBlocks()
+	return func() {
+		forgotten := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.networks[network.networkId] == network {
+				delete(self.networks, network.networkId)
+				return true
+			}
+			return false
+		}()
+		removeChange()
+		if forgotten {
+			self.wantSharedBlocks()
 		}
 	}, nil
 }
@@ -449,6 +506,8 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 			return nil, fmt.Errorf("%w: its interface %s routes the network's block on this host", errUrTunYield, holder)
 		}
 	}
+	// judged now, so the first sync already leaves off a block another network routes here
+	self.judgeSharedBlocks()
 	tun, err := startUrTun(self.ctx, &urTunArgs{
 		Name:      name,
 		NetworkId: networkId,
@@ -457,7 +516,10 @@ func (self *urBridgeDaemon) tunUp(networkId sidecar.Id, running *sidecar.Sidecar
 		Links:     network.links,
 		Settings:  self.settings,
 		Log:       self.log,
-		OnClose:   self.forgetTun,
+		Withheld: func() []urSharedBlock {
+			return self.sharedBlocksFor(networkId)
+		},
+		OnClose: self.forgetTun,
 	})
 	if err != nil {
 		return nil, err
@@ -541,4 +603,5 @@ func (self *urBridgeDaemon) close() {
 		}
 	}
 	self.cancel()
+	<-self.sharedDone
 }

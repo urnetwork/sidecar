@@ -691,6 +691,14 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Settings:       settings,
 		Log:            log,
 	})
+	// sidecar.json's order of enrollment, which decides who routes a block two networks hold (§17.4)
+	bridgeArgs.JoinOrder = func() []sidecar.Id {
+		order := []sidecar.Id{}
+		for _, record := range instance.Networks() {
+			order = append(order, record.NetworkId)
+		}
+		return order
+	}
 	network.bridges = newUrBridgeDaemon(ctx, bridgeArgs)
 	defer network.bridges.close()
 	if urlsErr != nil {

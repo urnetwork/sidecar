@@ -16,19 +16,13 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
 	"fmt"
-	"io"
-	"math"
-	"net"
 	"net/netip"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"github.com/urnetwork/connect"
 	"golang.org/x/sys/unix"
 
 	"github.com/urnetwork/sidecar"
@@ -133,31 +127,12 @@ func urTunResolverStep(name string, resolver netip.Addr, zones []string) string 
 		name, resolver, name, strings.Join(routing, " "), strings.Join(servers, " "))
 }
 
-// The bridge's pass-through (device.BridgeResolverUpstream): query to each of this host's resolvers in turn until one
-// answers, over UDP, and over TCP when the answer is truncated. routed says which addresses the tun carries.
+// The bridge's pass-through (device.BridgeResolverUpstream) over this host's resolvers (urLinuxUpstreamServers); routed
+// says which addresses the tun carries.
 func urLinuxResolverUpstream(routed func(address netip.Addr) bool) device.BridgeResolverUpstream {
-	// connect's egress machinery: the mark on each socket it makes while one is set, nothing otherwise. A dial of an
-	// address needs none of a strategy's settings, its TLS roots among them, so a zero ConnectSettings makes it, and the
-	// query's context bounds it
-	dialer := (&connect.ConnectSettings{}).NetDialer()
-	return func(ctx context.Context, query []byte) ([]byte, error) {
-		servers := urLinuxUpstreamServers(routed)
-		if len(servers) == 0 {
-			return nil, errors.New("no resolver of this host's is outside the tun")
-		}
-		var lastErr error
-		for _, server := range servers {
-			answer, err := urDnsExchange(ctx, dialer, server, query)
-			if err == nil {
-				return answer, nil
-			}
-			lastErr = err
-			if ctx.Err() != nil {
-				break
-			}
-		}
-		return nil, lastErr
-	}
+	return urResolverUpstream(func() []netip.Addr {
+		return urLinuxUpstreamServers(routed)
+	})
 }
 
 // This host's resolvers the bridge may pass to: resolved's uplinks where its file is, else /etc/resolv.conf's; never
@@ -176,79 +151,4 @@ func urLinuxUpstreamServers(routed func(address netip.Addr) bool) []netip.Addr {
 		servers = append(servers, resolver)
 	}
 	return servers
-}
-
-// One DNS exchange with server on port 53 (RFC 1035 4.2) through dialer: over UDP, again over TCP for an answer whose TC
-// bit is set. The answer must carry the query's id and the response bit.
-func urDnsExchange(ctx context.Context, dialer *net.Dialer, server netip.Addr, query []byte) ([]byte, error) {
-	const dnsHeaderByteCount = 12
-	if len(query) < dnsHeaderByteCount {
-		return nil, errors.New("not a query")
-	}
-	address := net.JoinHostPort(server.String(), "53")
-	check := func(answer []byte) error {
-		if len(answer) < dnsHeaderByteCount || answer[0] != query[0] || answer[1] != query[1] || answer[2]&0x80 == 0 {
-			return errors.New("not an answer to the query")
-		}
-		return nil
-	}
-	deadline, hasDeadline := ctx.Deadline()
-	udp, err := dialer.DialContext(ctx, "udp", address)
-	if err != nil {
-		return nil, err
-	}
-	answer, err := func() ([]byte, error) {
-		defer udp.Close()
-		if hasDeadline {
-			udp.SetDeadline(deadline)
-		}
-		if _, err := udp.Write(query); err != nil {
-			return nil, err
-		}
-		// a DNS message's length is a uint16 (RFC 1035 4.2.2)
-		buffer := make([]byte, math.MaxUint16)
-		for {
-			n, err := udp.Read(buffer)
-			if err != nil {
-				return nil, err
-			}
-			if check(buffer[:n]) == nil {
-				return buffer[:n], nil
-			}
-		}
-	}()
-	if err != nil {
-		return nil, err
-	}
-	// TC: the whole answer comes over TCP
-	if answer[2]&0x02 == 0 {
-		return answer, nil
-	}
-	if math.MaxUint16 < len(query) {
-		return nil, errors.New("a query too long for TCP's length")
-	}
-	stream, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return nil, err
-	}
-	defer stream.Close()
-	if hasDeadline {
-		stream.SetDeadline(deadline)
-	}
-	framed := binary.BigEndian.AppendUint16(nil, uint16(len(query)))
-	if _, err := stream.Write(append(framed, query...)); err != nil {
-		return nil, err
-	}
-	var lengthBytes [2]byte
-	if _, err := io.ReadFull(stream, lengthBytes[:]); err != nil {
-		return nil, err
-	}
-	answer = make([]byte, binary.BigEndian.Uint16(lengthBytes[:]))
-	if _, err := io.ReadFull(stream, answer); err != nil {
-		return nil, err
-	}
-	if err := check(answer); err != nil {
-		return nil, err
-	}
-	return answer, nil
 }

@@ -15,12 +15,20 @@
 //	         every LocalPollInterval, into Bridge.SetLocalAddresses whenever they change, the bridge's own resolvers left
 //	         out so their routes are never carved
 //
-// Under exits the default route rides the tun (§17.11), in a routing table of the platform's own with wg-quick's rules,
-// `not fwmark <mark> lookup <table>` and `lookup main suppress_prefixlength 0` (tun_linux.go; QD-800): the daemon's own
-// connect sockets carry connect's egress mark, which the first rule passes by, so its transport, and with it every
-// link the bridge sends on, keeps today's route, and nothing is carved by address. Where the platform cannot put it on,
-// or the host refuses it, the exits are held: the status says why, the host's other traffic keeps today's route, and
-// the sync tries again. Off exits, or once the tun ends, the route, the rules and the mark go.
+// Under exits the default route rides the tun (§17.11). On Linux it goes in a routing table of the platform's own with
+// wg-quick's rules, `not fwmark <mark> lookup <table>` and `lookup main suppress_prefixlength 0` (tun_linux.go;
+// QD-800): the daemon's own connect sockets carry connect's egress mark, which the first rule passes by, so its
+// transport, and with it every link the bridge sends on, keeps today's route, and nothing is carved by address. On
+// macOS and Windows it goes on as IPv4's two halves (urTunExitsHalves), and connect's sockets are bound to the
+// interface of the host's own default route instead (tun_darwin.go, tun_windows.go). Where the platform cannot put it
+// on, or the host refuses it, the exits are held: the status says why, the host's other traffic keeps today's route,
+// and the sync tries again. Off exits, or once the tun ends, the route, the rules and the binding go.
+//
+// A block of the network's that this device routes to another network, one it joined first holding the same block
+// (§17.4; bridge_shared_block.go), is withheld: each sync leaves the addresses, routes and names inside it off the
+// device, and the read loop drops anything bound into it, so a packet sent there under the exits' default route or a
+// wider route reaches none of this network's hosts. Its routes outside the block, its exits and the flows it hosts stay
+// its own.
 //
 // Close, from ur tun down, the daemon's end, the network's bridge closing or a device that failed, stops the loops,
 // takes the default route, its rules and the mark off, reverts the resolver, removes the routes and addresses it
@@ -54,9 +62,11 @@ import (
 
 // What ur tun refuses or stops on.
 var (
-	// The platform has no ur tun at this release (§17.18): Linux and WSL2 at M4, macOS and Windows at M6.
-	errUrTunPlatform = errors.New("ur tun runs on Linux and WSL2 at this release; macOS and Windows follow at M6")
-	// The daemon may not create or configure the device.
+	// The platform has no ur tun (§17.18): Linux and WSL2 from M4, macOS and Windows from M6.
+	errUrTunPlatform = errors.New("ur tun has no OS tun on this system: it runs on Linux, WSL2, macOS and Windows; " +
+		"ur bridge works without it over the userspace stack")
+	// The daemon may not create or configure the device. Linux's words; macOS and Windows say theirs through
+	// urTunPrivilegeError, which is this error too.
 	errUrTunPrivilege = errors.New("ur tun needs CAP_NET_ADMIN or root in the daemon: grant ur the capability " +
 		"(sudo setcap cap_net_admin=ep \"$(command -v ur)\") and run ur again, or run the daemon as root; " +
 		"ur bridge works without it over the userspace stack")
@@ -72,6 +82,37 @@ var (
 	// The default route stays off the tun under exits, for the reason it wraps; the sync tries again.
 	errUrTunExitsHeld = errors.New("the exits are held off ur tun")
 )
+
+// A privilege the daemon lacks, in its platform's words: errors.Is finds errUrTunPrivilege, so the start ends as it
+// does on Linux, while the person reads the step their system takes.
+type urTunPrivilegeError struct {
+	// What the person reads: what the daemon lacks and the step that grants it.
+	text string
+	// The platform's refusal.
+	err error
+}
+
+func (self *urTunPrivilegeError) Error() string {
+	if self.err == nil {
+		return self.text
+	}
+	return fmt.Sprintf("%s (%v)", self.text, self.err)
+}
+
+func (self *urTunPrivilegeError) Is(target error) bool {
+	return target == errUrTunPrivilege
+}
+
+func (self *urTunPrivilegeError) Unwrap() error {
+	return self.err
+}
+
+// The two halves of IPv4's space, which macOS and Windows put the default route on as under exits (tun_darwin.go,
+// tun_windows.go): each more specific than the host's own default route, which stays, so the transport's interface
+// keeps a way out and the halves come off without touching it.
+func urTunExitsHalves() []netip.Prefix {
+	return []netip.Prefix{netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("128.0.0.0/1")}
+}
 
 // Tunables of ur tun.
 type urTunSettings struct {
@@ -115,6 +156,16 @@ type urTunSettings struct {
 	// <mark> lookup <table>`, takes the one after: 32760, so both run before the main table's rule at 32766 and the
 	// first before the second, which is what keeps the host's own non-default routes ahead of the tun.
 	ExitsRulePriority uint32
+	// How often the daemon judges its networks' shared blocks again with no change reported (bridge_shared_block.go):
+	// 1 min, for a drain that ends with no change of state.
+	SharedBlockInterval time.Duration
+	// The bytes a read leaves in front of each packet: 4, the family header a utun puts there on macOS, which
+	// wireguard's read wants room for. Linux and Windows read past it unused.
+	ReadHeadroomByteCount int
+	// The longest zone name a platform's resolver files or rules take, and its longest label: DNS's 253, a name's 255
+	// less its length and root bytes, and 63 (RFC 1035 2.3.4).
+	ZoneNameMaxByteCount  int
+	ZoneLabelMaxByteCount int
 }
 
 // The defaults, a fresh value each call.
@@ -136,6 +187,10 @@ func defaultUrTunSettings() *urTunSettings {
 		ExitsTable:             0x7572,
 		ExitsMark:              0x7572,
 		ExitsRulePriority:      32760,
+		SharedBlockInterval:    time.Minute,
+		ReadHeadroomByteCount:  4,
+		ZoneNameMaxByteCount:   253,
+		ZoneLabelMaxByteCount:  63,
 	}
 }
 
@@ -172,6 +227,13 @@ type urTunInterface interface {
 	Close() error
 }
 
+// An open tun whose platform names the device itself, as macOS names a utun: the tun takes that name for its status
+// and for what it asks the platform about its own interface.
+type urTunNamedInterface interface {
+	urTunInterface
+	Name() string
+}
+
 // The platform's half of ur tun.
 type urTunSystem interface {
 	// Opens the device name with mtu, up. Refuses with errUrTunPrivilege or errUrTunNoDevice where the host lacks one.
@@ -184,7 +246,8 @@ type urTunSystem interface {
 	WatchLocal(ctx context.Context, changed func()) error
 }
 
-// The platform's half where ur tun runs: tun_linux.go sets it at M4. Nil elsewhere, where ur tun refuses.
+// The platform's half where ur tun runs: tun_linux.go sets it at M4, tun_darwin.go and tun_windows.go at M6. Nil
+// elsewhere, where ur tun refuses.
 var urTunPlatform func(settings *urTunSettings, log sidecar.Logger) urTunSystem
 
 // What the tun reads and feeds of one network's device.Bridge, which satisfies it; a test stands a fake in.
@@ -218,6 +281,9 @@ type urTunArgs struct {
 	Links     urTunLinks
 	Settings  *urTunSettings
 	Log       sidecar.Logger
+	// The network's blocks this device routes to another network, one it joined first that holds the same block
+	// (bridge_shared_block.go), read at each sync: the tun carries nothing inside them. Nil for none.
+	Withheld func() []urSharedBlock
 	// Called once the tun has closed, on whichever path, with why; nil for none.
 	OnClose func(tun *urTun, reason error)
 	// Called after each sync has applied, with its error; nil for none. A test's barrier.
@@ -249,6 +315,10 @@ type urTunStatus struct {
 	ExitsHeldReason string `json:"exits_held_reason,omitempty"`
 	// What the bridge waits on, by kind.
 	Waits []string `json:"waits,omitempty"`
+	// The network's blocks this device routes to a network it joined first (§17.4), which the tun leaves off, and the
+	// packets it dropped for being bound into one.
+	Withheld      []urTunWithheld `json:"withheld,omitempty"`
+	WithheldCount uint64          `json:"withheld_count,omitempty"`
 	// How many local addresses the bridge carves; -1 while unknown.
 	LocalAddressCount int `json:"local_address_count"`
 	// Packets since the tun came up: read, taken by a route, dropped for the default route, refused by a building link
@@ -263,6 +333,12 @@ type urTunStatus struct {
 	SyncError string `json:"sync_error,omitempty"`
 }
 
+// A block the tun leaves off, as its status shows it: the block, and the network that routes it on this device.
+type urTunWithheld struct {
+	Block          string     `json:"block"`
+	OwnerNetworkId sidecar.Id `json:"owner_network_id"`
+}
+
 // One network's OS tun. See the file's comment.
 type urTun struct {
 	name      string
@@ -275,6 +351,10 @@ type urTun struct {
 	log       sidecar.Logger
 	onClose   func(tun *urTun, reason error)
 	onSync    func(err error)
+	// the network's withheld blocks, nil for none
+	withheldOf func() []urSharedBlock
+	// their prefixes as the last sync applied them, which the read loop drops packets bound into; nil for none
+	withheldPrefixes atomic.Pointer[[]netip.Prefix]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -303,9 +383,11 @@ type urTun struct {
 	refusedCount    atomic.Uint64
 	writtenCount    atomic.Uint64
 	writeErrorCount atomic.Uint64
+	withheldCount   atomic.Uint64
 
 	stateLock sync.Mutex
 	// what the last sync applied
+	withheld           []urSharedBlock
 	addresses          []netip.Addr
 	routes             []netip.Prefix
 	routeConflictCount int
@@ -352,19 +434,24 @@ func startUrTun(ctx context.Context, args *urTunArgs) (*urTun, error) {
 	if err != nil {
 		return nil, err
 	}
+	name := args.Name
+	if named, ok := iface.(urTunNamedInterface); ok {
+		name = named.Name()
+	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &urTun{
-		name:      args.Name,
-		networkId: args.NetworkId,
-		settings:  settings,
-		system:    args.System,
-		iface:     iface,
-		bridge:    args.Bridge,
-		links:     args.Links,
-		log:       args.Log,
-		onClose:   args.OnClose,
-		onSync:    args.OnSync,
-		ctx:       cancelCtx,
+		name:       name,
+		networkId:  args.NetworkId,
+		settings:   settings,
+		system:     args.System,
+		iface:      iface,
+		bridge:     args.Bridge,
+		links:      args.Links,
+		log:        args.Log,
+		onClose:    args.OnClose,
+		onSync:     args.OnSync,
+		withheldOf: args.Withheld,
+		ctx:        cancelCtx,
 		cancel:    cancel,
 		readDone:  make(chan struct{}),
 		syncDone:  make(chan struct{}),
@@ -415,23 +502,29 @@ func (self *urTun) wantLocal() {
 func (self *urTun) runRead() {
 	defer close(self.readDone)
 	batchCount := max(1, min(self.iface.BatchSize(), self.settings.ReadBatchCount))
+	headroom := self.settings.ReadHeadroomByteCount
 	bufs := make([][]byte, batchCount)
 	for i := range bufs {
-		bufs[i] = make([]byte, self.settings.ReadPacketByteCount)
+		bufs[i] = make([]byte, headroom+self.settings.ReadPacketByteCount)
 	}
 	sizes := make([]int, batchCount)
 	packets := make([][]byte, 0, batchCount)
 	for {
-		n, err := self.iface.Read(bufs, sizes, 0)
+		n, err := self.iface.Read(bufs, sizes, headroom)
 		if 0 < n {
 			packets = packets[:0]
 			for i := range n {
-				packets = append(packets, connect.MessagePoolCopy(bufs[i][:sizes[i]]))
+				packets = append(packets, connect.MessagePoolCopy(bufs[i][headroom:headroom+sizes[i]]))
 			}
 			self.readCount.Add(uint64(n))
+			if withheld := self.withheldPrefixes.Load(); withheld != nil {
+				packets = self.dropWithheld(packets, *withheld)
+			}
 			// takes every packet: each run's send owns its packets as the route it reaches says
-			self.bridge.RouteBurst(packets, self.send)
-			clear(packets)
+			if 0 < len(packets) {
+				self.bridge.RouteBurst(packets, self.send)
+			}
+			clear(packets[:cap(packets)])
 		}
 		if err == nil || errors.Is(err, errUrTunSegmentsDropped) {
 			continue
@@ -442,6 +535,43 @@ func (self *urTun) runRead() {
 		}
 		return
 	}
+}
+
+// Drops each packet bound into a withheld block, returning it to the pool and counting it, and answers the rest in
+// their order, in packets' own array. Only the network that joined first routes a shared block here (§17.4), so a
+// packet the host sends there, under the default route of exits or a wider route of the network's, reaches none of
+// this network's hosts.
+func (self *urTun) dropWithheld(packets [][]byte, withheld []netip.Prefix) [][]byte {
+	kept := packets[:0]
+	for _, packet := range packets {
+		if urTunPacketWithheld(packet, withheld) {
+			connect.MessagePoolReturn(packet)
+			self.withheldCount.Add(1)
+			continue
+		}
+		kept = append(kept, packet)
+	}
+	return kept
+}
+
+// Whether packet is an IPv4 packet bound into one of withheld. The overlay is IPv4 alone (§17.4), so no IPv6 packet
+// is.
+func urTunPacketWithheld(packet []byte, withheld []netip.Prefix) bool {
+	if len(packet) < 20 || packet[0]>>4 != 4 {
+		return false
+	}
+	return urTunInsideAny(withheld, netip.AddrFrom4([4]byte(packet[16:20])))
+}
+
+// Whether address lies in one of prefixes.
+func urTunInsideAny(prefixes []netip.Prefix, address netip.Addr) bool {
+	address = address.Unmap()
+	for _, prefix := range prefixes {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 // Sends one run of a burst on the route the bridge gave it. Takes every packet: a route takes those it accepts, and a
@@ -533,18 +663,43 @@ func (self *urTun) runSync() {
 }
 
 // Sets the device to what the bridge has in force now: its addresses, its routes, the default route under exits and the
-// zones' resolver. Every step runs even when one fails. The first error is the sync's, joined by why the exits are held,
-// which the sync tries again too and the status names apart.
+// zones' resolver, less everything inside a block another network routes on this device (§17.4). Every step runs even
+// when one fails. The first error is the sync's, joined by why the exits are held, which the sync tries again too and
+// the status names apart.
 func (self *urTun) sync() error {
+	var withheld []urSharedBlock
+	if self.withheldOf != nil {
+		withheld = self.withheldOf()
+	}
+	withheldPrefixes := []netip.Prefix{}
+	for _, shared := range withheld {
+		withheldPrefixes = append(withheldPrefixes, shared.Block.Masked())
+	}
+	// the read loop drops what is bound there before the routes that lead there come off
+	if 0 < len(withheldPrefixes) {
+		self.withheldPrefixes.Store(&withheldPrefixes)
+	} else {
+		self.withheldPrefixes.Store(nil)
+	}
 	status := self.bridge.Status()
 	addresses := []netip.Addr{}
 	for _, address := range status.Addresses {
-		if address = address.Unmap(); address.Is4() && !slices.Contains(addresses, address) {
+		if address = address.Unmap(); address.Is4() && !slices.Contains(addresses, address) &&
+			!urTunInsideAny(withheldPrefixes, address) {
 			addresses = append(addresses, address)
 		}
 	}
 	slices.SortFunc(addresses, netip.Addr.Compare)
-	routes := self.bridge.Routes()
+	routes := []netip.Prefix{}
+	for _, route := range self.bridge.Routes() {
+		// a wider route that holds a withheld block stays for the rest of what it holds, and the read loop drops what
+		// is bound into the block
+		if !slices.ContainsFunc(withheldPrefixes, func(prefix netip.Prefix) bool {
+			return prefix.Bits() <= route.Bits() && prefix.Contains(route.Addr())
+		}) {
+			routes = append(routes, route)
+		}
+	}
 	ownResolvers := []netip.Addr{}
 	for _, block := range []netip.Prefix{status.Block, status.PreviousBlock} {
 		if block.IsValid() && block.Addr().Is4() {
@@ -561,7 +716,9 @@ func (self *urTun) sync() error {
 	}
 	slices.Sort(zones)
 	var resolver netip.Addr
-	if status.Block.IsValid() && status.Block.Addr().Is4() {
+	// the resolver sits in the block, so a withheld block takes the names with it: they would name hosts this device
+	// does not reach
+	if status.Block.IsValid() && status.Block.Addr().Is4() && !urTunInsideAny(withheldPrefixes, urTunResolverAddr(status.Block)) {
 		resolver = urTunResolverAddr(status.Block)
 	}
 	if !resolver.IsValid() {
@@ -607,6 +764,7 @@ func (self *urTun) sync() error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		self.withheld = withheld
 		self.addresses = addresses
 		self.routes = routes
 		self.routeConflictCount = conflictCount
@@ -726,6 +884,7 @@ func (self *urTun) status() *urTunStatus {
 		RefusedCount:    self.refusedCount.Load(),
 		WrittenCount:    self.writtenCount.Load(),
 		WriteErrorCount: self.writeErrorCount.Load(),
+		WithheldCount:   self.withheldCount.Load(),
 	}
 	if bridgeStatus.Block.IsValid() {
 		status.Block = bridgeStatus.Block.String()
@@ -738,6 +897,9 @@ func (self *urTun) status() *urTunStatus {
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	for _, shared := range self.withheld {
+		status.Withheld = append(status.Withheld, urTunWithheld{Block: shared.Block.String(), OwnerNetworkId: shared.OwnerNetworkId})
+	}
 	for _, address := range self.addresses {
 		status.Addresses = append(status.Addresses, address.String())
 	}
