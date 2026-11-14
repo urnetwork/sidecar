@@ -10,6 +10,9 @@
 package mcp
 
 import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -24,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -508,5 +512,135 @@ func TestOfflinePhaseSpools(t *testing.T) {
 	}
 	if env.hasGap(runId, sidecar.RecordCoverageGapMissedEvent) {
 		t.Error("an event was counted as missed")
+	}
+}
+
+// §16.9's witness bound (owner decision 129; D-TRUST-10): from witness_bound_hours a cloud sidecar's shared-group
+// writes stop, which reaches its record writer as evs refusing its deposits. Through RECORD's own writer, depositing
+// to its sponsor's vault as a tagged sidecar does: while evs refuses, every hook still succeeds, each entry is sealed
+// and kept in the writer's journal, nothing reaches evs, and the run counts no missed event; once evs takes deposits
+// again the same entries land, none lost. The twin, a gate never closed, lands them at the first flush.
+func TestWitnessBoundSpoolsCapture(t *testing.T) {
+	for _, bound := range []bool{true, false} {
+		env := newIngestTestEnv(t)
+		ctx := context.Background()
+		streams := sidecartest.NewFakeRecordStreams(env.clock, nil, nil)
+		vaultId, err := streams.NewRepo(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publicKey, key, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// the cloud agent: tagged, so it has a sponsor and no member, and the sponsor's vault takes its deposits alone
+		agentId := sidecar.NewId()
+		sponsorId := sidecar.NewId()
+		ownerDeviceId := sidecar.NewId()
+		if err := streams.Grant(vaultId, agentId, sidecartest.RecordStreamsScope{Deposit: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := streams.Grant(vaultId, ownerDeviceId, sidecartest.RecordStreamsScope{Read: true, Write: true, Deposit: true}); err != nil {
+			t.Fatal(err)
+		}
+		auth := sidecartest.NewFakeRecordAuth()
+		auth.Append(&sidecartest.FakeRecordAuthFixture{
+			TimeMillis:   env.clock.Now().UnixMilli(),
+			IdentityKeys: map[sidecar.Id][]byte{agentId: publicKey},
+			Members:      map[sidecar.Id]sidecar.Id{ownerDeviceId: sponsorId},
+			Sponsors:     map[sidecar.Id]sidecar.Id{agentId: sponsorId},
+			Repos: map[sidecar.Id]*sidecartest.FakeRecordRepoAuth{vaultId: {
+				Readers:    []sidecar.Id{ownerDeviceId},
+				Writers:    []sidecar.Id{ownerDeviceId},
+				Consented:  []sidecar.Id{ownerDeviceId},
+				Depositors: []sidecar.Id{agentId},
+			}},
+			Vaults: map[sidecar.Id]sidecar.Id{sponsorId: vaultId},
+		})
+		store, err := env.network.LocalStore().Directory("record", "record")
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+			SidecarId:         agentId,
+			IdentityPublicKey: publicKey,
+			Store:             store,
+			Sign: func(purpose string, signedType bridge.SignedType, body []byte, signAgentId *sidecar.Id) (*bridge.Signed, error) {
+				return &bridge.Signed{
+					Body:      bytes.Clone(body),
+					SignerId:  agentId.Bytes(),
+					Signature: ed25519.Sign(key, bridge.SignedBytes(purpose, signedType, body)),
+					Type:      uint32(signedType),
+				}, nil
+			},
+			Runs:     &ingestTestRunView{network: env.network},
+			Streams:  streams.For(agentId),
+			Auth:     func() sidecar.RecordAuthView { return auth.Tip() },
+			Clock:    env.clock,
+			Settings: sidecar.DefaultSidecarSettings().Record,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		env.ingest.detach()
+		env.ingest = NewIngest(&IngestArgs{
+			Server:    env.server,
+			Writers:   func(network McpNetwork) (sidecar.RecordWriter, error) { return record.Writer(), nil },
+			Redactors: func(network McpNetwork) (*sidecar.Redactor, error) { return env.redactor, nil },
+			Record:    sidecar.DefaultSidecarSettings().Record,
+		})
+		deposited := func() int {
+			heads, err := streams.For(ownerDeviceId).DepositRefs(ctx, vaultId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return len(heads)
+		}
+
+		streams.SetGateClosed(vaultId, bound)
+		harness := env.harnessIn(sidecartest.FakeHarnessCodex)
+		steps := []error{
+			harness.Hook(harness.Payload("s1", "UserPromptSubmit", map[string]any{"prompt": "Fix the build"})),
+			harness.ToolCall("s1", true, "Bash", map[string]any{"command": "make"}),
+			harness.ToolCall("s1", false, "Bash", map[string]any{"command": "make"}),
+		}
+		for index, err := range steps {
+			if err != nil {
+				t.Fatalf("bound %t: step %d failed its hook: %v", bound, index, err)
+			}
+		}
+		runId := env.runOf("codex", "s1")
+		flushErr := record.Flush(ctx)
+		if bound {
+			if flushErr == nil || deposited() != 0 {
+				t.Errorf("past the bound: the flush answered %v with %d deposit refs", flushErr, deposited())
+			}
+			if code, refused := sidecar.RecordStreamRefusalCode(flushErr); !refused {
+				t.Errorf("the stop did not arrive as an evs refusal: %v (%v)", flushErr, code)
+			}
+			if env.hasGap(runId, sidecar.RecordCoverageGapMissedEvent) {
+				t.Error("an entry evs refused was counted as a missed event")
+			}
+			// a hook past the bound still succeeds, its entry kept behind the others
+			if err := harness.ToolCall("s1", false, "Bash", map[string]any{"command": "make test"}); err != nil {
+				t.Fatalf("a hook past the bound failed: %v", err)
+			}
+			// the witness returns: evs takes the deposits, the kept entries among them
+			streams.SetGateClosed(vaultId, false)
+			flushErr = record.Flush(ctx)
+		}
+		if flushErr != nil {
+			t.Fatalf("bound %t: the flush once evs takes deposits: %v", bound, flushErr)
+		}
+		if deposited() == 0 {
+			t.Errorf("bound %t: nothing was deposited", bound)
+		}
+		if env.hasGap(runId, sidecar.RecordCoverageGapMissedEvent) {
+			t.Errorf("bound %t: an event was counted as missed", bound)
+		}
+		if violations := streams.Violations(); len(violations) != 0 {
+			t.Errorf("bound %t: %v", bound, violations)
+		}
+		env.ingest.detach()
 	}
 }
