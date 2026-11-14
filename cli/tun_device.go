@@ -3,24 +3,29 @@
 // tun down or its own end, as it holds a socket (§5.8).
 //
 //	read     the device's packets, a batch at a time, copied into the message pool and split by Bridge.RouteBurst: a
-//	         link, the reject client or the resolver takes each run, and a building link refuses its run, which is
-//	         counted and dropped for TCP to retransmit; a nil route, the default, is dropped and counted, since the tun
-//	         holds no default route
+//	         link, an exit, the reject client or the resolver takes each run, and a building link refuses its run, which
+//	         is counted and dropped for TCP to retransmit; a nil route, today's route, is dropped and counted, since the
+//	         tun cannot hand a packet back to the host's own route
 //	write    each packet the bridge answers, a link's reply, a reject or the resolver's answer, written into the device
 //	         at once on the caller's goroutine, the packet the caller's again after the call
 //	sync     on each change the bridge reports, coalesced: the device's addresses are this host's overlay addresses,
-//	         its routes Bridge.Routes(), and the state's name zones resolve through <block>.0.53
+//	         its routes Bridge.Routes(), the default route too under the egress mode exits, and the state's name zones
+//	         resolve through <block>.0.53
 //	local    this host's interface, gateway and resolver addresses, which the platform watches and the tun reads again
 //	         every LocalPollInterval, into Bridge.SetLocalAddresses whenever they change, the bridge's own resolvers left
 //	         out so their routes are never carved
 //
-// The default route stays off the tun under every egress mode for now: under exits the daemon's own transport would
-// have to be kept off the tun first, which connect's egress binding does not do on Linux (question
-// bridge-m4-18-linux-exits), so the status says the exits are held and the host's other traffic keeps today's route.
+// Under exits the default route rides the tun (§17.11), in a routing table of the platform's own with wg-quick's rules,
+// `not fwmark <mark> lookup <table>` and `lookup main suppress_prefixlength 0` (tun_linux.go; QD-800): the daemon's own
+// connect sockets carry connect's egress mark, which the first rule passes by, so its transport, and with it every
+// link the bridge sends on, keeps today's route, and nothing is carved by address. Where the platform cannot put it on,
+// or the host refuses it, the exits are held: the status says why, the host's other traffic keeps today's route, and
+// the sync tries again. Off exits, or once the tun ends, the route, the rules and the mark go.
 //
 // Close, from ur tun down, the daemon's end, the network's bridge closing or a device that failed, stops the loops,
-// reverts the resolver, removes the routes and addresses it added, and closes the device, whose deletion the kernel
-// follows by dropping anything left, so routes are restored on any path. No address, name or prefix reaches a log
+// takes the default route, its rules and the mark off, reverts the resolver, removes the routes and addresses it
+// added, and closes the device, whose deletion the kernel follows by dropping anything left, so routes are restored on
+// any path. No address, name or prefix reaches a log
 // (I-13); ur tun's own replies show them to the person on the terminal.
 //
 // A urTun is safe for concurrent use.
@@ -64,6 +69,8 @@ var (
 	errUrTunClosed = errors.New("ur tun is down")
 	// A read dropped segments its batch had no room for; the read goes on.
 	errUrTunSegmentsDropped = errors.New("segments dropped")
+	// The default route stays off the tun under exits, for the reason it wraps; the sync tries again.
+	errUrTunExitsHeld = errors.New("the exits are held off ur tun")
 )
 
 // Tunables of ur tun.
@@ -98,6 +105,16 @@ type urTunSettings struct {
 	// The longest device name the platform takes: 15, Linux's IFNAMSIZ less its NUL. A longer ur-<instance> is hashed
 	// to fit (urTunDeviceName).
 	DeviceNameByteCount int
+	// The routing table the default route goes in under exits, and the fwmark the daemon's own connect sockets carry
+	// so the rule that sends the rest there passes them by: 0x7572, "ur", for both, as wg-quick gives its table and its
+	// mark one number. A table another program's routes hold, or a mark another program's rule matches, holds the
+	// exits rather than mixing with it.
+	ExitsTable uint32
+	ExitsMark  uint32
+	// The priority of the first of the exits' two rules, `lookup main suppress_prefixlength 0`; the second, `not fwmark
+	// <mark> lookup <table>`, takes the one after: 32760, so both run before the main table's rule at 32766 and the
+	// first before the second, which is what keeps the host's own non-default routes ahead of the tun.
+	ExitsRulePriority uint32
 }
 
 // The defaults, a fresh value each call.
@@ -116,6 +133,9 @@ func defaultUrTunSettings() *urTunSettings {
 		PlatformTimeout:        5 * time.Second,
 		CloseTimeout:           10 * time.Second,
 		DeviceNameByteCount:    15,
+		ExitsTable:             0x7572,
+		ExitsMark:              0x7572,
+		ExitsRulePriority:      32760,
 	}
 }
 
@@ -142,7 +162,13 @@ type urTunInterface interface {
 	// Points the zones' names at resolver for this device's link: "" when the host's resolver took it, else the step a
 	// person takes. No zones reverts what it set.
 	SetResolver(resolver netip.Addr, zones []string) (string, error)
-	// Reverts the resolver, removes the routes and addresses it added and closes the device, which ends a Read.
+	// Puts the default route on the device, for the egress mode exits, in a routing table of its own with the rules that
+	// keep this daemon's own sockets off it, those sockets marked first; or, not exits, takes the route, the rules and
+	// the mark off. Answers whether the default route rides the device after the call, and why it does not where exits
+	// asked for it.
+	SetExits(exits bool) (bool, error)
+	// Takes the default route off, reverts the resolver, removes the routes and addresses it added and closes the
+	// device, which ends a Read.
 	Close() error
 }
 
@@ -215,9 +241,12 @@ type urTunStatus struct {
 	Resolver     string   `json:"resolver,omitempty"`
 	Zones        []string `json:"zones,omitempty"`
 	ResolverStep string   `json:"resolver_step,omitempty"`
-	// The state's egress mode, and whether its exits are held off the tun (the file's comment).
-	EgressMode string `json:"egress_mode"`
-	ExitsHeld  bool   `json:"exits_held,omitempty"`
+	// The state's egress mode; whether the default route rides the tun, as it does under exits; and whether the exits
+	// are held off it, with why (the file's comment).
+	EgressMode      string `json:"egress_mode"`
+	DefaultRoute    bool   `json:"default_route,omitempty"`
+	ExitsHeld       bool   `json:"exits_held,omitempty"`
+	ExitsHeldReason string `json:"exits_held_reason,omitempty"`
 	// What the bridge waits on, by kind.
 	Waits []string `json:"waits,omitempty"`
 	// How many local addresses the bridge carves; -1 while unknown.
@@ -283,7 +312,9 @@ type urTun struct {
 	resolver           netip.Addr
 	zones              []string
 	resolverStep       string
+	defaultRoute       bool
 	exitsHeld          bool
+	exitsHeldReason    string
 	syncErr            error
 	// the bridge's own resolver addresses, which the local addresses leave out
 	ownResolvers []netip.Addr
@@ -501,8 +532,9 @@ func (self *urTun) runSync() {
 	}
 }
 
-// Sets the device to what the bridge has in force now: its addresses, its routes and the zones' resolver. Every step
-// runs even when one fails, and the first error is the sync's.
+// Sets the device to what the bridge has in force now: its addresses, its routes, the default route under exits and the
+// zones' resolver. Every step runs even when one fails. The first error is the sync's, joined by why the exits are held,
+// which the sync tries again too and the status names apart.
 func (self *urTun) sync() error {
 	status := self.bridge.Status()
 	addresses := []netip.Addr{}
@@ -545,6 +577,19 @@ func (self *urTun) sync() error {
 	keep(self.iface.SetAddresses(addresses))
 	conflictCount, err := self.iface.SetRoutes(routes)
 	keep(err)
+	exits := status.EgressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	defaultRoute, exitsErr := self.iface.SetExits(exits)
+	if !exits {
+		// a default route that did not come off is the sync's to retry, not a hold
+		keep(exitsErr)
+		exitsErr = nil
+	}
+	exitsHeldReason := ""
+	if exitsErr != nil {
+		exitsHeldReason = exitsErr.Error()
+		// held exits leave the tun up whatever the platform answered, so no hold reads as the start's privilege refusal
+		exitsErr = fmt.Errorf("%w: %v", errUrTunExitsHeld, exitsErr)
+	}
 	var previousResolver netip.Addr
 	var previousZones []string
 	var previousStep string
@@ -568,7 +613,9 @@ func (self *urTun) sync() error {
 		if !resolverChanged || err == nil {
 			self.resolver, self.zones, self.resolverStep = resolver, zones, step
 		}
-		self.exitsHeld = status.EgressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+		self.defaultRoute = defaultRoute
+		self.exitsHeld = exits && !defaultRoute
+		self.exitsHeldReason = exitsHeldReason
 		self.ownResolvers = ownResolvers
 		self.syncErr = syncErr
 	}()
@@ -578,9 +625,9 @@ func (self *urTun) sync() error {
 	// a change of the bridge's own resolvers changes what the local addresses leave out
 	self.wantLocal()
 	if self.onSync != nil {
-		self.onSync(syncErr)
+		self.onSync(errors.Join(syncErr, exitsErr))
 	}
-	return syncErr
+	return errors.Join(syncErr, exitsErr)
 }
 
 // <block>.0.53, the block's resolver (§17.4).
@@ -703,7 +750,9 @@ func (self *urTun) status() *urTunStatus {
 		status.Zones = slices.Clone(self.zones)
 		status.ResolverStep = self.resolverStep
 	}
+	status.DefaultRoute = self.defaultRoute
 	status.ExitsHeld = self.exitsHeld
+	status.ExitsHeldReason = self.exitsHeldReason
 	status.LocalAddressCount = -1
 	if self.localKnown {
 		status.LocalAddressCount = len(self.localAddrs)
@@ -732,8 +781,9 @@ func (self *urTun) close() {
 }
 
 // Ends the tun with reason, once: the loops stop, the bridge's and the links' replies stop reaching the device, the
-// interface reverts its resolver, removes its routes and addresses and closes the device, and the bridge's local
-// addresses go back to unknown. started is false for a start that failed before its loops ran.
+// interface takes its default route, rules and mark off, reverts its resolver, removes its routes and addresses and
+// closes the device, and the bridge's local addresses go back to unknown. started is false for a start that failed
+// before its loops ran.
 func (self *urTun) closeAt(reason error, started bool) {
 	self.closeOnce.Do(func() {
 		self.cancel()
