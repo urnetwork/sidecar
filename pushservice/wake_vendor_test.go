@@ -298,7 +298,7 @@ func (self *testVendorServer) serveFcmTokens(t *testing.T, key *rsa.PrivateKey, 
 		})
 		now := clock.Now().Unix()
 		if header["alg"] != "RS256" || header["kid"] != "synthetic-key-id" || claims["iss"] != "wake-sender@synthetic-wake-project.example" ||
-			claims["scope"] != "https://www.googleapis.com/auth/firebase.messaging" || claims["aud"] != self.server.URL+"/token" ||
+			claims["scope"] != pushservice.FcmMessagingScope || claims["aud"] != self.server.URL+"/token" ||
 			int64(claims["iat"].(float64)) != now || int64(claims["exp"].(float64)) != now+3600 {
 			t.Errorf("assertion header %v, claims %v", header, claims)
 			return testVendorAnswer{status: 400}, true
@@ -368,8 +368,8 @@ func TestFcmVendorMapsItsAnswers(t *testing.T) {
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	vendor, exchanges := newTestFcmVendor(t, server, clock)
 	fcmError := func(status int, statusName string, errorCode string) string {
-		return fmt.Sprintf(`{"error":{"code":%d,"message":"synthetic","status":%q,"details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":%q}]}}`,
-			status, statusName, errorCode)
+		return fmt.Sprintf(`{"error":{"code":%d,"message":"synthetic","status":%q,"details":[{"@type":%q,"errorCode":%q}]}}`,
+			status, statusName, pushservice.FcmErrorDetailType, errorCode)
 	}
 	payload := &pushservice.WakePayload{TopicClass: "evs", Version: 3}
 	cases := []struct {

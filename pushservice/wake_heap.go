@@ -16,8 +16,6 @@ type wakeHeldEntry struct {
 	entry     *WakeEntry
 	// when it is next due, in unix milliseconds: due_millis, or a window's end it was put off to
 	dueMs int64
-	// it was put off to a window's end once already
-	windowDeferred bool
 	// its index in the heap's slice, -1 once out of it
 	index int
 }

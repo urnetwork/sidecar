@@ -6,12 +6,14 @@
 //	read      one GetMany of {scp_<C>}ack, tok and tokrev, three keys of one slot (WK1)
 //	acked     ack at or past the entry's hint id: the client's stack has the hint, so no wake
 //	token     no tok, or one that does not parse: nothing to wake
-//	window    {wake_<C>}w SET NX for ClientWindow (10 s), its value the window's start, before any vendor call,
-//	          so a sender killed after the send still holds the window (FS-36). A window already held from at
-//	          or after the hint folds the entry into that wake (coalesced); one held from before the hint puts
-//	          the entry off to the window's end, the one wake at a window's end a hint inside it earns
+//	window    the client's window for ClientWindow (10 s), field w of its {wake_<C>} counters, its value the
+//	          window's start, taken before any vendor call, so a sender killed after the send still holds it
+//	          (FS-36). A window already held from at or after the hint folds the entry into that wake
+//	          (coalesced); one held from before the hint puts the entry off to the window's end, the one wake at
+//	          a window's end a hint inside it earns
 //	caps      APNs ApnsWindowMaxCount (3) an ApnsWindow (1 h) per device, FCM FcmWindowMaxCount (1) an
-//	          FcmWindow (1 min) per device and topic: INCR under {wake_<C>}, expiring within the hour
+//	          FcmWindow (1 min) per device and topic: fields of the same {wake_<C>}, counted in the same step
+//	          as the window (WakeRateScript), each expiring on its own within the hour
 //	send      the vendor, retried after a 429, a 5xx or no answer at most RetryCount (3) times, backing off from
 //	          RetryBackoff, doubling; APNs' 410 or FCM's UNREGISTERED tombstones the client's row only while
 //	          its revision is the tokrev read with that token (WakeTokenStore), so a newer registration
@@ -52,13 +54,9 @@ import (
 // What the sender needs of Redis: ServiceHost.Redis satisfies it. Safe for concurrent use.
 type WakeSenderRedis interface {
 	// See sidecar.Redis.
-	Get(ctx context.Context, key string) (value []byte, found bool, err error)
-	// See sidecar.Redis.
 	GetMany(ctx context.Context, keys []string) (values [][]byte, err error)
-	// See sidecar.Redis.
-	SetIfAbsent(ctx context.Context, key string, value []byte, ttl time.Duration) (set bool, err error)
-	// See sidecar.Redis.
-	Increment(ctx context.Context, key string, ttl time.Duration) (value int64, err error)
+	// See sidecar.Redis: WakeRateScript.
+	RunScript(ctx context.Context, script *sidecar.RedisScript, keys []string, args []string) (*sidecar.RedisReply, error)
 	// See sidecar.Redis.
 	StreamGroupCreate(ctx context.Context, key string, group string) error
 	// See sidecar.Redis.
@@ -451,7 +449,11 @@ func (self *WakeSender) runDispatcher() {
 		}
 		stop := func() bool { return false }
 		if waiting {
-			stop = self.clock.AfterFunc(time.Duration(nextDueMs-nowMs)*time.Millisecond, self.wakeDispatcher)
+			stop = self.clock.AfterFunc(time.Duration(nextDueMs-self.clock.Now().UnixMilli())*time.Millisecond, self.wakeDispatcher)
+			// a clock that passed the due while the timer was set leaves the timer standing late: wake now
+			if nextDueMs <= self.clock.Now().UnixMilli() {
+				self.wakeDispatcher()
+			}
 		}
 		select {
 		case <-self.ctx.Done():
@@ -475,11 +477,12 @@ func (self *WakeSender) runWorker() {
 	}
 }
 
-// Puts held off to atMs, or past MaxAge settles it expired. A time not after now, as a window's end another
-// host's clock set, waits ErrorBackoff, so a key that outlives its end on this clock never spins a worker.
-func (self *WakeSender) requeue(held *wakeHeldEntry, atMs int64) {
-	if nowMs := self.clock.Now().UnixMilli(); atMs <= nowMs {
-		atMs = nowMs + self.settings.ErrorBackoff.Milliseconds()
+// Puts held off to atMs, decided at decidedMs, or past MaxAge settles it expired. A time not after the decision,
+// as the end of a window still held then, set by a host whose clock is behind, waits ErrorBackoff, so a window
+// that outlives its end on this clock never spins a worker; one the clock has passed since is due at once.
+func (self *WakeSender) requeue(held *wakeHeldEntry, atMs int64, decidedMs int64) {
+	if atMs <= decidedMs {
+		atMs = decidedMs + self.settings.ErrorBackoff.Milliseconds()
 	}
 	if self.settings.MaxAge.Milliseconds() < atMs-held.entry.HintMs {
 		self.finish(held, &WakeSettled{ClientId: held.entry.ClientId, TopicClass: held.entry.TopicClass, Result: WakeSettledExpired})
@@ -510,7 +513,7 @@ func (self *WakeSender) settle(held *wakeHeldEntry) {
 		return
 	}
 	retryLater := func() {
-		self.requeue(held, now.Add(self.settings.ErrorBackoff).UnixMilli())
+		self.requeue(held, now.Add(self.settings.ErrorBackoff).UnixMilli(), now.UnixMilli())
 	}
 	values, err := self.redis.GetMany(self.ctx, []string{HintAckKey(clientId), HintTokenKey(clientId), WakeTokenRevisionKey(clientId)})
 	if err != nil || len(values) != 3 {
@@ -543,31 +546,23 @@ func (self *WakeSender) settle(held *wakeHeldEntry) {
 		return
 	}
 
-	// one wake a client a window, the window set before the vendor call (FS-36)
-	windowStartMs, acquired, err := self.acquireWindow(clientId, now)
+	// one wake a client a window, the window taken and the vendor's cap counted in one step before the vendor
+	// call (FS-36)
+	rate, err := self.rate(clientId, platform, entry.TopicClass)
 	if err != nil {
 		retryLater()
 		return
 	}
-	if !acquired {
-		if entry.HintMs <= windowStartMs {
+	if !rate.acquired {
+		if entry.HintMs <= rate.windowStartMs {
 			settled.Result = WakeSettledCoalesced
 			self.finish(held, settled)
 			return
 		}
-		held.windowDeferred = true
-		self.requeue(held, windowStartMs+self.settings.ClientWindow.Milliseconds())
+		self.requeue(held, rate.windowStartMs+self.settings.ClientWindow.Milliseconds(), rate.decidedMs)
 		return
 	}
-
-	capped, err := self.capped(clientId, platform, entry.TopicClass)
-	if err != nil {
-		// the window is taken and the cap unknown: no wake, since a cap that cannot be read cannot be kept
-		settled.Result = WakeSettledCapped
-		self.finish(held, settled)
-		return
-	}
-	if capped {
+	if rate.capped {
 		settled.Result = WakeSettledCapped
 		self.finish(held, settled)
 		return
@@ -594,50 +589,59 @@ func (self *WakeSender) settle(held *wakeHeldEntry) {
 	self.finish(held, settled)
 }
 
-// Takes clientId's window at now, answering its start: now's when taken, else the start the holder wrote.
-func (self *WakeSender) acquireWindow(clientId connect.Id, now time.Time) (int64, bool, error) {
-	key := WakeWindowKey(clientId)
-	nowMs := now.UnixMilli()
-	for range 2 {
-		testHookBarrier("pushservice.wake_sender.window", clientId.String())
-		set, err := self.redis.SetIfAbsent(self.ctx, key, []byte(strconv.FormatInt(nowMs, 10)), self.settings.ClientWindow)
-		testHookBarrier("pushservice.wake_sender.window_set", clientId.String())
-		if err != nil {
-			return 0, false, err
-		}
-		if set {
-			return nowMs, true, nil
-		}
-		value, found, err := self.redis.Get(self.ctx, key)
-		if err != nil {
-			return 0, false, err
-		}
-		if !found {
-			// it lapsed between the two: take it again
-			continue
-		}
-		startMs, err := strconv.ParseInt(string(value), 10, 64)
-		if err != nil {
-			// a window this package did not write: as held from now, which puts the entry off
-			return nowMs, false, nil
-		}
-		return startMs, false, nil
-	}
-	return 0, false, errors.New("wake sender: the window lapsed twice while read")
+// What WakeRateScript answered.
+type wakeRate struct {
+	// When it was asked, in unix milliseconds: a window taken then begins then.
+	decidedMs int64
+	// The window was taken, and the wake counted against its cap.
+	acquired bool
+	// A window still held: when it began, in unix milliseconds.
+	windowStartMs int64
+	// The cap holds the wake: its count passed the platform's most.
+	capped bool
 }
 
-// Whether a vendor cap holds the wake: APNs' per device, FCM's per device and topic, each an INCR under
-// {wake_<C>} with its window's ttl.
-func (self *WakeSender) capped(clientId connect.Id, platform string, topicClass string) (bool, error) {
-	key, window, maxCount := WakeApnsCapKey(clientId), self.settings.ApnsWindow, self.settings.ApnsWindowMaxCount
+// Takes clientId's window now and counts the wake against platform's cap, in one script on {wake_<C>}. The time
+// is read here, as late as it can be, so a window never begins before the step that took it.
+func (self *WakeSender) rate(clientId connect.Id, platform string, topicClass string) (*wakeRate, error) {
+	now := self.clock.Now()
+	capField, capWindow, capMaxCount := wakeRateApnsField, self.settings.ApnsWindow, self.settings.ApnsWindowMaxCount
 	if platform == WakePlatformFcm {
-		key, window, maxCount = WakeFcmCapKey(clientId, topicClass), self.settings.FcmWindow, self.settings.FcmWindowMaxCount
+		capField, capWindow, capMaxCount = wakeRateFcmFieldPrefix+topicClass, self.settings.FcmWindow, self.settings.FcmWindowMaxCount
 	}
-	count, err := self.redis.Increment(self.ctx, key, window)
+	testHookBarrier("pushservice.wake_sender.window", clientId.String())
+	reply, err := self.redis.RunScript(self.ctx, WakeRateScript, []string{WakeRateKey(clientId)}, []string{
+		strconv.FormatInt(now.UnixMilli(), 10),
+		strconv.FormatInt(self.settings.ClientWindow.Milliseconds(), 10),
+		capField,
+		strconv.FormatInt(capWindow.Milliseconds(), 10),
+	})
+	testHookBarrier("pushservice.wake_sender.window_set", clientId.String())
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return maxCount < count, nil
+	if reply == nil || reply.Kind != sidecar.RedisReplyArray || len(reply.Replies) != 2 || reply.Replies[0].Kind != sidecar.RedisReplyInteger {
+		return nil, errWakeRateReply
+	}
+	value := reply.Replies[1]
+	switch reply.Replies[0].Integer {
+	case 0:
+		if value.Kind != sidecar.RedisReplyBulk {
+			return nil, errWakeRateReply
+		}
+		startMs, err := strconv.ParseInt(string(value.Bulk), 10, 64)
+		if err != nil {
+			// a window this package did not write: as held from now, which puts the entry off
+			startMs = now.UnixMilli()
+		}
+		return &wakeRate{decidedMs: now.UnixMilli(), windowStartMs: startMs}, nil
+	case 1:
+		if value.Kind != sidecar.RedisReplyInteger {
+			return nil, errWakeRateReply
+		}
+		return &wakeRate{decidedMs: now.UnixMilli(), acquired: true, capped: capMaxCount < value.Integer}, nil
+	}
+	return nil, errWakeRateReply
 }
 
 // The vendor's answer to one wake, after at most RetryCount retries of a 429, a 5xx or no answer, the
@@ -695,17 +699,57 @@ func (self *WakeSender) finish(held *wakeHeldEntry, settled *WakeSettled) {
 	}
 }
 
-// {wake_<C>}w: the client's window, its value the window's start in unix milliseconds (§19.4's rate row).
-func WakeWindowKey(clientId connect.Id) string {
-	return "{wake_" + clientId.String() + "}w"
+// {wake_<C>}: the client's §19.4 counters, one hash in the client's own slot: field w its window's start in
+// unix milliseconds, apns its APNs wakes in the current ApnsWindow, and fcm:<topic class> its FCM wakes of that
+// class in the current FcmWindow, each field expiring on its own (HPEXPIRE), all within the hour.
+func WakeRateKey(clientId connect.Id) string {
+	return "{wake_" + clientId.String() + "}"
 }
 
-// {wake_<C>}apns: the client's APNs wakes in the current ApnsWindow.
-func WakeApnsCapKey(clientId connect.Id) string {
-	return "{wake_" + clientId.String() + "}apns"
-}
+// The cap fields of {wake_<C>}, as WakeRateScript writes them beside its window field, w.
+const (
+	wakeRateApnsField      = "apns"
+	wakeRateFcmFieldPrefix = "fcm:"
+)
 
-// {wake_<C>}fcm_<topic class>: the client's FCM wakes of one topic class in the current FcmWindow.
-func WakeFcmCapKey(clientId connect.Id, topicClass string) string {
-	return "{wake_" + clientId.String() + "}fcm_" + topicClass
+// What WakeRateScript answered that is not the shape it returns.
+var errWakeRateReply = errors.New("wake sender: the rate script's reply malformed")
+
+// §19.4's rate row in one step on the client's {wake_<C>}: takes the client's window, and with it counts the wake
+// against its vendor's cap. KEYS: {wake_<C>}. ARGV: now and the window, in milliseconds, the cap's field, apns or
+// fcm:<topic class>, and the cap's window in milliseconds.
+//
+// A window still held answers {0, its start} and counts nothing. Else the window field is set to now with the
+// window's ttl, the cap's field raised by one, given its window's ttl at its first wake, and {1, the count}
+// answered. Each field lapses on its own, so a counter lives at most its window from its first wake and the key
+// at most the longest of them. Arguments that are not what the sender passes are refused and write nothing.
+var WakeRateScript = &sidecar.RedisScript{
+	Name: "pushservice.wake_rate",
+	Source: `
+local key = KEYS[1]
+local now = ARGV[1]
+local window = ARGV[2]
+local capField = ARGV[3]
+local capWindow = ARGV[4]
+
+local function decimal(text)
+  return #text > 0 and #text <= 15 and string.find(text, '^[1-9][0-9]*$') ~= nil
+end
+
+if not decimal(now) or not decimal(window) or not decimal(capWindow) or
+    (capField ~= 'apns' and string.find(capField, '^fcm:[a-z]+$') == nil) then
+  return redis.error_reply('ERR wake rate arguments malformed')
+end
+local start = redis.call('HGET', key, 'w')
+if start then
+  return {0, start}
+end
+redis.call('HSET', key, 'w', now)
+redis.call('HPEXPIRE', key, window, 'FIELDS', 1, 'w')
+local count = redis.call('HINCRBY', key, capField, 1)
+if count == 1 then
+  redis.call('HPEXPIRE', key, capWindow, 'FIELDS', 1, capField)
+end
+return {1, count}
+`,
 }

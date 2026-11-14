@@ -35,12 +35,13 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// FCM's identifiers: the scope an access token asks for, the JWT grant, and the error code of a token gone.
+// FCM's identifiers: the scope an access token asks for and the type of an error's FCM detail, which a test of a
+// fake vendor names too, and the JWT grant and the error code of a token gone.
 const (
-	fcmMessagingScope     = "https://www.googleapis.com/auth/firebase.messaging"
+	FcmMessagingScope     = "https://www.googleapis.com/auth/firebase.messaging"
+	FcmErrorDetailType    = "type.googleapis.com/google.firebase.fcm.v1.FcmError"
 	fcmJwtBearerGrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 	fcmErrorUnregistered  = "UNREGISTERED"
-	fcmErrorDetailType    = "type.googleapis.com/google.firebase.fcm.v1.FcmError"
 )
 
 // What an FCM vendor is held to.
@@ -239,7 +240,7 @@ func (self *FcmVendor) signAssertion(now time.Time) (string, error) {
 	headerJson, _ := json.Marshal(header)
 	claimsJson, _ := json.Marshal(map[string]any{
 		"iss":   self.account.ClientEmail,
-		"scope": fcmMessagingScope,
+		"scope": FcmMessagingScope,
 		"aud":   self.tokenUrl,
 		"iat":   now.Unix(),
 		"exp":   now.Add(self.settings.AccessTokenLifetime).Unix(),
@@ -288,7 +289,7 @@ func (self *FcmVendor) Send(ctx context.Context, token string, payload *WakePayl
 			result.Reason = fcmError.Error.Status
 		}
 		for _, detail := range fcmError.Error.Details {
-			if detail.Type == fcmErrorDetailType && wakeVendorReasonCode(detail.ErrorCode) {
+			if detail.Type == FcmErrorDetailType && wakeVendorReasonCode(detail.ErrorCode) {
 				result.Reason = detail.ErrorCode
 			}
 		}

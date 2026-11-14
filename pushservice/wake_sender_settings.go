@@ -32,7 +32,7 @@ type WakeSenderSettings struct {
 	// An entry older than this from its hint is dropped and acknowledged unsent: §19.4's 60 s, past
 	// §15.6's hold; the client resyncs at its next start (§6.8).
 	MaxAge time.Duration
-	// One wake per client per window, kept in Redis under {wake_<C>}w and set before the vendor call so
+	// One wake per client per window, kept in Redis as field w of {wake_<C>} and set before the vendor call so
 	// a sender killed after the send still holds it (§19.4's rate row, FS-36): 10 s. A hint inside a
 	// window gets one wake at its end.
 	ClientWindow time.Duration

@@ -87,6 +87,7 @@ func newTestSenderEnv(t *testing.T, settings *pushservice.WakeSenderSettings) *t
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	redis := sidecartest.NewFakeRedis(t.Context(), clock, nil, nil, nil)
 	t.Cleanup(redis.Close)
+	sidecartest.RegisterPushScripts(redis)
 	self := &testSenderEnv{
 		t:        t,
 		redis:    redis,
@@ -562,11 +563,25 @@ func TestWakeSenderSwitchOffReadsNothing(t *testing.T) {
 	env.token(fresh, pushservice.WakePlatformApns, 1)
 	env.token(stale, pushservice.WakePlatformApns, 1)
 	env.enqueue(stale, "mail", 1, 0, 0)
-	env.awaitTimerAt(start.Add(5 * time.Second))
+	// every reader waits on the switch, and the claimer on its interval, before the clock moves
+	awaitWaiting := func() {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), testWakeSenderTimeout)
+		defer cancel()
+		if err := env.clock.AwaitTimers(ctx, settings.Queue.ShardCount+1); err != nil {
+			t.Fatalf("the readers never waited: %v", env.clock.PendingTimers())
+		}
+	}
+	awaitWaiting()
+	if pending := env.clock.PendingTimers(); !pending[0].Equal(start.Add(5 * time.Second)) {
+		t.Fatalf("pending %v", pending)
+	}
 	env.clock.Advance(61 * time.Second)
 	if stats := sender.Stats(); stats.ReadCount != 0 {
 		t.Fatalf("read while off: %+v", stats)
 	}
+	// each reader asked the switch again and waits once more, so switching it on now is read at their next ask
+	awaitWaiting()
 	env.enqueue(fresh, "mail", 1, 0, 0)
 	env.on.Store(true)
 	env.clock.Advance(5 * time.Second)
