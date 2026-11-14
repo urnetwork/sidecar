@@ -1,6 +1,8 @@
-// EVSB-M2-20's tests of POST .../reseed on T2 (reseed.go; QD-725): each rule the reseed mode skips, shown beside the
-// push route refusing the same statement, and each rule it keeps; the slot call's order and stripping; the repos a
-// re-seed is taken for; and the Signed EvsReseed kept at reseed/ and served with the head.
+// EVSB-M2-20's tests of POST .../reseed on T2 (reseed.go; QD-725, QD-815): each rule the reseed mode skips, shown
+// beside the push route refusing the same statement, and each rule it keeps, 5f's window and 5g among them, which a
+// repo admin's device's walk of its mirror (sidecar.EvsRepo.Reseed, in process) shows returning a ref two devices
+// wrote whole; the slot call's order and stripping; the repos a re-seed is taken for; and the Signed EvsReseed kept
+// at reseed/ and served with the head.
 
 package evsservice
 
@@ -9,8 +11,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,40 +235,424 @@ func TestReseedIsClosedOutsideARecovery(t *testing.T) {
 	fixture.requireCommitted(fixture.reseed(body), 1)
 }
 
-// The chain onto the current head: base_version and base_chain equal to it. A file-mode push on a base below the
-// head, which the push route's 5f takes inside its window, is refused, as is one whose base chain is not the head's;
-// neither records a refusal, so the same statement goes once the head is its base.
-func TestReseedKeepsTheChainOntoTheHead(t *testing.T) {
+// A shared file-mode ref two devices wrote through the push route of a site the test then loses: the writer's pushes
+// each on the head, and the other device's, planned at version 1 to write a and create e, sent once the head stood at
+// 4, 3 versions above its base, which 5f takes inside its window, so it committed at 5. What the devices' mirrors hold
+// of it, by version from 1: each version's statement and payload, its batch record as a read serves it, and C_v.
+type reseedTwoDeviceHistory struct {
+	bodies  []*protocol.EvsReseedRequest
+	records [][]byte
+	chains  [][32]byte
+	// the lost site's head
+	head *EvsStoredHead
+}
+
+// Six versions: a, b, c and d by the writer, the other device's push at 5, and f by the writer.
+func newReseedTwoDeviceHistory(t *testing.T) *reseedTwoDeviceHistory {
+	t.Helper()
+	site := newPushFixture(t, nil)
+	check := site.check
+	history := &reseedTwoDeviceHistory{}
+	committed := func(recorder *httptest.ResponseRecorder, body *protocol.EvsPushRequest) {
+		t.Helper()
+		site.requireCommitted(recorder, uint64(len(history.bodies)+1))
+		history.bodies = append(history.bodies, &protocol.EvsReseedRequest{Statement: body.GetStatement(), Payload: body.GetPayload()})
+		history.chains = append(history.chains, [32]byte(site.head().Head.GetChain()))
+	}
+	writer := func(label string) {
+		t.Helper()
+		plan := site.plan()
+		site.create(plan, label)
+		body := site.body(plan)
+		committed(site.post(site.token(check.signerId), body), body)
+	}
+	writer("a")
+	// the other device plans on version 1
+	other := site.plan()
+	other.Changes = append(other.Changes, check.change(other, checkTestPath("a"), 1, 2))
+	site.create(other, "e")
+	otherBody, _ := site.bodyAndOriginBy(other, check.otherKey, check.otherId)
+	writer("b")
+	writer("c")
+	writer("d")
+	committed(site.post(site.token(check.otherId), otherBody), otherBody)
+	writer("f")
+
+	head := site.head()
+	window, err := EvsHeadWindow(head.Head)
+	if err != nil || len(window) != len(history.bodies) || EvsHeadWindowFirstVersion(head.Head) != 1 {
+		t.Fatalf("the lost site's window: %d entries, %v", len(window), err)
+	}
+	for _, entry := range window {
+		recordBytes, err := site.engine.readRecordBytesAt(site.ctx, site.cluster, check.repoId, check.refId, entry.Place)
+		if err != nil {
+			t.Fatal(err)
+		}
+		history.records = append(history.records, recordBytes)
+	}
+	history.head = head
+	return history
+}
+
+// version's statement, parsed.
+func (self *reseedTwoDeviceHistory) statement(t *testing.T, version uint64) *sidecar.EvsStatement {
+	t.Helper()
+	statement, err := sidecar.ParseEvsStatement(self.bodies[version-1].GetStatement())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return statement
+}
+
+// A repo admin's device in the fixture's recovery: the admin's EvsClient, whose calls the fixture's engine serves in
+// process under tokens for the scopes the client asks, and its sealed mirror of the repo.
+type reseedDevice struct {
+	fixture *reseedFixture
+	client  *sidecar.EvsClient
+	mirror  *sidecar.EvsMirrorStore
+	// the reseed calls the engine has served
+	reseedCallCount int
+}
+
+func (self *reseedFixture) device() *reseedDevice {
+	t := self.t
+	t.Helper()
+	check := self.check
+	sign := checkTestSign(check.otherKey, check.otherId)
+	identity := &sidecar.SidecarIdentity{
+		NetworkId: check.networkId, SidecarId: check.otherId, ClientId: check.clientId, Generation: 1,
+		IdentityPublicKey: check.otherKey.Public().(ed25519.PublicKey),
+	}
+	device := &reseedDevice{fixture: self}
+	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
+		NetworkId: check.networkId,
+		EvsUrl:    "https://evs.example",
+		Transport: device,
+		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
+			connectSidecarId := connect.Id(check.otherId)
+			return self.host.Authenticator.Issue(&sidecar.Principal{
+				NetworkId: connect.Id(check.networkId), ClientId: connect.Id(check.clientId), SidecarId: &connectSidecarId,
+				Audience: EvsAudience, Scopes: scopes, IssuedAt: self.clock.Now(), ExpiresAt: self.clock.Now().Add(15 * time.Minute),
+			}), nil
+		},
+		Sign:     sign,
+		Identity: func() *sidecar.SidecarIdentity { return identity },
+		Gkm:      sidecartest.NewFakeGkm(self.clock, self.host.Blobs, nil).Client(check.otherId, sidecar.GkmSignFunction(sign)),
+		Store:    sidecartest.NewFakeStore().Root(),
+		Clock:    &reseedDeviceClock{clock: self.clock},
+		Log:      sidecar.NewNoopLogger(),
+		Settings: sidecar.DefaultEvsSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	mirror, err := client.Mirror(check.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device.client, device.mirror = client, mirror
+	return device
+}
+
+// The engine serves the call, counting the reseed calls. Called on the walk's goroutine alone.
+func (self *reseedDevice) RoundTrip(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, "/reseed") {
+		self.reseedCallCount += 1
+	}
+	recorder := httptest.NewRecorder()
+	self.fixture.engine.Handler().ServeHTTP(recorder, request)
+	return recorder.Result(), nil
+}
+
+// The mirror holds history's versions through version, as the devices' syncs kept them.
+func (self *reseedDevice) holds(history *reseedTwoDeviceHistory, through uint64) {
+	t := self.fixture.t
+	t.Helper()
+	refId := self.fixture.check.refId
+	for version := uint64(1); version <= through; version += 1 {
+		statement := history.statement(t, version)
+		if err := self.mirror.Put(sidecar.EvsMirrorStatementKey(refId, version), bytes.NewReader(statement.Bytes)); err != nil {
+			t.Fatal(err)
+		}
+		recordKey := sidecar.EvsMirrorRecordKey(sidecar.Id(statement.Push.GetPushId()), 0)
+		if err := self.mirror.Put(recordKey, bytes.NewReader(history.records[version-1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ref := &sidecar.EvsMirrorRef{RefId: refId, Version: through, Chain: history.chains[through-1], MirroredAt: self.fixture.clock.Now()}
+	if err := self.mirror.RaiseRef(ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The device's walk of its mirror and what it did to the one ref the mirror holds, once every step 8 of the commits
+// it made has finished.
+func (self *reseedDevice) reseed() *sidecar.EvsReseedRef {
+	t := self.fixture.t
+	t.Helper()
+	result, err := self.client.Repo(self.fixture.check.repoId).Reseed(self.fixture.ctx, &sidecar.EvsReseedArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	self.fixture.awaitStepEights()
+	if len(result.Refs) != 1 || result.Refs[0].RefId != self.fixture.check.refId || len(result.Slots) != 0 {
+		t.Fatalf("a walk of one ref: %d refs, %d slots not taken", len(result.Refs), len(result.Slots))
+	}
+	return result.Refs[0]
+}
+
+// The device's clock: the fixture's, its waits firing at once, so a retry of a call that refused nothing runs on.
+type reseedDeviceClock struct {
+	clock *sidecartest.FakeClock
+}
+
+func (self *reseedDeviceClock) Now() time.Time {
+	return self.clock.Now()
+}
+
+func (self *reseedDeviceClock) After(timeout time.Duration) <-chan time.Time {
+	fired := make(chan time.Time, 1)
+	fired <- self.clock.Now()
+	return fired
+}
+
+func (self *reseedDeviceClock) AfterFunc(timeout time.Duration, function func()) func() bool {
+	return self.clock.AfterFunc(timeout, function)
+}
+
+// A shared file-mode ref two devices wrote, one of them on a base 3 below the head, re-seeds whole from a complete
+// mirror (QD-815): the device's walk sends each version in order, the other device's push commits on its own base as
+// 5f and 5g take it, and the ref returns at the lost site's version, chain and push, each version an EVS_BATCH_RESEED
+// record of the statement the mirror held, with nothing refused or recorded. A second walk changes nothing.
+func TestReseedReturnsAFileModeRefTwoDevicesWroteWhole(t *testing.T) {
+	history := newReseedTwoDeviceHistory(t)
 	fixture := newReseedFixture(t)
+	check := fixture.check
+	if other := history.statement(t, 5).Push; other.GetBaseVersion() != 1 || !bytes.Equal(other.GetSignerSidecarId(), check.otherId.Bytes()) {
+		t.Fatalf("version 5 is %x's push on base %d", other.GetSignerSidecarId(), other.GetBaseVersion())
+	}
+	device := fixture.device()
+	device.holds(history, 6)
+	ref := device.reseed()
+	if ref.Stopped != nil || ref.MirrorVersion != 6 || ref.Version != 6 || ref.Chain != history.chains[5] || device.reseedCallCount != 6 {
+		t.Fatalf("the walk ended at %d of %d after %d calls, stopped by %v", ref.Version, ref.MirrorVersion, device.reseedCallCount, ref.Stopped)
+	}
+	head := fixture.head()
+	if head.Version() != 6 || !bytes.Equal(head.Head.GetChain(), history.head.Head.GetChain()) ||
+		!bytes.Equal(head.Head.GetPushId(), history.head.Head.GetPushId()) || len(head.Head.GetRefused()) != 0 {
+		t.Fatalf("head at %d, not the lost site's, with %d bytes of refusals", head.Version(), len(head.Head.GetRefused()))
+	}
+	for version := uint64(1); version <= 6; version += 1 {
+		record := fixture.recordAt(check.refId, version)
+		statementBytes, _, err := sidecar.ParseEvsPushRecordBody(record.Body)
+		if record.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED || err != nil || !bytes.Equal(statementBytes, history.bodies[version-1].GetStatement()) {
+			t.Fatalf("version %d's record is type %s, not the mirror's statement: %v", version, record.Type, err)
+		}
+	}
+
+	// again: 5a answers each version where it stands, and nothing is written
+	if again := device.reseed(); again.Stopped != nil || again.Version != 6 {
+		t.Fatalf("a second walk ended at %d, stopped by %v", again.Version, again.Stopped)
+	}
+	if after := fixture.head(); after.Etag != head.Etag {
+		t.Fatal("a second walk wrote the head")
+	}
+}
+
+// A file-mode push the push route's 5f or 5g refuses is refused the same in the reseed mode, recording nothing
+// (QD-815): a base past the window below the head, one above the head and one planned on no head 409 BASE_STALE, a
+// base_chain the history does not hold 409 BASE_STALE, and a file a version after the base changed 409 PATH_CONFLICT
+// naming it, each as the push route answers a twin of it built now. The head keeps its ETag and holds no refusal,
+// and the statement sent again answers the same, unrecorded. At the window's edge, a base 63 below the head, a push
+// that changes nothing written since commits.
+func TestReseedRefusesAFileModeBaseWhereThePushRouteDoes(t *testing.T) {
+	fixture := newReseedFixture(t)
+	check := fixture.check
+	reseeded := func(plan *sidecar.EvsPushPlan, version uint64) {
+		t.Helper()
+		fixture.requireCommitted(fixture.reseed(fixture.reseedBody(plan)), version)
+	}
 	first := fixture.kept()
 	fixture.create(first, "a")
-	// built on the absent head too, on another path: a concurrent file-mode writer's push
-	sibling := fixture.kept()
-	fixture.create(sibling, "b")
-	siblingBody := fixture.reseedBody(sibling)
-	fixture.requireCommitted(fixture.reseed(fixture.reseedBody(first)), 1)
-	requireRefusal(t, fixture.reseed(siblingBody), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
-
-	forked := fixture.kept()
-	forked.BaseChain = [32]byte(bytes.Repeat([]byte{9}, 32))
-	fixture.create(forked, "c")
-	requireRefusal(t, fixture.reseed(fixture.reseedBody(forked)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
-
-	ahead := fixture.kept()
-	ahead.BaseVersion = 2
-	fixture.create(ahead, "d")
-	requireRefusal(t, fixture.reseed(fixture.reseedBody(ahead)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
-
-	head := fixture.head()
-	if head.Version() != 1 || len(head.Head.GetRefused()) != 0 {
-		t.Fatalf("head at %d with %d bytes of refusals", head.Version(), len(head.Head.GetRefused()))
-	}
+	reseeded(first, 1)
+	chainOne := fixture.head().Head.GetChain()
 	second := fixture.kept()
-	fixture.create(second, "e")
-	fixture.requireCommitted(fixture.reseed(fixture.reseedBody(second)), 2)
-	// the push route, in file mode, takes a base inside its window: 5f alone does not refuse the sibling
-	if refusal := CheckBase(fixture.check.view(sibling)); refusal != nil {
-		t.Fatalf("5f refuses the sibling on an absent head: %s", refusal.Detail)
+	fixture.create(second, "b")
+	reseeded(second, 2)
+	chainTwo := fixture.head().Head.GetChain()
+	// a written on its version 1 at version 3
+	write := fixture.kept()
+	write.Changes = append(write.Changes, check.change(write, checkTestPath("a"), 1, 2))
+	reseeded(write, 3)
+	chainThree := fixture.head().Head.GetChain()
+	for version := uint64(4); version <= 65; version += 1 {
+		plan := fixture.kept()
+		fixture.create(plan, fmt.Sprintf("p%d", version))
+		reseeded(plan, version)
+	}
+	fixture.awaitStepEights()
+
+	// the same base, chain and changes as the mirror kept them, and as a device would push them now
+	twins := func(base uint64, chain []byte, labels ...string) (*protocol.EvsReseedRequest, *sidecar.EvsPushPlan) {
+		t.Helper()
+		kept, fresh := fixture.kept(), fixture.plan()
+		for _, plan := range []*sidecar.EvsPushPlan{kept, fresh} {
+			plan.BaseVersion = base
+			plan.BaseChain = [32]byte(chain)
+			fixture.create(plan, labels...)
+		}
+		return fixture.reseedBody(kept), fresh
+	}
+	refused := func(what string, body *protocol.EvsReseedRequest, fresh *sidecar.EvsPushPlan, code protocol.EvsRefusalCode) *protocol.EvsRefusalReply {
+		t.Helper()
+		before := fixture.head()
+		requireRefusal(t, fixture.reseed(body), http.StatusConflict, code)
+		recorder := fixture.reseed(body)
+		requireRefusal(t, recorder, http.StatusConflict, code)
+		reply := refusalOf(t, recorder)
+		if after := fixture.head(); reply.GetRecorded() || after.Etag != before.Etag || len(after.Head.GetRefused()) != 0 {
+			t.Fatalf("%s: a refused re-seed was recorded", what)
+		}
+		requireRefusal(t, fixture.push(fresh), http.StatusConflict, code)
+		if after := fixture.head(); after.Etag != before.Etag {
+			t.Fatalf("%s: the push route's refusal wrote the head", what)
+		}
+		return reply
+	}
+	start := sidecar.EvsChainStart(check.repoId, check.refId)
+	outside, outsideFresh := twins(1, chainOne, "q")
+	refused("a base 64 below the head", outside, outsideFresh, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+	above, aboveFresh := twins(66, chainThree, "r")
+	refused("a base above the head", above, aboveFresh, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+	noHead, noHeadFresh := twins(0, start[:], "s")
+	refused("a push planned on no head", noHead, noHeadFresh, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+	forked, forkedFresh := twins(2, chainThree, "t")
+	refused("a base chain the history does not hold", forked, forkedFresh, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+
+	// a on its version 1, on base 2: version 3 wrote it since
+	conflict, conflictFresh := fixture.kept(), fixture.plan()
+	for _, plan := range []*sidecar.EvsPushPlan{conflict, conflictFresh} {
+		plan.BaseVersion = 2
+		plan.BaseChain = [32]byte(chainTwo)
+		plan.Changes = append(plan.Changes, check.change(plan, checkTestPath("a"), 1, 2))
+	}
+	reply := refused("a file written after the base", fixture.reseedBody(conflict), conflictFresh, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
+	if paths := reply.GetPaths(); len(paths) != 1 {
+		t.Fatalf("the conflict names %d paths", len(paths))
+	}
+
+	// at the window's edge, on a path nothing has written
+	edge, _ := twins(2, chainTwo, "u")
+	fixture.requireCommitted(fixture.reseed(edge), 66)
+}
+
+// A git-mode ref keeps QD-725's rule, which is 5f's git mode: a re-seeded push on a base below the head is refused
+// 409 non-fast-forward though nothing it changes was written since, and so is one on the head's version under another
+// chain, each as the push route refuses a twin of it and recording nothing; one on the head commits.
+func TestReseedKeepsTheHeadForAGitModeRef(t *testing.T) {
+	fixture := newReseedFixture(t)
+	gitPlan := func(plan *sidecar.EvsPushPlan) *sidecar.EvsPushPlan {
+		plan.RefMode = protocol.EvsRefMode_EVS_REF_GIT
+		return plan
+	}
+	versionChains := map[uint64][]byte{}
+	for version, label := range []string{"a", "b", "c"} {
+		plan := gitPlan(fixture.kept())
+		fixture.create(plan, label)
+		fixture.requireCommitted(fixture.reseed(fixture.reseedBody(plan)), uint64(version+1))
+		versionChains[uint64(version+1)] = fixture.head().Head.GetChain()
+	}
+	refused := func(what string, base uint64, chain []byte, label string) {
+		t.Helper()
+		kept, fresh := gitPlan(fixture.kept()), gitPlan(fixture.plan())
+		for _, plan := range []*sidecar.EvsPushPlan{kept, fresh} {
+			plan.BaseVersion = base
+			plan.BaseChain = [32]byte(chain)
+			fixture.create(plan, label)
+		}
+		before := fixture.head()
+		requireRefusal(t, fixture.reseed(fixture.reseedBody(kept)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_NON_FAST_FORWARD)
+		requireRefusal(t, fixture.push(fresh), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_NON_FAST_FORWARD)
+		if after := fixture.head(); after.Etag != before.Etag || len(after.Head.GetRefused()) != 0 {
+			t.Fatalf("%s: a refusal was recorded", what)
+		}
+	}
+	refused("a base below the head", 1, versionChains[1], "d")
+	refused("the head's version under another chain", 3, versionChains[2], "e")
+	onHead := gitPlan(fixture.kept())
+	fixture.create(onHead, "d")
+	fixture.requireCommitted(fixture.reseed(fixture.reseedBody(onHead)), 4)
+}
+
+// The device's version check still catches a statement that lands at another version than the mirror held it at
+// (QD-815's cost): the new site's ref holds the history through version 4 from a walk of a mirror that held no more,
+// and a writer's push lands at 5 on it. The complete mirror's walk then sends the other device's push, whose base 1
+// lies inside 5f's window with nothing it changes written since, so evs commits it at 6; the walk stops the ref at 4
+// with ErrEvsReseedVersion and sends nothing past it.
+func TestReseedWalkStopsWhereAStatementLandsAtAnotherVersion(t *testing.T) {
+	history := newReseedTwoDeviceHistory(t)
+	fixture := newReseedFixture(t)
+	device := fixture.device()
+	device.holds(history, 4)
+	if ref := device.reseed(); ref.Stopped != nil || ref.Version != 4 {
+		t.Fatalf("the first walk ended at %d, stopped by %v", ref.Version, ref.Stopped)
+	}
+	// a writer's push on the head the walk left, under a push id of its own
+	live := fixture.plan()
+	live.PushId = testId("reseed live push")
+	fixture.create(live, "z")
+	fixture.requireCommitted(fixture.push(live), 5)
+	fixture.awaitStepEights()
+
+	device.holds(history, 6)
+	device.reseedCallCount = 0
+	ref := device.reseed()
+	if !errors.Is(ref.Stopped, sidecar.ErrEvsReseedVersion) || ref.Version != 4 || ref.Chain != history.chains[3] {
+		t.Fatalf("the walk ended at %d, stopped by %v", ref.Version, ref.Stopped)
+	}
+	if device.reseedCallCount != 5 {
+		t.Fatalf("the walk made %d reseed calls, versions 1 to 5 being 5", device.reseedCallCount)
+	}
+	head := fixture.head()
+	if head.Version() != 6 || !bytes.Equal(head.Head.GetPushId(), history.statement(t, 5).Push.GetPushId()) || len(head.Head.GetRefused()) != 0 {
+		t.Fatalf("head at %d with push %x", head.Version(), head.Head.GetPushId())
+	}
+}
+
+// BASE_STALE carries a deposit ref's head only to its own depositor (plan-EVS1-deposit-head), as a re-seed's 200 does:
+// the admin re-seeding the writer's deposit on a base above its head gets the refusal alone, and the writer, a repo
+// admin too, re-seeding its own deposit gets the head with it.
+func TestReseedBaseStaleCarriesADepositHeadToItsDepositorAlone(t *testing.T) {
+	fixture := newReseedFixture(t)
+	check := fixture.check
+	depositor := check.signerId
+	refId := sidecar.EvsDepositRefId(check.repoId, depositor)
+	deposit := func(base uint64, chain [32]byte, label string) *protocol.EvsReseedRequest {
+		plan := fixture.kept()
+		plan.RefId = refId
+		plan.RefKind = protocol.EvsRefKind_EVS_REF_DEPOSIT
+		plan.OwnerSidecarId = &depositor
+		plan.BaseVersion = base
+		plan.BaseChain = chain
+		plan.Changes = append(plan.Changes, check.change(plan, checkTestPath(label), 0, base+1))
+		return fixture.reseedBody(plan)
+	}
+	reply := fixture.requireCommitted(fixture.reseed(deposit(0, sidecar.EvsChainStart(check.repoId, refId), "deposit 1")), 1)
+	if reply.GetDepositHead() != nil {
+		t.Fatal("the admin's 200 carries another sidecar's deposit head")
+	}
+	ahead := deposit(2, [32]byte(bytes.Repeat([]byte{6}, 32)), "deposit 2")
+	recorder := fixture.reseed(ahead)
+	requireRefusal(t, recorder, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+	if refusalOf(t, recorder).GetDepositHead() != nil {
+		t.Fatal("the admin's BASE_STALE carries another sidecar's deposit head")
+	}
+	fixture.auth.grant(depositor, check.repoId, sidecar.AclEvsAdmin)
+	own := fixture.call(fixture.token(depositor, "admin"), http.MethodPost, "/reseed", ahead)
+	requireRefusal(t, own, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+	if head := refusalOf(t, own).GetDepositHead(); head.GetVersion() != 1 || !bytes.Equal(head.GetChain(), fixture.headOf(refId).Head.GetChain()) {
+		t.Fatalf("the depositor's BASE_STALE carries head %v", head)
 	}
 }
 
