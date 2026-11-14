@@ -35,6 +35,8 @@ type Sidecar struct {
 	serviceTokens sidecarServiceTokens
 	// The network's DnsClient and its zone watch.
 	dns sidecarDns
+	// D-TLS-8's CT watch, where the tls component runs one.
+	tlsCt sidecarTlsCt
 	// Running totals for `ur status --stats` (sidecar_stats.go).
 	stats sidecarStats
 	// Raised for each change the run loop must look at that the instance's state does not show: an
@@ -390,6 +392,38 @@ func (self *sidecarDns) zoneWatchDegraded() bool {
 	return watch != nil && watch.Degraded()
 }
 
+// D-TLS-8's CT watch found a logged certificate it cannot read back to a device of this network (tls_ct.go).
+const SidecarEventCtAlarm SidecarEventKind = "ct_alarm"
+
+// Why a ct_alarm fired.
+type SidecarCtAlarm string
+
+const (
+	// No row's attestation verifies for the certificate's key and names.
+	SidecarCtAlarmUnattested SidecarCtAlarm = "unattested"
+	// Every identity that attests it was first pinned under 24 hours before it was issued.
+	SidecarCtAlarmRecentIdentity SidecarCtAlarm = "recent_identity"
+)
+
+// The CT watch the tls component attached, held through an interface so every leg compiles the Sidecar.
+type sidecarTlsCt struct {
+	stateLock sync.Mutex
+	watch     sidecarCtWatch
+}
+
+// What the Sidecar holds a CT watch as: whether its last pass was degraded.
+type sidecarCtWatch interface {
+	Degraded() bool
+}
+
+// The attached CT watch's "CT watch degraded", false with none attached.
+func (self *sidecarTlsCt) degraded() bool {
+	self.stateLock.Lock()
+	watch := self.watch
+	self.stateLock.Unlock()
+	return watch != nil && watch.Degraded()
+}
+
 // Why a bridge_alarm fired: QD-557's five, DESIGN-DETAILS 12.7's three and this build's map_refused.
 type SidecarBridgeAlarm string
 
@@ -561,6 +595,8 @@ type SidecarEvent struct {
 	BridgeAlarm SidecarBridgeAlarm
 	// dns_alarm (D-TRUST-9's zone watch).
 	DnsAlarm SidecarDnsAlarm
+	// ct_alarm (D-TLS-8's CT watch). SidecarId names the attesting identity of a recent_identity alarm.
+	CtAlarm SidecarCtAlarm
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait
@@ -599,6 +635,8 @@ type SidecarStatus struct {
 	Unverified [][]byte
 	// "zone watch degraded": a resolver of D-TRUST-9's zone watch failed at its last pass (DnsWatch).
 	ZoneWatchDegraded bool
+	// "CT watch degraded": D-TLS-8's CT watch could not read a source, the rows or verified config at its last pass.
+	CtWatchDegraded bool
 }
 
 // One client generation of a sidecar (§5.5), signed by the ClientKey and the identity key. Its wire
