@@ -1439,6 +1439,8 @@ type AclRepoDeletionRow struct {
 	DeletedAt     uint64                 `protobuf:"varint,3,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
 	RestoredAt    uint64                 `protobuf:"varint,4,opt,name=restored_at,json=restoredAt,proto3" json:"restored_at,omitempty"`
 	DeletedTimeMs int64                  `protobuf:"varint,5,opt,name=deleted_time_ms,json=deletedTimeMs,proto3" json:"deleted_time_ms,omitempty"` // the RepoDelete entry's time_ms, which RepoRestore's 7 days and §11.12's
+	// shred start count from once the log no longer keeps the entry (QD-743)
+	Signer        []byte `protobuf:"bytes,6,opt,name=signer,proto3" json:"signer,omitempty"` // the RepoDelete's signer sidecar_id, as every row keeps its signer: what
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1506,6 +1508,13 @@ func (x *AclRepoDeletionRow) GetDeletedTimeMs() int64 {
 		return x.DeletedTimeMs
 	}
 	return 0
+}
+
+func (x *AclRepoDeletionRow) GetSigner() []byte {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
 }
 
 type AclAudit struct {
@@ -2664,7 +2673,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x10AclRepoRevokeRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x03 \x01(\x04R\x02at\"\xaf\x01\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\"\xc7\x01\n" +
 	"\x12AclRepoDeletionRow\x12\x1f\n" +
 	"\vdeletion_id\x18\x01 \x01(\fR\n" +
 	"deletionId\x12\x10\n" +
@@ -2673,7 +2682,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"deleted_at\x18\x03 \x01(\x04R\tdeletedAt\x12\x1f\n" +
 	"\vrestored_at\x18\x04 \x01(\x04R\n" +
 	"restoredAt\x12&\n" +
-	"\x0fdeleted_time_ms\x18\x05 \x01(\x03R\rdeletedTimeMs\"\x89\x01\n" +
+	"\x0fdeleted_time_ms\x18\x05 \x01(\x03R\rdeletedTimeMs\x12\x16\n" +
+	"\x06signer\x18\x06 \x01(\fR\x06signer\"\x89\x01\n" +
 	"\bAclAudit\x12!\n" +
 	"\freader_atoms\x18\x01 \x03(\fR\vreaderAtoms\x12\x1d\n" +
 	"\n" +

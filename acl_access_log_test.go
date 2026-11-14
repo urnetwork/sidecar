@@ -1,8 +1,8 @@
 // §8.8's access-log fold: each row with its signer and position, a RepoDelete with its entry's time and a removal
-// stamped on the row it keeps (QD-743), the rows a fold was given never changed, a re-application over rows lacking its
-// repo refused, VoidEvsShares listing what a cascade voids, RepoAdminAt judging an admin at a position before and after
-// its removal, and the base compile dropping a removed admin's row once the retention point passes its removal. Pure, on
-// every leg; the last tests run TEAM's log.
+// stamped on the row it keeps (QD-743), the RepoDelete's signer in its row (QD-798), the rows a fold was given never
+// changed, a re-application over rows lacking its repo refused, VoidEvsShares listing what a cascade voids, RepoAdminAt
+// judging an admin at a position before and after its removal, and the base compile dropping a removed admin's row
+// once the retention point passes its removal. Pure, on every leg; the last tests run TEAM's log.
 
 package sidecar
 
@@ -35,8 +35,8 @@ func aclTestEntryTimeMs(at uint64) int64 {
 }
 
 // A fold keeps every statement's signer and carrying position, the newest RepoGrant and EvsShare per subject, a
-// config writer's standing RepoRevoke, the newest RepoDelete with its RepoRestore and the newest lock, and changes no
-// row it was given.
+// config writer's standing RepoRevoke, the newest RepoDelete with its own signer (QD-798) and its RepoRestore, whose
+// other signer leaves the deletion's as it was, and the newest lock, and changes no row it was given.
 func TestFoldAclReposKeepsSignersAndPositions(t *testing.T) {
 	admin, writer, subject := NewId(), NewId(), NewId()
 	repoId, deletionId := NewId(), NewId()
@@ -63,7 +63,8 @@ func TestFoldAclReposKeepsSignersAndPositions(t *testing.T) {
 	if len(admins) != 2 || admins[0].GetAt() != 10 || admins[1].GetAt() != 13 || !bytes.Equal(admins[1].GetSidecarId(), writer.Bytes()) {
 		t.Errorf("admins %+v", admins)
 	}
-	if deletion := repo.GetDeletion(); deletion.GetDeletedAt() != 15 || deletion.GetDeletedTimeMs() != aclTestEntryTimeMs(15) || deletion.GetRestoredAt() != 16 {
+	if deletion := repo.GetDeletion(); deletion.GetDeletedAt() != 15 || deletion.GetDeletedTimeMs() != aclTestEntryTimeMs(15) || deletion.GetRestoredAt() != 16 ||
+		!bytes.Equal(deletion.GetSigner(), admin.Bytes()) {
 		t.Errorf("deletion %+v", deletion)
 	}
 	if repo.GetLock() != protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED {
@@ -385,6 +386,84 @@ func TestAclRepoRestoreJudgedFromTheRowAfterItsEntryLeftRetention(t *testing.T) 
 			}
 		}
 	}
+}
+
+// QD-798 on TEAM's log: the deletion row's signer is the RepoDelete statement's own signer, here a repo admin other
+// than the one that signs the bases, in every fold that writes the row: the reader's ApplyStatement at the entry; its
+// ReapplyStatement over a base whose fold stops before the entry, so the base's tail re-applies it, and a new device's,
+// starting at that base; and the base compile that folds through the entry, which the head check compiles from and a
+// rows-only reader, as a gate is, starts from without the entry.
+func TestAclRepoDeleteRowKeepsTheStatementsSigner(t *testing.T) {
+	net := newTestConfigNet(t)
+	phone := net.admitMemberDevice("deleting admin")
+	repoId, deletionId := testConfigId("signed deletion repo"), testConfigId("signed deletion")
+	aclTestOwnedRepo(net, repoId)
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_ADMIN, &protocol.RepoAdmin{
+		Header: net.header(), RepoId: repoId.Bytes(), SidecarId: phone.sidecarId.Bytes(), Change: protocol.RepoAdminChange_REPO_ADMIN_CHANGE_ADD,
+	})
+	signedBytes := net.sign(phone, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
+		Header: net.header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
+	})
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(signedBytes, signed); err != nil {
+		t.Fatal(err)
+	}
+	statementSigner := signed.GetSignerId()
+	if !bytes.Equal(statementSigner, phone.sidecarId.Bytes()) {
+		t.Fatalf("the statement names %x", statementSigner)
+	}
+	verdict := net.push(net.makeEntry(bridge.AuthEntryKindStatement, signedBytes))
+	if !verdict.Accepted() {
+		t.Fatalf("the RepoDelete: %v", verdict.Refusal)
+	}
+	deletedAt := verdict.Pin.GetVersion()
+
+	rowHoldsTheSigner := func(name string, rows *protocol.AclRows) {
+		t.Helper()
+		for _, repo := range rows.GetRepos() {
+			if Id(repo.GetRepoId()) != repoId {
+				continue
+			}
+			if deletion := repo.GetDeletion(); deletion.GetDeletedAt() != deletedAt || !bytes.Equal(deletion.GetSigner(), statementSigner) {
+				t.Errorf("%s's deletion row %+v", name, deletion)
+			}
+			return
+		}
+		t.Errorf("%s holds no row of the repo", name)
+	}
+	stateRows := func(log *ConfigLog) *protocol.AclRows {
+		t.Helper()
+		acl, err := log.State().Acl()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return acl.Rows()
+	}
+	rowHoldsTheSigner("the reader at the entry", stateRows(net.log))
+
+	// a base whose fold stops before the entry: each reader re-applies the RepoDelete over the base's rows
+	net.fold(net.owner, deletedAt-1, 3)
+	rowHoldsTheSigner("the reader past a base whose tail holds the entry", stateRows(net.log))
+	newDevice, err := RestoreConfigLog(testConfigLogSettings(), net.log.Retained(), net.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowHoldsTheSigner("a new device starting at that base", stateRows(newDevice))
+
+	// a base folding through the entry: what its head check compiled from, and a rows-only reader starting there
+	net.fold(net.owner, net.n, 4)
+	if len(net.source.checks) == 0 {
+		t.Fatal("no head check")
+	}
+	rowHoldsTheSigner("the base compile", net.source.checks[len(net.source.checks)-1].CompileRows.AclStatements)
+	rowsOnly, err := RestoreConfigLogRowsOnly(testConfigLogSettings(), net.log.Retained(), net.rowsOnlySource(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := rowsOnly.State().aclTimeAt(deletedAt); kept {
+		t.Fatal("the rows-only reader starting at the base holds the RepoDelete's entry")
+	}
+	rowHoldsTheSigner("a rows-only reader starting at the base", stateRows(rowsOnly))
 }
 
 // The repo's admin rows of a sidecar in what the newest base's head check compiled from.

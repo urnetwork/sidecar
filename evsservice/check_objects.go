@@ -7,6 +7,11 @@
 //	new       each new segment of the new-objects list carries a receipt of its id, padded size and upload day
 //	segments  every segment a new version names is one of this push's uploads or appears in a version step 4 read:
 //	          a changed path's base, a path the push removes (a rename), or a reuse source; else SEGMENT_GONE
+//	inline    a kind-2 locator holds its record, which rides only there (QD-735; question
+//	          evs1-m2-01-inline-record-home), so entry_sha256 covers it and the push carries it once: it is neither an
+//	          upload nor a citation, and 5h adopts nothing for it, a version keeping its base's inline records carrying
+//	          them again. One holding no record, the elided form only idx/ keeps for an older version, never commits:
+//	          the codecs refuse it first, and 5h again, 400 INVALID
 //	slots     every slot a new version names is one this push introduces or one a version step 4 read names (from
 //	          M2, §11.22); else 409 SLOT_UNKNOWN, recorded. On a deposit ref only one this push introduces
 //	          (DESIGN-DETAILS 14.2.6, QD-768): a deposit is one body under one key its own push wraps, so no honest
@@ -113,14 +118,19 @@ func CheckObjects(view *PushView) *EvsCheckRefusal {
 		}
 		if view.Stage != PushStageSeal {
 			for _, locator := range entry.GetChain() {
-				if protocol.EvsLocatorKind(locator.GetKind()) != protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT {
-					continue
-				}
-				segmentId := [32]byte(locator.GetId())
-				if !newSegments[segmentId] && !citedSegments[segmentId] {
-					refusal := newEvsCheckRefusal(EvsCheckReasonSegmentUnknown, "a segment neither uploaded nor named by a version read")
-					refusal.Paths = []sidecar.EvsTokenPath{change.TokenPath}
-					return refusal
+				switch protocol.EvsLocatorKind(locator.GetKind()) {
+				case protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT:
+					segmentId := [32]byte(locator.GetId())
+					if !newSegments[segmentId] && !citedSegments[segmentId] {
+						refusal := newEvsCheckRefusal(EvsCheckReasonSegmentUnknown, "a segment neither uploaded nor named by a version read")
+						refusal.Paths = []sidecar.EvsTokenPath{change.TokenPath}
+						return refusal
+					}
+				case protocol.EvsLocatorKind_EVS_LOCATOR_INLINE:
+					// the record rides here, under entry_sha256: nothing to adopt or cite (QD-735)
+					if len(locator.GetInline()) == 0 {
+						return newEvsCheckRefusal(EvsCheckReasonInvalid, "an inline locator holding no record")
+					}
 				}
 			}
 		}
@@ -152,7 +162,8 @@ func CheckObjects(view *PushView) *EvsCheckRefusal {
 }
 
 // The segments and slots the versions step 4 read name: each changed path's newest version, a removed path's
-// included, and each reuse source. A reuse source step 4 found no version of cites nothing, and refuses.
+// included, and each reuse source. A reuse source step 4 found no version of cites nothing, and refuses. A kind-2
+// locator gives nothing to cite: its record rides in each version that names it (QD-735).
 func evsCitable(view *PushView) (map[[32]byte]bool, map[sidecar.Id]bool, *EvsCheckRefusal) {
 	segments := map[[32]byte]bool{}
 	slots := map[sidecar.Id]bool{}
