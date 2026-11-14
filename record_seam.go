@@ -302,6 +302,9 @@ type RecordLogIds struct {
 	// The team record and the team directory: nil while either does not exist, and in a personal network.
 	TeamRecordId *Id
 	DirectoryId  *Id
+	// The network's `record` repos, RECORD.md section 6.5's other ledgers: each with no owner, as the team record has
+	// none.
+	LedgerIds []Id
 }
 
 // What the record reads of §7.9's and §8's verified state at one pin (§16.8's matrix, §8.5's kinds and consent): who
