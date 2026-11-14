@@ -17,6 +17,12 @@
 // two views (FS-14). Its dispatchers still stand on the Net's default network under the FakeAuthority,
 // so Hello is the one part of such an exchange not on that log. Detach joins what a sidecar's HeadCheck
 // still runs, a responder's acts and witness among them, so a schedule's last check reads them final.
+//
+// AddHeadCheckDispatchers attaches HeadCheck to dispatchers a row built itself on a platform's clients
+// (NetSettings.Platform), which no sidecar of the Net's runs: on T3, server's exchange under its contract gate
+// (FS-21). Each compares its own follower's auth pin and reads its own state's standing of each peer, Hello reads
+// that state too, and the row says which groups hold another member's devices, so a personal network's stops are
+// its own groups' alone. FI-10's oracle reads these devices as it reads the Net's own.
 
 package sidecartest
 
@@ -49,19 +55,28 @@ type HeadCheckNet struct {
 	witnessBoundHours uint32
 	// FI-10's notes between its checks, by sidecar (sidecartest/fault/fi10.go)
 	notes map[sidecar.Id]*HeadCheckNote
+	// whether a group holds another member's devices, nil for every group (HeadStopStateEnv.SharedGroup)
+	sharedGroup func(groupId sidecar.Id) bool
+	// each dispatcher's binding by sidecar, which GET /sidecar/identity answers for a net of dispatchers; nil for
+	// the Net's own sidecars, whose bindings the fake api holds
+	bindings map[sidecar.Id][]byte
 }
 
-// One sidecar with HeadCheck attached: its dispatcher, its sources, its stops and its alarms.
+// One sidecar with HeadCheck attached: its dispatcher, its sources, its stops and its alarms. A dispatcher
+// AddHeadCheckDispatchers attached runs no TestSidecar, so only its Name, dispatcher and client id stand for one.
 type HeadCheckSidecar struct {
 	*SubprotocolSidecar
+	Name      string
 	SidecarId sidecar.Id
 	// Its fakes: the generation, epoch and ref pins, the peer state, and the auth source, which is nil
-	// when AddHeadCheckSidecarsOver gave it another (AuthSource).
+	// when AddHeadCheckSidecarsOver or AddHeadCheckDispatchers gave it another (AuthSource).
 	Device    *FakeHeadCheckDevice
 	Stop      *sidecar.HeadStopState
 	headCheck *HeadCheckNet
 	// the auth source AddHeadCheckSidecarsOver gave it, nil for Device.Auth
 	auth sidecar.HeadCheckAuthSource
+	// the peer state AddHeadCheckDispatchers gave it, nil for Device.Peers
+	peers sidecar.HeadCheckPeerState
 	// detaches HeadCheck from the dispatcher, joining what it still runs; once
 	detach func()
 
@@ -128,6 +143,7 @@ func (self *Net) addHeadCheckSidecars(networkId *sidecar.Id, auths []sidecar.Hea
 		}
 		side := &HeadCheckSidecar{
 			SubprotocolSidecar: subprotocolSidecar,
+			Name:               subprotocolSidecar.Name,
 			SidecarId:          identity.SidecarId,
 			Device:             NewFakeHeadCheckDevice(identity.SidecarId, headCheck.Api),
 			headCheck:          headCheck,
@@ -155,6 +171,103 @@ func (self *Net) addHeadCheckSidecars(networkId *sidecar.Id, auths []sidecar.Hea
 	return headCheck, nil
 }
 
+// One dispatcher AddHeadCheckDispatchers attaches HeadCheck to, which a row built on a platform's client.
+type HeadCheckDispatcher struct {
+	Name      string
+	SidecarId sidecar.Id
+	// The client a peer calls it at, and its dispatcher, whose Hello reads the row's state of the network.
+	ClientId    connect.Id
+	Subprotocol *sidecar.Subprotocol
+	// Its marshalled SignedSidecarIdentityBinding, which GET /sidecar/identity answers for it here.
+	Binding []byte
+	// The auth source its HeadCheck compares, a follower of the network's log, which FI-10's oracle reads.
+	Auth sidecar.HeadCheckAuthSource
+	// How its own newest verified state holds each sidecar (§6.4's witness rows).
+	Peers sidecar.HeadCheckPeerState
+}
+
+// HeadCheck attached to each of dispatchers until the Net closes, on networkId's stops: each compares its own
+// Auth and reads its own Peers, its generation, epoch and ref pins fakes holding none. sharedGroup answers whether a
+// group holds another member's devices, as HeadStopStateEnv.SharedGroup does: false for every group of a personal
+// network, whose devices then only alarm. The net holds no FakeAuthority, since each dispatcher's Hello reads its own
+// state, so RevokePeer refuses: a revocation there is a statement on the network's log.
+func (self *Net) AddHeadCheckDispatchers(networkId sidecar.Id, sharedGroup func(groupId sidecar.Id) bool, dispatchers ...*HeadCheckDispatcher) (*HeadCheckNet, error) {
+	if len(dispatchers) == 0 {
+		return nil, errors.New("head check net: no dispatchers")
+	}
+	if sharedGroup == nil {
+		return nil, errors.New("head check net: no shared group rule")
+	}
+	headCheck := &HeadCheckNet{
+		net:         self,
+		Api:         NewFakeHeadCheckApi(networkId),
+		notes:       map[sidecar.Id]*HeadCheckNote{},
+		sharedGroup: sharedGroup,
+		bindings:    map[sidecar.Id][]byte{},
+	}
+	for _, dispatcher := range dispatchers {
+		if dispatcher == nil {
+			return nil, errors.New("head check net: a nil dispatcher")
+		}
+		if dispatcher.Subprotocol == nil || dispatcher.Auth == nil || dispatcher.Peers == nil || len(dispatcher.Binding) == 0 {
+			return nil, fmt.Errorf("head check net: %s lacks a dispatcher, binding, auth source or peer state", dispatcher.Name)
+		}
+		attached := make(chan struct{})
+		close(attached)
+		side := &HeadCheckSidecar{
+			SubprotocolSidecar: &SubprotocolSidecar{subprotocol: dispatcher.Subprotocol, clientId: dispatcher.ClientId, attached: attached},
+			Name:               dispatcher.Name,
+			SidecarId:          dispatcher.SidecarId,
+			Device:             NewFakeHeadCheckDevice(dispatcher.SidecarId, headCheck.Api),
+			headCheck:          headCheck,
+			auth:               dispatcher.Auth,
+			peers:              dispatcher.Peers,
+			alarmCount:         sidecar.NewMonitorValue(0),
+		}
+		side.Device.Auth = nil
+		headCheck.sidecars = append(headCheck.sidecars, side)
+		headCheck.bindings[dispatcher.SidecarId] = slices.Clone(dispatcher.Binding)
+	}
+	for _, side := range headCheck.sidecars {
+		if err := headCheck.attach(side); err != nil {
+			return nil, err
+		}
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.headCheckNets = append(self.headCheckNets, headCheck)
+	return headCheck, nil
+}
+
+// What GET /sidecar/identity answers for sidecarId: the dispatcher's own binding on a net of dispatchers, else the
+// newest the fake api holds.
+func (self *HeadCheckNet) identity(sidecarId sidecar.Id) (*sidecar.SidecarIdentityRecord, error) {
+	if self.bindings != nil {
+		binding, ok := self.bindings[sidecarId]
+		if !ok {
+			return nil, errHeadCheckNetNoIdentity
+		}
+		return &sidecar.SidecarIdentityRecord{SidecarId: sidecarId, Binding: slices.Clone(binding)}, nil
+	}
+	api, err := self.net.Api()
+	if err != nil {
+		return nil, err
+	}
+	binding, ok := api.newestSidecarBinding(sidecarId)
+	if !ok {
+		return nil, errHeadCheckNetNoIdentity
+	}
+	return &sidecar.SidecarIdentityRecord{SidecarId: sidecarId, Binding: binding}, nil
+}
+
+// The peer state side's HeadCheck reads: the one AddHeadCheckDispatchers gave it, else Device.Peers.
+func (self *HeadCheckSidecar) peerState() sidecar.HeadCheckPeerState {
+	if self.peers != nil {
+		return self.peers
+	}
+	return self.Device.Peers
+}
+
 // Builds side's HeadStopState and attaches HeadCheck to its running dispatcher until the Net closes.
 func (self *HeadCheckNet) attach(side *HeadCheckSidecar) error {
 	net := self.net
@@ -166,7 +279,7 @@ func (self *HeadCheckNet) attach(side *HeadCheckSidecar) error {
 			Gens:   side.Device.Heads,
 			Groups: side.Device.Heads,
 			Refs:   side.Device.Heads,
-			Peers:  side.Device.Peers,
+			Peers:  side.peerState(),
 		},
 		Store:    NewFakeStore().Root(),
 		Settings: sidecar.DefaultSidecarProtocolSettings(),
@@ -177,8 +290,10 @@ func (self *HeadCheckNet) attach(side *HeadCheckSidecar) error {
 			defer self.stateLock.Unlock()
 			return self.witnessBoundHours, true
 		},
-		SharedGroup: func(groupId sidecar.Id) bool { return true },
-		Alarm:       side.recordAlarm,
+		SharedGroup: func(groupId sidecar.Id) bool {
+			return self.sharedGroup == nil || self.sharedGroup(groupId)
+		},
+		Alarm: side.recordAlarm,
 		// each exchange here is one a schedule starts; the revoker's asks are left to them
 		RequestRound: func() {},
 	})
@@ -188,18 +303,10 @@ func (self *HeadCheckNet) attach(side *HeadCheckSidecar) error {
 	detach, err := side.Subprotocol().AttachHeadCheck(&sidecar.HeadCheckEnv{
 		Stop:       stop,
 		Candidates: func() []sidecar.HeadCheckCandidate { return nil },
-		// what GET /sidecar/identity answers: the newest binding the fake api holds, which a proof request
-		// to a claimant whose Hello has lapsed resolves its client by
+		// what GET /sidecar/identity answers, which a proof request to a claimant whose Hello has lapsed
+		// resolves its client by
 		Identity: func(ctx context.Context, sidecarId sidecar.Id) (*sidecar.SidecarIdentityRecord, error) {
-			api, err := net.Api()
-			if err != nil {
-				return nil, err
-			}
-			binding, ok := api.newestSidecarBinding(sidecarId)
-			if !ok {
-				return nil, errHeadCheckNetNoIdentity
-			}
-			return &sidecar.SidecarIdentityRecord{SidecarId: sidecarId, Binding: binding}, nil
+			return self.identity(sidecarId)
 		},
 	})
 	if err != nil {
@@ -281,8 +388,12 @@ func (self *HeadCheckNet) Note(sidecarId sidecar.Id) *HeadCheckNote {
 }
 
 // Revokes target in the authority Hello reads and in every device's view of the state, as a revocation
-// every device has applied: no Hello with it stands, and no device counts it.
+// every device has applied: no Hello with it stands, and no device counts it. A net of dispatchers has no
+// such authority, and this panics there: its revocations are statements on the network's log.
 func (self *HeadCheckNet) RevokePeer(target *HeadCheckSidecar) {
+	if self.Authority == nil {
+		panic("head check net: RevokePeer on dispatchers, whose state is the network's log")
+	}
 	self.Authority.EditSidecar(target.SidecarId, func(row *bridge.SidecarRow) {
 		row.RevokedAt = self.Authority.Pin().GetVersion() + 1
 	})
