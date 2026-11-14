@@ -39,6 +39,8 @@ type mailIngestTestDeposit struct {
 	plaintext []byte
 	// its slot's key is gone, so it does not open
 	slotGone bool
+	// the slot its key sits in
+	slotId Id
 	// it fails to open with this, as a transport would
 	openErr error
 	pin     *bridge.AuthPin
@@ -64,6 +66,12 @@ type mailIngestTestRepo struct {
 	// the next CONSUME commits and then answers this, once: an answer lost
 	failConsumeAfter error
 	wake             func()
+	// whether a slot still holds its key; nil holds every one
+	slotHeld func(slotId Id) bool
+	// called with each new deposit's slot, with no lock of the repo's held
+	onDeposit func(slotId Id)
+	// the repo's erasure ref where another stand-in keeps it; nil reads erasures
+	erasureSource func(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error)
 }
 
 func newMailIngestTestRepo() *mailIngestTestRepo {
@@ -72,11 +80,17 @@ func newMailIngestTestRepo() *mailIngestTestRepo {
 
 // A deposit of plaintext by depositorId, signed by signerId.
 func (self *mailIngestTestRepo) deposit(depositorId Id, signerId Id, plaintext []byte) *mailIngestTestDeposit {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.versions[depositorId] += 1
-	deposit := &mailIngestTestDeposit{id: NewId(), version: self.versions[depositorId], signerId: signerId, plaintext: plaintext}
-	self.standing[depositorId] = append(self.standing[depositorId], deposit)
+	deposit, onDeposit := func() (*mailIngestTestDeposit, func(slotId Id)) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.versions[depositorId] += 1
+		deposit := &mailIngestTestDeposit{id: NewId(), version: self.versions[depositorId], signerId: signerId, plaintext: plaintext, slotId: NewEvsSlotId()}
+		self.standing[depositorId] = append(self.standing[depositorId], deposit)
+		return deposit, self.onDeposit
+	}()
+	if onDeposit != nil {
+		onDeposit(deposit.slotId)
+	}
 	return deposit
 }
 
@@ -118,12 +132,13 @@ func (self *mailIngestTestRepo) ReadDeposits(ctx context.Context, depositorId Id
 			EntryId: EvsToken(deposit.id), Version: deposit.version, SignerSidecarId: deposit.signerId,
 			Time: time.UnixMilli(testMailIngestPushMillis).UTC(), AuthPin: deposit.pin,
 		}
-		if deposit.slotGone {
+		if deposit.slotGone || (self.slotHeld != nil && !self.slotHeld(deposit.slotId)) {
 			return &EvsDepositOpenError{Deposit: evsDeposit, Err: ErrEvsSealInvalid}
 		}
 		if deposit.openErr != nil {
 			return &EvsDepositOpenError{Deposit: evsDeposit, Err: deposit.openErr}
 		}
+		evsDeposit.SlotId = deposit.slotId
 		if err := visit(evsDeposit, bytes.NewReader(deposit.plaintext)); err != nil {
 			return err
 		}
@@ -150,6 +165,9 @@ func (self *mailIngestTestRepo) Consume(ctx context.Context, depositorId Id, dep
 }
 
 func (self *mailIngestTestRepo) Erasures(ctx context.Context, afterVersion uint64) ([]*EvsErasure, error) {
+	if self.erasureSource != nil {
+		return self.erasureSource(ctx, afterVersion)
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	erasures := []*EvsErasure{}
