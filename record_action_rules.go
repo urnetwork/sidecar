@@ -19,8 +19,9 @@
 //
 // Which fields each other kind fills, and which of them a GrantActivate or a gate may carry, are MCP-M3-02's kind
 // table, and the per-path allowlist ACL's and the gates' (protos-services-canonical-action); this file holds what is
-// true of every action, and the one shape a row cannot say: an egress_change's exits, which its mode decides
-// (QD-799's egress_mode, field 39).
+// true of every action, and the shapes a row cannot say: an egress_change's exits, which its mode decides
+// (QD-799's egress_mode, field 39), and a share's network, share_network_id, field 40 (QD-820), which a dial or route
+// grant alone names, as a network's id; what the grant's destinations may then be is ACL's (ParseAclGrantAction).
 //
 // Package-level functions are safe for concurrent use.
 
@@ -60,6 +61,8 @@ const (
 	canonicalActionFieldVersioning   = 37
 	canonicalActionFieldSealedDetail = 38
 	canonicalActionFieldEgressMode   = 39
+	// A share's other network (§8.11; QD-820), on a dial or route grant.
+	canonicalActionFieldShareNetworkId = 40
 
 	// access_request's version (16.11).
 	canonicalActionVersionAccessRequest = 3
@@ -91,10 +94,11 @@ var canonicalActionVersion3Fields = []protoreflect.FieldNumber{
 }
 
 // The fields a version-4 dial or route grant may set (owner decision 220; QD-740): kind, version and scope, and
-// expires_millis, a subject-only grant_dst, grant_allow, rule_id, subject and sealed_detail.
+// expires_millis, a subject-only grant_dst, grant_allow, rule_id, subject and sealed_detail, and a share's
+// share_network_id (QD-820).
 var canonicalActionVersion4Fields = []protoreflect.FieldNumber{
 	canonicalActionFieldKind, canonicalActionFieldVersion, canonicalActionFieldScope, 8, canonicalActionFieldGrantDst,
-	11, 28, 29, canonicalActionFieldSealedDetail,
+	11, 28, 29, canonicalActionFieldSealedDetail, canonicalActionFieldShareNetworkId,
 }
 
 // The actions a version-4 grant asks: §8.4's names of dial and route.
@@ -222,6 +226,16 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 	if kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE || action.GetEgressMode() != 0 {
 		if err := checkEgressChangeAction(action); err != nil {
 			return err
+		}
+	}
+	if shareNetworkId := action.GetShareNetworkId(); len(shareNetworkId) != 0 {
+		// a share's network rides a dial or route grant alone (QD-820), as one network's id: the id stays out of the
+		// errors, which a log may carry (I-13)
+		if version != canonicalActionVersionSealedGrant {
+			return fmt.Errorf("%w: share_network_id at version %d", ErrCanonicalActionInvalid, version)
+		}
+		if len(shareNetworkId) != recordIdByteCount || bytes.Equal(shareNetworkId, make([]byte, recordIdByteCount)) {
+			return fmt.Errorf("%w: a share_network_id that is no network's id", ErrCanonicalActionInvalid)
 		}
 	}
 	return nil
