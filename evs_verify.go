@@ -65,6 +65,9 @@ var (
 	ErrEvsVersionIgnored = errors.New("evs: version ignored")
 	// The content of a replaced versionless version, which nothing restores (§11.7's history row): no alarm.
 	ErrEvsCollected = errors.New("evs: content collected")
+	// A versionless file replaced each time ReadHead read it, EvsSettings.ReadReplacedRestartCount times over: a path
+	// overwritten faster than it downloads (§11.7's reads row). No alarm.
+	ErrEvsReplacedMidRead = errors.New("evs: replaced while it was read")
 )
 
 // The two refs format 2 reserves by name (§11.7's git row, §11.11, §11.14).
@@ -102,6 +105,9 @@ type evsFormat2Reader interface {
 	checkRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, signerId Id) error
 	// Which reserved ref refId is in repo.
 	reservedRef(ctx context.Context, repo *EvsRepo, refId Id) (EvsReservedRef, error)
+	// What a versionless version's `collected` or missing content comes to after a fresh read of its path's newest
+	// version: ErrEvsObjectMissing after an alarm, or ErrEvsCollected for a replaced one (evs_read_versionless.go).
+	contentGone(ctx context.Context, repo *EvsRepo, result *evsReadResult, verified *EvsVerifiedPath) error
 }
 
 // The client's format-2 reader, nil for one that reads format 1 alone: a client whose composition installed none, as

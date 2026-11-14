@@ -223,6 +223,9 @@ type EvsSettings struct {
 	// (EVS2-M10-30). Reading format 2 also needs its reader installed (EvsClient.EnableFormat2Reader), and writing it
 	// §19.11's format2 gate (Format2Admitted).
 	MaxFormat int
+	// How many times ReadHead reads a versionless file again from a fresh head after its content was replaced
+	// mid-read, before it answers ErrEvsReplacedMidRead (§11.7's reads row), 3. Not negative; 0 never rereads.
+	ReadReplacedRestartCount int
 }
 
 // The desktop daemon's evs settings.
@@ -307,5 +310,6 @@ func DefaultEvsSettings() *EvsSettings {
 		WriteAtTipTryCount:       3,
 		LookupVersionCount:       10000,
 		MaxFormat:                2,
+		ReadReplacedRestartCount: 3,
 	}
 }
