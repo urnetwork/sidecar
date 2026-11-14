@@ -93,6 +93,8 @@ type Sidecar struct {
 	// The network's config follower, which a host starts (sidecar_config_follower.go). Held as any, as search is: the
 	// forwarding and page legs build none.
 	configFollower atomic.Value
+	// The network's mail (Sidecar.Mail, mail_client.go). Held as any, as search is: the forwarding leg holds no mail.
+	mail atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
