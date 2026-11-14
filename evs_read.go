@@ -8,8 +8,10 @@
 // that chooses them, verifies each round and starts again on a head of another epoch state is evs_epoch_read.go's;
 // a ref this client has not verified a head of takes one round for its head first. A path read before is read from
 // its read record's pin, so every statement since that read is checked against it
-// (g0-recheck-0-head-reader-read-paths#1), and a version below the record is refused and alarmed as tampering. A hint
-// naming a newer version sends the read past evs's head cache.
+// (g0-recheck-0-head-reader-read-paths#1), and a version below the record is refused and alarmed as tampering. A
+// verified EvsReseed drops the records of entries the incident lost and lowers the rest to the re-seeded head
+// (QD-816), so a lost path's surviving version reads as part of the loss. A hint naming a newer version sends the read
+// past evs's head cache.
 //
 // Objects the reply carries (segment ranges, slots) stream into spills (evs_reconstruct.go), never a whole reply in
 // memory. Nothing is decrypted before the head and the path verify and the head is pinned, and nothing at all of an
@@ -368,9 +370,9 @@ func (self *EvsRepo) readRoundFromPin(ctx context.Context, refId Id, keys *evsRe
 // history a site loss left, which the device takes only under the ref's Signed EvsReseed, a repo admin's, naming
 // exactly the head served (EvsVerifier.AcceptReseed). evs serves the statement after a head below the request's
 // pin_version (QD-725), so a round that asked from an older path record's pin asks once more from the ref's. True
-// when the caller is to read again: the pin stands lowered to the re-seeded head, kept as a loss, or the head has
-// passed the pin while this asked. False with no statement or one that does not verify: nothing changed, and the
-// caller's own check refuses the head and alarms, as it does without this.
+// when the caller is to read again: the pin stands lowered to the re-seeded head, kept as a loss, the ref's read
+// records with it (QD-816), or the head has passed the pin while this asked. False with no statement or one that does
+// not verify: nothing changed, and the caller's own check refuses the head and alarms, as it does without this.
 func (self *EvsRepo) acceptReseedBelowPin(ctx context.Context, refId Id, pin *EvsPin, reply *evsReadReply, askedVersion uint64) (bool, error) {
 	head, statement := reply.head, reply.reseed
 	if statement == nil && askedVersion < pin.Version {
@@ -394,7 +396,6 @@ func (self *EvsRepo) acceptReseedBelowPin(ctx context.Context, refId Id, pin *Ev
 		}
 		return false, err
 	}
-	self.client.forgetRefHead(self.repoId, refId)
 	return true, nil
 }
 

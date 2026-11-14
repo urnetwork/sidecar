@@ -597,7 +597,10 @@ func (self *EvsVerifier) Pin(verified *EvsVerifiedHead) error {
 
 // Checks a Signed EvsReseed (§11.6, §19.10) for a head below the pin: by a repo admin at the reader's newest state,
 // for this repo and ref, naming exactly the head served. A verified one lowers the pin to that head, kept as a loss,
-// so the next read of it verifies from there.
+// so the next read of it verifies from there, and the ref's read records with it (QD-816; evs_pin_store.go): a path
+// whose entry the incident lost reads its surviving version as part of the loss, and every other recorded path keeps
+// its rollback check from that head, its floor at most the head's current epoch. What memory holds of the ref's head
+// above it goes too (forgetRefHead).
 func (self *EvsVerifier) AcceptReseed(signedBytes []byte, repoId Id, refId Id, head *protocol.EvsHeadSummary) error {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(signedBytes, signed); err != nil {
@@ -631,6 +634,11 @@ func (self *EvsVerifier) AcceptReseed(signedBytes []byte, repoId Id, refId Id, h
 	if err != nil {
 		return err
 	}
-	pin := &EvsPin{RepoId: repoId, RefId: refId, Version: head.GetVersion(), Chain: chain, PinnedAt: self.client.clock.Now()}
-	return self.client.pins.lowerByReseed(pin, reseed.GetIncidentId(), self.client.clock.Now())
+	now := self.client.clock.Now()
+	pin := &EvsPin{RepoId: repoId, RefId: refId, Version: head.GetVersion(), Chain: chain, PinnedAt: now}
+	if err := self.client.pins.lowerByReseed(pin, reseed.GetIncidentId(), now, evsCurrentEpoch(head.GetPathEpoch())); err != nil {
+		return err
+	}
+	self.client.forgetRefHead(repoId, refId, head.GetVersion())
+	return nil
 }
