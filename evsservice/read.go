@@ -52,7 +52,8 @@
 // asks a client for a token.
 //
 // A placeholder head reads as absent (§11.8's first row). The route takes r, so a deposit-only principal is refused
-// at the guard (FS-23). The {refs} streams form and moved_after are M6's (EVS1-M6-01) and answer 400 until then.
+// at the guard (FS-23). The {refs} streams form is read_streams.go's and GET .../refs?moved_after= refs_moved.go's
+// (EVS1-M6-01).
 // A request whose reads fail before the first frame answers 503; one that fails after it ends the stream short,
 // which the client reads as invalid and retries.
 //
@@ -102,9 +103,8 @@ func (self *EvsEngine) serveRead(request *EvsRequest) {
 		return
 	}
 	if len(body.GetRefs()) != 0 {
-		// the streams form is M6's
-		request.Note("streams")
-		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+		// the streams form (read_streams.go)
+		self.serveReadStreams(request, body)
 		return
 	}
 	refId, err := sidecar.IdFromBytes(body.GetRefId())

@@ -670,7 +670,9 @@ message EvsSealedBlob {
   bytes git_oid = 1; uint64 size = 2; bytes base_oid = 3; bytes file_id = 4; repeated EvsHistoryLocator records = 5;
 }
 message EvsHistoryLocator { uint32 segment = 1; uint32 offset = 2; uint32 length = 3; }
-message EvsProvenance { bytes agent_id = 1; bool tainted = 2; }
+message EvsProvenance {
+  bytes agent_id = 1; bool tainted = 2; bytes agent_cert = 3; bytes agent_key_id = 4; bytes agent_signature = 5;
+}
 // DESIGN-DETAILS 8.2.2 adds trees: a commit's trees that do not rebuild from names, modes and oids.
 message EvsSealedCommit { bytes object = 1; repeated EvsSealedChange changes = 2; repeated EvsSealedTree trees = 3; }
 message EvsSealedTree { repeated bytes path = 1; bytes object = 2; }
@@ -751,7 +753,7 @@ message EvsReadObject {
   EvsReadObjectKind kind = 1; bytes id = 2; uint64 number = 3; uint32 offset = 4; bytes body = 5; bool missing = 6;
 }
 // 11.9's moved row and 11.10's sequence and gap rows.
-message EvsRefsReply { uint32 format = 1; uint64 push_sequence = 2; repeated EvsHeadSummary refs = 3; }
+message EvsRefsReply { uint32 format = 1; uint64 push_sequence = 2; repeated EvsHeadSummary refs = 3; bool all = 4; }
 message EvsLogReply { repeated EvsReadStatement statements = 1; uint64 next_version = 2; }
 // Format 2's chapter (EVS-FORMAT.md, EVS2-M10-01): 11.13's purge row and 11.20's drop routes, with 11.9's dropped
 // row's DROP statement and body above, proposed until M10's entry review; replaced, EVS_DROP_HORIZON, map_parts and

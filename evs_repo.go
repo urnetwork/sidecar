@@ -132,6 +132,9 @@ type EvsHistoryVersion struct {
 // What Write changes (EVS1-M2-25, EVS1-M2-26).
 type EvsWriteArgs struct {
 	RefName []byte
+	// The agent the write is made for, which the push's sealed provenance names and its subkey signs (§5.5); nil
+	// for the sidecar's own.
+	AgentId *Id
 	Path    string
 	// The new content, Size bytes; nil with Remove.
 	Content io.Reader

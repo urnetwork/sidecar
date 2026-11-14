@@ -83,6 +83,11 @@ type EvsClientArgs struct {
 	// This device's epoch pin for a §10 group it is a leaf of (KEYS-M2-23's HeadCheckGroupSource.GroupHead), which a
 	// push's sealed metadata carries for HeadCheck's epoch pins. Nil, or a group it holds none of, carries none.
 	GroupHead func(groupId Id) (*protocol.GroupHead, bool)
+	// Sidecar.SignProvenance: an agent's subkey signs a push made for it (evs_provenance.go). Nil names the agent
+	// alone, agent_asserted.
+	SignProvenance EvsSignProvenanceFunction
+	// The format's bound a reader holds agent certificates to (SidecarSettings.AgentSubkeys); nil its defaults.
+	AgentSubkeys *SidecarAgentSubkeySettings
 	// A replaying reader's committer check for a new commit (owner decision 81; plan-CORE-client-to-sidecar-lookup):
 	// SidecarCommitter.Check. Nil takes only a committer that is the push's own client, as SidecarCommitter with no
 	// lookup does, and refuses every other.
@@ -262,6 +267,10 @@ func (self *EvsClient) alarm(repoId Id, refId Id, reason SidecarEvsAlarm, path s
 		EvsAlarm:  reason,
 	})
 }
+
+// Signs as Sidecar.SignProvenance does: the agent's subkey over purpose and message, with its certificate
+// (EvsClientArgs.SignProvenance; evs_provenance.go).
+type EvsSignProvenanceFunction func(agentId Id, purpose string, message []byte) (*AgentProvenanceSignature, error)
 
 // What CreateRepo makes.
 type EvsCreateRepoArgs struct {

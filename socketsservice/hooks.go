@@ -40,7 +40,9 @@ type SocketListenCheck struct {
 	Namespace sidecar.SocketNamespace
 	// What the entry registers, defaults applied: AppMode is tls/'s http or raw (§9.5).
 	Registration *sidecar.SocketRegistration
-	// The gate's allow, whose grant §13.9's quota and certificate checks read.
+	// The gate's allow, whose grant §13.9's quota and certificate checks read. On §13.9's system publish,
+	// tls/443/mta-sts, it is the caller's own smtp/25/mx listen grant, which stands in for the tls/ listen and
+	// publish grants (system_publish.go): what makes the caller a receiver.
 	Listen *SocketGateVerdict
 }
 

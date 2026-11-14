@@ -573,6 +573,10 @@ message EvsHistoryLocator {             // a history record: a range of one of E
 message EvsProvenance {                 // 11.6's records row
   bytes agent_id = 1;                   // §5.5's; absent reads agent_asserted
   bool tainted = 2;                     // the writing run's (format 2), which format 1 ignores
+  bytes agent_cert = 3;                 // from v1 (QD-159): the Signed AgentCert the subkey's signature checks under,
+                                        // empty with no subkey signature (agent_asserted)
+  bytes agent_key_id = 4;               // SHA-256 of the subkey's public key
+  bytes agent_signature = 5;            // the subkey's Ed25519 signature over EVS-FORMAT.md's push provenance bytes
 }
 message EvsSealedCommit {
   bytes object = 1;                     // the git commit object, which hashes to its oid
@@ -810,6 +814,7 @@ message EvsRefsReply {                  // GET .../refs[?moved_after=] (11.9, 11
   uint32 format = 1;                    // repo/'s object format (11.6)
   uint64 push_sequence = 2;             // {evsq_<repo_id>}
   repeated EvsHeadSummary refs = 3;     // a placeholder head is absent
+  bool all = 4;                         // every ref is listed: no moved_after, or one {evsh_} cannot place (11.9)
 }
 message EvsLogReply {                   // GET .../log?ref=&since=, at most 1,000 statements
   repeated EvsReadStatement statements = 1;

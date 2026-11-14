@@ -543,6 +543,12 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 	}
 	defer plan.closeContents()
 	plan.Flags = self.flags
+	if self.flags&(uint32(protocol.EvsPushFlag_EVS_PUSH_FORCE)|uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE)) != 0 &&
+		plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED {
+		// FORCE and DELETE on a shared ref take admin (§11.8's refs table), which the push's token must carry; evs
+		// answers SCOPE to an admin's push at rw (found by EVS1-M2-43's conformance run against evsservice)
+		plan.scope = evsScopeAdmin
+	}
 	plan.gitExtras = &evsGitPushExtras{commits: self.commits, creating: self.creating}
 	if self.creating {
 		// payload sections 15 and 16, the first after a DELETE's as a new ref's, repeating the head's base (8.2.2's

@@ -10,7 +10,8 @@
 //  3. the view S of the name's network, unloaded or behind answering unavailable; then the dial check on S,
 //     before any group is read, so refusals hide names: MayDial for the caller, an edge's as
 //     autogroup:public with MayPublish on tls/. An smtp/ edge Find has no dial check here: each receiver's
-//     own listen grant decides it at step 7 (§9.10, §15.4). denied
+//     own listen grant decides it at step 7 (§9.10, §15.4). Nor has §13.9's system publish, whose audience is
+//     public: each receiver's own smtp/25/mx listen grant decides it at step 7 (system_publish.go). denied
 //  4. the paying network, the listener's for an edge Find and else the caller's, spent in §20.7's over-limit
 //     snapshot: quota
 //  5. the failed tickets: each verified and held by the caller, else dropped (tickets.go)
@@ -26,7 +27,7 @@
 //     PairWriteInterval; a pair below its floor hands the floor to the gate as evidence, and the Find answers
 //     unavailable
 //  9. sign each: policy_version S''s position, the grant of the dial verdict, the publish verdict on tls/,
-//     or the receiver's own listen verdict on smtp/
+//     or the receiver's own listen verdict on smtp/ and, standing in, on the system publish
 //
 // Who may Find what (§9.4's table). tls/ and smtp/ names are their edges' to dial, so a sidecar's Find of one
 // is denied; a blinded name is dialed within its own network (§6.4), so an edge's Find of one, or a sidecar's
@@ -340,9 +341,9 @@ func socketFindReaches(caller *socketCaller, networkId connect.Id, name *socketP
 }
 
 // Step 3's dial check on view: the grant a ticket rests on, and whether the Find may go on. An smtp/ edge Find
-// is checked per receiver at step 7, so it passes here with no grant.
+// is checked per receiver at step 7, and so is §13.9's system publish, so each passes here with no grant.
 func (self *SocketsService) dialCheck(caller *socketCaller, view SocketGateView, networkId connect.Id, name *socketParsedName, now time.Time) (*socketTicketGrant, bool) {
-	if name.namespace == sidecar.SocketNamespaceSmtp {
+	if name.namespace == sidecar.SocketNamespaceSmtp || socketSystemPublish(name) {
 		return nil, true
 	}
 	if name.namespace == sidecar.SocketNamespacePlatform {
@@ -415,7 +416,7 @@ func (self *SocketsService) checkPicked(
 		case socketListenerPassed:
 			grant := dialGrant
 			if grant == nil {
-				// smtp/: the receiver's own listen grant is what the ticket rests on
+				// smtp/, and the system publish: the receiver's own listen grant is what the ticket rests on
 				grant = &socketTicketGrant{}
 				if listen != nil {
 					grant = &socketTicketGrant{grantId: listen.GrantId, grantExpireMillis: listen.GrantExpireMillis}
@@ -440,10 +441,11 @@ func (self *SocketsService) checkPicked(
 //
 // Refused: the listener's client is in the removed-client set, or a kill names the name; else, on any name
 // but ur/, MayListen for the listener's stored sidecar on the name, and on tls/ MayPublish for it, refuse, a
-// grant that has run out by time since the listener's last heartbeat included. A ur/ listener is a platform
-// client its service authorizes (§9.4), so nothing more is asked of it. A lease admitted above view's position
-// is unjudged, and its position is handed to the gate as evidence. A lease written before leases kept their
-// sidecar reads as none, which no gate allows: its next heartbeat writes it again.
+// grant that has run out by time since the listener's last heartbeat included. On §13.9's system publish the
+// listener's own smtp/25/mx listen stands in for both, and its verdict is the one returned (system_publish.go). A
+// ur/ listener is a platform client its service authorizes (§9.4), so nothing more is asked of it. A lease
+// admitted above view's position is unjudged, and its position is handed to the gate as evidence. A lease written
+// before leases kept their sidecar reads as none, which no gate allows: its next heartbeat writes it again.
 func (self *SocketsService) checkListener(view SocketGateView, networkId connect.Id, name *socketParsedName, listener *SocketStoreListener, now time.Time) (socketListenerCheck, *SocketGateVerdict) {
 	listenerClientId := listener.Candidate.ListenerClientId
 	if self.removedClients.contains(listenerClientId, now) || self.killSet.kills(networkId, name, now) {
@@ -464,6 +466,9 @@ func (self *SocketsService) checkListener(view SocketGateView, networkId connect
 		SidecarId:       listener.SidecarId,
 		Name:            name.name,
 		NameToken:       name.nameToken,
+	}
+	if socketSystemPublish(name) {
+		return socketSystemPublishListenerCheck(view, request, listener, now)
 	}
 	listen := view.MayListen(request, now)
 	if listen == nil || !listen.Allowed {
