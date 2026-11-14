@@ -367,8 +367,10 @@ message ForwardingHandOff {
 }
 
 // sidecar/protocol/bridge/bridge.proto
-// §17.8's statements and their rows, each statement's sealed part in its *Body.
+// §17.8's statements and their rows, each statement's sealed part in its *Body. BridgeRouteRow is
+// acl-m2-17-no-via-route-advertisers' (QD-764): an approved route's ids, which BridgeRows.routes carries.
 message BridgeEgressRow { bytes subject = 1; BridgeEgressMode mode = 2; }
+message BridgeRouteRow { bytes route_id = 1; bytes advertiser = 2; repeated bytes route_rule_ids = 3; }
 message BridgeIpv4Prefix { fixed32 address = 1; uint32 length = 2; }
 message BridgePortRange { uint32 first = 1; uint32 last = 2; }
 message BridgeApproval { bytes canonical_action = 1; repeated Signed decisions = 2; bytes template_action = 3; }
@@ -1021,6 +1023,18 @@ var testFenceAdditions = []struct {
 		message:  "AclRows",
 		field:    testFenceField{name: "evidence_default", number: 10, typeName: "uint32", repeated: true},
 		question: "mcp-m3-03-evidence-default-at-gates",
+	},
+	// QD-764: a rule's via subjects apart from its targets, and an approved route's ids in the rows, whose advertisers
+	// a route rule with no via takes as its via subjects (QD-004's second half)
+	{
+		message:  "AclRule",
+		field:    testFenceField{name: "via", number: 12, typeName: "AclTarget", repeated: true},
+		question: "acl-m2-17-no-via-route-advertisers",
+	},
+	{
+		message:  "BridgeRows",
+		field:    testFenceField{name: "routes", number: 2, typeName: "BridgeRouteRow", repeated: true},
+		question: "acl-m2-17-no-via-route-advertisers",
 	},
 	{
 		message:  "AclTarget",

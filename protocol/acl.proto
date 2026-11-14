@@ -104,8 +104,9 @@ message AclPortRange {
 }
 
 // Ports and CIDRs stay in AclLocalPolicy, from the sealed policy, so a server sees whether a rule limits ports,
-// never which (plan-BRIDGE-gate-row-prefixes #1, §17.8). A route rule's targets are its via subjects; one with no
-// via names none, and the advertisers BridgeRoute.route_rule_ids names stand in at id level.
+// never which (plan-BRIDGE-gate-row-prefixes #1, §17.8). targets are a rule's destinations and via its via subjects,
+// kept apart (QD-764): a route rule that names no via takes as its via subjects the advertisers whose BridgeRouteRow
+// in AclRows.bridge names it (QD-004's second half).
 message AclRule {
   reserved 5;
   reserved "ports";
@@ -122,6 +123,8 @@ message AclRule {
                                           // whose deletion ends it (plan-ACL-folded-grant-state #2)
   bool ports_limited = 11;                // the rule's ip field names ports: a legacy client is reached only
                                           // under a dial grant with none (§8.10, D-ACL-5)
+  repeated AclTarget via = 12;            // a route rule's via subjects, each a subject kind of AclTarget; none
+                                          // names the advertisers that name the rule (QD-764)
 }
 
 message AclRequestRule {
