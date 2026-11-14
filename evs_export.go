@@ -115,14 +115,36 @@ func (self *EvsRepo) exportRef(ctx context.Context, export *evsGitExport, refId 
 	}
 }
 
-// A ref's head, read fresh and held to this device's pin: its statements not read yet.
+// A ref's head, read fresh and held to this device's pin: its statements not read yet. A head below the pin is taken
+// only under the ref's Signed EvsReseed, as a read takes it (evs_read.go's acceptReseedBelowPin).
 func (self *EvsRepo) pinnedHead(ctx context.Context, refId Id) (*EvsVerifiedHead, error) {
+	return self.pinnedHeadFromPin(ctx, refId, true)
+}
+
+// pinnedHead, taking a head below the pin under the ref's EvsReseed at most once (reseed).
+func (self *EvsRepo) pinnedHeadFromPin(ctx context.Context, refId Id, reseed bool) (*EvsVerifiedHead, error) {
 	reply, objects, err := self.client.postRead(ctx, self.repoId, &protocol.EvsReadRequest{RefId: refId.Bytes(), Fresh: true})
 	if err != nil {
 		return nil, err
 	}
 	objects.close()
 	head := reply.head
+	if reseed {
+		pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
+		if err != nil {
+			return nil, err
+		}
+		if pinned && head.GetVersion() < pin.Version {
+			// this read named no pin, so the statement comes with a second one that does
+			again, err := self.acceptReseedBelowPin(ctx, refId, pin, reply, 0)
+			if err != nil {
+				return nil, err
+			}
+			if again {
+				return self.pinnedHeadFromPin(ctx, refId, false)
+			}
+		}
+	}
 	headChain, err := EvsChainFromBytes(head.GetChain())
 	if err != nil {
 		return nil, fmt.Errorf("%w: the head's chain", ErrEvsReplyInvalid)

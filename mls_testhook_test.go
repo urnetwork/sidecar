@@ -1,14 +1,15 @@
 //go:build sidecar_testhooks
 
-// Under the tag, every MLS secret reaches the privacy harness's hook, under the name of what it is.
-// TestMlsSecretsComeOnlyThroughHookedFunctions proves the same from source in both builds; these prove
-// it by value, on the paths a real group runs.
+// Under the tag, every MLS secret reaches the privacy harness's hook, under the name of what it is, and no AEAD
+// nonce does (ledger QD-755). TestMlsSecretsComeOnlyThroughHookedFunctions and TestMlsUnhooksOnlyItsAeadNonces
+// prove the same from source in both builds; these prove it by value, on the paths a real group runs.
 
 package sidecar
 
 import (
 	"bytes"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,35 @@ func (self *mlsHookRecorder) require(t *testing.T, kind string, secret []byte) {
 	}
 	if !self.saw(kind, secret) {
 		t.Errorf("%s did not reach the hook", kind)
+	}
+}
+
+// Fails the test if this value reached the hook under any kind.
+func (self *mlsHookRecorder) refuse(t *testing.T, what string, value []byte) {
+	t.Helper()
+	if len(value) == 0 {
+		t.Errorf("%s: nothing to look for", what)
+	}
+	for kind := range self.kindSecrets {
+		if self.saw(kind, value) {
+			t.Errorf("%s reached the hook as %s", what, kind)
+		}
+	}
+}
+
+// Fails the test if anything that is no key reached the hook: a kind that names a nonce, or a value shorter than
+// the suite's AEAD key, its shortest key, which at 16 bytes is also the least the privacy capture searches for.
+func (self *mlsHookRecorder) refuseNonces(t *testing.T, suite *mlsCipherSuite) {
+	t.Helper()
+	for kind, secrets := range self.kindSecrets {
+		if strings.Contains(kind, "nonce") {
+			t.Errorf("%s reached the hook %d times", kind, len(secrets))
+		}
+		for _, secret := range secrets {
+			if len(secret) < suite.aeadKeyLength {
+				t.Errorf("%s reached the hook with %d bytes, under a key's %d", kind, len(secret), suite.aeadKeyLength)
+			}
+		}
 	}
 }
 
@@ -143,7 +173,7 @@ func TestMlsHookSeesTheSecretTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder.require(t, "ratchet_key", step.key)
-	recorder.require(t, "ratchet_nonce", step.nonce)
+	recorder.refuse(t, "a handshake ratchet's nonce", step.nonce)
 	recorder.require(t, "ratchet_secret", step.nextSecret)
 	// three skipped generations and the step's own next secret
 	if count := len(recorder.kindSecrets["ratchet_secret"]); count != 4 {
@@ -155,14 +185,104 @@ func TestMlsHookSeesTheSecretTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder.require(t, "ratchet_key", key)
-	recorder.require(t, "ratchet_nonce", nonce)
+	recorder.refuse(t, "an application ratchet's nonce", nonce)
 
 	senderDataKey, senderDataNonce, err := suite.deriveSenderDataKey(make([]byte, suite.hashLength), []byte("ciphertext"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	recorder.require(t, "sender_data_key", senderDataKey)
-	recorder.require(t, "sender_data_nonce", senderDataNonce)
+	recorder.refuse(t, "the sender data nonce", senderDataNonce)
+	recorder.refuseNonces(t, suite)
+}
+
+// An expansion its caller leaves unhooked reaches no hook and is the bytes the hooked one is: the flag changes what
+// the harness hears, never what is derived.
+func TestMlsHookSkipsAnUnhookedExpansion(t *testing.T) {
+	recorder := mlsRecordHooks(t)
+	suite := mlsSuite
+	secret := bytes.Repeat([]byte{3}, suite.hashLength)
+
+	unhooked, err := suite.expandWithLabel("test_nonce", false, secret, "nonce", []byte("context"), suite.aeadNonceLength)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.kindSecrets) != 0 {
+		t.Errorf("an unhooked expansion reached the hook")
+	}
+	unhookedTree, err := suite.deriveTreeSecret("test_nonce", false, secret, "nonce", 7, suite.aeadNonceLength)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.kindSecrets) != 0 {
+		t.Errorf("an unhooked tree expansion reached the hook")
+	}
+
+	hooked, err := suite.expandWithLabel("test_value", true, secret, "nonce", []byte("context"), suite.aeadNonceLength)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.require(t, "test_value", hooked)
+	hookedTree, err := suite.deriveTreeSecret("test_tree_value", true, secret, "nonce", 7, suite.aeadNonceLength)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.require(t, "test_tree_value", hookedTree)
+	if !bytes.Equal(unhooked, hooked) || !bytes.Equal(unhookedTree, hookedTree) {
+		t.Errorf("the hook flag changed what was derived")
+	}
+}
+
+// The three nonces RFC 9420 derives reach no hook, and the key beside each and the secret each comes from do: the
+// Welcome's from welcome_secret, the sender data's from sender_data_secret, a ratchet's from its ratchet secret.
+func TestMlsHookSeesANoncesSecretAndKeyAndNotTheNonce(t *testing.T) {
+	recorder := mlsRecordHooks(t)
+	suite := mlsSuite
+	secrets, err := suite.newGroupEpochSecrets()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	welcomeSecret, err := suite.deriveWelcomeSecret(suite.generateSecret("joiner_secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.require(t, "welcome_secret", welcomeSecret)
+	welcomeKey, welcomeNonce, err := suite.deriveWelcomeKey(welcomeSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.require(t, "welcome_key", welcomeKey)
+	recorder.refuse(t, "the Welcome's nonce", welcomeNonce)
+
+	recorder.require(t, "sender_data_secret", secrets.senderDataSecret)
+	senderDataKey, senderDataNonce, err := suite.deriveSenderDataKey(secrets.senderDataSecret, []byte("ciphertext"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.require(t, "sender_data_key", senderDataKey)
+	recorder.refuse(t, "the sender data nonce", senderDataNonce)
+
+	tree := mlsNewTestSecretTree(t, suite)
+	ratchets, err := tree.ratchets(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// generation 0's nonce comes from the leaf's ratchet secret itself, generation 1's from the secret after it
+	recorder.require(t, "application_ratchet_secret", ratchets.application.secret)
+	for generation := range 2 {
+		_, key, nonce, err := ratchets.application.next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder.require(t, "ratchet_key", key)
+		recorder.refuse(t, "a ratchet's nonce", nonce)
+		recorder.require(t, "ratchet_secret", ratchets.application.secret)
+		if count := len(recorder.kindSecrets["ratchet_secret"]); count != generation+1 {
+			t.Errorf("%d ratchet secrets after generation %d", count, generation)
+		}
+	}
+	recorder.refuseNonces(t, suite)
 }
 
 func TestMlsHookSeesTreeKem(t *testing.T) {
@@ -262,14 +382,14 @@ func TestMlsHookKeepsItsCopyPastAnErase(t *testing.T) {
 }
 
 // The engine's own paths reach the hook by value: a KeyPackage's keys, a Welcome's group secrets and the keys its
-// schedule derives, a path's new signature key, the exporter's output, and every key and secret a reload unwraps
-// from disk.
+// schedule derives, a commit's sender data and ratchet keys on both its ends, a path's new signature key, the
+// exporter's output, and every key and secret a reload unwraps from disk. No nonce does on any of them.
 func TestMlsHookSeesTheEngine(t *testing.T) {
 	recorder := mlsRecordHooks(t)
 	world := newMlsTestWorld(t)
 	creator, joiner := world.sidecar(nil), world.sidecar(nil)
 	groups := mlsTestGroupOf(t, creator, joiner)
-	recorder.requireKinds(t, "init_priv", "leaf_priv", "signature_priv", "group_secrets", "joiner_secret", "welcome_secret", "welcome_key", "welcome_nonce")
+	recorder.requireKinds(t, "init_priv", "leaf_priv", "signature_priv", "group_secrets", "joiner_secret", "welcome_secret", "welcome_key")
 
 	staged, err := groups[1].Commit(&MlsCommitArgs{Path: true, AuthenticatedData: []byte("update")})
 	if err != nil {
@@ -279,12 +399,26 @@ func TestMlsHookSeesTheEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// the commit is a PrivateMessage: its sender sealed it under a ratchet key and a sender data key, hooked above
+	recorder.requireKinds(t, "handshake_ratchet_secret", "ratchet_key", "sender_data_key")
+	delete(recorder.kindSecrets, "ratchet_key")
+	delete(recorder.kindSecrets, "sender_data_key")
+	processed, err := groups[0].Process(staged.Message())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := processed.Adopt(); err != nil {
+		t.Fatal(err)
+	}
+	// and its receiver derived both again to open it
+	recorder.requireKinds(t, "ratchet_key", "sender_data_key")
 	kek, err := MlsKek(adopted, gkmTestId("repo"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	recorder.require(t, "exported_secret", kek)
 	recorder.require(t, "signature_priv", adopted.(*mlsRealGroup).state.signatureKey.Seed())
+	recorder.refuseNonces(t, mlsSuite)
 
 	recorder.kindSecrets = map[string][][]byte{}
 	joiner.restart(t)
@@ -300,4 +434,5 @@ func TestMlsHookSeesTheEngine(t *testing.T) {
 	recorder.require(t, "sender_data_secret", state.senderDataSecret)
 	recorder.require(t, "signature_priv", state.signatureKey.Seed())
 	recorder.requireKinds(t, "leaf_priv", "node_priv")
+	recorder.refuseNonces(t, mlsSuite)
 }

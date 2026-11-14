@@ -117,7 +117,7 @@ func (self *mlsCipherSuite) deriveJoinerSecret(initSecret []byte, commitSecret [
 		return nil, err
 	}
 	defer clear(extracted)
-	return self.expandWithLabel("joiner_secret", extracted, "joiner", groupContext, self.hashLength)
+	return self.expandWithLabel("joiner_secret", true, extracted, "joiner", groupContext, self.hashLength)
 }
 
 // The schedule's second half, from joiner_secret on, for a committer and for a Welcome's recipient.
@@ -135,7 +135,7 @@ func (self *mlsCipherSuite) deriveEpochSecrets(joinerSecret []byte, pskSecret []
 	if err != nil {
 		return nil, err
 	}
-	epochSecret, err := self.expandWithLabel("epoch_secret", extracted, "epoch", groupContext, self.hashLength)
+	epochSecret, err := self.expandWithLabel("epoch_secret", true, extracted, "epoch", groupContext, self.hashLength)
 	if err != nil {
 		return nil, err
 	}
@@ -162,11 +162,11 @@ func (self *mlsCipherSuite) deriveWelcomeSecret(joinerSecret []byte) ([]byte, er
 
 // welcome_key and welcome_nonce (RFC §12.4.3.1), which seal a Welcome's GroupInfo.
 func (self *mlsCipherSuite) deriveWelcomeKey(welcomeSecret []byte) (key []byte, nonce []byte, err error) {
-	key, err = self.expandWithLabel("welcome_key", welcomeSecret, "key", nil, self.aeadKeyLength)
+	key, err = self.expandWithLabel("welcome_key", true, welcomeSecret, "key", nil, self.aeadKeyLength)
 	if err != nil {
 		return nil, nil, err
 	}
-	nonce, err = self.expandWithLabel("welcome_nonce", welcomeSecret, "nonce", nil, self.aeadNonceLength)
+	nonce, err = self.expandWithLabel("welcome_nonce", false, welcomeSecret, "nonce", nil, self.aeadNonceLength)
 	if err != nil {
 		clear(key)
 		return nil, nil, err
@@ -222,7 +222,7 @@ func (self *mlsCipherSuite) exporter(kind string, exporterSecret []byte, label s
 		return nil, err
 	}
 	defer clear(labelSecret)
-	return self.expandWithLabel(kind, labelSecret, "exported", self.hash(context), length)
+	return self.expandWithLabel(kind, true, labelSecret, "exported", self.hash(context), length)
 }
 
 // A joiner's half of RFC §8.3: encapsulates to external_pub and exports the new init_secret, which

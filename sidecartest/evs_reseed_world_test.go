@@ -2,8 +2,9 @@
 // epoch world's site is lost, every cluster with it, and a repo admin's sidecar.EvsRepo.Reseed sends its mirror back
 // through evsservice's POST .../reseed on a new, empty site running with reseed on. The history returns as the
 // devices signed it, under the same chain; a fresh reader reads it; a device whose pin lies above the returned head
-// takes it only under the admin's EvsReseed, and then finds the unmirrored entry gone; and a stale mirror's slot
-// copy returns without the key an ERASE the site holds covers.
+// takes it only under the admin's EvsReseed, which its own read takes from the frame evs serves after the head, and
+// then finds the unmirrored entry gone; and a stale mirror's slot copy returns without the key an ERASE the site holds
+// covers.
 
 package sidecartest
 
@@ -159,6 +160,11 @@ func TestEvsReseedReturnsAMirroredRepoEndToEnd(t *testing.T) {
 	}
 	refId := world.mainRefId(writer)
 	mirrored := world.head(refId)
+	// the writer reads an entry at the mirrored head, so its read record of the path is pinned there: after the loss
+	// its read of that path asks from the record's pin, at which evs serves no statement, and then from the ref's
+	if content, _, err := writer.read("ledger/a"); err != nil || !bytes.Equal(content, small) {
+		t.Fatalf("the writer's read before the loss: %d bytes, %v", len(content), err)
+	}
 	slotIds := epochNewSlots(nil, world.slotKeys())
 	slots := map[sidecar.Id][]byte{}
 	for _, slotId := range slotIds {
@@ -180,7 +186,8 @@ func TestEvsReseedReturnsAMirroredRepoEndToEnd(t *testing.T) {
 	}
 
 	world.loseSite()
-	result, err := writer.repo.Reseed(world.ctx, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41"), SignReseed: true})
+	// the history first, with no EvsReseed over it
+	result, err := writer.repo.Reseed(world.ctx, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +200,7 @@ func TestEvsReseedReturnsAMirroredRepoEndToEnd(t *testing.T) {
 		t.Errorf("slot %s was not taken: %v", slot.SlotId, slot.Refused)
 	}
 	main := reseedRefOf(t, result, refId)
-	if main.Version != mirrored.GetVersion() || !bytes.Equal(main.Chain[:], mirrored.GetChain()) || !main.Filed {
+	if main.Version != mirrored.GetVersion() || !bytes.Equal(main.Chain[:], mirrored.GetChain()) || main.Filed {
 		t.Fatalf("the main ref returned to %d, filed %v; the mirror held %d", main.Version, main.Filed, mirrored.GetVersion())
 	}
 	if result.SlotCount != len(slots) || result.SegmentCount == 0 {
@@ -222,35 +229,77 @@ func TestEvsReseedReturnsAMirroredRepoEndToEnd(t *testing.T) {
 		t.Fatal("the entry no mirror held came back")
 	}
 
-	// the writer's device is pinned at the lost head: the returned one is below its pin, refused as a fork
+	// the writer's device is pinned at the lost head: the returned one is below its pin, refused as a fork, and its
+	// pin stays where it was
+	lostVersion := mirrored.GetVersion() + 1
 	if _, _, err := writer.read("ledger/a"); !errors.Is(err, sidecar.ErrEvsHeadForked) {
 		t.Fatalf("a read below the pin: %v", err)
 	}
-	// until it takes the admin's EvsReseed, which evs keeps for the ref
-	object, err := world.cluster.Get(world.ctx, evsservice.ReseedKey(world.repoId, refId))
-	if err != nil {
-		t.Fatalf("reseed/ holds no statement: %v", err)
-	}
-	reseedBytes, err := readAllAndClose(object)
+	// a statement no repo admin signed, served with the head, lowers nothing
+	reseedKey := evsservice.ReseedKey(world.repoId, refId)
+	returnedChain := [sha256.Size]byte(returned.GetChain())
+	forged, err := sidecar.SignEvsReseed(world.signers["v"].Sign, world.repoId, refId, returned.GetVersion(), returnedChain, []byte("incident 41"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	summary := &protocol.EvsHeadSummary{RefId: refId.Bytes(), Version: returned.GetVersion(), Chain: returned.GetChain()}
-	if err := writer.client.Verifier().AcceptReseed(reseedBytes, world.repoId, refId, summary); err != nil {
-		t.Fatalf("the admin's EvsReseed: %v", err)
+	if _, err := world.cluster.PutIfNoneMatch(world.ctx, reseedKey, forged, nil); err != nil {
+		t.Fatal(err)
 	}
-	content, _, err := writer.read("ledger/a")
-	if err != nil || !bytes.Equal(content, small) {
-		t.Fatalf("the writer's read under the EvsReseed: %d bytes, %v", len(content), err)
+	if _, _, err := writer.read("ledger/a"); !errors.Is(err, sidecar.ErrEvsHeadForked) {
+		t.Fatalf("a read below the pin under a non-admin's EvsReseed: %v", err)
+	}
+	// nor does an admin's statement of another head
+	other, err := sidecar.SignEvsReseed(world.signers["w"].Sign, world.repoId, refId, returned.GetVersion()-1, returnedChain, []byte("incident 41"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := world.cluster.Delete(world.ctx, reseedKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.cluster.PutIfNoneMatch(world.ctx, reseedKey, other, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := writer.read("ledger/a"); !errors.Is(err, sidecar.ErrEvsHeadForked) {
+		t.Fatalf("a read below the pin under an EvsReseed of another head: %v", err)
+	}
+	if pin, pinned, err := writer.client.Pins().Pin(world.repoId, refId); err != nil || !pinned || pin.Version != lostVersion || pin.Loss != nil {
+		t.Fatalf("the writer's pin after the refused statements: %+v %v %v", pin, pinned, err)
+	}
+	if err := world.cluster.Delete(world.ctx, reseedKey); err != nil {
+		t.Fatal(err)
 	}
 
-	// again: everything is there, and nothing changes
+	// the admin files the EvsReseed over the returned head: everything is there already, and nothing else changes
 	again, err := writer.repo.Reseed(world.ctx, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 41"), SignReseed: true})
 	if err != nil || !again.Whole() {
 		t.Fatalf("a second re-seed: %+v, %v", again, err)
 	}
+	if filed := reseedRefOf(t, again, refId); !filed.Filed || filed.FileError != nil {
+		t.Fatalf("the EvsReseed was not filed: %v", filed.FileError)
+	}
 	if after := world.head(refId); after.GetVersion() != returned.GetVersion() || !bytes.Equal(after.GetChain(), returned.GetChain()) {
 		t.Fatalf("a second re-seed moved the head to %d", after.GetVersion())
+	}
+	// evs serves it after the head, and the writer's own read takes the shorter history under it, kept as a loss
+	content, _, err := writer.read("ledger/a")
+	if err != nil || !bytes.Equal(content, small) {
+		t.Fatalf("the writer's read under the EvsReseed: %d bytes, %v", len(content), err)
+	}
+	pin, pinned, err := writer.client.Pins().Pin(world.repoId, refId)
+	if err != nil || !pinned || pin.Version != returned.GetVersion() || !bytes.Equal(pin.Chain[:], returned.GetChain()) {
+		t.Fatalf("the writer's pin under the EvsReseed: %+v %v %v", pin, pinned, err)
+	}
+	if pin.Loss == nil || pin.Loss.FromVersion != lostVersion || !bytes.Equal(pin.Loss.IncidentId, []byte("incident 41")) {
+		t.Fatalf("the loss the pin keeps: %+v", pin.Loss)
+	}
+	// the entry the incident lost does not come back. The writer's read record of it, made at the lost head, still
+	// refuses the path: whether an EvsReseed lowers a ref's read records with its pin is not settled (question
+	// evs-reseed-route-read-records), so the record stands and the read fails closed
+	if _, _, err := writer.read("ledger/c"); !errors.Is(err, sidecar.ErrEvsEntryRefused) {
+		t.Fatalf("the lost entry's read by its writer: %v", err)
+	}
+	if content, _, err := writer.read("ledger/b"); err != nil || !bytes.Equal(content, large) {
+		t.Fatalf("the writer's ledger/b under the EvsReseed: %d bytes, %v", len(content), err)
 	}
 	// and the repo takes pushes again on the returned head
 	if _, err := world.device("v", nil).write("ledger/d", []byte("written after the recovery")); err != nil {
