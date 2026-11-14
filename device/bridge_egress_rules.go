@@ -30,11 +30,18 @@
 // leaves a route admitting, its drain timed by the next state, since a drain starts at a log time, never a device's.
 //
 // Tags (BridgeRuleTag): a map's flows carry (subject, map_id), a served route's or remap's (subject, route_id), rule
-// 3's (subject, 3 and the hosted address the flow was sent to), and rules 4 and 7 (subject, 4) and (subject, 7).
+// 3's (subject, 3 and the hosted address the flow was sent to), and rules 4 and 7 (subject, 4) and (subject, 7). A flow
+// whose principal a forwarding key admitted carries BridgeForwardRuleTag of the same pair, with that Delegation in it.
+//
+// Forwarding keys (owner decision 197; DESIGN-DETAILS 4.2.5): a principal a forwarding key admitted is rechecked per
+// flow against the Delegation the state lists live for its subject, and is denied once the state lists another or
+// none, and while the overlay holds a DelegationRevoke of it or a supersession of its sidecar by another Delegation. A
+// principal the identity key admitted is untouched by any of the three.
 
 package device
 
 import (
+	"crypto/sha256"
 	"net"
 	"net/netip"
 	"slices"
@@ -87,9 +94,15 @@ type bridgePolicySubject struct {
 	identityKey []byte
 	// neither revoked nor suspended by the state or the overlay
 	admitted bool
-	dial     []bridgePolicyReach
-	route    []bridgePolicyReach
-	exit     []bridgePolicyReach
+	// the forwarding Delegation the state lists live for it and its key, hasForward false for none
+	hasForward          bool
+	forwardDelegationId [sha256.Size]byte
+	forwardKey          []byte
+	// the overlay revokes that Delegation, or supersedes this sidecar's forwarding key by another
+	forwardDenied bool
+	dial          []bridgePolicyReach
+	route         []bridgePolicyReach
+	exit          []bridgePolicyReach
 }
 
 // A map, its withdrawal applied.
@@ -140,6 +153,8 @@ type bridgePolicyState struct {
 
 	subjectBySidecarId map[connect.Id]*bridgePolicySubject
 	subjectByClientId  map[connect.Id]*bridgePolicySubject
+	// by the forwarding Delegation the state lists live for a subject (BridgeIdentity.forward_delegation_id)
+	subjectByForwardDelegationId map[[sha256.Size]byte]*bridgePolicySubject
 	// another client at an sdk provider: untagged, admitted, the zero id, holding BridgeRules.untagged's rows, none
 	// when the rules carry no such field
 	otherClient *bridgePolicySubject
@@ -162,6 +177,10 @@ type bridgePolicyOverlay struct {
 	revokedGrantIds   map[string]bool
 	resetRuleIds      map[string]bool
 	drainedRuleIds    map[string]bool
+	// forwarding Delegations a DelegationRevoke names
+	revokedDelegationIds map[string]bool
+	// by sidecar_id, the newer forwarding Delegations that supersede its older ones
+	supersedingDelegationIds map[string][]string
 }
 
 // Indexes the overlay's entries.
@@ -173,6 +192,9 @@ func newBridgePolicyOverlay(entries []PostureOverlayEntry) *bridgePolicyOverlay 
 		revokedGrantIds:   map[string]bool{},
 		resetRuleIds:      map[string]bool{},
 		drainedRuleIds:    map[string]bool{},
+
+		revokedDelegationIds:     map[string]bool{},
+		supersedingDelegationIds: map[string][]string{},
 	}
 	for _, entry := range entries {
 		id := string(entry.Id)
@@ -192,9 +214,34 @@ func newBridgePolicyOverlay(entries []PostureOverlayEntry) *bridgePolicyOverlay 
 				// reset, and a mode this role does not know, which resets: the stricter
 				self.resetRuleIds[id] = true
 			}
+		case PostureOverlayDelegationRevoke:
+			self.revokedDelegationIds[id] = true
+		case PostureOverlayForwardSupersede:
+			self.supersedingDelegationIds[id] = append(self.supersedingDelegationIds[id], string(entry.DelegationId))
 		}
 	}
 	return self
+}
+
+// Whether the overlay denies a sidecar's forwarding key under delegationId: a DelegationRevoke of it, or a
+// supersession of the sidecar by any other Delegation. The newer Delegation's own key is not denied here; the state
+// that judged it admits it.
+func (self *bridgePolicyOverlay) deniesForward(sidecarId []byte, delegationId []byte) bool {
+	if self.revokedDelegationIds[string(delegationId)] {
+		return true
+	}
+	for _, supersedingId := range self.supersedingDelegationIds[string(sidecarId)] {
+		if supersedingId != string(delegationId) {
+			return true
+		}
+	}
+	return false
+}
+
+// Whether the subject's forwarding key admits: the state lists a live forwarding Delegation for it, the overlay does
+// not deny that Delegation, and the subject itself stands.
+func (self *bridgePolicySubject) forwardAdmitted() bool {
+	return self.admitted && self.hasIdentity && self.hasForward && !self.forwardDenied
 }
 
 // Whether the overlay revokes or suspends a sidecar of memberId.
@@ -214,6 +261,8 @@ func newBridgePolicyState(input *BridgePolicyInput, generation uint64, settings 
 		subjectBySidecarId: map[connect.Id]*bridgePolicySubject{},
 		subjectByClientId:  map[connect.Id]*bridgePolicySubject{},
 		otherClient:        &bridgePolicySubject{admitted: true},
+
+		subjectByForwardDelegationId: map[[sha256.Size]byte]*bridgePolicySubject{},
 	}
 	if len(input.NetworkId) == bridgeRuleIdByteCount {
 		self.networkId = connect.Id(input.NetworkId)
@@ -281,16 +330,20 @@ func newBridgePolicyState(input *BridgePolicyInput, generation uint64, settings 
 	}
 
 	type bridgePolicyIdentity struct {
-		key       []byte
-		revoked   bool
-		suspended bool
+		key                 []byte
+		revoked             bool
+		suspended           bool
+		forwardDelegationId []byte
+		forwardKey          []byte
 	}
 	identities := map[string]bridgePolicyIdentity{}
 	for _, identity := range input.BridgeState.GetIdentities() {
 		identities[string(identity.GetSidecarId())] = bridgePolicyIdentity{
-			key:       identity.GetIdentityPublicKey(),
-			revoked:   identity.GetRevoked(),
-			suspended: identity.GetSuspended(),
+			key:                 identity.GetIdentityPublicKey(),
+			revoked:             identity.GetRevoked(),
+			suspended:           identity.GetSuspended(),
+			forwardDelegationId: identity.GetForwardDelegationId(),
+			forwardKey:          identity.GetForwardPublicKey(),
 		}
 	}
 	reach := func(rows []*bridge.BridgeRuleReach) []bridgePolicyReach {
@@ -321,6 +374,19 @@ func newBridgePolicyState(input *BridgePolicyInput, generation uint64, settings 
 			dial:  reach(ruleSubject.GetDial()),
 			route: reach(ruleSubject.GetRoute()),
 			exit:  reach(ruleSubject.GetExit()),
+		}
+		// a forwarding Delegation and its key come as a pair of the right lengths, or the subject has neither
+		if len(identity.forwardDelegationId) == sha256.Size && len(identity.forwardKey) == bridgeRuleIdentityByteCount {
+			subject.hasForward = true
+			subject.forwardDelegationId = [sha256.Size]byte(identity.forwardDelegationId)
+			subject.forwardKey = identity.forwardKey
+			subject.forwardDenied = overlay.deniesForward(ruleSubject.GetSidecarId(), identity.forwardDelegationId)
+			// a Delegation two identities list is one neither's key is read under
+			if held := self.subjectByForwardDelegationId[subject.forwardDelegationId]; held != nil {
+				held.hasForward, subject.hasForward = false, false
+			} else {
+				self.subjectByForwardDelegationId[subject.forwardDelegationId] = subject
+			}
 		}
 		self.subjectBySidecarId[subject.sidecarId] = subject
 		for _, clientId := range ruleSubject.GetClientIds() {
@@ -618,6 +684,7 @@ func (self *bridgePolicyState) resolve(
 	profile BridgePolicyProfile,
 	settings *BridgeSettings,
 	flow *connect.EgressFlow,
+	forwardDelegationId *[sha256.Size]byte,
 	now time.Time,
 ) connect.EgressDecision {
 	deny := connect.EgressDecision{Verdict: connect.EgressVerdictDeny, PolicyGeneration: self.generation}
@@ -661,6 +728,11 @@ func (self *bridgePolicyState) resolve(
 		if !now.Before(principal.NotAfter) || !flow.Sealed || mode == protocol.ProvideMode_FriendsAndFamily {
 			return deny
 		}
+		// a principal a forwarding key admitted stands only while the state lists that Delegation live for its
+		// subject and the overlay denies neither it nor the key
+		if forwardDelegationId != nil && (!subject.forwardAdmitted() || subject.forwardDelegationId != *forwardDelegationId) {
+			return deny
+		}
 	}
 	if !self.posture.Enforcing() || self.rulesRefused {
 		return deny
@@ -679,10 +751,14 @@ func (self *bridgePolicyState) resolve(
 		}
 	}
 	admit := func(verdict connect.EgressVerdict, target netip.AddrPort, ruleId []byte) connect.EgressDecision {
+		ruleTag := BridgeRuleTag(subject.sidecarId, ruleId)
+		if !sdk && forwardDelegationId != nil {
+			ruleTag = BridgeForwardRuleTag(subject.sidecarId, *forwardDelegationId, ruleId)
+		}
 		return connect.EgressDecision{
 			Verdict:          verdict,
 			Target:           target,
-			RuleTag:          BridgeRuleTag(subject.sidecarId, ruleId),
+			RuleTag:          ruleTag,
 			PolicyGeneration: self.generation,
 			IdleTimeout:      idle,
 		}
