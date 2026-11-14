@@ -93,6 +93,7 @@ func (self *FakeRecordAuthFixture) clone() *FakeRecordAuthFixture {
 	}
 	if self.Logs != nil {
 		cloned.Logs.Team = self.Logs.Team
+		cloned.Logs.LedgerIds = slices.Clone(self.Logs.LedgerIds)
 		if self.Logs.TeamRecordId != nil {
 			teamRecordId := *self.Logs.TeamRecordId
 			cloned.Logs.TeamRecordId = &teamRecordId
@@ -269,7 +270,7 @@ func (self *fakeRecordAuthView) CompromisedSince(sidecarId sidecar.Id) (uint64, 
 }
 
 func (self *fakeRecordAuthView) Logs() *sidecar.RecordLogIds {
-	logs := &sidecar.RecordLogIds{Team: self.fixture.Logs.Team}
+	logs := &sidecar.RecordLogIds{Team: self.fixture.Logs.Team, LedgerIds: slices.Clone(self.fixture.Logs.LedgerIds)}
 	if self.fixture.Logs.TeamRecordId != nil {
 		teamRecordId := *self.fixture.Logs.TeamRecordId
 		logs.TeamRecordId = &teamRecordId

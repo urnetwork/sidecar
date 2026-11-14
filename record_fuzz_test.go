@@ -163,3 +163,55 @@ func FuzzRecordHeader(f *testing.F) {
 		}
 	})
 }
+
+// FuzzRecordEntry (RECORD-M3-11): whatever bytes arrive as a RecordEntry, reading its fields by hand never panics,
+// and what the hand decoder accepts is what proto.Unmarshal reads of the same bytes (§22.6): the header's Signed and
+// the sealed body byte for byte, the slot and the version. An accepted entry re-slots with its Signed and sealed body
+// unchanged, and a deposit batch holding the bytes parses or is refused, never more. The seeds in
+// testdata/fuzz/FuzzRecordEntry, run in every test run, hold a valid entry and the same with its fields reordered,
+// one repeated, unknown fields packed and unpacked, and a non-minimal varint; FuzzRecordHeader's hold the like of a
+// header.
+func FuzzRecordEntry(f *testing.F) {
+	slotId := Id(bytes.Repeat([]byte{0x53}, 16))
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, entryBytes []byte) {
+		// a deposit of these bytes parses or is refused
+		batch, err := proto.Marshal(&protocol.RecordDepositBatch{Entries: []*protocol.RecordDeposit{{
+			Entry: entryBytes,
+			Key:   bytes.Repeat([]byte{0x4b}, RecordKeyByteCount),
+			Salt:  bytes.Repeat([]byte{0x5a}, RecordSaltByteCount),
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = RecordDepositBatchParse(batch, DefaultSidecarSettings().Record.DepositByteCount)
+
+		fields := &recordEntryFields{}
+		if fields.parse(entryBytes) != nil {
+			return
+		}
+		message := &protocol.RecordEntry{}
+		if proto.Unmarshal(entryBytes, message) == nil {
+			signed := &bridge.Signed{}
+			if err := proto.Unmarshal(fields.signed, signed); err != nil {
+				t.Fatalf("the message parses and its header's bytes do not: %v", err)
+			}
+			if !proto.Equal(signed, message.GetHeader()) || !bytes.Equal(fields.sealedBody, message.GetSealedBody()) ||
+				!bytes.Equal(fields.keySlotId, message.GetKeySlotId()) || fields.keyIndex != message.GetKeyIndex() || fields.version != message.GetVersion() {
+				t.Fatal("the fields read by hand are not proto.Unmarshal's")
+			}
+		}
+		reslotted, err := recordEntryReslot(entryBytes, &slotId, 7)
+		if err != nil {
+			t.Fatalf("an accepted entry does not re-slot: %v", err)
+		}
+		again := &recordEntryFields{}
+		if err := again.parse(reslotted); err != nil {
+			t.Fatalf("a re-slotted entry does not parse: %v", err)
+		}
+		if !bytes.Equal(again.signed, fields.signed) || !bytes.Equal(again.sealedBody, fields.sealedBody) || again.version != fields.version ||
+			!bytes.Equal(again.keySlotId, slotId[:]) || again.keyIndex != 7 {
+			t.Fatal("re-slotting changed what was signed or sealed, or named another slot")
+		}
+	})
+}

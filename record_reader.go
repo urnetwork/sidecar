@@ -583,7 +583,8 @@ func (self *RecordReader) kindAdmitted(auth RecordAuthView, logId Id, writerId I
 func recordLogIsAVault(auth RecordAuthView, logId Id) bool {
 	// RecordAuthView answers a member's vault, not a vault's member: a log that is not the team's is read as a vault
 	logs := auth.Logs()
-	return (logs.TeamRecordId == nil || *logs.TeamRecordId != logId) && (logs.DirectoryId == nil || *logs.DirectoryId != logId)
+	return (logs.TeamRecordId == nil || *logs.TeamRecordId != logId) && (logs.DirectoryId == nil || *logs.DirectoryId != logId) &&
+		!slices.Contains(logs.LedgerIds, logId)
 }
 
 // Step 5: opens the body with its slot row and holds it to its commitment and its kind's caps. A row this push's slot
