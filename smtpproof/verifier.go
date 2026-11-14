@@ -69,10 +69,20 @@ func NewProver(settings *ProverSettings, keySet *KeySet, cacheDirectory string) 
 	return &Prover{settings: settings, backend: backend}
 }
 
+// HoldsKeySet of sidecar.SmtpProofVerifier. Until key sets of version 2 exist (SMTP-M9-40) this verifier
+// holds no set with an id, so a preamble that names any set is refused, and one that names none is
+// checked as before: nothing passes here that did not before DESIGN-DETAILS 3.2.5's field.
+func (self *Verifier) HoldsKeySet(keySet []byte) bool {
+	return len(keySet) == 0
+}
+
 // NewSmtpProofSession of sidecar.SmtpProofVerifier.
 func (self *Verifier) NewSmtpProofSession(preamble *sidecar.SmtpProofPreamble) (sidecar.SmtpProofSession, error) {
 	if preamble == nil || preamble.MxHost == "" {
 		return nil, errors.New("smtpproof: preamble lacks the edge's own values")
+	}
+	if !self.HoldsKeySet(preamble.ProofKeySet) {
+		return nil, sidecar.ErrSmtpProofKeySet
 	}
 	session := newSessionPreamble(preamble)
 	if err := checkSessionPreamble(session); err != nil {

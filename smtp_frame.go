@@ -1,10 +1,11 @@
 //go:build !sidecar_http && !ios_extension
 
 // The frames ahead of the raw TLS on a stream to smtpedge (D-SMTP-3, plan-SMTP-wire-gaps#3): each is
-// u32be body length ‖ u16be MessageType ‖ body, the body at most 65,536 B. Only SmtpPreamble, from the
-// sidecar, and SmtpPreambleResult, from the edge, travel this way. Raw TLS follows an OK result, and
-// any other result ends the stream after its frame. A bad length or type, a body that does not decode,
-// or a result code of 0 resets the stream with PROTOCOL (§6.11's zero rule).
+// u32be body length ‖ u16be MessageType ‖ body, the body at most SmtpFrameSettings.MaxBodyByteCount,
+// 65,536 B. Only SmtpPreamble, from the sidecar, and SmtpPreambleResult, from the edge, travel this way.
+// Raw TLS follows an OK result, and any other result ends the stream after its frame. A bad length or
+// type, a body that does not decode, or a result code of 0 resets the stream with PROTOCOL (§6.11's
+// zero rule). KEYS (DESIGN-DETAILS 3.2.5) is a known code, an answer like any other refusal.
 //
 // A read takes exactly one frame's octets from the stream, with no buffer past them, because the
 // sidecar's ClientHello follows the result on the same stream. A length over the bound is refused
@@ -25,13 +26,30 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// Format values (plan-SMTP-wire-gaps#3), not settings: both ends must agree on them.
-const (
-	// The length and the type.
-	SmtpFrameHeaderByteCount = 4 + 2
-	// The most a body holds.
-	SmtpFrameMaxBodyByteCount = 64 * 1024
-)
+// The header's layout (plan-SMTP-wire-gaps#3): the length and the type.
+const SmtpFrameHeaderByteCount = 4 + 2
+
+// What both ends of the frames agree on (plan-SMTP-wire-gaps#3). Its one limit is a protocol value, so a
+// deployment never changes it on one side alone (QD-702).
+type SmtpFrameSettings struct {
+	// The most octets a body holds: 65,536, which bounds the dnssec_chain an edge can send.
+	MaxBodyByteCount int
+}
+
+// A fresh value each call.
+func DefaultSmtpFrameSettings() *SmtpFrameSettings {
+	return &SmtpFrameSettings{
+		MaxBodyByteCount: 64 * 1024,
+	}
+}
+
+// nil is DefaultSmtpFrameSettings'.
+func smtpFrameSettingsOrDefault(settings *SmtpFrameSettings) *SmtpFrameSettings {
+	if settings == nil {
+		return DefaultSmtpFrameSettings()
+	}
+	return settings
+}
 
 // The stream resets with PROTOCOL: a frame with a bad length or type, a body that does not decode, or
 // a value §6.11 makes a protocol error. errors.Is finds it under the wrapped detail.
@@ -41,7 +59,7 @@ var ErrSmtpFrameProtocol = errors.New("smtp frame protocol error")
 type SmtpFrame struct {
 	// SMTP_PREAMBLE or SMTP_PREAMBLE_RESULT.
 	Type protocol.MessageType
-	// The message, at most SmtpFrameMaxBodyByteCount octets.
+	// The message, at most SmtpFrameSettings.MaxBodyByteCount octets.
 	Body []byte
 }
 
@@ -50,12 +68,14 @@ func smtpFrameType(messageType protocol.MessageType) bool {
 	return messageType == protocol.MessageType_SMTP_PREAMBLE || messageType == protocol.MessageType_SMTP_PREAMBLE_RESULT
 }
 
-// Writes one frame in a single write, so the header and the body never go out apart.
-func WriteSmtpFrame(writer io.Writer, frame *SmtpFrame) error {
+// Writes one frame in a single write, so the header and the body never go out apart. nil settings are
+// DefaultSmtpFrameSettings'.
+func WriteSmtpFrame(writer io.Writer, frame *SmtpFrame, settings *SmtpFrameSettings) error {
+	settings = smtpFrameSettingsOrDefault(settings)
 	if !smtpFrameType(frame.Type) {
 		return fmt.Errorf("%w: type %#x travels in no frame", ErrSmtpFrameProtocol, int32(frame.Type))
 	}
-	if SmtpFrameMaxBodyByteCount < len(frame.Body) {
+	if settings.MaxBodyByteCount < len(frame.Body) {
 		return fmt.Errorf("%w: a %d B body is past the bound", ErrSmtpFrameProtocol, len(frame.Body))
 	}
 	encoded := make([]byte, SmtpFrameHeaderByteCount, SmtpFrameHeaderByteCount+len(frame.Body))
@@ -67,15 +87,17 @@ func WriteSmtpFrame(writer io.Writer, frame *SmtpFrame) error {
 }
 
 // Reads exactly one frame of type want, and nothing after it. A stream that ends inside a frame
-// returns io.ErrUnexpectedEOF, and one that ends before a frame starts io.EOF, each a reset.
-func ReadSmtpFrame(reader io.Reader, want protocol.MessageType) (*SmtpFrame, error) {
+// returns io.ErrUnexpectedEOF, and one that ends before a frame starts io.EOF, each a reset. nil
+// settings are DefaultSmtpFrameSettings'.
+func ReadSmtpFrame(reader io.Reader, want protocol.MessageType, settings *SmtpFrameSettings) (*SmtpFrame, error) {
+	settings = smtpFrameSettingsOrDefault(settings)
 	var header [SmtpFrameHeaderByteCount]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		return nil, err
 	}
 	bodyByteCount := binary.BigEndian.Uint32(header[0:4])
 	frameType := protocol.MessageType(binary.BigEndian.Uint16(header[4:6]))
-	if SmtpFrameMaxBodyByteCount < bodyByteCount {
+	if uint64(max(settings.MaxBodyByteCount, 0)) < uint64(bodyByteCount) {
 		return nil, fmt.Errorf("%w: a %d B body is past the bound", ErrSmtpFrameProtocol, bodyByteCount)
 	}
 	if frameType != want {
@@ -97,18 +119,18 @@ func marshalSmtpFrameBody(message proto.Message) ([]byte, error) {
 }
 
 // The sidecar's first frame.
-func WriteSmtpPreamble(writer io.Writer, preamble *protocol.SmtpPreamble) error {
+func WriteSmtpPreamble(writer io.Writer, preamble *protocol.SmtpPreamble, settings *SmtpFrameSettings) error {
 	body, err := marshalSmtpFrameBody(preamble)
 	if err != nil {
 		return err
 	}
-	return WriteSmtpFrame(writer, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE, Body: body})
+	return WriteSmtpFrame(writer, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE, Body: body}, settings)
 }
 
-// The edge's first read. What the preamble declares is the gate's to judge (§14.5); this refuses only
-// what does not decode.
-func ReadSmtpPreamble(reader io.Reader) (*protocol.SmtpPreamble, error) {
-	frame, err := ReadSmtpFrame(reader, protocol.MessageType_SMTP_PREAMBLE)
+// The edge's first read. What the preamble declares is the gate's to judge (§14.5), its proof_key_set
+// included; this refuses only what does not decode.
+func ReadSmtpPreamble(reader io.Reader, settings *SmtpFrameSettings) (*protocol.SmtpPreamble, error) {
+	frame, err := ReadSmtpFrame(reader, protocol.MessageType_SMTP_PREAMBLE, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +144,8 @@ func ReadSmtpPreamble(reader io.Reader) (*protocol.SmtpPreamble, error) {
 // The edge's one frame. A dnssec_chain that would take the body past the bound is sent empty, so TL1
 // is not available on that connection (plan-SMTP-wire-gaps#3); anything else that passes it is
 // refused. result is not changed.
-func WriteSmtpPreambleResult(writer io.Writer, result *protocol.SmtpPreambleResult) error {
+func WriteSmtpPreambleResult(writer io.Writer, result *protocol.SmtpPreambleResult, settings *SmtpFrameSettings) error {
+	settings = smtpFrameSettingsOrDefault(settings)
 	if !smtpPreambleCodeKnown(result.GetCode()) {
 		return fmt.Errorf("%w: code %d", ErrSmtpFrameProtocol, result.GetCode())
 	}
@@ -130,20 +153,20 @@ func WriteSmtpPreambleResult(writer io.Writer, result *protocol.SmtpPreambleResu
 	if err != nil {
 		return err
 	}
-	if SmtpFrameMaxBodyByteCount < len(body) && len(result.GetDnssecChain()) != 0 {
+	if settings.MaxBodyByteCount < len(body) && len(result.GetDnssecChain()) != 0 {
 		withoutChain := proto.CloneOf(result)
 		withoutChain.DnssecChain = nil
 		if body, err = marshalSmtpFrameBody(withoutChain); err != nil {
 			return err
 		}
 	}
-	return WriteSmtpFrame(writer, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE_RESULT, Body: body})
+	return WriteSmtpFrame(writer, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE_RESULT, Body: body}, settings)
 }
 
 // The sidecar's one read before TLS. A code of 0 or one this version does not know resets the
 // stream: a sender must never read it as retry, refusal or success (§6.11).
-func ReadSmtpPreambleResult(reader io.Reader) (*protocol.SmtpPreambleResult, error) {
-	frame, err := ReadSmtpFrame(reader, protocol.MessageType_SMTP_PREAMBLE_RESULT)
+func ReadSmtpPreambleResult(reader io.Reader, settings *SmtpFrameSettings) (*protocol.SmtpPreambleResult, error) {
+	frame, err := ReadSmtpFrame(reader, protocol.MessageType_SMTP_PREAMBLE_RESULT, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +180,7 @@ func ReadSmtpPreambleResult(reader io.Reader) (*protocol.SmtpPreambleResult, err
 	return result, nil
 }
 
-// OK to TRY_LATER, never 0.
+// OK to KEYS, never 0.
 func smtpPreambleCodeKnown(code uint32) bool {
-	return uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK) <= code && code <= uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER)
+	return uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK) <= code && code <= uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS)
 }

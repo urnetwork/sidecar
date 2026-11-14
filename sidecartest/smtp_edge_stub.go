@@ -5,7 +5,10 @@
 // (SmtpMxResolver and SmtpMxDialer, MxWorld in tests), runs the pre-TLS dialog itself, and splices
 // whole TLS records through a SmtpProofSession, so nothing reaches the MX that the session did not
 // clear. SubmitProof and Handshake are SMTP_PROOF's and SMTP_HANDSHAKE's handlers, and ProofChannel
-// lands a sender's calls on them as smtpProofChannel's RPCs would.
+// lands a sender's calls on them as smtpProofChannel's RPCs would, every SmtpProof field included.
+//
+// A preamble naming a key set the verifier does not hold is answered KEYS before any MX is dialed
+// (DESIGN-DETAILS 3.2.5).
 //
 // It has no gate, quota, halt or send log, and its X-UR-Ref and Feedback-ID have the issued values'
 // exact widths (plan-SMTP-small-readings#3, #4) and no MAC behind them: those are SMTP-M9-10's to
@@ -40,10 +43,6 @@ var (
 	errStubSmtpEdgeNoSend   = errors.New("stub smtp edge: no such send")
 )
 
-// The most octets one TLS record may hold on the wire, header included: 2^14 + 2,048 of ciphertext
-// (RFC 5246 §6.2.3), past any 1.3 record's 2^14 + 256.
-const smtpTlsRecordMaxByteCount = 5 + 16*1024 + 2048
-
 // The lowercase unpadded base32 the issued values use.
 var smtpStubBase32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
@@ -63,14 +62,20 @@ type StubSmtpEdgeSettings struct {
 	HeloName       string
 	// b.<net>.<root>, which a real edge reads from the ticket's network, never from the sidecar.
 	EnvelopeDomain string
+	// The frames' bound, which both ends share. Nil is sidecar.DefaultSmtpFrameSettings'.
+	Frame *sidecar.SmtpFrameSettings
+	// The most octets one TLS record may hold on the wire, header included: 2^14 + 2,048 of ciphertext
+	// (RFC 5246 §6.2.3) and the 5-octet header, past any 1.3 record's 2^14 + 256.
+	RecordMaxByteCount int
 }
 
 func DefaultStubSmtpEdgeSettings() *StubSmtpEdgeSettings {
 	return &StubSmtpEdgeSettings{
-		Code:           protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK,
-		SendingAddress: netip.MustParseAddr("192.0.2.25"),
-		HeloName:       "o1.out.root.example",
-		EnvelopeDomain: "b.n1.root.example",
+		Code:               protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK,
+		SendingAddress:     netip.MustParseAddr("192.0.2.25"),
+		HeloName:           "o1.out.root.example",
+		EnvelopeDomain:     "b.n1.root.example",
+		RecordMaxByteCount: 5 + 16*1024 + 2048,
 	}
 }
 
@@ -140,7 +145,7 @@ func (self *StubSmtpEdge) Results() []*protocol.SmtpPreambleResult {
 // Closes conn. An error is a reset.
 func (self *StubSmtpEdge) Serve(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
-	preamble, err := sidecar.ReadSmtpPreamble(conn)
+	preamble, err := sidecar.ReadSmtpPreamble(conn, self.settings.Frame)
 	if err != nil {
 		return err
 	}
@@ -155,7 +160,7 @@ func (self *StubSmtpEdge) Serve(ctx context.Context, conn net.Conn) error {
 			defer self.stateLock.Unlock()
 			self.results = append(self.results, result)
 		}()
-		return sidecar.WriteSmtpPreambleResult(conn, result)
+		return sidecar.WriteSmtpPreambleResult(conn, result, self.settings.Frame)
 	}
 	refuse := func(code protocol.SmtpPreambleCode) error {
 		result := &protocol.SmtpPreambleResult{Code: uint32(code)}
@@ -167,6 +172,10 @@ func (self *StubSmtpEdge) Serve(ctx context.Context, conn net.Conn) error {
 	}
 	if self.settings.Code != protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK {
 		return refuse(self.settings.Code)
+	}
+	// a key set the verifier does not hold dials no MX
+	if !self.verifier.HoldsKeySet(preamble.GetProofKeySet()) {
+		return refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS)
 	}
 	mxConn, mxHost, keywords, code := self.connect(ctx, preamble.GetRecipientDomain())
 	if code != protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK {
@@ -203,7 +212,12 @@ func (self *StubSmtpEdge) Serve(ctx context.Context, conn net.Conn) error {
 		FeedbackId:       result.FeedbackId,
 		EnvelopeDomain:   self.settings.EnvelopeDomain,
 		MxHost:           mxHost,
+		ProofKeySet:      preamble.GetProofKeySet(),
 	})
+	if errors.Is(err, sidecar.ErrSmtpProofKeySet) {
+		mxConn.Close()
+		return refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS)
+	}
 	if err != nil {
 		mxConn.Close()
 		return refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER)
@@ -339,14 +353,14 @@ func runSmtpPreTls(conn net.Conn, heloName string) ([]string, error) {
 	return keywords, nil
 }
 
-// Reads one whole TLS record, header included, as it travels.
-func readSmtpTlsRecord(reader io.Reader) ([]byte, error) {
+// Reads one whole TLS record, header included, as it travels: at most recordMaxByteCount octets.
+func readSmtpTlsRecord(reader io.Reader, recordMaxByteCount int) ([]byte, error) {
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(reader, header); err != nil {
 		return nil, err
 	}
 	length := int(binary.BigEndian.Uint16(header[3:]))
-	if smtpTlsRecordMaxByteCount < 5+length {
+	if recordMaxByteCount < 5+length {
 		return nil, fmt.Errorf("stub smtp edge: a %d-octet record", length)
 	}
 	record := make([]byte, 5+length)
@@ -365,7 +379,7 @@ func (self *StubSmtpEdge) splice(connection *stubSmtpConnection) {
 		defer close(done)
 		defer connection.close()
 		for {
-			record, err := readSmtpTlsRecord(connection.mxConn)
+			record, err := readSmtpTlsRecord(connection.mxConn, self.settings.RecordMaxByteCount)
 			if err != nil {
 				connection.session.ServerClosed()
 				return
@@ -381,7 +395,7 @@ func (self *StubSmtpEdge) splice(connection *stubSmtpConnection) {
 	func() {
 		defer connection.close()
 		for {
-			record, err := readSmtpTlsRecord(connection.sidecar)
+			record, err := readSmtpTlsRecord(connection.sidecar, self.settings.RecordMaxByteCount)
 			if err != nil {
 				return
 			}
@@ -426,6 +440,10 @@ func (self *StubSmtpEdge) SubmitProof(ctx context.Context, proof *protocol.SmtpP
 		Last:              proof.GetLast(),
 		ServerRecordCount: proof.GetServerRecordCount(),
 		Records:           proof.GetRecords(),
+		KeyCommitment:     proof.GetKeyCommitment(),
+		ReplyCount:        proof.GetReplyCount(),
+		HeaderRecordCount: proof.GetHeaderRecordCount(),
+		Carry:             proof.GetCarry(),
 	}
 	err := func() error {
 		connection.writeLock.Lock()
@@ -495,6 +513,10 @@ func (self *stubSmtpProofChannel) SubmitPart(ctx context.Context, part *sidecar.
 		Last:              part.Last,
 		ServerRecordCount: part.ServerRecordCount,
 		Records:           part.Records,
+		KeyCommitment:     part.KeyCommitment,
+		ReplyCount:        part.ReplyCount,
+		HeaderRecordCount: part.HeaderRecordCount,
+		Carry:             part.Carry,
 	})
 	if result.GetCode() != uint32(protocol.SmtpProofCode_SMTP_PROOF_OK) {
 		return fmt.Errorf("%w: part %d answered %d", errStubSmtpEdgeNoSend, part.Index, result.GetCode())
