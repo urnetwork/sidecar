@@ -590,7 +590,8 @@ type SidecarErasure struct {
 type SidecarStatus struct {
 	State  SidecarState
 	Reason SidecarStateReason
-	// The bound client generation (§5.5).
+	// The bound client generation (§5.5): Offline and Online name the generation whose client is in that state, and
+	// every other state the one the keychain binds.
 	Generation int64
 	// The newest consistent HeadCheck witness (§6.4). Zero: none yet.
 	WitnessedAt time.Time
