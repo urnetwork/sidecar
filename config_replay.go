@@ -3,11 +3,11 @@
 // b it holds: verifies b's signature under a config writer its own rows name, the fold rule against the base before
 // it and the tail cap; for a full reader, checks b's config head as its anchor (the head's genesis is the log's, its
 // records equal every held entry through folded_through, and the chain recomputed from the genesis through the head's
-// records, bases included, reaches the first held entry); then loads b's rows and re-applies the tail
-// folded_through+1..b-1 by b's tail_verdicts, judging nothing, taking every verdict there from the base, and applies
-// b+1 on as a long-running reader does. So a new device reaches a long-running reader's S(b) without judging a tail it
-// could only judge on b's head (questions team-m2-02-new-device-tail-verdicts and the replay ring's, which DESIGN-DETAILS
-// 5.1 answers).
+// records, bases included, reaches the first held entry, the head's pushes judged by descent under b's rows, QD-814);
+// then loads b's rows and re-applies the tail folded_through+1..b-1 by b's tail_verdicts, judging nothing, taking every
+// verdict there from the base, and applies b+1 on as a long-running reader does. So a new device reaches a long-running
+// reader's S(b) without judging a tail it could only judge on b's head (questions team-m2-02-new-device-tail-verdicts
+// and the replay ring's, which DESIGN-DETAILS 5.1 answers).
 //
 // A new device holds no verdict for the entries b's rows fold: it keeps their bytes for the head check and the next
 // base's fold, and its replay ring is b's rows' plus the tail's.
@@ -257,6 +257,9 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 			FoldedFrom:     entries[0].GetN(),
 			FirstPrevChain: [sha256.Size]byte(entries[0].GetPrevChain()),
 			Floor:          floor,
+			// b's rows, the tail not yet re-applied, whose identity keys judge the head's pushes (QD-814); the head
+			// reader reads only the genesis and those keys, so no acl part builds before the tail lands
+			Anchor: state,
 		})
 		if errors.Is(err, ErrConfigHeadUnavailable) {
 			return err

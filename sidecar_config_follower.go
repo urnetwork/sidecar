@@ -867,8 +867,8 @@ func (self *sidecarConfigFollowerRows) Rows(networkId Id, rowsSha256 []byte) ([]
 	return rows, nil
 }
 
-// A base's head read through the host's head reader and checked as the client checks one (CheckConfigBase).
-// ErrConfigHeadUnavailable with no head reader.
+// A base's head read through the host's head reader, an anchor's under the base's own rows (readConfigHeadForCheck),
+// and checked as the client checks one (CheckConfigBase). ErrConfigHeadUnavailable with no head reader.
 func (self *sidecarConfigFollowerRows) CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
 	heads := self.follower.args.Heads
 	if heads == nil {
@@ -876,7 +876,7 @@ func (self *sidecarConfigFollowerRows) CheckHead(check *ConfigHeadCheck) (*Confi
 	}
 	ctx, cancel := context.WithTimeout(self.follower.ctx, self.follower.settings.AnchorReadTimeout)
 	defer cancel()
-	head, err := heads.ReadConfigHead(ctx, check.Header.GetConfigVersion(), check.Header.GetConfigHeadSha256())
+	head, err := readConfigHeadForCheck(ctx, heads, check)
 	if err != nil {
 		return nil, err
 	}

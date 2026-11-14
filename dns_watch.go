@@ -6,19 +6,22 @@
 // and what its local state says, kept in its own store (<state>/net/<id>/dns/), never the API's word.
 //
 // Each pass, about every Interval with Jitter, asks both resolvers for every watched name and type: the published
-// hosts and the apex @, A, AAAA and CAA at each (from M7 also mx, _25._tcp.mx and the DKIM selectors, which the mail
-// components add through Watch). For each:
+// hosts and the apex @, A, AAAA and CAA at each, and from M7 the mail hosts and DKIM selectors the mail components
+// add (dns_watch_mail.go: mx's MX, addresses and TLSA). For each:
 //
 //   - the two resolvers' answers must agree; a split is asked once more, and a split that stays alarms (split);
-//   - the agreed answer must hold exactly what the device expects where it expects anything, CAA none unless it asked
-//     for one (unrequested);
-//   - and it must hold what GET /dns/zone shows the device where the zone holds values, and at an owner the edge
-//     answers, addresses and no CNAME (zone_mismatch).
+//   - the agreed answer must hold exactly what the device expects where it expects anything, or, for a mail host's
+//     TLSA, hold the device's own record among others; CAA none unless it asked for one (unrequested);
+//   - and it must hold what GET /dns/zone shows the device where the zone holds values, and at an owner the edge or
+//     the router interfaces answer, addresses and no CNAME (zone_mismatch).
+//
+// StrictChain answers §15.5's strict_chain through the DnsWatchStrictValidator the args attach, which
+// dns_watch_mail.go builds on the legs that validate DNSSEC; with none it answers false.
 //
 // A resolver that fails marks the watch degraded, "zone watch degraded" in SidecarStatus, as the CT watch does, and
 // that pass judges the other resolver's answer alone, with no split to see; both failing judge nothing. A sidecar
-// with no published name and no watched name watches nothing. Lookups go only through DoH (§2.8 ext-3), never a
-// URnetwork proxy: the resolver is DnsWatchResolver, whose connect-leg implementation is dns_watch_doh.go.
+// with no published name, mail host or watched name watches nothing. Lookups go only through DoH (§2.8 ext-3),
+// never a URnetwork proxy: the resolver is DnsWatchResolver, whose connect-leg implementation is dns_watch_doh.go.
 //
 // Values compare in one canonical form a type (canonicalDnsWatchValue), which the resolver's parser and the zone's
 // presentation text both reach. Safe for concurrent use.
@@ -62,16 +65,43 @@ type DnsWatchSettings struct {
 	LookupTimeout time.Duration
 	// The most names one pass watches, a bound on its work.
 	NameMaxCount int
+	// URnetwork's zones beside the zone's root, whose records an operator controls, so StrictChain counts nothing
+	// under them as customer-signed (QD-145's "outside <root> and bringyour.com"). Canonical names.
+	UrnetworkZones []string
 }
 
-// D-TRUST-9's 6 hours, jittered by half an hour either way.
+// D-TRUST-9's 6 hours, jittered by half an hour either way. UrnetworkZones is the zone of each service host in the
+// embedded host list (QD-119's one copy of the platform's names), so no code here names one.
 func DefaultDnsWatchSettings() *DnsWatchSettings {
 	return &DnsWatchSettings{
-		Interval:      6 * time.Hour,
-		Jitter:        30 * time.Minute,
-		LookupTimeout: 10 * time.Second,
-		NameMaxCount:  256,
+		Interval:       6 * time.Hour,
+		Jitter:         30 * time.Minute,
+		LookupTimeout:  10 * time.Second,
+		NameMaxCount:   256,
+		UrnetworkZones: dnsWatchPlatformZones(),
 	}
+}
+
+// The zones directly holding the host list's service hosts, canonical, each once: the platform's zone. None when the
+// list does not read, which leaves StrictChain only the zone's root.
+func dnsWatchPlatformZones() []string {
+	zones := []string{}
+	list, err := SidecarHostListV1()
+	if err != nil {
+		return zones
+	}
+	for _, entry := range list.Hosts {
+		if entry.Service == "" {
+			continue
+		}
+		if _, zone, ok := strings.Cut(entry.Host, "."); ok && strings.Contains(zone, ".") {
+			zone = CanonicalDnsRecordName(zone)
+			if !slices.Contains(zones, zone) {
+				zones = append(zones, zone)
+			}
+		}
+	}
+	return zones
 }
 
 // What one resolver answered for one name and type.
@@ -103,6 +133,9 @@ type DnsWatchExpected struct {
 	Name   string   `json:"name"`
 	Type   uint16   `json:"type"`
 	Values []string `json:"values,omitempty"`
+	// Values must be among the RRset's rather than be all of it, the rest held to GET /dns/zone where it shows the
+	// RRset: a mail host's TLSA, which holds every receiver's key (dns_watch_mail.go).
+	Includes bool `json:"includes,omitempty"`
 }
 
 // The watch's file in its store.
@@ -117,6 +150,35 @@ type dnsWatchFile struct {
 	Expected []*DnsWatchExpected `json:"expected"`
 	// Names a component asked the watch to watch beyond the published hosts and @.
 	Names []string `json:"names,omitempty"`
+	// The mail hosts this receiver serves (WatchMailHost).
+	MailHosts []*dnsWatchMailHost `json:"mail_hosts,omitempty"`
+}
+
+// A mail host this receiver serves, as POST /dns/key-record names it (mx, or mx.<scope>), under the zone's apex.
+type dnsWatchMailHost struct {
+	Host string `json:"host"`
+	// This receiver's own record at _25._tcp.<host>, in canonicalDnsWatchValue's form.
+	Tlsa string `json:"tlsa"`
+}
+
+// StrictChain's DNSSEC validation (QD-145): NewDnsWatchStrictValidator's, on the legs that validate DNSSEC. Safe for
+// concurrent use.
+type DnsWatchStrictValidator interface {
+	// Whether request's chain holds (DnsWatch.StrictChain).
+	strictChainHolds(ctx context.Context, request *dnsWatchStrictRequest) bool
+}
+
+// One StrictChain question.
+type dnsWatchStrictRequest struct {
+	sniHost          string
+	recipientDomains []string
+	// this receiver's key: its SubjectPublicKeyInfo's SHA-256
+	spkiSha256 []byte
+	// URnetwork's zones: the settings' and the zone's root
+	urnetworkZones []string
+	// what the chain's signatures are valid at, and the clock lookups time out on
+	now   time.Time
+	clock Clock
 }
 
 // What the watch says of itself, for SidecarStatus.
@@ -144,6 +206,9 @@ type DnsWatchArgs struct {
 	Settings *DnsWatchSettings
 	// nil is real time.
 	Clock Clock
+	// StrictChain's validation: NewDnsWatchStrictValidator over C20's forwarder. nil answers every StrictChain false,
+	// as on a leg that validates no DNSSEC, or before connect has C20.
+	Strict DnsWatchStrictValidator
 }
 
 // The watch. See the file header.
@@ -155,6 +220,7 @@ type DnsWatch struct {
 	event          SidecarEventFunction
 	settings       *DnsWatchSettings
 	clock          Clock
+	strict         DnsWatchStrictValidator
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -165,6 +231,8 @@ type DnsWatch struct {
 	stateLock sync.Mutex
 	file      *dnsWatchFile
 	status    DnsWatchStatus
+	// the zone's root, canonical, as the last zone read gave it
+	root string
 }
 
 // A watch over args, its expectations read from its store, its passes running under ctx until Close.
@@ -189,6 +257,7 @@ func NewDnsWatch(ctx context.Context, args *DnsWatchArgs) (*DnsWatch, error) {
 		event:          args.Event,
 		settings:       settings,
 		clock:          clockOrReal(args.Clock),
+		strict:         args.Strict,
 		cancel:         cancel,
 		done:           make(chan struct{}),
 		file:           file,
@@ -228,6 +297,10 @@ func (self *DnsWatch) updateFile(change func(file *dnsWatchFile)) error {
 		entry.Values = slices.Clone(expected.Values)
 		copied.Expected = append(copied.Expected, &entry)
 	}
+	for _, mailHost := range self.file.MailHosts {
+		entry := *mailHost
+		copied.MailHosts = append(copied.MailHosts, &entry)
+	}
 	change(copied)
 	data, err := json.Marshal(copied)
 	if err != nil {
@@ -265,7 +338,8 @@ func (self *DnsWatch) Expect(name string, qType uint16, values []string) error {
 	})
 }
 
-// Adds name to every pass, beside the published hosts and @: a mail host, its TLSA owner or a DKIM selector (M7).
+// Adds name to every pass, beside the published hosts and @, asking its A, AAAA and CAA. A mail host has its own
+// watch (WatchMailHost), as a DKIM selector does (WatchDkimSelector).
 func (self *DnsWatch) Watch(name string) error {
 	name = CanonicalDnsRecordName(name)
 	return self.updateFile(func(file *dnsWatchFile) {
@@ -273,6 +347,66 @@ func (self *DnsWatch) Watch(name string) error {
 			file.Names = append(file.Names, name)
 		}
 	})
+}
+
+// Drops what this device asked for at name's qType RRset, so passes judge it as one it never asked for, and a name
+// nothing else watches is asked no more: a retired DKIM selector once its deletion is old.
+func (self *DnsWatch) Forget(name string, qType uint16) error {
+	name = CanonicalDnsRecordName(name)
+	return self.updateFile(func(file *dnsWatchFile) {
+		file.Expected = slices.DeleteFunc(file.Expected, func(expected *DnsWatchExpected) bool {
+			return expected.Name == name && expected.Type == qType
+		})
+	})
+}
+
+// §15.5's strict_chain for one message (D-TRUST-9, QD-145): whether the SNI host is a custom MX host, and every
+// recipient domain's MX hosts and their TLSA validate to the release's root anchors, customer-signed and none in a
+// URnetwork zone (DnsWatchSettings.UrnetworkZones and the zone's root), the SNI host among each domain's hosts with
+// its TLSA holding spkiSha256, this receiver's key's SPKI SHA-256. The caller asks only under mail.strict. False for
+// anything else, and always without a validator (DnsWatchArgs.Strict), so a failure only withholds the claim.
+func (self *DnsWatch) StrictChain(ctx context.Context, sniHost string, recipientDomains []string, spkiSha256 []byte) bool {
+	if self.strict == nil {
+		return false
+	}
+	root, ok := self.zoneRoot(ctx)
+	if !ok {
+		return false
+	}
+	return self.strict.strictChainHolds(ctx, &dnsWatchStrictRequest{
+		sniHost:          sniHost,
+		recipientDomains: slices.Clone(recipientDomains),
+		spkiSha256:       slices.Clone(spkiSha256),
+		urnetworkZones:   append(slices.Clone(self.settings.UrnetworkZones), root),
+		now:              self.clock.Now(),
+		clock:            self.clock,
+	})
+}
+
+// The zone's root, canonical, from the last zone read, or GET /dns/zone when there was none.
+func (self *DnsWatch) zoneRoot(ctx context.Context) (string, bool) {
+	root := func() string {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.root
+	}()
+	if root != "" {
+		return root, true
+	}
+	zone, err := self.zone(ctx)
+	if err != nil || zone == nil || zone.Root == "" {
+		return "", false
+	}
+	return self.noteRoot(zone.Root), true
+}
+
+// Keeps root, the zone read's, for StrictChain, and answers it canonical.
+func (self *DnsWatch) noteRoot(root string) string {
+	root = CanonicalDnsRecordName(root)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.root = root
+	return root
 }
 
 // The watch's own view, for SidecarStatus.
@@ -319,9 +453,12 @@ type dnsWatchItem struct {
 	// the zone's RRset there, nil for none
 	zone *DnsZoneRecordSet
 	// A or AAAA at a host this sidecar publishes and the zone holds no row at, which the edge answers through *
-	// (§12.7)
+	// (§12.7), or at a mail host, which the router interfaces or a direct MX's addresses answer
 	edge bool
 }
+
+// §12.7's preference of the MX at a mail domain: @ and * MX 10 mx.<net>.<root>.
+const dnsWatchMailMxPreference = 10
 
 // Runs one pass now and answers whether it alarmed. A pass with nothing to watch asks nothing.
 func (self *DnsWatch) Pass(ctx context.Context) bool {
@@ -393,8 +530,9 @@ func (self *DnsWatch) alarm(alarm SidecarDnsAlarm) {
 	}
 }
 
-// The names and types a pass asks about: A, AAAA and CAA at each published host and at @, and each type the device
-// expects at a name. Nothing when no host is published and no name watched.
+// The names and types a pass asks about: each mail host's MX, addresses, CAA and TLSA (dns_watch_mail.go), A, AAAA
+// and CAA at each published host and at @, and each type the device expects at a name. Nothing when no host is
+// published, served for mail or watched.
 func (self *DnsWatch) items(ctx context.Context) ([]*dnsWatchItem, error) {
 	file := func() *dnsWatchFile {
 		self.stateLock.Lock()
@@ -405,15 +543,22 @@ func (self *DnsWatch) items(ctx context.Context) ([]*dnsWatchItem, error) {
 	for _, host := range self.publishedHosts() {
 		hosts = append(hosts, CanonicalDnsRecordName(host))
 	}
-	if len(hosts) == 0 && len(file.Names) == 0 && len(file.Expected) == 0 {
+	if len(hosts) == 0 && len(file.Names) == 0 && len(file.Expected) == 0 && len(file.MailHosts) == 0 {
 		return nil, nil
 	}
 	zone, err := self.zone(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if zone.Root != "" {
+		self.noteRoot(zone.Root)
+	}
+	apex := zone.Apex()
+	if apex != "" {
+		apex = CanonicalDnsRecordName(apex)
+	}
 	names := slices.Clone(hosts)
-	if apex := zone.Apex(); apex != "" && 0 < len(hosts) && !slices.Contains(names, apex) {
+	if apex != "" && 0 < len(hosts) && !slices.Contains(names, apex) {
 		names = append(names, apex)
 	}
 	for _, name := range file.Names {
@@ -428,14 +573,16 @@ func (self *DnsWatch) items(ctx context.Context) ([]*dnsWatchItem, error) {
 	}
 	keys := map[string]bool{}
 	items := []*dnsWatchItem{}
-	add := func(name string, qType uint16) {
+	// implied is what a mail host makes the device expect, which its own request at the name overrides; router marks
+	// a mail host's addresses
+	add := func(name string, qType uint16, implied *DnsWatchExpected, router bool) {
 		key := name + " " + strconv.Itoa(int(qType))
 		if keys[key] || self.settings.NameMaxCount <= len(items) {
 			return
 		}
 		keys[key] = true
-		item := &dnsWatchItem{name: name, qType: qType}
-		item.edge = slices.Contains(hosts, name) && !ownersWithRows[name] && (qType == DnsWatchTypeA || qType == DnsWatchTypeAaaa)
+		item := &dnsWatchItem{name: name, qType: qType, expected: implied}
+		item.edge = router || (slices.Contains(hosts, name) && !ownersWithRows[name] && (qType == DnsWatchTypeA || qType == DnsWatchTypeAaaa))
 		for _, expected := range file.Expected {
 			if expected.Name == name && expected.Type == qType {
 				item.expected = expected
@@ -449,13 +596,33 @@ func (self *DnsWatch) items(ctx context.Context) ([]*dnsWatchItem, error) {
 		}
 		items = append(items, item)
 	}
+	// mail hosts first, so their addresses are judged as the router's wherever another list names them too
+	for _, mailHost := range file.MailHosts {
+		if apex == "" {
+			break
+		}
+		host := mailHost.Host + "." + apex
+		domain := apex
+		if scope, ok := strings.CutPrefix(mailHost.Host, "mx."); ok {
+			domain = scope + "." + apex
+		}
+		mx := []string{canonicalDnsWatchValue(DnsWatchTypeMx, strconv.Itoa(dnsWatchMailMxPreference)+" "+host)}
+		for _, owner := range []string{domain, "*." + domain} {
+			add(owner, DnsWatchTypeMx, &DnsWatchExpected{Name: owner, Type: DnsWatchTypeMx, Values: mx}, false)
+		}
+		add(host, DnsWatchTypeA, nil, true)
+		add(host, DnsWatchTypeAaaa, nil, true)
+		add(host, DnsWatchTypeCaa, nil, false)
+		tlsaOwner := "_25._tcp." + host
+		add(tlsaOwner, DnsWatchTypeTlsa, &DnsWatchExpected{Name: tlsaOwner, Type: DnsWatchTypeTlsa, Values: []string{mailHost.Tlsa}, Includes: true}, false)
+	}
 	for _, name := range names {
 		for _, qType := range []uint16{DnsWatchTypeA, DnsWatchTypeAaaa, DnsWatchTypeCaa} {
-			add(name, qType)
+			add(name, qType, nil, false)
 		}
 	}
 	for _, expected := range file.Expected {
-		add(expected.Name, expected.Type)
+		add(expected.Name, expected.Type, nil, false)
 	}
 	return items, nil
 }
@@ -481,9 +648,32 @@ func dnsWatchTypeOf(mnemonic string) uint16 {
 	return 0
 }
 
-// Whether answer is what item expects, and the alarm when it is not: the device's own expectation first, then the
-// zone's values, then the edge's shape, and a CAA the device did not ask for is unrequested.
+// Whether answer is what item expects, and the alarm when it is not: the device's own expectation first, which an
+// including one (a mail host's TLSA) meets by holding its values, the rest then held to the zone; then the zone's
+// values, then the edge's shape, and a CAA the device did not ask for is unrequested.
 func judgeDnsWatchAnswer(item *dnsWatchItem, answer *DnsWatchAnswer) (SidecarDnsAlarm, bool) {
+	zoneHolds := func() bool {
+		zoneValues := []string{}
+		for _, value := range item.zone.Values {
+			zoneValues = append(zoneValues, canonicalDnsWatchValue(item.qType, value))
+		}
+		slices.Sort(zoneValues)
+		return answer.Cname == "" && slices.Equal(answer.Values, zoneValues)
+	}
+	if item.expected != nil && item.expected.Includes {
+		if answer.Cname != "" {
+			return SidecarDnsAlarmUnrequested, false
+		}
+		for _, value := range item.expected.Values {
+			if !slices.Contains(answer.Values, value) {
+				return SidecarDnsAlarmUnrequested, false
+			}
+		}
+		if item.zone != nil && 0 < len(item.zone.Values) && !zoneHolds() {
+			return SidecarDnsAlarmZoneMismatch, false
+		}
+		return "", true
+	}
 	if item.expected != nil {
 		if answer.Cname != "" || !slices.Equal(answer.Values, item.expected.Values) {
 			return SidecarDnsAlarmUnrequested, false
@@ -491,12 +681,7 @@ func judgeDnsWatchAnswer(item *dnsWatchItem, answer *DnsWatchAnswer) (SidecarDns
 		return "", true
 	}
 	if item.zone != nil && 0 < len(item.zone.Values) {
-		zoneValues := []string{}
-		for _, value := range item.zone.Values {
-			zoneValues = append(zoneValues, canonicalDnsWatchValue(item.qType, value))
-		}
-		slices.Sort(zoneValues)
-		if answer.Cname != "" || !slices.Equal(answer.Values, zoneValues) {
+		if !zoneHolds() {
 			return SidecarDnsAlarmZoneMismatch, false
 		}
 		return "", true

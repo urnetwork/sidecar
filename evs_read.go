@@ -272,6 +272,10 @@ type evsReadResult struct {
 	paths   []*evsReadPath
 	replies []*EvsVerifiedPath
 	objects *evsReadObjects
+	// set only by the config head reader at an anchor (QD-814; evs_config_head.go), for the config repo its trusted
+	// genesis names, whose kind no read receipt covers: its content is decrypted without asking the receipt gate,
+	// which asks a verified state that a reader starting at a base does not hold yet
+	receiptExempt bool
 }
 
 // One round's reply: its parts as they arrived and their objects, its head verified but not pinned, and the ref pin

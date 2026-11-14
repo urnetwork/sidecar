@@ -26,6 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,8 +43,15 @@ import (
 type configHeadEvsRef struct {
 	world  *epochWorld
 	device *epochDevice
-	// the files the ref holds
-	files map[string][]byte
+
+	// held across a save, so a config writer's fold loop reads a head with its own version
+	stateLock sync.Mutex
+	// the files the ref holds, and the newest head saved through it with its version and chain value: nil, 0 and C_0
+	// before the first
+	files   map[string][]byte
+	head    *sidecar.ConfigHead
+	version uint64
+	chain   [sha256.Size]byte
 }
 
 // The ref's chain value at each version through version, as the writer's verifier walks it from C_0, and each
@@ -67,6 +76,8 @@ func (self *configHeadEvsRef) walk(version uint64) ([][sha256.Size]byte, [][]byt
 // Saves head as the ref's next version by device, one push of what changed: its version and chain value.
 func (self *configHeadEvsRef) save(device *epochDevice, head *sidecar.ConfigHead) (uint64, [sha256.Size]byte) {
 	self.world.t.Helper()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	files := head.Files()
 	changes := map[string][]byte{}
 	for path, data := range files {
@@ -85,11 +96,18 @@ func (self *configHeadEvsRef) save(device *epochDevice, head *sidecar.ConfigHead
 	}
 	self.files = files
 	chains, _ := self.walk(result.Version)
+	self.head, self.version, self.chain = head, result.Version, chains[result.Version]
 	return result.Version, chains[result.Version]
 }
 
+// The newest head saved through the ref, none at C_0 before the first.
 func (self *configHeadEvsRef) CurrentConfigHead(ctx context.Context) (*sidecar.ConfigHead, uint64, [sha256.Size]byte, error) {
-	return nil, 0, sidecar.EvsChainStart(self.world.repoId, self.world.mainRefId(self.device)), nil
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.head == nil {
+		return nil, 0, sidecar.EvsChainStart(self.world.repoId, self.world.mainRefId(self.device)), nil
+	}
+	return self.head, self.version, self.chain, nil
 }
 
 // Pushes the head, since evs prepares none without sending it.
@@ -226,14 +244,25 @@ func (self *configHeadWorld) pinVersion(device *epochDevice) uint64 {
 // A device of label whose evs verifier judges by config, the world's devices judging by the world's log.
 func (self *configHeadWorld) deviceJudgingBy(label string, config func() sidecar.GkmAuthView) *epochDevice {
 	self.t.Helper()
+	return self.deviceThrough(label, config, nil)
+}
+
+// deviceJudgingBy's device, its requests through wrap around the world's transport, nil for none, and its key client
+// advanced with the world's positions as every world device's is.
+func (self *configHeadWorld) deviceThrough(label string, config func() sidecar.GkmAuthView, wrap func(next http.RoundTripper) http.RoundTripper) *epochDevice {
+	self.t.Helper()
 	signer := self.signers[label]
 	device := &epochDevice{world: self.epochWorld, label: label, signer: signer, store: NewFakeStore().Root(), gkm: self.gkm.Client(signer.SidecarId, signer.Sign)}
 	device.gkm.AuthAdvanced(self.currentView())
 	identity := &sidecar.SidecarIdentity{NetworkId: self.networkId, SidecarId: signer.SidecarId, ClientId: self.clientId, Generation: 1, IdentityPublicKey: signer.PublicKey()}
+	var transport http.RoundTripper = &epochTransport{world: self.epochWorld, device: device}
+	if wrap != nil {
+		transport = wrap(transport)
+	}
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.networkId,
 		EvsUrl:    "https://evs.example",
-		Transport: &epochTransport{world: self.epochWorld, device: device},
+		Transport: transport,
 		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
 			connectSidecarId := connect.Id(signer.SidecarId)
 			return self.host.Authenticator.Issue(&sidecar.Principal{
@@ -256,6 +285,9 @@ func (self *configHeadWorld) deviceJudgingBy(label string, config func() sidecar
 	self.t.Cleanup(client.Close)
 	device.client = client
 	device.repo = client.Repo(self.repoId)
+	self.stateLock.Lock()
+	self.devices = append(self.devices, device)
+	self.stateLock.Unlock()
 	return device
 }
 
