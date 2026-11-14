@@ -45,8 +45,8 @@ const (
 // up to 63 octets as AES's 48.
 func partShapes() []*partShape {
 	return []*partShape{
-		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4},
-		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 1},
+		{kind: partKindKey, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4},
+		{kind: partKindKey, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 1},
 		// sized for D-SMTP-16's 10 recipients and a typical EHLO reply, whole or a line per record
 		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
 		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 12, serverBlocks: 12, localOctets: true},
@@ -66,8 +66,8 @@ func partShapes() []*partShape {
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, serverBlocks: 16, bodyBlocks: 128},
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 4, bodyBlocks: 32},
 		// TLS 1.2, for Exchange Online among others: AES-128-GCM alone, under each of its two suites
-		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4},
-		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4},
+		{kind: partKindKey, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4},
+		{kind: partKindKey, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4},
 		{kind: partKindEnvelope, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
 		{kind: partKindEnvelope, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
 		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
@@ -83,7 +83,7 @@ func partShapes() []*partShape {
 func partKindOf(statement *partStatement) partKind {
 	switch statement.index {
 	case 1:
-		return partKindEhlo
+		return partKindKey
 	case 2:
 		return partKindEnvelope
 	case 3:
