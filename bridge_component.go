@@ -49,46 +49,10 @@ import (
 // The bridge component is not serving, or was given nothing to feed.
 var ErrBridgeComponentClosed = errors.New("bridge component closed")
 
-// What the sink's posture has in force, as the component reads it.
-type BridgeSinkState int
-
-const (
-	// No Pending yet: today's behavior.
-	BridgeSinkLegacy BridgeSinkState = iota + 1
-	// Anchored and denying every private destination and exit, with no verified state, or forked.
-	BridgeSinkPending
-	// A verified state in force.
-	BridgeSinkEnforcing
-)
-
-// What the sink holds, which the component's catch-up and compiles read.
-type BridgeSinkDecision struct {
-	State BridgeSinkState
-	// The newest verified pin the sink holds: its state's, or past it the newest entry it applied. Nil before one.
-	Pin *bridge.AuthPin
-	// The pin of the state in force, nil before one.
-	StatePin *bridge.AuthPin
-	// Whether the sink holds a fork the sidecar role reported.
-	Fork bool
-}
-
-// A run of the authorization log, device.PostureLog's shape at the root, which never links device/ (§4.4).
-type BridgeStateLog struct {
-	// AuthEntry bytes, verbatim, at consecutive positions, oldest first.
-	Entries [][]byte
-	// Streams the ProjectionRows a base among Entries names. Nil when no base is among them.
-	OpenRows func(rowsSha256 []byte) (io.ReadCloser, error)
-}
-
-// Section 4's ForwarderSink with Revoke and EgressHook (DESIGN-DETAILS 12.2.5): what device.Bridge is to its producers.
-// cli/ adapts device.Bridge to it for ur tun. The component calls it from one goroutine.
+// Section 4's ForwarderSink (bridge_forward.go) with Revoke and EgressHook (DESIGN-DETAILS 12.2.5): what device.Bridge
+// is to its producers. cli/ adapts device.Bridge to it for ur tun. The component calls it from one goroutine.
 type BridgeStateSink interface {
-	SetPending(pending *bridge.Pending) error
-	// A compiled state, with the log run from its base through its pin.
-	SetState(state *bridge.BridgeState, log *BridgeStateLog) error
-	ApplyDeltas(log *BridgeStateLog) error
-	SetFork(fork bool) error
-	Decision() BridgeSinkDecision
+	ForwarderSink
 	// n is the denial's own position, never 0.
 	Revoke(statementType bridge.SignedType, id []byte, n uint64) error
 	EgressHook() connect.EgressHook
@@ -671,14 +635,6 @@ func (self *BridgeComponent) run() {
 		case <-compileAt:
 		}
 	}
-}
-
-// The later of two times.
-func laterTime(a time.Time, b time.Time) time.Time {
-	if b.After(a) {
-		return b
-	}
-	return a
 }
 
 // Marks a compile wanted, coalescing with one already wanted. On run's goroutine.
