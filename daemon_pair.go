@@ -14,14 +14,13 @@
 //	           (daemon_socket_appgroup_darwin.go), and stops with the daemon
 //
 // The socket's name: ur for the default instance, else u and the first 7 hex of SHA-256 of the instance's name, so a
-// container path and the name fit sun_path's 104 bytes (§5.9). A path that would not fit is passed over, logged.
+// container path and the name fit sun_path's 104 bytes (§5.9). A path that would not fit is passed over, logged. The
+// name is DaemonAppGroupSocketName's, in daemon_client.go, since a sandboxed app's remote backend dials by it too.
 
 package sidecar
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -30,13 +29,6 @@ import (
 
 // The pairing method.
 const DaemonMethodPair = "pair"
-
-// The default instance's socket name in an app-group container, and the prefix of every other's.
-const (
-	daemonAppGroupDefaultSocketName = "ur"
-	daemonAppGroupSocketNamePrefix  = "u"
-	daemonAppGroupSocketNameDomain  = "urnetwork-sidecar-v1/app-group-socket/"
-)
 
 // pair's params.
 type DaemonPairParams struct {
@@ -77,15 +69,6 @@ func DaemonPairMethod(target DaemonPairTarget) *DaemonMethod {
 			return reply, err
 		},
 	}
-}
-
-// The socket's name in an app-group container for instance.
-func DaemonAppGroupSocketName(instance string) string {
-	if instance == "" || instance == "default" {
-		return daemonAppGroupDefaultSocketName
-	}
-	sum := sha256.Sum256([]byte(daemonAppGroupSocketNameDomain + instance))
-	return daemonAppGroupSocketNamePrefix + hex.EncodeToString(sum[:])[:7]
 }
 
 // The app-group socket paths a sandboxed app of this platform pairs through, for instance under home: macOS's, which

@@ -104,10 +104,15 @@ func (self *pushFixture) subscriptions(sidecarId sidecar.Id) []*protocol.EvsSubs
 	return reply.GetSubscriptions()
 }
 
-// The fixture's network allowing limit subscribers a repo.
+// The fixture's network allowing limit subscribers a repo, and a client §20.4's 500 repos.
 func (self *pushFixture) allowSubscribers(limit int64) {
+	self.allowSubscriptions(limit, 500)
+}
+
+// The fixture's network allowing subscribers a repo and repos a client.
+func (self *pushFixture) allowSubscriptions(subscribersPerRepo int64, reposPerClient int64) {
 	self.host.Quota.SetLimits(connect.Id(self.check.networkId), &sidecar.QuotaLimits{
-		Tier: "pro", Limits: map[string]int64{evsSubscribersPerRepoLimitKey: limit},
+		Tier: "pro", Limits: map[string]int64{evsSubscribersPerRepoLimitKey: subscribersPerRepo, evsReposPerClientLimitKey: reposPerClient},
 	})
 }
 
@@ -231,9 +236,13 @@ func (self *fixedGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView, Evs
 }
 
 // The per-repo cap: a new holder past evs_subscribers_per_repo is refused with the key named, while a holder
-// already there renews; with no limit configured every new holder is refused (§20.5's 0).
+// already there renews; with no per-repo limit configured every new holder is refused (§20.5's 0). The client's
+// repo count, checked first, is within its own cap throughout and changes none of it.
 func TestSubscriptionsCapHoldersPerRepo(t *testing.T) {
 	fixture := newPushFixture(t, nil)
+	fixture.host.Quota.SetLimits(connect.Id(fixture.check.networkId), &sidecar.QuotaLimits{
+		Tier: "pro", Limits: map[string]int64{evsReposPerClientLimitKey: 500},
+	})
 	refused := fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest())
 	requireRefusal(t, refused, http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT)
 	if refusalOf(t, refused).GetQuota().GetLimitKey() != evsSubscribersPerRepoLimitKey {
