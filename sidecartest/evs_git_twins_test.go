@@ -17,8 +17,9 @@
 //	NoApplyLock       a receive arriving while settle holds the ref's apply lock waits for it, so an acknowledged
 //	                  commit is never lost between settle's read and write (AckedDurable)
 //
-// The last two hold goroutines at the local tier's barriers, so they need the sidecar_testhooks build and skip
-// without it. The answers git hears, the journal, the local refs and evs's head are each checked.
+// RefusedDropOnly and the last two wait at or hold goroutines at the local tier's barriers, so they need the
+// sidecar_testhooks build and skip without it. The answers git hears, the journal, the local refs and evs's head are
+// each checked.
 
 package sidecartest_test
 
@@ -131,8 +132,11 @@ func TestEvsGitTwinEqualsOld(t *testing.T) {
 }
 
 // RefusedDropOnly: an owned ref's queued update that evs refuses for good is held with the local ref kept, not dropped;
-// once evs would take it, ur evs retry releases it and evs's tip is the local one.
+// once evs would take it, ur evs retry releases it and evs's tip is the local one. The queue runs on the mount's own
+// loop, so the test waits at its barriers: the hold written (evs.local.queue.held), then the released push applied
+// (evs.local.apply.done).
 func TestEvsGitTwinRefusedDropOnly(t *testing.T) {
+	barrier := newEvsGitTwinBarrier(t)
 	world := newEvsGitTwinWorld(t)
 	a := world.Device("device-a", nil)
 	dir := a.Clone()
@@ -146,43 +150,31 @@ func TestEvsGitTwinRefusedDropOnly(t *testing.T) {
 		}
 		return nil, nil
 	}, nil)
+	held, releaseHeld := barrier.arm("evs.local.queue.held")
+	defer releaseHeld()
 	commit := a.Commit(dir, "queued", map[string]*string{"q.txt": evsgit.Text("queued\n")})
 	if out, ok := a.Push(dir, "origin", "HEAD:refs/heads/"+owned); !ok {
 		t.Fatalf("an owned push is taken at once: %s", out)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		statuses, err := a.Mount.Receiver().JournalStatus()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(statuses) == 1 && statuses[0].HoldCode != "" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the refused queue is not held: %+v", statuses)
-		}
-		time.Sleep(20 * time.Millisecond)
+	evsGitTwinAwait(t, held, "the refused queue never held")
+	releaseHeld()
+	statuses, err := a.Mount.Receiver().JournalStatus()
+	if err != nil || len(statuses) != 1 || statuses[0].HoldCode != "SCOPE" {
+		t.Fatalf("the refused queue %+v %v", statuses, err)
 	}
 	if a.LocalRef("refs/heads/"+owned) != commit {
 		t.Fatal("the held queue dropped its local ref")
 	}
 	refuse.Store(false)
-	if _, err := a.Mount.Receiver().Retry(t.Context(), []byte(owned)); err != nil {
-		t.Fatal(err)
+	applied, releaseApplied := barrier.arm("evs.local.apply.done")
+	defer releaseApplied()
+	if released, err := a.Mount.Receiver().Retry(t.Context(), []byte(owned)); err != nil || len(released) != 1 {
+		t.Fatalf("retry released %q %v", released, err)
 	}
-	for {
-		statuses, err := a.Mount.Receiver().JournalStatus()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(statuses) == 0 {
-			break
-		}
-		if time.Now().After(deadline.Add(10 * time.Second)) {
-			t.Fatalf("the released queue did not drain: %+v", statuses)
-		}
-		time.Sleep(20 * time.Millisecond)
+	evsGitTwinAwait(t, applied, "the released queue's push never applied")
+	releaseApplied()
+	if statuses, err := a.Mount.Receiver().JournalStatus(); err != nil || len(statuses) != 0 {
+		t.Fatalf("the released queue %+v %v", statuses, err)
 	}
 	b := world.Device("device-b", nil)
 	if err := b.Replay(owned); err != nil {
@@ -190,6 +182,16 @@ func TestEvsGitTwinRefusedDropOnly(t *testing.T) {
 	}
 	if b.LocalRef("refs/heads/"+owned) != commit {
 		t.Fatalf("evs's owned ref is %q", b.LocalRef("refs/heads/"+owned))
+	}
+}
+
+// Waits for a barrier's arrival; real time bounds the wait only to fail it.
+func evsGitTwinAwait(t *testing.T, arrived <-chan struct{}, why string) {
+	t.Helper()
+	select {
+	case <-arrived:
+	case <-time.After(30 * time.Second):
+		t.Fatal(why)
 	}
 }
 

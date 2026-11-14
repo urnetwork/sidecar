@@ -81,9 +81,6 @@ func evsSignPushProvenance(provenance *protocol.EvsProvenance, sign EvsSignProve
 	return nil
 }
 
-// Signs as Sidecar.SignProvenance does: the agent's subkey over purpose and message, with its certificate.
-type EvsSignProvenanceFunction func(agentId Id, purpose string, message []byte) (*AgentProvenanceSignature, error)
-
 // How a push's provenance reads (QD-159).
 type EvsPushProvenanceState int
 

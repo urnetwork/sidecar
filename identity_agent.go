@@ -100,15 +100,6 @@ type AgentSubkeyCert struct {
 	Cert []byte
 }
 
-// One provenance signature by an agent's subkey, with the certificate a reader checks it under: what RECORD.md 5.3's
-// AgentSignedBody and §11.6's sealed metadata carry.
-type AgentProvenanceSignature struct {
-	AgentId   Id
-	KeyId     []byte
-	Signature []byte
-	Cert      []byte
-}
-
 // An agent's record as keychain.ur holds it. The seed is the caller's to zero.
 type sidecarAgentRecord struct {
 	revoked bool

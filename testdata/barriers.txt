@@ -203,6 +203,7 @@ barrier evs.local.import.helper_recorded evs_local_import.go
 barrier evs.local.import.step_sent evs_local_import.go
 barrier evs.local.publish.answer evs_local_receive.go
 barrier evs.local.publish.sent evs_local_receive.go
+barrier evs.local.queue.held evs_local_receive.go
 barrier evs.local.queue.send evs_local_receive.go
 barrier evs.local.receive.local evs_local_receive.go
 barrier evs.log_page.put.after evsservice/logpage.go
@@ -237,6 +238,8 @@ barrier evs.read.entries.after evsservice/read.go
 barrier evs.read.entries.before evsservice/read.go
 barrier evs.read.head.after evsservice/read.go
 barrier evs.read.head.before evsservice/read.go
+barrier evs.read.streams.after evsservice/read_streams.go
+barrier evs.read.streams.before evsservice/read_streams.go
 barrier evs.repo.cas.after evsservice/repo_state.go
 barrier evs.repo.cas.before evsservice/repo_state.go
 barrier evs.repo.put.after evsservice/place.go

@@ -268,6 +268,10 @@ func (self *EvsClient) alarm(repoId Id, refId Id, reason SidecarEvsAlarm, path s
 	})
 }
 
+// Signs as Sidecar.SignProvenance does: the agent's subkey over purpose and message, with its certificate
+// (EvsClientArgs.SignProvenance; evs_provenance.go).
+type EvsSignProvenanceFunction func(agentId Id, purpose string, message []byte) (*AgentProvenanceSignature, error)
+
 // What CreateRepo makes.
 type EvsCreateRepoArgs struct {
 	// Fixed at creation and bound into §10's ur_group (§11.12).
