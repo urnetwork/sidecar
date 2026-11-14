@@ -48,7 +48,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -92,6 +94,8 @@ type BridgeNetSettings struct {
 	ServingPollInterval time.Duration
 	// The largest read an upstream listener or a window's UDP socket takes at once: 64 KiB, a datagram's most.
 	ReadByteCount int
+	// The strict_exp a sender's link gives each window client past the Net's clock: 7 days, §7.4's.
+	WindowClientLifetime time.Duration
 }
 
 func DefaultBridgeNetSettings() *BridgeNetSettings {
@@ -105,6 +109,7 @@ func DefaultBridgeNetSettings() *BridgeNetSettings {
 		BindingMaxCount:      16,
 		ServingPollInterval:  10 * time.Millisecond,
 		ReadByteCount:        64 * 1024,
+		WindowClientLifetime: 7 * 24 * time.Hour,
 	}
 }
 
@@ -516,6 +521,7 @@ type BridgeNet struct {
 	stateLock sync.Mutex
 	devices   []*BridgeNetDevice
 	hosts     []*BridgeNetHost
+	senders   []*BridgeNetSender
 	windows   []*BridgeNetWindow
 	// the operator's clients, whose return contracts the operator mints too
 	mintedClientIds map[connect.Id]bool
@@ -573,15 +579,19 @@ func NewBridgeNet(t AdmissionT, net *Net, settings *BridgeNetSettings) *BridgeNe
 // Closes every window and host, then the network's config world.
 func (self *BridgeNet) Close() {
 	var windows []*BridgeNetWindow
+	var senders []*BridgeNetSender
 	var hosts []*BridgeNetHost
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		windows, hosts = self.windows, self.hosts
-		self.windows, self.hosts = nil, nil
+		windows, senders, hosts = self.windows, self.senders, self.hosts
+		self.windows, self.senders, self.hosts = nil, nil, nil
 	}()
 	for _, window := range windows {
 		window.Close()
+	}
+	for _, sender := range senders {
+		sender.Close()
 	}
 	for _, host := range hosts {
 		host.Close()
@@ -917,7 +927,9 @@ func (self *bridgeNetPostureStore) List() ([]string, error) {
 // posture's, the decision read off what the bridge adopted, and its hook wrapped so the host records what it decided.
 type bridgeNetSink struct {
 	bridge *device.Bridge
-	hook   *bridgeNetHook
+	hook   connect.EgressHook
+	// records each denial handed through Revoke; nil records none
+	revoked func(revocation *BridgeNetRevocation)
 }
 
 var _ sidecar.BridgeStateSink = (*bridgeNetSink)(nil)
@@ -957,9 +969,9 @@ func (self *bridgeNetSink) Decision() sidecar.BridgeSinkDecision {
 
 func (self *bridgeNetSink) Revoke(statementType bridge.SignedType, id []byte, n uint64) error {
 	err := self.bridge.Revoke(statementType, id, n)
-	self.hook.host.record(func() {
-		self.hook.host.revocations = append(self.hook.host.revocations, &BridgeNetRevocation{Type: statementType, Id: bytes.Clone(id), N: n, Err: err})
-	})
+	if self.revoked != nil {
+		self.revoked(&BridgeNetRevocation{Type: statementType, Id: bytes.Clone(id), N: n, Err: err})
+	}
 	return err
 }
 
@@ -1349,22 +1361,9 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 		host.adoptedPin.Update(func(adopted uint64) uint64 { return max(adopted, pin) })
 	}))
 
-	// the bindings every device signed, verified as the component's fetcher verifies an answer, in the store the
-	// component reads its cache from
-	store := NewFakeStore()
-	cache := sidecar.NewBridgeBindingCache(self.settings.BindingRetainTimeout, self.settings.BindingMaxCount)
-	state := self.admission.State()
-	self.stateLock.Lock()
-	devices := slices.Clone(self.devices)
-	self.stateLock.Unlock()
-	for _, other := range devices {
-		binding, err := sidecar.VerifyBridgeBinding(other.Binding, self.NetworkId(), other.SidecarId(), state.IdentityKey(other.SidecarId()))
-		if err != nil {
-			fail("%s's binding: %v", other.Name, err)
-		}
-		cache.Record(binding, self.net.Clock().Now())
-	}
-	if err := cache.Save(store.Root()); err != nil {
+	// the bindings every device signed, in the store the component reads its cache from
+	store, err := self.bindingStore()
+	if err != nil {
 		fail("the binding cache: %v", err)
 	}
 
@@ -1418,7 +1417,15 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 	if err := host.component.Attach(&sidecar.SidecarEnv{Ctx: ctx, Client: host.Client.Client, Store: store.Root(), Log: sidecar.NewNoopLogger()}); err != nil {
 		fail("the generation: %v", err)
 	}
-	sink := &bridgeNetSink{bridge: host.Bridge, hook: &bridgeNetHook{inner: host.Bridge.EgressHook(), host: host}}
+	sink := &bridgeNetSink{
+		bridge: host.Bridge,
+		hook:   &bridgeNetHook{inner: host.Bridge.EgressHook(), host: host},
+		revoked: func(revocation *BridgeNetRevocation) {
+			host.record(func() {
+				host.revocations = append(host.revocations, revocation)
+			})
+		},
+	}
 	if err := host.component.SetDeviceRole(sink); err != nil {
 		fail("the device role: %v", err)
 	}
@@ -2371,4 +2378,492 @@ func bridgeScenarioS8(run *ScenarioRun, settings *BridgeNetSettings) error {
 		return fmt.Errorf("%d bytes reached the target, not the %d before the revocation", written, len(before))
 	}
 	return nil
+}
+
+// A sender's own settings.
+type BridgeNetSenderSettings struct {
+	// The key the operator writes as the target's into every contract a link's window client asks for (FS-38's sender
+	// row), each sealed and HMACed as the platform would; nil leaves the platform's contracts alone.
+	SubstitutedTargetKey []byte
+	// Edits the device role's settings, which start as DefaultBridgeSettings on the Net's clock with the world's signer
+	// and binding lookups.
+	Bridge func(settings *device.BridgeSettings)
+}
+
+// A sender sidecar (§17.5): its device role, fed by a component of its own, whose router carries a userspace stack's
+// packets over real links to the hosts its rules name, each link a RemoteUserNatMultiClient over device's generator
+// wrapper, its window clients the sender's children on the Net's exchange, signed for by the sender's identity key and
+// held to the target's bound key. See the file's comment.
+type BridgeNetSender struct {
+	bridgeNet *BridgeNet
+	Device    *BridgeNetDevice
+	Bridge    *device.Bridge
+	// The sender's own client, its component's generation.
+	Client *NetClient
+
+	ctx       context.Context
+	cancel    context.CancelFunc
+	settings  *BridgeNetSenderSettings
+	follower  *sidecar.ConfigClient
+	component *sidecar.BridgeComponent
+	tun       *connect.Tun
+	source    netip.Addr
+	workers   sync.WaitGroup
+	// the posture's pin at the bridge's last publish
+	adoptedPin      *connect.MonitorValue[uint64]
+	removeCallbacks []func()
+
+	stateLock sync.Mutex
+	// every window client the links built, oldest first
+	windowClientIds []connect.Id
+	// what the multi clients' own local NATs dialed, which a bridged packet must never reach (TCP/25's rule)
+	localDials []string
+	// the packets the router sent to the default route
+	defaultCount int
+	// the contracts the links' window clients refused as naming a key not the target's (connect's Trust status)
+	trustRefusals *connect.MonitorValue[int]
+}
+
+// Starts device as a sender: its client, its device role with the world's signer and binding lookups, its component,
+// and a userspace stack whose every packet the role's router routes. Waits until the role enforces a state at the
+// network's tip.
+func (self *BridgeNet) StartSender(senderDevice *BridgeNetDevice, settings *BridgeNetSenderSettings) *BridgeNetSender {
+	self.t.Helper()
+	if settings == nil {
+		settings = &BridgeNetSenderSettings{}
+	}
+	ctx, cancel := context.WithCancel(self.net.Context())
+	sender := &BridgeNetSender{
+		bridgeNet:  self,
+		Device:     senderDevice,
+		ctx:        ctx,
+		cancel:     cancel,
+		settings:   settings,
+		adoptedPin: connect.NewMonitorValue[uint64](0),
+
+		trustRefusals: connect.NewMonitorValue(0),
+	}
+	fail := func(format string, args ...any) {
+		sender.Close()
+		self.t.Fatalf(format, args...)
+	}
+	clientSettings := netClientSettings()
+	clientSettings.ClientKeySeed = bytes.Clone(senderDevice.clientKeySeed)
+	clientSettings.EncryptionSettings.ExposeVerifiedPeerClientKey = true
+	sender.Client = self.net.exchange.addClientWithControl(ctx, senderDevice.Name, senderDevice.ClientId, clientSettings, &bridgeNetControl{
+		ctx: ctx, clientId: senderDevice.ClientId, platform: self.platform, workers: self.controls,
+	})
+	if err := self.waitClient(ctx, sender.Client, map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true}); err != nil {
+		fail("the sender's client: %v", err)
+	}
+
+	bridgeSettings := device.DefaultBridgeSettings()
+	bridgeSettings.Clock = self.net.Clock()
+	bridgeSettings.LinkSign = func(ctx context.Context, delegation *bridge.WindowDelegation) ([]byte, error) {
+		return bridge.WindowDelegationSigned(delegation, func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+			return &bridge.Signed{
+				Body:      body,
+				SignerId:  senderDevice.SidecarId().Bytes(),
+				Signature: ed25519.Sign(senderDevice.Device.Key, bridge.SignedBytes(purpose, signedType, body)),
+				Type:      uint32(signedType),
+			}, nil
+		}, bridgeSettings.WindowDelegation)
+	}
+	bridgeSettings.LinkTargetKey = func(ctx context.Context, targetSidecarId connect.Id, targetClientId connect.Id) ([]byte, error) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for _, device := range self.devices {
+			if connect.Id(device.SidecarId()) == targetSidecarId {
+				return bytes.Clone(device.Binding), nil
+			}
+		}
+		return nil, fmt.Errorf("no binding of %s", targetSidecarId)
+	}
+	if settings.Bridge != nil {
+		settings.Bridge(bridgeSettings)
+	}
+	var err error
+	sender.Bridge, err = device.NewBridge(ctx, newBridgeNetPostureStore(), &bridgeNetLinkHost{sender: sender, settings: bridgeSettings}, bridgeSettings)
+	if err != nil {
+		fail("the device role: %v", err)
+	}
+	sender.removeCallbacks = append(sender.removeCallbacks, sender.Bridge.AddChangeCallback(func() {
+		pin := sender.Bridge.Decision().Pin.GetVersion()
+		sender.adoptedPin.Update(func(adopted uint64) uint64 { return max(adopted, pin) })
+	}))
+
+	store, err := self.bindingStore()
+	if err != nil {
+		fail("the binding cache: %v", err)
+	}
+	componentSettings := sidecar.DefaultBridgeComponentSettings()
+	componentSettings.CompileDelay = 0
+	componentSettings.CompileMinInterval = 0
+	sender.follower = self.admission.Follower()
+	identity := &sidecar.SidecarIdentity{
+		NetworkId:         self.NetworkId(),
+		SidecarId:         senderDevice.SidecarId(),
+		ClientId:          sidecar.Id(senderDevice.ClientId),
+		Generation:        1,
+		IdentityPublicKey: senderDevice.Device.PublicKey(),
+		ClientPublicKey:   bytes.Clone(senderDevice.ClientPublicKey),
+	}
+	sender.component, err = sidecar.NewBridgeComponent(ctx, &sidecar.BridgeComponentArgs{
+		NetworkId: self.NetworkId(),
+		Identity:  func() *sidecar.SidecarIdentity { return identity },
+		Config:    sender.follower,
+		Heads:     self.admission.heads,
+		Rows:      self.rows,
+		RepoKeyAt: func(generation uint64) *sidecar.EvsRepoKey {
+			if generation == self.configKey.Generation() {
+				return self.configKey
+			}
+			return nil
+		},
+		AclLocal: func() *sidecar.AclLocalPolicy {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.aclLocal
+		},
+		Clock:    self.net.Clock(),
+		Log:      sidecar.NewNoopLogger(),
+		Settings: componentSettings,
+	})
+	if err != nil {
+		fail("the component: %v", err)
+	}
+	if err := sender.component.Attach(&sidecar.SidecarEnv{Ctx: ctx, Client: sender.Client.Client, Store: store.Root(), Log: sidecar.NewNoopLogger()}); err != nil {
+		fail("the generation: %v", err)
+	}
+	if err := sender.component.SetDeviceRole(&bridgeNetSink{bridge: sender.Bridge, hook: sender.Bridge.EgressHook()}); err != nil {
+		fail("the device role: %v", err)
+	}
+
+	tunSettings := connect.DefaultTunSettingsWithBufferSize(64)
+	tunSettings.Log = connect.NewNoopLogger()
+	sender.tun, err = connect.CreateTun(ctx, tunSettings)
+	if err != nil {
+		fail("the sender's stack: %v", err)
+	}
+	for _, address := range sender.tun.LocalAddresses() {
+		if address.Is4() {
+			sender.source = address
+		}
+	}
+	sender.Bridge.SetReceivePacket(func(source connect.TransferPath, provideMode protocol.ProvideMode, ipPath *connect.IpPath, packet []byte) {
+		sender.tun.Write(packet)
+	})
+	sender.workers.Add(1)
+	go sender.pump()
+	self.stateLock.Lock()
+	self.senders = append(self.senders, sender)
+	self.stateLock.Unlock()
+	sender.WaitAdopted(self.admission.Tip().GetVersion())
+	return sender
+}
+
+// A store holding every device's binding, verified as the component's fetcher verifies an answer, as the cache the
+// component reads at its first generation.
+func (self *BridgeNet) bindingStore() (*FakeStore, error) {
+	store := NewFakeStore()
+	cache := sidecar.NewBridgeBindingCache(self.settings.BindingRetainTimeout, self.settings.BindingMaxCount)
+	state := self.admission.State()
+	self.stateLock.Lock()
+	devices := slices.Clone(self.devices)
+	self.stateLock.Unlock()
+	for _, other := range devices {
+		binding, err := sidecar.VerifyBridgeBinding(other.Binding, self.NetworkId(), other.SidecarId(), state.IdentityKey(other.SidecarId()))
+		if err != nil {
+			return nil, fmt.Errorf("%s's binding: %w", other.Name, err)
+		}
+		cache.Record(binding, self.net.Clock().Now())
+	}
+	if err := cache.Save(store.Root()); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// Routes the stack's packets until the sender closes: a link's, the reject's or the resolver's client takes a packet,
+// and the default route, which goes nowhere here, drops it.
+func (self *BridgeNetSender) pump() {
+	defer self.workers.Done()
+	source := connect.SourceId(self.Client.ClientId)
+	for {
+		packet, err := self.tun.Read()
+		if err != nil {
+			return
+		}
+		client := self.Bridge.Route(packet)
+		if client == nil {
+			self.stateLock.Lock()
+			self.defaultCount += 1
+			self.stateLock.Unlock()
+			connect.MessagePoolReturn(packet)
+			continue
+		}
+		if !client.SendPacket(source, protocol.ProvideMode_Network, packet, self.bridgeNet.settings.SendTimeout) {
+			connect.MessagePoolReturn(packet)
+		}
+	}
+}
+
+// Ends the sender's stack, component, role and client. Idempotent.
+func (self *BridgeNetSender) Close() {
+	self.cancel()
+	if self.tun != nil {
+		self.tun.Close()
+	}
+	self.workers.Wait()
+	for _, remove := range self.removeCallbacks {
+		remove()
+	}
+	self.removeCallbacks = nil
+	if self.component != nil {
+		self.component.Close()
+	}
+	if self.Bridge != nil {
+		self.Bridge.Close()
+	}
+	if self.follower != nil {
+		self.follower.Close()
+	}
+	if self.Client != nil {
+		self.Client.Client.Cancel()
+	}
+}
+
+// As BridgeNetHost.WaitAdopted, for the sender's role.
+func (self *BridgeNetSender) WaitAdopted(n uint64) {
+	t := self.bridgeNet.t
+	t.Helper()
+	ctx, cancel := context.WithTimeout(self.ctx, self.bridgeNet.settings.WaitTimeout)
+	defer cancel()
+	if _, err := self.follower.WaitFor(ctx, n); err != nil {
+		t.Fatalf("%s's follower did not reach %d: %v", self.Device.Name, n, err)
+	}
+	compileAt := uint64(0)
+	for _, read := range self.follower.BridgeEntries(1, n) {
+		if !read.Pure {
+			compileAt = read.N
+		}
+	}
+	for {
+		adopted, changed := self.adoptedPin.Get()
+		status := self.component.Status()
+		if n <= adopted && compileAt <= status.CompiledPin.GetVersion() {
+			return
+		}
+		select {
+		case <-changed:
+		case <-time.After(self.bridgeNet.settings.ServingPollInterval):
+		case <-ctx.Done():
+			t.Fatalf("%s adopted %d, not %d, compiled at %d, not %d", self.Device.Name, adopted, n, status.CompiledPin.GetVersion(), compileAt)
+		}
+	}
+}
+
+// A TCP connection through the sender's router to address, its error if nothing answers it with a connection.
+func (self *BridgeNetSender) DialTcp(address netip.AddrPort) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(self.ctx, self.bridgeNet.settings.WaitTimeout)
+	defer cancel()
+	return self.tun.DialContext(ctx, "tcp4", address.String())
+}
+
+// Waits until the links' window clients have refused count contracts as naming a key not the target's, false past
+// WaitTimeout.
+func (self *BridgeNetSender) WaitTrustRefusals(count int) bool {
+	deadline := time.After(self.bridgeNet.settings.WaitTimeout)
+	for {
+		refused, changed := self.trustRefusals.Get()
+		if count <= refused {
+			return true
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			return false
+		}
+	}
+}
+
+// The contracts the links' window clients refused as naming a key not the target's.
+func (self *BridgeNetSender) TrustRefusalCount() int {
+	return self.trustRefusals.Value()
+}
+
+// A TCP connection through the sender's router to address, ended by ctx too.
+func (self *BridgeNetSender) DialTcpContext(ctx context.Context, address netip.AddrPort) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, self.bridgeNet.settings.WaitTimeout)
+	defer cancel()
+	return self.tun.DialContext(ctx, "tcp4", address.String())
+}
+
+// The window clients the sender's links built, oldest first.
+func (self *BridgeNetSender) WindowClientIds() []connect.Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.windowClientIds)
+}
+
+// What the links' own local NATs dialed, which a bridged packet never reaches.
+func (self *BridgeNetSender) LocalDials() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.localDials)
+}
+
+// The address the sender's stack sends from.
+func (self *BridgeNetSender) Source() netip.Addr {
+	return self.source
+}
+
+// The CLI's BridgeHost on the Net's exchange (cli/bridge_host.go's shape): each link a multi client of one window client
+// to its target, drawn from a generator that registers the sender's children on the platform, wrapped by
+// device.NewBridgeLinkGenerator, on device.BridgeLinkMultiClientSettings. A share link waits for C18 and is refused.
+type bridgeNetLinkHost struct {
+	sender   *BridgeNetSender
+	settings *device.BridgeSettings
+}
+
+var _ device.BridgeHost = (*bridgeNetLinkHost)(nil)
+
+func (self *bridgeNetLinkHost) NewBridgeLink(ctx context.Context, target connect.Id, subject connect.Id, shareAliases []netip.Prefix,
+	sign func(windowClientId connect.Id, windowClientPublicKey []byte, notAfter time.Time) ([]byte, error),
+) (connect.UserNatClient, error) {
+	if shareAliases != nil {
+		return nil, errors.New("share links come with shares")
+	}
+	sender := self.sender
+	multiClientSettings := device.BridgeLinkMultiClientSettings(self.settings)
+	if err := device.CheckBridgeLinkMultiClientSettings(multiClientSettings, self.settings.LinkAllowDirect); err != nil {
+		return nil, err
+	}
+	// the multi client's own local NAT, which a TCP/25 packet that entered a link would be dialed from
+	multiClientSettings.LocalDialContextSettings = &connect.DialContextSettings{
+		DialContext: func(ctx context.Context, network string, address string) (net.Conn, error) {
+			sender.stateLock.Lock()
+			sender.localDials = append(sender.localDials, network+" "+address)
+			sender.stateLock.Unlock()
+			return nil, errors.New("the sender's links dial nothing locally")
+		},
+	}
+	generator := &bridgeNetLinkGenerator{sender: sender, target: target}
+	receive := func(source connect.TransferPath, provideMode protocol.ProvideMode, ipPath *connect.IpPath, packet []byte) {
+		sender.tun.Write(packet)
+	}
+	return connect.NewRemoteUserNatMultiClient(ctx, device.NewBridgeLinkGenerator(ctx, generator, sign), receive,
+		protocol.ProvideMode_Network, multiClientSettings), nil
+}
+
+// One link's generator: its target alone, each window client a child of the sender registered on the platform, its
+// token unsigned but naming the client and a strict_exp the delegation's not_after may not pass.
+type bridgeNetLinkGenerator struct {
+	sender *BridgeNetSender
+	target connect.Id
+}
+
+var _ connect.MultiClientGenerator = (*bridgeNetLinkGenerator)(nil)
+
+func (self *bridgeNetLinkGenerator) NextDestinations(count int, excludeDestinations []connect.MultiHopId, rankMode string) (map[connect.MultiHopId]connect.DestinationStats, error) {
+	destination, err := connect.NewMultiHopId(self.target)
+	if err != nil {
+		return nil, err
+	}
+	if slices.Contains(excludeDestinations, destination) {
+		return map[connect.MultiHopId]connect.DestinationStats{}, nil
+	}
+	return map[connect.MultiHopId]connect.DestinationStats{destination: {}}, nil
+}
+
+func (self *bridgeNetLinkGenerator) NewClientArgs() (*connect.MultiClientGeneratorClientArgs, error) {
+	sender := self.sender
+	world := sender.bridgeNet
+	parentClientId := sender.Device.ClientId
+	clientId, err := world.platform.AddClient(sender.ctx, &BridgeNetClientArgs{
+		Name: sender.Device.Name + " window", NetworkId: world.NetworkId(), ParentClientId: &parentClientId,
+	})
+	if err != nil {
+		return nil, err
+	}
+	strictExp := world.net.Clock().Now().Add(world.settings.WindowClientLifetime)
+	return &connect.MultiClientGeneratorClientArgs{
+		ClientId:   clientId,
+		ClientAuth: &connect.ClientAuth{ByJwt: bridgeNetUnsignedToken(clientId, strictExp)},
+	}, nil
+}
+
+func (self *bridgeNetLinkGenerator) RemoveClientArgs(args *connect.MultiClientGeneratorClientArgs) {}
+
+func (self *bridgeNetLinkGenerator) RemoveClientWithArgs(client *connect.Client, args *connect.MultiClientGeneratorClientArgs) {
+}
+
+func (self *bridgeNetLinkGenerator) NewClientSettings() *connect.ClientSettings {
+	return netClientSettings()
+}
+
+func (self *bridgeNetLinkGenerator) NewClient(ctx context.Context, args *connect.MultiClientGeneratorClientArgs, clientSettings *connect.ClientSettings) (*connect.Client, error) {
+	sender := self.sender
+	world := sender.bridgeNet
+	control := &bridgeNetControl{ctx: ctx, clientId: args.ClientId, platform: world.platform, workers: world.controls}
+	if substituted := sender.settings.SubstitutedTargetKey; substituted != nil {
+		// the operator's contracts, each naming another key as the target's
+		control.mint = func(request *protocol.CreateContract) (*protocol.CreateContractResult, bool, error) {
+			destinationId, err := connect.IdFromBytes(request.GetDestinationId())
+			if err != nil || destinationId != self.target {
+				return nil, false, nil
+			}
+			subject := sender.Device.ClientId
+			networkId := connect.Id(world.NetworkId())
+			contract, err := world.net.MintContract(&MintContractArgs{
+				SourceId:                   args.ClientId,
+				DestinationId:              destinationId,
+				ProvideMode:                protocol.ProvideMode_Network,
+				SourceSubjectClientId:      &subject,
+				SourceNetworkId:            &networkId,
+				ContractClass:              protocol.ContractClass_ContractClassData,
+				WindowDelegation:           request.GetWindowDelegation(),
+				DestinationClientPublicKey: substituted,
+				TransferByteCount:          max(request.GetTransferByteCount(), world.settings.ContractByteCount),
+			})
+			if err != nil {
+				return nil, true, err
+			}
+			return &protocol.CreateContractResult{Contract: contract, CreateContract: request}, true, nil
+		}
+	}
+	client := world.net.exchange.addClientWithControl(ctx, sender.Device.Name+" window", args.ClientId, clientSettings, control)
+	if err := world.waitClient(ctx, client, map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true}); err != nil {
+		client.Client.Cancel()
+		return nil, err
+	}
+	// what the target check the generator wrapper installs refuses, each contract with a Trust status
+	client.Client.ContractManager().AddContractStatusCallback(func(status *connect.ContractStatus) {
+		if status != nil && status.Error != nil && *status.Error == protocol.ContractError_Trust {
+			sender.trustRefusals.Update(func(count int) int { return count + 1 })
+		}
+	})
+	sender.stateLock.Lock()
+	sender.windowClientIds = append(sender.windowClientIds, args.ClientId)
+	sender.stateLock.Unlock()
+	return client.Client, nil
+}
+
+func (self *bridgeNetLinkGenerator) FixedDestinationSize() (int, bool) {
+	return 1, true
+}
+
+// An unsigned token naming clientId and expiring at expireTime, as the platform's child token reads to
+// connect.ParseByJwtUnverified: nothing verifies it on the exchange, and the generator wrapper reads its exp as the
+// window client's strict_exp.
+func bridgeNetUnsignedToken(clientId connect.Id, expireTime time.Time) string {
+	claims, _ := json.Marshal(map[string]any{"client_id": clientId.String(), "exp": expireTime.Unix()})
+	encode := base64.RawURLEncoding.EncodeToString
+	return encode([]byte(`{"alg":"none","typ":"JWT"}`)) + "." + encode(claims) + "." + encode([]byte("unsigned"))
+}
+
+// Whether the sender's router sends a TCP SYN to destination down the default route, as it does a carved local address
+// whatever entry covers it (§17.4's carve).
+func (self *BridgeNetSender) TakesDefaultRoute(destination netip.AddrPort) bool {
+	return self.Bridge.Route(bridgeNetSyn(netip.AddrPortFrom(self.source, 40000), destination)) == nil
 }
