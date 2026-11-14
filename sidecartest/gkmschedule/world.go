@@ -181,6 +181,8 @@ type FsKeysWorld struct {
 	Log       *sidecartest.FakeGkmAuthLog
 	NetworkId connect.Id
 	MemberId  sidecar.Id
+	// the network's other members, each standing until RevokeMember (team.go)
+	memberIds []sidecar.Id
 	RepoId    sidecar.Id
 	Kind      protocol.RepoKind
 	// the repo's group, once KF1 formed it
@@ -580,6 +582,33 @@ func (self *FsKeysWorld) AddMember(label string, readOnly bool) *FsKeysDevice {
 	}
 	device.Restart()
 	return device
+}
+
+// Another member of the network, with no device yet: a MemberAdmit's subject.
+func (self *FsKeysWorld) NewMember() sidecar.Id {
+	memberId := sidecar.NewId()
+	self.memberIds = append(self.memberIds, memberId)
+	return memberId
+}
+
+// Admits a member device of memberId, the world's member or one NewMember made, with its real MLS engine.
+func (self *FsKeysWorld) AddMemberOf(memberId sidecar.Id, label string) *FsKeysDevice {
+	self.t.Helper()
+	device := self.admit(label)
+	device.row.MemberId = memberId.Bytes()
+	device.Restart()
+	return device
+}
+
+// A MemberRevoke of a member NewMember made (§7.10): its row gone and every device of it revoked at the next
+// position.
+func (self *FsKeysWorld) RevokeMember(memberId sidecar.Id) {
+	self.memberIds = slices.DeleteFunc(self.memberIds, func(id sidecar.Id) bool { return id == memberId })
+	for _, device := range self.Devices {
+		if bytes.Equal(device.row.GetMemberId(), memberId.Bytes()) && device.row.GetRevokedAt() == 0 {
+			self.Revoke(device)
+		}
+	}
 }
 
 // Admits a tagged agent, which holds no leaf: it reads by its ReaderWraps and rotates by wraps.
@@ -995,6 +1024,9 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 	rows := &bridge.ProjectionRows{
 		Acl:     acl,
 		Members: []*bridge.MemberRow{member},
+	}
+	for _, memberId := range self.memberIds {
+		rows.Members = append(rows.Members, &bridge.MemberRow{MemberId: memberId.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_MEMBER})
 	}
 	for _, delegation := range self.delegations {
 		rows.Delegations = append(rows.Delegations, proto.Clone(delegation.row).(*bridge.DelegationRow))
@@ -1744,7 +1776,8 @@ func (self *fsKeysWorldState) PendingTargets(principal *sidecar.Principal, sidec
 	targets := []*gkmservice.GkmPendingTarget{}
 	for _, repoId := range self.world.repoIds() {
 		if slices.Contains(view.RepoReadersAt(repoId, now), sidecarId) {
-			targets = append(targets, &gkmservice.GkmPendingTarget{RepoId: repoId, SidecarIds: view.RepoWriters(repoId)})
+			sidecarIds := gkmservice.GkmFirstUploadAudience(view, repoId, sidecarId, self.hintWriters(view, repoId), now)
+			targets = append(targets, &gkmservice.GkmPendingTarget{RepoId: repoId, SidecarIds: sidecarIds})
 		}
 	}
 	return targets, gkmservice.GkmAuthAllowed
@@ -1755,7 +1788,20 @@ func (self *fsKeysWorldState) RepoReaders(principal *sidecar.Principal, repoId s
 }
 
 func (self *fsKeysWorldState) RepoWriters(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
-	return self.tip().RepoWriters(repoId), gkmservice.GkmAuthAllowed
+	view := self.tip()
+	return self.hintWriters(view, repoId), gkmservice.GkmAuthAllowed
+}
+
+// Who a pending or wrap-pending hint about repoId goes to: its writers, or in the directory group the config's
+// (§10.9's Directory group hints row), none while the world has no config repo.
+func (self *fsKeysWorldState) hintWriters(view *sidecartest.FakeGkmAuthView, repoId sidecar.Id) []sidecar.Id {
+	if view.Repo(repoId).GetKind() != protocol.RepoKind_REPO_KIND_DIRECTORY {
+		return view.RepoWriters(repoId)
+	}
+	if self.world.ConfigRepoId == (sidecar.Id{}) {
+		return []sidecar.Id{}
+	}
+	return view.RepoWriters(self.world.ConfigRepoId)
 }
 
 func (self *fsKeysWorldState) CheckPin(principal *sidecar.Principal, pin *bridge.AuthPin) gkmservice.GkmAuthAnswer {
