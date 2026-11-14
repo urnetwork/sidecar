@@ -98,7 +98,7 @@ func BootstrapNetwork(ctx context.Context, args *ConfigBootstrapArgs) (*ConfigBo
 	if err != nil {
 		return nil, err
 	}
-	rows, err := CompileProjectionRows(head, configGenesisCompileRows(genesis))
+	rows, err := CompileProjectionRows(head, configGenesisCompileRows(genesis, genesisChain))
 	if err != nil {
 		return nil, err
 	}
