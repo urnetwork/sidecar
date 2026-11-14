@@ -24,6 +24,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -347,7 +348,8 @@ func TestTunDarwinExitsBindTheTransportFirst(t *testing.T) {
 		t.Fatalf("bound to %v", binding)
 	}
 	<-world.kicks
-	if calls := world.kernel.take(); !slices.Equal(calls, []string{"add route 0.0.0.0/1", "add route 128.0.0.0/1"}) {
+	halves := urTunExitsHalves()
+	if calls := world.kernel.take(); !slices.Equal(calls, []string{"add route " + halves[0].String(), "add route " + halves[1].String()}) {
 		t.Fatalf("halves: %v", calls)
 	}
 	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute || 0 < len(world.kernel.take()) ||
@@ -369,7 +371,7 @@ func TestTunDarwinExitsBindTheTransportFirst(t *testing.T) {
 	if err != nil || defaultRoute {
 		t.Fatalf("off: %v %v", defaultRoute, err)
 	}
-	if calls := world.kernel.take(); !slices.Equal(calls, []string{"delete route 0.0.0.0/1", "delete route 128.0.0.0/1"}) {
+	if calls := world.kernel.take(); !slices.Equal(calls, []string{"delete route " + halves[0].String(), "delete route " + halves[1].String()}) {
 		t.Fatalf("off: %v", calls)
 	}
 	if binding := <-world.bindings; binding != [2]uint32{0, 0} {
@@ -392,11 +394,12 @@ func TestTunDarwinExitsHoldWhatTheHostRefuses(t *testing.T) {
 		t.Fatal("something went on")
 	}
 	world.kernel.table = table
-	world.kernel.addErrs[netip.MustParsePrefix("128.0.0.0/1")] = unix.EEXIST
+	halves := urTunExitsHalves()
+	world.kernel.addErrs[halves[1]] = unix.EEXIST
 	if defaultRoute, err := iface.SetExits(true); defaultRoute || !errors.Is(err, errUrTunExitsHalfInUse) {
 		t.Fatalf("a held half: %v %v", defaultRoute, err)
 	}
-	if calls := world.kernel.take(); !slices.Equal(calls, []string{"add route 0.0.0.0/1", "delete route 0.0.0.0/1"}) {
+	if calls := world.kernel.take(); !slices.Equal(calls, []string{"add route " + halves[0].String(), "delete route " + halves[0].String()}) {
 		t.Fatalf("a held half: %v", calls)
 	}
 	if bound, unbound := <-world.bindings, <-world.bindings; bound != [2]uint32{4, 4} || unbound != [2]uint32{0, 0} {
@@ -419,7 +422,8 @@ func TestTunDarwinCloseRemovesEverything(t *testing.T) {
 	if err := iface.Close(); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"delete route 0.0.0.0/1", "delete route 128.0.0.0/1", "delete route 100.70.1.2/32",
+	halves := urTunExitsHalves()
+	want := []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(), "delete route 100.70.1.2/32",
 		"delete address 100.70.9.9"}
 	if calls := world.kernel.take(); !slices.Equal(calls, want) {
 		t.Fatalf("close: %v", calls)
@@ -650,5 +654,27 @@ func TestTunDarwinReadsTheRoutingTable(t *testing.T) {
 		return held.index == loopback.Index && held.dst.Contains(netip.MustParseAddr("127.0.0.1"))
 	}) {
 		t.Fatalf("no loopback route in %d routes", len(routes))
+	}
+}
+
+// Each ioctl's request names its argument's size in bits 16 to 28 (<sys/ioccom.h>'s IOCPARM_LEN), so each struct the
+// device's calls pass is that size: struct ifreq's 32 bytes, struct ifaliasreq's 64.
+func TestTunDarwinIoctlStructsFitTheirRequests(t *testing.T) {
+	size := func(request uint) uintptr {
+		return uintptr((request >> 16) & 0x1fff)
+	}
+	for _, each := range []struct {
+		name    string
+		request uint
+		size    uintptr
+	}{
+		{"SIOCGIFFLAGS", unix.SIOCGIFFLAGS, unsafe.Sizeof(urTunDarwinIfreqFlags{})},
+		{"SIOCSIFFLAGS", unix.SIOCSIFFLAGS, unsafe.Sizeof(urTunDarwinIfreqFlags{})},
+		{"SIOCAIFADDR", unix.SIOCAIFADDR, unsafe.Sizeof(urTunDarwinIfaliasreq{})},
+		{"SIOCDIFADDR", unix.SIOCDIFADDR, unsafe.Sizeof(urTunDarwinIfreqAddr{})},
+	} {
+		if size(each.request) != each.size {
+			t.Errorf("%s takes %d bytes, and its struct is %d", each.name, size(each.request), each.size)
+		}
 	}
 }

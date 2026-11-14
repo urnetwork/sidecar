@@ -63,8 +63,14 @@ func urTunDarwinSetResolver(directory string, owner string, resolver netip.Addr,
 	log sidecar.Logger) (string, bool) {
 	marker := urTunDarwinResolverMarker(owner)
 	wanted := []string{}
+	refusedCount := 0
 	for _, zone := range zones {
-		if name, ok := urTunZoneName(zone, settings); ok && !slices.Contains(wanted, name) {
+		name, ok := urTunZoneName(zone, settings)
+		if !ok {
+			refusedCount += 1
+			continue
+		}
+		if !slices.Contains(wanted, name) {
 			wanted = append(wanted, name)
 		}
 	}
@@ -99,11 +105,9 @@ func urTunDarwinSetResolver(directory string, owner string, resolver netip.Addr,
 		}
 		written += 1
 	}
-	if len(wanted) < len(zones) {
+	if 0 < refusedCount && log.V(1).Enabled() {
 		// a zone that names no file the system resolver reads: the state's, which the compile checked, so a fault
-		if log.V(1).Enabled() {
-			log.Infof("[tun]%d zones are not names a resolver file takes", len(zones)-len(wanted))
-		}
+		log.Infof("[tun]%d zones are not names a resolver file takes", refusedCount)
 	}
 	if len(unwritten) == 0 {
 		return "", 0 < written
