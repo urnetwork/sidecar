@@ -15,6 +15,11 @@
 //	Check             Sidecar.Authorize's active-grant test through CORE's SidecarGate, and MCP's acl_check
 //	VerifyRepoMember  ACL-M2-08's CheckRepoMember at the pin the push or delivery carries (§10.9, FS-104)
 //	VerifyHeadSigner  owner decision 7: a reader takes a head only from one of the repo's writers at its pin
+//	AllowPrefixWrite  a write's own refusal under the repo's prefix rules, lines 1 to 3 of PrefixVerdict at the
+//	                  installed state, whose pin the push then carries, in plaintext, before anything is planned,
+//	                  sealed or sent (DESIGN-DETAILS 16.2.7; QD-801): its paths drawn from a sequence until one is
+//	                  refused, none drawn for a sidecar a rule with no path names, and the path of no component
+//	                  answering whether this device is held
 //
 // The two Verify checks judge at the pin a push or delivery carries, never the tip, since each late wrap is judged at
 // its own pin: a pin above the tip waits (ErrConfigPinAhead), one before what the log retains is unjudged and never
@@ -33,7 +38,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"iter"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -462,4 +469,110 @@ func (self *AclEngine) stateAt(pin *bridge.AuthPin) (*AclState, error) {
 		self.alarm(AclEngineAlarm{Kind: AclEngineAlarmPinOffChain, Installed: self.Pin(), Offered: pin})
 	}
 	return state, err
+}
+
+// What AllowPrefixWrite asks of one write (DESIGN-DETAILS 16.2.7): the ref it writes, the push's flags where the
+// caller knows them, and its paths.
+type AclPrefixWrite struct {
+	RepoId  Id
+	RefKind protocol.EvsRefKind
+	RefMode protocol.EvsRefMode
+	// The ref's name, which tells ur/index and ur/lfs from the other shared refs.
+	RefName []byte
+	// The push's flags: one 16.2.4's line 1 leaves outside the rules asks nothing.
+	Flags uint32
+	// The paths, each its raw names joined by / (§11.6), drawn one at a time (QD-801): the engine stops drawing at the
+	// first path it refuses, and draws none where a rule with no path names this sidecar. "" is the path of no
+	// component, which asks whether this device is held: allowed where a rule names it for every path, where no set is
+	// in force and where the ref is outside the rules, refused with no path to name where it is held. Nil asks about
+	// no path.
+	Paths iter.Seq[string]
+	// The repo's sets this device holds for the installed state's rows (AclPrefixSets): a row with none is pending.
+	Sets []*AclPrefixRuleSet
+}
+
+// AllowPrefixWrite's answer. AclDecision's Reason is AclReasonPrefixRule either way, or AclReasonNoState and
+// AclReasonNoRepo where the engine cannot ask, and its At is the position of the set in force, 0 for none.
+type AclPrefixWriteDecision struct {
+	AclDecision
+	// The line of 16.2.4 that decided.
+	Line AclPrefixReason
+	// A refusal's EVS_PREFIX_RULE detail: refused, pending or update. The caller adds its own, base or tag (QD-801).
+	Detail AclPrefixDetail
+	// The first path refused, the caller's own plaintext, which goes into no log (I-13); empty where there is none
+	// to name.
+	Path string
+}
+
+// nil for an allow, else EVS_PREFIX_RULE as an *AclPrefixRuleError, which carries the path and never names it.
+func (self AclPrefixWriteDecision) Err() error {
+	if self.Allowed {
+		return nil
+	}
+	return &AclPrefixRuleError{Detail: self.Detail, Path: self.Path}
+}
+
+// The writer's half of DESIGN-DETAILS 16.2.7: lines 1 to 3 of PrefixVerdict with this sidecar as signer and the
+// installed state's pin as the push's, then each path asked by its components in plaintext against the paths of the
+// rules that name this sidecar. A device that cannot read the set in force does not write under it: a pending set is
+// refused with detail pending and a newer one with update. Called by the planner for every path a file-mode write
+// names and by publish for every file a git update changes, before the first round trip, so nothing is planned,
+// sealed or sent for a refused path; a push sealed again on another state's pin asks again. A file-mode ref's
+// .ur-index/ is outside the rules, as line 4 has it for readers.
+func (self *AclEngine) AllowPrefixWrite(write *AclPrefixWrite) AclPrefixWriteDecision {
+	refused := func(reason AclReason, line AclPrefixReason, detail AclPrefixDetail, at uint64, path string) AclPrefixWriteDecision {
+		return AclPrefixWriteDecision{AclDecision: AclDecision{Reason: reason, At: at}, Line: line, Detail: detail, Path: path}
+	}
+	allowed := func(line AclPrefixReason, at uint64) AclPrefixWriteDecision {
+		return AclPrefixWriteDecision{AclDecision: AclDecision{Allowed: true, Reason: AclReasonPrefixRule, At: at}, Line: line}
+	}
+	installed := self.installed.Load()
+	if installed == nil || write == nil {
+		return refused(AclReasonNoState, AclPrefixReasonPending, AclPrefixDetailPending, 0, "")
+	}
+	state := installed.state
+	repo := state.Repo(write.RepoId)
+	if repo == nil {
+		return refused(AclReasonNoRepo, AclPrefixReasonScope, AclPrefixDetailRefused, 0, "")
+	}
+	if aclPrefixOutside(repo.GetKind(), write.RefKind, write.RefName, write.Flags) {
+		return allowed(AclPrefixReasonScope, 0)
+	}
+	set, verdict, decided := aclPrefixSetInForce(repo.GetPrefixRules(), write.Sets, state.Pin().GetVersion())
+	if decided {
+		switch verdict.Outcome {
+		case AclPrefixAllowed:
+			return allowed(verdict.Reason, 0)
+		case AclPrefixUpdate:
+			return refused(AclReasonPrefixRule, verdict.Reason, AclPrefixDetailUpdate, verdict.SetAt, "")
+		}
+		return refused(AclReasonPrefixRule, verdict.Reason, AclPrefixDetailPending, verdict.SetAt, "")
+	}
+	var row *bridge.SidecarRow
+	if sidecar := state.View().Sidecar(self.sidecarId); sidecar != nil {
+		row = sidecar.Row
+	}
+	named := aclPrefixNamedRules(set, row)
+	for _, rule := range named {
+		if len(rule.GetPath()) == 0 {
+			// named for every path: allowed before any path is drawn
+			return allowed(AclPrefixReasonUnder, set.At)
+		}
+	}
+	if write.Paths != nil {
+		for path := range write.Paths {
+			if path == "" {
+				// the path of no component: this device is held
+				return refused(AclReasonPrefixRule, AclPrefixReasonNotUnder, AclPrefixDetailRefused, set.At, "")
+			}
+			names := strings.Split(path, "/")
+			if write.RefMode == protocol.EvsRefMode_EVS_REF_FILE && names[0] == aclPrefixIndexDirectory {
+				continue
+			}
+			if !aclPrefixRulesCoverNames(named, names) {
+				return refused(AclReasonPrefixRule, AclPrefixReasonNotUnder, AclPrefixDetailRefused, set.At, path)
+			}
+		}
+	}
+	return allowed(AclPrefixReasonUnder, set.At)
 }
