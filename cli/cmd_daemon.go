@@ -752,6 +752,27 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Restore: mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log}),
 		Home:    home,
 		Record:  settings.Record,
+		// §16.7's Run announcement row: a run's start, activity and end to its network's team directory, under the
+		// claims value its session starts under (mcp's ingest_directory.go); a network with no directory hears nothing
+		Lifecycle: mcp.NewDirectoryLifecycle(&mcp.DirectoryLifecycleArgs{
+			Runs: func(networkId sidecar.Id) (mcp.McpDirectoryRuns, error) {
+				hosted, ok := daemon.SidecarForNetwork(networkId)
+				if !ok {
+					return nil, nil
+				}
+				directory := hosted.Directory()
+				if directory == nil {
+					return nil, nil
+				}
+				runs := directory.Runs()
+				if runs == nil {
+					return nil, nil
+				}
+				return runs, nil
+			},
+			Claims: daemon.ResolveClaims,
+			Log:    log,
+		}),
 	})
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), cli.settings.CloseTimeout)
