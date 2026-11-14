@@ -4,7 +4,11 @@
 // the route fixture's processes, each an engine on a production gate of its own over one FakeSocketStore, on the
 // Net's clock. Nothing sleeps: loads are awaited by count, and the grace, reloads and polls move on the fake clock.
 // The processes' cache waits no backoff after a failed load and reloads behind networks only when a test asks, so a
-// load happens exactly when a test triggers one.
+// load happens exactly when a test triggers one. That holds only from a process at rest, so newProcess returns once
+// the gate's worker has finished its first pass and the cache's poll has armed its wait: both start on goroutines
+// of their own, and a first pass that ran late found a test's evidence and asked for a load the test never counted.
+// A wait for a load counts from the loads the cache has started, not the ones the gate has taken in, so a load that
+// was already running when the test triggered its own never satisfies it.
 
 package socketsservice_test
 
@@ -262,11 +266,31 @@ func (self *testGateLog) newProcess(world *testSocketWorld, mutate func(settings
 	if mutate != nil {
 		mutate(settings)
 	}
+	pollTime := world.clock.Now().Add(settings.Gate.Cache.PollInterval)
+	pollTimerCount := testTimerCountAt(world.clock.PendingTimers(), pollTime)
 	gate, err := socketsservice.NewSocketProjectionGate(world.ctx, serviceHost, self.source, settings.Gate)
 	if err != nil {
 		self.t.Fatal(err)
 	}
 	self.t.Cleanup(gate.Close)
+	process := &testSocketProcess{world: world, host: host, projection: gate}
+	// the worker's first pass asks for a load of every network it finds behind, so it ends before a test has any;
+	// and the poll's wait is armed before a test moves the clock past it. The clock stands still meanwhile, and
+	// nothing else of the process is made yet, so the one timer more at the poll's time is the poll's
+	process.awaitPasses(1)
+	if 0 < settings.Gate.Cache.PollInterval && settings.Gate.Cache.PollJitter == 0 {
+		for {
+			pending, added := world.clock.WatchTimers()
+			if pollTimerCount < testTimerCountAt(pending, pollTime) {
+				break
+			}
+			select {
+			case <-added:
+			case <-world.ctx.Done():
+				self.t.Fatal(world.ctx.Err())
+			}
+		}
+	}
 	service, err := socketsservice.NewSocketsService(world.ctx, serviceHost, world.store, gate, settings)
 	if err != nil {
 		self.t.Fatal(err)
@@ -277,34 +301,85 @@ func (self *testGateLog) newProcess(world *testSocketWorld, mutate func(settings
 	if err := gate.AwaitOverLimitReads(world.ctx, 1); err != nil {
 		self.t.Fatal(err)
 	}
-	return &testSocketProcess{world: world, host: host, projection: gate, service: service}
+	process.service = service
+	return process
 }
 
-// Asks the process's gate for networkId until a load lands, failing the test unless the network is then served.
-func (self *testSocketProcess) awaitLoaded(networkId connect.Id) socketsservice.SocketGateView {
-	self.world.t.Helper()
-	count := self.projection.LoadCount()
-	if view, err := self.projection.View(networkId); err == nil {
-		return view
+// How many of times are at.
+func testTimerCountAt(times []time.Time, at time.Time) int {
+	count := 0
+	for _, pending := range times {
+		if pending.Equal(at) {
+			count += 1
+		}
 	}
-	if err := self.projection.AwaitLoads(self.world.ctx, count+1); err != nil {
+	return count
+}
+
+// Waits until the gate's worker has finished count passes, each with its asks for loads made and its next wait armed.
+func (self *testSocketProcess) awaitPasses(count uint64) {
+	self.world.t.Helper()
+	for {
+		current, changed := self.projection.Passes()
+		if count <= current {
+			return
+		}
+		select {
+		case <-changed:
+		case <-self.world.ctx.Done():
+			self.world.t.Fatal(self.world.ctx.Err())
+		}
+	}
+}
+
+// How many worker passes the gate has finished.
+func (self *testSocketProcess) passCount() uint64 {
+	count, _ := self.projection.Passes()
+	return count
+}
+
+// How many loads the cache has started. A test reads it before it triggers a load and awaits one more with
+// awaitLoads: the gate's own count is of loads taken in, which a load already running when the trigger came would
+// raise as well, with none of what the trigger was to show.
+func (self *testSocketProcess) startedLoadCount() uint64 {
+	return self.projection.Stats().LoadCount
+}
+
+// Waits until the gate has taken in count loads, which is every load the cache had started when a test read count
+// from startedLoadCount, and as many after as it added.
+func (self *testSocketProcess) awaitLoads(count uint64) {
+	self.world.t.Helper()
+	if err := self.projection.AwaitLoads(self.world.ctx, count); err != nil {
 		self.world.t.Fatal(err)
 	}
+}
+
+// Asks the process's gate for networkId, awaits the load the ask starts when the gate holds nothing of the network,
+// and fails the test unless the network is then served. It returns with every started load taken in: the cache
+// installs a state before it tells the gate of the load, so a view served is not yet a load counted. A test asks this
+// of a network no load is running for, or one already loaded: an ask of a network still loading can mark another load
+// due behind the running one, which nothing here can see.
+func (self *testSocketProcess) awaitLoaded(networkId connect.Id) socketsservice.SocketGateView {
+	self.world.t.Helper()
+	started := self.startedLoadCount()
 	view, err := self.projection.View(networkId)
 	if err != nil {
-		self.world.t.Fatalf("after its load the network answers %v", err)
+		self.awaitLoads(started + 1)
+		view, err = self.projection.View(networkId)
+		if err != nil {
+			self.world.t.Fatalf("after its load the network answers %v", err)
+		}
 	}
+	self.awaitLoads(self.startedLoadCount())
 	return view
 }
 
-// The {acl_<N>}v event, and the load it starts awaited.
+// The {acl_<N>}v event, and a load that started after it awaited: from a process at rest, the one load it starts.
 func (self *testSocketProcess) changed(networkId connect.Id) {
 	self.world.t.Helper()
-	count := self.projection.LoadCount()
+	started := self.startedLoadCount()
 	self.service.ProjectionChanged(networkId)
-	if err := self.projection.AwaitLoads(self.world.ctx, count+1); err != nil {
-		self.world.t.Fatal(err)
-	}
+	self.awaitLoads(started + 1)
 }
 
 // One Find of app/db by dialer: the refusal's code, or "" with the primary ticket verified.
@@ -333,6 +408,7 @@ func TestGateLoadsOnFirstAskAndServesTheVerifiedState(t *testing.T) {
 	dialer := network.sidecarOf(world, network.dialer)
 
 	networkId := network.networkId
+	started := process.startedLoadCount()
 	code, result := process.find(dialer.token, &sidecar.SocketFindArgs{NameToken: network.tokenPath, NetworkId: &networkId})
 	if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeUnavailable || result.Error.RetryAfterMs != 250 {
 		t.Fatalf("a Find of an unloaded network answered %d, %+v", code, result)
@@ -340,7 +416,12 @@ func TestGateLoadsOnFirstAskAndServesTheVerifiedState(t *testing.T) {
 	if process.service.SignedTicketCount() != 0 {
 		t.Fatal("an unloaded network got a ticket")
 	}
-	view := process.awaitLoaded(networkId)
+	// the Find's ask started the load, and the gate is asked again only once it has landed
+	process.awaitLoads(started + 1)
+	view, err := process.projection.View(networkId)
+	if err != nil {
+		t.Fatalf("after the load its Find started the network answers %v", err)
+	}
 	if view.Position() != network.tip() {
 		t.Fatalf("the view stands at %d, the tip %d", view.Position(), network.tip())
 	}
@@ -437,7 +518,7 @@ func TestGateRevocationReachesFindWithinTheGrace(t *testing.T) {
 
 	release := log.source.holdEntries()
 	network.savePolicy(false)
-	count := process.projection.LoadCount()
+	started := process.startedLoadCount()
 	process.service.ProjectionChanged(network.networkId)
 	<-log.source.started
 	world.clock.Advance(socketsservice.DefaultSocketGateSettings().BehindGrace - time.Millisecond)
@@ -450,9 +531,7 @@ func TestGateRevocationReachesFindWithinTheGrace(t *testing.T) {
 		t.Fatalf("past the grace with its load held the Find answered %s", errorCode)
 	}
 	release()
-	if err := process.projection.AwaitLoads(world.ctx, count+1); err != nil {
-		t.Fatal(err)
-	}
+	process.awaitLoads(started + 1)
 	if errorCode, _ := process.findAppDb(network, dialer); errorCode != sidecar.SocketErrorCodeNoListener {
 		t.Fatalf("after the load the Find answered %s", errorCode)
 	}
@@ -492,11 +571,9 @@ func TestGateSourceOutageRefusesOnlyANetworkWithEvidence(t *testing.T) {
 
 	log.source.setFailing(first.networkId, true)
 	log.source.setFailing(second.networkId, true)
-	count := process.projection.LoadCount()
+	started := process.startedLoadCount()
 	world.clock.Advance(socketsservice.DefaultSocketGateSettings().Cache.PollInterval)
-	if err := process.projection.AwaitLoads(world.ctx, count+2); err != nil {
-		t.Fatal(err)
-	}
+	process.awaitLoads(started + 2)
 	world.clock.Advance(time.Minute)
 	for _, network := range []*testGateNetwork{first, second} {
 		if view, err := process.projection.View(network.networkId); err != nil || view.Position() != network.tip() {
@@ -534,11 +611,9 @@ func TestGateBehindNetworkReloadsOnItsInterval(t *testing.T) {
 	network.admission.AdmitMember(network.admission.Owner(), "after the outage", bridge.MemberRole_MEMBER_ROLE_MEMBER)
 	process.changed(network.networkId)
 	log.source.setFailing(network.networkId, false)
-	count := process.projection.LoadCount()
+	started := process.startedLoadCount()
 	world.clock.Advance(5 * time.Second)
-	if err := process.projection.AwaitLoads(world.ctx, count+1); err != nil {
-		t.Fatal(err)
-	}
+	process.awaitLoads(started + 1)
 	if view, err := process.projection.View(network.networkId); err != nil || view.Position() != network.tip() {
 		t.Fatalf("after its reload the network answers %v", err)
 	}
@@ -567,14 +642,22 @@ func TestGateWithheldEventServesUntilTheResubscriptionCheck(t *testing.T) {
 		t.Fatalf("with its event withheld the Find answered %s at %d", errorCode, ticket.GetPolicyVersion())
 	}
 
-	count := process.projection.LoadCount()
+	// The check's load is held at its read, which shows the check alone started it. The same pass of the worker then
+	// asks once more for the network, behind until that load lands, and its ask either joins the held load's or marks
+	// another due behind it, as the goroutines fall. The withheld event arriving while the load is held marks one due
+	// either way, so exactly one more load follows the held one, and the test counts both.
+	release := log.source.holdEntries()
+	started := process.startedLoadCount()
+	passes := process.passCount()
 	process.service.ProjectionsResync()
 	if err := process.projection.AwaitResyncs(world.ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := process.projection.AwaitLoads(world.ctx, count+1); err != nil {
-		t.Fatal(err)
-	}
+	<-log.source.started
+	process.awaitPasses(passes + 1)
+	process.service.ProjectionChanged(network.networkId)
+	release()
+	process.awaitLoads(started + 2)
 	if view, err := process.projection.View(network.networkId); err != nil || view.Position() != network.tip() {
 		t.Fatalf("after the check the network answers %v", err)
 	}
@@ -582,12 +665,15 @@ func TestGateWithheldEventServesUntilTheResubscriptionCheck(t *testing.T) {
 		t.Fatalf("after the check the Find answered %s", errorCode)
 	}
 
-	count = process.projection.LoadCount()
+	// every ask of the check and of its pass is made before the loads are counted
+	started = process.startedLoadCount()
+	passes = process.passCount()
 	process.service.ProjectionsResync()
 	if err := process.projection.AwaitResyncs(world.ctx, 2); err != nil {
 		t.Fatal(err)
 	}
-	if process.projection.LoadCount() != count {
+	process.awaitPasses(passes + 1)
+	if process.startedLoadCount() != started {
 		t.Fatal("a check that found {acl_}v unmoved loaded the network")
 	}
 }
@@ -656,19 +742,17 @@ func TestGateObservedPositionIsEvidenceUntilALoadReachesIt(t *testing.T) {
 	process := log.newProcess(world, nil)
 	held := process.awaitLoaded(network.networkId).Position()
 
-	count := process.projection.LoadCount()
+	started := process.startedLoadCount()
 	process.projection.Observe(network.networkId, held)
 	process.projection.Observe(network.networkId, socketsservice.SocketRemovedClientPosition)
 	world.clock.Advance(socketsservice.DefaultSocketGateSettings().BehindGrace)
-	if _, err := process.projection.View(network.networkId); err != nil || process.projection.LoadCount() != count {
+	if _, err := process.projection.View(network.networkId); err != nil || process.startedLoadCount() != started {
 		t.Fatalf("no evidence at all made the network answer %v", err)
 	}
 
 	// a fresher process admitted a lease at the next position, which this process's source does not yet serve
 	process.projection.Observe(network.networkId, held+1)
-	if err := process.projection.AwaitLoads(world.ctx, count+1); err != nil {
-		t.Fatal(err)
-	}
+	process.awaitLoads(started + 1)
 	world.clock.Advance(socketsservice.DefaultSocketGateSettings().BehindGrace)
 	if _, err := process.projection.View(network.networkId); !errors.Is(err, socketsservice.ErrSocketGateBehind) {
 		t.Fatalf("a load short of the observed position left the network answering %v", err)
@@ -803,12 +887,14 @@ func TestGateResyncSkipsANetworkLongUnused(t *testing.T) {
 	if _, err := process.host.Redis.Increment(world.ctx, sidecar.AclVersionKey(sidecar.Id(network.networkId)), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	count := process.projection.LoadCount()
+	started := process.startedLoadCount()
+	passes := process.passCount()
 	process.service.ProjectionsResync()
 	if err := process.projection.AwaitResyncs(world.ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	if process.projection.LoadCount() != count {
+	process.awaitPasses(passes + 1)
+	if process.startedLoadCount() != started {
 		t.Fatal("a resubscription reloaded a network long unused")
 	}
 }
