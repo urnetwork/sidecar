@@ -37,22 +37,25 @@ const (
 	SignedType_SIGNED_SOCKET_TICKET       SignedType = 4098
 	// 0x11xx §8 acl statements in §8.8's row order, GrantActivate first: purpose acl, but for AuditOptIn
 	// and AuditOptOut, which are purpose authority. RepoVersioning's type is reserved at M2: format-1
-	// code verifies it and folds its lock (D-PHASE-9).
-	SignedType_SIGNED_GRANT_ACTIVATE  SignedType = 4353
-	SignedType_SIGNED_GRANT_REVOKE    SignedType = 4354
-	SignedType_SIGNED_SUSPEND         SignedType = 4355
-	SignedType_SIGNED_UNSUSPEND       SignedType = 4356
-	SignedType_SIGNED_EVS_SHARE       SignedType = 4357
-	SignedType_SIGNED_OWNER_CONFIRM   SignedType = 4358
-	SignedType_SIGNED_REPO_CREATE     SignedType = 4359
-	SignedType_SIGNED_REPO_ADMIN      SignedType = 4360
-	SignedType_SIGNED_REPO_GRANT      SignedType = 4361
-	SignedType_SIGNED_REPO_REVOKE     SignedType = 4362
-	SignedType_SIGNED_REPO_DELETE     SignedType = 4363
-	SignedType_SIGNED_REPO_RESTORE    SignedType = 4364
-	SignedType_SIGNED_REPO_VERSIONING SignedType = 4365
-	SignedType_SIGNED_AUDIT_OPT_IN    SignedType = 4366
-	SignedType_SIGNED_AUDIT_OPT_OUT   SignedType = 4367
+	// code verifies it and folds its lock (D-PHASE-9). RepoPrefixRules' is too (QD-212; DESIGN-DETAILS
+	// 16.2.2): code from M2 checks it and folds its row, and M6 enforces it; 0x1110 stays QD-013's
+	// ApprovalDelivery, unused.
+	SignedType_SIGNED_GRANT_ACTIVATE    SignedType = 4353
+	SignedType_SIGNED_GRANT_REVOKE      SignedType = 4354
+	SignedType_SIGNED_SUSPEND           SignedType = 4355
+	SignedType_SIGNED_UNSUSPEND         SignedType = 4356
+	SignedType_SIGNED_EVS_SHARE         SignedType = 4357
+	SignedType_SIGNED_OWNER_CONFIRM     SignedType = 4358
+	SignedType_SIGNED_REPO_CREATE       SignedType = 4359
+	SignedType_SIGNED_REPO_ADMIN        SignedType = 4360
+	SignedType_SIGNED_REPO_GRANT        SignedType = 4361
+	SignedType_SIGNED_REPO_REVOKE       SignedType = 4362
+	SignedType_SIGNED_REPO_DELETE       SignedType = 4363
+	SignedType_SIGNED_REPO_RESTORE      SignedType = 4364
+	SignedType_SIGNED_REPO_VERSIONING   SignedType = 4365
+	SignedType_SIGNED_AUDIT_OPT_IN      SignedType = 4366
+	SignedType_SIGNED_AUDIT_OPT_OUT     SignedType = 4367
+	SignedType_SIGNED_REPO_PREFIX_RULES SignedType = 4369
 	// 0x12xx §7 config records and log statements in §7.9's row order: purpose authority. VersioningRules'
 	// type is reserved at M2: format-1 readers apply nothing from it but still apply the head holding it
 	// (D-PHASE-9).
@@ -145,6 +148,7 @@ var (
 		4365: "SIGNED_REPO_VERSIONING",
 		4366: "SIGNED_AUDIT_OPT_IN",
 		4367: "SIGNED_AUDIT_OPT_OUT",
+		4369: "SIGNED_REPO_PREFIX_RULES",
 		4609: "SIGNED_GENESIS",
 		4610: "SIGNED_ADMIN_SET",
 		4611: "SIGNED_MEMBER_ADMIT",
@@ -216,6 +220,7 @@ var (
 		"SIGNED_REPO_VERSIONING":     4365,
 		"SIGNED_AUDIT_OPT_IN":        4366,
 		"SIGNED_AUDIT_OPT_OUT":       4367,
+		"SIGNED_REPO_PREFIX_RULES":   4369,
 		"SIGNED_GENESIS":             4609,
 		"SIGNED_ADMIN_SET":           4610,
 		"SIGNED_MEMBER_ADMIT":        4611,
@@ -499,7 +504,7 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\xba\x0e\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\xd9\x0e\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
 	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
@@ -519,7 +524,8 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x13SIGNED_REPO_RESTORE\x10\x8c\"\x12\x1b\n" +
 	"\x16SIGNED_REPO_VERSIONING\x10\x8d\"\x12\x18\n" +
 	"\x13SIGNED_AUDIT_OPT_IN\x10\x8e\"\x12\x19\n" +
-	"\x14SIGNED_AUDIT_OPT_OUT\x10\x8f\"\x12\x13\n" +
+	"\x14SIGNED_AUDIT_OPT_OUT\x10\x8f\"\x12\x1d\n" +
+	"\x18SIGNED_REPO_PREFIX_RULES\x10\x91\"\x12\x13\n" +
 	"\x0eSIGNED_GENESIS\x10\x81$\x12\x15\n" +
 	"\x10SIGNED_ADMIN_SET\x10\x82$\x12\x18\n" +
 	"\x13SIGNED_MEMBER_ADMIT\x10\x83$\x12\x19\n" +

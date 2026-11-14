@@ -82,6 +82,13 @@ message RepoRestore { StatementHeader header = 1; bytes repo_id = 2; bytes delet
 message RepoVersioning {
   StatementHeader header = 1; bytes repo_id = 2; RepoVersioningLock lock = 3; bytes sealed_rules = 4;
 }
+// QD-212's statement as DESIGN-DETAILS 16.2.2 writes it, with the plaintext its sealed_rules opens to and the row
+// AclRepo.prefix_rules folds (16.2.3), which design-records writes into §8.8 (16.8).
+message RepoPrefixRules { StatementHeader header = 1; bytes repo_id = 2; bytes sealed_rules = 3; }
+message PrefixRuleSet { repeated PrefixRule rules = 1; }
+message PrefixRule { bytes subject = 1; repeated bytes path = 2; PrefixAction action = 3; }
+enum PrefixAction { PREFIX_ACTION_UNSPECIFIED = 0; PREFIX_ACTION_WRITE = 1; }
+message AclRepoPrefixRulesRow { bytes signer = 1; uint64 at = 2; }
 message AuditOptIn { StatementHeader header = 1; repeated bytes reader_atoms = 2; int64 not_after = 3; }
 message AuditOptOut { StatementHeader header = 1; }
 // §8.4's autogroups, actions, audiences and modes, §11.12's kinds, and §8.8's names, in the order written.
@@ -1032,6 +1039,13 @@ var testFenceAdditions = []struct {
 		message:  "AclRepoDeletionRow",
 		field:    testFenceField{name: "signer", number: 6, typeName: "bytes"},
 		question: "acl-repo-delete-times-deletion-signer",
+	},
+	// QD-212: every RepoPrefixRules that took effect, {signer, at} in position order for the repo's life, which a
+	// verifier started at any base judges a push's pin by (DESIGN-DETAILS 16.2.2, 16.2.3; 5.2.2's amendment 16-C)
+	{
+		message:  "AclRepo",
+		field:    testFenceField{name: "prefix_rules", number: 12, typeName: "AclRepoPrefixRulesRow", repeated: true},
+		question: "DESIGN-DETAILS 16.2.2 (QD-212)",
 	},
 	{
 		message:  "Announcement",
