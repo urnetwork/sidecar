@@ -8,24 +8,26 @@ import (
 
 func TestNoProverIsInjectedWithoutAPinnedKeySet(t *testing.T) {
 	// what this release does: no production setup, no pin, no prover, and a host that queues
-	prover, err := newSmtpProver(t.TempDir(), t.TempDir())
-	if prover != nil || err != nil {
-		t.Errorf("prover %v, %v", prover, err)
-	}
-	if err := verifySmtpProverKeys(context.Background(), t.TempDir(), t.TempDir()); err != nil {
-		t.Error(err)
+	if prover := newSmtpProver(t.TempDir(), ""); prover != nil {
+		t.Errorf("prover %v", prover)
 	}
 }
 
-func TestAPinnedKeySetThatIsNotThereInjectsNothing(t *testing.T) {
+func TestAPinnedKeySetThatIsNotThereNamesNoKeySet(t *testing.T) {
 	pin := sha256.Sum256([]byte("a release's keyset.json"))
-	smtpKeySetPin = pin[:]
-	defer func() { smtpKeySetPin = nil }()
-	prover, err := newSmtpProver(t.TempDir(), t.TempDir())
-	if prover != nil || err == nil {
-		t.Errorf("prover %v, %v", prover, err)
+	smtpKeySetPins = [][]byte{pin[:]}
+	defer func() { smtpKeySetPins = nil }()
+	// with no base url nothing is fetched, so a set whose files are not on the host never becomes ready:
+	// the check has nothing left to do, and the host names no key set and queues its mail
+	prover := newSmtpProver(t.TempDir(), "")
+	if prover == nil {
+		t.Fatal("no prover over a pinned set")
 	}
-	if err := verifySmtpProverKeys(context.Background(), t.TempDir(), t.TempDir()); err == nil {
-		t.Error("verified a KeySet that is not there")
+	readiness, err := prover.PrepareKeys(context.Background())
+	if err != nil || !readiness.Done || len(readiness.KeySets) != 0 {
+		t.Errorf("readiness %+v, %v", readiness, err)
+	}
+	if keySet := prover.KeySet(); len(keySet) != 0 {
+		t.Errorf("KeySet %x", keySet)
 	}
 }
