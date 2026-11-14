@@ -361,7 +361,7 @@ func TestAStandingRuleFollowsThePolicy(t *testing.T) {
 			rows.Rules = append(rows.Rules, &protocol.AclRule{
 				RuleId:   policyRule.Bytes(),
 				SrcAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER).Bytes()},
-				Targets:  []*protocol.AclTarget{{SidecarId: net.peer.sidecarId.Bytes()}},
+				Via:      []*protocol.AclTarget{{SidecarId: net.peer.sidecarId.Bytes()}},
 				Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_ROUTE)},
 			})
 			local.Rules = append(local.Rules, AclLocalRule{RuleId: policyRule, Cidrs: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}})
@@ -746,7 +746,8 @@ func testBridgeCompileVectorStates(t testing.TB) map[string]*BridgeCompiled {
 		{SidecarId: rich.peer.sidecarId.Bytes(), Name: "desktop"},
 	}})
 	rich.standingRoute(rich.peer, "golden route", testBridgePrefix(192, 0, 2, 0, 24))
-	rich.standingRoute(rich.host, "golden served", testBridgePrefix(198, 51, 100, 0, 24))
+	// the implicit document's first rule names no via, so S's route naming it makes S its via for every peer (QD-764)
+	rich.standingRoute(rich.host, "golden served", testBridgePrefix(198, 51, 100, 0, 24), aclImplicitRuleId(0).Bytes())
 	body := testBridgeMapBody(testBridgeIpv4(100, 80, 3, 7), 8080, 80)
 	rich.mustPost(rich.host, bridge.SignedType_SIGNED_BRIDGE_MAP, rich.bridgeMap(rich.host, testBridgeRuleId("golden map"), 0, body))
 	rich.foldLedger(rich.n, nil)

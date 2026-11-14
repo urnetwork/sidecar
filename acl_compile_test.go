@@ -41,6 +41,8 @@ type aclCompileWorld struct {
 	resolve    *protocol.ConfigResolution
 	socketKey  *protocol.SocketKeyFile
 	statements *protocol.AclRows
+	// the routes the head's bridge ledger holds at its fold, which the compile writes the rows' routes from (QD-764)
+	routes     []*BridgeLedgerRule
 	headTimeMs int64
 	position   uint64
 	// The config repo a test names in the view's Genesis, zero for none: no rows hold its row (QD-719).
@@ -192,7 +194,32 @@ func (self *aclCompileWorld) input() *AclCompileInput {
 		Members:    self.members,
 		Sidecars:   self.sidecars,
 		Statements: self.statements,
+		// the log's section at the fold, as NewAclCompileInput takes it from the rows
+		Bridge: self.statements.GetBridge(),
+		// none is the empty ledger, not a head's to read
+		BridgeRoutes: append([]*BridgeLedgerRule{}, self.routes...),
 	}
+}
+
+// A route the head's ledger holds at its fold, of a 10.0.0.0/8 subnet, filed by advertiser for the route rules ruleIds:
+// under a decision when approved, else with no approval, in force only where a standing grant covers it (QD-764).
+func (self *aclCompileWorld) ledgerRoute(label string, advertiser Id, approved bool, ruleIds ...Id) *BridgeLedgerRule {
+	digest := sha256.Sum256([]byte("acl compile test route " + label))
+	rule := &BridgeLedgerRule{
+		RuleId: digest[:], SignedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE, Owner: advertiser,
+		Route: &bridge.BridgeRouteBody{
+			Prefixes: []*bridge.BridgeIpv4Prefix{{Address: 10 << 24, Length: 8}}, Weight: 1, Kind: bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET,
+		},
+		Standing: !approved,
+	}
+	if approved {
+		rule.ApprovalId = self.id("approval " + label)
+	}
+	for _, ruleId := range ruleIds {
+		rule.RouteRuleIds = append(rule.RouteRuleIds, ruleId.Bytes())
+	}
+	self.routes = append(self.routes, rule)
+	return rule
 }
 
 func (self *aclCompileWorld) compile(t testing.TB) *protocol.AclRows {
@@ -792,10 +819,11 @@ func TestCompileAclLocalKeepsWhatRowsDrop(t *testing.T) {
 	if !slices.ContainsFunc(local.Names, func(name AclLocalName) bool { return name.Text == "tag:router" && name.Id == world.tag("router") }) {
 		t.Errorf("names %v", local.Names)
 	}
+	// the via rides AclRule.via, apart from the targets, which an ip: destination leaves empty (QD-764)
 	rows := world.compile(t)
 	for _, rule := range rows.GetRules() {
 		if Id(rule.GetRuleId()) == world.documentRuleId(t, "grant", 0) {
-			if !rule.GetPortsLimited() || len(rule.GetTargets()) != 1 || !bytes.Equal(rule.GetTargets()[0].GetAtom(), world.tag("router").Bytes()) {
+			if !rule.GetPortsLimited() || len(rule.GetTargets()) != 0 || len(rule.GetVia()) != 1 || !bytes.Equal(rule.GetVia()[0].GetAtom(), world.tag("router").Bytes()) {
 				t.Errorf("the route's row: %v", rule)
 			}
 		}

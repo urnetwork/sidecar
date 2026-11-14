@@ -10,10 +10,13 @@
 // network; a repo by id, or by sixteen zero bytes for every general or record repo (evs:*, a bare *); one
 // socket's token paths, each t_1 || ... || t_n of 16-byte segments (§9.4), or with socket_prefix every
 // name strictly below one, no token meaning every application socket; a tls/ or smtp/ name or a dns host,
-// glob kept, in public_name; mail_send. A bare * compiles to several of these. In a rule allowing route,
-// subject targets are its via subjects (§8.10). Rows carry no ports and no CIDRs, only whether a rule
-// limits ports (plan-BRIDGE-gate-row-prefixes #1): a gate decides who reaches whom, and a client's
-// AclEngine checks ports and addresses from AclLocalPolicy.
+// glob kept, in public_name; mail_send. A bare * compiles to several of these. A route rule's via subjects
+// ride AclRule.via, apart from its targets, which a dial reaches (QD-764): an atom, autogroup:self, a sidecar,
+// a client or another network; and a route rule that names none takes as its via subjects the advertisers
+// whose BridgeRows route rows name it (QD-004's second half), so it reaches nothing before an approved route
+// names it. Rows carry no ports and no CIDRs, only whether a rule limits ports
+// (plan-BRIDGE-gate-row-prefixes #1): a gate decides who reaches whom, and a client's AclEngine checks ports
+// and addresses from AclLocalPolicy.
 //
 // Malformed rows refuse to build: an atom or id of the wrong size, a duplicate atom or repo, a target with
 // two kinds set. A target with no kind this code knows, from a later format, matches nothing, and so does
@@ -174,6 +177,14 @@ type aclRule struct {
 	sidecarTargets []Id
 	clientTargets  []Id
 	networkTargets []Id
+	// via subjects, a route rule's (AclRule.via, QD-764): viaNamed whether the rule names any; one that names none takes
+	// the advertisers whose route rows name it (QD-004's second half), held in viaSidecars
+	viaNamed    bool
+	viaAtoms    []int32
+	viaSelf     bool
+	viaSidecars []Id
+	viaClients  []Id
+	viaNetworks []Id
 	// resource targets
 	repoTargets  []Id
 	repoWildcard bool
@@ -225,8 +236,10 @@ type aclSidecarState struct {
 	atoms []int32
 	// rules it is in the src of
 	srcRules aclBits
-	// dial or route rules whose subject targets name it
-	reachRules aclBits
+	// dial rules whose subject targets name it
+	dialRules aclBits
+	// route rules whose via subjects name it: their via targets, or for a rule that names no via its advertisers
+	viaRules aclBits
 	// listen rules on token-path sockets it is in the src of
 	listenRules aclBits
 	// for an ephemeral sidecar, the rules §8.6's ceiling counts: those naming it directly
@@ -283,8 +296,9 @@ type AclState struct {
 	srcRulesByAtom []aclBits
 	// by AclAction value: the rules allowing it
 	actionRules []aclBits
-	// dial or route rules with an autogroup:self target
-	selfReachRules aclBits
+	// dial rules with an autogroup:self target, and route rules with an autogroup:self via
+	selfDialRules aclBits
+	selfViaRules  aclBits
 	// dial rules with a token-path socket target
 	socketDialRules aclBits
 	// by rule index, for a socket dial rule: the listen rules whose token-path sockets overlap its own
@@ -311,6 +325,10 @@ type AclState struct {
 
 	// subjects an active Suspend names (plan-ACL-folded-grant-state #1)
 	suspended map[Id]bool
+
+	// whether AclRows.bridge is bytes no verifier folded: no route row names an advertiser, and every egress mode reads
+	// as none (acl_reach.go), the closed direction
+	bridgeMalformed bool
 }
 
 // A rows error naming its field. The field is the rows' own, never a name from a policy (I-13).
@@ -476,8 +494,14 @@ func (self *AclState) indexRules() error {
 				return err
 			}
 		}
+		for j, via := range row.GetVia() {
+			if err := self.classifyVia(rule, via, fmt.Sprintf("rules[%d].via[%d]", i, j)); err != nil {
+				return err
+			}
+		}
 		rule.portsLimited = row.GetPortsLimited()
 	}
+	self.indexRouteAdvertisers()
 
 	newBits := func() aclBits {
 		return make(aclBits, self.ruleWordCount)
@@ -490,7 +514,8 @@ func (self *AclState) indexRules() error {
 	for i := range self.actionRules {
 		self.actionRules[i] = newBits()
 	}
-	self.selfReachRules = newBits()
+	self.selfDialRules = newBits()
+	self.selfViaRules = newBits()
 	self.socketDialRules = newBits()
 	self.wildcardRepoRules = newBits()
 	for i := range self.rules {
@@ -503,8 +528,11 @@ func (self *AclState) indexRules() error {
 				self.actionRules[action].set(rule.index)
 			}
 		}
-		if rule.actions&aclReachActions != 0 && rule.selfTarget {
-			self.selfReachRules.set(rule.index)
+		if rule.allows(protocol.AclAction_ACL_ACTION_DIAL) && rule.selfTarget {
+			self.selfDialRules.set(rule.index)
+		}
+		if rule.allows(protocol.AclAction_ACL_ACTION_ROUTE) && rule.viaSelf {
+			self.selfViaRules.set(rule.index)
 		}
 		if rule.allows(protocol.AclAction_ACL_ACTION_DIAL) && 0 < len(rule.sockets) {
 			self.socketDialRules.set(rule.index)
@@ -624,6 +652,100 @@ func (self *AclState) classifyTarget(rule *aclRule, target *protocol.AclTarget, 
 		rule.mailSend = true
 	}
 	return nil
+}
+
+// Sorts one via subject into its rule (AclRule.via, QD-764), refusing one with two kinds set, autogroup:internet, which
+// is a destination and no via (§8.4), or a kind that names no subject. One with no kind this code knows, from a later
+// format, still names a via, so the rule takes no advertiser, and matches nothing.
+func (self *AclState) classifyVia(rule *aclRule, via *protocol.AclTarget, field string) error {
+	rule.viaNamed = true
+	kindCount := 0
+	count := func(set bool) {
+		if set {
+			kindCount += 1
+		}
+	}
+	count(len(via.GetAtom()) != 0)
+	count(len(via.GetSidecarId()) != 0)
+	count(len(via.GetNetworkId()) != 0)
+	count(len(via.GetClientId()) != 0)
+	subjectKindCount := kindCount
+	count(len(via.GetRepoId()) != 0)
+	count(len(via.GetSocketTokens()) != 0 || via.GetSocketPrefix())
+	count(via.GetPublicName() != "")
+	count(via.GetMailSend())
+	switch {
+	case 1 < kindCount:
+		return aclRowsRefusal("%s sets %d kinds", field, kindCount)
+	case kindCount == 1 && subjectKindCount == 0:
+		return aclRowsRefusal("%s names no subject", field)
+	}
+	switch {
+	case len(via.GetAtom()) != 0:
+		atom, err := aclRowsId(via.GetAtom(), field+".atom")
+		if err != nil {
+			return err
+		}
+		switch autogroup, _ := aclAtomAutogroup(atom); autogroup {
+		case protocol.AclAutogroup_ACL_AUTOGROUP_SELF:
+			rule.viaSelf = true
+		case protocol.AclAutogroup_ACL_AUTOGROUP_INTERNET:
+			return aclRowsRefusal("%s names autogroup:internet, which is no via", field)
+		default:
+			rule.viaAtoms = append(rule.viaAtoms, self.atomIndex(atom))
+		}
+	case len(via.GetSidecarId()) != 0:
+		sidecarId, err := aclRowsId(via.GetSidecarId(), field+".sidecar_id")
+		if err != nil {
+			return err
+		}
+		rule.viaSidecars = append(rule.viaSidecars, sidecarId)
+	case len(via.GetClientId()) != 0:
+		clientId, err := aclRowsId(via.GetClientId(), field+".client_id")
+		if err != nil {
+			return err
+		}
+		rule.viaClients = append(rule.viaClients, clientId)
+	case len(via.GetNetworkId()) != 0:
+		networkId, err := aclRowsId(via.GetNetworkId(), field+".network_id")
+		if err != nil {
+			return err
+		}
+		rule.viaNetworks = append(rule.viaNetworks, networkId)
+	}
+	return nil
+}
+
+// QD-004's second half (QD-764): each route row of the rows' BridgeRows adds its advertiser to the via subjects of the
+// route rules it names that name no via of their own, a policy rule by its 16-byte id and an activated grant by its
+// grant id. Bytes no verifier folded add no advertiser, the closed direction, as egressMode reads every mode there as
+// none: such a rule then reaches no via.
+func (self *AclState) indexRouteAdvertisers() {
+	rows, err := ParseBridgeRows(self.rows.GetBridge())
+	if err != nil {
+		self.bridgeMalformed = true
+		return
+	}
+	if len(rows.GetRoutes()) == 0 {
+		return
+	}
+	ruleIndexes := make(map[string][]int32, len(self.rules))
+	for i := range self.rules {
+		ruleId := string(self.rules[i].row.GetRuleId())
+		ruleIndexes[ruleId] = append(ruleIndexes[ruleId], int32(i))
+	}
+	for _, route := range rows.GetRoutes() {
+		advertiser := Id(route.GetAdvertiser())
+		for _, routeRuleId := range route.GetRouteRuleIds() {
+			for _, index := range ruleIndexes[string(routeRuleId)] {
+				rule := &self.rules[index]
+				if rule.viaNamed || !rule.allows(protocol.AclAction_ACL_ACTION_ROUTE) || slices.Contains(rule.viaSidecars, advertiser) {
+					continue
+				}
+				rule.viaSidecars = append(rule.viaSidecars, advertiser)
+			}
+		}
+	}
 }
 
 // Indexes the active Suspends.
@@ -765,7 +887,8 @@ func (self *AclState) indexSidecars(sidecarListedAtoms map[Id][]int32) {
 	for i := range self.sidecars {
 		sidecar := &self.sidecars[i]
 		sidecar.srcRules = newBits()
-		sidecar.reachRules = newBits()
+		sidecar.dialRules = newBits()
+		sidecar.viaRules = newBits()
 		sidecar.listenRules = newBits()
 		if !sidecar.valid {
 			continue
@@ -783,8 +906,11 @@ func (self *AclState) indexSidecars(sidecarListedAtoms map[Id][]int32) {
 		}
 		for j := range self.rules {
 			rule := &self.rules[j]
-			if rule.actions&aclReachActions != 0 && self.sidecarIsSubjectTarget(sidecar, rule) {
-				sidecar.reachRules.set(rule.index)
+			if rule.allows(protocol.AclAction_ACL_ACTION_DIAL) && self.sidecarIsSubjectTarget(sidecar, rule) {
+				sidecar.dialRules.set(rule.index)
+			}
+			if rule.allows(protocol.AclAction_ACL_ACTION_ROUTE) && self.sidecarIsVia(sidecar, rule) {
+				sidecar.viaRules.set(rule.index)
 			}
 			if rule.allows(protocol.AclAction_ACL_ACTION_LISTEN) && 0 < len(rule.sockets) && sidecar.srcRules.has(rule.index) {
 				sidecar.listenRules.set(rule.index)
@@ -869,6 +995,18 @@ func (self *AclState) sidecarIsSubjectTarget(sidecar *aclSidecarState, rule *acl
 		}
 	}
 	return slices.Contains(rule.sidecarTargets, sidecar.id)
+}
+
+// Whether a rule's via subjects name the sidecar: an atom it holds or its id among the rule's via, or, for a rule that
+// names no via, among the advertisers whose route rows name the rule (QD-764). autogroup:self depends on the source, so
+// a check reads it, never this.
+func (self *AclState) sidecarIsVia(sidecar *aclSidecarState, rule *aclRule) bool {
+	for _, atomIndex := range rule.viaAtoms {
+		if _, found := slices.BinarySearch(sidecar.atoms, atomIndex); found {
+			return true
+		}
+	}
+	return slices.Contains(rule.viaSidecars, sidecar.id)
 }
 
 // The state's (n, A_n).

@@ -17,7 +17,8 @@
 // names no admin.
 //
 // A GrantActivate folds to an AclRule (plan-ACL-folded-grant-state #2): rule_id the grant_id, src its subject's
-// sidecar atom, targets and actions from grant_dst and grant_allow, ports_limited when the action carries a
+// sidecar atom, targets and actions from grant_dst and grant_allow, a route grant's subjects in grant_dst its via too
+// (QD-764), since what it routes through is all its clear grant_dst names, ports_limited when the action carries a
 // sealed_detail, whose prefixes and ports no server reads (QD-740), so a grant with sealed ports never folds to one
 // with none: the closed direction, until the device reads its ports from the detail. A clear grant_dst names no port
 // at any version, which every parser holds, so no port's value reaches rows (plan-BRIDGE-gate-row-prefixes #1); the
@@ -162,6 +163,15 @@ func (self *AclState) CheckGrantActivate(statement *AclStatement, spendCheck Acl
 	}
 	for _, allow := range ask.Allow {
 		fold.rule.Actions = append(fold.rule.Actions, uint32(allow))
+	}
+	if slices.Contains(ask.Allow, protocol.AclAction_ACL_ACTION_ROUTE) {
+		// a route grant's subject-only grant_dst names what it routes through, its prefixes riding sealed_detail (QD-740):
+		// its via subjects, apart from its targets as every rule's are (QD-764)
+		for _, target := range ask.Dst {
+			if len(target.GetAtom())+len(target.GetSidecarId())+len(target.GetClientId())+len(target.GetNetworkId()) != 0 {
+				fold.rule.Via = append(fold.rule.Via, target)
+			}
+		}
 	}
 	if slices.Contains(ask.Allow, protocol.AclAction_ACL_ACTION_PUBLISH) {
 		fold.rule.Audience = protocol.AclAudience(action.Action.GetAudience())

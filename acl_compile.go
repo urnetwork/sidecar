@@ -14,15 +14,19 @@
 //	socket/key        K_sock, whose token paths application sockets compile to (§9.4), with a second target under
 //	                  the previous key while a rotation holds one (plan-SOCK-ksock-rotation)
 //	the log's rows    members and sidecars the atoms expand over, and the acl statements' rows: activated grants,
-//	                  the folded access logs, suspensions, spent grant ids and BridgeRows
+//	                  the folded access logs, suspensions, spent grant ids and BridgeRows' egress modes
+//	bridge/ledger/    the routes the head's bridge ledger holds active at its fold, read only by CompileAcl
 //
 // What it writes: has_document; evidence_default, the document's effective evidenceDefault as channel values, all
 // three where it names none, the implicit document's included, which every verifier reads for an action no requests
 // rule names (QD-727); an AclAtom for every tag, group and derived atom the policy names, autogroups being
-// fixed constants with no row; the policy's grants and requests, then §8.5's kind-default rules that need the head
+// fixed constants with no row; the policy's grants, each grant's via subjects in AclRule.via apart from its
+// destinations (QD-764), and requests, then §8.5's kind-default rules that need the head
 // (acl_kind.go), then the log's activated grants whose requests rule this head still holds (FS-14); the log's repos,
-// suspensions and spent grant ids, a spent id dropped once its retention is below the head's newest record time; and
-// BridgeRows from BRIDGE's CompileBridgeRows; and the audit block, which counts only under the k-of-n AuditOptIn record
+// suspensions and spent grant ids, a spent id dropped once its retention is below the head's newest record time;
+// BridgeRows from BRIDGE's CompileBridgeRows, the log's egress modes with a row for each route the head's ledger holds in
+// force, a standing one judged against this compile's own rows and policy (QD-764); and the audit block, which counts
+// only under the k-of-n AuditOptIn record
 // the log's rows hold (acl_audit.go), so a block with none names no reader. Kind defaults themselves are the binary's (acl_kind.go):
 // documents add to them and never narrow them, and nothing here can.
 //
@@ -37,8 +41,10 @@ package sidecar
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"time"
@@ -72,8 +78,15 @@ type AclCompileInput struct {
 	Members    []*bridge.MemberRow
 	Sidecars   []*bridge.SidecarRow
 	Statements *protocol.AclRows
-	// BridgeRows' bytes, BRIDGE's CompileBridgeRows over the head (C-15).
+	// L(folded_through)'s BridgeRows bytes, whose egress modes the rows carry (C-15).
 	Bridge []byte
+	// The routes the head's bridge ledger may hold in force (BridgeHeadRoutes): BRIDGE's CompileBridgeRows writes the
+	// rows' routes from them, a standing one only where this compile's own policy covers it (QD-764). Nil reads them
+	// from the head NewAclCompileInput was given, when CompileAcl first needs them; with no head, none.
+	BridgeRoutes []*BridgeLedgerRule
+
+	// the head the input came from, nil for an input built by hand
+	head *ConfigHead
 }
 
 // The input a head and the log's rows at its folded_through give.
@@ -126,11 +139,11 @@ func NewAclCompileInput(head *ConfigHead, rows *ConfigCompileRows) (*AclCompileI
 			return nil, err
 		}
 	}
-	bridgeRows, err := CompileBridgeRows(head, input.Statements.GetBridge())
-	if err != nil {
+	if _, err := ParseBridgeRows(input.Statements.GetBridge()); err != nil {
 		return nil, fmt.Errorf("%w: bridge: %w", ErrAclCompile, err)
 	}
-	input.Bridge = bridgeRows
+	input.Bridge = input.Statements.GetBridge()
+	input.head = head
 	return input, nil
 }
 
@@ -161,7 +174,141 @@ func CompileAcl(input *AclCompileInput) (*protocol.AclRows, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := compiler.compileBridge(); err != nil {
+		return nil, err
+	}
 	return compiler.rows, nil
+}
+
+// AclRows.bridge at the fold (QD-764): the log's egress modes at folded_through, and a row for each route the head's
+// ledger holds in force, BRIDGE's CompileBridgeRows judging a standing one by StandingCovers on these rows, at the head's
+// newest record time, with the policy this compile gave. The rows' state for that judgment reads the log's members and
+// sidecars at folded_through (aclCompileView); it needs no route row, since a rule that names no via is held by every
+// advertiser whose route names it.
+func (self *aclCompiler) compileBridge() error {
+	routes := self.input.BridgeRoutes
+	if routes == nil && self.input.head != nil {
+		var err error
+		if routes, err = BridgeHeadRoutes(self.input.head); err != nil {
+			return fmt.Errorf("%w: bridge: %w", ErrAclCompile, err)
+		}
+	}
+	var state *AclState
+	var stateErr error
+	now := time.UnixMilli(self.input.HeadTimeMs)
+	covers := func(rule *BridgeLedgerRule) bool {
+		if state == nil && stateErr == nil {
+			state, stateErr = NewAclState(self.rows, newAclCompileView(self.input))
+		}
+		return stateErr == nil && self.local.StandingCovers(state, rule, now)
+	}
+	bridgeRows, err := CompileBridgeRows(self.input.Bridge, routes, covers)
+	if err != nil {
+		return fmt.Errorf("%w: bridge: %w", ErrAclCompile, err)
+	}
+	if stateErr != nil {
+		return fmt.Errorf("%w: the rows' state for a standing route: %w", ErrAclCompile, stateErr)
+	}
+	self.rows.Bridge = bridgeRows
+	return nil
+}
+
+// The log's rows at a compile's folded_through as an AclAuthView, for the standing grants a fold judges routes by: each
+// sidecar's admission, revocation, park and sponsor as its row holds them, and each member. It holds no Genesis, pin,
+// config writer or cascade, none of which a standing grant's cover reads.
+type aclCompileView struct {
+	members  map[Id]*bridge.MemberRow
+	sidecars map[Id]*bridge.SidecarRow
+}
+
+// The view of the input's members and sidecars; a row with a malformed id holds no place in it.
+func newAclCompileView(input *AclCompileInput) *aclCompileView {
+	view := &aclCompileView{members: map[Id]*bridge.MemberRow{}, sidecars: map[Id]*bridge.SidecarRow{}}
+	for _, member := range input.Members {
+		if memberId, err := IdFromBytes(member.GetMemberId()); err == nil {
+			view.members[memberId] = member
+		}
+	}
+	for _, sidecar := range input.Sidecars {
+		if sidecarId, err := IdFromBytes(sidecar.GetSidecarId()); err == nil {
+			view.sidecars[sidecarId] = sidecar
+		}
+	}
+	return view
+}
+
+// Version 0 over a zero chain: the view stands at no position.
+func (self *aclCompileView) Pin() *bridge.AuthPin {
+	return &bridge.AuthPin{Version: 0, Chain: make([]byte, sha256.Size)}
+}
+
+// None: no route's cover reads the config repo or the genesis clause.
+func (self *aclCompileView) Genesis() *bridge.Genesis {
+	return nil
+}
+
+// Every sidecar the rows hold, in id order.
+func (self *aclCompileView) SidecarIds() []Id {
+	return slices.SortedFunc(maps.Keys(self.sidecars), Id.Cmp)
+}
+
+// A sidecar's admission as its row holds it, as ConfigState gives it; nil for a row the rows lack or whose member or tag
+// ids are malformed.
+func (self *aclCompileView) Sidecar(sidecarId Id) *AclSidecar {
+	row := self.sidecars[sidecarId]
+	if row == nil {
+		return nil
+	}
+	sidecar := &AclSidecar{Row: row, Ephemeral: row.GetEphemeral()}
+	if len(row.GetMemberId()) != 0 {
+		memberId, err := IdFromBytes(row.GetMemberId())
+		if err != nil {
+			return nil
+		}
+		sidecar.MemberId = memberId
+	}
+	for _, tagBytes := range row.GetTagIds() {
+		tagId, err := IdFromBytes(tagBytes)
+		if err != nil {
+			return nil
+		}
+		sidecar.TagIds = append(sidecar.TagIds, tagId)
+	}
+	return sidecar
+}
+
+// A member's row, nil for none.
+func (self *aclCompileView) Member(memberId Id) *bridge.MemberRow {
+	return self.members[memberId]
+}
+
+// None: no route's cover reads who writes config heads.
+func (self *aclCompileView) IsConfigWriter(sidecarId Id) bool {
+	return false
+}
+
+// As the sidecar's row says, parked_at, which a cascade or a leaked bundle's DelegationRevoke sets (config_cascade.go).
+func (self *aclCompileView) Parked(sidecarId Id) bool {
+	row := self.sidecars[sidecarId]
+	return row != nil && row.GetParkedAt() != 0
+}
+
+// A tagged sidecar's sponsor, as its row names one the rows still hold a member of, as ConfigState answers.
+func (self *aclCompileView) Sponsor(sidecarId Id) (Id, bool) {
+	row := self.sidecars[sidecarId]
+	if row == nil || len(row.GetTagIds()) == 0 || len(row.GetSponsor()) == 0 {
+		return Id{}, false
+	}
+	sponsorId, err := IdFromBytes(row.GetSponsor())
+	if err != nil || self.members[sponsorId] == nil {
+		return Id{}, false
+	}
+	return sponsorId, true
+}
+
+// None: no route's cover reads a consent.
+func (self *aclCompileView) CascadeVoids(signer []byte, at uint64) bool {
+	return false
 }
 
 // What rows drop on purpose, from the same input as CompileAcl (plan-ACL-small-readings #12). It never leaves the
@@ -624,13 +771,14 @@ func (self *aclCompiler) compileGrant(ruleId Id, grant *AclGrant) (*protocol.Acl
 		self.addLocalResource(resource, &local.Sockets, &local.Aliases, &local.Cidrs)
 	}
 	if slices.Contains(grant.Allow, protocol.AclAction_ACL_ACTION_ROUTE) {
-		// a route rule's targets are its via subjects (§8.10; plan-BRIDGE-gate-row-prefixes #1)
+		// a route rule's via subjects, apart from its destinations (QD-764, replacing acl-m2-04-compile-readings #6): with
+		// none, the advertisers whose routes name the rule stand in at id level (QD-004)
 		for _, via := range grant.Via {
 			target, err := self.subjectTarget(via)
 			if err != nil {
 				return nil, local, err
 			}
-			rule.Targets = append(rule.Targets, target)
+			rule.Via = append(rule.Via, target)
 		}
 	}
 	aclSortRule(rule)
@@ -773,6 +921,9 @@ func aclSortRows(rows *protocol.AclRows) {
 func aclSortRule(rule *protocol.AclRule) {
 	rule.SrcAtoms = aclSortBytesList(rule.SrcAtoms)
 	rule.Targets = aclSortTargets(rule.Targets)
+	if 0 < len(rule.Via) {
+		rule.Via = aclSortTargets(rule.Via)
+	}
 	slices.Sort(rule.Actions)
 	rule.Actions = slices.Compact(rule.Actions)
 }

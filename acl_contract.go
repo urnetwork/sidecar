@@ -32,9 +32,10 @@
 //	             refused; anything else is data
 //	not loaded   a network with a head row and no verified state refuses, never passes, and asks the cache to load it
 //
-// reach is AclState.Reach's: an active dial or route grant, sockets expanding to their listeners and ip grants to their
-// via subjects, ports left to the endpoints. A client with no acl_enforcing is reached only through a rule whose
-// ports_limited is false, and is a source only otherwise (D-ACL-5, owner decision 106). A reply is decided before the
+// reach is AclState.Reach's: an active dial grant, sockets expanding to their listeners, or a route grant through its via
+// subjects, its AclRule.via or with none the advertisers of the approved routes that name it (QD-764), ports left to
+// the endpoints. A client with no acl_enforcing is reached only through a dial rule whose ports_limited is false and
+// that names no via, and is a source only otherwise (D-ACL-5, owner decision 106). A reply is decided before the
 // witness exception, so a reply racing its origin never sticks on a control contract (QD-185).
 //
 // The caller never records a refusal as a route rejection: a grant can activate at any moment.
@@ -49,6 +50,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -551,8 +553,9 @@ func (self *AclState) contractPublic(networkId Id, request *AclContractRequest, 
 	return aclContractAllow(networkId, AclContractClassData, AclContractReasonPublic, AclDecision{})
 }
 
-// reach(source, destination) for the contract rule: Reach's search, holding a legacy destination to rules with
-// ports_limited false.
+// reach(source, destination) for the contract rule: Reach's search, a dial to what a rule's targets name or a route
+// through what its via subjects name (QD-764), holding a legacy destination to a dial by a rule with ports_limited false
+// and no via (D-ACL-5).
 func (self *AclState) contractReach(source *AclSubject, destination *AclSubject, legacyDestination bool, nowMs int64) AclDecision {
 	sourceResolved := self.resolve(source, nowMs)
 	if sourceResolved.deny != 0 {
@@ -562,20 +565,22 @@ func (self *AclState) contractReach(source *AclSubject, destination *AclSubject,
 	if destinationResolved.deny != 0 {
 		return aclDeny(destinationResolved.deny)
 	}
+	actions := uint32(aclReachActions)
 	var accept func(rule *aclRule) bool
 	if legacyDestination {
+		actions = 1 << uint32(protocol.AclAction_ACL_ACTION_DIAL)
 		accept = aclRuleUnrestricted
 	}
-	if rule := self.findSubjectRule(&sourceResolved, &destinationResolved, nowMs, aclReachActions, accept, true); rule != nil {
+	if rule := self.findSubjectRule(&sourceResolved, &destinationResolved, nowMs, actions, accept, true); rule != nil {
 		return aclAllowRule(rule)
 	}
 	return aclDeny(AclReasonNoGrant)
 }
 
-// Whether a rule reaches a legacy client: one whose ip field names no ports, which only an endpoint could enforce
-// (D-ACL-5).
+// Whether a rule reaches a legacy client: one whose ip field names no ports and that names no via, which only an
+// endpoint could enforce (D-ACL-5: "with dial and no ip ports, sock or via").
 func aclRuleUnrestricted(rule *aclRule) bool {
-	return !rule.portsLimited
+	return !rule.portsLimited && !rule.viaNamed
 }
 
 // The witness exception: both are sidecars this state admits, neither revoked, parked, suspended nor past its
