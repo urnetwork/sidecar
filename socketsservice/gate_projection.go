@@ -29,11 +29,13 @@
 // Evaluation (§8.10's sock row). A view reads its snapshot's AclState for the sidecar a request's token names,
 // the only subject a sockets caller has outside urnetwork-edge (QD-040): a listener's listen on its token path or
 // tls/ and smtp/ name, a dialer's dial by token path, and a listener's publish on its tls/ name's host, each a
-// grant whose rule id and expiry the verdict carries. Three checks wait on ACL-M5-01's AclGateView and refuse
+// grant whose rule id and expiry the verdict carries. Two checks wait on ACL-M5-01's AclGateView and refuse
 // meanwhile, the closed direction: an urnetwork-edge caller's tls/ dial and publish as autogroup:public (so every
-// edge Find of tls/ is denied), the system publish tls/443/mta-sts standing on an smtp/25/mx grant, and the hard
-// denies only servers know, abuse halts (§21). urnetwork-edge itself holds no log, so its view refuses every
-// check until SOCK-M9-01 judges ur/ names by no state.
+// edge Find of an ordinary tls/ name is denied), and the hard denies only servers know, abuse halts (§21). §13.9's
+// system publish, tls/443/mta-sts, is the engine's (system_publish.go): it asks a view only the receiver's own
+// smtp/25/mx listen, which stands in for the publish's tls/ grants, and never its tls/ listen, dial or publish.
+// urnetwork-edge itself holds no log, so its view refuses every check, and ur/ names are judged by no state
+// (namespace_ur.go).
 //
 // Safe for concurrent use.
 
