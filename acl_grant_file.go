@@ -63,14 +63,16 @@ var _ ApprovalStandingGrants = (*AclEngine)(nil)
 // asked action applies to, or an action that applies to no destination, is covered by nothing. So is an action with no
 // grant fields, a route (whose prefix rides sealed_detail, which this does not open) and another network's
 // destination. A version-4 action's ports ride sealed_detail too, so its ask names none, and only a rule that limits
-// no ports covers it. Reads the installed state with no lock.
+// no ports covers it. A share's grant (QD-820) is covered by none: its inbound half is another network's reach, not
+// the spender's, so the spender's own standing reach to the same sidecars says nothing of it, and each share is its
+// own admin-approved activation (§8.11). Reads the installed state with no lock.
 func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, now time.Time) bool {
 	installed := self.installed.Load()
 	if installed == nil || action == nil || action.Action == nil {
 		return false
 	}
 	ask, err := ParseAclGrantAction(action.Action)
-	if err != nil || ask.Subject != spender {
+	if err != nil || ask.Subject != spender || ask.share() {
 		return false
 	}
 	// a use is reserved only until the skew before its grant ends (§16.6)
@@ -249,11 +251,15 @@ type AclGrantRequest struct {
 	// A dial or route grant's prefixes and ports (QD-740), which the filer seals into the action's sealed_detail once
 	// the grant's clear fields are filled (QD-771); nil for a grant that seals nothing.
 	Detail *protocol.CanonicalActionDetail
+	// A share's other network (§8.11; QD-820), which the action names in share_network_id; the zero id for a grant
+	// that is no share. GrantDst then names this network's own resources, or that network alone (acl_request.go).
+	ShareNetworkId Id
 }
 
 // The CanonicalAction a grant needs (§16.8): base, the caller's action of its kind with its own fields set (a
 // publish's host, port, audience, app_mode and pin), with the grant's fields filled from the requests rule
-// MatchAclRequest finds at the installed state: rule_id, subject, grant_dst, grant_allow and expires_millis. A dial or
+// MatchAclRequest finds at the installed state: rule_id, subject, grant_dst, grant_allow and expires_millis, and a
+// share's share_network_id, which is the request's alone to name, never the base's. A dial or
 // route grant's request.Detail is sealed only then, beside those final fields, by the filer's sealer
 // (NewSealedCanonicalAction); a base that carries a sealed_detail already is refused, since its seal binds none of
 // them. Built through NewCanonicalAction or NewSealedCanonicalAction, which hold it to its kind's row.
@@ -273,6 +279,10 @@ func (self *AclGrantFiler) Action(ctx context.Context, base *protocol.CanonicalA
 	action.GrantDst = slices.Clone(request.GrantDst)
 	action.GrantAllow = slices.Clone(request.GrantAllow)
 	action.ExpiresMillis = request.ExpiresMs
+	action.ShareNetworkId = nil
+	if request.ShareNetworkId != (Id{}) {
+		action.ShareNetworkId = request.ShareNetworkId.Bytes()
+	}
 	// a rule id of the right size for the parse; the match fills the real one
 	action.RuleId = make([]byte, aclAtomByteCount)
 	ask, err := ParseAclGrantAction(action)

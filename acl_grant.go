@@ -29,6 +29,16 @@
 // latest of its decisions' not_after_millis plus 60 s, so a re-signed GrantActivate under a fresh header is refused
 // for as long as any of its decisions could spend.
 //
+// A share's grant (§8.11; the owner's answer to acl-m6-03-share-grant-subject, QD-820) names the other network in its
+// action's share_network_id, and stays its requesting sidecar's: the action's subject, every decision's requester and
+// the spender are that sidecar, as for any grant. Its inbound half, which gives the other network reach to this
+// one's resources, folds with src the derived network atom (kind 4) over that network's id, the atom a document's
+// network:<net> compiles to, and its row names the network, so the contract gate's share half finds the rule naming
+// network:Y in X's rows (acl_share.go). Its outbound half, whose destination is the other network itself, folds as
+// any grant does, src its subject, its target that network: the rule targeting network:X in Y's rows. Either half
+// needs an admin's approval whatever its rule says, and its activation is the delta §8.11 asks, on each side. An
+// inbound share's rule names no sidecar, so only an admin revokes it (checkGrantRevoke).
+//
 // Harness evidence in a tainted run needs the rule itself to name harness, which only the signing daemon's harness_ok
 // checks from AclLocalPolicy (owner decision 142); rows hold the effective evidence list, and gates check the channel
 // against it.
@@ -95,7 +105,8 @@ type aclGrantFold struct {
 	grantId []byte
 	// the AclRule, rule_id the grant_id
 	rule *protocol.AclRule
-	// the subject's sidecar atom, which rows lacking it gain, a new base's included
+	// the rule's src atom, its subject's sidecar atom or an inbound share's network atom, which rows lacking it gain,
+	// a new base's included
 	atom *protocol.AclAtom
 	// AclSpentGrant.retain_until_ms
 	retainUntilMs int64
@@ -149,7 +160,19 @@ func (self *AclState) CheckGrantActivate(statement *AclStatement, spendCheck Acl
 		return nil, err
 	}
 
+	// the rule's src: the subject, or for a share's inbound half the other network (QD-820)
 	atomId := AclDerivedAtom(AclDerivedAtomSidecar, ask.Subject.Bytes())
+	atom := &protocol.AclAtom{Atom: atomId.Bytes(), SidecarIds: [][]byte{ask.Subject.Bytes()}}
+	if ask.share() {
+		outbound, err := ask.shareHalf()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
+		}
+		if !outbound {
+			atomId = AclDerivedAtom(AclDerivedAtomNetwork, ask.ShareNetworkId.Bytes())
+			atom = &protocol.AclAtom{Atom: atomId.Bytes(), NetworkIds: [][]byte{ask.ShareNetworkId.Bytes()}}
+		}
+	}
 	fold := &aclGrantFold{
 		grantId: grantId[:],
 		rule: &protocol.AclRule{
@@ -181,7 +204,7 @@ func (self *AclState) CheckGrantActivate(statement *AclStatement, spendCheck Acl
 	if _, found := self.atomIndexes[atomId]; !found && aclRowsMaxAtomCount <= len(self.rows.GetAtoms()) {
 		return nil, fmt.Errorf("%w: the rows hold %d atoms already", ErrConfigRule, aclRowsMaxAtomCount)
 	}
-	fold.atom = &protocol.AclAtom{Atom: atomId.Bytes(), SidecarIds: [][]byte{ask.Subject.Bytes()}}
+	fold.atom = atom
 	for _, decision := range decisions {
 		fold.retainUntilMs = max(fold.retainUntilMs, decision.Decision.GetNotAfterMillis()+aclDecisionSkewMs)
 	}
@@ -241,7 +264,8 @@ func (self *AclState) grantTouches(ask *AclGrantAsk, audience protocol.AclAudien
 			}
 		}
 	}
-	if audience == protocol.AclAudience_ACL_AUDIENCE_PUBLIC {
+	if audience == protocol.AclAudience_ACL_AUDIENCE_PUBLIC || ask.share() {
+		// a share needs an admin whichever half it is and whatever it reaches (§8.11, owner decision 74)
 		adminOnly = true
 	}
 	for _, target := range ask.Dst {

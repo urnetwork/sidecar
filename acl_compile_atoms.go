@@ -8,7 +8,9 @@
 //	sidecar:<id>         a derived atom of kind 2 over the id, listing it
 //	client:<id>          a derived atom of kind 3, listing the sidecar resolve's binding names, or with none the client
 //	network:<net>        a derived atom of kind 4 over the network resolve names; network:* a derived atom over "*"
-//	                     with no row, which names no network until §8.11's shares give it one (ACL-M6-03)
+//	                     with no row, which no subject holds: in a requests rule's src it takes a share's grant
+//	                     for any network (MatchAclRequest), whose activation then folds a rule under that
+//	                     network's own atom, the one network:<net> compiles to (acl_grant.go; QD-820)
 //	role:, principal:    derived atoms of kinds 5 and 6 over the name, carrying it
 //
 // Derived atoms are the first 16 bytes of SHA-256("urnetwork-sidecar-v1/acl-atom" || 0x00 || kind || 0x00 || value)
