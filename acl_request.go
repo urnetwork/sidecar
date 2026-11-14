@@ -24,6 +24,21 @@
 // sealed_detail's presence (acl_grant.go); reading the detail's ports on the device is ACL-M4-02's. grant_allow
 // holds §8.4's action names.
 //
+// A share's grant (§8.11; the owner's answer to acl-m6-03-share-grant-subject, QD-820) names the other network in
+// share_network_id, beside its subject, which stays the requesting sidecar. A requests rule takes it by its src, where
+// that names the network: network:*, the implicit document's shares rule, or network:<net> for that network. The
+// requester holds no network atom, so it need only stand; no rule whose src names no network takes a share, and none
+// takes a grant that is no share through a network: src. A share's ask is one of two halves, as §8.11 has them:
+//
+//	inbound   this network grants the other reach to its own resources: no destination names a network, each falls
+//	          inside the rule's targets, and the grant folds to a rule whose src is the other network's atom
+//	outbound  this network grants its subject reach to the other: every destination is network:<the other>, which
+//	          the rule's src names, so its targets are not asked, and the grant folds to a rule whose src is the
+//	          subject and whose target is that network
+//
+// A share's destination naming any other network, a share that mixes the halves, and one asking more than dial or
+// route are refused, the closed direction.
+//
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
 package sidecar
@@ -68,6 +83,45 @@ type AclGrantAsk struct {
 	ExpiresMs int64
 	// The requests rule's id, or empty to take the first rule, in the rows' order, that takes the ask.
 	RuleId []byte
+	// A share's other network, CanonicalAction.share_network_id (§8.11; QD-820); the zero id for a grant that is no
+	// share.
+	ShareNetworkId Id
+}
+
+// Whether the ask is a share's (§8.11).
+func (self *AclGrantAsk) share() bool {
+	return self.ShareNetworkId != (Id{})
+}
+
+// Holds a share's ask to one of §8.11's halves, and answers whether it is the outbound one, whose destinations all
+// name the share's network; the inbound one's name no network. A destination naming another network, a share mixing
+// the halves, one with no destination, and one asking more than dial or route are refused. The ids stay out of the
+// errors, which a log may carry (I-13).
+func (self *AclGrantAsk) shareHalf() (outbound bool, err error) {
+	for _, action := range self.Allow {
+		if action != protocol.AclAction_ACL_ACTION_DIAL && action != protocol.AclAction_ACL_ACTION_ROUTE {
+			return false, fmt.Errorf("%w: a share asking more than dial or route", ErrAclGrantFieldInvalid)
+		}
+	}
+	networkCount := 0
+	for _, target := range self.Dst {
+		if len(target.GetNetworkId()) == 0 {
+			continue
+		}
+		if !bytes.Equal(target.GetNetworkId(), self.ShareNetworkId.Bytes()) {
+			return false, fmt.Errorf("%w: a share's destination naming another network than its own", ErrAclGrantFieldInvalid)
+		}
+		networkCount += 1
+	}
+	switch {
+	case len(self.Dst) == 0:
+		return false, fmt.Errorf("%w: a share with no destination", ErrAclGrantFieldInvalid)
+	case networkCount == 0:
+		return false, nil
+	case networkCount == len(self.Dst):
+		return true, nil
+	}
+	return false, fmt.Errorf("%w: a share naming its network beside other destinations", ErrAclGrantFieldInvalid)
 }
 
 // The rule that takes an ask, and the grant's end.
@@ -192,7 +246,9 @@ func aclActionName(action protocol.AclAction) string {
 }
 
 // The grant a CanonicalAction carries (QD-064's fields 8, 10, 11, 28 and 29): subject, destinations, actions, expiry
-// and rule. Each list must be non-empty and each entry readable.
+// and rule, and a share's other network (field 40; QD-820). Each list must be non-empty and each entry readable, and
+// a share's ask one of §8.11's halves (shareHalf). An action with no share_network_id, one stored before the field
+// among them, reads as it did.
 func ParseAclGrantAction(action *protocol.CanonicalAction) (*AclGrantAsk, error) {
 	subjectId, err := IdFromBytes(action.GetSubject())
 	if err != nil {
@@ -229,6 +285,16 @@ func ParseAclGrantAction(action *protocol.CanonicalAction) (*AclGrantAsk, error)
 			ask.Allow = append(ask.Allow, action)
 		}
 	}
+	if shareNetworkIdBytes := action.GetShareNetworkId(); len(shareNetworkIdBytes) != 0 {
+		shareNetworkId, err := IdFromBytes(shareNetworkIdBytes)
+		if err != nil || shareNetworkId == (Id{}) {
+			return nil, fmt.Errorf("%w: a share_network_id that is no network's id", ErrAclGrantFieldInvalid)
+		}
+		ask.ShareNetworkId = shareNetworkId
+		if _, err := ask.shareHalf(); err != nil {
+			return nil, err
+		}
+	}
 	return ask, nil
 }
 
@@ -241,6 +307,14 @@ func MatchAclRequest(state *AclState, ask *AclGrantAsk, now time.Time) (*AclRequ
 	requester := state.sidecarState(ask.Subject)
 	if requester == nil || requester.hardDeny(nowMs) != 0 {
 		return nil, fmt.Errorf("%w: a subject that does not stand", ErrAclRequestNoMatch)
+	}
+	if ask.share() {
+		if _, err := ask.shareHalf(); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrAclRequestNoMatch, err)
+		}
+		if genesis := state.view.Genesis(); genesis != nil && bytes.Equal(genesis.GetNetworkId(), ask.ShareNetworkId.Bytes()) {
+			return nil, fmt.Errorf("%w: a share with the network itself", ErrAclRequestNoMatch)
+		}
 	}
 	for _, rule := range state.rows.GetRequests() {
 		if 0 < len(ask.RuleId) && !bytes.Equal(rule.GetRuleId(), ask.RuleId) {
@@ -271,22 +345,47 @@ func MatchAclRequest(state *AclState, ask *AclGrantAsk, now time.Time) (*AclRequ
 	return nil, ErrAclRequestNoMatch
 }
 
-// Whether a requests rule takes the ask: the requester in its src, every action among its own, every destination
-// inside one of its targets.
+// Whether a requests rule's src names a share's network (QD-820): network:*, whose atom has no row and names every
+// network here, or network:<net>'s derived atom over that id. The atoms are compared as bytes: a network a rule names
+// needs no row for the match, and a row's network_ids are not asked, since the atom is derived from the one id.
+func aclRequestSrcNamesNetwork(rule *protocol.AclRequestRule, networkId Id) bool {
+	wildcard := aclNetworkWildcardAtom()
+	named := AclDerivedAtom(AclDerivedAtomNetwork, networkId.Bytes())
+	for _, atomBytes := range rule.GetSrcAtoms() {
+		if bytes.Equal(atomBytes, wildcard.Bytes()) || bytes.Equal(atomBytes, named.Bytes()) {
+			return true
+		}
+	}
+	return false
+}
+
+// Whether a requests rule takes the ask: the requester in its src, or for a share its network named by the src, every
+// action among its own, every destination inside one of its targets. A share's outbound half names its network alone,
+// which the src took, so its targets are not asked.
 func (self *AclState) requestTakes(rule *protocol.AclRequestRule, requester *aclSidecarState, ask *AclGrantAsk) bool {
 	inSrc := false
-	for _, atomBytes := range rule.GetSrcAtoms() {
-		atom, err := IdFromBytes(atomBytes)
+	shareOutbound := false
+	if ask.share() {
+		outbound, err := ask.shareHalf()
 		if err != nil {
-			continue
+			return false
 		}
-		atomIndex, found := self.atomIndexes[atom]
-		if !found {
-			continue
-		}
-		if _, holds := slices.BinarySearch(requester.atoms, atomIndex); holds {
-			inSrc = true
-			break
+		shareOutbound = outbound
+		inSrc = aclRequestSrcNamesNetwork(rule, ask.ShareNetworkId)
+	} else {
+		for _, atomBytes := range rule.GetSrcAtoms() {
+			atom, err := IdFromBytes(atomBytes)
+			if err != nil {
+				continue
+			}
+			atomIndex, found := self.atomIndexes[atom]
+			if !found {
+				continue
+			}
+			if _, holds := slices.BinarySearch(requester.atoms, atomIndex); holds {
+				inSrc = true
+				break
+			}
 		}
 	}
 	if !inSrc {
@@ -296,6 +395,9 @@ func (self *AclState) requestTakes(rule *protocol.AclRequestRule, requester *acl
 		if !slices.Contains(rule.GetActions(), uint32(action)) {
 			return false
 		}
+	}
+	if shareOutbound {
+		return true
 	}
 	for _, target := range ask.Dst {
 		if !slices.ContainsFunc(rule.GetTargets(), func(ruleTarget *protocol.AclTarget) bool {

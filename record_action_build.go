@@ -42,6 +42,8 @@ var canonicalActionFieldByteCounts = map[protoreflect.FieldNumber]int{
 	14: recordIdByteCount,
 	26: recordIdByteCount,
 	30: recordIdByteCount,
+	// a share's other network
+	canonicalActionFieldShareNetworkId: recordIdByteCount,
 }
 
 // The field numbers set on message, in number order.
@@ -141,10 +143,12 @@ func canonicalActionBuildVersion(action *protocol.CanonicalAction, row *Canonica
 }
 
 // clear's bytes as the builder stores them, before its detail is sealed: sealed_detail left out and the version fixed
-// as NewCanonicalAction fixes it, deterministically encoded, field by field in number order. Field 38 being the last
-// an action that seals a detail sets (39, egress_mode, is a version-1 egress_change's alone), the stored action is
-// these bytes and its sealed_detail after them, so the context a detail is sealed to here is the one its stored bytes
-// derive (CanonicalActionDetailSealContext). The caller's message is not changed.
+// as NewCanonicalAction fixes it, deterministically encoded, field by field in number order. The stored action is
+// these bytes with its sealed_detail's record, field 38's, among them in number order: after every other field (39,
+// egress_mode, is a version-1 egress_change's alone) but a share's share_network_id, 40 (QD-820), which follows it.
+// The context cuts field 38's record out wherever it stands, so the one a detail is sealed to here is the one its
+// stored bytes derive (CanonicalActionDetailSealContext), a share's network bound into it as every clear field is.
+// The caller's message is not changed.
 func canonicalActionClearBytes(clear *protocol.CanonicalAction) ([]byte, error) {
 	final := proto.Clone(clear).(*protocol.CanonicalAction)
 	final.SealedDetail = nil

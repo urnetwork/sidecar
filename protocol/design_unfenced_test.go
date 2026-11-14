@@ -1200,6 +1200,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "egress_mode", number: 39, typeName: "uint32"},
 		question: "bridge-m4-19-egress-change-action",
 	},
+	// QD-820: a share's grant names the other network, beside its subject, the requesting sidecar
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "share_network_id", number: 40, typeName: "bytes"},
+		question: "acl-m6-03-share-grant-subject",
+	},
 	// QD-712 and QD-716: parts bound to one key part (DESIGN-DETAILS 3.2.5), the key set a connection proves under,
 	// the key commitment, each part's reply count, the header block's record count and a scan's carry
 	{

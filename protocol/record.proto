@@ -77,7 +77,8 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   repeated string cidrs = 9; repeated string grant_dst = 10; repeated string grant_allow = 11;
   uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
                                             // 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
-                                            // 10, 11, 28, 29 and 38; approvers that do not know a version refuse it
+                                            // 10, 11, 28, 29 and 38, a share's also 40; approvers that do not know
+                                            // a version refuse it
   bool scope = 13;                          // a multi-use template (16.6)
   bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
                                                         // evs_delete; mail_alias_delete's mailcfg record (16.6)
@@ -105,6 +106,13 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // beside its subject (29) and, under exits, its exits in grant_dst (10),
                                             // sidecar:<id> entries or one tag:<id>; version 1 alone, so no action
                                             // that seals a detail sets it, and no server path takes it (QD-799)
+  bytes share_network_id = 40;              // a share's grant (§8.11): the other network, 16 bytes, on a dial or
+                                            // route grant alone, version 4's. Either the grant gives that network
+                                            // reach to what grant_dst names here, or grant_dst names that network
+                                            // alone and the grant gives its subject (29) reach to it. The subject
+                                            // stays the requesting sidecar, and an admin's approval covers the
+                                            // network as it covers every field (QD-820). Empty on every other
+                                            // grant, so an action stored before the field reads as before
 }
 // What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
 message CanonicalActionDetail {

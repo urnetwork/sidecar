@@ -23,10 +23,13 @@
 // What leaves a pair uncovered, so the Public rule decides it: a companion (a share's reply rides its forward
 // contract's companion, which the Public rule passes), an end the facts cannot tell, a destination that is no bound
 // sidecar, a destination network with no head row, or one with no loaded state, which is asked to load, a hard-denied
-// end at either state, and either half missing. Rows name a remote network only by its id: network:* names none,
-// since no state tells this gate which networks a share binds, and a share's requested grant cannot fold yet, since
-// a GrantActivate folds only for a sidecar subject (question acl-m6-03-share-grant-subject); standing document grants
-// naming network:<net> are what cover a pair until it is answered.
+// end at either state, and either half missing. Rows name a remote network only by its id, and two kinds of rule do:
+// a standing document grant naming network:<net>, and a share's requested grant once its GrantActivate folds
+// (acl_grant.go; the owner's answer to acl-m6-03-share-grant-subject, QD-820). Such a grant's action names the other
+// network in share_network_id, a requests rule whose src is network:* or network:<net> takes it, the implicit
+// document's shares rule among them, and with an admin's approval X's fold writes a rule whose src is network:Y's
+// atom, and Y's a rule whose target is network:X. A requests rule's network:* itself still names no network in
+// rows: it is what a share's ask is matched against, never a src any subject holds.
 //
 // Reads two maps and two states and allocates nothing, as the rest of Decide.
 
