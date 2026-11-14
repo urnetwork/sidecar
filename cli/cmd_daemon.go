@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -681,6 +682,25 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			closeSidecar(running)
 		}
 	}()
+	// each network's key and evs clients (daemon_clients.go), and, on a daemon whose state is on disk, its local git tier
+	// under <state>, run by the system git, each mount's hooks exec'ing this daemon's own ur git-hook
+	urDaemonClients = &urDaemonClientsArgs{Log: log}
+	if !ephemeral {
+		gitPath, err := exec.LookPath("git")
+		if err == nil {
+			gitPath, err = filepath.Abs(gitPath)
+		}
+		if err == nil {
+			urDaemonClients.StateDirectory, urDaemonClients.GitPath = stateDirectory, gitPath
+		} else {
+			log.Warningf("[ur]no git found, so this daemon serves no local git tier: %s", err)
+		}
+		if executable, err := os.Executable(); err == nil {
+			urDaemonClients.HookCommand, urDaemonClients.HookEnvironment = urDaemonGitHookCommand(executable, cli.instance)
+		} else {
+			log.Warningf("[ur]this daemon cannot name its own ur, so its git tier takes no push: %s", err)
+		}
+	}
 	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar}
 	// the bridges and ur tun end with the daemon, the tun's routes removed, on every path Run returns by; each network's
 	// bridge is built over its config follower (daemon_config.go)
