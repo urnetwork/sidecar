@@ -107,6 +107,8 @@ type AclFollower struct {
 	// the newest head's local policy, and the head the reader should read next
 	local      atomic.Pointer[aclFollowerLocal]
 	wantedHead *MonitorValue[[sha256.Size]byte]
+	// the local policy the engine holds with its state, which Local reports
+	localInstalled *MonitorValue[*AclLocalPolicy]
 
 	// the newest installed position, which the ack loop sends and GrantsChanged reports
 	installed *MonitorValue[aclAckPosition]
@@ -130,14 +132,15 @@ func NewAclFollower(ctx context.Context, args *AclFollowerArgs) (*AclFollower, e
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &AclFollower{
-		args:       args,
-		settings:   settings,
-		clock:      clockOrReal(settings.Clock),
-		log:        loggerOrDefault(settings.Log),
-		ctx:        cancelCtx,
-		cancel:     cancel,
-		wantedHead: NewMonitorValue([sha256.Size]byte{}),
-		installed:  NewMonitorValue(aclAckPosition{}),
+		args:           args,
+		settings:       settings,
+		clock:          clockOrReal(settings.Clock),
+		log:            loggerOrDefault(settings.Log),
+		ctx:            cancelCtx,
+		cancel:         cancel,
+		wantedHead:     NewMonitorValue([sha256.Size]byte{}),
+		localInstalled: NewMonitorValue[*AclLocalPolicy](nil),
+		installed:      NewMonitorValue(aclAckPosition{}),
 	}
 	self.remove = args.Source.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
 		self.apply()
@@ -223,7 +226,14 @@ func (self *AclFollower) installWithLock(state *ConfigState) bool {
 	}
 	self.installCount.Add(1)
 	self.grants.Store(newAclGrants(acl))
+	self.localInstalled.Set(local)
 	return true
+}
+
+// The local policy the engine holds with its newest state, nil before one compiled (with no head reader, never), and a
+// channel that closes when another is installed: what BRIDGE's compile reads beside the state (BridgeComponentArgs).
+func (self *AclFollower) Local() (*AclLocalPolicy, chan struct{}) {
+	return self.localInstalled.Get()
 }
 
 // The local policy installed with the engine's state, nil for none.

@@ -88,6 +88,9 @@ type Sidecar struct {
 	// Forwarding's setup for the app's VPN component, which a host installs (bridge_forward_setup.go). Held as any, as
 	// search is: the forwarding leg sets up nothing.
 	forwardingSetup atomic.Value
+	// The network's config follower, which a host starts (sidecar_config_follower.go). Held as any, as search is: the
+	// forwarding and page legs build none.
+	configFollower atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
