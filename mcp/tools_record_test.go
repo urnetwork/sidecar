@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -313,6 +314,9 @@ func TestRecordAppendFilesThroughTheRecord(t *testing.T) {
 	}{
 		{err: sidecar.ErrRecordTargetsInvalid, code: McpCodeInvalidArguments, part: "grammar"},
 		{err: sidecar.ErrRecordRouteAnnouncement, code: McpCodeFailedPrecondition, part: "announcement"},
+		{err: sidecar.ErrDirectoryRunUnknown, code: McpCodeFailedPrecondition, part: "announcement"},
+		{err: sidecar.ErrDirectoryRunsClaimsOff, code: McpCodeFailedPrecondition, part: "claims is off"},
+		{err: sidecar.ErrDirectoryRunClaimsFull, code: McpCodeFailedPrecondition, part: "four claims"},
 		{err: sidecar.ErrRecordProjectionLog, code: McpCodeFailedPrecondition, part: "does not read"},
 		{err: sidecar.ErrSidecarStoreLocked, code: McpCodeFailedPrecondition, part: "ur unlock"},
 	}
@@ -467,5 +471,23 @@ func TestRecordToolsSchemasAtEveryVersion(t *testing.T) {
 				t.Errorf("%s %s: structuredContent against outputSchema: %v", version, call.tool, err)
 			}
 		}
+	}
+}
+
+// A page of rows that together pass the result limit stops before the row that would pass it, its cursor the last
+// kept row's, and the result is no link: every row it holds is whole.
+func TestRecordQueryPageCutBeforeTheLimit(t *testing.T) {
+	env := newTestRecordToolEnv(t)
+	limit := env.server.settings.Mcp.ResultByteCount
+	for i := 0; i < 4; i += 1 {
+		row := testRecordRow(sidecar.RecordTrustOwn, strings.Repeat("b", limit/3))
+		row.Cursor = fmt.Sprintf("cursor-%d", i)
+		env.record.rows = append(env.record.rows, row)
+	}
+	conn := env.conn("2025-06-18")
+	out := &mcpRecordQueryOut{}
+	envelope := testRecordToolData(t, env.callTool(conn, "2025-06-18", "record_query", map[string]any{}), out)
+	if envelope.Truncated || len(out.Rows) != 2 || out.NextCursor != "cursor-1" {
+		t.Fatalf("truncated %v, %d rows, next %q", envelope.Truncated, len(out.Rows), out.NextCursor)
 	}
 }

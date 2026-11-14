@@ -24,7 +24,7 @@
 //	            grammar, their text and targets normalized and redacted whole by §16.11's rule before the writer seals;
 //	            a personal network's vault takes them; in team mode the writer sends ask, answer, check and note to
 //	            the directory, and claim and handoff, state of the run's announcement (§16.11), go to the directory's
-//	            runs (RECORD-M6-16) once a directory client is bound, else are refused as the writer refuses them
+//	            runs (directory_claim.go), refused as the writer refuses them while no directory client is bound
 //	approvals   approval_status: this daemon's ledger, a named approval's log polled first while it waits
 //	            (Sidecar.ApprovalStatus), then the approval family in the vault and team record for approvals the
 //	            ledger does not hold; rows carry no hash or signature
@@ -1330,8 +1330,16 @@ func (self *RecordProjection) Append(ctx context.Context, args *RecordAppendArgs
 	return result, nil
 }
 
-// A team-mode claim or handoff, state of the run's announcement (§16.11): the directory's runs take it once
-// RECORD-M6-16 binds them; until then refused as the writer refuses it.
+// A team-mode claim or handoff, state of the calling run's announcement (§16.11): the directory's runs take it
+// (directory_claim.go, RECORD-M6-16); with no directory client bound, refused as the writer refuses it.
 func (self *RecordProjection) appendTeamClaim(ctx context.Context, args *RecordAppendArgs, body *protocol.CoordinationBody, targets *RecordTargets) (*RecordAppendResult, error) {
-	return nil, fmt.Errorf("%w: %s", ErrRecordRouteAnnouncement, args.Kind)
+	directory := self.directory()
+	if directory == nil {
+		return nil, fmt.Errorf("%w: %s", ErrRecordRouteAnnouncement, args.Kind)
+	}
+	runs := directory.Runs()
+	if runs == nil {
+		return nil, fmt.Errorf("%w: %s", ErrRecordRouteAnnouncement, args.Kind)
+	}
+	return runs.Coordinate(ctx, args, targets, body)
 }

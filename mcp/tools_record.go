@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
 	"time"
 
@@ -39,9 +40,6 @@ import (
 
 // A row's time, as every record tool writes one: RFC 3339 in UTC with milliseconds.
 const mcpRecordTimeLayout = "2006-01-02T15:04:05.000Z"
-
-// What a page keeps back of ResultByteCount for the envelope's own keys and the cursor around its rows.
-const mcpRecordEnvelopeByteCount = 1024
 
 // untrusted's values, as §16.10 names them.
 const (
@@ -91,6 +89,10 @@ var (
 		"in a team network a claim or a handoff changes the calling run's announcement, which this daemon cannot file for the run now", false)
 	errMcpRecordState = NewMcpError(McpCodeInvalidArguments,
 		"state is pending, approved, denied, cancelled, expired, spent or uncertain", false)
+	errMcpRecordClaimsOff = NewMcpError(McpCodeFailedPrecondition,
+		"claims is off for this run's project, so it announces nothing and takes no claim or handoff: a person sets it with ur directory runs", false)
+	errMcpRecordClaimsFull = NewMcpError(McpCodeFailedPrecondition,
+		"the run's announcement holds its four claims: release one with a claim:<id> target and a past expires first", false)
 	// the guard's record row answers first; this is the projection's own refusal behind it
 	errMcpRecordKind = NewMcpError(McpCodeRefused, "record_append takes claim, handoff, ask, answer, check and note only", false)
 )
@@ -111,8 +113,12 @@ func mcpRecordError(err error) error {
 		return errMcpRecordKind
 	case errors.Is(err, sidecar.ErrRecordTargetsInvalid), errors.Is(err, sidecar.ErrRecordDraftInvalid):
 		return errMcpRecordTargets
-	case errors.Is(err, sidecar.ErrRecordRouteAnnouncement):
+	case errors.Is(err, sidecar.ErrRecordRouteAnnouncement), errors.Is(err, sidecar.ErrDirectoryRunUnknown):
 		return errMcpRecordAnnouncement
+	case errors.Is(err, sidecar.ErrDirectoryRunsClaimsOff):
+		return errMcpRecordClaimsOff
+	case errors.Is(err, sidecar.ErrDirectoryRunClaimsFull):
+		return errMcpRecordClaimsFull
 	case errors.Is(err, sidecar.ErrRecordProjectionNoTaint):
 		return errMcpTaintFailed
 	case errors.Is(err, sidecar.ErrApprovalNoState):
@@ -332,7 +338,7 @@ func mcpRecordRow(result *McpResult, row *sidecar.RecordQueryRow) (*mcpRecordRow
 // the result links to its entry's resource.
 func mcpRecordPageOut(result *McpResult, page *sidecar.RecordQueryPage, byteLimit int) *mcpRecordQueryOut {
 	out := &mcpRecordQueryOut{Rows: []*mcpRecordRowOut{}, NextCursor: page.NextCursor, Stale: page.Stale, UntrustedWithheld: page.WithheldCount}
-	byteCount := mcpRecordEnvelopeByteCount
+	byteCount := mcpRecordPageOverhead(page)
 	member := false
 	for i, row := range page.Rows {
 		rowOut, lowers := mcpRecordRow(result, row)
@@ -362,6 +368,33 @@ func mcpRecordPageOut(result *McpResult, page *sidecar.RecordQueryPage, byteLimi
 		result.Member()
 	}
 	return out
+}
+
+// The bytes a page's result holds besides its rows, measured rather than guessed: the envelope at its longest tags,
+// and the page's own keys with a cursor as long as any a row gives.
+func mcpRecordPageOverhead(page *sidecar.RecordQueryPage) int {
+	cursor := page.NextCursor
+	for _, row := range page.Rows {
+		if len(cursor) < len(row.Cursor) {
+			cursor = row.Cursor
+		}
+	}
+	data, err := json.Marshal(&mcpRecordQueryOut{Rows: []*mcpRecordRowOut{}, NextCursor: cursor, Stale: true, UntrustedWithheld: len(page.Rows)})
+	if err != nil {
+		return 0
+	}
+	envelope, err := json.Marshal(&mcpResultEnvelope{
+		Trust:        McpTrustUntrusted,
+		Source:       "record:" + page.Log.Name,
+		MeteredBytes: math.MaxInt64,
+		MarkerBroken: true,
+		Data:         json.RawMessage(data),
+	})
+	if err != nil {
+		return 0
+	}
+	// each row after the first adds its separating comma
+	return len(envelope) + len(page.Rows)
 }
 
 // The URI of a log's resource.
@@ -631,9 +664,10 @@ func addRecordTools(catalog *McpCatalog, recordOf mcpRecordOfFunction) {
 		if err != nil {
 			return nil, err
 		}
-		// a log §8 does not let this sidecar read gives no approval rows; the ledger is this daemon's own
+		// a log §8 does not let this sidecar read, or none at all yet, gives no approval rows; the ledger is this
+		// daemon's own
 		logs, err := mcpRecordAllowedLogs(record, catalog.clock, call)
-		if err != nil && !errors.Is(err, errMcpNotAllowed) {
+		if err != nil && !errors.Is(err, errMcpNotAllowed) && !errors.Is(err, errMcpRecordLog) {
 			return nil, err
 		}
 		args := &sidecar.RecordApprovalArgs{Logs: logs, LedgerOnly: len(logs) == 0, Cursor: in.Cursor}

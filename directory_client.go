@@ -72,6 +72,9 @@ type DirectoryClientArgs struct {
 	// (§16.11's default row): "" for none, and nil knows none, so the item names the repo by its kind and id until an
 	// admin announces it at a higher version.
 	RepoDisplayName func(repoId Id) string
+	// Each run's taint, which a run's item carries as written (directory_run.go, RECORD-M6-16); nil reads every run
+	// tainted.
+	Runs RecordRunView
 }
 
 // One network's team directory on this sidecar.
@@ -94,6 +97,8 @@ type DirectoryClient struct {
 	repoLabeled   func(repoId Id) bool
 	// what a repo predating the directory is announced under (DirectoryClientArgs.RepoDisplayName), nil for none
 	repoDisplayName func(repoId Id) string
+	// each run's taint, for a run's item (DirectoryClientArgs.Runs)
+	runView RecordRunView
 
 	syncLock sync.Mutex
 	// the record reader over the copy, replaced at a lost read
@@ -110,6 +115,9 @@ type DirectoryClient struct {
 	fold *DirectoryFold
 	// the highest version of each repo's item this client wrote, until the copy reads it back
 	repoWrittenVersions map[Id]uint64
+	// this sidecar's run announcements (directory_run.go, which no ios_extension leg links), made at the first Runs:
+	// held as any, so this file, which the forwarding leg links, names none of their types
+	runs any
 }
 
 // A client over args. Nothing is read until its first Sync.
@@ -144,6 +152,10 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 			return nil, err
 		}
 	}
+	runView := args.Runs
+	if runView == nil {
+		runView = RecordRunViewMissing{}
+	}
 	store := NewDirectoryStore(args.Store)
 	self := &DirectoryClient{
 		sidecarId:     args.SidecarId,
@@ -166,6 +178,7 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 		authFunc:      args.Auth,
 
 		repoDisplayName: args.RepoDisplayName,
+		runView:         runView,
 
 		repoWrittenVersions: map[Id]uint64{},
 	}
@@ -478,6 +491,7 @@ func (self *Sidecar) DirectoryClient() (*DirectoryClient, error) {
 		Log:            self.log,
 		Writer:         record.Writer(),
 		Redactor:       redactor,
+		Runs:           self,
 	})
 	if err != nil {
 		return nil, err
