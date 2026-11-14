@@ -323,11 +323,11 @@ func (self *testTlsWorld) send(t *testing.T, edge *sidecartest.StubSmtpEdge, pol
 		HeaderFromDomain: job.Preamble.HeaderFromDomain,
 		MessageByteCount: job.Preamble.MessageByteCount,
 		Flags:            flags,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := sidecar.ReadSmtpPreambleResult(sidecarConn)
+	result, err := sidecar.ReadSmtpPreambleResult(sidecarConn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

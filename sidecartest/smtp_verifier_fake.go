@@ -8,8 +8,10 @@
 //
 // Holding follows E3's shape by counts. The first HoldAfterClientRecords client records, the
 // handshake's, pass at once; every later one needs credit, and each verified part adds its
-// LastRecord-FirstRecord+1 records of credit and releases what was held, oldest first. A zero script
-// holds nothing. Safe for concurrent use; a session's methods may run one goroutine per direction.
+// LastRecord-FirstRecord+1 records of credit and releases what was held, oldest first; a part that opens
+// no record (LastRecord = FirstRecord - 1, DESIGN-DETAILS 3.2.5) adds none. A zero script holds nothing.
+// A script can refuse key sets, which HoldsKeySet and NewSmtpProofSession then answer as an edge
+// without that set does. Safe for concurrent use; a session's methods may run one goroutine per direction.
 
 package sidecartest
 
@@ -42,6 +44,19 @@ type FakeSmtpProofScript struct {
 	// The client record whose release makes MailForwarded true, the engine's cue to charge a unit.
 	// 0 never.
 	MailForwardedAtClientRecord int
+	// Key sets the verifier does not hold: HoldsKeySet answers false and NewSmtpProofSession
+	// ErrSmtpProofKeySet for a preamble naming one. Every other set, none included, is held.
+	RefuseKeySets [][]byte
+}
+
+// Whether the script holds keySet.
+func (self *FakeSmtpProofScript) holdsKeySet(keySet []byte) bool {
+	for _, refused := range self.RefuseKeySets {
+		if bytes.Equal(refused, keySet) {
+			return false
+		}
+	}
+	return true
 }
 
 // One call a session took, with what it returned.
@@ -95,13 +110,24 @@ func (self *FakeSmtpProofVerifier) Sessions() []*FakeSmtpProofSession {
 	return append([]*FakeSmtpProofSession(nil), self.sessions...)
 }
 
+// HoldsKeySet of sidecar.SmtpProofVerifier, by the script.
+func (self *FakeSmtpProofVerifier) HoldsKeySet(keySet []byte) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.script.holdsKeySet(keySet)
+}
+
 func (self *FakeSmtpProofVerifier) NewSmtpProofSession(preamble *sidecar.SmtpProofPreamble) (sidecar.SmtpProofSession, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.refuseSessions != nil {
 		return nil, self.refuseSessions
 	}
+	if !self.script.holdsKeySet(preamble.ProofKeySet) {
+		return nil, sidecar.ErrSmtpProofKeySet
+	}
 	keptPreamble := *preamble
+	keptPreamble.ProofKeySet = bytes.Clone(preamble.ProofKeySet)
 	session := &FakeSmtpProofSession{script: self.script, preamble: &keptPreamble}
 	self.sessions = append(self.sessions, session)
 	return session, nil
@@ -161,6 +187,8 @@ func (self *FakeSmtpProofSession) recordWithLock(call *FakeSmtpProofCall) {
 		part := *call.Part
 		part.SendId = bytes.Clone(call.Part.SendId)
 		part.Proof = bytes.Clone(call.Part.Proof)
+		part.KeyCommitment = bytes.Clone(call.Part.KeyCommitment)
+		part.Carry = bytes.Clone(call.Part.Carry)
 		part.Records = nil
 		for _, record := range call.Part.Records {
 			part.Records = append(part.Records, bytes.Clone(record))

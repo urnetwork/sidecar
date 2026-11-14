@@ -25,6 +25,22 @@
 #     result    pass or fail
 #     sources_sha256  the digest of the sources when it ran, as modelled_test.go computes it
 #     states, depth, seconds  what TLC reported, summed over the mode's runs
+#
+# details       one per model of DESIGN-DETAILS.md that stands alone under details/: no spec in this
+#               directory keeps its objects, so it is no spec's companion, and its own run script is its
+#               check. At a gate, model_test.go runs each group of the script whose newest passing run is
+#               not at the model's sources, and the gate fails, naming the model not run, where the owner's
+#               tla2tools.jar is missing; a merge, and make check, run none.
+#   model       details/<Name>, whose spec is details/<Name>.tla.
+#   run         its script under details/, run as <run> <track> <group>, which runs the owner's TLC
+#               (ROOT/.stack/tools/tlc, ROOT being the script's own) and keeps TLC's state under
+#               ROOT/.stack/scratch by the track's name: design, the configurations that must pass; twins,
+#               each of which must end with the invariant its cfg names violated; and reach, each of which
+#               must reach the state its cfg's last invariant denies.
+#   owners, milestones, objects, sources, exclude and runs as a model's. The spec, its cfgs and its run
+#               script count among the sources, and every glob matches a file. A run's mode is the group it
+#               ran, its tlc the revision the script's verdict lines name, and its states and depth what
+#               those lines report, summed and at most.
 
 models:
   - spec: EvsCommit
@@ -64,8 +80,8 @@ models:
   - spec: IndexRollup
     owners: [SEARCH-M10-02, SEARCH-M10-46]
     milestones: [M10]
-    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and kept slots and large entries on its own bases under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written"
-    companions: [details/IndexMerge]
+    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and kept slots and large entries on its own bases under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written, and details/IndexErase.tla keeps an erasure under them, of a path document whose edit may rest on the version a CUT lists and of a run card, beside the writers that keep pushing (DESIGN-DETAILS.md section 15)"
+    companions: [details/IndexMerge, details/IndexErase]
     sources:
       - sidecar/sidecartest/model/IndexRollup.tla
       - sidecar/sidecartest/model/IndexRollup.cfg
@@ -73,6 +89,9 @@ models:
       - sidecar/sidecartest/model/details/IndexMerge.tla
       - sidecar/sidecartest/model/details/IndexMerge*.cfg
       - sidecar/sidecartest/model/details/run-indexmerge.sh
+      - sidecar/sidecartest/model/details/IndexErase.tla
+      - sidecar/sidecartest/model/details/IndexErase*.cfg
+      - sidecar/sidecartest/model/details/run-indexerase.sh
       - sidecar/evs_index_*.go
       - sidecar/search_*.go
       - sidecar/indexer_*.go
@@ -80,3 +99,45 @@ models:
     runs:
       - {at: 2026-11-09, commit: c9e4cdea7ad12d7d4085b5ff7df0ca8a30187b9a, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: d009e271be94e34cb43dfdc846845a2f65b481ddbd6721982a9027a3f266eef6, states: 531540, depth: 0, seconds: 36}
       - {at: 2026-11-11, commit: 48cdcc3b1187664bb2742c1c2aab86e39cbfa85f, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 8e853774f013ed753b55a86a16f6fdc37a37c8ed8ed6993be4fab42567cbd7dc, states: 1481149, depth: 20, seconds: 1103}
+
+details:
+  - model: details/BridgeVoid
+    run: details/run-bridgevoid.sh
+    owners: [BRIDGE-M4-23]
+    milestones: [M4]
+    objects: "a network's config log of bridge filings and bases with the times api sequenced them at, each filing sealed to a formed generation, to one that never forms, or to the next under a key its filer may later claim that generation with; gkm's generations formed in order, each with a GenRotate time within Skew of its clock; and two readers, both config writers with waits of their own, that judge filings, publish bases at the fold, voiding a body sealed above every formed generation once it has waited, and check each other's bases, one at the tip and one that may fall behind in the log or in the generations it holds (DESIGN-DETAILS.md 12.3's void at the fold, QD-761)"
+    sources:
+      - sidecar/sidecartest/model/details/BridgeVoid.tla
+      - sidecar/sidecartest/model/details/BridgeVoid*.cfg
+      - sidecar/sidecartest/model/details/run-bridgevoid.sh
+      - sidecar/bridge_ledger*.go
+      - sidecar/bridge_statement*.go
+    exclude: []
+    runs: []
+
+  - model: details/PrefixRules
+    run: details/run-prefixrules.sh
+    owners: [TEST-M6-03]
+    milestones: [M6]
+    objects: "one repo's authorization log with prefix rule sets of three kinds (every path, one path, nothing) and bases, and one file-mode ref with two paths, one under the prefix a set may name, pushed by an admin's device, a design device the sets hold to their paths and a writer that sends any change with any row under any pin evs takes, each push with its pin, its change to the path's content and row, and its lineage; evs's fence on the head's pin and, for the ref's first push, on the newest set; the readers (the long-running one, a device started at each base, a mirror and a head reader started at each version) are functions of the log and the ref (DESIGN-DETAILS.md 16.3)"
+    sources:
+      - sidecar/sidecartest/model/details/PrefixRules.tla
+      - sidecar/sidecartest/model/details/PrefixRules*.cfg
+      - sidecar/sidecartest/model/details/run-prefixrules.sh
+    exclude: []
+    runs:
+      - {at: 2026-11-13, commit: fefc67b9ffb9370e535af04c3c3b96621a89168f, tlc: d8fb231, mode: design, result: pass, sources_sha256: 2bf5b9a3137f5b79241386b56887b6d866baddd9f5e655c6e7e3c13a4920327d, states: 938648, depth: 6, seconds: 20}
+      - {at: 2026-11-13, commit: fefc67b9ffb9370e535af04c3c3b96621a89168f, tlc: d8fb231, mode: twins, result: pass, sources_sha256: 2bf5b9a3137f5b79241386b56887b6d866baddd9f5e655c6e7e3c13a4920327d, states: 2853, depth: 5, seconds: 3}
+      - {at: 2026-11-13, commit: fefc67b9ffb9370e535af04c3c3b96621a89168f, tlc: d8fb231, mode: reach, result: pass, sources_sha256: 2bf5b9a3137f5b79241386b56887b6d866baddd9f5e655c6e7e3c13a4920327d, states: 2180, depth: 4, seconds: 7}
+
+  - model: details/CertOrder
+    run: details/run-certorder.sh
+    owners: [TLS-M6-05]
+    milestones: [M6]
+    objects: "one customer ACME account's lock, the state, recorded order and registered order of two rows naming one host, the CA's orders, which it validates, fails, expires or hands back at will, and what each ordering desktop remembers, where any step may be followed by a crash or by the lease lapsing while its holder goes on, and a row's device may be removed at any step (DESIGN-DETAILS.md 17.3)"
+    sources:
+      - sidecar/sidecartest/model/details/CertOrder.tla
+      - sidecar/sidecartest/model/details/CertOrder*.cfg
+      - sidecar/sidecartest/model/details/run-certorder.sh
+    exclude: []
+    runs: []

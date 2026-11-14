@@ -104,9 +104,10 @@ var x9Rows = []x9Row{
 	},
 	{id: "C4", disposition: x9Later, task: "none: after §18's HTTPS-only worker (owner decision 26)"},
 	{
-		id: "C5", disposition: x9Lands, milestone: 4, task: "BRIDGE-M4-01, BRIDGE-M4-02",
+		// with its extension, the egress mark that keeps ur tun's daemon off its own default route under exits
+		id: "C5", disposition: x9Lands, milestone: 4, task: "BRIDGE-M4-01, BRIDGE-M4-02; the egress mark, linux-egress-fwmark (QD-800)",
 		marker: "EgressHook", markerKind: x9MarkerName,
-		defaultOffTests: []string{"TestEgressHookNilHookResolvesWithoutAllocation"},
+		defaultOffTests: []string{"TestEgressHookNilHookResolvesWithoutAllocation", "TestEgressMarkIsOffByDefault"},
 	},
 	{
 		id: "C6a", disposition: x9Lands, milestone: 4, task: "BRIDGE-M4-03",

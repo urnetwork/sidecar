@@ -777,10 +777,11 @@ message EvsDropPreviewReply {
 message EvsDropPreviewPath { bool list_match = 1; uint32 count = 2; repeated uint32 map_parts = 3; bool linked = 4; }
 
 // sidecar/protocol/smtp.proto
-// §6.11's edge codes, numbers as written.
+// §6.11's edge codes, numbers as written, and DESIGN-DETAILS 3.2.5's KEYS (QD-712).
 enum SmtpPreambleCode {
   SMTP_PREAMBLE_CODE_UNSPECIFIED = 0; SMTP_PREAMBLE_OK = 1; SMTP_PREAMBLE_HALTED = 2; SMTP_PREAMBLE_QUOTA = 3;
   SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
+  SMTP_PREAMBLE_KEYS = 8;
 }
 enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
 // §14.8's self-report and §14.14's status, as plan-SMTP-wire-gaps#1 and #2 number them.
@@ -1162,6 +1163,33 @@ var testFenceAdditions = []struct {
 		message:  "CanonicalAction",
 		field:    testFenceField{name: "egress_mode", number: 39, typeName: "uint32"},
 		question: "bridge-m4-19-egress-change-action",
+	},
+	// QD-712 and QD-716: parts bound to one key part (DESIGN-DETAILS 3.2.5), the key set a connection proves under,
+	// the key commitment, each part's reply count, the header block's record count and a scan's carry
+	{
+		message:  "SmtpPreamble",
+		field:    testFenceField{name: "proof_key_set", number: 10, typeName: "bytes"},
+		question: "details-3-metadata-rows",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "key_commitment", number: 10, typeName: "bytes"},
+		question: "details-3-key-commitment",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "reply_count", number: 11, typeName: "uint32"},
+		question: "details-3-key-commitment",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "header_record_count", number: 12, typeName: "uint32"},
+		question: "details-3-key-commitment",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "carry", number: 13, typeName: "bytes"},
+		question: "details-3-key-commitment",
 	},
 }
 

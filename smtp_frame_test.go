@@ -20,6 +20,9 @@ import (
 // The first octets of a TLS ClientHello record, which follow the frames on the stream.
 var testSmtpTlsStart = []byte{0x16, 0x03, 0x01, 0x02, 0x00}
 
+// The frame's body bound, plan-SMTP-wire-gaps#3's, which DefaultSmtpFrameSettings gives.
+const testSmtpFrameMaxBodyByteCount = 64 * 1024
+
 func testSmtpPreamble() *protocol.SmtpPreamble {
 	return &protocol.SmtpPreamble{
 		Version:          1,
@@ -87,7 +90,7 @@ func (self *testCountingWriter) Write(data []byte) (int, error) {
 
 func TestSmtpPreambleRoundTripsAsAFrameAndLeavesTheTlsBytes(t *testing.T) {
 	stream := &testCountingWriter{}
-	if err := WriteSmtpPreamble(stream, testSmtpPreamble()); err != nil {
+	if err := WriteSmtpPreamble(stream, testSmtpPreamble(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if stream.writeCount != 1 {
@@ -95,7 +98,7 @@ func TestSmtpPreambleRoundTripsAsAFrameAndLeavesTheTlsBytes(t *testing.T) {
 	}
 	stream.Write(testSmtpTlsStart)
 	reader := bytes.NewReader(stream.Bytes())
-	preamble, err := ReadSmtpPreamble(reader)
+	preamble, err := ReadSmtpPreamble(reader, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,13 +113,13 @@ func TestSmtpPreambleRoundTripsAsAFrameAndLeavesTheTlsBytes(t *testing.T) {
 
 func TestSmtpPreambleResultRoundTripsAsAFrameAndLeavesTheTlsBytes(t *testing.T) {
 	stream := &bytes.Buffer{}
-	if err := WriteSmtpPreambleResult(stream, testSmtpPreambleResult()); err != nil {
+	if err := WriteSmtpPreambleResult(stream, testSmtpPreambleResult(), nil); err != nil {
 		t.Fatal(err)
 	}
 	frameByteCount := stream.Len()
 	stream.Write(testSmtpTlsStart)
 	reader := &testCountingReader{reader: bytes.NewReader(stream.Bytes()), limit: frameByteCount}
-	result, err := ReadSmtpPreambleResult(reader)
+	result, err := ReadSmtpPreambleResult(reader, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,15 +133,15 @@ func TestSmtpPreambleResultRoundTripsAsAFrameAndLeavesTheTlsBytes(t *testing.T) 
 
 func TestSmtpFrameTakesABodyAtTheBound(t *testing.T) {
 	stream := &bytes.Buffer{}
-	body := bytes.Repeat([]byte{0}, SmtpFrameMaxBodyByteCount)
-	if err := WriteSmtpFrame(stream, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE, Body: body}); err != nil {
+	body := bytes.Repeat([]byte{0}, testSmtpFrameMaxBodyByteCount)
+	if err := WriteSmtpFrame(stream, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE, Body: body}, nil); err != nil {
 		t.Fatal(err)
 	}
-	frame, err := ReadSmtpFrame(stream, protocol.MessageType_SMTP_PREAMBLE)
+	frame, err := ReadSmtpFrame(stream, protocol.MessageType_SMTP_PREAMBLE, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(frame.Body) != SmtpFrameMaxBodyByteCount {
+	if len(frame.Body) != testSmtpFrameMaxBodyByteCount {
 		t.Errorf("%d B", len(frame.Body))
 	}
 }
@@ -146,10 +149,10 @@ func TestSmtpFrameTakesABodyAtTheBound(t *testing.T) {
 // plan-SMTP-wire-gaps#3: a bad length resets, and nothing is allocated for a length past the bound,
 // nor read past its header.
 func TestSmtpFrameRefusesALengthPastTheBoundBeforeAllocating(t *testing.T) {
-	for _, bodyByteCount := range []uint32{SmtpFrameMaxBodyByteCount + 1, 1024 * 1024, 0xFFFFFFFF} {
+	for _, bodyByteCount := range []uint32{testSmtpFrameMaxBodyByteCount + 1, 1024 * 1024, 0xFFFFFFFF} {
 		stream := append(testSmtpFrameHeader(bodyByteCount, protocol.MessageType_SMTP_PREAMBLE), make([]byte, 1024)...)
 		reader := &testCountingReader{reader: bytes.NewReader(stream), limit: len(stream)}
-		if _, err := ReadSmtpFrame(reader, protocol.MessageType_SMTP_PREAMBLE); !errors.Is(err, ErrSmtpFrameProtocol) {
+		if _, err := ReadSmtpFrame(reader, protocol.MessageType_SMTP_PREAMBLE, nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 			t.Errorf("%d B: %v", bodyByteCount, err)
 		}
 		if reader.readCount != SmtpFrameHeaderByteCount {
@@ -162,7 +165,7 @@ func TestSmtpFrameRefusesALengthPastTheBoundBeforeAllocating(t *testing.T) {
 	runtime.ReadMemStats(&before)
 	const readCount = 1000
 	for range readCount {
-		ReadSmtpFrame(bytes.NewReader(header), protocol.MessageType_SMTP_PREAMBLE)
+		ReadSmtpFrame(bytes.NewReader(header), protocol.MessageType_SMTP_PREAMBLE, nil)
 	}
 	runtime.ReadMemStats(&after)
 	// an error and a reader a call, never a body: a 4 GiB claim allocating anything for itself would
@@ -184,33 +187,33 @@ func TestSmtpFrameRefusesATypeThatIsNotItsOwn(t *testing.T) {
 		{frameType: protocol.MessageType_MESSAGE_TYPE_NONE, want: protocol.MessageType_SMTP_PREAMBLE},
 	} {
 		stream := testSmtpFrameHeader(0, c.frameType)
-		if _, err := ReadSmtpFrame(bytes.NewReader(stream), c.want); !errors.Is(err, ErrSmtpFrameProtocol) {
+		if _, err := ReadSmtpFrame(bytes.NewReader(stream), c.want, nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 			t.Errorf("%s for %s: %v", c.frameType, c.want, err)
 		}
 	}
 	// and nothing but the two frames may be written as one
 	for _, frameType := range []protocol.MessageType{protocol.MessageType_SMTP_PROOF, protocol.MessageType_SMTP_OUTCOME, protocol.MessageType_MESSAGE_TYPE_NONE} {
-		if err := WriteSmtpFrame(io.Discard, &SmtpFrame{Type: frameType}); !errors.Is(err, ErrSmtpFrameProtocol) {
+		if err := WriteSmtpFrame(io.Discard, &SmtpFrame{Type: frameType}, nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 			t.Errorf("wrote %s: %v", frameType, err)
 		}
 	}
-	if err := WriteSmtpFrame(io.Discard, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE, Body: make([]byte, SmtpFrameMaxBodyByteCount+1)}); !errors.Is(err, ErrSmtpFrameProtocol) {
+	if err := WriteSmtpFrame(io.Discard, &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE, Body: make([]byte, testSmtpFrameMaxBodyByteCount+1)}, nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 		t.Errorf("wrote a body past the bound: %v", err)
 	}
 }
 
 func TestSmtpFrameEndingEarlyIsAReset(t *testing.T) {
-	if _, err := ReadSmtpFrame(bytes.NewReader(nil), protocol.MessageType_SMTP_PREAMBLE); err != io.EOF {
+	if _, err := ReadSmtpFrame(bytes.NewReader(nil), protocol.MessageType_SMTP_PREAMBLE, nil); err != io.EOF {
 		t.Errorf("an empty stream: %v", err)
 	}
 	header := testSmtpFrameHeader(10, protocol.MessageType_SMTP_PREAMBLE)
-	if _, err := ReadSmtpFrame(bytes.NewReader(header[:3]), protocol.MessageType_SMTP_PREAMBLE); err != io.ErrUnexpectedEOF {
+	if _, err := ReadSmtpFrame(bytes.NewReader(header[:3]), protocol.MessageType_SMTP_PREAMBLE, nil); err != io.ErrUnexpectedEOF {
 		t.Errorf("half a header: %v", err)
 	}
-	if _, err := ReadSmtpFrame(bytes.NewReader(header), protocol.MessageType_SMTP_PREAMBLE); err != io.ErrUnexpectedEOF {
+	if _, err := ReadSmtpFrame(bytes.NewReader(header), protocol.MessageType_SMTP_PREAMBLE, nil); err != io.ErrUnexpectedEOF {
 		t.Errorf("no body: %v", err)
 	}
-	if _, err := ReadSmtpFrame(bytes.NewReader(append(header, 1, 2, 3)), protocol.MessageType_SMTP_PREAMBLE); err != io.ErrUnexpectedEOF {
+	if _, err := ReadSmtpFrame(bytes.NewReader(append(header, 1, 2, 3)), protocol.MessageType_SMTP_PREAMBLE, nil); err != io.ErrUnexpectedEOF {
 		t.Errorf("part of a body: %v", err)
 	}
 }
@@ -219,19 +222,103 @@ func TestSmtpFrameBodyThatDoesNotDecodeIsAReset(t *testing.T) {
 	// a field tag naming wire type 7, which no encoding has
 	garbage := []byte{0x0f, 0xff}
 	stream := append(testSmtpFrameHeader(uint32(len(garbage)), protocol.MessageType_SMTP_PREAMBLE), garbage...)
-	if _, err := ReadSmtpPreamble(bytes.NewReader(stream)); !errors.Is(err, ErrSmtpFrameProtocol) {
+	if _, err := ReadSmtpPreamble(bytes.NewReader(stream), nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 		t.Errorf("preamble: %v", err)
 	}
 	stream = append(testSmtpFrameHeader(uint32(len(garbage)), protocol.MessageType_SMTP_PREAMBLE_RESULT), garbage...)
-	if _, err := ReadSmtpPreambleResult(bytes.NewReader(stream)); !errors.Is(err, ErrSmtpFrameProtocol) {
+	if _, err := ReadSmtpPreambleResult(bytes.NewReader(stream), nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 		t.Errorf("result: %v", err)
+	}
+}
+
+// DESIGN-DETAILS 3.2.5: the key set a connection is proven under travels in the preamble, and a preamble
+// without one reads back without one.
+func TestSmtpPreambleRoundTripsWithAndWithoutItsKeySet(t *testing.T) {
+	for _, keySet := range [][]byte{nil, bytes.Repeat([]byte{0xa5}, 32)} {
+		preamble := testSmtpPreamble()
+		preamble.ProofKeySet = keySet
+		stream := &bytes.Buffer{}
+		if err := WriteSmtpPreamble(stream, preamble, nil); err != nil {
+			t.Fatal(err)
+		}
+		read, err := ReadSmtpPreamble(stream, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !proto.Equal(read, preamble) || !bytes.Equal(read.GetProofKeySet(), keySet) {
+			t.Errorf("a %d-octet key set read back as %x", len(keySet), read.GetProofKeySet())
+		}
+	}
+	// a preamble from a sender before the field decodes, with no key set
+	old := testSmtpPreamble()
+	body, err := proto.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := append(testSmtpFrameHeader(uint32(len(body)), protocol.MessageType_SMTP_PREAMBLE), body...)
+	read, err := ReadSmtpPreamble(bytes.NewReader(stream), nil)
+	if err != nil || len(read.GetProofKeySet()) != 0 {
+		t.Errorf("an old preamble: %x, %v", read.GetProofKeySet(), err)
+	}
+}
+
+// DESIGN-DETAILS 3.2.5: KEYS is a code both ends know, an answer and no protocol error, while 0 stays one.
+func TestSmtpPreambleResultKeysIsAKnownCode(t *testing.T) {
+	result := &protocol.SmtpPreambleResult{Code: uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS)}
+	stream := &bytes.Buffer{}
+	if err := WriteSmtpPreambleResult(stream, result, nil); err != nil {
+		t.Fatal(err)
+	}
+	read, err := ReadSmtpPreambleResult(stream, nil)
+	if err != nil || read.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS) {
+		t.Fatalf("KEYS read back as %d: %v", read.GetCode(), err)
+	}
+	if protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS != 8 {
+		t.Errorf("KEYS is %d", protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS)
+	}
+	zero := &protocol.SmtpPreambleResult{}
+	if err := WriteSmtpPreambleResult(io.Discard, zero, nil); !errors.Is(err, ErrSmtpFrameProtocol) {
+		t.Errorf("wrote code 0: %v", err)
+	}
+}
+
+// The bound is the settings' (QD-702): the defaults hold 64 KiB, and a tighter bound refuses what passes
+// it in both directions, before allocating for a read.
+func TestSmtpFrameBoundIsItsSettings(t *testing.T) {
+	if bound := DefaultSmtpFrameSettings().MaxBodyByteCount; bound != testSmtpFrameMaxBodyByteCount {
+		t.Errorf("the default bound is %d", bound)
+	}
+	tight := DefaultSmtpFrameSettings()
+	tight.MaxBodyByteCount = 16
+	frame := &SmtpFrame{Type: protocol.MessageType_SMTP_PREAMBLE, Body: make([]byte, 17)}
+	if err := WriteSmtpFrame(io.Discard, frame, tight); !errors.Is(err, ErrSmtpFrameProtocol) {
+		t.Errorf("wrote past a tight bound: %v", err)
+	}
+	stream := &bytes.Buffer{}
+	if err := WriteSmtpFrame(stream, frame, nil); err != nil {
+		t.Fatal(err)
+	}
+	reader := &testCountingReader{reader: bytes.NewReader(stream.Bytes()), limit: stream.Len()}
+	if _, err := ReadSmtpFrame(reader, protocol.MessageType_SMTP_PREAMBLE, tight); !errors.Is(err, ErrSmtpFrameProtocol) {
+		t.Errorf("read past a tight bound: %v", err)
+	}
+	if reader.readCount != SmtpFrameHeaderByteCount {
+		t.Errorf("read %d octets of a refused frame", reader.readCount)
+	}
+	frame.Body = frame.Body[:16]
+	stream.Reset()
+	if err := WriteSmtpFrame(stream, frame, tight); err != nil {
+		t.Fatal(err)
+	}
+	if read, err := ReadSmtpFrame(stream, protocol.MessageType_SMTP_PREAMBLE, tight); err != nil || len(read.Body) != 16 {
+		t.Errorf("a body at a tight bound: %v", err)
 	}
 }
 
 // §6.11: a result code of 0 is a protocol error, never retry, refusal or success, and so is one this
 // version does not know.
 func TestSmtpPreambleResultRefusesCodeZeroAndUnknownCodes(t *testing.T) {
-	for _, code := range []uint32{0, 8, 0xFFFFFFFF} {
+	for _, code := range []uint32{0, 9, 0xFFFFFFFF} {
 		result := testSmtpPreambleResult()
 		result.Code = code
 		body, err := proto.Marshal(result)
@@ -239,10 +326,10 @@ func TestSmtpPreambleResultRefusesCodeZeroAndUnknownCodes(t *testing.T) {
 			t.Fatal(err)
 		}
 		stream := append(testSmtpFrameHeader(uint32(len(body)), protocol.MessageType_SMTP_PREAMBLE_RESULT), body...)
-		if _, err := ReadSmtpPreambleResult(bytes.NewReader(stream)); !errors.Is(err, ErrSmtpFrameProtocol) {
+		if _, err := ReadSmtpPreambleResult(bytes.NewReader(stream), nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 			t.Errorf("read code %d: %v", code, err)
 		}
-		if err := WriteSmtpPreambleResult(io.Discard, result); !errors.Is(err, ErrSmtpFrameProtocol) {
+		if err := WriteSmtpPreambleResult(io.Discard, result, nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 			t.Errorf("wrote code %d: %v", code, err)
 		}
 	}
@@ -253,11 +340,11 @@ func TestSmtpPreambleResultRefusesCodeZeroAndUnknownCodes(t *testing.T) {
 		result := testSmtpPreambleResult()
 		result.Code = uint32(code)
 		stream := &bytes.Buffer{}
-		if err := WriteSmtpPreambleResult(stream, result); err != nil {
+		if err := WriteSmtpPreambleResult(stream, result, nil); err != nil {
 			t.Errorf("code %d: %v", code, err)
 			continue
 		}
-		if _, err := ReadSmtpPreambleResult(stream); err != nil {
+		if _, err := ReadSmtpPreambleResult(stream, nil); err != nil {
 			t.Errorf("code %d: %v", code, err)
 		}
 	}
@@ -267,15 +354,15 @@ func TestSmtpPreambleResultRefusesCodeZeroAndUnknownCodes(t *testing.T) {
 // and everything else arrives as written.
 func TestSmtpPreambleResultDropsAChainPastTheBound(t *testing.T) {
 	result := testSmtpPreambleResult()
-	result.DnssecChain = bytes.Repeat([]byte{9}, SmtpFrameMaxBodyByteCount)
+	result.DnssecChain = bytes.Repeat([]byte{9}, testSmtpFrameMaxBodyByteCount)
 	stream := &bytes.Buffer{}
-	if err := WriteSmtpPreambleResult(stream, result); err != nil {
+	if err := WriteSmtpPreambleResult(stream, result, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.DnssecChain) != SmtpFrameMaxBodyByteCount {
+	if len(result.DnssecChain) != testSmtpFrameMaxBodyByteCount {
 		t.Error("the writer changed its argument")
 	}
-	read, err := ReadSmtpPreambleResult(stream)
+	read, err := ReadSmtpPreambleResult(stream, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,20 +376,20 @@ func TestSmtpPreambleResultDropsAChainPastTheBound(t *testing.T) {
 
 	// a chain that fits goes as it is
 	result = testSmtpPreambleResult()
-	result.DnssecChain = bytes.Repeat([]byte{9}, SmtpFrameMaxBodyByteCount/2)
+	result.DnssecChain = bytes.Repeat([]byte{9}, testSmtpFrameMaxBodyByteCount/2)
 	stream.Reset()
-	if err := WriteSmtpPreambleResult(stream, result); err != nil {
+	if err := WriteSmtpPreambleResult(stream, result, nil); err != nil {
 		t.Fatal(err)
 	}
-	if read, err := ReadSmtpPreambleResult(stream); err != nil || len(read.DnssecChain) != SmtpFrameMaxBodyByteCount/2 {
+	if read, err := ReadSmtpPreambleResult(stream, nil); err != nil || len(read.DnssecChain) != testSmtpFrameMaxBodyByteCount/2 {
 		t.Errorf("a chain that fits: %v", err)
 	}
 
 	// what is past the bound without a chain is refused, not cut
 	result = testSmtpPreambleResult()
 	result.DnssecChain = nil
-	result.EhloKeywords = []string{strings.Repeat("K", SmtpFrameMaxBodyByteCount)}
-	if err := WriteSmtpPreambleResult(io.Discard, result); !errors.Is(err, ErrSmtpFrameProtocol) {
+	result.EhloKeywords = []string{strings.Repeat("K", testSmtpFrameMaxBodyByteCount)}
+	if err := WriteSmtpPreambleResult(io.Discard, result, nil); !errors.Is(err, ErrSmtpFrameProtocol) {
 		t.Errorf("keywords past the bound: %v", err)
 	}
 }
@@ -311,22 +398,30 @@ func TestSmtpPreambleResultDropsAChainPastTheBound(t *testing.T) {
 // it, and whatever reads is exactly what a writer writes for it, with nothing read past it.
 func FuzzSmtpFrame(f *testing.F) {
 	preamble := &bytes.Buffer{}
-	WriteSmtpPreamble(preamble, testSmtpPreamble())
+	WriteSmtpPreamble(preamble, testSmtpPreamble(), nil)
 	result := &bytes.Buffer{}
-	WriteSmtpPreambleResult(result, testSmtpPreambleResult())
+	WriteSmtpPreambleResult(result, testSmtpPreambleResult(), nil)
+	keyed := &bytes.Buffer{}
+	keyedPreamble := testSmtpPreamble()
+	keyedPreamble.ProofKeySet = bytes.Repeat([]byte{0xa5}, 32)
+	WriteSmtpPreamble(keyed, keyedPreamble, nil)
+	keys := &bytes.Buffer{}
+	WriteSmtpPreambleResult(keys, &protocol.SmtpPreambleResult{Code: uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS)}, nil)
 	f.Add(preamble.Bytes())
 	f.Add(result.Bytes())
+	f.Add(keyed.Bytes())
+	f.Add(keys.Bytes())
 	f.Add(append(slices.Clone(preamble.Bytes()), testSmtpTlsStart...))
 	f.Add(testSmtpFrameHeader(0, protocol.MessageType_SMTP_PREAMBLE))
-	f.Add(testSmtpFrameHeader(SmtpFrameMaxBodyByteCount+1, protocol.MessageType_SMTP_PREAMBLE))
+	f.Add(testSmtpFrameHeader(testSmtpFrameMaxBodyByteCount+1, protocol.MessageType_SMTP_PREAMBLE))
 	f.Add(testSmtpFrameHeader(0xFFFFFFFF, protocol.MessageType_SMTP_PREAMBLE_RESULT))
 	f.Add(testSmtpFrameHeader(4, protocol.MessageType_SMTP_PROOF))
 	f.Add(preamble.Bytes()[:preamble.Len()-1])
 	f.Fuzz(func(t *testing.T, data []byte) {
 		for _, want := range []protocol.MessageType{protocol.MessageType_SMTP_PREAMBLE, protocol.MessageType_SMTP_PREAMBLE_RESULT} {
 			reader := bytes.NewReader(data)
-			frame, err := ReadSmtpFrame(reader, want)
-			if 6 <= len(data) && SmtpFrameMaxBodyByteCount < binary.BigEndian.Uint32(data[0:4]) {
+			frame, err := ReadSmtpFrame(reader, want, nil)
+			if 6 <= len(data) && testSmtpFrameMaxBodyByteCount < binary.BigEndian.Uint32(data[0:4]) {
 				if !errors.Is(err, ErrSmtpFrameProtocol) {
 					t.Fatalf("a length past the bound: %v", err)
 				}
@@ -337,19 +432,19 @@ func FuzzSmtpFrame(f *testing.F) {
 			if err != nil {
 				continue
 			}
-			if frame.Type != want || SmtpFrameMaxBodyByteCount < len(frame.Body) {
+			if frame.Type != want || testSmtpFrameMaxBodyByteCount < len(frame.Body) {
 				t.Fatalf("read a %s frame of %d B", frame.Type, len(frame.Body))
 			}
 			written := &bytes.Buffer{}
-			if err := WriteSmtpFrame(written, frame); err != nil {
+			if err := WriteSmtpFrame(written, frame, nil); err != nil {
 				t.Fatal(err)
 			}
 			if consumed := len(data) - reader.Len(); !bytes.Equal(written.Bytes(), data[:consumed]) {
 				t.Fatalf("read %d octets that write as %d others", consumed, written.Len())
 			}
 		}
-		ReadSmtpPreamble(bytes.NewReader(data))
-		if result, err := ReadSmtpPreambleResult(bytes.NewReader(data)); err == nil && !smtpPreambleCodeKnown(result.GetCode()) {
+		ReadSmtpPreamble(bytes.NewReader(data), nil)
+		if result, err := ReadSmtpPreambleResult(bytes.NewReader(data), nil); err == nil && !smtpPreambleCodeKnown(result.GetCode()) {
 			t.Fatalf("read code %d", result.GetCode())
 		}
 	})

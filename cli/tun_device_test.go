@@ -3,9 +3,10 @@
 // urTunLinks. A burst routes through the bridge, the default route dropped and counted and a building link's refusal
 // counted; a reply is copied behind the device's headroom; a sync sets the device to the bridge's addresses, routes and
 // zones, and follows each change; the local addresses reach the bridge without the bridge's own resolvers and only when
-// they change; close removes everything on each path; the default route never joins under exits; and the daemon
-// refuses a platform with no tun, a network with no bridge, a second network and an app's held block. Every wait is on
-// a channel, bounded by urTestTimeout.
+// they change; close removes everything on each path; the default route rides the tun under exits and leaves it off
+// exits, a platform's refusal holding the exits with its reason and the tun up; and the daemon refuses a platform with
+// no tun, a network with no bridge, a second network and an app's held block. Every wait is on a channel, bounded by
+// urTestTimeout.
 
 package main
 
@@ -14,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"slices"
@@ -56,8 +58,14 @@ type testTunInterface struct {
 	resolverSets  int
 	conflictCount int
 	closeCount    int
+	// whether the default route rides the device, and each SetExits asked
+	exits     bool
+	exitsSets []bool
 	// what SetAddresses answers, nil for success
 	addressErr error
+	// what SetExits answers under exits, and off them; nil puts the route on, or takes it off
+	exitsErr      error
+	exitsClearErr error
 }
 
 var _ urTunInterface = (*testTunInterface)(nil)
@@ -138,10 +146,33 @@ func (self *testTunInterface) SetResolver(resolver netip.Addr, zones []string) (
 	return "", nil
 }
 
+func (self *testTunInterface) SetExits(exits bool) (bool, error) {
+	self.stateLock.Lock()
+	self.exitsSets = append(self.exitsSets, exits)
+	var err error
+	switch {
+	case exits && self.exitsErr != nil:
+		// a refusal leaves nothing on
+		self.exits = false
+		err = self.exitsErr
+	case exits:
+		self.exits = true
+	case self.exitsClearErr != nil:
+		err = self.exitsClearErr
+	default:
+		self.exits = false
+	}
+	defaultRoute := self.exits
+	self.stateLock.Unlock()
+	self.announce("exits")
+	return defaultRoute, err
+}
+
 func (self *testTunInterface) Close() error {
 	self.closeOnce.Do(func() {
 		self.stateLock.Lock()
 		self.closeCount += 1
+		self.exits = false
 		self.routes = nil
 		self.addresses = nil
 		self.resolver = netip.Addr{}
@@ -675,30 +706,133 @@ func TestTunReadsOnPastDroppedSegments(t *testing.T) {
 	}
 }
 
-// Under exits the tun adds no default route of its own: its routes are the bridge's export, and its status says the
-// exits are held off it.
-func TestTunHoldsTheDefaultRouteOffUnderExits(t *testing.T) {
+// Sets the bridge's egress mode and has it report the change, as an adoption does.
+func (self *testTunBridge) setEgressMode(mode bridge.BridgeEgressMode) {
+	self.stateLock.Lock()
+	self.status.EgressMode = mode
+	self.stateLock.Unlock()
+	self.changed()
+}
+
+// Under exits the default route rides the tun, put on through the platform's SetExits rather than among the routes,
+// which stay the bridge's export; off exits it comes off again, and the status follows both.
+func TestTunCarriesTheDefaultRouteUnderExits(t *testing.T) {
 	tun, system, tunBridge, _, _ := startTestUrTun(t)
+	if status := tun.status(); status.DefaultRoute || status.ExitsHeld {
+		t.Fatalf("auto: %+v", status)
+	}
+	tunBridge.setEgressMode(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS)
+	waitTunEvents(t, system.iface.events, "a sync under exits", func() bool {
+		return tun.status().DefaultRoute
+	})
+	system.iface.stateLock.Lock()
+	routes, exits := slices.Clone(system.iface.routes), system.iface.exits
+	system.iface.stateLock.Unlock()
+	if !exits || !slices.Equal(routes, tunBridge.Routes()) {
+		t.Fatalf("exits %t, routes %v", exits, routes)
+	}
+	for _, route := range routes {
+		if route.Bits() == 0 {
+			t.Fatal("the default route among the bridge's routes")
+		}
+	}
+	if status := tun.status(); status.ExitsHeld || status.ExitsHeldReason != "" || status.EgressMode != "exits" {
+		t.Fatalf("exits: %+v", status)
+	}
+	tunBridge.setEgressMode(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE)
+	waitTunEvents(t, system.iface.events, "a sync off exits", func() bool {
+		return !tun.status().DefaultRoute
+	})
+	system.iface.stateLock.Lock()
+	defer system.iface.stateLock.Unlock()
+	if system.iface.exits || system.iface.exitsSets[len(system.iface.exitsSets)-1] {
+		t.Fatalf("the default route stayed: %v", system.iface.exitsSets)
+	}
+}
+
+// A platform that will not put the default route on holds the exits: the status names why, the tun stays up with
+// everything else it carries, the sync's error is the hold's, and the next sync puts the route on once it may.
+func TestTunHoldsTheExitsWhereThePlatformRefuses(t *testing.T) {
+	tun, system, tunBridge, _, _ := startTestUrTun(t)
+	refusal := errors.New("the reverse path filter is strict")
+	system.iface.stateLock.Lock()
+	system.iface.exitsErr = refusal
+	system.iface.stateLock.Unlock()
+	syncErrs := make(chan error, 16)
+	tun.onSync = func(err error) {
+		syncErrs <- err
+		system.iface.announce("synced")
+	}
+	tunBridge.setEgressMode(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS)
+	waitTunEvents(t, system.iface.events, "a held sync", func() bool {
+		return tun.status().ExitsHeld
+	})
+	status := tun.status()
+	if status.DefaultRoute || !strings.Contains(status.ExitsHeldReason, refusal.Error()) || status.SyncError != "" {
+		t.Fatalf("held: %+v", status)
+	}
+	select {
+	case err := <-syncErrs:
+		if !errors.Is(err, errUrTunExitsHeld) || errors.Is(err, refusal) {
+			t.Fatalf("the sync's error %v", err)
+		}
+	case <-time.After(urTestTimeout):
+		t.Fatal("no sync")
+	}
+	system.iface.stateLock.Lock()
+	system.iface.exitsErr = nil
+	closeCount := system.iface.closeCount
+	system.iface.stateLock.Unlock()
+	if closeCount != 0 {
+		t.Fatal("a hold closed the tun")
+	}
+	tunBridge.changed()
+	waitTunEvents(t, system.iface.events, "the exits once they may go on", func() bool {
+		return tun.status().DefaultRoute
+	})
+	if status := tun.status(); status.ExitsHeld || status.ExitsHeldReason != "" {
+		t.Fatalf("on: %+v", status)
+	}
+}
+
+// A hold at the start, even one the platform answers with the device's privilege error, leaves the tun up: only a
+// device the daemon may not configure ends a start.
+func TestTunStartsWithTheExitsHeld(t *testing.T) {
+	system := newTestTunSystem()
+	system.iface.exitsErr = fmt.Errorf("%w: a rule refused", errUrTunPrivilege)
+	networkId := sidecar.NewId()
+	bridges, tunBridge := newTestUrBridgeDaemon(t, system, networkId, false)
 	tunBridge.stateLock.Lock()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
 	tunBridge.stateLock.Unlock()
-	tunBridge.changed()
+	status, err := bridges.tunUp(networkId, nil)
+	if err != nil || !status.ExitsHeld || status.DefaultRoute || !strings.Contains(status.ExitsHeldReason, "a rule refused") {
+		t.Fatalf("up: %+v %v", status, err)
+	}
+	system.iface.stateLock.Lock()
+	defer system.iface.stateLock.Unlock()
+	if system.iface.closeCount != 0 {
+		t.Fatal("a hold ended the start")
+	}
+}
+
+// A default route that will not come off when the mode leaves exits is the sync's error, tried again, not a hold.
+func TestTunRetriesADefaultRouteThatStays(t *testing.T) {
+	tun, system, tunBridge, _, _ := startTestUrTun(t)
+	tunBridge.setEgressMode(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS)
 	waitTunEvents(t, system.iface.events, "a sync under exits", func() bool {
-		return tun.status().ExitsHeld
+		return tun.status().DefaultRoute
 	})
 	system.iface.stateLock.Lock()
-	routes := slices.Clone(system.iface.routes)
+	system.iface.exitsClearErr = errors.New("a rule did not come off")
 	system.iface.stateLock.Unlock()
-	for _, route := range routes {
-		if route.Bits() == 0 {
-			t.Fatal("a default route on the tun")
-		}
-	}
-	if !slices.Equal(routes, tunBridge.Routes()) {
-		t.Fatalf("routes %v", routes)
-	}
-	if status := tun.status(); status.EgressMode != "exits" {
-		t.Fatalf("egress %s", status.EgressMode)
+	tunBridge.setEgressMode(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO)
+	waitTunEvents(t, system.iface.events, "a sync off exits", func() bool {
+		return tun.status().SyncError != ""
+	})
+	status := tun.status()
+	if !status.DefaultRoute || status.ExitsHeld || !strings.Contains(status.SyncError, "did not come off") {
+		t.Fatalf("stayed: %+v", status)
 	}
 }
 
@@ -901,16 +1035,16 @@ func TestTunCommandsPrintWhatTheDaemonHolds(t *testing.T) {
 	cli, stdout, _ := startTestUrSocketCli(t,
 		daemon.method(urMethodTunUp, func(params json.RawMessage) (any, error) {
 			return &urTunStatus{
-				Device:     "ur-test",
-				NetworkId:  networkId,
-				State:      "enforcing_document",
-				Block:      "100.70.0.0/16",
-				Addresses:  []string{"100.70.9.9"},
-				Routes:     []string{"100.70.0.53/32", "100.70.1.2/32"},
-				Resolver:   "100.70.0.53",
-				Zones:      []string{"net.example"},
-				EgressMode: "exits",
-				ExitsHeld:  true,
+				Device:       "ur-test",
+				NetworkId:    networkId,
+				State:        "enforcing_document",
+				Block:        "100.70.0.0/16",
+				Addresses:    []string{"100.70.9.9"},
+				Routes:       []string{"100.70.0.53/32", "100.70.1.2/32"},
+				Resolver:     "100.70.0.53",
+				Zones:        []string{"net.example"},
+				EgressMode:   "exits",
+				DefaultRoute: true,
 			}, nil
 		}),
 		daemon.method(urMethodTunIp, func(params json.RawMessage) (any, error) {
@@ -922,10 +1056,13 @@ func TestTunCommandsPrintWhatTheDaemonHolds(t *testing.T) {
 	}
 	printed := stdout.String()
 	for _, want := range []string{"ur-test carries network", "100.70.0.0/16", "100.70.9.9", "100.70.1.2/32",
-		"net.example through 100.70.0.53", "exits      held"} {
+		"net.example through 100.70.0.53", "exits      the default route rides ur tun"} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("ur tun printed no %q:\n%s", want, printed)
 		}
+	}
+	if strings.Contains(printed, "held") {
+		t.Errorf("ur tun printed the exits held:\n%s", printed)
 	}
 	params := &urTunParams{}
 	daemon.lastParams(t, params)
@@ -938,6 +1075,27 @@ func TestTunCommandsPrintWhatTheDaemonHolds(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "address    none: ur tun ip <ip> claims one") {
 		t.Fatalf("ur tun ip printed:\n%s", stdout.String())
+	}
+}
+
+// Held exits print why, and that the host's other traffic keeps today's route; exits not asked for print nothing.
+func TestTunPrintsTheHeldExits(t *testing.T) {
+	cli, stdout, _ := newTestUrCli("/nonexistent/socket")
+	printUrTunStatus(cli, &urTunStatus{
+		Device:          "ur-test",
+		EgressMode:      "exits",
+		ExitsHeld:       true,
+		ExitsHeldReason: "the reverse path filter is strict (rp_filter 1) on eth0",
+	})
+	printed := stdout.String()
+	if !strings.Contains(printed, "exits      held: the reverse path filter is strict (rp_filter 1) on eth0; other "+
+		"traffic keeps today's route") || strings.Contains(printed, "rides ur tun") {
+		t.Fatalf("held:\n%s", printed)
+	}
+	stdout.Reset()
+	printUrTunStatus(cli, &urTunStatus{Device: "ur-test", EgressMode: "auto"})
+	if strings.Contains(stdout.String(), "exits") {
+		t.Fatalf("auto:\n%s", stdout.String())
 	}
 }
 
