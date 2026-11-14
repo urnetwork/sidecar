@@ -144,8 +144,12 @@ func TestAKillAtEachCompileStepLeavesTheStoreLoadable(t *testing.T) {
 // the base's own head then compiles.
 func TestACompileTakesOnlyTheHeadOfItsOwnNetwork(t *testing.T) {
 	world := newTestForwarderWorld(t)
-	other := newTestConfigNetNamed(t, "another")
-	forged, err := NewConfigHead(map[string][]byte{ConfigHeadGenesisPath: other.signedGenesis})
+	net := world.net
+	genesis := &bridge.Genesis{
+		NetworkId: testConfigId("another network").Bytes(), ConfigRepoId: net.configRepoId().Bytes(), OwnerMemberId: net.ownerMemberId.Bytes(),
+		OwnerSidecarId: net.owner.sidecarId.Bytes(), OwnerIdentityPublicKey: net.owner.publicKey(), TimeMs: testConfigStartMs,
+	}
+	forged, err := NewConfigHead(map[string][]byte{ConfigHeadGenesisPath: net.sign(net.owner, bridge.SignedType_SIGNED_GENESIS, genesis)})
 	if err != nil {
 		t.Fatal(err)
 	}

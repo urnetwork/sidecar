@@ -277,7 +277,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	// 4 compile
 	if !self.bindingsLoaded {
 		self.bindingsLoaded = true
-		if err := self.bindings.Load(forwarderBindingStore{self.args.Store}, self.args.NetworkId, state.IdentityKey); err != nil {
+		if err := self.bindings.Load(forwarderBindingStore{ForwarderStore: self.args.Store}, self.args.NetworkId, state.IdentityKey); err != nil {
 			self.log.Warningf("[forward]%s the binding cache did not load: %v", self.args.NetworkId, err)
 		}
 	}
@@ -659,7 +659,7 @@ func (self *Forwarder) fetchBindings(wants []forwarderBindingWant) bool {
 		}
 	}
 	if changed {
-		if err := self.bindings.Save(forwarderBindingStore{self.args.Store}); err != nil {
+		if err := self.bindings.Save(forwarderBindingStore{ForwarderStore: self.args.Store}); err != nil {
 			self.log.Warningf("[forward]%s the binding cache was not kept: %v", self.args.NetworkId, err)
 		}
 	}

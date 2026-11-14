@@ -25,10 +25,28 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// What the fakes were called with, in order.
+type testForwarderEvents struct {
+	stateLock sync.Mutex
+	events    []string
+}
+
+func (self *testForwarderEvents) add(event string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.events = append(self.events, event)
+}
+
+func (self *testForwarderEvents) list() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.events)
+}
+
 // A device role's posture as the Forwarder sees it: it holds the pins it is handed, applies a revocation as a denial
 // and wants a compile for every other entry, and records each call.
 type testForwarderSink struct {
-	events    *testBridgeEvents
+	events    *testForwarderEvents
 	stateLock sync.Mutex
 	decision  BridgeSinkDecision
 	// run inside SetState before the state is taken; an error refuses it
@@ -255,7 +273,7 @@ type testForwarderWorld struct {
 	forwardStore *testForwarderStore
 	// the world's projection, unreachable while a test says
 	api       *testForwarderFailingProjection
-	events    *testBridgeEvents
+	events    *testForwarderEvents
 	settings  *ForwarderSettings
 	heapInUse atomic.Int64
 	lapsed    atomic.Bool
@@ -287,7 +305,7 @@ func newTestForwarderWorld(t *testing.T) *testForwarderWorld {
 		peer:                  desktop,
 		groupId:               testConfigId("config group"),
 		blockFile:             net.sign(net.owner, bridge.SignedType_SIGNED_BRIDGE_BLOCK, testBridgeCompileBlock()),
-		events:                newTestBridgeEvents(),
+		events:                &testForwarderEvents{},
 		gkm:                   &testForwarderGkm{wraps: map[uint64]map[string][]*bridge.Signed{}},
 		keys:                  &testForwarderKeys{},
 		settings:              DefaultForwarderSettings(ForwarderHostDesktop),
