@@ -1,3 +1,5 @@
+//go:build !js && !ios && !android && !sdk_mobile_bind && !windows && !sidecar_http && !ios_extension
+
 // §22.7's actions row, its bridge clauses, on the path the MCP bridge tools take (MCP-M4-01; §16.6's bridge row,
 // R-MCP-9, D-MCP-11, D-MCP-12, I-8, AD2): DaemonBridges, the seam mcp/tools_bridge.go calls, over the real BridgeFiler,
 // with §16.6's real gate installed in place of bridge_file_test.go's seam gate, its P the test net's verified state
