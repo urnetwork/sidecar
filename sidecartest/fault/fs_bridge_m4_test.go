@@ -2,11 +2,12 @@
 
 // BRIDGE-M4-22's schedules on T2 (fs_bridge_m4.go): FS-38's M4 part and its forged case, and FS-56, each under every
 // rule §22.8 gives its case; server/controller/connect_bridge_m4_test.go runs the same builders on T3. Beside them,
-// §22.5's §17 rows end to end on the same world: blocks, and reset against drain.
+// §22.5's §17 rows end to end on the same world, blocks and reset against drain, and §17.4's carve on a sender.
 
 package fault
 
 import (
+	"bytes"
 	"net"
 	"net/netip"
 	"slices"
@@ -144,5 +145,54 @@ func TestBridgeWithdrawResetEndsAndDrainKeeps(t *testing.T) {
 		return len("before the drain")+len(after) <= dials[drainedDial].WrittenByteCount && !dials[drainedDial].Closed
 	}) {
 		t.Fatalf("the drained route's connection stopped carrying bytes: %+v", host.Dials()[drainedDial])
+	}
+}
+
+// The sender's router on real links (§17.5): FS-38's and FS-56's sender rows run in the schedules (fs_bridge_m4.go);
+// the carve runs here.
+
+// A host at fsBridgeHostAddress and a sender, on a world of the test's own; senderSettings nil is the honest sender.
+func fsBridgeSenderWorld(t *testing.T, testNet *sidecartest.Net, senderSettings *sidecartest.BridgeNetSenderSettings) (*sidecartest.BridgeNet, *sidecartest.BridgeNetHost, *sidecartest.BridgeNetSender) {
+	t.Helper()
+	world := sidecartest.NewBridgeNet(t, testNet, nil)
+	t.Cleanup(world.Close)
+	hostDevice := world.AddDevice("host")
+	senderDevice := world.AddDevice("sender")
+	host := world.StartHost(hostDevice, &sidecartest.BridgeNetHostSettings{Address: fsBridgeHostAddress})
+	sender := world.StartSender(senderDevice, senderSettings)
+	return world, host, sender
+}
+
+// §17.4's carve as a CGNAT fixture: the sender's carrier address lies inside the network's block; carved, it keeps its
+// carrier path, the default route, while the host's overlay address in the same block still routes to its link and
+// carries a connection.
+func TestBridgeCgnatCarveKeepsTheCarrierPathAndOverlayReach(t *testing.T) {
+	testNet := sidecartest.NewNet(t.Context(), nil)
+	defer testNet.Close()
+	world, host, sender := fsBridgeSenderWorld(t, testNet, nil)
+	carrier := netip.MustParseAddr("100.80.200.1")
+	if sender.TakesDefaultRoute(netip.AddrPortFrom(carrier, 443)) {
+		t.Fatal("an unassigned block address took the default route before the carve: the fixture proves nothing")
+	}
+	sender.Bridge.SetLocalAddresses([]netip.Addr{carrier})
+	if !sender.TakesDefaultRoute(netip.AddrPortFrom(carrier, 443)) {
+		t.Fatal("the carved carrier address did not keep its carrier path")
+	}
+	if sender.TakesDefaultRoute(netip.AddrPortFrom(host.Address, host.Upstream.TcpPort())) {
+		t.Fatal("the host's overlay address lost its link to the carve")
+	}
+	conn, err := sender.DialTcp(netip.AddrPortFrom(host.Address, host.Upstream.TcpPort()))
+	if err != nil {
+		t.Fatalf("the overlay connection after the carve: %v", err)
+	}
+	payload := []byte("past the carve")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if !host.Upstream.WaitFor(world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return bytes.Equal(accept.Bytes, payload) })
+	}) {
+		t.Fatal("the overlay payload never reached the host")
 	}
 }

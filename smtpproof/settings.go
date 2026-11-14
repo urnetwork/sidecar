@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // The proofs' own settings (DESIGN-DETAILS 3.2.8; QD-702): the shape catalog and every limit the relation,
@@ -175,6 +176,45 @@ func DefaultProofSettings() *ProofSettings {
 		RecipientMaxCount:            100,
 		PartMaxCount:                 8192,
 		PartRecordMaxCount:           64,
+	}
+}
+
+// How a prover host takes its keys (DESIGN-DETAILS 3.2.7, 3.2.8): which families it checks first, how it
+// fetches the key sets' transcripts, and how hard it works at it. Start from DefaultKeySettings.
+type KeySettings struct {
+	// Where key sets are published: <BaseUrl>/<id in hex>/<name>, over HTTPS. §18.9's host table gives
+	// it (SmtpProofKeysUrl), and cli/ sets it here. Empty fetches nothing: a host then checks only the files
+	// its key directory already holds.
+	BaseUrl string
+	// The families a host checks, in order: aes128gcm, then chacha20. Every TLS 1.3 server takes the first.
+	FamilyOrder []ShapeFamily
+	// Octets of keyset.json read at most: 262,144.
+	ManifestMaxByteCount int64
+	// Octets of any other published file a host fetches at most: 536,870,912. A larger one is refused.
+	FetchFileMaxByteCount int64
+	// How long one file's fetch may take: 30 min.
+	FetchTimeout time.Duration
+	// After a failed fetch or check, how long the host waits before the next: 5 min, doubling after each
+	// failure to FetchRetryMaxInterval, 6 h, and back to this after a success.
+	FetchRetryInterval    time.Duration
+	FetchRetryMaxInterval time.Duration
+	// Shapes checked at once: 1. A check takes minutes and gigabytes. Non-positive checks one at a time.
+	VerifyConcurrency int
+	// Keeps the fetched contributions once a shape's keys are cached. False deletes them, since the cache
+	// alone is what a send reads.
+	KeepTranscripts bool
+}
+
+// A fresh value each call.
+func DefaultKeySettings() *KeySettings {
+	return &KeySettings{
+		FamilyOrder:           []ShapeFamily{ShapeFamilyAes128Gcm, ShapeFamilyChacha20},
+		ManifestMaxByteCount:  256 * 1024,
+		FetchFileMaxByteCount: 512 * 1024 * 1024,
+		FetchTimeout:          30 * time.Minute,
+		FetchRetryInterval:    5 * time.Minute,
+		FetchRetryMaxInterval: 6 * time.Hour,
+		VerifyConcurrency:     1,
 	}
 }
 

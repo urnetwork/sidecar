@@ -1057,11 +1057,11 @@ func testFormat(statement *partStatement) string {
 	return fmt.Sprintf("part %d mode %d", statement.index, statement.mode)
 }
 
-// SMTP-M9-35: until key sets of version 2 exist (SMTP-M9-40) the prover names no key set, has nothing to
-// prepare, and refuses a job under any named set before an octet goes out, while a job naming none proves
-// as before. The verifier holds only the unnamed set: a preamble naming any is refused.
-func TestProverAndVerifierRefuseEveryNamedKeySet(t *testing.T) {
-	prover := NewProver(DefaultProverSettings(), nil, t.TempDir())
+// What cli/ and server hold until a release pins a key set: a prover with no pin names no key set, has
+// nothing to prepare, and refuses every job, naming a set or none, before an octet goes out; a verifier
+// with no set holds none, and answers every preamble KEYS (DESIGN-DETAILS 3.2.7).
+func TestProverAndVerifierWithNoKeySetRefuseEveryJob(t *testing.T) {
+	prover := NewProver(DefaultProverSettings(), DefaultKeySettings(), nil, t.TempDir())
 	if keySet := prover.KeySet(); len(keySet) != 0 {
 		t.Errorf("KeySet %x", keySet)
 	}
@@ -1069,39 +1069,39 @@ func TestProverAndVerifierRefuseEveryNamedKeySet(t *testing.T) {
 	if err != nil || !readiness.Done || len(readiness.KeySets) != 0 {
 		t.Errorf("PrepareKeys %+v, %v", readiness, err)
 	}
-	job := testJob("body\r\n", "bob")
-	job.KeySet = bytes.Repeat([]byte{5}, sha256.Size)
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-	written := make(chan int, 1)
-	go func() {
-		buffer := make([]byte, 1)
-		n, _ := server.Read(buffer)
-		written <- n
-	}()
-	if _, err := prover.SendSmtp(context.Background(), client, job, nil); !errors.Is(err, sidecar.ErrSmtpProofKeySet) {
-		t.Errorf("a named set: %v", err)
-	}
-	client.Close()
-	if n := <-written; n != 0 {
-		t.Error("a refused job wrote to the MX")
+	for _, keySet := range [][]byte{nil, bytes.Repeat([]byte{5}, sha256.Size)} {
+		job := testJob("body\r\n", "bob")
+		job.KeySet = keySet
+		client, server := net.Pipe()
+		written := make(chan int, 1)
+		go func() {
+			buffer := make([]byte, 1)
+			n, _ := server.Read(buffer)
+			written <- n
+		}()
+		if _, err := prover.SendSmtp(context.Background(), client, job, nil); !errors.Is(err, sidecar.ErrSmtpProofKeySet) {
+			t.Errorf("a job naming %x: %v", keySet, err)
+		}
+		client.Close()
+		if n := <-written; n != 0 {
+			t.Error("a refused job wrote to the MX")
+		}
+		server.Close()
 	}
 
 	verifier, err := NewVerifier(DefaultVerifierSettings(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !verifier.HoldsKeySet(nil) || verifier.HoldsKeySet(job.KeySet) {
-		t.Error("HoldsKeySet holds a named set")
+	named := bytes.Repeat([]byte{5}, sha256.Size)
+	if verifier.HoldsKeySet(nil) || verifier.HoldsKeySet(named) {
+		t.Error("a verifier with no set holds one")
 	}
-	preamble := *testJob("body\r\n", "bob").Preamble
-	preamble.ProofKeySet = job.KeySet
-	if _, err := verifier.NewSmtpProofSession(&preamble); !errors.Is(err, sidecar.ErrSmtpProofKeySet) {
-		t.Errorf("a session under a named set: %v", err)
-	}
-	preamble.ProofKeySet = nil
-	if _, err := verifier.NewSmtpProofSession(&preamble); err != nil {
-		t.Errorf("a session under none: %v", err)
+	for _, keySet := range [][]byte{nil, named} {
+		preamble := *testJob("body\r\n", "bob").Preamble
+		preamble.ProofKeySet = keySet
+		if _, err := verifier.NewSmtpProofSession(&preamble); !errors.Is(err, sidecar.ErrSmtpProofKeySet) {
+			t.Errorf("a session under %x: %v", keySet, err)
+		}
 	}
 }

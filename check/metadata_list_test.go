@@ -312,6 +312,35 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "{acl_}e 10 min after the network's last append; {acl_}q 25 h\n",
 		list:     "{acl_}e 10 min after the network's last append; {acl_}q 25 h; {acl_}r 24 h after its last write or the last token exchange that read its resumed marker, its uploads dropped when the network's resume base lands\n",
 	},
+	{
+		// QD-716's list version, after v18's
+		question: "details-3-metadata-rows",
+		block:    "# metadata_list.yml v18;",
+		list:     "# metadata_list.yml v19;",
+	},
+	{
+		// QD-716: v19's line, after v18's
+		question: "details-3-metadata-rows",
+		block:    "# marker where re-seed mode ends for a network.\n",
+		list: "# marker where re-seed mode ends for a network.\n" +
+			"# v19, updated 2026-11-14 for the owner's answer QD-716 (details-3-metadata-rows), adds smtp-7, what the key set\n" +
+			"# path on ur.io sees of a mail prover host's fetch of the key set its release pins (DESIGN-DETAILS 3.8).\n",
+	},
+	{
+		// QD-716: smtp-7, the key set path on ur.io, after smtp-6's row (DESIGN-DETAILS 3.8), which a prover host's
+		// fetch needs before it runs (I-18)
+		question: "details-3-metadata-rows",
+		block:    "  owner: §14.6\nmx-1:\n",
+		list: "  owner: §14.6\n" +
+			"smtp-7:\n" +
+			"  service: the key set path on ur.io (static files; §2.8 EX7 for who terminates ur.io)\n" +
+			"  store: none of sidecar's\n" +
+			"  sees: per fetch the client's address and time, the key set's id and the names of the files fetched, which say that the address runs a mail prover host, on which key set, and which TLS families it has prepared; no account, token, cookie or sidecar id\n" +
+			"  why: a prover host checks the setup's transcripts itself before it uses a key (D-SMTP-16), and they are about 0.9 GiB a key set, too large for the package (QD-123)\n" +
+			"  ttl: as ur.io's other static downloads (§4.10)\n" +
+			"  owner: §14.9\n" +
+			"mx-1:\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

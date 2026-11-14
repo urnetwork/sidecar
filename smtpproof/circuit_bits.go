@@ -1,6 +1,7 @@
 package smtpproof
 
 import (
+	"errors"
 	"math/big"
 
 	"github.com/consensys/gnark/constraint/solver"
@@ -15,9 +16,29 @@ import (
 // A constant bit is a Go 0 or 1, which every function here folds, so padding and fixed labels cost
 // nothing. Bits are least significant first.
 
+// Each hint's id in a compiled circuit, fixed here where gnark's RegisterHint would derive it from the
+// function's name. That name holds the package path, which the release rewrites to /v2026 (§4.9), and a
+// compiled circuit holds the id and the name, so a derived id would give a release build other circuit
+// digests than smtpShapeDigests and the key set's circuit_sha256 (DESIGN-DETAILS 3.2.7).
+const (
+	hintIdIdentity solver.HintID = 0x75720001
+	hintIdHighBits solver.HintID = 0x75720002
+)
+
 func init() {
-	solver.RegisterHint(hintHighBits)
-	solver.RegisterHint(hintIdentity)
+	solver.RegisterNamedHint(hintHighBits, hintIdHighBits)
+	solver.RegisterNamedHint(hintIdentity, hintIdIdentity)
+}
+
+// A hint by its fixed id. gnark's r1cs builder, the only one these circuits compile with, takes one.
+func newHintById(api frontend.API, id solver.HintID, nbOutputs int, inputs ...frontend.Variable) ([]frontend.Variable, error) {
+	compiler, ok := api.Compiler().(interface {
+		NewHintForId(id solver.HintID, nbOutputs int, inputs ...frontend.Variable) ([]frontend.Variable, error)
+	})
+	if !ok {
+		return nil, errors.New("the compiler takes no hint by id")
+	}
+	return compiler.NewHintForId(id, nbOutputs, inputs...)
 }
 
 // A running value as one wire. A scanner's sum carried as a linear combination gains a term per
@@ -27,7 +48,7 @@ func pinWire(api frontend.API, value frontend.Variable) frontend.Variable {
 	if _, ok := api.Compiler().ConstantValue(value); ok {
 		return value
 	}
-	pinned, err := api.Compiler().NewHint(hintIdentity, 1, value)
+	pinned, err := newHintById(api, hintIdIdentity, 1, value)
 	if err != nil {
 		panic(err)
 	}
@@ -94,7 +115,7 @@ func bitParity(api frontend.API, terms ...frontend.Variable) frontend.Variable {
 		for (1 << (highBits + 1)) <= len(variables) {
 			highBits += 1
 		}
-		highs, err := api.Compiler().NewHint(hintHighBits, highBits, sum)
+		highs, err := newHintById(api, hintIdHighBits, highBits, sum)
 		if err != nil {
 			panic(err)
 		}

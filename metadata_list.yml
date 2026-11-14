@@ -1,4 +1,4 @@
-# metadata_list.yml v18; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v19; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -64,6 +64,8 @@
 # v18, updated 2026-11-14 for the owner's answer QD-724 (team-m3-02-reseed-upload-store), adds api-7's
 # {acl_<networkId>}r, the re-seed uploads api keeps after a site loss until two members agree, with the resumed
 # marker where re-seed mode ends for a network.
+# v19, updated 2026-11-14 for the owner's answer QD-716 (details-3-metadata-rows), adds smtp-7, what the key set
+# path on ur.io sees of a mail prover host's fetch of the key set its release pins (DESIGN-DETAILS 3.8).
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -619,6 +621,13 @@ smtp-6:
   why: publish DKIM (§12.7, §14.6); check signatures in reports (§14.8)
   ttl: 30 d after the selector leaves DNS (7 d after rotation, at once on removal; §14.14)
   owner: §14.6
+smtp-7:
+  service: the key set path on ur.io (static files; §2.8 EX7 for who terminates ur.io)
+  store: none of sidecar's
+  sees: per fetch the client's address and time, the key set's id and the names of the files fetched, which say that the address runs a mail prover host, on which key set, and which TLS families it has prepared; no account, token, cookie or sidecar id
+  why: a prover host checks the setup's transcripts itself before it uses a key (D-SMTP-16), and they are about 0.9 GiB a key set, too large for the package (QD-123)
+  ttl: as ur.io's other static downloads (§4.10)
+  owner: §14.9
 mx-1:
   service: mxedge (router)
   store: memory; Redis {mxc_<HMAC_k(prefix)>} and {vhk}mx:<yyyymmdd>, the fleet's daily key k

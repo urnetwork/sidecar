@@ -794,6 +794,8 @@ values:
   "metrics by route template and logs with opaque ids": ops-1
   "the sidecar dump and the main dumps": ops-2
   "the rdb bundles of existing Redis families": ops-3
+  # a prover host's fetch of its pinned key set from ur.io, smtpproof's setup_fetch.go (DESIGN-DETAILS 3.2.7)
+  "the key set's id and the names of the files fetched": smtp-7
 
 not_keys:
   "http/1.1": "an ALPN id, the second a route probe's hello offers, which the lb's http branch selects (§13.4)"

@@ -489,6 +489,10 @@ barrier rpc.hello_pin.before rpc_pins.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go
+barrier setup_cache.rename.after smtpproof/setup_cache.go
+barrier setup_cache.rename.before smtpproof/setup_cache.go
+barrier setup_keys.shape_state.after smtpproof/setup_keys.go
+barrier setup_keys.shape_state.before smtpproof/setup_keys.go
 barrier sidecar.attach.after sidecar_component.go
 barrier sidecar.attach.before sidecar_component.go
 barrier sidecar.authorize.after sidecar_gate.go
