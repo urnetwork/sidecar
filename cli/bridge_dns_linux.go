@@ -136,8 +136,10 @@ func urTunResolverStep(name string, resolver netip.Addr, zones []string) string 
 // The bridge's pass-through (device.BridgeResolverUpstream): query to each of this host's resolvers in turn until one
 // answers, over UDP, and over TCP when the answer is truncated. routed says which addresses the tun carries.
 func urLinuxResolverUpstream(routed func(address netip.Addr) bool) device.BridgeResolverUpstream {
-	// connect's egress machinery: the mark on each socket it makes while one is set, nothing otherwise
-	dialer := connect.DefaultConnectSettings().NetDialer()
+	// connect's egress machinery: the mark on each socket it makes while one is set, nothing otherwise. A dial of an
+	// address needs none of a strategy's settings, its TLS roots among them, so a zero ConnectSettings makes it, and the
+	// query's context bounds it
+	dialer := (&connect.ConnectSettings{}).NetDialer()
 	return func(ctx context.Context, query []byte) ([]byte, error) {
 		servers := urLinuxUpstreamServers(routed)
 		if len(servers) == 0 {
