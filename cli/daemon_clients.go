@@ -198,6 +198,8 @@ type urNetworkClients struct {
 	groupLock  sync.Mutex
 	intakeLock sync.Mutex
 	evsLock    sync.Mutex
+	// held across computing and setting the GkmApi's repo scopes, so the last to set them read the newest state
+	scopesLock sync.Mutex
 
 	stateLock sync.Mutex
 	closed    bool
@@ -334,6 +336,8 @@ func (self *urNetworkClients) intake() (*sidecar.GkmApi, *sidecar.GkmHints, erro
 // carry them in batches; nothing before the api or a state. A role the state no longer grants leaves the batches, and
 // a call presents its own scope where its repo is in none.
 func (self *urNetworkClients) setRepoScopes() {
+	self.scopesLock.Lock()
+	defer self.scopesLock.Unlock()
 	api, clock := func() (*sidecar.GkmApi, sidecar.Clock) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
