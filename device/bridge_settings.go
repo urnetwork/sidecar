@@ -117,6 +117,15 @@ type BridgeSettings struct {
 	// How long one pass-through query may take upstream: 5 s, a stub resolver's own retry interval. Positive.
 	ResolverUpstreamTimeout time.Duration
 
+	// The slots of the ring the provider hook reports reach events into (bridge_reach.go): 1,024 on desktop, 256 on
+	// mobile, about 112 bytes each, held for the bridge's life. A flow a granted row admits while every slot is held
+	// goes on unreported, which is counted. Rounded up to a power of two. Non-positive reports no reach at all.
+	ReachQueueCount int
+	// The coalesced reach events a bridge holds while no callback takes them, as while an app's sidecar role is not
+	// running, one per (kind, grant, peer, source network, target port): 1,024 on desktop, 256 on mobile. One more
+	// distinct event is dropped and counted. Non-positive holds none.
+	ReachWaitingCount int
+
 	// The largest marshalled BridgeRules ParseBridgeRules reads: 8 MiB, as large as the posture keeps a state. Positive.
 	RulesMaxByteCount int
 	// The most messages, strings and byte fields ParseBridgeRules decodes, at every depth. Decoding allocates per
@@ -152,16 +161,20 @@ func DefaultBridgeSettings() *BridgeSettings {
 		RulesMaxFieldCount:       1024 * 1024,
 		RevocationMaxCount:       4 * 1024,
 		RevocationIdMaxByteCount: 64,
+		ReachQueueCount:          1024,
+		ReachWaitingCount:        1024,
 	}
 }
 
-// The defaults adjusted for a phone (§17.5): 1,024 pin slots, which §22.9's mobile churn case runs past, and 8 links
-// before one idle for LinkRoomIdleTimeout closes for room. The iOS tunnel sets LinkCountMax to 0 on top of these until
-// §22.9 measures a link there (owner decision 100).
+// The defaults adjusted for a phone (§17.5): 1,024 pin slots, which §22.9's mobile churn case runs past, 8 links
+// before one idle for LinkRoomIdleTimeout closes for room, and 256 reach slots and waiting reach events. The iOS tunnel
+// sets LinkCountMax to 0 on top of these until §22.9 measures a link there (owner decision 100).
 func MobileBridgeSettings() *BridgeSettings {
 	settings := DefaultBridgeSettings()
 	settings.PinSlotCount = 1024
 	settings.LinkCountMax = 8
+	settings.ReachQueueCount = 256
+	settings.ReachWaitingCount = 256
 	return settings
 }
 
