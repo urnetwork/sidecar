@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -366,6 +367,71 @@ func TestAKeySetRefusesKeysItsTranscriptDoesNotFix(t *testing.T) {
 	// the other shape's own keys pass
 	if err := keySet.ensureShape(context.Background(), circuits[1]); err != nil {
 		t.Errorf("the other shape: %v", err)
+	}
+}
+
+// A transcript keyset.json names by its true hash, but not in a contribution's form, is refused before
+// gnark reads it, whatever count it declares: such a file costs a host a refusal, never its memory or its
+// process (DESIGN-DETAILS 3.5).
+func TestAKeySetRefusesATranscriptOutOfForm(t *testing.T) {
+	circuits := testFamilyKeySetCircuits(t)[:1]
+	// phase 1's domain size follows three update proofs, and phase 2's key count its commitment count and δ
+	phase1CountOffset := 3 * (setupG1Bytes + setupG2Bytes)
+	phase2CountOffset := 2 + setupG1Bytes
+	for name, malform := range map[string]func(phase1 []byte, phase2 []byte) ([]byte, []byte){
+		"a phase 1 of a vast domain": func(phase1 []byte, phase2 []byte) ([]byte, []byte) {
+			binary.BigEndian.PutUint64(phase1[phase1CountOffset:], 1<<40)
+			return phase1, phase2
+		},
+		"a phase 1 with a point not compressed": func(phase1 []byte, phase2 []byte) ([]byte, []byte) {
+			phase1[0] &^= setupPointMask
+			return phase1, phase2
+		},
+		"a phase 1 cut short": func(phase1 []byte, phase2 []byte) ([]byte, []byte) { return phase1[:len(phase1)/2], phase2 },
+		"a phase 2 of a vast key count": func(phase1 []byte, phase2 []byte) ([]byte, []byte) {
+			binary.BigEndian.PutUint32(phase2[phase2CountOffset:], 0xffffffff)
+			return phase1, phase2
+		},
+		"a phase 2 with a commitment": func(phase1 []byte, phase2 []byte) ([]byte, []byte) {
+			binary.BigEndian.PutUint16(phase2, 1)
+			return phase1, phase2
+		},
+		"a phase 2 with an octet after it": func(phase1 []byte, phase2 []byte) ([]byte, []byte) { return phase1, append(phase2, 0) },
+		"no contribution at all": func(phase1 []byte, phase2 []byte) ([]byte, []byte) {
+			return phase1, bytes.Repeat([]byte{0xff}, len(phase2))
+		},
+	} {
+		made := testMakeKeySet(t, circuits)
+		edge := made.open(t)
+		files := made.files(t)
+		phase1Name := edge.manifest.Phase1[0].Contributions[0].Name
+		phase2Name := edge.manifest.Shapes[0].Contributions[0].Name
+		phase1, phase2 := malform(bytes.Clone(files[phase1Name]), bytes.Clone(files[phase2Name]))
+		records := map[string]*keySetFile{}
+		for fileName, content := range map[string][]byte{phase1Name: phase1, phase2Name: phase2} {
+			record, err := writeKeySetFile(made.directory, fileName, content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			records[fileName] = record
+		}
+		repinned := testRepinned(t, made, func(manifest *keySetManifest) {
+			manifest.Phase1[0].Contributions = []*keySetFile{records[phase1Name]}
+			manifest.Shapes[0].Contributions = []*keySetFile{records[phase2Name]}
+		})
+		host := testHostHolding(t, testKeySettings(), repinned.id, repinned.files(t))
+		keySet := testOpenOnHost(t, host, repinned.id, circuits)
+		err := keySet.ensureShape(context.Background(), circuits[0])
+		phase := name[:len("a phase 1")]
+		if name == "no contribution at all" {
+			phase = "a phase 2"
+		}
+		if !isKeyRefusal(err) || !strings.Contains(err.Error(), phase+" ") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if _, err := keySet.backend.keysFor(circuits[0].shape); !errors.Is(err, errNoKeys) {
+			t.Errorf("%s: keys %v", name, err)
+		}
 	}
 }
 

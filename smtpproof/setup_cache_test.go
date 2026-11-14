@@ -190,8 +190,11 @@ func TestPhase1CommonsAreCachedAndCheckedWhenTaken(t *testing.T) {
 	host, keySet, _ := testCheckedShape(t, testSquareCircuit)
 	phase1 := keySet.manifest.Phase1[0]
 	phase1Sha256 := keyCachePhase1Hash(phase1.DomainSize, keySet.beacon, phase1.Contributions)
-	if _, ok := host.cache.loadPhase1(phase1Sha256); !ok {
+	if _, ok := host.cache.loadPhase1(phase1Sha256, phase1.DomainSize); !ok {
 		t.Fatal("no commons")
+	}
+	if _, ok := host.cache.loadPhase1(phase1Sha256, 2*phase1.DomainSize); ok {
+		t.Error("took commons for another domain")
 	}
 	path := filepath.Join(host.cache.directory, "phase1-"+phase1Sha256+".commons")
 	content, err := os.ReadFile(path)
@@ -202,7 +205,7 @@ func TestPhase1CommonsAreCachedAndCheckedWhenTaken(t *testing.T) {
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := host.cache.loadPhase1(phase1Sha256); ok {
+	if _, ok := host.cache.loadPhase1(phase1Sha256, phase1.DomainSize); ok {
 		t.Error("took changed commons")
 	}
 	// another beacon or another contribution is another phase 1

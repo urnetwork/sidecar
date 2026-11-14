@@ -909,6 +909,9 @@ func (self *KeySet) ensureShape(ctx context.Context, circuit *keySetCircuit) err
 	}
 	err := self.checkShape(ctx, circuit)
 	self.host.tried(self.id, err)
+	// what the check found becomes what the host offers and loads
+	testHookBarrier("setup_keys.shape_state.before", circuit.name)
+	defer testHookBarrier("setup_keys.shape_state.after", circuit.name)
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -1005,7 +1008,7 @@ func (self *KeySet) checkShape(ctx context.Context, circuit *keySetCircuit) erro
 func (self *KeySet) phase1Commons(ctx context.Context) (*mpcsetup.SrsCommons, error) {
 	phase1 := self.manifest.Phase1[0]
 	phase1Sha256 := keyCachePhase1Hash(phase1.DomainSize, self.beacon, phase1.Contributions)
-	if commons, ok := self.host.cache.loadPhase1(phase1Sha256); ok {
+	if commons, ok := self.host.cache.loadPhase1(phase1Sha256, phase1.DomainSize); ok {
 		return commons, nil
 	}
 	contributions, err := self.files(ctx, phase1.Contributions)

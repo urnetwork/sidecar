@@ -126,7 +126,10 @@ func (self *keyCache) writeFile(name string, write func(writer io.Writer) error)
 		return &keySetFile{Name: name, Sha256: hex.EncodeToString(digest.Sum(nil)), ByteCount: counter.count}, nil
 	}()
 	if err == nil {
+		// the file is whole and synced, and appears under its name here: an .ok, last, makes an entry
+		testHookBarrier("setup_cache.rename.before", name)
 		err = os.Rename(partialPath, filepath.Join(self.directory, name))
+		testHookBarrier("setup_cache.rename.after", name)
 	}
 	if err != nil {
 		os.Remove(partialPath)
@@ -297,8 +300,9 @@ func (self *keyCache) storeShape(circuitSha256 string, provingKeySha256 string, 
 	})
 }
 
-// Step 4's cache: a phase 1's commons, if its .ok names it and the file hashes to the record.
-func (self *keyCache) loadPhase1(phase1Sha256 string) (*mpcsetup.SrsCommons, bool) {
+// Step 4's cache: a phase 1's commons for a domain of domainSize points, if its .ok names it, the file
+// hashes to the record, and it declares that domain before gnark allocates for it.
+func (self *keyCache) loadPhase1(phase1Sha256 string, domainSize uint64) (*mpcsetup.SrsCommons, bool) {
 	name := "phase1-" + phase1Sha256
 	record, err := self.readRecord(name+".ok", func(record *keyCacheRecord) bool {
 		return record.Phase1Sha256 == phase1Sha256 && record.CircuitSha256 == "" && record.ProvingKeySha256 == "" &&
@@ -308,7 +312,7 @@ func (self *keyCache) loadPhase1(phase1Sha256 string) (*mpcsetup.SrsCommons, boo
 		return nil, false
 	}
 	encoded, err := self.readFile(record.Files[0])
-	if err != nil {
+	if err != nil || len(encoded) < 8 || binary.BigEndian.Uint64(encoded) != domainSize {
 		return nil, false
 	}
 	commons := &mpcsetup.SrsCommons{}
