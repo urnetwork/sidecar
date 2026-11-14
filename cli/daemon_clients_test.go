@@ -36,6 +36,7 @@ type testUrProbedRead struct {
 	standing bool
 }
 
+// next's answer, with what the follower held when it was asked.
 func (self *testUrProbedHeads) ReadConfigHead(ctx context.Context, configVersion uint64, configHeadSha256 []byte) (*sidecar.ConfigHead, error) {
 	read := &testUrProbedRead{}
 	if follower := self.running.ConfigFollower(); follower != nil {

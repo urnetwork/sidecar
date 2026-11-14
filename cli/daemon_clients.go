@@ -607,6 +607,7 @@ func (self *urNetworkGkm) AuthAdvanced(state sidecar.GkmAuthView) {
 	}
 }
 
+// The group client's, ErrGkmUnavailable before it is built.
 func (self *urNetworkGkm) CurrentRepoKey(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
 	group, err := self.group()
 	if err != nil {
@@ -615,6 +616,7 @@ func (self *urNetworkGkm) CurrentRepoKey(ctx context.Context, repoId sidecar.Id)
 	return group.CurrentRepoKey(ctx, repoId)
 }
 
+// The group client's, ErrGkmUnavailable before it is built.
 func (self *urNetworkGkm) RepoKey(ctx context.Context, repoId sidecar.Id, generation uint64) (*sidecar.EvsRepoKey, error) {
 	group, err := self.group()
 	if err != nil {
@@ -623,6 +625,7 @@ func (self *urNetworkGkm) RepoKey(ctx context.Context, repoId sidecar.Id, genera
 	return group.RepoKey(ctx, repoId, generation)
 }
 
+// The group client's, ErrGkmUnavailable before it is built.
 func (self *urNetworkGkm) EnsureWritable(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
 	group, err := self.group()
 	if err != nil {
@@ -631,6 +634,7 @@ func (self *urNetworkGkm) EnsureWritable(ctx context.Context, repoId sidecar.Id)
 	return group.EnsureWritable(ctx, repoId)
 }
 
+// The group client's, ErrGkmUnavailable before it is built.
 func (self *urNetworkGkm) DropKey(ctx context.Context, repoId sidecar.Id) (*sidecar.GkmDropKey, error) {
 	group, err := self.group()
 	if err != nil {
@@ -639,6 +643,7 @@ func (self *urNetworkGkm) DropKey(ctx context.Context, repoId sidecar.Id) (*side
 	return group.DropKey(ctx, repoId)
 }
 
+// The group client's, ErrGkmUnavailable before it is built.
 func (self *urNetworkGkm) CreateGroup(ctx context.Context, args *sidecar.GkmCreateGroupArgs) (*sidecar.EvsRepoKey, error) {
 	group, err := self.group()
 	if err != nil {
@@ -647,6 +652,7 @@ func (self *urNetworkGkm) CreateGroup(ctx context.Context, args *sidecar.GkmCrea
 	return group.CreateGroup(ctx, args)
 }
 
+// The group client's, ErrGkmUnavailable before it is built.
 func (self *urNetworkGkm) RotateRepo(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
 	group, err := self.group()
 	if err != nil {
@@ -655,6 +661,7 @@ func (self *urNetworkGkm) RotateRepo(ctx context.Context, repoId sidecar.Id) (*s
 	return group.RotateRepo(ctx, repoId)
 }
 
+// The group client's, ErrGkmUnavailable before it is built.
 func (self *urNetworkGkm) ForgetRepo(ctx context.Context, repoId sidecar.Id) error {
 	group, err := self.group()
 	if err != nil {
@@ -707,6 +714,7 @@ func (self *urNetworkMls) get() (sidecar.MlsEngine, error) {
 	return engine, nil
 }
 
+// The engine's, once it is built.
 func (self *urNetworkMls) CreateKeyPackage(lastResort bool) (*sidecar.MlsKeyPackage, error) {
 	engine, err := self.get()
 	if err != nil {
@@ -715,6 +723,7 @@ func (self *urNetworkMls) CreateKeyPackage(lastResort bool) (*sidecar.MlsKeyPack
 	return engine.CreateKeyPackage(lastResort)
 }
 
+// The engine's, once it is built.
 func (self *urNetworkMls) CreateGroup(groupId sidecar.Id, urGroup *sidecar.MlsUrGroup) (sidecar.MlsGroup, error) {
 	engine, err := self.get()
 	if err != nil {
@@ -723,6 +732,7 @@ func (self *urNetworkMls) CreateGroup(groupId sidecar.Id, urGroup *sidecar.MlsUr
 	return engine.CreateGroup(groupId, urGroup)
 }
 
+// The engine's, once it is built.
 func (self *urNetworkMls) JoinWelcome(welcome []byte) (sidecar.MlsPendingJoin, error) {
 	engine, err := self.get()
 	if err != nil {
@@ -731,6 +741,7 @@ func (self *urNetworkMls) JoinWelcome(welcome []byte) (sidecar.MlsPendingJoin, e
 	return engine.JoinWelcome(welcome)
 }
 
+// The engine's, once it is built.
 func (self *urNetworkMls) JoinExternal(groupInfo []byte, args *sidecar.MlsCommitArgs) (sidecar.MlsStagedCommit, error) {
 	engine, err := self.get()
 	if err != nil {
@@ -739,6 +750,7 @@ func (self *urNetworkMls) JoinExternal(groupInfo []byte, args *sidecar.MlsCommit
 	return engine.JoinExternal(groupInfo, args)
 }
 
+// The engine's, once it is built.
 func (self *urNetworkMls) LoadGroup(groupId sidecar.Id) (sidecar.MlsGroup, error) {
 	engine, err := self.get()
 	if err != nil {
