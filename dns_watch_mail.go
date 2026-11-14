@@ -182,6 +182,8 @@ func NewDnsWatchStrictValidator(forwarder DnsWatchDnssecForwarder, anchors *Smtp
 	return &dnsWatchStrictValidator{forwarder: forwarder, anchors: anchors, settings: settings}
 }
 
+// See DnsWatch.StrictChain: names and the key held to their forms first, then each recipient domain's MX answer, and
+// for each MX host its TLSA answers, validated as one chain with every zone's keys and DS on the way to the root.
 func (self *dnsWatchStrictValidator) strictChainHolds(ctx context.Context, request *dnsWatchStrictRequest) bool {
 	if self.forwarder == nil || !self.settings.valid() || len(request.spkiSha256) != sha256.Size {
 		return false
