@@ -53,7 +53,7 @@ func TestRevokeDeviceLandsOnTheFakeApi(t *testing.T) {
 	env.signedGenesis = env.genesis(env.owner, env.configRepo)
 	genesisChain := bridge.GenesisChain(env.signedGenesis)
 	env.tip = &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}
-	rows := env.baseOneRows(env.owner)
+	rows := env.baseOneRows(env.owner, env.signedGenesis)
 	pin, err := api.AppendBase(ctx, env.networkId, env.base(env.owner, env.tip, rows, 0, 1), rows, env.signedGenesis, env.configRepo.pushes(0, 1))
 	if err != nil {
 		t.Fatal(err)

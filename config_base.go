@@ -306,7 +306,7 @@ func configFoldRecordOf(kept *configKeptEntry) ConfigFoldRecord {
 func (self *ConfigLog) foldRows(state *ConfigState, header *bridge.ProjectionHeader) (*ConfigCompileRows, error) {
 	foldedThrough := header.GetFoldedThrough()
 	if state.base == nil {
-		return configGenesisCompileRows(state.genesis), nil
+		return configGenesisCompileRows(state.genesis, state.genesisChain), nil
 	}
 	var compileRows *ConfigCompileRows
 	if foldedThrough == state.base.header.GetFoldedThrough() {

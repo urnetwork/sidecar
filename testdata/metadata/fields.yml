@@ -670,6 +670,9 @@ fields:
   CanonicalAction.subject: api-7
   CanonicalAction.app_mode: api-7
   CanonicalAction.link_spki_sha256: api-7
+  # Answered (QD-820): a share's grant names the other network beside its subject; api-7's rows already show a
+  # shared network's id, as a rule's network target and a network atom's row.
+  CanonicalAction.share_network_id: api-7
   ApprovalDecision.approval_id: api-10
   ApprovalDecision.request_sha256: api-10
   ApprovalDecision.payload_sha256: api-10

@@ -26,8 +26,9 @@
 //	         network's first device, holds a leaf. Before any state names it the key client answers ErrGkmUnavailable,
 //	         a generation in the keychain included, which no device holds before a state names it
 //	mls      the network's MLS engine, built at its first need under the admission the key client's newest state
-//	         names (§10.4's admission_sha256): the row's SidecarAdmit, or for the network's first device, whose row
-//	         base 1 compiles from the Genesis with none, the Genesis's own hash, A_0, which its anchor records
+//	         names (§10.4's admission_sha256): the row's, its SidecarAdmit or, for the network's first device, the
+//	         Genesis's own hash, A_0, which base 1's compile gives its row (QD-825); before base 1, when that device
+//	         has no row yet, the same A_0 from its anchor
 //	git      the EvsClient's local tier, whose mounts' hooks exec the daemon's own ur git-hook, so a push reaches evs
 //	         through this daemon; with no hook command every push is refused at its hook
 //
@@ -521,10 +522,10 @@ func (self *urNetworkClients) upkeepRole() sidecar.GkmUpkeepRole {
 }
 
 // The admission this sidecar's MLS engine is built under (§10.4's admission_sha256), at the newest state the key client
-// was given: its row's, the hash of the SidecarAdmit that admitted it, or for the network's first device, whose row
-// base 1 compiles from the Genesis with none, the Genesis's own hash A_0, which the anchor its follower holds the log to
-// records (§10.4: "Genesis for the first device"). ErrGkmUnavailable before a state admits this sidecar, and for a
-// tagged or ephemeral sidecar, which holds no leaf.
+// was given: its row's, the hash of the SidecarAdmit that admitted it or, for the network's first device, the Genesis's
+// own hash A_0, which base 1's compile gives its row (QD-825; §10.4: "Genesis for the first device"). Before base 1 the
+// first device has no row, and the hash is the same A_0 from the anchor its follower holds the log to.
+// ErrGkmUnavailable before a state admits this sidecar, and for a tagged or ephemeral sidecar, which holds no leaf.
 func (self *urNetworkClients) admission() ([]byte, error) {
 	state := self.gkm.newestState()
 	identity := self.running.Identity()

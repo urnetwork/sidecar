@@ -173,6 +173,7 @@ func TestConfigLogChecksConfigPushesAtItsTip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	genesisChain := bridge.GenesisChain(net.signedGenesis)
 	rows := testConfigMarshal(t, &bridge.ProjectionRows{
 		Members: []*bridge.MemberRow{{MemberId: net.ownerMemberId.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_OWNER}},
 		Sidecars: []*bridge.SidecarRow{{
@@ -181,6 +182,7 @@ func TestConfigLogChecksConfigPushesAtItsTip(t *testing.T) {
 			IdentityPublicKey: net.owner.publicKey(),
 			IdentityAlg:       configIdentityAlgEd25519,
 			MemberId:          net.ownerMemberId.Bytes(),
+			AdmissionSha256:   genesisChain[:],
 		}},
 	})
 	rowsSha256 := sha256.Sum256(rows)
@@ -199,7 +201,6 @@ func TestConfigLogChecksConfigPushesAtItsTip(t *testing.T) {
 			RowsByteCount:    uint32(len(rows)),
 		})
 	}
-	genesisChain := bridge.GenesisChain(net.signedGenesis)
 	baseOne := signedHeader(1, genesisChain[:], 0, 2)
 	if err := log.CheckBase(baseOne, rows, testConfigStartMs); err != nil {
 		t.Fatal(err)

@@ -643,7 +643,8 @@ type CanonicalAction struct {
 	GrantAllow    []string               `protobuf:"bytes,11,rep,name=grant_allow,json=grantAllow,proto3" json:"grant_allow,omitempty"`
 	Version       uint32                 `protobuf:"varint,12,opt,name=version,proto3" json:"version,omitempty"` // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
 	// 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
-	// 10, 11, 28, 29 and 38; approvers that do not know a version refuse it
+	// 10, 11, 28, 29 and 38, a share's also 40; approvers that do not know
+	// a version refuse it
 	Scope         bool   `protobuf:"varint,13,opt,name=scope,proto3" json:"scope,omitempty"` // a multi-use template (16.6)
 	RepoId        []byte `protobuf:"bytes,14,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
 	Path          string `protobuf:"bytes,15,opt,name=path,proto3" json:"path,omitempty"`
@@ -677,9 +678,13 @@ type CanonicalAction struct {
 	// tag and value in its stored order and encoding: for a builder's bytes,
 	// written once in field order, the clear fields' deterministic encoding.
 	// Sealed once those fields are final, it opens beside them alone
-	EgressMode    uint32 `protobuf:"varint,39,opt,name=egress_mode,json=egressMode,proto3" json:"egress_mode,omitempty"` // egress_change: the subject's BridgeEgressMode, auto, exits or none,
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EgressMode uint32 `protobuf:"varint,39,opt,name=egress_mode,json=egressMode,proto3" json:"egress_mode,omitempty"` // egress_change: the subject's BridgeEgressMode, auto, exits or none,
+	// beside its subject (29) and, under exits, its exits in grant_dst (10),
+	// sidecar:<id> entries or one tag:<id>; version 1 alone, so no action
+	// that seals a detail sets it, and no server path takes it (QD-799)
+	ShareNetworkId []byte `protobuf:"bytes,40,opt,name=share_network_id,json=shareNetworkId,proto3" json:"share_network_id,omitempty"` // a share's grant (§8.11): the other network, 16 bytes, on a dial or
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CanonicalAction) Reset() {
@@ -955,6 +960,13 @@ func (x *CanonicalAction) GetEgressMode() uint32 {
 		return x.EgressMode
 	}
 	return 0
+}
+
+func (x *CanonicalAction) GetShareNetworkId() []byte {
+	if x != nil {
+		return x.ShareNetworkId
+	}
+	return nil
 }
 
 // What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
@@ -5228,7 +5240,7 @@ const file_protocol_record_proto_rawDesc = "" +
 	"sealedBody\x12\x1e\n" +
 	"\vkey_slot_id\x18\x03 \x01(\fR\tkeySlotId\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\rR\aversion\x12\x1b\n" +
-	"\tkey_index\x18\x05 \x01(\rR\bkeyIndex\"\xc5\b\n" +
+	"\tkey_index\x18\x05 \x01(\rR\bkeyIndex\"\xef\b\n" +
 	"\x0fCanonicalAction\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\rR\x04kind\x12\x1e\n" +
 	"\n" +
@@ -5274,7 +5286,8 @@ const file_protocol_record_proto_rawDesc = "" +
 	"versioning\x12#\n" +
 	"\rsealed_detail\x18& \x01(\fR\fsealedDetail\x12\x1f\n" +
 	"\vegress_mode\x18' \x01(\rR\n" +
-	"egressModeJ\x04\b\x17\x10\x18J\x04\b\x18\x10\x19J\x04\b\x19\x10\x1aJ\x04\b\"\x10#\"k\n" +
+	"egressMode\x12(\n" +
+	"\x10share_network_id\x18( \x01(\fR\x0eshareNetworkIdJ\x04\b\x17\x10\x18J\x04\b\x18\x10\x19J\x04\b\x19\x10\x1aJ\x04\b\"\x10#\"k\n" +
 	"\x15CanonicalActionDetail\x12\x14\n" +
 	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\x12\x1f\n" +
 	"\vtarget_port\x18\x02 \x01(\rR\n" +

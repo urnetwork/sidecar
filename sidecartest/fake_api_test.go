@@ -109,7 +109,7 @@ func TestFakeApiRoutesServeTheLog(t *testing.T) {
 
 	genesisChain := bridge.GenesisChain(env.signedGenesis)
 	env.tip = &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}
-	rows := env.baseOneRows(env.owner)
+	rows := env.baseOneRows(env.owner, env.signedGenesis)
 	pin := &fakeApiConfigPin{}
 	status, refusal, err := world.call(http.MethodPost, "/network/config/projection", owner, &fakeApiConfigProjectionPublishArgs{
 		SignedHeader: env.base(env.owner, env.tip, rows, 0, 1), Rows: rows, Genesis: env.signedGenesis, ConfigPushes: env.configRepo.pushes(0, 1),
@@ -342,7 +342,7 @@ func TestFakeApiReadsABaseUpToServersBodyBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := world.api.ClientToken(env.networkId, configLogSuiteId(), env.owner.sidecarId)
-	rows := env.baseOneRows(env.owner)
+	rows := env.baseOneRows(env.owner, env.signedGenesis)
 	oversized := func(pushCount int) *fakeApiConfigProjectionPublishArgs {
 		args := &fakeApiConfigProjectionPublishArgs{SignedHeader: env.base(env.owner, env.tip, rows, 1, 1+uint64(pushCount)), Rows: rows}
 		for range pushCount {

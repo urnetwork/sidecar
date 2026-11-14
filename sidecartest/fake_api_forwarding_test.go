@@ -26,7 +26,7 @@ func TestFakeApiChecksAForwardingDelegationsHostClient(t *testing.T) {
 
 	genesisChain := bridge.GenesisChain(env.signedGenesis)
 	env.tip = &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}
-	rows := env.baseOneRows(env.owner)
+	rows := env.baseOneRows(env.owner, env.signedGenesis)
 	pin := &fakeApiConfigPin{}
 	status, refusal, err := world.call(http.MethodPost, "/network/config/projection", topLevel, &fakeApiConfigProjectionPublishArgs{
 		SignedHeader: env.base(env.owner, env.tip, rows, 0, 1), Rows: rows, Genesis: env.signedGenesis, ConfigPushes: env.configRepo.pushes(0, 1),
