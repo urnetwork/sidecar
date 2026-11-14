@@ -273,7 +273,9 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 		request.Unavailable(refusal.Reply(attempt.pushId))
 		return nil, false
 	}
-	payload, err := sidecar.EvsCheckPayload(statement, body.GetPayload())
+	// the payload as the mirror holds the push's record, which evs served with no slot body (QD-806); slots come
+	// last, by their own calls
+	payload, err := sidecar.EvsCheckRecordPayload(statement, body.GetPayload())
 	if err != nil {
 		refusal := EvsCheckRefusalOfCodec(err)
 		if refusal.Reason == EvsCheckReasonFormatUnsupported {
@@ -283,6 +285,13 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 		return nil, false
 	}
 	attempt.payload = payload
+	// and the record keeps none, whatever a mirror sends: a body an ERASE since destroyed a key of is not stored again
+	recordPayload, err := sidecar.EvsRecordPayload(body.GetPayload())
+	if err != nil {
+		request.Refuse(EvsCheckRefusalOfCodec(err).Reply(attempt.pushId))
+		return nil, false
+	}
+	attempt.recordPayloadBytes = recordPayload
 
 	// the signature before any store read, at the statement's own auth pin: a statement nobody the log admitted
 	// signed costs evs nothing

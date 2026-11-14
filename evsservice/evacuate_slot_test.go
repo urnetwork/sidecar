@@ -544,9 +544,9 @@ func TestEvacuationKeepsTheSlotAClosureRetokenTookOver(t *testing.T) {
 }
 
 // B: another writer lists a committed version's slot as new four times, young and past 23 h, with its bytes and with
-// others. Each is refused 409 SLOT_STALE at step 6, recorded, the object being another statement's: no alarm, no
-// step 7, nothing taken. 26 h on, evacuation drops the four records, every one listing the slot, finds the committed
-// statement's origin at each HEAD, and keeps the slot.
+// others. Each is refused 409 SLOT_STALE at step 6's slot round, recorded, the object being another statement's: no
+// alarm, no step 7, nothing taken, and, the slots coming before the record (QD-806), no record appended. 26 h on,
+// evacuation finds the committed record alone, nothing of the re-listings to judge, and the slot stands.
 func TestEvacuationKeepsACommittedVersionsSlotThatRefusedPushesListAgain(t *testing.T) {
 	fixture := newSlotEvacuateFixture(t)
 	slotId, _, slotBody := checkTestSlot(t, "committed")
@@ -585,8 +585,12 @@ func TestEvacuationKeepsACommittedVersionsSlotThatRefusedPushesListAgain(t *test
 		t.Fatalf("counted %v foreign and %v mismatched", foreign, mismatch)
 	}
 
+	if records := fixture.batchRecords(); len(records) != 1 {
+		t.Fatalf("%d records in the batches, the committed one's alone wanted", len(records))
+	}
+
 	fixture.requireEvacuated(func(result *EvacuationResult) bool {
-		return result.DeadCount == 4 && result.KeptCount == 1 && result.SlotForeignCount == 4 && result.SlotDeletedCount == 0
+		return result.DeadCount == 0 && result.KeptCount == 1 && result.SlotForeignCount == 0 && result.SlotDeletedCount == 0
 	})
 	fixture.requireSlotOrigin(slotId, slotBody, committedOrigin)
 	fixture.requireSlotReadBack(map[uint64]sidecar.EvsTokenPath{1: checkTestPath("a")}, checkTestPath("a"), slotId, slotBody)

@@ -5,7 +5,8 @@
 //	slots     slot/<repo>/<id>, whole; a 404 answers missing
 //	maps      pmap/<repo>/<ref>/<p>/<map>/<part>/_, whole, over frames past 1 MiB
 //	pages     log/<repo>/<ref>/<n>, this process's cache, the object, or its container through pidx/
-//	records   a push's record at the place its version's entry names, or a part's at the place its seal names
+//	records   a push's record at the place its version's entry names, as stored, with no slot body (QD-806), or a
+//	          part's at the place its seal names
 //	ranges    a segment through SegmentLocator: up to 256 KiB read whole from offset 0, larger ones in 64 KiB-aligned
 //	          ranges covering what was asked, each range over frames past 1 MiB, offset naming each frame's first byte
 //
@@ -263,7 +264,8 @@ func (self *readAttempt) streamObject(stream *readStream, kind protocol.EvsReadO
 }
 
 // A push's record, or one of its parts' (§11.9's request row: push records and parts by push id), at the place the
-// version's entry or its seal names; one the head does not name as asked answers missing.
+// version's entry or its seal names, served as stored: a push's record holds no slot body (QD-806), so a reader that
+// holds fek_g finds no key an ERASE destroyed here. One the head does not name as asked answers missing.
 func (self *readAttempt) streamPushRecord(stream *readStream, readPush *protocol.EvsReadPush) bool {
 	kind := protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD
 	pushId := readPush.GetPushId()

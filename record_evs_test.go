@@ -103,6 +103,8 @@ type recordEvsWorld struct {
 	afterServe func(request *http.Request) error
 	// every request a device sent, its route alone
 	requests []string
+	// while set, the body of every read reply evs served, in order: what a reader holding the repo's keys could fetch
+	servedReads *[][]byte
 }
 
 // evs's view of the world: a token's rights are what its sidecar's grant gives.
@@ -443,6 +445,15 @@ func (self *recordEvsWorld) RoundTrip(request *http.Request) (*http.Response, er
 	}()
 	recorder := httptest.NewRecorder()
 	self.engine.Handler().ServeHTTP(recorder, request)
+	if strings.HasSuffix(request.URL.Path, "/read") {
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.servedReads != nil {
+				*self.servedReads = append(*self.servedReads, bytes.Clone(recorder.Body.Bytes()))
+			}
+		}()
+	}
 	if strings.HasSuffix(request.URL.Path, "/push") || strings.HasSuffix(request.URL.Path, "/slots/delete") {
 		for {
 			started, finished, changed := self.engine.StepEights()
@@ -676,6 +687,77 @@ func (self *recordEvsWorld) storedHolding(secrets ...[]byte) []string {
 	return holding
 }
 
+// The read replies evs serves while read runs, each body whole.
+func (self *recordEvsWorld) served(read func()) [][]byte {
+	self.t.Helper()
+	replies := [][]byte{}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.servedReads = &replies
+	}()
+	defer func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.servedReads = nil
+	}()
+	read()
+	return replies
+}
+
+// Evacuation's hourly run over the world's metadata cluster, 25 h 2 min past every write: each batch's records to
+// a parcel or a pack, and the batches deleted. Then, when idlePack, the nightly pass a week on, which packs an idle
+// repo's parcels, as §11.13 moves a small repo's records.
+func (self *recordEvsWorld) evacuate(idlePack bool) {
+	self.t.Helper()
+	settings := evsservice.DefaultEvacuatorSettings()
+	settings.SpoolDirectory = self.t.TempDir()
+	self.Advance(25*time.Hour + 2*time.Minute)
+	evacuator, err := evsservice.NewEvacuator(self.host.ServiceHost(), &evsservice.EvacuatorDeps{Settings: settings})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if result, err := evacuator.Run(self.ctx, self.cluster.ClusterId()); err != nil || result.HasBatches {
+		self.t.Fatalf("evacuation: %v (%+v)", err, result)
+	}
+	if !idlePack {
+		return
+	}
+	self.Advance(6 * 24 * time.Hour)
+	pass, err := evsservice.NewNightlyPass(self.host.ServiceHost(), &evsservice.NightlyPassDeps{
+		Evacuator:          settings,
+		SegmentClusterBusy: func(ctx context.Context, clusterId string) bool { return false },
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if result, err := pass.Run(self.ctx, self.cluster.ClusterId(), "", ""); err != nil {
+		self.t.Fatalf("the nightly pass: %v (%+v)", err, result)
+	}
+}
+
+// The keys under prefix on clusterId's cluster.
+func (self *recordEvsWorld) keys(clusterId string, prefix string) []string {
+	self.t.Helper()
+	cluster, err := self.host.Blobs.Cluster(clusterId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	keys := []string{}
+	for startAfter, more := "", true; more; {
+		var infos []*sidecar.BlobInfo
+		infos, more, err = cluster.List(self.ctx, prefix, startAfter, 1000)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		for _, info := range infos {
+			keys = append(keys, info.Key)
+			startAfter = info.Key
+		}
+	}
+	return keys
+}
+
 // Fails the test unless storedHolding finds repoId, which repo/ on the metadata cluster and every segment's public
 // header carry in the clear: a scan that finds nothing it should proves nothing.
 func (self *recordEvsWorld) requireScanFinds(repoId sidecar.Id) {
@@ -786,8 +868,10 @@ func TestRecordEvsStreamsStoresRowsAsRecordSlotRowBlocks(t *testing.T) {
 // QD-739's erasure through the binding: an ERASE naming one row of a record slot rewrites the slot without that
 // row's whole 104 B block, every other block left byte for byte at its index, so the entry's key and salt go
 // together and no slot read returns either. Neither was ever stored in the clear, the entry files included, and
-// neither is after. What the binding cannot reach, the push's own record holding its slot body as sent, is question
-// record-slot-104-push-record-slot-bodies.
+// neither is after. And the slot is the block's one stored copy (QD-806): before the ERASE only slot/ holds it, the
+// push's record keeping no slot body; after it no stored object holds it, in the batches, then in the parcel
+// evacuation moves the records to and in the pack a week on, and no read reply evs serves holds it, the push's record
+// among them.
 func TestRecordEvsStreamsEraseTakesARowsKeyAndSaltTogether(t *testing.T) {
 	world := newRecordEvsWorld(t)
 	repoId, err := world.NewRepo(t.Context())
@@ -821,6 +905,10 @@ func TestRecordEvsStreamsEraseTakesARowsKeyAndSaltTogether(t *testing.T) {
 	world.requireScanFinds(repoId)
 	if holding := world.storedHolding(keys[1], salts[1]); len(holding) != 0 {
 		t.Fatalf("the key or salt in the clear before the ERASE, in %v", holding)
+	}
+	slotKey := world.cluster.ClusterId() + ":" + evsservice.SlotKey(repoId, push.SlotId)
+	if holding := world.storedHolding(erasedBlock); len(holding) != 1 || holding[0] != slotKey {
+		t.Fatalf("the row's block stored in %v, its slot alone wanted", holding)
 	}
 
 	erase := &sidecar.RecordStreamErase{
@@ -873,6 +961,60 @@ func TestRecordEvsStreamsEraseTakesARowsKeyAndSaltTogether(t *testing.T) {
 			t.Fatalf("the entry file at %s holds the erased key or salt", entry.Path)
 		}
 	}
+
+	// the block nowhere: stored in no object, the record's batch moved to a parcel and the parcel to a pack, and served
+	// in no read, the push's record read back by the stream each time
+	requireErased := func(stage string) {
+		t.Helper()
+		if holding := world.storedHolding(erasedBlock); len(holding) != 0 {
+			t.Fatalf("%s: the erased row's block is stored in %v", stage, holding)
+		}
+		recordServed := false
+		for _, reply := range world.served(func() {
+			if _, err := world.For(adminId).ReadStream(t.Context(), repoId, writerId, 0); err != nil {
+				t.Fatalf("%s: %v", stage, err)
+			}
+			if _, err := world.For(writerId).ReadSlot(t.Context(), repoId, push.SlotId); err != nil {
+				t.Fatalf("%s: %v", stage, err)
+			}
+		}) {
+			if bytes.Contains(reply, erasedBlock) {
+				t.Fatalf("%s: a read reply serves the erased row's block", stage)
+			}
+			frames := sidecar.NewEvsReadFrames(bytes.NewReader(reply))
+			for {
+				frame, err := frames.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("%s: a read reply's frames: %v", stage, err)
+				}
+				object := frame.GetObject()
+				if object.GetKind() == protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD && bytes.Equal(object.GetId(), push.PushId.Bytes()) && !object.GetMissing() {
+					recordServed = true
+				}
+			}
+		}
+		if !recordServed {
+			t.Fatalf("%s: no read served the push's record", stage)
+		}
+	}
+	requireErased("in the batches")
+	world.evacuate(false)
+	if parcels := world.keys(world.cluster.ClusterId(), "hp/"); len(parcels) == 0 {
+		t.Fatal("evacuation wrote no parcel")
+	}
+	requireErased("in a parcel")
+	world.evacuate(true)
+	segmentCluster, err := world.host.Blobs.SegmentCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packs := world.keys(segmentCluster.ClusterId(), "pack/"); len(packs) == 0 {
+		t.Fatal("the nightly pass wrote no pack")
+	}
+	requireErased("in a pack")
 }
 
 // QD-739 from RECORD-M3-01's sealing to evs and back: notes RecordSeal sealed go to their writer's stream with their

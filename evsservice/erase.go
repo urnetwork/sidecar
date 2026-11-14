@@ -297,7 +297,8 @@ func FinishErasures(ctx context.Context, host *sidecar.ServiceHost, repoId sidec
 		if err != nil || statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) == 0 {
 			continue
 		}
-		payload, err := sidecar.EvsCheckPayload(statement, payloadBytes)
+		// as the record keeps it, with no slot body (QD-806)
+		payload, err := sidecar.EvsCheckRecordPayload(statement, payloadBytes)
 		if err != nil {
 			return finished, err
 		}
