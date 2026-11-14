@@ -344,6 +344,88 @@ func TestGkmNoEarlyWelcome(t *testing.T) {
 	}
 }
 
+// QD-747: HEAD welcome/<n> answers whether epoch n's Welcome stands, 404 before the uploader wrote it and 200 after,
+// with no body either way; only under rw, so a reader's and a read_only device's token are refused; a path out of
+// form is 400; and a store that does not answer is 503, never the 404 a leaf would remove a joiner on.
+func TestGkmWelcomeHeadAnswersWhetherTheWelcomeStands(t *testing.T) {
+	world := newGkmCommitWorld(t)
+	fixture := world.fixture
+	joiner := fixture.newSidecar("sc-joiner", memberDeviceFacts(world.memberId))
+	fixture.auth.grant(joiner.sidecarId, world.repoId, sidecar.AclEvsRead)
+	fixture.clientOf(joiner.sidecarId)
+	joinerToken := fixture.token(joiner.sidecarId, repoScope(world.repoId, "r"))
+	writer := fixture.newSidecar("sc-writer", memberDeviceFacts(world.memberId))
+	fixture.auth.grant(writer.sidecarId, world.repoId, sidecar.AclEvsWrite)
+	writerToken := fixture.token(writer.sidecarId, repoScope(world.repoId, "rw"))
+	readOnlyFacts := memberDeviceFacts(world.memberId)
+	readOnlyFacts.ReadOnly = true
+	readOnly := fixture.newSidecar("sc-read-only", readOnlyFacts)
+	fixture.auth.grant(readOnly.sidecarId, world.repoId, sidecar.AclEvsWrite)
+	readOnlyToken := fixture.token(readOnly.sidecarId, repoScope(world.repoId, "rw"))
+	groupPath := "/gkm/groups/" + sidecar.EvsKeyId(world.groupId)
+	stands := func(token string, epoch string) int {
+		t.Helper()
+		recorder := fixture.serve(http.MethodHead, groupPath+"/welcome/"+epoch, token, nil)
+		if recorder.Body.Len() != 0 {
+			t.Errorf("HEAD welcome/%s answered %d with a body of %d bytes", epoch, recorder.Code, recorder.Body.Len())
+		}
+		return recorder.Code
+	}
+	world.commitAndAdopt(1, true)
+	// the epoch stands and its uploader has written no Welcome: what a crash between the two leaves
+	if code := stands(writerToken, "1"); code != http.StatusNotFound {
+		t.Errorf("before the Welcome: %d", code)
+	}
+	// a leaf without rw learns nothing, whether or not a Welcome stands
+	if code := stands(joinerToken, "1"); code != http.StatusForbidden {
+		t.Errorf("a reader's token before the Welcome: %d", code)
+	}
+	request := &protocol.GkmWelcomeRequest{
+		Welcome:    []byte("a Welcome without the tree"),
+		Recipients: []*protocol.GkmWelcomeRecipient{{SidecarId: joiner.sidecarId.Bytes(), KeyPackageRef: bytes.Repeat([]byte{0xab}, gkmKeyPackageRefByteCount)}},
+	}
+	if code := fixture.serve(http.MethodPost, groupPath+"/welcome/1", world.adminToken, fixture.marshal(request)).Code; code != http.StatusOK {
+		t.Fatalf("the uploader's Welcome: %d", code)
+	}
+	if code := stands(writerToken, "1"); code != http.StatusOK {
+		t.Errorf("after the Welcome: %d", code)
+	}
+	if code := stands(world.adminToken, "1"); code != http.StatusOK {
+		t.Errorf("under admin: %d", code)
+	}
+	if code := stands(joinerToken, "1"); code != http.StatusForbidden {
+		t.Errorf("a reader's token: %d", code)
+	}
+	if code := stands(readOnlyToken, "1"); code != http.StatusForbidden {
+		t.Errorf("a read_only device's token: %d", code)
+	}
+	// another epoch's Welcome is its own object
+	if code := stands(writerToken, "2"); code != http.StatusNotFound {
+		t.Errorf("an epoch with no Welcome: %d", code)
+	}
+	for _, epoch := range []string{"0", "01", "x", "-1"} {
+		if code := stands(writerToken, epoch); code != http.StatusBadRequest {
+			t.Errorf("epoch %q: %d", epoch, code)
+		}
+	}
+	// the answer carries nothing of the Welcome, and a GET of the path is no route
+	if recorder := fixture.serve(http.MethodGet, groupPath+"/welcome/1", writerToken, nil); recorder.Code != http.StatusMethodNotAllowed || bytes.Contains(recorder.Body.Bytes(), request.GetWelcome()) {
+		t.Errorf("GET welcome/1: %d", recorder.Code)
+	}
+	// a store that does not answer is not a 404
+	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+		Op:        sidecartest.FaultOpGet,
+		KeyPrefix: GkmWelcomeKey(world.groupId, 1),
+		Result:    sidecartest.FailBeforeApply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := fixture.serve(http.MethodHead, groupPath+"/welcome/1", writerToken, nil)
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Retry-After") == "" {
+		t.Errorf("a store fault: %d", recorder.Code)
+	}
+}
+
 // A crash between an epoch 16 past the pointer and the pointer's PUT heals at the next commit (§10.6's group-info
 // row, §22.7's FS-20 case).
 func TestGkmGroupInfoPointerHealsAtTheNextCommit(t *testing.T) {
