@@ -1,7 +1,8 @@
-//go:build !sidecar_http && !js && !ios && !android && !sdk_mobile_bind
+//go:build !sidecar_http && !js && !ios && !android && !sdk_mobile_bind && !windows
 
 // The pin push of a git-mode ref (EVS1-M6-05; DESIGN-DETAILS 16.2.9 and 8.2.10 as amended; QD-802), through a mount's
-// receiver over the stand-in evs, with the system git as evs_local_receive_test.go has it.
+// receiver over the stand-in evs, with the system git as evs_local_receive_test.go has it, whose receiver it builds on,
+// so off Windows as that file is.
 
 package sidecar
 
@@ -95,5 +96,52 @@ func TestEvsLocalPinPushCommitsNoChangeAndMovesNoLocalRef(t *testing.T) {
 	}
 	if publisher.posted() != posted+1 {
 		t.Fatalf("a pin push to a ref it cannot bind posted")
+	}
+	// show over the same refs, under a set this device reads: the tag, the deleted branch and main, stopped here, each
+	// listed apart, and the name with no head not at all
+	repoWorld := publisher.writer.world
+	signerId := repoWorld.signer.sidecarId
+	set := &AclPrefixRuleSet{At: 1, Signer: signerId, State: AclPrefixSetOpened, Rules: []*protocol.PrefixRule{
+		{Subject: signerId.Bytes(), Action: protocol.PrefixAction_PREFIX_ACTION_WRITE},
+	}}
+	repoWorld.config.stateLock.Lock()
+	repoWorld.config.repo.PrefixRules = append(repoWorld.config.repo.PrefixRules, &protocol.AclRepoPrefixRulesRow{At: 1, Signer: signerId.Bytes()})
+	repoWorld.config.stateLock.Unlock()
+	client := publisher.writer.test.client
+	client.EnablePrefixRules(&EvsPrefixRulesArgs{
+		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) {
+			return []*AclPrefixRuleSet{set}, nil
+		},
+	})
+	status, err := client.PrefixRulesStatus(ctx, repoWorld.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := evsPrefixTestBindings(status.Refs)
+	if len(bindings) != 3 || bindings["main"] != EvsPrefixStopped || bindings["refs/tags/v1"] != EvsPrefixTag || bindings["topic"] != EvsPrefixDeleted {
+		t.Errorf("show's refs: %v", bindings)
+	}
+}
+
+// A git push built on the version before a pin push loses its turn to it and is built again on the pin push's version,
+// never answered non-fast-forward: the pin push, an UPDATE of one tip that carries nothing, moves no tip (8.2.10's
+// losing row, G7). An update that moved the tip is still the caller's non-fast-forward
+// (TestEvsLocalPublishJudgesAHeadPastItsBase).
+func TestEvsLocalPinPushIsCommitlessToAPushThatLosesItsTurn(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	c1 := publisher.commit(map[string]string{"a.txt": "a\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	stale := *publisher.ref("main")
+	// the pin push as the local tier builds it: the UPDATE of one tip
+	if result, err := publisher.publish("main", &c1); err != nil || result.Version != 2 || len(result.Commits) != 0 || result.Flags != 0 {
+		t.Fatalf("the pin push: %+v %v", result, err)
+	}
+	*publisher.ref("main") = stale
+	c2 := publisher.commit(map[string]string{"a.txt": "a two\n"}, c1)
+	result, err := publisher.publish("main", &c2)
+	if err != nil || result.Version != 3 {
+		t.Fatalf("a push that lost its turn to a pin push: %+v %v", result, err)
 	}
 }
