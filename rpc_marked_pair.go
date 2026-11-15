@@ -116,6 +116,7 @@ func (self subprotocolMarkedPairs) peerIds() []connect.Id {
 	return self.peers.peerIds
 }
 
+// Whether peerId is one of the warm indexers.
 func (self subprotocolMarkedPairs) has(peerId connect.Id) bool {
 	return slices.Contains(self.peerIds(), peerId)
 }
