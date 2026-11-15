@@ -5,7 +5,8 @@
 //     AAAA only, at most 8; a CNAME alone at a host and never into a tombstoned label; printable TXT
 //     of at most 1024 bytes, with no SPF at @; MX at hosts only, at most 4; SRV only at
 //     _svc._proto.<host>; *.<host> only for A and AAAA; no NS, DS, DNAME, PTR, CAA, HTTPS or SVCB; no
-//     system owner, scope label or word-number label; a TTL within ttl.user_range.
+//     system owner, scope label or word-number label; a TTL within ttl.user_range. In a Team scope's
+//     zone (zone_scope.go) the same rules hold below the scope's apex, which keeps its system set alone.
 //   - LintZoneWrite holds every writer's result, system rows included, to RFC 2181 §10.1 and §12.7's
 //     DMARC rule, at each owner the write changed.
 //   - copy_rows.go's PlanCopyRows keeps the wildcard answering where a write makes an empty
@@ -30,14 +31,6 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// §12.7's caps on a user RRset. Requirements of the record table (D-DNS-7) that users are told, not
-// tunables.
-const (
-	dnsUserAddressMaxCount = 8
-	dnsUserMxMaxCount      = 4
-	dnsUserTxtMaxByteCount = 1024
-)
-
 // The host labels §12.7 keeps for the system's mail and burner records in every network, alias and
 // scope zone.
 var dnsUserRefusedHostLabels = []string{"b", "mx", "mail", "mta-sts"}
@@ -59,6 +52,8 @@ var (
 	ErrDnsZoneLint = errors.New("dns zone lint")
 	// A DMARC record §12.7 refuses: ruf, fo, or a report address in the root.
 	ErrDnsDmarcRefused = errors.New("dns dmarc record refused")
+	// A TLS-RPT record §12.7 refuses: no rua, or a report address in the root (DNS-M8-01).
+	ErrDnsTlsRptRefused = errors.New("dns tls-rpt record refused")
 )
 
 // What §12.7's user rules read beyond the RRset.
@@ -73,9 +68,24 @@ type DnsUserRecordContext struct {
 	TtlRange [2]uint32
 	// The network's Team scope labels (§8, from M6), which no user host takes. Empty before M6.
 	ScopeLabels []string
+	// The scope label when Apex is a Team scope's, <scope>.<label>.<root> (zone_scope.go): only its hosts,
+	// one label below it, take user records, and its apex, with the underscore owners directly below it,
+	// keeps §12.7's set alone. Empty for the network's own zone.
+	Scope string
 	// Whether a label directly below Root is tombstoned (§12.5): DNS-M5-10's lookup. A CNAME into the
 	// root is refused while this is nil, the closed direction.
 	Tombstoned func(label string) bool
+	// §12.7's caps on a user RRset: dns.yml's user_records. nil takes DefaultDnsUserRecordSettings, the
+	// table's own values.
+	Limits *DnsUserRecordSettings
+}
+
+// The caps Limits gives, or the table's own.
+func (self *DnsUserRecordContext) limits() *DnsUserRecordSettings {
+	if self.Limits != nil {
+		return self.Limits
+	}
+	return DefaultDnsUserRecordSettings()
 }
 
 // Whether name is a canonical name: lowercase, fully qualified, with no escape.
@@ -133,6 +143,9 @@ const (
 // owner's form below the context's apex and its host label, or why §12.7 refuses it as a user owner.
 func (self *DnsUserRecordContext) userOwnerForm(owner string) (dnsUserOwnerForm, string, error) {
 	if owner == self.Apex {
+		if self.Scope != "" {
+			return 0, "", fmt.Errorf("is the scope %s's apex, which holds §12.7's records alone", self.Scope)
+		}
 		return dnsUserOwnerApex, "", nil
 	}
 	if !dns.IsSubDomain(self.Apex, owner) {
@@ -171,6 +184,9 @@ func (self *DnsUserRecordContext) userOwnerForm(owner string) (dnsUserOwnerForm,
 	}
 	switch {
 	case len(labels) == 1 && strings.HasPrefix(host, "_"):
+		if self.Scope != "" {
+			return 0, "", fmt.Errorf("is at the scope %s's apex, which holds §12.7's records alone", self.Scope)
+		}
 		if err := checkUnderscore(host); err != nil {
 			return 0, "", err
 		}
@@ -289,11 +305,12 @@ func ValidateUserRecordSet(context *DnsUserRecordContext, set *DnsRecordSet) err
 	if set.Ttl < context.TtlRange[0] || context.TtlRange[1] < set.Ttl {
 		return refuseDnsUserRecord(set, "ttl %d is outside %d to %d", set.Ttl, context.TtlRange[0], context.TtlRange[1])
 	}
+	limits := context.limits()
 
 	switch set.Type {
 	case dns.TypeA, dns.TypeAAAA:
-		if dnsUserAddressMaxCount < len(records) {
-			return refuseDnsUserRecord(set, "%d addresses, more than %d", len(records), dnsUserAddressMaxCount)
+		if limits.AddressMaxCount < len(records) {
+			return refuseDnsUserRecord(set, "%d addresses, more than %d", len(records), limits.AddressMaxCount)
 		}
 		for _, record := range records {
 			var ip net.IP
@@ -343,12 +360,12 @@ func ValidateUserRecordSet(context *DnsUserRecordContext, set *DnsRecordSet) err
 				return refuseDnsUserRecord(set, "SPF at the apex is the system's")
 			}
 		}
-		if dnsUserTxtMaxByteCount < byteCount {
-			return refuseDnsUserRecord(set, "%d bytes of text, more than %d", byteCount, dnsUserTxtMaxByteCount)
+		if limits.TxtMaxByteCount < byteCount {
+			return refuseDnsUserRecord(set, "%d bytes of text, more than %d", byteCount, limits.TxtMaxByteCount)
 		}
 	case dns.TypeMX:
-		if dnsUserMxMaxCount < len(records) {
-			return refuseDnsUserRecord(set, "%d exchanges, more than %d", len(records), dnsUserMxMaxCount)
+		if limits.MxMaxCount < len(records) {
+			return refuseDnsUserRecord(set, "%d exchanges, more than %d", len(records), limits.MxMaxCount)
 		}
 		for _, record := range records {
 			if exchange := dns.CanonicalName(record.(*dns.MX).Mx); !isDnsTargetName(exchange) {
@@ -427,6 +444,60 @@ func ValidateDmarcRecord(root string, record string) error {
 	return nil
 }
 
+// Holds a TLS-RPT record to RFC 8460 §3 and §12.7: v=TLSRPTv1 first, then a rua whose every address is a mailto:
+// one outside root, since report mail into a user root would land with whoever holds the name, as DMARC's would.
+// root is a zone name, with or without its final dot.
+func ValidateTlsRptRecord(root string, record string) error {
+	root = strings.TrimSuffix(strings.ToLower(root), ".")
+	if root == "" {
+		return fmt.Errorf("%w: no root", ErrDnsTlsRptRefused)
+	}
+	tags := map[string]string{}
+	for index, part := range strings.Split(record, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(part, "=")
+		name = strings.ToLower(strings.TrimSpace(name))
+		value = strings.TrimSpace(value)
+		if !ok || name == "" {
+			return fmt.Errorf("%w: %q is not a field", ErrDnsTlsRptRefused, part)
+		}
+		if index == 0 && (name != "v" || value != "TLSRPTv1") {
+			return fmt.Errorf("%w: does not start v=TLSRPTv1", ErrDnsTlsRptRefused)
+		}
+		if _, repeated := tags[name]; repeated {
+			return fmt.Errorf("%w: %s twice", ErrDnsTlsRptRefused, name)
+		}
+		tags[name] = value
+	}
+	rua, ok := tags["rua"]
+	if tags["v"] != "TLSRPTv1" || !ok || rua == "" {
+		return fmt.Errorf("%w: no v=TLSRPTv1 or no rua", ErrDnsTlsRptRefused)
+	}
+	for _, uri := range strings.Split(rua, ",") {
+		uri = strings.TrimSpace(uri)
+		scheme, address, ok := strings.Cut(uri, ":")
+		if !ok || strings.ToLower(scheme) != "mailto" {
+			return fmt.Errorf("%w: rua %q is not a mailto: address", ErrDnsTlsRptRefused, uri)
+		}
+		address, err := url.PathUnescape(address)
+		if err != nil {
+			return fmt.Errorf("%w: rua %q: %w", ErrDnsTlsRptRefused, uri, err)
+		}
+		at := strings.LastIndexByte(address, '@')
+		if at <= 0 || at == len(address)-1 {
+			return fmt.Errorf("%w: rua %q has no address", ErrDnsTlsRptRefused, uri)
+		}
+		domain := strings.TrimSuffix(strings.ToLower(address[at+1:]), ".")
+		if domain == root || strings.HasSuffix(domain, "."+root) {
+			return fmt.Errorf("%w: rua %q sends reports into %s", ErrDnsTlsRptRefused, uri, root)
+		}
+	}
+	return nil
+}
+
 // Every row of rows at each owner, by owner.
 func dnsRowsByOwner(rows []DnsRecordSet) map[string][]DnsRecordSet {
 	ownerRows := map[string][]DnsRecordSet{}
@@ -453,8 +524,8 @@ func dnsOwnerRowsEqual(first []DnsRecordSet, second []DnsRecordSet) bool {
 
 // The zone lint (§12.7, D-DNS-6), over every writer's result, system rows included: at each owner the
 // write changed between before and after, no CNAME beside any other row, copy rows included (RFC 2181
-// §10.1), no CNAME at a wildcard, and every DMARC record at a _dmarc owner held to
-// ValidateDmarcRecord. Owners the write left alone are not judged, so a row an older release let in
+// §10.1), no CNAME at a wildcard, every DMARC record at a _dmarc owner held to ValidateDmarcRecord and
+// every TLS-RPT record at a _smtp._tls owner to ValidateTlsRptRecord. Owners the write left alone are not judged, so a row an older release let in
 // costs its own owner and not every later write. A refusal wraps ErrDnsZoneLint, and the write takes
 // no serial.
 func LintZoneWrite(root string, before []DnsRecordSet, after []DnsRecordSet) error {
@@ -480,7 +551,13 @@ func LintZoneWrite(root string, before []DnsRecordSet, after []DnsRecordSet) err
 				return fmt.Errorf("%w: %s is a wildcard CNAME", ErrDnsZoneLint, owner)
 			}
 		}
-		if !strings.HasPrefix(owner, "_dmarc.") {
+		var validate func(root string, record string) error
+		switch {
+		case strings.HasPrefix(owner, "_dmarc."):
+			validate = ValidateDmarcRecord
+		case strings.HasPrefix(owner, "_smtp._tls."):
+			validate = ValidateTlsRptRecord
+		default:
 			continue
 		}
 		for _, row := range rows {
@@ -496,7 +573,7 @@ func LintZoneWrite(root string, before []DnsRecordSet, after []DnsRecordSet) err
 				if err != nil {
 					return fmt.Errorf("%w: %s: %w", ErrDnsZoneLint, owner, err)
 				}
-				if err := ValidateDmarcRecord(root, text); err != nil {
+				if err := validate(root, text); err != nil {
 					return fmt.Errorf("%w: %s: %w", ErrDnsZoneLint, owner, err)
 				}
 			}

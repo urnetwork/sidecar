@@ -8,7 +8,7 @@
 // Redis lost costs seconds, not a write. Plan reading 8 decides reload: only for after below the serial
 // with no row to continue from, a 7-day purge's gap included, and while restoring only once the restore
 // transaction has run, so an edge never swaps down to a dump's older zone. Every answer names the lb
-// interfaces and the key window released now.
+// interfaces, with the custom-host map's state of each (api_map.go), and the key window released now.
 //
 // GET snapshot?root= streams one transaction's rows as wire.go's snapshot lines, so neither end
 // buffers a zone; a stream cut short ends with no end line, which the edge refuses.
@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 )
 
@@ -105,7 +106,9 @@ func (self *DnsApi) readJournal(request *http.Request, root string, after uint64
 		answer.Rows = read.Rows
 	}
 	if self.deps.Interfaces != nil {
-		answer.Interfaces = self.deps.Interfaces()
+		// a copy, since the map's fields are this answer's (DNS-M6-03)
+		answer.Interfaces = slices.Clone(self.deps.Interfaces())
+		self.fillMapInterfaces(ctx, root, answer.Interfaces)
 	}
 	if self.deps.KeyWindow != nil {
 		answer.KeyWindow = self.deps.KeyWindow(root, self.clock.Now())
