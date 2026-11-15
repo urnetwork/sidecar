@@ -24,6 +24,16 @@
 //	cert      the sidecar holds no unexpired certificate row naming the host (TlsListenFacts.Certified), except an
 //	          acme-tls/1-only registration, a TLS-ALPN-01 responder, before its first order
 //
+// An entry that passes is then narrowed (DESIGN-DETAILS 17.2.10, TLS-M6-08): of its certified names the hook keeps only
+// those its sidecar holds an unexpired custom_issued row for, mapped to the name's owner, past now plus
+// CertifiedMargin (TlsListenFacts.CustomCertified), and of its ACME names only those whose claim the account's lock
+// holds for that sidecar at that sequence (AcmeClaims). A dropped name never refuses the entry, since a listener must
+// not lose its network names over a custom one, but an acme-tls/1-only entry left with no ACME name is refused. The
+// engine stores the entry as the hook left it. An ACME name whose claim is above the one the facts hold reads the
+// facts again, synchronously and at most once a FactsRereadInterval a sidecar, so a new claim is not held up by the
+// cache. A list past its count is the engine's malformed entry (registrations.go). Until TLS-M6-05's model reads the
+// two maps every listed name is dropped: the closed direction.
+//
 // §13.9's system publish, tls/443/mta-sts (TLS-M8-02, §15.5, D-MAIL-4), keeps lines of its own and no other name takes
 // them, tls/8443/mta-sts and the like refused: it admits only a receiver, whose approved smtp/25/mx listen grant the
 // engine asked in the name's place (system_publish.go, the check's Listen), registering app mode http, whose sidecar
@@ -96,6 +106,12 @@ type TlsNamespaceSettings struct {
 	// The most screen verdicts held per network between reads of its facts; past it a verdict is computed and not
 	// held. Positive.
 	ScreenVerdictMaxCount int
+	// How long before a custom certificate's not_after the hook stops keeping its name certified (17.2.10): the
+	// front's CertifiedMargin, so listener and hook share one default. Not negative.
+	CertifiedMargin time.Duration
+	// The least time between two of one sidecar's synchronous reads for a claim above the facts' (17.2.10's "once a
+	// page a sidecar"). Positive.
+	FactsRereadInterval time.Duration
 }
 
 // §13.9's numbers and plan-SOCK-gate-data's refresh.
@@ -111,6 +127,8 @@ func DefaultTlsNamespaceSettings() *TlsNamespaceSettings {
 		FactsLoadQueueCount:         1024,
 		FactsMaxNetworkCount:        100_000,
 		ScreenVerdictMaxCount:       1024,
+		CertifiedMargin:             sidecar.DefaultTlsFrontSettings().CertifiedMargin,
+		FactsRereadInterval:         1 * time.Second,
 	}
 }
 
@@ -139,6 +157,10 @@ func (self *TlsNamespaceSettings) Validate() error {
 		return fmt.Errorf("%w: tls.facts_max_network_count", ErrSocketsSettingsRefused)
 	case self.ScreenVerdictMaxCount <= 0:
 		return fmt.Errorf("%w: tls.screen_verdict_max_count", ErrSocketsSettingsRefused)
+	case self.CertifiedMargin < 0:
+		return fmt.Errorf("%w: tls.certified_margin", ErrSocketsSettingsRefused)
+	case self.FactsRereadInterval <= 0:
+		return fmt.Errorf("%w: tls.facts_reread_interval", ErrSocketsSettingsRefused)
 	}
 	for _, port := range self.Ports {
 		if name, namespace, err := sidecar.ParseSocketName(tlsNamespaceNamePrefix + port + "/www"); err != nil ||
@@ -176,6 +198,58 @@ type TlsListenFacts struct {
 	VerifiedDomains    []string `json:"verified_domains,omitempty"`
 	ScopeLabels        []string `json:"scope_labels,omitempty"`
 	ScreenAllowedHosts []string `json:"screen_allowed_hosts,omitempty"`
+	// 17.2.10's CustomCertified, for every sidecar and owner of the network: each custom_issued row whose custom host is
+	// active and mapped to the owner, with its not_after, and TLS-M6-03's certified aliases. Empty until TLS-M6-05's
+	// model reads them.
+	CustomCertified []*TlsListenCustomName `json:"custom_certified,omitempty"`
+	// 17.2.10's AcmeClaims, for every sidecar and owner: each account whose lock the sidecar holds, purpose order,
+	// unlapsed, for a row of a custom host mapped to the owner, by its claim sequence. Empty until TLS-M6-05's model
+	// reads them.
+	AcmeClaims []*TlsListenAcmeClaim `json:"acme_claims,omitempty"`
+}
+
+// A custom host or alias a sidecar holds a certificate for, on the owner its host maps to (17.2.10).
+type TlsListenCustomName struct {
+	SidecarId connect.Id `json:"sidecar_id"`
+	// The host segment of tls/<port>/<owner>.
+	Owner    string    `json:"owner"`
+	Name     string    `json:"name"`
+	NotAfter time.Time `json:"not_after"`
+}
+
+// A custom host whose account lock a sidecar holds to order, on the owner the host maps to, with the claim's sequence
+// (17.2.6, 17.2.10).
+type TlsListenAcmeClaim struct {
+	SidecarId connect.Id `json:"sidecar_id"`
+	Owner     string     `json:"owner"`
+	Name      string     `json:"name"`
+	ClaimSeq  uint64     `json:"claim_seq"`
+}
+
+// CustomCertified for the entry's sidecar and owner: each name with its latest not_after.
+func (self *TlsListenFacts) customCertified(sidecarId connect.Id, owner string) map[string]time.Time {
+	nameNotAfters := map[string]time.Time{}
+	for _, custom := range self.CustomCertified {
+		if custom == nil || custom.SidecarId != sidecarId || custom.Owner != owner {
+			continue
+		}
+		if notAfter, found := nameNotAfters[custom.Name]; !found || notAfter.Before(custom.NotAfter) {
+			nameNotAfters[custom.Name] = custom.NotAfter
+		}
+	}
+	return nameNotAfters
+}
+
+// AcmeClaims for the entry's sidecar and owner: each name with its claim's sequence, the highest where two are held.
+func (self *TlsListenFacts) acmeClaims(sidecarId connect.Id, owner string) map[string]uint64 {
+	nameClaimSeqs := map[string]uint64{}
+	for _, claim := range self.AcmeClaims {
+		if claim == nil || claim.SidecarId != sidecarId || claim.Owner != owner {
+			continue
+		}
+		nameClaimSeqs[claim.Name] = max(nameClaimSeqs[claim.Name], claim.ClaimSeq)
+	}
+	return nameClaimSeqs
 }
 
 // One live certificate row as ValidateListen reads it: whose it is, until when, and what it names.
@@ -277,6 +351,14 @@ type TlsNamespaceHooks struct {
 
 	stateLock      sync.Mutex
 	networkEntries map[connect.Id]*tlsListenFactsEntry
+	// When each (network, sidecar) last read its facts again for a claim above theirs.
+	sidecarRereadTimes map[tlsListenRereadKey]time.Time
+}
+
+// Who a synchronous read is rationed to.
+type tlsListenRereadKey struct {
+	networkId connect.Id
+	sidecarId connect.Id
 }
 
 var _ SocketNamespaceHooks = (*TlsNamespaceHooks)(nil)
@@ -299,14 +381,15 @@ func NewTlsNamespaceHooks(ctx context.Context, source TlsListenFactsSource, cloc
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &TlsNamespaceHooks{
-		ctx:            cancelCtx,
-		cancel:         cancel,
-		settings:       settings,
-		source:         source,
-		clock:          clock,
-		loads:          make(chan connect.Id, settings.FactsLoadQueueCount),
-		loadCount:      sidecar.NewMonitorValue[uint64](0),
-		networkEntries: map[connect.Id]*tlsListenFactsEntry{},
+		ctx:                cancelCtx,
+		cancel:             cancel,
+		settings:           settings,
+		source:             source,
+		clock:              clock,
+		loads:              make(chan connect.Id, settings.FactsLoadQueueCount),
+		loadCount:          sidecar.NewMonitorValue[uint64](0),
+		networkEntries:     map[connect.Id]*tlsListenFactsEntry{},
+		sidecarRereadTimes: map[tlsListenRereadKey]time.Time{},
 	}
 	self.group.Add(settings.FactsLoadWorkerCount)
 	for range settings.FactsLoadWorkerCount {
@@ -634,10 +717,81 @@ func (self *TlsNamespaceHooks) ValidateListen(ctx context.Context, check *Socket
 		return tlsListenRefused("a host the screen does not allow")
 	}
 	// cert
-	if !tlsAcmeOnlyRegistration(check.Registration) && !facts.Certified(sidecarId, host, now) {
+	acmeOnly := tlsAcmeOnlyRegistration(check.Registration)
+	if !acmeOnly && !facts.Certified(sidecarId, host, now) {
 		return tlsListenRefused("no unexpired certificate")
 	}
+	// 17.2.10's narrowing, which refuses only an acme-only entry left with no claim
+	certifiedNames, acmeNames := self.narrow(ctx, check, sidecarId, host, facts, now)
+	if acmeOnly && len(acmeNames) == 0 {
+		return tlsListenRefused("an acme-tls/1-only registration holding no claim")
+	}
+	check.Registration.CertifiedNames, check.Registration.AcmeNames = certifiedNames, acmeNames
 	return nil
+}
+
+// 17.2.10's narrowing of the entry's two lists for sidecarId on owner: the certified names facts certify past now plus
+// CertifiedMargin, and the ACME names whose claim facts hold at that very sequence. A claim above the one facts hold
+// reads the facts again first, at most once a FactsRereadInterval a sidecar; a failed read narrows on what is held.
+// Names keep the entry's order, and an empty list is nil.
+func (self *TlsNamespaceHooks) narrow(ctx context.Context, check *SocketListenCheck, sidecarId connect.Id, owner string, facts *TlsListenFacts, now time.Time) ([]string, []*sidecar.SocketAcmeName) {
+	registration := check.Registration
+	if len(registration.CertifiedNames) == 0 && len(registration.AcmeNames) == 0 {
+		return nil, nil
+	}
+	acmeClaims := facts.acmeClaims(sidecarId, owner)
+	ahead := slices.ContainsFunc(registration.AcmeNames, func(acmeName *sidecar.SocketAcmeName) bool {
+		return acmeName != nil && acmeClaims[acmeName.Name] < acmeName.ClaimSeq
+	})
+	if ahead && self.takeReread(check.NetworkId, sidecarId, now) {
+		if err := self.load(ctx, check.NetworkId); err == nil {
+			if fresh, loaded := self.loadedFacts(check.NetworkId); loaded {
+				facts = fresh
+				acmeClaims = facts.acmeClaims(sidecarId, owner)
+			}
+		}
+	}
+	customCertified := facts.customCertified(sidecarId, owner)
+	var certifiedNames []string
+	for _, name := range registration.CertifiedNames {
+		if notAfter, found := customCertified[name]; found && now.Add(self.settings.CertifiedMargin).Before(notAfter) {
+			certifiedNames = append(certifiedNames, name)
+		}
+	}
+	var acmeNames []*sidecar.SocketAcmeName
+	for _, acmeName := range registration.AcmeNames {
+		if claimSeq, found := acmeClaims[acmeName.Name]; found && claimSeq == acmeName.ClaimSeq {
+			acmeNames = append(acmeNames, &sidecar.SocketAcmeName{Name: acmeName.Name, ClaimSeq: acmeName.ClaimSeq})
+		}
+	}
+	return certifiedNames, acmeNames
+}
+
+// Whether the sidecar may read its network's facts again now, noting it if so: once a FactsRereadInterval.
+func (self *TlsNamespaceHooks) takeReread(networkId connect.Id, sidecarId connect.Id, now time.Time) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	key := tlsListenRereadKey{networkId: networkId, sidecarId: sidecarId}
+	if lastTime, found := self.sidecarRereadTimes[key]; found && now.Sub(lastTime) < self.settings.FactsRereadInterval {
+		return false
+	}
+	// the rationing is soft state: past the networks' bound it starts again, which lets each sidecar one read more
+	if self.settings.FactsMaxNetworkCount <= len(self.sidecarRereadTimes) {
+		self.sidecarRereadTimes = map[tlsListenRereadKey]time.Time{}
+	}
+	self.sidecarRereadTimes[key] = now
+	return true
+}
+
+// The network's facts as held now, asking nothing.
+func (self *TlsNamespaceHooks) loadedFacts(networkId connect.Id) (*TlsListenFacts, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	entry := self.networkEntries[networkId]
+	if entry == nil || entry.facts == nil {
+		return nil, false
+	}
+	return entry.facts, true
 }
 
 // §13.9's system publish lines, as the file's header lists them, for a sidecar's tls/443/mta-sts entry.
@@ -666,6 +820,8 @@ func (self *TlsNamespaceHooks) validateSystemPublish(check *SocketListenCheck, s
 		// @ rides the network's pair, which mta-sts.<net>.<root> does too
 		return tlsListenRefused("no unexpired certificate for the network's pair")
 	}
+	// no custom name or claim rides the system publish
+	check.Registration.CertifiedNames, check.Registration.AcmeNames = nil, nil
 	return nil
 }
 

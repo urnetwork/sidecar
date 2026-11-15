@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sync"
@@ -560,9 +561,13 @@ func TestTlsListenRefusesAListenerWithNoCertificate(t *testing.T) {
 		{name: "the apex", mutate: func(scene *testTlsListenScene) {
 			scene.setName("tls/443/@")
 		}, allow: true},
-		{name: "acme-tls/1 alone with no certificate", mutate: func(scene *testTlsListenScene) {
+		{name: "acme-tls/1 alone with no certificate, holding a claim", mutate: func(scene *testTlsListenScene) {
 			scene.facts.Certs = nil
 			scene.check.Registration.Alpn = []string{"acme-tls/1"}
+			scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 1}}
+			scene.facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+				{SidecarId: scene.sidecarId, Owner: "blog", Name: "app.customer.example", ClaimSeq: 1},
+			}
 		}, allow: true},
 		{name: "acme-tls/1 and h2 with no certificate", mutate: func(scene *testTlsListenScene) {
 			scene.facts.Certs = nil
@@ -971,5 +976,229 @@ func TestTlsListenSystemPublishComposesIntoTheRegistrationPath(t *testing.T) {
 	process.gate.Load(networkId)
 	if status := register(receiver, 2); status != sidecar.SocketRegistrationStatusRevoked {
 		t.Fatalf("after the receiver's grant was revoked the entry answered %s", status)
+	}
+}
+
+// 17.2.10's narrowing (TLS-M6-08): the entry keeps the certified names its sidecar's rows certify past the margin on
+// the name's owner and the ACME names whose claim the lock holds at that sequence; a claim below the row's, a
+// certificate inside the margin, another sidecar's or another owner's row are dropped; no dropping refuses the entry.
+func TestTlsListenNarrowsCertifiedAndAcmeNames(t *testing.T) {
+	scene := newTestTlsListenScene(t, nil)
+	now := scene.clock.Now()
+	margin := socketsservice.DefaultTlsNamespaceSettings().CertifiedMargin
+	other := testSocketId()
+	scene.facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+		{SidecarId: scene.sidecarId, Owner: "blog", Name: "app.customer.example", NotAfter: now.Add(margin + time.Hour)},
+		{SidecarId: scene.sidecarId, Owner: "blog", Name: "edge.customer.example", NotAfter: now.Add(margin)},
+		{SidecarId: other, Owner: "blog", Name: "www.customer.example", NotAfter: now.Add(48 * time.Hour)},
+		{SidecarId: scene.sidecarId, Owner: "shop", Name: "shop.customer.example", NotAfter: now.Add(48 * time.Hour)},
+	}
+	scene.facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+		{SidecarId: scene.sidecarId, Owner: "blog", Name: "app.customer.example", ClaimSeq: 3},
+		{SidecarId: scene.sidecarId, Owner: "blog", Name: "new.customer.example", ClaimSeq: 6},
+		{SidecarId: other, Owner: "blog", Name: "www.customer.example", ClaimSeq: 9},
+	}
+	scene.check.Registration.CertifiedNames = []string{"app.customer.example", "edge.customer.example", "www.customer.example", "shop.customer.example"}
+	scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{
+		{Name: "app.customer.example", ClaimSeq: 3},
+		{Name: "new.customer.example", ClaimSeq: 5},
+		{Name: "www.customer.example", ClaimSeq: 9},
+	}
+	if err := scene.validate(); err != nil {
+		t.Fatalf("a narrowing refused the entry: %v", err)
+	}
+	if got := scene.check.Registration.CertifiedNames; !slices.Equal(got, []string{"app.customer.example"}) {
+		t.Fatalf("certified names kept %v", got)
+	}
+	if got := scene.check.Registration.AcmeNames; len(got) != 1 || *got[0] != (sidecar.SocketAcmeName{Name: "app.customer.example", ClaimSeq: 3}) {
+		t.Fatalf("ACME names kept %v", got)
+	}
+	// every name dropped still allows the entry, with no list
+	empty := newTestTlsListenScene(t, nil)
+	empty.check.Registration.CertifiedNames = []string{"app.customer.example"}
+	empty.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 1}}
+	if err := empty.validate(); err != nil {
+		t.Fatalf("an entry whose names all dropped was refused: %v", err)
+	}
+	if empty.check.Registration.CertifiedNames != nil || empty.check.Registration.AcmeNames != nil {
+		t.Fatalf("dropped names left %v and %v", empty.check.Registration.CertifiedNames, empty.check.Registration.AcmeNames)
+	}
+}
+
+// An acme-tls/1-only entry needs no certificate but must keep an ACME name, else it is refused.
+func TestTlsListenRefusesAnAcmeOnlyEntryWithNoClaim(t *testing.T) {
+	testTlsListenCases(t, []testTlsListenCase{
+		{name: "acme-only with no ACME name", mutate: func(scene *testTlsListenScene) {
+			scene.facts.Certs = nil
+			scene.check.Registration.Alpn = []string{"acme-tls/1"}
+		}},
+		{name: "acme-only with a claim the lock does not hold", mutate: func(scene *testTlsListenScene) {
+			scene.facts.Certs = nil
+			scene.check.Registration.Alpn = []string{"acme-tls/1"}
+			scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 2}}
+			scene.facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+				{SidecarId: scene.sidecarId, Owner: "blog", Name: "app.customer.example", ClaimSeq: 3},
+			}
+		}},
+		{name: "acme-only holding the claim", mutate: func(scene *testTlsListenScene) {
+			scene.facts.Certs = nil
+			scene.check.Registration.Alpn = []string{"acme-tls/1"}
+			scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 3}}
+			scene.facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+				{SidecarId: scene.sidecarId, Owner: "blog", Name: "app.customer.example", ClaimSeq: 3},
+			}
+		}, allow: true},
+	})
+}
+
+// A claim above the one the facts hold reads them again on the registration path, so a new claim is not held up by the
+// cache, and only once a FactsRereadInterval for the sidecar; a claim the facts already hold reads nothing.
+func TestTlsListenReadsTheFactsAgainForANewerClaim(t *testing.T) {
+	scene := newTestTlsListenScene(t, nil)
+	scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 4}}
+	scene.load()
+	reads := scene.source.reads()
+	// the lock moved to claim 4 after the facts were read
+	fresh := *scene.facts
+	fresh.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{{SidecarId: scene.sidecarId, Owner: "blog", Name: "app.customer.example", ClaimSeq: 4}}
+	scene.source.set(scene.networkId, &fresh)
+	if err := scene.hooks.ValidateListen(scene.ctx, scene.check); err != nil {
+		t.Fatal(err)
+	}
+	if got := scene.source.reads(); got != reads+1 {
+		t.Fatalf("%d reads for a newer claim", got-reads)
+	}
+	if got := scene.check.Registration.AcmeNames; len(got) != 1 || got[0].ClaimSeq != 4 {
+		t.Fatalf("the newer claim was not kept: %v", got)
+	}
+	// a claim above even the fresh facts reads again only once the interval has passed
+	scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 5}}
+	if err := scene.hooks.ValidateListen(scene.ctx, scene.check); err != nil {
+		t.Fatal(err)
+	}
+	if got := scene.source.reads(); got != reads+1 {
+		t.Fatalf("a second read within the interval")
+	}
+	if len(scene.check.Registration.AcmeNames) != 0 {
+		t.Fatal("a claim the lock does not hold was kept")
+	}
+	scene.clock.Advance(socketsservice.DefaultTlsNamespaceSettings().FactsRereadInterval)
+	scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 5}}
+	if err := scene.hooks.ValidateListen(scene.ctx, scene.check); err != nil {
+		t.Fatal(err)
+	}
+	if got := scene.source.reads(); got != reads+2 {
+		t.Fatalf("%d reads once the interval passed", got-reads)
+	}
+	// a held claim reads nothing
+	scene.clock.Advance(socketsservice.DefaultTlsNamespaceSettings().FactsRereadInterval)
+	scene.check.Registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 4}}
+	if err := scene.hooks.ValidateListen(scene.ctx, scene.check); err != nil {
+		t.Fatal(err)
+	}
+	if got := scene.source.reads(); got != reads+2 {
+		t.Fatalf("a held claim read the facts")
+	}
+}
+
+// Composed into the registration path: a list past its count is a malformed entry, the store keeps the entry as the hook
+// left it, and a Find by server name reaches only the listener the rows certify.
+func TestTlsListenNarrowingComposesIntoTheRegistrationPath(t *testing.T) {
+	world := newTestSocketWorld(t)
+	process := world.newProcess(nil)
+	source := newTestTlsFactsSource()
+	hooks, err := socketsservice.NewTlsNamespaceHooks(world.ctx, source, world.clock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(hooks.Close)
+	if err := process.service.RegisterNamespace(sidecar.SocketNamespaceTls, hooks); err != nil {
+		t.Fatal(err)
+	}
+	networkId := testSocketId()
+	certified := world.newSidecar(networkId)
+	uncertified := world.newSidecar(networkId)
+	now := world.clock.Now()
+	for _, listener := range []*testSocketSidecar{certified, uncertified} {
+		process.gate.SetIdentityKey(networkId, listener.sidecarId, listener.publicKey())
+		process.gate.AllowListenPrefix(networkId, listener.sidecarId, nil, testSocketGrant("listen"))
+	}
+	process.gate.AllowPublish(networkId, []byte("tls/443/web"), sidecartest.FakeSocketGrant{
+		GrantId:      []byte("web-publish"),
+		ExpireMillis: uint64(now.Add(time.Hour).UnixMilli()),
+		Audience:     protocol.AclAudience_ACL_AUDIENCE_PUBLIC,
+	})
+	process.gate.AllowPublicDial(networkId, []byte("tls/443/web"), testSocketGrant("public"))
+	process.gate.Load(networkId)
+	source.set(networkId, &socketsservice.TlsListenFacts{
+		Verified: true,
+		Standing: sidecar.AbuseStandingStandard,
+		Tier:     "team",
+		Certs: []*socketsservice.TlsListenCert{
+			{SidecarId: certified.sidecarId, NotAfter: now.Add(24 * time.Hour), NetworkPair: true},
+			{SidecarId: uncertified.sidecarId, NotAfter: now.Add(24 * time.Hour), NetworkPair: true},
+		},
+		CustomCertified: []*socketsservice.TlsListenCustomName{
+			{SidecarId: certified.sidecarId, Owner: "web", Name: "app.customer.example", NotAfter: now.Add(24 * time.Hour)},
+		},
+	})
+	if err := hooks.LoadFacts(world.ctx, networkId); err != nil {
+		t.Fatal(err)
+	}
+	register := func(listener *testSocketSidecar, setVersion uint64, certifiedNames []string) sidecar.SocketRegistrationStatus {
+		t.Helper()
+		registration := listener.edgeRegistration(t, "tls/443/web", "tls", "http")
+		registration.Alpn = []string{"h2", "http/1.1"}
+		registration.CertifiedNames = certifiedNames
+		code, result := process.register(listener.token, &sidecar.SocketRegistrationsArgs{SetVersion: setVersion, Registrations: []*sidecar.SocketRegistration{registration}})
+		if code != http.StatusOK || result.Error != nil {
+			t.Fatalf("the page answered %d, %+v", code, result)
+		}
+		return result.Statuses[0]
+	}
+	// past CertifiedNameMaxCount: malformed
+	tooMany := []string{}
+	for index := range socketsservice.DefaultSocketsSettings().CertifiedNameMaxCount + 1 {
+		tooMany = append(tooMany, fmt.Sprintf("h%d.customer.example", index))
+	}
+	if status := register(certified, 1, tooMany); status != sidecar.SocketRegistrationStatusInvalid {
+		t.Fatalf("a list past its count answered %s", status)
+	}
+	// each lists the custom host, which the rows bear out for one alone
+	if status := register(certified, 2, []string{"app.customer.example"}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("the certified listener answered %s", status)
+	}
+	if status := register(uncertified, 1, []string{"app.customer.example"}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("the uncertified listener answered %s", status)
+	}
+	listeners, err := world.fakeStore.ListListeners(world.ctx, networkId, []byte("tls/443/web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, listener := range listeners {
+		want := []string(nil)
+		if listener.SidecarId != nil && *listener.SidecarId == certified.sidecarId {
+			want = []string{"app.customer.example"}
+		}
+		if !slices.Equal(listener.Registration.CertifiedNames, want) {
+			t.Fatalf("the store holds %v for a listener", listener.Registration.CertifiedNames)
+		}
+	}
+	edge := world.newEdge(2)
+	for range 20 {
+		code, result := process.find(edge.token, &sidecar.SocketFindArgs{
+			Name:       "tls/443/web",
+			NetworkId:  &networkId,
+			ClientIds:  edge.clientIdArgs(),
+			Alpn:       []string{"h2"},
+			ServerName: "app.customer.example",
+		})
+		if code != http.StatusOK || result.Error != nil || result.Primary == nil || result.Backup != nil {
+			t.Fatalf("a Find by the custom host answered %d, %+v", code, result)
+		}
+		ticket := world.verifyTicket(result.Primary)
+		if !bytes.Equal(ticket.GetListenerClientId(), certified.clientId.Bytes()) {
+			t.Fatal("a Find by the custom host reached the uncertified listener")
+		}
 	}
 }

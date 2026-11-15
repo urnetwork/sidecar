@@ -28,6 +28,14 @@
 // SetServing), so tlsedge tries a backup rather than a target that refuses. A probe connects and closes, carrying no
 // byte.
 //
+// Custom hosts and aliases (DESIGN-DETAILS 17.2.10, TLS-M6-08): a front given a TlsFrontCustomSource serves each custom
+// name the source lists beside the network's own, presenting the certificate installed for it on this device's key,
+// and for a custom name with none, or one past its not_after, it fails the handshake with unrecognized_name: never the
+// self-signed leaf and never the network's wildcard, which name another host. It keeps its registration's lists in
+// step through UpdateTls: the ALPN ids its mode and pending challenges give, each custom name from its certificate's
+// install until not_after less CertifiedMargin or until the source drops it (its row no longer custom_issued), and
+// each name it answers TLS-ALPN-01 for under a claim (SetCustomAlpnChallenge), sending a change at once.
+//
 // Nothing here logs a name, an address or a URL (I-13). Safe for concurrent use.
 
 package sidecar
@@ -39,6 +47,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -138,6 +147,9 @@ type TlsFrontSettings struct {
 
 	// How long a visitor's acceptance of the Community notice is kept: 30 days, a reading.
 	NoticeLifetime time.Duration
+	// How long before a custom certificate's not_after its listener stops listing the name as certified, and
+	// ValidateListen stops keeping it: 1 h (DESIGN-DETAILS 17.2.10, 17.2.15). Both sides read this one default.
+	CertifiedMargin time.Duration
 	// How long the network's tier is used before it is read again, for the notice: 5 min, a reading.
 	LimitsCacheTimeout time.Duration
 	// One read of the network's tier: 5 s, a reading. One that fails reads as Community, which shows the notice.
@@ -176,6 +188,7 @@ func DefaultTlsFrontSettings() *TlsFrontSettings {
 		LinkCookieLifetime:         12 * time.Hour,
 		LinkTokenMaxByteCount:      1024,
 		NoticeLifetime:             30 * 24 * time.Hour,
+		CertifiedMargin:            1 * time.Hour,
 		LimitsCacheTimeout:         5 * time.Minute,
 		LimitsRequestTimeout:       5 * time.Second,
 	}
@@ -188,7 +201,7 @@ func (self *TlsFrontSettings) validate() error {
 		self.RequestHeaderTimeout, self.IdleTimeout, self.ChallengeBackdate, self.SessionLifetime, self.PreLoginLifetime,
 		self.IdTokenMaxLifetime, self.IssuerRequestTimeout, self.JwksLifetime, self.JwksRefetchMinInterval,
 		self.DeviceLoginLifetime, self.LinkCookieLifetime, self.NoticeLifetime, self.LimitsCacheTimeout,
-		self.LimitsRequestTimeout,
+		self.LimitsRequestTimeout, self.CertifiedMargin,
 	}
 	for _, positiveTime := range positiveTimes {
 		if positiveTime <= 0 {
@@ -349,6 +362,45 @@ func (self *SocketListener) tlsEdgeNetworkId() (Id, bool) {
 	return *admission.urnetworkEdge, true
 }
 
+// One custom host or alias a front serves (17.2.10): the certificate installed for it on this device's key while its
+// row reads custom_issued, nil while none is, and that certificate's not_after.
+type TlsFrontCustomCertificate struct {
+	// Canonical, lowercase.
+	Name        string
+	Certificate *tls.Certificate
+	NotAfter    time.Time
+}
+
+// What a front reads its custom names from: TLS-M5-18's certificate manager, or a test's fake. Safe for concurrent
+// use.
+type TlsFrontCustomSource interface {
+	// Each custom host or alias mapped to the endpoint's owner, with its installed certificate or none.
+	CustomCertificates() []*TlsFrontCustomCertificate
+	// A channel that closes at the next change of what CustomCertificates answers.
+	CustomChanged() <-chan struct{}
+}
+
+// The three fields of a registration a front keeps in step (17.2.10), which SocketListener.UpdateTls sends.
+type TlsFrontUpdate struct {
+	Alpn           []string
+	CertifiedNames []string
+	AcmeNames      []*SocketAcmeName
+}
+
+// Whether two updates register alike.
+func (self *TlsFrontUpdate) equal(other *TlsFrontUpdate) bool {
+	if other == nil || !slices.Equal(self.Alpn, other.Alpn) || !slices.Equal(self.CertifiedNames, other.CertifiedNames) ||
+		len(self.AcmeNames) != len(other.AcmeNames) {
+		return false
+	}
+	for index, acmeName := range self.AcmeNames {
+		if *acmeName != *other.AcmeNames[index] {
+			return false
+		}
+	}
+	return true
+}
+
 // What NewTlsFront takes.
 type TlsFrontArgs struct {
 	// Nil takes DefaultTlsFrontSettings.
@@ -377,6 +429,11 @@ type TlsFrontArgs struct {
 	// Called when the registration's ALPN list changes, as a TLS-ALPN-01 challenge starts or ends, so the owner
 	// registers again with ListenSettings. Nil: nothing to tell.
 	AlpnChanged func()
+	// The custom hosts and aliases the endpoint serves (17.2.10). Nil: the network's own names alone.
+	Custom TlsFrontCustomSource
+	// Sends the registration's ALPN ids, certified names and ACME names, at once, under the same listen_id
+	// (SocketListener.UpdateTls): called at start and at each change. Nil: nothing to send.
+	UpdateTls func(update *TlsFrontUpdate) error
 	// The network's record writer (SidecarRecord.Writer()), which the endpoint's reach receipts go through (§16.8).
 	// Nil writes none.
 	Record RecordWriter
@@ -401,8 +458,12 @@ type TlsFront struct {
 	certificate func(serverName string) (*tls.Certificate, error)
 	dialTarget  func(ctx context.Context) (net.Conn, error)
 	alpnChanged func()
+	custom      TlsFrontCustomSource
+	updateTls   func(update *TlsFrontUpdate) error
 	clock       Clock
 	log         Logger
+	// what makes runUpdates look again: a challenge set or cleared
+	updateWake chan struct{}
 
 	dispatch  *tlsDispatch
 	responder *tlsAlpnResponder
@@ -421,6 +482,8 @@ type TlsFront struct {
 	// what the front last told the listener, true as the listener begins
 	serving   bool
 	liveConns map[*TlsFrontConn]bool
+	// the claim each custom name's pending TLS-ALPN-01 challenge is answered under (SetCustomAlpnChallenge)
+	acmeNameClaimSeqs map[string]uint64
 }
 
 // A front on args' listener, accepting at once. Settings, target and args are checked first, and nothing runs when
@@ -485,13 +548,18 @@ func NewTlsFront(ctx context.Context, args *TlsFrontArgs) (*TlsFront, error) {
 		certificate: args.Certificate,
 		dialTarget:  dialTarget,
 		alpnChanged: alpnChanged,
+		custom:      args.Custom,
+		updateTls:   args.UpdateTls,
 		clock:       clock,
 		log:         log,
+		updateWake:  make(chan struct{}, 1),
 		sessions:    sessions,
 		reach:       reach,
 		probeWake:   make(chan struct{}, 1),
 		serving:     true,
 		liveConns:   map[*TlsFrontConn]bool{},
+
+		acmeNameClaimSeqs: map[string]uint64{},
 	}
 	self.dispatch = &tlsDispatch{front: self}
 	self.responder = newTlsAlpnResponder(self.clock, settings, self.alpnChallengeChanged)
@@ -502,7 +570,124 @@ func NewTlsFront(ctx context.Context, args *TlsFrontArgs) (*TlsFront, error) {
 	self.http = newTlsHttpFront(self, args.Limits)
 	go self.run()
 	go self.runProbe()
+	if self.updateTls != nil {
+		go self.runUpdates()
+	}
 	return self, nil
+}
+
+// Whether visitors reach this endpoint by serverName, lowercase: one of the network's names, or a custom name the source
+// lists, whatever its certificate.
+func (self *TlsFront) serves(serverName string) bool {
+	return self.target.serves(serverName) || self.customEntry(serverName) != nil
+}
+
+// The source's entry for a custom name, nil for a name it does not list.
+func (self *TlsFront) customEntry(serverName string) *TlsFrontCustomCertificate {
+	if self.custom == nil || self.target.serves(serverName) {
+		return nil
+	}
+	for _, entry := range self.custom.CustomCertificates() {
+		if entry != nil && entry.Name == serverName {
+			return entry
+		}
+	}
+	return nil
+}
+
+// The certificate a hello for the custom name gets at now: the installed one while its not_after is ahead, else nil,
+// and the handshake fails with unrecognized_name (17.2.10).
+func (self *TlsFront) customCertificate(serverName string, now time.Time) *tls.Certificate {
+	entry := self.customEntry(serverName)
+	if entry == nil || entry.Certificate == nil || !now.Before(entry.NotAfter) {
+		return nil
+	}
+	return entry.Certificate
+}
+
+// What the registration should list at now (17.2.10): the mode's ALPN ids, each custom name with a certificate whose
+// not_after is past now plus CertifiedMargin, sorted, and each pending custom challenge with its claim, sorted by name.
+// The time the custom list next changes by the clock alone, zero for never.
+func (self *TlsFront) update(now time.Time) (*TlsFrontUpdate, time.Time) {
+	update := &TlsFrontUpdate{Alpn: self.ListenSettings().Alpn}
+	next := time.Time{}
+	if self.custom != nil {
+		for _, entry := range self.custom.CustomCertificates() {
+			if entry == nil || entry.Certificate == nil || self.target.serves(entry.Name) {
+				continue
+			}
+			listedUntil := entry.NotAfter.Add(-self.settings.CertifiedMargin)
+			if now.Before(listedUntil) {
+				update.CertifiedNames = append(update.CertifiedNames, entry.Name)
+				if next.IsZero() || listedUntil.Before(next) {
+					next = listedUntil
+				}
+			}
+		}
+		slices.Sort(update.CertifiedNames)
+		update.CertifiedNames = slices.Compact(update.CertifiedNames)
+	}
+	nameClaimSeqs := func() map[string]uint64 {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return maps.Clone(self.acmeNameClaimSeqs)
+	}()
+	for name, claimSeq := range nameClaimSeqs {
+		if self.responder.certificate(name, now) == nil {
+			// its challenge ended or expired
+			continue
+		}
+		update.AcmeNames = append(update.AcmeNames, &SocketAcmeName{Name: name, ClaimSeq: claimSeq})
+	}
+	slices.SortFunc(update.AcmeNames, func(a *SocketAcmeName, b *SocketAcmeName) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return update, next
+}
+
+// Keeps the registration's lists in step until the front closes: sends the update at start and whenever it changes, on
+// the source's change, a challenge's, or the clock reaching a name's margin. A send that fails is tried again at the
+// next change or after TargetProbeMinInterval.
+func (self *TlsFront) runUpdates() {
+	var sent *TlsFrontUpdate
+	for {
+		var changed <-chan struct{}
+		if self.custom != nil {
+			changed = self.custom.CustomChanged()
+		}
+		now := self.clock.Now()
+		update, next := self.update(now)
+		retry := false
+		if !update.equal(sent) {
+			if err := self.updateTls(update); err != nil {
+				retry = true
+			} else {
+				sent = update
+			}
+		}
+		var at <-chan time.Time
+		switch {
+		case retry:
+			at = self.clock.After(self.settings.TargetProbeMinInterval)
+		case !next.IsZero():
+			at = self.clock.After(next.Sub(now))
+		}
+		select {
+		case <-self.ctx.Done():
+			return
+		case <-changed:
+		case <-self.updateWake:
+		case <-at:
+		}
+	}
+}
+
+// Asks runUpdates to look again.
+func (self *TlsFront) wakeUpdates() {
+	select {
+	case self.updateWake <- struct{}{}:
+	default:
+	}
 }
 
 // The listen settings the registration takes now (§9.5, §13.7): protocol tls, the signed AppMode, max_streams, and
@@ -539,20 +724,54 @@ func TlsFrontListenSettings(target *TlsFrontTarget, challengePending bool) *Sock
 // carries. The registration's ALPN gains acme-tls/1 (AlpnChanged).
 func (self *TlsFront) SetAlpnChallenge(serverName string, keyAuthorization string, expireTime time.Time) error {
 	serverName = strings.ToLower(serverName)
-	if !self.target.serves(serverName) {
+	if !self.serves(serverName) {
 		return fmt.Errorf("%w: a challenge for a name this endpoint serves", errInvalidSettings)
 	}
 	return self.responder.set(serverName, keyAuthorization, expireTime)
 }
 
+// SetAlpnChallenge for a custom name, answered under the account lock's claim claimSeq (17.2.6, 17.2.10): the name goes
+// on the registration's ACME names with its claim at once, so Find routes the CA's validation here, and leaves them
+// when the challenge ends.
+func (self *TlsFront) SetCustomAlpnChallenge(serverName string, keyAuthorization string, expireTime time.Time, claimSeq uint64) error {
+	serverName = strings.ToLower(serverName)
+	if self.customEntry(serverName) == nil || claimSeq == 0 {
+		return fmt.Errorf("%w: a claimed challenge for a custom name this endpoint serves", errInvalidSettings)
+	}
+	// the claim first, so no update lists the challenge without it
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.acmeNameClaimSeqs[serverName] = claimSeq
+	}()
+	if err := self.responder.set(serverName, keyAuthorization, expireTime); err != nil {
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			delete(self.acmeNameClaimSeqs, serverName)
+		}()
+		return err
+	}
+	self.wakeUpdates()
+	return nil
+}
+
 // Ends a pending challenge, if there is one.
 func (self *TlsFront) ClearAlpnChallenge(serverName string) {
-	self.responder.clear(strings.ToLower(serverName))
+	serverName = strings.ToLower(serverName)
+	self.responder.clear(serverName)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		delete(self.acmeNameClaimSeqs, serverName)
+	}()
+	self.wakeUpdates()
 }
 
 // The responder's pending set moved between some and none.
 func (self *TlsFront) alpnChallengeChanged() {
 	self.alpnChanged()
+	self.wakeUpdates()
 }
 
 // Stops accepting, closes the listener and every connection, ends the HTTP front, and writes the reach receipts it
@@ -644,7 +863,7 @@ func (self *TlsFront) trust(socketConn *SocketConn) (*protocol.TlsEdgeOpen, prot
 	if err != nil {
 		return nil, protocol.StreamResetCode_RST_PROTOCOL
 	}
-	if open.GetExpireTimeMillis() != ticket.GetGrantExpireTimeMillis() || !self.target.serves(open.GetServerName()) {
+	if open.GetExpireTimeMillis() != ticket.GetGrantExpireTimeMillis() || !self.serves(open.GetServerName()) {
 		return nil, protocol.StreamResetCode_RST_PROTOCOL
 	}
 	return open, protocol.StreamResetCode_RST_UNSPECIFIED
