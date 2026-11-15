@@ -226,7 +226,13 @@ func NewFs98World(t AdmissionT, net *Net, settings *Fs98Settings) *Fs98World {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Fs98World{t: t, net: net, settings: settings, admission: NewAdmissionNet(t, tier), directory: directory}
+	self := &Fs98World{t: t, net: net, settings: settings, directory: directory}
+	// a schedule that fails never reaches Close: the directory goes with the Net's context then, as the daemons do
+	context.AfterFunc(net.Context(), func() {
+		os.RemoveAll(directory)
+	})
+	self.admission = NewAdmissionNet(t, tier)
+	return self
 }
 
 // The network: its fixture devices, statements and readers.
@@ -383,6 +389,8 @@ func (self *Fs98World) AddHost(name string, memberId sidecar.Id, admitter *Admis
 		defer close(host.done)
 		daemon.Run()
 	}()
+	// a world that is never closed still ends its daemons with the Net
+	context.AfterFunc(self.net.Context(), daemon.Close)
 	self.hosts = append(self.hosts, host)
 	self.catchUp()
 	return host
