@@ -312,6 +312,10 @@ type DnsRestoreSettings struct {
 	// it lists what came; a rerun lists what comes later. An edge posts its diff as it reloads, retrying
 	// from feed.retry_min_s. Zero lists at once.
 	DiffWaitSeconds int `yaml:"diff_wait_s"`
+	// How long the step waits, once restoring is clear, for every lb interface to report the custom-host map's
+	// restored version before it lists the hosts their reports add or drop (DNS-M6-07); a rerun lists what comes
+	// later. lbmap loads a new version within §13.4's 15 min, so 20 min by default. Zero lists at once.
+	MapWaitSeconds int `yaml:"map_wait_s"`
 }
 
 // How dnsedge follows the feed and keeps its local snapshot (DNS-M5-06).
@@ -560,6 +564,7 @@ func DefaultDnsSettings() *DnsSettings {
 		Restore: DnsRestoreSettings{
 			PollSeconds:     1,
 			DiffWaitSeconds: 60,
+			MapWaitSeconds:  20 * 60,
 		},
 		UserRecords: *DefaultDnsUserRecordSettings(),
 		CaaCanary: DnsCaaCanarySettings{
@@ -720,6 +725,9 @@ func (self *DnsSettings) Validate() error {
 	}
 	if self.Restore.DiffWaitSeconds < 0 {
 		return refuse("restore.diff_wait_s is negative")
+	}
+	if self.Restore.MapWaitSeconds < 0 {
+		return refuse("restore.map_wait_s is negative")
 	}
 	if self.CnameChainMaxCount < 1 {
 		return refuse("cname_chain_max_count is below 1")

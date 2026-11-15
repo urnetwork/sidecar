@@ -25,8 +25,22 @@
 //  6. restoring := false, so later dns writes commit above restore_serial.
 //
 // A rerun after the step has ended lists what diffs came since, an NS that reloaded late among them.
-// The custom-host map's half of §19.10's step, its version raised 2^24 above the restored one, is
-// DNS-M6-07's. Barriers mark each step's start and end, keyed by the incident.
+//
+// The custom-host map's half (§12.6's last clause; DNS-M6-07), through DnsRestoreMapStore, beside steps 3
+// and 6:
+//
+//  3b. Once the restore transaction has run, the map's version is raised 2^24 above the restored one (above
+//      every host's map_version and every interface's reported version, QD-257), every active host's
+//      map_version with it and its ready time cleared, so W1 loads the map from the restored rows (§19.5) and
+//      each host stays pending until every interface is current for the new version. Run again for the
+//      incident, it answers the same version.
+//  7. Once restoring is clear, the step waits up to restore.map_wait_s for every interface to report the new
+//     version, then lists the hosts the regeneration added or dropped, as lbmap reports them, in the incident
+//     and each network's admin events (DnsRestoreMapStore.ListRestoreCustomHosts). A rerun lists what reports
+//     came later.
+//
+// A step with no map store skips both and says so in its progress. Barriers mark each step's start and end,
+// keyed by the incident.
 
 package dnsservice
 
@@ -50,12 +64,22 @@ var ErrDnsNsStateUnavailable = errors.New("dns ns state unavailable")
 // The reason the step stops an NS with: it did not answer the SOA read.
 const DnsNsStoppedNoSoa = "restore_no_soa"
 
-// One RRset a restore listed (§12.6): by network, owner and type.
+// How a custom host changed in a restore's regenerated map, as lbmap reports it (§12.6).
+const (
+	DnsRestoreCustomHostAdded   = "added"
+	DnsRestoreCustomHostDropped = "dropped"
+)
+
+// One RRset a restore listed (§12.6): by network, owner and type; or one custom host the regenerated map added or
+// dropped, by network and host (DNS-M6-07).
 type DnsRestoreEntry struct {
-	// nil for <root>'s own records and a name no dns_label row holds.
+	// nil for <root>'s own records and a name no dns_label row holds, and for a custom host no network holds.
 	NetworkId *sidecar.Id
 	Owner     string
 	Type      uint16
+	// A custom host's entry: the host, with no Owner or Type, and DnsRestoreCustomHostAdded or Dropped.
+	CustomHost       string
+	CustomHostChange string
 	// Its network had an open §21 case as it was listed (§21.10's check).
 	Flagged bool
 	// When the abuse role cleared the flag; nil while it stands, or with none.
@@ -87,6 +111,21 @@ type DnsRestoreStore interface {
 	ListRestoreChanges(ctx context.Context, root string, incidentId sidecar.Id, keys []DnsRecordKey) (*DnsRestoreListing, error)
 }
 
+// The custom-host map's half of the step (§12.6's last clause; DNS-M6-07). dnshost.RestoreStore implements it
+// on Postgres. Safe for concurrent use; none may be called with a state lock held.
+type DnsRestoreMapStore interface {
+	// Raises root's map 2^24 above the restored one for incidentId (see the file header's step 3b) and answers
+	// the version; run again for the incident, it answers the same one.
+	RaiseCustomHostMapForRestore(ctx context.Context, root string, incidentId sidecar.Id) (version uint64, err error)
+	// The map's state: each interface's report.
+	CustomHostMapState(ctx context.Context, root string) (*DnsMapState, error)
+	// Lists the hosts the regenerated map added and dropped under incidentId in one transaction: each not yet
+	// listed under it, mapped to its network by its row or else by the verified domain it is under, its network
+	// flagged for an open §21 case, and one admin event for each network the incident lists first. Returns the
+	// incident's custom-host entries, each it holds.
+	ListRestoreCustomHosts(ctx context.Context, root string, incidentId sidecar.Id, added []string, dropped []string) (*DnsRestoreListing, error)
+}
+
 // What the step takes.
 type RestoreStepDeps struct {
 	// §12.14's tables: restoring, the restore transaction and the posted diffs. Required.
@@ -96,6 +135,9 @@ type RestoreStepDeps struct {
 	// Each NS's SOA over TCP. nil reads every NS as not answering, so nothing is ever served at the
 	// restore serial and the step waits.
 	SoaReader DnsSoaReader
+	// The custom-host map's half (DNS-M6-07). nil skips it, which the progress says, so the hosts keep the
+	// readiness the dump holds until the map moves again.
+	CustomHostMaps DnsRestoreMapStore
 	// nil is the wall clock.
 	Clock sidecar.Clock
 	// Each step and its findings. nil discards.
@@ -120,6 +162,13 @@ type DnsRestoreProgress struct {
 	Listing *DnsRestoreListing
 	// restoring is clear: the step has ended for this incident.
 	Done bool
+	// The custom-host map's version the restore raised to, zero until it is, or with no map store
+	// (MapSkipped).
+	MapVersion uint64
+	MapSkipped bool
+	// The interfaces that reported MapVersion or a later one when the hosts were listed, of how many.
+	MapReportedCount  int
+	MapInterfaceCount int
 }
 
 // §19.10's dns step for one deployment's dns.yml. Safe for concurrent use, though one incident is one
@@ -271,6 +320,19 @@ func (self *RestoreStep) Run(ctx context.Context, root string, incidentId sideca
 		progress.RestoreSerial = restoreSerial
 		self.log.Infof("[dns]restore: %s lands at serial %d", root, restoreSerial)
 	}
+	// step 3b: the custom-host map, raised once the restore transaction has run
+	if self.deps.CustomHostMaps == nil {
+		progress.MapSkipped = true
+		self.log.Warningf("[dns]restore: no custom-host map store, so the map keeps the dump's versions")
+	} else {
+		testHookBarrier("dnsservice.restore_map_raise.before", key)
+		mapVersion, err := self.deps.CustomHostMaps.RaiseCustomHostMapForRestore(ctx, root, incidentId)
+		if err != nil {
+			return progress, err
+		}
+		progress.MapVersion = mapVersion
+		testHookBarrier("dnsservice.restore_map_raise.after", key)
+	}
 	// step 4: every running NS serving restore_serial, then the diffs
 	running, err := self.awaitServed(ctx, root, progress)
 	if err != nil {
@@ -298,8 +360,64 @@ func (self *RestoreStep) Run(ctx context.Context, root string, incidentId sideca
 		testHookBarrier("dnsservice.restore_clear.after", key)
 		self.log.Infof("[dns]restore: %s writes again above serial %d; %d RRsets listed", root, progress.RestoreSerial, len(listing.Entries))
 	}
+	// step 7: the hosts the regenerated map added or dropped
+	if self.deps.CustomHostMaps != nil {
+		added, dropped, err := self.awaitMapReports(ctx, root, progress)
+		if err != nil {
+			return progress, err
+		}
+		testHookBarrier("dnsservice.restore_map_list.before", key)
+		hostListing, err := self.deps.CustomHostMaps.ListRestoreCustomHosts(ctx, root, incidentId, added, dropped)
+		if err != nil {
+			return progress, err
+		}
+		progress.Listing.Entries = append(slices.DeleteFunc(progress.Listing.Entries, func(entry DnsRestoreEntry) bool {
+			return entry.CustomHost != ""
+		}), hostListing.Entries...)
+		testHookBarrier("dnsservice.restore_map_list.after", key)
+	}
 	progress.Done = true
 	return progress, nil
+}
+
+// Waits up to restore.map_wait_s for every interface to report progress's map version or a later one, then
+// answers the hosts those reports added and dropped, each once and sorted.
+func (self *RestoreStep) awaitMapReports(ctx context.Context, root string, progress *DnsRestoreProgress) (added []string, dropped []string, err error) {
+	waitEnded := self.clock.After(dnsSeconds(self.settings.Restore.MapWaitSeconds))
+	for {
+		state, err := self.deps.CustomHostMaps.CustomHostMapState(ctx, root)
+		if err != nil {
+			return nil, nil, err
+		}
+		added = []string{}
+		dropped = []string{}
+		reportedCount := 0
+		for _, lbInterface := range state.Interfaces {
+			if lbInterface.ReportedVersion < progress.MapVersion {
+				continue
+			}
+			reportedCount += 1
+			added = append(added, lbInterface.AddedHosts...)
+			dropped = append(dropped, lbInterface.DroppedHosts...)
+		}
+		slices.Sort(added)
+		slices.Sort(dropped)
+		added = slices.Compact(added)
+		dropped = slices.Compact(dropped)
+		progress.MapReportedCount = reportedCount
+		progress.MapInterfaceCount = len(state.Interfaces)
+		if len(state.Interfaces) <= reportedCount {
+			return added, dropped, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-waitEnded:
+			self.log.Warningf("[dns]restore: %d of %d interfaces reported the restored map; a rerun lists what comes later", reportedCount, len(state.Interfaces))
+			return added, dropped, nil
+		case <-self.clock.After(dnsSeconds(self.settings.Restore.PollSeconds)):
+		}
+	}
 }
 
 // Waits until every running NS answers an SOA at or above progress's restore serial, starting a

@@ -12,10 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/dnsservice"
 )
 
-// T2's store. See the file header.
+// T2's store. See the file header. It is also the restore step's map half (dnsservice.DnsRestoreMapStore), keeping
+// each incident's raised version and its listed hosts as the model does.
 type FakeDnsCustomHostMapStore struct {
 	stateLock sync.Mutex
 	versions  []dnsservice.DnsMapVersion
@@ -26,16 +28,128 @@ type FakeDnsCustomHostMapStore struct {
 	hostVersions map[string]uint64
 	// each host's ready time, unset while not ready
 	hostReadyTimes map[string]time.Time
+	// each incident's raised version, and the hosts it listed
+	incidentVersions map[sidecar.Id]uint64
+	incidentEntries  map[sidecar.Id][]dnsservice.DnsRestoreEntry
+	// each host's network, as a row or a verified domain names it, for a listing
+	hostNetworkIds map[string]sidecar.Id
+	// the networks each incident wrote an admin event for, in order
+	incidentEventNetworkIds map[sidecar.Id][]sidecar.Id
+	// called with the version once a restore's raise has made it, as lbmap would then load it
+	restoreRaiseHook func(version uint64)
 }
 
-var _ dnsservice.DnsCustomHostMapStore = (*FakeDnsCustomHostMapStore)(nil)
+// Calls hook with the version once a restore's raise has made it, outside the store's lock, before the raise
+// returns: where a test reports lbmap's load of the restored map.
+func (self *FakeDnsCustomHostMapStore) SetRestoreRaiseHook(hook func(version uint64)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.restoreRaiseHook = hook
+}
+
+var (
+	_ dnsservice.DnsCustomHostMapStore = (*FakeDnsCustomHostMapStore)(nil)
+	_ dnsservice.DnsRestoreMapStore    = (*FakeDnsCustomHostMapStore)(nil)
+)
 
 func NewFakeDnsCustomHostMapStore() *FakeDnsCustomHostMapStore {
 	return &FakeDnsCustomHostMapStore{
-		interfaces:     map[string]*dnsservice.DnsMapInterface{},
-		hostVersions:   map[string]uint64{},
-		hostReadyTimes: map[string]time.Time{},
+		interfaces:              map[string]*dnsservice.DnsMapInterface{},
+		hostVersions:            map[string]uint64{},
+		hostReadyTimes:          map[string]time.Time{},
+		incidentVersions:        map[sidecar.Id]uint64{},
+		incidentEntries:         map[sidecar.Id][]dnsservice.DnsRestoreEntry{},
+		hostNetworkIds:          map[string]sidecar.Id{},
+		incidentEventNetworkIds: map[sidecar.Id][]sidecar.Id{},
 	}
+}
+
+// Says which network host is under, as its row or a verified domain does, for a restore's listing.
+func (self *FakeDnsCustomHostMapStore) SetHostNetwork(host string, networkId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.hostNetworkIds[host] = networkId
+}
+
+// Each host's map version, and the networks an incident wrote an admin event for.
+func (self *FakeDnsCustomHostMapStore) HostVersion(host string) uint64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.hostVersions[host]
+}
+
+func (self *FakeDnsCustomHostMapStore) IncidentEventNetworks(incidentId sidecar.Id) []sidecar.Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.incidentEventNetworkIds[incidentId])
+}
+
+// Raises the map 2^24 above the newest of the counter, every host's map version and every reported version, as
+// the model does, once an incident.
+func (self *FakeDnsCustomHostMapStore) RaiseCustomHostMapForRestore(ctx context.Context, root string, incidentId sidecar.Id) (uint64, error) {
+	version, raised, hook := self.raiseForRestore(incidentId)
+	if raised && hook != nil {
+		hook(version)
+	}
+	return version, nil
+}
+
+// The raise's work under the lock: the version, whether this call made it, and the hook to call.
+func (self *FakeDnsCustomHostMapStore) raiseForRestore(incidentId sidecar.Id) (uint64, bool, func(version uint64)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if version, ok := self.incidentVersions[incidentId]; ok {
+		return version, false, nil
+	}
+	base := uint64(0)
+	for _, version := range self.versions {
+		base = max(base, version.Version)
+	}
+	for _, version := range self.hostVersions {
+		base = max(base, version)
+	}
+	for _, lbInterface := range self.interfaces {
+		base = max(base, lbInterface.ReportedVersion)
+	}
+	version := base + dnsservice.DnsRestoreSerialJump
+	self.versions = append(self.versions, dnsservice.DnsMapVersion{Version: version, Digest: dnsservice.DnsCustomHostMapDigest(self.hosts), CreateTime: time.Now()})
+	for host := range self.hostVersions {
+		self.hostVersions[host] = version
+		delete(self.hostReadyTimes, host)
+	}
+	self.incidentVersions[incidentId] = version
+	return version, true, self.restoreRaiseHook
+}
+
+// Lists each host not yet listed under the incident, with one admin event a network the incident lists first.
+func (self *FakeDnsCustomHostMapStore) ListRestoreCustomHosts(ctx context.Context, root string, incidentId sidecar.Id, added []string, dropped []string) (*dnsservice.DnsRestoreListing, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	entries := self.incidentEntries[incidentId]
+	listed := func(host string, change string) bool {
+		return slices.ContainsFunc(entries, func(entry dnsservice.DnsRestoreEntry) bool {
+			return entry.CustomHost == host && entry.CustomHostChange == change
+		})
+	}
+	list := func(hosts []string, change string) {
+		for _, host := range hosts {
+			if listed(host, change) {
+				continue
+			}
+			entry := dnsservice.DnsRestoreEntry{CustomHost: host, CustomHostChange: change, ListTime: time.Now()}
+			if networkId, ok := self.hostNetworkIds[host]; ok {
+				entry.NetworkId = &networkId
+				if !slices.Contains(self.incidentEventNetworkIds[incidentId], networkId) {
+					self.incidentEventNetworkIds[incidentId] = append(self.incidentEventNetworkIds[incidentId], networkId)
+				}
+			}
+			entries = append(entries, entry)
+		}
+	}
+	list(added, dnsservice.DnsRestoreCustomHostAdded)
+	list(dropped, dnsservice.DnsRestoreCustomHostDropped)
+	self.incidentEntries[incidentId] = entries
+	return &dnsservice.DnsRestoreListing{Root: root, IncidentId: incidentId, Entries: slices.Clone(entries)}, nil
 }
 
 // Adds version, the newest, with hosts, created at createTime, as the model's raise does: each host not in
