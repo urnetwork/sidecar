@@ -521,6 +521,8 @@ func (self *evsPrefixJudge) effective(ctx context.Context, repo *EvsRepo, path s
 		pushId, _ := IdFromBytes(verified.Statement.Push.GetPushId())
 		self.alarm(repo.repoId, refId, signerOf(verified), path, verified.CommitVersion, &pushId, SidecarEvsAlarmDetailIgnored, 1)
 		ignoredCount += 1
+		// what a write over it names (QD-833)
+		read.ignored = append(read.ignored, evsPrefixIgnoredPush{commitVersion: verified.CommitVersion, pushId: pushId})
 		if self.settings.WalkBackVersionCount < ignoredCount {
 			self.alarm(repo.repoId, refId, signerOf(verified), path, verified.CommitVersion, &pushId, SidecarEvsAlarmDetailDepth, 1)
 			return fail(&EvsPrefixRuleError{Detail: EvsPrefixDetailDepth, Path: path})
@@ -622,7 +624,9 @@ func (self *evsPrefixJudge) allowWrite(ctx context.Context, repo *EvsRepo, ask *
 }
 
 // evsPrefixReader's writeBase: the walk runs on a read of the path alone, so the planner's own read keeps what it
-// verified of evs's newest event, which the write's base_entry_version and prev_push_id name (16.2.7).
+// verified of evs's newest event, which the write's base_entry_version and prev_push_id name (16.2.7). The ignored
+// events the repair writes over are the walk's, or, where the read record answered with no walk, the same events read
+// again without its alarms (writtenOverEvents, evs_prefix_repair.go).
 func (self *evsPrefixJudge) writeBase(ctx context.Context, repo *EvsRepo, result *evsReadResult, index int) (*evsPrefixWriteBase, error) {
 	verified := result.replies[index]
 	if entry := verified.Entry; entry != nil && verified.Removal == nil && entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
@@ -650,9 +654,14 @@ func (self *evsPrefixJudge) writeBase(ctx context.Context, repo *EvsRepo, result
 		return nil, err
 	}
 	defer effective.objects.close()
-	base := &evsPrefixWriteBase{ignoredAbove: max(1, read.ignoredAbove)}
+	base := &evsPrefixWriteBase{ignoredAbove: max(1, read.ignoredAbove), writtenOver: read.ignored}
 	if found := effective.replies[0]; found.Entry != nil && found.Removal == nil && !found.Absent {
 		base.version = found.Entry.GetVersion()
+	}
+	if len(base.writtenOver) == 0 {
+		if base.writtenOver, err = self.writtenOverEvents(ctx, repo, result.refId, path, verified); err != nil {
+			return nil, err
+		}
 	}
 	return base, nil
 }

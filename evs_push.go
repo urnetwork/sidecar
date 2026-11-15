@@ -5,9 +5,10 @@
 //
 //	build    choose push_id P; render each entry version under P (evs_plan.go's planned paths, sealed); the new
 //	         segments with the upload day their receipts give; sealed metadata under manifest_g with the §10 group
-//	         head the writer pins, when the client knows one, and on a git-mode ref the plan's update (a rekey's REKEY
-//	         shape, DESIGN-DETAILS 8.2.10), which a git-mode plan with none refuses; the statement on the head the plan read (v = b, C_b), its
-//	         time fresh per statement, signed only by §5's identity key, naming sidecar_id and client_id (D-EVS-5)
+//	         head the writer pins, when the client knows one, a repair form's written_over (QD-833), and on a git-mode
+//	         ref the plan's update (a rekey's REKEY shape, DESIGN-DETAILS 8.2.10), which a git-mode plan with none
+//	         refuses; the statement on the head the plan read (v = b, C_b), its time fresh per statement, signed only by
+//	         §5's identity key, naming sidecar_id and client_id (D-EVS-5)
 //	send     a one-part push posts {statement, payload, receipts} once every upload answered 200; a push over 1 MiB or
 //	         1,024 entry writes goes in parts (evs_push_parts.go), git mode taking its seal lease first
 //	retry    one push id names one statement, retried one attempt at a time, the same bytes, until 200, 409 or 412:
@@ -167,6 +168,8 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 	metadata := &protocol.EvsSealedMetadata{Provenance: &protocol.EvsProvenance{Tainted: plan.Tainted}}
 	// an ERASE's and a CLOSURE's note, sealed with the push's metadata (§11.12's push and rekey rows; QD-682)
 	metadata.ErasureNote = plan.erasureNote
+	// a repair form's ignored pushes, for `ur evs log` alone, none on any other push (DESIGN-DETAILS 16.2.7; QD-833)
+	metadata.WrittenOver = plan.writtenOver
 	if plan.RefMode == protocol.EvsRefMode_EVS_REF_GIT {
 		// a git-mode push states its update (DESIGN-DETAILS 8.2.3): what readers check its changes against
 		if plan.gitUpdate == nil {

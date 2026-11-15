@@ -3,7 +3,9 @@
 //
 //	ur evs ls <repo_id> [-l] [--ref=<ref>] [<path>]           a directory's children, verified; -l shows each file's
 //	                                                          versioning setting, on, off or index (EVS2-M10-16)
-//	ur evs log <repo_id> [--ref=<ref>] <path>                 a path's versions, newest first
+//	ur evs log <repo_id> [--ref=<ref>] <path>                 a path's versions, newest first, one the prefix rules have
+//	                                                          this device ignore marked so, and one a later repair
+//	                                                          wrote over marked with that repair's version (QD-833)
 //	ur evs delete <repo_id>                                   §8.8's RepoDelete filed, then DELETE, after a yes on the
 //	                                                          terminal (§5.8)
 //	ur evs restore <repo_id>                                  RepoRestore filed, then POST .../restore, after a yes
@@ -135,16 +137,7 @@ func urEvsRepoMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 			if err != nil {
 				return nil, err
 			}
-			lines := []string{}
-			for _, version := range history.Versions {
-				what := version.State
-				if version.Removed {
-					what = "removed"
-				}
-				lines = append(lines, fmt.Sprintf("version %d at ref version %d by sidecar %s, %s, %s", version.Version,
-					version.CommitVersion, version.SignerSidecarId, version.Time.UTC().Format("2006-01-02 15:04:05Z"), what))
-			}
-			return lines, nil
+			return urEvsLogLines(history), nil
 		}),
 		method(urMethodEvsDelete, true, func(ctx context.Context, params *urEvsRepoParams) ([]string, error) {
 			_, repo, repoId, err := urEvsRepoOf(evs, params)
@@ -330,6 +323,29 @@ func urEvsMountStatus(ctx context.Context, evs urEvsTarget, mount *sidecar.EvsLo
 		lines = append(lines, "nothing open")
 	}
 	return lines, nil
+}
+
+// A path's History as ur evs log prints it, a line a version, newest first: its number, ref version, signer, time and
+// state, then `ignored: prefix rule` where this device ignores it (DESIGN-DETAILS 16.2.5's History row) and `written
+// over by version <n>` where a later repair's sealed written_over names it (DESIGN-DETAILS 16.2.7; QD-833).
+func urEvsLogLines(history *sidecar.EvsHistory) []string {
+	lines := []string{}
+	for _, version := range history.Versions {
+		what := version.State
+		if version.Removed {
+			what = "removed"
+		}
+		line := fmt.Sprintf("version %d at ref version %d by sidecar %s, %s, %s", version.Version,
+			version.CommitVersion, version.SignerSidecarId, version.Time.UTC().Format("2006-01-02 15:04:05Z"), what)
+		if version.Ignored {
+			line += ", ignored: prefix rule"
+		}
+		if version.WrittenOverBy != 0 {
+			line += fmt.Sprintf(", written over by version %d", version.WrittenOverBy)
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 // A listing's path as ur prints it.
