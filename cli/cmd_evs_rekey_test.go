@@ -1,11 +1,14 @@
 // ur evs rekey (KEYS-M2-26): the command hands the daemon the repo, refs and paths named and prints the job's scope
 // and counts as the daemon answers them; --status shows a job, a stopped one with its reason and how to go on, and
-// says so when there is none; a skipped ref is named; and the methods are served only over a target with rekey jobs.
+// says so when there is none; a skipped ref is named; a held device's finished job shows its count of files left and
+// who runs the job for them, done on this device only (DESIGN-DETAILS 8.2.10's report); and the methods are served
+// only over a target with rekey jobs, the status answering the count.
 
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -121,6 +124,43 @@ func TestEvsRekeyStatusShowsWhereTheJobStands(t *testing.T) {
 			t.Errorf("a finished job does not show %q:\n%s", want, shown)
 		}
 	}
+	if strings.Contains(shown, "left") || strings.Contains(shown, "on this device") {
+		t.Errorf("a finished job that left nothing shows files left:\n%s", shown)
+	}
+
+	// a held device's finished job (DESIGN-DETAILS 8.2.10's report): its count of files left, with who runs the job
+	// for them, done on this device and never shown as having brought the repo to the generation
+	target.progress = &sidecar.GkmRekeyProgress{
+		RepoId: repoId, State: sidecar.GkmRekeyStateDone, Generation: 4, RefNames: [][]byte{[]byte("main")},
+		RewrittenCount: 12, CurrentCount: 2, LeftCount: 5, PushCount: 1,
+	}
+	shown = status()
+	for _, want := range []string{"generation 4, done on this device", "12 file(s) rewritten in 1 push(es), 2 already of the generation",
+		"5 file(s) left: the repo's prefix rules give this device no write to them",
+		"a device the rule set names for those paths, which an admin's is, runs the job for them",
+		"the repo is not at the generation until the files left are rekeyed"} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("a finished job that left files does not show %q:\n%s", want, shown)
+		}
+	}
+	if strings.Contains(shown, "generation 4, done\n") {
+		t.Errorf("a job that left files is shown as done for the repo:\n%s", shown)
+	}
+
+	// a job stopped at a rule set this device cannot read: the detail, and how to go on
+	target.progress = &sidecar.GkmRekeyProgress{
+		RepoId: repoId, State: sidecar.GkmRekeyStateStopped, Generation: 4, RefNames: [][]byte{[]byte("main")},
+		StopReason: (&sidecar.EvsPrefixRuleError{Detail: sidecar.EvsPrefixDetailPending, Path: "src/held.go"}).Error(),
+	}
+	shown = status()
+	for _, want := range []string{"generation 4, stopped", "EVS_PREFIX_RULE", "(pending)", "again to go on"} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("a job stopped at a pending set does not show %q:\n%s", want, shown)
+		}
+	}
+	if strings.Contains(shown, "src/held.go") {
+		t.Errorf("a stopped job shows a path:\n%s", shown)
+	}
 	if len(target.requests) != 0 {
 		t.Error("--status started a job")
 	}
@@ -148,6 +188,18 @@ func TestEvsRekeyMethods(t *testing.T) {
 	emptyRef := []byte(`{"repo_id":"` + sidecar.NewId().String() + `","refs":[""]}`)
 	if _, err := methods[urMethodEvsRekeyStart].Handler(context.Background(), &sidecar.DaemonCall{Params: emptyRef}); err == nil || len(target.requests) != 0 {
 		t.Errorf("a start naming an empty ref: %v", err)
+	}
+	// the status answers the count of files left beside the others, in the state the job ended in
+	target.progress = &sidecar.GkmRekeyProgress{State: sidecar.GkmRekeyStateDone, Generation: 2, RewrittenCount: 3, LeftCount: 2}
+	repoParams := []byte(`{"repo_id":"` + sidecar.NewId().String() + `"}`)
+	answer, err := methods[urMethodEvsRekeyStatus].Handler(context.Background(), &sidecar.DaemonCall{Params: repoParams})
+	reply, _ := answer.(*urEvsRekeyReply)
+	if err != nil || reply == nil || !reply.Known || reply.State != "done" || reply.Rewritten != 3 || reply.Left != 2 {
+		t.Errorf("the status of a job that left files: %+v %v", answer, err)
+	}
+	encoded, err := json.Marshal(reply)
+	if err != nil || !strings.Contains(string(encoded), `"left":2`) {
+		t.Errorf("the reply as sent: %s %v", encoded, err)
 	}
 	// the daemon's own target: refused while no host builds an evs client, and with no Sidecar either way
 	network := &urDaemonNetwork{noSidecar: "not enrolled"}
