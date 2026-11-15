@@ -21,7 +21,8 @@ type MailSessionSettings struct {
 	// go-smtp's line bound, which holds DATA's lines as well as commands: far past a command's 512 B, so mail
 	// with long lines passes, and a line is what a session holds at most while it reads a command.
 	LineMaxByteCount int
-	// MailIngress's bound, the router's 1,024 B (§15.5's fence, plan-MAIL-format-bytes#7).
+	// MailIngress's bound, the router's 1,024 B (§15.5's fence, plan-MAIL-format-bytes#7), whose default is the
+	// format's own (MailIngressFormatSettings.MaxByteCount).
 	IngressMaxByteCount int
 	// A deposit trailer's bound, the reader's own (MailIngestSettings.TrailerMaxByteCount).
 	TrailerMaxByteCount int
@@ -40,7 +41,7 @@ func DefaultMailSessionSettings() *MailSessionSettings {
 		SessionTimeout:      30 * time.Minute,
 		ChunkByteCount:      64 * 1024,
 		LineMaxByteCount:    1024 * 1024,
-		IngressMaxByteCount: 1024,
+		IngressMaxByteCount: DefaultMailIngressFormatSettings().MaxByteCount,
 		TrailerMaxByteCount: DefaultMailIngestSettings().TrailerMaxByteCount,
 		StatusInterval:      30 * time.Second,
 		LimitsInterval:      5 * time.Minute,

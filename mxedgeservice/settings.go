@@ -1,6 +1,8 @@
 // config/<env>/mxedge.yml (§15.15). DefaultMxEdgeSettings is the only source of a default
-// (connect/CODESTYLE.md:144), and LoadMxEdgeSettings lays a file over it. Protocol sizes are not
-// settings: they stay constants in dialog.go, since §15.4 promises them.
+// (connect/CODESTYLE.md:144), and LoadMxEdgeSettings lays a file over it. The limits a name or url in
+// this file is held to are fields too, set only by the defaults (QD-702). dialog.go's protocol sizes
+// are still constants there, as MAIL-M5-01 wrote them, until the review phase's sweep (QD-706) moves
+// them.
 //
 // Every number must be positive. Validate refuses anything else, so a zero is never unlimited or off,
 // and no reader has to decide what one means.
@@ -18,20 +20,15 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/urnetwork/sidecar"
 )
 
-const (
-	// RFC 1035's longest name, which a banner carries.
-	mxHostNameMaxByteCount = 253
-	// RFC 1035's longest label.
-	mxHostLabelMaxByteCount = 63
-	// A 530's line has to fit RFC 5321's 512 B, CRLF included, with its fixed text around the url.
-	mxDeviationUrlMaxByteCount = 400
-	// An entry must not outlive the daily k it is under, or no read finds it. k lives 25 h from its
-	// creation, which may come at the first moment of its day, so an entry may outlive the day by an
-	// hour at most.
-	mxClosedHandshakeTtlMax = mxDailyKeyTtl - mxSecondsPerDay*time.Second
-)
+// An entry must not outlive the daily k it is under, or no read finds it. k lives 25 h from its
+// creation, which may come at the first moment of its day, so an entry may outlive the day by an hour
+// at most. Derived from mxDailyKeyTtl, which closed_handshake.go keeps out of settings on purpose, so
+// it is no tunable either.
+const mxClosedHandshakeTtlMax = mxDailyKeyTtl - mxSecondsPerDay*time.Second
 
 // An mxedge.yml that cannot be served from. The wrapping error names the field.
 var ErrMxEdgeSettingsRefused = errors.New("mxedge.yml refused")
@@ -134,6 +131,103 @@ type MxEdgeSettings struct {
 	PlatformIdleTimeout time.Duration `yaml:"platform_idle_timeout"`
 	// How long a session after TLS may run at all. Default 30 min, a splice's bound (§15.4).
 	PlatformSessionTimeout time.Duration `yaml:"platform_session_timeout"`
+
+	// The router's (D-MAIL-1, D-MAIL-2, MAIL-M7-19), which only NewMxEdgeRouterService reads. route_root has
+	// no default, as a production name, and ValidateRouter refuses it empty; the platform's file need not
+	// set it.
+
+	// <root>, under which mx.<net>.<root> names a network's mail host and mx.<scope>.<net>.<root> a
+	// scope's (§15.4). Any other SNI routes by its full name, as a strict-mode custom MX host does. An LDH
+	// name.
+	RouteRootDomainName string `yaml:"route_root"`
+	// How long the router keeps what {mxr_<net>} answered for a name, a route or none, so a connection
+	// reads Redis at most once a name in this (§15.15's in-process cache). Default 5 s: a released or
+	// tombstoned label stops routing within this of its key's delete (I-14), the most CODESTYLE lets an
+	// inline path cache a positive answer.
+	RouteCacheTtl time.Duration `yaml:"route_cache_ttl"`
+	// Names the cache holds at most, past which the oldest goes, so a scan of random names bounds this
+	// process's memory. Default 65,536.
+	RouteCacheEntryCount int `yaml:"route_cache_entries"`
+	// K, the platform clients the router holds in urnetwork-edge, each a Find names (§13.6, §9.6).
+	// Default 4, tlsedge's. A dialer holding fewer leaves the router not ready.
+	Clients int `yaml:"clients"`
+	// The most one Find may take. Default 2 s, §9.6's.
+	FindTimeout time.Duration `yaml:"find_timeout"`
+	// The most Finds one dial sends, the first included. Default 3, §9.6's.
+	FindCount int `yaml:"find_max"`
+	// How long each ticket's open waits for its receiver's accept before the backup is tried, the one
+	// failure an edge reports (§9.6). Default 5 s.
+	AcceptTicketTimeout time.Duration `yaml:"accept_ticket_timeout"`
+	// The whole Find and open's bound, every ticket's included. Default 15 s, tlsedge's (§13.5).
+	AcceptSetupTimeout time.Duration `yaml:"accept_setup_timeout"`
+	// How long the one alert a closed handshake writes may take once the dialog's watchdog has stopped.
+	// Default 2 s, tlsedge's.
+	AlertTimeout time.Duration `yaml:"alert_timeout"`
+	// How long a Quota.Lease call may take before the network reads as unavailable. Default 2 s, tlsedge's.
+	LeaseTimeout time.Duration `yaml:"lease_timeout"`
+	// A splice ends after this long with no byte either way. Default 10 min, RFC 5321 §4.5.3.2.6's (§15.4).
+	SpliceIdleTimeout time.Duration `yaml:"splice_idle_timeout"`
+	// A splice that has passed fewer than SpliceSlowByteCount bytes this long after it began ends then.
+	// Default 10 min (§15.4).
+	SpliceSlowTimeout time.Duration `yaml:"splice_slow_timeout"`
+	// What a splice must have passed by SpliceSlowTimeout. Default 1 MiB (§15.4).
+	SpliceSlowByteCount int `yaml:"splice_slow_bytes"`
+	// A splice ends this long after it began, whatever it carries. Default 30 min (§15.4).
+	SpliceSessionTimeout time.Duration `yaml:"splice_session_timeout"`
+	// A splice ends once it has passed this many times its network's message cap, plus
+	// SpliceExtraByteCount, both ways. Default 2 (§15.4).
+	SpliceMessageMultiple int `yaml:"splice_message_multiple"`
+	// See SpliceMessageMultiple. Default 1 MiB (§15.4).
+	SpliceExtraByteCount int `yaml:"splice_extra_bytes"`
+	// What one read of either side takes at most. Default 16 KiB, tlsedge's.
+	SpliceBufferByteCount int `yaml:"splice_buffer_bytes"`
+	// The message cap a splice is bounded by before its network's own mail_inbound_message_bytes has
+	// loaded (§20.4). Default 50 MiB, the largest tier's: the receiver holds each message to its network's
+	// own SIZE, so this only bounds what a cold network's first splice may cost it, and never cuts a
+	// message its tier allows.
+	ColdMessageByteCount int `yaml:"cold_message_max_bytes"`
+	// How often a network's limits are read again while it has sessions. Default 1 min.
+	LimitsRefreshInterval time.Duration `yaml:"limits_refresh_interval"`
+	// A network with no session for this long is forgotten, and cold again. Default 10 min, tlsedge's.
+	LimitsActiveWindow time.Duration `yaml:"limits_active_window"`
+	// Networks whose limits are held at most. Default 65,536, tlsedge's.
+	LimitsNetworkCount int `yaml:"limits_networks"`
+	// How long a sender's forward-confirmed PTR may take, both lookups, from the session's admission. A
+	// lookup the handoff outruns leaves MailIngress.ptr_name "". Default 5 s.
+	PtrTimeout time.Duration `yaml:"ptr_timeout"`
+	// The PTR names forward-confirmed at most. Default 4.
+	PtrNameCount int `yaml:"ptr_names"`
+	// PTR lookups this process runs at once at most, past which a session goes without, so a flood of
+	// senders cannot turn into a flood of lookups. Default 1,024.
+	PtrLookupCount int `yaml:"ptr_lookups"`
+
+	// How often the router loads the feed mirror into a new prefix set (owner decision 111). Default 5 min,
+	// §15.4's.
+	ListingRefreshInterval time.Duration `yaml:"listing_refresh_interval"`
+	// A set whose feed was current longer ago than this lists no one, so a feed that is down or stale rejects
+	// nothing (§15.4). Default 15 min, three refreshes missed.
+	ListingStaleTimeout time.Duration `yaml:"listing_stale_timeout"`
+	// How long one load of the mirror may take before it reads as failed and the set in use stays. Default
+	// 2 min.
+	ListingLoadTimeout time.Duration `yaml:"listing_load_timeout"`
+	// The most entries one load takes, past which the load fails whole and the set in use stays, so a mirror
+	// that grows past what this process should hold never half-loads. Default 16,777,216, a few bytes each.
+	ListingPrefixCount int `yaml:"listing_prefixes"`
+
+	// MailIngress's bounds, the format's, which a receiver holds it to as well. Set only by the defaults.
+	Ingress *sidecar.MailIngressFormatSettings `yaml:"-"`
+	// The router's usage windows for meter mx (§20.6). Set only by the defaults.
+	Usage *sidecar.QuotaUsageBatcherSettings `yaml:"-"`
+
+	// The limits a name and a url in this file are held to, which no file sets.
+
+	// RFC 1035's longest name, in its dotted text form: 253.
+	HostNameMaxByteCount int `yaml:"-"`
+	// RFC 1035's longest label: 63.
+	HostLabelMaxByteCount int `yaml:"-"`
+	// The longest url a reply carries: 400, so a 530's line fits RFC 5321's 512 B, CRLF included, with its
+	// fixed text around the url.
+	ReplyUrlMaxByteCount int `yaml:"-"`
 }
 
 // The defaults every number here is read from. BannerHostName and DeviationUrl stay empty, so these
@@ -164,6 +258,38 @@ func DefaultMxEdgeSettings() *MxEdgeSettings {
 		PlatformHandshakeTimeout:    10 * time.Second,
 		PlatformIdleTimeout:         5 * time.Minute,
 		PlatformSessionTimeout:      30 * time.Minute,
+		RouteCacheTtl:               5 * time.Second,
+		RouteCacheEntryCount:        64 * 1024,
+		Clients:                     4,
+		FindTimeout:                 2 * time.Second,
+		FindCount:                   3,
+		AcceptTicketTimeout:         5 * time.Second,
+		AcceptSetupTimeout:          15 * time.Second,
+		AlertTimeout:                2 * time.Second,
+		LeaseTimeout:                2 * time.Second,
+		SpliceIdleTimeout:           10 * time.Minute,
+		SpliceSlowTimeout:           10 * time.Minute,
+		SpliceSlowByteCount:         1024 * 1024,
+		SpliceSessionTimeout:        30 * time.Minute,
+		SpliceMessageMultiple:       2,
+		SpliceExtraByteCount:        1024 * 1024,
+		SpliceBufferByteCount:       16 * 1024,
+		ColdMessageByteCount:        50 * 1024 * 1024,
+		LimitsRefreshInterval:       1 * time.Minute,
+		LimitsActiveWindow:          10 * time.Minute,
+		LimitsNetworkCount:          64 * 1024,
+		PtrTimeout:                  5 * time.Second,
+		PtrNameCount:                4,
+		PtrLookupCount:              1024,
+		ListingRefreshInterval:      5 * time.Minute,
+		ListingStaleTimeout:         15 * time.Minute,
+		ListingLoadTimeout:          2 * time.Minute,
+		ListingPrefixCount:          16 * 1024 * 1024,
+		Ingress:                     sidecar.DefaultMailIngressFormatSettings(),
+		Usage:                       sidecar.DefaultQuotaUsageBatcherSettings(),
+		HostNameMaxByteCount:        253,
+		HostLabelMaxByteCount:       63,
+		ReplyUrlMaxByteCount:        400,
 	}
 }
 
@@ -191,21 +317,43 @@ func (self *MxEdgeSettings) Validate() error {
 	if self == nil {
 		return fmt.Errorf("%w: no settings", ErrMxEdgeSettingsRefused)
 	}
-	if !mxLdhNameFits(self.BannerHostName) {
-		return fmt.Errorf("%w: banner_host is not an LDH name", ErrMxEdgeSettingsRefused)
-	}
-	if !mxReplyUrlFits(self.DeviationUrl) {
-		return fmt.Errorf("%w: deviation_url is not an absolute https url that fits a reply", ErrMxEdgeSettingsRefused)
-	}
 	value := reflect.ValueOf(self).Elem()
 	for i := range value.NumField() {
 		field := value.Field(i)
 		if (field.Kind() == reflect.Int || field.Kind() == reflect.Int64) && field.Int() <= 0 {
-			return fmt.Errorf("%w: %s is not positive", ErrMxEdgeSettingsRefused, value.Type().Field(i).Tag.Get("yaml"))
+			name := value.Type().Field(i).Tag.Get("yaml")
+			if name == "-" {
+				name = value.Type().Field(i).Name
+			}
+			return fmt.Errorf("%w: %s is not positive", ErrMxEdgeSettingsRefused, name)
 		}
+	}
+	if !self.ldhNameFits(self.BannerHostName) {
+		return fmt.Errorf("%w: banner_host is not an LDH name", ErrMxEdgeSettingsRefused)
+	}
+	if !self.replyUrlFits(self.DeviationUrl) {
+		return fmt.Errorf("%w: deviation_url is not an absolute https url that fits a reply", ErrMxEdgeSettingsRefused)
 	}
 	if mxClosedHandshakeTtlMax < self.ClosedHandshakeTtl {
 		return fmt.Errorf("%w: closed_handshake_ttl would outlive its daily key", ErrMxEdgeSettingsRefused)
+	}
+	if !self.Ingress.Valid() {
+		return fmt.Errorf("%w: Ingress", ErrMxEdgeSettingsRefused)
+	}
+	if self.Usage == nil || self.Usage.WindowTimeout <= 0 || self.Usage.RetryTimeout <= 0 {
+		return fmt.Errorf("%w: Usage needs a positive window and retry timeout", ErrMxEdgeSettingsRefused)
+	}
+	return nil
+}
+
+// Whether these settings can run the router role: Validate's rules and the root it routes under. A
+// refusal names the field, never its value.
+func (self *MxEdgeSettings) ValidateRouter() error {
+	if err := self.Validate(); err != nil {
+		return err
+	}
+	if !self.ldhNameFits(self.RouteRootDomainName) {
+		return fmt.Errorf("%w: route_root is not an LDH name", ErrMxEdgeSettingsRefused)
 	}
 	return nil
 }
@@ -216,13 +364,13 @@ func (self *MxEdgeSettings) ValidatePlatform() error {
 	if err := self.Validate(); err != nil {
 		return err
 	}
-	if !mxLdhNameFits(self.PlatformReportHostName) {
+	if !self.ldhNameFits(self.PlatformReportHostName) {
 		return fmt.Errorf("%w: platform_report_host is not an LDH name", ErrMxEdgeSettingsRefused)
 	}
-	if !mxLdhNameFits(self.PlatformRootDomainName) {
+	if !self.ldhNameFits(self.PlatformRootDomainName) {
 		return fmt.Errorf("%w: platform_root is not an LDH name", ErrMxEdgeSettingsRefused)
 	}
-	if !mxReplyUrlFits(self.PlatformAbuseUrl) {
+	if !self.replyUrlFits(self.PlatformAbuseUrl) {
 		return fmt.Errorf("%w: platform_abuse_url is not an absolute https url that fits a reply", ErrMxEdgeSettingsRefused)
 	}
 	return nil
@@ -230,12 +378,12 @@ func (self *MxEdgeSettings) ValidatePlatform() error {
 
 // Dotted LDH labels within RFC 1035's lengths, which also keeps a CR or LF out of every reply the name
 // enters.
-func mxLdhNameFits(name string) bool {
-	if name == "" || mxHostNameMaxByteCount < len(name) {
+func (self *MxEdgeSettings) ldhNameFits(name string) bool {
+	if name == "" || self.HostNameMaxByteCount < len(name) {
 		return false
 	}
 	for _, label := range strings.Split(name, ".") {
-		if label == "" || mxHostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || self.HostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := range len(label) {
@@ -249,8 +397,8 @@ func mxLdhNameFits(name string) bool {
 }
 
 // Absolute https, printable ASCII with no space, and short enough for a reply's line to fit around it.
-func mxReplyUrlFits(replyUrl string) bool {
-	if replyUrl == "" || mxDeviationUrlMaxByteCount < len(replyUrl) {
+func (self *MxEdgeSettings) replyUrlFits(replyUrl string) bool {
+	if replyUrl == "" || self.ReplyUrlMaxByteCount < len(replyUrl) {
 		return false
 	}
 	for i := range len(replyUrl) {
