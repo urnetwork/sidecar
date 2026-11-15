@@ -366,14 +366,16 @@ func (self *BridgeShareNet) Delegation(window *BridgeNetWindow, cert []byte, sig
 }
 
 // A window client of Y's to the host, as the operator mints it: every contract it asks for FriendsAndFamily, sealed to
-// network, Y's for the zero id, carrying what delegation answers for the window. Its flows go to Alias.
+// network, Y's for the zero id, and to a source subject of the operator's choosing, never the delegation's, so the
+// principal the host verifies is the signer's whatever C13 sealed (§22.7's forged source_subject); carrying what
+// delegation answers for the window. Its flows go to Alias.
 func (self *BridgeShareNet) OpenWindow(name string, network sidecar.Id, delegation func(window *BridgeNetWindow) []byte) *BridgeNetWindow {
 	self.t.Helper()
 	if network == (sidecar.Id{}) {
 		network = self.AcceptingNetworkId
 	}
 	sealedNetwork := connect.Id(network)
-	subject := connect.Id(self.AcceptingSidecarId)
+	subject := connect.Id(sidecar.NewId())
 	return self.X.OpenWindow(name, self.HostDevice, self.Host, &BridgeNetWindowArgs{
 		ProvideMode:  protocol.ProvideMode_FriendsAndFamily,
 		NoDelegation: true,
