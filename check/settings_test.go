@@ -226,6 +226,8 @@ func defaultCheckSettings() *checkSettings {
 			"mail_operators_gen.go": "TestMailOperatorsGenIsCurrent",
 			// HTML's named character references as Go, from testdata/index/conformance/entities.json (DESIGN-DETAILS 11.2.6)
 			"evs_index_extract_entities.go": "TestIndexReferenceTableIsCurrent",
+			// SearchOracle's own copy of the same table, written apart from the index's (DESIGN-DETAILS 11.7; SEARCH-M10-43)
+			"sidecartest/search_oracle_entities.go": "TestSearchOracleReferenceTableIsCurrent",
 		},
 		wallClockExceptions: map[string]wallClockException{
 			"id.go time.Now": {

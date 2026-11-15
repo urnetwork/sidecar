@@ -475,6 +475,8 @@ type daemonSession struct {
 	projectRead bool
 	project     *SidecarProject
 	projectErr  error
+	// closed once the caller is gone (DaemonCall.SessionDone); nil for a session no reader watches, which never ends
+	done <-chan struct{}
 }
 
 // The session's `.ur`, found on first use.
