@@ -1,8 +1,8 @@
 //go:build !sidecar_http
 
 // RECORD-M10-02's cards and repo files on sidecartest's fakes, signed for real so every reader verifies them: a card
-// written, folded and stored at 2 KiB steps; its caps on both sides, a 17th item and 16,209 B refused, 16,208 B taken;
-// FS-84's card cases, a card signed or pushed by another sidecar, one whose seq is not above the last or whose pin is
+// written, folded and stored at 2 KiB steps; its caps on both sides, a 17th item and 16,193 B refused, 16,192 B taken
+// (QD-834); its file read to 16 KiB and no further, which 16 items at the items' cap fit; FS-84's card cases, a card signed or pushed by another sidecar, one whose seq is not above the last or whose pin is
 // out of range, one by a parked or suspended signer, and removals by another member, by a directory admin and after a
 // revocation; and FS-101's r/ cases, a pin over 4,096 positions before its push's, a removed admin's and a
 // non-admin's version, and a removed admin's push at an idle cards ref's older pin.
@@ -11,6 +11,7 @@ package sidecar_test
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -133,24 +134,31 @@ func testCardItemsByteCount(items []*protocol.Announcement) int {
 	return byteCount
 }
 
-// Runs of writerId's whose card items take exactly byteCount bytes: claims full of targets, trimmed byte by byte, the
-// last claim's text making up a varint's step.
-func testCardRunsOfByteCount(t *testing.T, writerId sidecar.Id, memberId *sidecar.Id, renewedMillis int64, byteCount int) []*protocol.Announcement {
+// itemCount runs of writerId's whose card items take exactly byteCount bytes: each run's claims filled with targets to
+// its share of byteCount, then the last run's trimmed byte by byte, its last claim's text making up a varint's step.
+func testCardRunsOfByteCount(t *testing.T, writerId sidecar.Id, memberId *sidecar.Id, renewedMillis int64, itemCount int, byteCount int) []*protocol.Announcement {
 	t.Helper()
 	items := []*protocol.Announcement{}
-	for testCardItemsByteCount(items) < byteCount {
+	for index := range itemCount {
 		item := testRunItem(writerId, memberId, sidecar.NewId(), 1, renewedMillis)
-		for range 4 {
-			claim := &protocol.Claim{ClaimId: sidecar.NewId().Bytes(), Text: strings.Repeat("c", 300), ExpiresMillis: item.GetExpiresMillis(), State: 1}
-			for range 16 {
-				claim.Targets = append(claim.Targets, "src/"+strings.Repeat("p", 252))
-			}
-			item.Claims = append(item.Claims, claim)
-		}
 		items = append(items, item)
+		for testCardItemsByteCount(items) < byteCount*(index+1)/itemCount {
+			// a run holds at most 4 claims of at most 16 targets
+			if len(item.Claims) == 0 || len(item.Claims[len(item.Claims)-1].Targets) == 16 {
+				if len(item.Claims) == 4 {
+					t.Fatalf("%d runs hold no %d bytes", itemCount, byteCount)
+				}
+				item.Claims = append(item.Claims, &protocol.Claim{ClaimId: sidecar.NewId().Bytes(), Text: "c", ExpiresMillis: item.GetExpiresMillis(), State: 1})
+			}
+			claim := item.Claims[len(item.Claims)-1]
+			claim.Targets = append(claim.Targets, "src/"+strings.Repeat("p", 252))
+		}
 	}
 	last := items[len(items)-1]
 	for byteCount < testCardItemsByteCount(items) {
+		if len(last.Claims) == 0 {
+			t.Fatalf("the last run has no claim left to trim to %d bytes", byteCount)
+		}
 		claim := last.Claims[len(last.Claims)-1]
 		if len(claim.Targets) == 0 {
 			last.Claims = last.Claims[:len(last.Claims)-1]
@@ -162,6 +170,9 @@ func testCardRunsOfByteCount(t *testing.T, writerId sidecar.Id, memberId *sideca
 			continue
 		}
 		claim.Targets[len(claim.Targets)-1] = target[:len(target)-1]
+	}
+	if len(last.Claims) == 0 {
+		t.Fatalf("the last run has no claim left to fill to %d bytes", byteCount)
 	}
 	claim := last.Claims[len(last.Claims)-1]
 	claim.Text += strings.Repeat("c", byteCount-testCardItemsByteCount(items))
@@ -256,8 +267,8 @@ func TestDirectoryCardWrittenFoldedAndPadded(t *testing.T) {
 	}
 }
 
-// A writer refuses a 17th item, a second worker item and items past 16,208 B, signing nothing; a reader ignores a card
-// of 17 items or of 16,209 B of items with over_cap, keeps showing the card it took last, and takes 16,208 B.
+// A writer refuses a 17th item, a second worker item and items past 16,192 B, signing nothing; a reader ignores a card
+// of 17 items or of 16,193 B of items with over_cap, keeps showing the card it took last, and takes 16,192 B.
 func TestDirectoryCardCaps(t *testing.T) {
 	world := newTestDirectoryWorld(t, nil)
 	memberId := sidecar.NewId()
@@ -279,9 +290,9 @@ func TestDirectoryCardCaps(t *testing.T) {
 	if _, err := device.client.WriteCard(t.Context(), &sidecar.DirectoryCardWriteArgs{Items: workers}); !errors.Is(err, sidecar.ErrDirectoryCardOverCap) {
 		t.Errorf("a second worker item: %v", err)
 	}
-	past := testCardRunsOfByteCount(t, writer.sidecarId, &memberId, now, 16209)
+	past := testCardRunsOfByteCount(t, writer.sidecarId, &memberId, now, 1, 16193)
 	if _, err := device.client.WriteCard(t.Context(), &sidecar.DirectoryCardWriteArgs{Items: past}); !errors.Is(err, sidecar.ErrDirectoryCardOverCap) {
-		t.Errorf("items of 16,209 B: %v", err)
+		t.Errorf("items of 16,193 B: %v", err)
 	}
 	if version := world.cardFileVersion(sidecar.DirectoryCardPath(writer.sidecarId)); version != 0 {
 		t.Fatalf("a refused card was put at version %d", version)
@@ -304,13 +315,109 @@ func TestDirectoryCardCaps(t *testing.T) {
 	world.putFile(writer.sidecarId, path, world.cardContent(writer, writer.sidecarId, 3, pin, past...), pin)
 	reader.mustSync(t)
 	if reader.alarmsNaming(sidecar.SidecarRecordAlarmOverCap, writer.sidecarId) != 2 {
-		t.Errorf("a card of 16,209 B: alarms %v", reader.alarmReasons())
+		t.Errorf("a card of 16,193 B: alarms %v", reader.alarmReasons())
 	}
-	at := testCardRunsOfByteCount(t, writer.sidecarId, &memberId, now, 16208)
+	at := testCardRunsOfByteCount(t, writer.sidecarId, &memberId, now, 1, 16192)
 	world.putFile(writer.sidecarId, path, world.cardContent(writer, writer.sidecarId, 4, pin, at...), pin)
 	reader.mustSync(t)
 	if shown := testItemsOf(t, reader, writer.sidecarId); len(shown) != len(at) {
-		t.Errorf("a card of 16,208 B: %d of %d items shown, alarms %v", len(shown), len(at), reader.alarmReasons())
+		t.Errorf("a card of 16,192 B: %d of %d items shown, alarms %v", len(shown), len(at), reader.alarmReasons())
+	}
+}
+
+// A card of 16 items in exactly 16,192 B, the items' cap, written and signed by the writer, fits 16 KiB, eight steps,
+// and a reader shows its items; one item byte more the writer refuses, putting nothing. A card file is read to 16 KiB
+// and no further: a signed card of exactly 16,384 B decodes, and one of 16,385 B is refused though its items are within
+// their cap, the reader ignoring it with over_cap and showing the card it took. At the items' cap a card fits whenever
+// seq and the position are below 2^56, whatever written_millis is; with seq, the position and written_millis at their
+// widest varints it is 16,388 B, which the file bound refuses, so QD-834's 16 B margin falls 4 B short there.
+func TestDirectoryCardFileBound(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	memberId := sidecar.NewId()
+	writer := world.memberWriter(memberId)
+	world.publish()
+	device := world.device(writer)
+	now := world.clock.Now().UnixMilli()
+	settings := sidecar.DefaultDirectoryCardSettings()
+	if settings.ItemsByteCount != 16192 || settings.CardFileByteCount != 16*1024 {
+		t.Fatalf("a card's items in %d B, its file in %d B", settings.ItemsByteCount, settings.CardFileByteCount)
+	}
+
+	items := testCardRunsOfByteCount(t, writer.sidecarId, &memberId, now, 16, 16192)
+	written := device.writeCard(t, items...)
+	if len(written.Items) != 16 || 16384 < written.ByteCount || written.StoredByteCount != 16384 {
+		t.Fatalf("a card at the items' cap: %d items in %d B, stored at %d", len(written.Items), written.ByteCount, written.StoredByteCount)
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	if shown := testItemsOf(t, reader, writer.sidecarId); len(shown) != 16 {
+		t.Fatalf("a card at the items' cap: %d of 16 items shown, alarms %v", len(shown), reader.alarmReasons())
+	}
+
+	path := sidecar.DirectoryCardPath(writer.sidecarId)
+	version := world.cardFileVersion(path)
+	past := testCardRunsOfByteCount(t, writer.sidecarId, &memberId, now, 16, 16193)
+	if _, err := device.client.WriteCard(t.Context(), &sidecar.DirectoryCardWriteArgs{Items: past}); !errors.Is(err, sidecar.ErrDirectoryCardOverCap) {
+		t.Errorf("items of 16,193 B: %v", err)
+	}
+	if world.cardFileVersion(path) != version {
+		t.Error("a refused card was put")
+	}
+
+	// the card's and the Signed's own fields take 175 B with seq and the position in one byte each and written_millis in
+	// six, and 196 B at their widest, ten, ten and nine
+	cardAt := func(itemsByteCount int, seq uint64, position uint64, writtenMillis int64) ([]byte, *protocol.DirectoryCard) {
+		t.Helper()
+		card := &protocol.DirectoryCard{
+			NetworkId: world.networkId.Bytes(), SidecarId: writer.sidecarId.Bytes(), Seq: seq,
+			At:            &bridge.AuthPin{Version: position, Chain: make([]byte, 32)},
+			WrittenMillis: writtenMillis,
+			Items:         testCardRunsOfByteCount(t, writer.sidecarId, &memberId, now, 16, itemsByteCount),
+			Version:       1,
+		}
+		body, err := proto.MarshalOptions{Deterministic: true}.Marshal(card)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return testSignedContent(t, writer, bridge.SignedType_SIGNED_DIRECTORY_CARD, body), card
+	}
+	for _, bound := range []struct {
+		name           string
+		itemsByteCount int
+		seq            uint64
+		position       uint64
+		writtenMillis  int64
+		byteCount      int
+		decodes        bool
+	}{
+		{name: "16,188 B of items, all at their widest", itemsByteCount: 16188, seq: math.MaxUint64, position: math.MaxUint64, writtenMillis: math.MaxInt64, byteCount: 16384, decodes: true},
+		{name: "16,189 B of items, all at their widest", itemsByteCount: 16189, seq: math.MaxUint64, position: math.MaxUint64, writtenMillis: math.MaxInt64, byteCount: 16385},
+		{name: "the items' cap, seq and the position below 2^56", itemsByteCount: 16192, seq: 1<<56 - 1, position: 1<<56 - 1, writtenMillis: math.MaxInt64, byteCount: 16384, decodes: true},
+		{name: "the items' cap, seq and the position at their widest", itemsByteCount: 16192, seq: math.MaxUint64, position: math.MaxUint64, writtenMillis: now, byteCount: 16385},
+		{name: "the items' cap, all at their widest", itemsByteCount: 16192, seq: math.MaxUint64, position: math.MaxUint64, writtenMillis: math.MaxInt64, byteCount: 16388},
+	} {
+		content, card := cardAt(bound.itemsByteCount, bound.seq, bound.position, bound.writtenMillis)
+		if len(content) != bound.byteCount {
+			t.Errorf("%s: a card file of %d B, not %d", bound.name, len(content), bound.byteCount)
+		}
+		if err := sidecar.DirectoryCheckCard(card, settings); err != nil {
+			t.Errorf("%s: the card itself: %v", bound.name, err)
+		}
+		_, err := sidecar.DirectoryDecodeCard(content, settings)
+		if bound.decodes != (err == nil) || err != nil && !errors.Is(err, sidecar.ErrDirectoryFormatInvalid) {
+			t.Errorf("%s: read as %v", bound.name, err)
+		}
+	}
+
+	// a card file of 16,385 B at the path, its items within their cap: ignored with over_cap, the card taken still shown
+	over, _ := cardAt(16189, math.MaxUint64, math.MaxUint64, math.MaxInt64)
+	world.putFile(writer.sidecarId, path, over, world.directoryAuth.Tip().Pin())
+	reader.mustSync(t)
+	if reader.alarmsNaming(sidecar.SidecarRecordAlarmOverCap, writer.sidecarId) != 1 {
+		t.Errorf("a card file of 16,385 B: alarms %v", reader.alarmReasons())
+	}
+	if shown := testItemsOf(t, reader, writer.sidecarId); len(shown) != 16 {
+		t.Errorf("past the file's bound the reader shows %d items", len(shown))
 	}
 }
 

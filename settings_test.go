@@ -185,6 +185,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				CacheByteCount:         4 * 1024 * 1024 * 1024,
 				MemoryByteCount:        64 * 1024 * 1024,
 				VersionCacheByteCount:  256 * 1024,
+				CacheHoldingsByteCount: 16 * 1024 * 1024,
+				CacheMetaByteCount:     64 * 1024,
 				BackgroundByteCount:    1024 * 1024 * 1024,
 				MoreByteCount:          1024 * 1024 * 1024,
 				AllPolicy:              "background",
