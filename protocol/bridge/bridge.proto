@@ -121,6 +121,7 @@ message BridgeRules {
                                            //   member_id or client_ids: what an sdk provider before C16 gives a
                                            //   sealed subject no row binds; unset, such a subject holds no rows
                                            //   (bridge-m4-09-other-client-rows, DESIGN-DETAILS 12.2.2)
+  repeated BridgeRuleShare shares = 11;    // the shares this host serves, X's side (§17.9; DESIGN-DETAILS 12.2.2)
 }
 
 enum BridgeRuleEntryKind {
@@ -150,7 +151,8 @@ message BridgeRuleLink {
   bytes site_id = 7;
   int64 draining_since = 8;                // removed (§17.5's removed row): drains from here
   int64 drain_until = 9;
-  // 10 and 11 are a share link's share_id and target_network_id (BRIDGE-M6-05; DESIGN-DETAILS 12.2.2)
+  bytes share_id = 10;                     // a share link, Y's side: FriendsAndFamily to an alias's host
+  bytes target_network_id = 11;            // with share_id: X
   bytes target_client_public_key = 12;     // an app host: the device client key its live forwarding Delegation names
                                            // (§17.9's target row), which the link pins in place of a fetched binding
 }
@@ -199,6 +201,28 @@ message BridgeRuleReach {
   uint32 protocol = 3;                     // 0, 1, 6 or 17
   repeated BridgePortRange ports = 4;
   int64 expires = 5;
+}
+
+// A share this host serves (§17.9's X side): who may arrive under it and the targets this host hosts itself. The
+// principal's verified share and network select the rows, never an address (owner decision 11).
+message BridgeRuleShare {
+  bytes share_id = 1;
+  bytes accepting_network_id = 2;          // Y: the principal's network must be it
+  bytes share_public_key = 3;              // as BridgeState.share_keys carries it
+  bytes grant_id = 4;                      // a GrantRevoke of it ends the share between states
+  int64 expires = 5;
+  repeated BridgeRuleShareTarget targets = 6;   // the targets this host hosts, by index
+}
+
+// One target of a share at its host: a destination whose low 16 bits lie in the alias maps to target, keeping the
+// bits past length, since Y's block is not X's to know and a block change in Y keeps them.
+message BridgeRuleShareTarget {
+  uint32 index = 1;
+  uint32 alias_host_bits = 2;
+  uint32 length = 3;
+  BridgeIpv4Prefix target = 4;             // T_i: To's low bits past length are kept
+  uint32 protocol = 5;
+  repeated BridgePortRange ports = 6;
 }
 
 // This device's own default route (§17.9's egress spec): today's under auto, only exits under exits, none under none.
@@ -352,6 +376,74 @@ message BridgeAliasBody {
   uint32 target_index = 2;
   BridgeIpv4Prefix alias_prefix = 3;
   bytes host = 4;                      // sidecar_id: T_i's host, in the source network
+  bytes host_identity_public_key = 5;  // QD-077: T_i's host's identity key, copied from the opened target table
+  bytes sharing_network_id = 6;        // X, the network the host is a sidecar of
+  uint32 drain_seconds = 7;            // a release's drain, 300 s when 0, 3,600 s at most
+  bool release = 8;                    // ends the alias of this share_id and target_index; alias_prefix as held
+}
+
+// X's config file bridge/share-grant/<share_id hex> (§17.9's share pins; QD-077, QD-670): what X's approving admin's
+// device writes in a head in the act that files the share's GrantActivate. A config file, which evs holds as
+// ciphertext, so no server reads it. table_key is K itself, so every reader of X's config holds it (§2.6).
+message BridgeShareGrant {
+  bytes share_id = 1;
+  bytes grant_id = 2;                  // the share's GrantActivate; the file counts only while that grant is live
+  bytes share_public_key = 3;          // Y's ShareKey, Ed25519
+  bytes target_table_sha256 = 4;       // SHA-256 of the sealed target table as network_bridge_share stores it
+  bytes table_key = 5;                 // K
+  bytes accepting_network_id = 6;      // Y
+  bytes alias_table_sha256 = 7;        // SHA-256 of the sealed alias table X's approving admin opened
+  uint64 target_table_version = 8;
+  uint64 alias_table_version = 9;
+}
+
+// The share seal's bodies (§17.9; QD-108): each sealed under K with its label, padded by pad to a multiple of 256 B.
+message BridgeShareTargets {           // label "targets"
+  repeated BridgeShareTarget targets = 1;
+  bytes pad = 15;
+}
+
+message BridgeShareTarget {
+  uint32 index = 1;                    // from 0, dense
+  bytes host_sidecar_id = 2;
+  bytes host_identity_public_key = 3;  // QD-077
+  BridgeIpv4Prefix prefix = 4;         // what X's host reaches: its hosted address as a /32, or a served prefix
+  uint32 protocol = 5;                 // 0 every protocol; 6 or 17 with ports
+  repeated BridgePortRange ports = 6;
+}
+
+message BridgeShareAliases {           // label "aliases"
+  repeated BridgeShareAlias aliases = 1;
+  bytes pad = 15;
+}
+
+message BridgeShareAlias {
+  uint32 index = 1;
+  uint32 alias_host_bits = 2;          // the low 16 bits of A_i's network address: Y's block is not X's to know
+  uint32 length = 3;                   // equal to its target's
+}
+
+message BridgeShareKeyBody {           // label "share-key"
+  bytes share_public_key = 1;
+  bytes pad = 15;
+}
+
+message BridgeShareShortfall {         // label "shortfall"
+  uint32 index = 1;                    // the first target that found no room
+  uint32 length = 2;                   // its prefix length
+  uint32 free_address_count = 3;       // the upper /17's free addresses at the preflight
+  uint32 largest_free_length = 4;      // the shortest prefix length with an aligned free block; 33 for none
+  bytes pad = 15;
+}
+
+// What the accepting network stores as its side of network_bridge_share, the row's alias table (§2.8's api-9): the
+// seals an accept returns, each under K with its own label, in one value, since the row has one sealed column a side
+// (question bridge-m6-03-accept-seals). X's approving admin pins the SHA-256 of these bytes as the alias table's
+// (BridgeShareGrant.alias_table_sha256), so the ShareKey and the aliases are pinned as one. Ciphertext only.
+message BridgeShareAccept {
+  bytes aliases = 1;                   // the sealed BridgeShareAliases; empty on a refusal
+  bytes share_key = 2;                 // the sealed BridgeShareKeyBody; empty on a refusal
+  bytes shortfall = 3;                 // the sealed BridgeShareShortfall, under refused_no_space alone
 }
 
 enum BridgeWithdrawMode {

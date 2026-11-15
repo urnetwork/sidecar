@@ -45,6 +45,7 @@ package sidecar
 import (
 	"bytes"
 	"cmp"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"maps"
@@ -406,12 +407,32 @@ type BridgeLedgerEgress struct {
 
 // One alias a share's accepting sidecar filed (§17.9).
 type BridgeLedgerAlias struct {
+	// The body as filed, its release unset; once released, with the release's drain_seconds.
 	Body *bridge.BridgeAliasBody
 	// The sidecar that filed it, and its entry.
 	Signer Id
 	At     uint64
 	// The statement for one past the fold, nil for a row the fold holds.
 	Statement *BridgeLogStatement
+	// The release that ended it (DESIGN-DETAILS 12.2.2's BridgeAliasBody.release), its entry and time; zero while the
+	// alias is in force. A released alias routes nothing new and keeps its block until its drain ends (D-BRIDGE-20).
+	ReleasedAt uint64
+	ReleasedMs int64
+	// how long it drains from ReleasedMs
+	drainMs int64
+}
+
+// Whether the alias is in force: filed and not released.
+func (self *BridgeLedgerAlias) InForce() bool {
+	return self.ReleasedAt == 0
+}
+
+// When a released alias's drain ends and its block is free, by the log's time; 0 while it is in force.
+func (self *BridgeLedgerAlias) DrainUntilMs() int64 {
+	if self.ReleasedAt == 0 {
+		return 0
+	}
+	return self.ReleasedMs + self.drainMs
 }
 
 // A range of a block's upper /17 that an alias or an exposed prefix holds, in host bits.
@@ -546,6 +567,7 @@ func openBridgeLedger(rows BridgeLedgerRows, statements []*BridgeLogStatement, r
 		}
 	}
 	ledger.releaseAddresses()
+	ledger.sweepAliases(ledger.timeMs)
 	return ledger, nil
 }
 
@@ -568,6 +590,9 @@ func (self *BridgeLog) Open(reader *BridgeLedgerReader) *BridgeLedger {
 func (self *BridgeLedger) apply(statement *BridgeLogStatement) {
 	entry := &BridgeLedgerEntry{Statement: statement, Disposition: BridgeDispositionActive}
 	self.entries = append(self.entries, entry)
+	// a released alias whose drain ended by this statement's time has left the rows, as the fold whose time passes it
+	// drops the row, so the statement reads the upper /17 alike whether a fold came between or not
+	self.sweepAliases(statement.TimeMs)
 	var err error
 	switch statement.SignedType {
 	case bridge.SignedType_SIGNED_BRIDGE_ADDRESS:
@@ -1328,16 +1353,24 @@ func (self *BridgeLedger) applyEgress(entry *BridgeLedgerEntry) error {
 	return nil
 }
 
-// A BridgeAlias at body level: its signer an admin's device where it landed (DESIGN-DETAILS 12.2.3), its ids, one alias
-// a share's target, and room in the upper /17 for its prefix. What the share itself allows, its preflight and its
-// keys, and an alias's release, are BRIDGE-M6-03's, on what this holds.
+// A BridgeAlias at body level (DESIGN-DETAILS 12.2.3, 12.2.7): a filing's signer is an admin's device where it landed,
+// its ids are well formed, it is the one alias in force for its share's target, and the upper /17 has room for its
+// prefix; a release, by the alias's signer or an admin's device, ends the alias in force for its share's target, which
+// then drains for the release's drain_seconds, the ledger's AliasDrainTimeout when 0, and keeps its block until then.
+// What the share itself allows, its preflight and its keys, are the accept's (bridge_share_invite.go).
 func (self *BridgeLedger) applyAlias(entry *BridgeLedgerEntry) error {
-	if !entry.Statement.SignerAdmin {
-		return errors.New("an alias its signer filed as no admin's device")
-	}
 	body := &bridge.BridgeAliasBody{}
 	if err := self.openBody(entry, body); err != nil {
 		return err
+	}
+	if body.GetRelease() {
+		return self.releaseAlias(body, entry.Statement)
+	}
+	if !entry.Statement.SignerAdmin {
+		return errors.New("an alias its signer filed as no admin's device")
+	}
+	if body.GetDrainSeconds() != 0 {
+		return errors.New("a drain on an alias that is no release")
 	}
 	if err := self.holdAlias(body, entry.Statement); err != nil {
 		return err
@@ -1346,19 +1379,89 @@ func (self *BridgeLedger) applyAlias(entry *BridgeLedgerEntry) error {
 	return nil
 }
 
+// A release at body level: it names the alias in force for its share's target with the prefix that alias holds, so
+// a release of another prefix frees nothing, and its signer is that alias's or an admin's device.
+func (self *BridgeLedger) releaseAlias(body *bridge.BridgeAliasBody, statement *BridgeLogStatement) error {
+	if uint64(self.settings.DrainMaximum/time.Second) < uint64(body.GetDrainSeconds()) {
+		return fmt.Errorf("drain_seconds of %d", body.GetDrainSeconds())
+	}
+	for _, alias := range self.aliases {
+		if !alias.InForce() || !bytes.Equal(alias.Body.GetShareId(), body.GetShareId()) || alias.Body.GetTargetIndex() != body.GetTargetIndex() {
+			continue
+		}
+		if !statement.SignerAdmin && statement.Signer != alias.Signer {
+			return errors.New("a release by neither the alias's signer nor an admin")
+		}
+		if !proto.Equal(alias.Body.GetAliasPrefix(), body.GetAliasPrefix()) {
+			return errors.New("a release of a prefix the alias does not hold")
+		}
+		released := proto.Clone(alias.Body).(*bridge.BridgeAliasBody)
+		released.DrainSeconds = body.GetDrainSeconds()
+		alias.Body = released
+		alias.ReleasedAt, alias.ReleasedMs = statement.N, statement.TimeMs
+		alias.drainMs = self.aliasDrainMs(body.GetDrainSeconds())
+		return nil
+	}
+	return errors.New("a release of no alias in force")
+}
+
+// A release's drain: its drain_seconds, the ledger's AliasDrainTimeout when 0.
+func (self *BridgeLedger) aliasDrainMs(drainSeconds uint32) int64 {
+	if drainSeconds == 0 {
+		return self.settings.AliasDrainTimeout.Milliseconds()
+	}
+	return int64(drainSeconds) * 1000
+}
+
+// Drops every released alias whose drain ended by timeMs, with the block it held.
+func (self *BridgeLedger) sweepAliases(timeMs int64) {
+	self.aliases = slices.DeleteFunc(self.aliases, func(alias *BridgeLedgerAlias) bool {
+		if alias.InForce() || timeMs < alias.DrainUntilMs() {
+			return false
+		}
+		first, last, err := bridgeUpperRangeOf(alias.Body.GetAliasPrefix())
+		if err != nil {
+			return true
+		}
+		for i := range self.upper {
+			if self.upper[i].rule == nil && self.upper[i].first == first && self.upper[i].last == last {
+				self.upper = slices.Delete(self.upper, i, i+1)
+				break
+			}
+		}
+		return true
+	})
+}
+
 // Checks an alias's body against the ledger at statement's position and time, nil for a row the rows hold, and holds
-// its range.
+// its range. released is a row's alias already released, which is no second alias of its target: the one in force
+// came after it.
 func (self *BridgeLedger) holdAlias(body *bridge.BridgeAliasBody, statement *BridgeLogStatement) error {
+	return self.holdAliasRow(body, statement, false)
+}
+
+func (self *BridgeLedger) holdAliasRow(body *bridge.BridgeAliasBody, statement *BridgeLogStatement, released bool) error {
 	if len(body.GetShareId()) != len(Id{}) || len(body.GetHost()) != len(Id{}) {
 		return errors.New("an alias with a malformed share_id or host")
+	}
+	if key := body.GetHostIdentityPublicKey(); len(key) != 0 && len(key) != ed25519.PublicKeySize {
+		return errors.New("an alias with a malformed host identity key")
+	}
+	if networkId := body.GetSharingNetworkId(); len(networkId) != 0 && len(networkId) != len(Id{}) {
+		return errors.New("an alias with a malformed sharing network")
 	}
 	first, last, err := bridgeUpperRangeOf(body.GetAliasPrefix())
 	if err != nil {
 		return fmt.Errorf("alias_prefix: %w", err)
 	}
-	for _, alias := range self.aliases {
-		if bytes.Equal(alias.Body.GetShareId(), body.GetShareId()) && alias.Body.GetTargetIndex() == body.GetTargetIndex() {
-			return errors.New("a second alias for one target of a share")
+	if body.GetAliasPrefix().GetLength() == 32 && (first&0xff == 0x00 || first&0xff == 0xff) {
+		return errors.New("a /32 alias at a .0 or a .255")
+	}
+	if !released {
+		for _, alias := range self.aliases {
+			if alias.InForce() && bytes.Equal(alias.Body.GetShareId(), body.GetShareId()) && alias.Body.GetTargetIndex() == body.GetTargetIndex() {
+				return errors.New("a second alias for one target of a share")
+			}
 		}
 	}
 	if self.upperRangeHolding(first, last) != nil {
@@ -1517,7 +1620,24 @@ func (self *BridgeLedger) Egress() []*BridgeLedgerEgress {
 
 // The aliases in force, in the order the rows and the log gave them.
 func (self *BridgeLedger) Aliases() []*BridgeLedgerAlias {
-	return slices.Clone(self.aliases)
+	aliases := []*BridgeLedgerAlias{}
+	for _, alias := range self.aliases {
+		if alias.InForce() {
+			aliases = append(aliases, alias)
+		}
+	}
+	return aliases
+}
+
+// The released aliases still draining at the ledger's time, which keep their blocks, in the same order.
+func (self *BridgeLedger) DrainingAliases() []*BridgeLedgerAlias {
+	aliases := []*BridgeLedgerAlias{}
+	for _, alias := range self.aliases {
+		if !alias.InForce() {
+			aliases = append(aliases, alias)
+		}
+	}
+	return aliases
 }
 
 // Verifies a rule's BridgeApproval as §8.8 does a GrantActivate's (CheckGrantActivate), on this state, the one the
