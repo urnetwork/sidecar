@@ -505,7 +505,7 @@ func Fs85AclWorkerRequest(net *Net) *Schedule {
 	world := newAclM6World()
 	return world.schedule("FS-85 acl worker request",
 		world.startWorkers(),
-		world.do("b first", func(net *sidecartest.AdmissionNet) error {
+		world.do("bFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, mFirst, worker := world.devices["b first"], world.devices["m first"], world.devices["m worker"]
 			request, err := world.reachRequest(net, "worker", bFirst, worker.SidecarId, aclM6WorkerPort, net.Clock().Now().Add(2*time.Hour).UnixMilli())
 			if err != nil {
@@ -526,7 +526,7 @@ func Fs85AclWorkerRequest(net *Net) *Schedule {
 			net.MustRefuse(world.grantActivate(net, request, bFirst, own), sidecar.ErrConfigAuthority)
 			return aclM6ExpectReach(net, bFirst, world.cast(), "b first", "b worker")
 		}),
-		world.do("m first", func(net *sidecartest.AdmissionNet) error {
+		world.do("mFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, mFirst := world.devices["b first"], world.devices["m first"]
 			request := world.requests[0]
 			decision, err := world.deviceDecision(net, request, mFirst, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE)
@@ -559,7 +559,7 @@ func Fs85AclWorkerRequest(net *Net) *Schedule {
 			}
 			return nil
 		}),
-		world.do("m presence", func(net *sidecartest.AdmissionNet) error {
+		world.do("mPresence", func(net *sidecartest.AdmissionNet) error {
 			bFirst, mFirst, phone := world.devices["b first"], world.devices["m first"], world.devices["m phone"]
 			request, err := world.reachRequest(net, "device", bFirst, phone.SidecarId, aclM6WorkerPort, net.Clock().Now().Add(time.Hour).UnixMilli())
 			if err != nil {
@@ -590,7 +590,7 @@ func Fs85AclCopiedDecision(net *Net) *Schedule {
 	world := newAclM6World()
 	return world.schedule("FS-85 acl copied decision",
 		world.startWorkers(),
-		world.do("m first", func(net *sidecartest.AdmissionNet) error {
+		world.do("mFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, mFirst, adminFirst, worker := world.devices["b first"], world.devices["m first"], world.devices["admin first"], world.devices["m worker"]
 			expiresMs := net.Clock().Now().Add(2 * time.Hour).UnixMilli()
 			approved, err := world.reachRequest(net, "approved", bFirst, worker.SidecarId, aclM6WorkerPort, expiresMs)
@@ -643,7 +643,7 @@ func Fs85AclCopiedDecision(net *Net) *Schedule {
 			net.MustRefuse(world.grantActivate(net, otherPort, bFirst, forged), sidecar.ErrConfigAuthority)
 			return aclM6ExpectReach(net, bFirst, world.cast(), "b first", "b worker")
 		}),
-		world.do("b first", func(net *sidecartest.AdmissionNet) error {
+		world.do("bFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, mFirst := world.devices["b first"], world.devices["m first"]
 			request := world.requests[0]
 			// the twin: the request the decision approved spends it
@@ -746,7 +746,7 @@ func aclM6EvsShare(net *sidecartest.AdmissionNet, signer *sidecartest.AdmissionD
 func (self *aclM6World) repoRequestSteps() []*Step {
 	world := self
 	return []*Step{
-		world.do("b first", func(net *sidecartest.AdmissionNet) error {
+		world.do("bFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, notes := world.devices["b first"], sidecar.Id(world.ids["notes"])
 			request := world.repoRequest(net, "notes", bFirst, notes, protocol.RepoGrantRole_REPO_GRANT_ROLE_READER, net.Clock().Now().Add(2*time.Hour).UnixMilli())
 			// denied: the Admin's own request to write the repo, which no step approves
@@ -758,7 +758,7 @@ func (self *aclM6World) repoRequestSteps() []*Step {
 			net.MustRefuse(aclM6RepoGrant(net, world.devices["m burner"], request), sidecar.ErrConfigAuthority)
 			return aclM6ExpectAccess(net, "b first", bFirst.SidecarId, notes, 0)
 		}),
-		world.do("m phone", func(net *sidecartest.AdmissionNet) error {
+		world.do("mPhone", func(net *sidecartest.AdmissionNet) error {
 			bFirst, phone, notes := world.devices["b first"], world.devices["m phone"], sidecar.Id(world.ids["notes"])
 			request := world.requests[0]
 			request.approved, request.decider = true, phone.SidecarId
@@ -832,7 +832,7 @@ func Fs85AclOwnerBoundRequest(net *Net) *Schedule {
 	world := newAclM6World()
 	return world.schedule("FS-85 acl owner-bound request",
 		world.startRepos(),
-		world.do("admin first", func(net *sidecartest.AdmissionNet) error {
+		world.do("adminFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, vault := world.devices["b first"], sidecar.Id(world.ids["vault"])
 			request := world.repoRequest(net, "vault", bFirst, vault, protocol.RepoGrantRole_REPO_GRANT_ROLE_READER, net.Clock().Now().Add(2*time.Hour).UnixMilli())
 			if err := world.expectDeciders(net, request, world.cast(), "m first", "m phone"); err != nil {
@@ -854,7 +854,7 @@ func Fs85AclOwnerBoundRequest(net *Net) *Schedule {
 			}
 			return aclM6ExpectAccess(net, "b first", bFirst.SidecarId, vault, 0)
 		}),
-		world.do("m first", func(net *sidecartest.AdmissionNet) error {
+		world.do("mFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, mFirst, vault := world.devices["b first"], world.devices["m first"], sidecar.Id(world.ids["vault"])
 			request := world.requests[0]
 			request.approved, request.decider = true, mFirst.SidecarId
@@ -888,7 +888,7 @@ func AclS13GrantSteps(net *Net) *Schedule {
 	world := newAclM6World()
 	steps := []*Step{
 		world.startRepos(),
-		world.do("m first", func(net *sidecartest.AdmissionNet) error {
+		world.do("mFirst", func(net *sidecartest.AdmissionNet) error {
 			world.admitWorker(net, world.devices["m first"], "m worker")
 			net.Fold(true)
 			return nil
@@ -896,7 +896,7 @@ func AclS13GrantSteps(net *Net) *Schedule {
 	}
 	steps = append(steps, world.repoRequestSteps()...)
 	steps = append(steps,
-		world.do("b first", func(net *sidecartest.AdmissionNet) error {
+		world.do("bFirst", func(net *sidecartest.AdmissionNet) error {
 			bFirst, mFirst, worker := world.devices["b first"], world.devices["m first"], world.devices["m worker"]
 			request, err := world.reachRequest(net, "worker", bFirst, worker.SidecarId, aclM6WorkerPort, net.Clock().Now().Add(time.Hour).UnixMilli())
 			if err != nil {
@@ -1119,7 +1119,7 @@ func Fs19Team(net *Net) *Schedule {
 			}
 			return fs19M6ExpectDirectory(net, world)
 		}),
-		world.do("owner first", func(net *sidecartest.AdmissionNet) error {
+		world.do("ownerFirst", func(net *sidecartest.AdmissionNet) error {
 			// no document adds or removes a reader: one that opens everything, then one that opens nothing
 			for _, policy := range []string{fs19M6WidePolicy, fs19M6NarrowPolicy} {
 				if plan, _ := net.SaveAclPolicy([]byte(policy), nil); !plan.Rows.GetHasDocument() {
@@ -1131,7 +1131,7 @@ func Fs19Team(net *Net) *Schedule {
 			}
 			return nil
 		}),
-		world.do("m first", func(net *sidecartest.AdmissionNet) error {
+		world.do("mFirst", func(net *sidecartest.AdmissionNet) error {
 			mFirst, tablet := world.devices["m first"], world.devices["m tablet"]
 			// the device KF2 parks for consent reads the directory as every admitted sidecar does, and writes nothing
 			// that counts until m's consented device confirms it (I-EVS-14)
@@ -1187,7 +1187,7 @@ func Fs19Invite(net *Net) *Schedule {
 	}
 	return world.schedule("FS-19 invite",
 		world.start(nil),
-		world.do("owner first", func(net *sidecartest.AdmissionNet) error {
+		world.do("ownerFirst", func(net *sidecartest.AdmissionNet) error {
 			owner := world.devices["owner first"]
 			memberId := net.AdmitMember(owner, "n", bridge.MemberRole_MEMBER_ROLE_MEMBER)
 			world.ids["n"] = memberId.Bytes()
@@ -1246,7 +1246,7 @@ func Fs19Invite(net *Net) *Schedule {
 			net.AdmitDevice(owner, laptop, invited)
 			return aclM6ExpectConsented(net, memberId, world.cast(), "n laptop")
 		}),
-		world.do("n laptop", func(net *sidecartest.AdmissionNet) error {
+		world.do("nLaptop", func(net *sidecartest.AdmissionNet) error {
 			owner, laptop, memberId := world.devices["owner first"], world.devices["n laptop"], sidecar.Id(world.ids["n"])
 			net.MustLand(vaultCreate(net, laptop))
 			// the invite consents one device: a later one carrying the bit waits for n's own confirmation
@@ -1364,7 +1364,7 @@ func AclMemberAddsOnlyForReaders(net *Net) *Schedule {
 			}
 			return nil
 		}),
-		world.do("owner first", func(net *sidecartest.AdmissionNet) error {
+		world.do("ownerFirst", func(net *sidecartest.AdmissionNet) error {
 			owner := world.devices["owner first"]
 			memberId := net.AdmitMember(owner, "n", bridge.MemberRole_MEMBER_ROLE_MEMBER)
 			world.ids["n"] = memberId.Bytes()
@@ -1379,7 +1379,7 @@ func AclMemberAddsOnlyForReaders(net *Net) *Schedule {
 			net.AdmitDevice(owner, world.devices["n laptop"], invited)
 			return aclM6ExpectMembers(net, world, checks(net, true, false, false))
 		}),
-		world.do("n laptop", func(net *sidecartest.AdmissionNet) error {
+		world.do("nLaptop", func(net *sidecartest.AdmissionNet) error {
 			owner, laptop, memberId := world.devices["owner first"], world.devices["n laptop"], sidecar.Id(world.ids["n"])
 			world.ids["n vault"] = aclCreateRepo(net, laptop, "n vault", protocol.RepoKind_REPO_KIND_VAULT).Bytes()
 			tablet := net.Device("n tablet", memberId)
@@ -1471,7 +1471,7 @@ func AclMemberRemovalDropsEveryRight(net *Net) *Schedule {
 			}
 			return nil
 		}),
-		world.do("owner first", func(net *sidecartest.AdmissionNet) error {
+		world.do("ownerFirst", func(net *sidecartest.AdmissionNet) error {
 			owner, memberId := world.devices["owner first"], sidecar.Id(world.ids["n"])
 			notes, directory := sidecar.Id(world.ids["notes"]), sidecar.Id(world.ids["directory"])
 			before := net.Tip()
