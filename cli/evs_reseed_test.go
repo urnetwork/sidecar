@@ -78,7 +78,7 @@ func TestEvsReseedSendsOnlyOnAYesAndPrintsWhatReturned(t *testing.T) {
 func TestEvsReseedExitsFailedOnAPartialReseed(t *testing.T) {
 	repoId, refId, slotId, unnamedId := sidecar.NewId(), sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
 	target := &testUrEvsReseedTarget{result: &sidecar.EvsReseedResult{
-		Refs:  []*sidecar.EvsReseedRef{{RefId: refId, MirrorVersion: 9, Version: 4, Stopped: sidecar.ErrEvsReseedParts}},
+		Refs:  []*sidecar.EvsReseedRef{{RefId: refId, MirrorVersion: 9, Version: 4, Stopped: sidecar.ErrEvsReseedVersion}},
 		Slots: []*sidecar.EvsReseedSlot{{SlotId: slotId, Refused: errors.New("evs refused: 409")}, {SlotId: unnamedId}},
 	}}
 	daemon := startTestControlDaemon(t, target, nil)
@@ -89,7 +89,7 @@ func TestEvsReseedExitsFailedOnAPartialReseed(t *testing.T) {
 	}
 	shown := stdout.String()
 	for _, want := range []string{
-		"ref " + refId.String() + ": version 4 of 9, stopped: " + sidecar.ErrEvsReseedParts.Error(),
+		"ref " + refId.String() + ": version 4 of 9, stopped: " + sidecar.ErrEvsReseedVersion.Error(),
 		"slot " + slotId.String() + ": not taken: evs refused: 409",
 		"slot " + unnamedId.String() + ": not sent, no returned version names it",
 		"the re-seed is partial",

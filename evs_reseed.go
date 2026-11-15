@@ -7,17 +7,18 @@
 //	order     the repo's erasure ref first, so evs holds every ERASE this device kept before any slot returns; then
 //	          each other ref's history in version order; and last, after every ref's history, the slots
 //	version   its new segments from seg/ through PUT .../segments, which takes re-seed uploads while reseed is on, then
-//	          its statement and payload as the mirror's stmt/ and rec/ hold them, in one reseed call; a version evs
-//	          already holds answers its version (§11.8's 5a) and the walk goes on
+//	          its statement as the mirror's stmt/ holds it with, from rec/, a one-part push's payload or a push in
+//	          parts' every part in part order (QD-818), in one reseed call; a version evs already holds answers its
+//	          version (§11.8's 5a) and the walk goes on
 //	slot      each slot the mirror holds, under the statement of the last re-seeded version that names it, which is
 //	          what evs takes a slot by; evs strips what its ERASEs cover (QD-096)
 //	statement with SignReseed, for each ref re-seeded as far as the mirror holds it, a Signed EvsReseed over that
 //	          head, which a reader whose pin lies above it accepts the shorter history under (§11.6)
 //
 // A ref stops at the first version the mirror cannot send or evs does not take, and says why: a version past it cannot
-// chain. A push in parts stops its ref, since evs takes none yet (question evs-reseed-route-part-records), as does a
-// PATH_EPOCH push whose map evs does not hold, whose parts this walk does not send. One ref's stop never ends the
-// walk: the other refs and the slots go on, and the result names each.
+// chain. So does a PATH_EPOCH push whose map evs does not hold, whose parts this walk does not send, and a push in
+// parts past the body evs takes in one call (question evs-reseed-parts-request-bound), which evs answers 400. One ref's
+// stop never ends the walk: the other refs and the slots go on, and the result names each.
 //
 // Nothing here reads evs: a head below this device's pin is what a re-seed mends, and the verifier refuses it until
 // the EvsReseed is filed. The walk starts each ref at version 1 and lets 5a answer what evs already holds.
@@ -40,10 +41,8 @@ import (
 )
 
 var (
-	// A version the mirror does not hold whole: its statement, its record or a segment it introduces.
+	// A version the mirror does not hold whole: its statement, its records or a segment it introduces.
 	ErrEvsReseedMirrorPartial = errors.New("evs: the mirror does not hold the version whole")
-	// A push in parts, which POST .../reseed does not take yet.
-	ErrEvsReseedParts = errors.New("evs: a push in parts is not re-seeded yet")
 	// evs answered a version another than the one the mirror holds the statement at.
 	ErrEvsReseedVersion = errors.New("evs: a re-seeded push committed at another version")
 )
@@ -215,26 +214,22 @@ func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) erro
 		if !bytes.Equal(push.GetRepoId(), self.repo.repoId.Bytes()) || !bytes.Equal(push.GetRefId(), ref.RefId.Bytes()) {
 			return fmt.Errorf("%w: a statement of another ref at version %d", ErrEvsMirrorRecordInvalid, version)
 		}
-		if 0 < push.GetPartCount() {
-			return fmt.Errorf("%w: version %d", ErrEvsReseedParts, version)
-		}
 		pushId, err := IdFromBytes(push.GetPushId())
 		if err != nil {
 			return err
 		}
-		recordBytes, err := self.held(EvsMirrorRecordKey(pushId, 0))
+		// part 0, the push's record or a push in parts' seal, and then each part's record
+		records := make([][]byte, push.GetPartCount()+1)
+		for part := range records {
+			if records[part], err = self.held(EvsMirrorRecordKey(pushId, uint32(part))); err != nil {
+				return err
+			}
+		}
+		checked, err := evsMirrorCheckRecords(statement, records)
 		if err != nil {
 			return err
 		}
-		checked, err := evsMirrorCheckRecords(statement, [][]byte{recordBytes})
-		if err != nil {
-			return err
-		}
-		record, err := ParseEvsBatchRecord(recordBytes)
-		if err != nil {
-			return err
-		}
-		_, payloadBytes, err := ParseEvsPushRecordBody(record.Body)
+		request, err := evsReseedRequestOf(statementBytes, records)
 		if err != nil {
 			return err
 		}
@@ -246,7 +241,7 @@ func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) erro
 				return err
 			}
 		}
-		reply, err := self.post(ctx, &protocol.EvsReseedRequest{Statement: statementBytes, Payload: payloadBytes})
+		reply, err := self.post(ctx, request)
 		if err != nil {
 			return err
 		}
@@ -258,6 +253,35 @@ func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) erro
 		self.noteSlots(statementBytes, checked)
 	}
 	return nil
+}
+
+// The reseed call of a version whose records the mirror holds, already held to its statement: a one-part push's
+// statement and payload as its record keeps them, or a push in parts' statement and each part as its record keeps it,
+// in part order (QD-818), never re-signed or rebuilt.
+func evsReseedRequestOf(statementBytes []byte, records [][]byte) (*protocol.EvsReseedRequest, error) {
+	request := &protocol.EvsReseedRequest{Statement: statementBytes}
+	if len(records) == 1 {
+		record, err := ParseEvsBatchRecord(records[0])
+		if err != nil {
+			return nil, err
+		}
+		if _, request.Payload, err = ParseEvsPushRecordBody(record.Body); err != nil {
+			return nil, err
+		}
+		return request, nil
+	}
+	for _, recordBytes := range records[1:] {
+		record, err := ParseEvsBatchRecord(recordBytes)
+		if err != nil {
+			return nil, err
+		}
+		_, part, _, _, err := ParseEvsSealPartRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		request.Parts = append(request.Parts, part)
+	}
+	return request, nil
 }
 
 // One segment from the mirror's seg/ to evs, under the push that introduces it. evs answers a segment it already holds

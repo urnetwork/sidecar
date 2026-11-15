@@ -1,6 +1,9 @@
 // Masks (SEARCH-M10-24): FS-109's mask memory at unit level, one all row that a newer version masks on a
-// 500,000-key table, probed once a candidate; FS-108's tombstones, ref tombstones and a re-created ref; erasures and
-// searchable_days; a branch overlay; and a table that does not cover a candidate reading not yet searchable.
+// 500,000-key table, probed once a candidate, with and without a rule set in force; FS-108's tombstones, ref
+// tombstones and a re-created ref; erasures and searchable_days; a branch overlay; a table that does not cover a
+// candidate reading not yet searchable; and prefix write rules (DESIGN-DETAILS 16.2.5's search row): a hit on a version
+// the device ignores masked while the accepted version's hit shows, the device's own verdicts read from a real evs
+// client's read records and journal, and a repo with no set masking nothing more.
 
 package sidecar
 
@@ -8,6 +11,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
+	"maps"
 	"runtime"
 	"slices"
 	"testing"
@@ -264,7 +269,32 @@ func testHitKeys(hits []*searchRankedHit) [][indexIdByteCount]byte {
 // once a candidate and holds nothing of it, so the walk's live heap stays far below the table's: a build that
 // collected the partitions' keys per search would hold the 500,000 keys and fail the bound.
 func TestSearchMaskMemoryOnAHalfMillionKeyTable(t *testing.T) {
-	repoId, refId := evsTestId("fs109 repo"), evsTestId("fs109 ref")
+	mask, _ := testSearchMaskMemory(t, evsTestId("fs109 repo"), evsTestId("fs109 ref"), nil)
+	if mask.prefixCallCount != 0 {
+		t.Errorf("%d prefix calls with no rule set", mask.prefixCallCount)
+	}
+}
+
+// FS-109's bound under a rule set in force, through the device's own prefix judge over a real evs client: asked once
+// a candidate, from what the device holds, it adds nothing that grows with the table, and masks nothing the device
+// does not ignore.
+func TestSearchMaskMemoryUnderPrefixRules(t *testing.T) {
+	test := newEvsPrefixTest(t)
+	test.file(5, AclPrefixSetOpened, "agents/build")
+	reader := test.reader("fs109 reader")
+	prefix, err := searchPrefixJudgeOf(reader.client, test.world.repoId)
+	if err != nil || prefix == nil {
+		t.Fatalf("no judge over a ruled repo: %v", err)
+	}
+	mask, candidateCount := testSearchMaskMemory(t, test.world.repoId, test.world.refId, prefix)
+	if mask.prefixCallCount != candidateCount {
+		t.Errorf("%d prefix calls for %d candidates", mask.prefixCallCount, candidateCount)
+	}
+}
+
+// FS-109's walk on refId's index under prefix, nil for none: its assertions, and the mask and the candidate count.
+func testSearchMaskMemory(t *testing.T, repoId Id, refId Id, prefix searchPrefixJudgeFunc) (*searchMask, int) {
+	t.Helper()
 	refKey := testSearchRefKey("fs109")
 	run := newTestSearchRun(t, "quarterly forecast")
 	stale := testSearchEntry(t, refKey, refId, false, &testSearchDocument{path: "plans/forecast.md", title: "Old plan", body: "the quarterly forecast as it stood", version: 3, time: 1700000000})
@@ -300,7 +330,7 @@ func TestSearchMaskMemoryOnAHalfMillionKeyTable(t *testing.T) {
 		peak = max(peak, stats.HeapAlloc)
 		return table.probe(key)
 	}
-	source := run.source(repoId, refId, &searchMaskArgs{probe: probe, refId: refId}, nil, nil)
+	source := run.source(repoId, refId, &searchMaskArgs{probe: probe, refId: refId, prefix: prefix}, nil, nil)
 	inputs := run.inputs(source, testSearchSlotPartition(searchPartitionCurrent, matching...), testSearchShardPartition(t, false, append(slices.Clone(others), stale)...))
 	candidateCount := 0
 	for _, input := range inputs {
@@ -334,6 +364,7 @@ func TestSearchMaskMemoryOnAHalfMillionKeyTable(t *testing.T) {
 	if growth := int64(peak) - int64(before.HeapAlloc); 4*1024*1024 < growth {
 		t.Errorf("the walk's heap reached %d B past its start beside a %d-key table", growth, len(keys))
 	}
+	return source.mask, candidateCount
 }
 
 // FS-108's masks: a document removed in a newer partition is masked by its tombstone in every older one; one whose
@@ -539,5 +570,325 @@ func TestSearchMaskLocalLayerJoinsNewestWins(t *testing.T) {
 	}
 	if !bytes.Equal(indexed.row.refId, nil) {
 		t.Error("an in-ref row carries a ref_id")
+	}
+}
+
+// Prefix write rules at the ranker: a held writer's breach wrote a newer version of a report, and its own index head
+// holds that version over the all row of the version the device accepted. The device's judge, its record saying the
+// breach is ignored, masks the breach's hit, and the accepted version's hit shows in its place; a document with no
+// verdict shows as it is. With no rule set the breach's version supersedes the accepted one, as before.
+func TestSearchMaskIgnoredVersionMaskedWhileTheAcceptedOneShows(t *testing.T) {
+	repoId, refId := evsTestId("prefix rank repo"), evsTestId("prefix rank ref")
+	refKey := testSearchRefKey("prefix rank")
+	entry := func(path string, body string, version uint64, time uint64) *indexEntry {
+		return testSearchEntry(t, refKey, refId, false, &testSearchDocument{path: path, body: body, version: version, time: time})
+	}
+	accepted := entry("reports/q3.md", "the quarterly report as approved", 1, 1700000000)
+	breach := entry("reports/q3.md", "the quarterly report, planted", 2, 1800000000)
+	other := entry("reports/q4.md", "the quarterly report for the next quarter", 5, 1800000100)
+	if accepted.key != breach.key {
+		t.Fatal("two versions of one path under two keys")
+	}
+	table := testVersionTableOf(testSearchRecords(accepted, breach, other))
+	// effective's walk over reports/q3.md accepted version 1 and ignored version 2
+	record := &EvsReadRecord{Accepted: &EvsReadAccepted{Version: 1, IgnoredAbove: 1}, IgnoredThrough: 2}
+	prefix := func(ask *searchPrefixAsk) (searchPrefixAnswer, error) {
+		if ask.refId != refId {
+			t.Errorf("asked about ref %s", ask.refId)
+		}
+		if ask.path == "reports/q3.md" {
+			return searchPrefixAnswerOf(record, nil, ask), nil
+		}
+		return searchPrefixAnswerOf(nil, nil, ask), nil
+	}
+	rank := func(prefix searchPrefixJudgeFunc) (map[string]uint64, searchRankCounts, *searchMask) {
+		run := newTestSearchRun(t, "quarterly report")
+		source := run.source(repoId, refId, &searchMaskArgs{probe: table.probe, refId: refId, prefix: prefix}, nil, nil)
+		hits, counts := run.all(run.inputs(source, testSearchSlotPartition(searchPartitionCurrent, breach, other), testSearchShardPartition(t, false, accepted)))
+		versions := map[string]uint64{}
+		for _, hit := range hits {
+			if _, ok := versions[hit.row.locator]; ok {
+				t.Errorf("two hits for %s", hit.row.locator)
+			}
+			versions[hit.row.locator] = hit.version
+		}
+		return versions, counts, source.mask
+	}
+
+	versions, counts, mask := rank(prefix)
+	if want := map[string]uint64{"reports/q3.md": 1, "reports/q4.md": 5}; !maps.Equal(versions, want) {
+		t.Fatalf("under the rules the hits are %v, want %v", versions, want)
+	}
+	if counts.masked != 1 || counts.unsearchable != 0 {
+		t.Errorf("masked %d and unsearchable %d, want the breach's hit alone", counts.masked, counts.unsearchable)
+	}
+	if mask.prefixCallCount != 3 {
+		t.Errorf("%d prefix calls for 3 candidates", mask.prefixCallCount)
+	}
+	versions, counts, mask = rank(nil)
+	if want := map[string]uint64{"reports/q3.md": 2, "reports/q4.md": 5}; !maps.Equal(versions, want) {
+		t.Fatalf("with no rule set the hits are %v, want %v", versions, want)
+	}
+	if counts.masked != 1 || mask.prefixCallCount != 0 {
+		t.Errorf("with no rule set: masked %d, %d prefix calls", counts.masked, mask.prefixCallCount)
+	}
+}
+
+// The prefix call at the judge, one key at a time: the newest version that counts is the newest the device does not
+// ignore, by its record's span, its journal or both; an ignored tombstone or local-layer version supersedes nothing; a
+// version above everything the device judged is not ignored; reads newer than any held version, and a row whose path
+// is not exact, are unsearchable; and a candidate an erasure, searchable_days or scope masks first asks nothing.
+func TestSearchMaskPrefixVerdictsAtTheJudge(t *testing.T) {
+	refId := evsTestId("prefix judge ref")
+	refKey := testSearchRefKey("prefix judge")
+	key, err := indexDocKey(refKey, refId, []byte("src/main.go"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := func(version uint64, ignoredThrough uint64) *EvsReadRecord {
+		return &EvsReadRecord{Accepted: &EvsReadAccepted{Version: version}, IgnoredThrough: ignoredThrough}
+	}
+	absent := &EvsReadRecord{Accepted: &EvsReadAccepted{Absent: true, IgnoredAbove: 2}, IgnoredThrough: 2}
+	held := func(version uint64) searchVersionRecord { return searchVersionRecord{found: true, version: version} }
+	for _, c := range []struct {
+		name    string
+		table   searchVersionRecord
+		local   uint64
+		record  *EvsReadRecord
+		journal []uint64
+		version uint64
+		inLocal bool
+		inexact bool
+		old     bool
+		want    searchMaskVerdict
+		calls   int
+	}{
+		{name: "the accepted version under a breach", table: held(2), record: accepted(1, 2), version: 1, want: searchMaskCurrent, calls: 1},
+		{name: "the breach", table: held(2), record: accepted(1, 2), version: 2, want: searchMaskIgnored, calls: 1},
+		{name: "the accepted version under an ignored removal", table: searchVersionRecord{found: true, version: 2, tombstone: true}, record: accepted(1, 2), version: 1, want: searchMaskCurrent, calls: 1},
+		{name: "the first of two ignored versions", table: held(3), record: accepted(1, 3), version: 2, want: searchMaskIgnored, calls: 1},
+		{name: "the accepted version under two", table: held(3), record: accepted(1, 3), version: 1, want: searchMaskCurrent, calls: 1},
+		{name: "a version above what the device judged", table: held(3), record: accepted(1, 2), version: 3, want: searchMaskCurrent, calls: 1},
+		{name: "the accepted version under an unjudged one", table: held(3), record: accepted(1, 2), version: 1, want: searchMaskSuperseded, calls: 1},
+		{name: "reads newer than any held", table: held(3), record: accepted(4, 0), version: 3, want: searchMaskUnknown, calls: 1},
+		{name: "a path a breach created", table: held(2), record: absent, version: 1, want: searchMaskIgnored, calls: 1},
+		{name: "a journalled version", table: held(2), journal: []uint64{2}, version: 2, want: searchMaskIgnored, calls: 1},
+		{name: "the version under a journalled one", table: held(2), journal: []uint64{2}, version: 1, want: searchMaskCurrent, calls: 1},
+		{name: "the record and the journal", table: held(3), record: accepted(1, 2), journal: []uint64{3}, version: 1, want: searchMaskCurrent, calls: 1},
+		{name: "an ignored local-layer version", table: held(1), local: 3, record: accepted(1, 3), version: 1, want: searchMaskCurrent, calls: 1},
+		{name: "the local layer under an ignored index version", table: held(4), record: accepted(3, 4), version: 3, inLocal: true, want: searchMaskCurrent, calls: 1},
+		{name: "the local layer at the index's version", table: held(3), record: accepted(3, 0), version: 3, inLocal: true, want: searchMaskSuperseded, calls: 1},
+		{name: "nothing ignored", table: held(2), version: 1, want: searchMaskSuperseded, calls: 1},
+		{name: "a path that is not exact", table: held(2), record: accepted(1, 2), version: 1, inexact: true, want: searchMaskUnknown, calls: 0},
+		{name: "an erased candidate", table: searchVersionRecord{found: true, version: 2, erasedThrough: searchErasedAll}, record: accepted(1, 2), version: 1, want: searchMaskErased, calls: 0},
+		{name: "an expired candidate", table: held(2), record: accepted(1, 2), version: 1, old: true, want: searchMaskExpired, calls: 0},
+	} {
+		table := testVersionTableOf(map[[indexIdByteCount]byte]searchVersionRecord{key: c.table})
+		args := &searchMaskArgs{
+			probe: table.probe, refId: refId, searchableSinceSeconds: 1700000000,
+			prefix: func(ask *searchPrefixAsk) (searchPrefixAnswer, error) {
+				if ask.refId != refId || ask.path != "src/main.go" || ask.version != c.version || ask.newest < ask.version {
+					t.Errorf("%s: asked %+v", c.name, ask)
+				}
+				return searchPrefixAnswerOf(c.record, c.journal, ask), nil
+			},
+		}
+		if c.local != 0 {
+			args.local = func(localKey [indexIdByteCount]byte) (uint64, bool, bool) { return c.local, false, localKey == key }
+		}
+		mask, err := newSearchMask(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := &indexRow{docKind: indexDocFile, locator: "src/main.go"}
+		if c.inexact {
+			row.flags |= indexRowInexact
+		}
+		timeSeconds := uint64(1800000000)
+		if c.old {
+			timeSeconds = 1600000000
+		}
+		verdict, err := mask.judge(&searchMaskCandidate{key: key, version: c.version, timeSeconds: timeSeconds, row: row, local: c.inLocal})
+		if err != nil || verdict != c.want || mask.prefixCallCount != c.calls {
+			t.Errorf("%s: verdict %d with %d calls, want %d with %d (%v)", c.name, verdict, mask.prefixCallCount, c.want, c.calls, err)
+		}
+	}
+
+	// a ur/index row of a ref this search does not read asks nothing; one of the searched ref asks about its own ref
+	otherRefId := evsTestId("prefix judge other ref")
+	asked := []Id{}
+	table := testVersionTableOf(map[[indexIdByteCount]byte]searchVersionRecord{key: held(2)})
+	mask, err := newSearchMask(&searchMaskArgs{probe: table.probe, companion: true, refId: refId, prefix: func(ask *searchPrefixAsk) (searchPrefixAnswer, error) {
+		asked = append(asked, ask.refId)
+		return searchPrefixAnswerOf(nil, nil, ask), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rowRefId := range []Id{otherRefId, refId} {
+		if _, err := mask.judge(&searchMaskCandidate{key: key, version: 2, row: &indexRow{docKind: indexDocFile, locator: "src/main.go", refId: rowRefId.Bytes()}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(asked, []Id{refId}) {
+		t.Errorf("asked about refs %v", asked)
+	}
+
+	// an answer that names no version from the candidate's through the newest held is refused
+	for _, allowed := range []uint64{1, 3} {
+		mask, err := newSearchMask(&searchMaskArgs{probe: table.probe, refId: refId, prefix: func(ask *searchPrefixAsk) (searchPrefixAnswer, error) {
+			return searchPrefixAnswer{allowed: allowed}, nil
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mask.judge(&searchMaskCandidate{key: key, version: 2, row: &indexRow{docKind: indexDocFile, locator: "src/main.go"}}); !errors.Is(err, errSearchMaskPrefixAnswer) {
+			t.Errorf("an answer of %d: %v", allowed, err)
+		}
+	}
+}
+
+// The device's own verdicts through a real evs client (EVS1-M6-04): a held writer's breach of src/main.go, which the
+// reader's head read walked under and recorded, is masked while the accepted version counts; a path the mirror
+// journalled as a breach's creation is masked though this reader never read it; a path read with nothing ignored, and
+// one never read, count. Nothing is read from evs to judge a candidate. A client whose rules no composition enabled
+// holds every candidate of the ruled repo, as it refuses every read of it.
+func TestSearchMaskTakesTheDevicesOwnVerdicts(t *testing.T) {
+	test := newEvsPrefixTest(t)
+	world := test.world
+	test.file(5, AclPrefixSetOpened, "agents/build")
+	world.push(&evsTestChange{path: "src/main.go", content: []byte("good")})
+	test.pushAs(test.held, &evsTestChange{path: "src/main.go", content: []byte("bad")})
+	world.push(&evsTestChange{path: "docs/readme.md", content: []byte("readme")})
+	reader := test.reader("searcher")
+	// the versions as the reads give them, which the index's writers named too
+	shown := map[string]uint64{}
+	for _, path := range []string{"src/main.go", "docs/readme.md"} {
+		_, info, err := test.read(reader, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shown[path] = info.Version
+	}
+	record, ok, err := reader.client.pins.ReadRecord(world.repoId, world.refId, "src/main.go")
+	if err != nil || !ok || record.Accepted == nil || record.Accepted.Version != shown["src/main.go"] || record.IgnoredThrough <= shown["src/main.go"] {
+		t.Fatalf("the reader's record %+v %v", record, err)
+	}
+	if err := reader.client.prefixJudge().journalAdd(world.repoId, []*EvsPrefixIgnored{{
+		RepoId: world.repoId, RefId: world.refId, Path: "src/planted.go", Named: true, Version: 1, CommitVersion: 9,
+		PushId: evsTestId("planting push"), SignerSidecarId: test.held.sidecarId, Kind: EvsPrefixIgnoredCreate,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	refKey := testSearchRefKey("devices verdicts")
+	entry := func(path string, version uint64) *indexEntry {
+		return testSearchEntry(t, refKey, world.refId, false, &testSearchDocument{path: path, body: "words", version: version, time: 1800000000})
+	}
+	accepted, breach := entry("src/main.go", shown["src/main.go"]), entry("src/main.go", record.IgnoredThrough)
+	readme, planted, unread := entry("docs/readme.md", shown["docs/readme.md"]), entry("src/planted.go", 1), entry("src/unread.go", 3)
+	table := testVersionTableOf(testSearchRecords(accepted, breach, readme, planted, unread))
+	judgeAll := func(prefix searchPrefixJudgeFunc) ([]searchMaskVerdict, *searchMask) {
+		mask, err := newSearchMask(&searchMaskArgs{probe: table.probe, refId: world.refId, prefix: prefix})
+		if err != nil {
+			t.Fatal(err)
+		}
+		verdicts := []searchMaskVerdict{}
+		for _, candidate := range []*indexEntry{breach, accepted, readme, planted, unread} {
+			verdict, err := mask.judge(&searchMaskCandidate{key: candidate.key, version: candidate.version, timeSeconds: candidate.timeSeconds, row: candidate.row})
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdicts = append(verdicts, verdict)
+		}
+		return verdicts, mask
+	}
+
+	readCount := func() int {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		return world.reads
+	}
+	reads := readCount()
+	prefix, err := searchPrefixJudgeOf(reader.client, world.repoId)
+	if err != nil || prefix == nil {
+		t.Fatalf("no judge over a ruled repo: %v", err)
+	}
+	verdicts, mask := judgeAll(prefix)
+	if want := []searchMaskVerdict{searchMaskIgnored, searchMaskCurrent, searchMaskCurrent, searchMaskIgnored, searchMaskCurrent}; !slices.Equal(verdicts, want) {
+		t.Fatalf("verdicts %v, want %v", verdicts, want)
+	}
+	if mask.prefixCallCount != 5 {
+		t.Errorf("%d prefix calls for 5 candidates", mask.prefixCallCount)
+	}
+	if readCount() != reads {
+		t.Errorf("judging candidates read evs %d times", readCount()-reads)
+	}
+
+	plain := world.reader(t, evsTestId("no rules enabled"))
+	held, err := searchPrefixJudgeOf(plain.client, world.repoId)
+	if err != nil || held == nil {
+		t.Fatalf("no judge for a client without rules: %v", err)
+	}
+	verdicts, _ = judgeAll(held)
+	for index, verdict := range verdicts {
+		if verdict != searchMaskUnknown {
+			t.Errorf("candidate %d on a client without rules: %d", index, verdict)
+		}
+	}
+}
+
+// A repo whose rows hold no rule set: the judge is nil, so the mask asks nothing and its verdicts are the other masks'
+// alone; and a repo under a set in force, on a device that ignores nothing, masks nothing more either.
+func TestSearchMaskNoRuleSetMasksNothingMore(t *testing.T) {
+	unruled := newEvsPrefixTest(t)
+	prefix, err := searchPrefixJudgeOf(unruled.reader("no set").client, unruled.world.repoId)
+	if err != nil || prefix != nil {
+		t.Fatalf("a judge over a repo with no set: %v", err)
+	}
+	ruled := newEvsPrefixTest(t)
+	ruled.file(5, AclPrefixSetOpened, "agents/build")
+	ruledPrefix, err := searchPrefixJudgeOf(ruled.reader("set").client, ruled.world.repoId)
+	if err != nil || ruledPrefix == nil {
+		t.Fatalf("no judge over a ruled repo: %v", err)
+	}
+
+	refId := evsTestId("no set ref")
+	refKey := testSearchRefKey("no set")
+	entry := func(path string, version uint64, time uint64) *indexEntry {
+		return testSearchEntry(t, refKey, refId, true, &testSearchDocument{path: path, body: "words", version: version, time: time, refId: refId})
+	}
+	current, superseded, tombstoned := entry("a.md", 7, 1800000000), entry("b.md", 7, 1800000000), entry("c.md", 7, 1800000000)
+	erased, expired, ahead, deleted := entry("d.md", 7, 1800000000), entry("e.md", 7, 1600000000), entry("f.md", 9, 1800000000), entry("g.md", 4, 1800000000)
+	records := testSearchRecords(current, expired, deleted)
+	records[superseded.key] = searchVersionRecord{found: true, version: 8}
+	records[tombstoned.key] = searchVersionRecord{found: true, version: 7, tombstone: true}
+	records[erased.key] = searchVersionRecord{found: true, version: 7, erasedThrough: searchErasedAll}
+	records[ahead.key] = searchVersionRecord{found: true, version: 8}
+	records[[indexIdByteCount]byte(refId)] = searchVersionRecord{found: true, version: 5, tombstone: true}
+	table := testVersionTableOf(records)
+	judgeAll := func(prefix searchPrefixJudgeFunc) ([]searchMaskVerdict, int) {
+		mask, err := newSearchMask(&searchMaskArgs{probe: table.probe, companion: true, refId: refId, searchableSinceSeconds: 1700000000, prefix: prefix})
+		if err != nil {
+			t.Fatal(err)
+		}
+		verdicts := []searchMaskVerdict{}
+		for _, candidate := range []*indexEntry{current, superseded, tombstoned, erased, expired, ahead, deleted} {
+			verdict, err := mask.judge(&searchMaskCandidate{key: candidate.key, version: candidate.version, timeSeconds: candidate.timeSeconds, row: candidate.row})
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdicts = append(verdicts, verdict)
+		}
+		return verdicts, mask.prefixCallCount
+	}
+	want := []searchMaskVerdict{searchMaskCurrent, searchMaskSuperseded, searchMaskSuperseded, searchMaskErased, searchMaskExpired, searchMaskUnknown, searchMaskRefDeleted}
+	verdicts, calls := judgeAll(prefix)
+	if !slices.Equal(verdicts, want) || calls != 0 {
+		t.Errorf("with no set: verdicts %v and %d calls, want %v and none", verdicts, calls, want)
+	}
+	// the erased and the expired candidates are masked before the call
+	verdicts, calls = judgeAll(ruledPrefix)
+	if !slices.Equal(verdicts, want) || calls != 5 {
+		t.Errorf("under a set that ignores nothing: verdicts %v and %d calls, want %v and 5", verdicts, calls, want)
 	}
 }
