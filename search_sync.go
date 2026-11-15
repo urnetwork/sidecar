@@ -188,7 +188,9 @@ type searchSyncRef struct {
 	args *searchSyncRefArgs
 	// One round at a time a ref.
 	roundLock sync.Mutex
-	// The version table of the manifest's root; nil until a root is known.
+	// One load of the manifest and plan, which a snapshot may run beside a round.
+	loadLock sync.Mutex
+	// The version table of the manifest's root; nil until a root is known. Set under the engine's stateLock.
 	table *SearchVersionTable
 
 	// Under the engine's stateLock.
@@ -546,6 +548,8 @@ func (self *SearchSync) raiseMalformed(ref *searchSyncRef, path string, signer I
 
 // Loads the ref's manifest and plan from the cache once; one that does not decode is derived state, dropped.
 func (self *SearchSync) load(ref *searchSyncRef) error {
+	ref.loadLock.Lock()
+	defer ref.loadLock.Unlock()
 	self.stateLock.Lock()
 	loaded := ref.loaded
 	self.stateLock.Unlock()
@@ -595,13 +599,18 @@ func (self *SearchSync) load(ref *searchSyncRef) error {
 
 // Opens the version table of root, once a root is known or moves.
 func (self *SearchSync) openTable(ref *searchSyncRef, root string) error {
-	if ref.table != nil && ref.table.root == root {
+	self.stateLock.Lock()
+	current := ref.table
+	self.stateLock.Unlock()
+	if current != nil && current.root == root {
 		return nil
 	}
 	table, err := NewSearchVersionTable(self.args.cache, ref.args.repoId, ref.args.refId, root)
 	if err != nil {
 		return err
 	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	ref.table = table
 	return nil
 }
@@ -1025,19 +1034,22 @@ func (self *SearchSync) Snapshot(repoId Id, refId Id) (*SearchSyncSnapshot, erro
 	if err := self.load(ref); err != nil {
 		return nil, err
 	}
-	// a snapshot is taken between rounds' swaps, never inside one
-	ref.roundLock.Lock()
-	defer ref.roundLock.Unlock()
-	manifest, _ := self.state(ref)
-	if manifest == nil {
-		return nil, ErrSidecarStoreAbsent
-	}
 	held, err := self.args.cache.Ref(repoId, refId)
 	if err != nil {
 		return nil, err
 	}
+	// never waits for a round: the manifest is read and the snapshot counted open in one step under the state lock,
+	// so a swap after it keeps every file and run the snapshot names until it is released (retire reads the open set)
+	self.stateLock.Lock()
+	manifest, table := ref.manifest, ref.table
+	if manifest == nil {
+		self.stateLock.Unlock()
+		return nil, ErrSidecarStoreAbsent
+	}
 	snapshot := &SearchSyncSnapshot{sync: self, ref: ref, manifest: manifest, ended: make(chan struct{})}
 	snapshot.allUsable = searchAllUsable(manifest, held)
+	ref.open[snapshot] = true
+	self.stateLock.Unlock()
 	runIds := []SearchVersionRunId{}
 	for _, run := range manifest.Runs {
 		if run.Slot.Kind == SearchVersionAll && !snapshot.allUsable {
@@ -1045,16 +1057,14 @@ func (self *SearchSync) Snapshot(repoId Id, refId Id) (*SearchSyncSnapshot, erro
 		}
 		runIds = append(runIds, run.RunId)
 	}
-	if ref.table != nil && 0 < len(runIds) {
-		versions, err := ref.table.Snapshot(runIds)
+	if table != nil && 0 < len(runIds) {
+		versions, err := table.Snapshot(runIds)
 		if err != nil {
+			snapshot.end()
 			return nil, err
 		}
 		snapshot.versions = versions
 	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	ref.open[snapshot] = true
 	return snapshot, nil
 }
 
