@@ -9,6 +9,8 @@
 //	             the Forwarder verifies under the identity key its judged state admits
 //	refresh      Refresh: GET /auth/refresh with F's proof, answering the new token and installing nothing; the
 //	             component keeps it in its key store first and then installs it with SetByJwt (D-CORE-8's order)
+//	links        AuthWindowClient and RemoveWindowClient: the window clients of the component's links, F's children,
+//	             which the sdk's BridgeHost mints and retires (SDK-M8-08)
 //	poll         SyncPoll: §6.8's long-poll on F, which brings team hints where no device client receives pushes
 //	heads        ConfigHeads (bridge_heads_forward.go, off the ios_extension leg): the config head reader the Forwarder
 //	             reads each base's head through, on F's exchange for the config repo's read scope
@@ -111,6 +113,21 @@ func (self *ForwardingClient) Binding(ctx context.Context, sidecarId Id) ([]byte
 		return nil, errors.New("api holds no current binding for the sidecar")
 	}
 	return record.Binding, nil
+}
+
+// POST /network/auth-client on F's token with F's proof (SDK-M8-08, §17.9's sign row, D-ACL-3): a window client of one
+// of the component's links, F's child, which inherits forward_only and strict_exp, so C13 seals S's client as its
+// subject. args names F as the parent; the caller refuses an answer that does not confirm the marks. Never F itself.
+func (self *ForwardingClient) AuthWindowClient(ctx context.Context, args *SidecarAuthClientArgs) (*SidecarAuthClientResult, error) {
+	if args == nil || args.SourceClientId == nil || args.ForwardOnly || 0 < len(args.ClientPublicKey) || args.ClientId != nil {
+		return nil, fmt.Errorf("%w: a window client is a new child of F, never F", ErrSidecarApiArgs)
+	}
+	return self.api.AuthClient(ctx, args)
+}
+
+// POST /network/remove-client on F's token: a window client F minted, which a link retired.
+func (self *ForwardingClient) RemoveWindowClient(ctx context.Context, clientId Id) error {
+	return self.api.RemoveClient(ctx, clientId)
 }
 
 // GET /auth/refresh with F's proof: the new token, which the caller keeps before it installs it (the file's comment).
