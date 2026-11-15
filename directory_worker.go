@@ -414,6 +414,31 @@ func (self *DirectoryWorker) stateNow() *directoryWorkerState {
 	return &copied
 }
 
+// The device's worker setting as kept, and the item it last wrote, for `ur directory worker` to show.
+type DirectoryWorkerShown struct {
+	On          bool
+	Description string
+	Requests    DirectoryRequests
+	// The item last written; zero before any and after a withdrawal.
+	AnnouncementId Id
+	Version        uint64
+}
+
+// What `ur directory worker` shows: the kept setting and item.
+func (self *DirectoryWorker) Shown() (*DirectoryWorkerShown, error) {
+	if err := self.load(); err != nil {
+		return nil, err
+	}
+	state := self.stateNow()
+	shown := &DirectoryWorkerShown{
+		On: !state.Off, Description: state.Description, Requests: DirectoryRequestsOpen, AnnouncementId: state.AnnouncementId, Version: state.Version,
+	}
+	if DirectoryRequests(state.Requests) == DirectoryRequestsClosed {
+		shown.Requests = DirectoryRequestsClosed
+	}
+	return shown, nil
+}
+
 // Writes the state, before an entry is appended.
 func (self *DirectoryWorker) persist(state *directoryWorkerState) error {
 	if self.store != nil {
