@@ -31,7 +31,9 @@
 //
 // Tags (BridgeRuleTag): a map's flows carry (subject, map_id), a served route's or remap's (subject, route_id), rule
 // 3's (subject, 3 and the hosted address the flow was sent to), and rules 4 and 7 (subject, 4) and (subject, 7). A flow
-// whose principal a forwarding key admitted carries BridgeForwardRuleTag of the same pair, with that Delegation in it.
+// whose principal a forwarding key admitted carries BridgeForwardRuleTag of the same pair, with that Delegation in it. A
+// share's flow, which §17.9's row decides before these rules (bridge_share.go), carries (share_id, 0x53 and its
+// target's index) whichever of them it then leads through.
 //
 // Forwarding keys (owner decision 197; DESIGN-DETAILS 4.2.5): a principal a forwarding key admitted is rechecked per
 // flow against the Delegation the state lists live for its subject, and is denied once the state lists another or
@@ -169,6 +171,10 @@ type bridgePolicyState struct {
 	listenersUnknown bool
 	localAddrsKnown  bool
 	localAddrs       []netip.Addr
+
+	// the shares this host serves, by share_id (bridge_share.go), and whether there is one, which turns C18 on
+	shareById        map[connect.Id]*bridgePolicyShare
+	friendsAndFamily bool
 }
 
 // What the overlay narrows, by id.
@@ -263,6 +269,7 @@ func newBridgePolicyState(input *BridgePolicyInput, generation uint64, settings 
 		subjectBySidecarId: map[connect.Id]*bridgePolicySubject{},
 		subjectByClientId:  map[connect.Id]*bridgePolicySubject{},
 		otherClient:        &bridgePolicySubject{admitted: true},
+		shareById:          map[connect.Id]*bridgePolicyShare{},
 
 		subjectByForwardDelegationId: map[[sha256.Size]byte]*bridgePolicySubject{},
 	}
@@ -288,6 +295,8 @@ func newBridgePolicyState(input *BridgePolicyInput, generation uint64, settings 
 	}
 	overlay := newBridgePolicyOverlay(input.Overlay)
 	self.pinN = input.BridgeState.GetAuth().GetVersion()
+	self.shareById = newBridgePolicyShares(rules, overlay)
+	self.friendsAndFamily = 0 < len(self.shareById)
 
 	self.block, _ = bridgeRulePrefix(rules.GetBlock())
 	self.previousBlock, _ = bridgeRulePrefix(rules.GetPreviousBlock())
@@ -722,6 +731,10 @@ func (self *bridgePolicyState) resolve(
 	if protocolNumber == 0 {
 		return deny
 	}
+	// a host's FriendsAndFamily flow is a share's, which §17.9's row decides by its verified share alone
+	if !sdk && mode == protocol.ProvideMode_FriendsAndFamily {
+		return self.resolveShare(settings, flow, protocolNumber, now, reach)
+	}
 
 	var subject *bridgePolicySubject
 	if sdk {
@@ -743,7 +756,7 @@ func (self *bridgePolicyState) resolve(
 		if self.networkId == (connect.Id{}) || principal.Network != self.networkId || principal.ShareId != (connect.Id{}) {
 			return deny
 		}
-		if !now.Before(principal.NotAfter) || !flow.Sealed || mode == protocol.ProvideMode_FriendsAndFamily {
+		if !now.Before(principal.NotAfter) || !flow.Sealed {
 			return deny
 		}
 		// a principal a forwarding key admitted stands only while the state lists that Delegation live for its

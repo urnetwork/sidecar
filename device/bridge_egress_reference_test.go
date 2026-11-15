@@ -132,6 +132,10 @@ func egressReferenceResolve(
 	if !known {
 		return deny("protocol")
 	}
+	// a host's FriendsAndFamily flow is a share's: §17.9's row, walked on its own
+	if !sdk && mode == protocol.ProvideMode_FriendsAndFamily {
+		return egressReferenceShare(input, flow, now, protocolNumber, tcpIdle, otherIdle)
+	}
 
 	// the overlay's narrowing
 	narrowedSubject := func(subject *bridge.BridgeRuleSubject) bool {
@@ -238,9 +242,6 @@ func egressReferenceResolve(
 		if principal.ShareId != (connect.Id{}) || !principal.NotAfter.After(now) || !flow.Sealed {
 			return deny("principal")
 		}
-		if mode == protocol.ProvideMode_FriendsAndFamily {
-			return deny("principal")
-		}
 		subjectId = principal.Subject
 	}
 	if input.State != device.PostureEnforcingDocument && input.State != device.PostureEnforcingNoDocument {
@@ -337,41 +338,7 @@ func egressReferenceResolve(
 
 	// rule 0
 	daemon := func(candidate netip.Addr, candidatePort uint16) bool {
-		if candidatePort == 0 {
-			return false
-		}
-		local := candidate.IsLoopback() || candidate.IsUnspecified() || input.LocalAddresses == nil
-		for _, localAddr := range input.LocalAddresses {
-			if localAddr.Unmap() == candidate {
-				local = true
-			}
-		}
-		unknown := false
-		ports := []uint16{}
-		for _, listener := range input.BridgeState.GetDaemonListeners() {
-			host, portText, err := net.SplitHostPort(listener)
-			listenerPort, portErr := strconv.ParseUint(portText, 10, 16)
-			if err != nil || portErr != nil || listenerPort == 0 {
-				unknown = true
-				continue
-			}
-			ports = append(ports, uint16(listenerPort))
-			if hostAddr, err := netip.ParseAddr(host); err == nil && !hostAddr.IsUnspecified() && hostAddr.Unmap() == candidate {
-				local = true
-			}
-		}
-		if !local {
-			return false
-		}
-		if unknown {
-			return true
-		}
-		for _, listenerPort := range ports {
-			if listenerPort == candidatePort {
-				return true
-			}
-		}
-		return false
+		return egressReferenceDaemon(input, candidate, candidatePort)
 	}
 	if daemon(addr, port) {
 		return deny("0")
@@ -520,6 +487,273 @@ func egressReferenceResolve(
 	return deny("8")
 }
 
+// Rule 0's walk: whether a dial of candidate and its port could reach one of the daemon's listeners, written out from
+// the state's listener strings and the input's addresses.
+func egressReferenceDaemon(input *device.BridgePolicyInput, candidate netip.Addr, candidatePort uint16) bool {
+	if candidatePort == 0 {
+		return false
+	}
+	local := candidate.IsLoopback() || candidate.IsUnspecified() || input.LocalAddresses == nil
+	for _, localAddr := range input.LocalAddresses {
+		if localAddr.Unmap() == candidate {
+			local = true
+		}
+	}
+	unknown := false
+	ports := []uint16{}
+	for _, listener := range input.BridgeState.GetDaemonListeners() {
+		host, portText, err := net.SplitHostPort(listener)
+		listenerPort, portErr := strconv.ParseUint(portText, 10, 16)
+		if err != nil || portErr != nil || listenerPort == 0 {
+			unknown = true
+			continue
+		}
+		ports = append(ports, uint16(listenerPort))
+		if hostAddr, err := netip.ParseAddr(host); err == nil && !hostAddr.IsUnspecified() && hostAddr.Unmap() == candidate {
+			local = true
+		}
+	}
+	if !local {
+		return false
+	}
+	if unknown {
+		return true
+	}
+	for _, listenerPort := range ports {
+		if listenerPort == candidatePort {
+			return true
+		}
+	}
+	return false
+}
+
+// The reference's FriendsAndFamily row at a host (§17.6's share row, §17.9's isolation), on its own: the principal's
+// share, its grant's revocation and expiry and its network, the alias the destination's low 16 bits fall in, the
+// target's protocol and ports, and then rules 0, 1, 1's remap, 2, 3, 5 and 6 on the target with the destination's bits
+// past the alias kept, each a Map under the share target's tag; anything else denies.
+func egressReferenceShare(
+	input *device.BridgePolicyInput,
+	flow *connect.EgressFlow,
+	now time.Time,
+	protocolNumber uint32,
+	tcpIdle time.Duration,
+	otherIdle time.Duration,
+) egressReferenceDecision {
+	deny := func(row string) egressReferenceDecision {
+		return egressReferenceDecision{verdict: connect.EgressVerdictDeny, row: "share_" + row}
+	}
+	principal := flow.Principal
+	if principal == nil || principal.ShareId == (connect.Id{}) || !principal.NotAfter.After(now) || !flow.Sealed {
+		return deny("principal")
+	}
+	if input.State != device.PostureEnforcingDocument && input.State != device.PostureEnforcingNoDocument {
+		return deny("state")
+	}
+	rules := input.Rules
+	if rules == nil || input.BridgeState == nil {
+		return deny("state")
+	}
+	var share *bridge.BridgeRuleShare
+	for _, candidate := range rules.GetShares() {
+		if string(candidate.GetShareId()) == string(principal.ShareId[:]) {
+			share = candidate
+		}
+	}
+	if share == nil {
+		return deny("share")
+	}
+	for _, entry := range input.Overlay {
+		if entry.Kind == device.PostureOverlayGrantRevoke && string(entry.Id) == string(share.GetGrantId()) {
+			return deny("share")
+		}
+	}
+	if share.GetExpires() != 0 && !now.Before(time.UnixMilli(share.GetExpires())) {
+		return deny("share")
+	}
+	if string(share.GetAcceptingNetworkId()) != string(principal.Network[:]) || string(principal.Network[:]) == string(input.NetworkId) {
+		return deny("share")
+	}
+	addr := flow.To.Addr().Unmap()
+	if !addr.Is4() {
+		return deny("alias")
+	}
+	port := flow.To.Port()
+	if protocolNumber == 1 {
+		port = 0
+	}
+	octets := addr.As4()
+	low := uint32(octets[2])<<8 | uint32(octets[3])
+	var target *bridge.BridgeRuleShareTarget
+	for _, candidate := range share.GetTargets() {
+		first := candidate.GetAliasHostBits()
+		if first <= low && low-first < uint32(1)<<(32-candidate.GetLength()) {
+			target = candidate
+		}
+	}
+	if target == nil {
+		return deny("alias")
+	}
+	switch {
+	case target.GetProtocol() == 0:
+	case target.GetProtocol() != protocolNumber:
+		return deny("port")
+	case len(target.GetPorts()) == 0:
+	case protocolNumber == 1:
+		return deny("port")
+	default:
+		inRange := false
+		for _, ports := range target.GetPorts() {
+			inRange = inRange || (uint32(port) >= ports.GetFirst() && uint32(port) <= ports.GetLast())
+		}
+		if !inRange {
+			return deny("port")
+		}
+	}
+	targetPrefix, _ := egressReferencePrefix(target.GetTarget())
+	first := target.GetAliasHostBits()
+	mapped, ok := egressReferenceOffset(targetPrefix.Addr(), netip.AddrFrom4([4]byte{0, 0, byte(low >> 8), byte(low)}),
+		netip.AddrFrom4([4]byte{0, 0, byte(first >> 8), byte(first)}))
+	if !ok {
+		return deny("alias")
+	}
+	idle := otherIdle
+	if protocolNumber == 6 {
+		idle = tcpIdle
+	}
+	index := target.GetIndex()
+	ruleId := []byte{0x53, byte(index >> 24), byte(index >> 16), byte(index >> 8), byte(index)}
+	admitted := func(row string, to netip.AddrPort) egressReferenceDecision {
+		return egressReferenceDecision{
+			verdict: connect.EgressVerdictMap,
+			target:  to,
+			ruleTag: egressReferenceTag(principal.ShareId, ruleId),
+			idle:    idle,
+			row:     "share_" + row,
+		}
+	}
+	withdrawn := func(ruleId []byte, drain bool) bool {
+		for _, entry := range input.Overlay {
+			if entry.Kind != device.PostureOverlayBridgeWithdraw || string(entry.Id) != string(ruleId) {
+				continue
+			}
+			if (entry.WithdrawMode == bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_DRAIN) == drain {
+				return true
+			}
+		}
+		return false
+	}
+	drainEnd := func(since int64, until int64) time.Time {
+		end := time.UnixMilli(since).Add(max(tcpIdle, otherIdle))
+		if time.UnixMilli(until).After(end) {
+			return time.UnixMilli(until)
+		}
+		return end
+	}
+	block, hasBlock := egressReferencePrefix(rules.GetBlock())
+	previousBlock, hasPrevious := egressReferencePrefix(rules.GetPreviousBlock())
+	inBlocks := func(candidate netip.Addr) bool {
+		return (hasBlock && block.Contains(candidate)) || (hasPrevious && previousBlock.Contains(candidate))
+	}
+	previousLapsed := func(candidate netip.Addr) bool {
+		return hasPrevious && previousBlock.Contains(candidate) && !now.Before(time.UnixMilli(rules.GetPreviousBlockDrainUntil()))
+	}
+
+	// rule 0
+	if egressReferenceDaemon(input, mapped, port) {
+		return deny("0")
+	}
+	// rule 1, by the share's grant
+	for _, ruleMap := range rules.GetMaps() {
+		match, _ := egressReferencePrefix(ruleMap.GetMatchPrefix())
+		if ruleMap.GetProtocol() != protocolNumber || !match.Contains(mapped) || previousLapsed(mapped) {
+			continue
+		}
+		if withdrawn(ruleMap.GetMapId(), false) || withdrawn(ruleMap.GetMapId(), true) || ruleMap.GetDrainingSince() != 0 {
+			continue
+		}
+		if ruleMap.GetExpires() != 0 && !now.Before(time.UnixMilli(ruleMap.GetExpires())) {
+			continue
+		}
+		if 0 < len(ruleMap.GetPorts()) {
+			inRange := false
+			for _, portRange := range ruleMap.GetPorts() {
+				inRange = inRange || (uint32(port) >= portRange.GetFirst() && uint32(port) <= portRange.GetLast())
+			}
+			if !inRange {
+				continue
+			}
+		}
+		mapTarget, _ := netip.AddrFromSlice(ruleMap.GetTarget())
+		mapTarget = mapTarget.Unmap()
+		if match.Bits() < 32 {
+			if mapTarget, ok = egressReferenceOffset(mapTarget, mapped, match.Addr()); !ok {
+				return deny("1")
+			}
+		}
+		targetPort := port
+		if ruleMap.GetTargetPort() != 0 {
+			targetPort = uint16(ruleMap.GetTargetPort() + uint32(port) - ruleMap.GetPorts()[0].GetFirst())
+		}
+		if inBlocks(mapTarget) || egressReferenceDaemon(input, mapTarget, targetPort) {
+			return deny("1")
+		}
+		return admitted("1", netip.AddrPortFrom(mapTarget, targetPort))
+	}
+	// rule 6's remaps
+	for _, served := range rules.GetServed() {
+		exposed, hasExposed := egressReferencePrefix(served.GetExposedPrefix())
+		if served.GetKind() != bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET || !hasExposed || !exposed.Contains(mapped) {
+			continue
+		}
+		if previousLapsed(mapped) || withdrawn(served.GetRouteId(), false) ||
+			(served.GetDrainingSince() != 0 && !now.Before(drainEnd(served.GetDrainingSince(), served.GetDrainUntil()))) {
+			continue
+		}
+		prefix, _ := egressReferencePrefix(served.GetPrefix())
+		remapped, _ := egressReferenceOffset(prefix.Addr(), mapped, exposed.Addr())
+		if egressReferenceDaemon(input, remapped, port) {
+			return deny("1_remap")
+		}
+		return admitted("1_remap", netip.AddrPortFrom(remapped, port))
+	}
+	hosted := false
+	for _, address := range rules.GetAddresses() {
+		if egressReferenceAddr(address) == mapped && !previousLapsed(mapped) {
+			hosted = true
+		}
+	}
+	// rule 2
+	if inBlocks(mapped) && !hosted {
+		return deny("2")
+	}
+	// rule 3, by the share's grant alone
+	if hosted {
+		loopback := netip.MustParseAddr("127.0.0.1")
+		if egressReferenceDaemon(input, loopback, port) {
+			return deny("3")
+		}
+		return admitted("3", netip.AddrPortFrom(loopback, port))
+	}
+	// rule 5
+	if egressReferenceIn(egressReferenceRuleFive, mapped) {
+		return deny("5")
+	}
+	// rule 6
+	for _, served := range rules.GetServed() {
+		prefix, _ := egressReferencePrefix(served.GetPrefix())
+		if served.GetKind() != bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET || !prefix.Contains(mapped) {
+			continue
+		}
+		if withdrawn(served.GetRouteId(), false) ||
+			(served.GetDrainingSince() != 0 && !now.Before(drainEnd(served.GetDrainingSince(), served.GetDrainUntil()))) {
+			continue
+		}
+		return admitted("6", netip.AddrPortFrom(mapped, port))
+	}
+	// never rule 4, an exit or a LAN with no route
+	return deny("8")
+}
+
 // A rules address, read on its own.
 func egressReferenceAddr(address uint32) netip.Addr {
 	return netip.AddrFrom4([4]byte{byte(address >> 24), byte(address >> 16), byte(address >> 8), byte(address)})
@@ -603,6 +837,7 @@ type egressGenState struct {
 	// what the flows draw on
 	subjects     []sidecartest.BridgeRulesFixtureSubject
 	destinations []netip.Addr
+	shares       []sidecartest.BridgeRulesFixtureShare
 }
 
 // The network every generated state is of, and this host.
@@ -705,6 +940,51 @@ func (self *egressGen) state() *egressGenState {
 		subject.Exit = rows(false)
 		fixture.Subjects = append(fixture.Subjects, subject)
 		generated.subjects = append(generated.subjects, subject)
+	}
+	// shares this host serves half the time, their targets leading through each row of the share's table: a served
+	// subnet, a remapped route's exposed prefix, a hosted address, another host's address, a public prefix, loopback, a
+	// served subnet's part, a mapped range and an address of the previous block
+	if self.oneIn(2) {
+		aliases := []struct {
+			hostBits uint32
+			target   string
+		}{
+			{hostBits: 0x8100, target: "192.168.50.0/24"}, {hostBits: 0x8200, target: blockBase + ".200.0/24"},
+			{hostBits: 0x8001, target: blockBase + ".1.2/32"}, {hostBits: 0x8002, target: blockBase + ".1.3/32"},
+			{hostBits: 0x8300, target: "203.0.113.0/24"}, {hostBits: 0x8400, target: "127.0.0.0/24"},
+			{hostBits: 0x8500, target: "10.30.4.0/24"}, {hostBits: 0x8604, target: blockBase + ".2.4/30"},
+			{hostBits: 0x8003, target: "100.81.1.2/32"},
+		}
+		for i := range 1 + self.below(2) {
+			share := sidecartest.BridgeRulesFixtureShare{
+				Share:   byte(0x30 + i),
+				Network: egressGenPick(self, byte(0xC1), byte(0xC2)),
+				Grant:   byte(self.below(4) + 1),
+			}
+			if self.oneIn(4) {
+				share.Expires = self.timeMs()
+			}
+			for index, alias := range aliases {
+				if self.oneIn(3) {
+					continue
+				}
+				ports := self.ports(egressGenPick(self, "*", "tcp", "udp"))
+				if (alias.hostBits == 0x8001 || alias.hostBits == 0x8604 || alias.hostBits == 0x8200) && self.oneIn(2) {
+					// every protocol, so the maps and remaps behind it decide
+					ports = "*"
+				}
+				share.Targets = append(share.Targets, sidecartest.BridgeRulesFixtureShareTarget{
+					Index: uint32(index), AliasHostBits: alias.hostBits, Target: alias.target, Ports: ports,
+				})
+			}
+			if len(share.Targets) == 0 {
+				share.Targets = append(share.Targets, sidecartest.BridgeRulesFixtureShareTarget{
+					Index: 0, AliasHostBits: aliases[0].hostBits, Target: aliases[0].target, Ports: "*",
+				})
+			}
+			fixture.Shares = append(fixture.Shares, share)
+			generated.shares = append(generated.shares, share)
+		}
 	}
 	// autogroup:untagged's rows half the time, which another client holds at an sdk provider
 	if self.oneIn(2) {
@@ -835,6 +1115,63 @@ func (self *egressGen) flow(state *egressGenState) (*connect.EgressFlow, time.Ti
 	}
 	flow.To = netip.AddrPortFrom(destination, port)
 	flow.From = netip.AddrPortFrom(netip.MustParseAddr("10.9.8.7"), 40000)
+	// half the flows of a state with shares are a share's, from the accepting network to an alias most of the time
+	if 0 < len(state.shares) && self.oneIn(2) {
+		share := state.shares[self.below(len(state.shares))]
+		flow.ProvideMode = protocol.ProvideMode_FriendsAndFamily
+		flow.ContractClass = connect.ContractClassData
+		if self.oneIn(10) {
+			flow.ContractClass = egressGenPick(self, connect.ContractClassControl, connect.ContractClassUnset)
+		}
+		network := connect.Id(sidecartest.BridgeFixtureNetworkId(share.Network))
+		principal := &connect.BridgePrincipal{
+			Subject:  connect.Id(sidecartest.BridgeFixtureSidecarId(0x61)),
+			Network:  network,
+			ShareId:  connect.Id(sidecartest.BridgeFixtureShareId(share.Share)),
+			NotAfter: now.Add(time.Hour),
+		}
+		switch self.below(16) {
+		case 0:
+			principal.Network = connect.Id(sidecartest.BridgeFixtureNetworkId(0xC3))
+		case 1:
+			principal.Network = connect.Id(egressGenNetworkId)
+		case 2:
+			principal.ShareId = connect.Id(sidecartest.BridgeFixtureShareId(0x3F))
+		case 3:
+			principal.NotAfter = now
+		case 4:
+			principal = nil
+		}
+		flow.Principal = principal
+		flow.SourceNetwork = network
+		hostBits := uint32(0x8000 + self.below(256)<<7)
+		if !self.oneIn(6) {
+			candidates := share.Targets
+			if self.oneIn(2) {
+				// half the time a target that leads through a map or a remap, the rows a share reaches least, on a
+				// mapped port
+				preferred := []sidecartest.BridgeRulesFixtureShareTarget{}
+				for _, target := range share.Targets {
+					switch target.AliasHostBits {
+					case 0x8001, 0x8604, 0x8200:
+						preferred = append(preferred, target)
+					}
+				}
+				if 0 < len(preferred) {
+					candidates = preferred
+					if flow.Protocol != connect.IpProtocolIcmp {
+						port = egressGenPick(self, uint16(5432), uint16(8000), uint16(8005), uint16(22), uint16(443))
+					}
+				}
+			}
+			target := candidates[self.below(len(candidates))]
+			prefix := netip.MustParsePrefix(target.Target)
+			size := uint32(1) << (32 - prefix.Bits())
+			hostBits = target.AliasHostBits + uint32(self.below(256))%size
+		}
+		blockSecond := egressGenPick(self, byte(90), byte(91))
+		flow.To = netip.AddrPortFrom(netip.AddrFrom4([4]byte{100, blockSecond, byte(hostBits >> 8), byte(hostBits)}), port)
+	}
 	return flow, now
 }
 
@@ -864,11 +1201,12 @@ func egressCompare(state *egressGenState, flows []*connect.EgressFlow, nows []ti
 	return ""
 }
 
-// §22.5's "hook = reference": the policy and the reference agree on every flow of thousands of generated states.
+// §22.5's "hook = reference": the policy and the reference agree on every flow of thousands of generated states, a
+// share's flows among them.
 func TestBridgeEgressPolicyEqualsTheReference(t *testing.T) {
 	random := rand.New(rand.NewPCG(0x5eed, 0xb41d6e))
 	rows := map[string]int{}
-	for range 3000 {
+	for range 4000 {
 		gen := &egressGen{random: random}
 		state := gen.state()
 		flows := []*connect.EgressFlow{}
@@ -894,6 +1232,10 @@ func TestBridgeEgressPolicyEqualsTheReference(t *testing.T) {
 		"state deny", "0 deny", "1 map", "1 deny", "1_remap map", "1_remap deny", "2 deny", "3 map", "3 deny",
 		"block deny", "4 pass", "5 deny", "6 pass", "6 deny", "7 pass", "7 deny", "8 deny",
 		"untagged 7 pass", "untagged 7 deny",
+		// a share's row (§17.9) and where its targets lead
+		"share_principal deny", "share_state deny", "share_share deny", "share_alias deny", "share_port deny",
+		"share_0 deny", "share_1 map", "share_1 deny", "share_1_remap map", "share_2 deny", "share_3 map", "share_3 deny",
+		"share_5 deny", "share_6 map", "share_8 deny",
 	} {
 		if rows[row] < 50 {
 			t.Errorf("%s reached %d times", row, rows[row])

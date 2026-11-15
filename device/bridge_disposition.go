@@ -17,6 +17,8 @@
 //	(subject, route)          the served route, until its drain ends, and its remap, until its block's; the subject's
 //	                          route rows that meet it; the allow-all for a remap
 //	(subject, 7)              the subject's exit rows, and at a host that it serves an exit
+//	(share, 0x53, index)      the share, its grant and the target; and every map, hosted address, served route and remap
+//	                          the target leads through (bridge_share.go)
 //
 // So a revocation or an expiry resets at once, an edit drains: a removed route or address keeps admitting until
 // max(drain_seconds, 600 s), a retargeted map keeps only the flows it opened, and then their tags end. Rule 3's tag
@@ -146,9 +148,7 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 		if 0 < len(dialAtoms) {
 			for _, policyMap := range self.maps {
 				if self.mapKept(policyMap, at) {
-					mapAtom := fmt.Sprintf("map:%x:%v:%d:%v:%v:%d", policyMap.mapId, policyMap.match, policyMap.protocol,
-						policyMap.ports, policyMap.target, policyMap.targetPort)
-					add(policyMap.mapId, append(slices.Clone(dialAtoms), mapAtom)...)
+					add(policyMap.mapId, append(slices.Clone(dialAtoms), bridgeMapAtom(policyMap))...)
 				}
 			}
 		}
@@ -174,14 +174,39 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 			if len(atoms) == 0 {
 				continue
 			}
-			atoms = append(atoms, fmt.Sprintf("served:%x:%v", served.routeId, served.prefix))
+			atoms = append(atoms, bridgeServedAtom(served))
 			if remapKept {
-				atoms = append(atoms, fmt.Sprintf("remap:%x:%v", served.routeId, served.exposed))
+				atoms = append(atoms, bridgeRemapAtom(served))
 			}
 			add(served.routeId, atoms...)
 		}
 	}
+	// a share's flows at a host, by their own tags (bridge_share.go)
+	if !sdk {
+		self.shareAdmission(admission, at)
+	}
 	return admission
+}
+
+// A map's atom: what it matches and where it leads.
+func bridgeMapAtom(policyMap *bridgePolicyMap) string {
+	return fmt.Sprintf("map:%x:%v:%d:%v:%v:%d", policyMap.mapId, policyMap.match, policyMap.protocol, policyMap.ports,
+		policyMap.target, policyMap.targetPort)
+}
+
+// A served route's atom, and its remap's.
+func bridgeServedAtom(served *bridgePolicyServed) string {
+	return fmt.Sprintf("served:%x:%v", served.routeId, served.prefix)
+}
+
+func bridgeRemapAtom(served *bridgePolicyServed) string {
+	return fmt.Sprintf("remap:%x:%v", served.routeId, served.exposed)
+}
+
+// A share target's atom: its alias, where it leads and what it admits.
+func bridgeShareTargetAtom(target *bridgePolicyShareTarget) string {
+	return fmt.Sprintf("share_target:%d:%d:%d:%v:%d:%v", target.index, target.aliasFirst, target.aliasLast, target.target,
+		target.protocol, target.ports)
 }
 
 // The tags previous admitted under at previousAt whose atoms next, at now, no longer holds all of, sorted (the file's

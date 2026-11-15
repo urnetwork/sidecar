@@ -12,11 +12,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/connect"
+	"github.com/urnetwork/connect/protocol"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/device"
@@ -86,7 +88,7 @@ func TestBridgeHostMintsThroughTheSidecarsApi(t *testing.T) {
 	}
 }
 
-// A build with no client generation, and a share link before shares, are refused and build nothing.
+// A build with no client generation is refused and builds nothing, a share link's included.
 func TestBridgeHostRefusesWhatItCannotBuild(t *testing.T) {
 	host := newUrBridgeHost(context.Background(), nil)
 	sign := func(windowClientId connect.Id, windowClientPublicKey []byte, notAfter time.Time) ([]byte, error) {
@@ -95,13 +97,36 @@ func TestBridgeHostRefusesWhatItCannotBuild(t *testing.T) {
 	if client, err := host.NewBridgeLink(context.Background(), connect.NewId(), connect.NewId(), nil, sign); !errors.Is(err, errUrBridgeHostRefused) || client != nil {
 		t.Errorf("no generation: %v", err)
 	}
-	host.setGeneration(&urBridgeGeneration{credentials: &testUrBridgeCredentials{}})
 	shareAliases := []netip.Prefix{netip.MustParsePrefix("100.80.200.0/24")}
 	if client, err := host.NewBridgeLink(context.Background(), connect.NewId(), connect.NewId(), shareAliases, sign); !errors.Is(err, errUrBridgeHostRefused) || client != nil {
-		t.Errorf("a share link: %v", err)
+		t.Errorf("a share link with no generation: %v", err)
 	}
 	if err := device.CheckBridgeLinkMultiClientSettings(device.BridgeLinkMultiClientSettings(host.settings), host.settings.LinkAllowDirect); err != nil {
 		t.Errorf("the links' settings: %v", err)
+	}
+}
+
+// §17.9's sender row: a link of this network is a multi client in ProvideMode_Network with no private destination of
+// its own, and a share link one in ProvideMode_FriendsAndFamily whose source half carries the link's aliases alone,
+// both on the links' own settings.
+func TestBridgeHostBuildsAShareLinkFriendsAndFamilyWithItsAliases(t *testing.T) {
+	settings := device.DefaultBridgeSettings()
+	provideMode, multiClientSettings, err := urBridgeLinkSettings(settings, nil)
+	if err != nil || provideMode != protocol.ProvideMode_Network || multiClientSettings.SharePrivateDestinations != nil {
+		t.Fatalf("a link of this network: %v, %v, %v", provideMode, multiClientSettings.SharePrivateDestinations, err)
+	}
+	shareAliases := []netip.Prefix{netip.MustParsePrefix("100.80.128.1/32"), netip.MustParsePrefix("100.80.129.0/24")}
+	provideMode, multiClientSettings, err = urBridgeLinkSettings(settings, shareAliases)
+	if err != nil || provideMode != protocol.ProvideMode_FriendsAndFamily || !slices.Equal(multiClientSettings.SharePrivateDestinations, shareAliases) {
+		t.Fatalf("a share link: %v, %v, %v", provideMode, multiClientSettings.SharePrivateDestinations, err)
+	}
+	if err := device.CheckBridgeLinkMultiClientSettings(multiClientSettings, settings.LinkAllowDirect); err != nil {
+		t.Errorf("a share link's settings: %v", err)
+	}
+	// the settings are the link's own: the aliases a caller holds are copied
+	shareAliases[0] = netip.MustParsePrefix("10.0.0.0/8")
+	if multiClientSettings.SharePrivateDestinations[0] == shareAliases[0] {
+		t.Error("the share link's settings follow the caller's slice")
 	}
 }
 

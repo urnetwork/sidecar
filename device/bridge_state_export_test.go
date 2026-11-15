@@ -93,3 +93,26 @@ func (self *BridgeLogFixtureForTest) EmptyStore() PostureStore {
 func (self *BridgeLogFixtureForTest) NetworkId() []byte {
 	return self.fixture.networkId
 }
+
+// A posture store in memory that a test can kill at its next write and restart from, as a process killed mid-commit
+// leaves its store (posture_fixture_test.go's memoryPostureStore).
+type MemoryPostureStoreForTest struct {
+	*memoryPostureStore
+}
+
+// A store holding nothing.
+func NewMemoryPostureStoreForTest() *MemoryPostureStoreForTest {
+	return &MemoryPostureStoreForTest{memoryPostureStore: newMemoryPostureStore()}
+}
+
+// Kills the store at its next write's first step: that write and every call after it fail.
+func (self *MemoryPostureStoreForTest) KillAtNextWrite() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.killAtStep = self.steps + 1
+}
+
+// The store as the kill left it, its durable records, alive.
+func (self *MemoryPostureStoreForTest) Survivor() *MemoryPostureStoreForTest {
+	return &MemoryPostureStoreForTest{memoryPostureStore: self.memoryPostureStore.survivor()}
+}

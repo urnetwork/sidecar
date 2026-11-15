@@ -128,12 +128,18 @@ func TestAShareLinkIsSignedByItsShareSigner(t *testing.T) {
 	}
 	identity := &SidecarIdentity{NetworkId: testConfigId("accepting network"), SidecarId: testConfigId("accepting sidecar")}
 	target := testConfigId("sharing host")
-	compiled := &BridgeCompiled{State: &bridge.BridgeState{}, LinkTargets: []Id{target}}
+	// the state links to the host over the share alone: a share link's host is no link target of this network's
+	compiled := &BridgeCompiled{State: &bridge.BridgeState{}, ShareLinks: []BridgeCompiledShareLink{{ShareId: shareId, TargetSidecarId: target}}}
 	maxLifetime := DefaultBridgeComponentSettings().WindowDelegationMaxLifetime
 	windowPublicKey := bytes.Repeat([]byte{0x33}, 32)
 	request := &BridgeDelegationRequest{
 		NetworkId: identity.NetworkId, SubjectSidecarId: identity.SidecarId, WindowClientId: testConfigId("share window client"),
 		WindowClientPublicKey: windowPublicKey, TargetSidecarId: target, NotAfter: keys.clock.Now().Add(time.Hour), ShareId: shareId,
+	}
+	sameNetwork := *request
+	sameNetwork.ShareId = Id{}
+	if _, err := bridgeSignWindowDelegation(&sameNetwork, identity, compiled, maxLifetime, keys.clock.Now(), nil, nil); !errors.Is(err, ErrBridgeDelegationRefused) {
+		t.Fatalf("a delegation of this network to a share's host: %v", err)
 	}
 	identitySign := func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
 		t.Fatal("the identity key was asked to sign a share link's delegation")

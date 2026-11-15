@@ -22,7 +22,6 @@
 package sidecar
 
 import (
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 
@@ -36,8 +35,6 @@ var (
 	// The upper /17 has no aligned free block for a target (§17.9's space row): accept_status refused_no_space, a
 	// *BridgeShareRefusal too.
 	ErrBridgeShareNoSpace = errors.New("bridge share has no room in the upper /17")
-	// A target table no accept takes: indexes that are not dense from 0, an id, a key, a prefix or ports out of form.
-	ErrBridgeShareTableInvalid = errors.New("bridge share table refused")
 )
 
 // A refusal of the preflight, with §17.9's figures, which the accept seals under K for the sharing network: the first
@@ -61,52 +58,6 @@ func (self *BridgeShareRefusal) Unwrap() error {
 
 // The largest shortfall figure for "no aligned free block of any length" (BridgeShareShortfall.largest_free_length).
 const bridgeShareNoFreeLength = 33
-
-// The target table an invite seals and an accept opens, held to its form: indexes dense from 0, each host a
-// sidecar_id with its Ed25519 identity key (QD-077), a masked IPv4 prefix, a protocol of 0, 6 or 17, and ports only
-// under 6 or 17, each range in order. A length is not judged here: the preflight refuses a wide one as too large. At
-// most listMaxCount port ranges a target, the ledger's BodyListMaxCount.
-func CheckBridgeShareTargets(targets *bridge.BridgeShareTargets, settings *BridgeLedgerSettings) error {
-	read := bridgeLedgerSettingsOrDefault(settings)
-	if targets == nil || len(targets.GetTargets()) == 0 {
-		return fmt.Errorf("%w: no target", ErrBridgeShareTableInvalid)
-	}
-	for i, target := range targets.GetTargets() {
-		switch {
-		case target == nil || target.GetIndex() != uint32(i):
-			return fmt.Errorf("%w: target %d is out of its index", ErrBridgeShareTableInvalid, i)
-		case len(target.GetHostSidecarId()) != len(Id{}):
-			return fmt.Errorf("%w: target %d names no host", ErrBridgeShareTableInvalid, i)
-		case len(target.GetHostIdentityPublicKey()) != ed25519.PublicKeySize:
-			return fmt.Errorf("%w: target %d carries no host identity key", ErrBridgeShareTableInvalid, i)
-		}
-		prefix, err := bridgePrefixOf(target.GetPrefix())
-		if err != nil {
-			return fmt.Errorf("%w: target %d: %w", ErrBridgeShareTableInvalid, i, err)
-		}
-		if prefix.length == 0 {
-			return fmt.Errorf("%w: target %d is every address", ErrBridgeShareTableInvalid, i)
-		}
-		switch target.GetProtocol() {
-		case 0:
-			if len(target.GetPorts()) != 0 {
-				return fmt.Errorf("%w: target %d names ports of no protocol", ErrBridgeShareTableInvalid, i)
-			}
-		case bridgeProtocolTcp, bridgeProtocolUdp:
-		default:
-			return fmt.Errorf("%w: target %d names a protocol with no ports", ErrBridgeShareTableInvalid, i)
-		}
-		if read.BodyListMaxCount < len(target.GetPorts()) {
-			return fmt.Errorf("%w: target %d names %d port ranges", ErrBridgeShareTableInvalid, i, len(target.GetPorts()))
-		}
-		for _, ports := range target.GetPorts() {
-			if ports == nil || ports.GetFirst() == 0 || ports.GetLast() < ports.GetFirst() || 65535 < ports.GetLast() {
-				return fmt.Errorf("%w: target %d names a port range out of form", ErrBridgeShareTableInvalid, i)
-			}
-		}
-	}
-	return nil
-}
 
 // The upper /17's host bits a ledger holds at its time, one flag a host address, from bridgeUpperHostBits.
 type bridgeUpperMap struct {
@@ -232,31 +183,4 @@ func BridgeSharePreflight(ledger *BridgeLedger, targets *bridge.BridgeShareTarge
 		aliases = append(aliases, &bridge.BridgeShareAlias{Index: target.GetIndex(), AliasHostBits: first, Length: length})
 	}
 	return aliases, nil
-}
-
-// The alias table an accept seals, held to its target table: one alias a target, by index, each of its target's
-// length, aligned, inside the upper /17, a /32 at neither a .0 nor a .255, and no two overlapping.
-func CheckBridgeShareAliases(aliases *bridge.BridgeShareAliases, targets *bridge.BridgeShareTargets) error {
-	if aliases == nil || targets == nil || len(aliases.GetAliases()) != len(targets.GetTargets()) {
-		return fmt.Errorf("%w: an alias table that is not one alias a target", ErrBridgeShareTableInvalid)
-	}
-	upper := &bridgeUpperMap{held: make([]bool, 0x10000-int(bridgeUpperHostBits))}
-	for i, alias := range aliases.GetAliases() {
-		target := targets.GetTargets()[i]
-		length := alias.GetLength()
-		if alias == nil || alias.GetIndex() != uint32(i) || length != target.GetPrefix().GetLength() || length < 17 || 32 < length {
-			return fmt.Errorf("%w: alias %d does not match its target", ErrBridgeShareTableInvalid, i)
-		}
-		first, size := alias.GetAliasHostBits(), uint32(1)<<(32-length)
-		switch {
-		case first < bridgeUpperHostBits || 0xffff < first || first%size != 0:
-			return fmt.Errorf("%w: alias %d is no aligned block of the upper /17", ErrBridgeShareTableInvalid, i)
-		case length == 32 && (first&0xff == 0x00 || first&0xff == 0xff):
-			return fmt.Errorf("%w: alias %d is a /32 at a .0 or a .255", ErrBridgeShareTableInvalid, i)
-		case !upper.free(first, first+size-1):
-			return fmt.Errorf("%w: alias %d overlaps another", ErrBridgeShareTableInvalid, i)
-		}
-		upper.hold(first, first+size-1)
-	}
-	return nil
 }

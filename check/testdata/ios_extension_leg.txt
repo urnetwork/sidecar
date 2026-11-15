@@ -45,6 +45,7 @@ api_transport_connect.go
 bridge_compile.go
 bridge_compile_local.go
 bridge_compile_rows.go
+bridge_compile_share.go
 bridge_forward.go
 bridge_forward_compile.go
 bridge_forward_follow.go
@@ -53,6 +54,8 @@ bridge_forward_sign.go
 bridge_ledger.go
 bridge_ledger_fold.go
 bridge_rows.go
+bridge_share_open.go
+bridge_share_seal.go
 bridge_statement.go
 bridge_statement_rules.go
 clock.go

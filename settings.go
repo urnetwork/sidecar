@@ -329,6 +329,9 @@ type SidecarDirectorySettings struct {
 	ViewCoalesce time.Duration
 	// Cards a metered session on phones, which keep cards only while the view is open: 8 MiB (§16.11).
 	PhoneMeteredByteCount int64
+	// What a phone's view takes a version to cost before it has fetched one: an entry, about 1.5 KiB by Padmé, and its
+	// push statement, about 0.8 KiB (§16.11's sizes row), 2,336 B.
+	PhoneVersionByteCount int64
 	// ±this on hourly run renewals, so a team's cards do not renew together: 5 min (§16.11).
 	RenewJitter time.Duration
 	// A phone renews a notice lease this old at its next resync, at once: 24 h, §11.10's renew row as a phone runs it
@@ -881,6 +884,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 			IdleSyncInterval:      1 * time.Hour,
 			ViewCoalesce:          30 * time.Second,
 			PhoneMeteredByteCount: 8 * 1024 * 1024,
+			PhoneVersionByteCount: 1536 + 800,
 			RenewJitter:           5 * time.Minute,
 			PhoneLeaseRenewAge:    24 * time.Hour,
 			PhoneLeaseExpiry:      7 * 24 * time.Hour,

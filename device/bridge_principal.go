@@ -18,8 +18,9 @@
 // sidecar, or once the state no longer lists it, and its flows carry their own tags (BridgeForwardRuleTag), so those
 // end and the flows the same subject's identity key admitted go on (DESIGN-DETAILS 4.2.5).
 //
-// A share link's delegation, FriendsAndFamily under a ShareSigner, is refused until shares land (BRIDGE-M6-05), and an
-// sdk provider verifies none until C16 (§17.6's sdk exit NAT).
+// A share link's delegation, FriendsAndFamily under a ShareSigner, is §17.9's admit row (bridge_share.go): a
+// FriendsAndFamily contract takes that branch alone, and a Network one never does. An sdk provider verifies none until
+// C16 (§17.6's sdk exit NAT).
 
 package device
 
@@ -38,12 +39,19 @@ import (
 
 // connect.EgressHook: the contract's principal, or nil. See the file's comment.
 func (self *BridgeEgressPolicy) VerifyPrincipal(source connect.TransferPath, peer connect.Peer) *connect.BridgePrincipal {
-	if self.profile != BridgePolicyProfileHost || peer.ProvideMode != protocol.ProvideMode_Network {
+	if self.profile != BridgePolicyProfileHost {
+		return nil
+	}
+	if peer.ProvideMode != protocol.ProvideMode_Network && peer.ProvideMode != protocol.ProvideMode_FriendsAndFamily {
 		return nil
 	}
 	sessionKey, ok := peer.VerifiedClientPublicKey()
 	if !ok {
 		return nil
+	}
+	if peer.ProvideMode == protocol.ProvideMode_FriendsAndFamily {
+		// a share link's, from another network (bridge_share.go)
+		return self.verifySharePrincipal(source.SourceId, sessionKey[:], peer.SourceNetwork, peer.WindowDelegation)
 	}
 	return self.verifyPrincipal(source.SourceId, sessionKey[:], peer.SourceNetwork, peer.SourceSubject, peer.WindowDelegation)
 }
