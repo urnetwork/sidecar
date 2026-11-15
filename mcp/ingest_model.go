@@ -6,10 +6,17 @@
 //   - Codex's PostModelRequest hook, which the hook path reads as any event (HookEventModelCall) and Ingest captures
 //     beside it, the Coverage naming hooks;
 //   - harness OpenTelemetry: OTLP/HTTP JSON log records POSTed to IngestTelemetry's handler, which the daemon serves on
-//     a loopback listener. The handler authenticates its caller (I-17) by the bearer token the exporter's settings
-//     carry, compared in constant time, and refuses any other caller 401, recording nothing. A record maps to the
-//     live run of its harness (the resource's service.name) and session (session.id, else gen_ai.conversation.id);
-//     the Coverage names telemetry.
+//     a loopback listener (ingest_telemetry.go). The handler authenticates its caller (I-17) by the bearer token the
+//     exporter's settings carry (harness_telemetry.go), compared in constant time, and refuses any other caller 401,
+//     recording nothing. A record maps to the live run of its harness (the resource's service.name) and session
+//     (session.id, else gen_ai.conversation.id); the Coverage names telemetry.
+//
+// The token's scope (QD-822): a POST of model calls to OTLP's logs path, for model_call entries alone, labeled source
+// hook as RECORD.md has them. A request with the token for anything else is refused 401 with nothing recorded: another
+// path or method, any request while capture is off, and an export that holds no model call. An export holding model
+// calls and other records takes the calls and passes the others over, so the token adds model_call entries and
+// nothing else, which any same-uid process can already add through ur hook (owner decisions 47, 75). Exports past
+// Ingest.TelemetryRequestRate are answered 429 and record nothing, so the exporter sends them again.
 //
 // A record is a model call when it names an API request (event.name api_request, any harness's prefix) or carries
 // gen_ai.usage tokens: model, provider, request id, tokens, the harness's own cost and the duration, under the
@@ -17,6 +24,12 @@
 // cut to Ingest.ModelCallFieldByteCount, RECORD.md's 128 B. An export that cannot be read whole, past
 // Ingest.TelemetryByteCount or not OTLP JSON, and a call that names no live run, are dropped exports: a missed_event
 // gap on the runs of its harness, or on every live run when the harness is unknown, since a lost call may hide cost.
+// A Codex record is no call here: §16.18 also names Codex's PostModelRequest hook, which reports the same calls with
+// their request ids and tokens, so taking both would count each call twice in RECORD.md 13.1's sums, and an
+// api_request record alone carries no tokens and counts retries. Until question
+// harness-telemetry-token-codex-double-count settles where Codex's calls come from, its records stay passed over; ur
+// install-harness does not install the hook yet either (MCP-M6-03), so a Codex run records no model call, and its
+// coverage names no model-call source.
 // Off unless Ingest.ModelCalls is set: M6's capture, off by default.
 
 package mcp
@@ -32,6 +45,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -138,18 +152,39 @@ type IngestTelemetry struct {
 	stateLock    sync.Mutex
 	refusedCount int
 	droppedCount int
+	limitedCount int
+	// exports left, refilled at Ingest.TelemetryRequestRate up to its burst
+	requestTokens float64
+	// when requestTokens was last refilled
+	requestRefillTime time.Time
 }
 
-// A receiver over ingest whose callers must hold token, the exporter settings' bearer value (§16.18; I-17).
+// A receiver over ingest whose callers must hold token, the exporter settings' bearer value (§16.18; I-17), its
+// request bucket full.
 func NewIngestTelemetry(ingest *Ingest, token []byte) *IngestTelemetry {
-	return &IngestTelemetry{ingest: ingest, token: append([]byte(nil), token...)}
+	return &IngestTelemetry{
+		ingest:            ingest,
+		token:             append([]byte(nil), token...),
+		requestTokens:     float64(ingest.settings.TelemetryRequestRate.Burst),
+		requestRefillTime: ingest.clock.Now(),
+	}
 }
 
-// The callers refused for want of the token, and the exports dropped.
-func (self *IngestTelemetry) Counts() (refused int, dropped int) {
+// What a receiver refused, dropped and held back.
+type IngestTelemetryCounts struct {
+	// Requests refused 401: no token or another, or the token for anything but model calls.
+	Refused int `json:"refused,omitempty"`
+	// Exports that could not be read whole, and calls naming no live run, each a gap.
+	Dropped int `json:"dropped,omitempty"`
+	// Exports answered 429, past Ingest.TelemetryRequestRate.
+	Limited int `json:"limited,omitempty"`
+}
+
+// The receiver's counts so far.
+func (self *IngestTelemetry) Counts() IngestTelemetryCounts {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.refusedCount, self.droppedCount
+	return IngestTelemetryCounts{Refused: self.refusedCount, Dropped: self.droppedCount, Limited: self.limitedCount}
 }
 
 // OTLP/HTTP JSON's logs export, the fields this receiver reads.
@@ -268,22 +303,55 @@ func otlpModelCall(record map[string]*otlpValue, body *otlpValue, timeUnixNano s
 	return call, session, true
 }
 
-// The OTLP/HTTP JSON logs handler: the caller authenticated, the export read whole, each model call captured on its
-// run, every other record passed over. See the file header.
+// One model call an export holds, with the harness and session it names.
+type otlpExportCall struct {
+	harness string
+	session string
+	call    *ingestModelCall
+}
+
+// The model calls an export holds, in order: every other record, and every Codex record (see the file header), passed
+// over.
+func otlpExportCalls(export *otlpLogsExport) []*otlpExportCall {
+	calls := []*otlpExportCall{}
+	for _, resourceLogs := range export.ResourceLogs {
+		harness := otlpHarness(otlpAttributes(resourceLogs.Resource.Attributes))
+		if harness == codexHookHarness {
+			// where Codex's calls come from waits on question harness-telemetry-token-codex-double-count
+			continue
+		}
+		for _, scopeLogs := range resourceLogs.ScopeLogs {
+			for _, record := range scopeLogs.LogRecords {
+				call, session, ok := otlpModelCall(otlpAttributes(record.Attributes), record.Body, record.TimeUnixNano)
+				if ok {
+					calls = append(calls, &otlpExportCall{harness: harness, session: session, call: call})
+				}
+			}
+		}
+	}
+	return calls
+}
+
+// The OTLP/HTTP JSON logs handler: the caller authenticated, the request held to the token's scope and rate, the
+// export read whole, each model call captured on its run, every other record passed over. See the file header.
 func (self *IngestTelemetry) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc(ingestTelemetryLogsPath, func(writer http.ResponseWriter, request *http.Request) {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// the token first, so a caller without it learns nothing of what the listener takes
 		if !self.authenticated(request) {
-			self.count(&self.refusedCount)
-			writer.WriteHeader(http.StatusUnauthorized)
+			self.refuse(writer)
 			return
 		}
-		if request.Method != http.MethodPost {
-			writer.WriteHeader(http.StatusMethodNotAllowed)
+		ingest := self.ingest
+		if request.URL.Path != ingestTelemetryLogsPath || request.Method != http.MethodPost || !ingest.settings.ModelCalls {
+			self.refuse(writer)
+			return
+		}
+		if !self.admit() {
+			self.count(&self.limitedCount)
+			writer.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
 		ctx := request.Context()
-		ingest := self.ingest
 		limit := ingest.settings.TelemetryByteCount
 		body, err := io.ReadAll(io.LimitReader(request.Body, limit+1))
 		export := &otlpLogsExport{}
@@ -293,36 +361,59 @@ func (self *IngestTelemetry) Handler() http.Handler {
 		if err == nil {
 			err = json.Unmarshal(body, export)
 		}
-		if err != nil || !ingest.settings.ModelCalls {
+		if err != nil {
 			self.dropped(ctx, "")
 			// answered as taken, so the exporter does not send the same bytes again
 			writer.WriteHeader(http.StatusOK)
 			writer.Write([]byte("{}"))
 			return
 		}
-		for _, resourceLogs := range export.ResourceLogs {
-			harness := otlpHarness(otlpAttributes(resourceLogs.Resource.Attributes))
-			for _, scopeLogs := range resourceLogs.ScopeLogs {
-				for _, record := range scopeLogs.LogRecords {
-					call, session, ok := otlpModelCall(otlpAttributes(record.Attributes), record.Body, record.TimeUnixNano)
-					if !ok {
-						continue
-					}
-					if !self.capture(ctx, harness, session, call) {
-						self.dropped(ctx, harness)
-					}
-				}
+		calls := otlpExportCalls(export)
+		if len(calls) == 0 {
+			// the token adds model calls alone
+			self.refuse(writer)
+			return
+		}
+		for _, call := range calls {
+			if !self.capture(ctx, call.harness, call.session, call.call) {
+				self.dropped(ctx, call.harness)
 			}
 		}
 		writer.WriteHeader(http.StatusOK)
 		writer.Write([]byte("{}"))
 	})
-	return mux
+}
+
+// A request refused 401, nothing recorded.
+func (self *IngestTelemetry) refuse(writer http.ResponseWriter) {
+	self.count(&self.refusedCount)
+	writer.WriteHeader(http.StatusUnauthorized)
+}
+
+// Takes one export from the request bucket, false past the rate: Ingest.TelemetryRequestRate.Burst, refilled at Count
+// an Interval on the ingest's clock.
+func (self *IngestTelemetry) admit() bool {
+	rate := self.ingest.settings.TelemetryRequestRate
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	now := self.ingest.clock.Now()
+	if elapsed := now.Sub(self.requestRefillTime); 0 < elapsed && 0 < rate.Interval {
+		self.requestTokens += float64(rate.Count) * float64(elapsed) / float64(rate.Interval)
+		if float64(rate.Burst) < self.requestTokens {
+			self.requestTokens = float64(rate.Burst)
+		}
+		self.requestRefillTime = now
+	}
+	if self.requestTokens < 1 {
+		return false
+	}
+	self.requestTokens -= 1
+	return true
 }
 
 // Whether the request carries the token: `Authorization: Bearer <token>`, compared in constant time.
 func (self *IngestTelemetry) authenticated(request *http.Request) bool {
-	presented, ok := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+	presented, ok := strings.CutPrefix(request.Header.Get("Authorization"), harnessTelemetryBearerScheme)
 	if !ok || len(self.token) == 0 {
 		return false
 	}

@@ -193,6 +193,21 @@ type SidecarIngestSettings struct {
 	// A model_call entry's model, provider and request id each, in bytes: RECORD.md's ModelCallBody, 128 B, which a
 	// longer value is cut to, a truncation gap. The format's value, which every writer of the entry shares.
 	ModelCallFieldByteCount int64
+	// The random bytes of the telemetry token `ur install-harness` draws once for the instance, which each harness's
+	// exporter presents as its bearer and the daemon's telemetry listener checks (QD-822): 32, the owner's.
+	TelemetryTokenByteCount int
+	// The exports the telemetry listener takes from callers holding its token, a token bucket, past which it answers
+	// 429 and records nothing: 4 a second, burst 16, a reading, far past an exporter's batch every few seconds, so a
+	// caller with the token cannot make the daemon parse exports without bound.
+	TelemetryRequestRate SidecarRate
+	// How long one request to the telemetry listener may take from its first byte to its answer, and how long an idle
+	// connection stays open: 30 s, a reading, far past a loopback exporter's.
+	TelemetryRequestTimeout time.Duration
+	// The largest request header the telemetry listener reads, in bytes: 64 KiB, a reading, past any exporter's.
+	TelemetryHeaderByteCount int
+	// How long a reload of the telemetry listener, or the daemon's end, waits for the requests in flight before it
+	// closes their connections: 5 s.
+	TelemetryShutdownTimeout time.Duration
 }
 
 // §16.8's record defaults, with RECORD.md section 18's fields below the first six, whose names stand
@@ -326,6 +341,12 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		ModelCalls:              false,
 		TelemetryByteCount:      4 * 1024 * 1024,
 		ModelCallFieldByteCount: 128,
+		// the telemetry listener and its token (QD-822)
+		TelemetryTokenByteCount:  32,
+		TelemetryRequestRate:     SidecarRate{Count: 4, Burst: 16, Interval: 1 * time.Second},
+		TelemetryRequestTimeout:  30 * time.Second,
+		TelemetryHeaderByteCount: 64 * 1024,
+		TelemetryShutdownTimeout: 5 * time.Second,
 	}
 }
 
