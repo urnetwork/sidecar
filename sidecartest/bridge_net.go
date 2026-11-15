@@ -97,6 +97,10 @@ type BridgeNetSettings struct {
 	ReadByteCount int
 	// The strict_exp a sender's link gives each window client past the Net's clock: 7 days, §7.4's.
 	WindowClientLifetime time.Duration
+	// §16.6's spend check, which the network's api and readers install alike, so a GrantActivate spends an admin's
+	// decision for real, a share's activation among them (BridgeShareNet); nil installs none, and every GrantActivate
+	// is refused.
+	AclSpendCheck sidecar.AclSpendCheck
 }
 
 func DefaultBridgeNetSettings() *BridgeNetSettings {
@@ -560,6 +564,7 @@ func NewBridgeNet(t AdmissionT, net *Net, settings *BridgeNetSettings) *BridgeNe
 		t.Fatal(err)
 	}
 	tier.AclCompile = AclAdmissionCompile
+	tier.AclSpendCheck = settings.AclSpendCheck
 	admission := NewAdmissionNet(t, tier)
 	admission.StartReadersAtBases(false)
 	self := &BridgeNet{
@@ -952,7 +957,19 @@ type bridgeNetSink struct {
 	revoked func(revocation *BridgeNetRevocation)
 }
 
-var _ sidecar.BridgeStateSink = (*bridgeNetSink)(nil)
+var (
+	_ sidecar.BridgeStateSink     = (*bridgeNetSink)(nil)
+	_ sidecar.BridgeShareResigner = (*bridgeNetSink)(nil)
+)
+
+// sidecar.BridgeShareResigner: the shares whose signer changed, whose links' live window clients the role signs again.
+func (self *bridgeNetSink) ResignShares(shareIds []sidecar.Id) error {
+	connectIds := make([]connect.Id, 0, len(shareIds))
+	for _, shareId := range shareIds {
+		connectIds = append(connectIds, connect.Id(shareId))
+	}
+	return self.bridge.ResignShares(connectIds)
+}
 
 func (self *bridgeNetSink) SetPending(pending *bridge.Pending) error {
 	return self.bridge.SetPending(pending)
@@ -1033,6 +1050,8 @@ type BridgeNetDecision struct {
 	Verdict     connect.EgressVerdict
 	Target      netip.AddrPort
 	Generation  uint64
+	// The (subject, rule) pair the decision came from, a share target's for a share's flow (§17.9's tag row).
+	RuleTag uint64
 }
 
 // Whether the hook let the flow open a socket: a pass or a map.
@@ -1073,6 +1092,7 @@ func (self *bridgeNetHook) ResolveEgress(flow *connect.EgressFlow) connect.Egres
 			Verdict:     decision.Verdict,
 			Target:      decision.Target,
 			Generation:  decision.PolicyGeneration,
+			RuleTag:     decision.RuleTag,
 		})
 	})
 	return decision
@@ -1281,6 +1301,11 @@ type BridgeNetHostSettings struct {
 	Component func(settings *sidecar.BridgeComponentSettings)
 	// Edits the device role's settings, which start as DefaultBridgeSettings on the Net's clock.
 	Bridge func(settings *device.BridgeSettings)
+	// Where the shares' rows the host serves are fetched from (BridgeComponentArgs.ShareRows): no api serves these
+	// networks' shares, so a share's world hands them in. Nil fetches none.
+	ShareRows sidecar.BridgeShareRowSource
+	// The device role's posture store, which a restart hands the next host to restore from; nil is a store of its own.
+	PostureStore device.PostureStore
 }
 
 // A host sidecar: its device role, the component that feeds it, its connect client and its upstream. See the file's
@@ -1372,7 +1397,11 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 	if settings.Bridge != nil {
 		settings.Bridge(bridgeSettings)
 	}
-	host.Bridge, err = device.NewBridge(ctx, newBridgeNetPostureStore(), nil, bridgeSettings)
+	postureStore := settings.PostureStore
+	if postureStore == nil {
+		postureStore = newBridgeNetPostureStore()
+	}
+	host.Bridge, err = device.NewBridge(ctx, postureStore, nil, bridgeSettings)
 	if err != nil {
 		fail("the device role: %v", err)
 	}
@@ -1426,9 +1455,10 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 			defer self.stateLock.Unlock()
 			return self.aclLocal
 		},
-		Clock:    self.net.Clock(),
-		Log:      sidecar.NewNoopLogger(),
-		Settings: componentSettings,
+		ShareRows: settings.ShareRows,
+		Clock:     self.net.Clock(),
+		Log:       sidecar.NewNoopLogger(),
+		Settings:  componentSettings,
 	})
 	if err != nil {
 		fail("the component: %v", err)

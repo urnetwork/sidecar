@@ -180,10 +180,13 @@ type BridgeComponentArgs struct {
 	// RecordModels.InForce: the model manifest in force for a forward's port on this host. Nil names none.
 	ReachManifest func(port uint32) *RecordContentRef
 	// Raises bridge_alarm. Nil drops it.
-	Emit     SidecarEventFunction
-	Clock    Clock
-	Log      Logger
-	Settings *BridgeComponentSettings
+	Emit SidecarEventFunction
+	// Where the rows of the shares this host serves are fetched from (BridgeShareTableView); nil is the generation's
+	// api, GET /network/bridge/share/<share_id>.
+	ShareRows BridgeShareRowSource
+	Clock     Clock
+	Log       Logger
+	Settings  *BridgeComponentSettings
 
 	// tests stand in for connect's NAT and provider; nil is connect's
 	parts *bridgeProviderParts
@@ -310,7 +313,11 @@ func NewBridgeComponent(ctx context.Context, args *BridgeComponentArgs) (*Bridge
 	if self.parts == nil {
 		self.parts = defaultBridgeProviderParts(settings)
 	}
-	self.shareTables, _ = NewBridgeShareTableView(&bridgeComponentShareRows{component: self}, settings.ShareTables)
+	var shareRows BridgeShareRowSource = &bridgeComponentShareRows{component: self}
+	if args.ShareRows != nil {
+		shareRows = args.ShareRows
+	}
+	self.shareTables, _ = NewBridgeShareTableView(shareRows, settings.ShareTables)
 	// on the follower's goroutine, which keeps the entry first: it reads the entry there and never blocks
 	self.removeEntry = args.Config.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
 		log := args.Config.Log()
@@ -1014,13 +1021,17 @@ func (self *BridgeComponent) fetchBindings() {
 			api, store, compiled = self.api, self.store, self.compiled
 		}()
 		log := self.args.Config.Log()
-		if api == nil || log == nil || compiled == nil {
+		if log == nil || compiled == nil {
 			continue
 		}
 		state := log.State()
 		now := self.clock.Now()
 		wanted := []Id{}
 		for _, wait := range compiled.Waits {
+			// the bindings come from the generation's api; the shares' rows from their own source, which may be none's
+			if api == nil {
+				break
+			}
 			switch wait.Kind {
 			case BridgeCompileWaitBinding:
 				wanted = append(wanted, wait.SidecarId)
@@ -1030,7 +1041,7 @@ func (self *BridgeComponent) fetchBindings() {
 			}
 		}
 		for sidecarId, at := range fetchedAt {
-			if self.settings.BindingRefreshInterval <= now.Sub(at) && !slices.Contains(wanted, sidecarId) {
+			if api != nil && self.settings.BindingRefreshInterval <= now.Sub(at) && !slices.Contains(wanted, sidecarId) {
 				wanted = append(wanted, sidecarId)
 			}
 		}
