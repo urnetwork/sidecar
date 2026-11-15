@@ -46,11 +46,12 @@ var (
 // The flags every folder offers and keeps.
 var mailImapFlags = []imap.Flag{imap.FlagSeen, imap.FlagFlagged, imap.FlagDeleted}
 
+// One connection's session: see the file header.
 type mailImapSession struct {
 	server *MailImapServer
 	conn   *imapserver.Conn
-	// held across each command and each of IDLE's polls, so two never run at once; a lock of its own, never stateLock,
-	// since it is held across a command's store calls
+	// held across each command, and by IDLE's poll while it reads the session and applies what it read, so neither
+	// meets the other halfway; a lock of its own, never stateLock, since a command holds it across its store calls
 	commandLock sync.Mutex
 	// the account LOGIN matched, and its store once built; nil before
 	account *MailImapAccount

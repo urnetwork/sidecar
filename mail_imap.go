@@ -259,6 +259,7 @@ type mailImapListener struct {
 	net.Listener
 }
 
+// The next connection D-MAIL-11 allows, as go-imap is to see it.
 func (self *mailImapListener) Accept() (net.Conn, error) {
 	for {
 		conn, err := self.Listener.Accept()
