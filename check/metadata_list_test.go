@@ -389,6 +389,33 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "is issued or registered; team settings\n",
 		list:     "is issued or registered; team settings; the team's SCIM bearer's SHA-256, while SCIM is on\n",
 	},
+	{
+		// QD-830's list version, after v21's
+		question: "team-m6-08-device-grant-row",
+		block:    "# metadata_list.yml v21;",
+		list:     "# metadata_list.yml v22;",
+	},
+	{
+		// QD-830: v22's line, after v21's
+		question: "team-m6-08-device-grant-row",
+		block:    "# the team's SCIM bearer, network_team.scim_token_sha256, which api keeps while SCIM is on.\n",
+		list: "# the team's SCIM bearer, network_team.scim_token_sha256, which api keeps while SCIM is on.\n" +
+			"# v22, updated 2026-11-15 for the owner's answer QD-830 (team-m6-08-device-grant-row), adds to api-11 the device\n" +
+			"# authorizations api keeps in Redis, {oauthdev_<device_code_sha256>} and {oauthuser_<user_code>}, 10 min, taken once.\n",
+	},
+	{
+		// QD-830: api-11's store names the two Redis families where RFC 8628's device authorizations wait, so the
+		// guard reads them as this row's
+		question: "team-m6-08-device-grant-row",
+		block:    "auth_code (api_key_id), admin_token_use; Redis {dpop_<client_id>} (proof jti); api's service log\n",
+		list:     "auth_code (api_key_id), admin_token_use; Redis {dpop_<client_id>} (proof jti), {oauthdev_<device_code_sha256>} and {oauthuser_<user_code>} (device authorizations); api's service log\n",
+	},
+	{
+		// QD-830: api-11's sees gains the device authorizations in progress, in the owner's words
+		question: "team-m6-08-device-grant-row",
+		block:    "edge logins for members audiences (member, network, published origin, time, nonce)\n",
+		list:     "edge logins for members audiences (member, network, published origin, time, nonce); device authorizations in progress (device code's SHA-256, user code, the ur-cli request with its DPoP key thumbprint and command digest, poll times, and once approved the user, network and sign-in time; 10 min, taken once)\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
