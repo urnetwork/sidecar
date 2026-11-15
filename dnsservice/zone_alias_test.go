@@ -277,7 +277,7 @@ func TestZoneDirectRowsAnswerOnlyPublicAddresses(t *testing.T) {
 // RRset cap of a family is held on the server's direct-MX writer.
 func TestValidateDirectMxAddresses(t *testing.T) {
 	public := []netip.Addr{netip.MustParseAddr("11.22.33.44"), netip.MustParseAddr("2a0f:ffff::7")}
-	if err := ValidateDirectMxAddresses(public); err != nil {
+	if err := ValidateDirectMxAddresses(public, nil); err != nil {
 		t.Errorf("%v: %v", public, err)
 	}
 	refused := [][]netip.Addr{
@@ -290,7 +290,7 @@ func TestValidateDirectMxAddresses(t *testing.T) {
 		{netip.MustParseAddr("11.22.33.44"), netip.MustParseAddr("::ffff:11.22.33.44")},
 	}
 	for _, addresses := range refused {
-		if err := ValidateDirectMxAddresses(addresses); !errors.Is(err, ErrDnsDirectMxRefused) {
+		if err := ValidateDirectMxAddresses(addresses, nil); !errors.Is(err, ErrDnsDirectMxRefused) {
 			t.Errorf("%v: %v", addresses, err)
 		}
 	}

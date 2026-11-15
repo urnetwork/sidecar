@@ -336,6 +336,10 @@ func defaultCheckSettings() *checkSettings {
 				since: "2026-11-15",
 				why:   "§12.7's A rules refuse documentation space, so a user's or a direct MX's answered A record needs a routable address",
 			},
+			"dnsservice/zone_scope_test.go 11.22.33.44": {
+				since: "2026-11-15",
+				why:   "§12.7's A rules refuse documentation space, so a user's answered A record under a Team scope needs a routable address",
+			},
 			"dnsservice/zone_alias_test.go 2a0f:ffff::7": {
 				since: "2026-11-15",
 				why:   "§12.7's A rules refuse documentation space, so a direct MX's accepted AAAA address needs a routable one",
