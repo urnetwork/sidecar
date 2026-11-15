@@ -188,9 +188,9 @@ func (self *AdmissionNet) ForkedReader(rowsOnly bool) *sidecar.ConfigLog {
 	var log *sidecar.ConfigLog
 	var err error
 	if rowsOnly {
-		log, err = sidecar.RestoreConfigLogRowsOnly(admissionLogSettings(), retained, self.rowsOnlySource(), nil)
+		log, err = sidecar.RestoreConfigLogRowsOnly(self.logSettings(), retained, self.rowsOnlySource(), nil)
 	} else {
-		log, err = sidecar.RestoreConfigLog(admissionLogSettings(), retained, admissionHeadSource{net: self})
+		log, err = sidecar.RestoreConfigLog(self.logSettings(), retained, admissionHeadSource{net: self})
 	}
 	if err != nil {
 		self.t.Fatalf("a reader restored at base %d: %v", base, err)
@@ -241,7 +241,7 @@ func (self *AdmissionNet) followerOf(projection sidecar.ConfigProjectionReader) 
 	self.t.Helper()
 	clientSettings := sidecar.DefaultConfigClientSettings()
 	clientSettings.Log = sidecar.NewNoopLogger()
-	clientSettings.LogSettings = admissionLogSettings()
+	clientSettings.LogSettings = self.logSettings()
 	client, err := sidecar.NewConfigClient(self.ctx, &sidecar.ConfigClientArgs{
 		NetworkId:    self.networkId,
 		GenesisChain: self.genesisChain,
@@ -409,6 +409,11 @@ func (self *AdmissionNet) PresenceKeyRegister(device *AdmissionDevice, key *Fixt
 // The config repo's id, the Genesis's.
 func (self *AdmissionNet) ConfigRepoId() sidecar.Id {
 	return self.configRepoId
+}
+
+// A_0, SHA-256 of the network's Signed Genesis, which an invite carries as its anchor (§7.5).
+func (self *AdmissionNet) GenesisChain() [sha256.Size]byte {
+	return self.genesisChain
 }
 
 // Whether holders hold a sidecar under one of kinds.
