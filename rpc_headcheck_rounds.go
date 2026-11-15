@@ -71,8 +71,9 @@ func headCheckRoundPicks(candidates []HeadCheckCandidate, peers HeadCheckPeerSta
 }
 
 // headCheckRoundPicks, with firstOwn, an own candidate counted first among the own picks when it stands:
-// an app host's first-choice search indexer in the foreground (D-SDK-27), the other picks staying
-// random.
+// the first of the search indexers an app host keeps warm in the foreground, its first-choice own one
+// (D-SDK-27; MarkSearchPeers), the other picks staying random. One that is not an own candidate, as
+// another member's indexer named alone is, moves nothing.
 func headCheckRoundPicksWith(candidates []HeadCheckCandidate, peers HeadCheckPeerState, selfId Id, count int, otherCount int, random func(n int) int, firstOwn *Id) []Id {
 	shuffle := func(ids []Id) {
 		for i := len(ids) - 1; 0 < i; i -= 1 {
@@ -173,7 +174,7 @@ func (self *headCheckTransport) round(ctx context.Context) {
 	self.runActs(ctx, step.acts)
 	self.prune()
 	self.pruneWakes()
-	// in the foreground, the first-choice search indexer counts among the own picks (D-SDK-27)
+	// in the foreground, the first warm search indexer counts among the own picks (D-SDK-27)
 	var firstOwn *Id
 	if peerId, ok := self.subprotocol.foregroundSearchPeer(); ok {
 		if peer, ok := self.subprotocol.PeerIdentity(Id(peerId)); ok {
