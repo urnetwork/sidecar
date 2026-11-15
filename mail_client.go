@@ -152,8 +152,12 @@ type MailClientStatus struct {
 type MailClientArgs struct {
 	NetworkId Id
 	SidecarId Id
-	// The mail component's sealed directory: whether mail is on, and the receiver's TLSA times and spool.
+	// The mail component's sealed directory: whether mail is on, the receiver's TLSA times and spool, and IMAP's
+	// UIDs.
 	Store SidecarStore
+	// The mail component's keychain namespace: the local credential's verifier (mail_local_credential.go). Nil leaves
+	// IMAP and submission with no credential to match.
+	Secrets SidecarSecrets
 	// Nil takes DefaultMailSettings.
 	Settings *MailSettings
 	// Nil is real time.
@@ -167,11 +171,14 @@ type MailClient struct {
 	networkId Id
 	sidecarId Id
 	store     SidecarStore
+	secrets   SidecarSecrets
 	settings  *MailSettings
 	clock     Clock
 	log       Logger
 	// the Sidecar the component binds from, nil for a client a host binds itself
 	sidecar *Sidecar
+	// rises at each message this device's ingest writes: IDLE's hint (mail_imap.go)
+	imapHints *MonitorValue[uint64]
 
 	stateLock sync.Mutex
 	binding   *MailBinding
@@ -182,6 +189,8 @@ type MailClient struct {
 	config       *MailConfig
 	configRepoId Id
 	views        map[Id]*MailView
+	// the mailbox's store as IMAP sees it, by mailbox, built at first use over the binding (mail_imap_store.go)
+	imapStores map[Id]*MailImapStore
 	// whether mail is on: this device's enable, kept in the store, or the network's status as last read
 	enabledLoaded  bool
 	enabledLocally bool
@@ -214,14 +223,17 @@ func NewMailClient(args *MailClientArgs) (*MailClient, error) {
 		log = NewNoopLogger()
 	}
 	return &MailClient{
-		networkId: args.NetworkId,
-		sidecarId: args.SidecarId,
-		store:     args.Store,
-		settings:  settings,
-		clock:     clockOrReal(args.Clock),
-		log:       log,
-		views:     map[Id]*MailView{},
-		changed:   make(chan struct{}),
+		networkId:  args.NetworkId,
+		sidecarId:  args.SidecarId,
+		store:      args.Store,
+		secrets:    args.Secrets,
+		settings:   settings,
+		clock:      clockOrReal(args.Clock),
+		log:        log,
+		imapHints:  NewMonitorValue(uint64(0)),
+		views:      map[Id]*MailView{},
+		imapStores: map[Id]*MailImapStore{},
+		changed:    make(chan struct{}),
 	}, nil
 }
 
@@ -253,6 +265,7 @@ func (self *Sidecar) MailWith(settings *MailSettings) (*MailClient, error) {
 		NetworkId: *networkId,
 		SidecarId: identity.SidecarId,
 		Store:     store,
+		Secrets:   self.instance.secrets(*networkId, mailComponentName),
 		Settings:  settings,
 		Clock:     self.settings.ClockOrReal(),
 		Log:       self.log,
@@ -289,6 +302,7 @@ func (self *MailClient) Bind(binding *MailBinding) {
 		self.config = nil
 		self.configRepoId = Id{}
 		self.views = map[Id]*MailView{}
+		self.imapStores = map[Id]*MailImapStore{}
 		self.notifyWithLock()
 	}()
 	if closeConfig != nil {
@@ -740,6 +754,7 @@ func (self *MailClient) closeParts() {
 		self.config = nil
 		self.repos = nil
 		self.views = map[Id]*MailView{}
+		self.imapStores = map[Id]*MailImapStore{}
 		self.notifyWithLock()
 		return config
 	}()

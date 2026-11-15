@@ -421,3 +421,45 @@ func (self *MailImapStore) PurgeMail(ctx context.Context, repoId Id, messageIds 
 func (self *MailImapStore) Revision() (uint64, chan struct{}) {
 	return self.revision.Get()
 }
+
+// The member's mailbox as IMAP sees it, built at its first use over the binding and kept until the binding changes:
+// ErrMailUnbound or ErrMailNoMailbox while there is none to read.
+func (self *MailClient) ImapStore() (*MailImapStore, error) {
+	mailboxId, err := self.mailboxId()
+	if err != nil {
+		return nil, err
+	}
+	_, parts, err := self.bound()
+	if err != nil {
+		return nil, err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if store := self.imapStores[mailboxId]; store != nil {
+		return store, nil
+	}
+	store, err := NewMailImapStore(&MailImapStoreArgs{
+		MailboxId: mailboxId,
+		Mailbox:   parts.store(mailboxId),
+		Groups: func(ctx context.Context, repoId Id) (mailStore, error) {
+			return parts.store(repoId), nil
+		},
+		Hlc:           NewMailHlc(self.clock),
+		SidecarId:     self.sidecarId,
+		State:         self.store,
+		Clock:         self.clock,
+		StoreSettings: self.settings.Store,
+		Settings:      self.settings.Imap,
+	})
+	if err != nil {
+		return nil, err
+	}
+	self.imapStores[mailboxId] = store
+	return store, nil
+}
+
+// IDLE's hint: a revision that rises at each message this device's ingest writes, and a channel that closes at the
+// next.
+func (self *MailClient) ImapHints() (uint64, chan struct{}) {
+	return self.imapHints.Get()
+}
