@@ -416,12 +416,13 @@ func (self *DirectoryErasureRunner) check(auth DirectoryAuthView, request *Direc
 	return directoryErasureCheckWaits
 }
 
-// The live entries a request erases: each announce entry for the repo's item below the marker's version, and each
-// run's announce entry that names the repo.
+// The entries with a key left that a request erases: each announce entry for the repo's item below the marker's
+// version, and each run's announce entry that names the repo. An archived copy still names the repo, so it is among
+// them.
 func (self *DirectoryErasureRunner) copiesNaming(request *DirectoryErasureRequestView) []Id {
 	entryIds := []Id{}
 	for _, entry := range self.client.entriesOfKinds(RecordKindAnnounce) {
-		if entry.State != RecordEntryLive || entry.Body == nil || entry.BodyInvalid {
+		if (entry.State != RecordEntryLive && entry.State != RecordEntryArchived) || entry.Body == nil || entry.BodyInvalid {
 			continue
 		}
 		item, err := DirectoryDecodeAnnouncement(entry.Body)
