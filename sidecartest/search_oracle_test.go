@@ -27,7 +27,9 @@ import (
 )
 
 // The files written apart from the index, which the import check reads.
-var searchOracleFiles = []string{"search_oracle.go", "search_oracle_normalize.go", "search_oracle_extract.go", "search_corpus.go"}
+var searchOracleFiles = []string{
+	"search_oracle.go", "search_oracle_normalize.go", "search_oracle_extract.go", "search_oracle_entities.go", "search_corpus.go",
+}
 
 // One repo of the hand corpus.
 type searchHandRepo struct {
@@ -598,7 +600,7 @@ func TestSearchOracleExtractsHtmlAsPublished(t *testing.T) {
 		{in: "<BR/>x<Div>y", want: " x y"},
 	}
 	for _, c := range cases {
-		if got := searchOracleStripHtml(c.in); got != c.want {
+		if got := string(searchOracleHtmlText([]byte(c.in))); got != c.want {
 			t.Errorf("strip(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
@@ -616,13 +618,13 @@ func TestSearchOracleDecodesHeaders(t *testing.T) {
 		{in: "=?windows-1252?q?=80?=", want: "€"},
 	}
 	for _, c := range cases {
-		if got := searchOracleDecodeWords(c.in); got != c.want {
+		if got := string(searchOracleWords([]byte(c.in))); got != c.want {
 			t.Errorf("decode(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	mediaType, params := searchOracleParseParams("attachment; filename*0*=utf-8''r%C3%A9; filename*1=\"sum.pdf\"; name=\"a;b\"")
-	if mediaType != "attachment" || params["filename"] != "résum.pdf" || params["name"] != "a;b" {
-		t.Errorf("parameters = %q %q", mediaType, params)
+	params := searchOracleParseParams([]byte("attachment; filename*0*=utf-8''r%C3%A9; filename*1=\"sum.pdf\"; name=\"a;b\""), DefaultSearchOracleExtractSettings())
+	if string(params.value) != "attachment" || string(params.param("filename")) != "résum.pdf" || string(params.param("name")) != "a;b" {
+		t.Errorf("parameters = %q %q %q", params.value, params.param("filename"), params.param("name"))
 	}
 }
 
@@ -639,11 +641,11 @@ func TestSearchOracleSniffsFiles(t *testing.T) {
 		{in: append([]byte{0xFE, 0xFF}, 0, 'h', 0, 'i'), text: true},
 	}
 	for i, c := range cases {
-		if _, text := searchOracleSniff(c.in); text != c.text {
+		if _, text := searchOracleSniff(c.in, DefaultSearchOracleExtractSettings()); text != c.text {
 			t.Errorf("case %d: text %v, want %v", i, text, c.text)
 		}
 	}
-	if documents := searchOracleFileDocuments("big.txt", bytes.Repeat([]byte("abcdefgh\n"), 300000)); len(documents) != 3 {
+	if documents := searchOracleFileDocuments("big.txt", bytes.Repeat([]byte("abcdefgh\n"), 300000), DefaultSearchOracleExtractSettings()); len(documents) != 3 {
 		t.Errorf("a 2.6 MiB file is %d documents, want 3", len(documents))
 	}
 }

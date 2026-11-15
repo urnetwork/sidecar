@@ -11,7 +11,7 @@
 // back, and the T2 adapter that reads evs's stores into it is EVS1's and EVS2's to add. The doc_keys
 // are the format's, from each repo's own K_ref, so a DocumentKey names the document the index names.
 //
-// The oracle's readings of what §11.14 and §16.10 leave open, beside those in search_oracle_extract.go:
+// The oracle's readings of what §11.14 and §16.10 leave open, beside extractor 1's rules in search_oracle_extract.go:
 //   - a term is matched within one document, one chunk with its 256 B overlap
 //     (plan-SEARCH-small-readings#2);
 //   - words and "quoted phrases" split at whitespace outside quotes, and each is normalized by steps
@@ -442,6 +442,8 @@ func searchLedgerNewest(commits []*searchLedgerCommit) map[string]*searchLedgerR
 // The oracle over a ledger.
 type SearchOracle struct {
 	ledger *SearchLedger
+	// how extractor 1 reads each version's bytes
+	extractSettings *SearchOracleExtractSettings
 
 	stateLock sync.Mutex
 	// each path version's documents, by repo, ref, path and version
@@ -458,6 +460,7 @@ type searchOracleVersionKey struct {
 func NewSearchOracle(ledger *SearchLedger) *SearchOracle {
 	return &SearchOracle{
 		ledger:           ledger,
+		extractSettings:  DefaultSearchOracleExtractSettings(),
 		versionDocuments: map[searchOracleVersionKey][]*searchOracleDocument{},
 	}
 }
@@ -754,10 +757,10 @@ func (self *SearchOracle) documents(repo *SearchLedgerRepo, refId sidecar.Id, pa
 		documents = nil
 	case repo.Kind == protocol.RepoKind_REPO_KIND_MAILBOX:
 		if strings.HasPrefix(path, searchOracleMailboxPrefix) {
-			documents = searchOracleMailDocuments(path, content)
+			documents = searchOracleMailDocuments(path, content, self.extractSettings)
 		}
 	default:
-		documents = searchOracleFileDocuments(path, content)
+		documents = searchOracleFileDocuments(path, content, self.extractSettings)
 	}
 	kept := []*searchOracleDocument{}
 	for _, document := range documents {
