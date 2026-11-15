@@ -29,6 +29,11 @@
 //	           --token-file <path> --ephemeral`, then runs ur hook, in one command, since a harness runs an event's
 //	           hooks side by side and the enrollment comes before any other ur step (§16.9; QD-041). The file names a
 //	           path, never a key, and the seal holds it with the template's other inputs
+//	telemetry  with a telemetry pair named (HarnessInstallArgs.Telemetry; a user install alone, of a harness that
+//	           exports), the exporter's settings: Claude Code's env block and Codex's [otel] table, naming the
+//	           daemon's loopback listener and its bearer token (harness_telemetry.go; QD-822). The pair is written
+//	           beside the seals before any harness file, so the daemon can take the token by the time a harness
+//	           presents it, and the diff shown never prints the token
 //
 // The vault-synced global harness config is plan-MCP-harness-config-schema's: until a reader of the vault's
 // harness/config.json lands, the install takes local defaults and reads no vault (QD-116's interim).
@@ -122,7 +127,11 @@ type HarnessInstallArgs struct {
 	// The fail-closed form (see the file header): a Team's ServiceSettings.record_required from M6, and until a reader
 	// of it lands `ur install-harness --record-required`, a local flag. False writes the fail-open form, the default.
 	RecordRequired bool
-	Ingest         *sidecar.SidecarIngestSettings
+	// The instance's telemetry pair the exporter's settings name (harness_telemetry.go; QD-822): the one sealed under
+	// StateDirectory, or one the caller drew where none is. Nil writes no exporter settings. A user install's alone,
+	// of a harness HarnessExportsTelemetry names; any other is refused.
+	Telemetry *HarnessTelemetry
+	Ingest    *sidecar.SidecarIngestSettings
 }
 
 // `ur hook`'s flag on the fail-closed form's commands: exit 2 when the daemon cannot take the event.
@@ -145,6 +154,8 @@ type harnessTemplate struct {
 	cloudKeyFile string
 	// The fail-closed form (HarnessInstallArgs.RecordRequired).
 	recordRequired bool
+	// The telemetry pair the exporter's settings name, nil for none (HarnessInstallArgs.Telemetry).
+	telemetry *HarnessTelemetry
 }
 
 // The template of args, its outward tools the catalog's.
@@ -453,6 +464,11 @@ func PlanHarnessInstall(args *HarnessInstallArgs) (*HarnessInstallPlan, error) {
 		}
 		template.cloudKeyFile = args.CloudKeyFile
 	}
+	telemetry, err := checkHarnessTelemetry(args)
+	if err != nil {
+		return nil, err
+	}
+	template.telemetry = telemetry
 	plan := &HarnessInstallPlan{args: args, template: template}
 	for _, file := range adapter.files(args.Home, args.ProjectDirectory) {
 		filePlan, err := planHarnessFile(file, template, args.Ingest)
@@ -516,10 +532,16 @@ func planHarnessProjectFile(args *HarnessInstallArgs) (*HarnessFilePlan, error) 
 	return &HarnessFilePlan{Path: path, After: []byte(content), Mode: harnessFileMode(args.ProjectDirectory)}, nil
 }
 
-// Whether the plan changes anything: a file or the seal.
+// Whether the plan changes anything: a file, the seal, or the telemetry pair it names.
 func (self *HarnessInstallPlan) Changed() (bool, error) {
 	for _, file := range self.Files {
 		if file.Changed() {
+			return true, nil
+		}
+	}
+	if telemetry := self.template.telemetry; telemetry != nil {
+		sealed, err := ReadHarnessTelemetry(self.args.StateDirectory, self.args.Ingest.HarnessConfigByteCount)
+		if err != nil || !telemetry.equal(sealed) {
 			return true, nil
 		}
 	}
@@ -530,7 +552,17 @@ func (self *HarnessInstallPlan) Changed() (bool, error) {
 	return !self.Seal.equal(sealed), nil
 }
 
-// Every changed file's unified diff, with Ingest.HarnessDiffContextLineCount lines of context, its paths whole.
+// The telemetry pair the plan writes, nil for none.
+func (self *HarnessInstallPlan) Telemetry() *HarnessTelemetry {
+	return self.template.telemetry
+}
+
+// What the diff shows in the token's place: the token is a credential, and a diff goes to a terminal an agent may
+// read (I-7).
+const harnessTelemetryTokenShown = "<telemetry token>"
+
+// Every changed file's unified diff, with Ingest.HarnessDiffContextLineCount lines of context, its paths whole, the
+// telemetry token never printed.
 func (self *HarnessInstallPlan) Diff() string {
 	diff := strings.Builder{}
 	for _, file := range self.Files {
@@ -543,12 +575,29 @@ func (self *HarnessInstallPlan) Diff() string {
 		}
 		diff.WriteString(harnessUnifiedDiff(before, "b"+filepath.ToSlash(file.Path), file.Before, file.After, self.args.Ingest.HarnessDiffContextLineCount))
 	}
+	if telemetry := self.template.telemetry; telemetry != nil {
+		return strings.ReplaceAll(diff.String(), telemetry.Token, harnessTelemetryTokenShown)
+	}
 	return diff.String()
 }
 
-// Writes every changed file, each by a temporary file renamed over it, then the seal. A file the harness rewrote
-// since the plan is planned again from its new bytes, up to Ingest.HarnessInstallRetryCount times.
+// Writes the telemetry pair where it is new, every changed file, each by a temporary file renamed over it, then the
+// seal. A file the harness rewrote since the plan is planned again from its new bytes, up to
+// Ingest.HarnessInstallRetryCount times. A pair another install sealed since the plan stops the write before any file.
 func (self *HarnessInstallPlan) Write() error {
+	if telemetry := self.template.telemetry; telemetry != nil {
+		sealed, err := ReadHarnessTelemetry(self.args.StateDirectory, self.args.Ingest.HarnessConfigByteCount)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			if err := writeHarnessTelemetry(self.args.StateDirectory, telemetry); err != nil {
+				return fmt.Errorf("the telemetry pair: %w", err)
+			}
+		case err != nil:
+			return fmt.Errorf("the telemetry pair: %w", err)
+		case !telemetry.equal(sealed):
+			return errors.New("another install sealed a telemetry pair since this one was planned: run ur install-harness again")
+		}
+	}
 	for _, file := range self.Files {
 		if err := self.writeFile(file); err != nil {
 			return fmt.Errorf("%s: %w", file.Path, err)

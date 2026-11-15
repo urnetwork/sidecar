@@ -141,6 +141,13 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ModelCalls:              false,
 				TelemetryByteCount:      4 * 1024 * 1024,
 				ModelCallFieldByteCount: 128,
+				// the telemetry listener and its token (QD-822): the token's 32 bytes are the owner's, the rest are
+				// readings
+				TelemetryTokenByteCount:  32,
+				TelemetryRequestRate:     SidecarRate{Count: 4, Burst: 16, Interval: 1 * time.Second},
+				TelemetryRequestTimeout:  30 * time.Second,
+				TelemetryHeaderByteCount: 64 * 1024,
+				TelemetryShutdownTimeout: 5 * time.Second,
 			},
 		},
 		// §16.8

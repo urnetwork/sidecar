@@ -7,9 +7,11 @@
 //
 //	seal       one JSON file per install under <state>/harness/, the user's <harness>.json and a project's
 //	           <harness>.project.<hash of its directory>.json: the template's inputs (ur's path, the agent, the
-//	           instance, the outward tools, the directory), each file's path and the SHA-256 of ur's entries in it as
-//	           the template renders them, and config_sha256, RECORD.md's, SHA-256 over those in order. Local state,
-//	           never synced, never sent
+//	           instance, the outward tools, the directory, the telemetry port), each file's path and the SHA-256 of
+//	           ur's entries in it as the template renders them, and config_sha256, RECORD.md's, SHA-256 over those in
+//	           order. Local state, never synced, never sent. The telemetry pair itself is telemetry.json beside them
+//	           (harness_telemetry.go), which no seal copies: a seal naming a port renders its template from the pair
+//	           as it stands, so a pair drawn again, or gone, reads as changed
 //	file hash  ur's entries in one file, extracted and rendered as RFC 8785 canonical JSON (TOML read to the same
 //	           form), hashed with SHA-256: one rule for every file and no whole-file hash, so an edit elsewhere in a
 //	           file changes nothing (QD-103)
@@ -68,6 +70,9 @@ type HarnessSeal struct {
 	CloudKeyFile string `json:"cloud_key_file,omitempty"`
 	// The fail-closed form was installed (HarnessInstallArgs.RecordRequired).
 	RecordRequired bool `json:"record_required,omitempty"`
+	// The telemetry pair's port the exporter's settings name, 0 for an install that wrote none (QD-822). The token is
+	// the pair file's alone.
+	TelemetryPort int `json:"telemetry_port,omitempty"`
 	// In the install's order.
 	Files []*HarnessSealFile `json:"files"`
 	// SHA-256 over the files' hashes in order, hex: RECORD.md's config_sha256.
@@ -92,6 +97,9 @@ func newHarnessSeal(args *HarnessInstallArgs, template *harnessTemplate, adapter
 		OutwardTools:     slices.Clone(template.outwardTools),
 		CloudKeyFile:     template.cloudKeyFile,
 		RecordRequired:   template.recordRequired,
+	}
+	if template.telemetry != nil {
+		seal.TelemetryPort = template.telemetry.Port
 	}
 	if args.ProjectDirectory == "" {
 		seal.Home = args.Home
@@ -226,7 +234,10 @@ func (self *HarnessConfigHashes) Check(ctx context.Context, harness string, cwd 
 		}
 	}
 	if cwd != "" {
-		template := self.templateOf(seals[0])
+		template, err := self.templateOf(seals[0])
+		if err != nil {
+			return true, err
+		}
 		for _, file := range adapter.projectSettingsFiles(cwd) {
 			content, _, existed, err := harnessReadFile(file.path, self.args.Ingest)
 			if err != nil {
@@ -333,12 +344,23 @@ func harnessDirectoryHolds(directory string, path string) bool {
 	return path == directory || strings.HasPrefix(path, directory+string(filepath.Separator))
 }
 
-// The template a seal's inputs render.
-func (self *HarnessConfigHashes) templateOf(seal *HarnessSeal) *harnessTemplate {
+// The template a seal's inputs render, its telemetry pair the one under <state> as it stands: an error where the seal
+// names a port and that pair is gone, does not read, or names another port, which the check reads as changed.
+func (self *HarnessConfigHashes) templateOf(seal *HarnessSeal) (*harnessTemplate, error) {
 	template := newHarnessTemplate(seal.Harness, seal.UrPath, seal.Agent, seal.Instance, seal.OutwardTools, self.args.Ingest)
 	template.cloudKeyFile = seal.CloudKeyFile
 	template.recordRequired = seal.RecordRequired
-	return template
+	if seal.TelemetryPort != 0 {
+		telemetry, err := ReadHarnessTelemetry(self.args.StateDirectory, self.args.Ingest.HarnessConfigByteCount)
+		if err != nil {
+			return nil, fmt.Errorf("%w: the telemetry pair the install wrote does not read", ErrHarnessConfig)
+		}
+		if telemetry.Port != seal.TelemetryPort {
+			return nil, fmt.Errorf("%w: the telemetry pair was drawn again since the install", ErrHarnessConfig)
+		}
+		template.telemetry = telemetry
+	}
+	return template, nil
 }
 
 // Every seal under stateDirectory, each read up to byteCount bytes, sorted by its file's name: what `ur status`
@@ -355,7 +377,8 @@ func ReadHarnessSeals(stateDirectory string, byteCount int64) ([]*HarnessSeal, i
 	seals := []*HarnessSeal{}
 	unreadable := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		// the telemetry pair is beside the seals and is none of them
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == harnessTelemetryFileName {
 			continue
 		}
 		seal, err := readHarnessSeal(filepath.Join(directory, entry.Name()), byteCount)
@@ -390,7 +413,10 @@ func (self *HarnessConfigHashes) checkSeal(seal *HarnessSeal, adapter harnessIns
 			return true, nil
 		}
 	}
-	template := self.templateOf(seal)
+	template, err := self.templateOf(seal)
+	if err != nil {
+		return true, err
+	}
 	files := adapter.files(seal.Home, seal.ProjectDirectory)
 	if len(files) != len(seal.Files) {
 		return true, nil

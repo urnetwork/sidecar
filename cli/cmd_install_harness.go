@@ -15,18 +15,31 @@
 // record_required asks for (D-MCP-5; MCP-M6-04), the local flag that stands for it until a reader of
 // ServiceSettings.record_required lands: ur hook --required on every command, Claude Code's onFailure block and
 // Cursor's failClosed, and `ur status` names each harness installed so.
+//
+// While Ingest.ModelCalls is on (§16.18; M6's, off by default), a user install of Claude Code or Codex also writes the
+// exporter's settings for the daemon's telemetry listener (QD-822; mcp's harness_telemetry.go): the instance's
+// telemetry pair, Ingest.TelemetryTokenByteCount random bytes and a port the loopback interface has free, drawn here
+// at the first such install and sealed under <state>/harness/ by the write, then read back by every later one, so a
+// re-install changes nothing and every harness names one pair. Once written, a daemon already running is asked to
+// serve it (telemetry.reload, status_telemetry.go), and none is started for it. A project install takes no token,
+// since its files are committed, and Cursor documents no exporter setting, which the install says.
 
 package main
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/docopt/docopt-go"
 
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/mcp"
 )
 
@@ -50,6 +63,39 @@ var urHarnessExecutable = func() (string, error) {
 
 // The person's home, under which a user install's files go. A test replaces it.
 var urHarnessHome = os.UserHomeDir
+
+// A port the loopback interface has free now, for a telemetry pair drawn here. A test replaces it.
+var urHarnessTelemetryPort = func() (int, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port, nil
+}
+
+// The instance's telemetry pair for an install: the one sealed under stateDirectory, else a fresh one, which the
+// install's write seals. A pair that does not read is refused, naming the file, rather than drawn again over, since
+// every harness installed with it would then read as changed.
+func urHarnessTelemetry(ingest *sidecar.SidecarIngestSettings, stateDirectory string) (*mcp.HarnessTelemetry, error) {
+	sealed, err := mcp.ReadHarnessTelemetry(stateDirectory, ingest.HarnessConfigByteCount)
+	if err == nil {
+		return sealed, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("the telemetry pair %s does not read: remove it, then run ur install-harness for each harness again (%w)",
+			mcp.HarnessTelemetryPath(stateDirectory), err)
+	}
+	token := make([]byte, ingest.TelemetryTokenByteCount)
+	if _, err := rand.Read(token); err != nil {
+		return nil, err
+	}
+	port, err := urHarnessTelemetryPort()
+	if err != nil {
+		return nil, fmt.Errorf("no loopback port is free for the telemetry listener: %w", err)
+	}
+	return mcp.NewHarnessTelemetry(port, token), nil
+}
 
 func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	harness, _ := options.String("<harness>")
@@ -91,6 +137,18 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 			return err
 		}
 	}
+	// the exporter's settings (QD-822): a user install's, of a harness that exports, while model calls are captured
+	exporterNote := ""
+	if cli.ingest.ModelCalls && !project && slices.Contains(mcp.HarnessNames(), harness) {
+		if mcp.HarnessExportsTelemetry(harness) {
+			args.Telemetry, err = urHarnessTelemetry(cli.ingest, stateDirectory)
+			if err != nil {
+				return err
+			}
+		} else {
+			exporterNote = fmt.Sprintf("%s documents no OpenTelemetry exporter setting, so its model calls are not recorded\n", harness)
+		}
+	}
 	plan, err := mcp.PlanHarnessInstall(args)
 	if err != nil {
 		return err
@@ -101,6 +159,8 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 	}
 	if !changed {
 		cli.printf("ur's entries are installed in %s as they are: nothing to change\n", harness)
+		cli.printf("%s", exporterNote)
+		urInstallHarnessReload(ctx, cli, plan.Telemetry())
 		return nil
 	}
 	if diff := plan.Diff(); diff != "" {
@@ -118,5 +178,24 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 		return err
 	}
 	cli.printf("installed in %s; its config is sealed as %s\n", harness, plan.Seal.ConfigSha256)
+	cli.printf("%s", exporterNote)
+	urInstallHarnessReload(ctx, cli, plan.Telemetry())
 	return nil
+}
+
+// Asks a daemon already running to serve the sealed telemetry pair, and says what it serves; nothing for an install
+// with no pair. No daemon is started for it: the next one serves the pair from its start.
+func urInstallHarnessReload(ctx context.Context, cli *urCli, telemetry *mcp.HarnessTelemetry) {
+	if telemetry == nil {
+		return
+	}
+	status, err := urTelemetryReloadRunning(ctx, cli)
+	switch {
+	case err != nil:
+		cli.printf("its telemetry goes to 127.0.0.1:%d, which the daemon serves from its next start\n", telemetry.Port)
+	case status.Serving:
+		cli.printf("its telemetry goes to %s, which the daemon serves\n", status.Address)
+	default:
+		cli.printf("its telemetry goes to 127.0.0.1:%d, which the daemon does not serve: %s\n", telemetry.Port, status.Reason)
+	}
 }

@@ -10,13 +10,18 @@
 // midway goes on from the last committed push when the command is run again. --ref names a ref by its name (main when
 // none is given) and each path a file or a directory with everything below it.
 //
-// It covers the refs and paths named and says so, never the whole repo: evs cannot list a repo's refs or a ref's top
-// level yet (questions evs1-m2-01-ref-creation-fields and evs1-m2-24-root-directory-names), so with no path and no
-// unfinished job the daemon refuses rather than report a repo rekeyed that it could not walk. A git-mode ref, written
-// only through the local tier, and another sidecar's owned ref are skipped and named.
+// It covers the refs and paths named and says so, never the whole repo: evs cannot list a repo's refs (question
+// evs1-m2-01-ref-creation-fields), so a ref not named is not walked, and with no path each named ref is walked from
+// its top level. A git-mode ref is rekeyed as any other; another sidecar's owned ref is skipped and named.
+//
+// Under the repo's prefix write rules (DESIGN-DETAILS 8.2.10's report) a file this device may not write is left, and
+// the job says how many: a device the rule set names for those paths, which an admin's is, runs the job for them. A
+// job that left files is done on this device, and nothing here says the repo is at the generation. A rule set this
+// device cannot read yet stops the job, which resumes when the command is run again.
 //
 // A rekey writes ordinary pushes as this device, a writer's act, so it takes no confirmation on the terminal. Paths
-// and ref names are the person's own and go only between ur and its daemon on this device.
+// and ref names are the person's own and go only between ur and its daemon on this device; a left file's path is not
+// among what the daemon answers.
 
 package main
 
@@ -100,14 +105,16 @@ type urEvsRekeySkipped struct {
 // A job as the methods answer it: its scope, counts and positions, never a key.
 type urEvsRekeyReply struct {
 	// False for a status of a repo with no job.
-	Known      bool                 `json:"known"`
-	State      string               `json:"state,omitempty"`
-	Generation uint64               `json:"generation,omitempty"`
-	Refs       []string             `json:"refs,omitempty"`
-	Paths      []string             `json:"paths,omitempty"`
-	Rewritten  uint64               `json:"rewritten"`
-	Current    uint64               `json:"current"`
-	Absent     uint64               `json:"absent"`
+	Known      bool     `json:"known"`
+	State      string   `json:"state,omitempty"`
+	Generation uint64   `json:"generation,omitempty"`
+	Refs       []string `json:"refs,omitempty"`
+	Paths      []string `json:"paths,omitempty"`
+	Rewritten  uint64   `json:"rewritten"`
+	Current    uint64   `json:"current"`
+	Absent     uint64   `json:"absent"`
+	// Files the repo's prefix rules give another device to write, which keep their keys.
+	Left       uint64               `json:"left"`
 	Pushes     uint64               `json:"pushes"`
 	Skipped    []*urEvsRekeySkipped `json:"skipped,omitempty"`
 	StopReason string               `json:"stop_reason,omitempty"`
@@ -117,8 +124,8 @@ type urEvsRekeyReply struct {
 func urEvsRekeyReplyOf(progress *sidecar.GkmRekeyProgress) *urEvsRekeyReply {
 	reply := &urEvsRekeyReply{
 		Known: true, State: string(progress.State), Generation: progress.Generation, Paths: progress.Paths,
-		Rewritten: progress.RewrittenCount, Current: progress.CurrentCount, Absent: progress.AbsentCount, Pushes: progress.PushCount,
-		StopReason: progress.StopReason,
+		Rewritten: progress.RewrittenCount, Current: progress.CurrentCount, Absent: progress.AbsentCount, Left: progress.LeftCount,
+		Pushes: progress.PushCount, StopReason: progress.StopReason,
 	}
 	for _, refName := range progress.RefNames {
 		reply.Refs = append(reply.Refs, string(refName))
@@ -218,9 +225,14 @@ func runUrEvsRekey(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	return nil
 }
 
-// Prints a job: its state, its scope and its counts.
+// Prints a job: its state, its scope and its counts. A finished job that left files is done on this device only, and
+// is never printed as having brought the repo to the generation.
 func printUrEvsRekey(cli *urCli, repoId sidecar.Id, reply *urEvsRekeyReply) {
-	cli.printf("repo %s: rekey to generation %d, %s\n", repoId, reply.Generation, reply.State)
+	state := reply.State
+	if reply.State == string(sidecar.GkmRekeyStateDone) && 0 < reply.Left {
+		state = "done on this device"
+	}
+	cli.printf("repo %s: rekey to generation %d, %s\n", repoId, reply.Generation, state)
 	paths := "each ref from its top level"
 	if 0 < len(reply.Paths) {
 		paths = "paths " + strings.Join(reply.Paths, ", ")
@@ -228,6 +240,10 @@ func printUrEvsRekey(cli *urCli, repoId sidecar.Id, reply *urEvsRekeyReply) {
 	cli.printf("  scope: refs %s; %s\n", strings.Join(reply.Refs, ", "), paths)
 	cli.printf("  %d file(s) rewritten in %d push(es), %d already of the generation, %d gone before they were read\n",
 		reply.Rewritten, reply.Pushes, reply.Current, reply.Absent)
+	if 0 < reply.Left {
+		cli.printf("  %d file(s) left: the repo's prefix rules give this device no write to them, and they keep the keys they had\n", reply.Left)
+		cli.printf("  a device the rule set names for those paths, which an admin's is, runs the job for them\n")
+	}
 	for _, skipped := range reply.Skipped {
 		why := skipped.Reason
 		switch skipped.Reason {
@@ -245,6 +261,9 @@ func printUrEvsRekey(cli *urCli, repoId sidecar.Id, reply *urEvsRekeyReply) {
 		}
 		cli.printf("  run ur evs rekey %s again to go on from the last push that committed\n", repoId)
 	case string(sidecar.GkmRekeyStateDone):
+		if 0 < reply.Left {
+			cli.printf("  the repo is not at the generation until the files left are rekeyed\n")
+		}
 		cli.printf("  files outside this scope, and on a skipped ref, keep the keys they had\n")
 	}
 }
