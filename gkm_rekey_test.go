@@ -1063,7 +1063,8 @@ func TestEvsRekeyOnADeviceNamedForEveryPathLeavesNone(t *testing.T) {
 
 // A set this device holds pending, or one of a later release, gives the planner's call no verdict, so the job cannot
 // tell what to leave: it stops with that detail before anything is sent, its StopReason naming the code and the detail
-// and no path, and resumes as any stopped job once the device can read the set in force.
+// and no path, and resumes as any stopped job once the device can read the set in force. A refusal that names no path,
+// from a state that does not hold the repo, says nothing of the file either and stops the job the same way.
 func TestEvsRekeyStopsAtARuleSetItCannotRead(t *testing.T) {
 	test := newRekeyPrefixTest(t, "pending")
 	under := []string{"agents/build/a.txt", "agents/build/b.txt"}
@@ -1081,6 +1082,8 @@ func TestEvsRekeyStopsAtARuleSetItCannotRead(t *testing.T) {
 	}{
 		{engineRepo: "pending", detail: EvsPrefixDetailPending},
 		{engineRepo: "newer", detail: EvsPrefixDetailUpdate},
+		// a repo the engine's state does not hold: refused, with no path to name
+		{engineRepo: "not held", detail: EvsPrefixDetailRefused},
 	}
 	for _, c := range cases {
 		test.askIn(c.engineRepo)
