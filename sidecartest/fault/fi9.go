@@ -97,11 +97,15 @@ type GitPush struct {
 	Updates []*GitPushUpdate
 }
 
-// The pushes and exports a world records for FI-9, in order. Safe for concurrent use.
+// The pushes and exports a world records for FI-9, in order. Safe for concurrent use: a record never waits on a check,
+// and checks run one at a time.
 type GitLedger struct {
 	stateLock sync.Mutex
 	events    []*gitLedgerEvent
-	// FI(9)'s progress: the events before this one are checked, each push against the export after it
+
+	// held across a check, which reads exports from disk
+	checkLock sync.Mutex
+	// the events before this one are checked, each push against the export after it
 	checkedThrough int
 	// each export's parse, by event index
 	repositories map[int]*GitRepository
@@ -151,26 +155,31 @@ func CheckGitPushes(ledger *GitLedger, final bool) error {
 }
 
 func (self *GitLedger) check(final bool) error {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
+	self.checkLock.Lock()
+	defer self.checkLock.Unlock()
+	events := func() []*gitLedgerEvent {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return slices.Clone(self.events)
+	}()
 	errs := []error{}
-	for index := self.checkedThrough; index < len(self.events); index += 1 {
-		event := self.events[index]
+	for index := self.checkedThrough; index < len(events); index += 1 {
+		event := events[index]
 		if event.export == "" {
 			continue
 		}
-		repository, err := self.repositoryWithLock(index)
+		repository, err := self.repositoryWithLock(index, event.export)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("the export in %s: %w", event.export, err))
 			self.checkedThrough = index + 1
 			continue
 		}
-		errs = append(errs, self.checkExportWithLock(index, repository)...)
+		errs = append(errs, gitCheckExport(events, index, repository)...)
 		self.checkedThrough = index + 1
 	}
 	if final {
-		for index := self.checkedThrough; index < len(self.events); index += 1 {
-			push := self.events[index].push
+		for index := self.checkedThrough; index < len(events); index += 1 {
+			push := events[index].push
 			if push == nil {
 				continue
 			}
@@ -184,11 +193,12 @@ func (self *GitLedger) check(final bool) error {
 	return errors.Join(errs...)
 }
 
-func (self *GitLedger) repositoryWithLock(index int) (*GitRepository, error) {
+// The parse of the export at event index, under checkLock.
+func (self *GitLedger) repositoryWithLock(index int, dir string) (*GitRepository, error) {
 	if repository := self.repositories[index]; repository != nil {
 		return repository, nil
 	}
-	repository, err := OpenGitRepository(self.events[index].export)
+	repository, err := OpenGitRepository(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -198,10 +208,10 @@ func (self *GitLedger) repositoryWithLock(index int) (*GitRepository, error) {
 
 // The pushes since the export before exportIndex, held to the export at it; the newest acknowledged update of each
 // ref among every push before it must be the ref's tip.
-func (self *GitLedger) checkExportWithLock(exportIndex int, repository *GitRepository) []error {
+func gitCheckExport(events []*gitLedgerEvent, exportIndex int, repository *GitRepository) []error {
 	start := 0
 	for index := exportIndex - 1; 0 <= index; index -= 1 {
-		if self.events[index].export != "" {
+		if events[index].export != "" {
 			start = index + 1
 			break
 		}
@@ -211,7 +221,7 @@ func (self *GitLedger) checkExportWithLock(exportIndex int, repository *GitRepos
 	refUpdates := map[string][]*GitPushUpdate{}
 	refTips := map[string][]*GitPushUpdate{}
 	for index := 0; index < exportIndex; index += 1 {
-		if push := self.events[index].push; push != nil {
+		if push := events[index].push; push != nil {
 			for _, update := range push.Updates {
 				switch {
 				case update.Status == GitPushOk:
@@ -225,7 +235,7 @@ func (self *GitLedger) checkExportWithLock(exportIndex int, repository *GitRepos
 	}
 	errs := []error{}
 	for index := start; index < exportIndex; index += 1 {
-		push := self.events[index].push
+		push := events[index].push
 		if push == nil {
 			continue
 		}
