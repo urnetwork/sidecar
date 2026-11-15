@@ -221,6 +221,7 @@ type evsPrefixRepoKeys struct {
 	repoId Id
 }
 
+// The repo key of a generation, nil for one this device does not hold.
 func (self *evsPrefixRepoKeys) RepoKeyAt(generation uint64) *EvsRepoKey {
 	key, err := self.client.args.Gkm.RepoKey(self.ctx, self.repoId, generation)
 	if err != nil {
@@ -229,6 +230,7 @@ func (self *evsPrefixRepoKeys) RepoKeyAt(generation uint64) *EvsRepoKey {
 	return key
 }
 
+// K_path of an epoch, nil where this device holds no key of it.
 func (self *evsPrefixRepoKeys) PathKeyAt(epoch uint64) *EvsPathKey {
 	repoKey := self.RepoKeyAt(epoch)
 	if repoKey == nil {
@@ -241,6 +243,7 @@ func (self *evsPrefixRepoKeys) PathKeyAt(epoch uint64) *EvsPathKey {
 	return pathKey
 }
 
+// When a generation's key was made, which a set's margin counts from; false for one this device does not hold.
 func (self *evsPrefixRepoKeys) GenRotateTimeAt(generation uint64) (int64, bool) {
 	repoKey := self.RepoKeyAt(generation)
 	if repoKey == nil {

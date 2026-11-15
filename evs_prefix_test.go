@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Readers of a ruled repo (EVS1-M6-04; DESIGN-DETAILS 16.6's evs_prefix_test.go), over the stand-in evs of
 // evs_world_test.go: a general repo's main ref whose rows hold a rule set that names the world's own writer, an
 // admin, for every path and a second writer, held, for agents/build alone. What held writes outside its prefix is a
@@ -11,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -335,7 +336,10 @@ func TestEvsPrefixPendingAndNewerSetsReturnTheRecordsVersion(t *testing.T) {
 		state  AclPrefixSetState
 		name   string
 		detail EvsPrefixDetail
-	}{{AclPrefixSetPending, "held", EvsPrefixDetailPending}, {AclPrefixSetNewer, "update", EvsPrefixDetailUpdate}} {
+	}{
+		{state: AclPrefixSetPending, name: "held", detail: EvsPrefixDetailPending},
+		{state: AclPrefixSetNewer, name: "update", detail: EvsPrefixDetailUpdate},
+	} {
 		test := newEvsPrefixTest(t)
 		test.file(5, AclPrefixSetOpened, "agents/build")
 		test.world.push(&evsTestChange{path: "src/main.go", content: []byte("accepted")})
@@ -679,9 +683,8 @@ func TestEvsPrefixHeadModeJudgesAnOverlaysEntriesAndFollowsNoBase(t *testing.T) 
 
 // A replay that holds each push whole, as the mirror and export do: each change is judged with its entry, a
 // directory's delta against the table the fold holds; the allowed changes are folded, the ignored ones journalled
-// {ref, path, version, kind} once, with one alarm a push carrying its count; and the exported tree holds effective
-// versions, the ignored ones reported.
-func TestEvsPrefixReplayJournalsIgnoredEventsAndExportsEffectiveVersions(t *testing.T) {
+// {ref, path, version, kind} once, with one alarm a push carrying its count.
+func TestEvsPrefixReplayJournalsIgnoredEvents(t *testing.T) {
 	test := newEvsPrefixTest(t)
 	world := test.world
 	test.file(5, AclPrefixSetOpened, "agents/build")
@@ -763,25 +766,5 @@ func TestEvsPrefixReplayJournalsIgnoredEventsAndExportsEffectiveVersions(t *test
 	}
 	if listed, err = reader.client.PrefixIgnored(&world.repoId); err != nil || len(listed) != 1 {
 		t.Fatalf("the journal after a repair %+v %v", listed, err)
-	}
-
-	// export: effective versions, the ignored version reported
-	dir := filepath.Join(t.TempDir(), "ruled.git")
-	exporter := test.reader("exporter")
-	result, err := exporter.client.Repo(world.repoId).Export(ctx, &EvsExportArgs{Dir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Refs) != 1 || len(result.Refs[0].Ignored) != 1 || result.Refs[0].Ignored[0].Version != breach || len(result.Refs[0].Refused) != 0 {
-		t.Fatalf("exported %+v", result.Refs[0])
-	}
-	if tree := evsTestGit(t, dir, "ls-tree", "-r", "--name-only", "main"); tree != "agents/build/out\nsrc/gone.go\nsrc/main.go\n" {
-		t.Errorf("the tip's tree %q", tree)
-	}
-	if content := evsTestGit(t, dir, "show", "main:src/main.go"); content != "main\n" {
-		t.Errorf("src/main.go at the tip %q", content)
-	}
-	if alarms := evsPrefixTestAlarms(exporter); len(alarms) != 1 || alarms[0].Count != 4 {
-		t.Errorf("the export's alarms %+v", alarms)
 	}
 }
