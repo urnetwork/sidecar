@@ -1,8 +1,9 @@
 // ur admin's Team parts (TEAM-M6-08; D-TEAM-7): each command is one admin token's, by PKCE or with --device the device
 // grant, its method, path and body exactly the command run; ur-cli asks all for a Team command and auth_keys for v0's
 // key; ur admin members remove shows the plan, and on a yes the server's denial and then the MemberRevoke, which a no
-// never reaches, and which a member the server denied already still gets; and the act method is a Confirm one, so MCP
-// and unconfirmed calls never reach it.
+// never reaches, and which a member the server denied already still gets; the act method is a Confirm one, so MCP
+// and unconfirmed calls never reach it; ur admin idp add refuses a client secret before any consent; and an answer a
+// replay gave without its credential says how to make another.
 
 package main
 
@@ -223,5 +224,139 @@ func TestAdminMemberMethodsAreConfirmOnly(t *testing.T) {
 	}
 	if methods := urAdminMemberMethods(&testUrDaemonTarget{}); len(methods) != 0 {
 		t.Error("a target with no Sidecar serves the members methods")
+	}
+}
+
+// The IdP, domain, audit webhook and admin event parts: each is one token's command, its method, path and body
+// exactly the command run, under the all scope; --device takes the device grant.
+func TestAdminIdpDomainAndAuditCommandsAreOneTokensCommand(t *testing.T) {
+	webhookId := sidecar.NewId()
+	runs := installTestUrAdminRun(t, func(command *sidecar.AdminCommand) string {
+		switch command.Path {
+		case "/network/idp":
+			return `{"idp_id":"` + sidecar.NewId().String() + `"}`
+		case "/network/domain-add":
+			return `{"domain":{"domain":"corp.example","txt_name":"_urnetwork-challenge.corp.example","txt_value":"challenge-value","verified":false}}`
+		case "/network/domain-verify":
+			return `{"domain":{"domain":"corp.example","txt_name":"_urnetwork-challenge.corp.example","txt_value":"challenge-value","verified":true}}`
+		case "/network/domain-remove":
+			return `{"removed":true}`
+		case "/network/audit-webhook":
+			if strings.Contains(string(command.Body), `"url"`) {
+				return `{"webhook_id":"` + webhookId.String() + `","signing_key":"synthetic-signing-key","webhooks":[]}`
+			}
+			return `{"webhooks":[{"webhook_id":"` + webhookId.String() + `","url":"https://siem.example/hook","delivered_seq":7}]}`
+		case "/network/admin-events":
+			return `{"events":[{"seq":1,"event_time":"2026-11-15T09:00:00Z","actor_kind":"user","actor_id":"a","action":"domain.add","target_kind":"domain","result":"ok","chain_sha256":"00ff"}],"more":true}`
+		}
+		return `{}`
+	})
+	cli, stdout, _ := newTestUrCli("")
+	cases := []struct {
+		args   []string
+		method string
+		path   string
+		body   map[string]any
+		device bool
+	}{
+		{args: []string{"ur", "admin", "idp", "add", "--issuer=https://idp.example", "--client-id=synthetic-client"}, method: "POST", path: "/network/idp",
+			body: map[string]any{"issuer": "https://idp.example", "client_id": "synthetic-client", "client_auth": "private_key_jwt"}},
+		{args: []string{"ur", "admin", "domains", "add", "corp.example"}, method: "POST", path: "/network/domain-add", body: map[string]any{"domain": "corp.example"}},
+		{args: []string{"ur", "admin", "domains", "verify", "corp.example", "--device"}, method: "POST", path: "/network/domain-verify", body: map[string]any{"domain": "corp.example"}, device: true},
+		{args: []string{"ur", "admin", "domains", "remove", "corp.example"}, method: "POST", path: "/network/domain-remove", body: map[string]any{"domain": "corp.example"}},
+		{args: []string{"ur", "admin", "audit-webhook"}, method: "POST", path: "/network/audit-webhook", body: map[string]any{}},
+		{args: []string{"ur", "admin", "audit-webhook", "list"}, method: "POST", path: "/network/audit-webhook", body: map[string]any{}},
+		{args: []string{"ur", "admin", "audit-webhook", "add", "https://siem.example/hook"}, method: "POST", path: "/network/audit-webhook", body: map[string]any{"url": "https://siem.example/hook"}},
+		{args: []string{"ur", "admin", "audit-webhook", "remove", webhookId.String()}, method: "POST", path: "/network/audit-webhook", body: map[string]any{"remove_webhook_id": webhookId.String()}},
+		{args: []string{"ur", "admin", "events"}, method: "GET", path: "/network/admin-events"},
+	}
+	for _, c := range cases {
+		before := len(*runs)
+		if code := cli.main(context.Background(), c.args); code != urExitOk {
+			t.Errorf("%v: exit %d", c.args, code)
+			continue
+		}
+		if len(*runs) != before+1 {
+			t.Errorf("%v ran %d commands", c.args, len(*runs)-before)
+			continue
+		}
+		run := (*runs)[len(*runs)-1]
+		if run.command.Method != c.method || run.command.Path != c.path || run.device != c.device {
+			t.Errorf("%v ran %s %s (device %v)", c.args, run.command.Method, run.command.Path, run.device)
+		}
+		if c.body == nil && len(run.command.Body) != 0 {
+			t.Errorf("%v sent a body %s", c.args, run.command.Body)
+		}
+		if c.body != nil {
+			body := map[string]any{}
+			if err := json.Unmarshal(run.command.Body, &body); err != nil || len(body) != len(c.body) {
+				t.Errorf("%v sent %s", c.args, run.command.Body)
+			}
+			for key, value := range c.body {
+				if encoded, _ := json.Marshal(body[key]); string(encoded) != mustJson(t, value) {
+					t.Errorf("%v sent %s = %s", c.args, key, encoded)
+				}
+			}
+		}
+		if urcliCommandScope(run.command) != "all" {
+			t.Errorf("%v would ask %s", c.args, urcliCommandScope(run.command))
+		}
+	}
+	for _, want := range []string{
+		"publish TXT _urnetwork-challenge.corp.example with the value challenge-value",
+		"corp.example is verified",
+		"removed corp.example",
+		"https://siem.example/hook delivered through seq 7",
+		"its signing key, shown once, for the receiver alone: synthetic-signing-key",
+		"chain head 00ff at seq 1",
+		"more events follow",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("the output does not say %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+// ur admin idp add refuses a client_secret IdP before any consent, so its secret never reaches the authorization URL
+// or the consent page, and takes no secret on its command line at all.
+func TestAdminIdpAddRefusesAClientSecretBeforeAnyConsent(t *testing.T) {
+	runs := installTestUrAdminRun(t, func(command *sidecar.AdminCommand) string { return `{}` })
+	cli, _, stderr := newTestUrCli("")
+	if code := cli.main(context.Background(), []string{"ur", "admin", "idp", "add", "--issuer=https://idp.example", "--client-id=c", "--client-auth=client_secret"}); code == urExitOk || len(*runs) != 0 {
+		t.Fatalf("a client_secret IdP: exit %d, %d runs", code, len(*runs))
+	}
+	if !strings.Contains(stderr.String(), "from the console") {
+		t.Errorf("the refusal: %s", stderr.String())
+	}
+	if code := cli.main(context.Background(), []string{"ur", "admin", "idp", "add", "--issuer=https://idp.example", "--client-id=c", "--client-secret=synthetic"}); code == urExitOk || len(*runs) != 0 {
+		t.Fatalf("a secret on the command line: exit %d, %d runs", code, len(*runs))
+	}
+}
+
+// A replay's answer carries no invite bearer and no webhook signing key, which the server never keeps, and the part
+// says how to make another; a domain the server could not verify shows the record to publish and fails the run.
+func TestAdminAnswersWithoutTheirCredentialSayWhatToDo(t *testing.T) {
+	installTestUrAdminRun(t, func(command *sidecar.AdminCommand) string {
+		switch command.Path {
+		case "/network/member-invite":
+			return `{"invite_id":"` + sidecar.NewId().String() + `","expire_time":"2026-11-22T09:00:00Z"}`
+		case "/network/audit-webhook":
+			return `{"webhook_id":"` + sidecar.NewId().String() + `","webhooks":[]}`
+		case "/network/domain-verify":
+			return `{"domain":{"domain":"corp.example","txt_name":"_urnetwork-challenge.corp.example","txt_value":"challenge-value","verified":false},"error":{"message":"The TXT record was not found. DNS changes can take a while to appear."}}`
+		}
+		return `{}`
+	})
+	cli, stdout, _ := newTestUrCli("")
+	if code := cli.main(context.Background(), []string{"ur", "admin", "members", "invite", "new.person@example.com"}); code != urExitOk || !strings.Contains(stdout.String(), "invite the person again") {
+		t.Errorf("a replayed invite: exit %d: %s", code, stdout.String())
+	}
+	stdout.Reset()
+	if code := cli.main(context.Background(), []string{"ur", "admin", "audit-webhook", "add", "https://siem.example/hook"}); code != urExitOk || !strings.Contains(stdout.String(), "remove this webhook and add another") {
+		t.Errorf("a replayed webhook: exit %d: %s", code, stdout.String())
+	}
+	stdout.Reset()
+	if code := cli.main(context.Background(), []string{"ur", "admin", "domains", "verify", "corp.example"}); code == urExitOk || !strings.Contains(stdout.String(), "publish TXT _urnetwork-challenge.corp.example") {
+		t.Errorf("a domain not verified: exit %d: %s", code, stdout.String())
 	}
 }

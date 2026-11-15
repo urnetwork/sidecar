@@ -10,12 +10,9 @@
 //	          (FakeApi.ServeService), the origins a Net's Sidecar settings name, on the transport its api uses
 //	scopes    the exchange's scope source is §8's table (sidecar.AclExchangeScopes) at the gate's state of the
 //	          token's network, as TEAM-M2-15's projection source is api's
-//	window    from a network's Bootstrap until its base 1 lands (bootstrap.go), a bootstrap window answers in the gate's
-//	          place for that network: it honors the bootstrapping device alone, on the config repo alone, as base 1
-//	          will, its identity key the Genesis's and its pins the genesis state's. The config writer's side that signs
-//	          the first head's push before base 1 and sends it after (QD-081 #4) is not built, nor KF1's draft before
-//	          base 1, so the bootstrap sends both before base 1 lands, while no log exists for the gate to read. Every
-//	          request after base 1 is the real gate's
+//
+// Every request is the real gate's, a bootstrapping network's included: its first device reaches evs and gkm only once
+// base 1 has landed (bootstrap.go; QD-824), and before that the gate holds no log of it and answers nothing.
 //
 // The gate learns of a log's new entries when told (Sync): api writes no {acl_} hint here, and the cache polls
 // nothing. The engines are the Net's (AddEngine), closed with it; the cache closes at the test's end. Safe for
@@ -83,14 +80,8 @@ type Engines struct {
 	loads *sidecar.MonitorValue[uint64]
 	gkm   *gkmservice.GkmEngine
 	evs   *enginesEvsHost
-	// the engines' seams: each answers a bootstrap window's network by its window and every other by the gate
-	gkmState *enginesGkmAuthState
-	evsState *enginesEvsAuthState
-	evsViews *enginesEvsGateViews
 
 	stateLock sync.Mutex
-	// the networks in their bootstrap window, by id
-	windows map[sidecar.Id]*bootstrapWindow
 	// every request the exchange asked the scope source, in order
 	scopeRequests []*sidecartest.FakeApiScopeRequest
 }
@@ -112,7 +103,6 @@ func NewEngines(t testing.TB, net *sidecartest.Net, settings *EnginesSettings) *
 		api:      api,
 		settings: settings,
 		loads:    sidecar.NewMonitorValue(uint64(0)),
-		windows:  map[sidecar.Id]*bootstrapWindow{},
 	}
 	sidecartest.RegisterEvsTwins(net.Fakes().Redis)
 
@@ -139,18 +129,18 @@ func NewEngines(t testing.TB, net *sidecartest.Net, settings *EnginesSettings) *
 	place := *gkmSettings.Place
 	place.NotFoundTtl = 0
 	gkmSettings.Place = &place
-	self.gkmState = &enginesGkmAuthState{engines: self, real: gkmservice.NewAclGkmAuthState(self.cache, revocations, net.Clock())}
+	gkmState := gkmservice.NewAclGkmAuthState(self.cache, revocations, net.Clock())
 	gkmEngine, err := net.AddEngine("gkm", func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
-		return gkmservice.NewGkmEngine(ctx, host, gkmSettings, &gkmservice.GkmEngineDeps{AuthState: self.gkmState})
+		return gkmservice.NewGkmEngine(ctx, host, gkmSettings, &gkmservice.GkmEngineDeps{AuthState: gkmState})
 	})
 	if err != nil {
 		t.Fatalf("gkm: %v", err)
 	}
 	self.gkm = gkmEngine.(*gkmservice.GkmEngine)
-	self.evsState = &enginesEvsAuthState{engines: self, real: evsservice.NewAclEvsAuthState(self.cache, revocations)}
-	self.evsViews = &enginesEvsGateViews{engines: self, real: evsservice.NewAclGateViews(self.cache)}
+	evsState := evsservice.NewAclEvsAuthState(self.cache, revocations)
+	evsViews := evsservice.NewAclGateViews(self.cache)
 	evsEngine, err := net.AddEngine("evs", func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
-		return newEnginesEvsHost(ctx, host, net.Clock(), settings.ReceiptKeyAge, self.evsState, self.evsViews)
+		return newEnginesEvsHost(ctx, host, net.Clock(), settings.ReceiptKeyAge, evsState, evsViews)
 	})
 	if err != nil {
 		t.Fatalf("evs: %v", err)
@@ -254,33 +244,14 @@ func (self *Engines) ScopeRequests() []*sidecartest.FakeApiScopeRequest {
 	return append([]*sidecartest.FakeApiScopeRequest{}, self.scopeRequests...)
 }
 
-// The window of networkId while it bootstraps, nil once base 1 landed or for a network that never bootstrapped here.
-func (self *Engines) window(networkId sidecar.Id) *bootstrapWindow {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.windows[networkId]
-}
-
-// The window of a principal's network, nil for none.
-func (self *Engines) windowOf(principal *sidecar.Principal) *bootstrapWindow {
-	if principal == nil {
-		return nil
-	}
-	return self.window(sidecar.Id(principal.NetworkId))
-}
-
-// The exchange's scope source (the file header): §8's table at the gate's state of the token's network, or in a
-// bootstrap window the bootstrapping device's scopes on the config repo. A network the gate has not loaded is told to
-// it and answers a server error, which the sidecar asks again past.
+// The exchange's scope source (the file header): §8's table at the gate's state of the token's network. A network the
+// gate has not loaded is told to it and answers a server error, which the sidecar asks again past.
 func (self *Engines) exchangeScopes(ctx context.Context, request *sidecartest.FakeApiScopeRequest) (*sidecartest.FakeApiScopeGrant, error) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.scopeRequests = append(self.scopeRequests, request)
 	}()
-	if window := self.window(request.NetworkId); window != nil {
-		return window.scopes(request)
-	}
 	snapshot, status := self.cache.State(request.NetworkId)
 	if status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Config == nil {
 		self.cache.Changed(request.NetworkId)
@@ -315,232 +286,6 @@ func (self *Engines) exchangeScopes(ctx context.Context, request *sidecartest.Fa
 var enginesAudiences = map[string]sidecar.AclTokenAudience{
 	evsservice.EvsAudience: sidecar.AclTokenAudienceEvs,
 	gkmservice.GkmAudience: sidecar.AclTokenAudienceGkm,
-}
-
-// A network's bootstrap window (the file header): the bootstrapping device, the config repo the Genesis names, and
-// the genesis state, S(0).
-type bootstrapWindow struct {
-	networkId    sidecar.Id
-	sidecarId    sidecar.Id
-	memberId     sidecar.Id
-	configRepoId sidecar.Id
-	identityKey  []byte
-	genesisState *sidecar.ConfigState
-}
-
-// Whether principal is the bootstrapping device.
-func (self *bootstrapWindow) device(principal *sidecar.Principal) bool {
-	return principal != nil && principal.SidecarId != nil && sidecar.Id(*principal.SidecarId) == self.sidecarId
-}
-
-// The bootstrapping device's scopes on the config repo, every role it asks; any other scope, or another subject's, is
-// refused.
-func (self *bootstrapWindow) scopes(request *sidecartest.FakeApiScopeRequest) (*sidecartest.FakeApiScopeGrant, error) {
-	if request.SidecarId == nil || *request.SidecarId != self.sidecarId {
-		if 0 < len(request.Scopes) {
-			return nil, fmt.Errorf("%w: only the bootstrapping device takes scopes before base 1", sidecartest.ErrFakeApiInvalidScope)
-		}
-		return &sidecartest.FakeApiScopeGrant{}, nil
-	}
-	prefix := "repo:" + self.configRepoId.String() + ":"
-	for _, scope := range request.Scopes {
-		if len(scope) <= len(prefix) || scope[:len(prefix)] != prefix {
-			return nil, fmt.Errorf("%w: %s before base 1", sidecartest.ErrFakeApiInvalidScope, scope)
-		}
-	}
-	memberId := self.memberId
-	return &sidecartest.FakeApiScopeGrant{Scopes: request.Scopes, MemberId: &memberId}, nil
-}
-
-// A pin the window holds: the genesis state's own, or one off its chain.
-func (self *bootstrapWindow) onChain(pin *bridge.AuthPin) bool {
-	return self.genesisState.OnChain(pin)
-}
-
-// gkm's AuthState: the window's answers for a bootstrapping network, the real state's for every other.
-type enginesGkmAuthState struct {
-	engines *Engines
-	real    *gkmservice.AclGkmAuthState
-}
-
-var _ gkmservice.GkmAuthState = (*enginesGkmAuthState)(nil)
-
-// Allowed or Denied.
-func enginesGkmAnswer(allowed bool) gkmservice.GkmAuthAnswer {
-	if allowed {
-		return gkmservice.GkmAuthAllowed
-	}
-	return gkmservice.GkmAuthDenied
-}
-
-func (self *enginesGkmAuthState) CheckRevocation(ctx context.Context, principal *sidecar.Principal) error {
-	if self.engines.windowOf(principal) != nil {
-		return nil
-	}
-	return self.real.CheckRevocation(ctx, principal)
-}
-
-func (self *enginesGkmAuthState) Sidecar(principal *sidecar.Principal, sidecarId sidecar.Id) (*gkmservice.GkmSidecarFacts, gkmservice.GkmAuthAnswer) {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.Sidecar(principal, sidecarId)
-	}
-	if sidecarId != window.sidecarId {
-		return nil, gkmservice.GkmAuthDenied
-	}
-	memberId := window.memberId
-	return &gkmservice.GkmSidecarFacts{IdentityPublicKey: window.identityKey, MemberDevice: true, MemberId: &memberId}, gkmservice.GkmAuthAllowed
-}
-
-func (self *enginesGkmAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.HonorScope(principal, repoId, right, now)
-	}
-	return enginesGkmAnswer(window.device(principal) && repoId == window.configRepoId)
-}
-
-func (self *enginesGkmAuthState) Reads(principal *sidecar.Principal, repoId sidecar.Id, sidecarId sidecar.Id, now time.Time) gkmservice.GkmAuthAnswer {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.Reads(principal, repoId, sidecarId, now)
-	}
-	return enginesGkmAnswer(repoId == window.configRepoId && sidecarId == window.sidecarId)
-}
-
-func (self *enginesGkmAuthState) PendingTargets(principal *sidecar.Principal, sidecarId sidecar.Id, now time.Time) ([]*gkmservice.GkmPendingTarget, gkmservice.GkmAuthAnswer) {
-	if self.engines.windowOf(principal) == nil {
-		return self.real.PendingTargets(principal, sidecarId, now)
-	}
-	return nil, gkmservice.GkmAuthAllowed
-}
-
-func (self *enginesGkmAuthState) RepoReaders(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.RepoReaders(principal, repoId, now)
-	}
-	if repoId != window.configRepoId {
-		return nil, gkmservice.GkmAuthDenied
-	}
-	return []sidecar.Id{window.sidecarId}, gkmservice.GkmAuthAllowed
-}
-
-func (self *enginesGkmAuthState) RepoWriters(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.RepoWriters(principal, repoId, now)
-	}
-	if repoId != window.configRepoId {
-		return nil, gkmservice.GkmAuthDenied
-	}
-	return []sidecar.Id{window.sidecarId}, gkmservice.GkmAuthAllowed
-}
-
-func (self *enginesGkmAuthState) CheckPin(principal *sidecar.Principal, pin *bridge.AuthPin) gkmservice.GkmAuthAnswer {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.CheckPin(principal, pin)
-	}
-	if 0 < pin.GetVersion() {
-		return gkmservice.GkmAuthUnknown
-	}
-	return enginesGkmAnswer(window.onChain(pin))
-}
-
-func (self *enginesGkmAuthState) DelegationReads(principal *sidecar.Principal, repoId sidecar.Id, delegationId []byte, now time.Time) gkmservice.GkmAuthAnswer {
-	if self.engines.windowOf(principal) == nil {
-		return self.real.DelegationReads(principal, repoId, delegationId, now)
-	}
-	return gkmservice.GkmAuthDenied
-}
-
-func (self *enginesGkmAuthState) DelegationKey(principal *sidecar.Principal, delegationId []byte) (*gkmservice.GkmDelegationKeyFacts, gkmservice.GkmAuthAnswer) {
-	if self.engines.windowOf(principal) == nil {
-		return self.real.DelegationKey(principal, delegationId)
-	}
-	return nil, gkmservice.GkmAuthDenied
-}
-
-func (self *enginesGkmAuthState) LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.LateHolders(principal, repoId, recipient, now)
-	}
-	if repoId != window.configRepoId {
-		return nil, gkmservice.GkmAuthDenied
-	}
-	return []sidecar.Id{window.sidecarId}, gkmservice.GkmAuthAllowed
-}
-
-func (self *enginesGkmAuthState) HoldersDropped(principal *sidecar.Principal, repoId sidecar.Id, pin *bridge.AuthPin, since time.Time, now time.Time) gkmservice.GkmAuthAnswer {
-	if self.engines.windowOf(principal) == nil {
-		return self.real.HoldersDropped(principal, repoId, pin, since, now)
-	}
-	return gkmservice.GkmAuthDenied
-}
-
-// evs's AuthState: the window's answers for a bootstrapping network, the real state's for every other.
-type enginesEvsAuthState struct {
-	engines *Engines
-	real    *evsservice.AclEvsAuthState
-}
-
-var _ evsservice.EvsAuthState = (*enginesEvsAuthState)(nil)
-
-// Allowed or Denied.
-func enginesEvsAnswer(allowed bool) evsservice.EvsAuthAnswer {
-	if allowed {
-		return evsservice.EvsAuthAllowed
-	}
-	return evsservice.EvsAuthDenied
-}
-
-func (self *enginesEvsAuthState) CheckRevocation(ctx context.Context, principal *sidecar.Principal) error {
-	if self.engines.windowOf(principal) != nil {
-		return nil
-	}
-	return self.real.CheckRevocation(ctx, principal)
-}
-
-func (self *enginesEvsAuthState) MatchBinding(principal *sidecar.Principal) evsservice.EvsAuthAnswer {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.MatchBinding(principal)
-	}
-	return enginesEvsAnswer(window.device(principal))
-}
-
-func (self *enginesEvsAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) evsservice.EvsAuthAnswer {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.HonorScope(principal, repoId, rights, now)
-	}
-	return enginesEvsAnswer(window.device(principal) && repoId == window.configRepoId)
-}
-
-func (self *enginesEvsAuthState) Repo(principal *sidecar.Principal, repoId sidecar.Id) (*evsservice.EvsRepoFacts, evsservice.EvsAuthAnswer) {
-	window := self.engines.windowOf(principal)
-	if window == nil {
-		return self.real.Repo(principal, repoId)
-	}
-	if repoId != window.configRepoId {
-		return nil, evsservice.EvsAuthDenied
-	}
-	return &evsservice.EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_CONFIG, NetworkId: window.networkId}, evsservice.EvsAuthAllowed
-}
-
-// evs's push views: a bootstrapping network's genesis state, the gate's for every other.
-type enginesEvsGateViews struct {
-	engines *Engines
-	real    evsservice.EvsGateViews
-}
-
-func (self *enginesEvsGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView, evsservice.EvsAuthAnswer) {
-	if window := self.engines.window(networkId); window != nil {
-		return window.genesisState, evsservice.EvsAuthAllowed
-	}
-	return self.real.View(networkId)
 }
 
 // evs's block as server/cli/evs builds it (evshost.NewHost), on the world's state: the engine with the segment route's
