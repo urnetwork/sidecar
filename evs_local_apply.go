@@ -175,7 +175,8 @@ type EvsGitRef struct {
 	StuckAt uint64
 	// Each span of versions a refusal stopped, [refused, the DELETE that ended it), 0 while it stands.
 	Stopped [][2]uint64
-	// The token paths the stopped versions changed, which the re-creating push must write or remove.
+	// The token paths the stopped versions changed, each with whether the last of those changes removed it, which the
+	// re-creating push must write or remove, save one last removed that its new tree lacks (QD-826).
 	Tainted []EvsTaintedPath
 	// The source a version waits on, nil for none, and the version it waits for: no alarm of its own (8.5).
 	WaitingSource  *Id
