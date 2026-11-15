@@ -1,21 +1,32 @@
-// The seal form of POST /evs/v1/repos/<id>/push (§11.8's seal row; EVS1-M2-13): {Signed EvsPush, the parts' places}
-// within 30 min of time_ms. Before step 4, one round reads the parts at their places and the head from the cluster,
-// since a git-mode push's own lease left the cached ETag stale:
+// The seal form of POST /evs/v1/repos/<id>/push (§11.8's seal row; EVS1-M2-13): {Signed EvsPush, the parts' places,
+// the slot bodies} within 30 min of time_ms. Before step 4, one round reads the parts at their places and the head
+// from the cluster, since a git-mode push's own lease left the cached ETag stale:
 //
 //	5a       on that head first, so a retry of a sealed push answers its version whatever became of its parts
 //	missing  a place that holds no record, or a record that is not this push's part, answers 409 PARTS_MISSING,
 //	         which records and refuses nothing: the client posts that part again and seals P again
 //	parts    each part's record is checked to be this statement's, and the parts together to parts_sha256,
-//	         changes_root and change_count, their slices joined into the one-part payload step 5 checks
-//	         (sidecar.EvsCheckSeal); every part's receipts join the view's, for 5h's age check
+//	         changes_root and change_count, their slices joined into the one-part payload step 5 checks, the
+//	         request's slot bodies its section 7 (sidecar.EvsCheckSeal); every part's receipts join the view's, for
+//	         5h's age check
 //	5        b to f and h over the joined payload against that head (check.go's seal stage), then 5g again for
 //	         every part against the same head (push.go's check): a changed path's newest version at the seal's head
 //	         is its base, or a statement after the version the part was checked at changed it, which refuses the seal
 //	         naming the paths; directory deltas merge but for §11.7's two-way check, and each directory's bound is
 //	         checked over the parts' joined delta
-//	6, 7     the seal record {statement, each part's place, changes_root and first token path} and the head If-Match,
-//	         which clears the lease: a git seal fails 412 only on a write after its read, and commits only by TIP,
-//	         so an expired lease is ignored and a stalled holder cannot commit over a newer tip
+//	6, 7     the slots from the request's bodies, then the seal record {statement, each part's place, changes_root and
+//	         first token path}, which keeps no body (push_commit.go's step 6), and the head If-Match, which clears the
+//	         lease: a git seal fails 412 only on a write after its read, and commits only by TIP, so an expired lease
+//	         is ignored and a stalled holder cannot commit over a newer tip
+//
+// The slot bodies (QD-819; question push-record-no-slot-bodies-part-slot-bodies). A push in parts carries its new
+// slots' bodies, payload section 7, whole in its seal request, outside every hash, and in none of its parts, as a
+// one-part push carries them in its payload (QD-806): the part route refuses a part holding one as INVALID, so no part
+// record evs stores, evacuates, packs or serves, and no mirror's copy, holds a key an ERASE may destroy. The seal's
+// checks hold the bodies to the statement's new slots, one each, within the format's SealSlotBodiesMaxByteCount, and
+// refuse a seal whose bodies do not match as INVALID, as a one-part push's are refused. A retry of the seal carries
+// them again: after a commit 5a answers its version, and before one, an attempt whose slots stand finds them its own
+// and goes on (push_commit.go's slot round).
 //
 // A failed seal leaves its parts to evacuation, which finds them dead through their statement (resolve.go); nothing
 // here deletes. A format-2 seal reads no part: only 5a and its FORMAT_UNSUPPORTED refusal run.
@@ -23,7 +34,9 @@
 // A re-seeded push in parts (reseed.go; QD-818) runs the same round with its parts as POST .../reseed carried them, in
 // place of reads at places it has not written yet: each an EVS_BATCH_RESEED record holding a part's body, the type the
 // round takes in that mode alone, as the push route's takes EVS_BATCH_PART alone. Their places are named once step 6
-// has written them, before the seal's record.
+// has written them, before the seal's record. Its parts carry no slot body and its call none, since its slots come
+// last by their own calls: the round checks it as its records keep it (sidecar.EvsCheckRecordSeal), format 1 alone, as
+// a re-seeded one-part push's payload is checked.
 
 package evsservice
 
@@ -40,6 +53,9 @@ import (
 type sealReads struct {
 	// In part order, one per part the statement counts.
 	places []*protocol.EvsPlace
+	// The request's slot bodies, the push's payload section 7 whole, which step 6 writes to their slots and no record
+	// keeps (QD-819); nil for a push with no new slot and for a re-seed, whose slots come last.
+	slotBodies []byte
 	// Set once the parts have been read and checked.
 	read bool
 	// The cluster's head read in the parts' round, which step 4 takes once in place of its own read.
@@ -153,13 +169,18 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	var payload *sidecar.EvsCheckedPayload
 	var checkedParts []*sidecar.EvsCheckedPart
 	var err error
-	if format2 {
-		payload, checkedParts, err = sidecar.EvsCheckSealFormat2(self.statement, partBytes, partStaged)
+	switch {
+	case self.reseed != nil:
+		// a re-seeded push in parts: no part carries a slot body, nor its call, its slots coming last (QD-819); held to
+		// format 1, as a re-seeded one-part push's payload is
+		payload, checkedParts, err = sidecar.EvsCheckRecordSeal(self.statement, partBytes)
+	case format2:
+		payload, checkedParts, err = sidecar.EvsCheckSealFormat2(self.statement, partBytes, partStaged, self.seal.slotBodies)
 		if err == nil {
 			self.needsFormat2 = self.needsFormat2 || sidecar.EvsPushNeedsFormat2(self.statement, payload)
 		}
-	} else {
-		payload, checkedParts, err = sidecar.EvsCheckSeal(self.statement, partBytes)
+	default:
+		payload, checkedParts, err = sidecar.EvsCheckSeal(self.statement, partBytes, self.seal.slotBodies)
 	}
 	if err != nil {
 		refusal := EvsCheckRefusalOfCodec(err)

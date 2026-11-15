@@ -16,6 +16,12 @@
 // and no prefix (QD-658). ParseEvsStatement is evs's and readers' half, holding a statement to format 1's shape before any check that needs the
 // head.
 //
+// A push in parts carries its new slots' bodies, payload section 7, whole in its seal request, outside every hash, and
+// in none of its parts (QD-819; question push-record-no-slot-bodies-part-slot-bodies): section 7 never spills, and
+// EvsBuiltPush.SlotBodies holds it for the seal. A push whose bodies pass the seal's bound
+// (EvsFormatSettings.SealSlotBodiesMaxByteCount) is ErrEvsSlotBodiesTooLarge before anything is signed, which the
+// writer splits into pushes each within it (evs_write_split.go). A one-part push keeps them in its payload (QD-806).
+//
 // Format 2 (EVS-FORMAT.md's format 2 chapter) parses through ParseEvsStatementFormat2 and builds through BuildFormat2,
 // which take flags 256 DROP and 512 CUT and fields 33 and 34: a DROP sets flag 256 alone, drop_sha256 over its body
 // and index_epoch 0, and its body and lists ride as payload sections 9 and 10 (evs_drop_payload.go).
@@ -45,6 +51,10 @@ const evsPushPurpose = "evs-push"
 
 // What a one-part push's payload passing 1 MiB tells the builder: build parts instead.
 var errEvsPayloadTooLarge = errors.New("evs payload past 1 MiB")
+
+// A push in parts whose slot bodies, section 7 whole, pass the bound its seal request carries them within (QD-819):
+// refused before anything is signed, and split by the writer into pushes each within it (evs_write_split.go).
+var ErrEvsSlotBodiesTooLarge = errors.New("evs: slot bodies past a seal's bound")
 
 // The flag bits format 1 writes, and format 2's, which it refuses as needing that format.
 const (
@@ -332,6 +342,10 @@ type EvsBuiltPush struct {
 	Payload    []byte
 	Parts      [][]byte
 	ChangeTree *EvsChangeTree
+	// A push in parts' slot bodies, payload section 7 whole (an item per new slot, in its new-objects item's order),
+	// which its seal request carries outside every hash and no part does (QD-819); nil for a one-part push, whose
+	// payload carries them, and for a push with no new slot.
+	SlotBodies []byte
 }
 
 // Builds pushes' statements and payloads and signs them through sign, within format's bounds.
@@ -647,10 +661,11 @@ type evsBuildPart struct {
 	sections  *EvsPayload
 }
 
-// The sections no change carries, in the order they spill into the parts' room.
+// The sections no change carries, in the order they spill into the parts' room. Section 7, the slot bodies, is not
+// among them: its seal request carries it whole (QD-819).
 var evsSpilledSections = []protocol.EvsPayloadSection{
 	protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA, protocol.EvsPayloadSection_EVS_PAYLOAD_NEW_OBJECTS,
-	protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES, protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST,
+	protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST,
 	protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS,
 	protocol.EvsPayloadSection_EVS_PAYLOAD_TAIL_MOVES, protocol.EvsPayloadSection_EVS_PAYLOAD_REUSE_LIST,
 	protocol.EvsPayloadSection_EVS_PAYLOAD_REF_NAME, protocol.EvsPayloadSection_EVS_PAYLOAD_OVERLAY_BASE,
@@ -663,12 +678,19 @@ var evsSpilledSections = []protocol.EvsPayloadSection{
 // stands, is every part changeless, its statement the root of zero parts with changes, a count of 0 and no prefix
 // (QD-658).
 //
+// The slot bodies, section 7, go to the seal request whole and to no part (QD-819): past the seal's bound the push is
+// ErrEvsSlotBodiesTooLarge, before anything is laid out or signed.
+//
 // A DROP lays out as DESIGN-DETAILS 10.2.5 has it: part 1 takes section 9, its body, whole, its run of changes cut to
 // leave it room (a first part with no change when the DROP has none); section 10's values fill each part's room
 // left in part order from part 1 on, a value never split; then parts with no change take at most
 // DropListPartValueCount values each until the lists end.
 func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte, format2 bool) (*EvsBuiltPush, error) {
 	format := self.format
+	slotBodies := common.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES)
+	if format.SealSlotBodiesMaxByteCount < len(slotBodies) {
+		return nil, fmt.Errorf("%w: %d bytes of slot bodies, past %d", ErrEvsSlotBodiesTooLarge, len(slotBodies), format.SealSlotBodiesMaxByteCount)
+	}
 	dropBody := common.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY)
 	// the room part 1 keeps for the body, whole (10.2.5's step 2)
 	dropReserve := 0
@@ -818,6 +840,9 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 	}
 
 	built := &EvsBuiltPush{ChangeTree: tree}
+	if 0 < len(slotBodies) {
+		built.SlotBodies = bytes.Clone(slotBodies)
+	}
 	partHashes := []byte{}
 	paths := make([]EvsTokenPath, 0, len(changes))
 	for i, part := range parts {

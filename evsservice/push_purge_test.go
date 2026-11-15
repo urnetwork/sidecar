@@ -223,7 +223,7 @@ func TestPushPurgeOfARenameAcrossPartsListsAtTheSeal(t *testing.T) {
 	if !listed[segment] {
 		t.Fatal("part 1's list left out the renamed file's segment, which a part does not subtract")
 	}
-	fixture.requireCommitted(fixture.post(token, &protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places}), 2)
+	fixture.requireCommitted(fixture.post(token, &protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places, SlotBodies: built.SlotBodies}), 2)
 	fixture.awaitStepEights()
 	sealList := fixture.recordList(fixture.windowEntryAt(2).Place)
 	if sealList == nil || sealList.GetReplaced() || sealList.GetMarked() {

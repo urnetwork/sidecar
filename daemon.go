@@ -107,6 +107,8 @@ type Daemon struct {
 	networkIdSidecars map[Id]*Sidecar
 	// the sockets and shares the daemon holds (daemon_socket.go), made on first use
 	sockets *DaemonSockets
+	// the IMAP server and its listener (mail_imap.go), made on first use: a *DaemonMailImap on the legs that build it
+	mailImap any
 	// the ring of the attached Sidecars' events, which the events method long-polls (daemon_events.go), made on first
 	// use
 	events *DaemonEvents

@@ -374,6 +374,13 @@ rows:
     targets:
       - {name: FuzzMailIndexSegment, package: ".", seeds: [testdata/fuzz/FuzzMailIndexSegment]}
 
+  - id: mail-imap
+    spec: "MAIL-M8-07's Tests line: FuzzMailImap, no panic and memory bounded over a session's bytes, logged in or not"
+    owner: MAIL-M8-07
+    milestone: M8
+    targets:
+      - {name: FuzzMailImap, package: "."}
+
   - id: mta-sts
     spec: "SMTP-M9-06's Tests line: the MTA-STS policy and TXT grammars"
     owner: SMTP-M9-06

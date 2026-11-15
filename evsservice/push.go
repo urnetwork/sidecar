@@ -16,8 +16,8 @@
 //	   5 (b-h) at most 8 times, then 429 BUSY; an unknown outcome rereads 3 times 200 ms apart (outcome.go)
 //	8  off the reply path: the push sequence and hints, usage, the head cache and the fold trigger (push_commit.go)
 //
-// The seal form of this route, {statement, part places}, runs the same steps over the parts' joined payload once
-// push_seal.go has read them; a part of a push (push_part.go) runs steps 4 and 5 (a-e, g, h) over its own entries
+// The seal form of this route, {statement, part places, slot bodies}, runs the same steps over the parts' joined
+// payload, the request's slot bodies its section 7 (QD-819), once push_seal.go has read them; a part of a push (push_part.go) runs steps 4 and 5 (a-e, g, h) over its own entries
 // and appends its record, and the git-mode seal lease is push_lease.go's.
 //
 // An attempt runs to its end once its request has arrived, whether or not its client is still there: the lb
@@ -287,16 +287,25 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 	request.NoteRefIds(attempt.refId)
 	switch {
 	case 0 < len(body.GetPartPlaces()):
-		// a seal: the parts' places, in part order, one per part the statement counts (push_seal.go)
+		// a seal: the parts' places, in part order, one per part the statement counts, and the push's slot bodies,
+		// which no part carries, within the format's bound (push_seal.go; QD-819)
 		if push.GetPartCount() == 0 || uint32(len(body.GetPartPlaces())) != push.GetPartCount() || len(body.GetPayload()) != 0 {
 			request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a seal whose places are not one per part").Reply(attempt.pushId))
 			return nil, false
 		}
-		attempt.seal = &sealReads{places: body.GetPartPlaces()}
+		if sidecar.DefaultEvsFormatSettings().SealSlotBodiesMaxByteCount < len(body.GetSlotBodies()) {
+			request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a seal's slot bodies past their bound").Reply(attempt.pushId))
+			return nil, false
+		}
+		attempt.seal = &sealReads{places: body.GetPartPlaces(), slotBodies: body.GetSlotBodies()}
 		request.Note("seal")
 	case 0 < push.GetPartCount():
 		// a push in parts is sealed by its parts' places, never posted whole
 		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a push in parts posted as one").Reply(attempt.pushId))
+		return nil, false
+	case 0 < len(body.GetSlotBodies()):
+		// a one-part push carries its slot bodies in its payload's section 7 (QD-806), never beside it
+		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "slot bodies beside a one-part push's payload").Reply(attempt.pushId))
 		return nil, false
 	}
 	switch {

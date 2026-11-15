@@ -118,6 +118,11 @@ type EvsSettings struct {
 	UploadConcurrency int
 	// Parts one push posts at once: 4 (§11.8's parts row). A phone sets 2.
 	PartConcurrency int
+	// The new slots' bodies, framed as payload section 7, past which WritePaths splits a write into pushes each
+	// within them (evs_write_split.go): the format's SealSlotBodiesMaxByteCount, 1 MiB, past which a push in parts'
+	// seal cannot carry them (QD-819). At most that bound; a write whose bodies pass a lower one splits whether or not
+	// it would go in parts.
+	PushSlotBodiesByteCount int
 	// How many times one push id's request, an upload or a lease goes again after a 429, a 503 or no answer, each one
 	// attempt at a time with the same bytes (§11.8's retry id row): 40, past which the statement's own 10 min ends it.
 	PushRetryCount int
@@ -272,6 +277,7 @@ func DefaultEvsSettings() *EvsSettings {
 		DiffMaxByteCount:         8 * 1024 * 1024,
 		UploadConcurrency:        4,
 		PartConcurrency:          4,
+		PushSlotBodiesByteCount:  DefaultEvsFormatSettings().SealSlotBodiesMaxByteCount,
 		PushRetryCount:           40,
 		PushRetryMaxWait:         60 * time.Second,
 		PushRebuildCount:         8,

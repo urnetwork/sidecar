@@ -9,7 +9,7 @@
 // and is strictly sorted by token path, changed_prefixes cover it, each listed section matches its statement hash,
 // and every item parses to what format 1 writes. What needs the head or the store (5a and 5c to 5h) is evs's. A push
 // in parts is checked part by part as each arrives (EvsCheckPart), and whole at its seal (EvsCheckSeal), which joins
-// the parts' slices into the one-part payload they spell.
+// the parts' slices, with the seal request's slot bodies as section 7, into the one-part payload they spell.
 //
 // An inline record travels only inside its entry version's kind-2 locator, as the locator's inline bytes, so
 // entry_sha256 covers it and a push carries it once (QD-735; question evs1-m2-01-inline-record-home). A kind-2
@@ -29,9 +29,14 @@
 // with the section emptied (EvsRecordPayload), so the slot object is the one stored copy of every key and a committed
 // ERASE leaves the keys it destroyed in no record a reader can fetch. No hash covers the section, so the record still
 // verifies. A push's checks (EvsCheckPayload and the rest) hold section 7 to the new slots, one body each; a stored
-// record's (EvsCheckRecordPayload, EvsCheckStoredPayload, EvsCheckStoredSeal) take it absent, and check one a record
-// still carries as a push's are checked. A push in parts carries its bodies inside its parts, which parts_sha256
-// covers, so their records keep them (question push-record-no-slot-bodies-part-slot-bodies).
+// record's (EvsCheckRecordPayload, EvsCheckStoredPayload) take it absent, and check one a record still carries as a
+// push's are checked. A push in parts carries its bodies whole in its seal request, outside every hash, and in none
+// of its parts (QD-819; question push-record-no-slot-bodies-part-slot-bodies): a part whose sections hold section 7 is
+// INVALID wherever it is read, as it arrives or as a record keeps it; a seal's checks (EvsCheckSeal,
+// EvsCheckSealFormat2) join the request's bodies as the payload's section 7, within the format's
+// SealSlotBodiesMaxByteCount, and hold them to the new slots as a one-part push's; and a sealed push read back from
+// its records (EvsCheckRecordSeal, EvsCheckStoredSeal) takes section 7 absent, so no stored, served or mirrored part
+// holds a key an ERASE destroyed.
 //
 // Format 2 (EVS-FORMAT.md's format 2 chapter) runs the same checks through EvsCheckPayloadFormat2, EvsCheckPartFormat2
 // and EvsCheckSealFormat2, which take what format 1 refuses as needing format 2: versioning 1 and 2, kind-5 and staged
@@ -577,14 +582,9 @@ func evsEntryVersionIsDirectory(entryBytes []byte) bool {
 // The sections past the change list, checked against the statement, into checked: sealed metadata, new objects and
 // their slot bodies, the erased list, tail moves, source paths (an item per change), the reuse list, and each entry
 // version's Merkle proof when the change list is not inline. partRoots gives each change's root and its tree's size
-// for the proofs: the statement's for one part, its part's for several.
-func checkEvsSections(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64)) error {
-	return checkEvsSectionsOf(statement, payload, checked, partRoots, false, false)
-}
-
-// The sections past the change list as checkEvsSections checks them, of either format: format 2 takes staged
+// for the proofs: the statement's for one part, its part's for several. Of either format: format 2 takes staged
 // new-objects items. A DROP's sections are the callers', through evsCheckDropSlices. stored reads them as a record
-// keeps them, whose section 7 may be absent beside new slots (QD-806), SlotBodies then nil.
+// keeps them, whose section 7 may be absent beside new slots (QD-806, QD-819), SlotBodies then nil.
 func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64), format2 bool, stored bool) error {
 	push := statement.Push
 	if len(payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS)) != 0 {
@@ -972,7 +972,8 @@ type EvsCheckedPart struct {
 
 // A part of statement's push as it arrives (§11.8's parts row): at most 1 MiB and 1,024 entry writes, of this push
 // and a part number it has, its changes non-empty and strictly sorted, each entry version hashing to its change,
-// changes_root over its changes, and its sections slice framed as a payload holding no section its fields carry.
+// changes_root over its changes, and its sections slice framed as a payload holding no section its fields carry and
+// no slot body, which the seal request carries (QD-819).
 func EvsCheckPart(statement *EvsStatement, partBytes []byte) (*EvsCheckedPart, error) {
 	return evsCheckPartOf(statement, partBytes, false)
 }
@@ -1000,7 +1001,7 @@ func EvsCheckPartFormat2(statement *EvsStatement, partBytes []byte, stagedBytes 
 }
 
 // A committed push's part as its batch record stores it, of either format, as EvsCheckStoredPayload reads a one-part
-// push's.
+// push's: a part holding a slot body is INVALID here too, since no part carries one (QD-819).
 func EvsCheckStoredPart(statement *EvsStatement, partBytes []byte) (*EvsCheckedPart, error) {
 	return evsCheckPartOf(statement, partBytes, true)
 }
@@ -1074,6 +1075,10 @@ func evsCheckPartOf(statement *EvsStatement, partBytes []byte, format2 bool) (*E
 	if len(sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_PART_HASHES)) != 0 {
 		return nil, fmt.Errorf("%w: part hashes inside a part", ErrEvsPushInvalid)
 	}
+	if len(sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES)) != 0 {
+		// the seal request carries them, so no part record keeps a key an ERASE may destroy (QD-819)
+		return nil, fmt.Errorf("%w: slot bodies inside a part, which its seal carries", ErrEvsPushInvalid)
+	}
 	checked.sections = sections
 	return checked, nil
 }
@@ -1091,39 +1096,58 @@ func (self *EvsCheckedPart) FirstTokenPath() EvsTokenPath {
 	return self.Changes[0].TokenPath
 }
 
-// §11.8's seal over every part of statement's push, in part order, as their records hold them: each part checks,
-// parts_sha256 binds them, their changes ascend strictly across parts, changes_root is over the parts' roots and
-// change_count their total, changed_prefixes cover every change, and the parts' slices joined in order are a one-part
-// payload whose sections match their hashes, each entry version's proof reaching its part's root.
-func EvsCheckSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
-	return evsCheckSealOf(statement, parts, nil, false)
+// §11.8's seal over every part of statement's push, in part order, as their records hold them, and slotBodies, the
+// seal request's section 7 whole (QD-819): each part checks, none holding a slot body, parts_sha256 binds them, their
+// changes ascend strictly across parts, changes_root is over the parts' roots and change_count their total,
+// changed_prefixes cover every change, and the parts' slices joined in order, slotBodies as section 7, are a one-part
+// payload whose sections match their hashes, each entry version's proof reaching its part's root. slotBodies are held
+// to the new slots as a one-part push's section 7 is, one body each, within the format's SealSlotBodiesMaxByteCount.
+func EvsCheckSeal(statement *EvsStatement, parts [][]byte, slotBodies []byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
+	return evsCheckSealOf(statement, parts, nil, slotBodies, false, false)
 }
 
 // EvsCheckSeal's checks over every part of a format-2 push and each part's staged bytes, in part order as their
-// records hold them: format 2's values taken, a DROP's sections checked over the parts' slices, and the staged
-// segments, joined in part order, matched to the joined new-objects list's kind-2 items, one each and in order.
-func EvsCheckSealFormat2(statement *EvsStatement, parts [][]byte, partStaged [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
+// records hold them, with the seal request's slotBodies: format 2's values taken, a DROP's sections checked over the
+// parts' slices, and the staged segments, joined in part order, matched to the joined new-objects list's kind-2
+// items, one each and in order.
+func EvsCheckSealFormat2(statement *EvsStatement, parts [][]byte, partStaged [][]byte, slotBodies []byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
 	if len(partStaged) != len(parts) {
 		return nil, nil, fmt.Errorf("%w: staged bytes for %d of %d parts", ErrEvsPushInvalid, len(partStaged), len(parts))
 	}
-	return evsCheckSealOf(statement, parts, partStaged, true)
+	return evsCheckSealOf(statement, parts, partStaged, slotBodies, true, false)
+}
+
+// A push in parts read back from its parts as their records keep them, held to format 1: EvsCheckSeal's checks with
+// section 7 taken absent and the payload's SlotBodies nil, since no part carries a slot body and the seal's record
+// keeps none (QD-819), as EvsCheckRecordPayload reads a one-part push's record. What a re-seed of a push in parts
+// checks, its slots coming last by their own calls.
+func EvsCheckRecordSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
+	return evsCheckSealOf(statement, parts, nil, nil, false, true)
 }
 
 // A committed push's seal over its parts as their records store them, of either format, as EvsCheckStoredPayload
 // reads a one-part push's: EvsCheckSealFormat2's checks without the staged bytes, which ride outside every hash and
 // outside packs and parcels, so a fold or a reader takes back what step 7 committed and judges none of format 2's
-// values (§11.6's format row). The joined section 7 is taken absent, as a one-part record's is (QD-806); parts today
-// still carry their bodies (question push-record-no-slot-bodies-part-slot-bodies), which are checked as at the seal.
+// values (§11.6's format row). Section 7 is taken absent and SlotBodies nil: the seal request carried the bodies, no
+// part does and no record keeps them (QD-806, QD-819), so a reader takes each key from a slot read alone.
 func EvsCheckStoredSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
-	return evsCheckSealOf(statement, parts, nil, true)
+	return evsCheckSealOf(statement, parts, nil, nil, true, true)
 }
 
 // A seal's checks, of either format; format 2 with no staged bytes is a stored seal's (EvsCheckStoredSeal), which
-// matches none.
-func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte, format2 bool) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
+// matches none. A record seal's (EvsCheckRecordSeal, EvsCheckStoredSeal) takes section 7 absent; any other's is
+// slotBodies, the seal request's.
+func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte, slotBodies []byte, format2 bool, record bool) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
 	push := statement.Push
 	if push.GetPartCount() == 0 || uint32(len(parts)) != push.GetPartCount() {
 		return nil, nil, fmt.Errorf("%w: %d parts for a count of %d", ErrEvsPushInvalid, len(parts), push.GetPartCount())
+	}
+	if record && len(slotBodies) != 0 {
+		return nil, nil, fmt.Errorf("%w: slot bodies beside a sealed push's records, which keep none", ErrEvsPushInvalid)
+	}
+	if DefaultEvsFormatSettings().SealSlotBodiesMaxByteCount < len(slotBodies) {
+		// on the received length, before any part is read (QD-819)
+		return nil, nil, fmt.Errorf("%w: slot bodies of %d bytes, past a seal's bound", ErrEvsPushInvalid, len(slotBodies))
 	}
 	stored := format2 && partStaged == nil
 	checkedParts := make([]*EvsCheckedPart, len(parts))
@@ -1201,6 +1225,8 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 		return nil, nil, fmt.Errorf("%w: changed_prefixes do not cover every change", ErrEvsPushInvalid)
 	}
 	joined.sections[protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA] = metadata
+	// section 7 is the seal request's, whole, since no part holds a slice of it (QD-819); a record seal's is absent
+	joined.sections[protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES] = slotBodies
 	partRoots := func(change int) ([]byte, uint64) {
 		part := checkedParts[changeParts[change]]
 		return part.Root[:], uint64(len(part.Changes))
@@ -1215,7 +1241,7 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 				return nil, nil, fmt.Errorf("%w: a DROP in parts whose body is not whole in part 1", ErrEvsPushInvalid)
 			}
 		}
-		if err := checkEvsSectionsOf(statement, joined, checked, partRoots, true, stored); err != nil {
+		if err := checkEvsSectionsOf(statement, joined, checked, partRoots, true, record); err != nil {
 			return nil, nil, err
 		}
 		var err error
@@ -1230,7 +1256,7 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 		}
 		return checked, checkedParts, nil
 	}
-	if err := checkEvsSections(statement, joined, checked, partRoots); err != nil {
+	if err := checkEvsSectionsOf(statement, joined, checked, partRoots, false, record); err != nil {
 		return nil, nil, err
 	}
 	return checked, checkedParts, nil

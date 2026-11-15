@@ -3,7 +3,8 @@
 // A push in parts (§11.8's parts, lease and seal rows; D-EVS-20): past 1 MiB or 1,024 entry writes the statement
 // signs part_count, parts_sha256 and changes_root, each part posts to .../push/<P>/<k> with the receipts of the
 // segments its entry versions name, at most PartConcurrency at once, and the seal posts the statement with the
-// parts' places, in part order, which evs answers as a one-part push. Git mode first takes the seal lease, after
+// parts' places, in part order, and the push's slot bodies, which no part carries (QD-819), the same bytes on every
+// try, which evs answers as a one-part push. Git mode first takes the seal lease, after
 // its segments and before its parts, so no other push lands on its tip meanwhile; an expired lease costs only a
 // refused seal, since the seal still commits only by TIP.
 //
@@ -45,7 +46,8 @@ func (self *EvsRepo) sendParts(ctx context.Context, attempt *evsPushAttempt) (*p
 		if err := self.renewLease(ctx, attempt); err != nil {
 			return nil, err
 		}
-		reply, err := self.postPushAs(ctx, attempt.pushId, &protocol.EvsPushRequest{Statement: attempt.built.Statement.Bytes, PartPlaces: places}, attempt.scope)
+		seal := &protocol.EvsPushRequest{Statement: attempt.built.Statement.Bytes, PartPlaces: places, SlotBodies: attempt.built.SlotBodies}
+		reply, err := self.postPushAs(ctx, attempt.pushId, seal, attempt.scope)
 		if IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING) && tries < self.client.settings.PartsMissingRetryCount {
 			continue
 		}

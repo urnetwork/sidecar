@@ -5,6 +5,9 @@
 //	                                   POST /mail/enable, which turns on the network's mail records (§12)
 //	ur mail status [--network=<net>]   the network's mail status, this device's receiver, and §15.6's prompt for a
 //	                                   desktop, NAS or VPS indexer while none stands
+//	ur mail credential [--network=<net>]
+//	                                   the network's IMAP and submission credential, shown once on the terminal
+//	                                   (cmd_mail_credential.go)
 //
 // `ur status` prints a mail line from the same method for each hosted network, and the prompt while it holds. The
 // design names the commands' flags nowhere: --network is this file's, as cli/UI.md records (plan-CORE-cli-ui-missing).
@@ -33,8 +36,8 @@ const (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "mail",
-		usage:   "  ur mail enable [--network=<net>]\n  ur mail status [--network=<net>]",
-		summary: "turn mail on for the network, or show its status",
+		usage:   "  ur mail enable [--network=<net>]\n  ur mail status [--network=<net>]\n  ur mail credential [--network=<net>]",
+		summary: "turn mail on for the network, show its status, or make its IMAP credential",
 		run:     runUrMail,
 	})
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urMailMethods)
@@ -197,8 +200,10 @@ func runUrMail(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			cli.printf("%s\n", line)
 		}
 		return nil
+	case options["credential"] == true:
+		return runUrMailCredential(ctx, cli, network)
 	}
-	return errors.New("ur mail takes enable or status")
+	return errors.New("ur mail takes enable, status or credential")
 }
 
 // The status as a person reads it.

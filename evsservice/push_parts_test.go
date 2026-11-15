@@ -95,9 +95,9 @@ func (self *pushFixture) postParts(token string, built *sidecar.EvsBuiltPush) []
 	return places
 }
 
-// POST .../push with built's statement and places: the seal.
+// POST .../push with built's statement, places and slot bodies: the seal.
 func (self *pushFixture) seal(token string, built *sidecar.EvsBuiltPush, places []*protocol.EvsPlace) *httptest.ResponseRecorder {
-	return self.post(token, &protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places})
+	return self.post(token, &protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places, SlotBodies: built.SlotBodies})
 }
 
 // POST .../push/<P>/lease.

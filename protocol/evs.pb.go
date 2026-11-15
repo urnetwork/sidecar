@@ -5309,6 +5309,7 @@ type EvsPushRequest struct {
 	Receipts      []*EvsUploadReceipt    `protobuf:"bytes,3,rep,name=receipts,proto3" json:"receipts,omitempty"`                       // one per new segment, outside the statement (11.13)
 	Staged        []byte                 `protobuf:"bytes,4,opt,name=staged,proto3" json:"staged,omitempty"`                           // format 2's staged segments, outside every payload hash
 	PartPlaces    []*EvsPlace            `protobuf:"bytes,5,rep,name=part_places,json=partPlaces,proto3" json:"part_places,omitempty"` // a seal: the record of each part, in part order
+	SlotBodies    []byte                 `protobuf:"bytes,6,opt,name=slot_bodies,json=slotBodies,proto3" json:"slot_bodies,omitempty"` // a seal: the push's payload section 7 whole, its new slots' bodies, outside
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5374,6 +5375,13 @@ func (x *EvsPushRequest) GetStaged() []byte {
 func (x *EvsPushRequest) GetPartPlaces() []*EvsPlace {
 	if x != nil {
 		return x.PartPlaces
+	}
+	return nil
+}
+
+func (x *EvsPushRequest) GetSlotBodies() []byte {
+	if x != nil {
+		return x.SlotBodies
 	}
 	return nil
 }
@@ -8449,14 +8457,16 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x0fEvsSealedChange\x12\x12\n" +
 	"\x04path\x18\x01 \x03(\fR\x04path\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\rR\x04mode\x12\x17\n" +
-	"\agit_oid\x18\x03 \x01(\fR\x06gitOid\"\xdf\x01\n" +
+	"\agit_oid\x18\x03 \x01(\fR\x06gitOid\"\x80\x02\n" +
 	"\x0eEvsPushRequest\x12\x1c\n" +
 	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12?\n" +
 	"\breceipts\x18\x03 \x03(\v2#.urnetwork.sidecar.EvsUploadReceiptR\breceipts\x12\x16\n" +
 	"\x06staged\x18\x04 \x01(\fR\x06staged\x12<\n" +
 	"\vpart_places\x18\x05 \x03(\v2\x1b.urnetwork.sidecar.EvsPlaceR\n" +
-	"partPlaces\"\x9b\x01\n" +
+	"partPlaces\x12\x1f\n" +
+	"\vslot_bodies\x18\x06 \x01(\fR\n" +
+	"slotBodies\"\x9b\x01\n" +
 	"\x0eEvsPartRequest\x12\x1c\n" +
 	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x12\n" +
 	"\x04part\x18\x02 \x01(\fR\x04part\x12?\n" +
