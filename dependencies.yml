@@ -303,12 +303,21 @@ modules:
     leg: [test]
   - module: github.com/urnetwork/connect
     spdx: MPL-2.0
-    reason: the one first-party module sidecar builds on (owner rule 2); a sibling replace
+    reason: the first-party module sidecar builds on (owner rule 2), which operator-core imports too (owner decision 251); a sibling replace
     leg: [client, engine, cli, test]
   - module: github.com/urnetwork/glog
     spdx: Apache-2.0
     reason: connect's logging fork; a sibling replace
     leg: [client, engine, cli, test]
+  - module: github.com/urnetwork/operator-core
+    spdx: MPL-2.0
+    reason: the host contract between server and sidecar, Env and the interfaces ServiceHost aliases, and the Id the root's aliases on every leg (owner decision 251); a sibling replace
+    leg: [client, engine, cli, test]
+  - module: github.com/urnetwork/operator-core/coretest
+    spdx: MPL-2.0
+    reason: operator-core's conformance suites, for the test leg alone once sidecartest's fakes move there in the review phase (owner decision 251, §4.18)
+    leg: [test]
+    planned: true
   - module: github.com/wlynxg/anet
     spdx: BSD-3-Clause
     reason: Android interface listing for connect and pion
@@ -375,7 +384,7 @@ modules:
     leg: [engine, test]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
-    reason: connect's IP stack, kept out of the sidecar_http leg; a sibling replace
+    reason: connect's IP stack, which reaches the sidecar_http leg only through operator-core's Id, connect compiling for js/wasm (owner decision 251); a sibling replace
     leg: [client, engine, cli, test]
   - module: src.agwa.name/tlshacks
     spdx: X11

@@ -17,37 +17,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	operator "github.com/urnetwork/operator-core"
 )
 
-// A network's §21.7 standing, as ServiceHost.Abuse and GET /abuse/status give it. The values are a
-// format: server's model.AbuseStanding holds the same strings.
-type AbuseStanding string
+// A network's §21.7 standing, as ServiceHost.Abuse and GET /abuse/status give it: operator-core's
+// (owner decision 251), with its Known. The values are a format: server's model.AbuseStanding holds the
+// same strings.
+type AbuseStanding = operator.AbuseStanding
 
 const (
-	// Under 7 days old: same-network mail deposits only, 1 endpoint publishing at most 24 h, at most
-	// probation_dns_entries user RRsets and none A, AAAA or CNAME, and no names held for review,
-	// aliases or outbound shares.
-	AbuseStandingProbation AbuseStanding = "probation"
+	// Under 7 days old: probation's limits.
+	AbuseStandingProbation = operator.AbuseStandingProbation
 	// 7 or more days old, and 30 days without an action: the tier's defaults (§20).
-	AbuseStandingStandard AbuseStanding = "standard"
-	// A Team with a verified domain, paid 30 days and clean 90: Team thresholds, and brand use.
-	AbuseStandingTrusted AbuseStanding = "trusted"
+	AbuseStandingStandard = operator.AbuseStandingStandard
+	// A Team with a verified domain, paid 30 days and clean 90.
+	AbuseStandingTrusted = operator.AbuseStandingTrusted
 	// A network halt or a kill within 30 days: probation's limits.
-	AbuseStandingRestricted AbuseStanding = "restricted"
-	// A §8 suspension until reviewed: no reach, publishing or sending, while its data stays kept,
-	// readable and exportable.
-	AbuseStandingSuspended AbuseStanding = "suspended"
+	AbuseStandingRestricted = operator.AbuseStandingRestricted
+	// A §8 suspension until reviewed.
+	AbuseStandingSuspended = operator.AbuseStandingSuspended
 )
-
-// Whether this build knows the standing. A gate refuses one it does not, as it refuses a network it
-// has not loaded, so a standing added later never passes an older gate.
-func (self AbuseStanding) Known() bool {
-	switch self {
-	case AbuseStandingProbation, AbuseStandingStandard, AbuseStandingTrusted, AbuseStandingRestricted, AbuseStandingSuspended:
-		return true
-	}
-	return false
-}
 
 // GET /abuse/status's body (§21.16): the caller's own network's standing, whether it is verified,
 // and the actions on it that have not ended.
