@@ -84,7 +84,7 @@ func (self *testCompanionWorld) restart(t *testing.T) {
 		indexRefId: evsTestId("view ref"),
 		repoKind:   protocol.RepoKind_REPO_KIND_GENERAL,
 		writer:     self.writer,
-		isAdmin:    func(*indexFileVersion) bool { return false },
+		isAdmin:    testIndexEraserAdmin,
 		tables:     testHeadTables,
 		refKey:     self.refKey,
 		settings:   self.settings,
@@ -217,7 +217,7 @@ func testCompanionView(t *testing.T, world *testCompanionWorld, _ *indexView) *i
 	t.Helper()
 	view, err := indexLoadView(context.Background(), &indexViewArgs{
 		store: world.index.store(evsTestId("reader")), repoId: evsTestId("view repo"), refId: evsTestId("view ref"),
-		repoKind: protocol.RepoKind_REPO_KIND_GENERAL, companion: true, isAdmin: func(*indexFileVersion) bool { return false },
+		repoKind: protocol.RepoKind_REPO_KIND_GENERAL, companion: true, isAdmin: testIndexEraserAdmin,
 		settings: world.format,
 	})
 	if err != nil {

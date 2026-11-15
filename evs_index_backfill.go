@@ -351,14 +351,13 @@ func (self *IndexBackfiller) attempt(ctx context.Context, outcome *indexBackfill
 	testHookBarrier("evs.index.backfill.built", self.barrierKey())
 
 	// 6: sent within the push's life
-	push := &indexPush{
-		pushId:       NewId(),
-		kind:         indexPushIndex,
-		baseVersion:  view.head.version,
-		indexEpoch:   view.head.indexEpoch,
-		signedTimeMs: signedTime.UnixMilli(),
-		files:        files,
-		removals:     removals,
+	guard, err := indexNewEpochGuard(view)
+	if err != nil {
+		return false, err
+	}
+	push, err := guard.push(indexPushIndex, signedTime.UnixMilli(), files, removals)
+	if err != nil {
+		return false, err
 	}
 	committed, err := indexSendPush(ctx, self.args.store, push, signedTime, self.clock, self.args.format.PushLife)
 	switch {

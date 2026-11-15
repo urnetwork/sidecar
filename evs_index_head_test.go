@@ -35,16 +35,23 @@ type testHeadWorld struct {
 	at time.Time
 	// What every view is loaded with.
 	settings *IndexFormatSettings
+	// The repo's admins, whose settings and erasure set versions count: the eraser.
+	admins []Id
 }
 
 func testNewHeadWorld() *testHeadWorld {
-	return &testHeadWorld{ref: testNewIndexRef(), at: testDayTime(20341, 0), settings: DefaultIndexFormatSettings()}
+	return &testHeadWorld{ref: testNewIndexRef(), at: testDayTime(20341, 0), settings: DefaultIndexFormatSettings(), admins: []Id{evsTestId("eraser")}}
+}
+
+// Whether file's signer is one of the world's admins.
+func (self *testHeadWorld) isAdmin(file *indexFileVersion) bool {
+	return slices.Contains(self.admins, file.signerSidecarId)
 }
 
 // The view at the head, read by writer.
 func (self *testHeadWorld) view(t testing.TB, writer Id) *indexView {
 	t.Helper()
-	return testLoadViewWith(t, self.ref.store(writer), self.settings)
+	return testLoadViewWith(t, self.ref.store(writer), self.settings, self.admins...)
 }
 
 // Plans writer's push of pending at the head and the world's time.
@@ -548,6 +555,8 @@ func TestIndexHeadPlanIsAFunction(t *testing.T) {
 func TestIndexHeadTombstonesAndTheErasureSet(t *testing.T) {
 	world := testNewHeadWorld()
 	a := evsTestId("writer a")
+	// a signs the erasure set below, as an admin's CUT
+	world.admins = append(world.admins, a)
 	world.push(t, a, testLive("d", 1, 1, 0, testHeadKeys(1, 0)), testLive("d", 2, 1, 0, testHeadKeys(2, 0)))
 	world.push(t, a, testRemoved("d", 1, 2))
 	world.push(t, a, testLive("d", 1, 3, 2, testHeadKeys(1, 1)))

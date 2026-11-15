@@ -8,7 +8,8 @@
 // A round, one at a time a ref, a trigger during it running another after it:
 //
 //	1 head      the statements after the manifest's pin (replay), each change of the index noted, the pin ring fed,
-//	            an index push naming another index_epoch than the ref's newest CUT before it alarmed, a push that
+//	            an index push naming another index_epoch than the ref's newest CUT before it alarmed (I-EVS-17), and
+//	            an erasure set version from a signer who may not erase listed bad and alarmed at step 4, a push that
 //	            removes every file of a bucket and writes a/m read as that bucket's roll-up; or past the catch-up
 //	            budget, a re-pin and a listing, whose roll-ups are one entry and retain nothing
 //	2 target    T = h; staged files T lists at their version stay, the rest go
@@ -71,6 +72,8 @@ var (
 	ErrSearchSyncUnfollowed = errors.New("search sync: the ref is not followed")
 	// A non-writer's round needs a read receipt first, and none can be deposited: nothing is fetched.
 	errSearchSyncReceipt = errors.New("search sync: no read receipt could be deposited")
+	// A background round's next read is past the day's budget (Search.BackgroundByteCount): held back.
+	errSearchSyncHeldBack = errors.New("search sync: background budget spent")
 )
 
 // Why a round runs (DESIGN-DETAILS 7.2.7's triggers).
@@ -163,6 +166,15 @@ type searchSyncArgs struct {
 	readByteCount int64
 	reproducer    searchSyncReproducer
 	coverage      searchSyncCoverage
+	// What background rounds may download: SEARCH-M10-20's policy, Search.BackgroundByteCount a UTC day. Nil holds them
+	// to nothing but the read limits. A "search more" round is held to its call's own budget instead.
+	budget searchSyncBudget
+}
+
+// The background budget a round asks before each read and tells after (SearchPolicy).
+type searchSyncBudget interface {
+	AdmitBackground(repoId Id, byteCount int64) bool
+	SpentBackground(repoId Id, byteCount int64)
 }
 
 // One ref the engine follows.
@@ -181,6 +193,13 @@ type searchSyncRefArgs struct {
 	// Deposits §16.10's read receipt naming the round's wanted files, before the round's first fetch; a non-writer
 	// with none fetches nothing.
 	depositReceipt func(ctx context.Context, wanted []*SearchSyncWanted) error
+	// Whether this device keeps the ref's latest set synced (SEARCH-M10-20's policy): false runs no round but "search
+	// more"'s, as phones keep the team directory. Nil keeps it.
+	keepLatest func() bool
+	// Whether signer could erase the repo's documents at signedTimeMs: an admin of the repo, the directory's too
+	// (§11.12's cut and directory rows). An erasure set version from any other signer is ignored and alarmed, and the
+	// last set one who could signed keeps masking (§11.14's cut row). Required, so a composition cannot leave it out.
+	mayErase func(signer Id, signedTimeMs int64) bool
 }
 
 // One followed ref's state. Fields past roundLock are the round's, read by snapshots under the engine's stateLock.
@@ -192,6 +211,12 @@ type searchSyncRef struct {
 	loadLock sync.Mutex
 	// The version table of the manifest's root; nil until a root is known. Set under the engine's stateLock.
 	table *SearchVersionTable
+	// The "search more" call a running round serves, under roundLock: its budget and its per-shard search
+	// (search_more.go). Nil for every other round.
+	moreRun *searchSyncMoreRun
+	// The last round's error, nil after a success; under the engine's stateLock. A search names a repo whose read
+	// receipt did not land from it (search_receipts.go).
+	lastErr error
 
 	// Under the engine's stateLock.
 	due         time.Time
@@ -262,8 +287,8 @@ func newSearchSync(args *searchSyncArgs) (*SearchSync, error) {
 // Follows a ref for search: its rounds start at the next trigger. An index root in a config, mailcfg or secret repo is
 // never followed (FI-17): ErrSearchSyncUnfollowed.
 func (self *SearchSync) Follow(args *searchSyncRefArgs) error {
-	if args == nil || args.source == nil || args.repoId == (Id{}) || args.refId == (Id{}) {
-		return fmt.Errorf("%w: a followed ref needs its ids and source", ErrSearchCacheArgs)
+	if args == nil || args.source == nil || args.repoId == (Id{}) || args.refId == (Id{}) || args.mayErase == nil {
+		return fmt.Errorf("%w: a followed ref needs its ids, source and erasure judge", ErrSearchCacheArgs)
 	}
 	switch args.repoKind {
 	case protocol.RepoKind_REPO_KIND_CONFIG, protocol.RepoKind_REPO_KIND_MAILCFG, protocol.RepoKind_REPO_KIND_SECRET,
@@ -384,6 +409,11 @@ func (self *SearchSync) dueRefs() []*searchSyncRef {
 		if ref.running || ref.due.IsZero() || now.Before(ref.due) {
 			continue
 		}
+		if ref.args.keepLatest != nil && !ref.args.keepLatest() && !ref.more {
+			// kept for "search more" alone: no background round
+			ref.due = time.Time{}
+			continue
+		}
 		if ref.args.nonWriter && !ref.roundAt.IsZero() && now.Before(ref.roundAt.Add(settings.NonWriterSyncInterval)) {
 			// a non-writer's rounds are spaced (§16.10's receipts)
 			ref.due = ref.roundAt.Add(settings.NonWriterSyncInterval)
@@ -440,6 +470,10 @@ func (self *SearchSync) runRef(ctx context.Context, ref *searchSyncRef) {
 		return more
 	}()
 	err := self.round(ctx, ref, more)
+	if errors.Is(err, errSearchSyncHeldBack) {
+		// the day's background budget is spent: what is staged stays, and the next resync or "search more" goes on
+		err = nil
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	now := self.args.clock.Now()
@@ -676,8 +710,35 @@ func (self *searchSyncRef) keepsAll(more bool) bool {
 // One round of ref (see the file header), restarted at step 1 when a read answers collected, at most
 // Search.SyncRestartCount times.
 func (self *SearchSync) round(ctx context.Context, ref *searchSyncRef, more bool) error {
+	err := self.roundWithRun(ctx, ref, more, nil)
+	self.noteError(ref, err)
+	return err
+}
+
+// Records a round's outcome for lastError.
+func (self *SearchSync) noteError(ref *searchSyncRef, err error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	ref.lastErr = err
+}
+
+// The last round's error of a followed ref, nil after a success or for a ref not followed.
+func (self *SearchSync) lastError(repoId Id, refId Id) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if ref := self.refs[[2]Id{repoId, refId}]; ref != nil {
+		return ref.lastErr
+	}
+	return nil
+}
+
+// A round serving run, a "search more" call's, which holds its fetch of the all set to the call's budget and searches
+// each shard as it lands (search_more.go); nil for every other round.
+func (self *SearchSync) roundWithRun(ctx context.Context, ref *searchSyncRef, more bool, run *searchSyncMoreRun) error {
 	ref.roundLock.Lock()
 	defer ref.roundLock.Unlock()
+	ref.moreRun = run
+	defer func() { ref.moreRun = nil }()
 	if err := self.load(ref); err != nil {
 		return err
 	}
@@ -970,7 +1031,7 @@ func searchWantedOf(file *indexFileVersion, parsed indexPath) *SearchSyncWanted 
 	partition, _ := searchPartitionOfPath(parsed)
 	return &SearchSyncWanted{
 		Path: file.path, Version: file.version, ContentSha256: file.contentSha256, ByteCount: int64(file.byteCount),
-		Partition: partition, Signer: file.signerSidecarId, CommitVersion: file.commitVersion,
+		Partition: partition, Signer: file.signerSidecarId, CommitVersion: file.commitVersion, SignedTimeMs: file.signedTimeMs,
 	}
 }
 

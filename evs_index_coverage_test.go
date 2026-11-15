@@ -223,6 +223,7 @@ func (self *testBackfillWorld) view(t testing.TB) *indexView {
 		refId:     evsTestId("view ref"),
 		repoKind:  self.repoKind,
 		companion: self.companion,
+		isAdmin:   testIndexEraserAdmin,
 		settings:  self.settings,
 	})
 	if err != nil {
@@ -299,6 +300,7 @@ func (self *testBackfillWorld) backfiller(t testing.TB, writer Id, cards indexBa
 		refId:     evsTestId("view ref"),
 		repoKind:  self.repoKind,
 		companion: self.companion,
+		isAdmin:   testIndexEraserAdmin,
 		format:    self.settings,
 		tables:    testHeadTables,
 		clock:     self,

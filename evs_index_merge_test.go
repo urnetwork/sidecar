@@ -63,6 +63,7 @@ func (self *testHeadWorld) mergerOf(t testing.TB, store indexRefStore) *IndexMer
 		repoId:   evsTestId("view repo"),
 		refId:    evsTestId("view ref"),
 		repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		isAdmin:  self.isAdmin,
 		format:   self.settings,
 		padKey: func(ctx context.Context) (*indexPadKey, error) {
 			return testPadKey(t, 2), nil

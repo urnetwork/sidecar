@@ -158,6 +158,10 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 		return false, err
 	}
 	files := searchFetchOrder(manifest, plan, lacking, ref.args.companion, latest)
+	if run := ref.moreRun; run != nil && !latest {
+		// a call that goes on from a partial one fetches on from the first shard it has not searched, never restarting
+		files = slices.DeleteFunc(files, run.searchedBefore)
+	}
 	if len(files) == 0 {
 		return false, nil
 	}
@@ -170,9 +174,25 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 			return false, fmt.Errorf("%w: %w", errSearchSyncReceipt, err)
 		}
 	}
+	run := ref.moreRun
 	for _, batch := range self.fetchBatches(files) {
 		if err := ctx.Err(); err != nil {
 			return false, err
+		}
+		batchByteCount := int64(0)
+		for _, wanted := range batch {
+			batchByteCount += wanted.ByteCount
+		}
+		// a "search more" call is held to its own budget, a background round to the day's (SEARCH-M10-20)
+		switch {
+		case run != nil:
+			if !run.admit(batchByteCount) {
+				return false, errSearchMoreBudget
+			}
+		case self.args.budget != nil:
+			if !self.args.budget.AdmitBackground(ref.args.repoId, batchByteCount) {
+				return false, errSearchSyncHeldBack
+			}
 		}
 		asked := make([]*indexFileVersion, 0, len(batch))
 		for _, wanted := range batch {
@@ -184,6 +204,12 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 		fetched, err := ref.args.source.Fetch(ctx, asked)
 		if err != nil {
 			return false, err
+		}
+		switch {
+		case run != nil:
+			run.spent(batchByteCount)
+		case self.args.budget != nil:
+			self.args.budget.SpentBackground(ref.args.repoId, batchByteCount)
 		}
 		byPath := map[string]*searchSyncFetched{}
 		for _, answer := range fetched {
@@ -211,8 +237,21 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 			plan.Staged = slices.DeleteFunc(plan.Staged, func(old *SearchManifestFile) bool {
 				return old.Path == staged.Path && old.Version == staged.Version
 			})
-			plan.Staged = append(plan.Staged, staged)
 			testHookBarrier("search.sync.fetched", searchSyncBarrierKey(ref.args.repoId, ref.args.refId))
+			if run != nil && !latest {
+				// "search more" searches each all shard as it lands, and past a cap keeps the youngest within it
+				drop, err := run.landed(ctx, staged)
+				if err != nil {
+					return false, err
+				}
+				if drop {
+					if err := self.args.cache.Remove(SearchCacheKey{RepoId: ref.args.repoId, RefId: ref.args.refId, Path: staged.Path, Version: staged.Version}); err != nil {
+						return false, err
+					}
+					continue
+				}
+			}
+			plan.Staged = append(plan.Staged, staged)
 		}
 		if err := self.storePlan(ctx, ref, plan); err != nil {
 			return false, err
@@ -271,6 +310,10 @@ func (self *SearchSync) stage(ctx context.Context, ref *searchSyncRef, plan *Sea
 		return bad()
 	case err != nil:
 		return nil, err
+	}
+	if parsed.kind == indexPathErasureSet && !ref.args.mayErase(wanted.Signer, wanted.SignedTimeMs) {
+		// a set version from a signer who may not erase: ignored and alarmed, the last good set masking (§11.14's cut row)
+		return bad()
 	}
 	staged.State = SearchManifestHeld
 	file := SearchVersionFile{Path: wanted.Path, Version: wanted.Version}
