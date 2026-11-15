@@ -169,7 +169,7 @@ func TestTheModuleWalkReachesTheCodeItGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := reflect.TypeFor[sidecar.RedisScript]().PkgPath()
+	root := reflect.TypeFor[sidecar.SidecarSettings]().PkgPath()
 	for _, want := range []string{root, root + "/device", root + "/protocol"} {
 		if !slices.Contains(packages, want) {
 			t.Errorf("%s is not walked: %v", want, packages)

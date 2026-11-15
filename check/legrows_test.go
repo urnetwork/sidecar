@@ -261,22 +261,42 @@ func (self *repository) iosExtensionModuleFindings(t testing.TB) []string {
 	return findings
 }
 
-// §18.10: the leg's closure holds no connect or gVisor package, nor the sctp fork that lives in
-// connect's tree. Each is matched by the module the package comes from.
+// §4.7, §18.10: a file of this repository that the sidecar_http leg compiles imports no connect or
+// gVisor package itself, nor one of the sctp fork that lives in connect's tree. The leg does link connect,
+// through operator-core's Id, which the root's Id aliases on every leg (owner decision 251), so the rule
+// reads each compiled file's own imports, not the leg's closure, and a file that names connect directly
+// still fails.
 func (self *repository) sidecarHttpFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
+	fileSet := token.NewFileSet()
 	for _, leg := range self.legs {
 		if !leg.hasTag(sidecarHttpTag) {
 			continue
 		}
 		for _, listed := range self.closure(t, leg) {
-			if listed.Module == nil {
+			if listed.Module == nil || !underPath(firstPartyBase(listed.Module.Path), sidecarBasePath) {
 				continue
 			}
-			base := firstPartyBase(listed.Module.Path)
-			if base == connectBasePath || base == sctpBasePath || base == gvisorBasePath {
-				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
+			for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
+				filePath := filepath.Join(listed.Dir, goFile)
+				relativePath, err := filepath.Rel(self.moduleDirectory, filePath)
+				if err != nil {
+					relativePath = filePath
+				}
+				relativePath = filepath.ToSlash(relativePath)
+				parsed, err := parser.ParseFile(fileSet, filePath, nil, parser.ImportsOnly)
+				if err != nil {
+					findings = append(findings, findingf("%s compiles %s, which does not parse: %v", leg.name, relativePath, err))
+					continue
+				}
+				for _, spec := range parsed.Imports {
+					importPath := strings.Trim(spec.Path.Value, "\"`")
+					base := firstPartyBase(importPath)
+					if underPath(base, connectBasePath) || underPath(importPath, sctpBasePath) || underPath(importPath, gvisorBasePath) {
+						findings = append(findings, findingf("%s compiles %s, which imports %s", leg.name, relativePath, importPath))
+					}
+				}
 			}
 		}
 	}

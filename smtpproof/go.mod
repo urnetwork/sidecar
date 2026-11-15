@@ -6,6 +6,8 @@ replace github.com/urnetwork/sidecar => ..
 
 replace github.com/urnetwork/connect => ../../connect
 
+replace github.com/urnetwork/operator-core => ../../operator-core
+
 replace github.com/pion/sctp => ../../connect/sctp
 
 replace github.com/urnetwork/glog => ../../glog
@@ -71,6 +73,7 @@ require (
 	github.com/theodorsm/covert-dtls v1.5.1 // indirect
 	github.com/urnetwork/connect v0.0.0 // indirect
 	github.com/urnetwork/glog v0.0.0 // indirect
+	github.com/urnetwork/operator-core v0.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
