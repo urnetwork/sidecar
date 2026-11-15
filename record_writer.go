@@ -208,6 +208,8 @@ type SidecarRecord struct {
 	models    any
 	inventory any
 	ledgers   any
+	// the retention policies and their expiry (record_retention.go, which no ios_extension leg links)
+	retention any
 	// one erasure at a time (record_erase.go, which no ios_extension leg links)
 	eraseLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint

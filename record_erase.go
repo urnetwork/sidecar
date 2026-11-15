@@ -317,6 +317,10 @@ func (self *RecordEraser) run(ctx context.Context, journal *recordEraseJournal) 
 	logId := journal.LogId
 	// from here no ingest of this device takes a named entry
 	reader.noteErased(logId, journal.EntryIds, nil)
+	if RecordErasureReason(journal.Reason) == RecordErasureReasonRetention {
+		// expiry's erasure: its entries read expired (record_retention.go)
+		reader.noteExpired(logId, journal.EntryIds)
+	}
 	if journal.Step == recordEraseStepPlanned && len(journal.Erases) == 0 {
 		named := map[Id]bool{}
 		for _, entryId := range journal.EntryIds {
@@ -514,7 +518,7 @@ func (self *RecordEraser) Plan(ctx context.Context, args *RecordEraseArgs) (*Rec
 		}
 		plan.Items = append(plan.Items, &RecordErasePlanItem{
 			EntryId: entryId, Kind: entry.Header.Kind(), TimeMillis: entry.Header.Header.GetTimeMillis(), CopyCount: len(entry.Copies),
-			Erased: entry.State == RecordEntryErased,
+			Erased: entry.State.KeyGone(),
 		})
 	}
 	return plan, nil

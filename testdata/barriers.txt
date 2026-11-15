@@ -121,12 +121,15 @@ barrier directory.decide.intent.after directory_decide.go
 barrier directory.decide.intent.before directory_decide.go
 barrier directory.decide.statement.after directory_decide.go
 barrier directory.decide.statement.before directory_decide.go
+barrier directory.erasure.erase.before directory_erasure.go
 barrier directory.fold.after directory_fold.go
 barrier directory.fold.before directory_fold.go
 barrier directory.notice.after directory_notice.go
 barrier directory.notice.before directory_notice.go
 barrier directory.request.after directory_request.go
 barrier directory.request.before directory_request.go
+barrier directory.revoke.filed directory_revoke.go
+barrier directory.revoke.journaled directory_revoke.go
 barrier directory.run.after directory_run.go
 barrier directory.run.before directory_run.go
 barrier directory.sync.after directory_sync.go
@@ -503,6 +506,8 @@ barrier record.receipt.deposit.after record_receipt.go
 barrier record.receipt.deposit.before record_receipt.go
 barrier record.reserve.after record_ledger.go
 barrier record.reserve.before record_ledger.go
+barrier record.retention.base.before record_retention.go
+barrier record.retention.erase.before record_retention.go
 barrier record.taint.after record_run.go
 barrier record.taint.before record_run.go
 barrier restore.aside.after mcp/restore_apply.go

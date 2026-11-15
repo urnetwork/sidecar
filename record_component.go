@@ -28,6 +28,9 @@ func NewRecordComponent(record *SidecarRecord) SidecarComponent {
 	// from here the writer keeps each deposit until its ingest, and the loop sends kept ones again after a site loss
 	// (record_mirror.go)
 	record.Mirrors()
+	// and every sync marks archived entries, the loop running the daily expiry of each log this sidecar administers
+	// (record_retention.go)
+	record.Retention()
 	return &recordComponent{record: record}
 }
 
