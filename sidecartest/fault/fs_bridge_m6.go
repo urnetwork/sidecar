@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/urnetwork/connect"
@@ -53,16 +54,41 @@ import (
 
 var Fs38ShareCase = Register("FS-38", "shares", []Tier{TierT2, TierT3}, Twin(Fs38ShareRefusals, Fs38ShareSigner))
 
+// What FS-38's share schedules run their world with.
+type Fs38ShareSettings struct {
+	// How long, in real time, a wait of the share's world may take before it fails, the world's
+	// BridgeNetSettings.WaitTimeout at most: a failure's bound only. Within the Net's
+	// BarrierDriverSettings.AwaitTimeout, so a wait that fails names itself and what the world saw of its flow before
+	// the run's own bound fails the step as an actor that never ended, which is all the share refusals' lost datagram
+	// said.
+	WaitTimeout time.Duration
+}
+
+func DefaultFs38ShareSettings() *Fs38ShareSettings {
+	return &Fs38ShareSettings{
+		WaitTimeout: 8 * time.Second,
+	}
+}
+
 // What one share schedule builds in its first step and its later steps read.
 type fsShareWorld struct {
 	share *sidecartest.BridgeShareNet
 }
 
-// The first step: X, its host serving the share, enforcing a state that holds it.
-func fsShareSetup(world *fsShareWorld) *Step {
+// The first step: X, its host serving the share, enforcing a state that holds it, on the Net's bridge settings (T3's
+// platform among them) with its waits bounded by settings'.
+func fsShareSetup(world *fsShareWorld, settings *Fs38ShareSettings) *Step {
 	return &Step{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
 		return fsTeamCatch(func() error {
-			world.share = sidecartest.NewBridgeShareNet(fsTeamFailer{}, net, nil)
+			bridgeSettings := sidecartest.NetBridgeSettings(net)
+			if bridgeSettings == nil {
+				bridgeSettings = sidecartest.DefaultBridgeNetSettings()
+			}
+			bounded := *bridgeSettings
+			bounded.WaitTimeout = min(bounded.WaitTimeout, settings.WaitTimeout)
+			shareSettings := sidecartest.DefaultBridgeShareNetSettings()
+			shareSettings.Bridge = &bounded
+			world.share = sidecartest.NewBridgeShareNet(fsTeamFailer{}, net, shareSettings)
 			return nil
 		})
 	}}
@@ -153,9 +179,10 @@ func (self *fsShareFlows) expectOpen(payload string) error {
 	share := self.world.share
 	host := share.Host
 	settings := share.X.Settings()
+	dialCount := len(host.Dials())
 	conn, err := self.window.DialTcp(self.tcpAddress())
 	if err != nil {
-		return fmt.Errorf("%s's TCP connection: %w", self.window.Name, err)
+		return fmt.Errorf("%s's TCP connection: %w; %s", self.window.Name, err, self.seenOf(connect.IpProtocolTcp, self.tcpAddress(), nil, dialCount))
 	}
 	if _, err := conn.Write([]byte(payload)); err != nil {
 		conn.Close()
@@ -165,17 +192,18 @@ func (self *fsShareFlows) expectOpen(payload string) error {
 	if !host.Upstream.WaitFor(settings.WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
 		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return string(accept.Bytes) == payload })
 	}) {
-		return fmt.Errorf("%s's TCP payload never reached the upstream", self.window.Name)
+		return fmt.Errorf("%s's TCP payload never reached the upstream; %s", self.window.Name, self.seenOf(connect.IpProtocolTcp, self.tcpAddress(), []byte(payload), dialCount))
 	}
+	dialCount = len(host.Dials())
 	answer, err := self.window.ExchangeUdp(self.udpAddress(), []byte(payload), settings.WaitTimeout)
 	if err != nil || string(answer) != payload {
-		return fmt.Errorf("%s's datagram: %q, %v", self.window.Name, answer, err)
+		return fmt.Errorf("%s's datagram: %q, %v; %s", self.window.Name, answer, err, self.seenOf(connect.IpProtocolUdp, self.udpAddress(), []byte(payload), dialCount))
 	}
 	if err := self.window.SendEcho(share.Alias(), 1); err != nil {
 		return err
 	}
 	if !self.window.WaitEchoReply(1, settings.WaitTimeout) {
-		return fmt.Errorf("%s's echo was never answered", self.window.Name)
+		return fmt.Errorf("%s's echo was never answered; %s", self.window.Name, self.seenOf(connect.IpProtocolIcmp, netip.AddrPortFrom(share.Alias(), 0), nil, len(host.Dials())))
 	}
 	principals := host.Principals(self.window.Client.ClientId)
 	if len(principals) == 0 || principals[0].Principal == nil {
@@ -193,6 +221,49 @@ func (self *fsShareFlows) expectOpen(payload string) error {
 		}
 	}
 	return nil
+}
+
+// What the world saw of the window's flow of ipProtocol to to, for a failed exchange to say where its packet stopped:
+// how many packets the window's link refused, the host's latest decision of the flow, the NAT's dials to the
+// decision's target since dialCount of them, and whether the upstream took payload, unless payload is nil. The world
+// keeps no record of a packet between the window's link and the host's hook, so a flow the host never decided, with
+// nothing refused, was lost on that way.
+func (self *fsShareFlows) seenOf(ipProtocol connect.IpProtocol, to netip.AddrPort, payload []byte, dialCount int) string {
+	host := self.world.share.Host
+	seen := []string{fmt.Sprintf("the window's link refused %d packets", self.window.RefusedCount())}
+	var decision *sidecartest.BridgeNetDecision
+	for _, each := range host.Decisions(self.window.Client.ClientId) {
+		if each.Protocol == ipProtocol && each.To == to {
+			decision = each
+		}
+	}
+	if decision == nil {
+		return strings.Join(append(seen, fmt.Sprintf("the host decided no %s flow of it to %s", ipProtocol, to)), ", ")
+	}
+	seen = append(seen, fmt.Sprintf("the host decided %s to %s", decision.Verdict, decision.Target))
+	if !decision.Opens() || ipProtocol == connect.IpProtocolIcmp {
+		return strings.Join(seen, ", ")
+	}
+	target := netip.AddrPortFrom(decision.Target.Addr(), cmpPort(decision.Target.Port(), decision.To.Port())).String()
+	dialed := false
+	dials := host.Dials()
+	for _, dial := range dials[min(dialCount, len(dials)):] {
+		if dial.Address == target {
+			dialed = true
+			seen = append(seen, fmt.Sprintf("the NAT's %s dial held=%v connected=%v wrote %d bytes closed=%v", dial.Network, dial.Held, dial.Connected, dial.WrittenByteCount, dial.Closed))
+		}
+	}
+	if !dialed {
+		seen = append(seen, "the NAT dialed nothing to "+target)
+	}
+	if payload != nil {
+		took := slices.ContainsFunc(host.Upstream.Accepts(), func(accept sidecartest.BridgeNetAccept) bool { return bytes.Contains(accept.Bytes, payload) })
+		if ipProtocol == connect.IpProtocolUdp {
+			took = slices.ContainsFunc(host.Upstream.Datagrams(), func(datagram []byte) bool { return bytes.Equal(datagram, payload) })
+		}
+		seen = append(seen, fmt.Sprintf("the upstream took the payload: %v", took))
+	}
+	return strings.Join(seen, ", ")
 }
 
 // The aliases' neighbour in Y's block, past the port target's alias, is no target of the share: the window's TCP
@@ -333,9 +404,10 @@ func (self *fsShareFlows) expectPortTarget(payload string) error {
 	windowId := self.window.Client.ClientId
 	port := share.PortTargetPort()
 	allowed := netip.AddrPortFrom(share.PortAlias(), port)
+	dialCount := len(host.Dials())
 	conn, err := self.window.DialTcp(allowed)
 	if err != nil {
-		return fmt.Errorf("%s's TCP connection to the port target: %w", self.window.Name, err)
+		return fmt.Errorf("%s's TCP connection to the port target: %w; %s", self.window.Name, err, self.seenOf(connect.IpProtocolTcp, allowed, nil, dialCount))
 	}
 	if _, err := conn.Write([]byte(payload)); err != nil {
 		conn.Close()
@@ -345,7 +417,7 @@ func (self *fsShareFlows) expectPortTarget(payload string) error {
 	if !host.Upstream.WaitFor(settings.WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
 		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return string(accept.Bytes) == payload })
 	}) {
-		return fmt.Errorf("%s's TCP payload to the port target never reached the upstream", self.window.Name)
+		return fmt.Errorf("%s's TCP payload to the port target never reached the upstream; %s", self.window.Name, self.seenOf(connect.IpProtocolTcp, allowed, []byte(payload), dialCount))
 	}
 	// a decision is a flow's protocol and destination together: the upstream's UDP port may be its TCP port's number,
 	// so a destination alone can name the TCP connection the target admits
@@ -362,7 +434,7 @@ func (self *fsShareFlows) expectPortTarget(payload string) error {
 		return fmt.Errorf("%s's connection to the port target opened under no tag of that target: %+v", self.window.Name, decision)
 	}
 
-	dialCount := len(host.Dials())
+	dialCount = len(host.Dials())
 	acceptCount, datagramCount := len(host.Upstream.Accepts()), len(host.Upstream.Datagrams())
 	otherProtocol := netip.AddrPortFrom(share.PortAlias(), host.Upstream.UdpPort())
 	otherPort := netip.AddrPortFrom(share.PortAlias(), share.PortTargetOtherPort())
@@ -477,7 +549,7 @@ func fsShareWindow(world *fsShareWorld, name string, cert func() []byte, generat
 func Fs38ShareSigner(net *Net) *Schedule {
 	world := &fsShareWorld{}
 	return fsShareSchedule("", world,
-		fsShareSetup(world),
+		fsShareSetup(world, DefaultFs38ShareSettings()),
 		fsShareDo("readerY", world, func() error {
 			window := world.share.OpenReaderWindow("fs38 share reader", world.share.AcceptingSidecarId, func() []byte { return world.share.CurrentCert(7) }, 7)
 			defer window.Close()
@@ -518,7 +590,7 @@ func Fs38ShareRefusals(net *Net) *Schedule {
 			return world.share.Cert(7, now().Add(time.Hour), ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
 		}},
 	}
-	steps := []*Step{fsShareSetup(world)}
+	steps := []*Step{fsShareSetup(world, DefaultFs38ShareSettings())}
 	for _, refusal := range cases {
 		steps = append(steps, fsShareDo("operator", world, func() error {
 			window := fsShareWindow(world, "fs38 share "+refusal.name, refusal.cert, 7)
