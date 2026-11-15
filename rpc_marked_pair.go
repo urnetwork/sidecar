@@ -42,6 +42,11 @@
 //
 // The foreground and the warm indexers are the callers' (§18.7's host, SEARCH): plan-SEARCH-
 // foreground-signal's Sidecar.SetSearchForeground feeds SetForeground.
+//
+// testHookBarrier runs at rpc.marked_pair_mark.before and .after around each mark, the mode's change and
+// what it retires and adopts, and at rpc.marked_pair_tick.before and .after around each keepalive tick,
+// keyed by the peer's client id, so a fault schedule can hold one pair's mark or tick while the others
+// run.
 
 package sidecar
 
@@ -198,6 +203,8 @@ func (self *Subprotocol) asksSearch(peerId connect.Id) bool {
 // Puts peerId in C19's mode before this side sends it a frame carrying bit 1, retiring what it holds to
 // it if that changed the mode. Answers whether it did, which a Hello's sender adopts its answer for.
 func (self *Subprotocol) markBeforeSend(peerId connect.Id) bool {
+	testHookBarrier("rpc.marked_pair_mark.before", peerId.String())
+	defer testHookBarrier("rpc.marked_pair_mark.after", peerId.String())
 	if !self.peerWindows.SetPeerWindowAccounting(peerId, true) {
 		return false
 	}
@@ -208,6 +215,8 @@ func (self *Subprotocol) markBeforeSend(peerId connect.Id) bool {
 // Puts peerId in C19's mode on receipt of a frame carrying bit 1, before any reply: if that changed the
 // mode, retires what this side holds to it and adopts the contract the frame rode.
 func (self *Subprotocol) markOnReceipt(peerId connect.Id, transferKey connect.TransferKey) {
+	testHookBarrier("rpc.marked_pair_mark.before", peerId.String())
+	defer testHookBarrier("rpc.marked_pair_mark.after", peerId.String())
 	if !self.peerWindows.SetPeerWindowAccounting(peerId, true) {
 		return
 	}
@@ -412,6 +421,8 @@ func (self *Subprotocol) nextKeepaliveTick(peerId connect.Id, now time.Time) tim
 // MarkedSessionTimeout, is re-established by a Hello, which carries bit 1 toward the indexer; a live one
 // gets a Ping when ping says so, as each tick on the grid does.
 func (self *Subprotocol) keepaliveTick(peerId connect.Id, ping bool) {
+	testHookBarrier("rpc.marked_pair_tick.before", peerId.String())
+	defer testHookBarrier("rpc.marked_pair_tick.after", peerId.String())
 	sessionTime, standing := self.sessionTime(peerId)
 	if !standing || self.settings.MarkedSessionTimeout <= self.clock.Now().Sub(sessionTime) {
 		self.forgetPeer(peerId)
