@@ -258,6 +258,8 @@ barrier evs.index.backfill.built evs_index_backfill.go
 barrier evs.index.backfill.pushed evs_index_backfill.go
 barrier evs.index.companion.built evs_index_companion.go
 barrier evs.index.companion.pushed evs_index_companion.go
+barrier evs.index.cut.built evs_index_cut.go
+barrier evs.index.cut.pushed evs_index_cut.go
 barrier evs.index.merge.built evs_index_merge_runner.go
 barrier evs.index.merge.pushed evs_index_merge_runner.go
 barrier evs.index.merge.uploaded evs_index_merge_runner.go

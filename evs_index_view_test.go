@@ -352,7 +352,8 @@ func TestIndexViewReadsAnIndex(t *testing.T) {
 		&indexPushFile{path: paths.root + "/b/20340/w/zz", plaintext: []byte("x")},
 	)
 
-	view := testLoadView(t, ref.store(a))
+	// a signs the erasure set, as an admin's CUT
+	view := testLoadView(t, ref.store(a), a)
 	root := view.root(indexRootNumber)
 	if root == nil || len(root.buckets) != 1 || root.buckets[0].window != window {
 		t.Fatalf("buckets %+v", root)

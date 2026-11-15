@@ -125,14 +125,15 @@ func indexWriteLock(ctx context.Context, store indexRefStore, view *indexView, r
 	if err != nil {
 		return nil, err
 	}
-	committed, err := indexSendPush(ctx, store, &indexPush{
-		pushId:       NewId(),
-		kind:         indexPushIndex,
-		baseVersion:  view.head.version,
-		indexEpoch:   view.head.indexEpoch,
-		signedTimeMs: signedTime.UnixMilli(),
-		files:        []*indexPushFile{file},
-	}, signedTime, clock, view.settings.PushLife)
+	guard, err := indexNewEpochGuard(view)
+	if err != nil {
+		return nil, err
+	}
+	push, err := guard.push(indexPushIndex, signedTime.UnixMilli(), []*indexPushFile{file}, nil)
+	if err != nil {
+		return nil, err
+	}
+	committed, err := indexSendPush(ctx, store, push, signedTime, clock, view.settings.PushLife)
 	if refusal, ok := indexRefusalOf(err); ok && refusal.kind == indexRefusalConflict {
 		return nil, errIndexLockHeld
 	}

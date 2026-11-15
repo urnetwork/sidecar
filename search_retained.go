@@ -96,12 +96,22 @@ func (self *SearchSync) slotRun(ctx context.Context, ref *searchSyncRef, manifes
 }
 
 // The erased run from the erasure set's documents, each masked at and below its listed version (§11.14's epoch row);
-// nil where the set lists none or does not read.
+// the last manifest's where the set's version was listed bad; nil where the set lists none.
 func (self *SearchSync) erasedRun(ctx context.Context, ref *searchSyncRef, manifest *SearchManifest, erasureSet *SearchManifestFile) (*SearchManifestRun, error) {
+	slot := SearchVersionSlot{Kind: SearchVersionErased}
+	if erasureSet != nil && erasureSet.State == SearchManifestBad && manifest != nil {
+		// a set version ignored (malformed, or from a signer who may not erase): the last good one keeps masking, so a
+		// forged set unmasks nothing (§11.14's cut row)
+		for _, run := range manifest.Runs {
+			if run.Slot == slot {
+				return run, nil
+			}
+		}
+		return nil, nil
+	}
 	if erasureSet == nil || erasureSet.State != SearchManifestHeld || erasureSet.Small == nil {
 		return nil, nil
 	}
-	slot := SearchVersionSlot{Kind: SearchVersionErased}
 	// the set's own (path, version), so an unchanged set keeps its run
 	marker := SearchVersionRunId(erasureSet.Version)
 	if manifest != nil {
