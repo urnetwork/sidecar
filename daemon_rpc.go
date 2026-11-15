@@ -54,6 +54,10 @@ type DaemonCall struct {
 	// The ur that sent the call confirmed it on /dev/tty or in an app's UI (D-CORE-13). Only control mode sets it;
 	// any same-uid process can forge it (owner decision 47).
 	Confirmed bool
+	// Closed once the session's caller is gone: its connection ended or failed, or it sent a line past the request
+	// bound. The handler's context does not end with it, so a call a caller left still finishes as before; a long
+	// poll ends its wait on it (daemon_events.go). Nil, which never closes, for a call no session reader watches.
+	SessionDone <-chan struct{}
 }
 
 // A value no reply may carry: the root's types holding a token, a key, a seed or a pass carry this method, so the
@@ -100,21 +104,23 @@ var daemonSecretTypes = map[reflect.Type]bool{
 // The secret marker's interface, for the walk.
 var daemonSecretValueType = reflect.TypeFor[daemonSecretValue]()
 
-// The bound on how deep the walk follows a value, past which it refuses: a reply nests a few levels, and a cycle
-// would otherwise never end.
-const daemonReplyMaxDepth = 32
+// checkDaemonReplyTo on the default settings' depth bound, for a caller that holds no daemon's settings.
+func checkDaemonReply(value any) error {
+	return checkDaemonReplyTo(value, DefaultSidecarSettings().LocalSettings.ReplyMaxDepth)
+}
 
 // Refuses a reply that holds a secret anywhere it can reach: a value of a type marked daemonSecretValue, as itself or
 // behind a pointer, or one of daemonSecretTypes. Unexported fields are walked too, since encoding/json skips them
-// but a MarshalJSON need not.
-func checkDaemonReply(value any) error {
+// but a MarshalJSON need not. A value nested past maxDepth is refused too (SidecarLocalSettings.ReplyMaxDepth), since a
+// cycle would otherwise never end.
+func checkDaemonReplyTo(value any, maxDepth int) error {
 	visited := map[uintptr]bool{}
 	var walk func(value reflect.Value, depth int) error
 	walk = func(value reflect.Value, depth int) error {
 		if !value.IsValid() {
 			return nil
 		}
-		if daemonReplyMaxDepth < depth {
+		if maxDepth < depth {
 			return errors.New("the reply nests too deep")
 		}
 		valueType := value.Type()
@@ -205,7 +211,7 @@ func (self *Daemon) dispatch(line []byte, session *daemonSession, run func(handl
 	if method.Confirm && !confirmed {
 		return answer(DaemonRpcConfirmationRequired, "this call needs a person's confirmation on /dev/tty or in an app")
 	}
-	call := &DaemonCall{Hello: hello, Params: request.Params, Confirmed: confirmed}
+	call := &DaemonCall{Hello: hello, Params: request.Params, Confirmed: confirmed, SessionDone: session.done}
 	if method.Network {
 		call.Network = daemonCallNetwork(request.Params)
 		networkId, err := self.resolveSessionNetwork(session, call.Network)
@@ -233,7 +239,7 @@ func (self *Daemon) dispatch(line []byte, session *daemonSession, run func(handl
 	if err != nil {
 		return answer(DaemonRpcFailed, err.Error())
 	}
-	if err := checkDaemonReply(result); err != nil {
+	if err := checkDaemonReplyTo(result, self.settings.Local.ReplyMaxDepth); err != nil {
 		self.log.Errorf("[daemon]method %s answered a secret, which no reply carries", request.Method)
 		return answer(daemonRpcInternalError, "internal error")
 	}

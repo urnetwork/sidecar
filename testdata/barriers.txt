@@ -116,6 +116,9 @@ barrier daemon.claims.choose.after daemon_claims.go
 barrier daemon.claims.choose.before daemon_claims.go
 barrier daemon.directory.list.taint.after daemon_directory.go
 barrier daemon.directory.list.taint.before daemon_directory.go
+barrier daemon.events.add.after daemon_events.go
+barrier daemon.events.add.before daemon_events.go
+barrier daemon.events.wait daemon_events.go
 barrier directory.announce.after directory_repo.go
 barrier directory.announce.before directory_repo.go
 barrier directory.cancel.entry.after directory_decide.go
