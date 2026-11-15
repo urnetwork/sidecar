@@ -37,6 +37,13 @@ type FakeDnsCustomHostMapStore struct {
 	incidentEventNetworkIds map[sidecar.Id][]sidecar.Id
 	// called with the version once a restore's raise has made it, as lbmap would then load it
 	restoreRaiseHook func(version uint64)
+	// reads of the state, which a test waits on to know a reader has reached its wait
+	stateReads *sidecar.MonitorValue[int]
+}
+
+// How many times the state was read, and a channel that closes at the next read.
+func (self *FakeDnsCustomHostMapStore) StateReads() (int, chan struct{}) {
+	return self.stateReads.Get()
 }
 
 // Calls hook with the version once a restore's raise has made it, outside the store's lock, before the raise
@@ -62,6 +69,7 @@ func NewFakeDnsCustomHostMapStore() *FakeDnsCustomHostMapStore {
 		incidentEntries:         map[sidecar.Id][]dnsservice.DnsRestoreEntry{},
 		hostNetworkIds:          map[string]sidecar.Id{},
 		incidentEventNetworkIds: map[sidecar.Id][]sidecar.Id{},
+		stateReads:              sidecar.NewMonitorValue(0),
 	}
 }
 
@@ -208,6 +216,7 @@ func (self *FakeDnsCustomHostMapStore) CustomHostMap(ctx context.Context, root s
 
 // Every version, every interface row in name order, and the hosts' distinct versions.
 func (self *FakeDnsCustomHostMapStore) CustomHostMapState(ctx context.Context, root string) (*dnsservice.DnsMapState, error) {
+	defer self.stateReads.Update(func(count int) int { return count + 1 })
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	state := &dnsservice.DnsMapState{Versions: slices.Clone(self.versions)}

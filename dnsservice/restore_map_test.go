@@ -144,10 +144,24 @@ func TestRestoreStepListsTheMapAfterItsWait(t *testing.T) {
 		progress, err := test.step.Run(t.Context(), edgeTestRoot, incidentId)
 		done <- outcome{progress: progress, err: err}
 	}()
-	start := test.clock.Now()
-	// time moves only while the step waits on it, a poll at a time, until it lists
+	// time stands still until the step reaches the map's wait, its first read of the map's state, so no SOA read
+	// or diff it waits on before that can time out; then it moves only while the step waits on it, a poll at a time,
+	// until it lists
 	var result outcome
-	for finished := false; !finished; {
+	finished := false
+	for !finished {
+		reads, changed := test.maps.StateReads()
+		if 1 <= reads {
+			break
+		}
+		select {
+		case result = <-done:
+			finished = true
+		case <-changed:
+		}
+	}
+	start := test.clock.Now()
+	for !finished {
 		pending, added := test.clock.WatchTimers()
 		select {
 		case result = <-done:
