@@ -466,6 +466,7 @@ func (self *RecordRetention) Expire(ctx context.Context, args *RecordRetentionEx
 	return self.expire(ctx, args)
 }
 
+// Expire's pass. The caller holds passLock.
 func (self *RecordRetention) expire(ctx context.Context, args *RecordRetentionExpireArgs) (*RecordRetentionPass, error) {
 	writer := self.record.writer
 	if err := recordEraseAdmin(writer.auth(), writer.sidecarId, args.LogId); err != nil {
@@ -597,6 +598,8 @@ func (self *RecordRetention) Tick(ctx context.Context) {
 	}
 }
 
+// One log's part of a tick: its expiry pass of the day once its delay has run, and its BASE once a week. The caller
+// holds passLock.
 func (self *RecordRetention) tickLog(ctx context.Context, logId Id) error {
 	writer := self.record.writer
 	mark, err := self.readMark(logId)
@@ -663,6 +666,7 @@ func (self *RecordRetention) Base(ctx context.Context, logId Id) (int, error) {
 	return self.rebase(ctx, logId)
 }
 
+// Base's pass. The caller holds passLock.
 func (self *RecordRetention) rebase(ctx context.Context, logId Id) (int, error) {
 	base := func() RecordRetentionBaseFunction {
 		self.stateLock.Lock()
