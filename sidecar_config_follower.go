@@ -402,7 +402,9 @@ func (self *SidecarConfigFollower) Heads() ConfigHeadReader {
 
 // The client's newest verified state whether or not the follower stands, a start's own included
 // (ConfigClient.VerifiedState): what evs's verifier judges the config repo's pushes at while the follower catches up to
-// its anchor (QD-804). Nil before its client starts, after a refusal and once closed, so nothing is judged by it then.
+// its anchor (QD-804). A joining device's follower (QD-817) answers a full pass's own state while that pass runs, the
+// one the base whose head it reads lands on, and nil between passes, never the rows-only log's. Nil before its client
+// starts, after a refusal and once closed, so nothing is judged by it then.
 func (self *SidecarConfigFollower) VerifiedState() *ConfigState {
 	client := func() *ConfigClient {
 		self.stateLock.Lock()
