@@ -2,8 +2,8 @@
 
 // A VPN component's config head reader (DESIGN-DETAILS 4.2.5's Compile, step 3; QD-804, QD-814; owner decision 197;
 // SDK-M8-16): the replaying EvsConfigHeadReader on the network's config repo, built for a forwarding role, which the
-// Forwarder reads each base's head through so a network past its first base compiles in the component with no sidecar
-// role running.
+// Forwarder reads each base's head through. Every base names a head, base 1's included, so with no reader nothing
+// compiles; with it the component compiles each network with no sidecar role running.
 //
 //	tokens   F's exchange (ForwardingClient.ConfigHeads), which api answers only for the config repo's read scope
 //	keys     the generations the Forwarder's store holds (Forwarder.RepoKeyAt), opened by the forwarding reader key,
@@ -23,8 +23,8 @@
 //
 // Off the ios_extension leg: the replay reads push records through evs_export.go and evs_reseed_record.go, which the
 // Apple extensions' leg leaves out by tag (DESIGN-DETAILS 4.2.3), so those extensions build no head reader yet
-// (question sdk-m8-04-forwarding-heads-on-the-leg) and a network past its first base never compiles there, the closed
-// direction. Android's VPN service and the desktop app services link it. Not a bridge_forward file, so the leg's seed
+// (question sdk-m8-04-forwarding-heads-on-the-leg) and compile nothing: a role's posture there stays pending after its
+// hand-off, the closed direction. Android's VPN service and the desktop app services link it. Not a bridge_forward file, so the leg's seed
 // rule does not take it. Safe for concurrent use; one read replays at a time.
 
 package sidecar

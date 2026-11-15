@@ -394,7 +394,8 @@ type ForwarderArgs struct {
 	Projection ConfigProjectionReader
 	// Reads the config head a base names, with the keys RepoKeyAt answers. One that reads anchors
 	// (ConfigHeadAnchorReader) reads it at the state at that base, since each compile starts there (QD-814). Nil
-	// reads none: a network past its first base then never compiles, and the sink stays as its posture has it.
+	// reads none: since every base names a head, base 1's included, nothing then compiles, and the sink stays as its
+	// posture has it.
 	Heads ConfigHeadReader
 	// Nil opens no generation, so every sealed body stays pending.
 	Gkm ForwarderGkm
