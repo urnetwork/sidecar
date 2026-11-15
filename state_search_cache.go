@@ -1072,7 +1072,8 @@ func (self *SearchCacheRecordFrames) checkKeys() error {
 // ErrSearchCacheKeysLacking for a record kept before the cache kept its keys, which stays for the next sync round to
 // fetch again; ErrSearchCacheSlotKeyed for a slot-keyed one; ErrSearchCacheKey, dropping nothing, for a key of another
 // repo or generation or one that does not unwrap the block. A header that opens but is not the record its keys were
-// kept for drops the file: ErrSearchCacheRefetch.
+// kept for drops the file: ErrSearchCacheRefetch. An instance that is not open answers its state's error, such as
+// ErrSidecarStoreLocked, and a lock while the key is unwrapped ErrSearchCacheReadEnded, the key cleared either way.
 func (self *SearchCacheRecordFrames) OpenRead(repoKey *EvsRepoKey) (*SearchCacheRecordRead, error) {
 	if err := self.checkKeys(); err != nil {
 		return nil, err
