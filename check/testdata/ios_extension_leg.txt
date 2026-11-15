@@ -78,6 +78,7 @@ config_head.go
 config_indexer.go
 config_keys.go
 config_leaves.go
+config_member_remove.go
 config_names.go
 config_presence.go
 config_read_only.go

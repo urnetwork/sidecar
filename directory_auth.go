@@ -21,8 +21,9 @@
 //	             devices, never an admin; a worker's or a socket's reach by the requests rule the request's
 //	             CanonicalAction names, autogroup:dst-owner resolved by ACL, a socket's listeners read as
 //	             plan-ACL-small-readings #5, a sponsor gone resolving to autogroup:admin
-//	masked       a sidecar whose row is revoked: a SidecarRevoke, a reap, or its member's MemberRevoke (§16.11's
-//	             member and device rows); TEAM-M6-11's ConfigState.MaskedInDirectory replaces this reading
+//	masked       TEAM-M6-11's ConfigState.MaskedInDirectory: a sidecar whose row is revoked at or before the state's
+//	             position, by a SidecarRevoke, a reap, or its member's MemberRevoke, never a removed member's tagged
+//	             agents (§7.10's cards row; §16.11's member and device rows)
 //	voided       what a sidecar signed at a position that a compromise cascade in this state reaches (§7.9's cascade,
 //	             §7.10's since_n), however long after the signature the revocation came (RECORD-M6-15)
 //	right ended  whether an entry after a repo item's push pin ended its signer's right more than 10 min before the
@@ -757,8 +758,7 @@ func (self *configDirectoryAuth) SponsorOf(sidecarId Id) (Id, bool) {
 	return self.state.Sponsor(sidecarId)
 }
 
-// Whether its row is revoked at or before this state.
+// ConfigState's mask (TEAM-M6-11).
 func (self *configDirectoryAuth) Masked(sidecarId Id) bool {
-	row := self.state.SidecarRow(sidecarId)
-	return row != nil && row.GetRevokedAt() != 0 && row.GetRevokedAt() <= self.state.n
+	return self.state.MaskedInDirectory(sidecarId)
 }
