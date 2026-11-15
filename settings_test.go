@@ -228,6 +228,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ViewCoalesce:          30 * time.Second,
 				PhoneMeteredByteCount: 8 * 1024 * 1024,
 				RenewJitter:           5 * time.Minute,
+				PhoneLeaseRenewAge:    24 * time.Hour,
+				PhoneLeaseExpiry:      7 * 24 * time.Hour,
 			},
 		},
 	}
@@ -257,6 +259,7 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 		HelloCacheTimeout:                10 * time.Minute,
 		MarkedKeepaliveInterval:          60 * time.Second,
 		MarkedSessionTimeout:             120 * time.Second,
+		MarkedPeerMaxCount:               3,
 		DefaultCallTimeout:               15 * time.Second,
 		HelloUnknownPeerCount:            1024,
 		CallSendRetryInterval:            250 * time.Millisecond,

@@ -25,6 +25,11 @@ type SidecarProtocolSettings struct {
 	// indexer: 120 s, connect's receive idle, past which §6.10's session row calls it lost and a Hello
 	// re-establishes it. §6.6's comment on HelloCacheTimeout names the value; this field holds it.
 	MarkedSessionTimeout time.Duration
+	// The most search indexers an app host keeps warm at once, each a marked pair with a §6.10 window and a
+	// keepalive of its own: 3, the two own indexers a search asks at once (QD-707) and one other member's
+	// (DESIGN-DETAILS 7.2.3). Subprotocol.MarkSearchPeers refuses each id past it; every pair costs C19's
+	// floor a window in the foreground (DESIGN-DETAILS 7.4).
+	MarkedPeerMaxCount int
 	// A call's timeout when its caller sets none: 15 s. The protocol's maximum is 55 s, before the 60 s
 	// sequence exit (§6.6).
 	DefaultCallTimeout time.Duration
@@ -135,6 +140,7 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		HelloCacheTimeout:                10 * time.Minute,
 		MarkedKeepaliveInterval:          60 * time.Second,
 		MarkedSessionTimeout:             120 * time.Second,
+		MarkedPeerMaxCount:               3,
 		DefaultCallTimeout:               15 * time.Second,
 		HelloUnknownPeerCount:            1024,
 		CallSendRetryInterval:            250 * time.Millisecond,
