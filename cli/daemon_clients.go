@@ -3,8 +3,9 @@
 // client with its evs component and its local git tier, and the config repo's head reader over that EvsClient
 // (sidecar.EvsConfigHeadReader), and fills three hooks with them:
 //
-//	urDaemonGkmClient    the key client: the config follower's, which hands it each verified state once it stands and
-//	                     takes the config repo's generation keys from it (RepoKeyAt), and ur keys rotate's
+//	urDaemonGkmClient    the key client: the config follower's, which hands it each verified state once it stands, and
+//	                     its rows-only states unconfirmed while it joins, and takes the config repo's generation keys
+//	                     from it (RepoKeyAt), and ur keys rotate's
 //	urDaemonConfigHeads  the head reader the follower checks each base's head through, on the EvsClient over the key
 //	                     client urDaemonGkmClient gives: a daemon with either hook unset withholds every base
 //	urDaemonEvsClient    the EvsClient, for git's service, a mount's git hooks, ur mount and the ur evs commands, once
@@ -14,6 +15,14 @@
 // (SidecarConfigFollower.VerifiedState), since a base's head is checked on the state the base lands on while the follower
 // catches up; nothing but the head reader reaches the EvsClient before the follower stands. The key client takes a state
 // only from the follower, so no state below the anchored head moves a key flow.
+//
+// A device joining its network (QD-817), which holds no generation of the config repo yet, gets the follower's
+// rows-only states before it stands (sidecar.GkmConfigJoiner, which the key client is): kept as unconfirmed, they choose
+// its group client, build its MLS engine under the admission they name, give the upkeep its member-device role, so its
+// KeyPackages reach gkm (F1's order), and check the credentials of the config group's leaves, and the group client takes
+// them for the config group's Welcome or wrap alone. Every other act of the key client waits for the first verified
+// state. Asked whether the config key is held before its group client is built, the key client reads the keychain
+// itself (Sidecar.GkmRepoKeyHeld), so a restart that holds the key keeps the full check from base 1.
 //
 //	intake   the network's GkmApi, its gkm hint intake and the key upkeep, built at the first client generation once
 //	         the Sidecar knows its network and identity; the upkeep keeps KeyPackages at gkm only while the newest state
@@ -37,11 +46,9 @@
 //
 // Not built here, each failing closed: the statement poster (CORE-M2-02's evs FileStatement), so a repo's create,
 // delete and restore refuse; the readers' committer lookup, so a commit by another of this sidecar's clients is refused;
-// a member's recovery key, so a rotation refuses where a member holds a recovery identity; the current ReaderKey's
-// digest, so a late ask names none; and a new member device's first config head, whose key it takes only from a state
-// the follower gives once it stands (question daemon-evs-gkm-clients-new-device-config-key). Not built and open:
-// HeadCheck's witness stop (the key client's SealAllowed and ReportFork), which no host runs yet, so an unwitnessed
-// device's sealing does not stop.
+// a member's recovery key, so a rotation refuses where a member holds a recovery identity; and the current ReaderKey's
+// digest, so a late ask names none. Not built and open: HeadCheck's witness stop (the key client's SealAllowed and
+// ReportFork), which no host runs yet, so an unwitnessed device's sealing does not stop.
 
 package main
 
@@ -210,6 +217,8 @@ type urNetworkClients struct {
 	hints  *sidecar.GkmHints
 	upkeep *sidecar.GkmUpkeep
 	group  *sidecar.GkmGroupClient
+	// closed once group is built, so a follower asking whether the config key is held asks the group client next
+	groupBuiltSignal chan struct{}
 	// whether the group client holds a leaf, chosen at its build (leafChoice)
 	leaf bool
 	evs  *sidecar.EvsClient
@@ -225,7 +234,10 @@ func newUrNetworkClients(running *sidecar.Sidecar, args *urDaemonClientsArgs, gk
 	if args != nil && args.Log != nil {
 		log = args.Log
 	}
-	self := &urNetworkClients{running: running, args: args, gkmHook: gkmHook, log: log, ctx: ctx, cancel: cancel}
+	self := &urNetworkClients{
+		running: running, args: args, gkmHook: gkmHook, log: log, ctx: ctx, cancel: cancel,
+		groupBuiltSignal: make(chan struct{}),
+	}
 	self.gkm = &urNetworkGkm{clients: self}
 	self.heads = &urNetworkConfigHeads{clients: self}
 	self.mls = &urNetworkMls{clients: self}
@@ -269,6 +281,11 @@ func (self *urNetworkClients) builtGroup() *sidecar.GkmGroupClient {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.group
+}
+
+// A channel closed once the group client is built.
+func (self *urNetworkClients) groupBuilt() <-chan struct{} {
+	return self.groupBuiltSignal
 }
 
 // The network's GkmApi, gkm hint intake and key upkeep, built at the first call once the Sidecar knows its network and
@@ -379,10 +396,11 @@ func (self *urNetworkClients) setRepoScopes() {
 	api.SetRepoScopes(scopes)
 }
 
-// The network's group client, built at the first call once a verified state names this sidecar (leafChoice), over the
-// intake's GkmApi and hints: with the network's MLS engine for a device that holds a leaf, with none for a tagged or
-// ephemeral sidecar, which holds wraps only. It is handed the newest state the key client was given. errUrKeysUnchosen
-// before a state names this sidecar.
+// The network's group client, built at the first call once a verified state names this sidecar (leafChoice), or a
+// joining device's unconfirmed one (QD-817), over the intake's GkmApi and hints: with the network's MLS engine for a
+// device that holds a leaf, with none for a tagged or ephemeral sidecar, which holds wraps only. It is handed the newest
+// state the key client was given, a verified one as AuthAdvanced, an unconfirmed one as AuthUnconfirmed.
+// errUrKeysUnchosen before a state names this sidecar.
 func (self *urNetworkClients) groupClient() (*sidecar.GkmGroupClient, error) {
 	self.groupLock.Lock()
 	defer self.groupLock.Unlock()
@@ -433,23 +451,30 @@ func (self *urNetworkClients) groupClient() (*sidecar.GkmGroupClient, error) {
 		return nil, errUrClientsClosed
 	}
 	group.AttachHints(self.ctx, hints)
-	if state := self.gkm.newestState(); state != nil {
+	switch state, configRepoId, confirmed := self.gkm.joiningState(); {
+	case state == nil:
+	case confirmed:
 		group.AuthAdvanced(state)
+	default:
+		group.AuthUnconfirmed(state, configRepoId)
 	}
+	// built under groupLock, so this closes once
+	close(self.groupBuiltSignal)
 	return group, nil
 }
 
-// Whether this sidecar holds a leaf, from its row at the newest verified state that names it, the key client's newest
-// and else the follower's, a start's own included: a member device that is untagged and not ephemeral does, a tagged
-// or ephemeral sidecar does not (§7.9's leaves row); before its row, the Genesis's owner sidecar, the network's first
-// device, does. named is false while no state names it. A row's tags and ephemeral flag never change, so the choice
-// stands for the clients' life.
+// Whether this sidecar holds a leaf, from its row at the newest state that names it, the key client's newest, a joining
+// device's unconfirmed one included (QD-817), and else the follower's, a start's own included: a member device that is
+// untagged and not ephemeral does, a tagged or ephemeral sidecar does not (§7.9's leaves row); before its row, the
+// Genesis's owner sidecar, the network's first device, does. named is false while no state names it. A row's tags and
+// ephemeral flag never change, so the choice stands for the clients' life.
 func (self *urNetworkClients) leafChoice() (leaf bool, named bool) {
 	identity := self.running.Identity()
 	if identity == nil {
 		return false, false
 	}
-	for _, state := range []sidecar.GkmAuthView{self.gkm.newestState(), self.verifiedConfig()} {
+	joining, _, _ := self.gkm.joiningState()
+	for _, state := range []sidecar.GkmAuthView{joining, self.verifiedConfig()} {
 		if state == nil {
 			continue
 		}
@@ -499,9 +524,10 @@ func (self *urNetworkClients) readerPrivateKey(keySha256 []byte) (hpke.PrivateKe
 	return upkeep.ReaderPrivateKey(keySha256)
 }
 
-// This sidecar's row at the newest state the key client was given, nil before one or for a sidecar it does not admit.
+// This sidecar's row at the newest state the key client was given, a joining device's unconfirmed one included
+// (QD-817), nil before one or for a sidecar it does not admit.
 func (self *urNetworkClients) sidecarRow() *bridge.SidecarRow {
-	state := self.gkm.newestState()
+	state, _, _ := self.gkm.joiningState()
 	identity := self.running.Identity()
 	if state == nil || identity == nil {
 		return nil
@@ -510,7 +536,9 @@ func (self *urNetworkClients) sidecarRow() *bridge.SidecarRow {
 }
 
 // What the upkeep keeps at gkm for this device: KeyPackages once the newest state admits it as an untagged, standing
-// member device (§10.6), held back while a restored binding's admission waits for its anchor (§10.8).
+// member device (§10.6), a joining device's unconfirmed state included, since F1 has a new device upload them before
+// it reads the config back to genesis and its admitter claims one for the config group's Add (QD-817); held back while
+// a restored binding's admission waits for its anchor (§10.8).
 func (self *urNetworkClients) upkeepRole() sidecar.GkmUpkeepRole {
 	role := sidecar.GkmUpkeepRole{AwaitingAnchor: self.running.RecoveryAwaitingAnchor()}
 	row := self.sidecarRow()
@@ -524,10 +552,12 @@ func (self *urNetworkClients) upkeepRole() sidecar.GkmUpkeepRole {
 // The admission this sidecar's MLS engine is built under (§10.4's admission_sha256), at the newest state the key client
 // was given: its row's, the hash of the SidecarAdmit that admitted it or, for the network's first device, the Genesis's
 // own hash A_0, which base 1's compile gives its row (QD-825; §10.4: "Genesis for the first device"). Before base 1 the
-// first device has no row, and the hash is the same A_0 from the anchor its follower holds the log to.
-// ErrGkmUnavailable before a state admits this sidecar, and for a tagged or ephemeral sidecar, which holds no leaf.
+// first device has no row, and the hash is the same A_0 from the anchor its follower holds the log to. A joining
+// device's engine is built under its unconfirmed state's row (QD-817), to take the config group's Welcome; a verified
+// state naming another admission refuses the engine after (errUrMlsAdmissionMoved). ErrGkmUnavailable before a state
+// admits this sidecar, and for a tagged or ephemeral sidecar, which holds no leaf.
 func (self *urNetworkClients) admission() ([]byte, error) {
-	state := self.gkm.newestState()
+	state, _, _ := self.gkm.joiningState()
 	identity := self.running.Identity()
 	if state == nil || identity == nil {
 		return nil, fmt.Errorf("%w: no verified state admits this sidecar yet", sidecar.ErrGkmUnavailable)
@@ -785,24 +815,85 @@ func (self *urNetworkClientsComponent) Close() {
 // The key client urDaemonGkmClient answers for a network: the network's GkmGroupClient, built at the first call that
 // needs it once a verified state names this sidecar (urNetworkClients.groupClient), ErrGkmUnavailable before. It keeps
 // the newest state it was given, the follower's once it stands, which the MLS engine's admission, the upkeep's role and
-// the repos the group client joins are read from.
+// the repos the group client joins are read from; and, while the device joins its network (QD-817), the follower's
+// newest rows-only state, which stands in for the first three until a verified state is given and reaches the group
+// client for the config group's join alone.
 type urNetworkGkm struct {
 	clients *urNetworkClients
 
 	stateLock sync.Mutex
 	newest    sidecar.GkmAuthView
+	// the follower's newest rows-only state before it stands, and the config repo it serves; nil once a verified state
+	// is given
+	unconfirmed             sidecar.GkmAuthView
+	unconfirmedConfigRepoId sidecar.Id
 }
 
 var (
 	_ sidecar.GkmClient       = (*urNetworkGkm)(nil)
 	_ sidecar.GkmGroupDrafter = (*urNetworkGkm)(nil)
+	_ sidecar.GkmConfigJoiner = (*urNetworkGkm)(nil)
 )
 
-// The newest state given, nil before one.
+// The newest verified state given, nil before one.
 func (self *urNetworkGkm) newestState() sidecar.GkmAuthView {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.newest
+}
+
+// What a joining device's composition reads (QD-817): the newest verified state given, else the newest unconfirmed one
+// with the config repo it serves; confirmed says which. A nil state before either.
+func (self *urNetworkGkm) joiningState() (state sidecar.GkmAuthView, configRepoId sidecar.Id, confirmed bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.newest != nil {
+		return self.newest, sidecar.Id{}, true
+	}
+	return self.unconfirmed, self.unconfirmedConfigRepoId, false
+}
+
+// joiningState's state, which the MLS engine checks a leaf's credential at: a joining device takes the config group's
+// Welcome before any verified state is given.
+func (self *urNetworkGkm) joiningView() sidecar.GkmAuthView {
+	state, _, _ := self.joiningState()
+	return state
+}
+
+// The follower's rows-only state before it stands (sidecar.GkmConfigJoiner; QD-817): kept unless a verified state was
+// given or a newer unconfirmed one was, and handed to the group client, built now where this state names this sidecar,
+// for the config group's join alone. Never blocks on I/O.
+func (self *urNetworkGkm) AuthUnconfirmed(state sidecar.GkmAuthView, configRepoId sidecar.Id) {
+	if state == nil {
+		return
+	}
+	kept := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.newest != nil || self.unconfirmed != nil && state.Pin().GetVersion() <= self.unconfirmed.Pin().GetVersion() {
+			return false
+		}
+		self.unconfirmed, self.unconfirmedConfigRepoId = state, configRepoId
+		return true
+	}()
+	if !kept {
+		return
+	}
+	if group, err := self.group(); err == nil {
+		group.AuthUnconfirmed(state, configRepoId)
+	}
+}
+
+// Whether the network's keychain holds a generation of the repo, and a channel closed once that may have changed
+// (sidecar.GkmConfigJoiner): the group client's answer where it is built, else the keychain read with no key client
+// (Sidecar.GkmRepoKeyHeld) and a channel closed once the group client is built, which the follower asks next.
+func (self *urNetworkGkm) RepoKeyHeld(repoId sidecar.Id) (bool, <-chan struct{}) {
+	// armed before the look, so a build between them wakes the follower to ask the group client
+	built := self.clients.groupBuilt()
+	if group := self.clients.builtGroup(); group != nil {
+		return group.RepoKeyHeld(repoId)
+	}
+	return self.clients.running.GkmRepoKeyHeld(repoId), built
 }
 
 // The group client, building it where it is not built yet.
@@ -830,6 +921,8 @@ func (self *urNetworkGkm) AuthAdvanced(state sidecar.GkmAuthView) {
 			return false
 		}
 		self.newest = state
+		// a verified state supersedes the joining device's unconfirmed one
+		self.unconfirmed, self.unconfirmedConfigRepoId = nil, sidecar.Id{}
 		return true
 	}()
 	if !advanced {
@@ -914,10 +1007,11 @@ func (self *urNetworkGkm) ForgetRepo(ctx context.Context, repoId sidecar.Id) err
 	return group.ForgetRepo(ctx, repoId)
 }
 
-// The network's MLS engine, built at the first call that needs it once the newest state the key client holds admits
-// this sidecar as a member device, under the admission that state gives it (urNetworkClients.admission), on the
-// network's store: ErrGkmUnavailable before. The group client of a tagged or ephemeral sidecar is built with no engine
-// (leafChoice), and this refuses one all the same; an admission the engine was not built under is refused. Both closed.
+// The network's MLS engine, built at the first call that needs it once the newest state the key client holds, a joining
+// device's unconfirmed one included (QD-817), admits this sidecar as a member device, under the admission that state
+// gives it (urNetworkClients.admission), on the network's store, checking each leaf's credential at that state:
+// ErrGkmUnavailable before. The group client of a tagged or ephemeral sidecar is built with no engine (leafChoice), and
+// this refuses one all the same; an admission the engine was not built under is refused. Both closed.
 type urNetworkMls struct {
 	clients *urNetworkClients
 
@@ -942,7 +1036,7 @@ func (self *urNetworkMls) get() (sidecar.MlsEngine, error) {
 		}
 		return self.engine, nil
 	}
-	args, err := self.clients.running.MlsEngineArgs(admissionSha256, sidecar.NewGkmCredentialCheck(self.clients.gkm.newestState))
+	args, err := self.clients.running.MlsEngineArgs(admissionSha256, sidecar.NewGkmCredentialCheck(self.clients.gkm.joiningView))
 	if err != nil {
 		return nil, err
 	}
