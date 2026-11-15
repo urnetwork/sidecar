@@ -86,6 +86,9 @@ var (
 	ErrDirectoryCardOverCap = errors.New("directory card over its caps")
 	// The client has no signer or no network bound (DirectoryClientArgs.Sign and NetworkId): nothing was signed.
 	ErrDirectoryCardUnbound = errors.New("directory card writer unbound")
+	// This sidecar does not stand to write in the directory at the state now (§16.11's card row): readers would ignore
+	// its card, so nothing was signed.
+	ErrDirectoryCardStanding = errors.New("directory card: this sidecar does not stand to write")
 )
 
 // What cards and repo files hold at most and how they are stored and judged. Their defaults are §16.11's values,
@@ -873,7 +876,7 @@ func (self *DirectoryClient) cardItems(items []*protocol.Announcement, settings 
 }
 
 // Puts this sidecar's card with args' items: see the file's header's write row. A read_only client, one with no
-// writer standing, and one with no signer or network bound refuse, signing nothing.
+// signer or network bound, and one whose sidecar does not stand to write in the directory now refuse, signing nothing.
 func (self *DirectoryClient) WriteCard(ctx context.Context, args *DirectoryCardWriteArgs) (*DirectoryCardWritten, error) {
 	if args == nil {
 		args = &DirectoryCardWriteArgs{}
@@ -918,6 +921,13 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 		pin := auth.Pin()
 		if !directoryPinValid(pin) {
 			return nil, ErrDirectoryAuthUnavailable
+		}
+		standing, err := auth.SignerStanding(self.sidecarId, pin)
+		if err != nil {
+			return nil, err
+		}
+		if standing != DirectoryStandingStanding {
+			return nil, fmt.Errorf("%w: %s", ErrDirectoryCardStanding, standing)
 		}
 		card := &protocol.DirectoryCard{
 			NetworkId:     self.networkId.Bytes(),

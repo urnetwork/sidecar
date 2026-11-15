@@ -570,7 +570,7 @@ func TestDirectoryCardDecoders(t *testing.T) {
 	}
 }
 
-// Unbound, a client writes no card and no repo file, signing nothing; read_only, it refuses.
+// Unbound, a client writes no card, signing nothing; read_only, or for a suspended sidecar, it refuses.
 func TestDirectoryCardWriterRefusals(t *testing.T) {
 	world := newTestDirectoryWorld(t, nil)
 	memberId := sidecar.NewId()
@@ -584,6 +584,14 @@ func TestDirectoryCardWriterRefusals(t *testing.T) {
 	readOnly := world.clientFor(writer.sidecarId, nil, true)
 	if _, err := readOnly.client.WriteCard(t.Context(), &sidecar.DirectoryCardWriteArgs{}); !errors.Is(err, sidecar.ErrDirectoryReadOnly) {
 		t.Errorf("a read_only client's card: %v", err)
+	}
+	// a suspended sidecar's card is one readers ignore, so it writes none
+	device := world.device(writer)
+	device.mustSync(t)
+	world.directoryFixture.Sidecars[writer.sidecarId].SuspendedAt = world.directoryAuth.Tip().Pin().GetVersion() + 1
+	world.publish()
+	if _, err := device.client.WriteCard(t.Context(), &sidecar.DirectoryCardWriteArgs{}); !errors.Is(err, sidecar.ErrDirectoryCardStanding) {
+		t.Errorf("a suspended sidecar's card: %v", err)
 	}
 	if version := world.cardFileVersion(sidecar.DirectoryCardPath(writer.sidecarId)); version != 0 {
 		t.Errorf("a refused card at version %d", version)
