@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // MTA-STS's policy for a zone's mail host (§12.7, §15.5, RFC 8461; DNS-M8-01): the text a mail-enabled
 // network's receivers serve at https://mta-sts.<zone>/.well-known/mta-sts.txt as a system publish (MAIL-M8-08),
 // and the id §12.7's _mta-sts TXT carries, "v=STSv1; id=<id>", which changes exactly when the text does, so a

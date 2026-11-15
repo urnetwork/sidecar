@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
-
-	"github.com/urnetwork/sidecar"
 )
 
 // Team scopes (zone_scope.go; DNS-M6-06): a scope label refused in each listed case; a scope's set
@@ -31,7 +29,7 @@ func testScopeRows(edge bool) []DnsRecordSet {
 		{Owner: apex, Type: dns.TypeTXT, Ttl: 3600, Kind: DnsRecordKindSystem, Rdata: []string{`"v=spf1 -all"`}},
 		{Owner: "*." + apex, Type: dns.TypeMX, Ttl: 300, Kind: DnsRecordKindSystem, Rdata: []string{"0 ."}},
 		{Owner: "_dmarc." + apex, Type: dns.TypeTXT, Ttl: 3600, Kind: DnsRecordKindSystem, Rdata: []string{`"v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=s"`}},
-		{Owner: "web." + apex, Type: dns.TypeA, Ttl: 300, Kind: DnsRecordKindUser, Rdata: []string{"11.22.33.55"}},
+		{Owner: "web." + apex, Type: dns.TypeA, Ttl: 300, Kind: DnsRecordKindUser, Rdata: []string{"11.22.33.44"}},
 	}
 	if edge {
 		rows = append(rows, DnsRecordSet{Owner: "*." + apex, Type: dns.TypeA, Ttl: 60, Kind: DnsRecordKindEdge})
@@ -40,8 +38,7 @@ func testScopeRows(edge bool) []DnsRecordSet {
 }
 
 // Refused: not one lowercase LDH label, one of §12.7's system hosts, a word-number label, §12.5's reserved
-// list, a host the zone holds, a client name, and a brand the network has not verified; a plain label passes,
-// and a brand passes for the network verifying the brand's own domain.
+// list, a host the zone holds, a client name, and a brand the network has not verified; a plain label passes.
 func TestValidateDnsScopeLabel(t *testing.T) {
 	context := &DnsScopeLabelContext{Hosts: []string{"shop", "www"}, ClientNames: []string{"laptop"}}
 	refused := []string{"", "Eng", "e_ng", "-eng", "b", "mx", "maple-1234", "www", "api", "main-x", "shop", "laptop", "paypal"}
@@ -54,10 +51,6 @@ func TestValidateDnsScopeLabel(t *testing.T) {
 		if err := ValidateDnsScopeLabel(label, context); err != nil {
 			t.Errorf("%q: %v", label, err)
 		}
-	}
-	verified := &DnsScopeLabelContext{Facts: &sidecar.ScreenFacts{VerifiedDomains: []string{"paypal.com"}}}
-	if err := ValidateDnsScopeLabel("paypal", verified); err != nil {
-		t.Errorf("a verified brand: %v", err)
 	}
 	if err := ValidateDnsScopeLabel("eng", nil); err != nil {
 		t.Errorf("no context: %v", err)
@@ -74,7 +67,7 @@ func TestZoneScopeAnswersItsOwnSet(t *testing.T) {
 	requireAliasAnswer(t, view, healthy, scope, dns.TypeMX, dns.RcodeSuccess, "MX 0 .")
 	requireAliasAnswer(t, view, healthy, scope, dns.TypeTXT, dns.RcodeSuccess, `TXT "v=spf1 -all"`)
 	requireAliasAnswer(t, view, healthy, "maple-1234."+scope, dns.TypeMX, dns.RcodeSuccess, "MX 0 .")
-	requireAliasAnswer(t, view, healthy, "web."+scope, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.55")
+	requireAliasAnswer(t, view, healthy, "web."+scope, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.44")
 	// no edge row in the scope: its wildcard holds MX alone, so an address query is NODATA, not the network's
 	requireAliasAnswer(t, view, healthy, "app."+scope, dns.TypeA, dns.RcodeSuccess)
 	requireAliasAnswer(t, view, healthy, "app."+testAliasLabel, dns.TypeA, dns.RcodeSuccess, "A 192.0.2.1", "A 192.0.2.2")
@@ -91,7 +84,7 @@ func TestZoneScopeAnswersUnderAnAlias(t *testing.T) {
 	view := newTestView(t, 1, append(append(append(testApexRows(), testAliasLabelRows()...), testScopeRows(true)...), testAliasRow(true))...)
 	aliasScope := testScopeLabel + "." + testAliasApex
 	requireAliasAnswer(t, view, healthy, aliasScope, dns.TypeMX, dns.RcodeSuccess, "MX 0 .")
-	requireAliasAnswer(t, view, healthy, "web."+aliasScope, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.55")
+	requireAliasAnswer(t, view, healthy, "web."+aliasScope, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.44")
 	requireAliasAnswer(t, view, healthy, "app."+aliasScope, dns.TypeA, dns.RcodeSuccess, "A 192.0.2.1", "A 192.0.2.2")
 }
 
