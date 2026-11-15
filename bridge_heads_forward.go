@@ -233,14 +233,17 @@ type forwarderSidecarStore struct {
 
 var _ SidecarStore = (*forwarderSidecarStore)(nil)
 
+// The record name names, as the forwarding store streams it.
 func (self *forwarderSidecarStore) Open(name string) (io.ReadCloser, error) {
 	return self.store.Open(self.prefix + name)
 }
 
+// Starts replacing the record name names; nothing shows until Commit.
 func (self *forwarderSidecarStore) Create(name string) (SidecarStoreWriter, error) {
 	return self.store.Create(self.prefix + name)
 }
 
+// Takes the record name names away; absent is not an error.
 func (self *forwarderSidecarStore) Remove(name string) error {
 	return self.store.Remove(self.prefix + name)
 }
