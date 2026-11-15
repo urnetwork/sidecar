@@ -240,6 +240,16 @@ type SidecarLocalSettings struct {
 	// The longest an events call waits for an event before it answers none: 25 s, under RequestTimeout's 30 s, so the
 	// wait answers before the request bound does, and so under ur's call bound and the sdk's.
 	EventWaitTimeout time.Duration
+	// How long an act a remote-mode app's call began waits, built and unsigned, for the app's next call (§5.8's two
+	// calls, daemon_approvals.go): 2 min, room for the person's presence check on the app between them, which is
+	// outside each call's RequestTimeout (QD-518), and the sdk's own bound on such a call. Past it the act ends
+	// unsigned and its next call is refused. Each hold the act reaches starts it again. Zero or less ends every such
+	// act unsigned as soon as it holds, so no two-call act signs.
+	PresenceActTimeout time.Duration
+	// How many such acts the daemon holds at once: 16, far past the one or two a person runs at a time, so a caller
+	// that begins acts and never finishes them holds bounded memory and goroutines. Past it a first call is refused,
+	// and zero or less refuses every one.
+	PresenceActCount int
 }
 
 // §16.10's limits, 5.9's cache and §11.14's remote search. A daemon designated for search (§7.9)
@@ -909,6 +919,8 @@ func DefaultSidecarSettings() *SidecarSettings {
 			EventRingEventCount:    1024,
 			EventReplyEventCount:   256,
 			EventWaitTimeout:       25 * time.Second,
+			PresenceActTimeout:     2 * time.Minute,
+			PresenceActCount:       16,
 		},
 		Mcp:    defaultSidecarMcpSettings(),
 		Ingest: defaultSidecarIngestSettings(),

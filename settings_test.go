@@ -365,6 +365,8 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 		EventRingEventCount:    1024,
 		EventReplyEventCount:   256,
 		EventWaitTimeout:       25 * time.Second,
+		PresenceActTimeout:     2 * time.Minute,
+		PresenceActCount:       16,
 	}
 	if *settings.LocalSettings != wantLocal {
 		t.Errorf("local settings %+v, want %+v", *settings.LocalSettings, wantLocal)
