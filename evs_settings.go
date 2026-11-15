@@ -79,7 +79,7 @@ type EvsSettings struct {
 	RefLockTimeout time.Duration
 
 	// DESIGN-DETAILS 8.2.2's receive and sync settings (evs_local_receive.go, evs_local_sync.go). The time an update
-	// may spend waiting on evs to take what it refused for now (GATE_CLOSED, 429, PATH_EPOCH_DUE, a lease), and on
+	// may spend waiting on evs to take what it refused for now (429, PATH_EPOCH_DUE, a lease), and on
 	// P_r, before git hears `ng <ref> busy` or `remote outcome pending`: 3 min, the hook's own bound.
 	ReceiveWaitTimeout time.Duration
 	// The time an update may spend building, uploading and posting before git hears `ng <ref> too slow`: 30 min, a

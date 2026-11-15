@@ -24,6 +24,10 @@
 // Each version carries the slot ids its entry names, read from the verified entry without opening a key, so an
 // erasing device names every retained version's slot keys from History even once some are gone (§11.12).
 //
+// Under the repo's prefix write rules every version is listed, and one this device ignores is marked Ignored with
+// its signer (DESIGN-DETAILS 16.2.5's History row); a version nobody can judge, under a rule set this device cannot
+// read, is shown as evs has it.
+//
 // On every leg. Safe for concurrent use.
 
 package sidecar
@@ -38,6 +42,10 @@ import (
 // A path's versions, newest first.
 func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistory, error) {
 	refId, err := self.resolveRefId(ctx, args.RefName, args.RefId)
+	if err != nil {
+		return nil, err
+	}
+	ruled, err := self.prefixRuled()
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +76,12 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			}
 			break
 		}
+		ignored := false
+		if ruled != nil {
+			if ignored, err = ruled.ignored(ctx, self, result, 0); err != nil {
+				return nil, err
+			}
+		}
 		// a read by number answers that version or one below it; anything else does not descend (see the file header)
 		descends := func(served uint64) bool {
 			if version == 0 || served <= version {
@@ -92,6 +106,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 				ClientId:        clientId,
 				Time:            evsTime(verified.Statement.Push.GetTimeMs()),
 				Removed:         true,
+				Ignored:         ignored,
 				State:           "kept",
 			})
 			if removal.GetPathVersion() <= 1 {
@@ -135,6 +150,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			ClientId:        info.ClientId,
 			Time:            info.Time,
 			Versioning:      entry.GetVersioning(),
+			Ignored:         ignored,
 			State:           state,
 			SlotIds:         slotIds,
 		})

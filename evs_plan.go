@@ -190,6 +190,9 @@ type EvsPlanArgs struct {
 	Tainted bool
 	// The agent the push is made for, which its sealed provenance names and its subkey signs, nil for none.
 	AgentId *Id
+	// The flags the push will carry, which the repo's prefix rules read: one 16.2.4's line 1 leaves outside the rules
+	// asks nothing of them.
+	Flags uint32
 }
 
 // A planned push. See the file header.
@@ -235,6 +238,9 @@ type EvsWritePlan struct {
 	// planned on a ref with no head, in the epoch firstEpoch gave: a refusal is answered by planning again, never by a
 	// retoken, and lowers no floor (DESIGN-DETAILS 9.2.3)
 	firstPush bool
+	// under the repo's prefix rules: each written path whose newest event at evs this device ignores, with the
+	// effective version its write repairs to (DESIGN-DETAILS 16.2.7)
+	prefixBases map[string]*evsPrefixWriteBase
 	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
 	slotKeyed bool
 	// the ref's name bytes and the repo's kind, which a write's versioning is decided from (evs_write_versionless.go)
@@ -308,6 +314,10 @@ type EvsPlannedPath struct {
 	keptSlotIds []Id
 	// the version the change is held to is versionless: a conflict on it is never rebased (evs_write_versionless.go)
 	baseVersionless bool
+	// The repair form (DESIGN-DETAILS 16.2.7; §11.7's sixth checkpoint case): a write over an event of the path this
+	// device ignores under the repo's prefix rules. Its content is one checkpoint, and its parent's delta states its
+	// row again, so a reader that ignored a delta taking the row away, or adding it, follows the row from here.
+	Repair bool
 }
 
 // A slot-keyed chain's object key and where its slot holds it.
@@ -407,6 +417,28 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			readPaths = append(readPaths, directory)
 		}
 	}
+	// the repo's prefix rules, asked before the first round trip: nothing is planned, sealed or sent for a path this
+	// device may not write (DESIGN-DETAILS 16.2.7). The ref's kind is its name's, as setRef has it for a ref with no
+	// head; .ur-index/ was refused above, so the mode decides nothing here
+	ruled, err := self.prefixRuled()
+	if err != nil {
+		return nil, err
+	}
+	if ruled != nil {
+		ask := &evsPrefixWriteAsk{
+			refName: args.RefName, refKind: protocol.EvsRefKind_EVS_REF_SHARED, refMode: protocol.EvsRefMode_EVS_REF_FILE,
+			flags: args.Flags,
+		}
+		if _, owned := EvsOwnedRefOwner(args.RefName); owned {
+			ask.refKind = protocol.EvsRefKind_EVS_REF_OWNED
+		}
+		for _, write := range args.Writes {
+			ask.paths = append(ask.paths, write.Path)
+		}
+		if err := ruled.allowWrite(ctx, self, ask); err != nil {
+			return nil, err
+		}
+	}
 	writes := map[string]*EvsPathWrite{}
 	for _, write := range args.Writes {
 		writes[write.Path] = write
@@ -459,6 +491,19 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 				if write == nil {
 					directories[readPath.path] = evsDirectoryReadOf(readPath, result.replies[i])
 					continue
+				}
+				if ruled != nil && plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && plan.RefMode == protocol.EvsRefMode_EVS_REF_FILE {
+					// the path as this device follows it: evs's newest event, or the effective version below it
+					base, err := ruled.writeBase(ctx, self, result, i)
+					if err != nil {
+						return err
+					}
+					if base != nil {
+						if plan.prefixBases == nil {
+							plan.prefixBases = map[string]*evsPrefixWriteBase{}
+						}
+						plan.prefixBases[write.Path] = base
+					}
 				}
 				path, err := self.planPath(ctx, plan, result, readPath, result.replies[i], write)
 				if _, ok := evsPlannedConflict(err); ok {
@@ -616,6 +661,11 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	}
 	planned := &EvsPlannedPath{Path: write.Path, TokenPath: readPath.current, Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE, names: readPath.names}
 	stands := verified.Entry != nil
+	// under the repo's prefix rules, where evs's newest event of the path is one this device ignores: the caller's
+	// versions are compared with the effective version's number, and the write takes the repair form. Its
+	// base_entry_version and prev_push_id stay evs's newest, or 5g refuses it and History's walk breaks (16.2.7)
+	repairBase := plan.prefixBases[write.Path]
+	planned.Repair = repairBase != nil
 	if stands {
 		planned.PrevPushId = verified.Statement.Push.GetPushId()
 		planned.PrevCommitVersion = verified.CommitVersion
@@ -626,6 +676,9 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 		newest := uint64(0)
 		if stands {
 			newest = evsVerifiedNewestVersion(verified)
+		}
+		if repairBase != nil {
+			newest = repairBase.version
 		}
 		if newest != *write.IfVersion {
 			return nil, newEvsPlannedConflict([]string{write.Path}, []EvsTokenPath{readPath.current})
@@ -638,6 +691,9 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 			newest = evsVerifiedNewestVersion(verified)
 		case verified.Removal != nil:
 			newest = verified.Removal.GetPathVersion()
+		}
+		if repairBase != nil {
+			newest = repairBase.version
 		}
 		if newest != *base {
 			return nil, ErrEvsPathMoved
@@ -676,7 +732,12 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	var previousContent *evsSpill
 	var previousKeys *evsChainKeys
 	var previousFields *protocol.EvsSealedFields
-	if stands {
+	if stands && planned.Repair {
+		// the repair form: one checkpoint of the caller's content, chunks above 8 MiB, never a diff, under a file id
+		// of its own. The ignored version's chain is not read, kept or diffed against, so no reader's reconstruction
+		// passes through a record this device ignores
+		verified = &EvsVerifiedPath{TokenPath: verified.TokenPath}
+	} else if stands {
 		content, state, keys, fields, err := self.readBaseKeys(ctx, result, verified)
 		if err != nil {
 			return nil, err
@@ -729,6 +790,9 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	}
 	if err := self.planChain(ctx, plan, planned, write, verified, previous, previousContent, previousKeys, oid); err != nil {
 		return nil, err
+	}
+	if planned.Repair {
+		planned.Checkpoint = EvsCheckpointRepair
 	}
 	return planned, nil
 }

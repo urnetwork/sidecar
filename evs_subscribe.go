@@ -1181,9 +1181,22 @@ func (self *evsSubscriber) raiseChanges(ctx context.Context, repo *EvsRepo, refI
 		change.Paths = evsSortedPaths(change.Paths)
 		changes = append(changes, change)
 	}
+	ruled, ruledErr := repo.prefixRuled()
 	for _, verified := range head.Statements {
 		push := verified.Statement.Push
 		touched := evsStatementTokenPaths(verified.Statement)
+		if ruled != nil {
+			// no change event for a change this device ignores (DESIGN-DETAILS 16.2.5): its subscribers hear of
+			// the alarm, not of a change
+			followed, any := ruled.followed(ctx, repo, refId, verified)
+			if !any {
+				continue
+			}
+			touched = followed
+		} else if ruledErr != nil {
+			// a ruled repo this client cannot judge: its reads refuse, and a change event would only prompt one
+			continue
+		}
 		change := &EvsRepoChange{
 			RepoId:    repo.repoId,
 			RefId:     refId,

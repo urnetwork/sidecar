@@ -16,6 +16,12 @@
 // A listing of a ref's root hides the index files' root unless asked, and reads each file's versioning setting when
 // asked, from the newest version of each (EVS2-M10-18; evs_read_versionless.go).
 //
+// Under the repo's prefix write rules (DESIGN-DETAILS 16.2.5's List row) the folded table is evs's word, as it
+// always is for a head reader; the deltas after it are judged and an ignored one is not applied, and a row whose path
+// this device's read record holds as effectively absent is left out. The listing cached for lookups stays evs's own
+// table, which is what a floor and a write's base read. A directory whose removal this device ignores answers
+// EVS_PREFIX_RULE with detail unavailable: a head reader holds no copy of a table evs removed, as a mirror does.
+//
 // On every leg. Safe for concurrent use.
 
 package sidecar
@@ -36,12 +42,25 @@ func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, 
 	if err != nil {
 		return nil, err
 	}
+	ruled, err := self.prefixRuled()
+	if err != nil {
+		return nil, err
+	}
 	result, err := self.read(ctx, refId, []string{args.Path}, args.Version, args.Fresh)
 	if err != nil {
 		return nil, err
 	}
 	defer result.objects.close()
 	verified := result.replies[0]
+	if ruled != nil && verified.Removal != nil {
+		ignored, err := ruled.ignored(ctx, self, result, 0)
+		if err != nil {
+			return nil, err
+		}
+		if ignored {
+			return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailUnavailable, Path: args.Path}
+		}
+	}
 	switch {
 	case verified.Base != nil:
 		return nil, ErrEvsOverlayBase
@@ -56,7 +75,7 @@ func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, 
 	if err := self.client.preDecrypt(ctx, self.repoId, refId, nil); err != nil {
 		return nil, err
 	}
-	opened, err := self.openListing(ctx, result, 0)
+	opened, followed, err := self.openListingRuled(ctx, result, 0, ruled)
 	if err != nil {
 		return nil, err
 	}
@@ -64,9 +83,29 @@ func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, 
 	cached := &evsListedDirectory{headVersion: result.head.Version, rows: map[string]*evsListedRow{}}
 	for token, row := range opened {
 		cached.rows[string(row.name)] = &evsListedRow{kind: row.kind, epoch: row.epoch, token: token}
+	}
+	shown := opened
+	if ruled != nil {
+		// the table as this device follows it: evs's fold and the deltas its rules allow
+		shown = followed
+	}
+	for _, row := range shown {
 		if args.Path == "" && !args.IndexFiles && string(row.name) == strings.TrimSuffix(indexFileModePrefix, "/") {
 			// the index files' root, shown only when asked (§16.2)
 			continue
+		}
+		if ruled != nil && args.Version == 0 {
+			childPath := string(row.name)
+			if args.Path != "" {
+				childPath = args.Path + "/" + childPath
+			}
+			absent, err := ruled.rowAbsent(self, refId, childPath, row.addedAt)
+			if err != nil {
+				return nil, err
+			}
+			if absent {
+				continue
+			}
 		}
 		listing.Entries = append(listing.Entries, &EvsListEntry{Name: row.name, Kind: row.kind, CarriedEpoch: row.carried})
 	}

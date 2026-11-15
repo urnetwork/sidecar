@@ -43,10 +43,23 @@ type evsTestConfig struct {
 	writers      []Id
 	readers      []Id
 	repo         *protocol.AclRepo
+	// the sidecars' admission rows, which a prefix rule's subject is matched against; nil holds none
+	rows map[Id]*bridge.SidecarRow
+	// the installed pin's version, 0 for 1
+	pinVersion uint64
 }
 
 func (self *evsTestConfig) Pin() *bridge.AuthPin {
-	return &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return &bridge.AuthPin{Version: max(1, self.pinVersion), Chain: evsTestBytes("auth chain", 32)}
+}
+
+// Installs a newer pin, as a follow of the authorization log does.
+func (self *evsTestConfig) setPin(version uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.pinVersion = version
 }
 func (self *evsTestConfig) At(pin *bridge.AuthPin) (GkmAuthView, error) {
 	self.stateLock.Lock()
@@ -79,7 +92,11 @@ func (self *evsTestConfig) RepoWriters(repoId Id) []Id {
 func (self *evsTestConfig) RepoReadersAt(repoId Id, at time.Time) []Id {
 	return self.RepoReaders(repoId)
 }
-func (self *evsTestConfig) SidecarRow(sidecarId Id) *bridge.SidecarRow        { return nil }
+func (self *evsTestConfig) SidecarRow(sidecarId Id) *bridge.SidecarRow {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.rows[sidecarId]
+}
 func (self *evsTestConfig) Member(memberId Id) *bridge.MemberRow              { return nil }
 func (self *evsTestConfig) Delegations() []*bridge.DelegationRow              { return nil }
 func (self *evsTestConfig) ReposGrantedToAtoms(atoms []Id, at time.Time) []Id { return nil }
