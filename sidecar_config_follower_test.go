@@ -41,6 +41,10 @@ type configFollowWorld struct {
 	networks []*sidecartest.AdmissionNet
 	// the settings each follower starts on
 	settings func() *sidecar.SidecarConfigFollowerSettings
+	// set before a Sidecar is hosted, each nil for none: the key client its follower takes, and what wraps its head
+	// reader
+	keys      func(running *sidecar.Sidecar) sidecar.GkmClient
+	wrapHeads func(running *sidecar.Sidecar, heads sidecar.ConfigHeadReader) sidecar.ConfigHeadReader
 
 	stateLock sync.Mutex
 	// the head_alarms each Sidecar raised, by the Sidecar
@@ -99,10 +103,17 @@ func (self *configFollowWorld) follow(running *sidecar.Sidecar) error {
 		defer self.stateLock.Unlock()
 		self.headAlarms[running] = append(self.headAlarms[running], event)
 	})
-	_, err := running.FollowConfig(&sidecar.SidecarConfigFollowerArgs{
+	args := &sidecar.SidecarConfigFollowerArgs{
 		Heads:    &configFollowTestHeads{world: self, running: running},
 		Settings: self.settings(),
-	})
+	}
+	if self.wrapHeads != nil {
+		args.Heads = self.wrapHeads(running, args.Heads)
+	}
+	if self.keys != nil {
+		args.Gkm = self.keys(running)
+	}
+	_, err := running.FollowConfig(args)
 	return err
 }
 

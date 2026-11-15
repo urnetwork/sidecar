@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,11 +90,14 @@ func testUrClientsOf(running *sidecar.Sidecar) *urNetworkClients {
 }
 
 // A head reader that hands each read's answer, and what the network's follower held as its newest verified state at
-// the read, to answers, reading through next.
+// the read, to answers, reading through next once admitted closes.
 type testUrProbedHeads struct {
 	next    sidecar.ConfigHeadReader
 	running *sidecar.Sidecar
 	answers chan *testUrProbedRead
+	// closed once the Sidecar is admitted: every read waits for it, so what the follower reads after a read includes
+	// the admission
+	admitted chan struct{}
 }
 
 // One read as testUrProbedHeads saw it.
@@ -106,6 +110,11 @@ type testUrProbedRead struct {
 
 // next's answer, with what the follower held when it was asked.
 func (self *testUrProbedHeads) ReadConfigHead(ctx context.Context, configVersion uint64, configHeadSha256 []byte) (*sidecar.ConfigHead, error) {
+	select {
+	case <-self.admitted:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: %w", sidecar.ErrConfigHeadUnavailable, ctx.Err())
+	}
 	read := &testUrProbedRead{}
 	if follower := self.running.ConfigFollower(); follower != nil {
 		read.verified = follower.VerifiedState()
@@ -131,23 +140,39 @@ func (self *testUrProbedHeads) answer(read *testUrProbedRead) {
 }
 
 // Installs urDaemonConfigHeads as the composition's reader probed, restoring the world's at the test's end, and hosts a
-// Sidecar in network: its first read's answer.
-func testUrHostProbed(t *testing.T, world *testUrFollowWorld, network int) (*sidecar.Sidecar, *testUrProbedRead) {
+// Sidecar in network, its follower's reads held until it is admitted: where each read's answer arrives, the first
+// unread one kept and later ones dropped until it is taken.
+func testUrHostProbing(t *testing.T, world *testUrFollowWorld, network int) (*sidecar.Sidecar, chan *testUrProbedRead) {
 	t.Helper()
 	answers := make(chan *testUrProbedRead, 1)
+	admitted := make(chan struct{})
 	held := urDaemonConfigHeads
 	t.Cleanup(func() { urDaemonConfigHeads = held })
 	urDaemonConfigHeads = func(running *sidecar.Sidecar) sidecar.ConfigHeadReader {
-		return &testUrProbedHeads{next: urNetworkConfigHeadReader(running), running: running, answers: answers}
+		return &testUrProbedHeads{next: urNetworkConfigHeadReader(running), running: running, answers: answers, admitted: admitted}
 	}
 	running := world.host(world.networks[network], nil)
+	close(admitted)
+	return running, answers
+}
+
+// The next read's answer.
+func testUrNextRead(t *testing.T, world *testUrFollowWorld, answers chan *testUrProbedRead) *testUrProbedRead {
+	t.Helper()
 	select {
 	case read := <-answers:
-		return running, read
+		return read
 	case <-world.ctx.Done():
 		t.Fatalf("the follower read no head: %v", world.ctx.Err())
 	}
-	return nil, nil
+	return nil
+}
+
+// testUrHostProbing's Sidecar and its first read's answer.
+func testUrHostProbed(t *testing.T, world *testUrFollowWorld, network int) (*sidecar.Sidecar, *testUrProbedRead) {
+	t.Helper()
+	running, answers := testUrHostProbing(t, world, network)
+	return running, testUrNextRead(t, world, answers)
 }
 
 // Each network's hooks answer its own clients, the same ones on each call: a GkmGroupClient the follower handed its
@@ -338,11 +363,17 @@ func TestDaemonWithholdsEveryBaseWithEitherHookUnset(t *testing.T) {
 
 // Both hooks set: the composition's reader reads base 1 at the start's genesis state, which the follower holds from its
 // first read, so it finds the config repo the genesis names and builds the EvsClient over the key client; a device that
-// holds no generation of that repo yet gets none from a key client the follower hands no state before it stands
-// (question daemon-evs-gkm-clients-new-device-config-key), so base 1 is withheld and nothing past the genesis installs.
+// holds no generation of that repo yet, handed no state at that first read, gets no key from the key client, so base 1
+// is withheld. The follower then joins (QD-817): its rows-only pass hands the key client its state unconfirmed, which
+// chooses the group client, a member device's with a leaf, gives the upkeep its member-device role so KeyPackages reach
+// gkm, and names the admission its MLS engine is built under, while no verified state is given; the full pass's next
+// read of base 1 reaches that group client, which looks for the config repo's key on the unconfirmed state alone. With
+// no Welcome or wrap at gkm for it here, base 1 stays withheld and the follower never stands.
 func TestDaemonReadsBaseOneAtTheStartsState(t *testing.T) {
 	world := newTestUrFollowWorld(t, 1)
-	running, read := testUrHostProbed(t, world, 0)
+	network := world.networks[0]
+	running, answers := testUrHostProbing(t, world, 0)
+	read := testUrNextRead(t, world, answers)
 	if !errors.Is(read.err, sidecar.ErrConfigHeadUnavailable) || errors.Is(read.err, errUrNoKeyClient) ||
 		!errors.Is(read.err, sidecar.ErrGkmUnavailable) {
 		t.Fatalf("base 1 with no generation of the config repo held: %v", read.err)
@@ -353,16 +384,47 @@ func TestDaemonReadsBaseOneAtTheStartsState(t *testing.T) {
 	if read.standing || read.verified == nil || read.verified.Pin().GetVersion() != 0 {
 		t.Fatalf("the follower at base 1's read: standing %t, at %v", read.standing, read.verified)
 	}
-	if running.ConfigFollower().Client() != nil {
-		t.Fatal("a follower stood on a base its head reader withheld")
-	}
-	// the start's genesis state names neither this sidecar's row nor it as the Genesis's owner, so no key client is
-	// chosen for it, and none answers a generation from the keychain
+	// the start's genesis state names neither this sidecar's row nor it as the Genesis's owner, and the rows-only pass
+	// has handed nothing over yet, so no key client is chosen for it
 	if !errors.Is(read.err, errUrKeysUnchosen) {
 		t.Fatalf("base 1's read stopped at %v, not at the unchosen key client", read.err)
 	}
-	if clients := testUrClientsOf(running); clients == nil || clients.builtGroup() != nil {
-		t.Fatal("a group client was built before a state named this sidecar")
+
+	// the rows-only pass chose the key client, and its build woke the follower for the next full pass
+	second := testUrNextRead(t, world, answers)
+	if !errors.Is(second.err, sidecar.ErrConfigHeadUnavailable) || errors.Is(second.err, errUrKeysUnchosen) {
+		t.Fatalf("base 1's read once the key client joins: %v", second.err)
+	}
+	if second.standing || second.verified == nil || second.verified.Pin().GetVersion() != 0 {
+		t.Fatalf("the follower at base 1's second read: standing %t, at %v", second.standing, second.verified)
+	}
+	clients := testUrClientsOf(running)
+	if clients == nil || clients.builtGroup() == nil || !clients.leaf {
+		t.Fatal("the joining member device's group client is not built with a leaf")
+	}
+	identity := running.Identity()
+	state, configRepoId, confirmed := clients.gkm.joiningState()
+	if state == nil || confirmed || configRepoId != network.ConfigRepoId() || state.SidecarRow(identity.SidecarId) == nil {
+		t.Fatalf("the key client holds %v, confirmed %t, for repo %s", state, confirmed, configRepoId)
+	}
+	if clients.gkm.newestState() != nil {
+		t.Fatal("the key client holds a verified state before the follower stands")
+	}
+	if !clients.upkeepRole().MemberDevice {
+		t.Fatal("the upkeep keeps no KeyPackages for the joining member device")
+	}
+	if admission, err := clients.admission(); err != nil || !bytes.Equal(admission, state.SidecarRow(identity.SidecarId).GetAdmissionSha256()) {
+		t.Fatalf("the joining device's MLS admission: %v", err)
+	}
+	// a seal waits for a verified state
+	if _, err := clients.builtGroup().EnsureWritable(world.ctx, configRepoId); !errors.Is(err, sidecar.ErrGkmUnavailable) {
+		t.Fatalf("a seal on the unconfirmed state: %v", err)
+	}
+	if running.ConfigFollower().Client() != nil || running.Admitted() {
+		t.Fatal("a follower stood on a base its head reader withheld")
+	}
+	if status := running.ConfigFollower().Status(); !strings.Contains(status.Reason, "joining") {
+		t.Fatalf("the joining follower says %q", status.Reason)
 	}
 }
 

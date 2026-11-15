@@ -109,6 +109,9 @@ barrier config.member_remove.sign.after config_member_remove.go
 barrier config.member_remove.sign.before config_member_remove.go
 barrier config.restore config_replay.go
 barrier config.run.checked config_rows_only.go
+barrier config_client.confirm.after config_client.go
+barrier config_client.confirm.before config_client.go
+barrier config_client.unconfirmed config_client.go
 barrier daemon.claims.choose.after daemon_claims.go
 barrier daemon.claims.choose.before daemon_claims.go
 barrier daemon.directory.list.taint.after daemon_directory.go

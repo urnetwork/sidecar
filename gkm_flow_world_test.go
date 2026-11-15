@@ -38,6 +38,9 @@ type gkmFlowDevice struct {
 	forks       []sidecar.HeadFork
 	// whether this process holds the network's state; a test clears it for a Worker without the Web Lock
 	stateless bool
+	// whether a restart hands the client the log's tip as a joining device's follower does before it stands,
+	// unconfirmed, the world's repo its config repo (QD-817), rather than as a verified state
+	unconfirmed bool
 }
 
 type gkmFlowWorld struct {
@@ -173,7 +176,11 @@ func (self *gkmFlowDevice) restart() {
 	}
 	self.client = client
 	if tip := world.log.Tip(); tip != nil {
-		client.AuthAdvanced(tip)
+		if self.unconfirmed {
+			client.AuthUnconfirmed(tip, world.repoId)
+		} else {
+			client.AuthAdvanced(tip)
+		}
 	}
 }
 

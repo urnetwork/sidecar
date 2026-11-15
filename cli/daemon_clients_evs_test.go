@@ -483,3 +483,138 @@ func TestDaemonsFirstNetworkRetriesUnderItsDraft(t *testing.T) {
 		t.Fatalf("generation 1 after the retry: %v", err)
 	}
 }
+
+// A member device joining a network its first device bootstrapped on evs (QD-817), each device the daemon's Sidecar in
+// an instance of its own: the second, admitted by the first as the owner member's device, holds no generation of the
+// config repo, so its follower's full pass is withheld at base 1; its rows-only pass hands its key client the state its
+// admission lands in, unconfirmed, which builds its group client, a leaf, whose upkeep's KeyPackages reach gkm; the first
+// device's pending engine adds it to the config group, and its key client takes the Welcome on the unconfirmed state;
+// the keychain's wait wakes its follower, whose full re-read opens base 1's head over evs and stands, the device
+// admitted and its key client handed verified states from then on.
+func TestDaemonsSecondDeviceJoinsOverEvs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	engines := enginenet.NewEngines(t, net, nil)
+	networkId := sidecar.NewId()
+	ownerMemberId := sidecar.NewId()
+	host := func(name string, anchor *sidecar.SidecarEnrollAnchor) *sidecar.Sidecar {
+		t.Helper()
+		instance, err := net.StartInstance(name, &sidecartest.TestInstanceArgs{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(instance.Close)
+		running, err := instance.AddSidecarIn(networkId, anchor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return running
+	}
+	standing := func(running *sidecar.Sidecar) *sidecar.ConfigClient {
+		t.Helper()
+		standCtx, standCancel := context.WithTimeout(ctx, urTestTimeout)
+		defer standCancel()
+		follower := running.ConfigFollower()
+		client, err := follower.WaitStanding(standCtx)
+		if err != nil {
+			t.Fatalf("the follower: %v (%+v)", err, follower.Status())
+		}
+		return client
+	}
+
+	first := host("first", nil)
+	firstGkm, err := urDaemonGkmClient(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engines.Bootstrap(ctx, &enginenet.BootstrapArgs{Sidecar: first, Gkm: firstGkm, OwnerMemberId: ownerMemberId}, nil)
+	if err != nil {
+		t.Fatalf("the first device's bootstrap: %v", err)
+	}
+	if startUrConfigFollower(first, sidecar.NewNoopLogger()) == nil {
+		t.Fatal("no follower started on the first device")
+	}
+	standing(first)
+
+	second := host("second", &sidecar.SidecarEnrollAnchor{GenesisSha256: result.Bootstrap.GenesisChain[:]})
+	identity := second.Identity()
+	pin, err := engines.PostStatement(ctx, first, bridge.SignedType_SIGNED_SIDECAR_ADMIT, func(header *bridge.StatementHeader) proto.Message {
+		return &protocol.SidecarAdmit{
+			Header:            header,
+			NetworkId:         networkId.Bytes(),
+			SidecarId:         identity.SidecarId.Bytes(),
+			IdentityPublicKey: identity.IdentityPublicKey,
+			IdentityAlg:       "ed25519",
+			MemberId:          ownerMemberId.Bytes(),
+		}
+	})
+	if err != nil {
+		t.Fatalf("the second device's admission: %v", err)
+	}
+	if startUrConfigFollower(second, sidecar.NewNoopLogger()) == nil {
+		t.Fatal("no follower started on the second device")
+	}
+	secondClients := testUrClientsOf(second)
+	if secondClients == nil {
+		t.Fatal("the second device's clients are not built")
+	}
+
+	// the rows-only pass chooses the second device's key client on the state its admission lands in
+	select {
+	case <-secondClients.groupBuilt():
+	case <-ctx.Done():
+		t.Fatalf("the second device's group client was never built (%+v)", second.ConfigFollower().Status())
+	}
+	state, configRepoId, confirmed := secondClients.gkm.joiningState()
+	if state == nil || confirmed || configRepoId != result.ConfigRepoId || state.Pin().GetVersion() < pin.GetVersion() ||
+		state.SidecarRow(identity.SidecarId) == nil || !secondClients.leaf {
+		t.Fatalf("the second device's key client joins at %v, confirmed %t", state, confirmed)
+	}
+	if second.ConfigFollower().Client() != nil || second.Admitted() {
+		t.Fatal("the second device stood before it held the config key")
+	}
+
+	// its KeyPackages reach gkm at its upkeep's next pass, which a resync would ask for
+	upkeep := func() *sidecar.GkmUpkeep {
+		secondClients.stateLock.Lock()
+		defer secondClients.stateLock.Unlock()
+		return secondClients.upkeep
+	}()
+	passes, _ := upkeep.Passes()
+	upkeep.RefillKeyPackages()
+	for {
+		count, changed := upkeep.Passes()
+		if passes < count {
+			break
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatal("the second device's upkeep ran no pass")
+		}
+	}
+
+	// the first device adds it to the config group, and it takes the Welcome on its unconfirmed state
+	firstGroup := testUrClientsOf(first).builtGroup()
+	if err := firstGroup.RunPending(ctx, result.ConfigRepoId); err != nil {
+		t.Fatalf("the first device's Add: %v", err)
+	}
+	joined, err := secondClients.builtGroup().JoinWelcomes(ctx)
+	if err != nil || !slices.Equal(joined, []sidecar.Id{result.ConfigRepoId}) {
+		t.Fatalf("the second device's join: %v %v", joined, err)
+	}
+
+	client := standing(second)
+	if !second.Admitted() || client.State().SidecarRow(identity.SidecarId) == nil {
+		t.Fatal("the second device is not admitted once its follower stands")
+	}
+	if given := secondClients.gkm.newestState(); given == nil || given.Pin().GetVersion() != client.Pin().GetVersion() {
+		t.Fatalf("the second device's key client holds %v, the follower %d", given, client.Pin().GetVersion())
+	}
+	if head, err := second.ConfigFollower().Heads().ReadConfigHead(ctx, 1, result.Chain[:]); err != nil ||
+		!bytes.Equal(head.File(sidecar.ConfigHeadGenesisPath), result.Bootstrap.SignedGenesis) {
+		t.Fatalf("the second device's head reader at base 1: %v", err)
+	}
+}

@@ -1,4 +1,4 @@
-# metadata_list.yml v20; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v21; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -69,6 +69,8 @@
 # v20, updated 2026-11-14 for the owner's answer QD-764 (acl-m2-17-no-via-route-advertisers), adds to api-7's rows
 # each rule's via subjects apart from its targets, and BridgeRows' approved routes by their ids, route id, advertiser
 # and the route rules each serves, which §17.8's statements already show.
+# v21, updated 2026-11-15 for the owner's answer QD-828 (team-m6-07-scim-bearer-row), adds to api-2 the SHA-256 of
+# the team's SCIM bearer, network_team.scim_token_sha256, which api keeps while SCIM is on.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -138,7 +140,7 @@ api-1:
 api-2:
   service: api, dns
   store: network (existing; network_name), network_name_reclaim (existing), network_team, dns_label
-  sees: network_id, network_name and its reclaim tombstones; the opaque label and the opt-in alias (owner decision 14), each with kind and state (live, retiring, tombstoned), and dns_label.certified_time, set by certs when a chain naming the alias is issued or registered; team settings
+  sees: network_id, network_name and its reclaim tombstones; the opaque label and the opt-in alias (owner decision 14), each with kind and state (live, retiring, tombstoned), and dns_label.certified_time, set by certs when a chain naming the alias is issued or registered; team settings; the team's SCIM bearer's SHA-256, while SCIM is on
   why: naming and routing (§12.5); takeover protection (I-14)
   ttl: labels and aliases never deleted (tombstoned), a changed alias retiring 90 d first (D-DNS-10); released names held 24 h (§7.12); team settings for the network's life (§7.5)
   owner: §12.5
