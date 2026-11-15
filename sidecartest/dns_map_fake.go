@@ -52,6 +52,7 @@ var (
 	_ dnsservice.DnsRestoreMapStore    = (*FakeDnsCustomHostMapStore)(nil)
 )
 
+// An empty store: no version, no interface, no host.
 func NewFakeDnsCustomHostMapStore() *FakeDnsCustomHostMapStore {
 	return &FakeDnsCustomHostMapStore{
 		interfaces:              map[string]*dnsservice.DnsMapInterface{},
@@ -78,6 +79,7 @@ func (self *FakeDnsCustomHostMapStore) HostVersion(host string) uint64 {
 	return self.hostVersions[host]
 }
 
+// The networks the incident wrote an admin event for, in the order it wrote them.
 func (self *FakeDnsCustomHostMapStore) IncidentEventNetworks(incidentId sidecar.Id) []sidecar.Id {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -193,6 +195,7 @@ func (self *FakeDnsCustomHostMapStore) Interface(name string) *dnsservice.DnsMap
 	return lbInterface.Clone()
 }
 
+// The newest version with its hosts, nil before any.
 func (self *FakeDnsCustomHostMapStore) CustomHostMap(ctx context.Context, root string) (*dnsservice.DnsCustomHostMap, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -203,6 +206,7 @@ func (self *FakeDnsCustomHostMapStore) CustomHostMap(ctx context.Context, root s
 	return &dnsservice.DnsCustomHostMap{Format: dnsservice.DnsFormat, Version: newest.Version, Digest: newest.Digest, Hosts: slices.Clone(self.hosts)}, nil
 }
 
+// Every version, every interface row in name order, and the hosts' distinct versions.
 func (self *FakeDnsCustomHostMapStore) CustomHostMapState(ctx context.Context, root string) (*dnsservice.DnsMapState, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -234,6 +238,7 @@ func (self *FakeDnsCustomHostMapStore) interfaceWithLock(name string) *dnsservic
 	return lbInterface
 }
 
+// dnsservice.ApplyDnsMapPoll on the interface's row, added where there is none.
 func (self *FakeDnsCustomHostMapStore) RecordMapPoll(ctx context.Context, root string, poll *dnsservice.DnsMapPoll) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -241,6 +246,7 @@ func (self *FakeDnsCustomHostMapStore) RecordMapPoll(ctx context.Context, root s
 	return nil
 }
 
+// dnsservice.ApplyDnsMapReport on the interface's row, added where there is none.
 func (self *FakeDnsCustomHostMapStore) RecordMapReport(ctx context.Context, root string, report *dnsservice.DnsCustomHostMapReport, now time.Time, routeHostCount int, droppedMaxCount int) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -248,6 +254,7 @@ func (self *FakeDnsCustomHostMapStore) RecordMapReport(ctx context.Context, root
 	return nil
 }
 
+// dnsservice.ApplyDnsRouteProbes on each named interface's row there is.
 func (self *FakeDnsCustomHostMapStore) RecordRouteProbes(ctx context.Context, root string, report *dnsservice.DnsRouteProbeReport, now time.Time) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -260,6 +267,7 @@ func (self *FakeDnsCustomHostMapStore) RecordRouteProbes(ctx context.Context, ro
 	return nil
 }
 
+// One row for each of names, and none for any other.
 func (self *FakeDnsCustomHostMapStore) SyncMapInterfaces(ctx context.Context, root string, names []string) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -274,6 +282,7 @@ func (self *FakeDnsCustomHostMapStore) SyncMapInterfaces(ctx context.Context, ro
 	return nil
 }
 
+// Sets each judged version's hosts ready from now, or not ready.
 func (self *FakeDnsCustomHostMapStore) SetCustomHostReadiness(ctx context.Context, root string, ready map[uint64]bool, now time.Time) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -298,30 +307,37 @@ type fakeDnsMapStoreByRoot struct {
 	stores map[string]*FakeDnsCustomHostMapStore
 }
 
+// The root's fake's.
 func (self *fakeDnsMapStoreByRoot) CustomHostMap(ctx context.Context, root string) (*dnsservice.DnsCustomHostMap, error) {
 	return self.stores[root].CustomHostMap(ctx, root)
 }
 
+// The root's fake's.
 func (self *fakeDnsMapStoreByRoot) CustomHostMapState(ctx context.Context, root string) (*dnsservice.DnsMapState, error) {
 	return self.stores[root].CustomHostMapState(ctx, root)
 }
 
+// The root's fake's.
 func (self *fakeDnsMapStoreByRoot) RecordMapPoll(ctx context.Context, root string, poll *dnsservice.DnsMapPoll) error {
 	return self.stores[root].RecordMapPoll(ctx, root, poll)
 }
 
+// The root's fake's.
 func (self *fakeDnsMapStoreByRoot) RecordMapReport(ctx context.Context, root string, report *dnsservice.DnsCustomHostMapReport, now time.Time, routeHostCount int, droppedMaxCount int) error {
 	return self.stores[root].RecordMapReport(ctx, root, report, now, routeHostCount, droppedMaxCount)
 }
 
+// The root's fake's.
 func (self *fakeDnsMapStoreByRoot) RecordRouteProbes(ctx context.Context, root string, report *dnsservice.DnsRouteProbeReport, now time.Time) error {
 	return self.stores[root].RecordRouteProbes(ctx, root, report, now)
 }
 
+// The root's fake's.
 func (self *fakeDnsMapStoreByRoot) SyncMapInterfaces(ctx context.Context, root string, names []string) error {
 	return self.stores[root].SyncMapInterfaces(ctx, root, names)
 }
 
+// The root's fake's.
 func (self *fakeDnsMapStoreByRoot) SetCustomHostReadiness(ctx context.Context, root string, ready map[uint64]bool, now time.Time) error {
 	return self.stores[root].SetCustomHostReadiness(ctx, root, ready, now)
 }

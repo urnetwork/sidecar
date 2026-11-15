@@ -423,6 +423,7 @@ func (self *DnsApi) inventoryInterface(name string) bool {
 	return slices.ContainsFunc(self.deps.Interfaces(), func(lbInterface DnsLbInterface) bool { return lbInterface.Name == name })
 }
 
+// GET custom-host-map (see the file header).
 func (self *DnsApi) serveCustomHostMap(writer http.ResponseWriter, request *http.Request) {
 	store := self.mapStore(writer)
 	if store == nil {
@@ -568,6 +569,7 @@ func (self *DnsApi) validateMapReport(report *DnsCustomHostMapReport, state *Dns
 	return nil
 }
 
+// POST custom-host-map/applied (see the file header), then readiness from what it changed.
 func (self *DnsApi) serveCustomHostMapApplied(writer http.ResponseWriter, request *http.Request) {
 	store := self.mapStore(writer)
 	if store == nil {
@@ -614,6 +616,7 @@ func (self *DnsApi) serveCustomHostMapApplied(writer http.ResponseWriter, reques
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// POST route-probes (see the file header), then readiness from what they changed.
 func (self *DnsApi) serveRouteProbes(writer http.ResponseWriter, request *http.Request) {
 	store := self.mapStore(writer)
 	if store == nil {

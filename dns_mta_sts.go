@@ -31,6 +31,7 @@ type MtaStsSettings struct {
 	IdDigitCount int
 }
 
+// §15.5's policy: enforce, cached a week, its id 32 hex digits.
 func DefaultMtaStsSettings() *MtaStsSettings {
 	return &MtaStsSettings{
 		Mode:          MtaStsModeEnforce,

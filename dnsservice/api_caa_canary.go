@@ -201,6 +201,7 @@ const (
 	dnsCaaCanaryResultFailed    = "failed"
 )
 
+// POST caa-canary: a publish with a fresh nonce, or a delete (see the file header).
 func (self *DnsApi) serveCaaCanary(writer http.ResponseWriter, request *http.Request) {
 	unavailable := func() {
 		retryAfter := int(math.Ceil(self.host.GatesOrClosed().RetryAfter().Seconds()))

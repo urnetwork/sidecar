@@ -67,6 +67,7 @@ func dnsMapSuiteInterface(ctx context.Context, store dnsservice.DnsCustomHostMap
 	return nil, fmt.Errorf("no row for %s", name)
 }
 
+// The suite's cases, in the order they run.
 func dnsMapSuiteCases() []dnsMapSuiteCase {
 	suiteTime := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	master := &dnsservice.DnsMapMaster{Pid: 4242, StartTimeMillis: suiteTime.UnixMilli()}
