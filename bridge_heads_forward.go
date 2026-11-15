@@ -220,12 +220,14 @@ func (self *forwardingConfigKeys) withFirst(key *EvsRepoKey) (*EvsRepoKey, error
 }
 
 // The names a forwarding head reader's records take in the forwarding store: its pin store's "pins/<repo>" and
-// "reads/<repo>" as "evs-pins/<repo>" and "evs-reads/<repo>", two segments as the store's names are, apart from the
-// Forwarder's own.
+// "reads/<repo>" as "evs-pins/<repo>" and "evs-reads/<repo>", and a read's spilled chunks, "spill/<id>/<n>", as
+// "evs-spill/<id>-<n>": at most two segments, as the store's names are, apart from the Forwarder's own.
 const forwardingConfigHeadsStorePrefix = "evs-"
 
-// A ForwarderStore as the SidecarStore an evs client keeps its pins in, each name's first segment prefixed. It holds
-// no directory: the head reader keeps no mirror.
+// A ForwarderStore as the SidecarStore an evs client keeps its pins and a read's spill in: each name's first segment
+// prefixed, and every separator past the first a dash, since the forwarding store's names hold two segments at most.
+// Nothing an evs read keeps lists a name with more than two, so a name only comes back flattened from List, where
+// none is a spill's. It holds no directory: the head reader keeps no mirror.
 type forwarderSidecarStore struct {
 	store  ForwarderStore
 	prefix string
@@ -233,24 +235,33 @@ type forwarderSidecarStore struct {
 
 var _ SidecarStore = (*forwarderSidecarStore)(nil)
 
+// name as the forwarding store holds it: prefixed, and its segments past the second joined to it by dashes.
+func (self *forwarderSidecarStore) storeName(name string) string {
+	first, rest, nested := strings.Cut(name, "/")
+	if !nested {
+		return self.prefix + name
+	}
+	return self.prefix + first + "/" + strings.ReplaceAll(rest, "/", "-")
+}
+
 // The record name names, as the forwarding store streams it.
 func (self *forwarderSidecarStore) Open(name string) (io.ReadCloser, error) {
-	return self.store.Open(self.prefix + name)
+	return self.store.Open(self.storeName(name))
 }
 
 // Starts replacing the record name names; nothing shows until Commit.
 func (self *forwarderSidecarStore) Create(name string) (SidecarStoreWriter, error) {
-	return self.store.Create(self.prefix + name)
+	return self.store.Create(self.storeName(name))
 }
 
 // Takes the record name names away; absent is not an error.
 func (self *forwarderSidecarStore) Remove(name string) error {
-	return self.store.Remove(self.prefix + name)
+	return self.store.Remove(self.storeName(name))
 }
 
 // Each record whose name starts with prefix, its name without this store's prefix.
 func (self *forwarderSidecarStore) List(prefix string) ([]SidecarStoreEntry, error) {
-	entries, err := self.store.List(self.prefix + prefix)
+	entries, err := self.store.List(self.storeName(prefix))
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -189,13 +190,7 @@ func TestForwarderSidecarStoreKeepsItsNamesApart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, found := inner.files["evs-pins/0123"]; !found {
-		t.Fatalf("the inner store holds %v", slices.Sorted(func(yield func(string) bool) {
-			for name := range inner.files {
-				if !yield(name) {
-					return
-				}
-			}
-		}))
+		t.Fatalf("the inner store holds %v", slices.Sorted(maps.Keys(inner.files)))
 	}
 	reader, err := store.Open("pins/0123")
 	if err != nil {
@@ -218,6 +213,31 @@ func TestForwarderSidecarStoreKeepsItsNamesApart(t *testing.T) {
 	}
 	if _, err := store.Directory("mirror", ""); !errors.Is(err, ErrSidecarStoreFailed) {
 		t.Errorf("a directory: %v", err)
+	}
+	// a read's spilled chunk, three segments in the evs client, is two in the forwarding store, and reads back
+	spillChunk := "spill/0123abcd/00000001"
+	if err := testForwarderStoreWrite(store, spillChunk, []byte("a chunk")); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := inner.files["evs-spill/0123abcd-00000001"]; !found {
+		t.Errorf("the spilled chunk is not held flattened: %v", slices.Sorted(maps.Keys(inner.files)))
+	}
+	if reader, err := store.Open(spillChunk); err != nil {
+		t.Errorf("the spilled chunk does not open: %v", err)
+	} else {
+		data, _ := io.ReadAll(reader)
+		reader.Close()
+		if string(data) != "a chunk" {
+			t.Errorf("the spilled chunk read back %q", data)
+		}
+	}
+	if err := store.Remove(spillChunk); err != nil {
+		t.Fatal(err)
+	}
+	for name := range inner.files {
+		if 1 < strings.Count(name, "/") {
+			t.Errorf("a record named %q past two segments", name)
+		}
 	}
 	if entries, _ := inner.List(""); len(entries) != 1 || !strings.HasPrefix(entries[0].Name, forwarderGenesisName) {
 		t.Errorf("the Forwarder's records are now %v", entries)
