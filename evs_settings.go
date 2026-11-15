@@ -231,6 +231,10 @@ type EvsSettings struct {
 	// How many times ReadHead reads a versionless file again from a fresh head after its content was replaced
 	// mid-read, before it answers ErrEvsReplacedMidRead (§11.7's reads row), 3. Not negative; 0 never rereads.
 	ReadReplacedRestartCount int
+
+	// §11.11's git-lfs rows (evs_lfs_*.go). A git-lfs pointer is shorter than this, 1,024 bytes, git-lfs's own bound
+	// (docs/spec.md): a longer blob is no pointer and requires nothing (R(c)'s requires row).
+	LfsPointerMaxByteCount int64
 }
 
 // The desktop daemon's evs settings.
@@ -317,5 +321,6 @@ func DefaultEvsSettings() *EvsSettings {
 		LookupVersionCount:       10000,
 		MaxFormat:                2,
 		ReadReplacedRestartCount: 3,
+		LfsPointerMaxByteCount:   1024,
 	}
 }
