@@ -117,38 +117,26 @@ func (self *testMailCredentialClock) pending() []time.Duration {
 }
 
 // A wrong credential is refused at a bounded rate: each refusal from a client waits on the clock, doubling up to
-// the bound, a wrong user name costing what a wrong secret does; a success clears the count; a rotated secret stops
-// checking the old one at once.
+// the bound, a wrong user name costing what a wrong secret does; a success clears the count; a new credential stops
+// the old one opening anything at once.
 func TestMailLocalCredentialRefusesAtABoundedRate(t *testing.T) {
 	clock := newTestMailCredentialClock(time.UnixMilli(1793923200000))
 	settings := DefaultMailLocalCredentialSettings()
 	settings.FailureDelayMax = 4 * settings.FailureDelay
-	credential, err := NewMailLocalCredential(&testMailSecrets{}, clock, settings)
+	login, err := NewMailLocalLogin(clock, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
+	credential, err := NewMailLocalCredential(&testMailSecrets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := []*MailLocalCredential{credential}
 	client := netip.MustParseAddr("192.0.2.40")
-	// with no credential made, every pair refuses
-	answered := make(chan bool, 1)
-	go func() { answered <- credential.Check(context.Background(), client, MailLocalCredentialUser, "x") }()
-	for !slices.Contains(clock.pending(), settings.FailureDelay) {
-		<-clock.added
-	}
-	clock.Advance(settings.FailureDelay)
-	if <-answered {
-		t.Fatal("a pair checked before any credential was made")
-	}
-	secret, err := credential.Ensure()
-	if err != nil || len(secret) < 40 {
-		t.Fatalf("ensure %d %v", len(secret), err)
-	}
-	if again, _ := credential.Ensure(); again != secret {
-		t.Fatal("ensure made a second secret")
-	}
 	check := func(user string, password string, wait time.Duration) {
 		t.Helper()
-		answered := make(chan bool, 1)
-		go func() { answered <- credential.Check(context.Background(), client, user, password) }()
+		answered := make(chan int, 1)
+		go func() { answered <- login.Check(context.Background(), client, user, password, credentials) }()
 		for !slices.Contains(clock.pending(), wait) {
 			<-clock.added
 		}
@@ -158,35 +146,106 @@ func TestMailLocalCredentialRefusesAtABoundedRate(t *testing.T) {
 		default:
 		}
 		clock.Advance(wait)
-		if <-answered {
-			t.Fatal("a wrong credential checked")
+		if index := <-answered; index != -1 {
+			t.Fatalf("a wrong credential opened %d", index)
 		}
 	}
+	// with no credential made, every pair refuses
+	check(MailLocalCredentialUser, "x", settings.FailureDelay)
+	if configured, err := credential.Configured(); err != nil || configured {
+		t.Fatalf("configured before any credential: %v %v", configured, err)
+	}
+	secret, err := NewMailLocalCredentialSecret(settings)
+	if err != nil || len(secret.Text) < 40 {
+		t.Fatalf("a secret of %d characters: %v", len(secret.Text), err)
+	}
+	if err := credential.Install(secret.Verifier); err != nil {
+		t.Fatal(err)
+	}
 	check(MailLocalCredentialUser, "wrong", 2*settings.FailureDelay)
-	check("someone", secret, 4*settings.FailureDelay)
-	check(MailLocalCredentialUser, secret+"x", settings.FailureDelayMax)
-	if !credential.Check(context.Background(), client, MailLocalCredentialUser, secret) {
-		t.Fatal("the credential did not check")
+	check("someone", secret.Text, 4*settings.FailureDelay)
+	check(MailLocalCredentialUser, secret.Text+"x", settings.FailureDelayMax)
+	if login.Check(context.Background(), client, MailLocalCredentialUser, secret.Text, credentials) != 0 {
+		t.Fatal("the credential did not open")
 	}
 	check(MailLocalCredentialUser, "wrong", settings.FailureDelay)
-	rotated, err := credential.Rotate()
-	if err != nil || rotated == secret {
-		t.Fatalf("rotate %v", err)
+	replaced, err := NewMailLocalCredentialSecret(settings)
+	if err != nil || replaced.Text == secret.Text {
+		t.Fatalf("a second secret: %v", err)
 	}
-	check(MailLocalCredentialUser, secret, 2*settings.FailureDelay)
-	if !credential.Check(context.Background(), client, MailLocalCredentialUser, rotated) {
-		t.Fatal("the rotated credential did not check")
+	if err := credential.Install(replaced.Verifier); err != nil {
+		t.Fatal(err)
+	}
+	check(MailLocalCredentialUser, secret.Text, 2*settings.FailureDelay)
+	if login.Check(context.Background(), client, MailLocalCredentialUser, replaced.Text, credentials) != 0 {
+		t.Fatal("the new credential did not open")
 	}
 }
 
-// A keychain that cannot answer leaves no credential to show, and settings out of range make none.
+// The keychain holds the verifier alone: neither the secret's text nor anything that opens a session sits there,
+// so no reply or store can give a credential out (I-7). The secret names its own network among several.
+func TestMailLocalCredentialKeepsOnlyAVerifier(t *testing.T) {
+	secrets := []*testMailSecrets{{}, {}}
+	credentials := []*MailLocalCredential{}
+	texts := []string{}
+	for _, keychain := range secrets {
+		credential, err := NewMailLocalCredential(keychain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, err := NewMailLocalCredentialSecret(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := credential.Install(secret.Verifier); err != nil {
+			t.Fatal(err)
+		}
+		credentials = append(credentials, credential)
+		texts = append(texts, secret.Text)
+	}
+	for index, keychain := range secrets {
+		if len(keychain.values) != 1 {
+			t.Errorf("network %d's keychain holds %d entries", index, len(keychain.values))
+		}
+		for name, value := range keychain.values {
+			if len(value) != 32 {
+				t.Errorf("%s holds %d bytes, not a verifier", name, len(value))
+			}
+			for _, text := range texts {
+				if bytes.Contains(value, []byte(text)) {
+					t.Errorf("%s holds a secret's text", name)
+				}
+			}
+		}
+		login, err := NewMailLocalLogin(nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := login.Check(context.Background(), netip.MustParseAddr("127.0.0.1"), MailLocalCredentialUser, texts[index], credentials); got != index {
+			t.Errorf("network %d's secret opened %d", index, got)
+		}
+	}
+}
+
+// A keychain that cannot answer makes no credential, settings out of range make no login or secret, and a verifier
+// of the wrong size is refused.
 func TestMailLocalCredentialFailsClosed(t *testing.T) {
-	if _, err := NewMailLocalCredential(nil, nil, nil); !errors.Is(err, ErrMailLocalCredential) {
+	if _, err := NewMailLocalCredential(nil); !errors.Is(err, ErrMailLocalCredential) {
 		t.Errorf("no keychain: %v", err)
 	}
 	settings := DefaultMailLocalCredentialSettings()
 	settings.CredentialByteCount = 8
-	if _, err := NewMailLocalCredential(&testMailSecrets{}, nil, settings); !errors.Is(err, ErrMailLocalCredential) {
+	if _, err := NewMailLocalLogin(nil, settings); !errors.Is(err, ErrMailLocalCredential) {
+		t.Errorf("an 8-byte secret's login: %v", err)
+	}
+	if _, err := NewMailLocalCredentialSecret(settings); !errors.Is(err, ErrMailLocalCredential) {
 		t.Errorf("an 8-byte secret: %v", err)
+	}
+	credential, err := NewMailLocalCredential(&testMailSecrets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credential.Install(make([]byte, 16)); !errors.Is(err, ErrMailLocalCredential) {
+		t.Errorf("a 16-byte verifier: %v", err)
 	}
 }
