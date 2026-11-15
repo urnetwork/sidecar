@@ -9,7 +9,9 @@
 //     has loaded no version. The interface must be one of the lb inventory's (plan-TLS-internal-credentials).
 //   - POST /dns/internal/custom-host-map/applied (lbmap): the version the interface's nginx loaded, its digest
 //     and master, the hosts it added and dropped against the map it held, and the last load that failed. The
-//     report must name a version the block knows by its digest, or one it no longer holds.
+//     report must name a version the block knows by its digest, or one it no longer holds. A failed load is
+//     counted by stage and logged, and keeps the interface on the version it reported; the store keeps no
+//     failure, which §12.14's report and §2.8 dns-1 do not name.
 //   - POST /dns/internal/route-probes (dnsedge): a round's route probes from one edge (probe_route.go), each
 //     result taken only for the version the interface reported, by that version's probe name, and each host
 //     only among the hosts that version added.
@@ -149,8 +151,6 @@ type DnsMapInterface struct {
 	DroppedHosts []string
 	// The latest probe of each added host for the reported version.
 	HostProbes map[string]bool
-	// The last load that failed.
-	Failure *DnsMapFailure
 }
 
 // A copy that shares nothing with this one.
@@ -161,10 +161,6 @@ func (self *DnsMapInterface) Clone() *DnsMapInterface {
 	clone.HostProbes = map[string]bool{}
 	for host, passed := range self.HostProbes {
 		clone.HostProbes[host] = passed
-	}
-	if self.Failure != nil {
-		failure := *self.Failure
-		clone.Failure = &failure
 	}
 	return &clone
 }
@@ -243,7 +239,6 @@ func ApplyDnsMapPoll(lbInterface *DnsMapInterface, poll *DnsMapPoll) {
 // again.
 func ApplyDnsMapReport(lbInterface *DnsMapInterface, report *DnsCustomHostMapReport, now time.Time, routeHostCount int, droppedMaxCount int) {
 	lbInterface.PollTime = now
-	lbInterface.Failure = report.Failure
 	master := report.Master.key()
 	if report.Version != 0 && report.Version == lbInterface.ReportedVersion && master == lbInterface.Master && report.Digest == lbInterface.Digest {
 		return

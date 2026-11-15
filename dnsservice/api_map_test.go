@@ -246,8 +246,7 @@ func TestDnsCustomHostMapReportsARefusedTest(t *testing.T) {
 	if failures := api.host.Metrics.Value("urnetwork_dns_custom_host_map_load_failures_total", dnsservice.DnsMapStageTest); failures != 1 {
 		t.Errorf("failures %v", failures)
 	}
-	row := api.maps.Interface(mapTestFirst)
-	if row.Failure == nil || row.Failure.Stage != dnsservice.DnsMapStageTest || row.ReportedVersion != 1 {
+	if row := api.maps.Interface(mapTestFirst); row.ReportedVersion != 1 {
 		t.Fatalf("row %+v", row)
 	}
 	if pending := api.judge(t).Pending[2]; !slices.Contains(pending, mapTestFirst) {
