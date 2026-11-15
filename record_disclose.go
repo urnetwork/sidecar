@@ -573,7 +573,7 @@ func (self *RecordDisclosure) Disclose(ctx context.Context, args *RecordDisclose
 		opening := &protocol.Opening{Header: bytes.Clone(entry.SignedBytes)}
 		if choice.opened {
 			opening.Salt = bytes.Clone(entry.Salt)
-			opening.Body = bytes.Clone(entry.Body)
+			opening.Body = bytes.Clone(entry.CommittedBody())
 			if _, err := VerifyRecordOpening(opening); err != nil {
 				return nil, err
 			}
@@ -678,7 +678,7 @@ func (self *RecordDisclosure) Open(ctx context.Context, args *RecordOpenArgs) (*
 		item := &RecordDisclosureItem{EntryId: entry.EntryId, Kind: entry.Kind(), TimeMillis: entry.Header.Header.GetTimeMillis(), Erased: entry.State == RecordEntryErased}
 		if entry.Body != nil && entry.State != RecordEntryErased {
 			opening.Salt = bytes.Clone(entry.Salt)
-			opening.Body = bytes.Clone(entry.Body)
+			opening.Body = bytes.Clone(entry.CommittedBody())
 			if _, err := VerifyRecordOpening(opening); err != nil {
 				return nil, err
 			}

@@ -409,6 +409,10 @@ type SidecarAgentSubkeySettings struct {
 	// A subkey with less than this left is replaced by a new one, under a new certificate, at its next use: 1 day, a
 	// reading, so a run that spans the old one's end never signs with it past its not_after.
 	RenewBefore time.Duration
+	// Whether this sidecar's record seals an entry an agent filed as RecordEntry.version 2, the agent's subkey
+	// signing inside its body (RECORD.md section 5.3's agent key row): false until M6's rollout sets it. False seals
+	// every entry version 1, whose agent is the writer's word; a reader opens both whatever this says.
+	SignRecordEntries bool
 }
 
 // A fresh value each call.

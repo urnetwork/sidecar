@@ -140,6 +140,10 @@ type RecordSpool interface {
 	Drain(ctx context.Context, consume func(id SpoolRecordId, record *SpoolRecord) error) error
 }
 
+// A Sidecar's provenance signer for its record's writer, Sidecar.SignProvenance (record_agent_body.go sets it); nil on
+// a leg that links no agent subkeys, where every entry seals version 1.
+var recordSidecarAgentSigner func(sidecar *Sidecar) RecordAgentSignFunction
+
 // What a SidecarRecord needs of its sidecar, which Sidecar.Record fills and a test fakes.
 type SidecarRecordArgs struct {
 	SidecarId Id
@@ -168,6 +172,13 @@ type SidecarRecordArgs struct {
 	Log    Logger
 	// Reaches the verifiable log's witnesses (record_log_witness.go); the HTTPS client when nil.
 	Witness RecordLogWitness
+	// Sidecar.SignProvenance: with it, an entry an agent filed seals as version 2, the agent's subkey signing inside
+	// its body (record_agent_body.go). Nil seals every entry version 1; Sidecar.Record leaves it nil until
+	// AgentSubkeys.SignRecordEntries is set.
+	SignProvenance RecordAgentSignFunction
+	// The bound a reader holds an agent subkey's certificate to in a version-2 entry (§5.5); nil is the format's
+	// default.
+	AgentSubkeys *SidecarAgentSubkeySettings
 }
 
 // One network's record on this sidecar: its writer, its reader, its ingester, its read receipts, the approval family's
@@ -213,14 +224,15 @@ func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
 	}
 	writer := newRecordWriter(args)
 	reader := NewRecordReader(&RecordReaderArgs{
-		SidecarId: args.SidecarId,
-		Store:     args.Store,
-		Streams:   writer.boundStreams,
-		Auth:      writer.auth,
-		Alarm:     args.Alarm,
-		Clock:     args.Clock,
-		Settings:  args.Settings,
-		Log:       args.Log,
+		SidecarId:    args.SidecarId,
+		Store:        args.Store,
+		Streams:      writer.boundStreams,
+		Auth:         writer.auth,
+		Alarm:        args.Alarm,
+		Clock:        args.Clock,
+		Settings:     args.Settings,
+		Log:          args.Log,
+		AgentSubkeys: args.AgentSubkeys,
 	})
 	self := &SidecarRecord{
 		writer:     writer,
@@ -419,6 +431,7 @@ type recordWriter struct {
 	store             SidecarStore
 	chain             *RecordChainStore
 	sign              func(purpose string, signedType bridge.SignedType, body []byte, agentId *Id) (*bridge.Signed, error)
+	signProvenance    RecordAgentSignFunction
 	spool             RecordSpool
 	runs              RecordRunView
 	gap               func(runId Id, code string)
@@ -479,6 +492,7 @@ func newRecordWriter(args *SidecarRecordArgs) *recordWriter {
 		store:             args.Store,
 		chain:             NewRecordChainStore(args.Store, args.SidecarId),
 		sign:              args.Sign,
+		signProvenance:    args.SignProvenance,
 		spool:             args.Spool,
 		runs:              runs,
 		gap:               args.Gap,
@@ -756,6 +770,19 @@ func (self *recordWriter) sealArgs(draft *recordSpoolDraft, logId Id, kind Recor
 		StoredBody:    body,
 		CaptureId:     captureId,
 	}
+	if draft.AgentId != nil && self.signProvenance != nil {
+		// the agent's subkey signs inside the body (RecordEntry.version 2); an agent this daemon cannot sign for now
+		// still gets its entry, version 1, since the capture matters more than the stronger attribution
+		sign := self.signProvenance
+		args.AgentSign = func(agentId Id, purpose string, message []byte) (*AgentProvenanceSignature, error) {
+			signature, err := sign(agentId, purpose, message)
+			if err != nil && !errors.Is(err, ErrSidecarStoreLocked) {
+				self.log.Warningf("[record]an agent's entry seals with no subkey signature: %s", err)
+				return nil, fmt.Errorf("%w: %w", ErrRecordAgentUnsigned, err)
+			}
+			return signature, err
+		}
+	}
 	return args
 }
 
@@ -857,6 +884,8 @@ type recordSealedOpening struct {
 	ref    *RecordEntryRef
 	signed []byte
 	salt   []byte
+	// a version-2 entry's sealed plaintext, which its commitment covers in place of the kind's body; nil for version 1
+	committed []byte
 }
 
 // Seals one entry of draft into route's log, kind and body its own, and queues it for the log's next push or
@@ -880,9 +909,11 @@ func (self *recordWriter) sealOne(draft *recordSpoolDraft, route *recordRoute, k
 			Leaf:       sealed.Leaf,
 			Commitment: [sha256.Size]byte(header.Header.GetBodyCommitment()),
 		},
-		signed: bytes.Clone(sealed.Signed),
-		salt:   bytes.Clone(sealed.Salt),
+		signed:    bytes.Clone(sealed.Signed),
+		salt:      bytes.Clone(sealed.Salt),
+		committed: sealed.agentBody,
 	}
+	sealed.agentBody = nil
 	self.enqueue(route, sealed, kind)
 	return opening, nil
 }
@@ -945,7 +976,12 @@ func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRout
 		}
 		refs = append(refs, sealed.ref)
 		if routes.copy && routes.vault != nil {
-			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: teamBody}})
+			// what the header's commitment opens with: T's body, or the AgentSignedBody holding it (version 2)
+			copiedBody := teamBody
+			if sealed.committed != nil {
+				copiedBody = sealed.committed
+			}
+			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: copiedBody}})
 			clear(sealed.salt)
 			if err != nil {
 				return refs, err
@@ -1195,10 +1231,11 @@ func (self *recordWriter) load() error {
 		if err != nil {
 			return err
 		}
-		// a read receipt goes out through its own path, which awaits evs before its read (record_receipt.go)
+		// a read receipt goes out through its own path, which awaits evs before its read (record_receipt.go); the audit
+		// reader's second read, in the team record, is this writer's to carry
 		entries := []*RecordSealedEntry{}
 		for _, entry := range pending {
-			if header, err := entry.Header(); err == nil && header.Kind() == RecordKindRead {
+			if recordJournaledReceipt(entry) {
 				entry.Clear()
 				continue
 			}
@@ -1294,6 +1331,10 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 		Clock:    self.settings.ClockOrReal(),
 		Settings: self.settings.Record,
 		Log:      self.log,
+	}
+	args.AgentSubkeys = self.settings.AgentSubkeys
+	if recordSidecarAgentSigner != nil && self.settings.AgentSubkeys != nil && self.settings.AgentSubkeys.SignRecordEntries {
+		args.SignProvenance = recordSidecarAgentSigner(self)
 	}
 	if runsErr == nil {
 		args.Gap = func(runId Id, code string) {
