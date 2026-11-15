@@ -94,6 +94,11 @@ func (self *EvsWriteOptions) writeVersioning(repo *EvsRepo, plan *EvsWritePlan, 
 	return versioning, err
 }
 
+// Whether the write is the search index's reserved writer's (evsWriteVersioning).
+func (self *EvsWriteOptions) reservedIndex() bool {
+	return self != nil && self.Reserved == EvsReservedIndex
+}
+
 // A kept link's locator as the new version names it: as it stands, or relabeled to the link's kind, a kind-5 segment
 // adopted as kind 1 when versioning turns on (§11.7's on row).
 func evsKeptLocator(link *EvsPlannedLink) *protocol.EvsLocator {

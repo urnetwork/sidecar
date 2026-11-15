@@ -143,6 +143,9 @@ type EvsPathWrite struct {
 // writes (evs_write_versionless.go). The ios_extension leg links the planner and plans no write, so it has none.
 type evsWriteVersioning interface {
 	writeVersioning(repo *EvsRepo, plan *EvsWritePlan, write *EvsPathWrite, verified *EvsVerifiedPath) (uint32, error)
+	// Whether the write is the search index's reserved writer's, the one writer of .ur-index/ and of ur/index
+	// (§11.7's choose row).
+	reservedIndex() bool
 }
 
 // A write evs's path CAS refused, with the written paths it names (QD-721). The planner's own: a write held to a
@@ -267,7 +270,42 @@ type EvsWritePlan struct {
 	// 8.2.2's versions row), what a creation's version is one past
 	effectiveBaseVersion uint64
 	reuse                []*EvsReuse
+	// Format 2's index (§11.14; SEARCH-M10-13): the head's index_epoch the push names, which the sender puts in its
+	// statement, 0 for a push that writes no index file or a head with none; each write by path, whose content the
+	// index writer's hook extracts; the writes the hook adds, planned in the same push; and whether it added any, so
+	// a 409 on one of them or 409 INDEX_EPOCH plans the whole push again (§11.14's conflict and epoch rows).
+	IndexEpoch uint64
+	// The push's signed time_ms where an index builder chose it, which its entries and buckets name; 0 lets the
+	// sender take its clock's at build time.
+	SignedTimeMs int64
+	writes       map[string]*EvsPathWrite
+	indexWrites  []*EvsPathWrite
+	indexHooked  bool
 }
+
+// Adds an index writer's writes to the plan the hook was given, which PlanWrite plans in the same push once the hook
+// returns: each the index's reserved writer's (EvsWriteOptions.Reserved, EvsReservedIndex), under .ur-index/ on a
+// file-mode ref (§11.14's paths row).
+func (self *EvsWritePlan) addIndexWrites(writes ...*EvsPathWrite) {
+	self.indexWrites = append(self.indexWrites, writes...)
+}
+
+// The write that made path's change, nil for a directory's delta or a path the write did not name.
+func (self *EvsWritePlan) writeOf(path string) *EvsPathWrite {
+	return self.writes[path]
+}
+
+// Whether write is the index's reserved writer's, the one writer of .ur-index/ and of ur/index (§11.7's choose row).
+func evsIsIndexWrite(write *EvsPathWrite) bool {
+	return write.Options != nil && write.Options.reservedIndex()
+}
+
+// The ref the companion index rides (§11.14).
+var evsIndexRefName = []byte("ur/index")
+
+// A file the index writer's hook planned against moved before the plan read it: the write plans again from a fresh
+// read, which the hook reads too (§11.14's conflict row). Never returned to a caller but past PushRebuildCount.
+var errEvsIndexMoved = errors.New("evs: an index file moved under its writer")
 
 // What a git-mode push seals beside its update (DESIGN-DETAILS 8.2.2; 8.2.5's step 5): its carried commits and its
 // signed import; and on a push that creates its ref, or is the first after a DELETE, the ref's name and an overlay's
@@ -386,8 +424,14 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	if len(args.Writes) == 0 {
 		return nil, fmt.Errorf("%w: no path", ErrEvsWriteInvalid)
 	}
+	// the index's own writes alone may go to ur/index (§11.14)
+	indexOnly := true
+	for _, write := range args.Writes {
+		indexOnly = indexOnly && evsIsIndexWrite(write)
+	}
+	onIndexRef := bytes.Equal(args.RefName, evsIndexRefName)
 	for _, reserved := range evsReservedRefNames {
-		if bytes.Equal(args.RefName, reserved) {
+		if bytes.Equal(args.RefName, reserved) && !(indexOnly && onIndexRef) {
 			return nil, fmt.Errorf("%w: a format-2 or v1 ref", ErrEvsReservedPath)
 		}
 	}
@@ -416,8 +460,8 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		if write.Content != nil && EvsFileMaxByteCount < write.Content.Size() {
 			return nil, fmt.Errorf("%w: %d bytes", ErrEvsFileTooLarge, write.Content.Size())
 		}
-		if bytes.Equal(names[0], evsReservedIndexDirectory) {
-			return nil, fmt.Errorf("%w: under .ur-index/", ErrEvsReservedPath)
+		if err := evsCheckIndexPlace(names, write, onIndexRef); err != nil {
+			return nil, err
 		}
 		writePaths[write.Path] = true
 		readPaths = append(readPaths, write.Path)
@@ -546,13 +590,65 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		}
 		return nil, newEvsPlannedConflict(paths, tokenPaths)
 	}
+	ordered := slices.Clone(args.Writes)
+	if hook := self.client.writePlanHook(); hook != nil {
+		// M10's index writer sees the content planned and adds its own writes to the same push (§11.20, §11.14)
+		plan.writes = writes
+		plan.Paths = nil
+		for _, write := range ordered {
+			plan.Paths = append(plan.Paths, planned[write.Path])
+		}
+		if err := hook(ctx, plan); err != nil {
+			return nil, err
+		}
+		plan.Paths = nil
+		extra := plan.indexWrites
+		plan.indexWrites = nil
+		if 0 < len(extra) {
+			extraPaths := []string{}
+			for _, write := range extra {
+				names, err := evsPathNames(write.Path)
+				if err != nil {
+					return nil, err
+				}
+				if !evsIsIndexWrite(write) || writePaths[write.Path] || write.Remove != (write.Content == nil) {
+					return nil, fmt.Errorf("%w: an index write that is not the index's own", ErrEvsWriteInvalid)
+				}
+				if err := evsCheckIndexPlace(names, write, onIndexRef); err != nil {
+					return nil, err
+				}
+				writes[write.Path] = write
+				writePaths[write.Path] = true
+				extraPaths = append(extraPaths, write.Path)
+			}
+			for _, directory := range evsParentDirectories(extraPaths) {
+				if !writePaths[directory] && directories[directory] == nil && !slices.Contains(readPaths, directory) {
+					extraPaths = append(extraPaths, directory)
+				}
+			}
+			for start := 0; start < len(extraPaths); start += DefaultEvsFormatSettings().ReadMaxPathCount {
+				batch := extraPaths[start:min(len(extraPaths), start+DefaultEvsFormatSettings().ReadMaxPathCount)]
+				if err := readBatch(batch, true); err != nil {
+					return nil, err
+				}
+			}
+			if 0 < len(moved) {
+				// the index's own files moved since the hook read them: planned again from a fresh read
+				return nil, errEvsIndexMoved
+			}
+			ordered = append(ordered, extra...)
+			plan.indexHooked = true
+		} else {
+			plan.IndexEpoch = 0
+		}
+	}
 	if evsNeedsRoot(planned, directories) && directories[""] == nil {
 		// a top-level creation or removal changes the root's table, read after the rest (DESIGN-DETAILS 9.2.8)
 		if err := readBatch([]string{""}, true); err != nil {
 			return nil, err
 		}
 	}
-	for _, write := range args.Writes {
+	for _, write := range ordered {
 		plan.Paths = append(plan.Paths, planned[write.Path])
 	}
 	if err := self.planEpochs(ctx, plan); err != nil {
@@ -573,12 +669,20 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			return nil, err
 		}
 	}
-	if hook := self.client.writePlanHook(); hook != nil {
-		if err := hook(ctx, plan); err != nil {
-			return nil, err
-		}
-	}
 	return plan, nil
+}
+
+// Where a write may go under the index's reservation (§11.14's paths row): only the index's reserved writer writes
+// under .ur-index/ on a file-mode ref, and on ur/index it writes nothing else; format 1 writes neither.
+func evsCheckIndexPlace(names [][]byte, write *EvsPathWrite, onIndexRef bool) error {
+	underIndex := bytes.Equal(names[0], evsReservedIndexDirectory)
+	switch {
+	case !evsIsIndexWrite(write) && underIndex:
+		return fmt.Errorf("%w: under .ur-index/", ErrEvsReservedPath)
+	case evsIsIndexWrite(write) && !onIndexRef && !underIndex:
+		return fmt.Errorf("%w: an index write outside .ur-index/", ErrEvsWriteInvalid)
+	}
+	return nil
 }
 
 // The repo's kind, from the newest verified config state.

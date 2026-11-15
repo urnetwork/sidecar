@@ -69,6 +69,10 @@ type evsPushExtras struct {
 	erased      []*EvsErasedKey
 	scope       string
 	erasureNote []byte
+	// an index push's: the head's index_epoch it names, which every index push but a CLOSURE carries, and the signed
+	// time its builder took first (§11.14's epoch row, DESIGN-DETAILS 1.2.7; SEARCH-M10-13's store over EvsRepo)
+	indexEpoch   uint64
+	signedTimeMs int64
 }
 
 // Commits a CLOSURE: see the file header.
