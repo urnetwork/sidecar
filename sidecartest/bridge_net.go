@@ -1828,6 +1828,29 @@ func (self *BridgeNetHost) WaitDecisionCount(sourceId connect.Id, count int) []*
 	}
 }
 
+// Waits until done holds of the hook's decisions of flows from sourceId, oldest first, and answers them. The monitor is
+// armed before each read, so a decision recorded at any point, before the wait began included, is seen: a wait for a
+// count measured after the flows were sent would miss the decisions that landed before it was measured. Fails the test
+// past WaitTimeout.
+func (self *BridgeNetHost) WaitDecisions(sourceId connect.Id, done func(decisions []*BridgeNetDecision) bool) []*BridgeNetDecision {
+	t := self.bridgeNet.t
+	t.Helper()
+	deadline := time.After(self.bridgeNet.settings.WaitTimeout)
+	for {
+		_, changed := self.records.Get()
+		decisions := self.Decisions(sourceId)
+		if done(decisions) {
+			return decisions
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatalf("%s's hook made %d decisions of %s's flows, and not the ones waited for", self.Device.Name, len(self.Decisions(sourceId)), sourceId)
+			return nil
+		}
+	}
+}
+
 // Every decision the hook made of a flow from sourceId, oldest first.
 func (self *BridgeNetHost) Decisions(sourceId connect.Id) []*BridgeNetDecision {
 	self.stateLock.Lock()

@@ -45,6 +45,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"net"
 	"net/netip"
 	"time"
 
@@ -74,15 +76,20 @@ type BridgeShareNetSettings struct {
 	AcceptingBlock netip.Prefix
 	// How long a ShareCert the world signs runs past the Net's clock: 168 h, §17.9's 7 days.
 	CertLifetime time.Duration
+	// The lowest destination port a window's own client policy passes to a share's alias, a public relationship to it:
+	// 1024, connect's CFAA rule, which drops every privileged port but a few named services before any packet leaves
+	// the window. PortTargetOtherPort picks no port under it; zero lets it pick any.
+	UnprivilegedPortFirst uint16
 }
 
 func DefaultBridgeShareNetSettings() *BridgeShareNetSettings {
 	return &BridgeShareNetSettings{
-		HostAddress:       netip.MustParseAddr("100.80.7.20"),
-		AliasHostBits:     0x8001,
-		PortAliasHostBits: 0x8002,
-		AcceptingBlock:    netip.MustParsePrefix("100.90.0.0/16"),
-		CertLifetime:      168 * time.Hour,
+		HostAddress:           netip.MustParseAddr("100.80.7.20"),
+		AliasHostBits:         0x8001,
+		PortAliasHostBits:     0x8002,
+		AcceptingBlock:        netip.MustParsePrefix("100.90.0.0/16"),
+		CertLifetime:          168 * time.Hour,
+		UnprivilegedPortFirst: 1024,
 	}
 }
 
@@ -491,6 +498,27 @@ func (self *BridgeShareNet) PortAlias() netip.Addr {
 // The one port the second target admits: the TCP port of the upstream every host of the share reaches.
 func (self *BridgeShareNet) PortTargetPort() uint16 {
 	return self.portTargetPort
+}
+
+// A TCP port beside PortTargetPort that the second target does not admit and a flow to which still reaches the host's
+// hook to be refused there: never the host's daemon listener, which rule 0 denies whatever a target admits, and never
+// one under UnprivilegedPortFirst, which the window's own client policy drops before the host sees it. A port past the
+// top of the range is never taken, so a target port of 65535 looks below it. Fails the test when no port beside the
+// target's qualifies.
+func (self *BridgeShareNet) PortTargetOtherPort() uint16 {
+	self.t.Helper()
+	daemonPort := 0
+	if daemon, ok := self.Host.Daemon.Addr().(*net.TCPAddr); ok {
+		daemonPort = daemon.Port
+	}
+	port := int(self.portTargetPort)
+	for _, candidate := range []int{port + 1, port - 1, port + 2, port - 2} {
+		if int(self.settings.UnprivilegedPortFirst) <= candidate && candidate <= math.MaxUint16 && candidate != daemonPort {
+			return uint16(candidate)
+		}
+	}
+	self.t.Fatalf("no TCP port beside the port target's %d is free of the daemon's %d and at or above %d", port, daemonPort, self.settings.UnprivilegedPortFirst)
+	return 0
 }
 
 // The address at hostBits in Y's block.

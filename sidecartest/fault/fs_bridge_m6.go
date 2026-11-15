@@ -38,7 +38,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"slices"
 	"time"
@@ -348,26 +347,25 @@ func (self *fsShareFlows) expectPortTarget(payload string) error {
 	}) {
 		return fmt.Errorf("%s's TCP payload to the port target never reached the upstream", self.window.Name)
 	}
+	// a decision is a flow's protocol and destination together: the upstream's UDP port may be its TCP port's number,
+	// so a destination alone can name the TCP connection the target admits
+	decisionOf := func(decisions []*sidecartest.BridgeNetDecision, ipProtocol connect.IpProtocol, to netip.AddrPort) *sidecartest.BridgeNetDecision {
+		for _, decision := range decisions {
+			if decision.Protocol == ipProtocol && decision.To == to {
+				return decision
+			}
+		}
+		return nil
+	}
 	tag := device.BridgeShareRuleTag(connect.Id(share.ShareId), 1)
-	if !slices.ContainsFunc(host.Decisions(windowId), func(decision *sidecartest.BridgeNetDecision) bool {
-		return decision.To == allowed && decision.Opens() && decision.RuleTag == tag
-	}) {
-		return fmt.Errorf("%s's connection to the port target opened under no tag of that target", self.window.Name)
+	if decision := decisionOf(host.Decisions(windowId), connect.IpProtocolTcp, allowed); decision == nil || !decision.Opens() || decision.RuleTag != tag {
+		return fmt.Errorf("%s's connection to the port target opened under no tag of that target: %+v", self.window.Name, decision)
 	}
 
 	dialCount := len(host.Dials())
 	acceptCount, datagramCount := len(host.Upstream.Accepts()), len(host.Upstream.Datagrams())
 	otherProtocol := netip.AddrPortFrom(share.PortAlias(), host.Upstream.UdpPort())
-	// another TCP port, never the daemon's listener, which rule 0 would deny whatever the target admits
-	daemonPort := uint16(0)
-	if daemon, ok := host.Daemon.Addr().(*net.TCPAddr); ok {
-		daemonPort = uint16(daemon.Port)
-	}
-	other := port
-	for other == port || other == daemonPort || other == 0 {
-		other += 1
-	}
-	otherPort := netip.AddrPortFrom(share.PortAlias(), other)
+	otherPort := netip.AddrPortFrom(share.PortAlias(), share.PortTargetOtherPort())
 	udp, err := self.window.SendUdp(otherProtocol, []byte(payload))
 	if err != nil {
 		return err
@@ -376,21 +374,18 @@ func (self *fsShareFlows) expectPortTarget(payload string) error {
 	if err := self.window.SendSyn(otherPort); err != nil {
 		return err
 	}
-	decisionTo := func(to netip.AddrPort) *sidecartest.BridgeNetDecision {
-		for _, decision := range host.Decisions(windowId) {
-			if decision.To == to {
-				return decision
-			}
-		}
-		return nil
-	}
-	for decisionTo(otherProtocol) == nil || decisionTo(otherPort) == nil {
-		// each wait is for one more decision of the window's, bounded by WaitTimeout
-		host.WaitDecisionCount(windowId, len(host.Decisions(windowId))+1)
-	}
-	for _, to := range []netip.AddrPort{otherProtocol, otherPort} {
-		if decision := decisionTo(to); decision.Opens() {
-			return fmt.Errorf("%s's flow to %s, past the port target's protocol and port, was opened: %+v", self.window.Name, to, decision)
+	decisions := host.WaitDecisions(windowId, func(decisions []*sidecartest.BridgeNetDecision) bool {
+		return decisionOf(decisions, connect.IpProtocolUdp, otherProtocol) != nil && decisionOf(decisions, connect.IpProtocolTcp, otherPort) != nil
+	})
+	for _, flow := range []struct {
+		ipProtocol connect.IpProtocol
+		to         netip.AddrPort
+	}{
+		{ipProtocol: connect.IpProtocolUdp, to: otherProtocol},
+		{ipProtocol: connect.IpProtocolTcp, to: otherPort},
+	} {
+		if decision := decisionOf(decisions, flow.ipProtocol, flow.to); decision.Opens() {
+			return fmt.Errorf("%s's %s flow to %s, past the port target's protocol and port, was opened: %+v", self.window.Name, flow.ipProtocol, flow.to, decision)
 		}
 	}
 	if dials := host.Dials(); dialCount < len(dials) {
