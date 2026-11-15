@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -46,6 +47,9 @@ type FakeDirectoryCardsSettings struct {
 	LogPageCount int
 	// Statements of the cards ref a read carries a page.
 	CardsPageCount int
+	// From the repo's format 2, how long after a d/, r/ or q/ path's newest version lands the content of its earlier
+	// versions is purged (§16.11's ref cards row: about a minute).
+	PurgeDelay time.Duration
 }
 
 func DefaultFakeDirectoryCardsSettings() *FakeDirectoryCardsSettings {
@@ -54,6 +58,7 @@ func DefaultFakeDirectoryCardsSettings() *FakeDirectoryCardsSettings {
 		WindowVersionCount: 4096,
 		LogPageCount:       1000,
 		CardsPageCount:     1000,
+		PurgeDelay:         time.Minute,
 	}
 }
 
@@ -98,6 +103,8 @@ type FakeDirectoryCards struct {
 
 // One repo's cards ref and leases.
 type fakeDirectoryCardsRepo struct {
+	// repo/'s format, 0 reading 1 (§11.6's format row)
+	format     uint32
 	version    uint64
 	files      map[string]*sidecar.DirectoryCardFile
 	pathCounts map[string]uint64
@@ -113,6 +120,28 @@ type fakeDirectoryCardsStatement struct {
 type fakeDirectoryCardsLease struct {
 	prefix   string
 	callback func(repoId sidecar.Id)
+}
+
+// Raises repoId to format 2, as the first push carrying a format-2 value does (§11.6's format row; RECORD-M10-03):
+// listings return it, and from then d/, r/ and q/ are versionless, an earlier version's content purged PurgeDelay after
+// its path's newest version lands. Nothing lowers it.
+func (self *FakeDirectoryCards) RaiseFormat(repoId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.repoWithLock(repoId).format = 2
+}
+
+// Whether a statement's copy of file reads purged now: the repo at format 2, the path versionless, and its newest
+// version landed PurgeDelay ago or more. The caller holds stateLock.
+func (self *FakeDirectoryCards) purgedWithLock(repo *fakeDirectoryCardsRepo, file *sidecar.DirectoryCardFile) bool {
+	if repo.format < 2 || file.Removed {
+		return false
+	}
+	if !strings.HasPrefix(file.Path, "d/") && !strings.HasPrefix(file.Path, "r/") && !strings.HasPrefix(file.Path, "q/") {
+		return false
+	}
+	newest, ok := repo.files[file.Path]
+	return ok && file.Version < newest.Version && newest.TimeMillis+self.settings.PurgeDelay.Milliseconds() <= self.streams.clock.Now().UnixMilli()
 }
 
 // A fake over streams' world; settings may be nil, for the defaults.
@@ -274,7 +303,12 @@ func (self *fakeDirectoryCardsClient) Refs(ctx context.Context, repoId sidecar.I
 		// a ref the head cache lost answers every ref
 		all = all || ref.Sequence == 0
 	}
-	listing := &sidecar.DirectoryRefListing{Sequence: sequence.Sequence, All: all}
+	format := func() uint32 {
+		self.fake.stateLock.Lock()
+		defer self.fake.stateLock.Unlock()
+		return max(1, self.fake.repoWithLock(repoId).format)
+	}()
+	listing := &sidecar.DirectoryRefListing{Sequence: sequence.Sequence, All: all, Format: format}
 	for _, ref := range refs {
 		if all || movedAfter < ref.Sequence {
 			listing.Refs = append(listing.Refs, ref)
@@ -406,7 +440,12 @@ func (self *fakeDirectoryCardsClient) ReadCards(ctx context.Context, repoId side
 			break
 		}
 		for _, file := range statement.files {
-			changes.Files = append(changes.Files, fakeDirectoryCardCopy(file))
+			copied := fakeDirectoryCardCopy(file)
+			if self.fake.purgedWithLock(repo, file) {
+				// a versionless path's replaced content is gone (format 2)
+				copied.Content = nil
+			}
+			changes.Files = append(changes.Files, copied)
 		}
 		changes.ThroughVersion = statement.version
 		taken += 1

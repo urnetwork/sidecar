@@ -439,7 +439,8 @@ func (self *DirectoryClient) appendRepoItem(item *protocol.Announcement, confirm
 	}
 	hookKey := recordChainIdText(repoId)
 	testHookBarrier("directory.announce.before", hookKey)
-	refs, err := self.writer.Append(&RecordDraft{Kind: RecordKindAnnounce, Source: source, NoSession: true, Body: item})
+	// an announce entry at format 1, the repo's r/ file from format 2 (directory_format2.go)
+	refs, err := self.carrierWriter().Append(&RecordDraft{Kind: RecordKindAnnounce, Source: source, NoSession: true, Body: item})
 	testHookBarrier("directory.announce.after", hookKey)
 	if err != nil {
 		return nil, err
@@ -492,8 +493,13 @@ func (self *DirectoryClient) MaintainRepos(ctx context.Context) ([]*DirectoryRep
 		versions := keyVersions[key]
 		args := (*DirectoryRepoAnnounceArgs)(nil)
 		if winner := judge.repoWinner(versions); winner != nil {
-			if winner.writerId != self.sidecarId && auth.Masked(winner.writerId) {
+			switch {
+			case winner.writerId != self.sidecarId && auth.Masked(winner.writerId):
 				// the standing version's signer was revoked, reaped or its member removed: the same item, re-signed
+				args = directoryRepoArgsOf(winner.item, true)
+			case directoryRepoItemOnEntry(winner) && self.carriesFiles():
+				// format 2: the item an entry still carries moves onto its r/ file, the same announcement at a higher
+				// version, so its last M6 entry expires 30 days on (RECORD-M10-03)
 				args = directoryRepoArgsOf(winner.item, true)
 			}
 		} else if held := judge.repoHeld(versions); held != nil && auth.SignatureVoided(held.writerId, held.pushPin.GetVersion()) {

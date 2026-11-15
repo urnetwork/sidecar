@@ -20,6 +20,13 @@
 // The copy keeps the newest file of a path and nothing of a removal, so a removal is taken as it comes: who removed a
 // notice is not judged here, and the request's entries then say its state (directory_request.go).
 //
+// From the directory's format 2 a notice is versionless, as the cards ref's d/ and r/ files are (RECORD-M10-03): the
+// binding writes q/ as the directory's reserved writer, and a rewrite's replaced content is purged about a minute
+// later. Nothing here changes for it: every write and removal already names the path's current version by path CAS,
+// which is what "from the version it read" rides on a versionless file, a reader takes only the newest version a path
+// holds, and the requester's repair and the decider's resume stay the safety net for a version a purge took before
+// anyone read it.
+//
 // A phone keeps no copy and runs no sync (§16.11's phones row, D-MCP-31), so from M8 it holds its leases from what it
 // keeps itself (RECORD-M8-01; D-SDK-28, D-MCP-34, §18.7, FS-85, FS-100), through DirectoryPhoneNotices:
 //

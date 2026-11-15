@@ -308,8 +308,9 @@ func (self *DirectoryClient) BindWorker(binding *DirectoryWorkerBinding) *Direct
 			store = self.store.store
 		}
 		worker, err := NewDirectoryWorker(&DirectoryWorkerArgs{
-			SidecarId:   self.sidecarId,
-			Writer:      self.writer,
+			SidecarId: self.sidecarId,
+			// an announce entry at format 1, this sidecar's card from format 2 (directory_format2.go)
+			Writer:      self.carrierWriter(),
 			Auth:        self.auth,
 			TeamWorkers: binding.TeamWorkers,
 			Host:        binding.Host,

@@ -64,6 +64,8 @@ const (
 	// A share's other network (§8.11; QD-820), on a dial or route grant.
 	canonicalActionFieldShareNetworkId = 40
 
+	// field 37's version, versioning at format 2 (§11.7; RECORD-M10-03): the one version that may carry it.
+	canonicalActionVersionVersioning = 2
 	// access_request's version (16.11).
 	canonicalActionVersionAccessRequest = 3
 	// A dial or route grant's version, its prefixes and ports in sealed_detail (QD-740).
@@ -109,7 +111,7 @@ var canonicalActionSealedGrantAllows = []string{"dial", "route"}
 // in force.
 func CanonicalActionVersionKnown(version uint32) bool {
 	switch version {
-	case 1, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant:
+	case 1, canonicalActionVersionVersioning, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant:
 		return true
 	}
 	return false
@@ -154,6 +156,10 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 	if _, ok := protocol.SidecarActionKind_name[int32(kind)]; !ok || kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_UNSPECIFIED {
 		return fmt.Errorf("%w: kind %d", ErrCanonicalActionInvalid, action.GetKind())
 	}
+	if row, ok := CanonicalActionFields(SidecarActionKind(kind)); ok && !slices.Contains(row.Versions, version) {
+		// a version this build knows, but not one this kind takes: version 2 is field 37's, the agent-config writes'
+		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
+	}
 	accessRequest := kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST
 	if accessRequest != (version == canonicalActionVersionAccessRequest) {
 		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
@@ -170,7 +176,7 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 		return true
 	})
 	for _, number := range setFields {
-		if number == canonicalActionFieldVersioning && version != 2 {
+		if number == canonicalActionFieldVersioning && version != canonicalActionVersionVersioning {
 			return fmt.Errorf("%w: field %d at version %d", ErrCanonicalActionInvalid, number, version)
 		}
 		if number == canonicalActionFieldSealedDetail && !sealedVersion {

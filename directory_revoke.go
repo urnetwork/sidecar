@@ -352,7 +352,15 @@ func (self *DirectoryClient) RevokeRepo(ctx context.Context, args *DirectoryRevo
 		{Kind: RecordKindErasureRequest, Source: RecordSourceApprover, NoSession: true, Body: request},
 	}
 	var refs [][]*RecordEntryRef
-	if together, ok := self.writer.(interface {
+	if self.carriesFiles() {
+		// format 2: the marker is an r/ overwrite, purged about a minute later, and the request an entry of its own
+		// push; the journal, written first, files the same request once whatever the kill (RECORD-M10-03)
+		if err = self.carryItem(ctx, marker); err == nil {
+			var appended []*RecordEntryRef
+			appended, err = self.writer.Append(drafts[1])
+			refs = [][]*RecordEntryRef{{}, appended}
+		}
+	} else if together, ok := self.writer.(interface {
 		appendTogether(drafts ...*RecordDraft) ([][]*RecordEntryRef, error)
 	}); ok {
 		refs, err = together.appendTogether(drafts...)

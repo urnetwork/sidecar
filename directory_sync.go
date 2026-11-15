@@ -84,6 +84,9 @@ type DirectoryRef struct {
 type DirectoryRefListing struct {
 	// The repo's push sequence now: the next sync's moved_after.
 	Sequence uint64
+	// The repo's format, which GET .../refs returns (§11.6's format row): 1, or 2 once a format-2 push raised it; 0
+	// reads 1.
+	Format uint32
 	// Every ref is listed: no moved_after, a value from before the sequence's restart, or a ref the cache lacks.
 	All  bool
 	Refs []*DirectoryRef
@@ -307,6 +310,10 @@ func (self *DirectoryClient) syncFrom(ctx context.Context, cards DirectoryCards,
 	}
 	listing, err := cards.Refs(ctx, directoryId, movedAfter)
 	if err != nil {
+		return err
+	}
+	// the repo's format, which never falls (RECORD-M10-03's switch reads it)
+	if err := self.store.NoteFormat(listing.Format); err != nil {
 		return err
 	}
 	reads := []*DirectoryStreamRead{}
