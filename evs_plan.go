@@ -281,6 +281,9 @@ type EvsWritePlan struct {
 	writes       map[string]*EvsPathWrite
 	indexWrites  []*EvsPathWrite
 	indexHooked  bool
+	// the flags the plan was asked for (EvsPlanArgs.Flags), which the hook reads before the sender sets Flags: a
+	// CLOSURE, ERASE or CUT carries no in-ref entry
+	argsFlags uint32
 }
 
 // Adds an index writer's writes to the plan the hook was given, which PlanWrite plans in the same push once the hook
@@ -514,7 +517,8 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			head := result.head.Head
 			if plan == nil {
 				plan = &EvsWritePlan{
-					RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
+					argsFlags: args.Flags,
+					RepoId:    self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
 					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted, AgentId: args.AgentId,

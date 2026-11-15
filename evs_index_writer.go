@@ -96,7 +96,7 @@ type indexWriterChange struct {
 // push the index cannot take goes unindexed, with no error.
 func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error {
 	client := self.args.client
-	if !client.Format2Admitted() || plan.RefMode != protocol.EvsRefMode_EVS_REF_FILE || plan.Flags != 0 {
+	if !client.Format2Admitted() || plan.RefMode != protocol.EvsRefMode_EVS_REF_FILE || plan.Flags != 0 || plan.argsFlags != 0 {
 		return nil
 	}
 	if evsEpochExempt(plan.RefKind) || (plan.RefKind == protocol.EvsRefKind_EVS_REF_OWNED && EvsRepoKindRecordClass(plan.repoKind)) {

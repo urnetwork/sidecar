@@ -261,3 +261,32 @@ func TestIndexRefusalOfEvs(t *testing.T) {
 		t.Error("an error evs did not answer was changed")
 	}
 }
+
+// A CLOSURE's content push carries no in-ref entry: its flags reach the hook from the plan's arguments, before the
+// sender sets them on the plan (1.2.3: a CLOSURE rewrites no head it has no other reason to touch).
+func TestIndexWriterLeavesAClosureAlone(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	writer.test.client.SetFormat2Source(func() bool { return true })
+	testIndexWriterOn(t, writer, testNewIndexRef())
+	ctx := context.Background()
+	writer.server.know("notes/a.txt")
+	refId, err := writer.repo.resolveRefId(ctx, EvsMainRefName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoKey, err := writer.gkm.EnsureWritable(ctx, writer.world.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := writer.repo.PlanWrite(ctx, &EvsPlanArgs{
+		RefName: EvsMainRefName, RefId: refId, Generation: repoKey.Generation(),
+		Flags:  uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE),
+		Writes: []*EvsPathWrite{{Path: "notes/a.txt", Content: bytes.NewReader([]byte("rewritten words\n"))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.indexHooked || len(testIndexPlanned(plan)) != 0 {
+		t.Fatal("a CLOSURE carried the writer's head")
+	}
+}
