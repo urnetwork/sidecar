@@ -1,6 +1,6 @@
 // Authority approvals (CORE-M2-04, R-CORE-17, D-CORE-13): the core behind §18.5's GetPending and Decide and `ur
 // approve <id>`, for the kinds §5.6's alarms and admissions open, dispatched by kind in one table that §16's track
-// (the request kind, MCP-M3-07) and CORE-M6-04 (cleanup) join:
+// (the request kind, MCP-M3-07) and CORE-M6-04 (cleanup, identity_cleanup.go) join:
 //
 //	admission         approve signs this device's member's new device's SidecarAdmit, after the safety number;
 //	                  deny dismisses
@@ -12,6 +12,9 @@
 //	recovery_rebind   revoke signs a compromise revocation of the rebind's signer through RevokeDevice; deny
 //	                  dismisses it
 //	recovery_unseen   revoke signs the recovered device's revocation through RevokeDevice; deny dismisses it
+//	cleanup           admissions_near_cap's list on an admin device: revoke signs SidecarRevoke{removed} of each
+//	                  listed page Worker, the list a person was shown (PreviewCleanup); deny dismisses it until the
+//	                  count rises
 //
 // Every decision runs as a sidecarAct of the person's confirmation, on /dev/tty or in an app's UI, never MCP, a hook
 // or an unconfirmed control call (D-CORE-13), and a covered act takes its one presence check (identity_act.go).
@@ -100,6 +103,9 @@ type sidecarApprovalKind struct {
 	eligible func(self *Sidecar, authority SidecarAuthority, item *sidecarApprovalRecord) []string
 	// runs decision, which eligible allowed: signs what it signs as an act of origin's
 	decide func(ctx context.Context, self *Sidecar, authority SidecarAuthority, item *sidecarApprovalRecord, decision string, origin SidecarActOrigin, check SidecarPresenceCheck) error
+	// optional: what the kind does at each applied entry after §5.6's alarms, on the follower's goroutine, which it
+	// must not block: the cleanup's read of its cap when due (identity_cleanup.go)
+	entryApplied func(self *Sidecar, authority SidecarAuthority, entry *SidecarAuthorityEntry)
 }
 
 // The kinds, by name. A track adds its kind with registerSidecarApprovalKind, at init.

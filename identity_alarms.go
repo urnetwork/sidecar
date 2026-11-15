@@ -10,7 +10,10 @@
 //	                     restored binding's admission, is pending, from its window start p
 //	recovery_unseen      when the window activates under 72 h minus 10 min after this device applied p, or a valid
 //	                     veto first verifies only after this device applied the activation
-//	admissions_near_cap  on admin devices, from 90% of config_admissions, once each time the count rises past it
+//	admissions_near_cap  on admin devices, from 90% of config_admissions, once each time the count rises past it,
+//	                     with one cleanup item open while the count stays there (§7.10's cleanup row,
+//	                     identity_cleanup.go); the cap is the entry's where the authority gives one, else the one GET
+//	                     /sidecar/limits last answered (QD-250), which no reader derives from the log
 //
 // §7.9's time row compares device-local application times, never api's entry times, which are server-asserted: so
 // the watcher keeps, per window, the time this device applied p, by its own clock. What it has raised persists in
@@ -48,13 +51,11 @@ import (
 // The keychain record of the core's namespace holding what the watcher has applied and raised.
 const sidecarAlarmRecordName = "alarms"
 
-// §7.9's Recovery window and §5.6's tolerance on it: format values every device applies alike.
-const (
-	sidecarRecoveryWindowDuration  = 72 * time.Hour
-	sidecarRecoveryUnseenTolerance = 10 * time.Minute
-	// admissions_near_cap's threshold: 90% of config_admissions, as tenths
-	sidecarAdmissionsNearCapTenths = 9
-)
+// admissions_near_cap's threshold, 90% of config_admissions as tenths (§7.10's cleanup row): the list's own value,
+// which TEAM-M4-01's CleanupList(state, cap), a pure function every admin device answers alike, reads beside the
+// alarm, so it stays here until that function takes it from a settings object (QD-706's sweep). §7.9's Recovery
+// window and §5.6's tolerance on it are SidecarAlarmSettings'.
+const sidecarAdmissionsNearCapTenths = 9
 
 // The kinds of approval item an alarm opens (§18.5's GetPending; CORE-M2-04 dispatches on these).
 const (
@@ -122,6 +123,24 @@ type sidecarAlarms struct {
 	stateLock sync.Mutex
 	// the subscription to the installed authority's entries
 	removeCallback func()
+	// config_admissions as GET /sidecar/limits last answered it (QD-250; identity_cleanup.go reads it), which
+	// admissions_near_cap compares the count with where an entry carries no cap of its own: 0 before any read and
+	// for a tier that does not include admissions, -1 for none; either puts nothing near a cap
+	admissionCap int
+}
+
+// §7.10's cleanup on a Sidecar (identity_cleanup.go), under its own lock, which is never held while the alarm lock is
+// taken. Plain values, so this file, which the forwarding leg links, holds them while the cleanup's code stays off
+// that leg, which admits no Worker and raises no alarm.
+type sidecarCleanups struct {
+	stateLock sync.Mutex
+	// when GET /sidecar/limits last answered config_admissions, by this device's clock; zero before
+	capReadAt time.Time
+	// a read runs now, off the follower's goroutine
+	capReading bool
+	// the list a person was shown, by item: its ListId, which a revoke answer signs only while the list at the tip
+	// still has it
+	previews map[Id]Id
 }
 
 // Subscribes the watcher to authority's entries, ending any earlier subscription. nil ends it.
@@ -150,6 +169,11 @@ func (self *Sidecar) authorityInstalled(authority SidecarAuthority) {
 		self.applyRecoverySealEntry(authority, entry)
 		self.applyAlarmEntry(authority, entry)
 		self.applyRevokeEntry(authority, entry)
+		for _, kind := range sidecarApprovalKinds {
+			if kind.entryApplied != nil {
+				kind.entryApplied(self, authority, entry)
+			}
+		}
 	})
 	func() {
 		self.alarms.stateLock.Lock()
@@ -423,7 +447,8 @@ func (self *Sidecar) alarmsOfEntry(facts *sidecarAlarmFacts, identity *SidecarId
 			}
 		case SidecarRecoveryWindowActivated:
 			// a window this device never applied p of is one it could not have seen at all
-			tooSoon := held == nil || time.Duration(nowMs-held.AppliedAtMs)*time.Millisecond < sidecarRecoveryWindowDuration-sidecarRecoveryUnseenTolerance
+			alarmSettings := self.settings.alarmSettings()
+			tooSoon := held == nil || time.Duration(nowMs-held.AppliedAtMs)*time.Millisecond < alarmSettings.Recovery.Window-alarmSettings.RecoveryUnseenTolerance
 			if tooSoon {
 				events = append(events, SidecarEvent{Kind: SidecarEventRecoveryUnseen, SidecarId: window.SidecarId})
 				itemId := sidecarApprovalItemId(SidecarApprovalRecoveryUnseen, window.ProposalId, n)
@@ -459,16 +484,80 @@ func (self *Sidecar) alarmsOfEntry(facts *sidecarAlarmFacts, identity *SidecarId
 	if entry.AdminMemberIds != nil {
 		record.AdminMemberIds = slices.Clone(entry.AdminMemberIds)
 	}
-	if memberDevice && 0 < entry.AdmissionCap && slices.Contains(record.AdminMemberIds, memberId) {
-		nearCap := entry.AdmissionCap*sidecarAdmissionsNearCapTenths <= entry.AdmissionCount*10
-		if nearCap && record.NearCapRaisedCount < entry.AdmissionCount {
-			record.NearCapRaisedCount = entry.AdmissionCount
-			events = append(events, SidecarEvent{Kind: SidecarEventAdmissionsNearCap})
-		} else if !nearCap {
-			record.NearCapRaisedCount = 0
+	if memberDevice && slices.Contains(record.AdminMemberIds, memberId) {
+		admissionCap := entry.AdmissionCap
+		if admissionCap == 0 {
+			admissionCap = self.alarms.admissionCap
 		}
+		events = append(events, record.nearCap(entry.AdmissionCount, admissionCap, n, nowMs)...)
 	}
 	return events
+}
+
+// admissions_near_cap's step at count of admissionCap, on an admin device (§7.10's cleanup row): from 90% of the cap,
+// raised once each time the count rises past the count it was raised at, opening the cleanup item unless one is open;
+// below 90% the raise resets and an open cleanup item closes, since the list is gone. A cap of 0 or -1 changes nothing,
+// as no cap is known. position is the entry it is judged at, which names a new item.
+func (self *sidecarAlarmRecord) nearCap(count int, admissionCap int, position uint64, nowMs int64) []SidecarEvent {
+	if admissionCap <= 0 {
+		return nil
+	}
+	if count*10 < admissionCap*sidecarAdmissionsNearCapTenths {
+		self.NearCapRaisedCount = 0
+		for _, item := range self.Items {
+			if item.Kind == SidecarApprovalCleanup && !item.Decided {
+				item.Decided = true
+				item.Decision = "closed"
+			}
+		}
+		return nil
+	}
+	if count <= self.NearCapRaisedCount {
+		return nil
+	}
+	self.NearCapRaisedCount = count
+	events := []SidecarEvent{{Kind: SidecarEventAdmissionsNearCap}}
+	open := slices.ContainsFunc(self.Items, func(item *sidecarApprovalRecord) bool {
+		return item.Kind == SidecarApprovalCleanup && !item.Decided
+	})
+	if !open {
+		itemId := sidecarApprovalItemId(SidecarApprovalCleanup, nil, position)
+		self.open(&sidecarApprovalRecord{ItemId: itemId, Kind: SidecarApprovalCleanup, Position: position, RaisedAtMs: nowMs})
+		events[0].ApprovalId = &itemId
+	}
+	return events
+}
+
+// A fresh read of config_admissions, admissionCap (identity_cleanup.go): kept as the cap the watcher compares with, and,
+// on an admin device, admissions_near_cap judged at once at count, what config_admissions counts at the newest
+// verified state, whose position is position, so a cap read after the entries that reached it still raises.
+// memberDevice and memberId are this device's standing in that state, read before the lock.
+func (self *Sidecar) admissionCapRead(admissionCap int, count int, position uint64, memberDevice bool, memberId Id) {
+	events := []SidecarEvent{}
+	err := func() error {
+		self.alarms.stateLock.Lock()
+		defer self.alarms.stateLock.Unlock()
+		self.alarms.admissionCap = admissionCap
+		if !memberDevice {
+			return nil
+		}
+		record, err := self.loadAlarmRecord()
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(record.AdminMemberIds, memberId) {
+			return nil
+		}
+		events = record.nearCap(count, admissionCap, position, self.clock.Now().UnixMilli())
+		return self.persistAlarmRecord(record)
+	}()
+	if err != nil {
+		self.log.Warningf("[identity]admissions_near_cap was not judged at a fresh cap: %s", err)
+		return
+	}
+	for _, event := range events {
+		self.emitEvent(event)
+	}
 }
 
 // Closes every open item of kind for a window.
