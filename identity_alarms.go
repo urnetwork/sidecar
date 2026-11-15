@@ -516,16 +516,16 @@ func (self *sidecarAlarmRecord) nearCap(count int, admissionCap int, position ui
 		return nil
 	}
 	self.NearCapRaisedCount = count
-	events := []SidecarEvent{{Kind: SidecarEventAdmissionsNearCap}}
-	open := slices.ContainsFunc(self.Items, func(item *sidecarApprovalRecord) bool {
+	// the event names the open item, a new one unless one is open still
+	itemId := sidecarApprovalItemId(SidecarApprovalCleanup, nil, position)
+	if index := slices.IndexFunc(self.Items, func(item *sidecarApprovalRecord) bool {
 		return item.Kind == SidecarApprovalCleanup && !item.Decided
-	})
-	if !open {
-		itemId := sidecarApprovalItemId(SidecarApprovalCleanup, nil, position)
+	}); 0 <= index {
+		itemId = self.Items[index].ItemId
+	} else {
 		self.open(&sidecarApprovalRecord{ItemId: itemId, Kind: SidecarApprovalCleanup, Position: position, RaisedAtMs: nowMs})
-		events[0].ApprovalId = &itemId
 	}
-	return events
+	return []SidecarEvent{{Kind: SidecarEventAdmissionsNearCap, ApprovalId: &itemId}}
 }
 
 // A fresh read of config_admissions, admissionCap (identity_cleanup.go): kept as the cap the watcher compares with, and,
