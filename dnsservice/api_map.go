@@ -399,7 +399,6 @@ const (
 	dnsMapResultPolled   = "polled"
 	dnsMapResultReported = "reported"
 	dnsMapResultProbes   = "probes"
-	dnsMapResultFailure  = "load_failed"
 	dnsMapResultRefused  = "refused"
 	dnsMapResultFailed   = "failed"
 )

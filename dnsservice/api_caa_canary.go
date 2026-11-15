@@ -246,13 +246,12 @@ func (self *DnsApi) serveCaaCanary(writer http.ResponseWriter, request *http.Req
 		if errors.Is(err, ErrDnsWriteEmpty) {
 			err = nil
 		}
-		answer = &DnsCaaCanaryAnswer{Serial: serial}
-		if err == nil {
-			self.metrics.caaCanaries.Add(1, dnsCaaCanaryResultDeleted)
-		}
-		if err != nil && !self.answerCaaCanaryError(writer, err, unavailable, conflict) {
+		if err != nil {
+			self.answerCaaCanaryError(writer, err, unavailable, conflict)
 			return
 		}
+		self.metrics.caaCanaries.Add(1, dnsCaaCanaryResultDeleted)
+		answer = &DnsCaaCanaryAnswer{Serial: serial}
 	} else {
 		if canary.Replaces != "" && !isDnsCaaCanaryNonce(canary.Replaces) {
 			self.metrics.caaCanaries.Add(1, dnsCaaCanaryResultRefused)
@@ -288,8 +287,8 @@ func (self *DnsApi) serveCaaCanary(writer http.ResponseWriter, request *http.Req
 	dnsWriteJson(writer, answer)
 }
 
-// Answers a writer's refusal as the route maps it, counting it. Always false: the request is answered.
-func (self *DnsApi) answerCaaCanaryError(writer http.ResponseWriter, err error, unavailable func(), conflict func(code string, err error)) bool {
+// Answers a writer's refusal as the route maps it, counting it.
+func (self *DnsApi) answerCaaCanaryError(writer http.ResponseWriter, err error, unavailable func(), conflict func(code string, err error)) {
 	switch {
 	case errors.Is(err, ErrDnsRestoring):
 		self.metrics.caaCanaries.Add(1, dnsCaaCanaryResultRestoring)
@@ -308,5 +307,4 @@ func (self *DnsApi) answerCaaCanaryError(writer http.ResponseWriter, err error, 
 		self.log.Errorf("[dns]caa canary write failed: %v", err)
 		unavailable()
 	}
-	return false
 }
