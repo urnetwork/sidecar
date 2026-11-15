@@ -118,7 +118,7 @@ func (self *ConfigScimSigner) run() {
 		select {
 		case <-self.ctx.Done():
 			return
-		case <-time.After(self.settings.PollInterval):
+		case <-self.sidecar.clock.After(self.settings.PollInterval):
 		}
 	}
 }
