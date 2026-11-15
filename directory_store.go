@@ -61,6 +61,8 @@ type DirectoryStoreState struct {
 	ErasureVersion uint64
 	// Each writer's stream as far as this copy holds it.
 	StreamVersions map[Id]uint64
+	// The highest format a listing gave the repo (§11.6), 0 before any.
+	Format uint32
 }
 
 // A copy.
@@ -83,6 +85,7 @@ type directoryStateDocument struct {
 	CardsVersion   uint64            `json:"cards_version"`
 	ErasureVersion uint64            `json:"erasure_version"`
 	StreamVersions map[string]uint64 `json:"stream_versions"`
+	Format         uint32            `json:"format,omitempty"`
 }
 
 // A kept push's document.
@@ -206,7 +209,7 @@ func (self *DirectoryStore) Load(directoryId Id) error {
 			return self.Load(directoryId)
 		}
 		state.Sequence, state.SequenceKnown, state.FullListingDay = document.Sequence, document.SequenceKnown, document.FullListingDay
-		state.CardsVersion, state.ErasureVersion = document.CardsVersion, document.ErasureVersion
+		state.CardsVersion, state.ErasureVersion, state.Format = document.CardsVersion, document.ErasureVersion, document.Format
 		for writerText, version := range document.StreamVersions {
 			writerId, err := directoryParseIdText(writerText)
 			if err != nil {
@@ -263,7 +266,7 @@ func (self *DirectoryStore) State() *DirectoryStoreState {
 func (self *DirectoryStore) writeState(state *DirectoryStoreState) error {
 	document := &directoryStateDocument{
 		Version: directoryStoreVersion, DirectoryId: state.DirectoryId, Sequence: state.Sequence, SequenceKnown: state.SequenceKnown,
-		FullListingDay: state.FullListingDay, CardsVersion: state.CardsVersion, ErasureVersion: state.ErasureVersion,
+		FullListingDay: state.FullListingDay, CardsVersion: state.CardsVersion, ErasureVersion: state.ErasureVersion, Format: state.Format,
 		StreamVersions: map[string]uint64{},
 	}
 	for writerId, version := range state.StreamVersions {
@@ -443,6 +446,16 @@ func (self *DirectoryStore) Slot(slotId Id) (*RecordSlot, error) {
 		slot.Rows = append(slot.Rows, &RecordSlotRow{KeyIndex: row.KeyIndex, Row: row.Row})
 	}
 	return slot, nil
+}
+
+// Notes the repo's format a listing gave, keeping the highest: nothing lowers a repo's format (§11.6).
+func (self *DirectoryStore) NoteFormat(format uint32) error {
+	state := self.State()
+	if format <= state.Format {
+		return nil
+	}
+	state.Format = format
+	return self.writeState(state)
 }
 
 // Notes the erasure ref's version the reader read through.

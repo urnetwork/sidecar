@@ -21,8 +21,8 @@
 //	           a daemon wrote since. A request whose check fails erases nothing and alarms bad_erasure, naming its
 //	           signer, once
 //	expiry     the runner also runs the directory's retention expiry (RECORD-M6-03) through Expire: an announce entry
-//	           is held until 30 days after a newer entry for its item, or its item's expiry, so a live repo item keeps
-//	           its newest copy
+//	           is held until 30 days after a newer entry or file for its item, or its item's expiry, so a live repo
+//	           item keeps its newest copy (directory_retention.go's hold), and then the weekly admin BASE (Base)
 //	waiting    a request no ERASE names is pending, and is never dropped: past 24 h every directory admin's device
 //	           raises directory_erasure, pending, and done once it is erased; StatusLines names each one past 24 h and
 //	           the oldest waiting
@@ -35,7 +35,6 @@
 package sidecar
 
 import (
-	"cmp"
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/binary"
@@ -225,6 +224,8 @@ type DirectoryErasureRunnerArgs struct {
 	Erase DirectoryEraseFunction
 	// The directory's retention expiry, RecordRetention.Expire with hold as its Hold; nil runs none.
 	Expire func(ctx context.Context, directoryId Id, hold func(entry *RecordReadEntry) bool) error
+	// The directory's admin BASE once due, RecordRetention.DirectoryBase; nil runs none.
+	Base func(ctx context.Context, directoryId Id) (int, bool, error)
 	// The network-scope indexers at the state now (ConfigState.Indexers); nil for none known, when every directory
 	// admin's daemon runs.
 	Indexers func() []Id
@@ -260,6 +261,7 @@ type DirectoryErasureRunner struct {
 	client   *DirectoryClient
 	erase    DirectoryEraseFunction
 	expire   func(ctx context.Context, directoryId Id, hold func(entry *RecordReadEntry) bool) error
+	base     func(ctx context.Context, directoryId Id) (int, bool, error)
 	indexers func() []Id
 	raise    func(repoId Id, requestId Id, outcome string) error
 	random   io.Reader
@@ -292,7 +294,7 @@ func NewDirectoryErasureRunner(args *DirectoryErasureRunnerArgs) (*DirectoryEras
 		random = cryptorand.Reader
 	}
 	self := &DirectoryErasureRunner{
-		client: args.Client, erase: args.Erase, expire: args.Expire, indexers: args.Indexers, raise: args.Raise, random: random,
+		client: args.Client, erase: args.Erase, expire: args.Expire, base: args.Base, indexers: args.Indexers, raise: args.Raise, random: random,
 		settings: settings, dueMillis: map[Id]int64{}, refused: map[Id]bool{}, raised: map[Id]string{},
 	}
 	args.Client.addSyncHook(func(ctx context.Context) {
@@ -323,6 +325,7 @@ func (self *Sidecar) DirectoryErasureRunner() (*DirectoryErasureRunner, error) {
 				_, err := record.Retention().Expire(ctx, &RecordRetentionExpireArgs{LogId: directoryId, Hold: hold})
 				return err
 			},
+			Base: record.Retention().DirectoryBase,
 			Indexers: func() []Id {
 				state, err := self.configState()
 				if err != nil {
@@ -454,61 +457,6 @@ func (self *DirectoryErasureRunner) delay() time.Duration {
 		return most
 	}
 	return time.Duration(binary.BigEndian.Uint64(draw) % uint64(most+1))
-}
-
-// Whether expiry holds entry: an announce entry until AnnounceHold after a newer entry for its item, or its item's
-// expiry; a repo item's newest copy, which has neither, for as long as it is the newest.
-func (self *DirectoryErasureRunner) announceHold(entries []*RecordReadEntry, nowMillis int64) func(entry *RecordReadEntry) bool {
-	type copyOf struct {
-		entryId       Id
-		version       uint64
-		pushMillis    int64
-		expiresMillis int64
-	}
-	byItem := map[DirectoryItemKey][]*copyOf{}
-	for _, entry := range entries {
-		if entry.Header == nil || entry.Header.Kind() != RecordKindAnnounce || entry.Body == nil || entry.BodyInvalid {
-			continue
-		}
-		version, ok := directoryVersionOf(entry)
-		if !ok {
-			continue
-		}
-		byItem[version.key] = append(byItem[version.key], &copyOf{
-			entryId: entry.EntryId, version: version.item.GetVersion(), pushMillis: entry.PushTimeMillis, expiresMillis: version.item.GetExpiresMillis(),
-		})
-	}
-	endedMillis := map[Id]int64{}
-	held := map[Id]bool{}
-	for _, copies := range byItem {
-		slices.SortStableFunc(copies, func(a *copyOf, b *copyOf) int {
-			if order := cmp.Compare(a.version, b.version); order != 0 {
-				return order
-			}
-			if order := cmp.Compare(a.pushMillis, b.pushMillis); order != 0 {
-				return order
-			}
-			return a.entryId.Cmp(b.entryId)
-		})
-		for i, copied := range copies {
-			held[copied.entryId] = true
-			switch {
-			case i+1 < len(copies):
-				endedMillis[copied.entryId] = copies[i+1].pushMillis
-			case copied.expiresMillis != 0:
-				endedMillis[copied.entryId] = copied.expiresMillis
-			}
-		}
-	}
-	window := self.settings.AnnounceHold.Milliseconds()
-	return func(entry *RecordReadEntry) bool {
-		if !held[entry.EntryId] {
-			// no announce entry this copy reads: the policy's own rule
-			return false
-		}
-		ended, ok := endedMillis[entry.EntryId]
-		return !ok || nowMillis < ended+window
-	}
 }
 
 // Raises directory_erasure for request once an outcome.
@@ -656,9 +604,14 @@ func (self *DirectoryErasureRunner) Pass(ctx context.Context) (*DirectoryErasure
 	}
 	if pass.Runs && self.expire != nil && firstErr == nil {
 		entries := self.client.allEntries()
-		if err := self.expire(ctx, directoryId, self.announceHold(entries, nowMillis)); err != nil {
+		hold := directoryAnnounceHold(entries, self.client.foldFileVersions(), nowMillis, self.settings.AnnounceHold)
+		if err := self.expire(ctx, directoryId, hold); err != nil {
 			firstErr = err
 		}
+	}
+	if pass.Runs && firstErr == nil {
+		// the weekly admin BASE re-lists the live set (directory_retention.go)
+		firstErr = self.rebase(ctx, directoryId)
 	}
 	if 0 < len(pass.Erased) {
 		// the copy reads its own ERASEs at the next sync
@@ -696,7 +649,9 @@ func (self *DirectoryClient) ErasureStatusLines(settings *DirectoryErasureSettin
 	lines := self.RevocationStatusLines()
 	// a runner value for its reading alone: it holds no hook, eraser or timer, so it runs nothing
 	reading := &DirectoryErasureRunner{client: self, settings: settings}
-	return append(lines, reading.StatusLines()...)
+	lines = append(lines, reading.StatusLines()...)
+	// and on a directory admin's device the oldest entry that waits for retention expiry (RECORD-M6-21)
+	return append(lines, self.RetentionStatusLines(settings)...)
 }
 
 // `ur status`'s lines on a directory admin's device: each request still pending past 24 h, and the oldest waiting one

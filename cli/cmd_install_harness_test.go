@@ -148,8 +148,8 @@ func newTestTelemetryInstallCli(t *testing.T, home string, state string, socketP
 }
 
 // While model calls are captured, a user install of Claude Code draws a telemetry pair, seals it under <state>/harness/
-// and writes the exporter's settings naming it, the diff never printing the token; Codex's install then names the same
-// pair, and a re-install changes nothing.
+// and writes the exporter's settings naming it, the diff never printing the token; Codex's install then writes no
+// exporter settings and hooks PostModelRequest instead, saying so (QD-835), and a re-install changes nothing.
 func TestInstallHarnessWritesTelemetry(t *testing.T) {
 	home := t.TempDir()
 	state := t.TempDir()
@@ -181,7 +181,7 @@ func TestInstallHarnessWritesTelemetry(t *testing.T) {
 		t.Errorf("the exporter's settings:\n%s", settings)
 	}
 
-	// Codex names the pair already sealed, whatever port is free now
+	// Codex's model calls come from its PostModelRequest hook: no exporter settings, the pair left as it was
 	cli, tty = newTestTelemetryInstallCli(t, home, state, none, 41299, "y")
 	if code := cli.main(context.Background(), []string{"ur", "install-harness", "codex"}); code != urExitOk {
 		t.Fatalf("codex: exit %d:\n%s", code, tty.written.String())
@@ -190,8 +190,21 @@ func TestInstallHarnessWritesTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(config), `endpoint = "http://127.0.0.1:41235/v1/logs"`) || !strings.Contains(string(config), "Bearer "+pair.Token) {
-		t.Errorf("codex's [otel] table:\n%s", config)
+	if strings.Contains(string(config), "[otel]") || strings.Contains(string(config), pair.Token) {
+		t.Errorf("codex's config holds exporter settings:\n%s", config)
+	}
+	hooks, err := os.ReadFile(filepath.Join(home, ".codex", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hooks), `"PostModelRequest"`) {
+		t.Errorf("codex's hooks name no PostModelRequest:\n%s", hooks)
+	}
+	if log := tty.written.String(); !strings.Contains(log, "codex reports its model calls by its PostModelRequest hook") || strings.Contains(log, pair.Token) {
+		t.Errorf("codex's install does not say where its model calls come from, or prints the token:\n%s", log)
+	}
+	if again, err := mcp.ReadHarnessTelemetry(state, cli.ingest.HarnessConfigByteCount); err != nil || *again != *pair {
+		t.Errorf("codex's install changed the pair: %v", err)
 	}
 
 	// a re-install changes nothing and asks nothing

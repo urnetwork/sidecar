@@ -111,7 +111,16 @@
     "transcript": true
   },
   {
-    "file": "10-Stop.json",
+    "file": "10-PostModelRequest.json",
+    "kind": "model_call",
+    "harness_event": "PostModelRequest",
+    "session_id": "conf-codex-0001",
+    "model": "conformance-model",
+    "cwd": "/work/project",
+    "transcript": true
+  },
+  {
+    "file": "11-Stop.json",
     "kind": "stop",
     "harness_event": "Stop",
     "session_id": "conf-codex-0001",
@@ -119,7 +128,7 @@
     "transcript": true
   },
   {
-    "file": "11-SessionEnd.json",
+    "file": "12-SessionEnd.json",
     "kind": "session_end",
     "harness_event": "SessionEnd",
     "session_id": "conf-codex-0001",

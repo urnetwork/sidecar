@@ -85,7 +85,7 @@ func testRecordVersionsKnown(versions ...uint32) func(version uint32) bool {
 // §22.5's §16 row: versions 0, 2 and 5 are refused, and 1 parses. Version 3, an access request's (MCP-M6-01), and
 // version 4, a dial or route grant's (QD-740), are known, and neither is a dns action's.
 func TestApproverRefusesUnknownVersion(t *testing.T) {
-	for _, version := range []uint32{0, 2, 5} {
+	for _, version := range []uint32{0, 5} {
 		action := testRecordDnsAction()
 		action.Version = version
 		_, err := ParseStoredCanonicalAction(testRecordStored(t, action))
@@ -101,10 +101,27 @@ func TestApproverRefusesUnknownVersion(t *testing.T) {
 	if !bytes.Equal(parsed.Bytes, stored) || !proto.Equal(parsed.Action, testRecordDnsAction()) {
 		t.Error("the parse did not keep the action or its bytes")
 	}
-	// The set is a set: 2 is not known, though 3 and 4 past it are.
-	if CanonicalActionVersionKnown(2) || CanonicalActionVersionKnown(5) || CanonicalActionVersionKnown(0) ||
+	// The set is a set: 2, field 37's, known from M10 beside 1, 3 and 4 (RECORD-M10-03); 0 and 5 not.
+	if !CanonicalActionVersionKnown(2) || CanonicalActionVersionKnown(5) || CanonicalActionVersionKnown(0) ||
 		!CanonicalActionVersionKnown(1) || !CanonicalActionVersionKnown(3) || !CanonicalActionVersionKnown(4) {
-		t.Error("the known set is not {1, 3, 4}")
+		t.Error("the known set is not {1, 2, 3, 4}")
+	}
+	// version 2 is the agent-config writes' alone, and field 37 rides only it
+	dns := testRecordDnsAction()
+	dns.Version = 2
+	if _, err := ParseStoredCanonicalAction(testRecordStored(t, dns)); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("a dns action at version 2: %v", err)
+	}
+	write := &protocol.CanonicalAction{
+		Kind: uint32(SidecarActionAgentConfigWrite), Version: 2, RepoId: bytes.Repeat([]byte{7}, 16), Path: "CLAUDE.md",
+		ContentSha256: bytes.Repeat([]byte{0x43}, 32), BaseVersion: 7, Versioning: 1,
+	}
+	if _, err := ParseStoredCanonicalAction(testRecordStored(t, write)); err != nil {
+		t.Errorf("an agent-config write at version 2 with versioning: %v", err)
+	}
+	write.Version = 1
+	if _, err := ParseStoredCanonicalAction(testRecordStored(t, write)); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("versioning at version 1: %v", err)
 	}
 	for _, version := range []uint32{3, 4} {
 		misplaced := testRecordDnsAction()

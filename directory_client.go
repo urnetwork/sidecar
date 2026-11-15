@@ -212,6 +212,11 @@ var directoryFoldFiles func(client *DirectoryClient, fold *DirectoryFold) []*dir
 // ERASEs the reader takes, those of a directory admin, the rest alarming. Nil takes every one.
 var directoryErasureJudge func(client *DirectoryClient, repoId Id, erasures []*RecordStreamErasure) ([]*RecordStreamErasure, error)
 
+// What a reader does with the entries a sync verified once they are folded, set by directory_removal.go, which neither
+// the ios_extension nor the sidecar_http leg links: §16.11's moderation row's alarm on the moderated member's devices.
+// Called with syncLock held, so it reads only what it is given. Nil does nothing.
+var directoryAfterRead func(client *DirectoryClient, directoryId Id, entries []*RecordReadEntry)
+
 // The copy as the client's reader reads it: the adapter, with the erasure ref's ERASEs judged by directoryErasureJudge
 // before the reader takes them.
 type directoryReaderStreams struct {

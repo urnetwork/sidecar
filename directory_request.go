@@ -833,6 +833,31 @@ func (self *DirectoryAccessRequests) File(ctx context.Context, ask *DirectoryReq
 	return filed, nil
 }
 
+// The requests of this sidecar's own whose outcome this device received: its kept receipts, and on a phone the rows
+// its notices settled (RECORD-M6-26; §16.11's limits row, FS-100).
+func (self *DirectoryAccessRequests) receivedRequests() map[Id]bool {
+	received := map[Id]bool{}
+	if kept, err := self.loadReceipts(); err == nil {
+		for text := range kept.Receipts {
+			if requestId, err := directoryParseIdText(text); err == nil {
+				received[requestId] = true
+			}
+		}
+	}
+	phone, _ := self.client.part(directoryPhoneNoticesPartName, func() any { return nil }).(*DirectoryPhoneNotices)
+	if phone == nil {
+		return received
+	}
+	if document, err := phone.load(); err == nil {
+		for text, row := range document.Requests {
+			if requestId, err := directoryParseIdText(text); err == nil && row.Outcome != "" {
+				received[requestId] = true
+			}
+		}
+	}
+	return received
+}
+
 // Holds one more filing to §16.11's limits by this sidecar's own requests, the ones a sync read and the ones this
 // process filed since.
 func (self *DirectoryAccessRequests) checkFilingLimits(fold *directoryRequestFold, limits *directoryLimits, target *protocol.RequestTarget, runId *Id, nowMillis int64) error {
@@ -864,8 +889,11 @@ func (self *DirectoryAccessRequests) checkFilingLimits(fold *directoryRequestFol
 		})
 		return slices.Clone(self.filed)
 	}()
+	// a filing whose outcome this device received is pending no more, though no sync read it back: a requester that
+	// leases only its notice frees its count at the decided rewrite (§16.11's limits row, FS-100)
+	received := self.receivedRequests()
 	for _, filing := range filings {
-		if nowMillis <= filing.notAfter {
+		if nowMillis <= filing.notAfter && !received[filing.requestId] {
 			pending += 1
 		}
 		if nowMillis-settings.DayWindow.Milliseconds() < filing.timeMillis {

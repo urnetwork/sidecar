@@ -30,10 +30,11 @@
 //	           hooks side by side and the enrollment comes before any other ur step (§16.9; QD-041). The file names a
 //	           path, never a key, and the seal holds it with the template's other inputs
 //	telemetry  with a telemetry pair named (HarnessInstallArgs.Telemetry; a user install alone, of a harness that
-//	           exports), the exporter's settings: Claude Code's env block and Codex's [otel] table, naming the
-//	           daemon's loopback listener and its bearer token (harness_telemetry.go; QD-822). The pair is written
-//	           beside the seals before any harness file, so the daemon can take the token by the time a harness
-//	           presents it, and the diff shown never prints the token
+//	           exports), the exporter's settings: Claude Code's env block, naming the daemon's loopback listener and
+//	           its bearer token (harness_telemetry.go; QD-822). The pair is written beside the seals before any
+//	           harness file, so the daemon can take the token by the time a harness presents it, and the diff shown
+//	           never prints the token, nor the bearer of the [otel] table an earlier install wrote into Codex's
+//	           config, which Codex's install now removes (QD-835)
 //
 // The vault-synced global harness config is plan-MCP-harness-config-schema's: until a reader of the vault's
 // harness/config.json lands, the install takes local defaults and reads no vault (QD-116's interim).
@@ -561,8 +562,8 @@ func (self *HarnessInstallPlan) Telemetry() *HarnessTelemetry {
 // read (I-7).
 const harnessTelemetryTokenShown = "<telemetry token>"
 
-// Every changed file's unified diff, with Ingest.HarnessDiffContextLineCount lines of context, its paths whole, the
-// telemetry token never printed.
+// Every changed file's unified diff, with Ingest.HarnessDiffContextLineCount lines of context, its paths whole, no
+// telemetry token printed (hiddenTokens).
 func (self *HarnessInstallPlan) Diff() string {
 	diff := strings.Builder{}
 	for _, file := range self.Files {
@@ -575,10 +576,13 @@ func (self *HarnessInstallPlan) Diff() string {
 		}
 		diff.WriteString(harnessUnifiedDiff(before, "b"+filepath.ToSlash(file.Path), file.Before, file.After, self.args.Ingest.HarnessDiffContextLineCount))
 	}
-	if telemetry := self.template.telemetry; telemetry != nil {
-		return strings.ReplaceAll(diff.String(), telemetry.Token, harnessTelemetryTokenShown)
+	text := diff.String()
+	for _, token := range self.hiddenTokens() {
+		if token != "" {
+			text = strings.ReplaceAll(text, token, harnessTelemetryTokenShown)
+		}
 	}
-	return diff.String()
+	return text
 }
 
 // Writes the telemetry pair where it is new, every changed file, each by a temporary file renamed over it, then the
