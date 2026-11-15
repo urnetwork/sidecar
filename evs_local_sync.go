@@ -18,8 +18,9 @@
 //	     EvsGitRef {version, chain, tip}; settle(r) (evs_local_apply.go)
 //	  a refused u     evs_alarm (version_rule, or tamper for a hash); stuck_at = u; nothing past u-1 applied, the local
 //	                  ref left alone; every later version is read only for the token paths it changes, which stay
-//	                  tainted, until a DELETE, which carries nothing to check: it applies, the local ref is deleted, and
-//	                  the push that re-creates the ref must write or remove each tainted token path (8.5)
+//	                  tainted, each with whether its last change removed it, until a DELETE, which carries nothing to
+//	                  check: it applies, the local ref is deleted, and the push that re-creates the ref must write or
+//	                  remove each tainted token path, save one last removed that its new tree lacks (8.5; QD-826)
 //
 //	check(u)  EvsGitCheckUpdate (evs_git_check.go), its sources replayed first: a source this mount cannot replay to the
 //	          version named leaves r waiting with no alarm, and a cycle of waits refuses u; then the objects through the
@@ -27,7 +28,9 @@
 //	          commit names; then the changes held to the tree (G4): on a branch exactly 8.2.4's net change from the path
 //	          state at E (a deleted ref's last tip, an overlay's base tip for its first push) to tree(peel(new_tip)),
 //	          token path by token path in the push's epoch, each file entry's opened mode and oid the tree's, and beside
-//	          it a write or removal of every tainted token path; on a tag ref none; a REKEY's entries each the mode and
+//	          it a write or removal of every tainted token path as the new tree holds it or lacks it, save one whose last
+//	          stopped change was a removal and which the new tree lacks: the push states nothing there, and the stopped
+//	          removal stands for the net change's own (QD-826); on a tag ref none; a REKEY's entries each the mode and
 //	          oid of tree(peel(E)) at its path; and §11.7's per-path version rules on what this replay holds
 //
 // An own push is replayed from evs like any other and checked like any other. SidecarCommitter refusing a committer
@@ -476,6 +479,9 @@ type evsGitReplayRun struct {
 	paths    *EvsReplayPaths
 	// the refs whose replays enclose this one
 	replaying map[Id]bool
+	// each of ref.Tainted's places by its epoch and key form, Removed unset; made at the run's first taint, and
+	// dropped when a version applies and the taints clear
+	taintPlaces map[EvsTaintedPath]int
 	// since the last flush: the tips log's entries and the tip index's rows to add, the held set and born journal
 	// once loaded and changed, the versions passed, and whether anything is owed a flush
 	tips        []*evsGitTipEntry
@@ -685,6 +691,7 @@ func (self *evsGitReplayRun) apply(ctx context.Context, statement *EvsVerifiedSt
 		self.store.reachable[commit.Oid] = true
 	}
 	ref.Tip, ref.Peeled, ref.TipVersion, ref.Deleted, ref.Tainted = checked.NewTip, checked.Peeled, statement.Version, false, nil
+	self.taintPlaces = nil
 	self.tips = append(self.tips, &evsGitTipEntry{Version: statement.Version, Tip: evsOidText(checked.NewTip), Flags: flags})
 	self.index = append(self.index, &evsGitTipIndexRow{Oid: evsOidText(checked.Peeled), RefId: hex.EncodeToString(ref.RefId[:]), Version: statement.Version})
 	self.pass(statement)
@@ -738,16 +745,28 @@ func (self *evsGitReplayRun) refuse(statement *EvsVerifiedStatement, payload *Ev
 	return nil
 }
 
-// Notes the token paths a stopped version changes as tainted. The run's per-path versions no longer hold them: evs's
-// entry there is the stopped version's, which the re-creating push's change is based on, so a run that applied the
-// versions before the stop must not hold that change to the version it saw last (8.5).
+// Notes the token paths a stopped version changes as tainted, each with whether this change, the newest a stopped
+// version made there, removes it (QD-826): stopped versions are read in order, so the record ends holding whether
+// the last one did, which is what evs holds there. The run's per-path versions no longer hold them: evs's entry there
+// is the stopped version's, which the re-creating push's change is based on, so a run that applied the versions
+// before the stop must not hold that change to the version it saw last (8.5).
 func (self *evsGitReplayRun) taint(payload *EvsCheckedPayload, push *protocol.EvsPush) {
-	for _, change := range payload.Changes {
-		tainted := EvsTaintedPath{Epoch: push.GetPathEpoch(), Key: change.TokenPath.KeyString()}
-		if !slices.Contains(self.ref.Tainted, tainted) {
-			self.ref.Tainted = append(self.ref.Tainted, tainted)
+	if self.taintPlaces == nil {
+		self.taintPlaces = map[EvsTaintedPath]int{}
+		for i, path := range self.ref.Tainted {
+			self.taintPlaces[EvsTaintedPath{Epoch: path.Epoch, Key: path.Key}] = i
 		}
-		delete(self.paths.paths, tainted.Key)
+	}
+	for _, change := range payload.Changes {
+		place := EvsTaintedPath{Epoch: push.GetPathEpoch(), Key: change.TokenPath.KeyString()}
+		removed := !change.WritesEntry()
+		if i, ok := self.taintPlaces[place]; ok {
+			self.ref.Tainted[i].Removed = removed
+		} else {
+			self.taintPlaces[place] = len(self.ref.Tainted)
+			self.ref.Tainted = append(self.ref.Tainted, EvsTaintedPath{Epoch: place.Epoch, Key: place.Key, Removed: removed})
+		}
+		delete(self.paths.paths, place.Key)
 	}
 }
 
@@ -919,8 +938,10 @@ func (self *evsGitReplayRun) bornJournal() (map[string]uint64, error) {
 }
 
 // G4 on an UPDATE (see the file header's check row): the push's changes exactly the net change, each file entry's mode
-// and oid the tree's, every tainted token path written or removed; then an overlay's held set and the born journal
-// take what the version changed.
+// and oid the tree's, every tainted token path written as the new tree holds it or removed where it holds nothing,
+// save one whose last stopped change was a removal and which the new tree lacks, where the push states nothing and
+// the stopped removal stands for the net change's own (QD-826); then an overlay's held set and the born journal take
+// what the version changed.
 func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.EvsPush, payload *EvsCheckedPayload, metadata *protocol.EvsSealedMetadata, checked *EvsGitCheckedUpdate, written map[string]*evsGitWrittenFile, creating bool) error {
 	refused := func(format string, values ...any) error {
 		return fmt.Errorf("%w: %s", ErrEvsGitUpdateRefused, fmt.Sprintf(format, values...))
@@ -977,23 +998,95 @@ func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.Ev
 		}
 		expected[tokenPath.KeyString()] = change
 	}
-	tainted := map[string]bool{}
+	// each taint by its key form: whether the last change a stopped version made there removed it
+	taintedRemoved := map[string]bool{}
 	for _, path := range ref.Tainted {
 		if path.Epoch != epoch {
 			// a taint of another epoch cannot be matched here: the re-creation fails closed (incomplete)
 			return refused("a tainted path of another path epoch")
 		}
-		tainted[path.Key] = true
+		taintedRemoved[path.Key] = path.Removed
+	}
+	// the new tree's entry at a token path in the push's epoch, by its key form, nil where the tree holds no such path:
+	// each directory's children's tokens are made once, and a name no token can be made of names no token path
+	type nextChild struct {
+		entry EvsGitRawEntry
+		token EvsToken
+	}
+	nextChildren := map[string]map[string]*nextChild{}
+	var nextPathKey *EvsPathKey
+	nextEntryAt := func(key string) (*EvsGitRawEntry, error) {
+		at := &nextChild{entry: EvsGitRawEntry{Mode: EvsGitModeDirectory, CanonMode: EvsGitModeDirectory, Oid: next}, token: EvsRootToken}
+		if key == "" {
+			return &at.entry, nil
+		}
+		if nextPathKey == nil {
+			pathKey, err := self.keys.path(ctx, epoch)
+			if err != nil {
+				return nil, err
+			}
+			nextPathKey = pathKey
+		}
+		components := strings.Split(key, "/")
+		for i, component := range components {
+			if at.entry.CanonMode != EvsGitModeDirectory {
+				return nil, nil
+			}
+			directoryKey := strings.Join(components[:i], "/")
+			children, ok := nextChildren[directoryKey]
+			if !ok {
+				entries, err := evsGitSortedEntries(ctx, self.store, &at.entry.Oid)
+				if err != nil {
+					return nil, err
+				}
+				children = map[string]*nextChild{}
+				for _, entry := range entries {
+					if checkEvsPathName(entry.Name) != nil {
+						continue
+					}
+					token, err := EvsPathToken(nextPathKey, at.token, entry.Name)
+					if err != nil {
+						return nil, err
+					}
+					children[token.String()] = &nextChild{entry: entry, token: token}
+				}
+				nextChildren[directoryKey] = children
+			}
+			if at = children[component]; at == nil {
+				return nil, nil
+			}
+		}
+		return &at.entry, nil
 	}
 	for _, change := range payload.Changes {
 		key := change.TokenPath.KeyString()
 		pathChange := expected[key]
 		if pathChange == nil {
-			if tainted[key] {
-				delete(tainted, key)
-				continue
+			if _, ok := taintedRemoved[key]; !ok {
+				return refused("a change that is not the tree's")
 			}
-			return refused("a change that is not the tree's")
+			// a tainted path the expected changes leave alone, held to the new tree: written as the tree holds it,
+			// removed where it holds nothing
+			entry, err := nextEntryAt(key)
+			if err != nil {
+				return err
+			}
+			switch {
+			case entry == nil:
+				if change.WritesEntry() {
+					return refused("a tainted path written where the tree holds nothing")
+				}
+			case !change.WritesEntry():
+				return refused("a tainted path removed where the tree holds it")
+			case evsEntryVersionIsDirectory(change.EntryVersion) != (entry.CanonMode == EvsGitModeDirectory):
+				return refused("a tainted path written as a kind that is not the tree's")
+			case entry.CanonMode != EvsGitModeDirectory:
+				if file := written[key]; file == nil || file.mode != entry.CanonMode || file.oid != entry.Oid {
+					return refused("a tainted file entry whose mode or oid is not the tree's")
+				}
+			}
+			delete(taintedRemoved, key)
+			continue
 		}
 		if pathChange.removes() == change.WritesEntry() {
 			return refused("a change whose write or removal is not the tree's")
@@ -1011,13 +1104,37 @@ func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.Ev
 			}
 		}
 		delete(expected, key)
-		delete(tainted, key)
+		delete(taintedRemoved, key)
+	}
+	for key, pathChange := range expected {
+		if taintedRemoved[key] && pathChange.removes() {
+			// the stopped versions last removed the path, as the net change does: evs holds that removal and takes no
+			// other, and it stands for the net change's (QD-826)
+			delete(expected, key)
+			delete(taintedRemoved, key)
+		}
 	}
 	if len(expected) != 0 {
 		return refused("a path of the tree's change the push lacks")
 	}
-	if len(tainted) != 0 {
-		return refused("a tainted token path the re-creating push neither writes nor removes")
+	// a tainted path the push leaves alone clears only where the last stopped change removed it and the new tree holds
+	// nothing there (QD-826), taken in key order so that every reader names one reason
+	leftKeys := make([]string, 0, len(taintedRemoved))
+	for key := range taintedRemoved {
+		leftKeys = append(leftKeys, key)
+	}
+	slices.Sort(leftKeys)
+	for _, key := range leftKeys {
+		if !taintedRemoved[key] {
+			return refused("a tainted token path the re-creating push neither writes nor removes")
+		}
+		entry, err := nextEntryAt(key)
+		if err != nil {
+			return err
+		}
+		if entry != nil {
+			return refused("a tainted token path the new tree holds that the re-creating push leaves alone")
+		}
 	}
 	// what the version changed: the held set and the born journal
 	born, err := self.bornJournal()
