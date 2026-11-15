@@ -110,6 +110,13 @@ type BridgeStatus struct {
 	ResolverPassedCount   uint64
 	ResolverDroppedCount  uint64
 
+	// §16.8's reach events since the bridge started (bridge_reach.go): the flows a granted row admitted that a
+	// callback, the sidecar role's, took; the coalesced events waiting for one; and the flows whose report was dropped,
+	// by a full ring or a full waiting table.
+	ReachNotedCount   uint64
+	ReachWaitingCount int
+	ReachDroppedCount uint64
+
 	// What the bridge waits on.
 	Waits []BridgeWait
 	// What the posture's last call refused or found, and what the bridge itself holds back.

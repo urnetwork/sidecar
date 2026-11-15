@@ -139,6 +139,8 @@ type bridgePolicyServed struct {
 type bridgePolicyState struct {
 	generation uint64
 	posture    PostureState
+	// the state's pin, 0 with no state: the log position a reach event's flows were judged at
+	pinN uint64
 	// enforcing, with rules that were refused or are none: every Network flow denies
 	rulesRefused  bool
 	networkId     connect.Id
@@ -285,6 +287,7 @@ func newBridgePolicyState(input *BridgePolicyInput, generation uint64, settings 
 		return self
 	}
 	overlay := newBridgePolicyOverlay(input.Overlay)
+	self.pinN = input.BridgeState.GetAuth().GetVersion()
 
 	self.block, _ = bridgeRulePrefix(rules.GetBlock())
 	self.previousBlock, _ = bridgeRulePrefix(rules.GetPreviousBlock())
@@ -496,34 +499,48 @@ func (self *bridgePolicyReach) admits(protocolNumber uint32, port uint16, now ti
 	return false
 }
 
-// AllowDial: a dial row admits the flow to this host.
-func (self *bridgePolicySubject) allowDial(protocolNumber uint32, port uint16, now time.Time) bool {
-	for i := range self.dial {
-		if self.dial[i].admits(protocolNumber, port, now) {
-			return true
+// The row of rows that admits a flow of the protocol and port at now, nil for none: the first that carries a grant
+// id, else the first of a policy rule, so a flow a requested grant admits is reported under it (bridge_reach.go).
+// A valid addr is the destination as sent, which a route row's prefix must hold; dial and exit rows pass none.
+func bridgePolicyAdmittingRow(
+	rows []bridgePolicyReach,
+	addr netip.Addr,
+	protocolNumber uint32,
+	port uint16,
+	now time.Time,
+) *bridgePolicyReach {
+	var admitting *bridgePolicyReach
+	for i := range rows {
+		row := &rows[i]
+		if (addr.IsValid() && !row.prefix.Contains(addr)) || !row.admits(protocolNumber, port, now) {
+			continue
+		}
+		if 0 < len(row.grantId) {
+			return row
+		}
+		if admitting == nil {
+			admitting = row
 		}
 	}
-	return false
+	return admitting
 }
 
-// AllowRoute: a route row covering the destination as sent admits the flow.
-func (self *bridgePolicySubject) allowRoute(addr netip.Addr, protocolNumber uint32, port uint16, now time.Time) bool {
-	for i := range self.route {
-		if self.route[i].prefix.Contains(addr) && self.route[i].admits(protocolNumber, port, now) {
-			return true
-		}
-	}
-	return false
+// AllowDial: the dial row that admits the flow to this host, nil for none.
+func (self *bridgePolicySubject) allowDial(protocolNumber uint32, port uint16, now time.Time) *bridgePolicyReach {
+	return bridgePolicyAdmittingRow(self.dial, netip.Addr{}, protocolNumber, port, now)
 }
 
-// AllowExit: an exit row admits the flow out through this host.
-func (self *bridgePolicySubject) allowExit(protocolNumber uint32, port uint16, now time.Time) bool {
-	for i := range self.exit {
-		if self.exit[i].admits(protocolNumber, port, now) {
-			return true
-		}
+// AllowRoute: the route row covering the destination as sent that admits the flow, nil for none.
+func (self *bridgePolicySubject) allowRoute(addr netip.Addr, protocolNumber uint32, port uint16, now time.Time) *bridgePolicyReach {
+	if !addr.IsValid() {
+		return nil
 	}
-	return false
+	return bridgePolicyAdmittingRow(self.route, addr, protocolNumber, port, now)
+}
+
+// AllowExit: the exit row that admits the flow out through this host, nil for none.
+func (self *bridgePolicySubject) allowExit(protocolNumber uint32, port uint16, now time.Time) *bridgePolicyReach {
+	return bridgePolicyAdmittingRow(self.exit, netip.Addr{}, protocolNumber, port, now)
 }
 
 // Whether a new flow may take the map at now.
@@ -686,6 +703,7 @@ func (self *bridgePolicyState) resolve(
 	flow *connect.EgressFlow,
 	forwardDelegationId *[sha256.Size]byte,
 	now time.Time,
+	reach *BridgeReachEvent,
 ) connect.EgressDecision {
 	deny := connect.EgressDecision{Verdict: connect.EgressVerdictDeny, PolicyGeneration: self.generation}
 	sdk := profile == BridgePolicyProfileSdkProvider
@@ -750,7 +768,20 @@ func (self *bridgePolicyState) resolve(
 			idle = settings.PinTcpIdleTimeout
 		}
 	}
-	admit := func(verdict connect.EgressVerdict, target netip.AddrPort, ruleId []byte) connect.EgressDecision {
+	// row is the reach row that admitted the flow, nil where none did (the allow-all with no document), and kind
+	// what its reach event reports it as
+	admit := func(
+		verdict connect.EgressVerdict,
+		target netip.AddrPort,
+		ruleId []byte,
+		row *bridgePolicyReach,
+		kind BridgeReachKind,
+	) connect.EgressDecision {
+		targetPort := port
+		if target.IsValid() && target.Port() != 0 {
+			targetPort = target.Port()
+		}
+		self.reachEvent(reach, kind, row, subject, flow, targetPort)
 		ruleTag := BridgeRuleTag(subject.sidecarId, ruleId)
 		if !sdk && forwardDelegationId != nil {
 			ruleTag = BridgeForwardRuleTag(subject.sidecarId, *forwardDelegationId, ruleId)
@@ -772,24 +803,29 @@ func (self *bridgePolicyState) resolve(
 	if !sdk {
 		// rule 1
 		if policyMap := self.matchMap(addr, port, protocolNumber, now); policyMap != nil {
-			if !subject.allowDial(protocolNumber, port, now) {
+			row := subject.allowDial(protocolNumber, port, now)
+			if row == nil {
 				return deny
 			}
 			target, ok := policyMap.mapTarget(addr, port)
 			if !ok || self.inBlock(target.Addr()) || self.daemonListener(target.Addr(), target.Port()) {
 				return deny
 			}
-			return admit(connect.EgressVerdictMap, target, policyMap.mapId)
+			return admit(connect.EgressVerdictMap, target, policyMap.mapId, row, BridgeReachKindForward)
 		}
 		// rule 6's remap, hosted here
 		if served, remapped := self.matchExposed(addr, now); served != nil {
-			if !allowAll && !subject.allowRoute(addr, protocolNumber, port, now) {
-				return deny
+			var row *bridgePolicyReach
+			if !allowAll {
+				row = subject.allowRoute(addr, protocolNumber, port, now)
+				if row == nil {
+					return deny
+				}
 			}
 			if self.daemonListener(remapped, port) {
 				return deny
 			}
-			return admit(connect.EgressVerdictMap, netip.AddrPortFrom(remapped, port), served.routeId)
+			return admit(connect.EgressVerdictMap, netip.AddrPortFrom(remapped, port), served.routeId, row, BridgeReachKindRoute)
 		}
 		hosted := self.hosted(addr, now)
 		// rule 2
@@ -798,14 +834,18 @@ func (self *bridgePolicyState) resolve(
 		}
 		// rule 3, tagged by the hosted address the flow was sent to
 		if hosted {
-			if !allowAll && !subject.allowDial(protocolNumber, port, now) {
-				return deny
+			var row *bridgePolicyReach
+			if !allowAll {
+				row = subject.allowDial(protocolNumber, port, now)
+				if row == nil {
+					return deny
+				}
 			}
 			if self.daemonListener(bridgeHostedTarget, port) {
 				return deny
 			}
 			ruleId := bridgeHostedRuleId(addr)
-			return admit(connect.EgressVerdictMap, netip.AddrPortFrom(bridgeHostedTarget, port), ruleId[:])
+			return admit(connect.EgressVerdictMap, netip.AddrPortFrom(bridgeHostedTarget, port), ruleId[:], row, BridgeReachKindForward)
 		}
 	} else if self.inBlock(addr) {
 		// the block deny, in place of rules 1 to 3
@@ -813,7 +853,7 @@ func (self *bridgePolicyState) resolve(
 	}
 	// rule 4
 	if allowAll {
-		return admit(connect.EgressVerdictPass, netip.AddrPort{}, []byte{BridgeRuleAllowAll})
+		return admit(connect.EgressVerdictPass, netip.AddrPort{}, []byte{BridgeRuleAllowAll}, nil, BridgeReachKindRoute)
 	}
 	// rule 5
 	if bridgeRuleFiveAddress(addr) {
@@ -822,18 +862,23 @@ func (self *bridgePolicyState) resolve(
 	// rule 6
 	if !sdk {
 		if served := self.matchServed(addr, now); served != nil {
-			if !subject.allowRoute(addr, protocolNumber, port, now) {
+			row := subject.allowRoute(addr, protocolNumber, port, now)
+			if row == nil {
 				return deny
 			}
-			return admit(connect.EgressVerdictPass, netip.AddrPort{}, served.routeId)
+			return admit(connect.EgressVerdictPass, netip.AddrPort{}, served.routeId, row, BridgeReachKindRoute)
 		}
 	}
 	// rule 7
 	if bridgePublicUnicast(addr) {
-		if (!sdk && !self.servesExit(now)) || !subject.allowExit(protocolNumber, port, now) {
+		if !sdk && !self.servesExit(now) {
 			return deny
 		}
-		return admit(connect.EgressVerdictPass, netip.AddrPort{}, []byte{BridgeRuleExit})
+		row := subject.allowExit(protocolNumber, port, now)
+		if row == nil {
+			return deny
+		}
+		return admit(connect.EgressVerdictPass, netip.AddrPort{}, []byte{BridgeRuleExit}, row, BridgeReachKindRoute)
 	}
 	// rule 8
 	return deny
