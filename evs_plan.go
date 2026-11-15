@@ -1180,17 +1180,23 @@ var ErrEvsGitStateDiffers = errors.New("evs: a git update's tree and the ref's e
 
 // A re-creating git update its ref's tainted token paths refuse before any evs write (DESIGN-DETAILS 8.5): a taint of
 // another path epoch than the push's, on which every replaying reader fails closed; one that neither the new tree,
-// the net change nor evs's tables name; or one evs holds no version of that the new tree lacks, which neither a write
-// nor a removal can clear, since evs answers a removal of a path that does not stand 409 PATH_CONFLICT. The text
-// names no path (I-13).
+// the net change nor evs's tables name; or one recorded as left standing (EvsTaintedPath.Removed false, a record
+// stored before that field included) that evs holds no version of and the new tree lacks, which neither a write nor a
+// removal can clear, since evs answers a removal of a path that does not stand 409 PATH_CONFLICT and every reader
+// holding that record asks for one. A taint whose last stopped change was a removal refuses nothing: where the new
+// tree lacks it, the push states nothing there (QD-826). The text names no path (I-13).
 var ErrEvsGitTaintedPath = errors.New("evs: a tainted token path the re-creating push cannot write or remove")
 
 // A token path a stopped version changed, which no reader vouches for (DESIGN-DETAILS 8.5): the path epoch its token
-// path is in, and its key form (EvsTokenPath.KeyString), the root's empty. Replay keeps a ref's in EvsGitRef.Tainted
-// until a version applies; the push that re-creates the ref after its DELETE writes or removes each.
+// path is in, its key form (EvsTokenPath.KeyString), the root's empty, and whether the last change a stopped version
+// made there removed it. Replay keeps a ref's in EvsGitRef.Tainted until a version applies; the push that re-creates
+// the ref after its DELETE writes or removes each, save one last removed that its new tree lacks: evs holds that
+// removal and takes no other, so the push states nothing there (QD-826). Local state, never on the wire: a record
+// stored before Removed reads it false, as a path the stopped versions left standing.
 type EvsTaintedPath struct {
-	Epoch uint64 `json:"epoch"`
-	Key   string `json:"key"`
+	Epoch   uint64 `json:"epoch"`
+	Key     string `json:"key"`
+	Removed bool   `json:"removed,omitempty"`
 }
 
 // A git update past §11.19's directory bounds on its new tree, or past a push's entry writes: refused before any evs
@@ -1288,8 +1294,9 @@ type EvsGitPlanArgs struct {
 	// Reads the cluster's head, not evs's cache.
 	Fresh bool
 	// The ref's tainted token paths (EvsGitRef.Tainted), which the caller read under the apply lock with the update's
-	// old tip and base version, on an update that re-creates the ref after its DELETE; and the new tree they are named
-	// in. Nil for none (DESIGN-DETAILS 8.5; see the tainted row).
+	// old tip and base version, on an update that re-creates the ref after its DELETE, each with whether its last
+	// stopped change removed it, as the reader that checks the push holds it; and the new tree they are named in. Nil
+	// for none (DESIGN-DETAILS 8.5; see the tainted row).
 	Tainted  []EvsTaintedPath
 	NextTree EvsGitTreeEntries
 }
@@ -1338,8 +1345,12 @@ type EvsGitTreeEntries interface {
 //	           written where the new tree holds it and removed where it does not, beside the net change, on what evs
 //	           holds there (planGitTainted): a file one checkpoint of the tree's blob from Blobs, chunks past 8 MiB,
 //	           under a new file_id, with no diff against the entry that stands there, no rename pairing it and no
-//	           reuse item citing a chain for it; a directory given the table the new tree gives it. A removal of a
-//	           tainted path evs holds no version of, and a taint no tree or table names, refuse before any evs write
+//	           reuse item citing a chain for it; a directory given the table the new tree gives it. A taint whose last
+//	           stopped change was a removal (EvsTaintedPath.Removed) is written where the new tree holds it and
+//	           otherwise left alone, the push stating nothing there: evs holds that removal and takes no other
+//	           (§11.8's 5g), and it stands for the net change's own removal of a path the last tree applied held,
+//	           which leaves the push (QD-826). A removal of any other tainted path evs holds no version of, and a
+//	           taint no tree or table names, refuse before any evs write
 func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*EvsWritePlan, error) {
 	for _, reserved := range evsReservedRefNames {
 		if bytes.Equal(args.RefName, reserved) {
@@ -2027,6 +2038,11 @@ func (self *EvsRepo) overlayEffectiveBase(ctx context.Context, baseVersion uint6
 // from the tree's names, else in the tables evs folds for the path above it, each row opened and held to its token;
 // it is written where the new tree holds it, a file or a directory, and removed where it does not. A taint none of
 // them names refuses: no request can write or remove a path the plan cannot read by name.
+//
+// A taint whose last stopped change was a removal (QD-826) takes no removal, which evs would refuse on a path that
+// does not stand: the net change's own removal of it leaves the push, the stopped removal standing for it, and one
+// the net change does not name is named in the new tree alone, written where the tree holds it and otherwise left
+// as the stopped removal left it. Every reader holds the push to the same fact, from the same record.
 func (self *EvsRepo) planGitTaints(ctx context.Context, plan *EvsWritePlan, args *EvsGitPlanArgs) ([]*EvsGitPathChange, error) {
 	if plan.firstPush {
 		return nil, fmt.Errorf("%w: tainted token paths on a ref with no head", ErrEvsGitTaintedPath)
@@ -2034,14 +2050,15 @@ func (self *EvsRepo) planGitTaints(ctx context.Context, plan *EvsWritePlan, args
 	if args.NextTree == nil {
 		return nil, fmt.Errorf("%w: tainted token paths with no new tree to name them in", ErrEvsWriteInvalid)
 	}
-	tainted := map[string]bool{}
+	// each taint by its key form: whether the last change a stopped version made there removed it
+	taintedRemoved := map[string]bool{}
 	for _, path := range args.Tainted {
 		if path.Epoch != plan.PathEpoch {
 			return nil, fmt.Errorf("%w: a taint of path epoch %d, where the push's is %d", ErrEvsGitTaintedPath, path.Epoch, plan.PathEpoch)
 		}
-		tainted[path.Key] = true
+		taintedRemoved[path.Key] = path.Removed
 	}
-	changes := make([]*EvsGitPathChange, 0, len(args.Changes)+len(tainted))
+	changes := make([]*EvsGitPathChange, 0, len(args.Changes)+len(taintedRemoved))
 	for _, change := range args.Changes {
 		names, err := evsReadPathNames(change.Path)
 		if err != nil {
@@ -2051,16 +2068,21 @@ func (self *EvsRepo) planGitTaints(ctx context.Context, plan *EvsWritePlan, args
 		if err != nil {
 			return nil, err
 		}
-		if key := tokenPath.KeyString(); tainted[key] {
+		key := tokenPath.KeyString()
+		if removed, ok := taintedRemoved[key]; ok {
+			delete(taintedRemoved, key)
+			if removed && change.removes() {
+				// the stopped removal stands for the net change's: evs holds it and takes no other (QD-826)
+				continue
+			}
 			marked := *change
 			marked.Tainted, marked.ReuseRefId, marked.ReuseWhole = true, nil, false
 			change = &marked
-			delete(tainted, key)
 		}
 		changes = append(changes, change)
 	}
-	keys := make([]string, 0, len(tainted))
-	for key := range tainted {
+	keys := make([]string, 0, len(taintedRemoved))
+	for key := range taintedRemoved {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
@@ -2069,9 +2091,13 @@ func (self *EvsRepo) planGitTaints(ctx context.Context, plan *EvsWritePlan, args
 		listed: map[string]map[string][]byte{},
 	}
 	for _, key := range keys {
-		named, err := namer.name(ctx, key)
+		named, err := namer.name(ctx, key, taintedRemoved[key])
 		if err != nil {
 			return nil, err
+		}
+		if named == nil {
+			// last removed by a stopped version and absent from the new tree: the push states nothing (QD-826)
+			continue
 		}
 		change := &EvsGitPathChange{Path: named.path, Tainted: true}
 		switch {
@@ -2133,8 +2159,9 @@ type evsGitNamedTaint struct {
 
 // The path whose token path in the push's epoch has key as its key form: each component found among the new tree's
 // children of the path named so far while the tree holds it as a directory, else among the rows evs's table of that
-// path holds. The root, whose key is empty, is a directory of every tree.
-func (self *evsGitTaintNamer) name(ctx context.Context, key string) (*evsGitNamedTaint, error) {
+// path holds. The root, whose key is empty, is a directory of every tree. With nextOnly, a path the new tree does not
+// hold is nil, and evs's tables are not read: a taint last removed by a stopped version (QD-826).
+func (self *evsGitTaintNamer) name(ctx context.Context, key string, nextOnly bool) (*evsGitNamedTaint, error) {
 	named := &evsGitNamedTaint{inNext: true, directory: true}
 	if key == "" {
 		return named, nil
@@ -2152,6 +2179,9 @@ func (self *evsGitTaintNamer) name(ctx context.Context, key string) (*evsGitName
 				parent = child.token
 				continue
 			}
+		}
+		if nextOnly {
+			return nil, nil
 		}
 		// a name the new tree does not hold there: the row of evs's table for it
 		names, err := self.listedOf(ctx, named.path)
@@ -2230,7 +2260,9 @@ func (self *evsGitTaintNamer) listedOf(ctx context.Context, path string) (map[st
 //	           exactly: each child missing or of another kind added, each other row's name removed; over a file or
 //	           nothing a creation listing every child
 //	removal    of what stands, a file or a directory, at its newest version; a path that does not stand refuses with
-//	           ErrEvsGitTaintedPath, since evs takes no removal of it and the new tree holds nothing to write there
+//	           ErrEvsGitTaintedPath, since evs takes no removal of it and the new tree holds nothing to write there.
+//	           planGitTaints plans no removal of a taint whose last stopped change was a removal (QD-826), so this is
+//	           a record that holds the path left standing where evs does not, one stored before that field among them
 //
 // A path the overlay holds no version of has no entry of its own a refused version wrote, which refuses as well.
 func (self *EvsRepo) planGitTainted(ctx context.Context, plan *EvsWritePlan, result *evsReadResult, index int, change *EvsGitPathChange, contents *[]*evsSpill) (*EvsPlannedPath, error) {
@@ -2247,7 +2279,7 @@ func (self *EvsRepo) planGitTainted(ctx context.Context, plan *EvsWritePlan, res
 	}
 	if change.removes() {
 		if stood == protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED {
-			return nil, fmt.Errorf("%w: a tainted token path that evs holds no version of and the new tree lacks", ErrEvsGitTaintedPath)
+			return nil, fmt.Errorf("%w: a tainted token path recorded as standing that evs holds no version of and the new tree lacks", ErrEvsGitTaintedPath)
 		}
 		planned.Remove, planned.Kind = true, stood
 		planned.BaseEntryVersion = evsVerifiedNewestVersion(verified)

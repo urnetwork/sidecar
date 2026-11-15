@@ -13,8 +13,9 @@
 //	3 changes  the net change from the tree the path state stands at (old's, a deleted ref's last tip's) to new's
 //	           (evs_local_tree.go), none on a tag ref; PlanGitUpdate plans it, and its entries are sealed. A branch's
 //	           re-creating push writes or removes each tainted token path beside it (8.5; 8.2.4's chain row), named
-//	           in the new tree, which PlanGitUpdate walks: a taint below the epoch this client last saw the ref in,
-//	           or below another taint's, matches no push's epoch, and is refused before any request
+//	           in the new tree, which PlanGitUpdate walks, save one last removed that the new tree lacks, where it
+//	           states nothing (QD-826): a taint below the epoch this client last saw the ref in, or below another
+//	           taint's, matches no push's epoch, and is refused before any request
 //	4 history  every blob a carried commit's change names that B holds and no entry carries, one record each in
 //	           order: a diff against the same path's blob in the commit's first parent where it is smaller, else a
 //	           checkpoint, or chunks past 8 MiB; each in a history segment of 8 MiB, Padmé-padded, uploaded with the
@@ -82,9 +83,11 @@ type EvsLocalPublishArgs struct {
 	Deleted bool
 	LastTip *EvsGitOid
 	// The ref's tainted token paths (EvsGitRef.Tainted), read under the apply lock with Old and BaseVersion: the
-	// token paths a version stopped at, and those after it until the DELETE, changed (8.5). A branch's re-creating push
-	// writes or removes each beside its net change (PlanGitUpdate's tainted row); a DELETE and a tag ref, which hold
-	// no change, take none, and any other update of a ref holding them is refused. Nil for none.
+	// token paths a version stopped at, and those after it until the DELETE, changed (8.5), each with whether the last
+	// of those changes removed it. A branch's re-creating push writes or removes each beside its net change, save one
+	// last removed that the new tree lacks, where it states nothing (PlanGitUpdate's tainted row; QD-826); a DELETE
+	// and a tag ref, which hold no change, take none, and any other update of a ref holding them is refused. Nil for
+	// none.
 	Tainted []EvsTaintedPath
 	// An overlay's base as replay holds it from the head (EvsGitRef.base), for a push that does not create its ref or
 	// re-creates it after a DELETE; a new branch's is chosen here by the base search (evs_local_overlay.go), nil for
