@@ -24,6 +24,8 @@
 package device
 
 import (
+	"cmp"
+	"crypto/sha256"
 	"encoding/binary"
 	"net/netip"
 	"slices"
@@ -302,8 +304,9 @@ func (self *Bridge) markLinkDown(link BridgeLinkId) {
 	}
 }
 
-// The target a rule's link reaches.
-func bridgeRouteLinkTarget(link *bridge.BridgeRuleLink) BridgeLinkTarget {
+// The target a rule's link reaches; a share link's carries its share, its sharing network and the digest of its
+// aliases, from shareDigests by its target with none (bridgeRouteShareAliases), and nil leaves the digest zero.
+func bridgeRouteLinkTarget(link *bridge.BridgeRuleLink, shareDigests map[BridgeLinkTarget][sha256.Size]byte) BridgeLinkTarget {
 	target := BridgeLinkTarget{
 		ClientId:  connect.Id(link.GetTargetClientId()),
 		SidecarId: connect.Id(link.GetTargetSidecarId()),
@@ -311,7 +314,46 @@ func bridgeRouteLinkTarget(link *bridge.BridgeRuleLink) BridgeLinkTarget {
 	copy(target.IdentityPublicKey[:], link.GetTargetIdentityPublicKey())
 	// an app host's pinned device client key; checkBridgeRuleLink holds it to 32 bytes or none
 	copy(target.HostClientPublicKey[:], link.GetTargetClientPublicKey())
+	// a share link's share and network; checkBridgeRuleLink holds them to 16 bytes each, together, or neither
+	copy(target.ShareId[:], link.GetShareId())
+	copy(target.TargetNetworkId[:], link.GetTargetNetworkId())
+	if target.shareLink() {
+		target.ShareAliasesDigest = shareDigests[target]
+	}
 	return target
+}
+
+// Each share link's aliases (§17.9's sender row): the prefixes of the entries its link serves, sorted, which the link
+// carries as C18's source half, by its target with its digest, and the digests by its target without one.
+func bridgeRouteShareAliases(rules *bridge.BridgeRules, revoked func(link *bridge.BridgeRuleLink) bool) (map[BridgeLinkTarget][]netip.Prefix, map[BridgeLinkTarget][sha256.Size]byte) {
+	byTarget := map[BridgeLinkTarget][]netip.Prefix{}
+	for _, entry := range rules.GetEntries() {
+		prefix, ok := bridgeRulePrefix(entry.GetPrefix())
+		if !ok {
+			continue
+		}
+		for _, link := range entry.GetLinks() {
+			if len(link.GetShareId()) == 0 || revoked(link) {
+				continue
+			}
+			target := bridgeRouteLinkTarget(link, nil)
+			if !slices.Contains(byTarget[target], prefix) {
+				byTarget[target] = append(byTarget[target], prefix)
+			}
+		}
+	}
+	aliases := map[BridgeLinkTarget][]netip.Prefix{}
+	digests := map[BridgeLinkTarget][sha256.Size]byte{}
+	for target, prefixes := range byTarget {
+		slices.SortFunc(prefixes, func(a netip.Prefix, b netip.Prefix) int {
+			return cmp.Or(a.Addr().Compare(b.Addr()), cmp.Compare(a.Bits(), b.Bits()))
+		})
+		digest := bridgeShareAliasesDigest(prefixes)
+		digests[target] = digest
+		target.ShareAliasesDigest = digest
+		aliases[target] = prefixes
+	}
+	return aliases, digests
 }
 
 // Builds what Route reads, by the file's rows, from rules (nil for none: every packet takes the default route), the
@@ -367,14 +409,15 @@ func (self *Bridge) buildRouteWithLock(rules *bridge.BridgeRules, overlayEntries
 	if egressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS {
 		ruleLinkSets = append(ruleLinkSets, rules.GetEgress().GetExits())
 	}
+	shareAliases, shareDigests := bridgeRouteShareAliases(rules, revoked)
 	for _, ruleLinks := range ruleLinkSets {
 		for _, link := range ruleLinks {
 			if !revoked(link) {
-				targets = append(targets, bridgeRouteLinkTarget(link))
+				targets = append(targets, bridgeRouteLinkTarget(link, shareDigests))
 			}
 		}
 	}
-	uses := self.links.Retain(targets)
+	uses := self.links.RetainShares(targets, shareAliases)
 	entryLinks := func(ruleLinks []*bridge.BridgeRuleLink) []BridgeEntryLink {
 		links := []BridgeEntryLink{}
 		for _, link := range ruleLinks {
@@ -387,7 +430,7 @@ func (self *Bridge) buildRouteWithLock(rules *bridge.BridgeRules, overlayEntries
 				drainingSince = since
 				drainUntil = since
 			}
-			for _, use := range uses[bridgeRouteLinkTarget(link)] {
+			for _, use := range uses[bridgeRouteLinkTarget(link, shareDigests)] {
 				entryLink := BridgeEntryLink{Link: use.Link, Weight: link.GetWeight()}
 				switch {
 				case !drainingSince.IsZero():

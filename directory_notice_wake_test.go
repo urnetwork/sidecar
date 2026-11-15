@@ -1,12 +1,13 @@
 //go:build !sidecar_http && !ios_extension
 
 // RECORD-M8-01's phones over the fake world, each phone reaching evs through sidecartest's FakeDirectoryPhone, T4's
-// surrogate: a phone leasing only its member's targets' prefixes and its own requests' notice paths; FS-100's wake
-// case, R woken once for a denial and reading that notice and the one entry it names and nothing else; FS-85's wake
-// case, an approver's phone woken for a new request; no wake naming a directory, target or request; a phone that
-// slept past its leases' expiry renewing and reading at its next resync; one woken while its app was closed reading
-// its decision in its next process; a DecisionRef naming another request's entry refused on a phone; expiry never read
-// as denied; and with no head reads nothing taken.
+// surrogate: a phone leasing only its member's targets' prefixes and its own requests' notice paths, its member's
+// workers learned from its open view; FS-100's wake case, R woken once for a denial and reading that notice and the
+// one entry it names and nothing else; FS-85's wake case, an approver's phone woken for a new request; no wake naming
+// a directory, target or request; a phone that slept past its leases' expiry renewing and reading at its next resync;
+// one woken while its app was closed reading its decision in its next process; a DecisionRef naming another request's
+// entry refused on a phone; a breach of its notice alarmed and repaired; a repo approval that beat a denial received
+// as the approval; expiry never read as denied; and with no head reads nothing taken.
 
 package sidecar_test
 
@@ -518,4 +519,62 @@ func TestDirectoryPhoneApprovalOverADenial(t *testing.T) {
 	if notice := testNoticeAt(t, env.approver, filed.NoticePath); notice != nil {
 		t.Fatalf("the approved notice stands after it was recorded: %v", notice)
 	}
+}
+
+// A phone sees its member's workers only in its open view, so it learns them there and leases each worker's notice
+// prefix at its next resync, re-judged at the state then: a request's notice under the worker wakes it. A worker of
+// another member's shown in the same view is no target of the phone's.
+func TestDirectoryPhoneLeasesItsMembersWorkersFromItsView(t *testing.T) {
+	env := newTestDecideEnv(t)
+	approverDevice := env.approverPhone()
+	surrogate, phone := env.phone(approverDevice)
+	workerWriter := env.world.memberWriter(env.approverMember)
+	otherMember := sidecar.NewId()
+	otherWriter := env.world.memberWriter(otherMember)
+	env.world.publish()
+	nowMillis := env.world.clock.Now().UnixMilli()
+	workerWriter.announce(testWorkerItem(workerWriter.sidecarId, &env.approverMember, sidecar.NewId(), 1, nowMillis))
+	otherWriter.announce(testWorkerItem(otherWriter.sidecarId, &otherMember, sidecar.NewId(), 1, nowMillis))
+	workerPrefix, err := sidecar.DirectoryNoticePrefix(&protocol.RequestTarget{SidecarId: workerWriter.sidecarId.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPrefix, err := sidecar.DirectoryNoticePrefix(&protocol.RequestTarget{SidecarId: otherWriter.sidecarId.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPhoneResync(t, phone)
+	if slices.Contains(phone.Leased(), workerPrefix) {
+		t.Fatal("a worker's prefix leased before any view showed it")
+	}
+	view, err := approverDevice.client.View(&sidecar.DirectoryViewArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if coverage := view.Coverage(); !coverage.Complete {
+		t.Fatalf("the view's coverage %+v", coverage)
+	}
+	view.Close()
+	testPhoneResync(t, phone)
+	leased := phone.Leased()
+	if !slices.Contains(leased, workerPrefix) || slices.Contains(leased, otherPrefix) {
+		t.Fatalf("the phone leases %v after its view", leased)
+	}
+	before := len(surrogate.Wakes())
+	notice := &protocol.DirectoryNotice{
+		RequestId:          sidecar.NewId().Bytes(),
+		RequesterSidecarId: env.requester.writer.sidecarId.Bytes(),
+		EntrySeq:           1,
+		NotAfterMillis:     nowMillis + time.Hour.Milliseconds(),
+		State:              uint32(sidecar.DirectoryNoticeStatePending),
+	}
+	testPutNotice(t, env.testRequestsEnv, env.requester, workerPrefix+hex.EncodeToString(notice.GetRequestId()), notice)
+	wakes := surrogate.Wakes()
+	if len(wakes) != before+1 {
+		t.Fatalf("%d wakes for a notice under the worker", len(wakes)-before)
+	}
+	testPhoneWakeNamesNothing(t, wakes[len(wakes)-1], env.world.directoryId, workerWriter.sidecarId)
 }

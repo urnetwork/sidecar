@@ -49,9 +49,20 @@ type urBridgeSink struct {
 }
 
 var (
-	_ sidecar.BridgeStateSink   = (*urBridgeSink)(nil)
-	_ sidecar.BridgeReachSource = (*urBridgeSink)(nil)
+	_ sidecar.BridgeStateSink     = (*urBridgeSink)(nil)
+	_ sidecar.BridgeReachSource   = (*urBridgeSink)(nil)
+	_ sidecar.BridgeShareResigner = (*urBridgeSink)(nil)
 )
+
+// sidecar.BridgeShareResigner: the shares whose signer the compile found new, whose links' live window clients the
+// device role signs again (§17.9's sign row).
+func (self *urBridgeSink) ResignShares(shareIds []sidecar.Id) error {
+	connectIds := make([]connect.Id, 0, len(shareIds))
+	for _, shareId := range shareIds {
+		connectIds = append(connectIds, connect.Id(shareId))
+	}
+	return self.bridge.ResignShares(connectIds)
+}
 
 func (self *urBridgeSink) SetPending(pending *bridge.Pending) error {
 	return self.bridge.SetPending(pending)
@@ -280,14 +291,23 @@ func (self *urBridgeWire) sign(ctx context.Context, delegation *bridge.WindowDel
 		}
 		ids = append(ids, id)
 	}
-	return self.args.Sidecar.SignWindowDelegation(&sidecar.BridgeDelegationRequest{
+	request := &sidecar.BridgeDelegationRequest{
 		NetworkId:             ids[0],
 		SubjectSidecarId:      ids[1],
 		WindowClientId:        ids[2],
 		WindowClientPublicKey: delegation.GetWindowClientPublicKey(),
 		TargetSidecarId:       ids[3],
 		NotAfter:              time.UnixMilli(delegation.GetNotAfterMs()),
-	})
+	}
+	if shareIdBytes := delegation.GetShareId(); 0 < len(shareIdBytes) {
+		// a share link's: the Sidecar signs it with the share's signer, never the identity key (§17.9's sign row)
+		shareId, err := sidecar.IdFromBytes(shareIdBytes)
+		if err != nil {
+			return nil, fmt.Errorf("%w: a delegation's share", sidecar.ErrBridgeDelegationRefused)
+		}
+		request.ShareId = shareId
+	}
+	return self.args.Sidecar.SignWindowDelegation(request)
 }
 
 // device.BridgeTargetKeyFunction: the binding api answers for the target client, which the link verifies against the

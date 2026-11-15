@@ -52,6 +52,12 @@ type BridgeCompileLocal struct {
 	// The labels the network's zone publishes, hosts and record owners, which no client name may shadow (§12.9). The
 	// zone is the record API's, not the config's, so the host hands them in; empty before M5's records.
 	PublishedNames []string
+	// The rows of the shares this host's grant files name, as api last answered them (BridgeShareTableView), fetched
+	// off the compile path: ciphertext the compile holds to each file's pins (DESIGN-DETAILS 12.2.7's
+	// local.ShareTables). A share with no row waits for one and compiles nothing.
+	ShareTables []*BridgeShareRow
+	// The share seal's limits a share's tables are opened to; nil is DefaultBridgeShareSettings.
+	ShareSettings *BridgeShareSettings
 	// Nil is DefaultBridgeCompileSettings.
 	Settings *BridgeCompileSettings
 }

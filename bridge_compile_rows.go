@@ -200,6 +200,7 @@ func (self *bridgeCompiler) build() *bridge.BridgeRules {
 	rules.Subjects = self.subjects()
 	rules.Egress = self.egress()
 	rules.Untagged = self.untagged
+	rules.Shares, self.shareKeys = self.hostedShares()
 	return rules
 }
 
@@ -291,6 +292,8 @@ func (self *bridgeCompiler) entries() []*bridge.BridgeRuleEntry {
 			self.routeEntries(rule, find, func(entry *bridgeCompileEntry) { entries = append(entries, entry) })
 		}
 	}
+	// shares' aliases S may use (bridge_compile_share.go)
+	self.shareEntries(find, func(entry *bridgeCompileEntry) { entries = append(entries, entry) })
 	slices.SortFunc(entries, func(a *bridgeCompileEntry, b *bridgeCompileEntry) int {
 		return cmp.Or(cmp.Compare(a.prefix.address, b.prefix.address), cmp.Compare(a.prefix.length, b.prefix.length))
 	})

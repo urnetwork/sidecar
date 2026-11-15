@@ -105,6 +105,8 @@ type linkTest struct {
 	bindings  map[connect.Id][]byte
 	signed    []*bridge.WindowDelegation
 	signErr   error
+	// what each signature's bytes end with, so a test tells a later one from an earlier
+	signSuffix []byte
 }
 
 // A link test whose settings edit adjusts, its window clients expiring 7 days after the start.
@@ -150,7 +152,7 @@ func (self *linkTest) sign(ctx context.Context, delegation *bridge.WindowDelegat
 		return nil, self.signErr
 	}
 	self.signed = append(self.signed, proto.Clone(delegation).(*bridge.WindowDelegation))
-	return append([]byte("signed delegation of "), delegation.GetWindowClientId()...), nil
+	return append(append([]byte("signed delegation of "), delegation.GetWindowClientId()...), self.signSuffix...), nil
 }
 
 // The host's fetch: the binding the test gave the client, or an error.
@@ -175,6 +177,13 @@ func (self *linkTest) setSignErr(err error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.signErr = err
+}
+
+// Ends every later signature with suffix.
+func (self *linkTest) setSignSuffix(suffix []byte) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.signSuffix = suffix
 }
 
 func (self *linkTest) signedDelegations() []*bridge.WindowDelegation {
