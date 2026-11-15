@@ -66,6 +66,9 @@ type BridgeSettings struct {
 	// The WindowDelegation format's limits, which this host's verifier and its links' signers share
 	// (bridge.DefaultWindowDelegationSettings). Nil is the format's own.
 	WindowDelegation *bridge.WindowDelegationSettings
+	// The ShareCert format's limits a host holds a share link's certificate to (§17.9's admit row): 168 h and §8.6's
+	// 60 s (bridge.DefaultShareCertSettings), which the accepting network's keyring shares. Nil is the format's own.
+	ShareCert *bridge.ShareCertSettings
 	// Whether a link's window client may go direct, peer to peer: false until C3 (D-PROTO-10, D-BRIDGE-5), so
 	// BridgeLinkMultiClientSettings overrides direct mode off and a link relays.
 	LinkAllowDirect bool
@@ -147,6 +150,7 @@ func DefaultBridgeSettings() *BridgeSettings {
 		LinkBuildTimeout:         30 * time.Second,
 		LinkBindingMaxByteCount:  4 * 1024,
 		WindowDelegation:         bridge.DefaultWindowDelegationSettings(),
+		ShareCert:                bridge.DefaultShareCertSettings(),
 		LinkCountMax:             64,
 		LinkRoomIdleTimeout:      60 * time.Second,
 		RejectPerSecond:          20,

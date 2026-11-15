@@ -87,7 +87,10 @@ func bridgeSignWindowDelegation(request *BridgeDelegationRequest, identity *Side
 		return nil, fmt.Errorf("%w: a share link, and no share signer here", ErrBridgeDelegationRefused)
 	case compiled == nil || compiled.State == nil:
 		return nil, fmt.Errorf("%w: no compiled state", ErrBridgeDelegationRefused)
-	case !slices.Contains(compiled.LinkTargets, request.TargetSidecarId):
+	case request.ShareId != (Id{}) && !slices.Contains(compiled.ShareLinks, BridgeCompiledShareLink{ShareId: request.ShareId, TargetSidecarId: request.TargetSidecarId}):
+		// a share's delegation reaches only an alias's host of that share (DESIGN-DETAILS 12.2.6)
+		return nil, fmt.Errorf("%w: a target the newest compiled state names in no link of the share", ErrBridgeDelegationRefused)
+	case request.ShareId == (Id{}) && !slices.Contains(compiled.LinkTargets, request.TargetSidecarId):
 		return nil, fmt.Errorf("%w: a target the compiled state links to nowhere", ErrBridgeDelegationRefused)
 	}
 	delegation := &bridge.WindowDelegation{

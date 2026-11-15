@@ -228,8 +228,8 @@ func recordRoutesFor(auth RecordAuthView, sidecarId Id, kind RecordKind, teamOnl
 func recordKindNamesItsLog(kind RecordKind) bool {
 	// a disclosure is of the log it discloses, and an erasure goes in the eraser's stream of the log it erased
 	// (§16.8's Erasure row)
-	// and a ledger's scope is of the ledger it scopes (section 6.5)
-	return kind == RecordKindDisclosure || kind == RecordKindErasure || kind == RecordKindLedgerScope
+	// and a ledger's scope is of the ledger it scopes (section 6.5), a retention policy of the log it governs (section 8)
+	return kind == RecordKindDisclosure || kind == RecordKindErasure || kind == RecordKindLedgerScope || kind == RecordKindRetention
 }
 
 // The route of a draft that names its log (RecordDraft.LogId): the team record, by this sidecar's stream or its
@@ -238,6 +238,21 @@ func recordKindNamesItsLog(kind RecordKind) bool {
 func recordRoutesToLog(auth RecordAuthView, sidecarId Id, kind RecordKind, logId Id) (*recordRoutes, error) {
 	if !recordKindNamesItsLog(kind) {
 		return nil, fmt.Errorf("%w: %s names no log of its own", ErrRecordDraftInvalid, kind)
+	}
+	if kind == RecordKindRetention {
+		// a log's policy comes only from a device that administers it, in a vault a consented device of its owner,
+		// which is what a reader takes it from (section 8's newest row)
+		if !auth.Admins(logId, sidecarId) || (!recordIsTeamLog(auth, logId) && !auth.Consented(logId, sidecarId)) {
+			return nil, fmt.Errorf("%w: only an admin of log %s sets its retention", ErrRecordRouteNoLog, logId)
+		}
+	}
+	if _, directoryId := recordTeamLogs(auth); directoryId != nil && *directoryId == logId {
+		// the directory takes its erasure entries and its retention policy from its admins alone, each in its own
+		// stream there (§16.11's authority row)
+		if (kind != RecordKindErasure && kind != RecordKindRetention) || !auth.Admins(logId, sidecarId) {
+			return nil, fmt.Errorf("%w: the directory takes no %s from this sidecar", ErrRecordRouteNoLog, kind)
+		}
+		return &recordRoutes{directory: &recordRoute{logId: logId}}, nil
 	}
 	if recordIsLedger(auth, logId) {
 		// a ledger takes its scope only from a repo admin writing its own stream there

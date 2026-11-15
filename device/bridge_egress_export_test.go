@@ -36,3 +36,24 @@ func (self *Bridge) VerifyPrincipalForTest(
 func (self *BridgeEgressPolicy) PrincipalCountsForTest() (verifiedCount uint64, mismatchCount uint64) {
 	return self.principalCounts()
 }
+
+// The share branch of VerifyPrincipal (bridge_share.go) over a FriendsAndFamily contract's source, the session's
+// verified key, C13's sealed network and the delegation as sealed, past its profile and provide mode rows.
+func (self *BridgeEgressPolicy) VerifySharePrincipalForTest(
+	sourceId connect.Id,
+	sessionKey []byte,
+	sealedNetwork connect.Id,
+	delegation []byte,
+) *connect.BridgePrincipal {
+	return self.verifySharePrincipal(sourceId, sessionKey, sealedNetwork, delegation)
+}
+
+// The same on the policy a bridge enforces by, its ratchet the bridge's posture.
+func (self *Bridge) VerifySharePrincipalForTest(
+	sourceId connect.Id,
+	sessionKey []byte,
+	sealedNetwork connect.Id,
+	delegation []byte,
+) *connect.BridgePrincipal {
+	return self.policy.verifySharePrincipal(sourceId, sessionKey, sealedNetwork, delegation)
+}

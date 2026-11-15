@@ -41,6 +41,9 @@ const (
 	bridgeFixtureGrantMark     = 0x6A
 	bridgeFixtureWindowMark    = 0xF0
 	bridgeFixtureWindowKeyMark = 0xF1
+	bridgeFixtureShareMark     = 0x53
+	bridgeFixtureNetworkMark   = 0x4E
+	bridgeFixtureShareKeyMark  = 0x5D
 )
 
 // byteCount bytes alternating mark and seed.
@@ -81,6 +84,21 @@ func BridgeFixtureGrantId(seed byte) []byte {
 	return bridgeFixtureBytes(bridgeFixtureGrantMark, seed, 32)
 }
 
+// The synthetic share_id and network_id a seed stands for, 16 bytes each: a share, and another network than the
+// host's, which accepted it.
+func BridgeFixtureShareId(seed byte) []byte {
+	return bridgeFixtureBytes(bridgeFixtureShareMark, seed, 16)
+}
+
+func BridgeFixtureNetworkId(seed byte) []byte {
+	return bridgeFixtureBytes(bridgeFixtureNetworkMark, seed, 16)
+}
+
+// The synthetic ShareKey a seed stands for, which a share's pin names and its certs are signed by.
+func BridgeFixtureShareKey(seed byte) ed25519.PrivateKey {
+	return ed25519.NewKeyFromSeed(bridgeFixtureBytes(bridgeFixtureShareKeyMark, seed, ed25519.SeedSize))
+}
+
 // A device's rules as a literal. See the file's comment.
 type BridgeRulesFixture struct {
 	// A /16, "" for none.
@@ -98,6 +116,60 @@ type BridgeRulesFixture struct {
 	// The rows autogroup:untagged holds at this host (BridgeRules.untagged), which an sdk provider gives another
 	// client. Nil leaves the field unset, so another client holds no rows.
 	Untagged *BridgeRulesFixtureUntagged
+	// The shares this host serves (BridgeRules.shares), the sharing network's side of §17.9.
+	Shares []BridgeRulesFixtureShare
+}
+
+// A share this host serves: its seed, the accepting network's, its ShareKey's (0 for the share's own seed) and its
+// grant's, the grant's expiry, and the targets this host hosts.
+type BridgeRulesFixtureShare struct {
+	Share   byte
+	Network byte
+	Key     byte
+	Grant   byte
+	Expires int64
+	Targets []BridgeRulesFixtureShareTarget
+}
+
+// One target of a share: its index, its alias's host bits in the accepting network's block, T_i as a prefix of the
+// alias's length, and its protocol and ports as a map's are written.
+type BridgeRulesFixtureShareTarget struct {
+	Index         uint32
+	AliasHostBits uint32
+	Target        string
+	Ports         string
+}
+
+// The share's ShareKey seed: Key, or the share's own seed for 0.
+func (self BridgeRulesFixtureShare) keySeed() byte {
+	if self.Key == 0 {
+		return self.Share
+	}
+	return self.Key
+}
+
+// The share as a row.
+func (self BridgeRulesFixtureShare) rule() *bridge.BridgeRuleShare {
+	share := &bridge.BridgeRuleShare{
+		ShareId:            BridgeFixtureShareId(self.Share),
+		AcceptingNetworkId: BridgeFixtureNetworkId(self.Network),
+		SharePublicKey:     BridgeFixtureShareKey(self.keySeed()).Public().(ed25519.PublicKey),
+		GrantId:            BridgeFixtureGrantId(self.Grant),
+		Expires:            self.Expires,
+	}
+	for _, target := range self.Targets {
+		prefix := bridgeFixturePrefix(target.Target)
+		protocolNumber, ports := bridgeFixturePorts(target.Ports)
+		share.Targets = append(share.Targets, &bridge.BridgeRuleShareTarget{
+			Index:         target.Index,
+			AliasHostBits: target.AliasHostBits,
+			Length:        prefix.GetLength(),
+			Target:        prefix,
+			Protocol:      protocolNumber,
+			Ports:         ports,
+		})
+	}
+	return share
 }
 
 // autogroup:untagged's rows: a subject's, with no ids, since they name no one.
@@ -130,6 +202,10 @@ type BridgeRulesFixtureLink struct {
 	// An app host's device client key, which the rules pin for the link (BridgeRuleLink.target_client_public_key);
 	// nil for a target whose binding names its client key.
 	HostClientKey []byte
+	// A share link's share and sharing network seeds (§17.9's sender row), 0 on a link of this network. A share link's
+	// target is another network's sidecar, so it carries no member however Tagged is set.
+	Share   byte
+	Network byte
 }
 
 // A map this host holds.
@@ -273,6 +349,9 @@ func (self *BridgeRulesFixture) Rules() *bridge.BridgeRules {
 			Exit:  bridgeFixtureReach(self.Untagged.Exit),
 		}
 	}
+	for _, share := range self.Shares {
+		rules.Shares = append(rules.Shares, share.rule())
+	}
 	return rules
 }
 
@@ -296,7 +375,11 @@ func (self BridgeRulesFixtureLink) rule() *bridge.BridgeRuleLink {
 		DrainingSince:           self.DrainingSince,
 		DrainUntil:              self.DrainUntil,
 	}
-	if !self.Tagged {
+	if self.Share != 0 {
+		// another network's sidecar: no member of this network
+		link.ShareId = BridgeFixtureShareId(self.Share)
+		link.TargetNetworkId = BridgeFixtureNetworkId(self.Network)
+	} else if !self.Tagged {
 		link.TargetMemberId = BridgeFixtureMemberId(self.Target)
 	}
 	if self.Route != 0 {

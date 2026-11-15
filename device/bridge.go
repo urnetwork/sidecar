@@ -129,6 +129,8 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		reachDone:         make(chan struct{}),
 	}
 	self.reach = newBridgeReach(self.policy.reach, settings)
+	// the shares' ratchets live in the posture's store, so a restart refuses a ShareCert below one kept (§17.9)
+	self.policy.SetShareRatchet(posture)
 	self.zoneView = &bridgeZoneView{bridge: self}
 	self.resolver = NewBridgeResolverClient(cancelCtx, self.zone.Load, nil, settings)
 	self.hook = &bridgeEgressHook{BridgeEgressPolicy: self.policy, bridge: self}

@@ -115,6 +115,11 @@ type BridgeComponentSettings struct {
 	BindingMaxCount int
 	// The longest one binding fetch runs: 30 s.
 	BindingFetchTimeout time.Duration
+	// How often the rows of the shares this host serves are fetched again, beside each a compile waits for: 1 h
+	// (DESIGN-DETAILS 12.2.2's ShareTableRefreshInterval).
+	ShareTableRefreshInterval time.Duration
+	// The table view's own settings; nil is its defaults.
+	ShareTables *BridgeShareTableViewSettings
 	// ur tun ip auto, refused until §22.9's Browsers check (plan-BRIDGE-small-readings #18): false.
 	AutoAddressEnabled bool
 	// The compile's ledger and own settings. Nil is each one's defaults.
@@ -139,6 +144,7 @@ func DefaultBridgeComponentSettings() *BridgeComponentSettings {
 		BindingRetainTimeout:        7 * 24 * time.Hour,
 		BindingMaxCount:             16,
 		BindingFetchTimeout:         30 * time.Second,
+		ShareTableRefreshInterval:   time.Hour,
 		AutoAddressEnabled:          false,
 	}
 }
@@ -225,6 +231,8 @@ type BridgeComponent struct {
 	removeEntry  func()
 	bindings     *BridgeBindingCache
 	bindingsWake chan struct{}
+	// the rows of the shares this host serves, which the fetcher keeps and a compile reads (BridgeCompileLocal.ShareTables)
+	shareTables *BridgeShareTableView
 
 	stateLock sync.Mutex
 	// the entries the callback read on the follower's goroutine, oldest first, which run takes
@@ -302,6 +310,7 @@ func NewBridgeComponent(ctx context.Context, args *BridgeComponentArgs) (*Bridge
 	if self.parts == nil {
 		self.parts = defaultBridgeProviderParts(settings)
 	}
+	self.shareTables, _ = NewBridgeShareTableView(&bridgeComponentShareRows{component: self}, settings.ShareTables)
 	// on the follower's goroutine, which keeps the entry first: it reads the entry there and never blocks
 	self.removeEntry = args.Config.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
 		log := args.Config.Log()
@@ -861,6 +870,7 @@ func (self *BridgeComponent) compileNow() {
 			Bindings:      self.bindings.Snapshot(),
 			PreviousBlock: self.block,
 			NameZones:     self.args.NameZones,
+			ShareTables:   self.shareTables.Rows(),
 			Settings:      self.settings.Compile,
 		}
 		if self.args.DaemonListeners != nil {
@@ -980,9 +990,14 @@ func (self *BridgeComponent) loadBindings(env *SidecarEnv) {
 }
 
 // The binding fetcher: after each compile, and each BindingRefreshInterval, every binding a compile waits for and
-// every current one past its refresh, verified and kept; a change wants a compile. Off the compile's path.
+// every current one past its refresh, verified and kept, a share link host's under the network and key its alias
+// pinned; and the rows of the shares a compile waits for, and each ShareTableRefreshInterval those it compiled. A
+// change wants a compile. Off the compile's path.
 func (self *BridgeComponent) fetchBindings() {
 	fetchedAt := map[Id]time.Time{}
+	// a share link host's network and pinned key, by its sidecar_id, kept for its refreshes
+	shareHosts := map[Id]BridgeCompileWait{}
+	sharesRefreshedAt := time.Time{}
 	for {
 		select {
 		case <-self.ctx.Done():
@@ -1006,7 +1021,11 @@ func (self *BridgeComponent) fetchBindings() {
 		now := self.clock.Now()
 		wanted := []Id{}
 		for _, wait := range compiled.Waits {
-			if wait.Kind == BridgeCompileWaitBinding {
+			switch wait.Kind {
+			case BridgeCompileWaitBinding:
+				wanted = append(wanted, wait.SidecarId)
+			case BridgeCompileWaitShareBinding:
+				shareHosts[wait.SidecarId] = wait
 				wanted = append(wanted, wait.SidecarId)
 			}
 		}
@@ -1025,7 +1044,12 @@ func (self *BridgeComponent) fetchBindings() {
 				if err != nil {
 					return nil, err
 				}
-				return VerifyBridgeBinding(record.Binding, self.args.NetworkId, sidecarId, state.IdentityKey(sidecarId))
+				networkId, identityKey := self.args.NetworkId, state.IdentityKey(sidecarId)
+				if host, ok := shareHosts[sidecarId]; ok && len(identityKey) == 0 {
+					// a share link's host, a sidecar of the sharing network, under the key the alias pinned (QD-077)
+					networkId, identityKey = host.NetworkId, host.IdentityPublicKey[:]
+				}
+				return VerifyBridgeBinding(record.Binding, networkId, sidecarId, identityKey)
 			}()
 			if err != nil {
 				if self.log.V(1).Enabled() {
@@ -1037,6 +1061,7 @@ func (self *BridgeComponent) fetchBindings() {
 			changed = self.bindings.Record(binding, now) || changed
 		}
 		changed = self.bindings.Expire(now) || changed
+		changed = self.refreshShareTables(compiled, now, &sharesRefreshedAt) || changed
 		if !changed {
 			continue
 		}
@@ -1047,6 +1072,70 @@ func (self *BridgeComponent) fetchBindings() {
 		}
 		self.onRun(self.wantCompile)
 	}
+}
+
+// The rows of the shares a compile waits for, and each ShareTableRefreshInterval those it compiled, fetched into the
+// table view; whether a row changed, which wants a compile. A failed fetch keeps the row held and is logged by count.
+func (self *BridgeComponent) refreshShareTables(compiled *BridgeCompiled, now time.Time, refreshedAt *time.Time) bool {
+	shareIds := []Id{}
+	for _, wait := range compiled.Waits {
+		if wait.Kind == BridgeCompileWaitShareTable {
+			shareIds = append(shareIds, wait.ShareId)
+		}
+	}
+	if self.settings.ShareTableRefreshInterval <= now.Sub(*refreshedAt) {
+		for _, key := range compiled.State.GetShareKeys() {
+			if shareId, err := IdFromBytes(key.GetShareId()); err == nil {
+				shareIds = append(shareIds, shareId)
+			}
+		}
+		*refreshedAt = now
+	}
+	if len(shareIds) == 0 {
+		return false
+	}
+	slices.SortFunc(shareIds, Id.Cmp)
+	shareIds = slices.Compact(shareIds)
+	before := map[Id]*BridgeShareRow{}
+	for _, shareId := range shareIds {
+		before[shareId] = self.shareTables.Row(shareId)
+	}
+	if err := self.shareTables.Refresh(self.ctx, shareIds); err != nil && self.ctx.Err() == nil {
+		self.log.Warningf("[bridge]%s %d share rows were not fetched: %v", self.args.NetworkId, len(shareIds), err)
+	}
+	changed := false
+	for _, shareId := range shareIds {
+		changed = changed || !bridgeShareRowEqual(before[shareId], self.shareTables.Row(shareId))
+	}
+	return changed
+}
+
+// Whether two rows are one: both none, or the same share at the same tables, versions and status.
+func bridgeShareRowEqual(a *BridgeShareRow, b *BridgeShareRow) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ShareId == b.ShareId && a.SharingNetworkId == b.SharingNetworkId && a.AcceptingNetworkId == b.AcceptingNetworkId &&
+		bytes.Equal(a.TargetTable, b.TargetTable) && a.TargetTableVersion == b.TargetTableVersion &&
+		bytes.Equal(a.AliasTable, b.AliasTable) && a.AliasTableVersion == b.AliasTableVersion && a.AcceptStatus == b.AcceptStatus
+}
+
+// The share rows through the generation's api: an error before the first Attach.
+type bridgeComponentShareRows struct {
+	component *BridgeComponent
+}
+
+// BridgeShareRowSource.
+func (self *bridgeComponentShareRows) GetBridgeShare(ctx context.Context, shareId Id) (*BridgeShareRow, error) {
+	api := func() *SidecarApi {
+		self.component.stateLock.Lock()
+		defer self.component.stateLock.Unlock()
+		return self.component.api
+	}()
+	if api == nil {
+		return nil, errors.New("bridge component: no api yet")
+	}
+	return api.GetBridgeShare(ctx, shareId)
 }
 
 // What the component holds, for a log line: never a prefix, an address or a name.

@@ -8,8 +8,10 @@
 // target's pinned key before it can send; the multi client runs device.BridgeLinkMultiClientSettings, a fixed window
 // of one, post-quantum Required, no direct mode before C3 and ICMP on, never DefaultMultiClientSettings.
 //
-// A share link (FriendsAndFamily) is refused until shares land (BRIDGE-M6-05). With no generation attached, every
-// build is refused and the link fails closed.
+// A share link (§17.9, C18) is a multi client in ProvideMode_FriendsAndFamily to a host of another network, whose
+// MultiClientSettings.SharePrivateDestinations are the link's aliases, the source half's only private destinations, so
+// nothing else private leaves through it. Its window clients' delegations name the share, which the Sidecar signs with
+// the share's signer. With no generation attached, every build is refused and the link fails closed.
 
 package main
 
@@ -141,9 +143,6 @@ func (self *urBridgeHost) sourcePath() connect.TransferPath {
 func (self *urBridgeHost) NewBridgeLink(ctx context.Context, target connect.Id, subject connect.Id, shareAliases []netip.Prefix,
 	sign func(windowClientId connect.Id, windowClientPublicKey []byte, notAfter time.Time) ([]byte, error),
 ) (connect.UserNatClient, error) {
-	if shareAliases != nil {
-		return nil, fmt.Errorf("%w: share links come with shares", errUrBridgeHostRefused)
-	}
 	var generation *urBridgeGeneration
 	newGenerator := self.newGenerator
 	func() {
@@ -158,8 +157,8 @@ func (self *urBridgeHost) NewBridgeLink(ctx context.Context, target connect.Id, 
 		newGenerator = urBridgeApiGenerator
 	}
 	generator := newGenerator(ctx, generation, target)
-	multiClientSettings := device.BridgeLinkMultiClientSettings(self.settings)
-	if err := device.CheckBridgeLinkMultiClientSettings(multiClientSettings, self.settings.LinkAllowDirect); err != nil {
+	provideMode, multiClientSettings, err := urBridgeLinkSettings(self.settings, shareAliases)
+	if err != nil {
 		return nil, err
 	}
 	receive := func(source connect.TransferPath, provideMode protocol.ProvideMode, ipPath *connect.IpPath, packet []byte) {
@@ -174,7 +173,22 @@ func (self *urBridgeHost) NewBridgeLink(ctx context.Context, target connect.Id, 
 		}
 	}
 	return connect.NewRemoteUserNatMultiClient(ctx, device.NewBridgeLinkGenerator(ctx, generator, sign), receive,
-		protocol.ProvideMode_Network, multiClientSettings), nil
+		provideMode, multiClientSettings), nil
+}
+
+// A link's provide mode and multi client settings: device.BridgeLinkMultiClientSettings, held to the links' rules, in
+// ProvideMode_Network; or for a share link, whose shareAliases are not nil, ProvideMode_FriendsAndFamily with the
+// aliases as SharePrivateDestinations, C18's source half, so no other private destination leaves through it.
+func urBridgeLinkSettings(settings *device.BridgeSettings, shareAliases []netip.Prefix) (protocol.ProvideMode, *connect.MultiClientSettings, error) {
+	multiClientSettings := device.BridgeLinkMultiClientSettings(settings)
+	if err := device.CheckBridgeLinkMultiClientSettings(multiClientSettings, settings.LinkAllowDirect); err != nil {
+		return protocol.ProvideMode_None, nil, err
+	}
+	if shareAliases == nil {
+		return protocol.ProvideMode_Network, multiClientSettings, nil
+	}
+	multiClientSettings.SharePrivateDestinations = append([]netip.Prefix{}, shareAliases...)
+	return protocol.ProvideMode_FriendsAndFamily, multiClientSettings, nil
 }
 
 // connect's generator for one link: target alone, minted as children of the sidecar's client through the Sidecar's api

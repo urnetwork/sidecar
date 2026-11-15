@@ -22,9 +22,11 @@
 // device role's ParseBridgeRules takes, since a row it refuses refuses the whole state: a map or route that would
 // not parse is voided here with an alarm instead.
 //
+// Shares (bridge_compile_share.go): a host's rules carry the shares it serves from its grant files and their pinned
+// tables, and a sender's table an entry of each alias in force it may use, linked to the alias's host.
+//
 // Deferred to the review phase, as BRIDGE-M4-23's ledger was drafted: the ledger is opened from rows decoded into
-// memory, so a compile holds the ledger rather than only 12.2.4's wanted rows (CompileBounded); shares and their signers
-// are BRIDGE-M6-03's and -04's.
+// memory, so a compile holds the ledger rather than only 12.2.4's wanted rows (CompileBounded).
 //
 // testHookSecret runs where a body's key derives, inside OpenConfigBody. On every leg, the ios_extension legs'
 // included (DESIGN-DETAILS 4.7), with no connect import.
@@ -34,6 +36,7 @@ package sidecar
 import (
 	"bytes"
 	"cmp"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -78,6 +81,11 @@ const (
 	BridgeCompileWaitGeneration BridgeCompileWaitKind = "generation"
 	// A sidecar's verified binding: SidecarId.
 	BridgeCompileWaitBinding BridgeCompileWaitKind = "binding"
+	// A share's row, which the host fetches into BridgeCompileLocal.ShareTables: ShareId.
+	BridgeCompileWaitShareTable BridgeCompileWaitKind = "share_table"
+	// The binding of a share link's host, a sidecar of the sharing network, verified under the key the alias pinned:
+	// SidecarId, NetworkId and IdentityPublicKey.
+	BridgeCompileWaitShareBinding BridgeCompileWaitKind = "share_binding"
 )
 
 // One thing the compile lacked, which the component fetches before it compiles again.
@@ -85,6 +93,10 @@ type BridgeCompileWait struct {
 	Kind       BridgeCompileWaitKind
 	Generation uint64
 	SidecarId  Id
+	ShareId    Id
+	// A share link host's network and the identity key the alias pinned for it.
+	NetworkId         Id
+	IdentityPublicKey [ed25519.PublicKeySize]byte
 }
 
 // One bridge_alarm the compile or the component raises.
@@ -110,9 +122,18 @@ type BridgeCompiled struct {
 	Alarms []BridgeAlarm
 	// The block in force, the next compile's PreviousBlock; the previous one when this one was refused.
 	Block *bridge.BridgeBlock
-	// Every sidecar the state names in a link, an entry's or an exit's, ascending: the targets
+	// Every sidecar the state names in a link of this network, an entry's or an exit's, ascending: the targets
 	// Sidecar.SignWindowDelegation signs for.
 	LinkTargets []Id
+	// Every share link the state names, by share then target, each once: the targets Sidecar.SignWindowDelegation
+	// signs a share's delegation for (DESIGN-DETAILS 12.2.6).
+	ShareLinks []BridgeCompiledShareLink
+}
+
+// A share link of a compiled state: the share and its host in the sharing network.
+type BridgeCompiledShareLink struct {
+	ShareId         Id
+	TargetSidecarId Id
 }
 
 // SHA-256 of a state's deterministic marshal, which `ur bridge` shows and two compiles of one input share.
@@ -292,6 +313,10 @@ type bridgeCompiler struct {
 	// the block and, while it drains at t, the previous one; none until a head carries a block
 	blocks []bridgePrefix
 	ledger *BridgeLedger
+	// the ledger's settings, which a share's tables are held to
+	ledgerSettings *BridgeLedgerSettings
+	// the ShareKeys of the shares this host serves, which the state carries (bridge_compile_share.go)
+	shareKeys []*bridge.BridgeShareKey
 	// the bindings, never nil
 	bindings BridgeBindingView
 
@@ -329,6 +354,8 @@ func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settin
 		selfSubject: AclSidecarSubject(local.SidecarId),
 		bindings:    local.Bindings,
 		compiled:    &BridgeCompiled{},
+
+		ledgerSettings: settings,
 	}
 	if compiler.bindings == nil {
 		compiler.bindings = &bridgeBindingSnapshot{}
@@ -545,6 +572,7 @@ func (self *bridgeCompiler) finish(rules *bridge.BridgeRules) error {
 		Names:           self.names(),
 		NameZones:       self.nameZones(),
 		Identities:      self.identities(rules),
+		ShareKeys:       self.shareKeys,
 		DaemonListeners: slices.Clone(self.local.DaemonListeners),
 	}
 	digest, err := BridgeStateDigest(state)
@@ -552,11 +580,13 @@ func (self *bridgeCompiler) finish(rules *bridge.BridgeRules) error {
 		return fmt.Errorf("%w: %w", ErrBridgeCompileRefused, err)
 	}
 	slices.SortFunc(self.compiled.Waits, func(a BridgeCompileWait, b BridgeCompileWait) int {
-		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Generation, b.Generation), a.SidecarId.Cmp(b.SidecarId))
+		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Generation, b.Generation), a.SidecarId.Cmp(b.SidecarId),
+			a.ShareId.Cmp(b.ShareId), a.NetworkId.Cmp(b.NetworkId), bytes.Compare(a.IdentityPublicKey[:], b.IdentityPublicKey[:]))
 	})
 	self.compiled.State = state
 	self.compiled.Digest = digest
 	self.compiled.LinkTargets = bridgeCompileLinkTargets(rules)
+	self.compiled.ShareLinks = bridgeCompileShareLinks(rules)
 	return nil
 }
 
@@ -641,10 +671,14 @@ func (self *bridgeCompiler) identities(rules *bridge.BridgeRules) []*bridge.Brid
 	return identities
 }
 
-// Every sidecar the rules link to, ascending, each once.
+// Every sidecar the rules link to over a link of this network, ascending, each once.
 func bridgeCompileLinkTargets(rules *bridge.BridgeRules) []Id {
 	targets := []Id{}
 	add := func(link *bridge.BridgeRuleLink) {
+		if 0 < len(link.GetShareId()) {
+			// a share link's host signs no delegation of this network's (bridgeCompileShareLinks)
+			return
+		}
 		target := Id(link.GetTargetSidecarId())
 		if !slices.Contains(targets, target) {
 			targets = append(targets, target)
@@ -660,4 +694,24 @@ func bridgeCompileLinkTargets(rules *bridge.BridgeRules) []Id {
 	}
 	slices.SortFunc(targets, Id.Cmp)
 	return targets
+}
+
+// Every share link the rules name, by share then target, each once.
+func bridgeCompileShareLinks(rules *bridge.BridgeRules) []BridgeCompiledShareLink {
+	links := []BridgeCompiledShareLink{}
+	for _, entry := range rules.GetEntries() {
+		for _, link := range entry.GetLinks() {
+			if len(link.GetShareId()) == 0 {
+				continue
+			}
+			shareLink := BridgeCompiledShareLink{ShareId: Id(link.GetShareId()), TargetSidecarId: Id(link.GetTargetSidecarId())}
+			if !slices.Contains(links, shareLink) {
+				links = append(links, shareLink)
+			}
+		}
+	}
+	slices.SortFunc(links, func(a BridgeCompiledShareLink, b BridgeCompiledShareLink) int {
+		return cmp.Or(a.ShareId.Cmp(b.ShareId), a.TargetSidecarId.Cmp(b.TargetSidecarId))
+	})
+	return links
 }

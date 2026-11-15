@@ -37,6 +37,9 @@ const (
 	bridgeBlockLength = 16
 	// §17.4: a block's <block>.0.0/24 holds its services
 	bridgeServiceLength = 24
+	// §17.4: an alias lies in a block's upper /17, whose host bits run from 0x8000
+	bridgeUpperLength   = 17
+	bridgeUpperHostBits = 0x8000
 	// the IP protocol numbers a flow through connect's NAT can have
 	bridgeProtocolIcmp = 1
 	bridgeProtocolTcp  = 6
@@ -208,7 +211,11 @@ func checkBridgeRules(rules *bridge.BridgeRules) error {
 	if err != nil {
 		return err
 	}
-	return checkBridgeRulesUntagged(rules)
+	err = checkBridgeRulesUntagged(rules)
+	if err != nil {
+		return err
+	}
+	return checkBridgeRulesShares(rules)
 }
 
 // A malformed-rules error at a row.
@@ -309,7 +316,8 @@ func checkBridgeRuleId(row string, name string, id []byte, byteCount int, option
 	return nil
 }
 
-// A link: the target's ids and key, a weight of at least 1, and a drain.
+// A link: the target's ids and key, a weight of at least 1, and a drain; a share link's share and sharing network
+// together, and no app host's client key, since a share's host is a sidecar-owned Required host (§17.9).
 func checkBridgeRuleLink(row string, link *bridge.BridgeRuleLink) error {
 	checks := []error{
 		checkBridgeRuleId(row, "target_client_id", link.GetTargetClientId(), bridgeRuleIdByteCount, false),
@@ -317,6 +325,8 @@ func checkBridgeRuleLink(row string, link *bridge.BridgeRuleLink) error {
 		checkBridgeRuleId(row, "target_identity_public_key", link.GetTargetIdentityPublicKey(), bridgeRuleIdentityByteCount, false),
 		checkBridgeRuleId(row, "target_member_id", link.GetTargetMemberId(), bridgeRuleIdByteCount, true),
 		checkBridgeRuleId(row, "rule_id", link.GetRuleId(), bridgeRuleRuleIdByteCount, true),
+		checkBridgeRuleId(row, "share_id", link.GetShareId(), bridgeRuleIdByteCount, true),
+		checkBridgeRuleId(row, "target_network_id", link.GetTargetNetworkId(), bridgeRuleIdByteCount, true),
 		checkBridgeRuleId(row, "target_client_public_key", link.GetTargetClientPublicKey(), bridgeRuleIdentityByteCount, true),
 	}
 	for _, err := range checks {
@@ -326,8 +336,18 @@ func checkBridgeRuleLink(row string, link *bridge.BridgeRuleLink) error {
 	}
 	if clientKey := link.GetTargetClientPublicKey(); 0 < len(clientKey) {
 		// a client key is never the identity key (§5.5), and all zero would read as no pin
-		if bytes.Equal(clientKey, link.GetTargetIdentityPublicKey()) || !slices.ContainsFunc(clientKey, func(b byte) bool { return b != 0 }) {
+		if bytes.Equal(clientKey, link.GetTargetIdentityPublicKey()) || !bridgeRuleNonZero(clientKey) {
 			return bridgeRulesFault(row, "a target_client_public_key that pins no client key")
+		}
+	}
+	if shareLink := 0 < len(link.GetShareId()); shareLink || 0 < len(link.GetTargetNetworkId()) {
+		switch {
+		case !shareLink || len(link.GetTargetNetworkId()) == 0:
+			return bridgeRulesFault(row, "a share link without both its share and its network")
+		case !bridgeRuleNonZero(link.GetShareId()) || !bridgeRuleNonZero(link.GetTargetNetworkId()):
+			return bridgeRulesFault(row, "a share link naming no share or no network")
+		case 0 < len(link.GetTargetClientPublicKey()) || 0 < len(link.GetTargetMemberId()):
+			return bridgeRulesFault(row, "a share link to an app host or to a member of this network")
 		}
 	}
 	if link.GetWeight() == 0 {
@@ -659,6 +679,12 @@ func checkBridgeRulesEgress(rules *bridge.BridgeRules) error {
 	}
 	switch egress.GetMode() {
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
+		for j, link := range egress.GetExits() {
+			// an exit is this network's: a share reaches its targets alone, never the internet (§17.9's isolation)
+			if 0 < len(link.GetShareId()) || 0 < len(link.GetTargetNetworkId()) {
+				return bridgeRulesFault(fmt.Sprintf("egress.links[%d]", j), "an exit over a share link")
+			}
+		}
 		return checkBridgeRuleLinks("egress", egress.GetExits())
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:
 		if 0 < len(egress.GetExits()) {
@@ -668,4 +694,84 @@ func checkBridgeRulesEgress(rules *bridge.BridgeRules) error {
 	default:
 		return bridgeRulesFault("egress", "mode %d", egress.GetMode())
 	}
+}
+
+// Whether any byte is set: an id or key of all zero names nothing.
+func bridgeRuleNonZero(value []byte) bool {
+	return slices.ContainsFunc(value, func(b byte) bool { return b != 0 })
+}
+
+// The shares this host serves (§17.9; BridgeRules.shares): each once by its id, naming its accepting network, its
+// pinned ShareKey and its grant, with an expiry of 0 for none, and at least one target. Each target once by its index:
+// an alias of 17 to 32 bits, aligned, inside the upper /17 and, as a /32, at neither a .0 nor a .255, overlapping no
+// other alias of the share; T_i an IPv4 prefix of the alias's length; and every protocol, or TCP or UDP with ports.
+func checkBridgeRulesShares(rules *bridge.BridgeRules) error {
+	shareIds := map[string]bool{}
+	for i, share := range rules.GetShares() {
+		row := fmt.Sprintf("shares[%d]", i)
+		checks := []error{
+			checkBridgeRuleId(row, "share_id", share.GetShareId(), bridgeRuleIdByteCount, false),
+			checkBridgeRuleId(row, "accepting_network_id", share.GetAcceptingNetworkId(), bridgeRuleIdByteCount, false),
+			checkBridgeRuleId(row, "share_public_key", share.GetSharePublicKey(), bridgeRuleIdentityByteCount, false),
+			checkBridgeRuleId(row, "grant_id", share.GetGrantId(), bridgeRuleGrantIdByteCount, false),
+		}
+		for _, err := range checks {
+			if err != nil {
+				return err
+			}
+		}
+		switch {
+		case !bridgeRuleNonZero(share.GetShareId()) || !bridgeRuleNonZero(share.GetAcceptingNetworkId()):
+			return bridgeRulesFault(row, "a share naming no share or no network")
+		case shareIds[string(share.GetShareId())]:
+			return bridgeRulesFault(row, "a share the rules already hold")
+		case share.GetExpires() < 0:
+			return bridgeRulesFault(row, "an expiry before the epoch")
+		case len(share.GetTargets()) == 0:
+			return bridgeRulesFault(row, "a share with no target")
+		}
+		shareIds[string(share.GetShareId())] = true
+		indexes := map[uint32]bool{}
+		type aliasRange struct{ first, last uint32 }
+		aliases := []aliasRange{}
+		for j, target := range share.GetTargets() {
+			targetRow := fmt.Sprintf("%s.targets[%d]", row, j)
+			length := target.GetLength()
+			if length < bridgeUpperLength || 32 < length {
+				return bridgeRulesFault(targetRow, "an alias of %d bits", length)
+			}
+			size := uint32(1) << (32 - length)
+			first := target.GetAliasHostBits()
+			last := first + size - 1
+			switch {
+			case indexes[target.GetIndex()]:
+				return bridgeRulesFault(targetRow, "a target the share already has")
+			case first < bridgeUpperHostBits || 0xffff < last || first%size != 0:
+				return bridgeRulesFault(targetRow, "an alias that is no aligned block of the upper /17")
+			case length == 32 && (first&0xff == 0x00 || first&0xff == 0xff):
+				return bridgeRulesFault(targetRow, "a /32 alias at a .0 or a .255")
+			case slices.ContainsFunc(aliases, func(held aliasRange) bool { return first <= held.last && held.first <= last }):
+				return bridgeRulesFault(targetRow, "an alias overlapping another of the share")
+			}
+			indexes[target.GetIndex()] = true
+			aliases = append(aliases, aliasRange{first: first, last: last})
+			prefix, ok := bridgeRulePrefix(target.GetTarget())
+			if !ok || prefix.Bits() != int(length) {
+				return bridgeRulesFault(targetRow, "a target that is no prefix of its alias's length")
+			}
+			switch target.GetProtocol() {
+			case 0:
+				if 0 < len(target.GetPorts()) {
+					return bridgeRulesFault(targetRow, "ports of no protocol")
+				}
+			case bridgeProtocolTcp, bridgeProtocolUdp:
+			default:
+				return bridgeRulesFault(targetRow, "protocol %d", target.GetProtocol())
+			}
+			if err := checkBridgeRulePorts(targetRow, target.GetPorts()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
