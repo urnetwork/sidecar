@@ -22,6 +22,9 @@
 //   - a second document lets w dial d: w's first contract to d is data, so the same RPC is answered, the same open
 //     accepted and w's packet reaches d's hook sealed data, while w to x stays control and refused.
 //
+// Its M6-out case, a Team's default document, is the same schedule on another cast and other documents (fs21Scenario;
+// Fs21Team in fs_acl_m6.go).
+//
 // FI-10 reads every device after every step (AddHeadCheckDispatchers). Time: the devices' dispatchers, stops and
 // followers run on the Net's fake clock, which only a step moves; server's exchange, controller and gate keep real
 // time, and every real wait here is bounded by Fs21Settings.WaitTimeout, a failure's bound only.
@@ -157,10 +160,45 @@ type fs21Device struct {
 	accepted atomic.Int64
 }
 
+// What a case of FS-21 changes in its world: the personal network's of M4-out here (fs21Personal), a Team's default
+// document's of M6-out in fs_acl_m6.go.
+type fs21Scenario struct {
+	// the schedule's id
+	id string
+	// the member a device is admitted under, and the capabilities its admission by the owner's laptop carries
+	member       func(admission *sidecartest.AdmissionNet, name string) sidecar.Id
+	capabilities uint32
+	// runs once every device is admitted, before the first document; nil for nothing
+	cast func(admission *sidecartest.AdmissionNet, world *fs21World) error
+	// the first document, which gives w, x and r no reach to each other, and the second, which lets w dial d
+	policy     func() []byte
+	dialPolicy func(source sidecar.Id, destination sidecar.Id) []byte
+	// a group holding another member's devices, in which a device unwitnessed past witness_bound_hours stops sealing
+	// (D-TRUST-10); the zero id for a network whose groups are all its one member's own
+	sharedGroupId sidecar.Id
+}
+
+// The M4-out case: every device the owner member's own, the document one of no grants, and no shared group.
+func fs21Personal() *fs21Scenario {
+	return &fs21Scenario{
+		id: "FS-21",
+		member: func(admission *sidecartest.AdmissionNet, name string) sidecar.Id {
+			return admission.Owner().MemberId
+		},
+		policy: func() []byte {
+			return []byte(fs21NoReachPolicy)
+		},
+		dialPolicy: func(source sidecar.Id, destination sidecar.Id) []byte {
+			return []byte(fs21DialPolicy(source, destination))
+		},
+	}
+}
+
 // What FS-21's steps share.
 type fs21World struct {
 	*fsTeamWorld
 	settings    *Fs21Settings
+	scenario    *fs21Scenario
 	tier        *AclExchangeTier
 	devices     map[string]*fs21Device
 	cache       *sidecar.AclGateCache
@@ -448,7 +486,7 @@ func fs21Setup(world *fs21World) *Step {
 			networkId := admission.NetworkId()
 			owner := admission.Owner()
 			for _, name := range fs21Names {
-				identity := admission.Device("fs21 "+name, owner.MemberId)
+				identity := admission.Device("fs21 "+name, world.scenario.member(admission, name))
 				clientKey := admission.Device("fs21 client key "+name, sidecar.Id{}).Key
 				device := &fs21Device{name: name, identity: identity, classes: newFs21Classes(), egress: newFs21Egress()}
 				bind := func(clientId sidecar.Id) ([]byte, error) {
@@ -477,9 +515,14 @@ func fs21Setup(world *fs21World) *Step {
 					return fmt.Errorf("%s's client was opened with no binding", name)
 				}
 				world.devices[name] = device
-				admission.AdmitDevice(owner, identity, 0)
+				admission.AdmitDevice(owner, identity, world.scenario.capabilities)
 			}
-			plan, _ := admission.SaveAclPolicy([]byte(fs21NoReachPolicy), nil)
+			if world.scenario.cast != nil {
+				if err := world.scenario.cast(admission, world); err != nil {
+					return err
+				}
+			}
+			plan, _ := admission.SaveAclPolicy(world.scenario.policy(), nil)
 			if !plan.Rows.GetHasDocument() {
 				return errors.New("the saved head has no document")
 			}
@@ -608,7 +651,10 @@ func fs21Online(world *fs21World) *Step {
 				Peers:       &fs21Peers{follower: device.follower},
 			})
 		}
-		headCheck, err := net.AddHeadCheckDispatchers(networkId, func(groupId sidecar.Id) bool { return false }, dispatchers...)
+		sharedGroupId := world.scenario.sharedGroupId
+		headCheck, err := net.AddHeadCheckDispatchers(networkId, func(groupId sidecar.Id) bool {
+			return sharedGroupId != (sidecar.Id{}) && groupId == sharedGroupId
+		}, dispatchers...)
 		if err != nil {
 			return err
 		}
@@ -887,10 +933,27 @@ func fs21Partition(world *fs21World) []*Step {
 		}),
 		fs21Witness("w", world, "w", "x"),
 		fs21Do("r", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
+			shared := world.scenario.sharedGroupId
+			if shared != (sidecar.Id{}) {
+				// an hour short of the bound r still seals in the group it shares
+				if err := world.headCheck.Sidecar("r").Stop.SealAllowed(shared); err != nil {
+					return fmt.Errorf("r stopped sealing in a shared group before the bound: %w", err)
+				}
+			}
 			net.Clock().AdvanceTo(world.rWitnessedAt.Add(bound))
-			// own groups only alarm: r, unwitnessed past the bound, still seals in every group it holds
+			// own groups only alarm: r, unwitnessed past the bound, still seals in every group that is its member's own
 			if err := world.headCheck.Sidecar("r").Stop.SealAllowed(admission.Id("fs21 an owned group")); err != nil {
 				return fmt.Errorf("r stopped sealing in its own group: %w", err)
+			}
+			if shared != (sidecar.Id{}) {
+				// in a group with another member's devices r stops at the bound, and w, witnessed since, does not
+				stop := &sidecar.HeadStopError{}
+				if err := world.headCheck.Sidecar("r").Stop.SealAllowed(shared); !errors.As(err, &stop) || stop.Cause != sidecar.HeadStopUnwitnessed {
+					return fmt.Errorf("r, unwitnessed past the bound, sealing in a shared group: %v", err)
+				}
+				if err := world.headCheck.Sidecar("w").Stop.SealAllowed(shared); err != nil {
+					return fmt.Errorf("w, witnessed, stopped sealing in a shared group: %w", err)
+				}
 			}
 			if !world.headCheck.Sidecar("r").Stop.WitnessedAt().Equal(world.rWitnessedAt) {
 				return errors.New("r's witnessed_at moved while it was off the relays")
@@ -915,6 +978,11 @@ func fs21Partition(world *fs21World) []*Step {
 			if witnessedAt := world.headCheck.Sidecar("r").Stop.WitnessedAt(); !witnessedAt.Equal(net.Clock().Now()) {
 				return fmt.Errorf("r witnessed at %s once relayed again, not now", witnessedAt)
 			}
+			if shared := world.scenario.sharedGroupId; shared != (sidecar.Id{}) {
+				if err := world.headCheck.Sidecar("r").Stop.SealAllowed(shared); err != nil {
+					return fmt.Errorf("r, witnessed again, does not seal in a shared group: %w", err)
+				}
+			}
 			return nil
 		}),
 	}
@@ -925,7 +993,7 @@ func fs21Partition(world *fs21World) []*Step {
 func fs21DataTwin(world *fs21World) []*Step {
 	return []*Step{
 		fs21Do("owner", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
-			plan, _ := admission.SaveAclPolicy([]byte(fs21DialPolicy(world.device("w").identity.SidecarId, world.device("d").identity.SidecarId)), nil)
+			plan, _ := admission.SaveAclPolicy(world.scenario.dialPolicy(world.device("w").identity.SidecarId, world.device("d").identity.SidecarId), nil)
 			if !plan.Rows.GetHasDocument() {
 				return errors.New("the second head has no document")
 			}
@@ -1005,6 +1073,11 @@ func Fs21(net *Net) *Schedule {
 
 // FS-21's schedule on settings, nil for the defaults.
 func Fs21With(settings *Fs21Settings) Builder {
+	return fs21Builder(settings, fs21Personal)
+}
+
+// The schedule of one case of FS-21 on settings, nil for the defaults: a world of its own for each Net.
+func fs21Builder(settings *Fs21Settings, scenario func() *fs21Scenario) Builder {
 	if settings == nil {
 		settings = DefaultFs21Settings()
 	}
@@ -1012,6 +1085,7 @@ func Fs21With(settings *Fs21Settings) Builder {
 		world := &fs21World{
 			fsTeamWorld: newFsTeamWorld(),
 			settings:    settings,
+			scenario:    scenario(),
 			devices:     map[string]*fs21Device{},
 			natClients:  map[string]*connect.RemoteUserNatClient{},
 		}
@@ -1027,7 +1101,7 @@ func Fs21With(settings *Fs21Settings) Builder {
 		steps = append(steps, fs21DataTwin(world)...)
 		steps = append(steps, fs21Close(world))
 		return &Schedule{
-			Id:    "FS-21",
+			Id:    world.scenario.id,
 			Tiers: []Tier{TierT3},
 			Check: []Invariant{FI(10), FsTeamAgreement(world.fsTeamWorld)},
 			Steps: steps,

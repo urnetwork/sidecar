@@ -16,7 +16,8 @@
 //   - FS-19's invite: a member invite refuses an ephemeral enrollment at both ends, an ephemeral admitted with the
 //     invited bit anyway is consented at no reader, and the member's next untagged device from the invite is, alone.
 //
-// Registered on T3 alone, fs21.go's schedule on a Team's world: FS-21's team.
+// Registered on T3 alone, since its clients run on server's exchange under server's contract gate: FS-21's team,
+// fs21.go's schedule on a Team's cast and documents (Fs21Team).
 //
 // FS-85 is RECORD-M6-26's row (fs85_test.go), whose directory legs file requests and decisions through the directory
 // daemon; its acl cases are clauses here, each a schedule RunClause runs, and FI-26's acl half is the invariant
@@ -1507,4 +1508,79 @@ func AclMemberRemovalDropsEveryRight(net *Net) *Schedule {
 			return aclM6ExpectStanding(net, "m first", mFirst.SidecarId, sidecar.DirectoryStandingStanding)
 		}),
 	)
+}
+
+var Fs21TeamCase = Register("FS-21", "team", []Tier{TierT3}, Fs21Team)
+
+// Team's starting document with one more grant, source dialing destination: the second document of FS-21's team. It
+// carries no tests, since the starting document's own deny a member's dial of another member's device, which this
+// grant is.
+func fs21TeamDialPolicy(source sidecar.Id, destination sidecar.Id) []byte {
+	return []byte(fmt.Sprintf(`{
+	"tagOwners": { "tag:recurd": ["autogroup:member"] },
+	"grants": [
+		{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] },
+		{ "src": ["tag:recurd"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
+		{ "src": ["sidecar:%s"], "dst": ["sidecar:%s"], "allow": ["dial"] },
+	],
+	"requests": [
+		{ "src": ["autogroup:member", "autogroup:tagged"],
+		  "dst": ["autogroup:member", "autogroup:tagged", "sock:*"], "allow": ["dial"],
+		  "approver": ["autogroup:dst-owner"], "evidence": ["device", "presence"], "maxExpiry": "30d" },
+	],
+}`, source, destination))
+}
+
+// The Team case's world: w, x, r and d each the first device of a member of its own, admitted by the Owner's laptop
+// from that member's invite, r's member an Admin; Team's starting document, under which a member's devices reach each
+// other and no other member's; and one group that holds another member's devices, as a Team's repos do.
+func fs21Team() *fs21Scenario {
+	members := map[string]sidecar.Id{}
+	sharedGroup := sha256Sum([]byte("fs21 a shared group"))
+	return &fs21Scenario{
+		id: "FS-21 team",
+		member: func(admission *sidecartest.AdmissionNet, name string) sidecar.Id {
+			memberId, found := members[name]
+			if !found {
+				memberId = admission.AdmitMember(admission.Owner(), "fs21 member "+name, bridge.MemberRole_MEMBER_ROLE_MEMBER)
+				members[name] = memberId
+			}
+			return memberId
+		},
+		capabilities: uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_INVITED),
+		cast: func(admission *sidecartest.AdmissionNet, world *fs21World) error {
+			owner := admission.Owner()
+			// an Admin's device reaches no more than a Member's under the starting document
+			admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_ADMIN_SET,
+				admission.AdminSet([]sidecar.Id{owner.MemberId}, []sidecar.Id{members["r"]}, 0)))
+			for name, device := range world.devices {
+				if !admission.Consented(device.identity, members[name]) {
+					return fmt.Errorf("%s is not its member's consented device", name)
+				}
+			}
+			// the compile expands the document's autogroups over the folded members
+			admission.Fold(true)
+			return nil
+		},
+		policy:        sidecar.AclTeamStartDocument,
+		dialPolicy:    fs21TeamDialPolicy,
+		sharedGroupId: sidecar.Id(sharedGroup[:16]),
+	}
+}
+
+// FS-21's team (M6-out; §2, §6; D-PROTO-18, D-TRUST-10, I-10; FI-10): fs21.go's schedule on a Team whose document is
+// the starting one, its devices four members' own, every client on server's exchange under server's contract gate and
+// every receiver PROTO-M4-03's. The default document gives the members' devices no reach to each other, so the gate
+// gives each pair of them the witness exception's control contract: HeadCheck passes and counts, and a data RPC, a
+// stream and IP on it are refused. The server partitions its relays, r off the exchange: w and x still witness each
+// other; r alarms unwitnessed at 24 h, and at witness_bound_hours stops sealing in the group it shares with another
+// member's devices while it still seals in its own, and w, witnessed, seals in both; relayed again, r witnesses and
+// seals. A second document lets w dial d, and w's contract to d is data.
+func Fs21Team(net *Net) *Schedule {
+	return Fs21TeamWith(nil)(net)
+}
+
+// FS-21's team on settings, nil for the defaults.
+func Fs21TeamWith(settings *Fs21Settings) Builder {
+	return fs21Builder(settings, fs21Team)
 }
