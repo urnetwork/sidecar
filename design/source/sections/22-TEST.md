@@ -28,8 +28,8 @@ Unimportable Required test helpers (connect/transfer_encrypt_contract_test.go:21
 ### 22.4 Tiers and harness
 
 - **T1**, sidecar on all §4.7 legs: unit, property, vectors, fuzz seeds.
-- **T2**, `sidecartest`: sidecars and engines in one process; fake stores; injected clock, store results and barriers.
-- **T3**, server hosting engines on the stores below with Postgres and the in-process exchange; store suites and fault schedules.
+- **T2**, `sidecartest`: sidecars and engines in one process; fake stores; injected clock, store results and barriers. The fakes of operator-core's interfaces and their conformance suites move to operator-core's test-only `coretest` module in the build's review phase, and every extension reuses them (§4.5; owner decision 251).
+- **T3**, server hosting engines on the stores below with Postgres and the in-process exchange; store suites and fault schedules. server/core runs `coretest`'s conformance suites against the real stack, and sidecar's SQL stores run their suites over server/core's db on the private test stack; sidecar never dials Postgres itself (owner decision 251).
 - **T4**, sdk: binding gates, wasm in Node, size, memory, and from M10 phone search on the ios32 and Android surrogates and page search in wasm (FS-77), with phone remote search on those surrogates from the later of M10's and M8's exits (FS-83).
 - **T5**, a PERFVAR-style host and M2's staging cluster on the production hosts' PM9A3 set (§19.11): 22.8; format 2's drive-write gate needs no T5 drives (D-TEST-13).
 - **T6**, `tests/test-main.sh` in main, dark (owner decisions 91, 118): 22.9, per milestone.

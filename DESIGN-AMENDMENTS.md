@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 252 decided items and 278 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 252 decided items and 277 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -14,7 +14,7 @@ Holds 252 decided items and 278 proposed ones, generated from the ledger on 2026
 |---|---|---|
 | [§2 Trust model and threat model](#s2) | 3 | 0 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
-| [§4 Repositories, code placement, branches, and build](#s4) | 15 | 21 |
+| [§4 Repositories, code placement, branches, and build](#s4) | 15 | 20 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
 | [§6 The sidecar subprotocol](#s6) | 7 | 17 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 25 | 5 |
@@ -259,15 +259,6 @@ Questions: `plan-REPO-small-readings.md#1`.
 The Version sed writes `${WARP_VERSION}`, as sdk's does, so `ur --version` prints the `+` form; artifact names and tags use `${EXTERNAL_WARP_VERSION}`. sidecar.go's comment showing `$WARP_VERSION-$WARP_VERSION_CODE` is corrected.
 
 Questions: `plan-REPO-small-readings.md#6`.
-
-### QD-336: Engine as three shapes
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Keep Engine (Ready, Drain, Close), HttpEngine (adds Handler() http.Handler) and StreamEngine (adds Serve(net.Listener) error). Each engine package states its shape with var _ sidecar.HttpEngine = (*EvsEngine)(nil), and sidecarhost.RunOptions takes the shape it serves rather than asking by type assertion. smtpedge is an Engine alone.
-
-Changes: §4.5.
-
-Questions: `core-types-engine-shape.md`.
 
 ### QD-345: App groups
 *Proposed reading: the agents' reading of text the design leaves open; work builds on it.*

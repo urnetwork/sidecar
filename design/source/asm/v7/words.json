@@ -2,17 +2,17 @@
  {
   "num": 1,
   "code": "CTX",
-  "words": 3792,
+  "words": 3800,
   "code_words": 52,
   "ceiling": 2200,
-  "over": 1592,
-  "over_pct": 72.4
+  "over": 1600,
+  "over_pct": 72.7
  },
  {
   "num": 2,
   "code": "TRUST",
   "words": 8989,
-  "code_words": 15131,
+  "code_words": 15132,
   "ceiling": 3000,
   "over": 5989,
   "over_pct": 199.6
@@ -20,29 +20,29 @@
  {
   "num": 3,
   "code": "ARCH",
-  "words": 4666,
-  "code_words": 6686,
+  "words": 4678,
+  "code_words": 6722,
   "ceiling": 3000,
-  "over": 1666,
-  "over_pct": 55.5
+  "over": 1678,
+  "over_pct": 55.9
  },
  {
   "num": 4,
   "code": "REPO",
-  "words": 4417,
-  "code_words": 952,
+  "words": 5548,
+  "code_words": 1335,
   "ceiling": 2800,
-  "over": 1617,
-  "over_pct": 57.8
+  "over": 2748,
+  "over_pct": 98.1
  },
  {
   "num": 5,
   "code": "CORE",
-  "words": 8524,
-  "code_words": 6447,
+  "words": 8584,
+  "code_words": 6472,
   "ceiling": 3500,
-  "over": 5024,
-  "over_pct": 143.5
+  "over": 5084,
+  "over_pct": 145.3
  },
  {
   "num": 6,
@@ -120,7 +120,7 @@
   "num": 14,
   "code": "SMTP",
   "words": 7028,
-  "code_words": 1079,
+  "code_words": 1098,
   "ceiling": 4500,
   "over": 2528,
   "over_pct": 56.2
@@ -155,20 +155,20 @@
  {
   "num": 18,
   "code": "SDK",
-  "words": 9635,
-  "code_words": 9566,
+  "words": 9760,
+  "code_words": 9626,
   "ceiling": 3000,
-  "over": 6635,
-  "over_pct": 221.2
+  "over": 6760,
+  "over_pct": 225.3
  },
  {
   "num": 19,
   "code": "OPS",
-  "words": 7862,
+  "words": 7923,
   "code_words": 8895,
   "ceiling": 3500,
-  "over": 4362,
-  "over_pct": 124.6
+  "over": 4423,
+  "over_pct": 126.4
  },
  {
   "num": 20,
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7194,
+  "words": 7255,
   "code_words": 35304,
   "ceiling": 2500,
-  "over": 4694,
-  "over_pct": 187.8
+  "over": 4755,
+  "over_pct": 190.2
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 6893,
+  "words": 6901,
   "code_words": 1136,
   "ceiling": 2500,
-  "over": 4393,
-  "over_pct": 175.7
+  "over": 4401,
+  "over_pct": 176.0
  }
 ]

@@ -438,6 +438,28 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "all of it also in that push's record (evs-12)\"",
 		list:     "all of it also in that push's record (evs-12); each new slot's body as its push brought it, a one-part push's in its payload and a push in parts' in its seal request, never in a part, which evs writes to slot/ and keeps in no record (QD-806, QD-819)\"",
 	},
+	{
+		// QD-840's list version, after v23's
+		question: "dns-m6-05-custom-host-withheld-state",
+		block:    "# metadata_list.yml v23;",
+		list:     "# metadata_list.yml v24;",
+	},
+	{
+		// QD-840: v24's line, after v23's
+		question: "dns-m6-05-custom-host-withheld-state",
+		block:    "# part, and that no record keeps it (QD-806).\n",
+		list: "# part, and that no record keeps it (QD-806).\n" +
+			"# v24, updated 2026-11-15 for the owner's answer QD-840 (dns-m6-05-custom-host-withheld-state), adds to dns-1 each\n" +
+			"# custom host's state, withheld among them, a web host a downgrade keeps out of the map and routing (§20.7).\n",
+	},
+	{
+		// QD-840: dns-1's custom-host maps name each host's state, whose third value, withheld, keeps a downgraded
+		// network's web host out of §13.4's map and tlsedge's routing with its row kept (D-QUOTA-6); the state was
+		// already the map's own input, so only the word is new
+		question: "dns-m6-05-custom-host-withheld-state",
+		block:    "custom-host maps with each custom host's CAA mode (strong or weak)",
+		list:     "custom-host maps with each custom host's state (pending, active, or withheld while a downgrade keeps a web host out of the map; §20.7, QD-840), CAA mode (strong or weak)",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
