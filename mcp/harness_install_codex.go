@@ -7,27 +7,35 @@
 //	           it, [mcp_servers.ur.tools.<tool>], with approval_mode "prompt", Codex's per-tool approval, so it asks
 //	           before every one. The table's spelling is a reading MCP-M3-28's conformance run pins
 //	hooks      ~/.codex/hooks.json, Claude Code's shape: PermissionRequest with Ingest.PermissionHookTimeout,
-//	           PreToolUse and PostToolUse matching every tool (shell, apply_patch and MCP among them), and the session
-//	           events. Codex trusts the file by its hash, so it asks the person to trust it again after an install.
-//	           SessionEnd's 1 s is the harness's own bound, which ur hook's 300 ms meets
+//	           PreToolUse and PostToolUse matching every tool (shell, apply_patch and MCP among them), the session
+//	           events, and PostModelRequest, §16.18's model calls, each of which the hook path records as one
+//	           model_call entry while Ingest.ModelCalls is on (hook_codex.go, ingest_model.go; QD-835). Codex trusts
+//	           the file by its hash, so it asks the person to trust it again after an install. SessionEnd's 1 s is the
+//	           harness's own bound, which ur hook's 300 ms meets
 //	--project  .codex/config.toml and .codex/hooks.json in the project, a reading, since §16.7 names only the user's
-//	exporter   with a telemetry pair (a user install's alone; QD-822), the [otel] table of config.toml: exporter
-//	           otlp-http to the daemon's listener's logs endpoint, protocol json, its bearer in headers'
-//	           Authorization, and log_user_prompt false, since the listener takes model calls alone. The listener
-//	           takes no Codex record as a call until question harness-telemetry-token-codex-double-count settles
-//	           where Codex's calls come from, since §16.18's PostModelRequest hook reports the same calls with their
-//	           request ids and tokens (ingest_model.go)
+//	exporter   none: Codex's model calls come from its PostModelRequest hook alone, with each call's request id and
+//	           tokens (QD-835), so the install takes no telemetry pair, and it removes the [otel] table, bearer and
+//	           all, that an earlier install wrote for QD-822 (below)
 //
-// config.toml is edited by whole tables: every table under mcp_servers.ur is ur's, and with a telemetry pair every
-// table under otel too, each group replaced together by the template's block where its first table stood, and a config
-// defining either any other way is refused (harness_config.go). What the seal hashes of it: mcp_servers.ur's tables as
-// one JSON object, and with a telemetry pair that object and otel's, as {"server": ..., "otel": ...}.
+// config.toml is edited by whole tables: every table under mcp_servers.ur is ur's, replaced together by the template's
+// block where the first one stood, and a config defining mcp_servers.ur any other way is refused (harness_config.go).
+// What the seal hashes of it: mcp_servers.ur's tables as one JSON object.
+//
+// An earlier install's exporter table is otel's one table holding exactly what that install wrote for some telemetry
+// pair: log_user_prompt false and an otlp-http exporter to 127.0.0.1's logs endpoint at a port, protocol json,
+// headers' Authorization a bearer of lowercase hex. The install removes its lines, and where it ends the file the blank
+// lines before it, which that install put there, so the rest of the file stays as it was; the diff shows its bearer
+// as the token's stand-in (harness_telemetry.go). Anything else under otel, a person's own exporter or ur's table
+// edited since, is the person's: it stays byte for byte, refuses nothing, and no seal holds it.
 
 package mcp
 
 import (
+	"bytes"
+	"net"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -41,6 +49,8 @@ var codexHookEvents = []harnessHookEvent{
 	{name: "PreToolUse", matcher: "*"},
 	{name: "PermissionRequest", matcher: "*", permission: true},
 	{name: "PostToolUse", matcher: "*"},
+	// §16.18's model calls, Codex's one source of them (QD-835)
+	{name: "PostModelRequest"},
 	{name: "Stop"},
 	{name: "SessionEnd"},
 }
@@ -67,27 +77,26 @@ func (self *codexInstallAdapter) projectSettingsFiles(cwd string) []*harnessFile
 	}
 }
 
-// Codex's config.toml: mcp_servers.ur's tables, and with a telemetry pair otel's.
+// Codex's config.toml: mcp_servers.ur's tables, and an earlier install's exporter table, which the install removes.
 type codexConfigFile struct{}
 
 // The table path of ur's MCP server.
 var codexServerKeys = []string{"mcp_servers", urMcpServerName}
 
-// The table path of the exporter's settings (QD-822), every table under which is ur's while the template has a
-// telemetry pair.
+// The table path of the exporter's settings an earlier install wrote (QD-822), which this one removes (QD-835).
 var codexOtelKeys = []string{"otel"}
 
 // The approval mode each outward tool's table sets: Codex asks before the call.
 const codexApprovalModePrompt = "prompt"
 
-// Codex's OTLP/HTTP exporter, as its [otel] table names it, and the payload encoding the listener reads.
+// Codex's OTLP/HTTP exporter, as an earlier install's [otel] table named it, and the payload encoding that table set.
 const (
 	codexOtelExporterOtlpHttp = "otlp-http"
 	codexOtelProtocolJson     = "json"
 )
 
 // ur's server as one object: command, args, and tools.<tool>.approval_mode.
-func (self *codexConfigFile) serverTemplate(template *harnessTemplate) map[string]any {
+func (self *codexConfigFile) template(template *harnessTemplate) (any, error) {
 	tools := map[string]any{}
 	for _, tool := range template.outwardTools {
 		tools[tool] = map[string]any{"approval_mode": codexApprovalModePrompt}
@@ -96,30 +105,7 @@ func (self *codexConfigFile) serverTemplate(template *harnessTemplate) map[strin
 	if 0 < len(tools) {
 		server["tools"] = tools
 	}
-	return server
-}
-
-// The exporter's settings as one object: otel's exporter, naming the listener and its bearer, and log_user_prompt.
-func (self *codexConfigFile) otelTemplate(telemetry *HarnessTelemetry) map[string]any {
-	return map[string]any{
-		"log_user_prompt": false,
-		"exporter": map[string]any{
-			codexOtelExporterOtlpHttp: map[string]any{
-				"endpoint": telemetry.LogsEndpoint(),
-				"protocol": codexOtelProtocolJson,
-				"headers":  map[string]any{"Authorization": telemetry.Authorization()},
-			},
-		},
-	}
-}
-
-// ur's server's object, and with a telemetry pair that object and otel's: see the file header.
-func (self *codexConfigFile) template(template *harnessTemplate) (any, error) {
-	server := self.serverTemplate(template)
-	if template.telemetry == nil {
-		return server, nil
-	}
-	return map[string]any{"server": server, "otel": self.otelTemplate(template.telemetry)}, nil
+	return server, nil
 }
 
 // The template's block of server tables, each line ending in a newline, a blank line between tables.
@@ -139,15 +125,90 @@ func (self *codexConfigFile) block(template *harnessTemplate) string {
 	return text.String()
 }
 
-// The exporter's block: one [otel] table, the exporter an inline table on one line, as TOML 1.0 has them.
-func (self *codexConfigFile) otelBlock(telemetry *HarnessTelemetry) string {
-	text := strings.Builder{}
-	text.WriteString("[otel]\n")
-	text.WriteString("log_user_prompt = false\n")
-	text.WriteString("exporter = { " + codexOtelExporterOtlpHttp + " = { endpoint = " + harnessTomlString(telemetry.LogsEndpoint()) +
-		", protocol = " + harnessTomlString(codexOtelProtocolJson) +
-		", headers = { Authorization = " + harnessTomlString(telemetry.Authorization()) + " } } }\n")
-	return text.String()
+// The exporter's settings an earlier install wrote for pair, as one object (QD-822): otel's otlp-http exporter naming
+// the listener's logs endpoint and the bearer, and log_user_prompt false.
+func codexEarlierOtel(pair *HarnessTelemetry) map[string]any {
+	return map[string]any{
+		"log_user_prompt": false,
+		"exporter": map[string]any{
+			codexOtelExporterOtlpHttp: map[string]any{
+				"endpoint": pair.LogsEndpoint(),
+				"protocol": codexOtelProtocolJson,
+				"headers":  map[string]any{"Authorization": pair.Authorization()},
+			},
+		},
+	}
+}
+
+// An earlier install's exporter table in document and the pair it names (see the file header): false for none, for
+// otel defined any other way, and for otel's tables holding anything but exactly what that install wrote.
+func codexEarlierOtelTable(document *harnessTomlDocument) (*harnessTomlTable, *HarnessTelemetry, bool) {
+	tables, err := codexOwnedTables(document, codexOtelKeys)
+	if err != nil || len(tables) != 1 {
+		// a dotted key, an inline table, an array of tables or more tables than one: never what an install wrote
+		return nil, nil, false
+	}
+	found, err := codexOwnedEntries(tables, codexOtelKeys)
+	if err != nil {
+		return nil, nil, false
+	}
+	// the pair the table would name, then the table that pair renders, which must be the one found
+	object, _ := found.(map[string]any)
+	exporters, _ := object["exporter"].(map[string]any)
+	exporter, _ := exporters[codexOtelExporterOtlpHttp].(map[string]any)
+	headers, _ := exporter["headers"].(map[string]any)
+	endpoint, _ := exporter["endpoint"].(string)
+	authorization, _ := headers["Authorization"].(string)
+	address := strings.TrimSuffix(strings.TrimPrefix(endpoint, "http://"), ingestTelemetryLogsPath)
+	_, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, nil, false
+	}
+	port, err := strconv.Atoi(portText)
+	token, bearer := strings.CutPrefix(authorization, harnessTelemetryBearerScheme)
+	if err != nil || !bearer {
+		return nil, nil, false
+	}
+	pair := &HarnessTelemetry{Version: harnessTelemetryVersion, Port: port, Token: token}
+	if pair.validate() != nil {
+		return nil, nil, false
+	}
+	want, err := harnessJsonNormal(codexEarlierOtel(pair))
+	if err != nil || !reflect.DeepEqual(found, want) {
+		return nil, nil, false
+	}
+	return tables[0], pair, true
+}
+
+// The edit removing an earlier install's exporter table, nil where content holds none: its lines, and where it ends
+// the file the blank lines before it, the line before keeping its own ending.
+func codexEarlierOtelEdit(content []byte, document *harnessTomlDocument) *harnessEdit {
+	table, _, ok := codexEarlierOtelTable(document)
+	if !ok {
+		return nil
+	}
+	start := table.start
+	if table.end == len(content) {
+		kept := len(bytes.TrimRight(content[:table.start], " \t\r\n"))
+		start = 0
+		if 0 < kept {
+			start = kept + bytes.IndexByte(content[kept:table.start], '\n') + 1
+		}
+	}
+	return &harnessEdit{start: start, end: table.end}
+}
+
+// The bearer of an earlier install's exporter table content holds, which a plan's diff never prints
+// (harnessTelemetryTokenFile).
+func (self *codexConfigFile) telemetryTokens(content []byte, maxDepth int) []string {
+	document, err := harnessParseToml(content, maxDepth)
+	if err != nil {
+		return nil
+	}
+	if _, pair, ok := codexEarlierOtelTable(document); ok {
+		return []string{pair.Token}
+	}
+	return nil
 }
 
 // The tables under keys, in order, refused where keys' table is defined any other way: a dotted key or an inline
@@ -271,6 +332,7 @@ func codexTablesEdit(content []byte, tables []*harnessTomlTable, keys []string, 
 	return &harnessEdit{start: table.start, end: table.end, text: text}, nil
 }
 
+// ur's server tables brought to the template's, then an earlier install's exporter table removed.
 func (self *codexConfigFile) nextEdit(content []byte, template *harnessTemplate, maxDepth int) (*harnessEdit, error) {
 	document, err := harnessParseToml(content, maxDepth)
 	if err != nil {
@@ -280,18 +342,18 @@ func (self *codexConfigFile) nextEdit(content []byte, template *harnessTemplate,
 	if err != nil {
 		return nil, err
 	}
-	edit, err := codexTablesEdit(content, tables, codexServerKeys, self.block(template), self.serverTemplate(template))
-	if edit != nil || err != nil || template.telemetry == nil {
-		return edit, err
-	}
-	otelTables, err := codexOwnedTables(document, codexOtelKeys)
+	server, err := self.template(template)
 	if err != nil {
 		return nil, err
 	}
-	return codexTablesEdit(content, otelTables, codexOtelKeys, self.otelBlock(template.telemetry), self.otelTemplate(template.telemetry))
+	edit, err := codexTablesEdit(content, tables, codexServerKeys, self.block(template), server)
+	if edit != nil || err != nil {
+		return edit, err
+	}
+	return codexEarlierOtelEdit(content, document), nil
 }
 
-// ur's tables as the template's shape has them; a nil template reads the server's alone.
+// ur's server tables as one object, the template's shape: otel's tables are no part of what ur installs.
 func (self *codexConfigFile) extract(content []byte, template *harnessTemplate, maxDepth int) (any, error) {
 	document, err := harnessParseToml(content, maxDepth)
 	if err != nil {
@@ -301,19 +363,7 @@ func (self *codexConfigFile) extract(content []byte, template *harnessTemplate, 
 	if err != nil {
 		return nil, err
 	}
-	server, err := codexOwnedEntries(tables, codexServerKeys)
-	if err != nil || template == nil || template.telemetry == nil {
-		return server, err
-	}
-	otelTables, err := codexOwnedTables(document, codexOtelKeys)
-	if err != nil {
-		return nil, err
-	}
-	otel, err := codexOwnedEntries(otelTables, codexOtelKeys)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"server": server, "otel": otel}, nil
+	return codexOwnedEntries(tables, codexServerKeys)
 }
 
 // Codex's config names no hook: an outward tool's approval mode is ur's own table, which the seal covers.
