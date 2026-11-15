@@ -392,8 +392,9 @@ type ForwarderArgs struct {
 	ConfigGroupId Id
 	// GET /network/config/projection with the forwarding client's token. Required.
 	Projection ConfigProjectionReader
-	// Reads the config head a base names, with the keys RepoKeyAt answers. Nil reads none: a network past its first
-	// base then never compiles, and the sink stays as its posture has it.
+	// Reads the config head a base names, with the keys RepoKeyAt answers. One that reads anchors
+	// (ConfigHeadAnchorReader) reads it at the state at that base, since each compile starts there (QD-814). Nil
+	// reads none: a network past its first base then never compiles, and the sink stays as its posture has it.
 	Heads ConfigHeadReader
 	// Nil opens no generation, so every sealed body stays pending.
 	Gkm ForwarderGkm
@@ -502,8 +503,10 @@ type Forwarder struct {
 	// when the heap ceiling first deferred the compile now wanted, zero while none is deferred
 	deferredSince time.Time
 	keyWaits      map[uint64]*forwarderKeyWait
-	// the generations the last compile waited for beside its unopened bodies
+	// the generations the last compile waited for beside its unopened bodies, and whether the head's read lacked a
+	// generation's key, which has the next compile list gkm past the generations held
 	wantedGenerations []uint64
+	headKeysWanted    bool
 	// the sink's next alarm time not yet read at
 	sinkAlarmAt    time.Time
 	bindingsLoaded bool

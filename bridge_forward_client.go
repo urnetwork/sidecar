@@ -10,6 +10,8 @@
 //	refresh      Refresh: GET /auth/refresh with F's proof, answering the new token and installing nothing; the
 //	             component keeps it in its key store first and then installs it with SetByJwt (D-CORE-8's order)
 //	poll         SyncPoll: §6.8's long-poll on F, which brings team hints where no device client receives pushes
+//	heads        ConfigHeads (bridge_heads_forward.go, off the ios_extension leg): the config head reader the Forwarder
+//	             reads each base's head through, on F's exchange for the config repo's read scope
 //
 // F's token is forward_only (§7.4): api takes it only on TEAM-M8-02's allowlist and exchanges it only for the config
 // repo's read scope, so what this client can reach is what forwarding needs. It holds no identity key and signs no
@@ -33,7 +35,8 @@ import (
 
 // What a forwarding client is built over.
 type ForwardingClientArgs struct {
-	// The network's service urls: ApiUrl, AuthUrl and GkmUrl. Validated as a SidecarApi's are.
+	// The network's service urls: ApiUrl, AuthUrl and GkmUrl, and EvsUrl for the head reader. Validated as a
+	// SidecarApi's are.
 	Settings *SidecarSettings
 	// What every request is sent through: the component's client strategy's (NewForwardingTransport), or a test's.
 	// Nil refuses every request.
@@ -51,6 +54,8 @@ type ForwardingClientArgs struct {
 type ForwardingClient struct {
 	api *SidecarApi
 	gkm *GkmApi
+	// the service urls it was built with, which the head reader reads evs's from
+	evsUrl string
 }
 
 // A forwarding client over args. Settings, a token and a ClientKey seed are required.
@@ -83,7 +88,7 @@ func NewForwardingClient(args *ForwardingClientArgs) (*ForwardingClient, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &ForwardingClient{api: api, gkm: gkm}, nil
+	return &ForwardingClient{api: api, gkm: gkm, evsUrl: args.Settings.EvsUrl}, nil
 }
 
 // The Forwarder's ConfigProjectionReader: GET /network/config/projection?after= on F.
