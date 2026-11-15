@@ -37,6 +37,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -209,8 +210,22 @@ func (self *Sidecar) signMemberRevoke(ctx context.Context, memberId Id, check Si
 	if err != nil {
 		return nil, err
 	}
-	proposal, err := act.addCounted(bridge.SignedType_SIGNED_MEMBER_REVOKE, &bridge.MemberRevoke{MemberId: memberId.Bytes()}, nil)
-	if err != nil {
+	// k > 1 goes as an AuthorityProposal this device signs as the first counted signer, the plan's reading of the log,
+	// as RevokeDevicePlan decides its own
+	revoke := &bridge.MemberRevoke{MemberId: memberId.Bytes()}
+	proposal := 1 < plan.Signatures
+	if proposal {
+		proposedBytes, err := act.proposedStatementBytes(revoke)
+		if err != nil {
+			return nil, err
+		}
+		if err := act.Add(bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, &protocol.AuthorityProposal{
+			StatementType: uint32(bridge.SignedType_SIGNED_MEMBER_REVOKE),
+			Statement:     proposedBytes,
+		}); err != nil {
+			return nil, err
+		}
+	} else if err := act.Add(bridge.SignedType_SIGNED_MEMBER_REVOKE, revoke); err != nil {
 		return nil, err
 	}
 	// the act's own reading of the log decides the check, whatever the caller expected

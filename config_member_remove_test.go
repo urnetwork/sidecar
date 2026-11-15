@@ -134,12 +134,11 @@ func TestUnsignedMemberRemovalsAreTheConfigsMembersApiDropped(t *testing.T) {
 }
 
 // An act authority that holds the test network's state, which the member's removal plans from, and says whether a
-// statement needs a proposal and whether one pends.
+// proposal pends.
 type testMemberRemoveAuthority struct {
 	*testActAuthority
 	stateLock sync.Mutex
 	state     *ConfigState
-	proposal  bool
 	pending   map[string]bool
 }
 
@@ -155,8 +154,11 @@ func (self *testMemberRemoveAuthority) setState(state *ConfigState) {
 	self.state = state
 }
 
-func (self *testMemberRemoveAuthority) ProposalRequired(statement *SidecarStatement) bool {
-	return self.proposal
+// Changes the act authority's state under its lock.
+func (self *testMemberRemoveAuthority) edit(change func()) {
+	self.testActAuthority.stateLock.Lock()
+	defer self.testActAuthority.stateLock.Unlock()
+	change()
 }
 
 func (self *testMemberRemoveAuthority) PendingProposal(proposalId []byte) *bridge.ProposalRow {
@@ -238,12 +240,12 @@ func TestSignMemberRevokePostsOneMemberRevoke(t *testing.T) {
 	}
 }
 
-// At k = 2 the act posts an AuthorityProposal of the MemberRevoke and runs no effect; a MemberRevoke of the member that
+// At k = 2, an AdminSet member's removal, the act posts an AuthorityProposal of the MemberRevoke and runs no effect; a MemberRevoke of the member that
 // lands while the proposal still pends runs none either; the entry where it completes runs them.
 func TestSignMemberRevokeAtK2WaitsForItsCompletion(t *testing.T) {
-	net, member, _, _ := newTestConfigMemberRemoveNet(t)
-	sidecar, authority, deltaApi, effects := newTestMemberRemoveSidecar(t, net)
-	authority.proposal = true
+	team := newTestConfigTeam(t)
+	member := team.adminC.memberId
+	sidecar, authority, deltaApi, effects := newTestMemberRemoveSidecar(t, team.testConfigNet)
 	ctx := context.Background()
 	revocation, err := sidecar.SignMemberRevoke(ctx, member, SidecarActConfirmed, nil)
 	if err != nil {
