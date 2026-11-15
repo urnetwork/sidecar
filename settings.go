@@ -345,6 +345,23 @@ type SidecarSearchSettings struct {
 	// What one pass of the version table's merge holds in all, its inputs' buffers counted: 1 MiB (§5.9's versions
 	// row).
 	VersionMergeByteCount int64
+	// §11.14's hourly resync of each index ref this device follows for search: 1 h (DESIGN-DETAILS 7.2.1).
+	ResyncInterval time.Duration
+	// Sync rounds at once a network: 4 on daemon hosts, 1 on app hosts and page Workers, whose hosts set it
+	// (DESIGN-DETAILS 7.2.1).
+	SyncRoundCount int
+	// A round that failed on a read is tried again after this, doubling up to ResyncInterval: 30 s (DESIGN-DETAILS
+	// 7.2.1).
+	SyncRetryInterval time.Duration
+	// The (version, chain) pairs replayed that a ref's manifest keeps, to match a coverage's pin: 64 (DESIGN-DETAILS
+	// 7.2.1, 7.2.6).
+	PinRingCount int
+	// A retained bucket lives at most this many of its windows after its roll-up: 2 (§11.14's retained row,
+	// DESIGN-DETAILS 7.2.1).
+	RetainFactor int
+	// A round a read answered collected restarts on the new head at most this many times, then waits for
+	// SyncRetryInterval: 4, a reading, since DESIGN-DETAILS 7.2.7 bounds the restarts nowhere.
+	SyncRestartCount int
 }
 
 // Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
@@ -922,6 +939,12 @@ func DefaultSidecarSettings() *SidecarSettings {
 			VersionPageByteCount:            4 * 1024,
 			VersionMergeInputCount:          16,
 			VersionMergeByteCount:           1024 * 1024,
+			ResyncInterval:                  1 * time.Hour,
+			SyncRoundCount:                  4,
+			SyncRetryInterval:               30 * time.Second,
+			PinRingCount:                    64,
+			RetainFactor:                    2,
+			SyncRestartCount:                4,
 		},
 		Directory: &SidecarDirectorySettings{
 			SessionSyncInterval:   15 * time.Minute,
