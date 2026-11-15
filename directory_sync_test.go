@@ -32,6 +32,8 @@ type testDirectoryWorld struct {
 	cards       *sidecartest.FakeDirectoryCards
 	directoryId sidecar.Id
 	readerId    sidecar.Id
+	// the network every card and repo file names
+	networkId sidecar.Id
 
 	directoryAuth    *sidecartest.FakeDirectoryAuth
 	directoryFixture *sidecartest.FakeDirectoryAuthFixture
@@ -68,6 +70,7 @@ func newTestDirectoryWorld(t *testing.T, settings *sidecartest.FakeDirectoryCard
 		cards:         sidecartest.NewFakeDirectoryCards(streams, settings),
 		directoryId:   directoryId,
 		readerId:      readerId,
+		networkId:     sidecar.NewId(),
 		directoryAuth: sidecartest.NewFakeDirectoryAuth(),
 		directoryFixture: &sidecartest.FakeDirectoryAuthFixture{
 			Sidecars: map[sidecar.Id]*sidecartest.FakeDirectorySidecar{readerId: {MemberId: &memberId}},
@@ -206,8 +209,9 @@ func (self *testDirectoryWorld) reader(sessionActive func() bool) *testDirectory
 			defer reader.stateLock.Unlock()
 			reader.alarms = append(reader.alarms, alarm)
 		},
-		Clock:    self.clock,
-		Settings: sidecar.DefaultSidecarSettings().Directory,
+		Clock:     self.clock,
+		Settings:  sidecar.DefaultSidecarSettings().Directory,
+		NetworkId: self.networkId,
 	})
 	if err != nil {
 		self.t.Fatal(err)
