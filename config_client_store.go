@@ -12,6 +12,12 @@
 // pin included. A file that does not decode keeps nothing, and the first follow reads from api with no floor but what
 // it can check.
 //
+// A joining device (QD-817) keeps its rows-only log here until a base is confirmed, so its pin holds across a restart
+// as any pin it held does. A restart that still holds no generation of the config repo restores it rows-only, as the
+// rows-only pass it was; one whose keychain took a generation meanwhile restores the entries as a full reader, every
+// head judged, or, where that fails, its first full pass reads from api held to the kept pin. A rows-only log verified
+// no head, so the file never names one as verified for it.
+//
 // Every leg. For the client's follower, under its followLock, but for restoreFromStore at construction.
 
 package sidecar
@@ -59,10 +65,14 @@ type configClientHeadRecord struct {
 	Settings         []byte `json:"settings,omitempty"`
 }
 
-// Writes what the log keeps now to authlog/. No store keeps nothing.
+// Writes what the log keeps now to authlog/, a joining device's rows-only log while no log is confirmed. No store keeps
+// nothing.
 func (self *ConfigClient) save() error {
 	store := self.args.Store
 	log := self.configLog.Load()
+	if log == nil {
+		log = self.unconfirmed.Load()
+	}
 	if store == nil || log == nil {
 		return nil
 	}
@@ -196,12 +206,35 @@ func (self *ConfigClient) restoreFromStore() error {
 	if err := proto.Unmarshal(document.Entries[0], first); err != nil {
 		return fmt.Errorf("%w: %w", errConfigClientDocument, err)
 	}
-	if first.GetN() == 1 {
+	// a joining device whose keychain holds no generation of the config repo restores its rows-only pass (QD-817)
+	rowsOnly := false
+	configRepoId := Id{}
+	if self.args.Joiner != nil {
+		genesis, err := configParseGenesis(document.SignedGenesis)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errConfigClientDocument, err)
+		}
+		self.genesis.CompareAndSwap(nil, genesis)
+		if configRepoId, err = IdFromBytes(genesis.GetConfigRepoId()); err != nil {
+			return fmt.Errorf("%w: %w", errConfigClientDocument, err)
+		}
+		held, _ := self.args.Joiner.RepoKeyHeld(configRepoId)
+		rowsOnly = !held
+	}
+	switch {
+	case first.GetN() == 1 && rowsOnly:
+		log, err = NewConfigLogRowsOnly(self.logSettings, document.SignedGenesis)
+		if err == nil {
+			_, err = log.ApplyRun(document.Entries, source)
+		}
+	case first.GetN() == 1:
 		log, err = NewConfigLog(self.logSettings, document.SignedGenesis)
 		if err == nil {
 			_, err = log.ApplyRun(document.Entries, source)
 		}
-	} else {
+	case rowsOnly:
+		log, err = RestoreConfigLogRowsOnly(self.logSettings, retained, source, nil)
+	default:
 		log, err = restoreConfigLogAbove(self.logSettings, retained, source, nil)
 	}
 	if err != nil {
@@ -210,6 +243,12 @@ func (self *ConfigClient) restoreFromStore() error {
 	}
 	if err := log.checkFloor(self.floorPin()); err != nil {
 		return err
+	}
+	if rowsOnly {
+		// nothing is confirmed by it: the key client takes its state for the config group's join alone
+		self.unconfirmed.Store(log)
+		self.args.Joiner.AuthUnconfirmed(log.State(), configRepoId)
+		return nil
 	}
 	if base := log.State().Base(); base != nil {
 		self.startBase = base.GetVersion()
