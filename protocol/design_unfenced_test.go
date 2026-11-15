@@ -996,6 +996,12 @@ var testFenceAdditions = []struct {
 	field    testFenceField
 	question string
 }{
+	// QD-159: the certificate a version-2 entry's subkey signature checks under rides inside the sealed body
+	{
+		message:  "AgentSignedBody",
+		field:    testFenceField{name: "agent_cert", number: 5, typeName: "bytes"},
+		question: "plan-CORE-agent-revoke",
+	},
 	{
 		message:  "EvsPush",
 		field:    testFenceField{name: "consumed_through", number: 35, typeName: "uint64"},

@@ -334,6 +334,8 @@ message InventoryAgent {
 }
 message AgentSignedBody {                   // the sealed plaintext of RecordEntry.version 2 (M6; section 5.3)
   bytes body = 1; bytes agent_id = 2; bytes key_id = 3; bytes signature = 4;
+  bytes agent_cert = 5;                     // QD-159: the Signed AgentCert the subkey's signature checks under, by
+                                            // the writing sidecar's identity key; absent, the agent reads agent_asserted
 }
 message Opening {                           // an entry with what opens it
   bytes header = 1;                         // RecordEntry.header, the whole Signed, as stored

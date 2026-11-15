@@ -280,6 +280,8 @@ type testRecordDevice struct {
 	spool     *testRecordSpool
 	tap       *testRecordStreamsTap
 	settings  *sidecar.SidecarRecordSettings
+	// Sidecar.SignProvenance's stand-in, nil for a device with no agent subkeys (record_agent_body_test.go)
+	signProvenance sidecar.RecordAgentSignFunction
 
 	stateLock sync.Mutex
 	locked    bool
@@ -384,8 +386,9 @@ func (self *testRecordDevice) open() *sidecar.SidecarRecord {
 			defer self.stateLock.Unlock()
 			self.alarms = append(self.alarms, alarm)
 		},
-		Clock:    self.world.clock,
-		Settings: self.settings,
+		Clock:          self.world.clock,
+		Settings:       self.settings,
+		SignProvenance: self.signProvenance,
 	})
 	if err != nil {
 		self.t.Fatal(err)
