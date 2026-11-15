@@ -9,7 +9,7 @@ This section assembles §1-§23 into one picture: a component map, the repo grap
 | id | requirement | source |
 |---|---|---|
 | R-ARCH-1 | Component map, repo graph, planes, topologies and flows, citing owners; contradictions recorded; nothing new | OUTLINE §3 |
-| R-ARCH-2 | sidecar imports only connect; server and sdk import sidecar; new pieces live in sidecar | PLAN.md:5-7; owner rule 1 |
+| R-ARCH-2 | Of first-party modules sidecar imports only connect and operator-core, never server or sdk; server and sdk import sidecar; new pieces live in sidecar | PLAN.md:5-7; owner rule 1; owner decision 251 |
 | R-ARCH-3 | Storage, the TLS edge and mail see only ciphertext plus small header values, except mail to URnetwork at `rpt.bringyour.com`'s report and role-mail listener | CONVENTIONS §0; D-TRUST-4 |
 | R-ARCH-4 | Apps use the sidecar directly; the extension runs it as a web worker | PLAN.md:28 |
 | R-ARCH-5 | Flows and their scenarios show only the owner's decisions, and an open question's recommendation only marked proposed | owner decision record (front matter); D-PHASE-2 |
@@ -55,10 +55,15 @@ harness --stdio--> ur relay          api: enroll, token exchange, /sidecar/*, pu
 ### 3.5 Repo graph and planes
 
 ```text
-sidecar ---------> connect                (only import; §4 D-REPO-1, D-REPO-4)
+sidecar ---------> operator-core, connect (its only first-party imports; §4 D-REPO-1, D-REPO-4;
+                                          owner decision 251)
+operator-core ---> connect                (the core services' interfaces, rooted at Env, and the shared
+                                          value types, server.Id moved among them; §4.4, §4.5)
 sdk -------------> sidecar root, protocol; its forwarding files only sidecar/device, protocol/bridge
                                           and the root's forwarding files (§18.10, D-SDK-20)
-server ----------> sidecar root, sidecar/<svc>service engines, sdk, connect (owner decisions 19, 104)
+server ----------> sidecar root, sidecar/<svc>service engines, operator-core, sdk, connect; server/core
+                                          implements operator-core's Env for the engines
+                                          (owner decisions 19, 104, 251)
 apps, extension -> sdk bindings           (§18 D-SDK-2)
 warp, config, vault, build, minio: no Go import (§19; owner decision 195)
 connect: X9 rows per owner decisions 22, 85, 86, 176 (§4.6)

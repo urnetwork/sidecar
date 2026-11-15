@@ -2,14 +2,14 @@
 
 ### 4.1 Purpose and scope
 
-This section decides where code lives and how it is built, branched, versioned, published and shipped, including X9's connect changes and the checkout's documents. Components are §5-§18, deployment §19, tests §22, milestones §23.
+This section decides where code lives and how it is built, branched, versioned, published and shipped, including X9's connect changes, operator-core's host contract (owner decision 251) and the checkout's documents. Components are §5-§18, deployment §19, tests §22, milestones §23.
 
 ### 4.2 Requirements
 
 | id | requirement | source |
 |---|---|---|
 | R-REPO-1 | CLI and components in sidecar; services, team management and access control in server; sdk exposes the components | PLAN.md:5 |
-| R-REPO-2 | sidecar imports connect only; server and sdk import sidecar | PLAN.md:7 |
+| R-REPO-2 | Of first-party modules sidecar imports only connect and operator-core, never server or sdk; server and sdk import sidecar | PLAN.md:7; owner decision 251 |
 | R-REPO-3 | go.mod, sidecar.go, protocol/, mcp/, cli/main.go; service code in the root | PLAN.md:9-21 |
 | R-REPO-4 | New pieces, MLS included, in sidecar; all work on `sidecar` branches | owner rules 1, 4 |
 | R-REPO-5 | No parent package imports a child; commits carry no AI attribution | connect/CODESTYLE.md:24-47, 80-83 |
@@ -19,7 +19,7 @@ This section decides where code lives and how it is built, branched, versioned, 
 
 ### 4.3 What exists today
 
-- **Repos** (`gh repo view`, `git log`, 2026-11-05). sidecar holds two `main` commits and no code: `2b5b0ab` (2026-11-03, 119 documents) and `708bb45` (2026-11-05, the design checkpoint: the business documents moved under `design/` as renames, so their history follows, and DESIGN.md, its reviews, README.md with its images, the research sheets and the search-index report and notes added). INTERNAL and unlicensed before owner decision 118's flip, it is now PUBLIC, its README stating MPL-2.0, whose full text is the first `sidecar` commit (4.9); connect, sdk, server, sn (`urfoundation/sn`), build, warp and extension are PUBLIC too, config, vault and xops PRIVATE, mmm INTERNAL. None has a `sidecar` branch.
+- **Repos** (`gh repo view`, `git log`, 2026-11-05). sidecar holds two `main` commits and no code: `2b5b0ab` (2026-11-03, 119 documents) and `708bb45` (2026-11-05, the design checkpoint: the business documents moved under `design/` as renames, so their history follows, and DESIGN.md, its reviews, README.md with its images, the research sheets and the search-index report and notes added). INTERNAL and unlicensed before owner decision 118's flip, it is now PUBLIC, its README stating MPL-2.0, whose full text is the first `sidecar` commit (4.9); connect, sdk, server, sn (`urfoundation/sn`), build, warp and extension are PUBLIC too, config, vault and xops PRIVATE, mmm INTERNAL. None has a `sidecar` branch. operator-core (`github.com/urnetwork/operator-core`), which the owner created on 2026-11-15 for owner decision 251, holds no code yet.
 - **Replaces and pins.** Replaces are not inherited, so server, sn and four sdk modules repeat them (server/go.mod:213-236; sn/go.mod:205-223; sdk/go.mod:107-115). server's lock pins complete commits of nine clean siblings on one `go` line (server/local/source-graph/source_graph_test.go:90, 113-143, 200-235); build pins its submodules as gitlinks (build/.gitmodules).
 - **Release, hooks, CI:** `yyyy.m.d-code` versions (build/all/run.sh:1186-1195). connect and sdk declare unversioned modules (connect/go.mod:1; sdk/go.mod:1), which consumers require at v0.0.0 beside sibling replaces (server/go.mod:48, 213), and the release rewrites each to `/v2026` on a version branch (4.9). An unclassified service exits 64 (build/all/deploy-rollout.zsh:37-39). All touched repos but sidecar, config and vault share one commit-msg hook. With no hosted CI, policy lives in Go tests, a leg per shipped build (sdk/dependency_boundary_test.go:81-92).
 
@@ -37,7 +37,7 @@ sidecar/            github.com/urnetwork/sidecar, package sidecar
   identity_ keys_ state_ daemon_ api_   core
   indexer_                              an indexer's services: schedule, fallbacks, status (§3.6)
   envelope_ rpc_ stream_ push_ codec_   subprotocol (type Subprotocol, §6)
-  host_                                 engine host interfaces (ServiceHost)
+  host_                                 engine host interfaces (ServiceHost), aliasing operator-core's (4.5)
   acl_ socket_ mls_ gkm_ evs_ dns_ tls_ smtp_ mail_ bridge_ record_ directory_ search_   client and shared;
                                         search_remote_*.go is remote search (§11.14), evs_drop_*.go the
                                         drop-history client (§11.7)
@@ -60,21 +60,35 @@ sidecar/            github.com/urnetwork/sidecar, package sidecar
   mcp/              stdio MCP server
   cli/              nested module github.com/urnetwork/sidecar/cli: ur, also run as git-remote-ur (4.10);
                     requires the root and smtpproof
-  sidecartest/      fakes, store conformance suites
+  sidecartest/      the in-process harness (§22.4); fakes and store conformance suites, until they move to
+                    operator-core/coretest (4.18)
   testdata/         MLS vectors, transcripts, golden encodings
   mlsinterop/       nested test module of differential peers: tmc/mls and thomas-vilte/mls-go v1.6.0
                     (both MIT) and the mlswg interop client (§10.4); go-git, the git codec oracle (§22.6)
   smtpproof/        nested module: the X7 BDAT and DATA provers and the verifier (§14; owner decision 125),
                     which cli/ and server inject through root interfaces; the root never requires it
+
+operator-core/      github.com/urnetwork/operator-core, package operator, its own repository
+                    (owner decision 251): the core services' interfaces and the value types server and
+                    sidecar share, no service implementation; imports connect, never sidecar, server or sdk
+  go.mod LICENSE
+  env.go            Env, the root factory of every service an extension holds (4.5)
+  *.go              ServiceHost's interfaces, the db, the domain interfaces for server-owned data (networks,
+                    clients, accounts), Engine, HttpEngine, StreamEngine and Extension; the value types moved
+                    from server: Id (type Id connect.Id, with server.Id's marshalling), ByteCount, NanoCents,
+                    the blob object records and the sentinel errors
+  coretest/         nested module github.com/urnetwork/operator-core/coretest: in-memory fakes of those
+                    interfaces and their conformance suites, which only test legs import
 ```
 
-- Of this module's packages, the root imports only `protocol` and `protocol/bridge`, std-and-protobuf packages, as connect's root imports `connect/protocol` (Q-REPO-3). `protocol` imports `protocol/bridge`, never the reverse, so a type both use is declared only in `protocol/bridge` (4.9). The root never imports `device/`: `cli/` (`ur tun`, `ur bridge`) and sdk's `DeviceLocal` wire `device.Bridge` to the root's `BridgeState`, so Apple's network extensions, the `ios_extension` leg, link of the root only §18.10's forwarding files and of `protocol` only its config, acl, evs and gkm descriptors (D-SDK-20; owner decision 197).
-- **Build tags.** Desktop-only code (the OS tun, §17.10; installers; the macOS keychain, §5.10) lives in `cli/` or carries `!ios && !android && !sdk_mobile_bind`. Package connect links gVisor into every importer through its untagged tun.go (connect/tun.go:38-47), so root files that use package connect (client generations and `SidecarEnv`, `Subprotocol` and streams, remote search, sockets dial and listen, the bridge, tls and smtp listeners) carry `!sidecar_http`, as do the engine host interfaces (`host_*.go`), since no hosted server engine runs in the page Worker, whose search engine needs none. The rest, §5.4's events, actions, binding and `Sign` included, uses the root's own `Id` ([16]byte), `Logger`, `MonitorValue` and `CallbackList`, and reaches api through the net/http `SidecarApi` (bearer plus DPoP signer), in both legs; connect-facing files convert at that boundary, and §4.7 fails the `sidecar_http` leg on any connect or gVisor package (§18.10).
+- Of this module's packages, the root imports only `protocol` and `protocol/bridge`, std-and-protobuf packages, as connect's root imports `connect/protocol` (Q-REPO-3). `protocol` imports `protocol/bridge`, never the reverse, so a type both use is declared only in `protocol/bridge` (4.9). The root never imports `device/`: `cli/` (`ur tun`, `ur bridge`) and sdk's `DeviceLocal` wire `device.Bridge` to the root's `BridgeState`, so Apple's network extensions, the `ios_extension` leg, link of the root only §18.10's forwarding files and of `protocol` only its config, acl, evs and gkm descriptors (D-SDK-20; owner decision 197). Beyond this repository the root's first-party imports are connect and operator-core's `operator` package, which imports connect (owner decision 251).
+- **Build tags.** Desktop-only code (the OS tun, §17.10; installers; the macOS keychain, §5.10) lives in `cli/` or carries `!ios && !android && !sdk_mobile_bind`. Package connect links gVisor into every importer through its untagged tun.go (connect/tun.go:38-47), so root files that use package connect (client generations and `SidecarEnv`, `Subprotocol` and streams, remote search, sockets dial and listen, the bridge, tls and smtp listeners) carry `!sidecar_http`, as do the engine host interfaces (`host_*.go`), since no hosted server engine runs in the page Worker, whose search engine needs none. The rest, §5.4's events, actions, binding and `Sign` included, uses the root's `Id`, `Logger`, `MonitorValue` and `CallbackList`, and reaches api through the net/http `SidecarApi` (bearer plus DPoP signer), in both legs; connect-facing files convert at that boundary. The root's `Id` is an alias of operator-core's (4.5), which imports connect, so the `sidecar_http` leg links connect and gVisor through it, connect compiling for js/wasm, and the `ios_extension` leg links operator-core beside the connect it links through `device/`; §4.7 fails a root file of the `sidecar_http` leg that imports connect itself (§18.10). Both legs are re-measured once the seam lands (4.18), and the owner revisits D-SDK-19's goal with its miss rule's sdk.wasm gate, and §18.10's 6 MiB extension budget (owner decision 215), with those measurements (owner decision 251).
 
 ### 4.5 Placement and the sidecar/server split
 
 | Component | sidecar | server and other repos |
 |---|---|---|
+| Host contract (owner decision 251) | the `<svc>service` engines and any `Sidecar` core a server process runs take an `Env`; sidecar's stores, over the db it grants | operator-core: the interfaces and shared value types, fakes in `coretest`; server/core implements the `Env` |
 | Core, subprotocol, MCP, `ur` (§5, §6, §16) | root, protocol/, mcp/, cli/ | api routes (§5, §7) |
 | Push (§6.8, §18.7; owner decisions 17, 88, 104) | `push_`; `pushservice`: publishers, long-poll, wake sender | connect residents, api, taskworker, respectively |
 | Access control (§8; owner decisions 3, 5, 6) | `acl_`: parser and compiler, run by each device for itself and by the writer of each config head for `AclRows`; gates use only the `AclRows` evaluator | the signed id-only projection: storage, routes, gates |
@@ -88,36 +102,57 @@ sidecar/            github.com/urnetwork/sidecar, package sidecar
 | mail, mxedge (§15) | `mail_`, `mxedgeservice` | server/cli/mxedge |
 | bridge (§17) | `bridge_` (the compiler builds `BridgeState`, in the daemon or an app's VPN component); `device/` (the forwarding role's packet side); `protocol/bridge` | sdk DeviceLocal imports `device/` (sdk/device_local.go:5707, 5800); connect C5, C18 |
 
+The host contract is operator-core's `Env` (operator-core/env.go), the root factory of every service an extension uses (owner decision 251). An extension holds service instances that an `Env` creates, never a package-level service function or global service state, unlike server's own shared-namespace functions (`server.Db`, `server.Tx`, its Redis and blob helpers), on purpose. server/core implements it, wrapping server's existing services, those functions and the sidecarhost, evshost, dnshost, mxedgehost and quotahost packages, and passes it to sidecar's server-hosted code, the `<svc>service` engines and any `Sidecar` core a server process runs, which take the `Env` or the instances they need. Device-side code (`ur daemon`, the apps, their VPN components) takes no `Env` and keeps its own settings and local stores.
+
 ```go
-// host_service.go: supplied by the hosting process; engines never import server, so go-redis,
-// minio-go and prometheus stay out of sidecar.
-type ServiceHost struct {
-	Authenticator Authenticator       // jwt -> Principal (server/session)
-	Quota         Quota               // reserve, commit, release (§20)
-	Metrics       Metrics             // prometheus in server
-	Tasks         Tasks               // once-keyed jobs (taskworker)
-	Redis         Redis               // cas, incr, scripts, TTLs, hash-tagged keys; evs and gkm keep only soft state
-	                                  // they rebuild there (owner decision 136); keyspace events only via the shared
-	                                  // subscriber, never per client, the pattern that melted the cluster on
-	                                  // 2026-07-15 (server/model/peer_model.go:32-37)
-	Blobs         BlobStore           // the segment bucket and each metadata cluster's bucket, by cluster id, the
-	                                  // first holding place/ (owner decision 145): If-Match and If-None-Match
-	                                  // puts, streamed put, ranged get, prefix list, delete (X13)
-	Push          Push                // server to client (X8)
-	ServiceClient ServiceClientSource // jwt and urls for the engine's connect client
+// operator-core/env.go, package operator: what a hosting process supplies. Engines never import server, so
+// go-redis, minio-go, pgx and prometheus stay out of sidecar and operator-core.
+type Env interface { // each accessor answers its service or a typed not-granted error, never a nil
+	Db() (Db, error)                             // granted only where the process allows: evs and gkm get none
+	Redis() (Redis, error)                       // cas, incr, scripts, TTLs, hash-tagged keys; evs and gkm keep
+	                                             // only soft state they rebuild there (owner decision 136);
+	                                             // keyspace events only via the shared subscriber, never per
+	                                             // client, the pattern that melted the cluster on 2026-07-15
+	                                             // (server/model/peer_model.go:32-37)
+	Blobs() (BlobStore, error)                   // the segment bucket and each metadata cluster's bucket, by
+	                                             // cluster id, the first holding place/ (owner decision 145):
+	                                             // If-Match and If-None-Match puts, streamed put, ranged get,
+	                                             // prefix list, delete (X13)
+	Authenticator() (Authenticator, error)       // jwt -> Principal (server/session)
+	Quota() (Quota, error)                       // reserve, commit, release (§20)
+	Metrics() (Metrics, error)                   // prometheus in server
+	Tasks() (Tasks, error)                       // once-keyed jobs (taskworker)
+	Push() (Push, error)                         // server to client (X8)
+	ServiceClient() (ServiceClientSource, error) // jwt and urls for the engine's connect client
+	// and ServiceHost's other members, Clock, ClockCheck (§19.6), Gates (§19.11), Budget (§11.13's write
+	// budget) and Abuse (§21.7), beside the domain interfaces through which server-owned data (networks,
+	// clients, accounts) reaches an extension
 }
 
-// Each engine that a server/cli/<svc> hosts; server wraps it with readiness, /status, stats and
-// PROXY-unwrapped listeners. pushservice's types run inside existing services instead.
+// What each engine a server/cli/<svc> hosts hands back. The host wraps it with readiness, /status, stats and
+// PROXY-unwrapped listeners and serves the shape it is handed, never asking by type assertion; pushservice's
+// types run inside existing services instead. An engine package states its shape, as
+// var _ operator.HttpEngine = (*EvsEngine)(nil); smtpedge, which listens on nothing (§14.9), is an Engine.
 type Engine interface {
-	Handler() http.Handler // or Serve(net.Listener) for stream engines
-	Ready() bool
-	Drain()
+	Ready() bool // its stores reachable and its state loaded, §19.4's ready column
+	Drain()      // takes no new work; returns once work in flight ends or its own bound passes
 	Close()
+}
+type HttpEngine interface {
+	Engine
+	Handler() http.Handler // one handler for every route of the service
+}
+type StreamEngine interface { // tlsedge, mxedge
+	Engine
+	Serve(listener net.Listener) error // once per listener, each on its own goroutine
 }
 ```
 
-evs and gkm keep durable state only in `Blobs` (owner decisions 2, 19, 21): a repo's metadata objects and its gkm group's live on the metadata cluster that the repo's create-only `place/<repo_id>` on the first cluster names, which the engines resolve and cache (owner decision 145; §11.8). Other engines take a store (`SmtpEdgeStore`, …) that server/model implements beside the migrations.
+Each process grants the db only where its role allows. evs and gkm get none and keep durable state only in `Blobs` (owner decisions 2, 19, 21): a repo's metadata objects and its gkm group's live on the metadata cluster that the repo's create-only `place/<repo_id>` on the first cluster names, which the engines resolve and cache (owner decision 145; §11.8). The db mirrors server's helpers (server/db.go) as instance methods: callback-style `Db` and `Tx` whose implementation owns retries (serialization failures, lock timeouts), the isolation and read-before-begin options, `Query`, `Exec` and `Batch`, `Rows` that scan into standard types and `Id`, named args and temp tables, all in operator-core's own types with no pgx type; server/core adapts server's pgx helpers to it. Sidecar owns its SQL: its stores (`SmtpEdgeStore`, …) live in sidecar over the granted db and touch only sidecar's own tables, server's T3 harness testing them over server/core's db (§22.4); server-owned data reaches them through operator-core's domain interfaces; and sidecar's operator-core `Extension`, its migrations and its engines' constructors over an `Env`, is what server/core iterates, running the migrations, so hosting another extension is one import and one registration.
+
+operator-core's `Id` is server.Id moved: `type Id connect.Id`, with server.Id's database/sql, JSON and Hash marshalling and its parsing, formatting and comparison delegating to connect. Its pgx codec stays in server/core; `server.Id` and the root's `Id` alias it, the root's on every leg (4.4); the generators stay where they are, server's `NewId` over `connect.NewId` and the root's on crypto/rand. The other value types server shared move with it (`ByteCount`, `NanoCents`, the blob object records, the sentinel errors); server-internal types stay in server.
+
+Until the build's review phase moves the call sites (4.18), sidecar and server keep Go type aliases of the moved types and sidecar keeps `ServiceHost`, so other sections' `ServiceHost.<member>` names stay valid, each naming the `Env` accessor of that name, and sidecar's stores and migrations stay in server, which implements them over Postgres.
 
 ### 4.6 Connect changes (X9)
 
@@ -153,6 +188,7 @@ module github.com/urnetwork/sidecar
 go 1.27.4
 tool google.golang.org/protobuf/cmd/protoc-gen-go
 replace github.com/urnetwork/connect => ../connect
+replace github.com/urnetwork/operator-core => ../operator-core
 replace github.com/pion/sctp => ../connect/sctp
 replace github.com/urnetwork/glog => ../glog
 replace gvisor.dev/gvisor => ../gvisor
@@ -167,26 +203,33 @@ development (every sidecar branch and main)
   sidecar/smtpproof/go.mod  module github.com/urnetwork/sidecar/smtpproof   provers and the verifier, which
                                                                        server injects into smtpedgeservice
   sidecar/mlsinterop/go.mod test-only differential peers
+  operator-core/go.mod      module github.com/urnetwork/operator-core  its own repository (owner decision 251):
+                                                                       the host contract; requires connect
+  operator-core/coretest/go.mod  .../operator-core/coretest            fakes and conformance suites; test
+                                                                       legs only
   replaces   a nested module repeats the root's sibling replaces one level up, plus this repository's own
-  consumers  require v0.0.0 with ../sidecar (server also ../sidecar/smtpproof), as for connect
+  consumers  require v0.0.0 with ../sidecar (server also ../sidecar/smtpproof), as for connect, and
+             operator-core v0.0.0 with ../operator-core, which sidecar's root brings into every consumer's
+             module graph
 ```
 
-- **Imports:** besides this repository's modules, connect and its replaced forks are the only first-party modules a sidecar module requires, never proxy or the userwireguard it requires (proxy/go.mod:9-10), so `ur proxy add` (cli/UI.md:39-41) runs in `cli/` on §17's userspace `connect.Tun`.
-- **Third-party:** `dependencies.yml` lists each module with SPDX id, reason and leg (client, engine, cli, test). Allowed: MIT, BSD-2/3-Clause, Apache-2.0, ISC, MPL-2.0; refused: GPL family, SSPL, BUSL, custom, unlicensed. Initial: protobuf v1.36.11, x/crypto, docopt-go, pires/go-proxyproto, go-sdk v1.7.0 for mcp/ and go-winio v0.6.2 for §5.8's pipe (server/go.mod:30, 67), purego v0.11.2 for the macOS Keychain (Apache-2.0), wireguard's tun (MIT) for `cli/`'s OS tun (§17.10); in the test leg, `mlsinterop/`'s peers [R:ext-storage-crypto].
+- **Imports:** besides this repository's modules, connect with its replaced forks and operator-core are the only first-party modules a sidecar module requires (owner decision 251), operator-core/coretest only in the test leg; never proxy or the userwireguard it requires (proxy/go.mod:9-10), so `ur proxy add` (cli/UI.md:39-41) runs in `cli/` on §17's userspace `connect.Tun`.
+- **Third-party:** `dependencies.yml` lists each module with SPDX id, reason and leg (client, engine, cli, test), operator-core's on every leg and operator-core/coretest's on the test leg alone. Allowed: MIT, BSD-2/3-Clause, Apache-2.0, ISC, MPL-2.0; refused: GPL family, SSPL, BUSL, custom, unlicensed. Initial: protobuf v1.36.11, x/crypto, docopt-go, pires/go-proxyproto, go-sdk v1.7.0 for mcp/ and go-winio v0.6.2 for §5.8's pipe (server/go.mod:30, 67), purego v0.11.2 for the macOS Keychain (Apache-2.0), wireguard's tun (MIT) for `cli/`'s OS tun (§17.10); in the test leg, `mlsinterop/`'s peers [R:ext-storage-crypto].
 - **Versions:** shared modules match connect, sdk and server, because an uncoordinated bump fails server's `-mod=readonly` build (server/README.md:12); protobuf follows §18.10; golang.org/x/text follows §11.14's normalizer 1: one module version on every leg, at least server's and sn's v0.43.0 (server/go.mod:59; sn/go.mod:191), so connect and sdk bump together from v0.40.0 (connect/go.mod:33, sdk/go.mod:97) and gomobile's v0.41.0 (sdk/build/go.mod:96), whose NFC wrongly composes 19,960 two-rune strings (every two-rune string checked under go1.27.3, 2026-11-05), U+05D2 U+0307 into U+105C9 and U+10044 U+0307 into U+1E0A among them, which v0.43.0 normalizes correctly under the same reported Unicode version, 17.0.0 (v0.40.0 and v0.41.0 key recomposition on runes clipped to 16 bits, .gomodcache/golang.org/x/text@v0.40.0/unicode/norm/forminfo.go:217).
 - **`make check`** (Go tests, also at release):
 
 ```text
 fails on
-  deps      server, sdk, sn or an unlisted module in a leg's go list -deps; the root module requiring any module
-            of this repository; from M10, a leg selecting a golang.org/x/text other than normalizer 1's
-            (Versions, above)
+  deps      server, sdk, sn or an unlisted module in a leg's go list -deps; operator-core/coretest on a leg
+            but the test leg (owner decision 251); the root module requiring any module of this repository;
+            from M10, a leg selecting a golang.org/x/text other than normalizer 1's (Versions, above)
   layering  the root importing a package of this module other than protocol and protocol/bridge; protocol
             importing beyond std, protobuf and protocol/bridge, or protocol/bridge beyond std and protobuf; a
             client package importing a <svc>service
   legs      the ios_extension leg's root files leaving §18.10's forwarding list, or its protocol descriptors
-            beyond that list's (owner decision 197); the sidecar_http js leg's deps including any connect or
-            gVisor package (from M1); net/rpc or template packages on ios, android or js
+            beyond that list's (owner decision 197); a root file of the sidecar_http js leg importing a connect
+            package (from M1), the leg linking connect only through operator-core's Id (owner decision 251);
+            net/rpc or template packages on ios, android or js
   cgo       CgoFiles, except keychain_darwin.go in §5.10's darwin fallback leg
   hygiene   replaces other than 4.7's; registry conflicts; stale generated code; a release leg built with
             sidecar_testhooks (§22.4); govulncheck findings
@@ -195,13 +238,13 @@ legs        sdk's (sdk/dependency_boundary_test.go:81-92), gomobile's CGO_ENABLE
             root and protocol, which §18.10's main imports); the CLI's six release targets, from cli/
 ```
 
-- **Consumers:** server, sn (sn/go.mod:207) and four sdk modules add the require and replace above, server also for `smtpproof`; lock.yml, a pinned entry (source_graph_test.go:145-151) and `./cli/<svc>` (service_compile_test.go:13); build/.gitmodules, a `sidecar` submodule; run.sh, 4.9's release step after connect's and before sdk's, and `warpctl build` per service (:3398-3477); deploy-rollout.zsh, a class per service (:23-40).
+- **Consumers:** server, sn (sn/go.mod:207) and four sdk modules add the require and replace above, server also for `smtpproof`, and operator-core's beside them, since a replace is not inherited (owner decision 251); lock.yml, a pinned entry for sidecar and one for operator-core (source_graph_test.go:145-151) and `./cli/<svc>` (service_compile_test.go:13); build/.gitmodules, a `sidecar` and an `operator-core` submodule; run.sh, 4.9's release steps, operator-core's after connect's and sidecar's after it and before sdk's, and `warpctl build` per service (:3398-3477); deploy-rollout.zsh, a class per service (:23-40).
 
 ### 4.8 Branches and cross-repo pinning
 
-- **Branches.** Every repo the work touches gets a `sidecar` branch at M0 (§23.4; owner decision 196), on its normal remote, public where the repo is (owner decision 118); the extension and apps only if the owner opts in. `urnetwork/minio`, the new fork that holds D-OPS-20's build, is a sibling checkout with its own `sidecar` branch, and the owner creates its GitHub repo before any push (owner decision 195). `main` stays production-ready (build/README.md:5).
-- **Pins.** server@sidecar's lock and build@sidecar's submodules pin the same `sidecar` commits, which server's source-graph tests confirm.
-- **Merge, never rebase.** A rebase orphans pinned commits and skips the commit-msg hook (connect/.githooks/commit-msg:17-18). Merge `main` in weekly and before each gate, in the order connect, sidecar, sdk, sn, server, warp/config/vault/xops/mmm, build, re-pinning each time.
+- **Branches.** Every repo the work touches gets a `sidecar` branch at M0 (§23.4; owner decision 196), on its normal remote, public where the repo is (owner decision 118); the extension and apps only if the owner opts in. `urnetwork/minio`, the new fork that holds D-OPS-20's build, is a sibling checkout with its own `sidecar` branch, and the owner creates its GitHub repo before any push (owner decision 195). operator-core, whose GitHub repo the owner created, is a sibling checkout too, its `sidecar` branch opened with the seam (owner decision 251). `main` stays production-ready (build/README.md:5).
+- **Pins.** server@sidecar's lock and build@sidecar's submodules pin the same `sidecar` commits of sidecar and operator-core, which server's source-graph tests confirm.
+- **Merge, never rebase.** A rebase orphans pinned commits and skips the commit-msg hook (connect/.githooks/commit-msg:17-18). Merge `main` in weekly and before each gate, in the order connect, operator-core, sidecar, sdk, sn, server, warp/config/vault/xops/mmm, build, re-pinning each time.
 - **To `main`** at each milestone's Gn-out (§23.8): every touched repo, server and sdk included, in that order, once the pinned set passes its checks, migrations are additive and release-compatible (connect/CODESTYLE.md:85-89), connect's default-off changes lead and the code is dark (D-OPS-10). Branch migrations stay pending until their own Gn-out registers them (D-OPS-6), so one track's merge never applies the other track's group, and M3's pilot runs on production (owner decision 118; §23.9).
 
 ### 4.9 Generation, targets, versions, license, style
@@ -212,6 +255,8 @@ legs        sdk's (sdk/dependency_boundary_test.go:81-92), gomobile's CGO_ENABLE
 
 ```text
 branch     v<version> in each repo (:1302)
+operator-core  its own repository's step, after connect's and before sidecar's, rewritten to
+           .../operator-core/v2026 and tagged as connect is, coretest with it (owner decision 251)
 root       go mod edit -module .../sidecar/v2026 (:1540-1543); quoted import paths in Go files and Makefiles
            rewritten (:1560-1566); the tree moved into v2026/, nested modules left in place (go_mod_fork,
            :1639-1683); tag v2026.M.D-<code> (:1781-1786)
@@ -223,13 +268,14 @@ version    the release sed fills Version, as for sdk (sdk/sdk.go:737; :1964)
 generated  .pb.go files are committed, never regenerated on the release branch; descriptors keep
            protocol/<name>.proto and protocol/bridge/<name>.proto, so one module identity registers each
            descriptor once
-fixture    the tags served through GOPROXY=file:// with GOWORK=off, an empty module cache and no replaces:
+fixture    the tags, operator-core's among them, served through GOPROXY=file:// with GOWORK=off, an empty
+           module cache and no replaces:
            root, protocol and an engine package import at the tag, ur builds from cli/, go list -m all shows
            one sidecar path, each descriptor registers once, and sdk's go mod graph holds no smtpproof or
            prover dependency
 ```
 
-- **License and style.** The full MPL-2.0 text, copyright 2026 BringYour, Inc., is the first `sidecar` commit and reaches `main` at M0's Gn-out; GitHub reads connect's abbreviated notice (connect/LICENSE:1-3) as "Other". CODESTYLE.md adopts connect's plus the leaf, host and dependency rules; `.githooks/commit-msg` is copied byte for byte into sidecar, config, vault and minio before their first `sidecar` commit.
+- **License and style.** The full MPL-2.0 text, copyright 2026 BringYour, Inc., is the first `sidecar` commit and reaches `main` at M0's Gn-out; GitHub reads connect's abbreviated notice (connect/LICENSE:1-3) as "Other". operator-core carries the same license and copyright (owner decision 251). CODESTYLE.md adopts connect's plus the leaf, host and dependency rules; `.githooks/commit-msg` is copied byte for byte into sidecar, config, vault and minio before their first `sidecar` commit.
 
 ### 4.10 CLI distribution
 
@@ -255,6 +301,9 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 | Scrub, then publish a filtered clone (D-REPO-8 as drafted) | Business material stays private | A second repository, a rewrite and a path allowlist | Rejected (owner decision 117) |
 | `/v2026` in development paths | One identity in every build | Breaks connect's and sdk's convention and consumers' v0.0.0 requires; the rewrite already publishes `/v2026` | Rejected (D-REPO-1) |
 | `cli/` in the root module | One module | The root requires `smtpproof`, whose requirements then enter every consumer's graph, sdk's legs included | Rejected (D-REPO-2; owner decision 104) |
+| Host interfaces declared in sidecar (`ServiceHost`), each engine's store implemented by server | No new repository | Sidecar's SQL and migrations live in server; each extension declares a host of its own | Rejected (D-REPO-3; owner decision 251) |
+| The root keeps its own `Id` on every leg, operator-core's converting to it | The page Worker links no connect package | Two id types at every boundary between sidecar, operator-core and server | Not taken: the alias on every leg (owner decision 251) |
+| Package-level service functions, as server has (`server.Db`, `server.Tx`) | No factory to pass | One shared namespace per process, so no host can give an extension instances of its own | Rejected (owner decision 251) |
 
 §23.10 rejects D-REPO-9's private mirrors (owner decision 118).
 
@@ -262,15 +311,15 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 **D-REPO-1 (proposed).** Use §4.7's go.mod, §4.9's proto naming, an unversioned development path, and the release rewrite to `/v2026` that connect and sdk use (§4.9). *Why:* §4.3's replace and lock rules, protobuf's init-time panic, and the release convention; Go accepts a v2026 tag only on a `/v2026` path, which only the release tree has.
 
-**D-REPO-2 (proposed).** Use §4.4's tree: MLS in root `mls_*` files (owner decision 43), server-only engines in `<svc>service` packages (owner decision 104), the forwarding role's packet side in the leaf `device/` over `protocol/bridge`, which alone declares the types it parses, linked in apps' VPN components with only the root's forwarding files (D-SDK-20; owner decision 197), connect-facing and engine-host root files under `!sidecar_http` (D-SDK-19), test peers only in `mlsinterop/`; `cli/` and `smtpproof/` are nested modules the root never requires. *Why:* CODESTYLE groups files by prefix (connect/CODESTYLE.md:49-62); owner rule 1; a message declared twice panics at init, and importing connect links gVisor; test peers must not raise consumers' versions, and a root requirement reaches every consumer's module graph.
+**D-REPO-2 (proposed).** Use §4.4's tree: MLS in root `mls_*` files (owner decision 43), server-only engines in `<svc>service` packages (owner decision 104), the forwarding role's packet side in the leaf `device/` over `protocol/bridge`, which alone declares the types it parses, linked in apps' VPN components with only the root's forwarding files (D-SDK-20; owner decision 197), connect-facing and engine-host root files under `!sidecar_http` (D-SDK-19), test peers only in `mlsinterop/`; `cli/` and `smtpproof/` are nested modules the root never requires; the core services' interfaces and the value types server and sidecar share in the operator-core repository's `operator` package, which imports connect, with their fakes and conformance suites in its test-only `coretest` module (owner decision 251). *Why:* CODESTYLE groups files by prefix (connect/CODESTYLE.md:49-62); owner rule 1; a message declared twice panics at init, and importing connect links gVisor; test peers must not raise consumers' versions, and a root requirement reaches every consumer's module graph; server imports sidecar, so what both need lives in a module below both.
 
-**D-REPO-3 (proposed).** Engines live in sidecar behind §4.5's `ServiceHost` and stores, and server hosts each one (Q-REPO-1). *Why:* logic stays in sidecar, persistence beside the migrations, and URnetwork-only infrastructure behind interfaces (owner decision 48).
+**D-REPO-3 (proposed).** Engines live in sidecar and take operator-core's `Env`, the root factory of every service they hold, which server/core implements over server's services; server hosts each one, and sidecar owns its SQL over the db an `Env` grants, registering its migrations through operator-core's `Extension` (§4.5; Q-REPO-1; owner decision 251). *Why:* logic and its persistence stay in sidecar, URnetwork-only infrastructure stays behind interfaces (owner decision 48), and service instances from one factory, never a shared namespace, let any host supply an extension's services.
 
 **D-REPO-4 (proposed).** Enforce §4.7 with `make check` and §4.9's v0 `make size` gate; ship no binding or C ABI. *Why:* no hosted CI exists, sidecar must be checked as the bindings build it, and a cgo file would enter gomobile's macOS slice.
 
 **D-REPO-5 (proposed).** X9 changes are generic, additive, off by default and wire-compatible, tested in connect and merged to connect `main` first. *Why:* connect serves every client.
 
-**D-REPO-6 (proposed).** Consumers wire sidecar as §4.7 lists, and branches follow §4.8. *Why:* the gates fail closed, pins must stay reachable (owner rule 4), and migration versions are positions.
+**D-REPO-6 (proposed).** Consumers wire sidecar and operator-core as §4.7 lists, and branches follow §4.8. *Why:* the gates fail closed, pins must stay reachable (owner rule 4), and migration versions are positions.
 
 **D-REPO-7 (proposed).** License, style, hook and distribution per §4.9 and §4.10, with offline-signed sums. *Why:* the open-source promise, the owner's commit rule, and no single origin may ship a client.
 
@@ -280,7 +329,7 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 ### 4.14 Open questions
 
-**Q-REPO-1.** How do PLAN.md:5-7's repos split a service? **Decided by owner 2026-11-03 (owner decision 19):** (a), a sidecar engine that server hosts and backs with its stores (D-REPO-3). *Residual:* none.
+**Q-REPO-1.** How do PLAN.md:5-7's repos split a service? **Decided by owner 2026-11-03 (owner decision 19):** (a), a sidecar engine that server hosts and backs with its stores (D-REPO-3). **Amended by owner 2026-11-15 (owner decision 251):** the engine takes operator-core's `Env`, which server/core implements over server's services; sidecar owns its SQL over the db an `Env` grants and registers its migrations through operator-core for server/core to run, and server-owned data reaches it through operator-core's domain interfaces (4.5). *Residual:* none.
 
 **Q-REPO-2.** [X9] Which connect changes may land on connect's `sidecar` branch? **Decided by owner 2026-11-03 (owner decision 22):** (b), §4.6's dispositions, as owner decisions 85, 86 and 176 amend them. *Residual:* C17, for the extension's streaming Worker only, after §18's spike.
 
@@ -297,17 +346,18 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 ### 4.16 Interfaces
 
-- **Provides:** the tree and modules, `ServiceHost`, the X9 rows, the checks, §4.8's and §4.11's rules, §4.9's release rewrite, and §4.10's install paths (§11, §16).
-- **Consumes:** §6 (X8; §6.4's requester feature bit, §6.11's marked pair and §6.10's windows, which C19 keys on), §10 (X12), §11 (X19; placement; §11.14's normalizer 1, which x/text follows), §13 (X1), §17 (X18; C5's dial fence and per-flow idle, `WindowDelegation`, C18's alias map), §18 (X14; `sidecar_http`, `device/`), §19's gates and pending migrations (D-OPS-6), §22.4's `sidecar_testhooks` and release fixture, §23's milestones.
+- **Provides:** the tree and modules, operator-core's `Env` with its db, domain interfaces, engine contract and `Extension` (`ServiceHost` and the aliases until the review phase's sweep), the X9 rows, the checks, §4.8's and §4.11's rules, §4.9's release rewrite, and §4.10's install paths (§11, §16).
+- **Consumes:** server/core's `Env` over server's services and host packages (owner decision 251); §6 (X8; §6.4's requester feature bit, §6.11's marked pair and §6.10's windows, which C19 keys on), §10 (X12), §11 (X19; placement; §11.14's normalizer 1, which x/text follows), §13 (X1), §17 (X18; C5's dial fence and per-flow idle, `WindowDelegation`, C18's alias map), §18 (X14; `sidecar_http`, `device/`), §19's gates and pending migrations (D-OPS-6), §22.4's `sidecar_testhooks` and release fixture, §23's milestones.
 - **Subprotocol messages, API routes, tables:** none (routes: C11).
-- **Services and config:** §4.5's server column; lock.yml; build/.gitmodules; run.sh; deploy-rollout.zsh; dependencies.yml.
-- **Assumptions about other sections:** §6 adds no protobuf `service` blocks; §6, §9-§15 and §19 follow §4.5's placement; §6.9, §7.9, §8.8 and §17 declare what `device/` parses only in `protocol/bridge`'s `signed.proto`, `auth.proto` (§8.8's `GrantRevoke`, `Suspend` and `Unsuspend` included) and `bridge.proto`, which `config.proto`, `acl.proto` and `directory.proto` import (4.4); §5.4 and §18.10 keep connect types out of the `sidecar_http` leg's files, and §18.10 excludes `host_*.go` (4.4); §10, §11 and §19 keep each repo's metadata on the cluster its `place/` object names (owner decision 145); §5.8 and §11.11 define `git-remote-ur`'s daemon mode; §17, §2.10 and §22 cover C18, and §2.8's connect-5 and §20.6 state what C19 leaves visible and costs; §23.9 merges every touched repo at each Gn-out.
+- **Services and config:** §4.5's server column; operator-core's repository and `sidecar` branch; lock.yml; build/.gitmodules; run.sh; deploy-rollout.zsh; dependencies.yml.
+- **Assumptions about other sections:** §6 adds no protobuf `service` blocks; §6, §9-§15 and §19 follow §4.5's placement, their engines taking an `Env` and, from the review phase's move, keeping their SQL in sidecar, which §22.4's T3 tests over server/core's db (owner decision 251); §6.9, §7.9, §8.8 and §17 declare what `device/` parses only in `protocol/bridge`'s `signed.proto`, `auth.proto` (§8.8's `GrantRevoke`, `Suspend` and `Unsuspend` included) and `bridge.proto`, which `config.proto`, `acl.proto` and `directory.proto` import (4.4); §5.4 and §18.10 keep connect imports out of the `sidecar_http` leg's root files, which reach connect only through operator-core's `Id`, and §18.10 excludes `host_*.go` (4.4); §10, §11 and §19 keep each repo's metadata on the cluster its `place/` object names (owner decision 145); §5.8 and §11.11 define `git-remote-ur`'s daemon mode; §17, §2.10 and §22 cover C18, and §2.8's connect-5 and §20.6 state what C19 leaves visible and costs; §23.9 merges every touched repo at each Gn-out.
 
 ### 4.17 Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | Engine or root code bloats the iOS extension, which since owner decision 197 links the root's forwarding files | Medium | High | `<svc>service` packages; the leaf `device/` and the `ios_extension` leg's file and descriptor lists; `make size` at owner decision 215's budget |
+| With the root's `Id` an alias of operator-core's, the page Worker's `sidecar.wasm` links connect's IP stack, which alone made a connect-only js/wasm main 55.0 MB against D-SDK-19's 41,943,040 B goal, and operator-core enters the iOS extension's leg | High | Medium | Both legs re-measured once the seam lands; the owner revisits the goal, the miss rule's sdk.wasm gate and owner decision 215's budget with those measurements (owner decision 251) |
 | Branches drift from mains that release almost daily | High | Medium | Weekly and per-milestone merges; pending migration groups (D-OPS-6) |
 | A secret or AI-attributed message on a public branch stays served by hash (https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository, read 2026-11-03) | Low | Medium | The hook in every clone (connect/.githooks/commit-msg:23-27); `--scan` before each push and at each Gn-out (§23.8); secrets only in vault |
 | A Go release breaks purego, leaving macOS pass-only | Low | High | Pinned version; a Keychain round trip in `make check`; cgo fallback |
@@ -317,6 +367,7 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 ### 4.18 Phasing
 
 - **v0, before code (M0):** LICENSE, the hook, the root's and `cli/`'s go.mod, dependencies.yml and `make check` on sidecar's `sidecar` branch, merged at M0's Gn-out (DESIGN.md and the documents are on `main` already, 708bb45); M0's branches; the lock entry, the release step and its fixture.
+- **The operator-core seam (owner decision 251), now:** operator-core with ServiceHost's interfaces moved over, the `Env`, the db interface and the shared value types, Go type aliases left in sidecar and server so existing code compiles unchanged, and server/core building the `Env` over the existing host packages; new code takes the `Env`. In the build's review phase, the pass of reviews and fixes after the draft of M0-M10: the call sites, sidecar's SQL and migrations moving from server into sidecar, and the fakes' move into `coretest`.
 - **v0, first usable:** §4.6's M1, M4 and M5 rows; the first hosted engine; signed `ur` packages; the `make size` gate; `sidecar_http`'s import rule (M1) and size measure (M2); `device/` and its `ios_extension` rule, with the root's forwarding files (M4; owner decision 197).
 - **v1:** C18 (M6); C19's window accounting (M10; owner decisions 176, 188) and 4.7's x/text bump, ahead of M10's index code; Homebrew and winget; no apt or yum repository, `.deb` and `.rpm` staying direct downloads (owner decision 213). **Later:** C4 with §18's worker, and C17 for that streaming Worker if its spike needs it.
 - **Blocking:** M0's `make check` blocks the first consumer pin; C13 blocks C18; C19 blocks M10's Gn-out, since §2.8's connect-5 assumes it.

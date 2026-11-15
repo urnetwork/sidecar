@@ -156,7 +156,7 @@ Terms are defined once, in Appendix C. The one most sections share is the **inde
 
 ### 1.13 Open questions
 
-**Q-CTX-1.** Must the server services be self-hostable (P5:576,903)? **Decided by owner 2026-11-03 (implied by owner decision 48):** at the later assured stage; engines reach URnetwork-only infrastructure only through `ServiceHost` interfaces (D-REPO-3), and v0 ships no bundle. *Residual:* none.
+**Q-CTX-1.** Must the server services be self-hostable (P5:576,903)? **Decided by owner 2026-11-03 (implied by owner decision 48):** at the later assured stage; engines reach URnetwork-only infrastructure only through operator-core's interfaces, whose instances an `Env` creates (D-REPO-3; owner decision 251), and v0 ships no bundle. *Residual:* none.
 
 **Q-CTX-2.** Which runtime serves browser surfaces besides the extension? **Decided by owner 2026-11-03 (implied by owner decision 76):** the extension's `sidecar.wasm` (owner decision 26), in a page Worker admitted read-only and labeled as served code (§2.8 EX7; §18.8), ephemeral for the quick burner (Q-SDK-4). *Residual:* none.
 
