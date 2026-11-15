@@ -265,7 +265,6 @@ func (self *DnsApi) serveCaaCanary(writer http.ResponseWriter, request *http.Req
 			unavailable()
 			return
 		}
-		testHookSecret("dns_caa_canary_nonce", []byte(nonce))
 		rdata, err := DnsCaaCanaryRdata(canary.Caa, nonce, settings)
 		if err != nil {
 			self.metrics.caaCanaries.Add(1, dnsCaaCanaryResultRefused)
