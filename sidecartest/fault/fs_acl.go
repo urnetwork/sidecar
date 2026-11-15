@@ -583,7 +583,7 @@ func Fs14AclRepoRevoke(net *Net) *Schedule {
 	world := newFsTeamWorld()
 	return fsTeamSchedule("FS-14 acl repo revoke", world,
 		fs14AclStart(world),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, notes := world.devices["m first"], sidecar.Id(world.ids["notes"])
 			burner := net.Device("m burner", first.MemberId)
 			world.devices["m burner"] = burner
@@ -633,7 +633,7 @@ func Fs14AclOwnerConfirm(net *Net) *Schedule {
 	world := newFsTeamWorld()
 	return fsTeamSchedule("FS-14 acl owner confirm", world,
 		fs14AclStart(world),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first := world.devices["m first"]
 			world.ids["vault"] = aclCreateRepo(net, first, "m vault", protocol.RepoKind_REPO_KIND_VAULT).Bytes()
 			tablet := net.Device("m tablet", first.MemberId)
@@ -648,7 +648,7 @@ func Fs14AclOwnerConfirm(net *Net) *Schedule {
 			net.MustRefuse(net.Sign(tablet, bridge.SignedType_SIGNED_OWNER_CONFIRM, net.OwnerConfirm(tablet)), sidecar.ErrConfigRule)
 			return fs14AclExpectConfirmed(net, world, false)
 		}),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, tablet := world.devices["m first"], world.devices["m tablet"]
 			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_OWNER_CONFIRM, net.OwnerConfirm(tablet)))
 			if row := net.Row(tablet); sidecar.Id(row.GetOwnerConfirmSigner()) != first.SidecarId {
@@ -1774,7 +1774,7 @@ func AclAddsOnlyForReaders(net *Net) *Schedule {
 	world := newFsTeamWorld()
 	return fsTeamSchedule("S3a's acl checks", world,
 		fs14AclStart(world),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first := world.devices["m first"]
 			burner := net.Device("m burner", first.MemberId)
 			world.devices["m burner"] = burner
@@ -1800,7 +1800,7 @@ func AclAddsOnlyForReaders(net *Net) *Schedule {
 			}
 			return aclExpectMembers(net, world, false, false)
 		}),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, burner, tablet := world.devices["m first"], world.devices["m burner"], world.devices["m tablet"]
 			net.MustLand(aclRepoGrant(net, first, sidecar.Id(world.ids["notes"]), burner.SidecarId, protocol.RepoGrantRole_REPO_GRANT_ROLE_READER))
 			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_OWNER_CONFIRM, net.OwnerConfirm(tablet)))
@@ -1872,7 +1872,7 @@ func AclRemovalDropsEveryRight(net *Net) *Schedule {
 	world := newFsTeamWorld()
 	return fsTeamSchedule("S4a's acl checks", world,
 		fs14AclStart(world),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, notes := world.devices["m first"], sidecar.Id(world.ids["notes"])
 			burner := net.Device("m burner", first.MemberId)
 			world.devices["m burner"] = burner
