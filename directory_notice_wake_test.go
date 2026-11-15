@@ -357,6 +357,11 @@ func TestDirectoryPhoneReceiptRefusesAnotherRequestsDecision(t *testing.T) {
 			t.Fatal("the forged approval was recorded")
 		}
 	}
+	// the refused version is not read again until the notice's next rewrite hints
+	again := testPhoneResync(t, phone)
+	if again.EntryReads != 0 || testAlarmCount(env.requester, sidecar.SidecarRecordAlarmBadDecision) != 1 {
+		t.Fatalf("a resync after the refusal %+v", again)
+	}
 }
 
 // A request past not_after with no decision is expired on a phone, never denied: its next resync reads its notice once,
@@ -470,5 +475,47 @@ func TestDirectoryPhoneRepairsABreachOfItsNotice(t *testing.T) {
 	view := env.request(env.approver, filed.RequestId)
 	if view.State != sidecar.DirectoryRequestPending || view.Notice == nil || len(view.Notice.GetDecisions()) != 0 || !view.Decidable {
 		t.Fatalf("the approver's view after the repair %+v", view)
+	}
+}
+
+// A repo approval that a denial beat still reaches a phone: the denial's rewrite wakes R, cues its app host and is
+// taken; a second admin's approval rewrites the notice to approved, which R still leases, so it wakes R again and is
+// received as the approval, its statement checked in the log and recorded, and R closes the approved notice.
+func TestDirectoryPhoneApprovalOverADenial(t *testing.T) {
+	env := newTestDecideEnv(t)
+	surrogate, phone := env.phone(env.requester)
+	hints := 0
+	if _, err := env.requester.client.BindPhoneNotices(&sidecar.DirectoryPhoneNoticesArgs{Hinted: func() { hints += 1 }}); err != nil {
+		t.Fatal(err)
+	}
+	second := env.secondApprover()
+	requesterId := env.requester.writer.sidecarId
+	filed := env.mustFile(env.requester, env.ask())
+	env.mustDecide(env.approver, filed.RequestId, false)
+	if hints != 1 {
+		t.Fatalf("the denial cued the app host %d times", hints)
+	}
+	if resynced := testPhoneResync(t, phone); resynced.Decided != 1 {
+		t.Fatalf("the denial's resync %+v", resynced)
+	}
+	env.mustDecide(second, filed.RequestId, true)
+	if wakes := surrogate.Wakes(); len(wakes) != 2 {
+		t.Fatalf("%d wakes for the denial and the approval over it", len(wakes))
+	}
+	resynced := testPhoneResync(t, phone)
+	if resynced.Decided != 1 || resynced.NoticeReads != 1 || resynced.EntryReads != 1 {
+		t.Fatalf("the approval's resync %+v", resynced)
+	}
+	if testPhoneEventCount(env, env.requester, "access_decided/denied/"+filed.RequestId.String()) != 1 ||
+		testPhoneEventCount(env, env.requester, "access_decided/approved/"+filed.RequestId.String()) != 1 {
+		t.Fatalf("events %v", env.events[requesterId])
+	}
+	recorded := env.receipts[requesterId].recorded
+	if len(recorded) != 2 || recorded[1].Outcome != sidecar.SidecarAccessDecidedApproved {
+		t.Fatalf("the vault recorded %+v", recorded)
+	}
+	env.approver.mustSync(t)
+	if notice := testNoticeAt(t, env.approver, filed.NoticePath); notice != nil {
+		t.Fatalf("the approved notice stands after it was recorded: %v", notice)
 	}
 }

@@ -519,6 +519,7 @@ func (self *DirectoryPhoneNotices) headReader() (DirectoryHeadReader, bool) {
 	return heads, ok
 }
 
+// Whether Close ran.
 func (self *DirectoryPhoneNotices) isClosed() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -550,6 +551,7 @@ func (self *DirectoryPhoneNotices) load() (*directoryPhoneDocument, error) {
 	return kept, nil
 }
 
+// Writes what this phone keeps, whole.
 func (self *DirectoryPhoneNotices) keep(document *directoryPhoneDocument) error {
 	return self.client.store.writeDocument(directoryPhoneStoreName, document)
 }
@@ -964,6 +966,10 @@ func (self *DirectoryPhoneNotices) receiveRow(ctx context.Context, heads Directo
 	if row.Outcome != outcome || !row.Recorded {
 		source := &directoryPhoneReceiptSource{phone: self, heads: heads, directoryId: directoryId, resynced: resynced}
 		receipt, err := self.requests.Receive(ctx, view, source)
+		if errors.Is(err, ErrDirectoryReceiptRefused) || errors.Is(err, ErrDirectoryHeadEntryRefused) {
+			// ignored and alarmed: read again only at the notice's next rewrite, which hints again
+			return true, err
+		}
 		if err != nil {
 			return false, err
 		}
@@ -1076,6 +1082,10 @@ func (self *DirectoryPhoneNotices) readPrefix(ctx context.Context, heads Directo
 		}
 		resynced.EntryReads += 1
 		entry, err := self.readEntry(ctx, heads, directoryId, requesterId, notice.GetEntrySeq())
+		if errors.Is(err, ErrDirectoryHeadEntryRefused) {
+			// ignored and alarmed: a request whose entry does not verify is none
+			continue
+		}
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
