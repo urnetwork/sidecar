@@ -9,6 +9,12 @@
 // for one is refused. A revocation, §5.6's or any call naming one, is answered REVOKE_NOT_CAPABLE here, since the
 // extension is alarms-only (§18.4) and not approval-capable (§16.6).
 //
+// Requests are answered one at a time, in order, on one control session. events (QD-821) long-polls there, so the
+// extension's sdk holds one call at a time and reads status between polls. Frames are read a frame ahead, so the
+// stream's end is seen while a call runs: a long poll then ends, its session with it, which ends its wait at the
+// daemon, and its answer goes nowhere; any other call runs to its answer. A frame that cannot be read ends the session
+// once the requests before it are answered.
+//
 // stdout carries frames and nothing else: every log, refusal and error goes to stderr. A request's reply never holds a
 // token, a key or the pass, which the daemon's walk refuses before this process sees it.
 
@@ -21,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/docopt/docopt-go"
@@ -29,14 +36,19 @@ import (
 )
 
 // The methods the native host relays: the extension's alarms-only surface, each signing nothing and carrying no
-// secret either way. status is the state and generation, which the extension shows.
+// secret either way. status is the state and generation, which the extension shows; events is every event kind of
+// the daemon's hosted sidecars, its alarms among them, long-polled past a cursor (QD-821).
 var nativeHostRelayedMethods = []string{
 	urMethodStatus,
+	sidecar.DaemonMethodEvents,
 }
 
-// The longest request id the native host keeps, so a chunked reply's envelope stays within a frame: ids are a number
-// or a short string in practice.
-const nativeHostMaxIdByteCount = 256
+// The relayed methods whose call waits on the daemon for an event rather than runs to an answer: the stream's end
+// ends such a call at once and closes its session, which ends the wait at the daemon (QD-821), and its answer goes
+// nowhere. Every other call runs to its answer, which is written even once the stream has ended.
+var nativeHostLongPollMethods = []string{
+	sidecar.DaemonMethodEvents,
+}
 
 // What a native host answers a revocation, which the extension may not sign (D-SDK-30).
 const nativeHostRevokeNotCapable = "REVOKE_NOT_CAPABLE"
@@ -71,6 +83,8 @@ type nativeHostRelay struct {
 	relayed []string
 	// the control session, dialed at the first relayed request and again after it fails
 	client *sidecar.DaemonClient
+	// ends once the browser's stream does, which a long poll's call ends with; nil before serve
+	streamCtx context.Context
 }
 
 // A relay of the methods relayed.
@@ -86,19 +100,50 @@ func (self *nativeHostRelay) close() {
 	}
 }
 
-// Answers each frame reader carries until it ends between frames, which is a session's normal end. A frame that cannot
-// be read ends the session with an error, since the stream cannot be resynced.
+// Answers each frame reader carries, in order, until it ends between frames, which is a session's normal end. A
+// goroutine reads the frames, at most one ahead of the request being answered, so a stream that ends, between frames
+// or inside one, ends a long poll in flight at once (nativeHostLongPollMethods). A frame that cannot be read ends the
+// session with an error once the requests before it are answered, since the stream cannot be resynced. The reader
+// ends with the stream, which in a native host is the process's stdin.
 func (self *nativeHostRelay) serve(ctx context.Context, reader io.Reader) error {
+	streamCtx, endStream := context.WithCancel(ctx)
+	defer endStream()
+	self.streamCtx = streamCtx
+	type frame struct {
+		message []byte
+		err     error
+	}
+	frames := make(chan frame)
+	// closed once this returns, so a reader holding a frame nobody takes ends
+	served := make(chan struct{})
+	defer close(served)
+	go func() {
+		for {
+			message, err := readNativeHostFrame(reader, int(self.cli.settings.NativeHostRequestByteCount))
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				// the browser is gone: a long poll in flight ends
+				endStream()
+			}
+			select {
+			case frames <- frame{message: message, err: err}:
+			case <-served:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 	for {
-		message, err := readNativeHostFrame(reader, int(self.cli.settings.NativeHostRequestByteCount))
-		if errors.Is(err, io.EOF) {
+		next := <-frames
+		if errors.Is(next.err, io.EOF) {
 			return nil
 		}
-		if err != nil {
-			fmt.Fprintf(self.cli.stderr, "ur native-host: %s\n", err)
-			return err
+		if next.err != nil {
+			fmt.Fprintf(self.cli.stderr, "ur native-host: %s\n", next.err)
+			return next.err
 		}
-		id, reply := self.answer(ctx, message)
+		id, reply := self.answer(ctx, next.message)
 		if reply == nil {
 			continue
 		}
@@ -144,8 +189,8 @@ func (self *nativeHostRelay) answer(ctx context.Context, message []byte) (json.R
 	if err := decoder.Decode(request); err != nil || decoder.More() {
 		return refuse(nil, -32600, "invalid request: JSON-RPC 2.0 with jsonrpc, id, method and params only")
 	}
-	if nativeHostMaxIdByteCount < len(request.Id) {
-		return refuse(nil, -32600, "invalid request: an id past 256 bytes")
+	if self.cli.settings.NativeHostIdByteCount < len(request.Id) {
+		return refuse(nil, -32600, fmt.Sprintf("invalid request: an id past %d bytes", self.cli.settings.NativeHostIdByteCount))
 	}
 	if request.JsonRpc != "2.0" || request.Method == "" {
 		return refuse(request.Id, -32600, "invalid request")
@@ -163,6 +208,10 @@ func (self *nativeHostRelay) answer(ctx context.Context, message []byte) (json.R
 
 	result, err := self.call(ctx, request.Method, request.Params)
 	if err != nil {
+		if self.longPoll(request.Method) && self.streamCtx != nil && self.streamCtx.Err() != nil && ctx.Err() == nil {
+			// the stream ended under a long poll: nobody reads its answer
+			return nil, nil
+		}
 		var rpcErr *sidecar.DaemonRpcError
 		if errors.As(err, &rpcErr) {
 			return refuse(request.Id, rpcErr.Code, rpcErr.Message)
@@ -190,10 +239,20 @@ func (self *nativeHostRelay) relays(method string) bool {
 	return false
 }
 
+// Whether method's call is a long poll, which the stream's end ends.
+func (self *nativeHostRelay) longPoll(method string) bool {
+	return slices.Contains(nativeHostLongPollMethods, method)
+}
+
 // Calls method on the daemon's control session, unconfirmed, dialing one, and spawning a daemon, when none is open. A
-// failure other than the daemon's own refusal drops the session, so the next request dials again.
+// failure other than the daemon's own refusal drops the session, so the next request dials again; a long poll the
+// stream's end ended is such a failure, and the daemon's wait ends with the session it drops.
 func (self *nativeHostRelay) call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
-	callCtx, cancel := context.WithTimeout(ctx, self.cli.settings.CallTimeout)
+	parent := ctx
+	if self.longPoll(method) && self.streamCtx != nil {
+		parent = self.streamCtx
+	}
+	callCtx, cancel := context.WithTimeout(parent, self.cli.settings.CallTimeout)
 	defer cancel()
 	if self.client == nil {
 		client, err := self.cli.connectDaemon(callCtx, self.cli.hello(sidecar.DaemonModeControl), nil)

@@ -86,7 +86,7 @@ func TestNativeHostOversizedReplySplits(t *testing.T) {
 	}
 
 	// the default chunk size's chunk, base64 and envelope with the longest id, fits a frame
-	longest := json.RawMessage(`"` + strings.Repeat("i", nativeHostMaxIdByteCount-2) + `"`)
+	longest := json.RawMessage(`"` + strings.Repeat("i", defaultUrSettings().NativeHostIdByteCount-2) + `"`)
 	if err := writeNativeHostReply(io.Discard, longest, bytes.Repeat([]byte{0xff}, 3*defaultUrSettings().NativeHostChunkByteCount),
 		defaultUrSettings().NativeHostChunkByteCount); err != nil {
 		t.Errorf("the default chunk size does not fit a frame: %v", err)
