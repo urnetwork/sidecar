@@ -127,6 +127,8 @@ type directoryCardDocument struct {
 	PinVersion      uint64 `json:"pin_version"`
 	PinChain        []byte `json:"pin_chain"`
 	TimeMillis      int64  `json:"time_millis"`
+	// a card's or repo file's removal, kept with its signer and pin for its path rule (directory_card.go)
+	Removed bool `json:"removed,omitempty"`
 }
 
 // The directory's copy over a sealed directory of its own.
@@ -229,7 +231,7 @@ func (self *DirectoryStore) Load(directoryId Id) error {
 			return fmt.Errorf("%w: a cards ref file", ErrDirectoryStoreCorrupt)
 		}
 		cards[document.Path] = &DirectoryCardFile{
-			Path: document.Path, Version: document.PathVersion, Content: document.Content, PushVersion: document.PushVersion,
+			Path: document.Path, Version: document.PathVersion, Removed: document.Removed, Content: document.Content, PushVersion: document.PushVersion,
 			SignerSidecarId: document.SignerSidecarId, AuthPin: &bridge.AuthPin{Version: document.PinVersion, Chain: document.PinChain},
 			TimeMillis: document.TimeMillis,
 		}
@@ -277,7 +279,8 @@ func (self *DirectoryStore) writeState(state *DirectoryStoreState) error {
 }
 
 // Applies one page of the cards ref's changes: each file written or removed as its statement left it, then the
-// ref's position. A path no directory file takes is not kept.
+// ref's position. A path no directory file takes is not kept. A notice's removal leaves nothing; a card's or repo
+// file's leaves its removal, signer and pin, which its path rule judges.
 func (self *DirectoryStore) ApplyCards(changes *DirectoryCardsChanges) error {
 	if changes == nil {
 		return nil
@@ -288,7 +291,7 @@ func (self *DirectoryStore) ApplyCards(changes *DirectoryCardsChanges) error {
 			continue
 		}
 		name := directoryStoreCardPrefix + file.Path
-		if file.Removed {
+		if file.Removed && !directoryCardRemovalKept(file.Path) {
 			if err := self.store.Remove(name); err != nil {
 				return err
 			}
@@ -302,7 +305,7 @@ func (self *DirectoryStore) ApplyCards(changes *DirectoryCardsChanges) error {
 		document := &directoryCardDocument{
 			Version: directoryStoreVersion, Path: file.Path, PathVersion: file.Version, Content: file.Content,
 			PushVersion: file.PushVersion, SignerSidecarId: file.SignerSidecarId, PinVersion: file.AuthPin.GetVersion(),
-			PinChain: file.AuthPin.GetChain(), TimeMillis: file.TimeMillis,
+			PinChain: file.AuthPin.GetChain(), TimeMillis: file.TimeMillis, Removed: file.Removed,
 		}
 		if err := self.writeDocument(name, document); err != nil {
 			return err
@@ -322,7 +325,12 @@ func (self *DirectoryStore) ApplyCards(changes *DirectoryCardsChanges) error {
 	return self.writeState(state)
 }
 
-// The cards ref's files this copy holds, in path order. Copies.
+// Whether a removal at path is kept: a card's or a repo file's, d/ or r/, whose path rule judges who removed it.
+func directoryCardRemovalKept(path string) bool {
+	return strings.HasPrefix(path, "d/") || strings.HasPrefix(path, "r/")
+}
+
+// The cards ref's files this copy holds, in path order, a card's or repo file's removal among them. Copies.
 func (self *DirectoryStore) Cards() []*DirectoryCardFile {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

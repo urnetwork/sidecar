@@ -855,8 +855,12 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 	return reply, locators, nil
 }
 
-// Serves POST .../read and GET .../log.
+// Serves POST .../read, GET .../log and GET .../refs.
 func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/refs") {
+		self.serveRefs(writer)
+		return
+	}
 	if other := self.otherOf(request); other != nil {
 		other.ServeHTTP(writer, request)
 		return
@@ -1137,4 +1141,28 @@ func (self *evsTestWorld) otherOfId(refId Id) *evsTestWorld {
 	}
 	self.others[refId] = other
 	return other
+}
+
+// GET .../refs (§11.9's listing, EVS1-M6-01): every ref of the repo the world and its others hold a version of, each
+// head as a read gives it with its last push's auth pin, a ref with no version absent as a placeholder is.
+func (self *evsTestWorld) serveRefs(writer http.ResponseWriter) {
+	worlds := []*evsTestWorld{self}
+	self.stateLock.Lock()
+	for _, other := range self.others {
+		worlds = append(worlds, other)
+	}
+	self.stateLock.Unlock()
+	reply := &protocol.EvsRefsReply{All: true}
+	for _, world := range worlds {
+		world.stateLock.Lock()
+		if 0 < len(world.commits) {
+			head := proto.Clone(world.headSummaryWithLock()).(*protocol.EvsHeadSummary)
+			head.Auth = world.commits[len(world.commits)-1].parsed.Push.GetAuth()
+			reply.Refs = append(reply.Refs, head)
+		}
+		world.stateLock.Unlock()
+	}
+	body, _ := proto.Marshal(reply)
+	writer.WriteHeader(http.StatusOK)
+	writer.Write(body)
 }

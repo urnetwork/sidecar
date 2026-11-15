@@ -10,6 +10,11 @@
 // the client's subscriptions read what they call for (evs_hint.go). Hints carry no authority either way: every read
 // verifies whatever it finds.
 //
+// The repo's prefix write rules (EVS1-M6-04, EVS1-M6-05): each generation runs the prefix timer, which on a device
+// whose composition repairs passes the repair runner and the owed pin pushes every RepairPassInterval; the Sidecar
+// files a next rule set through `ur evs rules` (FilePrefixRules), reading the subjects it names against its verified
+// state and config head, and sends the filer's pin pushes once its log holds the set.
+//
 // connect legs only: the sidecar_http leg runs no component (§18.10). Safe for concurrent use.
 
 package sidecar
@@ -80,6 +85,8 @@ func (self *EvsComponent) Attach(env *SidecarEnv) error {
 		self.client.log.Warningf("[evs]subscriptions did not start: %v", err)
 	}
 	go self.runMapper(env.Ctx)
+	// the prefix rules' repairs and owed pin pushes, on a device whose composition repairs (DESIGN-DETAILS 16.2.8)
+	go self.runPrefixRepair(env.Ctx)
 	go func() {
 		<-env.Ctx.Done()
 		remove()
@@ -265,5 +272,109 @@ func (self *Sidecar) EvsPrefixRulesArgs() *EvsPrefixRulesArgs {
 			}
 			return engine.AllowPrefixWrite(write)
 		},
+	}
+}
+
+// What a prefix rule subject's text is read against: the verified state's members and rows, and the names the
+// config head's tables give their atoms (AclLocalPolicy.Names), nil where this device opens no head.
+func (self *Sidecar) evsPrefixNames() (*ConfigState, *AclLocalPolicy, error) {
+	follower := self.ConfigFollower()
+	if follower == nil {
+		return nil, nil, fmt.Errorf("%w: no config follower stands", ErrEvsNoConfig)
+	}
+	state := follower.VerifiedState()
+	if state == nil {
+		return nil, nil, fmt.Errorf("%w: no verified state yet", ErrEvsNoConfig)
+	}
+	return state, follower.AclLocal(), nil
+}
+
+// The atom a subject's text names in a prefix rule, read against this Sidecar's verified state and config head
+// (evsPrefixSubjectOf): what `ur evs rules` files a rule for.
+func (self *Sidecar) PrefixRuleSubject(text string) (Id, error) {
+	state, local, err := self.evsPrefixNames()
+	if err != nil {
+		return Id{}, err
+	}
+	return evsPrefixSubjectOf(state, local, text)
+}
+
+// A rule's subject as `ur evs rules show` prints it (evsPrefixSubjectText): id:<id> where this Sidecar holds no state.
+func (self *Sidecar) PrefixRuleSubjectText(subject Id) string {
+	state, local, err := self.evsPrefixNames()
+	if err != nil {
+		return "id:" + subject.String()
+	}
+	return evsPrefixSubjectText(state, local, subject)
+}
+
+// One `ur evs rules` filing and what followed it (DESIGN-DETAILS 16.2.9).
+type EvsPrefixRulesFiling struct {
+	// The set's entry, the set as filed, and the standing admins it names in no rule.
+	Filed *AclPrefixRulesFiled
+	// The repo held no set before: devices older than the release that carries the rules do not follow them, which
+	// the command says once (16.2.12).
+	FirstSet bool
+	// Each shared ref after the filer's pin pushes.
+	Refs []*EvsPrefixRef
+}
+
+// Files the repo's next prefix rule set as the person confirmed it (origin; never MCP or a hook) through
+// AclPrefixRulesFiler, sealed under client's current repo key and built from the sets client holds, then sends the
+// filer's pin push to each shared ref of the repo once this device's log holds the set (EvsClient.PinPushRules). A
+// pin push that fails stays owed in the journal, and the filing stands: its error is the ref's, not the filing's.
+func (self *Sidecar) FilePrefixRules(ctx context.Context, client *EvsClient, request *AclPrefixRulesRequest, origin SidecarActOrigin) (*EvsPrefixRulesFiling, error) {
+	follower := self.ConfigFollower()
+	if follower == nil || follower.Client() == nil {
+		return nil, ErrSidecarActNoAuthority
+	}
+	judge := client.prefixJudge()
+	if judge == nil {
+		return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
+	}
+	config := follower.Client()
+	firstSet := false
+	if state := config.State(); state != nil {
+		if repo := state.Repo(request.RepoId); repo != nil {
+			firstSet = len(repo.GetPrefixRules()) == 0
+		}
+	}
+	filer := NewAclPrefixRulesFiler(&AclPrefixRulesFilerArgs{
+		Sidecar: self,
+		Config:  config,
+		RepoKey: client.args.Gkm.CurrentRepoKey,
+		Sets: func(ctx context.Context, state *ConfigState, repoId Id) ([]*AclPrefixRuleSet, error) {
+			return judge.setsOf(ctx, repoId, state)
+		},
+		Settings: judge.settings,
+	})
+	filed, err := filer.File(ctx, request, origin, nil)
+	if err != nil {
+		return nil, err
+	}
+	filing := &EvsPrefixRulesFiling{Filed: filed, FirstSet: firstSet}
+	refs, err := client.PinPushRules(ctx, request.RepoId, filed.Pin.GetVersion())
+	if err != nil {
+		self.log.Warningf("[evs]the pin pushes after a prefix rule set on repo %s: %v", request.RepoId, err)
+	}
+	filing.Refs = refs
+	return filing, nil
+}
+
+// The prefix rules' loop until ctx ends (DESIGN-DETAILS 16.2.8, 16.2.9): every RepairPassInterval, on a device whose
+// composition repairs, one pass of the repair runner over each repo whose mirror journalled an ignored event, and the
+// pin pushes the journal owes. What a pass leaves waits for the next.
+func (self *EvsComponent) runPrefixRepair(ctx context.Context) {
+	judge := self.client.prefixJudge()
+	if judge == nil || !judge.args.Repair || judge.settings.RepairPassInterval <= 0 {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-self.client.clock.After(judge.settings.RepairPassInterval):
+		}
+		self.client.passPrefixRepair(ctx)
 	}
 }

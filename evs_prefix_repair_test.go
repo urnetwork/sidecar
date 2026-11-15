@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -461,5 +462,412 @@ func TestEvsPrefixRepairKeepsItsBoundsAndItsPrefixes(t *testing.T) {
 	// by hand: without the bounds
 	if result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId, ByHand: true}); err != nil || result.PushCount != 1 || result.WaitingCount != 0 {
 		t.Fatalf("by hand past the bound: %+v %v", result, err)
+	}
+}
+
+// The pin push of a file-mode ref (16.2.9): a statement with no change on the head at the installed pin, which every
+// reader under the rules allows with no walk and no alarm; nothing for a name with no head.
+func TestEvsPrefixPinPushCommitsNoChangeAtTheInstalledPin(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	if result, err := writer.repo.PinPush(ctx, nil); err != nil || result.Skipped != EvsPinPushSkipNoHead {
+		t.Fatalf("a name with no head: %+v %v", result, err)
+	}
+	if statements, _ := writer.server.sentCounts(); statements != 0 {
+		t.Fatalf("a pin push to no head sent %d statements", statements)
+	}
+	writer.world.config.setPin(4)
+	if _, err := writer.write(t, "src/main.go", []byte("under the older pin")); err != nil {
+		t.Fatal(err)
+	}
+	writer.world.config.setPin(5)
+	result, err := writer.repo.PinPush(ctx, nil)
+	if err != nil || result.Skipped != "" || result.Version != 2 {
+		t.Fatalf("the pin push: %+v %v", result, err)
+	}
+	if pins := evsTestPostedPins(t, writer.server); !slices.Equal(pins, []uint64{4, 5}) {
+		t.Fatalf("the pins posted %v", pins)
+	}
+	writer.world.stateLock.Lock()
+	pinned := writer.world.commits[1].parsed
+	writer.world.stateLock.Unlock()
+	if pinned.Push.GetChangeCount() != 0 || len(pinned.Changes) != 0 {
+		t.Fatalf("a pin push with %d changes", pinned.Push.GetChangeCount())
+	}
+	reader := test.ruledReader("reader")
+	content, info, err := test.read(reader, "src/main.go")
+	if err != nil || content != "under the older pin" || info.IgnoredAbove != 0 || info.HeadVersion != 2 {
+		t.Fatalf("a reader after the pin push: %q %+v %v", content, info, err)
+	}
+	if alarms := evsPrefixTestAlarms(reader); len(alarms) != 0 {
+		t.Errorf("alarms %+v", alarms)
+	}
+}
+
+// The filer's pin pushes (16.2.9; QD-802, QD-803): with this device's log behind the set, one follow, and where it
+// still does not hold the set every unbound ref waits, owed in the journal, with nothing sent; once the log holds it,
+// a ref whose head's pin is below the set takes a pin push, a ref already pinned at or above it takes none, a deleted
+// ref is listed as held at its re-creation, and the journal sends what it owed and then drops it. `show`'s status
+// lists the same bindings.
+func TestEvsPrefixPinPushesBindEachSharedRef(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	world := writer.world
+	ctx := context.Background()
+	client := writer.test.client
+	// main below the set; notes at it; old deleted
+	world.config.setPin(4)
+	if _, err := writer.write(t, "src/main.go", []byte("main")); err != nil {
+		t.Fatal(err)
+	}
+	notes := world.otherRef([]byte("notes"))
+	old := world.otherRef([]byte("old"))
+	world.config.setPin(5)
+	writer.server.know("notes.md", "old.md")
+	if _, err := writer.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: []byte("notes"), Writes: []*EvsPathWrite{{Path: "notes.md", Content: bytes.NewReader([]byte("notes"))}}}); err != nil {
+		t.Fatal(err)
+	}
+	world.config.setPin(4)
+	if _, err := writer.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: []byte("old"), Writes: []*EvsPathWrite{{Path: "old.md", Content: bytes.NewReader([]byte("old"))}}}); err != nil {
+		t.Fatal(err)
+	}
+	old.stateLock.Lock()
+	old.deleted = true
+	old.stateLock.Unlock()
+	evsPrefixTestSealName(t, notes, "notes")
+	evsPrefixTestSealName(t, old, "old")
+	world.config.setPin(4)
+	// the log is behind the set, and one follow does not move it
+	follows := 0
+	client.args.ConfigFollow = func(ctx context.Context) error {
+		follows += 1
+		return nil
+	}
+	statements, _ := writer.server.sentCounts()
+	refs, err := client.PinPushRules(ctx, world.repoId, 5)
+	if err != nil || follows != 1 {
+		t.Fatalf("behind the set: %v, %d follows", err, follows)
+	}
+	bindings := evsPrefixTestBindings(refs)
+	if bindings["main"] != EvsPrefixWaiting || bindings["notes"] != EvsPrefixBound || bindings["old"] != EvsPrefixDeleted {
+		t.Fatalf("behind the set: %v", bindings)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements {
+		t.Fatalf("a pin push sent below the set")
+	}
+	status, err := client.PrefixRulesStatus(ctx, world.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindings := evsPrefixTestBindings(status.Refs); bindings["main"] != EvsPrefixUnbound || bindings["notes"] != EvsPrefixBound || bindings["old"] != EvsPrefixDeleted {
+		t.Fatalf("show's refs: %v", bindings)
+	}
+	if status.NewestAt != 5 || len(status.Sets) != 1 {
+		t.Fatalf("show's sets: %+v", status)
+	}
+	// the log moves past the set; within the retry interval the journal sends nothing, past it the owed pin push,
+	// to main alone, and drops it
+	world.config.setPin(5)
+	if err := client.RetryPrefixPinPushes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements {
+		t.Fatalf("the journal sent within its interval")
+	}
+	writer.test.clock.advance(DefaultAclPrefixSettings().PinPushRetryInterval)
+	if err := client.RetryPrefixPinPushes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements+1 {
+		t.Fatalf("%d statements for one owed pin push", after-statements)
+	}
+	if pins := evsTestPostedPins(t, writer.server); pins[len(pins)-1] != 5 {
+		t.Fatalf("the pin push's pin %v", pins)
+	}
+	if entries, err := client.args.Store.List(evsPrefixPinDirectory); err != nil || len(entries) != 0 {
+		t.Fatalf("the journal after the pin push: %v %v", entries, err)
+	}
+	status, err = client.PrefixRulesStatus(ctx, world.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindings := evsPrefixTestBindings(status.Refs); bindings["main"] != EvsPrefixBound || bindings["old"] != EvsPrefixDeleted {
+		t.Fatalf("show's refs after the pin push: %v", bindings)
+	}
+	// a second filing's pin pushes find every ref bound: nothing more is sent
+	if _, err := client.PinPushRules(ctx, world.repoId, 5); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements+1 {
+		t.Fatalf("a bound ref took another pin push")
+	}
+}
+
+// Each ref's binding by its name.
+func evsPrefixTestBindings(refs []*EvsPrefixRef) map[string]EvsPrefixBinding {
+	bindings := map[string]EvsPrefixBinding{}
+	for _, ref := range refs {
+		bindings[string(ref.Name)] = ref.Binding
+	}
+	return bindings
+}
+
+// The repair form with no edit for one path, which the DROP builder calls (16.2.7 as amended, 10.2.4): with one
+// ignored version over a versioned file, below RepairDepth, the effective content is written back at once as one
+// checkpoint; it keeps 16.2.8's who, so a device that does not repair, and one that does not mirror the ref, write
+// nothing, and the planner refuses a path the rules do not give this device.
+func TestEvsPrefixRepairPathWritesBackUnderTheDepth(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	if _, err := writer.repo.RepairPath(ctx, nil, "src/main.go"); !errors.Is(err, ErrEvsPrefixRepairOff) {
+		t.Fatalf("a device that does not repair: %v", err)
+	}
+	test.enableRepairs(DefaultAclPrefixSettings())
+	good := evsTestContent("good", 64*1024)
+	if _, err := writer.write(t, "src/main.go", good); err != nil {
+		t.Fatal(err)
+	}
+	breached := bytes.Clone(good)
+	breached[10] ^= 0xff
+	test.breach("src/main.go", breached)
+	if _, err := writer.repo.RepairPath(ctx, nil, "src/main.go"); !errors.Is(err, ErrEvsPrefixRepairOff) {
+		t.Fatalf("a device that does not mirror the ref: %v", err)
+	}
+	test.mirrorRef()
+	statements, _ := writer.server.sentCounts()
+	result, err := writer.repo.RepairPath(ctx, nil, "src/main.go")
+	if err != nil || result.PushCount != 1 {
+		t.Fatalf("the repair: %+v %v", result, err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements+1 {
+		t.Fatalf("%d statements for one repair", after-statements)
+	}
+	reader := test.ruledReader("reader")
+	content, info, err := test.read(reader, "src/main.go")
+	if err != nil || !bytes.Equal([]byte(content), good) || info.IgnoredAbove != 0 {
+		t.Fatalf("after the repair: %+v %v", info, err)
+	}
+	// written back already: nothing more
+	if result, err := writer.repo.RepairPath(ctx, nil, "src/main.go"); err != nil || result.PushCount != 0 {
+		t.Fatalf("a path whose newest version is allowed: %+v %v", result, err)
+	}
+	// a path the rules do not give this device
+	breached[11] ^= 0xff
+	test.breach("src/main.go", breached)
+	test.refuse = &AclPrefixWriteDecision{AclDecision: AclDecision{Reason: AclReasonPrefixRule}, Detail: AclPrefixDetailRefused, Path: "src/main.go"}
+	if _, err := writer.repo.RepairPath(ctx, nil, "src/main.go"); evsPrefixTestDetail(err) != EvsPrefixDetailRefused {
+		t.Fatalf("a path refused to this device: %v", err)
+	}
+}
+
+// The planner's local refusal covers a rekey of a shared git-mode ref (8.2.10 as amended): a path outside the device's
+// prefixes is EVS_PREFIX_RULE before any request.
+func TestEvsPrefixRekeyOfAGitModeRefRefusedBeforeAnyRequest(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	writer.world.stateLock.Lock()
+	writer.world.mode = protocol.EvsRefMode_EVS_REF_GIT
+	writer.world.stateLock.Unlock()
+	reads, posts := writer.world.readCount(), len(writer.server.postedPushIds(t))
+	test.refuse = &AclPrefixWriteDecision{AclDecision: AclDecision{Reason: AclReasonPrefixRule}, Detail: AclPrefixDetailRefused, Path: "src/main.go"}
+	_, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
+		Path: "src/main.go", Content: bytes.NewReader([]byte("rekeyed")), IfVersion: evsTestUint64(1), ForceCheckpoint: true,
+	}}})
+	if evsPrefixTestDetail(err) != EvsPrefixDetailRefused {
+		t.Fatalf("a rekey outside the prefixes: %v", err)
+	}
+	if !slices.Equal(test.asked, []string{"src/main.go"}) {
+		t.Fatalf("asked %q", test.asked)
+	}
+	if writer.world.readCount() != reads || len(writer.server.postedPushIds(t)) != posts {
+		t.Fatalf("a refused rekey sent a request")
+	}
+}
+
+// Seals name as the head of other, a ref of world, carries it, as evs keeps a creating push's payload section 15.
+func evsPrefixTestSealName(t *testing.T, other *evsTestWorld, name string) {
+	t.Helper()
+	keys := evsTestKeys(t, other.repoId, max(1, other.generation))
+	sealed, err := EvsSealRefName(keys.manifest, other.refId, []byte(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.stateLock.Lock()
+	defer other.stateLock.Unlock()
+	other.sealedRefName = sealed
+}
+
+// Records that the writer's device mirrors the world's ref, as its mirror's first sync would.
+func (self *evsPrefixWriterTest) mirrorRef() {
+	self.t.Helper()
+	mirror, err := self.writer.test.client.Mirror(self.writer.world.repoId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if err := mirror.RaiseRef(&EvsMirrorRef{RefId: self.writer.world.refId, Version: 1, MirroredAt: self.writer.test.clock.Now()}); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// An ephemeral sidecar runs no repair, by its timer, by hand or for one path, whatever its composition says (16.2.8's
+// who), and the daemon's prefix timer passes a due unit and an owed pin push on a device that repairs.
+func TestEvsPrefixRepairPassesOnTheTimerAndNeverOnAnEphemeralSidecar(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	repoId := writer.world.repoId
+	settings := DefaultAclPrefixSettings()
+	judge := test.enableRepairs(settings)
+	if _, err := writer.write(t, "src/gone.go", []byte("good")); err != nil {
+		t.Fatal(err)
+	}
+	writer.server.know("src/gone.go")
+	gone := test.pushAs(test.held, &evsTestChange{path: "src/gone.go"})
+	test.journal(judge, EvsPrefixIgnoredRemove, "src/gone.go", gone)
+	test.mirrorRef()
+	writer.world.config.stateLock.Lock()
+	ownRow := writer.world.config.rows[test.admin.sidecarId]
+	ownRow.Ephemeral = true
+	writer.world.config.stateLock.Unlock()
+	writer.test.clock.advance(settings.RepairDelay + settings.RepairJitter)
+	if _, err := writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId, ByHand: true}); !errors.Is(err, ErrEvsPrefixRepairOff) {
+		t.Fatalf("an ephemeral sidecar by hand: %v", err)
+	}
+	if _, err := writer.repo.RepairPath(ctx, nil, "src/gone.go"); !errors.Is(err, ErrEvsPrefixRepairOff) {
+		t.Fatalf("an ephemeral sidecar's one path: %v", err)
+	}
+	statements, _ := writer.server.sentCounts()
+	writer.test.client.passPrefixRepair(ctx)
+	if after, _ := writer.server.sentCounts(); after != statements {
+		t.Fatalf("an ephemeral sidecar's timer repaired")
+	}
+	writer.world.config.stateLock.Lock()
+	ownRow.Ephemeral = false
+	writer.world.config.stateLock.Unlock()
+	writer.test.client.passPrefixRepair(ctx)
+	if after, _ := writer.server.sentCounts(); after != statements+1 {
+		t.Fatalf("%d statements for the timer's repair", after-statements)
+	}
+	if units, err := judge.journal(repoId); err != nil || len(units) != 0 {
+		t.Fatalf("the journal after the timer's pass: %v %v", units, err)
+	}
+	reader := test.ruledReader("reader")
+	if content, info, err := test.read(reader, "src/gone.go"); err != nil || content != "good" || info.IgnoredAbove != 0 {
+		t.Fatalf("after the timer's repair: %q %+v %v", content, info, err)
+	}
+}
+
+// `ur evs rules`' subjects read against the verified state and the config head's names (16.2.2, 16.2.9): sidecar:,
+// user:, tag: and the four autogroups name their atoms; group: is refused with its members' user: subjects; any other
+// form, an autogroup a rule cannot name, a name the head does not hold, and a user: with no head at all are refused.
+// Each atom prints back as the form that names it.
+func TestEvsPrefixSubjectsReadAgainstTheHead(t *testing.T) {
+	net, ci, _ := newTestConfigTagNet(t)
+	laptop := net.admitMemberDevice("prefix subject laptop")
+	group := testConfigId("prefix subject group")
+	net.withAclRows(func(rows *protocol.AclRows) {
+		rows.Atoms = append(rows.Atoms, &protocol.AclAtom{Atom: group.Bytes(), MemberIds: [][]byte{laptop.memberId.Bytes()}})
+	})
+	state := net.log.State()
+	local := &AclLocalPolicy{Names: []AclLocalName{
+		{Id: ci, Text: "tag:ci"},
+		{Id: group, Text: "group:eng"},
+		{Id: AclDerivedAtom(AclDerivedAtomMember, laptop.memberId.Bytes()), Text: "user:laptop@example.com"},
+	}}
+	for _, c := range []struct {
+		text string
+		want Id
+	}{
+		{text: "sidecar:" + laptop.sidecarId.String(), want: laptop.sidecarId},
+		{text: "user:laptop@example.com", want: laptop.memberId},
+		{text: "tag:ci", want: ci},
+		{text: "autogroup:sidecar", want: AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SIDECAR)},
+		{text: "autogroup:member", want: AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)},
+		{text: "autogroup:tagged", want: AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_TAGGED)},
+		{text: "autogroup:ephemeral", want: AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_EPHEMERAL)},
+	} {
+		if got, err := evsPrefixSubjectOf(state, local, c.text); err != nil || got != c.want {
+			t.Errorf("%s: %s %v", c.text, got, err)
+		}
+		if text := evsPrefixSubjectText(state, local, c.want); text != c.text {
+			t.Errorf("%s prints as %q", c.want, text)
+		}
+	}
+	var groupErr *EvsPrefixGroupSubjectError
+	if _, err := evsPrefixSubjectOf(state, local, "group:eng"); !errors.As(err, &groupErr) || !errors.Is(err, ErrEvsPrefixSubject) ||
+		groupErr.Group != "eng" || !slices.Equal(groupErr.Members, []string{"user:laptop@example.com"}) {
+		t.Errorf("a group: %v", err)
+	}
+	for _, text := range []string{"tag:nope", "user:nobody@example.com", "autogroup:admin", "role:admin", "sidecar:nope", "nocolon", "tag:"} {
+		if _, err := evsPrefixSubjectOf(state, local, text); !errors.Is(err, ErrEvsPrefixSubject) {
+			t.Errorf("%q: %v", text, err)
+		}
+	}
+	if _, err := evsPrefixSubjectOf(state, nil, "user:laptop@example.com"); !errors.Is(err, ErrEvsPrefixSubject) {
+		t.Errorf("a user: with no head: %v", err)
+	}
+	if text := evsPrefixSubjectText(state, local, testConfigId("nobody")); !strings.HasPrefix(text, "id:") {
+		t.Errorf("an unknown atom prints as %q", text)
+	}
+}
+
+// The repair form's twin (16.6's writer bullet; PrefixRulesTwin-DiffOnNewest on the code): under a hook that sends a
+// write over an ignored version as a diff on it, the allowed version's chain rests on the breach's record, and a reader
+// that cannot fetch the breach's segment cannot read the file; the repair form's checkpoint needs nothing of it.
+func TestEvsPrefixWriteOverAnIgnoredVersionAsADiffRestsOnTheIgnoredRecord(t *testing.T) {
+	t.Cleanup(func() { evsPrefixRepairDiffHook = nil })
+	for _, diff := range []bool{false, true} {
+		test := newEvsPrefixWriterTest(t)
+		writer := test.writer
+		good := evsTestContent("good", 64*1024)
+		if _, err := writer.write(t, "src/main.go", good); err != nil {
+			t.Fatal(err)
+		}
+		breached := bytes.Clone(good)
+		breached[100] ^= 0xff
+		test.breach("src/main.go", breached)
+		breachSegments := map[string]bool{}
+		for _, locator := range writer.entry(t, "src/main.go").GetChain() {
+			if 0 < len(locator.GetId()) {
+				breachSegments[string(locator.GetId())] = true
+			}
+		}
+		if len(breachSegments) == 0 {
+			t.Fatal("the breach's version names no segment")
+		}
+		evsPrefixRepairDiffHook = nil
+		if diff {
+			evsPrefixRepairDiffHook = func() bool { return true }
+		}
+		repaired := bytes.Clone(good)
+		repaired[200] ^= 0xff
+		_, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
+			Path: "src/main.go", Content: bytes.NewReader(repaired), IfVersion: evsTestUint64(1),
+		}}})
+		evsPrefixRepairDiffHook = nil
+		if err != nil {
+			t.Fatalf("diff %v: %v", diff, err)
+		}
+		restsOnBreach := slices.ContainsFunc(writer.entry(t, "src/main.go").GetChain(), func(locator *protocol.EvsLocator) bool {
+			return breachSegments[string(locator.GetId())]
+		})
+		if restsOnBreach != diff {
+			t.Fatalf("diff %v: the allowed version's chain rests on the breach's record: %v", diff, restsOnBreach)
+		}
+		writer.world.stateLock.Lock()
+		for segment := range breachSegments {
+			delete(writer.world.segments, segment)
+		}
+		writer.world.stateLock.Unlock()
+		reader := test.ruledReader("reader")
+		content, _, err := test.read(reader, "src/main.go")
+		switch {
+		case diff && err == nil:
+			t.Errorf("a diff on the ignored version read with the breach's record gone")
+		case !diff && (err != nil || content != string(repaired)):
+			t.Errorf("the repair form with the breach's record gone: %v", err)
+		}
 	}
 }

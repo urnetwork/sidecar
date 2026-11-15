@@ -19,6 +19,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -41,6 +42,10 @@ type testDirectoryClientOptions struct {
 	auth func() sidecar.DirectoryAuthView
 	// DirectoryClientArgs.RepoDisplayName; none by default
 	repoDisplayName func(repoId sidecar.Id) string
+	// DirectoryClientArgs.Sign; a device's its writer's key, a reader's none
+	sign func(purpose string, signedType bridge.SignedType, body []byte, agentId *sidecar.Id) (*bridge.Signed, error)
+	// no network and no signer, so the client judges and writes no card or repo file
+	unbound bool
 }
 
 // A client of the world's for sidecarId, appending through writer, nil for none: a reader's, or a device's.
@@ -64,6 +69,11 @@ func (self *testDirectoryWorld) clientWith(sidecarId sidecar.Id, writer sidecar.
 		self.t.Fatal(err)
 	}
 	reader := &testDirectoryReader{files: files, store: store, synced: make(chan struct{}, 64)}
+	networkId := self.networkId
+	sign := options.sign
+	if options.unbound {
+		networkId, sign = sidecar.Id{}, nil
+	}
 	client, err := sidecar.NewDirectoryClient(&sidecar.DirectoryClientArgs{
 		SidecarId:  sidecarId,
 		Store:      store,
@@ -81,6 +91,8 @@ func (self *testDirectoryWorld) clientWith(sidecarId sidecar.Id, writer sidecar.
 		Writer:          writer,
 		ReadOnly:        readOnly,
 		RepoDisplayName: options.repoDisplayName,
+		NetworkId:       networkId,
+		Sign:            sign,
 	})
 	if err != nil {
 		self.t.Fatal(err)
@@ -121,6 +133,12 @@ func (self *testDirectoryWorld) deviceWith(writer *testDirectoryWriter, options 
 	})
 	if err != nil {
 		self.t.Fatal(err)
+	}
+	if options == nil {
+		options = &testDirectoryClientOptions{}
+	}
+	if options.sign == nil {
+		options.sign = writer.sign
 	}
 	return &testDirectoryDevice{writer: writer, record: record, testDirectoryReader: self.clientWith(writer.sidecarId, record.Writer(), false, options)}
 }
