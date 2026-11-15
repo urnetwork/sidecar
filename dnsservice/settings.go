@@ -111,6 +111,9 @@ type DnsSettings struct {
 	UserRecords DnsUserRecordSettings `yaml:"user_records"`
 	// How POST caa-canary bounds a strong-mode probe's canary (§12.8; DNS-M6-05). Not in the sketch.
 	CaaCanary DnsCaaCanarySettings `yaml:"caa_canary"`
+	// How the block judges the custom-host map's reports and route probes (§13.4; DNS-M6-03). Not in the
+	// sketch, whose prose gives the windows these default to.
+	Map DnsMapSettings `yaml:"map"`
 	// The roots whose DS the registrar publishes (D-DNS-5; DNS-M7-04), canonical once loaded. The DS
 	// itself is external: a person publishes it once the monitor reports the root's 30 clean canary days,
 	// then lists the root here, and from then on the monitor's public resolvers must validate its canary
@@ -190,6 +193,56 @@ type DnsCaaCanarySettings struct {
 	RecordMaxCount int `yaml:"record_max_count"`
 	// The most bytes a request body may hold. Must be positive.
 	RequestMaxByteCount int `yaml:"request_max_bytes"`
+}
+
+// How the block holds the map's long-poll and judges currency, readiness and map-stale (§13.4; DNS-M6-03), in
+// seconds but for the bounds. The model reads the same values from the same dns.yml for GET /network/dns.
+type DnsMapSettings struct {
+	// How long GET custom-host-map holds a poll whose applied version is the newest: §12.8's 25. Must be
+	// positive and below the lb's api.lb_proxy_read_timeout_s.
+	HoldSeconds int `yaml:"hold_s"`
+	// How often a held poll reads the map again, since a change to the active rows raises no wake. Must be
+	// positive.
+	HoldPollSeconds int `yaml:"hold_poll_s"`
+	// An interface whose lbmap has neither polled nor reported this long has loaded no version: §13.4's 2 min.
+	// Must be positive.
+	PollSilenceSeconds int `yaml:"poll_silence_s"`
+	// How long an edge's passing probe of the reported version's probe name counts: §13.4's 2 min. Must be
+	// positive.
+	ProbeFreshSeconds int `yaml:"probe_fresh_s"`
+	// A version this old must be current on an interface, else it is map-stale: §13.4's 20 min. Must be
+	// positive.
+	StaleAfterSeconds int `yaml:"stale_after_s"`
+	// The most bytes a POST custom-host-map/applied body may hold. Must be positive.
+	ReportMaxByteCount int `yaml:"report_max_bytes"`
+	// The most hosts a report's added or dropped list may name, and the most dropped hosts kept for a
+	// restore's list. Must be positive.
+	ReportHostMaxCount int `yaml:"report_hosts"`
+	// The most bytes a POST route-probes body may hold. Must be positive.
+	ProbesMaxByteCount int `yaml:"probes_max_bytes"`
+}
+
+// Whether every window and bound is positive and the hold stays under the lb's read timeout.
+func (self *DnsMapSettings) validate(lbProxyReadTimeoutSeconds int) error {
+	switch {
+	case self.HoldSeconds <= 0 || lbProxyReadTimeoutSeconds <= self.HoldSeconds:
+		return fmt.Errorf("hold_s is not positive and under the lb's %d s", lbProxyReadTimeoutSeconds)
+	case self.HoldPollSeconds <= 0:
+		return errors.New("hold_poll_s is not positive")
+	case self.PollSilenceSeconds <= 0:
+		return errors.New("poll_silence_s is not positive")
+	case self.ProbeFreshSeconds <= 0:
+		return errors.New("probe_fresh_s is not positive")
+	case self.StaleAfterSeconds <= 0:
+		return errors.New("stale_after_s is not positive")
+	case self.ReportMaxByteCount <= 0:
+		return errors.New("report_max_bytes is not positive")
+	case self.ReportHostMaxCount <= 0:
+		return errors.New("report_hosts is not positive")
+	case self.ProbesMaxByteCount <= 0:
+		return errors.New("probes_max_bytes is not positive")
+	}
+	return nil
 }
 
 // How the API block holds, reads and bounds its routes (DNS-M5-08, §12.8).
@@ -513,6 +566,16 @@ func DefaultDnsSettings() *DnsSettings {
 			RecordMaxCount:      16,
 			RequestMaxByteCount: 16 * 1024,
 		},
+		Map: DnsMapSettings{
+			HoldSeconds:        25,
+			HoldPollSeconds:    1,
+			PollSilenceSeconds: 120,
+			ProbeFreshSeconds:  120,
+			StaleAfterSeconds:  20 * 60,
+			ReportMaxByteCount: 4 * 1024 * 1024,
+			ReportHostMaxCount: 16 * 1024,
+			ProbesMaxByteCount: 1024 * 1024,
+		},
 	}
 }
 
@@ -669,6 +732,9 @@ func (self *DnsSettings) Validate() error {
 	}
 	if self.CaaCanary.RequestMaxByteCount <= 0 {
 		return refuse("caa_canary.request_max_bytes is not positive")
+	}
+	if err := self.Map.validate(self.Api.LbProxyReadTimeoutSeconds); err != nil {
+		return refuse("map: %v", err)
 	}
 	if err := self.Signing.validate(); err != nil {
 		return refuse("signing: %v", err)

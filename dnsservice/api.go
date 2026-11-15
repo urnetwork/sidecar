@@ -222,6 +222,10 @@ type DnsApiDeps struct {
 	// certs' CAA canaries for a strong-mode custom host's probe through the same path (DNS-M6-05). nil
 	// answers every canary 503, so nothing is written around the path.
 	CaaCanaries DnsCaaCanaryWriter
+	// The custom-host map's versions, lbmap's reports and the route probes' results (DNS-M6-03). nil answers
+	// the map's routes 503 and names no map in the feed, so no interface is ever current and every custom host
+	// stays pending: the closed direction.
+	CustomHostMaps DnsCustomHostMapStore
 	// dns_canary_verdict, where the monitors' reports go (DNS-M5-17). nil answers every report 503 and
 	// keeps no verdict, so ready answers canary_failing: plan-DNS-canary-route-state's interim until the
 	// table's §2.8 row lands.
@@ -332,7 +336,7 @@ func NewDnsApi(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 // Every route the block serves. A later task adds its own list here.
 func (self *DnsApi) routes() []*dnsApiRoute {
 	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes(), self.canaryRoutes(), self.recordRoutes(),
-		self.reclaimRoutes(), self.keyRecordRoutes(), self.caaCanaryRoutes())
+		self.reclaimRoutes(), self.keyRecordRoutes(), self.caaCanaryRoutes(), self.mapRoutes())
 }
 
 // The handler every route runs behind: the bearer's class, or a sidecar's service token for the record
@@ -418,6 +422,14 @@ func (self *DnsApi) run() {
 			}
 		}
 		self.storesReachable.Set(reachable)
+		// the custom-host map's interface rows follow the lb inventory (DNS-M6-03)
+		func() {
+			ctx, cancel := context.WithCancel(self.ctx)
+			defer cancel()
+			stop := self.clock.AfterFunc(dnsSeconds(self.settings.Api.StoreTimeoutSeconds), cancel)
+			defer stop()
+			self.syncMapInterfaces(ctx)
+		}()
 		next := self.clock.After(dnsSeconds(self.settings.Api.StoreProbeSeconds))
 		self.probeCount.Update(func(count int) int { return count + 1 })
 		select {
@@ -517,6 +529,10 @@ type dnsApiMetrics struct {
 	records sidecar.MetricsCounter
 	// certs' CAA canary writes and deletes, by result.
 	caaCanaries sidecar.MetricsCounter
+	// The custom-host map's polls, reports and route-probe rounds, by result.
+	maps sidecar.MetricsCounter
+	// Loads lbmap reported failing, by stage.
+	mapLoadFailures sidecar.MetricsCounter
 }
 
 func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
@@ -529,6 +545,12 @@ func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
 		records:    metrics.Counter("urnetwork_dns_record_writes_total", "Record writes sidecars sent, by result.", "result"),
 		caaCanaries: metrics.Counter(
 			"urnetwork_dns_caa_canaries_total", "CAA canary publishes and deletes certs asked for, by result.", "result",
+		),
+		maps: metrics.Counter(
+			"urnetwork_dns_custom_host_map_requests_total", "Custom-host map polls, reports and route-probe rounds, by result.", "result",
+		),
+		mapLoadFailures: metrics.Counter(
+			"urnetwork_dns_custom_host_map_load_failures_total", "Custom-host map loads lbmap reported failing, by stage.", "stage",
 		),
 	}
 }
