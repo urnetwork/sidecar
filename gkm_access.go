@@ -8,6 +8,10 @@
 //	                yet takes its first wrap. ErrGkmUnavailable with none
 //	RepoKey         generation g from the keychain, else the generations gkm holds past this device's, else the
 //	                ladder walked down from the newest it opened; ErrGkmKeyMissing for one it cannot reach
+//	                Both reach gkm at the newest verified state, or, for the config repo alone, at the unconfirmed
+//	                one the config follower gives before it stands (QD-817, keyState), so a joining device opens
+//	                the config heads; a key of any other repo the keychain does not hold refuses with
+//	                ErrGkmUnavailable until a verified state is held
 //	EnsureWritable  §8.12's primary control, in order:
 //	                1  this device writes the repo at its state, else ErrGkmNotWriter
 //	                2  it takes what gkm holds past its own generation and epoch, then commits the pending Removes
@@ -52,7 +56,7 @@ func (self *GkmGroupClient) CurrentRepoKey(ctx context.Context, repoId Id) (*Evs
 	held, err := self.newestOpenedGeneration(repoId)
 	if errors.Is(err, ErrGkmKeyMissing) {
 		// nothing opened yet: a first wrap, or a delivery that came since this device last looked
-		state, stateErr := self.currentState()
+		state, stateErr := self.keyState(repoId)
 		if stateErr != nil {
 			return nil, stateErr
 		}
@@ -98,7 +102,7 @@ func (self *GkmGroupClient) RepoKey(ctx context.Context, repoId Id, generation u
 		return key, err
 	}
 	// not in the keychain: past this device's newest, or below one it opened
-	state, err := self.currentState()
+	state, err := self.keyState(repoId)
 	if err != nil {
 		return nil, err
 	}

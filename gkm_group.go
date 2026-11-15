@@ -20,6 +20,14 @@
 // (KEYS-M2-21), CurrentRepoKey, RepoKey, EnsureWritable, DropKey and ForgetRepo (KEYS-M2-22, gkm_access.go), and
 // the group sync, pins and HeadCheck heads (KEYS-M2-23, gkm_sync.go and gkm_pins.go).
 //
+// A device that holds no generation of its config repo, every member device but the network's first, gets no verified
+// state until its config follower stands, and the follower cannot stand until it opens the config heads (QD-817). The
+// follower hands such a device the states it verified rows-only (GkmConfigJoiner's AuthUnconfirmed), which serve one
+// purpose: to join the config group, by its Welcome (JoinWelcomes) or a wrap (CurrentRepoKey and RepoKey's first
+// wrap), and open the config repo's generation keys. Every other flow reads currentState, which never answers an
+// unconfirmed state, so a seal, a commit, a rotation, an admission, and a key of any other repo refuse with
+// ErrGkmUnavailable until the follower stands and AuthAdvanced gives the first verified state.
+//
 // Locks: a manager's flowLock is held across a whole flow and its I/O, so it is never taken under stateLock, which
 // guards only the newest state and the manager table. Safe for concurrent use.
 
@@ -168,8 +176,13 @@ type GkmGroupClient struct {
 
 	stateLock sync.Mutex
 	// the newest verified state the log applier gave
-	state          GkmAuthView
-	repoIdManagers map[Id]*gkmGroupManager
+	state GkmAuthView
+	// the newest state the config follower verified rows-only before it stands, no config head checked, and the config
+	// repo its genesis names (AuthUnconfirmed; QD-817): what joining the config group and opening the config repo's keys
+	// run at while no verified state is held, nothing else; nil once one is
+	unconfirmedState        GkmAuthView
+	unconfirmedConfigRepoId Id
+	repoIdManagers          map[Id]*gkmGroupManager
 	// the hint work running now, by kind and repo
 	hintWorkKeys map[string]bool
 	// what HeadCheck and the acks read from memory: each held repo's pins and its tree's leaves (gkm_pins.go)
@@ -193,6 +206,23 @@ type GkmGroupClient struct {
 }
 
 var _ GkmClient = (*GkmGroupClient)(nil)
+
+// A key client that lets a device take its config group's key before its config follower stands (QD-817): while the
+// keychain holds no generation of the config repo, the follower applies the log rows-only as a gate does (§7.9's device
+// posture), hands each state it so reaches to AuthUnconfirmed, and re-reads every base with its head judged in full
+// before it stands. GkmGroupClient, and a host's key client over one.
+type GkmConfigJoiner interface {
+	// Whether the keychain holds RK_g of some generation of the repo, and a channel closed once it next takes a
+	// generation of it: armed before the look, so a key taken between them closes it.
+	RepoKeyHeld(repoId Id) (bool, <-chan struct{})
+	// A state the follower verified rows-only, no config head checked, and the config repo its genesis names. It serves
+	// only to join the config group, by its Welcome (KF2) or a wrap, and to open the config repo's generation keys:
+	// every other act refuses on it. It never blocks; a state at or below the newest given changes nothing, and none
+	// does once a verified state is held.
+	AuthUnconfirmed(state GkmAuthView, configRepoId Id)
+}
+
+var _ GkmConfigJoiner = (*GkmGroupClient)(nil)
 
 // A client with no state yet: every flow refuses with ErrGkmUnavailable until the first AuthAdvanced.
 func NewGkmGroupClient(args *GkmGroupClientArgs) (*GkmGroupClient, error) {
@@ -229,10 +259,70 @@ func (self *GkmGroupClient) AuthAdvanced(state GkmAuthView) {
 		return
 	}
 	self.state = state
+	// a verified state supersedes every unconfirmed one
+	self.unconfirmedState, self.unconfirmedConfigRepoId = nil, Id{}
+}
+
+// The config follower's state before it stands (GkmConfigJoiner; QD-817), kept for the config group's join alone:
+// nothing once a verified state is held, or for a state at or below the newest unconfirmed one. Never blocks.
+func (self *GkmGroupClient) AuthUnconfirmed(state GkmAuthView, configRepoId Id) {
+	if state == nil || configRepoId == (Id{}) {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.state != nil {
+		return
+	}
+	if self.unconfirmedState != nil && state.Pin().GetVersion() <= self.unconfirmedState.Pin().GetVersion() {
+		return
+	}
+	self.unconfirmedState, self.unconfirmedConfigRepoId = state, configRepoId
+}
+
+// Whether the keychain holds RK_g of some generation of the repo, and a channel closed once it next takes a generation
+// of it (GkmConfigJoiner). It reads no state, so it answers in a process that does not hold the network's state too.
+func (self *GkmGroupClient) RepoKeyHeld(repoId Id) (bool, <-chan struct{}) {
+	// armed before the look, so a generation kept between them closes it
+	changed := self.generationWaits.signal(repoId)
+	held, err := gkmKeychainHoldsRepoKey(self.args.Secrets, repoId)
+	if err != nil && self.log.V(1).Enabled() {
+		self.log.Infof("[gkm]%s the keychain's generations do not read: %v", repoId, err)
+	}
+	return err == nil && held, changed
+}
+
+// Whether secrets, a network's keychain under gkm's namespace, holds RK_g of some generation of the repo, a poisoned
+// one never opened not counting: read with no state, by a key client or by its host before one is built
+// (Sidecar.GkmRepoKeyHeld).
+func gkmKeychainHoldsRepoKey(secrets SidecarSecrets, repoId Id) (bool, error) {
+	names, err := secrets.List(gkmRepoRecordName(repoId, "gen/"))
+	if err != nil {
+		return false, err
+	}
+	// 20-digit names sort as numbers, and the newest is the likeliest held
+	for index := len(names) - 1; 0 <= index; index -= 1 {
+		encoded, err := secrets.Get(names[index])
+		if errors.Is(err, ErrSidecarStoreAbsent) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		held, err := decodeGkmHeldGeneration(encoded)
+		clear(encoded)
+		if err != nil {
+			return false, err
+		}
+		if held.key != nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // The newest verified state, or ErrGkmUnavailable before the first, and in a process that does not hold the
-// network's state, where no flow runs.
+// network's state, where no flow runs. An unconfirmed state never answers here (joiningState).
 func (self *GkmGroupClient) currentState() (GkmAuthView, error) {
 	if !self.holdsState() {
 		return nil, fmt.Errorf("%w: this process does not hold the network's state", ErrGkmUnavailable)
@@ -243,6 +333,38 @@ func (self *GkmGroupClient) currentState() (GkmAuthView, error) {
 		return nil, fmt.Errorf("%w: no verified state yet", ErrGkmUnavailable)
 	}
 	return self.state, nil
+}
+
+// The state a join of the config group runs at (QD-817): the newest verified state, else the newest unconfirmed one the
+// config follower handed over before it stands, with the config repo it serves; confirmed says which.
+// ErrGkmUnavailable with neither, and in a process that does not hold the network's state.
+func (self *GkmGroupClient) joiningState() (state GkmAuthView, configRepoId Id, confirmed bool, err error) {
+	if !self.holdsState() {
+		return nil, Id{}, false, fmt.Errorf("%w: this process does not hold the network's state", ErrGkmUnavailable)
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	switch {
+	case self.state != nil:
+		return self.state, Id{}, true, nil
+	case self.unconfirmedState != nil:
+		return self.unconfirmedState, self.unconfirmedConfigRepoId, false, nil
+	}
+	return nil, Id{}, false, fmt.Errorf("%w: no verified state yet", ErrGkmUnavailable)
+}
+
+// The state a read of the repo's keys runs at: the newest verified state, else, for the config repo alone, the newest
+// unconfirmed one (QD-817), whose first wrap and ladder open the config repo's generation keys. ErrGkmUnavailable for
+// any other repo while no verified state is held.
+func (self *GkmGroupClient) keyState(repoId Id) (GkmAuthView, error) {
+	state, configRepoId, confirmed, err := self.joiningState()
+	if err != nil {
+		return nil, err
+	}
+	if !confirmed && repoId != configRepoId {
+		return nil, fmt.Errorf("%w: no verified state yet, and an unconfirmed one opens the config repo's keys alone", ErrGkmUnavailable)
+	}
+	return state, nil
 }
 
 // The repo's manager, made at first use.
@@ -895,14 +1017,43 @@ func (self *GkmGroupClient) repoOfGroup(ctx context.Context, groupId Id) (Id, bo
 	return Id{}, false, nil
 }
 
+// Whether groupId is the repo's group: the group of its pins where this device holds them, else the group its newest
+// GroupForm at gkm names, a re-form's included, which joinInFlow follows along a verified form chain. What gkm answers
+// binds nothing, as repoOfGroup's rule says.
+func (self *GkmGroupClient) isGroupOfRepo(ctx context.Context, repoId Id, groupId Id) (bool, error) {
+	if pins, err := self.repoPins(repoId); err == nil && pins.groupId == groupId {
+		return true, nil
+	} else if err != nil && !errors.Is(err, ErrGkmKeyMissing) {
+		return false, err
+	}
+	forms, err := self.args.Api.Forms(ctx, repoId)
+	if err != nil {
+		if _, refused := GkmErrorOf(err); refused {
+			return false, nil
+		}
+		return false, err
+	}
+	signedForms := forms.GetForms()
+	if len(signedForms) == 0 {
+		return false, nil
+	}
+	form := &protocol.GroupForm{}
+	if err := proto.Unmarshal(signedForms[len(signedForms)-1].GetBody(), form); err != nil {
+		return false, nil
+	}
+	return bytes.Equal(form.GetGroupId(), groupId.Bytes()), nil
+}
+
 // KF2's joiner (the welcome hint's work, and each resync's): takes each Welcome gkm holds for this sidecar. Of the
 // pointers for one group it takes the one with the highest epoch above the newest it reached and skips the rest: a
 // lower one names a leaf a later Remove took out, or an epoch at or below its pin (I-16). Returns the repos joined.
+// On an unconfirmed state, before the config follower stands, it takes the config group's Welcome alone (QD-817), and
+// every other group's waits for a verified state.
 func (self *GkmGroupClient) JoinWelcomes(ctx context.Context) ([]Id, error) {
 	if self.args.Mls == nil {
 		return nil, nil
 	}
-	state, err := self.currentState()
+	state, configRepoId, confirmed, err := self.joiningState()
 	if err != nil {
 		return nil, err
 	}
@@ -928,7 +1079,15 @@ func (self *GkmGroupClient) JoinWelcomes(ctx context.Context) ([]Id, error) {
 	joinedRepoIds := []Id{}
 	errs := []error{}
 	for _, groupId := range groupIds {
-		repoId, found, err := self.repoOfGroup(ctx, groupId)
+		var repoId Id
+		var found bool
+		if confirmed {
+			repoId, found, err = self.repoOfGroup(ctx, groupId)
+		} else {
+			// an unconfirmed state looks at the config repo alone
+			repoId = configRepoId
+			found, err = self.isGroupOfRepo(ctx, configRepoId, groupId)
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue
