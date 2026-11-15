@@ -270,6 +270,8 @@ type testForwarderWorld struct {
 	keys         *testForwarderKeys
 	gkm          *testForwarderGkm
 	forwardHeads *testForwarderHeads
+	// the reader the Forwarder is built over, forwardHeads where nil
+	heads        ConfigHeadReader
 	forwardStore *testForwarderStore
 	// the world's projection, unreachable while a test says
 	api       *testForwarderFailingProjection
@@ -446,6 +448,10 @@ func (self *testForwarderWorld) wrap(generation uint64, recipient testForwarderR
 func (self *testForwarderWorld) forwarderIn(ctx context.Context) *Forwarder {
 	self.t.Helper()
 	genesisChain := bridge.GenesisChain(self.net.signedGenesis)
+	var heads ConfigHeadReader = self.forwardHeads
+	if self.heads != nil {
+		heads = self.heads
+	}
 	forwarder, err := NewForwarder(ctx, &ForwarderArgs{
 		NetworkId:     self.net.networkId,
 		SidecarId:     self.host.sidecarId,
@@ -453,7 +459,7 @@ func (self *testForwarderWorld) forwarderIn(ctx context.Context) *Forwarder {
 		ConfigRepoId:  self.net.configRepoId(),
 		ConfigGroupId: self.groupId,
 		Projection:    self.api,
-		Heads:         self.forwardHeads,
+		Heads:         heads,
 		Gkm:           self.gkm,
 		Binding: func(ctx context.Context, sidecarId Id) ([]byte, error) {
 			self.stateLock.Lock()

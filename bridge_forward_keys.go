@@ -128,15 +128,15 @@ func (self *Forwarder) loadGenerations() (map[uint64]*forwarderGeneration, error
 	return held, nil
 }
 
-// Step 2 of a compile: opens the generations gkm lists past those held, when the compile lacks one of wanted or holds
-// none, into held and the store. Returns how many it opened. state is the judged state, whose identity keys a
+// Step 2 of a compile: opens the generations gkm lists past those held, when the compile lacks one of wanted, holds
+// none, or follows a head read that lacked a generation's key, into held and the store. Returns how many it opened. state is the judged state, whose identity keys a
 // GenRotate and a wrap verify under. A read of gkm that fails is an error, which the compile retries; a generation
 // with no wrap is not.
 func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, held map[uint64]*forwarderGeneration, wanted []uint64) (int, error) {
 	if self.args.Gkm == nil {
 		return 0, nil
 	}
-	lacking := len(held) == 0 || 0 < len(self.keyWaits) || slices.ContainsFunc(wanted, func(generation uint64) bool { return held[generation] == nil })
+	lacking := len(held) == 0 || 0 < len(self.keyWaits) || self.headKeysWanted || slices.ContainsFunc(wanted, func(generation uint64) bool { return held[generation] == nil })
 	if !lacking {
 		return 0, nil
 	}
@@ -151,6 +151,8 @@ func (self *Forwarder) openGenerations(ctx context.Context, state *ConfigState, 
 	if err != nil {
 		return 0, fmt.Errorf("gkm's generations after %d: %w", since, err)
 	}
+	// listed: a generation the head's read lacked opens now if gkm has it, and waits for its wrap otherwise
+	self.headKeysWanted = false
 	identityKey := GkmIdentityKeys(state)
 	listed := []*GkmGeneration{}
 	signedRotates := [][]byte{}
