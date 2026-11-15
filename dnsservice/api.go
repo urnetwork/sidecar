@@ -219,6 +219,9 @@ type DnsApiDeps struct {
 	Challenges DnsChallengeWriter
 	// The site monitor's canary writes through the same path (DNS-M5-17). nil answers every canary 503.
 	Canaries DnsCanaryWriter
+	// certs' CAA canaries for a strong-mode custom host's probe through the same path (DNS-M6-05). nil
+	// answers every canary 503, so nothing is written around the path.
+	CaaCanaries DnsCaaCanaryWriter
 	// dns_canary_verdict, where the monitors' reports go (DNS-M5-17). nil answers every report 503 and
 	// keeps no verdict, so ready answers canary_failing: plan-DNS-canary-route-state's interim until the
 	// table's §2.8 row lands.
@@ -329,7 +332,7 @@ func NewDnsApi(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 // Every route the block serves. A later task adds its own list here.
 func (self *DnsApi) routes() []*dnsApiRoute {
 	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes(), self.canaryRoutes(), self.recordRoutes(),
-		self.reclaimRoutes(), self.keyRecordRoutes())
+		self.reclaimRoutes(), self.keyRecordRoutes(), self.caaCanaryRoutes())
 }
 
 // The handler every route runs behind: the bearer's class, or a sidecar's service token for the record
@@ -512,6 +515,8 @@ type dnsApiMetrics struct {
 	canaries sidecar.MetricsCounter
 	// Sidecars' record writes, by result.
 	records sidecar.MetricsCounter
+	// certs' CAA canary writes and deletes, by result.
+	caaCanaries sidecar.MetricsCounter
 }
 
 func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
@@ -522,5 +527,8 @@ func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
 		challenges: metrics.Counter("urnetwork_dns_challenges_total", "Challenge writes certs asked for, by result.", "result"),
 		canaries:   metrics.Counter("urnetwork_dns_canaries_total", "Canary writes and verdict reports the monitors sent, by result.", "result"),
 		records:    metrics.Counter("urnetwork_dns_record_writes_total", "Record writes sidecars sent, by result.", "result"),
+		caaCanaries: metrics.Counter(
+			"urnetwork_dns_caa_canaries_total", "CAA canary publishes and deletes certs asked for, by result.", "result",
+		),
 	}
 }
