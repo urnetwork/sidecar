@@ -210,7 +210,7 @@ func TestSearchMoreColdContract(t *testing.T) {
 		if progress.At.After(bound) {
 			t.Fatalf("%s: complete at %s, past B / R + 1 s at %s", query, progress.At, bound)
 		}
-		if first := record.reports[0]; first.At.Sub(start) > settings.MoreFirstProgress || first.Complete {
+		if first := record.reports[0]; first.At.Sub(start) > settings.MoreFirstProgress || first.Complete || first.MissingByteCount != total {
 			t.Fatalf("%s: the first report %+v", query, first)
 		}
 		for index := 1; index < len(record.reports); index += 1 {

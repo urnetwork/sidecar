@@ -113,6 +113,16 @@ func (self *SearchSync) moreMissing(repoId Id, refId Id) ([]*SearchSyncWanted, *
 	return searchFetchOrder(manifest, plan, lacking, ref.args.companion, false), manifest, nil
 }
 
+// Whether a snapshot of the ref now would search its all: held, and bridged to the snapshot's pin (7.2.7's all row).
+func (self *SearchSync) allUsable(repoId Id, refId Id) bool {
+	snapshot, err := self.Snapshot(repoId, refId)
+	if err != nil {
+		return false
+	}
+	defer snapshot.Release()
+	return snapshot.AllUsable()
+}
+
 // One round of a followed ref for a "search more" call: the all set kept, held to run.
 func (self *SearchSync) runMore(ctx context.Context, repoId Id, refId Id, run *searchSyncMoreRun) error {
 	self.stateLock.Lock()
@@ -241,12 +251,14 @@ func (self *SearchMore) setMissing(missing []*SearchSyncWanted) {
 // Runs the call: see the file header. Answers its last report; an error stops it, what it staged kept for the next.
 func (self *SearchMore) Run(ctx context.Context) (SearchMoreProgress, error) {
 	args := self.args
-	// at once, before anything slow (§16.10's first report)
-	self.report()
+	// the missing set is local state: judged, then reported at once, before anything slow (§16.10's first report)
 	missing, manifest, err := args.Sync.moreMissing(args.RepoId, args.RefId)
 	if err != nil {
 		return self.current(), err
 	}
+	missing = self.unsearched(missing)
+	self.setMissing(missing)
+	self.report()
 	if manifest == nil {
 		// never synced: a round brings the latest set, and with it a/m's listing, before the missing set is judged
 		if err := args.Sync.RunRound(ctx, args.RepoId, args.RefId, false); err != nil {
@@ -255,9 +267,10 @@ func (self *SearchMore) Run(ctx context.Context) (SearchMoreProgress, error) {
 		if missing, manifest, err = args.Sync.moreMissing(args.RepoId, args.RefId); err != nil {
 			return self.current(), err
 		}
+		missing = self.unsearched(missing)
+		self.setMissing(missing)
+		self.report()
 	}
-	missing = self.unsearched(missing)
-	self.setMissing(missing)
 	if waiting := args.Policy.MoreWaiting(self.current().MissingByteCount, args.AllowMetered); waiting != "" {
 		self.stateLock.Lock()
 		self.progress.Waiting = waiting
@@ -272,8 +285,9 @@ func (self *SearchMore) Run(ctx context.Context) (SearchMoreProgress, error) {
 			}
 		}
 	}
-	if len(missing) == 0 && !args.Policy.MayRefreshHead(args.RepoId) {
-		// nothing missing and the head refreshed lately: complete from the cache
+	if len(missing) == 0 && args.Sync.allUsable(args.RepoId, args.RefId) && !args.Policy.MayRefreshHead(args.RepoId) {
+		// nothing missing, all usable and the head refreshed lately: complete from the cache; an unusable all is
+		// fetched before the call answers, whatever the refresh interval (DESIGN-DETAILS 7.7)
 		self.complete()
 		return self.current(), nil
 	}
