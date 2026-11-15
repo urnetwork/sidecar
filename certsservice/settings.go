@@ -28,7 +28,7 @@ type CertsCaSettings struct {
 	Profile string
 	// How long an order lives at the CA from its creation, past which the CA calls it invalid however far
 	// it got: LE's tlsserver 8 h (LE's profiles page, read 2026-11-15). An order at this CA gives up no
-	// later (CertsSettings.OrderGiveUpAge). Zero: the CA's lifetime is not known here, and
+	// later than this (CertsSettings.OrderGiveUpAge). Zero: the CA's lifetime is not known here, and
 	// OrderGiveUpAge alone bounds its orders. Never negative.
 	OrderLifetime time.Duration
 	// New-set orders at most BudgetCap in any BudgetWindow, under <root>'s budget with this CA

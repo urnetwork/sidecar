@@ -1,5 +1,5 @@
 // §13.8's order policy, pure on the times it is given, so a fake clock moves every rule (D-TLS-7). Each
-// rule keeps under a limit of the CA's, Let's Encrypt's as its rate-limits page (last updated
+// rule keeps under one of the CA's limits, Let's Encrypt's as its rate-limits page (last updated
 // 2026-08-05) states them, read 2026-11-15 (QD-784):
 //
 //   - A new set, one no certificate was ever issued for, spends one unit of <root>'s budget at the CA
@@ -25,8 +25,8 @@
 // A renewal's order names replaces when the row it renews kept its chain, as every row has since
 // QD-741, and when the CA has not already taken a replacement for that certificate. A row issued before
 // then renews with no replaces, and acmez sends a renewal again without it when the CA answers
-// alreadyReplaced (RFC 9773 §5): LE counts either as a repeated set, which this policy lets through as a
-// renewal.
+// alreadyReplaced (RFC 9773 §5): LE counts either against its exact-set and failed-authorization limits,
+// which this policy does not check for a renewal.
 //
 // A CA is chosen in the sidecar's order: LE, GTS, ZeroSSL, or for an ephemeral sidecar GTS, ZeroSSL, LE.
 
