@@ -63,8 +63,9 @@
 //
 // A push in parts goes one part a call and then its seal, never whole (QD-836; question
 // evs-reseed-parts-request-bound): every call carries at most one part of at most 1 MiB, so each is held to
-// ReseedBodyMaxByteCount, within the lb's 16 MiB (RequestBodyMaxByteCount), and evs holds one part a call, whatever
-// the push's 1,024 parts hold. A call carrying a push in parts whole, or more than one part, is INVALID. The parts'
+// ReseedBodyMaxByteCount, within the lb's 16 MiB (RequestBodyMaxByteCount), and a request holds one part, whatever the
+// push's 1,024 parts hold; the seal reads its parts back from their records for its checks, as the push route's seal
+// does. A call carrying a push in parts whole, or more than one part, is INVALID. The parts'
 // records are written before the seal is checked, as posted parts are: a part call retried after an answer it lost
 // writes a second record and the seal names one, and parts a seal never names, a seal that never came's or a retry's
 // copy, are dead weight that evacuation drops once their push is dead (resolve.go), as it drops a posted part no seal

@@ -138,3 +138,73 @@ func TestEvsReseedReturnsAPushInPartsEndToEnd(t *testing.T) {
 		t.Fatalf("the fresh mirror's check: %+v, %v", check, err)
 	}
 }
+
+// FS-41's storage clause for a push in parts past the lb's 16 MiB (QD-836), which QD-725's one call could not carry:
+// the writer pushes 1,300 files of 15,000 B each in one push, each an inline record, so the push goes in at least 20
+// parts of about 1 MiB whose records hold more than RequestBodyMaxByteCount together; a mirror syncs it; the site is
+// lost; and the repo admin's walk re-seeds it a part a call and then its seal, every call within the engine's bounds.
+// The ref returns under its own chain, the push as a seal naming a reseed record per part, and a fresh reader reads the
+// first, a middle and the last file and lists them all.
+func TestEvsReseedReturnsAPushInPartsPastTheRequestBoundEndToEnd(t *testing.T) {
+	world := newEpochWorld(t)
+	mirrorWorldAdmin(world, "w")
+	writer := world.device("w", nil)
+	files := map[string][]byte{}
+	for i := 0; i < 1300; i += 1 {
+		files[fmt.Sprintf("big/f-%04d", i)] = bytes.Repeat([]byte{byte(i)}, 15000)
+	}
+	if _, err := writer.writePaths(files); err != nil {
+		t.Fatalf("the push in parts: %v", err)
+	}
+	refId := world.mainRefId(writer)
+	lost := world.head(refId)
+	seal := world.recordAt(lost, lost.GetVersion())
+	_, sealParts, err := sidecar.ParseEvsSealRecordBody(seal.Body)
+	if err != nil || seal.Type != protocol.EvsBatchRecordType_EVS_BATCH_SEAL || len(sealParts) < 20 {
+		t.Fatalf("the lost site's version %d is type %s with %d parts: %v", lost.GetVersion(), seal.Type, len(sealParts), err)
+	}
+	partByteCount := 0
+	for _, sealPart := range sealParts {
+		partByteCount += len(world.recordAtPlace(sealPart.Place).Body)
+	}
+	if requestBound := evsservice.DefaultEvsSettings().RequestBodyMaxByteCount; int64(partByteCount) <= requestBound {
+		t.Fatalf("the parts' records hold %d bytes, within the request bound's %d", partByteCount, requestBound)
+	}
+	mirror := newWorldMirror(t, world, writer)
+	if synced, err := mirror.Sync(world.ctx); err != nil || synced.MissingCount != 0 {
+		t.Fatalf("the mirror's sync: %+v, %v", synced, err)
+	}
+
+	world.loseSite()
+	result, err := world.reseed(writer, &sidecar.EvsReseedArgs{IncidentId: []byte("incident 836")})
+	if err != nil || !result.Whole() {
+		t.Fatalf("the re-seed: %+v, %v", result, err)
+	}
+	main := reseedRefOf(t, result, refId)
+	if main.Version != lost.GetVersion() || !bytes.Equal(main.Chain[:], lost.GetChain()) {
+		t.Fatalf("the main ref returned to %d of %d", main.Version, lost.GetVersion())
+	}
+	returned := world.head(refId)
+	if returned.GetVersion() != lost.GetVersion() || !bytes.Equal(returned.GetChain(), lost.GetChain()) {
+		t.Fatalf("the returned head is at %d", returned.GetVersion())
+	}
+	_, returnedParts, err := sidecar.ParseEvsSealRecordBody(world.recordAt(returned, returned.GetVersion()).Body)
+	if err != nil || len(returnedParts) != len(sealParts) {
+		t.Fatalf("the returned seal names %d parts of %d: %v", len(returnedParts), len(sealParts), err)
+	}
+	for i, sealPart := range returnedParts {
+		if part := world.recordAtPlace(sealPart.Place); !sidecar.EvsReseedRecordHoldsPart(part) {
+			t.Fatalf("part %d returned as type %s", i+1, part.Type)
+		}
+	}
+
+	reader := world.device("r", nil)
+	for _, path := range []string{"big/f-0000", "big/f-0650", "big/f-1299"} {
+		if content, _, err := reader.read(path); err != nil || !bytes.Equal(content, files[path]) {
+			t.Fatalf("a fresh reader's %s: %d bytes, %v", path, len(content), err)
+		}
+	}
+	if names, err := reader.list("big"); err != nil || len(names) != len(files) {
+		t.Fatalf("a fresh reader's listing of big: %d names, %v", len(names), err)
+	}
+}
