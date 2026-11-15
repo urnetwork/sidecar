@@ -44,6 +44,9 @@ func testSocketApiRegistration() *SocketRegistration {
 		Draining:   true,
 		Inflight:   3,
 		Claim:      []byte{0x03},
+		// 17.2.10's two lists
+		CertifiedNames: []string{"app.customer.example"},
+		AcmeNames:      []*SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 4}},
 	}
 }
 
@@ -72,6 +75,10 @@ func testSocketApiBodies() []any {
 			Name:          "tls/443/blog",
 			NameToken:     []byte{0x01},
 			NetworkId:     &testSocketApiId,
+			Protocol:      "tls",
+			MinVersion:    1,
+			Alpn:          []string{"h2"},
+			ServerName:    "app.customer.example",
 			AffinityKey:   []byte{0x02},
 			FailedTickets: []*SocketFailedTicket{{Ticket: []byte{0x03}, Reason: SocketFailedReasonTimeout}},
 			ClientIds:     []*connect.Id{&testSocketApiId, &testSocketApiOtherId},
@@ -164,10 +171,24 @@ func TestSocketRouteBodyNames(t *testing.T) {
 		{
 			body: testSocketApiRegistration(),
 			keys: []string{
+				"acme_names", "affinity", "alpn", "app_mode", "certified_names", "claim", "draining", "exclusive", "inflight",
+				"listen_id", "max_streams", "name", "name_token", "protocol", "sealed_name", "serving", "version", "weight",
+			},
+		},
+		// a registration with neither of 17.2.10's lists shows neither
+		{
+			body: func() *SocketRegistration {
+				registration := testSocketApiRegistration()
+				registration.CertifiedNames = nil
+				registration.AcmeNames = nil
+				return registration
+			}(),
+			keys: []string{
 				"affinity", "alpn", "app_mode", "claim", "draining", "exclusive", "inflight", "listen_id", "max_streams",
 				"name", "name_token", "protocol", "sealed_name", "serving", "version", "weight",
 			},
 		},
+		{body: &SocketAcmeName{}, keys: []string{"claim_seq", "name"}},
 		{body: &SocketRegistrationsArgs{}, keys: []string{"key_end", "key_start", "registrations", "set_version"}},
 		{
 			body: &SocketRegistrationsResult{Error: &SocketError{}},
@@ -220,34 +241,37 @@ func TestSocketRouteValues(t *testing.T) {
 	}
 }
 
-// §9.7's filter fields stay off the wire in both directions until §2.8's sock-2 lists them (I-18,
-// plan-SOCK-metadata-rows). Changing a tag here is a change to what the service sees, which starts with
-// the row.
-func TestSocketFindArgsKeepsItsFilterOffTheWire(t *testing.T) {
+// Find's filter rides the wire under sock-2's names, and a custom host's server name with it (17.2.10): each field
+// crosses JSON as it was set, and a Find that asks nothing carries none of them.
+func TestSocketFindArgsCarriesItsFilterOnTheWire(t *testing.T) {
 	args := &SocketFindArgs{
 		NameToken:  []byte{0x01},
 		NetworkId:  &testSocketApiId,
-		Protocol:   "canary-protocol",
-		MinVersion: 12345,
-		Alpn:       []string{"canary-alpn"},
+		Protocol:   "tls",
+		MinVersion: 3,
+		Alpn:       []string{"h2"},
+		ServerName: "app.customer.example",
 	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{"protocol", "min_version", "alpn", "canary", "12345"} {
-		if strings.Contains(string(encoded), text) {
-			t.Errorf("%q in %s", text, encoded)
-		}
-	}
-
 	decoded := &SocketFindArgs{}
-	body := `{"name":"tls/443/blog","protocol":"tcp","min_version":3,"alpn":["h2"],"Protocol":"tcp","MinVersion":3,"Alpn":["h2"]}`
-	if err := json.Unmarshal([]byte(body), decoded); err != nil {
+	if err := json.Unmarshal(encoded, decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Protocol != "" || decoded.MinVersion != 0 || decoded.Alpn != nil {
+	if decoded.Protocol != "tls" || decoded.MinVersion != 3 || len(decoded.Alpn) != 1 || decoded.Alpn[0] != "h2" ||
+		decoded.ServerName != "app.customer.example" {
 		t.Errorf("read from the wire: %+v", decoded)
+	}
+	plain, err := json.Marshal(&SocketFindArgs{NameToken: []byte{0x01}, NetworkId: &testSocketApiId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"protocol", "min_version", "alpn", "server_name"} {
+		if strings.Contains(string(plain), text) {
+			t.Errorf("%q in a Find that asks nothing: %s", text, plain)
+		}
 	}
 }
 

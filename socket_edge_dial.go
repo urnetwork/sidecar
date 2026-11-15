@@ -79,10 +79,12 @@ type SocketEdgeDialRequest struct {
 	NetworkLabel string
 	// tls/<port>/<host> or smtp/25/<host>.
 	Name string
-	// §9.7's filter: "tls" or "smtp-starttls", and the visitor's offered ALPN ids. The service applies them once
-	// sock-2 names them (plan-SOCK-metadata-rows).
+	// §9.7's filter: "tls" or "smtp-starttls", and the visitor's offered ALPN ids, which sock-2 lists.
 	Protocol string
 	Alpns    []string
+	// The hello's server name exactly when the edge resolved it through the custom-host map or the alias table, empty
+	// for a name under the network's own zone (DESIGN-DETAILS 17.2.10): tlsedge's alone, which no other dialer sets.
+	ServerName string
 	// §9.7's affinity key, a keyed hash of the visitor's /24 or /48.
 	AffinityKey []byte
 	// StreamOpen.metadata for a ticket whose grant ends at grantExpireTimeMillis, such as TlsEdgeOpen, whose
@@ -306,6 +308,7 @@ func (self *SocketEdgeDialer) Dial(ctx context.Context, request *SocketEdgeDialR
 		NetworkId:   &networkId,
 		Protocol:    request.Protocol,
 		Alpn:        request.Alpns,
+		ServerName:  request.ServerName,
 		AffinityKey: request.AffinityKey,
 		ClientIds:   clientIds,
 	}

@@ -185,6 +185,7 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 		MinVersion:      args.MinVersion,
 		Alpns:           args.Alpn,
 		AffinityKey:     args.AffinityKey,
+		ServerName:      args.ServerName,
 		Reports:         reports,
 	}
 	pick, refusal := self.pick(pickRequest)
@@ -302,6 +303,16 @@ func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs, settin
 	}
 	if settings.Format.FailedTicketMaxCount < len(args.FailedTickets) || settings.Format.AffinityKeyMaxByteCount < len(args.AffinityKey) {
 		return nil, nil, false
+	}
+	// §9.7's filter and a server name, within §9.5's sizes; a server name is a tls/ Find's alone (17.2.10)
+	if settings.Format.ProtocolMaxByteCount < len(args.Protocol) || args.MinVersion < 0 || settings.Format.AlpnMaxCount < len(args.Alpn) ||
+		settings.ServerNameMaxByteCount < len(args.ServerName) || (args.ServerName != "" && name.namespace != sidecar.SocketNamespaceTls) {
+		return nil, nil, false
+	}
+	for _, alpn := range args.Alpn {
+		if alpn == "" || settings.Format.AlpnMaxByteCount < len(alpn) {
+			return nil, nil, false
+		}
 	}
 	for _, failed := range args.FailedTickets {
 		if failed == nil || len(failed.Ticket) == 0 || settings.Format.TicketMaxByteCount < len(failed.Ticket) ||

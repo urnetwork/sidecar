@@ -2,8 +2,9 @@
 
 // I-18 for §9's route bodies (socket_api.go, and socket_ticket.go's key): each field a caller shows sockets names the
 // §2.8 row that shows it, in that row's own words, and each the service only answers with says why no row needs it, so
-// a field added to a body cannot reach the service unnoticed. Find's protocol, minimum version and ALPN stay off the
-// wire until sock-2 names them (plan-SOCK-metadata-rows), so they carry no JSON name and do not appear here.
+// a field added to a body cannot reach the service unnoticed. Find's protocol, minimum version and ALPN ride the wire
+// as sock-2 names them, and a registration's certified and ACME names and a Find's server name as 17.2.16's version of
+// sock-1 and sock-2 does (TLS-M6-08).
 
 package sidecartest
 
@@ -33,22 +34,28 @@ var testSocketApiFields = map[reflect.Type]map[string]testSocketApiField{
 		"registrations": {nowhere: "a list of SocketRegistration, whose fields are placed below"},
 	},
 	reflect.TypeFor[sidecar.SocketRegistration](): {
-		"name":        {row: "sock-1", sees: "for tls/, smtp/ and ur/, in plaintext"},
-		"name_token":  {row: "sock-1", sees: "the name as a token path"},
-		"sealed_name": {row: "sock-1", sees: "the sealed name"},
-		"listen_id":   {row: "sock-1", sees: "listen_id"},
-		"protocol":    {row: "sock-1", sees: "protocol, version, ALPN"},
-		"version":     {row: "sock-1", sees: "protocol, version, ALPN"},
-		"alpn":        {row: "sock-1", sees: "protocol, version, ALPN"},
-		"app_mode":    {row: "sock-1", sees: "application mode (http or raw"},
-		"weight":      {row: "sock-1", sees: "weight"},
-		"max_streams": {row: "sock-1", sees: "max_streams"},
-		"exclusive":   {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
-		"affinity":    {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
-		"serving":     {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
-		"draining":    {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
-		"inflight":    {row: "sock-1", sees: "reported in-flight"},
-		"claim":       {row: "sock-1", sees: "its Signed claim (the sidecar's identity key)"},
+		"name":            {row: "sock-1", sees: "for tls/, smtp/ and ur/, in plaintext"},
+		"name_token":      {row: "sock-1", sees: "the name as a token path"},
+		"sealed_name":     {row: "sock-1", sees: "the sealed name"},
+		"listen_id":       {row: "sock-1", sees: "listen_id"},
+		"protocol":        {row: "sock-1", sees: "protocol, version, ALPN"},
+		"version":         {row: "sock-1", sees: "protocol, version, ALPN"},
+		"alpn":            {row: "sock-1", sees: "protocol, version, ALPN"},
+		"app_mode":        {row: "sock-1", sees: "application mode (http or raw"},
+		"weight":          {row: "sock-1", sees: "weight"},
+		"max_streams":     {row: "sock-1", sees: "max_streams"},
+		"exclusive":       {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
+		"affinity":        {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
+		"serving":         {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
+		"draining":        {row: "sock-1", sees: "flags (exclusive, affinity, serving, draining)"},
+		"inflight":        {row: "sock-1", sees: "reported in-flight"},
+		"claim":           {row: "sock-1", sees: "its Signed claim (the sidecar's identity key)"},
+		"certified_names": {row: "sock-1", sees: "per tls/ listener the custom hosts and aliases it is certified for"},
+		"acme_names":      {nowhere: "a list of SocketAcmeName, whose fields are placed below"},
+	},
+	reflect.TypeFor[sidecar.SocketAcmeName](): {
+		"name":      {row: "sock-1", sees: "the names it holds an ACME claim for with the claim sequence"},
+		"claim_seq": {row: "sock-1", sees: "the names it holds an ACME claim for with the claim sequence"},
 	},
 	reflect.TypeFor[sidecar.SocketRegistrationsResult](): {
 		"statuses":        {nowhere: "the service's verdict on each entry, made for this answer"},
@@ -76,6 +83,10 @@ var testSocketApiFields = map[reflect.Type]map[string]testSocketApiField{
 		"affinity_key":   {row: "sock-2", sees: "affinity key (tlsedge's keyed /24 or /48 hash, never stored)"},
 		"failed_tickets": {nowhere: "a list of SocketFailedTicket, whose fields are placed below"},
 		"client_ids":     {row: "sock-2", sees: "edges add their K client ids"},
+		"protocol":       {row: "sock-2", sees: "a dial's protocol, minimum version and offered ALPN ids"},
+		"min_version":    {row: "sock-2", sees: "a dial's protocol, minimum version and offered ALPN ids"},
+		"alpn":           {row: "sock-2", sees: "a dial's protocol, minimum version and offered ALPN ids"},
+		"server_name":    {row: "sock-2", sees: "the server name of a dial that came by a custom host or an alias"},
 	},
 	reflect.TypeFor[sidecar.SocketFailedTicket](): {
 		"ticket": {row: "sock-2", sees: "the failed tickets a retry reports"},
@@ -154,18 +165,18 @@ func TestSocketApiFieldsQuoteLiveRows(t *testing.T) {
 	}
 }
 
-// Find's filter has no row yet, so its fields carry no JSON name: a tag change here is a change to what the service
-// sees, and it starts with sock-2's row (plan-SOCK-metadata-rows).
-func TestSocketFindFilterStaysOffTheWire(t *testing.T) {
+// Find's filter rides the wire under sock-2's names, and the server name with it (17.2.10), each left out when it asks
+// nothing, so a Find of a name under the network's own zone carries no server name.
+func TestSocketFindFilterRidesTheWire(t *testing.T) {
 	findArgs := reflect.TypeFor[sidecar.SocketFindArgs]()
-	for _, name := range []string{"Protocol", "MinVersion", "Alpn"} {
+	for name, jsonName := range map[string]string{"Protocol": "protocol", "MinVersion": "min_version", "Alpn": "alpn", "ServerName": "server_name"} {
 		field, ok := findArgs.FieldByName(name)
 		if !ok {
 			t.Errorf("SocketFindArgs has no %s", name)
 			continue
 		}
-		if tag := field.Tag.Get("json"); tag != "-" {
-			t.Errorf("SocketFindArgs.%s has the JSON name %q", name, tag)
+		if tag := field.Tag.Get("json"); tag != jsonName+",omitempty" {
+			t.Errorf("SocketFindArgs.%s has the JSON tag %q", name, tag)
 		}
 	}
 }

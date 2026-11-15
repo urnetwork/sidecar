@@ -259,6 +259,11 @@ type SocketsSettings struct {
 	// network maps to one host owner (DESIGN-DETAILS 17.2.10, 17.7): 64. TLS-M6-08's field, which DNS-M6-02 holds
 	// custom-host-add to.
 	CertifiedNameMaxCount int
+	// The most names one listener lists as holding a TLS-ALPN-01 claim for: 4 (17.2.15).
+	AcmeNameMaxCount int
+	// The longest server name a Find carries and a listener lists, certified or ACME: 253, a DNS name in its dotted
+	// text form (RFC 1035 §2.3.4).
+	ServerNameMaxByteCount int
 
 	// The revocation sweep (sweep.go; DESIGN-DETAILS 13.2.3). The least time between two sweeps of one network by
 	// this process: 10 s, so a run of revocations costs a network one sweep a period, always at its newest position.
@@ -317,6 +322,8 @@ func DefaultSocketsSettings() *SocketsSettings {
 		FindMaxBodyByteCount:          64 * 1024,
 		FindMaxClientIdCount:          64,
 		CertifiedNameMaxCount:         64,
+		AcmeNameMaxCount:              4,
+		ServerNameMaxByteCount:        253,
 
 		SweepMinInterval:      10 * time.Second,
 		SweepClaimTtl:         30 * time.Second,
@@ -435,6 +442,8 @@ func (self *SocketsSettings) Validate() error {
 		{name: "find_max_body_byte_count", positive: 0 < self.FindMaxBodyByteCount},
 		{name: "find_max_client_id_count", positive: 0 < self.FindMaxClientIdCount},
 		{name: "certified_name_max_count", positive: 0 < self.CertifiedNameMaxCount},
+		{name: "acme_name_max_count", positive: 0 < self.AcmeNameMaxCount},
+		{name: "server_name_max_byte_count", positive: 0 < self.ServerNameMaxByteCount},
 		{name: "format.claim_max_byte_count", positive: 0 < self.Format.ClaimMaxByteCount},
 		{name: "format.protocol_max_byte_count", positive: 0 < self.Format.ProtocolMaxByteCount},
 		{name: "format.alpn_max_count", positive: 0 < self.Format.AlpnMaxCount},

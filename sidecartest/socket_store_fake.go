@@ -195,6 +195,11 @@ func copySocketRegistration(registration *sidecar.SocketRegistration) *sidecar.S
 	kept.SealedName = bytes.Clone(registration.SealedName)
 	kept.Alpn = slices.Clone(registration.Alpn)
 	kept.Claim = bytes.Clone(registration.Claim)
+	kept.CertifiedNames = slices.Clone(registration.CertifiedNames)
+	kept.AcmeNames = nil
+	for _, acmeName := range registration.AcmeNames {
+		kept.AcmeNames = append(kept.AcmeNames, &sidecar.SocketAcmeName{Name: acmeName.Name, ClaimSeq: acmeName.ClaimSeq})
+	}
 	if registration.ListenId != nil {
 		listenId := *registration.ListenId
 		kept.ListenId = &listenId
@@ -612,6 +617,11 @@ func copySocketId(id *connect.Id) *connect.Id {
 
 // The candidate a pick reads for listener, deep enough that the pick cannot reach the store.
 func fakeSocketCandidate(listenerClientId connect.Id, listener *fakeSocketListener) *socketsservice.SocketCandidate {
+	// 17.2.10's lists, read from the one registration the store keeps, as the script reads them from m
+	acmeNames := map[string]uint64{}
+	for _, acmeName := range listener.registration.AcmeNames {
+		acmeNames[acmeName.Name] = acmeName.ClaimSeq
+	}
 	dialerShares := map[connect.Id]*socketsservice.SocketDialerShare{}
 	for dialerClientId, share := range listener.dialerShares {
 		dialerShares[dialerClientId] = &socketsservice.SocketDialerShare{
@@ -635,6 +645,8 @@ func fakeSocketCandidate(listenerClientId connect.Id, listener *fakeSocketListen
 		ReportMillis:         listener.reportMillis,
 		Ejection:             listener.ejection,
 		DialerClientIdShares: dialerShares,
+		CertifiedNames:       slices.Clone(listener.registration.CertifiedNames),
+		AcmeNames:            acmeNames,
 	}
 }
 
@@ -733,8 +745,9 @@ func (self *FakeSocketStore) Pick(ctx context.Context, request *socketsservice.S
 		}
 
 		listenerClientIds := fakeSocketSortedListenerIds(group)
-		// a keyed pick reads the whole group, since a sample would move a key's listener (SOCK-M6-01)
-		if self.settings.SampleCount < len(listenerClientIds) && len(request.AffinityKey) == 0 {
+		// a keyed pick reads the whole group, since a sample would move a key's listener (SOCK-M6-01), and so does
+		// one with a server name, whose listeners may be few (17.2.10)
+		if self.settings.SampleCount < len(listenerClientIds) && len(request.AffinityKey) == 0 && request.ServerName == "" {
 			random := rand.New(rand.NewPCG(uint64(request.SampleSeed), 0))
 			random.Shuffle(len(listenerClientIds), func(i int, j int) {
 				listenerClientIds[i], listenerClientIds[j] = listenerClientIds[j], listenerClientIds[i]
@@ -751,6 +764,7 @@ func (self *FakeSocketStore) Pick(ctx context.Context, request *socketsservice.S
 			MinVersion:     request.MinVersion,
 			Alpns:          request.Alpns,
 			AffinityKey:    request.AffinityKey,
+			ServerName:     request.ServerName,
 			NowMillis:      nowMillis,
 			FirstDraw:      request.FirstDraw,
 			SecondDraw:     request.SecondDraw,
