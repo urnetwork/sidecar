@@ -445,7 +445,7 @@ func TestDirectoryAuthMembersSponsorsAndMasks(t *testing.T) {
 	for _, masked := range []struct {
 		sidecarId Id
 		at        uint64
-	}{{network.Revoked, network.RevokedAt}, {network.LeftDevice, network.LeftAt}} {
+	}{{sidecarId: network.Revoked, at: network.RevokedAt}, {sidecarId: network.LeftDevice, at: network.LeftAt}} {
 		position, timeMillis, ok := view.MaskedSince(masked.sidecarId)
 		atState, err := view.At(network.PinAt(masked.at))
 		if err != nil || !ok || position != masked.at || timeMillis == 0 || timeMillis != atState.(*configDirectoryAuth).state.TimeMs() {

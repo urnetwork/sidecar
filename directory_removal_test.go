@@ -203,7 +203,7 @@ func TestDirectoryRemovalIndexerCleansAtOnce(t *testing.T) {
 		t.Fatalf("a member device beside a designated indexer: %+v", member)
 	}
 	unbound := world.clientWith(indexer.writer.sidecarId, indexer.record.Writer(), false, nil)
-	unbound.client.Bind(testCardsWithoutRemover{world.cards.For(indexer.writer.sidecarId)}, nil)
+	unbound.client.Bind(testCardsWithoutRemover{DirectoryCards: world.cards.For(indexer.writer.sidecarId)}, nil)
 	unbound.mustSync(t)
 	if _, err := testDirectoryRemoval(t, unbound, []sidecar.Id{indexer.writer.sidecarId}).Cleanup(t.Context()); !errors.Is(err, sidecar.ErrDirectoryCleanupUnbound) {
 		t.Fatalf("a cleanup over a binding with no multi-file removal: %v", err)
