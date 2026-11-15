@@ -977,6 +977,8 @@ func (self *DirectoryClient) putCard(ctx context.Context, items []*protocol.Anno
 // that links this file.
 func init() {
 	directoryFoldFiles = func(client *DirectoryClient, fold *DirectoryFold) []*directoryVersion {
+		// whatever a sync judges, the loop's next pass repairs (directory_repair.go)
+		client.repairs()
 		return client.filesOf(fold).judge(fold)
 	}
 }
