@@ -35,10 +35,12 @@ func urDirectoryMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 }
 
 // The acts' backends this ur has: the Sidecar's own list, taint and announcement, the revocation and the directory
-// admin's erasure (RECORD-M6-20), and none yet of the decisions.
+// admin's erasure (RECORD-M6-20), and the decisions (RECORD-M6-19, through ur directory's directory_cmd.go), which
+// refuse while their statements seam is unbound.
 func urDirectoryBackends() *sidecar.DaemonDirectoryBackends {
 	return &sidecar.DaemonDirectoryBackends{
 		Revoke: sidecar.DirectoryRevokeBackend,
+		Decide: urDirectoryDecideBackend,
 		Erase:  sidecar.DirectoryEraseBackend,
 	}
 }

@@ -14,8 +14,13 @@
 //	seal       the pair is a template input of each install that wrote exporter settings, and its seal names the port
 //	           (HarnessSeal.TelemetryPort): the config check renders the template from the pair as it stands, so a
 //	           pair drawn again, or files no longer holding it, read as changed
-//	scope      a user install's alone: a project's files are committed, and the token is never committed. Cursor
-//	           documents no OpenTelemetry exporter setting, so a Cursor install writes none and draws no pair
+//	scope      a user install's alone, of Claude Code, whose one source of model calls is OpenTelemetry (QD-822): a
+//	           project's files are committed, and the token is never committed. Codex reports its calls by its
+//	           PostModelRequest hook, with their request ids and tokens, so a Codex install writes none, draws no pair,
+//	           and removes the exporter table an earlier install wrote (QD-835; harness_install_codex.go); Cursor
+//	           documents no OpenTelemetry exporter setting, so its install writes none and draws no pair either
+//	diff       a plan's diff never prints a token: the pair's, and the bearer an earlier install wrote into a file the
+//	           plan rewrites, which that file's kind names (harnessTelemetryTokenFile), each shown as a stand-in
 //
 // The file is local state, never synced or sent, 0600 under a 0700 directory, like the seals; it holds the token
 // itself, since every exporter's settings do too and the daemon must read it while locked, as capture goes on then.
@@ -50,16 +55,31 @@ const harnessTelemetryHost = "127.0.0.1"
 // The token's scheme in an Authorization header, which IngestTelemetry checks.
 const harnessTelemetryBearerScheme = "Bearer "
 
-// The harnesses whose exporter settings ur writes: Claude Code's env block and Codex's [otel] table. Cursor documents
-// no OpenTelemetry exporter setting.
+// The harnesses whose exporter settings ur writes: Claude Code's env block, OpenTelemetry being its only source of
+// model calls (QD-822). Codex reports its calls by its PostModelRequest hook, the richer source, so it takes none
+// (QD-835), and Cursor documents no OpenTelemetry exporter setting.
 var harnessTelemetryHarnesses = map[string]bool{
 	claudeHookHarness: true,
-	codexHookHarness:  true,
 }
 
-// Whether ur writes exporter settings into harness (QD-822): false for Cursor, which documents none.
+// Why ur writes no exporter settings into a harness it installs into, as `ur install-harness` says it.
+var harnessTelemetryNoneReasons = map[string]string{
+	codexHookHarness:  "codex reports its model calls by its PostModelRequest hook, so ur writes no exporter settings into it",
+	cursorHookHarness: "cursor documents no OpenTelemetry exporter setting, so its model calls are not recorded",
+}
+
+// Whether ur writes exporter settings into harness: Claude Code alone (QD-822, QD-835).
 func HarnessExportsTelemetry(harness string) bool {
 	return harnessTelemetryHarnesses[harness]
+}
+
+// Why ur writes no exporter settings into harness, one line for `ur install-harness` to print: "" for a harness it
+// writes them into, or one it does not install into.
+func HarnessTelemetryNone(harness string) string {
+	if HarnessExportsTelemetry(harness) {
+		return ""
+	}
+	return harnessTelemetryNoneReasons[harness]
 }
 
 // The instance's telemetry pair: the listener's loopback port and the bearer token, hex.
@@ -177,11 +197,40 @@ func checkHarnessTelemetry(args *HarnessInstallArgs) (*HarnessTelemetry, error) 
 		return nil, errors.New("a project install writes no telemetry token: its files are committed")
 	}
 	if !HarnessExportsTelemetry(args.Harness) {
-		return nil, fmt.Errorf("%s documents no OpenTelemetry exporter setting, so ur writes none", args.Harness)
+		if reason := HarnessTelemetryNone(args.Harness); reason != "" {
+			return nil, fmt.Errorf("a telemetry pair is refused: %s", reason)
+		}
+		return nil, fmt.Errorf("a telemetry pair is refused: ur writes no exporter settings into %s", args.Harness)
 	}
 	if err := telemetry.validate(); err != nil {
 		return nil, err
 	}
 	copied := *telemetry
 	return &copied, nil
+}
+
+// A harness file kind whose bytes may hold the bearer of exporter settings an earlier install wrote, which a plan's
+// diff shows as the token's stand-in whether the install keeps or removes them (I-7): Codex's config.toml, whose
+// earlier [otel] table the install removes (QD-835).
+type harnessTelemetryTokenFile interface {
+	// The bearers content holds, each a token an earlier install drew; none for content that holds none.
+	telemetryTokens(content []byte, maxDepth int) []string
+}
+
+// The tokens a plan's diff never prints: the pair the template names, and each bearer an earlier install wrote into
+// one of the plan's files as it stands.
+func (self *HarnessInstallPlan) hiddenTokens() []string {
+	tokens := []string{}
+	if telemetry := self.template.telemetry; telemetry != nil {
+		tokens = append(tokens, telemetry.Token)
+	}
+	for _, file := range self.Files {
+		if file.file == nil {
+			continue
+		}
+		if holder, ok := file.file.kind.(harnessTelemetryTokenFile); ok {
+			tokens = append(tokens, holder.telemetryTokens(file.Before, self.args.Ingest.HarnessConfigDepthCount)...)
+		}
+	}
+	return tokens
 }

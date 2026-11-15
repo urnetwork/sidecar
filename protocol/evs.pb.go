@@ -5466,14 +5466,17 @@ func (x *EvsPartRequest) GetStaged() []byte {
 
 type EvsReseedRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// one Signed EvsReseed a call; a 200 carries an EvsPushReply
+	// part of a push in parts, that push's seal, one slot or one Signed EvsReseed
+	// a call; a 200 carries an EvsPushReply
 	Statement []byte `protobuf:"bytes,1,opt,name=statement,proto3" json:"statement,omitempty"` // a re-seeded Signed EvsPush as its device kept it, never re-signed; with a
 	// slot, the Signed EvsPush of a re-seeded version that names the slot; alone and
 	// a Signed EvsReseed, the statement evs keeps at reseed/<repo>/<ref>
-	Payload       []byte   `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`             // a one-part push's payload, as EvsPushRequest's
-	Parts         [][]byte `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`                 // a push in parts: each EvsPushPart as sent, in part order
-	SlotId        []byte   `protobuf:"bytes,4,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"` // a slot call: the slot's id, 16 B
-	Slot          []byte   `protobuf:"bytes,5,opt,name=slot,proto3" json:"slot,omitempty"`                   // and its EvsSlotObject bytes as the mirror holds them
+	Payload       []byte      `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`                          // a one-part push's payload, as EvsPushRequest's
+	Parts         [][]byte    `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`                              // a part call: its one EvsPushPart as sent, never more (QD-836)
+	SlotId        []byte      `protobuf:"bytes,4,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"`              // a slot call: the slot's id, 16 B
+	Slot          []byte      `protobuf:"bytes,5,opt,name=slot,proto3" json:"slot,omitempty"`                                // and its EvsSlotObject bytes as the mirror holds them
+	PartNumber    uint32      `protobuf:"varint,6,opt,name=part_number,json=partNumber,proto3" json:"part_number,omitempty"` // a part call: its part's k, from 1, as its EvsPushPart numbers it (QD-836)
+	PartPlaces    []*EvsPlace `protobuf:"bytes,7,rep,name=part_places,json=partPlaces,proto3" json:"part_places,omitempty"`  // a seal call: each part's reseed record, as its part call answered, in part
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5539,6 +5542,20 @@ func (x *EvsReseedRequest) GetSlotId() []byte {
 func (x *EvsReseedRequest) GetSlot() []byte {
 	if x != nil {
 		return x.Slot
+	}
+	return nil
+}
+
+func (x *EvsReseedRequest) GetPartNumber() uint32 {
+	if x != nil {
+		return x.PartNumber
+	}
+	return 0
+}
+
+func (x *EvsReseedRequest) GetPartPlaces() []*EvsPlace {
+	if x != nil {
+		return x.PartPlaces
 	}
 	return nil
 }
@@ -5890,7 +5907,7 @@ func (x *EvsSubscriptionsReply) GetSubscriptions() []*EvsSubscription {
 type EvsPushReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Version       uint64                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`                           // push and seal: its ref version, the original one on a retry
-	Place         *EvsPlace              `protobuf:"bytes,2,opt,name=place,proto3" json:"place,omitempty"`                                // part: where its record is
+	Place         *EvsPlace              `protobuf:"bytes,2,opt,name=place,proto3" json:"place,omitempty"`                                // part, and a reseed part call: where its record is
 	DepositHead   *EvsDepositHead        `protobuf:"bytes,3,opt,name=deposit_head,json=depositHead,proto3" json:"deposit_head,omitempty"` // a push or seal on the caller's own deposit ref
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -8482,13 +8499,17 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x12\n" +
 	"\x04part\x18\x02 \x01(\fR\x04part\x12?\n" +
 	"\breceipts\x18\x03 \x03(\v2#.urnetwork.sidecar.EvsUploadReceiptR\breceipts\x12\x16\n" +
-	"\x06staged\x18\x04 \x01(\fR\x06staged\"\x8d\x01\n" +
+	"\x06staged\x18\x04 \x01(\fR\x06staged\"\xec\x01\n" +
 	"\x10EvsReseedRequest\x12\x1c\n" +
 	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x14\n" +
 	"\x05parts\x18\x03 \x03(\fR\x05parts\x12\x17\n" +
 	"\aslot_id\x18\x04 \x01(\fR\x06slotId\x12\x12\n" +
-	"\x04slot\x18\x05 \x01(\fR\x04slot\"[\n" +
+	"\x04slot\x18\x05 \x01(\fR\x04slot\x12\x1f\n" +
+	"\vpart_number\x18\x06 \x01(\rR\n" +
+	"partNumber\x12<\n" +
+	"\vpart_places\x18\a \x03(\v2\x1b.urnetwork.sidecar.EvsPlaceR\n" +
+	"partPlaces\"[\n" +
 	"\x0fEvsLeaseRequest\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12!\n" +
 	"\fbase_version\x18\x02 \x01(\x04R\vbaseVersion\x12\x0e\n" +
@@ -9095,61 +9116,62 @@ var file_protocol_evs_proto_depIdxs = []int32{
 	39,  // 41: urnetwork.sidecar.EvsPushRequest.receipts:type_name -> urnetwork.sidecar.EvsUploadReceipt
 	40,  // 42: urnetwork.sidecar.EvsPushRequest.part_places:type_name -> urnetwork.sidecar.EvsPlace
 	39,  // 43: urnetwork.sidecar.EvsPartRequest.receipts:type_name -> urnetwork.sidecar.EvsUploadReceipt
-	25,  // 44: urnetwork.sidecar.EvsSubscriptionRequest.prefixes:type_name -> urnetwork.sidecar.EvsTokenPath
-	25,  // 45: urnetwork.sidecar.EvsSubscription.prefix:type_name -> urnetwork.sidecar.EvsTokenPath
-	76,  // 46: urnetwork.sidecar.EvsSubscriptionsReply.subscriptions:type_name -> urnetwork.sidecar.EvsSubscription
-	40,  // 47: urnetwork.sidecar.EvsPushReply.place:type_name -> urnetwork.sidecar.EvsPlace
-	81,  // 48: urnetwork.sidecar.EvsPushReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
-	16,  // 49: urnetwork.sidecar.EvsRefusalReply.code:type_name -> urnetwork.sidecar.EvsRefusalCode
-	25,  // 50: urnetwork.sidecar.EvsRefusalReply.paths:type_name -> urnetwork.sidecar.EvsTokenPath
-	17,  // 51: urnetwork.sidecar.EvsRefusalReply.outcome:type_name -> urnetwork.sidecar.EvsPushOutcome
-	80,  // 52: urnetwork.sidecar.EvsRefusalReply.quota:type_name -> urnetwork.sidecar.EvsQuotaRefusal
-	81,  // 53: urnetwork.sidecar.EvsRefusalReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
-	83,  // 54: urnetwork.sidecar.EvsReadRequest.paths:type_name -> urnetwork.sidecar.EvsReadPath
-	84,  // 55: urnetwork.sidecar.EvsReadRequest.ranges:type_name -> urnetwork.sidecar.EvsReadRange
-	85,  // 56: urnetwork.sidecar.EvsReadRequest.maps:type_name -> urnetwork.sidecar.EvsReadMap
-	86,  // 57: urnetwork.sidecar.EvsReadRequest.pushes:type_name -> urnetwork.sidecar.EvsReadPush
-	87,  // 58: urnetwork.sidecar.EvsReadRequest.refs:type_name -> urnetwork.sidecar.EvsReadRef
-	34,  // 59: urnetwork.sidecar.EvsReadPath.token_paths:type_name -> urnetwork.sidecar.EvsSourcePath
-	89,  // 60: urnetwork.sidecar.EvsReadFrame.head:type_name -> urnetwork.sidecar.EvsHeadSummary
-	90,  // 61: urnetwork.sidecar.EvsReadFrame.statement:type_name -> urnetwork.sidecar.EvsReadStatement
-	91,  // 62: urnetwork.sidecar.EvsReadFrame.path:type_name -> urnetwork.sidecar.EvsReadPathReply
-	95,  // 63: urnetwork.sidecar.EvsReadFrame.object:type_name -> urnetwork.sidecar.EvsReadObject
-	79,  // 64: urnetwork.sidecar.EvsReadFrame.error:type_name -> urnetwork.sidecar.EvsRefusalReply
-	4,   // 65: urnetwork.sidecar.EvsHeadSummary.ref_kind:type_name -> urnetwork.sidecar.EvsRefKind
-	5,   // 66: urnetwork.sidecar.EvsHeadSummary.ref_mode:type_name -> urnetwork.sidecar.EvsRefMode
-	45,  // 67: urnetwork.sidecar.EvsHeadSummary.base:type_name -> urnetwork.sidecar.EvsOverlay
-	105, // 68: urnetwork.sidecar.EvsHeadSummary.auth:type_name -> urnetwork.sidecar.AuthPin
-	47,  // 69: urnetwork.sidecar.EvsHeadSummary.path_epoch:type_name -> urnetwork.sidecar.EvsPathEpoch
-	56,  // 70: urnetwork.sidecar.EvsReadPathReply.version:type_name -> urnetwork.sidecar.EvsIndexVersion
-	93,  // 71: urnetwork.sidecar.EvsReadPathReply.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
-	94,  // 72: urnetwork.sidecar.EvsReadPathReply.absences:type_name -> urnetwork.sidecar.EvsAbsenceProof
-	57,  // 73: urnetwork.sidecar.EvsReadPathReply.removal:type_name -> urnetwork.sidecar.EvsRemovalMarker
-	45,  // 74: urnetwork.sidecar.EvsReadPathReply.base:type_name -> urnetwork.sidecar.EvsOverlay
-	29,  // 75: urnetwork.sidecar.EvsReadPathReply.names:type_name -> urnetwork.sidecar.EvsNameTable
-	56,  // 76: urnetwork.sidecar.EvsReadPathReply.deltas:type_name -> urnetwork.sidecar.EvsIndexVersion
-	18,  // 77: urnetwork.sidecar.EvsReadPathReply.state:type_name -> urnetwork.sidecar.EvsReadPathState
-	92,  // 78: urnetwork.sidecar.EvsReadPathReply.delta_proofs:type_name -> urnetwork.sidecar.EvsDeltaProof
-	93,  // 79: urnetwork.sidecar.EvsDeltaProof.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
-	93,  // 80: urnetwork.sidecar.EvsAbsenceProof.below:type_name -> urnetwork.sidecar.EvsMerkleProof
-	93,  // 81: urnetwork.sidecar.EvsAbsenceProof.above:type_name -> urnetwork.sidecar.EvsMerkleProof
-	93,  // 82: urnetwork.sidecar.EvsAbsenceProof.present:type_name -> urnetwork.sidecar.EvsMerkleProof
-	19,  // 83: urnetwork.sidecar.EvsReadObject.kind:type_name -> urnetwork.sidecar.EvsReadObjectKind
-	89,  // 84: urnetwork.sidecar.EvsRefsReply.refs:type_name -> urnetwork.sidecar.EvsHeadSummary
-	90,  // 85: urnetwork.sidecar.EvsLogReply.statements:type_name -> urnetwork.sidecar.EvsReadStatement
-	99,  // 86: urnetwork.sidecar.EvsPurgeList.candidates:type_name -> urnetwork.sidecar.EvsPurgeCandidate
-	20,  // 87: urnetwork.sidecar.EvsDropStatus.state:type_name -> urnetwork.sidecar.EvsDropState
-	21,  // 88: urnetwork.sidecar.EvsDropStatus.phase:type_name -> urnetwork.sidecar.EvsDropPhase
-	22,  // 89: urnetwork.sidecar.EvsDropStatus.reason:type_name -> urnetwork.sidecar.EvsDropRefusal
-	100, // 90: urnetwork.sidecar.EvsDropsReply.drops:type_name -> urnetwork.sidecar.EvsDropStatus
-	38,  // 91: urnetwork.sidecar.EvsDropPreviewRequest.paths:type_name -> urnetwork.sidecar.EvsDropPath
-	23,  // 92: urnetwork.sidecar.EvsDropPreviewReply.state:type_name -> urnetwork.sidecar.EvsDropPreviewState
-	104, // 93: urnetwork.sidecar.EvsDropPreviewReply.paths:type_name -> urnetwork.sidecar.EvsDropPreviewPath
-	94,  // [94:94] is the sub-list for method output_type
-	94,  // [94:94] is the sub-list for method input_type
-	94,  // [94:94] is the sub-list for extension type_name
-	94,  // [94:94] is the sub-list for extension extendee
-	0,   // [0:94] is the sub-list for field type_name
+	40,  // 44: urnetwork.sidecar.EvsReseedRequest.part_places:type_name -> urnetwork.sidecar.EvsPlace
+	25,  // 45: urnetwork.sidecar.EvsSubscriptionRequest.prefixes:type_name -> urnetwork.sidecar.EvsTokenPath
+	25,  // 46: urnetwork.sidecar.EvsSubscription.prefix:type_name -> urnetwork.sidecar.EvsTokenPath
+	76,  // 47: urnetwork.sidecar.EvsSubscriptionsReply.subscriptions:type_name -> urnetwork.sidecar.EvsSubscription
+	40,  // 48: urnetwork.sidecar.EvsPushReply.place:type_name -> urnetwork.sidecar.EvsPlace
+	81,  // 49: urnetwork.sidecar.EvsPushReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
+	16,  // 50: urnetwork.sidecar.EvsRefusalReply.code:type_name -> urnetwork.sidecar.EvsRefusalCode
+	25,  // 51: urnetwork.sidecar.EvsRefusalReply.paths:type_name -> urnetwork.sidecar.EvsTokenPath
+	17,  // 52: urnetwork.sidecar.EvsRefusalReply.outcome:type_name -> urnetwork.sidecar.EvsPushOutcome
+	80,  // 53: urnetwork.sidecar.EvsRefusalReply.quota:type_name -> urnetwork.sidecar.EvsQuotaRefusal
+	81,  // 54: urnetwork.sidecar.EvsRefusalReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
+	83,  // 55: urnetwork.sidecar.EvsReadRequest.paths:type_name -> urnetwork.sidecar.EvsReadPath
+	84,  // 56: urnetwork.sidecar.EvsReadRequest.ranges:type_name -> urnetwork.sidecar.EvsReadRange
+	85,  // 57: urnetwork.sidecar.EvsReadRequest.maps:type_name -> urnetwork.sidecar.EvsReadMap
+	86,  // 58: urnetwork.sidecar.EvsReadRequest.pushes:type_name -> urnetwork.sidecar.EvsReadPush
+	87,  // 59: urnetwork.sidecar.EvsReadRequest.refs:type_name -> urnetwork.sidecar.EvsReadRef
+	34,  // 60: urnetwork.sidecar.EvsReadPath.token_paths:type_name -> urnetwork.sidecar.EvsSourcePath
+	89,  // 61: urnetwork.sidecar.EvsReadFrame.head:type_name -> urnetwork.sidecar.EvsHeadSummary
+	90,  // 62: urnetwork.sidecar.EvsReadFrame.statement:type_name -> urnetwork.sidecar.EvsReadStatement
+	91,  // 63: urnetwork.sidecar.EvsReadFrame.path:type_name -> urnetwork.sidecar.EvsReadPathReply
+	95,  // 64: urnetwork.sidecar.EvsReadFrame.object:type_name -> urnetwork.sidecar.EvsReadObject
+	79,  // 65: urnetwork.sidecar.EvsReadFrame.error:type_name -> urnetwork.sidecar.EvsRefusalReply
+	4,   // 66: urnetwork.sidecar.EvsHeadSummary.ref_kind:type_name -> urnetwork.sidecar.EvsRefKind
+	5,   // 67: urnetwork.sidecar.EvsHeadSummary.ref_mode:type_name -> urnetwork.sidecar.EvsRefMode
+	45,  // 68: urnetwork.sidecar.EvsHeadSummary.base:type_name -> urnetwork.sidecar.EvsOverlay
+	105, // 69: urnetwork.sidecar.EvsHeadSummary.auth:type_name -> urnetwork.sidecar.AuthPin
+	47,  // 70: urnetwork.sidecar.EvsHeadSummary.path_epoch:type_name -> urnetwork.sidecar.EvsPathEpoch
+	56,  // 71: urnetwork.sidecar.EvsReadPathReply.version:type_name -> urnetwork.sidecar.EvsIndexVersion
+	93,  // 72: urnetwork.sidecar.EvsReadPathReply.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
+	94,  // 73: urnetwork.sidecar.EvsReadPathReply.absences:type_name -> urnetwork.sidecar.EvsAbsenceProof
+	57,  // 74: urnetwork.sidecar.EvsReadPathReply.removal:type_name -> urnetwork.sidecar.EvsRemovalMarker
+	45,  // 75: urnetwork.sidecar.EvsReadPathReply.base:type_name -> urnetwork.sidecar.EvsOverlay
+	29,  // 76: urnetwork.sidecar.EvsReadPathReply.names:type_name -> urnetwork.sidecar.EvsNameTable
+	56,  // 77: urnetwork.sidecar.EvsReadPathReply.deltas:type_name -> urnetwork.sidecar.EvsIndexVersion
+	18,  // 78: urnetwork.sidecar.EvsReadPathReply.state:type_name -> urnetwork.sidecar.EvsReadPathState
+	92,  // 79: urnetwork.sidecar.EvsReadPathReply.delta_proofs:type_name -> urnetwork.sidecar.EvsDeltaProof
+	93,  // 80: urnetwork.sidecar.EvsDeltaProof.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
+	93,  // 81: urnetwork.sidecar.EvsAbsenceProof.below:type_name -> urnetwork.sidecar.EvsMerkleProof
+	93,  // 82: urnetwork.sidecar.EvsAbsenceProof.above:type_name -> urnetwork.sidecar.EvsMerkleProof
+	93,  // 83: urnetwork.sidecar.EvsAbsenceProof.present:type_name -> urnetwork.sidecar.EvsMerkleProof
+	19,  // 84: urnetwork.sidecar.EvsReadObject.kind:type_name -> urnetwork.sidecar.EvsReadObjectKind
+	89,  // 85: urnetwork.sidecar.EvsRefsReply.refs:type_name -> urnetwork.sidecar.EvsHeadSummary
+	90,  // 86: urnetwork.sidecar.EvsLogReply.statements:type_name -> urnetwork.sidecar.EvsReadStatement
+	99,  // 87: urnetwork.sidecar.EvsPurgeList.candidates:type_name -> urnetwork.sidecar.EvsPurgeCandidate
+	20,  // 88: urnetwork.sidecar.EvsDropStatus.state:type_name -> urnetwork.sidecar.EvsDropState
+	21,  // 89: urnetwork.sidecar.EvsDropStatus.phase:type_name -> urnetwork.sidecar.EvsDropPhase
+	22,  // 90: urnetwork.sidecar.EvsDropStatus.reason:type_name -> urnetwork.sidecar.EvsDropRefusal
+	100, // 91: urnetwork.sidecar.EvsDropsReply.drops:type_name -> urnetwork.sidecar.EvsDropStatus
+	38,  // 92: urnetwork.sidecar.EvsDropPreviewRequest.paths:type_name -> urnetwork.sidecar.EvsDropPath
+	23,  // 93: urnetwork.sidecar.EvsDropPreviewReply.state:type_name -> urnetwork.sidecar.EvsDropPreviewState
+	104, // 94: urnetwork.sidecar.EvsDropPreviewReply.paths:type_name -> urnetwork.sidecar.EvsDropPreviewPath
+	95,  // [95:95] is the sub-list for method output_type
+	95,  // [95:95] is the sub-list for method input_type
+	95,  // [95:95] is the sub-list for extension type_name
+	95,  // [95:95] is the sub-list for extension extendee
+	0,   // [0:95] is the sub-list for field type_name
 }
 
 func init() { file_protocol_evs_proto_init() }

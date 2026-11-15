@@ -441,6 +441,23 @@ func TestDirectoryAuthMembersSponsorsAndMasks(t *testing.T) {
 	if err != nil || before.Masked(network.LeftDevice) {
 		t.Errorf("masked before the removal's position: %v", err)
 	}
+	// each mask's position and the time of the entry there, which the removal cleanup's 24 h runs from
+	for _, masked := range []struct {
+		sidecarId Id
+		at        uint64
+	}{{sidecarId: network.Revoked, at: network.RevokedAt}, {sidecarId: network.LeftDevice, at: network.LeftAt}} {
+		position, timeMillis, ok := view.MaskedSince(masked.sidecarId)
+		atState, err := view.At(network.PinAt(masked.at))
+		if err != nil || !ok || position != masked.at || timeMillis == 0 || timeMillis != atState.(*configDirectoryAuth).state.TimeMs() {
+			t.Errorf("%s masked since %d at %d (%v), want %d: %v", masked.sidecarId, position, timeMillis, ok, masked.at, err)
+		}
+	}
+	if _, _, ok := view.MaskedSince(network.MemberDevice); ok {
+		t.Error("a standing device reads masked")
+	}
+	if _, _, ok := before.MaskedSince(network.LeftDevice); ok {
+		t.Error("masked since before the removal's position")
+	}
 }
 
 // With nothing bound every check refuses and everyone is masked.
@@ -468,5 +485,8 @@ func TestDirectoryAuthUnavailableRefuses(t *testing.T) {
 	}
 	if !view.Masked(sidecarId) {
 		t.Error("not masked")
+	}
+	if _, _, ok := view.MaskedSince(sidecarId); ok {
+		t.Error("a mask time with no state")
 	}
 }

@@ -182,6 +182,10 @@ type DirectoryAuthView interface {
 	// Whether readers mask the sidecar's cards, notices and pending requests at this state (§16.11's member and device
 	// rows).
 	Masked(sidecarId Id) bool
+	// When readers began masking the sidecar: the position of its revocation, and the time_ms of that entry where this
+	// state still holds it, 0 where it does not; false for a sidecar not masked. The removal cleanup's 24 h runs from
+	// that time (RECORD-M6-21).
+	MaskedSince(sidecarId Id) (uint64, int64, bool)
 	// Whether a compromise cascade in this state voids what sidecarId signed at position: a compromise revocation of
 	// it from a since_n at or before position (§7.10), however late that revocation came.
 	SignatureVoided(sidecarId Id, position uint64) bool
@@ -261,6 +265,11 @@ func (self DirectoryAuthUnavailable) SponsorOf(sidecarId Id) (Id, bool) {
 // Everyone, so nothing shows as current.
 func (self DirectoryAuthUnavailable) Masked(sidecarId Id) bool {
 	return true
+}
+
+// No revocation is known, so no cleanup is due.
+func (self DirectoryAuthUnavailable) MaskedSince(sidecarId Id) (uint64, int64, bool) {
+	return 0, 0, false
 }
 
 // Everything, so no repo item stands.
@@ -761,4 +770,17 @@ func (self *configDirectoryAuth) SponsorOf(sidecarId Id) (Id, bool) {
 // ConfigState's mask (TEAM-M6-11).
 func (self *configDirectoryAuth) Masked(sidecarId Id) bool {
 	return self.state.MaskedInDirectory(sidecarId)
+}
+
+// The row's revoked_at, and the time of the state there while the log holds it.
+func (self *configDirectoryAuth) MaskedSince(sidecarId Id) (uint64, int64, bool) {
+	if !self.state.MaskedInDirectory(sidecarId) {
+		return 0, 0, false
+	}
+	position := self.state.SidecarRow(sidecarId).GetRevokedAt()
+	state, held, err := self.stateAtPosition(position)
+	if err != nil || !held {
+		return position, 0, true
+	}
+	return position, state.TimeMs(), true
 }

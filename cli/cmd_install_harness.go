@@ -16,13 +16,15 @@
 // ServiceSettings.record_required lands: ur hook --required on every command, Claude Code's onFailure block and
 // Cursor's failClosed, and `ur status` names each harness installed so.
 //
-// While Ingest.ModelCalls is on (§16.18; M6's, off by default), a user install of Claude Code or Codex also writes the
+// While Ingest.ModelCalls is on (§16.18; M6's, off by default), a user install of Claude Code also writes the
 // exporter's settings for the daemon's telemetry listener (QD-822; mcp's harness_telemetry.go): the instance's
 // telemetry pair, Ingest.TelemetryTokenByteCount random bytes and a port the loopback interface has free, drawn here
 // at the first such install and sealed under <state>/harness/ by the write, then read back by every later one, so a
 // re-install changes nothing and every harness names one pair. Once written, a daemon already running is asked to
 // serve it (telemetry.reload, status_telemetry.go), and none is started for it. A project install takes no token,
-// since its files are committed, and Cursor documents no exporter setting, which the install says.
+// since its files are committed. Codex reports its model calls by its PostModelRequest hook, which every Codex install
+// writes, so it takes no exporter settings and loses the [otel] table an earlier install wrote (QD-835), and Cursor
+// documents no exporter setting; the install says which.
 
 package main
 
@@ -145,8 +147,8 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 			if err != nil {
 				return err
 			}
-		} else {
-			exporterNote = fmt.Sprintf("%s documents no OpenTelemetry exporter setting, so its model calls are not recorded\n", harness)
+		} else if reason := mcp.HarnessTelemetryNone(harness); reason != "" {
+			exporterNote = reason + "\n"
 		}
 	}
 	plan, err := mcp.PlanHarnessInstall(args)
