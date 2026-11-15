@@ -593,6 +593,11 @@ barrier rpc.marked_pair_tick.before rpc_marked_pair.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go
+barrier search.sync.fetched search_fetch.go
+barrier search.sync.replayed search_sync.go
+barrier search.sync.retired search_sync.go
+barrier search.sync.swapped search_retained.go
+barrier search.sync.tables search_retained.go
 barrier setup_cache.rename.after smtpproof/setup_cache.go
 barrier setup_cache.rename.before smtpproof/setup_cache.go
 barrier setup_keys.shape_state.after smtpproof/setup_keys.go

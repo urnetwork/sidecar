@@ -265,7 +265,7 @@ func (self *SearchSync) swapLatest(ctx context.Context, ref *searchSyncRef, mani
 		for _, slot := range []struct {
 			kind   SearchVersionSlotKind
 			inputs []SearchVersionRunId
-		}{{SearchVersionShards, shardInputs[startDay]}, {SearchVersionOthers, otherInputs[startDay]}} {
+		}{{kind: SearchVersionShards, inputs: shardInputs[startDay]}, {kind: SearchVersionOthers, inputs: otherInputs[startDay]}} {
 			run, err := self.slotRun(ctx, ref, manifest, SearchVersionSlot{Kind: slot.kind, StartDay: startDay}, slot.inputs)
 			if err != nil {
 				return nil, err

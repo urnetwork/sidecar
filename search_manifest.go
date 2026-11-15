@@ -226,12 +226,14 @@ type searchManifestWire struct {
 	Listing    []searchWantedWire          `json:"listing,omitempty"`
 }
 
+// A pin as stored.
 type searchPinWire struct {
 	Version uint64 `json:"version"`
 	Chain   string `json:"chain"`
 	TimeMs  int64  `json:"time_ms,omitempty"`
 }
 
+// A manifest's or plan's file as stored.
 type searchManifestFileWire struct {
 	Path      string                   `json:"path"`
 	Version   uint64                   `json:"version"`
@@ -249,18 +251,21 @@ type searchManifestFileWire struct {
 	Small     []byte                   `json:"small,omitempty"`
 }
 
+// A file header's coverage row as stored.
 type searchFileCoverageWire struct {
 	RefId   string `json:"ref_id"`
 	Version uint64 `json:"version"`
 	Horizon bool   `json:"horizon,omitempty"`
 }
 
+// What a manifest holds of all, as stored.
 type searchManifestAllWire struct {
 	Held             bool          `json:"held,omitempty"`
 	Pin              searchPinWire `json:"pin"`
 	RolledThroughDay uint32        `json:"rolled_through_day,omitempty"`
 }
 
+// A roll-up as stored: a manifest's, or a plan's with its input_whole.
 type searchManifestRolledWire struct {
 	StartDay   uint32 `json:"start_day"`
 	WindowDays uint32 `json:"window_days"`
@@ -268,18 +273,21 @@ type searchManifestRolledWire struct {
 	InputWhole bool   `json:"input_whole,omitempty"`
 }
 
+// A content ref's coverage as stored.
 type searchManifestContentWire struct {
 	RefId          string                       `json:"ref_id"`
 	IndexedThrough uint64                       `json:"indexed_through,omitempty"`
 	Rows           []searchManifestCoverageWire `json:"rows,omitempty"`
 }
 
+// One writer's coverage row for a content ref, as stored.
 type searchManifestCoverageWire struct {
 	Writer  string `json:"writer"`
 	Version uint64 `json:"version"`
 	Horizon bool   `json:"horizon,omitempty"`
 }
 
+// A version-table run as stored.
 type searchManifestRunWire struct {
 	Kind     int      `json:"kind"`
 	StartDay uint32   `json:"start_day,omitempty"`
@@ -287,6 +295,7 @@ type searchManifestRunWire struct {
 	Inputs   []uint64 `json:"inputs,omitempty"`
 }
 
+// The plan as stored.
 type searchPlanWire struct {
 	Format     int                        `json:"format"`
 	Root       string                     `json:"root"`
@@ -299,6 +308,7 @@ type searchPlanWire struct {
 	Pins       []searchPinWire            `json:"pins,omitempty"`
 }
 
+// A file the target lists, as stored.
 type searchWantedWire struct {
 	Path          string `json:"path"`
 	Version       uint64 `json:"version"`
@@ -313,10 +323,12 @@ type searchWantedWire struct {
 // A manifest or plan that does not decode: derived state, dropped and derived again.
 var errSearchManifestUndecodable = errors.New("search manifest undecodable")
 
+// A pin's stored form.
 func searchPinWireOf(pin SearchSyncPin) searchPinWire {
 	return searchPinWire{Version: pin.Version, Chain: hex.EncodeToString(pin.Chain[:]), TimeMs: pin.TimeMs}
 }
 
+// The stored pin, or errSearchManifestUndecodable.
 func (self searchPinWire) pin() (SearchSyncPin, error) {
 	chain, err := searchHash32(self.Chain)
 	if err != nil {
@@ -339,6 +351,7 @@ func searchHash32(text string) ([sha256.Size]byte, error) {
 	return hash, nil
 }
 
+// An id from its stored hex, or errSearchManifestUndecodable.
 func searchIdOfWire(text string) (Id, error) {
 	decoded, err := hex.DecodeString(text)
 	if err != nil || len(decoded) != len(Id{}) {
@@ -347,6 +360,7 @@ func searchIdOfWire(text string) (Id, error) {
 	return Id(decoded), nil
 }
 
+// A file's stored form.
 func searchManifestFileWireOf(file *SearchManifestFile) searchManifestFileWire {
 	wire := searchManifestFileWire{
 		Path: file.Path, Version: file.Version, Sha256: hex.EncodeToString(file.ContentSha256[:]), Bytes: file.ByteCount,
@@ -360,6 +374,7 @@ func searchManifestFileWireOf(file *SearchManifestFile) searchManifestFileWire {
 	return wire
 }
 
+// The stored file, or errSearchManifestUndecodable.
 func (self searchManifestFileWire) file() (*SearchManifestFile, error) {
 	sum, err := searchHash32(self.Sha256)
 	if err != nil {
@@ -394,10 +409,12 @@ func (self searchManifestFileWire) file() (*SearchManifestFile, error) {
 	return file, nil
 }
 
+// A roll-up's stored form.
 func searchRolledWireOf(startDay uint32, windowDays uint32, atVersion uint64, inputWhole bool) searchManifestRolledWire {
 	return searchManifestRolledWire{StartDay: startDay, WindowDays: windowDays, AtVersion: atVersion, InputWhole: inputWhole}
 }
 
+// A listed file's stored form.
 func searchWantedWireOf(wanted *SearchSyncWanted) searchWantedWire {
 	return searchWantedWire{
 		Path: wanted.Path, Version: wanted.Version, Sha256: hex.EncodeToString(wanted.ContentSha256[:]), Bytes: wanted.ByteCount,
@@ -406,6 +423,7 @@ func searchWantedWireOf(wanted *SearchSyncWanted) searchWantedWire {
 	}
 }
 
+// The stored listed file, or errSearchManifestUndecodable.
 func (self searchWantedWire) wanted() (*SearchSyncWanted, error) {
 	sum, err := searchHash32(self.Sha256)
 	if err != nil {
