@@ -150,7 +150,9 @@ type EvsEngine struct {
 	// §19.11's format2 gate over the host's gates, read per push (format2_gate.go)
 	format2 Format2Gate
 	// hold/ as a slot takeover reads it, at most 5 s old
-	holds   *HoldCache
+	holds *HoldCache
+	// drops/<repo>/_, which the drop routes read and write (drop_table.go)
+	drops   *DropTable
 	metrics *evsMetrics
 	handler http.Handler
 	// what the router took at the start, in its order
@@ -239,6 +241,10 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.locator, self.repos, priceTable, settings, log)
 	self.generations = NewGenerationRecords(settings)
 	self.segments = NewSegmentLocator(blobs)
+	if self.drops, err = NewDropTable(host, blobs, settings.Drop, log); err != nil {
+		cancel()
+		return nil, err
+	}
 	self.notifier = deps.CommitNotifier
 	if self.notifier == nil {
 		self.notifier = NewEvsHintNotifier(cancelCtx, clock, host.Redis, host.Push, deps.GateViews, log)
@@ -270,6 +276,7 @@ func (self *EvsEngine) routes() []*EvsRoute {
 	routes = append(routes, self.erasureRoutes()...)
 	routes = append(routes, self.repoRoutes()...)
 	routes = append(routes, self.reseedRoutes()...)
+	routes = append(routes, self.dropRoutes()...)
 	return append(routes, self.deps.testRoutes...)
 }
 

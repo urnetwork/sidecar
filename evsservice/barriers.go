@@ -253,6 +253,36 @@ const (
 	BarrierReseedStatementPutAfter  = "evs.reseed.statement_put.after"
 )
 
+// EVSB-M10-03: the drop job (drop_job.go; DESIGN-DETAILS 10.6's drop_job_test.go row), keyed by the repo: F0 to F9's
+// sites in the order the job meets them. refs, head and delete are mark's, verify's and the deletes' (EVSB-M10-04,
+// -05, -06), which fire them around the LIST of head/, each head's read (keyed by <repo>:<ref>) and each DELETE.
+const (
+	// Around the start CAS (F1), after its reads of the ref's history for a cancel and of the lock.
+	BarrierDropStartBefore = "evs.drop.start.before"
+	BarrierDropStartAfter  = "evs.drop.start.after"
+	// Around resolve (F2), before snap-0 and the move to phase horizon (F3).
+	BarrierDropResolveBefore = "evs.drop.resolve.before"
+	BarrierDropResolveAfter  = "evs.drop.resolve.after"
+	// Around the round's horizon read, its one LIST of pb/ (F4), before any LIST of head/.
+	BarrierDropHorizonBefore = "evs.drop.horizon.before"
+	BarrierDropHorizonAfter  = "evs.drop.horizon.after"
+	// Around the LIST of head/ mark and verify each make (F5, F6).
+	BarrierDropRefsBefore = "evs.drop.refs.before"
+	BarrierDropRefsAfter  = "evs.drop.refs.after"
+	// Around mark's scan (F5).
+	BarrierDropMarkBefore = "evs.drop.mark.before"
+	BarrierDropMarkAfter  = "evs.drop.mark.after"
+	// Around verify's scan (F6).
+	BarrierDropVerifyBefore = "evs.drop.verify.before"
+	BarrierDropVerifyAfter  = "evs.drop.verify.after"
+	// Around each head read from the cluster by mark and verify.
+	BarrierDropHeadBefore = "evs.drop.head.before"
+	BarrierDropHeadAfter  = "evs.drop.head.after"
+	// Around each DELETE (F7 to F9).
+	BarrierDropDeleteBefore = "evs.drop.delete.before"
+	BarrierDropDeleteAfter  = "evs.drop.delete.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)

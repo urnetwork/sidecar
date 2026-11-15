@@ -16,9 +16,20 @@
 //	ur admin oauth-clients create --scopes=...  POST /network/oauth-clients, its secret printed once
 //	ur admin oauth-clients revoke <id>          POST /network/oauth-client-revoke
 //	ur admin scim-changes                       GET /network/scim-changes, its first page
+//	ur admin idp add --issuer= --client-id=     POST /network/idp, a private_key_jwt IdP; a client_secret IdP is
+//	                                            refused here, before any consent, since the authorization URL and
+//	                                            the consent page carry the command's body: the console adds it
+//	ur admin domains add|verify|remove <domain> POST /network/domain-add, domain-verify, domain-remove
+//	ur admin audit-webhook [list]               POST /network/audit-webhook {}, the team's SIEM webhooks
+//	ur admin audit-webhook add <url>            POST /network/audit-webhook {url}, its signing key printed once
+//	ur admin audit-webhook remove <id>          POST /network/audit-webhook {remove_webhook_id}
+//	ur admin events                             GET /network/admin-events: the oldest page kept, since a command
+//	                                            covers no query, with the page's chain head
 //
-// Nothing here runs from MCP or a hook (D-CORE-13), and nothing here prints a token: the OAuth client's secret, shown
-// once for the person to give CI, is the one credential any part prints.
+// Nothing here runs from MCP or a hook (D-CORE-13), and nothing here prints a token. The credentials a part prints are
+// each shown once, for the one who needs it: an invite's bearer for the person invited, an OAuth client's secret for
+// CI and a webhook's signing key for its receiver. A replay's answer carries none of them, since the server never
+// keeps them, and the part says how to make another.
 
 package main
 
@@ -113,6 +124,34 @@ var (
 		word:  "scim-changes",
 		usage: []string{"  ur admin scim-changes [--device]"},
 		run:   runUrAdminScimChanges,
+	})
+	_ = registerUrAdminPart(&urAdminPart{
+		word:  "idp",
+		usage: []string{"  ur admin idp add --issuer=<issuer> --client-id=<client_id> [--client-auth=<client_auth>] [--device]"},
+		run:   runUrAdminIdp,
+	})
+	_ = registerUrAdminPart(&urAdminPart{
+		word: "domains",
+		usage: []string{
+			"  ur admin domains add <domain> [--device]",
+			"  ur admin domains verify <domain> [--device]",
+			"  ur admin domains remove <domain> [--device]",
+		},
+		run: runUrAdminDomains,
+	})
+	_ = registerUrAdminPart(&urAdminPart{
+		word: "audit-webhook",
+		usage: []string{
+			"  ur admin audit-webhook [list] [--device]",
+			"  ur admin audit-webhook add <webhook_url> [--device]",
+			"  ur admin audit-webhook remove <webhook_id> [--device]",
+		},
+		run: runUrAdminAuditWebhook,
+	})
+	_ = registerUrAdminPart(&urAdminPart{
+		word:  "events",
+		usage: []string{"  ur admin events [--device]"},
+		run:   runUrAdminEvents,
 	})
 )
 
@@ -229,6 +268,11 @@ func runUrAdminMembers(ctx context.Context, cli *urCli, options docopt.Opts) err
 			return err
 		}
 		cli.printf("invite %s for %s as %s, until %s\n", result.InviteId, email, role, result.ExpireTime.UTC().Format(time.RFC3339))
+		if result.InviteBearer == "" {
+			// the first answer was lost, and the server keeps no bearer to answer a retry with
+			cli.printf("its bearer was in an answer that was lost: invite the person again; this invite expires unspent\n")
+			return nil
+		}
 		cli.printf("its bearer, for the person alone: %s\n", result.InviteBearer)
 		cli.printf("the link's fragment, which lets the person's first device be admitted from the invite, is not appended yet\n")
 		return nil
@@ -552,6 +596,223 @@ func runUrAdminScimChanges(ctx context.Context, cli *urCli, options docopt.Opts)
 	}
 	if 0 < len(result.Changes) {
 		cli.printf("a member_revoke's MemberRevoke is owed: ur admin members remove <member_id> signs it\n")
+	}
+	return nil
+}
+
+// The IdP client authentications: ur admin adds a private_key_jwt IdP alone. A client_secret IdP's secret would ride
+// in the authorization URL ur prints and opens, and show on the consent page, so it is refused here before any of
+// that, as the server refuses such a command at its consent too; the console adds it from a signed-in session.
+const (
+	urAdminIdpClientAuthPrivateKeyJwt = "private_key_jwt"
+	urAdminIdpClientAuthClientSecret  = "client_secret"
+)
+
+// ur admin idp add.
+func runUrAdminIdp(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	issuer, _ := options.String("--issuer")
+	clientId, _ := options.String("--client-id")
+	clientAuth, _ := options.String("--client-auth")
+	if clientAuth == "" {
+		clientAuth = urAdminIdpClientAuthPrivateKeyJwt
+	}
+	switch clientAuth {
+	case urAdminIdpClientAuthPrivateKeyJwt:
+	case urAdminIdpClientAuthClientSecret:
+		return errors.New("a client_secret IdP is added from the console: ur admin's command rides in the authorization URL and shows on the consent page, and an IdP's secret never goes there")
+	default:
+		return fmt.Errorf("--client-auth takes private_key_jwt: %q", clientAuth)
+	}
+	if issuer == "" || clientId == "" {
+		return errors.New("ur admin idp add takes --issuer and --client-id")
+	}
+	command, err := urAdminCommand("POST", "/network/idp", map[string]any{"issuer": issuer, "client_id": clientId, "client_auth": clientAuth})
+	if err != nil {
+		return err
+	}
+	result := &struct {
+		IdpId string `json:"idp_id"`
+	}{}
+	if err := urAdminRun(ctx, cli, options, command, result); err != nil {
+		return err
+	}
+	cli.printf("IdP %s added for %s: it signs people in to this team alone\n", result.IdpId, issuer)
+	return nil
+}
+
+// A domain as the domain routes answer it, with the TXT record that proves it.
+type urAdminDomainState struct {
+	Domain   string     `json:"domain"`
+	TxtName  string     `json:"txt_name"`
+	TxtValue string     `json:"txt_value"`
+	Verified bool       `json:"verified"`
+	FailTime *time.Time `json:"fail_time"`
+}
+
+// ur admin domains add|verify|remove.
+func runUrAdminDomains(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	domain, _ := options.String("<domain>")
+	path := ""
+	switch {
+	case urOptionBool(options, "add"):
+		path = "/network/domain-add"
+	case urOptionBool(options, "verify"):
+		path = "/network/domain-verify"
+	case urOptionBool(options, "remove"):
+		path = "/network/domain-remove"
+	default:
+		return errors.New("ur admin domains takes add, verify or remove")
+	}
+	command, err := urAdminCommand("POST", path, map[string]any{"domain": domain})
+	if err != nil {
+		return err
+	}
+	result := &struct {
+		Domain  *urAdminDomainState `json:"domain"`
+		Removed bool                `json:"removed"`
+	}{}
+	err = urAdminRun(ctx, cli, options, command, result)
+	refusal := &urAdminRefusal{}
+	if errors.As(err, &refusal) && result.Domain != nil && !result.Domain.Verified {
+		// a record not found, or looked up a moment ago: the record still to publish
+		cli.printf("publish TXT %s with the value %s\n", result.Domain.TxtName, result.Domain.TxtValue)
+	}
+	if err != nil {
+		return err
+	}
+	if path == "/network/domain-remove" {
+		if result.Removed {
+			cli.printf("removed %s: its sign-ins route to no IdP from now on\n", domain)
+		} else {
+			cli.printf("the team held no %s\n", domain)
+		}
+		return nil
+	}
+	if result.Domain == nil {
+		return fmt.Errorf("the answer to POST %s names no domain", path)
+	}
+	if result.Domain.Verified {
+		cli.printf("%s is verified: its sign-ins route to the team's IdP, and it is looked up again daily\n", result.Domain.Domain)
+		return nil
+	}
+	cli.printf("%s is added: publish TXT %s with the value %s, then run ur admin domains verify %s\n",
+		result.Domain.Domain, result.Domain.TxtName, result.Domain.TxtValue, result.Domain.Domain)
+	return nil
+}
+
+// A webhook as POST /network/audit-webhook lists it, never its key.
+type urAdminWebhookState struct {
+	WebhookId    string     `json:"webhook_id"`
+	Url          string     `json:"url"`
+	DeliveredSeq int64      `json:"delivered_seq"`
+	FailTime     *time.Time `json:"fail_time"`
+	NextTime     *time.Time `json:"next_time"`
+}
+
+// ur admin audit-webhook [list|add|remove].
+func runUrAdminAuditWebhook(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	add := urOptionBool(options, "add")
+	remove := urOptionBool(options, "remove")
+	body := map[string]any{}
+	switch {
+	case add:
+		webhookUrl, _ := options.String("<webhook_url>")
+		body["url"] = webhookUrl
+	case remove:
+		text, _ := options.String("<webhook_id>")
+		webhookId, err := sidecar.ParseId(text)
+		if err != nil {
+			return fmt.Errorf("a webhook is its webhook_id: %q", text)
+		}
+		body["remove_webhook_id"] = webhookId.String()
+	}
+	command, err := urAdminCommand("POST", "/network/audit-webhook", body)
+	if err != nil {
+		return err
+	}
+	result := &struct {
+		WebhookId  string                 `json:"webhook_id"`
+		SigningKey string                 `json:"signing_key"`
+		Removed    bool                   `json:"removed"`
+		Webhooks   []*urAdminWebhookState `json:"webhooks"`
+	}{}
+	if err := urAdminRun(ctx, cli, options, command, result); err != nil {
+		return err
+	}
+	switch {
+	case add:
+		cli.printf("webhook %s added: the team's admin events go to it from now on\n", result.WebhookId)
+		if result.SigningKey == "" {
+			// the first answer was lost, and the server keeps no key to answer a retry with
+			cli.printf("its signing key was in an answer that was lost: remove this webhook and add another\n")
+			return nil
+		}
+		cli.printf("its signing key, shown once, for the receiver alone: %s\n", result.SigningKey)
+		return nil
+	case remove:
+		text, _ := options.String("<webhook_id>")
+		if result.Removed {
+			cli.printf("removed webhook %s\n", text)
+		} else {
+			cli.printf("the team has no webhook %s\n", text)
+		}
+		return nil
+	}
+	for _, webhook := range result.Webhooks {
+		line := fmt.Sprintf("%s %s delivered through seq %d", webhook.WebhookId, webhook.Url, webhook.DeliveredSeq)
+		if webhook.FailTime != nil {
+			line += ", failing since " + webhook.FailTime.UTC().Format(time.RFC3339)
+			if webhook.NextTime != nil {
+				line += ", next try " + webhook.NextTime.UTC().Format(time.RFC3339)
+			}
+		}
+		cli.printf("%s\n", line)
+	}
+	return nil
+}
+
+// ur admin events: the team's admin events from the oldest kept, a page the server bounds, since an admin token's
+// command covers no query and so names no seq to read after; the page's chain head, for a person to compare with a
+// SIEM's or an earlier read's.
+func runUrAdminEvents(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	command, err := urAdminCommand("GET", "/network/admin-events", nil)
+	if err != nil {
+		return err
+	}
+	result := &struct {
+		Events []struct {
+			Seq         int64     `json:"seq"`
+			EventTime   time.Time `json:"event_time"`
+			ActorKind   string    `json:"actor_kind"`
+			ActorId     *string   `json:"actor_id"`
+			Action      string    `json:"action"`
+			TargetKind  string    `json:"target_kind"`
+			TargetId    *string   `json:"target_id"`
+			Result      string    `json:"result"`
+			ChainSha256 string    `json:"chain_sha256"`
+		} `json:"events"`
+		More bool `json:"more"`
+	}{}
+	if err := urAdminRun(ctx, cli, options, command, result); err != nil {
+		return err
+	}
+	for _, event := range result.Events {
+		actor := event.ActorKind
+		if event.ActorId != nil {
+			actor += " " + *event.ActorId
+		}
+		target := event.TargetKind
+		if event.TargetId != nil {
+			target += " " + *event.TargetId
+		}
+		cli.printf("%d %s %s %s %s %s\n", event.Seq, event.EventTime.UTC().Format(time.RFC3339), actor, event.Action, target, event.Result)
+	}
+	if count := len(result.Events); 0 < count {
+		last := result.Events[count-1]
+		cli.printf("chain head %s at seq %d\n", last.ChainSha256, last.Seq)
+	}
+	if result.More {
+		cli.printf("more events follow: ur admin reads the oldest page kept, and the console or an OAuth client with logs:read reads the rest\n")
 	}
 	return nil
 }

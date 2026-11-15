@@ -297,6 +297,10 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 			self.result.DuplicateCount += 1
 			return
 		}
+		if why, err := self.appendDrop(minute.minute, place, record, version); why != "" {
+			wait(why, err)
+			return
+		}
 		segmentIds, _, err := evacuateRecordObjects(record)
 		if err != nil {
 			// GC reads what a committed push introduced from its pidx/ entry, so a list that does not parse
@@ -520,7 +524,8 @@ func evacuateRecordObjects(record *sidecar.EvsBatchRecord) (segmentIds [][32]byt
 		if len(payloadBytes) == 0 {
 			return nil
 		}
-		payload, err := sidecar.ParseEvsPayload(payloadBytes)
+		// either format: a format-2 DROP's body and lists ride beside its new objects (EVSB-M10-03)
+		payload, err := sidecar.ParseEvsPayloadFormat2(payloadBytes)
 		if err != nil {
 			return err
 		}

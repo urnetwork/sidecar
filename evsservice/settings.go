@@ -53,6 +53,9 @@ const evsSlotMinSettleAge = sidecar.BlobUnmodifiedSlack + time.Second
 type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
 	Place *sidecar.EvsRepoPlaceSettings
+	// The drop table's, the drop job's and the dry runs' (drop_table.go; EVSB-M10-03): the routes read the table's
+	// bounds and the dry runs' request bounds here.
+	Drop *DropSettings
 
 	// The storage format this instance runs as (§11.6's format row, EVS-FORMAT.md; format1_guard.go): 2, which
 	// takes format-2 values from networks in §19.11's format2 gate and raises their repos, refusing them 409
@@ -313,6 +316,7 @@ type EvsSettings struct {
 func DefaultEvsSettings() *EvsSettings {
 	return &EvsSettings{
 		Place:                       sidecar.DefaultEvsRepoPlaceSettings(),
+		Drop:                        DefaultDropSettings(),
 		InstanceFormat:              sidecar.EvsRepoFormat2,
 		RepoCacheTtl:                5 * time.Second,
 		RepoCacheCount:              100 * 1000,
@@ -414,6 +418,12 @@ func DefaultEvsSettings() *EvsSettings {
 func (self *EvsSettings) Validate() error {
 	if self.Place == nil {
 		return fmt.Errorf("%w: no place settings", ErrEvsSettings)
+	}
+	if self.Drop == nil {
+		return fmt.Errorf("%w: no drop settings", ErrEvsSettings)
+	}
+	if err := self.Drop.Validate(); err != nil {
+		return err
 	}
 	if self.PushTimeBound <= 0 || self.SealTimeBound <= 0 || self.SlotMaxByteCount <= 0 || self.SlotExistingMaxAge <= 0 || self.GenerationRecordMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's time bound, a slot's bound or age, or gen/<g>'s bound not positive", ErrEvsSettings)

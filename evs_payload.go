@@ -84,6 +84,13 @@ func ParseEvsPayload(payloadBytes []byte) (*EvsPayload, error) {
 	return parseEvsPayload(payloadBytes, false)
 }
 
+// The sections of a stored payload's bytes in either format, a format-2 DROP's sections taken: what a reader of
+// format-2 records parses with, as evacuation does to list what a kept record introduced (format-1 data is valid
+// format 2).
+func ParseEvsPayloadFormat2(payloadBytes []byte) (*EvsPayload, error) {
+	return parseEvsPayload(payloadBytes, true)
+}
+
 // The sections of a payload's bytes as ParseEvsPayload reads them, a format-2 payload's DROP sections taken.
 func parseEvsPayload(payloadBytes []byte, format2 bool) (*EvsPayload, error) {
 	payload := &EvsPayload{}
