@@ -98,11 +98,13 @@ func (self *fixture) toRelease() {
 	edit(filepath.Join(self.directory, "connect", "v2026", "go.mod"), "-module="+connectBasePath+releaseSuffix,
 		"-droprequire="+glogBasePath, "-require="+glogBasePath+releaseSuffix+version)
 
-	// the sibling edits of a module whose directory climbs to the siblings with climbs
+	// the sibling edits of a module whose directory climbs to the siblings with climbs. operator-core's
+	// tag replaces its development require and replace, as connect's does, and a module that does not
+	// import it holds no stand-in for it (owner decision 251)
 	siblings := func(climbs string) []string {
 		return []string{
-			"-droprequire=" + connectBasePath, "-droprequire=" + glogBasePath,
-			"-dropreplace=" + connectBasePath, "-dropreplace=" + glogBasePath,
+			"-droprequire=" + connectBasePath, "-droprequire=" + glogBasePath, "-droprequire=" + operatorCoreBasePath,
+			"-dropreplace=" + connectBasePath, "-dropreplace=" + glogBasePath, "-dropreplace=" + operatorCoreBasePath,
 			"-require=" + connectBasePath + releaseSuffix + version, "-require=" + glogBasePath + releaseSuffix + version,
 			"-replace=" + connectBasePath + releaseSuffix + "=" + climbs + "connect/v2026",
 			"-replace=" + glogBasePath + releaseSuffix + "=" + climbs + "glog/v2026",

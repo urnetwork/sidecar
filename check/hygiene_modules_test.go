@@ -22,10 +22,11 @@ import (
 
 // Where the root's sibling replaces point, from the root's own directory (§4.7).
 var siblingReplaces = map[string]string{
-	connectBasePath: "../connect",
-	sctpBasePath:    "../connect/sctp",
-	glogBasePath:    "../glog",
-	gvisorBasePath:  "../gvisor",
+	connectBasePath:      "../connect",
+	sctpBasePath:         "../connect/sctp",
+	glogBasePath:         "../glog",
+	gvisorBasePath:       "../gvisor",
+	operatorCoreBasePath: "../operator-core",
 }
 
 // The modules of this repository a nested module may replace, and what they are relative to it.

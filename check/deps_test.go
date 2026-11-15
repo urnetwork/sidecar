@@ -33,8 +33,16 @@ var refusedModules = map[string]string{
 	"github.com/prometheus/client_golang": "prometheus, which only ServiceHost's implementation may use",
 }
 
-// The first-party modules a sidecar module may require beside this repository's own (§4.7).
-var allowedFirstPartyModules = []string{connectBasePath, glogBasePath}
+// operator-core, the host contract between server and sidecar (owner decision 251), and its test-only
+// module of conformance suites.
+const (
+	operatorCoreBasePath     = urnetworkPrefix + "operator-core"
+	operatorCoreTestBasePath = operatorCoreBasePath + "/coretest"
+)
+
+// The first-party modules a sidecar module may require beside this repository's own (§4.7): connect, its
+// glog, and operator-core with coretest, whose row keeps it to the test leg.
+var allowedFirstPartyModules = []string{connectBasePath, glogBasePath, operatorCoreBasePath, operatorCoreTestBasePath}
 
 // One dependencies.yml row.
 type dependencyRow struct {
