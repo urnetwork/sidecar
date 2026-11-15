@@ -251,7 +251,8 @@ func (self *urDaemonNetwork) stats() sidecar.SidecarStats {
 	return sidecar.SidecarStats{}
 }
 
-// U opens every network's keychain at once (§5.9): the instance's unlock, then each Sidecar looks again.
+// U opens every network's keychain at once (§5.9): the instance's unlock, then each Sidecar looks again, and IMAP
+// opens where a network serves it (cmd_mail_credential.go).
 func (self *urDaemonNetwork) unlock(pass []byte) error {
 	if err := self.instance.Unlock(pass); err != nil {
 		return err
@@ -259,6 +260,7 @@ func (self *urDaemonNetwork) unlock(pass []byte) error {
 	for _, network := range self.hosted() {
 		network.Sidecar.Unlock(nil)
 	}
+	self.startMailImapIfServing()
 	return nil
 }
 
