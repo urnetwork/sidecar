@@ -4724,14 +4724,17 @@ func (x *EvsSealedFields) GetContentSha256() []byte {
 type EvsSealedMetadata struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// hashes the sealed bytes
-	Group         *GroupHead         `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"` // §10's (group_id, epoch, epoch_authenticator) the writer pins
-	Provenance    *EvsProvenance     `protobuf:"bytes,2,opt,name=provenance,proto3" json:"provenance,omitempty"`
-	Commits       []*EvsSealedCommit `protobuf:"bytes,3,rep,name=commits,proto3" json:"commits,omitempty"`                               // git mode: the carried commits, parents before children (DESIGN-DETAILS 8.2.3)
-	SignedImport  []byte             `protobuf:"bytes,4,opt,name=signed_import,json=signedImport,proto3" json:"signed_import,omitempty"` // a Signed EvsImport, as signed, over this push's own commits (8.2.6)
-	Git           *EvsGitUpdate      `protobuf:"bytes,5,opt,name=git,proto3" json:"git,omitempty"`                                       // git mode, every push but a PATH_EPOCH: what the update is (8.2.3)
-	RefName       []byte             `protobuf:"bytes,6,opt,name=ref_name,json=refName,proto3" json:"ref_name,omitempty"`                // a creating push: the ref name's bytes, the signed copy of payload section 15
-	Base          *EvsOverlay        `protobuf:"bytes,7,opt,name=base,proto3" json:"base,omitempty"`                                     // a creating push of an overlay: the signed copy of payload section 16
-	ErasureNote   []byte             `protobuf:"bytes,8,opt,name=erasure_note,json=erasureNote,proto3" json:"erasure_note,omitempty"`    // an ERASE's or a CLOSURE's note (11.12; QD-682): erasure id 16 B, and for an
+	Group        *GroupHead         `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"` // §10's (group_id, epoch, epoch_authenticator) the writer pins
+	Provenance   *EvsProvenance     `protobuf:"bytes,2,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	Commits      []*EvsSealedCommit `protobuf:"bytes,3,rep,name=commits,proto3" json:"commits,omitempty"`                               // git mode: the carried commits, parents before children (DESIGN-DETAILS 8.2.3)
+	SignedImport []byte             `protobuf:"bytes,4,opt,name=signed_import,json=signedImport,proto3" json:"signed_import,omitempty"` // a Signed EvsImport, as signed, over this push's own commits (8.2.6)
+	Git          *EvsGitUpdate      `protobuf:"bytes,5,opt,name=git,proto3" json:"git,omitempty"`                                       // git mode, every push but a PATH_EPOCH: what the update is (8.2.3)
+	RefName      []byte             `protobuf:"bytes,6,opt,name=ref_name,json=refName,proto3" json:"ref_name,omitempty"`                // a creating push: the ref name's bytes, the signed copy of payload section 15
+	Base         *EvsOverlay        `protobuf:"bytes,7,opt,name=base,proto3" json:"base,omitempty"`                                     // a creating push of an overlay: the signed copy of payload section 16
+	ErasureNote  []byte             `protobuf:"bytes,8,opt,name=erasure_note,json=erasureNote,proto3" json:"erasure_note,omitempty"`    // an ERASE's or a CLOSURE's note (11.12; QD-682): erasure id 16 B, and for an
+	// ERASE complete u8 (1 when this push ends the erasure) and the caller's note
+	// bytes; a CLOSURE's is its erasure id alone
+	WrittenOver   [][]byte `protobuf:"bytes,9,rep,name=written_over,json=writtenOver,proto3" json:"written_over,omitempty"` // a repair form's (DESIGN-DETAILS 16.2.7; QD-833): the push ids of the ignored
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4818,6 +4821,13 @@ func (x *EvsSealedMetadata) GetBase() *EvsOverlay {
 func (x *EvsSealedMetadata) GetErasureNote() []byte {
 	if x != nil {
 		return x.ErasureNote
+	}
+	return nil
+}
+
+func (x *EvsSealedMetadata) GetWrittenOver() [][]byte {
+	if x != nil {
+		return x.WrittenOver
 	}
 	return nil
 }
@@ -8408,7 +8418,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\agit_oid\x18\x03 \x01(\fR\x06gitOid\x128\n" +
 	"\boid_kind\x18\x04 \x01(\x0e2\x1d.urnetwork.sidecar.EvsOidKindR\aoidKind\x12\x12\n" +
 	"\x04size\x18\x05 \x01(\x04R\x04size\x12%\n" +
-	"\x0econtent_sha256\x18\x06 \x01(\fR\rcontentSha256\"\x90\x03\n" +
+	"\x0econtent_sha256\x18\x06 \x01(\fR\rcontentSha256\"\xb3\x03\n" +
 	"\x11EvsSealedMetadata\x122\n" +
 	"\x05group\x18\x01 \x01(\v2\x1c.urnetwork.sidecar.GroupHeadR\x05group\x12@\n" +
 	"\n" +
@@ -8419,7 +8429,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x03git\x18\x05 \x01(\v2\x1f.urnetwork.sidecar.EvsGitUpdateR\x03git\x12\x19\n" +
 	"\bref_name\x18\x06 \x01(\fR\arefName\x121\n" +
 	"\x04base\x18\a \x01(\v2\x1d.urnetwork.sidecar.EvsOverlayR\x04base\x12!\n" +
-	"\ferasure_note\x18\b \x01(\fR\verasureNote\"\x9c\x02\n" +
+	"\ferasure_note\x18\b \x01(\fR\verasureNote\x12!\n" +
+	"\fwritten_over\x18\t \x03(\fR\vwrittenOver\"\x9c\x02\n" +
 	"\fEvsGitUpdate\x124\n" +
 	"\x05shape\x18\x01 \x01(\x0e2\x1e.urnetwork.sidecar.EvsGitShapeR\x05shape\x12\x17\n" +
 	"\aold_tip\x18\x02 \x01(\fR\x06oldTip\x12\x17\n" +

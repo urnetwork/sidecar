@@ -78,26 +78,38 @@ func (self *zoneRrset) answersData(healthy *HealthySet) bool {
 	return self.set.Type == dns.TypeSOA || len(self.records) != 0
 }
 
-// The types name answers with data now, as typedRecords would answer them: its own RRsets, then its
-// copy row's wildcard's for the types it lacks, each only while it answers a record. nil when the name
-// does not exist; empty for an empty non-terminal. name is canonical and at or below the root.
+// The types name answers with data now, as typedRecords would answer them: under an alias the alias's
+// own RRsets, then the matched name's own, then its copy row's wildcard's for the types it lacks, each
+// only while it answers a record. nil when the name does not exist; empty for an empty non-terminal and
+// for a suspended host. name is canonical and at or below the root.
 func (self *ZoneView) dataTypes(name string, healthy *HealthySet) []uint16 {
-	match := self.match(name)
-	if match.node == nil {
+	lookup := self.lookup(name)
+	if !lookup.exists() {
 		return nil
 	}
 	types := []uint16{}
-	add := func(node *zoneNode) {
+	if lookup.withheld() {
+		return types
+	}
+	add := func(node *zoneNode, rrsetOf func(node *zoneNode, rrType uint16) *zoneRrset) {
 		for _, held := range node.rrsets {
-			if rrset := node.rrset(held.set.Type); rrset != nil && rrset.answersData(healthy) {
+			if rrset := rrsetOf(node, held.set.Type); rrset != nil && rrset.answersData(healthy) {
 				types = append(types, held.set.Type)
 			}
 		}
 	}
-	add(match.node)
-	if match.node.copies() {
-		if source := self.copySource(match.name); source != nil {
-			add(source)
+	ownRrset := func(node *zoneNode, rrType uint16) *zoneRrset {
+		return node.rrset(rrType)
+	}
+	if lookup.own != nil {
+		add(lookup.own, ownRrset)
+	}
+	if match := lookup.match; match.node != nil {
+		add(match.node, lookup.matchRrset)
+		if match.node.copies() {
+			if source := self.copySource(match.name); source != nil {
+				add(source, ownRrset)
+			}
 		}
 	}
 	slices.Sort(types)

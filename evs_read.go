@@ -89,17 +89,28 @@ type evsPrefixWriteAsk struct {
 }
 
 // The effective version of a path whose newest event at evs this device ignores: its number, 0 for a path that is
-// effectively absent, and how many ignored versions lie over it.
+// effectively absent, and how many ignored versions lie over it; and the ignored events between it and evs's newest,
+// newest first, whose push ids the repair form's sealed metadata names (QD-833).
 type evsPrefixWriteBase struct {
 	version      uint64
 	ignoredAbove int
+	writtenOver  []evsPrefixIgnoredPush
 }
 
 // What 16.2.5's walk found over the version a read shows: how many ignored versions lie over it, and whether a set
-// this device cannot read holds everything above it back (held: pending; update: a later release's).
+// this device cannot read holds everything above it back (held: pending; update: a later release's); and the ignored
+// events the walk passed, newest first, none where the read record answered with no walk.
 type evsPrefixRead struct {
 	ignoredAbove int
 	state        string
+	ignored      []evsPrefixIgnoredPush
+}
+
+// One ignored event of a path, a version or a removal: the push that made it and the ref version that push committed
+// at, which orders a repair's written_over (QD-833).
+type evsPrefixIgnoredPush struct {
+	commitVersion uint64
+	pushId        Id
 }
 
 // The prefix reader of this repo's reads: nil where the repo's rows hold no rule set, so nothing is judged (16.2.4's

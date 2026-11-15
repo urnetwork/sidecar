@@ -50,6 +50,12 @@
 // before anything is sealed or sent; one it bears out states that version as its base_entry_version, so 5g's CAS spans
 // the caller's read to the commit, and a plan made again after a refusal checks it again.
 //
+// Under the repo's prefix rules (DESIGN-DETAILS 16.2.7) a write over an event of a path this device ignores takes the
+// repair form: its versions are held to the effective version's number, its base_entry_version and prev_push_id stay
+// evs's newest, its content is one checkpoint, its parent's delta states its row again, and the plan names the push
+// ids of the ignored events it writes over, in ref-version order, which the sender seals as
+// EvsSealedMetadata.written_over for `ur evs log` (QD-833). A plan that repairs nothing names none.
+//
 // Not built here, and failing closed: a file-mode rename or copy, which would keep a file's chain under another path
 // through the reuse list.
 //
@@ -59,6 +65,7 @@ package sidecar
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -241,6 +248,9 @@ type EvsWritePlan struct {
 	// under the repo's prefix rules: each written path whose newest event at evs this device ignores, with the
 	// effective version its write repairs to (DESIGN-DETAILS 16.2.7)
 	prefixBases map[string]*evsPrefixWriteBase
+	// the push ids the repair form writes over, which the sender seals as EvsSealedMetadata.written_over (QD-833;
+	// evsPrefixWrittenOver); none for a plan that repairs nothing
+	writtenOver [][]byte
 	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
 	slotKeyed bool
 	// the ref's name bytes and the repo's kind, which a write's versioning is decided from (evs_write_versionless.go)
@@ -553,6 +563,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		return nil, err
 	}
 	plan.Paths = append(plan.Paths, directoryPaths...)
+	plan.writtenOver = evsPrefixWrittenOver(plan)
 	if plan.firstPush {
 		epoch, err := self.firstEpoch(ctx, plan.RefKind, nil, args.Generation)
 		if err != nil {
@@ -587,6 +598,31 @@ func (self *EvsRepo) repoKind() (protocol.RepoKind, error) {
 // checkpoint, nil outside tests: what DESIGN-DETAILS 16.6's writer twin shows a reader's reconstruction passing through
 // the ignored record with.
 var evsPrefixRepairDiffHook func() bool
+
+// The push ids a plan's repair form writes over (QD-833; DESIGN-DETAILS 16.2.7's metadata row), which the sender seals
+// as EvsSealedMetadata.written_over: for each path the plan repairs, the ignored events between its effective version
+// and evs's newest, every path's together in ref-version order, 16 B each. A push two paths' ignored events came from
+// is one ref version and is named once. Nil where the plan repairs nothing, so every other push leaves the field
+// empty.
+func evsPrefixWrittenOver(plan *EvsWritePlan) [][]byte {
+	events := []evsPrefixIgnoredPush{}
+	for _, planned := range plan.Paths {
+		if base := plan.prefixBases[planned.Path]; planned.Repair && base != nil {
+			events = append(events, base.writtenOver...)
+		}
+	}
+	slices.SortStableFunc(events, func(a evsPrefixIgnoredPush, b evsPrefixIgnoredPush) int {
+		return cmp.Compare(a.commitVersion, b.commitVersion)
+	})
+	var pushIds [][]byte
+	for i, event := range events {
+		if 0 < i && events[i-1].commitVersion == event.commitVersion && events[i-1].pushId == event.pushId {
+			continue
+		}
+		pushIds = append(pushIds, event.pushId.Bytes())
+	}
+	return pushIds
+}
 
 // The ref's kind, mode and owner: the head's once a push set them, else a file-mode ref named by refName, owned for
 // ur/<this sidecar>/..., shared otherwise. A git-mode ref is ErrEvsGitRef but for a rekey's writes, rekeyOnly, which

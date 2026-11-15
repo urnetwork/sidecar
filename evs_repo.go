@@ -133,6 +133,10 @@ type EvsHistoryVersion struct {
 	// The repo's prefix write rules do not allow the version's signer its path, so this device does not follow it
 	// (`ignored: prefix rule`, DESIGN-DETAILS 16.2.5); a version nobody can judge is shown as evs has it.
 	Ignored bool
+	// The path version of the later listed repair whose sealed written_over names this version's push, which `ur evs
+	// log` marks it with (DESIGN-DETAILS 16.2.7's metadata row; QD-833); 0 where no listed repair names it. For display
+	// alone: nothing about the version rests on it.
+	WrittenOverBy uint64
 	// 0 kept, 1 versionless, 2 index (§11.7).
 	Versioning uint32
 	// kept, or collected for a replaced versionless version whose content evs no longer serves; drop_pending and

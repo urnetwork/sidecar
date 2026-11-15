@@ -871,3 +871,205 @@ func TestEvsPrefixWriteOverAnIgnoredVersionAsADiffRestsOnTheIgnoredRecord(t *tes
 		}
 	}
 }
+
+// The push ids a committed push's sealed metadata names in written_over (QD-833), in its order.
+func (self *evsPrefixWriterTest) writtenOver(version uint64) []Id {
+	self.t.Helper()
+	statement, checked := self.writer.committedPayload(self.t, version)
+	metadata, err := EvsOpenMetadata(evsTestKeys(self.t, self.writer.world.repoId, statement.Push.GetGeneration()).manifest, checked.SealedMetadata)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	pushIds := []Id{}
+	for _, pushIdBytes := range metadata.GetWrittenOver() {
+		pushId, err := IdFromBytes(pushIdBytes)
+		if err != nil {
+			self.t.Fatalf("written_over holds an id of %d bytes", len(pushIdBytes))
+		}
+		pushIds = append(pushIds, pushId)
+	}
+	return pushIds
+}
+
+// The push the world's ref committed at a version.
+func (self *evsPrefixWriterTest) pushIdAt(commitVersion uint64) Id {
+	world := self.writer.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	return Id(world.commits[commitVersion-1].parsed.Push.GetPushId())
+}
+
+// A repair over two ignored versions of one path names both breaches' pushes in its sealed written_over, in ref-version
+// order (QD-833; DESIGN-DETAILS 16.2.7's metadata row): where the write's own walk finds them, and where an earlier read
+// noted the effective version in the read record, which answers the write with no walk, so the same events are read
+// again. The writes that repair nothing, before it and after it, name none.
+func TestEvsPrefixRepairNamesTheIgnoredVersionsItWritesOver(t *testing.T) {
+	for _, readFirst := range []bool{false, true} {
+		test := newEvsPrefixWriterTest(t)
+		writer := test.writer
+		ctx := context.Background()
+		good, err := writer.write(t, "src/main.go", []byte("good"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pushIds := test.writtenOver(good.Version); len(pushIds) != 0 {
+			t.Fatalf("read first %v: an ordinary write names %v", readFirst, pushIds)
+		}
+		first := test.breach("src/main.go", []byte("breach one"))
+		second := test.breach("src/main.go", []byte("breach two"))
+		if readFirst {
+			out := &bytes.Buffer{}
+			if info, err := writer.repo.ReadHead(ctx, &EvsReadArgs{Path: "src/main.go"}, out); err != nil || out.String() != "good" || info.IgnoredAbove != 2 {
+				t.Fatalf("the read before the repair: %q %+v %v", out.String(), info, err)
+			}
+		}
+		record, _, err := writer.test.client.pins.ReadRecord(writer.world.repoId, writer.world.refId, "src/main.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if noted := record != nil && record.Accepted != nil && record.IgnoredThrough != 0; noted != readFirst {
+			t.Fatalf("read first %v: the read record %+v", readFirst, record)
+		}
+		repair, err := writer.repo.WritePaths(ctx, &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
+			Path: "src/main.go", Content: bytes.NewReader([]byte("good")), IfVersion: evsTestUint64(good.PathVersion),
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := test.writtenOver(repair.Version), []Id{test.pushIdAt(first), test.pushIdAt(second)}; !slices.Equal(got, want) {
+			t.Errorf("read first %v: the repair names %v, want %v", readFirst, got, want)
+		}
+		after, err := writer.writeHeld("src/main.go", repair.PathVersions[0], "after the repair")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pushIds := test.writtenOver(after.Version); len(pushIds) != 0 {
+			t.Errorf("read first %v: a write after the repair names %v", readFirst, pushIds)
+		}
+	}
+}
+
+// One write that repairs two paths names each path's ignored pushes, all of them together in ref-version order, and a
+// breach of both paths in one push once; each path then reads its repair back.
+func TestEvsPrefixRepairOfTwoPathsNamesEachPathsIgnoredPushes(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	a, err := writer.write(t, "src/a.go", []byte("good a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := writer.write(t, "src/b.go", []byte("good b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	breachA := test.breach("src/a.go", []byte("breach a"))
+	breachB := test.breach("src/b.go", []byte("breach b"))
+	both := test.pushAs(test.held, &evsTestChange{path: "src/a.go", content: []byte("both a"), segment: true},
+		&evsTestChange{path: "src/b.go", content: []byte("both b"), segment: true})
+	again := test.breach("src/a.go", []byte("breach a again"))
+	repair, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{
+		{Path: "src/a.go", Content: bytes.NewReader([]byte("good a")), IfVersion: evsTestUint64(a.PathVersion)},
+		{Path: "src/b.go", Content: bytes.NewReader([]byte("good b")), IfVersion: evsTestUint64(b.PathVersion)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Id{test.pushIdAt(breachA), test.pushIdAt(breachB), test.pushIdAt(both), test.pushIdAt(again)}
+	if got := test.writtenOver(repair.Version); !slices.Equal(got, want) {
+		t.Errorf("the repair names %v, want %v", got, want)
+	}
+	reader := test.ruledReader("reader")
+	for path, want := range map[string]string{"src/a.go": "good a", "src/b.go": "good b"} {
+		if content, info, err := test.read(reader, path); err != nil || content != want || info.IgnoredAbove != 0 {
+			t.Errorf("%s after the repair: %q %+v %v", path, content, info, err)
+		}
+	}
+}
+
+// History marks each version a later repair named with that repair's version (QD-833), for `ur evs log`: two repairs,
+// each over the breaches below it, mark their own breaches, and the repairs and the version the first repaired to stay
+// unmarked. The repair runner's push names what it wrote over as a caller's write does.
+func TestEvsPrefixHistoryMarksWhatEachRepairWroteOver(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	good, err := writer.write(t, "src/main.go", []byte("good"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	test.breach("src/main.go", []byte("breach one"))
+	first, err := writer.writeHeld("src/main.go", good.PathVersion, "first repair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := test.breach("src/main.go", []byte("breach two"))
+	test.breach("src/main.go", []byte("breach three"))
+	// the runner's repair by hand, of a versioned file under RepairDepth
+	judge := test.enableRepairs(DefaultAclPrefixSettings())
+	test.journal(judge, EvsPrefixIgnoredWrite, "src/main.go", second)
+	result, err := writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: writer.world.repoId, ByHand: true})
+	if err != nil || result.PushCount != 1 {
+		t.Fatalf("the repair by hand: %+v %v", result, err)
+	}
+	reader := test.ruledReader("reader")
+	history, err := reader.client.Repo(writer.world.repoId).History(ctx, &EvsReadArgs{Path: "src/main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type mark struct {
+		version       uint64
+		ignored       bool
+		writtenOverBy uint64
+	}
+	got := []mark{}
+	for _, version := range history.Versions {
+		got = append(got, mark{version: version.Version, ignored: version.Ignored, writtenOverBy: version.WrittenOverBy})
+	}
+	want := []mark{
+		{version: 6}, {version: 5, ignored: true, writtenOverBy: 6}, {version: 4, ignored: true, writtenOverBy: 6},
+		{version: first.PathVersions[0]}, {version: 2, ignored: true, writtenOverBy: first.PathVersions[0]}, {version: 1},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("history marks %+v, want %+v", got, want)
+	}
+}
+
+// A repair whose push names no list reads as before (QD-833): History over an allowed push written over a breach with
+// sealed metadata from before the field, and over one whose sealed metadata does not open, marks nothing, fails
+// nothing and lists every version with its verdict.
+func TestEvsPrefixHistoryReadsARepairWithNoListAsBefore(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	world := writer.world
+	if _, err := writer.write(t, "src/main.go", []byte("good")); err != nil {
+		t.Fatal(err)
+	}
+	test.breach("src/main.go", []byte("breach one"))
+	sealed, err := EvsSealMetadata(evsTestKeys(t, world.repoId, world.generation).manifest, &protocol.EvsSealedMetadata{Provenance: &protocol.EvsProvenance{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.nextMetadata = sealed
+	world.push(&evsTestChange{path: "src/main.go", content: []byte("good"), segment: true})
+	test.breach("src/main.go", []byte("breach two"))
+	// the world's own metadata bytes, which open under no key
+	world.push(&evsTestChange{path: "src/main.go", content: []byte("good"), segment: true})
+	reader := test.ruledReader("reader")
+	history, err := reader.client.Repo(world.repoId).History(context.Background(), &EvsReadArgs{Path: "src/main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ignored := []bool{}
+	for _, version := range history.Versions {
+		ignored = append(ignored, version.Ignored)
+		if version.WrittenOverBy != 0 {
+			t.Errorf("version %d marked written over by %d", version.Version, version.WrittenOverBy)
+		}
+	}
+	if !slices.Equal(ignored, []bool{false, true, false, true, false}) {
+		t.Errorf("history's verdicts %v", ignored)
+	}
+	if content, info, err := test.read(reader, "src/main.go"); err != nil || content != "good" || info.IgnoredAbove != 0 {
+		t.Errorf("the newest read: %q %+v %v", content, info, err)
+	}
+}

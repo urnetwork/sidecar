@@ -77,6 +77,15 @@ const (
 	// NODATA for every type, ANY included, and * no longer covers it or any name below it. It stands
 	// beside the owner's copy row, if any, which answers again once the suspension lifts.
 	DnsRecordKindWithheld DnsRecordKind = "withheld"
+	// A network's alias (§12.5, D-DNS-2; DNS-M6-01): one row at the alias's apex, <alias>.<root>, of
+	// type DnsAliasType. With no rdata it holds the apex for the alias's own rows alone, its challenges;
+	// with its label's apex <label>.<root> as its one rdata, every name below the alias answers from the
+	// label's rows (zone_alias.go).
+	DnsRecordKindAlias DnsRecordKind = "alias"
+	// A or AAAA at a mail host naming a direct MX's mail indexers (§12.8, owner decision 33; DNS-M7-03),
+	// in place of the router rows. Held to §12.7's public-address rule at the write and again at the
+	// answer, as a user's addresses are, since a customer names them.
+	DnsRecordKindDirect DnsRecordKind = "direct"
 )
 
 // The type a copy row holds, since one row stands for every type at the wildcard. RFC 1035 reserves
@@ -87,11 +96,17 @@ const DnsCopyType uint16 = dns.TypeNone
 // 65535, so it can name no real RRset either, and it keys apart from the owner's copy row.
 const DnsWithheldType uint16 = dns.TypeReserved
 
+// The type an alias row holds: the last of RFC 6895 §3.1's private-use range, which no public RRset
+// takes and no other row may hold, so it keys apart from the retiring CAA <root> keeps at the same
+// apex (D-DNS-10).
+const DnsAliasType uint16 = 0xfffe
+
 // Whether this is a kind this release answers.
 func (self DnsRecordKind) known() bool {
 	switch self {
 	case DnsRecordKindUser, DnsRecordKindSystem, DnsRecordKindCopy, DnsRecordKindEdge, DnsRecordKindRouter,
-		DnsRecordKindChallenge, DnsRecordKindCanary, DnsRecordKindKey, DnsRecordKindWithheld:
+		DnsRecordKindChallenge, DnsRecordKindCanary, DnsRecordKindKey, DnsRecordKindWithheld, DnsRecordKindAlias,
+		DnsRecordKindDirect:
 		return true
 	}
 	return false
@@ -114,7 +129,7 @@ type DnsRecordSet struct {
 	Ttl  uint32        `json:"ttl"`
 	Kind DnsRecordKind `json:"kind"`
 	// One presentation-form RDATA a record, without owner, TTL, class or type. Empty on edge, router
-	// and copy rows, which hold no addresses.
+	// and copy rows, which hold no addresses. An alias row's is its label's apex, or nothing.
 	Rdata []string `json:"rdata,omitempty"`
 }
 
@@ -168,10 +183,24 @@ func dnsTypeStorable(rrType uint16) bool {
 	switch rrType {
 	case dns.TypeNone, dns.TypeOPT, dns.TypeTSIG, dns.TypeTKEY, dns.TypeAXFR, dns.TypeIXFR, dns.TypeMAILA, dns.TypeMAILB,
 		dns.TypeANY, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3, dns.TypeNSEC3PARAM, dns.TypeDNSKEY, dns.TypeNXNAME,
-		dns.TypeReserved:
+		dns.TypeReserved, DnsAliasType:
 		return false
 	}
 	return true
+}
+
+// The label directly below root that name is, and whether name is one: <label>.<root>. name and root
+// are canonical.
+func dnsLabelBelowRoot(root string, name string) (string, bool) {
+	rest, ok := strings.CutSuffix(name, "."+root)
+	if !ok || rest == "" {
+		return "", false
+	}
+	labels := dns.SplitDomainName(rest + ".")
+	if len(labels) != 1 {
+		return "", false
+	}
+	return labels[0], true
 }
 
 // Whether owner is a canonical name at or below root.
@@ -193,7 +222,7 @@ func (self *DnsRecordKey) Validate(root string) error {
 	if err := validateDnsOwner(root, self.Owner); err != nil {
 		return err
 	}
-	if self.Type != DnsCopyType && self.Type != DnsWithheldType && !dnsTypeStorable(self.Type) {
+	if self.Type != DnsCopyType && self.Type != DnsWithheldType && self.Type != DnsAliasType && !dnsTypeStorable(self.Type) {
 		return fmt.Errorf("%w: type %s", ErrDnsRowMalformed, dnsTypeText(self.Type))
 	}
 	return nil
@@ -235,6 +264,28 @@ func (self *DnsRecordSet) parse(root string) ([]dns.RR, error) {
 			return nil, fmt.Errorf("%w: an %s row is A or AAAA with no rdata", ErrDnsRowMalformed, self.Kind)
 		}
 		return nil, nil
+	case DnsRecordKindAlias:
+		// at most its label's apex, both directly below the root, and never itself
+		if self.Type != DnsAliasType || 1 < len(self.Rdata) {
+			return nil, fmt.Errorf("%w: an alias row holds its type and at most its label's apex", ErrDnsRowMalformed)
+		}
+		if _, ok := dnsLabelBelowRoot(root, self.Owner); !ok {
+			return nil, fmt.Errorf("%w: alias %q is not directly below %s", ErrDnsRowMalformed, self.Owner, root)
+		}
+		if len(self.Rdata) == 1 {
+			target := self.Rdata[0]
+			if !isCanonicalDnsName(target) || target == self.Owner {
+				return nil, fmt.Errorf("%w: alias %q names no label apex", ErrDnsRowMalformed, self.Owner)
+			}
+			if _, ok := dnsLabelBelowRoot(root, target); !ok {
+				return nil, fmt.Errorf("%w: alias %q names %q, not directly below %s", ErrDnsRowMalformed, self.Owner, target, root)
+			}
+		}
+		return nil, nil
+	case DnsRecordKindDirect:
+		if self.Type != dns.TypeA && self.Type != dns.TypeAAAA {
+			return nil, fmt.Errorf("%w: a direct row is A or AAAA", ErrDnsRowMalformed)
+		}
 	}
 	if !dnsTypeStorable(self.Type) {
 		return nil, fmt.Errorf("%w: type %s", ErrDnsRowMalformed, dnsTypeText(self.Type))

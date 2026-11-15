@@ -1204,6 +1204,13 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "erasure_note", number: 8, typeName: "bytes"},
 		question: "evs1-m2-30-erasure-note-format",
 	},
+	// QD-833: a repair form names the push ids of the ignored versions it writes over, sealed with its metadata, for
+	// `ur evs log` (DESIGN-DETAILS 16.2.7's metadata row)
+	{
+		message:  "EvsSealedMetadata",
+		field:    testFenceField{name: "written_over", number: 9, typeName: "bytes", repeated: true},
+		question: "evs1-m6-04-repair-written-over",
+	},
 	// QD-740: a dial or route grant's prefixes and ports ride sealed, at CanonicalAction version 4, and local_port,
 	// weight and alpn ride the ApprovalRequest, which is sealed in its entry
 	{

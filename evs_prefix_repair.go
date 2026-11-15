@@ -37,6 +37,12 @@
 // mirror's sealed copy, so a versionless file whose replaced content evs purged, or a removal collected past the
 // horizon, answers EVS_PREFIX_RULE unavailable and its unit waits.
 //
+// What a repair writes over (QD-833; DESIGN-DETAILS 16.2.7's metadata row): every write over an ignored event, the
+// runner's and a caller's alike, names in its sealed written_over the push ids of the events it writes over. The
+// planner takes them from the writeBase walk that found the effective version, or, where the read record answered
+// with no walk, from writtenOverEvents, which reads the same events again; evs_plan.go orders them and evs_push.go
+// seals them. History marks each version a later repair named (evs_history.go).
+//
 // The filer's pin pushes (16.2.9): once its own log holds a set it filed, a pin push (EvsRepo.PinPush) to each shared
 // ref whose head's pin is below the set. A ref whose pin push fails, or every ref while the log does not hold the set,
 // stays owed under prefix_pin/<repo_id>; the prefix timer sends it again at most once a PinPushRetryInterval, up to
@@ -296,6 +302,66 @@ func (self *evsPrefixJudge) repairPath(ctx context.Context, repo *EvsRepo, refId
 		return evsPrefixRepairWaiting, 0, err
 	}
 	return evsPrefixRepairPushed, byteCount, nil
+}
+
+// The ignored events a write over newest writes over (QD-833), newest first: newest, the path's newest event at evs as
+// the planner's read verified it, and each event below it this device ignores, read by number and held to what its
+// successor names as effective's walk reads it, down to the first event it does not ignore, at most
+// WalkBackVersionCount of them. writeBase runs it only where the read record answered with no walk, so it raises no
+// prefix alarm, the read that noted the record having raised one, and notes nothing in the record. A version its
+// successor does not name alarms as tampering and fails the write, as it fails the walk.
+func (self *evsPrefixJudge) writtenOverEvents(ctx context.Context, repo *EvsRepo, refId Id, path string, newest *EvsVerifiedPath) ([]evsPrefixIgnoredPush, error) {
+	events := []evsPrefixIgnoredPush{}
+	verified := newest
+	for {
+		verdict, err := self.verdictOfPath(ctx, repo, refId, verified, nil)
+		if err != nil {
+			return nil, err
+		}
+		if verdict.Outcome != AclPrefixIgnored {
+			// the effective version, or one this device cannot judge: the list ends above it
+			return events, nil
+		}
+		pushId, _ := IdFromBytes(verified.Statement.Push.GetPushId())
+		events = append(events, evsPrefixIgnoredPush{commitVersion: verified.CommitVersion, pushId: pushId})
+		if self.settings.WalkBackVersionCount < len(events) {
+			return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailDepth, Path: path}
+		}
+		below := &evsReadPath{path: path}
+		var expectPushId []byte
+		if verified.Removal != nil {
+			if verified.Removal.GetPathVersion() <= 1 {
+				return nil, fmt.Errorf("%w: a removal of no version", ErrEvsEntryRefused)
+			}
+			below.version = verified.Removal.GetPathVersion() - 1
+		} else {
+			entry := verified.Entry
+			if len(entry.GetPrevPushId()) == 0 || entry.GetVersion() <= 1 {
+				// the ignored version created the path
+				return events, nil
+			}
+			below.version = entry.GetVersion() - 1
+			below.commitVersion, below.prevPushId = entry.GetPrevCommitVersion(), entry.GetPrevPushId()
+			expectPushId = entry.GetPrevPushId()
+		}
+		next, err := repo.readPaths(ctx, refId, []*evsReadPath{below}, false)
+		if err != nil {
+			return nil, err
+		}
+		next.objects.close()
+		found := next.replies[0]
+		switch {
+		case found.Base != nil, found.Absent:
+			// nothing below the ignored event: the list ends with it
+			return events, nil
+		case below.version < evsPrefixEventVersion(found),
+			found.Entry != nil && found.Removal == nil && expectPushId != nil &&
+				(!bytes.Equal(found.Entry.GetPushId(), expectPushId) || found.CommitVersion != below.commitVersion):
+			self.client.alarm(repo.repoId, refId, SidecarEvsAlarmTamper, path, nil)
+			return nil, fmt.Errorf("%w: a version its successor does not name", ErrEvsEntryRefused)
+		}
+		verified = found
+	}
 }
 
 // A ref's name by its id: main's, else the name its head seals for the repo's readers.
