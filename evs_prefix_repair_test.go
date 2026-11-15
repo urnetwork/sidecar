@@ -12,6 +12,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -239,5 +240,226 @@ func TestEvsPrefixFollowAfterAClosedGateMeetsTheNewerSet(t *testing.T) {
 	}
 	if statements, _ := writer.server.sentCounts(); statements != 1 || follows != 1 {
 		t.Fatalf("%d statements, %d follows", statements, follows)
+	}
+}
+
+// Enables the rules on the writer again with settings and the repair runner on, as a desktop's composition does.
+func (self *evsPrefixWriterTest) enableRepairs(settings *AclPrefixSettings) *evsPrefixJudge {
+	self.writer.test.client.EnablePrefixRules(&EvsPrefixRulesArgs{
+		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return slices.Clone(self.sets), nil },
+		AllowWrite: func(write *AclPrefixWrite) AclPrefixWriteDecision {
+			if self.refuse != nil {
+				return *self.refuse
+			}
+			return AclPrefixWriteDecision{AclDecision: AclDecision{Allowed: true, Reason: AclReasonPrefixRule}}
+		},
+		Settings: settings,
+		Repair:   true,
+	})
+	return self.writer.test.client.prefixJudge()
+}
+
+// Journals an ignored event of path as this device's mirror would, at the writer's clock.
+func (self *evsPrefixWriterTest) journal(judge *evsPrefixJudge, kind EvsPrefixIgnoredKind, path string, commitVersion uint64) *EvsPrefixIgnored {
+	self.t.Helper()
+	world := self.writer.world
+	world.stateLock.Lock()
+	pushId := Id(world.commits[commitVersion-1].parsed.Push.GetPushId())
+	world.stateLock.Unlock()
+	unit := &EvsPrefixIgnored{
+		RepoId: world.repoId, RefId: world.refId, Path: path, Named: true, Version: commitVersion, CommitVersion: commitVersion,
+		PushId: pushId, SignerSidecarId: self.held.sidecarId, Kind: kind, AtMs: self.writer.test.clock.Now().UnixMilli(),
+	}
+	if err := judge.journalAdd(world.repoId, []*EvsPrefixIgnored{unit}); err != nil {
+		self.t.Fatal(err)
+	}
+	return unit
+}
+
+// The runner over a journal (16.2.8's table): nothing before RepairDelay and the unit's share of RepairJitter; then a
+// breach-created path is removed, a removed file is created again from the effective content, a versionless file's
+// accepted content is written again, and a versioned file a breach replaced waits until RepairDepth ignored versions
+// lie over it, or until `ur evs repair` asks by hand. A second runner that comes after finds the newest event allowed
+// and drops its unit with no push. A device that does not repair runs none.
+func TestEvsPrefixRepairRunnerRepairsEachClassWhenDue(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	repoId := writer.world.repoId
+	if _, err := writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId}); !errors.Is(err, ErrEvsPrefixRepairOff) {
+		t.Fatalf("a device that does not repair: %v", err)
+	}
+	settings := DefaultAclPrefixSettings()
+	judge := test.enableRepairs(settings)
+	for _, path := range []string{"src/replaced.go", "src/gone.go", "src/versionless.bin"} {
+		if _, err := writer.write(t, path, []byte("good "+path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replaced := test.breach("src/replaced.go", []byte("breached"))
+	writer.server.know("src/gone.go")
+	gone := test.pushAs(test.held, &evsTestChange{path: "src/gone.go"})
+	versionless := test.breach("src/versionless.bin", []byte("breached"))
+	planted := test.breach("src/planted.go", []byte("planted"))
+	test.journal(judge, EvsPrefixIgnoredWrite, "src/replaced.go", replaced)
+	test.journal(judge, EvsPrefixIgnoredRemove, "src/gone.go", gone)
+	test.journal(judge, EvsPrefixIgnoredWrite, "src/versionless.bin", versionless)
+	test.journal(judge, EvsPrefixIgnoredCreate, "src/planted.go", planted)
+	// the versionless unit's class is its journalled mark
+	units, _ := judge.journal(repoId)
+	units[2].Versionless = true
+	if err := judge.journalWrite(repoId, units); err != nil {
+		t.Fatal(err)
+	}
+	statements, _ := writer.server.sentCounts()
+	// before the delay: nothing
+	writer.test.clock.advance(settings.RepairDelay - time.Second)
+	result, err := writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId})
+	if err != nil || result.PushCount != 0 || result.WaitingCount != 4 || result.SettledCount != 0 {
+		t.Fatalf("before the delay: %+v %v", result, err)
+	}
+	// past the delay and the whole jitter: three classes repair at once, the versioned replacement waits
+	writer.test.clock.advance(settings.RepairJitter + time.Second)
+	result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId})
+	if err != nil || result.PushCount != 3 || result.SettledCount != 3 || result.WaitingCount != 1 {
+		t.Fatalf("when due: %+v %v", result, err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements+3 {
+		t.Fatalf("%d statements for three repairs", after-statements)
+	}
+	reader := test.ruledReader("reader")
+	for _, path := range []string{"src/gone.go", "src/versionless.bin"} {
+		if content, info, err := test.read(reader, path); err != nil || content != "good "+path || info.IgnoredAbove != 0 {
+			t.Errorf("%s after its repair: %q %+v %v", path, content, info, err)
+		}
+	}
+	if _, _, err := test.read(reader, "src/planted.go"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Errorf("a breach-created path after its repair: %v", err)
+	}
+	if content, info, err := test.read(reader, "src/replaced.go"); err != nil || content != "good src/replaced.go" || info.IgnoredAbove != 1 {
+		t.Errorf("a versioned file under the depth: %q %+v %v", content, info, err)
+	}
+	// by hand, for the one path, whatever the depth says
+	result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId, Path: "src/replaced.go", ByHand: true})
+	if err != nil || result.PushCount != 1 || result.SettledCount != 1 || result.WaitingCount != 0 {
+		t.Fatalf("by hand: %+v %v", result, err)
+	}
+	after := test.ruledReader("reader after")
+	if content, info, err := test.read(after, "src/replaced.go"); err != nil || content != "good src/replaced.go" || info.IgnoredAbove != 0 {
+		t.Errorf("after the repair by hand: %q %+v %v", content, info, err)
+	}
+	if left, err := writer.test.client.PrefixIgnored(&repoId); err != nil || len(left) != 0 {
+		t.Fatalf("the journal after the repairs: %+v %v", left, err)
+	}
+	// a second runner's unit of a path already repaired: dropped with no push
+	test.journal(judge, EvsPrefixIgnoredRemove, "src/gone.go", gone)
+	writer.test.clock.advance(settings.RepairDelay + settings.RepairJitter)
+	statements, _ = writer.server.sentCounts()
+	result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId})
+	if err != nil || result.PushCount != 0 || result.SettledCount != 1 {
+		t.Fatalf("a second runner: %+v %v", result, err)
+	}
+	if again, _ := writer.server.sentCounts(); again != statements {
+		t.Fatalf("a second runner pushed")
+	}
+}
+
+// The jitter is a share of RepairJitter by SHA-256(sidecar_id || push id): the same for one device and push, inside
+// the jitter, and different between devices; a unit is due at its delay plus that share and not a moment before.
+func TestEvsPrefixRepairJitterSpreadsTheCandidates(t *testing.T) {
+	jitter := 5 * time.Minute
+	pushId := evsTestId("a breach's push")
+	shares := map[time.Duration]bool{}
+	for _, label := range []string{"one", "two", "three", "four"} {
+		share := evsPrefixRepairJitter(evsTestId("device "+label), pushId, jitter)
+		if share < 0 || jitter <= share || share != evsPrefixRepairJitter(evsTestId("device "+label), pushId, jitter) {
+			t.Errorf("device %s: %s", label, share)
+		}
+		shares[share] = true
+	}
+	if len(shares) != 4 {
+		t.Errorf("four devices share %d times", len(shares))
+	}
+	if evsPrefixRepairJitter(evsTestId("device one"), pushId, 0) != 0 {
+		t.Errorf("no jitter is no wait")
+	}
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	settings := DefaultAclPrefixSettings()
+	judge := test.enableRepairs(settings)
+	if _, err := writer.write(t, "src/gone.go", []byte("good")); err != nil {
+		t.Fatal(err)
+	}
+	writer.server.know("src/gone.go")
+	gone := test.pushAs(test.held, &evsTestChange{path: "src/gone.go"})
+	unit := test.journal(judge, EvsPrefixIgnoredRemove, "src/gone.go", gone)
+	share := evsPrefixRepairJitter(writer.test.client.args.Identity().SidecarId, unit.PushId, settings.RepairJitter)
+	writer.test.clock.advance(settings.RepairDelay + share - time.Millisecond)
+	ctx := context.Background()
+	if result, err := writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: unit.RepoId}); err != nil || result.PushCount != 0 || result.WaitingCount != 1 {
+		t.Fatalf("a moment before its share: %+v %v", result, err)
+	}
+	writer.test.clock.advance(time.Millisecond)
+	if result, err := writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: unit.RepoId}); err != nil || result.PushCount != 1 {
+		t.Fatalf("at its share: %+v %v", result, err)
+	}
+}
+
+// The bounds, for each repo and device: past RepairPushCount pushes in RepairPushWindow, or RepairByteCount bytes in
+// RepairByteWindow, the units wait in the journal; and a device the rules hold to a prefix repairs only under it,
+// asked before any request.
+func TestEvsPrefixRepairKeepsItsBoundsAndItsPrefixes(t *testing.T) {
+	test := newEvsPrefixWriterTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	repoId := writer.world.repoId
+	settings := DefaultAclPrefixSettings()
+	settings.RepairPushCount = 1
+	settings.RepairJitter = 0
+	judge := test.enableRepairs(settings)
+	paths := []string{"src/a.go", "src/b.go", "src/c.go"}
+	for _, path := range paths {
+		if _, err := writer.write(t, path, []byte("good "+path)); err != nil {
+			t.Fatal(err)
+		}
+		writer.server.know(path)
+		test.journal(judge, EvsPrefixIgnoredRemove, path, test.pushAs(test.held, &evsTestChange{path: path}))
+	}
+	writer.test.clock.advance(settings.RepairDelay)
+	// a device held to a prefix the paths lie outside: nothing sent, every unit kept
+	test.refuse = &AclPrefixWriteDecision{AclDecision: AclDecision{Reason: AclReasonPrefixRule}, Detail: AclPrefixDetailRefused, Path: "src/a.go"}
+	statements, _ := writer.server.sentCounts()
+	result, err := writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId})
+	if err != nil || result.PushCount != 0 || result.WaitingCount != 3 {
+		t.Fatalf("a held device: %+v %v", result, err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements {
+		t.Fatalf("a held device sent %d statements", after-statements)
+	}
+	test.refuse = nil
+	// one push an hour
+	result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId})
+	if err != nil || result.PushCount != 1 || result.WaitingCount != 2 {
+		t.Fatalf("the push bound: %+v %v", result, err)
+	}
+	if result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId}); err != nil || result.PushCount != 0 || result.WaitingCount != 2 {
+		t.Fatalf("inside the push window: %+v %v", result, err)
+	}
+	if left, err := writer.test.client.PrefixIgnored(&repoId); err != nil || len(left) != 2 {
+		t.Fatalf("the dirty paths listed: %+v %v", left, err)
+	}
+	// the byte bound, once the push window passed
+	writer.test.clock.advance(settings.RepairPushWindow)
+	settings.RepairByteCount = 4
+	if result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId}); err != nil || result.PushCount != 0 || result.WaitingCount != 2 {
+		t.Fatalf("the byte bound: %+v %v", result, err)
+	}
+	settings.RepairByteCount = 1 << 20
+	if result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId}); err != nil || result.PushCount != 1 || result.WaitingCount != 1 {
+		t.Fatalf("under the byte bound: %+v %v", result, err)
+	}
+	// by hand: without the bounds
+	if result, err = writer.test.client.RepairPrefix(ctx, &EvsPrefixRepairArgs{RepoId: repoId, ByHand: true}); err != nil || result.PushCount != 1 || result.WaitingCount != 0 {
+		t.Fatalf("by hand past the bound: %+v %v", result, err)
 	}
 }

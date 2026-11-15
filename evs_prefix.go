@@ -86,6 +86,9 @@ type EvsPrefixRulesArgs struct {
 	// first round trip. Nil refuses every write to a ruled repo with EVS_PREFIX_RULE, detail pending: a device that
 	// cannot ask does not write under the rules.
 	AllowWrite func(write *AclPrefixWrite) AclPrefixWriteDecision
+	// Whether this device repairs (DESIGN-DETAILS 16.2.8's who): true on a desktop or the daemon, never on a phone
+	// or an ephemeral sidecar. False runs no repair, by timer or by hand.
+	Repair bool
 	// Nil: DefaultAclPrefixSettings.
 	Settings *AclPrefixSettings
 }
@@ -119,6 +122,9 @@ type EvsPrefixIgnored struct {
 	PushId          Id                   `json:"push_id"`
 	SignerSidecarId Id                   `json:"signer_sidecar_id"`
 	Kind            EvsPrefixIgnoredKind `json:"kind"`
+	// The ignored version is versionless, as its path's setting has it: its accepted content is written again at
+	// once, where a versioned file's waits for RepairDepth (16.2.8).
+	Versionless bool `json:"versionless,omitempty"`
 	// When this device journalled it, ms since the epoch: what RepairDelay counts from.
 	AtMs int64 `json:"at_ms"`
 }
@@ -132,6 +138,8 @@ type evsPrefixJudge struct {
 
 	// one journal or alarm file write at a time; held across I/O and never inside stateLock
 	storeLock sync.Mutex
+	// one repair pass at a time (evs_prefix_repair.go); taken before storeLock
+	repairLock sync.Mutex
 
 	stateLock sync.Mutex
 	// a set's token table in one path epoch, by repo, set position and epoch
@@ -1112,6 +1120,7 @@ func (self *evsPrefixJudge) foldPush(ctx context.Context, repo *EvsRepo, refId I
 		unit := &EvsPrefixIgnored{
 			RepoId: repo.repoId, RefId: refId, Named: named, CommitVersion: statement.Version,
 			PushId: pushId, SignerSidecarId: signerId, AtMs: self.client.clock.Now().UnixMilli(),
+			Versionless: folded.entry != nil && folded.entry.GetVersioning() != uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT),
 		}
 		pathNames := make([]string, 0, len(names))
 		for _, name := range names {
