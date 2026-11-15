@@ -95,6 +95,20 @@ type AdmissionApi interface {
 // Makes one api over cluster on clock, the tier's.
 type AdmissionApiFactory func(clock sidecar.Clock, cluster sidecar.BlobCluster) AdmissionApi
 
+// What a world that spends approvals asks of its tier's api (AdmissionTier.AclSpendCheck): §16.6's spend check in the
+// verifier of every log the api holds, as api installs the one every reader does (ACL-M2-07). Called once, before the
+// api's first append. An api without it cannot run such a world, which fails at its start.
+type AdmissionSpendApi interface {
+	SetAclSpendCheck(check sidecar.AclSpendCheck)
+}
+
+// What a team network's world asks of its tier's api (AdmissionTier.Team): the tier is api's to say, never the log's
+// (§8.8), so the world tells the api its networks are on the team tier, where a directory's RepoCreate lands. Called
+// once, before the api's first append. An api without it cannot run such a world, which fails at its start.
+type AdmissionTeamApi interface {
+	SetTeamTier(team bool)
+}
+
 // FakeApi as an AdmissionApi.
 func FakeApiAdmission(api *FakeApi) AdmissionApi {
 	return fakeApiAdmission{api: api}
@@ -124,6 +138,16 @@ func (self fakeApiAdmission) SequenceAnyway(ctx context.Context, networkId sidec
 	return self.api.SequenceAnyway(ctx, networkId, kind, body)
 }
 
+// The spend check of every log this api verifies from now on.
+func (self fakeApiAdmission) SetAclSpendCheck(check sidecar.AclSpendCheck) {
+	self.api.SetConfigLogSpendCheck(check)
+}
+
+// Nothing to set: FakeApi judges no tier, so a directory's RepoCreate lands on it in any network, and the tier's
+// refusal is server's sequencer's alone (model.ConfigLogSettings.TeamTier).
+func (self fakeApiAdmission) SetTeamTier(team bool) {
+}
+
 // One tier the suite runs on: a cluster its networks share, each row on a network id of its own, and its api.
 type AdmissionTier struct {
 	// The tier's first metadata cluster, where api keeps proj/ and projrows/.
@@ -140,6 +164,13 @@ type AdmissionTier struct {
 	// stand-in, admissionAclCompile; AclAdmissionCompile, ACL's own CompileAcl, for a world whose rows are the policy
 	// itself (ACL-M2-16, acl_world.go).
 	AclCompile sidecar.ConfigAclCompiler
+	// §16.6's spend check, which the network's api and every reader of the world install alike, so a GrantActivate's
+	// decisions are judged for real (ACL-M6-05's FS-85 cases). nil installs none, and every GrantActivate is refused as
+	// unbuilt, as a process that installs none refuses it. The tier's api must be an AdmissionSpendApi.
+	AclSpendCheck sidecar.AclSpendCheck
+	// The network is on the team tier, which its api alone knows (§8.8): a directory's RepoCreate lands. The tier's
+	// api must be an AdmissionTeamApi.
+	Team bool
 }
 
 // What a world fails through: a testing.TB, or a fault schedule's step, which turns a failure into the step's error.
@@ -279,6 +310,8 @@ type AdmissionNet struct {
 	everyEntry bool
 	// runs once before the writer's next publish reaches api, as another appender landing first
 	beforePublish func()
+	// the tier's spend check, in every reader's log settings; nil for none
+	aclSpendCheck sidecar.AclSpendCheck
 }
 
 // A fresh network on tier, bootstrapped: its owner's first device signed the genesis and base 1, which every verifier
@@ -313,6 +346,22 @@ func NewAdmissionNet(t AdmissionT, tier *AdmissionTier) *AdmissionNet {
 		rows:         map[[sha256.Size]byte][]byte{},
 		everyBase:    true,
 		everyEntry:   true,
+
+		aclSpendCheck: tier.AclSpendCheck,
+	}
+	if tier.AclSpendCheck != nil {
+		spendApi, ok := self.api.(AdmissionSpendApi)
+		if !ok {
+			t.Fatalf("the tier's api takes no spend check, which this world's GrantActivates need")
+		}
+		spendApi.SetAclSpendCheck(tier.AclSpendCheck)
+	}
+	if tier.Team {
+		teamApi, ok := self.api.(AdmissionTeamApi)
+		if !ok {
+			t.Fatalf("the tier's api takes no team tier, which this world's directory needs")
+		}
+		teamApi.SetTeamTier(true)
 	}
 	aclCompile := tier.AclCompile
 	if aclCompile == nil {
@@ -327,7 +376,7 @@ func NewAdmissionNet(t AdmissionT, tier *AdmissionTier) *AdmissionNet {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	self.signedGenesis, self.genesisChain = result.SignedGenesis, result.GenesisChain
-	reference, err := sidecar.NewConfigLog(admissionLogSettings(), self.signedGenesis)
+	reference, err := sidecar.NewConfigLog(self.logSettings(), self.signedGenesis)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +396,13 @@ func (self *AdmissionNet) Close() {
 	}
 	self.restoreAcl()
 	self.cancel()
+}
+
+// The tunables of every log of this world: admissionLogSettings with the tier's spend check.
+func (self *AdmissionNet) logSettings() *sidecar.ConfigLogSettings {
+	settings := admissionLogSettings()
+	settings.AclSpendCheck = self.aclSpendCheck
+	return settings
 }
 
 // A log's tunables, its refusals kept out of the test's output.
@@ -538,7 +594,7 @@ func (self *AdmissionNet) UseWriter(device *AdmissionDevice) {
 	self.writerClock = NewFakeClock(self.clock.Now())
 	clientSettings := sidecar.DefaultConfigClientSettings()
 	clientSettings.Log = sidecar.NewNoopLogger()
-	clientSettings.LogSettings = admissionLogSettings()
+	clientSettings.LogSettings = self.logSettings()
 	follower, err := sidecar.NewConfigClient(self.ctx, &sidecar.ConfigClientArgs{
 		NetworkId:    self.networkId,
 		GenesisChain: self.genesisChain,
@@ -1046,11 +1102,11 @@ func (self *AdmissionNet) startReadersAt(n uint64) {
 		}
 		retained.Entries = append(retained.Entries, entryBytes)
 	}
-	device, err := sidecar.RestoreConfigLog(admissionLogSettings(), retained, admissionHeadSource{net: self})
+	device, err := sidecar.RestoreConfigLog(self.logSettings(), retained, admissionHeadSource{net: self})
 	if err != nil {
 		self.t.Fatalf("a new device at base %d: %v", n, err)
 	}
-	gate, err := sidecar.RestoreConfigLogRowsOnly(admissionLogSettings(), retained, self.rowsOnlySource(), nil)
+	gate, err := sidecar.RestoreConfigLogRowsOnly(self.logSettings(), retained, self.rowsOnlySource(), nil)
 	if err != nil {
 		self.t.Fatalf("a gate at base %d: %v", n, err)
 	}

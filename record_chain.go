@@ -127,6 +127,8 @@ type recordJournalDocument struct {
 	Salt            []byte `json:"salt"`
 	// the writer's id of a spooled capture this entry seals (RecordSealArgs.CaptureId), when it has one
 	CaptureId []byte `json:"capture_id,omitempty"`
+	// RecordEntry.version where it is not 1: 2 for an agent-signed body (record_agent_body.go)
+	EntryVersion uint32 `json:"entry_version,omitempty"`
 }
 
 // The chains of writerSidecarId, this sidecar, in store, the record component's sealed directory.
@@ -432,6 +434,7 @@ func (self *RecordChainStore) append(logId Id, build func(seq uint64, prev [sha2
 		Key:             entry.Key,
 		Salt:            entry.Salt,
 		CaptureId:       entry.CaptureId,
+		EntryVersion:    recordJournalEntryVersion(entry.Version),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("record chain: %w", err)
@@ -506,6 +509,7 @@ func (self *RecordChainStore) Pending(logId Id) ([]*RecordSealedEntry, error) {
 			Key:        document.Key,
 			Salt:       document.Salt,
 			CaptureId:  document.CaptureId,
+			Version:    document.EntryVersion,
 		})
 	}
 	return entries, nil
@@ -722,4 +726,13 @@ func recordStreamEntryOf(entryBytes []byte, logId Id, writerSidecarId Id, identi
 		return 0, [sha256.Size]byte{}, false
 	}
 	return header.Header.GetSeq(), header.LeafHash(), true
+}
+
+// A sealed entry's version as its journal record keeps it: nothing for version 1, so a record written before version 2
+// existed and one written since read alike.
+func recordJournalEntryVersion(version uint32) uint32 {
+	if version <= recordEntryVersion {
+		return 0
+	}
+	return version
 }

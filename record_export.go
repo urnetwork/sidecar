@@ -331,7 +331,11 @@ func recordExportLine(entry *RecordReadEntry, bodies bool, agentLabel string) (m
 	fields := recordExportBodyFields(kind, entry.Body)
 	if bodies {
 		line["salt"] = base64.StdEncoding.EncodeToString(entry.Salt)
-		line["body"] = base64.StdEncoding.EncodeToString(entry.Body)
+		line["body"] = base64.StdEncoding.EncodeToString(entry.CommittedBody())
+		if recordEntryVersion < entry.Version {
+			// body is then what the entry's version seals, an AgentSignedBody for 2, and fields its kind's message
+			line["entry_version"] = entry.Version
+		}
 		if fields != nil {
 			line["fields"] = fields
 		}

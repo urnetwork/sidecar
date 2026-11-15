@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -32,6 +33,8 @@ type FakeRecordRepoAuth struct {
 	ReceiptOnly []sidecar.Id
 	// Consented devices of the repo's owner (§8.5).
 	Consented []sidecar.Id
+	// The sidecars the Team's audit block makes readers of the repo (sidecar.RecordAuditView).
+	AuditReaders []sidecar.Id
 }
 
 // One position's state, as a test writes it. A nil map answers no.
@@ -80,12 +83,13 @@ func (self *FakeRecordAuthFixture) clone() *FakeRecordAuthFixture {
 			continue
 		}
 		cloned.Repos[repoId] = &FakeRecordRepoAuth{
-			Readers:     slices.Clone(repo.Readers),
-			Writers:     slices.Clone(repo.Writers),
-			Admins:      slices.Clone(repo.Admins),
-			Depositors:  slices.Clone(repo.Depositors),
-			ReceiptOnly: slices.Clone(repo.ReceiptOnly),
-			Consented:   slices.Clone(repo.Consented),
+			Readers:      slices.Clone(repo.Readers),
+			Writers:      slices.Clone(repo.Writers),
+			Admins:       slices.Clone(repo.Admins),
+			Depositors:   slices.Clone(repo.Depositors),
+			ReceiptOnly:  slices.Clone(repo.ReceiptOnly),
+			Consented:    slices.Clone(repo.Consented),
+			AuditReaders: slices.Clone(repo.AuditReaders),
 		}
 	}
 	for sidecarId, since := range self.CompromisedSince {
@@ -262,6 +266,11 @@ func (self *fakeRecordAuthView) Deposits(repoId sidecar.Id, sidecarId sidecar.Id
 
 func (self *fakeRecordAuthView) ReceiptOnly(repoId sidecar.Id, sidecarId sidecar.Id) bool {
 	return slices.Contains(self.repo(repoId).ReceiptOnly, sidecarId)
+}
+
+// sidecar.RecordAuditView: the fixture's audit readers of the repo, whatever the time.
+func (self *fakeRecordAuthView) AuditReaders(repoId sidecar.Id, at time.Time) []sidecar.Id {
+	return slices.Clone(self.repo(repoId).AuditReaders)
 }
 
 func (self *fakeRecordAuthView) CompromisedSince(sidecarId sidecar.Id) (uint64, bool) {
