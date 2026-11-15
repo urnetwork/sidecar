@@ -189,6 +189,8 @@ type testSyncWorld struct {
 	keepAll   bool
 	stateLock sync.Mutex
 	events    []SidecarEvent
+	// Signers whose erasure set versions the engine's judge refuses: none may erase.
+	forgers map[Id]bool
 }
 
 func newTestSyncWorld(t *testing.T, keepAll bool) *testSyncWorld {
@@ -231,6 +233,11 @@ func (self *testSyncWorld) restart(t *testing.T) {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			return self.keepAll
+		},
+		mayErase: func(signer Id, signedTimeMs int64) bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return !self.forgers[signer]
 		},
 	})
 	if err != nil {
@@ -919,7 +926,8 @@ func TestSearchSyncAlarms(t *testing.T) {
 			t.Fatal("an unknown index path was fetched")
 		}
 	}
-	err := world.sync.Follow(&searchSyncRefArgs{repoId: NewId(), refId: NewId(), repoKind: protocol.RepoKind_REPO_KIND_CONFIG, source: world.source})
+	err := world.sync.Follow(&searchSyncRefArgs{repoId: NewId(), refId: NewId(), repoKind: protocol.RepoKind_REPO_KIND_CONFIG, source: world.source,
+		mayErase: func(Id, int64) bool { return true }})
 	if !errors.Is(err, ErrSearchSyncUnfollowed) {
 		t.Fatalf("a config repo was followed: %v", err)
 	}

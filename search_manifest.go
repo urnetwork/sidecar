@@ -184,6 +184,8 @@ type SearchSyncWanted struct {
 	Signer        Id
 	// The ref version its push committed at.
 	CommitVersion uint64
+	// Its push's signed time_ms, at which the erasure set's signer is judged (§11.14's cut row).
+	SignedTimeMs int64
 }
 
 // A bucket a replayed push rolled up.
@@ -318,6 +320,7 @@ type searchWantedWire struct {
 	StartDay      uint32 `json:"start_day,omitempty"`
 	Signer        string `json:"signer"`
 	CommitVersion uint64 `json:"commit_version,omitempty"`
+	SignedTimeMs  int64  `json:"signed_time_ms,omitempty"`
 }
 
 // A manifest or plan that does not decode: derived state, dropped and derived again.
@@ -419,7 +422,7 @@ func searchWantedWireOf(wanted *SearchSyncWanted) searchWantedWire {
 	return searchWantedWire{
 		Path: wanted.Path, Version: wanted.Version, Sha256: hex.EncodeToString(wanted.ContentSha256[:]), Bytes: wanted.ByteCount,
 		All: wanted.Partition.All, StartDay: wanted.Partition.StartDay, Signer: hex.EncodeToString(wanted.Signer[:]),
-		CommitVersion: wanted.CommitVersion,
+		CommitVersion: wanted.CommitVersion, SignedTimeMs: wanted.SignedTimeMs,
 	}
 }
 
@@ -439,7 +442,7 @@ func (self searchWantedWire) wanted() (*SearchSyncWanted, error) {
 	return &SearchSyncWanted{
 		Path: self.Path, Version: self.Version, ContentSha256: sum, ByteCount: self.Bytes,
 		Partition: SearchCachePartition{All: self.All, StartDay: self.StartDay}, Signer: signer,
-		CommitVersion: self.CommitVersion,
+		CommitVersion: self.CommitVersion, SignedTimeMs: self.SignedTimeMs,
 	}, nil
 }
 

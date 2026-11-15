@@ -272,6 +272,10 @@ func (self *SearchSync) stage(ctx context.Context, ref *searchSyncRef, plan *Sea
 	case err != nil:
 		return nil, err
 	}
+	if parsed.kind == indexPathErasureSet && !ref.args.mayErase(wanted.Signer, wanted.SignedTimeMs) {
+		// a set version from a signer who may not erase: ignored and alarmed, the last good set masking (§11.14's cut row)
+		return bad()
+	}
 	staged.State = SearchManifestHeld
 	file := SearchVersionFile{Path: wanted.Path, Version: wanted.Version}
 	switch parsed.kind {

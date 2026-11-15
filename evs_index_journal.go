@@ -16,6 +16,10 @@
 //	          to committed when their push is refused or its life passes unsent
 //	bound     past Search.JournalByteCount the oldest units lose their key sets and rows and keep their documents'
 //	          keys and versions; a build extracts them again from the text, or drops the unit to be backfilled
+//	epoch     each unit is stamped with the index epoch of ur/index the journal had seen when it was journaled, which
+//	          is never above the epoch at its commit; a build whose erasure set's listed_since passes a unit's stamp
+//	          strips it as the bound does, since the set may have dropped a complete erasure the unit's key sets
+//	          still hold (§11.14's epoch row; the epoch guard's rebuildJournal)
 //	search    the device's own searches read committed and sent units as a local overlay (searchJournalEntries,
 //	          the local layer's seam); ApplyErase and ApplyCut remove a listed document's units
 //
@@ -85,7 +89,9 @@ type indexJournalUnit struct {
 	// The companion push a sent unit is in.
 	pushId Id
 	// The bound took its key sets.
-	stripped  bool
+	stripped bool
+	// The index epoch the journal had seen when the unit was journaled: work begun there.
+	epoch     uint64
 	documents []*indexJournalDocument
 }
 
@@ -98,6 +104,7 @@ type indexJournalUnitWire struct {
 	State        string                     `json:"state"`
 	PushId       string                     `json:"push_id,omitempty"`
 	Stripped     bool                       `json:"stripped,omitempty"`
+	Epoch        uint64                     `json:"epoch,omitempty"`
 	Documents    []indexJournalDocumentWire `json:"documents"`
 }
 
@@ -120,6 +127,8 @@ type IndexJournal struct {
 
 	stateLock sync.Mutex
 	nextSeq   uint64
+	// The highest index epoch of ur/index a build has read, which a unit journaled now is stamped with.
+	observedEpoch uint64
 }
 
 // The journal of repoId in a network's store, its units read back from earlier runs.
@@ -138,8 +147,28 @@ func newIndexJournal(store SidecarStore, repoId Id, settings *SidecarSearchSetti
 	}
 	if 0 < len(seqs) {
 		journal.nextSeq = seqs[len(seqs)-1] + 1
+		// the newest unit's stamp is the epoch the journal had seen last; with none readable, 0, which only strips more
+		journal.observedEpoch = journal.newestEpoch(seqs[len(seqs)-1])
 	}
 	return journal, nil
+}
+
+// The epoch stamped on the unit of seq, 0 where it does not read.
+func (self *IndexJournal) newestEpoch(seq uint64) uint64 {
+	reader, err := self.store.Open(self.name(seq))
+	if err != nil {
+		return 0
+	}
+	file, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		return 0
+	}
+	unit, err := self.decode(seq, file)
+	if err != nil {
+		return 0
+	}
+	return unit.epoch
 }
 
 // The repo's directory prefix of unit files.
@@ -186,7 +215,7 @@ func (self *IndexJournal) ByteCount() (int64, error) {
 func (self *IndexJournal) encode(unit *indexJournalUnit) ([]byte, error) {
 	wire := indexJournalUnitWire{
 		Format: indexJournalFormat, RefId: hex.EncodeToString(unit.refId[:]), Version: unit.version,
-		SignedTimeMs: unit.signedTimeMs, State: string(unit.state), Stripped: unit.stripped,
+		SignedTimeMs: unit.signedTimeMs, State: string(unit.state), Stripped: unit.stripped, Epoch: unit.epoch,
 		Documents: []indexJournalDocumentWire{},
 	}
 	if unit.pushId != (Id{}) {
@@ -237,7 +266,7 @@ func (self *IndexJournal) decode(seq uint64, file []byte) (*indexJournalUnit, er
 	}
 	unit := &indexJournalUnit{
 		seq: seq, refId: refId, version: wire.Version, signedTimeMs: wire.SignedTimeMs,
-		state: indexJournalState(wire.State), stripped: wire.Stripped,
+		state: indexJournalState(wire.State), stripped: wire.Stripped, epoch: wire.Epoch,
 	}
 	if unit.state != indexJournalCommitted && unit.state != indexJournalSent {
 		return nil, errIndexJournalUndecodable
@@ -301,6 +330,7 @@ func (self *IndexJournal) Committed(unit *indexJournalUnit) error {
 	stored.seq = self.nextSeq
 	stored.state = indexJournalCommitted
 	stored.pushId = Id{}
+	stored.epoch = self.observedEpoch
 	if err := self.write(&stored); err != nil {
 		return err
 	}
@@ -330,6 +360,37 @@ func (self *IndexJournal) boundWithLock() error {
 		byteCount, err := self.ByteCount()
 		return self.settings.JournalByteCount < byteCount, err
 	})
+}
+
+// Takes epoch, the index epoch a build read at ur/index's head, as seen: units journaled from now are stamped with it.
+func (self *IndexJournal) observe(epoch uint64) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.observedEpoch = max(self.observedEpoch, epoch)
+	return nil
+}
+
+// Strips the key sets and rows of every unit stamped below listedSince, as the bound does, so a build extracts each
+// again from the text or drops it to backfill; answers how many it stripped.
+func (self *IndexJournal) stripBelow(listedSince uint64) (int, error) {
+	if listedSince == 0 {
+		return 0, nil
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	stripped := 0
+	err := self.eachWithLock(func(unit *indexJournalUnit) (bool, error) {
+		if unit.stripped || listedSince <= unit.epoch {
+			return true, nil
+		}
+		unit.stripped = true
+		for _, document := range unit.documents {
+			document.keys, document.row = nil, nil
+		}
+		stripped += 1
+		return true, self.write(unit)
+	})
+	return stripped, err
 }
 
 // Visits every unit in sequence order, one read at a time, until visit answers false. A unit file that does not read

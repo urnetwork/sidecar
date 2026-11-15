@@ -228,8 +228,9 @@ func (self *IndexRoller) attempt(ctx context.Context, rootNumber uint32, outcome
 		}
 		return false, errIndexLockLost
 	}
-	if view.erasureSetUnreadable {
-		return false, errIndexErasureSetUnreadable
+	guard, err := indexNewEpochGuard(view)
+	if err != nil {
+		return false, err
 	}
 	listing, err := self.args.store.List(ctx, view.head.version)
 	if err != nil {
@@ -285,14 +286,9 @@ func (self *IndexRoller) attempt(ctx context.Context, rootNumber uint32, outcome
 	if err != nil {
 		return false, err
 	}
-	push := &indexPush{
-		pushId:       NewId(),
-		kind:         indexPushIndex,
-		baseVersion:  view.head.version,
-		indexEpoch:   view.head.indexEpoch,
-		signedTimeMs: signedTime.UnixMilli(),
-		files:        append(result.files, free),
-		removals:     result.removals,
+	push, err := guard.push(indexPushIndex, signedTime.UnixMilli(), append(result.files, free), result.removals)
+	if err != nil {
+		return false, err
 	}
 	testHookBarrier("evs.index.rollup.uploaded", self.barrierKey())
 	committed, err := indexSendPush(ctx, self.args.store, push, signedTime, self.clock, self.args.format.PushLife)

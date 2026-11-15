@@ -8,7 +8,8 @@
 // A round, one at a time a ref, a trigger during it running another after it:
 //
 //	1 head      the statements after the manifest's pin (replay), each change of the index noted, the pin ring fed,
-//	            an index push naming another index_epoch than the ref's newest CUT before it alarmed, a push that
+//	            an index push naming another index_epoch than the ref's newest CUT before it alarmed (I-EVS-17), and
+//	            an erasure set version from a signer who may not erase listed bad and alarmed at step 4, a push that
 //	            removes every file of a bucket and writes a/m read as that bucket's roll-up; or past the catch-up
 //	            budget, a re-pin and a listing, whose roll-ups are one entry and retain nothing
 //	2 target    T = h; staged files T lists at their version stay, the rest go
@@ -181,6 +182,10 @@ type searchSyncRefArgs struct {
 	// Deposits §16.10's read receipt naming the round's wanted files, before the round's first fetch; a non-writer
 	// with none fetches nothing.
 	depositReceipt func(ctx context.Context, wanted []*SearchSyncWanted) error
+	// Whether signer could erase the repo's documents at signedTimeMs: an admin of the repo, the directory's too
+	// (§11.12's cut and directory rows). An erasure set version from any other signer is ignored and alarmed, and the
+	// last set one who could signed keeps masking (§11.14's cut row). Required, so a composition cannot leave it out.
+	mayErase func(signer Id, signedTimeMs int64) bool
 }
 
 // One followed ref's state. Fields past roundLock are the round's, read by snapshots under the engine's stateLock.
@@ -262,8 +267,8 @@ func newSearchSync(args *searchSyncArgs) (*SearchSync, error) {
 // Follows a ref for search: its rounds start at the next trigger. An index root in a config, mailcfg or secret repo is
 // never followed (FI-17): ErrSearchSyncUnfollowed.
 func (self *SearchSync) Follow(args *searchSyncRefArgs) error {
-	if args == nil || args.source == nil || args.repoId == (Id{}) || args.refId == (Id{}) {
-		return fmt.Errorf("%w: a followed ref needs its ids and source", ErrSearchCacheArgs)
+	if args == nil || args.source == nil || args.repoId == (Id{}) || args.refId == (Id{}) || args.mayErase == nil {
+		return fmt.Errorf("%w: a followed ref needs its ids, source and erasure judge", ErrSearchCacheArgs)
 	}
 	switch args.repoKind {
 	case protocol.RepoKind_REPO_KIND_CONFIG, protocol.RepoKind_REPO_KIND_MAILCFG, protocol.RepoKind_REPO_KIND_SECRET,
@@ -970,7 +975,7 @@ func searchWantedOf(file *indexFileVersion, parsed indexPath) *SearchSyncWanted 
 	partition, _ := searchPartitionOfPath(parsed)
 	return &SearchSyncWanted{
 		Path: file.path, Version: file.version, ContentSha256: file.contentSha256, ByteCount: int64(file.byteCount),
-		Partition: partition, Signer: file.signerSidecarId, CommitVersion: file.commitVersion,
+		Partition: partition, Signer: file.signerSidecarId, CommitVersion: file.commitVersion, SignedTimeMs: file.signedTimeMs,
 	}
 }
 
