@@ -15,12 +15,19 @@
 //	           (plan-MCP-presence-hook-timing); each runs `<ur> hook claude-code`. SessionEnd's 1.5 s is the harness's
 //	           own bound, which ur hook's 300 ms meets, so nothing is written for it. Under the cloud profile
 //	           SessionStart's one command takes the key file first (harness_cloud.go)
+//	exporter   with a telemetry pair (a user install's alone; QD-822), the env block of the same file, whose variables
+//	           Claude Code sets for its session (https://code.claude.com/docs/en/monitoring-usage):
+//	           CLAUDE_CODE_ENABLE_TELEMETRY 1, OTEL_LOGS_EXPORTER otlp, OTEL_EXPORTER_OTLP_PROTOCOL http/json, the
+//	           daemon's listener as OTEL_EXPORTER_OTLP_ENDPOINT and its bearer in OTEL_EXPORTER_OTLP_HEADERS. Its
+//	           api_request events are the model calls; no metrics exporter is named, so none is sent. The variables
+//	           replace a person's own of those names, which the diff shows, and every other env entry stays
 //
 // The same hooks shape serves Codex's hooks.json (harness_install_codex.go), its events its own and no ask rule.
 //
 // What the seal hashes of a settings file: the ask rules naming ur's server, sorted, and per event each of this ur's
 // hook entries with its group's matcher, sorted by their canonical bytes; another ur's entries, an older path's among
-// them, are not this ur's and count as competing where they can answer for a tool.
+// them, are not this ur's and count as competing where they can answer for a tool. With a telemetry pair, also env's
+// values of the exporter's variables, so a changed endpoint or token reads as a changed config.
 
 package mcp
 
@@ -55,7 +62,7 @@ var claudeHookEvents = []harnessHookEvent{
 
 func (self *claudeInstallAdapter) files(home string, projectDirectory string) []*harnessFile {
 	mode := harnessFileMode(projectDirectory)
-	settings := &harnessHooksFile{askRules: true, events: claudeHookEvents}
+	settings := &harnessHooksFile{askRules: true, exporterEnv: true, events: claudeHookEvents}
 	if projectDirectory != "" {
 		return []*harnessFile{
 			{path: filepath.Join(projectDirectory, ".mcp.json"), mode: mode, kind: &harnessMcpEntryFile{stdioType: true}},
@@ -196,10 +203,41 @@ func harnessJsonSame(content []byte, node *harnessJsonNode, value any) (bool, er
 }
 
 // A hooks file of Claude Code's shape: hooks.<event> is a list of groups, each an optional matcher and a list of
-// hook entries; with askRules, permissions.ask too.
+// hook entries; with askRules, permissions.ask too; with exporterEnv, the exporter's env variables wherever the
+// template has a telemetry pair.
 type harnessHooksFile struct {
-	askRules bool
-	events   []harnessHookEvent
+	askRules    bool
+	exporterEnv bool
+	events      []harnessHookEvent
+}
+
+// Claude Code's exporter variables for a telemetry pair (see the file header).
+func claudeTelemetryEnv(telemetry *HarnessTelemetry) map[string]string {
+	return map[string]string{
+		"CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+		"OTEL_LOGS_EXPORTER":           "otlp",
+		"OTEL_EXPORTER_OTLP_PROTOCOL":  "http/json",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":  telemetry.Endpoint(),
+		"OTEL_EXPORTER_OTLP_HEADERS":   "Authorization=" + telemetry.Authorization(),
+	}
+}
+
+// The template's exporter variables for this file, nil where it carries none.
+func (self *harnessHooksFile) envOf(template *harnessTemplate) map[string]string {
+	if !self.exporterEnv || template.telemetry == nil {
+		return nil
+	}
+	return claudeTelemetryEnv(template.telemetry)
+}
+
+// The template's exporter variables' names, sorted, so their edits come in one order.
+func harnessEnvNames(env map[string]string) []string {
+	names := []string{}
+	for name := range env {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // One hook group, as written.
@@ -273,6 +311,9 @@ func (self *harnessHooksFile) document(template *harnessTemplate) any {
 	if self.askRules {
 		document["permissions"] = map[string]any{"ask": self.askRulesOf(template)}
 	}
+	if env := self.envOf(template); env != nil {
+		document["env"] = env
+	}
 	return document
 }
 
@@ -286,11 +327,15 @@ func (self *harnessHooksFile) event(name string) (harnessHookEvent, bool) {
 	return harnessHookEvent{}, false
 }
 
-// The sealed shape: {"ask": [...], "hooks": {event: [{matcher, hook}, ...]}}, ask only where the file has rules.
+// The sealed shape: {"ask": [...], "hooks": {event: [{matcher, hook}, ...]}, "env": {name: value}}, ask only where
+// the file has rules and env only where the template writes the exporter's variables into it.
 func (self *harnessHooksFile) template(template *harnessTemplate) (any, error) {
 	sealed := map[string]any{}
 	if self.askRules {
 		sealed["ask"] = self.askRulesOf(template)
+	}
+	if env := self.envOf(template); env != nil {
+		sealed["env"] = env
 	}
 	hooks := map[string]any{}
 	for _, event := range self.events {
@@ -395,6 +440,41 @@ func (self *harnessHooksFile) nextEdit(content []byte, template *harnessTemplate
 			return harnessJsonRemoveElement(content, member.value, urGroups[1]), nil
 		}
 	}
+	return self.nextEnvEdit(content, root, template)
+}
+
+// The next edit of env: the exporter's variables the template has, each added where missing and replaced where it
+// differs; every other variable stays as it is. None for a file the template writes none into.
+func (self *harnessHooksFile) nextEnvEdit(content []byte, root *harnessJsonNode, template *harnessTemplate) (*harnessEdit, error) {
+	env := self.envOf(template)
+	if env == nil {
+		return nil, nil
+	}
+	member, err := root.member("env")
+	if err != nil {
+		return nil, err
+	}
+	if member == nil {
+		return harnessJsonAddMember(content, root, "env", env)
+	}
+	if member.value.kind != harnessJsonObject {
+		return nil, harnessConfigError("env is no object")
+	}
+	for _, name := range harnessEnvNames(env) {
+		variable, err := member.value.member(name)
+		if err != nil {
+			return nil, err
+		}
+		if variable == nil {
+			return harnessJsonAddMember(content, member.value, name, env[name])
+		}
+		if same, err := harnessJsonSame(content, variable.value, env[name]); err != nil || !same {
+			if err != nil {
+				return nil, err
+			}
+			return harnessJsonReplace(content, variable.value, env[name])
+		}
+	}
 	return nil, nil
 }
 
@@ -465,6 +545,24 @@ func (self *harnessHooksFile) extract(content []byte, template *harnessTemplate,
 			rules = append(rules, rule)
 		}
 		sealed["ask"] = rules
+	}
+	if want := self.envOf(template); want != nil {
+		// the exporter's variables as the file holds them, every other variable the person's
+		env := map[string]any{}
+		if variables := root.get("env"); variables != nil && variables.kind == harnessJsonObject {
+			for name := range want {
+				node := variables.get(name)
+				if node == nil {
+					continue
+				}
+				value, err := harnessJsonValue(content, node)
+				if err != nil {
+					return nil, err
+				}
+				env[name] = value
+			}
+		}
+		sealed["env"] = env
 	}
 	hooks := map[string]any{}
 	if events := root.get("hooks"); events != nil && events.kind == harnessJsonObject {

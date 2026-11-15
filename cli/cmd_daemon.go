@@ -817,6 +817,17 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		defer cancel()
 		ingest.Close(closeCtx)
 	}()
+	// §16.18's harness OpenTelemetry (QD-822; status_telemetry.go): the telemetry listener on 127.0.0.1 at the port ur
+	// install-harness sealed, taking its token for model calls alone, while Ingest.ModelCalls is on (M6's, off by
+	// default); it ends before the ingest it captures into
+	telemetry := mcp.NewIngestTelemetryListener(&mcp.IngestTelemetryListenerArgs{Ingest: ingest, StateDirectory: stateDirectory})
+	defer telemetry.Close()
+	for _, method := range urTelemetryMethods(telemetry) {
+		if err := daemon.RegisterMethod(method); err != nil {
+			daemon.Close()
+			return err
+		}
+	}
 	// §16.5's tools, each registered from its owner's file, their W calls recorded as tool_call entries through ingest
 	mcp.NewDaemonMcpCatalog(mcpServer, ingest).Install(mcpServer)
 	// §16.5's ur:// resources, each family registered from its owner's file, their updates sent until the daemon ends
