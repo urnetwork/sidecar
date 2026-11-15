@@ -208,36 +208,57 @@ func (self *Net) MintContract(args *MintContractArgs) (*protocol.Contract, error
 	}, nil
 }
 
-// T2's platform: a registry of the world's clients and an issuer that seals as server's CreateContract does.
+// T2's platform: a registry of the world's clients and an issuer that seals as server's CreateContract does, settling
+// a share as its contract gate and escrow do (bridge_share_net.go).
 type bridgeNetFakePlatform struct {
 	net      *Net
 	settings *BridgeNetSettings
 
 	stateLock sync.Mutex
 	clients   map[connect.Id]*bridgeNetFakeClient
+	// each network's verified ACL state a share world handed in (SetShareStates), which a share's two halves read
+	shareStates map[sidecar.Id]*sidecar.AclGateSnapshot
+	// the network each issued contract was escrowed from, by contract id
+	contractPayers map[connect.Id]sidecar.Id
+	// the payer of each pair's newest non-companion contract, by source then destination: what a companion answering
+	// it is escrowed from
+	originPayers map[[2]connect.Id]sidecar.Id
+	// the pairs, by source then destination, a share's FriendsAndFamily contract was issued for, whose companions the
+	// platform answers (shareSettles)
+	shareOrigins map[[2]connect.Id]struct{}
 }
 
 type bridgeNetFakeClient struct {
 	networkId       sidecar.Id
 	subjectClientId connect.Id
-	exit            bool
+	// the sidecar the subject's own client is bound to, zero for a client that is no sidecar's
+	subjectSidecarId sidecar.Id
+	exit             bool
 }
 
 func newBridgeNetFakePlatform(net *Net, settings *BridgeNetSettings) *bridgeNetFakePlatform {
-	return &bridgeNetFakePlatform{net: net, settings: settings, clients: map[connect.Id]*bridgeNetFakeClient{}}
+	return &bridgeNetFakePlatform{
+		net:            net,
+		settings:       settings,
+		clients:        map[connect.Id]*bridgeNetFakeClient{},
+		shareStates:    map[sidecar.Id]*sidecar.AclGateSnapshot{},
+		contractPayers: map[connect.Id]sidecar.Id{},
+		originPayers:   map[[2]connect.Id]sidecar.Id{},
+		shareOrigins:   map[[2]connect.Id]struct{}{},
+	}
 }
 
 func (self *bridgeNetFakePlatform) AddClient(ctx context.Context, args *BridgeNetClientArgs) (connect.Id, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	clientId := connect.NewId()
-	client := &bridgeNetFakeClient{networkId: args.NetworkId, subjectClientId: clientId, exit: args.Exit}
+	client := &bridgeNetFakeClient{networkId: args.NetworkId, subjectClientId: clientId, subjectSidecarId: args.SidecarId, exit: args.Exit}
 	if args.ParentClientId != nil {
 		parent := self.clients[*args.ParentClientId]
 		if parent == nil {
 			return connect.Id{}, fmt.Errorf("no parent client %s", *args.ParentClientId)
 		}
-		client.subjectClientId = parent.subjectClientId
+		client.subjectClientId, client.subjectSidecarId = parent.subjectClientId, parent.subjectSidecarId
 	}
 	self.clients[clientId] = client
 	return clientId, nil
@@ -277,7 +298,10 @@ func (self *bridgeNetFakePlatform) Control(ctx context.Context, clientId connect
 
 // Network contracts between two of the network's clients, sealed with the source's subject and network, the data
 // class and the request's delegation; a companion carries its forward contract's seals, its destination's, and no
-// delegation. Anything else is refused, as shares wait for C18.
+// delegation. Between two networks: a public exit's Public and its Stream companion, and a share's FriendsAndFamily
+// and its Stream companion (shareSettles), escrowed from the dialer's network both ways. Anything else is refused.
+// Each issued contract's payer is kept for ContractPayer: the source's network, and for a companion the payer of the
+// forward contract it answers.
 func (self *bridgeNetFakePlatform) createContract(sourceId connect.Id, request *protocol.CreateContract) (*protocol.CreateContractResult, error) {
 	destinationId, err := connect.IdFromBytes(request.GetDestinationId())
 	if err != nil {
@@ -300,7 +324,11 @@ func (self *bridgeNetFakePlatform) createContract(sourceId connect.Id, request *
 		// the Stream companion answering a Public contract, with the forward's seals
 		provideMode = protocol.ProvideMode_Stream
 	case source.networkId != destination.networkId:
-		return &protocol.CreateContractResult{Error: &refused, CreateContract: request}, nil
+		settled, ok := self.shareSettles(sourceId, source, destinationId, destination, request.GetCompanion())
+		if !ok {
+			return &protocol.CreateContractResult{Error: &refused, CreateContract: request}, nil
+		}
+		provideMode = settled
 	}
 	sealed := source
 	delegation := request.GetWindowDelegation()
@@ -322,6 +350,27 @@ func (self *bridgeNetFakePlatform) createContract(sourceId connect.Id, request *
 	if err != nil {
 		return nil, err
 	}
+	storedContract := &protocol.StoredContract{}
+	if err := proto.Unmarshal(contract.GetStoredContractBytes(), storedContract); err != nil {
+		return nil, err
+	}
+	contractId, err := connect.IdFromBytes(storedContract.GetContractId())
+	if err != nil {
+		return nil, err
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		payer := source.networkId
+		if request.GetCompanion() {
+			if originPayer, found := self.originPayers[[2]connect.Id{destinationId, sourceId}]; found {
+				payer = originPayer
+			}
+		} else {
+			self.originPayers[[2]connect.Id{sourceId, destinationId}] = payer
+		}
+		self.contractPayers[contractId] = payer
+	}()
 	return &protocol.CreateContractResult{Contract: contract, CreateContract: request}, nil
 }
 
@@ -341,16 +390,114 @@ type bridgeNetControl struct {
 // Why a control is refused once its world has closed.
 var errBridgeNetClosed = errors.New("the bridge world is closed")
 
-// The out-of-band controls in flight across a world's clients, which its close waits for. A client may send a control
-// after its world began to close, a contract's close among them, which is refused at once. Safe for concurrent use.
+// The out-of-band controls in flight across a world's clients, which its close waits for, and every contract they were
+// answered, kept for BridgeNet.Contracts. A client may send a control after its world began to close, a contract's
+// close among them, which is refused at once. Safe for concurrent use.
 type bridgeNetControls struct {
 	stateLock sync.Mutex
 	closed    bool
 	count     *connect.MonitorValue[int]
+	contracts []*BridgeNetContract
+	// moves at each contract kept
+	contractCount *connect.MonitorValue[int]
+}
+
+// One contract a world client asked for and what answered it, the platform or the operator's mint. A value the world
+// never changes once kept.
+type BridgeNetContract struct {
+	// The client that asked, the contract's source.
+	SourceId      connect.Id
+	DestinationId connect.Id
+	// The request's own companion bit.
+	Companion bool
+	// The operator's mint answered it, not the platform.
+	Minted bool
+	// An issued contract's mode and stored contract: C13's seals, the delegation, the contract's id. The zero mode and
+	// nil for a refusal.
+	ProvideMode protocol.ProvideMode
+	Stored      *protocol.StoredContract
+	// A refusal's error, nil for an issued contract.
+	Error *protocol.ContractError
+}
+
+// Whether the contract was issued, not refused.
+func (self *BridgeNetContract) Issued() bool {
+	return self.Stored != nil
+}
+
+// Keeps what answered each of requests, which sourceId sent in one control: answers' CreateContractResults, in order.
+// An issued contract pairs with the first unpaired request to its destination, and a refusal with the request it
+// echoes or, when it echoes none, as server's do not, with the next unpaired request.
+func (self *bridgeNetControls) record(sourceId connect.Id, requests []*protocol.CreateContract, answers []*protocol.Frame, minted bool) {
+	paired := make([]bool, len(requests))
+	pair := func(destinationId []byte) *protocol.CreateContract {
+		for i, request := range requests {
+			if !paired[i] && (destinationId == nil || bytes.Equal(request.GetDestinationId(), destinationId)) {
+				paired[i] = true
+				return request
+			}
+		}
+		return nil
+	}
+	contracts := []*BridgeNetContract{}
+	for _, answer := range answers {
+		message, err := connect.FromFrame(answer)
+		if err != nil {
+			continue
+		}
+		result, ok := message.(*protocol.CreateContractResult)
+		if !ok {
+			continue
+		}
+		contract := &BridgeNetContract{SourceId: sourceId, Minted: minted, Error: result.Error}
+		var request *protocol.CreateContract
+		if result.GetContract() != nil {
+			storedContract := &protocol.StoredContract{}
+			if err := proto.Unmarshal(result.GetContract().GetStoredContractBytes(), storedContract); err != nil {
+				continue
+			}
+			contract.Stored, contract.ProvideMode = storedContract, result.GetContract().GetProvideMode()
+			request = pair(storedContract.GetDestinationId())
+		} else if result.GetCreateContract() != nil {
+			request = pair(result.GetCreateContract().GetDestinationId())
+		} else {
+			request = pair(nil)
+		}
+		if request == nil {
+			continue
+		}
+		if destinationId, err := connect.IdFromBytes(request.GetDestinationId()); err == nil {
+			contract.DestinationId = destinationId
+		}
+		contract.Companion = request.GetCompanion()
+		contracts = append(contracts, contract)
+	}
+	if len(contracts) == 0 {
+		return
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.contracts = append(self.contracts, contracts...)
+	}()
+	self.contractCount.Update(func(count int) int { return count + len(contracts) })
+}
+
+// Every contract kept from sourceId to destinationId, in the order they were answered.
+func (self *bridgeNetControls) between(sourceId connect.Id, destinationId connect.Id) []*BridgeNetContract {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	contracts := []*BridgeNetContract{}
+	for _, contract := range self.contracts {
+		if contract.SourceId == sourceId && contract.DestinationId == destinationId {
+			contracts = append(contracts, contract)
+		}
+	}
+	return contracts
 }
 
 func newBridgeNetControls() *bridgeNetControls {
-	return &bridgeNetControls{count: connect.NewMonitorValue(0)}
+	return &bridgeNetControls{count: connect.NewMonitorValue(0), contractCount: connect.NewMonitorValue(0)}
 }
 
 // Counts a control in, false once the world closed.
@@ -408,21 +555,24 @@ func (self *bridgeNetControl) SendControl(frames []*protocol.Frame, callback con
 			}
 		}()
 		platformFrames := []*protocol.Frame{}
+		platformRequests := []*protocol.CreateContract{}
 		for _, frame := range frames {
-			if self.mint != nil {
-				if message, err := connect.FromFrame(frame); err == nil {
-					if request, ok := message.(*protocol.CreateContract); ok {
-						result, minted, err := self.mint(request)
-						if minted {
-							if err == nil && result != nil {
-								if resultFrame, err := connect.ToFrame(result, connect.DefaultProtocolVersion); err == nil {
-									resultFrames = append(resultFrames, resultFrame)
-								}
-							}
-							continue
+			message, err := connect.FromFrame(frame)
+			request, isRequest := message.(*protocol.CreateContract)
+			if err == nil && isRequest && self.mint != nil {
+				result, minted, err := self.mint(request)
+				if minted {
+					if err == nil && result != nil {
+						if resultFrame, err := connect.ToFrame(result, connect.DefaultProtocolVersion); err == nil {
+							resultFrames = append(resultFrames, resultFrame)
+							self.workers.record(self.clientId, []*protocol.CreateContract{request}, []*protocol.Frame{resultFrame}, true)
 						}
 					}
+					continue
 				}
+			}
+			if err == nil && isRequest {
+				platformRequests = append(platformRequests, request)
 			}
 			platformFrames = append(platformFrames, frame)
 		}
@@ -430,6 +580,8 @@ func (self *bridgeNetControl) SendControl(frames []*protocol.Frame, callback con
 		if 0 < len(platformFrames) {
 			var answers []*protocol.Frame
 			answers, err = self.platform.Control(self.ctx, self.clientId, platformFrames)
+			// kept before the client takes the answers, so a flow that rode a contract finds it kept
+			self.workers.record(self.clientId, platformRequests, answers, false)
 			resultFrames = append(resultFrames, answers...)
 		}
 		if callback != nil {
@@ -628,6 +780,32 @@ func (self *BridgeNet) Close() {
 // The network's config world.
 func (self *BridgeNet) Admission() *AdmissionNet {
 	return self.admission
+}
+
+// Every contract a client of the world asked for from sourceId to destinationId, and what answered it, in the order
+// they were answered: each request a client's control carried, the platform's and the operator's alike.
+func (self *BridgeNet) Contracts(sourceId connect.Id, destinationId connect.Id) []*BridgeNetContract {
+	return self.controls.between(sourceId, destinationId)
+}
+
+// Waits until done holds for the contracts kept from sourceId to destinationId, at most WaitTimeout of real time;
+// false when it never did.
+func (self *BridgeNet) WaitContracts(sourceId connect.Id, destinationId connect.Id, done func(contracts []*BridgeNetContract) bool) bool {
+	deadline := time.After(self.settings.WaitTimeout)
+	for {
+		// armed at the read, so a contract kept after it wakes the wait
+		_, changed := self.controls.contractCount.Get()
+		if done(self.controls.between(sourceId, destinationId)) {
+			return true
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			return false
+		case <-self.net.Context().Done():
+			return false
+		}
+	}
 }
 
 func (self *BridgeNet) Net() *Net {
@@ -1306,6 +1484,9 @@ type BridgeNetHostSettings struct {
 	ShareRows sidecar.BridgeShareRowSource
 	// The device role's posture store, which a restart hands the next host to restore from; nil is a store of its own.
 	PostureStore device.PostureStore
+	// The upstream the host's flows reach, made and closed by the caller, so it can name the upstream's ports before
+	// the host starts and hand a restarted host the same one; nil is an upstream of the host's own.
+	Upstream *BridgeNetUpstream
 }
 
 // A host sidecar: its device role, the component that feeds it, its connect client and its upstream. See the file's
@@ -1335,6 +1516,8 @@ type BridgeNetHost struct {
 	// moves at each principal or decision recorded
 	records         *connect.MonitorValue[int]
 	removeCallbacks []func()
+	// whether the upstream is the host's own, which its close closes
+	ownsUpstream bool
 }
 
 // Starts device as a host: files its address where settings name one, then builds its device role, its connect
@@ -1363,9 +1546,14 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 		self.t.Fatalf(format, args...)
 	}
 	var err error
-	host.Upstream, err = newBridgeNetUpstream(self.settings.ReadByteCount)
-	if err != nil {
-		fail("the upstream: %v", err)
+	if settings.Upstream != nil {
+		host.Upstream = settings.Upstream
+	} else {
+		host.Upstream, err = newBridgeNetUpstream(self.settings.ReadByteCount)
+		if err != nil {
+			fail("the upstream: %v", err)
+		}
+		host.ownsUpstream = true
 	}
 	host.Daemon, err = net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -1503,7 +1691,7 @@ func (self *BridgeNetHost) Close() {
 		self.follower.Close()
 	}
 	self.dials.open()
-	if self.Upstream != nil {
+	if self.Upstream != nil && self.ownsUpstream {
 		self.Upstream.close()
 	}
 	if self.Daemon != nil {
@@ -1866,6 +2054,14 @@ type BridgeNetWindowArgs struct {
 	// judges what it sends first, as every public client's does: it refuses a destination that is not public before
 	// the exit sees it, and sends 100.64/10, which it counts public until a release drops it.
 	Exit *BridgeNetExit
+	// The network the platform registers the window client in, and its parent there, for a window whose subject is no
+	// device of this network, another network's sidecar on a share (BridgeShareNet): zero and nil are this network
+	// and the subject's own client. Unused for a minted window.
+	NetworkId      sidecar.Id
+	ParentClientId *connect.Id
+	// Signs the window's delegation itself, given the window with its client, in place of the subject's identity key:
+	// a share's, by a ShareSigner. Edit and SignKey are then unused.
+	Sign func(window *BridgeNetWindow) []byte
 }
 
 // A window client to one host. See the file's comment.
@@ -1935,9 +2131,21 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 	var clientId connect.Id
 	var control *bridgeNetControl
 	if args.Mint == nil {
-		parentClientId := subject.ClientId
+		networkId := self.NetworkId()
+		if args.NetworkId != (sidecar.Id{}) {
+			networkId = args.NetworkId
+		}
+		var parentClientId connect.Id
+		switch {
+		case args.ParentClientId != nil:
+			parentClientId = *args.ParentClientId
+		case subject != nil:
+			parentClientId = subject.ClientId
+		default:
+			fail("the window %s has neither a subject nor a parent", name)
+		}
 		var err error
-		clientId, err = self.platform.AddClient(ctx, &BridgeNetClientArgs{Name: name, NetworkId: self.NetworkId(), ParentClientId: &parentClientId})
+		clientId, err = self.platform.AddClient(ctx, &BridgeNetClientArgs{Name: name, NetworkId: networkId, ParentClientId: &parentClientId})
 		if err != nil {
 			fail("the window client: %v", err)
 		}
@@ -1976,7 +2184,10 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 	} else {
 		window.Client = self.net.exchange.addClientWithControl(ctx, name, clientId, netClientSettings(), control)
 	}
-	if !args.NoDelegation {
+	if !args.NoDelegation && args.Sign != nil {
+		window.Delegation = args.Sign(window)
+		window.Client.Client.ContractManager().SetWindowDelegation(window.Delegation)
+	} else if !args.NoDelegation {
 		subjectId := sidecar.Id{}
 		if subject != nil {
 			subjectId = subject.SidecarId()

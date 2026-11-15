@@ -495,7 +495,13 @@ type testBridgeFileWorld struct {
 
 func newTestBridgeFileWorld(t *testing.T, admin bool) *testBridgeFileWorld {
 	t.Helper()
-	net := newTestConfigNet(t)
+	return newTestBridgeFileWorldOf(t, admin, "network")
+}
+
+// newTestBridgeFileWorld on a network whose id networkLabel names, so two worlds stand for two networks.
+func newTestBridgeFileWorldOf(t *testing.T, admin bool, networkLabel string) *testBridgeFileWorld {
+	t.Helper()
+	net := newTestConfigNetOf(t, networkLabel)
 	net.log.settings.AclSpendCheck = testBridgeSpendCheck{}
 	net.log.settings.BridgeBodyJudge = testBridgeJudge()
 	member, laptop := net.consentedMember("m")

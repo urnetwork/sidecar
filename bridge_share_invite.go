@@ -403,17 +403,36 @@ func (self *BridgeFiler) completeShare(ctx context.Context, acts *bridgeShareAct
 	return nil
 }
 
-// Posts a refusal with its sealed shortfall, and answers the refusal.
-func (self *BridgeFiler) refuseShare(ctx context.Context, acts *bridgeShareActs, seal *BridgeShareSeal, shareId Id, refusal *BridgeShareRefusal) error {
-	status := BridgeShareAcceptStatusRefusedNoSpace
-	if errors.Is(refusal.Reason, ErrBridgeShareTooLarge) {
-		status = BridgeShareAcceptStatusRefusedTooLarge
+// What an accept posts for a refusal (§17.9's space row; question bridge-m6-03-accept-seals, option 1): the status its
+// reason names, refused_too_large or refused_no_space, and the alias table's container holding the shortfall alone,
+// sealed under seal for acceptingNetworkId at version 1. random nil is crypto/rand. A refusal of no reason is an error.
+func BridgeShareRefusalCompletion(seal *BridgeShareSeal, acceptingNetworkId Id, refusal *BridgeShareRefusal, random io.Reader) ([]byte, BridgeShareAcceptStatus, error) {
+	if seal == nil || refusal == nil || refusal.Shortfall == nil {
+		return nil, "", fmt.Errorf("%w: no refusal to post", ErrBridgeShareTableInvalid)
 	}
-	sealed, err := seal.Seal(BridgeShareLabelShortfall, acts.view.state.NetworkId(), 1, refusal.Shortfall, self.random)
+	var status BridgeShareAcceptStatus
+	switch {
+	case errors.Is(refusal.Reason, ErrBridgeShareTooLarge):
+		status = BridgeShareAcceptStatusRefusedTooLarge
+	case errors.Is(refusal.Reason, ErrBridgeShareNoSpace):
+		status = BridgeShareAcceptStatusRefusedNoSpace
+	default:
+		return nil, "", fmt.Errorf("%w: a refusal of no reason the server stores", ErrBridgeShareTableInvalid)
+	}
+	sealed, err := seal.Seal(BridgeShareLabelShortfall, acceptingNetworkId, 1, refusal.Shortfall, random)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	accept, err := proto.MarshalOptions{Deterministic: true}.Marshal(&bridge.BridgeShareAccept{Shortfall: sealed})
+	if err != nil {
+		return nil, "", err
+	}
+	return accept, status, nil
+}
+
+// Posts a refusal with its sealed shortfall, and answers the refusal.
+func (self *BridgeFiler) refuseShare(ctx context.Context, acts *bridgeShareActs, seal *BridgeShareSeal, shareId Id, refusal *BridgeShareRefusal) error {
+	accept, status, err := BridgeShareRefusalCompletion(seal, acts.view.state.NetworkId(), refusal, self.random)
 	if err != nil {
 		return err
 	}

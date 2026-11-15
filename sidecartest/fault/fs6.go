@@ -29,8 +29,8 @@
 // records in 25 h-old batches packed, kept until the hold ends and then deleted; a device killed between filing
 // RepoDelete and calling DELETE, the reconciler applying it; DELETE and restore without their projected statements
 // 409 STATEMENT_MISSING; a re-seed refused for a repo deleted with now or over 7 d ago, and a soft-deleted one's
-// re-seed then restore) are EVS1-M2-41's report's; FI-5's oracle is not bound (TEST-M2-06), so the schedules check
-// repo/'s states, the shred's outcomes and what the stores keep in its place.
+// re-seed then restore) are EVS1-M2-41's report's. Every schedule here names FI(5), TEST-M2-06's lifecycle oracle,
+// beside its own checks of repo/'s states, the shred's outcomes and what the stores keep in its place.
 
 package fault
 
@@ -126,7 +126,7 @@ func fs6RaceSchedule(net *Net, restoreFirst bool) *Schedule {
 	}
 	steps = append(steps, &Step{Actor: "check", Action: world.ExpectRepoState(protocol.EvsRepoState_EVS_REPO_SHREDDING)})
 	steps = append(steps, fs6ShredToTheEnd(world)...)
-	return &Schedule{Id: "FS-6", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
+	return &Schedule{Id: "FS-6", Steps: steps, Check: world.Checks(FI(5)), Tiers: []Tier{TierT2, TierT3}}
 }
 
 // See the file header.
@@ -153,7 +153,7 @@ func Fs6SevenDayStart(net *Net) *Schedule {
 	}...)
 	steps = append(steps, fs6ShredToTheEnd(world)...)
 	return &Schedule{
-		Id: "FS-6 seven-day start", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3},
+		Id: "FS-6 seven-day start", Steps: steps, Check: world.Checks(FI(5)), Tiers: []Tier{TierT2, TierT3},
 		Refuses: "a restore past the RepoDelete's 7 d, which api never takes, so the start claims repo/ and shreds it",
 		Twin:    Fs6RestoredBeforeTheStart,
 	}
@@ -176,7 +176,7 @@ func Fs6RestoredBeforeTheStart(net *Net) *Schedule {
 		{Actor: "writerB", Action: world.Write("writerB", "d/b.txt", EvsWorldContent("fs6 b 2", 200))},
 		{Actor: "reader", Action: world.Verify("reader", fs6Files...)},
 	}...)
-	return &Schedule{Id: "FS-6 seven-day start twin", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
+	return &Schedule{Id: "FS-6 seven-day start twin", Steps: steps, Check: world.Checks(FI(5)), Tiers: []Tier{TierT2, TierT3}}
 }
 
 // See the file header.
@@ -212,7 +212,7 @@ func Fs6KilledAtEachPhase(net *Net) *Schedule {
 		{Actor: "check", Action: world.ExpectShred(evsservice.EvsShredShredded)},
 		{Actor: "check", Action: world.ExpectShredded()},
 	}...)
-	return &Schedule{Id: "FS-6 killed at each phase", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
+	return &Schedule{Id: "FS-6 killed at each phase", Steps: steps, Check: world.Checks(FI(5)), Tiers: []Tier{TierT2, TierT3}}
 }
 
 // See the file header.
@@ -237,7 +237,7 @@ func Fs6StaleJob(net *Net) *Schedule {
 		{Actor: "check", Action: world.ExpectRepoState(protocol.EvsRepoState_EVS_REPO_SHREDDING)},
 	}...)
 	steps = append(steps, fs6ShredToTheEnd(world)...)
-	return &Schedule{Id: "FS-6 stale job", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
+	return &Schedule{Id: "FS-6 stale job", Steps: steps, Check: world.Checks(FI(5)), Tiers: []Tier{TierT2, TierT3}}
 }
 
 // See the file header.
@@ -253,7 +253,7 @@ func Fs6ReadsRefusedWhileDeleted(net *Net) *Schedule {
 	steps = append(steps, fs6ShredToTheEnd(world)...)
 	steps = append(steps, &Step{Actor: "reader", Action: fs6ExpectRefsRefused(world, "reader", protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)})
 	return &Schedule{
-		Id: "FS-6 reads refused while deleted", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3},
+		Id: "FS-6 reads refused while deleted", Steps: steps, Check: world.Checks(FI(5)), Tiers: []Tier{TierT2, TierT3},
 		Refuses: "reads of a deleted repo, 409 REPO_DELETED, and of a shredding or shredded one, 409 SHREDDING",
 		Twin:    Fs6RestoredBeforeTheStart,
 	}
