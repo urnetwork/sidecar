@@ -108,7 +108,9 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 		return nil
 	}
 
-	// a renewal goes to its certificate's CA past every limit and hold
+	// a renewal goes to its certificate's CA past every limit and hold, in its ARI window or not: LE
+	// exempts an order from every rate limit when its replaces names a certificate not already replaced
+	// through ARI, and names no window (rate-limits page, read 2026-11-15)
 	predecessor, err := self.store.GetPredecessor(ctx, row.CertId)
 	if err != nil {
 		return err

@@ -1,6 +1,11 @@
 // certs' tunables (§13.8; D-TLS-7). DefaultCertsSettings is the only source of a default
 // (connect/CODESTYLE.md:144), and a host lays config/<env>/certs.yml over it (TLS-M5-16). Validate refuses
 // what would leave a rule unenforced: a zero is never unlimited unless the field says so.
+//
+// Each number a CA sets says where it comes from. Let's Encrypt's are from its rate-limits page (last
+// updated 2026-08-05) and its profiles page, both read 2026-11-15 (QD-784); GTS's and ZeroSSL's are
+// §13.8's, from [R:ext-edge], and were not read again. A default no CA sets is this build's choice, or
+// cert-1's where its field says so.
 
 package certsservice
 
@@ -17,16 +22,23 @@ var ErrCertsSettingsRefused = errors.New("certs settings refused")
 
 // One CA's part of the policy.
 type CertsCaSettings struct {
-	// The ACME profile an order asks for: LE's tlsserver, 45 days and 25 names (§13.8). Empty asks for
-	// none.
+	// The ACME profile an order asks for: LE's tlsserver, 45-day certificates, 7 h authorization reuse
+	// and at most 25 names (§13.8; LE's profiles page, read 2026-11-15). An order that names no profile
+	// gets LE's classic, 90 days and 30 days. Empty asks for none.
 	Profile string
+	// How long an order lives at the CA from its creation, past which the CA calls it invalid however far
+	// it got: LE's tlsserver 8 h (LE's profiles page, read 2026-11-15). An order at this CA gives up no
+	// later (CertsSettings.OrderGiveUpAge). Zero: the CA's lifetime is not known here, and
+	// OrderGiveUpAge alone bounds its orders. Never negative.
+	OrderLifetime time.Duration
 	// New-set orders at most BudgetCap in any BudgetWindow, under <root>'s budget with this CA
 	// ({tcb_<ca>_<registered_domain>}), set below the CA's own limit so a race or a lost key cannot
 	// reach it (§13.8's Budget). A BudgetCap of zero keeps no budget at this CA.
 	BudgetWindow time.Duration
 	BudgetCap    int
-	// Whether §13.8's repeated-set rule holds at this CA. It models LE's duplicate-certificate limit,
-	// so a set spent there moves on to the next CA, as a team adding devices quickly needs (§13.16).
+	// Whether §13.8's repeated-set rule holds at this CA. It models LE's limit on new certificates for an
+	// exact set of names, which also counts a renewal that names no replaces, so a set spent there moves
+	// on to the next CA, as a team adding devices quickly needs (§13.16).
 	RepeatSetLimited bool
 	// The CA's ACME directory, from certs.yml. No default: a production URL, which the host sets. Empty:
 	// no order reaches this CA, so the policy may admit to it and its order fails.
@@ -47,11 +59,14 @@ type CertsSettings struct {
 	EphemeralCaOrder []CertsCa
 
 	// A repeated set's orders at one RepeatSetLimited CA: a bucket of RepeatSetCount, refilling one per
-	// RepeatSetRefill, with no overrides (§13.8: 5 per 7 days, one per 34 h). Positive.
+	// RepeatSetRefill, with no overrides: LE's 5 new certificates for an exact set of names in 7 days, one
+	// back each 34 h, no override (§13.8; LE's rate-limits page, read 2026-11-15). Positive.
 	RepeatSetCount  int
 	RepeatSetRefill time.Duration
 	// A name with FailedAuthorizationCount failed authorizations inside FailedAuthorizationWindow holds
-	// until the oldest of them leaves it, so no name reaches LE's 5 per identifier per hour. Positive.
+	// until the oldest of them leaves it, so no name reaches LE's 5 failed authorizations an identifier
+	// and account an hour, one back each 12 min, no override (LE's rate-limits page, read 2026-11-15): 4
+	// keeps one in hand. Positive.
 	FailedAuthorizationCount  int
 	FailedAuthorizationWindow time.Duration
 	// How long past a CA's Retry-After the orders it holds wait, since the CA's clock and this one
@@ -83,7 +98,9 @@ type CertsSettings struct {
 	// The orders one pass has at its CAs at once. Positive.
 	OrderConcurrency int
 	// An order that has not issued this long after it was accepted fails, where a younger one queues
-	// again; a renewal of a certificate still valid queues again whatever its age. Positive.
+	// again; a renewal of a certificate still valid queues again whatever its age. At a CA with an
+	// OrderLifetime the shorter of the two counts (orderGiveUpAge), so no order outwaits the life the CA
+	// gives one. Default a day, this build's choice, which LE's 8 h cuts for its orders. Positive.
 	OrderGiveUpAge time.Duration
 	// Issued rows one renewal pass reads at most. Positive.
 	RenewalBatchCount int
@@ -126,25 +143,37 @@ type CertsSettings struct {
 func DefaultCertsSettings() *CertsSettings {
 	return &CertsSettings{
 		Cas: map[CertsCa]*CertsCaSettings{
-			// LE allows 50 new certificates per registered domain per 7 days across accounts
+			// LE's numbers, from its rate-limits and profiles pages, read 2026-11-15
 			CertsCaLetsEncrypt: {
-				Profile:          "tlsserver",
-				BudgetWindow:     7 * 24 * time.Hour,
-				BudgetCap:        40,
+				// tlsserver's 45-day certificates; its orders live 8 h
+				Profile:       "tlsserver",
+				OrderLifetime: 8 * time.Hour,
+				// LE allows 50 new certificates a registered domain in 7 days, all accounts together, one
+				// back each 202 min: 40 in any 7 days keeps a margin for a race, a lost key and <root>'s
+				// other issuance
+				BudgetWindow: 7 * 24 * time.Hour,
+				BudgetCap:    40,
+				// LE allows 5 new certificates an exact set of names in 7 days (RepeatSetCount)
 				RepeatSetLimited: true,
 			},
-			// GTS allows 100 new orders per hour per project
+			// GTS allows 100 new orders an hour a project (§13.8, [R:ext-edge]): 90 keeps a margin. Its order
+			// lifetime is not known here.
 			CertsCaGts: {
 				BudgetWindow: 1 * time.Hour,
 				BudgetCap:    90,
 			},
-			// ZeroSSL's 90-day certificates are unlimited
+			// ZeroSSL's 90-day certificates are unlimited (§13.8, [R:ext-edge]). Its order lifetime is not
+			// known here.
 			CertsCaZeroSsl: {},
 		},
-		CaOrder:                   []CertsCa{CertsCaLetsEncrypt, CertsCaGts, CertsCaZeroSsl},
-		EphemeralCaOrder:          []CertsCa{CertsCaGts, CertsCaZeroSsl, CertsCaLetsEncrypt},
-		RepeatSetCount:            5,
-		RepeatSetRefill:           34 * time.Hour,
+		// D-TLS-7's orders
+		CaOrder:          []CertsCa{CertsCaLetsEncrypt, CertsCaGts, CertsCaZeroSsl},
+		EphemeralCaOrder: []CertsCa{CertsCaGts, CertsCaZeroSsl, CertsCaLetsEncrypt},
+		// LE's 5 an exact set in 7 days, one back each 34 h (rate-limits page, read 2026-11-15)
+		RepeatSetCount:  5,
+		RepeatSetRefill: 34 * time.Hour,
+		// under LE's 5 failed authorizations an identifier and account an hour (rate-limits page, read
+		// 2026-11-15)
 		FailedAuthorizationCount:  4,
 		FailedAuthorizationWindow: 1 * time.Hour,
 		RetryAfterMargin:          1 * time.Minute,
@@ -182,6 +211,17 @@ func (self *CertsSettings) caOrder(ephemeral bool) []CertsCa {
 	return self.CaOrder
 }
 
+// How old an order at ca grows before a failure fails it rather than queueing it again: OrderGiveUpAge,
+// or the CA's OrderLifetime when that is shorter, past which the CA has called invalid any order it
+// made for the row's first attempt.
+func (self *CertsSettings) orderGiveUpAge(ca CertsCa) time.Duration {
+	giveUpAge := self.OrderGiveUpAge
+	if caSettings := self.Cas[ca]; caSettings != nil && 0 < caSettings.OrderLifetime {
+		giveUpAge = min(giveUpAge, caSettings.OrderLifetime)
+	}
+	return giveUpAge
+}
+
 // Whether certs can run on these settings. A refusal names the field.
 func (self *CertsSettings) Validate() error {
 	if self == nil {
@@ -211,6 +251,9 @@ func (self *CertsSettings) Validate() error {
 		}
 		if caSettings == nil || caSettings.BudgetCap < 0 || (0 < caSettings.BudgetCap && caSettings.BudgetWindow <= 0) {
 			return fmt.Errorf("%w: CA %s's budget", ErrCertsSettingsRefused, ca)
+		}
+		if caSettings.OrderLifetime < 0 {
+			return fmt.Errorf("%w: CA %s's OrderLifetime is negative", ErrCertsSettingsRefused, ca)
 		}
 		if 0 < caSettings.BudgetCap && self.BudgetTtl < caSettings.BudgetWindow {
 			return fmt.Errorf("%w: BudgetTtl is shorter than CA %s's window", ErrCertsSettingsRefused, ca)

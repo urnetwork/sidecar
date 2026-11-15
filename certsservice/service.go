@@ -132,7 +132,8 @@ func (self *CertsAcmeRateLimitError) Error() string {
 	return "the CA refused under a rate limit"
 }
 
-// Authorizations the CA refused, by name, which hold those names (LE's 5 per identifier per hour).
+// Authorizations the CA refused, by name, which hold those names (LE's 5 failed authorizations an
+// identifier and account an hour, one back each 12 min; its rate-limits page, read 2026-11-15).
 type CertsAcmeAuthorizationError struct {
 	Ca    CertsCa
 	Names []string
@@ -252,8 +253,9 @@ func (self *CertsService) callContext(ctx context.Context) (context.Context, fun
 }
 
 // Holds every order a limit counts at ca until retryAfter and the margin, or DefaultRetryAfter from now
-// when the CA named none: a CA's refusal on a limit (a *CertsAcmeRateLimitError). Renewals and
-// revocations go on. A later hold never shortens an earlier one.
+// when the CA named none: a CA's refusal on a limit (a *CertsAcmeRateLimitError). Renewals go on, since
+// no rate limit of LE's counts an ARI renewal, and so do revocations, which order nothing. A later hold
+// never shortens an earlier one.
 func (self *CertsService) HoldCa(ca CertsCa, retryAfter time.Time) {
 	now := self.clock.Now()
 	until := now.Add(self.settings.DefaultRetryAfter)
