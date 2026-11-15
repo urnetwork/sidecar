@@ -29,6 +29,9 @@
 //	          on the path's current version, which the notices already use (directory_notice.go); repair stays the
 //	          safety net
 //
+// Off the ios_extension leg, which writes no directory item: the repo writer (directory_repo.go, which that leg links)
+// reaches the carrier through its hooks, which this file sets.
+//
 // Safe for concurrent use. Locks: the carrier's writeLock across a card's write, then the card writer's (WriteCard's),
 // then the carrier's stateLock, held across no call out.
 
@@ -47,7 +50,22 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-const directoryCarrierPart = "format 2 carrier"
+const (
+	directoryCarrierPart = "format 2 carrier"
+	// repo/'s format from which the directory's items ride files (§11.6's format row), EvsRepoFormat2's value
+	directoryRepoFormat2 uint32 = 2
+)
+
+// Sets the repo writer's hooks on every leg that links this file: its items through the carrier writer, and an item an
+// entry still carries moved onto its r/ file once this daemon carries files.
+func init() {
+	directoryRepoWriter = func(client *DirectoryClient) RecordWriter {
+		return client.carrierWriter()
+	}
+	directoryRepoMigrate = func(client *DirectoryClient, winner *directoryVersion) bool {
+		return directoryRepoItemOnEntry(winner) && client.carriesFiles()
+	}
+}
 
 // What the move to format 2 runs by.
 type DirectoryFormat2Settings struct {
@@ -104,7 +122,7 @@ func (self *DirectoryClient) SetFormat2Settings(settings *DirectoryFormat2Settin
 
 // Whether the directory's repo is at format 2 as the copy's last listing gave it.
 func (self *DirectoryClient) Format2() bool {
-	return EvsRepoFormat2 <= self.store.State().Format
+	return directoryRepoFormat2 <= self.store.State().Format
 }
 
 // Whether this daemon writes its items as format 2's: the copy reads the repo at format 2, or the gate admits the

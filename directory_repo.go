@@ -427,6 +427,13 @@ func (self *DirectoryFold) repoVersionHeld(auth DirectoryAuthView, nowMillis int
 	return held.item.GetVersion(), held.item.GetStartedMillis(), true
 }
 
+// format 2's carrier for a repo item, and whether to move an item an entry still carries onto its r/ file, set by
+// directory_format2.go, which no ios_extension leg links: nil writes every repo item as an announce entry.
+var (
+	directoryRepoWriter  func(client *DirectoryClient) RecordWriter
+	directoryRepoMigrate func(client *DirectoryClient, winner *directoryVersion) bool
+)
+
 // Appends item, padded, through the record writer: the directory's announce entry in this sidecar's own stream.
 func (self *DirectoryClient) appendRepoItem(item *protocol.Announcement, confirmed bool) (*DirectoryRepoWrite, error) {
 	if self.writer == nil {
@@ -440,7 +447,11 @@ func (self *DirectoryClient) appendRepoItem(item *protocol.Announcement, confirm
 	hookKey := recordChainIdText(repoId)
 	testHookBarrier("directory.announce.before", hookKey)
 	// an announce entry at format 1, the repo's r/ file from format 2 (directory_format2.go)
-	refs, err := self.carrierWriter().Append(&RecordDraft{Kind: RecordKindAnnounce, Source: source, NoSession: true, Body: item})
+	writer := self.writer
+	if directoryRepoWriter != nil {
+		writer = directoryRepoWriter(self)
+	}
+	refs, err := writer.Append(&RecordDraft{Kind: RecordKindAnnounce, Source: source, NoSession: true, Body: item})
 	testHookBarrier("directory.announce.after", hookKey)
 	if err != nil {
 		return nil, err
@@ -497,7 +508,7 @@ func (self *DirectoryClient) MaintainRepos(ctx context.Context) ([]*DirectoryRep
 			case winner.writerId != self.sidecarId && auth.Masked(winner.writerId):
 				// the standing version's signer was revoked, reaped or its member removed: the same item, re-signed
 				args = directoryRepoArgsOf(winner.item, true)
-			case directoryRepoItemOnEntry(winner) && self.carriesFiles():
+			case directoryRepoMigrate != nil && directoryRepoMigrate(self, winner):
 				// format 2: the item an entry still carries moves onto its r/ file, the same announcement at a higher
 				// version, so its last M6 entry expires 30 days on (RECORD-M10-03)
 				args = directoryRepoArgsOf(winner.item, true)
