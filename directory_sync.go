@@ -271,8 +271,12 @@ func (self *DirectoryClient) Sync(ctx context.Context) error {
 	// what the reader verified, this sync's included up to where it stopped, folded for List and Get, and judged now,
 	// so a refused version alarms at the sync that brought it whether or not anything lists
 	fold := self.currentFold()
-	fold.Update(self.reader.Entries(directoryId))
+	entries := self.reader.Entries(directoryId)
+	fold.Update(entries)
 	fold.View(self.auth(), self.clock.Now().UnixMilli())
+	if directoryAfterRead != nil {
+		directoryAfterRead(self, directoryId, entries)
+	}
 	return err
 }
 

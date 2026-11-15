@@ -63,12 +63,14 @@ type FakeDirectoryCardsCounts struct {
 	MovedListings int
 	FullListings  int
 	// POST .../read {refs} requests, and the streams they named in all.
-	StreamReads   int
-	StreamsNamed  int
-	LogPages      int
-	CardsReads    int
-	CardWrites    int
-	CardRemovals  int
+	StreamReads  int
+	StreamsNamed int
+	LogPages     int
+	CardsReads   int
+	CardWrites   int
+	CardRemovals int
+	// Pushes of several removals at once (RemoveCards), each counted once here beside its paths' CardRemovals.
+	RemovalPushes int
 	LeasesTaken   int
 	LeasesRelease int
 }
@@ -476,6 +478,71 @@ func (self *fakeDirectoryCardsClient) PutCard(ctx context.Context, repoId sideca
 func (self *fakeDirectoryCardsClient) RemoveCard(ctx context.Context, repoId sidecar.Id, write *sidecar.DirectoryCardWrite) error {
 	_, err := self.commitCard(repoId, write, true)
 	return err
+}
+
+// sidecar.DirectoryCardsRemover: one push removing every path by its CAS, all or none, its one statement listing each
+// (the removal cleanup's, RECORD-M6-21). It counts one CardRemovals per path and one RemovalPushes.
+func (self *fakeDirectoryCardsClient) RemoveCards(ctx context.Context, repoId sidecar.Id, writes []*sidecar.DirectoryCardWrite) error {
+	scope, err := self.scope(repoId)
+	if err != nil {
+		return err
+	}
+	if !scope.Write {
+		return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	}
+	if len(writes) == 0 {
+		return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	}
+	paths := map[string]bool{}
+	for _, write := range writes {
+		if write == nil || write.Path == "" || paths[write.Path] {
+			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+		}
+		paths[write.Path] = true
+	}
+	var callbacks []func(repoId sidecar.Id)
+	err = func() error {
+		self.fake.stateLock.Lock()
+		defer self.fake.stateLock.Unlock()
+		repo := self.fake.repoWithLock(repoId)
+		for _, write := range writes {
+			file, ok := repo.files[write.Path]
+			if !ok || file.Removed || file.Version != write.IfVersion {
+				return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
+			}
+		}
+		repo.version += 1
+		statement := &fakeDirectoryCardsStatement{version: repo.version}
+		called := map[uint64]bool{}
+		for _, write := range writes {
+			repo.pathCounts[write.Path] += 1
+			file := &sidecar.DirectoryCardFile{
+				Path: write.Path, Version: repo.pathCounts[write.Path], Removed: true,
+				PushVersion: repo.version, SignerSidecarId: self.sidecarId, AuthPin: fakeRecordClonePin(write.AuthPin),
+				TimeMillis: self.fake.streams.clock.Now().UnixMilli(),
+			}
+			repo.files[write.Path] = file
+			statement.files = append(statement.files, fakeDirectoryCardCopy(file))
+			self.fake.counts.CardRemovals += 1
+			for leaseId, lease := range repo.leases {
+				if strings.HasPrefix(write.Path, lease.prefix) && !called[leaseId] {
+					called[leaseId] = true
+					callbacks = append(callbacks, lease.callback)
+				}
+			}
+		}
+		repo.statements = append(repo.statements, statement)
+		self.fake.counts.RemovalPushes += 1
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+	self.fake.streams.RaiseSequence(repoId, fakeDirectoryCardsRef)
+	for _, callback := range callbacks {
+		callback(repoId)
+	}
+	return nil
 }
 
 func (self *fakeDirectoryCardsClient) Lease(repoId sidecar.Id, prefix string, callback func(repoId sidecar.Id)) (func(), error) {
