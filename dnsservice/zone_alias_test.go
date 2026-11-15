@@ -108,18 +108,20 @@ func TestZoneAliasAnswersTheLabelsRecordsWithItsApex(t *testing.T) {
 // A write to the label's rows, and a health drop, reach the alias with no write of its own.
 func TestZoneAliasFollowsTheLabelWithNoSecondWrite(t *testing.T) {
 	view := newTestView(t, 1, append(append(testApexRows(), testAliasLabelRows()...), testAliasRow(true))...)
+	healthy := testAliasHealthy()
+	// before the write, blog falls to the wildcard under the alias as under the label
+	requireAliasAnswer(t, view, healthy, "blog."+testAliasApex, dns.TypeA, dns.RcodeSuccess, "A 192.0.2.1", "A 192.0.2.2")
 	next, err := view.Apply([]DnsJournalRow{{
 		Format:  DnsFormat,
 		Root:    testRoot,
 		Serial:  2,
-		Upserts: []DnsRecordSet{{Owner: "shop." + testAliasLabel, Type: dns.TypeA, Ttl: 300, Kind: DnsRecordKindUser, Rdata: []string{"11.22.33.55"}}},
+		Upserts: []DnsRecordSet{{Owner: "blog." + testAliasLabel, Type: dns.TypeA, Ttl: 300, Kind: DnsRecordKindUser, Rdata: []string{"11.22.33.44"}}},
 		Deletes: []DnsRecordKey{{Owner: "www." + testAliasLabel, Type: dns.TypeCNAME}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	healthy := testAliasHealthy()
-	requireAliasAnswer(t, next, healthy, "shop."+testAliasApex, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.55")
+	requireAliasAnswer(t, next, healthy, "blog."+testAliasApex, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.44")
 	// www left the label, so the alias's www falls to the wildcard
 	requireAliasAnswer(t, next, healthy, "www."+testAliasApex, dns.TypeA, dns.RcodeSuccess, "A 192.0.2.1", "A 192.0.2.2")
 	dropped := NewHealthySet([]DnsLbInterface{{Name: "lb-1", Ipv4: netip.MustParseAddr("192.0.2.1")}}, nil)
@@ -250,9 +252,9 @@ func TestZoneAliasRowShape(t *testing.T) {
 // A direct MX's addresses answer at the mail host, and one that is not public is held and never
 // answered, as a user's would be.
 func TestZoneDirectRowsAnswerOnlyPublicAddresses(t *testing.T) {
-	direct := DnsRecordSet{Owner: "mx." + testAliasLabel, Type: dns.TypeA, Ttl: 300, Kind: DnsRecordKindDirect, Rdata: []string{"11.22.33.66"}}
+	direct := DnsRecordSet{Owner: "mx." + testAliasLabel, Type: dns.TypeA, Ttl: 300, Kind: DnsRecordKindDirect, Rdata: []string{"11.22.33.44"}}
 	view := newTestView(t, 1, append(testApexRows(), direct)...)
-	requireAliasAnswer(t, view, nil, "mx."+testAliasLabel, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.66")
+	requireAliasAnswer(t, view, nil, "mx."+testAliasLabel, dns.TypeA, dns.RcodeSuccess, "A 11.22.33.44")
 	private := direct
 	private.Rdata = []string{"10.1.2.3"}
 	held := newTestView(t, 1, append(testApexRows(), private)...)
@@ -271,10 +273,10 @@ func TestZoneDirectRowsAnswerOnlyPublicAddresses(t *testing.T) {
 }
 
 // §12.7's A rules over a direct MX's addresses (DNS-M7-03): public unicast of either family passes; none, a
-// private, documentation, loopback or ULA address, one given twice (its mapped form included) and more than
-// the RRset cap of a family refuse.
+// private, documentation, loopback or ULA address, and one given twice, its mapped form included, refuse. The
+// RRset cap of a family is held on the server's direct-MX writer.
 func TestValidateDirectMxAddresses(t *testing.T) {
-	public := []netip.Addr{netip.MustParseAddr("11.22.33.4"), netip.MustParseAddr("2a0b:1111:2222::5")}
+	public := []netip.Addr{netip.MustParseAddr("11.22.33.44"), netip.MustParseAddr("2a0f:ffff::7")}
 	if err := ValidateDirectMxAddresses(public); err != nil {
 		t.Errorf("%v: %v", public, err)
 	}
@@ -285,13 +287,8 @@ func TestValidateDirectMxAddresses(t *testing.T) {
 		{netip.MustParseAddr("127.0.0.1")},
 		{netip.MustParseAddr("fd00::1")},
 		{netip.MustParseAddr("2001:db8::1")},
-		{netip.MustParseAddr("11.22.33.4"), netip.MustParseAddr("::ffff:11.22.33.4")},
+		{netip.MustParseAddr("11.22.33.44"), netip.MustParseAddr("::ffff:11.22.33.44")},
 	}
-	many := []netip.Addr{}
-	for index := range 9 {
-		many = append(many, netip.AddrFrom4([4]byte{11, 22, 33, byte(10 + index)}))
-	}
-	refused = append(refused, many)
 	for _, addresses := range refused {
 		if err := ValidateDirectMxAddresses(addresses); !errors.Is(err, ErrDnsDirectMxRefused) {
 			t.Errorf("%v: %v", addresses, err)

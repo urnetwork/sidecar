@@ -103,8 +103,9 @@ type DnsRecordsAnswer struct {
 }
 
 // One RRset of a zone as GET /dns/zone and GET /network/dns show it. Kind is the row's (user, system, edge, router,
-// copy, challenge, canary, key or withheld); an edge or router row answers the healthy lb interfaces and holds no
-// values, and a copy row answers the wildcard's.
+// copy, challenge, canary, key, withheld or direct); an edge or router row answers the healthy lb interfaces and holds
+// no values, a copy row answers the wildcard's, and a direct row names a direct MX's mail indexers. The alias row is
+// shown as the zone's Alias and AliasCertified, never here.
 type DnsZoneRecordSet struct {
 	Name   string   `json:"name"`
 	Type   string   `json:"type"`
