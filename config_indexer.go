@@ -4,7 +4,7 @@
 //	              subject's member, the subject itself a consented device of that member; retire also by the subject
 //	              itself; the subject neither ephemeral nor read_only; the newest per (sidecar_id, scope) holds, a
 //	              device at both scopes running their union; retire and the subject's revocation end it, and a parked
-//	              subject serves nothing until lifted
+//	              subject serves nothing until lifted, nor one an active Suspend names until its Unsuspend
 //	SponsorSet  an admin's device names the member that sponsors a tagged sidecar; until one does, a removed
 //	              member's agents resolve to autogroup:admin (Sponsor)
 //
@@ -136,14 +136,19 @@ type ConfigIndexer struct {
 	SealedServices []byte
 }
 
-// Every designation that holds and whose subject serves at this state: not retired, the subject not revoked and not
-// parked, by subject then scope.
+// Every designation that holds and whose subject serves at this state: not retired, the subject not revoked, not
+// parked and named by no active Suspend (§8.6: a Suspend removes its activations), by subject then scope. A state whose
+// acl rows do not build, which no base carries, answers none.
 func (self *ConfigState) Indexers() []ConfigIndexer {
 	indexers := []ConfigIndexer{}
+	acl, err := self.Acl()
+	if err != nil {
+		return indexers
+	}
 	for _, key := range self.indexerKeys() {
 		row := self.indexers[key]
 		subject := self.sidecars[key.sidecarId]
-		if subject == nil || subject.GetRevokedAt() != 0 || subject.GetParkedAt() != 0 {
+		if subject == nil || subject.GetRevokedAt() != 0 || subject.GetParkedAt() != 0 || acl.Suspended(key.sidecarId) {
 			continue
 		}
 		indexer := ConfigIndexer{SidecarId: key.sidecarId, Scope: key.scope, At: row.GetAt(), SealedServices: row.GetSealedServices()}
@@ -225,62 +230,140 @@ func configApplySponsorSet(next *configStateBuilder, statement *configStatement)
 	return nil
 }
 
-// IndexerSet's search service (TEAM-M10-01; §11.14, §18.4; owner decisions 157, 175, 177, 178): which designated
-// indexers answer a searcher's remote searches over a repo at this state.
+// IndexerSet's search service (TEAM-M10-01, TEAM-M10-02; §11.14, §18.4; D-TEAM-27, D-EVS-58; owner decisions 126, 157,
+// 175, 177, 178): which designated indexers d may answer searcher p's remote searches over repo R at this state S, as
+// DESIGN-DETAILS 7.2.2's E1 to E6. Both ends call it, each in its own newest verified state at every send and every
+// page (FI-24): the asker with itself as searcher, the indexer with the requester as searcher, checking that its own
+// id is in the answer, so E1 and E2 are judged for the indexer by this code too.
 //
-//	network  an indexer designated at network scope answers any member's devices over the team repos the searcher
-//	         reads
-//	member   one at member scope answers its own member's devices over any repo they read, and an EvsShare reader
-//	         over the repo its member shared
-//	tagged   a tagged indexer answers only team repos
+//	E1  d stands: admitted, not revoked, parked or suspended, its admission not past not_after; neither ephemeral
+//	    nor read_only; d is not p
+//	E2  scopes(d), the scopes at which d's designation holds with services that open and name search, is not empty
+//	E3  p stands as d does, and is an untagged member device, not ephemeral
+//	E4  d and p both read R (§8.12's RepoReaders), and R's kind is none of secret, config, mailcfg
+//	E5  R owner-bound to member M (a vault or mailbox): d is a consented device of M (§8.5), whoever else reads R;
+//	    member is in scopes(d), or network is and S holds one member (a personal network); and p is a consented
+//	    device of M or the subject of a live EvsShare of R
+//	E6  R a team repo (general, which a group inbox is, record, team_record, the directory): network is in
+//	    scopes(d), or member is and d and p are untagged devices of one member
 //
-// The indexer must read the repo itself, and its services, sealed to the config's generation, must name search:
-// services opens them, the caller holding the key (OpenConfigBody), and a designation it cannot open serves no search.
-// Readers ignore search on a read_only or ephemeral subject, which IndexerSet's rule refuses before any row holds one.
+// So a member's own vault and mailbox go only to that member's consented indexers, a vault another member shared goes
+// only to its owner's, the audit reader, which is neither an owner's device nor a share's subject, gets none, and a
+// tagged indexer, consented for no one, answers team repos only, at network scope. A kind this code does not know
+// answers none.
+//
+// services opens a designation's sealed services, the caller holding the key of the config's generation
+// (OpenConfigBody); a designation it cannot open serves no search.
 func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)) []Id {
-	repo := self.Repo(repoId)
+	acl, err := self.Acl()
+	if err != nil || services == nil {
+		return nil
+	}
+	repo := acl.Repo(repoId)
+	// E3
 	searcher, standing := self.standingSidecar(searcherId, self.timeMs)
-	if repo == nil || !standing {
+	if repo == nil || !standing || !configRowMemberDevice(searcher) || acl.Suspended(searcherId) {
+		return nil
+	}
+	searcherMember, _ := configRowMember(searcher)
+	// E4's kinds, and which of E5 and E6 decides
+	ownerBound := false
+	switch repo.GetKind() {
+	case protocol.RepoKind_REPO_KIND_VAULT, protocol.RepoKind_REPO_KIND_MAILBOX:
+		ownerBound = true
+	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD, protocol.RepoKind_REPO_KIND_TEAM_RECORD,
+		protocol.RepoKind_REPO_KIND_DIRECTORY:
+	default:
 		return nil
 	}
 	readers := self.RepoReaders(repoId)
-	searcherReads := slices.Contains(readers, searcherId)
-	searcherMember, searcherUntagged := configRowMember(searcher)
-	searcherMemberDevice := configRowMemberDevice(searcher)
-	teamRepo := !aclRepoKindOwnerBound(repo.GetKind())
-	sharedToSearcher := false
-	for _, share := range repo.GetShares() {
-		if bytes.Equal(share.GetSubject(), searcherId.Bytes()) && (share.GetExpires() == 0 || self.timeMs < share.GetExpires()) {
-			sharedToSearcher = true
+	if !slices.Contains(readers, searcherId) {
+		return nil
+	}
+	ownerId := Id{}
+	if ownerBound {
+		// E5's third line, which no indexer changes
+		ownerId, err = IdFromBytes(repo.GetOwnerMemberId())
+		if err != nil || ownerId == (Id{}) {
+			return nil
+		}
+		if !acl.ConsentedFor(searcherId, ownerId) && !self.evsShareSubject(acl, searcherId, repoId) {
+			return nil
 		}
 	}
-	answering := []Id{}
+	oneMember := len(self.members) == 1
+
+	// E2: Indexers answers by subject then scope, so a subject's scopes are adjacent
+	type searchScopes struct {
+		sidecarId Id
+		network   bool
+		member    bool
+	}
+	subjects := []searchScopes{}
 	for _, indexer := range self.Indexers() {
 		offered, opened := services(indexer)
 		if !opened || !slices.Contains(offered, protocol.IndexerService_INDEXER_SERVICE_SEARCH) {
 			continue
 		}
-		if indexer.SidecarId == searcherId || !slices.Contains(readers, indexer.SidecarId) {
+		if len(subjects) == 0 || subjects[len(subjects)-1].sidecarId != indexer.SidecarId {
+			subjects = append(subjects, searchScopes{sidecarId: indexer.SidecarId})
+		}
+		scopes := &subjects[len(subjects)-1]
+		switch indexer.Scope {
+		case protocol.IndexerScope_INDEXER_SCOPE_NETWORK:
+			scopes.network = true
+		case protocol.IndexerScope_INDEXER_SCOPE_MEMBER:
+			scopes.member = true
+		}
+	}
+
+	answering := []Id{}
+	for _, scopes := range subjects {
+		if !scopes.network && !scopes.member {
 			continue
 		}
-		indexerMember, indexerUntagged := configRowMember(self.SidecarRow(indexer.SidecarId))
-		if !indexerUntagged && !teamRepo {
+		// E1; Indexers left out a revoked, parked or suspended subject
+		indexer, standing := self.standingSidecar(scopes.sidecarId, self.timeMs)
+		if !standing || indexer.GetEphemeral() || configRowReadOnly(indexer) || scopes.sidecarId == searcherId {
+			continue
+		}
+		// E4
+		if !slices.Contains(readers, scopes.sidecarId) {
 			continue
 		}
 		answers := false
-		switch indexer.Scope {
-		case protocol.IndexerScope_INDEXER_SCOPE_NETWORK:
-			answers = searcherMemberDevice && teamRepo && searcherReads
-		case protocol.IndexerScope_INDEXER_SCOPE_MEMBER:
-			ownMember := indexerUntagged && searcherUntagged && searcherMember == indexerMember && searcherReads
-			sharedByMember := indexerUntagged && sharedToSearcher && bytes.Equal(repo.GetOwnerMemberId(), indexerMember.Bytes())
-			answers = ownMember || sharedByMember
+		if ownerBound {
+			answers = acl.ConsentedFor(scopes.sidecarId, ownerId) && (scopes.member || (scopes.network && oneMember))
+		} else {
+			indexerMember, indexerUntagged := configRowMember(indexer)
+			answers = scopes.network || (scopes.member && indexerUntagged && indexerMember == searcherMember)
 		}
-		if answers && !slices.Contains(answering, indexer.SidecarId) {
-			answering = append(answering, indexer.SidecarId)
+		if answers {
+			answering = append(answering, scopes.sidecarId)
 		}
 	}
 	return answering
+}
+
+// Whether the sidecar is the subject of a live EvsShare of the repo at this state's time, as §8.5 gives its read: a
+// share whose signer counts (a consented device of the repo's owner, outside every cascade), unexpired, whose subject
+// names the sidecar as §8.6 reads a share's subject.
+func (self *ConfigState) evsShareSubject(acl *AclState, sidecarId Id, repoId Id) bool {
+	repo := acl.repos[repoId]
+	sidecar := acl.sidecarState(sidecarId)
+	if repo == nil || sidecar == nil {
+		return false
+	}
+	for i := range repo.shares {
+		share := &repo.shares[i]
+		if !share.valid || (share.expiresMs != 0 && share.expiresMs <= self.timeMs) {
+			continue
+		}
+		if acl.namesSidecar(sidecar, share.subject, sidecar.ephemeral) {
+			return true
+		}
+	}
+	return false
 }
 
 // The network's indexers at the newest verified state, for `ur indexer ls`.
