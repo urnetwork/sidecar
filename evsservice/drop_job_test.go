@@ -847,3 +847,65 @@ func commitDropPushForTest(t *testing.T, world *evsWorld, body []byte) uint64 {
 	world.head = written
 	return next.Version
 }
+
+// §11.13's who row: evacuation appends a committed DROP the table lacks before its batch goes, here a cancel whose
+// step-8 append was lost, which leaves the drop's void record so a later append of the drop finds it cancelled.
+func TestEvacuationAppendsACommittedDropTheTableLacks(t *testing.T) {
+	world := newEvsWorld(t)
+	world.push(&worldChange{path: worldPath("x"), version: 1})
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: "meta-1", CreatorSidecarId: testId("creator")}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCluster, err := world.host.Blobs.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := firstCluster.PutIfNoneMatch(world.paidCtx, sidecar.EvsPlaceKey(world.repoId), placeBytes, nil); err != nil {
+		t.Fatal(err)
+	}
+	cancelBody, err := proto.Marshal(&protocol.EvsDropHistory{
+		DropId: testId("cancel-x").Bytes(), Action: 2, CancelsDropId: testId("drop-x").Bytes(), CancelsVersion: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitDropPushForTest(t, world, cancelBody)
+	table, err := NewDropTable(world.host.ServiceHost(), NewBudgetedBlobs(world.host.Blobs), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := DefaultEvacuatorSettings()
+	settings.SpoolDirectory = t.TempDir()
+	lines := []string{}
+	evacuator, err := NewEvacuator(world.host.ServiceHost(), &EvacuatorDeps{Settings: settings, EvsSettings: world.settings, Drops: table, Log: &capturingLogger{lines: &lines}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.clock.Advance(26 * time.Hour)
+	result, err := evacuator.Run(world.ctx, "meta-1")
+	if err != nil {
+		t.Fatalf("evacuation: %v (%+v)", err, result)
+	}
+	if result.KeptCount == 0 || result.MinuteDeletedCount == 0 {
+		t.Fatalf("evacuation kept %d records and deleted %d minutes: %v", result.KeptCount, result.MinuteDeletedCount, lines)
+	}
+	read, err := table.Read(world.ctx, world.cluster, world.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if void := read.State.Void(testId("drop-x")); void == nil || void.State != DropStateCancelled {
+		t.Fatal("evacuation appended no cancel of a committed DROP")
+	}
+	// an evacuation with no table appends nothing and still goes
+	world.push(&worldChange{path: worldPath("x"), base: 1, version: 2})
+	commitDropPushForTest(t, world, cancelBody)
+	bare, err := NewEvacuator(world.host.ServiceHost(), &EvacuatorDeps{Settings: settings, EvsSettings: world.settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.clock.Advance(26 * time.Hour)
+	if _, err := bare.Run(world.ctx, "meta-1"); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -182,6 +182,9 @@ type EvacuatorDeps struct {
 	Usage   StoredDeltaSink
 	// The sweep's LIST page and recompute bound. nil: the defaults.
 	SweepSettings *SweepSettings
+	// The drop table a kept DROP record is appended to when the table lacks it (§11.13's who row; EVSB-M10-03), before
+	// its batch goes, so a lost step-8 append costs 26 h at most. nil appends nothing.
+	Drops DropSink
 	// a test's: called at each barrier, an error stopping the run there as a kill would
 	atStep func(name string, key string) error
 }

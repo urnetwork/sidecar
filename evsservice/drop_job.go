@@ -1542,6 +1542,13 @@ func (self *DropJob) dropBodyAt(ctx context.Context, cluster sidecar.BlobCluster
 	if err != nil {
 		return nil, err
 	}
+	return dropBodyOfRecord(ctx, self.records, self.locator, cluster, record)
+}
+
+// The DROP body of a committed push's record, a one-part push's from its payload and a seal's from its parts, read
+// through records and locator; ErrDropJobState for a record that holds none.
+func dropBodyOfRecord(ctx context.Context, records *RecordCache, locator *RecordLocator, cluster sidecar.BlobCluster, record *sidecar.EvsBatchRecord) (*protocol.EvsDropHistory, error) {
+	repoId, refId := record.RepoId, record.RefId
 	statement, err := EvsBatchRecordStatement(record)
 	if err != nil {
 		return nil, err
@@ -1563,7 +1570,7 @@ func (self *DropJob) dropBodyAt(ctx context.Context, cluster sidecar.BlobCluster
 		}
 		partBytes := make([][]byte, 0, len(parts))
 		for _, part := range parts {
-			partRecord, err := ReadRecordLocated(ctx, self.records, self.locator, cluster, repoId, refId, part.Place)
+			partRecord, err := ReadRecordLocated(ctx, records, locator, cluster, repoId, refId, part.Place)
 			if err != nil {
 				return nil, err
 			}
@@ -1583,6 +1590,43 @@ func (self *DropJob) dropBodyAt(ctx context.Context, cluster sidecar.BlobCluster
 		return nil, fmt.Errorf("%w: a bit-5 version with no DROP body", ErrDropJobState)
 	}
 	return checked.Drop.History, nil
+}
+
+// Evacuation's append of a committed DROP the table lacks (§11.13's who row): once its record is settled committed at
+// version, before its batch goes, its body read from the record (a seal's from its parts) and seen_ms the clock after
+// the head read that showed it committed. "" once there is nothing to append or the append landed; else why the minute
+// waits, so a batch never goes with the append lost (DESIGN-DETAILS 10.5's lost-append row).
+func (self *evacuateRun) appendDrop(minute uint32, place *protocol.EvsPlace, record *sidecar.EvsBatchRecord, version uint64) (string, error) {
+	drops := self.evacuator.deps.Drops
+	if drops == nil || (record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH && record.Type != protocol.EvsBatchRecordType_EVS_BATCH_SEAL) {
+		return "", nil
+	}
+	statement, err := EvsBatchRecordStatement(record)
+	if err != nil {
+		return "drop statement", err
+	}
+	if statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) == 0 {
+		return "", nil
+	}
+	history, err := dropBodyOfRecord(self.ctx, NewRecordCache(self.evacuator.evsSettings), self.evacuator.locator, self.cluster, record)
+	if err != nil {
+		return "drop body", err
+	}
+	grant, err := self.acquire(minute, WriteOperation{Kind: WriteOperationOverwrite, ObjectByteCount: int64(self.evacuator.evsSettings.Drop.TableByteCount), Count: 1}, nil)
+	if err != nil {
+		return "drop append grant", err
+	}
+	defer grant.Close()
+	err = drops.Append(grant.Context(), &DropCommit{
+		ClusterId: self.clusterId, RepoId: record.RepoId, RefId: record.RefId, PushId: record.PushId, Version: version, Place: place, Body: history,
+	}, self.evacuator.clock.Now().UnixMilli())
+	switch {
+	case errors.Is(err, ErrDropClockUnsure):
+		return "drop append clock", nil
+	case err != nil:
+		return "drop append", err
+	}
+	return "", nil
 }
 
 // What tidy deletes and evicts: ended entries and dry runs past their retention, by a table write, and each ended job's
