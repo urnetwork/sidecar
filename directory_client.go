@@ -188,9 +188,28 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 		repoWrittenVersions: map[Id]uint64{},
 		parts:               map[string]any{},
 	}
-	self.adapter.client = self
 	self.reader = self.newReader()
 	return self, nil
+}
+
+// §16.11's readers row for the directory's ERASEs, set by directory_revoke.go, which no ios_extension leg links: the
+// ERASEs the reader takes, those of a directory admin, the rest alarming. Nil takes every one.
+var directoryErasureJudge func(client *DirectoryClient, repoId Id, erasures []*RecordStreamErasure) ([]*RecordStreamErasure, error)
+
+// The copy as the client's reader reads it: the adapter, with the erasure ref's ERASEs judged by directoryErasureJudge
+// before the reader takes them.
+type directoryReaderStreams struct {
+	*directoryStreams
+	client *DirectoryClient
+}
+
+// The adapter's ERASEs past afterVersion that §16.11's readers row takes.
+func (self directoryReaderStreams) ReadErasures(ctx context.Context, repoId Id, afterVersion uint64) ([]*RecordStreamErasure, error) {
+	erasures, err := self.directoryStreams.ReadErasures(ctx, repoId, afterVersion)
+	if err != nil || directoryErasureJudge == nil {
+		return erasures, err
+	}
+	return directoryErasureJudge(self.client, repoId, erasures)
 }
 
 // The client's part of name, made by build at its first ask and kept: nil when build answers nil, which is asked
@@ -234,7 +253,7 @@ func (self *DirectoryClient) newReader() *RecordReader {
 	return NewRecordReader(&RecordReaderArgs{
 		SidecarId:        self.sidecarId,
 		Store:            self.store.store,
-		Streams:          func() RecordStreams { return self.adapter },
+		Streams:          func() RecordStreams { return directoryReaderStreams{directoryStreams: self.adapter, client: self} },
 		Auth:             self.recordAuth,
 		Alarm:            self.alarm,
 		Clock:            self.clock,

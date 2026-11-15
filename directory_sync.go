@@ -392,8 +392,6 @@ func directoryUtcDay(millis int64) int64 {
 type directoryStreams struct {
 	store   *DirectoryStore
 	streams func() RecordStreams
-	// the client it reads for, which directoryErasureJudge judges by
-	client *DirectoryClient
 
 	stateLock    sync.Mutex
 	erasureMoved bool
@@ -490,15 +488,8 @@ func (self *directoryStreams) ReadErasures(ctx context.Context, repoId Id, after
 			return nil, err
 		}
 	}
-	if directoryErasureJudge != nil && self.client != nil {
-		return directoryErasureJudge(self.client, repoId, erasures)
-	}
 	return erasures, nil
 }
-
-// §16.11's readers row for the directory's ERASEs, set by directory_revoke.go, which no ios_extension leg links: the
-// ERASEs the reader takes, those of a directory admin, the rest alarming. Nil takes every one.
-var directoryErasureJudge func(client *DirectoryClient, repoId Id, erasures []*RecordStreamErasure) ([]*RecordStreamErasure, error)
 
 // Never fires: the directory's hints are its leases' (DirectoryClient.Lease).
 func (self *directoryStreams) Subscribe(repoId Id, callback func(repoId Id)) func() {
