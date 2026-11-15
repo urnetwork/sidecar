@@ -526,3 +526,30 @@ func TestEvsToolTiers(t *testing.T) {
 		}
 	}
 }
+
+// EVS_PREFIX_RULE through a tool's answer (EVS1-M6-05; DESIGN-DETAILS 16.2.7, 8.2.8; QD-801): each of the seven
+// details answers its own constant text, from the planner's and a reader's refusal and from publish's, and the path
+// is in none (I-13).
+func TestPrefixRuleRefusalAnswersItsDetailAndNoPath(t *testing.T) {
+	answers := map[string]bool{}
+	for _, detail := range []sidecar.EvsPrefixDetail{
+		sidecar.EvsPrefixDetailRefused, sidecar.EvsPrefixDetailPending, sidecar.EvsPrefixDetailUpdate, sidecar.EvsPrefixDetailDepth,
+		sidecar.EvsPrefixDetailUnavailable, sidecar.EvsPrefixDetailBase, sidecar.EvsPrefixDetailTag,
+	} {
+		answer := mcpEvsError(fmt.Errorf("a write: %w", &sidecar.EvsPrefixRuleError{Detail: detail, Path: "src/secret-name.go"}))
+		text := answer.Error()
+		if !strings.Contains(text, "EVS_PREFIX_RULE ("+string(detail)+")") || strings.Contains(text, "secret-name") || answers[text] {
+			t.Errorf("%s: %q", detail, text)
+		}
+		answers[text] = true
+	}
+	for _, detail := range []sidecar.AclPrefixDetail{sidecar.AclPrefixDetailBase, sidecar.AclPrefixDetailTag} {
+		text := mcpEvsError(&sidecar.AclPrefixRuleError{Detail: detail, Path: "src/secret-name.go"}).Error()
+		if !answers[text] || !strings.Contains(text, "("+detail.String()+")") {
+			t.Errorf("publish's %s: %q", detail, text)
+		}
+	}
+	if text := mcpEvsError(&sidecar.EvsPrefixRuleError{}).Error(); !strings.Contains(text, "EVS_PREFIX_RULE") {
+		t.Errorf("no detail: %q", text)
+	}
+}

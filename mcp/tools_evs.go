@@ -235,11 +235,46 @@ func mcpEvsError(err error) error {
 		return errMcpEvsGitRefused
 	case errors.Is(err, sidecar.ErrEvsGitWriteUnchanged):
 		return errMcpEvsUnchanged
+	case errors.Is(err, sidecar.ErrEvsPrefixRule), errors.Is(err, sidecar.ErrAclPrefixRule):
+		return mcpEvsPrefixRuleError(err)
 	case errors.Is(err, sidecar.ErrEvsWriteInvalid):
 		return errMcpEvsInvalid
 	}
 	return err
 }
+
+// EVS_PREFIX_RULE as a tool answers it (DESIGN-DETAILS 16.2.7, 16.2.5, 8.2.8; QD-801): the code and its detail, one of
+// refused, pending, update, depth, unavailable, base and tag, in constant text. The path the rules hold is the
+// caller's own and is in no answer (I-13).
+func mcpEvsPrefixRuleError(err error) error {
+	detail := ""
+	var evsErr *sidecar.EvsPrefixRuleError
+	var aclErr *sidecar.AclPrefixRuleError
+	switch {
+	case errors.As(err, &evsErr):
+		detail = string(evsErr.Detail)
+	case errors.As(err, &aclErr):
+		detail = aclErr.Detail.String()
+	}
+	if answer, ok := errMcpEvsPrefixRules[detail]; ok {
+		return answer
+	}
+	return errMcpEvsPrefixRule
+}
+
+// EVS_PREFIX_RULE's answers by detail.
+var (
+	errMcpEvsPrefixRule  = errors.New("EVS_PREFIX_RULE: the repo's prefix rules hold this path")
+	errMcpEvsPrefixRules = map[string]error{
+		"refused":     errors.New("EVS_PREFIX_RULE (refused): the repo's prefix rules do not give this device the path"),
+		"pending":     errors.New("EVS_PREFIX_RULE (pending): a rule set of the repo is not readable on this device yet"),
+		"update":      errors.New("EVS_PREFIX_RULE (update): a rule set of the repo needs a later release"),
+		"depth":       errors.New("EVS_PREFIX_RULE (depth): too many ignored versions lie over the path"),
+		"unavailable": errors.New("EVS_PREFIX_RULE (unavailable): the version the rules allow is gone from evs and this device holds no copy"),
+		"base":        errors.New("EVS_PREFIX_RULE (base): a new shared branch holds a file outside this device's prefixes"),
+		"tag":         errors.New("EVS_PREFIX_RULE (tag): a tag reaches a file outside this device's prefixes"),
+	}
+)
 
 // evs_repos takes nothing but the network.
 type mcpEvsReposIn struct{}
