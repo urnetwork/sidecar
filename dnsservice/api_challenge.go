@@ -4,8 +4,8 @@
 // certs bearer reaches it, and it is a write: the dns gate's writes: false refuses it.
 //
 // What a challenge may be, at most two values, at most 10 writes a name an hour, an hour's life, under a
-// live label or alias, is the model's (DnsChallengeWriter), since it is a rule of §12.6's one write
-// path. This route maps the answers: a restore's 503 with Retry-After, which certs retries; a name or
+// live label or alias, or at a verified custom domain's <acme_token>.acme.<root> (QD-175; DNS-M6-02), is
+// the model's (DnsChallengeWriter), since it is a rule of §12.6's one write path. This route maps the answers: a restore's 503 with Retry-After, which certs retries; a name or
 // values the writer refuses, 400; the hourly cap, 429; a removal of nothing, the serial zero. A block
 // whose host gives no writer answers 503 to every challenge, so nothing is written around the path.
 
@@ -47,7 +47,9 @@ type DnsChallengeWriter interface {
 type DnsChallengeRequest struct {
 	// May be left out with one root.
 	Root string `json:"root,omitempty"`
-	// <label>.<root> or <alias>.<root>, with or without *.: a wildcard's challenge sits at its name.
+	// <label>.<root> or <alias>.<root>, with or without *.: a wildcard's challenge sits at its name. Or a
+	// verified custom domain's <acme_token>.acme.<root>, where the TXT sits at the name itself, the target
+	// of the domain's one-time _acme-challenge CNAME (QD-175).
 	Name string `json:"name"`
 	// At most two. None removes the challenge.
 	Values []string `json:"values,omitempty"`

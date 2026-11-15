@@ -216,27 +216,37 @@ func (self *ZoneView) rrsetRecords(rrset *zoneRrset, owner string, healthy *Heal
 	return records
 }
 
-// The records a matched name answers rrType with: its own RRset, or the copy row's wildcard's.
-func (self *ZoneView) typedRecords(match zoneMatch, rrType uint16, owner string, healthy *HealthySet) []dns.RR {
-	if rrset := match.node.rrset(rrType); rrset != nil {
-		return self.rrsetRecords(rrset, owner, healthy)
+// The records a looked-up name answers rrType with: under an alias the alias's own RRset first, then
+// the matched name's own RRset, or the copy row's wildcard's (zone_alias.go).
+func (self *ZoneView) typedRecords(lookup *zoneLookup, rrType uint16, owner string, healthy *HealthySet) []dns.RR {
+	if lookup.own != nil {
+		if rrset := lookup.own.rrset(rrType); rrset != nil {
+			return self.rrsetRecords(rrset, owner, healthy)
+		}
+	}
+	match := lookup.match
+	if match.node == nil {
+		return nil
+	}
+	if rrset := lookup.matchRrset(match.node, rrType); rrset != nil {
+		return lookup.aliasRecords(self.rrsetRecords(rrset, owner, healthy))
 	}
 	if match.node.copies() {
 		if source := self.copySource(match.name); source != nil {
 			if rrset := source.rrset(rrType); rrset != nil {
-				return self.rrsetRecords(rrset, owner, healthy)
+				return lookup.aliasRecords(self.rrsetRecords(rrset, owner, healthy))
 			}
 		}
 	}
 	return nil
 }
 
-// RFC 8482's answer to ANY (plan reading 21): the first RRset of the name's in type order, or a
-// synthesized HINFO where it has none to give.
-func (self *ZoneView) anyRecords(match zoneMatch, owner string, healthy *HealthySet) []dns.RR {
-	first := func(node *zoneNode) []dns.RR {
+// RFC 8482's answer to ANY (plan reading 21): the first RRset of the name's in type order, the alias's
+// own before the label's, or a synthesized HINFO where it has none to give.
+func (self *ZoneView) anyRecords(lookup *zoneLookup, owner string, healthy *HealthySet) []dns.RR {
+	first := func(node *zoneNode, rrsetOf func(node *zoneNode, rrType uint16) *zoneRrset) []dns.RR {
 		for _, held := range node.rrsets {
-			if rrset := node.rrset(held.set.Type); rrset != nil {
+			if rrset := rrsetOf(node, held.set.Type); rrset != nil {
 				if records := self.rrsetRecords(rrset, owner, healthy); len(records) != 0 {
 					return records
 				}
@@ -244,13 +254,24 @@ func (self *ZoneView) anyRecords(match zoneMatch, owner string, healthy *Healthy
 		}
 		return nil
 	}
-	if records := first(match.node); records != nil {
-		return records
+	ownRrset := func(node *zoneNode, rrType uint16) *zoneRrset {
+		return node.rrset(rrType)
 	}
-	if match.node.copies() {
-		if source := self.copySource(match.name); source != nil {
-			if records := first(source); records != nil {
-				return records
+	if lookup.own != nil {
+		if records := first(lookup.own, ownRrset); records != nil {
+			return records
+		}
+	}
+	match := lookup.match
+	if match.node != nil {
+		if records := first(match.node, lookup.matchRrset); records != nil {
+			return lookup.aliasRecords(records)
+		}
+		if match.node.copies() {
+			if source := self.copySource(match.name); source != nil {
+				if records := first(source, ownRrset); records != nil {
+					return lookup.aliasRecords(records)
+				}
 			}
 		}
 	}
@@ -264,31 +285,35 @@ func (self *ZoneView) anyRecords(match zoneMatch, owner string, healthy *Healthy
 func (self *ZoneView) answerQuestion(reply *dns.Msg, question dns.Question, healthy *HealthySet) {
 	owner := dns.Fqdn(question.Name)
 	for chainCount := 0; ; {
-		match := self.match(dns.CanonicalName(owner))
-		if match.node == nil {
+		lookup := self.lookup(dns.CanonicalName(owner))
+		if !lookup.exists() {
 			reply.Rcode = dns.RcodeNameError
 			reply.Ns = append(reply.Ns, self.denialSoa())
 			return
 		}
 		// a suspended host answers no data of any type, ANY included (§12.9)
-		if match.node.withheldOwner() {
+		if lookup.withheld() {
 			reply.Ns = append(reply.Ns, self.denialSoa())
 			return
 		}
 		if question.Qtype == dns.TypeANY {
-			reply.Answer = append(reply.Answer, self.anyRecords(match, owner, healthy)...)
+			reply.Answer = append(reply.Answer, self.anyRecords(&lookup, owner, healthy)...)
 			return
 		}
-		if records := self.typedRecords(match, question.Qtype, owner, healthy); len(records) != 0 {
+		if records := self.typedRecords(&lookup, question.Qtype, owner, healthy); len(records) != 0 {
 			reply.Answer = append(reply.Answer, records...)
 			return
 		}
-		cname := match.node.rrset(dns.TypeCNAME)
+		// a CNAME answers only where nothing else does: never beside the alias's own rows
+		var cname *zoneRrset
+		if lookup.match.node != nil && !lookup.ownAnswers() {
+			cname = lookup.matchRrset(lookup.match.node, dns.TypeCNAME)
+		}
 		if cname == nil {
 			reply.Ns = append(reply.Ns, self.denialSoa())
 			return
 		}
-		records := self.rrsetRecords(cname, owner, healthy)
+		records := lookup.aliasRecords(self.rrsetRecords(cname, owner, healthy))
 		reply.Answer = append(reply.Answer, records...)
 		chainCount += 1
 		target := records[0].(*dns.CNAME).Target

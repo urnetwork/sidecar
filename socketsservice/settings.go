@@ -255,6 +255,10 @@ type SocketsSettings struct {
 	FindMaxBodyByteCount int
 	// The most client ids an edge's Find names: 64, an edge process's K clients (§13.6's 4 by default) with room.
 	FindMaxClientIdCount int
+	// The most custom hosts and aliases one listener lists as certified names, and so the most custom hosts a
+	// network maps to one host owner (DESIGN-DETAILS 17.2.10, 17.7): 64. TLS-M6-08's field, which DNS-M6-02 holds
+	// custom-host-add to.
+	CertifiedNameMaxCount int
 
 	// The revocation sweep (sweep.go; DESIGN-DETAILS 13.2.3). The least time between two sweeps of one network by
 	// this process: 10 s, so a run of revocations costs a network one sweep a period, always at its newest position.
@@ -312,6 +316,7 @@ func DefaultSocketsSettings() *SocketsSettings {
 		RegistrationsMaxBodyByteCount: 4 * 1024 * 1024,
 		FindMaxBodyByteCount:          64 * 1024,
 		FindMaxClientIdCount:          64,
+		CertifiedNameMaxCount:         64,
 
 		SweepMinInterval:      10 * time.Second,
 		SweepClaimTtl:         30 * time.Second,
@@ -429,6 +434,7 @@ func (self *SocketsSettings) Validate() error {
 		{name: "registrations_max_body_byte_count", positive: 0 < self.RegistrationsMaxBodyByteCount},
 		{name: "find_max_body_byte_count", positive: 0 < self.FindMaxBodyByteCount},
 		{name: "find_max_client_id_count", positive: 0 < self.FindMaxClientIdCount},
+		{name: "certified_name_max_count", positive: 0 < self.CertifiedNameMaxCount},
 		{name: "format.claim_max_byte_count", positive: 0 < self.Format.ClaimMaxByteCount},
 		{name: "format.protocol_max_byte_count", positive: 0 < self.Format.ProtocolMaxByteCount},
 		{name: "format.alpn_max_count", positive: 0 < self.Format.AlpnMaxCount},

@@ -33,6 +33,11 @@ const (
 	DnsZonePath           = "/dns/zone"
 	NetworkDnsPath        = "/network/dns"
 	NetworkDnsRecordsPath = "/network/dns/records"
+	// The alias routes (DNS-M6-01) and the custom-host routes (DNS-M6-02), api's, Network class.
+	NetworkDnsAliasClaimPath       = "/network/dns/alias-claim"
+	NetworkDnsAliasReleasePath     = "/network/dns/alias-release"
+	NetworkDnsCustomHostAddPath    = "/network/dns/custom-host-add"
+	NetworkDnsCustomHostRemovePath = "/network/dns/custom-host-remove"
 )
 
 // The header a write under a decision names its use's effect key in (§16.6), as base64url with no padding.
@@ -116,8 +121,10 @@ type DnsZone struct {
 	// The root, canonical.
 	Root  string `json:"root"`
 	Label string `json:"label"`
-	// Empty while the network has none.
+	// The live alias, empty while the network has none.
 	Alias string `json:"alias,omitempty"`
+	// A certificate names the live alias, so it answers the label's records (reading 11).
+	AliasCertified bool `json:"alias_certified,omitempty"`
 	// The serial of the zone's last write, zero before any.
 	Version    uint64             `json:"version"`
 	RecordSets []DnsZoneRecordSet `json:"record_sets"`
@@ -137,6 +144,119 @@ type NetworkDns struct {
 	DnsZone
 	EntryCount int64 `json:"entry_count"`
 	EntryLimit int64 `json:"entry_limit"`
+	// The network's custom hosts, by host (DNS-M6-02).
+	CustomHosts []DnsCustomHost `json:"custom_hosts,omitempty"`
+	// The network's verified domains with the challenge target each one's _acme-challenge CNAME names
+	// (QD-175).
+	CustomDomains []DnsCustomDomain `json:"custom_domains,omitempty"`
+}
+
+// What an alias is, said in every answer of the alias routes (§12.5): the claim is the opt-in.
+const DnsAliasDisclosure = "An alias is public forever: every certificate naming it is logged in Certificate " +
+	"Transparency, and once released it retires for 90 days and is never anyone's again."
+
+// The body of POST /network/dns/alias-claim (§12.5, DNS-M6-01): the alias claimed, which must be the
+// network's network_name as it stands, so a concurrent rename claims nothing. A network holding another
+// live alias changes it: the old one retires.
+type DnsAliasClaimRequest struct {
+	Name string `json:"name"`
+}
+
+// The body of POST /network/dns/alias-release: the live alias released, which retires for 90 days.
+type DnsAliasReleaseRequest struct {
+	Name string `json:"name"`
+}
+
+// The states of an alias as the routes answer them (D-DNS-10).
+const (
+	DnsAliasStateLive     = "live"
+	DnsAliasStateRetiring = "retiring"
+)
+
+// The answer of the alias routes.
+type DnsAliasAnswer struct {
+	// <alias>.<root>, lowercase with no final dot.
+	Name string `json:"name"`
+	// live or retiring.
+	State string `json:"state"`
+	// A certificate names the alias, so it answers the label's records.
+	Certified bool `json:"certified"`
+	// When a retiring alias tombstones, for good.
+	TombstoneTime *time.Time `json:"tombstone_time,omitempty"`
+	// DnsAliasDisclosure.
+	Disclosure string `json:"disclosure"`
+}
+
+// A custom host's CAA modes (§12.8, D-DNS-9).
+const (
+	// The customer's own A and AAAA, or an ALIAS that synthesizes only them, so its CAA stays the
+	// customer's. The default, and every apex's.
+	DnsCustomHostModeStrong = "strong"
+	// A CNAME into the root, which lets URnetwork publish the CAA that governs the host (§2.8 EX1).
+	DnsCustomHostModeWeak = "weak"
+)
+
+// A custom host's states (§12.14).
+const (
+	DnsCustomHostStatePending = "pending"
+	DnsCustomHostStateActive  = "active"
+)
+
+// What weak mode costs, which a weak request accepts by name (§2.8 EX1).
+const DnsCustomHostWeakDisclosure = "Weak mode points this host into URnetwork's zone by CNAME. CAA discovery " +
+	"follows the CNAME, so URnetwork could publish a CAA record there admitting its own certificate authority " +
+	"account and obtain certificates for this host."
+
+// The body of POST /network/dns/custom-host-add (§12.8, DNS-M6-02): host, <host>.<domain> or an apex
+// <domain> of a verified domain, maps to owner, a host owner <host>.<label>.<root> of the network's
+// zone, never an apex or a system owner.
+type DnsCustomHostAddRequest struct {
+	Host  string `json:"host"`
+	Owner string `json:"owner"`
+	// strong, the default, or weak, which no apex takes.
+	Mode string `json:"mode,omitempty"`
+	// Weak mode only: the caller accepts DnsCustomHostWeakDisclosure.
+	WeakDisclosureAccepted bool `json:"weak_disclosure_accepted,omitempty"`
+}
+
+// The body of POST /network/dns/custom-host-remove.
+type DnsCustomHostRemoveRequest struct {
+	Host string `json:"host"`
+}
+
+// One custom host as GET /network/dns and the custom-host routes show it.
+type DnsCustomHost struct {
+	// lowercase, no final dot
+	Host string `json:"host"`
+	// the host owner, canonical
+	Owner string `json:"owner"`
+	// pending or active
+	State string `json:"state"`
+	// strong or weak
+	CaaMode string `json:"caa_mode"`
+	// certs' last walk and probe passed (§12.8 step 3)
+	EffectiveCaaChainOk bool `json:"effective_caa_chain_ok"`
+	// every lb interface that passes the probe is current for the host (§13.4; DNS-M6-03)
+	Ready bool `json:"ready"`
+	// the interfaces not yet current for a pending host (DNS-M6-03)
+	PendingInterfaces []string `json:"pending_interfaces,omitempty"`
+}
+
+// The answer of the custom-host routes.
+type DnsCustomHostAnswer struct {
+	// add: the host as it stands
+	CustomHost *DnsCustomHost `json:"custom_host,omitempty"`
+	// remove: whether a row went
+	Removed bool `json:"removed,omitempty"`
+	// add in weak mode: what the caller accepted
+	Disclosure string `json:"disclosure,omitempty"`
+}
+
+// A verified domain as GET /network/dns shows it (QD-175).
+type DnsCustomDomain struct {
+	Domain string `json:"domain"`
+	// <acme_token>.acme.<root>, with no final dot: what _acme-challenge.<domain> is CNAMEd to once.
+	AcmeChallengeTarget string `json:"acme_challenge_target"`
 }
 
 // A refusal of a record route. Error starts with the status and a space, the convention api's router answers by.

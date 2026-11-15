@@ -1,7 +1,9 @@
 package dnsservice
 
 import (
+	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -152,5 +154,87 @@ func TestPlannedCopyRowsAnswerFromTheWildcard(t *testing.T) {
 	unplanned := newTestView(t, 101, rows...)
 	if reply := testAnswer(t, unplanned, nil, "blog."+testCopyApex, dns.TypeMX); len(reply.Answer) != 0 {
 		t.Fatalf("an unplanned empty non-terminal answered %v", reply.Answer)
+	}
+}
+
+// A replying burner's selector, as DNS-M9-01's writers plan it (S10; D-DNS-11): one DKIM key at
+// <sel>._domainkey.<blabel>.
+func testCopyBurnerSelector(selector string, blabel string) DnsRecordSet {
+	return DnsRecordSet{
+		Owner: selector + "._domainkey." + blabel + "." + testCopyApex,
+		Type:  dns.TypeTXT,
+		Ttl:   300,
+		Kind:  DnsRecordKindKey,
+		Rdata: []string{`"v=DKIM1; k=rsa; p=MIIBCgKCAQEA"`},
+	}
+}
+
+// S10's plan: a replying burner's first selector gives <blabel>, and _domainkey.<blabel> below it, a
+// copy in the same write; a second selector adds none; the last one's removal takes both away, back to
+// the wildcard alone; and a receive-only burner, which has no selector, has no row at all.
+func TestPlanCopyRowsBurnerSelectors(t *testing.T) {
+	rows := testCopyZoneRows()
+	first := testCopyBurnerSelector("s1", "maple-1234")
+	rows = requireCopyPlan(t, DnsRowsAfter(rows, []DnsRecordSet{first}, nil), []string{"_domainkey.maple-1234", "maple-1234"}, nil)
+	second := testCopyBurnerSelector("s2", "maple-1234")
+	rows = requireCopyPlan(t, DnsRowsAfter(rows, []DnsRecordSet{second}, nil), nil, nil)
+	rows = requireCopyPlan(t, DnsRowsAfter(rows, nil, []DnsRecordKey{first.Key()}), nil, nil)
+	rows = requireCopyPlan(t, DnsRowsAfter(rows, nil, []DnsRecordKey{second.Key()}), nil, []string{"_domainkey.maple-1234", "maple-1234"})
+	for _, row := range rows {
+		if strings.Contains(row.Owner, "maple-1234") {
+			t.Errorf("the last selector's removal left %+v", row)
+		}
+	}
+	// another burner's selector plans only its own label
+	requireCopyPlan(t, append(testCopyZoneRows(), testCopyBurnerSelector("s1", "cedar-0042")), []string{"_domainkey.cedar-0042", "cedar-0042"}, nil)
+}
+
+// What S10 serves: a replying burner's label answers *'s MX and the healthy addresses through its copy,
+// as one with no selector does through *, a health drop reaching both with no write; and the selector
+// answers its key.
+func TestBurnerSelectorCopyAnswersTheWildcardsCurrentRecords(t *testing.T) {
+	rows := append(testApexRows(), testCopyZoneRows()...)
+	rows = append(rows, DnsRecordSet{Owner: "*." + testCopyApex, Type: dns.TypeAAAA, Ttl: 60, Kind: DnsRecordKindEdge})
+	selector := testCopyBurnerSelector("s1", "maple-1234")
+	rows = DnsRowsAfter(rows, []DnsRecordSet{selector}, nil)
+	upserts, deletes := PlanCopyRows(testCopyApex, rows)
+	view := newTestView(t, 200, DnsRowsAfter(rows, upserts, deletes)...)
+	both := NewHealthySet([]DnsLbInterface{
+		{Name: "lb-1", Ipv4: netip.MustParseAddr("192.0.2.1"), Ipv6: netip.MustParseAddr("2001:db8::1")},
+		{Name: "lb-2", Ipv4: netip.MustParseAddr("192.0.2.2"), Ipv6: netip.MustParseAddr("2001:db8::2")},
+	}, nil)
+	dropped := NewHealthySet([]DnsLbInterface{
+		{Name: "lb-2", Ipv4: netip.MustParseAddr("192.0.2.2"), Ipv6: netip.MustParseAddr("2001:db8::2")},
+	}, nil)
+	answerLines := func(healthy *HealthySet, name string, rrType uint16) []string {
+		reply := testAnswer(t, view, healthy, name, rrType)
+		if reply.Rcode != dns.RcodeSuccess {
+			t.Fatalf("%s %s: %s", name, dns.TypeToString[rrType], dns.RcodeToString[reply.Rcode])
+		}
+		lines := []string{}
+		for _, record := range reply.Answer {
+			lines = append(lines, strings.TrimPrefix(record.String(), record.Header().String()))
+		}
+		slices.Sort(lines)
+		return lines
+	}
+	blabel := "maple-1234." + testCopyApex
+	other := "birch-0001." + testCopyApex
+	for _, name := range []string{blabel, other} {
+		if got := answerLines(both, name, dns.TypeMX); !slices.Equal(got, []string{"10 mx.net1.zone.example."}) {
+			t.Errorf("%s MX %v", name, got)
+		}
+		if got := answerLines(both, name, dns.TypeA); !slices.Equal(got, []string{"192.0.2.1", "192.0.2.2"}) {
+			t.Errorf("%s A %v", name, got)
+		}
+		if got := answerLines(dropped, name, dns.TypeA); !slices.Equal(got, []string{"192.0.2.2"}) {
+			t.Errorf("%s A after a drop %v", name, got)
+		}
+		if got := answerLines(dropped, name, dns.TypeAAAA); !slices.Equal(got, []string{"2001:db8::2"}) {
+			t.Errorf("%s AAAA after a drop %v", name, got)
+		}
+	}
+	if got := answerLines(both, selector.Owner, dns.TypeTXT); len(got) != 1 {
+		t.Errorf("the selector answered %v", got)
 	}
 }
