@@ -1,6 +1,6 @@
 // ur-cli in the ur process (§7.8, D-TEAM-7, §5.7): the public OAuth client that gets one admin token for one
 // command, loopback PKCE (RFC 8252) with code-matched consent and a DPoP key that never leaves this process. ur login
-// and, from TEAM-M6-08, ur admin call it; the daemon and MCP never do, so no agent's tool call can reach it.
+// and ur admin's Team parts (cmd_admin.go) call it; the daemon and MCP never do, so no agent's tool call can reach it.
 //
 //	discover  GET <issuer>/.well-known/oauth-authorization-server for its authorization and token endpoints, the
 //	          token endpoint on the issuer's own host
@@ -42,8 +42,21 @@ import (
 // ur-cli's client_id, preregistered at the issuer.
 const urcliClientId = "ur-cli"
 
-// The scope v0's one command needs (§7.8's OAuth client scopes).
-const urcliScopeAuthKeys = "auth_keys"
+// The scopes ur-cli asks (§7.8's OAuth client scopes): auth_keys for v0's one command, all for full ur admin's Team
+// commands, which each route's role gate cuts to the member's role (TEAM-M6-08).
+const (
+	urcliScopeAuthKeys = "auth_keys"
+	urcliScopeAll      = "all"
+)
+
+// The one scope ur-cli asks for a command, as the issuer checks it: auth_keys for POST /network/auth-keys, all for
+// every other admin command.
+func urcliCommandScope(command *sidecar.AdminCommand) string {
+	if command.Method == "POST" && command.Path == "/network/auth-keys" {
+		return urcliScopeAuthKeys
+	}
+	return urcliScopeAll
+}
 
 // Tunables of ur-cli in this process.
 type urcliSettings struct {
@@ -326,7 +339,7 @@ func urcliAdminToken(ctx context.Context, env *urcliEnv, command *sidecar.AdminC
 	query.Set("client_id", urcliClientId)
 	query.Set("response_type", "code")
 	query.Set("redirect_uri", redirectUri)
-	query.Set("scope", urcliScopeAuthKeys)
+	query.Set("scope", urcliCommandScope(command))
 	query.Set("state", state)
 	query.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
 	query.Set("code_challenge_method", "S256")

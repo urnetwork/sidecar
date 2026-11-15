@@ -1,6 +1,6 @@
-// ur admin (TEAM-M2-18, TEAM-M10-01): a network admin's acts on its config, each read from the verified log, printed
-// as a plan, confirmed on /dev/tty and signed through the daemon's sidecarAct, never through MCP or a hook (D-CORE-13,
-// R-CTX-33). This file registers the command and its agents part:
+// ur admin's config parts (TEAM-M2-18, TEAM-M10-01): a network admin's acts on its config, each read from the verified
+// log, printed as a plan, confirmed on /dev/tty and signed through the daemon's sidecarAct, never through MCP or a hook
+// (D-CORE-13, R-CTX-33). This file holds the agents part:
 //
 //	ur admin agents revoke <agent> [--compromise [--since=<since>]]
 //	ur admin agents suspend <agent>
@@ -13,7 +13,8 @@
 // Suspend the log covers needs the presence countersignature, which the daemon's prompt gives once §16's lands; until
 // then the act refuses rather than sign without it.
 //
-// cmd_admin_delegations.go adds `ur admin delegations`, and cmd_admin_versioning.go `ur admin versioning`.
+// cmd_admin_delegations.go adds `ur admin delegations`, and cmd_admin_versioning.go `ur admin versioning`; this file
+// registers the three config parts, and cmd_admin.go the command and its Team parts.
 
 package main
 
@@ -37,37 +38,27 @@ const (
 	urMethodAdminAgentAct  = "admin.agents.act"
 )
 
-func init() {
-	registerUrCommand(&urCommand{
-		name: "admin",
-		usage: strings.Join([]string{
-			"  ur admin agents (revoke|suspend|unsuspend) <agent> [--compromise] [--since=<since>]",
-			"  ur admin delegations [revoke <delegation_id>] [--leaked] [--since=<since>]",
-			"  ur admin versioning [--rules=<rules_json>]",
-		}, "\n"),
-		summary: "a network admin's acts on its config: agents, Delegations and versioning, confirmed on the terminal",
-		run:     runUrAdmin,
+// The config parts, which sign through the daemon's sidecarAct (cmd_admin.go registers the command).
+var (
+	_ = registerUrAdminPart(&urAdminPart{
+		word:  "agents",
+		usage: []string{"  ur admin agents (revoke|suspend|unsuspend) <agent> [--compromise] [--since=<since>]"},
+		run:   runUrAdminAgents,
 	})
+	_ = registerUrAdminPart(&urAdminPart{
+		word:  "delegations",
+		usage: []string{"  ur admin delegations [revoke <delegation_id>] [--leaked] [--since=<since>]"},
+		run:   runUrAdminDelegations,
+	})
+	_ = registerUrAdminPart(&urAdminPart{
+		word:  "versioning",
+		usage: []string{"  ur admin versioning [--rules=<rules_json>]"},
+		run:   runUrAdminVersioning,
+	})
+)
+
+func init() {
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urAdminAgentMethods)
-}
-
-// Runs the part of ur admin its first word names.
-func runUrAdmin(ctx context.Context, cli *urCli, options docopt.Opts) error {
-	switch {
-	case urOptionBool(options, "agents"):
-		return runUrAdminAgents(ctx, cli, options)
-	case urOptionBool(options, "delegations"):
-		return runUrAdminDelegations(ctx, cli, options)
-	case urOptionBool(options, "versioning"):
-		return runUrAdminVersioning(ctx, cli, options)
-	}
-	return errors.New("ur admin takes agents, delegations or versioning")
-}
-
-// A docopt flag or command word, false when absent.
-func urOptionBool(options docopt.Opts, key string) bool {
-	value, _ := options.Bool(key)
-	return value
 }
 
 // What the agents methods act on: a target hosting a Sidecar.

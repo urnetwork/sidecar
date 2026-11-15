@@ -5,8 +5,8 @@
 //
 //	discover   the issuer's metadata names its device_authorization_endpoint and token_endpoint, both on the issuer's
 //	           own origin, so the device code goes nowhere else (RFC 8628 §4)
-//	authorize  a new Ed25519 DPoP key and consent code; POST device_authorization with client_id ur-cli, scope
-//	           auth_keys, the api as resource, dpop_jkt and the command as RFC 9396 authorization_details with the
+//	authorize  a new Ed25519 DPoP key and consent code; POST device_authorization with client_id ur-cli, the
+//	           command's scope, the api as resource, dpop_jkt and the command as RFC 9396 authorization_details with the
 //	           consent code beside it. The terminal shows the verification url, the user code, and the consent code,
 //	           which the person matches on the consent page: consent stays code-matched, since an agent can drive a
 //	           browser (TEAM-M6-08's trap)
@@ -185,7 +185,7 @@ func urcliDeviceToken(ctx context.Context, env *urcliDeviceEnv, command *sidecar
 	authorization, err := func() (*urcliDeviceAuthorization, error) {
 		form := url.Values{}
 		form.Set("client_id", urcliClientId)
-		form.Set("scope", urcliScopeAuthKeys)
+		form.Set("scope", urcliCommandScope(command))
 		form.Set("resource", env.apiOrigin)
 		form.Set("dpop_jkt", dpopKey.Thumbprint)
 		form.Set("authorization_details", details)
