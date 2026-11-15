@@ -218,6 +218,8 @@ type DropSettings struct {
 	ReadBytesPerSecond int64
 	// At most this many DELETEs a second a job issues: 10.
 	DeletesPerSecond int
+	// Each DELETE is cancelled this long before the lease's until_ms by the job's clock: 50 ms (§11.13's clock row).
+	DeleteDeadlineMargin time.Duration
 	// A job pauses while the segment cluster's drive operations a second pass this share of its measured capacity,
 	// and while no capacity is known: 0.5 (§11.13's bound row; QD-056).
 	HddPauseShare float64
@@ -258,6 +260,7 @@ func DefaultDropSettings() *DropSettings {
 		TableCasRetryCount:      8,
 		ReadBytesPerSecond:      32 * 1000 * 1000,
 		DeletesPerSecond:        10,
+		DeleteDeadlineMargin:    50 * time.Millisecond,
 		HddPauseShare:           0.5,
 		PauseRetryInterval:      1 * time.Minute,
 		FileRowCount:            131072,
@@ -278,7 +281,8 @@ func (self *DropSettings) Validate() error {
 		return fmt.Errorf("%w: a cite bound of %s, under %s", ErrDropSettings, self.CiteBound, self.CiteBoundFloor)
 	case self.AdoptionBoundFloor <= 0 || self.AdoptionBound < self.AdoptionBoundFloor:
 		return fmt.Errorf("%w: an adoption bound of %s, under %s", ErrDropSettings, self.AdoptionBound, self.AdoptionBoundFloor)
-	case self.LeaseTime <= self.LeaseMargin || self.LeaseLapse <= 0 || self.LeaseMargin <= 0:
+	case self.LeaseTime <= self.LeaseMargin || self.LeaseLapse <= 0 || self.LeaseMargin <= 0 || self.DeleteDeadlineMargin <= 0 ||
+		self.LeaseMargin <= self.DeleteDeadlineMargin:
 		return fmt.Errorf("%w: a lease of %s with a margin of %s", ErrDropSettings, self.LeaseTime, self.LeaseMargin)
 	case self.CheckpointInterval <= 0 || self.HorizonRetryInterval <= 0 || self.HorizonRetryLag <= 0 || self.PauseRetryInterval <= 0:
 		return fmt.Errorf("%w: an interval that is not positive", ErrDropSettings)

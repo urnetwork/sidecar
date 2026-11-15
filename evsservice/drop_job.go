@@ -240,14 +240,22 @@ type DropDeleteRequest struct {
 	Horizon time.Time
 	// D, ascending in cand order, none before the cursor, none marked, none answered for good.
 	Candidates []*DropCandidate
-	// The lease's end now: no DELETE issues within LeaseMargin of it, and each is cancelled 50 ms before it.
-	LeaseUntil time.Time
+	// The lease's end now: no DELETE issues within LeaseMargin of it, and each is cancelled DeadlineMargin before it.
+	LeaseUntil     time.Time
+	LeaseMargin    time.Duration
+	DeadlineMargin time.Duration
+	// F7's: an id is young while its LastModified + AdoptionBound is past Horizon.
+	AdoptionBound time.Duration
+	// At most this many DELETEs a second.
+	DeletesPerSecond int
 	// Writes the cursor and what was freed and held since the last checkpoint, renewing the lease, at most once a
 	// CheckpointInterval: the new lease's end, or ErrDropLeaseLost, which stops the deletes.
 	Checkpoint func(ctx context.Context, progress *DropDeleteProgress) (time.Time, error)
 }
 
-// One checkpoint of the deletes: every candidate before Cursor is answered.
+// One checkpoint of the deletes: every candidate before Cursor is answered. FreedByteCount is the stored bytes deleted
+// since the last checkpoint that no earlier checkpoint counted as held, and HeldByteCount those moved to held, so a
+// held drop's freed and held bytes sum as its done twin's would (owner decision 184).
 type DropDeleteProgress struct {
 	Cursor         DropCursor
 	FreedByteCount uint64
@@ -1389,6 +1397,8 @@ func (self *dropJobRun) deletes(table *DropTableState) (*DropTableState, error) 
 	deleted, err := self.job.deps.Deleter.Delete(self.ctx, &DropDeleteRequest{
 		Cluster: self.cluster, SegmentCluster: self.segmentCluster, RepoId: self.repoId, NetworkId: self.networkId(),
 		JobId: self.jobId, Round: job.Round, Horizon: time.UnixMilli(job.HorizonMs), Candidates: set, LeaseUntil: self.leaseUntil,
+		LeaseMargin: settings.LeaseMargin, DeadlineMargin: settings.DeleteDeadlineMargin, AdoptionBound: settings.AdoptionBound,
+		DeletesPerSecond: settings.DeletesPerSecond,
 		Checkpoint: func(ctx context.Context, progress *DropDeleteProgress) (time.Time, error) {
 			_, err := self.write(func(state *DropTableState, job *DropJobRecord, now time.Time) error {
 				job.Cursor = progress.Cursor
