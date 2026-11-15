@@ -185,16 +185,13 @@ type EvsSettings struct {
 	// The body a one-part push or a seal may carry: its statement, a payload of at most 1 MiB and its receipts, or a
 	// seal's part places and its slot bodies of at most 1 MiB (QD-819), 2 MiB. Positive.
 	PushBodyMaxByteCount int64
-	// POST .../reseed (§11.13's re-seed row; QD-725). The body one call may carry, a re-seeded push's statement and
-	// payload or a slot, 2 MiB; the Signed EvsReseed a call may file and reseed/<repo>/<ref> may hold, 4 KiB; how
-	// long after its RepoDelete's entry a repo is still restorable and so takes its history back, §11.12's 7 d; and
-	// how many times a statement's write reads reseed/ again after another write came first, 4. All positive.
-	ReseedBodyMaxByteCount int64
-	// The body a call re-seeding a push in parts may carry, its statement and every part as sent (QD-818): the
-	// format's most, 1,024 parts of at most 1 MiB, and a part's room more for the statement and the framing, 1,025
-	// MiB. RequestBodyMaxByteCount, the lb's 16 MiB, caps it as it caps every body, so a push in parts past that is
-	// refused 400 until question evs-reseed-parts-request-bound is answered. Positive.
-	ReseedPartsBodyMaxByteCount int64
+	// POST .../reseed (§11.13's re-seed row; QD-725). The body one call may carry, a re-seeded push's statement with
+	// its payload of at most 1 MiB or one part of a push in parts of at most 1 MiB, a seal's part places, or a slot,
+	// 2 MiB, within RequestBodyMaxByteCount, since a push in parts goes one part a call (QD-836); the Signed EvsReseed a
+	// call may file and reseed/<repo>/<ref> may hold, 4 KiB; how long after its RepoDelete's entry a repo is still
+	// restorable and so takes its history back, §11.12's 7 d; and how many times a statement's write reads reseed/
+	// again after another write came first, 4. All positive.
+	ReseedBodyMaxByteCount      int64
 	ReseedStatementMaxByteCount int
 	ReseedRestoreWindow         time.Duration
 	ReseedStatementRetryCount   int
@@ -365,7 +362,6 @@ func DefaultEvsSettings() *EvsSettings {
 		PushAttemptTimeout:          25 * time.Second,
 		PushBodyMaxByteCount:        2 * 1024 * 1024,
 		ReseedBodyMaxByteCount:      2 * 1024 * 1024,
-		ReseedPartsBodyMaxByteCount: int64(sidecar.EvsMaxPartCount+1) * int64(sidecar.DefaultEvsFormatSettings().PartMaxByteCount),
 		ReseedStatementMaxByteCount: sidecar.DefaultEvsFormatSettings().ReseedStatementMaxByteCount,
 		ReseedRestoreWindow:         7 * 24 * time.Hour,
 		ReseedStatementRetryCount:   4,
@@ -500,9 +496,9 @@ func (self *EvsSettings) Validate() error {
 		self.PushAttemptTimeout <= 0 || self.PushBodyMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's retry counts, reread count, refusal fence interval, attempt timeout and body bound must be positive", ErrEvsSettings)
 	}
-	if self.ReseedBodyMaxByteCount <= 0 || self.ReseedPartsBodyMaxByteCount <= 0 || self.ReseedStatementMaxByteCount <= 0 ||
+	if self.ReseedBodyMaxByteCount <= 0 || self.ReseedStatementMaxByteCount <= 0 ||
 		self.ReseedRestoreWindow <= 0 || self.ReseedStatementRetryCount <= 0 {
-		return fmt.Errorf("%w: a re-seed's body bounds, statement bound, restore window and retry count must be positive", ErrEvsSettings)
+		return fmt.Errorf("%w: a re-seed's body bound, statement bound, restore window and retry count must be positive", ErrEvsSettings)
 	}
 	if self.LeaseMaxDuration <= 0 || evsLeaseMaxDuration < self.LeaseMaxDuration {
 		return fmt.Errorf("%w: a lease bound %s, outside (0, %s]", ErrEvsSettings, self.LeaseMaxDuration, evsLeaseMaxDuration)

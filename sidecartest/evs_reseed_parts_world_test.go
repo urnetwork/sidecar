@@ -1,9 +1,10 @@
-// A push in parts re-seeded end to end (QD-818; EVSB-M2-20, §11.13's re-seed row, FS-41's storage clauses on T2): the
-// epoch world's writer pushes 1,100 files in one push, which goes in parts, between two one-part pushes; a mirror
-// holds the push's seal and each part's record; the site is lost; and the repo admin's sidecar.EvsRepo.Reseed sends
-// the push back whole in one reseed call. The ref returns under its own chain, the push in parts as a seal naming a
-// reseed record per part; a fresh reader reads and lists what it wrote; an export of the re-seeded ref verifies every
-// version; and a mirror synced from the new site holds it and checks clean.
+// A push in parts re-seeded end to end (QD-818, QD-836; EVSB-M2-20, §11.13's re-seed row, FS-41's storage clauses on
+// T2): the epoch world's writer pushes 1,100 files in one push, which goes in parts, between two one-part pushes; a
+// mirror holds the push's seal and each part's record; the site is lost; and the repo admin's sidecar.EvsRepo.Reseed
+// sends the push back a part a call, then its seal naming the places those calls answered. The ref returns under its
+// own chain, the push in parts as a seal naming a reseed record per part; a fresh reader reads and lists what it wrote;
+// an export of the re-seeded ref verifies every version; and a mirror synced from the new site holds it and checks
+// clean.
 
 package sidecartest
 

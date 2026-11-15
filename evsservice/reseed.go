@@ -1,15 +1,24 @@
-// POST /evs/v1/repos/<id>/reseed (§11.13's re-seed row, §19.10's repos step, D-EVS-17; EVSB-M2-20; the owner's answer
-// QD-725): after a site loss, while sidecar.yml's reseed is on, a repo admin's device sends back what its mirror
-// holds, one EvsReseedRequest a call, never re-signed:
+// POST /evs/v1/repos/<id>/reseed (§11.13's re-seed row, §19.10's repos step, D-EVS-17; EVSB-M2-20; the owner's answers
+// QD-725 and QD-836): after a site loss, while sidecar.yml's reseed is on, a repo admin's device sends back what its
+// mirror holds, one EvsReseedRequest a call, never re-signed:
 //
 //	push       {statement, payload}: one re-seeded Signed EvsPush. evs runs the push route's steps 4 to 8 in a reseed
 //	           mode (push.go's attempt with reseed set), and its record is an EVS_BATCH_RESEED record
-//	parts      {statement, parts}: a re-seeded push in parts, every part as the mirror holds it, in part order
-//	           (QD-818). The same mode runs the push route's seal over them (push_seal.go's round with the parts as
-//	           carried, so the seal's checks, with no slot body (EvsCheckRecordSeal; QD-819), and 5g for every part are
-//	           the push route's own), and step 6 writes an EVS_BATCH_RESEED record per part, holding a part record's
-//	           body with no receipts, then the EVS_BATCH_SEAL record naming their places, which the window entry names
-//	           as a pushed seal's
+//	part       {statement, part_number, parts holding the one part}: one part of a re-seeded push in parts as the
+//	           mirror holds it, sent as the push route's sender posts one (QD-836). evs checks it against the
+//	           statement (its push id and its number under part_count, which part_number repeats, its changes_root
+//	           over its own changes, no slot body; sidecar.EvsCheckPart, as the part route does) and the statement's
+//	           signature at its own auth pin, then runs 5a on the cluster's head: a push that stands committed is
+//	           answered its version, and nothing is written. Otherwise its EVS_BATCH_RESEED record, a part record's
+//	           body with no receipts and the version of the head it read (QD-818), joins the open batch, paid at P1 as
+//	           a posted part's record is, and its place is answered. Nothing reaches the ref
+//	seal       {statement, part_places}: the push's seal, naming each part's record as its part call answered it, in
+//	           part order. The same mode runs the push route's seal over the records at those places (push_seal.go's
+//	           round, which takes EVS_BATCH_RESEED records alone, so the seal's checks with no slot body
+//	           (EvsCheckRecordSeal; QD-819) and 5g for every part are the push route's own): a place that holds no
+//	           part of this statement answers 409 PARTS_MISSING, and parts that are not the statement's push 400, each
+//	           committing nothing. Step 6 writes the EVS_BATCH_SEAL record naming their places, which the window entry
+//	           names as a pushed seal's, and step 7 commits
 //	slot       {statement, slot_id, slot}: one slot object, taken only once the statement's push stands committed in
 //	           its ref's history as a re-seeded version that names the slot, stripped of every key an ERASE evs holds
 //	           covers, and written If-None-Match with origin 1.r (DESIGN-DETAILS 14.2.6); a slot left with no key is
@@ -52,11 +61,15 @@
 // anything is taken, and then takes its history and slots while deleted, and its admin's segments at PUT .../segments
 // (reseedAdmitsDeleted).
 //
-// A push in parts goes in one call, as QD-725's message has it, so the lb's 16 MiB body bound (RequestBodyMaxByteCount)
-// caps the push in parts a re-seed returns, below the format's 1,024 parts of 1 MiB: past it the call is refused 400,
-// refusing nothing, and the device stops that ref (question evs-reseed-parts-request-bound). A re-seeded part carries
-// no slot body, as no part does (QD-819): one that holds one is INVALID, so no reseed record keeps a key an ERASE may
-// have destroyed, and the push's slots return by their own calls, stripped.
+// A push in parts goes one part a call and then its seal, never whole (QD-836; question
+// evs-reseed-parts-request-bound): every call carries at most one part of at most 1 MiB, so each is held to
+// ReseedBodyMaxByteCount, within the lb's 16 MiB (RequestBodyMaxByteCount), and evs holds one part a call, whatever
+// the push's 1,024 parts hold. A call carrying a push in parts whole, or more than one part, is INVALID. The parts'
+// records are written before the seal is checked, as posted parts are: a part call retried after an answer it lost
+// writes a second record and the seal names one, and parts a seal never names, a seal that never came's or a retry's
+// copy, are dead weight that evacuation drops once their push is dead (resolve.go), as it drops a posted part no seal
+// names. A re-seeded part carries no slot body, as no part does (QD-819): one that holds one is INVALID, so no reseed
+// record keeps a key an ERASE may have destroyed, and the push's slots return by their own calls, stripped.
 //
 // Not built here, each refused before anything is written: a push carrying format 2 (EVS2-M10-13), and a statement at
 // an auth pin evs's state does not retain. A reading waits on its question: a slot call names its version by the
@@ -72,8 +85,6 @@ import (
 	"net/http"
 	"slices"
 	"time"
-
-	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -114,10 +125,11 @@ type reseedAttempt struct {
 	// no entry.
 	segments     map[[32]byte]int64
 	segmentsRead bool
-	// A push in parts (QD-818): each part as the request carried it, in part order, and once step 6 has written them
-	// their EVS_BATCH_RESEED records' places, which the seal's record then names. Both nil for a one-part push.
-	parts      [][]byte
-	partPlaces []*protocol.EvsPlace
+}
+
+// Whether a call is a part call or a seal call of a push in parts, by the fields only those carry (QD-836).
+func reseedCallForm(body *protocol.EvsReseedRequest) (partCall bool, sealCall bool) {
+	return body.GetPartNumber() != 0 || len(body.GetParts()) != 0, len(body.GetPartPlaces()) != 0
 }
 
 // See the file header.
@@ -130,29 +142,25 @@ func (self *EvsEngine) serveReseed(request *EvsRequest) {
 		return
 	}
 	body := &protocol.EvsReseedRequest{}
-	// a push in parts goes whole in one call (QD-818), so the body is read to the larger bound, and a call that
-	// carries no part is then held to its own
-	if !request.ReadMessage(body, max(self.settings.ReseedBodyMaxByteCount, self.settings.ReseedPartsBodyMaxByteCount)) {
-		return
-	}
-	if len(body.GetParts()) == 0 && self.settings.ReseedBodyMaxByteCount < int64(proto.Size(body)) {
-		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	// every call carries at most one part (QD-836), so every call is held to the route's one bound
+	if !request.ReadMessage(body, self.settings.ReseedBodyMaxByteCount) {
 		return
 	}
 	deletion, ok := self.reseedRepo(request)
 	if !ok {
 		return
 	}
+	partCall, sealCall := reseedCallForm(body)
 	switch {
 	case len(body.GetSlotId()) != 0 || len(body.GetSlot()) != 0:
-		if len(body.GetPayload()) != 0 || len(body.GetParts()) != 0 {
+		if len(body.GetPayload()) != 0 || partCall || sealCall {
 			request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a slot and a push in one call").Reply(sidecar.Id{}))
 			return
 		}
 		request.Note("slot")
 		self.serveReseedSlot(request, body)
 	case sidecar.EvsSignedIsReseed(body.GetStatement()):
-		if len(body.GetPayload()) != 0 || len(body.GetParts()) != 0 {
+		if len(body.GetPayload()) != 0 || partCall || sealCall {
 			request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "an EvsReseed with a payload").Reply(sidecar.Id{}))
 			return
 		}
@@ -161,6 +169,10 @@ func (self *EvsEngine) serveReseed(request *EvsRequest) {
 	default:
 		attempt, ok := self.newReseedAttempt(request, body, deletion)
 		if !ok {
+			return
+		}
+		if attempt.part != nil {
+			attempt.answer(attempt.runReseedPart())
 			return
 		}
 		outcome := attempt.run()
@@ -250,8 +262,8 @@ func (self *EvsEngine) reseedAdmitsDeleted(request *EvsRequest, facts *EvsRepoFa
 	return deletion != nil && restorable && evsRepoNamesDeletion(object, deletion.DeletionId)
 }
 
-// The attempt for a re-seeded push, or false once the request has been answered. A statement or payload that does
-// not parse or verify refuses nothing.
+// The attempt for a re-seeded push, one part of a push in parts, or its seal, or false once the request has been
+// answered. A statement, payload or part that does not parse or verify refuses nothing.
 func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsReseedRequest, deletion *EvsRepoDeletionFacts) (*pushAttempt, bool) {
 	ctx, cancel := self.newAttemptContext(request)
 	attempt := &pushAttempt{
@@ -290,21 +302,54 @@ func (self *EvsEngine) newReseedAttempt(request *EvsRequest, body *protocol.EvsR
 	attempt.refId = sidecar.Id(push.GetRefId())
 	request.NoteRefIds(attempt.refId)
 	partCount := push.GetPartCount()
+	partCall, sealCall := reseedCallForm(body)
+	invalid := func(detail string) {
+		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, detail).Reply(attempt.pushId))
+	}
 	switch {
-	case partCount == 0 && 0 < len(body.GetParts()):
-		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "parts for a one-part push").Reply(attempt.pushId))
+	case partCall && sealCall:
+		invalid("a part and a seal in one call")
 		return nil, false
-	case 0 < partCount && (uint32(len(body.GetParts())) != partCount || len(body.GetPayload()) != 0):
-		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a push in parts whose call carries other than one part per part").Reply(attempt.pushId))
+	case partCount == 0 && (partCall || sealCall):
+		invalid("a part or a seal of a one-part push")
+		return nil, false
+	case partCall && (len(body.GetParts()) != 1 || body.GetPartNumber() == 0 || partCount < body.GetPartNumber() || len(body.GetPayload()) != 0):
+		invalid("a part call carrying other than one numbered part of its push")
+		return nil, false
+	case sealCall && (uint32(len(body.GetPartPlaces())) != partCount || len(body.GetPayload()) != 0):
+		invalid("a seal whose places are not one per part")
+		return nil, false
+	case 0 < partCount && !partCall && !sealCall:
+		// a push in parts goes one part a call, then its seal (QD-836)
+		invalid("a push in parts sent whole")
 		return nil, false
 	}
-	if 0 < partCount {
-		// a push in parts (QD-818): the push route's seal runs over the parts as carried (push_seal.go), which reads no
-		// place, and step 6 writes their records before the seal's
-		request.Note("parts")
-		attempt.reseed.parts = body.GetParts()
-		attempt.seal = &sealReads{places: make([]*protocol.EvsPlace, partCount)}
-	} else {
+	switch {
+	case partCall:
+		// one part, checked against its statement as the part route checks one (QD-836); its record is written by
+		// runReseedPart, and the seal reads it at the place that answers
+		part := body.GetParts()[0]
+		checked, err := sidecar.EvsCheckPart(statement, part)
+		if err != nil {
+			refusal := EvsCheckRefusalOfCodec(err)
+			if refusal.Reason == EvsCheckReasonFormatUnsupported {
+				refusal = newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's re-seed rules are EVS2-M10-13's")
+			}
+			request.Refuse(refusal.Reply(attempt.pushId))
+			return nil, false
+		}
+		if checked.Part != body.GetPartNumber() {
+			invalid("a part numbered unlike its call")
+			return nil, false
+		}
+		request.Note("part")
+		attempt.part = &partReads{number: checked.Part, bytes: part, checked: checked}
+	case sealCall:
+		// the push route's seal over the records at the places its part calls answered (push_seal.go), taking
+		// EVS_BATCH_RESEED records alone
+		request.Note("seal")
+		attempt.seal = &sealReads{places: body.GetPartPlaces()}
+	default:
 		// the payload as the mirror holds the push's record, which evs served with no slot body (QD-806); slots come
 		// last, by their own calls
 		payload, err := sidecar.EvsCheckRecordPayload(statement, body.GetPayload())
@@ -550,10 +595,10 @@ func (self *pushAttempt) readReseedSegments() *EvsCheckRefusal {
 	return nil
 }
 
-// The EVS_BATCH_RESEED record of part index of a re-seeded push in parts (QD-818): a part record's body, the
-// statement, the part as the request carried it, no receipts, since a re-seed takes its segments from seg/, and
-// checkedVersion, the head version the attempt checked it at.
-func (self *pushAttempt) reseedPartRecord(index int, checkedVersion uint64) *sidecar.EvsBatchRecord {
+// The EVS_BATCH_RESEED record of a part call's part (QD-818, QD-836): a part record's body, the statement, the part as
+// the call carried it, no receipts, since a re-seed takes its segments from seg/, and checkedVersion, the version of
+// the head the call read.
+func (self *pushAttempt) reseedPartRecord(checkedVersion uint64) *sidecar.EvsBatchRecord {
 	push := self.statement.Push
 	return &sidecar.EvsBatchRecord{
 		Type:            protocol.EvsBatchRecordType_EVS_BATCH_RESEED,
@@ -562,54 +607,41 @@ func (self *pushAttempt) reseedPartRecord(index int, checkedVersion uint64) *sid
 		PushId:          self.pushId,
 		SignerSidecarId: sidecar.Id(push.GetSignerSidecarId()),
 		TimeMs:          push.GetTimeMs(),
-		Body:            sidecar.EvsPartRecordBody(self.statement.Bytes, self.reseed.parts[index], nil, checkedVersion),
+		Body:            sidecar.EvsPartRecordBody(self.statement.Bytes, self.part.bytes, nil, checkedVersion),
 	}
 }
 
-// Step 6 of a re-seeded push in parts, before its seal's record (QD-818): each part's EVS_BATCH_RESEED record in part
-// order, checked at the head this attempt's step 5 passed on, written once an attempt, and the seal's record body
-// built again to name their places. Nothing for any other push. A part that does not go answers 503, refusing
-// nothing: the parts already written are records no seal names, which evacuation drops as it drops a posted part no
-// seal names (resolve.go), and the device sends the push again.
-func (self *pushAttempt) appendReseedParts() *pushOutcome {
-	reseed := self.reseed
-	if reseed == nil || reseed.parts == nil || reseed.partPlaces != nil {
-		return nil
-	}
-	places := make([]*protocol.EvsPlace, len(reseed.parts))
-	barrierKey := barrierRefKey(self.repoId, self.refId)
-	for i := range reseed.parts {
-		testHookBarrier(BarrierReseedPartAppendBefore, barrierKey)
-		place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), self.reseedPartRecord(i, self.head.Version()), nil)
-		testHookBarrier(BarrierReseedPartAppendAfter, barrierKey)
-		if err != nil {
-			return self.unavailable()
+// A part call once its statement and part have checked (QD-836): 5a on the cluster's head, then the part's
+// EVS_BATCH_RESEED record, paid at P1 in the token network's queue as a posted part's record is (push_part.go's
+// admitPart), and 200 {place}. A part of a push that stands committed answers 200 {version}, writing nothing, so a
+// walk that sends a version evs holds again costs no record. Nothing reaches the head: a part issues no step 7, so the
+// fence row ends none, and only its seal commits. A record whose append does not answer is a record no seal names
+// yet, and the device's retry writes another; the seal names one.
+func (self *pushAttempt) runReseedPart() *pushOutcome {
+	defer self.cancel()
+	defer func() {
+		if self.grant != nil {
+			self.grant.Close()
 		}
-		places[i] = place
+	}()
+	head, err := self.engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, self.refId)
+	if err != nil {
+		return self.unavailableOn(err)
 	}
-	for i, part := range self.seal.parts {
-		part.Place = places[i]
+	if outcome := self.settle(head); outcome != nil {
+		return outcome
 	}
-	self.seal.places = places
-	self.seal.body = sidecar.EvsSealRecordBody(self.statement.Bytes, self.seal.parts)
-	reseed.partPlaces = places
-	return nil
-}
-
-// The writes of a re-seeded push in parts' part records, priced with the push as a posted part prices its own
-// (push_part.go): each a create now, and its evacuation, a delete and a create, deferred. Nothing for any other push.
-func (self *pushAttempt) addReseedPartOperations(operations *PushOperations) {
-	if self.reseed == nil {
-		return
+	if outcome := self.admitPart(); outcome != nil {
+		return outcome
 	}
-	for i := range self.reseed.parts {
-		recordByteCount := int64(sidecar.EvsBatchRecordHeaderByteCount + len(self.reseedPartRecord(i, 0).Body))
-		operations.Immediate = append(operations.Immediate, WriteOperation{Kind: WriteOperationCreate, ObjectByteCount: recordByteCount, Count: 1})
-		operations.Deferred = append(operations.Deferred,
-			WriteOperation{Kind: WriteOperationDelete, Count: 1},
-			WriteOperation{Kind: WriteOperationCreate, ObjectByteCount: recordByteCount, Count: 1},
-		)
+	barrierKey := barrierRefKey(self.repoId, self.refId)
+	testHookBarrier(BarrierReseedPartAppendBefore, barrierKey)
+	place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), self.reseedPartRecord(head.Version()), nil)
+	testHookBarrier(BarrierReseedPartAppendAfter, barrierKey)
+	if err != nil {
+		return self.unavailable()
 	}
+	return &pushOutcome{committed: true, partPlace: place}
 }
 
 // 5h in the reseed mode: check_objects.go's segment and slot rules with seg/ in the receipts' place. Each new segment

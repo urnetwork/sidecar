@@ -251,8 +251,9 @@ const (
 	// <repo>:<ref>, after the route read the head the statement names.
 	BarrierReseedStatementPutBefore = "evs.reseed.statement_put.before"
 	BarrierReseedStatementPutAfter  = "evs.reseed.statement_put.after"
-	// Around each part's EVS_BATCH_RESEED record of a re-seeded push in parts (QD-818), keyed by <repo>:<ref>, at step
-	// 6 before its seal's record: an attempt held here has written some of its parts and no seal names them.
+	// Around a part call's EVS_BATCH_RESEED record of a re-seeded push in parts (QD-818, QD-836), keyed by <repo>:<ref>,
+	// after its 5a read of the head: a call held here writes a record no seal names yet, and a seal of the push that
+	// commits meanwhile leaves it for evacuation.
 	BarrierReseedPartAppendBefore = "evs.reseed.part_append.before"
 	BarrierReseedPartAppendAfter  = "evs.reseed.part_append.after"
 )
