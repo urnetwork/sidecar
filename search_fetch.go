@@ -9,7 +9,7 @@
 //	all set     where it is kept or "search more" asks for it: all's shards, youngest (highest n) first
 //
 // Each file: SearchCache.PutRecord, which keeps it only once its plaintext's SHA-256 is its entry version's
-// content_sha256; then indexValidateFile over the kept copy; then staged in the plan with its two times, the window or
+// content_sha256, with its wrapped object key and file id beside it (QD-838); then indexValidateFile over the kept copy; then staged in the plan with its two times, the window or
 // coverage its header names, a small file's plaintext, and the version-table run built from it while its keys are at
 // hand. A file that fails either check is listed bad at that version, its copy dropped, and raises index_malformed
 // {repo, ref, path, signer}; a file in a newer format is listed newer and raises nothing. A read answering collected
