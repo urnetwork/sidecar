@@ -20,7 +20,9 @@ path prefixes (234), format 1 reading past index_epoch (235), and git and evs bo
 bytes, history blobs, a push's sources, changeless parts, conflict branches, one import statement per push, an
 import's helper refs, overlay directories and tag refs), and the owner items of 2026-11-06 for §11 in 245-250: the
 tainted bit from M3, retention without the reclaim, compaction Later, the 2 GiB file cap, SHA-1 repos and working-tree
-sync and derived shares Later."""
+sync and derived shares Later. Adds owner decision 251 (2026-11-15): the operator-core seam, whose Env server/core
+implements for the engines, amending 19, with operator-core in the branch policy's starts and merge order and in the
+scope."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -231,6 +233,10 @@ INDEX = list(_P9['INDEX']) + [
      "repository, naming it, before any evs write."),
     (250, "§11.22",
      "Working-tree sync and derived shares leave v1 for Later; git users update a working tree with stock git."),
+    (251, "Q-REPO-1",
+     "operator-core holds the core services' interfaces and server's shared value types; its Env creates every "
+     "service instance an engine holds, server/core implements it, sidecar owns its SQL, and sidecar.Id aliases "
+     "operator.Id on every leg."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -244,11 +250,15 @@ for _n, _old_end, _note in [
          "with its own forwarding key, and nothing else of sidecar."),
         (12, "no hosted or TEE receiver.",
          " Amended by @@OD:197@@: Android with the VPN on is no receiver; the Android app, like the iOS app, receives "
-         "only while open.")]:
+         "only while open."),
+        # Owner decision 251 amends 19's: the host interfaces move to operator-core, and sidecar owns its SQL.
+        (19, "owns migrations and routes, and hosts each engine.",
+         " Amended by @@OD:251@@: the interfaces are operator-core's, rooted at its Env, which server/core implements; "
+         "sidecar owns its SQL and migrations, which server/core runs.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 251))
+assert [r[0] for r in INDEX] == list(range(1, 252))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -263,7 +273,7 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               233: '2026-11-10', 234: '2026-11-10', 235: '2026-11-10', 236: '2026-11-10', 237: '2026-11-10',
               238: '2026-11-10', 239: '2026-11-10', 240: '2026-11-10', 241: '2026-11-10', 242: '2026-11-10',
               243: '2026-11-10', 244: '2026-11-10', 245: '2026-11-06', 246: '2026-11-06', 247: '2026-11-06',
-              248: '2026-11-06', 249: '2026-11-06', 250: '2026-11-06'})
+              248: '2026-11-06', 249: '2026-11-06', 250: '2026-11-06', 251: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -308,6 +318,19 @@ BRANCH = BRANCH.replace(_BS_OLD, _BS_NEW)
 _SC_OLD = "through sn, warp, config, vault, build, xops and mmm."
 assert SCOPE.count(_SC_OLD) == 1, 'scope text moved'
 SCOPE = SCOPE.replace(_SC_OLD, "through sn, warp, config, vault, build, xops, mmm and the `urnetwork/minio` fork.")
+
+# Owner decision 251 (2026-11-15): operator-core, a repo of its own between connect and sidecar, holds the core
+# services' interfaces, so the branch policy names its branch and merge place and the scope covers it (§4.4, §4.8).
+for _a, _b in [("and vault, and the `urnetwork/minio` fork (@@OD:195@@).",
+                "and vault, and the `urnetwork/minio` fork (@@OD:195@@); operator-core's opened later, with its seam "
+                "(@@OD:251@@)."),
+               ("in the order connect, sidecar, sdk, sn, server,", "in the order connect, operator-core, sidecar, sdk, sn, server,")]:
+    assert BRANCH.count(_a) == 1, _a
+    BRANCH = BRANCH.replace(_a, _b)
+_SC251 = "`sdk/sidecar.go`; the changes these need"
+assert SCOPE.count(_SC251) == 1, 'scope text moved'
+SCOPE = SCOPE.replace(_SC251, "`sdk/sidecar.go`; operator-core, the module of core-service interfaces and shared value types "
+                      "that server and sidecar import (@@OD:251@@); the changes these need")
 
 # Id families after the final meta review: filled in from the reconciler's IDS.md before the build.
 _ID_FIX = [("FI-1 to FI-27 (", "FI-1 to FI-30 ("), ("FS-1 to FS-98 (", "FS-1 to FS-125 ("),
@@ -375,7 +398,9 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "(239), conflict branches (240), one import statement per push (241), an import's helper refs (242), overlay "
     "directories (243), tag refs (244), the tainted bit from M3 (245), retention without the reclaim (246), "
     "compaction Later (247), the 2 GiB file cap (248), SHA-1 repos (249) and working-tree sync and derived shares "
-    "Later (250). ")
+    "Later (250). On 2026-11-15 the owner put the core services' interfaces and server's shared value types in a new "
+    "operator-core module, whose `Env` creates every service instance a hosted engine holds and server/core "
+    "implements, with sidecar owning its SQL (251), amending @@OD:19@@. ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

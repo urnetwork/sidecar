@@ -927,14 +927,16 @@ Claude Code cloud adds secrets at its proxy (https://code.claude.com/docs/en/clo
 kept        the every-leg types and SidecarApi; the forwarding client's DPoP refresh (§7.4); the authorization
             log's follower and config verification (§7.9); DelegationWrap unwrap, X-Wing and the key ladder
             (§10.5); evs head reads of the config repo (§11); AclEngine (§8); §17.8's statements and compiler;
-            forwarding's signer; protocol's config, acl, evs and gkm descriptors; sidecar/device; protocol/bridge
+            forwarding's signer; protocol's config, acl, evs and gkm descriptors; sidecar/device; protocol/bridge;
+            operator-core, whose Id the root's aliases (owner decision 251)
 excluded    every other root file, under !ios_extension as connect-facing ones carry !sidecar_http: mls_,
             mail_, smtp_, tls_, dns_, socket_, search_, record_, directory_, indexer_ and the subprotocol but
             push hints; evs writes and every repo but config; approvals, enrollment and recovery; mcp/, cli/
             and every <svc>service
 make size   from M4 the leg adds at most 6 MiB (6,291,456 B) of executable over today's binding, measured
             stripped as the shipped binding is, and the signed iOS extension's ceiling rises from 50 MiB to
-            54 MiB (56,623,104 B) (owner decision 215)
+            54 MiB (56,623,104 B) (owner decision 215); re-measured once operator-core's seam lands, and the
+            owner revisits the budget with that measurement (owner decision 251)
 memory      forwarding's Go heap at most 4 MiB steady, inside the iOS tunnel's 28 MiB target and 32 MiB soft
             limit (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md); a compile is transient, and in the iOS and
             macOS extensions it is admitted only when 5 x rows + 2 x head + 1 MiB fits a 10 MiB per-compile
@@ -947,7 +949,7 @@ memory      forwarding's Go heap at most 4 MiB steady, inside the iOS tunnel's 2
 - **Pruning.** No `net/rpc`, templates or dynamic reflect lookups (sdk/build/mobile_method_pruning_test.go:27); the worker needs protobuf v1.36.12, the first that keeps pruning (sdk/build/go.mod:98; sdk/js/go.mod:97 has v1.36.11), and sidecar generates with v1.36.11 (§6).
 - **Tags.** sdk's sidecar-role files carry `!ios_extension`, and §5.10's Keychain tag keeps gomobile's darwin slices (sdk/dependency_boundary_test.go:91) on the app's `SidecarKeyStore`.
 - **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above (owner decision 215; D-SDK-20); memory is measured on surrogates only (owner decision 100).
-- **wasm (D-SDK-19).** A connect-only js/wasm main is already 55.0 MB unstripped (53.2 MB stripped; 2026-11-03), since Go links every imported package's `init` functions and initialized variables, connect's IP stack included (42 gVisor packages, §4.6). The page Worker's `sidecar.wasm` therefore links no connect package; the Q-SDK-1 spike before M4's entry decides C17 for the extension only (owner decision 22):
+- **wasm (D-SDK-19).** A connect-only js/wasm main is already 55.0 MB unstripped (53.2 MB stripped; 2026-11-03), since Go links every imported package's `init` functions and initialized variables, connect's IP stack included (42 gVisor packages, §4.6). The page Worker's `sidecar.wasm` therefore leaves out the root's connect-facing files, but since the root's `Id` aliases operator-core's, which imports connect, it links connect's IP stack through that `Id`, so the leg is re-measured once the seam lands and the owner revisits the goal and the miss rule's gate below with that measurement (owner decision 251); the Q-SDK-1 spike before M4's entry decides C17 for the extension only (owner decision 22):
 
 ```text
 leg         js/wasm, -tags sidecar_http, main sdk/js/cmd/sidecarwasm, importing only the sidecar root and
@@ -958,18 +960,21 @@ excluded    the root's connect-dependent files (client generations and SidecarEn
             streams, remote search's search_remote_*.go, sockets dial and listen, bridge, tls and smtp
             listeners) and the engine host
             interfaces (host_*.go), since no server engine (§4.4) runs in the page Worker, each //go:build
-            !sidecar_http; only they name a connect type, connect.Id included, or the root's Subprotocol
+            !sidecar_http; only they import connect or name a connect type, connect.Id included, or the
+            root's Subprotocol
 kept        identity, keychain, config verification and ACL evaluation, mls_ and the key ladder, evs head
             reads and writes over HTTPS, records and approval views, search (x/text normalization, about 0.6
             MB unstripped; no zstd), the long-poll, and the token path over SidecarApi: POST /sidecar/bind,
             GET /auth/refresh with a DPoP proof that crypto/ed25519 signs by the ClientKey (§7.4), and the
             token exchange for evs and gkm (§7.8)
-types       §5.4's every-leg types: the root's Id ([16]byte), Logger, MonitorValue and CallbackList, and
-            the net/http SidecarApi (bearer plus DPoP signer), so its events, actions, binding and Sign
-            link here; connect-facing files convert at that boundary
-make check  from M1: this leg's go list -deps holds no github.com/urnetwork/connect package and no gVisor
-gate        41,943,040 B unstripped (owner decision 22's goal), measured from M2; estimated 13-21 MB (Go's
-            js runtime, net/http's fetch transport, protobuf, crypto/hpke, mls_, search)
+types       §5.4's every-leg types: the root's Id (operator-core's, owner decision 251), Logger,
+            MonitorValue and CallbackList, and the net/http SidecarApi (bearer plus DPoP signer), so its
+            events, actions, binding and Sign link here; connect-facing files convert at that boundary
+make check  from M1: no root file of this leg imports a github.com/urnetwork/connect package; its go list
+            -deps holds connect and gVisor only through operator-core's Id (owner decision 251)
+gate        41,943,040 B unstripped (owner decision 22's goal), measured from M2; estimated at 13-21 MB (Go's
+            js runtime, net/http's fetch transport, protobuf, crypto/hpke, mls_, search) before
+            owner decision 251 brought in connect's IP stack, which the seam's measurement replaces
 threads     js/wasm runs one thread: MLS and X-Wing are pure Go in the Worker, and an operation over 50 ms
             yields between steps, so a long-poll's fetch and page requests interleave
 C17         no longer gates the page Worker; it stays for the extension's streaming Worker (C4, Later)
@@ -1035,9 +1040,9 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-18 (proposed).** Browser keys, tokens and the Worker live in a key origin that ur.io pages frame and message by exact origin, one Worker per network under a Web Lock. *Why:* one shared origin would let any ur.io XSS take the key, and two tabs' Workers over one IndexedDB would race refreshes, commits and keychain writes.
 
-**D-SDK-19 (proposed).** The page Worker builds the root with `-tags sidecar_http`, linking no connect package: connect-facing and engine host (`host_*.go`) files are `!sidecar_http`, and the rest, token path included, use only §5.4's root types and `SidecarApi`. *Why:* importing connect links its IP stack, putting the 40 MB goal out of reach without C17.
+**D-SDK-19 (proposed).** The page Worker builds the root with `-tags sidecar_http`: connect-facing and engine host (`host_*.go`) files are `!sidecar_http`, and the rest, token path included, use only §5.4's root types and `SidecarApi`. Since the root's `Id` aliases operator-core's, which imports connect, the leg links connect and gVisor through it, and 18.10's goal and miss rule are re-measured once the seam lands and revisited by the owner (owner decision 251). *Why:* the page Worker runs no connect client, and connect's IP stack puts the 40 MB goal out of reach without C17; owner decision 251 took one `Id` on every leg, the goal to be revisited with the seam's measurements.
 
-**D-SDK-20 (proposed).** The forwarding role is `sidecar/device`, importing connect and `sidecar/protocol/bridge` only, with the root's forwarding files, the only root files the `ios_extension` leg links, whose file and descriptor lists `make check` holds (18.10). *Why:* owner decision 197 puts the config follower and compiler in the VPN component, and only an allow-list keeps every other root init and descriptor out of the jetsam-bound tunnel.
+**D-SDK-20 (proposed).** The forwarding role is `sidecar/device`, importing connect and `sidecar/protocol/bridge` only, with the root's forwarding files, the only root files the `ios_extension` leg links, whose file and descriptor lists `make check` holds (18.10); through the root's `Id` the leg also links operator-core, re-measured against owner decision 215's budget once the seam lands (owner decision 251). *Why:* owner decision 197 puts the config follower and compiler in the VPN component, and only an allow-list keeps every other root init and descriptor out of the jetsam-bound tunnel.
 
 **D-SDK-21 (proposed).** Every host that searches a repo keeps its two latest buckets synced, phones' team directory aside (D-SDK-28). Desktops and indexers keep all in the background; phones fetch it at "search more" for repos no designated indexer answers and browser tabs at "search more", both also on Wi-Fi while charging, phones in OS windows, and tabs while open only where their browser reports both conditions; ephemeral agents fetch it only at "search more"; each device may override per repo, within 18.4's caps. A condition an app or browser has not reported counts as metered and not charging. *Why:* owner decisions 154, 177 and 178; 154's per-device override covers browsers, since Safari and Firefox report neither condition and desktop browsers no network type, and ephemeral agents, whose in-memory caches would re-download all at every start; only OS windows let a backgrounded phone download tens to hundreds of MB.
 

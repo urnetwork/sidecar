@@ -10,7 +10,7 @@ This section owns X15: milestones M0-M10 on two tracks, staffing, exit criteria,
 |---|---|---|
 | R-PHASE-1 | Design peer review precedes implementation | CONVENTIONS.md preamble |
 | R-PHASE-2 | Work stays on `sidecar` branches; `main` stays production-ready | owner rule 4; build/README.md:5 |
-| R-PHASE-3 | Services land vertically, sidecar to server; sidecar imports only connect | PLAN.md:7, :36 |
+| R-PHASE-3 | Services land vertically, sidecar to server; of first-party modules sidecar imports only connect and operator-core | PLAN.md:7, :36; owner decision 251 |
 | R-PHASE-4 | recURd's three stages ship whole, in order, at ur.io/recurd: record and reach; team layer and TLS edge; inbox and assurance | sidecar/design/pitch5.html:889-907; owner decision 15 |
 | R-PHASE-5 | Design partners and trust documents come first; the documents, disclosing unaudited cryptography, gate the "end-to-end encrypted" claim | sidecar/design/pitch5.html:886-887, :909-934; owner decisions 99, 119 |
 | R-PHASE-6 | No sidecar ships before the AUTHZ1 P0 and 7-day sidecar tokens | D-TRUST-3; owner decisions 45, 103, 131 |
