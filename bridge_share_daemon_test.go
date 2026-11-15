@@ -1,4 +1,4 @@
-//go:build !js && !ios && !android && !sdk_mobile_bind && !sidecar_http && !ios_extension
+//go:build !js && !ios && !android && !sdk_mobile_bind && !windows && !sidecar_http && !ios_extension
 
 package sidecar
 
