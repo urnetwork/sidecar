@@ -8,7 +8,10 @@
 // version's content_sha256, which is checked by opening every frame here before anything is written: a file no verified
 // entry version named is never kept. A mirror of the ref shares these copies. The record's frames stay sealed as evs
 // sealed them, and each is kept as its own file of the store, so a reader opens one 64 KiB frame at a time, by index,
-// under keys the cache never holds (searchRecordFrames). Derived data is state_search_derived.go's.
+// under keys the cache never holds (searchRecordFrames). Beside each record it keeps the record's object key as its
+// segment's header carried it, wrapped under the repo generation's key, and its file id, so a reader holding that
+// generation's key from GkmClient reopens it with no read of evs (QD-838): a wrapped key is not a key. Derived data is
+// state_search_derived.go's.
 //
 // The store's layout under net/<network_id>/search/, every file sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search")
 // with XChaCha20-Poly1305 and a random nonce prefix, its name in the AAD (state_seal.go):
@@ -108,6 +111,9 @@ type SearchCacheRecord struct {
 	Header    *EvsRecordHeader
 	ObjectKey *EvsObjectKey
 	FileId    Id
+	// The object key as the record's segment header carried it, wrapped under the repo generation's key, which the
+	// cache keeps with the file id so a reader reopens the record later (QD-838); nil where the source gave none.
+	WrappedObjectKey []byte
 }
 
 // One file the cache keeps, as the holdings record lists it.
@@ -153,12 +159,14 @@ type searchCacheFileWire struct {
 	KeptMs   int64  `json:"kept_ms"`
 }
 
-// A kept file's meta: its frames and, for a record, its sealed header.
+// A kept file's meta: its frames and, for a record, its sealed header, its wrapped object key and its file id.
 type searchCacheMetaWire struct {
 	Length       int64  `json:"length"`
 	FrameCount   int    `json:"frames"`
 	SealedHeader []byte `json:"header,omitempty"`
 	Sha256       string `json:"sha256,omitempty"`
+	WrappedKey   []byte `json:"wrapped_key,omitempty"`
+	FileId       string `json:"file_id,omitempty"`
 }
 
 // The index cache. Construct with NewSearchCache.
@@ -659,6 +667,8 @@ func (self *SearchCache) PutRecord(ctx context.Context, record *SearchCacheRecor
 			FrameCount:   len(frames),
 			SealedHeader: bytes.Clone(record.SealedHeader),
 			Sha256:       hex.EncodeToString(record.ContentSha256[:]),
+			WrappedKey:   bytes.Clone(record.WrappedObjectKey),
+			FileId:       hex.EncodeToString(record.FileId[:]),
 		})
 		if err != nil {
 			return err
@@ -878,6 +888,21 @@ func (self *SearchCache) OpenRecord(key SearchCacheKey) (*SearchCacheRecordFrame
 // The sealed header as evs sealed it.
 func (self *SearchCacheRecordFrames) SealedHeader() []byte {
 	return bytes.Clone(self.meta.SealedHeader)
+}
+
+// The record's object key as its segment header carried it, wrapped under the repo generation's key (QD-838); nil
+// where its source gave none.
+func (self *SearchCacheRecordFrames) WrappedObjectKey() []byte {
+	return bytes.Clone(self.meta.WrappedKey)
+}
+
+// The record's file id, its frames' AAD; ErrSearchCacheRefetch where the meta lost it.
+func (self *SearchCacheRecordFrames) FileId() (Id, error) {
+	decoded, err := hex.DecodeString(self.meta.FileId)
+	if err != nil || len(decoded) != len(Id{}) {
+		return Id{}, self.cache.readFailed(self.key, ErrSidecarStoreFailed)
+	}
+	return Id(decoded), nil
 }
 
 // The record body's length.

@@ -12,6 +12,7 @@ package sidecar
 // snapshot through a swap.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -165,6 +166,7 @@ func (self *testSyncSource) Fetch(ctx context.Context, files []*indexFileVersion
 		}
 		key := SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.path, Version: file.version}
 		record := newTestSearchRecord(self.t, key, SearchCachePartition{}, plaintext)
+		record.record.WrappedObjectKey = testSyncWrappedKey(file.path, file.version)
 		fetched = append(fetched, &searchSyncFetched{file: file, record: record.record})
 	}
 	return fetched, nil
@@ -921,5 +923,69 @@ func TestSearchSyncAlarms(t *testing.T) {
 	err := world.sync.Follow(&searchSyncRefArgs{repoId: NewId(), refId: NewId(), repoKind: protocol.RepoKind_REPO_KIND_CONFIG, source: world.source})
 	if !errors.Is(err, ErrSearchSyncUnfollowed) {
 		t.Fatalf("a config repo was followed: %v", err)
+	}
+}
+
+// §11.14's swap row: a search never waits for a round. A snapshot taken while a round is inside its fetch returns the
+// manifest it holds at once, and it stays readable after that round swaps past it.
+func TestASnapshotNeverWaitsForARound(t *testing.T) {
+	world := newTestSyncWorld(t, false)
+	writer := evsTestId("writer")
+	world.push(t, writer, "first", 1)
+	world.round(t)
+	world.push(t, writer, "second", 1)
+	var during *SearchSyncSnapshot
+	world.source.beforeFetch[world.source.fetchCalls] = func() {
+		snapshot, err := world.sync.Snapshot(world.repoId, world.refId)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		during = snapshot
+	}
+	world.round(t)
+	if during == nil {
+		t.Fatal("no snapshot was taken inside the round")
+	}
+	defer during.Release()
+	world.assertOneVersion(t, during)
+	if after := world.snapshot(t); after.Pin().Version <= during.Pin().Version {
+		t.Fatal("the round did not swap past the snapshot taken inside it")
+	}
+	for _, file := range during.Files() {
+		key := SearchCacheKey{RepoId: world.repoId, RefId: world.refId, Path: file.Path, Version: file.Version}
+		if _, err := world.cache.cache.OpenRecord(key); err != nil {
+			t.Fatalf("a file the snapshot holds went at the swap: %v", err)
+		}
+	}
+}
+
+// What the fake source gives as a record's wrapped object key: bytes of its own a file version.
+func testSyncWrappedKey(path string, version uint64) []byte {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("wrapped %s %d", path, version)))
+	return sum[:]
+}
+
+// QD-838: every file a round keeps carries its record's wrapped object key and file id in the cache, so a reader with
+// the generation's key reopens it after the round with no read of evs.
+func TestAKeptFileKeepsItsWrappedKey(t *testing.T) {
+	world := newTestSyncWorld(t, false)
+	world.push(t, evsTestId("writer"), "first", 2)
+	world.round(t)
+	snapshot := world.snapshot(t)
+	if len(snapshot.Files()) == 0 {
+		t.Fatal("no file kept")
+	}
+	for _, file := range snapshot.Files() {
+		frames, err := world.cache.cache.OpenRecord(SearchCacheKey{RepoId: world.repoId, RefId: world.refId, Path: file.Path, Version: file.Version})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(frames.WrappedObjectKey(), testSyncWrappedKey(file.Path, file.Version)) {
+			t.Fatal("a kept file lost its wrapped key")
+		}
+		if fileId, err := frames.FileId(); err != nil || fileId == (Id{}) {
+			t.Fatalf("a kept file lost its file id: %v", err)
+		}
 	}
 }
