@@ -501,8 +501,28 @@ const (
 	SidecarEvsAlarmVersionRule SidecarEvsAlarm = "version_rule"
 	// A writer an hour past a path epoch's due_by_ms (§11.6).
 	SidecarEvsAlarmEpochOverdue SidecarEvsAlarm = "epoch_overdue"
-	// From M6: a stream push off its prefix rule (§16.11).
+	// From M6: a stream push off its prefix rule (§16.11), and a change a repo's prefix write rules do not allow its
+	// signer (DESIGN-DETAILS 16.2.10), which carries a SidecarEvsAlarmDetail.
 	SidecarEvsAlarmPrefixRule SidecarEvsAlarm = "prefix_rule"
+)
+
+// What an evs_alarm of reason prefix_rule stands for (DESIGN-DETAILS 16.2.10): a closed set.
+type SidecarEvsAlarmDetail string
+
+const (
+	// A change of a file-mode ref this device does not follow: its signer's rules do not allow its path.
+	SidecarEvsAlarmDetailIgnored SidecarEvsAlarmDetail = "ignored"
+	// A git-mode push the mounts refused whole, its ref stopped at the version before (16.2.6).
+	SidecarEvsAlarmDetailRefused SidecarEvsAlarmDetail = "refused"
+	// A rule set that is void, the set below it staying in force; raised once a set a device, with the row's signer
+	// and position in place of a push.
+	SidecarEvsAlarmDetailSetVoid SidecarEvsAlarmDetail = "set_void"
+	// A rule set of a later release, which this device cannot read: once a set a device, as set_void.
+	SidecarEvsAlarmDetailSetNewer SidecarEvsAlarmDetail = "set_newer"
+	// More ignored versions over a path than a read walks back under.
+	SidecarEvsAlarmDetailDepth SidecarEvsAlarmDetail = "depth"
+	// The effective version is gone from evs and this device holds no copy.
+	SidecarEvsAlarmDetailUnavailable SidecarEvsAlarmDetail = "unavailable"
 )
 
 // A drop's state as a device reports it (§11.7).
@@ -593,6 +613,13 @@ type SidecarEvent struct {
 	Erasure *SidecarErasure
 	// evs_alarm.
 	EvsAlarm SidecarEvsAlarm
+	// evs_alarm of reason prefix_rule (DESIGN-DETAILS 16.2.10): what it stands for; the ref version and the push of
+	// the first change it names, or for set_void and set_newer the set's log position and no push; and how many
+	// changes it stands for, one event a (repo, ref, signer) in AclPrefixSettings.AlarmInterval.
+	EvsAlarmDetail SidecarEvsAlarmDetail
+	Version        uint64
+	PushId         *Id
+	Count          int
 	// evs_gap: the newest re-pin past the catch-up budget.
 	VerifiedSince time.Time
 	// record_alarm.

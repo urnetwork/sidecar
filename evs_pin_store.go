@@ -107,6 +107,25 @@ type EvsReadRecord struct {
 	// 9.2.3), and the ref's current epoch at PinVersion, whose statements the next read walks from.
 	Floor    uint64
 	PinEpoch uint64
+	// Under a repo's prefix write rules (DESIGN-DETAILS 16.2.5): the newest version of the path this device does not
+	// ignore, nil for none held, and the newest version of the path it ignored, 0 for none. A read whose newest
+	// version is at or below IgnoredThrough returns Accepted with no walk and no alarm. They say what this reader
+	// believes; the fields above say what evs was shown, and move at every verified read, ignored or not. A record
+	// stored before these were kept reads as none, which only walks again.
+	Accepted       *EvsReadAccepted
+	IgnoredThrough uint64
+}
+
+// The newest version of a path a reader of a ruled repo does not ignore (DESIGN-DETAILS 16.2.5's Accepted).
+type EvsReadAccepted struct {
+	// The path's version and the ref version its push committed at; both 0 where Absent.
+	Version       uint64
+	CommitVersion uint64
+	PushId        Id
+	// The path is effectively absent: every version evs holds of it is ignored, or its removal is allowed.
+	Absent bool
+	// The ignored versions over it when it was accepted, which a read from the record reports.
+	IgnoredAbove int
 }
 
 // A pin's stored form.
@@ -133,6 +152,14 @@ type evsReadRecordRecord struct {
 	UsedAtMs      int64  `json:"used_at_ms"`
 	Floor         uint64 `json:"floor,omitempty"`
 	PinEpoch      uint64 `json:"pin_epoch,omitempty"`
+	// DESIGN-DETAILS 16.2.5's Accepted and IgnoredThrough: accepted is set by any of the first four
+	Accepted        bool   `json:"accepted,omitempty"`
+	AcceptedVersion uint64 `json:"accepted_version,omitempty"`
+	AcceptedCommit  uint64 `json:"accepted_commit,omitempty"`
+	AcceptedPushId  string `json:"accepted_push_id,omitempty"`
+	AcceptedAbsent  bool   `json:"accepted_absent,omitempty"`
+	IgnoredAbove    int    `json:"ignored_above,omitempty"`
+	IgnoredThrough  uint64 `json:"ignored_through,omitempty"`
 }
 
 // One repo's state as memory holds it.
@@ -241,6 +268,20 @@ func (self *EvsPinStore) load() error {
 						UsedAt:        time.UnixMilli(record.UsedAtMs),
 						Floor:         record.Floor,
 						PinEpoch:      record.PinEpoch,
+					}
+					if record.Accepted {
+						accepted := &EvsReadAccepted{
+							Version:       record.AcceptedVersion,
+							CommitVersion: record.AcceptedCommit,
+							Absent:        record.AcceptedAbsent,
+							IgnoredAbove:  record.IgnoredAbove,
+						}
+						if !accepted.Absent {
+							if accepted.PushId, err = ParseId(record.AcceptedPushId); err != nil {
+								return fmt.Errorf("%w: an evs read record's accepted push", ErrSidecarStoreFailed)
+							}
+						}
+						read.Accepted, read.IgnoredThrough = accepted, record.IgnoredThrough
 					}
 					if record.PinChain != "" {
 						chainBytes, err := hex.DecodeString(record.PinChain)
@@ -516,6 +557,10 @@ func evsReseedReadRecord(record *EvsReadRecord, head *EvsPin, headEpoch uint64) 
 		return record
 	}
 	lowered := *record
+	if lowered.Accepted != nil && head.Version < lowered.PinVersion {
+		// what was accepted or ignored above the re-seeded head may be part of the loss: the next read walks again
+		lowered.Accepted, lowered.IgnoredThrough = nil, 0
+	}
 	if head.Version < lowered.PinVersion {
 		chain := head.Chain
 		lowered.PinVersion, lowered.PinChain, lowered.PinEpoch = head.Version, &chain, headEpoch
@@ -688,6 +733,10 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 					raised.PinVersion, raised.PinChain, raised.PinEpoch = held.PinVersion, held.PinChain, held.PinEpoch
 				}
 				raised.Floor = evsLowerFloor(raised.Floor, held.Floor)
+				// what the reader believes moves only through NoteAccepted
+				raised.Accepted, raised.IgnoredThrough = held.Accepted, held.IgnoredThrough
+			} else {
+				raised.Accepted, raised.IgnoredThrough = nil, 0
 			}
 			reads[key] = &raised
 		}
@@ -728,6 +777,56 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 	return nil
 }
 
+// Sets what a reader of a ruled repo believes of one path (DESIGN-DETAILS 16.2.5): the version it accepts and the
+// newest it ignored, or with accepted nil clears both, the path's newest version being one it follows. Only a path
+// that holds a record takes it: the record's entry, pin, floor and epoch are a verified read's, which this never
+// moves, and a path with none is walked again at its next read.
+func (self *EvsPinStore) NoteAccepted(repoId Id, refId Id, path string, accepted *EvsReadAccepted, ignoredThrough uint64) error {
+	if err := self.load(); err != nil {
+		return err
+	}
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+	key := evsReadKey{refId: refId, path: path}
+	reads := func() map[evsReadKey]*EvsReadRecord {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		state := self.repoIdRepos[repoId]
+		if state == nil || state.reads[key] == nil {
+			return nil
+		}
+		held := state.reads[key]
+		if accepted == nil && held.Accepted == nil {
+			return nil
+		}
+		if accepted != nil && held.Accepted != nil && *accepted == *held.Accepted && held.IgnoredThrough == ignoredThrough {
+			return nil
+		}
+		reads := map[evsReadKey]*EvsReadRecord{}
+		for readKey, record := range state.reads {
+			reads[readKey] = record
+		}
+		noted := *held
+		noted.Accepted, noted.IgnoredThrough = nil, 0
+		if accepted != nil {
+			copied := *accepted
+			noted.Accepted, noted.IgnoredThrough = &copied, ignoredThrough
+		}
+		reads[key] = &noted
+		return reads
+	}()
+	if reads == nil {
+		return nil
+	}
+	if err := self.writeReadsWithWriteLock(repoId, reads); err != nil {
+		return err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.repoWithLock(repoId).reads = reads
+	return nil
+}
+
 // Writes one repo's read records whole, under writeLock.
 func (self *EvsPinStore) writeReadsWithWriteLock(repoId Id, reads map[evsReadKey]*EvsReadRecord) error {
 	stored := []*evsReadRecordRecord{}
@@ -744,6 +843,14 @@ func (self *EvsPinStore) writeReadsWithWriteLock(repoId Id, reads map[evsReadKey
 		}
 		if record.PinChain != nil {
 			storedRecord.PinChain = hex.EncodeToString(record.PinChain[:])
+		}
+		if accepted := record.Accepted; accepted != nil {
+			storedRecord.Accepted, storedRecord.IgnoredThrough = true, record.IgnoredThrough
+			storedRecord.AcceptedVersion, storedRecord.AcceptedCommit = accepted.Version, accepted.CommitVersion
+			storedRecord.AcceptedAbsent, storedRecord.IgnoredAbove = accepted.Absent, accepted.IgnoredAbove
+			if !accepted.Absent {
+				storedRecord.AcceptedPushId = accepted.PushId.String()
+			}
 		}
 		stored = append(stored, storedRecord)
 	}

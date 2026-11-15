@@ -292,16 +292,30 @@ func evsExportErasedStub(tokenPath EvsTokenPath, entrySha256 []byte) []byte {
 // each version is one commit (evsFileModeCommit). A removal takes the path and everything below it out. A ref that
 // ever cut over to another path epoch refuses: its paths' names would be carried across the map, which this draft
 // does not follow (DESIGN-DETAILS 9.2.7).
+//
+// Under the repo's prefix write rules the tree of each commit holds effective versions (DESIGN-DETAILS 16.2.5's export
+// row): every change is judged with its entry, a directory's delta against the rows this replay follows, and one this
+// device ignores is not applied. It is alarmed prefix_rule and reported in EvsExportedRef.Ignored, as 8.5 reports a
+// refused version, never left out in silence. A set this device cannot read refuses the export.
 func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWriter, head *EvsVerifiedHead, gitRef string) (*EvsExportedRef, []*evsExportNote, error) {
+	judge, err := self.prefixJudge()
+	if err != nil {
+		return nil, nil, err
+	}
 	keys := newEvsReadKeys(self)
 	state := evsExportState{}
-	// each standing path's names by its token path's bytes, the root's none
+	// each standing path's names by its token path's bytes, the root's none, and its kind where a row gave one
 	names := map[string][][]byte{"": {}}
+	kinds := map[string]protocol.EvsEntryKind{}
+	// the names rows of ignored deltas gave, which name an ignored change's path and no path of the tree
+	ignoredNames := map[string][][]byte{}
+	ignored := []*EvsExportRefusal{}
 	forget := func(tokenPath EvsTokenPath) {
 		prefix := string(tokenPath.Bytes())
 		for key := range names {
 			if strings.HasPrefix(key, prefix) && key != "" {
 				delete(names, key)
+				delete(kinds, key)
 			}
 		}
 	}
@@ -316,6 +330,8 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 		case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) != 0:
 			state = evsExportState{}
 			names = map[string][][]byte{"": {}}
+			kinds = map[string]protocol.EvsEntryKind{}
+			ignoredNames = map[string][][]byte{}
 			tip = nil
 			continue
 		case push.GetPartCount() != 0:
@@ -338,13 +354,34 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 		if err != nil {
 			return nil, nil, err
 		}
+		ignoredCount := 0
 		for _, change := range payload.Changes {
 			key := string(change.TokenPath.Bytes())
 			pathNames, named := names[key]
+			changeIgnored := false
+			if judge != nil {
+				held := func(token EvsToken) (protocol.EvsEntryKind, bool) {
+					kind, ok := kinds[key+string(token[:])]
+					return kind, ok
+				}
+				if changeIgnored, err = judge.replayIgnored(ctx, self, head.RefId, statement.Statement, change, held); err != nil {
+					return nil, nil, err
+				}
+			}
+			if changeIgnored && !named {
+				// a path only an ignored delta named
+				pathNames, named = ignoredNames[key]
+			}
 			if !named {
 				return nil, nil, fmt.Errorf("%w: a path whose name no directory's row gives", ErrEvsExport)
 			}
+			if changeIgnored {
+				ignoredCount += 1
+			}
 			if !change.WritesEntry() {
+				if changeIgnored {
+					continue
+				}
 				for stateKey, path := range state {
 					if evsNamesHavePrefix(path.names, pathNames) {
 						delete(state, stateKey)
@@ -363,7 +400,9 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 					if err != nil {
 						return nil, nil, err
 					}
-					forget(append(slices.Clone(change.TokenPath), child))
+					if !changeIgnored {
+						forget(append(slices.Clone(change.TokenPath), child))
+					}
 				}
 				for _, row := range entry.GetNames().GetNames() {
 					child, err := EvsTokenFromBytes(row.GetToken())
@@ -375,8 +414,16 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 						self.client.alarm(self.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
 						return nil, nil, err
 					}
+					if changeIgnored {
+						ignoredNames[key+string(child[:])] = append(slices.Clone(pathNames), name)
+						continue
+					}
 					names[key+string(child[:])] = append(slices.Clone(pathNames), name)
+					kinds[key+string(child[:])] = protocol.EvsEntryKind(row.GetKind())
 				}
+				continue
+			}
+			if changeIgnored {
 				continue
 			}
 			if len(pathNames) == 0 || bytes.Equal(pathNames[0], []byte(evsExportSkippedDirectory)) {
@@ -396,6 +443,12 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 				return nil, nil, err
 			}
 			state[evsExportKey(pathNames)] = &evsExportPath{names: pathNames, mode: fields.GetMode(), oid: *oid}
+		}
+		if 0 < ignoredCount {
+			signerId, _ := IdFromBytes(push.GetSignerSidecarId())
+			pushId, _ := IdFromBytes(push.GetPushId())
+			judge.alarm(self.repoId, head.RefId, signerId, "", statement.Version, &pushId, SidecarEvsAlarmDetailIgnored, ignoredCount)
+			ignored = append(ignored, &EvsExportRefusal{Version: statement.Version, Reason: fmt.Sprintf("ignored: prefix rule (%d changes)", ignoredCount)})
 		}
 		treeOid, err := writer.writeTree(state)
 		if err != nil {
@@ -418,7 +471,7 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 	if err := writer.setRef(gitRef, *tip); err != nil {
 		return nil, nil, err
 	}
-	return &EvsExportedRef{GitRef: gitRef, Tip: *tip, Versions: head.Version}, notes, nil
+	return &EvsExportedRef{GitRef: gitRef, Tip: *tip, Versions: head.Version, Ignored: ignored}, notes, nil
 }
 
 // Whether names is prefix or a path below it.

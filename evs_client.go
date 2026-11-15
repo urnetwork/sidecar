@@ -108,6 +108,12 @@ type EvsClientArgs struct {
 	// resumed by its id filed its RepoCreate already and is not asked again. Nil refuses every private create, with
 	// ErrEvsPrivateUnchecked.
 	PrivateCreate func(ctx context.Context, client *EvsClient, args *EvsCreateRepoArgs) error
+	// One follow of the authorization log now, answering once it ran (ConfigClient.CatchUp, within its FollowTimeout
+	// and ctx): what the push sender asks once after evs's gate refuses a push that creates or re-creates a shared
+	// ref, whose pin evs holds at or above the repo's newest rule set (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803). It runs
+	// with the write's locks held and applies entries on the caller's goroutine, so no entry callback may wait on
+	// that write. Nil on a leg with no follower, which skips the follow.
+	ConfigFollow func(ctx context.Context) error
 }
 
 // A repo CreateRepo made, as EvsClientArgs.RepoCreated takes it.
@@ -161,6 +167,19 @@ type EvsClient struct {
 	versioningRules func(repoId Id, filePath string, size uint64) (uint32, error)
 	// subscriptions and catch-up (evs_subscribe.go), with its own lock
 	subscriber *evsSubscriber
+	// the prefix write rules' reader, nil until a composition enables it (EnablePrefixRules, evs_prefix.go)
+	prefixReads evsPrefixReader
+	// each ref whose creating push evs's gate refused, with that statement's pin and generation: no second statement
+	// is built for the ref on them (evs_push.go; QD-803)
+	gateRefusals map[evsRefKey]*evsGateRefusal
+}
+
+// A creating push's 412 GATE_CLOSED as the sender keeps it for its ref: the refused statement's auth pin and
+// generation, and evs's answer.
+type evsGateRefusal struct {
+	pinVersion uint64
+	generation uint64
+	err        error
 }
 
 // A ref of a repo.
@@ -201,6 +220,7 @@ func NewEvsClient(args *EvsClientArgs) (*EvsClient, error) {
 		},
 		pins:           NewEvsPinStore(args.Store, args.Settings),
 		hintedVersions: map[evsRefKey]uint64{},
+		gateRefusals:   map[evsRefKey]*evsGateRefusal{},
 		refEpochs:      map[evsRefKey]*evsRefEpoch{},
 		epochs:         newEvsClientEpochs(),
 		repoIdMirrors:  map[Id]*EvsMirrorStore{},
