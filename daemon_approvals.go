@@ -337,9 +337,11 @@ func (self *daemonPresenceAct) armLapse() {
 	}
 }
 
-// Holds the run at hold until a next call answers it or the act ends.
+// Holds the run at hold until a next call answers it or the act ends. testHookBarrier brackets the wait.
 func (self *daemonPresenceAct) holdAt(hold *daemonPresenceHold) (*bridge.WebAuthnEvidence, error) {
 	daemonCtx := self.acts.daemon.ctx
+	testHookBarrier("daemon.presence.hold.before", self.actId.String())
+	defer testHookBarrier("daemon.presence.hold.after", self.actId.String())
 	select {
 	case self.holds <- hold:
 	case <-self.ended:
@@ -595,6 +597,7 @@ type daemonAppPresenceProvider struct {
 	act    *daemonPresenceAct
 }
 
+// The key the app made, as the first call named it.
 func (self *daemonAppPresenceProvider) Register(ctx context.Context) (*PresenceKeyHandle, error) {
 	return &PresenceKeyHandle{
 		KeyId:       bytes.Clone(self.handle.KeyId),
@@ -604,6 +607,7 @@ func (self *daemonAppPresenceProvider) Register(ctx context.Context) (*PresenceK
 	}, nil
 }
 
+// Whether keyId is the app's key.
 func (self *daemonAppPresenceProvider) Holds(keyId []byte) bool {
 	return bytes.Equal(keyId, self.handle.KeyId)
 }
@@ -623,6 +627,7 @@ func (self *daemonAppPresenceProvider) Assert(ctx context.Context, keyId []byte,
 	return evidence, nil
 }
 
+// Nothing: the key is the app's to take off its own authenticator.
 func (self *daemonAppPresenceProvider) Remove(keyId []byte) error {
 	return nil
 }

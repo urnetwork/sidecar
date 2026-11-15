@@ -311,8 +311,8 @@ func daemonDevicesRevokeArgs(call *DaemonCall) (Id, [][]byte, error) {
 }
 
 // What RevokeDevicePlan did as devices.revoke's reply carries it, and devices.revoke.finish's: §5.6's refusal and a
-// lost post's pending are answers; any other error is the rpc's.
-func newDaemonDevicesRevokeReply(revocation *DeviceRevocation, err error) (*DaemonDevicesRevokeReply, error) {
+// lost post's pending are answers; any other error is the rpc's. What an app's local backend answers the same way.
+func NewDaemonDevicesRevokeReply(revocation *DeviceRevocation, err error) (*DaemonDevicesRevokeReply, error) {
 	reply := &DaemonDevicesRevokeReply{}
 	if revocation != nil {
 		reply.Position = revocation.Entry.GetVersion()
@@ -434,7 +434,7 @@ func DaemonDevicesMethods(daemon *Daemon) []*DaemonMethod {
 					return nil, err
 				}
 				// Confirm let only a confirmed control call here; the origin says so to the act, which checks it again
-				return newDaemonDevicesRevokeReply(call.Sidecar.RevokeDevicePlan(ctx, planId, revokeKeyIds, SidecarActConfirmed, daemon.PresencePrompt(call.Sidecar)))
+				return NewDaemonDevicesRevokeReply(call.Sidecar.RevokeDevicePlan(ctx, planId, revokeKeyIds, SidecarActConfirmed, daemon.PresencePrompt(call.Sidecar)))
 			},
 		},
 		{
@@ -475,7 +475,7 @@ func DaemonDevicesMethods(daemon *Daemon) []*DaemonMethod {
 					return nil, errDaemonPresenceHeldTwice
 				}
 				revocation, _ := step.result.(*DeviceRevocation)
-				return newDaemonDevicesRevokeReply(revocation, step.err)
+				return NewDaemonDevicesRevokeReply(revocation, step.err)
 			},
 		},
 		{
