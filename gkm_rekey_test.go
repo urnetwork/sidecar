@@ -1191,40 +1191,52 @@ func TestEvsRekeyResumedCountsALeftFileOnce(t *testing.T) {
 // re-checkpointed from its effective version (DESIGN-DETAILS 16.2.5) and never from the breach: the push is held to
 // the effective version's number and takes the repair form (16.2.7), one checkpoint of the effective content on evs's
 // newest, which a reader under the rules then reads. The breach is of the current generation and the effective
-// version is not, so a job that judged evs's newest would count the file current. A path a breach created is absent
-// as this device follows it.
+// version is not, so a job that judged evs's newest would count the file current. A file whose newest event is a
+// removal the rules ignore, named to the job, stands as this device follows it and is written again from the version
+// below the removal. A path a breach created is absent as this device follows it.
 func TestEvsRekeyRewritesTheEffectiveVersionUnderAnIgnoredOne(t *testing.T) {
 	test := newRekeyPrefixTest(t, "everywhere")
 	test.write("src/main.go", 20*1024)
+	test.write("src/util.go", 900)
 	test.file()
 	test.rotate(2, GkmCauseRemove)
 	breached := bytes.Clone(test.contents["src/main.go"])
 	breached[100] ^= 0xff
-	test.writer.server.know("src/main.go", "src/new.txt")
+	test.writer.server.know("src/main.go", "src/new.txt", "src/util.go")
 	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "src/main.go", content: breached, segment: true})
 	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "src", children: []string{"new.txt"}},
 		&evsTestChange{path: "src/new.txt", content: []byte("planted"), segment: true})
+	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "src/util.go"})
 	test.versions["src/main.go"] = test.writer.entry(t, "src/main.go").GetVersion()
 	if chain, _ := test.chain("src/main.go"); chain.KeyGeneration != 2 {
 		t.Fatalf("the breach: key generation %d", chain.KeyGeneration)
 	}
 	commits := test.commits()
-	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: test.writer.world.repoId, Paths: []string{"src/main.go", "src/new.txt"}})
+	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{
+		RepoId: test.writer.world.repoId, Paths: []string{"src/main.go", "src/new.txt", "src/util.go"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != 1 || progress.CurrentCount != 0 || progress.AbsentCount != 1 ||
+	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != 2 || progress.CurrentCount != 0 || progress.AbsentCount != 1 ||
 		progress.LeftCount != 0 || progress.PushCount != 1 {
 		t.Fatalf("the progress: %+v", progress)
 	}
-	// the file's version and its parent's delta, which the repair form states the path's row in again
-	if got := test.entryWriteCounts(commits); len(got) != 1 || got[0] != 2 {
+	// the two files' versions and their parent's delta, which the repair form states each row in again
+	if got := test.entryWriteCounts(commits); len(got) != 1 || got[0] != 3 {
 		t.Errorf("the job's pushes carried %v entry writes", got)
 	}
 	// one checkpoint of generation 2 over the breach, whose content is the effective version's
 	test.requireRekeyed(2, "src/main.go")
 	if read, err := test.read("src/main.go"); err != nil || bytes.Equal(read, breached) {
 		t.Errorf("the rekeyed file reads the breach: %v", err)
+	}
+	// the file under the ignored removal: created again at evs, one checkpoint of generation 2 of what it held
+	if chain, _ := test.chain("src/util.go"); chain.KeyGeneration != 2 || chain.RecordCount != 1 || chain.DiffCount != 0 {
+		t.Errorf("the file under an ignored removal: generation %d, %d records, %d diffs", chain.KeyGeneration, chain.RecordCount, chain.DiffCount)
+	}
+	if read, err := test.read("src/util.go"); err != nil || !bytes.Equal(read, test.contents["src/util.go"]) {
+		t.Errorf("the file under an ignored removal read back: %v", err)
 	}
 	if _, err := test.read("src/new.txt"); !errors.Is(err, ErrEvsPathAbsent) {
 		t.Errorf("the breach-created path: %v", err)

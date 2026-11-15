@@ -42,7 +42,8 @@
 //	the end     done, as with a skipped ref. With files left that says the job is finished on this device, and
 //	            nothing here reports the repo as at the generation: a device the rule set names for those paths, an
 //	            admin's, runs the job for them over the same scope and finds each by its own read
-//	no path     a left file's path goes into no field of the record, no log and no StopReason (I-13)
+//	no path     no field lists the files left, and a left file's path goes into no log and no StopReason (I-13);
+//	            the record's position, the last path the walk settled, passes a left file as it passes any other
 //	no verdict  a set this device holds pending or newer gives the planner's call no verdict, so the job cannot
 //	            tell what it follows or what to leave: it stops with EVS_PREFIX_RULE, detail pending or update, and
 //	            resumes as any stopped job
@@ -709,14 +710,22 @@ func (self *gkmRekeyRun) namedKinds(ctx context.Context, refName []byte, paths [
 	case err != nil:
 		return nil, "", err
 	}
+	// under the repo's prefix rules a removal evs holds on a shared file-mode ref may be one this device ignores, the
+	// file below it standing as the device follows it (16.2.5): such a path is read, and readFiles' walk decides
+	ruled, err := self.repo.prefixRuled()
+	if err != nil {
+		return nil, "", err
+	}
+	followed := ruled != nil && writable.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && writable.RefMode == protocol.EvsRefMode_EVS_REF_FILE
 	kinds := make([]protocol.EvsEntryKind, len(paths))
 	for i, verified := range result.replies {
-		if verified.Base != nil {
+		switch {
+		case verified.Base != nil:
 			// an overlay's path it holds no version of: its base ref's to rekey, so nothing here
-			continue
-		}
-		if verified.Entry != nil && verified.Removal == nil && !verified.Absent {
+		case verified.Entry != nil && verified.Removal == nil && !verified.Absent:
 			kinds[i] = protocol.EvsEntryKind(verified.Entry.GetKind())
+		case followed && verified.Removal != nil:
+			kinds[i] = protocol.EvsEntryKind_EVS_ENTRY_FILE
 		}
 	}
 	return kinds, "", nil
@@ -824,11 +833,10 @@ func (self *gkmRekeyRun) readFiles(ctx context.Context, paths []string, pushFull
 	// (evs_plan.go), which the ref's head says as the planner's setRef reads it
 	effective := false
 	if ruled != nil {
+		// a ref the planner takes no write on is refused at the push, as it is with no rules
 		plan := &EvsWritePlan{}
-		if err := plan.setRef(result.head.Head, self.refName, self.rekey.args.Evs.args.Identity().SidecarId, true); err != nil {
-			return err
-		}
-		effective = plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && plan.RefMode == protocol.EvsRefMode_EVS_REF_FILE
+		effective = plan.setRef(result.head.Head, self.refName, self.rekey.args.Evs.args.Identity().SidecarId, true) == nil &&
+			plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && plan.RefMode == protocol.EvsRefMode_EVS_REF_FILE
 	}
 	readFile := func(i int) error {
 		path := paths[i]
