@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"runtime"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -196,10 +197,10 @@ func testBridgeShareVectorInputs() []struct {
 		label BridgeShareLabel
 		body  proto.Message
 	}{
-		{BridgeShareLabelTargets, testBridgeShareTargets(24, 32)},
-		{BridgeShareLabelAliases, &bridge.BridgeShareAliases{Aliases: []*bridge.BridgeShareAlias{{Index: 0, AliasHostBits: 0x8000, Length: 24}, {Index: 1, AliasHostBits: 0x8101, Length: 32}}}},
-		{BridgeShareLabelShareKey, &bridge.BridgeShareKeyBody{SharePublicKey: bytes.Repeat([]byte{7}, ed25519.PublicKeySize)}},
-		{BridgeShareLabelShortfall, &bridge.BridgeShareShortfall{Index: 2, Length: 18, FreeAddressCount: 900, LargestFreeLength: 23}},
+		{label: BridgeShareLabelTargets, body: testBridgeShareTargets(24, 32)},
+		{label: BridgeShareLabelAliases, body: &bridge.BridgeShareAliases{Aliases: []*bridge.BridgeShareAlias{{Index: 0, AliasHostBits: 0x8000, Length: 24}, {Index: 1, AliasHostBits: 0x8101, Length: 32}}}},
+		{label: BridgeShareLabelShareKey, body: &bridge.BridgeShareKeyBody{SharePublicKey: bytes.Repeat([]byte{7}, ed25519.PublicKeySize)}},
+		{label: BridgeShareLabelShortfall, body: &bridge.BridgeShareShortfall{Index: 2, Length: 18, FreeAddressCount: 900, LargestFreeLength: 23}},
 	}
 }
 
@@ -233,6 +234,9 @@ func TestBridgeShareSealMatchesItsVectors(t *testing.T) {
 		if err := os.WriteFile(testBridgeShareVectorsPath, append(encoded, '\n'), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if runtime.GOOS == "js" {
+		t.Skip("a Worker has no files: the native legs read the vectors")
 	}
 	encoded, err := os.ReadFile(testBridgeShareVectorsPath)
 	if err != nil {

@@ -80,6 +80,7 @@ func (self BridgeShareSignerUse) String() string {
 	return fmt.Sprintf("BridgeShareSignerUse(share %s, generation %d)", self.ShareId, self.Generation)
 }
 
+// As String, so %#v prints no seed either.
 func (self BridgeShareSignerUse) GoString() string {
 	return self.String()
 }
@@ -216,6 +217,7 @@ type BridgeShareSignerSettings struct {
 	RenewAttemptCount int
 }
 
+// DESIGN-DETAILS 12.2.2's values.
 func DefaultBridgeShareSignerSettings() *BridgeShareSignerSettings {
 	return &BridgeShareSignerSettings{
 		RenewInterval:     time.Hour,
@@ -248,6 +250,7 @@ type BridgeShareSignerRenewer struct {
 	log      Logger
 }
 
+// A renewer over args, whose Keyring, Config and Generation are required.
 func NewBridgeShareSignerRenewer(args *BridgeShareSignerRenewerArgs) (*BridgeShareSignerRenewer, error) {
 	if args == nil || args.Keyring == nil || args.Config == nil || args.Generation == nil {
 		return nil, fmt.Errorf("%w: a share signer renewer needs its keyring, config and generation", errInvalidSettings)

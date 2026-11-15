@@ -47,10 +47,12 @@ type BridgeShareRefusal struct {
 	Shortfall *bridge.BridgeShareShortfall
 }
 
+// The reason alone: the figures are for the sharing network, sealed.
 func (self *BridgeShareRefusal) Error() string {
 	return fmt.Sprintf("%s: target %d, a /%d", self.Reason.Error(), self.Shortfall.GetIndex(), self.Shortfall.GetLength())
 }
 
+// The reason, so errors.Is finds ErrBridgeShareTooLarge or ErrBridgeShareNoSpace.
 func (self *BridgeShareRefusal) Unwrap() error {
 	return self.Reason
 }
@@ -141,6 +143,7 @@ func newBridgeUpperMap(ledger *BridgeLedger) *bridgeUpperMap {
 	return upper
 }
 
+// Marks [first, last], host bits of the upper half, as held.
 func (self *bridgeUpperMap) hold(first uint32, last uint32) {
 	for hostBits := max(first, bridgeUpperHostBits); hostBits <= min(last, 0xffff); hostBits += 1 {
 		self.held[hostBits-bridgeUpperHostBits] = true

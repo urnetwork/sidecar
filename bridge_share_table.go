@@ -204,6 +204,7 @@ func (self *SidecarApi) CompleteBridgeShare(ctx context.Context, shareId Id, ali
 	})
 }
 
+// POST /acl/accept-invite with wire, a claim or a completion, answered with the share's row.
 func (self *SidecarApi) acceptBridgeShare(ctx context.Context, route string, operation string, wire *bridgeShareAcceptWire) (*BridgeShareRow, error) {
 	reply := &bridgeShareRowWire{}
 	err := self.sendJson(ctx, &sidecarApiRequest{
@@ -423,6 +424,7 @@ type BridgeShareTableViewSettings struct {
 	ShareMaxCount int
 }
 
+// The values above.
 func DefaultBridgeShareTableViewSettings() *BridgeShareTableViewSettings {
 	return &BridgeShareTableViewSettings{
 		FetchTimeout:  30 * time.Second,
@@ -482,6 +484,7 @@ func (self *BridgeShareTableView) Refresh(ctx context.Context, shareIds []Id) er
 	return failed
 }
 
+// Keeps row as the share's newest.
 func (self *BridgeShareTableView) keep(row *BridgeShareRow) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -496,6 +499,7 @@ func (self *BridgeShareTableView) keep(row *BridgeShareRow) {
 	}
 }
 
+// Forgets the share's row.
 func (self *BridgeShareTableView) drop(shareId Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

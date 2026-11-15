@@ -70,6 +70,7 @@ func NewBridgeShareKeyLocalStore(store SidecarStore) (BridgeShareKeyStore, error
 	return &bridgeShareKeyLocalStore{store: store}, nil
 }
 
+// Keeps seed under name where the store holds nothing there.
 func (self *bridgeShareKeyLocalStore) CreateShareKey(ctx context.Context, name string, seed []byte) error {
 	if reader, err := self.store.Open(name); err == nil {
 		reader.Close()
@@ -88,6 +89,7 @@ func (self *bridgeShareKeyLocalStore) CreateShareKey(ctx context.Context, name s
 	return writer.Commit()
 }
 
+// The seed kept under name.
 func (self *bridgeShareKeyLocalStore) ReadShareKey(ctx context.Context, name string) ([]byte, error) {
 	reader, err := self.store.Open(name)
 	if errors.Is(err, ErrSidecarStoreAbsent) {
@@ -100,6 +102,7 @@ func (self *bridgeShareKeyLocalStore) ReadShareKey(ctx context.Context, name str
 	return io.ReadAll(io.LimitReader(reader, 2*ed25519.SeedSize))
 }
 
+// The names kept under prefix, in the store's order.
 func (self *bridgeShareKeyLocalStore) ListShareKeys(ctx context.Context, prefix string) ([]string, error) {
 	entries, err := self.store.List(prefix)
 	if err != nil {
@@ -121,6 +124,7 @@ type BridgeShareKeySettings struct {
 	Cert *bridge.ShareCertSettings
 }
 
+// §17.9's values.
 func DefaultBridgeShareKeySettings() *BridgeShareKeySettings {
 	return &BridgeShareKeySettings{
 		CertLifetime: 168 * time.Hour,
@@ -144,6 +148,7 @@ type BridgeShareKeyring struct {
 	settings *BridgeShareKeySettings
 }
 
+// A keyring over args, whose Store is required.
 func NewBridgeShareKeyring(args *BridgeShareKeyringArgs) (*BridgeShareKeyring, error) {
 	if args == nil || args.Store == nil {
 		return nil, fmt.Errorf("%w: a share keyring needs its store", errInvalidSettings)

@@ -1440,6 +1440,7 @@ func (self *BridgeLedger) holdAlias(body *bridge.BridgeAliasBody, statement *Bri
 	return self.holdAliasRow(body, statement, false)
 }
 
+// holdAlias for a statement's alias, or, with released set, for a folded row already released and still draining.
 func (self *BridgeLedger) holdAliasRow(body *bridge.BridgeAliasBody, statement *BridgeLogStatement, released bool) error {
 	if len(body.GetShareId()) != len(Id{}) || len(body.GetHost()) != len(Id{}) {
 		return errors.New("an alias with a malformed share_id or host")
