@@ -148,7 +148,7 @@ func TestOtelListenerRefusesUnauthenticated(t *testing.T) {
 	if calls := env.writer.of(sidecar.RecordKindModelCall); len(calls) != 0 {
 		t.Errorf("an unauthenticated caller recorded %d calls", len(calls))
 	}
-	if refused, _ := telemetry.Counts(); refused != 4 {
+	if refused := telemetry.Counts().Refused; refused != 4 {
 		t.Errorf("%d refused", refused)
 	}
 	if status := testTelemetryPost(t, listener, "Bearer "+token, export); status != http.StatusOK || len(env.writer.of(sidecar.RecordKindModelCall)) != 1 {
@@ -191,7 +191,7 @@ func TestDroppedExportIsGap(t *testing.T) {
 	if calls := env.writer.of(sidecar.RecordKindModelCall); len(calls) != 0 {
 		t.Errorf("dropped exports recorded %d calls", len(calls))
 	}
-	if _, dropped := telemetry.Counts(); dropped != len(exports) {
+	if dropped := telemetry.Counts().Dropped; dropped != len(exports) {
 		t.Errorf("%d dropped", dropped)
 	}
 }
