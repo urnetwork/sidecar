@@ -431,6 +431,7 @@ func (self *SocketsService) judgeEntry(
 			Namespace:        name.namespace,
 			Registration:     stored,
 			Listen:           listen,
+			View:             view,
 		})
 		switch {
 		case errors.Is(err, ErrSocketListenRefused):
