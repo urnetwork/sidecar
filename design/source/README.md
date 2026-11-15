@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-250. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-251. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (251 onward)
+## Adding owner decision N (252 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -126,3 +126,13 @@ The design-records track for §11 folds that section's items from sidecar/DESIGN
 - **Superseded options.** 294 grep hits, each with a reading; the three on changed lines of the first piece (the pools family, at §11.13's needs row, §19.6's rewrapped settle row and §22.9's file-cluster list) were read on 2026-11-10, and the second piece's changed lines raised none. None is live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
 - **The metadata list** is v11, whose header names what it adds (evs-2's erasure ref id, evs-4's keyless expired segments and retained deposits, evs-4's and evs-12's content kept until a later compaction), copied to `metadata_list.yml` by `make metadata`. evs-2 keeps the words "each ref's kind (shared, owned, deposit)", which testdata/evs/metadata_rows.yml quotes for EvsHeadSummary.ref_kind, and names the erasure ref in its own clause.
+
+## Validation after owner decision 251 (2026-11-15)
+
+The design-records track for the operator-core seam folded QD-841, QD-842 and QD-843, the owner's decisions of 2026-11-15 on how server and its extensions depend on each other, as owner decision 251; the owner asked that they go into DESIGN.md directly, so they were never in sidecar/DESIGN-AMENDMENTS.md. A new repository and module, operator-core (package `operator`, MPL-2.0), holds the core services' interfaces, rooted at an `Env` that creates every service instance a hosted engine holds, the engine contract and an `Extension` interface, and the value types server and sidecar share, `Id` (server.Id moved) among them; it imports connect. server/core implements the `Env`; sidecar owns its SQL over the db an `Env` grants, evs and gkm getting none; `sidecar.Id` aliases `operator.Id` on every leg; fakes and conformance suites go to operator-core/coretest; and the call sites, the SQL's move into sidecar and the fakes' move come in the build's review phase. It amends owner decision 19, whose row notes it, and Q-REPO-1, marked "Amended by owner". §4 takes most of it: the tree, 4.5's host contract (whose `Engine`, `HttpEngine` and `StreamEngine` carry QD-336's reading, deleted from DESIGN-AMENDMENTS.md with it), the modules, legs, pins, release order, license, D-REPO-2, D-REPO-3, D-REPO-6, the alternatives, risks and phasing. The parts it names elsewhere went with it: Q-CTX-1 (§1), R-ARCH-2 and §3.5's repo graph, §5.4's `Id`, §5.10's wasm row, §5.11's alternatives row and D-CORE-1, `SmtpEdgeStore`'s comment (§14), §18.10's forwarding and page Worker legs with D-SDK-19 and D-SDK-20, §19.7's migrations, §22.4's T2 and T3, and R-PHASE-3 (§23); the front matter's scope and branch policy name operator-core, its branch and its place in the merge order. `build.sh` on this folder reproduced DESIGN.md (SHA-256 `69f02b959b3fc4fd6ea0cb7689c9d98da7238dd8db42da6dadcfa45c7f471116`) at this fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item, so no guard line was needed.
+- **Owner decisions.** All 251 rows are present and cited; `validate10.py`'s date pattern and `LATE_DATES` take 2026-11-15.
+- **Superseded options.** 295 grep hits, each with a reading; the three on changed lines (4.5's `Env.Redis`, 4.8's weekly merges and §19.7's new bullet) were read on 2026-11-15. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is unchanged: no §2.8 row changes.

@@ -37,7 +37,9 @@
   "D-SDK-20": "Forwarding is `sidecar/device` plus the root's listed forwarding files, whose file and descriptor lists `make check` holds.",
   "D-SDK-32": "A forwarding Delegation of the device's sidecar and its forward_only clients authorize forwarding; the forwarding key signs only delegations.",
   "D-TEAM-33": "A sidecar alone signs its forwarding Delegation: no admissions, config-only reach, no not_after, superseded by a newer one.",
-  "D-REPO-2": "Root: client code, MLS; engines in `<svc>service`; forwarding's packet side in `device/`; test peers in `mlsinterop/`; nested cli/, smtpproof/."
+  "D-REPO-2": "Root: client code, MLS; engines in `<svc>service`; forwarding's packet side in `device/`; test peers in `mlsinterop/`; nested cli/, smtpproof/.",
+  "D-REPO-3": "Engines live in sidecar over operator-core's Env, which server/core implements; sidecar owns its SQL (owner decisions 19, 251).",
+  "D-SDK-19": "The page Worker builds the root with `-tags sidecar_http`, excluding connect-facing and `host_*.go` files; connect comes only through operator-core."
  },
  "Q": {
   "Q-EVS-24": [
@@ -63,6 +65,10 @@
   "Q-BRIDGE-8": [
    "Does an app device claim its overlay address when its forwarding is set up?",
    "(a) on demand, as §17.4 says: no new reach under owner decision 120."
+  ],
+  "Q-REPO-1": [
+   "How do PLAN.md:5-7's repos split a service?",
+   "(a), amended by owner decision 251: engines take operator-core's Env, which server/core implements."
   ]
  }
 }
