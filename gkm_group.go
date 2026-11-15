@@ -8,7 +8,9 @@
 //	<repo_id>/pins       the group, the newest epoch adopted with its epoch_authenticator and header, and the
 //	                     newest generation held with its C_g; they never fall (R8, I-16)
 //	<repo_id>/pending    KF1's draft, the Welcomes this device committed and has not yet written, and the Adds of
-//	                     other leaves' commits whose Welcomes it watches for (QD-747, gkm_welcome_watch.go)
+//	                     other leaves' commits whose Welcomes it watches for (QD-747, gkm_welcome_watch.go); a
+//	                     bootstrap draft holds its group and RK_1 alone until CreateGroup signs it (QD-824,
+//	                     gkm_create.go)
 //
 // A flow is a method that runs to its end or to an error, and every transition it makes is fenced by the object it
 // writes at gkm, each an If-None-Match create, and by the member checks (gkm_verify_*.go) at this device's own
@@ -654,7 +656,7 @@ type gkmPendingRecord struct {
 
 // version | u32 length | [group_id | RK_1 | request] | u16 count | { u64 epoch | commit hash | u32 length | request }
 // | group_id | u64 epoch | u16 count | { u64 epoch | u64 time_ms | u8 flags | u16 count | { sidecar_id } }. A record
-// that ends after its owed Welcomes holds no watch.
+// that ends after its owed Welcomes holds no watch. A bootstrap draft's request is empty (DraftGroup).
 func (self *gkmPendingRecord) encode() []byte {
 	encoded := []byte{gkmRecordVersion}
 	create := []byte{}
@@ -722,7 +724,8 @@ func decodeGkmPendingRecord(encoded []byte) (*gkmPendingRecord, error) {
 	}
 	record := &gkmPendingRecord{}
 	if create := take(int(takeUint(4))); 0 < len(create) {
-		if len(create) <= gkmIdByteCount+gkmRepoKeyByteCount {
+		// exactly a group and RK_1 is a bootstrap draft, no request signed yet
+		if len(create) < gkmIdByteCount+gkmRepoKeyByteCount {
 			return nil, malformed
 		}
 		groupId, err := IdFromBytes(create[:gkmIdByteCount])

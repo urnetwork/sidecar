@@ -61,6 +61,22 @@ func (self *GkmGroupClient) TestHasRotateDraft(repoId Id) bool {
 	return err == nil
 }
 
+// Whether the repo's pending record holds KF1's draft, and whether that draft holds its signed request yet: a bootstrap
+// draft holds its group and RK_1 alone until CreateGroup signs it.
+func (self *GkmGroupClient) TestCreateDraft(repoId Id) (kept bool, signed bool, err error) {
+	record, err := self.manager(repoId).pendingRecord()
+	if err != nil || record.create == nil {
+		return false, false, err
+	}
+	return true, 0 < len(record.create.request), nil
+}
+
+// C_g computed from the key's own RK_g, SHA-256("UR evs 1.0 commit" || repo_id || u64be(g) || RK_g), for a test to
+// hold a commitment some statement names to the secret itself.
+func (self *EvsRepoKey) TestCommitmentOfKey() []byte {
+	return gkmCommitment(self.repoId, self.generation, self.repoKey)
+}
+
 // The Welcome watches the repo's pending record holds, as epoch and joiner count, with the group and epoch the
 // record names them current at: what the keychain holds, whether or not it still holds at this client's pins.
 func (self *GkmGroupClient) TestWelcomeWatches(repoId Id) (groupId Id, epoch uint64, watchEpochs []uint64, err error) {

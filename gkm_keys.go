@@ -441,7 +441,18 @@ type GkmGenerationArgs struct {
 // Generation 1 of a new group: a fresh RK_1, its commitment, and gen/1's statement, unsigned, with no parent
 // (KF1).
 func NewGkmFirstGeneration(repoId Id, groupId Id, args *GkmGenerationArgs) (*EvsRepoKey, *protocol.GenRotate, error) {
-	return newGkmGeneration(repoId, groupId, nil, args)
+	return newGkmGeneration(repoId, groupId, nil, nil, args)
+}
+
+// Generation 1 over an RK_1 drawn before its statement could be signed, KF1's bootstrap draft's (QD-824;
+// GkmGroupClient.DraftGroup): gen/1's statement, unsigned, held to every rule NewGkmFirstGeneration's is, its auth pin
+// past position 0 among them. C_1 = SHA-256("UR evs 1.0 commit" || repo_id || u64be(1) || RK_1) holds no pin, so it is
+// the commitment a push sealed under the draft already named.
+func newGkmFirstGenerationOver(repoId Id, groupId Id, repoKey []byte, args *GkmGenerationArgs) (*EvsRepoKey, *protocol.GenRotate, error) {
+	if len(repoKey) != gkmRepoKeyByteCount {
+		return nil, nil, fmt.Errorf("%w: a drafted key of %d bytes", ErrGkmMalformed, len(repoKey))
+	}
+	return newGkmGeneration(repoId, groupId, nil, repoKey, args)
 }
 
 // Generation g+1 after this one: a fresh RK_{g+1}, its commitment, and gen/<g+1>'s statement, unsigned, whose
@@ -451,7 +462,7 @@ func (self *EvsRepoKey) NextGeneration(args *GkmGenerationArgs) (*EvsRepoKey, *p
 	if err := self.checkHeld(); err != nil {
 		return nil, nil, err
 	}
-	return newGkmGeneration(self.repoId, self.groupId, self, args)
+	return newGkmGeneration(self.repoId, self.groupId, self, nil, args)
 }
 
 // Generation g+1 after this one in groupId, the group that re-formed this generation's (§10.8; plan-KEYS-reform-ladder
@@ -464,11 +475,12 @@ func (self *EvsRepoKey) NextGenerationIn(groupId Id, args *GkmGenerationArgs) (*
 	if groupId == (Id{}) {
 		return nil, nil, fmt.Errorf("%w: a generation needs its group", ErrGkmMalformed)
 	}
-	return newGkmGeneration(self.repoId, groupId, self, args)
+	return newGkmGeneration(self.repoId, groupId, self, nil, args)
 }
 
-// A generation's keys and statement; parent nil for generation 1.
-func newGkmGeneration(repoId Id, groupId Id, parent *EvsRepoKey, args *GkmGenerationArgs) (*EvsRepoKey, *protocol.GenRotate, error) {
+// A generation's keys and statement; parent nil for generation 1. drawn is an RK_g drawn before, nil to draw a fresh
+// one here.
+func newGkmGeneration(repoId Id, groupId Id, parent *EvsRepoKey, drawn []byte, args *GkmGenerationArgs) (*EvsRepoKey, *protocol.GenRotate, error) {
 	if args == nil || !args.Cause.valid() || args.Time.IsZero() || len(args.HoldersSha256) != gkmDigestByteCount {
 		return nil, nil, fmt.Errorf("%w: a generation needs a cause, a time and a holders hash", ErrGkmMalformed)
 	}
@@ -483,7 +495,13 @@ func newGkmGeneration(repoId Id, groupId Id, parent *EvsRepoKey, args *GkmGenera
 	if parent != nil {
 		generation = parent.generation + 1
 	}
-	repoKey := gkmNewRepoKey()
+	repoKey := drawn
+	if repoKey == nil {
+		repoKey = gkmNewRepoKey()
+	} else {
+		repoKey = bytes.Clone(repoKey)
+		testHookSecret("RK_g", repoKey)
+	}
 	key := &EvsRepoKey{
 		repoId:     repoId,
 		groupId:    groupId,
