@@ -4,7 +4,8 @@
 // is a protocol change no deployment makes on one side alone: the two id-level limits, which api, every gate and every
 // device judge a RepoPrefixRules entry by (16.2.2), then what makes an opened set void or a pending one void
 // (ACL-M6-04's acl_prefix.go). Then what a reader of a ruled repo holds itself to, WalkBackVersionCount and
-// AlarmInterval (EVS1-M6-04's evs_prefix.go), and the repair's bounds (EVS1-M6-05's evs_prefix_repair.go).
+// AlarmInterval (EVS1-M6-04's evs_prefix.go), and the repair's and the pin pushes' bounds and timer (EVS1-M6-05's
+// evs_prefix_repair.go).
 //
 // The statement rules read DefaultAclPrefixSettings(), as they read DefaultAclAccessLogSettings(); threading each
 // side's own instance through them is the review phase's settings sweep (QD-706).
@@ -79,6 +80,17 @@ type AclPrefixSettings struct {
 	// writes none.
 	RepairByteCount  int64
 	RepairByteWindow time.Duration
+	// How often the daemon's prefix timer runs a pass of the repair runner and of the pin pushes the journal owes: 1
+	// min, well inside RepairDelay, so a unit is sent at most a minute past its due time. Non-positive runs no timer,
+	// and repairs go by hand alone.
+	RepairPassInterval time.Duration
+	// The least time between two sends of one repo's owed pin pushes (16.2.9's retry row): 10 min, so a refused pin
+	// push costs evs a request a ref every ten minutes at most. Non-positive sends them at every pass.
+	PinPushRetryInterval time.Duration
+	// The sends of one repo's owed pin pushes before the journal drops them: 144, a day at PinPushRetryInterval. Past
+	// it the next honest push on each ref binds it, as any push pinned at its writer's installed state does, and `ur
+	// evs rules show` lists the ref as not bound yet. Non-positive drops them after the first send.
+	PinPushRetryCount int
 }
 
 // DESIGN-DETAILS 16.2.11's values. A fresh value each call.
@@ -99,6 +111,9 @@ func DefaultAclPrefixSettings() *AclPrefixSettings {
 		RepairPushWindow:     1 * time.Hour,
 		RepairByteCount:      1024 * 1024 * 1024,
 		RepairByteWindow:     24 * time.Hour,
+		RepairPassInterval:   1 * time.Minute,
+		PinPushRetryInterval: 10 * time.Minute,
+		PinPushRetryCount:    144,
 	}
 }
 
