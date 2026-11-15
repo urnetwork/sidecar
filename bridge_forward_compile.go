@@ -9,7 +9,10 @@
 //	2 keys       the generations a sealed body names and the store lacks, by DelegationWrap (bridge_forward_keys.go)
 //	3 head       the head the base names, from the store or its reader, held to the base: the anchored genesis, the
 //	             rows' settings equal to its ServiceSettings, and the rows' has_document equal to whether it holds a
-//	             policy. The Forwarder does not re-compile rows from it: a full reader's check, the app's sidecar role's
+//	             policy. A reader that anchors reads it at the state at the base, the compile having started there:
+//	             descent, and each push's signature under an identity key that state admits (QD-814). A read that
+//	             lacked a generation's key has the next compile list gkm for it. The Forwarder does not re-compile rows
+//	             from it: a full reader's check, the app's sidecar role's
 //	4 compile    NewAclState and CompileBridgeState for its sidecar, over the bindings it holds
 //	5 hand       the sink's SetState with the log run from the base through the captured pin
 //	6 release    the compile's record kept, the store trimmed to the base's retention point, every reference
@@ -213,7 +216,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 		return io.ReadAll(reader)
 	})
 	testHookBarrier("bridge_forward.compile.judge", self.args.NetworkId.String())
-	log, err := self.judge(logSettings, signedGenesis, stored, baseIndex, rowsSource, decision.Pin)
+	log, anchor, err := self.judge(logSettings, signedGenesis, stored, baseIndex, rowsSource, decision.Pin)
 	if err != nil {
 		var runError *ConfigRunError
 		if errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigEntryMalformed) || errors.Is(err, ErrConfigRowsUnavailable) || errors.As(err, &runError) {
@@ -257,7 +260,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	// 3 head
 	var head *ConfigHead
 	if base := state.Base(); base != nil {
-		if head, err = self.compileHead(state, base); err != nil {
+		if head, err = self.compileHead(state, base, anchor); err != nil {
 			return self.compileFailed(through, err), 0 < opened
 		}
 		if size.HeadByteCount == 0 {
@@ -392,7 +395,7 @@ func (self *Forwarder) compile() (forwarderCompileOutcome, bool) {
 	self.trimStore(state, baseHeader)
 
 	// what arrived during the compile, off its memory
-	log, state, view, compiled, stored, held = nil, nil, nil, nil, nil, nil
+	log, anchor, state, view, compiled, stored, held = nil, nil, nil, nil, nil, nil, nil
 	if self.settings.FreeMemoryAfterCompile {
 		debug.FreeOSMemory()
 	}
@@ -450,44 +453,48 @@ func (self *Forwarder) admit(through uint64, size ForwarderCompileSize) (forward
 }
 
 // Step 1: the rows-only log at the newest base among the stored entries, baseIndex, with every entry after it applied
-// in runs, held to floor, the sink's pin. With no base stored the log starts at the genesis, which the entries must
-// reach back to.
-func (self *Forwarder) judge(settings *ConfigLogSettings, signedGenesis []byte, stored [][]byte, baseIndex int, rowsSource ConfigRowsSource, floor *bridge.AuthPin) (*ConfigLog, error) {
+// in runs, held to floor, the sink's pin, and the state at that base, the anchor its head is read at; nil with no base
+// stored, when the log starts at the genesis, which the entries must reach back to. The log's history keeps the
+// anchor's state as the start of its window, so holding it costs nothing more.
+func (self *Forwarder) judge(settings *ConfigLogSettings, signedGenesis []byte, stored [][]byte, baseIndex int, rowsSource ConfigRowsSource, floor *bridge.AuthPin) (*ConfigLog, *ConfigState, error) {
 	var log *ConfigLog
+	var anchor *ConfigState
 	var err error
 	if baseIndex < 0 {
 		if log, err = NewConfigLogRowsOnly(settings, signedGenesis); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	} else {
 		retained := &ConfigRetained{SignedGenesis: signedGenesis, Entries: stored[:baseIndex+1]}
 		if log, err = RestoreConfigLogRowsOnly(settings, retained, rowsSource, nil); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		anchor = log.State()
 	}
 	rest := stored[baseIndex+1:]
 	for 0 < len(rest) {
 		run := rest[:min(len(rest), self.settings.CompileApplyRunCount)]
 		if _, err := log.ApplyRun(run, rowsSource); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		rest = rest[len(run):]
 	}
 	if fork := log.Fork(); fork != nil {
-		return nil, fork
+		return nil, nil, fork
 	}
 	if uint64(len(stored)) != 0 && log.Pin().GetVersion() == 0 {
-		return nil, fmt.Errorf("%w: the stored entries do not reach back to the genesis and hold no base", ErrConfigEntryMalformed)
+		return nil, nil, fmt.Errorf("%w: the stored entries do not reach back to the genesis and hold no base", ErrConfigEntryMalformed)
 	}
 	if err := log.checkFloor(floor); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return log, nil
+	return log, anchor, nil
 }
 
 // Step 3: the head the base names, from the store or its reader, held to the base (the file's comment), and kept. A
-// head that cannot be read now is an error the compile retries; one that is not the base's is head_alarm.
-func (self *Forwarder) compileHead(state *ConfigState, base *bridge.ProjectionHeader) (*ConfigHead, error) {
+// reader that anchors reads it at anchor, the state at the base. A head that cannot be read now is an error the compile
+// retries, which lists gkm first where the read lacked a generation's key; one that is not the base's is head_alarm.
+func (self *Forwarder) compileHead(state *ConfigState, base *bridge.ProjectionHeader, anchor *ConfigState) (*ConfigHead, error) {
 	name := forwarderHeadName(base.GetConfigVersion(), base.GetConfigHeadSha256())
 	var head *ConfigHead
 	stored := false
@@ -514,8 +521,18 @@ func (self *Forwarder) compileHead(state *ConfigState, base *bridge.ProjectionHe
 		ctx, cancel := context.WithTimeout(self.ctx, self.settings.FetchTimeout)
 		defer cancel()
 		testHookBarrier("bridge_forward.compile.head", self.args.NetworkId.String())
-		read, err := self.args.Heads.ReadConfigHead(ctx, base.GetConfigVersion(), base.GetConfigHeadSha256())
+		var read *ConfigHead
+		var err error
+		if anchorHeads, ok := self.args.Heads.(ConfigHeadAnchorReader); ok && anchor != nil {
+			read, err = anchorHeads.ReadConfigHeadAtAnchor(ctx, base.GetConfigVersion(), base.GetConfigHeadSha256(), anchor)
+		} else {
+			read, err = self.args.Heads.ReadConfigHead(ctx, base.GetConfigVersion(), base.GetConfigHeadSha256())
+		}
 		if err != nil {
+			if errors.Is(err, ErrGkmKeyMissing) {
+				// a push of the head sealed under a generation the store does not hold, one no body named
+				self.headKeysWanted = true
+			}
 			if errors.Is(err, ErrConfigHeadMismatch) {
 				// the reader was served a head that is not the one the base names
 				self.emitHeadAlarm(SidecarHeadAlarmFork, state.Pin(), state.Pin())
