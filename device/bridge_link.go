@@ -18,6 +18,10 @@
 //	         LinkDownTimeout, while Route answers its packets with rejects
 //	close    on the manager's own goroutine, outside every lock, never inside a client's callback (CODESTYLE's
 //	         CloseAndWait rule): a client's callbacks only set flags and wake it
+//	share    a share link (§17.9, C18) reaches a host of another network: its target's binding must name that network
+//	         and the identity key the alias pinned (QD-077), the host builds it FriendsAndFamily with the link's aliases
+//	         as C18's source half, each window client's delegation names the share, which the sidecar role signs with
+//	         the share's signer, and a new signer re-signs its live window clients (resignShares)
 //
 // A link can be built only with a host, the sidecar role's signer and the binding fetch, an identity to sign as, and a
 // LinkCountMax other than 0; with any missing, Route answers every link with a reject, which fails closed.
@@ -31,9 +35,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -60,16 +66,22 @@ type BridgeSignFunction func(ctx context.Context, delegation *bridge.WindowDeleg
 type BridgeTargetKeyFunction func(ctx context.Context, targetSidecarId connect.Id, targetClientId connect.Id) ([]byte, error)
 
 // What a link reaches, one link per target (Q-BRIDGE-2): the target's client and sidecar, the identity key the rules
-// pin for it (BridgeRuleLink.target_identity_public_key), and on a share link its share (BRIDGE-M6-05), zero here.
-// For an app host the rules also pin the client's own key (BridgeRuleLink.target_client_public_key): the device client
-// its live forwarding Delegation names, which its identity key signed (§17.9's target row; owner decision 197). Such a
-// link holds every contract to that key and fetches no binding, since GET /sidecar/identity names the sidecar's own
-// client, never the device's. A change of the pinned key is another target, so the link is built anew.
+// pin for it (BridgeRuleLink.target_identity_public_key), and on a share link its share, the sharing network the
+// target is a sidecar of and the digest of the aliases the link carries (§17.9; BRIDGE-M6-05), zero on a link of this
+// network. For an app host the rules also pin the client's own key (BridgeRuleLink.target_client_public_key): the
+// device client its live forwarding Delegation names, which its identity key signed (§17.9's target row; owner
+// decision 197). Such a link holds every contract to that key and fetches no binding, since GET /sidecar/identity names
+// the sidecar's own client, never the device's. A change of the pinned key, or of a share link's aliases, which C18's
+// source half fixes when the link is built, is another target, so the link is built anew.
 type BridgeLinkTarget struct {
 	ClientId          connect.Id
 	SidecarId         connect.Id
 	IdentityPublicKey [ed25519.PublicKeySize]byte
 	ShareId           connect.Id
+	// A share link's sharing network, which the target's binding must name; zero on a link of this network.
+	TargetNetworkId connect.Id
+	// SHA-256 of a share link's aliases, in order (bridgeShareAliasesDigest); zero on a link of this network.
+	ShareAliasesDigest [sha256.Size]byte
 	// An app host's device client key as the rules pin it; zero where the target's binding names the key.
 	HostClientPublicKey [ed25519.PublicKeySize]byte
 }
@@ -77,6 +89,24 @@ type BridgeLinkTarget struct {
 // Whether the rules pin the target client's key themselves, an app host's.
 func (self BridgeLinkTarget) hostClientPinned() bool {
 	return self.HostClientPublicKey != [ed25519.PublicKeySize]byte{}
+}
+
+// Whether the link is a share link, FriendsAndFamily to a host of another network (§17.9).
+func (self BridgeLinkTarget) shareLink() bool {
+	return self.ShareId != (connect.Id{})
+}
+
+// The digest a share link's aliases are keyed by: SHA-256 over each prefix's four address bytes and its length.
+func bridgeShareAliasesDigest(aliases []netip.Prefix) [sha256.Size]byte {
+	hash := sha256.New()
+	for _, alias := range aliases {
+		octets := alias.Addr().As4()
+		hash.Write(octets[:])
+		hash.Write([]byte{byte(alias.Bits())})
+	}
+	var digest [sha256.Size]byte
+	hash.Sum(digest[:0])
+	return digest
 }
 
 // One link of a target as an entry takes it: the target's current link, or one a rebuild replaced, draining from
@@ -120,6 +150,8 @@ type bridgeLink struct {
 	id      BridgeLinkId
 	target  BridgeLinkTarget
 	manager *BridgeLinkManager
+	// a share link's aliases, C18's source half, fixed for the link's life; nil on a link of this network
+	shareAliases []netip.Prefix
 
 	// the build in force, nil while the link has no client
 	built atomic.Pointer[bridgeLinkBuilt]
@@ -168,6 +200,11 @@ type bridgeLinkBuilt struct {
 	connectTimedOut atomic.Bool
 	// the latest strict_exp a window client was signed for, unix ms, 0 for none
 	notAfterMs atomic.Int64
+
+	// the generators the host wrapped for this build (NewBridgeLinkGenerator), whose live window clients a share's
+	// new signer re-signs (resign)
+	generatorsLock sync.Mutex
+	generators     []*bridgeLinkGenerator
 }
 
 // The links of one bridge. See the file's comment.
@@ -303,6 +340,12 @@ func (self *BridgeLinkManager) AddDownCallback(callback func(link BridgeLinkId))
 // The links targets take, each target's current one and those a rebuild replaced and that still drain, by target;
 // a target with none gets a link, unbuilt. Every link of a target not among targets leaves it, and run closes it.
 func (self *BridgeLinkManager) Retain(targets []BridgeLinkTarget) map[BridgeLinkTarget][]BridgeLinkUse {
+	return self.RetainShares(targets, nil)
+}
+
+// Retain, with each share link target's aliases, which its link carries as C18's source half: a share link target
+// whose aliases shareAliases does not hold gets none, so its link builds nothing (bridge_route.go names them all).
+func (self *BridgeLinkManager) RetainShares(targets []BridgeLinkTarget, shareAliases map[BridgeLinkTarget][]netip.Prefix) map[BridgeLinkTarget][]BridgeLinkUse {
 	uses := map[BridgeLinkTarget][]BridgeLinkUse{}
 	retired := false
 	func() {
@@ -312,7 +355,12 @@ func (self *BridgeLinkManager) Retain(targets []BridgeLinkTarget) map[BridgeLink
 		for _, target := range targets {
 			kept[target] = true
 			if self.targetLinks[target] == nil && !self.closed {
-				self.newLinkWithLock(target)
+				var aliases []netip.Prefix
+				if target.shareLink() {
+					// never nil on a share link, so the host takes it as one even with no alias to carry
+					aliases = append([]netip.Prefix{}, shareAliases[target]...)
+				}
+				self.newLinkWithLock(target, aliases)
 			}
 		}
 		for target := range self.targetLinks {
@@ -343,13 +391,13 @@ func (self *BridgeLinkManager) Retain(targets []BridgeLinkTarget) map[BridgeLink
 	return uses
 }
 
-// Adds a current link of target, unbuilt.
-func (self *BridgeLinkManager) newLinkWithLock(target BridgeLinkTarget) *bridgeLink {
+// Adds a current link of target, unbuilt, carrying shareAliases, nil on a link of this network.
+func (self *BridgeLinkManager) newLinkWithLock(target BridgeLinkTarget, shareAliases []netip.Prefix) *bridgeLink {
 	self.lastLinkId += 1
 	if self.lastLinkId == 0 {
 		self.lastLinkId = 1
 	}
-	link := &bridgeLink{id: self.lastLinkId, target: target, manager: self}
+	link := &bridgeLink{id: self.lastLinkId, target: target, manager: self, shareAliases: shareAliases}
 	self.targetLinks[target] = link
 	links := maps.Clone(*self.links.Load())
 	links[link.id] = link
@@ -526,7 +574,7 @@ func (self *BridgeLinkManager) maintain() time.Time {
 				if now.Before(rebuildAt) {
 					soonest(rebuildAt)
 				} else {
-					successor := self.newLinkWithLock(link.target)
+					successor := self.newLinkWithLock(link.target, link.shareAliases)
 					links[successor.id] = successor
 					successor.buildWanted.Store(true)
 					link.replacedAt = now
@@ -668,6 +716,15 @@ func (self *BridgeLinkManager) buildLink(link *bridgeLink) error {
 	if err != nil || len(networkId) != bridgeRuleIdByteCount {
 		return fmt.Errorf("%w: no identity to sign as", ErrBridgeLinkRefused)
 	}
+	// the network the target's binding names: this one, or on a share link the sharing network, whose host the
+	// alias pinned by its identity key (§17.9's target row; QD-077)
+	targetNetworkId := networkId
+	if link.target.shareLink() {
+		if link.target.TargetNetworkId == (connect.Id{}) || link.target.TargetNetworkId == connect.Id(networkId) || link.target.hostClientPinned() {
+			return fmt.Errorf("%w: a share link to no host of another network", ErrBridgeLinkRefused)
+		}
+		targetNetworkId = link.target.TargetNetworkId.Bytes()
+	}
 	clientKey, err := func() (ed25519.PublicKey, error) {
 		if link.target.hostClientPinned() {
 			// an app host: the key its forwarding Delegation names, which the compiled rules carry; nothing is fetched
@@ -681,7 +738,7 @@ func (self *BridgeLinkManager) buildLink(link *bridgeLink) error {
 		if err != nil {
 			return nil, fmt.Errorf("%w: the target's binding was not fetched", ErrBridgeLinkRefused)
 		}
-		return verifyBridgeTargetBinding(signedBinding, link.target, networkId, self.settings.LinkBindingMaxByteCount)
+		return verifyBridgeTargetBinding(signedBinding, link.target, targetNetworkId, self.settings.LinkBindingMaxByteCount)
 	}()
 	if err != nil {
 		return err
@@ -697,11 +754,13 @@ func (self *BridgeLinkManager) buildLink(link *bridgeLink) error {
 		sidecarId:       sidecarId,
 		targetClientKey: clientKey,
 	}
+	// nil on a link of this network, ProvideMode_Network; a share link's aliases make it FriendsAndFamily, C18's source
+	// half carrying them alone (BridgeHost)
 	client, err := self.host.NewBridgeLink(
 		context.WithValue(linkCtx, bridgeLinkContextKey{}, built),
 		link.target.ClientId,
 		subject,
-		nil,
+		link.shareAliases,
 		built.sign,
 	)
 	if err == nil && client == nil {
@@ -739,9 +798,58 @@ func (self *bridgeLinkBuilt) close() {
 	self.cancel()
 }
 
+// Notes a generator the host wrapped for this build, whose live window clients resign signs again.
+func (self *bridgeLinkBuilt) addGenerator(generator *bridgeLinkGenerator) {
+	self.generatorsLock.Lock()
+	defer self.generatorsLock.Unlock()
+	self.generators = append(self.generators, generator)
+}
+
+// Signs each live window client of the build again, for its later contracts: a share's new signer (§17.9's sign row).
+// Answers how many were signed, and the failures joined; a window client whose signature fails keeps the delegation it
+// carries, which the host refuses once its signer's generation is passed or its cert lapses.
+func (self *bridgeLinkBuilt) resign() (int, error) {
+	generators := func() []*bridgeLinkGenerator {
+		self.generatorsLock.Lock()
+		defer self.generatorsLock.Unlock()
+		return slices.Clone(self.generators)
+	}()
+	count := 0
+	var failed error
+	for _, generator := range generators {
+		signed, err := generator.resign()
+		count += signed
+		failed = errors.Join(failed, err)
+	}
+	return count, failed
+}
+
+// Signs the live window clients of every built link of the shares again (Bridge.ResignShares), off the packet path:
+// links of other shares and of this network are untouched. Answers how many window clients were signed.
+func (self *BridgeLinkManager) resignShares(shareIds []connect.Id) (int, error) {
+	builds := []*bridgeLinkBuilt{}
+	for _, link := range *self.links.Load() {
+		if !link.target.shareLink() || link.retired.Load() || !slices.Contains(shareIds, link.target.ShareId) {
+			continue
+		}
+		if built := link.built.Load(); built != nil {
+			builds = append(builds, built)
+		}
+	}
+	count := 0
+	var failed error
+	for _, built := range builds {
+		signed, err := built.resign()
+		count += signed
+		failed = errors.Join(failed, err)
+	}
+	return count, failed
+}
+
 // The link's sign for its host (§10's BridgeHost.NewBridgeLink): one window client's delegation, from this network and
-// this sidecar to the target, until notAfter, the window client's strict_exp, signed by the sidecar role. A window
-// client with no strict_exp, or a key that is no Ed25519 key, gets none, so it opens no contract.
+// this sidecar to the target, until notAfter, the window client's strict_exp, signed by the sidecar role. On a share
+// link the delegation names the share, so the sidecar role signs it with the share's signer and its cert (§17.9's sign
+// row). A window client with no strict_exp, or a key that is no Ed25519 key, gets none, so it opens no contract.
 func (self *bridgeLinkBuilt) sign(windowClientId connect.Id, windowClientPublicKey []byte, notAfter time.Time) ([]byte, error) {
 	if self.ctx.Err() != nil {
 		return nil, fmt.Errorf("%w: the link closed", ErrBridgeLinkRefused)
@@ -759,6 +867,9 @@ func (self *bridgeLinkBuilt) sign(windowClientId connect.Id, windowClientPublicK
 		WindowClientPublicKey: bytes.Clone(windowClientPublicKey),
 		TargetSidecarId:       self.link.target.SidecarId.Bytes(),
 		NotAfterMs:            notAfter.UnixMilli(),
+	}
+	if self.link.target.shareLink() {
+		delegation.ShareId = self.link.target.ShareId.Bytes()
 	}
 	signed, err := self.manager.settings.LinkSign(self.ctx, delegation)
 	if err != nil {

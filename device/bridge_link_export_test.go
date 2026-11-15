@@ -4,6 +4,9 @@
 package device
 
 import (
+	"crypto/sha256"
+	"net/netip"
+
 	"github.com/urnetwork/connect"
 )
 
@@ -64,4 +67,14 @@ func (self *BridgeLinkManager) CountsForTest() (openCount int, buildingCount int
 func (self *BridgeLinkManager) LinkBuiltForTest(link BridgeLinkId) bool {
 	held := (*self.links.Load())[link]
 	return held != nil && held.built.Load() != nil
+}
+
+// Signs the live window clients of the shares' built links again, as Bridge.ResignShares does, and answers how many.
+func (self *BridgeLinkManager) ResignSharesForTest(shareIds []connect.Id) (int, error) {
+	return self.resignShares(shareIds)
+}
+
+// The digest a share link's target is keyed by for its aliases.
+func BridgeShareAliasesDigestForTest(aliases []netip.Prefix) [sha256.Size]byte {
+	return bridgeShareAliasesDigest(aliases)
 }

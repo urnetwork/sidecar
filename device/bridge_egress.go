@@ -15,8 +15,10 @@
 //	                passes to today's public-only rules (plan-BRIDGE-small-readings #7)
 //	host            every mode but Network and FriendsAndFamily denies (#7)
 //	both            a contract class other than data denies, control and unset alike (#6, D-PROTO-18); Service denies
+//	host            FriendsAndFamily is a share's: §17.9's row (bridge_share.go) decides it, from the principal's verified
+//	                share alone, and nothing below
 //	host            no verified principal, or its subject revoked or suspended here, denies (D-BRIDGE-17); not sealed
-//	                denies (D-PROTO-6); FriendsAndFamily denies until shares land (BRIDGE-M6-05)
+//	                denies (D-PROTO-6)
 //	both            pending, legacy at a host and rules that did not parse deny every Network flow (§17.8)
 //
 // The sdk provider skips the principal and Sealed rows and rules 1 to 3 and 6 until C16, keeping rules 0, 4, 5, 7 and 8
@@ -166,6 +168,11 @@ type BridgeEgressPolicy struct {
 	// which forwarding Delegation's key admitted a principal (bridge_principal.go)
 	forwardPrincipals bridgeForwardPrincipals
 
+	// where the shares' ratchets are kept, nil for none, which admits no share principal (bridge_share.go); and the
+	// share principals refused because their ratchet's raise did not commit
+	shareRatchet             atomic.Pointer[bridgeShareRatchetBox]
+	shareRatchetRefusedCount atomic.Uint64
+
 	// where the flows a granted row admitted are reported (bridge_reach.go); nil reports nothing
 	reach *bridgeReachQueue
 }
@@ -212,10 +219,11 @@ func (self *BridgeEgressPolicy) PolicyGeneration() uint64 {
 	return self.state.Load().generation
 }
 
-// connect.EgressHook (C18): false, so FriendsAndFamily flows to private destinations keep today's public-only rules.
-// Only a sidecar-owned Required host holding a share grant turns it on, and shares land at M6 (BRIDGE-M6-05).
+// connect.EgressHook (C18): true only on the host profile while the published state holds a share it serves, so only a
+// sidecar-owned Required host holding a share grant hands FriendsAndFamily flows to private destinations to
+// ResolveEgress, and an sdk provider never does (§17.9's isolation row). One atomic load.
 func (self *BridgeEgressPolicy) FriendsAndFamilyEgress() bool {
-	return false
+	return self.profile == BridgePolicyProfileHost && self.state.Load().friendsAndFamily
 }
 
 // connect.EgressHook: decides one flow by the published state. See the file's comment.

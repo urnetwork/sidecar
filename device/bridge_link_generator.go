@@ -9,6 +9,8 @@
 //	check   ContractManager.SetContractDestinationCheck, so every contract answers to the client key the target's
 //	        verified binding names (bridge_link.go's pin row)
 //	watch   contract statuses and encryption events, which the link's health reads (plan-BRIDGE-small-readings #15)
+//	resign  each window client set up is kept until the window removes it, so a share's new signer (§17.9's sign row;
+//	        Bridge.ResignShares) signs it again and its later contracts carry the new delegation
 //
 // A step that fails retires the client with its args and returns no client: the window opens no contract, and the link
 // fails closed. The window then hands the args back once, which the wrapper takes without retiring them again. A
@@ -23,6 +25,7 @@ package device
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -40,6 +43,14 @@ type bridgeLinkGenerator struct {
 	stateLock sync.Mutex
 	// args whose client the wrapper retired with them, which the window hands back once
 	retiredArgs map[*connect.MultiClientGeneratorClientArgs]bool
+	// the window clients set up and not yet removed, which resign signs again
+	live map[*connect.Client]bridgeLinkLiveClient
+}
+
+// What a live window client was signed for: its ClientKey and its strict_exp.
+type bridgeLinkLiveClient struct {
+	publicKey []byte
+	notAfter  time.Time
 }
 
 // Wraps generator for the link whose build handed the host ctx: every window client it builds is signed for by sign,
@@ -51,12 +62,17 @@ func NewBridgeLinkGenerator(
 	sign func(windowClientId connect.Id, windowClientPublicKey []byte, notAfter time.Time) ([]byte, error),
 ) connect.MultiClientGenerator {
 	built, _ := ctx.Value(bridgeLinkContextKey{}).(*bridgeLinkBuilt)
-	return &bridgeLinkGenerator{
+	self := &bridgeLinkGenerator{
 		MultiClientGenerator: generator,
 		built:                built,
 		sign:                 sign,
 		retiredArgs:          map[*connect.MultiClientGeneratorClientArgs]bool{},
+		live:                 map[*connect.Client]bridgeLinkLiveClient{},
 	}
+	if built != nil {
+		built.addGenerator(self)
+	}
+	return self
 }
 
 // connect.MultiClientGenerator: the host generator's client, signed for and checked before it is returned, or none.
@@ -122,7 +138,54 @@ func (self *bridgeLinkGenerator) setUp(client *connect.Client, args *connect.Mul
 	if sessions := client.EncryptionSessionManager(); sessions != nil {
 		sessions.AddEncryptionEventCallback(self.built.encryptionEvent)
 	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.live[client] = bridgeLinkLiveClient{publicKey: keyManager.PublicKey(), notAfter: byJwt.ExpireTime}
+	}()
 	return nil
+}
+
+// connect.MultiClientGenerator: a window client the window removes leaves the live ones before the host's generator
+// retires it.
+func (self *bridgeLinkGenerator) RemoveClientWithArgs(client *connect.Client, args *connect.MultiClientGeneratorClientArgs) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		delete(self.live, client)
+	}()
+	self.MultiClientGenerator.RemoveClientWithArgs(client, args)
+}
+
+// Signs each live window client again with the link's sign and carries the new delegation on its later contracts (the
+// file's resign row). Off the packet path, outside every lock: sign may wait on §18.6's channel. Answers how many were
+// signed, and the failures joined; a client whose signing fails keeps the delegation it had.
+func (self *bridgeLinkGenerator) resign() (int, error) {
+	type liveClient struct {
+		client *connect.Client
+		live   bridgeLinkLiveClient
+	}
+	clients := func() []liveClient {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		clients := make([]liveClient, 0, len(self.live))
+		for client, live := range self.live {
+			clients = append(clients, liveClient{client: client, live: live})
+		}
+		return clients
+	}()
+	count := 0
+	var failed error
+	for _, held := range clients {
+		delegation, err := self.sign(held.client.ClientId(), held.live.publicKey, held.live.notAfter)
+		if err != nil {
+			failed = errors.Join(failed, err)
+			continue
+		}
+		held.client.ContractManager().SetWindowDelegation(delegation)
+		count += 1
+	}
+	return count, failed
 }
 
 // connect.MultiClientGenerator: args the window hands back, retired by the host's generator unless the wrapper retired

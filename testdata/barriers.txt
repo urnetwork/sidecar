@@ -66,6 +66,8 @@ barrier bridge_pin_entry.mark_down.after device/bridge_pin_entry.go
 barrier bridge_pin_entry.mark_down.before device/bridge_pin_entry.go
 barrier bridge_pin_entry.swap.after device/bridge_pin_entry.go
 barrier bridge_pin_entry.swap.before device/bridge_pin_entry.go
+barrier bridge_principal.share_ratchet.after device/bridge_share.go
+barrier bridge_principal.share_ratchet.before device/bridge_share.go
 barrier bridge_share.accept.plan bridge_share_invite.go
 barrier bridge_share.alias.after bridge_share_invite.go
 barrier bridge_share.alias.before bridge_share_invite.go
