@@ -10,6 +10,9 @@
 //	         before the 200, under a preservation hold too: a slot answering 404 is done, since every key it held is
 //	         gone (the drops row); a rewrite that cannot finish answers 503 unknown, which the client's retry
 //	         finishes, and queues taskworker's evs.erasure_finish for the repo, which FinishErasures runs
+//	versionless  a slot-keyed repo's versionless path keeps its one key in its own slot, so the rewrite above
+//	         destroys every version of the path at once, under a hold too, and waits for no purge (§11.12's
+//	         versionless row; EVS2-M10-12); in a general repo the key rides the kind-5 segment and goes with it
 //	class    a network's ERASE, CUT and CLOSURE pushes within 60 a minute are P0, past it P1, counted through
 //	         Quota.CountRate's evs_erasure_pushes; every slot rewrite is P0 (§11.13's classes)
 //

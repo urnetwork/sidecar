@@ -29,6 +29,14 @@
 //	          those keys: not built here, since those caches are §15.7's mail stores, §16.8's record caches and §5.9's
 //	          index cache; ReadErasures gives them the keys to forget
 //
+// Versionless paths and drops (§11.12's versionless and drops rows; FS-69, FS-96; EVS2-M10-12). A slot-keyed repo's
+// versionless path keeps its one key in its own slot, so an ERASE naming it destroys every version of the path at
+// once, under a hold too, with nothing to re-checkpoint first; SlotKeysOf names the key of every slot a version of a
+// path names, a version a hold kept from before a REMOVE generation or ur evs rekey re-keyed the path included. A
+// slot a drop deleted holds no key: evs counts its rewrite done, and an ERASE naming only such slots answers
+// NOTHING_TO_ERASE, which counts done here. An erasure never waits for a purge. In a general repo a versionless
+// segment's key rides its header, so only the purge that follows the path's removal or replacement takes it.
+//
 // Erasure and deposit refs stay at path epoch 1 (evsEpochExempt), so an ERASE never meets 412 PATH_EPOCH. ERASE,
 // CLOSURE and closure uploads take admin; a 429's retry_after_ms, which may run to the next 00:00 UTC for a closure's
 // allowance, goes back to the caller as the refusal.
@@ -39,6 +47,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -308,4 +317,43 @@ func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 		states = append(states, state)
 	}
 	return states, nil
+}
+
+// The key index a chain's slot holds its one key at, as the sealer draws it (evs_upload.go).
+const evsChainSlotKeyIndex = 0
+
+// A path whose history SlotKeysOf could not walk down to its first version, so a version it did not reach may name a
+// slot the list lacks: an erasure never counts such a list whole.
+var ErrEvsSlotKeysIncomplete = errors.New("evs: a path's history not walked to its first version")
+
+// The key of every slot a version of each path names, by the paths' verified histories, each once, in the paths'
+// order and newest version first: what an ERASE of the paths lists, and a CLOSURE's list for the files it rewrites
+// (§11.12's closure and versionless rows). A version the history shows names its slots whether or not its content
+// still stands, so a version a hold kept is covered; a general repo's versions name none. Each slot is a file
+// chain's, holding its one key at index 0 as Write seals it; a caller whose slots hold several keys, as RECORD's
+// entry slots do, names its own. refName nil is main.
+//
+// It fails closed: History walks at most HistoryVersionCount versions and never past a creation into a path's
+// earlier, removed life, so a walk that ends above the path's version 1 is ErrEvsSlotKeysIncomplete, with no list.
+func (self *EvsRepo) SlotKeysOf(ctx context.Context, refName []byte, paths []string) ([]*EvsErasedKey, error) {
+	keys := []*EvsErasedKey{}
+	named := map[Id]bool{}
+	for _, path := range paths {
+		history, err := self.History(ctx, &EvsReadArgs{RefName: refName, Path: path, Fresh: true})
+		if err != nil {
+			return nil, err
+		}
+		if len(history.Versions) == 0 || history.Versions[len(history.Versions)-1].Version != 1 {
+			return nil, fmt.Errorf("%w: %d versions walked", ErrEvsSlotKeysIncomplete, len(history.Versions))
+		}
+		for _, version := range history.Versions {
+			for _, slotId := range version.SlotIds {
+				if !named[slotId] {
+					named[slotId] = true
+					keys = append(keys, &EvsErasedKey{SlotId: slotId, KeyIndex: evsChainSlotKeyIndex})
+				}
+			}
+		}
+	}
+	return keys, nil
 }

@@ -802,7 +802,9 @@ func (self *gkmRekeyRun) pushBatch(ctx context.Context) error {
 	for moved := 0; 0 < len(self.batch); moved += 1 {
 		writes := make([]*EvsPathWrite, len(self.batch))
 		for i, file := range self.batch {
-			writes[i] = &EvsPathWrite{Path: file.path, Content: file.content, ForceCheckpoint: true, IfVersion: &file.version}
+			// a rekey changes no setting: a versionless path stays versionless, every chunk sealed again under a fresh
+			// key, in a slot-keyed repo in a new slot (§11.7's keys row; EVS2-M10-12)
+			writes[i] = &EvsPathWrite{Path: file.path, Content: file.content, ForceCheckpoint: true, IfVersion: &file.version, Options: &EvsWriteOptions{}}
 		}
 		testHookBarrier(gkmBarrierRekeyPushBefore, barrierKey)
 		_, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.refName, Writes: writes})

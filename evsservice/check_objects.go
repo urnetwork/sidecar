@@ -121,7 +121,9 @@ func CheckObjects(view *PushView) *EvsCheckRefusal {
 				switch protocol.EvsLocatorKind(locator.GetKind()) {
 				case protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT:
 					segmentId := [32]byte(locator.GetId())
-					if !newSegments[segmentId] && !citedSegments[segmentId] {
+					// a kind-5 segment the path's own newest version names unstaged is adopted as kind 1 when versioning
+					// turns on (§11.7's on row), which the citation rule then judges (check_citation.go)
+					if !newSegments[segmentId] && !citedSegments[segmentId] && !evsAdoptsKind5(view, change.TokenPath, segmentId) {
 						refusal := newEvsCheckRefusal(EvsCheckReasonSegmentUnknown, "a segment neither uploaded nor named by a version read")
 						refusal.Paths = []sidecar.EvsTokenPath{change.TokenPath}
 						return refusal

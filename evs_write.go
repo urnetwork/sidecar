@@ -2,7 +2,10 @@
 
 // EvsRepo.Write and WritePaths (§11.20, §18.5; EVS1-M2-25, EVS1-M2-26): files written or removed on a file-mode ref
 // in one push. Head mode cannot build a git tree, which needs every sibling's oid, so a git-mode ref answers
-// EVS_GIT_REF and is written through the local tier (§11.7). Format 1 writes versioning on only.
+// EVS_GIT_REF and is written through the local tier (§11.7). Write takes a versioning setting, "", "on" or "off"
+// (§18.5), which each plan decides the version's versioning from, and a removal of a directory lists the versionless
+// files below it (evs_write_versionless.go; EVS2-M10-16); outside §19.11's format2 gate every version is versioning 0
+// and "off" is ErrEvsFormatUnsupported.
 //
 // Each attempt: GkmClient.EnsureWritable first, so nothing is sealed to a generation a non-reader holds (§8.12); a
 // plan on a verified read (evs_plan.go); its records sealed (evs_upload.go); a new push id; its segments uploaded with
@@ -19,7 +22,9 @@
 // and each made again, so a rebuild or a creation's second plan never puts a caller's older bytes over a version
 // that landed meanwhile: the planner answers 409 PATH_CONFLICT itself, nothing sent. A 409 PATH_CONFLICT evs gives
 // the push goes back as an *EvsPathConflictError too, naming the written paths its token paths are, none when evs
-// named only a parent directory's delta.
+// named only a parent directory's delta. One naming a versionless path is ErrEvsVersionlessConflict as well: a caller
+// surfaces it and never writes its content again over the winner's, which no history would keep (§11.7's writers
+// row). A 409 VERSIONING is a caller error and goes back as it is, never retried.
 //
 // On every leg. Safe for concurrent use, each call its own push.
 
@@ -56,13 +61,19 @@ type EvsWritePathsResult struct {
 // Writes or removes one file on a file-mode ref: see the file header.
 func (self *EvsRepo) Write(ctx context.Context, args *EvsWriteArgs) (*EvsWriteResult, error) {
 	switch args.Versioning {
-	case "", "on":
-	case "off":
-		return nil, fmt.Errorf("%w: versioning off is format 2's", ErrEvsFormatUnsupported)
+	case EvsVersioningKeepSetting, EvsVersioningOn:
+	case EvsVersioningOff:
+		if !self.client.Format2Admitted() {
+			return nil, fmt.Errorf("%w: versioning off is format 2's, outside this network's gate", ErrEvsFormatUnsupported)
+		}
 	default:
 		return nil, fmt.Errorf("%w: versioning %q", ErrEvsWriteInvalid, args.Versioning)
 	}
 	write := &EvsPathWrite{Path: args.Path, Mode: args.Mode, Remove: args.Remove, ForceCheckpoint: args.ForceCheckpoint}
+	if !args.Remove {
+		// each plan decides the version's versioning from the setting, on its own read of the path
+		write.Options = &EvsWriteOptions{Versioning: args.Versioning}
+	}
 	if !args.Remove {
 		if args.Content == nil || args.Size < 0 || EvsFileMaxByteCount < args.Size {
 			return nil, fmt.Errorf("%w: content of %d bytes", ErrEvsWriteInvalid, args.Size)
@@ -120,6 +131,7 @@ func evsWrittenConflict(err error, writes []*EvsPathWrite, plan *EvsWritePlan) e
 			conflict.Paths = append(conflict.Paths, write.Path)
 		}
 	}
+	evsVersionlessConflict(conflict, plan)
 	return conflict
 }
 
@@ -195,7 +207,12 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 		// a newer generation, which may be a removal this device rotated to: its refs' mappers tick
 		self.client.NoteGeneration(self.repoId)
 	}
-	plan, err := self.PlanWrite(ctx, &EvsPlanArgs{RefName: refName, RefId: refId, Writes: writes, Generation: repoKey.Generation(), Fresh: fresh, AgentId: agentId})
+	// a removed directory's versionless files, each listed as a removal of its own (§11.7's removal row)
+	planWrites, err := self.withRemovalLists(ctx, refName, writes)
+	if err != nil {
+		return nil, nil, err
+	}
+	plan, err := self.PlanWrite(ctx, &EvsPlanArgs{RefName: refName, RefId: refId, Writes: planWrites, Generation: repoKey.Generation(), Fresh: fresh, AgentId: agentId})
 	if err != nil {
 		return nil, nil, err
 	}

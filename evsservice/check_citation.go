@@ -28,11 +28,59 @@ import (
 // carries one, ran at 5c instead. A part's citations wait for its seal, whose view holds every part's changes,
 // staged segments, receipts and reads: a rename's removal and its target may sit in two parts, and the at-most-one
 // rules count over the whole push, so only the seal can judge them, and only the seal commits.
+//
+// A push that carries no format-2 value is judged too when a version of it adopts its path's kind-5 segment as kind 1
+// (§11.7's on row; EVS2-M10-16): format 1's 5h let that one locator through, so the rule's at-most-one count holds
+// over it.
 func checkFormat2Objects(view *PushView) *EvsCheckRefusal {
-	if !view.NeedsFormat2 || view.Format2Rules != nil || view.Stage == PushStagePart {
+	if view.Format2Rules != nil || view.Stage == PushStagePart {
+		return nil
+	}
+	if !view.NeedsFormat2 && !evsViewAdoptsKind5(view) {
 		return nil
 	}
 	return CheckCitation(view)
+}
+
+// Whether a version of tokenPath naming segmentId by a kind-1 locator adopts a kind-5 segment: one its path's own
+// newest version, as step 4 read it, names unstaged. Never another path's, a reuse source's or a staged one, which
+// stay format 1's unknown segment; a rename's adoption of a removed path's segment waits for the planner that builds
+// renames.
+func evsAdoptsKind5(view *PushView, tokenPath sidecar.EvsTokenPath, segmentId [sha256.Size]byte) bool {
+	newest, refusal := evsPathNewestEntry(view, tokenPath)
+	if refusal != nil || newest == nil {
+		return false
+	}
+	for _, locator := range newest.GetChain() {
+		if protocol.EvsLocatorKind(locator.GetKind()) == protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT && !locator.GetStaged() &&
+			len(locator.GetId()) == sha256.Size && [sha256.Size]byte(locator.GetId()) == segmentId {
+			return true
+		}
+	}
+	return false
+}
+
+// Whether any version the view's payload writes adopts a kind-5 segment as kind 1.
+func evsViewAdoptsKind5(view *PushView) bool {
+	if view.Payload == nil {
+		return false
+	}
+	for _, change := range view.Payload.Changes {
+		if !change.WritesEntry() {
+			continue
+		}
+		entry, err := parseEvsEntryVersion(change.EntryVersion)
+		if err != nil {
+			continue
+		}
+		for _, locator := range entry.GetChain() {
+			if protocol.EvsLocatorKind(locator.GetKind()) == protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT && len(locator.GetId()) == sha256.Size &&
+				evsAdoptsKind5(view, change.TokenPath, [sha256.Size]byte(locator.GetId())) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // 5h's citation rule: see the file header.

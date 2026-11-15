@@ -156,6 +156,9 @@ type EvsClient struct {
 	// whether the network is in §19.11's format2 gate, from the composition's core state (evs_format_client.go); nil
 	// answers false
 	format2Source func() bool
+	// a new path's versioning rules, from the composition's config state (evs_write_versionless.go); nil reads as
+	// no rule
+	versioningRules func(repoId Id, filePath string, size uint64) (uint32, error)
 	// subscriptions and catch-up (evs_subscribe.go), with its own lock
 	subscriber *evsSubscriber
 }
