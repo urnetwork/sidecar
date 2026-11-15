@@ -8,11 +8,15 @@
 package sidecar
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -91,5 +95,126 @@ func TestSignWindowDelegationSignsWhatAHostVerifies(t *testing.T) {
 	}
 	if _, err := bridgeSignWindowDelegation(request(), nil, compiled, maxLifetime, now, sign, nil); !errors.Is(err, ErrBridgeDelegationRefused) {
 		t.Errorf("no identity: %v", err)
+	}
+}
+
+// §17.9's sign and use rows on a sidecar: a share link's delegation is signed by the signer the newest compiled head
+// carries, never by the identity key, carries the share's id and cert, and verifies at the other network's host under
+// the pinned ShareKey. The sidecar never signs below a generation it used, signs nothing once the cert expired or the
+// file left the head, and a signer that changed is what the links are signed again for.
+func TestAShareLinkIsSignedByItsShareSigner(t *testing.T) {
+	keys := newTestBridgeShareKeys(t)
+	net := newTestConfigNet(t)
+	ctx := context.Background()
+	shareId := testConfigId("signed share")
+	sharePublicKey, err := keys.keyring.Create(ctx, shareId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headAt := func(generation uint64) *ConfigHead {
+		files := map[string][]byte{ConfigHeadGenesisPath: net.signedGenesis}
+		if 0 < generation {
+			file, err := keys.keyring.Certify(ctx, shareId, generation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[ConfigHeadBridgeSharePath(shareId)], _ = proto.Marshal(file)
+		}
+		head, err := NewConfigHead(files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return head
+	}
+	identity := &SidecarIdentity{NetworkId: testConfigId("accepting network"), SidecarId: testConfigId("accepting sidecar")}
+	target := testConfigId("sharing host")
+	compiled := &BridgeCompiled{State: &bridge.BridgeState{}, LinkTargets: []Id{target}}
+	maxLifetime := DefaultBridgeComponentSettings().WindowDelegationMaxLifetime
+	windowPublicKey := bytes.Repeat([]byte{0x33}, 32)
+	request := &BridgeDelegationRequest{
+		NetworkId: identity.NetworkId, SubjectSidecarId: identity.SidecarId, WindowClientId: testConfigId("share window client"),
+		WindowClientPublicKey: windowPublicKey, TargetSidecarId: target, NotAfter: keys.clock.Now().Add(time.Hour), ShareId: shareId,
+	}
+	identitySign := func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+		t.Fatal("the identity key was asked to sign a share link's delegation")
+		return nil, nil
+	}
+	shares := &bridgeComponentShares{}
+	sign := func() ([]byte, error) {
+		return bridgeSignWindowDelegation(request, identity, compiled, maxLifetime, keys.clock.Now(), identitySign, shares.use)
+	}
+	admit := func(signed []byte, ratchet uint64) (*bridge.WindowDelegationAdmission, error) {
+		return bridge.VerifyWindowDelegationAdmission(signed, &bridge.WindowDelegationCheck{
+			NetworkId: identity.NetworkId.Bytes(), WindowClientId: request.WindowClientId.Bytes(), WindowClientPublicKey: windowPublicKey,
+			TargetSidecarId: target.Bytes(), NowMs: keys.clock.Now().UnixMilli(),
+			IdentityKey: func(sidecarId []byte) ([]byte, bool) { return nil, false },
+			Share: func(got []byte) (*bridge.WindowDelegationShare, bool) {
+				return &bridge.WindowDelegationShare{SharePublicKey: sharePublicKey, Generation: ratchet}, bytes.Equal(got, shareId.Bytes())
+			},
+		})
+	}
+	// no file: nothing is signed
+	if _, err := sign(); !errors.Is(err, ErrBridgeDelegationRefused) || !errors.Is(err, ErrBridgeShareSignerRefused) {
+		t.Fatalf("a share with no signer: %v", err)
+	}
+	if _, err := bridgeSignWindowDelegation(request, identity, compiled, maxLifetime, keys.clock.Now(), identitySign, nil); !errors.Is(err, ErrBridgeDelegationRefused) {
+		t.Fatalf("a share link where no share signer runs: %v", err)
+	}
+	head := headAt(8)
+	if changed := shares.setHead(head); len(changed) != 1 || changed[0] != shareId {
+		t.Fatalf("a first signer changed %v", changed)
+	}
+	if changed := shares.setHead(head); len(changed) != 0 {
+		t.Fatalf("the same head changed %v", changed)
+	}
+	signed, err := sign()
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := admit(signed, 8)
+	if err != nil || admission.ShareCert.GetConfigGeneration() != 8 || !bytes.Equal(admission.Delegation.GetShareId(), shareId.Bytes()) {
+		t.Fatalf("a host's admission: %v", err)
+	}
+	if _, err := admit(signed, 9); !errors.Is(err, bridge.ErrShareCertGeneration) {
+		t.Errorf("a host whose ratchet passed the cert: %v", err)
+	}
+	// a target the compiled state links to nowhere is refused for a share as for any link
+	elsewhere := *request
+	elsewhere.TargetSidecarId = testConfigId("no link")
+	if _, err := bridgeSignWindowDelegation(&elsewhere, identity, compiled, maxLifetime, keys.clock.Now(), identitySign, shares.use); !errors.Is(err, ErrBridgeDelegationRefused) {
+		t.Errorf("a share link to no compiled target: %v", err)
+	}
+	// a head that carries an older generation's signer, a stale read or a rollback: never signed with again
+	if changed := shares.setHead(headAt(7)); len(changed) != 1 {
+		t.Fatalf("an older signer changed %v", changed)
+	}
+	if _, err := sign(); !errors.Is(err, ErrBridgeShareSignerRefused) {
+		t.Fatalf("a signer below the one used: %v", err)
+	}
+	// a renewal at the generation used signs again, and once its cert runs out the share lapses here
+	if changed := shares.setHead(headAt(8)); len(changed) != 1 {
+		t.Fatalf("a renewed signer changed %v", changed)
+	}
+	if _, err := sign(); err != nil {
+		t.Fatal(err)
+	}
+	keys.clock.advance(169 * time.Hour)
+	request.NotAfter = keys.clock.Now().Add(time.Hour)
+	if _, err := sign(); !errors.Is(err, ErrBridgeShareSignerRefused) {
+		t.Fatalf("an expired signer: %v", err)
+	}
+	// the file leaves the head: the share stops signing, and nothing is re-signed for it
+	if changed := shares.setHead(headAt(0)); len(changed) != 0 {
+		t.Fatalf("a head with no file changed %v", changed)
+	}
+	if _, err := sign(); !errors.Is(err, ErrBridgeShareSignerRefused) {
+		t.Fatalf("a share whose file left the head: %v", err)
+	}
+	// a floor that cannot be kept signs nothing
+	kept := &bridgeComponentShares{}
+	kept.setFloors(NewBridgeShareSignerFloors(nil, func(floors map[Id]uint64) error { return errors.New("the store is full") }))
+	kept.setHead(headAt(9))
+	if _, err := kept.use(shareId, keys.clock.Now()); !errors.Is(err, ErrBridgeShareSignerRefused) {
+		t.Fatalf("a floor that was not kept: %v", err)
 	}
 }

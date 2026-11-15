@@ -35,6 +35,7 @@ import (
 	"bytes"
 	"cmp"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -436,7 +437,40 @@ func (self *bridgeCompiler) openLedger(settings *BridgeLedgerSettings) error {
 			self.wait(BridgeCompileWait{Kind: BridgeCompileWaitGeneration, Generation: entry.Generation})
 		}
 	}
+	// §17.9's bound row: a share this network accepted whose holder is no longer one, named once a share
+	alarmed := map[string]bool{}
+	for _, alias := range self.ledger.Aliases() {
+		shareId := hex.EncodeToString(alias.Body.GetShareId())
+		if alarmed[shareId] {
+			continue
+		}
+		if removed, gone := BridgeShareHolderRemoved(self.state, alias.Signer); gone {
+			alarmed[shareId] = true
+			self.alarm(SidecarBridgeAlarmShareHolderRemoved, 0, removed,
+				"share "+shareId+": the device that accepted it is revoked or its member is no longer an admin, and can still certify its signers; the sharing network revokes the share and invites again")
+		}
+	}
 	return nil
+}
+
+// Whether a share's holder is still one (§17.9's bound row; DESIGN-DETAILS 12.2.8): the device that filed the share's
+// aliases stands, and its member is still an admin. A holder device revoked, or a holder member gone from the
+// AdminSet, can certify until the sharing network revokes the share, so the accepting network's devices raise
+// bridge_alarm share_holder_removed naming it, and the sharing network re-invites. removed names the device; the zero
+// id for a holder that stands.
+func BridgeShareHolderRemoved(state *ConfigState, aliasSigner Id) (removed Id, gone bool) {
+	if state == nil || aliasSigner == (Id{}) {
+		return Id{}, false
+	}
+	row := state.SidecarRow(aliasSigner)
+	if row == nil || row.GetRevokedAt() != 0 {
+		return aliasSigner, true
+	}
+	statement := &configStatement{signers: []ConfigSigner{{Kind: ConfigSignerSidecar, SidecarId: aliasSigner}}, timeMs: state.TimeMs()}
+	if !bridgeSignerAdmin(state, statement) {
+		return aliasSigner, true
+	}
+	return Id{}, false
 }
 
 // Whether a rule the ledger holds is in force at t, and its drain when a drain withdrawal keeps it compiled (§17.8's

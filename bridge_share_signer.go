@@ -19,13 +19,16 @@
 //	        generation until the holder's renewal lands
 //	resign  a new signer -> the host re-signs each live window client of that share's links, whose next contracts
 //	        carry it (BridgeComponent.ResignShares)
+//	bound   a holder device revoked, or a holder member no longer an admin, can still certify until the sharing
+//	        network revokes the share: every compile of the accepting network names it in bridge_alarm
+//	        share_holder_removed (BridgeShareHolderRemoved, bridge_compile.go), once a share and id
 //
 // The write gate is the fence against a stale holder: a holder that read generation 7, certified it and writes after
 // the network rotated to 8 for a removal cannot land the file in a head sealed at 7, so the removed sidecar, which
 // holds 7's key, reads no seed whose cert outlives its removal by more than a cert's lifetime. The holder's own view
 // cannot be that fence, since its view is what is stale.
 //
-// A seed never leaves the sidecar role: a BridgeShareSignerUse is not in BridgeState, crosses no device RPC and prints
+// A seed never leaves the sidecar role: a BridgeShareSignerFile is not in BridgeState, crosses no device RPC and prints
 // as its ids alone. testHookSecret runs where a seed is read from a file. Safe for concurrent use.
 
 package sidecar
@@ -38,8 +41,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -65,7 +66,7 @@ func ConfigHeadBridgeSharePath(shareId Id) string {
 
 // A share's signer as a sidecar role may sign with it (the file's use row). Its seed stays inside: nothing prints
 // or exports it.
-type BridgeShareSignerUse struct {
+type BridgeShareSignerFile struct {
 	ShareId Id
 	// g, the config generation the cert names.
 	Generation uint64
@@ -78,22 +79,22 @@ type BridgeShareSignerUse struct {
 }
 
 // The use's ids alone: never the seed (I-7).
-func (self BridgeShareSignerUse) String() string {
-	return fmt.Sprintf("BridgeShareSignerUse(share %s, generation %d)", self.ShareId, self.Generation)
+func (self BridgeShareSignerFile) String() string {
+	return fmt.Sprintf("BridgeShareSignerFile(share %s, generation %d)", self.ShareId, self.Generation)
 }
 
 // As String, so %#v prints no seed either.
-func (self BridgeShareSignerUse) GoString() string {
+func (self BridgeShareSignerFile) GoString() string {
 	return self.String()
 }
 
 // The ids alone, as String: the seed is in no encoding of a use.
-func (self BridgeShareSignerUse) MarshalJSON() ([]byte, error) {
+func (self BridgeShareSignerFile) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]any{"share_id": self.ShareId.String(), "generation": self.Generation, "not_after_ms": self.NotAfterMs})
 }
 
 // Signs body as the share's signer (bridge.ShareSignerSign), for WindowDelegationSigned.
-func (self *BridgeShareSignerUse) sign(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
+func (self *BridgeShareSignerFile) sign(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
 	if purpose != bridge.SignedPurposeWindowDelegation || signedType != bridge.SignedType_SIGNED_WINDOW_DELEGATION {
 		return nil, fmt.Errorf("%w: a share signer signs only share-link window delegations", ErrBridgeShareSignerRefused)
 	}
@@ -102,7 +103,7 @@ func (self *BridgeShareSignerUse) sign(purpose string, signedType bridge.SignedT
 
 // Reads a share's signer file from a head as the use row holds it, but the floor and the cert's expiry, which
 // BridgeShareSignerUsable judges at a time. Nil and no error for a head with no file for the share.
-func ReadBridgeShareSigner(head *ConfigHead, shareId Id) (*BridgeShareSignerUse, error) {
+func ReadBridgeShareSigner(head *ConfigHead, shareId Id) (*BridgeShareSignerFile, error) {
 	if head == nil || shareId == (Id{}) {
 		return nil, nil
 	}
@@ -140,7 +141,7 @@ func ReadBridgeShareSigner(head *ConfigHead, shareId Id) (*BridgeShareSignerUse,
 	case !bytes.Equal(cert.GetSignerPublicKey(), ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)):
 		return nil, fmt.Errorf("%w: a seed the cert does not certify", ErrBridgeShareSignerRefused)
 	}
-	return &BridgeShareSignerUse{
+	return &BridgeShareSignerFile{
 		ShareId: shareId, Generation: cert.GetConfigGeneration(), NotAfterMs: cert.GetNotAfterMs(),
 		CertSigned: bytes.Clone(file.GetShareCert()), seed: seed,
 	}, nil
@@ -148,7 +149,7 @@ func ReadBridgeShareSigner(head *ConfigHead, shareId Id) (*BridgeShareSignerUse,
 
 // Whether a sidecar signs with use at nowMs given the newest generation it already used for the share (the file's
 // use row): its cert unexpired and its generation no lower than the floor.
-func BridgeShareSignerUsable(use *BridgeShareSignerUse, floor uint64, nowMs int64) error {
+func BridgeShareSignerUsable(use *BridgeShareSignerFile, floor uint64, nowMs int64) error {
 	switch {
 	case use == nil:
 		return fmt.Errorf("%w: no signer", ErrBridgeShareSignerRefused)
@@ -275,7 +276,7 @@ func NewBridgeShareSignerRenewer(args *BridgeShareSignerRenewerArgs) (*BridgeSha
 }
 
 // The share's signer file in the newest verified head, nil for none or one no sidecar signs with, which is due.
-func (self *BridgeShareSignerRenewer) current(ctx context.Context, shareId Id) (*BridgeShareSignerUse, error) {
+func (self *BridgeShareSignerRenewer) current(ctx context.Context, shareId Id) (*BridgeShareSignerFile, error) {
 	state := self.args.Config.State()
 	if state == nil {
 		return nil, fmt.Errorf("%w: no verified state", ErrBridgeShareSignerRenew)
@@ -386,119 +387,5 @@ func (self *BridgeShareSignerRenewer) Run(ctx context.Context, wake <-chan struc
 		case <-wake:
 		case <-self.clock.After(self.settings.RenewInterval):
 		}
-	}
-}
-
-// Whether a share's holder is still one (the file's comment; §17.9's bound row): the device that filed the share's
-// aliases stands, and its member is still an admin. A holder device revoked, or a holder member gone from the
-// AdminSet, can certify until the sharing network revokes the share, so the accepting network's devices raise
-// bridge_alarm share_holder_removed naming it, and the sharing network re-invites. removed names the device where it
-// was revoked, and the member's first device otherwise; the zero id for a holder that stands.
-func BridgeShareHolderRemoved(state *ConfigState, aliasSigner Id) (removed Id, gone bool) {
-	if state == nil || aliasSigner == (Id{}) {
-		return Id{}, false
-	}
-	row := state.SidecarRow(aliasSigner)
-	if row == nil || row.GetRevokedAt() != 0 {
-		return aliasSigner, true
-	}
-	statement := &configStatement{signers: []ConfigSigner{{Kind: ConfigSignerSidecar, SidecarId: aliasSigner}}, timeMs: state.TimeMs()}
-	if !bridgeSignerAdmin(state, statement) {
-		return aliasSigner, true
-	}
-	return Id{}, false
-}
-
-// A sink that signs a share's links again: the device role, in process or over §18.6's ResignShares.
-type BridgeShareResigner interface {
-	// The shares whose signer changed. Each live window client of their links is signed again, for its later
-	// contracts.
-	ResignShares(shareIds []Id) error
-}
-
-// The share signers a component signs with (the file's use and resign rows): the ones its newest compiled head
-// carries, and the floors. Safe for concurrent use.
-type bridgeComponentShares struct {
-	stateLock sync.Mutex
-	// by share, the signer the newest compiled head carries; a file no sidecar signs with is absent
-	signers map[Id]*BridgeShareSignerUse
-	// nil until the first use: floors kept in memory alone
-	floors *BridgeShareSignerFloors
-}
-
-// Takes the head a compile read: every bridge/share/<share_id hex> file a sidecar would sign with. Answers the shares
-// whose signer is new or changed, in id order; a share whose file left the head stops signing and is not answered.
-func (self *bridgeComponentShares) setHead(head *ConfigHead) []Id {
-	signers := map[Id]*BridgeShareSignerUse{}
-	if head != nil {
-		for _, path := range head.Paths() {
-			encoded, ok := strings.CutPrefix(path, ConfigHeadBridgeSharePrefix)
-			if !ok {
-				continue
-			}
-			decoded, err := hex.DecodeString(encoded)
-			if err != nil {
-				continue
-			}
-			shareId, err := IdFromBytes(decoded)
-			if err != nil || ConfigHeadBridgeSharePath(shareId) != path {
-				continue
-			}
-			if use, err := ReadBridgeShareSigner(head, shareId); err == nil && use != nil {
-				signers[shareId] = use
-			}
-		}
-	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	changed := []Id{}
-	for shareId, use := range signers {
-		if held := self.signers[shareId]; held == nil || !bytes.Equal(held.CertSigned, use.CertSigned) {
-			changed = append(changed, shareId)
-		}
-	}
-	self.signers = signers
-	slices.SortFunc(changed, func(a Id, b Id) int { return bytes.Compare(a.Bytes(), b.Bytes()) })
-	return changed
-}
-
-// Sets where the floors are kept, before the first use: loaded now, and saved at each rise.
-func (self *bridgeComponentShares) setFloors(floors *BridgeShareSignerFloors) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.floors = floors
-}
-
-// The share's signer for a signature at now, its floor raised first (the file's use row).
-// ErrBridgeShareSignerRefused where the head carries none this sidecar signs with.
-func (self *bridgeComponentShares) use(shareId Id, now time.Time) (*BridgeShareSignerUse, error) {
-	use, floors := func() (*BridgeShareSignerUse, *BridgeShareSignerFloors) {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		if self.floors == nil {
-			self.floors = NewBridgeShareSignerFloors(nil, nil)
-		}
-		return self.signers[shareId], self.floors
-	}()
-	if err := BridgeShareSignerUsable(use, floors.Floor(shareId), now.UnixMilli()); err != nil {
-		return nil, err
-	}
-	// saved before the signature, so a kill after it leaves the floor at least here
-	if err := floors.Use(shareId, use.Generation); err != nil {
-		return nil, fmt.Errorf("%w: its generation was not kept: %w", ErrBridgeShareSignerRefused, err)
-	}
-	return use, nil
-}
-
-// Has the device role sign the shares' links again (the file's resign row): a share's new signer reaches its live
-// window clients' later contracts. A sink that signs no share's links takes nothing.
-func (self *BridgeComponent) ResignShares(shareIds []Id) {
-	sink := self.currentSink()
-	resigner, ok := sink.(BridgeShareResigner)
-	if !ok || len(shareIds) == 0 {
-		return
-	}
-	if err := resigner.ResignShares(shareIds); err != nil {
-		self.log.Warningf("[bridge]%s the device role did not re-sign %d shares: %v", self.args.NetworkId, len(shareIds), err)
 	}
 }
