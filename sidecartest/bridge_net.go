@@ -2110,6 +2110,8 @@ type BridgeNetWindow struct {
 	echoReplies map[uint16]bool
 	echoes      *connect.MonitorValue[int]
 	echoId      uint16
+	// the packets of the window's stack its link refused, each lost before it left the window
+	refusedCount int
 }
 
 // Opens a window client of subject's to host, sending from a userspace stack of its own. args nil is the honest
@@ -2322,6 +2324,11 @@ func (self *BridgeNetWindow) pump() {
 		}
 		if !self.natClient.SendPacket(source, self.ProvideMode, packet, self.bridgeNet.settings.SendTimeout) {
 			connect.MessagePoolReturn(packet)
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				self.refusedCount += 1
+			}()
 		}
 	}
 }
@@ -2446,6 +2453,14 @@ func (self *BridgeNetWindow) EchoReplied(sequence uint16) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.echoReplies[sequence]
+}
+
+// How many packets of the window's stack its link refused so far. Each was lost before it left the window, and the
+// stack sends a datagram once, so one refused leaves its exchange unanswered.
+func (self *BridgeNetWindow) RefusedCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.refusedCount
 }
 
 // An IPv4 ICMP echo request from source to destination, with its checksums.
