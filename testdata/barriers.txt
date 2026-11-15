@@ -138,6 +138,8 @@ barrier directory.fold.after directory_fold.go
 barrier directory.fold.before directory_fold.go
 barrier directory.notice.after directory_notice.go
 barrier directory.notice.before directory_notice.go
+barrier directory.removal.cleanup.after directory_removal.go
+barrier directory.removal.cleanup.before directory_removal.go
 barrier directory.repo_file.after directory_repo_file.go
 barrier directory.repo_file.before directory_repo_file.go
 barrier directory.request.after directory_request.go

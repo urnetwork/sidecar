@@ -64,6 +64,8 @@ const (
 	// A share's other network (§8.11; QD-820), on a dial or route grant.
 	canonicalActionFieldShareNetworkId = 40
 
+	// field 37's version, versioning at format 2 (§11.7; RECORD-M10-03): the one version that may carry it.
+	canonicalActionVersionVersioning = 2
 	// access_request's version (16.11).
 	canonicalActionVersionAccessRequest = 3
 	// A dial or route grant's version, its prefixes and ports in sealed_detail (QD-740).
@@ -105,11 +107,11 @@ var canonicalActionVersion4Fields = []protoreflect.FieldNumber{
 var canonicalActionSealedGrantAllows = []string{"dial", "route"}
 
 // Whether this build's approvers know a CanonicalAction version: 1 at M3, 3, access_request's, at M6 (MCP-M6-01),
-// and 4, a dial or route grant's sealed form (QD-740). RECORD-M10's carrier switch adds 2, its rules below already
-// in force.
+// 4, a dial or route grant's sealed form (QD-740), and 2, field 37's versioning, at M10 (RECORD-M10-03), which the
+// agent-config writes alone take; the evs write honors field 37 only under §19.11's format2 gate (EvsVersioningFor).
 func CanonicalActionVersionKnown(version uint32) bool {
 	switch version {
-	case 1, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant:
+	case 1, canonicalActionVersionVersioning, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant:
 		return true
 	}
 	return false
@@ -154,6 +156,10 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 	if _, ok := protocol.SidecarActionKind_name[int32(kind)]; !ok || kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_UNSPECIFIED {
 		return fmt.Errorf("%w: kind %d", ErrCanonicalActionInvalid, action.GetKind())
 	}
+	if row, ok := CanonicalActionFields(SidecarActionKind(kind)); ok && !slices.Contains(row.Versions, version) {
+		// a version this build knows, but not one this kind takes: version 2 is field 37's, the agent-config writes'
+		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
+	}
 	accessRequest := kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST
 	if accessRequest != (version == canonicalActionVersionAccessRequest) {
 		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
@@ -170,7 +176,7 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 		return true
 	})
 	for _, number := range setFields {
-		if number == canonicalActionFieldVersioning && version != 2 {
+		if number == canonicalActionFieldVersioning && version != canonicalActionVersionVersioning {
 			return fmt.Errorf("%w: field %d at version %d", ErrCanonicalActionInvalid, number, version)
 		}
 		if number == canonicalActionFieldSealedDetail && !sealedVersion {

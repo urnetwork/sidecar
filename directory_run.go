@@ -334,8 +334,9 @@ func (self *DirectoryClient) Runs() *DirectoryRuns {
 		store = self.store.store
 	}
 	runs, err := NewDirectoryRuns(&DirectoryRunsArgs{
-		SidecarId:         self.sidecarId,
-		Writer:            self.writer,
+		SidecarId: self.sidecarId,
+		// announce entries at format 1, this sidecar's card from format 2 (directory_format2.go)
+		Writer:            self.carrierWriter(),
 		Runs:              self.runView,
 		Auth:              self.auth,
 		RepoItem:          self.RepoItem,
