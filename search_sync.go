@@ -72,6 +72,8 @@ var (
 	ErrSearchSyncUnfollowed = errors.New("search sync: the ref is not followed")
 	// A non-writer's round needs a read receipt first, and none can be deposited: nothing is fetched.
 	errSearchSyncReceipt = errors.New("search sync: no read receipt could be deposited")
+	// A background round's next read is past the day's budget (Search.BackgroundByteCount): held back.
+	errSearchSyncHeldBack = errors.New("search sync: background budget spent")
 )
 
 // Why a round runs (DESIGN-DETAILS 7.2.7's triggers).
@@ -164,6 +166,15 @@ type searchSyncArgs struct {
 	readByteCount int64
 	reproducer    searchSyncReproducer
 	coverage      searchSyncCoverage
+	// What background rounds may download: SEARCH-M10-20's policy, Search.BackgroundByteCount a UTC day. Nil holds them
+	// to nothing but the read limits. A "search more" round is held to its call's own budget instead.
+	budget searchSyncBudget
+}
+
+// The background budget a round asks before each read and tells after (SearchPolicy).
+type searchSyncBudget interface {
+	AdmitBackground(repoId Id, byteCount int64) bool
+	SpentBackground(repoId Id, byteCount int64)
 }
 
 // One ref the engine follows.
@@ -182,6 +193,9 @@ type searchSyncRefArgs struct {
 	// Deposits §16.10's read receipt naming the round's wanted files, before the round's first fetch; a non-writer
 	// with none fetches nothing.
 	depositReceipt func(ctx context.Context, wanted []*SearchSyncWanted) error
+	// Whether this device keeps the ref's latest set synced (SEARCH-M10-20's policy): false runs no round but "search
+	// more"'s, as phones keep the team directory. Nil keeps it.
+	keepLatest func() bool
 	// Whether signer could erase the repo's documents at signedTimeMs: an admin of the repo, the directory's too
 	// (§11.12's cut and directory rows). An erasure set version from any other signer is ignored and alarmed, and the
 	// last set one who could signed keeps masking (§11.14's cut row). Required, so a composition cannot leave it out.
@@ -197,6 +211,9 @@ type searchSyncRef struct {
 	loadLock sync.Mutex
 	// The version table of the manifest's root; nil until a root is known. Set under the engine's stateLock.
 	table *SearchVersionTable
+	// The "search more" call a running round serves, under roundLock: its budget and its per-shard search
+	// (search_more.go). Nil for every other round.
+	moreRun *searchSyncMoreRun
 
 	// Under the engine's stateLock.
 	due         time.Time
@@ -389,6 +406,11 @@ func (self *SearchSync) dueRefs() []*searchSyncRef {
 		if ref.running || ref.due.IsZero() || now.Before(ref.due) {
 			continue
 		}
+		if ref.args.keepLatest != nil && !ref.args.keepLatest() && !ref.more {
+			// kept for "search more" alone: no background round
+			ref.due = time.Time{}
+			continue
+		}
 		if ref.args.nonWriter && !ref.roundAt.IsZero() && now.Before(ref.roundAt.Add(settings.NonWriterSyncInterval)) {
 			// a non-writer's rounds are spaced (§16.10's receipts)
 			ref.due = ref.roundAt.Add(settings.NonWriterSyncInterval)
@@ -445,6 +467,10 @@ func (self *SearchSync) runRef(ctx context.Context, ref *searchSyncRef) {
 		return more
 	}()
 	err := self.round(ctx, ref, more)
+	if errors.Is(err, errSearchSyncHeldBack) {
+		// the day's background budget is spent: what is staged stays, and the next resync or "search more" goes on
+		err = nil
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	now := self.args.clock.Now()
@@ -681,8 +707,16 @@ func (self *searchSyncRef) keepsAll(more bool) bool {
 // One round of ref (see the file header), restarted at step 1 when a read answers collected, at most
 // Search.SyncRestartCount times.
 func (self *SearchSync) round(ctx context.Context, ref *searchSyncRef, more bool) error {
+	return self.roundWithRun(ctx, ref, more, nil)
+}
+
+// A round serving run, a "search more" call's, which holds its fetch of the all set to the call's budget and searches
+// each shard as it lands (search_more.go); nil for every other round.
+func (self *SearchSync) roundWithRun(ctx context.Context, ref *searchSyncRef, more bool, run *searchSyncMoreRun) error {
 	ref.roundLock.Lock()
 	defer ref.roundLock.Unlock()
+	ref.moreRun = run
+	defer func() { ref.moreRun = nil }()
 	if err := self.load(ref); err != nil {
 		return err
 	}

@@ -378,6 +378,25 @@ type SidecarSearchSettings struct {
 	// Builds of one companion push, the first included, before it gives up on the refusals it rebuilds after: 8, a
 	// reading, as the backfill's.
 	CompanionAttemptCount int
+	// A "search more" whose missing all passes this on a metered link waits, reporting waiting=metered and the bytes,
+	// until the host repeats it with AllowMetered: 25 MiB (§18.4's metered row).
+	MeteredMoreByteCount int64
+	// The most of one network's all a device keeps: on phones min(256 MiB, a tenth of free space), which sdk's host
+	// reads by statfs on StateDir and passes here; 128 MiB in the page Worker (§18.4's caps row). Past it the device
+	// keeps all on demand, and a "search more" searches each shard as it lands and keeps the youngest within it.
+	// Zero sets no cap beyond CacheByteCount, as desktops and indexers keep.
+	AllCacheByteCount int64 `settings:"zero"`
+	// All shards no search used this long are evicted: 30 d on phones and in browsers (§18.4's caps row). Zero evicts
+	// none for age, as desktops and indexers keep.
+	UnusedAllAge time.Duration `settings:"zero"`
+	// Whether the team directory's buckets are kept synced: true, but false on phones, which fetch its cards while a
+	// view is open and its buckets and all only for "search more" (§18.4's directory row).
+	DirectoryBuckets bool
+	// A "search more"'s first progress report, from its start: 500 ms (§16.10's cold contract).
+	MoreFirstProgress time.Duration
+	// How often a "search more" reports progress at the least, beside a report at each shard: 1 s (§16.10's cold
+	// contract).
+	MoreProgressInterval time.Duration
 }
 
 // Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
@@ -966,6 +985,10 @@ func DefaultSidecarSettings() *SidecarSettings {
 			CompanionInterval:               5 * time.Minute,
 			JournalByteCount:                64 * 1024 * 1024,
 			CompanionAttemptCount:           8,
+			MeteredMoreByteCount:            25 * 1024 * 1024,
+			DirectoryBuckets:                true,
+			MoreFirstProgress:               500 * time.Millisecond,
+			MoreProgressInterval:            1 * time.Second,
 		},
 		Directory: &SidecarDirectorySettings{
 			SessionSyncInterval:   15 * time.Minute,
