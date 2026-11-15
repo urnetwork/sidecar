@@ -33,7 +33,7 @@ func TestForwardingClientPresentsItsOwnProof(t *testing.T) {
 		Transport:     transport,
 		ByJwt:         "synthetic-forward-jwt-1",
 		ClientKeySeed: seed,
-		Now:           func() time.Time { return testDpopNow },
+		Clock:         testForwardingClientClock{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +63,15 @@ func TestForwardingClientPresentsItsOwnProof(t *testing.T) {
 	if client.String() != "ForwardingClient{}" || strings.Contains(client.String(), "jwt") {
 		t.Error("the client's text names its token")
 	}
+}
+
+// A clock reading testDpopNow.
+type testForwardingClientClock struct {
+	RealClock
+}
+
+func (self testForwardingClientClock) Now() time.Time {
+	return testDpopNow
 }
 
 // A forwarding client needs F's token and a 32-byte ClientKey seed.

@@ -27,7 +27,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -45,7 +44,7 @@ type ForwardingClientArgs struct {
 	// erase its own.
 	ClientKeySeed []byte
 	// This device's clock, which proofs' iat read against api's; nil is real time.
-	Now func() time.Time
+	Clock Clock
 }
 
 // F's api and gkm (the file's comment).
@@ -59,13 +58,10 @@ func NewForwardingClient(args *ForwardingClientArgs) (*ForwardingClient, error) 
 	if args == nil || args.Settings == nil || args.ByJwt == "" || len(args.ClientKeySeed) != ed25519.SeedSize {
 		return nil, fmt.Errorf("%w: a forwarding client needs its settings, F's token and F's ClientKey seed", errInvalidSettings)
 	}
-	api, err := newSidecarApi(args.Settings, args.Transport, args.Now)
+	now := clockOrReal(args.Clock).Now
+	api, err := newSidecarApi(args.Settings, args.Transport, now)
 	if err != nil {
 		return nil, err
-	}
-	now := args.Now
-	if now == nil {
-		now = time.Now
 	}
 	signer, err := newDpopSigner(args.ClientKeySeed, now, api.currentApiClockOffset, rand.Reader)
 	if err != nil {
