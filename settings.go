@@ -362,6 +362,15 @@ type SidecarSearchSettings struct {
 	// A round a read answered collected restarts on the new head at most this many times, then waits for
 	// SyncRetryInterval: 4, a reading, since DESIGN-DETAILS 7.2.7 bounds the restarts nowhere.
 	SyncRestartCount int
+	// A committer's companion push on ur/index at most this often while its journal holds a committed unit: 5 min on
+	// every host, moving to 1 min once D-TEST-11 fixes 1 KiB blocks (QD-511, §11.14's companion row).
+	CompanionInterval time.Duration
+	// The journal past which its oldest units lose their key sets, keeping their documents' keys and versions: 64 MiB,
+	// a reading, since DESIGN-DETAILS 1.2.6 names the bound and no value.
+	JournalByteCount int64
+	// Builds of one companion push, the first included, before it gives up on the refusals it rebuilds after: 8, a
+	// reading, as the backfill's.
+	CompanionAttemptCount int
 }
 
 // Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
@@ -945,6 +954,9 @@ func DefaultSidecarSettings() *SidecarSettings {
 			PinRingCount:                    64,
 			RetainFactor:                    2,
 			SyncRestartCount:                4,
+			CompanionInterval:               5 * time.Minute,
+			JournalByteCount:                64 * 1024 * 1024,
+			CompanionAttemptCount:           8,
 		},
 		Directory: &SidecarDirectorySettings{
 			SessionSyncInterval:   15 * time.Minute,
