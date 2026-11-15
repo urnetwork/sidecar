@@ -683,6 +683,32 @@ func fakeApiAppendFailure(writer http.ResponseWriter, err error) {
 	}
 }
 
+// Where a network's posted statements go in place of this api's own log.
+type fakeApiConfigDeltaRoute func(ctx context.Context, signedBytes []byte) (*bridge.AuthPin, error)
+
+// Sends every statement a client of networkId posts to route in place of this api's own log, nil to end it: a world
+// whose log lives on another api, an admission tier's (suite_admission.go) or server's sequencer on T3, and whose real
+// Sidecars enrolled here post to it (fs98.go). route answers as ConfigLogSequencer.AppendStatement does, a
+// *ConfigLogRefusal for a 403 or a 409.
+func (self *FakeApi) RouteConfigDelta(networkId sidecar.Id, route func(ctx context.Context, signedBytes []byte) (*bridge.AuthPin, error)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if route == nil {
+		delete(self.configDeltaRoutes, networkId)
+		return
+	}
+	if self.configDeltaRoutes == nil {
+		self.configDeltaRoutes = map[sidecar.Id]fakeApiConfigDeltaRoute{}
+	}
+	self.configDeltaRoutes[networkId] = route
+}
+
+func (self *FakeApi) configDeltaRoute(networkId sidecar.Id) fakeApiConfigDeltaRoute {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.configDeltaRoutes[networkId]
+}
+
 // POST /network/config/delta {signed}: an admitted client's statement, or an unadmitted client's recovery-signed one.
 func (self *FakeApi) handleConfigDelta(writer http.ResponseWriter, request *http.Request) {
 	client := self.client(request)
@@ -692,6 +718,16 @@ func (self *FakeApi) handleConfigDelta(writer http.ResponseWriter, request *http
 	}
 	args := &fakeApiConfigDeltaArgs{}
 	if !self.readJson(writer, request, args) {
+		return
+	}
+	if route := self.configDeltaRoute(client.networkId); route != nil {
+		// the network's log is another api's (RouteConfigDelta), which judges the statement and its signer itself
+		pin, err := route(request.Context(), args.Signed)
+		if err != nil {
+			fakeApiAppendFailure(writer, err)
+			return
+		}
+		fakeApiWriteJson(writer, http.StatusOK, fakeApiPinJson(pin))
 		return
 	}
 	if !self.admitted(request.Context(), client) {

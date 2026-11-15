@@ -16,6 +16,8 @@ type testUrApprovalsTarget struct {
 	testUrDaemonTarget
 	items     []*sidecar.SidecarApprovalItem
 	decisions []string
+	// the plan a revoke answer signs, nil for a device that may sign none
+	revokePlan *sidecar.DeviceRevokePlan
 }
 
 func (self *testUrApprovalsTarget) pendingApprovals() ([]*sidecar.SidecarApprovalItem, error) {
@@ -25,6 +27,13 @@ func (self *testUrApprovalsTarget) pendingApprovals() ([]*sidecar.SidecarApprova
 func (self *testUrApprovalsTarget) decideApproval(ctx context.Context, approvalId sidecar.Id, decision string) error {
 	self.decisions = append(self.decisions, approvalId.String()+" "+decision)
 	return nil
+}
+
+func (self *testUrApprovalsTarget) approvalRevokePlan(approvalId sidecar.Id) (*sidecar.DeviceRevokePlan, error) {
+	if self.revokePlan == nil {
+		return nil, &sidecar.DeviceRevokeError{Code: sidecar.DeviceRevokeCodeNotCapable}
+	}
+	return self.revokePlan, nil
 }
 
 // TestApproveShowsSafetyNumber's CLI half: ur approve <id> prints the device's safety number to the terminal before it
@@ -72,7 +81,7 @@ func TestApprovalsDecideIsConfirmOnly(t *testing.T) {
 			t.Error("approvals.decide runs unconfirmed")
 		}
 	}
-	if len(methods) != 2 {
+	if len(methods) != 3 {
 		t.Errorf("%d methods", len(methods))
 	}
 	if methods := urApproveMethods(&testUrDaemonTarget{}); len(methods) != 0 {

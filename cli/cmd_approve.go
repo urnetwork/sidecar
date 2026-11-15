@@ -1,18 +1,33 @@
 // ur approve (§16.16, D-CORE-13, CORE-M2-04): lists what waits for this device's decision, or decides one after the
 // person confirms on /dev/tty, never through MCP. An admission or an admission alarm prints its safety number first,
-// for the person to compare with the one the other device shows (§5.6's genesis row). The daemon serves two control
-// methods: approvals.list, and approvals.decide, a Confirm method, so it runs only from a confirmed control call.
-// §16's request kind (MCP-M3-07, cmd_approve_request.go) rides the same command, dispatched by kind: an id that is no
-// authority item is a request's, and ur approve cancel <id> cancels an approval.
+// for the person to compare with the one the other device shows (§5.6's genesis row). The daemon serves three control
+// methods: approvals.list, approvals.revoke_plan, and approvals.decide, a Confirm method, so it runs only from a
+// confirmed control call. §16's request kind (MCP-M3-07, cmd_approve_request.go) rides the same command, dispatched
+// by kind: an id that is no authority item is a request's, and ur approve cancel <id> cancels an approval.
+//
+// CORE-M3-04 (D-CORE-20; FS-98, FS-124's CLI cases) adds:
+//
+//	ur approve <proposal_id>   a revocation proposal's 64 hex digits, as `ur devices revoke` printed them on the
+//	                           proposing device: prints the proposal's plan on the terminal, and after the person's yes
+//	                           signs this device's AuthorityCosign (the root's devices.proposal and devices.cosign).
+//	                           A proposal is approved or left to expire, so --deny and --revoke take none
+//	--revoke                   an alarm's revoke answer prints the plan it signs first (PreviewApprovalRevoke): a
+//	                           compromise revocation of the alarm's device from the alarm's entry
+//
+// Every decision here runs under the daemon's presence prompt where the log covers what it signs (§5.6's presence
+// countersignature): a host with no authenticator, or a refused check, signs nothing.
 
 package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/docopt/docopt-go"
 
@@ -21,8 +36,9 @@ import (
 
 // The control methods ur approve calls.
 const (
-	urMethodApprovalsList   = "approvals.list"
-	urMethodApprovalsDecide = "approvals.decide"
+	urMethodApprovalsList       = "approvals.list"
+	urMethodApprovalsDecide     = "approvals.decide"
+	urMethodApprovalsRevokePlan = "approvals.revoke_plan"
 )
 
 func init() {
@@ -39,6 +55,8 @@ func init() {
 type urApprovalsTarget interface {
 	pendingApprovals() ([]*sidecar.SidecarApprovalItem, error)
 	decideApproval(ctx context.Context, approvalId sidecar.Id, decision string) error
+	// The plan an item's revoke answer signs.
+	approvalRevokePlan(approvalId sidecar.Id) (*sidecar.DeviceRevokePlan, error)
 }
 
 func (self *urDaemonNetwork) pendingApprovals() ([]*sidecar.SidecarApprovalItem, error) {
@@ -49,14 +67,23 @@ func (self *urDaemonNetwork) pendingApprovals() ([]*sidecar.SidecarApprovalItem,
 	return running.PendingApprovals()
 }
 
-// A confirmed control call, the person having answered on /dev/tty. The daemon's presence prompt is §16's, so a
-// statement the log covers is refused until it lands, never signed without the check.
+// A confirmed control call, the person having answered on /dev/tty. Where the log covers what the decision signs, an
+// admission, an OwnerConfirm, a veto or a revocation, the act runs the daemon's presence prompt (presenceCheck): with
+// no authenticator on this host it signs nothing.
 func (self *urDaemonNetwork) decideApproval(ctx context.Context, approvalId sidecar.Id, decision string) error {
 	running, err := self.onlySidecar()
 	if err != nil {
 		return err
 	}
-	return running.DecideApproval(ctx, approvalId, decision, sidecar.SidecarActConfirmed, nil)
+	return running.DecideApproval(ctx, approvalId, decision, sidecar.SidecarActConfirmed, self.presenceCheck(running))
+}
+
+func (self *urDaemonNetwork) approvalRevokePlan(approvalId sidecar.Id) (*sidecar.DeviceRevokePlan, error) {
+	running, err := self.onlySidecar()
+	if err != nil {
+		return nil, err
+	}
+	return running.PreviewApprovalRevoke(approvalId)
 }
 
 // One item as approvals.list answers it: ids and kinds, never a secret.
@@ -79,6 +106,17 @@ type urApprovalsReply struct {
 type urDecideParams struct {
 	ApprovalId sidecar.Id `json:"approval_id"`
 	Decision   string     `json:"decision"`
+}
+
+// approvals.revoke_plan's params.
+type urApprovalRevokePlanParams struct {
+	ApprovalId sidecar.Id `json:"approval_id"`
+}
+
+// approvals.revoke_plan's reply: the plan, or §5.6's refusal.
+type urApprovalRevokePlanReply struct {
+	Plan    *sidecar.DaemonDeviceRevokePlan `json:"plan,omitempty"`
+	Refusal *sidecar.DaemonDeviceRefusal    `json:"refusal,omitempty"`
 }
 
 // The approve methods over target, when it runs a Sidecar.
@@ -111,6 +149,24 @@ func urApproveMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 			},
 		},
 		{
+			Name: urMethodApprovalsRevokePlan,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				params := &urApprovalRevokePlanParams{}
+				if err := decodeUrParams(call, params); err != nil {
+					return nil, errors.New("a revoke plan takes an approval id")
+				}
+				plan, err := approvals.approvalRevokePlan(params.ApprovalId)
+				var revokeError *sidecar.DeviceRevokeError
+				if errors.As(err, &revokeError) {
+					return &urApprovalRevokePlanReply{Refusal: &sidecar.DaemonDeviceRefusal{Code: revokeError.Code, Position: revokeError.Position}}, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				return &urApprovalRevokePlanReply{Plan: sidecar.NewDaemonDeviceRevokePlan(plan)}, nil
+			},
+		},
+		{
 			Name:    urMethodApprovalsDecide,
 			Confirm: true,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
@@ -129,11 +185,15 @@ func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	if urOptionBool(options, "cancel") {
 		return runUrApproveCancel(ctx, cli, options)
 	}
+	approvalIdText, _ := options.String("<approval_id>")
+	if proposalId, err := hex.DecodeString(approvalIdText); err == nil && len(proposalId) == sha256.Size {
+		// §7.9's proposal_id, never an approval id's form
+		return runUrApproveProposal(ctx, cli, approvalIdText, options)
+	}
 	reply := &urApprovalsReply{}
 	if err := cli.callDaemon(ctx, urMethodApprovalsList, nil, false, reply); err != nil {
 		return err
 	}
-	approvalIdText, _ := options.String("<approval_id>")
 	if approvalIdText == "" {
 		requests, requestsErr := urPendingRequests(ctx, cli)
 		if len(reply.Items) == 0 && len(requests) == 0 {
@@ -169,11 +229,33 @@ func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return fmt.Errorf("this device may answer %s only with %s", item.Kind, strings.Join(item.Decisions, " or "))
 	}
 
+	// a revoke answer signs a compromise revocation: its plan is read before the person confirms
+	var revokePlan *sidecar.DaemonDeviceRevokePlan
+	if decision == sidecar.SidecarDecisionRevoke {
+		planReply := &urApprovalRevokePlanReply{}
+		if err := cli.callDaemon(ctx, urMethodApprovalsRevokePlan, &urApprovalRevokePlanParams{ApprovalId: approvalId}, false, planReply); err != nil {
+			return err
+		}
+		if planReply.Refusal != nil {
+			return urDeviceRefusalError(planReply.Refusal)
+		}
+		revokePlan = planReply.Plan
+	}
+
 	tty, err := cli.openTty()
 	if err != nil {
 		return fmt.Errorf("%w: %w", errUrNoTty, err)
 	}
 	fmt.Fprintf(tty, "%s%s\n", item.Kind, urApprovalSubject(item))
+	if revokePlan != nil {
+		fmt.Fprintf(tty, "Revoking it signs a compromise revocation of device %s from entry %d:\n", revokePlan.SidecarId, revokePlan.SinceN)
+		for _, planItem := range revokePlan.Items {
+			fmt.Fprintln(tty, urDeviceRevokeItemLine(planItem))
+		}
+		if 1 < revokePlan.Signatures {
+			fmt.Fprintf(tty, "  it takes %d admins: this signs the proposal and suspends the device at once\n", revokePlan.Signatures)
+		}
+	}
 	if item.SafetyNumber != "" && decision == sidecar.SidecarDecisionApprove {
 		fmt.Fprintf(tty, "Compare this safety number with the one the device shows. Approve only if every digit matches:\n%s\n", sidecar.FormatSafetyNumber(item.SafetyNumber))
 	}
@@ -190,6 +272,71 @@ func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return err
 	}
 	cli.printf("%s: %s\n", item.ApprovalId, decision)
+	return nil
+}
+
+// ur approve <proposal_id>: an open revocation proposal's plan on the terminal, the person's yes, then this device's
+// cosign under the daemon's presence prompt.
+func runUrApproveProposal(ctx context.Context, cli *urCli, proposalIdText string, options docopt.Opts) error {
+	if urOptionBool(options, "--deny") || urOptionBool(options, "--revoke") {
+		return errors.New("a revocation proposal is approved or left to expire: it takes no --deny or --revoke")
+	}
+	proposalIdText = strings.ToLower(proposalIdText)
+	params := &sidecar.DaemonDevicesProposalParams{ProposalId: proposalIdText}
+	shown := &sidecar.DaemonDevicesProposalReply{}
+	if err := cli.callDaemon(ctx, sidecar.DaemonMethodDevicesProposal, params, false, shown); err != nil {
+		return err
+	}
+	if shown.Unknown || shown.Proposal == nil {
+		return errors.New("no open revocation proposal has that id: it was approved, it expired, or this device has not read it yet")
+	}
+	proposal := shown.Proposal
+	tty, err := cli.openTty()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errUrNoTty, err)
+	}
+	fmt.Fprintf(tty, "A proposal to revoke device %s %s of member %s as %s", urDeviceName(proposal.Name), proposal.SidecarId, proposal.MemberId, proposal.Reason)
+	if proposal.SinceN != 0 {
+		fmt.Fprintf(tty, ", from entry %d", proposal.SinceN)
+		if proposal.SinceTimeMs != 0 {
+			fmt.Fprintf(tty, " (%s)", time.UnixMilli(proposal.SinceTimeMs).UTC().Format(time.RFC3339))
+		}
+	}
+	fmt.Fprintln(tty)
+	for _, item := range proposal.Items {
+		fmt.Fprintln(tty, urDeviceRevokeItemLine(item))
+	}
+	fmt.Fprintf(tty, "  proposed at entry %d, signed so far by %s\n", proposal.ProposedAt, strings.Join(proposal.Signers, ", "))
+	if proposal.Suspended {
+		fmt.Fprintln(tty, "  the device is suspended while the proposal waits")
+	}
+	fmt.Fprintf(tty, "  it expires unsigned at %s, the device staying suspended\n", time.UnixMilli(proposal.NotAfterMs).UTC().Format(time.RFC3339))
+	if proposal.Presence {
+		fmt.Fprintln(tty, "  the authenticator then asks for biometry, a passcode or a touch")
+	}
+	tty.Close()
+	confirmed, err := confirmOnTty(cli, "Approve the revocation?")
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		cli.printf("nothing changed\n")
+		return nil
+	}
+	reply := &sidecar.DaemonDevicesCosignReply{}
+	if err := cli.callDaemon(ctx, sidecar.DaemonMethodDevicesCosign, params, true, reply); err != nil {
+		return err
+	}
+	switch {
+	case reply.Refusal != nil:
+		return urDeviceRefusalError(reply.Refusal)
+	case reply.Unknown:
+		return errors.New("the proposal closed or expired before this device signed")
+	case reply.Pending:
+		cli.printf("signed: the network's answer was lost, so the same statement is sent again until it lands\n")
+	default:
+		cli.printf("proposal %s: approved at entry %d\n", proposalIdText, reply.Position)
+	}
 	return nil
 }
 
