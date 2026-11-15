@@ -230,6 +230,10 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				PinRingCount:      64,
 				RetainFactor:      2,
 				SyncRestartCount:  4,
+				// QD-511's companion interval; the journal's bound and the build count are readings
+				CompanionInterval:     5 * time.Minute,
+				JournalByteCount:      64 * 1024 * 1024,
+				CompanionAttemptCount: 8,
 			},
 		},
 		// §5.4's directory settings

@@ -175,6 +175,11 @@ func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsA
 			rebuilds < self.client.settings.PushRebuildCount:
 			rebuilds += 1
 			continue
+		case evsIndexRebuilds(err, plan) && rebuilds < self.client.settings.PushRebuildCount:
+			// the index writer's own files moved, or a CUT moved the epoch: the push is planned again from a fresh
+			// read, its index entries rebuilt against the new head and erasure set (§11.14's conflict and epoch rows)
+			rebuilds += 1
+			continue
 		case evsCreationConflict(err) && creations == nil && plan != nil:
 			creations = map[string]bool{}
 			for _, planned := range plan.Paths {
@@ -245,6 +250,12 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 			}
 		}
 		plan.Flags, plan.Erased, plan.scope, plan.erasureNote = extras.flags, extras.erased, extras.scope, extras.erasureNote
+		if extras.indexEpoch != 0 {
+			plan.IndexEpoch = extras.indexEpoch
+		}
+		if extras.signedTimeMs != 0 {
+			plan.SignedTimeMs = extras.signedTimeMs
+		}
 	}
 	sealed, err := self.client.sealWrite(ctx, plan, repoKey)
 	if err != nil {
