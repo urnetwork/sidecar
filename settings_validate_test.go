@@ -283,6 +283,8 @@ func TestEveryNumberMustBePositive(t *testing.T) {
 		"settings.LocalSettings.IdleExitTimeout",
 		"settings.LocalSettings.FirstPort",
 		"settings.Search.CacheByteCount",
+		"settings.Search.AllCacheByteCount",
+		"settings.Search.UnusedAllAge",
 		"settings.Alarms.AdmissionCapTimeout",
 	}
 	if !reflect.DeepEqual(zeroFieldNames, want) {

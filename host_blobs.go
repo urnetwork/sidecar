@@ -1,7 +1,8 @@
 //go:build !sidecar_http && !ios_extension
 
-// ServiceHost.Blobs: the file clusters (§11.8, §11.13, §19.6). evs and gkm keep every durable thing
-// here, each repo's metadata objects on the one metadata cluster its create-only place/<repo_id>
+// ServiceHost.Blobs: the file clusters (§11.8, §11.13, §19.6), whose interfaces, records and sentinel
+// errors are operator-core's (owner decision 251); the context helpers and PutImmutable stay here. evs
+// and gkm keep every durable thing here, each repo's metadata objects on the one metadata cluster its create-only place/<repo_id>
 // names, and segments and packs on the segment cluster. Each cluster has its own endpoint, credentials
 // and unversioned bucket, so a DELETE or overwrite keeps no prior version (owner decision 90).
 //
@@ -37,36 +38,30 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
+
+	operator "github.com/urnetwork/operator-core"
 )
 
+// operator-core's sentinels, so errors.Is reads one value on both sides.
 var (
-	// A Get, GetRange or Head of a key that does not exist. For a ranged read at a place, the batch has
-	// gone, and §11.8's read row finds the record in pidx/.
-	ErrBlobNotFound = errors.New("blob not found")
-	// A PUT's condition failed and nothing was written: an If-None-Match on a key that exists, or an
-	// If-Match on one that has moved or does not exist. Or a Delete that named its object with
-	// WithBlobUnmodified found a newer one under its key, and deleted nothing.
-	ErrBlobPrecondition = errors.New("blob precondition failed")
-	// §19.6's settle holds the key, so the request waited and got a 503 and took no effect. A write
-	// before it on the key is still settling: the caller retries later, and a key held past a minute
-	// pages (§19.8).
-	ErrBlobHeld = errors.New("blob key held")
-	// A PUT's body does not hash to its checksum, and nothing was written. For a segment, the client
-	// sent bytes other than the id it named.
-	ErrBlobChecksum = errors.New("blob checksum mismatch")
+	// A Get, GetRange or Head of a key that does not exist.
+	ErrBlobNotFound = operator.ErrBlobNotFound
+	// A PUT's condition failed and nothing was written, or a Delete that named its object found a newer
+	// one under its key and deleted nothing.
+	ErrBlobPrecondition = operator.ErrBlobPrecondition
+	// §19.6's settle holds the key, so the request took no effect.
+	ErrBlobHeld = operator.ErrBlobHeld
+	// A PUT's body does not hash to its checksum, and nothing was written.
+	ErrBlobChecksum = operator.ErrBlobChecksum
 	// A GetRange that starts at or past the object's end.
-	ErrBlobRange = errors.New("blob range not satisfiable")
-	// No cluster this process holds credentials for (§19.4): gkm has no segment cluster, and api only
-	// the first.
-	ErrBlobClusterUnknown = errors.New("blob cluster unknown")
+	ErrBlobRange = operator.ErrBlobRange
+	// No cluster this process holds credentials for (§19.4).
+	ErrBlobClusterUnknown = operator.ErrBlobClusterUnknown
 	// A PUT's arguments fail their rules, so nothing was sent.
-	ErrBlobPutOptions = errors.New("blob put options invalid")
-	// An immutable key holds bytes other than the ones a create of it carried: two writers disagree on
-	// what a key created once holds, a fault the caller alarms (§11.8's immutable and write rows).
-	// Nothing was written.
-	ErrBlobImmutableMismatch = errors.New("blob immutable key holds other bytes")
+	ErrBlobPutOptions = operator.ErrBlobPutOptions
+	// An immutable key holds bytes other than the ones a create of it carried. Nothing was written.
+	ErrBlobImmutableMismatch = operator.ErrBlobImmutableMismatch
 )
 
 // How many times PutImmutable sends one create: once, and once more after a read shows an unknown
@@ -74,29 +69,9 @@ var (
 // and not a tunable: past it the outcome stays the caller's to resolve, as its section says.
 const blobImmutableWriteCount = 2
 
-// The store's limits on a PUT's metadata (minio/cmd/generic-handlers.go, maxUserDataSize): 2 KiB,
-// counting each key with the header prefix it travels under. Format values, not settings.
-const (
-	blobMetadataMaxByteCount = 2 * 1024
-	blobMetadataKeyPrefix    = "x-amz-meta-"
-)
-
-// A PUT or DELETE that may have applied, or may yet apply before the next request on its key: a
-// timeout, an EOF or a 5xx. The caller rereads (§11.8's unknown row), and deletes nothing on the
-// strength of it (I-EVS-2). Err is what the transport said, for logs only.
-type BlobUnknownError struct {
-	Err error
-}
-
-// Names the cause, for logs only.
-func (self *BlobUnknownError) Error() string {
-	return fmt.Sprintf("blob outcome unknown: %v", self.Err)
-}
-
-// What the transport said.
-func (self *BlobUnknownError) Unwrap() error {
-	return self.Err
-}
+// A PUT or DELETE that may have applied, or may yet apply before the next request on its key. The caller
+// rereads (§11.8's unknown row), and deletes nothing on the strength of it (I-EVS-2).
+type BlobUnknownError = operator.BlobUnknownError
 
 // The context key WithBlobDeadline stores under.
 type blobDeadlineKey struct{}
@@ -238,139 +213,17 @@ func PutImmutable(ctx context.Context, cluster BlobCluster, key string, body []b
 	}
 }
 
-// The clusters of one deployment, by cluster id: the names sidecar.yml uses, such as place_new's
-// meta-1, and place/<repo_id> records. Ids are stable, so a repo's place/ always resolves. A lookup
-// dials nothing, so an engine may call these per request.
-type BlobStore interface {
-	// One cluster, or ErrBlobClusterUnknown.
-	Cluster(clusterId string) (BlobCluster, error)
-	// The first metadata cluster, the only one holding place/, proj/, projrows/, rev/, hold/ and
-	// per-sidecar gkm/ objects (§11.8).
-	FirstCluster() (BlobCluster, error)
-	// Where seg/, pack/ and dropscan/ live.
-	SegmentCluster() (BlobCluster, error)
-	// Every metadata cluster, the first first: what a recovery fetch and evacuation walk (§10.6,
-	// §11.13).
-	MetadataClusterIds() []string
-	// The metadata cluster that takes new repos: sidecar.yml's place_new, the first when absent
-	// (§19.9). It changes as the host rereads its config, and it may name a cluster Cluster refuses,
-	// which evs answers 503.
-	NewRepoClusterId() string
-}
+// The clusters of one deployment, by cluster id.
+type BlobStore = operator.BlobStore
 
 // One cluster's bucket. See the file header for what every method promises.
-type BlobCluster interface {
-	// Its id in BlobStore.
-	ClusterId() string
-	// §19.6's store request deadline, 10 s on both clusters. What a waiter waits: §11.8's unknown row
-	// and §11.13's orphan and GC rules wait this long, so it is read from here and kept nowhere else.
-	RequestTimeout() time.Duration
-	// Whether this cluster's build passed §22.9's settle cases (FS-114). False: taskworker opens no
-	// collection window and v1's purge and drop jobs delete nothing, keeping markers and candidates
-	// (§11.7, §19.6). A host that cannot tell answers false, and answers false after an upgrade until
-	// the suite has passed on the new build.
-	SettlePassed() bool
+type BlobCluster = operator.BlobCluster
 
-	// Creates key, returning its ETag, or ErrBlobPrecondition when it exists. One request. A 412 on an
-	// immutable family reads the key back, and equal bytes are success (§11.8).
-	PutIfNoneMatch(ctx context.Context, key string, body []byte, options *BlobPutOptions) (newEtag string, err error)
-	// Replaces key while it still has etag, returning its new ETag: §11.8 step 7's commit. A missing key
-	// is ErrBlobPrecondition too. An empty etag is ErrBlobPutOptions and sends nothing, since an
-	// If-Match left off is the blind overwrite this interface exists to rule out.
-	PutIfMatch(ctx context.Context, key string, etag string, body []byte, options *BlobPutOptions) (newEtag string, err error)
-	// Creates key from a body streamed through, a segment from a client's upload (§11.8 step 2), with
-	// its id as its checksum. byteCount is exact, and a body of any other length fails without writing.
-	// The only call with no deadline, since the uploader sets the pace: the store bounds it 40 s after
-	// its last byte, and this client cancels it RequestTimeout after that byte if no response came.
-	PutStream(ctx context.Context, key string, body io.Reader, byteCount int64, checksumSha256 []byte) (newEtag string, err error)
-	// Opens the whole object in one round trip: its bytes and BlobInfo. The caller closes the body.
-	Get(ctx context.Context, key string) (*BlobObject, error)
-	// Opens byteCount bytes from offset: a batch record by its place (§11.8), or a record in a pack
-	// (§11.13). A span past the object's end stops there, and one starting at or past it is
-	// ErrBlobRange. BlobInfo.ByteCount stays the whole object's.
-	GetRange(ctx context.Context, key string, offset int64, byteCount int64) (*BlobObject, error)
-	// What Get would describe, with no body: an object's age from LastModified (§11.13), an entry's
-	// state from Metadata (§11.7).
-	Head(ctx context.Context, key string) (*BlobInfo, error)
-	// Keys under keyPrefix strictly after startAfter, ascending by byte, at most limit of them, and
-	// whether more follow, so a night's pass pages through a repo and checkpoints between pages
-	// (connect/CODESTYLE.md:135). Each has its Key, ByteCount, Etag and LastModified, never Metadata. A
-	// limit that is not positive is an error.
-	List(ctx context.Context, keyPrefix string, startAfter string, limit int) (objects []*BlobInfo, more bool, err error)
-	// Unconditional, since upstream's store evaluates no precondition on a DELETE (§11.3), unless ctx
-	// names the object with WithBlobUnmodified: §19.6's build then deletes only an object stored under
-	// BlobUnmodifiedSlack after that time, and answers ErrBlobPrecondition, deleting nothing, for a
-	// newer one. nil for a key already gone (§11.13), named or not, so a HEAD first is what tells the
-	// two apart.
-	Delete(ctx context.Context, key string) error
-}
-
-// What rides a PUT beyond its condition. nil means none of it.
-type BlobPutOptions struct {
-	// Sent as x-amz-checksum-sha256, which the store verifies before the object exists: pb/ and pack/
-	// PUTs (§11.8). Empty: none. Otherwise 32 bytes.
-	Sha256 []byte
-	// Object metadata, read back by Head and Get: an idx/ entry's state while a head lists sources
-	// (§11.7). Nil for every other family, which carries none (§19.6). Keys are lowercase letters,
-	// digits and dashes, and values printable ASCII with no space at either end, which an HTTP header
-	// drops: what a store's headers carry unchanged, so T2's fake and the store agree. The store takes
-	// 2 KiB of them, keys included.
-	Metadata map[string]string
-}
-
-// What every implementation checks before it sends anything, so a fake and the store refuse alike. A
-// failure wraps ErrBlobPutOptions.
-func (self *BlobPutOptions) Validate() error {
-	if self == nil {
-		return nil
-	}
-	if len(self.Sha256) != 0 && len(self.Sha256) != 32 {
-		return fmt.Errorf("%w: a %d byte checksum", ErrBlobPutOptions, len(self.Sha256))
-	}
-	metadataByteCount := 0
-	for key, value := range self.Metadata {
-		if key == "" {
-			return fmt.Errorf("%w: an empty metadata key", ErrBlobPutOptions)
-		}
-		metadataByteCount += len(blobMetadataKeyPrefix) + len(key) + len(value)
-		for i := 0; i < len(key); i += 1 {
-			c := key[i]
-			if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
-				return fmt.Errorf("%w: byte %d of a metadata key", ErrBlobPutOptions, i)
-			}
-		}
-		for i := 0; i < len(value); i += 1 {
-			if c := value[i]; c < ' ' || '~' < c {
-				return fmt.Errorf("%w: byte %d of a metadata value", ErrBlobPutOptions, i)
-			}
-		}
-		if strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ") {
-			return fmt.Errorf("%w: a space at the end of a metadata value", ErrBlobPutOptions)
-		}
-	}
-	if blobMetadataMaxByteCount < metadataByteCount {
-		return fmt.Errorf("%w: %d bytes of metadata", ErrBlobPutOptions, metadataByteCount)
-	}
-	return nil
-}
+// What rides a PUT beyond its condition, with the Validate every implementation runs before it sends.
+type BlobPutOptions = operator.BlobPutOptions
 
 // One object, as Head, Get and List see it.
-type BlobInfo struct {
-	// The key, as a call named it or List found it.
-	Key string
-	// The whole object's size, even for a GetRange.
-	ByteCount int64
-	// Opaque: compare it and hand it to PutIfMatch, never parse it. A head never repeats one, since
-	// every write raises its version or fence (§11.8's etag row).
-	Etag string
-	// The store's clock: §11.13's 23 h and 25 h age rules read it.
-	LastModified time.Time
-	// What BlobPutOptions.Metadata set. Nil from List, and for an object with none.
-	Metadata map[string]string
-}
+type BlobInfo = operator.BlobInfo
 
 // An open Get. Body holds the bytes asked for, and the caller closes it.
-type BlobObject struct {
-	BlobInfo
-	Body io.ReadCloser
-}
+type BlobObject = operator.BlobObject

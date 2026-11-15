@@ -195,6 +195,14 @@ func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error 
 			return err
 		}
 	}
+	// the push names the view's epoch and carries nothing the erasure set lists (the epoch guard)
+	guard, err := indexNewEpochGuard(view)
+	if err != nil {
+		return nil
+	}
+	if err := guard.checkFiles(files, false); err != nil {
+		return err
+	}
 	writes := []*EvsPathWrite{}
 	for _, file := range files {
 		replaces := file.replaces
@@ -211,7 +219,7 @@ func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error 
 		return nil
 	}
 	plan.addIndexWrites(writes...)
-	plan.IndexEpoch = view.head.indexEpoch
+	plan.IndexEpoch = guard.epoch()
 	plan.SignedTimeMs = signedTimeMs
 	return nil
 }

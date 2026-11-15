@@ -4,7 +4,8 @@
 // through FakeClock.WithOffset (plan-TEST-clock-seam). ServiceHost.Clock carries an engine's,
 // SidecarSettings.Clock a Sidecar's, and nil in either is real time.
 //
-// It is declared on every leg, sidecar_http included, so it names no connect type. device/ may not
+// The interface is operator-core's (owner decision 251), aliased here on every leg, sidecar_http
+// included, so it names no connect type. device/ may not
 // import the root, so it declares the same method set (device/clock.go), and one fake serves both.
 // connect's own timers stay real and connect does not change for this (X9): a schedule moves a link
 // with Net.SetLink, never connect's timers. Nor does a context's deadline stand in for a fake one,
@@ -17,19 +18,13 @@ package sidecar
 
 import (
 	"time"
+
+	operator "github.com/urnetwork/operator-core"
 )
 
-// What a Sidecar, an engine or a host reads time from. Implementations are safe for concurrent use.
-type Clock interface {
-	// The time on this clock.
-	Now() time.Time
-	// Fires once this clock reaches now plus timeout. A timeout that is not positive fires at once.
-	After(timeout time.Duration) <-chan time.Time
-	// Calls function once this clock reaches now plus timeout, on a goroutine of the clock's choosing,
-	// so function must not assume the caller's locks are held or free. stop returns false once
-	// function has been called or stopped, and true when it stopped a call still to come.
-	AfterFunc(timeout time.Duration, function func()) (stop func() bool)
-}
+// What a Sidecar, an engine or a host reads time from: Now, After and AfterFunc. Implementations are
+// safe for concurrent use.
+type Clock = operator.Clock
 
 // Real time: the clock a nil Clock reads, and the one place in the root that calls time's clock.
 type RealClock struct{}

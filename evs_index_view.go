@@ -43,7 +43,9 @@ type indexViewArgs struct {
 	// 0 reads the head.
 	refVersion uint64
 	// Whether a settings version's signer was one of the repo's admins (§8.8) when it signed. Nil counts no version,
-	// so only the defaults hold.
+	// so only the defaults hold. It judges the erasure set's signer too, since only an admin's CUT writes it (§11.12's
+	// cut row, the directory's included): a version it refuses, or any where it is nil, is ignored and alarmed, and
+	// the view's set reads as unreadable, so no builder writes (fail closed).
 	isAdmin func(file *indexFileVersion) bool
 	// The format's limits the view reads its files under, and that a plan from it writes under. Required.
 	settings *IndexFormatSettings
@@ -59,6 +61,9 @@ const (
 	indexViewAlarmUnknownPath
 	// A settings version no repo admin signed, or one the repo's kind refuses.
 	indexViewAlarmSettings
+	// An erasure set version from a signer who may not erase (§11.14's cut row): ignored, so no builder writes until a
+	// version one who may erase signed reads.
+	indexViewAlarmErasureSet
 )
 
 // One alarm, naming the file and the signer of the version it is about.
@@ -213,9 +218,14 @@ func indexLoadView(ctx context.Context, args *indexViewArgs) (*indexView, error)
 		if err != nil {
 			return nil, err
 		}
-		if validated == nil {
+		switch {
+		case validated == nil:
 			view.erasureSetUnreadable = true
-		} else {
+		case args.isAdmin == nil || !args.isAdmin(view.erasureSetFile):
+			// a set version from a signer who may not erase: ignored and alarmed (§11.14's cut row)
+			view.alarm(indexViewAlarmErasureSet, view.erasureSetFile)
+			view.erasureSetUnreadable = true
+		default:
 			view.erasureSet = validated.message.(*protocol.IndexErasureSet)
 		}
 	}
