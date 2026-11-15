@@ -14,6 +14,8 @@
 //	       signed at the genesis pin before base 1; base 1 lands and the key client takes the device's own S(1); evs's
 //	       real create route places the config repo, KF1 signs GenRotate_1 there over the drafted RK_1, activation
 //	       follows and the push lands; the daemon's follower then stands on base 1 over the composition's head reader
+//	retry  the same bootstrap cut short before base 1, its base lost on the way to api: the retry for the same config
+//	       repo seals the first head under the group and C_1 the key client drafted the first time
 //
 // Every wait is on a monitor, a channel or a follow the test asks for, bounded by a real-time guard only a broken
 // wiring reaches.
@@ -370,6 +372,17 @@ func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	if auth := key.Auth(); auth.GetVersion() != 1 || !bytes.Equal(auth.GetChain(), bootstrap.Pin.GetChain()) {
 		t.Fatalf("GenRotate_1 signed at %v, not at S(1)", auth)
 	}
+	// the key client holds a leaf, its MLS engine built at KF1 under the admission base 1's row names, A_0 (QD-825)
+	clients := testUrClientsOf(running)
+	if clients.builtGroup() == nil || !clients.leaf {
+		t.Fatal("the first device's key client holds no leaf")
+	}
+	clients.mls.stateLock.Lock()
+	admission, engine := clients.mls.admissionSha256, clients.mls.engine
+	clients.mls.stateLock.Unlock()
+	if engine == nil || !bytes.Equal(admission, bootstrap.GenesisChain[:]) {
+		t.Fatal("the first device's MLS engine is not built under the Genesis's hash")
+	}
 	heads, err := engines.RefHeads(ctx, result.ConfigRepoId)
 	if err != nil {
 		t.Fatal(err)
@@ -405,5 +418,68 @@ func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	}
 	if !running.Admitted() {
 		t.Fatal("the first device is not admitted at base 1")
+	}
+}
+
+// A publisher whose every base is lost before api takes it: a bootstrap cut short before base 1.
+type testUrLostBasePublisher struct{}
+
+func (self testUrLostBasePublisher) PublishConfigBase(ctx context.Context, base *sidecar.ConfigBasePublish) (*bridge.AuthPin, error) {
+	return nil, errors.New("the base never reached api")
+}
+
+// A first device's bootstrap cut short before base 1, its base lost on the way to api, leaves its key client's draft
+// standing: the retry for the same config repo seals the first head under the same group and C_1, lands base 1 and
+// forms that group, nothing of the cut-short attempt having reached api, evs or gkm.
+func TestDaemonsFirstNetworkRetriesUnderItsDraft(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
+	defer cancel()
+	net := sidecartest.NewNet(ctx, nil)
+	t.Cleanup(net.Close)
+	engines := enginenet.NewEngines(t, net, nil)
+	instance, err := net.StartInstance("daemon", &sidecartest.TestInstanceArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(instance.Close)
+	networkId := sidecar.NewId()
+	running, err := instance.AddSidecarIn(networkId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gkm, err := urDaemonGkmClient(running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerMemberId, configRepoId := sidecar.NewId(), sidecar.NewEvsRepoId()
+	cut, err := engines.Bootstrap(ctx, &enginenet.BootstrapArgs{
+		Sidecar: running, Gkm: gkm, OwnerMemberId: ownerMemberId, Publisher: testUrLostBasePublisher{},
+	}, &configRepoId)
+	if err == nil || cut.DraftedKey == nil {
+		t.Fatalf("a bootstrap whose base never landed: %v", err)
+	}
+	if tip, err := engines.Api().Tip(ctx, networkId); err != nil || tip != nil {
+		t.Fatalf("api's log after the cut-short bootstrap: %v %v", tip, err)
+	}
+	if heads, err := engines.RefHeads(ctx, configRepoId); err != nil || len(heads) != 0 {
+		t.Fatalf("evs holds the config repo after the cut-short bootstrap: %v %v", heads, err)
+	}
+
+	// the Net's clock stands still, so the retry signs the same Genesis, whose A_0 the Sidecar anchored the first time
+	result, err := engines.Bootstrap(ctx, &enginenet.BootstrapArgs{Sidecar: running, Gkm: gkm, OwnerMemberId: ownerMemberId}, &configRepoId)
+	if err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if result.DraftedKey.GroupId() != cut.DraftedKey.GroupId() || !bytes.Equal(result.DraftedKey.Commitment(), cut.DraftedKey.Commitment()) {
+		t.Fatal("the retry drafted another group or RK_1")
+	}
+	statement, err := sidecar.ParseEvsStatement(result.Bootstrap.Push.SignedPush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := gkm.RepoKey(ctx, configRepoId, 1)
+	if err != nil || key.GroupId() != cut.DraftedKey.GroupId() || !bytes.Equal(statement.Push.GetGenerationCommitment(), cut.DraftedKey.Commitment()) ||
+		!bytes.Equal(key.Commitment(), cut.DraftedKey.Commitment()) {
+		t.Fatalf("generation 1 after the retry: %v", err)
 	}
 }

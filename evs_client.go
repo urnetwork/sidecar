@@ -10,6 +10,10 @@
 // killed between the statement and the route leaves a state the log records, which taskworker's reconciler applies,
 // so a retry is safe.
 //
+// The config kind's first head is the exception to sealing on a repo that stands: its push is sealed and signed before
+// its network's base 1, under generation 1 as KF1's bootstrap draft holds it, and sent once the repo is active
+// (PrepareConfigHead and CommitConfigHead, evs_config_push.go; QD-824).
+//
 // What the client runs on comes in EvsClientArgs as seams, so a test builds one on fakes (§23.5): Sidecar.ServiceToken,
 // Sidecar.Sign, GkmClient (sidecartest.FakeGkm until gkm lands), the component's SidecarStore, the newest verified
 // config state, and the core's statement poster, which CORE-M2-02 provides; until it does, FileStatement is nil and
