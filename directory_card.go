@@ -8,7 +8,8 @@
 //
 //	card    a Signed DirectoryCard, by the sidecar's identity key under purpose directory, SIGNED_DIRECTORY_CARD:
 //	        network_id, its own sidecar_id, seq, at (§7.9's pin as written), written_millis, at most 16 items, at most
-//	        one worker item first and then runs, in at most 16,208 B, and version 1
+//	        one worker item first and then runs, in at most 16,192 B (QD-834), and version 1; the whole Signed at most
+//	        16 KiB, eight steps, past which a writer puts none and a reader parses none
 //	write   WriteCard puts the items it is given, less those that show no more: a withdrawal, which a card says by
 //	        leaving the item out, an ended or handed-off item 24 h after its renewal, an active one past its stale 24 h.
 //	        Each passes DirectoryCheckItem with this sidecar as who; past a cap the writer refuses
@@ -82,7 +83,7 @@ const (
 
 var (
 	// A card past its caps: more than its items, a second worker item or a worker item after a run, or its items past
-	// their bytes. Nothing was signed.
+	// their bytes, refused before anything is signed; or its Signed past the card file's bytes, signed and never put.
 	ErrDirectoryCardOverCap = errors.New("directory card over its caps")
 	// The client has no signer or no network bound (DirectoryClientArgs.Sign and NetworkId): nothing was signed.
 	ErrDirectoryCardUnbound = errors.New("directory card writer unbound")
@@ -98,10 +99,12 @@ type DirectoryCardSettings struct {
 	ItemCount int
 	// Worker items among them, first: 1.
 	WorkerItemCount int
-	// The items' bytes, each item's field tag and length included: 16,208 B.
+	// The items' bytes, each item's field tag and length included: 16,192 B (QD-834).
 	ItemsByteCount int
-	// A card file's bytes, the Signed and all, which a reader parses no further past: 18 KiB, the items' bytes and the
-	// card's and the Signed's own fields, up to the next step.
+	// A card file's bytes, the Signed and all, past which a writer puts none and a reader parses none: 16 KiB, §20.4's
+	// directory_card_bytes, eight steps. A card whose items are within ItemsByteCount fits it whenever its seq and its
+	// position are below 2^56, whatever its written_millis; past that, which no count rising one at a time reaches,
+	// such a card can be up to 16,388 B, and this bound refuses it on both sides.
 	CardFileByteCount int
 	// A repo file's bytes: 4 KiB.
 	RepoFileByteCount int
@@ -121,8 +124,8 @@ func DefaultDirectoryCardSettings() *DirectoryCardSettings {
 	return &DirectoryCardSettings{
 		ItemCount:         DirectoryCardItemCount,
 		WorkerItemCount:   1,
-		ItemsByteCount:    DirectoryCardItemsByteCount,
-		CardFileByteCount: 18 * 1024,
+		ItemsByteCount:    16192,
+		CardFileByteCount: 16 * 1024,
 		RepoFileByteCount: DirectoryRepoFileByteCount,
 		FileStepByteCount: DirectoryFileStepByteCount,
 		PinPositionCount:  DirectoryPinPositionCount,
