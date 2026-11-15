@@ -347,13 +347,18 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 	go ingestor.Run(ingestCtx)
 }
 
-// Drops the view's kept month where the mailbox's ingest wrote, so the next list reads it afresh.
+// Drops the view's kept month where the mailbox's ingest wrote, so the next list reads it afresh, and raises IDLE's
+// hint.
 func (self *MailClient) invalidateMonth(repoId Id, month MailYearMonth) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if view := self.views[repoId]; view != nil {
-		view.InvalidateMonth(month)
-	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if view := self.views[repoId]; view != nil {
+			view.InvalidateMonth(month)
+		}
+	}()
+	// a message written here is IDLE's hint (mail_imap.go)
+	self.imapHints.Update(func(revision uint64) uint64 { return revision + 1 })
 }
 
 // Whether policy grants this device the receiver's listen on smtp/25/mx at the installed state.
