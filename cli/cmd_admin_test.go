@@ -110,6 +110,15 @@ func TestEachAdminTeamCommandIsOneTokensCommand(t *testing.T) {
 		t.Errorf("v0's key asks %s", urcliCommandScope(login))
 	}
 
+	// a replay's answer carries no secret, which the server never keeps
+	installTestUrAdminRun(t, func(command *sidecar.AdminCommand) string {
+		return `{"client_id":"ur-oauth-x","scopes":["auth_keys"]}`
+	})
+	stdout.Reset()
+	if code := cli.main(context.Background(), []string{"ur", "admin", "oauth-clients", "create", "--scopes=auth_keys"}); code != urExitOk || !strings.Contains(stdout.String(), "revoke this client and create another") {
+		t.Errorf("a replayed creation: exit %d: %s", code, stdout.String())
+	}
+
 	refused := installTestUrAdminRun(t, func(command *sidecar.AdminCommand) string {
 		return `{"error":{"message":"Only the team's Owners and Admins may manage its OAuth clients."}}`
 	})

@@ -478,6 +478,11 @@ func runUrAdminOauthClients(ctx context.Context, cli *urCli, options docopt.Opts
 			return err
 		}
 		cli.printf("client_id %s, scopes %s\n", result.ClientId, strings.Join(result.Scopes, ","))
+		if result.ClientSecret == "" {
+			// the first answer was lost, and the server keeps no secret to answer a retry with
+			cli.printf("its secret was in an answer that was lost: revoke this client and create another\n")
+			return nil
+		}
 		cli.printf("client_secret, shown once, for CI alone: %s\n", result.ClientSecret)
 		return nil
 	case urOptionBool(options, "revoke"):
