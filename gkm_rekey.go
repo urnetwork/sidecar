@@ -862,8 +862,13 @@ func (self *gkmRekeyRun) readFiles(ctx context.Context, paths []string, pushFull
 				}
 				defer read.objects.close()
 				verified = read.replies[0]
-				if verified.Entry == nil || verified.Removal != nil || verified.Collected || verified.Entry.GetVersion() != base.version {
+				switch {
+				case verified.Entry == nil || verified.Removal != nil || verified.Collected || verified.Entry.GetVersion() != base.version:
 					// the effective version went from evs between the walk and this read: nothing to re-checkpoint it from
+					return &EvsPrefixRuleError{Detail: EvsPrefixDetailUnavailable}
+				case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
+					// a directory under a removal the rules ignore, which List answers so as well: the walk cannot list
+					// what this device follows there, so it claims nothing of it
 					return &EvsPrefixRuleError{Detail: EvsPrefixDetailUnavailable}
 				}
 			}

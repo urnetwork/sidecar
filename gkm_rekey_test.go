@@ -1289,3 +1289,31 @@ func TestEvsRekeyOfAGitModeRefLeavesTheFilesOutsideAHeldDevicesPrefixes(t *testi
 	test.requireRekeyed(2, under)
 	test.requireUntouched(outside)
 }
+
+// A directory whose removal the rules ignore stands as this device follows it, and neither a listing nor the job can
+// walk what it holds: named to the job, or met by its walk, it stops the job with EVS_PREFIX_RULE detail unavailable,
+// as List answers it, and nothing under it is claimed as rekeyed or gone.
+func TestEvsRekeyStopsAtADirectoryUnderAnIgnoredRemoval(t *testing.T) {
+	test := newRekeyPrefixTest(t, "everywhere")
+	test.write("docs/a.txt", 600)
+	test.write("src/main.go", 600)
+	test.file()
+	test.rotate(2, GkmCauseRemove)
+	test.writer.server.know("docs/a.txt")
+	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "docs"})
+	repoId := test.writer.world.repoId
+	posted := test.posted()
+	for _, paths := range [][]string{{"docs"}, nil} {
+		progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: repoId, RefNames: [][]byte{EvsMainRefName}, Paths: paths})
+		if evsPrefixTestDetail(err) != EvsPrefixDetailUnavailable {
+			t.Fatalf("paths %q: %v", paths, err)
+		}
+		if progress.State != GkmRekeyStateStopped || progress.AbsentCount != 0 || progress.RewrittenCount != 0 || strings.Contains(progress.StopReason, "docs") {
+			t.Errorf("paths %q: the progress %+v", paths, progress)
+		}
+	}
+	if test.posted() != posted {
+		t.Errorf("a stopped job sent %d statements", test.posted()-posted)
+	}
+	test.requireUntouched("docs/a.txt", "src/main.go")
+}
