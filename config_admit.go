@@ -3,7 +3,8 @@
 //
 //	AdminSet          authority, its changed members never counting
 //	MemberAdmit,      an Owner's or Admin's device; authority, the member never counting, if the member is in
-//	  MemberRevoke      the AdminSet
+//	  MemberRevoke      the AdminSet; a MemberRevoke outside the AdminSet also by the standing sidecar
+//	                    ServiceSettings.scim_signer names (D-TEAM-25, TEAM-M6-07)
 //	SidecarAdmit      for a device of a member outside the AdminSet, one admin's device (an Owner, Admin or IT
 //	                    admin) or, while self_admit is on, the member's consented device (§8.5); for an AdminSet
 //	                    member's device, authority, its existing device counting as one; for a tagged one, a
@@ -267,12 +268,34 @@ func configCheckMemberRevoke(state *ConfigState, statement *configStatement) err
 		}
 		return nil
 	}
+	// the indexer ServiceSettings.scim_signer names signs SCIM's removals outside the AdminSet at once (D-TEAM-25)
+	if configScimSignerSigns(state, statement.signers, statement.timeMs) {
+		return nil
+	}
 	if _, ok := state.anyMemberDevice(statement.signers, statement.timeMs, func(signerId Id, signerMemberId Id, role bridge.MemberRole) bool {
 		return configRoleAdmitsMembers(role) && signerMemberId != memberId
 	}); !ok {
-		return fmt.Errorf("%w: a MemberRevoke needs an Owner's or Admin's device", ErrConfigAuthority)
+		return fmt.Errorf("%w: a MemberRevoke needs an Owner's or Admin's device, or outside the AdminSet the scim_signer's", ErrConfigAuthority)
 	}
 	return nil
+}
+
+// Whether one of signers is the sidecar ServiceSettings.scim_signer names, standing at timeMs: admitted, not revoked,
+// parked or expired, its member still a member where it is a member device, and neither suspended nor read_only. The
+// caller has established that the MemberRevoke's member is outside the AdminSet.
+func configScimSignerSigns(state *ConfigState, signers []ConfigSigner, timeMs int64) bool {
+	scimSigner, ok := state.ScimSigner()
+	if !ok {
+		return false
+	}
+	for _, signer := range signers {
+		if signer.Kind != ConfigSignerSidecar || signer.SidecarId != scimSigner {
+			continue
+		}
+		row, standing := state.standingSidecar(scimSigner, timeMs)
+		return standing && !configRowReadOnly(row) && !state.Suspended(scimSigner)
+	}
+	return false
 }
 
 // A MemberRevoke's effect: the member's row goes, and each of its untagged devices is revoked at this position, its
