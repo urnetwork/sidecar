@@ -308,8 +308,9 @@ func (self *DirectoryClient) BindWorker(binding *DirectoryWorkerBinding) *Direct
 			store = self.store.store
 		}
 		worker, err := NewDirectoryWorker(&DirectoryWorkerArgs{
-			SidecarId:   self.sidecarId,
-			Writer:      self.writer,
+			SidecarId: self.sidecarId,
+			// an announce entry at format 1, this sidecar's card from format 2 (directory_format2.go)
+			Writer:      self.carrierWriter(),
 			Auth:        self.auth,
 			TeamWorkers: binding.TeamWorkers,
 			Host:        binding.Host,
@@ -412,6 +413,31 @@ func (self *DirectoryWorker) stateNow() *directoryWorkerState {
 	copied := *self.state
 	copied.ContentSha256 = slices.Clone(self.state.ContentSha256)
 	return &copied
+}
+
+// The device's worker setting as kept, and the item it last wrote, for `ur directory worker` to show.
+type DirectoryWorkerShown struct {
+	On          bool
+	Description string
+	Requests    DirectoryRequests
+	// The item last written; zero before any and after a withdrawal.
+	AnnouncementId Id
+	Version        uint64
+}
+
+// What `ur directory worker` shows: the kept setting and item.
+func (self *DirectoryWorker) Shown() (*DirectoryWorkerShown, error) {
+	if err := self.load(); err != nil {
+		return nil, err
+	}
+	state := self.stateNow()
+	shown := &DirectoryWorkerShown{
+		On: !state.Off, Description: state.Description, Requests: DirectoryRequestsOpen, AnnouncementId: state.AnnouncementId, Version: state.Version,
+	}
+	if DirectoryRequests(state.Requests) == DirectoryRequestsClosed {
+		shown.Requests = DirectoryRequestsClosed
+	}
+	return shown, nil
 }
 
 // Writes the state, before an entry is appended.

@@ -117,7 +117,9 @@ type DirectoryErasureRequestView struct {
 // What erased an entry of the directory, as a reader shows it.
 type DirectoryErasure struct {
 	EraserSidecarId Id
-	Reason          RecordErasureReason
+	// The erasure's id, as its ERASE and its erasure entry name it.
+	ErasureId Id
+	Reason    RecordErasureReason
 	// A repo owner's revocation: the erasure_request its note names, and the repo where this copy holds the request.
 	RequestId *Id
 	RepoId    *Id
@@ -350,7 +352,15 @@ func (self *DirectoryClient) RevokeRepo(ctx context.Context, args *DirectoryRevo
 		{Kind: RecordKindErasureRequest, Source: RecordSourceApprover, NoSession: true, Body: request},
 	}
 	var refs [][]*RecordEntryRef
-	if together, ok := self.writer.(interface {
+	if self.carriesFiles() {
+		// format 2: the marker is an r/ overwrite, purged about a minute later, and the request an entry of its own
+		// push; the journal, written first, files the same request once whatever the kill (RECORD-M10-03)
+		if err = self.carryItem(ctx, marker); err == nil {
+			var appended []*RecordEntryRef
+			appended, err = self.writer.Append(drafts[1])
+			refs = [][]*RecordEntryRef{{}, appended}
+		}
+	} else if together, ok := self.writer.(interface {
 		appendTogether(drafts ...*RecordDraft) ([][]*RecordEntryRef, error)
 	}); ok {
 		refs, err = together.appendTogether(drafts...)
@@ -538,7 +548,7 @@ func (self *DirectoryClient) judgeErasures(repoId Id, erasures []*RecordStreamEr
 			if !ok {
 				continue
 			}
-			seen := &DirectoryErasure{EraserSidecarId: erasure.EraserSidecarId, Reason: RecordErasureReason(body.GetReason())}
+			seen := &DirectoryErasure{EraserSidecarId: erasure.EraserSidecarId, ErasureId: erasure.ErasureId, Reason: RecordErasureReason(body.GetReason())}
 			if seen.Reason == RecordErasureReasonRevocation && len(body.GetRequestId()) == len(Id{}) {
 				requestId := recordIdOf(body.GetRequestId())
 				seen.RequestId = &requestId
@@ -700,7 +710,7 @@ func (self *DirectoryClient) ErasureOf(entryId Id) (*DirectoryErasure, bool) {
 			if !slices.ContainsFunc(entry.body.GetEntryIds(), func(named []byte) bool { return len(named) == len(Id{}) && recordIdOf(named) == entryId }) {
 				continue
 			}
-			seen = &DirectoryErasure{EraserSidecarId: entry.writerId, Reason: RecordErasureReason(entry.body.GetReason())}
+			seen = &DirectoryErasure{EraserSidecarId: entry.writerId, ErasureId: recordIdOf(entry.body.GetErasureId()), Reason: RecordErasureReason(entry.body.GetReason())}
 			if seen.Reason == RecordErasureReasonRevocation && len(entry.body.GetRequestId()) == len(Id{}) {
 				requestId := recordIdOf(entry.body.GetRequestId())
 				seen.RequestId = &requestId

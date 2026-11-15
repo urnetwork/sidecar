@@ -8,6 +8,13 @@
 //
 // Codex reports no session's start in the table §16.7 read, so a session's first event opens its run, which inherits
 // its harness process's taint (plan-MCP-taint-new-session). A SessionStart it does send reads as Claude Code's does.
+//
+// PostModelRequest is §16.18's model call, Codex's one source of them (QD-835): ur install-harness hooks it
+// (harness_install_codex.go), and Ingest records each as one model_call entry with its request id, tokens and
+// duration while Ingest.ModelCalls is on (ingest_model.go). Its own fields, provider, request_id, duration_ms and
+// usage, with model among the common ones, are the plan's names (MCP-M6-03), not a pinned build's: MCP-M3-28's
+// recorded session carries them (testdata/harness/codex/), and the live conformance run in review pins them against a
+// Codex build, until which a field Codex adds is drift, a hook_failure gap that taints the run like any other event's.
 
 package mcp
 
@@ -49,7 +56,7 @@ var codexHookEventFields = map[string][]string{
 	"PostToolUse":       {"tool_name", "tool_input", "tool_response", "tool_use_id"},
 	"PermissionRequest": {"tool_name", "tool_input", "tool_use_id"},
 	"Stop":              {"stop_hook_active"},
-	// §16.18's model calls (MCP-M6-03)
+	// §16.18's model calls (MCP-M6-03; QD-835): the plan's names until the live conformance run pins them
 	"PostModelRequest": {"provider", "request_id", "duration_ms", "usage"},
 }
 

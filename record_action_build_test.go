@@ -454,12 +454,17 @@ func TestBuilderHoldsVersionsAndSizes(t *testing.T) {
 	if _, err := NewCanonicalAction(wrongVersion); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("dns_set at version 3 answered %v", err)
 	}
-	// format 2's versioning waits on version 2, which this build does not know yet
+	// format 2's versioning rides version 2, known from M10 (RECORD-M10-03), and the agent-config writes alone take it
 	versioned := proto.Clone(actions["agent_config_write"]).(*protocol.CanonicalAction)
 	versioned.Version = 2
 	versioned.Versioning = 1
-	if _, err := NewCanonicalAction(versioned); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+	if _, err := NewCanonicalAction(versioned); err != nil {
 		t.Errorf("version 2 answered %v", err)
+	}
+	dnsVersioned := proto.Clone(actions["dns_set"]).(*protocol.CanonicalAction)
+	dnsVersioned.Version = 2
+	if _, err := NewCanonicalAction(dnsVersioned); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("dns_set at version 2 answered %v", err)
 	}
 	unversioned := proto.Clone(actions["agent_config_write"]).(*protocol.CanonicalAction)
 	unversioned.Versioning = 1

@@ -657,10 +657,11 @@ func TestParseStoredApprovalRequestRefuses(t *testing.T) {
 			},
 			err: ErrRecordStoredInvalid,
 		},
-		"action version 2": {
+		"action version 5": {
 			change: func(request *protocol.ApprovalRequest) {
+				// 2 is known from M10 (RECORD-M10-03), so 5 stands for a version this build does not know
 				action := testRecordDnsAction()
-				action.Version = 2
+				action.Version = 5
 				request.CanonicalAction = testRecordStored(t, action)
 				payloadSha256 := ApprovalPayloadSha256(request.CanonicalAction)
 				actionId := ApprovalActionId(Id(request.ApprovalId), request.CanonicalAction)

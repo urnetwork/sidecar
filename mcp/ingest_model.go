@@ -1,15 +1,18 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
 // §16.18's model calls (MCP-M6-03; R-MCP-4, D-MCP-5; RECORD.md section 12's call row and section 13's sources row): a
-// model_call entry, source hook, in the author's vault, per call a harness reports, from either of two places:
+// model_call entry, source hook, in the author's vault, per call a harness reports, each harness's calls from one place
+// alone, so no call counts twice in RECORD.md 13.1's sums:
 //
-//   - Codex's PostModelRequest hook, which the hook path reads as any event (HookEventModelCall) and Ingest captures
-//     beside it, the Coverage naming hooks;
-//   - harness OpenTelemetry: OTLP/HTTP JSON log records POSTed to IngestTelemetry's handler, which the daemon serves on
-//     a loopback listener (ingest_telemetry.go). The handler authenticates its caller (I-17) by the bearer token the
-//     exporter's settings carry (harness_telemetry.go), compared in constant time, and refuses any other caller 401,
-//     recording nothing. A record maps to the live run of its harness (the resource's service.name) and session
-//     (session.id, else gen_ai.conversation.id); the Coverage names telemetry.
+//   - Codex's PostModelRequest hook, its one source (QD-835): ur install-harness hooks it (harness_install_codex.go),
+//     the hook path reads it as any event (HookEventModelCall), and Ingest captures one entry per call beside it, with
+//     its request id, tokens and duration, the Coverage naming hooks. The payload's fields are the plan's names until
+//     the live conformance run in review pins them (hook_codex.go);
+//   - harness OpenTelemetry, Claude Code's one source (QD-822): OTLP/HTTP JSON log records POSTed to IngestTelemetry's
+//     handler, which the daemon serves on a loopback listener (ingest_telemetry.go). The handler authenticates its
+//     caller (I-17) by the bearer token the exporter's settings carry (harness_telemetry.go), compared in constant
+//     time, and refuses any other caller 401, recording nothing. A record maps to the live run of its harness (the
+//     resource's service.name) and session (session.id, else gen_ai.conversation.id); the Coverage names telemetry.
 //
 // The token's scope (QD-822): a POST of model calls to OTLP's logs path, for model_call entries alone, labeled source
 // hook as RECORD.md has them. A request with the token for anything else is refused 401 with nothing recorded: another
@@ -24,12 +27,11 @@
 // cut to Ingest.ModelCallFieldByteCount, RECORD.md's 128 B. An export that cannot be read whole, past
 // Ingest.TelemetryByteCount or not OTLP JSON, and a call that names no live run, are dropped exports: a missed_event
 // gap on the runs of its harness, or on every live run when the harness is unknown, since a lost call may hide cost.
-// A Codex record is no call here: §16.18 also names Codex's PostModelRequest hook, which reports the same calls with
-// their request ids and tokens, so taking both would count each call twice in RECORD.md 13.1's sums, and an
-// api_request record alone carries no tokens and counts retries. Until question
-// harness-telemetry-token-codex-double-count settles where Codex's calls come from, its records stay passed over; ur
-// install-harness does not install the hook yet either (MCP-M6-03), so a Codex run records no model call, and its
-// coverage names no model-call source.
+// A Codex record is no call here: Codex's calls come from its PostModelRequest hook alone (QD-835), which reports
+// each with its request id and tokens, while its api_request record carries no tokens and counts retries. ur
+// install-harness writes Codex no exporter settings and removes those an earlier install wrote, so a Codex record that
+// reaches the receiver anyway, from an exporter a person set up by hand or an earlier install's table not yet
+// removed, is passed over, and an export holding nothing else is refused 401 as one holding no model call.
 // Off unless Ingest.ModelCalls is set: M6's capture, off by default.
 
 package mcp
@@ -68,7 +70,8 @@ type ingestModelCall struct {
 	durationMillis  uint32
 }
 
-// A Codex PostModelRequest's fields this version reads (§16.18), its usage under OpenAI's names.
+// A Codex PostModelRequest's fields this version reads (§16.18), its usage under OpenAI's names: the plan's names
+// (MCP-M6-03), which MCP-M3-28's recorded session carries, until the live conformance run in review pins them.
 type codexModelRequestPayload struct {
 	Model      string `json:"model"`
 	Provider   string `json:"provider"`
@@ -317,7 +320,7 @@ func otlpExportCalls(export *otlpLogsExport) []*otlpExportCall {
 	for _, resourceLogs := range export.ResourceLogs {
 		harness := otlpHarness(otlpAttributes(resourceLogs.Resource.Attributes))
 		if harness == codexHookHarness {
-			// where Codex's calls come from waits on question harness-telemetry-token-codex-double-count
+			// Codex's calls come from its PostModelRequest hook alone (QD-835)
 			continue
 		}
 		for _, scopeLogs := range resourceLogs.ScopeLogs {

@@ -37,7 +37,7 @@
 +approval_mode = "prompt"
 --- /dev/null
 +++ b/$HOME/.codex/hooks.json
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,88 @@
 +{
 +  "hooks": {
 +    "PermissionRequest": [
@@ -48,6 +48,16 @@
 +            "type": "command",
 +            "command": "/opt/ur/bin/ur hook codex --required",
 +            "timeout": 75
++          }
++        ]
++      }
++    ],
++    "PostModelRequest": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex --required"
 +          }
 +        ]
 +      }

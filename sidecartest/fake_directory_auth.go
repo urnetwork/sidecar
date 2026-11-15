@@ -465,6 +465,20 @@ func (self *fakeDirectoryAuthView) Masked(sidecarId sidecar.Id) bool {
 	return admission != nil && admission.RevokedAt != 0 && admission.RevokedAt <= self.pin.GetVersion()
 }
 
+// RevokedAt, timed by that position's fixture while it is retained, 0 once it is not.
+func (self *fakeDirectoryAuthView) MaskedSince(sidecarId sidecar.Id) (uint64, int64, bool) {
+	if !self.Masked(sidecarId) {
+		return 0, 0, false
+	}
+	position := self.fixture.Sidecars[sidecarId].RevokedAt
+	self.auth.stateLock.Lock()
+	defer self.auth.stateLock.Unlock()
+	if position < self.auth.retainedFrom {
+		return position, 0, true
+	}
+	return position, self.auth.views[position-1].fixture.TimeMillis, true
+}
+
 func (self *fakeDirectoryAuthView) SignatureVoided(sidecarId sidecar.Id, position uint64) bool {
 	admission := self.fixture.Sidecars[sidecarId]
 	if admission == nil {
