@@ -30,6 +30,15 @@
 // evs answers missing stays named in the mirror's state, which coverage reports (evs_mirror_coverage.go). A hash
 // check (Check) rereads everything held, so a mirror that rotted on disk is reported partial.
 //
+// Under the repo's prefix write rules (DESIGN-DETAILS 16.2.5's mirror row; EVS1-M6-04) every statement of a
+// file-mode shared ref is judged from the ref's first version, change by change, from the bytes the mirror holds:
+// the allowed changes are applied to the ref's fold, the names this device follows (evs_prefix.go), and an ignored
+// event is journalled {ref, path, version, kind} in the evs component's sealed store for the repair and `ur status`.
+// The bytes themselves are held either way: they are evs's history as it committed it, which a re-seed restores, and
+// a version this device ignores is still a link of the chain. The fold is kept per ref under prefix-<ref_id>, and
+// catches up at each sync from the version it stands at, so a rule set this device could not read yet holds only the
+// judging back, never the copy.
+//
 // Bulk state stays on disk (QD-641): objects stream from evs's reply spills into the sealed store, and the state file
 // names at most MissingNameCount missing objects, counting the rest. M10 adds a versionless path's newest-version rule
 // and a drop's statement-only rule (EVS2-M10-13); format-2 batch records answer ErrEvsFormatUnsupported here until
@@ -459,7 +468,111 @@ func (self *evsMirrorRun) syncRef(ctx context.Context, summary *protocol.EvsHead
 			return nil, err
 		}
 	}
+	if err := self.judgeRef(ctx, summary); err != nil {
+		return nil, err
+	}
 	return refState, nil
+}
+
+// The fold's name in the mirror's sealed store, beside its families and its state.
+func evsMirrorFoldName(refId Id) string {
+	return "prefix-" + refId.String()
+}
+
+// Judges the versions of a file-mode shared ref the mirror holds past its fold, from the held statements and records
+// (see the file header): each push folded in order, its ignored events journalled. Nothing for a client whose prefix
+// rules are not enabled, a repo that is not general, or a ref the rules leave outside by its kind or mode. A set
+// this device cannot read, or a version whose records the mirror lacks, stops the judging there until a later sync.
+func (self *evsMirrorRun) judgeRef(ctx context.Context, summary *protocol.EvsHeadSummary) error {
+	mirror := self.mirror
+	client := mirror.client
+	judge := client.prefixJudge()
+	if judge == nil || protocol.EvsRefKind(summary.GetRefKind()) != protocol.EvsRefKind_EVS_REF_SHARED ||
+		protocol.EvsRefMode(summary.GetRefMode()) != protocol.EvsRefMode_EVS_REF_FILE {
+		return nil
+	}
+	repo := client.Repo(mirror.repoId)
+	if kind, err := repo.repoKind(); err != nil || kind != protocol.RepoKind_REPO_KIND_GENERAL {
+		return nil
+	}
+	refId, _ := IdFromBytes(summary.GetRefId())
+	held, ok, err := mirror.store.Ref(refId)
+	if err != nil || !ok {
+		return err
+	}
+	fold := newEvsPrefixFold()
+	if _, err := aclPrefixReadStoreJson(mirror.store.store, evsMirrorFoldName(refId), fold); err != nil {
+		return err
+	}
+	if fold.Nodes == nil {
+		fold.Nodes = map[string]*evsPrefixFoldNode{}
+	}
+	if held.Version <= fold.Through {
+		return nil
+	}
+	keys := newEvsReadKeys(repo)
+	journalled := []*EvsPrefixIgnored{}
+	folded := false
+	for version := fold.Through + 1; version <= held.Version; version += 1 {
+		statementBytes, err := self.heldBytes(EvsMirrorStatementKey(refId, version))
+		if err != nil {
+			return err
+		}
+		if statementBytes == nil {
+			break
+		}
+		statement, err := ParseEvsStatement(statementBytes)
+		if errors.Is(err, ErrEvsFormatUnsupported) {
+			statement, err = ParseEvsStatementFormat2(statementBytes)
+		}
+		if err != nil {
+			return fmt.Errorf("%w: a held statement that does not parse", ErrEvsMirrorRecordInvalid)
+		}
+		pushId, err := IdFromBytes(statement.Push.GetPushId())
+		if err != nil {
+			return fmt.Errorf("%w: a held statement's push id", ErrEvsMirrorRecordInvalid)
+		}
+		records := make([][]byte, statement.Push.GetPartCount()+1)
+		whole := true
+		for part := range records {
+			if records[part], err = self.heldBytes(EvsMirrorRecordKey(pushId, uint32(part))); err != nil {
+				return err
+			}
+			whole = whole && records[part] != nil
+		}
+		if !whole {
+			break
+		}
+		payload, err := evsMirrorCheckRecords(statement, records)
+		if errors.Is(err, ErrEvsFormatUnsupported) {
+			// a format-2 batch record, which this mirror does not read yet (EVS2-M10-13): judged when it does
+			break
+		}
+		if err != nil {
+			return err
+		}
+		ignored, err := judge.foldPush(ctx, repo, refId, keys, fold, &EvsVerifiedStatement{Version: version, Statement: statement}, payload)
+		if evsPrefixUnread(err) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		journalled = append(journalled, ignored...)
+		folded = true
+	}
+	if !folded {
+		return nil
+	}
+	// the journal first: a kill between the two writes folds the same pushes again, and a unit is journalled once
+	if err := judge.journalAdd(mirror.repoId, journalled); err != nil {
+		return err
+	}
+	data, err := json.Marshal(fold)
+	if err != nil {
+		return err
+	}
+	return aclPrefixWriteStoreFile(mirror.store.store, evsMirrorFoldName(refId), data)
 }
 
 // One version's statement and every object its push names, put into the mirror; false when evs did not serve one,

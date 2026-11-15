@@ -28,6 +28,17 @@
 //	         in the epoch its ref starts in read again, as evs's 409 for one that meets a head has it planned again
 //	         (DESIGN-DETAILS 9.2.3, PathEpochTwin-StaleFirstPush)
 //	return   any other refusal goes back to the caller as an *EvsError: a file-mode 409 with paths among them
+//	follow   412 GATE_CLOSED on a push this device built to create or re-create a shared ref, planned on no head or
+//	         on a deleted one (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803): evs holds such a push's pin at or above the
+//	         repo's newest rule set, so the device's log is behind it. The sender follows the log once through
+//	         EvsClientArgs.ConfigFollow and keeps the refused statement's pin and generation for the ref. The rebuild
+//	         above then builds a statement only where the installed pin, or the generation EnsureWritable returned,
+//	         is above the kept ones; on the same pin and generation the build answers the kept refusal as an
+//	         *EvsGateHeldError, which evsNeedsRebuild does not take, so no second statement is sent on them. One
+//	         follow a refusal, never a loop, nothing in the background; each rebuild counts against PushRebuildCount.
+//	         A push on a head that exists, a push to an owned ref and a deposit ask no follow. The kept refusal is
+//	         its write's: a later write, or the same git update pushed again, builds its first statement afresh,
+//	         since evs's gate also closes for reasons that pass with nothing changed on this device (FS-5's case)
 //
 // A part's own 409 PARTS_MISSING at the seal posts the parts again and seals P again (evs_push_parts.go).
 //
@@ -38,6 +49,7 @@ package sidecar
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -60,8 +72,29 @@ var evsRebuildCodes = map[protocol.EvsRefusalCode]bool{
 	protocol.EvsRefusalCode_EVS_REFUSAL_TIME_STALE:    true,
 }
 
+// evs's 412 GATE_CLOSED for a push that creates or re-creates a shared ref, kept: the build's answer for the ref
+// while this device's installed pin and writable generation are the refused statement's (the file header's follow
+// row). It unwraps to evs's refusal, so a caller answers it as any closed gate, and no rebuild takes it.
+type EvsGateHeldError struct {
+	Refusal error
+}
+
+// The refusal, and that nothing newer stands to create the ref on.
+func (self *EvsGateHeldError) Error() string {
+	return fmt.Sprintf("evs: no newer authorization state or generation to create the ref on: %s", self.Refusal)
+}
+
+// evs's refusal, so EvsErrorOf and IsEvsRefusal find its code.
+func (self *EvsGateHeldError) Unwrap() error {
+	return self.Refusal
+}
+
 // Whether err asks for a rebuild under a new push id.
 func evsNeedsRebuild(err error) bool {
+	var held *EvsGateHeldError
+	if errors.As(err, &held) {
+		return false
+	}
 	evsError, ok := EvsErrorOf(err)
 	return ok && evsRebuildCodes[evsError.Code]
 }
@@ -108,6 +141,10 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 	authPin := state.Pin()
 	if headAuth := plan.Head.GetAuth(); headAuth != nil && authPin.GetVersion() < headAuth.GetVersion() {
 		return nil, fmt.Errorf("%w: this device's authorization state is behind the ref's head", ErrEvsNoConfig)
+	}
+	if err := self.client.gateHeld(evsRefKey{repoId: plan.RepoId, refId: plan.RefId}, authPin.GetVersion(), repoKey.Generation()); err != nil {
+		// the statement evs just refused, on the same pin and generation: not built again (the file header's follow row)
+		return nil, err
 	}
 	identity := self.client.args.Identity()
 	timeMs := self.client.clock.Now().UnixMilli()
@@ -374,6 +411,10 @@ func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, reb
 // sendSealed, noting each push id before anything is sent under it, nil for none: what a git publish judges a moved
 // head by, since an attempt it sent may be in the history (DESIGN-DETAILS 8.2.5's 409 row).
 func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int, note func(pushId Id), beforePost func(attempt *evsPushAttempt) error) (Id, *protocol.EvsPushReply, error) {
+	if *rebuilds == 0 {
+		// a write's first build: a refusal kept for an earlier write of the ref is not this one's
+		self.client.gateOpened(evsRefKey{repoId: self.repoId, refId: sealed.Plan.RefId})
+	}
 	for {
 		pushId := NewEvsPushId()
 		if note != nil {
@@ -399,6 +440,11 @@ func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrit
 		reply, err := self.sendPush(ctx, attempt)
 		if err == nil {
 			self.client.epochs.noteCommitted(self.repoId, sealed.Plan.RefId, reply.GetVersion())
+			self.client.gateOpened(evsRefKey{repoId: self.repoId, refId: sealed.Plan.RefId})
+		}
+		if IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED) && evsCreatesSharedRef(sealed.Plan) {
+			self.client.followClosedGate(ctx, evsRefKey{repoId: self.repoId, refId: sealed.Plan.RefId},
+				attempt.built.Statement.Push.GetAuth().GetVersion(), sealed.RepoKey.Generation(), err)
 		}
 		if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH) {
 			return pushId, reply, err
@@ -417,6 +463,52 @@ func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrit
 			return pushId, nil, err
 		}
 	}
+}
+
+// Whether the plan's push creates or re-creates a shared ref: planned on no head, or on a deleted one. evs holds such
+// a push's pin at or above the repo's newest rule set (QD-803).
+func evsCreatesSharedRef(plan *EvsWritePlan) bool {
+	return plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && (plan.BaseVersion == 0 || plan.Head.GetDeleted())
+}
+
+// The file header's follow row: keeps the refused statement's pin and generation for the ref, then follows the
+// authorization log once, on the caller's goroutine and within its ctx. A follow that fails leaves the state where it
+// was, and the next build answers the kept refusal.
+func (self *EvsClient) followClosedGate(ctx context.Context, key evsRefKey, pinVersion uint64, generation uint64, refusal error) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.gateRefusals[key] = &evsGateRefusal{pinVersion: pinVersion, generation: generation, err: refusal}
+	}()
+	if self.args.ConfigFollow == nil {
+		return
+	}
+	if err := self.args.ConfigFollow(ctx); err != nil {
+		self.log.Infof("[evs]the follow after a closed gate on repo %s ref %s: %v", key.repoId, key.refId, err)
+	}
+}
+
+// The kept refusal of a ref's creating push while neither the pin nor the generation a new statement would carry is
+// above the refused one's, as an *EvsGateHeldError; nil, forgetting it, once either is.
+func (self *EvsClient) gateHeld(key evsRefKey, pinVersion uint64, generation uint64) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	kept := self.gateRefusals[key]
+	if kept == nil {
+		return nil
+	}
+	if kept.pinVersion < pinVersion || kept.generation < generation {
+		delete(self.gateRefusals, key)
+		return nil
+	}
+	return &EvsGateHeldError{Refusal: kept.err}
+}
+
+// Forgets a ref's kept refusal: once a push to it committed, and at a later write's first build.
+func (self *EvsClient) gateOpened(key evsRefKey) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.gateRefusals, key)
 }
 
 // A test's hook on a retoken's floors once the refusal lowered them, nil outside tests: what DESIGN-DETAILS 9.6's

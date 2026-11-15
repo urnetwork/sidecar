@@ -262,6 +262,9 @@ type BridgeComponent struct {
 
 	// the device role's reach events, noted to the record (bridge_reach.go); its own lock
 	reach bridgeComponentReach
+	// the share signers the newest compiled head carries, and the generations signed with (bridge_share_signer.go);
+	// its own lock
+	shares bridgeComponentShares
 }
 
 var _ SidecarComponent = (*BridgeComponent)(nil)
@@ -888,6 +891,10 @@ func (self *BridgeComponent) compileNow() {
 			self.compiled = compiled
 			self.compileCount += 1
 		}()
+		// a share whose signer changed has its links' window clients signed again (§17.9's resign row)
+		if changed := self.shares.setHead(head); 0 < len(changed) {
+			self.ResignShares(changed)
+		}
 		select {
 		case self.bindingsWake <- struct{}{}:
 		default:
