@@ -1099,3 +1099,144 @@ func TestAnEmptyListNamesNone(t *testing.T) {
 		t.Errorf("with none named the app sent %v", testEnvelopeTypes(sent))
 	}
 }
+
+// A 3-minute suspension with three pairs warm: the background sends nothing to any of them, even for the
+// wakes armed as it began, and the next foreground re-establishes each lost session by a Hello at once,
+// before any Ping, each on its own pair's loop.
+func TestThreePairsSuspensionReestablishesEachAtTheNextForeground(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 3, nil)
+	app := world.app
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); err != nil {
+		t.Fatal(err)
+	}
+	for _, indexer := range world.indexers {
+		if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.subprotocol.SetForeground(true)
+	// each session stands, so each loop's tick at the foreground sends nothing and arms its first wake
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	from := len(app.windowEvents.list())
+	sentBefore := len(app.sent())
+	app.subprotocol.SetForeground(false)
+	world.advance(3 * time.Minute)
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
+	}
+	if types := testEnvelopeTypes(app.sent()[sentBefore:]); !slices.Equal(types, []string{"HELLO", "HELLO", "HELLO"}) {
+		t.Errorf("sent from the suspension's start on: %v", types)
+	}
+	events := app.windowEvents.list()
+	for _, indexer := range world.indexers {
+		name := world.names[indexer.clientId]
+		if sent := testEventsNaming(events, name, from); testEventIndex(sent, "send HELLO "+name, 0) < 0 || slices.Contains(sent, "send PING "+name) {
+			t.Errorf("toward %s from the suspension's start on: %v", name, sent)
+		}
+		if !app.subprotocol.peerVerified(indexer.clientId) {
+			t.Errorf("the pair with %s was not re-established", name)
+		}
+	}
+}
+
+// One pair's lost Pong delays no other pair's Ping. Three pairs are warm, the dropped one's window
+// opening 10 s before the other two's; the network to it drops in the foreground, its minute's Ping goes
+// into the drop and its tick waits out the Pong, and the other two are Pinged at their minute meanwhile.
+// Once the network is back, its next tick, 120 s past its Hello with no Pong, finds its session lost and
+// re-establishes it alone by a Hello; the other two keep theirs, and every Ping stays on its own grid.
+func TestALostPongDelaysNoOtherPairsPing(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 3, nil)
+	app := world.app
+	dropped := world.indexers[1]
+	droppedName := world.names[dropped.clientId]
+	live := []*testRpcSide{world.indexers[0], world.indexers[2]}
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); err != nil {
+		t.Fatal(err)
+	}
+	start := app.clock.Now()
+	if err := app.subprotocol.EnsureHello(t.Context(), Id(dropped.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	offset := 10 * time.Second
+	world.advance(offset)
+	for _, indexer := range live {
+		if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	app.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from == dropped || to == dropped {
+			return nil
+		}
+		return envelope
+	})
+	interval := app.settings.MarkedKeepaliveInterval
+	pingTimeout := app.settings.PingTimeout
+	// the dropped pair's minute: its Ping goes into the drop, and its tick waits for the Pong, the only
+	// wait set from here that is due by then
+	waitCount, _ := app.clock.waitCount.Get()
+	world.advance(interval - offset)
+	app.clock.awaitWaitDue(waitCount, start.Add(interval+pingTimeout))
+	// the live pairs' minute, while the dropped pair's tick still waits
+	world.advance(offset)
+	for _, indexer := range live {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
+	}
+	func() {
+		app.subprotocol.stateLock.Lock()
+		defer app.subprotocol.stateLock.Unlock()
+		if loop := app.subprotocol.keepaliveLoops[dropped.clientId]; loop == nil || loop.markCount != 1 {
+			t.Errorf("the dropped pair's tick ended before its Pong's timeout")
+		}
+	}()
+	// no Pong by the timeout: the tick ends, and the next wake is on the dropped pair's grid
+	world.advance(pingTimeout - offset)
+	testAwaitKeepaliveMark(t, app, dropped.clientId, 2)
+	// the network returns, and the dropped pair's next tick re-establishes its lost session by a Hello
+	app.setDeliver(nil)
+	from := len(app.windowEvents.list())
+	world.advance(interval - pingTimeout)
+	testAwaitKeepaliveMark(t, app, dropped.clientId, 3)
+	world.advance(offset)
+	for _, indexer := range live {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 3)
+	}
+	world.advance(interval - offset)
+	testAwaitKeepaliveMark(t, app, dropped.clientId, 4)
+
+	if times := world.pingTimes(droppedName); !slices.Equal(times, []time.Time{start.Add(interval), start.Add(3 * interval)}) {
+		t.Errorf("%s's Pings at %v, want the lost one at its first minute and one at its third", droppedName, times)
+	}
+	for _, indexer := range live {
+		name := world.names[indexer.clientId]
+		want := []time.Time{start.Add(offset + interval), start.Add(offset + 2*interval)}
+		if times := world.pingTimes(name); !slices.Equal(times, want) {
+			t.Errorf("%s's Pings at %v, want %v", name, times, want)
+		}
+	}
+	events := app.windowEvents.list()
+	if testEventIndex(events, "send HELLO "+droppedName, from) < 0 {
+		t.Errorf("toward %s once the network returned: %v", droppedName, testEventsNaming(events, droppedName, from))
+	}
+	hellos := 0
+	for _, envelope := range app.sent() {
+		if envelope.Type == uint32(protocol.MessageType_HELLO) {
+			hellos += 1
+		}
+	}
+	if hellos != 4 {
+		t.Errorf("%d Hellos, want the three that opened the pairs and the dropped pair's one: %v", hellos, testEnvelopeTypes(app.sent()))
+	}
+	for _, indexer := range world.indexers {
+		if !app.subprotocol.peerVerified(indexer.clientId) {
+			t.Errorf("the pair with %s lost its Hello", world.names[indexer.clientId])
+		}
+	}
+}
