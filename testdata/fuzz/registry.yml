@@ -236,6 +236,7 @@ rows:
       - {name: FuzzIndexExtractFile, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractFile]}
       - {name: FuzzIndexExtractAttachment, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractAttachment]}
       - {name: FuzzIndexExtractStreamEqualsWhole, package: ".", owner: SEARCH-M10-44}
+      - {name: FuzzExtractOracleEqualsIndex, package: sidecartest, owner: SEARCH-M10-43, second: [github.com/urnetwork/sidecar]}
 
   - id: search-arguments
     bullet: "Search arguments and cursors"
