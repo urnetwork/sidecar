@@ -80,9 +80,13 @@ func isPublicDnsAddress(address netip.Addr) bool {
 var ErrDnsDirectMxRefused = errors.New("dns direct mx refused")
 
 // Holds a direct MX's mail indexer addresses to §12.7's A rules, as a user's A and AAAA are held: at
-// least one, each a public unicast address, none twice, and at most dnsUserAddressMaxCount of a family.
-// A refusal wraps ErrDnsDirectMxRefused and says which rule.
-func ValidateDirectMxAddresses(addresses []netip.Addr) error {
+// least one, each a public unicast address, none twice, and at most limits' address_max_count of a
+// family. limits nil takes DefaultDnsUserRecordSettings. A refusal wraps ErrDnsDirectMxRefused and says
+// which rule.
+func ValidateDirectMxAddresses(addresses []netip.Addr, limits *DnsUserRecordSettings) error {
+	if limits == nil {
+		limits = DefaultDnsUserRecordSettings()
+	}
 	if len(addresses) == 0 {
 		return fmt.Errorf("%w: no address", ErrDnsDirectMxRefused)
 	}
@@ -101,8 +105,8 @@ func ValidateDirectMxAddresses(addresses []netip.Addr) error {
 			ipv6Count += 1
 		}
 	}
-	if dnsUserAddressMaxCount < ipv4Count || dnsUserAddressMaxCount < ipv6Count {
-		return fmt.Errorf("%w: more than %d addresses of a family", ErrDnsDirectMxRefused, dnsUserAddressMaxCount)
+	if limits.AddressMaxCount < ipv4Count || limits.AddressMaxCount < ipv6Count {
+		return fmt.Errorf("%w: more than %d addresses of a family", ErrDnsDirectMxRefused, limits.AddressMaxCount)
 	}
 	return nil
 }

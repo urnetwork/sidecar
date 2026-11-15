@@ -170,6 +170,10 @@ barrier dnsservice.restore_commit.after dnsservice/restore.go
 barrier dnsservice.restore_commit.before dnsservice/restore.go
 barrier dnsservice.restore_list.after dnsservice/restore.go
 barrier dnsservice.restore_list.before dnsservice/restore.go
+barrier dnsservice.restore_map_list.after dnsservice/restore.go
+barrier dnsservice.restore_map_list.before dnsservice/restore.go
+barrier dnsservice.restore_map_raise.after dnsservice/restore.go
+barrier dnsservice.restore_map_raise.before dnsservice/restore.go
 barrier dnsservice.restore_served dnsservice/restore.go
 barrier dnsservice.restore_soa_read.after dnsservice/restore.go
 barrier dnsservice.restore_soa_read.before dnsservice/restore.go

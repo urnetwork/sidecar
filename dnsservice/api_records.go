@@ -130,21 +130,33 @@ func (self DnsUnloadedRecordGate) MayView(networkId sidecar.Id, sidecarId sideca
 
 // The host an owner of root sits under, as §8.4's dns:<host> names it: @ for the apex <label>.<root> and an underscore
 // owner directly below it, else the label directly below the apex, through a wildcard, an underscore label or an SRV
-// owner's two. False for root itself and a name outside it.
+// owner's two. A name two LDH labels below the apex is a Team scope's host, <host>.<scope> (DNS-M6-06; §8.4's
+// dns:*.<scope> covers one scope), through the same forms below it: the zone's own owners never take that shape, so
+// whether <scope> is one of the network's scopes is the model's to judge, and a name under no scope is refused there.
+// False for root itself and a name outside it.
 func DnsOwnerHost(root string, owner string) (string, bool) {
 	rest, ok := strings.CutSuffix(owner, "."+root)
 	if !ok || rest == "" {
 		return "", false
 	}
 	labels := dns.SplitDomainName(rest + ".")
-	if len(labels) == 1 {
+	// below the zone's apex, the label directly below the apex last
+	below := labels[:len(labels)-1]
+	if len(below) == 0 {
 		return "@", true
 	}
-	host := labels[len(labels)-2]
+	host := below[len(below)-1]
 	if strings.HasPrefix(host, "_") {
 		return "@", true
 	}
-	return host, true
+	if len(below) == 1 {
+		return host, true
+	}
+	next := below[len(below)-2]
+	if next == "*" || strings.HasPrefix(next, "_") {
+		return host, true
+	}
+	return next + "." + host, true
 }
 
 // One write as the block hands it to the model.

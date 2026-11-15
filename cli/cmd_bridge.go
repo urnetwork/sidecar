@@ -20,8 +20,8 @@
 // Without an active grant, expose and forward print the approval prompt and wait: the command asks the daemon again
 // until the decision lands or the wait runs out (§16.6). close is a reading: §17.11 names no spelling for ending a
 // forward or a rule, and bridge_close is its MCP twin. Readable addresses reach the person's terminal only; the
-// daemon's logs name opaque ids alone (I-13). `ur bridge public-tls` is §13's (bridge_public_tls_cmd.go), and invite and
-// accept-invite are shares' (cmd_bridge_share.go).
+// daemon's logs name opaque ids alone (I-13). `ur bridge public-tls` is §13's (bridge_public_tls_cmd.go), and invite,
+// accept-invite and activate are shares' (cmd_bridge_share.go).
 
 package main
 
@@ -107,6 +107,9 @@ func runUrBridge(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	case options["accept-invite"] == true:
 		code, _ := options.String("<code>")
 		return runUrBridgeAcceptInvite(ctx, cli, network, code)
+	case options["activate"] == true:
+		shareId, _ := options.String("<share_id>")
+		return runUrBridgeActivate(ctx, cli, network, shareId)
 	case options["expose"] == true:
 		ranges, _ := options["<ranges>"].([]string)
 		remap, _ := options.Bool("--remap")
