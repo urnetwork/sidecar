@@ -372,6 +372,8 @@ barrier identity.bind.after identity_enroll.go
 barrier identity.bind.after identity_enroll_child.go
 barrier identity.bind.before identity_enroll.go
 barrier identity.bind.before identity_enroll_child.go
+barrier identity.cleanup.sign.after identity_cleanup.go
+barrier identity.cleanup.sign.before identity_cleanup.go
 barrier identity.enroll.after identity_enroll.go
 barrier identity.enroll.before identity_enroll.go
 barrier identity.enroll_child.mint.after identity_enroll_child.go

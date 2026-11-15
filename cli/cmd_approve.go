@@ -14,6 +14,10 @@
 //	--revoke                   an alarm's revoke answer prints the plan it signs first (PreviewApprovalRevoke): a
 //	                           compromise revocation of the alarm's device from the alarm's entry
 //
+// CORE-M6-04 (§7.10's cleanup row) adds the cleanup kind's revoke: the list it signs printed first, each page Worker
+// with its admission time from the rows and its leaf's last change where this device shows one (the root's
+// PreviewCleanup, behind approvals.cleanup_list), the daemon keeping that list as the one the revoke may sign.
+//
 // Every decision here runs under the daemon's presence prompt where the log covers what it signs (§5.6's presence
 // countersignature): a host with no authenticator, or a refused check, signs nothing.
 
@@ -36,9 +40,11 @@ import (
 
 // The control methods ur approve calls.
 const (
-	urMethodApprovalsList       = "approvals.list"
-	urMethodApprovalsDecide     = "approvals.decide"
-	urMethodApprovalsRevokePlan = "approvals.revoke_plan"
+	urMethodApprovalsList          = "approvals.list"
+	urMethodApprovalsDecide        = "approvals.decide"
+	urMethodApprovalsRevokePlan    = "approvals.revoke_plan"
+	urMethodApprovalsCleanupList   = "approvals.cleanup_list"
+	urMethodApprovalsCleanupRevoke = "approvals.cleanup_revoke"
 )
 
 func init() {
@@ -86,6 +92,89 @@ func (self *urDaemonNetwork) approvalRevokePlan(approvalId sidecar.Id) (*sidecar
 	return running.PreviewApprovalRevoke(approvalId)
 }
 
+// What a target answers of §7.10's cleanup, beside the approvals: the list a cleanup item's revoke signs, which the
+// Sidecar keeps as the one shown. Optional: a target without it serves no approvals.cleanup_list.
+type urCleanupTarget interface {
+	approvalCleanupList(ctx context.Context, approvalId sidecar.Id) (*sidecar.SidecarCleanupList, error)
+	// A confirmed control call: the revoke of the list shown, with what it signed.
+	approvalCleanupRevoke(ctx context.Context, approvalId sidecar.Id) (*sidecar.SidecarCleanupRevocation, error)
+}
+
+func (self *urDaemonNetwork) approvalCleanupList(ctx context.Context, approvalId sidecar.Id) (*sidecar.SidecarCleanupList, error) {
+	running, err := self.onlySidecar()
+	if err != nil {
+		return nil, err
+	}
+	return running.PreviewCleanup(ctx, approvalId)
+}
+
+// A confirmed control call, the person having answered on /dev/tty: the revoke runs the daemon's presence prompt where
+// the log covers it, as decideApproval does.
+func (self *urDaemonNetwork) approvalCleanupRevoke(ctx context.Context, approvalId sidecar.Id) (*sidecar.SidecarCleanupRevocation, error) {
+	running, err := self.onlySidecar()
+	if err != nil {
+		return nil, err
+	}
+	return running.RevokeCleanup(ctx, approvalId, sidecar.SidecarActConfirmed, self.presenceCheck(running))
+}
+
+// approvals.cleanup_revoke's reply: the Workers whose revocation the act signed, and the proposal_id, in hex, of each
+// that awaits other AdminSet devices' cosigns.
+type urCleanupRevokeReply struct {
+	Revoked   []sidecar.Id `json:"revoked"`
+	Proposals []string     `json:"proposals,omitempty"`
+	Pending   bool         `json:"pending,omitempty"`
+}
+
+// One page Worker as approvals.cleanup_list answers it: ids, positions and times, never a secret.
+type urCleanupWorker struct {
+	SidecarId  sidecar.Id `json:"sidecar_id"`
+	AdmittedAt uint64     `json:"admitted_at"`
+	// ms since the epoch; 0 for none
+	AdmittedTimeMs int64 `json:"admitted_time_ms,omitempty"`
+	LastChangeMs   int64 `json:"last_change_ms,omitempty"`
+	Signatures     int   `json:"signatures"`
+}
+
+// One member's part.
+type urCleanupMember struct {
+	MemberId sidecar.Id         `json:"member_id"`
+	Workers  []*urCleanupWorker `json:"workers"`
+}
+
+// approvals.cleanup_list's reply.
+type urCleanupListReply struct {
+	AdmissionCount int                `json:"admission_count"`
+	AdmissionCap   int                `json:"admission_cap"`
+	Members        []*urCleanupMember `json:"members"`
+	Presence       bool               `json:"presence,omitempty"`
+}
+
+// A list as the reply carries it.
+func newUrCleanupListReply(list *sidecar.SidecarCleanupList) *urCleanupListReply {
+	reply := &urCleanupListReply{AdmissionCount: list.AdmissionCount, AdmissionCap: list.AdmissionCap, Members: []*urCleanupMember{}, Presence: list.Presence}
+	milliseconds := func(at time.Time) int64 {
+		if at.IsZero() {
+			return 0
+		}
+		return at.UnixMilli()
+	}
+	for _, member := range list.Members {
+		listed := &urCleanupMember{MemberId: member.MemberId, Workers: []*urCleanupWorker{}}
+		for _, worker := range member.Workers {
+			listed.Workers = append(listed.Workers, &urCleanupWorker{
+				SidecarId:      worker.SidecarId,
+				AdmittedAt:     worker.AdmittedAt,
+				AdmittedTimeMs: milliseconds(worker.AdmittedTime),
+				LastChangeMs:   milliseconds(worker.LastChange),
+				Signatures:     worker.Signatures,
+			})
+		}
+		reply.Members = append(reply.Members, listed)
+	}
+	return reply
+}
+
 // One item as approvals.list answers it: ids and kinds, never a secret.
 type urApprovalItem struct {
 	ApprovalId   sidecar.Id  `json:"approval_id"`
@@ -125,7 +214,7 @@ func urApproveMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	if !ok {
 		return nil
 	}
-	return []*sidecar.DaemonMethod{
+	methods := []*sidecar.DaemonMethod{
 		{
 			Name: urMethodApprovalsList,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
@@ -178,6 +267,43 @@ func urApproveMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 			},
 		},
 	}
+	if cleanups, ok := target.(urCleanupTarget); ok {
+		methods = append(methods, &sidecar.DaemonMethod{
+			Name: urMethodApprovalsCleanupList,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				params := &urApprovalRevokePlanParams{}
+				if err := decodeUrParams(call, params); err != nil {
+					return nil, errors.New("a cleanup list takes an approval id")
+				}
+				list, err := cleanups.approvalCleanupList(ctx, params.ApprovalId)
+				if err != nil {
+					return nil, err
+				}
+				return newUrCleanupListReply(list), nil
+			},
+		}, &sidecar.DaemonMethod{
+			Name:    urMethodApprovalsCleanupRevoke,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
+				params := &urApprovalRevokePlanParams{}
+				if err := decodeUrParams(call, params); err != nil {
+					return nil, errors.New("a cleanup revoke takes an approval id")
+				}
+				revocation, err := cleanups.approvalCleanupRevoke(ctx, params.ApprovalId)
+				if revocation == nil {
+					return nil, err
+				}
+				reply := &urCleanupRevokeReply{Revoked: revocation.Revoked, Pending: revocation.Pending}
+				for _, workerId := range revocation.Revoked {
+					if proposalId, ok := revocation.Proposals[workerId]; ok {
+						reply.Proposals = append(reply.Proposals, hex.EncodeToString(proposalId))
+					}
+				}
+				return reply, err
+			},
+		})
+	}
+	return methods
 }
 
 // Lists the items, or decides the one named.
@@ -229,9 +355,17 @@ func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return fmt.Errorf("this device may answer %s only with %s", item.Kind, strings.Join(item.Decisions, " or "))
 	}
 
+	// a cleanup's revoke signs the list shown: it is read before the person confirms, and the daemon keeps it
+	var cleanupList *urCleanupListReply
+	if decision == sidecar.SidecarDecisionRevoke && item.Kind == sidecar.SidecarApprovalCleanup {
+		cleanupList = &urCleanupListReply{}
+		if err := cli.callDaemon(ctx, urMethodApprovalsCleanupList, &urApprovalRevokePlanParams{ApprovalId: approvalId}, false, cleanupList); err != nil {
+			return err
+		}
+	}
 	// a revoke answer signs a compromise revocation: its plan is read before the person confirms
 	var revokePlan *sidecar.DaemonDeviceRevokePlan
-	if decision == sidecar.SidecarDecisionRevoke {
+	if decision == sidecar.SidecarDecisionRevoke && cleanupList == nil {
 		planReply := &urApprovalRevokePlanReply{}
 		if err := cli.callDaemon(ctx, urMethodApprovalsRevokePlan, &urApprovalRevokePlanParams{ApprovalId: approvalId}, false, planReply); err != nil {
 			return err
@@ -247,6 +381,9 @@ func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return fmt.Errorf("%w: %w", errUrNoTty, err)
 	}
 	fmt.Fprintf(tty, "%s%s\n", item.Kind, urApprovalSubject(item))
+	if cleanupList != nil {
+		urPrintCleanupList(tty, cleanupList)
+	}
 	if revokePlan != nil {
 		fmt.Fprintf(tty, "Revoking it signs a compromise revocation of device %s from entry %d:\n", revokePlan.SidecarId, revokePlan.SinceN)
 		for _, planItem := range revokePlan.Items {
@@ -266,6 +403,20 @@ func runUrApprove(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	}
 	if !confirmed {
 		cli.printf("nothing changed\n")
+		return nil
+	}
+	if cleanupList != nil {
+		reply := &urCleanupRevokeReply{}
+		if err := cli.callDaemon(ctx, urMethodApprovalsCleanupRevoke, &urApprovalRevokePlanParams{ApprovalId: approvalId}, true, reply); err != nil {
+			return err
+		}
+		cli.printf("%s: revoked %d page Workers\n", item.ApprovalId, len(reply.Revoked))
+		for _, proposalId := range reply.Proposals {
+			cli.printf("authority_pending: revoked once another admin's device runs\n  ur approve %s\n", proposalId)
+		}
+		if reply.Pending {
+			cli.printf("signed: the network's answer was lost, so the same statements are sent again until they land\n")
+		}
 		return nil
 	}
 	if err := cli.callDaemon(ctx, urMethodApprovalsDecide, &urDecideParams{ApprovalId: approvalId, Decision: decision}, true, nil); err != nil {
@@ -338,6 +489,37 @@ func runUrApproveProposal(ctx context.Context, cli *urCli, proposalIdText string
 		cli.printf("proposal %s: approved at entry %d\n", proposalIdText, reply.Position)
 	}
 	return nil
+}
+
+// A cleanup list on the terminal, as the revoke signs it: per member, each page Worker but its newest, oldest first,
+// with its admission time from the rows and its leaf's last change where this device shows one.
+func urPrintCleanupList(tty urTty, list *urCleanupListReply) {
+	fmt.Fprintf(tty, "%d of the network's %d admissions stand. Revoking signs SidecarRevoke{removed} of each page Worker listed:\n", list.AdmissionCount, list.AdmissionCap)
+	if len(list.Members) == 0 {
+		fmt.Fprintln(tty, "  none: the count is below 90% of the cap")
+	}
+	for _, member := range list.Members {
+		fmt.Fprintf(tty, "  member %s\n", member.MemberId)
+		for _, worker := range member.Workers {
+			admitted := fmt.Sprintf("admitted at entry %d", worker.AdmittedAt)
+			if worker.AdmittedTimeMs != 0 {
+				admitted += " (" + time.UnixMilli(worker.AdmittedTimeMs).UTC().Format(time.RFC3339) + ")"
+			}
+			lastChange := ""
+			if worker.LastChangeMs != 0 {
+				lastChange = ", its leaf last changed " + time.UnixMilli(worker.LastChangeMs).UTC().Format(time.RFC3339)
+			}
+			proposal := ""
+			if 1 < worker.Signatures {
+				proposal = fmt.Sprintf(", a proposal %d admins sign", worker.Signatures)
+			}
+			fmt.Fprintf(tty, "    page Worker %s, %s%s%s\n", worker.SidecarId, admitted, lastChange, proposal)
+		}
+	}
+	fmt.Fprintln(tty, "  a Worker still in use signs out and is enrolled again")
+	if list.Presence {
+		fmt.Fprintln(tty, "  the authenticator then asks for biometry, a passcode or a touch")
+	}
 }
 
 // The device an item is about, for a line ur prints.

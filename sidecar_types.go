@@ -70,6 +70,8 @@ type Sidecar struct {
 	staleGroupViews sidecarStaleGroupViews
 	// §5.6's alarm watcher on that state's entries (identity_alarms.go).
 	alarms sidecarAlarms
+	// §7.10's cleanup on admin devices: when its cap was read and the lists a person was shown (identity_cleanup.go).
+	cleanups sidecarCleanups
 	// §6.4's state Status reads witnessed_at and the UNVERIFIED pins from (sidecar_status.go).
 	headCheckStatuses sidecarHeadCheckStatuses
 	// §16's ledger and spend check behind Authorize (sidecar_gate.go).

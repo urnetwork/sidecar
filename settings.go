@@ -75,6 +75,8 @@ type SidecarSettings struct {
 	// §5.5's agent subkeys: how long each certificate runs, the bound every reader holds it to, and when a new one
 	// replaces it.
 	AgentSubkeys *SidecarAgentSubkeySettings
+	// §5.6's alarms and §7.10's cleanup on the device: the windows they measure and the cap's reads.
+	Alarms *SidecarAlarmSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -122,6 +124,30 @@ type SidecarSettings struct {
 	// The time the Sidecar reads and waits on (clock.go). Nil, the default, is real time; a test
 	// passes sidecartest's FakeClock. connect's own timers stay real (X9).
 	Clock Clock
+}
+
+// §5.6's alarms (identity_alarms.go) and §7.10's cleanup (identity_cleanup.go) on the device.
+type SidecarAlarmSettings struct {
+	// §7.9's Recovery window, which recovery_unseen measures this device's own application times against: the
+	// log's own value object, DefaultConfigRecoverySettings' 72 h (D-TEAM-21), so the device and every verifier
+	// hold one default.
+	Recovery *ConfigRecoverySettings
+	// How far short of the window an activation may land after this device applied the window's start before
+	// recovery_unseen raises: 10 min (§5.6's alarm row), for delivery and clocks.
+	RecoveryUnseenTolerance time.Duration
+	// How long a read of GET /sidecar/limits's config_admissions stands before an entry the log applies reads it
+	// again, off the follower's goroutine, so admissions_near_cap judges the count against a cap no older: 1 h, a
+	// reading (QD-250 names the route and no cadence; a tier changes the cap rarely, and every cleanup preview and
+	// revoke reads it afresh). Zero reads it at no entry, leaving those and RefreshAdmissionCap to read it.
+	AdmissionCapTimeout time.Duration `settings:"zero"`
+}
+
+// The alarm settings, DefaultSidecarSettings' where a host left them out.
+func (self *SidecarSettings) alarmSettings() *SidecarAlarmSettings {
+	if self == nil || self.Alarms == nil {
+		return DefaultSidecarSettings().Alarms
+	}
+	return self.Alarms
 }
 
 // sdk's refresh schedule (§5.4). A token refreshes at a point of its lifetime drawn from the window
@@ -913,6 +939,11 @@ func DefaultSidecarSettings() *SidecarSettings {
 		Sockets: DefaultSidecarSocketSettings(),
 
 		AgentSubkeys: DefaultSidecarAgentSubkeySettings(),
+		Alarms: &SidecarAlarmSettings{
+			Recovery:                DefaultConfigRecoverySettings(),
+			RecoveryUnseenTolerance: 10 * time.Minute,
+			AdmissionCapTimeout:     1 * time.Hour,
+		},
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,
