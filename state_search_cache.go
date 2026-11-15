@@ -8,10 +8,17 @@
 // version's content_sha256, which is checked by opening every frame here before anything is written: a file no verified
 // entry version named is never kept. A mirror of the ref shares these copies. The record's frames stay sealed as evs
 // sealed them, and each is kept as its own file of the store, so a reader opens one 64 KiB frame at a time, by index,
-// under keys the cache never holds (searchRecordFrames). Beside each record it keeps the record's object key as its
-// segment's header carried it, wrapped under the repo generation's key, and its file id, so a reader holding that
-// generation's key from GkmClient reopens it with no read of evs (QD-838): a wrapped key is not a key. Derived data is
-// state_search_derived.go's.
+// under keys the cache never holds.
+//
+// Beside each record it keeps what reopens it after the round that fetched it (QD-838): the 72 B block wrapping its
+// object key under fek_g exactly as its segment's header carried it, that generation g, and its file id. A reader
+// holding RK_g from GkmClient, as any evs read gets it, opens it with no read of evs (OpenRecordRead): fek_g unwraps
+// the object key and manifest_g opens the sealed header, both derived for the open and cleared after it, and the read
+// holds the object key until it ends or the instance locks. A wrapped key is not a key, so the cache still holds none,
+// and no key reaches a log or an error. A record kept before these reads as lacking them and stays, and the next sync
+// round fetches it again (search_fetch.go). A slot-keyed repo's record has its key in a slot, not in its segment's
+// header, so the cache keeps none and the record reopens only in its own round, failing closed until question
+// search-cache-wrapped-key-slot-keyed is answered. Derived data is state_search_derived.go's.
 //
 // The store's layout under net/<network_id>/search/, every file sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search")
 // with XChaCha20-Poly1305 and a random nonce prefix, its name in the AAD (state_seal.go):
@@ -52,17 +59,18 @@ import (
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §5.9's file class of the index cache and search state, and the cache's directory.
+// §5.9's file class of the index cache and search state, the cache's directory and its names. Its bounds are
+// SidecarSearchSettings'; a frame file holds one of evs's sealed frames.
 const (
 	SidecarSearchFileClass  = "search"
 	sidecarSearchCacheDir   = "search"
 	searchCacheHoldingsName = "holdings"
 	searchCacheMetaName     = "m"
 	searchCachePartRecord   = "record"
-	searchCacheHoldingsMax  = 16 * 1024 * 1024
-	searchCacheMetaMax      = 64 * 1024
 	searchCacheFrameMax     = EvsRecordFrameByteCount + chacha20poly1305.Overhead
 	searchCacheHoldingsVer  = 1
 )
@@ -77,6 +85,17 @@ var (
 	ErrSearchCacheUnnamed = errors.New("search cache: no verified entry version names it")
 	// What a call asks of the cache is not well formed.
 	ErrSearchCacheArgs = errors.New("search cache: invalid arguments")
+	// A kept record lacks what reopens it after its round: it was kept before the cache kept its wrapped object key,
+	// generation and file id (QD-838). It stays, and the next sync round fetches it again.
+	ErrSearchCacheKeysLacking = errors.New("search cache: the kept record lacks the keys that reopen it; a sync round fetches it again")
+	// A kept record of a slot-keyed repo, whose key is in a slot the cache does not keep: it reopens only in the round
+	// that fetched it, failing closed until question search-cache-wrapped-key-slot-keyed is answered.
+	ErrSearchCacheSlotKeyed = errors.New("search cache: the kept record's key is in a slot the cache does not keep")
+	// The repo key a read was given does not open the kept record: another repo's or generation's, or one whose fek_g
+	// does not unwrap the record's block. Nothing is dropped.
+	ErrSearchCacheKey = errors.New("search cache: the key given does not open the kept record")
+	// A read of a kept record ended, by Close or a lock of the instance, and holds no key.
+	ErrSearchCacheReadEnded = errors.New("search cache: the read ended")
 )
 
 // One index file version a ref's index names: its path under the index root and its entry version.
@@ -107,12 +126,14 @@ type SearchCacheRecord struct {
 	SealedHeader []byte
 	SealedFrames []byte
 	// What opens it for the check, from the evs read path, which the cache never keeps: the header opened under its
-	// manifest key, the object key it names, and the record's file id, its frames' AAD.
+	// manifest key, the object key it names, and the record's file id, its frames' AAD, which the cache keeps.
 	Header    *EvsRecordHeader
 	ObjectKey *EvsObjectKey
 	FileId    Id
-	// The object key as the record's segment header carried it, wrapped under the repo generation's key, which the
-	// cache keeps with the file id so a reader reopens the record later (QD-838); nil where the source gave none.
+	// The 72 B block wrapping ObjectKey under fek_g exactly as the record's segment header carried it, g the header's
+	// generation (QD-524), which the cache keeps with g and the file id so a reader holding RK_g reopens the record after
+	// its round (QD-838). Required where the record is keyed by its container (key_ref_kind 0); refused on a slot-keyed
+	// record, whose key is in a slot the cache does not keep (ErrSearchCacheSlotKeyed).
 	WrappedObjectKey []byte
 }
 
@@ -126,6 +147,10 @@ type SearchCacheFile struct {
 	// What it takes in the store.
 	ByteCount int64
 	KeptAt    time.Time
+	// For a record: kept with what reopens it after its round (QD-838), its wrapped object key, generation and file id,
+	// or with the mark that a slot holds its key. False for a record kept before, which the next sync round fetches
+	// again.
+	KeysKept bool
 }
 
 // What the cache holds of one ref.
@@ -157,9 +182,12 @@ type searchCacheFileWire struct {
 	Kind     string `json:"kind"`
 	Bytes    int64  `json:"bytes"`
 	KeptMs   int64  `json:"kept_ms"`
+	Keys     bool   `json:"keys,omitempty"`
 }
 
-// A kept file's meta: its frames and, for a record, its sealed header, its wrapped object key and its file id.
+// A kept file's meta: its frames and, for a record, its sealed header, its file id and what reopens it (QD-838): the
+// wrapped object key with its generation, or the mark that a slot holds its key. A record's meta written before then
+// has neither, nor a generation.
 type searchCacheMetaWire struct {
 	Length       int64  `json:"length"`
 	FrameCount   int    `json:"frames"`
@@ -167,6 +195,23 @@ type searchCacheMetaWire struct {
 	Sha256       string `json:"sha256,omitempty"`
 	WrappedKey   []byte `json:"wrapped_key,omitempty"`
 	FileId       string `json:"file_id,omitempty"`
+	Generation   uint64 `json:"generation,omitempty"`
+	SlotKeyed    bool   `json:"slot_keyed,omitempty"`
+}
+
+// Whether a reader may reopen the meta's record under a repo key (QD-838): nil where it keeps the record's wrapped
+// object key, generation and file id; ErrSearchCacheSlotKeyed for a slot-keyed record; ErrSearchCacheKeysLacking for
+// one kept before the cache kept them; ErrSidecarStoreFailed for a block of the wrong length.
+func (self *searchCacheMetaWire) keysState() error {
+	switch {
+	case self.SlotKeyed:
+		return ErrSearchCacheSlotKeyed
+	case self.Generation == 0 || self.FileId == "":
+		return ErrSearchCacheKeysLacking
+	case len(self.WrappedKey) != EvsWrappedKeyByteCount:
+		return fmt.Errorf("%w: a kept record's wrapped key", ErrSidecarStoreFailed)
+	}
+	return nil
 }
 
 // The index cache. Construct with NewSearchCache.
@@ -216,7 +261,8 @@ func NewSearchCache(ctx context.Context, store SidecarStore, settings *SidecarSe
 		return nil, fmt.Errorf("%w: a search cache needs its store and settings", ErrSearchCacheArgs)
 	}
 	if settings.CacheByteCount < 0 || settings.MemoryByteCount <= 0 || settings.VersionCacheByteCount <= 0 ||
-		settings.MemoryByteCount < settings.VersionCacheByteCount {
+		settings.MemoryByteCount < settings.VersionCacheByteCount || settings.CacheHoldingsByteCount <= 0 ||
+		settings.CacheMetaByteCount <= 0 {
 		return nil, fmt.Errorf("%w: the search settings' bounds", ErrSearchCacheArgs)
 	}
 	self := &SearchCache{
@@ -365,7 +411,7 @@ func (self *SearchCache) loadRefWithLock(repoId Id, refId Id) (*SearchCacheRef, 
 		return ref, nil
 	}
 	ref = &SearchCacheRef{RepoId: repoId, RefId: refId}
-	content, err := self.readSmall(searchCacheRefName(repoId, refId)+"/"+searchCacheHoldingsName, searchCacheHoldingsMax)
+	content, err := self.readSmall(searchCacheRefName(repoId, refId)+"/"+searchCacheHoldingsName, self.settings.CacheHoldingsByteCount)
 	switch {
 	case err == nil:
 		wire := &searchCacheHoldingsWire{}
@@ -389,6 +435,7 @@ func (self *SearchCache) loadRefWithLock(repoId Id, refId Id) (*SearchCacheRef, 
 				Kind:      file.Kind,
 				ByteCount: file.Bytes,
 				KeptAt:    time.UnixMilli(file.KeptMs),
+				KeysKept:  file.Keys,
 			}
 			copy(kept.ContentSha256[:], sum)
 			ref.Files = append(ref.Files, kept)
@@ -428,6 +475,7 @@ func (self *SearchCache) storeRefWithLock(ref *SearchCacheRef) error {
 			Kind:     file.Kind,
 			Bytes:    file.ByteCount,
 			KeptMs:   file.KeptAt.UnixMilli(),
+			Keys:     file.KeysKept,
 		})
 	}
 	for _, retained := range ref.Retained {
@@ -589,7 +637,7 @@ func (self *SearchCache) writeFramed(base string, frames [][]byte, meta *searchC
 
 // A kept file's meta, or ErrSidecarStoreAbsent.
 func (self *SearchCache) readMeta(base string) (*searchCacheMetaWire, error) {
-	content, err := self.readSmall(base+"/"+searchCacheMetaName, searchCacheMetaMax)
+	content, err := self.readSmall(base+"/"+searchCacheMetaName, self.settings.CacheMetaByteCount)
 	if err != nil {
 		return nil, err
 	}
@@ -601,11 +649,23 @@ func (self *SearchCache) readMeta(base string) (*searchCacheMetaWire, error) {
 }
 
 // Opens each of a record's sealed frames under keys, hashing the plaintext, which is cleared as it goes: the check
-// before a record is kept. Answers the sealed frames, split.
+// before a record is kept. Before it, the record must carry what reopens it later as its key ref kind says (QD-838): a
+// container-keyed record its 72 B wrapped block and a file id, a slot-keyed one no block. Answers the sealed frames,
+// split.
 func searchCacheCheckRecord(record *SearchCacheRecord) ([][]byte, error) {
 	header := record.Header
 	if header == nil || record.ObjectKey == nil || len(record.SealedHeader) != EvsRecordHeaderByteCount {
 		return nil, fmt.Errorf("%w: a record without its header or key", ErrSearchCacheArgs)
+	}
+	switch header.KeyRefKind {
+	case protocol.EvsKeyRefKind_EVS_KEY_REF_CONTAINER:
+		if len(record.WrappedObjectKey) != EvsWrappedKeyByteCount || record.FileId == (Id{}) {
+			return nil, fmt.Errorf("%w: a container-keyed record without its wrapped object key or file id", ErrSearchCacheArgs)
+		}
+	default:
+		if len(record.WrappedObjectKey) != 0 {
+			return nil, fmt.Errorf("%w: a wrapped object key on a slot-keyed record", ErrSearchCacheArgs)
+		}
 	}
 	if uint64(len(record.SealedFrames)) != EvsRecordByteCount(header.BodyLength)-EvsRecordHeaderByteCount {
 		return nil, fmt.Errorf("%w: its frames are not its header's length", ErrSearchCacheContent)
@@ -642,8 +702,10 @@ func searchCacheCheckRecord(record *SearchCacheRecord) ([][]byte, error) {
 
 // Keeps an index file's record (§5.9's holds row), once every frame opens under the record's keys and the plaintext's
 // SHA-256 equals its entry version's content_sha256; else nothing is written and the answer is ErrSearchCacheContent.
-// The record's frames are kept as evs sealed them. A copy kept before at the same key is replaced. The cache's bound
-// then applies (Evict).
+// The record's frames are kept as evs sealed them, and beside them its file id and, for a container-keyed record, its
+// wrapped object key and the header's generation, whose keys seal both (QD-524, QD-838); a slot-keyed record is
+// marked so. A record without what its key ref kind needs is ErrSearchCacheArgs. A copy kept before at the same key is
+// replaced. The cache's bound then applies (Evict).
 func (self *SearchCache) PutRecord(ctx context.Context, record *SearchCacheRecord) error {
 	if record == nil {
 		return ErrSearchCacheArgs
@@ -655,6 +717,21 @@ func (self *SearchCache) PutRecord(ctx context.Context, record *SearchCacheRecor
 	if err != nil {
 		return err
 	}
+	meta := &searchCacheMetaWire{
+		Length:       int64(record.Header.BodyLength),
+		FrameCount:   len(frames),
+		SealedHeader: bytes.Clone(record.SealedHeader),
+		Sha256:       hex.EncodeToString(record.ContentSha256[:]),
+		FileId:       hex.EncodeToString(record.FileId[:]),
+	}
+	if record.Header.KeyRefKind == protocol.EvsKeyRefKind_EVS_KEY_REF_CONTAINER {
+		// evs's readers hold a container-keyed record's generation to its segment's, whose g seals the header and wraps
+		// the block alike
+		meta.WrappedKey = bytes.Clone(record.WrappedObjectKey)
+		meta.Generation = record.Header.Generation
+	} else {
+		meta.SlotKeyed = true
+	}
 	if err := func() error {
 		self.operationLock.Lock()
 		defer self.operationLock.Unlock()
@@ -662,14 +739,7 @@ func (self *SearchCache) PutRecord(ctx context.Context, record *SearchCacheRecor
 		if err != nil {
 			return err
 		}
-		byteCount, err := self.writeFramed(searchCachePartName(record.Key, searchCachePartRecord), frames, &searchCacheMetaWire{
-			Length:       int64(record.Header.BodyLength),
-			FrameCount:   len(frames),
-			SealedHeader: bytes.Clone(record.SealedHeader),
-			Sha256:       hex.EncodeToString(record.ContentSha256[:]),
-			WrappedKey:   bytes.Clone(record.WrappedObjectKey),
-			FileId:       hex.EncodeToString(record.FileId[:]),
-		})
+		byteCount, err := self.writeFramed(searchCachePartName(record.Key, searchCachePartRecord), frames, meta)
 		if err != nil {
 			return err
 		}
@@ -680,6 +750,7 @@ func (self *SearchCache) PutRecord(ctx context.Context, record *SearchCacheRecor
 			Kind:          searchCacheKindRecord,
 			ByteCount:     byteCount,
 			KeptAt:        self.clock.Now(),
+			KeysKept:      true,
 		})
 		if ref.RefVersion < record.RefVersion {
 			ref.RefVersion = record.RefVersion
@@ -853,7 +924,8 @@ func (self *SearchCache) DropAll() error {
 
 // A kept record's frames, read one at a time (§5.9's bounds row): the sealed header as fetched, which the reader opens
 // under its manifest key, and each frame, opened under the object key it names, so one 64 KiB frame is decrypted at a
-// time and nothing of the record is decrypted at rest.
+// time and nothing of the record is decrypted at rest. With the repo key at its Generation, OpenRead opens it for a
+// read that needs no other key (QD-838).
 type SearchCacheRecordFrames struct {
 	cache *SearchCache
 	key   SearchCacheKey
@@ -861,8 +933,9 @@ type SearchCacheRecordFrames struct {
 	meta  *searchCacheMetaWire
 }
 
-// The kept record at key, or ErrSidecarStoreAbsent for one the cache does not hold; ErrSearchCacheRefetch for one that
-// failed and was dropped.
+// The kept record at key, with what reopens it: its file id and wrapped object key and their generation (QD-838).
+// ErrSidecarStoreAbsent for a record the cache does not hold; ErrSearchCacheRefetch for one that failed and was
+// dropped.
 func (self *SearchCache) OpenRecord(key SearchCacheKey) (*SearchCacheRecordFrames, error) {
 	if err := key.check(); err != nil {
 		return nil, err
@@ -890,14 +963,24 @@ func (self *SearchCacheRecordFrames) SealedHeader() []byte {
 	return bytes.Clone(self.meta.SealedHeader)
 }
 
-// The record's object key as its segment header carried it, wrapped under the repo generation's key (QD-838); nil
-// where its source gave none.
+// The 72 B block wrapping the record's object key under fek_g as its segment header carried it (QD-838); nil for a
+// slot-keyed record and one kept before the cache kept it.
 func (self *SearchCacheRecordFrames) WrappedObjectKey() []byte {
 	return bytes.Clone(self.meta.WrappedKey)
 }
 
-// The record's file id, its frames' AAD; ErrSearchCacheRefetch where the meta lost it.
+// g, whose RK_g a reader asks of GkmClient to reopen the record: its keys seal the header and wrap the object key
+// (QD-524). 0 for a slot-keyed record and one kept before the cache kept it.
+func (self *SearchCacheRecordFrames) Generation() uint64 {
+	return self.meta.Generation
+}
+
+// The record's file id, its frames' AAD: ErrSearchCacheKeysLacking for a record kept before the cache kept it
+// (QD-838), and ErrSearchCacheRefetch, the file dropped, where the meta holds a malformed one.
 func (self *SearchCacheRecordFrames) FileId() (Id, error) {
+	if self.meta.FileId == "" {
+		return Id{}, ErrSearchCacheKeysLacking
+	}
 	decoded, err := hex.DecodeString(self.meta.FileId)
 	if err != nil || len(decoded) != len(Id{}) {
 		return Id{}, self.cache.readFailed(self.key, ErrSidecarStoreFailed)
@@ -914,6 +997,23 @@ func (self *SearchCacheRecordFrames) Length() int64 {
 // whole frame: one frame decrypted, nothing else of the record. A kept frame that does not open drops the file:
 // ErrSearchCacheRefetch.
 func (self *SearchCacheRecordFrames) ReadFrame(index int, header *EvsRecordHeader, objectKey *EvsObjectKey, fileId Id, dst []byte) ([]byte, error) {
+	sealed, err := self.readSealedFrame(index, header)
+	if err != nil {
+		return nil, err
+	}
+	opened, ok, err := self.openFrame(index, sealed, header, objectKey, fileId, dst)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, self.cache.readFailed(self.key, ErrSidecarStoreFailed)
+	}
+	return opened, nil
+}
+
+// Frame index's sealed bytes as kept, for a record of header's length; a part gone drops the file:
+// ErrSearchCacheRefetch.
+func (self *SearchCacheRecordFrames) readSealedFrame(index int, header *EvsRecordHeader) ([]byte, error) {
 	if index < 0 || self.meta.FrameCount <= index || header == nil || header.BodyLength != uint64(self.meta.Length) {
 		return nil, fmt.Errorf("%w: a frame past the record", ErrSearchCacheArgs)
 	}
@@ -921,9 +1021,15 @@ func (self *SearchCacheRecordFrames) ReadFrame(index int, header *EvsRecordHeade
 	if err != nil {
 		return nil, self.cache.readFailed(self.key, err)
 	}
+	return sealed, nil
+}
+
+// Frame index's plaintext from its sealed bytes under the keys given, into dst: false where its tag fails. Only memory
+// is touched, so a read holding its key under a lock may call it.
+func (self *SearchCacheRecordFrames) openFrame(index int, sealed []byte, header *EvsRecordHeader, objectKey *EvsObjectKey, fileId Id, dst []byte) ([]byte, bool, error) {
 	frames := &evsRecordFrames{}
 	if err := frames.begin(objectKey, self.key.RepoId, fileId, header); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	frames.frameIndex = uint32(index)
 	frames.frame()
@@ -933,9 +1039,181 @@ func (self *SearchCacheRecordFrames) ReadFrame(index int, header *EvsRecordHeade
 	}
 	opened, err := frames.aead.Open(dst[:0], frames.nonce[:], sealed, frames.aad[:])
 	if err != nil {
+		return nil, false, nil
+	}
+	return opened, true, nil
+}
+
+// keysState, a block of the wrong length dropping the file: ErrSearchCacheRefetch.
+func (self *SearchCacheRecordFrames) checkKeys() error {
+	err := self.meta.keysState()
+	if err != nil && isSearchCacheDamage(err) {
+		return self.cache.readFailed(self.key, err)
+	}
+	return err
+}
+
+// Opens the kept record for one read under repoKey, RK_g of the record's repo at its Generation, which the reader asks
+// of GkmClient as any evs read does (OpenRecordRead asks it), so a record kept in an earlier round reads with no read
+// of evs (QD-838). fek_g unwraps the object key from the block the record's segment header carried and manifest_g
+// opens its sealed header, each derived here and cleared once used; the read holds the object key until it ends.
+// ErrSearchCacheKeysLacking for a record kept before the cache kept its keys, which stays for the next sync round to
+// fetch again; ErrSearchCacheSlotKeyed for a slot-keyed one; ErrSearchCacheKey, dropping nothing, for a key of another
+// repo or generation or one that does not unwrap the block. A header that opens but is not the record its keys were
+// kept for drops the file: ErrSearchCacheRefetch.
+func (self *SearchCacheRecordFrames) OpenRead(repoKey *EvsRepoKey) (*SearchCacheRecordRead, error) {
+	if err := self.checkKeys(); err != nil {
+		return nil, err
+	}
+	fileId, err := self.FileId()
+	if err != nil {
+		return nil, err
+	}
+	if repoKey == nil || repoKey.RepoId() != self.key.RepoId || repoKey.Generation() != self.meta.Generation {
+		return nil, fmt.Errorf("%w: a key of another repo or generation", ErrSearchCacheKey)
+	}
+	objectKey, err := func() (*EvsObjectKey, error) {
+		fekKey, err := NewEvsFekKey(repoKey)
+		if err != nil {
+			return nil, err
+		}
+		defer clear(fekKey.key)
+		return EvsUnwrapObjectKey(fekKey, self.meta.WrappedKey)
+	}()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSearchCacheKey, err)
+	}
+	header, err := func() (*EvsRecordHeader, error) {
+		manifestKey, err := NewEvsManifestKey(repoKey)
+		if err != nil {
+			return nil, err
+		}
+		defer clear(manifestKey.key)
+		return EvsOpenRecordHeader(manifestKey, self.meta.SealedHeader)
+	}()
+	if err != nil {
+		clear(objectKey.key)
+		return nil, fmt.Errorf("%w: %w", ErrSearchCacheKey, err)
+	}
+	if header.KeyRefKind != protocol.EvsKeyRefKind_EVS_KEY_REF_CONTAINER || header.Generation != self.meta.Generation ||
+		header.BodyLength != uint64(self.meta.Length) || EvsRecordFrameCount(header.BodyLength) != uint64(self.meta.FrameCount) {
+		clear(objectKey.key)
 		return nil, self.cache.readFailed(self.key, ErrSidecarStoreFailed)
 	}
+	read := &SearchCacheRecordRead{frames: self, header: header, fileId: fileId, objectKey: objectKey}
+	// a lock of the instance ends the read as it ends a cursor (§5.9's delete row)
+	read.release = self.cache.AddCursor(read.end)
+	return read, nil
+}
+
+// The kept record at key opened for one read (QD-838), with RK_g at the record's generation asked of gkm as any evs
+// read asks it: what a search, local or remote, reads a kept shard, posting list or slot through after the round that
+// fetched it, with no read of evs. Answers as OpenRecord and OpenRead do, and gkm's own refusals as they are, such as
+// ErrGkmKeyMissing for a generation this sidecar no longer reaches.
+func (self *SearchCache) OpenRecordRead(ctx context.Context, key SearchCacheKey, gkm GkmClient) (*SearchCacheRecordRead, error) {
+	if gkm == nil {
+		return nil, fmt.Errorf("%w: a read needs gkm", ErrSearchCacheArgs)
+	}
+	frames, err := self.OpenRecord(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := frames.checkKeys(); err != nil {
+		return nil, err
+	}
+	repoKey, err := gkm.RepoKey(ctx, key.RepoId, frames.meta.Generation)
+	if err != nil {
+		return nil, err
+	}
+	return frames.OpenRead(repoKey)
+}
+
+// A kept record opened for one read (QD-838): its header opened and its object key unwrapped, which it holds until
+// Close, or a lock of the instance, clears and drops it; a frame read after either is ErrSearchCacheReadEnded. Each
+// ReadFrame decrypts one 64 KiB frame and nothing else of the record. It serves the index's readers as their frame
+// source. Close and a lock are safe beside a read; reads are not safe for concurrent use with each other.
+type SearchCacheRecordRead struct {
+	frames *SearchCacheRecordFrames
+	header *EvsRecordHeader
+	fileId Id
+	// takes the read out of the cache's open cursors
+	release func()
+
+	stateLock sync.Mutex
+	// the record's object key, nil once the read ended
+	objectKey *EvsObjectKey
+}
+
+// The record body's length.
+func (self *SearchCacheRecordRead) Length() int64 {
+	return self.frames.meta.Length
+}
+
+// The frames the body takes.
+func (self *SearchCacheRecordRead) FrameCount() int {
+	return self.frames.meta.FrameCount
+}
+
+// Frame index's plaintext into dst, which holds a whole frame: one frame decrypted, nothing else of the record. A kept
+// frame that does not open, or a part gone, drops the file: ErrSearchCacheRefetch. ErrSearchCacheReadEnded once the
+// read ended.
+func (self *SearchCacheRecordRead) ReadFrame(index int, dst []byte) ([]byte, error) {
+	if self.ended() {
+		return nil, ErrSearchCacheReadEnded
+	}
+	sealed, err := self.frames.readSealedFrame(index, self.header)
+	if err != nil {
+		return nil, err
+	}
+	// the key is used under the lock, which only memory work holds, so an end never clears it mid-frame
+	opened, ok, err := func() ([]byte, bool, error) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.objectKey == nil {
+			return nil, false, ErrSearchCacheReadEnded
+		}
+		return self.frames.openFrame(index, sealed, self.header, self.objectKey, self.fileId, dst)
+	}()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, self.frames.cache.readFailed(self.frames.key, ErrSidecarStoreFailed)
+	}
 	return opened, nil
+}
+
+// Whether the read ended.
+func (self *SearchCacheRecordRead) ended() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.objectKey == nil
+}
+
+// Ends the read: the object key is cleared and dropped. Safe to call more than once.
+func (self *SearchCacheRecordRead) Close() {
+	self.end()
+	self.release()
+}
+
+// Clears and drops the object key: Close's, and a lock's through the cache's open cursors.
+func (self *SearchCacheRecordRead) end() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.objectKey != nil {
+		clear(self.objectKey.key)
+		self.objectKey = nil
+	}
+}
+
+// The record body's length, as the index's readers ask it.
+func (self *SearchCacheRecordRead) indexLength() int {
+	return int(self.frames.meta.Length)
+}
+
+// Frame index's plaintext, as the index's readers ask it.
+func (self *SearchCacheRecordRead) indexReadFrame(index int, dst []byte) ([]byte, error) {
+	return self.ReadFrame(index, dst)
 }
 
 // A frame source over a kept record for the index's readers (indexOpenShard, indexValidateFile): each frame opened as

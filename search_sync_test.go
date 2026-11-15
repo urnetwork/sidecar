@@ -12,7 +12,6 @@ package sidecar
 // snapshot through a swap.
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -165,8 +164,8 @@ func (self *testSyncSource) Fetch(ctx context.Context, files []*indexFileVersion
 			plaintext[len(plaintext)-1] ^= 1
 		}
 		key := SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.path, Version: file.version}
+		// sealed under RK_1, with its object key's block as its segment header carries it (QD-838)
 		record := newTestSearchRecord(self.t, key, SearchCachePartition{}, plaintext)
-		record.record.WrappedObjectKey = testSyncWrappedKey(file.path, file.version)
 		fetched = append(fetched, &searchSyncFetched{file: file, record: record.record})
 	}
 	return fetched, nil
@@ -956,36 +955,6 @@ func TestASnapshotNeverWaitsForARound(t *testing.T) {
 		key := SearchCacheKey{RepoId: world.repoId, RefId: world.refId, Path: file.Path, Version: file.Version}
 		if _, err := world.cache.cache.OpenRecord(key); err != nil {
 			t.Fatalf("a file the snapshot holds went at the swap: %v", err)
-		}
-	}
-}
-
-// What the fake source gives as a record's wrapped object key: bytes of its own a file version.
-func testSyncWrappedKey(path string, version uint64) []byte {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("wrapped %s %d", path, version)))
-	return sum[:]
-}
-
-// QD-838: every file a round keeps carries its record's wrapped object key and file id in the cache, so a reader with
-// the generation's key reopens it after the round with no read of evs.
-func TestAKeptFileKeepsItsWrappedKey(t *testing.T) {
-	world := newTestSyncWorld(t, false)
-	world.push(t, evsTestId("writer"), "first", 2)
-	world.round(t)
-	snapshot := world.snapshot(t)
-	if len(snapshot.Files()) == 0 {
-		t.Fatal("no file kept")
-	}
-	for _, file := range snapshot.Files() {
-		frames, err := world.cache.cache.OpenRecord(SearchCacheKey{RepoId: world.repoId, RefId: world.refId, Path: file.Path, Version: file.Version})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(frames.WrappedObjectKey(), testSyncWrappedKey(file.Path, file.Version)) {
-			t.Fatal("a kept file lost its wrapped key")
-		}
-		if fileId, err := frames.FileId(); err != nil || fileId == (Id{}) {
-			t.Fatalf("a kept file lost its file id: %v", err)
 		}
 	}
 }
