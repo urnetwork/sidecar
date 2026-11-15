@@ -1,6 +1,6 @@
-// ur bridge invite and ur bridge accept-invite (§17.9, §17.11; BRIDGE-M6-03): a share from the terminal. Both are an
-// admin's, and a person's confirmation: each asks on the terminal before it calls the daemon, and the daemon runs
-// neither for an agent.
+// ur bridge invite, ur bridge accept-invite and ur bridge activate (§17.9, §17.11; BRIDGE-M6-03; QD-831): a share from
+// the terminal. Each is an admin's, and a person's confirmation: each asks on the terminal before the daemon acts, and
+// the daemon runs none for an agent.
 //
 //	ur bridge invite <target>...       shares what hosts of this network reach with one other network. A target is
 //	                                   <host>=<cidr>[,tcp:<port>[-<port>]|,udp:<port>[-<port>]]: the host by its id,
@@ -8,11 +8,16 @@
 //	                                   share's id and the invite's code. The code is shown once: this device keeps
 //	                                   none, and whoever holds it can accept the invite
 //	ur bridge accept-invite <code>     accepts another network's invite: gives each target an alias in this
-//	                                   network's block and tells the other network. Prints the aliases, or why
-//	                                   there was no room
+//	                                   network's block and tells the other network. Prints the aliases and the
+//	                                   ShareKey's fingerprint, or why there was no room
+//	ur bridge activate <share_id>      the inviting network's approving admin, on a device that made the invite:
+//	                                   shows the accepted share on the terminal (the other network, each target with
+//	                                   its alias, the ShareKey's fingerprint, both tables' hashes), asks, and on a yes
+//	                                   activates exactly what was shown; a share that changed in between is refused
 //
-// The other network's admin then activates the share on its side. The code reaches the terminal alone; the daemon's
-// logs name opaque ids (I-13).
+// The code reaches the terminal alone; the daemon's logs name opaque ids (I-13). activate needs a terminal before it
+// reads the share, and shows the share there rather than on stdout: what the person confirms reaches the person, and
+// no process reading ur's output sees it.
 
 package main
 
@@ -20,9 +25,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -31,6 +38,7 @@ import (
 var urBridgeShareUsage = []string{
 	"  ur bridge invite <target>... [--network=<name>]",
 	"  ur bridge accept-invite <code> [--network=<name>]",
+	"  ur bridge activate <share_id> [--network=<name>]",
 }
 
 func init() {
@@ -143,9 +151,13 @@ func runUrBridgeAcceptInvite(ctx context.Context, cli *urCli, network string, co
 			cli.printf("from       network %s\n", reply.SharingNetworkId)
 		}
 		for _, alias := range reply.Aliases {
-			cli.printf("alias      target %d at .%d.%d/%d of this network's block\n", alias.Index, alias.HostBits>>8&0xff, alias.HostBits&0xff, alias.Length)
+			cli.printf("alias      target %d at %s of this network's block\n", alias.Index, formatUrBridgeShareAlias(alias))
 		}
 		cli.printf("Accepted. The share carries traffic once the other network's admin activates it.\n")
+		if reply.ShareKeyFingerprint != "" {
+			cli.printf("share key  %s\n", reply.ShareKeyFingerprint)
+			cli.printf("That admin is shown this fingerprint before activating: read it to them to compare.\n")
+		}
 		return nil
 	case sidecar.BridgeShareAcceptStatusRefusedTooLarge:
 		return &urExitError{code: urExitFailed, err: fmt.Errorf(
@@ -161,6 +173,116 @@ func runUrBridgeAcceptInvite(ctx context.Context, cli *urCli, network string, co
 			reply.RefusedIndex, reply.RefusedLength, reply.FreeAddressCount, largest)}
 	}
 	return fmt.Errorf("the daemon answered a status this ur does not know: %q", reply.Status)
+}
+
+// An alias's block in its network's upper half as a person reads it: the last two octets and the length.
+func formatUrBridgeShareAlias(alias *sidecar.DaemonBridgeShareAlias) string {
+	return fmt.Sprintf(".%d.%d/%d", alias.HostBits>>8&0xff, alias.HostBits&0xff, alias.Length)
+}
+
+// Prints a share as its approving admin is shown it before activating, to the terminal (the file's comment).
+func printUrBridgeSharePreview(out io.Writer, preview *sidecar.DaemonBridgeSharePreview) {
+	fmt.Fprintf(out, "share      %s\n", preview.ShareId)
+	if preview.AcceptingNetworkId != nil {
+		fmt.Fprintf(out, "network    %s accepted the invite\n", preview.AcceptingNetworkId)
+	} else {
+		fmt.Fprintf(out, "network    none yet: the invite is open\n")
+	}
+	for _, target := range preview.Targets {
+		what := target.Prefix + ", every protocol"
+		if target.Protocol != "" {
+			what = target.Prefix + " " + target.Protocol + " " + strings.Join(target.Ports, ",")
+		}
+		alias := "no alias yet"
+		if target.Alias != nil {
+			alias = "alias " + formatUrBridgeShareAlias(target.Alias) + " of that network's block"
+		}
+		fmt.Fprintf(out, "%-10s %s on host %s, %s\n", fmt.Sprintf("target %d", target.Index), what, target.HostSidecarId, alias)
+	}
+	if preview.ShareKeyFingerprint != "" {
+		fmt.Fprintf(out, "share key  %s\n", preview.ShareKeyFingerprint)
+	}
+	fmt.Fprintf(out, "targets    sha256 %s, version %d\n", preview.TargetTableSha256, preview.TargetTableVersion)
+	if preview.AliasTableSha256 != "" {
+		fmt.Fprintf(out, "aliases    sha256 %s, version %d\n", preview.AliasTableSha256, preview.AliasTableVersion)
+	}
+}
+
+// A refusal the daemon's filer answered, as the person reads it: what was not done, and the filer's reason.
+func urBridgeShareRefusal(err error, what string) error {
+	var rpcError *sidecar.DaemonRpcError
+	if errors.As(err, &rpcError) && rpcError.Code == sidecar.DaemonRpcFailed {
+		return &urExitError{code: urExitFailed, err: fmt.Errorf("%s: %s", what, rpcError.Message)}
+	}
+	return err
+}
+
+// ur bridge activate: the share on the terminal, the person's yes, then the activation of exactly that preview.
+func runUrBridgeActivate(ctx context.Context, cli *urCli, network string, shareIdText string) error {
+	shareId, err := sidecar.ParseId(shareIdText)
+	if err != nil {
+		return errors.New("that is not a share's id: give the share ur bridge invite printed")
+	}
+	// a caller with no terminal is refused before the share is read: what it shows is the person's to see
+	tty, err := cli.openTty()
+	if err != nil {
+		return fmt.Errorf("%w: ur bridge activate needs a person on a terminal: %w", errUrNoTty, err)
+	}
+	tty.Close()
+	params := &sidecar.DaemonBridgeActivateParams{Network: network, ShareId: shareId}
+	preview := &sidecar.DaemonBridgeSharePreview{}
+	if err := cli.callDaemon(ctx, sidecar.DaemonMethodBridgeActivate, params, true, preview); err != nil {
+		return urBridgeShareRefusal(err, "the share was not read")
+	}
+	if preview.ShareId != shareId || preview.PreviewDigest == "" {
+		return errors.New("the daemon answered another share's preview, or none")
+	}
+	tty, err = cli.openTty()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errUrNoTty, err)
+	}
+	printUrBridgeSharePreview(tty, preview)
+	tty.Close()
+	switch sidecar.BridgeShareAcceptStatus(preview.Status) {
+	case sidecar.BridgeShareAcceptStatusActive:
+	case "":
+		return &urExitError{code: urExitFailed, err: errors.New("the other network has not accepted the invite yet: there is nothing to activate")}
+	case sidecar.BridgeShareAcceptStatusRefusedTooLarge:
+		return &urExitError{code: urExitFailed, err: fmt.Errorf(
+			"the other network refused the invite: target %d, a /%d, is wider than the /17 a network keeps for aliases. There is nothing to activate: invite again with narrower targets",
+			preview.RefusedIndex, preview.RefusedLength)}
+	case sidecar.BridgeShareAcceptStatusRefusedNoSpace:
+		return &urExitError{code: urExitFailed, err: fmt.Errorf(
+			"the other network refused the invite: it had no room for target %d, a /%d, with %d alias addresses free. There is nothing to activate: invite again with fewer or narrower targets",
+			preview.RefusedIndex, preview.RefusedLength, preview.FreeAddressCount)}
+	default:
+		return fmt.Errorf("the daemon answered a status this ur does not know: %q", preview.Status)
+	}
+	if preview.AcceptingNetworkId == nil {
+		return errors.New("the daemon answered an active share with no accepting network")
+	}
+	question := fmt.Sprintf("Activate this share? Network %s then reaches each target above through its alias, until the share's grant is revoked.", preview.AcceptingNetworkId)
+	confirmed, err := confirmOnTty(cli, question)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		return &urExitError{code: urExitFailed, err: errors.New("not confirmed: the share was not activated")}
+	}
+	params.PreviewDigest = preview.PreviewDigest
+	reply, err := callUrBridgeFiling(ctx, cli, sidecar.DaemonMethodBridgeActivate, params, true)
+	if err != nil {
+		return urBridgeShareRefusal(err, "the share was not activated")
+	}
+	if reply.GrantId == "" {
+		return errors.New("the daemon answered the activation with no grant")
+	}
+	cli.printf("activated  share %s for network %s, under grant %s\n", shareId, preview.AcceptingNetworkId, reply.GrantId)
+	if reply.ApprovalId != nil {
+		cli.printf("approval   %s\n", reply.ApprovalId)
+	}
+	cli.printf("Each host of this network serves the share once its next state takes the grant.\n")
+	return nil
 }
 
 // The share acts of a network's backend: its filer's, where the filer offers them, as sidecar.BridgeFiler does.
@@ -188,6 +310,24 @@ func (self *urBridgeBackend) AcceptInvite(ctx context.Context, origin *sidecar.B
 		return nil, err
 	}
 	return shares.AcceptInvite(ctx, origin, code)
+}
+
+// sidecar.DaemonBridgeShareBackend's preview, the filer's.
+func (self *urBridgeBackend) PreviewShare(ctx context.Context, origin *sidecar.BridgeFileOrigin, shareId sidecar.Id) (*sidecar.BridgeSharePreview, error) {
+	shares, err := self.shareFiler()
+	if err != nil {
+		return nil, err
+	}
+	return shares.PreviewShare(ctx, origin, shareId)
+}
+
+// sidecar.DaemonBridgeShareBackend's activation, the filer's.
+func (self *urBridgeBackend) ActivateShare(ctx context.Context, origin *sidecar.BridgeFileOrigin, preview *sidecar.BridgeSharePreview, lifetime time.Duration) (*sidecar.BridgeFiling, error) {
+	shares, err := self.shareFiler()
+	if err != nil {
+		return nil, err
+	}
+	return shares.ActivateShare(ctx, origin, preview, lifetime)
 }
 
 var _ sidecar.DaemonBridgeShareBackend = (*urBridgeBackend)(nil)

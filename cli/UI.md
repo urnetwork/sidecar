@@ -103,6 +103,9 @@ ur bridge forward <client>:<port>[:<local ip>]:<local port> [--listen=<ip>] [--u
 ur bridge close <id> [--reset]                     end a forward, withdraw a rule or revoke a grant
 ur bridge egress auto|<exit>[,<exit>]|tag:<t>|none set this device's default route
 ur bridge block [cycle|<cidr>]                     show the network's block, or re-roll or choose it (admins)
+ur bridge invite <target>...                       share targets of this network with one other network (admins)
+ur bridge accept-invite <code>                     accept another network's invite, aliasing its targets (admins)
+ur bridge activate <share_id>                      show an accepted share, then activate it on a yes (admins)
 ```
 
 - The listing shows pinned and unpinned counts, what the bridge waits on, a block another network on this host
@@ -113,6 +116,19 @@ ur bridge block [cycle|<cidr>]                     show the network's block, or 
   reaches the listener: it is listed LAN-exposed, here and in `ur status`, and the command warns. It carries its
   user's own protocol, so no TLS rule applies. It stops at its grant's expiry and when the grant is revoked.
 - `egress` and `block` ask for a yes on the terminal first, and never run from MCP or a hook.
+- A share takes three admins' acts (§17.9, v1), each asking on the terminal first and never run from MCP or a hook.
+  `invite`'s target is `<host>=<cidr>[,tcp:<port>[-<port>]|,udp:<port>[-<port>]]`, the host by its id, private name
+  or overlay address; it prints the share's id and the invite's code, shown once. `accept-invite <code>` prints each
+  target's alias in this network's block and the ShareKey's fingerprint, or why there was no room.
+- `activate <share_id>` is the inviting network's approving admin's, on a device that made the invite, and stays
+  apart from the invite, since another admin may approve. It needs a terminal before it reads the share, and shows
+  the share there, not on stdout: the network that accepted, each target with its host and its alias in that
+  network's block, the ShareKey's fingerprint (its public key's SHA-256 in groups of four hex digits, which
+  `accept-invite` printed on the other side, to compare) and both tables' SHA-256 and versions. Only on a yes does it
+  activate, and only what was shown: a share that changed in between is refused, and the command shows it again when
+  run again. A share not yet accepted, or refused, is shown and not asked about. The activation files the share's
+  grant through the approval gate, so it may print `ur approve <id>` and wait as `expose` does. The owner named the
+  command (QD-831); §17.11's table names only `invite` and `accept-invite` until the design carries it.
 - `close` is this file's spelling; §17.11 names none. Closing a forward leaves its grant; `close <grant id>` revokes
   it. `<client>` is a sidecar's id until the daemon follows the network's config, then a private name or an overlay
   address too.
