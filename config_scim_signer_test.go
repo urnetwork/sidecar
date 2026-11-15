@@ -1,7 +1,8 @@
 // TEAM-M6-07's scim_signer: the verifier takes a MemberRevoke of a member outside the AdminSet signed by the standing
 // sidecar ServiceSettings.scim_signer names, at every reader and api alike, and refuses it for an AdminSet member, from
-// a sidecar it does not name, before the setting and once the indexer is suspended (D-TEAM-25); and ConfigScimSigner
-// signs the queued removals it may and leaves the rest.
+// a sidecar it does not name, before the setting and once the indexer is suspended (D-TEAM-25); ConfigScimSigner signs
+// the queued removals it may and leaves the rest; and what api serves GET /sidecar/scim-changes by (QD-829) is that
+// same rule: the standing scim_signer, and the members outside the AdminSet.
 
 package sidecar
 
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -116,5 +118,60 @@ func TestTheScimSignerSignsTheQueueItMay(t *testing.T) {
 	source.err = errors.New("the queue is unreachable")
 	if _, err := signer.Pass(context.Background()); err == nil {
 		t.Error("a queue that answers no list passed")
+	}
+}
+
+// QD-829's gate is the verifier's rule: ScimSignerStanding holds for the sidecar scim_signer names and no other, not
+// before the setting, and not once that sidecar is suspended or revoked, so api serves the queue to a sidecar whose
+// MemberRevokes would count and to none other.
+func TestScimSignerStandingIsTheVerifiersRule(t *testing.T) {
+	net := newTestConfigNet(t)
+	_, indexer := net.consentedMember("standing indexer member")
+	_, other := net.consentedMember("standing other member")
+	standing := func(device testConfigDevice) bool {
+		return net.log.State().ScimSignerStanding(device.sidecarId, time.UnixMilli(net.timeMs))
+	}
+
+	if standing(indexer) || standing(other) || standing(net.owner) {
+		t.Fatal("a sidecar stands as the scim_signer before the setting names one")
+	}
+	net.designateScimSigner(indexer.sidecarId, 2)
+	if !standing(indexer) || standing(other) || standing(net.owner) {
+		t.Fatalf("named: the indexer stands %t, another member's device %t, the owner's %t", standing(indexer), standing(other), standing(net.owner))
+	}
+
+	suspendId := aclTestSuspendId("standing indexer")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SUSPEND, &bridge.Suspend{Header: net.header(), Subject: indexer.sidecarId.Bytes(), SuspendId: suspendId})
+	if standing(indexer) {
+		t.Error("a suspended scim_signer stands")
+	}
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_UNSUSPEND, &bridge.Unsuspend{Header: net.header(), Subject: indexer.sidecarId.Bytes(), SuspendId: suspendId})
+	if !standing(indexer) {
+		t.Fatal("the unsuspended scim_signer does not stand")
+	}
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(indexer, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
+	if standing(indexer) {
+		t.Error("a revoked scim_signer stands")
+	}
+}
+
+// The members whose queued removals api answers the scim_signer: every member the state holds outside the AdminSet, in
+// id order; not an Owner or an Admin, whose removal needs k of n, and not a member already removed.
+func TestScimSignerMemberIdsLeaveOutTheAdminSet(t *testing.T) {
+	net := newTestConfigNet(t)
+	first, _ := net.consentedMember("listed first")
+	second, _ := net.consentedMember("listed second")
+	removed, _ := net.consentedMember("listed removed")
+	admin := net.admitAdmin("listed admin")
+
+	want := []Id{first, second, removed}
+	slices.SortFunc(want, Id.Cmp)
+	if got := net.log.State().ScimSignerMemberIds(); !slices.Equal(got, want) {
+		t.Fatalf("listed %v, want %v", got, want)
+	}
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_REVOKE, &bridge.MemberRevoke{Header: net.header(), MemberId: removed.Bytes()})
+	got := net.log.State().ScimSignerMemberIds()
+	if slices.Contains(got, removed) || slices.Contains(got, admin.memberId) || slices.Contains(got, net.ownerMemberId) || len(got) != 2 {
+		t.Errorf("after a removal listed %v", got)
 	}
 }

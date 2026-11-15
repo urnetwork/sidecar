@@ -10,6 +10,11 @@
 // enrollment recorded no anchor trusts the first genesis api serves (§5.6's genesis row), and keeps the log's full tail
 // in authlog/, as §7.9's retain row has a CLI host's member device do. A network whose follower does not start runs on
 // unjudged, nothing admitted on it, and the daemon's other networks follow on (CORE-M6-01).
+//
+// Beside each follower the daemon runs the network's scim_signer (QD-829; sidecar.SidecarScimSigner, startUrScimSigner):
+// it reads the state the follower installs, and only while this network's Sidecar is the one ServiceSettings.scim_signer
+// names does it install SCIM's queue source over the Sidecar's api, GET /sidecar/scim-changes (urDaemonScimSource), which
+// its ConfigScimSigner signs the queued removals of members outside the AdminSet from (§7.6, D-TEAM-25).
 
 package main
 
@@ -38,8 +43,33 @@ func urConfigFollowerSettings() *sidecar.SidecarConfigFollowerSettings {
 	return settings
 }
 
+// SCIM's queue source over a network Sidecar's api, which that network's scim_signer makes only while the Sidecar is the
+// one ServiceSettings.scim_signer names (QD-829). Nil is GET /sidecar/scim-changes; a test replaces it.
+var urDaemonScimSource func(api *sidecar.SidecarApi) sidecar.ScimChangeSource
+
+// The settings each network's scim_signer runs on: the defaults, a pass every minute while designated.
+func urScimSignerSettings() *sidecar.ConfigScimSignerSettings {
+	return sidecar.DefaultConfigScimSignerSettings()
+}
+
+// Starts running's scim_signer, which installs SCIM's queue source only while running is the sidecar
+// ServiceSettings.scim_signer names, and logs why where it cannot start: running then signs no SCIM removal, and
+// nothing else changes. Nil when none started.
+func startUrScimSigner(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.SidecarScimSigner {
+	scimSigner, err := running.RunScimSigner(&sidecar.SidecarScimSignerArgs{
+		Settings:  urScimSignerSettings(),
+		NewSource: urDaemonScimSource,
+	})
+	if err != nil {
+		log.Warningf("[ur]a network runs no scim_signer, so it signs no SCIM removal: %s", err)
+		return nil
+	}
+	return scimSigner
+}
+
 // Starts running's config follower, as the daemon does with every Sidecar it starts, and logs why where it cannot: the
-// Sidecar then runs unjudged, and the daemon's other networks are untouched. Nil when none started.
+// Sidecar then runs unjudged, and the daemon's other networks are untouched. Nil when none started. A follower that
+// starts has the network's scim_signer started beside it (startUrScimSigner), which reads the state it installs.
 func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sidecar.SidecarConfigFollower {
 	args := &sidecar.SidecarConfigFollowerArgs{Settings: urConfigFollowerSettings()}
 	if urDaemonConfigHeads != nil {
@@ -59,6 +89,7 @@ func startUrConfigFollower(running *sidecar.Sidecar, log sidecar.Logger) *sideca
 		log.Warningf("[ur]a network follows no config, and nothing is admitted on it: %s", err)
 		return nil
 	}
+	startUrScimSigner(running, log)
 	return follower
 }
 
