@@ -172,16 +172,13 @@ type fi5Deletion struct {
 	repoId sidecar.Id
 	// a check found repo/ go from deleted under it back to active
 	restored bool
-	// a check found repo/ shredding or shredded under it
+	// a check found repo/ shredding or shredded under it, by its start or a delete with now
 	shredded bool
-	// a check found repo/ go from deleted under it to shredding under it: the start, not a delete with now
-	started bool
 }
 
 // A deleted repo's key closure: what a restore must find.
 type fi5Closure struct {
 	deletionId sidecar.Id
-	clusterId  string
 	// each slot's key indexes, by slot id hex
 	slotKeys map[string][]uint32
 	// each group's gen/ keys and its newest generation's wraps, by group
@@ -351,8 +348,6 @@ func (self *fi5Memory) move(ctx context.Context, oracle *Oracle, evsMemory *evsO
 		case protocol.EvsRepoState_EVS_REPO_SHREDDING, protocol.EvsRepoState_EVS_REPO_SHREDDED:
 			if sameDeletion {
 				// the start: only the 7 d 10 min timer claims a deleted repo under its own deletion
-				deletion := self.deletion(known.repoId, previous.deletionId)
-				deletion.started = true
 				errs = append(errs, self.checkStartTime(known, previous, current)...)
 			}
 			// under another deletion: a newer RepoDelete with now, so the earlier deletion ends neither way
@@ -431,10 +426,8 @@ func (self *fi5Memory) checkLog(evsMemory *evsOracleMemory) []error {
 	return errs
 }
 
-// One RepoDelete as the access log held it.
+// One RepoDelete as the access log held it: whether any state held it restored.
 type fi5LoggedDeletion struct {
-	now      bool
-	timeMs   int64
 	restored bool
 }
 
@@ -455,7 +448,7 @@ func fi5LogDeletions(history []*evsAuthorizationAt, repoId sidecar.Id) map[sidec
 		}
 		deletion := logged[deletionId]
 		if deletion == nil {
-			deletion = &fi5LoggedDeletion{now: row.GetNow(), timeMs: row.GetDeletedTimeMs()}
+			deletion = &fi5LoggedDeletion{}
 			logged[deletionId] = deletion
 		}
 		deletion.restored = deletion.restored || row.GetRestoredAt() != 0
@@ -469,7 +462,6 @@ func fi5LogDeletions(history []*evsAuthorizationAt, repoId sidecar.Id) map[sidec
 func fi5TakeClosure(ctx context.Context, oracle *Oracle, known *fi5Repo, repo *evsStoreRepo, deletionId sidecar.Id) (*fi5Closure, error) {
 	closure := &fi5Closure{
 		deletionId:     deletionId,
-		clusterId:      repo.clusterId,
 		slotKeys:       map[string][]uint32{},
 		generationKeys: map[sidecar.Id][]string{},
 		newestWrapKeys: map[sidecar.Id][]string{},
