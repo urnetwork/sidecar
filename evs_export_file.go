@@ -334,10 +334,10 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 			ignoredNames = map[string][][]byte{}
 			tip = nil
 			continue
-		case push.GetPartCount() != 0:
-			return nil, nil, fmt.Errorf("%w: a push in parts, which this draft does not read back", ErrEvsExport)
 		}
-		payload, err := self.pushPayload(ctx, head, statement)
+		// a one-part push's record, or a push in parts' every part, a re-seeded push's reseed records included
+		// (QD-818), its changes joined in part order as one push's
+		payload, err := self.pushContent(ctx, head, statement)
 		if err != nil {
 			return nil, nil, err
 		}

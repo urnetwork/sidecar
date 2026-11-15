@@ -60,6 +60,8 @@ type fiWorld struct {
 	// the device call in flight, and the 429 or 503 that ended it: the clock stands still, so a wait would never end
 	callCancel context.CancelFunc
 	callWait   error
+	// answers a device request in the engine's place when it says so, nil for none (fi1_reseed_test.go)
+	intercept func(request *http.Request, recorder *httptest.ResponseRecorder) bool
 }
 
 func newFiWorld(t *testing.T) *fiWorld {
@@ -229,10 +231,15 @@ func (self *fiWorld) token(scopes []string) string {
 	})
 }
 
-// The device's transport: the engine's handler, a 429 or 503 ending the call it answered.
+// The device's transport: the engine's handler, or the world's intercept, a 429 or 503 ending the call it answered.
 func (self *fiWorld) RoundTrip(request *http.Request) (*http.Response, error) {
 	recorder := httptest.NewRecorder()
-	self.engine.Handler().ServeHTTP(recorder, request)
+	self.stateLock.Lock()
+	intercept := self.intercept
+	self.stateLock.Unlock()
+	if intercept == nil || !intercept(request, recorder) {
+		self.engine.Handler().ServeHTTP(recorder, request)
+	}
 	response := recorder.Result()
 	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusServiceUnavailable {
 		reply := &protocol.EvsRefusalReply{}

@@ -441,9 +441,11 @@ func (self *RecordPushSource) ChangesAt(ctx context.Context, version uint64, ent
 	if !push.sealed {
 		return touching(push.changes, tokenPath), nil
 	}
-	// the parts whose runs may hold the path or a prefix of it: each prefix sorts before the path
+	// the parts whose runs may hold the path or a prefix of it: each prefix sorts before the path, the root's empty one
+	// first, whose change a push that changes the root names as its first part's (QD-661), as a one-part push's
+	// changes give it touching every path
 	partIndexes := []int{}
-	for length := 1; length <= len(tokenPath); length += 1 {
+	for length := 0; length <= len(tokenPath); length += 1 {
 		index := sealPartHolding(push.sealParts, tokenPath[:length])
 		if 0 <= index && !slices.Contains(partIndexes, index) {
 			partIndexes = append(partIndexes, index)

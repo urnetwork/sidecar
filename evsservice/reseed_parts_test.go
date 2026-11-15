@@ -533,3 +533,52 @@ func TestReseedHoldsEachCallToItsBodyBound(t *testing.T) {
 	}
 	fixture.requireCommitted(fixture.reseed(body), 1)
 }
+
+// The newest rule finds the root's own change in a sealed push: a push in parts that changes the root, as one creating
+// a top-level directory does, names the root's delta first, in its first part (QD-661), and RecordPushSource.ChangesAt,
+// which the read route and step 4 read a sealed push's changes through, finds it for the root, through the push
+// route's part records and a re-seed's alike; so a second creation of the root, on the head after it, conflicts.
+func TestNewestFindsTheRootsChangeInASealedPush(t *testing.T) {
+	for _, reseeded := range []bool{false, true} {
+		fixture := newReseedFixture(t)
+		check := fixture.check
+		root := sidecar.EvsTokenPath{}
+		rowsOf := func(labels ...string) []*protocol.EvsName {
+			rows := []*protocol.EvsName{}
+			for _, label := range labels {
+				token := worldToken(label)
+				rows = append(rows, &protocol.EvsName{Token: token[:], Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("sealed " + label)})
+			}
+			return rows
+		}
+		plan := fixture.plan()
+		plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{TokenPath: root, EntryVersion: check.directoryEntry(plan, 1, rowsOf("file-00000", "file-00001"), nil)})
+		for i := 0; i < 1100; i += 1 {
+			fixture.create(plan, fmt.Sprintf("file-%05d", i))
+		}
+		built := fixture.built(plan)
+		if first, err := sidecar.EvsCheckPart(built.Statement, built.Parts[0]); err != nil || len(first.FirstTokenPath()) != 0 {
+			t.Fatalf("the first part does not start at the root: %v", err)
+		}
+		if reseeded {
+			fixture.requireCommitted(fixture.reseed(reseedPartsBody(built)), 1)
+		} else {
+			token := fixture.token(check.signerId)
+			fixture.requireCommitted(fixture.seal(token, built, fixture.postParts(token, built)), 1)
+		}
+		fixture.awaitStepEights()
+		window, err := EvsHeadWindow(fixture.head().Head)
+		if err != nil || len(window) != 1 {
+			t.Fatalf("window %v %v", window, err)
+		}
+		source := NewRecordPushSource(fixture.engine.records, fixture.engine.locator, fixture.cluster, check.repoId, check.refId)
+		changes, err := source.ChangesAt(fixture.ctx, 1, window[0], root)
+		if err != nil || len(changes) != 1 || len(changes[0].TokenPath) != 0 {
+			t.Fatalf("re-seeded %t: the root's changes in the sealed push: %d, %v", reseeded, len(changes), err)
+		}
+		again := fixture.plan()
+		again.PushId = testId(fmt.Sprintf("root again %t", reseeded))
+		again.Changes = []*sidecar.EvsPlannedChange{{TokenPath: root, EntryVersion: check.directoryEntry(again, 2, rowsOf("file-00002"), nil)}}
+		requireRefusal(t, fixture.push(again), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
+	}
+}
