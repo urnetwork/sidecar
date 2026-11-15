@@ -131,7 +131,21 @@ func NewRecordingBackend(owner *Net, settings *RecordingBackendSettings) (*Recor
 		self.Close()
 		return nil, err
 	}
-	self.listener = listener
+	// the accept loop counts in the wait group before a Close can wait on it, or not at all
+	serving := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.listener = listener
+		if self.closed {
+			return false
+		}
+		self.waitGroup.Add(1)
+		return true
+	}()
+	if !serving {
+		listener.Close()
+		return nil, fmt.Errorf("the recording backend %s closed as it started", self.settings.Name)
+	}
 	self.serveListener(listener)
 	return self, nil
 }
@@ -279,8 +293,8 @@ func (self *RecordingBackend) Close() {
 	self.waitGroup.Wait()
 }
 
+// Accepts on listener until it closes, a count of the wait group already taken for the loop.
 func (self *RecordingBackend) serveListener(listener net.Listener) {
-	self.waitGroup.Add(1)
 	go func() {
 		defer self.waitGroup.Done()
 		for {
@@ -316,13 +330,14 @@ func (self *RecordingBackend) adopt(conn net.Conn, serve bool) *recordingConn {
 		self.connections += 1
 		wrapped.index = self.connections
 		self.conns[wrapped] = true
+		// counted under the lock, so a Close that has begun waiting never misses it
+		self.waitGroup.Add(1)
 		return true
 	}()
 	if !accepted {
 		conn.Close()
 		return nil
 	}
-	self.waitGroup.Add(1)
 	go func() {
 		defer self.waitGroup.Done()
 		wrapped.pump()

@@ -156,13 +156,14 @@ func (self *InterceptingProxy) Listen() (string, error) {
 			return false
 		}
 		self.listener = listener
+		// counted under the lock, so a Close that has begun waiting never misses it
+		self.waitGroup.Add(1)
 		return true
 	}()
 	if !accepted {
 		listener.Close()
 		return "", fmt.Errorf("%w: closed, or listening already", errInterceptingProxy)
 	}
-	self.waitGroup.Add(1)
 	go func() {
 		defer self.waitGroup.Done()
 		for {
@@ -197,13 +198,13 @@ func (self *InterceptingProxy) Serve(conn net.Conn) bool {
 			return false
 		}
 		self.conns[conn] = true
+		self.waitGroup.Add(1)
 		return true
 	}()
 	if !accepted {
 		conn.Close()
 		return false
 	}
-	self.waitGroup.Add(1)
 	go func() {
 		defer self.waitGroup.Done()
 		defer func() {
@@ -604,6 +605,7 @@ func (self *InterceptingOrigin) Dial(ctx context.Context, network string, addres
 			return false
 		}
 		self.conns[server] = true
+		self.waitGroup.Add(1)
 		return true
 	}()
 	if !accepted {
@@ -611,7 +613,6 @@ func (self *InterceptingOrigin) Dial(ctx context.Context, network string, addres
 		server.Close()
 		return nil, fmt.Errorf("%w: the origin is closed", errInterceptingProxy)
 	}
-	self.waitGroup.Add(1)
 	go func() {
 		defer self.waitGroup.Done()
 		defer func() {
@@ -698,6 +699,9 @@ func (self *InterceptingOrigin) Close() {
 // Returns the status and the answer's body. conn is the client's connection to the proxy, which this closes.
 func InterceptingProxyRequest(ctx context.Context, conn net.Conn, roots *x509.CertPool, host string, method string, path string, bearer string, body []byte) (int, []byte, error) {
 	defer conn.Close()
+	// an in-process connection keeps no deadline of its own, so ctx's end closes it
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
