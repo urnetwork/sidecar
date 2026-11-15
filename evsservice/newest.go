@@ -547,12 +547,13 @@ func (self *RecordPushSource) readPart(ctx context.Context, push *recordPush, in
 	if err != nil {
 		return nil, err
 	}
-	if record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART || record.PushId != sidecar.Id(push.statement.Push.GetPushId()) {
+	if record.PushId != sidecar.Id(push.statement.Push.GetPushId()) {
 		return nil, fmt.Errorf("%w: a seal's part place holds another record", ErrEvsStatementMismatch)
 	}
-	statementBytes, partBytes, _, _, err := sidecar.ParseEvsPartRecordBody(record.Body)
+	// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+	statementBytes, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(record)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: a seal's part place holds another record: %w", ErrEvsStatementMismatch, err)
 	}
 	if !bytes.Equal(statementBytes, push.statement.Bytes) {
 		return nil, fmt.Errorf("%w: a part of another statement", ErrEvsStatementMismatch)

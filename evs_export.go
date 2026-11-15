@@ -828,11 +828,15 @@ func (self *EvsRepo) pushContent(ctx context.Context, head *EvsVerifiedHead, sta
 					return err
 				}
 				record, err := ParseEvsBatchRecord(recordBytes)
-				if err != nil || record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
+				if err != nil {
 					return fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
 				}
-				statementBytes, partBytes, _, _, err := ParseEvsPartRecordBody(record.Body)
-				if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
+				// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+				statementBytes, partBytes, _, _, err := ParseEvsSealPartRecord(record)
+				if err != nil {
+					return fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
+				}
+				if !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 					return fmt.Errorf("%w: a part record of another statement", ErrEvsEntryRefused)
 				}
 				parts[key.number-1] = partBytes
@@ -879,9 +883,10 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 	if record == nil {
 		return nil, fmt.Errorf("%w: a push record evs did not serve", ErrEvsObjectMissing)
 	}
-	// the batch record as its place holds it: its header, then the push's statement and payload
+	// the batch record as its place holds it: its header, then the push's statement and payload, a re-seeded push's
+	// under the reseed type (QD-725)
 	batchRecord, err := ParseEvsBatchRecord(record)
-	if err != nil || batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH {
+	if err != nil || (batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH && batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED) {
 		return nil, fmt.Errorf("%w: a push record that is not one push's", ErrEvsEntryRefused)
 	}
 	statementBytes, payload, err := ParseEvsPushRecordBody(batchRecord.Body)

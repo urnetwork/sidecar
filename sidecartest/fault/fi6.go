@@ -641,7 +641,12 @@ func (self *fi6BatchRecord) decode() error {
 	}
 	var statementBytes []byte
 	var err error
-	switch self.record.Type {
+	recordType := self.record.Type
+	if sidecar.EvsReseedRecordHoldsPart(self.record) {
+		// a re-seeded push's part, a reseed record holding a part's body (QD-818)
+		recordType = protocol.EvsBatchRecordType_EVS_BATCH_PART
+	}
+	switch recordType {
 	case protocol.EvsBatchRecordType_EVS_BATCH_PUSH, protocol.EvsBatchRecordType_EVS_BATCH_RESEED:
 		var payloadBytes []byte
 		if statementBytes, payloadBytes, err = sidecar.ParseEvsPushRecordBody(self.record.Body); err != nil {
@@ -653,7 +658,7 @@ func (self *fi6BatchRecord) decode() error {
 	case protocol.EvsBatchRecordType_EVS_BATCH_PART:
 		var partBytes []byte
 		var receipts [][]byte
-		if statementBytes, partBytes, receipts, _, err = sidecar.ParseEvsPartRecordBody(self.record.Body); err != nil {
+		if statementBytes, partBytes, receipts, _, err = sidecar.ParseEvsSealPartRecord(self.record); err != nil {
 			return err
 		}
 		part := &protocol.EvsPushPart{}
@@ -683,9 +688,11 @@ func (self *fi6BatchRecord) decode() error {
 // §11.8's Resolve row, from its text: P is committed at u iff the head history names P at a version u in (b, b+64]
 // (file mode) or at b+1 (git mode), here or at another place; dead iff not committed and the head is at or past b+64
 // (git mode: b+1), or its statement can no longer pass the time checks (time_ms + 35 min) and the head's fence_ms is
-// later than that; otherwise pending. A reseed record counts as committed, and a ref with no head leaves P pending.
+// later than that; otherwise pending. A one-part reseed record counts as committed, a re-seeded push's part follows
+// its seal as any part does (QD-818), and a ref with no head leaves P pending.
 func fi6Resolve(repo *evsStoreRepo, read *fi6BatchRecord) fi6Outcome {
-	if read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED {
+	reseededPart := sidecar.EvsReseedRecordHoldsPart(read.record)
+	if read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED && !reseededPart {
 		return fi6CommittedHere
 	}
 	var ref *evsStoreRef
@@ -710,7 +717,7 @@ func fi6Resolve(repo *evsStoreRepo, read *fi6BatchRecord) fi6Outcome {
 		if committed == nil || committed.entry.PushId != read.record.PushId {
 			continue
 		}
-		if read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_PART {
+		if read.record.Type == protocol.EvsBatchRecordType_EVS_BATCH_PART || reseededPart {
 			// a part commits with its seal, which names its place
 			return fi6CommittedHere
 		}

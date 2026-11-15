@@ -226,12 +226,13 @@ func (self *readAttempt) streamVersionObjects(version uint64) (*readStreamVersio
 			}
 			objects.records = append(objects.records, partRecord)
 			record, err := sidecar.ParseEvsBatchRecord(partRecord)
-			if err != nil || record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
+			if err != nil {
 				return nil, fmt.Errorf("%w: a seal's part place holds another record", ErrEvsStatementMismatch)
 			}
-			_, partBytes, _, _, err := sidecar.ParseEvsPartRecordBody(record.Body)
+			// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+			_, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(record)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
+				return nil, fmt.Errorf("%w: a seal's part place holds another record: %w", ErrEvsStatementMismatch, err)
 			}
 			parts = append(parts, partBytes)
 		}

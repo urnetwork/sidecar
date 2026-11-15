@@ -158,24 +158,26 @@ type EvsResolution struct {
 
 // §11.8's Resolve rule for a batch record, which evacuation runs over every record of a batch past 25 h (§11.13): a
 // push's or seal's by its own statement against its ref's cluster head and log pages; a part follows its seal, so
-// it resolves as its statement's push; a reseed counts as committed. head is the ref's head as the caller read it
-// from the cluster, nil when the ref has none.
+// it resolves as its statement's push, a re-seeded push's part, a reseed record holding a part's body, as any part
+// (QD-818); a one-part reseed counts as committed. head is the ref's head as the caller read it from the cluster, nil
+// when the ref has none.
 func (self *EvsEngine) ResolvePush(ctx context.Context, cluster sidecar.BlobCluster, record *sidecar.EvsBatchRecord, head *protocol.EvsHead) (*EvsResolution, error) {
 	return ResolveBatchRecord(ctx, record, head, self.settings.ResolveStatementLife, func(ctx context.Context, page uint64) (*LogPage, error) {
 		return self.readLogPage(ctx, cluster, record.RepoId, record.RefId, page)
 	})
 }
 
-// A batch record's statement: a push's, part's, seal's or reseed's first item, parsed in either format.
+// A batch record's statement: a push's, part's, seal's or reseed's first item, a reseed's from a push record's body or,
+// for a re-seeded push's part, a part's (QD-818), parsed in either format.
 func EvsBatchRecordStatement(record *sidecar.EvsBatchRecord) (*sidecar.EvsStatement, error) {
 	var statementBytes []byte
 	var err error
-	switch record.Type {
-	case protocol.EvsBatchRecordType_EVS_BATCH_PUSH, protocol.EvsBatchRecordType_EVS_BATCH_RESEED:
+	switch {
+	case record.Type == protocol.EvsBatchRecordType_EVS_BATCH_PART || sidecar.EvsReseedRecordHoldsPart(record):
+		statementBytes, _, _, _, err = sidecar.ParseEvsSealPartRecord(record)
+	case record.Type == protocol.EvsBatchRecordType_EVS_BATCH_PUSH || record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED:
 		statementBytes, _, err = sidecar.ParseEvsPushRecordBody(record.Body)
-	case protocol.EvsBatchRecordType_EVS_BATCH_PART:
-		statementBytes, _, _, _, err = sidecar.ParseEvsPartRecordBody(record.Body)
-	case protocol.EvsBatchRecordType_EVS_BATCH_SEAL:
+	case record.Type == protocol.EvsBatchRecordType_EVS_BATCH_SEAL:
 		statementBytes, _, err = sidecar.ParseEvsSealRecordBody(record.Body)
 	default:
 		return nil, sidecar.ErrEvsPushInvalid
@@ -190,7 +192,7 @@ func EvsBatchRecordStatement(record *sidecar.EvsBatchRecord) (*sidecar.EvsStatem
 // EvsSettings.ResolveStatementLife, and readPage reads one log page of the record's ref, from log/ or, once packed,
 // from its pack.
 func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, statementLife time.Duration, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsResolution, error) {
-	if record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED {
+	if record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED && !sidecar.EvsReseedRecordHoldsPart(record) {
 		return &EvsResolution{State: EvsResolveCommitted}, nil
 	}
 	statement, err := EvsBatchRecordStatement(record)
