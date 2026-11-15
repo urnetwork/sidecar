@@ -279,7 +279,9 @@ func modulePackages(directory string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("go list: %w", err)
 	}
-	modulePath := reflect.TypeFor[sidecar.RedisScript]().PkgPath()
+	// SidecarSettings is the root's own type: RedisScript is operator-core's, which the root aliases
+	// (owner decision 251)
+	modulePath := reflect.TypeFor[sidecar.SidecarSettings]().PkgPath()
 	packages := []string{}
 	for _, importPath := range strings.Fields(string(output)) {
 		relative := strings.TrimPrefix(strings.TrimPrefix(importPath, modulePath), "/")
@@ -1292,7 +1294,8 @@ func scriptKeyProblems(source string) []string {
 
 // A sidecar.RedisScript literal: a package-level value, with a Source this can read.
 func (self *lint) checkScript(source *sourcePackage, function *ast.FuncDecl, literal *ast.CompositeLit) {
-	named, ok := source.info.Types[literal].Type.(*types.Named)
+	// a literal written as sidecar.RedisScript has the alias's type, which names operator-core's
+	named, ok := types.Unalias(source.info.Types[literal].Type).(*types.Named)
 	if !ok {
 		return
 	}

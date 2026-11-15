@@ -637,16 +637,41 @@ func TestAuthenticatorRuleCatchesAPlantedRead(t *testing.T) {
 	}
 }
 
-// What `make check` will enforce from M1 (§4.7), on the whole transitive graph.
-func TestHttpLegLinksNoConnectOrGvisor(t *testing.T) {
-	deps := goListDeps(t, []string{"GOOS=js", "GOARCH=wasm"}, "-tags", "sidecar_http", ".")
-	if !slices.Contains(deps, "github.com/urnetwork/sidecar") {
-		t.Fatalf("deps %v", deps)
-	}
-	for _, dep := range deps {
-		if namesConnect(dep) {
-			t.Errorf("the sidecar_http leg links %s", dep)
+// What `make check` enforces from M1 (§4.7), read off the whole transitive graph: no package of this
+// module on the sidecar_http leg imports a connect or gVisor package, and the leg links connect only
+// through operator-core's Id, which the root's Id aliases on every leg (owner decision 251), so every
+// import of one comes from connect's or gVisor's own trees or from operator-core.
+func TestHttpLegLinksConnectOnlyThroughOperatorCore(t *testing.T) {
+	command := exec.Command("go", "list", "-deps", "-tags", "sidecar_http", "-f", `{{.ImportPath}} {{join .Imports " "}}`, ".")
+	command.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	output, err := command.Output()
+	if err != nil {
+		stderr := ""
+		if exitError, ok := err.(*exec.ExitError); ok {
+			stderr = string(exitError.Stderr)
 		}
+		t.Fatalf("go list: %v\n%s", err, stderr)
+	}
+	operatorCore := "github.com/urnetwork/operator-core"
+	listed := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		importer := fields[0]
+		listed[importer] = true
+		if namesConnect(importer) || importer == operatorCore {
+			continue
+		}
+		for _, imported := range fields[1:] {
+			if namesConnect(imported) {
+				t.Errorf("%s, on the sidecar_http leg, imports %s", importer, imported)
+			}
+		}
+	}
+	if !listed["github.com/urnetwork/sidecar"] || !listed[operatorCore] {
+		t.Fatalf("the leg holds neither the root nor operator-core: %v", listed)
 	}
 }
 
