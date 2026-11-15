@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -98,6 +99,12 @@ func TestEvsPushRebuildsUnderANewPushId(t *testing.T) {
 	}
 	for _, c := range cases {
 		writer := newEvsTestWriter(t)
+		// the write creates its ref, so a closed gate builds again only on a newer pin, which its one follow installs
+		// (QD-803; TestEvsPushFollowsOnceAfterAClosedGateOnACreatingPush)
+		writer.test.client.args.ConfigFollow = func(ctx context.Context) error {
+			writer.world.config.setPin(2)
+			return nil
+		}
 		writer.server.pushRefusals = []*evsTestRefusal{{status: c.status, reply: &protocol.EvsRefusalReply{Code: c.code, Recorded: true}}}
 		result, err := writer.write(t, "big.txt", evsTestContent("rebuild", 64*1024))
 		if err != nil {
@@ -427,5 +434,148 @@ func TestEvsPushRetokenBound(t *testing.T) {
 	}
 	if posted := writer.server.postedPushIds(t); len(posted) != count+1 {
 		t.Fatalf("%d posts for a bound of %d", len(posted), count)
+	}
+}
+
+// A gate that refuses the next statements 412 GATE_CLOSED, recorded.
+func evsTestClosedGate(count int) []*evsTestRefusal {
+	refusals := []*evsTestRefusal{}
+	for range count {
+		refusals = append(refusals, &evsTestRefusal{status: http.StatusPreconditionFailed,
+			reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, Recorded: true}})
+	}
+	return refusals
+}
+
+// The auth pin version each posted statement carries.
+func evsTestPostedPins(t *testing.T, server *evsTestPushServer) []uint64 {
+	t.Helper()
+	server.stateLock.Lock()
+	defer server.stateLock.Unlock()
+	pins := []uint64{}
+	for _, statementBytes := range server.postedStatements {
+		statement, err := ParseEvsStatement(statementBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pins = append(pins, statement.Push.GetAuth().GetVersion())
+	}
+	return pins
+}
+
+// The device's half of the gate's clause for a creating push (DESIGN-DETAILS 16.2.9, 8.2.5; QD-803): a push that
+// creates a shared ref and is refused 412 GATE_CLOSED asks one follow. Where the follow installs a newer pin the
+// write is planned again and its second statement carries that pin; where only the generation rose it builds again;
+// where neither rose no second statement is sent and the write ends with the refusal; a gate that refuses every
+// statement ends the write at PushRebuildCount.
+func TestEvsPushFollowsOnceAfterAClosedGateOnACreatingPush(t *testing.T) {
+	// a newer pin
+	writer := newEvsTestWriter(t)
+	follows := 0
+	writer.test.client.args.ConfigFollow = func(ctx context.Context) error {
+		follows += 1
+		writer.world.config.setPin(7)
+		return nil
+	}
+	writer.server.pushRefusals = evsTestClosedGate(1)
+	if _, err := writer.write(t, "a.txt", []byte("a")); err != nil {
+		t.Fatalf("a newer pin: %v", err)
+	}
+	if pins := evsTestPostedPins(t, writer.server); follows != 1 || !slices.Equal(pins, []uint64{1, 7}) {
+		t.Fatalf("a newer pin: %d follows, pins %v", follows, pins)
+	}
+
+	// only the generation rose
+	writer = newEvsTestWriter(t)
+	follows = 0
+	writer.test.client.args.ConfigFollow = func(ctx context.Context) error {
+		follows += 1
+		writer.gkm.stateLock.Lock()
+		defer writer.gkm.stateLock.Unlock()
+		writer.gkm.newest = 2
+		return nil
+	}
+	writer.server.pushRefusals = evsTestClosedGate(1)
+	writer.write(t, "a.txt", []byte("a"))
+	if statements, _ := writer.server.sentCounts(); follows != 1 || statements != 2 {
+		t.Fatalf("a newer generation: %d follows, %d statements", follows, statements)
+	}
+
+	// neither rose, with a follow and with no follower at all
+	for _, follower := range []bool{true, false} {
+		writer = newEvsTestWriter(t)
+		follows = 0
+		if follower {
+			writer.test.client.args.ConfigFollow = func(ctx context.Context) error {
+				follows += 1
+				return nil
+			}
+		}
+		writer.server.pushRefusals = evsTestClosedGate(1)
+		_, err := writer.write(t, "a.txt", []byte("a"))
+		var held *EvsGateHeldError
+		if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED) || !errors.As(err, &held) {
+			t.Fatalf("follower %t: neither rose: %v", follower, err)
+		}
+		if statements, _ := writer.server.sentCounts(); statements != 1 || (follower && follows != 1) {
+			t.Fatalf("follower %t: neither rose: %d follows, %d statements", follower, follows, statements)
+		}
+		// the kept refusal answers the next write's build too, with nothing sent, until the pin rises
+		if _, err := writer.write(t, "a.txt", []byte("a")); !errors.As(err, &held) {
+			t.Fatalf("follower %t: the next write on the same pin: %v", follower, err)
+		}
+		if statements, _ := writer.server.sentCounts(); statements != 1 {
+			t.Fatalf("follower %t: the next write on the same pin sent a statement", follower)
+		}
+		writer.world.config.setPin(3)
+		if _, err := writer.write(t, "a.txt", []byte("a")); err != nil {
+			t.Fatalf("follower %t: once the pin rose: %v", follower, err)
+		}
+	}
+
+	// a gate that refuses every statement, each follow installing a newer pin
+	writer = newEvsTestWriter(t)
+	follows = 0
+	writer.test.client.args.ConfigFollow = func(ctx context.Context) error {
+		follows += 1
+		writer.world.config.setPin(uint64(1 + follows))
+		return nil
+	}
+	rebuildCount := writer.test.client.settings.PushRebuildCount
+	writer.server.pushRefusals = evsTestClosedGate(rebuildCount + 4)
+	if _, err := writer.write(t, "a.txt", []byte("a")); !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED) {
+		t.Fatalf("a gate that stays closed: %v", err)
+	}
+	if statements, _ := writer.server.sentCounts(); statements != rebuildCount+1 || follows != rebuildCount+1 {
+		t.Fatalf("a gate that stays closed: %d statements, %d follows", statements, follows)
+	}
+}
+
+// A push on a head that exists asks no follow and rebuilds as it did, and so does a creating push of an owned ref.
+func TestEvsPushAsksNoFollowOnAStandingHeadOrAnOwnedRef(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	follows := 0
+	writer.test.client.args.ConfigFollow = func(ctx context.Context) error {
+		follows += 1
+		return nil
+	}
+	if _, err := writer.write(t, "a.txt", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	writer.server.pushRefusals = evsTestClosedGate(1)
+	if _, err := writer.write(t, "a.txt", []byte("b")); err != nil {
+		t.Fatalf("a push on a standing head: %v", err)
+	}
+	if statements, _ := writer.server.sentCounts(); follows != 0 || statements != 3 {
+		t.Fatalf("a push on a standing head: %d follows, %d statements", follows, statements)
+	}
+	// an owned ref's creating plan
+	owned := &EvsWritePlan{RefKind: protocol.EvsRefKind_EVS_REF_OWNED, Head: &protocol.EvsHeadSummary{}}
+	deposit := &EvsWritePlan{RefKind: protocol.EvsRefKind_EVS_REF_DEPOSIT, Head: &protocol.EvsHeadSummary{}}
+	created := &EvsWritePlan{RefKind: protocol.EvsRefKind_EVS_REF_SHARED, Head: &protocol.EvsHeadSummary{}}
+	recreated := &EvsWritePlan{RefKind: protocol.EvsRefKind_EVS_REF_SHARED, BaseVersion: 9, Head: &protocol.EvsHeadSummary{Deleted: true}}
+	standing := &EvsWritePlan{RefKind: protocol.EvsRefKind_EVS_REF_SHARED, BaseVersion: 9, Head: &protocol.EvsHeadSummary{}}
+	if evsCreatesSharedRef(owned) || evsCreatesSharedRef(deposit) || evsCreatesSharedRef(standing) || !evsCreatesSharedRef(created) || !evsCreatesSharedRef(recreated) {
+		t.Errorf("which pushes create a shared ref")
 	}
 }
