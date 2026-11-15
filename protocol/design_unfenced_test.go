@@ -713,6 +713,8 @@ message EvsSealedChange { repeated bytes path = 1; uint32 mode = 2; bytes git_oi
 message EvsPushRequest {
   bytes statement = 1; bytes payload = 2; repeated EvsUploadReceipt receipts = 3; bytes staged = 4;
   repeated EvsPlace part_places = 5;
+  // QD-819 (question push-record-no-slot-bodies-part-slot-bodies): a seal's slot bodies, section 7, in no part.
+  bytes slot_bodies = 6;
 }
 message EvsPartRequest {
   bytes statement = 1; bytes part = 2; repeated EvsUploadReceipt receipts = 3; bytes staged = 4;

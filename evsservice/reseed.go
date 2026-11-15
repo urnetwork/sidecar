@@ -6,9 +6,10 @@
 //	           mode (push.go's attempt with reseed set), and its record is an EVS_BATCH_RESEED record
 //	parts      {statement, parts}: a re-seeded push in parts, every part as the mirror holds it, in part order
 //	           (QD-818). The same mode runs the push route's seal over them (push_seal.go's round with the parts as
-//	           carried, so EvsCheckSeal and 5g for every part are the push route's own), and step 6 writes an
-//	           EVS_BATCH_RESEED record per part, holding a part record's body with no receipts, then the
-//	           EVS_BATCH_SEAL record naming their places, which the window entry names as a pushed seal's
+//	           carried, so the seal's checks, with no slot body (EvsCheckRecordSeal; QD-819), and 5g for every part are
+//	           the push route's own), and step 6 writes an EVS_BATCH_RESEED record per part, holding a part record's
+//	           body with no receipts, then the EVS_BATCH_SEAL record naming their places, which the window entry names
+//	           as a pushed seal's
 //	slot       {statement, slot_id, slot}: one slot object, taken only once the statement's push stands committed in
 //	           its ref's history as a re-seeded version that names the slot, stripped of every key an ERASE evs holds
 //	           covers, and written If-None-Match with origin 1.r (DESIGN-DETAILS 14.2.6); a slot left with no key is
@@ -53,8 +54,9 @@
 //
 // A push in parts goes in one call, as QD-725's message has it, so the lb's 16 MiB body bound (RequestBodyMaxByteCount)
 // caps the push in parts a re-seed returns, below the format's 1,024 parts of 1 MiB: past it the call is refused 400,
-// refusing nothing, and the device stops that ref (question evs-reseed-parts-request-bound). A re-seeded part keeps
-// the slot bodies its bytes carry, which parts_sha256 covers, until QD-819 takes them out of parts.
+// refusing nothing, and the device stops that ref (question evs-reseed-parts-request-bound). A re-seeded part carries
+// no slot body, as no part does (QD-819): one that holds one is INVALID, so no reseed record keeps a key an ERASE may
+// have destroyed, and the push's slots return by their own calls, stripped.
 //
 // Not built here, each refused before anything is written: a push carrying format 2 (EVS2-M10-13), and a statement at
 // an auth pin evs's state does not retain. A reading waits on its question: a slot call names its version by the

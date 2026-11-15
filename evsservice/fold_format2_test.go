@@ -1071,10 +1071,10 @@ func TestFormat2FoldReadsAVersionlessPushInParts(t *testing.T) {
 		}
 		partBytes = append(partBytes, part)
 	}
-	if _, _, err := sidecar.EvsCheckSeal(statement, partBytes); !errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+	if _, _, err := sidecar.EvsCheckSeal(statement, partBytes, nil); !errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
 		t.Fatalf("format 1's seal over versionless parts: %v", err)
 	}
-	if _, _, err := sidecar.EvsCheckSealFormat2(statement, partBytes, make([][]byte, len(partBytes))); !errors.Is(err, sidecar.ErrEvsPushInvalid) {
+	if _, _, err := sidecar.EvsCheckSealFormat2(statement, partBytes, make([][]byte, len(partBytes)), nil); !errors.Is(err, sidecar.ErrEvsPushInvalid) {
 		t.Fatalf("an arriving seal without its staged segment: %v", err)
 	}
 	if _, _, err := sidecar.EvsCheckStoredSeal(statement, partBytes); err != nil {

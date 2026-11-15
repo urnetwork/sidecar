@@ -26,6 +26,10 @@ type EvsFormatSettings struct {
 	PartMaxByteCount int
 	// The entry writes one part, or a one-part push, carries: 1,024.
 	PartMaxEntryWriteCount int
+	// A push in parts' slot bodies, payload section 7 whole as its seal request carries them outside every hash and
+	// no part does: a part's 1 MiB (QD-819). evs refuses a seal past it as INVALID, and a builder refuses to build one
+	// (ErrEvsSlotBodiesTooLarge), which the writer splits into pushes each within it (evs_write_split.go).
+	SealSlotBodiesMaxByteCount int
 	// changed_prefixes' token bytes in all: 512 B (D-EVS-20).
 	ChangedPrefixesMaxByteCount int
 	// The room a builder keeps in each part for its fixed fields and their framing, past its changes and slices:
@@ -81,6 +85,7 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		PayloadMaxByteCount:         1024 * 1024,
 		PartMaxByteCount:            1024 * 1024,
 		PartMaxEntryWriteCount:      1024,
+		SealSlotBodiesMaxByteCount:  1024 * 1024,
 		ChangedPrefixesMaxByteCount: 512,
 		PartFieldsByteCount:         4 * 1024,
 		PathMapMaxByteCount:         8 * 1024 * 1024,

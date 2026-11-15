@@ -229,5 +229,5 @@ func TestPushRecordsAStalePinSealInAPlaceholderHead(t *testing.T) {
 	requireRulesAnswer(t, "the seal again", fixture.seal(token, built, places), true)
 	sibling := fixture.sibling(unset)
 	requireRulesAnswer(t, "the seal at the sibling", fixture.postTo(sibling, token,
-		&protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places}), true)
+		&protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places, SlotBodies: built.SlotBodies}), true)
 }

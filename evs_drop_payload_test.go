@@ -550,14 +550,14 @@ func TestEvsDropThroughThePushChecks(t *testing.T) {
 	if carrying < 2 {
 		t.Errorf("640 KB of lists rode in %d parts", carrying)
 	}
-	checkedMany, _, err := EvsCheckSealFormat2(builtMany.Statement, builtMany.Parts, make([][]byte, len(builtMany.Parts)))
+	checkedMany, _, err := EvsCheckSealFormat2(builtMany.Statement, builtMany.Parts, make([][]byte, len(builtMany.Parts)), builtMany.SlotBodies)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if checkedMany.Drop == nil || checkedMany.Drop.History.GetPaths()[0].GetCount() != 20000 {
 		t.Error("the seal did not adopt the DROP")
 	}
-	if _, _, err := EvsCheckSeal(builtMany.Statement, builtMany.Parts); !errors.Is(err, ErrEvsFormatUnsupported) {
+	if _, _, err := EvsCheckSeal(builtMany.Statement, builtMany.Parts, builtMany.SlotBodies); !errors.Is(err, ErrEvsFormatUnsupported) {
 		t.Errorf("format 1's seal took a DROP's sections: %v", err)
 	}
 

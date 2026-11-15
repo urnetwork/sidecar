@@ -96,7 +96,7 @@ func (self *evsTestSync) Replay(ctx context.Context, refId Id) error {
 		var checked *EvsCheckedPayload
 		var err error
 		if 0 < len(commit.built.Parts) {
-			checked, _, err = EvsCheckSeal(commit.parsed, commit.built.Parts)
+			checked, _, err = EvsCheckSeal(commit.parsed, commit.built.Parts, commit.built.SlotBodies)
 		} else {
 			checked, err = EvsCheckPayload(commit.parsed, commit.built.Payload)
 		}

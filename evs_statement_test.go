@@ -128,7 +128,7 @@ func evsTestBuildAndCheck(t testing.TB, signer *evsTestSigner, plan *EvsPushPlan
 		}
 		return built, checked
 	}
-	checked, _, err := EvsCheckSeal(statement, built.Parts)
+	checked, _, err := EvsCheckSeal(statement, built.Parts, built.SlotBodies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,12 +631,12 @@ func TestEvsPartsCheckAloneAndAtTheSeal(t *testing.T) {
 			t.Errorf("part %d's root or changes", i+1)
 		}
 	}
-	if _, _, err := EvsCheckSeal(built.Statement, built.Parts[:len(built.Parts)-1]); !errors.Is(err, ErrEvsPushInvalid) {
+	if _, _, err := EvsCheckSeal(built.Statement, built.Parts[:len(built.Parts)-1], built.SlotBodies); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("a part missing: %v", err)
 	}
 	swapped := slices.Clone(built.Parts)
 	swapped[0], swapped[1] = swapped[1], swapped[0]
-	if _, _, err := EvsCheckSeal(built.Statement, swapped); !errors.Is(err, ErrEvsPushInvalid) {
+	if _, _, err := EvsCheckSeal(built.Statement, swapped, built.SlotBodies); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("parts swapped: %v", err)
 	}
 	other, _ := evsTestBuildAndCheck(t, signer, evsTestPlan(t, signer, "other parts", 1100))
@@ -651,7 +651,7 @@ func TestEvsPartsCheckAloneAndAtTheSeal(t *testing.T) {
 	if _, err := EvsCheckPart(built.Statement, tampered[0]); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("a tampered entry version: %v", err)
 	}
-	if _, _, err := EvsCheckSeal(built.Statement, tampered); !errors.Is(err, ErrEvsPushInvalid) {
+	if _, _, err := EvsCheckSeal(built.Statement, tampered, built.SlotBodies); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("a seal over a tampered part: %v", err)
 	}
 	// inline records ride only in their locators (QD-735): neither in a part's field 5 nor in its sections
@@ -664,7 +664,7 @@ func TestEvsPartsCheckAloneAndAtTheSeal(t *testing.T) {
 	}
 	withInlineParts := slices.Clone(built.Parts)
 	withInlineParts[0] = withInline
-	if _, _, err := EvsCheckSeal(built.Statement, withInlineParts); !errors.Is(err, ErrEvsPushInvalid) {
+	if _, _, err := EvsCheckSeal(built.Statement, withInlineParts, built.SlotBodies); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("a seal over a part with inline records: %v", err)
 	}
 	inSections := &protocol.EvsPushPart{}
@@ -957,7 +957,7 @@ func TestEvsStatementLaysOutADropInParts(t *testing.T) {
 			t.Fatal("the joined slices are not the one-part sections")
 		}
 		if check {
-			checked, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, make([][]byte, len(built.Parts)))
+			checked, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, make([][]byte, len(built.Parts)), built.SlotBodies)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1061,10 +1061,10 @@ func TestEvsSealRefusesADropBodyOutsidePartOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := EvsCheckSealFormat2(statement, partBytes, make([][]byte, len(partBytes))); !errors.Is(err, ErrEvsPushInvalid) || !strings.Contains(err.Error(), "part 1") {
+	if _, _, err := EvsCheckSealFormat2(statement, partBytes, make([][]byte, len(partBytes)), nil); !errors.Is(err, ErrEvsPushInvalid) || !strings.Contains(err.Error(), "part 1") {
 		t.Errorf("a DROP's body in part 2: %v", err)
 	}
-	if _, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, make([][]byte, len(built.Parts))); err != nil {
+	if _, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, make([][]byte, len(built.Parts)), built.SlotBodies); err != nil {
 		t.Errorf("its twin with the body in part 1: %v", err)
 	}
 }
