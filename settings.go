@@ -200,6 +200,20 @@ type SidecarLocalSettings struct {
 	// The read buffer of one local session: 4 KiB, a hello's size and a request line's usual one; a longer line
 	// reads through it in pieces.
 	SessionBufferByteCount int
+	// How deep the reply walk follows a reply's values before it refuses the reply (daemon_rpc.go): 32, far past the
+	// few levels a reply nests, so a cycle ends.
+	ReplyMaxDepth int
+	// The events the daemon keeps for its events method (§18.5; QD-821, daemon_events.go): 1,024, a busy minute of
+	// every hosted network's alarms and state moves, with room for a reader a few seconds behind. Past it the oldest
+	// goes, and a reader whose cursor the ring passed is answered gap and reads status for where things stand.
+	EventRingEventCount int
+	// The most events one events reply carries: 256, a few hundred bytes each, so a reply stays far below a native
+	// messaging frame's 1 MiB (cli/native_host_frame.go); a reply holding this many may leave more, which the next call
+	// answers at once.
+	EventReplyEventCount int
+	// The longest an events call waits for an event before it answers none: 25 s, under RequestTimeout's 30 s, so the
+	// wait answers before the request bound does, and so under ur's call bound and the sdk's.
+	EventWaitTimeout time.Duration
 }
 
 // §16.10's limits, 5.9's cache and §11.14's remote search. A daemon designated for search (§7.9)
@@ -832,6 +846,10 @@ func DefaultSidecarSettings() *SidecarSettings {
 			FirstPort:              17000,
 			HelloByteCount:         16 * 1024,
 			SessionBufferByteCount: 4 * 1024,
+			ReplyMaxDepth:          32,
+			EventRingEventCount:    1024,
+			EventReplyEventCount:   256,
+			EventWaitTimeout:       25 * time.Second,
 		},
 		Mcp:    defaultSidecarMcpSettings(),
 		Ingest: defaultSidecarIngestSettings(),
