@@ -548,6 +548,11 @@ message EvsSealedMetadata {             // what a push's sealed metadata opens t
   bytes erasure_note = 8;               // an ERASE's or a CLOSURE's note (11.12; QD-682): erasure id 16 B, and for an
                                         // ERASE complete u8 (1 when this push ends the erasure) and the caller's note
                                         // bytes; a CLOSURE's is its erasure id alone
+  repeated bytes written_over = 9;      // a repair form's (DESIGN-DETAILS 16.2.7; QD-833): the push ids of the ignored
+                                        // versions it writes over, of every path the push repairs, between the
+                                        // effective version and evs's newest, in ref-version order, 16 B each; empty
+                                        // otherwise. For `ur evs log` alone: a reader checks nothing against it, and
+                                        // its absence is no list
 }
 message EvsGitUpdate {                  // a git-mode push's update (DESIGN-DETAILS 8.2.2, 8.2.3)
   EvsGitShape shape = 1;
