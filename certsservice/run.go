@@ -153,7 +153,8 @@ type CertsOrdersReport struct {
 	// Orders that queue again: a CA's refusal on a limit, which holds the CA, a failed authorization,
 	// which counts against its names, or a failure that may pass.
 	Requeued []sidecar.Id
-	// Rows moved to failed: a CSR no CA can take, or an order past OrderGiveUpAge.
+	// Rows moved to failed: a CSR no CA can take, or an order past its give-up age (OrderGiveUpAge, never
+	// past its CA's OrderLifetime).
 	Failed []sidecar.Id
 	// Orders the pass's end cut short, left under way for the next.
 	Interrupted []sidecar.Id
@@ -315,11 +316,12 @@ func (self *CertsService) runOrder(ctx context.Context, order *certsRunOrder) ce
 		case errors.As(err, &authorization):
 			self.RecordAuthorizationFailures(authorization.Names)
 		}
-		// an order that keeps failing ends, so its device hears and may order again; a renewal of a
-		// certificate still valid keeps trying, since nothing else would renew it
+		// an order that keeps failing ends, never later than its CA keeps an order alive, so its device
+		// hears and may order again; a renewal of a certificate still valid keeps trying, since nothing
+		// else would renew it
 		to := sidecar.TlsCertStateQueued
 		outcome.end = certsOrderRequeued
-		if order.predecessor == nil && self.settings.OrderGiveUpAge <= self.clock.Now().Sub(certsIdTime(row.CertId)) {
+		if order.predecessor == nil && self.settings.orderGiveUpAge(ca) <= self.clock.Now().Sub(certsIdTime(row.CertId)) {
 			to = sidecar.TlsCertStateFailed
 			outcome.end = certsOrderFailed
 		}

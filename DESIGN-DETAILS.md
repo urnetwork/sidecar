@@ -14680,37 +14680,52 @@ A holder that must give a live order up does not leave it: it **kills** it. An o
 
 #### 17.2.8 The budgets, the holds and the plan
 
-**What is assumed about the CA.** Let's Encrypt, profile `tlsserver`. I did not read the CA's pages for this section: no page may be fetched. Each number is DESIGN.md §13.8's, with the date its author read it, or mine from memory with knowledge to mid-2026. Every one is a field of `CertsCustomSettings` (17.2.15), and `details-17-ca-numbers` asks the owner to confirm them.
+**What is assumed about the CA.** Let's Encrypt, profile `tlsserver`. This section was written from DESIGN.md §13.8's numbers and from memory, since no page could be fetched for it. The CA's two pages were read on 2026-11-15 (QD-784), and each row gives its source: *rate limits* is https://letsencrypt.org/docs/rate-limits/ (last updated 2026-08-05) and *profiles* is https://letsencrypt.org/docs/profiles/. The reading bore out A1 to A6 and A8, corrected A7's condition and scope and A10's numbers, and added A14 to A17. A9 was not part of it and A11 is on neither page, so both stay from memory. The numbers the design counts by are fields of `CertsCustomSettings` and `TlsCustomSettings` (17.2.15), defaults the owner may correct.
 
 ```text
-     the CA's rule                                    assumed                              from
-A1   certificate lifetime                             45 days                              §13.8, read 2026-10-04
-A2   valid authorization reuse                        7 h                                  §13.8, read 2026-10-04
-A3   new certificates a registered domain,            50 in 7 d, one back each 202 min     §13.8, read 2026-08-05;
-     all accounts together                                                                 the refill from memory
-A4   new certificates an exact set of names           5 in 7 d, one back each 34 h,        §13.8, read 2026-08-05
+     the CA's rule                                    the number                           from
+A1   certificate lifetime                             45 days (classic, which an order     profiles, read 2026-11-15
+                                                      naming no profile gets: 90 days)
+A2   valid authorization reuse                        7 h (classic: 30 days)               profiles, read 2026-11-15
+A3   new certificates a registered domain,            50 in 7 d, one back each 202 min     rate limits, read 2026-11-15
+     all accounts together
+A4   new certificates an exact set of names           5 in 7 d, one back each 34 h,        rate limits, read 2026-11-15
                                                       no override
-A5   new orders an account                            300 in 3 h, one back each 36 s       memory
-A6   failed authorizations a name and account         5 an hour, one back each 12 min      §13.8; the refill from
-                                                                                           memory
-A7   an order with `replaces` naming a certificate    counts against none of A3 to A5      §13.8 ("ARI renewals
-     of its account, sent inside that certificate's                                        skip all limits"); the
-     suggested window (RFC 9773)                                                           window condition from memory
-A8   a certificate is replaced once                   a second order replacing it is       memory
-                                                      refused 409 alreadyReplaced
-A9   order reuse                                      newOrder may return the account's    memory
-                                                      pending or ready order for the same names
-A10  a long run of failed validations for a name      the CA pauses that name for the      memory, low confidence
-                                                      account; thousands of failures
-A11  a 429                                            problem type rateLimited, with       memory
-                                                      Retry-After
+A5   new orders an account                            300 in 3 h, one back each 36 s       rate limits, read 2026-11-15
+A6   failed authorizations a name and account         5 an hour, one back each 12 min,     rate limits, read 2026-11-15
+                                                      no override
+A7   an ARI renewal: an order whose `replaces`        exempt from every rate limit, A3 to  rate limits, read 2026-11-15;
+     names a certificate not already replaced         A6 and A10 included, whenever it     the page states no window
+     through ARI, and which names at least one        is sent                              condition
+     identifier of that certificate (RFC 9773)
+A8   a certificate is replaced once                   a second order replacing it is       rate limits, read 2026-11-15;
+                                                      refused 409 alreadyReplaced          the 409 is RFC 9773 §5's
+A9   order reuse                                      newOrder may return the account's    memory; not part of the
+                                                      pending or ready order for the       2026-11-15 reading
+                                                      same names
+A10  consecutive failed authorizations a name and     1,152, one back each day, a success  rate limits, read 2026-11-15
+     account                                          resets the count; past them the CA
+                                                      pauses the name for the account;
+                                                      no override
+A11  a 429                                            problem type rateLimited, with       memory; on neither page read
+                                                      Retry-After                          2026-11-15
 A12  an order issues at most once; a key change keeps the account, its orders and          RFC 8555 §7.4, §7.3.5,
      authorizations; the account or the certificate's key may revoke                       §7.6
 A13  an order one of whose authorizations is deactivated is never finalized after; the     RFC 8555 §7.1.6, §7.5.2
      CA may call it invalid or deactivated
+A14  a renewal not by ARI: an order for an earlier    counts against neither A3 nor A5,    rate limits, read 2026-11-15
+     certificate's exact set of names, with no        and against A4 and A6 as any order
+     `replaces`
+A15  order lifetime                                   8 h from the order's creation        profiles, read 2026-11-15
+A16  pending authorization lifetime                   1 h                                  profiles, read 2026-11-15
+A17  names a certificate                              at most 25                           profiles, read 2026-11-15
 ```
 
-Only A12 and A13 are relied on for safety, and they are the protocol, not policy. If A13 failed, 17.2.12's pass would stop the account's ordering and raise an alarm; it would not issue. A wrong A1 to A11 changes how long a row waits or turns one request into a 429 and a hold. A9 is handled either way: the design is safe whether or not the CA reuses orders (17.3).
+Every order names `tlsserver` (`TlsCustomSettings.Profile`), since one that names no profile gets classic's 90 days and 30 days. The Baseline Requirements, as read the same day, cap a certificate's validity at 100 days from 2027-03-15 and at 47 days from 2029-03-15, and authorization reuse at 100 days and then at 10 days from the same dates; tlsserver's 45 days and 7 h already meet both.
+
+Only A12 and A13 are relied on for safety, and they are the protocol, not policy. If A13 failed, 17.2.12's pass would stop the account's ordering and raise an alarm; it would not issue. A wrong A1 to A11 or A14 to A17 changes how long a row waits or turns one request into a 429 and a hold. A9 is handled either way: the design is safe whether or not the CA reuses orders (17.3).
+
+A15 to A17 need no field of their own, since the design sits inside them. A certificate names one name (17.2.2), far under A17's 25. A challenge lives `ChallengeLifetime`, 10 min, inside A16's hour. By A15 and A16 an order nobody completes is dead at the CA within 8 h of its creation, and within the hour while its authorization is still pending, not days later as 17.2.7 puts it: that bounds how long a recorded order left alone could hold its account's queue, and a holder that gives an order up still kills it at once (17.2.7).
 
 **The buckets.** A budget is a bucket replayed from `network_tls_custom_spend`, so there is no counter to lose and a restore behind the truth is repaired by the CA's next 429.
 
@@ -14742,7 +14757,9 @@ grant(r), inside the claim's or order_invalid's transaction, after pg_advisory_x
 
 `set` keeps one certificate back (need 2 of 5), so a device whose key is compromised can be re-certified at once. `domain` is our share of A3, which the customer's other issuance draws on too: we take at most half (`details-17-own-share-of-the-domain-limit`). `orders` and the failure backoff are a fifth and less of A5 and A6. A row has at most one `certificate` spend, written when a newOrder is first granted, kept across takeovers, moved to the register time on issue and deleted only on proof that no certificate came of it. So the replay never counts less than the CA does, whatever crashes.
 
-**The holds.** A 429 is the CA telling us our count is behind. `rate_limited` writes it on the account row, where every desktop's next claim reads it. A 429 on an ordinary order holds ordinary orders (`hold_new_until`) and lets ARI renewals through. A 429 on an ARI renewal means A7 did not hold for it: everything is held (`hold_all_until`), and the row becomes an ordinary one that waits its turn in the buckets. A 429 anywhere past newOrder is the CA's request limit and holds everything too; the order stays recorded, and the claim refuses every order until the hold ends, so no desktop repeats the request meanwhile.
+`exempt` is narrower than A7, by the design's own choice and not the CA's rule. The CA exempts an order whose `replaces` names a certificate not yet replaced whenever it is sent; the grant also asks that the order fall inside the predecessor's stored window, so a renewal sent early or late waits in `set` and `domain` like a first order. `orders` and the failure backoff count an exempt row too, though A7 takes it out of A5 and A6, and a renewal sent with `no_replaces` is counted in `domain` as well as in `set`, though A14 takes it out of A3. Each choice counts more than the CA does, never less. The failure backoff also keeps every host far from A10: from a host's seventh failure on, `FailureBackoffMax` (24 h) passes between its grants, so it fails at most once a day, which A10's one back each day returns, and the CA's count of its consecutive failures never passes about seven.
+
+**The holds.** A 429 is the CA telling us our count is behind. `rate_limited` writes it on the account row, where every desktop's next claim reads it. A 429 on an ordinary order holds ordinary orders (`hold_new_until`) and lets ARI renewals through. A 429 on an ARI renewal means the CA did not take it as one, since A7 exempts an ARI renewal from every rate limit: everything is held (`hold_all_until`), and the row becomes an ordinary one that waits its turn in the buckets. A 429 anywhere past newOrder is the CA's request limit and holds everything too; the order stays recorded, and the claim refuses every order until the hold ends, so no desktop repeats the request meanwhile.
 
 **The plan for N devices.** The work list is the server's, in this order, each row with its `wait_ms` from the grant's rule (the largest wait, or the hold's remainder):
 
