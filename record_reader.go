@@ -57,6 +57,15 @@ const (
 	RecordEntryLost RecordEntryState = "lost"
 )
 
+// ErasureBody.reason's value for expiry under a retention policy, RecordErasureReasonRetention of record_erase.go,
+// which no ios_extension leg links: a format value.
+const recordErasureReasonExpiry uint32 = 2
+
+// Whether the entry's key is gone for good, by a person's erasure or by expiry: the header is all that is left.
+func (self RecordEntryState) KeyGone() bool {
+	return self == RecordEntryErased || self == RecordEntryExpired
+}
+
 var (
 	// This sidecar does not read the log (§8.6).
 	ErrRecordNotReader = errors.New("record log not read by this sidecar")
@@ -254,6 +263,8 @@ type recordReadLog struct {
 	erasureVersion uint64
 	erasedKeys     map[RecordSlotKey]bool
 	erasedEntryIds map[Id]bool
+	// the erased entries an erasure of reason 2 named: they read expired (record_retention.go)
+	expiredEntryIds map[Id]bool
 	// each stream's ref id and verified pushes, in version order
 	streamRefIds map[Id]Id
 	streamPushes map[Id][]*RecordReadPush
@@ -321,14 +332,15 @@ func (self *RecordReader) readLog(logId Id) *recordReadLog {
 	log, ok := self.logs[logId]
 	if !ok {
 		log = &recordReadLog{
-			logId:          logId,
-			streamVersions: map[Id]uint64{},
-			leafEntries:    map[[sha256.Size]byte]*RecordReadEntry{},
-			writerChains:   map[Id]*recordReadChain{},
-			erasedKeys:     map[RecordSlotKey]bool{},
-			erasedEntryIds: map[Id]bool{},
-			streamRefIds:   map[Id]Id{},
-			streamPushes:   map[Id][]*RecordReadPush{},
+			logId:           logId,
+			streamVersions:  map[Id]uint64{},
+			leafEntries:     map[[sha256.Size]byte]*RecordReadEntry{},
+			writerChains:    map[Id]*recordReadChain{},
+			erasedKeys:      map[RecordSlotKey]bool{},
+			erasedEntryIds:  map[Id]bool{},
+			expiredEntryIds: map[Id]bool{},
+			streamRefIds:    map[Id]Id{},
+			streamPushes:    map[Id][]*RecordReadPush{},
 		}
 		self.logs[logId] = log
 	}
@@ -600,6 +612,9 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 			if log.erasedEntryIds[entry.EntryId] || log.erasedKeys[RecordSlotKey{SlotId: entryCopy.SlotId, KeyIndex: entryCopy.KeyIndex}] {
 				recordEraseEntryWithLock(entry)
 			}
+			if entry.State == RecordEntryErased && log.expiredEntryIds[entry.EntryId] {
+				entry.State = RecordEntryExpired
+			}
 			log.leafEntries[leaf] = entry
 			log.ordered = append(log.ordered, entry)
 		}()
@@ -833,6 +848,9 @@ func (self *RecordReader) readErasures(ctx context.Context, streams RecordStream
 			for _, entryId := range body.GetEntryIds() {
 				if len(entryId) == len(Id{}) {
 					log.erasedEntryIds[Id(entryId)] = true
+					if body.GetReason() == recordErasureReasonExpiry {
+						log.expiredEntryIds[Id(entryId)] = true
+					}
 				}
 			}
 		}
@@ -849,7 +867,48 @@ func (self *RecordReader) readErasures(ctx context.Context, streams RecordStream
 			}
 		}
 	}
+	log.markExpiredWithLock()
 	return nil
+}
+
+// Shows as expired each erased entry an erasure of reason 2 named (RECORD.md section 5.5's states row).
+func (self *recordReadLog) markExpiredWithLock() {
+	for _, entry := range self.ordered {
+		if entry.State == RecordEntryErased && self.expiredEntryIds[entry.EntryId] {
+			entry.State = RecordEntryExpired
+		}
+	}
+}
+
+// Takes the log's archived entries as its retention policies give them now (record_retention.go): a live entry among
+// entryIds reads archived, and an archived one no longer among them reads live again. Its key is untouched.
+func (self *RecordReader) setArchived(logId Id, entryIds []Id) {
+	archived := map[Id]bool{}
+	for _, entryId := range entryIds {
+		archived[entryId] = true
+	}
+	log := self.readLog(logId)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, entry := range log.ordered {
+		switch {
+		case entry.State == RecordEntryLive && archived[entry.EntryId]:
+			entry.State = RecordEntryArchived
+		case entry.State == RecordEntryArchived && !archived[entry.EntryId]:
+			entry.State = RecordEntryLive
+		}
+	}
+}
+
+// Takes an expiry this device runs before evs holds it: entryIds read expired once erased (record_retention.go).
+func (self *RecordReader) noteExpired(logId Id, entryIds []Id) {
+	log := self.readLog(logId)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, entryId := range entryIds {
+		log.expiredEntryIds[entryId] = true
+	}
+	log.markExpiredWithLock()
 }
 
 // Takes an erasure this device runs before evs holds it: entryIds erased and keys refused here at once, so an ingest
@@ -869,6 +928,7 @@ func (self *RecordReader) noteErased(logId Id, entryIds []Id, keys []*RecordSlot
 			recordEraseEntryWithLock(entry)
 		}
 	}
+	log.markExpiredWithLock()
 }
 
 // An erasure entry's named entries: erased here, and refused by an ingester (section 5.4's erased step).
@@ -882,6 +942,9 @@ func (self *RecordReader) applyErasureEntry(log *recordReadLog, erasure *RecordR
 	for _, entryId := range body.GetEntryIds() {
 		if len(entryId) == len(Id{}) {
 			log.erasedEntryIds[Id(entryId)] = true
+			if body.GetReason() == recordErasureReasonExpiry {
+				log.expiredEntryIds[Id(entryId)] = true
+			}
 		}
 	}
 	for _, entry := range log.ordered {
@@ -889,6 +952,7 @@ func (self *RecordReader) applyErasureEntry(log *recordReadLog, erasure *RecordR
 			recordEraseEntryWithLock(entry)
 		}
 	}
+	log.markExpiredWithLock()
 }
 
 // Drops an entry's body for good: every decrypted copy goes (§16.8's erasure row).
@@ -947,7 +1011,7 @@ func (self *RecordReader) Erased(logId Id, entryId Id) bool {
 		return true
 	}
 	for _, entry := range log.ordered {
-		if entry.EntryId == entryId && entry.State == RecordEntryErased {
+		if entry.EntryId == entryId && entry.State.KeyGone() {
 			return true
 		}
 	}

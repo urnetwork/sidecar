@@ -15,6 +15,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"sync"
 	"testing"
@@ -282,6 +283,8 @@ type testRecordDevice struct {
 	settings  *sidecar.SidecarRecordSettings
 	// Sidecar.SignProvenance's stand-in, nil for a device with no agent subkeys (record_agent_body_test.go)
 	signProvenance sidecar.RecordAgentSignFunction
+	// the record's randomness, nil for the system's (record_retention_test.go)
+	random io.Reader
 
 	stateLock sync.Mutex
 	locked    bool
@@ -389,6 +392,7 @@ func (self *testRecordDevice) open() *sidecar.SidecarRecord {
 		Clock:          self.world.clock,
 		Settings:       self.settings,
 		SignProvenance: self.signProvenance,
+		Random:         self.random,
 	})
 	if err != nil {
 		self.t.Fatal(err)
