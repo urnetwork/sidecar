@@ -99,7 +99,7 @@ func Fs19Grant(net *Net) *Schedule {
 	world := newFsTeamWorld()
 	return fsTeamSchedule("FS-19 grant", world,
 		fs19M4Start(world),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, agent, tagId := world.devices["m first"], world.devices["agent"], sidecar.Id(world.ids["tag ci"])
 			ci := aclCreateRepo(net, first, "ci", protocol.RepoKind_REPO_KIND_GENERAL)
 			notes := aclCreateRepo(net, first, "notes", protocol.RepoKind_REPO_KIND_GENERAL)
@@ -114,7 +114,7 @@ func Fs19Grant(net *Net) *Schedule {
 				shared: 0,
 			})
 		}),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, agent := world.devices["m first"], world.devices["agent"]
 			ci, notes, shared := sidecar.Id(world.ids["ci"]), sidecar.Id(world.ids["notes"]), sidecar.Id(world.ids["shared"])
 			// a read grant naming it opens exactly that repo, at once
@@ -125,7 +125,7 @@ func Fs19Grant(net *Net) *Schedule {
 				shared: sidecar.AclEvsRead,
 			})
 		}),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, agent := world.devices["m first"], world.devices["agent"]
 			ci, notes, shared := sidecar.Id(world.ids["ci"]), sidecar.Id(world.ids["notes"]), sidecar.Id(world.ids["shared"])
 			// the grant's removal is a shrink
@@ -147,7 +147,7 @@ func Fs19Share(net *Net) *Schedule {
 	world := newFsTeamWorld()
 	return fsTeamSchedule("FS-19 share", world,
 		fs19M4Start(world),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, agent := world.devices["m first"], world.devices["agent"]
 			vault := aclCreateRepo(net, first, "m vault", protocol.RepoKind_REPO_KIND_VAULT)
 			mailbox := aclCreateRepo(net, first, "m mailbox", protocol.RepoKind_REPO_KIND_MAILBOX)
@@ -158,7 +158,7 @@ func Fs19Share(net *Net) *Schedule {
 				mailbox: sidecar.AclEvsDeposit,
 			})
 		}),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, agent := world.devices["m first"], world.devices["agent"]
 			vault, mailbox := sidecar.Id(world.ids["vault"]), sidecar.Id(world.ids["mailbox"])
 			// the member's consented device shares its vault with the agent: exactly that repo opens, at once
@@ -170,7 +170,7 @@ func Fs19Share(net *Net) *Schedule {
 				mailbox: sidecar.AclEvsDeposit,
 			})
 		}),
-		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
 			first, agent := world.devices["m first"], world.devices["agent"]
 			vault, mailbox := sidecar.Id(world.ids["vault"]), sidecar.Id(world.ids["mailbox"])
 			// the share's revocation is a shrink

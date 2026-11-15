@@ -9,11 +9,17 @@
 //	all set     where it is kept or "search more" asks for it: all's shards, youngest (highest n) first
 //
 // Each file: SearchCache.PutRecord, which keeps it only once its plaintext's SHA-256 is its entry version's
-// content_sha256, with its wrapped object key and file id beside it (QD-838); then indexValidateFile over the kept copy; then staged in the plan with its two times, the window or
-// coverage its header names, a small file's plaintext, and the version-table run built from it while its keys are at
-// hand. A file that fails either check is listed bad at that version, its copy dropped, and raises index_malformed
-// {repo, ref, path, signer}; a file in a newer format is listed newer and raises nothing. A read answering collected
-// for a wanted version ends the fetch: the round starts again at step 1, on the new head (7.1's C).
+// content_sha256, with what reopens it after the round beside it (QD-838): the source's record carries the 72 B block
+// its segment header held, wrapping its object key under fek_g, and its file id, which PutRecord keeps with g. Then
+// indexValidateFile over the kept copy; then staged in the plan with its two times, the window or coverage its header
+// names, a small file's plaintext, and the version-table run built from it while its keys are at hand. A file that
+// fails either check is listed bad at that version, its copy dropped, and raises index_malformed {repo, ref, path,
+// signer}; a file in a newer format is listed newer and raises nothing. A read answering collected for a wanted
+// version ends the fetch: the round starts again at step 1, on the new head (7.1's C).
+//
+// A file the manifest holds or the plan staged counts as had, except a record the cache kept before it kept those
+// keys (SearchCacheFile.KeysKept false): a reader could not reopen it after the round, so it is fetched again, in the
+// same order, and its new copy replaces the staged one. Which records lack keys is cache state, never a query (FI-23).
 //
 // The plan is written after each read, so a round killed between reads resumes with what it staged.
 
@@ -48,8 +54,12 @@ func searchFetchRank(parsed indexPath) (latest bool, rank int) {
 	return false, -1
 }
 
-// Whether a manifest or plan already has path at version: held, bad or newer there.
-func searchHas(manifest *SearchManifest, plan *SearchSyncPlan, path string, version uint64) bool {
+// Whether a manifest or plan already has path at version: held, bad or newer there, and not a record the cache keeps
+// without the keys that reopen it (lacking), which is fetched again.
+func searchHas(manifest *SearchManifest, plan *SearchSyncPlan, lacking map[SearchVersionFile]bool, path string, version uint64) bool {
+	if lacking[SearchVersionFile{Path: path, Version: version}] {
+		return false
+	}
 	if manifest != nil {
 		if file := manifest.file(path); file != nil && file.Version == version {
 			return true
@@ -59,8 +69,8 @@ func searchHas(manifest *SearchManifest, plan *SearchSyncPlan, path string, vers
 }
 
 // The files of plan.Wanted under its root in the set asked (latest or all), in fetch order, that the round does not
-// have yet.
-func searchFetchOrder(manifest *SearchManifest, plan *SearchSyncPlan, companion bool, latest bool) []*SearchSyncWanted {
+// have yet, lacking's records among them.
+func searchFetchOrder(manifest *SearchManifest, plan *SearchSyncPlan, lacking map[SearchVersionFile]bool, companion bool, latest bool) []*SearchSyncWanted {
 	type ordered struct {
 		wanted *SearchSyncWanted
 		parsed indexPath
@@ -77,7 +87,7 @@ func searchFetchOrder(manifest *SearchManifest, plan *SearchSyncPlan, companion 
 			continue
 		}
 		inLatest, rank := searchFetchRank(parsed)
-		if rank < 0 || inLatest != latest || searchHas(manifest, plan, wanted.Path, wanted.Version) {
+		if rank < 0 || inLatest != latest || searchHas(manifest, plan, lacking, wanted.Path, wanted.Version) {
 			continue
 		}
 		files = append(files, ordered{wanted: wanted, parsed: parsed, rank: rank})
@@ -122,9 +132,32 @@ func (self *SearchSync) fetchBatches(files []*SearchSyncWanted) [][]*SearchSyncW
 	return batches
 }
 
+// The ref's records the cache keeps without the keys that reopen them after their round, kept before it kept those
+// (QD-838), by path and version.
+func (self *SearchSync) lackingKeys(ref *searchSyncRef) (map[SearchVersionFile]bool, error) {
+	held, err := self.args.cache.Ref(ref.args.repoId, ref.args.refId)
+	if err != nil {
+		return nil, err
+	}
+	lacking := map[SearchVersionFile]bool{}
+	if held == nil {
+		return lacking, nil
+	}
+	for _, file := range held.Files {
+		if file.Kind == searchCacheKindRecord && !file.KeysKept {
+			lacking[SearchVersionFile{Path: file.Key.Path, Version: file.Key.Version}] = true
+		}
+	}
+	return lacking, nil
+}
+
 // Step 4 over the latest set, or the all set: true where a read answered collected.
 func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest *SearchManifest, plan *SearchSyncPlan, latest bool) (bool, error) {
-	files := searchFetchOrder(manifest, plan, ref.args.companion, latest)
+	lacking, err := self.lackingKeys(ref)
+	if err != nil {
+		return false, err
+	}
+	files := searchFetchOrder(manifest, plan, lacking, ref.args.companion, latest)
 	if len(files) == 0 {
 		return false, nil
 	}
@@ -174,6 +207,10 @@ func (self *SearchSync) fetch(ctx context.Context, ref *searchSyncRef, manifest 
 			if err != nil {
 				return false, err
 			}
+			// a copy fetched again for its keys replaces one staged before them
+			plan.Staged = slices.DeleteFunc(plan.Staged, func(old *SearchManifestFile) bool {
+				return old.Path == staged.Path && old.Version == staged.Version
+			})
 			plan.Staged = append(plan.Staged, staged)
 			testHookBarrier("search.sync.fetched", searchSyncBarrierKey(ref.args.repoId, ref.args.refId))
 		}
