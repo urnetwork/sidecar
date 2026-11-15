@@ -1484,6 +1484,9 @@ type BridgeNetHostSettings struct {
 	ShareRows sidecar.BridgeShareRowSource
 	// The device role's posture store, which a restart hands the next host to restore from; nil is a store of its own.
 	PostureStore device.PostureStore
+	// The upstream the host's flows reach, made and closed by the caller, so it can name the upstream's ports before
+	// the host starts and hand a restarted host the same one; nil is an upstream of the host's own.
+	Upstream *BridgeNetUpstream
 }
 
 // A host sidecar: its device role, the component that feeds it, its connect client and its upstream. See the file's
@@ -1513,6 +1516,8 @@ type BridgeNetHost struct {
 	// moves at each principal or decision recorded
 	records         *connect.MonitorValue[int]
 	removeCallbacks []func()
+	// whether the upstream is the host's own, which its close closes
+	ownsUpstream bool
 }
 
 // Starts device as a host: files its address where settings name one, then builds its device role, its connect
@@ -1541,9 +1546,14 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 		self.t.Fatalf(format, args...)
 	}
 	var err error
-	host.Upstream, err = newBridgeNetUpstream(self.settings.ReadByteCount)
-	if err != nil {
-		fail("the upstream: %v", err)
+	if settings.Upstream != nil {
+		host.Upstream = settings.Upstream
+	} else {
+		host.Upstream, err = newBridgeNetUpstream(self.settings.ReadByteCount)
+		if err != nil {
+			fail("the upstream: %v", err)
+		}
+		host.ownsUpstream = true
 	}
 	host.Daemon, err = net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -1681,7 +1691,7 @@ func (self *BridgeNetHost) Close() {
 		self.follower.Close()
 	}
 	self.dials.open()
-	if self.Upstream != nil {
+	if self.Upstream != nil && self.ownsUpstream {
 		self.Upstream.close()
 	}
 	if self.Daemon != nil {

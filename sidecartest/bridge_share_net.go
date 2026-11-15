@@ -13,9 +13,11 @@
 //	          shares rule (QD-820), decides it on its own device and spends the decision in a GrantActivate
 //	pin       the grant file bridge/share-grant/<share_id hex> in a head of X's: the grant, Y's ShareKey, K, Y and both
 //	          tables' hashes and versions (QD-077, QD-670)
-//	row       the target table, the host's address as a /32 on every protocol, sealed under K at version 1, and Y's
-//	          side, the alias table and the ShareKey sealed under K, as network_bridge_share stores them; the host
-//	          fetches it from the world (BridgeNetHostSettings.ShareRows), since no api serves these networks
+//	row       the target table, sealed under K at version 1: the host's address as a /32 on every protocol, and again
+//	          for TCP to the port of the upstream the share's hosts reach alone, an upstream the share net makes before
+//	          it seals and hands each host, a restarted one too; and Y's side, the alias table and the ShareKey sealed
+//	          under K, as network_bridge_share stores them. The host fetches it from the world
+//	          (BridgeNetHostSettings.ShareRows), since no api serves these networks
 //	sign      a ShareCert of a generation by Y's ShareKey, and a delegation by that generation's ShareSigner, as Y's
 //	          keyring and sidecars make them (bridge.ShareCertSigned, bridge.ShareSignerSign)
 //	readers   Y's state, a hand-made one (FakeAclView): two sidecars of Y's owner, the granted reader, whose rule
@@ -60,11 +62,15 @@ import (
 type BridgeShareNetSettings struct {
 	// X's world; nil is the Net's (NetBridgeSettings) or the defaults. Its spend check is the share net's own.
 	Bridge *BridgeNetSettings
-	// The host's own overlay address in X's block, the share's one target: 100.80.7.20.
+	// The host's own overlay address in X's block, which both of the share's targets name: 100.80.7.20.
 	HostAddress netip.Addr
-	// The target's alias in Y's block, as host bits of its upper /17: 0x8001, x.y.128.1.
+	// The first target's alias in Y's block, as host bits of its upper /17: 0x8001, x.y.128.1. That target is the
+	// host's address on every protocol.
 	AliasHostBits uint32
-	// Y's block, which Y's senders route the alias in: 100.90.0.0/16.
+	// The second target's alias: 0x8002, x.y.128.2. That target is the host's address for TCP to its upstream's port
+	// alone, so a flow there on another port or protocol is the target's to refuse.
+	PortAliasHostBits uint32
+	// Y's block, which Y's senders route the aliases in: 100.90.0.0/16.
 	AcceptingBlock netip.Prefix
 	// How long a ShareCert the world signs runs past the Net's clock: 168 h, §17.9's 7 days.
 	CertLifetime time.Duration
@@ -72,10 +78,11 @@ type BridgeShareNetSettings struct {
 
 func DefaultBridgeShareNetSettings() *BridgeShareNetSettings {
 	return &BridgeShareNetSettings{
-		HostAddress:    netip.MustParseAddr("100.80.7.20"),
-		AliasHostBits:  0x8001,
-		AcceptingBlock: netip.MustParsePrefix("100.90.0.0/16"),
-		CertLifetime:   168 * time.Hour,
+		HostAddress:       netip.MustParseAddr("100.80.7.20"),
+		AliasHostBits:     0x8001,
+		PortAliasHostBits: 0x8002,
+		AcceptingBlock:    netip.MustParsePrefix("100.90.0.0/16"),
+		CertLifetime:      168 * time.Hour,
 	}
 }
 
@@ -91,6 +98,9 @@ type BridgeNetSharePlatform interface {
 	// The network the contract's escrow was reserved from, and false for a contract the platform did not issue.
 	ContractPayer(ctx context.Context, contractId connect.Id) (sidecar.Id, bool, error)
 }
+
+// TCP's IANA protocol number, as a share target's protocol names it. An identifier.
+const bridgeShareNetProtocolTcp = 6
 
 // One share between two networks. See the file's comment.
 type BridgeShareNet struct {
@@ -111,6 +121,11 @@ type BridgeShareNet struct {
 
 	shareKey ed25519.PrivateKey
 	row      *sidecar.BridgeShareRow
+	// the upstream every host of the share reaches, the share net's own, so its ports are known before the target
+	// table is sealed and stay the same across a host's restart
+	upstream *BridgeNetUpstream
+	// the one port the second target admits, the upstream's TCP port, sealed into the immutable target table
+	portTargetPort uint16
 	// the host's posture store, which a restart restores from
 	postureStore *bridgeNetPostureStore
 	// Y's verified state, which the platform takes beside X's
@@ -157,6 +172,12 @@ func NewBridgeShareNet(t AdmissionT, net *Net, settings *BridgeShareNetSettings)
 	rand.Read(shareSeed)
 	self.shareKey = ed25519.NewKeyFromSeed(shareSeed)
 	self.HostDevice = self.X.AddDevice("share host")
+	upstream, err := newBridgeNetUpstream(self.X.Settings().ReadByteCount)
+	if err != nil {
+		self.X.Close()
+		t.Fatalf("the share's upstream: %v", err)
+	}
+	self.upstream = upstream
 	self.accepting()
 	self.activate()
 	self.pin()
@@ -166,6 +187,7 @@ func NewBridgeShareNet(t AdmissionT, net *Net, settings *BridgeShareNetSettings)
 		ProvideFriendsAndFamily: true,
 		ShareRows:               self,
 		PostureStore:            self.postureStore,
+		Upstream:                self.upstream,
 	})
 	self.waitShare()
 	self.gate()
@@ -298,9 +320,12 @@ func (self *BridgeShareNet) waitShare() {
 	}
 }
 
-// Closes X's world.
+// Closes X's world, then the share's upstream.
 func (self *BridgeShareNet) Close() {
 	self.X.Close()
+	if self.upstream != nil {
+		self.upstream.close()
+	}
 }
 
 // sidecar.BridgeShareRowSource: the share's row as api stores it, and no other share's.
@@ -391,17 +416,31 @@ func (self *BridgeShareNet) pin() {
 		self.t.Fatal(err)
 	}
 	address := self.settings.HostAddress.As4()
-	targets := &bridge.BridgeShareTargets{Targets: []*bridge.BridgeShareTarget{{
-		Index:                 0,
-		HostSidecarId:         self.HostDevice.SidecarId().Bytes(),
-		HostIdentityPublicKey: bytes.Clone(self.HostDevice.Device.PublicKey()),
-		Prefix:                &bridge.BridgeIpv4Prefix{Address: binary.BigEndian.Uint32(address[:]), Length: 32},
-	}}}
+	self.portTargetPort = self.upstream.TcpPort()
+	targets := &bridge.BridgeShareTargets{Targets: []*bridge.BridgeShareTarget{
+		{
+			Index:                 0,
+			HostSidecarId:         self.HostDevice.SidecarId().Bytes(),
+			HostIdentityPublicKey: bytes.Clone(self.HostDevice.Device.PublicKey()),
+			Prefix:                &bridge.BridgeIpv4Prefix{Address: binary.BigEndian.Uint32(address[:]), Length: 32},
+		},
+		{
+			Index:                 1,
+			HostSidecarId:         self.HostDevice.SidecarId().Bytes(),
+			HostIdentityPublicKey: bytes.Clone(self.HostDevice.Device.PublicKey()),
+			Prefix:                &bridge.BridgeIpv4Prefix{Address: binary.BigEndian.Uint32(address[:]), Length: 32},
+			Protocol:              bridgeShareNetProtocolTcp,
+			Ports:                 []*bridge.BridgePortRange{{First: uint32(self.portTargetPort), Last: uint32(self.portTargetPort)}},
+		},
+	}}
 	targetTable, err := seal.Seal(sidecar.BridgeShareLabelTargets, sidecar.Id{}, 1, targets, nil)
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	aliases := &bridge.BridgeShareAliases{Aliases: []*bridge.BridgeShareAlias{{Index: 0, AliasHostBits: self.settings.AliasHostBits, Length: 32}}}
+	aliases := &bridge.BridgeShareAliases{Aliases: []*bridge.BridgeShareAlias{
+		{Index: 0, AliasHostBits: self.settings.AliasHostBits, Length: 32},
+		{Index: 1, AliasHostBits: self.settings.PortAliasHostBits, Length: 32},
+	}}
 	sealedAliases, err := seal.Seal(sidecar.BridgeShareLabelAliases, self.AcceptingNetworkId, 1, aliases, nil)
 	if err != nil {
 		self.t.Fatal(err)
@@ -441,8 +480,23 @@ func (self *BridgeShareNet) pin() {
 
 // The target's alias in Y's block, where Y's senders send what reaches the host's address.
 func (self *BridgeShareNet) Alias() netip.Addr {
+	return self.aliasAt(self.settings.AliasHostBits)
+}
+
+// The second target's alias in Y's block, where TCP to PortTargetPort alone reaches the host's address.
+func (self *BridgeShareNet) PortAlias() netip.Addr {
+	return self.aliasAt(self.settings.PortAliasHostBits)
+}
+
+// The one port the second target admits: the TCP port of the upstream every host of the share reaches.
+func (self *BridgeShareNet) PortTargetPort() uint16 {
+	return self.portTargetPort
+}
+
+// The address at hostBits in Y's block.
+func (self *BridgeShareNet) aliasAt(hostBits uint32) netip.Addr {
 	block := self.settings.AcceptingBlock.Addr().As4()
-	address := binary.BigEndian.Uint32(block[:]) | self.settings.AliasHostBits
+	address := binary.BigEndian.Uint32(block[:]) | hostBits
 	return netip.AddrFrom4([4]byte{byte(address >> 24), byte(address >> 16), byte(address >> 8), byte(address)})
 }
 
@@ -540,6 +594,7 @@ func (self *BridgeShareNet) RestartHost() {
 		ProvideFriendsAndFamily: true,
 		ShareRows:               self,
 		PostureStore:            self.postureStore,
+		Upstream:                self.upstream,
 	})
 	self.Host.Address = self.settings.HostAddress
 	self.waitShare()
