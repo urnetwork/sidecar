@@ -368,6 +368,27 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "BridgeRows egress modes;",
 		list:     "BridgeRows egress modes and each approved route in force by its ids (route id, advertiser and the route rules it serves; QD-764);",
 	},
+	{
+		// QD-828's list version, after v20's
+		question: "team-m6-07-scim-bearer-row",
+		block:    "# metadata_list.yml v20;",
+		list:     "# metadata_list.yml v21;",
+	},
+	{
+		// QD-828: v21's line, after v20's
+		question: "team-m6-07-scim-bearer-row",
+		block:    "# and the route rules each serves, which §17.8's statements already show.\n",
+		list: "# and the route rules each serves, which §17.8's statements already show.\n" +
+			"# v21, updated 2026-11-15 for the owner's answer QD-828 (team-m6-07-scim-bearer-row), adds to api-2 the SHA-256 of\n" +
+			"# the team's SCIM bearer, network_team.scim_token_sha256, which api keeps while SCIM is on.\n",
+	},
+	{
+		// QD-828: api-2's sees gains the SHA-256 of the team's SCIM bearer, which POST /network/scim-token sets and
+		// clears; a hash of a server-issued secret, so no new disclosure
+		question: "team-m6-07-scim-bearer-row",
+		block:    "is issued or registered; team settings\n",
+		list:     "is issued or registered; team settings; the team's SCIM bearer's SHA-256, while SCIM is on\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
