@@ -352,7 +352,9 @@ func (self *urNetworkClients) intake() (*sidecar.GkmApi, *sidecar.GkmHints, erro
 // Hands the GkmApi the repo scopes the newest state the key client was given grants this sidecar at gkm, each repo's
 // strongest role by §8's table (AclState.EvsAccess for gkm's audience, as the exchange grants them), so its tokens
 // carry them in batches; nothing before the api or a state. A role the state no longer grants leaves the batches, and
-// a call presents its own scope where its repo is in none.
+// a call presents its own scope where its repo is in none. A joining device's unconfirmed state asks for the config
+// repo's alone (QD-817), which taking its Welcome needs, a call such as gkm's Welcomes presenting a batch; what the
+// exchange grants is still api's to judge on its own log.
 func (self *urNetworkClients) setRepoScopes() {
 	self.scopesLock.Lock()
 	defer self.scopesLock.Unlock()
@@ -361,7 +363,8 @@ func (self *urNetworkClients) setRepoScopes() {
 		defer self.stateLock.Unlock()
 		return self.api, self.clock
 	}()
-	state, ok := self.gkm.newestState().(*sidecar.ConfigState)
+	view, configRepoId, confirmed := self.gkm.joiningState()
+	state, ok := view.(*sidecar.ConfigState)
 	identity := self.running.Identity()
 	if api == nil || !ok || identity == nil {
 		return
@@ -377,6 +380,9 @@ func (self *urNetworkClients) setRepoScopes() {
 	subject := sidecar.AclSidecarSubject(identity.SidecarId)
 	scopes := []sidecar.GkmRepoScope{}
 	for _, repoId := range acl.RepoIds() {
+		if !confirmed && repoId != configRepoId {
+			continue
+		}
 		rights := acl.EvsAccess(subject, repoId, sidecar.AclTokenAudienceGkm, now).Rights
 		role := ""
 		switch {
@@ -879,6 +885,7 @@ func (self *urNetworkGkm) AuthUnconfirmed(state sidecar.GkmAuthView, configRepoI
 	if !kept {
 		return
 	}
+	self.clients.setRepoScopes()
 	if group, err := self.group(); err == nil {
 		group.AuthUnconfirmed(state, configRepoId)
 	}
