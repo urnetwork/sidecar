@@ -91,6 +91,17 @@ type RecordReadEntry struct {
 	Salt []byte
 	// The body did not open, did not commit, or broke its kind's caps: shown as invalid, its header standing.
 	BodyInvalid bool
+	// RecordEntry.version as stored, an absent one reading 1.
+	Version uint32
+	// What body_commitment opens with where that is not Body: a version-2 entry's AgentSignedBody as stored, and the
+	// sealed plaintext of an entry whose version this reader does not know. Nil for version 1, and gone with Body.
+	Sealed []byte
+	// A version this reader does not know: the entry is kept, its header verified and its body shown generically, so
+	// Body is nil and nothing parses Sealed (RECORD.md section 5.3's agent key row, for the versions after it).
+	BodyGeneric bool
+	// What a version-2 entry's agent signature came to (RECORD-M6-04); empty for version 1, whose agent is the
+	// writer's word alone.
+	AgentProvenance RecordAgentProvenance
 	// The header's tainted: reading its text taints the reader's run first (§16.6, I-9).
 	Flagged bool
 	// time_ms of the earliest push holding a copy, which evs bounds where time_millis is the writer's word.
@@ -107,6 +118,7 @@ func (self *RecordReadEntry) clone() *RecordReadEntry {
 	clone.SignedBytes = bytes.Clone(self.SignedBytes)
 	clone.Body = bytes.Clone(self.Body)
 	clone.Salt = bytes.Clone(self.Salt)
+	clone.Sealed = bytes.Clone(self.Sealed)
 	clone.Copies = nil
 	for _, entryCopy := range self.Copies {
 		copied := *entryCopy
@@ -122,6 +134,45 @@ func (self *RecordReadEntry) clone() *RecordReadEntry {
 func (self *RecordReadEntry) Kind() RecordKind {
 	return self.Header.Kind()
 }
+
+// The bytes body_commitment opens with beside Salt (§16.8's disclosure row): the body as stored, and for a version-2
+// entry the AgentSignedBody holding it. What an Opening, a packet or an export with bodies carries; nil without the
+// key and once erased. The reader's own bytes: a caller copies before it keeps them.
+func (self *RecordReadEntry) CommittedBody() []byte {
+	if self.Sealed != nil {
+		return self.Sealed
+	}
+	return self.Body
+}
+
+// What a reader makes of the agent signature inside a version-2 entry (RECORD.md section 5.3's agent key row, QD-159).
+type RecordAgentProvenance string
+
+const (
+	// No certificate rode in the body, so nothing can be checked: the agent is the writer's word, never verified.
+	RecordAgentProvenanceAsserted RecordAgentProvenance = "agent_asserted"
+	// The certificate verified under the writer's identity key and named the entry's agent, the entry fell inside its
+	// life, and the subkey's signature over log_id, entry_id and the body verified.
+	RecordAgentProvenanceVerified RecordAgentProvenance = "verified"
+	// A certificate or signature that does not verify, or a body naming another agent than its header: never
+	// attributed, and alarmed bad_entry. The body stands on the writer's own signature.
+	RecordAgentProvenanceInvalid RecordAgentProvenance = "invalid"
+)
+
+// What opening a version-2 entry's sealed plaintext takes.
+type recordAgentBodyOpenArgs struct {
+	header *StoredRecordHeader
+	// the sealed plaintext, opened and committed to
+	sealed []byte
+	// the writer's identity key as the reader's state admits it
+	identityPublicKey []byte
+	settings          *SidecarAgentSubkeySettings
+}
+
+// Opens a version-2 entry's AgentSignedBody: the kind's body as stored and what its agent signature came to, or an
+// error for bytes that are no AgentSignedBody (record_agent_body.go sets it). Nil on a leg that links no agent
+// provenance, the ios_extension legs, where such an entry shows generically, as a version the reader does not know.
+var recordAgentBodyOpener func(args *recordAgentBodyOpenArgs) ([]byte, RecordAgentProvenance, error)
 
 // What a RecordReader reads with.
 type RecordReaderArgs struct {
@@ -139,6 +190,8 @@ type RecordReaderArgs struct {
 	// entry. The team directory's reader sets it (RecordEntryArrival.UnretainedAtHead), so a device that starts past
 	// a repo item's push still reads it, and the directory's fold holds each kind to its own rule after.
 	UnretainedAtHead bool
+	// The bound an agent subkey's certificate is held to in a version-2 entry (§5.5); nil is the format's default.
+	AgentSubkeys *SidecarAgentSubkeySettings
 }
 
 // The logs this sidecar reads, as verified so far.
@@ -153,6 +206,7 @@ type RecordReader struct {
 	log       Logger
 	// RecordReaderArgs.UnretainedAtHead
 	unretainedAtHead bool
+	agentSubkeys     *SidecarAgentSubkeySettings
 
 	stateLock sync.Mutex
 	logs      map[Id]*recordReadLog
@@ -225,6 +279,10 @@ func NewRecordReader(args *RecordReaderArgs) *RecordReader {
 	if auth == nil {
 		auth = func() RecordAuthView { return RecordAuthUnavailable{} }
 	}
+	agentSubkeys := args.AgentSubkeys
+	if agentSubkeys == nil {
+		agentSubkeys = DefaultSidecarAgentSubkeySettings()
+	}
 	return &RecordReader{
 		sidecarId: args.SidecarId,
 		chain:     NewRecordChainStore(args.Store, args.SidecarId),
@@ -237,6 +295,7 @@ func NewRecordReader(args *RecordReaderArgs) *RecordReader {
 		logs:      map[Id]*recordReadLog{},
 
 		unretainedAtHead: args.UnretainedAtHead,
+		agentSubkeys:     agentSubkeys,
 	}
 }
 
@@ -601,14 +660,46 @@ func (self *RecordReader) openBody(logId Id, writerId Id, entry *RecordReadEntry
 		body, err = RecordOpen(entry.Header, fields.sealedBody, key, salt)
 		clear(key)
 		if err == nil {
+			entry.Version = max(fields.version, recordEntryVersion)
+			var sealed []byte
+			switch {
+			case entry.Version == recordEntryVersion:
+			case entry.Version == recordEntryVersionAgent && recordAgentBodyOpener != nil:
+				// the agent's subkey signed inside the body: the kind's message is the AgentSignedBody's body
+				inner, provenance, openErr := recordAgentBodyOpener(&recordAgentBodyOpenArgs{
+					header: entry.Header, sealed: body, identityPublicKey: self.authNow().IdentityKey(writerId), settings: self.agentSubkeys,
+				})
+				if openErr != nil {
+					entry.BodyInvalid = true
+					clear(body)
+					clear(salt)
+					self.raise(SidecarRecordAlarmBadEntry, logId, &writerId)
+					return
+				}
+				if provenance == RecordAgentProvenanceInvalid {
+					// never attributed; the body stands on the writer's own signature over its commitment
+					self.raise(SidecarRecordAlarmBadEntry, logId, &writerId)
+				}
+				entry.AgentProvenance = provenance
+				sealed = body
+				body = inner
+			default:
+				// a version this reader does not know: kept, its header verified, its body shown generically
+				entry.Sealed = body
+				entry.Salt = salt
+				entry.BodyGeneric = true
+				return
+			}
 			if capErr := RecordBodyValidateStored(entry.Kind(), body); capErr != nil {
 				entry.BodyInvalid = true
 				clear(body)
+				clear(sealed)
 				clear(salt)
 				self.raise(SidecarRecordAlarmOverCap, logId, &writerId)
 				return
 			}
 			entry.Body = body
+			entry.Sealed = sealed
 			entry.Salt = salt
 			return
 		}
@@ -806,6 +897,9 @@ func recordEraseEntryWithLock(entry *RecordReadEntry) {
 	entry.Body = nil
 	clear(entry.Salt)
 	entry.Salt = nil
+	clear(entry.Sealed)
+	entry.Sealed = nil
+	entry.BodyGeneric = false
 	entry.BodyInvalid = false
 	entry.State = RecordEntryErased
 }

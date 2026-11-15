@@ -3377,6 +3377,7 @@ type AgentSignedBody struct {
 	AgentId       []byte                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	KeyId         []byte                 `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
 	Signature     []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	AgentCert     []byte                 `protobuf:"bytes,5,opt,name=agent_cert,json=agentCert,proto3" json:"agent_cert,omitempty"` // QD-159: the Signed AgentCert the subkey's signature checks under, by
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3435,6 +3436,13 @@ func (x *AgentSignedBody) GetKeyId() []byte {
 func (x *AgentSignedBody) GetSignature() []byte {
 	if x != nil {
 		return x.Signature
+	}
+	return nil
+}
+
+func (x *AgentSignedBody) GetAgentCert() []byte {
+	if x != nil {
+		return x.AgentCert
 	}
 	return nil
 }
@@ -5535,12 +5543,14 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\x04runs\x18\b \x01(\rR\x04runs\x12*\n" +
 	"\x11first_seen_millis\x18\t \x01(\x03R\x0ffirstSeenMillis\x12(\n" +
 	"\x10last_seen_millis\x18\n" +
-	" \x01(\x03R\x0elastSeenMillis\"u\n" +
+	" \x01(\x03R\x0elastSeenMillis\"\x94\x01\n" +
 	"\x0fAgentSignedBody\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\fR\x04body\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\fR\aagentId\x12\x15\n" +
 	"\x06key_id\x18\x03 \x01(\fR\x05keyId\x12\x1c\n" +
-	"\tsignature\x18\x04 \x01(\fR\tsignature\"I\n" +
+	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x1d\n" +
+	"\n" +
+	"agent_cert\x18\x05 \x01(\fR\tagentCert\"I\n" +
 	"\aOpening\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\fR\x06header\x12\x12\n" +
 	"\x04salt\x18\x02 \x01(\fR\x04salt\x12\x12\n" +

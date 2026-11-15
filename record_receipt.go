@@ -7,8 +7,14 @@
 //
 //	entry     RecordHeader kind read, source observed, with no run, agent or action id, which are the reader's own;
 //	          tainted by section 5.3's closed rule from the request's run; ReadBody{object ids <= 64, purpose} with
-//	          read_log_id empty (the audit reader's second receipt, to T, is RECORD-M6-04's); one entry a deposit,
-//	          within §11.12's 4 KiB
+//	          read_log_id empty; one entry a deposit, within §11.12's 4 KiB
+//	audit     a Team's audit reader files a second read, to the team record, after the vault's, so admins can answer
+//	          who read what (RECORD-M6-04; RECORD.md section 16.2's reading 5): the same objects and purpose with
+//	          read_log_id the repo read, sealed and journaled once evs committed the vault's receipt and before
+//	          Deposit returns, so before anything is decrypted, then carried by the writer's own pushes or deposits
+//	          to T as any entry; an audit reader that T takes nothing from is refused its read. An EvsShare subject's
+//	          reads stay between it and the author: only a sidecar the state lists as the repo's audit reader files
+//	          one, and a state that does not say who that is files none
 //	chain     the writer's chain store: a receipt takes this sidecar's next seq in the repo, sealed and journaled as
 //	          any entry (record_seal.go), never through Append, and the writer's push loop leaves journaled read
 //	          entries to this path (record_writer.go's load)
@@ -154,6 +160,48 @@ type recordReceiptDocument struct {
 	ObjectIds [][]byte `json:"object_ids"`
 	// the UTC day, time.DateOnly, on which evs's commit was taken; empty while pending
 	CommittedDay string `json:"committed_day,omitempty"`
+	// the seq of the audit reader's second read in the team record's chain, once sealed, so a retry seals no other
+	AuditSeq uint64 `json:"audit_seq,omitempty"`
+}
+
+// What a state shows of a repo's audit reader, beside RecordAuthView: ACL's AclState.AuditReaders, which TEAM's
+// ConfigState answers. A state that does not answer it names no audit reader, so no read is reported to the team
+// record on a guess.
+type RecordAuditView interface {
+	// The sidecars the audit block makes readers of the repo at the time given: none before its AuditOptIn has
+	// reached a base, after an AuditOptOut or past the opt-in's not_after.
+	AuditReaders(repoId Id, at time.Time) []Id
+}
+
+// Whether the state lists sidecarId as repoId's audit reader at a time: false for a state that does not say.
+func RecordAuditReads(auth RecordAuthView, repoId Id, sidecarId Id, at time.Time) bool {
+	auditView, ok := auth.(RecordAuditView)
+	if !ok || auditView == nil {
+		return false
+	}
+	return slices.Contains(auditView.AuditReaders(repoId, at), sidecarId)
+}
+
+// Whether a journaled read entry is a receipt, which goes out through Deposit, and not the audit reader's second
+// read in the team record, which names the log read and goes out with the writer's own entries. One that does not
+// open reads as a receipt, as before.
+func recordJournaledReceipt(sealed *RecordSealedEntry) bool {
+	header, err := sealed.Header()
+	if err != nil || header.Kind() != RecordKindRead {
+		return false
+	}
+	if len(sealed.Key) != RecordKeyByteCount || len(sealed.Salt) != RecordSaltByteCount {
+		return true
+	}
+	opened, err := RecordOpen(header, sealed.SealedBody, sealed.Key, sealed.Salt)
+	if err != nil {
+		return true
+	}
+	body := &protocol.ReadBody{}
+	if err := proto.Unmarshal(opened, body); err != nil {
+		return true
+	}
+	return len(body.GetReadLogId()) == 0
 }
 
 // The file of a log's receipt at seq.
@@ -463,7 +511,7 @@ func (self *RecordReceipts) journaledReceipts(logId Id) (map[uint64]*RecordSeale
 	}
 	receipts := map[uint64]*RecordSealedEntry{}
 	for _, entry := range entries {
-		if header, err := entry.Header(); err == nil && header.Kind() == RecordKindRead {
+		if recordJournaledReceipt(entry) {
 			receipts[entry.Seq] = entry
 			continue
 		}
@@ -606,7 +654,76 @@ func (self *RecordReceipts) send(ctx context.Context, receiptLog *recordReceiptL
 		}
 		return fmt.Errorf("%w: seq %d in log %s: %w", ErrRecordReceiptRefused, pending.document.Seq, receiptLog.logId, err)
 	}
+	// the audit reader's second read, journaled before the read it reports may decrypt anything
+	if err := self.auditRead(receiptLog, pending); err != nil {
+		return fmt.Errorf("%w: seq %d in log %s: the audit reader's read to the team record: %w", ErrRecordReceiptRefused, pending.document.Seq, receiptLog.logId, err)
+	}
 	self.committed(receiptLog, pending)
+	return nil
+}
+
+// The audit reader's second read, to the team record, for a receipt evs just committed: see the file header's audit
+// row. Nothing for any other reader, in a network with no team record, or once this receipt's file names one. The
+// receipt stays pending when this fails, so the read is refused and the next Deposit, which evs answers with the
+// commit it made, comes here again.
+func (self *RecordReceipts) auditRead(receiptLog *recordReceiptLog, pending *recordReceiptPending) error {
+	if pending.document.AuditSeq != 0 {
+		return nil
+	}
+	writer := self.writer
+	auth := writer.auth()
+	teamRecordId, _ := recordTeamLogs(auth)
+	if teamRecordId == nil || recordIsTeamLog(auth, receiptLog.logId) {
+		return nil
+	}
+	if !RecordAuditReads(auth, receiptLog.logId, writer.sidecarId, writer.clock.Now()) {
+		// an EvsShare subject's reads stay between it and the author
+		return nil
+	}
+	deposit, ok := recordLogMode(auth, writer.sidecarId, *teamRecordId)
+	pin := auth.Pin()
+	if !ok || pin == nil {
+		return fmt.Errorf("%w: the team record takes nothing from this sidecar", ErrRecordReceiptNotDepositor)
+	}
+	body := &protocol.ReadBody{Purpose: pending.document.Purpose, ObjectIds: pending.document.ObjectIds, ReadLogId: receiptLog.logId.Bytes()}
+	if err := RecordBodyValidate(RecordKindRead, body); err != nil {
+		return fmt.Errorf("%w: %v", ErrRecordReceiptInvalid, err)
+	}
+	tainted := true
+	if header, err := pending.sealed.Header(); err == nil {
+		// as the vault's receipt was sealed, by the read's run
+		tainted = header.Header.GetTainted()
+	}
+	sealed, err := func() (*RecordSealedEntry, error) {
+		writer.sealLock.RLock()
+		defer writer.sealLock.RUnlock()
+		sealed, err := RecordSeal(&RecordSealEnv{Chain: writer.chain, Sign: writer.sign, Random: writer.random}, &RecordSealArgs{
+			LogId:         *teamRecordId,
+			Kind:          RecordKindRead,
+			Source:        RecordSourceObserved,
+			AgentSource:   RecordAgentSourceNone,
+			TimeMillis:    writer.clock.Now().UnixMilli(),
+			Tainted:       tainted,
+			PolicyVersion: pin.GetVersion(),
+			Body:          body,
+		})
+		if err != nil {
+			return nil, err
+		}
+		writer.enqueue(&recordRoute{logId: *teamRecordId, deposit: deposit}, sealed, RecordKindRead)
+		return sealed, nil
+	}()
+	if err != nil {
+		return err
+	}
+	marked := *pending.document
+	marked.AuditSeq = sealed.Seq
+	if err := self.writeDocument(&marked); err != nil {
+		// the entry is journaled and goes out; a retry of this receipt seals one more, which reports the same read
+		writer.log.Warningf("[record]an audit read's seq was not kept, so a retry files it again: %s", err)
+		return err
+	}
+	pending.document = &marked
 	return nil
 }
 

@@ -2,13 +2,21 @@
 // scope, an ephemeral or read_only subject, retirement by the subject itself, the subject's revocation and park ending
 // what it serves, no key or grant added, and the designation surviving a fold at every reader; a SponsorSet by an admin
 // naming a tagged sidecar's member.
+//
+// TEAM-M10-02: SearchIndexersFor as DESIGN-DETAILS 7.2.2's E1 to E6, the rows of 7.6's TestEligibleTable this function
+// decides, over a Team with two members, an EvsShare'd vault, a tagged indexer and an audit reader, and over a personal
+// network. SEARCH-M10-32's verdict table has its own tests of the same names, so these carry the function's.
 
 package sidecar
 
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -121,5 +129,337 @@ func TestASponsorSetNamesATaggedSidecarsSponsor(t *testing.T) {
 	if _, err := net.log.State().Acl(); errors.Is(err, ErrConfigRule) {
 		t.Fatal(err)
 	}
+	net.everyReaderAgrees()
+}
+
+// Every designation opens and offers search.
+func testConfigSearchServices(indexer ConfigIndexer) ([]protocol.IndexerService, bool) {
+	return []protocol.IndexerService{protocol.IndexerService_INDEXER_SERVICE_SEARCH}, true
+}
+
+// A Team for 7.2.2's rows: Dana and Ben, each with a laptop, a phone and a NAS that is its member's search indexer;
+// an auditor with a laptop and a NAS, its member's indexer too, whom an audit block lets read every vault; the
+// network Owner's device and a tagged agent as network-scope indexers; Dana's vault, shared by EvsShare with Ben's
+// phone and NAS, the Owner's device and the agent; Dana's mailbox and secret, Ben's vault, and a team repo every device
+// named here reads but the laptops of Dana and Ben and the auditor's NAS.
+type testConfigSearchTeam struct {
+	net *testConfigNet
+
+	dana, ben, auditor                 Id
+	danaLaptop, danaPhone, danaNas     testConfigDevice
+	benLaptop, benPhone, benNas        testConfigDevice
+	auditorLaptop, auditorNas          testConfigDevice
+	agent                              testConfigDevice
+	danaVault, danaMailbox, danaSecret Id
+	benVault, teamRepo                 Id
+}
+
+func newTestConfigSearchTeam(t *testing.T) *testConfigSearchTeam {
+	t.Helper()
+	net := newTestConfigNet(t)
+	self := &testConfigSearchTeam{net: net}
+	self.dana, self.danaLaptop = net.consentedMember("dana")
+	self.ben, self.benLaptop = net.consentedMember("ben")
+	self.auditor, self.auditorLaptop = net.consentedMember("auditor")
+	self.danaPhone, self.danaNas = net.device("dana phone", self.dana), net.device("dana nas", self.dana)
+	self.benPhone, self.benNas = net.device("ben phone", self.ben), net.device("ben nas", self.ben)
+	self.auditorNas = net.device("auditor nas", self.auditor)
+	net.admitDevice(self.danaLaptop, self.danaPhone, 0)
+	net.admitDevice(self.danaLaptop, self.danaNas, 0)
+	net.admitDevice(self.benLaptop, self.benPhone, 0)
+	net.admitDevice(self.benLaptop, self.benNas, 0)
+	net.admitDevice(self.auditorLaptop, self.auditorNas, 0)
+
+	// the Owner's tag for the agent, and an audit block naming the auditor's member over every vault
+	tagId, auditAtom := testConfigId("tag indexer"), testConfigId("audit readers")
+	optIn, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.AuditOptIn{
+		ReaderAtoms: [][]byte{auditAtom.Bytes()}, NotAfter: net.timeMs + 24*testConfigHourMs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	net.withAclRows(func(rows *protocol.AclRows) {
+		rows.Atoms = append(rows.Atoms,
+			&protocol.AclAtom{Atom: tagId.Bytes(), TagOwnerMemberIds: [][]byte{net.ownerMemberId.Bytes()}},
+			&protocol.AclAtom{Atom: auditAtom.Bytes(), MemberIds: [][]byte{self.auditor.Bytes()}},
+		)
+		rows.Audit = &protocol.AclAudit{
+			ReaderAtoms: [][]byte{auditAtom.Bytes()},
+			RepoKinds:   []uint32{uint32(protocol.RepoKind_REPO_KIND_VAULT)},
+			AuditOptIn:  optIn,
+		}
+	})
+	self.agent = net.device("agent indexer", Id{})
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(self.agent, []Id{tagId}, false, net.timeMs+testConfigHourMs, 0))
+
+	create := func(signer testConfigDevice, label string, kind protocol.RepoKind) Id {
+		repoId := testConfigId(label)
+		net.mustPost(signer, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{Header: net.header(), RepoId: repoId.Bytes(), Kind: kind})
+		return repoId
+	}
+	self.danaVault = create(self.danaLaptop, "dana vault", protocol.RepoKind_REPO_KIND_VAULT)
+	self.danaMailbox = create(self.danaLaptop, "dana mailbox", protocol.RepoKind_REPO_KIND_MAILBOX)
+	self.danaSecret = create(self.danaLaptop, "dana secret", protocol.RepoKind_REPO_KIND_SECRET)
+	self.benVault = create(self.benLaptop, "ben vault", protocol.RepoKind_REPO_KIND_VAULT)
+	self.teamRepo = create(net.owner, "team repo", protocol.RepoKind_REPO_KIND_GENERAL)
+	for _, subject := range []testConfigDevice{self.benPhone, self.benNas, net.owner, self.agent} {
+		net.mustPost(self.danaLaptop, bridge.SignedType_SIGNED_EVS_SHARE, &protocol.EvsShare{
+			Header: net.header(), RepoId: self.danaVault.Bytes(), Subject: subject.sidecarId.Bytes(),
+		})
+	}
+	for _, reader := range []testConfigDevice{self.danaPhone, self.danaNas, self.benPhone, self.benNas, self.auditorLaptop, self.agent} {
+		self.grantTeamRepo(reader)
+	}
+
+	network, member := protocol.IndexerScope_INDEXER_SCOPE_NETWORK, protocol.IndexerScope_INDEXER_SCOPE_MEMBER
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(net.owner, network, false))
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(self.agent, network, false))
+	net.mustPost(self.danaLaptop, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(self.danaNas, member, false))
+	net.mustPost(self.benLaptop, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(self.benNas, member, false))
+	net.mustPost(self.auditorLaptop, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(self.auditorNas, member, false))
+
+	// what makes each refusal below the predicate's own: the devices it refuses do read the repo
+	self.mustRead(self.danaVault, self.danaPhone, self.danaNas, self.benPhone, self.benNas, net.owner, self.agent, self.auditorLaptop, self.auditorNas)
+	self.mustRead(self.danaMailbox, self.danaPhone, self.danaNas)
+	self.mustRead(self.danaSecret, self.danaPhone, self.danaNas)
+	self.mustRead(self.teamRepo, self.danaPhone, self.danaNas, self.benPhone, self.benNas, net.owner, self.agent, self.auditorLaptop)
+	return self
+}
+
+// Grants a device reading of the team repo, by its creator.
+func (self *testConfigSearchTeam) grantTeamRepo(reader testConfigDevice) {
+	self.net.t.Helper()
+	self.net.mustPost(self.net.owner, bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{
+		Header: self.net.header(), RepoId: self.teamRepo.Bytes(), Subject: reader.sidecarId.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_READER,
+	})
+}
+
+// Fails the test unless every device is among the repo's readers at the tip.
+func (self *testConfigSearchTeam) mustRead(repoId Id, devices ...testConfigDevice) {
+	self.net.t.Helper()
+	readers := self.net.log.State().RepoReaders(repoId)
+	for _, device := range devices {
+		if !slices.Contains(readers, device.sidecarId) {
+			self.net.t.Fatalf("%s does not read %s", device.sidecarId, repoId)
+		}
+	}
+}
+
+// The indexers that answer searcher over the repo at the net's tip must be exactly want.
+func testConfigExpectSearchIndexers(t *testing.T, net *testConfigNet, label string, searcher testConfigDevice, repoId Id,
+	services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool), want ...testConfigDevice) {
+	t.Helper()
+	wantIds := []Id{}
+	for _, device := range want {
+		wantIds = append(wantIds, device.sidecarId)
+	}
+	slices.SortFunc(wantIds, Id.Cmp)
+	got := slices.Clone(net.log.State().SearchIndexersFor(searcher.sidecarId, repoId, services))
+	slices.SortFunc(got, Id.Cmp)
+	if !slices.Equal(got, wantIds) {
+		t.Errorf("%s: answered by %v, want %v", label, got, wantIds)
+	}
+}
+
+// 7.2.2's E4 to E6 over the Team, each row a searcher and a repo: an owner-bound repo goes only to its owner's
+// consented member-scope indexers, whoever else reads it and at whatever scope; a team repo to every network-scope
+// indexer and the searcher's own member's; a barred kind and a repo the searcher does not read to none.
+func TestSearchIndexersForEligibleTable(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	net := team.net
+	configRepoId := Id(net.log.State().Genesis().GetConfigRepoId())
+	cases := []struct {
+		label    string
+		searcher testConfigDevice
+		repoId   Id
+		want     []testConfigDevice
+	}{
+		{label: "a member's own vault", searcher: team.danaPhone, repoId: team.danaVault, want: []testConfigDevice{team.danaNas}},
+		{label: "a member's own mailbox", searcher: team.danaPhone, repoId: team.danaMailbox, want: []testConfigDevice{team.danaNas}},
+		{label: "another member's own vault", searcher: team.benPhone, repoId: team.benVault, want: []testConfigDevice{team.benNas}},
+		// 7.1's A: Ben's NAS reads Dana's vault and is Ben's indexer, and Dana never consented it
+		{label: "a vault shared with the searcher", searcher: team.benPhone, repoId: team.danaVault, want: []testConfigDevice{team.danaNas}},
+		{label: "a vault the searcher does not read", searcher: team.danaPhone, repoId: team.benVault},
+		// the audit reader is neither a device of the owner nor a share's subject, though its own indexer reads too
+		{label: "the audit reader", searcher: team.auditorLaptop, repoId: team.danaVault},
+		// the Owner's device and the agent read by a share and index the network, and answer none of the rows above; as
+		// a share's subject the Owner's device is itself answered by the vault owner's indexer
+		{label: "another share's subject", searcher: net.owner, repoId: team.danaVault, want: []testConfigDevice{team.danaNas}},
+		{label: "an indexer is not asked of itself", searcher: team.danaNas, repoId: team.danaVault},
+		{label: "the owner's laptop", searcher: team.danaLaptop, repoId: team.danaVault, want: []testConfigDevice{team.danaNas}},
+		{label: "a secret", searcher: team.danaPhone, repoId: team.danaSecret},
+		{label: "the config", searcher: team.danaPhone, repoId: configRepoId},
+		{label: "an unknown repo", searcher: team.danaPhone, repoId: testConfigId("no such repo")},
+		{label: "a team repo, Dana", searcher: team.danaPhone, repoId: team.teamRepo, want: []testConfigDevice{net.owner, team.agent, team.danaNas}},
+		{label: "a team repo, Ben", searcher: team.benPhone, repoId: team.teamRepo, want: []testConfigDevice{net.owner, team.agent, team.benNas}},
+		{label: "a team repo, the auditor, whose indexer does not read it", searcher: team.auditorLaptop, repoId: team.teamRepo, want: []testConfigDevice{net.owner, team.agent}},
+		{label: "a team repo the searcher does not read", searcher: team.danaLaptop, repoId: team.teamRepo},
+		{label: "a tagged searcher", searcher: team.agent, repoId: team.teamRepo},
+		{label: "an unknown searcher", searcher: net.device("never admitted", team.dana), repoId: team.teamRepo},
+	}
+	for _, c := range cases {
+		testConfigExpectSearchIndexers(t, net, c.label, c.searcher, c.repoId, testConfigSearchServices, c.want...)
+	}
+	net.everyReaderAgrees()
+}
+
+// 7.1's A on the function alone: Dana shares her vault with Ben's phone and Ben's NAS, Ben's search indexer. Ben's
+// search of it goes to Dana's indexer and never to his own, and to none once Dana has no indexer; a share that names
+// Ben's member, not a device, reads the same; and a share revoked ends it.
+func TestSearchIndexersForAnOwnerBoundRepoNeedsItsOwnersDevice(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	net := team.net
+	testConfigExpectSearchIndexers(t, net, "the shared vault", team.benPhone, team.danaVault, testConfigSearchServices, team.danaNas)
+	// the indexer's side: Ben's NAS, asked by Ben's phone, does not find itself in the answer
+	if slices.Contains(net.log.State().SearchIndexersFor(team.benPhone.sidecarId, team.danaVault, testConfigSearchServices), team.benNas.sidecarId) {
+		t.Fatal("a device the vault's owner never consented answers searches of it")
+	}
+	net.mustPost(team.danaNas, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(team.danaNas, protocol.IndexerScope_INDEXER_SCOPE_MEMBER, true))
+	testConfigExpectSearchIndexers(t, net, "the owner has no indexer", team.benPhone, team.danaVault, testConfigSearchServices)
+	testConfigExpectSearchIndexers(t, net, "the owner itself then", team.danaPhone, team.danaVault, testConfigSearchServices)
+	net.mustPost(team.danaLaptop, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(team.danaNas, protocol.IndexerScope_INDEXER_SCOPE_MEMBER, false))
+
+	// Ben's laptop reads only once a share names Ben's member
+	testConfigExpectSearchIndexers(t, net, "a device no share names", team.benLaptop, team.danaVault, testConfigSearchServices)
+	net.mustPost(team.danaLaptop, bridge.SignedType_SIGNED_EVS_SHARE, &protocol.EvsShare{Header: net.header(), RepoId: team.danaVault.Bytes(), Subject: team.ben.Bytes()})
+	testConfigExpectSearchIndexers(t, net, "a share of the member", team.benLaptop, team.danaVault, testConfigSearchServices, team.danaNas)
+
+	// a share that expires ends with no device online
+	expires := net.timeMs + testConfigHourMs
+	net.mustPost(team.danaLaptop, bridge.SignedType_SIGNED_EVS_SHARE, &protocol.EvsShare{
+		Header: net.header(), RepoId: team.danaMailbox.Bytes(), Subject: team.benPhone.sidecarId.Bytes(), Expires: expires,
+	})
+	testConfigExpectSearchIndexers(t, net, "a share with an expiry ahead", team.benPhone, team.danaMailbox, testConfigSearchServices, team.danaNas)
+	net.tickAt(expires + 1000)
+	testConfigExpectSearchIndexers(t, net, "a share past its expiry", team.benPhone, team.danaMailbox, testConfigSearchServices)
+	testConfigExpectSearchIndexers(t, net, "its owner past the share's expiry", team.danaPhone, team.danaMailbox, testConfigSearchServices, team.danaNas)
+	net.everyReaderAgrees()
+}
+
+// E1 and E3: an indexer an active Suspend names serves nothing and is in no listing until its Unsuspend, a suspended
+// searcher is answered by none, an ephemeral searcher by none though it reads the repo and its member has an indexer,
+// and a tagged indexer past its not_after drops out.
+func TestSearchIndexersForStandingDevicesOnly(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	net := team.net
+	suspend := func(device testConfigDevice, label string) {
+		net.mustPost(net.owner, bridge.SignedType_SIGNED_SUSPEND, &bridge.Suspend{Header: net.header(), Subject: device.sidecarId.Bytes(), SuspendId: aclTestSuspendId(label)})
+	}
+	unsuspend := func(device testConfigDevice, label string) {
+		net.mustPost(net.owner, bridge.SignedType_SIGNED_UNSUSPEND, &bridge.Unsuspend{Header: net.header(), Subject: device.sidecarId.Bytes(), SuspendId: aclTestSuspendId(label)})
+	}
+	listed := func(device testConfigDevice) bool {
+		return slices.ContainsFunc(net.log.State().Indexers(), func(indexer ConfigIndexer) bool { return indexer.SidecarId == device.sidecarId })
+	}
+
+	suspend(team.danaNas, "indexer")
+	if listed(team.danaNas) || len(net.log.State().IndexerDesignations(team.danaNas.sidecarId)) != 0 {
+		t.Error("a suspended subject is still listed as serving")
+	}
+	testConfigExpectSearchIndexers(t, net, "a suspended indexer, the vault", team.danaPhone, team.danaVault, testConfigSearchServices)
+	testConfigExpectSearchIndexers(t, net, "a suspended indexer, the team repo", team.danaPhone, team.teamRepo, testConfigSearchServices, net.owner, team.agent)
+	unsuspend(team.danaNas, "indexer")
+	if !listed(team.danaNas) {
+		t.Error("the Unsuspend did not restore the designation")
+	}
+	testConfigExpectSearchIndexers(t, net, "after the Unsuspend", team.danaPhone, team.danaVault, testConfigSearchServices, team.danaNas)
+
+	suspend(team.benPhone, "searcher")
+	testConfigExpectSearchIndexers(t, net, "a suspended searcher, the team repo", team.benPhone, team.teamRepo, testConfigSearchServices)
+	testConfigExpectSearchIndexers(t, net, "a suspended searcher, its vault", team.benPhone, team.benVault, testConfigSearchServices)
+	unsuspend(team.benPhone, "searcher")
+	testConfigExpectSearchIndexers(t, net, "the searcher after its Unsuspend", team.benPhone, team.benVault, testConfigSearchServices, team.benNas)
+
+	// an ephemeral device of Dana that a grant lets read the team repo
+	worker := net.device("dana worker", team.dana)
+	net.mustPost(team.danaLaptop, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(worker, nil, true, net.timeMs+testConfigHourMs, 0))
+	team.grantTeamRepo(worker)
+	team.mustRead(team.teamRepo, worker)
+	testConfigExpectSearchIndexers(t, net, "an ephemeral searcher", worker, team.teamRepo, testConfigSearchServices)
+
+	// a revoked indexer, which Indexers leaves out
+	net.mustPost(team.benLaptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(team.benNas, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
+	testConfigExpectSearchIndexers(t, net, "a revoked indexer", team.benPhone, team.benVault, testConfigSearchServices)
+
+	// the tagged indexer's admission runs out
+	notAfter := net.log.State().SidecarRow(team.agent.sidecarId).GetNotAfter()
+	net.tickAt(notAfter + 1000)
+	if !listed(team.agent) {
+		t.Fatal("the designation's row went with the admission's not_after")
+	}
+	testConfigExpectSearchIndexers(t, net, "a tagged indexer past not_after", team.danaPhone, team.teamRepo, testConfigSearchServices, net.owner, team.danaNas)
+	net.everyReaderAgrees()
+}
+
+// E2: only a designation whose services open and name search counts, scope by scope, so a device designated at both
+// scopes answers by the scopes that offer search.
+func TestSearchIndexersForCountOnlyScopesThatOfferSearch(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	net := team.net
+	network, member := protocol.IndexerScope_INDEXER_SCOPE_NETWORK, protocol.IndexerScope_INDEXER_SCOPE_MEMBER
+	// Dana's NAS at network scope too
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(team.danaNas, network, false))
+	only := func(scope protocol.IndexerScope) func(indexer ConfigIndexer) ([]protocol.IndexerService, bool) {
+		return func(indexer ConfigIndexer) ([]protocol.IndexerService, bool) {
+			if indexer.Scope == scope {
+				return []protocol.IndexerService{protocol.IndexerService_INDEXER_SERVICE_SEARCH}, true
+			}
+			return []protocol.IndexerService{protocol.IndexerService_INDEXER_SERVICE_MAIL}, true
+		}
+	}
+	// in a network of several members a network designation covers no member's own repo
+	testConfigExpectSearchIndexers(t, net, "search at network scope alone, the vault", team.danaPhone, team.danaVault, only(network))
+	testConfigExpectSearchIndexers(t, net, "search at network scope alone, the team repo", team.benPhone, team.teamRepo, only(network), net.owner, team.agent, team.danaNas)
+	testConfigExpectSearchIndexers(t, net, "search at member scope alone, the vault", team.danaPhone, team.danaVault, only(member), team.danaNas)
+	testConfigExpectSearchIndexers(t, net, "search at member scope alone, the team repo", team.benPhone, team.teamRepo, only(member), team.benNas)
+	unopened := func(indexer ConfigIndexer) ([]protocol.IndexerService, bool) {
+		return []protocol.IndexerService{protocol.IndexerService_INDEXER_SERVICE_SEARCH}, false
+	}
+	testConfigExpectSearchIndexers(t, net, "services that do not open", team.danaPhone, team.danaVault, unopened)
+	testConfigExpectSearchIndexers(t, net, "no services given", team.danaPhone, team.danaVault, nil)
+}
+
+// E5's second line: a personal network's designations are network scope and cover its owner's repos, read as a state
+// that holds one member. Its tagged indexer, consented for no one, answers no owner-bound repo though a share lets it
+// read; and once a second member joins, the network designation covers the team repos alone.
+func TestSearchIndexersForAPersonalNetworksIndexerAnswersItsOwner(t *testing.T) {
+	net := newTestConfigNet(t)
+	phone, nas := net.device("owner phone", net.ownerMemberId), net.device("owner nas", net.ownerMemberId)
+	net.admitDevice(net.owner, phone, 0)
+	net.admitDevice(net.owner, nas, 0)
+	tagId := testConfigId("tag indexer")
+	net.withTagOwner(tagId, net.ownerMemberId)
+	agent := net.device("agent indexer", Id{})
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(agent, []Id{tagId}, false, net.timeMs+testConfigHourMs, 0))
+	mailbox, notes := testConfigId("owner mailbox"), testConfigId("notes")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{Header: net.header(), RepoId: mailbox.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILBOX})
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{Header: net.header(), RepoId: notes.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL})
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_EVS_SHARE, &protocol.EvsShare{Header: net.header(), RepoId: mailbox.Bytes(), Subject: agent.sidecarId.Bytes()})
+	for _, reader := range []testConfigDevice{phone, nas, agent} {
+		net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{
+			Header: net.header(), RepoId: notes.Bytes(), Subject: reader.sidecarId.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_READER,
+		})
+	}
+	network := protocol.IndexerScope_INDEXER_SCOPE_NETWORK
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(nas, network, false))
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(agent, network, false))
+	readers := net.log.State().RepoReadersAt(mailbox, time.UnixMilli(net.timeMs))
+	for _, device := range []testConfigDevice{phone, nas, agent} {
+		if !slices.Contains(readers, device.sidecarId) {
+			t.Fatalf("%s does not read the mailbox", device.sidecarId)
+		}
+	}
+
+	testConfigExpectSearchIndexers(t, net, "the owner's mailbox", phone, mailbox, testConfigSearchServices, nas)
+	testConfigExpectSearchIndexers(t, net, "the owner's mailbox from its first device", net.owner, mailbox, testConfigSearchServices, nas)
+	testConfigExpectSearchIndexers(t, net, "a general repo", phone, notes, testConfigSearchServices, nas, agent)
+
+	// a second member: the state holds two, and a network designation covers no member's own repo
+	net.consentedMember("second")
+	testConfigExpectSearchIndexers(t, net, "the mailbox in a network of two", phone, mailbox, testConfigSearchServices)
+	testConfigExpectSearchIndexers(t, net, "a general repo in a network of two", phone, notes, testConfigSearchServices, nas, agent)
+	// a member designation then covers it again
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_INDEXER_SET, net.indexerSet(nas, protocol.IndexerScope_INDEXER_SCOPE_MEMBER, false))
+	testConfigExpectSearchIndexers(t, net, "the mailbox by a member designation", phone, mailbox, testConfigSearchServices, nas)
 	net.everyReaderAgrees()
 }

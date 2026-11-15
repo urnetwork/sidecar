@@ -47,8 +47,10 @@ const (
 	RecordSealNonceByteCount = chacha20poly1305.NonceSizeX
 
 	recordSealDomain = "urnetwork-sidecar-v1/record-seal"
-	// The RecordEntry.version this build writes. 2 is M6's agent-signed body (RECORD.md section 5.3's agent key row).
-	recordEntryVersion = 1
+	// RecordEntry.version: 1, whose sealed plaintext is the kind's body, and 2, M6's agent-signed body, whose sealed
+	// plaintext is an AgentSignedBody holding it (RECORD.md section 5.3's agent key row, record_agent_body.go).
+	recordEntryVersion      = 1
+	recordEntryVersionAgent = 2
 	// RecordEntry's field numbers (§16.8), which EntryBytes writes by hand so an entry's bytes never move with how
 	// protobuf encodes (record_seal_test.go holds them to the descriptor).
 	recordEntryHeaderField     = 1
@@ -66,6 +68,9 @@ var (
 	// section 5.5's invalid body, which a reader alarms on and shows as invalid, its header standing, and section 5.4's,
 	// which an ingester consumes unrecorded.
 	ErrRecordBodyInvalid = errors.New("record body invalid")
+	// A provenance signer's answer for an agent it will not sign for now: the entry seals version 1, its agent the
+	// writer's word, rather than not at all.
+	ErrRecordAgentUnsigned = errors.New("record agent provenance not signed")
 )
 
 // One entry for one log, as RecordSeal takes it: every header field the writer chooses. Sealing sets the rest:
@@ -105,7 +110,21 @@ type RecordSealArgs struct {
 	// replays from the spool, so a replay after a kill tells a capture it sealed from a new one. Never leaves the
 	// device.
 	CaptureId []byte
+	// Sidecar.SignProvenance, for an entry an agent filed: set with AgentId, the entry seals as version 2, its sealed
+	// plaintext an AgentSignedBody the agent's subkey signs (RECORD.md section 5.3's agent key row). Nil seals
+	// version 1, whose agent is the writer's word. ErrAgentSubkeyRevoked from it seals version 1 too, since this
+	// daemon signs nothing more for a revoked agent, as does ErrRecordAgentUnsigned; any other failure seals nothing.
+	AgentSign RecordAgentSignFunction
 }
+
+// Sidecar.SignProvenance's shape: an agent's subkey signing sealed provenance under one of the provenance purposes,
+// answered with the certificate a reader checks it under (identity_agent.go).
+type RecordAgentSignFunction func(agentId Id, purpose string, message []byte) (*AgentProvenanceSignature, error)
+
+// A version-2 entry's sealed plaintext for body, the agent's subkey signing inside it (record_agent_body.go sets it);
+// false with no error where this daemon signs nothing more for the agent, whose entry then seals version 1. Nil on a
+// leg that links no agent provenance, the ios_extension legs, where every entry seals version 1.
+var recordAgentBodySealer func(sign RecordAgentSignFunction, agentId Id, logId Id, entryId Id, body []byte) ([]byte, bool, error)
 
 // What RecordSeal needs of its sidecar.
 type RecordSealEnv struct {
@@ -137,6 +156,11 @@ type RecordSealedEntry struct {
 	Salt []byte
 	// RecordSealArgs.CaptureId, as the journal kept it.
 	CaptureId []byte
+	// RecordEntry.version: 2 for an agent-signed body, else 1, which 0 reads as.
+	Version uint32
+	// a version-2 entry's sealed plaintext, the AgentSignedBody its commitment covers, from its seal until the writer
+	// has taken what a copy of it opens by; never journaled apart from the sealed body
+	agentBody []byte
 }
 
 // The stored header, parsed from the entry's Signed with the bytes its leaf and signature cover.
@@ -156,7 +180,7 @@ func (self *RecordSealedEntry) SlotRow(keyIndex uint32) *RecordSlotRow {
 	return &RecordSlotRow{KeyIndex: keyIndex, Row: append(row, self.Salt...)}
 }
 
-// The RecordEntry's bytes for a stream file: the stored Signed and sealed_body, version 1, and the slot row's place,
+// The RecordEntry's bytes for a stream file: the stored Signed and sealed_body, its version, and the slot row's place,
 // slotId nil and keyIndex 0 for a deposit, where the ingester re-slots it (RECORD.md section 5.4). The same arguments
 // give the same bytes, however protobuf comes to encode, so a retried push carries exactly what it carried before.
 func (self *RecordSealedEntry) EntryBytes(slotId *Id, keyIndex uint32) []byte {
@@ -170,7 +194,7 @@ func (self *RecordSealedEntry) EntryBytes(slotId *Id, keyIndex uint32) []byte {
 		entry = protowire.AppendBytes(entry, slotId[:])
 	}
 	entry = protowire.AppendTag(entry, recordEntryVersionField, protowire.VarintType)
-	entry = protowire.AppendVarint(entry, recordEntryVersion)
+	entry = protowire.AppendVarint(entry, uint64(max(self.Version, recordEntryVersion)))
 	if keyIndex != 0 {
 		entry = protowire.AppendTag(entry, recordEntryKeyIndexField, protowire.VarintType)
 		entry = protowire.AppendVarint(entry, uint64(keyIndex))
@@ -329,6 +353,21 @@ func RecordSeal(env *RecordSealEnv, args *RecordSealArgs) (*RecordSealedEntry, e
 	testHookSecret("record_entry_key", key)
 	testHookSecret("record_entry_salt", salt)
 
+	// version 2: the agent's subkey signs inside the body, and what is committed to and sealed is the AgentSignedBody
+	version := uint32(recordEntryVersion)
+	var agentBody []byte
+	if args.AgentSign != nil && args.AgentId != nil && recordAgentBodySealer != nil {
+		signedBody, signed, err := recordAgentBodySealer(args.AgentSign, *args.AgentId, args.LogId, entryId, body)
+		if err != nil {
+			return nil, fmt.Errorf("record seal: agent provenance: %w", err)
+		}
+		if signed {
+			agentBody = signedBody
+			body = signedBody
+			version = recordEntryVersionAgent
+		}
+	}
+
 	commitment, err := RecordBodyCommitment(salt, body)
 	if err != nil {
 		return nil, err
@@ -373,6 +412,8 @@ func RecordSeal(env *RecordSealEnv, args *RecordSealArgs) (*RecordSealedEntry, e
 			Key:        key,
 			Salt:       salt,
 			CaptureId:  bytes.Clone(args.CaptureId),
+			Version:    version,
+			agentBody:  agentBody,
 		}, nil
 	})
 }

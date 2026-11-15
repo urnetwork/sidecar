@@ -61,6 +61,25 @@ type fakeApiConfigLog struct {
 	dropped map[uint64]bool
 }
 
+// Installs §16.6's spend check in the verifier of every log this api loads or starts from now on, as api installs the
+// one every reader does (ACL-M2-07); nil, the default, installs none, and every GrantActivate is refused as unbuilt.
+// Call it before the api's first append: a verifier already built keeps what it was built with.
+func (self *FakeApi) SetConfigLogSpendCheck(check sidecar.AclSpendCheck) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.configLogSpendCheck = check
+}
+
+// The settings of a log's verifier at this api.
+func (self *FakeApi) configLogSettings() *sidecar.ConfigLogSettings {
+	settings := sidecar.DefaultConfigLogSettings()
+	settings.Log = sidecar.NewNoopLogger()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	settings.AclSpendCheck = self.configLogSpendCheck
+	return settings
+}
+
 // The network's log, made empty on first use.
 func (self *FakeApi) configLog(networkId sidecar.Id) *fakeApiConfigLog {
 	self.stateLock.Lock()
@@ -186,8 +205,7 @@ func (self *fakeApiConfigLog) loadWithLock(ctx context.Context, api *FakeApi, ge
 		signedGenesis = genesisHint
 	}
 	var log *sidecar.ConfigLog
-	settings := sidecar.DefaultConfigLogSettings()
-	settings.Log = sidecar.NewNoopLogger()
+	settings := api.configLogSettings()
 	if len(entries) == 0 || positions[0] == 1 {
 		log, err = sidecar.NewConfigLogRowsOnly(settings, signedGenesis)
 		if err == nil && 0 < len(entries) {
@@ -282,9 +300,7 @@ func (self *FakeApi) append(ctx context.Context, networkId sidecar.Id, request *
 		if request.genesis == nil {
 			return nil, &ConfigLogRefusal{Status: http.StatusForbidden, Err: errors.New("the network has no log, and only base 1 with its genesis starts one")}
 		}
-		settings := sidecar.DefaultConfigLogSettings()
-		settings.Log = sidecar.NewNoopLogger()
-		log, err := sidecar.NewConfigLogRowsOnly(settings, request.genesis)
+		log, err := sidecar.NewConfigLogRowsOnly(self.configLogSettings(), request.genesis)
 		if err != nil {
 			return nil, &ConfigLogRefusal{Status: http.StatusForbidden, Err: err}
 		}
