@@ -12,10 +12,13 @@
 //   - metrics.go, the metric families and their closed label values.
 //   - platform.go and platform_session.go, the platform role (D-MAIL-10): TLS ended here, then a
 //     go-smtp session that hands each message to PlatformIntake.
+//   - router.go, the router role (D-MAIL-1, D-MAIL-2): the ClientHello, a route by SNI alone, the Find
+//     and open through MxEdgeDialer; route_cache.go, {mxr_<net>} behind an in-process cache;
+//     ingress.go, MailIngress within its bound; ptr.go, the sender's forward-confirmed PTR; splice.go,
+//     the splice, its §15.4 bounds and its lease on meter mx.
 //
-// Two roles stand on this: MAIL-M7-19's router, which routes by SNI and splices, and MAIL-M5-03's
-// platform listener, which NewMxEdgePlatformService starts. Until the router replaces
-// MxEdgeService's handoff, every router session that reaches STARTTLS's 220 closes in the handshake,
-// the temporary failure §15.4 gives anything unroutable, so the router alone delivers nothing and tells
-// no sender no for good.
+// Two roles stand on this: the router, which NewMxEdgeRouterService starts, and the platform listener,
+// which NewMxEdgePlatformService starts. NewMxEdgeService starts the shared front with no role, which
+// no host runs: every session that reaches STARTTLS's 220 closes in the handshake, the temporary
+// failure §15.4 gives anything unroutable.
 package mxedgeservice

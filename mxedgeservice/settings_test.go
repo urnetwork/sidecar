@@ -2,6 +2,7 @@ package mxedgeservice_test
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -84,10 +85,39 @@ platform_recipients: 3
 platform_handshake_timeout: 7s
 platform_idle_timeout: 2m
 platform_session_timeout: 20m
+route_root: root.example
+route_cache_ttl: 3s
+route_cache_entries: 11
+clients: 2
+find_timeout: 1s
+find_max: 4
+accept_ticket_timeout: 6s
+accept_setup_timeout: 20s
+alert_timeout: 3s
+lease_timeout: 4s
+splice_idle_timeout: 9m
+splice_slow_timeout: 8m
+splice_slow_bytes: 2048
+splice_session_timeout: 25m
+splice_message_multiple: 3
+splice_extra_bytes: 4096
+splice_buffer_bytes: 8192
+cold_message_max_bytes: 1048576
+limits_refresh_interval: 2m
+limits_active_window: 20m
+limits_networks: 12
+ptr_timeout: 6s
+ptr_names: 2
+ptr_lookups: 13
+listing_refresh_interval: 4m
+listing_stale_timeout: 12m
+listing_load_timeout: 90s
+listing_prefixes: 14
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defaults := mxedgeservice.DefaultMxEdgeSettings()
 	want := &mxedgeservice.MxEdgeSettings{
 		BannerHostName:              testBannerHostName,
 		DeviationUrl:                testDeviationUrl,
@@ -118,9 +148,45 @@ platform_session_timeout: 20m
 		PlatformHandshakeTimeout:    7 * time.Second,
 		PlatformIdleTimeout:         2 * time.Minute,
 		PlatformSessionTimeout:      20 * time.Minute,
+		RouteRootDomainName:         "root.example",
+		RouteCacheTtl:               3 * time.Second,
+		RouteCacheEntryCount:        11,
+		Clients:                     2,
+		FindTimeout:                 time.Second,
+		FindCount:                   4,
+		AcceptTicketTimeout:         6 * time.Second,
+		AcceptSetupTimeout:          20 * time.Second,
+		AlertTimeout:                3 * time.Second,
+		LeaseTimeout:                4 * time.Second,
+		SpliceIdleTimeout:           9 * time.Minute,
+		SpliceSlowTimeout:           8 * time.Minute,
+		SpliceSlowByteCount:         2048,
+		SpliceSessionTimeout:        25 * time.Minute,
+		SpliceMessageMultiple:       3,
+		SpliceExtraByteCount:        4096,
+		SpliceBufferByteCount:       8192,
+		ColdMessageByteCount:        1048576,
+		LimitsRefreshInterval:       2 * time.Minute,
+		LimitsActiveWindow:          20 * time.Minute,
+		LimitsNetworkCount:          12,
+		PtrTimeout:                  6 * time.Second,
+		PtrNameCount:                2,
+		PtrLookupCount:              13,
+		ListingRefreshInterval:      4 * time.Minute,
+		ListingStaleTimeout:         12 * time.Minute,
+		ListingLoadTimeout:          90 * time.Second,
+		ListingPrefixCount:          14,
+		Ingress:                     defaults.Ingress,
+		Usage:                       defaults.Usage,
+		HostNameMaxByteCount:        defaults.HostNameMaxByteCount,
+		HostLabelMaxByteCount:       defaults.HostLabelMaxByteCount,
+		ReplyUrlMaxByteCount:        defaults.ReplyUrlMaxByteCount,
 	}
-	if *settings != *want {
+	if !reflect.DeepEqual(settings, want) {
 		t.Errorf("loaded %+v, want %+v", settings, want)
+	}
+	if err := settings.ValidateRouter(); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -132,8 +198,12 @@ func TestLoadKeepsDefaultsForWhatAFileLeavesOut(t *testing.T) {
 	want := mxedgeservice.DefaultMxEdgeSettings()
 	want.BannerHostName = testBannerHostName
 	want.DeviationUrl = testDeviationUrl
-	if *settings != *want {
+	if !reflect.DeepEqual(settings, want) {
 		t.Errorf("loaded %+v, want %+v", settings, want)
+	}
+	// the router's file must name its root
+	if err := settings.ValidateRouter(); !errors.Is(err, mxedgeservice.ErrMxEdgeSettingsRefused) || !strings.Contains(err.Error(), "route_root") {
+		t.Errorf("a router with no root: %v", err)
 	}
 }
 
@@ -255,6 +325,36 @@ func TestValidateRefusesEveryNumberAtZero(t *testing.T) {
 		"platform_handshake_timeout": func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformHandshakeTimeout = 0 },
 		"platform_idle_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformIdleTimeout = 0 },
 		"platform_session_timeout":   func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformSessionTimeout = 0 },
+		"route_cache_ttl":            func(settings *mxedgeservice.MxEdgeSettings) { settings.RouteCacheTtl = 0 },
+		"route_cache_entries":        func(settings *mxedgeservice.MxEdgeSettings) { settings.RouteCacheEntryCount = 0 },
+		"clients":                    func(settings *mxedgeservice.MxEdgeSettings) { settings.Clients = 0 },
+		"find_timeout":               func(settings *mxedgeservice.MxEdgeSettings) { settings.FindTimeout = 0 },
+		"find_max":                   func(settings *mxedgeservice.MxEdgeSettings) { settings.FindCount = 0 },
+		"accept_ticket_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.AcceptTicketTimeout = 0 },
+		"accept_setup_timeout":       func(settings *mxedgeservice.MxEdgeSettings) { settings.AcceptSetupTimeout = 0 },
+		"alert_timeout":              func(settings *mxedgeservice.MxEdgeSettings) { settings.AlertTimeout = 0 },
+		"lease_timeout":              func(settings *mxedgeservice.MxEdgeSettings) { settings.LeaseTimeout = 0 },
+		"splice_idle_timeout":        func(settings *mxedgeservice.MxEdgeSettings) { settings.SpliceIdleTimeout = 0 },
+		"splice_slow_timeout":        func(settings *mxedgeservice.MxEdgeSettings) { settings.SpliceSlowTimeout = 0 },
+		"splice_slow_bytes":          func(settings *mxedgeservice.MxEdgeSettings) { settings.SpliceSlowByteCount = 0 },
+		"splice_session_timeout":     func(settings *mxedgeservice.MxEdgeSettings) { settings.SpliceSessionTimeout = 0 },
+		"splice_message_multiple":    func(settings *mxedgeservice.MxEdgeSettings) { settings.SpliceMessageMultiple = 0 },
+		"splice_extra_bytes":         func(settings *mxedgeservice.MxEdgeSettings) { settings.SpliceExtraByteCount = 0 },
+		"splice_buffer_bytes":        func(settings *mxedgeservice.MxEdgeSettings) { settings.SpliceBufferByteCount = 0 },
+		"cold_message_max_bytes":     func(settings *mxedgeservice.MxEdgeSettings) { settings.ColdMessageByteCount = 0 },
+		"limits_refresh_interval":    func(settings *mxedgeservice.MxEdgeSettings) { settings.LimitsRefreshInterval = 0 },
+		"limits_active_window":       func(settings *mxedgeservice.MxEdgeSettings) { settings.LimitsActiveWindow = 0 },
+		"limits_networks":            func(settings *mxedgeservice.MxEdgeSettings) { settings.LimitsNetworkCount = 0 },
+		"ptr_timeout":                func(settings *mxedgeservice.MxEdgeSettings) { settings.PtrTimeout = 0 },
+		"ptr_names":                  func(settings *mxedgeservice.MxEdgeSettings) { settings.PtrNameCount = 0 },
+		"ptr_lookups":                func(settings *mxedgeservice.MxEdgeSettings) { settings.PtrLookupCount = 0 },
+		"listing_refresh_interval":   func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingRefreshInterval = 0 },
+		"listing_stale_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingStaleTimeout = 0 },
+		"listing_load_timeout":       func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingLoadTimeout = 0 },
+		"listing_prefixes":           func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingPrefixCount = 0 },
+		"HostNameMaxByteCount":       func(settings *mxedgeservice.MxEdgeSettings) { settings.HostNameMaxByteCount = 0 },
+		"HostLabelMaxByteCount":      func(settings *mxedgeservice.MxEdgeSettings) { settings.HostLabelMaxByteCount = 0 },
+		"ReplyUrlMaxByteCount":       func(settings *mxedgeservice.MxEdgeSettings) { settings.ReplyUrlMaxByteCount = 0 },
 	} {
 		settings := testSettings()
 		clear(settings)

@@ -229,3 +229,87 @@ func (self *MxEdgeService) PlatformBufferHeld() int64 {
 func (self *MxEdgeService) RecordSession(startTime time.Time, networkId sidecar.Id, byteCount int64, result string) bool {
 	return self.recordSession(&mxSession{startTime: startTime}, networkId, byteCount, result)
 }
+
+// Returns once count PTR lookups have ended, each name readable.
+func (self *MxEdgeService) AwaitPtrLookups(count int) {
+	for {
+		ended, update := self.router.lookups.endCount.Get()
+		if count <= ended {
+			return
+		}
+		<-update
+	}
+}
+
+// How many names the route cache holds.
+func (self *MxEdgeService) RouteCacheLen() int {
+	return self.router.routes.Len()
+}
+
+// The router's MailIngress builder, for the bound's tests.
+func BuildMailIngress(format *sidecar.MailIngressFormatSettings, sender netip.AddrPort, sni string, ehloName string, ptrName string, listings []string, receiveTime time.Time) ([]byte, error) {
+	return buildMailIngress(format, &mxIngressFields{
+		sender:      sender,
+		sni:         sni,
+		ehloName:    ehloName,
+		ptrName:     ptrName,
+		listings:    listings,
+		receiveTime: receiveTime,
+	})
+}
+
+// How many splices are open.
+func (self *MxEdgeService) SpliceCount() int {
+	return len(self.router.splices(nil))
+}
+
+// Returns once count passes of the message limits' loop have finished, the last with its next wait armed.
+func (self *MxEdgeService) AwaitMessageLimitsPass(count uint64) {
+	for {
+		passCount, update := self.router.limits.passCount.Get()
+		if count <= passCount {
+			return
+		}
+		<-update
+	}
+}
+
+// The listings, loading from source on settings' numbers.
+type Listings = mxListings
+
+// Listings with no set until a Load.
+func NewListings(source MxListingSource, settings *MxEdgeSettings, clock sidecar.Clock, metrics sidecar.Metrics) *Listings {
+	return newMxListings(source, settings, clock, newMxMetrics(metrics))
+}
+
+// Loads the mirror once.
+func (self *mxListings) Load(ctx context.Context) {
+	self.load(ctx)
+}
+
+// Returns once count loads of the engine's listings have finished, the last with its next wait armed.
+func (self *MxEdgeService) AwaitListingLoads(count int) {
+	for {
+		loadCount, update := self.router.listings.loadCount.Get()
+		if count <= loadCount {
+			return
+		}
+		<-update
+	}
+}
+
+// Loads of the engine's listings finished so far.
+func (self *MxEdgeService) ListingLoadCount() int {
+	return self.router.listings.loadCount.Value()
+}
+
+// Returns once this many splices are registered.
+func (self *MxEdgeService) AwaitSpliceCount(want int) {
+	for {
+		count, update := self.router.spliceCount.Get()
+		if count == want {
+			return
+		}
+		<-update
+	}
+}
