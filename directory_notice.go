@@ -24,9 +24,9 @@
 // keeps itself (RECORD-M8-01; D-SDK-28, D-MCP-34, §18.7, FS-85, FS-100), through DirectoryPhoneNotices:
 //
 //	leases    q/<h>/<tgt>/ for each target its member approves, by the state now (a repo whose requests this device
-//	          decides; a worker of its member's as far as the client's items name one), and each of its own requests'
-//	          notice paths from its filing until the request closes or not_after + NoticeGrace passes; never the
-//	          cards ref, d/ or r/ (D-MCP-31)
+//	          decides; a worker of its member's, or one it sponsors, as the phone's open view last showed it, since
+//	          a phone sees worker items nowhere else), and each of its own requests' notice paths from its filing
+//	          until the request closes or not_after + NoticeGrace passes; never the cards ref, d/ or r/ (D-MCP-31)
 //	hints     a lease's hint is evs's for the directory's repo, evs:<repo_id> (§11.10's hint row), a wake class, so
 //	          §18.7 wakes the phone with topic class evs and a version, naming no directory, target or request (WK4)
 //	renew     Resync, which the app host runs at each of its resyncs (its open, each wake, hourly while open), renews
@@ -437,6 +437,8 @@ type directoryPhoneDocument struct {
 	Requests map[string]*directoryPhoneRequestRow `json:"requests"`
 	// The requests access_request was raised for, by id in hex, with their not_after, so a restart raises none again.
 	Raised map[string]int64 `json:"raised"`
+	// The workers of this phone's member, or sponsored by it, as its open view last showed them, by id in hex, sorted.
+	Workers []string `json:"workers,omitempty"`
 }
 
 // A phone's notice leases and what it reads at a wake: see the file's header.
@@ -611,6 +613,22 @@ func (self *DirectoryPhoneNotices) wantedLeases(document *directoryPhoneDocument
 			wanted[prefix] = true
 		}
 	}
+	// the workers its view showed, while each is still its member's by the state now
+	auth := self.client.auth()
+	if memberId, isMember := auth.MemberOf(self.client.sidecarId); isMember {
+		for _, workerText := range document.Workers {
+			workerId, err := ParseId(workerText)
+			if err != nil || workerId == self.client.sidecarId {
+				continue
+			}
+			if whoId, ok := DirectoryWhoMember(auth, workerId); !ok || whoId != memberId {
+				continue
+			}
+			if prefix, err := DirectoryNoticePrefix(&protocol.RequestTarget{SidecarId: workerId.Bytes()}); err == nil {
+				wanted[prefix] = true
+			}
+		}
+	}
 	nowMillis := self.client.clock.Now().UnixMilli()
 	grace := self.requests.settings().NoticeGrace.Milliseconds()
 	for _, row := range document.Requests {
@@ -619,6 +637,53 @@ func (self *DirectoryPhoneNotices) wantedLeases(document *directoryPhoneDocument
 		}
 	}
 	return wanted
+}
+
+// What a phone's open view tells its notice leases (§16.11's phones row): the workers of its member's, or sponsored by
+// it, active in what the view shows, which a phone sees nowhere else. Nothing on a client with no phone part. Their
+// prefixes are leased at the next Resync.
+func (self *DirectoryClient) notePhoneView(view *DirectoryView) {
+	if phone := self.PhoneNotices(); phone != nil {
+		phone.noteView(view)
+	}
+}
+
+// Keeps the workers view shows of this phone's member: a complete view's replace the set, and a partial one's only add
+// to it, since a worker it did not fetch may stand.
+func (self *DirectoryPhoneNotices) noteView(view *DirectoryView) {
+	memberId, isMember := self.client.auth().MemberOf(self.client.sidecarId)
+	if !isMember {
+		return
+	}
+	page := view.List(&DirectoryFilter{Kind: DirectoryAnnouncementKindWorker, MemberId: &memberId, ActiveOnly: true})
+	workers := []string{}
+	for _, item := range page.Items {
+		if item.SignerSidecarId != self.client.sidecarId {
+			workers = append(workers, directoryIdText(item.SignerSidecarId))
+		}
+	}
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+	if self.isClosed() {
+		return
+	}
+	document, err := self.load()
+	if err != nil {
+		self.client.log.Infof("[directory]a phone's workers are not kept: %s", err)
+		return
+	}
+	if page.Coverage == nil || !page.Coverage.Complete {
+		workers = append(workers, document.Workers...)
+	}
+	slices.Sort(workers)
+	workers = slices.Compact(workers)
+	if slices.Equal(workers, document.Workers) {
+		return
+	}
+	document.Workers = workers
+	if err := self.keep(document); err != nil {
+		self.client.log.Infof("[directory]a phone's workers are not kept: %s", err)
+	}
 }
 
 // The callback of the lease on path: marks it due and cues the app host.

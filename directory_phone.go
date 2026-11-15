@@ -400,6 +400,8 @@ func (self *DirectoryView) Fetch(ctx context.Context) error {
 		return err
 	}
 	self.fold.Update(self.reader.Entries(self.directoryId))
+	// a phone's notice leases learn its member's workers from what the view shows (directory_notice.go)
+	self.client.notePhoneView(self)
 	return nil
 }
 
