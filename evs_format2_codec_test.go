@@ -575,7 +575,7 @@ func TestEvsFormat2PartsMatchStagedAtTheSeal(t *testing.T) {
 	partStaged := make([][]byte, len(built.Parts))
 	partStaged[0] = EvsEncodeStaged(stagedSegments[:1])
 	partStaged[len(partStaged)-1] = EvsEncodeStaged(stagedSegments[1:])
-	checked, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, partStaged)
+	checked, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, partStaged, built.SlotBodies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,14 +585,14 @@ func TestEvsFormat2PartsMatchStagedAtTheSeal(t *testing.T) {
 	swapped := make([][]byte, len(built.Parts))
 	swapped[0] = EvsEncodeStaged(stagedSegments[1:])
 	swapped[len(swapped)-1] = EvsEncodeStaged(stagedSegments[:1])
-	if _, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, swapped); !errors.Is(err, ErrEvsPushInvalid) {
+	if _, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, swapped, built.SlotBodies); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("staged segments out of their items' order: %v", err)
 	}
 	other, _, _ := evsTestKind5Segment(t, keys, evsTestId("another push"), evsTestId("file"), "part other", evsTestBody(100), nil, Id{})
 	if _, err := EvsCheckPartFormat2(built.Statement, built.Parts[0], EvsEncodeStaged([][]byte{other})); !errors.Is(err, ErrEvsVersioning) {
 		t.Errorf("a part staging another push's segment: %v", err)
 	}
-	if _, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, partStaged[:1]); !errors.Is(err, ErrEvsPushInvalid) {
+	if _, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, partStaged[:1], built.SlotBodies); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("staged bytes for one part of many: %v", err)
 	}
 }

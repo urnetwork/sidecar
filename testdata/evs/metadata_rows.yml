@@ -61,6 +61,7 @@ EvsPushRequest.payload: {number: 2, type: bytes, row: evs-12, sees: "cleartext e
 EvsPushRequest.receipts: {number: 3, type: repeated EvsUploadReceipt, row: evs-4, sees: "upload receipts"}
 EvsPushRequest.staged: {number: 4, type: bytes, row: evs-12, sees: "the staged segments' bytes"}
 EvsPushRequest.part_places: {number: 5, type: repeated EvsPlace, row: evs-22, sees: "and offsets"}
+EvsPushRequest.slot_bodies: {number: 6, type: bytes, row: evs-5, sees: "up to 64 wrapped object keys (ciphertext)"}
 EvsPartRequest.statement: {number: 1, type: bytes, row: evs-12, sees: "Signed EvsPush cleartext"}
 EvsPartRequest.part: {number: 2, type: bytes, row: evs-12, sees: "its EvsPushPart"}
 EvsPartRequest.receipts: {number: 3, type: repeated EvsUploadReceipt, row: evs-4, sees: "upload receipts"}

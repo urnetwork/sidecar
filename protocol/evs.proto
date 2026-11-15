@@ -74,7 +74,9 @@ message EvsPushPart {                   // unsigned; parts_sha256 binds it
   bytes sealed_metadata = 6;            // a slice; sealed_metadata_sha256 covers the slices in order
   bytes changes_root = 7;               // root over this part's changes; the statement's root is over these roots
   bytes sections = 8;                   // its slice of each payload section past fields 3-6, framed as a payload
-                                        // is; joined in part order, the slices are a one-part push's (EVS-FORMAT.md)
+                                        // is; joined in part order, the slices are a one-part push's (EVS-FORMAT.md),
+                                        // but for section 7, the slot bodies, which the seal carries and no part
+                                        // holds (QD-819)
 }
 message EvsEntryVersion {               // what entry_sha256 hashes; in the push record, and folded into idx/
   uint64 version = 1;                   // base_entry_version + 1; a creation's max(the push's effective base
@@ -601,6 +603,10 @@ message EvsPushRequest {                // POST .../push: a one-part push, or th
   repeated EvsUploadReceipt receipts = 3;  // one per new segment, outside the statement (11.13)
   bytes staged = 4;                     // format 2's staged segments, outside every payload hash
   repeated EvsPlace part_places = 5;    // a seal: the record of each part, in part order
+  bytes slot_bodies = 6;                // a seal: the push's payload section 7 whole, its new slots' bodies, outside
+                                        // every hash and in no part, which step 6 writes to slot/ and no record keeps;
+                                        // at most SealSlotBodiesMaxByteCount, 1 MiB; a one-part push sets none, its
+                                        // payload carrying them (QD-819)
 }
 message EvsPartRequest {                // POST .../push/<push_id>/<k>
   bytes statement = 1;

@@ -151,7 +151,7 @@ func TestEvsChangelessPartsAreHeldToTheirPlace(t *testing.T) {
 	partsDigest := sha256.Sum256(partHashes)
 	push.PartsSha256 = partsDigest[:]
 	statement := evsTestResign(t, signer, push)
-	if _, _, err := EvsCheckSeal(statement, parts); !errors.Is(err, ErrEvsPushInvalid) {
+	if _, _, err := EvsCheckSeal(statement, parts, nil); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("a changeless part before a part with a change: %v", err)
 	}
 }
