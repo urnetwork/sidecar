@@ -461,9 +461,9 @@ func (self *DropJob) Settings() *DropSettings {
 	return self.settings
 }
 
-// The barrier at a site, and a test's stop there: an error stops the run as a kill would.
+// A test's stop at the barrier a site has just passed, each site calling testHookBarrier with its own name so the
+// inventory lists it: an error stops the run there, as a kill would.
 func (self *DropJob) step(name string, key string) error {
-	testHookBarrier(name, key)
 	if self.deps.atStep != nil {
 		return self.deps.atStep(name, key)
 	}
@@ -479,17 +479,22 @@ func newDropId() (sidecar.Id, error) {
 
 // Waits so a pass reads at most ReadBytesPerSecond.
 func (self *DropJob) pace(ctx context.Context, byteCount int64) error {
+	return dropPace(ctx, self.clock, self.settings, byteCount)
+}
+
+// Waits on clock as long as byteCount bytes take at settings' ReadBytesPerSecond (§11.13's bound row: 32 MB/s a job).
+func dropPace(ctx context.Context, clock sidecar.Clock, settings *DropSettings, byteCount int64) error {
 	if byteCount <= 0 {
 		return nil
 	}
-	wait := time.Duration(float64(byteCount) / float64(self.settings.ReadBytesPerSecond) * float64(time.Second))
+	wait := time.Duration(float64(byteCount) / float64(settings.ReadBytesPerSecond) * float64(time.Second))
 	if wait <= 0 {
 		return nil
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-self.clock.After(wait):
+	case <-clock.After(wait):
 		return nil
 	}
 }
@@ -908,6 +913,7 @@ func (self *dropJobRun) start(state *DropTableState) error {
 	if err != nil {
 		return err
 	}
+	testHookBarrier(BarrierDropStartBefore, self.key())
 	if err := self.job.step(BarrierDropStartBefore, self.key()); err != nil {
 		return err
 	}
@@ -951,6 +957,7 @@ func (self *dropJobRun) start(state *DropTableState) error {
 	if err != nil {
 		return err
 	}
+	testHookBarrier(BarrierDropStartAfter, self.key())
 	if err := self.job.step(BarrierDropStartAfter, self.key()); err != nil {
 		return err
 	}
@@ -1051,6 +1058,7 @@ func (self *dropJobRun) resolve(table *DropTableState) (*DropTableState, error) 
 	if len(drops) == 0 {
 		return nil, self.end(DropStateDone)
 	}
+	testHookBarrier(BarrierDropResolveBefore, self.key())
 	if err := self.job.step(BarrierDropResolveBefore, self.key()); err != nil {
 		return nil, err
 	}
@@ -1062,6 +1070,7 @@ func (self *dropJobRun) resolve(table *DropTableState) (*DropTableState, error) 
 		return nil, err
 	}
 	self.job.countScan("resolve", resolved.ScanByteCount)
+	testHookBarrier(BarrierDropResolveAfter, self.key())
 	if err := self.job.step(BarrierDropResolveAfter, self.key()); err != nil {
 		return nil, err
 	}
@@ -1129,6 +1138,7 @@ func (self *dropJobRun) round(table *DropTableState) (*DropTableState, error) {
 	}
 	settings := self.job.settings
 	// F4: the horizon first, before any LIST of head/
+	testHookBarrier(BarrierDropHorizonBefore, self.key())
 	if err := self.job.step(BarrierDropHorizonBefore, self.key()); err != nil {
 		return nil, err
 	}
@@ -1136,6 +1146,7 @@ func (self *dropJobRun) round(table *DropTableState) (*DropTableState, error) {
 	if err != nil {
 		return nil, err
 	}
+	testHookBarrier(BarrierDropHorizonAfter, self.key())
 	if err := self.job.step(BarrierDropHorizonAfter, self.key()); err != nil {
 		return nil, err
 	}
@@ -1181,6 +1192,7 @@ func (self *dropJobRun) round(table *DropTableState) (*DropTableState, error) {
 		}
 		return nil, self.wait(why, protocol.EvsDropPhase_EVS_DROP_MARK, self.job.clock.Now().Add(settings.PauseRetryInterval))
 	}
+	testHookBarrier(BarrierDropMarkBefore, self.key())
 	if err := self.job.step(BarrierDropMarkBefore, self.key()); err != nil {
 		return nil, err
 	}
@@ -1192,6 +1204,7 @@ func (self *dropJobRun) round(table *DropTableState) (*DropTableState, error) {
 		return nil, err
 	}
 	self.job.countScan("mark", marked.ScanByteCount)
+	testHookBarrier(BarrierDropMarkAfter, self.key())
 	if err := self.job.step(BarrierDropMarkAfter, self.key()); err != nil {
 		return nil, err
 	}
@@ -1210,6 +1223,7 @@ func (self *dropJobRun) round(table *DropTableState) (*DropTableState, error) {
 		}
 		return nil, self.wait(why, protocol.EvsDropPhase_EVS_DROP_VERIFY, self.job.clock.Now().Add(settings.PauseRetryInterval))
 	}
+	testHookBarrier(BarrierDropVerifyBefore, self.key())
 	if err := self.job.step(BarrierDropVerifyBefore, self.key()); err != nil {
 		return nil, err
 	}
@@ -1230,6 +1244,7 @@ func (self *dropJobRun) round(table *DropTableState) (*DropTableState, error) {
 		return nil, err
 	}
 	self.job.countScan("verify", verified.ScanByteCount)
+	testHookBarrier(BarrierDropVerifyAfter, self.key())
 	if err := self.job.step(BarrierDropVerifyAfter, self.key()); err != nil {
 		return nil, err
 	}
