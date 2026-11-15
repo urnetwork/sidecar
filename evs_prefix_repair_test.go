@@ -812,3 +812,62 @@ func TestEvsPrefixSubjectsReadAgainstTheHead(t *testing.T) {
 		t.Errorf("an unknown atom prints as %q", text)
 	}
 }
+
+// The repair form's twin (16.6's writer bullet; PrefixRulesTwin-DiffOnNewest on the code): under a hook that sends a
+// write over an ignored version as a diff on it, the allowed version's chain rests on the breach's record, and a reader
+// that cannot fetch the breach's segment cannot read the file; the repair form's checkpoint needs nothing of it.
+func TestEvsPrefixWriteOverAnIgnoredVersionAsADiffRestsOnTheIgnoredRecord(t *testing.T) {
+	t.Cleanup(func() { evsPrefixRepairDiffHook = nil })
+	for _, diff := range []bool{false, true} {
+		test := newEvsPrefixWriterTest(t)
+		writer := test.writer
+		good := evsTestContent("good", 64*1024)
+		if _, err := writer.write(t, "src/main.go", good); err != nil {
+			t.Fatal(err)
+		}
+		breached := bytes.Clone(good)
+		breached[100] ^= 0xff
+		test.breach("src/main.go", breached)
+		breachSegments := map[string]bool{}
+		for _, locator := range writer.entry(t, "src/main.go").GetChain() {
+			if 0 < len(locator.GetId()) {
+				breachSegments[string(locator.GetId())] = true
+			}
+		}
+		if len(breachSegments) == 0 {
+			t.Fatal("the breach's version names no segment")
+		}
+		evsPrefixRepairDiffHook = nil
+		if diff {
+			evsPrefixRepairDiffHook = func() bool { return true }
+		}
+		repaired := bytes.Clone(good)
+		repaired[200] ^= 0xff
+		_, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
+			Path: "src/main.go", Content: bytes.NewReader(repaired), IfVersion: evsTestUint64(1),
+		}}})
+		evsPrefixRepairDiffHook = nil
+		if err != nil {
+			t.Fatalf("diff %v: %v", diff, err)
+		}
+		restsOnBreach := slices.ContainsFunc(writer.entry(t, "src/main.go").GetChain(), func(locator *protocol.EvsLocator) bool {
+			return breachSegments[string(locator.GetId())]
+		})
+		if restsOnBreach != diff {
+			t.Fatalf("diff %v: the allowed version's chain rests on the breach's record: %v", diff, restsOnBreach)
+		}
+		writer.world.stateLock.Lock()
+		for segment := range breachSegments {
+			delete(writer.world.segments, segment)
+		}
+		writer.world.stateLock.Unlock()
+		reader := test.ruledReader("reader")
+		content, _, err := test.read(reader, "src/main.go")
+		switch {
+		case diff && err == nil:
+			t.Errorf("a diff on the ignored version read with the breach's record gone")
+		case !diff && (err != nil || content != string(repaired)):
+			t.Errorf("the repair form with the breach's record gone: %v", err)
+		}
+	}
+}

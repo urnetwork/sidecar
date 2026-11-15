@@ -284,8 +284,8 @@ func (self *evsPrefixJudge) repairPath(ctx context.Context, repo *EvsRepo, refId
 		}
 		byteCount = content.Size()
 		spent := int64(0)
-		for _, bytes := range spend.Bytes {
-			spent += bytes.Count
+		for _, spentBytes := range spend.Bytes {
+			spent += spentBytes.Count
 		}
 		if !byHand && self.settings.RepairByteCount < spent+byteCount {
 			return evsPrefixRepairWaiting, 0, nil
@@ -332,13 +332,13 @@ func (self *evsPrefixJudge) repairSpend(repoId Id, now time.Time) (*evsPrefixRep
 			pushes = append(pushes, atMs)
 		}
 	}
-	bytes := []*evsPrefixRepairByte{}
+	byteSpends := []*evsPrefixRepairByte{}
 	for _, spent := range spend.Bytes {
 		if now.Sub(time.UnixMilli(spent.AtMs)) < self.settings.RepairByteWindow {
-			bytes = append(bytes, spent)
+			byteSpends = append(byteSpends, spent)
 		}
 	}
-	spend.Pushes, spend.Bytes = pushes, bytes
+	spend.Pushes, spend.Bytes = pushes, byteSpends
 	return spend, nil
 }
 
@@ -372,8 +372,9 @@ func (self *evsPrefixJudge) repairs() bool {
 // builder calls for a path whose newest version it ignores, before it builds a kept head on it. The effective state is
 // written back whatever RepairDepth says and outside the bounds, as `ur evs repair` writes it: the effective content
 // as one checkpoint with its row, or the removal where the effective state is absent. It keeps 16.2.8's who: a device
-// that repairs and mirrors the ref, else ErrEvsPrefixRepairOff, and one the rules allow the path, else the planner's
-// EVS_PREFIX_RULE before any request. A path whose newest event at evs is allowed already sends nothing, its
+// that repairs and mirrors the ref, else ErrEvsPrefixRepairOff, which the builder answers as EVS_PREFIX_RULE with detail
+// refused, naming `ur evs repair` on a device that mirrors the ref (10.2.4); and one the rules allow the path, else the
+// planner's EVS_PREFIX_RULE before any request. A path whose newest event at evs is allowed already sends nothing, its
 // SettledCount 1; one another write moves under it answers that write's conflict, which the caller reads again on.
 func (self *EvsRepo) RepairPath(ctx context.Context, refName []byte, path string) (*EvsPrefixRepairResult, error) {
 	judge := self.client.prefixJudge()

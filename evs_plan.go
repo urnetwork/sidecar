@@ -583,6 +583,11 @@ func (self *EvsRepo) repoKind() (protocol.RepoKind, error) {
 	return repo.GetKind(), nil
 }
 
+// A test's hook that sends a write over a version this device ignores as a diff on it, in place of the repair form's
+// checkpoint, nil outside tests: what DESIGN-DETAILS 16.6's writer twin shows a reader's reconstruction passing through
+// the ignored record with.
+var evsPrefixRepairDiffHook func() bool
+
 // The ref's kind, mode and owner: the head's once a push set them, else a file-mode ref named by refName, owned for
 // ur/<this sidecar>/..., shared otherwise. A git-mode ref is ErrEvsGitRef but for a rekey's writes, rekeyOnly, which
 // seal the REKEY shape; another sidecar's owned ref, a deposit or the erasure ref take no Write.
@@ -732,7 +737,7 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	var previousContent *evsSpill
 	var previousKeys *evsChainKeys
 	var previousFields *protocol.EvsSealedFields
-	if stands && planned.Repair {
+	if stands && planned.Repair && (evsPrefixRepairDiffHook == nil || !evsPrefixRepairDiffHook()) {
 		// the repair form: one checkpoint of the caller's content, chunks above 8 MiB, never a diff, under a file id
 		// of its own. The ignored version's chain is not read, kept or diffed against, so no reader's reconstruction
 		// passes through a record this device ignores
