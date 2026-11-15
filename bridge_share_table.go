@@ -13,62 +13,21 @@
 //	GET  /network/bridge/share/<share_id>  both sides, to a sidecar of either network
 //
 // A host of the sharing network compiles a share only from tables that hash to the pins its network's approving admin
-// wrote (BridgeShareGrant): OpenBridgeShareTables holds a row to them, opens it under K and checks the alias table
-// against the target table. A row at another hash or version than the pin is ErrBridgeShareTableMismatch, which the
-// compile ignores with bridge_alarm share_table_mismatch: the server holds the row, so what it serves is trusted
-// for nothing the pins do not fix.
-//
-// BridgeShareTableView fetches the rows off the compile path and keeps the newest of each, so a compile reads memory
-// alone. Safe for concurrent use.
+// wrote (BridgeShareGrant; bridge_share_open.go, which every leg links). BridgeShareTableView fetches the rows off the
+// compile path and keeps the newest of each, so a compile reads memory alone (BridgeCompileLocal.ShareTables). Safe for
+// concurrent use.
 
 package sidecar
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
 	"sync"
 	"time"
-
-	"google.golang.org/protobuf/proto"
-
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-var (
-	// A share's row is not what the share's grant file pins: another hash or version of a table, another accepting
-	// network, or another ShareKey. The row is ignored (bridge_alarm share_table_mismatch).
-	ErrBridgeShareTableMismatch = errors.New("bridge share table is not the one pinned")
-)
-
-// network_bridge_share.accept_status (§17.9's status row). Format values.
-type BridgeShareAcceptStatus string
-
-const (
-	BridgeShareAcceptStatusActive          BridgeShareAcceptStatus = "active"
-	BridgeShareAcceptStatusRefusedTooLarge BridgeShareAcceptStatus = "refused_too_large"
-	BridgeShareAcceptStatusRefusedNoSpace  BridgeShareAcceptStatus = "refused_no_space"
-)
-
-// One share's row as api answers it. Every table is ciphertext under K.
-type BridgeShareRow struct {
-	ShareId Id
-	// X, the network whose targets are shared, and Y, the zero id before a claim binds one.
-	SharingNetworkId   Id
-	AcceptingNetworkId Id
-	// X's sealed BridgeShareTargets and its version.
-	TargetTable        []byte
-	TargetTableVersion uint64
-	// Y's side, a marshalled BridgeShareAccept of seals, and its version; nil before Y completes.
-	AliasTable        []byte
-	AliasTableVersion uint64
-	// Empty before Y completes.
-	AcceptStatus BridgeShareAcceptStatus
-}
 
 // POST /acl/invite's arguments.
 type BridgeShareInviteArgs struct {
@@ -87,6 +46,11 @@ type BridgeShareInviteReply struct {
 	ShareId    Id
 	UseCount   int
 	ExpireTime time.Time
+}
+
+// What a table view fetches a share's row from: SidecarApi, or the component's generation-following adapter.
+type BridgeShareRowSource interface {
+	GetBridgeShare(ctx context.Context, shareId Id) (*BridgeShareRow, error)
 }
 
 // The share routes a filer and a table view call: SidecarApi is one, and tests pass a fake.
@@ -240,182 +204,6 @@ func (self *SidecarApi) GetBridgeShare(ctx context.Context, shareId Id) (*Bridge
 	return row, nil
 }
 
-// A share's tables, opened under K and held to each other.
-type BridgeShareOpened struct {
-	ShareId            Id
-	SharingNetworkId   Id
-	AcceptingNetworkId Id
-	Targets            *bridge.BridgeShareTargets
-	// One alias a target, by index; nil for a share that was refused or has not completed.
-	Aliases *bridge.BridgeShareAliases
-	// Y's ShareKey, Ed25519; nil with no aliases.
-	SharePublicKey []byte
-	// A refusal's figures, nil for an active share.
-	Shortfall *bridge.BridgeShareShortfall
-	// SHA-256 of each side as the row stores it, and its version: what X's approving admin pins.
-	TargetTableSha256  []byte
-	TargetTableVersion uint64
-	AliasTableSha256   []byte
-	AliasTableVersion  uint64
-	AcceptStatus       BridgeShareAcceptStatus
-}
-
-// Opens a share's row under seal, K for the row's sharing network: the target table, and, once the accepting network
-// completed, its side. ErrBridgeShareSeal for anything that does not open, and ErrBridgeShareTableInvalid for tables
-// out of form or an alias table that is not its target table's. The row's sharing network must be the seal's.
-func OpenBridgeShareRow(seal *BridgeShareSeal, row *BridgeShareRow, settings *BridgeLedgerSettings) (*BridgeShareOpened, error) {
-	if seal == nil || row == nil || row.ShareId == (Id{}) {
-		return nil, fmt.Errorf("%w: no row", ErrBridgeShareTableInvalid)
-	}
-	if row.SharingNetworkId != seal.SharingNetworkId() {
-		return nil, fmt.Errorf("%w: a row of another sharing network", ErrBridgeShareSeal)
-	}
-	opened := &BridgeShareOpened{
-		ShareId: row.ShareId, SharingNetworkId: row.SharingNetworkId, AcceptingNetworkId: row.AcceptingNetworkId,
-		Targets:           &bridge.BridgeShareTargets{},
-		TargetTableSha256: BridgeShareTableSha256(row.TargetTable), TargetTableVersion: row.TargetTableVersion,
-		AcceptStatus: row.AcceptStatus,
-	}
-	if err := seal.Open(BridgeShareLabelTargets, Id{}, row.TargetTableVersion, row.TargetTable, opened.Targets); err != nil {
-		return nil, err
-	}
-	if err := CheckBridgeShareTargets(opened.Targets, settings); err != nil {
-		return nil, err
-	}
-	if len(row.AliasTable) == 0 {
-		if row.AcceptStatus != "" {
-			return nil, fmt.Errorf("%w: a status with no accepting side", ErrBridgeShareTableInvalid)
-		}
-		return opened, nil
-	}
-	if row.AcceptingNetworkId == (Id{}) || row.AcceptingNetworkId == row.SharingNetworkId {
-		return nil, fmt.Errorf("%w: an accepting side of no other network", ErrBridgeShareTableInvalid)
-	}
-	opened.AliasTableSha256, opened.AliasTableVersion = BridgeShareTableSha256(row.AliasTable), row.AliasTableVersion
-	accept := &bridge.BridgeShareAccept{}
-	if err := proto.Unmarshal(row.AliasTable, accept); err != nil || bridgeLedgerUnknownFields(accept) {
-		return nil, fmt.Errorf("%w: the accepting side is no BridgeShareAccept", ErrBridgeShareSeal)
-	}
-	switch row.AcceptStatus {
-	case BridgeShareAcceptStatusActive:
-		if len(accept.GetAliases()) == 0 || len(accept.GetShareKey()) == 0 || len(accept.GetShortfall()) != 0 {
-			return nil, fmt.Errorf("%w: an active accept without its aliases and key", ErrBridgeShareTableInvalid)
-		}
-		opened.Aliases = &bridge.BridgeShareAliases{}
-		if err := seal.Open(BridgeShareLabelAliases, row.AcceptingNetworkId, row.AliasTableVersion, accept.GetAliases(), opened.Aliases); err != nil {
-			return nil, err
-		}
-		if err := CheckBridgeShareAliases(opened.Aliases, opened.Targets); err != nil {
-			return nil, err
-		}
-		keyBody := &bridge.BridgeShareKeyBody{}
-		if err := seal.Open(BridgeShareLabelShareKey, row.AcceptingNetworkId, row.AliasTableVersion, accept.GetShareKey(), keyBody); err != nil {
-			return nil, err
-		}
-		if len(keyBody.GetSharePublicKey()) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("%w: a ShareKey of %d bytes", ErrBridgeShareTableInvalid, len(keyBody.GetSharePublicKey()))
-		}
-		opened.SharePublicKey = keyBody.GetSharePublicKey()
-	case BridgeShareAcceptStatusRefusedNoSpace, BridgeShareAcceptStatusRefusedTooLarge:
-		// a refusal carries its figures alone: which target, how wide, and the room there was
-		if len(accept.GetAliases()) != 0 || len(accept.GetShareKey()) != 0 || len(accept.GetShortfall()) == 0 {
-			return nil, fmt.Errorf("%w: a refusal without its shortfall alone", ErrBridgeShareTableInvalid)
-		}
-		opened.Shortfall = &bridge.BridgeShareShortfall{}
-		if err := seal.Open(BridgeShareLabelShortfall, row.AcceptingNetworkId, row.AliasTableVersion, accept.GetShortfall(), opened.Shortfall); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("%w: an accepting side with no status", ErrBridgeShareTableInvalid)
-	}
-	return opened, nil
-}
-
-// Holds a share's row to its grant file's pins and opens it (the file's comment): the file's share, the sharing
-// network K was written for, the accepting network, each table's hash and version, and the ShareKey. A share that is
-// not active compiles nothing, so it is a mismatch too.
-func OpenBridgeShareTables(grant *bridge.BridgeShareGrant, sharingNetworkId Id, row *BridgeShareRow, settings *BridgeShareSettings, ledgerSettings *BridgeLedgerSettings) (*BridgeShareOpened, error) {
-	if err := CheckBridgeShareGrant(grant); err != nil {
-		return nil, err
-	}
-	if row == nil {
-		return nil, fmt.Errorf("%w: no row", ErrBridgeShareTableMismatch)
-	}
-	switch {
-	case !bytes.Equal(grant.GetShareId(), row.ShareId.Bytes()) || row.SharingNetworkId != sharingNetworkId:
-		return nil, fmt.Errorf("%w: another share's row", ErrBridgeShareTableMismatch)
-	case !bytes.Equal(grant.GetAcceptingNetworkId(), row.AcceptingNetworkId.Bytes()):
-		return nil, fmt.Errorf("%w: another accepting network", ErrBridgeShareTableMismatch)
-	case grant.GetTargetTableVersion() != row.TargetTableVersion || !bytes.Equal(grant.GetTargetTableSha256(), BridgeShareTableSha256(row.TargetTable)):
-		return nil, fmt.Errorf("%w: the target table", ErrBridgeShareTableMismatch)
-	case grant.GetAliasTableVersion() != row.AliasTableVersion || !bytes.Equal(grant.GetAliasTableSha256(), BridgeShareTableSha256(row.AliasTable)):
-		return nil, fmt.Errorf("%w: the alias table", ErrBridgeShareTableMismatch)
-	case row.AcceptStatus != BridgeShareAcceptStatusActive:
-		return nil, fmt.Errorf("%w: a share that is not active", ErrBridgeShareTableMismatch)
-	}
-	seal, err := NewBridgeShareSealOfKey(grant.GetTableKey(), sharingNetworkId, settings)
-	if err != nil {
-		return nil, err
-	}
-	opened, err := OpenBridgeShareRow(seal, row, ledgerSettings)
-	if err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(opened.SharePublicKey, grant.GetSharePublicKey()) {
-		return nil, fmt.Errorf("%w: another ShareKey", ErrBridgeShareTableMismatch)
-	}
-	return opened, nil
-}
-
-// A grant file held to its form: ids of 16 bytes, a grant id and hashes of 32, K, an Ed25519 ShareKey and versions
-// from 1.
-func CheckBridgeShareGrant(grant *bridge.BridgeShareGrant) error {
-	switch {
-	case grant == nil || bridgeLedgerUnknownFields(grant):
-		return fmt.Errorf("%w: no grant file this build reads", ErrBridgeShareTableInvalid)
-	case len(grant.GetShareId()) != len(Id{}) || len(grant.GetAcceptingNetworkId()) != len(Id{}):
-		return fmt.Errorf("%w: a grant file's ids", ErrBridgeShareTableInvalid)
-	case len(grant.GetGrantId()) != sha256.Size || len(grant.GetTargetTableSha256()) != sha256.Size || len(grant.GetAliasTableSha256()) != sha256.Size:
-		return fmt.Errorf("%w: a grant file's grant or hashes", ErrBridgeShareTableInvalid)
-	case len(grant.GetTableKey()) != bridgeShareKeyByteCount || len(grant.GetSharePublicKey()) != ed25519.PublicKeySize:
-		return fmt.Errorf("%w: a grant file's keys", ErrBridgeShareTableInvalid)
-	case grant.GetTargetTableVersion() == 0 || grant.GetAliasTableVersion() == 0:
-		return fmt.Errorf("%w: a grant file's versions", ErrBridgeShareTableInvalid)
-	}
-	return nil
-}
-
-// bridge/share-grant/<share_id hex>, the path of a share's grant file in the sharing network's head.
-func ConfigHeadBridgeShareGrantPath(shareId Id) string {
-	return ConfigHeadBridgeShareGrantPrefix + fmt.Sprintf("%x", shareId.Bytes())
-}
-
-// The grant files a head holds, by share id in path order. A file that is no BridgeShareGrant of its path's share is
-// left out: it pins nothing.
-func ReadBridgeShareGrants(head *ConfigHead) []*bridge.BridgeShareGrant {
-	if head == nil {
-		return nil
-	}
-	grants := []*bridge.BridgeShareGrant{}
-	paths := head.Paths()
-	slices.Sort(paths)
-	for _, path := range paths {
-		if len(path) != len(ConfigHeadBridgeShareGrantPrefix)+configHeadShareIdHexLength || path[:len(ConfigHeadBridgeShareGrantPrefix)] != ConfigHeadBridgeShareGrantPrefix {
-			continue
-		}
-		grant := &bridge.BridgeShareGrant{}
-		if err := proto.Unmarshal(head.File(path), grant); err != nil || CheckBridgeShareGrant(grant) != nil {
-			continue
-		}
-		shareId, err := IdFromBytes(grant.GetShareId())
-		if err != nil || ConfigHeadBridgeShareGrantPath(shareId) != path {
-			continue
-		}
-		grants = append(grants, grant)
-	}
-	return grants
-}
-
 // Tunables of a table view.
 type BridgeShareTableViewSettings struct {
 	// How long one share's fetch may take: 30 s. Non-positive is the default.
@@ -436,7 +224,7 @@ func DefaultBridgeShareTableViewSettings() *BridgeShareTableViewSettings {
 // local.ShareTables): a component refreshes it each ShareTableRefreshInterval and when a head names a share it holds no
 // row for. Nothing here is trusted: the compile holds every row to its grant file's pins.
 type BridgeShareTableView struct {
-	api      BridgeShareApi
+	api      BridgeShareRowSource
 	settings *BridgeShareTableViewSettings
 
 	stateLock sync.Mutex
@@ -446,7 +234,7 @@ type BridgeShareTableView struct {
 }
 
 // A view fetching through api; settings nil is the defaults.
-func NewBridgeShareTableView(api BridgeShareApi, settings *BridgeShareTableViewSettings) (*BridgeShareTableView, error) {
+func NewBridgeShareTableView(api BridgeShareRowSource, settings *BridgeShareTableViewSettings) (*BridgeShareTableView, error) {
 	if api == nil {
 		return nil, fmt.Errorf("%w: a table view needs the share routes", errInvalidSettings)
 	}

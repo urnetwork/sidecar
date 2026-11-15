@@ -1,5 +1,3 @@
-//go:build !ios_extension
-
 // §17.9's share seal (BRIDGE-M6-03; QD-108; DESIGN-DETAILS 12.2.2, 12.2.7; I-2): how the two networks of a share
 // exchange their tables through a server that reads neither.
 //
@@ -21,7 +19,8 @@
 // The accepting side's seals travel together as one BridgeShareAccept, the value network_bridge_share stores as that
 // side's table (question bridge-m6-03-accept-seals).
 //
-// Pure: no clock and no network. Safe for concurrent use.
+// Pure: no clock and no network. On every leg: a host's compile opens a share's tables with it, in a VPN component as on a
+// daemon (DESIGN-DETAILS 12.2.1). Safe for concurrent use.
 
 package sidecar
 
