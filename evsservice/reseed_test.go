@@ -1106,17 +1106,15 @@ func TestReseedOfARestoredRepoLeavesItActive(t *testing.T) {
 	}
 }
 
-// What the route does not build is refused before anything is written: a push in parts answers 503, refusing nothing,
-// and a call mixing a slot with a push is invalid.
-func TestReseedRefusesWhatItDoesNotBuild(t *testing.T) {
+// A call out of its form is refused before anything is written: parts beside a one-part push's statement, and a call
+// mixing a slot with a push, are invalid, as is a statement that does not parse.
+func TestReseedRefusesACallOutOfItsForm(t *testing.T) {
 	fixture := newReseedFixture(t)
 	plan := fixture.kept()
 	fixture.create(plan, "a")
 	body := fixture.reseedBody(plan)
 	parts := &protocol.EvsReseedRequest{Statement: body.GetStatement(), Parts: [][]byte{[]byte("part")}}
-	if recorder := fixture.reseed(parts); recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status %d for a push in parts, want 503", recorder.Code)
-	}
+	requireRefusal(t, fixture.reseed(parts), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 	mixed := &protocol.EvsReseedRequest{Statement: body.GetStatement(), Payload: body.GetPayload(), SlotId: testId("mixed slot").Bytes(), Slot: []byte("slot")}
 	requireRefusal(t, fixture.reseed(mixed), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 	requireRefusal(t, fixture.reseed(&protocol.EvsReseedRequest{Statement: []byte("no statement")}), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
@@ -1310,6 +1308,7 @@ func TestReseedKeyIsUnderItsReposFamily(t *testing.T) {
 func TestReseedSettingsAreValidated(t *testing.T) {
 	for _, adjust := range []func(settings *EvsSettings){
 		func(settings *EvsSettings) { settings.ReseedBodyMaxByteCount = 0 },
+		func(settings *EvsSettings) { settings.ReseedPartsBodyMaxByteCount = 0 },
 		func(settings *EvsSettings) { settings.ReseedStatementMaxByteCount = 0 },
 		func(settings *EvsSettings) { settings.ReseedRestoreWindow = 0 },
 		func(settings *EvsSettings) { settings.ReseedStatementRetryCount = 0 },

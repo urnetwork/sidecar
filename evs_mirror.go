@@ -9,8 +9,8 @@
 //
 //	stmt   each version's Signed EvsPush, walked from the mirror's last version and chain to the head as a replaying
 //	       reader walks them (EvsVerifier), so a mirror never holds a statement that does not chain
-//	rec    the push's record, part 0, and for a push in parts its seal record and every part record, each held to
-//	       its statement (§11.6's checks row)
+//	rec    the push's record, part 0, and for a push in parts its seal record and every part record, a re-seeded
+//	       push's parts reseed records (QD-818), each held to its statement (§11.6's checks row)
 //	seg    every segment a push's new-objects section names, its SHA-256 its id
 //	slot   every slot a push's new-objects section names, as the wrapped bytes evs holds (fek-wrapped or
 //	       drop-HPKE): the mirror never opens a slot
@@ -716,9 +716,10 @@ func (self *evsMirrorRun) mirrorRecords(ctx context.Context, head *EvsVerifiedHe
 	return checked, true, nil
 }
 
-// A push's records held to its statement: part 0 a push record holding the statement and its payload, or for a push
-// in parts a seal record holding the statement and parts 1 to n each a part record of it, the parts' payload checked
-// as its stored seal is.
+// A push's records held to its statement: part 0 a push or reseed record holding the statement and its payload, or
+// for a push in parts a seal record holding the statement and parts 1 to n each a part record of it, a re-seeded
+// push's parts reseed records holding a part's body (evs_reseed_record.go), the parts' payload checked as its stored
+// seal is.
 func evsMirrorCheckRecords(statement *EvsStatement, records [][]byte) (*EvsCheckedPayload, error) {
 	first, err := ParseEvsBatchRecord(records[0])
 	if err != nil {
@@ -745,10 +746,10 @@ func evsMirrorCheckRecords(statement *EvsStatement, records [][]byte) (*EvsCheck
 	parts := make([][]byte, len(records)-1)
 	for index, recordBytes := range records[1:] {
 		record, err := ParseEvsBatchRecord(recordBytes)
-		if err != nil || record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
+		if err != nil {
 			return nil, ErrEvsMirrorRecordInvalid
 		}
-		partStatement, partBytes, _, _, err := ParseEvsPartRecordBody(record.Body)
+		partStatement, partBytes, _, _, err := ParseEvsSealPartRecord(record)
 		if err != nil || !bytes.Equal(partStatement, statement.Bytes) {
 			return nil, ErrEvsMirrorRecordInvalid
 		}
