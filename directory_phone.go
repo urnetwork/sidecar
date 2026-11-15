@@ -27,8 +27,8 @@
 // At M6 evs's listing names each stream's versions and not its bytes, so the cap holds to what was read and the plan
 // to an estimate: a request can pass the cap by what its streams cost above the costliest version read before it, and
 // the first by its one stream's frame. The bytes left are the versions left at the mean a fetched version cost, or,
-// before any fetch, an entry and its push statement as §16.11's sizes row prices them. From format 2 the cards ref's
-// statements name each card's size.
+// before any fetch, Directory.PhoneVersionByteCount, an entry and its push statement as §16.11's sizes row prices
+// them. From format 2 the cards ref's statements name each card's size.
 //
 // Safe for concurrent use: one Fetch at a time, and List any time. Close drops everything the view holds.
 
@@ -41,10 +41,6 @@ import (
 	"slices"
 	"sync"
 )
-
-// What a version is taken to cost before a view has fetched one: an entry, about 1.5 KiB by Padmé, and its push
-// statement, about 0.8 KiB (§16.11's sizes row).
-const directoryPhoneVersionByteCount = 1536 + 800
 
 // DirectoryCoverage.Waiting while the metered cap holds a view (§18.4's waiting=metered).
 const DirectoryCoverageWaitingMetered = "metered"
@@ -182,10 +178,10 @@ func (self *DirectoryView) budgetWithLock() (int64, bool) {
 	return max(0, self.client.settings.PhoneMeteredByteCount-self.meteredByteCount), true
 }
 
-// What a version is taken to cost now: the mean of those fetched, else directoryPhoneVersionByteCount.
+// What a version is taken to cost now: the mean of those fetched, else Directory.PhoneVersionByteCount.
 func (self *DirectoryView) versionByteCountWithLock() int64 {
 	if self.fetchedVersionCount == 0 {
-		return directoryPhoneVersionByteCount
+		return self.client.settings.PhoneVersionByteCount
 	}
 	return max(1, self.fetchedByteCount/self.fetchedVersionCount)
 }

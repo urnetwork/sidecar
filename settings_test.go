@@ -227,6 +227,7 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				IdleSyncInterval:      1 * time.Hour,
 				ViewCoalesce:          30 * time.Second,
 				PhoneMeteredByteCount: 8 * 1024 * 1024,
+				PhoneVersionByteCount: 1536 + 800,
 				RenewJitter:           5 * time.Minute,
 				PhoneLeaseRenewAge:    24 * time.Hour,
 				PhoneLeaseExpiry:      7 * 24 * time.Hour,
