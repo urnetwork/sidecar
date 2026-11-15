@@ -214,6 +214,9 @@ type searchSyncRef struct {
 	// The "search more" call a running round serves, under roundLock: its budget and its per-shard search
 	// (search_more.go). Nil for every other round.
 	moreRun *searchSyncMoreRun
+	// The last round's error, nil after a success; under the engine's stateLock. A search names a repo whose read
+	// receipt did not land from it (search_receipts.go).
+	lastErr error
 
 	// Under the engine's stateLock.
 	due         time.Time
@@ -707,7 +710,26 @@ func (self *searchSyncRef) keepsAll(more bool) bool {
 // One round of ref (see the file header), restarted at step 1 when a read answers collected, at most
 // Search.SyncRestartCount times.
 func (self *SearchSync) round(ctx context.Context, ref *searchSyncRef, more bool) error {
-	return self.roundWithRun(ctx, ref, more, nil)
+	err := self.roundWithRun(ctx, ref, more, nil)
+	self.noteError(ref, err)
+	return err
+}
+
+// Records a round's outcome for lastError.
+func (self *SearchSync) noteError(ref *searchSyncRef, err error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	ref.lastErr = err
+}
+
+// The last round's error of a followed ref, nil after a success or for a ref not followed.
+func (self *SearchSync) lastError(repoId Id, refId Id) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if ref := self.refs[[2]Id{repoId, refId}]; ref != nil {
+		return ref.lastErr
+	}
+	return nil
 }
 
 // A round serving run, a "search more" call's, which holds its fetch of the all set to the call's budget and searches
