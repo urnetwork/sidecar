@@ -1,0 +1,311 @@
+//go:build !sidecar_http && !ios_extension
+
+// BRIDGE-M6-08's schedules (§22.8's FS-38 at M6-out, its share rows; FI-11, D-BRIDGE-14, D-BRIDGE-17, CC-05, I-10) on
+// sidecartest's BridgeShareNet: network X's host serving a share network Y accepted, X's grant, pins, compile, device
+// role and provider NAT each the real one, and Y's window clients the operator's, every contract minted
+// FriendsAndFamily and sealed to Y, carrying what the schedule has Y's ShareSigners sign. Registered on T2 and T3;
+// server/controller/connect_bridge_m6_test.go runs the same builders on server's platform.
+//
+//   - The twin, CC-05's minted reach: a delegation by generation 7's ShareSigner under a cert of Y's pinned ShareKey
+//     opens sockets over TCP, UDP and ICMP to the host's address through its alias in Y's block, the host verifying a
+//     principal of the share and Y, the delegation's subject whatever subject the operator sealed, every decision tagged
+//     by the share's target, X's grant, and the alias's neighbour, which the share names no target at, opening nothing.
+//   - The refusals: a cert expired, which is also the share lapsed after 7 days with no renewal, one over 7 days and
+//     the skew out, and one not by the pinned ShareKey each open nothing; a removed sidecar's generation 7 is admitted
+//     until a later generation's cert reaches the host, and refused on every contract after, the host restarted from
+//     its persisted state included.
+//
+// What these do not cover, each in the task's report: Y's honest gate refusing the CC-05 contract (ACL's contract
+// gate's share half, acl_share.go, tested there), a companion reply's subject and the dialer's network alone debited
+// (server's escrow, PROTO-M6-01 and ACL-M6-03), and the accept's refusals end to end (the filer's, bridge_share_invite).
+
+package fault
+
+import (
+	"context"
+	"crypto/ed25519"
+	"errors"
+	"fmt"
+	"net/netip"
+	"slices"
+	"time"
+
+	"github.com/urnetwork/connect"
+
+	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/device"
+	"github.com/urnetwork/sidecar/sidecartest"
+)
+
+var Fs38ShareCase = Register("FS-38", "shares", []Tier{TierT2, TierT3}, Twin(Fs38ShareRefusals, Fs38ShareSigner))
+
+// What one share schedule builds in its first step and its later steps read.
+type fsShareWorld struct {
+	share *sidecartest.BridgeShareNet
+}
+
+// The first step: X, its host serving the share, enforcing a state that holds it.
+func fsShareSetup(world *fsShareWorld) *Step {
+	return &Step{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
+		return fsTeamCatch(func() error {
+			world.share = sidecartest.NewBridgeShareNet(fsTeamFailer{}, net, nil)
+			return nil
+		})
+	}}
+}
+
+// A step by actor on the world, its failures the step's.
+func fsShareDo(actor string, world *fsShareWorld, body func() error) *Step {
+	return &Step{Actor: actor, Action: func(ctx context.Context, net *Net) error {
+		return fsTeamCatch(body)
+	}}
+}
+
+// A share schedule: its steps, then the world's end, under FI-11's bridge half.
+func fsShareSchedule(refuses string, world *fsShareWorld, steps ...*Step) *Schedule {
+	closeStep := &Step{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
+		if world.share != nil {
+			world.share.Close()
+		}
+		return nil
+	}}
+	return &Schedule{
+		Id:      "FS-38",
+		Steps:   append(steps, closeStep),
+		Check:   []Invariant{fsSharePathIntegrity(world)},
+		Tiers:   []Tier{TierT2, TierT3},
+		Refuses: refuses,
+	}
+}
+
+// FI-11's bridge half on the share's host, as FsBridgePathIntegrity reads a BridgeNet's: no upstream socket without the
+// hook's opening decision, every dial matched by a pass or a map of a TCP or UDP flow to that address.
+func fsSharePathIntegrity(world *fsShareWorld) Invariant {
+	return NewInvariant("FI-11/share-dials", func(ctx context.Context, oracle *Oracle) error {
+		if world.share == nil || world.share.Host == nil {
+			return nil
+		}
+		host := world.share.Host
+		opened := map[string]int{}
+		for _, decision := range host.AllDecisions() {
+			if !decision.Opens() || decision.Protocol == connect.IpProtocolIcmp {
+				continue
+			}
+			target := decision.To
+			if decision.Verdict == connect.EgressVerdictMap {
+				target = netip.AddrPortFrom(decision.Target.Addr(), cmpPort(decision.Target.Port(), decision.To.Port()))
+			}
+			opened[target.String()] += 1
+		}
+		for _, dial := range host.Dials() {
+			if opened[dial.Address] == 0 {
+				return fmt.Errorf("the NAT dialed %s %s with no opening decision for it", dial.Network, dial.Address)
+			}
+			opened[dial.Address] -= 1
+		}
+		return nil
+	})
+}
+
+// The flows a share window opens, each to the share's alias in Y's block, which the host maps to its own address and
+// rule 3 to its loopback service: a TCP connection carrying a payload, a datagram answered with its own bytes, an echo.
+type fsShareFlows struct {
+	world  *fsShareWorld
+	window *sidecartest.BridgeNetWindow
+}
+
+func (self *fsShareFlows) tcpAddress() netip.AddrPort {
+	return netip.AddrPortFrom(self.world.share.Alias(), self.world.share.Host.Upstream.TcpPort())
+}
+
+func (self *fsShareFlows) udpAddress() netip.AddrPort {
+	return netip.AddrPortFrom(self.world.share.Alias(), self.world.share.Host.Upstream.UdpPort())
+}
+
+// Every flow opens: the payload and the datagram reach the upstream, the datagram and the echo are answered, and the
+// host admitted the window as a principal of the share and Y, the delegation's subject, its decisions tagged by the
+// share's target.
+func (self *fsShareFlows) expectOpen(payload string) error {
+	share := self.world.share
+	host := share.Host
+	settings := share.X.Settings()
+	conn, err := self.window.DialTcp(self.tcpAddress())
+	if err != nil {
+		return fmt.Errorf("%s's TCP connection: %w", self.window.Name, err)
+	}
+	if _, err := conn.Write([]byte(payload)); err != nil {
+		conn.Close()
+		return fmt.Errorf("%s's TCP payload: %w", self.window.Name, err)
+	}
+	conn.Close()
+	if !host.Upstream.WaitFor(settings.WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return string(accept.Bytes) == payload })
+	}) {
+		return fmt.Errorf("%s's TCP payload never reached the upstream", self.window.Name)
+	}
+	answer, err := self.window.ExchangeUdp(self.udpAddress(), []byte(payload), settings.WaitTimeout)
+	if err != nil || string(answer) != payload {
+		return fmt.Errorf("%s's datagram: %q, %v", self.window.Name, answer, err)
+	}
+	if err := self.window.SendEcho(share.Alias(), 1); err != nil {
+		return err
+	}
+	if !self.window.WaitEchoReply(1, settings.WaitTimeout) {
+		return fmt.Errorf("%s's echo was never answered", self.window.Name)
+	}
+	principals := host.Principals(self.window.Client.ClientId)
+	if len(principals) == 0 || principals[0].Principal == nil {
+		return fmt.Errorf("the host verified no principal of %s: %+v", self.window.Name, principals)
+	}
+	principal := principals[0].Principal
+	if principal.ShareId != connect.Id(share.ShareId) || principal.Network != connect.Id(share.AcceptingNetworkId) ||
+		principal.Subject != connect.Id(share.AcceptingSidecarId) {
+		return fmt.Errorf("%s's principal %+v is not the share's, of Y, as its delegation names it", self.window.Name, principal)
+	}
+	tag := device.BridgeShareRuleTag(connect.Id(share.ShareId), 0)
+	for _, decision := range host.Decisions(self.window.Client.ClientId) {
+		if decision.Opens() && decision.RuleTag != tag {
+			return fmt.Errorf("%s's flow opened under tag %d, not the share target's", self.window.Name, decision.RuleTag)
+		}
+	}
+	return nil
+}
+
+// No flow of the window opens a socket: its TCP connection is refused, the hook denies its TCP, UDP and ICMP flows
+// before any dial, no principal is admitted, and nothing reaches the upstream past what earlier windows opened.
+func (self *fsShareFlows) expectRefused(payload string) error {
+	share := self.world.share
+	host := share.Host
+	dialCount := len(host.Dials())
+	acceptCount, datagramCount := len(host.Upstream.Accepts()), len(host.Upstream.Datagrams())
+	if conn, err := self.window.DialTcp(self.tcpAddress()); err == nil {
+		conn.Close()
+		return fmt.Errorf("%s's TCP connection opened", self.window.Name)
+	}
+	udp, err := self.window.SendUdp(self.udpAddress(), []byte(payload))
+	if err != nil {
+		return err
+	}
+	defer udp.Close()
+	if err := self.window.SendEcho(share.Alias(), 1); err != nil {
+		return err
+	}
+	for _, ipProtocol := range []connect.IpProtocol{connect.IpProtocolTcp, connect.IpProtocolUdp, connect.IpProtocolIcmp} {
+		decision := host.WaitDecision(self.window.Client.ClientId, ipProtocol)
+		if decision.Opens() {
+			return fmt.Errorf("%s's %s flow was opened: %+v", self.window.Name, ipProtocol, decision)
+		}
+		if decision.Principal != nil {
+			return fmt.Errorf("%s's %s flow carried a principal: %+v", self.window.Name, ipProtocol, decision.Principal)
+		}
+	}
+	for _, principal := range host.Principals(self.window.Client.ClientId) {
+		if principal.Principal != nil {
+			return fmt.Errorf("%s's contract was admitted: %+v", self.window.Name, principal.Principal)
+		}
+	}
+	// a denied flow never dials, so the counts are final once the hook has decided
+	if dials := host.Dials(); dialCount < len(dials) {
+		return fmt.Errorf("the NAT dialed %d upstream sockets more", len(dials)-dialCount)
+	}
+	if accepts, datagrams := host.Upstream.Accepts(), host.Upstream.Datagrams(); acceptCount < len(accepts) || datagramCount < len(datagrams) {
+		return fmt.Errorf("the upstream took %d connections and %d datagrams more", len(accepts)-acceptCount, len(datagrams)-datagramCount)
+	}
+	return nil
+}
+
+// A share window whose contracts carry a delegation of generation's signer under cert, sealed to Y.
+func fsShareWindow(world *fsShareWorld, name string, cert func() []byte, generation uint64) *sidecartest.BridgeNetWindow {
+	return world.share.OpenWindow(name, sidecar.Id{}, func(window *sidecartest.BridgeNetWindow) []byte {
+		return world.share.Delegation(window, cert(), generation, nil)
+	})
+}
+
+// FS-38's share twin and CC-05's minted reach (the file's comment): a ShareSigner's delegation opens every flow to the
+// share's target and nothing past it.
+func Fs38ShareSigner(net *Net) *Schedule {
+	world := &fsShareWorld{}
+	return fsShareSchedule("", world,
+		fsShareSetup(world),
+		fsShareDo("Y's reader", world, func() error {
+			window := fsShareWindow(world, "fs38 share", func() []byte { return world.share.CurrentCert(7) }, 7)
+			defer window.Close()
+			if err := (&fsShareFlows{world: world, window: window}).expectOpen("fs38 share"); err != nil {
+				return err
+			}
+			// the alias's neighbour is no target of the share: the host maps nothing there
+			neighbour := netip.AddrFrom4(world.share.Alias().As4())
+			octets := neighbour.As4()
+			octets[3] += 1
+			dialCount := len(world.share.Host.Dials())
+			if conn, err := window.DialTcp(netip.AddrPortFrom(netip.AddrFrom4(octets), world.share.Host.Upstream.TcpPort())); err == nil {
+				conn.Close()
+				return errors.New("a flow past the share's targets opened")
+			}
+			if len(world.share.Host.Dials()) != dialCount {
+				return errors.New("the NAT dialed for a flow past the share's targets")
+			}
+			return nil
+		}),
+	)
+}
+
+// FS-38's share refusals (the file's comment).
+func Fs38ShareRefusals(net *Net) *Schedule {
+	world := &fsShareWorld{}
+	now := func() time.Time { return world.share.X.Net().Clock().Now() }
+	cases := []struct {
+		name string
+		cert func() []byte
+	}{
+		{name: "an expired cert, the share lapsed with no renewal", cert: func() []byte { return world.share.Cert(7, now(), nil) }},
+		{name: "a cert over 7 days and the skew out", cert: func() []byte {
+			return world.share.Cert(7, now().Add(7*24*time.Hour+2*time.Minute), nil)
+		}},
+		{name: "a cert not by the pinned ShareKey", cert: func() []byte {
+			return world.share.Cert(7, now().Add(time.Hour), ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
+		}},
+	}
+	steps := []*Step{fsShareSetup(world)}
+	for _, refusal := range cases {
+		steps = append(steps, fsShareDo("operator", world, func() error {
+			window := fsShareWindow(world, "fs38 share "+refusal.name, refusal.cert, 7)
+			defer window.Close()
+			if err := (&fsShareFlows{world: world, window: window}).expectRefused("fs38 share refused"); err != nil {
+				return fmt.Errorf("%s: %w", refusal.name, err)
+			}
+			return nil
+		}))
+	}
+	steps = append(steps,
+		fsShareDo("removed reader", world, func() error {
+			// a sidecar Y removed still holds generation 7's signer, which the host admits until a later cert reaches it
+			window := fsShareWindow(world, "fs38 share removed before", func() []byte { return world.share.CurrentCert(7) }, 7)
+			defer window.Close()
+			return (&fsShareFlows{world: world, window: window}).expectOpen("fs38 share removed before")
+		}),
+		fsShareDo("Y's reader", world, func() error {
+			window := fsShareWindow(world, "fs38 share generation 8", func() []byte { return world.share.CurrentCert(8) }, 8)
+			defer window.Close()
+			return (&fsShareFlows{world: world, window: window}).expectOpen("fs38 share generation 8")
+		}),
+		fsShareDo("removed reader", world, func() error {
+			window := fsShareWindow(world, "fs38 share removed after", func() []byte { return world.share.CurrentCert(7) }, 7)
+			defer window.Close()
+			if err := (&fsShareFlows{world: world, window: window}).expectRefused("fs38 share removed after"); err != nil {
+				return fmt.Errorf("generation 7 after generation 8 reached the host: %w", err)
+			}
+			return nil
+		}),
+		fsShareDo("restart", world, func() error {
+			world.share.RestartHost()
+			window := fsShareWindow(world, "fs38 share removed after the restart", func() []byte { return world.share.CurrentCert(7) }, 7)
+			defer window.Close()
+			if err := (&fsShareFlows{world: world, window: window}).expectRefused("fs38 share removed after the restart"); err != nil {
+				return fmt.Errorf("generation 7 after the host's restart: %w", err)
+			}
+			return nil
+		}),
+	)
+	return fsShareSchedule("a share's contract on a cert expired, too long, not by the pinned ShareKey, or below the host's newest generation, before or after a restart, opens no socket", world, steps...)
+}
