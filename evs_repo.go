@@ -87,6 +87,11 @@ type EvsFileInfo struct {
 	Size   uint64
 	// The ref's head the read verified and pinned.
 	HeadVersion uint64
+	// Under the repo's prefix write rules (DESIGN-DETAILS 16.2.5): the versions over this one that this device
+	// ignores, 0 where it is evs's newest; and held or update where a rule set this device cannot read yet, pending
+	// or a later release's, holds back everything above the version shown, empty otherwise.
+	IgnoredAbove int
+	RuleState    string
 }
 
 // A directory's children as List shows them, each name checked against its token (§11.7's name row).
@@ -125,6 +130,9 @@ type EvsHistoryVersion struct {
 	Time            time.Time
 	// The removal that ended the path at this version, if it is one.
 	Removed bool
+	// The repo's prefix write rules do not allow the version's signer its path, so this device does not follow it
+	// (`ignored: prefix rule`, DESIGN-DETAILS 16.2.5); a version nobody can judge is shown as evs has it.
+	Ignored bool
 	// 0 kept, 1 versionless, 2 index (§11.7).
 	Versioning uint32
 	// kept, or collected for a replaced versionless version whose content evs no longer serves; drop_pending and
@@ -243,6 +251,10 @@ type EvsExportedRef struct {
 	// Each git-mode version that failed its check, which stopped the ref at the version before until a DELETE
 	// (DESIGN-DETAILS 8.5); none when every version applied.
 	Refused []*EvsExportRefusal
+	// Each file-mode version some of whose changes this device ignores under the repo's prefix write rules, which the
+	// exported trees leave out (DESIGN-DETAILS 16.2.5); none when every change is followed. The ref is not stopped: a
+	// file-mode push keeps the changes its rules allow.
+	Ignored []*EvsExportRefusal
 }
 
 // A git-mode version export refused, and why: never skipped in silence.

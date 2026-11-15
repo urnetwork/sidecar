@@ -52,6 +52,11 @@ type EvsVerifiedPath struct {
 	Entry         *protocol.EvsEntryVersion
 	Statement     *EvsStatement
 	CommitVersion uint64
+	// The statement's change that wrote the version or removed the path, and that change's own token path in the
+	// statement's epoch: the path's, or for a removal the path's or a directory's above it, which is what a prefix
+	// rule judges (DESIGN-DETAILS 16.2.4).
+	Change     *protocol.EvsChange
+	ChangePath EvsTokenPath
 	// A removal that stands, from its marker or the window, and the statement that made it.
 	Removal *protocol.EvsRemovalMarker
 	// An overlay's path it holds no version of: the base ref and version to read instead (§11.7).
@@ -323,6 +328,7 @@ func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, epochs *EvsPathEpo
 	verified.EntryBytes = version.GetEntryVersion()
 	verified.Entry = entry
 	verified.Statement = statement
+	verified.Change, verified.ChangePath = change, tokenPath
 	verified.CommitVersion = version.GetCommitVersion()
 	verified.Floor = evsLowerFloor(verified.Floor, epoch)
 	return nil
@@ -356,6 +362,7 @@ func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, epochs *EvsPathEpo
 	}
 	verified.Removal = removal
 	verified.Statement = statement
+	verified.Change, verified.ChangePath = change, changedPath
 	verified.CommitVersion = removal.GetRemovalVersion()
 	if changedPath.Equal(tokenPath) {
 		// a prefix's removal names the prefix's token, not the path's
@@ -390,6 +397,7 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 		if delta.GetCommitVersion() == verified.CommitVersion && !delta.GetElided() && bytes.Equal(delta.GetEntryVersion(), verified.EntryBytes) {
 			deltaPath.EntryBytes, deltaPath.Entry, deltaPath.CommitVersion = verified.EntryBytes, verified.Entry, verified.CommitVersion
 			deltaPath.Statement, deltaPath.Floor = verified.Statement, verified.Floor
+			deltaPath.Change, deltaPath.ChangePath = verified.Change, verified.ChangePath
 			verified.Deltas = append(verified.Deltas, deltaPath)
 			continue
 		}

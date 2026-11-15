@@ -113,7 +113,8 @@ func evsDirectoryChanges(ctx context.Context, plan *EvsWritePlan, planned map[st
 		case change.Remove && underRemoved(path):
 		case change.Remove:
 			note(path, change.Kind, true)
-		case change.BaseEntryVersion == 0:
+		case change.BaseEntryVersion == 0, change.Repair:
+			// a creation's row, and a repair's stated again (DESIGN-DETAILS 16.2.7)
 			note(path, change.Kind, false)
 		}
 	}

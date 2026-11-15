@@ -233,6 +233,8 @@ barrier evs.part.append.after evsservice/push_part.go
 barrier evs.part.append.before evsservice/push_part.go
 barrier evs.place.put.after evsservice/place.go
 barrier evs.place.put.before evsservice/place.go
+barrier evs.prefix.journal.after evs_prefix.go
+barrier evs.prefix.journal.before evs_prefix.go
 barrier evs.purge.certain evsservice/purge.go
 barrier evs.purge.delete.after evsservice/purge.go
 barrier evs.purge.delete.before evsservice/purge.go

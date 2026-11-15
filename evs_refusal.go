@@ -39,9 +39,53 @@ var (
 	// planner answers it at once, nothing sent, for a creation on a blocking ref under immediate pressure, and the
 	// writer waits it out as it waits out 412 PATH_EPOCH_DUE, giving it to the caller past its bound.
 	ErrEvsPathEpochDue = errors.New("evs: EVS_PATH_EPOCH_DUE: a creation waits for the ref's path epoch")
+	// A change a repo's prefix write rules hold back: §18.5's EVS_PREFIX_RULE (DESIGN-DETAILS 16.2.5, 16.2.7). A
+	// writer's device answers it before anything is planned, sealed or sent, for a path the set in force does not give
+	// it or a set it cannot read; a reader answers it for a path whose effective version it cannot reach. Always an
+	// *EvsPrefixRuleError, which carries the detail and the path.
+	ErrEvsPrefixRule = errors.New("evs: EVS_PREFIX_RULE: the repo's prefix rules hold this path")
 	// A refusal record or code §11.8 does not have.
 	ErrEvsRefusalInvalid = errors.New("evs refusal invalid")
 )
+
+// EVS_PREFIX_RULE's detail (§18.5; DESIGN-DETAILS 16.2.5, 16.2.7, 8.2.8): a closed set.
+type EvsPrefixDetail string
+
+const (
+	// A path the set in force does not give this sidecar, or no path at all where the device is held; to a reader,
+	// a version asked for by number that its rules ignore.
+	EvsPrefixDetailRefused EvsPrefixDetail = "refused"
+	// A set the device must read is pending: its generation is not held, or its entry not fetched.
+	EvsPrefixDetailPending EvsPrefixDetail = "pending"
+	// A set of a later release.
+	EvsPrefixDetailUpdate EvsPrefixDetail = "update"
+	// More ignored versions over the path than AclPrefixSettings.WalkBackVersionCount.
+	EvsPrefixDetailDepth EvsPrefixDetail = "depth"
+	// The effective version is gone from evs and this device holds no copy.
+	EvsPrefixDetailUnavailable EvsPrefixDetail = "unavailable"
+	// A new shared branch measured from nothing (QD-801), which publish adds to a refusal.
+	EvsPrefixDetailBase EvsPrefixDetail = "base"
+	// A tag with no proof (QD-801), which publish adds to a refusal.
+	EvsPrefixDetailTag EvsPrefixDetail = "tag"
+)
+
+// EVS_PREFIX_RULE with its detail and the first path it holds, the caller's own plaintext, which Error never repeats
+// and no log takes (I-13).
+type EvsPrefixRuleError struct {
+	Detail EvsPrefixDetail
+	// The path's raw names joined by /, empty where there is none to name.
+	Path string
+}
+
+// The code and the detail, never the path.
+func (self *EvsPrefixRuleError) Error() string {
+	return fmt.Sprintf("%s (%s)", ErrEvsPrefixRule, self.Detail)
+}
+
+// ErrEvsPrefixRule, so errors.Is finds the code.
+func (self *EvsPrefixRuleError) Unwrap() error {
+	return ErrEvsPrefixRule
+}
 
 // The status each code answers with (EVS-FORMAT.md's table).
 var evsRefusalStatuses = map[protocol.EvsRefusalCode]int{

@@ -668,13 +668,14 @@ func (self *EvsRepo) lookup(ctx context.Context, refId Id, path string) (*evsLis
 	return listing.rows[string(name)], nil
 }
 
-// One opened row of a listing: the child's raw name, kind, the epoch it opened under, and the source epoch a carried
-// row keeps, else 0.
+// One opened row of a listing: the child's raw name, kind, the epoch it opened under, the source epoch a carried
+// row keeps, else 0, and the ref version of the delta that gave it, or the version the folded table stands through.
 type evsOpenedRow struct {
 	name    []byte
 	kind    protocol.EvsEntryKind
 	epoch   uint64
 	carried uint64
+	addedAt uint64
 }
 
 // The rows of the directory result reads at index, opened and checked, by token: the folded table, whose untagged rows
@@ -683,8 +684,16 @@ type evsOpenedRow struct {
 // (DESIGN-DETAILS 9.3's W1), each delta adding or replacing rows and removing the tokens it lists. Every row opens
 // under its own epoch's keys and AAD and is checked against its token, recomputed from the directory's token in that
 // epoch, since evs folds the table itself and only the token ties a row to a path. Any failure refuses the whole
-// listing, alarmed as tamper.
+// listing, alarmed as tamper. This is the table as evs holds it, which a lookup and a floor read (9.2.3's E2).
 func (self *EvsRepo) openListing(ctx context.Context, result *evsReadResult, index int) (map[EvsToken]*evsOpenedRow, error) {
+	rows, _, err := self.openListingRuled(ctx, result, index, nil)
+	return rows, err
+}
+
+// openListing, and with a prefix reader the table as this device follows it (DESIGN-DETAILS 16.2.5's List row): the
+// folded table is evs's word, as it always is for a head reader, and each walked delta after it is judged, an ignored
+// one applied to evs's table alone. The second table is nil with no reader.
+func (self *EvsRepo) openListingRuled(ctx context.Context, result *evsReadResult, index int, ruled evsPrefixReader) (map[EvsToken]*evsOpenedRow, map[EvsToken]*evsOpenedRow, error) {
 	verified := result.replies[index]
 	names := result.paths[index].names
 	epochKeys := func(epoch uint64) (*EvsManifestKey, *EvsPathKey, EvsToken, error) {
@@ -703,7 +712,13 @@ func (self *EvsRepo) openListing(ctx context.Context, result *evsReadResult, ind
 		return manifest, pathKey, tokenPath.Last(), nil
 	}
 	children := map[EvsToken]*evsOpenedRow{}
-	apply := func(table *protocol.EvsNameTable, tableEpoch uint64) error {
+	var followed map[EvsToken]*evsOpenedRow
+	if ruled != nil {
+		followed = map[EvsToken]*evsOpenedRow{}
+	}
+	// delta is the walked delta the table is, nil for the folded table and a delta below the walk, which nobody
+	// can judge
+	apply := func(table *protocol.EvsNameTable, tableEpoch uint64, delta *EvsVerifiedPath, addedAt uint64) error {
 		if table == nil {
 			return nil
 		}
@@ -712,15 +727,45 @@ func (self *EvsRepo) openListing(ctx context.Context, result *evsReadResult, ind
 			self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, result.paths[index].path, nil)
 			return err
 		}
-		for _, removed := range table.GetRemovedTokens() {
-			delete(children, EvsToken(removed))
-		}
-		for _, name := range opened {
-			epoch := tableEpoch
-			if name.Epoch != 0 {
-				epoch = name.Epoch
+		ignored := false
+		if ruled != nil && delta != nil && delta.Statement != nil {
+			// the row a token of this delta names in the table followed so far, found by its name, since a row
+			// keeps the token of the epoch it was written in
+			var kinds map[string]protocol.EvsEntryKind
+			held := func(token EvsToken) (protocol.EvsEntryKind, bool) {
+				if kinds == nil {
+					kinds = map[string]protocol.EvsEntryKind{}
+					for _, row := range followed {
+						kinds[string(row.name)] = row.kind
+					}
+				}
+				for _, name := range opened {
+					if name.Token == token {
+						kind, ok := kinds[string(name.Name)]
+						return kind, ok
+					}
+				}
+				return 0, false
 			}
-			children[name.Token] = &evsOpenedRow{name: name.Name, kind: name.Kind, epoch: epoch, carried: name.Epoch}
+			if ignored, err = ruled.deltaIgnored(ctx, self, result, index, delta, held); err != nil {
+				return err
+			}
+		}
+		applyTo := func(rows map[EvsToken]*evsOpenedRow) {
+			for _, removed := range table.GetRemovedTokens() {
+				delete(rows, EvsToken(removed))
+			}
+			for _, name := range opened {
+				epoch := tableEpoch
+				if name.Epoch != 0 {
+					epoch = name.Epoch
+				}
+				rows[name.Token] = &evsOpenedRow{name: name.Name, kind: name.Kind, epoch: epoch, carried: name.Epoch, addedAt: addedAt}
+			}
+		}
+		applyTo(children)
+		if followed != nil && !ignored {
+			applyTo(followed)
 		}
 		return nil
 	}
@@ -730,22 +775,22 @@ func (self *EvsRepo) openListing(ctx context.Context, result *evsReadResult, ind
 		if verified.EntryEpoch != 0 {
 			tableEpoch = verified.EntryEpoch
 		}
-		if err := apply(verified.Names, tableEpoch); err != nil {
-			return nil, err
+		if err := apply(verified.Names, tableEpoch, nil, verified.NamesThrough); err != nil {
+			return nil, nil, err
 		}
-	} else if err := apply(verified.Entry.GetNames(), max(1, verified.Statement.Push.GetPathEpoch())); err != nil {
-		return nil, err
+	} else if err := apply(verified.Entry.GetNames(), max(1, verified.Statement.Push.GetPathEpoch()), verified, verified.CommitVersion); err != nil {
+		return nil, nil, err
 	}
 	for _, delta := range verified.Deltas {
 		deltaEpoch := headEpoch
 		if delta.Statement != nil {
 			deltaEpoch = max(1, delta.Statement.Push.GetPathEpoch())
 		}
-		if err := apply(delta.Entry.GetNames(), deltaEpoch); err != nil {
-			return nil, err
+		if err := apply(delta.Entry.GetNames(), deltaEpoch, delta, delta.CommitVersion); err != nil {
+			return nil, nil, err
 		}
 	}
-	return children, nil
+	return children, followed, nil
 }
 
 // A read that took more rounds than ReadEpochRoundCount: evs moving the epoch state or the walk's needs each round.
