@@ -166,6 +166,13 @@ type BridgeComponentArgs struct {
 	// Called at each Attach, before the generation's gate, with its env: a host's link builder takes the generation's
 	// api and client from it. Nil for none.
 	OnAttach func(env *SidecarEnv)
+	// RecordReach.Note of the network's record, which the device role's reach events are noted to (bridge_reach.go).
+	// Nil takes no events: they wait in the device role, bounded.
+	Reach func(note *RecordReachNote) error
+	// A grant's owner, approver and action by its id, for its receipts. Nil, or a nil answer, leaves them empty.
+	ReachGrant func(grantId []byte) *BridgeReachGrant
+	// RecordModels.InForce: the model manifest in force for a forward's port on this host. Nil names none.
+	ReachManifest func(port uint32) *RecordContentRef
 	// Raises bridge_alarm. Nil drops it.
 	Emit     SidecarEventFunction
 	Clock    Clock
@@ -193,6 +200,10 @@ type BridgeComponentStatus struct {
 	CompileErrorCount uint64
 	// Whether a start's catch-up waits for the client's follow.
 	CatchUpWaiting bool
+	// §16.8's reach receipts (bridge_reach.go): the flows the device role reported that were noted to the record, and
+	// those whose event or note was refused.
+	ReachNotedCount   uint64
+	ReachRefusedCount uint64
 }
 
 // The bridge component (the file's comment).
@@ -248,6 +259,9 @@ type BridgeComponent struct {
 	block *bridge.BridgeBlock
 	// the alarms the last compile raised, so a repeat is not raised again
 	raisedAlarms []BridgeAlarm
+
+	// the device role's reach events, noted to the record (bridge_reach.go); its own lock
+	reach bridgeComponentReach
 }
 
 var _ SidecarComponent = (*BridgeComponent)(nil)
@@ -351,6 +365,7 @@ func (self *BridgeComponent) SetDeviceRole(sink BridgeStateSink) error {
 		}
 		self.revokedThrough = sink.Decision().StatePin.GetVersion()
 		self.anchor(sink)
+		self.followReach(sink)
 		self.wantCompile()
 		if generation != nil {
 			startErr = self.startGate(generation, sink)
@@ -559,6 +574,7 @@ func (self *BridgeComponent) Close() {
 		self.removeEntry()
 	}
 	<-self.done
+	self.stopReach()
 }
 
 // The component's state.
@@ -586,6 +602,7 @@ func (self *BridgeComponent) Status() BridgeComponentStatus {
 	if sink != nil {
 		status.Decision = sink.Decision()
 	}
+	status.ReachNotedCount, status.ReachRefusedCount = self.reachCounts()
 	return status
 }
 

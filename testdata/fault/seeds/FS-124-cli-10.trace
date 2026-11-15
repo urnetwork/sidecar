@@ -1,0 +1,19 @@
+# fault trace
+# id FS-124's cli
+# seed 10
+# failed actor="setup" action=true await="" release=[] fault=<nil> advance=0s kill=false restart="" background=false join=false: actor setup: a first presence key asked for a check
+ran setup -
+passed setup api.config.verified@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.appended@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.verified@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.appended@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.verified@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.appended@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.verified@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.appended@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.verified@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.appended@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.verified@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.appended@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.verified@01a1dc44-4718-102d-faca-785f4c35e6f8
+passed setup api.config.appended@01a1dc44-4718-102d-faca-785f4c35e6f8

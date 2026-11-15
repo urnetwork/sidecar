@@ -56,6 +56,10 @@ type Bridge struct {
 	hook            *bridgeEgressHook
 	closers         *connect.CallbackList[connect.EgressFlowCloser]
 	changeCallbacks *connect.CallbackList[func()]
+	// the reach events the hook reported, their callbacks and what waits for one (bridge_reach.go); reachDone closes
+	// when runReach returns
+	reach     *bridgeReach
+	reachDone chan struct{}
 
 	// the next time a row's meaning changes, zero for none; run waits on it
 	deadline *connect.MonitorValue[time.Time]
@@ -122,7 +126,9 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		entryStates:       map[netip.Prefix]*BridgeEntryState{},
 		heldRejects:       map[netip.Prefix]time.Time{},
 		overlayDrainSince: map[string]time.Time{},
+		reachDone:         make(chan struct{}),
 	}
+	self.reach = newBridgeReach(self.policy.reach, settings)
 	self.zoneView = &bridgeZoneView{bridge: self}
 	self.resolver = NewBridgeResolverClient(cancelCtx, self.zone.Load, nil, settings)
 	self.hook = &bridgeEgressHook{BridgeEgressPolicy: self.policy, bridge: self}
@@ -137,13 +143,16 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		self.adoptWithLock(decision, true)
 	}()
 	go self.run()
+	go self.runReach()
 	return self, nil
 }
 
-// Stops run and waits for it, then closes the links. The posture's store is the caller's.
+// Stops run and the reach drain and waits for them, then closes the links. The drain's last pass hands the reach
+// callbacks what was reported; events still waiting for a callback are lost with the bridge. The posture's store is the caller's.
 func (self *Bridge) Close() {
 	self.cancel()
 	<-self.done
+	<-self.reachDone
 	for _, remove := range self.linkCallbackRemovals {
 		remove()
 	}
@@ -197,9 +206,13 @@ func (self *Bridge) Status() BridgeStatus {
 	if zone := self.zone.Load(); zone != nil {
 		nameCount = zone.NameCount()
 	}
+	reachNotedCount, reachWaitingCount, reachDroppedCount := self.reach.counts()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := BridgeStatus{
+		ReachNotedCount:        reachNotedCount,
+		ReachWaitingCount:      reachWaitingCount,
+		ReachDroppedCount:      reachDroppedCount,
 		State:                  self.decision.State,
 		PolicyProfile:          self.policy.Profile(),
 		PolicyGeneration:       self.policy.PolicyGeneration(),

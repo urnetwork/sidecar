@@ -2,7 +2,8 @@
 // sdk provider's LocalUserNat, deciding each new flow once, before its dial, by the verified state the bridge
 // publishes. ResolveEgress is a pure function of the published state, the flow and the clock: inline, non-blocking,
 // with no I/O, no lock and no allocation (R-BRIDGE-9, I-12). It reads compiled rows, never an AclEngine
-// (plan-BRIDGE-small-readings #12).
+// (plan-BRIDGE-small-readings #12). Its one effect beside its answer is the reach report of a flow a granted row
+// admitted, a slot of a preallocated ring taken by a compare-and-swap, which changes no decision (bridge_reach.go).
 //
 // Publish builds the next immutable state off the packet path and swaps it in by one atomic pointer store; its
 // generation is a field of the state, so PolicyGeneration is one atomic load. Before the first Publish the policy
@@ -164,6 +165,9 @@ type BridgeEgressPolicy struct {
 
 	// which forwarding Delegation's key admitted a principal (bridge_principal.go)
 	forwardPrincipals bridgeForwardPrincipals
+
+	// where the flows a granted row admitted are reported (bridge_reach.go); nil reports nothing
+	reach *bridgeReachQueue
 }
 
 var _ connect.EgressHook = (*BridgeEgressPolicy)(nil)
@@ -177,6 +181,7 @@ func NewBridgeEgressPolicy(profile BridgePolicyProfile, settings *BridgeSettings
 		profile:  profile,
 		settings: settings,
 		clock:    settings.clock(),
+		reach:    newBridgeReachQueue(settings.ReachQueueCount),
 	}
 	self.state.Store(newBridgePolicyState(&BridgePolicyInput{State: PosturePending}, 0, settings))
 	return self
@@ -223,7 +228,16 @@ func (self *BridgeEgressPolicy) ResolveEgress(flow *connect.EgressFlow) connect.
 	if delegationId, ok := self.forwardPrincipals.delegationId(flow.Principal); ok {
 		forwardDelegationId = &delegationId
 	}
-	return state.resolve(self.profile, self.settings, flow, forwardDelegationId, self.clock.Now())
+	if self.reach == nil {
+		return state.resolve(self.profile, self.settings, flow, forwardDelegationId, self.clock.Now(), nil)
+	}
+	// filled only for a flow a granted row admitted; it stays on this stack and the ring copies it
+	var reachEvent BridgeReachEvent
+	decision := state.resolve(self.profile, self.settings, flow, forwardDelegationId, self.clock.Now(), &reachEvent)
+	if reachEvent.StreamCount != 0 {
+		self.reach.offer(&reachEvent)
+	}
+	return decision
 }
 
 // The counts VerifyPrincipal keeps, for a status.
