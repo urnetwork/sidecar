@@ -212,7 +212,12 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 	if err != nil {
 		return nil, nil, err
 	}
-	plan, err := self.PlanWrite(ctx, &EvsPlanArgs{RefName: refName, RefId: refId, Writes: planWrites, Generation: repoKey.Generation(), Fresh: fresh, AgentId: agentId})
+	planArgs := &EvsPlanArgs{RefName: refName, RefId: refId, Writes: planWrites, Generation: repoKey.Generation(), Fresh: fresh, AgentId: agentId}
+	if extras != nil {
+		// the prefix rules leave a CLOSURE's, an ERASE's and a CUT's push outside them (DESIGN-DETAILS 16.2.4's line 1)
+		planArgs.Flags = extras.flags
+	}
+	plan, err := self.PlanWrite(ctx, planArgs)
 	if err != nil {
 		return nil, nil, err
 	}

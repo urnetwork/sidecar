@@ -69,6 +69,30 @@ type evsPrefixReader interface {
 	// The token paths a walked statement names that this reader follows, and false where it follows none of an
 	// inline list: every change ignored, which raises the alarm and no change event (§11.10).
 	followed(ctx context.Context, repo *EvsRepo, refId Id, statement *EvsVerifiedStatement) ([]EvsTokenPath, bool)
+	// The writer's local refusal (DESIGN-DETAILS 16.2.7; EVS1-M6-05): nil where this device may write every path of
+	// ask under the repo's rules, else EVS_PREFIX_RULE naming the first path refused. Asked before a write's first
+	// round trip.
+	allowWrite(ctx context.Context, repo *EvsRepo, ask *evsPrefixWriteAsk) error
+	// What a write of the path read at index stands on: nil where evs's newest event of it is the effective one, else
+	// the effective version, which the write then repairs to. A set this device cannot read is EVS_PREFIX_RULE.
+	writeBase(ctx context.Context, repo *EvsRepo, result *evsReadResult, index int) (*evsPrefixWriteBase, error)
+}
+
+// One write as the writer's local refusal is asked about it: the ref by its name and what the caller knows of its
+// kind and mode before any read, the push's flags, and each path's raw names joined by /.
+type evsPrefixWriteAsk struct {
+	refName []byte
+	refKind protocol.EvsRefKind
+	refMode protocol.EvsRefMode
+	flags   uint32
+	paths   []string
+}
+
+// The effective version of a path whose newest event at evs this device ignores: its number, 0 for a path that is
+// effectively absent, and how many ignored versions lie over it.
+type evsPrefixWriteBase struct {
+	version      uint64
+	ignoredAbove int
 }
 
 // What 16.2.5's walk found over the version a read shows: how many ignored versions lie over it, and whether a set

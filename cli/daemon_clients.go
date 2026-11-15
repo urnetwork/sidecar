@@ -634,6 +634,8 @@ func (self *urNetworkClients) evsClient() (*sidecar.EvsClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	// the repo's prefix write rules, read and written through this Sidecar's follower (DESIGN-DETAILS 16.2.5, 16.2.7)
+	client.EnablePrefixRules(self.running.EvsPrefixRulesArgs())
 	if err := self.startLocalTier(client, args); err != nil {
 		// git's service refuses for want of the tier, naming it, and the rest of evs runs on
 		self.log.Warningf("[ur]network %s serves no local git tier: %s", client.NetworkId(), err)

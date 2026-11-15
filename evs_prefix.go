@@ -82,6 +82,10 @@ type EvsPrefixRulesArgs struct {
 	// The device's newest read of gkm's generation listing for a repo's group, which voids a pending set past its
 	// margin (16.2.3); nil voids none.
 	Generations func(repoId Id) *AclPrefixGenerationRead
+	// AclEngine.AllowPrefixWrite on this device's installed state (16.2.7), which the planner asks before a write's
+	// first round trip. Nil refuses every write to a ruled repo with EVS_PREFIX_RULE, detail pending: a device that
+	// cannot ask does not write under the rules.
+	AllowWrite func(write *AclPrefixWrite) AclPrefixWriteDecision
 	// Nil: DefaultAclPrefixSettings.
 	Settings *AclPrefixSettings
 }
@@ -584,6 +588,65 @@ func (self *evsPrefixJudge) readAccepted(ctx context.Context, repo *EvsRepo, ref
 		return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailUnavailable, Path: path}
 	}
 	return result, nil
+}
+
+// evsPrefixReader's allowWrite: AllowPrefixWrite with the sets this device holds for its own state's rows.
+func (self *evsPrefixJudge) allowWrite(ctx context.Context, repo *EvsRepo, ask *evsPrefixWriteAsk) error {
+	if self.args.AllowWrite == nil {
+		return &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
+	}
+	state, err := self.client.verifier.config()
+	if err != nil {
+		return err
+	}
+	sets, err := self.setsOf(ctx, repo.repoId, state)
+	if err != nil {
+		return err
+	}
+	decision := self.args.AllowWrite(&AclPrefixWrite{
+		RepoId: repo.repoId, RefKind: ask.refKind, RefMode: ask.refMode, RefName: ask.refName, Flags: ask.flags,
+		Paths: slices.Values(ask.paths), Sets: sets,
+	})
+	if decision.Allowed {
+		return nil
+	}
+	return &EvsPrefixRuleError{Detail: EvsPrefixDetail(decision.Detail.String()), Path: decision.Path}
+}
+
+// evsPrefixReader's writeBase: the walk runs on a read of the path alone, so the planner's own read keeps what it
+// verified of evs's newest event, which the write's base_entry_version and prev_push_id name (16.2.7).
+func (self *evsPrefixJudge) writeBase(ctx context.Context, repo *EvsRepo, result *evsReadResult, index int) (*evsPrefixWriteBase, error) {
+	verified := result.replies[index]
+	if entry := verified.Entry; entry != nil && verified.Removal == nil && entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
+		// a directory's removal goes on what evs holds of it: its deltas are a listing's to judge
+		return nil, nil
+	}
+	path := result.paths[index].path
+	verdict, err := self.verdictOfPath(ctx, repo, result.refId, verified, nil)
+	if err != nil {
+		return nil, err
+	}
+	switch verdict.Outcome {
+	case AclPrefixAllowed:
+		return nil, nil
+	case AclPrefixIgnored:
+	default:
+		return nil, evsPrefixUnreadError(verdict, path)
+	}
+	own, err := repo.readPaths(ctx, result.refId, []*evsReadPath{{path: path}}, false)
+	if err != nil {
+		return nil, err
+	}
+	effective, read, err := self.effective(ctx, repo, path, own)
+	if err != nil {
+		return nil, err
+	}
+	defer effective.objects.close()
+	base := &evsPrefixWriteBase{ignoredAbove: max(1, read.ignoredAbove)}
+	if found := effective.replies[0]; found.Entry != nil && found.Removal == nil && !found.Absent {
+		base.version = found.Entry.GetVersion()
+	}
+	return base, nil
 }
 
 // evsPrefixReader's ignored.

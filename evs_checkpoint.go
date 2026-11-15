@@ -50,6 +50,9 @@ const (
 	EvsCheckpointRemoveGeneration
 	// ur evs rekey's rewrite.
 	EvsCheckpointForced
+	// The repair form (DESIGN-DETAILS 16.2.7): a version over one this device ignores under the repo's prefix rules,
+	// whole, so no reader's reconstruction passes through the ignored record.
+	EvsCheckpointRepair
 	// The file, or its previous version, is chunks: past 8 MiB.
 	EvsCheckpointChunked
 	// The file or its base is past the client's DiffMaxByteCount.

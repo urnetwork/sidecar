@@ -34,7 +34,12 @@ type evsPrefixTest struct {
 // A world whose repo admits two writers and holds no set yet.
 func newEvsPrefixTest(t *testing.T) *evsPrefixTest {
 	t.Helper()
-	world := newEvsTestWorld(t)
+	return newEvsPrefixTestOn(t, newEvsTestWorld(t))
+}
+
+// newEvsPrefixTest over a world a test made.
+func newEvsPrefixTestOn(t *testing.T, world *evsTestWorld) *evsPrefixTest {
+	t.Helper()
 	admin := world.signer
 	held := newEvsTestSigner("held writer")
 	world.config.identityKeys[held.sidecarId] = held.publicKey()

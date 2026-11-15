@@ -225,5 +225,45 @@ func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, file
 		Settings:      self.settings.Evs,
 		RepoCreated:   self.announceCreatedRepo,
 		PrivateCreate: self.readyPrivateRepo,
+		ConfigFollow:  self.evsConfigFollow,
 	}, nil
+}
+
+// EvsClientArgs.ConfigFollow: one follow of the network's authorization log through the config follower's client
+// (ConfigClient.CatchUp, within its FollowTimeout). Nothing where no follower stands yet, which follows on its own.
+func (self *Sidecar) evsConfigFollow(ctx context.Context) error {
+	follower := self.ConfigFollower()
+	if follower == nil {
+		return nil
+	}
+	client := follower.Client()
+	if client == nil {
+		return nil
+	}
+	return client.CatchUp(ctx)
+}
+
+// What EnablePrefixRules takes from this Sidecar (DESIGN-DETAILS 16.2.5, 16.2.7): the config follower's head reader,
+// which opens a set whose entry this device no longer keeps, and its AclEngine's AllowPrefixWrite, the writer's local
+// refusal. With no follower standing no set is opened that way and every write to a ruled repo is refused pending.
+func (self *Sidecar) EvsPrefixRulesArgs() *EvsPrefixRulesArgs {
+	return &EvsPrefixRulesArgs{
+		Heads: func() ConfigHeadReader {
+			follower := self.ConfigFollower()
+			if follower == nil {
+				return nil
+			}
+			return follower.Heads()
+		},
+		AllowWrite: func(write *AclPrefixWrite) AclPrefixWriteDecision {
+			var engine *AclEngine
+			if follower := self.ConfigFollower(); follower != nil {
+				engine = follower.AclEngine()
+			}
+			if engine == nil {
+				return AclPrefixWriteDecision{AclDecision: AclDecision{Reason: AclReasonNoState}, Line: AclPrefixReasonPending, Detail: AclPrefixDetailPending}
+			}
+			return engine.AllowPrefixWrite(write)
+		},
+	}
 }
