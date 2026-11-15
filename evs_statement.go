@@ -149,7 +149,9 @@ func (self *EvsStatement) checkShape(format2 bool) error {
 			return err
 		}
 	}
-	if push.GetAuth().GetVersion() == 0 || push.GetGeneration() == 0 || push.GetPathEpoch() == 0 || push.GetTimeMs() <= 0 {
+	// the genesis pin {0, A_0} is a config repo's first push's alone, which base 1 names and so precedes (QD-081 #4):
+	// the shape holds it to a ref's first push, evs's gate and readers' states to the config repo's
+	if (push.GetAuth().GetVersion() == 0 && push.GetBaseVersion() != 0) || push.GetGeneration() == 0 || push.GetPathEpoch() == 0 || push.GetTimeMs() <= 0 {
 		return fmt.Errorf("%w: a pin, generation, path epoch or time missing", ErrEvsPushInvalid)
 	}
 	if push.GetRefKind() == 0 || uint32(protocol.EvsRefKind_EVS_REF_ERASURE) < push.GetRefKind() ||

@@ -12,7 +12,9 @@
 //	record     gen/<g> of the push's group, from evs's caches: the push's C_g must be its commitment and the record
 //	           this repo's, else final; a record evs does not hold yet answers 503
 //	own pin    the push's auth pin on evs's chain: above evs's state answers 503 (api's notification brings the state
-//	           within 5 s, §8.9), off the chain is a fork and final, before what evs retains is not judged
+//	           within 5 s, §8.9), off the chain is a fork and final, before what evs retains is not judged. The
+//	           genesis pin {0, A_0} is taken on the config repo's first push alone, which base 1 names and so precedes
+//	           (QD-081 #4): on any other push it is final
 //	rules      a push on no head, a placeholder or a deleted head (the creating test 5c's sections make), of ref kind
 //	           shared, against the greatest position in the state's AclRepo.prefix_rules for the repo
 //	           (sidecar.AclPrefixRulesNewestAt): an auth pin below it is recorded (412 GATE_CLOSED), a pin at the
@@ -89,6 +91,10 @@ func CheckGate(view *PushView) *EvsCheckRefusal {
 
 	if view.Auth == nil {
 		return newEvsCheckRefusal(EvsCheckReasonGateUnknown, "no authorization state")
+	}
+	if push.GetAuth().GetVersion() == 0 && (view.Repo.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || view.headExists()) {
+		// the genesis pin is the config repo's first push's alone, the push base 1 names (QD-081 #4)
+		return newEvsCheckRefusal(EvsCheckReasonPinForked, "a genesis pin outside the config repo's first push")
 	}
 	if !view.Auth.OnChain(push.GetAuth()) {
 		_, err := view.Auth.At(push.GetAuth())
