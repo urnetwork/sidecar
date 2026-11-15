@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -345,8 +346,13 @@ type reseedDevice struct {
 	fixture *reseedFixture
 	client  *sidecar.EvsClient
 	mirror  *sidecar.EvsMirrorStore
-	// the reseed calls the engine has served
-	reseedCallCount int
+	// the reseed calls the engine has served, and the most bytes one call's body held
+	reseedCallCount    int
+	reseedMaxByteCount int
+	// When set, sees each reseed call's body, numbered from 1, before the engine serves it, and may change it; true
+	// loses the engine's answer, the device getting a 503 whose outcome is unknown in its place, as when the answer
+	// never reached it.
+	onReseed func(call int, body *protocol.EvsReseedRequest) bool
 }
 
 // The admin's device, its mirror empty.
@@ -391,13 +397,44 @@ func (self *reseedFixture) device() *reseedDevice {
 	return device
 }
 
-// The engine serves the call, counting the reseed calls. Called on the walk's goroutine alone.
+// The engine serves the call, counting the reseed calls and their bodies' bytes, through onReseed when set. Called on
+// the walk's goroutine alone.
 func (self *reseedDevice) RoundTrip(request *http.Request) (*http.Response, error) {
+	lost := false
 	if strings.HasSuffix(request.URL.Path, "/reseed") {
 		self.reseedCallCount += 1
+		bodyBytes, err := io.ReadAll(request.Body)
+		request.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		self.reseedMaxByteCount = max(self.reseedMaxByteCount, len(bodyBytes))
+		if self.onReseed != nil {
+			body := &protocol.EvsReseedRequest{}
+			if err := proto.Unmarshal(bodyBytes, body); err != nil {
+				return nil, err
+			}
+			lost = self.onReseed(self.reseedCallCount, body)
+			if bodyBytes, err = proto.Marshal(body); err != nil {
+				return nil, err
+			}
+		}
+		request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		request.ContentLength = int64(len(bodyBytes))
 	}
 	recorder := httptest.NewRecorder()
 	self.fixture.engine.Handler().ServeHTTP(recorder, request)
+	if lost {
+		replyBytes, err := proto.Marshal(&protocol.EvsRefusalReply{
+			Code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE, Outcome: protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_UNKNOWN,
+		})
+		if err != nil {
+			return nil, err
+		}
+		recorder = httptest.NewRecorder()
+		recorder.WriteHeader(http.StatusServiceUnavailable)
+		recorder.Write(replyBytes)
+	}
 	return recorder.Result(), nil
 }
 
@@ -1106,20 +1143,42 @@ func TestReseedOfARestoredRepoLeavesItActive(t *testing.T) {
 	}
 }
 
-// A call out of its form is refused before anything is written: parts beside a one-part push's statement, and a call
-// mixing a slot with a push, are invalid, as is a statement that does not parse.
+// A call out of its form is refused before anything is written: a part call or a seal call for a one-part push's
+// statement (QD-836), a call mixing a slot with a push, a part or a seal, and an EvsReseed with a part or places, are
+// invalid, as is a statement that does not parse.
 func TestReseedRefusesACallOutOfItsForm(t *testing.T) {
 	fixture := newReseedFixture(t)
 	plan := fixture.kept()
 	fixture.create(plan, "a")
 	body := fixture.reseedBody(plan)
-	parts := &protocol.EvsReseedRequest{Statement: body.GetStatement(), Parts: [][]byte{[]byte("part")}}
-	requireRefusal(t, fixture.reseed(parts), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
-	mixed := &protocol.EvsReseedRequest{Statement: body.GetStatement(), Payload: body.GetPayload(), SlotId: testId("mixed slot").Bytes(), Slot: []byte("slot")}
-	requireRefusal(t, fixture.reseed(mixed), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
-	requireRefusal(t, fixture.reseed(&protocol.EvsReseedRequest{Statement: []byte("no statement")}), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
-	if !fixture.head().Absent() {
-		t.Fatal("a refused call wrote the head")
+	place := &protocol.EvsPlace{Minute: 1, Seq: 1}
+	slotId := testId("mixed slot").Bytes()
+	reseedStatement, err := sidecar.SignEvsReseed(checkTestSign(fixture.check.otherKey, fixture.adminId), fixture.check.repoId, fixture.check.refId, 1,
+		[32]byte(bytes.Repeat([]byte{1}, 32)), []byte("incident"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct {
+		label string
+		body  *protocol.EvsReseedRequest
+	}{
+		{"a part of a one-part push", &protocol.EvsReseedRequest{Statement: body.GetStatement(), Parts: [][]byte{[]byte("part")}}},
+		{"a numbered part of a one-part push", &protocol.EvsReseedRequest{Statement: body.GetStatement(), Parts: [][]byte{[]byte("part")}, PartNumber: 1}},
+		{"a seal of a one-part push", &protocol.EvsReseedRequest{Statement: body.GetStatement(), PartPlaces: []*protocol.EvsPlace{place}}},
+		{"a slot beside a payload", &protocol.EvsReseedRequest{Statement: body.GetStatement(), Payload: body.GetPayload(), SlotId: slotId, Slot: []byte("slot")}},
+		{"a slot beside a part", &protocol.EvsReseedRequest{Statement: body.GetStatement(), Parts: [][]byte{[]byte("part")}, PartNumber: 1, SlotId: slotId, Slot: []byte("slot")}},
+		{"a slot beside places", &protocol.EvsReseedRequest{Statement: body.GetStatement(), PartPlaces: []*protocol.EvsPlace{place}, SlotId: slotId, Slot: []byte("slot")}},
+		{"an EvsReseed with a part", &protocol.EvsReseedRequest{Statement: reseedStatement, Parts: [][]byte{[]byte("part")}, PartNumber: 1}},
+		{"an EvsReseed with places", &protocol.EvsReseedRequest{Statement: reseedStatement, PartPlaces: []*protocol.EvsPlace{place}}},
+		{"no statement", &protocol.EvsReseedRequest{Statement: []byte("no statement")}},
+	} {
+		recorder := fixture.reseed(call.body)
+		if recorder.Code != http.StatusBadRequest || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_INVALID {
+			t.Fatalf("%s: status %d (%s), want 400 INVALID", call.label, recorder.Code, refusalOf(t, recorder).GetCode())
+		}
+	}
+	if !fixture.head().Absent() || len(fixture.batchRecords()) != 0 {
+		t.Fatal("a refused call wrote the head or a record")
 	}
 	fixture.requireCommitted(fixture.reseed(body), 1)
 }
@@ -1308,7 +1367,6 @@ func TestReseedKeyIsUnderItsReposFamily(t *testing.T) {
 func TestReseedSettingsAreValidated(t *testing.T) {
 	for _, adjust := range []func(settings *EvsSettings){
 		func(settings *EvsSettings) { settings.ReseedBodyMaxByteCount = 0 },
-		func(settings *EvsSettings) { settings.ReseedPartsBodyMaxByteCount = 0 },
 		func(settings *EvsSettings) { settings.ReseedStatementMaxByteCount = 0 },
 		func(settings *EvsSettings) { settings.ReseedRestoreWindow = 0 },
 		func(settings *EvsSettings) { settings.ReseedStatementRetryCount = 0 },

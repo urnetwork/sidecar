@@ -619,15 +619,19 @@ message EvsPartRequest {                // POST .../push/<push_id>/<k>
   repeated EvsUploadReceipt receipts = 3;
   bytes staged = 4;                     // format 2's, as in EvsPushRequest
 }
-message EvsReseedRequest {              // POST .../reseed (11.13's re-seed row, §19.10; QD-725): one push, one slot or
-                                        // one Signed EvsReseed a call; a 200 carries an EvsPushReply
+message EvsReseedRequest {              // POST .../reseed (11.13's re-seed row, §19.10; QD-725, QD-836): one push, one
+                                        // part of a push in parts, that push's seal, one slot or one Signed EvsReseed
+                                        // a call; a 200 carries an EvsPushReply
   bytes statement = 1;                  // a re-seeded Signed EvsPush as its device kept it, never re-signed; with a
                                         // slot, the Signed EvsPush of a re-seeded version that names the slot; alone and
                                         // a Signed EvsReseed, the statement evs keeps at reseed/<repo>/<ref>
   bytes payload = 2;                    // a one-part push's payload, as EvsPushRequest's
-  repeated bytes parts = 3;             // a push in parts: each EvsPushPart as sent, in part order
+  repeated bytes parts = 3;             // a part call: its one EvsPushPart as sent, never more (QD-836)
   bytes slot_id = 4;                    // a slot call: the slot's id, 16 B
   bytes slot = 5;                       // and its EvsSlotObject bytes as the mirror holds them
+  uint32 part_number = 6;               // a part call: its part's k, from 1, as its EvsPushPart numbers it (QD-836)
+  repeated EvsPlace part_places = 7;    // a seal call: each part's reseed record, as its part call answered, in part
+                                        // order, one per part the statement counts (QD-836)
 }
 message EvsLeaseRequest {               // POST .../push/<push_id>/lease, git mode; a 200 carries no body
   bytes ref_id = 1;
@@ -658,9 +662,9 @@ message EvsSubscription {               // one lease of the caller's, as GET /ev
 message EvsSubscriptionsReply {         // GET /evs/v1/subscriptions?repo_id=
   repeated EvsSubscription subscriptions = 1;
 }
-message EvsPushReply {                  // 200 from push, part or seal
+message EvsPushReply {                  // 200 from push, part or seal, and from reseed
   uint64 version = 1;                   // push and seal: its ref version, the original one on a retry
-  EvsPlace place = 2;                   // part: where its record is
+  EvsPlace place = 2;                   // part, and a reseed part call: where its record is
   EvsDepositHead deposit_head = 3;      // a push or seal on the caller's own deposit ref
 }
 message EvsRefusalReply {               // every answer of evs's but a 200

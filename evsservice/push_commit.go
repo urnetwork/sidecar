@@ -194,10 +194,6 @@ func (self *pushAttempt) step6() *pushOutcome {
 		self.slotsWritten = true
 	}
 	if self.place == nil {
-		// a re-seeded push in parts' part records first, which its seal's record then names (reseed.go)
-		if outcome := self.appendReseedParts(); outcome != nil {
-			return outcome
-		}
 		barrierKey := barrierRefKey(self.repoId, self.refId)
 		testHookBarrier(BarrierPushRecordBefore, barrierKey)
 		place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), self.batchRecord(), tail)
@@ -327,8 +323,6 @@ func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
 			{Kind: WriteOperationCreate, ObjectByteCount: sidecar.EvsLogPageMaxByteCount, Count: 1.0 / EvsLogPageVersionCount},
 		},
 	}
-	// a re-seeded push in parts writes its part records under the same grant (reseed.go)
-	self.addReseedPartOperations(operations)
 	return PricePush(self.engine.priceTable, operations)
 }
 
