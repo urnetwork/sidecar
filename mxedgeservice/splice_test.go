@@ -1,0 +1,385 @@
+// The router's splice (MAIL-M7-19): each of §15.4's bounds on a fake clock, the half-closes and resets,
+// the lease's byte count, a drain's reset, and MailIngress at its bound. On router_test.go's harness.
+
+package mxedgeservice_test
+
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
+
+	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/mxedgeservice"
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/sidecartest"
+)
+
+// Splice bounds apart from each other and from every other timer, so a test moves past exactly one.
+func testSpliceSettings(settings *mxedgeservice.MxEdgeSettings) {
+	settings.SpliceIdleTimeout = 7 * time.Minute
+	settings.SpliceSlowTimeout = 11 * time.Minute
+	settings.SpliceSlowByteCount = 1024
+	settings.SpliceSessionTimeout = 29 * time.Minute
+}
+
+// A spliced session, past its setup, with its timers armed: the splice armed its idle wait before its
+// first byte could move.
+func (self *testRouter) splice(sender string) (*testClient, *testReceiver, time.Time) {
+	self.t.Helper()
+	client, receiver := self.dialFrom(sender, testRouteSni)
+	start := self.clock.Now()
+	self.awaitTimerAt(start.Add(self.settings.SpliceIdleTimeout))
+	return client, receiver, start
+}
+
+// Expects the splice to have ended with reason: the stream reset with code, the sender's connection
+// closed, the session's record naming the reason.
+func (self *testRouter) expectSpliceEnd(client *testClient, receiver *testReceiver, reason string, code protocol.StreamResetCode) {
+	self.t.Helper()
+	client.expectEnd()
+	self.service.AwaitSessionCount(0)
+	if codes := receiver.stream.ResetCodes(); !slices.Equal(codes, []protocol.StreamResetCode{code}) {
+		self.t.Errorf("%s reset the stream with %v, want %v", reason, codes, code)
+	}
+	records := self.flushRecords()
+	if len(records) != 1 || records[0].Result != "splice_"+reason {
+		self.t.Errorf("records %+v, want splice_%s", records, reason)
+	}
+	if value := self.host.Metrics.Value("urnetwork_mxedge_splice_ends_total", reason); value != 1 {
+		self.t.Errorf("%v splices counted as ended by %s", value, reason)
+	}
+}
+
+// No byte either way for SpliceIdleTimeout ends the splice; a byte resets the wait.
+func TestSpliceEndsAfterIdle(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: testSpliceSettings})
+	client, receiver, start := router.splice(testSender)
+	router.clock.Advance(3 * time.Minute)
+	go client.conn.Write([]byte("x"))
+	receiver.readFull(t, 1)
+	// the wait at start+7m sees the byte at start+3m and waits until start+10m
+	router.clock.AdvanceTo(start.Add(router.settings.SpliceIdleTimeout))
+	router.awaitTimerAt(start.Add(3*time.Minute + router.settings.SpliceIdleTimeout))
+	if router.service.SpliceCount() != 1 {
+		t.Fatal("a splice with a byte 4 min ago ended at the idle wait")
+	}
+	router.clock.AdvanceTo(start.Add(3*time.Minute + router.settings.SpliceIdleTimeout))
+	router.expectSpliceEnd(client, receiver, "idle", protocol.StreamResetCode_RST_PEER_TIMEOUT)
+}
+
+// A splice that passed fewer than SpliceSlowByteCount by SpliceSlowTimeout ends then.
+func TestSpliceEndsWhenSlow(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: func(settings *mxedgeservice.MxEdgeSettings) {
+		testSpliceSettings(settings)
+		settings.SpliceIdleTimeout = time.Hour
+	}})
+	client, receiver, start := router.splice(testSender)
+	router.clock.AdvanceTo(start.Add(router.settings.SpliceSlowTimeout))
+	router.expectSpliceEnd(client, receiver, "slow", protocol.StreamResetCode_RST_PEER_TIMEOUT)
+}
+
+// One that passed SpliceSlowByteCount goes on past the slow bound, to SpliceSessionTimeout, where it ends
+// whatever it carries.
+func TestSpliceEndsAtTheSessionTimeout(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: func(settings *mxedgeservice.MxEdgeSettings) {
+		testSpliceSettings(settings)
+		settings.SpliceIdleTimeout = time.Hour
+	}})
+	client, receiver, start := router.splice(testSender)
+	payload := testRouteCapture(router.settings.SpliceSlowByteCount)
+	go client.conn.Write(payload)
+	receiver.readFull(t, len(payload))
+	router.clock.AdvanceTo(start.Add(router.settings.SpliceSlowTimeout))
+	if router.service.SpliceCount() != 1 {
+		t.Fatal("a splice past the slow bytes ended at the slow bound")
+	}
+	router.clock.AdvanceTo(start.Add(router.settings.SpliceSessionTimeout))
+	router.expectSpliceEnd(client, receiver, "session_timeout", protocol.StreamResetCode_RST_PEER_TIMEOUT)
+}
+
+// A splice ends once it would pass SpliceMessageMultiple times the cold message cap plus
+// SpliceExtraByteCount, both ways, the hello included, and the chunk that would pass it never reaches the
+// receiver.
+func TestSpliceEndsAtTheByteCap(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: func(settings *mxedgeservice.MxEdgeSettings) {
+		settings.ColdMessageByteCount = 1000
+		settings.SpliceMessageMultiple = 2
+		settings.SpliceExtraByteCount = 500
+	}})
+	client, receiver := router.dialFrom(testSender, testRouteSni)
+	helloByteCount := len(testRouterHello(testRouteSni, 64))
+	// the cap is 2,500 B: this leaves room for exactly 100 more
+	underCap := testRouteCapture(2500 - helloByteCount - 100)
+	go client.conn.Write(underCap)
+	if got := receiver.readFull(t, len(underCap)); !bytes.Equal(got, underCap) {
+		t.Fatal("the bytes under the cap changed")
+	}
+	go client.conn.Write(testRouteCapture(101))
+	client.expectEnd()
+	router.service.AwaitSessionCount(0)
+	if rest, _ := io.ReadAll(receiver.reader); 0 < len(rest) {
+		t.Errorf("%d bytes past the cap reached the receiver", len(rest))
+	}
+	records := router.flushRecords()
+	if len(records) != 1 || records[0].Result != "splice_byte_cap" || records[0].ByteCount != int64(2500-100) {
+		t.Errorf("records %+v", records)
+	}
+}
+
+// A network's own mail_inbound_message_bytes, once loaded, bounds its splices in place of the cold cap.
+func TestSpliceTakesTheNetworksMessageCap(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: func(settings *mxedgeservice.MxEdgeSettings) {
+		settings.ColdMessageByteCount = 100000
+		settings.SpliceMessageMultiple = 2
+		settings.SpliceExtraByteCount = 500
+	}})
+	router.host.Quota.SetLimits(connect.Id(router.networkId), &sidecar.QuotaLimits{Tier: "pro", Limits: map[string]int64{"mail_inbound_message_bytes": 1000}})
+	// the first session asks for the network's limits, loaded off its path
+	client, receiver := router.dialFrom(testSender, testRouteSni)
+	receiver.writer.Close()
+	client.expectEnd()
+	router.service.AwaitSessionCount(0)
+	router.service.AwaitMessageLimitsPass(2)
+
+	client, receiver = router.dialFrom("198.51.100.3", testRouteSni)
+	go client.conn.Write(testRouteCapture(3000))
+	client.expectEnd()
+	router.service.AwaitSessionCount(0)
+	records := router.flushRecords()
+	if len(records) != 2 || records[1].Result != "splice_byte_cap" || 2500 < records[1].ByteCount {
+		t.Errorf("records %+v", records)
+	}
+	io.ReadAll(receiver.reader)
+}
+
+// A splice ends at its ticket's grant expiry, revoked.
+func TestSpliceEndsAtTheGrantExpiry(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: testSpliceSettings})
+	expireTime := router.clock.Now().Add(4 * time.Minute)
+	router.dialer.answer(&testDialAnswer{grantExpireTimeMillis: uint64(expireTime.UnixMilli())})
+	client, receiver, _ := router.splice(testSender)
+	router.awaitTimerAt(expireTime)
+	router.clock.AdvanceTo(expireTime)
+	router.expectSpliceEnd(client, receiver, "expired", protocol.StreamResetCode_RST_REVOKED)
+}
+
+// The server's end of a sender's pipe whose reads fail as a reset would, once the test resets it.
+type testResetConn struct {
+	net.Conn
+	sender net.Addr
+	reset  atomic.Bool
+}
+
+var errTestConnReset = errors.New("connection reset by peer")
+
+func (self *testResetConn) RemoteAddr() net.Addr {
+	return self.sender
+}
+
+func (self *testResetConn) Read(b []byte) (int, error) {
+	n, err := self.Conn.Read(b)
+	if self.reset.Load() {
+		return n, errTestConnReset
+	}
+	return n, err
+}
+
+// The sender resets: what the router reads from it fails as a reset.
+func (self *testResetConn) injectReset() {
+	self.reset.Store(true)
+	self.Conn.Close()
+}
+
+// A sender's FIN maps to StreamClose, and the receiver's close then ends the splice cleanly, resetting
+// nothing.
+func TestSpliceMapsAFinToStreamClose(t *testing.T) {
+	router := newTestRouter(t, nil)
+	client, receiver := router.dialFrom(testSender, testRouteSni)
+	client.conn.Close()
+	if rest, err := io.ReadAll(receiver.reader); err != nil || 0 < len(rest) {
+		t.Errorf("the receiver read %q, %v before the StreamClose", rest, err)
+	}
+	receiver.writer.Close()
+	router.service.AwaitSessionCount(0)
+	if codes := receiver.stream.ResetCodes(); 0 < len(codes) {
+		t.Errorf("a clean end reset the stream with %v", codes)
+	}
+	if records := router.flushRecords(); len(records) != 1 || records[0].Result != "splice_closed" {
+		t.Errorf("records %+v", records)
+	}
+}
+
+// A sender's reset maps to StreamReset, and a receiver's StreamReset to a reset of the sender.
+func TestSpliceMapsResets(t *testing.T) {
+	router := newTestRouter(t, nil)
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { clientConn.Close() })
+	resetConn := &testResetConn{Conn: serverConn, sender: &net.TCPAddr{IP: net.ParseIP(testSender), Port: 2525}}
+	router.listener.conns <- resetConn
+	client := &testClient{t: t, conn: clientConn, reader: bufio.NewReader(clientConn)}
+	client.expect("220 " + testBannerHostName + " ESMTP")
+	client.write("EHLO " + testRouteEhlo + "\r\n")
+	client.expectEhlo()
+	quietAt := router.clock.Now().Add(router.settings.StartTlsQuietTimeout)
+	client.write("STARTTLS\r\n")
+	router.awaitTimerAt(quietAt)
+	router.clock.Advance(router.settings.StartTlsQuietTimeout)
+	client.expect("220 2.0.0 Ready to start TLS")
+	client.write(string(testRouterHello(testRouteSni, 64)))
+	receiver := <-router.dialer.dialing
+	resetConn.injectReset()
+	router.service.AwaitSessionCount(0)
+	if codes := receiver.stream.ResetCodes(); !slices.Equal(codes, []protocol.StreamResetCode{protocol.StreamResetCode_RST_CANCELLED}) {
+		t.Errorf("the sender's reset reset the stream with %v", codes)
+	}
+
+	client, receiver = router.dialFrom("198.51.100.5", testRouteSni)
+	receiver.writer.CloseWithError(io.ErrUnexpectedEOF)
+	client.expectEnd()
+	router.service.AwaitSessionCount(0)
+	records := router.flushRecords()
+	if len(records) != 2 || records[0].Result != "splice_sender_reset" || records[1].Result != "splice_receiver_reset" {
+		t.Errorf("records %+v", records)
+	}
+}
+
+// Every byte both ways is spent from the network's lease on meter mx, the hello's included, and reaches
+// the usage the drain sends: the network pays exactly what moved.
+func TestSpliceSpendsTheLeaseByteForByte(t *testing.T) {
+	router := newTestRouter(t, nil)
+	client, receiver := router.dialFrom(testSender, testRouteSni)
+	toReceiver := testRouteCapture(40000)
+	go client.conn.Write(toReceiver)
+	receiver.readFull(t, len(toReceiver))
+	toSender := testRouteCapture(25000)
+	go receiver.writer.Write(toSender)
+	if _, err := io.ReadFull(client.reader, make([]byte, len(toSender))); err != nil {
+		t.Fatal(err)
+	}
+	receiver.writer.Close()
+	client.expectEnd()
+	router.service.AwaitSessionCount(0)
+	router.service.Drain()
+	want := int64(len(testRouterHello(testRouteSni, 64)) + len(toReceiver) + len(toSender))
+	if used := router.host.Quota.TransferUsed(connect.Id(router.networkId), sidecar.QuotaMeterMx); used != want {
+		t.Errorf("the network paid %d bytes on meter mx, want %d", used, want)
+	}
+	if used := router.host.Quota.TransferUsed(connect.Id(router.networkId), sidecar.QuotaMeterTls); used != 0 {
+		t.Errorf("the network paid %d bytes on meter tls", used)
+	}
+}
+
+// A lease that runs out resets every splice of its network with RST_QUOTA. The chunk it could not pay
+// for never moves. A spent network's next session asks Quota again, which TestRouterClosesEach...'s
+// spent row answers with a refusal.
+func TestSpliceLeaseRunOutResetsTheNetwork(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{balance: 1000})
+	first, firstReceiver := router.dialFrom(testSender, testRouteSni)
+	second, secondReceiver := router.dialFrom("198.51.100.6", testRouteSni)
+	go first.conn.Write(testRouteCapture(2000))
+	first.expectEnd()
+	second.expectEnd()
+	router.service.AwaitSessionCount(0)
+	for _, receiver := range []*testReceiver{firstReceiver, secondReceiver} {
+		if codes := receiver.stream.ResetCodes(); !slices.Equal(codes, []protocol.StreamResetCode{protocol.StreamResetCode_RST_QUOTA}) {
+			t.Errorf("a spent network's splice reset with %v", codes)
+		}
+	}
+	if rest, _ := io.ReadAll(firstReceiver.reader); 0 < len(rest) {
+		t.Errorf("%d bytes the lease could not pay for reached the receiver", len(rest))
+	}
+	records := router.flushRecords()
+	if len(records) != 2 || records[0].Result != "splice_quota" || records[1].Result != "splice_quota" {
+		t.Errorf("records %+v", records)
+	}
+}
+
+// A drain whose wait runs out resets what is still spliced with RST_DRAINING.
+func TestSpliceDrainResets(t *testing.T) {
+	router := newTestRouter(t, &testRouterOptions{settings: func(settings *mxedgeservice.MxEdgeSettings) {
+		testSpliceSettings(settings)
+		settings.DrainTimeout = 3 * time.Minute
+	}})
+	client, receiver, _ := router.splice(testSender)
+	drained := make(chan struct{})
+	drainAt := router.clock.Now().Add(router.settings.DrainTimeout)
+	go func() {
+		router.service.Drain()
+		close(drained)
+	}()
+	router.awaitTimerAt(drainAt)
+	router.clock.AdvanceTo(drainAt)
+	<-drained
+	router.expectSpliceEnd(client, receiver, "drain", protocol.StreamResetCode_RST_DRAINING)
+}
+
+// MailIngress at maximal fields fits 1,024 B: ptr_name drops first, then ip_listings from the end, and
+// version, sender, port, SNI, EHLO and time are never dropped.
+func TestMailIngressAtMaximalFieldsFits(t *testing.T) {
+	format := sidecar.DefaultMailIngressFormatSettings()
+	label := strings.Repeat("a", 61) + "."
+	sni := strings.Repeat(label, 5)[:253]
+	ehlo := strings.Repeat("e", 255)
+	ptr := strings.Repeat("p", 253)
+	listings := []string{}
+	for i := range 20 {
+		listings = append(listings, strings.Repeat(string(rune('a'+i)), 12))
+	}
+	listings = append([]string{"far-too-long-category"}, listings...)
+	sender := netip.MustParseAddrPort("[2001:db8:ffff:ffff:ffff:ffff:ffff:ffff]:65535")
+	receiveTime := sidecartest.DefaultClockStart()
+	data, err := mxedgeservice.BuildMailIngress(format, sender, sni, ehlo, ptr, listings, receiveTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if format.MaxByteCount < len(data) {
+		t.Fatalf("%d bytes", len(data))
+	}
+	ingress := &protocol.MailIngress{}
+	if err := proto.Unmarshal(data, ingress); err != nil {
+		t.Fatal(err)
+	}
+	if ingress.GetVersion() != sidecar.MailIngressVersion || !bytes.Equal(ingress.GetSenderIp(), sender.Addr().AsSlice()) ||
+		ingress.GetSenderPort() != 65535 || ingress.GetSni() != sni || ingress.GetEhloName() != ehlo ||
+		ingress.GetReceiveTimeMillis() != uint64(receiveTime.UnixMilli()) {
+		t.Errorf("a field that is never dropped went: %v", ingress)
+	}
+	if ingress.GetPtrName() != "" {
+		t.Error("ptr_name stayed while the message was past its bound")
+	}
+	if len(ingress.GetIpListings()) == 0 || format.ListingMaxCount < len(ingress.GetIpListings()) ||
+		ingress.GetIpListings()[0] != strings.Repeat("a", 12) {
+		t.Errorf("ip_listings %v", ingress.GetIpListings())
+	}
+
+	// with room, nothing drops, the long category aside and the count held to 16
+	data, err = mxedgeservice.BuildMailIngress(format, netip.MustParseAddrPort("203.0.113.9:2525"), "mx.ab12cd34ef.root.example", "relay.example", "ptr.example", listings, receiveTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingress = &protocol.MailIngress{}
+	if err := proto.Unmarshal(data, ingress); err != nil {
+		t.Fatal(err)
+	}
+	if ingress.GetPtrName() != "ptr.example" || len(ingress.GetIpListings()) != format.ListingMaxCount || len(ingress.GetSenderIp()) != 4 {
+		t.Errorf("%v", ingress)
+	}
+	if _, err := mxedgeservice.BuildMailIngress(format, netip.AddrPort{}, sni, ehlo, "", nil, receiveTime); err == nil {
+		t.Error("built with no sender")
+	}
+	if _, err := mxedgeservice.BuildMailIngress(format, sender, "", ehlo, "", nil, receiveTime); err == nil {
+		t.Error("built with no SNI")
+	}
+}

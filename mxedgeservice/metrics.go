@@ -28,6 +28,31 @@ const (
 	mxSessionResultPlatformHandshakeFailed = "platform_handshake_failed"
 	// The platform role: a session after TLS that ran to its end.
 	mxSessionResultPlatformServed = "platform_served"
+	// The router (router.go): closed in the handshake, by why.
+	mxSessionResultHelloFailed        = "hello_failed"
+	mxSessionResultGateClosed         = "gate_closed"
+	mxSessionResultNotReady           = "not_ready"
+	mxSessionResultNoSni              = "no_sni"
+	mxSessionResultUnknownName        = "unknown_name"
+	mxSessionResultRouteUnavailable   = "route_unavailable"
+	mxSessionResultNetworkCap         = "network_cap"
+	mxSessionResultSpent              = "spent"
+	mxSessionResultNoReceiver         = "no_receiver"
+	mxSessionResultReceiverBusy       = "receiver_busy"
+	mxSessionResultReceiverDenied     = "receiver_denied"
+	mxSessionResultSocketsUnavailable = "sockets_unavailable"
+	mxSessionResultSetupFailed        = "setup_failed"
+	// The router: spliced, then ended by one of splice.go's reasons, which follows this.
+	mxSessionResultSplicePrefix = "splice_"
+)
+
+// How a PTR lookup went (ptr.go).
+const (
+	mxPtrResultConfirmed = "confirmed"
+	// No name, none confirmed, a failure, or an answer past the bound or the session.
+	mxPtrResultNone = "none"
+	// Every slot was taken, so none ran.
+	mxPtrResultNoSlot = "no_slot"
 )
 
 // Which refusal a plaintext transaction's session got.
@@ -69,6 +94,12 @@ type mxMetrics struct {
 	platformRecipients sidecar.MetricsCounter
 	// The platform role's messages, by how each was answered.
 	platformMessages sidecar.MetricsCounter
+	// The router's splices, by how each ended.
+	spliceEnds sidecar.MetricsCounter
+	// The router's spliced bytes, by direction.
+	spliceBytes sidecar.MetricsCounter
+	// The router's PTR lookups, by how each went.
+	ptrLookups sidecar.MetricsCounter
 }
 
 // Declares the families. Two engines in one process share them, as Metrics allows.
@@ -85,5 +116,8 @@ func newMxMetrics(metrics sidecar.Metrics) *mxMetrics {
 		recordFlushes:      metrics.Counter("urnetwork_mxedge_session_record_flushes_total", "Writes of a batch of session records, by outcome.", "result"),
 		platformRecipients: metrics.Counter("urnetwork_mxedge_platform_recipients_total", "The platform listener's recipients, by how each was answered.", "result"),
 		platformMessages:   metrics.Counter("urnetwork_mxedge_platform_messages_total", "The platform listener's messages, by how each was answered.", "result"),
+		spliceEnds:         metrics.Counter("urnetwork_mxedge_splice_ends_total", "The router's splices, by how each ended.", "result"),
+		spliceBytes:        metrics.Counter("urnetwork_mxedge_splice_bytes_total", "The router's spliced bytes, by direction.", "direction"),
+		ptrLookups:         metrics.Counter("urnetwork_mxedge_ptr_lookups_total", "The router's forward-confirmed PTR lookups, by how each went.", "result"),
 	}
 }

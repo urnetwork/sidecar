@@ -57,10 +57,14 @@ type MxEdgeDeps struct {
 	NormalizeSni func(serverName string) (normalized string, ok bool)
 	// TLS-M5-06's WriteTlsAlert: one plaintext fatal alert.
 	WriteTlsAlert func(conn net.Conn, alert MxTlsAlert) error
-	// Whether §19.11's mxedge gate is open, read at each plaintext transaction. nil reads as closed,
-	// since config/<env>/sidecar.yml's gates are dark when absent, and a closed gate answers 451, never
-	// 530, so a sender retries once it opens (§22.5). OPS-M1-03's ServiceHost.Gates feeds this.
+	// Whether §19.11's mxedge gate is open, read at each plaintext transaction and, by the router, at
+	// each hello. nil reads as closed, since config/<env>/sidecar.yml's gates are dark when absent, and a
+	// closed gate answers 451, never 530, so a sender retries once it opens (§22.5). OPS-M1-03's
+	// ServiceHost.Gates feeds this.
 	GateOpen func() bool
+	// Whether §19.11's mxedge gate admits a network, read by the router once SNI names one: enabled, and
+	// listed or under its percent. nil reads as closed, and a session it refuses closes in the handshake.
+	GateAdmits func(networkId sidecar.Id) bool
 	// nil is real time.
 	Clock sidecar.Clock
 	// nil discards.
@@ -76,6 +80,10 @@ type mxSession struct {
 	sender netip.Addr
 	hold   *mxCapHold
 	dialog *mxDialog
+	// The router's: the sender's PTR lookup, started at admission (ptr.go), and the feed mirror's
+	// categories for it (listings.go). nil and empty for the platform role.
+	ptr      *mxPtrLookup
+	listings []string
 }
 
 // The engine. Hosts call Serve once for each listener, and everything here is safe for concurrent use.
@@ -101,8 +109,10 @@ type MxEdgeService struct {
 	// Whether a sender gets 554 at the banner. nil rejects nothing, as §15.4 has it with the feed
 	// down, and MAIL-M7-20's listings set this.
 	bannerRefused func(sender netip.Addr) bool
-	// The platform role's state, nil for the router (platform.go).
+	// The platform role's state, nil for any other (platform.go).
 	platform *mxPlatform
+	// The router role's state, nil for any other (router.go).
+	router *mxRouter
 
 	// What the last probe found.
 	storesReachable *sidecar.MonitorValue[bool]
@@ -122,8 +132,10 @@ type MxEdgeService struct {
 	liveConnections map[net.Conn]bool
 }
 
-// Starts the engine, which stays not ready until a probe has found the store and today's k, and runs
-// until ctx ends or Close. host needs Redis and Metrics. A nil store or deps is allowed and leaves the
+// Starts the engine with the shared front and no role, which stays not ready until a probe has found the
+// store and today's k, and runs until ctx ends or Close: every session that reaches STARTTLS's 220
+// closes in the handshake. Tests of the front run this; a host runs NewMxEdgeRouterService or
+// NewMxEdgePlatformService. host needs Redis and Metrics. A nil store or deps is allowed and leaves the
 // engine not ready.
 func NewMxEdgeService(
 	ctx context.Context,
@@ -136,7 +148,7 @@ func NewMxEdgeService(
 }
 
 // The engine, with role setting the role's fields before anything starts, so no goroutine sees them
-// change. A nil role is the router's.
+// change. A nil role is none.
 func newMxEdgeService(
 	ctx context.Context,
 	host *sidecar.ServiceHost,
@@ -257,6 +269,9 @@ func (self *MxEdgeService) release() {
 	for _, listener := range listeners {
 		listener.Close()
 	}
+	if self.router != nil {
+		self.router.resetSplices()
+	}
 	for _, conn := range connections {
 		conn.Close()
 	}
@@ -264,6 +279,9 @@ func (self *MxEdgeService) release() {
 		self.platform.close()
 	}
 	self.sessionGroup.Wait()
+	if self.router != nil {
+		self.router.close()
+	}
 	// every session has left its record, so one last write keeps the queue's tail, bounded by the
 	// write's own timeout since the engine's context has ended
 	<-self.records.done
@@ -271,7 +289,7 @@ func (self *MxEdgeService) release() {
 }
 
 // Queues the record of a session whose SNI named networkId, as the router does at a session's end
-// (MAIL-M7-19), without waiting. byteCount is what the session passed both ways, and result one of the
+// (router.go), without waiting. byteCount is what the session passed both ways, and result one of the
 // session result words. A session that named no network calls nothing, so it leaves no row.
 func (self *MxEdgeService) recordSession(session *mxSession, networkId sidecar.Id, byteCount int64, result string) bool {
 	return self.records.Add(&MxConnectionRecord{
@@ -285,6 +303,9 @@ func (self *MxEdgeService) recordSession(session *mxSession, networkId sidecar.I
 // See sidecar.Engine. A closed gate stays ready, as §19.11 has it.
 func (self *MxEdgeService) Ready() bool {
 	if !self.depsComplete || !self.storesReachable.Value() {
+		return false
+	}
+	if self.router != nil && !self.router.ready() {
 		return false
 	}
 	self.stateLock.Lock()
@@ -301,6 +322,10 @@ func (self *MxEdgeService) Drain() {
 		self.draining = true
 	}()
 	timedOut := self.clock.After(self.settings.DrainTimeout)
+	// the router resets what is still spliced and sends its last usage window once the wait is over
+	if self.router != nil {
+		defer self.router.drained()
+	}
 	for {
 		count, update := self.sessionCount.Get()
 		if count == 0 {
@@ -425,6 +450,10 @@ func (self *MxEdgeService) serveConnection(conn net.Conn) {
 		bannerRefused := self.bannerRefused != nil && self.bannerRefused(sender)
 		dialog := newMxDialog(self.replies, func() bool { return self.plaintextRecent(sender) }, bannerRefused)
 		session := &mxSession{conn: conn, startTime: startTime, sender: sender, hold: hold, dialog: dialog}
+		if self.router != nil {
+			self.router.admit(session)
+			defer session.ptr.Stop()
+		}
 		result, readyForTls := self.runDialog(session)
 		if !readyForTls {
 			return result
@@ -523,8 +552,8 @@ func (self *MxEdgeService) plaintextRecent(sender netip.Addr) bool {
 	return recent
 }
 
-// The handoff until a role replaces it: a session that reached TLS has nowhere to go, so it closes in
-// the handshake as an unknown name does. The memory is written before the alert, so it exists before
+// The handoff of an engine with no role (NewMxEdgeService), which no host runs: a session that reached
+// TLS has nowhere to go, so it closes in the handshake as an unknown name does. The memory is written before the alert, so it exists before
 // a sender can see the close and retry in plaintext. A hello that never comes costs ClientHelloTimeout
 // and closes the same way.
 func (self *MxEdgeService) closeHandshake(session *mxSession) string {
