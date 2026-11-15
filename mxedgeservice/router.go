@@ -100,6 +100,9 @@ type MxEdgeRouterDeps struct {
 	// addresses a name's A and AAAA answer. Either nil leaves every ptr_name "".
 	LookupPtr  func(ctx context.Context, sender netip.Addr) ([]string, error)
 	LookupHost func(ctx context.Context, name string) ([]netip.Addr, error)
+	// The licensed feed's local mirror (listings.go). nil lists no one: nothing is rejected at the banner
+	// and no MailIngress carries a category, as with the feed down.
+	Listings MxListingSource
 }
 
 // The router role's state, built once with the engine.
@@ -112,8 +115,12 @@ type mxRouter struct {
 	usage   *sidecar.QuotaUsageBatcher
 	leases  *mxLeases
 	lookups *mxPtrLookups
-	// the limits loop
+	// nil with no source
+	listings *mxListings
+	// the limits loop and the listings'
 	loopGroup sync.WaitGroup
+	// splices registered, so a drain's wait and a test can see one start or end
+	spliceCount *sidecar.MonitorValue[int]
 
 	stateLock sync.Mutex
 	// every splice running, by listening network
@@ -161,6 +168,7 @@ func NewMxEdgeRouterService(
 			limits:           newMxMessageLimits(settings, host.Quota, self.clock),
 			usage:            usage,
 			lookups:          newMxPtrLookups(self, routerDeps),
+			spliceCount:      sidecar.NewMonitorValue(0),
 			networkIdSplices: map[sidecar.Id]map[*mxSplice]bool{},
 		}
 		router.leases = newMxLeases(self.ctx, host.Quota, usage, settings, self.clock, router.resetSpent)
@@ -172,6 +180,15 @@ func NewMxEdgeRouterService(
 			defer router.loopGroup.Done()
 			router.limits.run(self.ctx)
 		}()
+		if routerDeps.Listings != nil {
+			router.listings = newMxListings(routerDeps.Listings, settings, self.clock, self.metrics)
+			self.bannerRefused = router.listings.Refused
+			router.loopGroup.Add(1)
+			go func() {
+				defer router.loopGroup.Done()
+				router.listings.run(self.ctx)
+			}()
+		}
 	})
 	if err != nil {
 		if usage != nil {
@@ -190,9 +207,13 @@ func (self *mxRouter) ready() bool {
 	return self.service.settings.Clients <= len(self.dialer.ClientIds()) && self.dialer.Ready()
 }
 
-// Starts what the router does from a session's admission: the sender's PTR lookup, read at the handoff.
+// Starts what the router does from a session's admission: the sender's PTR lookup, read at the handoff,
+// and the categories the feed mirror lists it under, which MailIngress carries.
 func (self *mxRouter) admit(session *mxSession) {
 	session.ptr = self.lookups.Start(session.sender)
+	if self.listings != nil {
+		session.listings = self.listings.Categories(session.sender)
+	}
 }
 
 // Records a splice so a spent lease, a drain and a close can find it. False once a drain's reset or a
@@ -209,6 +230,7 @@ func (self *mxRouter) addSplice(splice *mxSplice) bool {
 		self.networkIdSplices[splice.networkId] = splices
 	}
 	splices[splice] = true
+	self.spliceCount.Update(func(count int) int { return count + 1 })
 	return true
 }
 
@@ -216,13 +238,14 @@ func (self *mxRouter) removeSplice(splice *mxSplice) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	splices, ok := self.networkIdSplices[splice.networkId]
-	if !ok {
+	if !ok || !splices[splice] {
 		return
 	}
 	delete(splices, splice)
 	if len(splices) == 0 {
 		delete(self.networkIdSplices, splice.networkId)
 	}
+	self.spliceCount.Update(func(count int) int { return count - 1 })
 }
 
 // The splices of one network, or of every network when networkId is nil.

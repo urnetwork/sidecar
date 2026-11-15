@@ -288,6 +288,8 @@ func TestSpliceLeaseRunOutResetsTheNetwork(t *testing.T) {
 	router := newTestRouter(t, &testRouterOptions{balance: 1000})
 	first, firstReceiver := router.dialFrom(testSender, testRouteSni)
 	second, secondReceiver := router.dialFrom("198.51.100.6", testRouteSni)
+	// both past their setup, each hello paid for, before the lease runs out
+	router.service.AwaitSpliceCount(2)
 	go first.conn.Write(testRouteCapture(2000))
 	first.expectEnd()
 	second.expectEnd()

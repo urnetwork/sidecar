@@ -109,6 +109,10 @@ limits_networks: 12
 ptr_timeout: 6s
 ptr_names: 2
 ptr_lookups: 13
+listing_refresh_interval: 4m
+listing_stale_timeout: 12m
+listing_load_timeout: 90s
+listing_prefixes: 14
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +172,10 @@ ptr_lookups: 13
 		PtrTimeout:                  6 * time.Second,
 		PtrNameCount:                2,
 		PtrLookupCount:              13,
+		ListingRefreshInterval:      4 * time.Minute,
+		ListingStaleTimeout:         12 * time.Minute,
+		ListingLoadTimeout:          90 * time.Second,
+		ListingPrefixCount:          14,
 		Ingress:                     defaults.Ingress,
 		Usage:                       defaults.Usage,
 		HostNameMaxByteCount:        defaults.HostNameMaxByteCount,
@@ -340,6 +348,10 @@ func TestValidateRefusesEveryNumberAtZero(t *testing.T) {
 		"ptr_timeout":                func(settings *mxedgeservice.MxEdgeSettings) { settings.PtrTimeout = 0 },
 		"ptr_names":                  func(settings *mxedgeservice.MxEdgeSettings) { settings.PtrNameCount = 0 },
 		"ptr_lookups":                func(settings *mxedgeservice.MxEdgeSettings) { settings.PtrLookupCount = 0 },
+		"listing_refresh_interval":   func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingRefreshInterval = 0 },
+		"listing_stale_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingStaleTimeout = 0 },
+		"listing_load_timeout":       func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingLoadTimeout = 0 },
+		"listing_prefixes":           func(settings *mxedgeservice.MxEdgeSettings) { settings.ListingPrefixCount = 0 },
 		"HostNameMaxByteCount":       func(settings *mxedgeservice.MxEdgeSettings) { settings.HostNameMaxByteCount = 0 },
 		"HostLabelMaxByteCount":      func(settings *mxedgeservice.MxEdgeSettings) { settings.HostLabelMaxByteCount = 0 },
 		"ReplyUrlMaxByteCount":       func(settings *mxedgeservice.MxEdgeSettings) { settings.ReplyUrlMaxByteCount = 0 },

@@ -107,7 +107,7 @@ type MxEdgeService struct {
 	// What follows STARTTLS's 220, returning a session result. Set once, at construction.
 	handoff func(session *mxSession) string
 	// Whether a sender gets 554 at the banner. nil rejects nothing, as §15.4 has it with the feed
-	// down, and MAIL-M7-20's listings set this.
+	// down; the router's listings set this (listings.go).
 	bannerRefused func(sender netip.Addr) bool
 	// The platform role's state, nil for any other (platform.go).
 	platform *mxPlatform

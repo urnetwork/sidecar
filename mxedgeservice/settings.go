@@ -201,6 +201,19 @@ type MxEdgeSettings struct {
 	// senders cannot turn into a flood of lookups. Default 1,024.
 	PtrLookupCount int `yaml:"ptr_lookups"`
 
+	// How often the router loads the feed mirror into a new prefix set (owner decision 111). Default 5 min,
+	// §15.4's.
+	ListingRefreshInterval time.Duration `yaml:"listing_refresh_interval"`
+	// A set whose feed was current longer ago than this lists no one, so a feed that is down or stale rejects
+	// nothing (§15.4). Default 15 min, three refreshes missed.
+	ListingStaleTimeout time.Duration `yaml:"listing_stale_timeout"`
+	// How long one load of the mirror may take before it reads as failed and the set in use stays. Default
+	// 2 min.
+	ListingLoadTimeout time.Duration `yaml:"listing_load_timeout"`
+	// The most entries one load takes, past which the load fails whole and the set in use stays, so a mirror
+	// that grows past what this process should hold never half-loads. Default 16,777,216, a few bytes each.
+	ListingPrefixCount int `yaml:"listing_prefixes"`
+
 	// MailIngress's bounds, the format's, which a receiver holds it to as well. Set only by the defaults.
 	Ingress *sidecar.MailIngressFormatSettings `yaml:"-"`
 	// The router's usage windows for meter mx (§20.6). Set only by the defaults.
@@ -268,6 +281,10 @@ func DefaultMxEdgeSettings() *MxEdgeSettings {
 		PtrTimeout:                  5 * time.Second,
 		PtrNameCount:                4,
 		PtrLookupCount:              1024,
+		ListingRefreshInterval:      5 * time.Minute,
+		ListingStaleTimeout:         15 * time.Minute,
+		ListingLoadTimeout:          2 * time.Minute,
+		ListingPrefixCount:          16 * 1024 * 1024,
 		Ingress:                     sidecar.DefaultMailIngressFormatSettings(),
 		Usage:                       sidecar.DefaultQuotaUsageBatcherSettings(),
 		HostNameMaxByteCount:        253,

@@ -273,3 +273,43 @@ func (self *MxEdgeService) AwaitMessageLimitsPass(count uint64) {
 		<-update
 	}
 }
+
+// The listings, loading from source on settings' numbers.
+type Listings = mxListings
+
+// Listings with no set until a Load.
+func NewListings(source MxListingSource, settings *MxEdgeSettings, clock sidecar.Clock, metrics sidecar.Metrics) *Listings {
+	return newMxListings(source, settings, clock, newMxMetrics(metrics))
+}
+
+// Loads the mirror once.
+func (self *mxListings) Load(ctx context.Context) {
+	self.load(ctx)
+}
+
+// Returns once count loads of the engine's listings have finished, the last with its next wait armed.
+func (self *MxEdgeService) AwaitListingLoads(count int) {
+	for {
+		loadCount, update := self.router.listings.loadCount.Get()
+		if count <= loadCount {
+			return
+		}
+		<-update
+	}
+}
+
+// Loads of the engine's listings finished so far.
+func (self *MxEdgeService) ListingLoadCount() int {
+	return self.router.listings.loadCount.Value()
+}
+
+// Returns once this many splices are registered.
+func (self *MxEdgeService) AwaitSpliceCount(want int) {
+	for {
+		count, update := self.router.spliceCount.Get()
+		if count == want {
+			return
+		}
+		<-update
+	}
+}
