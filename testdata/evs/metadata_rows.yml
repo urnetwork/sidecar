@@ -71,6 +71,8 @@ EvsReseedRequest.payload: {number: 2, type: bytes, row: evs-12, sees: "cleartext
 EvsReseedRequest.parts: {number: 3, type: repeated bytes, row: evs-12, sees: "its EvsPushPart"}
 EvsReseedRequest.slot_id: {number: 4, type: bytes, row: evs-5, sees: "slot id"}
 EvsReseedRequest.slot: {number: 5, type: bytes, row: evs-5, sees: "up to 64 wrapped object keys (ciphertext)"}
+EvsReseedRequest.part_number: {number: 6, type: uint32, row: evs-12, sees: "per part (up to 1,024)"}
+EvsReseedRequest.part_places: {number: 7, type: repeated EvsPlace, row: evs-22, sees: "and offsets"}
 EvsLeaseRequest.ref_id: {number: 1, type: bytes, row: evs-2, sees: "ref ids"}
 EvsLeaseRequest.base_version: {number: 2, type: uint64, row: evs-12, sees: "base version and chain"}
 EvsLeaseRequest.ms: {number: 3, type: uint32, row: evs-3, sees: "any seal lease"}

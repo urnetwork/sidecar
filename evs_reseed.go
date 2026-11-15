@@ -7,18 +7,25 @@
 //	order     the repo's erasure ref first, so evs holds every ERASE this device kept before any slot returns; then
 //	          each other ref's history in version order; and last, after every ref's history, the slots
 //	version   its new segments from seg/ through PUT .../segments, which takes re-seed uploads while reseed is on, then
-//	          its statement as the mirror's stmt/ holds it with, from rec/, a one-part push's payload or a push in
-//	          parts' every part in part order (QD-818), in one reseed call; a version evs already holds answers its
-//	          version (§11.8's 5a) and the walk goes on
+//	          its statement as the mirror's stmt/ holds it with, from rec/, a one-part push's payload in one reseed
+//	          call, or a push in parts' every part, each in its own call in part order, and then its seal naming the
+//	          places those calls answered (QD-818, QD-836), as the push route's sender posts parts and a seal, so no
+//	          call carries more than one part; a version evs already holds answers its version (§11.8's 5a), at its
+//	          first part call for a push in parts, and the walk goes on
 //	slot      each slot the mirror holds, under the statement of the last re-seeded version that names it, which is
 //	          what evs takes a slot by; evs strips what its ERASEs cover (QD-096)
 //	statement with SignReseed, for each ref re-seeded as far as the mirror holds it, a Signed EvsReseed over that
 //	          head, which a reader whose pin lies above it accepts the shorter history under (§11.6)
 //
+// Every call is retried with the same bytes while evs answers a refusal that refuses nothing or nothing at all. A part
+// call retried after an answer it lost leaves evs a second record of the part, and the seal names the one the last
+// answer gave; a seal answered 409 PARTS_MISSING, which records and refuses nothing (a part's record gone to
+// evacuation, say), sends the parts again and seals again, at most PartsMissingRetryCount times, as the push route's
+// sender does (evs_push_parts.go).
+//
 // A ref stops at the first version the mirror cannot send or evs does not take, and says why: a version past it cannot
-// chain. So does a PATH_EPOCH push whose map evs does not hold, whose parts this walk does not send, and a push in
-// parts past the body evs takes in one call (question evs-reseed-parts-request-bound), which evs answers 400. One ref's
-// stop never ends the walk: the other refs and the slots go on, and the result names each.
+// chain. So does a PATH_EPOCH push whose map evs does not hold, whose parts this walk does not send. One ref's stop
+// never ends the walk: the other refs and the slots go on, and the result names each.
 //
 // Nothing here reads evs: a head below this device's pin is what a re-seed mends, and the verifier refuses it until
 // the EvsReseed is filed. The walk starts each ref at version 1 and lets 5a answer what evs already holds.
@@ -229,7 +236,7 @@ func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) erro
 		if err != nil {
 			return err
 		}
-		request, err := evsReseedRequestOf(statementBytes, records)
+		payload, parts, err := evsReseedBodiesOf(records)
 		if err != nil {
 			return err
 		}
@@ -241,7 +248,12 @@ func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) erro
 				return err
 			}
 		}
-		reply, err := self.post(ctx, request)
+		var reply *protocol.EvsPushReply
+		if parts == nil {
+			reply, err = self.post(ctx, &protocol.EvsReseedRequest{Statement: statementBytes, Payload: payload})
+		} else {
+			reply, err = self.sendParts(ctx, statementBytes, parts)
+		}
 		if err != nil {
 			return err
 		}
@@ -255,33 +267,63 @@ func (self *evsReseedRun) reseedRef(ctx context.Context, ref *EvsReseedRef) erro
 	return nil
 }
 
-// The reseed call of a version whose records the mirror holds, already held to its statement: a one-part push's
-// statement and payload as its record keeps them, or a push in parts' statement and each part as its record keeps it,
-// in part order (QD-818), never re-signed or rebuilt.
-func evsReseedRequestOf(statementBytes []byte, records [][]byte) (*protocol.EvsReseedRequest, error) {
-	request := &protocol.EvsReseedRequest{Statement: statementBytes}
+// What the reseed calls of a version whose records the mirror holds, already held to its statement, carry: a one-part
+// push's payload as its record keeps it, with no parts, or a push in parts' every part as its record keeps it, in part
+// order (QD-818), with no payload; never re-signed or rebuilt.
+func evsReseedBodiesOf(records [][]byte) ([]byte, [][]byte, error) {
 	if len(records) == 1 {
 		record, err := ParseEvsBatchRecord(records[0])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if _, request.Payload, err = ParseEvsPushRecordBody(record.Body); err != nil {
-			return nil, err
+		_, payload, err := ParseEvsPushRecordBody(record.Body)
+		if err != nil {
+			return nil, nil, err
 		}
-		return request, nil
+		return payload, nil, nil
 	}
+	parts := make([][]byte, 0, len(records)-1)
 	for _, recordBytes := range records[1:] {
 		record, err := ParseEvsBatchRecord(recordBytes)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		_, part, _, _, err := ParseEvsSealPartRecord(record)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		request.Parts = append(request.Parts, part)
+		parts = append(parts, part)
 	}
-	return request, nil
+	return nil, parts, nil
+}
+
+// A push in parts' reseed calls (QD-836): each part in its own call, in part order, then the seal naming the places
+// those calls answered, each the same bytes on every try. A part call answered with a version found the push committed
+// (§11.8's 5a), which answers the push with no seal. A seal answered 409 PARTS_MISSING sends every part again and seals
+// again, at most PartsMissingRetryCount times. See the file header.
+func (self *evsReseedRun) sendParts(ctx context.Context, statementBytes []byte, parts [][]byte) (*protocol.EvsPushReply, error) {
+	for tries := 0; ; tries += 1 {
+		places := make([]*protocol.EvsPlace, len(parts))
+		for index, part := range parts {
+			reply, err := self.post(ctx, &protocol.EvsReseedRequest{Statement: statementBytes, Parts: [][]byte{part}, PartNumber: uint32(index + 1)})
+			if err != nil {
+				return nil, err
+			}
+			if reply.GetPlace() == nil {
+				if 0 < reply.GetVersion() {
+					// the push stands committed
+					return reply, nil
+				}
+				return nil, fmt.Errorf("%w: a reseed part answered with no place", ErrEvsReplyInvalid)
+			}
+			places[index] = reply.GetPlace()
+		}
+		reply, err := self.post(ctx, &protocol.EvsReseedRequest{Statement: statementBytes, PartPlaces: places})
+		if IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING) && tries < self.repo.client.settings.PartsMissingRetryCount {
+			continue
+		}
+		return reply, err
+	}
 }
 
 // One segment from the mirror's seg/ to evs, under the push that introduces it. evs answers a segment it already holds

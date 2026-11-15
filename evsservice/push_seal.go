@@ -31,12 +31,11 @@
 // A failed seal leaves its parts to evacuation, which finds them dead through their statement (resolve.go); nothing
 // here deletes. A format-2 seal reads no part: only 5a and its FORMAT_UNSUPPORTED refusal run.
 //
-// A re-seeded push in parts (reseed.go; QD-818) runs the same round with its parts as POST .../reseed carried them, in
-// place of reads at places it has not written yet: each an EVS_BATCH_RESEED record holding a part's body, the type the
-// round takes in that mode alone, as the push route's takes EVS_BATCH_PART alone. Their places are named once step 6
-// has written them, before the seal's record. Its parts carry no slot body and its call none, since its slots come
-// last by their own calls: the round checks it as its records keep it (sidecar.EvsCheckRecordSeal), format 1 alone, as
-// a re-seeded one-part push's payload is checked.
+// A re-seeded push in parts (reseed.go; QD-818, QD-836) runs the same round over the places its seal call names, which
+// its part calls answered: each an EVS_BATCH_RESEED record holding a part's body, the type the round takes in that
+// mode alone, as the push route's takes EVS_BATCH_PART alone, so neither mode seals the other's parts. Its parts carry
+// no slot body and its seal call none, since its slots come last by their own calls: the round checks it as its
+// records keep it (sidecar.EvsCheckRecordSeal), format 1 alone, as a re-seeded one-part push's payload is checked.
 
 package evsservice
 
@@ -99,11 +98,6 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			if self.reseed != nil {
-				// a re-seeded part as the request carried it, whose record step 6 writes (reseed.go)
-				records[i] = self.reseedPartRecord(i, 0)
-				return
-			}
 			if !format2 {
 				records[i], readErrs[i] = engine.readRecordAt(self.ctx, self.cluster, self.repoId, self.refId, place)
 				return
