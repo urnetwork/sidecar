@@ -76,6 +76,37 @@ func isPublicDnsAddress(address netip.Addr) bool {
 	return true
 }
 
+// A direct MX's addresses (§12.8, owner decision 33; DNS-M7-03) refused by §12.7's A rules.
+var ErrDnsDirectMxRefused = errors.New("dns direct mx refused")
+
+// Holds a direct MX's mail indexer addresses to §12.7's A rules, as a user's A and AAAA are held: at
+// least one, each a public unicast address, none twice, and at most dnsUserAddressMaxCount of a family.
+// A refusal wraps ErrDnsDirectMxRefused and says which rule.
+func ValidateDirectMxAddresses(addresses []netip.Addr) error {
+	if len(addresses) == 0 {
+		return fmt.Errorf("%w: no address", ErrDnsDirectMxRefused)
+	}
+	ipv4Count := 0
+	ipv6Count := 0
+	for index, address := range addresses {
+		if !isPublicDnsAddress(address) {
+			return fmt.Errorf("%w: %s is not a public unicast address", ErrDnsDirectMxRefused, address)
+		}
+		if slices.ContainsFunc(addresses[:index], func(earlier netip.Addr) bool { return earlier.Unmap() == address.Unmap() }) {
+			return fmt.Errorf("%w: %s twice", ErrDnsDirectMxRefused, address)
+		}
+		if address.Unmap().Is4() {
+			ipv4Count += 1
+		} else {
+			ipv6Count += 1
+		}
+	}
+	if dnsUserAddressMaxCount < ipv4Count || dnsUserAddressMaxCount < ipv6Count {
+		return fmt.Errorf("%w: more than %d addresses of a family", ErrDnsDirectMxRefused, dnsUserAddressMaxCount)
+	}
+	return nil
+}
+
 // §12.7's refused types, which only a system writer may hold.
 func isRefusedUserType(rrType uint16) bool {
 	switch rrType {

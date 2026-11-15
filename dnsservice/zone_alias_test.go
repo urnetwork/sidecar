@@ -269,3 +269,32 @@ func TestZoneDirectRowsAnswerOnlyPublicAddresses(t *testing.T) {
 		t.Errorf("a direct row of TXT: %v", err)
 	}
 }
+
+// §12.7's A rules over a direct MX's addresses (DNS-M7-03): public unicast of either family passes; none, a
+// private, documentation, loopback or ULA address, one given twice (its mapped form included) and more than
+// the RRset cap of a family refuse.
+func TestValidateDirectMxAddresses(t *testing.T) {
+	public := []netip.Addr{netip.MustParseAddr("11.22.33.4"), netip.MustParseAddr("2a0b:1111:2222::5")}
+	if err := ValidateDirectMxAddresses(public); err != nil {
+		t.Errorf("%v: %v", public, err)
+	}
+	refused := [][]netip.Addr{
+		{},
+		{netip.MustParseAddr("10.0.0.1")},
+		{netip.MustParseAddr("192.0.2.1")},
+		{netip.MustParseAddr("127.0.0.1")},
+		{netip.MustParseAddr("fd00::1")},
+		{netip.MustParseAddr("2001:db8::1")},
+		{netip.MustParseAddr("11.22.33.4"), netip.MustParseAddr("::ffff:11.22.33.4")},
+	}
+	many := []netip.Addr{}
+	for index := range 9 {
+		many = append(many, netip.AddrFrom4([4]byte{11, 22, 33, byte(10 + index)}))
+	}
+	refused = append(refused, many)
+	for _, addresses := range refused {
+		if err := ValidateDirectMxAddresses(addresses); !errors.Is(err, ErrDnsDirectMxRefused) {
+			t.Errorf("%v: %v", addresses, err)
+		}
+	}
+}
