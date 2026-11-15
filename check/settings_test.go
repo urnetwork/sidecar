@@ -332,6 +332,14 @@ func defaultCheckSettings() *checkSettings {
 				since: "2026-11-09",
 				why:   "§12.7's record validator refuses documentation space, so an accepted AAAA record needs a routable address",
 			},
+			"dnsservice/zone_alias_test.go 11.22.33.44": {
+				since: "2026-11-15",
+				why:   "§12.7's A rules refuse documentation space, so a user's or a direct MX's answered A record needs a routable address",
+			},
+			"dnsservice/zone_alias_test.go 2a0f:ffff::7": {
+				since: "2026-11-15",
+				why:   "§12.7's A rules refuse documentation space, so a direct MX's accepted AAAA address needs a routable one",
+			},
 			"mxedgeservice/caps_test.go 203.0.114.1": {
 				since: "2026-11-09",
 				why:   "routable, one /24 past 203.0.113.0/24: MAIL's owner moves it into 203.0.113.0/24",

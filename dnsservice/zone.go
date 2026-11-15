@@ -76,6 +76,37 @@ func isPublicDnsAddress(address netip.Addr) bool {
 	return true
 }
 
+// A direct MX's addresses (§12.8, owner decision 33; DNS-M7-03) refused by §12.7's A rules.
+var ErrDnsDirectMxRefused = errors.New("dns direct mx refused")
+
+// Holds a direct MX's mail indexer addresses to §12.7's A rules, as a user's A and AAAA are held: at
+// least one, each a public unicast address, none twice, and at most dnsUserAddressMaxCount of a family.
+// A refusal wraps ErrDnsDirectMxRefused and says which rule.
+func ValidateDirectMxAddresses(addresses []netip.Addr) error {
+	if len(addresses) == 0 {
+		return fmt.Errorf("%w: no address", ErrDnsDirectMxRefused)
+	}
+	ipv4Count := 0
+	ipv6Count := 0
+	for index, address := range addresses {
+		if !isPublicDnsAddress(address) {
+			return fmt.Errorf("%w: %s is not a public unicast address", ErrDnsDirectMxRefused, address)
+		}
+		if slices.ContainsFunc(addresses[:index], func(earlier netip.Addr) bool { return earlier.Unmap() == address.Unmap() }) {
+			return fmt.Errorf("%w: %s twice", ErrDnsDirectMxRefused, address)
+		}
+		if address.Unmap().Is4() {
+			ipv4Count += 1
+		} else {
+			ipv6Count += 1
+		}
+	}
+	if dnsUserAddressMaxCount < ipv4Count || dnsUserAddressMaxCount < ipv6Count {
+		return fmt.Errorf("%w: more than %d addresses of a family", ErrDnsDirectMxRefused, dnsUserAddressMaxCount)
+	}
+	return nil
+}
+
 // §12.7's refused types, which only a system writer may hold.
 func isRefusedUserType(rrType uint16) bool {
 	switch rrType {
@@ -94,10 +125,11 @@ func isWithheldRow(root string, set *DnsRecordSet, records []dns.RR) bool {
 	if (set.Type == dns.TypeSOA || set.Type == dns.TypeNS) && set.Owner != root {
 		return true
 	}
-	if set.Kind != DnsRecordKindUser {
+	// a direct MX's addresses are a customer's, held to the user rule (DNS-M7-03)
+	if set.Kind != DnsRecordKindUser && set.Kind != DnsRecordKindDirect {
 		return false
 	}
-	if isRefusedUserType(set.Type) {
+	if set.Kind == DnsRecordKindUser && isRefusedUserType(set.Type) {
 		return true
 	}
 	for _, record := range records {
@@ -137,13 +169,15 @@ type zoneNode struct {
 	// A suspended host's withheld owner, which denies every type while it stands, the copy row's
 	// included (§12.9).
 	withheldRow *zoneRrset
+	// An alias's row, at an alias's apex alone (zone_alias.go).
+	aliasRow *zoneRrset
 	// Names one label below this one that exist.
 	childCount int
 }
 
 // Whether this name holds nothing and has no child, and so does not exist.
 func (self *zoneNode) empty() bool {
-	return len(self.rrsets) == 0 && self.copyRow == nil && self.withheldRow == nil && self.childCount == 0
+	return len(self.rrsets) == 0 && self.copyRow == nil && self.withheldRow == nil && self.aliasRow == nil && self.childCount == 0
 }
 
 // A copy of this node, or an empty one for a name not there yet, ready to change.
@@ -187,14 +221,18 @@ func (self *zoneNode) holds(key DnsRecordKey) bool {
 	if key.Type == DnsWithheldType {
 		return self.withheldRow != nil
 	}
+	if key.Type == DnsAliasType {
+		return self.aliasRow != nil
+	}
 	_, found := self.rrsetIndex(key.Type)
 	return found
 }
 
 // Whether this name holds a row of its own, a copy row aside, withheld or not. A suspended host's
-// withheld owner is its own, so it blocks every wildcard above it as an owner with rows does.
+// withheld owner is its own, so it blocks every wildcard above it as an owner with rows does, and so
+// is an alias's row.
 func (self *zoneNode) holdsOwnRows() bool {
-	return len(self.rrsets) != 0 || self.withheldOwner()
+	return len(self.rrsets) != 0 || self.withheldOwner() || self.aliasRow != nil
 }
 
 // Whether this name answers from its wildcard for the types it lacks: it holds a copy row and no
@@ -296,6 +334,9 @@ func (self *ZoneView) Rows() iter.Seq[*DnsRecordSet] {
 			if node.withheldRow != nil && !yield(&node.withheldRow.set) {
 				return
 			}
+			if node.aliasRow != nil && !yield(&node.aliasRow.set) {
+				return
+			}
 		}
 	}
 }
@@ -355,6 +396,9 @@ func (self *ZoneView) upsert(generation uint64, set *DnsRecordSet) error {
 	if set.Kind == DnsRecordKindWithheld {
 		self.countOut(node.withheldRow)
 		node.withheldRow = rrset
+	} else if set.Kind == DnsRecordKindAlias {
+		self.countOut(node.aliasRow)
+		node.aliasRow = rrset
 	} else if set.Kind == DnsRecordKindCopy {
 		self.countOut(node.copyRow)
 		node.copyRow = rrset
@@ -401,6 +445,12 @@ func (self *ZoneView) remove(generation uint64, key DnsRecordKey) {
 		}
 		self.countOut(node.withheldRow)
 		node.withheldRow = nil
+	} else if key.Type == DnsAliasType {
+		if node.aliasRow == nil {
+			return
+		}
+		self.countOut(node.aliasRow)
+		node.aliasRow = nil
 	} else {
 		index, found := node.rrsetIndex(key.Type)
 		if !found {
