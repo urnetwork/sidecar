@@ -36,7 +36,7 @@ var gateM1Sweep = RegisterGateSweep(&GateSweep{
 			Item: "Required RPC after §6.4's M1 identity check (§23.4's M1 exit; PROTO-M1-11)",
 			Tests: []*GateTest{
 				{Repo: "sidecar", Package: "./sidecartest", Names: []string{"TestSubprotocolRequiredRpcAfterTheIdentityCheck", "TestSubprotocolNothingBeforeAVerifiedHello", "TestSubprotocolNoSessionIsUnavailableEncryption", "TestSubprotocolControlContractCarriesNoData"}},
-				{Repo: "server", Package: "./connect", Stores: true, Names: []string{"TestSidecarSubprotocolT3HelloHeadCheckAndClosedData"}},
+				{Repo: "server", Package: "./connect", Stores: true, Names: []string{"TestSidecarSubprotocolT3HelloHeadCheckAndSealedData"}},
 			},
 		},
 		{
