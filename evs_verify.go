@@ -293,6 +293,12 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 	return evsCheckRefRulesOver(state, statement, statement.Changes, nil, repoId, refId, signerId)
 }
 
+// A state that names its network's genesis config writer, the Genesis's owner sidecar at S(0) (§7.9): *ConfigState.
+type evsGenesisWriterState interface {
+	Genesis() *bridge.Genesis
+	IsConfigWriter(sidecarId Id) bool
+}
+
 // The refs table as evsCheckRefRules holds it, over changes: the statement's inline ones, or a push's payload's with
 // their entry versions. pathOf gives a change's path as the caller's replay holds it, nil when it holds none, as nil
 // pathOf does for every change.
@@ -305,6 +311,12 @@ func evsCheckRefRulesOver(state GkmAuthView, statement *EvsStatement, changes []
 	flags := push.GetFlags()
 	has := func(flag protocol.EvsPushFlag) bool { return flags&uint32(flag) != 0 }
 	writer := slices.Contains(state.RepoWriters(repoId), signerId)
+	if genesis, ok := state.(evsGenesisWriterState); ok && !writer && push.GetAuth().GetVersion() == 0 &&
+		bytes.Equal(genesis.Genesis().GetConfigRepoId(), repoId.Bytes()) {
+		// the config repo's first push, pinned at the genesis (QD-081 #4): S(0) holds no rows, so its one config
+		// writer, the Genesis's owner sidecar (§7.9), is no row's
+		writer = genesis.IsConfigWriter(signerId)
+	}
 	admin := evsRepoAdmin(state, repo, signerId)
 	createsOnly := func(deltas bool) error {
 		for _, change := range changes {

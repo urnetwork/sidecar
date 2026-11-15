@@ -793,7 +793,10 @@ type urNetworkGkm struct {
 	newest    sidecar.GkmAuthView
 }
 
-var _ sidecar.GkmClient = (*urNetworkGkm)(nil)
+var (
+	_ sidecar.GkmClient       = (*urNetworkGkm)(nil)
+	_ sidecar.GkmGroupDrafter = (*urNetworkGkm)(nil)
+)
 
 // The newest state given, nil before one.
 func (self *urNetworkGkm) newestState() sidecar.GkmAuthView {
@@ -881,6 +884,16 @@ func (self *urNetworkGkm) CreateGroup(ctx context.Context, args *sidecar.GkmCrea
 		return nil, err
 	}
 	return group.CreateGroup(ctx, args)
+}
+
+// The group client's KF1 bootstrap draft (QD-824), for the network's first device before base 1: ErrGkmUnavailable
+// before the group client is built.
+func (self *urNetworkGkm) DraftGroup(ctx context.Context, args *sidecar.GkmCreateGroupArgs) (*sidecar.EvsRepoKey, error) {
+	group, err := self.group()
+	if err != nil {
+		return nil, err
+	}
+	return group.DraftGroup(ctx, args)
 }
 
 // The group client's, ErrGkmUnavailable before it is built.

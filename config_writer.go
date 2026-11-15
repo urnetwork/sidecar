@@ -68,6 +68,9 @@ type ConfigHeadPush struct {
 	Chain   [sha256.Size]byte
 	// The Signed EvsPush, which a base's config_pushes carries.
 	SignedPush []byte
+	// The push's one-part payload, which the commit posts beside SignedPush: EvsClient's config kind fills it
+	// (evs_config_push.go); nil for a ref that keeps its own.
+	Payload []byte
 }
 
 // The config repo's file-mode main ref as a config writer saves heads to it (§11.8): EvsClient's for the config kind,

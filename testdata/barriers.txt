@@ -691,6 +691,7 @@ secret K_sock socket_name.go
 secret K_tok socket_name.go
 secret K_unlock_previous keys_rotate.go
 secret K_unlock_previous keys_unlock.go
+secret RK_g gkm_create.go
 secret RK_g gkm_delivery.go
 secret RK_g gkm_keys.go
 secret R_n keys_instance.go

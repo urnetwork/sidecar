@@ -1,28 +1,24 @@
 // A network bootstrapped by a hosted Sidecar as its first device (§7.9's bootstrap) on the engines, and the config
 // writer's ref over evs (EvsConfigHeadRef) and the repo creation (CreateRepo) a test drives through that Sidecar.
 //
-//	genesis   BootstrapNetwork signs the Genesis, the first head and base 1 by the Sidecar's own identity key
-//	          (Sidecar.Sign), the Genesis naming it as the owner's sidecar, and publishes base 1 at the Net's api
-//	first     in the first head's prepare, before base 1 lands and so inside the network's bootstrap window
-//	          (enginenet.go): the Sidecar records its own Genesis as its anchor, its key client is handed the genesis
-//	          state S(0), and EvsClient.CreateRepo creates the config repo on evs, keying, KF1 forming the group by that
-//	          key client, which keeps generation 1 in the Sidecar's keychain, and activation; then the head's files go
-//	          up as the ref's first push, its auth {0, A_0}, by a client that judges at S(0) and keys from that
-//	          generation, since the key client writes nothing at a state with no rows. The push is sent there, before
-//	          base 1, where a writer's side would sign it there and send it after (QD-081 #4); the window then closes
-//	          and the gate loads base 1
+//	draft     BootstrapNetwork signs the Genesis by the Sidecar's own identity key (Sidecar.Sign), naming it as the
+//	          owner's sidecar; the Sidecar records that Genesis as its anchor, its key client is handed the genesis
+//	          state, S(0), and drafts the config group's id and RK_1 (sidecar.GkmGroupDrafter; QD-824)
+//	prepare   the config kind's prepare, on an EvsClient of the Sidecar's, seals the first head's push under the
+//	          drafted generation pin and signs it at {0, A_0}, sending nothing: nothing of the network exists at evs or
+//	          gkm, and the real gate holds no log of it
+//	base 1    published at the Net's api naming (1, C_1); the gate loads it, and the key client takes the Sidecar's own
+//	          S(1), which BootstrapNetwork checked over the head it prepared
+//	repo      EvsClient.CreateRepo for the config kind by the Genesis's id, filing nothing: placement, KF1 by the key
+//	          client at S(1), which signs GenRotate_1 over the drafted RK_1 and posts the group, then activation
+//	push      the config kind's commit sends the prepared push, which evs takes at the genesis pin as the config
+//	          repo's first push
 //	repos     CreateRepo files a RepoCreate as the Sidecar's poster would (CORE-M2-02's, which the daemon's
 //	          composition does not have): signed by its identity key with a header at its follower's tip, landed at
 //	          api, the gate loaded and the follower past it, so the key client holds the state that holds the repo;
 //	          then EvsClient.CreateRepo's own sequence runs, PUT, KF1 by the given key client and activation
 //
-// Today the bootstrap stops at KF1: a GenRotate's auth pin must be past position 0, and the genesis state is the only
-// state before base 1, whose head the first generation must key (question
-// daemon-evs-gkm-clients-first-device-config-generation). Bootstrap answers that refusal, the window closed and base 1
-// unlanded. What it does up to KF1 runs as written; the answer decides the order of the rest.
-//
-// Every request outside a bootstrap window is judged by the real gate. Not safe for concurrent use with itself on one
-// network.
+// Every request goes through the real gate. Not safe for concurrent use with itself on one network.
 
 package enginenet
 
@@ -48,12 +44,15 @@ import (
 type BootstrapArgs struct {
 	// The hosted Sidecar that becomes the network's first device: enrolled in the network and Online.
 	Sidecar *sidecar.Sidecar
-	// Its key client, the host's composition's: it is handed the genesis state and forms the config repo's group.
+	// Its key client, the host's composition's: it drafts the config group before base 1, which takes a
+	// sidecar.GkmGroupDrafter, is handed the genesis state and then the Sidecar's own S(1), and forms the group there.
 	Gkm sidecar.GkmClient
 	// The owner member the Genesis names.
 	OwnerMemberId sidecar.Id
 	// The first head's files beside its genesis; nil for none.
 	Files map[string][]byte
+	// Publishes base 1 in place of the Net's api, nil for the api: a test's way to cut the bootstrap short there.
+	Publisher sidecar.ConfigBasePublisher
 }
 
 // What Bootstrap made.
@@ -64,12 +63,20 @@ type BootstrapResult struct {
 	MainRefId sidecar.Id
 	Head      *sidecar.ConfigHead
 	Chain     [sha256.Size]byte
+	// Generation 1 of the config repo as KF1's bootstrap draft held it, which the first head's push was sealed under.
+	DraftedKey *sidecar.EvsRepoKey
 }
 
-// The bootstrap (the file's comment): base 1 landed, the window closed and the gate holding base 1.
-func (self *Engines) Bootstrap(ctx context.Context, args *BootstrapArgs) (*BootstrapResult, error) {
+// The bootstrap (the file's comment): base 1 landed and the gate holding it, the config group formed and the first
+// head committed. configRepoId names the config repo, nil to draw one; a retry of a bootstrap cut short passes the
+// same.
+func (self *Engines) Bootstrap(ctx context.Context, args *BootstrapArgs, configRepoId *sidecar.Id) (*BootstrapResult, error) {
 	if args == nil || args.Sidecar == nil || args.Gkm == nil {
 		return nil, errors.New("enginenet: a bootstrap needs a Sidecar and its key client")
+	}
+	drafter, ok := args.Gkm.(sidecar.GkmGroupDrafter)
+	if !ok {
+		return nil, errors.New("enginenet: the key client drafts no config group")
 	}
 	running := args.Sidecar
 	networkId := running.NetworkId()
@@ -78,13 +85,29 @@ func (self *Engines) Bootstrap(ctx context.Context, args *BootstrapArgs) (*Boots
 		return nil, errors.New("enginenet: the Sidecar is not enrolled")
 	}
 	self.OpenNetwork(*networkId)
-	ref := &bootstrapHeadRef{engines: self, args: args, networkId: *networkId, configRepoId: sidecar.NewEvsRepoId()}
-	defer func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		delete(self.windows, *networkId)
-	}()
-	result, err := sidecar.BootstrapNetwork(ctx, &sidecar.ConfigBootstrapArgs{
+	result := &BootstrapResult{ConfigRepoId: sidecar.NewEvsRepoId()}
+	if configRepoId != nil {
+		result.ConfigRepoId = *configRepoId
+	}
+	// the state the bootstrap's evs client judges at: none before base 1, then the Sidecar's own S(1)
+	var stateLock sync.Mutex
+	var landed sidecar.GkmAuthView
+	client, err := newEnginesEvsClient(running, args.Gkm, func() sidecar.GkmAuthView {
+		stateLock.Lock()
+		defer stateLock.Unlock()
+		return landed
+	}, func(ctx context.Context, signedType bridge.SignedType, body proto.Message) error {
+		return errors.New("enginenet: the config repo files no RepoCreate: the Genesis names it")
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	publisher := args.Publisher
+	if publisher == nil {
+		publisher = &sidecartest.FakeApiConfigPublisher{Api: self.api, NetworkId: *networkId}
+	}
+	bootstrap, err := sidecar.BootstrapNetwork(ctx, &sidecar.ConfigBootstrapArgs{
 		NetworkId:         *networkId,
 		OwnerMemberId:     args.OwnerMemberId,
 		SidecarId:         identity.SidecarId,
@@ -92,176 +115,59 @@ func (self *Engines) Bootstrap(ctx context.Context, args *BootstrapArgs) (*Boots
 		Sign: func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
 			return running.Sign(purpose, signedType, body, nil)
 		},
-		ConfigRepoId: ref.configRepoId,
-		Heads:        ref,
-		Publisher:    &sidecartest.FakeApiConfigPublisher{Api: self.api, NetworkId: *networkId},
-		Projection:   &sidecartest.FakeApiConfigReader{Api: self.api, NetworkId: *networkId},
-		Files:        args.Files,
-		Clock:        self.net.Clock(),
+		ConfigRepoId: result.ConfigRepoId,
+		First: &sidecar.ConfigFirstHead{
+			Draft: func(ctx context.Context, genesis *sidecar.ConfigState) (*sidecar.EvsRepoKey, error) {
+				// A_0, the genesis state's chain
+				if err := running.TrustFirstUse(genesis.Pin().GetChain()); err != nil {
+					return nil, fmt.Errorf("enginenet: the first device's anchor: %w", err)
+				}
+				args.Gkm.AuthAdvanced(genesis)
+				key, err := drafter.DraftGroup(ctx, &sidecar.GkmCreateGroupArgs{
+					NetworkId: *networkId, RepoId: result.ConfigRepoId, Kind: protocol.RepoKind_REPO_KIND_CONFIG,
+				})
+				result.DraftedKey = key
+				return key, err
+			},
+			Prepare: client.PrepareConfigHead,
+			Commit:  client.CommitConfigHead,
+		},
+		Publisher:  publisher,
+		Projection: &sidecartest.FakeApiConfigReader{Api: self.api, NetworkId: *networkId},
+		BaseLanded: func(ctx context.Context, state *sidecar.ConfigState) error {
+			if err := self.Sync(ctx, *networkId); err != nil {
+				return err
+			}
+			func() {
+				stateLock.Lock()
+				defer stateLock.Unlock()
+				landed = state
+			}()
+			args.Gkm.AuthAdvanced(state)
+			return nil
+		},
+		CreateRepo: func(ctx context.Context) error {
+			_, err := client.CreateRepo(ctx, &sidecar.EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_CONFIG, ResumeRepoId: &result.ConfigRepoId})
+			return err
+		},
+		Files: args.Files,
+		Clock: self.net.Clock(),
 	})
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	if !result.Won {
-		return nil, errors.New("enginenet: another genesis won the network")
+	if !bootstrap.Won {
+		return result, errors.New("enginenet: another genesis won the network")
 	}
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		delete(self.windows, *networkId)
-	}()
-	if err := self.Sync(ctx, *networkId); err != nil {
-		return nil, err
-	}
-	return &BootstrapResult{
-		Bootstrap:    result,
-		ConfigRepoId: ref.configRepoId,
-		MainRefId:    ref.refId,
-		Head:         ref.head,
-		Chain:        ref.chain,
-	}, nil
-}
-
-// BootstrapNetwork's ref of the config repo: its prepare makes the repo and sends the first head (the file's comment).
-type bootstrapHeadRef struct {
-	engines      *Engines
-	args         *BootstrapArgs
-	networkId    sidecar.Id
-	configRepoId sidecar.Id
-
-	// set by the prepare
-	refId sidecar.Id
-	head  *sidecar.ConfigHead
-	chain [sha256.Size]byte
-}
-
-// No head before the first: BootstrapNetwork asks none.
-func (self *bootstrapHeadRef) CurrentConfigHead(ctx context.Context) (*sidecar.ConfigHead, uint64, [sha256.Size]byte, error) {
-	return nil, 0, [sha256.Size]byte{}, errors.New("enginenet: the bootstrap's ref answers its prepare alone")
-}
-
-// The first head, sent: see the file's comment.
-func (self *bootstrapHeadRef) PrepareConfigHead(ctx context.Context, head *sidecar.ConfigHead, version uint64) (*sidecar.ConfigHeadPush, error) {
-	if version != 0 {
-		return nil, fmt.Errorf("enginenet: the bootstrap's ref prepares the first head alone, not one after %d", version)
-	}
-	running := self.args.Sidecar
-	identity := running.Identity()
-	signedGenesis := head.File(sidecar.ConfigHeadGenesisPath)
-	logSettings := sidecar.DefaultConfigLogSettings()
-	logSettings.Log = sidecar.NewNoopLogger()
-	genesisLog, err := sidecar.NewConfigLog(logSettings, signedGenesis)
+	statement, err := sidecar.ParseEvsStatement(bootstrap.Push.SignedPush)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	genesisState := genesisLog.State()
-	genesisChain := bridge.GenesisChain(signedGenesis)
-	if err := running.TrustFirstUse(genesisChain[:]); err != nil {
-		return nil, fmt.Errorf("enginenet: the first device's anchor: %w", err)
+	if result.MainRefId, err = sidecar.IdFromBytes(statement.Push.GetRefId()); err != nil {
+		return result, err
 	}
-	func() {
-		self.engines.stateLock.Lock()
-		defer self.engines.stateLock.Unlock()
-		self.engines.windows[self.networkId] = &bootstrapWindow{
-			networkId:    self.networkId,
-			sidecarId:    identity.SidecarId,
-			memberId:     self.args.OwnerMemberId,
-			configRepoId: self.configRepoId,
-			identityKey:  bytes.Clone(identity.IdentityPublicKey),
-			genesisState: genesisState,
-		}
-	}()
-	self.args.Gkm.AuthAdvanced(genesisState)
-
-	keys := &bootstrapKeys{gkm: self.args.Gkm, configRepoId: self.configRepoId}
-	client, err := newEnginesEvsClient(running, keys, func() sidecar.GkmAuthView { return genesisState }, func(ctx context.Context, signedType bridge.SignedType, body proto.Message) error {
-		return errors.New("enginenet: the config repo files no RepoCreate: the Genesis names it")
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-	repo, err := client.CreateRepo(ctx, &sidecar.EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_CONFIG, ResumeRepoId: &self.configRepoId})
-	if err != nil {
-		return nil, fmt.Errorf("enginenet: the config repo: %w", err)
-	}
-	firstKey, err := self.args.Gkm.RepoKey(ctx, self.configRepoId, 1)
-	if err != nil {
-		return nil, fmt.Errorf("enginenet: the config repo's generation 1: %w", err)
-	}
-	refKey, err := sidecar.NewEvsRefKey(firstKey)
-	if err != nil {
-		return nil, err
-	}
-	self.refId, err = sidecar.EvsRefId(refKey, sidecar.EvsMainRefName)
-	if err != nil {
-		return nil, err
-	}
-	ref := NewEvsConfigHeadRef(repo, self.refId, nil, 0)
-	push, err := ref.PrepareConfigHead(ctx, head, 0)
-	if err != nil {
-		return nil, fmt.Errorf("enginenet: the first head: %w", err)
-	}
-	self.head, self.chain = push.Head, push.Chain
-	return push, nil
-}
-
-// Sent at its prepare.
-func (self *bootstrapHeadRef) CommitConfigHead(ctx context.Context, push *sidecar.ConfigHeadPush) error {
-	return nil
-}
-
-// BootstrapNetwork asks none.
-func (self *bootstrapHeadRef) ConfigHeadPushes(ctx context.Context, after uint64, through uint64) ([][]byte, error) {
-	return nil, errors.New("enginenet: the bootstrap's ref answers its prepare alone")
-}
-
-// The bootstrap's key source for the config repo's first push: generation 1 of the key client's keychain, which KF1
-// put there, since the key client writes nothing at a state with no rows. Its CreateGroup is the key client's, so
-// EvsClient.CreateRepo's KF1 is the device's own.
-type bootstrapKeys struct {
-	gkm          sidecar.GkmClient
-	configRepoId sidecar.Id
-}
-
-var _ sidecar.GkmClient = (*bootstrapKeys)(nil)
-
-// The genesis state is the key client's already.
-func (self *bootstrapKeys) AuthAdvanced(state sidecar.GkmAuthView) {
-}
-
-func (self *bootstrapKeys) CurrentRepoKey(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
-	return self.RepoKey(ctx, repoId, 1)
-}
-
-func (self *bootstrapKeys) RepoKey(ctx context.Context, repoId sidecar.Id, generation uint64) (*sidecar.EvsRepoKey, error) {
-	if repoId != self.configRepoId {
-		return nil, fmt.Errorf("%w: the bootstrap keys the config repo alone", sidecar.ErrGkmUnavailable)
-	}
-	return self.gkm.RepoKey(ctx, repoId, generation)
-}
-
-func (self *bootstrapKeys) EnsureWritable(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
-	return self.RepoKey(ctx, repoId, 1)
-}
-
-func (self *bootstrapKeys) DropKey(ctx context.Context, repoId sidecar.Id) (*sidecar.GkmDropKey, error) {
-	return nil, fmt.Errorf("%w: the bootstrap drops no key", sidecar.ErrGkmUnavailable)
-}
-
-func (self *bootstrapKeys) CreateGroup(ctx context.Context, args *sidecar.GkmCreateGroupArgs) (*sidecar.EvsRepoKey, error) {
-	if args == nil || args.RepoId != self.configRepoId {
-		return nil, fmt.Errorf("%w: the bootstrap forms the config repo's group alone", sidecar.ErrGkmUnavailable)
-	}
-	return self.gkm.CreateGroup(ctx, args)
-}
-
-func (self *bootstrapKeys) RotateRepo(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
-	return nil, fmt.Errorf("%w: the bootstrap rotates nothing", sidecar.ErrGkmUnavailable)
-}
-
-func (self *bootstrapKeys) ForgetRepo(ctx context.Context, repoId sidecar.Id) error {
-	return fmt.Errorf("%w: the bootstrap forgets nothing", sidecar.ErrGkmUnavailable)
+	result.Bootstrap, result.Head, result.Chain = bootstrap, bootstrap.Push.Head, bootstrap.Push.Chain
+	return result, nil
 }
 
 // A short-lived EvsClient of running's, over gkm, judging at config and filing statements by fileStatement, on a store
