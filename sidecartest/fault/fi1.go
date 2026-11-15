@@ -910,12 +910,13 @@ func (self *evsStoreWalker) readVersion(repo *evsStoreRepo, refId sidecar.Id, ve
 			if err != nil {
 				return nil, fmt.Errorf("part %d: %w", k+1, err)
 			}
-			if partRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART || partRecord.PushId != entry.PushId {
+			if partRecord.PushId != entry.PushId {
 				return nil, fmt.Errorf("part %d's place holds another record", k+1)
 			}
-			partStatement, partBytes, _, _, err := sidecar.ParseEvsPartRecordBody(partRecord.Body)
+			// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+			partStatement, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(partRecord)
 			if err != nil {
-				return nil, fmt.Errorf("part %d: %w", k+1, err)
+				return nil, fmt.Errorf("part %d's place holds another record: %w", k+1, err)
 			}
 			if !bytes.Equal(partStatement, statementBytes) {
 				return nil, fmt.Errorf("part %d carries another statement", k+1)

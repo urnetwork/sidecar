@@ -790,12 +790,13 @@ func (self *verifier) readPush(ctx context.Context, refId sidecar.Id, place *pro
 				return nil, err
 			}
 			partRecord, _, err := sidecar.ParseEvsBatchRecordFormat2(partRecordBytes)
-			if err != nil || partRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
+			if err != nil {
 				return nil, fmt.Errorf("%w: a seal's part is no part record", ErrVerifyState)
 			}
-			_, partBytes, _, _, err := sidecar.ParseEvsPartRecordBody(partRecord.Body)
+			// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+			_, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(partRecord)
 			if err != nil {
-				return nil, fmt.Errorf("%w: a part record: %v", ErrVerifyState, err)
+				return nil, fmt.Errorf("%w: a seal's part is no part record: %w", ErrVerifyState, err)
 			}
 			onePart := &protocol.EvsPushPart{}
 			if err := proto.Unmarshal(partBytes, onePart); err != nil {

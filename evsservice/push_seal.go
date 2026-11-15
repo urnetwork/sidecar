@@ -19,6 +19,11 @@
 //
 // A failed seal leaves its parts to evacuation, which finds them dead through their statement (resolve.go); nothing
 // here deletes. A format-2 seal reads no part: only 5a and its FORMAT_UNSUPPORTED refusal run.
+//
+// A re-seeded push in parts (reseed.go; QD-818) runs the same round with its parts as POST .../reseed carried them, in
+// place of reads at places it has not written yet: each an EVS_BATCH_RESEED record holding a part's body, the type the
+// round takes in that mode alone, as the push route's takes EVS_BATCH_PART alone. Their places are named once step 6
+// has written them, before the seal's record.
 
 package evsservice
 
@@ -78,6 +83,11 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
+			if self.reseed != nil {
+				// a re-seeded part as the request carried it, whose record step 6 writes (reseed.go)
+				records[i] = self.reseedPartRecord(i, 0)
+				return
+			}
 			if !format2 {
 				records[i], readErrs[i] = engine.readRecordAt(self.ctx, self.cluster, self.repoId, self.refId, place)
 				return
@@ -110,11 +120,11 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 		case err != nil:
 			return self.unavailableOn(err)
 		}
-		if record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART || record.PushId != self.pushId ||
+		if record.Type != self.sealPartType() || record.PushId != self.pushId ||
 			record.RepoId != self.repoId || record.RefId != self.refId {
 			return self.partsMissing()
 		}
-		statementBytes, part, receiptItems, _, err := sidecar.ParseEvsPartRecordBody(record.Body)
+		statementBytes, part, receiptItems, _, err := sidecar.ParseEvsSealPartRecord(record)
 		if err != nil || !bytes.Equal(statementBytes, self.statement.Bytes) {
 			return self.partsMissing()
 		}
@@ -178,6 +188,15 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	self.seal.head = head
 	self.seal.read = true
 	return nil
+}
+
+// The type of the records a seal's parts are: EVS_BATCH_PART records the part route wrote, or for a re-seeded push in
+// parts EVS_BATCH_RESEED records holding a part's body (QD-818), so neither mode seals the other's parts.
+func (self *pushAttempt) sealPartType() protocol.EvsBatchRecordType {
+	if self.reseed != nil {
+		return protocol.EvsBatchRecordType_EVS_BATCH_RESEED
+	}
+	return protocol.EvsBatchRecordType_EVS_BATCH_PART
 }
 
 // 409 PARTS_MISSING, which records and refuses nothing.

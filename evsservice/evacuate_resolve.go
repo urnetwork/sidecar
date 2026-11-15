@@ -21,7 +21,8 @@
 //	           head has nothing to fence and its record stays too: how a fence reaches such a ref is
 //	           DESIGN-DETAILS.md's problem 2, which this file does not answer
 //	           (questions/evsb-m2-11-pending-record-no-head)
-//	reseed     counts as committed, and is kept at the version its ref's history names its push at
+//	reseed     counts as committed, and is kept at the version its ref's history names its push at; a re-seeded
+//	           push's part, a reseed record holding a part's body, follows its seal as any part does (QD-818)
 //
 // A kept record's bytes go to the run's spool, a local file, so a run holds no batch in memory past its parse, and
 // its segments and a dead record's slots are read from the new-objects list of its payload or part.
@@ -443,10 +444,14 @@ func (self *evacuateRun) fence(minute *evacuateMinute, repoId sidecar.Id, refId 
 }
 
 // Whether a committed record is the copy its ref's history names, and the version it committed at: a push or seal
-// at the place its version's entry names; a part when its committed seal's record names its place; a reseed at the
-// version its ref's history names its push at.
+// at the place its version's entry names; a part, a re-seeded one included (QD-818), when its committed seal's
+// record names its place; a one-part reseed at the version its ref's history names its push at.
 func (self *evacuateRun) committedHere(record *sidecar.EvsBatchRecord, place *protocol.EvsPlace, resolution *EvsResolution) (bool, uint64, error) {
-	switch record.Type {
+	recordType := record.Type
+	if sidecar.EvsReseedRecordHoldsPart(record) {
+		recordType = protocol.EvsBatchRecordType_EVS_BATCH_PART
+	}
+	switch recordType {
 	case protocol.EvsBatchRecordType_EVS_BATCH_PART:
 		named, err := self.sealNamesPart(record, place, resolution.Place)
 		return named, resolution.Version, err
@@ -518,7 +523,8 @@ func (self *evacuateRun) sealNamesPart(record *sidecar.EvsBatchRecord, place *pr
 }
 
 // The segments a record introduces and the slots it lists as new, from its payload's or part's new-objects list
-// and, for a part, its receipts (§11.8's record row). A seal lists none: its parts do.
+// and, for a part, its receipts, of which a re-seeded part holds none (§11.8's record row; QD-818). A seal lists
+// none: its parts do.
 func evacuateRecordObjects(record *sidecar.EvsBatchRecord) (segmentIds [][32]byte, slotIds []sidecar.Id, err error) {
 	addNewObjects := func(payloadBytes []byte) error {
 		if len(payloadBytes) == 0 {
@@ -545,7 +551,11 @@ func evacuateRecordObjects(record *sidecar.EvsBatchRecord) (segmentIds [][32]byt
 		}
 		return nil
 	}
-	switch record.Type {
+	recordType := record.Type
+	if sidecar.EvsReseedRecordHoldsPart(record) {
+		recordType = protocol.EvsBatchRecordType_EVS_BATCH_PART
+	}
+	switch recordType {
 	case protocol.EvsBatchRecordType_EVS_BATCH_PUSH, protocol.EvsBatchRecordType_EVS_BATCH_RESEED:
 		_, payloadBytes, err := sidecar.ParseEvsPushRecordBody(record.Body)
 		if err != nil {
@@ -555,7 +565,7 @@ func evacuateRecordObjects(record *sidecar.EvsBatchRecord) (segmentIds [][32]byt
 			return nil, nil, err
 		}
 	case protocol.EvsBatchRecordType_EVS_BATCH_PART:
-		_, partBytes, receipts, _, err := sidecar.ParseEvsPartRecordBody(record.Body)
+		_, partBytes, receipts, _, err := sidecar.ParseEvsSealPartRecord(record)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -194,6 +194,10 @@ func (self *pushAttempt) step6() *pushOutcome {
 		self.slotsWritten = true
 	}
 	if self.place == nil {
+		// a re-seeded push in parts' part records first, which its seal's record then names (reseed.go)
+		if outcome := self.appendReseedParts(); outcome != nil {
+			return outcome
+		}
 		barrierKey := barrierRefKey(self.repoId, self.refId)
 		testHookBarrier(BarrierPushRecordBefore, barrierKey)
 		place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), self.batchRecord(), tail)
@@ -223,8 +227,9 @@ func (self *pushAttempt) batchRecord() *sidecar.EvsBatchRecord {
 		record.Type = protocol.EvsBatchRecordType_EVS_BATCH_SEAL
 		record.Body = self.seal.body
 	}
-	if self.reseed != nil {
-		// a re-seeded push's record: a push record's body under its own type (reseed.go)
+	if self.reseed != nil && self.seal == nil {
+		// a re-seeded one-part push's record: a push record's body under its own type; a re-seeded push in parts is
+		// sealed as any push in parts is, its parts the EVS_BATCH_RESEED records (reseed.go; QD-818)
 		record.Type = protocol.EvsBatchRecordType_EVS_BATCH_RESEED
 	}
 	return record
@@ -307,7 +312,7 @@ func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
 	if self.needsFormat2 && self.reads.repo.Object.GetFormat() < sidecar.EvsRepoFormat2 {
 		raiseCount = 1
 	}
-	return PricePush(self.engine.priceTable, &PushOperations{
+	operations := &PushOperations{
 		Immediate: []WriteOperation{
 			{Kind: WriteOperationOverwrite, ObjectByteCount: headByteCount, Count: 1},
 			{Kind: WriteOperationCreate, ObjectByteCount: recordByteCount, Count: 1},
@@ -321,7 +326,10 @@ func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
 			{Kind: WriteOperationCreate, Count: 1},
 			{Kind: WriteOperationCreate, ObjectByteCount: sidecar.EvsLogPageMaxByteCount, Count: 1.0 / EvsLogPageVersionCount},
 		},
-	})
+	}
+	// a re-seeded push in parts writes its part records under the same grant (reseed.go)
+	self.addReseedPartOperations(operations)
+	return PricePush(self.engine.priceTable, operations)
 }
 
 // Step 6's new slots, the slot round of DESIGN-DETAILS 14.2.3, once per attempt and before the record, each body from

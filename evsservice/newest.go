@@ -441,9 +441,11 @@ func (self *RecordPushSource) ChangesAt(ctx context.Context, version uint64, ent
 	if !push.sealed {
 		return touching(push.changes, tokenPath), nil
 	}
-	// the parts whose runs may hold the path or a prefix of it: each prefix sorts before the path
+	// the parts whose runs may hold the path or a prefix of it: each prefix sorts before the path, the root's empty one
+	// first, whose change a push that changes the root names as its first part's (QD-661), as a one-part push's
+	// changes give it touching every path
 	partIndexes := []int{}
-	for length := 1; length <= len(tokenPath); length += 1 {
+	for length := 0; length <= len(tokenPath); length += 1 {
 		index := sealPartHolding(push.sealParts, tokenPath[:length])
 		if 0 <= index && !slices.Contains(partIndexes, index) {
 			partIndexes = append(partIndexes, index)
@@ -547,12 +549,13 @@ func (self *RecordPushSource) readPart(ctx context.Context, push *recordPush, in
 	if err != nil {
 		return nil, err
 	}
-	if record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART || record.PushId != sidecar.Id(push.statement.Push.GetPushId()) {
+	if record.PushId != sidecar.Id(push.statement.Push.GetPushId()) {
 		return nil, fmt.Errorf("%w: a seal's part place holds another record", ErrEvsStatementMismatch)
 	}
-	statementBytes, partBytes, _, _, err := sidecar.ParseEvsPartRecordBody(record.Body)
+	// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+	statementBytes, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(record)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: a seal's part place holds another record: %w", ErrEvsStatementMismatch, err)
 	}
 	if !bytes.Equal(statementBytes, push.statement.Bytes) {
 		return nil, fmt.Errorf("%w: a part of another statement", ErrEvsStatementMismatch)

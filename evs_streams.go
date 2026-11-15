@@ -233,7 +233,8 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 	}
 	var payload *EvsCheckedPayload
 	switch {
-	case batchRecord.Type == protocol.EvsBatchRecordType_EVS_BATCH_PUSH && push.GetPartCount() == 0:
+	case (batchRecord.Type == protocol.EvsBatchRecordType_EVS_BATCH_PUSH || batchRecord.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED) && push.GetPartCount() == 0:
+		// a push record, or a re-seeded push's reseed record holding a push record's body (QD-725)
 		statementBytes, payloadBytes, err := ParseEvsPushRecordBody(batchRecord.Body)
 		if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 			return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
@@ -250,11 +251,15 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 				return nil, fmt.Errorf("%w: part %d of version %d", ErrEvsObjectMissing, part+1, statement.Version)
 			}
 			parsed, err := ParseEvsBatchRecord(partRecord)
-			if err != nil || parsed.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
+			if err != nil {
 				return nil, fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
 			}
-			statementBytes, partBytes, _, _, err := ParseEvsPartRecordBody(parsed.Body)
-			if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
+			// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+			statementBytes, partBytes, _, _, err := ParseEvsSealPartRecord(parsed)
+			if err != nil {
+				return nil, fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
+			}
+			if !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 				return nil, fmt.Errorf("%w: a part record of another statement", ErrEvsEntryRefused)
 			}
 			parts[part] = partBytes

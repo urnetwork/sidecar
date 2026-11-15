@@ -251,6 +251,10 @@ const (
 	// <repo>:<ref>, after the route read the head the statement names.
 	BarrierReseedStatementPutBefore = "evs.reseed.statement_put.before"
 	BarrierReseedStatementPutAfter  = "evs.reseed.statement_put.after"
+	// Around each part's EVS_BATCH_RESEED record of a re-seeded push in parts (QD-818), keyed by <repo>:<ref>, at step
+	// 6 before its seal's record: an attempt held here has written some of its parts and no seal names them.
+	BarrierReseedPartAppendBefore = "evs.reseed.part_append.before"
+	BarrierReseedPartAppendAfter  = "evs.reseed.part_append.after"
 )
 
 // EVSB-M10-03: the drop job (drop_job.go; DESIGN-DETAILS 10.6's drop_job_test.go row), keyed by the repo: F0 to F9's

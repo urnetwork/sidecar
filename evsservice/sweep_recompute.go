@@ -140,14 +140,19 @@ func (self *Sweep) recompute(ctx context.Context, cluster sidecar.BlobCluster, t
 	return list, unfoundCount, nil
 }
 
-// The changes record carries of u's: a one-part push's or a reseed's, a part's, or for a seal every part's.
+// The changes record carries of u's: a one-part push's or a reseed's, a part's, a re-seeded part's (QD-818), or for a
+// seal every part's.
 func (self *sweepRecompute) recordChanges(record *sidecar.EvsBatchRecord, u *sweepRecomputePush) ([]*sidecar.EvsCheckedChange, error) {
-	switch record.Type {
+	recordType := record.Type
+	if sidecar.EvsReseedRecordHoldsPart(record) {
+		recordType = protocol.EvsBatchRecordType_EVS_BATCH_PART
+	}
+	switch recordType {
 	case protocol.EvsBatchRecordType_EVS_BATCH_PUSH, protocol.EvsBatchRecordType_EVS_BATCH_RESEED,
 		protocol.EvsBatchRecordType_EVS_BATCH_SEAL:
 		return u.changes, nil
 	case protocol.EvsBatchRecordType_EVS_BATCH_PART:
-		statementBytes, partBytes, _, _, err := sidecar.ParseEvsPartRecordBody(record.Body)
+		statementBytes, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(record)
 		if err != nil {
 			return nil, err
 		}
@@ -245,12 +250,10 @@ func (self *sweepRecompute) readPush(entry *sidecar.EvsWindowEntry) (*sweepRecom
 			if err != nil {
 				return nil, err
 			}
-			if partRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
-				return nil, fmt.Errorf("%w: a seal's part place holds another record", ErrEvsStatementMismatch)
-			}
-			partStatementBytes, partBytes, _, _, err := sidecar.ParseEvsPartRecordBody(partRecord.Body)
+			// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
+			partStatementBytes, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(partRecord)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: a seal's part place holds another record: %w", ErrEvsStatementMismatch, err)
 			}
 			if !bytes.Equal(partStatementBytes, statement.Bytes) {
 				return nil, fmt.Errorf("%w: a part of another statement", ErrEvsStatementMismatch)
