@@ -29,8 +29,10 @@
 //
 //	followed    a file is read as this device follows it: on a shared file-mode ref, where the rules ignore evs's
 //	            newest version, the effective one below it (16.2.5), which the push is held to and writes over in
-//	            the repair form (16.2.7), so no content a reader ignores is ever signed again here; a path whose every
-//	            version is ignored is absent
+//	            the repair form (16.2.7); a path whose every version is ignored is absent. On a shared git-mode ref a
+//	            REKEY can only seal the standing blob again (8.2.10), so where the version standing is one the rules
+//	            ignore the job writes nothing over it and stops (ErrGkmRekeyIgnoredVersion). Either way no content a
+//	            reader ignores is ever signed again here
 //	left        a file that needs a write and that the planner's call (AllowPrefixWrite, 16.2.7) refuses with
 //	            EVS_PREFIX_RULE detail refused is kept out of the push, so one path outside the device's prefixes
 //	            refuses no push of 1,024 writes, and the rest are re-checkpointed. The job asks the call itself, as
@@ -97,6 +99,11 @@ var (
 	ErrGkmRekeyRunning = errors.New("gkm rekey: a job for the repo is running")
 	// A batch whose paths kept moving under it past MovedRetryCount: the job stops and resumes from its record.
 	ErrGkmRekeyMoved = errors.New("gkm rekey: the paths kept changing under the job")
+	// A version the repo's prefix rules ignore stands at a path of a shared git-mode ref, a removal included. A REKEY
+	// seals the standing blob again as this device's, which every head reader would then show, so the job stops before
+	// any write. A replaying reader stops at that version too, and the ref awaits an admin's recovery (DESIGN-DETAILS
+	// 8.5), after which the job resumes.
+	ErrGkmRekeyIgnoredVersion = errors.New("gkm rekey: a version the prefix rules ignore stands on a git-mode ref")
 )
 
 // The job's tunables (§10.16: both limits are settings).
@@ -710,13 +717,13 @@ func (self *gkmRekeyRun) namedKinds(ctx context.Context, refName []byte, paths [
 	case err != nil:
 		return nil, "", err
 	}
-	// under the repo's prefix rules a removal evs holds on a shared file-mode ref may be one this device ignores, the
-	// file below it standing as the device follows it (16.2.5): such a path is read, and readFiles' walk decides
+	// under the repo's prefix rules a removal evs holds on a shared ref may be one this device ignores, the file below
+	// it standing as the device follows it (16.2.5): such a path is read, and readFiles decides
 	ruled, err := self.repo.prefixRuled()
 	if err != nil {
 		return nil, "", err
 	}
-	followed := ruled != nil && writable.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && writable.RefMode == protocol.EvsRefMode_EVS_REF_FILE
+	followed := ruled != nil && writable.RefKind == protocol.EvsRefKind_EVS_REF_SHARED
 	kinds := make([]protocol.EvsEntryKind, len(paths))
 	for i, verified := range result.replies {
 		switch {
@@ -829,14 +836,17 @@ func (self *gkmRekeyRun) readFiles(ctx context.Context, paths []string, pushFull
 		return err
 	}
 	defer result.objects.close()
-	// whether the planner writes a path of this ref over its effective version: a shared file-mode ref under rules
-	// (evs_plan.go), which the ref's head says as the planner's setRef reads it
-	effective := false
+	// a shared ref under rules, as its head says it and the planner's setRef reads it: on a file-mode one the planner
+	// writes a path over its effective version (evs_plan.go), and on a git-mode one a REKEY can only seal the standing
+	// blob again (8.2.10). A ref the planner takes no write on is refused at the push, as it is with no rules
+	effective, rekeyOnly := false, false
 	if ruled != nil {
-		// a ref the planner takes no write on is refused at the push, as it is with no rules
 		plan := &EvsWritePlan{}
-		effective = plan.setRef(result.head.Head, self.refName, self.rekey.args.Evs.args.Identity().SidecarId, true) == nil &&
-			plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && plan.RefMode == protocol.EvsRefMode_EVS_REF_FILE
+		if plan.setRef(result.head.Head, self.refName, self.rekey.args.Evs.args.Identity().SidecarId, true) == nil &&
+			plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED {
+			effective = plan.RefMode == protocol.EvsRefMode_EVS_REF_FILE
+			rekeyOnly = plan.RefMode == protocol.EvsRefMode_EVS_REF_GIT
+		}
 	}
 	readFile := func(i int) error {
 		path := paths[i]
@@ -844,12 +854,17 @@ func (self *gkmRekeyRun) readFiles(ctx context.Context, paths []string, pushFull
 		if verified.Base != nil {
 			return ErrEvsOverlayBase
 		}
-		if effective {
-			// the planner's own call: nil where evs's newest event is the one this device follows, else the effective
-			// version below an ignored one; a set this device cannot read gives no verdict and stops the job
+		if effective || rekeyOnly {
+			// the planner's own call on a file-mode ref: nil where evs's newest event is the one this device follows,
+			// else the effective version below an ignored one; a set this device cannot read gives no verdict and
+			// stops the job
 			base, err := ruled.writeBase(ctx, self.repo, result, i)
 			if err != nil {
 				return err
+			}
+			if base != nil && rekeyOnly {
+				// sealed again it would read to every head reader as this device's
+				return ErrGkmRekeyIgnoredVersion
 			}
 			if base != nil {
 				if base.version == 0 {

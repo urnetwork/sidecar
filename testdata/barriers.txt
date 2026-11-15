@@ -440,6 +440,9 @@ barrier mail.group.ref.remove.after mail_ingest_group.go
 barrier mail.group.ref.remove.before mail_ingest_group.go
 barrier mail.group.ref.write.after mail_ingest_group.go
 barrier mail.group.ref.write.before mail_ingest_group.go
+barrier mail.imap.uids.after mail_imap_uid.go
+barrier mail.imap.uids.before mail_imap_uid.go
+barrier mail.imap.validity mail_imap_uid.go
 barrier mail.index.write.after mail_index_segment.go
 barrier mail.index.write.before mail_index_segment.go
 barrier mail.ingest.consume.after mail_ingest.go
@@ -462,8 +465,14 @@ barrier mxedge.closed_handshake_write.after mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_write.before mxedgeservice/closed_handshake.go
 barrier mxedge.daily_key_create.after mxedgeservice/closed_handshake.go
 barrier mxedge.daily_key_create.before mxedgeservice/closed_handshake.go
+barrier mxedge.listings_swap.after mxedgeservice/listings.go
+barrier mxedge.listings_swap.before mxedgeservice/listings.go
 barrier mxedge.platform_accept.after mxedgeservice/platform_session.go
 barrier mxedge.platform_accept.before mxedgeservice/platform_session.go
+barrier mxedge.route_read.after mxedgeservice/route_cache.go
+barrier mxedge.route_read.before mxedgeservice/route_cache.go
+barrier mxedge.splice.end mxedgeservice/splice.go
+barrier mxedge.splice.start mxedgeservice/splice.go
 barrier mxedge.starttls.after mxedgeservice/service.go
 barrier mxedge.starttls.before mxedgeservice/service.go
 barrier posture.commit.after device/posture_apply.go
@@ -749,6 +758,7 @@ secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
 secret invite_join_secret config_invite.go
 secret joiner_secret mls_welcome.go
+secret mail_local_credential mail_local_credential.go
 secret mail_spool_key mail_spool.go
 secret measure_client_iv smtpproof/prover_measure.go
 secret measure_client_key smtpproof/prover_measure.go

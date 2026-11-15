@@ -1317,3 +1317,41 @@ func TestEvsRekeyStopsAtADirectoryUnderAnIgnoredRemoval(t *testing.T) {
 	}
 	test.requireUntouched("docs/a.txt", "src/main.go")
 }
+
+// On a git-mode ref a REKEY can only seal the standing blob again (8.2.10), so where the version standing at a path is
+// one the rules ignore, a breach by the world's held writer outside its prefix, the job writes nothing over it, which
+// every head reader would then show as this device's, and stops before any push. The breach is of the old generation,
+// so a job that judged evs's newest version would re-seal it. A removal the rules ignore stops the job the same way,
+// rather than being counted gone while the file stands as this device follows it.
+func TestEvsRekeyStopsAtAnIgnoredVersionOnAGitModeRef(t *testing.T) {
+	test := newRekeyPrefixTest(t, "everywhere")
+	world := test.writer.world
+	world.stateLock.Lock()
+	world.mode = protocol.EvsRefMode_EVS_REF_GIT
+	world.stateLock.Unlock()
+	world.push(&evsTestChange{path: "", children: []string{"src"}}, &evsTestChange{path: "src", children: []string{"u.txt", "v.txt"}},
+		&evsTestChange{path: "src/u.txt", content: evsTestEdited("src/u.txt", 600)}, &evsTestChange{path: "src/v.txt", content: evsTestEdited("src/v.txt", 700)})
+	test.writer.server.know("src/u.txt", "src/v.txt")
+	test.file()
+	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "src/u.txt", content: []byte("planted")})
+	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "src/v.txt"})
+	test.rotate(2, GkmCauseRemove)
+	if chain, _ := test.chain("src/u.txt"); chain.KeyGeneration != 1 {
+		t.Fatalf("the breach: key generation %d", chain.KeyGeneration)
+	}
+	posted := test.posted()
+	for _, path := range []string{"src/u.txt", "src/v.txt"} {
+		progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{
+			RepoId: world.repoId, RefNames: [][]byte{EvsMainRefName}, Paths: []string{path},
+		})
+		if !errors.Is(err, ErrGkmRekeyIgnoredVersion) {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if progress.State != GkmRekeyStateStopped || progress.RewrittenCount != 0 || progress.AbsentCount != 0 || strings.Contains(progress.StopReason, path) {
+			t.Errorf("%s: the progress %+v", path, progress)
+		}
+	}
+	if test.posted() != posted {
+		t.Errorf("a job stopped at an ignored version sent %d statements", test.posted()-posted)
+	}
+}
