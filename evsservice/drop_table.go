@@ -792,10 +792,11 @@ func DropHintRepoId(key string) (sidecar.Id, bool) {
 	return repoId, true
 }
 
-// One segment cluster's job lease, holding only the instance id (§11.13's bound row: one job a segment cluster), in
-// evs-28's {evsd_} family, which no hint key takes since a cluster id is no repo id.
+// One segment cluster's job lease, holding only the instance id (§11.13's bound row: one job a segment cluster): evs-28's
+// {evsd_} family, whose "per job: its owner instance and lease" it is, keyed by the cluster's id, which no hint key takes
+// since a cluster id is no repo id's 32 hex characters.
 func dropClusterLeaseKey(clusterId string) string {
-	return "{evsd_" + clusterId + "}l"
+	return "{evsd_" + clusterId + "}"
 }
 
 // The table as one read of the cluster found it.
@@ -937,7 +938,6 @@ func (self *DropTable) Update(ctx context.Context, cluster sidecar.BlobCluster, 
 		switch {
 		case err == nil:
 			read.Etag = etag
-			self.hint(ctx, repoId, cluster.ClusterId())
 			return read, nil
 		case errors.Is(err, sidecar.ErrBlobPrecondition), errors.As(err, &unknown):
 			// moved under us, or may have landed: the next read tells
@@ -949,9 +949,10 @@ func (self *DropTable) Update(ctx context.Context, cluster sidecar.BlobCluster, 
 	return nil, fmt.Errorf("%w: repo %s", ErrDropTableBusy, sidecar.EvsKeyId(repoId))
 }
 
-// Sets the repo's hint, its value the repo's metadata cluster. Soft state: a hint that does not land is covered by the
-// daily LIST of drops/.
-func (self *DropTable) hint(ctx context.Context, repoId sidecar.Id, clusterId string) {
+// Sets the repo's hint, its value the repo's metadata cluster: what evs does after a write that leaves drop work, a
+// DROP's, a cancel's or a dry run's, so taskworker runs the repo. The job's own writes set none. Soft state: a hint that
+// does not land is covered by the daily LIST of drops/.
+func (self *DropTable) Hint(ctx context.Context, repoId sidecar.Id, clusterId string) {
 	if self.host.Redis == nil {
 		return
 	}
@@ -979,6 +980,7 @@ func (self *DropTable) Append(ctx context.Context, commit *DropCommit, seenMs in
 	}
 	body := commit.Body
 	var moved DropState
+	changed := false
 	switch body.GetAction() {
 	case 1:
 		dropId, err := sidecar.IdFromBytes(body.GetDropId())
@@ -992,7 +994,7 @@ func (self *DropTable) Append(ctx context.Context, commit *DropCommit, seenMs in
 			}
 		}
 		_, err = self.Update(ctx, cluster, commit.RepoId, func(state *DropTableState, now time.Time) (bool, error) {
-			moved = 0
+			moved, changed = 0, false
 			if state.Drop(dropId) != nil || state.Void(dropId) != nil {
 				return false, nil
 			}
@@ -1003,7 +1005,7 @@ func (self *DropTable) Append(ctx context.Context, commit *DropCommit, seenMs in
 				DropId: dropId, RefId: commit.RefId, PushId: commit.PushId, Version: commit.Version, Place: commit.Place,
 				NotBeforeMs: body.GetNotBeforeMs(), SeenMs: seenMs, State: DropStatePending, PreviewId: previewId,
 			})
-			moved = DropStatePending
+			moved, changed = DropStatePending, true
 			return true, nil
 		})
 		if err != nil {
@@ -1015,15 +1017,16 @@ func (self *DropTable) Append(ctx context.Context, commit *DropCommit, seenMs in
 			return fmt.Errorf("%w: a cancelled drop id of %d bytes", ErrDropTableInvalid, len(body.GetCancelsDropId()))
 		}
 		_, err = self.Update(ctx, cluster, commit.RepoId, func(state *DropTableState, now time.Time) (bool, error) {
-			moved = 0
+			moved, changed = 0, false
 			entry := state.Drop(dropId)
 			switch {
 			case entry == nil && state.Void(dropId) == nil:
 				state.Voids = append(state.Voids, &DropVoidRecord{DropId: dropId, State: DropStateCancelled})
+				changed = true
 				return true, nil
 			case entry != nil && entry.State == DropStatePending:
 				state.setState(entry, DropStateCancelled, dropDay(now))
-				moved = DropStateCancelled
+				moved, changed = DropStateCancelled, true
 				return true, nil
 			}
 			// any other state stands: the job's start reads the ref's history for a cancel itself (F1)
@@ -1037,6 +1040,9 @@ func (self *DropTable) Append(ctx context.Context, commit *DropCommit, seenMs in
 	}
 	if moved != 0 {
 		self.countState(moved)
+	}
+	if changed {
+		self.Hint(ctx, commit.RepoId, commit.ClusterId)
 	}
 	return nil
 }

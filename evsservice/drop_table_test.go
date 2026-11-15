@@ -222,6 +222,18 @@ func TestDropSinkAppendsWithSeenMs(t *testing.T) {
 	if _, ok := DropHintRepoId(dropClusterLeaseKey("seg-1")); ok {
 		t.Fatal("the cluster lease key reads as a hint")
 	}
+	// the job's own writes set no hint, so a run does not wake its own repo
+	if err := world.host.Redis.Delete(world.ctx, []string{DropHintKey(world.repoId)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.table.Update(world.paidCtx, world.cluster, world.repoId, func(state *DropTableState, now time.Time) (bool, error) {
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := world.host.Redis.Get(world.ctx, DropHintKey(world.repoId)); found {
+		t.Fatal("a write that left no new drop work set the hint")
+	}
 }
 
 func TestDropSinkUnsureClockAppendsNothing(t *testing.T) {

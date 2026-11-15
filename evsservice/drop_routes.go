@@ -246,6 +246,7 @@ func (self *EvsEngine) serveDropPreviewRequest(request *EvsRequest) {
 		request.Unavailable(nil)
 		return
 	}
+	self.drops.Hint(request.Ctx, request.RepoId, request.Cluster.ClusterId())
 	request.Note("preview " + sidecar.EvsKeyId(previewId))
 	request.replyAccepted(&protocol.EvsDropPreviewReply{PreviewId: previewId.Bytes()})
 }
