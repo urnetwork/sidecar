@@ -50,7 +50,7 @@ func (self *bridgeCompiler) hostedShares() ([]*bridge.BridgeRuleShare, []*bridge
 		if rule == nil || !rule.activeAt(self.t) {
 			continue
 		}
-		if !self.acl.contractReach(&AclSubject{Kind: AclSubjectRemote, Id: acceptingNetworkId}, &self.selfSubject, false, self.t).Allowed {
+		if !self.acl.Reach(AclSubject{Kind: AclSubjectRemote, Id: acceptingNetworkId}, self.selfSubject, self.now).Allowed {
 			continue
 		}
 		row := self.shareRow(shareId)
@@ -145,7 +145,7 @@ func (self *bridgeCompiler) shareEntries(find func(prefix bridgePrefix) *bridgeC
 			continue
 		}
 		// Y's half of §8.11's share: S reaches the sharing network
-		if !self.acl.contractReach(&self.selfSubject, &AclSubject{Kind: AclSubjectRemote, Id: sharingNetworkId}, false, self.t).Allowed {
+		if !self.acl.Reach(self.selfSubject, AclSubject{Kind: AclSubjectRemote, Id: sharingNetworkId}, self.now).Allowed {
 			continue
 		}
 		first, _, err := bridgeUpperRangeOf(body.GetAliasPrefix())
