@@ -252,6 +252,18 @@ func testTlsListenCases(t *testing.T, cases []testTlsListenCase) {
 	}
 }
 
+// A brand's own domains from the screen's list, so no real hostname is written here.
+func testTlsBrandDomains(t *testing.T, brand string) []string {
+	t.Helper()
+	for _, screenBrand := range sidecar.ScreenBrands() {
+		if screenBrand.Brand == brand && 0 < len(screenBrand.Domains) {
+			return screenBrand.Domains
+		}
+	}
+	t.Fatalf("no brand %q with a domain", brand)
+	return nil
+}
+
 // The scene as built passes, the view asked for the registration's own name and mode.
 func TestTlsListenPassesAPublishedHostWithACertificate(t *testing.T) {
 	scene := newTestTlsListenScene(t, nil)
@@ -360,7 +372,7 @@ func TestTlsListenScreensTheHost(t *testing.T) {
 		}},
 		{name: "a verified brand", mutate: func(scene *testTlsListenScene) {
 			scene.setName("tls/443/apple")
-			scene.facts.VerifiedDomains = []string{"apple.com"}
+			scene.facts.VerifiedDomains = testTlsBrandDomains(t, "apple")
 		}, allow: true},
 		{name: "a brand with a keyword", mutate: func(scene *testTlsListenScene) {
 			scene.setName("tls/443/apple-login")

@@ -671,6 +671,8 @@ barrier sockets.sweep.claimed socketsservice/sweep.go
 barrier sockets.sweep.page socketsservice/sweep.go
 barrier sockets.sweep.remove.after socketsservice/sweep.go
 barrier sockets.sweep.remove.before socketsservice/sweep.go
+barrier sockets.tls.facts.read.after socketsservice/namespace_tls.go
+barrier sockets.tls.facts.read.before socketsservice/namespace_tls.go
 barrier state.commit.after keys_keychain.go
 barrier state.commit.before keys_keychain.go
 barrier state.remove.after keys_keychain.go
