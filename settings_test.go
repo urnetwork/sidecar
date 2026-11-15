@@ -341,6 +341,10 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 		FirstPort:              17000,
 		HelloByteCount:         16 * 1024,
 		SessionBufferByteCount: 4 * 1024,
+		ReplyMaxDepth:          32,
+		EventRingEventCount:    1024,
+		EventReplyEventCount:   256,
+		EventWaitTimeout:       25 * time.Second,
 	}
 	if *settings.LocalSettings != wantLocal {
 		t.Errorf("local settings %+v, want %+v", *settings.LocalSettings, wantLocal)
@@ -372,6 +376,11 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 	}
 	if settings.LocalSettings.RequestTimeout != settings.Mcp.CallTimeout {
 		t.Errorf("RequestTimeout %v", settings.LocalSettings.RequestTimeout)
+	}
+	// an events call's wait answers before the request bound would, and a reply's events fit the ring
+	if settings.LocalSettings.RequestTimeout <= settings.LocalSettings.EventWaitTimeout ||
+		settings.LocalSettings.EventRingEventCount < settings.LocalSettings.EventReplyEventCount {
+		t.Errorf("EventWaitTimeout %v, EventReplyEventCount %d", settings.LocalSettings.EventWaitTimeout, settings.LocalSettings.EventReplyEventCount)
 	}
 	if settings.ComponentQueueByteCount != settings.ComponentQueueMessageCount*4096 {
 		t.Errorf("queue %d messages, %d bytes", settings.ComponentQueueMessageCount, settings.ComponentQueueByteCount)

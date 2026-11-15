@@ -107,6 +107,9 @@ type Daemon struct {
 	networkIdSidecars map[Id]*Sidecar
 	// the sockets and shares the daemon holds (daemon_socket.go), made on first use
 	sockets *DaemonSockets
+	// the ring of the attached Sidecars' events, which the events method long-polls (daemon_events.go), made on first
+	// use
+	events *DaemonEvents
 	// the host's platform authenticator, which the daemon's presence prompt asks (daemon_presence.go); nil for none
 	presenceProvider PresenceProvider
 }
@@ -412,16 +415,42 @@ func (self *Daemon) serve(conn net.Conn) {
 	self.serveRpc(reader, conn, &daemonSession{hello: hello})
 }
 
-// control and hook: one JSON-RPC request a line, each answered before the next is read, each under the request
-// timeout. A line past the request bound, or one that does not end, closes the session.
+// control and hook: one JSON-RPC request a line, each answered before the next is taken, each under the request
+// timeout. A goroutine of the session reads its lines, at most one ahead of the request being answered, so the end of
+// the session is seen while a request runs: session.done closes then, which DaemonCall.SessionDone carries to a long
+// poll (daemon_events.go). A session that sent its next line meanwhile is seen to end once that line is taken. A line
+// past the request bound, or one that does not end, closes the session once the requests before it are answered.
 func (self *Daemon) serveRpc(reader *bufio.Reader, conn net.Conn, session *daemonSession) {
+	lines := make(chan []byte)
+	done := make(chan struct{})
+	// closed once this returns, so a reader holding a line nobody takes ends; serve's close of conn ends its read
+	served := make(chan struct{})
+	defer close(served)
+	session.done = done
+	go func() {
+		defer close(done)
+		for {
+			line, err := readDaemonLine(reader, self.settings.Local.RequestByteCount)
+			if err != nil {
+				if errors.Is(err, errDaemonLineTooLong) {
+					self.log.Warningf("[daemon]a request past %d bytes closed its session", self.settings.Local.RequestByteCount)
+				}
+				return
+			}
+			select {
+			case lines <- line:
+			case <-served:
+				return
+			}
+		}
+	}()
 	writer := bufio.NewWriter(conn)
 	for {
-		line, err := readDaemonLine(reader, self.settings.Local.RequestByteCount)
-		if err != nil {
-			if errors.Is(err, errDaemonLineTooLong) {
-				self.log.Warningf("[daemon]a request past %d bytes closed its session", self.settings.Local.RequestByteCount)
-			}
+		var line []byte
+		select {
+		case line = <-lines:
+		case <-done:
+			// every line taken was answered: a line is handed over before the reader can see the end after it
 			return
 		}
 		self.noteRequest()
