@@ -77,7 +77,8 @@ type urSettings struct {
 	// How often it dials again while it waits: 50 ms.
 	SpawnRetryInterval time.Duration
 	// How long a control call may take, a person's confirmation aside: SidecarLocalSettings.RequestTimeout's 30 s
-	// and a little more, so the daemon's own bound answers first.
+	// and a little more, so the daemon's own bound answers first, and so past an events call's wait, which the daemon
+	// caps at EventWaitTimeout's 25 s.
 	CallTimeout time.Duration
 	// How long ur status's host probes run, all at once, each a dial and a tls handshake: 10 s, past a cold dial
 	// through a proxy on a slow link (cmd_status_hosts.go).
@@ -88,6 +89,9 @@ type urSettings struct {
 	// The most of a reply one native messaging frame carries before the reply goes as chunks: 512 KiB, whose base64
 	// and envelope stay under Chrome's 1 MiB limit on a host's message (native_host_frame.go).
 	NativeHostChunkByteCount int
+	// The longest request id ur native-host keeps: 256 B, so a chunked reply's envelope stays within a frame; ids are a
+	// number or a short string in practice. A request with a longer one is refused.
+	NativeHostIdByteCount int
 	// The longest line `ur mcp` takes from its harness: SidecarLocalSettings.RequestByteCount's 4 MiB, the daemon's
 	// own bound on a session's line. A longer one is answered as an invalid request and goes no further.
 	RelayRequestByteCount int64
@@ -111,6 +115,7 @@ func defaultUrSettings() *urSettings {
 		// the daemon's own request bound, so nothing the daemon would refuse is read whole
 		NativeHostRequestByteCount: sidecar.DefaultSidecarSettings().LocalSettings.RequestByteCount,
 		NativeHostChunkByteCount:   512 * 1024,
+		NativeHostIdByteCount:      256,
 		RelayRequestByteCount:      sidecar.DefaultSidecarSettings().LocalSettings.RequestByteCount,
 		RelayAnswerByteCount:       64 * 1024 * 1024,
 		RelayReconnectInterval:     1 * time.Second,
