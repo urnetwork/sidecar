@@ -478,7 +478,7 @@ func Fs38ShareSigner(net *Net) *Schedule {
 	world := &fsShareWorld{}
 	return fsShareSchedule("", world,
 		fsShareSetup(world),
-		fsShareDo("Y's reader", world, func() error {
+		fsShareDo("readerY", world, func() error {
 			window := world.share.OpenReaderWindow("fs38 share reader", world.share.AcceptingSidecarId, func() []byte { return world.share.CurrentCert(7) }, 7)
 			defer window.Close()
 			flows := &fsShareFlows{world: world, window: window}
@@ -530,7 +530,7 @@ func Fs38ShareRefusals(net *Net) *Schedule {
 		}))
 	}
 	steps = append(steps,
-		fsShareDo("Y's ungranted reader", world, func() error {
+		fsShareDo("ungrantedReaderY", world, func() error {
 			// CC-05: a current reader of Y's config whom Y grants nothing on X asks the platform, whose gate refuses
 			share := world.share
 			window := share.OpenReaderWindow("fs38 share ungranted", share.UngrantedSidecarId, func() []byte { return share.CurrentCert(7) }, 7)
@@ -564,18 +564,18 @@ func Fs38ShareRefusals(net *Net) *Schedule {
 		}),
 	)
 	steps = append(steps,
-		fsShareDo("removed reader", world, func() error {
+		fsShareDo("removedReader", world, func() error {
 			// a sidecar Y removed still holds generation 7's signer, which the host admits until a later cert reaches it
 			window := fsShareWindow(world, "fs38 share removed before", func() []byte { return world.share.CurrentCert(7) }, 7)
 			defer window.Close()
 			return (&fsShareFlows{world: world, window: window}).expectOpen("fs38 share removed before")
 		}),
-		fsShareDo("Y's reader", world, func() error {
+		fsShareDo("readerY", world, func() error {
 			window := fsShareWindow(world, "fs38 share generation 8", func() []byte { return world.share.CurrentCert(8) }, 8)
 			defer window.Close()
 			return (&fsShareFlows{world: world, window: window}).expectOpen("fs38 share generation 8")
 		}),
-		fsShareDo("removed reader", world, func() error {
+		fsShareDo("removedReader", world, func() error {
 			window := fsShareWindow(world, "fs38 share removed after", func() []byte { return world.share.CurrentCert(7) }, 7)
 			defer window.Close()
 			if err := (&fsShareFlows{world: world, window: window}).expectRefused("fs38 share removed after"); err != nil {
