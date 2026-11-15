@@ -131,6 +131,9 @@ func TestCertsAriRenewalSkipsEveryLimitAndHold(t *testing.T) {
 	device := run.device("k9arinew01")
 	serial := big.NewInt(0x77ad01)
 	predecessor := run.issuedWithChain(device, certsservice.CertsCaLetsEncrypt, serial)
+	// rows accepted from here sort after the predecessor, as rows of a later millisecond do, so its set
+	// reads as issued before them
+	run.clock.Advance(time.Millisecond)
 	// the CA suggests renewing 20 days on: a renewal now is before its window
 	windowStart := run.clock.Now().Add(20 * 24 * time.Hour)
 	moved, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
