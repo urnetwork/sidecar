@@ -188,6 +188,7 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 		repoWrittenVersions: map[Id]uint64{},
 		parts:               map[string]any{},
 	}
+	self.adapter.client = self
 	self.reader = self.newReader()
 	return self, nil
 }

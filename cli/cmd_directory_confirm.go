@@ -34,9 +34,13 @@ func urDirectoryMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	return sidecar.DaemonDirectoryMethods(network.daemon, urDirectoryBackends())
 }
 
-// The acts' backends this ur has: the Sidecar's own list, taint and announcement, and none yet of the rest.
+// The acts' backends this ur has: the Sidecar's own list, taint and announcement, the revocation and the directory
+// admin's erasure (RECORD-M6-20), and none yet of the decisions.
 func urDirectoryBackends() *sidecar.DaemonDirectoryBackends {
-	return &sidecar.DaemonDirectoryBackends{}
+	return &sidecar.DaemonDirectoryBackends{
+		Revoke: sidecar.DirectoryRevokeBackend,
+		Erase:  sidecar.DirectoryEraseBackend,
+	}
 }
 
 // A person act refused for want of the person's yes: nothing was sent.
