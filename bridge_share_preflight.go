@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §17.9's preflight (BRIDGE-M6-03; D-BRIDGE-20; DESIGN-DETAILS 12.2.7): what a share's accepting device runs on its
 // own ledger before it files any BridgeAlias, since the server sees no prefix and could not refuse an alias that has
 // no room.

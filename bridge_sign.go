@@ -5,8 +5,14 @@
 // this sidecar's identity key, which a host verifies once per contract before its first flow (bridge.
 // VerifyWindowDelegation). It signs only for this sidecar's own network and itself as the subject, a window client key
 // of 32 bytes, a not_after ahead and at most WindowDelegationMaxLifetime away, and a target the newest compiled state
-// names in a link, an entry's or an exit's; with no compiled state, pending, it signs nothing. A share link's
-// delegation, signed with the share's BridgeShareSigner, is BRIDGE-M6-04's, and refused until then.
+// names in a link, an entry's or an exit's; with no compiled state, pending, it signs nothing.
+//
+// A share link's delegation (BRIDGE-M6-04; §17.9's share signers) is signed by the share's ShareSigner, never by the
+// identity key: the signer the newest compiled head carries at bridge/share/<share_id hex>, held to §17.9's use row
+// (bridge_share_signer.go), with the newest generation this sidecar signed with saved before it signs, so it never
+// signs below one it used. The delegation carries the share's id and the signer's ShareCert, by which the other
+// network's host verifies it under the ShareKey its admin pinned. With no usable signer it signs nothing: the share
+// lapses on this sidecar until its holder's renewal lands.
 //
 // Neither the delegation nor the signed bytes reach a log line, an event, BridgeState, a device RPC reply or an MCP
 // tool: the bytes go to the caller, the link's generator, alone. The identity key never leaves Sidecar.Sign.
@@ -49,12 +55,13 @@ func (self *Sidecar) SignWindowDelegation(request *BridgeDelegationRequest) ([]b
 	return bridgeSignWindowDelegation(request, self.currentIdentity(), component.Compiled(), component.settings.WindowDelegationMaxLifetime,
 		self.clock.Now(), func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error) {
 			return self.Sign(purpose, signedType, body, nil)
-		})
+		}, component.shares.use)
 }
 
 // SignWindowDelegation's rules over this sidecar's identity, the newest compile and the time, signing with sign.
 func bridgeSignWindowDelegation(request *BridgeDelegationRequest, identity *SidecarIdentity, compiled *BridgeCompiled,
-	maxLifetime time.Duration, now time.Time, sign func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error)) ([]byte, error) {
+	maxLifetime time.Duration, now time.Time, sign func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error),
+	shareSigner func(shareId Id, now time.Time) (*BridgeShareSignerUse, error)) ([]byte, error) {
 	switch {
 	case request == nil:
 		return nil, fmt.Errorf("%w: no request", ErrBridgeDelegationRefused)
@@ -72,9 +79,8 @@ func bridgeSignWindowDelegation(request *BridgeDelegationRequest, identity *Side
 		return nil, fmt.Errorf("%w: a not_after in the past", ErrBridgeDelegationRefused)
 	case maxLifetime < request.NotAfter.Sub(now):
 		return nil, fmt.Errorf("%w: a not_after past the longest a delegation lives", ErrBridgeDelegationRefused)
-	case request.ShareId != (Id{}):
-		// a share link's signer is the share's BridgeShareSigner (BRIDGE-M6-04)
-		return nil, fmt.Errorf("%w: a share link, which this build does not sign", ErrBridgeDelegationRefused)
+	case request.ShareId != (Id{}) && shareSigner == nil:
+		return nil, fmt.Errorf("%w: a share link, and no share signer here", ErrBridgeDelegationRefused)
 	case compiled == nil || compiled.State == nil:
 		return nil, fmt.Errorf("%w: no compiled state", ErrBridgeDelegationRefused)
 	case !slices.Contains(compiled.LinkTargets, request.TargetSidecarId):
@@ -87,6 +93,15 @@ func bridgeSignWindowDelegation(request *BridgeDelegationRequest, identity *Side
 		WindowClientPublicKey: append([]byte(nil), request.WindowClientPublicKey...),
 		TargetSidecarId:       request.TargetSidecarId.Bytes(),
 		NotAfterMs:            request.NotAfter.UnixMilli(),
+	}
+	if request.ShareId != (Id{}) {
+		// the share's signer signs, with its floor raised first; the identity key signs no share link's delegation
+		use, err := shareSigner(request.ShareId, now)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrBridgeDelegationRefused, err)
+		}
+		delegation.ShareId, delegation.ShareCert = request.ShareId.Bytes(), use.CertSigned
+		sign = use.sign
 	}
 	return bridge.WindowDelegationSigned(delegation, sign, nil)
 }

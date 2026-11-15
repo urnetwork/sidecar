@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §17.9's share seal (BRIDGE-M6-03; QD-108; DESIGN-DETAILS 12.2.2, 12.2.7; I-2): how the two networks of a share
 // exchange their tables through a server that reads neither.
 //

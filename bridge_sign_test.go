@@ -43,7 +43,7 @@ func TestSignWindowDelegationSignsWhatAHostVerifies(t *testing.T) {
 		}
 	}
 
-	signed, err := bridgeSignWindowDelegation(request(), identity, compiled, maxLifetime, now, sign)
+	signed, err := bridgeSignWindowDelegation(request(), identity, compiled, maxLifetime, now, sign, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +82,14 @@ func TestSignWindowDelegationSignsWhatAHostVerifies(t *testing.T) {
 		if refusal.compiled != nil {
 			held = refusal.compiled
 		}
-		if _, err := bridgeSignWindowDelegation(refused, identity, held, maxLifetime, now, sign); !errors.Is(err, ErrBridgeDelegationRefused) {
+		if _, err := bridgeSignWindowDelegation(refused, identity, held, maxLifetime, now, sign, nil); !errors.Is(err, ErrBridgeDelegationRefused) {
 			t.Errorf("%s: %v", refusal.name, err)
 		}
 	}
-	if _, err := bridgeSignWindowDelegation(request(), identity, compiled, maxLifetime, now, sign); err != nil {
+	if _, err := bridgeSignWindowDelegation(request(), identity, compiled, maxLifetime, now, sign, nil); err != nil {
 		t.Errorf("the request again: %v", err)
 	}
-	if _, err := bridgeSignWindowDelegation(request(), nil, compiled, maxLifetime, now, sign); !errors.Is(err, ErrBridgeDelegationRefused) {
+	if _, err := bridgeSignWindowDelegation(request(), nil, compiled, maxLifetime, now, sign, nil); !errors.Is(err, ErrBridgeDelegationRefused) {
 		t.Errorf("no identity: %v", err)
 	}
 }
