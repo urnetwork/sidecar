@@ -24,9 +24,12 @@
 // cut to Ingest.ModelCallFieldByteCount, RECORD.md's 128 B. An export that cannot be read whole, past
 // Ingest.TelemetryByteCount or not OTLP JSON, and a call that names no live run, are dropped exports: a missed_event
 // gap on the runs of its harness, or on every live run when the harness is unknown, since a lost call may hide cost.
-// A Codex record is no call here: Codex's calls come from its PostModelRequest hook, which carries their request ids
-// and tokens, and taking both would count each call twice in RECORD.md 13.1's sums, so its records stay passed over
-// until question harness-telemetry-token-codex-double-count settles how the two combine.
+// A Codex record is no call here: §16.18 also names Codex's PostModelRequest hook, which reports the same calls with
+// their request ids and tokens, so taking both would count each call twice in RECORD.md 13.1's sums, and an
+// api_request record alone carries no tokens and counts retries. Until question
+// harness-telemetry-token-codex-double-count settles where Codex's calls come from, its records stay passed over; ur
+// install-harness does not install the hook yet either (MCP-M6-03), so a Codex run records no model call, and its
+// coverage names no model-call source.
 // Off unless Ingest.ModelCalls is set: M6's capture, off by default.
 
 package mcp
@@ -314,7 +317,7 @@ func otlpExportCalls(export *otlpLogsExport) []*otlpExportCall {
 	for _, resourceLogs := range export.ResourceLogs {
 		harness := otlpHarness(otlpAttributes(resourceLogs.Resource.Attributes))
 		if harness == codexHookHarness {
-			// Codex's calls are its PostModelRequest hook's (question harness-telemetry-token-codex-double-count)
+			// where Codex's calls come from waits on question harness-telemetry-token-codex-double-count
 			continue
 		}
 		for _, scopeLogs := range resourceLogs.ScopeLogs {

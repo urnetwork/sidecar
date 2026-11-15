@@ -13,10 +13,10 @@
 //	--project  .codex/config.toml and .codex/hooks.json in the project, a reading, since §16.7 names only the user's
 //	exporter   with a telemetry pair (a user install's alone; QD-822), the [otel] table of config.toml: exporter
 //	           otlp-http to the daemon's listener's logs endpoint, protocol json, its bearer in headers'
-//	           Authorization, and log_user_prompt false, since the listener takes model calls alone. Codex's model
-//	           calls come from its PostModelRequest hook, which carries their request ids and tokens, so the listener
-//	           takes no Codex record as a call until question harness-telemetry-token-codex-double-count settles how
-//	           the two combine (ingest_model.go)
+//	           Authorization, and log_user_prompt false, since the listener takes model calls alone. The listener
+//	           takes no Codex record as a call until question harness-telemetry-token-codex-double-count settles
+//	           where Codex's calls come from, since §16.18's PostModelRequest hook reports the same calls with their
+//	           request ids and tokens (ingest_model.go)
 //
 // config.toml is edited by whole tables: every table under mcp_servers.ur is ur's, and with a telemetry pair every
 // table under otel too, each group replaced together by the template's block where its first table stood, and a config
