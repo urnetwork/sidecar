@@ -253,6 +253,13 @@ type SidecarSearchSettings struct {
 	MemoryByteCount int64
 	// 5.9's version-table pages a process, inside MemoryByteCount: 256 KiB, 64 pages of VersionPageByteCount.
 	VersionCacheByteCount int64
+	// The most one ref's holdings record in the index cache may hold: 16 MiB, a reading, room for some 100,000 kept
+	// files. One past it reads as failed, and the ref's files are dropped to fetch again (§5.9's rebuild row).
+	CacheHoldingsByteCount int
+	// The most one kept file's meta in the index cache may hold, a version-table run's included: 64 KiB, a reading, far
+	// above a record's 160 B sealed header, 72 B wrapped key and ids. One past it reads as failed, and the file is
+	// dropped to fetch again.
+	CacheMetaByteCount int
 	// Sync downloads a day a network, since each debits the transfer balance: 1 GiB (§16.10).
 	BackgroundByteCount int64
 	// Downloads a "search more" call, where its page turns partial: 1 GiB (§16.10).
@@ -910,6 +917,8 @@ func DefaultSidecarSettings() *SidecarSettings {
 			CacheByteCount:         4 * 1024 * 1024 * 1024,
 			MemoryByteCount:        64 * 1024 * 1024,
 			VersionCacheByteCount:  256 * 1024,
+			CacheHoldingsByteCount: 16 * 1024 * 1024,
+			CacheMetaByteCount:     64 * 1024,
 			BackgroundByteCount:    1024 * 1024 * 1024,
 			MoreByteCount:          1024 * 1024 * 1024,
 			AllPolicy:              "background",

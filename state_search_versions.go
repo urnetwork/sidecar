@@ -275,7 +275,7 @@ type searchVersionRun struct {
 func (self *SearchVersionTable) openRun(runId SearchVersionRunId) (*searchVersionRun, error) {
 	base := self.runBase(runId)
 	value, err := self.cache.Decoded(SearchDecodedKey{Key: self.runKey(runId), Part: string(SearchCachePartVersionTable)}, func() (any, int64, error) {
-		content, err := self.cache.readSmall(base+"/"+searchCacheMetaName, searchCacheMetaMax)
+		content, err := self.cache.readSmall(base+"/"+searchCacheMetaName, self.cache.settings.CacheMetaByteCount)
 		if err != nil {
 			return nil, 0, err
 		}

@@ -517,7 +517,7 @@ func buildVersionTableVector(t *testing.T, vector versionTableVector) ([]string,
 		}
 		pages = append(pages, hex.EncodeToString(bytes.TrimRight(page, "\x00")))
 	}
-	meta, err := world.cache.readSmall(world.table.runBase(runId)+"/"+searchCacheMetaName, searchCacheMetaMax)
+	meta, err := world.cache.readSmall(world.table.runBase(runId)+"/"+searchCacheMetaName, world.cache.settings.CacheMetaByteCount)
 	if err != nil {
 		t.Fatal(err)
 	}
