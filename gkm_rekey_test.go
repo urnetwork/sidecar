@@ -1,8 +1,17 @@
+//go:build !ios_extension
+
 // KEYS-M2-26's tests of ur evs rekey's job, over the write tests' stand-in evs (evs_plan_test.go): §22.7's "after ur
 // evs rekey every file of the repo opens only under the current generation", read from each file's chain; pushes
 // within the settings' entry-write and byte bounds; a kill before a push commits and one between a commit and its
 // progress record, each resumed without skipping or rewriting a file twice; the rate on a clock the test owns; a file
 // changed or removed under the job never put back; and what the job cannot write or list refused or skipped by name.
+//
+// Under a repo's prefix rules (DESIGN-DETAILS 8.2.10's "Under prefix rules" and its report), over a world of
+// evs_prefix_test.go: a held device's job re-checkpoints the files under its prefixes in one push and leaves the rest,
+// counted and never rewritten or current, in file mode and in git mode; a device the set names for every path leaves
+// none; a set the device cannot read stops the job; a refusal the planner gives at the push leaves that file alone; a
+// resumed job counts a left file once; a file whose newest version the rules ignore is re-checkpointed from its
+// effective version; and §22.7's row is asserted only where no file was left.
 
 package sidecar
 
@@ -11,7 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -131,6 +143,8 @@ type rekeyTest struct {
 	contents map[string][]byte
 	// each file's entry version as the test last wrote it, before any rekey
 	versions map[string]uint64
+	// how a file is read back, nil through a fresh reader with no prefix rules
+	readBack func(path string) ([]byte, error)
 }
 
 func newRekeyTest(t *testing.T) *rekeyTest {
@@ -233,11 +247,21 @@ func (self *rekeyTest) requireRekeyed(generation uint64, paths ...string) {
 			self.t.Errorf("%s: key generation %d, %d records, version %d; want generation %d, one record, version %d",
 				path, chain.KeyGeneration, chain.RecordCount, entryVersion, generation, version)
 		}
-		read, _, err := self.writer.read(self.t, path)
+		read, err := self.read(path)
 		if err != nil || !bytes.Equal(read, self.contents[path]) {
 			self.t.Errorf("%s read back: %v", path, err)
 		}
 	}
+}
+
+// path's content as a reader of the test's world reads it.
+func (self *rekeyTest) read(path string) ([]byte, error) {
+	self.t.Helper()
+	if self.readBack != nil {
+		return self.readBack(path)
+	}
+	read, _, err := self.writer.read(self.t, path)
+	return read, err
 }
 
 // The statements the stand-in was sent.
@@ -796,4 +820,457 @@ func TestEvsRekeyPushPastAPartGoesInParts(t *testing.T) {
 		t.Errorf("a push of %d inline files of 12 KiB went in %d parts", fileCount, partCount)
 	}
 	test.requireRekeyed(2, paths...)
+}
+
+// A rekey test over a world under prefix rules (evs_prefix_test.go). Every reader judges a push by the world's set,
+// filed at position 5, which names the writing device, an admin, for every path and the world's second writer for
+// agents/build alone. The job's own device asks the planner's call of a real AclEngine over a state of its own (the
+// engine world of acl_prefix_test.go), in which it is an agent tagged ci, in the repo the test chooses: held holds it to
+// agents/build, everywhere names it for every path, and pending and newer put in force a set it cannot read.
+type rekeyPrefixTest struct {
+	*rekeyTest
+	prefix        *evsPrefixTest
+	engineWorld   *aclTestPrefixEngineWorld
+	engineRepoIds map[string]Id
+	engineSets    map[string][]*AclPrefixRuleSet
+
+	stateLock  sync.Mutex
+	engineRepo string
+	// the planner's calls, and every path they drew, in order
+	callCount int
+	asked     []string
+}
+
+// A ruled rekey test whose device asks in engineRepo. No set is filed yet: a test writes its files, then files it.
+func newRekeyPrefixTest(t *testing.T, engineRepo string) *rekeyPrefixTest {
+	t.Helper()
+	test := newRekeyTest(t)
+	engineWorld, engineRepoIds := newAclTestPrefixEngineWorld(t, true, map[string][]uint64{
+		"held": {10}, "everywhere": {10}, "pending": {10, 20}, "newer": {10, 20},
+	})
+	held := aclTestOpenedSet(10, engineWorld.adminId, aclTestPrefixRule(engineWorld.ci, "agents/build"), aclTestPrefixRule(engineWorld.adminId, ""))
+	everywhere := aclTestOpenedSet(10, engineWorld.adminId, aclTestPrefixRule(AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_TAGGED), ""))
+	ruled := &rekeyPrefixTest{
+		rekeyTest: test, prefix: newEvsPrefixTestOn(t, test.writer.world), engineWorld: engineWorld, engineRepoIds: engineRepoIds,
+		engineSets: map[string][]*AclPrefixRuleSet{
+			"held":       {held},
+			"everywhere": {everywhere},
+			"pending":    {held, {At: 20, Signer: engineWorld.adminId, State: AclPrefixSetPending, Generation: 4}},
+			"newer":      {held, {At: 20, Signer: engineWorld.adminId, State: AclPrefixSetNewer, Generation: 1}},
+		},
+		engineRepo: engineRepo,
+	}
+	test.writer.test.client.EnablePrefixRules(&EvsPrefixRulesArgs{
+		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) {
+			return slices.Clone(ruled.prefix.sets), nil
+		},
+		AllowWrite: func(write *AclPrefixWrite) AclPrefixWriteDecision {
+			asked := *write
+			func() {
+				ruled.stateLock.Lock()
+				defer ruled.stateLock.Unlock()
+				ruled.callCount += 1
+				asked.RepoId, asked.Sets = ruled.engineRepoIds[ruled.engineRepo], ruled.engineSets[ruled.engineRepo]
+			}()
+			if paths := write.Paths; paths != nil {
+				asked.Paths = func(yield func(string) bool) {
+					for path := range paths {
+						func() {
+							ruled.stateLock.Lock()
+							defer ruled.stateLock.Unlock()
+							ruled.asked = append(ruled.asked, path)
+						}()
+						if !yield(path) {
+							return
+						}
+					}
+				}
+			}
+			return engineWorld.engine.AllowPrefixWrite(&asked)
+		},
+	})
+	test.readBack = ruled.readRuled
+	return ruled
+}
+
+// Files the world's set, which every push after it pins, with the device's installed state at its position.
+func (self *rekeyPrefixTest) file() {
+	self.prefix.file(5, AclPrefixSetOpened, "agents/build")
+	self.writer.world.config.setPin(5)
+}
+
+// The repo the device's planner call is asked in from here.
+func (self *rekeyPrefixTest) askIn(engineRepo string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.engineRepo = engineRepo
+}
+
+// How many times the planner's call drew path.
+func (self *rekeyPrefixTest) askedCount(path string) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	count := 0
+	for _, asked := range self.asked {
+		if asked == path {
+			count += 1
+		}
+	}
+	return count
+}
+
+// The planner's calls, and the paths they drew.
+func (self *rekeyPrefixTest) calls() (int, int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.callCount, len(self.asked)
+}
+
+// path's content as a reader under the world's rules reads it, a fresh client's.
+func (self *rekeyPrefixTest) readRuled(path string) ([]byte, error) {
+	reader := self.prefix.reader("rekey check reader")
+	reader.client.args.Gkm = self.writer.gkm
+	reader.client.args.Transport = &evsTestTransport{handler: self.writer.server}
+	reader.client.http.transport = wrapSidecarApiTransport(reader.client.args.Transport)
+	out := &bytes.Buffer{}
+	_, err := reader.client.Repo(self.writer.world.repoId).ReadHead(context.Background(), &EvsReadArgs{Path: path}, out)
+	return out.Bytes(), err
+}
+
+// The repo's progress record as the store holds it.
+func (self *rekeyTest) storedRecord(repoId Id) string {
+	self.t.Helper()
+	reader, err := self.store.Open(gkmRekeyDirectory + repoId.String())
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return string(data)
+}
+
+// A held device's job (DESIGN-DETAILS 8.2.10's report), walking the whole ref: the files under its prefix are
+// re-checkpointed in one push, and the files outside it that need a write are left, counted, each read and asked once
+// and never planned. They count as neither rewritten nor current and keep their keys, while a file outside already of
+// the generation is current. The job ends done with its count, so §22.7's row is not asserted for the ref: the left
+// files still open under generation 1. No left path is in StopReason or the record the job ends with, and a second run
+// leaves the same files and sends nothing.
+func TestEvsRekeyOnAHeldDeviceLeavesTheFilesOutsideItsPrefixes(t *testing.T) {
+	test := newRekeyPrefixTest(t, "held")
+	under := []string{"agents/build/a.txt", "agents/build/b.bin", "agents/build/c/d.txt"}
+	outside := []string{"docs/readme.txt", "src/main.go", "src/x.bin"}
+	test.write(under[0], 400)
+	test.write(under[1], 20*1024)
+	test.write(under[2], 900)
+	test.write(outside[0], 500)
+	test.write(outside[1], 700)
+	test.write(outside[2], 24*1024)
+	test.rotate(2, GkmCauseRemove)
+	test.write("docs/fresh.txt", 300)
+	test.file()
+	repoId := test.writer.world.repoId
+	commits, posted := test.commits(), test.posted()
+	rekey := test.rekey()
+	progress, err := rekey.Run(context.Background(), &GkmRekeyRequest{RepoId: repoId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.State != GkmRekeyStateDone || progress.Generation != 2 || progress.RewrittenCount != 3 || progress.LeftCount != 3 ||
+		progress.CurrentCount != 1 || progress.AbsentCount != 0 || progress.PushCount != 1 || progress.StopReason != "" {
+		t.Fatalf("the progress: %+v", progress)
+	}
+	if got := test.entryWriteCounts(commits); len(got) != 1 || got[0] != 3 || test.posted() != posted+1 {
+		t.Errorf("the job's pushes carried %v entry writes in %d statements", got, test.posted()-posted)
+	}
+	test.requireRekeyed(2, under...)
+	test.requireUntouched(outside...)
+	if chain, version := test.chain("docs/fresh.txt"); chain.KeyGeneration != 2 || version != test.versions["docs/fresh.txt"] {
+		t.Errorf("the current file outside the prefix: generation %d, version %d", chain.KeyGeneration, version)
+	}
+	// a left file is drawn once, by the job's own ask; a file under the prefix once by it and once by the one plan of
+	// its push, which no left file reached
+	for _, path := range outside {
+		if count := test.askedCount(path); count != 1 {
+			t.Errorf("%s drawn by the planner's call %d times", path, count)
+		}
+	}
+	for _, path := range under {
+		if count := test.askedCount(path); count != 2 {
+			t.Errorf("%s drawn by the planner's call %d times", path, count)
+		}
+	}
+	stored, ok, err := rekey.Progress(repoId)
+	if err != nil || !ok || stored.State != GkmRekeyStateDone || stored.LeftCount != 3 || stored.RewrittenCount != 3 || stored.CurrentCount != 1 {
+		t.Errorf("the stored progress: %+v %v", stored, err)
+	}
+	record := test.storedRecord(repoId)
+	if !strings.Contains(record, `"left_count":3`) {
+		t.Errorf("the record does not hold the count: %s", record)
+	}
+	for _, path := range outside {
+		if strings.Contains(record, path) {
+			t.Errorf("the record names a left file: %s", record)
+		}
+	}
+
+	again, err := rekey.Run(context.Background(), &GkmRekeyRequest{RepoId: repoId})
+	if err != nil || again.State != GkmRekeyStateDone || again.LeftCount != 3 || again.CurrentCount != 4 || again.RewrittenCount != 0 ||
+		again.PushCount != 0 || test.posted() != posted+1 {
+		t.Errorf("a second run: %+v %v, %d statements more", again, err, test.posted()-posted-1)
+	}
+}
+
+// A device the set names for every path leaves none: every file the walk needs to write is re-checkpointed, the
+// planner's call allowing each before it draws a path, and §22.7's row holds for every file of the ref. And a repo
+// whose rows hold no set runs as it did before them: the call is never asked, though the device would be held.
+func TestEvsRekeyOnADeviceNamedForEveryPathLeavesNone(t *testing.T) {
+	test := newRekeyPrefixTest(t, "everywhere")
+	paths := []string{"agents/build/a.txt", "docs/readme.txt", "src/main.go", "src/x.bin"}
+	for i, path := range paths {
+		test.write(path, 400+i*8*1024)
+	}
+	test.rotate(2, GkmCauseRemove)
+	test.file()
+	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: test.writer.world.repoId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != uint64(len(paths)) || progress.LeftCount != 0 || progress.CurrentCount != 0 ||
+		progress.PushCount != 1 {
+		t.Fatalf("the progress: %+v", progress)
+	}
+	if callCount, drawn := test.calls(); callCount == 0 || drawn != 0 {
+		t.Errorf("the planner's call: %d calls, %d paths drawn", callCount, drawn)
+	}
+	// none was left: every file of the ref opens only under the current generation
+	test.requireRekeyed(2, paths...)
+
+	plain := newRekeyPrefixTest(t, "held")
+	plainPaths := plain.writeFiles("src", 3)
+	plain.rotate(2, GkmCauseRemove)
+	progress, err = plain.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: plain.writer.world.repoId, Paths: []string{"src"}})
+	if err != nil || progress.State != GkmRekeyStateDone || progress.RewrittenCount != 3 || progress.LeftCount != 0 {
+		t.Fatalf("a repo with no set: %+v %v", progress, err)
+	}
+	if callCount, _ := plain.calls(); callCount != 0 {
+		t.Errorf("a repo with no set asked the planner's call %d times", callCount)
+	}
+	plain.requireRekeyed(2, plainPaths...)
+}
+
+// A set this device holds pending, or one of a later release, gives the planner's call no verdict, so the job cannot
+// tell what to leave: it stops with that detail before anything is sent, its StopReason naming the code and the detail
+// and no path, and resumes as any stopped job once the device can read the set in force.
+func TestEvsRekeyStopsAtARuleSetItCannotRead(t *testing.T) {
+	test := newRekeyPrefixTest(t, "pending")
+	under := []string{"agents/build/a.txt", "agents/build/b.txt"}
+	outside := []string{"src/main.go"}
+	for _, path := range append(slices.Clone(under), outside...) {
+		test.write(path, 600)
+	}
+	test.rotate(2, GkmCauseRemove)
+	test.file()
+	repoId := test.writer.world.repoId
+	posted := test.posted()
+	cases := []struct {
+		engineRepo string
+		detail     EvsPrefixDetail
+	}{
+		{engineRepo: "pending", detail: EvsPrefixDetailPending},
+		{engineRepo: "newer", detail: EvsPrefixDetailUpdate},
+	}
+	for _, c := range cases {
+		test.askIn(c.engineRepo)
+		rekey := test.rekey()
+		progress, err := rekey.Run(context.Background(), &GkmRekeyRequest{RepoId: repoId})
+		if evsPrefixTestDetail(err) != c.detail {
+			t.Fatalf("%s: %v", c.engineRepo, err)
+		}
+		if progress.State != GkmRekeyStateStopped || progress.RewrittenCount != 0 || progress.LeftCount != 0 ||
+			!strings.Contains(progress.StopReason, "EVS_PREFIX_RULE") || !strings.Contains(progress.StopReason, "("+string(c.detail)+")") {
+			t.Errorf("%s: the progress %+v", c.engineRepo, progress)
+		}
+		stored, ok, err := rekey.Progress(repoId)
+		if err != nil || !ok || stored.State != GkmRekeyStateStopped || stored.StopReason != progress.StopReason {
+			t.Errorf("%s: the stored progress %+v %v", c.engineRepo, stored, err)
+		}
+		for _, path := range append(slices.Clone(under), outside...) {
+			if strings.Contains(progress.StopReason, path) {
+				t.Errorf("%s: StopReason names a path: %q", c.engineRepo, progress.StopReason)
+			}
+		}
+	}
+	if test.posted() != posted {
+		t.Errorf("a job stopped at a set it cannot read sent %d statements", test.posted()-posted)
+	}
+	test.requireUntouched(append(slices.Clone(under), outside...)...)
+
+	// the set opens on this device: the stopped job resumes and finishes, leaving what the set holds back
+	test.askIn("held")
+	resumed, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: repoId})
+	if err != nil || resumed.State != GkmRekeyStateDone || resumed.RewrittenCount != 2 || resumed.LeftCount != 1 || resumed.PushCount != 1 {
+		t.Fatalf("the resumed job: %+v %v", resumed, err)
+	}
+	test.requireRekeyed(2, under...)
+	test.requireUntouched(outside...)
+}
+
+// A set that comes in force between the job's ask and its push: the planner refuses a path the job was allowed, and
+// the job leaves that file and pushes the rest, each refusal before anything was sealed or sent, so one path outside
+// the device's prefixes does not refuse the push.
+func TestEvsRekeyLeavesAFileThePlannerRefusesAtThePush(t *testing.T) {
+	test := newRekeyPrefixTest(t, "everywhere")
+	under := []string{"agents/build/a.txt", "agents/build/b.txt"}
+	outside := []string{"docs/readme.txt", "src/main.go"}
+	for _, path := range append(slices.Clone(under), outside...) {
+		test.write(path, 600)
+	}
+	test.rotate(2, GkmCauseRemove)
+	test.file()
+	// EnsureWritable's calls: the job's own, then one for each attempt at its push, the first after every file was read
+	test.gkm.setOnEnsure(func(call int) {
+		if call == 2 {
+			test.askIn("held")
+		}
+	})
+	commits, posted := test.commits(), test.posted()
+	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: test.writer.world.repoId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != 2 || progress.LeftCount != 2 || progress.CurrentCount != 0 || progress.PushCount != 1 {
+		t.Fatalf("the progress: %+v", progress)
+	}
+	if got := test.entryWriteCounts(commits); len(got) != 1 || got[0] != 2 || test.posted() != posted+1 {
+		t.Errorf("the job's pushes carried %v entry writes in %d statements", got, test.posted()-posted)
+	}
+	test.requireRekeyed(2, under...)
+	test.requireUntouched(outside...)
+}
+
+// A kill between the record of the job's push and the record that settles the ref: the push's record already passes
+// the files the walk counted after the push's last path, a left and a current one among them, so the resumed job
+// counts no file twice and sends nothing (8.2.10's report: the count is stored with the position that passes the file).
+func TestEvsRekeyResumedCountsALeftFileOnce(t *testing.T) {
+	test := newRekeyPrefixTest(t, "held")
+	under := []string{"agents/build/a.txt", "agents/build/b.txt"}
+	outside := []string{"docs/readme.txt", "src/main.go"}
+	for _, path := range append(slices.Clone(under), outside...) {
+		test.write(path, 600)
+	}
+	test.rotate(2, GkmCauseRemove)
+	test.write("docs/fresh.txt", 300)
+	test.file()
+	repoId := test.writer.world.repoId
+	// the record's creates: the job's first, the one after its push, then the one settling the ref, which is killed
+	test.store.failAt = 3
+	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: repoId})
+	if !errors.Is(err, errRekeyTestKilled) {
+		t.Fatalf("a job killed before the ref's record: %v", err)
+	}
+	if progress.State != GkmRekeyStateStopped || progress.RewrittenCount != 2 || progress.LeftCount != 2 || progress.CurrentCount != 1 || progress.PushCount != 1 {
+		t.Fatalf("the progress at the kill: %+v", progress)
+	}
+	posted := test.posted()
+	resumed, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: repoId})
+	if err != nil || resumed.State != GkmRekeyStateDone || resumed.RewrittenCount != 2 || resumed.LeftCount != 2 || resumed.CurrentCount != 1 ||
+		resumed.PushCount != 1 || test.posted() != posted {
+		t.Fatalf("the resumed job: %+v %v, %d statements", resumed, err, test.posted()-posted)
+	}
+	test.requireRekeyed(2, under...)
+	test.requireUntouched(outside...)
+}
+
+// A file whose newest version at evs the rules ignore, a breach by the world's held writer outside its prefix, is
+// re-checkpointed from its effective version (DESIGN-DETAILS 16.2.5) and never from the breach: the push is held to
+// the effective version's number and takes the repair form (16.2.7), one checkpoint of the effective content on evs's
+// newest, which a reader under the rules then reads. The breach is of the current generation and the effective
+// version is not, so a job that judged evs's newest would count the file current. A path a breach created is absent
+// as this device follows it.
+func TestEvsRekeyRewritesTheEffectiveVersionUnderAnIgnoredOne(t *testing.T) {
+	test := newRekeyPrefixTest(t, "everywhere")
+	test.write("src/main.go", 20*1024)
+	test.file()
+	test.rotate(2, GkmCauseRemove)
+	breached := bytes.Clone(test.contents["src/main.go"])
+	breached[100] ^= 0xff
+	test.writer.server.know("src/main.go", "src/new.txt")
+	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "src/main.go", content: breached, segment: true})
+	test.prefix.pushAs(test.prefix.held, &evsTestChange{path: "src", children: []string{"new.txt"}},
+		&evsTestChange{path: "src/new.txt", content: []byte("planted"), segment: true})
+	test.versions["src/main.go"] = test.writer.entry(t, "src/main.go").GetVersion()
+	if chain, _ := test.chain("src/main.go"); chain.KeyGeneration != 2 {
+		t.Fatalf("the breach: key generation %d", chain.KeyGeneration)
+	}
+	commits := test.commits()
+	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: test.writer.world.repoId, Paths: []string{"src/main.go", "src/new.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != 1 || progress.CurrentCount != 0 || progress.AbsentCount != 1 ||
+		progress.LeftCount != 0 || progress.PushCount != 1 {
+		t.Fatalf("the progress: %+v", progress)
+	}
+	// the file's version and its parent's delta, which the repair form states the path's row in again
+	if got := test.entryWriteCounts(commits); len(got) != 1 || got[0] != 2 {
+		t.Errorf("the job's pushes carried %v entry writes", got)
+	}
+	// one checkpoint of generation 2 over the breach, whose content is the effective version's
+	test.requireRekeyed(2, "src/main.go")
+	if read, err := test.read("src/main.go"); err != nil || bytes.Equal(read, breached) {
+		t.Errorf("the rekeyed file reads the breach: %v", err)
+	}
+	if _, err := test.read("src/new.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Errorf("the breach-created path: %v", err)
+	}
+}
+
+// The same on a git-mode ref (8.2.10's where row): a held device's job seals the REKEY shape for the file under its
+// prefix and leaves the file outside it, counted.
+func TestEvsRekeyOfAGitModeRefLeavesTheFilesOutsideAHeldDevicesPrefixes(t *testing.T) {
+	test := newRekeyPrefixTest(t, "held")
+	under, outside := "agents/build/t.txt", "src/u.txt"
+	// a git-mode ref from its first push, whose entries carry their blobs' oids, which a REKEY seals again
+	world := test.writer.world
+	world.stateLock.Lock()
+	world.mode = protocol.EvsRefMode_EVS_REF_GIT
+	world.stateLock.Unlock()
+	for path, content := range map[string][]byte{under: evsTestEdited(under, 600), outside: evsTestEdited(outside, 700)} {
+		test.contents[path] = content
+		test.versions[path] = 1
+	}
+	world.push(&evsTestChange{path: "", children: []string{"agents", "src"}}, &evsTestChange{path: "agents", children: []string{"build"}},
+		&evsTestChange{path: "agents/build", children: []string{"t.txt"}}, &evsTestChange{path: under, content: test.contents[under]},
+		&evsTestChange{path: "src", children: []string{"u.txt"}}, &evsTestChange{path: outside, content: test.contents[outside]})
+	test.writer.server.know(under, outside)
+	test.rotate(2, GkmCauseRemove)
+	test.file()
+	commits := test.commits()
+	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: test.writer.world.repoId, Paths: []string{under, outside}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != 1 || progress.LeftCount != 1 || progress.PushCount != 1 || len(progress.SkippedRefs) != 0 {
+		t.Fatalf("the progress: %+v", progress)
+	}
+	if got := test.entryWriteCounts(commits); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("the job's pushes carried %v entry writes", got)
+	}
+	commit := test.writer.world.commits[len(test.writer.world.commits)-1]
+	payload, err := ParseEvsPayload(commit.built.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := EvsOpenMetadata(evsTestKeys(t, test.writer.world.repoId, 2).manifest, payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.GetGit().GetShape() != protocol.EvsGitShape_EVS_GIT_REKEY {
+		t.Errorf("the rekey's update: %v", metadata.GetGit())
+	}
+	test.requireRekeyed(2, under)
+	test.requireUntouched(outside)
 }
