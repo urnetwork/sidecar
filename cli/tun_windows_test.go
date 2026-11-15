@@ -1,15 +1,18 @@
 //go:build windows
 
 // ur tun on Windows (tun_windows.go, bridge_local_windows.go, bridge_dns_windows.go), with IP Helper, the resolver's
-// policy table, the driver's load and the adapter behind fakes: the driver's pins hold, an adapter an unelevated daemon
-// may not create is refused in Windows' words, addresses and routes go on and come off as the sets ask, a prefix
-// another interface holds is left to it, the exits bind the transport to the default route's interface before the
-// halves go on and hold where the host refuses them, the resolver's rule follows the zones, and close removes
-// everything. A real adapter, which takes an elevated run on Windows, is not run here.
+// policy table, the driver's load and the adapter behind fakes: the driver's load holds a DLL to its hash pin before its
+// signature (the pins themselves, tun_wintun_test.go), an adapter an unelevated daemon may not create is refused in
+// Windows' words, addresses and routes go on and come off as the sets ask, a prefix another interface holds is left to
+// it, the exits bind the transport to the default route's interface before the halves go on and hold where the host
+// refuses them, the resolver's rule follows the zones, and close removes everything. A real adapter, which takes an
+// elevated run on Windows, is not run here.
 
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/netip"
 	"os"
@@ -262,12 +265,15 @@ func TestTunWindowsOpensOnlyOverTheDriver(t *testing.T) {
 	}
 }
 
-// The pins: no DLL hash pinned for this architecture refuses before anything else, a hash that differs refuses, and no
-// DLL where ur tun looks names where to get one.
+// The pins: a DLL of another hash than this architecture's pin is refused before its signature is read, held against
+// writers meanwhile; one whose hash is the pin goes on to its signature, which a file the pinned signer did not sign
+// fails; and no DLL where ur tun looks names where to get one. An architecture with no pin, which the release builds
+// no ur.exe for, refuses before anything else.
 func TestTunWindowsHoldsTheDriverToItsPins(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, urWintunDllName)
-	if err := os.WriteFile(path, []byte("not wintun"), 0o644); err != nil {
+	content := []byte("not wintun")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	file, err := urWintunOpen(path)
@@ -276,23 +282,30 @@ func TestTunWindowsHoldsTheDriverToItsPins(t *testing.T) {
 	}
 	defer file.Close()
 	pins := defaultUrWintunPins()
-	if err := urWintunCheck(file, path, pins); !errors.Is(err, errUrWintunUnpinned) {
-		t.Fatalf("unpinned: %v", err)
+	err = urWintunCheck(file, path, pins)
+	switch runtime.GOARCH {
+	case "amd64", "arm64":
+		if !errors.Is(err, errUrWintunRefused) || !strings.Contains(err.Error(), "SHA-256 is not the pinned one") {
+			t.Fatalf("another hash: %v", err)
+		}
+	default:
+		if !errors.Is(err, errUrWintunUnpinned) {
+			t.Fatalf("unpinned: %v", err)
+		}
 	}
 	// held against writers while it is open
 	if err := os.WriteFile(path, []byte("planted"), 0o644); err == nil {
 		t.Fatal("a writer reached the held file")
 	}
-	pins.DllSha256[runtime.GOARCH] = strings.Repeat("00", 32)
-	if err := urWintunCheck(file, path, pins); !errors.Is(err, errUrWintunRefused) {
-		t.Fatalf("another hash: %v", err)
+	digest := sha256.Sum256(content)
+	pins.DllSha256[runtime.GOARCH] = hex.EncodeToString(digest[:])
+	if err := urWintunCheck(file, path, pins); !errors.Is(err, errUrWintunRefused) ||
+		!strings.Contains(err.Error(), "signature does not verify") {
+		t.Fatalf("pinned but unsigned: %v", err)
 	}
 	if err := urWintunLoad(pins, []string{filepath.Join(directory, "absent", urWintunDllName)}); !errors.Is(err, errUrWintunMissing) ||
 		!strings.Contains(err.Error(), "wintun-0.14.1.zip") {
 		t.Fatalf("missing: %v", err)
-	}
-	if pins := defaultUrWintunPins(); pins.SignerThumbprint != "DF98E075A012ED8C86FBCF14854B8F9555CB3D45" {
-		t.Fatalf("the signer pin %s", pins.SignerThumbprint)
 	}
 }
 
