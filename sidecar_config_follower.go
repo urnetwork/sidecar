@@ -18,6 +18,16 @@
 //	         through, and only then does Client answer, so nothing on this device judges by a log below what the
 //	         credential vouched for
 //
+// A device that holds no generation of the config repo, every member device but the network's first, cannot open the
+// heads its follower must check before it stands, and its key client takes that key only on a state past its own
+// admission (QD-817). Where the key client is a GkmConfigJoiner, the client joins (ConfigClient's two passes): it
+// applies the log rows-only and hands each state so reached to the key client directly, unconfirmed, for the config
+// group's Welcome or wrap and the config repo's keys alone, while every verified state still waits for the follower to
+// stand; once the keychain takes the key, the full pass re-reads every base from the anchor, each head judged through
+// the head reader, and only a log that pass confirms at or past the anchor's head stands here. A head that fails
+// withholds, as it does for any device. The network's first device and a restart with the key keep the full check from
+// base 1.
+//
 // Each client generation hands its team hints to the client and asks it for a follow, since a hint may have gone
 // unheard between generations. One follower a Sidecar, and so a network (Sidecar.ConfigFollower): the bridge, the acl
 // engine and every other reader of §7.9's log on this device read it here, and the bridge's start gate (QD-669) waits
@@ -130,7 +140,8 @@ type SidecarConfigFollowerArgs struct {
 	// policy and the bridge's compile read heads through it. Nil holds every base withheld.
 	Heads ConfigHeadReader
 	// The network's key client: AuthAdvanced after each applied entry once the follower stands, and RepoKey for the
-	// config repo's generation keys. Nil for none.
+	// config repo's generation keys. One that is a GkmConfigJoiner is also handed the rows-only pass's states of a
+	// device joining its network, before the follower stands (QD-817). Nil for none.
 	Gkm GkmClient
 	// HeadStopState.ReportFork: a fork of the log stops sealing in shared groups (§6.4). Nil for none.
 	ReportFork func(fork HeadFork)
@@ -333,13 +344,17 @@ func (self *SidecarConfigFollower) isClosed() bool {
 	return self.state.Value() == SidecarConfigFollowerClosed
 }
 
-// The state, why, and the client's pin.
+// The state, why, and the client's pin. A joining device's reason names how far its rows-only pass came (QD-817).
 func (self *SidecarConfigFollower) Status() SidecarConfigFollowerStatus {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := SidecarConfigFollowerStatus{State: self.state.Value(), Reason: self.reason}
 	if self.client != nil {
 		status.Pin = self.client.Pin()
+		if unconfirmed := self.client.UnconfirmedPin(); unconfirmed != nil && status.State == SidecarConfigFollowerCatchingUp {
+			status.Reason = fmt.Sprintf("%s; joining: the log applied rows-only to %d waits for the config repo's key and a full re-read",
+				status.Reason, unconfirmed.GetVersion())
+		}
 	}
 	return status
 }
@@ -669,6 +684,11 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 	if self.gkm != nil {
 		clientArgs.Gkm = self.gkm
 	}
+	if joiner, ok := self.args.Gkm.(GkmConfigJoiner); ok {
+		// the rows-only pass's states reach the key client unconfirmed, past the standing gate, for the config group's
+		// join alone (QD-817)
+		clientArgs.Joiner = joiner
+	}
 	client, err := NewConfigClient(self.ctx, clientArgs)
 	if err != nil {
 		return nil, err
@@ -852,7 +872,9 @@ func (self *sidecarConfigFollowerProjection) ReadConfigProjection(ctx context.Co
 }
 
 // The key client as the follower hands it to its client: AuthAdvanced reaches it only once the follower stands, so no
-// state below the anchored head moves a key flow. Every other call goes through.
+// state below the anchored head moves a key flow. Every other call goes through. A joining device's unconfirmed states
+// do not pass here: the client hands them to the key client's GkmConfigJoiner, which acts on none but to join the
+// config group (QD-817).
 type sidecarConfigFollowerGkm struct {
 	GkmClient
 	standing atomic.Bool

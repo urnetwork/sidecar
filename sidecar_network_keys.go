@@ -43,6 +43,19 @@ func (self *Sidecar) GkmGroupClientArgs(api GkmGroupApi, mls MlsEngine) (*GkmGro
 	}, nil
 }
 
+// Whether the network's keychain under gkm's namespace holds RK_g of some generation of the repo, read with no state
+// and no key client (QD-817): what a host's key client answers a config follower before its group client is built, so a
+// restart that holds the config key keeps the full check from base 1. False before enrollment, and where the keychain
+// does not read.
+func (self *Sidecar) GkmRepoKeyHeld(repoId Id) bool {
+	networkId := self.enrolledNetworkId()
+	if networkId == nil || self.instance == nil {
+		return false
+	}
+	held, err := gkmKeychainHoldsRepoKey(self.instance.secrets(*networkId, gkmUpkeepSecretsNamespace), repoId)
+	return err == nil && held
+}
+
 // The args this sidecar's MLS engine takes (§10.4) for the network it is enrolled in: its sidecar_id and identity key,
 // admissionSha256, the hash of the admission the verified state gives it (SidecarRow.admission_sha256, the Genesis's
 // for a network's first device), which every credential it signs names, Sign, the network's store, under which the

@@ -6,6 +6,26 @@
 // point, starts there by the base's verdicts and anchor (DESIGN-DETAILS 5.2.4's StartAtBase), never below a pin it held,
 // reading the anchor's head through ConfigHeadAnchorReader under the base's own rows where its reader is one (QD-814).
 //
+// A device joining its network (QD-817), with a key client (ConfigClientArgs.Joiner) and no base confirmed yet, follows
+// in two passes, since it opens no config head until it holds a generation of the config repo and takes that key only on
+// a state past its own admission:
+//
+//	full       each follow, the log from the genesis api serves, every base's head judged in full, as a new device's
+//	           start reads it, over as many pages as reach the floor, the newest pin this device held, the rows-only
+//	           pass's included; published only once it holds that pin and a base, so it re-reads every base the
+//	           rows-only pass applied and agrees with it there. A head that fails withholds or forks as any full
+//	           start's does, nothing published
+//	rows-only  while the full pass stands nowhere and the keychain holds no generation of the config repo (or a
+//	           rows-only log is held already), pages after its own pin applied as a gate applies them, no config head
+//	           opened (config_rows_only.go's signature, prev_chain, rows_sha256 and versions): each newest state goes
+//	           to Joiner.AuthUnconfirmed, for the key client to join the config group by its Welcome or a wrap and
+//	           open the config repo's keys, and its pin becomes the floor. Nothing else hears of it: no entry callback,
+//	           no AuthAdvanced, and State, VerifiedState, WaitFor and the log's proofs answer only the full pass's log
+//
+// The network's first device and a device restarting with its keys hold the config key from the start, so they never
+// run the rows-only pass and keep the full check from base 1. Once the keychain takes a config generation the follower
+// wakes at once (GkmConfigJoiner.RepoKeyHeld's channel) for the full pass.
+//
 // It neither signs nor posts (C-01): CORE-M2-02's acts do, and read back what landed through State and WaitFor. After
 // each applied entry it calls GkmClient.AuthAdvanced and every AddEntryCallback once, in log order, with the entry's
 // verdict, so CORE-M2-03's alarms and ACL's AclFollower need no second follower. A fork stops the log: the client
@@ -158,6 +178,10 @@ type ConfigClientArgs struct {
 	Store SidecarStore
 	// Its AuthAdvanced runs after each applied entry (KEYS). Nil for none.
 	Gkm GkmClient
+	// The key client a joining device takes its config key through (QD-817; the file header's two passes): asked
+	// whether the keychain holds a generation of the config repo the genesis names, and handed each state of the
+	// rows-only pass while it does not. Nil runs the full pass alone, as a device whose keys are held does.
+	Joiner GkmConfigJoiner
 	// Raises head_alarm. Nil drops it.
 	Emit SidecarEventFunction
 	// HeadStopState.ReportFork, which stops sealing in shared groups (§6.4). Nil for none.
@@ -186,10 +210,15 @@ type ConfigClient struct {
 	saveDue bool
 
 	configLog atomic.Pointer[ConfigLog]
-	// the log a start from the genesis builds while its first page applies, nil outside one: what VerifiedState
-	// answers before configLog holds it
+	// the log a full start builds while its pages apply, nil outside one: what VerifiedState answers before configLog
+	// holds it
 	starting atomic.Pointer[ConfigLog]
-	// the newest applied position, which WaitFor watches
+	// a joining device's rows-only log (the file header's rows-only pass), nil outside one and once a base is confirmed
+	unconfirmed atomic.Pointer[ConfigLog]
+	// the Genesis this client trusts, once a start or the store read it: whose config repo a joining device's key client
+	// is asked about
+	genesis atomic.Pointer[bridge.Genesis]
+	// the newest position the confirmed log applied, which WaitFor watches
 	position *MonitorValue[uint64]
 
 	stateLock sync.Mutex
@@ -206,6 +235,9 @@ type ConfigClient struct {
 	heldVetoes [][]byte
 	// where a reader that started at a base began, which entry callbacks fire after
 	startBase uint64
+	// while joining, a channel closed once the keychain next takes a generation of the config repo (watchConfigKey),
+	// taken by the follower's next wait
+	configKeyWait <-chan struct{}
 	// this device's config writer for the network, nil for none
 	writer atomic.Pointer[ConfigWriter]
 }
@@ -271,12 +303,14 @@ func (self *ConfigClient) NetworkId() Id {
 	return self.args.NetworkId
 }
 
-// The log as this device verified it, nil before it trusts a genesis api served.
+// The log as this device verified it, nil before it trusts a genesis api served. A joining device's rows-only pass is
+// never this log.
 func (self *ConfigClient) Log() *ConfigLog {
 	return self.configLog.Load()
 }
 
-// The newest verified S(n), nil before the first read. Safe for concurrent use, with no lock.
+// The newest verified S(n), nil before the first read and, on a joining device, before the full pass confirms a base.
+// Safe for concurrent use, with no lock.
 func (self *ConfigClient) State() *ConfigState {
 	log := self.configLog.Load()
 	if log == nil {
@@ -285,10 +319,11 @@ func (self *ConfigClient) State() *ConfigState {
 	return log.State()
 }
 
-// The newest state this client verified, the log a start from the genesis is still building included: while the first
-// page applies, S(n-1) of the entry applying, which State answers only once the page is published. What evs's verifier
-// judges the config repo's pushes at while a base's head is read (QD-804): a base lands on S(n-1), and the first page
-// holds base 1. Nil before the first state. Safe for concurrent use, with no lock.
+// The newest state this client verified, the log a full start is still building included: while its pages apply,
+// S(n-1) of the entry applying, which State answers only once the start is published. What evs's verifier judges the
+// config repo's pushes at while a base's head is read (QD-804): a base lands on S(n-1), and the first page holds base 1.
+// Nil before the first state; a joining device's rows-only pass, which no head confirmed, never answers here (QD-817).
+// Safe for concurrent use, with no lock.
 func (self *ConfigClient) VerifiedState() *ConfigState {
 	if starting := self.starting.Load(); starting != nil {
 		return starting.State()
@@ -305,13 +340,28 @@ func (self *ConfigClient) Pin() *bridge.AuthPin {
 	return state.Pin()
 }
 
-// The fork that stopped the log, nil while it follows.
-func (self *ConfigClient) Fork() *ConfigForkError {
-	log := self.configLog.Load()
+// The pin a joining device's rows-only pass reached, which no config head confirmed yet (QD-817): nil outside that
+// pass, and once the full pass confirms a base.
+func (self *ConfigClient) UnconfirmedPin() *bridge.AuthPin {
+	log := self.unconfirmed.Load()
 	if log == nil {
 		return nil
 	}
-	return log.Fork()
+	return log.Pin()
+}
+
+// The fork that stopped the log, nil while it follows: a joining device's rows-only log forks it as the confirmed log
+// does, since what a rows-only verifier refuses as a fork every full reader refuses too.
+func (self *ConfigClient) Fork() *ConfigForkError {
+	for _, log := range []*ConfigLog{self.configLog.Load(), self.unconfirmed.Load()} {
+		if log == nil {
+			continue
+		}
+		if fork := log.Fork(); fork != nil {
+			return fork
+		}
+	}
+	return nil
 }
 
 // When api began serving less than this device holds proof of, zero while it serves all of it.
@@ -322,7 +372,8 @@ func (self *ConfigClient) WithheldSince() time.Time {
 }
 
 // Waits until the log has applied position n, or ctx ends, or the client closes. A follow runs at once if n is past
-// the newest hint, since whoever waits knows of an entry api holds (CORE-M2-02's act after its post).
+// the newest hint, since whoever waits knows of an entry api holds (CORE-M2-02's act after its post). A joining
+// device's rows-only pass moves nothing here: it answers once the full pass confirms n.
 func (self *ConfigClient) WaitFor(ctx context.Context, n uint64) (*ConfigState, error) {
 	self.noteHint(n)
 	for {
@@ -370,9 +421,19 @@ func (self *ConfigClient) noteHint(n uint64) {
 		defer self.stateLock.Unlock()
 		self.hinted = max(self.hinted, n)
 	}()
-	if self.position.Value() < n {
+	if self.appliedPosition() < n {
 		self.requestFollow()
 	}
+}
+
+// The newest position either log applied: the confirmed log's, or a joining device's rows-only pass's past it. What
+// api must serve before this device counts itself served (checkWithheld), and what a hint is new against.
+func (self *ConfigClient) appliedPosition() uint64 {
+	position := self.position.Value()
+	if log := self.unconfirmed.Load(); log != nil {
+		position = max(position, log.Pin().GetVersion())
+	}
+	return position
 }
 
 // Asks the follower for a follow now, without blocking.
@@ -395,7 +456,8 @@ func (self *ConfigClient) AddEntryCallback(callback SidecarAuthorityEntryFunctio
 	}
 }
 
-// The follower: a follow at start, then on each wake and every FollowInterval, backing off after a failure.
+// The follower: a follow at start, then on each wake and every FollowInterval, backing off after a failure, and, while
+// a joining device waits for its config key, as soon as the keychain takes one.
 func (self *ConfigClient) run() {
 	retry := time.Duration(0)
 	for {
@@ -420,8 +482,19 @@ func (self *ConfigClient) run() {
 			return
 		case <-self.wake:
 		case <-self.clock.After(wait):
+		case <-self.takeConfigKeyWait():
 		}
 	}
+}
+
+// The channel the follow just armed for a joining device's config key, cleared, so a fired one wakes one wait alone;
+// nil, which never fires, when none is armed.
+func (self *ConfigClient) takeConfigKeyWait() <-chan struct{} {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	wait := self.configKeyWait
+	self.configKeyWait = nil
+	return wait
 }
 
 // One follow: pages of entries after this device's pin until api has no more, each applied as §7.9's apply row says.
@@ -447,8 +520,17 @@ func (self *ConfigClient) follow(ctx context.Context) error {
 	return err
 }
 
-// follow's pages, under followLock.
+// follow's pages, under followLock: a joining device's two passes until a base is confirmed, then pages after the
+// confirmed log's pin.
 func (self *ConfigClient) followPages(ctx context.Context) error {
+	if self.joining() {
+		return self.followJoining(ctx)
+	}
+	return self.followConfirmed(ctx)
+}
+
+// Pages of entries after the confirmed log's pin until api has no more, the first starting that log, under followLock.
+func (self *ConfigClient) followConfirmed(ctx context.Context) error {
 	for range max(self.settings.MaxPagesPerFollow, 1) {
 		log := self.configLog.Load()
 		after := uint64(0)
@@ -459,22 +541,215 @@ func (self *ConfigClient) followPages(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		more, err := self.applyProjection(ctx, log, projection)
+		more, last, err := self.applyProjection(ctx, log, projection)
 		if err != nil {
 			return err
 		}
 		if !more {
-			self.checkWithheld(projection)
+			self.checkWithheld(last)
 			return nil
 		}
 	}
 	return nil
 }
 
+// Whether this client is joining its network (QD-817): it takes its config key through a key client, and no base is
+// confirmed yet.
+func (self *ConfigClient) joining() bool {
+	if self.args.Joiner == nil {
+		return false
+	}
+	log := self.configLog.Load()
+	return log == nil || log.State().Base() == nil
+}
+
+// The config repo the Genesis this client trusts names, false before a start or the store read that Genesis.
+func (self *ConfigClient) configRepoId() (Id, bool) {
+	genesis := self.genesis.Load()
+	if genesis == nil {
+		return Id{}, false
+	}
+	configRepoId, err := IdFromBytes(genesis.GetConfigRepoId())
+	return configRepoId, err == nil
+}
+
+// Whether the keychain holds a generation of the config repo; while it does not, the channel that closes once it takes
+// one is armed for the follower's next wait. Asked before what the answer decides, so a key taken meanwhile wakes it.
+func (self *ConfigClient) watchConfigKey(configRepoId Id) bool {
+	held, changed := self.args.Joiner.RepoKeyHeld(configRepoId)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if held {
+		self.configKeyWait = nil
+	} else {
+		self.configKeyWait = changed
+	}
+	return held
+}
+
+// A joining device's follow, under followLock (the file header's two passes): the full pass first, which, once it
+// confirms a base, ends the joining and follows on as any reader does; else the rows-only pass, while the keychain holds
+// no generation of the config repo or a rows-only log is held already. Answers the full pass's error, a withheld head
+// among them, so the follower retries at its retry interval as well as when the config key arrives.
+func (self *ConfigClient) followJoining(ctx context.Context) error {
+	configRepoId, known := self.configRepoId()
+	held := false
+	if known {
+		held = self.watchConfigKey(configRepoId)
+	}
+	confirmErr := self.confirm(ctx)
+	if !self.joining() {
+		self.takeConfigKeyWait()
+		if confirmErr != nil {
+			return confirmErr
+		}
+		// past the floor the full pass reached, as any reader follows
+		return self.followConfirmed(ctx)
+	}
+	if !known {
+		// the full pass read the Genesis, if api served one
+		if configRepoId, known = self.configRepoId(); !known {
+			return confirmErr
+		}
+		held = self.watchConfigKey(configRepoId)
+	}
+	if held && self.unconfirmed.Load() == nil {
+		// the config key was held before any rows-only pass: the full check alone, from base 1
+		return confirmErr
+	}
+	if err := self.followUnconfirmed(ctx, configRepoId); err != nil {
+		return err
+	}
+	return confirmErr
+}
+
+// The full pass of a joining device (QD-817): the log from the genesis api serves, every base's head judged in full,
+// over as many pages as reach the floor (start), published only once it holds the floor and a base. Until then nothing
+// is published, and VerifiedState answers the state each base being checked lands on.
+func (self *ConfigClient) confirm(ctx context.Context) error {
+	projection, err := self.args.Projection.ReadConfigProjection(ctx, 0)
+	if err != nil {
+		return err
+	}
+	started, _, err := self.start(ctx, nil, projection, false)
+	if err != nil {
+		return err
+	}
+	if started == nil || started.State().Base() == nil {
+		// no base to confirm yet
+		return nil
+	}
+	err = self.publish(started, nil, nil)
+	self.position.Set(started.Pin().GetVersion())
+	return err
+}
+
+// A joining device's rows-only pass (QD-817; the file header's): pages after the rows-only log's pin, applied as a gate
+// applies them with no config head opened, the log started where a full start would start it and held to the floor.
+// Each page's newest state goes to Joiner.AuthUnconfirmed and its pin becomes the floor, kept in authlog/; a fork stops
+// it, as a full reader's would.
+func (self *ConfigClient) followUnconfirmed(ctx context.Context, configRepoId Id) error {
+	for range max(self.settings.MaxPagesPerFollow, 1) {
+		log := self.unconfirmed.Load()
+		after := uint64(0)
+		if log != nil {
+			after = log.Pin().GetVersion()
+		}
+		projection, err := self.args.Projection.ReadConfigProjection(ctx, after)
+		if err != nil {
+			return err
+		}
+		first, err := configProjectionFirst(projection)
+		if err != nil {
+			return err
+		}
+		if log == nil || (0 < first && log.Pin().GetVersion()+1 < first) {
+			// the first page, or one past the log's next position once api's retention point passed its pin
+			started, last, err := self.start(ctx, log, projection, true)
+			if err != nil {
+				return err
+			}
+			if started == nil {
+				return nil
+			}
+			saveErr := self.publishUnconfirmed(started, configRepoId)
+			if !last.More {
+				self.checkWithheld(last)
+				return saveErr
+			}
+			continue
+		}
+		if len(projection.Entries) == 0 {
+			self.checkWithheld(projection)
+			return nil
+		}
+		_, err = log.ApplyRun(projection.Entries, self.pageRowsSource(ctx, projection))
+		saveErr := self.publishUnconfirmed(log, configRepoId)
+		if err != nil {
+			self.onApplyError(log, err)
+			return err
+		}
+		if !projection.More {
+			self.checkWithheld(projection)
+			return saveErr
+		}
+	}
+	return nil
+}
+
+// Keeps a joining device's rows-only log (QD-817): its pin becomes the floor no later start lands below, the log is kept
+// in authlog/, and its newest state goes to the key client for the config group's join alone. No entry callback and no
+// AuthAdvanced hears of it. Answers the store's error, which the next follow writes again.
+func (self *ConfigClient) publishUnconfirmed(log *ConfigLog, configRepoId Id) error {
+	self.unconfirmed.Store(log)
+	state := log.State()
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.raiseFloorWithLock(state.Pin())
+	}()
+	saveErr := self.save()
+	self.saveDue = saveErr != nil
+	if saveErr != nil {
+		self.log.Warningf("[config]%s the rows-only log through %d was not kept: %v", self.args.NetworkId, state.Pin().GetVersion(), saveErr)
+	}
+	testHookBarrier("config_client.unconfirmed", self.args.NetworkId.String())
+	self.args.Joiner.AuthUnconfirmed(state, configRepoId)
+	return saveErr
+}
+
+// Moves the floor to pin unless it stands past it already: what no start lands below never falls.
+func (self *ConfigClient) raiseFloorWithLock(pin *bridge.AuthPin) {
+	if self.floor == nil || self.floor.GetVersion() <= pin.GetVersion() {
+		self.floor = pin
+	}
+}
+
+// The position of a page's first entry, 0 for a page with none.
+func configProjectionFirst(projection *ConfigProjection) (uint64, error) {
+	if len(projection.Entries) == 0 {
+		return 0, nil
+	}
+	entry := &bridge.AuthEntry{}
+	if err := proto.Unmarshal(projection.Entries[0], entry); err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrConfigEntryMalformed, err)
+	}
+	return entry.GetN(), nil
+}
+
+// A rows source over one page's rows, whose head check reads the head each base names through the head reader.
+func (self *ConfigClient) pageRowsSource(ctx context.Context, projection *ConfigProjection) *configClientRowsSource {
+	source := &configClientRowsSource{client: self, ctx: ctx, rows: map[[sha256.Size]byte][]byte{}}
+	for _, rows := range projection.Rows {
+		source.rows[sha256.Sum256(rows)] = rows
+	}
+	return source
+}
+
 // Whether api served all this device knows of: a hint or a held pin past api's tip is withheld (§7.9's retain row),
-// which alarms once until api serves it.
+// which alarms once until api serves it. A joining device counts its rows-only pass's position as served.
 func (self *ConfigClient) checkWithheld(projection *ConfigProjection) {
-	position := self.position.Value()
+	position := self.appliedPosition()
 	alarm := false
 	func() {
 		self.stateLock.Lock()
@@ -492,6 +767,9 @@ func (self *ConfigClient) checkWithheld(projection *ConfigProjection) {
 	if alarm {
 		self.log.Warningf("[config]%s api serves through %d of what this device holds proof of", self.args.NetworkId, projection.Tip.GetVersion())
 		local := self.Pin()
+		if unconfirmed := self.UnconfirmedPin(); unconfirmed != nil && local.GetVersion() < unconfirmed.GetVersion() {
+			local = unconfirmed
+		}
 		self.emit(SidecarEvent{Kind: SidecarEventHeadAlarm, HeadAlarm: SidecarHeadAlarmWithheld,
 			Evidence: [2][]byte{configPinBytes(local), configPinBytes(projection.Tip)}})
 	}
@@ -499,39 +777,32 @@ func (self *ConfigClient) checkWithheld(projection *ConfigProjection) {
 
 // Applies one page: the first one starts the log at genesis or at the newest base it holds; a page that starts past
 // this log's next position, as one does once api's retention point passed this device's pin, starts the log again at
-// that page's newest base, held to the pin; any other applies on. Answers whether api has more.
-func (self *ConfigClient) applyProjection(ctx context.Context, log *ConfigLog, projection *ConfigProjection) (bool, error) {
-	source := &configClientRowsSource{client: self, ctx: ctx, rows: map[[sha256.Size]byte][]byte{}}
-	for _, rows := range projection.Rows {
-		source.rows[sha256.Sum256(rows)] = rows
-	}
-	first := uint64(0)
-	if 0 < len(projection.Entries) {
-		entry := &bridge.AuthEntry{}
-		if err := proto.Unmarshal(projection.Entries[0], entry); err != nil {
-			return false, fmt.Errorf("%w: %w", ErrConfigEntryMalformed, err)
-		}
-		first = entry.GetN()
+// that page's newest base, held to the pin; any other applies on. Answers whether api has more, and the last page read,
+// a start's past the first included.
+func (self *ConfigClient) applyProjection(ctx context.Context, log *ConfigLog, projection *ConfigProjection) (bool, *ConfigProjection, error) {
+	first, err := configProjectionFirst(projection)
+	if err != nil {
+		return false, nil, err
 	}
 
 	if log == nil || (0 < first && log.Pin().GetVersion()+1 < first) {
-		started, err := self.start(log, projection, source)
+		started, last, err := self.start(ctx, log, projection, false)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		if started == nil {
-			return false, nil
+			return false, projection, nil
 		}
 		err = self.publish(started, nil, nil)
 		self.position.Set(started.Pin().GetVersion())
-		return projection.More, err
+		return last.More, last, err
 	}
 
 	if len(projection.Entries) == 0 {
-		return false, nil
+		return false, projection, nil
 	}
 	before := log.State()
-	verdicts, err := log.ApplyRun(projection.Entries, source)
+	verdicts, err := log.ApplyRun(projection.Entries, self.pageRowsSource(ctx, projection))
 	// kept before a callback or WaitFor hears of it, so whoever acted on an entry or waited on a position finds it
 	// kept across a restart
 	if saveErr := self.publish(log, before, verdicts); saveErr != nil && err == nil {
@@ -540,84 +811,107 @@ func (self *ConfigClient) applyProjection(ctx context.Context, log *ConfigLog, p
 	self.position.Set(log.Pin().GetVersion())
 	if err != nil {
 		self.onApplyError(log, err)
-		return false, err
+		return false, nil, err
 	}
-	return projection.More, nil
+	return projection.More, projection, nil
 }
 
-// A log built from a page: at S(0) of the genesis this device trusts and every entry from 1 on, or at the newest base
-// the page holds, held to the pin this device held (restoreConfigLogAbove). Nil with no error when the page holds no
-// entry and no log stands yet but S(0).
-func (self *ConfigClient) start(log *ConfigLog, projection *ConfigProjection, source ConfigRowsSource) (*ConfigLog, error) {
+// A log built from a page and the pages after it, rows-only for a joining device's rows-only pass: at S(0) of the
+// genesis this device trusts and every entry from 1 on, or at the newest base the page holds (StartAtBase, as
+// restoreConfigLogAbove starts one, held to the pin this device held), then the pages after the first until it holds
+// the floor, the newest pin this device held, a rows-only pass's included: no start stands below it or off its chain
+// there (I-16), so a joining device's full pass re-reads every base its rows-only pass applied, and agrees with it, or
+// is refused. A full start's log is what VerifiedState answers while it builds, so each base's head is judged at the
+// state it lands on. Nil with no error when the page holds no entry and no log stands yet but S(0). Answers the last
+// page read.
+func (self *ConfigClient) start(ctx context.Context, log *ConfigLog, projection *ConfigProjection, rowsOnly bool) (*ConfigLog, *ConfigProjection, error) {
 	signedGenesis := projection.SignedGenesis
 	if log != nil {
 		signedGenesis = log.signedGenesis
 	}
 	if len(signedGenesis) == 0 {
-		return nil, fmt.Errorf("%w: api served no genesis", ErrConfigClientGenesis)
+		return nil, nil, fmt.Errorf("%w: api served no genesis", ErrConfigClientGenesis)
 	}
 	if bridge.GenesisChain(signedGenesis) != self.args.GenesisChain {
-		return nil, ErrConfigClientGenesis
+		return nil, nil, ErrConfigClientGenesis
 	}
+	newLog := NewConfigLog
+	if rowsOnly {
+		newLog = NewConfigLogRowsOnly
+	}
+	started, err := newLog(self.logSettings, signedGenesis)
+	if err != nil {
+		return nil, nil, err
+	}
+	// the genesis this device trusts, whose config repo a joining device's key client is asked about
+	self.genesis.CompareAndSwap(nil, started.State().Genesis())
 	floor := self.floorPin()
 	if len(projection.Entries) == 0 {
 		if log != nil {
-			return nil, nil
-		}
-		started, err := NewConfigLog(self.logSettings, signedGenesis)
-		if err != nil {
-			return nil, err
+			return nil, projection, nil
 		}
 		if err := started.checkFloor(floor); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return started, nil
+		return started, projection, nil
 	}
-	entry := &bridge.AuthEntry{}
-	if err := proto.Unmarshal(projection.Entries[0], entry); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrConfigEntryMalformed, err)
+	first, err := configProjectionFirst(projection)
+	if err != nil {
+		return nil, nil, err
 	}
-	if entry.GetN() == 1 {
-		started, err := NewConfigLog(self.logSettings, signedGenesis)
-		if err != nil {
-			return nil, err
-		}
-		// each base of the page is checked on the state it lands on, which configLog holds only once the page is
+	if !rowsOnly {
+		// each base of the start is checked on the state it lands on, which configLog holds only once the start is
 		// published: the head reader's verifier finds it through VerifiedState meanwhile
 		self.starting.Store(started)
-		_, err = started.ApplyRun(projection.Entries, source)
-		self.starting.Store(nil)
-		if err != nil {
-			self.onApplyError(started, err)
-			return nil, err
-		}
-		if err := started.checkFloor(floor); err != nil {
-			return nil, err
-		}
-		return started, nil
+		defer self.starting.Store(nil)
 	}
-	if log != nil {
+	atBase := first != 1
+	if atBase && log != nil {
 		// fell behind api's retention point: the old pin is the floor, and the restart's anchor links it
 		floor = log.Pin()
 	}
-	retained := &ConfigRetained{SignedGenesis: signedGenesis, Entries: projection.Entries, Rows: map[[sha256.Size]byte][]byte{}}
-	started, err := restoreConfigLogAbove(self.logSettings, retained, source, floor)
-	if err != nil {
-		if errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigRunRefused) || errors.Is(err, ErrConfigBelowPin) {
+	refused := func(err error) error {
+		if atBase && (errors.Is(err, ErrConfigFork) || errors.Is(err, ErrConfigRunRefused) || errors.Is(err, ErrConfigBelowPin)) {
 			self.log.Errorf("[config]%s a start at api's newest base refused: %v", self.args.NetworkId, err)
-			local := configPinBytes(floor)
-			self.emit(SidecarEvent{Kind: SidecarEventHeadAlarm, HeadAlarm: SidecarHeadAlarmFork, Evidence: [2][]byte{local, nil}})
+			self.emit(SidecarEvent{Kind: SidecarEventHeadAlarm, HeadAlarm: SidecarHeadAlarmFork, Evidence: [2][]byte{configPinBytes(floor), nil}})
 		}
-		return nil, err
+		return err
 	}
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		if base := started.State().Base(); base != nil {
-			self.startBase = base.GetVersion()
+	if atBase {
+		retained := &ConfigRetained{SignedGenesis: signedGenesis, Entries: projection.Entries, Rows: map[[sha256.Size]byte][]byte{}}
+		if err := started.restore(retained, self.pageRowsSource(ctx, projection), floor); err != nil {
+			return nil, nil, refused(err)
 		}
-	}()
-	return started, nil
+	} else if _, err := started.ApplyRun(projection.Entries, self.pageRowsSource(ctx, projection)); err != nil {
+		self.onApplyError(started, err)
+		return nil, nil, err
+	}
+	// the pages after the first, until the log holds the floor
+	last := projection
+	for pageCount := 1; floor != nil && started.Pin().GetVersion() < floor.GetVersion() && last.More && pageCount < max(self.settings.MaxPagesPerFollow, 1); pageCount += 1 {
+		next, err := self.args.Projection.ReadConfigProjection(ctx, started.Pin().GetVersion())
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, err := started.ApplyRun(next.Entries, self.pageRowsSource(ctx, next)); err != nil {
+			self.onApplyError(started, err)
+			return nil, nil, err
+		}
+		last = next
+	}
+	if err := started.checkFloor(floor); err != nil {
+		return nil, nil, refused(err)
+	}
+	if atBase && !rowsOnly {
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if base := started.State().Base(); base != nil {
+				self.startBase = base.GetVersion()
+			}
+		}()
+	}
+	return started, last, nil
 }
 
 // Installs log as the one this client follows, after it applied verdicts on before: the log is kept in authlog/
@@ -628,13 +922,24 @@ func (self *ConfigClient) start(log *ConfigLog, projection *ConfigProjection, so
 // Answers the store's error. A write that failed holds no callback back, since a judge that never heard of a
 // revocation would enforce less than one whose store lags, and a lagging store only delays a restart's gate: the
 // next follow writes it again (saveDue).
+//
+// A joining device's first confirmed base ends its rows-only pass (QD-817): the full pass that publishes it re-read
+// every base that pass applied and holds its pin, so the rows-only log goes, and nothing judges by it again.
 func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts []ConfigVerdict) error {
-	self.configLog.Store(log)
 	state := log.State()
+	confirming := state.Base() != nil && self.unconfirmed.Load() != nil
+	if confirming {
+		testHookBarrier("config_client.confirm.before", self.args.NetworkId.String())
+	}
+	self.configLog.Store(log)
+	if confirming {
+		self.unconfirmed.Store(nil)
+		testHookBarrier("config_client.confirm.after", self.args.NetworkId.String())
+	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.floor = state.Pin()
+		self.raiseFloorWithLock(state.Pin())
 	}()
 	saveErr := self.save()
 	self.saveDue = saveErr != nil
