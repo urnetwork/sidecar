@@ -11,7 +11,8 @@
 //
 //   - FS-98's cli (T2+T3): a harness hook's session, an unconfirmed control call, and an MCP tool's and a hook
 //     handler's reach of the Sidecar are each refused the revocation with nothing signed, as are the device's own
-//     revocation (REVOKE_SELF) and another member's device (REVOKE_NOT_OWN), and the phone stands; its twin, the
+//     revocation (REVOKE_SELF), another member's device (REVOKE_NOT_OWN) and a read-only device's
+//     (REVOKE_NOT_CAPABLE), and the phone stands; its twin, the
 //     owner's laptop in a personal network revoking the phone as lost, lands once and every reader drops the phone.
 //   - FS-124's cli (T2+T3): with a presence key registered through the daemon's prompt, the laptop's revocation is
 //     REVOKE_CANCELLED while the authenticator refuses, nothing signed, and a second key's registration and a key's
@@ -50,6 +51,71 @@ var (
 	Fs98Cli  = Register("FS-98", "cli", []Tier{TierT2, TierT3}, Twin(Fs98CliRefusedPaths, Fs98CliLost))
 	Fs124Cli = Register("FS-124", "cli", []Tier{TierT2, TierT3}, Twin(Fs124CliCheckRefused, Fs124CliUnderTheCheck))
 )
+
+// §22.7's revocation suite, the own-device form (M3): X is a member's phone, which the member's laptop revokes as lost
+// and as a compromise the way `ur devices revoke` does. CORE's clause is the log's: before the loss X's identity key
+// admits a device of its member, so the check judges a key that held something; after it every reader drops X, a
+// compromise parks what X admitted from since_n on, and nothing X signs afterwards is taken, an admission, a
+// revocation of the laptop or a presence key. What X can still read is the other areas' clauses, whose checks name
+// these two ways as they compose them.
+var Fs98RevocationCheck = sidecartest.RegisterRevocationCheck(&sidecartest.RevocationCheck{
+	Id:   "core/own-device-revoked-signs-nothing",
+	Area: "CORE",
+	Ways: []sidecartest.RevocationWay{sidecartest.RevocationOwnDeviceRevokeLost, sidecartest.RevocationOwnDeviceRevokeCompromise},
+	Run: func(run *sidecartest.RevocationRun) (string, error) {
+		return "", fsTeamCatch(func() error {
+			world := sidecartest.NewFs98World(fsTeamFailer{}, run.Net, nil)
+			defer world.Close()
+			net := world.Admission()
+			memberId, first := net.ConsentedMember("m")
+			laptop := world.AddHost("laptop", memberId, first, 0)
+			phone := net.Device("m phone", memberId)
+			net.AdmitDevice(first, phone, 0)
+			// what X's key did while X stood: one admission before the loss, one after it
+			tablet, watch := net.Device("m tablet", memberId), net.Device("m watch", memberId)
+			net.AdmitDevice(phone, tablet, 0)
+			net.AdmitDevice(phone, watch, 0)
+			lostAt := net.Tip().GetVersion()
+			world.Settle()
+
+			reason, sinceN := sidecar.DeviceRevokeLost, uint64(0)
+			if run.Way == sidecartest.RevocationOwnDeviceRevokeCompromise {
+				reason, sinceN = sidecar.DeviceRevokeCompromise, lostAt
+			}
+			preview := laptop.Preview(phone.SidecarId, reason, sinceN, time.Time{})
+			if preview.Refusal != nil {
+				return fmt.Errorf("the preview: %+v", preview.Refusal)
+			}
+			if reply := laptop.Revoke(preview.Plan); reply.Refusal != nil || reply.Position == 0 {
+				return fmt.Errorf("the revocation: %+v", reply)
+			}
+			if net.Admitted(phone) {
+				return errors.New("X stands after its revocation")
+			}
+			if !net.Admitted(tablet) {
+				return errors.New("what X admitted before the loss is out")
+			}
+			if compromised := run.Way == sidecartest.RevocationOwnDeviceRevokeCompromise; net.Admitted(watch) == compromised {
+				return fmt.Errorf("what X admitted from since_n on stands %t, compromise %t", net.Admitted(watch), compromised)
+			}
+			// X keeps its key and signs on: none of it is taken
+			before := net.Tip().GetVersion()
+			spare := net.Device("m spare", memberId)
+			for name, signed := range map[string][]byte{
+				"an admission":               net.Sign(phone, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.Admission(spare, nil, false, 0, 0)),
+				"a revocation of the laptop": net.Sign(phone, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.Revocation(laptop.Device, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)),
+			} {
+				if _, err := net.Post(signed); err == nil {
+					return fmt.Errorf("api took %s X signed after its revocation", name)
+				}
+			}
+			if net.Tip().GetVersion() != before || net.Admitted(spare) || !net.Admitted(laptop.Device) {
+				return fmt.Errorf("X's statements moved the log from %d to %d", before, net.Tip().GetVersion())
+			}
+			return nil
+		})
+	},
+})
 
 // What one schedule builds in its first step and its later steps read.
 type fs98World struct {
@@ -269,6 +335,14 @@ func Fs98CliRefusedPaths(net *Net) *Schedule {
 			}
 			if net.Tip().GetVersion() != before || !net.Admitted(phone) || !net.Admitted(stranger) {
 				return fmt.Errorf("a refused path moved the log from %d to %d", before, net.Tip().GetVersion())
+			}
+			// a read-only device of the member, a page Worker's kind, revokes nothing
+			reader := world.world.AddHost("reader", laptop.Device.MemberId, world.devices["first"], uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY))
+			if readOnly := reader.Preview(phone.SidecarId, sidecar.DeviceRevokeLost, 0, time.Time{}); readOnly.Refusal == nil || readOnly.Refusal.Code != sidecar.DeviceRevokeCodeNotCapable {
+				return fmt.Errorf("a read-only device's revocation: %+v", readOnly)
+			}
+			if !net.Admitted(phone) {
+				return errors.New("a read-only device revoked the phone")
 			}
 			return nil
 		}),

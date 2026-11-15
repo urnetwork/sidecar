@@ -8,6 +8,8 @@ package fault
 
 import (
 	"testing"
+
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 func TestFs98Cli(t *testing.T) {
@@ -44,4 +46,19 @@ func TestFs124CliRecoveryRotateSignsUnderTheDaemonsPrompt(t *testing.T) {
 
 func TestFs124CliCosignSignsUnderTheDaemonsPrompt(t *testing.T) {
 	fsTeamRun(t, Fs124CliCosign)
+}
+
+// §22.7's revocation suite with X revoked by its own member as lost and as a compromise: each way named, and CORE's
+// check judging in both.
+func TestRevocationSuiteOwnDeviceForm(t *testing.T) {
+	report := sidecartest.RunRevocationSuite(t, sidecartest.RevocationFormOwnDevice, nil)
+	for _, way := range sidecartest.RevocationFormOwnDevice.Ways() {
+		judged := false
+		for _, result := range report.Of(way) {
+			judged = judged || (result.CheckId == Fs98RevocationCheck.Id && result.Err == nil && result.Open == "")
+		}
+		if !judged {
+			t.Errorf("%s: CORE's check did not judge", way)
+		}
+	}
 }
