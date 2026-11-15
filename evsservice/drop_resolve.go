@@ -57,6 +57,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 
@@ -1257,7 +1258,7 @@ func EncodeDropListFiles(repoId sidecar.Id, jobId sidecar.Id, inputs []*dropList
 	if len(inputs) == 0 {
 		return nil, nil
 	}
-	if 1<<16 <= len(inputs) {
+	if math.MaxUint16 < len(inputs) {
 		return nil, fmt.Errorf("%w: %d drops in one list file", ErrDropFileInvalid, len(inputs))
 	}
 	drops := make([]*DropListDrop, len(inputs))
@@ -1431,7 +1432,7 @@ func (self *DropListFile) MayHold(entrySha256 [32]byte) bool {
 // The most bytes a list file of settings may hold.
 func dropListFileMaxByteCount(settings *DropSettings) int64 {
 	rows := int64(settings.FileRowCount)
-	return int64(dropFileHeaderByteCount+4+dropListTailByteCount+dropFileTrailerByteCount) + (1<<16)*dropListDropByteCount +
+	return int64(dropFileHeaderByteCount+4+dropListTailByteCount+dropFileTrailerByteCount) + (math.MaxUint16+1)*dropListDropByteCount +
 		rows*dropListRowByteCount + (rows/dropListIndexStride+1)*sha256.Size + int64(dropListBloomByteCount(int(rows)))
 }
 

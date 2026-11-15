@@ -391,3 +391,38 @@ func TestDropDeleteStaleDeleteIsRefusedPastItsDeadline(t *testing.T) {
 		t.Fatalf("answers %v", answers)
 	}
 }
+
+// An id moved to held, answered young in the round after the hold ends, and deleted in a later round reports its stored
+// bytes once, at the hold: the job's held files, not an id's newest outcome, say what was reported.
+func TestDropDeleteReportsAHeldIdOnceThroughALaterYoungRound(t *testing.T) {
+	fixture := newDropDeleteFixture(t)
+	world := fixture.world
+	a := fixture.putSegment("a", 100)
+	fixture.horizon = world.clock.Now()
+	if err := sidecartest.PlaceHold(world.ctx, world.host.Blobs, &sidecar.HoldRecord{
+		NetworkId: testId("network-a"), CaseId: testId("hold case"), Kind: sidecar.HoldKindPreserve2703f,
+		Scope: sidecar.HoldScopeNetwork(), PlaceTime: world.clock.Now(), ExpireTime: world.clock.Now().Add(90 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result := fixture.run(a); !result.Held {
+		t.Fatalf("under the hold: %+v", result)
+	}
+	if err := sidecartest.RemoveHold(world.ctx, world.host.Blobs, testId("network-a"), testId("hold case")); err != nil {
+		t.Fatal(err)
+	}
+	world.clock.Advance(time.Minute)
+	fixture.horizon = world.clock.Now()
+	if result := fixture.run(a); result.YoungBound.IsZero() || fixture.answers()[a] != DropOutcomeYoung {
+		t.Fatalf("the round after the hold: %+v", result)
+	}
+	world.clock.Advance(30 * time.Hour)
+	fixture.horizon = world.clock.Now()
+	fixture.run(a)
+	if fixture.answers()[a] != DropOutcomeDeleted || fixture.stored(a) {
+		t.Fatal("the later round did not delete")
+	}
+	if delta := world.host.Quota.StoredDelta(connect.Id(testId("network-a"))); delta != -100 {
+		t.Fatalf("stored delta %d, want the held bytes reported once", delta)
+	}
+}

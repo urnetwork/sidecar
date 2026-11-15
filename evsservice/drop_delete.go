@@ -162,8 +162,9 @@ type dropDeleteRun struct {
 	request *DropDeleteRequest
 	files   *DropFiles
 	result  *DropDeleteResult
-	// the newest outcome of each id answered before this run, which tells a held id's later DELETE
-	answered map[DropScanId]DropOutcome
+	// every id an earlier run moved to held, whose stored bytes were reported then: the job's held files, which a
+	// later outcome of the id, young among them, never takes it out of
+	heldBefore map[DropScanId]bool
 	// since the last checkpoint
 	answers  []*DropAnswer
 	heldIds  []DropScanId
@@ -191,9 +192,15 @@ func (self *DropDelete) Delete(ctx context.Context, request *DropDeleteRequest) 
 		return nil, fmt.Errorf("%w: deletes with no clusters or checkpoint", ErrDropJobState)
 	}
 	files := NewDropFiles(request.SegmentCluster, request.RepoId, request.JobId, self.settings)
-	answered, err := files.Answers(ctx)
+	heldFiles, err := files.ReadAll(ctx, DropFileHeld)
 	if err != nil {
 		return nil, err
+	}
+	heldBefore := map[DropScanId]bool{}
+	for _, file := range heldFiles {
+		for _, scanId := range file.Ids {
+			heldBefore[scanId] = true
+		}
 	}
 	delSequence, err := files.NextSequence(ctx, DropFileDel)
 	if err != nil {
@@ -204,7 +211,7 @@ func (self *DropDelete) Delete(ctx context.Context, request *DropDeleteRequest) 
 		return nil, err
 	}
 	run := &dropDeleteRun{
-		deleter: self, ctx: ctx, request: request, files: files, answered: answered,
+		deleter: self, ctx: ctx, request: request, files: files, heldBefore: heldBefore,
 		result:      &DropDeleteResult{Progress: &DropDeleteProgress{}},
 		delSequence: delSequence, heldSequence: heldSequence, leaseUntil: request.LeaseUntil,
 		lastCheckpoint: self.clock.Now(),
@@ -424,7 +431,7 @@ func (self *dropDeleteRun) judge(candidate *DropCandidate) error {
 		case err == nil:
 			if candidate.Kind == DropIdSegment {
 				size := uint64(max(0, info.ByteCount))
-				if self.answered[candidate.DropScanId] != DropOutcomeHeld {
+				if !self.heldBefore[candidate.DropScanId] {
 					self.freed += size
 				}
 				if self.deleter.freed != nil {
@@ -516,7 +523,7 @@ func (self *dropDeleteRun) moveToHeld(candidates []*DropCandidate) error {
 		case err != nil:
 			return err
 		}
-		if candidate.Kind == DropIdSegment && self.answered[candidate.DropScanId] != DropOutcomeHeld {
+		if candidate.Kind == DropIdSegment && !self.heldBefore[candidate.DropScanId] {
 			self.held += uint64(max(0, info.ByteCount))
 		}
 		self.answer(candidate, DropOutcomeHeld)
