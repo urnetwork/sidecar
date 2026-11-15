@@ -6,11 +6,11 @@
 //
 //	driver     neither bundled nor fetched (owner decision 222): ur tun looks for wintun.dll beside ur.exe, then in
 //	           the installed app's folder, and loads one only once its SHA-256 and its Authenticode signer match the
-//	           pins of windows/app/tools/fetch-deps.ps1's Wintun 0.14.1 (urWintunPins), holding the file against
-//	           writes from the check through the load, since ur tun runs elevated and an unchecked DLL there is a way
-//	           into the system; else it says where to get one. fetch-deps.ps1 pins the release zip's hash, not the
-//	           DLL's, so no DLL hash is pinned yet and every load refuses, naming it (question
-//	           bridge-m6-06-wintun-dll-hash), the closed direction
+//	           pins of windows/app/tools/fetch-deps.ps1's Wintun 0.14.1 (urWintunPins, tun_wintun.go), holding the
+//	           file against writes from the check through the load, since ur tun runs elevated and an unchecked DLL
+//	           there is a way into the system; else it says where to get one. fetch-deps.ps1 pins the release zip's
+//	           hash, which a host cannot check, so each architecture's pin is the hash of its DLL in that zip, amd64's
+//	           and arm64's (QD-823); an architecture with none loads no DLL, the closed direction
 //	device     the adapter ur-<instance>, its MTU the settings'; creating one takes an elevated daemon, refused clearly
 //	           otherwise
 //	addresses  this host's overlay /32s on the adapter (CreateUnicastIpAddressEntry)
@@ -37,7 +37,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -75,11 +74,6 @@ var (
 	errUrWintunMissing = errors.New("ur tun on Windows needs Wintun 0.14.1's wintun.dll, signed by WireGuard LLC, " +
 		"which ur neither bundles nor fetches: install the URnetwork app, which carries it, or put the one from " +
 		"https://www.wintun.net/builds/wintun-0.14.1.zip for this machine's architecture beside ur.exe")
-	// A wintun.dll is there, but no hash of the DLL is pinned for this architecture.
-	errUrWintunUnpinned = errors.New("ur tun on Windows loads wintun.dll only once its SHA-256 matches a pin, and " +
-		"none is pinned for this architecture's DLL yet, so it loads none")
-	// The DLL there is not the pinned one.
-	errUrWintunRefused = errors.New("the wintun.dll ur tun found is not the pinned Wintun 0.14.1, so it loads none")
 	// No default route leaves by another interface, so the daemon's own transport would have no way out.
 	errUrTunWindowsExitsNoDefault = errors.New("no default route leaves this host by another interface for the " +
 		"daemon's own transport to keep")
@@ -88,23 +82,6 @@ var (
 	// A call of IP Helper's that this Windows does not have.
 	errUrTunWindowsCallMissing = errors.New("an IP Helper call is missing from this Windows")
 )
-
-// The pins wintun.dll is held to (owner decision 222): windows/app/tools/fetch-deps.ps1's for Wintun 0.14.1.
-type urWintunPins struct {
-	// The DLL's own SHA-256, hex, for each GOARCH. fetch-deps.ps1 pins the release zip's, $WintunSha256, which a DLL on
-	// this host cannot be held to, so none is pinned yet (question bridge-m6-06-wintun-dll-hash): every load refuses.
-	DllSha256 map[string]string
-	// The signer certificate's SHA-1 thumbprint, hex: fetch-deps.ps1's $WintunSignerThumbprint.
-	SignerThumbprint string
-}
-
-// The pins, a fresh value each call.
-func defaultUrWintunPins() *urWintunPins {
-	return &urWintunPins{
-		DllSha256:        map[string]string{},
-		SignerThumbprint: "DF98E075A012ED8C86FBCF14854B8F9555CB3D45",
-	}
-}
 
 // What ur tun asks of IP Helper and the adapters, a test's recorder standing in for it.
 type urTunWindowsIpHelper interface {
@@ -630,18 +607,11 @@ func urWintunOpen(path string) (*os.File, error) {
 	return os.NewFile(uintptr(handle), path), nil
 }
 
-// Holds file, path's, to pins: its SHA-256 first, then its signature.
+// Holds file, path's, to pins: its SHA-256 first, to this architecture's DLL pin (urWintunCheckDigest), then its
+// signature.
 func urWintunCheck(file *os.File, path string, pins *urWintunPins) error {
-	pinned := strings.ToLower(pins.DllSha256[runtime.GOARCH])
-	if pinned == "" {
-		return fmt.Errorf("%w (%s, %s; question bridge-m6-06-wintun-dll-hash)", errUrWintunUnpinned, path, runtime.GOARCH)
-	}
-	digest, err := urWintunDigest(file)
-	if err != nil {
-		return fmt.Errorf("%w: %s did not read (%v)", errUrWintunRefused, path, err)
-	}
-	if digest != pinned {
-		return fmt.Errorf("%w: %s's SHA-256 is not the pinned one", errUrWintunRefused, path)
+	if err := urWintunCheckDigest(file, path, pins, runtime.GOARCH); err != nil {
+		return err
 	}
 	thumbprint, err := urWintunSigner(windows.Handle(file.Fd()), path)
 	if err != nil {
@@ -651,18 +621,6 @@ func urWintunCheck(file *os.File, path string, pins *urWintunPins) error {
 		return fmt.Errorf("%w: %s is signed by another certificate", errUrWintunRefused, path)
 	}
 	return nil
-}
-
-// The SHA-256 of file, hex, read from its start.
-func urWintunDigest(file *os.File) (string, error) {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return "", err
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // The calls x/sys/windows does not wrap, from crypt32.dll in System32.

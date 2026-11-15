@@ -271,7 +271,8 @@ False reports fail: replays come from other IPs, forgeries lack signatures, each
 | Prover and verifier (TLS 1.2 and 1.3; BDAT and DATA) | `smtpproof`, a nested module the root never requires; `cli/` injects its provers on desktop builds (owner decision 104; §4.4) | server injects the verifier into smtpedge |
 
 ```go
-type SmtpEdgeStore interface { // server implements; batched, off the connection path
+type SmtpEdgeStore interface { // batched, off the connection path; server implements it until the review phase
+	                            // moves sidecar's SQL into sidecar, over an Env's db (§4.5; owner decision 251)
 	InsertSends(ctx context.Context, sends []*SmtpSendRecord) error
 	FindSends(ctx context.Context, key *SmtpJoinKey) ([]*SmtpSendRecord, error)
 	InsertComplaint(ctx context.Context, complaint *SmtpComplaint) error
