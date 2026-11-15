@@ -228,6 +228,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ViewCoalesce:          30 * time.Second,
 				PhoneMeteredByteCount: 8 * 1024 * 1024,
 				RenewJitter:           5 * time.Minute,
+				PhoneLeaseRenewAge:    24 * time.Hour,
+				PhoneLeaseExpiry:      7 * 24 * time.Hour,
 			},
 		},
 	}

@@ -331,6 +331,12 @@ type SidecarDirectorySettings struct {
 	PhoneMeteredByteCount int64
 	// ±this on hourly run renewals, so a team's cards do not renew together: 5 min (§16.11).
 	RenewJitter time.Duration
+	// A phone renews a notice lease this old at its next resync, at once: 24 h, §11.10's renew row as a phone runs it
+	// (D-SDK-28). Non-positive renews every lease at each resync.
+	PhoneLeaseRenewAge time.Duration
+	// evs drops a lease this long after its last renewal, so a phone that held one this long reads its path again:
+	// 7 d (§11.10's renew row).
+	PhoneLeaseExpiry time.Duration
 }
 
 // §13.8's device key and the self-signed leaf a device presents until §13 issues it (§15.5, §11.11). The
@@ -876,6 +882,8 @@ func DefaultSidecarSettings() *SidecarSettings {
 			ViewCoalesce:          30 * time.Second,
 			PhoneMeteredByteCount: 8 * 1024 * 1024,
 			RenewJitter:           5 * time.Minute,
+			PhoneLeaseRenewAge:    24 * time.Hour,
+			PhoneLeaseExpiry:      7 * 24 * time.Hour,
 		},
 		Evs:     DefaultEvsSettings(),
 		Tls:     DefaultSidecarTlsSettings(),

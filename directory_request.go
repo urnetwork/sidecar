@@ -803,6 +803,8 @@ func (self *DirectoryAccessRequests) File(ctx context.Context, ask *DirectoryReq
 			filed.EntrySeq = ref.Seq
 		}
 	}
+	// a phone keeps what it filed in place of a copy, and leases its notice's path at once (directory_notice.go)
+	defer self.notePhoneFiled(ctx, filed)
 	if filed.EntrySeq == 0 {
 		// the entry waits in the spool: its notice is the repair's, once the entry lands
 		return filed, nil
