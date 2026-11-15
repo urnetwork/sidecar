@@ -75,6 +75,7 @@ type mailImapUids struct {
 	tombstoneLoaded bool
 }
 
+// UIDs over store, the component's imap/ directory, none loaded yet.
 func newMailImapUids(store SidecarStore, clock Clock, settings *MailImapSettings) *mailImapUids {
 	return &mailImapUids{
 		store:      store,

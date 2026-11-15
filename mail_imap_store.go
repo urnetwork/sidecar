@@ -83,6 +83,7 @@ type MailImapSettings struct {
 	LabelFolderMaxCount int
 }
 
+// The defaults, a fresh value each call.
 func DefaultMailImapSettings() *MailImapSettings {
 	return &MailImapSettings{
 		FolderMaxMessageCount: 100000,
