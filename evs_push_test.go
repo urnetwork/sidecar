@@ -520,16 +520,12 @@ func TestEvsPushFollowsOnceAfterAClosedGateOnACreatingPush(t *testing.T) {
 		if statements, _ := writer.server.sentCounts(); statements != 1 || (follower && follows != 1) {
 			t.Fatalf("follower %t: neither rose: %d follows, %d statements", follower, follows, statements)
 		}
-		// the kept refusal answers the next write's build too, with nothing sent, until the pin rises
-		if _, err := writer.write(t, "a.txt", []byte("a")); !errors.As(err, &held) {
-			t.Fatalf("follower %t: the next write on the same pin: %v", follower, err)
-		}
-		if statements, _ := writer.server.sentCounts(); statements != 1 {
-			t.Fatalf("follower %t: the next write on the same pin sent a statement", follower)
-		}
-		writer.world.config.setPin(3)
+		// the kept refusal is its write's: a later write sends its own first statement, which a gate that opened takes
 		if _, err := writer.write(t, "a.txt", []byte("a")); err != nil {
-			t.Fatalf("follower %t: once the pin rose: %v", follower, err)
+			t.Fatalf("follower %t: a later write: %v", follower, err)
+		}
+		if statements, _ := writer.server.sentCounts(); statements != 2 {
+			t.Fatalf("follower %t: a later write sent %d statements", follower, statements-1)
 		}
 	}
 

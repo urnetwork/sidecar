@@ -36,7 +36,9 @@
 //	         is above the kept ones; on the same pin and generation the build answers the kept refusal as an
 //	         *EvsGateHeldError, which evsNeedsRebuild does not take, so no second statement is sent on them. One
 //	         follow a refusal, never a loop, nothing in the background; each rebuild counts against PushRebuildCount.
-//	         A push on a head that exists, a push to an owned ref and a deposit ask no follow
+//	         A push on a head that exists, a push to an owned ref and a deposit ask no follow. The kept refusal is
+//	         its write's: a later write, or the same git update pushed again, builds its first statement afresh,
+//	         since evs's gate also closes for reasons that pass with nothing changed on this device (FS-5's case)
 //
 // A part's own 409 PARTS_MISSING at the seal posts the parts again and seals P again (evs_push_parts.go).
 //
@@ -409,6 +411,10 @@ func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, reb
 // sendSealed, noting each push id before anything is sent under it, nil for none: what a git publish judges a moved
 // head by, since an attempt it sent may be in the history (DESIGN-DETAILS 8.2.5's 409 row).
 func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int, note func(pushId Id), beforePost func(attempt *evsPushAttempt) error) (Id, *protocol.EvsPushReply, error) {
+	if *rebuilds == 0 {
+		// a write's first build: a refusal kept for an earlier write of the ref is not this one's
+		self.client.gateOpened(evsRefKey{repoId: self.repoId, refId: sealed.Plan.RefId})
+	}
 	for {
 		pushId := NewEvsPushId()
 		if note != nil {
@@ -498,7 +504,7 @@ func (self *EvsClient) gateHeld(key evsRefKey, pinVersion uint64, generation uin
 	return &EvsGateHeldError{Refusal: kept.err}
 }
 
-// Forgets a ref's kept refusal once a push to it committed.
+// Forgets a ref's kept refusal: once a push to it committed, and at a later write's first build.
 func (self *EvsClient) gateOpened(key evsRefKey) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
