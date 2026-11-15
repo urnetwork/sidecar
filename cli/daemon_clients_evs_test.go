@@ -9,16 +9,14 @@
 //	       mount's hooks, which relay to the daemon, and evs commits main with it; and a second clone reads it back
 //	admit  on the same world, the daemon's Sidecar admits a device with its own identity key, which its follower, its
 //	       key client and the gate all hold
-//	first  the network's first device bootstrapping on evs: its key client takes the genesis state, chooses a leaf and
-//	       builds its MLS engine under the Genesis's hash, and evs's real create route places the config repo; KF1 at
-//	       that state is refused, since a GenRotate's auth pin is past position 0 while the first head's push is signed
-//	       before base 1 (question daemon-evs-gkm-clients-first-device-config-generation), so base 1 never lands and the
-//	       follower never stands: the closed direction
+//	first  the network's first device bootstrapping on evs, KF1 split at its base 1 (QD-824): its key client takes the
+//	       genesis state and drafts the config group's id and RK_1; the first head's push is sealed under them and
+//	       signed at the genesis pin before base 1; base 1 lands and the key client takes the device's own S(1); evs's
+//	       real create route places the config repo, KF1 signs GenRotate_1 there over the drafted RK_1, activation
+//	       follows and the push lands; the daemon's follower then stands on base 1 over the composition's head reader
 //
-// Following past the genesis over evs, installing a base over the composition's head reader and ur tun's bridge
-// compiling over it wait on that question: no network's config head can be keyed on evs before it is answered. Every
-// wait is on a monitor, a channel or a follow the test asks for, bounded by a real-time guard only a broken wiring
-// reaches.
+// Every wait is on a monitor, a channel or a follow the test asks for, bounded by a real-time guard only a broken
+// wiring reaches.
 
 package main
 
@@ -318,25 +316,18 @@ func TestDaemonAdmitsADeviceTheGateHolds(t *testing.T) {
 	}
 }
 
-// The network's first device bootstrapping on evs (the file's comment): the daemon's own key client takes the genesis
-// state the bootstrap signed, chooses a leaf as the Genesis's owner and builds its MLS engine under the Genesis's hash,
-// its anchor; evs's real create route places the config repo for it, inside the bootstrap's window; and KF1 there is
-// refused as malformed, a generation pinned at position 0, so base 1 never lands and the daemon's follower, which reads
-// no genesis, never stands (question daemon-evs-gkm-clients-first-device-config-generation).
-func TestDaemonsFirstNetworkStopsAtItsConfigGeneration(t *testing.T) {
+// The network's first device bootstrapping on evs (the file's comment), the daemon's own Sidecar and key client on the
+// engines behind the real gate, which holds nothing of the network before base 1: the bootstrap lands base 1, forms the
+// config group and commits the first head; the key client holds generation 1 signed at S(1), its group the drafted one
+// and its C_1 the one the push named, which evs's head holds; and the daemon's follower, started once the network
+// exists, stands on base 1 over the real head reader, the first device admitted.
+func TestDaemonsFirstNetworkStandsOnItsBaseOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*urTestTimeout)
 	defer cancel()
 	net := sidecartest.NewNet(ctx, nil)
 	t.Cleanup(net.Close)
 	engines := enginenet.NewEngines(t, net, nil)
-	instance, err := net.StartInstance("daemon", &sidecartest.TestInstanceArgs{
-		Start: func(running *sidecar.Sidecar) error {
-			if startUrConfigFollower(running, sidecar.NewNoopLogger()) == nil {
-				return errors.New("no follower started")
-			}
-			return nil
-		},
-	})
+	instance, err := net.StartInstance("daemon", &sidecartest.TestInstanceArgs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,37 +341,69 @@ func TestDaemonsFirstNetworkStopsAtItsConfigGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = engines.Bootstrap(ctx, &enginenet.BootstrapArgs{Sidecar: running, Gkm: gkm, OwnerMemberId: sidecar.NewId()})
-	if !errors.Is(err, sidecar.ErrGkmMalformed) || !strings.Contains(err.Error(), "auth pin") {
-		t.Fatalf("the first device's KF1 at the genesis state: %v", err)
+	result, err := engines.Bootstrap(ctx, &enginenet.BootstrapArgs{Sidecar: running, Gkm: gkm, OwnerMemberId: sidecar.NewId()}, nil)
+	if err != nil {
+		t.Fatalf("the first device's bootstrap: %v", err)
+	}
+	bootstrap := result.Bootstrap
+	if tip, err := engines.Api().Tip(ctx, networkId); err != nil || tip.GetVersion() != 1 || !bytes.Equal(tip.GetChain(), bootstrap.Pin.GetChain()) {
+		t.Fatalf("api's log after the bootstrap: %v %v", tip, err)
 	}
 
-	clients := testUrClientsOf(running)
-	state, _ := clients.gkm.newestState().(*sidecar.ConfigState)
-	identity := running.Identity()
-	if state == nil || state.Pin().GetVersion() != 0 || !bytes.Equal(state.Genesis().GetOwnerSidecarId(), identity.SidecarId.Bytes()) {
-		t.Fatalf("the key client holds %v, not the genesis state naming this sidecar", state)
-	}
-	if clients.builtGroup() == nil || !clients.leaf {
-		t.Fatal("the first device's key client holds no leaf")
-	}
-	anchor, err := running.Anchor()
+	// the push base 1 names: the config repo's first, at the genesis pin, under the drafted generation
+	statement, err := sidecar.ParseEvsStatement(bootstrap.Push.SignedPush)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients.mls.stateLock.Lock()
-	admission, engine := clients.mls.admissionSha256, clients.mls.engine
-	clients.mls.stateLock.Unlock()
-	if engine == nil || !bytes.Equal(admission, anchor.GenesisSha256) {
-		t.Fatal("the first device's MLS engine is not built under the Genesis's hash")
+	push := statement.Push
+	if push.GetAuth().GetVersion() != 0 || !bytes.Equal(push.GetAuth().GetChain(), bootstrap.GenesisChain[:]) || push.GetBaseVersion() != 0 {
+		t.Fatalf("the first head's push: auth %v on version %d", push.GetAuth(), push.GetBaseVersion())
+	}
+	key, err := gkm.RepoKey(ctx, result.ConfigRepoId, 1)
+	if err != nil {
+		t.Fatalf("the key client's generation 1 of the config repo: %v", err)
+	}
+	if key.GroupId() != result.DraftedKey.GroupId() || !bytes.Equal(push.GetGroupId(), key.GroupId().Bytes()) ||
+		!bytes.Equal(key.Commitment(), push.GetGenerationCommitment()) || !bytes.Equal(key.Commitment(), result.DraftedKey.Commitment()) {
+		t.Fatal("generation 1 is not the one the first head's push was sealed under")
+	}
+	if auth := key.Auth(); auth.GetVersion() != 1 || !bytes.Equal(auth.GetChain(), bootstrap.Pin.GetChain()) {
+		t.Fatalf("GenRotate_1 signed at %v, not at S(1)", auth)
+	}
+	heads, err := engines.RefHeads(ctx, result.ConfigRepoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := false
+	for _, head := range heads {
+		if head.GetVersion() == 1 && head.GetGeneration() == 1 && bytes.Equal(head.GetGenerationCommitment(), key.Commitment()) &&
+			bytes.Equal(head.GetGroupId(), key.GroupId().Bytes()) {
+			committed = true
+		}
+	}
+	if !committed {
+		t.Fatalf("evs holds no main head at version 1 in generation 1: %v", heads)
 	}
 
-	if tip, err := engines.Api().Tip(ctx, networkId); err != nil || tip != nil {
-		t.Fatalf("api's log of a network whose bootstrap stopped: %v %v", tip, err)
+	// the daemon's follower, started now the network exists, stands on base 1 over the real head reader
+	if startUrConfigFollower(running, sidecar.NewNoopLogger()) == nil {
+		t.Fatal("no follower started")
 	}
-	net.Clock().Advance(urConfigFollowerSettings().AnchorRetryInterval)
 	follower := running.ConfigFollower()
-	if follower.Client() != nil || follower.VerifiedState() != nil || running.Admitted() {
-		t.Fatalf("a follower stood on a network with no base 1: %+v", follower.Status())
+	standCtx, standCancel := context.WithTimeout(ctx, urTestTimeout)
+	defer standCancel()
+	client, err := follower.WaitStanding(standCtx)
+	if err != nil {
+		t.Fatalf("the follower: %v (%+v)", err, follower.Status())
+	}
+	if pin := client.Pin(); pin.GetVersion() != 1 || !bytes.Equal(pin.GetChain(), bootstrap.Pin.GetChain()) {
+		t.Fatalf("the follower stands at %v", pin)
+	}
+	head, err := follower.Heads().ReadConfigHead(standCtx, 1, result.Chain[:])
+	if err != nil || !bytes.Equal(head.File(sidecar.ConfigHeadGenesisPath), bootstrap.SignedGenesis) {
+		t.Fatalf("the head reader's first head: %v", err)
+	}
+	if !running.Admitted() {
+		t.Fatal("the first device is not admitted at base 1")
 	}
 }
