@@ -103,6 +103,10 @@ barrier config.apply.after config_apply.go
 barrier config.apply.before config_apply.go
 barrier config.bridge_rejudge config_state_at.go
 barrier config.bridge_rejudge.before config_state_at.go
+barrier config.member_remove.effects.after config_member_remove.go
+barrier config.member_remove.effects.before config_member_remove.go
+barrier config.member_remove.sign.after config_member_remove.go
+barrier config.member_remove.sign.before config_member_remove.go
 barrier config.restore config_replay.go
 barrier config.run.checked config_rows_only.go
 barrier daemon.claims.choose.after daemon_claims.go

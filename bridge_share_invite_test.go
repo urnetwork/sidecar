@@ -33,10 +33,56 @@ type testBridgeShareServer struct {
 	completeErr error
 	// run as a completion arrives, before it is stored
 	onComplete func()
+	// held across a side's call, which sets caller (testBridgeShareSide)
+	callLock sync.Mutex
 }
 
 func newTestBridgeShareServer(caller Id) *testBridgeShareServer {
 	return &testBridgeShareServer{caller: caller, rows: map[Id]*BridgeShareRow{}, codes: map[[sha256.Size]byte]Id{}}
+}
+
+// One network's sidecar calling a server two networks' filers share: each call runs as that network's.
+type testBridgeShareSide struct {
+	server *testBridgeShareServer
+	caller Id
+}
+
+var _ BridgeShareApi = (*testBridgeShareSide)(nil)
+
+// Runs call as the side's network.
+func (self *testBridgeShareSide) as(call func()) {
+	self.server.callLock.Lock()
+	defer self.server.callLock.Unlock()
+	func() {
+		self.server.stateLock.Lock()
+		defer self.server.stateLock.Unlock()
+		self.server.caller = self.caller
+	}()
+	call()
+}
+
+func (self *testBridgeShareSide) InviteBridgeShare(ctx context.Context, args *BridgeShareInviteArgs) (reply *BridgeShareInviteReply, err error) {
+	self.as(func() { reply, err = self.server.InviteBridgeShare(ctx, args) })
+	return
+}
+
+func (self *testBridgeShareSide) ClaimBridgeShare(ctx context.Context, codeHash []byte) (row *BridgeShareRow, err error) {
+	self.as(func() { row, err = self.server.ClaimBridgeShare(ctx, codeHash) })
+	return
+}
+
+func (self *testBridgeShareSide) CompleteBridgeShare(ctx context.Context, shareId Id, aliasTable []byte, version uint64, status BridgeShareAcceptStatus) (row *BridgeShareRow, err error) {
+	self.as(func() { row, err = self.server.CompleteBridgeShare(ctx, shareId, aliasTable, version, status) })
+	return
+}
+
+// A side's network reads only a share it is a side of, as the route answers.
+func (self *testBridgeShareSide) GetBridgeShare(ctx context.Context, shareId Id) (row *BridgeShareRow, err error) {
+	self.as(func() { row, err = self.server.GetBridgeShare(ctx, shareId) })
+	if err == nil && row.SharingNetworkId != self.caller && row.AcceptingNetworkId != self.caller {
+		return nil, errors.New("404: no such share")
+	}
+	return
 }
 
 func testBridgeShareRowCopy(row *BridgeShareRow) *BridgeShareRow {
@@ -147,7 +193,13 @@ type testBridgeShareWorld struct {
 
 func newTestBridgeShareWorld(t *testing.T, admin bool) *testBridgeShareWorld {
 	t.Helper()
-	world := newTestBridgeFileWorld(t, admin)
+	return newTestBridgeShareWorldOf(t, admin, "network")
+}
+
+// newTestBridgeShareWorld on a network whose id networkLabel names, so two worlds stand for a share's two networks.
+func newTestBridgeShareWorldOf(t *testing.T, admin bool, networkLabel string) *testBridgeShareWorld {
+	t.Helper()
+	world := newTestBridgeFileWorldOf(t, admin, networkLabel)
 	keys := newTestBridgeShareKeys(t)
 	self := &testBridgeShareWorld{
 		testBridgeFileWorld: world, server: newTestBridgeShareServer(world.net.networkId), keys: keys,
@@ -365,6 +417,85 @@ func TestAcceptPostsItsRefusalWithItsShortfall(t *testing.T) {
 	}
 	if head, _ := world.heads.savedHead(); head != nil {
 		t.Fatal("a refused accept wrote a head")
+	}
+}
+
+// §22.7's oversized (/8, /16) and full-block shares, refused with their reason end to end (BRIDGE-M6-08; §17.9's space
+// row, D-BRIDGE-20): two networks' filers over one routes' fake. The sharing network's filer invites; the accepting
+// network's filer claims, opens the target table, refuses at its preflight and posts its sealed shortfall, filing and
+// keying nothing; and the sharing network's approving admin is shown the refusal, the accepting network and the same
+// figures, and its activation files nothing and writes no head. A full block is the accepting network's upper /17
+// taken whole, by another share's alias or by the first of two /17 targets.
+func TestARefusedShareShowsItsReasonToTheSharingNetwork(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name     string
+		prefixes []string
+		// another share's alias takes the accepting network's whole upper /17 first
+		full   bool
+		status BridgeShareAcceptStatus
+		reason error
+		index  uint32
+	}{
+		{name: "a /8", prefixes: []string{"10.0.0.0/8"}, status: BridgeShareAcceptStatusRefusedTooLarge, reason: ErrBridgeShareTooLarge, index: 0},
+		{name: "a /16", prefixes: []string{"192.168.7.0/24", "172.16.0.0/16"}, status: BridgeShareAcceptStatusRefusedTooLarge, reason: ErrBridgeShareTooLarge, index: 1},
+		{name: "a full block", prefixes: []string{"192.168.7.9/32"}, full: true, status: BridgeShareAcceptStatusRefusedNoSpace, reason: ErrBridgeShareNoSpace, index: 0},
+		{name: "two /17s", prefixes: []string{"192.168.0.0/17", "192.168.128.0/17"}, status: BridgeShareAcceptStatusRefusedNoSpace, reason: ErrBridgeShareNoSpace, index: 1},
+	} {
+		sharing := newTestBridgeShareWorldOf(t, true, "the sharing network")
+		accepting := newTestBridgeShareWorldOf(t, true, "the accepting network")
+		routes := newTestBridgeShareServer(Id{})
+		sharing.filer.args.Share.Api = &testBridgeShareSide{server: routes, caller: sharing.net.networkId}
+		accepting.filer.args.Share.Api = &testBridgeShareSide{server: routes, caller: accepting.net.networkId}
+		if c.full {
+			accepting.competitor(0x8000, 17)
+		}
+		requests := []*BridgeShareTargetRequest{}
+		for _, prefix := range c.prefixes {
+			requests = append(requests, &BridgeShareTargetRequest{Host: sharing.hostId, Prefix: netip.MustParsePrefix(prefix)})
+		}
+		invite, err := sharing.filer.Invite(ctx, sharing.confirmed(), &BridgeShareInviteRequest{Targets: requests})
+		if err != nil {
+			t.Fatalf("%s: the invite: %v", c.name, err)
+		}
+
+		postCount := accepting.api.postCount()
+		_, err = accepting.filer.AcceptInvite(ctx, accepting.confirmed(), invite.Code)
+		refusal := (*BridgeShareRefusal)(nil)
+		if !errors.Is(err, ErrBridgeFileRefused) || !errors.As(err, &refusal) || !errors.Is(err, c.reason) {
+			t.Fatalf("%s: the accept: %v", c.name, err)
+		}
+		if accepting.api.postCount() != postCount {
+			t.Errorf("%s: the refused accept filed %d statements", c.name, accepting.api.postCount()-postCount)
+		}
+		if head, _ := accepting.heads.savedHead(); head != nil {
+			t.Errorf("%s: the refused accept wrote a head", c.name)
+		}
+		if _, err := accepting.keys.keyring.PublicKey(ctx, invite.ShareId); !errors.Is(err, ErrBridgeShareKeyAbsent) {
+			t.Errorf("%s: the refused share made a key: %v", c.name, err)
+		}
+
+		preview, err := sharing.filer.PreviewShare(ctx, sharing.confirmed(), invite.ShareId)
+		if err != nil {
+			t.Fatalf("%s: the preview: %v", c.name, err)
+		}
+		if preview.Status != c.status || preview.AcceptingNetworkId != accepting.net.networkId || preview.Aliases != nil ||
+			len(preview.SharePublicKey) != 0 || preview.Shortfall.GetIndex() != c.index || !proto.Equal(preview.Shortfall, refusal.Shortfall) {
+			t.Errorf("%s: the sharing network is shown %+v, the refusal %v", c.name, preview, refusal.Shortfall)
+		}
+		if c.full && (preview.Shortfall.GetFreeAddressCount() != 0 || preview.Shortfall.GetLargestFreeLength() != bridgeShareNoFreeLength) {
+			t.Errorf("%s: a full block's figures: %v", c.name, preview.Shortfall)
+		}
+		if _, err := sharing.filer.ActivateShare(ctx, sharing.confirmed(), preview, 0); !errors.Is(err, ErrBridgeFileRefused) {
+			t.Errorf("%s: the refused share's activation: %v", c.name, err)
+		}
+		if head, _ := sharing.heads.savedHead(); head != nil || sharing.api.postCount() != 0 {
+			t.Errorf("%s: the refused share's activation filed or wrote a head", c.name)
+		}
+		// the refusal is final for the accepting network too
+		if _, err := accepting.filer.AcceptInvite(ctx, accepting.confirmed(), invite.Code); !errors.Is(err, ErrBridgeFileRefused) {
+			t.Errorf("%s: a second accept: %v", c.name, err)
+		}
 	}
 }
 

@@ -123,9 +123,14 @@ type testConfigNet struct {
 // A network at base 1: its owner a member with role OWNER and its first device the genesis device, base 1 signed by
 // it with the default settings.
 func newTestConfigNet(t testing.TB) *testConfigNet {
+	return newTestConfigNetOf(t, "network")
+}
+
+// newTestConfigNet's network under the id networkLabel names, for a test that runs two networks side by side.
+func newTestConfigNetOf(t testing.TB, networkLabel string) *testConfigNet {
 	self := &testConfigNet{
 		t:             t,
-		networkId:     testConfigId("network"),
+		networkId:     testConfigId(networkLabel),
 		ownerMemberId: testConfigId("owner member"),
 		source:        newTestConfigRowsSource(),
 		timeMs:        testConfigStartMs,
