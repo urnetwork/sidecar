@@ -686,6 +686,19 @@ func (self *DirectoryErasureRunner) Pending() []*DirectoryErasurePending {
 	return pending
 }
 
+// `ur status`'s directory lines on this device, with no runner made and nothing erased or raised: its own revocations
+// still waiting (RevocationStatusLines), then on a directory admin's device the runner's lines (StatusLines). settings
+// nil reads the defaults.
+func (self *DirectoryClient) ErasureStatusLines(settings *DirectoryErasureSettings) []string {
+	if settings == nil {
+		settings = DefaultDirectoryErasureSettings()
+	}
+	lines := self.RevocationStatusLines()
+	// a runner value for its reading alone: it holds no hook, eraser or timer, so it runs nothing
+	reading := &DirectoryErasureRunner{client: self, settings: settings}
+	return append(lines, reading.StatusLines()...)
+}
+
 // `ur status`'s lines on a directory admin's device: each request still pending past 24 h, and the oldest waiting one
 // with how many wait (§16.11's revoke and readers rows). None on a device that is no directory admin.
 func (self *DirectoryErasureRunner) StatusLines() []string {

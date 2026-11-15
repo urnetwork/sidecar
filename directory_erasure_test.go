@@ -204,6 +204,13 @@ func TestDirectoryRunnerErasesExactlyTheCopiesNamingTheRepo(t *testing.T) {
 	if len(lines) != 2 || !strings.Contains(lines[0], "1 erasure request(s) wait") || !strings.Contains(lines[1], "pending for 25h, past 24h") || !strings.Contains(lines[1], repoId.String()) {
 		t.Errorf("an admin's status lines: %v", lines)
 	}
+	// what ur status reads, with no runner of its own: the admin's lines, and the revoker's own pending one
+	if read := admin.client.ErasureStatusLines(nil); !slices.Equal(read, lines) {
+		t.Errorf("ur status on the admin's device: %v", read)
+	}
+	if read := owner.client.ErasureStatusLines(nil); len(read) == 0 || !strings.Contains(read[0], "is pending for 25h") {
+		t.Errorf("ur status on the revoker's device: %v", read)
+	}
 	// before the delay ends nothing goes
 	world.clock.Advance(3 * time.Minute)
 	if pass := admin.pass(t, runner); len(pass.Erased) != 0 {
