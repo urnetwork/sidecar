@@ -4,9 +4,10 @@
 // sharing network X is a BridgeNet whose host serves a share the accepting network Y holds, every part of it X's own
 // and real: the share's grant activated through X's ACL by its admin's decision under §16.6's spend check, the grant
 // file pinning Y's ShareKey, K and both tables' hashes written into X's head, the share's row at api sealed under K,
-// and the host's compile, device role, provider NAT and upstream the BridgeNet's. Y is what X's host sees of it: its
-// network id, the ShareKey its approving admin holds, the ShareSigners each generation of its config certifies, and
-// window clients whose contracts carry a ShareSigner's delegation, FriendsAndFamily and sealed to Y.
+// and the host's compile, device role, provider NAT and upstream the BridgeNet's. Y is what X's host and the platform
+// see of it: its network id, its verified ACL state, two readers of its config with their own clients on the platform,
+// the ShareKey its approving admin holds, the ShareSigners each generation of its config certifies, and window clients
+// whose contracts carry a ShareSigner's delegation, FriendsAndFamily and sealed to Y.
 //
 //	activate  X's admin requests the share's grant, a dial on the host for network:Y under the implicit document's
 //	          shares rule (QD-820), decides it on its own device and spends the decision in a GrantActivate
@@ -17,11 +18,20 @@
 //	          fetches it from the world (BridgeNetHostSettings.ShareRows), since no api serves these networks
 //	sign      a ShareCert of a generation by Y's ShareKey, and a delegation by that generation's ShareSigner, as Y's
 //	          keyring and sidecars make them (bridge.ShareCertSigned, bridge.ShareSignerSign)
+//	readers   Y's state, a hand-made one (FakeAclView): two sidecars of Y's owner, the granted reader, whose rule
+//	          dials network:X (Y's half of §8.11's intersection), and the ungranted reader, which no rule of Y's lets
+//	          reach X (CC-05's reader); each has its own client on the platform, in Y's network, bound to it
+//	gate      both networks' verified states handed to the platform (BridgeNetSharePlatform), which settles a contract
+//	          between them as its contract gate's share half and CreateContract do: T2's in memory over the same
+//	          states (sidecar.AclShareReach), T3's through server's own gate and CreateContract (server's
+//	          connect_bridge_m6_test.go)
 //
-// Y's routers are not run here: a share window is the operator's minted client, whose every contract the test mints
-// FriendsAndFamily and sealed to Y, so what the host admits rests on its own checks alone, which is FS-38's question;
-// Y's honest gate and routers are ACL's and the sender's tests'. Safe for concurrent use. A BridgeShareNet is closed by
-// its test, before its Net.
+// Two kinds of window reach the host. A reader's window (OpenReaderWindow) is the honest one: a child of the reader's
+// own client on the platform, whose contracts the platform issues and seals itself, the subject its rows store and Y,
+// with the delegation the window carries. A minted window (OpenWindow) is the operator's, every contract minted
+// FriendsAndFamily and sealed to whatever the test names, so what the host admits rests on its own checks alone, which
+// is FS-38's question. Y's routers are not run here (the sender's share link is the device's and compile's tests').
+// Safe for concurrent use. A BridgeShareNet is closed by its test, before its Net.
 
 package sidecartest
 
@@ -69,6 +79,19 @@ func DefaultBridgeShareNetSettings() *BridgeShareNetSettings {
 	}
 }
 
+// What a platform answers about shares between networks (§8.11, §6.10.1 item 4), beside BridgeNetPlatform: it takes
+// each network's verified ACL state, which its contract rule reads for that network's half of a share, and says which
+// network each contract it issued was escrowed from. A platform without it settles no share, so every honest contract
+// between two networks' clients is refused and only the operator's minted ones reach a share's host. Safe for
+// concurrent use.
+type BridgeNetSharePlatform interface {
+	// Takes each network's verified state, which the platform's contract rule reads from then on, in place of any it
+	// held for that network.
+	SetShareStates(ctx context.Context, states map[sidecar.Id]*sidecar.AclGateSnapshot) error
+	// The network the contract's escrow was reserved from, and false for a contract the platform did not issue.
+	ContractPayer(ctx context.Context, contractId connect.Id) (sidecar.Id, bool, error)
+}
+
 // One share between two networks. See the file's comment.
 type BridgeShareNet struct {
 	t        AdmissionT
@@ -77,9 +100,11 @@ type BridgeShareNet struct {
 	X          *BridgeNet
 	Host       *BridgeNetHost
 	HostDevice *BridgeNetDevice
-	// Y, the accepting network, and a sidecar of it whose delegations the test signs
+	// Y, the accepting network; its granted reader, whose delegations the test signs unless it names another subject;
+	// and its ungranted reader, whom no rule of Y's lets reach X
 	AcceptingNetworkId sidecar.Id
 	AcceptingSidecarId sidecar.Id
+	UngrantedSidecarId sidecar.Id
 	ShareId            sidecar.Id
 	// the share's GrantActivate's grant_id, which the grant file names
 	GrantId []byte
@@ -88,6 +113,10 @@ type BridgeShareNet struct {
 	row      *sidecar.BridgeShareRow
 	// the host's posture store, which a restart restores from
 	postureStore *bridgeNetPostureStore
+	// Y's verified state, which the platform takes beside X's
+	acceptingState *sidecar.AclGateSnapshot
+	// each reader's own client on the platform, by sidecar
+	readerClientIds map[sidecar.Id]connect.Id
 }
 
 // The implicit document's shares rule (§8.5), its third requests rule after four grants: rule i takes the first 16
@@ -121,13 +150,14 @@ func NewBridgeShareNet(t AdmissionT, net *Net, settings *BridgeShareNetSettings)
 		settings:           settings,
 		X:                  NewBridgeNet(t, net, &withSpend),
 		AcceptingNetworkId: sidecar.NewId(),
-		AcceptingSidecarId: sidecar.NewId(),
 		ShareId:            sidecar.NewId(),
+		readerClientIds:    map[sidecar.Id]connect.Id{},
 	}
 	shareSeed := make([]byte, ed25519.SeedSize)
 	rand.Read(shareSeed)
 	self.shareKey = ed25519.NewKeyFromSeed(shareSeed)
 	self.HostDevice = self.X.AddDevice("share host")
+	self.accepting()
 	self.activate()
 	self.pin()
 	self.postureStore = newBridgeNetPostureStore()
@@ -138,7 +168,114 @@ func NewBridgeShareNet(t AdmissionT, net *Net, settings *BridgeShareNetSettings)
 		PostureStore:            self.postureStore,
 	})
 	self.waitShare()
+	self.gate()
 	return self
+}
+
+// Y's state and its readers' clients (the file's readers row): the granted reader's rule dials network:X, and the
+// ungranted reader has none.
+func (self *BridgeShareNet) accepting() {
+	self.t.Helper()
+	view := NewFakeAclView()
+	owner := view.AddMember(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	self.AcceptingSidecarId = view.AddDevice(owner)
+	self.UngrantedSidecarId = view.AddDevice(owner)
+	atom := FakeAclSidecarAtom(self.AcceptingSidecarId)
+	rows := &sidecarprotocol.AclRows{
+		HasDocument: true,
+		Atoms:       []*sidecarprotocol.AclAtom{atom},
+		Rules: []*sidecarprotocol.AclRule{{
+			RuleId:   sidecar.NewId().Bytes(),
+			SrcAtoms: [][]byte{atom.Atom},
+			Targets:  []*sidecarprotocol.AclTarget{{NetworkId: self.X.NetworkId().Bytes()}},
+			Actions:  []uint32{uint32(sidecarprotocol.AclAction_ACL_ACTION_DIAL)},
+		}},
+	}
+	state, err := sidecar.NewAclState(rows, view)
+	if err != nil {
+		self.t.Fatalf("Y's state: %v", err)
+	}
+	self.acceptingState = &sidecar.AclGateSnapshot{Pin: view.Pin(), Acl: state}
+	for _, reader := range []struct {
+		name      string
+		sidecarId sidecar.Id
+	}{
+		{name: "Y's reader", sidecarId: self.AcceptingSidecarId},
+		{name: "Y's ungranted reader", sidecarId: self.UngrantedSidecarId},
+	} {
+		clientId, err := self.X.platform.AddClient(self.X.Net().Context(), &BridgeNetClientArgs{
+			Name: reader.name, NetworkId: self.AcceptingNetworkId, SidecarId: reader.sidecarId,
+		})
+		if err != nil {
+			self.t.Fatalf("%s's client: %v", reader.name, err)
+		}
+		self.readerClientIds[reader.sidecarId] = clientId
+	}
+}
+
+// Both networks' verified states to the platform (the file's gate row), X's as its readers hold it now. A platform
+// that settles no share takes nothing.
+func (self *BridgeShareNet) gate() {
+	self.t.Helper()
+	platform, ok := self.X.platform.(BridgeNetSharePlatform)
+	if !ok {
+		return
+	}
+	state := self.X.Admission().State()
+	acl, err := state.Acl()
+	if err != nil {
+		self.Close()
+		self.t.Fatalf("X's acl state: %v", err)
+	}
+	if err := platform.SetShareStates(self.X.Net().Context(), map[sidecar.Id]*sidecar.AclGateSnapshot{
+		self.X.NetworkId():      {Pin: state.Pin(), Config: state, Acl: acl},
+		self.AcceptingNetworkId: self.acceptingState,
+	}); err != nil {
+		self.Close()
+		self.t.Fatalf("the platform took no share states: %v", err)
+	}
+}
+
+// A reader's own client on the platform, in Y's network.
+func (self *BridgeShareNet) ReaderClientId(readerId sidecar.Id) connect.Id {
+	return self.readerClientIds[readerId]
+}
+
+// The network each contract was escrowed from, the platform's answer (BridgeNetSharePlatform); an error for a platform
+// that settles no share or a contract it did not issue.
+func (self *BridgeShareNet) ContractPayer(contractId connect.Id) (sidecar.Id, error) {
+	platform, ok := self.X.platform.(BridgeNetSharePlatform)
+	if !ok {
+		return sidecar.Id{}, fmt.Errorf("the platform settles no share")
+	}
+	payer, found, err := platform.ContractPayer(self.X.Net().Context(), contractId)
+	switch {
+	case err != nil:
+		return sidecar.Id{}, err
+	case !found:
+		return sidecar.Id{}, fmt.Errorf("the platform issued no contract %s", contractId)
+	}
+	return payer, nil
+}
+
+// A reader's honest window to the host (the file's comment): a child of the reader's own client in Y's network, its
+// contracts the platform's, carrying the reader's delegation by signerGeneration's ShareSigner under cert.
+func (self *BridgeShareNet) OpenReaderWindow(name string, readerId sidecar.Id, cert func() []byte, signerGeneration uint64) *BridgeNetWindow {
+	self.t.Helper()
+	parentClientId, found := self.readerClientIds[readerId]
+	if !found {
+		self.t.Fatalf("no reader %s of Y's", readerId)
+	}
+	return self.X.OpenWindow(name, nil, self.Host, &BridgeNetWindowArgs{
+		ProvideMode:    protocol.ProvideMode_FriendsAndFamily,
+		NetworkId:      self.AcceptingNetworkId,
+		ParentClientId: &parentClientId,
+		Sign: func(window *BridgeNetWindow) []byte {
+			return self.Delegation(window, cert(), signerGeneration, func(delegation *bridge.WindowDelegation) {
+				delegation.SubjectSidecarId = readerId.Bytes()
+			})
+		},
+	})
 }
 
 // Waits until the host's state holds the share: its first compile waits for the share's row, which its fetcher takes
@@ -407,3 +544,87 @@ func (self *BridgeShareNet) RestartHost() {
 	self.Host.Address = self.settings.HostAddress
 	self.waitShare()
 }
+
+var _ BridgeNetSharePlatform = (*bridgeNetFakePlatform)(nil)
+
+// Keeps each network's state, which shareSettles reads.
+func (self *bridgeNetFakePlatform) SetShareStates(ctx context.Context, states map[sidecar.Id]*sidecar.AclGateSnapshot) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for networkId, snapshot := range states {
+		if snapshot == nil || snapshot.Acl == nil {
+			return fmt.Errorf("network %s's state holds no acl part", networkId)
+		}
+		self.shareStates[networkId] = snapshot
+	}
+	return nil
+}
+
+// The payer createContract kept.
+func (self *bridgeNetFakePlatform) ContractPayer(ctx context.Context, contractId connect.Id) (sidecar.Id, bool, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	payer, found := self.contractPayers[contractId]
+	return payer, found, nil
+}
+
+// How a contract between two networks' clients settles as a share, as server's CreateContract settles one (§6.10.1
+// item 4; model.AclShareBetween over the gate's share half, acl_share.go): a non-companion from a sidecar's subject of
+// one network to another network's sidecar's own client is FriendsAndFamily when both halves hold, each on its own
+// network's state (sidecar.AclShareReach on the Net's clock), and the destination provides FriendsAndFamily; a
+// companion answering such a contract is Stream, sealed as its forward contract. false refuses the contract: no client
+// here provides Public, which server's Public rule would leave such a pair to.
+func (self *bridgeNetFakePlatform) shareSettles(
+	sourceId connect.Id,
+	source *bridgeNetFakeClient,
+	destinationId connect.Id,
+	destination *bridgeNetFakeClient,
+	companion bool,
+) (protocol.ProvideMode, bool) {
+	var sourceState, destinationState *sidecar.AclGateSnapshot
+	var answersShare bool
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		sourceState, destinationState = self.shareStates[source.networkId], self.shareStates[destination.networkId]
+		_, answersShare = self.shareOrigins[[2]connect.Id{destinationId, sourceId}]
+	}()
+	if companion {
+		return protocol.ProvideMode_Stream, answersShare
+	}
+	if source.subjectSidecarId == (sidecar.Id{}) || destination.subjectSidecarId == (sidecar.Id{}) || destination.subjectClientId != destinationId {
+		// a subject the gate cannot tell, or a destination that is no sidecar's own client
+		return protocol.ProvideMode_None, false
+	}
+	if sourceState == nil || destinationState == nil {
+		return protocol.ProvideMode_None, false
+	}
+	outbound, inbound := sidecar.AclShareReach(
+		sourceState.Acl, source.networkId, sidecar.AclSubject{Kind: sidecar.AclSubjectSidecar, Id: source.subjectSidecarId},
+		destinationState.Acl, destination.networkId, sidecar.AclSubject{Kind: sidecar.AclSubjectSidecar, Id: destination.subjectSidecarId},
+		self.net.Clock().Now(),
+	)
+	if !outbound.Allowed || !inbound.Allowed {
+		return protocol.ProvideMode_None, false
+	}
+	client := self.net.exchange.client(destinationId)
+	if client == nil {
+		return protocol.ProvideMode_None, false
+	}
+	if _, provides := client.Client.ContractManager().GetProvideSecretKey(protocol.ProvideMode_FriendsAndFamily); !provides {
+		return protocol.ProvideMode_None, false
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.shareOrigins[[2]connect.Id{sourceId, destinationId}] = struct{}{}
+	}()
+	return protocol.ProvideMode_FriendsAndFamily, true
+}
+
+// §22.7's FriendsAndFamily clause, on both tiers: FS-38's share case, whose twin runs a reader's honest window on the
+// platform's contracts beside the operator's minted one (sidecartest/fault/fs_bridge_m6.go).
+var (
+	_ = RegisterPrivacyAssert("friends-and-family", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest/fault", Name: "TestFs38Share"})
+	_ = RegisterPrivacyAssert("friends-and-family", &PrivacyAssertTest{Repo: "server", Package: "github.com/urnetwork/server/controller", Name: "TestFs38ShareOnT3", Tags: "sidecar_pending"})
+)
