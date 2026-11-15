@@ -722,6 +722,9 @@ message EvsPartRequest {
 // 11.13's re-seed row's body, the owner's answer to evsb-m2-19-reseed-route-body (QD-725).
 message EvsReseedRequest {
   bytes statement = 1; bytes payload = 2; repeated bytes parts = 3; bytes slot_id = 4; bytes slot = 5;
+  // QD-836 (question evs-reseed-parts-request-bound): a push in parts goes one part a call, then a seal naming the
+  // parts' places.
+  uint32 part_number = 6; repeated EvsPlace part_places = 7;
 }
 message EvsLeaseRequest { bytes ref_id = 1; uint64 base_version = 2; uint32 ms = 3; }
 // 11.6's map and block rows and 11.10's lease row, whose bodies plan-EVS1-format-bytes#8 does not list: proposed by

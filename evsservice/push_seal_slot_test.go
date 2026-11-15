@@ -351,8 +351,9 @@ func TestSealSlotsStandForTheRetryOfASealWhoseRecordWasNotWritten(t *testing.T) 
 	}
 }
 
-// A re-seeded push in parts whose part holds section 7 is refused 400 INVALID writing nothing, its statement signed
-// again over the changed part so only section 7 refuses it; its parts as built, which carry no body, re-seed (QD-819).
+// A re-seeded part that holds section 7 is refused at its call 400 INVALID writing nothing, its statement signed again
+// over the changed part so only section 7 refuses it; the push's parts as built, which carry no body, re-seed a part a
+// call and then their seal (QD-819, QD-836).
 func TestReseedOfAPartHoldingSlotBodiesIsRefused(t *testing.T) {
 	fixture := newReseedFixture(t)
 	slot := newSealTestSlot(t, "reseeded part", 1)
@@ -403,11 +404,12 @@ func TestReseedOfAPartHoldingSlotBodiesIsRefused(t *testing.T) {
 		t.Fatal("the statement signed again over the parts as built is not the builder's")
 	}
 	parts := append(slices.Clone(built.Parts[:last]), holding)
-	requireRefusal(t, fixture.reseed(&protocol.EvsReseedRequest{Statement: resign(parts), Parts: parts}), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	holdingCall := &protocol.EvsReseedRequest{Statement: resign(parts), Parts: [][]byte{holding}, PartNumber: uint32(last + 1)}
+	requireRefusal(t, fixture.reseed(holdingCall), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 	if records := fixture.batchRecords(); len(records) != 0 || !fixture.head().Absent() {
 		t.Fatalf("the refused re-seed wrote %d records or the head", len(records))
 	}
-	fixture.requireCommitted(fixture.reseed(reseedPartsBody(built)), 1)
+	fixture.requireCommitted(fixture.reseedInParts(built), 1)
 	fixture.awaitStepEights()
 	if sealTestHolds([]*sealTestSlot{slot}, fixture.batchRecords()...) {
 		t.Fatal("a re-seeded record holds the slot's body or key")
