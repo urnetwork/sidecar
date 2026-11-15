@@ -34,7 +34,6 @@
 package fault
 
 import (
-	"bufio"
 	"bytes"
 	"compress/zlib"
 	"context"
@@ -425,10 +424,8 @@ func gitShapeOfUpdate(update *GitPushUpdate) string {
 // is an error, since a push that reported nothing is no evidence.
 func ParseGitPushPorcelain(output string) ([]*GitPushUpdate, error) {
 	updates := []*GitPushUpdate{}
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		fields := strings.Split(line, "\t")
 		if len(fields) != 3 || len(fields[0]) != 1 || !strings.Contains(" +-*!=", fields[0]) {
 			continue
@@ -448,9 +445,6 @@ func ParseGitPushPorcelain(output string) ([]*GitPushUpdate, error) {
 			update.Status = GitPushRejected
 		}
 		updates = append(updates, update)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	if len(updates) == 0 {
 		return nil, fmt.Errorf("git push's porcelain output holds no ref's line: %q", output)
@@ -530,9 +524,12 @@ func gitIsOid(text string) bool {
 	return err == nil && strings.ToLower(text) == text
 }
 
-// The oid ref names, following a symbolic ref; false when the repository holds no such ref.
+// The oid ref names, following symbolic refs; false when the repository holds no such ref. A symbolic ref that comes
+// back to one it passed is an error.
 func (self *GitRepository) Ref(ref string) (string, bool, error) {
-	for depth := 0; depth < 8; depth += 1 {
+	followed := map[string]bool{}
+	for !followed[ref] {
+		followed[ref] = true
 		body, err := os.ReadFile(filepath.Join(self.dir, filepath.FromSlash(ref)))
 		if errors.Is(err, os.ErrNotExist) {
 			oid, ok := self.packedRefs[ref]
@@ -551,7 +548,7 @@ func (self *GitRepository) Ref(ref string) (string, bool, error) {
 		}
 		return text, true, nil
 	}
-	return "", false, fmt.Errorf("ref %s: symbolic refs nest too deep", ref)
+	return "", false, fmt.Errorf("ref %s: symbolic refs form a cycle", ref)
 }
 
 // The object oid names, inflated and hashed again: an object whose bytes do not hash to its name, or whose header
