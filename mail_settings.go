@@ -22,6 +22,8 @@ type MailSettings struct {
 	Store *MailStoreSettings
 	// A receiver's parts, on the legs a receiver builds on; nothing on the page Worker's.
 	Receive *MailReceiveSettings
+	// What IMAP's store lists and keeps (mail_imap_store.go).
+	Imap *MailImapSettings
 	// The most bytes Read takes of one message: the largest mail_inbound_message_bytes (50 MiB, §20.4) and the
 	// headers ingest adds, as ingest's own bound holds a deposit.
 	ReadMaxByteCount int
@@ -47,6 +49,7 @@ func DefaultMailSettings() *MailSettings {
 		Ingest:                      ingest,
 		Store:                       DefaultMailStoreSettings(),
 		Receive:                     defaultMailReceiveSettings(),
+		Imap:                        DefaultMailImapSettings(),
 		ReadMaxByteCount:            int(ingest.DepositMaxByteCount),
 		ReadHeaderValueMaxByteCount: 4 * 1024,
 		ReadHeaderMaxCount:          32,
@@ -58,7 +61,7 @@ func DefaultMailSettings() *MailSettings {
 
 // Whether every value is in range.
 func (self *MailSettings) valid() bool {
-	return self != nil && self.Config != nil && self.Ingest != nil && self.Store != nil && self.Receive != nil &&
+	return self != nil && self.Config != nil && self.Ingest != nil && self.Store != nil && self.Receive != nil && self.Imap != nil &&
 		0 < self.ReadMaxByteCount && 0 < self.ReadHeaderValueMaxByteCount && 0 < self.ReadHeaderMaxCount &&
 		0 < self.AddressScanMaxCount && 0 < self.CheckInterval && 0 < self.UnboundCheckInterval
 }

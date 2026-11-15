@@ -59,9 +59,8 @@ modules:
     leg: [cli]
   - module: github.com/emersion/go-imap/v2
     spdx: MIT
-    reason: MAIL-M8-07's IMAP server (§15.7, I-17) at v2.0.0-beta.8, since it has only pre-release tags; read from its LICENSE
+    reason: MAIL-M8-07's IMAP server, its imapserver behind the daemon's thin seam, and its imapclient as the stock client of the server's tests (§15.7, D-MAIL-11, I-17), at v2.0.0-beta.9, a pre-release, since v2 has only pre-release tags and this was the newest when MAIL-M8-07 began (QD-470); read from its LICENSE
     leg: [client, engine, cli, test]
-    planned: true
   - module: github.com/emersion/go-message
     spdx: MIT
     reason: D-MAIL-3's message parsing, its textproto alone, in MAIL-M7-11's bounded walk for the IndexEntry (§15.5, §15.7), at v0.18.2; read from its LICENSE

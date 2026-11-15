@@ -1,4 +1,4 @@
-# metadata_list.yml v22; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v23; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -73,6 +73,9 @@
 # the team's SCIM bearer, network_team.scim_token_sha256, which api keeps while SCIM is on.
 # v22, updated 2026-11-15 for the owner's answer QD-830 (team-m6-08-device-grant-row), adds to api-11 the device
 # authorizations api keeps in Redis, {oauthdev_<device_code_sha256>} and {oauthuser_<user_code>}, 10 min, taken once.
+# v23, updated 2026-11-15 for the owner's answer QD-819 (push-record-no-slot-bodies-part-slot-bodies), adds to
+# evs-5 how a new slot's body reaches evs, in a one-part push's payload or a push in parts' seal request, never a
+# part, and that no record keeps it (QD-806).
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -298,7 +301,7 @@ evs-4:
 evs-5:
   service: evs
   store: slot/<repo>/<slot_id> (metadata cluster)
-  sees: "slot id, up to 64 wrapped object keys (ciphertext), size up to 8 KiB, times; deposit keys HPKE-wrapped to the drop key; ERASE statements (signer, slot ids and key indexes, time); in slot-keyed repos (record-class repos, group inboxes), slots that only one versionless path's versions name, each holding that path's one key, and their deletion; slots that only executed drops' listed versions name, and their deletion by the drop's job (evs-28); each slot's origin, in object metadata: the push id, statement hash prefix, ref, signer sidecar, base version, path epoch and mode of the statement that created it, or a re-seed's mark; all of it also in that push's record (evs-12)"
+  sees: "slot id, up to 64 wrapped object keys (ciphertext), size up to 8 KiB, times; deposit keys HPKE-wrapped to the drop key; ERASE statements (signer, slot ids and key indexes, time); in slot-keyed repos (record-class repos, group inboxes), slots that only one versionless path's versions name, each holding that path's one key, and their deletion; slots that only executed drops' listed versions name, and their deletion by the drop's job (evs-28); each slot's origin, in object metadata: the push id, statement hash prefix, ref, signer sidecar, base version, path epoch and mode of the statement that created it, or a re-seed's mark; all of it also in that push's record (evs-12); each new slot's body as its push brought it, a one-part push's in its payload and a push in parts' in its seal request, never in a part, which evs writes to slot/ and keeps in no record (QD-806, QD-819)"
   why: per-entry erasure for record-class repos and mail (owner decision 61); a drop's slot deletions (owner decision 173)
   ttl: until erased (rewritten at once without the erased keys, under a preservation hold too; owner decision 133), consumed (a deposit's, by its CONSUME; evs-6) or shredded with the repo; a refused or dead push's own slots until evacuation finds it dead, at most about 26 h after its batch, a slot stored within 2 s of that or after it staying (§11.8, §11.13); never backed up (owner decision 90); owner devices' mirrors keep sealed copies until their next sync after an erasure (§11.13); a versionless path's slot until about a minute after no retained version names it (its removal, or a fresh key at a CLOSURE, a rekey or its first write after a reader's removal; §11.7), at most ~26 h when its committing process failed, at its marker's collection when its removing push did not list it (evs-11), or, existing at a hold's placement, until the hold ends (§11.13); a slot that only executed drops' listed versions name, as evs-4's kind-1 segments (§11.13)
   owner: §11.12

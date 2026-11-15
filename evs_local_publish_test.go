@@ -526,7 +526,7 @@ func (self *evsTestPublisher) metadata(name string, version uint64) *protocol.Ev
 	var checked *EvsCheckedPayload
 	var err error
 	if 0 < len(commit.built.Parts) {
-		checked, _, err = EvsCheckSeal(commit.parsed, commit.built.Parts)
+		checked, _, err = EvsCheckSeal(commit.parsed, commit.built.Parts, commit.built.SlotBodies)
 	} else {
 		checked, err = EvsCheckPayload(commit.parsed, commit.built.Payload)
 	}
@@ -913,7 +913,7 @@ func (self *evsTestPublisher) payload(name string, version uint64) *EvsCheckedPa
 	commit := world.commits[version-1]
 	world.stateLock.Unlock()
 	if 0 < len(commit.built.Parts) {
-		checked, _, err := EvsCheckSeal(commit.parsed, commit.built.Parts)
+		checked, _, err := EvsCheckSeal(commit.parsed, commit.built.Parts, commit.built.SlotBodies)
 		if err != nil {
 			self.t.Fatal(err)
 		}

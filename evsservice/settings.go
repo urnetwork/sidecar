@@ -182,8 +182,8 @@ type EvsSettings struct {
 	// How long one attempt of a push may run once the client's request has arrived, its writes going on if the
 	// client leaves: past it, 503 unknown. Within the lb's 30 s silence, 25 s. Positive.
 	PushAttemptTimeout time.Duration
-	// The body a one-part push or a seal may carry: its statement, a payload of at most 1 MiB and its receipts, 2
-	// MiB. Positive.
+	// The body a one-part push or a seal may carry: its statement, a payload of at most 1 MiB and its receipts, or a
+	// seal's part places and its slot bodies of at most 1 MiB (QD-819), 2 MiB. Positive.
 	PushBodyMaxByteCount int64
 	// POST .../reseed (§11.13's re-seed row; QD-725). The body one call may carry, a re-seeded push's statement and
 	// payload or a slot, 2 MiB; the Signed EvsReseed a call may file and reseed/<repo>/<ref> may hold, 4 KiB; how

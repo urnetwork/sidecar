@@ -328,7 +328,7 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 			parts = append(parts, partBytes)
 		}
 		var checkedParts []*EvsCheckedPart
-		checked, checkedParts, err = EvsCheckSeal(statement, parts)
+		checked, checkedParts, err = EvsCheckSeal(statement, parts, pushRequest.GetSlotBodies())
 		if err == nil {
 			partLeaves := [][][]byte{}
 			for _, checkedPart := range checkedParts {
