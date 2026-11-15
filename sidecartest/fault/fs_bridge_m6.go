@@ -22,8 +22,9 @@
 //     until a later generation's cert reaches the host, and refused on every contract after, the host restarted from
 //     its persisted state included. CC-05's row: a current Y reader with no Y grant on X asks the platform for its
 //     window's contracts, which the honest gate refuses, so nothing of it reaches the host; the same reader's valid
-//     signer on a contract the operator mints reaches X's granted target alone, and what enforced is X's grant, the
-//     host's compiled share naming it, and the platform's refusal, never a router of Y's, which runs nowhere here.
+//     signer on a contract the operator mints reaches X's granted targets and ports alone, TCP to the port target's
+//     one port and nothing else there, and what enforced is X's grant, the host's compiled share naming it, and the
+//     platform's refusal, never a router of Y's, which runs nowhere here.
 //
 // What these do not cover, each in the task's report: the accepting network's routers over a real share link (the
 // sender's share link is the device's and compile's tests'), and the accept's refusals, which bridge_share_invite's
@@ -37,6 +38,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"time"
@@ -194,14 +196,13 @@ func (self *fsShareFlows) expectOpen(payload string) error {
 	return nil
 }
 
-// The alias's neighbour in Y's block is no target of the share: the window's TCP connection there is refused, and the
-// NAT dials nothing for it.
+// The aliases' neighbour in Y's block, past the port target's alias, is no target of the share: the window's TCP
+// connection there is refused, and the NAT dials nothing for it.
 func (self *fsShareFlows) expectNeighbourRefused() error {
 	share := self.world.share
-	octets := share.Alias().As4()
-	octets[3] += 1
+	neighbour := share.PortAlias().Next()
 	dialCount := len(share.Host.Dials())
-	if conn, err := self.window.DialTcp(netip.AddrPortFrom(netip.AddrFrom4(octets), share.Host.Upstream.TcpPort())); err == nil {
+	if conn, err := self.window.DialTcp(netip.AddrPortFrom(neighbour, share.Host.Upstream.TcpPort())); err == nil {
 		conn.Close()
 		return fmt.Errorf("%s's flow past the share's targets opened", self.window.Name)
 	}
@@ -321,6 +322,86 @@ func (self *fsShareFlows) expectRefusedByPlatform(payload string) error {
 	return nil
 }
 
+// The share's port target (BridgeShareNet's second target) admits TCP to its one port alone (§17.9's FriendsAndFamily
+// row: the target's protocol and ports admit the flow): a connection there reaches the upstream under the target's
+// tag, while a datagram to the same alias, to the port the upstream's UDP listener answers on through the first
+// target, and a SYN to another TCP port, which rule 3 would map were the target to admit it, are each decided, opened
+// by nothing and dialed by nothing.
+func (self *fsShareFlows) expectPortTarget(payload string) error {
+	share := self.world.share
+	host := share.Host
+	settings := share.X.Settings()
+	windowId := self.window.Client.ClientId
+	port := share.PortTargetPort()
+	allowed := netip.AddrPortFrom(share.PortAlias(), port)
+	conn, err := self.window.DialTcp(allowed)
+	if err != nil {
+		return fmt.Errorf("%s's TCP connection to the port target: %w", self.window.Name, err)
+	}
+	if _, err := conn.Write([]byte(payload)); err != nil {
+		conn.Close()
+		return fmt.Errorf("%s's TCP payload to the port target: %w", self.window.Name, err)
+	}
+	conn.Close()
+	if !host.Upstream.WaitFor(settings.WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+		return slices.ContainsFunc(accepts, func(accept sidecartest.BridgeNetAccept) bool { return string(accept.Bytes) == payload })
+	}) {
+		return fmt.Errorf("%s's TCP payload to the port target never reached the upstream", self.window.Name)
+	}
+	tag := device.BridgeShareRuleTag(connect.Id(share.ShareId), 1)
+	if !slices.ContainsFunc(host.Decisions(windowId), func(decision *sidecartest.BridgeNetDecision) bool {
+		return decision.To == allowed && decision.Opens() && decision.RuleTag == tag
+	}) {
+		return fmt.Errorf("%s's connection to the port target opened under no tag of that target", self.window.Name)
+	}
+
+	dialCount := len(host.Dials())
+	acceptCount, datagramCount := len(host.Upstream.Accepts()), len(host.Upstream.Datagrams())
+	otherProtocol := netip.AddrPortFrom(share.PortAlias(), host.Upstream.UdpPort())
+	// another TCP port, never the daemon's listener, which rule 0 would deny whatever the target admits
+	daemonPort := uint16(0)
+	if daemon, ok := host.Daemon.Addr().(*net.TCPAddr); ok {
+		daemonPort = uint16(daemon.Port)
+	}
+	other := port
+	for other == port || other == daemonPort || other == 0 {
+		other += 1
+	}
+	otherPort := netip.AddrPortFrom(share.PortAlias(), other)
+	udp, err := self.window.SendUdp(otherProtocol, []byte(payload))
+	if err != nil {
+		return err
+	}
+	defer udp.Close()
+	if err := self.window.SendSyn(otherPort); err != nil {
+		return err
+	}
+	decisionTo := func(to netip.AddrPort) *sidecartest.BridgeNetDecision {
+		for _, decision := range host.Decisions(windowId) {
+			if decision.To == to {
+				return decision
+			}
+		}
+		return nil
+	}
+	for decisionTo(otherProtocol) == nil || decisionTo(otherPort) == nil {
+		// each wait is for one more decision of the window's, bounded by WaitTimeout
+		host.WaitDecisionCount(windowId, len(host.Decisions(windowId))+1)
+	}
+	for _, to := range []netip.AddrPort{otherProtocol, otherPort} {
+		if decision := decisionTo(to); decision.Opens() {
+			return fmt.Errorf("%s's flow to %s, past the port target's protocol and port, was opened: %+v", self.window.Name, to, decision)
+		}
+	}
+	if dials := host.Dials(); dialCount < len(dials) {
+		return fmt.Errorf("the NAT dialed %d upstream sockets more for flows past the port target's port", len(dials)-dialCount)
+	}
+	if accepts, datagrams := host.Upstream.Accepts(), host.Upstream.Datagrams(); acceptCount < len(accepts) || datagramCount < len(datagrams) {
+		return fmt.Errorf("the upstream took %d connections and %d datagrams more past the port target's port", len(accepts)-acceptCount, len(datagrams)-datagramCount)
+	}
+	return nil
+}
+
 // What enforced a share window's reach (§8.11, CC-05): X's grant, the one the host's compiled share names, and the
 // share's target, whose tag every decision that opened carries. Nothing of Y's runs here to be credited.
 func (self *fsShareFlows) expectEnforcedByXsGrant() error {
@@ -329,15 +410,15 @@ func (self *fsShareFlows) expectEnforcedByXsGrant() error {
 	if len(shares) != 1 || !bytes.Equal(shares[0].GetGrantId(), share.GrantId) || !bytes.Equal(shares[0].GetShareId(), share.ShareId.Bytes()) {
 		return errors.New("the host's compiled share is not the one X's grant activated")
 	}
-	tag := device.BridgeShareRuleTag(connect.Id(share.ShareId), 0)
+	tags := []uint64{device.BridgeShareRuleTag(connect.Id(share.ShareId), 0), device.BridgeShareRuleTag(connect.Id(share.ShareId), 1)}
 	opened := 0
 	for _, decision := range share.Host.Decisions(self.window.Client.ClientId) {
 		if !decision.Opens() {
 			continue
 		}
 		opened += 1
-		if decision.RuleTag != tag || decision.Principal == nil || decision.Principal.ShareId != connect.Id(share.ShareId) {
-			return fmt.Errorf("%s's flow opened under tag %d and principal %+v, not X's share target", self.window.Name, decision.RuleTag, decision.Principal)
+		if !slices.Contains(tags, decision.RuleTag) || decision.Principal == nil || decision.Principal.ShareId != connect.Id(share.ShareId) {
+			return fmt.Errorf("%s's flow opened under tag %d and principal %+v, not one of X's share targets", self.window.Name, decision.RuleTag, decision.Principal)
 		}
 	}
 	if opened == 0 {
@@ -454,6 +535,40 @@ func Fs38ShareRefusals(net *Net) *Schedule {
 		}))
 	}
 	steps = append(steps,
+		fsShareDo("Y's ungranted reader", world, func() error {
+			// CC-05: a current reader of Y's config whom Y grants nothing on X asks the platform, whose gate refuses
+			share := world.share
+			window := share.OpenReaderWindow("fs38 share ungranted", share.UngrantedSidecarId, func() []byte { return share.CurrentCert(7) }, 7)
+			defer window.Close()
+			if err := (&fsShareFlows{world: world, window: window, subject: share.UngrantedSidecarId}).expectRefusedByPlatform("fs38 share ungranted"); err != nil {
+				return fmt.Errorf("the ungranted reader's honest window: %w", err)
+			}
+			return nil
+		}),
+		fsShareDo("operator", world, func() error {
+			// CC-05: the same reader's valid signer on a contract the operator mints reaches X's granted targets and
+			// ports alone
+			share := world.share
+			window := share.OpenWindow("fs38 share ungranted minted", sidecar.Id{}, func(window *sidecartest.BridgeNetWindow) []byte {
+				return share.Delegation(window, share.CurrentCert(7), 7, func(delegation *bridge.WindowDelegation) {
+					delegation.SubjectSidecarId = share.UngrantedSidecarId.Bytes()
+				})
+			})
+			defer window.Close()
+			flows := &fsShareFlows{world: world, window: window, subject: share.UngrantedSidecarId}
+			if err := flows.expectOpen("fs38 share ungranted minted"); err != nil {
+				return fmt.Errorf("the ungranted reader's minted window: %w", err)
+			}
+			if err := flows.expectNeighbourRefused(); err != nil {
+				return fmt.Errorf("the ungranted reader's minted window: %w", err)
+			}
+			if err := flows.expectPortTarget("fs38 share ungranted minted port"); err != nil {
+				return fmt.Errorf("the ungranted reader's minted window: %w", err)
+			}
+			return flows.expectEnforcedByXsGrant()
+		}),
+	)
+	steps = append(steps,
 		fsShareDo("removed reader", world, func() error {
 			// a sidecar Y removed still holds generation 7's signer, which the host admits until a later cert reaches it
 			window := fsShareWindow(world, "fs38 share removed before", func() []byte { return world.share.CurrentCert(7) }, 7)
@@ -481,34 +596,6 @@ func Fs38ShareRefusals(net *Net) *Schedule {
 				return fmt.Errorf("generation 7 after the host's restart: %w", err)
 			}
 			return nil
-		}),
-		fsShareDo("Y's ungranted reader", world, func() error {
-			// CC-05: a current reader of Y's config whom Y grants nothing on X asks the platform, whose gate refuses
-			share := world.share
-			window := share.OpenReaderWindow("fs38 share ungranted", share.UngrantedSidecarId, func() []byte { return share.CurrentCert(8) }, 8)
-			defer window.Close()
-			if err := (&fsShareFlows{world: world, window: window, subject: share.UngrantedSidecarId}).expectRefusedByPlatform("fs38 share ungranted"); err != nil {
-				return fmt.Errorf("the ungranted reader's honest window: %w", err)
-			}
-			return nil
-		}),
-		fsShareDo("operator", world, func() error {
-			// CC-05: the same reader's valid signer on a contract the operator mints reaches X's granted target alone
-			share := world.share
-			window := share.OpenWindow("fs38 share ungranted minted", sidecar.Id{}, func(window *sidecartest.BridgeNetWindow) []byte {
-				return share.Delegation(window, share.CurrentCert(8), 8, func(delegation *bridge.WindowDelegation) {
-					delegation.SubjectSidecarId = share.UngrantedSidecarId.Bytes()
-				})
-			})
-			defer window.Close()
-			flows := &fsShareFlows{world: world, window: window, subject: share.UngrantedSidecarId}
-			if err := flows.expectOpen("fs38 share ungranted minted"); err != nil {
-				return fmt.Errorf("the ungranted reader's minted window: %w", err)
-			}
-			if err := flows.expectNeighbourRefused(); err != nil {
-				return fmt.Errorf("the ungranted reader's minted window: %w", err)
-			}
-			return flows.expectEnforcedByXsGrant()
 		}),
 	)
 	return fsShareSchedule("a share's contract on a cert expired, too long, not by the pinned ShareKey, or below the host's newest generation, before or after a restart, opens no socket; a reader Y grants nothing on X gets no contract from the platform", world, steps...)
