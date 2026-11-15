@@ -107,8 +107,8 @@ var canonicalActionVersion4Fields = []protoreflect.FieldNumber{
 var canonicalActionSealedGrantAllows = []string{"dial", "route"}
 
 // Whether this build's approvers know a CanonicalAction version: 1 at M3, 3, access_request's, at M6 (MCP-M6-01),
-// and 4, a dial or route grant's sealed form (QD-740). RECORD-M10's carrier switch adds 2, its rules below already
-// in force.
+// 4, a dial or route grant's sealed form (QD-740), and 2, field 37's versioning, at M10 (RECORD-M10-03), which the
+// agent-config writes alone take; the evs write honors field 37 only under §19.11's format2 gate (EvsVersioningFor).
 func CanonicalActionVersionKnown(version uint32) bool {
 	switch version {
 	case 1, canonicalActionVersionVersioning, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant:
