@@ -1482,3 +1482,128 @@ func ReadDropListFiles(ctx context.Context, segmentCluster sidecar.BlobCluster, 
 		startAfter = objects[len(objects)-1].Key
 	}
 }
+
+// What a reindex is asked: one job's list files to write again (DESIGN-DETAILS 10.5's corrupt row).
+type DropReindexRequest struct {
+	Cluster        sidecar.BlobCluster
+	SegmentCluster sidecar.BlobCluster
+	RepoId         sidecar.Id
+	JobId          sidecar.Id
+	// The job's drops, as its list files name them. nil takes them from the first of the job's list files that reads
+	// whole.
+	Drops []*DropListDrop
+	Pace  func(ctx context.Context, byteCount int64) error
+}
+
+// What a reindex did.
+type DropReindexResult struct {
+	// The sequences of the list files deleted and written again, and of those written where none stood.
+	Rewritten []uint32
+	Written   []uint32
+	// Files of the job past the sequences its drops give, left as they are for the operator to look at.
+	Stray         []uint32
+	ScanByteCount int64
+}
+
+// The listed index of a job written again (DESIGN-DETAILS 10.5's corrupt list file row, 10.7's EVSB-M10-04 note):
+// its list files computed anew from its drops' bodies and their refs' history, as resolve computes them, then each of
+// the job's list files that does not read whole, or holds other bytes, deleted by a DELETE naming its LastModified and
+// written again, equal bytes to what resolve wrote. A drop that no longer resolves is an error, and nothing is
+// written. What sidecarctl's evs drop-reindex calls, after drop_index_corrupt pages; it deletes nothing while the
+// segment cluster has not passed the settle cases.
+func (self *DropResolve) Reindex(ctx context.Context, request *DropReindexRequest) (*DropReindexResult, error) {
+	result := &DropReindexResult{}
+	if request.Cluster == nil || request.SegmentCluster == nil {
+		return result, fmt.Errorf("%w: a reindex with no clusters", ErrDropJobState)
+	}
+	files := NewDropFiles(request.SegmentCluster, request.RepoId, request.JobId, self.settings)
+	sequences, err := files.Sequences(ctx, DropFileList)
+	if err != nil {
+		return result, err
+	}
+	readFile := func(sequence uint32) ([]byte, *sidecar.BlobInfo, error) {
+		object, err := request.SegmentCluster.Get(ctx, DropFileKey(request.RepoId, request.JobId, DropFileList, sequence))
+		if errors.Is(err, sidecar.ErrBlobNotFound) {
+			return nil, nil, nil
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		defer object.Body.Close()
+		encoded, err := readAllLimited(object, dropListFileMaxByteCount(self.settings))
+		return encoded, &object.BlobInfo, err
+	}
+	drops := request.Drops
+	for _, sequence := range sequences {
+		if drops != nil {
+			break
+		}
+		encoded, _, err := readFile(sequence)
+		if err != nil {
+			return result, err
+		}
+		if file, err := DecodeDropListFile(encoded, request.RepoId, request.JobId, sequence); err == nil {
+			drops = file.Drops
+		}
+	}
+	if len(drops) == 0 {
+		return result, fmt.Errorf("%w: no list file of job %s reads whole; name its drops", ErrDropJobState, sidecar.EvsKeyId(request.JobId))
+	}
+	covered := make([]*DropCovered, 0, len(drops))
+	for _, drop := range drops {
+		covered = append(covered, &DropCovered{DropId: drop.DropId, RefId: drop.RefId, Version: drop.Version, PushId: drop.PushId})
+	}
+	resolveRequest := &DropResolveRequest{Cluster: request.Cluster, SegmentCluster: request.SegmentCluster, RepoId: request.RepoId, JobId: request.JobId, Drops: covered, Pace: request.Pace}
+	refDrops := map[sidecar.Id][]*DropCovered{}
+	for _, drop := range covered {
+		refDrops[drop.RefId] = append(refDrops[drop.RefId], drop)
+	}
+	resolved := []*dropResolved{}
+	for refId, refCovered := range refDrops {
+		refResolved, byteCount, err := self.resolveRef(ctx, resolveRequest, refId, refCovered)
+		result.ScanByteCount += byteCount
+		if err != nil {
+			return result, err
+		}
+		for _, one := range refResolved {
+			if one.mismatch != "" {
+				return result, fmt.Errorf("%w: drop %s no longer resolves: %s", ErrDropJobState, sidecar.EvsKeyId(one.drop.DropId), one.mismatch)
+			}
+			resolved = append(resolved, one)
+		}
+	}
+	listFiles, err := EncodeDropListFiles(request.RepoId, request.JobId, dropListInputs(resolved), self.settings)
+	if err != nil {
+		return result, err
+	}
+	for i, encoded := range listFiles {
+		sequence := uint32(i)
+		stored, info, err := readFile(sequence)
+		if err != nil {
+			return result, err
+		}
+		if stored != nil && bytes.Equal(stored, encoded) {
+			continue
+		}
+		if stored != nil {
+			if !request.SegmentCluster.SettlePassed() {
+				return result, fmt.Errorf("%w: the segment cluster has not passed the settle cases", ErrDropJobState)
+			}
+			if err := request.SegmentCluster.Delete(sidecar.WithBlobUnmodified(ctx, info.LastModified), info.Key); err != nil {
+				return result, err
+			}
+			result.Rewritten = append(result.Rewritten, sequence)
+		} else {
+			result.Written = append(result.Written, sequence)
+		}
+		if err := files.Put(ctx, DropFileList, sequence, encoded); err != nil {
+			return result, err
+		}
+	}
+	for _, sequence := range sequences {
+		if uint32(len(listFiles)) <= sequence {
+			result.Stray = append(result.Stray, sequence)
+		}
+	}
+	return result, nil
+}

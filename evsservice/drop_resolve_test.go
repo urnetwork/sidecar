@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -927,5 +928,50 @@ func TestDropFilesReadAWholeFileOfTheMostRows(t *testing.T) {
 	}
 	if len(file.Ids) != settings.FileRowCount {
 		t.Fatalf("%d ids", len(file.Ids))
+	}
+}
+
+// DESIGN-DETAILS 10.5's corrupt list file row: a list file with a bad trailer is deleted and written again with the
+// bytes resolve wrote, its job's drops read from another of its files or named; with none readable and none named,
+// nothing is written.
+func TestDropResolveReindexWritesACorruptListFileAgain(t *testing.T) {
+	history := newDropResolveHistory(t)
+	world := history.world
+	covered := history.dropX(testId("drop-x"), history.xVersions)
+	world.resolve(covered)
+	key := DropFileKey(world.repoId, world.jobId, DropFileList, 0)
+	original := world.host.Blobs.Dump()["seg-1/"+key]
+	if len(original) == 0 {
+		t.Fatal("no list file")
+	}
+	corrupt := bytes.Clone(original)
+	corrupt[len(corrupt)-1] ^= 1
+	if err := world.segment.Delete(world.ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.segment.PutIfNoneMatch(world.ctx, key, corrupt, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReadDropListFiles(world.ctx, world.segment, world.repoId, dropTestSettings()); !errors.Is(err, ErrDropFileInvalid) {
+		t.Fatalf("a corrupt file read: %v", err)
+	}
+	request := &DropReindexRequest{Cluster: world.cluster, SegmentCluster: world.segment, RepoId: world.repoId, JobId: world.jobId}
+	if _, err := world.resolver().Reindex(world.ctx, request); !errors.Is(err, ErrDropJobState) {
+		t.Fatalf("a reindex with no readable file and no drops named: %v", err)
+	}
+	request.Drops = []*DropListDrop{{DropId: covered.DropId, RefId: covered.RefId, Version: covered.Version, PushId: covered.PushId}}
+	world.clock.Advance(time.Minute)
+	result, err := world.resolver().Reindex(world.ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.Rewritten, []uint32{0}) || len(result.Written) != 0 {
+		t.Fatalf("result %+v", result)
+	}
+	if !bytes.Equal(world.host.Blobs.Dump()["seg-1/"+key], original) {
+		t.Fatal("the list file was written again with other bytes")
+	}
+	if result, err := world.resolver().Reindex(world.ctx, request); err != nil || len(result.Rewritten) != 0 {
+		t.Fatalf("a second reindex: %+v, %v", result, err)
 	}
 }
