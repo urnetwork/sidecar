@@ -389,6 +389,28 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "is issued or registered; team settings\n",
 		list:     "is issued or registered; team settings; the team's SCIM bearer's SHA-256, while SCIM is on\n",
 	},
+	{
+		// QD-819's list version, after v21's
+		question: "push-record-no-slot-bodies-part-slot-bodies",
+		block:    "# metadata_list.yml v21;",
+		list:     "# metadata_list.yml v22;",
+	},
+	{
+		// QD-819: v22's line, after v21's
+		question: "push-record-no-slot-bodies-part-slot-bodies",
+		block:    "# the team's SCIM bearer, network_team.scim_token_sha256, which api keeps while SCIM is on.\n",
+		list: "# the team's SCIM bearer, network_team.scim_token_sha256, which api keeps while SCIM is on.\n" +
+			"# v22, updated 2026-11-15 for the owner's answer QD-819 (push-record-no-slot-bodies-part-slot-bodies), adds to\n" +
+			"# evs-5 how a new slot's body reaches evs, in a one-part push's payload or a push in parts' seal request, never a\n" +
+			"# part, and that no record keeps it (QD-806).\n",
+	},
+	{
+		// QD-819: evs-5 names how a new slot's body reaches evs, the seal request's field among them, and that no record
+		// keeps it, which QD-806 and QD-819 make the slot object's one stored copy
+		question: "push-record-no-slot-bodies-part-slot-bodies",
+		block:    "all of it also in that push's record (evs-12)\"",
+		list:     "all of it also in that push's record (evs-12); each new slot's body as its push brought it, a one-part push's in its payload and a push in parts' in its seal request, never in a part, which evs writes to slot/ and keeps in no record (QD-806, QD-819)\"",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
