@@ -782,6 +782,7 @@ secret socket_ticket_seed socketsservice/ticket_keys.go
 secret spool_private_key record_spool.go
 secret spool_private_key record_spool_locked.go
 secret spool_public_key record_spool.go
+secret telemetry_token mcp/harness_telemetry.go
 secret tls12_client_key smtpproof/tls_client.go
 secret tls12_client_salt smtpproof/tls_client.go
 secret tls12_master_secret smtpproof/tls_client.go
