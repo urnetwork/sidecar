@@ -576,7 +576,8 @@ func (self *dropDeleteRun) report(from DropCursor, to DropCursor, storedByteCoun
 		BatchId:     sidecar.NewDropUsageBatchId(connect.Id(self.request.JobId), dropCursorBytes(from), dropCursorBytes(to)),
 		Producer:    sidecar.QuotaProducerTaskworker,
 		WindowStart: now.Truncate(sidecar.DefaultQuotaUsageBatcherSettings().WindowTimeout),
-		Events:      []*sidecar.UsageEvent{{NetworkId: connect.Id(networkId), StoredByteDelta: -int64(storedByteCount)}},
+		// a stored-byte delta rides evs's meter, which storage counts on (QuotaUsageBatcher.AddStoredDelta)
+		Events: []*sidecar.UsageEvent{{NetworkId: connect.Id(networkId), Meter: sidecar.QuotaMeterEvs, StoredByteDelta: -int64(storedByteCount)}},
 	}
 	if err := quota.ReportUsage(self.ctx, batch); err != nil {
 		self.deleter.log.Warningf("[evs] drop usage batch dropped: repo %s job %s: %d freed bytes: %v",
