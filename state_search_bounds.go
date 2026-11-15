@@ -10,9 +10,9 @@
 //
 // Retained buckets (§11.14's retained row): a device holding a stale all keeps the files of a bucket a roll-up dropped,
 // masked as usual, until its all copy shows the bucket rolled up (a/m's rolled_through_day at or past the bucket's start
-// day), an ERASE occurs in the repo, or two bucket lengths pass after the roll-up, so search stays complete between a
-// roll-up and its download. The sync engine, SEARCH-M10-19's, says when a bucket is retained and when its all moves;
-// this file keeps the record and drops the files.
+// day), an ERASE occurs in the repo, or Search.RetainFactor bucket lengths pass after the roll-up, so search stays
+// complete between a roll-up and its download. The sync engine, SEARCH-M10-19's, says when a bucket is retained and
+// when its all moves; this file keeps the record and drops the files.
 //
 // On every leg: root Id, no connect type. Safe for concurrent use.
 
@@ -56,6 +56,21 @@ func (self *SearchCache) MarkSearched(repoId Id, refId Id, partition SearchCache
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.searched[searchCacheSearchedKey{repoId: repoId, refId: refId, all: partition.All}] = self.clock.Now()
+}
+
+// When any partition of the repo was last searched, the zero time for never since this process started: the sync
+// engine's order across refs, the most recently searched repos first (DESIGN-DETAILS 7.2.7's fetch step), which reads
+// whole repos and nothing a search asked.
+func (self *SearchCache) lastSearched(repoId Id) time.Time {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	newest := time.Time{}
+	for key, at := range self.searched {
+		if key.repoId == repoId && newest.Before(at) {
+			newest = at
+		}
+	}
+	return newest
 }
 
 // Sets whether this daemon is designated for search (§7.9's IndexerSet), and the repos it serves (D-CORE-17): while
@@ -355,7 +370,7 @@ func (self *SearchCache) DropRetained(repoId Id) error {
 	return nil
 }
 
-// Drops every retained bucket two bucket lengths past its roll-up, now on the cache's clock.
+// Drops every retained bucket Search.RetainFactor bucket lengths past its roll-up, now on the cache's clock.
 func (self *SearchCache) SweepRetained() error {
 	self.operationLock.Lock()
 	defer self.operationLock.Unlock()
@@ -370,7 +385,7 @@ func (self *SearchCache) SweepRetained() error {
 			return err
 		}
 		err = self.dropRetainedWithLock(ref, func(retained SearchCacheRetained) bool {
-			return !now.Before(retained.RolledUpAt.Add(2 * time.Duration(retained.WindowDays) * 24 * time.Hour))
+			return !now.Before(retained.RolledUpAt.Add(time.Duration(self.settings.RetainFactor) * time.Duration(retained.WindowDays) * 24 * time.Hour))
 		})
 		if err != nil {
 			return err
