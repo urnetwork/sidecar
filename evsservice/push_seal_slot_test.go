@@ -4,8 +4,9 @@
 // no record evs keeps, the seal's or a part's, holds a body or a key of one; a part holding section 7 is refused at
 // the part route; a seal whose bodies do not match its new slots, or pass their bound, is refused writing nothing; a
 // seal's retry carrying its bodies again is answered its version, and one whose first attempt wrote its slots but not
-// its record finds them its own and commits; a one-part push carrying bodies beside its payload is refused; and after
-// an ERASE no batch, parcel or pack holds the erased key, and neither does any record or part the read route serves.
+// its record finds them its own and commits; a re-seeded part holding section 7 is refused; a one-part push carrying
+// bodies beside its payload is refused; and after an ERASE no batch, parcel or pack holds the erased key, and neither
+// does any record or part the read route serves.
 
 package evsservice
 
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -123,25 +126,48 @@ func sealTestHolds(slots []*sealTestSlot, held ...[]byte) bool {
 	return false
 }
 
-// A slot-keyed push past 1,024 entry writes goes in parts and carries its bodies in its seal alone: before the seal no
-// slot exists, the seal commits, step 6 wrote each slot from the request under the statement's origin, the record at
-// the window's place is the seal's and each part record it names checks as a stored part, and no batch record holds a
-// body or a key of one.
+// A slot-keyed push in parts carries its bodies in its seal alone, whether past 1,024 entry writes or past 1 MiB by its
+// sealed metadata: before the seal no slot exists, the seal commits, step 6 wrote each slot from the request under the
+// statement's origin, the record at the window's place is the seal's and each part record it names checks as a stored
+// part, and no batch record holds a body or a key of one.
 func TestSealWritesTheSlotsFromItsRequestAndNoRecordKeepsABody(t *testing.T) {
+	for _, shape := range []struct {
+		label string
+		plan  func(fixture *pushFixture, slots []*sealTestSlot) *sidecar.EvsPushPlan
+	}{
+		{"past 1,024 entry writes", func(fixture *pushFixture, slots []*sealTestSlot) *sidecar.EvsPushPlan {
+			return fixture.slottedPartsPlan(1100, slots...)
+		}},
+		{"past 1 MiB", func(fixture *pushFixture, slots []*sealTestSlot) *sidecar.EvsPushPlan {
+			plan := fixture.plan()
+			plan.SealedMetadata = bytes.Repeat([]byte{0x5a}, 1536*1024)
+			for i, slot := range slots {
+				fixture.createWithSlot(plan, checkTestPath("slotted", strconv.Itoa(i)), slot.slotId, slot.body)
+			}
+			return plan
+		}},
+	} {
+		slots := []*sealTestSlot{newSealTestSlot(t, shape.label+" written a", 2), newSealTestSlot(t, shape.label+" written b", 1)}
+		requireSealWritesItsSlots(t, shape.label, slots, shape.plan)
+	}
+}
+
+// One shape of TestSealWritesTheSlotsFromItsRequestAndNoRecordKeepsABody, on a fixture of its own.
+func requireSealWritesItsSlots(t *testing.T, label string, slots []*sealTestSlot, planOf func(fixture *pushFixture, slots []*sealTestSlot) *sidecar.EvsPushPlan) {
+	t.Helper()
 	fixture := newPushFixture(t, nil)
 	token := fixture.token(fixture.check.signerId)
-	slots := []*sealTestSlot{newSealTestSlot(t, "written a", 2), newSealTestSlot(t, "written b", 1)}
-	built := fixture.built(fixture.slottedPartsPlan(1100, slots...))
+	built := fixture.built(planOf(fixture, slots))
 	if len(built.Parts) < 2 || len(built.SlotBodies) == 0 {
-		t.Fatalf("%d parts, %d bytes of slot bodies", len(built.Parts), len(built.SlotBodies))
+		t.Fatalf("%s: %d parts, %d bytes of slot bodies", label, len(built.Parts), len(built.SlotBodies))
 	}
 	if sealTestHolds(slots, built.Parts...) {
-		t.Fatal("a part as built holds a slot body or key")
+		t.Fatalf("%s: a part as built holds a slot body or key", label)
 	}
 	places := fixture.postParts(token, built)
 	for _, slot := range slots {
 		if _, _, _, found := fixture.slotObject(slot.slotId); found {
-			t.Fatal("a slot was written before its seal")
+			t.Fatalf("%s: a slot was written before its seal", label)
 		}
 	}
 	fixture.requireCommitted(fixture.seal(token, built, places), 1)
@@ -156,38 +182,38 @@ func TestSealWritesTheSlotsFromItsRequestAndNoRecordKeepsABody(t *testing.T) {
 
 	window, err := EvsHeadWindow(fixture.head().Head)
 	if err != nil || len(window) != 1 {
-		t.Fatalf("window %v", err)
+		t.Fatalf("%s: window %v", label, err)
 	}
 	seal, err := fixture.engine.readRecordAt(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, window[0].Place)
 	if err != nil || seal.Type != protocol.EvsBatchRecordType_EVS_BATCH_SEAL {
-		t.Fatalf("the window's record: %v", err)
+		t.Fatalf("%s: the window's record: %v", label, err)
 	}
 	_, sealParts, err := sidecar.ParseEvsSealRecordBody(seal.Body)
 	if err != nil || len(sealParts) != len(built.Parts) {
-		t.Fatalf("the seal names %d parts: %v", len(sealParts), err)
+		t.Fatalf("%s: the seal names %d parts: %v", label, len(sealParts), err)
 	}
 	for i, sealPart := range sealParts {
 		record, err := fixture.engine.readRecordAt(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, sealPart.Place)
 		if err != nil || record.Type != protocol.EvsBatchRecordType_EVS_BATCH_PART {
-			t.Fatalf("part %d's record: %v", i+1, err)
+			t.Fatalf("%s: part %d's record: %v", label, i+1, err)
 		}
 		_, partBytes, _, _, err := sidecar.ParseEvsSealPartRecord(record)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := sidecar.EvsCheckStoredPart(built.Statement, partBytes); err != nil {
-			t.Fatalf("part %d as stored: %v", i+1, err)
+			t.Fatalf("%s: part %d as stored: %v", label, i+1, err)
 		}
 	}
 	records := fixture.batchRecords()
 	if len(records) != len(built.Parts)+1 {
-		t.Fatalf("%d records, want %d parts and a seal", len(records), len(built.Parts))
+		t.Fatalf("%s: %d records, want %d parts and a seal", label, len(records), len(built.Parts))
 	}
 	if sealTestHolds(slots, records...) {
-		t.Fatal("a batch record holds a slot body or key")
+		t.Fatalf("%s: a batch record holds a slot body or key", label)
 	}
 	if foreign, mismatch := fixture.slotCounts(); foreign != 0 || mismatch != 0 {
-		t.Fatalf("counted %v foreign and %v mismatched", foreign, mismatch)
+		t.Fatalf("%s: counted %v foreign and %v mismatched", label, foreign, mismatch)
 	}
 }
 
@@ -322,6 +348,72 @@ func TestSealSlotsStandForTheRetryOfASealWhoseRecordWasNotWritten(t *testing.T) 
 	}
 	if foreign, mismatch := fixture.slotCounts(); foreign != 0 || mismatch != 0 {
 		t.Fatalf("counted %v foreign and %v mismatched", foreign, mismatch)
+	}
+}
+
+// A re-seeded push in parts whose part holds section 7 is refused 400 INVALID writing nothing, its statement signed
+// again over the changed part so only section 7 refuses it; its parts as built, which carry no body, re-seed (QD-819).
+func TestReseedOfAPartHoldingSlotBodiesIsRefused(t *testing.T) {
+	fixture := newReseedFixture(t)
+	slot := newSealTestSlot(t, "reseeded part", 1)
+	plan := fixture.keptParts(1100)
+	fixture.createWithSlot(plan, checkTestPath("slotted"), slot.slotId, slot.body)
+	built := fixture.built(plan)
+	last := len(built.Parts) - 1
+	message := &protocol.EvsPushPart{}
+	if err := proto.Unmarshal(built.Parts[last], message); err != nil {
+		t.Fatal(err)
+	}
+	sections, err := sidecar.ParseEvsPayload(message.GetSections())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES, built.SlotBodies)
+	message.Sections = sections.Encode()
+	holding, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the statement signed again over parts, as the builder signs one
+	resign := func(parts [][]byte) []byte {
+		t.Helper()
+		partHashes := []byte{}
+		for _, partBytes := range parts {
+			digest := sha256.Sum256(partBytes)
+			partHashes = append(partHashes, digest[:]...)
+		}
+		push := proto.Clone(built.Statement.Push).(*protocol.EvsPush)
+		partsDigest := sha256.Sum256(partHashes)
+		push.PartsSha256 = partsDigest[:]
+		pushBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(push)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signed, err := checkTestSign(fixture.check.signingKey, fixture.check.signerId)("evs-push", bridge.SignedType_SIGNED_EVS_PUSH, pushBytes, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		statementBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return statementBytes
+	}
+	if !bytes.Equal(resign(built.Parts), built.Statement.Bytes) {
+		t.Fatal("the statement signed again over the parts as built is not the builder's")
+	}
+	parts := append(slices.Clone(built.Parts[:last]), holding)
+	requireRefusal(t, fixture.reseed(&protocol.EvsReseedRequest{Statement: resign(parts), Parts: parts}), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	if records := fixture.batchRecords(); len(records) != 0 || !fixture.head().Absent() {
+		t.Fatalf("the refused re-seed wrote %d records or the head", len(records))
+	}
+	fixture.requireCommitted(fixture.reseed(reseedPartsBody(built)), 1)
+	fixture.awaitStepEights()
+	if sealTestHolds([]*sealTestSlot{slot}, fixture.batchRecords()...) {
+		t.Fatal("a re-seeded record holds the slot's body or key")
+	}
+	if _, _, _, found := fixture.slotObject(slot.slotId); found {
+		t.Fatal("a re-seed of a push in parts wrote its slot, which comes by its own call")
 	}
 }
 
