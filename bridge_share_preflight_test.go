@@ -115,7 +115,7 @@ func TestPreflightReportsItsShortfall(t *testing.T) {
 		t.Fatalf("the last /24: %x", plan)
 	}
 	_, err := BridgeSharePreflight(ledger, testBridgeShareTargets(25, 23))
-	noSpace := &BridgeShareNoSpaceError{}
+	noSpace := &BridgeShareRefusal{}
 	if !errors.Is(err, ErrBridgeShareNoSpace) || !errors.As(err, &noSpace) {
 		t.Fatalf("a /23 with a /24 left: %v", err)
 	}

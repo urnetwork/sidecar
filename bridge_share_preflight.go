@@ -28,26 +28,31 @@ import (
 )
 
 var (
-	// A target is wider than the upper /17 (§17.9's size row): accept_status refused_too_large.
+	// A target is wider than the upper /17 (§17.9's size row): accept_status refused_too_large. The preflight's error
+	// is a *BridgeShareRefusal, which carries the figures.
 	ErrBridgeShareTooLarge = errors.New("bridge share target is wider than the upper /17")
-	// The upper /17 has no aligned free block for a target (§17.9's space row): accept_status refused_no_space. The
-	// error is a *BridgeShareNoSpaceError, which carries the shortfall.
+	// The upper /17 has no aligned free block for a target (§17.9's space row): accept_status refused_no_space, a
+	// *BridgeShareRefusal too.
 	ErrBridgeShareNoSpace = errors.New("bridge share has no room in the upper /17")
 	// A target table no accept takes: indexes that are not dense from 0, an id, a key, a prefix or ports out of form.
 	ErrBridgeShareTableInvalid = errors.New("bridge share table refused")
 )
 
-// refused_no_space, with §17.9's figures, which the accept seals under K for the sharing network.
-type BridgeShareNoSpaceError struct {
+// A refusal of the preflight, with §17.9's figures, which the accept seals under K for the sharing network: the first
+// target that found no room, or was too wide, its prefix length, and the room the upper /17 had. It unwraps to
+// ErrBridgeShareTooLarge or ErrBridgeShareNoSpace.
+type BridgeShareRefusal struct {
+	// ErrBridgeShareTooLarge or ErrBridgeShareNoSpace.
+	Reason    error
 	Shortfall *bridge.BridgeShareShortfall
 }
 
-func (self *BridgeShareNoSpaceError) Error() string {
-	return fmt.Sprintf("%s: target %d, a /%d", ErrBridgeShareNoSpace.Error(), self.Shortfall.GetIndex(), self.Shortfall.GetLength())
+func (self *BridgeShareRefusal) Error() string {
+	return fmt.Sprintf("%s: target %d, a /%d", self.Reason.Error(), self.Shortfall.GetIndex(), self.Shortfall.GetLength())
 }
 
-func (self *BridgeShareNoSpaceError) Unwrap() error {
-	return ErrBridgeShareNoSpace
+func (self *BridgeShareRefusal) Unwrap() error {
+	return self.Reason
 }
 
 // The largest shortfall figure for "no aligned free block of any length" (BridgeShareShortfall.largest_free_length).
@@ -190,8 +195,9 @@ func (self *bridgeUpperMap) largestFreeLength() uint32 {
 
 // Plans a share's aliases on ledger, the accepting network's at this device's tip (the file's comment): one alias a
 // target, by index, as the alias table carries them. ErrBridgeShareTableInvalid for a table out of form,
-// ErrBridgeShareTooLarge for a target wider than /17, and a *BridgeShareNoSpaceError where a target finds no block,
-// its figures read with the plan's earlier blocks held, since those are part of what leaves it no room.
+// a *BridgeShareRefusal of ErrBridgeShareTooLarge for a target wider than /17, and one of ErrBridgeShareNoSpace where a
+// target finds no block, its figures read with the plan's earlier blocks held, since those are part of what leaves it
+// no room.
 func BridgeSharePreflight(ledger *BridgeLedger, targets *bridge.BridgeShareTargets) ([]*bridge.BridgeShareAlias, error) {
 	if ledger == nil {
 		return nil, fmt.Errorf("%w: no ledger to plan on", ErrBridgeShareTableInvalid)
@@ -199,19 +205,21 @@ func BridgeSharePreflight(ledger *BridgeLedger, targets *bridge.BridgeShareTarge
 	if err := CheckBridgeShareTargets(targets, ledger.settings); err != nil {
 		return nil, err
 	}
+	upper := newBridgeUpperMap(ledger)
 	// size first, so a table that can never fit is refused as too large whatever room there is
 	for _, target := range targets.GetTargets() {
-		if target.GetPrefix().GetLength() < 17 {
-			return nil, fmt.Errorf("%w: target %d is a /%d", ErrBridgeShareTooLarge, target.GetIndex(), target.GetPrefix().GetLength())
+		if length := target.GetPrefix().GetLength(); length < 17 {
+			return nil, &BridgeShareRefusal{Reason: ErrBridgeShareTooLarge, Shortfall: &bridge.BridgeShareShortfall{
+				Index: target.GetIndex(), Length: length, FreeAddressCount: upper.freeCount(), LargestFreeLength: upper.largestFreeLength(),
+			}}
 		}
 	}
-	upper := newBridgeUpperMap(ledger)
 	aliases := make([]*bridge.BridgeShareAlias, 0, len(targets.GetTargets()))
 	for _, target := range targets.GetTargets() {
 		length := target.GetPrefix().GetLength()
 		first, ok := upper.firstFit(length)
 		if !ok {
-			return nil, &BridgeShareNoSpaceError{Shortfall: &bridge.BridgeShareShortfall{
+			return nil, &BridgeShareRefusal{Reason: ErrBridgeShareNoSpace, Shortfall: &bridge.BridgeShareShortfall{
 				Index: target.GetIndex(), Length: length, FreeAddressCount: upper.freeCount(), LargestFreeLength: upper.largestFreeLength(),
 			}}
 		}
