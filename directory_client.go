@@ -31,6 +31,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // What a DirectoryClient reads and writes with.
@@ -75,6 +77,11 @@ type DirectoryClientArgs struct {
 	// Each run's taint, which a run's item carries as written (directory_run.go, RECORD-M6-16); nil reads every run
 	// tainted.
 	Runs RecordRunView
+	// The network the directory is of, which every card and repo file names (directory_card.go): zero judges none of
+	// them, and writes none.
+	NetworkId Id
+	// Sidecar.Sign, which signs this sidecar's card and its repo files under purpose directory; nil writes none.
+	Sign func(purpose string, signedType bridge.SignedType, body []byte, agentId *Id) (*bridge.Signed, error)
 }
 
 // One network's team directory on this sidecar.
@@ -99,6 +106,9 @@ type DirectoryClient struct {
 	repoDisplayName func(repoId Id) string
 	// each run's taint, for a run's item (DirectoryClientArgs.Runs)
 	runView RecordRunView
+	// the network every card and repo file names, and the signer of this sidecar's (DirectoryClientArgs)
+	networkId Id
+	sign      func(purpose string, signedType bridge.SignedType, body []byte, agentId *Id) (*bridge.Signed, error)
 
 	syncLock sync.Mutex
 	// the record reader over the copy, replaced at a lost read
@@ -184,6 +194,8 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 
 		repoDisplayName: args.RepoDisplayName,
 		runView:         runView,
+		networkId:       args.NetworkId,
+		sign:            args.Sign,
 
 		repoWrittenVersions: map[Id]uint64{},
 		parts:               map[string]any{},
@@ -191,6 +203,10 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 	self.reader = self.newReader()
 	return self, nil
 }
+
+// format 2's card and repo file versions for a fold of this client's, set by directory_card.go, which no ios_extension
+// leg links: each new file judged by its path's rules, then every accepted one's items. Nil folds entries alone.
+var directoryFoldFiles func(client *DirectoryClient, fold *DirectoryFold) []*directoryVersion
 
 // §16.11's readers row for the directory's ERASEs, set by directory_revoke.go, which no ios_extension leg links: the
 // ERASEs the reader takes, those of a directory admin, the rest alarming. Nil takes every one.
@@ -270,6 +286,9 @@ func (self *DirectoryClient) currentFold() *DirectoryFold {
 	defer self.stateLock.Unlock()
 	if self.fold == nil || self.fold.DirectoryId() != directoryId {
 		self.fold = NewDirectoryFold(directoryId, self.alarm)
+		if directoryFoldFiles != nil {
+			self.fold.files = func(fold *DirectoryFold) []*directoryVersion { return directoryFoldFiles(self, fold) }
+		}
 	}
 	return self.fold
 }
@@ -554,6 +573,8 @@ func (self *Sidecar) DirectoryClient() (*DirectoryClient, error) {
 		Writer:         record.Writer(),
 		Redactor:       redactor,
 		Runs:           self,
+		NetworkId:      *networkId,
+		Sign:           self.Sign,
 	})
 	if err != nil {
 		return nil, err

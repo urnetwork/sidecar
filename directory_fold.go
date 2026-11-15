@@ -163,6 +163,11 @@ type DirectoryFold struct {
 	leafNotEndedAt map[[sha256.Size]byte]uint64
 	alarmed        map[directoryAlarmKey]bool
 	reused         map[directoryReuseKey]bool
+	// format 2's card and repo file versions, judged at each Update before the entries fold
+	// (DirectoryClient's directoryFoldFiles, directory_card.go); nil for none
+	files func(fold *DirectoryFold) []*directoryVersion
+	// what that judging keeps between updates, which goes with this fold at a lost read
+	fileState any
 }
 
 // A fold of directoryId's entries, raising its alarms through alarm, nil for none.
@@ -227,12 +232,17 @@ func directoryVersionOf(entry *RecordReadEntry) (*directoryVersion, bool) {
 	return version, true
 }
 
-// Replaces what the fold holds with entries' announce entries: live, a body that decodes, forked and erased ones
-// left out. A leaf already held keeps its decoding, so an update decodes only what is new.
+// Replaces what the fold holds with entries' announce entries, live, a body that decodes, forked and erased ones
+// left out, and from format 2 the items of every card and repo file accepted. A leaf already held keeps its decoding,
+// so an update decodes only what is new.
 func (self *DirectoryFold) Update(entries []*RecordReadEntry) {
 	hookKey := recordChainIdText(self.directoryId)
 	testHookBarrier("directory.fold.before", hookKey)
 	defer testHookBarrier("directory.fold.after", hookKey)
+	var fileVersions []*directoryVersion
+	if self.files != nil {
+		fileVersions = self.files(self)
+	}
 	held := func() map[[sha256.Size]byte]*directoryVersion {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -250,6 +260,9 @@ func (self *DirectoryFold) Update(entries []*RecordReadEntry) {
 		if version, ok := directoryVersionOf(entry); ok {
 			leafVersions[entry.Leaf] = version
 		}
+	}
+	for _, version := range fileVersions {
+		leafVersions[version.leaf] = version
 	}
 	keyVersions := map[DirectoryItemKey][]*directoryVersion{}
 	for _, version := range leafVersions {

@@ -111,6 +111,8 @@ barrier directory.announce.after directory_repo.go
 barrier directory.announce.before directory_repo.go
 barrier directory.cancel.entry.after directory_decide.go
 barrier directory.cancel.entry.before directory_decide.go
+barrier directory.card.after directory_card.go
+barrier directory.card.before directory_card.go
 barrier directory.decide.entry.after directory_decide.go
 barrier directory.decide.entry.before directory_decide.go
 barrier directory.decide.file.after directory_decide.go
@@ -124,6 +126,8 @@ barrier directory.fold.after directory_fold.go
 barrier directory.fold.before directory_fold.go
 barrier directory.notice.after directory_notice.go
 barrier directory.notice.before directory_notice.go
+barrier directory.repo_file.after directory_repo_file.go
+barrier directory.repo_file.before directory_repo_file.go
 barrier directory.request.after directory_request.go
 barrier directory.request.before directory_request.go
 barrier directory.revoke.filed directory_revoke.go
