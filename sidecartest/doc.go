@@ -52,6 +52,8 @@
 //     in-process pipes; smtp_edge_stub.go, StubSmtpEdge, which runs a sender before the engine exists.
 //   - recording_backend.go, what FI-11 reads: RecordingBackend, a backend that logs every byte at its socket with
 //     the audience state then, and MxProofLedger, the proofs an outbound edge accepted beside what each MX took.
+//   - intercepting_proxy.go, CC4's TLS-intercepting fixture proxy with its own CA, which ur status reports: what it
+//     decrypts is a capture source, and InterceptingOrigin is the real target behind it.
 //   - fault, the FS schedule runner (§22.8), with catalog.yml, §22.8's rows and §23.6's gates, and
 //     §22.8's rules across runs: twins, every write's lost response, the explorer and replays; the
 //     oracle's StoreView over every store and readers' keys (store_view*.go, oracle.go); and GateFile,
