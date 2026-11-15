@@ -9,10 +9,10 @@
 //	client    URnetwork-run (D-TLS-1): no sidecar, which neither a platform client nor §18's hosted device holds
 //	          (SOCK.md reading 7, D-SDK-12), or a sidecar bound to a hosted device (TlsListenFacts.HostedSidecarIds)
 //	port      other than TlsNamespaceSettings.Ports, 443, 8443, 8883 and 5671 (R-TLS-9)
-//	host      mta-sts, which only §13.9's system publish takes and TLS-M8-02 opens; a scope host, <label>.<scope>,
-//	          until TLS-M6-03 checks its scope and consent; a host §13.5 maps to no listener of the network's: one
-//	          §12.7's owner table keeps for the platform (b, mx, mail, mta-sts), a word-number label or one of the
-//	          network's scope labels, all of which ScreenHost denies whatever else the facts say
+//	host      mta-sts but on §13.9's system publish, below; a scope host, <label>.<scope>, until TLS-M6-03 checks
+//	          its scope and consent; a host §13.5 maps to no listener of the network's: one §12.7's owner table
+//	          keeps for the platform (b, mx, mail, mta-sts), a word-number label or one of the network's scope
+//	          labels, all of which ScreenHost denies whatever else the facts say
 //	grant     no active approved publish grant for the host bound to this name, the view's (§8.10, I-8); an app
 //	          mode other than the grant's app_mode; raw under an audience other than public or link; a raw link
 //	          whose grant holds no 32-byte link_spki_sha256 (§13.7, D-TLS-13). The gates report audience and pin and
@@ -23,6 +23,14 @@
 //	screen    ScreenHost denies the host, or sends it to review with no screen_allow (§21.6, QD-188, QD-807)
 //	cert      the sidecar holds no unexpired certificate row naming the host (TlsListenFacts.Certified), except an
 //	          acme-tls/1-only registration, a TLS-ALPN-01 responder, before its first order
+//
+// §13.9's system publish, tls/443/mta-sts (TLS-M8-02, §15.5, D-MAIL-4), keeps lines of its own and no other name takes
+// them, tls/8443/mta-sts and the like refused: it admits only a receiver, whose approved smtp/25/mx listen grant the
+// engine asked in the name's place (system_publish.go, the check's Listen), registering app mode http, whose sidecar
+// holds an unexpired certificate row for the network's pair, in a network with network_verified and a mail_network
+// row, and not suspended. It has no tls/ grant of its own, so no publish grant is read and no time box applies, and it
+// takes no tls_endpoints unit; its host is the platform's, so no screen runs. Its grant's end ends the publish: the
+// next heartbeat's listen verdict refuses before this hook is asked.
 //
 // The facts past the view come through TlsListenFactsSource, read off the registration path, since §9.5 runs this per
 // heartbeat (plan-SOCK-gate-data): a network's facts are asked for at its first entry and again once they are
@@ -572,8 +580,11 @@ func (self *TlsNamespaceHooks) ValidateListen(ctx context.Context, check *Socket
 	}
 	// host
 	if host == tlsNamespaceSystemHost {
-		// §13.9's system publish, tls/443/mta-sts, opens with TLS-M8-02, and no other port takes the host
-		return tlsListenRefused("the system host")
+		// §13.9's system publish keeps lines of its own, and no other port takes the host
+		if check.Name != sidecar.SocketSystemPublishName {
+			return tlsListenRefused("the system host on another port")
+		}
+		return self.validateSystemPublish(check, sidecarId)
 	}
 	if strings.Contains(host, ".") {
 		// TLS-M6-03 checks a scope host against the projection and its member's consent
@@ -625,6 +636,35 @@ func (self *TlsNamespaceHooks) ValidateListen(ctx context.Context, check *Socket
 	// cert
 	if !tlsAcmeOnlyRegistration(check.Registration) && !facts.Certified(sidecarId, host, now) {
 		return tlsListenRefused("no unexpired certificate")
+	}
+	return nil
+}
+
+// §13.9's system publish lines, as the file's header lists them, for a sidecar's tls/443/mta-sts entry.
+func (self *TlsNamespaceHooks) validateSystemPublish(check *SocketListenCheck, sidecarId connect.Id) error {
+	if check.Listen == nil || !check.Listen.Allowed {
+		return tlsListenRefused("no receiver's listen grant")
+	}
+	if check.Registration.AppMode != socketDefaultTlsAppMode {
+		return tlsListenRefused("the system publish serves http")
+	}
+	now := self.clock.Now()
+	facts, loaded := self.facts(check.NetworkId, now)
+	if !loaded {
+		return fmt.Errorf("%w: no listen facts yet", ErrSocketListenUnavailable)
+	}
+	switch {
+	case facts.hosted(sidecarId):
+		return tlsListenRefused("a URnetwork-run client")
+	case !facts.Standing.Known() || facts.Standing == sidecar.AbuseStandingSuspended:
+		return tlsListenRefused("no publishing in the network's standing")
+	case !facts.Verified:
+		return tlsListenRefused("an unverified network")
+	case !facts.MailNetwork:
+		return tlsListenRefused("a network with no mail")
+	case !facts.Certified(sidecarId, tlsNamespaceApexHost, now):
+		// @ rides the network's pair, which mta-sts.<net>.<root> does too
+		return tlsListenRefused("no unexpired certificate for the network's pair")
 	}
 	return nil
 }

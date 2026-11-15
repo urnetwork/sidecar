@@ -820,3 +820,156 @@ func TestTlsListenReadsThePublishGrantFromTheProjection(t *testing.T) {
 		t.Fatalf("the platform network answered %v", err)
 	}
 }
+
+// A receiver's entry for §13.9's system publish: tls/443/mta-sts, http, its listen verdict the receiver's smtp/25/mx
+// grant, in a verified mail network whose receiver holds the network's pair.
+func (self *testTlsListenScene) systemPublish() {
+	self.setName("tls/443/mta-sts")
+	self.facts.MailNetwork = true
+	self.view.grant = nil
+	self.check.Listen = &socketsservice.SocketGateVerdict{Allowed: true, GrantId: []byte("receiver-smtp-listen"), PolicyVersion: 1}
+}
+
+// The system publish's lines (TLS-M8-02, §22.5's row): a receiver passes with no tls/ grant, no expiry and no screen;
+// a non-receiver, an unverified network, a network with no mail_network row, a receiver with no certificate for the
+// network's pair, a hosted or suspended one, and raw are refused; mta-sts on another port takes no such path.
+func TestTlsListenAdmitsTheSystemPublishOnlyForAReceiver(t *testing.T) {
+	testTlsListenCases(t, []testTlsListenCase{
+		{name: "a receiver", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+		}, allow: true},
+		{name: "a receiver at Community on probation, standing", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.facts.Tier = "free"
+			scene.facts.Standing = sidecar.AbuseStandingProbation
+		}, allow: true},
+		{name: "a non-receiver", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.check.Listen = &socketsservice.SocketGateVerdict{}
+		}},
+		{name: "no listen verdict", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.check.Listen = nil
+		}},
+		{name: "a non-receiver holding a tls/ publish grant", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.check.Listen = &socketsservice.SocketGateVerdict{}
+			scene.view.grant = &sidecar.AclPublishGrant{
+				GrantIds: [][]byte{[]byte("grant")},
+				Audience: protocol.AclAudience_ACL_AUDIENCE_PUBLIC,
+				AppMode:  protocol.AclAppMode_ACL_APP_MODE_HTTP,
+			}
+		}},
+		{name: "an unverified network", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.facts.Verified = false
+		}},
+		{name: "no mail_network row", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.facts.MailNetwork = false
+		}},
+		{name: "no certificate", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.facts.Certs = nil
+		}},
+		{name: "a scope's pair alone", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.facts.Certs[0].NetworkPair = false
+			scene.facts.Certs[0].ScopePairs = []string{"team"}
+		}},
+		{name: "a hosted receiver", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.facts.HostedSidecarIds = []connect.Id{scene.sidecarId}
+		}},
+		{name: "a suspended network", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.facts.Standing = sidecar.AbuseStandingSuspended
+		}},
+		{name: "raw", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.check.Registration.AppMode = "raw"
+		}},
+		{name: "mta-sts on 8443", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.setName("tls/8443/mta-sts")
+		}},
+		{name: "another host on the receiver's listen alone", mutate: func(scene *testTlsListenScene) {
+			scene.systemPublish()
+			scene.setName("tls/443/policy")
+		}},
+	})
+	// the system publish asks no publish grant of the view
+	scene := newTestTlsListenScene(t, nil)
+	scene.systemPublish()
+	if err := scene.validate(); err != nil {
+		t.Fatalf("a receiver refused: %v", err)
+	}
+	if len(scene.view.askedNames) != 0 {
+		t.Fatalf("the system publish asked the view for %v", scene.view.askedNames)
+	}
+	// and with no facts it is undecided, never passed
+	undecided := newTestTlsListenScene(t, nil)
+	undecided.systemPublish()
+	if err := undecided.hooks.ValidateListen(undecided.ctx, undecided.check); !errors.Is(err, socketsservice.ErrSocketListenUnavailable) {
+		t.Fatalf("with no facts answered %v", err)
+	}
+}
+
+// Composed into the registration path: a receiver's system publish registers on its smtp/25/mx listen grant alone
+// with no tls/ grant in the network, and when that grant is revoked the next heartbeat ends the lease as revoked; a
+// non-receiver is denied.
+func TestTlsListenSystemPublishComposesIntoTheRegistrationPath(t *testing.T) {
+	world := newTestSocketWorld(t)
+	networkId := testSocketId()
+	source := newTestTlsFactsSource()
+	process := world.newProcess(nil)
+	hooks, err := socketsservice.NewTlsNamespaceHooks(world.ctx, source, world.clock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(hooks.Close)
+	if err := process.service.RegisterNamespace(sidecar.SocketNamespaceTls, hooks); err != nil {
+		t.Fatal(err)
+	}
+	receiver := world.newSidecar(networkId)
+	outsider := world.newSidecar(networkId)
+	process.gate.SetIdentityKey(networkId, receiver.sidecarId, receiver.publicKey())
+	process.gate.SetIdentityKey(networkId, outsider.sidecarId, outsider.publicKey())
+	process.gate.AllowListen(networkId, receiver.sidecarId, []byte(sidecar.SocketSystemPublishListenName), testSocketGrant("smtp-listen"))
+	process.gate.Load(networkId)
+	source.set(networkId, &socketsservice.TlsListenFacts{
+		Verified:    true,
+		Standing:    sidecar.AbuseStandingStandard,
+		Tier:        "free",
+		MailNetwork: true,
+		Certs: []*socketsservice.TlsListenCert{
+			{SidecarId: receiver.sidecarId, NotAfter: world.clock.Now().Add(24 * time.Hour), NetworkPair: true},
+			{SidecarId: outsider.sidecarId, NotAfter: world.clock.Now().Add(24 * time.Hour), NetworkPair: true},
+		},
+	})
+	if err := hooks.LoadFacts(world.ctx, networkId); err != nil {
+		t.Fatal(err)
+	}
+	register := func(listener *testSocketSidecar, setVersion uint64) sidecar.SocketRegistrationStatus {
+		t.Helper()
+		code, result := process.register(listener.token, &sidecar.SocketRegistrationsArgs{
+			SetVersion:    setVersion,
+			Registrations: []*sidecar.SocketRegistration{testSocketSystemPublishRegistration(t, listener, "http")},
+		})
+		if code != http.StatusOK || result.Error != nil {
+			t.Fatalf("the page answered %d, %+v", code, result)
+		}
+		return result.Statuses[0]
+	}
+	if status := register(receiver, 1); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("the receiver's system publish answered %s", status)
+	}
+	if status := register(outsider, 1); status != sidecar.SocketRegistrationStatusDenied {
+		t.Fatalf("a non-receiver's system publish answered %s", status)
+	}
+	process.gate.RevokeListen(networkId, receiver.sidecarId, []byte(sidecar.SocketSystemPublishListenName))
+	process.gate.Load(networkId)
+	if status := register(receiver, 2); status != sidecar.SocketRegistrationStatusRevoked {
+		t.Fatalf("after the receiver's grant was revoked the entry answered %s", status)
+	}
+}

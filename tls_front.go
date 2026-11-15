@@ -229,8 +229,13 @@ type TlsFrontTarget struct {
 	Forwarded bool
 	// The registration's max_streams, whose share one visitor may hold. 0 takes §9.5's 256.
 	MaxStreams int
-	// §13.9's system publish of tls/443/mta-sts, which never shows the Community notice.
+	// §13.9's system publish of tls/443/mta-sts and no other name, which never shows the Community notice and is
+	// served by Handler.
 	SystemPublish bool
+	// The system publish's component, which answers each request in place of a local port: a mail receiver's MTA-STS
+	// policy (TLS-M8-02, §15.5). Set exactly with SystemPublish, and then LocalAddress is empty, since no request
+	// reaches a port, and the visitor's address goes nowhere.
+	Handler http.Handler
 }
 
 // --proxy-protocol's behavior (§13.10, a reading): a PROXY v2 header on raw, a Forwarded header on http, where the
@@ -285,9 +290,19 @@ func newTlsFrontTarget(target *TlsFrontTarget) (*TlsFrontTarget, error) {
 		return nil, fmt.Errorf("%w: an ALPN id", errTlsFrontTarget)
 	case copied.MaxStreams < 1:
 		return nil, fmt.Errorf("%w: max_streams", errTlsFrontTarget)
+	case copied.SystemPublish != (copied.Name == tlsSystemPublishName):
+		// no other name takes the system publish's path (§13.9)
+		return nil, fmt.Errorf("%w: the system publish is tls/443/mta-sts alone", errTlsFrontTarget)
+	case copied.SystemPublish != (copied.Handler != nil):
+		return nil, fmt.Errorf("%w: a component handler serves the system publish alone", errTlsFrontTarget)
+	case copied.SystemPublish && (copied.AppMode != socketListenDefaultTlsAppMode || copied.LocalAddress != "" ||
+		copied.ProxyProtocol || copied.Forwarded):
+		return nil, fmt.Errorf("%w: the system publish is http to its handler, with no port and no visitor address", errTlsFrontTarget)
 	}
-	if _, err := netip.ParseAddrPort(copied.LocalAddress); err != nil {
-		return nil, fmt.Errorf("%w: a local ip and port", errTlsFrontTarget)
+	if copied.Handler == nil {
+		if _, err := netip.ParseAddrPort(copied.LocalAddress); err != nil {
+			return nil, fmt.Errorf("%w: a local ip and port", errTlsFrontTarget)
+		}
 	}
 	return &copied, nil
 }
@@ -661,9 +676,10 @@ func (self *TlsFront) targetRefused() {
 	}
 }
 
-// Probes the target until the front closes: serving follows whether it accepts a connection (§9.9's SetServing).
+// Probes the target until the front closes: serving follows whether it accepts a connection (§9.9's SetServing). A
+// component's handler is in this process and always answers, so it is never probed.
 func (self *TlsFront) runProbe() {
-	if self.settings.TargetProbeInterval <= 0 {
+	if self.settings.TargetProbeInterval <= 0 || self.target.Handler != nil {
 		return
 	}
 	for {
