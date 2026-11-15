@@ -950,8 +950,12 @@ type BridgeRules struct {
 	Subjects                []*BridgeRuleSubject   `protobuf:"bytes,8,rep,name=subjects,proto3" json:"subjects,omitempty"`            // who may reach this host and how (rules 1, 3, 4, 6 and 7)
 	Egress                  *BridgeRuleEgress      `protobuf:"bytes,9,opt,name=egress,proto3" json:"egress,omitempty"`                // this device's own default route; unset keeps today's
 	Untagged                *BridgeRuleSubject     `protobuf:"bytes,10,opt,name=untagged,proto3" json:"untagged,omitempty"`           // the rows autogroup:untagged holds at this host, with no sidecar_id,
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	//   member_id or client_ids: what an sdk provider before C16 gives a
+	//   sealed subject no row binds; unset, such a subject holds no rows
+	//   (bridge-m4-09-other-client-rows, DESIGN-DETAILS 12.2.2)
+	Shares        []*BridgeRuleShare `protobuf:"bytes,11,rep,name=shares,proto3" json:"shares,omitempty"` // the shares this host serves, X's side (§17.9; DESIGN-DETAILS 12.2.2)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BridgeRules) Reset() {
@@ -1054,6 +1058,13 @@ func (x *BridgeRules) GetUntagged() *BridgeRuleSubject {
 	return nil
 }
 
+func (x *BridgeRules) GetShares() []*BridgeRuleShare {
+	if x != nil {
+		return x.Shares
+	}
+	return nil
+}
+
 // One prefix of the sender's table. An entry owns its range outright: with every advertiser down it answers
 // unreachable, never a broader prefix or the default route (§17.7).
 type BridgeRuleEntry struct {
@@ -1128,10 +1139,11 @@ type BridgeRuleLink struct {
 	SiteId                  []byte                 `protobuf:"bytes,7,opt,name=site_id,json=siteId,proto3" json:"site_id,omitempty"`
 	DrainingSince           int64                  `protobuf:"varint,8,opt,name=draining_since,json=drainingSince,proto3" json:"draining_since,omitempty"` // removed (§17.5's removed row): drains from here
 	DrainUntil              int64                  `protobuf:"varint,9,opt,name=drain_until,json=drainUntil,proto3" json:"drain_until,omitempty"`
-	// 10 and 11 are a share link's share_id and target_network_id (BRIDGE-M6-05; DESIGN-DETAILS 12.2.2)
-	TargetClientPublicKey []byte `protobuf:"bytes,12,opt,name=target_client_public_key,json=targetClientPublicKey,proto3" json:"target_client_public_key,omitempty"` // an app host: the device client key its live forwarding Delegation names
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	ShareId                 []byte                 `protobuf:"bytes,10,opt,name=share_id,json=shareId,proto3" json:"share_id,omitempty"`                                               // a share link, Y's side: FriendsAndFamily to an alias's host
+	TargetNetworkId         []byte                 `protobuf:"bytes,11,opt,name=target_network_id,json=targetNetworkId,proto3" json:"target_network_id,omitempty"`                     // with share_id: X
+	TargetClientPublicKey   []byte                 `protobuf:"bytes,12,opt,name=target_client_public_key,json=targetClientPublicKey,proto3" json:"target_client_public_key,omitempty"` // an app host: the device client key its live forwarding Delegation names
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *BridgeRuleLink) Reset() {
@@ -1225,6 +1237,20 @@ func (x *BridgeRuleLink) GetDrainUntil() int64 {
 		return x.DrainUntil
 	}
 	return 0
+}
+
+func (x *BridgeRuleLink) GetShareId() []byte {
+	if x != nil {
+		return x.ShareId
+	}
+	return nil
+}
+
+func (x *BridgeRuleLink) GetTargetNetworkId() []byte {
+	if x != nil {
+		return x.TargetNetworkId
+	}
+	return nil
 }
 
 func (x *BridgeRuleLink) GetTargetClientPublicKey() []byte {
@@ -1601,6 +1627,178 @@ func (x *BridgeRuleReach) GetExpires() int64 {
 	return 0
 }
 
+// A share this host serves (§17.9's X side): who may arrive under it and the targets this host hosts itself. The
+// principal's verified share and network select the rows, never an address (owner decision 11).
+type BridgeRuleShare struct {
+	state              protoimpl.MessageState   `protogen:"open.v1"`
+	ShareId            []byte                   `protobuf:"bytes,1,opt,name=share_id,json=shareId,proto3" json:"share_id,omitempty"`
+	AcceptingNetworkId []byte                   `protobuf:"bytes,2,opt,name=accepting_network_id,json=acceptingNetworkId,proto3" json:"accepting_network_id,omitempty"` // Y: the principal's network must be it
+	SharePublicKey     []byte                   `protobuf:"bytes,3,opt,name=share_public_key,json=sharePublicKey,proto3" json:"share_public_key,omitempty"`             // as BridgeState.share_keys carries it
+	GrantId            []byte                   `protobuf:"bytes,4,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`                                    // a GrantRevoke of it ends the share between states
+	Expires            int64                    `protobuf:"varint,5,opt,name=expires,proto3" json:"expires,omitempty"`
+	Targets            []*BridgeRuleShareTarget `protobuf:"bytes,6,rep,name=targets,proto3" json:"targets,omitempty"` // the targets this host hosts, by index
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *BridgeRuleShare) Reset() {
+	*x = BridgeRuleShare{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeRuleShare) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeRuleShare) ProtoMessage() {}
+
+func (x *BridgeRuleShare) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeRuleShare.ProtoReflect.Descriptor instead.
+func (*BridgeRuleShare) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *BridgeRuleShare) GetShareId() []byte {
+	if x != nil {
+		return x.ShareId
+	}
+	return nil
+}
+
+func (x *BridgeRuleShare) GetAcceptingNetworkId() []byte {
+	if x != nil {
+		return x.AcceptingNetworkId
+	}
+	return nil
+}
+
+func (x *BridgeRuleShare) GetSharePublicKey() []byte {
+	if x != nil {
+		return x.SharePublicKey
+	}
+	return nil
+}
+
+func (x *BridgeRuleShare) GetGrantId() []byte {
+	if x != nil {
+		return x.GrantId
+	}
+	return nil
+}
+
+func (x *BridgeRuleShare) GetExpires() int64 {
+	if x != nil {
+		return x.Expires
+	}
+	return 0
+}
+
+func (x *BridgeRuleShare) GetTargets() []*BridgeRuleShareTarget {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+// One target of a share at its host: a destination whose low 16 bits lie in the alias maps to target, keeping the
+// bits past length, since Y's block is not X's to know and a block change in Y keeps them.
+type BridgeRuleShareTarget struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Index         uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	AliasHostBits uint32                 `protobuf:"varint,2,opt,name=alias_host_bits,json=aliasHostBits,proto3" json:"alias_host_bits,omitempty"`
+	Length        uint32                 `protobuf:"varint,3,opt,name=length,proto3" json:"length,omitempty"`
+	Target        *BridgeIpv4Prefix      `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"` // T_i: To's low bits past length are kept
+	Protocol      uint32                 `protobuf:"varint,5,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Ports         []*BridgePortRange     `protobuf:"bytes,6,rep,name=ports,proto3" json:"ports,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeRuleShareTarget) Reset() {
+	*x = BridgeRuleShareTarget{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeRuleShareTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeRuleShareTarget) ProtoMessage() {}
+
+func (x *BridgeRuleShareTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeRuleShareTarget.ProtoReflect.Descriptor instead.
+func (*BridgeRuleShareTarget) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *BridgeRuleShareTarget) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *BridgeRuleShareTarget) GetAliasHostBits() uint32 {
+	if x != nil {
+		return x.AliasHostBits
+	}
+	return 0
+}
+
+func (x *BridgeRuleShareTarget) GetLength() uint32 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+func (x *BridgeRuleShareTarget) GetTarget() *BridgeIpv4Prefix {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *BridgeRuleShareTarget) GetProtocol() uint32 {
+	if x != nil {
+		return x.Protocol
+	}
+	return 0
+}
+
+func (x *BridgeRuleShareTarget) GetPorts() []*BridgePortRange {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
 // This device's own default route (§17.9's egress spec): today's under auto, only exits under exits, none under none.
 type BridgeRuleEgress struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1612,7 +1810,7 @@ type BridgeRuleEgress struct {
 
 func (x *BridgeRuleEgress) Reset() {
 	*x = BridgeRuleEgress{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[16]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1624,7 +1822,7 @@ func (x *BridgeRuleEgress) String() string {
 func (*BridgeRuleEgress) ProtoMessage() {}
 
 func (x *BridgeRuleEgress) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[16]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1637,7 +1835,7 @@ func (x *BridgeRuleEgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeRuleEgress.ProtoReflect.Descriptor instead.
 func (*BridgeRuleEgress) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{16}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *BridgeRuleEgress) GetMode() BridgeEgressMode {
@@ -1672,7 +1870,7 @@ type WindowDelegation struct {
 
 func (x *WindowDelegation) Reset() {
 	*x = WindowDelegation{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[17]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1684,7 +1882,7 @@ func (x *WindowDelegation) String() string {
 func (*WindowDelegation) ProtoMessage() {}
 
 func (x *WindowDelegation) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[17]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1697,7 +1895,7 @@ func (x *WindowDelegation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WindowDelegation.ProtoReflect.Descriptor instead.
 func (*WindowDelegation) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{17}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *WindowDelegation) GetNetworkId() []byte {
@@ -1768,7 +1966,7 @@ type ShareCert struct {
 
 func (x *ShareCert) Reset() {
 	*x = ShareCert{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[18]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1780,7 +1978,7 @@ func (x *ShareCert) String() string {
 func (*ShareCert) ProtoMessage() {}
 
 func (x *ShareCert) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[18]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1793,7 +1991,7 @@ func (x *ShareCert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShareCert.ProtoReflect.Descriptor instead.
 func (*ShareCert) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{18}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ShareCert) GetShareId() []byte {
@@ -1836,7 +2034,7 @@ type BridgeShareSigner struct {
 
 func (x *BridgeShareSigner) Reset() {
 	*x = BridgeShareSigner{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[19]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1848,7 +2046,7 @@ func (x *BridgeShareSigner) String() string {
 func (*BridgeShareSigner) ProtoMessage() {}
 
 func (x *BridgeShareSigner) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[19]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1861,7 +2059,7 @@ func (x *BridgeShareSigner) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeShareSigner.ProtoReflect.Descriptor instead.
 func (*BridgeShareSigner) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{19}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BridgeShareSigner) GetShareId() []byte {
@@ -1902,7 +2100,7 @@ type BridgeIpv4Prefix struct {
 
 func (x *BridgeIpv4Prefix) Reset() {
 	*x = BridgeIpv4Prefix{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[20]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1914,7 +2112,7 @@ func (x *BridgeIpv4Prefix) String() string {
 func (*BridgeIpv4Prefix) ProtoMessage() {}
 
 func (x *BridgeIpv4Prefix) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[20]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1927,7 +2125,7 @@ func (x *BridgeIpv4Prefix) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeIpv4Prefix.ProtoReflect.Descriptor instead.
 func (*BridgeIpv4Prefix) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{20}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *BridgeIpv4Prefix) GetAddress() uint32 {
@@ -1954,7 +2152,7 @@ type BridgePortRange struct {
 
 func (x *BridgePortRange) Reset() {
 	*x = BridgePortRange{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[21]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1966,7 +2164,7 @@ func (x *BridgePortRange) String() string {
 func (*BridgePortRange) ProtoMessage() {}
 
 func (x *BridgePortRange) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[21]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1979,7 +2177,7 @@ func (x *BridgePortRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgePortRange.ProtoReflect.Descriptor instead.
 func (*BridgePortRange) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{21}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *BridgePortRange) GetFirst() uint32 {
@@ -2012,7 +2210,7 @@ type BridgeApproval struct {
 
 func (x *BridgeApproval) Reset() {
 	*x = BridgeApproval{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[22]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2024,7 +2222,7 @@ func (x *BridgeApproval) String() string {
 func (*BridgeApproval) ProtoMessage() {}
 
 func (x *BridgeApproval) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[22]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2037,7 +2235,7 @@ func (x *BridgeApproval) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeApproval.ProtoReflect.Descriptor instead.
 func (*BridgeApproval) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{22}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *BridgeApproval) GetCanonicalAction() []byte {
@@ -2074,7 +2272,7 @@ type BridgeBlock struct {
 
 func (x *BridgeBlock) Reset() {
 	*x = BridgeBlock{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[23]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2086,7 +2284,7 @@ func (x *BridgeBlock) String() string {
 func (*BridgeBlock) ProtoMessage() {}
 
 func (x *BridgeBlock) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[23]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2099,7 +2297,7 @@ func (x *BridgeBlock) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeBlock.ProtoReflect.Descriptor instead.
 func (*BridgeBlock) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{23}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *BridgeBlock) GetIpv4Prefix() *BridgeIpv4Prefix {
@@ -2134,7 +2332,7 @@ type BridgeAddress struct {
 
 func (x *BridgeAddress) Reset() {
 	*x = BridgeAddress{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[24]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2146,7 +2344,7 @@ func (x *BridgeAddress) String() string {
 func (*BridgeAddress) ProtoMessage() {}
 
 func (x *BridgeAddress) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[24]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2159,7 +2357,7 @@ func (x *BridgeAddress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeAddress.ProtoReflect.Descriptor instead.
 func (*BridgeAddress) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{24}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *BridgeAddress) GetHeader() *StatementHeader {
@@ -2192,7 +2390,7 @@ type BridgeAddressBody struct {
 
 func (x *BridgeAddressBody) Reset() {
 	*x = BridgeAddressBody{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[25]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2204,7 +2402,7 @@ func (x *BridgeAddressBody) String() string {
 func (*BridgeAddressBody) ProtoMessage() {}
 
 func (x *BridgeAddressBody) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[25]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2217,7 +2415,7 @@ func (x *BridgeAddressBody) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeAddressBody.ProtoReflect.Descriptor instead.
 func (*BridgeAddressBody) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{25}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *BridgeAddressBody) GetIpv4() uint32 {
@@ -2240,7 +2438,7 @@ type BridgeRoute struct {
 
 func (x *BridgeRoute) Reset() {
 	*x = BridgeRoute{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[26]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2252,7 +2450,7 @@ func (x *BridgeRoute) String() string {
 func (*BridgeRoute) ProtoMessage() {}
 
 func (x *BridgeRoute) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[26]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2265,7 +2463,7 @@ func (x *BridgeRoute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeRoute.ProtoReflect.Descriptor instead.
 func (*BridgeRoute) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{26}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *BridgeRoute) GetHeader() *StatementHeader {
@@ -2318,7 +2516,7 @@ type BridgeRouteBody struct {
 
 func (x *BridgeRouteBody) Reset() {
 	*x = BridgeRouteBody{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[27]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2330,7 +2528,7 @@ func (x *BridgeRouteBody) String() string {
 func (*BridgeRouteBody) ProtoMessage() {}
 
 func (x *BridgeRouteBody) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[27]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2343,7 +2541,7 @@ func (x *BridgeRouteBody) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeRouteBody.ProtoReflect.Descriptor instead.
 func (*BridgeRouteBody) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{27}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *BridgeRouteBody) GetPrefixes() []*BridgeIpv4Prefix {
@@ -2408,7 +2606,7 @@ type BridgeMap struct {
 
 func (x *BridgeMap) Reset() {
 	*x = BridgeMap{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[28]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2420,7 +2618,7 @@ func (x *BridgeMap) String() string {
 func (*BridgeMap) ProtoMessage() {}
 
 func (x *BridgeMap) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[28]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2433,7 +2631,7 @@ func (x *BridgeMap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeMap.ProtoReflect.Descriptor instead.
 func (*BridgeMap) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{28}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *BridgeMap) GetHeader() *StatementHeader {
@@ -2486,7 +2684,7 @@ type BridgeMapBody struct {
 
 func (x *BridgeMapBody) Reset() {
 	*x = BridgeMapBody{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[29]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2498,7 +2696,7 @@ func (x *BridgeMapBody) String() string {
 func (*BridgeMapBody) ProtoMessage() {}
 
 func (x *BridgeMapBody) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[29]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2511,7 +2709,7 @@ func (x *BridgeMapBody) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeMapBody.ProtoReflect.Descriptor instead.
 func (*BridgeMapBody) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{29}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *BridgeMapBody) GetMatchPrefix() *BridgeIpv4Prefix {
@@ -2578,7 +2776,7 @@ type BridgeEgress struct {
 
 func (x *BridgeEgress) Reset() {
 	*x = BridgeEgress{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[30]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2590,7 +2788,7 @@ func (x *BridgeEgress) String() string {
 func (*BridgeEgress) ProtoMessage() {}
 
 func (x *BridgeEgress) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[30]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2603,7 +2801,7 @@ func (x *BridgeEgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeEgress.ProtoReflect.Descriptor instead.
 func (*BridgeEgress) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{30}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *BridgeEgress) GetHeader() *StatementHeader {
@@ -2644,7 +2842,7 @@ type BridgeEgressBody struct {
 
 func (x *BridgeEgressBody) Reset() {
 	*x = BridgeEgressBody{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[31]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2656,7 +2854,7 @@ func (x *BridgeEgressBody) String() string {
 func (*BridgeEgressBody) ProtoMessage() {}
 
 func (x *BridgeEgressBody) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[31]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2669,7 +2867,7 @@ func (x *BridgeEgressBody) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeEgressBody.ProtoReflect.Descriptor instead.
 func (*BridgeEgressBody) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{31}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *BridgeEgressBody) GetExitSidecarIds() [][]byte {
@@ -2699,7 +2897,7 @@ type BridgeAlias struct {
 
 func (x *BridgeAlias) Reset() {
 	*x = BridgeAlias{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[32]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2711,7 +2909,7 @@ func (x *BridgeAlias) String() string {
 func (*BridgeAlias) ProtoMessage() {}
 
 func (x *BridgeAlias) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[32]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2724,7 +2922,7 @@ func (x *BridgeAlias) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeAlias.ProtoReflect.Descriptor instead.
 func (*BridgeAlias) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{32}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *BridgeAlias) GetHeader() *StatementHeader {
@@ -2742,18 +2940,22 @@ func (x *BridgeAlias) GetSealedBody() []byte {
 }
 
 type BridgeAliasBody struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ShareId       []byte                 `protobuf:"bytes,1,opt,name=share_id,json=shareId,proto3" json:"share_id,omitempty"`
-	TargetIndex   uint32                 `protobuf:"varint,2,opt,name=target_index,json=targetIndex,proto3" json:"target_index,omitempty"`
-	AliasPrefix   *BridgeIpv4Prefix      `protobuf:"bytes,3,opt,name=alias_prefix,json=aliasPrefix,proto3" json:"alias_prefix,omitempty"`
-	Host          []byte                 `protobuf:"bytes,4,opt,name=host,proto3" json:"host,omitempty"` // sidecar_id: T_i's host, in the source network
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	ShareId               []byte                 `protobuf:"bytes,1,opt,name=share_id,json=shareId,proto3" json:"share_id,omitempty"`
+	TargetIndex           uint32                 `protobuf:"varint,2,opt,name=target_index,json=targetIndex,proto3" json:"target_index,omitempty"`
+	AliasPrefix           *BridgeIpv4Prefix      `protobuf:"bytes,3,opt,name=alias_prefix,json=aliasPrefix,proto3" json:"alias_prefix,omitempty"`
+	Host                  []byte                 `protobuf:"bytes,4,opt,name=host,proto3" json:"host,omitempty"`                                                                    // sidecar_id: T_i's host, in the source network
+	HostIdentityPublicKey []byte                 `protobuf:"bytes,5,opt,name=host_identity_public_key,json=hostIdentityPublicKey,proto3" json:"host_identity_public_key,omitempty"` // QD-077: T_i's host's identity key, copied from the opened target table
+	SharingNetworkId      []byte                 `protobuf:"bytes,6,opt,name=sharing_network_id,json=sharingNetworkId,proto3" json:"sharing_network_id,omitempty"`                  // X, the network the host is a sidecar of
+	DrainSeconds          uint32                 `protobuf:"varint,7,opt,name=drain_seconds,json=drainSeconds,proto3" json:"drain_seconds,omitempty"`                               // a release's drain, 300 s when 0, 3,600 s at most
+	Release               bool                   `protobuf:"varint,8,opt,name=release,proto3" json:"release,omitempty"`                                                             // ends the alias of this share_id and target_index; alias_prefix as held
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *BridgeAliasBody) Reset() {
 	*x = BridgeAliasBody{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[33]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2765,7 +2967,7 @@ func (x *BridgeAliasBody) String() string {
 func (*BridgeAliasBody) ProtoMessage() {}
 
 func (x *BridgeAliasBody) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[33]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2778,7 +2980,7 @@ func (x *BridgeAliasBody) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeAliasBody.ProtoReflect.Descriptor instead.
 func (*BridgeAliasBody) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{33}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *BridgeAliasBody) GetShareId() []byte {
@@ -2809,6 +3011,586 @@ func (x *BridgeAliasBody) GetHost() []byte {
 	return nil
 }
 
+func (x *BridgeAliasBody) GetHostIdentityPublicKey() []byte {
+	if x != nil {
+		return x.HostIdentityPublicKey
+	}
+	return nil
+}
+
+func (x *BridgeAliasBody) GetSharingNetworkId() []byte {
+	if x != nil {
+		return x.SharingNetworkId
+	}
+	return nil
+}
+
+func (x *BridgeAliasBody) GetDrainSeconds() uint32 {
+	if x != nil {
+		return x.DrainSeconds
+	}
+	return 0
+}
+
+func (x *BridgeAliasBody) GetRelease() bool {
+	if x != nil {
+		return x.Release
+	}
+	return false
+}
+
+// X's config file bridge/share-grant/<share_id hex> (§17.9's share pins; QD-077, QD-670): what X's approving admin's
+// device writes in a head in the act that files the share's GrantActivate. A config file, which evs holds as
+// ciphertext, so no server reads it. table_key is K itself, so every reader of X's config holds it (§2.6).
+type BridgeShareGrant struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ShareId            []byte                 `protobuf:"bytes,1,opt,name=share_id,json=shareId,proto3" json:"share_id,omitempty"`
+	GrantId            []byte                 `protobuf:"bytes,2,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`                                    // the share's GrantActivate; the file counts only while that grant is live
+	SharePublicKey     []byte                 `protobuf:"bytes,3,opt,name=share_public_key,json=sharePublicKey,proto3" json:"share_public_key,omitempty"`             // Y's ShareKey, Ed25519
+	TargetTableSha256  []byte                 `protobuf:"bytes,4,opt,name=target_table_sha256,json=targetTableSha256,proto3" json:"target_table_sha256,omitempty"`    // SHA-256 of the sealed target table as network_bridge_share stores it
+	TableKey           []byte                 `protobuf:"bytes,5,opt,name=table_key,json=tableKey,proto3" json:"table_key,omitempty"`                                 // K
+	AcceptingNetworkId []byte                 `protobuf:"bytes,6,opt,name=accepting_network_id,json=acceptingNetworkId,proto3" json:"accepting_network_id,omitempty"` // Y
+	AliasTableSha256   []byte                 `protobuf:"bytes,7,opt,name=alias_table_sha256,json=aliasTableSha256,proto3" json:"alias_table_sha256,omitempty"`       // SHA-256 of the sealed alias table X's approving admin opened
+	TargetTableVersion uint64                 `protobuf:"varint,8,opt,name=target_table_version,json=targetTableVersion,proto3" json:"target_table_version,omitempty"`
+	AliasTableVersion  uint64                 `protobuf:"varint,9,opt,name=alias_table_version,json=aliasTableVersion,proto3" json:"alias_table_version,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *BridgeShareGrant) Reset() {
+	*x = BridgeShareGrant{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareGrant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareGrant) ProtoMessage() {}
+
+func (x *BridgeShareGrant) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareGrant.ProtoReflect.Descriptor instead.
+func (*BridgeShareGrant) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *BridgeShareGrant) GetShareId() []byte {
+	if x != nil {
+		return x.ShareId
+	}
+	return nil
+}
+
+func (x *BridgeShareGrant) GetGrantId() []byte {
+	if x != nil {
+		return x.GrantId
+	}
+	return nil
+}
+
+func (x *BridgeShareGrant) GetSharePublicKey() []byte {
+	if x != nil {
+		return x.SharePublicKey
+	}
+	return nil
+}
+
+func (x *BridgeShareGrant) GetTargetTableSha256() []byte {
+	if x != nil {
+		return x.TargetTableSha256
+	}
+	return nil
+}
+
+func (x *BridgeShareGrant) GetTableKey() []byte {
+	if x != nil {
+		return x.TableKey
+	}
+	return nil
+}
+
+func (x *BridgeShareGrant) GetAcceptingNetworkId() []byte {
+	if x != nil {
+		return x.AcceptingNetworkId
+	}
+	return nil
+}
+
+func (x *BridgeShareGrant) GetAliasTableSha256() []byte {
+	if x != nil {
+		return x.AliasTableSha256
+	}
+	return nil
+}
+
+func (x *BridgeShareGrant) GetTargetTableVersion() uint64 {
+	if x != nil {
+		return x.TargetTableVersion
+	}
+	return 0
+}
+
+func (x *BridgeShareGrant) GetAliasTableVersion() uint64 {
+	if x != nil {
+		return x.AliasTableVersion
+	}
+	return 0
+}
+
+// The share seal's bodies (§17.9; QD-108): each sealed under K with its label, padded by pad to a multiple of 256 B.
+type BridgeShareTargets struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Targets       []*BridgeShareTarget   `protobuf:"bytes,1,rep,name=targets,proto3" json:"targets,omitempty"`
+	Pad           []byte                 `protobuf:"bytes,15,opt,name=pad,proto3" json:"pad,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeShareTargets) Reset() {
+	*x = BridgeShareTargets{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareTargets) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareTargets) ProtoMessage() {}
+
+func (x *BridgeShareTargets) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareTargets.ProtoReflect.Descriptor instead.
+func (*BridgeShareTargets) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *BridgeShareTargets) GetTargets() []*BridgeShareTarget {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+func (x *BridgeShareTargets) GetPad() []byte {
+	if x != nil {
+		return x.Pad
+	}
+	return nil
+}
+
+type BridgeShareTarget struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Index                 uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"` // from 0, dense
+	HostSidecarId         []byte                 `protobuf:"bytes,2,opt,name=host_sidecar_id,json=hostSidecarId,proto3" json:"host_sidecar_id,omitempty"`
+	HostIdentityPublicKey []byte                 `protobuf:"bytes,3,opt,name=host_identity_public_key,json=hostIdentityPublicKey,proto3" json:"host_identity_public_key,omitempty"` // QD-077
+	Prefix                *BridgeIpv4Prefix      `protobuf:"bytes,4,opt,name=prefix,proto3" json:"prefix,omitempty"`                                                                // what X's host reaches: its hosted address as a /32, or a served prefix
+	Protocol              uint32                 `protobuf:"varint,5,opt,name=protocol,proto3" json:"protocol,omitempty"`                                                           // 0 every protocol; 6 or 17 with ports
+	Ports                 []*BridgePortRange     `protobuf:"bytes,6,rep,name=ports,proto3" json:"ports,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *BridgeShareTarget) Reset() {
+	*x = BridgeShareTarget{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareTarget) ProtoMessage() {}
+
+func (x *BridgeShareTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareTarget.ProtoReflect.Descriptor instead.
+func (*BridgeShareTarget) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *BridgeShareTarget) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *BridgeShareTarget) GetHostSidecarId() []byte {
+	if x != nil {
+		return x.HostSidecarId
+	}
+	return nil
+}
+
+func (x *BridgeShareTarget) GetHostIdentityPublicKey() []byte {
+	if x != nil {
+		return x.HostIdentityPublicKey
+	}
+	return nil
+}
+
+func (x *BridgeShareTarget) GetPrefix() *BridgeIpv4Prefix {
+	if x != nil {
+		return x.Prefix
+	}
+	return nil
+}
+
+func (x *BridgeShareTarget) GetProtocol() uint32 {
+	if x != nil {
+		return x.Protocol
+	}
+	return 0
+}
+
+func (x *BridgeShareTarget) GetPorts() []*BridgePortRange {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
+type BridgeShareAliases struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Aliases       []*BridgeShareAlias    `protobuf:"bytes,1,rep,name=aliases,proto3" json:"aliases,omitempty"`
+	Pad           []byte                 `protobuf:"bytes,15,opt,name=pad,proto3" json:"pad,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeShareAliases) Reset() {
+	*x = BridgeShareAliases{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareAliases) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareAliases) ProtoMessage() {}
+
+func (x *BridgeShareAliases) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareAliases.ProtoReflect.Descriptor instead.
+func (*BridgeShareAliases) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *BridgeShareAliases) GetAliases() []*BridgeShareAlias {
+	if x != nil {
+		return x.Aliases
+	}
+	return nil
+}
+
+func (x *BridgeShareAliases) GetPad() []byte {
+	if x != nil {
+		return x.Pad
+	}
+	return nil
+}
+
+type BridgeShareAlias struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Index         uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	AliasHostBits uint32                 `protobuf:"varint,2,opt,name=alias_host_bits,json=aliasHostBits,proto3" json:"alias_host_bits,omitempty"` // the low 16 bits of A_i's network address: Y's block is not X's to know
+	Length        uint32                 `protobuf:"varint,3,opt,name=length,proto3" json:"length,omitempty"`                                      // equal to its target's
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeShareAlias) Reset() {
+	*x = BridgeShareAlias{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareAlias) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareAlias) ProtoMessage() {}
+
+func (x *BridgeShareAlias) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareAlias.ProtoReflect.Descriptor instead.
+func (*BridgeShareAlias) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *BridgeShareAlias) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *BridgeShareAlias) GetAliasHostBits() uint32 {
+	if x != nil {
+		return x.AliasHostBits
+	}
+	return 0
+}
+
+func (x *BridgeShareAlias) GetLength() uint32 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+type BridgeShareKeyBody struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SharePublicKey []byte                 `protobuf:"bytes,1,opt,name=share_public_key,json=sharePublicKey,proto3" json:"share_public_key,omitempty"`
+	Pad            []byte                 `protobuf:"bytes,15,opt,name=pad,proto3" json:"pad,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *BridgeShareKeyBody) Reset() {
+	*x = BridgeShareKeyBody{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareKeyBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareKeyBody) ProtoMessage() {}
+
+func (x *BridgeShareKeyBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareKeyBody.ProtoReflect.Descriptor instead.
+func (*BridgeShareKeyBody) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *BridgeShareKeyBody) GetSharePublicKey() []byte {
+	if x != nil {
+		return x.SharePublicKey
+	}
+	return nil
+}
+
+func (x *BridgeShareKeyBody) GetPad() []byte {
+	if x != nil {
+		return x.Pad
+	}
+	return nil
+}
+
+type BridgeShareShortfall struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Index             uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`                                                    // the first target that found no room
+	Length            uint32                 `protobuf:"varint,2,opt,name=length,proto3" json:"length,omitempty"`                                                  // its prefix length
+	FreeAddressCount  uint32                 `protobuf:"varint,3,opt,name=free_address_count,json=freeAddressCount,proto3" json:"free_address_count,omitempty"`    // the upper /17's free addresses at the preflight
+	LargestFreeLength uint32                 `protobuf:"varint,4,opt,name=largest_free_length,json=largestFreeLength,proto3" json:"largest_free_length,omitempty"` // the shortest prefix length with an aligned free block; 33 for none
+	Pad               []byte                 `protobuf:"bytes,15,opt,name=pad,proto3" json:"pad,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *BridgeShareShortfall) Reset() {
+	*x = BridgeShareShortfall{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareShortfall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareShortfall) ProtoMessage() {}
+
+func (x *BridgeShareShortfall) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareShortfall.ProtoReflect.Descriptor instead.
+func (*BridgeShareShortfall) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *BridgeShareShortfall) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *BridgeShareShortfall) GetLength() uint32 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+func (x *BridgeShareShortfall) GetFreeAddressCount() uint32 {
+	if x != nil {
+		return x.FreeAddressCount
+	}
+	return 0
+}
+
+func (x *BridgeShareShortfall) GetLargestFreeLength() uint32 {
+	if x != nil {
+		return x.LargestFreeLength
+	}
+	return 0
+}
+
+func (x *BridgeShareShortfall) GetPad() []byte {
+	if x != nil {
+		return x.Pad
+	}
+	return nil
+}
+
+// What the accepting network stores as its side of network_bridge_share, the row's alias table (§2.8's api-9): the
+// seals an accept returns, each under K with its own label, in one value, since the row has one sealed column a side
+// (question bridge-m6-03-accept-seals). X's approving admin pins the SHA-256 of these bytes as the alias table's
+// (BridgeShareGrant.alias_table_sha256), so the ShareKey and the aliases are pinned as one. Ciphertext only.
+type BridgeShareAccept struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Aliases       []byte                 `protobuf:"bytes,1,opt,name=aliases,proto3" json:"aliases,omitempty"`                   // the sealed BridgeShareAliases; empty on a refusal
+	ShareKey      []byte                 `protobuf:"bytes,2,opt,name=share_key,json=shareKey,proto3" json:"share_key,omitempty"` // the sealed BridgeShareKeyBody; empty on a refusal
+	Shortfall     []byte                 `protobuf:"bytes,3,opt,name=shortfall,proto3" json:"shortfall,omitempty"`               // the sealed BridgeShareShortfall, under refused_no_space alone
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeShareAccept) Reset() {
+	*x = BridgeShareAccept{}
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeShareAccept) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeShareAccept) ProtoMessage() {}
+
+func (x *BridgeShareAccept) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeShareAccept.ProtoReflect.Descriptor instead.
+func (*BridgeShareAccept) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *BridgeShareAccept) GetAliases() []byte {
+	if x != nil {
+		return x.Aliases
+	}
+	return nil
+}
+
+func (x *BridgeShareAccept) GetShareKey() []byte {
+	if x != nil {
+		return x.ShareKey
+	}
+	return nil
+}
+
+func (x *BridgeShareAccept) GetShortfall() []byte {
+	if x != nil {
+		return x.Shortfall
+	}
+	return nil
+}
+
 type BridgeWithdraw struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Header        *StatementHeader       `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
@@ -2820,7 +3602,7 @@ type BridgeWithdraw struct {
 
 func (x *BridgeWithdraw) Reset() {
 	*x = BridgeWithdraw{}
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[34]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2832,7 +3614,7 @@ func (x *BridgeWithdraw) String() string {
 func (*BridgeWithdraw) ProtoMessage() {}
 
 func (x *BridgeWithdraw) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_bridge_proto_msgTypes[34]
+	mi := &file_protocol_bridge_bridge_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2845,7 +3627,7 @@ func (x *BridgeWithdraw) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeWithdraw.ProtoReflect.Descriptor instead.
 func (*BridgeWithdraw) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{34}
+	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *BridgeWithdraw) GetHeader() *StatementHeader {
@@ -2945,7 +3727,7 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x0econfig_repo_id\x18\x06 \x01(\fR\fconfigRepoId\x12&\n" +
 	"\x0fconfig_group_id\x18\a \x01(\fR\rconfigGroupId\x12+\n" +
 	"\x11signed_delegation\x18\b \x01(\fR\x10signedDelegation\x12?\n" +
-	"\rdelegation_at\x18\t \x01(\v2\x1a.urnetwork.sidecar.AuthPinR\fdelegationAt\"\xe1\x04\n" +
+	"\rdelegation_at\x18\t \x01(\v2\x1a.urnetwork.sidecar.AuthPinR\fdelegationAt\"\x9d\x05\n" +
 	"\vBridgeRules\x129\n" +
 	"\x05block\x18\x01 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x05block\x12J\n" +
 	"\x0eprevious_block\x18\x02 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\rpreviousBlock\x12;\n" +
@@ -2957,11 +3739,12 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\bsubjects\x18\b \x03(\v2$.urnetwork.sidecar.BridgeRuleSubjectR\bsubjects\x12;\n" +
 	"\x06egress\x18\t \x01(\v2#.urnetwork.sidecar.BridgeRuleEgressR\x06egress\x12@\n" +
 	"\buntagged\x18\n" +
-	" \x01(\v2$.urnetwork.sidecar.BridgeRuleSubjectR\buntagged\"\xc3\x01\n" +
+	" \x01(\v2$.urnetwork.sidecar.BridgeRuleSubjectR\buntagged\x12:\n" +
+	"\x06shares\x18\v \x03(\v2\".urnetwork.sidecar.BridgeRuleShareR\x06shares\"\xc3\x01\n" +
 	"\x0fBridgeRuleEntry\x12;\n" +
 	"\x06prefix\x18\x01 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x06prefix\x12:\n" +
 	"\x04kind\x18\x02 \x01(\x0e2&.urnetwork.sidecar.BridgeRuleEntryKindR\x04kind\x127\n" +
-	"\x05links\x18\x03 \x03(\v2!.urnetwork.sidecar.BridgeRuleLinkR\x05links\"\x98\x03\n" +
+	"\x05links\x18\x03 \x03(\v2!.urnetwork.sidecar.BridgeRuleLinkR\x05links\"\xdf\x03\n" +
 	"\x0eBridgeRuleLink\x12(\n" +
 	"\x10target_client_id\x18\x01 \x01(\fR\x0etargetClientId\x12*\n" +
 	"\x11target_sidecar_id\x18\x02 \x01(\fR\x0ftargetSidecarId\x12;\n" +
@@ -2972,7 +3755,10 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\asite_id\x18\a \x01(\fR\x06siteId\x12%\n" +
 	"\x0edraining_since\x18\b \x01(\x03R\rdrainingSince\x12\x1f\n" +
 	"\vdrain_until\x18\t \x01(\x03R\n" +
-	"drainUntil\x127\n" +
+	"drainUntil\x12\x19\n" +
+	"\bshare_id\x18\n" +
+	" \x01(\fR\ashareId\x12*\n" +
+	"\x11target_network_id\x18\v \x01(\fR\x0ftargetNetworkId\x127\n" +
 	"\x18target_client_public_key\x18\f \x01(\fR\x15targetClientPublicKey\"\xdf\x02\n" +
 	"\rBridgeRuleMap\x12\x15\n" +
 	"\x06map_id\x18\x01 \x01(\fR\x05mapId\x12F\n" +
@@ -3009,7 +3795,21 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x06prefix\x18\x02 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x06prefix\x12\x1a\n" +
 	"\bprotocol\x18\x03 \x01(\rR\bprotocol\x128\n" +
 	"\x05ports\x18\x04 \x03(\v2\".urnetwork.sidecar.BridgePortRangeR\x05ports\x12\x18\n" +
-	"\aexpires\x18\x05 \x01(\x03R\aexpires\"\x84\x01\n" +
+	"\aexpires\x18\x05 \x01(\x03R\aexpires\"\x81\x02\n" +
+	"\x0fBridgeRuleShare\x12\x19\n" +
+	"\bshare_id\x18\x01 \x01(\fR\ashareId\x120\n" +
+	"\x14accepting_network_id\x18\x02 \x01(\fR\x12acceptingNetworkId\x12(\n" +
+	"\x10share_public_key\x18\x03 \x01(\fR\x0esharePublicKey\x12\x19\n" +
+	"\bgrant_id\x18\x04 \x01(\fR\agrantId\x12\x18\n" +
+	"\aexpires\x18\x05 \x01(\x03R\aexpires\x12B\n" +
+	"\atargets\x18\x06 \x03(\v2(.urnetwork.sidecar.BridgeRuleShareTargetR\atargets\"\x80\x02\n" +
+	"\x15BridgeRuleShareTarget\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\rR\x05index\x12&\n" +
+	"\x0falias_host_bits\x18\x02 \x01(\rR\raliasHostBits\x12\x16\n" +
+	"\x06length\x18\x03 \x01(\rR\x06length\x12;\n" +
+	"\x06target\x18\x04 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x06target\x12\x1a\n" +
+	"\bprotocol\x18\x05 \x01(\rR\bprotocol\x128\n" +
+	"\x05ports\x18\x06 \x03(\v2\".urnetwork.sidecar.BridgePortRangeR\x05ports\"\x84\x01\n" +
 	"\x10BridgeRuleEgress\x127\n" +
 	"\x04mode\x18\x01 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\x127\n" +
 	"\x05exits\x18\x02 \x03(\v2!.urnetwork.sidecar.BridgeRuleLinkR\x05exits\"\xca\x02\n" +
@@ -3107,12 +3907,56 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\vBridgeAlias\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x1f\n" +
 	"\vsealed_body\x18\x02 \x01(\fR\n" +
-	"sealedBody\"\xab\x01\n" +
+	"sealedBody\"\xd1\x02\n" +
 	"\x0fBridgeAliasBody\x12\x19\n" +
 	"\bshare_id\x18\x01 \x01(\fR\ashareId\x12!\n" +
 	"\ftarget_index\x18\x02 \x01(\rR\vtargetIndex\x12F\n" +
 	"\falias_prefix\x18\x03 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\valiasPrefix\x12\x12\n" +
-	"\x04host\x18\x04 \x01(\fR\x04host\"\xa0\x01\n" +
+	"\x04host\x18\x04 \x01(\fR\x04host\x127\n" +
+	"\x18host_identity_public_key\x18\x05 \x01(\fR\x15hostIdentityPublicKey\x12,\n" +
+	"\x12sharing_network_id\x18\x06 \x01(\fR\x10sharingNetworkId\x12#\n" +
+	"\rdrain_seconds\x18\a \x01(\rR\fdrainSeconds\x12\x18\n" +
+	"\arelease\x18\b \x01(\bR\arelease\"\x81\x03\n" +
+	"\x10BridgeShareGrant\x12\x19\n" +
+	"\bshare_id\x18\x01 \x01(\fR\ashareId\x12\x19\n" +
+	"\bgrant_id\x18\x02 \x01(\fR\agrantId\x12(\n" +
+	"\x10share_public_key\x18\x03 \x01(\fR\x0esharePublicKey\x12.\n" +
+	"\x13target_table_sha256\x18\x04 \x01(\fR\x11targetTableSha256\x12\x1b\n" +
+	"\ttable_key\x18\x05 \x01(\fR\btableKey\x120\n" +
+	"\x14accepting_network_id\x18\x06 \x01(\fR\x12acceptingNetworkId\x12,\n" +
+	"\x12alias_table_sha256\x18\a \x01(\fR\x10aliasTableSha256\x120\n" +
+	"\x14target_table_version\x18\b \x01(\x04R\x12targetTableVersion\x12.\n" +
+	"\x13alias_table_version\x18\t \x01(\x04R\x11aliasTableVersion\"f\n" +
+	"\x12BridgeShareTargets\x12>\n" +
+	"\atargets\x18\x01 \x03(\v2$.urnetwork.sidecar.BridgeShareTargetR\atargets\x12\x10\n" +
+	"\x03pad\x18\x0f \x01(\fR\x03pad\"\x9d\x02\n" +
+	"\x11BridgeShareTarget\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\rR\x05index\x12&\n" +
+	"\x0fhost_sidecar_id\x18\x02 \x01(\fR\rhostSidecarId\x127\n" +
+	"\x18host_identity_public_key\x18\x03 \x01(\fR\x15hostIdentityPublicKey\x12;\n" +
+	"\x06prefix\x18\x04 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x06prefix\x12\x1a\n" +
+	"\bprotocol\x18\x05 \x01(\rR\bprotocol\x128\n" +
+	"\x05ports\x18\x06 \x03(\v2\".urnetwork.sidecar.BridgePortRangeR\x05ports\"e\n" +
+	"\x12BridgeShareAliases\x12=\n" +
+	"\aaliases\x18\x01 \x03(\v2#.urnetwork.sidecar.BridgeShareAliasR\aaliases\x12\x10\n" +
+	"\x03pad\x18\x0f \x01(\fR\x03pad\"h\n" +
+	"\x10BridgeShareAlias\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\rR\x05index\x12&\n" +
+	"\x0falias_host_bits\x18\x02 \x01(\rR\raliasHostBits\x12\x16\n" +
+	"\x06length\x18\x03 \x01(\rR\x06length\"P\n" +
+	"\x12BridgeShareKeyBody\x12(\n" +
+	"\x10share_public_key\x18\x01 \x01(\fR\x0esharePublicKey\x12\x10\n" +
+	"\x03pad\x18\x0f \x01(\fR\x03pad\"\xb4\x01\n" +
+	"\x14BridgeShareShortfall\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\rR\x05index\x12\x16\n" +
+	"\x06length\x18\x02 \x01(\rR\x06length\x12,\n" +
+	"\x12free_address_count\x18\x03 \x01(\rR\x10freeAddressCount\x12.\n" +
+	"\x13largest_free_length\x18\x04 \x01(\rR\x11largestFreeLength\x12\x10\n" +
+	"\x03pad\x18\x0f \x01(\fR\x03pad\"h\n" +
+	"\x11BridgeShareAccept\x12\x18\n" +
+	"\aaliases\x18\x01 \x01(\fR\aaliases\x12\x1b\n" +
+	"\tshare_key\x18\x02 \x01(\fR\bshareKey\x12\x1c\n" +
+	"\tshortfall\x18\x03 \x01(\fR\tshortfall\"\xa0\x01\n" +
 	"\x0eBridgeWithdraw\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x17\n" +
 	"\arule_id\x18\x02 \x01(\fR\x06ruleId\x129\n" +
@@ -3150,109 +3994,127 @@ func file_protocol_bridge_bridge_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_bridge_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_protocol_bridge_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_protocol_bridge_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
 var file_protocol_bridge_bridge_proto_goTypes = []any{
-	(BridgeRuleEntryKind)(0),  // 0: urnetwork.sidecar.BridgeRuleEntryKind
-	(BridgeRouteKind)(0),      // 1: urnetwork.sidecar.BridgeRouteKind
-	(BridgeEgressMode)(0),     // 2: urnetwork.sidecar.BridgeEgressMode
-	(BridgeWithdrawMode)(0),   // 3: urnetwork.sidecar.BridgeWithdrawMode
-	(*BridgeRows)(nil),        // 4: urnetwork.sidecar.BridgeRows
-	(*BridgeEgressRow)(nil),   // 5: urnetwork.sidecar.BridgeEgressRow
-	(*BridgeRouteRow)(nil),    // 6: urnetwork.sidecar.BridgeRouteRow
-	(*BridgeState)(nil),       // 7: urnetwork.sidecar.BridgeState
-	(*BridgeIdentity)(nil),    // 8: urnetwork.sidecar.BridgeIdentity
-	(*BridgeShareKey)(nil),    // 9: urnetwork.sidecar.BridgeShareKey
-	(*Pending)(nil),           // 10: urnetwork.sidecar.Pending
-	(*ForwardingKeys)(nil),    // 11: urnetwork.sidecar.ForwardingKeys
-	(*ForwardingHandOff)(nil), // 12: urnetwork.sidecar.ForwardingHandOff
-	(*BridgeRules)(nil),       // 13: urnetwork.sidecar.BridgeRules
-	(*BridgeRuleEntry)(nil),   // 14: urnetwork.sidecar.BridgeRuleEntry
-	(*BridgeRuleLink)(nil),    // 15: urnetwork.sidecar.BridgeRuleLink
-	(*BridgeRuleMap)(nil),     // 16: urnetwork.sidecar.BridgeRuleMap
-	(*BridgeRuleServed)(nil),  // 17: urnetwork.sidecar.BridgeRuleServed
-	(*BridgeRuleSubject)(nil), // 18: urnetwork.sidecar.BridgeRuleSubject
-	(*BridgeRuleReach)(nil),   // 19: urnetwork.sidecar.BridgeRuleReach
-	(*BridgeRuleEgress)(nil),  // 20: urnetwork.sidecar.BridgeRuleEgress
-	(*WindowDelegation)(nil),  // 21: urnetwork.sidecar.WindowDelegation
-	(*ShareCert)(nil),         // 22: urnetwork.sidecar.ShareCert
-	(*BridgeShareSigner)(nil), // 23: urnetwork.sidecar.BridgeShareSigner
-	(*BridgeIpv4Prefix)(nil),  // 24: urnetwork.sidecar.BridgeIpv4Prefix
-	(*BridgePortRange)(nil),   // 25: urnetwork.sidecar.BridgePortRange
-	(*BridgeApproval)(nil),    // 26: urnetwork.sidecar.BridgeApproval
-	(*BridgeBlock)(nil),       // 27: urnetwork.sidecar.BridgeBlock
-	(*BridgeAddress)(nil),     // 28: urnetwork.sidecar.BridgeAddress
-	(*BridgeAddressBody)(nil), // 29: urnetwork.sidecar.BridgeAddressBody
-	(*BridgeRoute)(nil),       // 30: urnetwork.sidecar.BridgeRoute
-	(*BridgeRouteBody)(nil),   // 31: urnetwork.sidecar.BridgeRouteBody
-	(*BridgeMap)(nil),         // 32: urnetwork.sidecar.BridgeMap
-	(*BridgeMapBody)(nil),     // 33: urnetwork.sidecar.BridgeMapBody
-	(*BridgeEgress)(nil),      // 34: urnetwork.sidecar.BridgeEgress
-	(*BridgeEgressBody)(nil),  // 35: urnetwork.sidecar.BridgeEgressBody
-	(*BridgeAlias)(nil),       // 36: urnetwork.sidecar.BridgeAlias
-	(*BridgeAliasBody)(nil),   // 37: urnetwork.sidecar.BridgeAliasBody
-	(*BridgeWithdraw)(nil),    // 38: urnetwork.sidecar.BridgeWithdraw
-	nil,                       // 39: urnetwork.sidecar.BridgeState.NamesEntry
-	(*AuthPin)(nil),           // 40: urnetwork.sidecar.AuthPin
-	(*Signed)(nil),            // 41: urnetwork.sidecar.Signed
-	(*StatementHeader)(nil),   // 42: urnetwork.sidecar.StatementHeader
+	(BridgeRuleEntryKind)(0),      // 0: urnetwork.sidecar.BridgeRuleEntryKind
+	(BridgeRouteKind)(0),          // 1: urnetwork.sidecar.BridgeRouteKind
+	(BridgeEgressMode)(0),         // 2: urnetwork.sidecar.BridgeEgressMode
+	(BridgeWithdrawMode)(0),       // 3: urnetwork.sidecar.BridgeWithdrawMode
+	(*BridgeRows)(nil),            // 4: urnetwork.sidecar.BridgeRows
+	(*BridgeEgressRow)(nil),       // 5: urnetwork.sidecar.BridgeEgressRow
+	(*BridgeRouteRow)(nil),        // 6: urnetwork.sidecar.BridgeRouteRow
+	(*BridgeState)(nil),           // 7: urnetwork.sidecar.BridgeState
+	(*BridgeIdentity)(nil),        // 8: urnetwork.sidecar.BridgeIdentity
+	(*BridgeShareKey)(nil),        // 9: urnetwork.sidecar.BridgeShareKey
+	(*Pending)(nil),               // 10: urnetwork.sidecar.Pending
+	(*ForwardingKeys)(nil),        // 11: urnetwork.sidecar.ForwardingKeys
+	(*ForwardingHandOff)(nil),     // 12: urnetwork.sidecar.ForwardingHandOff
+	(*BridgeRules)(nil),           // 13: urnetwork.sidecar.BridgeRules
+	(*BridgeRuleEntry)(nil),       // 14: urnetwork.sidecar.BridgeRuleEntry
+	(*BridgeRuleLink)(nil),        // 15: urnetwork.sidecar.BridgeRuleLink
+	(*BridgeRuleMap)(nil),         // 16: urnetwork.sidecar.BridgeRuleMap
+	(*BridgeRuleServed)(nil),      // 17: urnetwork.sidecar.BridgeRuleServed
+	(*BridgeRuleSubject)(nil),     // 18: urnetwork.sidecar.BridgeRuleSubject
+	(*BridgeRuleReach)(nil),       // 19: urnetwork.sidecar.BridgeRuleReach
+	(*BridgeRuleShare)(nil),       // 20: urnetwork.sidecar.BridgeRuleShare
+	(*BridgeRuleShareTarget)(nil), // 21: urnetwork.sidecar.BridgeRuleShareTarget
+	(*BridgeRuleEgress)(nil),      // 22: urnetwork.sidecar.BridgeRuleEgress
+	(*WindowDelegation)(nil),      // 23: urnetwork.sidecar.WindowDelegation
+	(*ShareCert)(nil),             // 24: urnetwork.sidecar.ShareCert
+	(*BridgeShareSigner)(nil),     // 25: urnetwork.sidecar.BridgeShareSigner
+	(*BridgeIpv4Prefix)(nil),      // 26: urnetwork.sidecar.BridgeIpv4Prefix
+	(*BridgePortRange)(nil),       // 27: urnetwork.sidecar.BridgePortRange
+	(*BridgeApproval)(nil),        // 28: urnetwork.sidecar.BridgeApproval
+	(*BridgeBlock)(nil),           // 29: urnetwork.sidecar.BridgeBlock
+	(*BridgeAddress)(nil),         // 30: urnetwork.sidecar.BridgeAddress
+	(*BridgeAddressBody)(nil),     // 31: urnetwork.sidecar.BridgeAddressBody
+	(*BridgeRoute)(nil),           // 32: urnetwork.sidecar.BridgeRoute
+	(*BridgeRouteBody)(nil),       // 33: urnetwork.sidecar.BridgeRouteBody
+	(*BridgeMap)(nil),             // 34: urnetwork.sidecar.BridgeMap
+	(*BridgeMapBody)(nil),         // 35: urnetwork.sidecar.BridgeMapBody
+	(*BridgeEgress)(nil),          // 36: urnetwork.sidecar.BridgeEgress
+	(*BridgeEgressBody)(nil),      // 37: urnetwork.sidecar.BridgeEgressBody
+	(*BridgeAlias)(nil),           // 38: urnetwork.sidecar.BridgeAlias
+	(*BridgeAliasBody)(nil),       // 39: urnetwork.sidecar.BridgeAliasBody
+	(*BridgeShareGrant)(nil),      // 40: urnetwork.sidecar.BridgeShareGrant
+	(*BridgeShareTargets)(nil),    // 41: urnetwork.sidecar.BridgeShareTargets
+	(*BridgeShareTarget)(nil),     // 42: urnetwork.sidecar.BridgeShareTarget
+	(*BridgeShareAliases)(nil),    // 43: urnetwork.sidecar.BridgeShareAliases
+	(*BridgeShareAlias)(nil),      // 44: urnetwork.sidecar.BridgeShareAlias
+	(*BridgeShareKeyBody)(nil),    // 45: urnetwork.sidecar.BridgeShareKeyBody
+	(*BridgeShareShortfall)(nil),  // 46: urnetwork.sidecar.BridgeShareShortfall
+	(*BridgeShareAccept)(nil),     // 47: urnetwork.sidecar.BridgeShareAccept
+	(*BridgeWithdraw)(nil),        // 48: urnetwork.sidecar.BridgeWithdraw
+	nil,                           // 49: urnetwork.sidecar.BridgeState.NamesEntry
+	(*AuthPin)(nil),               // 50: urnetwork.sidecar.AuthPin
+	(*Signed)(nil),                // 51: urnetwork.sidecar.Signed
+	(*StatementHeader)(nil),       // 52: urnetwork.sidecar.StatementHeader
 }
 var file_protocol_bridge_bridge_proto_depIdxs = []int32{
 	5,  // 0: urnetwork.sidecar.BridgeRows.egress:type_name -> urnetwork.sidecar.BridgeEgressRow
 	6,  // 1: urnetwork.sidecar.BridgeRows.routes:type_name -> urnetwork.sidecar.BridgeRouteRow
 	2,  // 2: urnetwork.sidecar.BridgeEgressRow.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
-	40, // 3: urnetwork.sidecar.BridgeState.auth:type_name -> urnetwork.sidecar.AuthPin
-	39, // 4: urnetwork.sidecar.BridgeState.names:type_name -> urnetwork.sidecar.BridgeState.NamesEntry
+	50, // 3: urnetwork.sidecar.BridgeState.auth:type_name -> urnetwork.sidecar.AuthPin
+	49, // 4: urnetwork.sidecar.BridgeState.names:type_name -> urnetwork.sidecar.BridgeState.NamesEntry
 	8,  // 5: urnetwork.sidecar.BridgeState.identities:type_name -> urnetwork.sidecar.BridgeIdentity
 	9,  // 6: urnetwork.sidecar.BridgeState.share_keys:type_name -> urnetwork.sidecar.BridgeShareKey
 	10, // 7: urnetwork.sidecar.ForwardingHandOff.pending:type_name -> urnetwork.sidecar.Pending
-	40, // 8: urnetwork.sidecar.ForwardingHandOff.delegation_at:type_name -> urnetwork.sidecar.AuthPin
-	24, // 9: urnetwork.sidecar.BridgeRules.block:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	24, // 10: urnetwork.sidecar.BridgeRules.previous_block:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	50, // 8: urnetwork.sidecar.ForwardingHandOff.delegation_at:type_name -> urnetwork.sidecar.AuthPin
+	26, // 9: urnetwork.sidecar.BridgeRules.block:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	26, // 10: urnetwork.sidecar.BridgeRules.previous_block:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
 	14, // 11: urnetwork.sidecar.BridgeRules.entries:type_name -> urnetwork.sidecar.BridgeRuleEntry
 	16, // 12: urnetwork.sidecar.BridgeRules.maps:type_name -> urnetwork.sidecar.BridgeRuleMap
 	17, // 13: urnetwork.sidecar.BridgeRules.served:type_name -> urnetwork.sidecar.BridgeRuleServed
 	18, // 14: urnetwork.sidecar.BridgeRules.subjects:type_name -> urnetwork.sidecar.BridgeRuleSubject
-	20, // 15: urnetwork.sidecar.BridgeRules.egress:type_name -> urnetwork.sidecar.BridgeRuleEgress
+	22, // 15: urnetwork.sidecar.BridgeRules.egress:type_name -> urnetwork.sidecar.BridgeRuleEgress
 	18, // 16: urnetwork.sidecar.BridgeRules.untagged:type_name -> urnetwork.sidecar.BridgeRuleSubject
-	24, // 17: urnetwork.sidecar.BridgeRuleEntry.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	0,  // 18: urnetwork.sidecar.BridgeRuleEntry.kind:type_name -> urnetwork.sidecar.BridgeRuleEntryKind
-	15, // 19: urnetwork.sidecar.BridgeRuleEntry.links:type_name -> urnetwork.sidecar.BridgeRuleLink
-	24, // 20: urnetwork.sidecar.BridgeRuleMap.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	25, // 21: urnetwork.sidecar.BridgeRuleMap.ports:type_name -> urnetwork.sidecar.BridgePortRange
-	1,  // 22: urnetwork.sidecar.BridgeRuleServed.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
-	24, // 23: urnetwork.sidecar.BridgeRuleServed.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	24, // 24: urnetwork.sidecar.BridgeRuleServed.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	19, // 25: urnetwork.sidecar.BridgeRuleSubject.dial:type_name -> urnetwork.sidecar.BridgeRuleReach
-	19, // 26: urnetwork.sidecar.BridgeRuleSubject.route:type_name -> urnetwork.sidecar.BridgeRuleReach
-	19, // 27: urnetwork.sidecar.BridgeRuleSubject.exit:type_name -> urnetwork.sidecar.BridgeRuleReach
-	24, // 28: urnetwork.sidecar.BridgeRuleReach.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	25, // 29: urnetwork.sidecar.BridgeRuleReach.ports:type_name -> urnetwork.sidecar.BridgePortRange
-	2,  // 30: urnetwork.sidecar.BridgeRuleEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
-	15, // 31: urnetwork.sidecar.BridgeRuleEgress.exits:type_name -> urnetwork.sidecar.BridgeRuleLink
-	41, // 32: urnetwork.sidecar.BridgeApproval.decisions:type_name -> urnetwork.sidecar.Signed
-	24, // 33: urnetwork.sidecar.BridgeBlock.ipv4_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	24, // 34: urnetwork.sidecar.BridgeBlock.previous_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	42, // 35: urnetwork.sidecar.BridgeAddress.header:type_name -> urnetwork.sidecar.StatementHeader
-	42, // 36: urnetwork.sidecar.BridgeRoute.header:type_name -> urnetwork.sidecar.StatementHeader
-	24, // 37: urnetwork.sidecar.BridgeRouteBody.prefixes:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	24, // 38: urnetwork.sidecar.BridgeRouteBody.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	1,  // 39: urnetwork.sidecar.BridgeRouteBody.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
-	26, // 40: urnetwork.sidecar.BridgeRouteBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
-	42, // 41: urnetwork.sidecar.BridgeMap.header:type_name -> urnetwork.sidecar.StatementHeader
-	24, // 42: urnetwork.sidecar.BridgeMapBody.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	25, // 43: urnetwork.sidecar.BridgeMapBody.ports:type_name -> urnetwork.sidecar.BridgePortRange
-	26, // 44: urnetwork.sidecar.BridgeMapBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
-	42, // 45: urnetwork.sidecar.BridgeEgress.header:type_name -> urnetwork.sidecar.StatementHeader
-	2,  // 46: urnetwork.sidecar.BridgeEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
-	42, // 47: urnetwork.sidecar.BridgeAlias.header:type_name -> urnetwork.sidecar.StatementHeader
-	24, // 48: urnetwork.sidecar.BridgeAliasBody.alias_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	42, // 49: urnetwork.sidecar.BridgeWithdraw.header:type_name -> urnetwork.sidecar.StatementHeader
-	3,  // 50: urnetwork.sidecar.BridgeWithdraw.mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
-	51, // [51:51] is the sub-list for method output_type
-	51, // [51:51] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	20, // 17: urnetwork.sidecar.BridgeRules.shares:type_name -> urnetwork.sidecar.BridgeRuleShare
+	26, // 18: urnetwork.sidecar.BridgeRuleEntry.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	0,  // 19: urnetwork.sidecar.BridgeRuleEntry.kind:type_name -> urnetwork.sidecar.BridgeRuleEntryKind
+	15, // 20: urnetwork.sidecar.BridgeRuleEntry.links:type_name -> urnetwork.sidecar.BridgeRuleLink
+	26, // 21: urnetwork.sidecar.BridgeRuleMap.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	27, // 22: urnetwork.sidecar.BridgeRuleMap.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	1,  // 23: urnetwork.sidecar.BridgeRuleServed.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
+	26, // 24: urnetwork.sidecar.BridgeRuleServed.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	26, // 25: urnetwork.sidecar.BridgeRuleServed.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	19, // 26: urnetwork.sidecar.BridgeRuleSubject.dial:type_name -> urnetwork.sidecar.BridgeRuleReach
+	19, // 27: urnetwork.sidecar.BridgeRuleSubject.route:type_name -> urnetwork.sidecar.BridgeRuleReach
+	19, // 28: urnetwork.sidecar.BridgeRuleSubject.exit:type_name -> urnetwork.sidecar.BridgeRuleReach
+	26, // 29: urnetwork.sidecar.BridgeRuleReach.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	27, // 30: urnetwork.sidecar.BridgeRuleReach.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	21, // 31: urnetwork.sidecar.BridgeRuleShare.targets:type_name -> urnetwork.sidecar.BridgeRuleShareTarget
+	26, // 32: urnetwork.sidecar.BridgeRuleShareTarget.target:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	27, // 33: urnetwork.sidecar.BridgeRuleShareTarget.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	2,  // 34: urnetwork.sidecar.BridgeRuleEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	15, // 35: urnetwork.sidecar.BridgeRuleEgress.exits:type_name -> urnetwork.sidecar.BridgeRuleLink
+	51, // 36: urnetwork.sidecar.BridgeApproval.decisions:type_name -> urnetwork.sidecar.Signed
+	26, // 37: urnetwork.sidecar.BridgeBlock.ipv4_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	26, // 38: urnetwork.sidecar.BridgeBlock.previous_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	52, // 39: urnetwork.sidecar.BridgeAddress.header:type_name -> urnetwork.sidecar.StatementHeader
+	52, // 40: urnetwork.sidecar.BridgeRoute.header:type_name -> urnetwork.sidecar.StatementHeader
+	26, // 41: urnetwork.sidecar.BridgeRouteBody.prefixes:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	26, // 42: urnetwork.sidecar.BridgeRouteBody.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	1,  // 43: urnetwork.sidecar.BridgeRouteBody.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
+	28, // 44: urnetwork.sidecar.BridgeRouteBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
+	52, // 45: urnetwork.sidecar.BridgeMap.header:type_name -> urnetwork.sidecar.StatementHeader
+	26, // 46: urnetwork.sidecar.BridgeMapBody.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	27, // 47: urnetwork.sidecar.BridgeMapBody.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	28, // 48: urnetwork.sidecar.BridgeMapBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
+	52, // 49: urnetwork.sidecar.BridgeEgress.header:type_name -> urnetwork.sidecar.StatementHeader
+	2,  // 50: urnetwork.sidecar.BridgeEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	52, // 51: urnetwork.sidecar.BridgeAlias.header:type_name -> urnetwork.sidecar.StatementHeader
+	26, // 52: urnetwork.sidecar.BridgeAliasBody.alias_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	42, // 53: urnetwork.sidecar.BridgeShareTargets.targets:type_name -> urnetwork.sidecar.BridgeShareTarget
+	26, // 54: urnetwork.sidecar.BridgeShareTarget.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	27, // 55: urnetwork.sidecar.BridgeShareTarget.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	44, // 56: urnetwork.sidecar.BridgeShareAliases.aliases:type_name -> urnetwork.sidecar.BridgeShareAlias
+	52, // 57: urnetwork.sidecar.BridgeWithdraw.header:type_name -> urnetwork.sidecar.StatementHeader
+	3,  // 58: urnetwork.sidecar.BridgeWithdraw.mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
+	59, // [59:59] is the sub-list for method output_type
+	59, // [59:59] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_protocol_bridge_bridge_proto_init() }
@@ -3268,7 +4130,7 @@ func file_protocol_bridge_bridge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_bridge_bridge_proto_rawDesc), len(file_protocol_bridge_bridge_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   36,
+			NumMessages:   46,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

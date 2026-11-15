@@ -195,6 +195,9 @@ type BridgeFilerArgs struct {
 	// Where the filer keeps the route entries it owes and its egress changes' markers; nil is this sidecar's network
 	// store's bridge/ directory.
 	Store SidecarStore
+	// The share acts' parts (bridge_share_invite.go); nil reaches the share routes through the sidecar's api and
+	// refuses an accept, which needs a keyring.
+	Share *BridgeShareFilerArgs
 	// crypto/rand's reader when nil: a standing rule's id, an address's or a block's draw, a seal's nonce.
 	Random   io.Reader
 	Clock    Clock

@@ -16,8 +16,13 @@
 // seal is the operator's statement, a consistency check only (D-BRIDGE-17), so every value a delegation is held to here
 // comes from what the verifier established itself, passed in WindowDelegationCheck.
 //
-// A share link's delegation, signed by a ShareSigner its share_cert names, is §17.9's share signers row, which lands
-// with shares (BRIDGE-M6-04, BRIDGE-M6-05); until then one that carries a share or a key_id is refused.
+// A share link's delegation (§17.9's share signers; DESIGN-DETAILS 12.2.8) is the third shape: signer_id is the
+// share_id, 16 bytes, and key_id the SHA-256 of the ShareSigner's key, which its share_cert certifies. Its signing key
+// rides its own body, so this one path reads the body before the signature: the body names the share, the check's
+// Share answers that share's pinned ShareKey and ratchet, VerifyShareCert holds the cert to them, and only then is the
+// delegation verified under the cert's signer key. A share delegation names no subject the host can check: the host
+// verifies that a current reader of the accepting network's config signed, never which (§17.12). A check with no
+// Share admits none.
 //
 // Errors name the check that failed, never a value (I-13). Package-level functions are safe for concurrent use.
 
@@ -71,7 +76,8 @@ var (
 	ErrWindowDelegationMismatch = errors.New("window delegation mismatch")
 	// not_after_ms is not ahead of the verifier's time.
 	ErrWindowDelegationExpired = errors.New("window delegation expired")
-	// A share link's delegation, which shares verify (BRIDGE-M6-05); refused until they land.
+	// A share link's delegation where none is admitted: a check with no Share, a share the check does not know, a
+	// share's fields on a delegation one of its subject's own keys signed, or a share delegation without them.
 	ErrWindowDelegationShare = errors.New("window delegation for a share refused")
 )
 
@@ -95,17 +101,36 @@ type WindowDelegationCheck struct {
 	// its Ed25519 key, and false for an id no admitted subject's identity lists live, a superseded or revoked one
 	// included. Nil admits no forwarding key. Called at most once, before the signature is checked.
 	ForwardingKey func(delegationId []byte) (sidecarId []byte, publicKey []byte, ok bool)
+	// A share this host serves, by the share_id a share link's delegation names: its pinned ShareKey and its ratchet,
+	// and false for a share the verifier's state did not compile. Nil admits no share. Called at most once, before
+	// any signature is checked.
+	Share func(shareId []byte) (share *WindowDelegationShare, ok bool)
 	// The format's limits; nil is DefaultWindowDelegationSettings.
 	Settings *WindowDelegationSettings
 }
 
-// A delegation that verified, and which of its subject's keys signed it.
+// What a host holds of a share it serves, for a share link's delegation (§17.9's admit row).
+type WindowDelegationShare struct {
+	// The pinned ShareKey, Ed25519.
+	SharePublicKey []byte
+	// The newest generation this host verified and kept for the share; 0 before any.
+	Generation uint64
+	// The ShareCert's limits; nil is DefaultShareCertSettings.
+	CertSettings *ShareCertSettings
+}
+
+// A delegation that verified, and which key signed it.
 type WindowDelegationAdmission struct {
 	Delegation *WindowDelegation
 	// The forwarding Delegation whose key signed it, 32 bytes; empty where the subject's identity key did. A host
 	// keeps it with the principal, since a revocation or supersession of that Delegation ends what its key admitted and
 	// nothing the identity key admitted.
 	ForwardDelegationId []byte
+	// On a share link: the ShareCert that certified the signer, verified under the pinned ShareKey, and its bytes as
+	// carried. Nil otherwise. A host raises the share's ratchet to the cert's generation, committed before it admits
+	// the contract, and bounds the principal by the earlier of the two not_after_ms.
+	ShareCert       *ShareCert
+	ShareCertSigned []byte
 }
 
 // VerifyWindowDelegationAdmission's delegation alone, for a caller that does not keep which key signed.
@@ -123,7 +148,8 @@ func VerifyWindowDelegation(signedBytes []byte, check *WindowDelegationCheck) (*
 // key_id the SHA-256 of that key; the signature over the body as received; then the body, whose subject_sidecar_id
 // must be the signer, or the sidecar the forwarding Delegation is listed under, whose network_id, window_client_id,
 // window_client_public_key and target_sidecar_id must equal the check's, and whose not_after_ms must be ahead of the
-// check's time. A delegation carrying a share is refused (the file's comment).
+// check's time. A share signer's delegation takes verifyShareWindowDelegation's path; a share's fields on any other
+// delegation are refused (the file's comment).
 func VerifyWindowDelegationAdmission(signedBytes []byte, check *WindowDelegationCheck) (*WindowDelegationAdmission, error) {
 	if check == nil || check.IdentityKey == nil {
 		return nil, fmt.Errorf("%w: no check to hold the delegation to", ErrWindowDelegationMismatch)
@@ -153,7 +179,8 @@ func VerifyWindowDelegationAdmission(signedBytes []byte, check *WindowDelegation
 	switch len(signerId) {
 	case windowDelegationIdByteCount:
 		if 0 < len(signed.GetKeyId()) {
-			return nil, fmt.Errorf("%w: a key_id, which only a share signer's delegation carries", ErrWindowDelegationShare)
+			// a share signer's delegation: the third shape
+			return verifyShareWindowDelegation(signed, check)
 		}
 		identityKey, ok := check.IdentityKey(signerId)
 		if !ok {
@@ -197,6 +224,15 @@ func VerifyWindowDelegationAdmission(signedBytes []byte, check *WindowDelegation
 	if !bytes.Equal(delegation.GetSubjectSidecarId(), subjectId) {
 		return nil, fmt.Errorf("%w: signed by another than its subject", ErrWindowDelegationSigner)
 	}
+	if err := windowDelegationMatches(delegation, check); err != nil {
+		return nil, err
+	}
+	return &WindowDelegationAdmission{Delegation: delegation, ForwardDelegationId: forwardDelegationId}, nil
+}
+
+// The same-network row's checks every delegation takes, whichever key signed it: the network, the window client, its
+// key and the target are the check's, and not_after_ms is ahead of the check's time.
+func windowDelegationMatches(delegation *WindowDelegation, check *WindowDelegationCheck) error {
 	matches := []struct {
 		name      string
 		got       []byte
@@ -211,19 +247,65 @@ func VerifyWindowDelegationAdmission(signedBytes []byte, check *WindowDelegation
 	for _, match := range matches {
 		// a check value of the wrong length or all zero is none, which nothing matches: an unsealed network among them
 		if len(match.want) != match.byteCount || !windowDelegationNonZero(match.want) {
-			return nil, fmt.Errorf("%w: no %s to hold the delegation to", ErrWindowDelegationMismatch, match.name)
+			return fmt.Errorf("%w: no %s to hold the delegation to", ErrWindowDelegationMismatch, match.name)
 		}
 		if len(match.got) != match.byteCount {
-			return nil, fmt.Errorf("%w: a %s of %d bytes", ErrWindowDelegationMalformed, match.name, len(match.got))
+			return fmt.Errorf("%w: a %s of %d bytes", ErrWindowDelegationMalformed, match.name, len(match.got))
 		}
 		if !bytes.Equal(match.got, match.want) {
-			return nil, fmt.Errorf("%w: %s", ErrWindowDelegationMismatch, match.name)
+			return fmt.Errorf("%w: %s", ErrWindowDelegationMismatch, match.name)
 		}
 	}
 	if delegation.GetNotAfterMs() <= check.NowMs {
-		return nil, ErrWindowDelegationExpired
+		return ErrWindowDelegationExpired
 	}
-	return &WindowDelegationAdmission{Delegation: delegation, ForwardDelegationId: forwardDelegationId}, nil
+	return nil
+}
+
+// §17.9's admit row for a share link's delegation (the file's comment): signed is a Signed of type 0x1908 whose
+// signer_id is 16 bytes and whose key_id is set. Its body is read first, for the share and the cert alone; nothing of
+// it is believed until the cert verifies under the pinned ShareKey and the delegation under the cert's signer key.
+func verifyShareWindowDelegation(signed *Signed, check *WindowDelegationCheck) (*WindowDelegationAdmission, error) {
+	if check.Share == nil {
+		return nil, fmt.Errorf("%w: no share is admitted here", ErrWindowDelegationShare)
+	}
+	if len(signed.GetKeyId()) != windowDelegationDigestByteCount {
+		return nil, fmt.Errorf("%w: a share signer with a key_id of %d bytes", ErrWindowDelegationMalformed, len(signed.GetKeyId()))
+	}
+	delegation := &WindowDelegation{}
+	if err := proto.Unmarshal(signed.GetBody(), delegation); err != nil {
+		return nil, fmt.Errorf("%w: the body does not decode", ErrWindowDelegationMalformed)
+	}
+	if 0 < len(delegation.ProtoReflect().GetUnknown()) {
+		return nil, fmt.Errorf("%w: a field this verifier does not know", ErrWindowDelegationMalformed)
+	}
+	if !bytes.Equal(delegation.GetShareId(), signed.GetSignerId()) || len(delegation.GetShareCert()) == 0 {
+		return nil, fmt.Errorf("%w: a share signer's delegation that names another share or carries no certificate", ErrWindowDelegationShare)
+	}
+	share, ok := check.Share(delegation.GetShareId())
+	if !ok || share == nil {
+		return nil, fmt.Errorf("%w: a share this host does not serve", ErrWindowDelegationShare)
+	}
+	cert, err := VerifyShareCert(delegation.GetShareCert(), &ShareCertCheck{
+		ShareId: delegation.GetShareId(), SharePublicKey: share.SharePublicKey, NowMs: check.NowMs, Generation: share.Generation,
+		Settings: share.CertSettings,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("window delegation: %w", err)
+	}
+	if keyDigest := sha256.Sum256(cert.GetSignerPublicKey()); !bytes.Equal(signed.GetKeyId(), keyDigest[:]) {
+		return nil, fmt.Errorf("%w: a key_id that is not the certified signer's", ErrWindowDelegationSigner)
+	}
+	if err := VerifySigned(signed, SignedPurposeWindowDelegation, SignedType_SIGNED_WINDOW_DELEGATION, SignedKeyAlgEd25519, cert.GetSignerPublicKey()); err != nil {
+		return nil, fmt.Errorf("window delegation: %w", err)
+	}
+	if len(delegation.GetSubjectSidecarId()) != windowDelegationIdByteCount {
+		return nil, fmt.Errorf("%w: a subject_sidecar_id of %d bytes", ErrWindowDelegationMalformed, len(delegation.GetSubjectSidecarId()))
+	}
+	if err := windowDelegationMatches(delegation, check); err != nil {
+		return nil, err
+	}
+	return &WindowDelegationAdmission{Delegation: delegation, ShareCert: cert, ShareCertSigned: bytes.Clone(delegation.GetShareCert())}, nil
 }
 
 // Whether any byte is set.
@@ -239,9 +321,10 @@ func windowDelegationNonZero(value []byte) bool {
 // The bytes a window client's contract carries (§17.9's sign row): delegation encoded deterministically, signed by sign
 // under purpose window-delegation and type 0x1908, and that Signed encoded as CreateContract.window_delegation holds
 // it. sign is the signer's own, such as the root's Sidecar.Sign by the identity key, or a VPN component's forwarding
-// signer. This holds the delegation to the lengths VerifyWindowDelegation reads and to no share, and what sign returns
+// signer. This holds the delegation to the lengths VerifyWindowDelegation reads, and what sign returns
 // to a Signed of that type over that body whose signer_id and key_id take one of the two shapes a verifier reads, so a
-// signer never hands a link another statement. Nil settings are DefaultWindowDelegationSettings.
+// signer never hands a link another statement; a share link's delegation carries its share_id and share_cert together
+// and is signed by its share's signer (ShareSignerSign), and no other delegation carries either. Nil settings are DefaultWindowDelegationSettings.
 func WindowDelegationSigned(
 	delegation *WindowDelegation,
 	sign func(purpose string, signedType SignedType, body []byte) (*Signed, error),
@@ -272,8 +355,10 @@ func WindowDelegationSigned(
 	if delegation.GetNotAfterMs() <= 0 {
 		return nil, fmt.Errorf("%w: no not_after_ms", ErrWindowDelegationMalformed)
 	}
-	if 0 < len(delegation.GetShareId()) || 0 < len(delegation.GetShareCert()) {
-		return nil, fmt.Errorf("%w: a delegation that carries a share", ErrWindowDelegationShare)
+	// a share's fields come together or not at all, and only a share signer signs them (below)
+	shareLink := 0 < len(delegation.GetShareId()) || 0 < len(delegation.GetShareCert())
+	if shareLink && (len(delegation.GetShareId()) != windowDelegationIdByteCount || len(delegation.GetShareCert()) == 0) {
+		return nil, fmt.Errorf("%w: a share without its certificate", ErrWindowDelegationShare)
 	}
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(delegation)
 	if err != nil {
@@ -288,7 +373,13 @@ func WindowDelegationSigned(
 	}
 	identitySigned := len(signed.GetSignerId()) == windowDelegationIdByteCount && len(signed.GetKeyId()) == 0
 	forwardSigned := len(signed.GetSignerId()) == windowDelegationDigestByteCount && len(signed.GetKeyId()) == windowDelegationDigestByteCount
-	if !identitySigned && !forwardSigned {
+	shareSigned := len(signed.GetSignerId()) == windowDelegationIdByteCount && len(signed.GetKeyId()) == windowDelegationDigestByteCount
+	switch {
+	case shareLink && (!shareSigned || !bytes.Equal(signed.GetSignerId(), delegation.GetShareId())):
+		return nil, fmt.Errorf("%w: a share link's delegation signed by another than its share's signer", ErrWindowDelegationShare)
+	case !shareLink && shareSigned:
+		return nil, fmt.Errorf("%w: a share signer's delegation that names no share", ErrWindowDelegationShare)
+	case !identitySigned && !forwardSigned && !shareSigned:
 		return nil, fmt.Errorf("%w: a signer no verifier reads", ErrWindowDelegationMalformed)
 	}
 	signedBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)

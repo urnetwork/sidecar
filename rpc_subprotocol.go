@@ -160,14 +160,14 @@ type Subprotocol struct {
 	headCheck atomic.Pointer[headCheckTransport]
 	// the feature bits this side sends, which the inline handler reads with no lock (rpc_features.go)
 	features atomic.Pointer[subprotocolFeatureSet]
-	// connect's C19 ledger, and the first-choice indexer and foreground the keepalive follows
+	// connect's C19 ledger, and the warm indexers and foreground the keepalives follow
 	// (rpc_marked_pair.go)
 	peerWindows subprotocolPeerWindows
-	markedPair  *MonitorValue[subprotocolMarkedPair]
-	// waits the keepalive has armed, so a test steps its clock with no sleep
+	markedPairs *MonitorValue[subprotocolMarkedPairs]
+	// moves each time a keepalive arms a wait or ends, so a test steps its clock with no sleep
 	keepaliveMark *MonitorValue[uint64]
-	// under stateLock: the keepalive loop runs, and Close joins it with the handlers
-	keepaliveStarted bool
+	// under stateLock: the keepalive loop of each warm indexer, which Close joins with the handlers
+	keepaliveLoops map[connect.Id]*subprotocolKeepaliveLoop
 
 	// §6.10.1's side this dispatcher runs as (stream_edge.go)
 	role SubprotocolRole
@@ -414,8 +414,9 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		admissions:            env.Admissions,
 		idempotency:           newIdempotencyCache(env.Settings, env.Budget, clock),
 		peerWindows:           seams.peerWindows,
-		markedPair:            NewMonitorValue(subprotocolMarkedPair{}),
+		markedPairs:           NewMonitorValue(subprotocolMarkedPairs{}),
 		keepaliveMark:         NewMonitorValue[uint64](0),
+		keepaliveLoops:        map[connect.Id]*subprotocolKeepaliveLoop{},
 		role:                  env.Role,
 		streams: subprotocolStreams{
 			outboundWake: make(chan struct{}, 1),

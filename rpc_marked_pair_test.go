@@ -8,7 +8,13 @@
 // and re-establishes by a Hello at the next foreground, as does a foreground return the keepalive never
 // saw begin; a 3-minute drop in the foreground re-establishes by the search before the next tick; a
 // failover search opens its own window; a window ending in the background clears the mode and the next
-// search marks again; and HeadCheck's round counts the first-choice indexer in the foreground.
+// search marks again; and HeadCheck's round counts the first warm indexer in the foreground.
+//
+// The warm pairs (PROTO-M10-06; DESIGN-DETAILS 7.2.3, QD-707), the same cases with three indexers named,
+// two of them own: each pair's grid holds 55 minutes from its own window's start; an indexer leaving the
+// list stops its Pings, even for a wake armed as it left, and leaves the others'; an id past
+// MarkedPeerMaxCount is refused, by the instance's setting; a failover to an indexer outside the list
+// opens its own window at the search and gets no keepalive; and an empty list names none.
 //
 // A PeerWindow call the fake holds stands for a goroutine the scheduler left behind, so a test forces the
 // orders a loaded machine can run in, among them the one tip-check's full suite found at 71679a2 and
@@ -18,8 +24,10 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -153,17 +161,44 @@ func (self *testPeerWindows) clear(peerId connect.Id) {
 	delete(self.windows, peerId)
 }
 
-// A pair of an app host and an indexer, each on a window ledger fake logging with its sends, the
-// indexer serving SEARCH; and a second indexer for failover.
+// An app host and its indexers, each on a window ledger fake logging with its sends, every indexer
+// serving SEARCH.
 type testMarkedWorld struct {
-	pair     *testRpcPair
-	app      *testRpcSide
+	pair *testRpcPair
+	app  *testRpcSide
+	// the first two of indexers: the first choice, and a second for failover
 	indexer  *testRpcSide
 	indexer2 *testRpcSide
+	// named indexer, indexer2, indexer3 and so on
+	indexers []*testRpcSide
 	names    map[connect.Id]string
+
+	stateLock sync.Mutex
+	// the app's Pings, in order
+	pings []testMarkedPing
 }
 
+// A Ping the app sent: to whom, and when on the app's clock.
+type testMarkedPing struct {
+	name string
+	time time.Time
+}
+
+// An app and two indexers, the app asking both: the first as whatever a test names warm, the second by
+// SetFeatures' function.
 func newTestMarkedWorld(t *testing.T) *testMarkedWorld {
+	world := newTestMarkedWorldWith(t, 2, nil)
+	if err := world.app.subprotocol.SetFeatures(0, func(clientId Id) bool {
+		return clientId == Id(world.indexer2.clientId)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return world
+}
+
+// An app and indexerCount indexers, every side's settings adjusted by adjust. The app asks only those a
+// test names.
+func newTestMarkedWorldWith(t *testing.T, indexerCount int, adjust func(settings *SidecarProtocolSettings)) *testMarkedWorld {
 	world := &testMarkedWorld{pair: newTestRpcPair(t), names: map[connect.Id]string{}}
 	nameOf := func(peerId connect.Id) string {
 		if name, ok := world.names[peerId]; ok {
@@ -175,18 +210,34 @@ func newTestMarkedWorld(t *testing.T) *testMarkedWorld {
 		side.windowEvents = newTestEvents()
 		return &testPeerWindows{events: side.windowEvents, names: nameOf, clock: side.clock, accounting: map[connect.Id]bool{}, windows: map[connect.Id]*connect.PeerWindow{}}
 	}
-	world.app = world.pair.add(nil, nil)
-	world.indexer = world.pair.add(nil, nil)
-	world.indexer2 = world.pair.add(nil, nil)
+	world.app = world.pair.add(nil, adjust)
 	world.names[world.app.clientId] = "app"
-	world.names[world.indexer.clientId] = "indexer"
-	world.names[world.indexer2.clientId] = "indexer2"
-	for _, side := range []*testRpcSide{world.app, world.indexer, world.indexer2} {
+	for i := range indexerCount {
+		indexer := world.pair.add(nil, adjust)
+		world.indexers = append(world.indexers, indexer)
+		name := "indexer"
+		if 0 < i {
+			name = fmt.Sprintf("indexer%d", i+1)
+		}
+		world.names[indexer.clientId] = name
+	}
+	world.indexer = world.indexers[0]
+	if 1 < indexerCount {
+		world.indexer2 = world.indexers[1]
+	}
+	for _, side := range append([]*testRpcSide{world.app}, world.indexers...) {
 		side.onSend = func(envelope *protocol.Envelope, destinationId connect.Id) {
+			if side == world.app && envelope.Type == uint32(protocol.MessageType_PING) {
+				func() {
+					world.stateLock.Lock()
+					defer world.stateLock.Unlock()
+					world.pings = append(world.pings, testMarkedPing{name: nameOf(destinationId), time: side.clock.Now()})
+				}()
+			}
 			side.windowEvents.add(fmt.Sprintf("send %s %s", protocol.MessageType(envelope.Type), nameOf(destinationId)))
 		}
 	}
-	for _, indexer := range []*testRpcSide{world.indexer, world.indexer2} {
+	for _, indexer := range world.indexers {
 		if err := indexer.subprotocol.SetFeatures(SubprotocolFeatureServesSearch, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -196,13 +247,55 @@ func newTestMarkedWorld(t *testing.T) *testMarkedWorld {
 			t.Fatal(err)
 		}
 	}
-	// the app asks both indexers, the first its first choice
-	if err := world.app.subprotocol.SetFeatures(0, func(clientId Id) bool {
-		return clientId == Id(world.indexer2.clientId)
-	}); err != nil {
-		t.Fatal(err)
-	}
 	return world
+}
+
+// Moves every side's clock on by step: the indexers' first, so none reads a Ping at an earlier time than
+// the app sent it.
+func (self *testMarkedWorld) advance(step time.Duration) {
+	for _, indexer := range self.indexers {
+		indexer.clock.Advance(step)
+	}
+	self.app.clock.Advance(step)
+}
+
+// When the app Pinged the indexer of that name, in order.
+func (self *testMarkedWorld) pingTimes(name string) []time.Time {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	times := []time.Time{}
+	for _, ping := range self.pings {
+		if ping.name == name {
+			times = append(times, ping.time)
+		}
+	}
+	return times
+}
+
+// The ids of indexers, in order, as MarkSearchPeers takes them.
+func testMarkedIds(indexers ...*testRpcSide) []Id {
+	ids := []Id{}
+	for _, indexer := range indexers {
+		ids = append(ids, Id(indexer.clientId))
+	}
+	return ids
+}
+
+// Names the warm indexers and the foreground with no keepalive loop started, for a test that runs each
+// tick itself.
+func testMarkWithoutKeepalive(subprotocol *Subprotocol, foreground bool, peerIds ...connect.Id) {
+	subprotocol.markedPairs.Set(subprotocolMarkedPairs{peers: &subprotocolMarkedPeers{peerIds: peerIds}, foreground: foreground})
+}
+
+// The events of a side that name the peer of that name, from index from on.
+func testEventsNaming(events []string, name string, from int) []string {
+	naming := []string{}
+	for _, event := range events[from:] {
+		if strings.HasSuffix(event, " "+name) || strings.Contains(event, " "+name+" ") {
+			naming = append(naming, event)
+		}
+	}
+	return naming
 }
 
 // The index of the first event equal to want at or after from, -1 for none.
@@ -232,11 +325,20 @@ func testEnvelopeTypes(envelopes []*protocol.Envelope) []string {
 	return types
 }
 
-// Waits until the side's keepalive has armed count waits.
-func testAwaitKeepaliveMark(t *testing.T, side *testRpcSide, count uint64) {
+// Waits until the side's keepalive for peerId has armed count waits.
+func testAwaitKeepaliveMark(t *testing.T, side *testRpcSide, peerId connect.Id, count uint64) {
 	t.Helper()
 	for {
-		mark, notify := side.subprotocol.keepaliveMark.Get()
+		// subscribed before the count is read, so a wait armed after the read is not missed
+		_, notify := side.subprotocol.keepaliveMark.Get()
+		mark := func() uint64 {
+			side.subprotocol.stateLock.Lock()
+			defer side.subprotocol.stateLock.Unlock()
+			if loop, ok := side.subprotocol.keepaliveLoops[peerId]; ok {
+				return loop.markCount
+			}
+			return 0
+		}()
 		if count <= mark {
 			return
 		}
@@ -248,12 +350,38 @@ func testAwaitKeepaliveMark(t *testing.T, side *testRpcSide, count uint64) {
 	}
 }
 
+// Whether the side runs a keepalive loop for peerId.
+func testKeepaliveRuns(side *testRpcSide, peerId connect.Id) bool {
+	side.subprotocol.stateLock.Lock()
+	defer side.subprotocol.stateLock.Unlock()
+	_, ok := side.subprotocol.keepaliveLoops[peerId]
+	return ok
+}
+
+// Waits until the side's keepalive loop for peerId has ended.
+func testAwaitKeepaliveEnd(t *testing.T, side *testRpcSide, peerId connect.Id) {
+	t.Helper()
+	for {
+		_, notify := side.subprotocol.keepaliveMark.Get()
+		if !testKeepaliveRuns(side, peerId) {
+			return
+		}
+		select {
+		case <-notify:
+		case <-time.After(testSubprotocolAwaitTimeout):
+			t.Fatalf("the keepalive has not ended")
+		}
+	}
+}
+
 // A bit-1 Hello marks before it is sent and adopts its answer's contract; the indexer marks on receipt,
 // adopting the marking frame's contract, before it answers; a repeat while the mode holds retires
 // nothing.
 func TestBitOneHelloMarksBothSides(t *testing.T) {
 	world := newTestMarkedWorld(t)
-	world.app.subprotocol.MarkSearchPeer(Id(world.indexer.clientId))
+	if err := world.app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexer)); err != nil {
+		t.Fatal(err)
+	}
 	if err := world.app.subprotocol.EnsureHello(t.Context(), Id(world.indexer.clientId)); err != nil {
 		t.Fatal(err)
 	}
@@ -309,14 +437,16 @@ func TestKeepaliveGridHolds55Minutes(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
-	app.subprotocol.MarkSearchPeer(Id(indexer.clientId))
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(indexer)); err != nil {
+		t.Fatal(err)
+	}
 	if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
 		t.Fatal(err)
 	}
 	start := app.clock.Now()
 	app.subprotocol.SetForeground(true)
 	for minute := uint64(1); minute <= 55; minute += 1 {
-		testAwaitKeepaliveMark(t, app, minute)
+		testAwaitKeepaliveMark(t, app, indexer.clientId, minute)
 		next := app.clock.Now().Add(app.settings.MarkedKeepaliveInterval)
 		for _, c := range []struct {
 			side   *testRpcSide
@@ -330,7 +460,7 @@ func TestKeepaliveGridHolds55Minutes(t *testing.T) {
 		indexer.clock.Advance(indexer.settings.MarkedKeepaliveInterval)
 		app.clock.Advance(app.settings.MarkedKeepaliveInterval)
 	}
-	testAwaitKeepaliveMark(t, app, 56)
+	testAwaitKeepaliveMark(t, app, indexer.clientId, 56)
 	pings := 0
 	for _, envelope := range app.sent() {
 		if envelope.Type == uint32(protocol.MessageType_PING) {
@@ -357,7 +487,9 @@ func TestSuspensionReestablishesAtTheNextForeground(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
-	app.subprotocol.MarkSearchPeer(Id(indexer.clientId))
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(indexer)); err != nil {
+		t.Fatal(err)
+	}
 	if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
 		t.Fatal(err)
 	}
@@ -370,11 +502,11 @@ func TestSuspensionReestablishesAtTheNextForeground(t *testing.T) {
 	app.clock.Advance(step)
 	indexer.clock.Advance(step)
 	hold.free()
-	testAwaitKeepaliveMark(t, app, 1)
+	testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
 	app.clock.Advance(3*time.Minute - step)
 	indexer.clock.Advance(3*time.Minute - step)
 	app.subprotocol.SetForeground(true)
-	testAwaitKeepaliveMark(t, app, 2)
+	testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
 	if types := testEnvelopeTypes(app.sent()[sentBefore:]); !slices.Equal(types, []string{"HELLO"}) {
 		t.Errorf("sent from the suspension's start on: %v", types)
 	}
@@ -387,12 +519,14 @@ func TestForegroundReturnDuringAPingReestablishesAtOnce(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
-	app.subprotocol.MarkSearchPeer(Id(indexer.clientId))
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(indexer)); err != nil {
+		t.Fatal(err)
+	}
 	if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
 		t.Fatal(err)
 	}
 	app.subprotocol.SetForeground(true)
-	testAwaitKeepaliveMark(t, app, 1)
+	testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
 	sentBefore := len(app.sent())
 	// the first tick's Ping is lost, and the tick waits on its Pong
 	app.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
@@ -409,7 +543,7 @@ func TestForegroundReturnDuringAPingReestablishesAtOnce(t *testing.T) {
 	app.setDeliver(nil)
 	indexer.clock.Advance(3 * time.Minute)
 	app.clock.Advance(3 * time.Minute)
-	testAwaitKeepaliveMark(t, app, 2)
+	testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
 	if types := testEnvelopeTypes(app.sent()[sentBefore:]); !slices.Equal(types, []string{"PING", "HELLO"}) {
 		t.Errorf("sent from the lost Ping on: %v", types)
 	}
@@ -426,7 +560,7 @@ func TestIndexerTouchesTheSessionAsOfThePingBeforeItsPong(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
-	app.subprotocol.markedPair.Set(subprotocolMarkedPair{peerId: indexer.clientId, hasPeer: true})
+	testMarkWithoutKeepalive(app.subprotocol, false, indexer.clientId)
 	if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +603,7 @@ func TestRequesterTouchesTheSessionAsOfThePong(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
-	app.subprotocol.markedPair.Set(subprotocolMarkedPair{peerId: indexer.clientId, hasPeer: true})
+	testMarkWithoutKeepalive(app.subprotocol, false, indexer.clientId)
 	if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +637,7 @@ func TestDropReestablishedByTheSearchBeforeTheNextTick(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
-	app.subprotocol.markedPair.Set(subprotocolMarkedPair{peerId: indexer.clientId, hasPeer: true, foreground: true})
+	testMarkWithoutKeepalive(app.subprotocol, true, indexer.clientId)
 	if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +683,9 @@ func TestDropReestablishedByTheSearchBeforeTheNextTick(t *testing.T) {
 func TestFailoverSearchOpensItsOwnWindow(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
-	app.subprotocol.MarkSearchPeer(Id(world.indexer.clientId))
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexer)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := app.subprotocol.Call(t.Context(), Id(world.indexer2.clientId), protocol.MessageType_SEARCH, testSearchRequestBody(t, 2, 0, 1), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +706,9 @@ func TestBackgroundWindowEndClearsTheModeAndTheNextSearchMarksAgain(t *testing.T
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
-	app.subprotocol.MarkSearchPeer(Id(indexer.clientId))
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(indexer)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := app.subprotocol.Call(t.Context(), Id(indexer.clientId), protocol.MessageType_SEARCH, testSearchRequestBody(t, 1, 0, 1), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -615,6 +753,490 @@ func TestHeadCheckRoundCountsTheIndexer(t *testing.T) {
 	for seed := uint64(1); seed <= 20; seed += 1 {
 		if picks := headCheckRoundPicksWith(candidates, peers, Id{}, 4, DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount, testSeededRandom(seed), nil); slices.Contains(picks, indexerId) {
 			t.Errorf("seed %d: the indexer picked in the background", seed)
+		}
+	}
+}
+
+// The first of the warm indexers is the one HeadCheck's round counts, and only in the foreground: the
+// caller names its own indexers first, so it is the first-choice own one.
+func TestForegroundSearchPeerIsTheFirstWarmIndexer(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 3, nil)
+	app := world.app
+	first, second, third := world.indexers[0], world.indexers[1], world.indexers[2]
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(second, first, third)); err != nil {
+		t.Fatal(err)
+	}
+	if peerId, ok := app.subprotocol.foregroundSearchPeer(); ok {
+		t.Errorf("%s counted in the background", world.names[peerId])
+	}
+	// no session stands, so each loop's tick at the foreground runs a Hello; the test waits them out
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	if peerId, ok := app.subprotocol.foregroundSearchPeer(); !ok || peerId != second.clientId {
+		t.Errorf("counted %s (%t), want indexer2", world.names[peerId], ok)
+	}
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(first, second)); err != nil {
+		t.Fatal(err)
+	}
+	if peerId, ok := app.subprotocol.foregroundSearchPeer(); !ok || peerId != first.clientId {
+		t.Errorf("counted %s (%t), want indexer", world.names[peerId], ok)
+	}
+	if err := app.subprotocol.MarkSearchPeers(nil); err != nil {
+		t.Fatal(err)
+	}
+	if peerId, ok := app.subprotocol.foregroundSearchPeer(); ok {
+		t.Errorf("%s counted with none named", world.names[peerId])
+	}
+}
+
+// Three warm pairs, two own and one other member's, whose windows opened 20 s apart: in the foreground
+// each is Pinged once a minute for 55 minutes on the grid from its own window's start, 20 s from the
+// next pair's, and every pair's Hello stands past HelloCacheTimeout on both sides with no second Hello.
+// Each step of the clocks reaches one pair's tick and waits for it to end, which its Pong ends.
+func TestThreeKeepaliveGridsHold55Minutes(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 3, nil)
+	app := world.app
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); err != nil {
+		t.Fatal(err)
+	}
+	offset := 20 * time.Second
+	windowStarts := []time.Time{}
+	for i, indexer := range world.indexers {
+		if 0 < i {
+			world.advance(offset)
+		}
+		windowStarts = append(windowStarts, app.clock.Now())
+		if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.subprotocol.SetForeground(true)
+	// every pair's first wake is armed before the clocks move, and from then on a pair arms a wake only
+	// as its own tick ends, which its step waits for: a clock a test moves between a loop's reading of it
+	// and its arming would set that wake late, as no running clock does
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	interval := app.settings.MarkedKeepaliveInterval
+	for step := range 3 * 55 {
+		i := step % 3
+		tick := uint64(step/3 + 1)
+		indexer := world.indexers[i]
+		testAwaitKeepaliveMark(t, app, indexer.clientId, tick)
+		// this pair's tick is the next point on any grid, and its Hello stands past the one after
+		due := windowStarts[i].Add(time.Duration(tick) * interval)
+		if next := app.clock.Now().Add(offset); !next.Equal(due) {
+			t.Fatalf("step %d: %s's tick %d is due %s in, the step reaches %s", step, world.names[indexer.clientId], tick, due.Sub(windowStarts[0]), next.Sub(windowStarts[0]))
+		}
+		for _, c := range []struct {
+			side   *testRpcSide
+			peerId connect.Id
+		}{{side: app, peerId: indexer.clientId}, {side: indexer, peerId: app.clientId}} {
+			if expireTime, ok := testSessionExpireTime(c.side.subprotocol, c.peerId); !ok || !due.Before(expireTime) {
+				t.Fatalf("step %d: the %s's Hello ends %s in, by the tick at %s", step, world.names[c.side.clientId], expireTime.Sub(windowStarts[0]), due.Sub(windowStarts[0]))
+			}
+		}
+		world.advance(offset)
+		testAwaitKeepaliveMark(t, app, indexer.clientId, tick+1)
+	}
+	for i, indexer := range world.indexers {
+		name := world.names[indexer.clientId]
+		times := world.pingTimes(name)
+		if len(times) != 55 {
+			t.Errorf("%d Pings to %s in its 55 minutes", len(times), name)
+			continue
+		}
+		for k, pingTime := range times {
+			if want := windowStarts[i].Add(time.Duration(k+1) * interval); !pingTime.Equal(want) {
+				t.Errorf("%s's Ping %d went %s into its window, off its grid", name, k+1, pingTime.Sub(windowStarts[i]))
+				break
+			}
+		}
+		if !app.subprotocol.peerVerified(indexer.clientId) || !indexer.subprotocol.peerVerified(app.clientId) {
+			t.Errorf("the pair with %s lost its Hello inside its window", name)
+		}
+	}
+	hellos := 0
+	for _, envelope := range app.sent() {
+		if envelope.Type == uint32(protocol.MessageType_HELLO) {
+			hellos += 1
+		}
+	}
+	if hellos != 3 {
+		t.Errorf("%d Hellos for three pairs: %v", hellos, testEnvelopeTypes(app.sent()))
+	}
+	if !app.clock.Now().Equal(windowStarts[2].Add(55 * time.Minute)) {
+		t.Errorf("ended %s into the last window", app.clock.Now().Sub(windowStarts[2]))
+	}
+}
+
+// An indexer leaving the list stops its Pings and leaves the others': the one that leaves does so while
+// its keepalive reads the window for its first wake, and the minute passes before the loop looks at that
+// wake, so the tick the wake was armed for is dropped and the loop ends, with nothing sent to it; the
+// two that stay are Pinged that minute and after, on their grids. Named again, it is re-established by a
+// Hello at once and Pinged at its grid's next point.
+func TestAPeerLeavingTheListStopsItsPingsAndLeavesTheOthers(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 3, nil)
+	app := world.app
+	staying := []*testRpcSide{world.indexers[0], world.indexers[2]}
+	leaving := world.indexers[1]
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); err != nil {
+		t.Fatal(err)
+	}
+	for _, indexer := range world.indexers {
+		if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := app.clock.Now()
+	leavingFrom := len(app.windowEvents.list())
+	hold := app.peerWindows.holdPeerWindow(t, leaving.clientId)
+	app.subprotocol.SetForeground(true)
+	testAwait(t, hold.held, "the leaving indexer's first wake")
+	for _, indexer := range staying {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(staying...)); err != nil {
+		t.Fatal(err)
+	}
+	if app.subprotocol.asksSearch(leaving.clientId) {
+		t.Errorf("bit 1 still goes to the indexer that left")
+	}
+	interval := app.settings.MarkedKeepaliveInterval
+	world.advance(interval)
+	// the wakes of the two that stay were armed before the list moved, and still fire
+	for _, indexer := range staying {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
+	}
+	hold.free()
+	testAwaitKeepaliveEnd(t, app, leaving.clientId)
+	for minute := uint64(2); minute <= 3; minute += 1 {
+		world.advance(interval)
+		for _, indexer := range staying {
+			testAwaitKeepaliveMark(t, app, indexer.clientId, minute+1)
+		}
+	}
+	for _, indexer := range staying {
+		name := world.names[indexer.clientId]
+		want := []time.Time{start.Add(interval), start.Add(2 * interval), start.Add(3 * interval)}
+		if times := world.pingTimes(name); !slices.Equal(times, want) {
+			t.Errorf("%s's Pings at %v, want one a minute for three", name, times)
+		}
+	}
+	leavingName := world.names[leaving.clientId]
+	if sent := testEventsNaming(app.windowEvents.list(), leavingName, leavingFrom); len(sent) != 0 {
+		t.Errorf("after it left the list, toward %s: %v", leavingName, sent)
+	}
+
+	// named again in the foreground, three minutes on: its session is lost, so a Hello at once, and then
+	// its grid, which is its window's still
+	againFrom := len(app.windowEvents.list())
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(staying[0], staying[1], leaving)); err != nil {
+		t.Fatal(err)
+	}
+	testAwaitKeepaliveMark(t, app, leaving.clientId, 1)
+	if events := app.windowEvents.list(); testEventIndex(events, "send HELLO "+leavingName, againFrom) < 0 || len(world.pingTimes(leavingName)) != 0 {
+		t.Errorf("named again, toward %s: %v", leavingName, testEventsNaming(events, leavingName, againFrom))
+	}
+	world.advance(interval)
+	testAwaitKeepaliveMark(t, app, leaving.clientId, 2)
+	for _, indexer := range staying {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 5)
+	}
+	if times := world.pingTimes(leavingName); !slices.Equal(times, []time.Time{start.Add(4 * interval)}) {
+		t.Errorf("%s's Pings at %v, want one at its grid's fourth minute", leavingName, times)
+	}
+	for _, indexer := range staying {
+		if times := world.pingTimes(world.names[indexer.clientId]); len(times) != 4 {
+			t.Errorf("%s's Pings at %v, want four", world.names[indexer.clientId], times)
+		}
+	}
+}
+
+// A fourth id is refused: the three before it are kept warm, each opening its window by a bit-1 Hello at
+// the foreground and Pinged at its minute, and the fourth gets no bit 1, no keepalive and no frame. A
+// zero id and a repeat take no place. The cap is the instance's setting: a host set to one refuses the
+// second, and one set to four keeps four.
+func TestAnIdPastTheCapIsRefused(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 4, nil)
+	app := world.app
+	if app.settings.MarkedPeerMaxCount != 3 {
+		t.Fatalf("MarkedPeerMaxCount %d", app.settings.MarkedPeerMaxCount)
+	}
+	warm := world.indexers[:3]
+	fourth := world.indexers[3]
+	fourthName := world.names[fourth.clientId]
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); !errors.Is(err, errSubprotocolMarkedPeers) {
+		t.Fatalf("a fourth id: %v", err)
+	}
+	if app.subprotocol.asksSearch(fourth.clientId) || testKeepaliveRuns(app, fourth.clientId) {
+		t.Errorf("the fourth id was named")
+	}
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range warm {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	events := app.windowEvents.list()
+	for _, indexer := range warm {
+		name := world.names[indexer.clientId]
+		set := testEventIndex(events, "set "+name+" true true", 0)
+		hello := testEventIndex(events, "send HELLO "+name, set)
+		if !app.subprotocol.asksSearch(indexer.clientId) || set < 0 || hello < 0 || !app.subprotocol.peerVerified(indexer.clientId) {
+			t.Errorf("%s is not warm at the foreground: %v", name, testEventsNaming(events, name, 0))
+		}
+	}
+	world.advance(app.settings.MarkedKeepaliveInterval)
+	for _, indexer := range warm {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
+		if times := world.pingTimes(world.names[indexer.clientId]); len(times) != 1 {
+			t.Errorf("%s's Pings at %v, want one", world.names[indexer.clientId], times)
+		}
+	}
+	if toward := testEventsNaming(app.windowEvents.list(), fourthName, 0); len(toward) != 0 {
+		t.Errorf("toward the refused id: %v", toward)
+	}
+
+	// a zero id and a repeat are passed over, and take no place under the cap
+	repeated := []Id{Id(warm[0].clientId), {}, Id(warm[0].clientId), Id(warm[1].clientId), Id(warm[2].clientId)}
+	if err := app.subprotocol.MarkSearchPeers(repeated); err != nil {
+		t.Errorf("three ids, one twice, and a zero id: %v", err)
+	}
+	if peerIds := app.subprotocol.markedPairs.Value().peerIds(); !slices.Equal(peerIds, []connect.Id{warm[0].clientId, warm[1].clientId, warm[2].clientId}) {
+		t.Errorf("named %v", peerIds)
+	}
+
+	one := newTestMarkedWorldWith(t, 2, func(settings *SidecarProtocolSettings) {
+		settings.MarkedPeerMaxCount = 1
+	})
+	if err := one.app.subprotocol.MarkSearchPeers(testMarkedIds(one.indexers...)); !errors.Is(err, errSubprotocolMarkedPeers) {
+		t.Errorf("a second id under a cap of one: %v", err)
+	}
+	if !one.app.subprotocol.asksSearch(one.indexer.clientId) || one.app.subprotocol.asksSearch(one.indexer2.clientId) {
+		t.Errorf("a cap of one did not keep the first id alone")
+	}
+	four := newTestMarkedWorldWith(t, 4, func(settings *SidecarProtocolSettings) {
+		settings.MarkedPeerMaxCount = 4
+	})
+	if err := four.app.subprotocol.MarkSearchPeers(testMarkedIds(four.indexers...)); err != nil {
+		t.Errorf("four ids under a cap of four: %v", err)
+	}
+}
+
+// A failover to an indexer outside the list: with three pairs warm, a search toward a fourth indexer the
+// app's mode lets it ask runs that indexer's bit-1 Hello first, which opens its own window at the search,
+// and the fourth then gets no keepalive, the three keeping theirs.
+func TestFailoverOutsideTheListOpensItsOwnWindowAtTheSearch(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 4, nil)
+	app := world.app
+	warm := world.indexers[:3]
+	outside := world.indexers[3]
+	outsideName := world.names[outside.clientId]
+	if err := app.subprotocol.SetFeatures(0, func(clientId Id) bool {
+		return clientId == Id(outside.clientId)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(warm...)); err != nil {
+		t.Fatal(err)
+	}
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range warm {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	if toward := testEventsNaming(app.windowEvents.list(), outsideName, 0); len(toward) != 0 {
+		t.Errorf("before the search, toward the indexer outside the list: %v", toward)
+	}
+	if _, err := app.subprotocol.Call(t.Context(), Id(outside.clientId), protocol.MessageType_SEARCH, testSearchRequestBody(t, 4, 0, 1), nil); err != nil {
+		t.Fatal(err)
+	}
+	events := app.windowEvents.list()
+	set := testEventIndex(events, "set "+outsideName+" true true", 0)
+	retire := testEventIndex(events, "retire "+outsideName, set)
+	hello := testEventIndex(events, "send HELLO "+outsideName, retire)
+	adopt := testEventIndex(events, "adopt "+outsideName, hello)
+	search := testEventIndex(events, "send SEARCH "+outsideName, adopt)
+	if set < 0 || retire < 0 || hello < 0 || adopt < 0 || search < 0 {
+		t.Errorf("events %v", testEventsNaming(events, outsideName, 0))
+	}
+	world.advance(app.settings.MarkedKeepaliveInterval)
+	for _, indexer := range warm {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
+		if times := world.pingTimes(world.names[indexer.clientId]); len(times) != 1 {
+			t.Errorf("%s's Pings at %v, want one", world.names[indexer.clientId], times)
+		}
+	}
+	if testKeepaliveRuns(app, outside.clientId) || len(world.pingTimes(outsideName)) != 0 {
+		t.Errorf("the indexer outside the list got a keepalive")
+	}
+}
+
+// An empty list names none: every keepalive ends, bit 1 goes to no one by the list, and the next minute
+// sends nothing.
+func TestAnEmptyListNamesNone(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 2, nil)
+	app := world.app
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); err != nil {
+		t.Fatal(err)
+	}
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	if err := app.subprotocol.MarkSearchPeers([]Id{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveEnd(t, app, indexer.clientId)
+		if app.subprotocol.asksSearch(indexer.clientId) {
+			t.Errorf("bit 1 still goes to %s", world.names[indexer.clientId])
+		}
+	}
+	sentBefore := len(app.sent())
+	world.advance(app.settings.MarkedKeepaliveInterval)
+	if sent := app.sent()[sentBefore:]; len(sent) != 0 {
+		t.Errorf("with none named the app sent %v", testEnvelopeTypes(sent))
+	}
+}
+
+// A 3-minute suspension with three pairs warm: the background sends nothing to any of them, even for the
+// wakes armed as it began, and the next foreground re-establishes each lost session by a Hello at once,
+// before any Ping, each on its own pair's loop.
+func TestThreePairsSuspensionReestablishesEachAtTheNextForeground(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 3, nil)
+	app := world.app
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); err != nil {
+		t.Fatal(err)
+	}
+	for _, indexer := range world.indexers {
+		if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.subprotocol.SetForeground(true)
+	// each session stands, so each loop's tick at the foreground sends nothing and arms its first wake
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	from := len(app.windowEvents.list())
+	sentBefore := len(app.sent())
+	app.subprotocol.SetForeground(false)
+	world.advance(3 * time.Minute)
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
+	}
+	if types := testEnvelopeTypes(app.sent()[sentBefore:]); !slices.Equal(types, []string{"HELLO", "HELLO", "HELLO"}) {
+		t.Errorf("sent from the suspension's start on: %v", types)
+	}
+	events := app.windowEvents.list()
+	for _, indexer := range world.indexers {
+		name := world.names[indexer.clientId]
+		if sent := testEventsNaming(events, name, from); testEventIndex(sent, "send HELLO "+name, 0) < 0 || slices.Contains(sent, "send PING "+name) {
+			t.Errorf("toward %s from the suspension's start on: %v", name, sent)
+		}
+		if !app.subprotocol.peerVerified(indexer.clientId) {
+			t.Errorf("the pair with %s was not re-established", name)
+		}
+	}
+}
+
+// One pair's lost Pong delays no other pair's Ping. Three pairs are warm, the dropped one's window
+// opening 10 s before the other two's; the network to it drops in the foreground, its minute's Ping goes
+// into the drop and its tick waits out the Pong, and the other two are Pinged at their minute meanwhile.
+// Once the network is back, its next tick, 120 s past its Hello with no Pong, finds its session lost and
+// re-establishes it alone by a Hello; the other two keep theirs, and every Ping stays on its own grid.
+func TestALostPongDelaysNoOtherPairsPing(t *testing.T) {
+	world := newTestMarkedWorldWith(t, 3, nil)
+	app := world.app
+	dropped := world.indexers[1]
+	droppedName := world.names[dropped.clientId]
+	live := []*testRpcSide{world.indexers[0], world.indexers[2]}
+	if err := app.subprotocol.MarkSearchPeers(testMarkedIds(world.indexers...)); err != nil {
+		t.Fatal(err)
+	}
+	start := app.clock.Now()
+	if err := app.subprotocol.EnsureHello(t.Context(), Id(dropped.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	offset := 10 * time.Second
+	world.advance(offset)
+	for _, indexer := range live {
+		if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.subprotocol.SetForeground(true)
+	for _, indexer := range world.indexers {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 1)
+	}
+	app.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		if from == dropped || to == dropped {
+			return nil
+		}
+		return envelope
+	})
+	interval := app.settings.MarkedKeepaliveInterval
+	pingTimeout := app.settings.PingTimeout
+	// the dropped pair's minute: its Ping goes into the drop, and its tick waits for the Pong, the only
+	// wait set from here that is due by then
+	waitCount, _ := app.clock.waitCount.Get()
+	world.advance(interval - offset)
+	app.clock.awaitWaitDue(waitCount, start.Add(interval+pingTimeout))
+	// the live pairs' minute, while the dropped pair's tick still waits
+	world.advance(offset)
+	for _, indexer := range live {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 2)
+	}
+	func() {
+		app.subprotocol.stateLock.Lock()
+		defer app.subprotocol.stateLock.Unlock()
+		if loop := app.subprotocol.keepaliveLoops[dropped.clientId]; loop == nil || loop.markCount != 1 {
+			t.Errorf("the dropped pair's tick ended before its Pong's timeout")
+		}
+	}()
+	// no Pong by the timeout: the tick ends, and the next wake is on the dropped pair's grid
+	world.advance(pingTimeout - offset)
+	testAwaitKeepaliveMark(t, app, dropped.clientId, 2)
+	// the network returns, and the dropped pair's next tick re-establishes its lost session by a Hello
+	app.setDeliver(nil)
+	from := len(app.windowEvents.list())
+	world.advance(interval - pingTimeout)
+	testAwaitKeepaliveMark(t, app, dropped.clientId, 3)
+	world.advance(offset)
+	for _, indexer := range live {
+		testAwaitKeepaliveMark(t, app, indexer.clientId, 3)
+	}
+	world.advance(interval - offset)
+	testAwaitKeepaliveMark(t, app, dropped.clientId, 4)
+
+	if times := world.pingTimes(droppedName); !slices.Equal(times, []time.Time{start.Add(interval), start.Add(3 * interval)}) {
+		t.Errorf("%s's Pings at %v, want the lost one at its first minute and one at its third", droppedName, times)
+	}
+	for _, indexer := range live {
+		name := world.names[indexer.clientId]
+		want := []time.Time{start.Add(offset + interval), start.Add(offset + 2*interval)}
+		if times := world.pingTimes(name); !slices.Equal(times, want) {
+			t.Errorf("%s's Pings at %v, want %v", name, times, want)
+		}
+	}
+	events := app.windowEvents.list()
+	if testEventIndex(events, "send HELLO "+droppedName, from) < 0 {
+		t.Errorf("toward %s once the network returned: %v", droppedName, testEventsNaming(events, droppedName, from))
+	}
+	hellos := 0
+	for _, envelope := range app.sent() {
+		if envelope.Type == uint32(protocol.MessageType_HELLO) {
+			hellos += 1
+		}
+	}
+	if hellos != 4 {
+		t.Errorf("%d Hellos, want the three that opened the pairs and the dropped pair's one: %v", hellos, testEnvelopeTypes(app.sent()))
+	}
+	for _, indexer := range world.indexers {
+		if !app.subprotocol.peerVerified(indexer.clientId) {
+			t.Errorf("the pair with %s lost its Hello", world.names[indexer.clientId])
 		}
 	}
 }

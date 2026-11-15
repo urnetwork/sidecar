@@ -112,6 +112,10 @@ type BridgeLedgerSettings struct {
 	BodyListMaxCount int
 	// The longest site_id a BridgeRoute names: 32 bytes. Non-positive is the default.
 	SiteIdMaxByteCount int
+	// How long a released alias drains, keeping its block, where its release names no drain_seconds (DESIGN-DETAILS
+	// 12.2.2): 300 s. Every reader of a network reads the default, since when a block is free again rides on it.
+	// Non-positive is the default.
+	AliasDrainTimeout time.Duration
 }
 
 // DESIGN-DETAILS 12.2.2's values, with §17.4's and §17.8's limits and QD-761's and QD-773's times.
@@ -127,6 +131,7 @@ func DefaultBridgeLedgerSettings() *BridgeLedgerSettings {
 		DrainMaximum:             time.Hour,
 		BodyListMaxCount:         64,
 		SiteIdMaxByteCount:       32,
+		AliasDrainTimeout:        300 * time.Second,
 	}
 }
 
@@ -156,6 +161,9 @@ func bridgeLedgerSettingsOrDefault(settings *BridgeLedgerSettings) *BridgeLedger
 	}
 	if read.BodyListMaxCount <= 0 {
 		read.BodyListMaxCount = defaults.BodyListMaxCount
+	}
+	if read.AliasDrainTimeout <= 0 {
+		read.AliasDrainTimeout = defaults.AliasDrainTimeout
 	}
 	if read.SiteIdMaxByteCount <= 0 {
 		read.SiteIdMaxByteCount = defaults.SiteIdMaxByteCount
@@ -632,7 +640,7 @@ func bridgeLedgerEachRow(rows BridgeLedgerRows, each func(path string, row proto
 
 // Takes a head's ledger rows into the ledger, each file in its one order, refusing rows no writer folds: a key out of
 // order or repeated, an id of the wrong size, a disposition with a body it never carries or without one it always
-// does, a body this build cannot read whole, or an alias's release, which BRIDGE-M6-03 builds.
+// does, or a body this build cannot read whole.
 func (self *BridgeLedger) loadRows(rows BridgeLedgerRows) error {
 	shardBits := uint32(bridgeLedgerShardBitsNarrow)
 	if manifest := rows.Manifest(); manifest != nil {
@@ -658,7 +666,8 @@ func (self *BridgeLedger) loadRows(rows BridgeLedgerRows) error {
 			key = typed.GetSubject()
 			err = self.loadEgressRow(typed)
 		case *protocol.BridgeLedgerAliasRow:
-			key = binary.BigEndian.AppendUint32(bytes.Clone(typed.GetBody().GetShareId()), typed.GetBody().GetTargetIndex())
+			// a released alias and the one filed after it share a target, so the entry orders them
+			key = binary.BigEndian.AppendUint64(binary.BigEndian.AppendUint32(bytes.Clone(typed.GetBody().GetShareId()), typed.GetBody().GetTargetIndex()), typed.GetAt())
 			err = self.loadAliasRow(typed)
 		default:
 			err = errors.New("a row of no ledger file")
@@ -851,18 +860,31 @@ func (self *BridgeLedger) loadEgressRow(row *protocol.BridgeLedgerEgressRow) err
 	return nil
 }
 
-// One alias.
+// One alias, in force or released and draining: a released row carries its release's entry and time, and its body the
+// release's drain_seconds.
 func (self *BridgeLedger) loadAliasRow(row *protocol.BridgeLedgerAliasRow) error {
 	signer, err := IdFromBytes(row.GetSigner())
 	if err != nil {
 		return err
 	}
-	if row.GetAt() == 0 || row.GetReleasedAt() != 0 || row.GetReleasedMs() != 0 || row.GetBody() == nil {
-		return errors.New("an alias out of place, or released, which this build cannot read")
+	body := row.GetBody()
+	released := row.GetReleasedAt() != 0
+	switch {
+	case row.GetAt() == 0 || body == nil || body.GetRelease():
+		return errors.New("an alias out of place")
+	case !released && (row.GetReleasedMs() != 0 || body.GetDrainSeconds() != 0):
+		return errors.New("an alias in force with a release's fields")
+	case released && (row.GetReleasedAt() <= row.GetAt() || uint64(self.settings.DrainMaximum/time.Second) < uint64(body.GetDrainSeconds())):
+		return errors.New("a released alias out of place")
 	}
-	if err := self.holdAlias(row.GetBody(), nil); err != nil {
+	if err := self.holdAliasRow(body, nil, released); err != nil {
 		return err
 	}
-	self.aliases = append(self.aliases, &BridgeLedgerAlias{Body: row.GetBody(), Signer: signer, At: row.GetAt()})
+	alias := &BridgeLedgerAlias{Body: body, Signer: signer, At: row.GetAt()}
+	if released {
+		alias.ReleasedAt, alias.ReleasedMs = row.GetReleasedAt(), row.GetReleasedMs()
+		alias.drainMs = self.aliasDrainMs(body.GetDrainSeconds())
+	}
+	self.aliases = append(self.aliases, alias)
 	return nil
 }
