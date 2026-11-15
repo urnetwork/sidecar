@@ -2,7 +2,10 @@
 
 // §16.18's model calls (MCP-M6-03) on the hook env: Codex's PostModelRequest and OTLP/HTTP JSON telemetry each become a
 // model_call entry, source hook, every string redacted; the telemetry receiver, served on loopback, refuses a caller
-// without its token and records nothing for it; an export it cannot read, or a call naming no live run, is a gap.
+// without its token and records nothing for it; an export it cannot read, or a call naming no live run, is a gap. A
+// Codex call comes from its hook alone (QD-835): one PostModelRequest is one model_call with its request id and tokens,
+// which RunCostBody's calls counts once, a Codex export of the same call adding nothing, and MCP-M3-28's recorded
+// PostModelRequest reads so.
 
 package mcp
 
@@ -13,6 +16,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -193,5 +197,154 @@ func TestDroppedExportIsGap(t *testing.T) {
 	}
 	if dropped := telemetry.Counts().Dropped; dropped != len(exports) {
 		t.Errorf("%d dropped", dropped)
+	}
+}
+
+// The run's model_call entries summed as RECORD.md 13.1's cost has them (sidecar.RecordRunCost), beside the run's gaps.
+func testRunCostBody(t *testing.T, env *ingestTestEnv, runId sidecar.Id) *protocol.RunCostBody {
+	t.Helper()
+	cost := &sidecar.RecordRunCost{}
+	for _, call := range env.writer.of(sidecar.RecordKindModelCall) {
+		if call.RunId != nil && *call.RunId == runId {
+			cost.AddCall(call.Body.(*protocol.ModelCallBody), nil)
+		}
+	}
+	body, ok := cost.Body(env.runFile(runId).Gaps)
+	if !ok {
+		t.Fatal("the run reported no model call")
+	}
+	return body
+}
+
+// One Codex PostModelRequest records one model_call, source hook, with its request id, tokens and duration, and the
+// run's cost counts it once; Codex's own export of the same call, reaching the receiver with the token, is refused
+// with nothing recorded, so the count stays one (QD-835).
+func TestCodexPostModelRequestCountsOnce(t *testing.T) {
+	env, telemetry, listener, token := newModelCallEnv(t)
+	codex := env.harnessIn(sidecartest.FakeHarnessCodex)
+	if err := codex.Hook(codex.Payload("c1", "PostModelRequest", map[string]any{
+		"model":       "codex-test",
+		"provider":    "test-provider",
+		"request_id":  "req-once",
+		"duration_ms": 1200,
+		"usage":       map[string]any{"input_tokens": 300, "output_tokens": 40, "cached_input_tokens": 200},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	runId := env.runOf("codex", "c1")
+	calls := env.writer.of(sidecar.RecordKindModelCall)
+	if len(calls) != 1 {
+		t.Fatalf("%d model_call entries", len(calls))
+	}
+	body := calls[0].Body.(*protocol.ModelCallBody)
+	if calls[0].Source != sidecar.RecordSourceHook || body.RequestId != "req-once" || body.Model != "codex-test" ||
+		body.InputTokens != 300 || body.OutputTokens != 40 || body.CacheReadTokens != 200 || body.DurationMillis != 1200 {
+		t.Errorf("the call %+v from source %v", body, calls[0].Source)
+	}
+
+	export := testOtlpRecords("codex_cli_rs", map[string]string{
+		"event.name": "codex.api_request", "session.id": "c1", "model": "codex-test", "request_id": "req-once",
+		"input_tokens": "300", "output_tokens": "40", "duration_ms": "1200",
+	})
+	if status := testTelemetryPost(t, listener, "Bearer "+token, export); status != http.StatusUnauthorized {
+		t.Errorf("codex's export: status %d", status)
+	}
+	if after := env.writer.of(sidecar.RecordKindModelCall); len(after) != 1 {
+		t.Errorf("%d model_call entries after codex's export", len(after))
+	}
+	if counts := telemetry.Counts(); counts.Refused != 1 || counts.Dropped != 0 {
+		t.Errorf("counts %+v", counts)
+	}
+	cost := testRunCostBody(t, env, runId)
+	if len(cost.Usage) != 1 || cost.Usage[0].Calls != 1 || cost.Usage[0].Model != "codex-test" || cost.Usage[0].InputTokens != 300 ||
+		cost.Usage[0].OutputTokens != 40 || cost.Usage[0].CacheReadTokens != 200 || !cost.Usage[0].Complete {
+		t.Errorf("the run's cost %+v", cost.Usage)
+	}
+	// the run's one model-call source is its hooks, never telemetry
+	if err := codex.SessionEnd("c1", "exit"); err != nil {
+		t.Fatal(err)
+	}
+	coverages := env.writer.of(sidecar.RecordKindCoverage)
+	if len(coverages) != 1 {
+		t.Fatalf("%d coverage entries", len(coverages))
+	}
+	if sources := coverages[0].Body.(*protocol.Coverage).Sources; !slices.Contains(sources, sidecar.RecordCoverageSourceHooks) ||
+		slices.Contains(sources, sidecar.RecordCoverageSourceTelemetry) {
+		t.Errorf("the run's sources %v", sources)
+	}
+}
+
+// MCP-M3-28's recorded Codex session holds a PostModelRequest, and each one, through the hook path, records one
+// model_call with the payload's request id and tokens while model calls are on, and none, and no gap, while they are
+// off, the hook event standing either way.
+func TestCodexRecordedPostModelRequestRecordsItsCall(t *testing.T) {
+	var codex *conformanceVersion
+	for _, version := range loadConformanceVersions(t) {
+		if version.manifest.Harness == codexHookHarness {
+			codex = version
+		}
+	}
+	if codex == nil {
+		t.Fatal("no recorded codex session")
+	}
+	payloads := [][]byte{}
+	for _, want := range codex.expected {
+		if want.HarnessEvent == "PostModelRequest" {
+			payloads = append(payloads, codex.payloads[want.File])
+		}
+	}
+	if len(payloads) == 0 {
+		t.Fatal("codex's recorded session holds no PostModelRequest")
+	}
+	for _, modelCalls := range []bool{true, false} {
+		env := newIngestTestEnv(t)
+		env.server.settings.Ingest.ModelCalls = modelCalls
+		env.ingest.detach()
+		env.install()
+		harness := env.harnessIn(sidecartest.FakeHarnessCodex)
+		home := t.TempDir()
+		sessionId := ""
+		for _, payload := range payloads {
+			text := strings.ReplaceAll(string(payload), codex.manifest.Cwd, env.cwd)
+			text = strings.ReplaceAll(text, codex.manifest.Home, home)
+			if err := harness.Hook([]byte(text)); err != nil {
+				t.Fatal(err)
+			}
+			read := &codexModelRequestPayload{}
+			fields := struct {
+				SessionId string `json:"session_id"`
+			}{}
+			if err := json.Unmarshal(payload, read); err != nil || json.Unmarshal(payload, &fields) != nil {
+				t.Fatalf("the recorded payload: %v", err)
+			}
+			sessionId = fields.SessionId
+		}
+		runId := env.runOf(codexHookHarness, sessionId)
+		calls := env.writer.of(sidecar.RecordKindModelCall)
+		if !modelCalls {
+			if len(calls) != 0 || 0 < len(env.runFile(runId).Gaps) {
+				t.Errorf("model calls off: %d calls, gaps %v", len(calls), env.runFile(runId).Gaps)
+			}
+		} else if len(calls) != len(payloads) {
+			t.Fatalf("%d model_call entries for %d recorded calls", len(calls), len(payloads))
+		}
+		for i := range calls {
+			read := &codexModelRequestPayload{}
+			json.Unmarshal(payloads[i], read)
+			body := calls[i].Body.(*protocol.ModelCallBody)
+			if body.RequestId != read.RequestId || body.Model != read.Model || body.Provider != read.Provider ||
+				body.InputTokens != read.Usage.InputTokens || body.OutputTokens != read.Usage.OutputTokens ||
+				body.CacheReadTokens != read.Usage.CachedInputTokens || uint64(body.DurationMillis) != read.DurationMs {
+				t.Errorf("recorded call %d: %+v from %+v", i, body, read)
+			}
+		}
+		if modelCalls {
+			if cost := testRunCostBody(t, env, runId); len(cost.Usage) != 1 || cost.Usage[0].Calls != uint64(len(payloads)) {
+				t.Errorf("the run's cost %+v", cost.Usage)
+			}
+		}
+		if events := env.writer.of(sidecar.RecordKindHookEvent); len(events) != len(payloads) {
+			t.Errorf("model calls %t: %d hook events", modelCalls, len(events))
+		}
 	}
 }

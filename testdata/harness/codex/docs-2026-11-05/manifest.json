@@ -4,7 +4,7 @@
   "pinned": "no Codex release named: the hook schema as published on the read date",
   "schema": "https://learn.chatgpt.com/docs/hooks.md",
   "read": "2026-11-05",
-  "recorded": "synthetic in every value, written from the published hook schema",
+  "recorded": "synthetic in every value, written from the published hook schema; PostModelRequest's fields are the plan's names (MCP-M6-03, QD-835) until the live conformance run pins them",
   "cwd": "/work/project",
   "files": {
     "src/main.go": "package main\n\nfunc main() {\n\tprintln(\"before\")\n}\n"

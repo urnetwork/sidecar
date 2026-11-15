@@ -1,9 +1,10 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
-// The telemetry pair in ur install-harness (QD-822): a user install of Claude Code or Codex writes the exporter's
-// settings naming the sealed loopback port and bearer token, seals the pair beside the seals, and a re-install changes
-// nothing; a pair drawn again or an edited exporter setting reads as changed; a project install, or Cursor's, takes no
-// token; the diff never prints the token; and the pair is no seal.
+// The telemetry pair in ur install-harness (QD-822): a user install of Claude Code writes the exporter's settings
+// naming the sealed loopback port and bearer token, seals the pair beside the seals, and a re-install changes nothing;
+// a pair drawn again or an edited exporter setting reads as changed; a project install, Codex's, whose model calls
+// come from its PostModelRequest hook (QD-835), and Cursor's take no token; the diff never prints the token; and the
+// pair is no seal. Codex's own install, the hook and the earlier [otel] table's removal, is harness_install_codex_test.go's.
 
 package mcp
 
@@ -53,9 +54,9 @@ func testClaudeEnv(t *testing.T, home string) map[string]any {
 	return env
 }
 
-// Claude Code's install writes the exporter's variables into its settings' env block, keeping the person's own, and
-// Codex's its [otel] table; both name the pair's loopback port and its bearer, the pair is sealed 0600 beside the
-// seals, the seal names the port, and the check holds.
+// Claude Code's install writes the exporter's variables into its settings' env block, keeping the person's own, naming
+// the pair's loopback port and its bearer, the pair is sealed 0600 beside the seals, the seal names the port, and the
+// check holds; a Codex install into the same state then writes no exporter settings and leaves the pair as it is.
 func TestInstallWritesExporterSettings(t *testing.T) {
 	pair := testTelemetryPair(testTelemetryPort, "synthetic telemetry token")
 	args := testTelemetryArgs(t, "claude-code", pair)
@@ -91,43 +92,35 @@ func TestInstallWritesExporterSettings(t *testing.T) {
 		t.Error("a fresh install with exporter settings reads changed")
 	}
 
-	// Codex, into the same state: the same pair, its [otel] table naming the logs endpoint
+	// Codex, into the same state: refused the pair, and installed without it, no exporter settings and the pair kept
 	codex := testHarnessArgs("codex", testHarnessHome(t, "codex"), args.StateDirectory)
 	codex.Telemetry = sealed
-	testInstallHarness(t, codex)
-	config, err := os.ReadFile(filepath.Join(codex.Home, ".codex", "config.toml"))
-	if err != nil {
-		t.Fatal(err)
+	if _, err := PlanHarnessInstall(codex); err == nil {
+		t.Error("codex's install took the pair")
 	}
-	document, err := harnessParseToml(config, 64)
-	if err != nil {
-		t.Fatal(err)
+	codex.Telemetry = nil
+	codexPlan := testInstallHarness(t, codex)
+	for _, file := range codexPlan.Files {
+		if strings.Contains(string(file.After), "[otel]") || strings.Contains(string(file.After), pair.Token) {
+			t.Errorf("codex's %s holds exporter settings:\n%s", file.Path, file.After)
+		}
 	}
-	tables, err := codexOwnedTables(document, codexOtelKeys)
-	if err != nil {
-		t.Fatal(err)
+	if codexPlan.Seal.TelemetryPort != 0 {
+		t.Errorf("codex's seal names port %d", codexPlan.Seal.TelemetryPort)
 	}
-	otel, err := codexOwnedEntries(tables, codexOtelKeys)
-	if err != nil {
-		t.Fatal(err)
+	if after, err := ReadHarnessTelemetry(args.StateDirectory, args.Ingest.HarnessConfigByteCount); err != nil || !after.equal(pair) {
+		t.Errorf("codex's install changed the pair: %+v %v", after, err)
 	}
-	encoded, _ := harnessJsonEncode(otel, "", "")
-	wantOtel := `{"exporter":{"otlp-http":{"endpoint":"http://127.0.0.1:41234/v1/logs","headers":{"Authorization":"Bearer ` +
-		pair.Token + `"},"protocol":"json"}},"log_user_prompt":false}`
-	if encoded != wantOtel {
-		t.Errorf("codex's otel %s", encoded)
-	}
-	if !strings.Contains(string(config), "[profiles.review]") || !strings.Contains(string(config), "[mcp_servers.docs]") {
-		t.Errorf("the person's tables went:\n%s", config)
-	}
-	if testHarnessChanged(t, testHarnessCheck(args.StateDirectory), "codex", "") {
-		t.Error("codex's fresh install with exporter settings reads changed")
+	check := testHarnessCheck(args.StateDirectory)
+	if testHarnessChanged(t, check, "codex", "") || testHarnessChanged(t, check, "claude-code", "") {
+		t.Error("an install reads changed beside the other")
 	}
 }
 
-// Each harness's diff with a pair against its fixtures is the golden one, the token shown by a stand-in.
+// Claude Code's diff with a pair against its fixtures is the golden one, the token shown by a stand-in: its exporter
+// settings as QD-822 has them, which QD-835 leaves unchanged.
 func TestTelemetryInstallDiffsAreGolden(t *testing.T) {
-	for _, harness := range []string{"claude-code", "codex"} {
+	for _, harness := range []string{"claude-code"} {
 		args := testTelemetryArgs(t, harness, testTelemetryPair(testTelemetryPort, "synthetic telemetry token"))
 		plan, err := PlanHarnessInstall(args)
 		if err != nil {
@@ -154,7 +147,7 @@ func TestTelemetryInstallDiffsAreGolden(t *testing.T) {
 // The diff names the stand-in, never the token, and the files written hold the token itself.
 func TestTelemetryDiffHidesToken(t *testing.T) {
 	pair := testTelemetryPair(testTelemetryPort, "synthetic telemetry token")
-	for _, harness := range []string{"claude-code", "codex"} {
+	for _, harness := range []string{"claude-code"} {
 		plan, err := PlanHarnessInstall(testTelemetryArgs(t, harness, pair))
 		if err != nil {
 			t.Fatal(err)
@@ -175,7 +168,7 @@ func TestTelemetryDiffHidesToken(t *testing.T) {
 
 // A re-install with the sealed pair changes nothing: the same files, the same seal, the same pair.
 func TestReinstallKeepsTelemetryPair(t *testing.T) {
-	for _, harness := range []string{"claude-code", "codex"} {
+	for _, harness := range []string{"claude-code"} {
 		args := testTelemetryArgs(t, harness, testTelemetryPair(testTelemetryPort, "synthetic telemetry token"))
 		testInstallHarness(t, args)
 		sealed, err := ReadHarnessTelemetry(args.StateDirectory, args.Ingest.HarnessConfigByteCount)
@@ -237,8 +230,9 @@ func TestChangedTelemetryPairReadsChanged(t *testing.T) {
 	}
 }
 
-// A project install takes no token, since its files are committed, and Cursor documents no exporter: each is refused
-// with a pair named, and nothing is written.
+// A project install takes no token, since its files are committed; Codex reports its model calls by its
+// PostModelRequest hook (QD-835); and Cursor documents no exporter: each is refused with a pair named, and nothing is
+// written.
 func TestTelemetryRefusedOutsideUserInstalls(t *testing.T) {
 	pair := testTelemetryPair(testTelemetryPort, "synthetic telemetry token")
 	project := testHarnessArgs("claude-code", testHarnessHome(t, "claude-code"), t.TempDir())
@@ -251,10 +245,18 @@ func TestTelemetryRefusedOutsideUserInstalls(t *testing.T) {
 	if _, err := PlanHarnessInstall(cursor); err == nil {
 		t.Error("cursor's install took a token")
 	}
-	if HarnessExportsTelemetry("cursor") || !HarnessExportsTelemetry("claude-code") || !HarnessExportsTelemetry("codex") {
-		t.Error("the harnesses with exporters are not Claude Code and Codex alone")
+	codex := testTelemetryArgs(t, "codex", pair)
+	if _, err := PlanHarnessInstall(codex); err == nil || !strings.Contains(err.Error(), "PostModelRequest") {
+		t.Errorf("codex's install took a token, or its refusal does not say why: %v", err)
 	}
-	for _, args := range []*HarnessInstallArgs{project, cursor} {
+	if HarnessExportsTelemetry("cursor") || HarnessExportsTelemetry("codex") || !HarnessExportsTelemetry("claude-code") {
+		t.Error("the harnesses with exporters are not Claude Code alone")
+	}
+	if HarnessTelemetryNone("claude-code") != "" || !strings.Contains(HarnessTelemetryNone("codex"), "PostModelRequest") ||
+		!strings.Contains(HarnessTelemetryNone("cursor"), "documents no OpenTelemetry exporter setting") {
+		t.Errorf("the reasons: %q %q %q", HarnessTelemetryNone("claude-code"), HarnessTelemetryNone("codex"), HarnessTelemetryNone("cursor"))
+	}
+	for _, args := range []*HarnessInstallArgs{project, cursor, codex} {
 		if _, err := os.Stat(HarnessTelemetryPath(args.StateDirectory)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("a refused install sealed a pair: %v", err)
 		}
