@@ -413,7 +413,7 @@ func recordDisclosurePlanOf(logId Id, profile RecordDisclosureProfile, choices [
 	for _, choice := range choices {
 		item := &RecordDisclosureItem{
 			EntryId: choice.entry.EntryId, Kind: choice.entry.Kind(), TimeMillis: choice.entry.Header.Header.GetTimeMillis(),
-			Opened: choice.opened, Erased: choice.entry.State == RecordEntryErased,
+			Opened: choice.opened, Erased: choice.entry.State.KeyGone(),
 		}
 		if choice.opened {
 			item.Fields = recordDisclosureFields(choice.entry.Kind(), choice.entry.Body)
@@ -675,7 +675,7 @@ func (self *RecordDisclosure) Open(ctx context.Context, args *RecordOpenArgs) (*
 			return nil, fmt.Errorf("%w: entry %s", ErrRecordDisclosureNotFound, entryId)
 		}
 		opening := &protocol.Opening{Header: bytes.Clone(entry.SignedBytes)}
-		item := &RecordDisclosureItem{EntryId: entry.EntryId, Kind: entry.Kind(), TimeMillis: entry.Header.Header.GetTimeMillis(), Erased: entry.State == RecordEntryErased}
+		item := &RecordDisclosureItem{EntryId: entry.EntryId, Kind: entry.Kind(), TimeMillis: entry.Header.Header.GetTimeMillis(), Erased: entry.State.KeyGone()}
 		if entry.Body != nil && entry.State != RecordEntryErased {
 			opening.Salt = bytes.Clone(entry.Salt)
 			opening.Body = bytes.Clone(entry.CommittedBody())
