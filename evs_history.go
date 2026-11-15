@@ -26,7 +26,10 @@
 //
 // Under the repo's prefix write rules every version is listed, and one this device ignores is marked Ignored with
 // its signer (DESIGN-DETAILS 16.2.5's History row); a version nobody can judge, under a rule set this device cannot
-// read, is shown as evs has it.
+// read, is shown as evs has it. A listed version a later listed repair names in its sealed written_over is marked
+// WrittenOverBy that repair's version (DESIGN-DETAILS 16.2.7's metadata row; QD-833). A repair is the first version
+// this device follows above one it ignores, so only such a version's sealed metadata is opened, one more round each;
+// the list is for display alone, so one that does not read or open marks nothing and fails nothing.
 //
 // On every leg. Safe for concurrent use.
 
@@ -53,6 +56,11 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 	version := args.Version
 	var expectPushId []byte
 	var expectCommit uint64
+	// each listed version's statement, beside history.Versions, and the first read's head and keys: what a repair's
+	// sealed metadata is read and opened with (markWrittenOver)
+	statements := []*EvsVerifiedStatement{}
+	var head *EvsVerifiedHead
+	var keys *evsReadKeys
 	for len(history.Versions) < self.client.settings.HistoryVersionCount {
 		path := &evsReadPath{path: args.Path, version: version}
 		if version != 0 {
@@ -65,6 +73,9 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		result.objects.close()
 		if history.HeadVersion == 0 {
 			history.HeadVersion = result.head.Version
+		}
+		if head == nil {
+			head, keys = result.head, result.keys
 		}
 		verified := result.replies[0]
 		if verified.Base != nil {
@@ -109,6 +120,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 				Ignored:         ignored,
 				State:           "kept",
 			})
+			statements = append(statements, &EvsVerifiedStatement{Version: removal.GetRemovalVersion(), Statement: verified.Statement})
 			if removal.GetPathVersion() <= 1 {
 				break
 			}
@@ -154,11 +166,62 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			State:           state,
 			SlotIds:         slotIds,
 		})
+		statements = append(statements, &EvsVerifiedStatement{Version: verified.CommitVersion, Statement: verified.Statement})
 		if len(entry.GetPrevPushId()) == 0 || entry.GetVersion() <= 1 {
 			break
 		}
 		expectPushId, expectCommit = entry.GetPrevPushId(), entry.GetPrevCommitVersion()
 		version = entry.GetVersion() - 1
 	}
+	self.markWrittenOver(ctx, history, statements, head, keys)
 	return history, nil
+}
+
+// Marks each listed version a later listed repair names in its sealed written_over with that repair's path version
+// (the file header): a candidate is a version this device follows directly above one it ignores, and a version takes
+// the mark of the nearest candidate above it that names it, the candidates being read oldest first. A push this
+// device ignores names nothing, and a push from before the field has no list.
+func (self *EvsRepo) markWrittenOver(ctx context.Context, history *EvsHistory, statements []*EvsVerifiedStatement, head *EvsVerifiedHead, keys *evsReadKeys) {
+	versions := history.Versions
+	for i := len(versions) - 2; 0 <= i; i -= 1 {
+		if versions[i].Ignored || !versions[i+1].Ignored {
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		pushIds := self.writtenOverOf(ctx, head, keys, statements[i])
+		for _, older := range versions[i+1:] {
+			if older.WrittenOverBy == 0 && pushIds[older.PushId] {
+				older.WrittenOverBy = versions[i].Version
+			}
+		}
+	}
+}
+
+// The push ids a version's push names in its sealed written_over, nil for none: no list, a payload or sealed metadata
+// that does not read or open, which this display does not alarm on, or a list holding an id of another width, which
+// is no list (QD-833).
+func (self *EvsRepo) writtenOverOf(ctx context.Context, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement) map[Id]bool {
+	payload, err := self.pushContent(ctx, head, statement)
+	if err != nil {
+		return nil
+	}
+	manifest, err := keys.manifest(ctx, statement.Statement.Push.GetGeneration())
+	if err != nil {
+		return nil
+	}
+	metadata, err := EvsOpenMetadata(manifest, payload.SealedMetadata)
+	if err != nil {
+		return nil
+	}
+	pushIds := map[Id]bool{}
+	for _, pushIdBytes := range metadata.GetWrittenOver() {
+		pushId, err := IdFromBytes(pushIdBytes)
+		if err != nil {
+			return nil
+		}
+		pushIds[pushId] = true
+	}
+	return pushIds
 }
