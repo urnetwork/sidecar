@@ -156,6 +156,13 @@ type SearchProgress struct {
 	FallbackReason string
 	// The indexer asked, or the one a notice names.
 	RemoteBy *Id
+	// A partition answered too_broad: its counts and header matches are given (§16.10's limits row).
+	TooBroad bool
+	// Each ref's coverage, and every repo or ref left out with its reason (§16.10's coverage and excluded rows).
+	Coverage []SearchRepoCoverage
+	Excluded []SearchExclusion
+	// The running counts (§16.10's counts).
+	Counts SearchHitCounts
 }
 
 // A repo's search status: §18.5's SidecarSearchStatus.

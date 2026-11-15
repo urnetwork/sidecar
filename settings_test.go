@@ -236,6 +236,10 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				CompanionInterval:     5 * time.Minute,
 				JournalByteCount:      64 * 1024 * 1024,
 				CompanionAttemptCount: 8,
+				MeteredMoreByteCount:  25 * 1024 * 1024,
+				DirectoryBuckets:      true,
+				MoreFirstProgress:     500 * time.Millisecond,
+				MoreProgressInterval:  1 * time.Second,
 			},
 		},
 		// §5.4's directory settings

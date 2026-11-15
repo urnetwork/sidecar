@@ -168,8 +168,9 @@ func (self *IndexMerger) attempt(ctx context.Context, rootNumber uint32, startDa
 		return false, err
 	}
 	outcome.events = view.events()
-	if view.erasureSetUnreadable {
-		return false, errIndexErasureSetUnreadable
+	guard, err := indexNewEpochGuard(view)
+	if err != nil {
+		return false, err
 	}
 	if view.newerFormat {
 		return false, errIndexMergeNewerFormat
@@ -212,7 +213,7 @@ func (self *IndexMerger) attempt(ctx context.Context, rootNumber uint32, startDa
 		bucket:    bucket,
 		shards:    shards,
 		absorb:    true,
-		erased:    view.erased,
+		erased:    guard.erased,
 		padKey:    padKey,
 		tables:    self.args.tables,
 		companion: view.companion,
@@ -225,14 +226,9 @@ func (self *IndexMerger) attempt(ctx context.Context, rootNumber uint32, startDa
 	outcome.events = append(outcome.events, indexMalformedEvents(view, result.malformed)...)
 	testHookBarrier("evs.index.merge.built", self.barrierKey())
 
-	push := &indexPush{
-		pushId:       NewId(),
-		kind:         indexPushIndex,
-		baseVersion:  view.head.version,
-		indexEpoch:   view.head.indexEpoch,
-		signedTimeMs: signedTime.UnixMilli(),
-		files:        result.files(),
-		removals:     result.removedShards,
+	push, err := guard.push(indexPushIndex, signedTime.UnixMilli(), result.files(), result.removedShards)
+	if err != nil {
+		return false, err
 	}
 	testHookBarrier("evs.index.merge.uploaded", self.barrierKey())
 	committed, err := indexSendPush(ctx, self.args.store, push, signedTime, self.clock, self.args.format.PushLife)

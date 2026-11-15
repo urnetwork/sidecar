@@ -36,6 +36,7 @@ func (self *testHeadWorld) rollerWith(t testing.TB, runner Id, indexedThrough fu
 		repoId:   evsTestId("view repo"),
 		refId:    evsTestId("view ref"),
 		repoKind: protocol.RepoKind_REPO_KIND_GENERAL,
+		isAdmin:  self.isAdmin,
 		format:   self.settings,
 		padKey: func(ctx context.Context) (*indexPadKey, error) {
 			return testPadKey(t, 2), nil

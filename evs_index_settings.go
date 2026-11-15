@@ -71,6 +71,10 @@ type IndexFormatSettings struct {
 	// The block a one-pass extraction reads a file in: 32 KiB. A tunable, not a format byte: every value gives the same
 	// documents, and it bounds what a read holds.
 	ExtractReadByteCount int
+	// The low bits of a run card's version that hold the stream version of its run's newest source entry, the index
+	// epoch its push names above them: 32 (DESIGN-DETAILS 15.2.8 and 15.2.11; QD-779). A CUT lists a card through its
+	// epoch at epoch * 2^32 + 2^32 - 1 (SEARCH-M10-16). Between 1 and 63.
+	CardVersionBitCount int
 }
 
 // DESIGN-DETAILS 11.2.1's and 1.2.1's values, the only source of their defaults. A fresh value each call, sharing nothing
@@ -97,5 +101,6 @@ func DefaultIndexFormatSettings() *IndexFormatSettings {
 		LockGrace:             10 * time.Minute,
 		PushLife:              5 * time.Minute,
 		ExtractReadByteCount:  32 * 1024,
+		CardVersionBitCount:   32,
 	}
 }

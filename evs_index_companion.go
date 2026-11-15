@@ -7,7 +7,8 @@
 // A build, whose order is its fence (R5):
 //
 //	1 t = now, the push's signed time, taken before any read
-//	2 ur/index's head from evs: base b, index_epoch, the erasure set, the writer's own files in the bucket of t
+//	2 ur/index's head from evs: base b, index_epoch, the erasure set, the writer's own files in the bucket of t; units
+//	  journaled below the set's listed_since lose their key sets, extracted again below (the epoch guard)
 //	3 for each content ref with a committed unit, its head read from evs, never a cache: the pin p_R
 //	4 due: every committed unit with c <= p_R; per doc_key the unit with the highest c gives the document, dropped
 //	  when superseded (R at p_R holds its path at a higher version or removed at a higher one, or R was deleted or
@@ -227,13 +228,18 @@ func (self *IndexCompanion) attempt(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if view.erasureSetUnreadable {
-		return false, errIndexErasureSetUnreadable
+	guard, err := indexNewEpochGuard(view)
+	if err != nil {
+		return false, err
 	}
 	if view.newerFormat {
 		return false, errIndexMergeNewerFormat
 	}
 	root := view.writeRoot()
+	// units begun below the set's listed_since are extracted again from the text, or dropped (the epoch guard)
+	if _, err := guard.rebuildJournal(args.journal); err != nil {
+		return false, err
+	}
 	units, err := args.journal.units()
 	if err != nil {
 		return false, err
@@ -329,7 +335,7 @@ func (self *IndexCompanion) attempt(ctx context.Context) (bool, error) {
 		held := newest[key]
 		document, unit := held.document, held.unit
 		ref := refs[unit.refId]
-		if view.erased(document.key, document.version) {
+		if guard.erased(document.key, document.version) {
 			continue
 		}
 		state, err := ref.content.State(ctx, document.name, ref.pin)
@@ -388,9 +394,9 @@ func (self *IndexCompanion) attempt(ctx context.Context) (bool, error) {
 	}
 	testHookBarrier("evs.index.companion.built", self.barrierKey())
 	// 6: sent within the push's life, its units sent until the outcome is known
-	push := &indexPush{
-		pushId: NewId(), kind: indexPushIndex, baseVersion: view.head.version, indexEpoch: view.head.indexEpoch,
-		signedTimeMs: signedTime.UnixMilli(), files: files, removals: removals,
+	push, err := guard.push(indexPushIndex, signedTime.UnixMilli(), files, removals)
+	if err != nil {
+		return false, err
 	}
 	seqs := indexUnitSeqs(due)
 	if err := args.journal.setState(seqs, indexJournalSent, push.pushId); err != nil {
