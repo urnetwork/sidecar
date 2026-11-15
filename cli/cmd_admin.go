@@ -353,7 +353,8 @@ func urAdminMemberMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 					return nil, err
 				}
 				revocation, err := members.signMemberRevoke(ctx, params.MemberId)
-				if revocation == nil {
+				// signed and kept, its post going again, is no failure: the decision is made
+				if revocation == nil || err != nil && !errors.Is(err, sidecar.ErrSidecarActPending) {
 					return nil, err
 				}
 				reply := &urMemberRevokeActReply{Pending: revocation.Pending}
@@ -363,7 +364,7 @@ func urAdminMemberMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 				if revocation.ProposalId != nil {
 					reply.ProposalId = fmt.Sprintf("%x", revocation.ProposalId)
 				}
-				return reply, err
+				return reply, nil
 			},
 		},
 	}

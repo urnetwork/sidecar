@@ -127,11 +127,13 @@ func mustJson(t *testing.T, value any) string {
 	return string(encoded)
 }
 
-// A daemon target whose member plan and signatures a test sets.
+// A daemon target whose member plan and signatures a test sets; pending answers a signed MemberRevoke whose post goes
+// again.
 type testUrAdminMembersTarget struct {
 	testUrDaemonTarget
-	plan  *sidecar.MemberRevokePlan
-	signs []sidecar.Id
+	plan    *sidecar.MemberRevokePlan
+	signs   []sidecar.Id
+	pending bool
 }
 
 func (self *testUrAdminMembersTarget) planMemberRevoke(memberId sidecar.Id) (*sidecar.MemberRevokePlan, error) {
@@ -142,6 +144,9 @@ func (self *testUrAdminMembersTarget) planMemberRevoke(memberId sidecar.Id) (*si
 
 func (self *testUrAdminMembersTarget) signMemberRevoke(ctx context.Context, memberId sidecar.Id) (*sidecar.MemberRevocation, error) {
 	self.signs = append(self.signs, memberId)
+	if self.pending {
+		return &sidecar.MemberRevocation{Pending: true}, sidecar.ErrSidecarActPending
+	}
 	return &sidecar.MemberRevocation{Entry: &bridge.AuthPin{Version: 42}}, nil
 }
 
@@ -187,6 +192,13 @@ func TestAdminMembersRemoveDeniesThenSigns(t *testing.T) {
 	tty = &testTty{lines: []string{"yes"}}
 	if code := cli.main(context.Background(), []string{"ur", "admin", "members", "remove", memberId.String()}); code != urExitOk || len(target.signs) != 2 {
 		t.Fatalf("a member denied already: exit %d, signs %v", code, target.signs)
+	}
+
+	// signed and kept, its post's answer lost: the decision is made, and ur says the post goes again
+	target.pending = true
+	tty = &testTty{lines: []string{"yes"}}
+	if code := cli.main(context.Background(), []string{"ur", "admin", "members", "remove", memberId.String()}); code != urExitOk || !strings.Contains(stdout.String(), "its post goes again") {
+		t.Fatalf("a pending MemberRevoke: exit %d: %s", code, stdout.String())
 	}
 }
 
