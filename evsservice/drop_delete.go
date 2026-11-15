@@ -72,15 +72,17 @@ type DropDelete struct {
 	holds    *HoldCache
 	format2  Format2Gate
 	log      sidecar.Logger
+	// a slot DELETE's price on the metadata cluster, which the DROP's admission paid for
+	slotPrice int64
 
 	deletes sidecar.MetricsCounter
 	freed   sidecar.MetricsCounter
 }
 
-// The deletes on host, which needs Blobs.
+// The deletes on host, which needs Blobs and a write budget.
 func NewDropDelete(host *sidecar.ServiceHost, deps *DropDeleteDeps) (*DropDelete, error) {
-	if host == nil || host.Blobs == nil {
-		return nil, errors.New("evs's drop deletes need a host with Blobs")
+	if host == nil || host.Blobs == nil || host.Budget == nil {
+		return nil, errors.New("evs's drop deletes need a host with Blobs and a write budget")
 	}
 	if deps == nil {
 		deps = &DropDeleteDeps{}
@@ -109,8 +111,17 @@ func NewDropDelete(host *sidecar.ServiceHost, deps *DropDeleteDeps) (*DropDelete
 	if format2 == nil {
 		format2 = ClosedFormat2Gate{}
 	}
+	priceTable, err := DefaultPriceTable(evsSettings.PriceBlockByteCount)
+	if err != nil {
+		return nil, err
+	}
+	slotPrice, err := priceTable.Price(WriteOperation{Kind: WriteOperationDelete, Count: 1})
+	if err != nil {
+		return nil, err
+	}
 	self := &DropDelete{
 		host: host, settings: settings, clock: clock, repos: NewRepoCache(clock, evsSettings), holds: holds, format2: format2, log: log,
+		slotPrice: slotPrice,
 	}
 	if host.Metrics != nil {
 		self.deletes = host.Metrics.Counter(dropDeletesMetricName, "Drop candidates the jobs answered, by result.", "result")
@@ -444,10 +455,22 @@ func (self *dropDeleteRun) judge(candidate *DropCandidate) error {
 }
 
 // One DELETE naming lastModified, with the lease's deadline less DeadlineMargin, cancelled the moment the clock
-// turns unsure.
+// turns unsure. A slot's, on the metadata cluster, goes as funded P2 work of rank drop, which the DROP's admission paid
+// for; a segment's, on the HDDs, spends no NVMe budget.
 func (self *dropDeleteRun) delete(candidate *DropCandidate, cluster sidecar.BlobCluster, key string, lastModified time.Time) error {
+	parent := self.ctx
+	if candidate.Kind == DropIdSlot {
+		grant, err := self.deleter.host.Budget.AcquireP2(self.ctx, cluster.ClusterId(), &sidecar.WriteP2Work{
+			Rank: sidecar.WriteP2RankDrop, Due: self.deleter.clock.Now(), ByteCount: self.deleter.slotPrice, Funded: true,
+		})
+		if err != nil {
+			return err
+		}
+		defer grant.Close()
+		parent = grant.Context()
+	}
 	deadline := self.leaseUntil.Add(-self.request.DeadlineMargin)
-	deleteCtx, cancel := context.WithCancel(sidecar.WithBlobUnmodified(sidecar.WithBlobDeadline(self.ctx, deadline), lastModified))
+	deleteCtx, cancel := context.WithCancel(sidecar.WithBlobUnmodified(sidecar.WithBlobDeadline(parent, deadline), lastModified))
 	defer cancel()
 	if clockCheck := self.deleter.host.ClockCheck; clockCheck != nil {
 		unsure := clockCheck.UnsureChannel()

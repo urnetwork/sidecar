@@ -286,14 +286,21 @@ func (self *dropWorld) pathEpoch(refId sidecar.Id, epoch uint64, partMoves [][]*
 	self.t.Helper()
 	ref := self.ref(refId, protocol.EvsRefMode_EVS_REF_FILE)
 	sourceVersion, sourceChain := ref.head.Version(), bytes.Clone(ref.head.Head.GetChain())
-	parts := [][]byte{}
-	for i, moves := range partMoves {
+	moveOrder := func(a *protocol.EvsPathMove, b *protocol.EvsPathMove) int {
+		pathA, _ := sidecar.ParseEvsTokenPath(a.GetNewTokenPath())
+		pathB, _ := sidecar.ParseEvsTokenPath(b.GetNewTokenPath())
+		return pathA.Compare(pathB)
+	}
+	// runs ascending by new token path within and across parts (DESIGN-DETAILS 9.2.2)
+	sortedParts := [][]*protocol.EvsPathMove{}
+	for _, moves := range partMoves {
 		moves = slices.Clone(moves)
-		slices.SortFunc(moves, func(a *protocol.EvsPathMove, b *protocol.EvsPathMove) int {
-			pathA, _ := sidecar.ParseEvsTokenPath(a.GetNewTokenPath())
-			pathB, _ := sidecar.ParseEvsTokenPath(b.GetNewTokenPath())
-			return pathA.Compare(pathB)
-		})
+		slices.SortFunc(moves, moveOrder)
+		sortedParts = append(sortedParts, moves)
+	}
+	slices.SortStableFunc(sortedParts, func(a []*protocol.EvsPathMove, b []*protocol.EvsPathMove) int { return moveOrder(a[0], b[0]) })
+	parts := [][]byte{}
+	for i, moves := range sortedParts {
 		body, err := proto.Marshal(&protocol.EvsPathMap{
 			RepoId: self.repoId.Bytes(), RefId: refId.Bytes(), PathEpoch: epoch, Part: uint32(i + 1), Parts: uint32(len(partMoves)),
 			Moves: moves, SourceVersion: sourceVersion, SourceChain: sourceChain,
