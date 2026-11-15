@@ -42,6 +42,10 @@
 //
 // A part's own 409 PARTS_MISSING at the seal posts the parts again and seals P again (evs_push_parts.go).
 //
+// PinPush (EVS1-M6-05; DESIGN-DETAILS 16.2.9, 8.2.10) is a push of no change at this device's installed pin, which binds
+// a ref to the rule sets at or below that pin: on a file-mode ref a statement with no change, sent through the same
+// sender; on a git-mode branch the UPDATE of one tip, which only the local tier builds (evs_local_pin.go).
+//
 // On every leg. A push attempt is one write's, not safe for concurrent use.
 
 package sidecar
@@ -549,4 +553,149 @@ func (self *EvsRepo) retoken(ctx context.Context, sealed *EvsSealedWrite) error 
 		}
 	}
 	return nil
+}
+
+// Why a pin push sent nothing (DESIGN-DETAILS 16.2.9, 8.2.10; QD-802, QD-803): a ref a pin push cannot bind, which
+// `ur evs rules show` lists apart.
+type EvsPinPushSkip string
+
+const (
+	// A name with no head: a new ref is judged at its creating push's pin, which evs holds at or above the repo's
+	// newest set (QD-803).
+	EvsPinPushSkipNoHead EvsPinPushSkip = "no head"
+	// A deleted ref: bound from the push that re-creates it, which evs holds as it holds a new ref's (QD-803).
+	EvsPinPushSkipDeleted EvsPinPushSkip = "deleted"
+	// A git-mode tag ref, which takes no second push and holds no file.
+	EvsPinPushSkipTag EvsPinPushSkip = "tag"
+	// A git-mode ref stopped on this device at a refused version, which its recovery binds: the DELETE and the
+	// re-creating push carry the admin's pin.
+	EvsPinPushSkipStopped EvsPinPushSkip = "stopped"
+)
+
+// What a pin push did: the push and the ref version it committed at, or why nothing was sent.
+type EvsPinPushResult struct {
+	PushId  Id
+	Version uint64
+	// Empty where the push went.
+	Skipped EvsPinPushSkip
+}
+
+// The local tier's pin push of a git-mode ref, the mounts' (evs_local_pin.go): the UPDATE of one tip under the ref's
+// publish lock. A leg with no local tier holds none.
+type evsLocalPinPusher interface {
+	pinPush(ctx context.Context, repoId Id, refId Id) (*EvsPinPushResult, error)
+	// Whether the ref is stopped on this device's mount of the repo at a refused version, false where no mount holds
+	// it.
+	pinStopped(repoId Id, refId Id) bool
+}
+
+// A git-mode ref's pin push with no mount of its repo on this device: only a device that mounts the repo builds one,
+// since the UPDATE of one tip is built on the version and chain its replay applied (8.2.10).
+var ErrEvsPinPushNoMount = errors.New("evs: a git-mode ref's pin push needs a mount of its repo")
+
+// The pin push of one shared ref (DESIGN-DETAILS 16.2.9, 8.2.10; QD-802, QD-803): a push of no change at this
+// device's installed pin. A rule set binds a ref from the first push on it whose pin is at or above the set, so the
+// set's filer sends one to every shared ref of the repo once its own log holds its statement, and retries a failed one
+// from its journal (evs_prefix_repair.go). The push carries no change, so every reader's verdict allows it (16.2.4).
+//
+//	file mode  a statement with no change on the ref's head
+//	git mode   the UPDATE of one tip, old_tip = new_tip, with no FORCE, commit, blob, tag, source or change, built on
+//	           the version and chain replay applied under the ref's publish lock on a device that mounts the repo
+//	           (evs_local_pin.go); it moves no local ref. A tag ref, a ref with no tip and a ref stopped on this device
+//	           take none
+//	nothing    a name with no head and a deleted ref: their next push creates the ref, and evs holds its pin at or
+//	           above the repo's newest set (QD-803)
+//
+// A ref that is not shared, an owned ref, a deposit ref or the erasure ref, is ErrEvsWriteInvalid: the rules leave it
+// outside. refName nil is main.
+func (self *EvsRepo) PinPush(ctx context.Context, refName []byte) (*EvsPinPushResult, error) {
+	if refName == nil {
+		refName = EvsMainRefName
+	}
+	refId, err := self.resolveRefId(ctx, refName, nil)
+	if err != nil {
+		return nil, err
+	}
+	return self.pinPushRef(ctx, refId, refName)
+}
+
+// PinPush of a ref by its id, refName its name where the caller holds it, nil where it does not: a pin push states no
+// name, which only a creating push carries.
+func (self *EvsRepo) pinPushRef(ctx context.Context, refId Id, refName []byte) (*EvsPinPushResult, error) {
+	repoKind, err := self.repoKind()
+	if err != nil {
+		return nil, err
+	}
+	rebuilds := 0
+	for {
+		repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
+		if err != nil {
+			return nil, err
+		}
+		var skipped EvsPinPushSkip
+		gitMode := false
+		plan, err := func() (*EvsWritePlan, error) {
+			result, err := self.read(ctx, refId, []string{""}, 0, true)
+			if err != nil {
+				return nil, err
+			}
+			defer result.objects.close()
+			head := result.head.Head
+			switch {
+			case result.head.Version == 0:
+				skipped = EvsPinPushSkipNoHead
+				return nil, nil
+			case head.GetDeleted():
+				skipped = EvsPinPushSkipDeleted
+				return nil, nil
+			case head.GetRefKind() != protocol.EvsRefKind_EVS_REF_SHARED:
+				return nil, fmt.Errorf("%w: a pin push goes to a shared ref", ErrEvsWriteInvalid)
+			case head.GetRefMode() == protocol.EvsRefMode_EVS_REF_GIT:
+				gitMode = true
+				return nil, nil
+			}
+			plan := &EvsWritePlan{
+				RepoId: self.repoId, RefId: refId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
+				Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
+				Generation: repoKey.Generation(), keys: result.keys, floors: map[string]uint64{},
+				slotKeyed: EvsRepoKindRecordClass(repoKind), refName: refName, repoKind: repoKind,
+			}
+			if err := plan.setRef(head, refName, self.client.args.Identity().SidecarId, false); err != nil {
+				return nil, err
+			}
+			return plan, nil
+		}()
+		switch {
+		case err != nil:
+			return nil, err
+		case skipped != "":
+			return &EvsPinPushResult{Skipped: skipped}, nil
+		case gitMode:
+			pusher, _ := func() (evsLocalPinPusher, bool) {
+				self.client.stateLock.Lock()
+				defer self.client.stateLock.Unlock()
+				pusher, ok := self.client.localTier.(evsLocalPinPusher)
+				return pusher, ok
+			}()
+			if pusher == nil {
+				return nil, ErrEvsPinPushNoMount
+			}
+			return pusher.pinPush(ctx, self.repoId, refId)
+		}
+		sealed, err := self.client.sealWrite(ctx, plan, repoKey)
+		if err != nil {
+			return nil, err
+		}
+		pushId, reply, err := self.sendSealed(ctx, sealed, &rebuilds)
+		sealed.Close()
+		switch {
+		case err == nil:
+			return &EvsPinPushResult{PushId: pushId, Version: reply.GetVersion()}, nil
+		case (evsNeedsRebuild(err) || errors.Is(err, errEvsPlanEpochMoved) || errors.Is(err, errEvsRetokenSealsAgain)) &&
+			rebuilds < self.client.settings.PushRebuildCount:
+			rebuilds += 1
+		default:
+			return nil, err
+		}
+	}
 }

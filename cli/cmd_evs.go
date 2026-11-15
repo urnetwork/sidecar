@@ -2,7 +2,8 @@
 // word; each part lives in its own cmd_evs_<part>.go and adds its usage line and its case here. rekey is KEYS-M2-26's
 // (cmd_evs_rekey.go), lock and unlock ACL-M10-01's (cmd_evs_lock.go); §11's own parts, ls, log, delete, restore,
 // import, export, retry and status, are EVS1-M2-38's (cmd_evs_repo.go), reseed EVSB-M2-20's (evs_reseed.go, the name
-// its plan entry gives it), versioning and ls -l EVS2-M10-16's (cmd_evs_versioning.go), and EVS2's add the rest.
+// its plan entry gives it), versioning and ls -l EVS2-M10-16's (cmd_evs_versioning.go), rules and repair EVS1-M6-05's
+// (cmd_evs_rules.go, cmd_evs_repair.go), and EVS2's add the rest.
 
 package main
 
@@ -33,8 +34,14 @@ func init() {
 			"  ur evs retry <repo_id> [--ref=<ref>]...",
 			"  ur evs status <repo_id>",
 			"  ur evs reseed <repo_id> [--incident=<id>] [--sign]",
+			"  ur evs rules <repo_id> show [--history]",
+			"  ur evs rules <repo_id> allow <subject> <path>...",
+			"  ur evs rules <repo_id> deny <subject>",
+			"  ur evs rules <repo_id> set <file> [--as-written]",
+			"  ur evs rules <repo_id> lift",
+			"  ur evs repair <repo_id> [<path>]",
 		}, "\n"),
-		summary: "a repo in evs: its files, history, life, imports and exports; rekey; each file's versioning, and its lock; a mount's open work; its re-seed after a site loss",
+		summary: "a repo in evs: its files, history, life, imports and exports; rekey; each file's versioning, and its lock; a mount's open work; its re-seed after a site loss; its prefix write rules and their repairs",
 		run:     runUrEvs,
 	})
 }
@@ -68,6 +75,10 @@ func runUrEvs(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return runUrEvsRepo(ctx, cli, options, urMethodEvsStatus)
 	case urOptionBool(options, "reseed"):
 		return runUrEvsReseed(ctx, cli, options)
+	case urOptionBool(options, "rules"):
+		return runUrEvsRules(ctx, cli, options)
+	case urOptionBool(options, "repair"):
+		return runUrEvsRepair(ctx, cli, options)
 	}
-	return errors.New("ur evs takes rekey, lock, unlock, ls, versioning, log, delete, restore, import, export, retry, status or reseed")
+	return errors.New("ur evs takes rekey, lock, unlock, ls, versioning, log, delete, restore, import, export, retry, status, reseed, rules or repair")
 }

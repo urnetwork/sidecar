@@ -26,8 +26,10 @@
 //	6 send     the landed sender: one part, or parts under the seal lease taken again as it lapses, and the seal
 //	7 answers  200 is the caller's to apply and settle (EVS1-M2-35's replay). A head past b, found by the plan or
 //	           by a 409 NON_FAST_FORWARD, is judged by the versions between: this push's id among them is its commit;
-//	           PATH_EPOCH and REKEY versions alone, which move no tip, build the update again on the new head under a
-//	           new push id; anything else moved the tip, ErrEvsGitTipMoved, the caller's `ng non-fast-forward`.
+//	           PATH_EPOCH and REKEY versions and pin pushes alone, which move no tip, build the update again on the new
+//	           head under a new push id; anything else moved the tip, ErrEvsGitTipMoved, the caller's `ng
+//	           non-fast-forward`. A pin push is the UPDATE of one tip, old_tip = new_tip, carrying nothing (8.2.10), so a
+//	           push that loses its turn to one is never non-fast-forward (8.2.10's losing row)
 //	           412 PATH_EPOCH is the sender's retoken, a first push planned again; SEGMENT_STALE, SEGMENT_GONE,
 //	           SLOT_STALE, TIME_STALE and GATE_CLOSED build again under a new push id, at most PushRebuildCount
 //	           times; 412 PATH_EPOCH_DUE waits as WritePaths does; any other refusal is the caller's
@@ -621,7 +623,8 @@ func (self *evsGitPublishUpdate) signImport(git *protocol.EvsGitUpdate) ([]byte,
 }
 
 // Judges a head past the update's base by the versions between, walked from the base's chain (8.2.5's 409 row):
-// committed when one is a push this update sent, commitless when each is a PATH_EPOCH or a REKEY, which move no tip.
+// committed when one is a push this update sent, commitless when each is a PATH_EPOCH, a REKEY or a pin push, which
+// move no tip.
 func (self *evsGitPublishUpdate) judgeMoved(ctx context.Context, moved *EvsGitHeadMovedError, chain [sha256.Size]byte) (*EvsLocalPublishResult, bool, error) {
 	repo := self.repo
 	head := moved.Head
@@ -650,11 +653,11 @@ func (self *evsGitPublishUpdate) judgeMoved(ctx context.Context, moved *EvsGitHe
 		case push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0:
 		case push.GetFlags() == 0:
 			// an UPDATE or a REKEY, which its sealed update tells apart
-			shape, err := self.shapeOf(ctx, keys, head, statement)
+			moves, err := self.movesTip(ctx, keys, head, statement)
 			if err != nil {
 				return nil, false, err
 			}
-			commitless = commitless && shape == protocol.EvsGitShape_EVS_GIT_REKEY
+			commitless = commitless && !moves
 		default:
 			commitless = false
 		}
@@ -662,21 +665,32 @@ func (self *evsGitPublishUpdate) judgeMoved(ctx context.Context, moved *EvsGitHe
 	return nil, commitless, nil
 }
 
-// A version's sealed update's shape, read from its push record's sealed metadata.
-func (self *evsGitPublishUpdate) shapeOf(ctx context.Context, keys *evsReadKeys, head *EvsVerifiedHead, statement *EvsVerifiedStatement) (protocol.EvsGitShape, error) {
+// Whether a version moves its ref's tip, by its push record's sealed update: a REKEY moves none, and neither does a pin
+// push, the UPDATE of one tip whose old and new tips are one oid and which carries no commit, tag, source or blob
+// (8.2.10); every other update does.
+func (self *evsGitPublishUpdate) movesTip(ctx context.Context, keys *evsReadKeys, head *EvsVerifiedHead, statement *EvsVerifiedStatement) (bool, error) {
 	payload, err := self.repo.pushContent(ctx, head, statement)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	manifest, err := keys.manifest(ctx, statement.Statement.Push.GetGeneration())
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	metadata, err := EvsOpenMetadata(manifest, payload.SealedMetadata)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
-	return metadata.GetGit().GetShape(), nil
+	git := metadata.GetGit()
+	switch git.GetShape() {
+	case protocol.EvsGitShape_EVS_GIT_REKEY:
+		return false, nil
+	case protocol.EvsGitShape_EVS_GIT_UPDATE:
+		pinPush := len(git.GetOldTip()) != 0 && bytes.Equal(git.GetOldTip(), git.GetNewTip()) && len(metadata.GetCommits()) == 0 &&
+			len(git.GetTags()) == 0 && len(git.GetSources()) == 0 && len(git.GetBlobs()) == 0
+		return !pinPush, nil
+	}
+	return true, nil
 }
 
 // Step 4 of the file header: the history blobs sealed into history segments of the push, appended to the sealed
