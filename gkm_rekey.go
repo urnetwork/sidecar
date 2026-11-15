@@ -23,14 +23,41 @@
 //	            (EvsPathWrite.IfVersion, and evs's own 5g); the batch is read and built again, at most MovedRetryCount
 //	            times, so the job never puts an older content back
 //
+// Under the repo's prefix write rules (DESIGN-DETAILS 8.2.10's "Under prefix rules" and its report; 16.2.4, "a writer
+// re-checkpoints only under its prefixes"), on a shared ref of a general repo with a set in force, file mode or git
+// mode alike:
+//
+//	followed    a file is read as this device follows it: on a shared file-mode ref, where the rules ignore evs's
+//	            newest version, the effective one below it (16.2.5), which the push is held to and writes over in
+//	            the repair form (16.2.7), so no content a reader ignores is ever signed again here; a path whose every
+//	            version is ignored is absent
+//	left        a file that needs a write and that the planner's call (AllowPrefixWrite, 16.2.7) refuses with
+//	            EVS_PREFIX_RULE detail refused is kept out of the push, so one path outside the device's prefixes
+//	            refuses no push of 1,024 writes, and the rest are re-checkpointed. The job asks the call itself, as
+//	            PlanWrite asks it, before a file joins a batch; a refusal the planner gives a path of a push anyway,
+//	            from a set that came in force since, leaves that file and sends the rest
+//	the count   LeftCount, beside the files rewritten, current and absent, stored with the position that passes the
+//	            file. A left file is neither rewritten nor current; one already wholly of the generation is current,
+//	            wherever it lies
+//	the end     done, as with a skipped ref. With files left that says the job is finished on this device, and
+//	            nothing here reports the repo as at the generation: a device the rule set names for those paths, an
+//	            admin's, runs the job for them over the same scope and finds each by its own read
+//	no path     no field lists the files left, and a left file's path goes into no log and no StopReason (I-13);
+//	            the record's position, the last path the walk settled, passes a left file as it passes any other
+//	no verdict  a set this device holds pending or newer gives the planner's call no verdict, so the job cannot
+//	            tell what it follows or what to leave: it stops with EVS_PREFIX_RULE, detail pending or update, and
+//	            resumes as any stopped job
+//
+// A repo whose rows hold no set runs as it did before them.
+//
 // What it cannot name it does not claim. A repo's refs are named by the caller, main when none is, since a head
-// stores no sealed ref name yet (questions/evs1-m2-01-ref-creation-fields.md), and a ref's root has no entry in
-// format 1 (questions/evs1-m2-24-root-directory-names.md), so a request naming no path asks List for the root,
-// which refuses, and the job ends having written nothing. A git-mode ref is rekeyed as any other, its pushes sealed
-// as the REKEY shape (DESIGN-DETAILS 8.2.10, question keys-m2-26-rekey-git-mode-refs): its own entries, an overlay's
-// held files and nothing it inherits, nothing on a tag ref. Another sidecar's owned ref takes writes only from its
-// owner: it is skipped and named in the progress, never counted as done. Record-class repos refuse as their writes do (EVS1-M2-29, EVS1-M2-30). The scope a finished job covered is
-// the refs and paths its progress names, nothing more.
+// stores no sealed ref name the job can list refs by (questions/evs1-m2-01-ref-creation-fields.md), and a request
+// naming no path walks each ref from its top level (questions/evs1-m2-24-root-directory-names.md, option 1). A
+// git-mode ref is rekeyed as any other, its pushes sealed as the REKEY shape (DESIGN-DETAILS 8.2.10, question
+// keys-m2-26-rekey-git-mode-refs): its own entries, an overlay's held files and nothing it inherits, nothing on a tag
+// ref. Another sidecar's owned ref takes writes only from its owner: it is skipped and named in the progress, never
+// counted as done. Record-class repos refuse as their writes do (EVS1-M2-29, EVS1-M2-30). The scope a finished job
+// covered is the refs and paths its progress names, less the files it left, nothing more.
 //
 // One job per repo at a time. Safe for concurrent use.
 
@@ -115,10 +142,12 @@ type GkmRekeyState string
 const (
 	// A job is walking the repo in this process.
 	GkmRekeyStateRunning GkmRekeyState = "running"
-	// A job began and did not finish, and none runs now: a kill, a refusal or a lost connection. It resumes.
+	// A job began and did not finish, and none runs now: a kill, a refusal, a lost connection or a rule set this
+	// device cannot read. It resumes.
 	GkmRekeyStateStopped GkmRekeyState = "stopped"
-	// Every file under the refs and paths the progress names is of the generation or newer. A ref it lists as
-	// skipped is not among them.
+	// The walk is finished on this device: every file under the refs and paths the progress names is of the
+	// generation or newer, but a file it counts as left, which the repo's prefix rules give another device to
+	// write, and a ref it lists as skipped. With a file left the repo is not brought to the generation.
 	GkmRekeyStateDone GkmRekeyState = "done"
 )
 
@@ -155,8 +184,14 @@ type GkmRekeyProgress struct {
 	RewrittenCount uint64
 	// Files found already wholly of the generation, and left.
 	CurrentCount uint64
-	// Files a listing named that were gone by the time they were read.
+	// Files a listing named that were gone by the time they were read, or that every version of which the repo's
+	// prefix rules ignore.
 	AbsentCount uint64
+	// Files that needed a write and that the repo's prefix rules give this device no write to (EVS_PREFIX_RULE,
+	// detail refused): kept out of the pushes, counted neither rewritten nor current, and keeping the keys they had.
+	// A device the rule set names for those paths, which an admin's is, runs the job for them (DESIGN-DETAILS
+	// 8.2.10's report).
+	LeftCount uint64
 	// Pushes committed.
 	PushCount   uint64
 	SkippedRefs []*GkmRekeySkippedRef
@@ -174,16 +209,18 @@ type gkmRekeyRecord struct {
 	RefNames   [][]byte `json:"ref_names"`
 	Paths      []string `json:"paths"`
 	// refs before this index are settled, and on this one every path at or before AfterPath in walk order
-	RefIndex       int                   `json:"ref_index"`
-	AfterPath      string                `json:"after_path,omitempty"`
-	RewrittenCount uint64                `json:"rewritten_count"`
-	CurrentCount   uint64                `json:"current_count"`
-	AbsentCount    uint64                `json:"absent_count"`
-	PushCount      uint64                `json:"push_count"`
-	Skipped        []*gkmRekeySkipRecord `json:"skipped,omitempty"`
-	Done           bool                  `json:"done"`
-	StartedAtMs    int64                 `json:"started_at_ms"`
-	UpdatedAtMs    int64                 `json:"updated_at_ms"`
+	RefIndex       int    `json:"ref_index"`
+	AfterPath      string `json:"after_path,omitempty"`
+	RewrittenCount uint64 `json:"rewritten_count"`
+	CurrentCount   uint64 `json:"current_count"`
+	AbsentCount    uint64 `json:"absent_count"`
+	// a record stored before the prefix rules holds none, which is 0: no file was left then
+	LeftCount   uint64                `json:"left_count"`
+	PushCount   uint64                `json:"push_count"`
+	Skipped     []*gkmRekeySkipRecord `json:"skipped,omitempty"`
+	Done        bool                  `json:"done"`
+	StartedAtMs int64                 `json:"started_at_ms"`
+	UpdatedAtMs int64                 `json:"updated_at_ms"`
 }
 
 // A skipped ref's stored form.
@@ -492,10 +529,15 @@ type gkmRekeyRun struct {
 	// the ref being walked
 	refName []byte
 	refId   Id
-	// files that needed no write, counted since the record was last written: the record takes them at its next
+	// files settled with no write, counted since the record was last written: the record takes them at its next
 	// write, which names a position at or past each of them, so the record in memory is always the record as stored
-	currentCount uint64
-	absentCount  uint64
+	// and a resumed job counts no file twice. countedThrough is the last of them in walk order: the walk counts a
+	// file only once every file before it is read, so a record written after a push may pass the files counted
+	// after the push's last path, every one before them being settled too
+	currentCount   uint64
+	absentCount    uint64
+	leftCount      uint64
+	countedThrough string
 	// listed files waiting for their read, in walk order
 	listedPaths []string
 	// read files waiting for their push, in walk order
@@ -512,7 +554,7 @@ func (self *gkmRekeyRun) progress(state GkmRekeyState) *GkmRekeyProgress {
 		RepoId: self.repoId, State: state, Generation: record.Generation,
 		RefNames: slices.Clone(record.RefNames), Paths: slices.Clone(record.Paths),
 		RewrittenCount: record.RewrittenCount, CurrentCount: record.CurrentCount, AbsentCount: record.AbsentCount,
-		PushCount: record.PushCount,
+		LeftCount: record.LeftCount, PushCount: record.PushCount,
 		StartedAt: time.UnixMilli(record.StartedAtMs), UpdatedAt: time.UnixMilli(record.UpdatedAtMs),
 	}
 	for _, skipped := range record.Skipped {
@@ -532,13 +574,18 @@ func (self *gkmRekeyRun) update(change func(record *gkmRekeyRecord)) error {
 		return &next
 	}()
 	change(next)
+	if next.AfterPath != "" && self.countedThrough != "" && gkmRekeyComparePaths(next.AfterPath, self.countedThrough) < 0 {
+		// a file counted past the position, which the walk settled after every file before it
+		next.AfterPath = self.countedThrough
+	}
 	next.CurrentCount += self.currentCount
 	next.AbsentCount += self.absentCount
+	next.LeftCount += self.leftCount
 	next.UpdatedAtMs = self.rekey.clock.Now().UnixMilli()
 	if err := self.persist(next); err != nil {
 		return err
 	}
-	self.currentCount, self.absentCount = 0, 0
+	self.currentCount, self.absentCount, self.leftCount, self.countedThrough = 0, 0, 0, ""
 	self.recordLock.Lock()
 	defer self.recordLock.Unlock()
 	self.record = next
@@ -617,7 +664,7 @@ func (self *gkmRekeyRun) walkRef(ctx context.Context, refName []byte) (skipReaso
 		return self.record.Paths
 	}()
 	if paths == nil {
-		// the ref's root: its children, which format 1 cannot list yet, so this refuses with List's error
+		// the ref's root: its top-level names (EVS1-M2-46)
 		listing, err := self.repo.List(ctx, &EvsReadArgs{RefId: &self.refId, Path: ""})
 		if err != nil {
 			return "", err
@@ -663,14 +710,22 @@ func (self *gkmRekeyRun) namedKinds(ctx context.Context, refName []byte, paths [
 	case err != nil:
 		return nil, "", err
 	}
+	// under the repo's prefix rules a removal evs holds on a shared file-mode ref may be one this device ignores, the
+	// file below it standing as the device follows it (16.2.5): such a path is read, and readFiles' walk decides
+	ruled, err := self.repo.prefixRuled()
+	if err != nil {
+		return nil, "", err
+	}
+	followed := ruled != nil && writable.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && writable.RefMode == protocol.EvsRefMode_EVS_REF_FILE
 	kinds := make([]protocol.EvsEntryKind, len(paths))
 	for i, verified := range result.replies {
-		if verified.Base != nil {
+		switch {
+		case verified.Base != nil:
 			// an overlay's path it holds no version of: its base ref's to rekey, so nothing here
-			continue
-		}
-		if verified.Entry != nil && verified.Removal == nil && !verified.Absent {
+		case verified.Entry != nil && verified.Removal == nil && !verified.Absent:
 			kinds[i] = protocol.EvsEntryKind(verified.Entry.GetKind())
+		case followed && verified.Removal != nil:
+			kinds[i] = protocol.EvsEntryKind_EVS_ENTRY_FILE
 		}
 	}
 	return kinds, "", nil
@@ -715,11 +770,23 @@ func (self *gkmRekeyRun) walkEntry(ctx context.Context, path string, kind protoc
 		}
 		return nil
 	default:
-		// a path named that does not stand: counted as gone, once
+		// a path named that does not stand: counted as gone, once, after the files listed before it are read, so
+		// the walk counts in walk order
 		if after == "" || 0 < gkmRekeyComparePaths(path, after) {
-			self.absentCount += 1
+			if err := self.readListed(ctx); err != nil {
+				return err
+			}
+			self.counted(path, &self.absentCount)
 		}
 		return nil
+	}
+}
+
+// Counts a file the walk settled with no write, current, absent or left as counter is, at its place in walk order.
+func (self *gkmRekeyRun) counted(path string, counter *uint64) {
+	*counter += 1
+	if self.countedThrough == "" || gkmRekeyComparePaths(self.countedThrough, path) < 0 {
+		self.countedThrough = path
 	}
 }
 
@@ -741,65 +808,160 @@ func (self *gkmRekeyRun) readListed(ctx context.Context) error {
 	return self.update(func(record *gkmRekeyRecord) { record.AfterPath = last })
 }
 
-// Reads paths, in walk order, into the batch. pushFull pushes the batch each time it fills, as the walk does; a
-// batch being read again after its paths moved is pushed by its caller instead.
+// Reads paths, in walk order, into the batch, each as this device follows it (see the file header): a file already
+// of the generation is current, one the repo's prefix rules give this device no write to is left, and any other joins
+// the batch. pushFull pushes the batch each time it fills, as the walk does; a batch being read again after its paths
+// moved is pushed by its caller instead.
 func (self *gkmRekeyRun) readFiles(ctx context.Context, paths []string, pushFull bool) error {
 	generation := func() uint64 {
 		self.recordLock.Lock()
 		defer self.recordLock.Unlock()
 		return self.record.Generation
 	}()
+	// the repo's prefix rules, nil where its rows hold no set (16.2.4's line 2); a device that holds none to read
+	// them by stops here with detail pending, as its planner would refuse every write
+	ruled, err := self.repo.prefixRuled()
+	if err != nil {
+		return err
+	}
 	result, err := self.repo.read(ctx, self.refId, paths, 0, false)
 	if err != nil {
 		return err
 	}
 	defer result.objects.close()
-	for i, verified := range result.replies {
-		switch {
-		case verified.Base != nil:
+	// whether the planner writes a path of this ref over its effective version: a shared file-mode ref under rules
+	// (evs_plan.go), which the ref's head says as the planner's setRef reads it
+	effective := false
+	if ruled != nil {
+		// a ref the planner takes no write on is refused at the push, as it is with no rules
+		plan := &EvsWritePlan{}
+		effective = plan.setRef(result.head.Head, self.refName, self.rekey.args.Evs.args.Identity().SidecarId, true) == nil &&
+			plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && plan.RefMode == protocol.EvsRefMode_EVS_REF_FILE
+	}
+	readFile := func(i int) error {
+		path := paths[i]
+		read, verified := result, result.replies[i]
+		if verified.Base != nil {
 			return ErrEvsOverlayBase
+		}
+		if effective {
+			// the planner's own call: nil where evs's newest event is the one this device follows, else the effective
+			// version below an ignored one; a set this device cannot read gives no verdict and stops the job
+			base, err := ruled.writeBase(ctx, self.repo, result, i)
+			if err != nil {
+				return err
+			}
+			if base != nil {
+				if base.version == 0 {
+					// every version of the path is one the rules ignore: absent as this device follows it
+					self.counted(path, &self.absentCount)
+					return nil
+				}
+				if read, err = self.repo.read(ctx, self.refId, []string{path}, base.version, false); err != nil {
+					return err
+				}
+				defer read.objects.close()
+				verified = read.replies[0]
+				switch {
+				case verified.Entry == nil || verified.Removal != nil || verified.Collected || verified.Entry.GetVersion() != base.version:
+					// the effective version went from evs between the walk and this read: nothing to re-checkpoint it from
+					return &EvsPrefixRuleError{Detail: EvsPrefixDetailUnavailable}
+				case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
+					// a directory under a removal the rules ignore, which List answers so as well: the walk cannot list
+					// what this device follows there, so it claims nothing of it
+					return &EvsPrefixRuleError{Detail: EvsPrefixDetailUnavailable}
+				}
+			}
+		}
+		switch {
 		case verified.Entry == nil || verified.Removal != nil || verified.Absent:
-			self.absentCount += 1
-			continue
+			self.counted(path, &self.absentCount)
+			return nil
 		case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
 			// a directory took the name since the listing: its files are new, sealed to a current generation
-			self.absentCount += 1
-			continue
+			self.counted(path, &self.absentCount)
+			return nil
 		}
 		if err := self.pacer.take(ctx); err != nil {
 			return err
 		}
-		content, chain, _, err := self.repo.readBase(ctx, result, verified)
+		content, chain, _, err := self.repo.readBase(ctx, read, verified)
 		if err != nil {
 			return err
 		}
 		if generation <= chain.KeyGeneration {
 			content.close()
-			self.currentCount += 1
-			continue
+			self.counted(path, &self.currentCount)
+			return nil
 		}
-		self.batch = append(self.batch, &gkmRekeyFile{path: paths[i], content: content, version: verified.Entry.GetVersion()})
+		if ruled != nil {
+			left, err := self.prefixLeft(ctx, ruled, path)
+			if err != nil {
+				content.close()
+				return err
+			}
+			if left {
+				content.close()
+				self.counted(path, &self.leftCount)
+				return nil
+			}
+		}
+		self.batch = append(self.batch, &gkmRekeyFile{path: path, content: content, version: verified.Entry.GetVersion()})
 		self.batchByteCount += content.Size()
 		if pushFull && (self.rekey.settings.PushEntryWriteCount <= len(self.batch) || self.rekey.settings.PushByteCount <= self.batchByteCount) {
 			// every file counted so far is at or before this push's last path, which the record then names
-			if err := self.pushBatch(ctx); err != nil {
-				return err
-			}
+			return self.pushBatch(ctx)
+		}
+		return nil
+	}
+	for i := range result.replies {
+		if err := readFile(i); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+// Whether the repo's prefix rules leave path to another device: the planner's call (AllowPrefixWrite, DESIGN-DETAILS
+// 16.2.7) asked as PlanWrite asks it for a write of path on the ref being walked, so what the job leaves is what the
+// planner would refuse with EVS_PREFIX_RULE detail refused. Any other refusal, pending or update included, is the
+// job's to stop at.
+func (self *gkmRekeyRun) prefixLeft(ctx context.Context, ruled evsPrefixReader, path string) (bool, error) {
+	ask := &evsPrefixWriteAsk{
+		refName: self.refName, refKind: protocol.EvsRefKind_EVS_REF_SHARED, refMode: protocol.EvsRefMode_EVS_REF_FILE,
+		paths: []string{path},
+	}
+	if _, owned := EvsOwnedRefOwner(self.refName); owned {
+		ask.refKind = protocol.EvsRefKind_EVS_REF_OWNED
+	}
+	err := ruled.allowWrite(ctx, self.repo, ask)
+	if err == nil {
+		return false, nil
+	}
+	if gkmRekeyLeftRefusal(err, path) {
+		return true, nil
+	}
+	return false, err
+}
+
+// Whether err is the planner's refusal of path to this device: EVS_PREFIX_RULE, detail refused, naming it.
+func gkmRekeyLeftRefusal(err error, path string) bool {
+	var ruleErr *EvsPrefixRuleError
+	return errors.As(err, &ruleErr) && ruleErr.Detail == EvsPrefixDetailRefused && ruleErr.Path != "" && ruleErr.Path == path
+}
+
 // Pushes the batch, every file a forced checkpoint held to the version it was read at, and only then moves the
 // record's position to its last path. A push refused because a path moved reads the batch again and pushes what
-// still needs it.
+// still needs it. A path the planner refuses under the repo's prefix rules, a set having come in force since the job
+// asked, is left and the rest pushed, with no read again: one file does not refuse the push.
 func (self *gkmRekeyRun) pushBatch(ctx context.Context) error {
 	if len(self.batch) == 0 {
 		return nil
 	}
 	barrierKey := self.repoId.String()
 	last := self.batch[len(self.batch)-1].path
-	for moved := 0; 0 < len(self.batch); moved += 1 {
+	moved := 0
+	for 0 < len(self.batch) {
 		writes := make([]*EvsPathWrite, len(self.batch))
 		for i, file := range self.batch {
 			// a rekey changes no setting: a versionless path stays versionless, every chunk sealed again under a fresh
@@ -811,12 +973,22 @@ func (self *gkmRekeyRun) pushBatch(ctx context.Context) error {
 		if err == nil {
 			break
 		}
+		if index := slices.IndexFunc(self.batch, func(file *gkmRekeyFile) bool { return gkmRekeyLeftRefusal(err, file.path) }); 0 <= index {
+			// refused before anything was sealed or sent (16.2.7), so nothing of this attempt stands
+			left := self.batch[index]
+			left.content.close()
+			self.batchByteCount -= left.content.Size()
+			self.batch = slices.Delete(self.batch, index, index+1)
+			self.counted(left.path, &self.leftCount)
+			continue
+		}
 		if !errors.Is(err, ErrEvsPathMoved) && !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT) {
 			return err
 		}
 		if self.rekey.settings.MovedRetryCount <= moved {
 			return fmt.Errorf("%w: %w", ErrGkmRekeyMoved, err)
 		}
+		moved += 1
 		paths := make([]string, len(self.batch))
 		for i, file := range self.batch {
 			paths[i] = file.path

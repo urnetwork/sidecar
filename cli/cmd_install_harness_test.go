@@ -4,12 +4,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/mcp"
 )
 
 // A ur whose install-harness writes under home and state, as /opt/ur/bin/ur, its output and the terminal's one log.
@@ -124,5 +129,193 @@ func TestInstallHarnessCloudKeyFile(t *testing.T) {
 	}
 	if strings.Contains(tty.written.String(), "write these changes") {
 		t.Errorf("a refused install asked:\n%s", tty.written.String())
+	}
+}
+
+// A ur on newTestInstallHarnessCli's terms with model calls captured, its daemon at socketPath, each telemetry pair it
+// draws on port.
+func newTestTelemetryInstallCli(t *testing.T, home string, state string, socketPath string, port int, answers ...string) (*urCli, *testTty) {
+	t.Helper()
+	cli, tty := newTestInstallHarnessCli(t, home, state, answers...)
+	cli.socketPath = func(instance string) (string, error) { return socketPath, nil }
+	ingest := *cli.ingest
+	ingest.ModelCalls = true
+	cli.ingest = &ingest
+	telemetryPort := urHarnessTelemetryPort
+	t.Cleanup(func() { urHarnessTelemetryPort = telemetryPort })
+	urHarnessTelemetryPort = func() (int, error) { return port, nil }
+	return cli, tty
+}
+
+// While model calls are captured, a user install of Claude Code draws a telemetry pair, seals it under <state>/harness/
+// and writes the exporter's settings naming it, the diff never printing the token; Codex's install then names the same
+// pair, and a re-install changes nothing.
+func TestInstallHarnessWritesTelemetry(t *testing.T) {
+	home := t.TempDir()
+	state := t.TempDir()
+	none := filepath.Join(shortTestDirectory(t), "none")
+	cli, tty := newTestTelemetryInstallCli(t, home, state, none, 41235, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "claude-code"}); code != urExitOk {
+		t.Fatalf("exit %d:\n%s", code, tty.written.String())
+	}
+	pair, err := mcp.ReadHarnessTelemetry(state, cli.ingest.HarnessConfigByteCount)
+	if err != nil {
+		t.Fatalf("no pair sealed: %v", err)
+	}
+	if pair.Port != 41235 || len(pair.Token) != 2*cli.ingest.TelemetryTokenByteCount {
+		t.Errorf("the pair: port %d, a token of %d hex digits", pair.Port, len(pair.Token))
+	}
+	log := tty.written.String()
+	if strings.Contains(log, pair.Token) {
+		t.Error("the install printed the token")
+	}
+	if !strings.Contains(log, "OTEL_EXPORTER_OTLP_ENDPOINT") || !strings.Contains(log, "which the daemon serves from its next start") {
+		t.Errorf("the diff or the note:\n%s", log)
+	}
+	settings, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(settings), `"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:41235"`) ||
+		!strings.Contains(string(settings), `"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer `+pair.Token+`"`) {
+		t.Errorf("the exporter's settings:\n%s", settings)
+	}
+
+	// Codex names the pair already sealed, whatever port is free now
+	cli, tty = newTestTelemetryInstallCli(t, home, state, none, 41299, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "codex"}); code != urExitOk {
+		t.Fatalf("codex: exit %d:\n%s", code, tty.written.String())
+	}
+	config, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(config), `endpoint = "http://127.0.0.1:41235/v1/logs"`) || !strings.Contains(string(config), "Bearer "+pair.Token) {
+		t.Errorf("codex's [otel] table:\n%s", config)
+	}
+
+	// a re-install changes nothing and asks nothing
+	cli, tty = newTestTelemetryInstallCli(t, home, state, none, 41299)
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "claude-code"}); code != urExitOk {
+		t.Fatalf("the re-install: exit %d", code)
+	}
+	if !strings.Contains(tty.written.String(), "nothing to change") || strings.Contains(tty.written.String(), "write these changes") {
+		t.Errorf("the re-install:\n%s", tty.written.String())
+	}
+	again, err := mcp.ReadHarnessTelemetry(state, cli.ingest.HarnessConfigByteCount)
+	if err != nil || *again != *pair {
+		t.Errorf("the re-install changed the pair: %v", err)
+	}
+}
+
+// Cursor documents no exporter, so its install says so and draws no pair; a project install takes no token, since its
+// files are committed; and with model calls off no install writes exporter settings.
+func TestInstallHarnessTelemetryOnlyWhereItCan(t *testing.T) {
+	none := filepath.Join(shortTestDirectory(t), "none")
+
+	home, state := t.TempDir(), t.TempDir()
+	cli, tty := newTestTelemetryInstallCli(t, home, state, none, 41235, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "cursor"}); code != urExitOk {
+		t.Fatalf("cursor: exit %d", code)
+	}
+	if !strings.Contains(tty.written.String(), "cursor documents no OpenTelemetry exporter setting") {
+		t.Errorf("cursor's install says nothing of it:\n%s", tty.written.String())
+	}
+	if _, err := os.Stat(mcp.HarnessTelemetryPath(state)); !os.IsNotExist(err) {
+		t.Errorf("cursor's install drew a pair: %v", err)
+	}
+
+	home, state = t.TempDir(), t.TempDir()
+	project := t.TempDir()
+	cli, tty = newTestTelemetryInstallCli(t, home, state, none, 41235, "y")
+	cli.cwd = func() (string, error) { return project, nil }
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "claude-code", "--project"}); code != urExitOk {
+		t.Fatalf("the project install: exit %d:\n%s", code, tty.written.String())
+	}
+	committed, err := os.ReadFile(filepath.Join(project, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(committed), "Bearer") || strings.Contains(string(committed), "OTEL_") {
+		t.Errorf("a committed file holds exporter settings:\n%s", committed)
+	}
+	if _, err := os.Stat(mcp.HarnessTelemetryPath(state)); !os.IsNotExist(err) {
+		t.Errorf("a project install drew a pair: %v", err)
+	}
+
+	home, state = t.TempDir(), t.TempDir()
+	cli, _ = newTestInstallHarnessCli(t, home, state, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "claude-code"}); code != urExitOk {
+		t.Fatalf("with model calls off: exit %d", code)
+	}
+	settings, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(settings), "OTEL_") {
+		t.Errorf("model calls off, yet exporter settings:\n%s", settings)
+	}
+	if _, err := os.Stat(mcp.HarnessTelemetryPath(state)); !os.IsNotExist(err) {
+		t.Errorf("model calls off, yet a pair: %v", err)
+	}
+}
+
+// A pair under <state> that does not read is refused, naming the file, and nothing is asked or written.
+func TestInstallHarnessRefusesUnreadablePair(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(state, "harness"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcp.HarnessTelemetryPath(state), []byte("not a pair"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli, tty := newTestTelemetryInstallCli(t, home, state, filepath.Join(shortTestDirectory(t), "none"), 41235, "y")
+	stderr := &bytes.Buffer{}
+	cli.stderr = stderr
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "claude-code"}); code != urExitFailed {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.Contains(tty.written.String(), "write these changes") || !strings.Contains(stderr.String(), "telemetry.json") {
+		t.Errorf("the refusal: %q, asked: %q", stderr.String(), tty.written.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Errorf("a refused install wrote: %v", err)
+	}
+}
+
+// Once the install seals a pair, a daemon already running is asked to serve it, and serves it at once.
+func TestInstallHarnessReloadsRunningDaemon(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	settings := sidecar.DefaultSidecarSettings()
+	settings.Ingest.ModelCalls = true
+	var listener *mcp.IngestTelemetryListener
+	daemon := startTestUrDaemon(t, shortTestDirectory(t), func(daemon *sidecar.Daemon) {
+		server := mcp.NewMcpServer(mcp.DaemonOf(daemon), mcp.NewMcpServerSettings(settings, sidecar.Version))
+		ingest := mcp.NewIngest(&mcp.IngestArgs{Server: server})
+		listener = mcp.NewIngestTelemetryListener(&mcp.IngestTelemetryListenerArgs{Ingest: ingest, StateDirectory: state})
+		t.Cleanup(listener.Close)
+		for _, method := range urTelemetryMethods(listener) {
+			if err := daemon.RegisterMethod(method); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if listener.Status().Serving {
+		t.Fatal("serving before any install")
+	}
+	port, err := urHarnessTelemetryPort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, tty := newTestTelemetryInstallCli(t, home, state, daemon.socketPath, port, "y")
+	if code := cli.main(context.Background(), []string{"ur", "install-harness", "claude-code"}); code != urExitOk {
+		t.Fatalf("exit %d:\n%s", code, tty.written.String())
+	}
+	status := listener.Status()
+	if !status.Serving || status.Port != port {
+		t.Fatalf("the daemon after the install: %+v", status)
+	}
+	if !strings.Contains(tty.written.String(), "its telemetry goes to 127.0.0.1:"+strconv.Itoa(port)+", which the daemon serves") {
+		t.Errorf("the install's note:\n%s", tty.written.String())
 	}
 }

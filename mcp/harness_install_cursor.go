@@ -10,6 +10,9 @@
 //	hooks      ~/.cursor/hooks.json, version 1: beforeMCPExecution, with Ingest.PermissionHookTimeout since it may
 //	           wait on a presence prompt (plan-MCP-presence-hook-timing), afterShellExecution, afterMCPExecution and
 //	           afterFileEdit, each a list of {command} entries, no matcher
+//	exporter   none: Cursor documents no OpenTelemetry exporter setting, in its settings, mcp.json or hooks.json, so
+//	           ur writes no telemetry settings for it and draws no telemetry pair (QD-822), and a Cursor run's model
+//	           calls are not recorded; its coverage names no model-call source, which RECORD.md 13.1 says it shows
 //
 // What the seal hashes of hooks.json: its version, and per event each of this ur's entries, sorted by their canonical
 // bytes. Another's beforeMCPExecution entry can answer before ur's does, so it counts as competing.

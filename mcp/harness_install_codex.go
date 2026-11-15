@@ -11,10 +11,17 @@
 //	           events. Codex trusts the file by its hash, so it asks the person to trust it again after an install.
 //	           SessionEnd's 1 s is the harness's own bound, which ur hook's 300 ms meets
 //	--project  .codex/config.toml and .codex/hooks.json in the project, a reading, since §16.7 names only the user's
+//	exporter   with a telemetry pair (a user install's alone; QD-822), the [otel] table of config.toml: exporter
+//	           otlp-http to the daemon's listener's logs endpoint, protocol json, its bearer in headers'
+//	           Authorization, and log_user_prompt false, since the listener takes model calls alone. The listener
+//	           takes no Codex record as a call until question harness-telemetry-token-codex-double-count settles
+//	           where Codex's calls come from, since §16.18's PostModelRequest hook reports the same calls with their
+//	           request ids and tokens (ingest_model.go)
 //
-// config.toml is edited by whole tables: every table under mcp_servers.ur is ur's, replaced together by the
-// template's block where the first one stood, and a config defining mcp_servers.ur any other way is refused
-// (harness_config.go). What the seal hashes of it: mcp_servers.ur's tables as one JSON object.
+// config.toml is edited by whole tables: every table under mcp_servers.ur is ur's, and with a telemetry pair every
+// table under otel too, each group replaced together by the template's block where its first table stood, and a config
+// defining either any other way is refused (harness_config.go). What the seal hashes of it: mcp_servers.ur's tables as
+// one JSON object, and with a telemetry pair that object and otel's, as {"server": ..., "otel": ...}.
 
 package mcp
 
@@ -60,17 +67,27 @@ func (self *codexInstallAdapter) projectSettingsFiles(cwd string) []*harnessFile
 	}
 }
 
-// Codex's config.toml: mcp_servers.ur's tables.
+// Codex's config.toml: mcp_servers.ur's tables, and with a telemetry pair otel's.
 type codexConfigFile struct{}
 
 // The table path of ur's MCP server.
 var codexServerKeys = []string{"mcp_servers", urMcpServerName}
 
+// The table path of the exporter's settings (QD-822), every table under which is ur's while the template has a
+// telemetry pair.
+var codexOtelKeys = []string{"otel"}
+
 // The approval mode each outward tool's table sets: Codex asks before the call.
 const codexApprovalModePrompt = "prompt"
 
+// Codex's OTLP/HTTP exporter, as its [otel] table names it, and the payload encoding the listener reads.
+const (
+	codexOtelExporterOtlpHttp = "otlp-http"
+	codexOtelProtocolJson     = "json"
+)
+
 // ur's server as one object: command, args, and tools.<tool>.approval_mode.
-func (self *codexConfigFile) template(template *harnessTemplate) (any, error) {
+func (self *codexConfigFile) serverTemplate(template *harnessTemplate) map[string]any {
 	tools := map[string]any{}
 	for _, tool := range template.outwardTools {
 		tools[tool] = map[string]any{"approval_mode": codexApprovalModePrompt}
@@ -79,10 +96,33 @@ func (self *codexConfigFile) template(template *harnessTemplate) (any, error) {
 	if 0 < len(tools) {
 		server["tools"] = tools
 	}
-	return server, nil
+	return server
 }
 
-// The template's block of tables, each line ending in a newline, a blank line between tables.
+// The exporter's settings as one object: otel's exporter, naming the listener and its bearer, and log_user_prompt.
+func (self *codexConfigFile) otelTemplate(telemetry *HarnessTelemetry) map[string]any {
+	return map[string]any{
+		"log_user_prompt": false,
+		"exporter": map[string]any{
+			codexOtelExporterOtlpHttp: map[string]any{
+				"endpoint": telemetry.LogsEndpoint(),
+				"protocol": codexOtelProtocolJson,
+				"headers":  map[string]any{"Authorization": telemetry.Authorization()},
+			},
+		},
+	}
+}
+
+// ur's server's object, and with a telemetry pair that object and otel's: see the file header.
+func (self *codexConfigFile) template(template *harnessTemplate) (any, error) {
+	server := self.serverTemplate(template)
+	if template.telemetry == nil {
+		return server, nil
+	}
+	return map[string]any{"server": server, "otel": self.otelTemplate(template.telemetry)}, nil
+}
+
+// The template's block of server tables, each line ending in a newline, a blank line between tables.
 func (self *codexConfigFile) block(template *harnessTemplate) string {
 	text := strings.Builder{}
 	text.WriteString("[mcp_servers." + urMcpServerName + "]\n")
@@ -99,26 +139,38 @@ func (self *codexConfigFile) block(template *harnessTemplate) string {
 	return text.String()
 }
 
-// ur's tables, in order, refused where mcp_servers.ur is defined any other way: a dotted key or an inline table
-// outside them, or an array of tables.
-func (self *codexConfigFile) urTables(document *harnessTomlDocument) ([]*harnessTomlTable, error) {
+// The exporter's block: one [otel] table, the exporter an inline table on one line, as TOML 1.0 has them.
+func (self *codexConfigFile) otelBlock(telemetry *HarnessTelemetry) string {
+	text := strings.Builder{}
+	text.WriteString("[otel]\n")
+	text.WriteString("log_user_prompt = false\n")
+	text.WriteString("exporter = { " + codexOtelExporterOtlpHttp + " = { endpoint = " + harnessTomlString(telemetry.LogsEndpoint()) +
+		", protocol = " + harnessTomlString(codexOtelProtocolJson) +
+		", headers = { Authorization = " + harnessTomlString(telemetry.Authorization()) + " } } }\n")
+	return text.String()
+}
+
+// The tables under keys, in order, refused where keys' table is defined any other way: a dotted key or an inline
+// table outside them, or an array of tables.
+func codexOwnedTables(document *harnessTomlDocument, keys []string) ([]*harnessTomlTable, error) {
+	name := strings.Join(keys, ".")
 	tables := []*harnessTomlTable{}
 	for _, table := range document.tables {
-		if table.keys != nil && table.keys.hasPrefix(codexServerKeys...) {
+		if table.keys != nil && table.keys.hasPrefix(keys...) {
 			if table.arrayOfThem {
-				return nil, harnessConfigError("mcp_servers.%s as an array of tables", urMcpServerName)
+				return nil, harnessConfigError("%s as an array of tables", name)
 			}
 			tables = append(tables, table)
 			continue
 		}
 		for _, value := range table.values {
 			full := append(append(harnessTomlKey{}, table.keys...), value.keys...)
-			if full.hasPrefix(codexServerKeys...) {
-				return nil, harnessConfigError("mcp_servers.%s set by a dotted key", urMcpServerName)
+			if full.hasPrefix(keys...) {
+				return nil, harnessConfigError("%s set by a dotted key", name)
 			}
-			if codexServerKeysHavePrefix(full) {
-				if object, ok := value.value.(map[string]any); ok && codexInlineHoldsServer(object, codexServerKeys[len(full):]) {
-					return nil, harnessConfigError("mcp_servers.%s set by an inline table", urMcpServerName)
+			if codexKeysHavePrefix(keys, full) {
+				if object, ok := value.value.(map[string]any); ok && codexInlineHolds(object, keys[len(full):]) {
+					return nil, harnessConfigError("%s set by an inline table", name)
 				}
 			}
 		}
@@ -126,13 +178,13 @@ func (self *codexConfigFile) urTables(document *harnessTomlDocument) ([]*harness
 	return tables, nil
 }
 
-// Whether keys is a proper prefix of mcp_servers.ur.
-func codexServerKeysHavePrefix(keys harnessTomlKey) bool {
-	return len(keys) < len(codexServerKeys) && harnessTomlKey(codexServerKeys).hasPrefix(keys...)
+// Whether prefix is a proper prefix of keys.
+func codexKeysHavePrefix(keys []string, prefix harnessTomlKey) bool {
+	return len(prefix) < len(keys) && harnessTomlKey(keys).hasPrefix(prefix...)
 }
 
-// Whether an inline table holds the rest of mcp_servers.ur's path.
-func codexInlineHoldsServer(object map[string]any, rest []string) bool {
+// Whether an inline table holds the rest of a table's path.
+func codexInlineHolds(object map[string]any, rest []string) bool {
 	for _, key := range rest {
 		next, ok := object[key]
 		if !ok {
@@ -147,16 +199,16 @@ func codexInlineHoldsServer(object map[string]any, rest []string) bool {
 	return true
 }
 
-// ur's tables as one object, nil for none.
-func (self *codexConfigFile) entries(document *harnessTomlDocument, tables []*harnessTomlTable) (any, error) {
+// The tables under keys as one object, nil for none.
+func codexOwnedEntries(tables []*harnessTomlTable, keys []string) (any, error) {
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	server := map[string]any{}
+	owned := map[string]any{}
 	for _, table := range tables {
-		relative := table.keys[len(codexServerKeys):]
+		relative := table.keys[len(keys):]
 		// the header alone makes its table, empty or not
-		object := server
+		object := owned
 		for _, key := range relative {
 			next, ok := object[key]
 			if !ok {
@@ -167,7 +219,7 @@ func (self *codexConfigFile) entries(document *harnessTomlDocument, tables []*ha
 			}
 			nested, isObject := next.(map[string]any)
 			if !isObject {
-				return nil, harnessConfigError("mcp_servers.%s.%s is a value and a table", urMcpServerName, key)
+				return nil, harnessConfigError("%s.%s is a value and a table", strings.Join(keys, "."), key)
 			}
 			object = nested
 		}
@@ -177,19 +229,13 @@ func (self *codexConfigFile) entries(document *harnessTomlDocument, tables []*ha
 			}
 		}
 	}
-	return server, nil
+	return owned, nil
 }
 
-func (self *codexConfigFile) nextEdit(content []byte, template *harnessTemplate, maxDepth int) (*harnessEdit, error) {
-	document, err := harnessParseToml(content, maxDepth)
-	if err != nil {
-		return nil, err
-	}
-	tables, err := self.urTables(document)
-	if err != nil {
-		return nil, err
-	}
-	block := self.block(template)
+// The next edit that brings one group of owned tables to the template's block: the block at the end where the group
+// has no table, nothing where its tables hold want, else its last table removed while it has more than one, then its
+// one table replaced by the block.
+func codexTablesEdit(content []byte, tables []*harnessTomlTable, keys []string, block string, want any) (*harnessEdit, error) {
 	if len(tables) == 0 {
 		prefix := ""
 		switch {
@@ -201,19 +247,15 @@ func (self *codexConfigFile) nextEdit(content []byte, template *harnessTemplate,
 		}
 		return &harnessEdit{start: len(content), end: len(content), text: prefix + block}, nil
 	}
-	found, err := self.entries(document, tables)
+	found, err := codexOwnedEntries(tables, keys)
 	if err != nil {
 		return nil, err
 	}
-	templateValue, err := self.template(template)
+	normal, err := harnessJsonNormal(want)
 	if err != nil {
 		return nil, err
 	}
-	want, err := harnessJsonNormal(templateValue)
-	if err != nil {
-		return nil, err
-	}
-	if reflect.DeepEqual(found, want) {
+	if reflect.DeepEqual(found, normal) {
 		return nil, nil
 	}
 	if 1 < len(tables) {
@@ -229,16 +271,49 @@ func (self *codexConfigFile) nextEdit(content []byte, template *harnessTemplate,
 	return &harnessEdit{start: table.start, end: table.end, text: text}, nil
 }
 
+func (self *codexConfigFile) nextEdit(content []byte, template *harnessTemplate, maxDepth int) (*harnessEdit, error) {
+	document, err := harnessParseToml(content, maxDepth)
+	if err != nil {
+		return nil, err
+	}
+	tables, err := codexOwnedTables(document, codexServerKeys)
+	if err != nil {
+		return nil, err
+	}
+	edit, err := codexTablesEdit(content, tables, codexServerKeys, self.block(template), self.serverTemplate(template))
+	if edit != nil || err != nil || template.telemetry == nil {
+		return edit, err
+	}
+	otelTables, err := codexOwnedTables(document, codexOtelKeys)
+	if err != nil {
+		return nil, err
+	}
+	return codexTablesEdit(content, otelTables, codexOtelKeys, self.otelBlock(template.telemetry), self.otelTemplate(template.telemetry))
+}
+
+// ur's tables as the template's shape has them; a nil template reads the server's alone.
 func (self *codexConfigFile) extract(content []byte, template *harnessTemplate, maxDepth int) (any, error) {
 	document, err := harnessParseToml(content, maxDepth)
 	if err != nil {
 		return nil, err
 	}
-	tables, err := self.urTables(document)
+	tables, err := codexOwnedTables(document, codexServerKeys)
 	if err != nil {
 		return nil, err
 	}
-	return self.entries(document, tables)
+	server, err := codexOwnedEntries(tables, codexServerKeys)
+	if err != nil || template == nil || template.telemetry == nil {
+		return server, err
+	}
+	otelTables, err := codexOwnedTables(document, codexOtelKeys)
+	if err != nil {
+		return nil, err
+	}
+	otel, err := codexOwnedEntries(otelTables, codexOtelKeys)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"server": server, "otel": otel}, nil
 }
 
 // Codex's config names no hook: an outward tool's approval mode is ur's own table, which the seal covers.
