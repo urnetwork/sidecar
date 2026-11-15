@@ -26,6 +26,10 @@
 // surfaces it and never writes its content again over the winner's, which no history would keep (§11.7's writers
 // row). A 409 VERSIONING is a caller error and goes back as it is, never retried.
 //
+// A write whose new slots' bodies pass what one push carries, EvsSettings.PushSlotBodiesByteCount, the seal's bound
+// (QD-819), is the one write that is not one push: sealed and found past it before anything is uploaded, it goes as
+// its halves, each its own write, splitting again in turn (evs_write_split.go).
+//
 // On every leg. Safe for concurrent use, each call its own push.
 
 package sidecar
@@ -153,6 +157,9 @@ func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsA
 		switch {
 		case err == nil:
 			return result, plan, nil
+		case errors.Is(err, errEvsWriteSplits):
+			// its new slots' bodies pass one push's (QD-819): its halves, each its own write (evs_write_split.go)
+			return self.writeSplit(ctx, args)
 		case errors.Is(err, ErrEvsPathEpochDue) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE):
 			if self.client.settings.PushRetryCount <= dueWaits {
 				if errors.Is(err, ErrEvsPathEpochDue) {
@@ -245,6 +252,10 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 	}
 	sealed.scope = plan.scope
 	defer sealed.Close()
+	if err := self.checkSlotBodies(sealed, writes, extras); err != nil {
+		// before any upload: a write past one push's slot bodies splits, or fails closed (evs_write_split.go)
+		return nil, plan, err
+	}
 	pushId, reply, err := self.sendSealed(ctx, sealed, rebuilds)
 	if err != nil {
 		return nil, plan, err
