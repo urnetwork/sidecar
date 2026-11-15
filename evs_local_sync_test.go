@@ -633,6 +633,17 @@ func TestEvsLocalSyncReCreationLeavesAPathTheStopRemoved(t *testing.T) {
 	if len(device.alarms()) != 1 || len(late.alarms()) != 1 {
 		t.Fatalf("alarms %v and %v", device.alarms(), late.alarms())
 	}
+	// a second stop after the re-creation: a mount whose one replay runs through both holds the second's taints alone
+	planted, _ := publisher.mount.history.commit(publisher.tree(map[string]string{"a.txt": "a two\n", "x.txt": "planted\n"}), evsTestId("another client").String()+evsCommitterDomain, lacking)
+	if _, err := publisher.publish("main", &planted, func(args *EvsLocalPublishArgs) { args.OwnClient = func(Id) bool { return true } }); err != nil {
+		t.Fatal(err)
+	}
+	fresh := newEvsTestDevice(t, publisher, "device d")
+	fresh.replay("main")
+	if ref := fresh.ref("main"); ref.StuckAt != result.Version+1 || !evsOidEqual(ref.Tip, &lacking) || len(ref.Tainted) != 2 ||
+		fresh.taintAt("main", "x.txt") == nil || fresh.taintAt("main", "secret.txt") != nil {
+		t.Fatalf("a mount whose one replay runs through both stops %+v", ref)
+	}
 }
 
 // A stopped span whose refused version plants new.txt and whose later version removes it (QD-826): device b reads the
@@ -680,6 +691,53 @@ func TestEvsLocalSyncReCreationLeavesAPathTheStopCreatedAndRemoved(t *testing.T)
 	}
 	if names := evsTestGit(t, late.mount.BareDir, "ls-tree", "--name-only", hex.EncodeToString(next[:])); names != "a.txt\n" {
 		t.Fatalf("the re-created tree holds %q", names)
+	}
+}
+
+// The mirror of the last (QD-826): a stopped span whose refused version removes secret.txt and whose later version
+// writes it again leaves it standing on evs, and device b records its taint as standing, the last change there. A
+// re-creation whose tree lacks secret.txt must remove it, and does, a removal of the later version's entry, which
+// device b and a device mounted afterwards apply.
+func TestEvsLocalSyncReCreationRemovesAPathTheStopRemovedAndWroteAgain(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	c1 := publisher.commit(map[string]string{"a.txt": "a\n", "secret.txt": "s\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	device := publisher.stopAndDelete("main", c1, map[string]string{"a.txt": "a\n"}, func() {
+		// on the forged tip, a version of the stopped span that writes what the refused one removed
+		rewriting := publisher.commit(map[string]string{"a.txt": "a\n", "secret.txt": "written again\n"}, *publisher.ref("main").tip)
+		if _, err := publisher.publish("main", &rewriting); err != nil {
+			t.Fatal(err)
+		}
+	})
+	tainted := device.ref("main").Tainted
+	if secret := device.taintAt("main", "secret.txt"); secret == nil || secret.Removed {
+		t.Fatalf("taints %+v", tainted)
+	}
+	lacking := publisher.commit(map[string]string{"a.txt": "a two\n"}, c1)
+	result, err := publisher.publish("main", &lacking, func(args *EvsLocalPublishArgs) { args.Tainted = tainted })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !publisher.changesPath("main", result.Version, "secret.txt") {
+		t.Fatal("the re-creation leaves alone secret.txt, which the stop wrote again")
+	}
+	world := publisher.writer.world
+	world.stateLock.Lock()
+	removed := world.paths["secret.txt"].removal != nil
+	world.stateLock.Unlock()
+	if !removed {
+		t.Fatal("secret.txt stands after the re-creation")
+	}
+	device.replay("main")
+	if ref := device.ref("main"); ref.StuckAt != 0 || !evsOidEqual(ref.Tip, &lacking) || len(ref.Tainted) != 0 {
+		t.Fatalf("device b after the re-creation %+v", ref)
+	}
+	late := newEvsTestDevice(t, publisher, "device c")
+	late.replay("main")
+	if ref := late.ref("main"); ref.StuckAt != 0 || !evsOidEqual(ref.Tip, &lacking) || len(ref.Tainted) != 0 {
+		t.Fatalf("a later mount %+v", ref)
 	}
 }
 
@@ -794,6 +852,63 @@ func TestEvsLocalSyncReCreationWritesAgainAPathTheStopRemoved(t *testing.T) {
 	}
 	if content := evsTestGit(t, device.mount.BareDir, "cat-file", "-p", hex.EncodeToString(again[:])+":secret.txt"); content != "s\n" {
 		t.Fatalf("secret.txt %q", content)
+	}
+}
+
+// A re-creating push whose tainted paths outside the net change are not as the new tree holds them is refused
+// (QD-826; 8.2.7's changes row). Its writer is handed another tree to name the taints in, so it removes a.txt, which
+// the new tree holds as it stood, writes a.txt with a blob the new tree does not hold there, or writes x.txt, which
+// the stop planted and the new tree lacks; or it is not told of x.txt's taint, and leaves alone the file the stop
+// planted there, standing on evs where the new tree holds nothing. Device b refuses each, stopping main at the
+// re-creation, where the design writer's push of such a tree applies
+// (TestEvsLocalSyncReCreationWritesAndRemovesTaintedPaths).
+func TestEvsLocalSyncRefusesTaintedPathsNotAsTheTreeHoldsThem(t *testing.T) {
+	cases := []struct {
+		name string
+		// the tree the writer names its taints in, nil for the new one
+		files map[string]string
+		// leaves x.txt's taint out of what the writer is told
+		forget bool
+	}{
+		{name: "a removal of a path the tree holds", files: map[string]string{"b.txt": "b two\n"}},
+		{name: "a file of another blob", files: map[string]string{"a.txt": "another blob\n", "b.txt": "b two\n"}},
+		{name: "a write of a path the tree lacks", files: map[string]string{"a.txt": "a\n", "b.txt": "b two\n", "x.txt": "planted\n"}},
+		{name: "a planted path left standing", forget: true},
+	}
+	for _, c := range cases {
+		publisher := newEvsTestPublisher(t)
+		c1 := publisher.commit(map[string]string{"a.txt": "a\n", "b.txt": "b\n"})
+		if _, err := publisher.publish("main", &c1); err != nil {
+			t.Fatal(err)
+		}
+		device := publisher.stopAndDelete("main", c1, map[string]string{"a.txt": "forged\n", "b.txt": "b\n", "x.txt": "planted\n"}, nil)
+		if text, planted := device.taintAt("main", "a.txt"), device.taintAt("main", "x.txt"); text == nil || text.Removed || planted == nil || planted.Removed {
+			t.Fatalf("%s: taints %+v", c.name, device.ref("main").Tainted)
+		}
+		next := publisher.commit(map[string]string{"a.txt": "a\n", "b.txt": "b two\n"}, c1)
+		var named *EvsGitOid
+		if c.files != nil {
+			tree := publisher.tree(c.files)
+			named = &tree
+		}
+		plantedKey := publisher.writer.world.tokensAt("x.txt", 1).KeyString()
+		evsLocalPublishUpdateHook = func(update *evsGitPublishUpdate) {
+			if named != nil {
+				update.nextTree = *named
+			}
+			if c.forget {
+				update.tainted = slices.DeleteFunc(slices.Clone(update.tainted), func(path EvsTaintedPath) bool { return path.Key == plantedKey })
+			}
+		}
+		result, err := publisher.publish("main", &next, func(args *EvsLocalPublishArgs) { args.Tainted = device.ref("main").Tainted })
+		evsLocalPublishUpdateHook = nil
+		if err != nil {
+			t.Fatalf("%s: the writer's push: %v", c.name, err)
+		}
+		device.replay("main")
+		if ref := device.ref("main"); ref.StuckAt != result.Version || ref.Tip != nil || len(device.alarms()) != 2 {
+			t.Fatalf("%s: device b %+v", c.name, ref)
+		}
 	}
 }
 
