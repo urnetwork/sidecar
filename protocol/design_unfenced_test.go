@@ -403,6 +403,7 @@ message BridgeEgressBody {
 message BridgeAlias { StatementHeader header = 1; bytes sealed_body = 2; }
 message BridgeAliasBody {
   bytes share_id = 1; uint32 target_index = 2; BridgeIpv4Prefix alias_prefix = 3; bytes host = 4;
+  bytes host_identity_public_key = 5; bytes sharing_network_id = 6; uint32 drain_seconds = 7; bool release = 8;
 }
 message BridgeWithdraw { StatementHeader header = 1; bytes rule_id = 2; BridgeWithdrawMode mode = 3; }
 enum BridgeRouteKind {
@@ -424,7 +425,7 @@ message BridgeRules {
   BridgeIpv4Prefix block = 1; BridgeIpv4Prefix previous_block = 2; int64 previous_block_drain_until = 3;
   repeated fixed32 addresses = 4; repeated BridgeRuleEntry entries = 5; repeated BridgeRuleMap maps = 6;
   repeated BridgeRuleServed served = 7; repeated BridgeRuleSubject subjects = 8; BridgeRuleEgress egress = 9;
-  BridgeRuleSubject untagged = 10;
+  BridgeRuleSubject untagged = 10; repeated BridgeRuleShare shares = 11;
 }
 message BridgeRuleEntry {
   BridgeIpv4Prefix prefix = 1; BridgeRuleEntryKind kind = 2; repeated BridgeRuleLink links = 3;
@@ -432,7 +433,7 @@ message BridgeRuleEntry {
 message BridgeRuleLink {
   bytes target_client_id = 1; bytes target_sidecar_id = 2; bytes target_identity_public_key = 3;
   bytes target_member_id = 4; bytes rule_id = 5; uint32 weight = 6; bytes site_id = 7; int64 draining_since = 8;
-  int64 drain_until = 9; bytes target_client_public_key = 12;
+  int64 drain_until = 9; bytes share_id = 10; bytes target_network_id = 11; bytes target_client_public_key = 12;
 }
 message BridgeRuleMap {
   bytes map_id = 1; BridgeIpv4Prefix match_prefix = 2; uint32 protocol = 3; repeated BridgePortRange ports = 4;
@@ -451,6 +452,36 @@ message BridgeRuleReach {
   int64 expires = 5;
 }
 message BridgeRuleEgress { BridgeEgressMode mode = 1; repeated BridgeRuleLink exits = 2; }
+// §17.9's shares, as DESIGN-DETAILS 12.2.2 writes them (QD-077, QD-108, QD-670): X's pin, the share seal's four
+// bodies, and the rows a host compiles a share to, landing with BridgeAliasBody's fields 5 to 8 and BridgeRules'
+// shares. BridgeShareAccept is this repository's: the accepting side's one sealed column holds its seals together
+// (question bridge-m6-03-accept-seals). Config files, seals and in-process rows: none reaches a server in the clear.
+message BridgeRuleShare {
+  bytes share_id = 1; bytes accepting_network_id = 2; bytes share_public_key = 3; bytes grant_id = 4;
+  int64 expires = 5; repeated BridgeRuleShareTarget targets = 6;
+}
+message BridgeRuleShareTarget {
+  uint32 index = 1; uint32 alias_host_bits = 2; uint32 length = 3; BridgeIpv4Prefix target = 4;
+  uint32 protocol = 5; repeated BridgePortRange ports = 6;
+}
+message BridgeShareGrant {
+  bytes share_id = 1; bytes grant_id = 2; bytes share_public_key = 3; bytes target_table_sha256 = 4;
+  bytes table_key = 5; bytes accepting_network_id = 6; bytes alias_table_sha256 = 7;
+  uint64 target_table_version = 8; uint64 alias_table_version = 9;
+}
+message BridgeShareTargets { repeated BridgeShareTarget targets = 1; bytes pad = 15; }
+message BridgeShareTarget {
+  uint32 index = 1; bytes host_sidecar_id = 2; bytes host_identity_public_key = 3; BridgeIpv4Prefix prefix = 4;
+  uint32 protocol = 5; repeated BridgePortRange ports = 6;
+}
+message BridgeShareAliases { repeated BridgeShareAlias aliases = 1; bytes pad = 15; }
+message BridgeShareAlias { uint32 index = 1; uint32 alias_host_bits = 2; uint32 length = 3; }
+message BridgeShareKeyBody { bytes share_public_key = 1; bytes pad = 15; }
+message BridgeShareShortfall {
+  uint32 index = 1; uint32 length = 2; uint32 free_address_count = 3; uint32 largest_free_length = 4;
+  bytes pad = 15;
+}
+message BridgeShareAccept { bytes aliases = 1; bytes share_key = 2; bytes shortfall = 3; }
 enum BridgeRuleEntryKind {
   BRIDGE_RULE_ENTRY_KIND_UNSPECIFIED = 0; BRIDGE_RULE_ENTRY_KIND_LINK = 1; BRIDGE_RULE_ENTRY_KIND_UNASSIGNED = 2;
   BRIDGE_RULE_ENTRY_KIND_CARVED = 3; BRIDGE_RULE_ENTRY_KIND_SERVICE = 4;

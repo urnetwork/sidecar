@@ -420,13 +420,16 @@ func TestWindowDelegationSignedByAForwardingKey(t *testing.T) {
 	}{
 		{name: "a 32-byte signer with no key_id", signerId: testForwardDelegationId},
 		{name: "a 32-byte signer with a 16-byte key_id", signerId: testForwardDelegationId, keyId: keyId[:16]},
-		{name: "a 16-byte signer with a key_id", signerId: testDelegationSubjectId, keyId: keyId[:]},
 		{name: "a signer of another length", signerId: testForwardDelegationId[:20], keyId: keyId[:]},
 	}
 	for _, testCase := range refused {
 		if _, err := WindowDelegationSigned(testDelegation(), sign(testCase.signerId, testCase.keyId), nil); !errors.Is(err, ErrWindowDelegationMalformed) {
 			t.Errorf("%s: %v", testCase.name, err)
 		}
+	}
+	// a share signer's shape on a delegation that names no share is a share's refusal (share_cert_test.go)
+	if _, err := WindowDelegationSigned(testDelegation(), sign(testDelegationSubjectId, keyId[:]), nil); !errors.Is(err, ErrWindowDelegationShare) {
+		t.Errorf("a 16-byte signer with a key_id: %v", err)
 	}
 	// a format limit below what a delegation takes refuses it, at the signer and at the verifier
 	small := &WindowDelegationSettings{MaxByteCount: 64}

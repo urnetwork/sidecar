@@ -192,7 +192,8 @@ func bridgeLedgerRowsFiles(rows BridgeLedgerRows) (map[string][]byte, error) {
 
 // The rows the ledger holds at a fold, by kind, each in its one order: the live addresses and the tombstones still
 // holding at its time; every rule, active, void and withdrawn, but a withdrawn one whose retention passed, and every
-// reservation; the egress specs; the aliases.
+// reservation; the egress specs; the aliases, in force and released ones still draining at its time, by share, target and
+// entry.
 func (self *BridgeLedger) foldRows() ([]*protocol.BridgeLedgerAddressRow, []*protocol.BridgeLedgerRuleRow, []*protocol.BridgeLedgerEgressRow, []*protocol.BridgeLedgerAliasRow) {
 	addressRows := []*protocol.BridgeLedgerAddressRow{}
 	for _, hostBits := range slices.Sorted(maps.Keys(self.byHostBits)) {
@@ -265,13 +266,18 @@ func (self *BridgeLedger) foldRows() ([]*protocol.BridgeLedgerAddressRow, []*pro
 
 	aliasRows := []*protocol.BridgeLedgerAliasRow{}
 	for _, alias := range self.aliases {
-		aliasRows = append(aliasRows, &protocol.BridgeLedgerAliasRow{Body: alias.Body, Signer: alias.Signer.Bytes(), At: alias.At})
+		aliasRows = append(aliasRows, &protocol.BridgeLedgerAliasRow{
+			Body: alias.Body, Signer: alias.Signer.Bytes(), At: alias.At, ReleasedAt: alias.ReleasedAt, ReleasedMs: alias.ReleasedMs,
+		})
 	}
 	slices.SortFunc(aliasRows, func(a *protocol.BridgeLedgerAliasRow, b *protocol.BridgeLedgerAliasRow) int {
 		if order := bytes.Compare(a.GetBody().GetShareId(), b.GetBody().GetShareId()); order != 0 {
 			return order
 		}
-		return cmp.Compare(a.GetBody().GetTargetIndex(), b.GetBody().GetTargetIndex())
+		if order := cmp.Compare(a.GetBody().GetTargetIndex(), b.GetBody().GetTargetIndex()); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.GetAt(), b.GetAt())
 	})
 	return addressRows, ruleRows, egressRows, aliasRows
 }
