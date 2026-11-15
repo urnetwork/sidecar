@@ -222,8 +222,10 @@ type SearchCache struct {
 	log      Logger
 	// whether the cache lives in memory (Search.CacheByteCount 0)
 	memory bool
-	cancel context.CancelFunc
-	done   chan struct{}
+	// the instance whose store this is, whose locks end reads and cursors; nil for a store of none
+	instance *SidecarInstance
+	cancel   context.CancelFunc
+	done     chan struct{}
 	// decoded index state, within Search.MemoryByteCount, and version-table pages within VersionCacheByteCount
 	decoded      *searchDecodedCache
 	versionPages *searchDecodedCache
@@ -302,8 +304,18 @@ func NewSearchCache(ctx context.Context, store SidecarStore, settings *SidecarSe
 		close(self.done)
 		return self, nil
 	}
+	self.instance = instance
 	go self.watchLock(watchCtx, instance)
 	return self, nil
+}
+
+// Why the instance this cache's store belongs to opens nothing now: nil while it is open, and for a store of no
+// instance.
+func (self *SearchCache) instanceError() error {
+	if self.instance == nil {
+		return nil
+	}
+	return self.instance.stateError()
 }
 
 // Drops the decoded state and ends every open cursor each time the instance leaves Open (§5.9's delete row), until ctx
@@ -1072,6 +1084,14 @@ func (self *SearchCacheRecordFrames) OpenRead(repoKey *EvsRepoKey) (*SearchCache
 	if repoKey == nil || repoKey.RepoId() != self.key.RepoId || repoKey.Generation() != self.meta.Generation {
 		return nil, fmt.Errorf("%w: a key of another repo or generation", ErrSearchCacheKey)
 	}
+	// a lock of the instance ends the read as it ends a cursor (§5.9's delete row): registered before any key exists,
+	// so a lock after this ends it, and one before it is the instance's state, checked next
+	read := &SearchCacheRecordRead{frames: self, fileId: fileId}
+	read.release = self.cache.AddCursor(read.end)
+	if err := self.cache.instanceError(); err != nil {
+		read.Close()
+		return nil, err
+	}
 	objectKey, err := func() (*EvsObjectKey, error) {
 		fekKey, err := NewEvsFekKey(repoKey)
 		if err != nil {
@@ -1081,6 +1101,7 @@ func (self *SearchCacheRecordFrames) OpenRead(repoKey *EvsRepoKey) (*SearchCache
 		return EvsUnwrapObjectKey(fekKey, self.meta.WrappedKey)
 	}()
 	if err != nil {
+		read.Close()
 		return nil, fmt.Errorf("%w: %w", ErrSearchCacheKey, err)
 	}
 	header, err := func() (*EvsRecordHeader, error) {
@@ -1093,16 +1114,31 @@ func (self *SearchCacheRecordFrames) OpenRead(repoKey *EvsRepoKey) (*SearchCache
 	}()
 	if err != nil {
 		clear(objectKey.key)
+		read.Close()
 		return nil, fmt.Errorf("%w: %w", ErrSearchCacheKey, err)
 	}
 	if header.KeyRefKind != protocol.EvsKeyRefKind_EVS_KEY_REF_CONTAINER || header.Generation != self.meta.Generation ||
 		header.BodyLength != uint64(self.meta.Length) || EvsRecordFrameCount(header.BodyLength) != uint64(self.meta.FrameCount) {
 		clear(objectKey.key)
+		read.Close()
 		return nil, self.cache.readFailed(self.key, ErrSidecarStoreFailed)
 	}
-	read := &SearchCacheRecordRead{frames: self, header: header, fileId: fileId, objectKey: objectKey}
-	// a lock of the instance ends the read as it ends a cursor (§5.9's delete row)
-	read.release = self.cache.AddCursor(read.end)
+	held := func() bool {
+		read.stateLock.Lock()
+		defer read.stateLock.Unlock()
+		if read.ended {
+			return false
+		}
+		read.header = header
+		read.objectKey = objectKey
+		return true
+	}()
+	if !held {
+		// a lock came while the key was unwrapped
+		clear(objectKey.key)
+		read.Close()
+		return nil, ErrSearchCacheReadEnded
+	}
 	return read, nil
 }
 
@@ -1134,14 +1170,15 @@ func (self *SearchCache) OpenRecordRead(ctx context.Context, key SearchCacheKey,
 // source. Close and a lock are safe beside a read; reads are not safe for concurrent use with each other.
 type SearchCacheRecordRead struct {
 	frames *SearchCacheRecordFrames
-	header *EvsRecordHeader
 	fileId Id
 	// takes the read out of the cache's open cursors
 	release func()
 
 	stateLock sync.Mutex
-	// the record's object key, nil once the read ended
+	// the opened header and the record's object key, set once OpenRead has both, the key nil again once the read ends
+	header    *EvsRecordHeader
 	objectKey *EvsObjectKey
+	ended     bool
 }
 
 // The record body's length.
@@ -1158,10 +1195,15 @@ func (self *SearchCacheRecordRead) FrameCount() int {
 // frame that does not open, or a part gone, drops the file: ErrSearchCacheRefetch. ErrSearchCacheReadEnded once the
 // read ended.
 func (self *SearchCacheRecordRead) ReadFrame(index int, dst []byte) ([]byte, error) {
-	if self.ended() {
+	header, open := func() (*EvsRecordHeader, bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.header, !self.ended
+	}()
+	if !open {
 		return nil, ErrSearchCacheReadEnded
 	}
-	sealed, err := self.frames.readSealedFrame(index, self.header)
+	sealed, err := self.frames.readSealedFrame(index, header)
 	if err != nil {
 		return nil, err
 	}
@@ -1169,10 +1211,10 @@ func (self *SearchCacheRecordRead) ReadFrame(index int, dst []byte) ([]byte, err
 	opened, ok, err := func() ([]byte, bool, error) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		if self.objectKey == nil {
+		if self.ended {
 			return nil, false, ErrSearchCacheReadEnded
 		}
-		return self.frames.openFrame(index, sealed, self.header, self.objectKey, self.fileId, dst)
+		return self.frames.openFrame(index, sealed, header, self.objectKey, self.fileId, dst)
 	}()
 	if err != nil {
 		return nil, err
@@ -1183,23 +1225,18 @@ func (self *SearchCacheRecordRead) ReadFrame(index int, dst []byte) ([]byte, err
 	return opened, nil
 }
 
-// Whether the read ended.
-func (self *SearchCacheRecordRead) ended() bool {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.objectKey == nil
-}
-
 // Ends the read: the object key is cleared and dropped. Safe to call more than once.
 func (self *SearchCacheRecordRead) Close() {
 	self.end()
 	self.release()
 }
 
-// Clears and drops the object key: Close's, and a lock's through the cache's open cursors.
+// Ends the read, clearing and dropping the object key if it holds one: Close's, and a lock's through the cache's open
+// cursors, which may come before OpenRead has the key.
 func (self *SearchCacheRecordRead) end() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	self.ended = true
 	if self.objectKey != nil {
 		clear(self.objectKey.key)
 		self.objectKey = nil

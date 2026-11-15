@@ -689,6 +689,19 @@ func TestKeptRecordReopensInALaterRound(t *testing.T) {
 	if frame, err := again.ReadFrame(2, nil); err != nil || !bytes.Equal(frame, plaintext[2*EvsRecordFrameByteCount:]) {
 		t.Errorf("the last frame after a lock: %v", err)
 	}
+
+	// a lock between the record's open and its read's start: the read is refused and never holds the key
+	frames, err = later.OpenRecord(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.instance.Lock()
+	if read, err := frames.OpenRead(evsTestRepoKey(key.RepoId, 3)); !errors.Is(err, ErrSidecarStoreLocked) || read != nil {
+		t.Errorf("a read started on a locked instance: %v", err)
+	}
+	if err := world.instance.Unlock(testPass); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // QD-838: only RK_g of the record's own repo at its own generation opens it. Another generation's key, another repo's,
