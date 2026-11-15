@@ -34,8 +34,13 @@ type EvsComponent struct {
 	env *SidecarEnv
 }
 
-// The component of client, which AddComponent or NewSidecar attaches.
+// The component of client, which AddComponent or NewSidecar attaches. A client the composition did not enable the
+// repo's prefix write rules on is enabled here with the defaults (EVS1-M6-04; DESIGN-DETAILS 16.2.5): a ruled repo is
+// read through the judge on every composition that runs evs.
 func NewEvsComponent(client *EvsClient) *EvsComponent {
+	if client.prefixJudge() == nil {
+		client.EnablePrefixRules(nil)
+	}
 	return &EvsComponent{client: client}
 }
 

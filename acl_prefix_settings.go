@@ -3,8 +3,8 @@
 // is a constant. The first five are format limits every verifier of the log or of a set holds alike, so changing one
 // is a protocol change no deployment makes on one side alone: the two id-level limits, which api, every gate and every
 // device judge a RepoPrefixRules entry by (16.2.2), then what makes an opened set void or a pending one void
-// (ACL-M6-04's acl_prefix.go). The rest arrive with the tasks that read them: WalkBackVersionCount and AlarmInterval
-// with EVS1-M6-04's readers, and the repair's four with EVS1-M6-05.
+// (ACL-M6-04's acl_prefix.go). Then what a reader of a ruled repo holds itself to, WalkBackVersionCount and
+// AlarmInterval (EVS1-M6-04's evs_prefix.go), and the repair's bounds (EVS1-M6-05's evs_prefix_repair.go).
 //
 // The statement rules read DefaultAclPrefixSettings(), as they read DefaultAclAccessLogSettings(); threading each
 // side's own instance through them is the review phase's settings sweep (QD-706).
@@ -24,7 +24,8 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// A RepoPrefixRules' limits that every verifier of the log holds alike (DESIGN-DETAILS 16.2.11).
+// A RepoPrefixRules' limits: the five every verifier of the log holds alike, then a reader's and the repair's
+// (DESIGN-DETAILS 16.2.11).
 type AclPrefixSettings struct {
 	// The longest RepoPrefixRules.sealed_rules, in bytes: 65,536 (64 KiB), which with config_seal's 48 B of framing
 	// holds 255 blocks of 256 B of padded rules, room for RuleMaxCount rules of deep paths. An id-level rule: a longer
@@ -51,6 +52,33 @@ type AclPrefixSettings struct {
 	// 10 min and api's and gkm's 20 min clock bounds, so a generation claimed after the void is signed past the grace
 	// and voids the set at every reader that gains it. Non-positive waits the grace alone.
 	PendingVoidMargin time.Duration
+	// The ignored versions a read walks back under before it answers EVS_PREFIX_RULE with detail depth: 64 (16.2.5's
+	// effective). Each is one read of an older version, so the bound is what a breaching writer can cost a reader of
+	// one path. Non-positive walks under none: a path whose newest version is ignored answers depth.
+	WalkBackVersionCount int
+	// The span in which one (repo, ref, signer) raises one evs_alarm prefix_rule event, carrying the first path and
+	// the count of the changes it stands for: 1 min (16.2.10), so a breach of a thousand files is one event.
+	// Non-positive raises an event for every ignored batch.
+	AlarmInterval time.Duration
+	// How long after a device journalled an ignored event its repair may be sent: 5 min (16.2.8's when row), which
+	// leaves the breach's alarm standing long enough to be seen before honest devices write over it. Non-positive
+	// repairs at once.
+	RepairDelay time.Duration
+	// The spread added to RepairDelay, a share of it by SHA-256(sidecar_id || push id): 5 min, so two candidates
+	// rarely send at once. Non-positive adds none.
+	RepairJitter time.Duration
+	// The ignored versions over a versioned file before its accepted content is written again: 8 (16.2.8's what
+	// row), below which every reader walks back and nothing is sent. Non-positive writes it again at the first.
+	RepairDepth int
+	// The repair pushes one device sends for one repo in RepairPushWindow: 60 in 1 h, past which the journal's units
+	// wait and `ur status` lists the dirty paths, so a breaching writer cannot spend the network's quota through
+	// honest devices. Non-positive sends none.
+	RepairPushCount  int
+	RepairPushWindow time.Duration
+	// The content bytes one device's repairs write for one repo in RepairByteWindow: 1 GiB in 24 h. Non-positive
+	// writes none.
+	RepairByteCount  int64
+	RepairByteWindow time.Duration
 }
 
 // DESIGN-DETAILS 16.2.11's values. A fresh value each call.
@@ -61,6 +89,16 @@ func DefaultAclPrefixSettings() *AclPrefixSettings {
 		RuleMaxCount:        256,
 		GenerationFormGrace: 1 * time.Hour,
 		PendingVoidMargin:   30 * time.Minute,
+
+		WalkBackVersionCount: 64,
+		AlarmInterval:        1 * time.Minute,
+		RepairDelay:          5 * time.Minute,
+		RepairJitter:         5 * time.Minute,
+		RepairDepth:          8,
+		RepairPushCount:      60,
+		RepairPushWindow:     1 * time.Hour,
+		RepairByteCount:      1024 * 1024 * 1024,
+		RepairByteWindow:     24 * time.Hour,
 	}
 }
 

@@ -43,6 +43,8 @@ type evsTestConfig struct {
 	writers      []Id
 	readers      []Id
 	repo         *protocol.AclRepo
+	// the sidecars' admission rows, which a prefix rule's subject is matched against; nil holds none
+	rows map[Id]*bridge.SidecarRow
 }
 
 func (self *evsTestConfig) Pin() *bridge.AuthPin {
@@ -79,7 +81,11 @@ func (self *evsTestConfig) RepoWriters(repoId Id) []Id {
 func (self *evsTestConfig) RepoReadersAt(repoId Id, at time.Time) []Id {
 	return self.RepoReaders(repoId)
 }
-func (self *evsTestConfig) SidecarRow(sidecarId Id) *bridge.SidecarRow        { return nil }
+func (self *evsTestConfig) SidecarRow(sidecarId Id) *bridge.SidecarRow {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.rows[sidecarId]
+}
 func (self *evsTestConfig) Member(memberId Id) *bridge.MemberRow              { return nil }
 func (self *evsTestConfig) Delegations() []*bridge.DelegationRow              { return nil }
 func (self *evsTestConfig) ReposGrantedToAtoms(atoms []Id, at time.Time) []Id { return nil }

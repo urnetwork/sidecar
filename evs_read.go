@@ -18,6 +18,11 @@
 // owner-bound repo this sidecar does not write until EVS1-M2-29's receipt gate deposits a read receipt: until that
 // gate is wired such reads are refused, as §8.19's owner-bound shares stay closed.
 //
+// Under a repo's prefix write rules (DESIGN-DETAILS 16.2.5) the version a read shows is the effective one: the round
+// verifies evs's newest event of the path and raises the pin and the record on it as above, since those say what evs
+// was shown, and the prefix reader (evs_prefix.go) then walks back under the versions this device ignores. A repo
+// whose rows hold a rule set is read only by a client that holds such a reader: any other answers EVS_PREFIX_RULE.
+//
 // On every leg. Safe for concurrent use.
 
 package sidecar
@@ -43,6 +48,59 @@ var (
 	// An overlay's path the overlay holds no version of: its base ref answers it, which head mode does not read.
 	ErrEvsOverlayBase = errors.New("evs: path on the overlay's base")
 )
+
+// A repo's prefix write rules as a client's reads follow them (DESIGN-DETAILS 16.2.5), once its composition enables
+// them (EvsClient.EnablePrefixRules, evs_prefix.go): behind a seam, so that the forwarding role's leg, which reads no
+// repo under rules, links none of them.
+type evsPrefixReader interface {
+	// 16.2.5's effective(X) over a head read of one path, result's only one: the read to show in its place, which is
+	// result itself where its rules allow the newest event, and what the walk found. It closes every read it
+	// replaces, result included, and on an error result too.
+	effective(ctx context.Context, repo *EvsRepo, path string, result *evsReadResult) (*evsReadResult, *evsPrefixRead, error)
+	// Whether its rules ignore the version or removal a read verified at index, as a version asked for by number or
+	// History's walk meets one; a version nobody can judge, under a pending or newer set, is not ignored.
+	ignored(ctx context.Context, repo *EvsRepo, result *evsReadResult, index int) (bool, error)
+	// Whether its rules ignore one walked delta of the directory a read verified at index, applied to the table that
+	// held gives: the kind of the row a child's token of that delta names there, false for none.
+	deltaIgnored(ctx context.Context, repo *EvsRepo, result *evsReadResult, index int, delta *EvsVerifiedPath, held func(token EvsToken) (protocol.EvsEntryKind, bool)) (bool, error)
+	// Whether a child of a directory listed at a head is one its record holds as effectively absent, its row added
+	// at or below addedAt, the ref version of the delta or fold that gave it.
+	rowAbsent(repo *EvsRepo, refId Id, path string, addedAt uint64) (bool, error)
+	// The token paths a walked statement names that this reader follows, and false where it follows none of an
+	// inline list: every change ignored, which raises the alarm and no change event (§11.10).
+	followed(ctx context.Context, repo *EvsRepo, refId Id, statement *EvsVerifiedStatement) ([]EvsTokenPath, bool)
+}
+
+// What 16.2.5's walk found over the version a read shows: how many ignored versions lie over it, and whether a set
+// this device cannot read holds everything above it back (held: pending; update: a later release's).
+type evsPrefixRead struct {
+	ignoredAbove int
+	state        string
+}
+
+// The prefix reader of this repo's reads: nil where the repo's rows hold no rule set, so nothing is judged (16.2.4's
+// line 2), else the client's, or EVS_PREFIX_RULE with detail pending for a client that holds none, which cannot read
+// the rules in force and so shows nothing under them.
+func (self *EvsRepo) prefixRuled() (evsPrefixReader, error) {
+	state, err := self.client.verifier.config()
+	if err != nil {
+		// no state judges anything, and the read's own checks refuse
+		return nil, nil
+	}
+	repo := state.Repo(self.repoId)
+	if repo == nil || len(repo.GetPrefixRules()) == 0 {
+		return nil, nil
+	}
+	reader := func() evsPrefixReader {
+		self.client.stateLock.Lock()
+		defer self.client.stateLock.Unlock()
+		return self.client.prefixReads
+	}()
+	if reader == nil {
+		return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
+	}
+	return reader, nil
+}
 
 // Called before any object of a read is decrypted, with the ids of the objects it names (segments and slots): the
 // receipt gate EVS1-M2-29 fills, which deposits a read receipt and awaits evs's 200 (§16.8). An error refuses the
@@ -513,11 +571,32 @@ func (self *EvsRepo) ReadHead(ctx context.Context, args *EvsReadArgs, out io.Wri
 
 // One pass of ReadHead: the file at args.Version on a head read fresh or not.
 func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, fresh bool, out io.Writer) (*EvsFileInfo, error) {
+	ruled, err := self.prefixRuled()
+	if err != nil {
+		return nil, err
+	}
 	result, err := self.read(ctx, refId, []string{args.Path}, args.Version, fresh)
 	if err != nil {
 		return nil, err
 	}
+	walk := &evsPrefixRead{}
+	if ruled != nil && args.Version == 0 {
+		// the effective version: evs's newest one this device does not ignore (DESIGN-DETAILS 16.2.5)
+		if result, walk, err = ruled.effective(ctx, self, args.Path, result); err != nil {
+			return nil, err
+		}
+	}
 	defer result.objects.close()
+	if ruled != nil && args.Version != 0 {
+		// a version asked for by number that this device ignores is not shown
+		ignored, err := ruled.ignored(ctx, self, result, 0)
+		if err != nil {
+			return nil, err
+		}
+		if ignored {
+			return nil, &EvsPrefixRuleError{Detail: EvsPrefixDetailRefused, Path: args.Path}
+		}
+	}
 	verified := result.replies[0]
 	switch {
 	case verified.Base != nil:
@@ -532,6 +611,7 @@ func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, 
 		return nil, err
 	}
 	info.Path = args.Path
+	info.IgnoredAbove, info.RuleState = walk.ignoredAbove, walk.state
 	return info, nil
 }
 

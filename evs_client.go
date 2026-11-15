@@ -161,6 +161,8 @@ type EvsClient struct {
 	versioningRules func(repoId Id, filePath string, size uint64) (uint32, error)
 	// subscriptions and catch-up (evs_subscribe.go), with its own lock
 	subscriber *evsSubscriber
+	// the prefix write rules' reader, nil until a composition enables it (EnablePrefixRules, evs_prefix.go)
+	prefixReads evsPrefixReader
 }
 
 // A ref of a repo.
