@@ -53,6 +53,8 @@ const (
 	SearchCachePartMismatch SearchCachePart = "mismatch"
 	// Desktops: the local vocabulary, words with their document counts.
 	SearchCachePartVocabulary SearchCachePart = "vocabulary"
+	// The ref's sync plan: the round in progress toward a newer version of the ref (DESIGN-DETAILS 7.2.7).
+	SearchCachePartPlan SearchCachePart = "plan"
 )
 
 // The path a part of a whole ref names, where no index file's or root's does.
@@ -64,7 +66,7 @@ func searchCachePartOfFile(part SearchCachePart) (ofFile bool, known bool) {
 	case SearchCachePartBlockIndex, SearchCachePartDocCounts:
 		return true, true
 	case SearchCachePartFile, SearchCachePartManifest, SearchCachePartVersionTable, SearchCachePartLocalLayer,
-		SearchCachePartMismatch, SearchCachePartVocabulary:
+		SearchCachePartMismatch, SearchCachePartVocabulary, SearchCachePartPlan:
 		return false, true
 	}
 	return false, false
@@ -188,6 +190,50 @@ func (self *SearchCache) OpenDerived(key SearchCacheKey, part SearchCachePart) (
 		return nil, self.derivedFailed(key, part, err)
 	}
 	return &SearchCacheFrames{cache: self, key: key, base: base, meta: meta}, nil
+}
+
+// The versions a part of a ref or root is kept at under path, ascending, each with its meta written: a part written
+// whole at a new version before the older goes, as the search manifest and the sync plan are (DESIGN-DETAILS 7.2.7),
+// so a kill leaves one whole copy.
+func (self *SearchCache) DerivedVersions(repoId Id, refId Id, path string, part SearchCachePart) ([]uint64, error) {
+	if ofFile, known := searchCachePartOfFile(part); ofFile || !known {
+		return nil, fmt.Errorf("%w: no ref-level part %q", ErrSearchCacheUnnamed, part)
+	}
+	prefix := searchCacheRefName(repoId, refId) + "/p" + hex.EncodeToString([]byte(path)) + "/"
+	entries, err := self.store.List(prefix)
+	if err != nil {
+		return nil, err
+	}
+	versions := []uint64{}
+	suffix := "/" + string(part) + "/" + searchCacheMetaName
+	for _, entry := range entries {
+		rest, ok := strings.CutSuffix(strings.TrimPrefix(entry.Name, prefix), suffix)
+		if !ok || strings.Contains(rest, "/") {
+			continue
+		}
+		version, err := strconv.ParseUint(rest, 10, 64)
+		if err != nil {
+			continue
+		}
+		versions = append(versions, version)
+	}
+	slices.Sort(versions)
+	return slices.Compact(versions), nil
+}
+
+// Takes a derived part away, meta first: a part of a ref or root, or a file's part while its file stays. A reproduced
+// file goes through Remove, which drops its holdings entry too.
+func (self *SearchCache) RemoveDerived(key SearchCacheKey, part SearchCachePart) error {
+	if err := key.check(); err != nil {
+		return err
+	}
+	if _, known := searchCachePartOfFile(part); !known || part == SearchCachePartFile {
+		return fmt.Errorf("%w: no derived part %q", ErrSearchCacheUnnamed, part)
+	}
+	self.operationLock.Lock()
+	defer self.operationLock.Unlock()
+	self.decoded.dropPrefix(searchCachePartName(key, string(part)))
+	return self.removeUnder(searchCachePartName(key, string(part)))
 }
 
 // The plaintext's length.

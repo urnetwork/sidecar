@@ -153,12 +153,16 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 	}
 	identity := self.client.args.Identity()
 	timeMs := self.client.clock.Now().UnixMilli()
+	if plan.SignedTimeMs != 0 {
+		// the index's entries name this time, and their buckets are chosen by it (§11.14's in-ref row)
+		timeMs = plan.SignedTimeMs
+	}
 	pushPlan := &EvsPushPlan{
 		RepoId: plan.RepoId, RefId: plan.RefId, RefKind: plan.RefKind, RefMode: plan.RefMode, OwnerSidecarId: plan.OwnerSidecarId,
 		PushId: pushId, BaseVersion: plan.BaseVersion, BaseChain: plan.BaseChain, Generation: repoKey.Generation(),
 		GroupId: repoKey.GroupId(), GenerationCommitment: repoKey.Commitment(), PathEpoch: plan.PathEpoch, Auth: authPin,
 		SignerSidecarId: identity.SidecarId, ClientId: identity.ClientId, TimeMs: timeMs, SourcesStand: 0 < len(plan.Sources),
-		Flags: plan.Flags, Erased: plan.Erased,
+		Flags: plan.Flags, Erased: plan.Erased, IndexEpoch: plan.IndexEpoch,
 	}
 	manifest, err := NewEvsManifestKey(repoKey)
 	if err != nil {

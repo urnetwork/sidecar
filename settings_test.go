@@ -223,6 +223,17 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				VersionPageByteCount:            4 * 1024,
 				VersionMergeInputCount:          16,
 				VersionMergeByteCount:           1024 * 1024,
+				// DESIGN-DETAILS 7.2.1's sync settings; the restart bound is a reading
+				ResyncInterval:    1 * time.Hour,
+				SyncRoundCount:    4,
+				SyncRetryInterval: 30 * time.Second,
+				PinRingCount:      64,
+				RetainFactor:      2,
+				SyncRestartCount:  4,
+				// QD-511's companion interval; the journal's bound and the build count are readings
+				CompanionInterval:     5 * time.Minute,
+				JournalByteCount:      64 * 1024 * 1024,
+				CompanionAttemptCount: 8,
 			},
 		},
 		// §5.4's directory settings

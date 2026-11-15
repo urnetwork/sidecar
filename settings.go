@@ -345,6 +345,32 @@ type SidecarSearchSettings struct {
 	// What one pass of the version table's merge holds in all, its inputs' buffers counted: 1 MiB (§5.9's versions
 	// row).
 	VersionMergeByteCount int64
+	// §11.14's hourly resync of each index ref this device follows for search: 1 h (DESIGN-DETAILS 7.2.1).
+	ResyncInterval time.Duration
+	// Sync rounds at once a network: 4 on daemon hosts, 1 on app hosts and page Workers, whose hosts set it
+	// (DESIGN-DETAILS 7.2.1).
+	SyncRoundCount int
+	// A round that failed on a read is tried again after this, doubling up to ResyncInterval: 30 s (DESIGN-DETAILS
+	// 7.2.1).
+	SyncRetryInterval time.Duration
+	// The (version, chain) pairs replayed that a ref's manifest keeps, to match a coverage's pin: 64 (DESIGN-DETAILS
+	// 7.2.1, 7.2.6).
+	PinRingCount int
+	// A retained bucket lives at most this many of its windows after its roll-up: 2 (§11.14's retained row,
+	// DESIGN-DETAILS 7.2.1).
+	RetainFactor int
+	// A round a read answered collected restarts on the new head at most this many times, then waits for
+	// SyncRetryInterval: 4, a reading, since DESIGN-DETAILS 7.2.7 bounds the restarts nowhere.
+	SyncRestartCount int
+	// A committer's companion push on ur/index at most this often while its journal holds a committed unit: 5 min on
+	// every host, moving to 1 min once D-TEST-11 fixes 1 KiB blocks (QD-511, §11.14's companion row).
+	CompanionInterval time.Duration
+	// The journal past which its oldest units lose their key sets, keeping their documents' keys and versions: 64 MiB,
+	// a reading, since DESIGN-DETAILS 1.2.6 names the bound and no value.
+	JournalByteCount int64
+	// Builds of one companion push, the first included, before it gives up on the refusals it rebuilds after: 8, a
+	// reading, as the backfill's.
+	CompanionAttemptCount int
 }
 
 // Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
@@ -922,6 +948,15 @@ func DefaultSidecarSettings() *SidecarSettings {
 			VersionPageByteCount:            4 * 1024,
 			VersionMergeInputCount:          16,
 			VersionMergeByteCount:           1024 * 1024,
+			ResyncInterval:                  1 * time.Hour,
+			SyncRoundCount:                  4,
+			SyncRetryInterval:               30 * time.Second,
+			PinRingCount:                    64,
+			RetainFactor:                    2,
+			SyncRestartCount:                4,
+			CompanionInterval:               5 * time.Minute,
+			JournalByteCount:                64 * 1024 * 1024,
+			CompanionAttemptCount:           8,
 		},
 		Directory: &SidecarDirectorySettings{
 			SessionSyncInterval:   15 * time.Minute,

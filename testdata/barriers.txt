@@ -250,6 +250,8 @@ barrier evs.head.read.after evsservice/head.go
 barrier evs.head.read.before evsservice/head.go
 barrier evs.index.backfill.built evs_index_backfill.go
 barrier evs.index.backfill.pushed evs_index_backfill.go
+barrier evs.index.companion.built evs_index_companion.go
+barrier evs.index.companion.pushed evs_index_companion.go
 barrier evs.index.merge.built evs_index_merge_runner.go
 barrier evs.index.merge.pushed evs_index_merge_runner.go
 barrier evs.index.merge.uploaded evs_index_merge_runner.go
@@ -593,6 +595,11 @@ barrier rpc.marked_pair_tick.before rpc_marked_pair.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go
+barrier search.sync.fetched search_fetch.go
+barrier search.sync.replayed search_sync.go
+barrier search.sync.retired search_sync.go
+barrier search.sync.swapped search_retained.go
+barrier search.sync.tables search_retained.go
 barrier setup_cache.rename.after smtpproof/setup_cache.go
 barrier setup_cache.rename.before smtpproof/setup_cache.go
 barrier setup_keys.shape_state.after smtpproof/setup_keys.go
