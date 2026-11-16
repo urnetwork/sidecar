@@ -75,8 +75,8 @@ func (self *fs86State) run(ctx context.Context, store *sidecartest.DirectoryLoad
 func Fs86DirectoryScale(net *Net) *Schedule {
 	state := &fs86State{ceilings: sidecartest.DefaultDirectoryLoadCeilings()}
 	state.settings = sidecartest.DefaultDirectoryLoadSettings()
-	state.settings.MemberCount = 24
-	state.settings.SampledReaderCount = 3
+	state.settings.MemberCount = 16
+	state.settings.SampledReaderCount = 2
 	// a cap a small team's day passes
 	state.directory = sidecar.DefaultSidecarSettings().Directory
 	state.directory.PhoneMeteredByteCount = 128 * 1024
