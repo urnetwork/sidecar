@@ -55,11 +55,6 @@ type evsExportPath struct {
 // A tree's state: every file path, by its names joined with a NUL, which no name holds.
 type evsExportState map[string]*evsExportPath
 
-// The state's key for names.
-func evsExportKey(names [][]byte) string {
-	return string(bytes.Join(names, []byte{0}))
-}
-
 // Writes git's loose objects and refs into a bare repository. It keeps nothing per object: the repository's files
 // answer what it holds, so an export's memory does not grow with its history (DESIGN-DETAILS 8.2.7).
 type evsGitObjectWriter struct {
@@ -472,17 +467,4 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 		return nil, nil, err
 	}
 	return &EvsExportedRef{GitRef: gitRef, Tip: *tip, Versions: head.Version, Ignored: ignored}, notes, nil
-}
-
-// Whether names is prefix or a path below it.
-func evsNamesHavePrefix(names [][]byte, prefix [][]byte) bool {
-	if len(names) < len(prefix) {
-		return false
-	}
-	for i, name := range prefix {
-		if !bytes.Equal(names[i], name) {
-			return false
-		}
-	}
-	return true
 }
