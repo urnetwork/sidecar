@@ -185,7 +185,7 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
-		row: "legs", item: "a root file of the sidecar_http js leg importing a connect package (from M1), the leg linking connect only through operator-core's Id (owner decision 251)",
+		row: "legs", item: "the sidecar_http js leg's deps including any connect, gVisor or operator-core package (from M1; QD-856, amending owner decision 251 for this leg)",
 		rule: func(self *repository, t testing.TB) []string {
 			return rowOff(self.report, self.settings.switches.sidecarHttpLinksNoConnect, "sidecarHttpLinksNoConnect", self.sidecarHttpFindings(t))
 		},
@@ -194,7 +194,7 @@ var failsOnRows = []failsOnRow{
 		},
 		plantedTests: []string{
 			"TestLegsFailsOnSidecarHttpLinkingConnect", "TestLegsFailsOnSidecarHttpLinkingGvisor",
-			"TestLegsFailsOnSidecarHttpThroughProtocol", "TestLegsAllowsSidecarHttpLinkingConnectThroughOperatorCore",
+			"TestLegsFailsOnSidecarHttpThroughProtocol", "TestLegsFailsOnSidecarHttpLinkingOperatorCore",
 		},
 	},
 	{
@@ -705,7 +705,7 @@ func TestEachSwitchGovernsItsRow(t *testing.T) {
 		legs  []string
 	}{
 		{
-			item: "a root file of the sidecar_http js leg importing a connect package (from M1), the leg linking connect only through operator-core's Id (owner decision 251)",
+			item: "the sidecar_http js leg's deps including any connect, gVisor or operator-core package (from M1; QD-856, amending owner decision 251 for this leg)",
 			plant: func(fixture *fixture) {
 				fixture.edit("connect_require.go", "//go:build !sidecar_http\n\n", "")
 			},
