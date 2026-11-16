@@ -90,7 +90,7 @@ func (self *evsTestLfsRepo) lfs() *EvsLfsGitRepo {
 
 // A canonical v1 pointer to content named by n.
 func evsTestLfsPointer(n int) string {
-	return fmt.Sprintf("version https://git-lfs.github.com/spec/v1\noid sha256:%064x\nsize %d\n", n, 1000+n)
+	return fmt.Sprintf("version %s\noid sha256:%064x\nsize %d\n", evsLfsPointerVersions[0], n, 1000+n)
 }
 
 // The oid evsTestLfsPointer(n) names.
@@ -299,28 +299,31 @@ func TestEvsLfsRequiredDiffJudgesOnlyChangedPaths(t *testing.T) {
 // else is no pointer.
 func TestEvsLfsParsePointer(t *testing.T) {
 	hex := strings.Repeat("ab", 32)
-	canonical := "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex + "\nsize 12345\n"
+	// the spec's version strings, from the parser's own list
+	v1, prerelease := "version "+evsLfsPointerVersions[0], "version "+evsLfsPointerVersions[1]
+	v2 := strings.TrimSuffix(v1, "1") + "2"
+	canonical := v1 + "\noid sha256:" + hex + "\nsize 12345\n"
 	cases := []struct {
 		data string
 		ok   bool
 	}{
 		{data: canonical, ok: true},
-		{data: "version https://hawser.github.com/spec/v1\noid sha256:" + hex + "\nsize 0\n", ok: true},
-		{data: "version https://git-lfs.github.com/spec/v1\next-0-foo sha256:" + hex + "\next-1-bar sha256:" + hex + "\noid sha256:" + hex + "\nsize 1\n", ok: true},
-		{data: "version https://git-lfs.github.com/spec/v1\next-1-bar sha256:" + hex + "\next-0-foo sha256:" + hex + "\noid sha256:" + hex + "\nsize 1\n", ok: false},
+		{data: prerelease + "\noid sha256:" + hex + "\nsize 0\n", ok: true},
+		{data: v1 + "\next-0-foo sha256:" + hex + "\next-1-bar sha256:" + hex + "\noid sha256:" + hex + "\nsize 1\n", ok: true},
+		{data: v1 + "\next-1-bar sha256:" + hex + "\next-0-foo sha256:" + hex + "\noid sha256:" + hex + "\nsize 1\n", ok: false},
 		{data: strings.TrimSuffix(canonical, "\n"), ok: false},
 		{data: strings.ReplaceAll(canonical, "\n", "\r\n"), ok: false},
 		{data: strings.ToUpper(canonical[:0]) + strings.Replace(canonical, hex, strings.ToUpper(hex), 1), ok: false},
-		{data: "version https://git-lfs.github.com/spec/v2\noid sha256:" + hex + "\nsize 1\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\noid sha1:" + hex[:40] + "\nsize 1\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex[:62] + "\nsize 1\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex + "\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex + "\nsize -1\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex + "\nsize 1x\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\noid sha256:" + hex + "\nsize 1\nextra 1\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\nsize 1\noid sha256:" + hex + "\n", ok: false},
-		{data: "oid sha256:" + hex + "\nversion https://git-lfs.github.com/spec/v1\nsize 1\n", ok: false},
-		{data: "version https://git-lfs.github.com/spec/v1\n\noid sha256:" + hex + "\nsize 1\n", ok: false},
+		{data: v2 + "\noid sha256:" + hex + "\nsize 1\n", ok: false},
+		{data: v1 + "\noid sha1:" + hex[:40] + "\nsize 1\n", ok: false},
+		{data: v1 + "\noid sha256:" + hex[:62] + "\nsize 1\n", ok: false},
+		{data: v1 + "\noid sha256:" + hex + "\n", ok: false},
+		{data: v1 + "\noid sha256:" + hex + "\nsize -1\n", ok: false},
+		{data: v1 + "\noid sha256:" + hex + "\nsize 1x\n", ok: false},
+		{data: v1 + "\noid sha256:" + hex + "\nsize 1\nextra 1\n", ok: false},
+		{data: v1 + "\nsize 1\noid sha256:" + hex + "\n", ok: false},
+		{data: "oid sha256:" + hex + "\n" + v1 + "\nsize 1\n", ok: false},
+		{data: v1 + "\n\noid sha256:" + hex + "\nsize 1\n", ok: false},
 		{data: canonical + strings.Repeat(" ", 1024), ok: false},
 		{data: "", ok: false},
 	}
