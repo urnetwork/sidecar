@@ -481,10 +481,13 @@ func TestEvsLocalReceiveHeldQueueReleasedByRetry(t *testing.T) {
 }
 
 // The receiving device as signer from here: the writer's client signs as it, and a clone's commits carry its client.
+// It answers one update at a time: the tests' clock fires every timer at once, so two updates contending for a ref's
+// lock would time out at once, which no answer here is about.
 func (self *evsTestGitRules) receiverAs(signer *evsTestSigner) *evsTestReceiver {
 	self.t.Helper()
 	receiver := newEvsTestReceiver(self.t, self.publisher)
 	client := self.publisher.writer.test.client
+	client.settings.ReceiveRefCount = 1
 	as := &SidecarIdentity{NetworkId: testNetworkId, SidecarId: signer.sidecarId, ClientId: self.clientOf(signer)}
 	client.args.Identity = func() *SidecarIdentity { return as }
 	client.args.Sign = signer.sign
@@ -699,10 +702,12 @@ func TestEvsLocalReceivePrefixNewSharedRefs(t *testing.T) {
 	}
 }
 
-// With no rule set, one push of two tags and two branches reports each status, the branches published first.
+// With no rule set, one push of two tags and two branches reports each status, the branches published first. One
+// update at a time, as receiverAs says.
 func TestEvsLocalReceivePublishesBranchesBeforeTags(t *testing.T) {
 	publisher := newEvsTestPublisher(t)
 	receiver := newEvsTestReceiver(t, publisher)
+	publisher.writer.test.client.settings.ReceiveRefCount = 1
 	for _, name := range []string{"b2", "refs/tags/t1", "refs/tags/t2"} {
 		publisher.ref(name)
 	}
