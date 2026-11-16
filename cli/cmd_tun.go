@@ -3,9 +3,10 @@
 // bridge is on (the bridge component is an active one, §5.8).
 //
 //	ur tun [--network=<name>]                 brings the tun up over the network's bridge: the block and the granted
-//	                                          prefixes, and the default route under the egress mode exits, the
-//	                                          daemon's own transport kept off it by connect's egress mark (QD-800);
-//	                                          it yields to an app's bridge
+//	                                          prefixes, and the default route under the egress mode exits, IPv6's
+//	                                          beside IPv4's though no exit carries IPv6, which goes nowhere (QD-881),
+//	                                          the daemon's own transport kept off it by connect's egress mark
+//	                                          (QD-800); it yields to an app's bridge
 //	ur tun down                               ends it, removing its routes
 //	ur tun ip [<ip> | auto] [--network=<name>]
 //	                                          shows this host's overlay address and the block, or claims an address in
@@ -304,8 +305,9 @@ func printUrTunStatus(cli *urCli, status *urTunStatus) {
 	cli.printf("  egress     %s\n", status.EgressMode)
 	switch {
 	case status.DefaultRoute:
-		cli.printf("  exits      the default route rides ur tun to the network's exits; the daemon's own transport " +
-			"keeps today's route by its mark, and so does IPv6, which ur tun does not carry\n")
+		cli.printf("  exits      the default route rides ur tun to the network's exits, and the daemon's own transport " +
+			"keeps today's route; IPv6 goes nowhere, since no exit carries it: ur tun drops it, and the host falls back " +
+			"to IPv4\n")
 	case status.ExitsHeld && status.ExitsHeldReason != "":
 		cli.printf("  exits      held: %s; other traffic keeps today's route, and ur tun tries again\n", status.ExitsHeldReason)
 	case status.ExitsHeld:

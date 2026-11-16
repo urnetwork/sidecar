@@ -10,3 +10,8 @@ _r = json.loads((_here / 'v10reg.json').read_text())
 D.update(_r['D'])
 Q.update({k: tuple(v) for k, v in _r['Q'].items()})
 QSTATUS = {k: tuple(v) for k, v in json.loads((_here / 'v10' / 'qstatus_final.json').read_text()).items()}
+# QD-425 (2026-11-16): a share is served while the sharing sidecar runs (§9.9), and D-SOCK-16's row names its expiry.
+assert Q['Q-CTX-4'][1].count("while `ur share` runs") == 1 and 'expiry' not in D['D-SOCK-16'], 'share rows moved'
+Q['Q-CTX-4'] = (Q['Q-CTX-4'][0], Q['Q-CTX-4'][1].replace("while `ur share` runs", "while the sharing sidecar runs"))
+D['D-SOCK-16'] = ("`ur share`, a live sharer: blinded `share/<token>` socket, fragment secret, durable use count, expiry "
+                  "(24 h default, 30 days most).")

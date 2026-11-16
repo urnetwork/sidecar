@@ -46,6 +46,8 @@ type Bridge struct {
 	reject     *BridgeRejectClient
 	resolver   *BridgeResolverClient
 	routeState atomic.Pointer[bridgeRouteState]
+	// what Route hands an IPv6 packet under exits, which drops and counts it (QD-881)
+	ipv6Drop *bridgeDropClient
 	// §12.9's names of the state in force, nil for none, and the LocalZone that reads them
 	zone     atomic.Pointer[BridgeZone]
 	zoneView *bridgeZoneView
@@ -118,6 +120,7 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		pins:              NewBridgePinTable(settings),
 		links:             NewBridgeLinkManager(cancelCtx, host, settings),
 		reject:            NewBridgeRejectClient(nil, settings),
+		ipv6Drop:          &bridgeDropClient{},
 		policy:            NewBridgeEgressPolicy(settings.PolicyProfile, settings),
 		closers:           connect.NewCallbackList[connect.EgressFlowCloser](),
 		changeCallbacks:   connect.NewCallbackList[func()](),
@@ -227,6 +230,7 @@ func (self *Bridge) Status() BridgeStatus {
 		LinkBuildingCount:      linkBuildingCount,
 		RejectSentCount:        rejectSentCount,
 		RejectUnsentCount:      rejectUnsentCount,
+		Ipv6DroppedCount:       self.ipv6Drop.droppedCount.Load(),
 		HeldRejectCount:        self.routeFindings.heldCount,
 		RouteConflictCount:     self.routeFindings.conflictCount,
 		EgressMode:             self.egressMode,

@@ -1,7 +1,7 @@
 // The seam each platform's ur tun sits behind (tun_device.go), on every GOOS a CI leg runs: each system the release
 // builds has a platform, a privilege refusal reads in its platform's words and is errUrTunPrivilege still, the read
 // leaves the headroom a utun's family header needs, a device the platform names keeps that name, the exits' halves
-// cover IPv4 whole, and a zone only names a resolver file or rule when it is a DNS name. tun_darwin_test.go,
+// cover IPv4 whole and IPv6's IPv6, and a zone only names a resolver file or rule when it is a DNS name. tun_darwin_test.go,
 // tun_windows_test.go and tun_linux_test.go hold each platform's own.
 
 package main
@@ -50,6 +50,35 @@ func TestTunPrivilegeErrorReadsAsThePlatformSays(t *testing.T) {
 	}
 	if errors.Is(errors.New("another"), errUrTunPrivilege) {
 		t.Fatal("any error is the refusal")
+	}
+}
+
+// IPv6's halves are /1s, apart, and together all of IPv6, as IPv4's are of IPv4, so the default route they make under
+// exits takes every IPv6 address the host's own default would (QD-881).
+func TestTunExitsIpv6HalvesCoverIpv6(t *testing.T) {
+	halves := urTunExitsIpv6Halves()
+	if len(halves) != 2 || halves[0].Overlaps(halves[1]) {
+		t.Fatalf("halves %v", halves)
+	}
+	for _, address := range []string{"::", "::1", "2001:db8::1", "7fff:ffff::1", "8000::", "fe80::1", "ff02::1",
+		"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"} {
+		inside := 0
+		for _, half := range halves {
+			if half.Bits() != 1 || !half.Addr().Is6() {
+				t.Fatalf("a half %s", half)
+			}
+			if half.Contains(netip.MustParseAddr(address)) {
+				inside += 1
+			}
+		}
+		if inside != 1 {
+			t.Fatalf("%s is in %d halves", address, inside)
+		}
+	}
+	for _, half := range urTunExitsHalves() {
+		if !half.Addr().Is4() {
+			t.Fatalf("IPv4's half %s", half)
+		}
 	}
 }
 

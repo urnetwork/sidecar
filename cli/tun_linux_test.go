@@ -12,6 +12,7 @@
 //	docker run --rm --name sidecar-test-tun-nodevice --cap-add NET_ADMIN -e UR_TUN_TEST_DEVICE=nodevice \
 //	    -v <dir>:/t:ro alpine:3.22 /t/cli.test -test.run TestTunLinuxNamesAMissingDevice -test.v
 //	docker run --rm --name sidecar-test-tun-isolated --network none --cap-add NET_ADMIN --device /dev/net/tun \
+//	    --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv6.conf.default.disable_ipv6=0 \
 //	    -e UR_TUN_TEST_DEVICE=isolated -v <dir>:/t:ro alpine:3.22 /t/cli.test -test.run TestTunLinux -test.v
 //
 // The device comes up with the host's overlay address and the bridge's routes, a ping to a fixture peer's address rides
@@ -20,7 +21,9 @@
 // open refuses with errUrTunPrivilege, not a crash. In a namespace with no network, a tun of the test's stands for the
 // physical path, and under exits the bridge's carved addresses leave by it rather than ur tun (QD-808). Every wait is a
 // read with urTestTimeout's deadline. The exits' rules and routes and their throws are also tested through a netlink
-// recorder that changes no host, which runs on any Linux.
+// recorder that changes no host, which runs on any Linux, IPv6's half among them (QD-881): in that namespace with IPv6
+// on, a datagram an unmarked socket sends to an IPv6 address beyond the host rides ur tun, and one a socket carrying the
+// exits mark sends, as the daemon's own do, leaves by the test's tun.
 
 package main
 
@@ -438,10 +441,15 @@ type testTunNetlink struct {
 	fail func(n int, messageType uint16) error
 	// what each add of a throw route answers ahead of fail, nil for none
 	throwErr error
-	routes   []urTunLinuxRoute
-	rules    []urTunLinuxRule
-	sent     int
+	// what a request answers by its family and type ahead of fail, nil for none
+	refuse func(family uint8, messageType uint16) error
+	routes []urTunLinuxRoute
+	rules  []urTunLinuxRule
+	sent   int
 }
+
+// IPv4 multicast routing's family of policy rules (RTNL_FAMILY_IPMR), which x/sys does not name.
+const testTunLinuxIpmrFamily = 128
 
 var _ urTunNetlink = (*testTunNetlink)(nil)
 
@@ -454,6 +462,11 @@ func (self *testTunNetlink) Request(messageType uint16, flags uint16, body []byt
 	if self.throwErr != nil && messageType == unix.RTM_NEWROUTE && unix.SizeofRtMsg <= len(body) && body[7] == unix.RTN_THROW {
 		return self.throwErr
 	}
+	if self.refuse != nil && 0 < len(body) {
+		if err := self.refuse(body[0], messageType); err != nil {
+			return err
+		}
+	}
 	if self.fail != nil {
 		return self.fail(n, messageType)
 	}
@@ -465,6 +478,13 @@ func (self *testTunNetlink) setThrowErr(throwErr error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.throwErr = throwErr
+}
+
+// Sets what a request answers by its family and type.
+func (self *testTunNetlink) setRefuse(refuse func(family uint8, messageType uint16) error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.refuse = refuse
 }
 
 func (self *testTunNetlink) Routes(family int) ([]urTunLinuxRoute, error) {
@@ -515,8 +535,8 @@ func testTunReversePathFilters(t *testing.T, values map[string]int) string {
 	return path
 }
 
-// An interface at index 7 on a recorded system, whose main table's default route leaves by eth0 at index 2 and whose
-// reverse path filters are loose.
+// An interface at index 7 on a recorded system, whose main table's default routes, IPv4's and IPv6's, leave by eth0 at
+// index 2 and whose reverse path filters are loose.
 func newTestTunLinuxExits(t *testing.T) (*urTunLinuxInterface, *testTunNetlink) {
 	t.Helper()
 	netlink := &testTunNetlink{
@@ -538,10 +558,21 @@ func newTestTunLinuxExits(t *testing.T) (*urTunLinuxInterface, *testTunNetlink) 
 				dst:       netip.MustParsePrefix("192.0.2.0/24"),
 				oifs:      []int{2},
 			},
+			testTunLinuxIpv6DefaultRoute(),
+			{
+				family:    unix.AF_INET6,
+				table:     unix.RT_TABLE_MAIN,
+				protocol:  unix.RTPROT_KERNEL,
+				routeType: unix.RTN_UNICAST,
+				dst:       netip.MustParsePrefix("2001:db8::/64"),
+				oifs:      []int{2},
+			},
 		},
 		rules: []urTunLinuxRule{
 			{family: unix.AF_INET, table: unix.RT_TABLE_LOCAL, action: unix.FR_ACT_TO_TBL, suppressPrefixLength: -1},
 			{family: unix.AF_INET, table: unix.RT_TABLE_MAIN, action: unix.FR_ACT_TO_TBL, priority: 32766, suppressPrefixLength: -1},
+			{family: unix.AF_INET6, table: unix.RT_TABLE_LOCAL, action: unix.FR_ACT_TO_TBL, suppressPrefixLength: -1},
+			{family: unix.AF_INET6, table: unix.RT_TABLE_MAIN, action: unix.FR_ACT_TO_TBL, priority: 32766, suppressPrefixLength: -1},
 		},
 	}
 	system := newUrTunLinuxSystem(testUrTunSettings(), nil).(*urTunLinuxSystem)
@@ -556,6 +587,37 @@ func newTestTunLinuxExits(t *testing.T) (*urTunLinuxInterface, *testTunNetlink) 
 	system.setEgressMark = netlink.setEgressMark
 	system.networkChanged = netlink.networkChanged
 	return &urTunLinuxInterface{system: system, name: "ur-test", index: 7}, netlink
+}
+
+// The IPv6 default route of the recorded system's main table, by eth0's router, as a router advertisement leaves it.
+func testTunLinuxIpv6DefaultRoute() urTunLinuxRoute {
+	return urTunLinuxRoute{
+		family:    unix.AF_INET6,
+		table:     unix.RT_TABLE_MAIN,
+		protocol:  unix.RTPROT_RA,
+		routeType: unix.RTN_UNICAST,
+		dst:       netip.MustParsePrefix("::/0"),
+		oifs:      []int{2},
+		gateways:  []netip.Addr{netip.MustParseAddr("fe80::1")},
+	}
+}
+
+// Takes the recorded system's IPv6 default route out of its main table, as on a host whose IPv6 reaches no further than
+// its own links.
+func (self *testTunNetlink) dropIpv6DefaultRoute() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.routes = slices.DeleteFunc(self.routes, func(route urTunLinuxRoute) bool {
+		return route.family == unix.AF_INET6 && route.dst.Bits() == 0
+	})
+}
+
+// The family of a route or rule message, its body's first byte.
+func testTunEventFamily(event testTunNetlinkEvent) uint8 {
+	if len(event.body) == 0 {
+		return 0
+	}
+	return event.body[0]
 }
 
 // A route message's body as the kernel reads it: the header's table, protocol, scope and type, and its attributes.
@@ -650,8 +712,9 @@ func testTunThrowAddrs(iface *urTunLinuxInterface) []netip.Addr {
 }
 
 // The exits put on the mark first, then the default route through the device in the exits table, then wg-quick's two
-// rules, `lookup main suppress_prefixlength 0` ahead of `not fwmark <mark> lookup <table>`, each ur's, and kick connect
-// once they are on; asked again, they send nothing more.
+// rules, `lookup main suppress_prefixlength 0` ahead of `not fwmark <mark> lookup <table>`, each ur's; then IPv6's
+// default route in the same table and its two rules alike (QD-881), so the daemon's marked IPv6 sockets pass by IPv6's
+// rule as its IPv4 ones pass by IPv4's; and kick connect once they are on; asked again, they send nothing more.
 func TestTunLinuxExitsInstallWgQuicksRules(t *testing.T) {
 	iface, netlink := newTestTunLinuxExits(t)
 	settings := iface.system.settings
@@ -660,43 +723,51 @@ func TestTunLinuxExitsInstallWgQuicksRules(t *testing.T) {
 		t.Fatalf("on: %t %v", defaultRoute, err)
 	}
 	events, kickCount := netlink.take()
-	if len(events) != 4 || kickCount != 1 {
+	if len(events) != 7 || kickCount != 1 {
 		t.Fatalf("%d events, %d kicks", len(events), kickCount)
 	}
 	if events[0].messageType != 0 || events[0].mark != settings.ExitsMark {
 		t.Fatalf("the mark did not go on first: %+v", events[0])
 	}
-	route := events[1]
-	message := testTunParseRouteBody(route.body)
-	if route.messageType != unix.RTM_NEWROUTE || route.flags != unix.NLM_F_CREATE|unix.NLM_F_EXCL ||
-		message.family != unix.AF_INET || message.dstBits != 0 || message.hasDst || message.table != settings.ExitsTable ||
-		message.protocol != urTunRouteProtocol || message.scope != unix.RT_SCOPE_LINK || message.routeType != unix.RTN_UNICAST ||
-		message.oif != 7 {
-		t.Fatalf("the default route: %+v %+v", route, message)
-	}
-	suppress := urTunLinuxParseRule(events[2].body)
-	if events[2].messageType != unix.RTM_NEWRULE || events[2].flags != unix.NLM_F_CREATE|unix.NLM_F_EXCL ||
-		suppress.family != unix.AF_INET || suppress.action != unix.FR_ACT_TO_TBL || suppress.flags != 0 ||
-		suppress.table != unix.RT_TABLE_MAIN || suppress.priority != settings.ExitsRulePriority ||
-		suppress.suppressPrefixLength != 0 || suppress.markSet || suppress.protocol != urTunRouteProtocol {
-		t.Fatalf("the suppress rule: %+v", suppress)
-	}
-	mark := urTunLinuxParseRule(events[3].body)
-	if events[3].messageType != unix.RTM_NEWRULE || mark.family != unix.AF_INET || mark.action != unix.FR_ACT_TO_TBL ||
-		mark.flags != unix.FIB_RULE_INVERT || mark.table != settings.ExitsTable ||
-		mark.priority != settings.ExitsRulePriority+1 || !mark.markSet || mark.mark != settings.ExitsMark ||
-		mark.suppressPrefixLength != -1 || mark.protocol != urTunRouteProtocol {
-		t.Fatalf("the mark rule: %+v", mark)
-	}
-	// the mark rule's mask is every bit, as `fwmark M` without a mask is
-	var mask uint32
-	for _, attribute := range urNetlinkAttributes(events[3].body[urTunLinuxRuleHeaderByteCount:]) {
-		if attribute.attributeType == unix.FRA_FWMASK {
-			mask = binary.NativeEndian.Uint32(attribute.value)
+	for i, family := range []uint8{unix.AF_INET, unix.AF_INET6} {
+		route := events[1+3*i]
+		message := testTunParseRouteBody(route.body)
+		scope := uint8(unix.RT_SCOPE_LINK)
+		if family == unix.AF_INET6 {
+			scope = unix.RT_SCOPE_UNIVERSE
 		}
-	}
-	if mask != math.MaxUint32 {
-		t.Fatalf("the mark rule's mask %#x", mask)
+		if route.messageType != unix.RTM_NEWROUTE || route.flags != unix.NLM_F_CREATE|unix.NLM_F_EXCL ||
+			message.family != family || message.dstBits != 0 || message.hasDst || message.table != settings.ExitsTable ||
+			message.protocol != urTunRouteProtocol || message.scope != scope || message.routeType != unix.RTN_UNICAST ||
+			message.oif != 7 {
+			t.Fatalf("family %d's default route: %+v %+v", family, route, message)
+		}
+		suppressEvent := events[2+3*i]
+		suppress := urTunLinuxParseRule(suppressEvent.body)
+		if suppressEvent.messageType != unix.RTM_NEWRULE || suppressEvent.flags != unix.NLM_F_CREATE|unix.NLM_F_EXCL ||
+			suppress.family != family || suppress.action != unix.FR_ACT_TO_TBL || suppress.flags != 0 ||
+			suppress.table != unix.RT_TABLE_MAIN || suppress.priority != settings.ExitsRulePriority ||
+			suppress.suppressPrefixLength != 0 || suppress.markSet || suppress.protocol != urTunRouteProtocol {
+			t.Fatalf("family %d's suppress rule: %+v", family, suppress)
+		}
+		markEvent := events[3+3*i]
+		mark := urTunLinuxParseRule(markEvent.body)
+		if markEvent.messageType != unix.RTM_NEWRULE || mark.family != family || mark.action != unix.FR_ACT_TO_TBL ||
+			mark.flags != unix.FIB_RULE_INVERT || mark.table != settings.ExitsTable ||
+			mark.priority != settings.ExitsRulePriority+1 || !mark.markSet || mark.mark != settings.ExitsMark ||
+			mark.suppressPrefixLength != -1 || mark.protocol != urTunRouteProtocol {
+			t.Fatalf("family %d's mark rule: %+v", family, mark)
+		}
+		// the mark rule's mask is every bit, as `fwmark M` without a mask is
+		var mask uint32
+		for _, attribute := range urNetlinkAttributes(markEvent.body[urTunLinuxRuleHeaderByteCount:]) {
+			if attribute.attributeType == unix.FRA_FWMASK {
+				mask = binary.NativeEndian.Uint32(attribute.value)
+			}
+		}
+		if mask != math.MaxUint32 {
+			t.Fatalf("family %d's mark rule's mask %#x", family, mask)
+		}
 	}
 	defaultRoute, err = iface.SetExits(true)
 	if events, kickCount := netlink.take(); err != nil || !defaultRoute || len(events) != 0 || kickCount != 1 {
@@ -704,8 +775,8 @@ func TestTunLinuxExitsInstallWgQuicksRules(t *testing.T) {
 	}
 }
 
-// Off exits the rules come off before the route, the one that sends traffic to the tun first, each delete naming ur's
-// own, and the mark last; asked again, nothing more is sent.
+// Off exits IPv4's rules come off before its route, the one that sends traffic to the tun first, each delete naming
+// ur's own, then IPv6's the same way, and the mark last; asked again, nothing more is sent.
 func TestTunLinuxExitsComeOffInReverse(t *testing.T) {
 	iface, netlink := newTestTunLinuxExits(t)
 	settings := iface.system.settings
@@ -718,24 +789,27 @@ func TestTunLinuxExitsComeOffInReverse(t *testing.T) {
 		t.Fatalf("off: %t %v", defaultRoute, err)
 	}
 	events, kickCount := netlink.take()
-	if len(events) != 4 || kickCount != 1 {
+	if len(events) != 7 || kickCount != 1 {
 		t.Fatalf("%d events, %d kicks", len(events), kickCount)
 	}
-	if events[0].messageType != unix.RTM_DELRULE || !slices.Equal(events[0].body, installed[3].body) {
-		t.Fatalf("the mark rule did not come off first: %+v", events[0])
+	for i, family := range []uint8{unix.AF_INET, unix.AF_INET6} {
+		markRule, route, suppressRule := events[3*i], events[1+3*i], events[2+3*i]
+		if markRule.messageType != unix.RTM_DELRULE || !slices.Equal(markRule.body, installed[3+3*i].body) {
+			t.Fatalf("family %d's mark rule did not come off first: %+v", family, markRule)
+		}
+		if route.messageType != unix.RTM_DELROUTE {
+			t.Fatalf("family %d's route did not come off second: %+v", family, route)
+		}
+		if message := testTunParseRouteBody(route.body); message.family != family || message.table != settings.ExitsTable ||
+			message.oif != 7 || message.protocol != urTunRouteProtocol || message.dstBits != 0 {
+			t.Fatalf("family %d's route's delete: %+v", family, message)
+		}
+		if suppressRule.messageType != unix.RTM_DELRULE || !slices.Equal(suppressRule.body, installed[2+3*i].body) {
+			t.Fatalf("family %d's suppress rule did not come off third: %+v", family, suppressRule)
+		}
 	}
-	if events[1].messageType != unix.RTM_DELROUTE {
-		t.Fatalf("the route did not come off second: %+v", events[1])
-	}
-	if message := testTunParseRouteBody(events[1].body); message.table != settings.ExitsTable || message.oif != 7 ||
-		message.protocol != urTunRouteProtocol || message.dstBits != 0 {
-		t.Fatalf("the route's delete: %+v", message)
-	}
-	if events[2].messageType != unix.RTM_DELRULE || !slices.Equal(events[2].body, installed[2].body) {
-		t.Fatalf("the suppress rule did not come off third: %+v", events[2])
-	}
-	if events[3].messageType != 0 || events[3].mark != 0 {
-		t.Fatalf("the mark did not come off last: %+v", events[3])
+	if events[6].messageType != 0 || events[6].mark != 0 {
+		t.Fatalf("the mark did not come off last: %+v", events[6])
 	}
 	if defaultRoute, err := iface.SetExits(false); err != nil || defaultRoute {
 		t.Fatalf("again: %t %v", defaultRoute, err)
@@ -775,6 +849,134 @@ func TestTunLinuxExitsRollBackAPartialSet(t *testing.T) {
 	}
 }
 
+// Where the host routes IPv6 off itself, a refusal of IPv6's half holds the exits as one of IPv4's does (QD-881): what
+// went on of both families comes off, IPv4's first and the mark last, nothing is kicked, and the error says IPv6 would
+// leave outside the exits, so the host's IPv6 never rides today's route while its IPv4 rides the exits.
+func TestTunLinuxExitsHoldWhereIpv6WouldLeave(t *testing.T) {
+	cases := []struct {
+		name string
+		// the request refused, numbered from 0: IPv4's route, its two rules, then IPv6's route and its two rules
+		n    int
+		want []uint16
+	}{
+		{
+			name: "IPv6's default route",
+			n:    3,
+			want: []uint16{0, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE, unix.RTM_NEWROUTE, unix.RTM_DELRULE,
+				unix.RTM_DELROUTE, unix.RTM_DELRULE, 0},
+		},
+		{
+			name: "IPv6's rule that sends unmarked traffic to the tun",
+			n:    5,
+			want: []uint16{0, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE, unix.RTM_NEWROUTE, unix.RTM_NEWRULE,
+				unix.RTM_NEWRULE, unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELRULE, 0},
+		},
+	}
+	for _, c := range cases {
+		iface, netlink := newTestTunLinuxExits(t)
+		netlink.fail = func(n int, messageType uint16) error {
+			if n == c.n {
+				return unix.EACCES
+			}
+			return nil
+		}
+		defaultRoute, err := iface.SetExits(true)
+		if err == nil || defaultRoute || !strings.Contains(err.Error(), c.name) ||
+			!strings.Contains(err.Error(), "IPv6 would leave outside the exits") {
+			t.Fatalf("%s: %t %v", c.name, defaultRoute, err)
+		}
+		if errors.Is(err, errUrTunPrivilege) {
+			t.Fatalf("%s: a hold reads as the device's privilege refusal", c.name)
+		}
+		events, kickCount := netlink.take()
+		if types := testTunEventTypes(events); !slices.Equal(types, c.want) || kickCount != 0 || events[len(events)-1].mark != 0 {
+			t.Fatalf("%s: events %v, %d kicks", c.name, types, kickCount)
+		}
+		if iface.exitsMark || iface.exitsRoute || iface.exitsSuppressRule || iface.exitsMarkRule || iface.exitsIpv6Route ||
+			iface.exitsIpv6SuppressRule || iface.exitsIpv6MarkRule {
+			t.Fatalf("%s: something of the refused set stayed on", c.name)
+		}
+	}
+}
+
+// Where the host routes no IPv6 off itself, a kernel that will not take IPv6's half, one without IPv6 or a device with
+// it off, holds nothing (QD-881): IPv4's exits stand and are kicked once, and no IPv6 rule goes on with no route for it
+// to reach. Each later SetExits tries IPv6's route again, kicking nothing, and once the kernel takes it IPv6's rules
+// follow; off exits all of it comes off. A kernel that takes IPv6's route but not its rules has the route taken back.
+func TestTunLinuxExitsStandOnIpv4WhereTheHostHasNoIpv6(t *testing.T) {
+	refuseIpv6 := func(refusal error, messageTypes ...uint16) func(family uint8, messageType uint16) error {
+		return func(family uint8, messageType uint16) error {
+			if family == unix.AF_INET6 && slices.Contains(messageTypes, messageType) {
+				return refusal
+			}
+			return nil
+		}
+	}
+	for _, refusal := range []error{unix.EAFNOSUPPORT, unix.EACCES} {
+		iface, netlink := newTestTunLinuxExits(t)
+		netlink.dropIpv6DefaultRoute()
+		netlink.setRefuse(refuseIpv6(refusal, unix.RTM_NEWROUTE, unix.RTM_NEWRULE))
+		defaultRoute, err := iface.SetExits(true)
+		if err != nil || !defaultRoute {
+			t.Fatalf("%v: on: %t %v", refusal, defaultRoute, err)
+		}
+		events, kickCount := netlink.take()
+		want := []uint16{0, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE, unix.RTM_NEWROUTE}
+		if types := testTunEventTypes(events); !slices.Equal(types, want) || kickCount != 1 ||
+			testTunEventFamily(events[4]) != unix.AF_INET6 {
+			t.Fatalf("%v: on: events %v, %d kicks", refusal, types, kickCount)
+		}
+		if !iface.exitsMarkRule || iface.exitsIpv6Route || iface.exitsIpv6SuppressRule || iface.exitsIpv6MarkRule {
+			t.Fatalf("%v: IPv4's %t, IPv6's %t %t %t", refusal, iface.exitsMarkRule, iface.exitsIpv6Route,
+				iface.exitsIpv6SuppressRule, iface.exitsIpv6MarkRule)
+		}
+		// the next sync's SetExits tries IPv6's route alone, and kicks nothing
+		if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+			t.Fatalf("%v: again: %t %v", refusal, defaultRoute, err)
+		}
+		events, kickCount = netlink.take()
+		if types := testTunEventTypes(events); !slices.Equal(types, []uint16{unix.RTM_NEWROUTE}) || kickCount != 1 {
+			t.Fatalf("%v: again: events %v, %d kicks", refusal, types, kickCount)
+		}
+		// the kernel takes IPv6 now: its route and rules go on, and still nothing is kicked
+		netlink.setRefuse(nil)
+		if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+			t.Fatalf("%v: IPv6 taken: %t %v", refusal, defaultRoute, err)
+		}
+		events, kickCount = netlink.take()
+		want = []uint16{unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE}
+		if types := testTunEventTypes(events); !slices.Equal(types, want) || kickCount != 1 ||
+			slices.ContainsFunc(events, func(event testTunNetlinkEvent) bool { return testTunEventFamily(event) != unix.AF_INET6 }) {
+			t.Fatalf("%v: IPv6 taken: events %v, %d kicks", refusal, types, kickCount)
+		}
+		if defaultRoute, err := iface.SetExits(false); err != nil || defaultRoute {
+			t.Fatalf("%v: off: %t %v", refusal, defaultRoute, err)
+		}
+		events, _ = netlink.take()
+		want = []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELRULE, unix.RTM_DELRULE, unix.RTM_DELROUTE,
+			unix.RTM_DELRULE, 0}
+		if types := testTunEventTypes(events); !slices.Equal(types, want) {
+			t.Fatalf("%v: off: events %v", refusal, types)
+		}
+	}
+
+	// a kernel with IPv6 but none of its policy rules: IPv6's route goes on, its first rule is refused, and the route
+	// comes back off, so IPv4's exits stand with nothing of IPv6's left behind
+	iface, netlink := newTestTunLinuxExits(t)
+	netlink.dropIpv6DefaultRoute()
+	netlink.setRefuse(refuseIpv6(unix.EAFNOSUPPORT, unix.RTM_NEWRULE))
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("no IPv6 rules: %t %v", defaultRoute, err)
+	}
+	events, _ := netlink.take()
+	want := []uint16{0, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE, unix.RTM_NEWROUTE, unix.RTM_NEWRULE,
+		unix.RTM_DELROUTE}
+	if types := testTunEventTypes(events); !slices.Equal(types, want) || testTunEventFamily(events[6]) != unix.AF_INET6 ||
+		iface.exitsIpv6Route || iface.exitsIpv6SuppressRule || !iface.exitsMarkRule {
+		t.Fatalf("no IPv6 rules: events %v", types)
+	}
+}
+
 // A rule already there, ur's from an end the daemon did not see, is taken as on.
 func TestTunLinuxExitsTakeTheirOwnLeftoverRules(t *testing.T) {
 	iface, netlink := newTestTunLinuxExits(t)
@@ -800,7 +1002,7 @@ func TestTunLinuxExitsTakeTheirOwnLeftoverRules(t *testing.T) {
 }
 
 // A rule that will not come off keeps the main table's rule ahead of it and the mark on, while the default route goes,
-// so the rule finds an empty table; the next call takes the rest off.
+// so the rule finds an empty table, in each family; the next call takes the rest off.
 func TestTunLinuxExitsKeepTheMarkWhileTheirRuleStays(t *testing.T) {
 	iface, netlink := newTestTunLinuxExits(t)
 	if _, err := iface.SetExits(true); err != nil {
@@ -822,8 +1024,10 @@ func TestTunLinuxExitsKeepTheMarkWhileTheirRuleStays(t *testing.T) {
 	for _, event := range events {
 		types = append(types, event.messageType)
 	}
-	if !slices.Equal(types, []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE}) || !iface.exitsMark || !iface.exitsSuppressRule {
-		t.Fatalf("events %v, mark %t, suppress %t", types, iface.exitsMark, iface.exitsSuppressRule)
+	if !slices.Equal(types, []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELRULE, unix.RTM_DELROUTE}) ||
+		!iface.exitsMark || !iface.exitsSuppressRule || !iface.exitsIpv6SuppressRule {
+		t.Fatalf("events %v, mark %t, suppress %t and %t", types, iface.exitsMark, iface.exitsSuppressRule,
+			iface.exitsIpv6SuppressRule)
 	}
 	netlink.fail = nil
 	if defaultRoute, err := iface.SetExits(false); err != nil || defaultRoute {
@@ -834,14 +1038,16 @@ func TestTunLinuxExitsKeepTheMarkWhileTheirRuleStays(t *testing.T) {
 	for _, event := range events {
 		types = append(types, event.messageType)
 	}
-	if !slices.Equal(types, []uint16{unix.RTM_DELRULE, unix.RTM_DELRULE, 0}) || iface.exitsMark {
+	if !slices.Equal(types, []uint16{unix.RTM_DELRULE, unix.RTM_DELRULE, unix.RTM_DELRULE, unix.RTM_DELRULE, 0}) ||
+		iface.exitsMark {
 		t.Fatalf("events %v", types)
 	}
 }
 
 // The exits refuse, putting nothing on, a table another program's routes hold, a mark or table another program's rule
-// uses, and a strict reverse path filter, all's or the default route's interface's; a loose or absent filter, and ur's
-// own leftover rule, do not refuse.
+// of either family uses, and a strict reverse path filter, all's or the default route's interface's; a loose or absent
+// filter, ur's own leftover rule of either family, and a multicast routing family's rule, which no lookup of the
+// exits meets, do not refuse.
 func TestTunLinuxExitsRefuseWhatTheHostHolds(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -930,6 +1136,37 @@ func TestTunLinuxExitsRefuseWhatTheHostHolds(t *testing.T) {
 					mark: iface.system.settings.ExitsMark, markSet: true, suppressPrefixLength: -1, protocol: urTunRouteProtocol})
 			},
 		},
+		{
+			name: "an IPv6 rule on the mark",
+			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
+				netlink.rules = append(netlink.rules, urTunLinuxRule{family: unix.AF_INET6, table: 100, priority: 1000,
+					mark: iface.system.settings.ExitsMark, markSet: true, suppressPrefixLength: -1, protocol: unix.RTPROT_BOOT})
+			},
+			refusal: errUrTunExitsMarkInUse,
+		},
+		{
+			name: "an IPv6 rule on the table",
+			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
+				netlink.rules = append(netlink.rules, urTunLinuxRule{family: unix.AF_INET6, table: iface.system.settings.ExitsTable,
+					priority: 1000, suppressPrefixLength: -1, protocol: unix.RTPROT_BOOT})
+			},
+			refusal: errUrTunExitsMarkInUse,
+		},
+		{
+			name: "ur's own leftover IPv6 rule",
+			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
+				netlink.rules = append(netlink.rules, urTunLinuxRule{family: unix.AF_INET6, table: iface.system.settings.ExitsTable,
+					flags: unix.FIB_RULE_INVERT, priority: iface.system.settings.ExitsRulePriority + 1,
+					mark: iface.system.settings.ExitsMark, markSet: true, suppressPrefixLength: -1, protocol: urTunRouteProtocol})
+			},
+		},
+		{
+			name: "a multicast family's rule on the table",
+			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
+				netlink.rules = append(netlink.rules, urTunLinuxRule{family: testTunLinuxIpmrFamily, table: iface.system.settings.ExitsTable,
+					priority: 1000, suppressPrefixLength: -1, protocol: unix.RTPROT_BOOT})
+			},
+		},
 	}
 	for _, c := range cases {
 		iface, netlink := newTestTunLinuxExits(t)
@@ -978,7 +1215,8 @@ func (self *testTunClosingDevice) Close() error {
 
 func (self *testTunClosingDevice) BatchSize() int { return 1 }
 
-// Close takes the exits off, the mark last, before it removes the routes and closes the device.
+// Close takes the exits off, IPv6's half among them and the mark last, before it removes the routes and closes the
+// device.
 func TestTunLinuxCloseTakesTheExitsOff(t *testing.T) {
 	iface, netlink := newTestTunLinuxExits(t)
 	device := &testTunClosingDevice{events: make(chan tun.Event)}
@@ -1000,9 +1238,15 @@ func TestTunLinuxCloseTakesTheExitsOff(t *testing.T) {
 	for _, event := range events {
 		types = append(types, event.messageType)
 	}
-	if !slices.Equal(types, []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELRULE, 0, unix.RTM_DELROUTE}) ||
-		!device.closed || iface.exitsMark {
+	want := []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELRULE, unix.RTM_DELRULE, unix.RTM_DELROUTE,
+		unix.RTM_DELRULE, 0, unix.RTM_DELROUTE}
+	if !slices.Equal(types, want) || !device.closed || iface.exitsMark || iface.exitsIpv6Route || iface.exitsIpv6MarkRule {
 		t.Fatalf("close: %v, device closed %t", types, device.closed)
+	}
+	// IPv6's route came off with IPv4's
+	if message := testTunParseRouteBody(events[4].body); message.family != unix.AF_INET6 || message.dstBits != 0 ||
+		message.table != iface.system.settings.ExitsTable {
+		t.Fatalf("close: IPv6's route %+v", message)
 	}
 	if _, err := iface.SetExits(true); !errors.Is(err, errUrTunClosed) {
 		t.Fatalf("exits after close: %v", err)
@@ -1032,7 +1276,7 @@ func TestTunLinuxExitsThrowEachCarvedAddress(t *testing.T) {
 	}
 	events, kickCount := netlink.take()
 	want := []uint16{0, unix.RTM_NEWROUTE, unix.RTM_NEWROUTE, unix.RTM_NEWROUTE, unix.RTM_NEWROUTE, unix.RTM_NEWRULE,
-		unix.RTM_NEWRULE}
+		unix.RTM_NEWRULE, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE}
 	if types := testTunEventTypes(events); !slices.Equal(types, want) || kickCount != 1 {
 		t.Fatalf("events %v, %d kicks", types, kickCount)
 	}
@@ -1108,7 +1352,8 @@ func TestTunLinuxExitsTakeTheirThrowsOff(t *testing.T) {
 		t.Fatalf("off: %t %v", defaultRoute, err)
 	}
 	events, _ := netlink.take()
-	want := []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELRULE, 0}
+	want := []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELRULE,
+		unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELRULE, 0}
 	if types := testTunEventTypes(events); !slices.Equal(types, want) {
 		t.Fatalf("off: events %v", types)
 	}
@@ -1189,7 +1434,7 @@ func TestTunLinuxExitsKeepTheThrowsWhileTheTableAnswers(t *testing.T) {
 		t.Fatal("rule stuck: no error")
 	}
 	events, _ = netlink.take()
-	want := []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELROUTE}
+	want := []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELRULE, unix.RTM_DELROUTE}
 	if _, removedAddrs := testTunThrows(t, events, settings.ExitsTable); !slices.Equal(testTunEventTypes(events), want) ||
 		!slices.Equal(removedAddrs, carvedAddrs) || len(testTunThrowAddrs(iface)) != 0 {
 		t.Fatalf("rule stuck: events %v, throws held %v", testTunEventTypes(events), testTunThrowAddrs(iface))
@@ -1257,7 +1502,8 @@ func TestTunLinuxExitsTakeTheirOwnLeftoverThrows(t *testing.T) {
 	}
 	events, _ := netlink.take()
 	addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable)
-	want := []uint16{0, unix.RTM_NEWROUTE, unix.RTM_DELROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE}
+	want := []uint16{0, unix.RTM_NEWROUTE, unix.RTM_DELROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE, unix.RTM_NEWROUTE,
+		unix.RTM_NEWRULE, unix.RTM_NEWRULE}
 	if !slices.Equal(testTunEventTypes(events), want) || len(addedAddrs) != 0 ||
 		!slices.Equal(removedAddrs, []netip.Addr{stale}) || !slices.Equal(testTunThrowAddrs(iface), []netip.Addr{kept}) {
 		t.Fatalf("events %v: on %v, off %v, held %v", testTunEventTypes(events), addedAddrs, removedAddrs,
@@ -1833,5 +2079,228 @@ func TestTunLinuxExitsPassTheCarveBackInTheKernel(t *testing.T) {
 	}
 	if slices.ContainsFunc(rules, func(rule urTunLinuxRule) bool { return rule.protocol == urTunRouteProtocol }) {
 		t.Fatal("a rule of ur's outlived the close")
+	}
+}
+
+// In the kernel, in a container's own network namespace with IPv6 on and no network but what the test makes, so nothing
+// leaves the host: a tun of the test's stands for the physical path, with an IPv4 and an IPv6 address and the main
+// table's default route of each family. Under exits ur tun's sync puts IPv6's default route in the exits table with
+// its two rules beside IPv4's (QD-881): a datagram an unmarked socket sends to an IPv6 address beyond the host rides ur
+// tun, where the bridge drops IPv6, and never the physical path; one a socket carrying the exits mark sends, as the
+// daemon's own do, leaves by the physical path and never rides ur tun; and the close leaves nothing of ur's in the
+// exits table or the rules of either family.
+func TestTunLinuxExitsTakeIpv6InTheKernel(t *testing.T) {
+	requireTunContainer(t, "isolated")
+	if content, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6"); err != nil || strings.TrimSpace(string(content)) != "0" {
+		t.Skip("IPv6 is off in this namespace: run the container with net.ipv6.conf.all.disable_ipv6=0")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	settings := testUrTunSettings()
+	linux := newUrTunLinuxSystem(settings, nil).(*urTunLinuxSystem)
+	physAddress := netip.MustParseAddr("2001:db8::2")
+	unmarkedDestination := netip.MustParseAddr("2001:db8:1::7")
+	markedDestination := netip.MustParseAddr("2001:db8:1::8")
+	marker := netip.MustParseAddr("2001:db8:1::9")
+
+	// the physical path, and the IPv6 destinations it carries in the order it reads them
+	phys, err := linux.Open("ur-phys6", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physIndex := urTunLinuxIndex("ur-phys6")
+	physAddrs := make(chan netip.Addr, 64)
+	physDone := make(chan struct{})
+	go func() {
+		defer close(physDone)
+		bufs := [][]byte{make([]byte, settings.ReadHeadroomByteCount+settings.ReadPacketByteCount)}
+		sizes := []int{0}
+		for {
+			n, err := phys.Read(bufs, sizes, settings.ReadHeadroomByteCount)
+			packet := bufs[0][settings.ReadHeadroomByteCount:]
+			if n == 1 && 40 <= sizes[0] && packet[0]>>4 == 6 {
+				select {
+				case physAddrs <- netip.AddrFrom16([16]byte(packet[24:40])):
+				default:
+				}
+			}
+			if err != nil && !errors.Is(err, errUrTunSegmentsDropped) {
+				return
+			}
+		}
+	}()
+	defer func() {
+		phys.Close()
+		<-physDone
+	}()
+	if err := phys.SetAddresses([]netip.Addr{netip.MustParseAddr("192.0.2.2")}); err != nil {
+		t.Fatal(err)
+	}
+	physRoutes := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("192.0.2.0/24")}
+	if conflictCount, err := phys.SetRoutes(physRoutes); err != nil || conflictCount != 0 {
+		t.Fatalf("the physical path's routes: %d %v", conflictCount, err)
+	}
+	// its IPv6 address, with no duplicate detection so it is a source at once, and the main table's IPv6 default route
+	addressBody := make([]byte, unix.SizeofIfAddrmsg)
+	addressBody[0] = unix.AF_INET6
+	addressBody[1] = 64
+	addressBody[2] = unix.IFA_F_NODAD
+	addressBody[3] = unix.RT_SCOPE_UNIVERSE
+	binary.NativeEndian.PutUint32(addressBody[4:8], uint32(physIndex))
+	physOctets := physAddress.As16()
+	addressBody = append(addressBody, urNetlinkAttribute(unix.IFA_LOCAL, physOctets[:])...)
+	addressBody = append(addressBody, urNetlinkAttribute(unix.IFA_ADDRESS, physOctets[:])...)
+	if err := linux.request(unix.RTM_NEWADDR, unix.NLM_F_CREATE|unix.NLM_F_EXCL, addressBody); err != nil {
+		t.Fatalf("the physical path's IPv6 address: %v", err)
+	}
+	ipv6Default := urTunLinuxRouteBody(physIndex, netip.PrefixFrom(netip.IPv6Unspecified(), 0), unix.RT_TABLE_MAIN, 0, true)
+	if err := linux.request(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, ipv6Default); err != nil {
+		t.Fatalf("the physical path's IPv6 default route: %v", err)
+	}
+
+	tunBridge := newTestTunBridge()
+	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.zones = nil
+	// every packet ur tun reads goes to a link that takes it, the IPv6 destinations noted in order
+	sink := &testTunLink{}
+	tunAddrs := make(chan netip.Addr, 64)
+	tunBridge.route = func(packet []byte) connect.UserNatClient {
+		if 40 <= len(packet) && packet[0]>>4 == 6 {
+			select {
+			case tunAddrs <- netip.AddrFrom16([16]byte(packet[24:40])):
+			default:
+			}
+		}
+		return sink
+	}
+	synced := make(chan struct{}, 1024)
+	tun, err := startUrTun(ctx, &urTunArgs{
+		Name:      "ur-ipv6",
+		NetworkId: sidecar.NewId(),
+		System:    linux,
+		Bridge:    tunBridge,
+		Links:     &testTunLinks{},
+		Settings:  settings,
+		OnSync: func(err error) {
+			select {
+			case synced <- struct{}{}:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.close()
+	tunIndex := urTunLinuxIndex("ur-ipv6")
+	ipv6Route := func() bool {
+		t.Helper()
+		routes, err := urTunLinuxRoutes(unix.AF_INET6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(routes, func(route urTunLinuxRoute) bool {
+			return route.table == settings.ExitsTable && route.dst.Bits() == 0 && slices.Contains(route.oifs, tunIndex)
+		})
+	}
+	deadline := time.After(urTestTimeout)
+	for !ipv6Route() {
+		select {
+		case <-synced:
+		case <-deadline:
+			t.Fatal("waited too long for IPv6's default route in the exits table")
+		}
+	}
+	rules, err := urTunLinuxRules(unix.AF_INET6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours := []urTunLinuxRule{}
+	for _, rule := range rules {
+		if rule.protocol == urTunRouteProtocol {
+			ours = append(ours, rule)
+		}
+	}
+	if len(ours) != 2 || ours[0].priority != settings.ExitsRulePriority || ours[0].suppressPrefixLength != 0 ||
+		ours[0].table != unix.RT_TABLE_MAIN || ours[1].priority != settings.ExitsRulePriority+1 ||
+		ours[1].mark != settings.ExitsMark || ours[1].table != settings.ExitsTable || ours[1].flags&unix.FIB_RULE_INVERT == 0 {
+		t.Fatalf("the kernel's IPv6 rules of ur's %+v", ours)
+	}
+	if status := tun.status(); !status.DefaultRoute || status.ExitsHeld {
+		t.Fatalf("on: %+v", status)
+	}
+
+	send := func(destination netip.Addr, mark uint32) {
+		t.Helper()
+		dialer := &net.Dialer{}
+		if mark != 0 {
+			dialer.Control = func(network string, address string, raw syscall.RawConn) error {
+				var markErr error
+				if err := raw.Control(func(fd uintptr) {
+					markErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, int(mark))
+				}); err != nil {
+					return err
+				}
+				return markErr
+			}
+		}
+		conn, err := dialer.Dial("udp6", netip.AddrPortFrom(destination, 9).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.Write([]byte("ur tun ipv6")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// what one of the devices carries until want, in order: a device reads what the kernel queued it in the order it was
+	// queued, so a datagram sent before want that took that device comes before it
+	until := func(addrs chan netip.Addr, want netip.Addr, what string) []netip.Addr {
+		t.Helper()
+		seen := []netip.Addr{}
+		deadline := time.After(urTestTimeout)
+		for !slices.Contains(seen, want) {
+			select {
+			case address := <-addrs:
+				seen = append(seen, address)
+			case <-deadline:
+				t.Fatalf("%s carried %v, not %v", what, seen, want)
+			}
+		}
+		return seen
+	}
+	// unmarked, as any program's socket: ur tun carries it, and the physical path does not
+	send(unmarkedDestination, 0)
+	until(tunAddrs, unmarkedDestination, "ur tun")
+	// marked, as the daemon's own: the physical path carries it, and the unmarked one never reached it first
+	send(markedDestination, settings.ExitsMark)
+	if physSeen := until(physAddrs, markedDestination, "the physical path"); slices.Contains(physSeen, unmarkedDestination) {
+		t.Fatalf("the physical path carried the unmarked datagram: %v", physSeen)
+	}
+	// and ur tun, which reads the marked one before a marker sent after it had it taken ur tun's way, never had it
+	send(marker, 0)
+	if tunSeen := until(tunAddrs, marker, "ur tun"); slices.Contains(tunSeen, markedDestination) {
+		t.Fatalf("ur tun carried the marked datagram: %v", tunSeen)
+	}
+
+	// the close leaves nothing of ur's in the exits table or the rules, in either family
+	tun.close()
+	routes, err := urTunLinuxRoutes(unix.AF_UNSPEC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range routes {
+		if route.table == settings.ExitsTable {
+			t.Fatalf("a route outlived the close in the exits table: %+v", route)
+		}
+	}
+	for _, family := range []int{unix.AF_INET, unix.AF_INET6} {
+		rules, err := urTunLinuxRules(family)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.ContainsFunc(rules, func(rule urTunLinuxRule) bool { return rule.protocol == urTunRouteProtocol }) {
+			t.Fatalf("a rule of ur's of family %d outlived the close", family)
+		}
 	}
 }
