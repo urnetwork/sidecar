@@ -67,10 +67,35 @@ type metadataListAddition struct {
 	list     string
 }
 
-// None waits now: design-records wrote every earlier entry's text into §2.8's block with the folds of 2026-11-16
-// (owner decision 252), QD-857's with §10's and QD-199's with §11's, so the list is the block alone until the next
-// answer.
-var metadataListAdditions = []metadataListAddition{}
+// Design-records wrote every entry before these into §2.8's block with the folds of 2026-11-16 (owner decision 252),
+// QD-857's with §10's and QD-199's with §11's; each here waits for the next fold.
+var metadataListAdditions = []metadataListAddition{
+	{
+		// QD-990: the list's v35, for cert-1's custom-domain spends kept 15 d
+		question: "tls-m6-04-custom-bucket-empty-start",
+		block:    "# metadata_list.yml v34;",
+		list:     "# metadata_list.yml v35;",
+	},
+	{
+		question: "tls-m6-04-custom-bucket-empty-start",
+		block:    "# smtp-4's hourly self-reported hard bounces (QD-199), which check's additions had published ahead of §14's fold.\n",
+		list: "# smtp-4's hourly self-reported hard bounces (QD-199), which check's additions had published ahead of §14's fold.\n" +
+			"# v35, updated 2026-11-16 for the owner's answer QD-990 (tls-m6-04-custom-bucket-empty-start), keeps cert-1's Team\n" +
+			"# custom-domain spends 15 d, not 8, since each budget now replays two of its windows: certs sees the times of orders,\n" +
+			"# certificates and failed authorizations of the last 15 days.\n",
+	},
+	{
+		// QD-990: each budget replays two of its windows, the set bucket's 340 h, so the spends it reads are 15 d old
+		question: "tls-m6-04-custom-bucket-empty-start",
+		block:    "certificates and failed authorizations of the last 8 days;",
+		list:     "certificates and failed authorizations of the last 15 days;",
+	},
+	{
+		question: "tls-m6-04-custom-bucket-empty-start",
+		block:    "the account row with its domain; spends 8 d;",
+		list:     "the account row with its domain; spends 15 d;",
+	},
+}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {
