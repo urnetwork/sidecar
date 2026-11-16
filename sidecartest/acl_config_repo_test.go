@@ -5,15 +5,21 @@
 // admission world's real log, bootstrapped by BootstrapNetwork on the Net's api, read by §8.9's real gate cache over
 // the Net's Redis and first metadata cluster, with evs's real EvsAuthState and engine over that cache:
 //
-//	exchange   AclExchangeScopes grants repo:<config_repo_id>:r and :rw as §8.5's kind default gives them, the
-//	           bootstrap sidecar's :admin (§7.9), and a forward_only client's r alone while its sidecar's forwarding
-//	           Delegation lives (owner decision 197)
-//	evs        PUT /evs/v1/repos/<config> places the config repo at bootstrap under the bootstrap sidecar's admin
-//	           scope, and no other sidecar's; GET honors a member device's and an ephemeral sidecar's r, and a
-//	           revocation closes it at the gate's next load
+//	exchange   AclExchangeScopes grants repo:<config_repo_id>:r and :rw as §8.5's kind default gives them, :admin to
+//	           every config writer (QD-894), §7.9's bootstrap sidecar the first of them, and a forward_only client's r
+//	           alone while its sidecar's forwarding Delegation lives (owner decision 197)
+//	evs        PUT /evs/v1/repos/<config> places the config repo under a config writer's admin scope, the bootstrap
+//	           sidecar's at bootstrap or another's once that one is revoked, and no other sidecar's: the guard honors
+//	           every config writer's admin, and §11.8's placement rule then answers 409 to any but the placement's
+//	           creator. POST .../activate takes a config writer's admin alike. GET honors a member device's and an
+//	           ephemeral sidecar's r, and a revocation closes it at the gate's next load
 //	gkm        AclGateCache.HonorScope for the gkm audience, the answer gkm's guard reads: a member device's rw in the
-//	           config group, never a read_only or ephemeral one's. gkm's engine over its own GkmAuthState on this
-//	           cache (QD-718) runs in gkm_auth_state_acl_test.go
+//	           config group, never a read_only or ephemeral one's. gkm's real engine over its AclGkmAuthState on this
+//	           cache (QD-718) forms the config group under the bootstrap sidecar's admin and, once that sidecar is
+//	           revoked, re-forms it and takes its ladder under another config writer's, and no other sidecar's; the
+//	           rest of gkm's routes over that state run in gkm_auth_state_acl_test.go
+//	drop       a config writer's admin drops nothing in the config: MayDrop refuses it in the gate's own state
+//	           (D-ACL-25)
 //
 // No sleeps: each load is awaited by the cache's OnLoad, and the clock is the Net's.
 
@@ -37,6 +43,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
+	"github.com/urnetwork/sidecar/gkmservice"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -48,7 +55,13 @@ func (self aclConfigRepoRevocations) Check(ctx context.Context, principal *sidec
 	return nil
 }
 
-// The world: the Net, its admission network, the real gate cache and evs over it.
+// The purpose a GroupForm is signed under (QD-527).
+const aclConfigRepoGroupFormPurpose = "group-form"
+
+// The cipher suite a group takes (owner decision 44).
+const aclConfigRepoCipherSuite uint32 = 0x0010
+
+// The world: the Net, its admission network, the real gate cache, and evs and gkm over it.
 type aclConfigRepoWorld struct {
 	t         *testing.T
 	net       *Net
@@ -56,6 +69,7 @@ type aclConfigRepoWorld struct {
 	cache     *sidecar.AclGateCache
 	loads     chan *bridge.AuthPin
 	engine    *evsservice.EvsEngine
+	gkm       *gkmservice.GkmEngine
 	configId  sidecar.Id
 }
 
@@ -100,6 +114,15 @@ func newAclConfigRepoWorld(t *testing.T) *aclConfigRepoWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(world.engine.Close)
+
+	host.Gates.OpenService(sidecar.ServiceGateGkm, connect.Id(admission.NetworkId()))
+	world.gkm, err = gkmservice.NewGkmEngine(t.Context(), net.Host(), nil, &gkmservice.GkmEngineDeps{
+		AuthState: gkmservice.NewAclGkmAuthState(world.cache, aclConfigRepoRevocations{}, net.Clock()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(world.gkm.Close)
 	return world
 }
 
@@ -146,7 +169,13 @@ func (self *aclConfigRepoWorld) token(device *AdmissionDevice, scopes ...string)
 // One request of the device to evs's config repo route, with the scopes its token carries: the status and the refusal.
 func (self *aclConfigRepoWorld) serve(method string, device *AdmissionDevice, scopes ...string) (int, protocol.EvsRefusalCode) {
 	self.t.Helper()
-	request := httptest.NewRequestWithContext(self.t.Context(), method, "/evs/v1/repos/"+sidecar.EvsKeyId(self.configId), nil)
+	return self.serveAt(method, "", device, scopes...)
+}
+
+// serve, on a route under the config repo's: suffix is the path after the repo's id.
+func (self *aclConfigRepoWorld) serveAt(method string, suffix string, device *AdmissionDevice, scopes ...string) (int, protocol.EvsRefusalCode) {
+	self.t.Helper()
+	request := httptest.NewRequestWithContext(self.t.Context(), method, "/evs/v1/repos/"+sidecar.EvsKeyId(self.configId)+suffix, nil)
 	request.Header.Set("Authorization", "Bearer "+self.token(device, scopes...))
 	recorder := httptest.NewRecorder()
 	self.engine.Handler().ServeHTTP(recorder, request)
@@ -158,6 +187,136 @@ func (self *aclConfigRepoWorld) serve(method string, device *AdmissionDevice, sc
 		self.t.Fatalf("a refusal that does not parse: %v", err)
 	}
 	return recorder.Code, reply.GetCode()
+}
+
+// One request of the device to gkm, with the scopes its gkm token carries: the status.
+func (self *aclConfigRepoWorld) serveGkm(path string, body proto.Message, device *AdmissionDevice, scopes ...string) int {
+	self.t.Helper()
+	bodyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(body)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	sidecarId := connect.Id(device.SidecarId)
+	now := self.net.Clock().Now()
+	token := self.net.Fakes().Authenticator.Issue(&sidecar.Principal{
+		NetworkId: connect.Id(self.admission.NetworkId()),
+		ClientId:  connect.Id(self.clientOf(device)),
+		SidecarId: &sidecarId,
+		Audience:  gkmservice.GkmAudience,
+		Scopes:    scopes,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(15 * time.Minute),
+	})
+	request := httptest.NewRequestWithContext(self.t.Context(), http.MethodPost, path, bytes.NewReader(bodyBytes))
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	self.gkm.Handler().ServeHTTP(recorder, request)
+	return recorder.Code
+}
+
+// The device's identity key signing as its sidecar, as a gkm statement is signed.
+func aclConfigRepoSign(device *AdmissionDevice) sidecar.GkmSignFunction {
+	return func(purpose string, signedType bridge.SignedType, body []byte, agentId *sidecar.Id) (*bridge.Signed, error) {
+		return &bridge.Signed{
+			Body:      bytes.Clone(body),
+			SignerId:  device.SidecarId.Bytes(),
+			Signature: ed25519.Sign(device.Key, bridge.SignedBytes(purpose, signedType, body)),
+			Type:      uint32(signedType),
+		}, nil
+	}
+}
+
+// A GroupForm of the config repo by signer at the tip: a creation's with no previous group, else a re-form's.
+func (self *aclConfigRepoWorld) groupForm(signer *AdmissionDevice, groupId sidecar.Id, previousGroupId *sidecar.Id, generation uint64) *bridge.Signed {
+	self.t.Helper()
+	body := &protocol.GroupForm{RepoId: self.configId.Bytes(), GroupId: groupId.Bytes(), Generation: generation, Auth: self.admission.Tip()}
+	if previousGroupId != nil {
+		body.PreviousGroupId = previousGroupId.Bytes()
+	}
+	bodyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(body)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	signed, err := aclConfigRepoSign(signer)(aclConfigRepoGroupFormPurpose, bridge.SignedType_SIGNED_GROUP_FORM, bodyBytes, nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return signed
+}
+
+// KF1's request for the config repo's first group by signer: its form and gen/1 at the tip and the Net's clock. The
+// holders hash, GenWrap and GroupInfo are stand-ins gkm stores and never opens.
+func (self *aclConfigRepoWorld) groupCreate(signer *AdmissionDevice, groupId sidecar.Id) *protocol.GkmGroupCreateRequest {
+	self.t.Helper()
+	holdersSha256 := sha256.Sum256([]byte("config repo holders"))
+	_, rotate, err := sidecar.NewGkmFirstGeneration(self.configId, groupId, &sidecar.GkmGenerationArgs{
+		Cause:         sidecar.GkmCauseRequest,
+		Auth:          self.admission.Tip(),
+		Time:          self.net.Clock().Now(),
+		HoldersSha256: holdersSha256[:],
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	signedRotate, err := sidecar.SignGenRotate(rotate, aclConfigRepoSign(signer))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return &protocol.GkmGroupCreateRequest{
+		Form:            self.groupForm(signer, groupId, nil, 1),
+		GenRotate:       signedRotate,
+		GenWrap:         bytes.Repeat([]byte{7}, 24+32+16),
+		SealedGroupInfo: []byte("sealed group info of the config group's epoch 0"),
+		CipherSuite:     aclConfigRepoCipherSuite,
+	}
+}
+
+// A re-form of the config repo's group previousGroupId into groupId by signer, at generation 1.
+func (self *aclConfigRepoWorld) groupReform(signer *AdmissionDevice, groupId sidecar.Id, previousGroupId sidecar.Id) *protocol.GkmGroupReformRequest {
+	self.t.Helper()
+	return &protocol.GkmGroupReformRequest{
+		Form:            self.groupForm(signer, groupId, &previousGroupId, 1),
+		GenWrap:         bytes.Repeat([]byte{5}, 24+32+16),
+		SealedGroupInfo: []byte("sealed group info of the re-formed config group's epoch 0"),
+		CipherSuite:     aclConfigRepoCipherSuite,
+	}
+}
+
+// The bytes of an object on the config repo's cluster, nil for none.
+func (self *aclConfigRepoWorld) configClusterObject(key string) []byte {
+	self.t.Helper()
+	first, err := self.net.Host().Blobs.FirstCluster()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	place, err := sidecar.ReadEvsRepoPlace(self.t.Context(), first, self.configId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	cluster, err := self.net.Host().Blobs.Cluster(place.ClusterId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	object, err := cluster.Get(self.t.Context(), key)
+	if err != nil {
+		return nil
+	}
+	defer object.Body.Close()
+	objectBytes := new(bytes.Buffer)
+	if _, err := objectBytes.ReadFrom(object.Body); err != nil {
+		self.t.Fatal(err)
+	}
+	return objectBytes.Bytes()
+}
+
+// The gate's own state at its newest load.
+func (self *aclConfigRepoWorld) gateAcl() *sidecar.AclState {
+	self.t.Helper()
+	snapshot, status := self.cache.State(self.admission.NetworkId())
+	if status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Acl == nil {
+		self.t.Fatalf("the gate holds no state: %d", status)
+	}
+	return snapshot.Acl
 }
 
 // The scopes the exchange grants the device's sidecar of those asked, at the tip.
@@ -207,7 +366,10 @@ func (self *aclConfigRepoWorld) configRowIs(shrunkAt uint64) {
 
 // The bootstrap, then the network's later devices: the exchange, the gate cache at both audiences and evs answer the
 // config repo's scopes from the row the state adds, with no AclRepo of it in any rows until the config's holders
-// first shrink, and from the rows' own after.
+// first shrink, and from the rows' own after. Every config writer administers the config (QD-894): the owner's second
+// device holds its admin beside the bootstrap sidecar and, once that sidecar is revoked, is the one that re-forms the
+// config group at gkm, posts its ladder and activates the repo at evs, while a member's device that writes no config
+// head and a read_only device are refused each, and no config writer drops in the config.
 func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 	world := newAclConfigRepoWorld(t)
 	admission := world.admission
@@ -270,11 +432,26 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 	if status, code := world.serve(http.MethodGet, owner, configR); status != http.StatusOK {
 		t.Errorf("the bootstrap sidecar's read: %d %s", status, code)
 	}
+	// and forms the config group at gkm under the same admin (KF1)
+	groupId := admission.Id("config repo group")
+	create := world.groupCreate(owner, groupId)
+	if status := world.serveGkm("/gkm/groups", create, owner, configR); status != http.StatusForbidden {
+		t.Errorf("a group's creation under the config's r: %d", status)
+	}
+	if status := world.serveGkm("/gkm/groups", create, owner, configAdmin); status != http.StatusOK {
+		t.Fatalf("the bootstrap sidecar's creation of the config group: %d", status)
+	}
+	rotate1 := world.configClusterObject(gkmservice.GkmGenerationKey(groupId, 1))
+	if len(rotate1) == 0 {
+		t.Fatal("the config group holds no gen/1")
+	}
 
-	// the network's later devices: another config writer, a member's device, a read_only one and an ephemeral one
+	// the network's later devices: another config writer, a member's devices, a read_only one and an ephemeral one
 	ownerPhone := admission.Device("owner phone", owner.MemberId)
 	admission.AdmitDevice(owner, ownerPhone, 0)
 	memberId, phone := admission.ConsentedMember("config repo")
+	laptop := admission.Device("config repo laptop", memberId)
+	admission.AdmitDevice(owner, laptop, 0)
 	readOnly := admission.Device("config repo read only", memberId)
 	admission.AdmitDevice(owner, readOnly, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY))
 	ephemeral := admission.Device("config repo ephemeral", memberId)
@@ -292,8 +469,9 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 		gkm    []string
 	}{
 		{name: "the bootstrap sidecar", device: owner, evs: all, gkm: all},
-		{name: "another config writer", device: ownerPhone, evs: []string{configR, configRw}, gkm: []string{configR, configRw}},
+		{name: "another config writer", device: ownerPhone, evs: all, gkm: all},
 		{name: "a member device", device: phone, evs: []string{configR}, gkm: []string{configR, configRw}},
+		{name: "a member's second device", device: laptop, evs: []string{configR}, gkm: []string{configR, configRw}},
 		{name: "a read_only device", device: readOnly, evs: []string{configR}, gkm: []string{configR}},
 		{name: "an ephemeral device", device: ephemeral, evs: []string{configR}, gkm: []string{configR}},
 	}
@@ -317,11 +495,25 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 		if status, code := world.serve(http.MethodGet, c.device, configR); status != http.StatusOK {
 			t.Errorf("%s: evs's read: %d %s", c.name, status, code)
 		}
-		if c.device != owner {
+		if slices.Contains(c.evs, configAdmin) {
+			// a config writer's PUT passes the guard: the placement's creator continues, and another config writer
+			// is told the placement stands (§11.8's step 2), never that its scope is refused
+			want := http.StatusConflict
+			if c.device == owner {
+				want = http.StatusOK
+			}
+			if status, code := world.serve(http.MethodPut, c.device, configAdmin); status != want {
+				t.Errorf("%s: a config writer's PUT: %d %s, want %d", c.name, status, code, want)
+			}
+		} else {
 			// a token that claims the config's admin without the state's leave places nothing
 			if status, code := world.serve(http.MethodPut, c.device, configAdmin); status != http.StatusForbidden || code != protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE {
 				t.Errorf("%s: a PUT under an admin scope the state does not give: %d %s", c.name, status, code)
 			}
+		}
+		// no admin of the config drops in it (D-ACL-25)
+		if decision := world.gateAcl().MayDrop(c.device.SidecarId, world.configId, world.net.Clock().Now()); decision.Allowed {
+			t.Errorf("%s: a drop in the config: %+v", c.name, decision)
 		}
 	}
 
@@ -373,6 +565,161 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 	}
 	if status, code := world.serve(http.MethodGet, readOnly, configR); status != http.StatusOK {
 		t.Errorf("another device's read after the revocation: %d %s", status, code)
+	}
+
+	// the bootstrap sidecar is revoked by the owner's other device: its scopes close, and the config's admin stays
+	// with the config writer that stands (QD-894)
+	removed := admission.MustLand(admission.Sign(ownerPhone, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(owner, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED, 0)))
+	world.load()
+	world.configRowIs(removed.Pin.GetVersion())
+	if !admission.State().IsConfigWriter(ownerPhone.SidecarId) || admission.State().IsConfigWriter(owner.SidecarId) {
+		t.Fatal("the config's writers after the bootstrap sidecar's revocation")
+	}
+	for _, audience := range []sidecar.AclTokenAudience{evs, gkm} {
+		if granted := world.exchange(owner, audience, false, all...); len(granted) != 0 {
+			t.Errorf("the revoked bootstrap sidecar's scopes at %d: %v", audience, granted)
+		}
+		if answer := world.honored(owner, sidecar.AclEvsAdmin, audience); answer != sidecar.AclScopeRefused {
+			t.Errorf("the revoked bootstrap sidecar's admin at %d: %d", audience, answer)
+		}
+		if granted := world.exchange(ownerPhone, audience, false, all...); !slices.Equal(granted, all) {
+			t.Errorf("the standing config writer's scopes at %d: %v", audience, granted)
+		}
+		if answer := world.honored(ownerPhone, sidecar.AclEvsAdmin, audience); answer != sidecar.AclScopeHonored {
+			t.Errorf("the standing config writer's admin at %d: %d", audience, answer)
+		}
+		for name, device := range map[string]*AdmissionDevice{"a member's device": laptop, "a read_only device": readOnly} {
+			if granted := world.exchange(device, audience, false, configAdmin); len(granted) != 0 {
+				t.Errorf("%s: the exchange grants the config's admin at %d", name, audience)
+			}
+			if answer := world.honored(device, sidecar.AclEvsAdmin, audience); answer != sidecar.AclScopeRefused {
+				t.Errorf("%s: the config's admin at %d: %d", name, audience, answer)
+			}
+		}
+	}
+
+	// evs: the config writer's admin passes the real guard, where the placement the bootstrap sidecar made stands
+	// (§11.8's step 2); the revoked bootstrap sidecar, a member's device and a read_only one are refused by the
+	// guard, at the PUT and at the activation
+	if status, code := world.serve(http.MethodPut, ownerPhone, configAdmin); status != http.StatusConflict {
+		t.Errorf("the config writer's PUT once the bootstrap sidecar is revoked: %d %s", status, code)
+	}
+	for name, device := range map[string]*AdmissionDevice{"the revoked bootstrap sidecar": owner, "a member's device": laptop, "a read_only device": readOnly} {
+		if status, code := world.serve(http.MethodPut, device, configAdmin); status != http.StatusForbidden {
+			t.Errorf("%s: a PUT under the config's admin: %d %s", name, status, code)
+		}
+		if status, code := world.serveAt(http.MethodPost, "/activate", device, configAdmin); status != http.StatusForbidden {
+			t.Errorf("%s: an activation under the config's admin: %d %s", name, status, code)
+		}
+	}
+
+	// gkm: the config writer re-forms the config group (§10.8) and posts its ladder, gen/1 byte for byte; the others'
+	// re-forms and ladders are refused by the guard, the re-form's own form signed by each as its sidecar
+	reformedGroupId := admission.Id("config repo group re-formed")
+	formsPath := "/gkm/repos/" + sidecar.EvsKeyId(world.configId) + "/forms"
+	ladderPath := "/gkm/groups/" + sidecar.EvsKeyId(reformedGroupId) + "/ladder"
+	signedRotate1 := &bridge.Signed{}
+	if err := proto.Unmarshal(rotate1, signedRotate1); err != nil {
+		t.Fatal(err)
+	}
+	ladder := &protocol.GkmLadderRequest{Generations: []*bridge.Signed{signedRotate1}}
+	for name, device := range map[string]*AdmissionDevice{"the revoked bootstrap sidecar": owner, "a member's device": laptop, "a read_only device": readOnly} {
+		if status := world.serveGkm(formsPath, world.groupReform(device, reformedGroupId, groupId), device, configAdmin); status != http.StatusForbidden {
+			t.Errorf("%s: a re-form of the config group: %d", name, status)
+		}
+	}
+	if world.configClusterObject(gkmservice.GkmGroupOwnerKey(reformedGroupId)) != nil {
+		t.Fatal("a refused re-form wrote the group's owner marker")
+	}
+	if status := world.serveGkm(formsPath, world.groupReform(ownerPhone, reformedGroupId, groupId), ownerPhone, configRw); status != http.StatusForbidden {
+		t.Errorf("the config writer's re-form under the config's rw: %d", status)
+	}
+	if status := world.serveGkm(formsPath, world.groupReform(ownerPhone, reformedGroupId, groupId), ownerPhone, configAdmin); status != http.StatusOK {
+		t.Fatalf("the config writer's re-form of the config group: %d", status)
+	}
+	for name, device := range map[string]*AdmissionDevice{"the revoked bootstrap sidecar": owner, "a member's device": laptop, "a read_only device": readOnly} {
+		if status := world.serveGkm(ladderPath, ladder, device, configAdmin); status != http.StatusForbidden {
+			t.Errorf("%s: the re-formed config group's ladder: %d", name, status)
+		}
+	}
+	if world.configClusterObject(gkmservice.GkmGenerationKey(reformedGroupId, 1)) != nil {
+		t.Fatal("a refused ladder wrote gen/1")
+	}
+	if status := world.serveGkm(ladderPath, ladder, ownerPhone, configAdmin); status != http.StatusOK {
+		t.Fatalf("the config writer's ladder: %d", status)
+	}
+	if carried := world.configClusterObject(gkmservice.GkmGenerationKey(reformedGroupId, 1)); !bytes.Equal(carried, rotate1) {
+		t.Errorf("gen/1 of the re-formed config group is not the first group's bytes")
+	}
+	// and activates the repo at evs, its re-formed group ready
+	if status, code := world.serveAt(http.MethodPost, "/activate", ownerPhone, configRw); status != http.StatusForbidden || code != protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE {
+		t.Errorf("the config writer's activation under the config's rw: %d %s", status, code)
+	}
+	if status, code := world.serveAt(http.MethodPost, "/activate", ownerPhone, configAdmin); status != http.StatusOK {
+		t.Fatalf("the config writer's activation of the config repo: %d %s", status, code)
+	}
+	activated := &protocol.EvsRepoObject{}
+	if err := proto.Unmarshal(world.configClusterObject(sidecar.EvsRepoObjectKey(world.configId)), activated); err != nil || activated.GetState() != protocol.EvsRepoState_EVS_REPO_ACTIVE {
+		t.Errorf("repo/ after the activation: %v, %v", activated, err)
+	}
+
+	// the config writer's admin still drops nothing in the config (D-ACL-25)
+	if decision := world.gateAcl().MayDrop(ownerPhone.SidecarId, world.configId, world.net.Clock().Now()); decision.Allowed || decision.Reason != sidecar.AclReasonNoGrant {
+		t.Errorf("the config writer's drop in the config: %+v", decision)
+	}
+}
+
+// QD-894 from the first byte: a network whose bootstrap sidecar is revoked before the config repo is placed. The
+// owner's other device, a config writer, places the repo through evs's real guard, as its creator, and forms its
+// group at gkm; the revoked bootstrap sidecar places nothing.
+func TestAclConfigRepoIsPlacedByAConfigWriterOnceTheBootstrapSidecarIsGone(t *testing.T) {
+	world := newAclConfigRepoWorld(t)
+	admission := world.admission
+	owner := admission.Owner()
+	configR, configAdmin := aclConfigRepoScope(world.configId, "r"), aclConfigRepoScope(world.configId, "admin")
+	ownerPhone := admission.Device("placed by owner phone", owner.MemberId)
+	admission.AdmitDevice(owner, ownerPhone, 0)
+	admission.MustLand(admission.Sign(ownerPhone, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(owner, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED, 0)))
+	world.load()
+
+	if status, code := world.serve(http.MethodPut, owner, configAdmin); status != http.StatusForbidden {
+		t.Fatalf("the revoked bootstrap sidecar's PUT: %d %s", status, code)
+	}
+	if status, code := world.serve(http.MethodGet, ownerPhone, configR); status != http.StatusNotFound || code != protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND {
+		t.Fatalf("a read before the repo is placed: %d %s", status, code)
+	}
+	if status, code := world.serve(http.MethodPut, ownerPhone, configAdmin); status != http.StatusOK {
+		t.Fatalf("the config writer's PUT: %d %s", status, code)
+	}
+	first, err := world.net.Host().Blobs.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	place, err := sidecar.ReadEvsRepoPlace(t.Context(), first, world.configId)
+	if err != nil || place.CreatorSidecarId != ownerPhone.SidecarId {
+		t.Fatalf("place/: %+v, %v", place, err)
+	}
+	repo := &protocol.EvsRepoObject{}
+	if err := proto.Unmarshal(world.configClusterObject(sidecar.EvsRepoObjectKey(world.configId)), repo); err != nil {
+		t.Fatal(err)
+	}
+	if repo.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || repo.GetState() != protocol.EvsRepoState_EVS_REPO_KEYING ||
+		!bytes.Equal(repo.GetRepoId(), world.configId.Bytes()) {
+		t.Fatalf("repo/: %v", repo)
+	}
+	if status, code := world.serve(http.MethodGet, ownerPhone, configR); status != http.StatusOK {
+		t.Errorf("the config writer's read: %d %s", status, code)
+	}
+
+	groupId := admission.Id("placed by group")
+	if status := world.serveGkm("/gkm/groups", world.groupCreate(owner, groupId), owner, configAdmin); status != http.StatusForbidden {
+		t.Errorf("the revoked bootstrap sidecar's creation of the config group: %d", status)
+	}
+	if status := world.serveGkm("/gkm/groups", world.groupCreate(ownerPhone, groupId), ownerPhone, configAdmin); status != http.StatusOK {
+		t.Fatalf("the config writer's creation of the config group: %d", status)
+	}
+	if world.configClusterObject(gkmservice.GkmGenerationKey(groupId, 1)) == nil {
+		t.Error("the config group holds no gen/1")
 	}
 }
 

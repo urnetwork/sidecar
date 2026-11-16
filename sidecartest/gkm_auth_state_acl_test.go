@@ -4,7 +4,7 @@
 //
 //	token       a gkm token's scope is honored only by the state: 503 while the network is not loaded, the ask
 //	            starting its load, then the config's r for every admitted sidecar, gkm's rw for member devices but
-//	            read_only ones, admin for the bootstrap sidecar alone, and 403 for a repo the state does not hold
+//	            read_only ones, admin for every config writer (QD-894), and 403 for a repo the state does not hold
 //	revoked     a SidecarRevoke closes the sidecar's routes at the gate's next load, and a rev/ object voids its
 //	            token's writes
 //	answers     the gkm-only answers from the same state: a sidecar's facts, readers and writers, pending targets,
@@ -353,7 +353,7 @@ func TestGkmAuthStateJudgesATokenByTheGatesState(t *testing.T) {
 		rights map[sidecar.AclEvsRights]gkmservice.GkmAuthAnswer
 	}{
 		{name: "the bootstrap sidecar", device: owner, rights: map[sidecar.AclEvsRights]gkmservice.GkmAuthAnswer{read: allowed, write: allowed, admin: allowed}},
-		{name: "another config writer", device: ownerPhone, rights: map[sidecar.AclEvsRights]gkmservice.GkmAuthAnswer{read: allowed, write: allowed, admin: denied}},
+		{name: "another config writer", device: ownerPhone, rights: map[sidecar.AclEvsRights]gkmservice.GkmAuthAnswer{read: allowed, write: allowed, admin: allowed}},
 		{name: "a member device", device: phone, rights: map[sidecar.AclEvsRights]gkmservice.GkmAuthAnswer{read: allowed, write: allowed, admin: denied}},
 		{name: "a read_only device", device: readOnly, rights: map[sidecar.AclEvsRights]gkmservice.GkmAuthAnswer{read: allowed, write: denied, admin: denied}},
 		{name: "an ephemeral device", device: ephemeral, rights: map[sidecar.AclEvsRights]gkmservice.GkmAuthAnswer{read: allowed, write: denied, admin: denied}},
