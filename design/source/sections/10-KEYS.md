@@ -93,7 +93,9 @@ message UrMlsCredential {                         // sidecar/protocol/gkm.proto
   bytes identity_public_key = 2; string identity_alg = 3;  // §5; ed25519 in v0
   bytes mls_signature_public_key = 4;             // rotated by self-update
   uint32 cipher_suite = 5; int64 not_after = 6;   // 0x0010 (owner decision 44)
-  bytes admission_sha256 = 7;                     // its §7.9 SidecarAdmit; Genesis for the first device
+  bytes admission_sha256 = 7;                     // its §7.9 SidecarAdmit's statement id (§7.9's ids), from
+                                                  // Signed.body or AuthorityProposal.statement; for the
+                                                  // first device SHA-256(Signed Genesis)
   bytes identity_signature = 8;                   // §6 signing, purpose mls-credential, fields 1-7:
                                                   // over "urnetwork-sidecar-v1/mls-credential" || 0x00 ||
                                                   // u32be(0x1306, SIGNED_UR_MLS_CREDENTIAL) || the
@@ -124,10 +126,11 @@ GKM stores only:
   RecoveryWrap_{m,g}   = HPKE-XWing(recovery_pub_m, RK_g)                                    (10.8)
   ReaderWrap_{g,s,k}   = §6 Signed, purpose reader-wrap, a KeyDelivery (below): {group_id, g, C_g, s, k,
                          staged or late, a late one's auth pin and time, HPKE-XWing(ReaderKey_{s,k}, RK_g)}
-  DelegationWrap_{g,d} = the same to the reader key of d, which d fixes, d = delegation_id = SHA-256(Signed
-                         Delegation); k = SHA-256 of the X-Wing public key sealed to, its incarnation
+  DelegationWrap_{g,d} = the same to the reader key of d, which d fixes, d = delegation_id = the Signed
+                         Delegation's statement id, the SHA-256 of its signed bytes (§7.9's ids); k = SHA-256
+                         of the X-Wing public key sealed to, its incarnation
 RK_g --HKDF-SHA256(salt repo_id, info "UR evs 1.0 "||purpose||u64be(g) [||group_id||u64be(e)])-->
-     link|fek|manifest|path|ref|drop|groupinfo|index
+     link|fek|manifest|path|ref|drop|groupinfo|index|statement (the last: §7.9's sealed bodies)
 ReaderKey_{s,k} = §6 Signed, purpose reader-key, {sidecar_id, xwing_public_key, not_after}, not_after at most
               7 days after signing; every reader holds one, a fresh X-Wing pair once it is 6 days old, k its
               incarnation (readerkey, below)
@@ -324,7 +327,7 @@ Clients cache every RK_g in the §5 keychain and, beside it from v0's first gene
 
 ### 10.6 GKM: the Delivery Service and wrapped-key store
 
-GKM is a strongly consistent Delivery Service (DS; RFC 9750 §5.2.1) with no state of its own: its records are metadata-cluster objects ordered by conditional writes (owner decisions 2, 21, 145). It verifies 15-minute capability tokens offline (aud `gkm`; scopes `repo:<id>:r|rw|admin`, `deposit` on the drop-key route only, and an unadmitted client's `recovery:<member_id>` for that member's own recovery wraps), honors an `r`, `rw` or `admin` scope only while its subject reads or writes the repo, as the scope says, in gkm's newest verified state (§8.12), and honors §7.8's `rev/` objects. Each route takes the scope the scopes block below gives.
+GKM is a strongly consistent Delivery Service (DS; RFC 9750 §5.2.1) with no state of its own: its records are metadata-cluster objects ordered by conditional writes (owner decisions 2, 21, 145). It verifies 15-minute capability tokens offline (aud `gkm`; scopes `repo:<id>:r|rw|admin`, `deposit` on the drop-key route only, and an unadmitted client's `recovery:<member_id>` for that member's own recovery wraps), honors an `r`, `rw` or `admin` scope only while its subject reads or writes the repo, as the scope says, in gkm's newest verified state, and `deposit` only while its subject may deposit there, the drop-key route taking that check though the key it serves is public (§8.12; §7.9's tokens row), and honors §7.8's `rev/` objects. Each route takes the scope the scopes block below gives.
 
 ```text
 object (epochs zero-padded)                   written                       holds
@@ -593,7 +596,7 @@ gkm-10:
 
 **KF1. Create a repo.** A member's device C files §8.8's `RepoCreate`, creates the repo in evs as `keying` (§11.12), placing it (owner decision 145), and becomes its admin (owner decision 8); a config repo follows §7.9's bootstrap. `POST /gkm/groups` writes `epoch/0` (a random 16-byte group_id, GenWrap_0 and the sealed GroupInfo), `gen/1` (the GenRotate of a new RK_1, without a parent) and C's GroupForm. C writes generation 1's deliveries (10.5's step 3: ReaderWraps, DelegationWraps, RecoveryWraps) while the repo is still keying, resuming from its keychain after a crash, and only then has evs activate it, so no content predates its recovery wraps. C then adds the other leaves in one Add-only commit with its Welcome and GroupInfo.
 
-**KF2. Add a device D.** D enrolls, its `SidecarAdmit` enters the authorization log (§5.6, §7.9), and it uploads a ReaderKey and, as a member device, KeyPackages (a device a restored binding admitted, only once anchored, 10.8). Once the state lists D where its subject reads, and again at D's first KeyPackage upload (10.6), GKM hints `pending` to the writers, and a committer per 10.9 claims a KeyPackage and commits the Add with other pending changes, the Welcome, the sealed GroupInfo and GenWrap; an agent, or in the config or directory group a member device that is wrapped or has no KeyPackage (10.4; owner decisions 144, 182), gets a late ReaderWrap of the current generation instead, signed at a state that lists D (10.9's late row), and a covered agent reads at once through its Delegation's wrap. D checks RK_g against `gen/<g>`'s C_g and walks the ladder (10.5). Owner-bound repos park a D without its owner's consent (§8.5; owner decision 126), whose devices raise `approval_pending` until an `OwnerConfirm`.
+**KF2. Add a device D.** D enrolls, its `SidecarAdmit` enters the authorization log (§5.6, §7.9), and it uploads a ReaderKey and, as a member device, KeyPackages (a device a restored binding admitted, only once anchored, 10.8). Once the state lists D where its subject reads, and again at D's first KeyPackage upload (10.6), GKM hints `pending` to the writers, and a committer per 10.9 claims a KeyPackage and commits the Add with other pending changes, the Welcome, the sealed GroupInfo and GenWrap; an agent, or in the config or directory group a member device that is wrapped or has no KeyPackage (10.4; owner decisions 144, 182), gets a late ReaderWrap of the current generation instead, signed at a state that lists D (10.9's late row), and a covered agent reads at once through its Delegation's wrap. D checks RK_g against `gen/<g>`'s C_g and walks the ladder (10.5). A newly admitted device holds no generation of the config repo, so until it does it joins on states its config follower applied rows-only, which serve only to take its config Welcome or wrap and open the config repo's generation keys; once it holds the key the follower re-reads those bases in full before it stands, and D signs, seals, commits and rotates nothing before that (§7.9's no key row; owner decision 319). Owner-bound repos park a D without its owner's consent (§8.5; owner decision 126), whose devices raise `approval_pending` until an `OwnerConfirm`.
 
 **KF3. Add a member N.** A repo or network admin signs N's grant into the repo's access log (§8.8; owner decisions 7, 8), or in an owner-bound repo the owner's device an `EvsShare` (owner decision 126), and KF2 runs for N's devices: the granting device at once, other writer leaves after 15 s plus jitter; while none is online, N waits and nothing leaks.
 

@@ -72,6 +72,8 @@ mail:<alias>                         send, listen; checked only by clients
                                      other networks) and §8.5's kinds must be named
 ```
 
+acl.proto numbers `AclAutogroup` and `AclAction` from 1 in the order the lists above write them, 0 being unspecified (§7.9's record bytes).
+
 ### 8.5 Policy document and worked examples
 
 The policy is HuJSON in the config repo, parsed by `github.com/tailscale/hujson` (BSD-3-Clause, untagged) or in-repo (§4 decides). Beyond the example it has `hosts`; grant fields `id`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` (8.4) and `note`; an `approvers` count on `requests`, which subjects, a harness `reach:` block (recurd-app.html:1743-1749) or a team directory request (§16.11) file; and document-level `expiresDefault` (1 h) and `evidenceDefault` (all §16.6 channels; harness only in untainted runs unless a rule names it, owner decision 142, §16.6).
@@ -118,9 +120,12 @@ consented(d, M) = d's admission names member M, d is neither ephemeral nor parke
   recovery key whose binding one signed:
   scoped     M's consented device or M's recovery key signed d's SidecarAdmit, alone or as one of k
              (§7.9, owner decision 112)
-  invited    d is the first device admitted under M that is neither ephemeral nor read_only, enrolled from
-             an invite addressed to M: §7.5's member invite, or the invite an admin device issues when it
-             admits a JIT-pending member (§7.6), neither of which an ephemeral enrollment redeems
+  invited    d's SidecarAdmit carries SIDECAR_CAPABILITY_INVITED, which the admitting device sets only after
+             the join MAC of an invite addressed to M verifies (§7.5's invite block): §7.5's member invite,
+             or the invite an admin device issues when it admits a JIT-pending member (§7.6), neither of
+             which an ephemeral enrollment redeems; and d is the first admission under M in log order,
+             revoked ones included, that is neither ephemeral nor read_only; a later device's bit counts for
+             nothing, and readers ignore it on an ephemeral or read_only admission
   genesis    d signed the network's Genesis (the owner's first device)
   confirmed  M's consented device signed OwnerConfirm{d} (§8.8), as after an admin's admission, or the
              AdmissionConfirm{d} that lifted d's park (§7.9)
@@ -188,7 +193,7 @@ hardDeny         = unadmitted, revoked or parked sidecar (§7.9; parked by its c
 
 ### 8.7 Policy authority (X3)
 
-Owner decisions 3, 5 and 6 settle X3 (§7.9, Q-ACL-1): config writers sign the policy, every admitted sidecar evaluates it, and gates enforce its id-only projection (§8.8-§8.10). A breached server can only withhold or delay, visibly once a HeadCheck crosses the split (I-16), within §2.8's exposure bound (owner decision 129). It sees the reach graph and keyed ids, never member-chosen names, rule text or tests (owner decision 72; §2.8 api-7).
+Owner decisions 3, 5 and 6 settle X3 (§7.9, Q-ACL-1): config writers sign the policy, every admitted sidecar evaluates it, and gates enforce its id-only projection (§8.8-§8.10). A breached server can only withhold or delay, visibly once a HeadCheck crosses the split (I-16), within §2.8's exposure bound (owner decision 129). It sees the reach graph and opaque ids, never member-chosen names, rule text or tests (owner decision 72; §2.8 api-7).
 
 ### 8.8 The policy in the config repo: rows, grant chains, saving
 
@@ -198,7 +203,7 @@ Owner decisions 3, 5 and 6 settle X3 (§7.9, Q-ACL-1): config writers sign the p
 // sidecar/protocol/acl.proto: §8's rows inside §7.9's ProjectionRows. Ids only.
 message AclRows {
   bool has_document = 1;                  // owner decisions 50, 105
-  repeated AclAtom atoms = 2;             // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
+  repeated AclAtom atoms = 2;             // §7.9's opaque tag and group ids -> member_ids, sidecar_ids
   repeated AclRule rules = 3;             // rule_id, src atoms, targets, actions, expires; a
                                           // publish's audience, app_mode and link_spki_sha256 (8.4), the
                                           // pin in full, as a requested grant's GrantActivate shows it to
@@ -279,8 +284,9 @@ OwnerConfirm{sidecar_id}                                           a consented d
 access log of one repo_id (owner decision 8):
 RepoCreate{repo_id, kind}                                          a sidecar the kind or policy lets create it
                                                                    (owner-bound kinds: a consented device of
-                                                                   the owner; directory: a config writer,
-                                                                   D-TEAM-28), which becomes the repo's admin
+                                                                   the owner; directory and team_record: a
+                                                                   config writer, D-TEAM-28), which becomes
+                                                                   the repo's admin
 RepoAdmin{repo_id, sidecar_id, add | remove}                       a repo admin or a config writer; in an
                                                                    owner-bound repo an add only by a consented
                                                                    device of its owner (8.5), any of which
@@ -305,6 +311,11 @@ directory (one per team network, §16.11; owner decision 171): its admins are it
   writer, each counted while consented (8.5) and not read_only, alone holding its admin scope (§7.8); api's
   verifier and readers refuse its RepoAdmin adds, RepoGrant, RepoRevoke and RepoVersioning and a second
   directory RepoCreate in a network, and api one outside the team tier (§20.5)
+team_record (one live per team network; owner decision 303): team-create's first Owner device files its
+  RepoCreate right after the directory's, and an admin device that finds a team whose access logs hold none
+  files it; api's verifier and readers refuse a second live one in a network, and api one outside the team
+  tier; its admins are its creator and every config writer, as the directory's; a RepoDelete of it stands,
+  only a person's /dev/tty-confirmed admin command filing a new one, so a Team may decline the ledger (§7.5)
 authority statement (purpose authority; §7.9's proposal and cosigns):
 AuditOptIn{reader atoms, not_after} | AuditOptOut                  k of n (§7.9)
 
@@ -330,12 +341,13 @@ rules     replace the network's VersioningRules (§7.9) for this repo; an owner-
           repo's own current generation (§10.5), which only its readers hold, the config writer folding the
           delta carrying them as an opaque blob, so no sidecar but its readers learns its path globs (owner
           decision 126); other repos' are sealed to the config's generation, as §17.8's rule bodies are; api
-          and evs see only the lock
+          and evs see only the lock; sealed_rules has §7.9's sealed-body bytes, its key drawn from the
+          generation of the repo it is sealed to
 ```
 
 **Access logs (owner decision 8).** A repo's access log, the ordered chain of its RepoCreate, RepoAdmin, RepoGrant, RepoRevoke, RepoDelete, RepoRestore and RepoVersioning statements, rides §7.9 deltas into config heads, which keep it for the repo's life, each statement with the log position of the entry that carried it, so a reader judges a signer's repo admin right at any position, one before its retention point included (§16.11's repo file row); readers replay it, members check Adds and Removes against it (§10.9), and, as a RepoDelete or RepoRestore precedes its §11.12 route, the log never shows a deleted repo live, so a re-seed after a site loss can refuse a repo whose log ends in a RepoDelete past 7 days or with `now` (§19.10). A DROP push rides its ref, not this log, since it changes no reader, writer or key (§11.7). A team directory's decision entry cites the `RepoGrant` or `EvsShare` it approved by hash and log position, or the `ApprovalDecision` a `GrantActivate` spends, as its request's receipt; the statements are unchanged (§16.11). Config writers, who alone write config heads, are the AdminSet members' member devices (untagged, not ephemeral; 8.4) that are not read-only, and only k of n adds one (§7.5, §7.9; owner decisions 110, 112, 128).
 
-**Saving.** A writer's device validates, compiles, tests, previews and signs; a failing test rejects the head (https://tailscale.com/docs/reference/syntax/policy-file). Validation refuses unknown atoms, approver-only atoms (`autogroup:sponsor`, `autogroup:dst-owner`) outside `approver`, tags outside `tagOwners`, bad ports, overruns, `evs:` paths (X2), owner-bound readers outside the `audit` block, `evs:` grants naming the config or the directory (D-ACL-13, D-ACL-24), an `audit` block without an `AuditOptIn`, publishes past §13.9's limits, `raw` outside `public` and `link`, and a raw `link` without a pin; `network:` selectors resolve from labels or aliases, never legacy names (D-DNS-2). The preview names readers a repo cannot seat (§8.12).
+**Saving.** A writer's device validates, compiles, tests, previews and signs; a failing test rejects the head (https://tailscale.com/docs/reference/syntax/policy-file). Validation refuses unknown atoms, approver-only atoms (`autogroup:sponsor`, `autogroup:dst-owner`) outside `approver`, tags outside `tagOwners`, bad ports, overruns, `evs:` paths (X2), owner-bound readers outside the `audit` block, `evs:` grants naming the config or the directory (D-ACL-13, D-ACL-24), an `audit` block without an `AuditOptIn`, publishes past §13.9's limits, `raw` outside `public` and `link`, and a raw `link` without a pin; `network:` selectors resolve from labels or aliases, never legacy names (D-DNS-2). compile is a pure function of the head, so `user:`, `network:` and `client:` selectors resolve through the config's sealed `resolve` file (§7.9's paths), one row per selector the policy names: the writer fills it at save, a server answer being only a proposal, as §7.6 treats SCIM. For an email it uses its own invite record where it has one, else `GET /network/members`, and the preview lists each new or changed row with the member's role and devices, which the person's confirmed save signs; for a network, §12's ResolveNetworkLabel, by label or alias, the id pinned until a person saves again, so a moved alias retargets nothing (§7.12); for a client, a dual-signed `SidecarIdentityBinding` the writer verifies itself, a client with no binding staying a literal client id. Validation refuses a member_id with no live MemberRow, so a stale row fails closed until the next save; 8.4's grammar and the stored source do not change. The preview names readers a repo cannot seat (§8.12).
 
 **Code and limits.** Pure Go `acl_*.go` in the sidecar root; `ur acl test policy.hujson` runs offline. Per-tier limits (owner decision 73) are §20.4's `acl_*` keys in `config/all/pro.yml` (`model.Pro()`). ProjectionRows hold at most 4,096 atoms and 4 MiB, and §7.9's `config_admissions` bounds subjects; validation and api's verifier refuse a head or base over a limit (`RESOURCE_EXHAUSTED`). Every tier may hold a document (owner decisions 50, 73); after a downgrade new heads must fit (§20.7).
 
@@ -355,7 +367,7 @@ Server gates are coarse (who talks to whom, holds a name, fetches ciphertext) an
 |---|---|---|
 | subject dial, `ip` route | `CreateContract` (`:859`-`:933`): subjects, dial and route rules (src → via), `has_document`; a 5 s heads snapshot; subject ids on the existing query (`server/model/network_client_model.go:2544`) | stream accept (§6); the provider hook per flow (`connect/ip.go:5676,3602`; `connect/ip_icmp.go:786`) |
 | `sock` | sockets (§9.10): token paths and public names | listener verifies the dialer |
-| `evs` | the token exchange's `repo:<id>:deposit\|r\|rw\|admin` scopes from `AclRows` (§7.8, owner decision 2); evs and gkm honor `r`, `rw` and `admin` only for current readers and writers (D-ACL-21) and check §11.8's gate; `admin` also covers DROP pushes and their cancels, in an owner-bound repo only from its owner's consented sidecar_ids (§11.7); in the team directory, as in every repo, only `admin` covers ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete`, and only its consented, not-read-only admins get it (§7.8, §11.12, §16.11) | heads only from writers (owner decision 7); every Add, Remove and wrap (§8.12) |
+| `evs` | the token exchange's `repo:<id>:deposit\|r\|rw\|admin` scopes from `AclRows` (§7.8, owner decision 2); evs and gkm honor `r`, `rw` and `admin` only for current readers and writers, and `deposit` only while its subject may deposit there (D-ACL-21), and check §11.8's gate; `admin` also covers DROP pushes and their cancels, in an owner-bound repo only from its owner's consented sidecar_ids (§11.7); in the team directory, as in every repo, only `admin` covers ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete`, and only its consented, not-read-only admins get it (§7.8, §11.12, §16.11) | heads only from writers (owner decision 7); every Add, Remove and wrap (§8.12) |
 | `dns` publish | dns, certs, tlsedge (SNI → name → socket): publish rules; the `tls/` `ValidateListen` refuses `raw` unless the grant's audience is `public` or `link`, and a raw `link` whose grant carries no pin (§13.9) | only the listener's front enforces `audience` and a raw `link`'s pin, both from its own evaluation (§13.7, §21.4) |
 | `mail` | mxedge: `listen` on `sock:smtp/25/mx` (a scope's `smtp/25/mx.<scope>`); smtpedge: `mail_send`, From domain (§14.5) | receivers, local mail server: `mail:<alias>` (§15.10) |
 | shares, egress | contract gate: share grants, `bridge` (§17.9) | provider: a verified `WindowDelegation` matching C13's sealed network (§17.9) |
@@ -372,7 +384,7 @@ Server gates are coarse (who talks to whom, holds a name, fetches ciphertext) an
 
 ### 8.12 ACL and evs readers
 
-- **Readers.** `RepoReaders(repo)` is the set of sidecars that 8.6's `allowed` gives read on `evs:<repo>`, from kind defaults, the audit set, rules, EvsShares and the access log, so `RepoReaders(directory)` is every admitted sidecar of the team (8.5); writers likewise, and readers accept heads only from writers (owner decision 7). An expiry drops a reader at its time (§7.9's coverage); evs and gkm honor an `r`, `rw` or `admin` scope only while its subject reads or writes the repo, as the scope says, in their newest state.
+- **Readers.** `RepoReaders(repo)` is the set of sidecars that 8.6's `allowed` gives read on `evs:<repo>`, from kind defaults, the audit set, rules, EvsShares and the access log, so `RepoReaders(directory)` is every admitted sidecar of the team (8.5); writers likewise, and readers accept heads only from writers (owner decision 7). An expiry drops a reader at its time (§7.9's coverage); evs and gkm honor an `r`, `rw` or `admin` scope only while its subject reads or writes the repo, as the scope says, in their newest state, and a `deposit` scope only while 8.6 gives its subject deposit there, under its ceiling and hard denies, or it reads an owner-bound repo it does not write (§16.8's receipts), computed as the exchange computes the scope; gkm's drop-key route takes the same check (§7.9's tokens row).
 - **Leaves, seats and wraps (owner decisions 114, 144, 182).** Member devices are MLS leaves of the repos they read, in the config and team directory groups only as §7.9's `leaves` rule entitles them; other sidecars (tagged, ephemeral, CI, cloud agents) hold §10.5's per-generation `ReaderWrap`s, the config repo's and the directory's included, and agents a live Delegation covers read its repos through the Delegation's wrap (§10.5). A group holds at most 1,000 leaves (D-KEYS-2):
 
 ```text
@@ -454,9 +466,9 @@ wrapped   a wrapped config or directory member commits no Add or Remove in that 
 
 **D-ACL-20 (proposed).** `autogroup:untagged` is untagged non-sidecars, and writers compile the implicit document into the projection's rules whenever `has_document` is false, so gates and clients evaluate one function (8.5, 8.6). *Why:* two compilers must not publish different rows for one file.
 
-**D-ACL-21 (proposed).** evs and gkm honor a read or write capability (`r`, `rw`, `admin`) only while its subject reads or writes the repo in their newest verified state (8.12). *Why:* a group edit or Suspend must not wait out a 15-minute token.
+**D-ACL-21 (proposed).** evs and gkm honor a capability (`r`, `rw`, `admin`, `deposit`) only while its subject holds that right on the repo in their newest verified state, gkm's drop-key route included (8.12; §7.9's tokens row). *Why:* a group edit or Suspend must not wait out a 15-minute token.
 
-**D-ACL-22 (proposed).** One consent predicate, §8.5's `consented(d, M)` (scoped, invited, genesis, confirmed, each on a signature outside §7.9's parked set), which §5.6 and §7.9 cite; the invited device is M's first that is neither ephemeral nor read-only, from an invite no ephemeral enrollment redeems, and a JIT member's invite comes from the admitting admin device. *Why:* three definitions left JIT members with no consented device, as an ephemeral or read-only first device would, and a stolen device's consents must stop with it.
+**D-ACL-22 (proposed).** One consent predicate, §8.5's `consented(d, M)` (scoped, invited, genesis, confirmed, each on a signature outside §7.9's parked set), which §5.6 and §7.9 cite; the invited device is M's first admission in log order that is neither ephemeral nor read-only, carrying the `invited` capability bit its admitting device set after the invite's join MAC verified, from an invite no ephemeral enrollment redeems, and a JIT member's invite comes from the admitting admin device. *Why:* three definitions left JIT members with no consented device, as an ephemeral or read-only first device would, and a stolen device's consents must stop with it.
 
 **D-ACL-23 (proposed).** As an approver, `autogroup:dst-owner` names a request's destination's owner, a tagged sidecar's sponsor, or a socket's listeners' one owner or sponsor, else an admin. The implicit document and Team's starting document carry the directory's default rule: dial on members' devices, tagged sidecars and sockets; approver dst-owner; evidence device or presence; 30 days at most. A touched member who approves meets §8.6's admin requirement (owner decision 180). *Why:* owner decisions 74, 179 and 180: owner decision 74's admin stood in for the touched member, who here consents directly.
 
@@ -480,7 +492,7 @@ wrapped   a wrapped config or directory member commits no Add or Remove in that 
 
 **Q-ACL-7.** Who approves requested grants, and for how long? **Decided by owner 2026-11-03 (owner decisions 74, 75):** §8.6's approvers, for 1 h by default and 30 days at most, a lone device's harness prompt counting unless `evidence` excludes it; owner decision 142 (2026-11-04) counts it in a tainted run only where the rule names it. *Residual:* none.
 
-**Q-ACL-8.** Which names may server-stored policy carry? **Decided by owner 2026-11-03 (implied by owner decision 59):** moot; the rows carry ids, keyed atom ids, socket token paths (owner decision 67) and public names. *Residual:* none.
+**Q-ACL-8.** Which names may server-stored policy carry? **Decided by owner 2026-11-03 (implied by owner decision 59):** moot; the rows carry ids, opaque atom ids (16 random bytes the config's sealed tables hold beside each name, §7.9), socket token paths (owner decision 67) and public names. *Residual:* none.
 
 **Q-ACL-9.** Cross-cutting (§7, §10). May tagged, ephemeral, CI and cloud sidecars read and write through per-generation X-Wing wraps instead of MLS leaves? **Decided by owner 2026-11-04 (owner decision 114):** (a) yes, in every repo granting them access, amending owner decision 60 (§8.12). A leaf's Remove still waits for a leaf, and a reaped Delegation-admitted agent, or any holder of its reader seed, reads later generations until the Delegation's key drops: when one of its agents is revoked rather than reaped, or is suspended, at a `DelegationRevoke`, and at the latest at its `not_after`; a holder of the whole auth key also admits fresh agents, each with its own wraps, until the Delegation ends (§7.9's delegation row, §10.5). Owner decision 144 extends config wraps to member devices past §7.9's first 1,000. *Residual:* none.
 
@@ -516,6 +528,7 @@ wrapped   a wrapped config or directory member commits no Add or Remove in that 
 | A data repo granted to more than 1,000 member devices seats only 1,000; the rest wait keyless | Low | Medium | the preview and console name the repo; seats fill earliest-admitted first; data-repo wraps would need the owner (owner decision 144); the team directory seats past 1,000 by wraps instead (owner decision 182) |
 | Network sources reach LAN and loopback without a document, or through legacy providers | High | High | disclosed (owner decision 120); any tier may write a document (owner decision 73); unrestricted-grant rule; suspension |
 | Approval fatigue | Medium | Medium | 30-day requests; standing grants; presence keys |
+| A `resolve` row goes stale: a member leaves, or a network's alias moves | Medium | Low | validation refuses a member_id with no live MemberRow, so the row fails closed until the next save; a network's id stays pinned until a person saves again (§8.8's Saving) |
 
 ### 8.19 Phasing
 

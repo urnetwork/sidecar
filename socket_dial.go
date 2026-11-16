@@ -13,6 +13,18 @@
 // not govern it, so the dialer holds instead to the ticket's own signature under the service's keys, its group in
 // urnetwork-edge and this client as its dialer, and opens an edge stream (C9) to the name itself, ur/<service>.
 //
+// Service for a ur/ stream (§6.10.1 item 2 and §13.6 as QD-849 reads them). A ur/ stream reverses a tls/ or smtp/
+// one: the sidecar dials, so the edge's replies (StreamAccept, §14's SmtpPreambleResult, the MX's TLS bytes,
+// SmtpOutcome) need contracts under this sidecar's Service key, which a sidecar that only sends mail holds for no
+// registration. So each ur/ ticket's open holds Service on its dispatcher (Subprotocol.HoldProvideMode), from just
+// before the open until the open fails or its stream ends at §6: both directions closed, or a reset from either end.
+// This end's Close alone ends nothing, since the edge's own StreamClose is still to come and needs its contract too.
+// The dispatcher counts the holds, a tls/ or smtp/ listener's among them (SocketListener.holdService), so overlapping
+// streams share one provide frame at the first hold and one at the last release, and Service goes only when the last
+// stream and the last lease have. A ticket that fails its checks holds nothing, and a hold the dispatcher refuses
+// refuses the ticket. The hold admits nothing: what a Service source may send a sidecar is the inline handler's rule
+// (stream_edge.go), and an edge's open reaches only a listener this sidecar has.
+//
 // Before OPEN (owner decision 3, I-5). A ticket names its listener's client; the dialer runs §6.4's Hello with it and
 // checks the ticket's claim, a §6 Signed of purpose socket-registration, under the identity key that Hello verified,
 // so a claim the listener's sidecar did not sign is never opened, and that the claim names the dialed network and
@@ -45,6 +57,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/connect"
+	connectprotocol "github.com/urnetwork/connect/protocol"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -69,6 +82,9 @@ type socketStreamOpener interface {
 	verify(ctx context.Context, clientId Id) (*SubprotocolPeerIdentity, error)
 	// StreamOpen to clientId: its stream once accepted, a *StreamRejectError once rejected, or the open's failure.
 	open(ctx context.Context, clientId Id, request *StreamOpenRequest) (socketStream, error)
+	// Holds Service on the dispatcher until release is called, counted with every other hold there, so an edge's
+	// replies on a ur/ stream get their contracts (QD-849). An error is a dispatcher that holds nothing more.
+	holdService() (release func(), err error)
 }
 
 // socketStreamOpener over one generation's dispatcher.
@@ -95,6 +111,20 @@ func (self *subprotocolSocketOpener) open(ctx context.Context, clientId Id, requ
 		return nil, err
 	}
 	return newSubprotocolSocketStream(stream), nil
+}
+
+// See socketStreamOpener.
+func (self *subprotocolSocketOpener) holdService() (release func(), err error) {
+	return self.subprotocol.HoldProvideMode(connectprotocol.ProvideMode_Service)
+}
+
+// A stream that reports its own end at §6, as a dispatcher's does (stream_socket.go): what a ur/ stream's Service
+// hold waits on (QD-849), since the edge's last frames, its StreamClose among them, come after this end's Close.
+type socketEndingStream interface {
+	socketStream
+	// Returns once the stream has ended: both directions closed and the peer's read through or dropped, or a reset
+	// from either end, as its dispatcher's own end is.
+	waitEnded()
 }
 
 // What one Dial dials: the network, the name in its forms, and the stream target both ends name.
@@ -347,7 +377,8 @@ func (self *socketDialer) attempt(ctx context.Context, target *socketDialTarget,
 }
 
 // One ticket of a ur/ name (D-SOCK-11): see the file header. Any check that fails is the ticket's, refused before the
-// open, so a ticket naming a listener outside urnetwork-edge is never opened.
+// open, so a ticket naming a listener outside urnetwork-edge is never opened and holds nothing. A ticket that passes
+// holds Service from before its open until its stream has ended, or until the open fails (QD-849).
 func (self *socketDialer) attemptPlatform(ctx context.Context, target *socketDialTarget, findTicket *SocketFindTicket, acceptTimeout time.Duration) *socketAttempt {
 	admission := self.admission
 	if admission == nil || !admission.known || admission.urnetworkEdge == nil {
@@ -365,6 +396,12 @@ func (self *socketDialer) attemptPlatform(ctx context.Context, target *socketDia
 	if err != nil {
 		return &socketAttempt{kind: socketAttemptRefused}
 	}
+	// held before the open leaves, so the edge's first reply, its StreamAccept, already finds the key; without it
+	// no reply could come, so a dispatcher that refuses the hold refuses the ticket
+	release, err := self.opener.holdService()
+	if err != nil {
+		return &socketAttempt{kind: socketAttemptRefused}
+	}
 	attemptCtx, done := self.attemptContext(ctx, acceptTimeout)
 	defer done()
 	stream, err := self.opener.open(attemptCtx, listenerClientId, &StreamOpenRequest{
@@ -372,7 +409,23 @@ func (self *socketDialer) attemptPlatform(ctx context.Context, target *socketDia
 		Ticket: findTicket.Ticket,
 		Edge:   true,
 	})
-	return self.openAttempt(ctx, attemptCtx, stream, err, target, listenerClientId, ticket)
+	if err != nil {
+		release()
+		return self.openAttempt(ctx, attemptCtx, nil, err, target, listenerClientId, ticket)
+	}
+	ending, ok := stream.(socketEndingStream)
+	if !ok {
+		// a stream whose end nothing reports would hold Service for good, so it is reset and its ticket refused
+		stream.Reset(protocol.StreamResetCode_RST_CANCELLED)
+		release()
+		return &socketAttempt{kind: socketAttemptRefused}
+	}
+	// the hold is the stream's from here: it goes when the stream has ended, which its dispatcher's end brings too
+	go func() {
+		ending.waitEnded()
+		release()
+	}()
+	return self.openAttempt(ctx, attemptCtx, stream, nil, target, listenerClientId, ticket)
 }
 
 // What one open came to: the accepted stream as a conn, the listener's refusal, or a timeout once attemptCtx ended
@@ -493,6 +546,10 @@ func (self *socketDialer) dial(ctx context.Context, address *SocketAddress, sett
 		for _, findTicket := range answer.tickets {
 			attempt := self.attempt(ctx, target, findTicket, settings, acceptTimeout)
 			if ctx.Err() != nil {
+				if attempt.conn != nil {
+					// accepted as the Dial ended: no one takes the conn, so its stream, and what it holds, end here
+					attempt.conn.Abort()
+				}
 				return nil, &SocketCodeError{Err: ErrSocketUnavailable}
 			}
 			reason := SocketFailedReasonRefused

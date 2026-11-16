@@ -184,8 +184,10 @@ ephemeral or cloud sidecar
 ```text
 register                  a consented, approval-capable device signs KeyRegister after a device or presence
                           decision, never harness; a presence key's KeyRegister also carries the new key's own
-                          signature over its body (WebAuthn: UP and UV set) and, from a device that registered
-                          a live presence key, that key's countersignature (countersign, below)
+                          signature over its body (WebAuthn: UP and UV set; fields 9 and 10 under purpose
+                          key-proof, §7.9's record bytes) and, from a device that registered a live presence
+                          key, that key's countersignature (countersign, below); the device about to sign
+                          refuses a key whose present attestation fails and never downgrades it to asserted
 remove                    ur keys rm <key_id> signs KeyRevoke of the member's SSH key, or of a presence key only
                           from a device that registered a live presence key of its own, under countersign, for a
                           /dev/tty-confirmed command; ur keys ls lists the member's keys with each one's
@@ -195,7 +197,10 @@ first key                 a member's first presence key may register from a /dev
                           member device lists it with its host and time; it is only as strong as that session
                           (owner decision 47)
 labels                    records and approver screens show presence (attested) or presence (asserted), both
-                          channel presence; the policy grammar is unchanged
+                          channel presence; the policy grammar is unchanged; each reader computes the label
+                          locally, at the carrying entry's time, and for a logged key whose attestation fails
+                          under its own roots shows presence (attestation refused), neither attested nor
+                          asserted, the log's KeyRegister rule reading no attestation (§7.9; owner decision 327)
 webauthn-es256 (COSE -7)  FIDO2 keys and Windows Hello through the platform WebAuthn API; passkeys in the iOS
                           and Android apps
   registration            attestation packed, tpm, android-key or apple, verified against the FIDO MDS roots the
@@ -399,13 +404,13 @@ TS1         once a run is tainted, no outward action in it passes the gate on a 
 
 ### 16.7 Harness integration, ingest and restore
 
-`ur install-harness <claude-code|codex|cursor> [--agent <n>] [--instance <i>] [--project]` shows a diff, then writes the MCP entry, the O-tool ask rule and the hooks (absolute path, §4.10), sealing each file's hash for 16.6's check; `--project` writes the committed files cloud sessions load, and §5.8's `.ur`. The global harness config, with per-agent overrides, lives in the author vault (sidecar/design/mocks/recurd-app.html:986-1009); changes rewrite the local files and their hashes.
+`ur install-harness <claude-code|codex|cursor> [--agent <n>] [--instance <i>] [--project]` shows a diff, then writes the MCP entry, the O-tool ask rule and the hooks (absolute path, §4.10), sealing each file's hash for 16.6's check; `--project` writes the committed files cloud sessions load, and §5.8's `.ur`. The global harness config, with per-agent overrides, lives in the author vault (sidecar/design/mocks/recurd-app.html:986-1009); changes rewrite the local files and their hashes. While a Team's `ServiceSettings.record_required` is set (§7.9; owner decision 305), `ur install-harness` writes `onFailure: block` (Claude Code) and `failClosed: true` (Cursor) on every `ur hook` entry, adds `--required` to the hook command and seals that form; `ur hook --required` exits 2 when the daemon cannot take the event, because the hook otherwise exits 0 and neither setting would ever fire. The config-hash check counts a fail-open form as a changed config, so such a run taints, and `ur status` names each fail-closed harness. Codex documents no fail-closed setting, so there `--required`'s exit 2 blocks a PreToolUse only while the hook runs, and `ur status` says so. Enforcement stops at a member's own daemon: a same-uid edit taints but cannot be prevented.
 
 | Harness | MCP entry; O-tool ask rule | Hooks (`ur hook <harness>`) | Transcript |
 |---|---|---|---|
-| Claude Code | `claude mcp add --scope user ur` (`.mcp.json` with `--project`); `permissions.ask` | SessionStart to SessionEnd (1.5 s there), PermissionRequest; fail open unless `onFailure: block` (v2.1.295+) | `transcript_path` JSONL |
-| Codex | `[mcp_servers.ur]` in `~/.codex/config.toml`; per-tool `approval_mode` | `~/.codex/hooks.json`, trusted by hash; PermissionRequest; PreToolUse and PostToolUse for shell, `apply_patch` and MCP; SessionEnd 1 s | `transcript_path` |
-| Cursor | `mcpServers.ur` in `~/.cursor/mcp.json`; `beforeMCPExecution` answers `ask` | `~/.cursor/hooks.json` v1: that hook, afterShellExecution, afterMCPExecution, afterFileEdit | `transcript_path`, null if disabled |
+| Claude Code | `claude mcp add --scope user ur` (`.mcp.json` with `--project`); `permissions.ask` | SessionStart to SessionEnd (1.5 s there), PermissionRequest; fail open unless `onFailure: block` (v2.1.295+), which a Team's `record_required` writes | `transcript_path` JSONL |
+| Codex | `[mcp_servers.ur]` in `~/.codex/config.toml`; per-tool `approval_mode` | `~/.codex/hooks.json`, trusted by hash; PermissionRequest; PreToolUse and PostToolUse for shell, `apply_patch` and MCP; SessionEnd 1 s; no fail-closed setting, so under `record_required` only `--required`'s exit 2 blocks | `transcript_path` |
+| Cursor | `mcpServers.ur` in `~/.cursor/mcp.json`; `beforeMCPExecution` answers `ask` | `~/.cursor/hooks.json` v1: that hook, afterShellExecution, afterMCPExecution, afterFileEdit; `failClosed: true` under `record_required` | `transcript_path`, null if disabled |
 
 Sources (2026-11-03; edit payloads and `session_title` re-read 2026-11-05): https://code.claude.com/docs/en/hooks, https://code.claude.com/docs/en/tools-reference, https://code.claude.com/docs/en/mcp, https://learn.chatgpt.com/docs/hooks.md, https://learn.chatgpt.com/docs/extend/mcp?surface=cli, https://cursor.com/docs/agent/hooks, https://cursor.com/docs/context/mcp.
 
@@ -1127,7 +1132,7 @@ message AnnounceWho {                       // attested: readers check every id 
   string agent_label = 5;                   // runs: [a-z0-9-]{1,64}, the daemon's normalization of §5.5's label
   string harness = 6;                       // runs: claude-code, codex, cursor, or none (a person's task)
   string model = 7;                         // runs: an identifier <= 64 B, or empty
-  repeated bytes tag_ids = 8;               // workers: keyed tag ids (§7.9)
+  repeated bytes tag_ids = 8;               // workers: opaque tag ids (§7.9)
 }
 message AnnounceWhat {
   string title = 1;                         // runs: <= 120 B; repos: the display name, <= 128 B (prose)
