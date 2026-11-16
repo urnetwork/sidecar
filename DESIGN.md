@@ -7396,8 +7396,8 @@ HPKE-XWing = HPKE base mode with KEM 0x647a (X-Wing), KDF HKDF-SHA256 (0x0001) a
              repo_id || u64be(g) || slot_id (§11.12)
 RK_g --HKDF-SHA256(salt repo_id, info "UR evs 1.0 "||purpose||u64be(g) [||group_id||u64be(e)])-->
      link|fek|manifest|path|ref|drop|groupinfo|index|statement (the last: §7.9's sealed bodies)
-ReaderKey_{s,k} = §6 Signed, purpose reader-key, ReaderKey{sidecar_id = 1, xwing_public_key = 2, int64
-              not_after = 3}, not_after in ms since the epoch, at most 7 days after signing; every reader
+ReaderKey_{s,k} = §6 Signed, purpose reader-key, {sidecar_id, xwing_public_key, not_after}, numbered 1 to 3 in
+              that order, not_after an int64 of ms since the epoch, at most 7 days after signing; every reader
               holds one, a fresh X-Wing pair once it is 6 days old, k its incarnation (readerkey, below)
 ur_group    = GroupContext extension 0xF553 (RFC 9420 §17.3's private use), listed in required_capabilities and
               fixed at creation, in TLS presentation (RFC 9420 §2.1.2): struct { opaque network_id<V>; opaque
@@ -8250,7 +8250,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 - **Provides:** `GkmClient` (`CurrentRepoKey`, `RepoKey(repoId, generation)`, `EnsureWritable`, which first commits the pending changes its device may, `DropKey`); `EvsRepoKey.DeriveKey(purpose, context)`; credential validation and pins (also for §6's `Hello`); GenRotates and drop keys, ReaderWraps and DelegationWraps (`KeyDelivery`, 10.5) with 10.9's delivery checks, and recovery wraps; 10.5's KeyHolders and 10.6's gate predicate (§7.9, §11.8, §11.12).
 - **Consumes:** keys, bindings, keychain, recovery code, `SidecarEvent` (§5); topics, `Signed`, `HeadCheck` (§6); tokens, `rev/` (§7.8); the authorization log, `AuthPin`, causal identities, recovery, the `leaves` rule and removals (§7.9, §7.10); `RepoReaders`, seats, kind defaults, consent, `OwnerConfirm`, access logs, `audit`, `EvsShare`, and the gate cache with its network list, sidecar index and install callback (§8, §8.9); kinds, `repo/` state, `place/`, slots, manifests, path epochs, the head-CAS gate and the write budget (§11); `ServiceHost.Blobs` per cluster and Redis (§4.5, §19).
-- **Subprotocol messages:** `GkmHint{group_id = 1, uint64 epoch = 2, GkmHintKind kind = 3, recipient = 4}` in `PushHint` (§6.11, 0x1301), `GkmHintKind` being COMMIT 1, PENDING 2, WELCOME 3, KEY_PACKAGES_LOW 4 and WRAP_PENDING 5, and `recipient` bytes in the wrap path's `s:` or `d:` form: commit on `gkm:<group_id>` (version = epoch × 2^24 + generation); pending, welcome, key-packages-low and wrap-pending (a GenWrap, wrap or sealed GroupInfo is missing; for 10.6's late wraps, `recipient` names the ask's `s:` or `d:` recipient, and a hint lost or coalesced comes again at the next ask) on the per-client `gkm` topic (§6.8).
+- **Subprotocol messages:** `GkmHint{group_id, epoch, kind, recipient}` in `PushHint` (§6.11, 0x1301), numbered 1 to 4 in that order, `epoch` a uint64, `kind` a `GkmHintKind` (COMMIT 1, PENDING 2, WELCOME 3, KEY_PACKAGES_LOW 4, WRAP_PENDING 5) and `recipient` bytes in the wrap path's `s:` or `d:` form: commit on `gkm:<group_id>` (version = epoch × 2^24 + generation); pending, welcome, key-packages-low and wrap-pending (a GenWrap, wrap or sealed GroupInfo is missing; for 10.6's late wraps, `recipient` names the ask's `s:` or `d:` recipient, and a hint lost or coalesced comes again at the next ask) on the per-client `gkm` topic (§6.8).
 - **API routes:** Client class, under 10.6's tokens and scopes, specified in connect/api/bringyour.yml.
 
   ```text
