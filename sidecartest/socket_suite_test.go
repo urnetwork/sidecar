@@ -8,6 +8,13 @@
 // Redis's loss healed by one heartbeat, a looping client shed before anything is signed while another client's
 // calls go on, a spent network's quota from the over-limit list, and the one-dialer clamp on a fake clock.
 //
+// DESIGN-DETAILS 17.2.10's custom names (17.6, 17.7's SOCK-M5-16 line, after TLS-M6-08) run on the same world with
+// tls/ open over facts the test sets (tls_suite_test.go's newTlsSuiteWorld) and urnetwork-edge's platform client
+// Finding as tlsedge does: the pick's table of acme by custom by an acme-only listener by a visitor with no ALPN, the
+// highest claim, the tie and no backup; and ValidateListen's narrowing of a listener's certified and ACME names on the
+// production gate's view, the fake store keeping each entry as the hook left it and the pick reading that. The pick's
+// own table on the pure function is scheduler_test.go's, the narrowing's own cases namespace_tls_test.go's.
+//
 // Nothing sleeps: the engine's first probe, the gate's first over-limit read and its worker's first pass are awaited
 // by count, loads by the gate's own count against the loads its cache has started, and time moves on the Net's
 // FakeClock.
@@ -22,6 +29,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -636,5 +644,418 @@ func TestSocketSuiteOneDialerIsClampedButNeverRefused(t *testing.T) {
 	}
 	if clamp != 25 {
 		t.Fatalf("c at 256 streams is %d", clamp)
+	}
+}
+
+// urnetwork-edge's platform client as tlsedge Finds through it: its K client ids, the first of which its token names.
+type socketSuiteEdge struct {
+	clientIds []*connect.Id
+	token     string
+}
+
+// The world with a custom domain's names (DESIGN-DETAILS 17.2.10): tls/ open over facts the test sets, tls/443/blog
+// and tls/443/shop published to the public for a day, both of the member's devices holding the network's pair, and an
+// edge that Finds as tlsedge does, with the hello's ALPN ids and, for a custom host, its server name. Listeners are
+// clients of either device, so two of one device share the facts its sidecar has.
+type socketSuiteCustomWorld struct {
+	*tlsSuiteWorld
+	edge *socketSuiteEdge
+	// every listener client the test made, and each one's newest set_version
+	clientIdListeners   map[connect.Id]*socketSuiteSidecar
+	clientIdSetVersions map[connect.Id]uint64
+}
+
+func newSocketSuiteCustomWorld(t *testing.T) *socketSuiteCustomWorld {
+	t.Helper()
+	world := &socketSuiteCustomWorld{
+		tlsSuiteWorld:       newTlsSuiteWorld(t),
+		edge:                &socketSuiteEdge{},
+		clientIdListeners:   map[connect.Id]*socketSuiteSidecar{},
+		clientIdSetVersions: map[connect.Id]uint64{},
+	}
+	now := world.net.Clock().Now()
+	world.setFacts(func(facts *socketsservice.TlsListenFacts) {
+		facts.Certs = append(slices.Clone(facts.Certs), &socketsservice.TlsListenCert{
+			SidecarId:   connect.Id(world.dialer.device.SidecarId),
+			NotAfter:    now.Add(24 * time.Hour),
+			NetworkPair: true,
+		})
+	})
+	world.savePublish("public", now.Add(24*time.Hour), "blog", "shop")
+	for range 2 {
+		clientId := connect.NewId()
+		world.edge.clientIds = append(world.edge.clientIds, &clientId)
+	}
+	world.edge.token = world.net.Fakes().Authenticator.Issue(&sidecar.Principal{
+		NetworkId: world.edgeNetworkId,
+		ClientId:  *world.edge.clientIds[0],
+		Audience:  socketsservice.SocketsAudience,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(48 * time.Hour),
+	})
+	return world
+}
+
+// Has the source answer change's copy of the facts from now on, the hooks keeping what they last read.
+func (self *socketSuiteCustomWorld) sourceFacts(change func(facts *socketsservice.TlsListenFacts)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	facts := *self.facts
+	change(&facts)
+	self.facts = &facts
+}
+
+// A new listener client of device, which the world's Finds know.
+func (self *socketSuiteCustomWorld) listenerOf(device *sidecartest.AdmissionDevice) *socketSuiteSidecar {
+	listener := self.sidecarOf(device)
+	self.clientIdListeners[listener.clientId] = listener
+	return listener
+}
+
+// listener's heartbeat of tls/443/<owner>, its http registration as edgeRegistration makes it changed by mutate: the
+// status of the whole-set page's one entry.
+func (self *socketSuiteCustomWorld) heartbeatWith(listener *socketSuiteSidecar, owner string, mutate func(registration *sidecar.SocketRegistration)) sidecar.SocketRegistrationStatus {
+	self.t.Helper()
+	registration := self.edgeRegistration(listener, "tls/443/"+owner)
+	mutate(registration)
+	self.clientIdSetVersions[listener.clientId] += 1
+	return self.status(listener, self.clientIdSetVersions[listener.clientId], registration)
+}
+
+// listener's heartbeat of tls/443/<owner> offering alpns and listing certified and acme.
+func (self *socketSuiteCustomWorld) heartbeat(listener *socketSuiteSidecar, owner string, alpns []string, certified []string, acme []*sidecar.SocketAcmeName) sidecar.SocketRegistrationStatus {
+	self.t.Helper()
+	return self.heartbeatWith(listener, owner, func(registration *sidecar.SocketRegistration) {
+		registration.Alpn = alpns
+		registration.CertifiedNames = certified
+		registration.AcmeNames = acme
+	})
+}
+
+// listener's lease of tls/443/<owner> as the store keeps it, nil for none.
+func (self *socketSuiteCustomWorld) stored(listener *socketSuiteSidecar, owner string) *sidecar.SocketRegistration {
+	self.t.Helper()
+	listeners, err := self.store.ListListeners(self.ctx, self.networkId, []byte("tls/443/"+owner))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	for _, stored := range listeners {
+		if stored.Candidate.ListenerClientId == listener.clientId {
+			return stored.Registration
+		}
+	}
+	return nil
+}
+
+// The edge's Find of tls/443/<owner> offering alpns for serverName, "" for a name under the network's own zone: the
+// listeners its primary and backup tickets name, each verified, nil for none, or the refusal's code.
+func (self *socketSuiteCustomWorld) edgeFind(owner string, alpns []string, serverName string) (*socketSuiteSidecar, *socketSuiteSidecar, sidecar.SocketErrorCode) {
+	self.t.Helper()
+	name := "tls/443/" + owner
+	networkId := self.networkId
+	result := &sidecar.SocketFindResult{}
+	code := self.call(http.MethodPost, "/socket/find", self.edge.token, &sidecar.SocketFindArgs{
+		Name:       name,
+		NetworkId:  &networkId,
+		ClientIds:  self.edge.clientIds,
+		Protocol:   "tls",
+		Alpn:       alpns,
+		ServerName: serverName,
+	}, result)
+	if code != http.StatusOK {
+		self.t.Fatalf("an edge Find answered %d", code)
+	}
+	if result.Error != nil {
+		return nil, nil, result.Error.Code
+	}
+	listenerOf := func(findTicket *sidecar.SocketFindTicket) *socketSuiteSidecar {
+		if findTicket == nil {
+			return nil
+		}
+		ticket, err := sidecar.VerifySocketTicket(findTicket.Ticket, self.ticketKeys.VerifyKeys(), uint64(self.net.Clock().Now().UnixMilli()))
+		if err != nil {
+			self.t.Fatalf("an edge Find's ticket: %v", err)
+		}
+		listenerClientId, err := connect.IdFromBytes(ticket.GetListenerClientId())
+		if err != nil || self.clientIdListeners[listenerClientId] == nil || ticket.GetName() != name {
+			self.t.Fatalf("a ticket names %q and no listener of the world (%v)", ticket.GetName(), err)
+		}
+		return self.clientIdListeners[listenerClientId]
+	}
+	return listenerOf(result.Primary), listenerOf(result.Backup), ""
+}
+
+// A listener as a failure names it.
+func socketSuiteListenerName(listener *socketSuiteSidecar) string {
+	if listener == nil {
+		return "none"
+	}
+	return listener.clientId.String()
+}
+
+// The ALPN ids the rows below offer and serve.
+var (
+	socketSuiteVisitorAlpns = []string{"h2", "http/1.1"}
+	socketSuiteAcmeAlpns    = []string{sidecar.SocketAlpnAcme}
+	socketSuiteBothAlpns    = []string{"h2", "http/1.1", sidecar.SocketAlpnAcme}
+)
+
+// DESIGN-DETAILS 17.6's pick through the engine, the production gate's view and the fake store, every list as
+// ValidateListen left it: its table of acme by custom by an acme-only listener by a visitor with no ALPN. An
+// acme-tls/1 Find for a custom host reaches the claim holder alone, though it neither serves nor stays out of a drain,
+// and never with a backup; one for a host nobody claims, or for a name under the network's own zone, finds no
+// listener; of two equal claims the lower client id answers, and after a takeover the higher claim, while the old
+// holder's lease still lists its own, until its next heartbeat ends it. A visitor's Find for a custom host reaches
+// only a listener certified for it and never an acme-only one; one with neither ALPN nor server name reaches every
+// listener but an acme-only one, and finds no listener where only acme-only ones listen.
+func TestSocketSuitePicksByCertifiedNamesAndClaims(t *testing.T) {
+	world := newSocketSuiteCustomWorld(t)
+	now := world.net.Clock().Now()
+	firstSidecarId := connect.Id(world.listener.device.SidecarId)
+	secondSidecarId := connect.Id(world.dialer.device.SidecarId)
+	world.setFacts(func(facts *socketsservice.TlsListenFacts) {
+		facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+			{SidecarId: secondSidecarId, Owner: "blog", Name: "app.customer.example", NotAfter: now.Add(30 * 24 * time.Hour)},
+			{SidecarId: firstSidecarId, Owner: "blog", Name: "solo.customer.example", NotAfter: now.Add(30 * 24 * time.Hour)},
+		}
+		facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+			{SidecarId: firstSidecarId, Owner: "blog", Name: "acme.customer.example", ClaimSeq: 9},
+			{SidecarId: firstSidecarId, Owner: "blog", Name: "solo.customer.example", ClaimSeq: 3},
+			{SidecarId: secondSidecarId, Owner: "blog", Name: "tie.customer.example", ClaimSeq: 4},
+			{SidecarId: firstSidecarId, Owner: "shop", Name: "shop.customer.example", ClaimSeq: 2},
+		}
+	})
+	plain := world.listenerOf(world.listener.device)
+	certified := world.listenerOf(world.dialer.device)
+	holder := world.listenerOf(world.listener.device)
+	// acme-only, serving, out of any drain, and certified for the host it answers challenges for
+	responder := world.listenerOf(world.listener.device)
+	tieOne := world.listenerOf(world.dialer.device)
+	tieTwo := world.listenerOf(world.dialer.device)
+	shopHolder := world.listenerOf(world.listener.device)
+	holderEntry := func(registration *sidecar.SocketRegistration) {
+		registration.Alpn = socketSuiteAcmeAlpns
+		registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "acme.customer.example", ClaimSeq: 9}}
+		registration.Serving = false
+		registration.Draining = true
+	}
+	for index, status := range []sidecar.SocketRegistrationStatus{
+		world.heartbeat(plain, "blog", socketSuiteVisitorAlpns, nil, nil),
+		world.heartbeat(certified, "blog", socketSuiteVisitorAlpns, []string{"app.customer.example"}, nil),
+		world.heartbeatWith(holder, "blog", holderEntry),
+		world.heartbeat(responder, "blog", socketSuiteAcmeAlpns, []string{"solo.customer.example"}, []*sidecar.SocketAcmeName{{Name: "solo.customer.example", ClaimSeq: 3}}),
+		world.heartbeat(tieOne, "blog", socketSuiteBothAlpns, nil, []*sidecar.SocketAcmeName{{Name: "tie.customer.example", ClaimSeq: 4}}),
+		world.heartbeat(tieTwo, "blog", socketSuiteBothAlpns, nil, []*sidecar.SocketAcmeName{{Name: "tie.customer.example", ClaimSeq: 4}}),
+		world.heartbeat(shopHolder, "shop", socketSuiteAcmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: "shop.customer.example", ClaimSeq: 2}}),
+	} {
+		if status != sidecar.SocketRegistrationStatusOk {
+			t.Fatalf("listener %d's heartbeat answered %s", index, status)
+		}
+	}
+	if stored := world.stored(holder, "blog"); stored == nil || stored.Serving || !stored.Draining || len(stored.AcmeNames) != 1 || stored.AcmeNames[0].ClaimSeq != 9 {
+		t.Fatalf("the store keeps the holder's lease as %+v", stored)
+	}
+	if stored := world.stored(responder, "blog"); stored == nil || !slices.Equal(stored.CertifiedNames, []string{"solo.customer.example"}) ||
+		len(stored.AcmeNames) != 1 || stored.AcmeNames[0].ClaimSeq != 3 {
+		t.Fatalf("the store keeps the responder's lease as %+v", stored)
+	}
+	lowerTie := tieOne
+	if tieTwo.clientId.Cmp(tieOne.clientId) < 0 {
+		lowerTie = tieTwo
+	}
+	cases := []struct {
+		name       string
+		owner      string
+		alpns      []string
+		serverName string
+		code       sidecar.SocketErrorCode
+		// the listeners an answer may name, and whether it comes with a backup
+		reached []*socketSuiteSidecar
+		backup  bool
+	}{
+		{name: "acme, custom: the claim holder alone", owner: "blog", alpns: socketSuiteAcmeAlpns, serverName: "acme.customer.example", reached: []*socketSuiteSidecar{holder}},
+		{name: "acme, custom: an acme-only claim holder certified too", owner: "blog", alpns: socketSuiteAcmeAlpns, serverName: "solo.customer.example", reached: []*socketSuiteSidecar{responder}},
+		{name: "acme among other ids, custom: still the claim holder alone", owner: "blog", alpns: []string{"h2", sidecar.SocketAlpnAcme}, serverName: "acme.customer.example", reached: []*socketSuiteSidecar{holder}},
+		{name: "acme, custom, a host nobody claims", owner: "blog", alpns: socketSuiteAcmeAlpns, serverName: "app.customer.example", code: sidecar.SocketErrorCodeNoListener},
+		{name: "acme, a name under the network's own zone", owner: "blog", alpns: socketSuiteAcmeAlpns, code: sidecar.SocketErrorCodeNoListener},
+		{name: "acme, custom, two equal claims: the lower client id alone", owner: "blog", alpns: socketSuiteAcmeAlpns, serverName: "tie.customer.example", reached: []*socketSuiteSidecar{lowerTie}},
+		{name: "visitor, custom: the certified listener alone", owner: "blog", alpns: []string{"h2"}, serverName: "app.customer.example", reached: []*socketSuiteSidecar{certified}},
+		{name: "visitor with no ALPN, custom: the certified listener alone", owner: "blog", serverName: "app.customer.example", reached: []*socketSuiteSidecar{certified}},
+		{name: "visitor, custom, none certified", owner: "blog", alpns: []string{"h2"}, serverName: "none.customer.example", code: sidecar.SocketErrorCodeNoListener},
+		{name: "visitor with no ALPN, custom, an acme-only listener certified alone", owner: "blog", serverName: "solo.customer.example", code: sidecar.SocketErrorCodeNoListener},
+		{name: "visitor with no ALPN, a name under the network's own zone: every listener but the acme-only ones", owner: "blog", reached: []*socketSuiteSidecar{plain, certified, tieOne, tieTwo}, backup: true},
+		{name: "visitor with no ALPN, acme-only listeners alone", owner: "shop", code: sidecar.SocketErrorCodeNoListener},
+	}
+	for _, c := range cases {
+		for range 20 {
+			primary, backup, code := world.edgeFind(c.owner, c.alpns, c.serverName)
+			if code != c.code {
+				t.Fatalf("%s: answered %q", c.name, code)
+			}
+			if code != "" {
+				continue
+			}
+			if !slices.Contains(c.reached, primary) || (backup == nil) == c.backup ||
+				(backup != nil && (backup == primary || !slices.Contains(c.reached, backup))) {
+				t.Fatalf("%s: reached %s and %s", c.name, socketSuiteListenerName(primary), socketSuiteListenerName(backup))
+			}
+		}
+	}
+
+	// a takeover: the lock's claim for the host moves to the second device at 10, whose new listener lists it at once;
+	// the holder's lease still lists 9, and the higher claim answers
+	world.setFacts(func(facts *socketsservice.TlsListenFacts) {
+		facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+			{SidecarId: secondSidecarId, Owner: "blog", Name: "acme.customer.example", ClaimSeq: 10},
+			{SidecarId: firstSidecarId, Owner: "blog", Name: "solo.customer.example", ClaimSeq: 3},
+			{SidecarId: secondSidecarId, Owner: "blog", Name: "tie.customer.example", ClaimSeq: 4},
+			{SidecarId: firstSidecarId, Owner: "shop", Name: "shop.customer.example", ClaimSeq: 2},
+		}
+	})
+	taker := world.listenerOf(world.dialer.device)
+	if status := world.heartbeat(taker, "blog", socketSuiteAcmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: "acme.customer.example", ClaimSeq: 10}}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("the taker's heartbeat answered %s", status)
+	}
+	if stored := world.stored(holder, "blog"); stored == nil || len(stored.AcmeNames) != 1 || stored.AcmeNames[0].ClaimSeq != 9 {
+		t.Fatalf("the old holder's lease reads %+v before its next heartbeat", stored)
+	}
+	for range 20 {
+		if primary, backup, code := world.edgeFind("blog", socketSuiteAcmeAlpns, "acme.customer.example"); code != "" || primary != taker || backup != nil {
+			t.Fatalf("after the takeover a challenge reached %s and %s (%q)", socketSuiteListenerName(primary), socketSuiteListenerName(backup), code)
+		}
+	}
+	// the old holder's next heartbeat: its claim is the lock's no longer, and an acme-only entry left with none ends
+	if status := world.heartbeatWith(holder, "blog", holderEntry); status != sidecar.SocketRegistrationStatusRevoked {
+		t.Fatalf("the old holder's heartbeat answered %s", status)
+	}
+	if stored := world.stored(holder, "blog"); stored != nil {
+		t.Fatalf("the old holder's lease stands: %+v", stored)
+	}
+	if primary, backup, code := world.edgeFind("blog", socketSuiteAcmeAlpns, "acme.customer.example"); code != "" || primary != taker || backup != nil {
+		t.Fatalf("a challenge reached %s and %s (%q)", socketSuiteListenerName(primary), socketSuiteListenerName(backup), code)
+	}
+}
+
+// DESIGN-DETAILS 17.2.10's narrowing through the engine, the production gate's view and the fake store. A heartbeat
+// keeps the certified names its sidecar's rows certify past CertifiedMargin on the name's owner, and the ACME names
+// whose claim the account's lock holds at that sequence; a name with no row, a row on another owner, a row inside the
+// margin and a claim below the row's are dropped, the entry answering ok and its network name still served. A list
+// past its count is malformed. An acme-only entry left with no claim is refused, and one holding its claim admitted.
+// A claim above the facts' reads them again on the heartbeat, so a new claim is not held up by the cache. The store
+// keeps each entry as the hook left it, and the pick reads that.
+func TestSocketSuiteNarrowsCertifiedAndAcmeNames(t *testing.T) {
+	world := newSocketSuiteCustomWorld(t)
+	now := world.net.Clock().Now()
+	tlsSettings := socketsservice.DefaultTlsNamespaceSettings()
+	firstSidecarId := connect.Id(world.listener.device.SidecarId)
+	secondSidecarId := connect.Id(world.dialer.device.SidecarId)
+	world.setFacts(func(facts *socketsservice.TlsListenFacts) {
+		facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+			{SidecarId: firstSidecarId, Owner: "blog", Name: "app.customer.example", NotAfter: now.Add(30 * 24 * time.Hour)},
+			{SidecarId: firstSidecarId, Owner: "shop", Name: "other.customer.example", NotAfter: now.Add(30 * 24 * time.Hour)},
+			{SidecarId: secondSidecarId, Owner: "blog", Name: "app.customer.example", NotAfter: now.Add(tlsSettings.CertifiedMargin / 2)},
+		}
+		facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+			{SidecarId: firstSidecarId, Owner: "blog", Name: "acme.customer.example", ClaimSeq: 5},
+		}
+	})
+	listed := world.listenerOf(world.listener.device)
+	marginal := world.listenerOf(world.dialer.device)
+	if status := world.heartbeat(listed, "blog", socketSuiteBothAlpns,
+		[]string{"app.customer.example", "unrowed.customer.example", "other.customer.example"},
+		[]*sidecar.SocketAcmeName{{Name: "acme.customer.example", ClaimSeq: 4}}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("a heartbeat with names to drop answered %s", status)
+	}
+	if status := world.heartbeat(marginal, "blog", socketSuiteVisitorAlpns, []string{"app.customer.example"}, nil); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("a heartbeat whose one certificate is inside the margin answered %s", status)
+	}
+	if stored := world.stored(listed, "blog"); stored == nil || !slices.Equal(stored.CertifiedNames, []string{"app.customer.example"}) || stored.AcmeNames != nil {
+		t.Fatalf("the store keeps the listed lease as %+v", stored)
+	}
+	if stored := world.stored(marginal, "blog"); stored == nil || stored.CertifiedNames != nil || stored.AcmeNames != nil {
+		t.Fatalf("the store keeps the marginal lease as %+v", stored)
+	}
+	// the pick reads what the store keeps
+	for range 20 {
+		if primary, backup, code := world.edgeFind("blog", []string{"h2"}, "app.customer.example"); code != "" || primary != listed || backup != nil {
+			t.Fatalf("the custom host reached %s and %s (%q)", socketSuiteListenerName(primary), socketSuiteListenerName(backup), code)
+		}
+	}
+	for _, serverName := range []string{"unrowed.customer.example", "other.customer.example"} {
+		if _, _, code := world.edgeFind("blog", []string{"h2"}, serverName); code != sidecar.SocketErrorCodeNoListener {
+			t.Fatalf("the dropped %s answered %q", serverName, code)
+		}
+	}
+	if _, _, code := world.edgeFind("blog", socketSuiteAcmeAlpns, "acme.customer.example"); code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("a dropped claim's challenge answered %q", code)
+	}
+	reached := map[*socketSuiteSidecar]bool{}
+	for range 20 {
+		primary, backup, code := world.edgeFind("blog", []string{"h2"}, "")
+		if code != "" {
+			t.Fatalf("the network name answered %q", code)
+		}
+		reached[primary] = true
+		reached[backup] = true
+	}
+	if !reached[listed] || !reached[marginal] {
+		t.Fatal("a listener that lost a custom name lost its network name too")
+	}
+
+	// a list past its count is malformed, whichever list it is
+	tooManyCertified := []string{}
+	for index := range socketsservice.DefaultSocketsSettings().CertifiedNameMaxCount + 1 {
+		tooManyCertified = append(tooManyCertified, fmt.Sprintf("h%d.customer.example", index))
+	}
+	tooManyAcme := []*sidecar.SocketAcmeName{}
+	for index := range socketsservice.DefaultSocketsSettings().AcmeNameMaxCount + 1 {
+		tooManyAcme = append(tooManyAcme, &sidecar.SocketAcmeName{Name: fmt.Sprintf("a%d.customer.example", index), ClaimSeq: 5})
+	}
+	crowded := world.listenerOf(world.listener.device)
+	if status := world.heartbeat(crowded, "blog", socketSuiteBothAlpns, tooManyCertified, nil); status != sidecar.SocketRegistrationStatusInvalid {
+		t.Fatalf("certified names past their count answered %s", status)
+	}
+	if status := world.heartbeat(crowded, "blog", socketSuiteBothAlpns, nil, tooManyAcme); status != sidecar.SocketRegistrationStatusInvalid {
+		t.Fatalf("ACME names past their count answered %s", status)
+	}
+	if stored := world.stored(crowded, "blog"); stored != nil {
+		t.Fatalf("a malformed entry was stored: %+v", stored)
+	}
+
+	// an acme-only entry left with no claim is refused, and one holding the lock's claim admitted
+	responder := world.listenerOf(world.listener.device)
+	if status := world.heartbeat(responder, "blog", socketSuiteAcmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: "acme.customer.example", ClaimSeq: 4}}); status != sidecar.SocketRegistrationStatusDenied {
+		t.Fatalf("an acme-only entry left with no claim answered %s", status)
+	}
+	if status := world.heartbeat(responder, "blog", socketSuiteAcmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: "acme.customer.example", ClaimSeq: 5}}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("an acme-only entry holding the claim answered %s", status)
+	}
+	if primary, backup, code := world.edgeFind("blog", socketSuiteAcmeAlpns, "acme.customer.example"); code != "" || primary != responder || backup != nil {
+		t.Fatalf("the challenge reached %s and %s (%q)", socketSuiteListenerName(primary), socketSuiteListenerName(backup), code)
+	}
+
+	// the lock's next claim, 6, is the first device's in the rows but not yet in the hooks' facts: the heartbeat
+	// listing it reads them once more and keeps it, and it answers the next challenge over the responder's 5
+	world.net.Clock().Advance(tlsSettings.FactsRereadInterval)
+	world.sourceFacts(func(facts *socketsservice.TlsListenFacts) {
+		facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+			{SidecarId: firstSidecarId, Owner: "blog", Name: "acme.customer.example", ClaimSeq: 6},
+		}
+	})
+	loads, _ := world.hooks.Loads()
+	if status := world.heartbeat(listed, "blog", socketSuiteBothAlpns, []string{"app.customer.example"},
+		[]*sidecar.SocketAcmeName{{Name: "acme.customer.example", ClaimSeq: 6}}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("a heartbeat listing a newer claim answered %s", status)
+	}
+	if count, _ := world.hooks.Loads(); count != loads+1 {
+		t.Fatalf("a claim above the facts' read them %d times", count-loads)
+	}
+	if stored := world.stored(listed, "blog"); stored == nil || len(stored.AcmeNames) != 1 || stored.AcmeNames[0].ClaimSeq != 6 {
+		t.Fatalf("the store keeps the newer claim's lease as %+v", stored)
+	}
+	for range 20 {
+		if primary, backup, code := world.edgeFind("blog", socketSuiteAcmeAlpns, "acme.customer.example"); code != "" || primary != listed || backup != nil {
+			t.Fatalf("the newer claim's challenge reached %s and %s (%q)", socketSuiteListenerName(primary), socketSuiteListenerName(backup), code)
+		}
 	}
 }

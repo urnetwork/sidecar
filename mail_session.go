@@ -113,6 +113,9 @@ type MailSessionArgs struct {
 	Depositor *MailDepositor
 	// The mail component's sealed directory, under whose spool/ each message waits.
 	SpoolStore SidecarStore
+	// §15.5's strict_chain for a spliced session's message (MailStrictPolicy.StrictChain, MAIL-M7-24): the SNI, the
+	// recipients' domains and the presented key. Nil seals none, and no direct-MX session asks it.
+	StrictChain func(ctx context.Context, sniHost string, recipientDomains []string, spkiSha256 []byte) bool
 	// Nil is real time.
 	Clock Clock
 	// Nil logs nothing.
@@ -257,7 +260,7 @@ func (self *MailSessionServer) Serve(ctx context.Context, stream *MailReceiverSt
 		// the router always sends one, so a stream without is no sender's
 		return
 	}
-	self.serveSession(ctx, stream, ingress)
+	self.serveSession(ctx, stream, ingress, false)
 }
 
 // One direct-MX session past its handshake (MailDirectListener, mail_direct.go): tlsConn on the key whose SPKI
@@ -268,11 +271,11 @@ func (self *MailSessionServer) ServeDirect(ctx context.Context, tlsConn *tls.Con
 	if ingress == nil || ingress.GetVersion() != mailFormatVersion {
 		return
 	}
-	self.serveSession(ctx, &MailReceiverStream{Tls: tlsConn, SpkiSha256: spkiSha256}, ingress)
+	self.serveSession(ctx, &MailReceiverStream{Tls: tlsConn, SpkiSha256: spkiSha256}, ingress, true)
 }
 
-// One session over stream, its ingress read already.
-func (self *MailSessionServer) serveSession(ctx context.Context, stream *MailReceiverStream, ingress *protocol.MailIngress) {
+// One session over stream, its ingress read already; direct for a direct-MX session, which never seals strict_chain.
+func (self *MailSessionServer) serveSession(ctx context.Context, stream *MailReceiverStream, ingress *protocol.MailIngress, direct bool) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	closeStream := func() {
@@ -286,6 +289,7 @@ func (self *MailSessionServer) serveSession(ctx context.Context, stream *MailRec
 		ctx:     sessionCtx,
 		stream:  stream,
 		ingress: ingress,
+		direct:  direct,
 	}
 	session.stopMailTimer = self.clock.AfterFunc(self.settings.MailTimeout, closeStream)
 	defer session.stopMailTimer()
@@ -328,10 +332,12 @@ func (self *mailSessionBackend) NewSession(conn *smtp.Conn) (smtp.Session, error
 // from a goroutine of its own, which the fork's reset waits out (third_party/go-smtp/URNETWORK.md); the transaction
 // sits under its own lock all the same, since Close may call Logout from another goroutine, and Data works on a copy.
 type MailSession struct {
-	server        *MailSessionServer
-	ctx           context.Context
-	stream        *MailReceiverStream
-	ingress       *protocol.MailIngress
+	server  *MailSessionServer
+	ctx     context.Context
+	stream  *MailReceiverStream
+	ingress *protocol.MailIngress
+	// a direct-MX session (MailDirectListener), which never seals strict_chain
+	direct        bool
 	smtpServer    *smtp.Server
 	conn          *smtp.Conn
 	limits        *mailSessionLimits
@@ -495,6 +501,14 @@ func (self *MailSession) Data(reader io.Reader) error {
 	return nil
 }
 
+// strict_chain for one message (MAIL-M7-24): the strict policy's answer for a spliced session, never a direct-MX one's.
+func (self *MailSessionServer) strictChain(ctx context.Context, sniHost string, recipients []string, spkiSha256 []byte, direct bool) bool {
+	if direct || self.args.StrictChain == nil {
+		return false
+	}
+	return self.args.StrictChain(ctx, sniHost, mailRecipientDomains(recipients), spkiSha256)
+}
+
 // The message's sealed evidence, nil when there is none to seal: no checker on this leg, or the checks' own read of
 // the spool failed. Either deposits as "evidence unavailable", which only ever weakens a label (D-MAIL-14).
 func (self *MailSession) evidence(spool *mailSpool, transaction *mailSessionTransaction, receiveTime time.Time, sniHost string) *protocol.MailAuthEvidence {
@@ -522,12 +536,15 @@ func (self *MailSession) evidence(spool *mailSpool, transaction *mailSessionTran
 		return nil
 	}
 	messageSha256 := spool.Sha256()
+	recipients := []string{}
+	for _, target := range transaction.targets {
+		recipients = append(recipients, target.Recipients...)
+	}
 	evidence, err := server.evidence.Build(&MailEvidenceInput{
 		MessageSha256:     messageSha256[:],
 		ReceiveTimeMillis: uint64(receiveTime.UnixMilli()),
-		// strict_chain stays false until MAIL-M7-24 and plan-MAIL-dnssec-evidence: no mail claims it meanwhile
-		StrictChain: false,
-		Outcome:     outcome,
+		StrictChain:       server.strictChain(self.ctx, sniHost, recipients, self.stream.SpkiSha256[:], self.direct),
+		Outcome:           outcome,
 	})
 	if err != nil {
 		return nil
