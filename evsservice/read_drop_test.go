@@ -97,6 +97,42 @@ func TestReadDropCancelledLeavesItReadable(t *testing.T) {
 	}
 }
 
+// A cancel committed before not_before_ms whose table append was lost: the window's cancel leaves the versions
+// readable all the same, and the read makes the lost append again.
+func TestReadDropCancelInTheWindowTheTableLacks(t *testing.T) {
+	fixture := newDropTestFixture(t, 2)
+	sink := &dropTestSink{next: fixture.engine.drops}
+	fixture.engine.deps.Drops = sink
+	plan, history := fixture.dropPlan(false, fixture.listedBelow(3))
+	fixture.commitDrop(plan, 3)
+	sink.stateLock.Lock()
+	sink.failing = true
+	sink.stateLock.Unlock()
+	fixture.requireCommitted(fixture.postDrop(fixture.cancelPlan(history.GetDropId(), 3)), 4)
+	fixture.awaitStepEights()
+	if entry := fixture.table().Drop(sidecar.Id(history.GetDropId())); entry == nil || entry.State != DropStatePending {
+		t.Fatalf("a lost cancel append left %+v", entry)
+	}
+	sink.stateLock.Lock()
+	sink.failing = false
+	sink.stateLock.Unlock()
+	if err := fixture.host.Redis.Delete(fixture.ctx, []string{HeadCacheKey(fixture.check.repoId)}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.engine.dropIndex = NewDropIndex(fixture.settings.Drop, fixture.engine.records, fixture.engine.locator)
+	read := fixture.read(fixture.token(fixture.check.signerId), &protocol.EvsReadRequest{
+		RefId: fixture.check.refId.Bytes(), PinVersion: fixture.head().Version(), Fresh: true,
+		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: fixture.x.Components()}}, Version: 1}},
+	})
+	if path := readTestOnePath(t, read); path.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_STATE_UNSPECIFIED {
+		t.Fatalf("a version a window cancel freed reads %s", path.GetState())
+	}
+	fixture.awaitStepEights()
+	if entry := fixture.table().Drop(sidecar.Id(history.GetDropId())); entry == nil || entry.State != DropStateCancelled {
+		t.Fatalf("the read did not make the lost cancel's append again: %+v", entry)
+	}
+}
+
 // The DROP's statement and body go once a reply, on its first path naming the drop, and no body goes for a DROP
 // version the request's held_drops names.
 func TestReadDropBodyOnceAndHeld(t *testing.T) {

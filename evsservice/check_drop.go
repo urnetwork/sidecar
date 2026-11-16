@@ -317,8 +317,8 @@ func CheckDropBoundary(view *PushView) *EvsCheckRefusal {
 			return boundary(tokenPath, fmt.Sprintf("boundary %d", path.GetBoundary()))
 		}
 	}
-	for key, change := range changes {
-		if !written[key] {
+	for _, change := range view.Payload.Changes {
+		if !written[change.TokenPath.KeyString()] {
 			return boundary(change.TokenPath, "a change no written lineage names")
 		}
 	}

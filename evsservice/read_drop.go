@@ -6,8 +6,8 @@
 //	              never had a drop pays
 //	           1  the live drops, newest first: each table entry on V's ref pending, executing, held, done or observed
 //	              with version > u(V), and each bit-5 entry of the head's window the table lacks (whose append is made
-//	              again, once a process, when the head came from the cluster): Covers(body, e(V), t(V), k(V))
-//	              (sidecar.EvsDropLists.Lists) gives that drop
+//	              again, once a process, when the head came from the cluster), none a cancel in that window names:
+//	              Covers(body, e(V), t(V), k(V)) (sidecar.EvsDropLists.Lists) gives that drop
 //	           2  each list file of the repo (bloom, then the rows by entry hash): a row with h(V) whose drop has no
 //	              void record gives that drop, a void record outranking a row
 //	           3  none
@@ -62,6 +62,8 @@ type readDrops struct {
 	statementSent map[uint64]bool
 	bodySent      map[uint64]bool
 	bodyByteCount int
+	// the drops a cancel in the head's window names, read once
+	cancels map[sidecar.Id]bool
 }
 
 // The repo's table, read once an attempt through the index; nil while the repo never had a drop. Nothing at a format-1
@@ -93,10 +95,15 @@ func (self *readAttempt) dropOf(target *readDropTarget) (*readDropVerdict, error
 		notBeforeMs := body.Lists.History().GetNotBeforeMs()
 		return &readDropVerdict{body: body, pending: pending && now.UnixMilli() < notBeforeMs}
 	}
+	// the drops a committed cancel in the head's window names, which no table write may have caught up with yet
+	cancelled, err := self.windowCancels()
+	if err != nil {
+		return nil, err
+	}
 	// 1: the live drops on this ref, newest first
 	entries := []*DropTableEntry{}
 	for _, entry := range table.Drops {
-		if entry.RefId != self.refId || entry.Version <= target.commitVersion {
+		if entry.RefId != self.refId || entry.Version <= target.commitVersion || cancelled[entry.DropId] {
 			continue
 		}
 		switch entry.State {
@@ -118,7 +125,7 @@ func (self *readAttempt) dropOf(target *readDropTarget) (*readDropVerdict, error
 		}
 	}
 	// the window's bit-5 entries the table lacks: a lost append, made again
-	verdict, err := self.windowDropOf(target, table, verdictOf)
+	verdict, err := self.windowDropOf(target, table, cancelled, verdictOf)
 	if err != nil || verdict != nil {
 		return verdict, err
 	}
@@ -162,7 +169,7 @@ func (self *readAttempt) dropOf(target *readDropTarget) (*readDropVerdict, error
 
 // Step 1's second half: each bit-5 entry of the head's window after u(V) whose drop the table holds neither an entry
 // nor a void record for, its append made again off the reply path when the head came from the cluster.
-func (self *readAttempt) windowDropOf(target *readDropTarget, table *DropTableState, verdictOf func(body *DropBody, pending bool) *readDropVerdict) (*readDropVerdict, error) {
+func (self *readAttempt) windowDropOf(target *readDropTarget, table *DropTableState, cancelled map[sidecar.Id]bool, verdictOf func(body *DropBody, pending bool) *readDropVerdict) (*readDropVerdict, error) {
 	head := self.head.Head
 	window, err := EvsHeadWindow(head)
 	if err != nil {
@@ -185,11 +192,18 @@ func (self *readAttempt) windowDropOf(target *readDropTarget, table *DropTableSt
 		if err != nil {
 			return nil, err
 		}
-		if table.Drop(body.DropId()) != nil || table.Void(body.DropId()) != nil {
+		dropId := body.DropId()
+		tableEntry, void := table.Drop(dropId), table.Void(dropId)
+		lacks := tableEntry == nil && void == nil
+		if !body.Drop() {
+			// a cancel the table lacks: its drop still pending there, or neither its entry nor its void record
+			lacks = lacks || (tableEntry != nil && tableEntry.State == DropStatePending)
+		}
+		if !lacks {
 			continue
 		}
 		met = append(met, &metDrop{refId: self.refId, body: body, seenAt: self.engine.clock.Now()})
-		if !body.Drop() || target.tokenPath == nil {
+		if !body.Drop() || target.tokenPath == nil || cancelled[dropId] {
 			continue
 		}
 		if _, listed := body.Lists.Lists(target.epoch, target.tokenPath, target.version, false); listed {
@@ -197,6 +211,34 @@ func (self *readAttempt) windowDropOf(target *readDropTarget, table *DropTableSt
 		}
 	}
 	return nil, nil
+}
+
+// The drops a cancel among the head's window's bit-5 entries names, read once an attempt.
+func (self *readAttempt) windowCancels() (map[sidecar.Id]bool, error) {
+	if self.drops.cancels != nil {
+		return self.drops.cancels, nil
+	}
+	head := self.head.Head
+	window, err := EvsHeadWindow(head)
+	if err != nil {
+		return nil, err
+	}
+	first := EvsHeadWindowFirstVersion(head)
+	cancels := map[sidecar.Id]bool{}
+	for i, entry := range window {
+		if !entry.Drop() {
+			continue
+		}
+		body, err := self.engine.dropIndex.Body(self.ctx, self.cluster, self.repoId, self.refId, first+uint64(i), entry)
+		if err != nil {
+			return nil, err
+		}
+		if !body.Drop() {
+			cancels[body.DropId()] = true
+		}
+	}
+	self.drops.cancels = cancels
+	return cancels, nil
 }
 
 // The repo's network, as repo/ names it (cached at most 5 s, which the guard read), for an append's admission; the
