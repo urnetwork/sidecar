@@ -41,7 +41,7 @@ require (
 	github.com/letsencrypt/pebble/v2 v2.10.1 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mholt/acmez/v3 v3.1.7 // indirect
+	github.com/mholt/acmez/v3 v3.1.7
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mjl-/adns v0.0.0-20260809141028-22f885debe71 // indirect
 	github.com/mjl-/flate v0.0.0-20250221133712-6372d09eb978 // indirect

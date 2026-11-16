@@ -5,7 +5,8 @@
 // object found missing with their paths and the prune's time, a racing touch read again as fresh; the hook's lines
 // naming at most 20 objects; and through stock git and the receive path, a push whose object is not stored refused
 // `lfs objects missing` with evs's tip unmoved and the journal empty, then committed once the object is stored, and a
-// force push to an ancestor whose object aged touching it before its POST.
+// force push to an ancestor whose object aged touching it before its POST; and an owned ref's git-lfs hold naming its
+// objects in ur status only while it stands.
 
 package sidecar
 
@@ -13,6 +14,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +200,57 @@ func TestEvsLocalReceiveLfsTipCheck(t *testing.T) {
 	newest, err := store.Newest(context.Background(), []EvsLfsOid{oid}, true)
 	if err != nil || newest[0].Version != 2 {
 		t.Fatalf("the aged object was not touched: %+v %v", newest, err)
+	}
+}
+
+// An owned ref's queue held on git-lfs objects the tip check found missing names them in ur status only while that
+// hold stands: once the local ref moves to a tip that needs none and evs refuses its push for good, the status shows
+// SCOPE and names no object (FS-73's owned clause; the journal had kept the first hold's objects under the next hold's
+// code, and under none once a hold went).
+func TestEvsLocalReceiveLfsHoldNamesObjectsWhileItStands(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	writer := publisher.writer
+	writer.server.format2 = true
+	writer.test.client.SetFormat2Source(func() bool { return true })
+	writer.test.client.EnableFormat2Reader()
+	writer.world.otherRef(EvsLfsRefName).mode = protocol.EvsRefMode_EVS_REF_FILE
+	receiver := newEvsTestReceiver(t, publisher)
+	owned := string(EvsOwnedRefName(writer.test.client.args.Identity().SidecarId, "lfs"))
+	dir := receiver.clone()
+	pointer, oid := evsTestLfsPointerOf([]byte("an object never stored"))
+	receiver.commit(dir, map[string]string{".gitattributes": "*.bin filter=lfs\n", "big.bin": pointer})
+	if out, ok := receiver.push(dir, "origin", "HEAD:refs/heads/"+owned); !ok {
+		t.Fatalf("the owned push: %s", out)
+	}
+	refId := publisher.ref(owned).refId
+	describe := func(statuses []*EvsJournalStatus) string {
+		texts := []string{}
+		for _, status := range statuses {
+			texts = append(texts, fmt.Sprintf("%+v", *status))
+		}
+		return strings.Join(texts, "; ")
+	}
+	if err := receiver.mount.receiver.publishQueued(context.Background(), refId); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := receiver.mount.receiver.JournalStatus()
+	if err != nil || len(statuses) != 1 || statuses[0].HoldCode != evsLfsTipCheckRefusal || len(statuses[0].HoldLfsOids) != 1 || statuses[0].HoldLfsOids[0] != oid.String() {
+		t.Fatalf("the git-lfs hold %s %v", describe(statuses), err)
+	}
+	// the local ref moves to a tip that needs no object, and evs refuses its push for good
+	evsTestGit(t, dir, "rm", "-q", "big.bin")
+	evsTestGit(t, dir, "commit", "-q", "-m", "no objects")
+	if out, ok := receiver.push(dir, "origin", "HEAD:refs/heads/"+owned); !ok {
+		t.Fatalf("the owned push past the hold: %s", out)
+	}
+	publisher.writer.server.stateLock.Lock()
+	publisher.writer.server.pushRefusals = []*evsTestRefusal{{status: http.StatusForbidden, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE}}}
+	publisher.writer.server.stateLock.Unlock()
+	if err := receiver.mount.receiver.publishQueued(context.Background(), refId); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err = receiver.mount.receiver.JournalStatus()
+	if err != nil || len(statuses) != 1 || statuses[0].HoldCode != "SCOPE" || len(statuses[0].HoldLfsOids) != 0 {
+		t.Fatalf("the hold after the git-lfs one went %s %v", describe(statuses), err)
 	}
 }
