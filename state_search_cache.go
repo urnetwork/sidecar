@@ -1239,7 +1239,10 @@ func (self *SearchCacheRecordFrames) OpenReadKeys(keyRepoKey *EvsRepoKey, header
 	for _, held := range []struct {
 		repoKey    *EvsRepoKey
 		generation uint64
-	}{{keyRepoKey, self.meta.Generation}, {headerRepoKey, self.meta.headerGeneration()}} {
+	}{
+		{repoKey: keyRepoKey, generation: self.meta.Generation},
+		{repoKey: headerRepoKey, generation: self.meta.headerGeneration()},
+	} {
 		if held.repoKey == nil || held.repoKey.RepoId() != self.key.RepoId || held.repoKey.Generation() != held.generation {
 			return nil, fmt.Errorf("%w: a key of another repo or generation", ErrSearchCacheKey)
 		}

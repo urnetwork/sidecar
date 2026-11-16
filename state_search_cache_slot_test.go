@@ -241,8 +241,8 @@ func TestSlotKeyedRecordReopensInALaterRound(t *testing.T) {
 		headerGeneration uint64
 		asked            []uint64
 	}{
-		{keptSame, 0, 2, 2, []uint64{2}},
-		{keptOlder, 5, 1, 3, []uint64{1, 3}},
+		{kept: keptSame, keyIndex: 0, generation: 2, headerGeneration: 2, asked: []uint64{2}},
+		{kept: keptOlder, keyIndex: 5, generation: 1, headerGeneration: 3, asked: []uint64{1, 3}},
 	} {
 		key := check.kept.record.Key
 		frames, err := later.OpenRecord(key)

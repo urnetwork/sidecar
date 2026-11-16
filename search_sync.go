@@ -41,7 +41,8 @@
 //
 // Not here: the settings file's signer, which the view judges where it reads it (SEARCH-M10-08); indexed_through,
 // which searchSyncCoverage computes where one is given (SEARCH-M10-12's reader), and reads 0, claiming nothing, where
-// none is; the erasure and drop paths, which call EndRepo and the cache's DropRetained (CORE-M10-04).
+// none is; the erasure and drop paths, which call EndRepo and the cache's DropRetained and, with the slot keys an
+// ERASE names, its DropErasedSlotKeys (CORE-M10-04; QD-845).
 //
 // On every leg but ios_extension: root Id, no connect type. Safe for concurrent use.
 
