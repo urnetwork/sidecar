@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 208 decided items and 213 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 187 decided items and 209 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -14,7 +14,7 @@ Holds 208 decided items and 213 proposed ones, generated from the ledger on 2026
 |---|---|---|
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§5 The Sidecar core](#s5) | 2 | 1 |
-| [§7 Networks, teams, members, enrollment, and SSO](#s7) | 25 | 5 |
+| [§7 Networks, teams, members, enrollment, and SSO](#s7) | 4 | 1 |
 | [§8 Access control](#s8) | 14 | 13 |
 | [§9 Abstract socket listeners and the scheduler](#s9) | 5 | 2 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 23 | 15 |
@@ -94,24 +94,6 @@ Not folded (2026-11-16): RECORD.md section 6.2's table of the four enums' values
 <a id="s7"></a>
 ## §7 Networks, teams, members, enrollment, and SSO
 
-### QD-001: A hacked server can replay revoked grants under new ids
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §10, §16.*
-
-[protos-bridge-statement-id-wrapper] The statement id, proposal_id, delegation_id, SidecarRow.admission_sha256 and UrMlsCredential.admission_sha256 of a SidecarAdmit are bridge.SignedBytesSha256(purpose, type, body). The ring keeps the first 16 bytes of that hash for statements a reader applied, so a copy it refused burns no id, and a retry under another wrapper returns its entry. A_0 and genesis_sha256, C_v and §16's hashes stay as they are: they are pinned or chained, never checked for a repeat, so another wrapper there fails closed. [team-records-admission-sha256-under-proposal] One rule for both paths: `admission_sha256` is `bridge.SignedBytesSha256(purpose, type, body)` over the SidecarAdmit body, taken from `Signed.body` or from `AuthorityProposal.statement`. The first device's credential names `genesis_sha256`. TEAM-M2-03's row for a k-of-n or recovery admission and the check of `UrMlsCredential.admission_sha256` use it.
-
-Changes: §7.9 statement, replay, proposal and retain rows; §10.4; §10.5; D-TEAM-20; §7.9; §10.4.
-
-Questions: `protos-bridge-statement-id-wrapper.md`, `team-records-admission-sha256-under-proposal.md`.
-
-### QD-005: No section gives the bytes of a statement's sealed body
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §10, §17.*
-
-One format for every `sealed_body`, `sealed_services` and `sealed_rules` field, which stay `bytes`: u64be(g) || nonce (24 random B) || XChaCha20-Poly1305(K, nonce, pt, aad). K = HKDF-SHA256(RK_g, salt repo_id, info "UR evs 1.0 statement" || u64be(g)), 32 B, adding `statement` to §10.5's purposes; repo_id is the config repo's, or for an owner-bound repo's RepoVersioning rules that repo's own. aad = "urnetwork-sidecar-v1/sealed-body" || 0x00 || u32be(SignedType) || header.network_id || header.nonce || u64be(g). pt = the *Body message, deterministically encoded, then 0x80, then zeros to a multiple of 256 B. A reader that holds RK_g opens it. One that lacks g keeps the entry pending and applies its id-level effect, opening it once RK_g arrives. If AEAD or padding fails, the id-level effect stands, the sealed effect is void and the reader alarms. api and keyless device roles never open one. RecoveryRebind{reason: compromise} is a revocation for §7.9's `check` row, so the witness stop does not hold it. Helpers: `SealConfigBody` and `OpenConfigBody` in sidecar/config_seal.go, with testHookSecret at K.
-
-Changes: §7.9 Indexers; §7.9 RecoveryBind; §8.8 RepoVersioning; §10.5; §17.8.
-
-Questions: `plan-TEAM-sealed-field-format.md`.
-
 ### QD-019: Whether per-run cost totals reach the team record, where admins can read a per-person series
 *Decided by the owner: owner 2026-11-06.*
 
@@ -120,6 +102,8 @@ per-run totals (tokens by model and reported amounts, never a model_call) go to 
 Changes: §7.9 ServiceSettings; RECORD.md sections 6.3 and 13.1; Q-RECORD-6.
 
 Questions: `record-md-run-cost-in-team-record.md`.
+
+Not folded (2026-11-16): RECORD.md sections 6.3 and 13.1 and Q-RECORD-6, which still hold the cost entry in the vault pending that question and live in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md part is folded as owner decision 302 (§7.9's settings fields: `record_cost`, field 8, on by default).
 
 ### QD-050: Who files the team record's RepoCreate, what refuses a second, and whether a Team may go without one
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §11.*
@@ -130,14 +114,7 @@ Changes: D-TEAM-28; §7.5; §8.8 RepoCreate row and directory paragraph; §11.12
 
 Questions: `record-md-team-record-creation.md`.
 
-### QD-059: Stored rows lack fields the published list shows
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-[protos-bridge-row-fields#1] Add to SidecarRow: bytes identity_public_key = 16; string identity_alg = 17; bytes member_id = 18; repeated bytes tag_ids = 19; bool ephemeral = 20. §7.9's comment lists them. About 80 B a sidecar, so 5,000 admissions cost about 400 KB inside the 4 MiB bound. [protos-bridge-row-fields#2] Add to DelegationRow: bytes pubkey = 9; bytes reader_xwing_public_key = 10; uint32 max_admits = 11. §7.9's comment lists them. [protos-bridge-row-fields#3] Reserve ProjectionRows field 6 at M2 as repeated TeamScopeRow team_scopes, and define TeamScopeRow{label, member_id or tag atom} at M6 with Team scopes. Format-1 readers skip it.
-
-Changes: §7.9.
-
-Questions: `protos-bridge-row-fields.md#1`, `protos-bridge-row-fields.md#2`, `protos-bridge-row-fields.md#3`.
+Not folded (2026-11-16): Q-RECORD-3, which RECORD.md still lists as open and which no design-records track edits; the DESIGN.md parts are folded as owner decision 303 (§7.5, D-TEAM-28, §8.8's RepoCreate row and team_record paragraph, §11.12).
 
 ### QD-062: Tag and group ids name a key that does not exist
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §2, §16, §17.*
@@ -148,68 +125,7 @@ Changes: §7.9; §8.7; §8.8; §2.8 api-7; §16.11; §17.8; Q-ACL-8; §7.9 Write
 
 Questions: `g0-density-keyed-tag-ids.md`, `plan-ACL-atom-and-rule-ids.md#1`.
 
-### QD-068: A service token must name its network
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§7.8's access token gains network_id, the claim name its ID token already uses, minted by the exchange from the subject client's network. TEAM-M1-06 adds it, OPS-M1-04 maps it to Principal.NetworkId, and Principal.Validate keeps refusing a token without it. Registered claims (iss, iat, exp, jti) stand beside the list.
-
-Changes: §7.8.
-
-Questions: `core-types-token-network-claim.md`.
-
-### QD-070: A dropped depositor keeps writing until its token ends
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §10, §16, §11.*
-
-[g0-recheck-0-deposit-scope#1] Option 1, as one rule for all four scopes. §7.9's tokens row reads: evs and gkm honor a capability for R only while its subject holds that right on R in their newest verified state, besides rev/ objects: r while it reads R, rw and admin while it writes R, deposit while §8 gives it deposit on R or it reads an owner-bound R it does not write (§16.8's receipts), by a cached per-repo bitset of those three rights. D-ACL-21, §8.10's evs row, §8.12 and §10.6's opening say the same and name deposit; §11.8 stands as written. The deposit bit is computed as the exchange computes its deposit scope: EvsAccess(deposit) with §8.6's ceiling and hardDeny, plus the §16.8 receipt case. gkm's drop-key route takes the same HonorScope call rather than an exception, though the key it serves is public. FS-23 adds: a deposit grant revoked or expired, the sidecar still admitted, is refused at evs within §8.9's 5 s. Settled against the question's closing remark and plan-ACL-small-readings#11: the drop-key route takes this check too. [plan-ACL-small-readings#11] As g0-recheck-0-deposit-scope#1: evs and gkm honor `deposit` only while its subject may deposit in their newest verified state, a third bit per subject in §7.9's cached set, gkm's drop-key route included through the same HonorScope call. D-ACL-21, §7.9's tokens row, §8.10 and §8.12 name deposit beside r, rw and admin, and §11.8 stands.
-
-Changes: D-ACL-21; §7.9 tokens row; §8.10 evs row; §8.12; §10.6 opening; FS-23; §7.9 tokens; §8.10.
-
-Questions: `g0-recheck-0-deposit-scope.md#1`, `plan-ACL-small-readings.md#11`.
-
-### QD-071: No object holds the Signed Genesis, and entry 1 is pruned
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-Option 1, with the write order fixed. (1) `proj/<network_id>/00000000000000000000/_` holds the Signed Genesis bytes verbatim, not an AuthEntry, written If-None-Match and kept for the network's life; retention never deletes n = 0. (2) `POST /network/config/projection` gains `genesis`, required only at version 1. api checks SHA-256(genesis) = prev_chain and §7.9's `who`, then PUTs projrows, entry 1 (If-None-Match, still the race's commit point) and entry 0, and a retry of base 1 repeats a missing step. (3) `GET /network/config/projection?after=0` returns `genesis` beside the entries, unadmitted clients included, and answers 503 while entry 1 exists without entry 0. (4) `sha256(Genesis)`, AuthKeyBundle's and Pending's `genesis_sha256` and an invite's hash all mean SHA-256(Signed Genesis) = A_0. (5) The first head holds the same bytes at `genesis`, and after a site loss `POST /network/config/reseed` takes them from devices under §7.9's two-member rule. (6) §2.8 api-7 adds the Signed Genesis, kept for the network's life (I-18).
-
-Changes: §7.9 Bootstrap; §7.9 base; §7.9 retain; §7.9 retention; §7.9 site loss; §7.17 API routes; §2.8 api-7.
-
-Questions: `plan-TEAM-genesis-custody.md`.
-
-### QD-072: No signed fact proves §8.5's `invited` clause
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §2.*
-
-Add `SIDECAR_CAPABILITY_INVITED = 4` (bit 2) to auth.proto's SidecarCapability. The admitting device sets it only after the invite's join MAC verifies (§7.5), a JIT member's first device included, from the invite that device issued (§7.6). §8.5's clause reads: d's SidecarAdmit carries the bit, and d is the first admission under M in log order, revoked ones included, that is neither ephemeral nor read_only. A later device's bit counts for nothing, and readers ignore it on an ephemeral or read_only admission. Rows carry it in SidecarRow.capabilities, so §2.8 api-7 needs no new row.
-
-Changes: §7.9 SidecarAdmit; §8.5; D-ACL-22.
-
-Questions: `plan-ACL-invited-consent-evidence.md`.
-
-### QD-081: api cannot read or open a config head, so §7.9's descent check must work from pushes the writer hands it
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §19.*
-
-api never reads the config repo. It judges descent only, from Signed EvsPush statements the writer supplies; records, signer roles and compile stay with readers. (1) `config_head_sha256` is C_v of the config repo's `main` ref at `config_version` (§11.8). (2) `POST /network/config/projection` gains `config_pushes`: the Signed EvsPush of each version in (previous base's config_version, config_version], oldest first, at most 4,096; empty when the version is unchanged, and then config_head_sha256 must equal the previous base's. (3) api walks forward from the previous base's config_head_sha256, for base 1 from C_0 = SHA-256("UR evs 1.0 ref" || repo_id || ref_id) with Genesis's config_repo_id: each push names that repo, its base_version and base_chain equal the running (v, C), and C_v = SHA-256(C_{v-1} || push_id_v || SHA-256(Signed EvsPush_v)). A mismatch answers 403. The pushes are not stored, so the log's bytes do not change. (4) The first head's EvsPush is signed before base 1, so it carries auth {0, A_0}: A_1 hashes that head's C_1, and a pin of A_1 would be circular. evs takes that pin only on a config repo's first push. (5) Site loss: `POST /network/config/reseed` takes the same statements from version 1 to the re-seeded head, and api discards the adopted run unless the newest adopted base's (config_version, config_head_sha256) lies on that walk from C_0. (6) §7.9's Writes says readers replay records and api checks this chain. §19.4 does not change.
-
-Changes: §7.9 Writes; §7.9 base; §7.9 Bootstrap; §7.9 site loss; §7.17 API routes; §11.8; §19.10.
-
-Questions: `plan-TEAM-api-config-head-reach.md`.
-
-### QD-086: Where a KeyRegister carries the new key's own signature
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16, §6, §2, §10.*
-
-Add to KeyRegister, set only for purpose presence and written last: bytes key_signature = 9; WebAuthnEvidence key_webauthn = 10. The new key signs the received body bytes before field 9, as UrMlsCredential signs fields 1-7 with its signature last (§10.4): a verifier slices at field 9's first byte, never re-marshals or empties a field, and refuses a body where anything follows fields 9 and 10. The signed bytes are §6.9's with purpose key-proof and type SIGNED_KEY_REGISTER; webauthn-es256 takes that hash as its challenge with UP and UV set and evidence in key_webauthn, and ecdsa-p256-sha256 a DER signature in key_signature. The identity key's Signed covers the whole body, and any countersignature stays in Signed.webauthn. api-7 gains a key registration's proof.
-
-Changes: §7.9; §16.6; §6.9; §2.8 api-7.
-
-Questions: `protos-bridge-presence-gaps.md#3`.
-
-### QD-117: What zero team_mail means
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §15.*
-
-§7.9 writes team_mail: indexers | member scopes (indexers), and TEAM_MAIL_MODE_UNSPECIFIED reads as indexers. A tag:mail device still needs an IndexerSet for mail before it registers (D-MAIL-15), and member scopes stays an explicit choice that turns {mxr_}'s scope routes on.
-
-Changes: §7.9; §15.5.
-
-Questions: `protos-bridge-team-mail-default.md`.
+Not folded (2026-11-16): the rewording of api-7's two phrases "member or keyed tag ids" and "keyed tag and group atoms" to opaque ids, which waits on testdata/config/metadata_rows.yml: its `sees` lines quote both phrases, the config rows test holds them to §2.8 word for word, and that file is a code track's. The rest is folded as text: §7.9's Writes says how an id is drawn and kept, api-7 (v29) says in a clause of its own that an atom's id is 16 random bytes derived from no key, and §8.7, §8.8, Q-ACL-8, §16.11 and §17.8 say opaque.
 
 ### QD-129: Is ur.io's OAuth consent page in scope, given owner rule 6?
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -220,113 +136,7 @@ Changes: HANDOFF section 5; owner rule 6 (its reach).
 
 Questions: `plan-TEAM-consent-page.md`.
 
-### QD-139: Who can require fail-closed hooks for a Team, and how a member's ur learns it
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16.*
-
-Recommended: `ServiceSettings.record_required`, bool, false by default, config.proto field 9, reserved at M2 and read from M6, set by an owner or admin and never through MCP. Field 9, since `mail_strict` (plan-MAIL-strict-setting) keeps 7 and `record_cost` (record-md-run-cost-in-team-record) takes 8. While it is set, `ur install-harness` writes `onFailure: block` (Claude Code) and `failClosed: true` (Cursor) on every `ur hook` entry, adds `--required` to the hook command and seals that form. `ur hook --required` exits 2 when the daemon cannot take the event, because §16.7's hook exits 0 and neither setting would otherwise ever fire. The config-hash check counts a fail-open form as a changed config, so such a run taints, and `ur status` names each fail-closed harness. Codex documents no fail-closed setting, so there `--required`'s exit 2 blocks a PreToolUse only while the hook runs, and `ur status` says so. Enforcement stops at a member's own daemon: a same-uid edit taints but cannot be prevented.
-
-Changes: §7.9 ServiceSettings; §16.7 How; §16.7 harness table.
-
-Questions: `plan-MCP-record-required.md`.
-
-### QD-171: compile must be pure, yet user:, network: and client: resolve through server data
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §12.*
-
-Option 1 with its sources fixed. A sealed config file `resolve` holds ConfigResolution{members: [{email, member_id}], networks: [{text, network_id}], clients: [{client_id, sidecar_id}]}, one row per selector the policy names and no others, so it adds no email beyond §7.9's "the emails it names". compile reads only it and refuses a selector with no row. The writer fills it at save, and a server answer is only a proposal, as §7.6 treats SCIM: email: the writer's own invite record where it has one, else `GET /network/members`; the preview lists each new or changed row with the member's role and devices, and the person's confirmed save signs it. network: §12's ResolveNetworkLabel, label or alias, never a legacy name (D-DNS-2), the id pinned until a person saves again, so a moved alias retargets nothing (§7.12). client: a dual-signed SidecarIdentityBinding the writer verifies itself (plan-CORE-client-to-sidecar-lookup); a client with no binding stays a literal client id (plan-ACL-nonsidecar-subjects). Validation refuses a member_id with no live MemberRow, so a stale row fails closed until the next save. §8.4's grammar and the stored source do not change.
-
-Changes: §7.9 Repo; §8.8 Saving; §8.18.
-
-Questions: `plan-ACL-selector-resolution.md`.
-
-### QD-174: The list of records that enter the log is short
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-[plan-TEAM-config-head-format#2] Every record that opens with a StatementHeader enters the log at once through `POST /network/config/delta`, as protocol/descriptor_test.go's TestStatementsOpenWithHeader lists them. §7.9's Writes list therefore gains MemberAdmit, Delegation, an admin's SidecarAdmit and AdminSet. AdminSet rides an AuthorityProposal at k > 1 and files alone at k = 1 (§7.9's `k = 1` row), so the question's "always" is wrong. ServiceSettings, VersioningRules and BridgeBlock carry no header, ride heads only and take effect at the base naming the head, as do the config files (policy, tags, groups, names, labels, K_sock, BridgeShareSigners). The cascade's "the base whose config head first holds it" covers those. §2.8 api-7's statement list gains MemberAdmit, Delegation and unscoped SidecarAdmit, whose contents rows already show. [protos-bridge-unwritten-numbers#2] No header on Genesis, ProjectionHeader, ServiceSettings, VersioningRules and BridgeBlock. Every other record, MemberAdmit and Delegation included, carries one and enters the log, as plan-TEAM-config-head-format's item 2 rules.
-
-Changes: §7.9 Writes; §2.8 api-7.
-
-Questions: `protos-bridge-unwritten-numbers.md#2`, `plan-TEAM-config-head-format.md#2`.
-
-### QD-204: `mail.strict` is named as the config's signed setting and exists in no record
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §15.*
-
-Add `bool mail_strict = 7` to `ServiceSettings` in §7.9 and protocol/config.proto, signed by an owner or admin, network-wide, default false, reserved before M2's freeze as `directory` was (D-PHASE-9). §15.4's `mail.strict` and `MailAuthEvidence.strict_chain`'s comment name this field. Older readers ignore it and never claim `strict_custom_mx`.
-
-Changes: §7.9 ServiceSettings; §15.4.
-
-Questions: `plan-MAIL-strict-setting.md`.
-
-### QD-227: A page Worker cannot HeadCheck, though §7.9, §18.8 and §22.7 say it does
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §22.*
-
-A page Worker runs no HeadCheck until C4 (Later): it neither witnesses nor is witnessed, raises no `unwitnessed` alarm, seals nothing, and shows no `witnessed_at`. It keeps its digests and newest 64 KiB per §7.9's `retain` row, but it uploads nothing: §7.9's `upload` row and §7.17 refuse read_only devices at `POST /network/config/reseed`, so the filed reading's 'uploaded over HTTPS' is dropped. design-records marks 'HeadCheck replies' in §7.9's read_only row and §18.8's Identity bullet as from C4, moves §22.7's 'its HeadCheck counts as a witness' (FS-106) to C4, adds to §18.8's `disclosed` row that a page's view is unwitnessed until then, and scopes I-16's witness clause accordingly.
-
-Changes: §7.9 read_only row; §18.8; §22.7; FS-106; I-16.
-
-Questions: `plan-SDK-small-readings.md#8`.
-
-### QD-245: acl_subject_client_id belongs on network_client; §7.7's owner-row list is wrong
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-Delete `acl_subject_client_id` from §7.7's `network_client_owner` list. It is the nullable column `network_client.acl_subject_client_id`, added in MG2 (§19.7), never in MG0. M1's enrollment writes no subject: NULL reads as itself for a top-level client, else as its source client's subject (D-ACL-3). From MG2 the mint writes it once at creation, which is what §7.8's Enrollment bullet means.
-
-Changes: §7.7.
-
-Questions: `plan-TEAM-acl-subject-column.md`.
-
-### QD-250: "The tier its token declares" cannot work
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21.*
-
-§7.10's `cleanup` row reads "from 90% of the network's `config_admissions`, from `GET /sidecar/limits`", in place of "the tier its token declares". An admin's device reads that value, which also sees §21.7's rows.
-
-Changes: §7.10; D-TEAM-29.
-
-Questions: `plan-QUOTA-small-readings.md#9`.
-
-### QD-628: Should AuthLog.tla hold a recovery-signed proposal pending at its k-th device cosign, as §7.9 does, rather than completing it there?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-AuthLog.tla holds a recovery-signed proposal pending at its k-th device cosign, as §7.9 and TEAM-M2-05's code do: in TypeRule's cosign case a proposal of kind recovery returns 1 and its completion is left to the tick, and rcosign joins the design's alphabet. The design-details track reruns the four design configurations and records their new state counts in DESIGN-DETAILS.md 5.3. Nothing in the code waits on it.
-
-Changes: sidecartest/model/details/AuthLog.tla and DESIGN-DETAILS.md 5.3 (design agent).
-
-Questions: `details-5-model-recovery-cosign.md`.
-
-### QD-646: Where does §7.10's cleanup list get each listed page Worker's admission time, when rows carry only its admission position?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §2.*
-
-SidecarRow gains int64 admitted_time_ms (field 23), set at apply from the entry where the admission takes effect (the admitting entry's, completing cosign's or tick's time_ms), carried through bases like admitted_at, computed by every reader including rows-only gates so rows stay equal, and listed by CleanupList beside the position. About 11 B per admission in rows; §2.8's api-7 text changes with no new exposure (design-records). TEAM follow-up: the field, its apply and carry, CleanupList, and CORE-M6-04's display.
-
-Changes: TEAM follow-up: SidecarRow.admitted_time_ms = 23, apply and carry, CleanupList; CORE-M6-04 shows it; §7.9 rows and §2.8 api-7 text (design-records).
-
-Questions: `team-m4-01-cleanup-admission-time.md`.
-
-### QD-647: Does a forwarding Delegation owe Owners and Admins the network authority notice that every new Delegation owes today?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A forwarding Delegation owes Owners and Admins no network authority notice: server/model/config_log_effects.go's configLogEntryEffect counts only Delegations without forward_sidecar_id. R-TEAM-12's 'new credential paths' and §7.8's Notices line read as paths that can admit devices or sign people in, as security_notice_authority.go already words it (design-records). The device's own admission already carried its notice. A one-line TEAM follow-up with its test.
-
-Changes: TEAM follow-up: configLogEntryEffect skips forwarding Delegations, with a test; §7.8 Notices line and R-TEAM-12 wording (design-records).
-
-Questions: `team-m2-20-forwarding-delegation-notice.md`.
-
-### QD-648: When does a superseded or ended forwarding Delegation's row leave ProjectionRows, since it has no not_after and every app device files a new one at least each 90 days?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A superseded or ended forwarding Delegation's DelegationRow leaves ProjectionRows at the first base whose retention point passes the later of its superseded_at and ended_at by 4,096 positions: one rule in the base compile, a function of rows and positions alone, so every reader drops it alike (DESIGN-DETAILS 5.2.3). Past that point §7.9's replay row already refuses its Signed bytes, and nothing admits under a non-live forwarding key. A DelegationRevoke naming a dropped id is refused as unknown. KEYS-M8-01's holder set reads only live rows. TEAM follow-up in sidecar/config_forwarding.go and the base compile; §7.9's rows text (design-records). Whether an ended auth key's Delegation row should also leave past its not_after is left for later, as small and not urgent.
-
-Changes: TEAM follow-up: the base compile drops superseded or ended forwarding rows past retention + 4,096 (config_forwarding.go, config_base.go, tests); §7.9 forwarding and replay rows (design-records).
-
-Questions: `team-m2-20-forwarding-rows-accumulate.md`.
-
-### QD-287: The sealed split of statements
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §17.*
-
-Keep the split as landed: each statement shows only what api-7 lists, and a sealed_body (sealed_services, sealed_rules) opens to a *Body message, for IndexerSet, RecoveryBind, RecoveryRebind, RepoVersioning and every §17.8 delta but BridgeWithdraw. BridgeAlias shows only its header. The seal's bytes stay with plan-TEAM-sealed-field-format, and BridgeEgress's mode with plan-BRIDGE-egress-mode-at-gates.
-
-Changes: §7.9; §17.8.
-
-Questions: `protos-bridge-unwritten-numbers.md#5`.
+Not folded (2026-11-16): the line in HANDOFF section 5's mmm row, since HANDOFF.md is outside design/source/ and so outside a design-records track's files; the decision is folded as owner decision 306, and §7.8's `page` row names the consent page's code and command.
 
 ### QD-451: Field numbers of records written as lists
 *Proposed fill: a gap the agents filled; work builds on it. Also amends §8, §17.*
@@ -337,32 +147,7 @@ Changes: §7.9; §8.8; §17.8.
 
 Questions: `protos-bridge-unwritten-numbers.md#1`.
 
-### QD-456: The config repo's paths and the fold record format
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Option 2, sharded. On the config repo's file-mode `main` ref: `genesis` (Signed Genesis, verbatim, first head only); `fold/<d>/<i>`, the i-th fold, i from 1 and d = i / 1024, each zero-padded to 8 digits, one file per head that advances folded_through; `service_settings`, `versioning_rules`, `bridge/block`, each one Signed record verbatim; `bridge/share/<share_id hex>`, a BridgeShareSigner; `socket/key` (plan-SOCK-ksock-rotation); `policy.hujson`, the source bytes; `tags`, `groups`, `rules`, `names`, `labels`, `resolve`, one deterministically encoded protobuf each. config.proto adds `message ConfigRecord { bytes id = 1; uint64 n = 2; int64 time_ms = 3; uint32 kind = 4; bytes body = 5; }` and `message ConfigFold { uint64 after = 1; uint64 folded_through = 2; repeated ConfigRecord records = 3; }`. id is SHA-256(Signed) for a STATEMENT and empty for a TICK; n and time_ms are the carrying entry's; kind is AuthEntry.kind, 1, 2 or 3; body is AuthEntry.body verbatim; records run in n order, the BASE entries in (after, folded_through] among them as kind 1 with the Signed ProjectionHeader as body, ignored by compile and compared by the head check like any record (amended by QD-627, owner decision 262, which §7.9's BASE, fold and retention rows already carry). §7.9's BASE check reads the fold files whose ranges lie in (previous folded_through, folded_through].
-
-Changes: §7.9.
-
-Questions: `plan-TEAM-config-head-format.md#1`.
-
-### QD-497: Enum values for named lists
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §8, §11.*
-
-Ratify as landed: 0 is UNSPECIFIED, then written order: MemberRole (§7.5), RepoKind (§11.12), AclAction and AclAutogroup (§8.4), and each a | b choice. SIDECAR_CAPABILITY_READ_ONLY is 2.
-
-Changes: §7.5; §7.9; §8.4; §11.12.
-
-Questions: `protos-bridge-unwritten-numbers.md#3`.
-
-### QD-498: Field types the text leaves open
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §17.*
-
-not_after, expires and drain_until are int64 ms since the epoch under the design's names. An IPv4 prefix is BridgeIpv4Prefix{fixed32 address, uint32 length}. AuthorityProposal.statement is the proposed type's whole body as signed, and only the proposal's own header is judged for replay and expiry.
-
-Changes: §7.9; §17.8.
-
-Questions: `protos-bridge-unwritten-numbers.md#6`.
+Not folded (2026-11-16): the fenced blocks in §7.9, §8.8 and §17.8. Those records' declarations are held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a ```proto fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do (it drops only `testFenceAdditions` entries). The rule itself is folded as text: §7.9's record bytes says field numbers follow the order written, with `StatementHeader` at field 1.
 
 <a id="s8"></a>
 ## §8 Access control
@@ -4262,15 +4047,6 @@ Changes: ACL's state build adds the config repo's row from the Genesis (acl_stat
 
 Questions: `team-m2-15-config-repo-acl-row.md`.
 
-### QD-720: Where may api keep a team IdP sign-in's flow state (state, nonce, PKCE verifier, the user that began it) between its start and GET /auth/sso/callback, and under which §2.8 row?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-api keeps a team IdP sign-in's flow state (state, nonce, PKCE code_verifier, IdP, network, redirect, and the signed-in user that began it, for D-TEAM-23's JIT link) under a Redis key {sso_<state>} as JSON, set with a 10-minute ttl and taken with GETDEL, so a replayed state finds nothing. §2.8's api-3 gains "IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)". The state is soft: a lost Redis only restarts sign-ins in flight, as §19.7 allows. No table and no cookie. The ttl is a settings field with 10 minutes as its default (QD-702).
-
-Changes: §2.8's api-3 row gains the sso flow line (metadata_list.yml; design-records folds DESIGN.md); TEAM-M6-05's NetworkSsoFlowStore gets its Redis implementation, installed in production.
-
-Questions: `team-m2-16-sso-flow-state-row.md`.
-
 ### QD-721: Should EvsRepo's write take the path version its caller read, so a mail writer's append is a path CAS?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
 
@@ -4288,24 +4064,6 @@ On a record-class stream ref, evs's creates-only rule (5c's checkCreatesOnly and
 Changes: §11.8's record-class refs row (design-records); evsservice/check_refs.go's checkCreatesOnly and evs_verify.go's evsCheckRefRules take an add-only delta; RECORD-M3-12's local refusal (ErrEvsStreamDirectoryDelta) goes.
 
 Questions: `record-m3-12-stream-directory-rows.md`.
-
-### QD-723: How does a members endpoint on port 8443 sign its visitors in, when the issuer takes an edge origin only with no port?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-§7.8's edge login issuer (TEAM-M5-01's server/oauth/edge_login.go) accepts client_id https://<host>.<net>.<root>:<port> for the four tlsedge ports, 443 written bare, with redirect_uri on that same origin and the ID token's aud that origin, and checks the members publish grant for (host, port), which ACL-M5-01's PublishGrant(subject, host, port, now) already takes. Each endpoint stays its own origin and audience (D-TEAM-15's one origin), so a 443 session never counts on 8443 or the reverse, and the TLS front logs members in on every tlsedge port. §7.8's wording says the origin carries its port when it is not 443.
-
-Changes: §7.8's edge login wording (design-records); TEAM-M5-01's issuer accepts the tlsedge ports and checks the grant for (host, port); the TLS front's members login on non-443 ports (tls_edge_login.go) stops answering 503.
-
-Questions: `tls-m5-19-members-login-on-8443.md`.
-
-### QD-724: Where does api keep devices' re-seed uploads until two members agree, and how does it know a network's log has resumed?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-api keeps §7.9's site-loss re-seed uploads in a Redis soft-state family {acl_<networkId>}r: one hash field per uploading sidecar holding its newest upload, the key's ttl 24 h, and a resumed marker field set when the network's resume base lands. Uploads are soft state devices send again until their network resumes, which owner decision 136 lets Redis hold, so they adopt across api instances. §7.8's re-seed mode ends per network at the resumed marker, while sidecar.yml's reseed stays the switch that allows it at all. §2.8's api-7 gains the family's line. The ttl is a settings field with 24 h as its default (QD-702).
-
-Changes: §2.8's api-7 gains {acl_<networkId>}r (metadata_list.yml; design-records folds DESIGN.md); model.ConfigReseedUploads moves from process memory to the Redis family; re-seed mode ends per network at the resumed marker.
-
-Questions: `team-m3-02-reseed-upload-store.md`.
 
 ### QD-725: What does `POST /evs/v1/repos/<id>/reseed` take, and which of a push's checks does a re-seeded push skip?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
@@ -4352,15 +4110,6 @@ Changes: §16.6's registration row and §2.8's api-7 wording (design-records); V
 
 Questions: `mcp-m2-01-attestation-client-data.md`.
 
-### QD-731: Should an AuthKeyBundle's delegation_id be the 32-byte SHA-256 of the Signed Delegation that the log names, rather than the 16-byte id TEAM-M1-05's parser reads?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-An AuthKeyBundle's delegation_id is the 32-byte delegation_id §10.5 defines, SHA-256 of the Signed Delegation (bridge.SignedBytesSha256 per QD-001), the one identifier ConfigState's DelegationRow, §6.9's signer table and the daemon's self-signed SidecarAdmit (signer_id the delegation_id, §5.6, C-03) already use. TEAM-M1-05's decodeAuthKeyBundle checks 32 bytes and keeps them as bytes, and the creating device's encoder writes them. §7.8's AuthKeyBundle line gives the width. No key has been minted, so nothing migrates.
-
-Changes: §7.8's AuthKeyBundle line names 32 bytes (design-records); TEAM-M1-05's decodeAuthKeyBundle and the creating device's encoder.
-
-Questions: `core-m2-01-bundle-delegation-id-width.md`.
-
 ### QD-732: Where does the keyless device role get the base, rows and entries that verify a BridgeState, when §18.6's `SetState(state)` takes the state alone?
 *Decided by the owner on 2026-11-12, asked one question at a time, then withdrawn. Folds into §18 SDK, apps, and extension integration.*
 
@@ -4399,16 +4148,6 @@ An inline record travels inside its entry version's kind-2 EvsLocator (inline = 
 Changes: EVS-FORMAT.md's interim reading becomes the rule; EVS1-M2-05's codec, EVS1-M2-10's elision and restore, and EVS1-M2-11's 5h check of kind-2 locators build on it.
 
 Questions: `evs1-m2-01-inline-record-home.md`.
-
-### QD-736: Where does an open AuthorityProposal live once a base folds past it, given ProjectionRows has no field for one?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-ProjectionRows gains repeated ProposalRow proposals = 7: each AuthorityProposal still open at the base (proposal_id, the statement type, the proposed statement's bytes or its hash, each signer with its position, the proposal's not_after_ms, and for a recovery-signed proposal its p and o), compiled from the config head's fold records like every other row. A proposal folded under a base stays open in the rows and closes at its k-th counted cosign, its recovery window's ApiTick (72 h after its newest recovery signature) or its not_after (7 days), so api, the gates, a new device and a long-running reader hold the same S(n) after a fold (D-TEAM-19). §2.8's api-7 gains the line; proposals are log statements api already sees, so no value is new to it. Rows grow only by open proposals.
-
-
-Changes: none beyond DESIGN-DETAILS section 5 as built. DESIGN-DETAILS section 5 had answered it on this option (ProjectionRows.proposals = 7, ProposalRow), and TEAM-M2-05 built it; this confirms it.
-
-Questions: `team-m2-02-open-proposals-across-bases.md`.
 
 ### QD-737: Which record lists a push in parts' purge candidates, when a rename's removal and its target can sit in different parts?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
@@ -4467,24 +4206,6 @@ Questions: `acl-m2-06-access-log-positions.md`.
 Changes: §19.6's rule (3), D-OPS-20's cost and FI-30's last clause (design-records, with DESIGN-DETAILS 2.8's text); StoreSettle.tla models the held DELETE and passes TLC with DELETEs in the run (M2's Gn-in).
 
 Questions: `evs-models-settle-stalled-deletes.md`.
-
-### QD-745: How should api's activation tick learn which recovery windows end, now that DESIGN-DETAILS.md section 5 moves open proposals into ProposalRow?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-api schedules an activation by a run-once task per proposal, as TEAM-M2-14's plan reads, on DESIGN-DETAILS section 5's ProposalRow (TEAM-M2-05): after each statement append, for each proposal whose window moved at that entry, RunOnce("config_log_activation", proposal_id) at its window_time_ms + 72 h; when it runs it checks the row at the tip (still open, its kind, its counted signatures, its window time) and appends an ApiTick naming the activation, which configCheckTick judges from the row at every reader. ConfigState exposes the open proposals with their kind and window_time_ms (5.7's PendingProposals and RecoveryWindow). One more taskworker target; nothing in the wire changes. No periodic sweep.
-
-Changes: TEAM-M2-14's activation ticks on ProposalRow; a config_log_activation run-once taskworker target; api's checkConfigLogTick and the sidecar verifier accept an activation judged from the row.
-
-Questions: `team-m1-04-activation-ticks.md`.
-
-### QD-746: How does every verifier learn that a base's own config head shrank a repo's key holders, when a new device and a cold gate start at that base?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-ProjectionHeader gains repeated bytes shrunk_repo_ids: the repos whose key holders the base's own config head change shrinks (KeyHolders(R, b-1, t_b) not a subset of KeyHolders(R, b, t_b)), computed by the writer from S(b-1) and S(b). A verifier present at b-1 recomputes it and forks on a difference, as with tail_verdicts; a new device or rows-only gate that starts at b (DESIGN-DETAILS 5.2.4's StartAtBase) takes it, so every verifier sets AclRepo.holders_shrunk_at = b for exactly those repos (D-TEAM-19). §2.8's api-7 gains the line. The interim fail-closed rule (a policy change at a base shrinks every repo) goes once the field lands.
-
-Changes: config.proto's ProjectionHeader.shrunk_repo_ids (fenced by design-records); §2.8's api-7 line (metadata_list.yml); TEAM-M2-17's holders_shrunk_at at a base reads it; the every-repo interim goes.
-
-Questions: `team-m2-09-base-shrinks.md`.
 
 ### QD-747: How does a writer leaf other than the uploader learn that an epoch's Welcome was never written, so it can remove and re-add the joiner after 10 minutes?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
@@ -4566,15 +4287,6 @@ A one-process MinIO cluster is out of scope for production, since §19.6 builds 
 Changes: §19.6 says a cluster in settle mode has at least 4 hosts (design-records); the minio fork refuses a one-process cluster in settle mode and never dereferences a nil locker; T3's meta-2 becomes 4 x 2 (server/local/file-cluster-t3).
 
 Questions: `evsb-m2-19-one-process-cluster-settle.md`.
-
-### QD-757: Must a sidecar whose clock is 10 min off still renew and exchange its tokens, given that §7.4 holds a DPoP proof's iat within ±60 s of the api's clock?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-A sidecar signs its DPoP proof's iat by the api's clock: it reads its offset from the Date header (or a server_time field) of its api answers, as §9.6's socket registrar reads the sockets service's, and signs iat at its own time plus that offset; a refusal for iat refreshes the offset once and retries. §7.4's ±60 s iat window and its replay ttl stay as they are, server-side and in sidecartest's fake api. §22.8's skew row's token clause then holds as written: a strict_exp sidecar 10 min fast or slow renews at GET /auth/refresh, POST /oauth/token's exchange and POST /network/auth-client. §7.4 gains the reading.
-
-Changes: §7.4's proof row gains the reading (design-records); the sidecar's api client keeps the api's clock offset and api_dpop.go signs iat by it; TEST-M2-15's skew row token clause.
-
-Questions: `test-m2-15-dpop-iat-under-skew.md`.
 
 ### QD-758: Should evs's client retry a segment PUT that the lb answers 502 or 504, which is what nginx gives a streamed PUT whose upstream died?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*

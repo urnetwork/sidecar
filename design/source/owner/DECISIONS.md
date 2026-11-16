@@ -1684,6 +1684,220 @@ The design-records track for §5 and §6 folded the answers below on 2026-11-16,
     - Not taken: (2) keeping each forward contract's delegation server-side, a column or a Redis family with its §2.8 row; (3) connect copying the forward contract's delegation into the companion request, a client-supplied value no receiver checks.
     - Raised by the build (PROTO-M4-02; the build's ledger, QD-957).
 
+## The build's owner questions on networks, teams, enrollment and the authorization log (2026-11-06 to 2026-11-16)
+
+The design-records track for §7 folded the answers below on 2026-11-16, each citing its ledger id: the owner items of that section decided or accepted in bulk on 2026-11-06 (302-306), those the owner decided one at a time from 2026-11-10 to 2026-11-15, and the recommendations of 2026-11-15 that the owner's instruction of 2026-11-16 accepted, which the ledger dates 2026-11-15. A decision that groups several answers carries its latest answer's date.
+
+302. **Per-run cost totals go to the team record by default, and a Team turns them off with `ServiceSettings.record_cost` (option 2; the build recommended off until a Team turns them on).**
+    - Question: I-20 keeps model calls in the vault and admins read actions and approvals, while the product's Team line puts cost in the ledger, and a per-run figure that names a member is monitoring-capable data.
+    - Answer: per-run totals (tokens by model and reported amounts, never a model_call) go to the team record by default. `ur record cost` groups by project, client or month, never ranks people and folds groups under 5 members into `other`, which shapes the tool and is no privacy control. A Team turns it off with `ServiceSettings.record_cost`, field 8, since `mail_strict` keeps 7, signed by an Owner or Admin, and every member's `ur status` names the setting (§7.9's settings fields).
+    - Cost: every Team's admins hold a per-person cost series from the first run, and works-council exposure is the product's default, so counsel reviews before RS2.
+    - Not taken: (1) per-run totals to the team record only in a Team that turns them on; (3) a daily per-project sum per sidecar with no run id; (4) the vault only.
+    - Raised by the build (RECORD.md's review; the build's ledger, QD-019).
+
+303. **The team record's `RepoCreate` follows the directory's rule, and a Team can decline the ledger (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §11.12 says one team record per network, but only the directory had a filer and a refusal, and copying the directory's rule word for word makes the ledger undeclinable, since an admin device re-files a deleted one.
+    - Answer: `team-create`'s first Owner device files `RepoCreate{kind team_record}` right after the directory's, and an admin device that finds a team whose access logs hold none files it. api and readers refuse a second live one in a network, and api one outside the team tier. Its admins are its creator and every config writer, as the directory's. A `RepoDelete` of it stands: only a person's /dev/tty-confirmed admin command files a new one, so a Team may decline the ledger and route as personal (§7.5, D-TEAM-28, §8.8, §11.12).
+    - Cost: one more clause in D-TEAM-28 and one api check; a Team that deletes its ledger has no employer-readable record until an admin asks for one.
+    - Not taken: (2) the directory's rule exactly, under which no Team can run without an employer-readable ledger; (3) only a person's command files it, which leaves the ledger off by default.
+    - Raised by the build (RECORD.md's review; the build's ledger, QD-050).
+
+304. **A zero `team_mail` reads as `indexers` (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §7.9 gives every other setting a default, while owner decision 58 says each team chooses its mail mode, and the two modes differ in who sees members' mail in transit.
+    - Answer: `team_mail` is `indexers | member scopes`, indexers first, and `TEAM_MAIL_MODE_UNSPECIFIED` reads as indexers. A `tag:mail` device still needs an `IndexerSet` for mail before it registers (D-MAIL-15), so no mail flows at zero until an admin designates one, and member scopes stays an explicit choice, which turns `{mxr_}`'s scope routes on (§7.9, §15.5).
+    - Cost: a team that never chooses gets designated receivers, which members' devices list, once an admin designates one.
+    - Not taken: (2) member scopes as the default, which needs each scope's mx host, mailcfg and certificates before any mail arrives; (3) no default, a setup step no section describes.
+    - Raised by the build (the protos review; the build's ledger, QD-117).
+
+305. **A Team requires fail-closed hooks with the signed `ServiceSettings.record_required`, read from M6 (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: D-MCP-5's one sentence names a policy that no record carries, and a blocking hook stops a member's tools when the daemon is down, against that item's own "an outage must not stop work".
+    - Answer: `ServiceSettings.record_required`, a bool, false by default, field 9, reserved at M2 and read from M6, set by an Owner or Admin and never through MCP. While it is set, `ur install-harness` writes `onFailure: block` (Claude Code) and `failClosed: true` (Cursor) on every `ur hook` entry, adds `--required` to the hook command and seals that form; `ur hook --required` exits 2 when the daemon cannot take the event. The config-hash check counts a fail-open form as a changed config, so such a run taints, and `ur status` names each fail-closed harness. Codex documents no fail-closed setting, so there the exit 2 blocks a PreToolUse only while the hook runs (§7.9's settings fields, §16.7).
+    - Cost: a dead daemon stops work on Claude Code and Cursor for a team that sets it; enforcement stops at a member's own daemon, where a same-uid edit taints but cannot be prevented.
+    - Not taken: (2) a key in §8.5's policy compiled into the local policy, a harness setting inside an access policy; (3) a documented local flag, which an admin can only ask for.
+    - Raised by the build (plan-MCP; the build's ledger, QD-139).
+
+306. **ur.io's OAuth consent page is in scope: owner rule 6 does not reach the issuer's consent page (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §7.8's consent row and D-TEAM-7 need the page to show the matching code and the one command, while owner rule 6 and the scope note of 2026-11-06 exclude UI and no section named the page.
+    - Answer: the build changes the consent component of ur.io on mmm's `sidecar` branch to show the matching code and the one command from `authorization_details`. The page is the issuer's `authorization_endpoint` and a security control, not product UI (§7.8's `page` row).
+    - Cost: a small page change in mmm and one line in the handoff's mmm row.
+    - Not taken: (2) a minimal consent page served from api, a second login surface to build and secure; (3) the code in the terminal only, which drops D-TEAM-7's control against an agent driving the browser.
+    - Raised by the build (plan-TEAM; the build's ledger, QD-129).
+
+307. **`SidecarRow` carries each admission's time, `admitted_time_ms = 23` (option 2, the recommendation).**
+    - Question: §7.10's cleanup list shows each listed page Worker "with its admission time", and rows carried only the admission's position, so a device that no longer retains the entry could show none.
+    - Answer: `SidecarRow` gains `int64 admitted_time_ms`, field 23, the `time_ms` of the entry the admission took effect at (the admitting entry's, the completing cosign's or the tick's), set at apply and carried through bases as `admitted_at` is, 0 for the Genesis's device. Every reader computes it from the entry it applies, rows-only gates included, so rows stay equal, and the cleanup list reads it (§7.9's fence comment, §7.10, §2.8 api-7).
+    - Cost: about 11 B per admission in rows, some 55 KB at 5,000, and an api-7 phrase that adds no exposure, since api already sees each entry's time and the admission's position.
+    - Not taken: (1) listing positions and showing a time only where the device retains the entry, so two admin devices show one list with different detail; (3) dropping the admission time from the list.
+    - Raised by the build (TEAM-M4-01; the build's ledger, QD-646).
+
+308. **A forwarding Delegation owes Owners and Admins no authority notice (option 1, the recommendation).**
+    - Question: R-TEAM-12 notifies on new credential paths, every new Delegation among them, and a forwarding Delegation (owner decision 197) is filed at each device's setup and every 90 days, thousands a quarter at team size.
+    - Answer: the notice counts only Delegations that can admit or sign in. A forwarding Delegation admits nothing, and its sidecar was already admitted under an act that owed a notice of its own, so it owes none (R-TEAM-12, §7.8's Notices).
+    - Cost: an owner is not told when a device of the network gains a forwarding key.
+    - Not taken: (2) the notice for every Delegation, noise that buries the authority changes it exists for; (3) a notice only when a signer other than the sidecar's own member files one, which today is never.
+    - Raised by the build (TEAM-M2-20; the build's ledger, QD-647).
+
+309. **A superseded or ended forwarding Delegation's row leaves the rows once retention passes it by 4,096 positions (option 1, the recommendation).**
+    - Question: a forwarding Delegation has no `not_after` and is replaced on every 90-day run, re-enrollment and pairing, so its rows accumulated without bound and a large team's bases would pass the 4 MiB rows limit.
+    - Answer: the row leaves `ProjectionRows` at the first base whose retention point passes the later of its `superseded_at` and `ended_at` by 4,096 positions, one rule of the base compile over rows and positions alone, so every reader drops it alike. Past that point the replay row already refuses its Signed bytes, nothing admits under a non-live forwarding key, a `DelegationRevoke` naming a dropped id is refused as unknown, and holder sets read only live rows (§7.9's forwarding row).
+    - Cost: a `DelegationRevoke` of a dropped id is refused where it once took effect and changed nothing.
+    - Not taken: (2) keeping every row and filing a new forwarding Delegation only at a new client generation; (3) both as written, under which a 5,000-device team's bases pass 4 MiB within about a year.
+    - Raised by the build (TEAM-M2-20; the build's ledger, QD-648).
+
+310. **A team IdP sign-in's flow state waits in Redis under `{sso_<state>}` for 10 minutes and is taken once (option 1, the recommendation).**
+    - Question: an OIDC or SAML sign-in holds a state, a nonce, a PKCE verifier and the user that began it between the redirect and the callback, and neither a Redis family nor a table held a flow.
+    - Answer: a Redis key `{sso_<state>}` holds the flow as JSON, set with a 10-minute ttl and taken with GETDEL, and §2.8's api-3 names it. Nothing lasts past 10 minutes, and a lost Redis only restarts sign-ins in flight (§7.6, §7.17).
+    - Cost: one Redis family and one phrase of api-3.
+    - Not taken: (2) a table with a sweep, durable where durability buys nothing; (3) the flow sealed into a cookie, which still needs a store for used states and puts a verifier in the browser.
+    - Raised by the build (TEAM-M2-16; the build's ledger, QD-720).
+
+311. **The issuer accepts an edge login origin on each tlsedge port (option 1, the recommendation).**
+    - Question: a members endpoint on a port other than 443 could not sign its visitors in, since the issuer took an edge origin only without a port.
+    - Answer: the issuer accepts `https://<host>.<net>.<root>:<port>` for the four tlsedge ports, 443 written bare, with the redirect_uri and the audience on that origin, and checks the members publish grant for (host, port). Each port is its own origin and audience (§7.8's edge login, D-TEAM-15).
+    - Cost: none beyond the wording; the grant check already takes the port.
+    - Not taken: (2) a login through the host's 443 origin with sessions sealed to the host, which ties a port's audience to a 443 listener; (3) refusing `members` on ports other than 443.
+    - Raised by the build (TLS-M5-19; the build's ledger, QD-723).
+
+312. **api keeps re-seed uploads in the Redis soft-state family `{acl_<networkId>}r`, with a resumed marker (option 2, the recommendation).**
+    - Question: after a site loss, devices' uploads wait until two members agree, and with several api instances two members' uploads could land on two instances and neither adopt; nothing durable said a network had resumed, so re-seed mode lasted until the operator turned it off.
+    - Answer: one hash field per uploading sidecar holds its newest upload, under a ttl that is a settings field, 24 h by default, and a resumed marker field is set when the network's resume base lands. Devices send their uploads again until their network resumes, so the family is rebuildable soft state under owner decision 136, and re-seed mode ends per network at the marker (§7.8, §7.9's site loss, §2.8 api-7).
+    - Cost: one Redis family and its line in api-7.
+    - Not taken: (1) uploads in memory with one api instance during a restore; (3) objects on the first metadata cluster, a new object family.
+    - Raised by the build (TEAM-M2-15; the build's ledger, QD-724).
+
+313. **An `AuthKeyBundle` carries the 32-byte `delegation_id` (option 1, the recommendation).**
+    - Question: the log names a Delegation by the 32-byte hash of its signed bytes, and the bundle's parser took 16 bytes, an id no verifier could match to the Delegation's row.
+    - Answer: the bundle's `delegation_id` is the 32-byte id the log names, kept as bytes: one identifier for a Delegation, the one §6.9 and §10.5 use (§7.8).
+    - Cost: none; no key had been minted.
+    - Not taken: (2) 16 bytes in the bundle and a second lookup key for the row.
+    - Raised by the build (CORE-M2-01; the build's ledger, QD-731).
+
+314. **Rows carry every open proposal, api schedules each recovery activation by a run-once task, and a restored binding's admission filed with `self_admit` off has its own kind (the recommendation in each).**
+    - Question: an `AuthorityProposal` closed at any base that folded past it, since `ProjectionRows` had no field for one; api's activation tick had no way to learn which recovery windows end; and `ProposalKind` could not say whether a restored binding's admission was filed with `self_admit` off, so its activation read the setting at the tick.
+    - Answer: `ProjectionRows` gains `repeated ProposalRow proposals = 7`: each open proposal's id, statement type and statement, each signer with its position, its `not_after_ms`, a recovery-signed one's window entry and time, and its kind, compiled from the head's fold records, so api, the gates, a new device and a long-running reader hold the same S(n) after a fold. After each statement append api schedules `RunOnce("config_log_activation", proposal_id)` at the window time + 72 h for each proposal whose window moved at that entry; the task checks the row at the tip and appends an `ApiTick` naming the activation, and no periodic sweep runs. A proposal's kind is fixed at its entry, and `PROPOSAL_KIND_RESTORED_COSIGNED = 4` names a restored binding's admission filed with `self_admit` off, which activates only with one admission signer's cosign among its signers; until the value is declared, readers take `self_admit` from rows at the tick, which keeps them agreeing (§7.9's proposal, tick and self_admit rows, §2.8 api-7).
+    - Cost: rows grow by open proposals only, bounded by their 7-day `not_after`; one more taskworker target; one enum value before M2's freeze.
+    - Not taken: forbidding a fold past an open proposal, which holds the unfolded tail for up to 7 days; readers rebuilding proposals from fold records, which api and the gates cannot read; a periodic per-network sweep; three kinds with `self_admit` read at the tick as the rule; `self_admit` overloaded into another field.
+    - Raised by the build (TEAM-M2-02, TEAM-M1-04, TEAM-M2-05; the build's ledger, QD-736, QD-745, QD-952).
+
+315. **A base names the repos its own head change shrinks, and a removal of a holder whose access had already ended by time counts as a shrink (option 1, the recommendation, in each).**
+    - Question: a base's own config head can shrink a repo's key holders, which a new device and a cold gate that start at the base cannot compute; and an entry that removed a holder whose grant had already expired left `holders_shrunk_at` unchanged, so the gate passed again a generation the expiry had closed.
+    - Answer: `ProjectionHeader` gains `repeated bytes shrunk_repo_ids = 11`, the 16-byte repo ids, ascending and none twice, of the repos whose holders the base's own head change shrinks, which the writer computes from S(version-1) and S(version); a verifier present at the previous entry recomputes it and forks on a difference, and one that starts at the base takes it. Entry n, a base included, also shrinks R when it drops a holder of KeyHolders(R, n-1, t_s) from KeyHolders(R, n, t_s), t_s being the time of the entry at R's `holders_shrunk_at`, or R's creation when that is 0 (§7.9's shrink row and apply's shrunk row, §2.8 api-7).
+    - Cost: a header field with its api-7 phrase, a compare at each base, and one more KeyHolders pair per repo at each touching entry; an expiry moved earlier with both ends after R's last shrink stays open, for the review phase.
+    - Not taken: every policy change at a base shrinking every repo, a rotation of repos the change did not touch; rows re-compiled at each re-sign; judging each generation by its own holders, kept for the review phase; the rule as it was.
+    - Raised by the build (TEAM-M2-09, TEAM-M2-17; the build's ledger, QD-746, QD-883).
+
+316. **A sidecar signs its DPoP `iat` by api's clock (option 1, the recommendation).**
+    - Question: §7.4 holds a DPoP proof to a window of ±60 s, so a sidecar whose clock is minutes off could neither renew nor exchange, while §22.8's skew row has it keep working.
+    - Answer: the sidecar reads the offset between its clock and api's from its api answers, signs `iat` at its own time plus that offset, and on a refusal for `iat` refreshes the offset once and retries. The window and its replay ttl stay as they are (§7.4's proof).
+    - Cost: a small client change; none on the server.
+    - Not taken: (2) a server-issued DPoP nonce, a Redis family, a §2.8 row and a round trip; (3) narrowing the skew row, under which a drifted laptop cannot renew until its clock is fixed.
+    - Raised by the build (TEST-M2-15; the build's ledger, QD-757).
+
+317. **`ur daemon` runs one config follower per network it hosts, over a head reader that evs provides (option 1, the recommendation, in each).**
+    - Question: no task built a network's config follower in the daemon, so the bridge and every other consumer of the verified log had no reader, and no task built the config repo's head reader over evs or each hosted network's evs and gkm clients.
+    - Answer: for each network the daemon hosts, one follower is the device's one judge of §7.9's log: its projection reader over that Sidecar's api, the config repo's head reader through evs, its `authlog/` store and gkm's keys. evs provides the head reader, the file-mode read of main at a ref version, every path of the head, checked against C_v on the ref's chain (§11.8); the daemon composes each network's evs and gkm clients. Components, the bridge among them, read through the follower and build none of their own, and until the pieces are composed the follower withholds every base (§7.9's follower row).
+    - Cost: two tasks, in the data and core lanes; until both land no hosted network's log is followed, the closed direction.
+    - Not taken: the bridge wiring building its own follower, a second judge of one log; one core task writing the head reader over evs's read path, whose ref-version rules evs owns.
+    - Raised by the build (BRIDGE-M4-16 and the daemon's composition; the build's ledger, QD-796, QD-804).
+
+318. **A reader that starts at a base judges that base's head by descent, as api does (option 1, the recommendation).**
+    - Question: a reader that starts at a base b holds no state for the authorization pins of the config repo's earlier pushes, so it could not judge their signers' writer role and withheld every anchor's head.
+    - Answer: at an anchor the reader checks that the head's chain runs from C_0 to C_v and that each push's signature verifies under an identity key b's rows admit, leaving the writer role at each push's own pin unjudged; a push whose signer b's rows no longer admit is unjudgeable and withholds the head; every push after the anchor is judged in full (§7.9's anchor row).
+    - Cost: a config writer removed before b, whose identity b still admits, could have a past push taken as a writer's, inside a head that b's signer, a config writer at b, signed for, and bound by the compile check from the next base on.
+    - Not taken: (2) rebuilding the states from the head's fold records, a full log replay at every anchor; (3) refusing every anchor over evs; (4) the chain check alone, with no signature checked.
+    - Raised by the build (the config head reader; the build's ledger, QD-814).
+
+319. **A device with no config key applies bases rows-only, joins the config group on those states, then re-reads them in full before it stands (option 1, the recommendation).**
+    - Question: a newly admitted device's follower must check config heads before it stands, and its key client takes the config repo's key only on a verified state the follower gives once it stands.
+    - Answer: while the device holds no generation of the config repo, its follower applies bases as sidecar/device's posture does and hands the key client those states, which serve only to take its Welcome or wrap and open the config repo's generation keys; nothing else acts on them, no seal, commit, rotation or admission. Once it holds the key, the follower re-reads every base it applied rows-only, from its anchor, judging each head in full, and stands only when that pass agrees. The network's first device and a device restarting with its keys keep the full check from the start (§7.9's no key row, §10.7's KF2).
+    - Cost: a second pass over the log since the anchor, and a window in which the key client holds a state no head check has confirmed.
+    - Not taken: (2) starting at a base by its rows and reading its head by descent, which a device that cannot start at a base cannot use; (3) a first wrap staged by the admitter, a key the device opens before it can judge who rotated it.
+    - Raised by the build (the daemon's composition; the build's ledger, QD-817).
+
+320. **The genesis owner's row names SHA-256(Signed Genesis) as its admission hash (option 1, the recommendation).**
+    - Question: base 1's compile gave the network's first device a row with no `admission_sha256`, while §10.4's credential names the Genesis, so every member's credential check refused the first device's leaf.
+    - Answer: base 1's compile sets the genesis owner's `SidecarRow.admission_sha256` to SHA-256(Signed Genesis), so the row says what the credential carries and every check stays a byte comparison (§7.9's fence comment, §10.4).
+    - Cost: one field in base 1's rows.
+    - Not taken: (2) reading an empty hash on that row as the Genesis's, a special case in every reader of a row's admission hash.
+    - Raised by the build (the daemon's composition; the build's ledger, QD-825).
+
+321. **SCIM's bearer is a hashed column an Owner-only route sets, and the indexer `scim_signer` names reads its queue on a sidecar route (option 1, the recommendation, in each).**
+    - Question: §7.6 gave SCIM a hashed bearer, and §2.8 named no store and §7.17 no route for it; and the indexer that `ServiceSettings.scim_signer` names (owner decision 150) could not read SCIM's queue, since `GET /network/scim-changes` is a Network route a sidecar's token cannot call.
+    - Answer: `network_team.scim_token_sha256`, a nullable column in MG6, holds the SHA-256 of a bearer `ur-scim-<secret>` that `POST /network/scim-token {remove?}`, Owner-only, answers once; a new bearer replaces the old at once and `remove` turns SCIM off, and api-2 names the hash. `GET /sidecar/scim-changes`, on the strict_exp allowlist, answers only the client whose sidecar the newest projection's `scim_signer` names, with the queued removals of members outside the AdminSet by the same rows; `GET /network/scim-changes` stays the console's and `ur admin`'s (§7.4, §7.6, §7.17, §2.10).
+    - Cost: one column, two routes and one allowlist line; the indexer acts on api's unsigned word, so a breached server can have it remove members outside the AdminSet, a denial that adds no reader (I-4).
+    - Not taken: a derived bearer, which needs a vault resource before any team can use SCIM; an OAuth client with a `scim` scope; widening the Network route to a client token; pushing the queue in a hint, which still needs the route.
+    - Raised by the build (TEAM-M6-07; the build's ledger, QD-828, QD-829).
+
+322. **Device authorizations wait in Redis, as IdP sign-in flows do (option 1, the recommendation).**
+    - Question: RFC 8628 device authorizations wait between `POST /oauth/device_authorization` and the token poll, and §2.8 named no store for them.
+    - Answer: `{oauthdev_<device_code_sha256>}` holds the authorization's JSON under a ttl of its life, 10 minutes, and `{oauthuser_<user_code>}` points at it; redemption is by GETDEL, and api-11 names them (§7.8's `device` row, §7.17).
+    - Cost: two Redis families and one phrase of api-11; a lost Redis restarts sign-ins in flight.
+    - Not taken: (2) a Postgres table with a sweep.
+    - Raised by the build (TEAM-M6-08; the build's ledger, QD-830).
+
+323. **The auth key bearer, a key's tag ids and the admin event chain are encoded as built (option 1, the recommendation).**
+    - Question: no section gave the bytes of an auth key's bearer string, of the tag ids a key record holds, or of the admin event hash chain.
+    - Answer: the bearer is `ur-authkey-<id>-<secret>` with both parts in lowercase RFC 4648 base32 without padding, a key's tag ids are written as hex, and the admin event chain is `chain_sha256 = SHA-256(prev_sha256 || canonical)` over a domain string and fixed fields, each row storing its own `prev_sha256`. When every event of a network has aged out of the 400-day window, its next event starts again at seq 1 from the zero value, and an event's time never falls below the previous event's (§7.8, §7.11).
+    - Cost: none in code; a fully swept chain restarts, which a reader sees because seq 1 follows a later time.
+    - Not taken: (2) other encodings; (3) keeping each network's newest event past 400 days, a row that outlives api-8's published ttl.
+    - Raised by the build (TEAM-M1-03, TEAM-M1-09; the build's ledger, QD-911).
+
+324. **A member invite is the string `ur-invite-<invite_id>-<secret>` with a fixed 153-byte fragment, and a join carries an HMAC under the fragment's join secret (option 1, the recommendation).**
+    - Question: §7.5 gave a member invite a fragment that pins the network and a secret that MACs the join request, and no section gave the bytes of either.
+    - Answer: the string is `ur-invite-<invite_id>-<secret>[#<base64url(fragment)>]`, the bearer's parts in lowercase base32 without padding as an auth key's are, the server keeping only the secret's SHA-256. The fragment is a fixed layout, not a proto message: a version byte 1, genesis_sha256, the pin's version and chain, the inviter's sidecar_id and Ed25519 identity key, and a 32-byte join secret, 153 bytes. The join MAC is HMAC-SHA256 under that secret over a domain string, the network id, invite id, sidecar id, identity key and member id, and is refused for an ephemeral or read_only join (§7.5's invite block, §8.5's invited clause).
+    - Cost: none; the fragment never reaches a server, so §2.8 gains no row.
+    - Not taken: (2) a `MemberInviteFragment` message in config.proto with its fence lines.
+    - Raised by the build (TEAM-M6-04; the build's ledger, QD-964).
+
+325. **A base carries the verdict of every entry in its tail, and later verifiers take verdicts from it (option 1, the recommendation, in the form the detailed design gives it).**
+    - Question: a new device that starts at base b re-judged the statements among folded_through+1..b-1 at a state it could not rebuild, so a tail statement whose rule reads what the base's head changed, or whose `at` lies below what the device holds, could get a verdict other than the long-running readers'.
+    - Answer: a verdict is judged once, at the entry's position, by the verifiers present there. The base's Signed `ProjectionHeader` carries `tail_verdicts = 10`: 2 bits per entry among folded_through+1..version-1 in position order (0 refused or a BASE, 1 took effect, 2 took effect and completed a proposal, 3 never), exactly ceil(2*(version-1-folded_through)/8) bytes with padding bits 0. A new device and a rows-only verifier re-apply the tail by those bits and never re-judge it; a long-running reader and api compare the bits with their own verdicts, a reader forking and api refusing on a difference (§7.9's state, base, apply and retention rows, §2.8 api-7).
+    - Cost: a header field with its api-7 phrase; a new device keeps verdicts it cannot recompute, which the base's signer and every verifier present vouch for.
+    - Not taken: (2) judging tail statements on the base's rows by design, under which a later authority change could undo an earlier revocation; (3) retaining rows back to every tail statement's state.
+    - Raised by the build (TEAM-M2-02; the build's ledger, QD-915).
+
+326. **A preview refusal answers the code `not_preview` (option 1, the recommendation).**
+    - Question: `POST /network/enroll` and `POST /network/auth-client` refuse a strict_exp client outside `preview_networks` with text only, and a client reads only structured codes, so `ur` could not tell a preview refusal from any other.
+    - Answer: both routes answer the refusal with the code `not_preview`, and `ur` prints by the code that the network is not in the preview yet (§7.4's `preview` row, §7.8's enroll block).
+    - Cost: one string on the server.
+    - Not taken: (2) text only, with a generic refusal printed.
+    - Raised by the build (CORE-M1-08; the build's ledger, QD-919).
+
+327. **The log's `KeyRegister` rule never reads the attestation; the registering device refuses a failing one, and readers label keys locally (option 1, the recommendation).**
+    - Question: a presence key's attestation is judged against the FIDO roots each release pins, so a log rule that refused a failing attestation would give readers on different releases different states from one log, against D-TEAM-32.
+    - Answer: the log's rule checks the `KeyRegister`'s own proof, which needs no roots, and never reads `attestation`. The device about to sign refuses a key whose present attestation fails and never downgrades it to asserted. Every reader computes §16.6's label locally, at the carrying entry's time, for records and approver screens only, and shows a logged key whose attestation fails under its own roots as presence (attestation refused), neither attested nor asserted (§7.9's record bytes, §16.6).
+    - Cost: a label can differ between releases; state, a key's liveness and the demand for its countersignature cannot.
+    - Not taken: (2) roots the log itself pins, one more authority record and its upkeep; (3) each release's roots in the rule, accepting forks.
+    - Raised by the build (MCP-M2-01; the build's ledger, QD-924).
+
+328. **§7.4's stage 2 is turned on by a build tag, never by a config push (option 1, the recommendation, as built).**
+    - Question: stage 2 must stay off until the app and extension releases ship, and nothing said whether a build tag or a `sidecar.yml` switch holds it.
+    - Answer: api is built with the tag `sidecar_stage2` at M3-out, once the releases have shipped; absent the tag, stage 2 is off, so stage 1's routes and the preview gate stand. Stage 2's refusal protects the network credential from same-user agents (I-6), so it does not depend on a config file (§7.4, §23.7).
+    - Cost: turning stage 2 on needs a deploy.
+    - Not taken: (2) a `sidecar.yml` switch, whose mistaken push refuses shipped apps or reopens the preview limit; (3) holding the commits off the branch until the releases ship.
+    - Raised by the build (TEAM-M1-07; the build's ledger, QD-933).
+
+329. **A team's last Owner cannot delete their account until another member is Owner or the team is deleted (option 1, the recommendation).**
+    - Question: an account deletion removes the user's memberships, and a team whose only Owner left would keep its network, AdminSet and subscription with no person holding a server-side role that administers it.
+    - Answer: api refuses the account deletion while its user is the last Owner of a team, answering what to do first: make another member Owner, or delete the team. An Owner lost any other way is restored by a signed `AdminSet` that names another member Owner, which the server's role mirror follows (§7.5's last Owner, Q-TEAM-2's residual).
+    - Cost: one more refusal on an existing route, only for a team's last Owner.
+    - Not taken: (2) deleting the membership and relying on the AdminSet's mirror alone, with billing running on a team no person administers; (3) promoting another Admin automatically, a role the server would originate.
+    - Raised by the build (TEAM-M6-01; the build's ledger, QD-941).
+
+330. **Rows keep each compromise cascade's span per sidecar and each indexer designation that holds (option 1, the recommendation, in each).**
+    - Question: what a sidecar signed while in a compromise cascade's set P stays void until re-signed outside P, and rows could not answer that after a fold or after a park was lifted; and `ProjectionRows` had no field for `IndexerSet` designations, so they lapsed at the first base at every reader that no longer held the entry.
+    - Answer: `SidecarRow` keeps one span per compromise cascade that held the sidecar in P, `cascades = 22`: from is since_n for the revoked sidecar and, for any other, the entry that pulled it into P, and until is the revocation's entry; what the sidecar signed at a position at with from <= at < until is void at every reader. What a recovery key or a Delegation signed follows from the row that names its signer and position, so no other row carries a void marker. `ProjectionRows` gains `repeated IndexerRow indexers = 10`, one row per (sidecar_id, scope) that holds, with its signer, position and sealed services (§7.9's spans row and Indexers, §2.8 api-7).
+    - Cost: about 10 B a span and one row a designation, with two phrases of api-7; the server learns nothing it does not already see as park positions, the revocation's since_n and the IndexerSet entries.
+    - Not taken: a void marker on each record a cascade can void, four fields across two files; whatever a currently parked sidecar signed being void at any position, wrong both ways; readers rebuilding designations from fold records; designations ending at the next fold.
+    - Raised by the build (TEAM-M2-04, TEAM-M2-07; the build's ledger, QD-947, QD-948).
+
+331. **Only the newest active forwarding client of a sidecar's bound client is answered at the exchange (option 1, the recommendation, as built).**
+    - Question: nothing in api tied a forwarding client to a Delegation, so a client minted under a forwarding Delegation that another had superseded kept exchanging tokens.
+    - Answer: only the newest active forwarding child of the sidecar's current bound client speaks for it at the exchange. Every setup generates a new key set and mints a new forwarding client after filing its Delegation, so a supersession by other keys ends the old client's exchange at the new one's mint, and a repeat for the same key reissues the client (§7.4's mark, §7.8's exchange, D-TEAM-33).
+    - Cost: between the Delegation's filing and the mint the old client still exchanges.
+    - Not taken: (2) binding the client to its `delegation_id`, a new owner-row column, an api-4 phrase and a request field, which can replace this later; (3) leaving the removal to the sidecar, which a crash leaves undone.
+    - Raised by the build (TEAM-M8-02; the build's ledger, QD-963).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

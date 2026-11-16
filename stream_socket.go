@@ -20,7 +20,7 @@ type subprotocolSocketStream struct {
 	stream *SubprotocolStream
 }
 
-var _ socketStream = (*subprotocolSocketStream)(nil)
+var _ socketEndingStream = (*subprotocolSocketStream)(nil)
 
 // The seam over stream, which it then owns.
 func newSubprotocolSocketStream(stream *SubprotocolStream) socketStream {
@@ -61,6 +61,23 @@ func (self *subprotocolSocketStream) Close() error {
 // See socketStream.
 func (self *subprotocolSocketStream) Reset(code protocol.StreamResetCode) error {
 	return socketStreamErrorOf(self.stream.Reset(code))
+}
+
+// See socketEndingStream (socket_dial.go). The stream's own state says when: every change of it wakes this wait, a
+// reset by its dispatcher's Close among them, so the wait never outlives the dispatcher.
+func (self *subprotocolSocketStream) waitEnded() {
+	stream := self.stream
+	for {
+		ended, changed := func() (bool, chan struct{}) {
+			stream.stateLock.Lock()
+			defer stream.stateLock.Unlock()
+			return stream.state.phase == streamPhaseDone, stream.changed
+		}()
+		if ended {
+			return
+		}
+		<-changed
+	}
 }
 
 // See socketStream.
