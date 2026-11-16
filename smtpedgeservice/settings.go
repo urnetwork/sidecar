@@ -1,6 +1,7 @@
 // config/<env>/smtpedge.yml (§14.14). DefaultSmtpEdgeSettings is the only source of a default
-// (connect/CODESTYLE.md:144), and LoadSmtpEdgeSettings lays a file over it. Protocol and format sizes
-// are not settings: they stay constants beside the code that reads them.
+// (connect/CODESTYLE.md:144), and LoadSmtpEdgeSettings lays a file over it. Protocol and format limits
+// are settings too, with the protocol's value as their default (QD-702), and smtpedge.yml never sets
+// them (yaml "-"): changing one is a protocol change, never a deployment's.
 //
 // One file serves both roles that load it: the edge (SMTP-M9-13 on), and the report intake in
 // mxedge's platform block (plan-SMTP-report-intake-home), which reads the names, the sending
@@ -22,13 +23,6 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-)
-
-const (
-	// RFC 1035's longest name.
-	smtpHostNameMaxByteCount = 253
-	// RFC 1035's longest label.
-	smtpHostLabelMaxByteCount = 63
 )
 
 // An smtpedge.yml that cannot be served from. The wrapping error names the field, never its value.
@@ -97,6 +91,9 @@ type SmtpEdgeSettings struct {
 	ReportInflateRatio int `yaml:"report_inflate_ratio"`
 	// The deepest XML or JSON nesting an aggregate may have (§14.8). Default 32.
 	ReportNestingDepth int `yaml:"report_nesting_depth"`
+	// The longest value an aggregate field may hold. Default 1,024: every field kept is an identifier,
+	// a name, a word or a number, and RFC 1035 bounds a name at 253 octets.
+	ReportAggregateValueMaxByteCount int `yaml:"-"`
 	// The deepest a report's multiparts may nest, the top level being 1. Default 8, deeper than any
 	// report shape needs (RFC 5965's is 2).
 	ReportMimeDepth int `yaml:"report_mime_depth"`
@@ -108,8 +105,20 @@ type SmtpEdgeSettings struct {
 	ReportDkimKeyRecordCount int `yaml:"report_dkim_key_records"`
 	// The largest RSA key a signature may use, in bits, which bounds a verify's cost. Default 4096.
 	ReportDkimRsaKeyBitCount int `yaml:"report_dkim_rsa_key_bits"`
+	// The smallest RSA key a signature may use, in bits. Default 1,024, RFC 8301 §3.2's floor, below which
+	// a verifier must not accept a key.
+	ReportDkimRsaKeyMinBitCount int `yaml:"-"`
+	// The longest reported Message-ID kept. Default 998, RFC 5322 §2.1.1's longest line.
+	ReportMessageIdMaxByteCount int `yaml:"-"`
+	// The longest Feedback-Type token kept. Default 32: RFC 5965's registry's longest is twelve.
+	ReportFeedbackTypeMaxByteCount int `yaml:"-"`
 	// How long one report's DNS reads may take in all. Default 30 s, D-MAIL-14's bound for mail.
 	ReportDnsTimeout time.Duration `yaml:"report_dns_timeout"`
+
+	// The longest name in text form. Default 253, RFC 1035's.
+	HostNameMaxByteCount int `yaml:"-"`
+	// The longest label. Default 63, RFC 1035's.
+	HostLabelMaxByteCount int `yaml:"-"`
 }
 
 // The defaults every number here is read from. Root and ReportHostName stay empty, so these alone do
@@ -137,6 +146,13 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		ReportDkimKeyRecordCount: 4,
 		ReportDkimRsaKeyBitCount: 4096,
 		ReportDnsTimeout:         30 * time.Second,
+
+		ReportAggregateValueMaxByteCount: 1024,
+		ReportDkimRsaKeyMinBitCount:      1024,
+		ReportMessageIdMaxByteCount:      998,
+		ReportFeedbackTypeMaxByteCount:   32,
+		HostNameMaxByteCount:             253,
+		HostLabelMaxByteCount:            63,
 	}
 }
 
@@ -160,12 +176,12 @@ func LoadSmtpEdgeSettings(data []byte) (*SmtpEdgeSettings, error) {
 }
 
 // Whether name is a dotted LDH name, which also keeps a CR, LF or space out of everything it enters.
-func smtpLdhName(name string) bool {
-	if name == "" || smtpHostNameMaxByteCount < len(name) {
+func (self *SmtpEdgeSettings) ldhName(name string) bool {
+	if name == "" || self.HostNameMaxByteCount < len(name) {
 		return false
 	}
 	for _, label := range strings.Split(name, ".") {
-		if label == "" || smtpHostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || self.HostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := range len(label) {
@@ -183,10 +199,24 @@ func (self *SmtpEdgeSettings) Validate() error {
 	if self == nil {
 		return fmt.Errorf("%w: no settings", ErrSmtpEdgeSettingsRefused)
 	}
-	if !smtpLdhName(self.Root) {
+	value := reflect.ValueOf(self).Elem()
+	for i := range value.NumField() {
+		field := value.Field(i)
+		if (field.Kind() == reflect.Int || field.Kind() == reflect.Int64) && field.Int() <= 0 {
+			name := value.Type().Field(i).Tag.Get("yaml")
+			if name == "" || name == "-" {
+				name = value.Type().Field(i).Name
+			}
+			return fmt.Errorf("%w: %s is not positive", ErrSmtpEdgeSettingsRefused, name)
+		}
+	}
+	if self.ReportDkimRsaKeyBitCount < self.ReportDkimRsaKeyMinBitCount {
+		return fmt.Errorf("%w: report_dkim_rsa_key_bits is under RFC 8301's floor", ErrSmtpEdgeSettingsRefused)
+	}
+	if !self.ldhName(self.Root) {
 		return fmt.Errorf("%w: root is not an LDH name", ErrSmtpEdgeSettingsRefused)
 	}
-	if !smtpLdhName(self.ReportHostName) {
+	if !self.ldhName(self.ReportHostName) {
 		return fmt.Errorf("%w: report_host is not an LDH name", ErrSmtpEdgeSettingsRefused)
 	}
 	seenAddresses := map[netip.Addr]bool{}
@@ -201,7 +231,7 @@ func (self *SmtpEdgeSettings) Validate() error {
 			return fmt.Errorf("%w: sending_addresses repeats an address", ErrSmtpEdgeSettingsRefused)
 		}
 		seenAddresses[address] = true
-		if !smtpLdhName(sendingAddress.HeloName) {
+		if !self.ldhName(sendingAddress.HeloName) {
 			return fmt.Errorf("%w: a sending address's helo is not an LDH name", ErrSmtpEdgeSettingsRefused)
 		}
 		if sendingAddress.Fwmark < 0 {
@@ -209,15 +239,8 @@ func (self *SmtpEdgeSettings) Validate() error {
 		}
 	}
 	for _, domain := range self.LoopAllowlist {
-		if !smtpLdhName(domain) {
+		if !self.ldhName(domain) {
 			return fmt.Errorf("%w: loop_allowlist holds a name that is not LDH", ErrSmtpEdgeSettingsRefused)
-		}
-	}
-	value := reflect.ValueOf(self).Elem()
-	for i := range value.NumField() {
-		field := value.Field(i)
-		if (field.Kind() == reflect.Int || field.Kind() == reflect.Int64) && field.Int() <= 0 {
-			return fmt.Errorf("%w: %s is not positive", ErrSmtpEdgeSettingsRefused, value.Type().Field(i).Tag.Get("yaml"))
 		}
 	}
 	return nil

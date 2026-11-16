@@ -314,8 +314,9 @@ func TestAggregateOtherRootElementRefused(t *testing.T) {
 }
 
 func TestAggregateLongValueRefused(t *testing.T) {
-	xml := "<feedback><report_metadata><report_id>" + strings.Repeat("a", smtpAggregateValueMaxByteCount+1) + "</report_id></report_metadata></feedback>"
-	if _, err := parseSmtpDmarcXml([]byte(xml), reportTestSettings()); !errors.Is(err, ErrSmtpReportRefused) {
+	settings := reportTestSettings()
+	xml := "<feedback><report_metadata><report_id>" + strings.Repeat("a", settings.ReportAggregateValueMaxByteCount+1) + "</report_id></report_metadata></feedback>"
+	if _, err := parseSmtpDmarcXml([]byte(xml), settings); !errors.Is(err, ErrSmtpReportRefused) {
 		t.Fatalf("%v", err)
 	}
 }
