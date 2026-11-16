@@ -411,6 +411,47 @@ type SidecarSearchSettings struct {
 	// How often a "search more" reports progress at the least, beside a report at each shard: 1 s (§16.10's cold
 	// contract).
 	MoreProgressInterval time.Duration
+	// The own search indexers a remote search asks at once, which are the own pairs the foreground keeps warm: 2
+	// (QD-707, DESIGN-DETAILS 7.2.3).
+	RemoteOwnAskCount int
+	// Other members' indexers kept warm beside the own ones, in mode on once a notice is answered: 1 (DESIGN-DETAILS
+	// 7.2.3).
+	RemoteOtherWarmCount int
+	// A failed indexer is not asked for this long: 2 min (D-SDK-27, DESIGN-DETAILS 7.2.1).
+	RemoteSkipTimeout time.Duration
+	// How long a HelloResult, Pong or page keeps an indexer online, and the own indexer that answered last first: 10 min
+	// (DESIGN-DETAILS 7.2.1).
+	RemoteOnlineTimeout time.Duration
+	// A repo an indexer refused in coverage is not asked of it for this long: 10 min (DESIGN-DETAILS 7.2.1).
+	RemoteRefusedTimeout time.Duration
+	// Mismatches from one indexer within RemoteMismatchInterval that void it for RemoteDistrustTimeout: 3, in 24 h, for
+	// 24 h (§11.14's merge row, DESIGN-DETAILS 7.2.6).
+	RemoteMismatchCount    int
+	RemoteMismatchInterval time.Duration
+	RemoteDistrustTimeout  time.Duration
+	// evs's time check both ways, which bounds a fold below an indexer's pinned push: 40 min, 10 min ahead on the pinned
+	// push and 30 min behind on a push in parts (§11.8's 5b; DESIGN-DETAILS 7.2.1, QD-709). A value of the format and of
+	// evs's check, so no deployment changes it on one side alone.
+	SkewGuard time.Duration
+	// The open searches one requester holds at one indexer, a third's page 0 superseding the oldest; and at an
+	// indexer, the live cursors one requester holds: 2 (§11.14's limits row).
+	RemoteRequesterCursorCount int
+	// The search ids an indexer remembers a requester ended, each for CursorTimeout, so no page of one is computed
+	// again: 300, the most RemoteRequesterRate admits in ten minutes (DESIGN-DETAILS 7.2.5). Past it the oldest goes.
+	RemoteEndedIdCount int
+	// Times a later page is asked again, with the same search_id and page, before its leg fails: 1 (DESIGN-DETAILS
+	// 7.2.4).
+	RemotePageRetryCount int
+	// Times one search reopens a leg on CURSOR_EXPIRED: 1 (§11.14's status row, DESIGN-DETAILS 7.2.4).
+	RemoteReopenCount int
+	// Times one search asks an indexer seen again for the repos that fell back from it: 1 (§11.14's failover row).
+	RemoteSeenAgainCount int
+	// Claims one search's merge keeps, past which the oldest pages' own possible claims go first: 20,000, 1.1 MiB at
+	// 56 B a claim (DESIGN-DETAILS 7.2.6's memory row).
+	RemoteClaimCount int
+	// Coverage pins of a ref that wait for a replay to reach their version before the pin check: PinRingCount's 64
+	// (DESIGN-DETAILS 7.2.6). Past it the oldest waiting goes unchecked.
+	RemotePinWaitCount int
 }
 
 // Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
@@ -1014,6 +1055,22 @@ func DefaultSidecarSettings() *SidecarSettings {
 			DirectoryBuckets:                true,
 			MoreFirstProgress:               500 * time.Millisecond,
 			MoreProgressInterval:            1 * time.Second,
+			RemoteOwnAskCount:               2,
+			RemoteOtherWarmCount:            1,
+			RemoteSkipTimeout:               2 * time.Minute,
+			RemoteOnlineTimeout:             10 * time.Minute,
+			RemoteRefusedTimeout:            10 * time.Minute,
+			RemoteMismatchCount:             3,
+			RemoteMismatchInterval:          24 * time.Hour,
+			RemoteDistrustTimeout:           24 * time.Hour,
+			SkewGuard:                       40 * time.Minute,
+			RemoteRequesterCursorCount:      2,
+			RemoteEndedIdCount:              300,
+			RemotePageRetryCount:            1,
+			RemoteReopenCount:               1,
+			RemoteSeenAgainCount:            1,
+			RemoteClaimCount:                20000,
+			RemotePinWaitCount:              64,
 		},
 		Directory: &SidecarDirectorySettings{
 			SessionSyncInterval:   15 * time.Minute,
