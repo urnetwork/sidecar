@@ -7,20 +7,34 @@
 // {sg_}, {sn_}, {sc_} and {svc_}), no log, metric or hint (CC4) holds a name in the clear, a seal's plaintext or a
 // key. Under sidecar_leaktest a canary leaked into each class through the class's own leak is found, so the clean
 // scan is no blind one.
+//
+// DESIGN-DETAILS 17.2.10's names (17.7's SOCK-M5-16 line, after TLS-M6-08) are canaries too, on the suite's custom
+// world: a custom host a listener is certified for, one it holds an ACME claim for, and one a visitor's Find names
+// that no listener lists. A tls/ listener's names travel in the clear by design, so each is declared where §2.8 says a
+// server sees it, and nowhere else: a registration's certified and ACME names by the service and in sock-1's group,
+// which keeps them; a Find's server name by the service for the request alone (sock-2), which no store keeps. No log,
+// metric or hint holds any of them (I-13). The schema guard holds 17.2.16's clauses of sock-1 and sock-2 to the
+// fields that carry them, both ways.
 
 package sidecartest_test
 
 import (
 	"bytes"
+	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/urnetwork/connect"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
+	"github.com/urnetwork/sidecar/socketsservice"
 )
 
 // Registers, lists and dials canary names through the engine, with the store's contents joining the capture. The
@@ -192,6 +206,326 @@ func TestSocketRowsAndFamiliesMapBothWays(t *testing.T) {
 		}
 		if row, ok := value.(string); !ok || !strings.HasPrefix(row, "sock-") {
 			t.Errorf("the ticket field %s maps to %v, no sock row", field, value)
+		}
+	}
+}
+
+// The kinds of 17.2.10's canaries, as a finding names them.
+const (
+	socketPrivacyCertifiedKind = "certified custom host"
+	socketPrivacyAcmeKind      = "acme custom host"
+	socketPrivacyUnlistedKind  = "unlisted custom host"
+)
+
+// One custom world's canary names.
+type socketPrivacyCustomNames struct {
+	certified string
+	acme      string
+	unlisted  string
+}
+
+// Plants 17.2.10's canaries on world's capture and declares where §2.8 lets a server see each; then a listener of the
+// first device lists the certified and the ACME host, which the facts bear out, a visitor's Find and a challenge's
+// Find reach it by them, and a visitor's Find names the unlisted host, which finds no listener. The store's contents
+// join the capture.
+func socketPrivacyCustomRun(t *testing.T, world *socketSuiteCustomWorld) *socketPrivacyCustomNames {
+	t.Helper()
+	capture := world.net.Capture()
+	names := &socketPrivacyCustomNames{
+		certified: capture.CanaryText(socketPrivacyCertifiedKind) + ".customer.example",
+		acme:      capture.CanaryText(socketPrivacyAcmeKind) + ".customer.example",
+		unlisted:  capture.CanaryText(socketPrivacyUnlistedKind) + ".customer.example",
+	}
+	for _, declaration := range []struct {
+		row   string
+		kind  string
+		class sidecartest.PrivacyClass
+	}{
+		// a registration lists them to the service, and sock-1's group keeps them
+		{row: "sock-1", kind: socketPrivacyCertifiedKind, class: sidecartest.PrivacyClassHandler},
+		{row: "sock-1", kind: socketPrivacyCertifiedKind, class: sidecartest.PrivacyClassRedis},
+		{row: "sock-1", kind: socketPrivacyAcmeKind, class: sidecartest.PrivacyClassHandler},
+		{row: "sock-1", kind: socketPrivacyAcmeKind, class: sidecartest.PrivacyClassRedis},
+		// a Find carries its server name for the request alone
+		{row: "sock-2", kind: socketPrivacyCertifiedKind, class: sidecartest.PrivacyClassHandler},
+		{row: "sock-2", kind: socketPrivacyAcmeKind, class: sidecartest.PrivacyClassHandler},
+		{row: "sock-2", kind: socketPrivacyUnlistedKind, class: sidecartest.PrivacyClassHandler},
+	} {
+		if err := capture.Declare(declaration.row, declaration.kind, declaration.class); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture.AddSource(world.store.PrivacyItems)
+	now := world.net.Clock().Now()
+	sidecarId := connect.Id(world.listener.device.SidecarId)
+	world.setFacts(func(facts *socketsservice.TlsListenFacts) {
+		facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+			{SidecarId: sidecarId, Owner: "blog", Name: names.certified, NotAfter: now.Add(30 * 24 * time.Hour)},
+		}
+		facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+			{SidecarId: sidecarId, Owner: "blog", Name: names.acme, ClaimSeq: 3},
+		}
+	})
+	listener := world.listenerOf(world.listener.device)
+	if status := world.heartbeat(listener, "blog", socketSuiteBothAlpns, []string{names.certified},
+		[]*sidecar.SocketAcmeName{{Name: names.acme, ClaimSeq: 3}}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("the canaries' heartbeat answered %s", status)
+	}
+	if primary, _, code := world.edgeFind("blog", []string{"h2"}, names.certified); code != "" || primary != listener {
+		t.Fatalf("the certified canary's Find answered %q", code)
+	}
+	if primary, _, code := world.edgeFind("blog", socketSuiteAcmeAlpns, names.acme); code != "" || primary != listener {
+		t.Fatalf("the ACME canary's Find answered %q", code)
+	}
+	if _, _, code := world.edgeFind("blog", []string{"h2"}, names.unlisted); code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("the unlisted canary's Find answered %q", code)
+	}
+	return names
+}
+
+// Each custom name is only where its row says a server sees it, and nowhere else: no log, metric or hint holds one,
+// and no store keeps the server name of a Find no listener lists. The store does hold the certified and the ACME host,
+// so the scan read them where sock-1 keeps them.
+func TestSocketCustomNameCanariesReachOnlyTheirRows(t *testing.T) {
+	world := newSocketSuiteCustomWorld(t)
+	names := socketPrivacyCustomRun(t, world)
+	capture := world.net.Capture()
+	for _, finding := range capture.Scan() {
+		t.Errorf("%s", finding)
+	}
+	stored := map[string]bool{}
+	for _, item := range world.store.PrivacyItems() {
+		for _, name := range []string{names.certified, names.acme, names.unlisted} {
+			if bytes.Contains(item.Body, []byte(name)) {
+				stored[name] = true
+			}
+		}
+	}
+	if !stored[names.certified] || !stored[names.acme] {
+		t.Fatalf("the store holds the certified host %v and the ACME host %v, so the scan read nothing there", stored[names.certified], stored[names.acme])
+	}
+	if stored[names.unlisted] {
+		t.Fatal("the store keeps a Find's server name")
+	}
+	for _, class := range []sidecartest.PrivacyClass{sidecartest.PrivacyClassHandler, sidecartest.PrivacyClassMetric} {
+		if capture.ItemCount(class) == 0 {
+			t.Fatalf("nothing reached %s, so the scan read nothing there", class)
+		}
+	}
+}
+
+// Under sidecar_leaktest: a custom name leaked through a class no row lets it reach is found there, the certified host
+// in a stored object, a log, a metric and a hint, and the unlisted host, a Find's server name, in Redis, so a name
+// that reached one of them would not pass unseen.
+func TestSocketCustomNameLeakedIntoEachClassIsCaught(t *testing.T) {
+	if !sidecartest.LeaksLinked {
+		t.Skip("the leaks link only under sidecar_leaktest, which test.sh's leak leg builds")
+	}
+	leaks := sidecartest.LeakClasses()
+	for _, c := range []struct {
+		class sidecartest.PrivacyClass
+		kind  string
+	}{
+		{class: sidecartest.PrivacyClassObject, kind: socketPrivacyCertifiedKind},
+		{class: sidecartest.PrivacyClassLog, kind: socketPrivacyCertifiedKind},
+		{class: sidecartest.PrivacyClassMetric, kind: socketPrivacyCertifiedKind},
+		{class: sidecartest.PrivacyClassHint, kind: socketPrivacyCertifiedKind},
+		{class: sidecartest.PrivacyClassRedis, kind: socketPrivacyUnlistedKind},
+	} {
+		leak := leaks[c.class]
+		if leak == nil {
+			t.Fatalf("%s has no leak", c.class)
+		}
+		func() {
+			world := newSocketSuiteCustomWorld(t)
+			names := socketPrivacyCustomRun(t, world)
+			if findings := world.net.Capture().Scan(); len(findings) != 0 {
+				t.Fatalf("%s: findings before the leak: %v", c.class, findings)
+			}
+			leaked := names.certified
+			if c.kind == socketPrivacyUnlistedKind {
+				leaked = names.unlisted
+			}
+			leak.Put(t, world.net, []byte(leaked))
+			caught := false
+			for _, finding := range world.net.Capture().Scan() {
+				if finding.Needle == c.kind && finding.Class == c.class {
+					caught = true
+				}
+			}
+			if !caught {
+				t.Errorf("the %s leaked into %s was not found", c.kind, c.class)
+			}
+		}()
+	}
+}
+
+// 17.2.16's clauses of sock-1 and sock-2 (TLS-M6-08), each with the wire fields, as Type.json_name, that carry its
+// value.
+var testSocketCustomClauses = []struct {
+	row    string
+	clause string
+	fields []string
+}{
+	{row: "sock-1", clause: "per tls/ listener the custom hosts and aliases it is certified for", fields: []string{"SocketRegistration.certified_names"}},
+	{row: "sock-1", clause: "the names it holds an ACME claim for with the claim sequence", fields: []string{"SocketAcmeName.claim_seq", "SocketAcmeName.name", "SocketRegistration.acme_names"}},
+	{row: "sock-2", clause: "the server name of a dial that came by a custom host or an alias", fields: []string{"SocketFindArgs.server_name"}},
+}
+
+// The wire types those fields are of, by name.
+var testSocketCustomTypes = map[string]reflect.Type{
+	"SocketRegistration": reflect.TypeFor[sidecar.SocketRegistration](),
+	"SocketAcmeName":     reflect.TypeFor[sidecar.SocketAcmeName](),
+	"SocketFindArgs":     reflect.TypeFor[sidecar.SocketFindArgs](),
+}
+
+// The fields of value, a struct or a pointer to one, as Type.json_name, that hold a needle: a string, string list or
+// bytes containing one of needles, or a whole number among numbers. A field holding a struct, or a list of them, that
+// holds one is named with the fields inside that do. Sorted, each once.
+func testSocketFieldsHolding(value reflect.Value, needles []string, numbers []uint64) []string {
+	for value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return nil
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return nil
+	}
+	contains := func(text []byte) bool {
+		return slices.ContainsFunc(needles, func(needle string) bool {
+			return bytes.Contains(text, []byte(needle))
+		})
+	}
+	fields := []string{}
+	structType := value.Type()
+	for index := range structType.NumField() {
+		field := structType.Field(index)
+		jsonName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if !field.IsExported() || jsonName == "" || jsonName == "-" {
+			continue
+		}
+		holds := false
+		var walk func(fieldValue reflect.Value)
+		walk = func(fieldValue reflect.Value) {
+			switch fieldValue.Kind() {
+			case reflect.String:
+				holds = holds || contains([]byte(fieldValue.String()))
+			case reflect.Uint, reflect.Uint32, reflect.Uint64:
+				holds = holds || slices.Contains(numbers, fieldValue.Uint())
+			case reflect.Int, reflect.Int32, reflect.Int64:
+				holds = holds || (0 <= fieldValue.Int() && slices.Contains(numbers, uint64(fieldValue.Int())))
+			case reflect.Slice:
+				if fieldValue.Type().Elem().Kind() == reflect.Uint8 {
+					holds = holds || contains(fieldValue.Bytes())
+					return
+				}
+				for elementIndex := range fieldValue.Len() {
+					walk(fieldValue.Index(elementIndex))
+				}
+			case reflect.Pointer, reflect.Struct:
+				if inner := testSocketFieldsHolding(fieldValue, needles, numbers); 0 < len(inner) {
+					holds = true
+					fields = append(fields, inner...)
+				}
+			}
+		}
+		walk(value.Field(index))
+		if holds {
+			fields = append(fields, structType.Name()+"."+jsonName)
+		}
+	}
+	slices.Sort(fields)
+	return slices.Compact(fields)
+}
+
+// §22.7's schema guard for 17.2.16's clauses of sock-1 and sock-2 (I-18), both ways. Each clause is its row's, a live
+// one, and no other row's, and each field it names is on the wire. The other way, at run time: of what the store keeps
+// for a listener listing a certified host and an ACME claim, the fields holding either name or the claim sequence are
+// exactly sock-1's clauses' fields; of a Find naming a custom host, the field holding it is exactly sock-2's clause's;
+// and after a Find names a host no listener lists, no store keeps it, as sock-2 has it, for the request alone.
+func TestSocketCustomNameClausesMapBothWays(t *testing.T) {
+	list, err := sidecartest.LoadMetadataList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowFields := map[string][]string{}
+	for _, clause := range testSocketCustomClauses {
+		saying := []string{}
+		for _, row := range list.LiveRows() {
+			if strings.Contains(row.Sees, clause.clause) {
+				saying = append(saying, row.Id)
+			}
+		}
+		if !slices.Equal(saying, []string{clause.row}) {
+			t.Errorf("%q is said by %v, not %s alone", clause.clause, saying, clause.row)
+		}
+		for _, field := range clause.fields {
+			typeName, jsonName, _ := strings.Cut(field, ".")
+			structType := testSocketCustomTypes[typeName]
+			found := false
+			if structType != nil {
+				for structField := range structType.Fields() {
+					if name, _, _ := strings.Cut(structField.Tag.Get("json"), ","); name == jsonName {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Errorf("%q names %s, which is on no wire type", clause.clause, field)
+			}
+		}
+		rowFields[clause.row] = append(rowFields[clause.row], clause.fields...)
+	}
+	for row := range rowFields {
+		slices.Sort(rowFields[row])
+	}
+
+	// the other way, at run time
+	world := newSocketSuiteCustomWorld(t)
+	now := world.net.Clock().Now()
+	sidecarId := connect.Id(world.listener.device.SidecarId)
+	certifiedName := "clause-certified.customer.example"
+	acmeName := "clause-acme.customer.example"
+	claimSeq := uint64(7340033)
+	world.setFacts(func(facts *socketsservice.TlsListenFacts) {
+		facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+			{SidecarId: sidecarId, Owner: "blog", Name: certifiedName, NotAfter: now.Add(30 * 24 * time.Hour)},
+		}
+		facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{
+			{SidecarId: sidecarId, Owner: "blog", Name: acmeName, ClaimSeq: claimSeq},
+		}
+	})
+	listener := world.listenerOf(world.listener.device)
+	if status := world.heartbeat(listener, "blog", socketSuiteBothAlpns, []string{certifiedName},
+		[]*sidecar.SocketAcmeName{{Name: acmeName, ClaimSeq: claimSeq}}); status != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("the heartbeat answered %s", status)
+	}
+	stored := world.stored(listener, "blog")
+	if held := testSocketFieldsHolding(reflect.ValueOf(stored), []string{certifiedName, acmeName}, []uint64{claimSeq}); !slices.Equal(held, rowFields["sock-1"]) {
+		t.Errorf("of the lease the store keeps, %v hold the names and the claim, and sock-1's clauses name %v", held, rowFields["sock-1"])
+	}
+	unlistedName := "clause-unlisted.customer.example"
+	networkId := world.networkId
+	find := &sidecar.SocketFindArgs{
+		Name:       "tls/443/blog",
+		NetworkId:  &networkId,
+		ClientIds:  world.edge.clientIds,
+		Protocol:   "tls",
+		Alpn:       []string{"h2"},
+		ServerName: unlistedName,
+	}
+	if held := testSocketFieldsHolding(reflect.ValueOf(find), []string{unlistedName}, nil); !slices.Equal(held, rowFields["sock-2"]) {
+		t.Errorf("of a Find, %v hold its server name, and sock-2's clause names %v", held, rowFields["sock-2"])
+	}
+	result := &sidecar.SocketFindResult{}
+	if code := world.call(http.MethodPost, "/socket/find", world.edge.token, find, result); code != http.StatusOK || result.Error == nil ||
+		result.Error.Code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("the unlisted host's Find answered %d, %+v", code, result.Error)
+	}
+	for _, item := range world.store.PrivacyItems() {
+		if bytes.Contains(item.Body, []byte(unlistedName)) {
+			t.Fatalf("%s keeps a Find's server name", item.Name)
 		}
 	}
 }
