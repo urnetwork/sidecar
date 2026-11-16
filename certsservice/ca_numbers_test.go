@@ -171,7 +171,9 @@ func TestCertsAriRenewalSkipsEveryLimitAndHold(t *testing.T) {
 	// then the CA holds, and the set's names fail authorization
 	run.service.HoldCa(certsservice.CertsCaLetsEncrypt, run.clock.Now().Add(2*time.Hour))
 	for range settings.FailedAuthorizationCount {
-		run.service.RecordAuthorizationFailures(device.identifierSet)
+		if err := run.service.RecordAuthorizationFailures(run.ctx, certsservice.CertsCaLetsEncrypt, device.identifierSet); err != nil {
+			t.Fatal(err)
+		}
 	}
 	report = run.admit()
 	if reasons := waits(report); len(report.Admitted) != 0 || reasons[newSetId] != certsservice.CertsWaitCaHold ||

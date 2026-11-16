@@ -13,6 +13,11 @@
 // from its issuance until ChainRetention past the certificate's expiry or revocation, which answers a
 // device's GET after a restart; and a requested revocation's reason, from the request until the CA
 // has taken it, which a store holds only while the row is revoking.
+//
+// Beside the rows, a store keeps each URnetwork-zone name's failure backoff at a CA,
+// network_tls_name_backoff (cert-1; QD-857): the name's failed authorizations there since its last
+// success there, and the time before which no order for it goes there. The policy sets the time
+// (ca_policy.go); the store only counts atomically and keeps the later time, so a restart keeps both.
 
 package certsservice
 
@@ -32,7 +37,20 @@ var (
 	// A row written, or a state changed, with no time: a store refuses it, since a revoked or failed
 	// row's 30 days count from that time and a zero would end them at once.
 	ErrCertsStateTime = errors.New("certificate row needs the time of its state")
+	// A failed authorization counted with no name, CA, time or wait: a store refuses it, since it could
+	// hold nothing.
+	ErrCertsNameFailure = errors.New("a failed authorization needs its name, CA, time and wait")
 )
+
+// One URnetwork-zone name's failure backoff at one CA, as a store keeps it (QD-857).
+type CertsNameBackoff struct {
+	Name string
+	Ca   CertsCa
+	// The name's failed authorizations at the CA since its last success there, at least 1.
+	FailureCount int
+	// No order for the name goes to the CA before this.
+	NextOrderTime time.Time
+}
 
 // One state change of a row, applied only while the row is in one of From, so two passes cannot both
 // move it. Every other field is written when set: an empty string, a zero time or no chain leaves the
@@ -111,4 +129,17 @@ type CertsStore interface {
 	// row whose state time is before it, and a row in any other state whose validity ended before it
 	// (cert-1's "issued chains until 30 d after expiry or revocation"). Returns how many rows lost one.
 	PurgeChains(ctx context.Context, before time.Time) (int, error)
+
+	// The failure backoffs of names at every CA, ordered by name, then CA. No names reads nothing.
+	ListNameBackoffs(ctx context.Context, names []string) ([]*CertsNameBackoff, error)
+	// Counts a failed authorization of name at ca at failureTime: the count goes up by one, from none to
+	// 1, and the next order time becomes failureTime plus wait of the new count, unless the one already
+	// kept is later. Atomic for each name and CA, so two failures counted at once count two, and wait runs
+	// inside that, so it must be pure and quick. Returns the backoff as it now stands. A call with no name,
+	// CA, time or wait is ErrCertsNameFailure.
+	AddNameFailure(ctx context.Context, name string, ca CertsCa, failureTime time.Time, wait func(failureCount int) time.Duration) (*CertsNameBackoff, error)
+	// A success at ca: deletes the backoffs of names there, and no other CA's. Returns how many went.
+	ClearNameBackoffs(ctx context.Context, names []string, ca CertsCa) (int, error)
+	// Deletes the backoffs whose next order time is before before (cert-1's ttl). Returns how many went.
+	PurgeNameBackoffs(ctx context.Context, before time.Time) (int, error)
 }

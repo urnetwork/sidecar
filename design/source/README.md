@@ -256,13 +256,13 @@ The design-records track for §10 (wave f39d) folded that section's items from s
 - **In text, not fenced.** GroupForm's numbers with `auth = 5` (QD-471, QD-643), the epoch, group-info, Welcome pointer and claim bodies (QD-467), ReaderKey's (QD-463, QD-528) and GkmHint's (QD-463) are written in text blocks and prose: their declarations are held by `testUnfencedFence`, which a design-records track does not edit. ReaderKey's and GkmHint's numbers stand beside their written field lists, which protocol's `TestWrittenFieldListsMatchTheirMessages` holds word for word.
 - **Left in sidecar/DESIGN-AMENDMENTS.md**, each with its reason: QD-046, for the review ledger's HNDL row in DESIGN-REVIEW-RESPONSE.md, outside this folder; and QD-471, for GroupForm's proto fence. Their other parts are folded.
 
-`build.sh` on this folder reproduced DESIGN.md (SHA-256 `b011649789514c9834d35357985547c672e2f23e77941e1a688f7e691eba42a5`) at this fold, and the validation shows:
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `4dc5c6f080389e8e67bcba4eda750bcb256f6b2fe2fe29a4a1feedbe90f2087e`) at this fold, and the validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed: §10.4's and §10.5's fences changed in their comments only.
 - **Owner decisions.** All 375 rows are present and cited; `LATE_DATES` gives each new row its date, no new day joined the row pattern, and row 202 notes decision 370's amendment.
 - **Open owner questions.** Two, as before: Q-BRIDGE-8 and Q-REPO-6.
 - **Superseded options.** 303 grep hits, each with a reading; the one on a changed line (§8.9's start-up listing from Postgres, a read by taskworker, not gkm state) was read on 2026-11-16, and the carried hit on §10.14's acks route left with that line's rewrap. None is live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
-- **The metadata list** is v31, whose header names what it changes in gkm-1 and gkm-5 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+- **The metadata list** is v32, whose header names what it changes in gkm-1 and gkm-5 and that it adds no row. The block also took v31, QD-857's lines for cert-1's name failure backoff, which a code track had published through check's additions ahead of §13's fold; as owner decision 252's rule has it, those entries left `check/metadata_list_test.go` once the block wrote their text, and QD-857's other parts stay for §13's fold. `make metadata` copied the block to `metadata_list.yml`; the block and the file are the same bytes.
 
-Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md and `metadata_list.yml`.
+Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md, `metadata_list.yml` and the five QD-857 entries of `check/metadata_list_test.go`'s additions, which left as the block took their text.
