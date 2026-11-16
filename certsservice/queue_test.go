@@ -197,13 +197,15 @@ func TestCaHoldWithNoTimeHoldsTheDefault(t *testing.T) {
 	}
 }
 
-// Four failed authorizations of a name inside the hour hold every order naming it until the oldest
-// leaves the hour.
+// Four failed authorizations of a name inside the hour hold every order naming it, at every CA, until the
+// oldest leaves the hour; then the order goes to a CA where the name does not back off.
 func TestFailedAuthorizationsHoldAName(t *testing.T) {
 	certs := newTestCerts(t, nil)
 	device := newTestDevice(t, "failing")
 	for range certs.settings.FailedAuthorizationCount {
-		certs.service.RecordAuthorizationFailures([]string{device.identifierSet[0]})
+		if err := certs.service.RecordAuthorizationFailures(certs.ctx, certsservice.CertsCaLetsEncrypt, []string{device.identifierSet[0]}); err != nil {
+			t.Fatal(err)
+		}
 		certs.clock.Advance(time.Minute)
 	}
 	firstFailure := certs.clock.Now().Add(-time.Duration(certs.settings.FailedAuthorizationCount) * time.Minute)
@@ -215,7 +217,8 @@ func TestFailedAuthorizationsHoldAName(t *testing.T) {
 	}
 	certs.clock.AdvanceTo(firstFailure.Add(certs.settings.FailedAuthorizationWindow))
 	report = certs.admit()
-	if len(report.Admitted) != 1 || report.Admitted[0].Cert.CertId != id {
+	// the four failures were LE's, where the name backs off 4 h from the last
+	if len(report.Admitted) != 1 || report.Admitted[0].Cert.CertId != id || report.Admitted[0].Ca != certsservice.CertsCaGts {
 		t.Fatalf("after the hour: %+v", report)
 	}
 }

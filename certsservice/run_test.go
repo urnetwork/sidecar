@@ -470,9 +470,13 @@ func TestCertsRunOrdersRateLimitHoldsTheCa(t *testing.T) {
 }
 
 // Failed authorizations count against the order's names: at the fourth inside the hour the name holds
-// and the order waits, with no CA asked.
+// and the order waits, with no CA asked. The name's backoff at a CA is cut to a millisecond, so each
+// failure's next pass goes to LE again and the hour's hold alone is seen (backoff_test.go has the rest).
 func TestCertsRunOrdersFailedAuthorizationsHoldTheName(t *testing.T) {
-	run := newTestRun(t, nil)
+	settings := testSettings()
+	settings.FailureBackoff = time.Millisecond
+	settings.FailureBackoffMax = time.Millisecond
+	run := newTestRun(t, settings)
 	device := run.device("k9runord04")
 	certId := run.accept(device)
 	for range run.settings.FailedAuthorizationCount {
