@@ -271,7 +271,10 @@ list      a LIST is answered only when it is whole: the build asks every online 
           while another heals, since a key on N/2 + 1 drives can then fall under the half of the asked drives a
           listing needs (§11.3); evacuation's horizon and every deletion decided on a LIST of pidx/ (§11.13) rest
           on it, so in the at_risk state on a metadata set (Parity, above), and with one host down on a 16-drive
-          segment set, evacuation, the nightly pass and uncached pidx/ lookups wait (owner decision 226)
+          segment set, evacuation, the nightly pass and uncached pidx/ lookups wait (owner decision 226); a key whose
+          overwrite is in flight counts too: one an asked drive holds whose xl.meta read failed other than
+          not-found is read again under the key's lock, or the LIST answers 503 rather than leave it out, so evs's
+          listers, the fold's marker LIST among them, decide on no LIST that drops a key (owner decision 382)
 clocks    chrony on every host running evs, gkm, taskworker, a Redis master or MinIO, by whose clocks
           §11.10's push sequence restarts and the settle row's deadlines hold (edge-6 and edge-5:
           xops/main/ansible/REDIS.md:3-6; none synced today, 19.3), serving NTP only to its services network,
@@ -692,6 +695,11 @@ gkm                        reads, deposits and gated writes continue; joins    r
                            and removals wait (§10 KF7)
 evs killed with v1         evacuation's sweep deletes them within ~26 h        none
   purges queued            (§11.13; 19.8's sweep metric)
+format 2 rolled back       evs's and taskworker's blocks take                  deploy the rollback with
+  (§11.6)                  EvsSettings.InstanceFormat from their block         InstanceFormat 1 in both blocks'
+                           config, 2 from M10's release: at 1, format 1's      config (owner decision 412)
+                           guard writes nothing to a format-2 repo, refuses
+                           its pushes and purges nothing
 a dns edge, or a signing   resolvers retry the other NS; an edge keeps its      §12.6's runbook
   fault                    previous key set
 Postgres primary           the token exchange stops, so evs and gkm refuse     repair, or restore the newest dumps, then
@@ -880,7 +888,8 @@ sidecar:
   evs: {enabled: false, writes: true, networks: [], percent: 0}
   format2: {enabled: false, networks: [], percent: 0, purge: observe, drop: observe}  # §11.6: networks whose
                              # pushes may carry format 2, each repo migrating at its first such push; purge: observe
-                             # logs each candidate and deletes nothing, purge: on deletes, after D-TEST-12's soak (§22);
+                             # logs each candidate and deletes nothing, purge: on deletes, after D-TEST-12's soak (§22),
+                             # the turn-on pass waiting, retrying, until its taskworker reads on (owner decision 412);
                              # drop: observe runs drop jobs through verify and deletes nothing (§11.13), drop: on
                              # deletes, after D-TEST-18's soak; until both are on and D-TEST-13's production check
                              # passes, the gate admits only listed internal networks and design partners (percent 0)

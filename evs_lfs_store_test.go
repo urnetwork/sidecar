@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -133,6 +134,62 @@ func TestEvsLfsStorePutTouchRemove(t *testing.T) {
 	var missing *EvsLfsMissingError
 	if _, err := lfs.store.Get(ctx, oid, &bytes.Buffer{}); !errors.As(err, &missing) || missing.RemovedAt.IsZero() {
 		t.Fatalf("a removed object read: %v", err)
+	}
+}
+
+// A device that read an object absent while ur/lfs had no head finds it on its first read after another device stores
+// it, which creates the ref: the read that sent no token, the ref having no head, asks again on the head evs answers
+// (FS-73's attributes clause found the tip check refusing an object another device had just stored). Every read of an
+// object the store's cache does not hold goes fresh, so no cached head hides another writer's object, and a Get that
+// meets an absent path reads it again fresh before it names the object missing.
+func TestEvsLfsStoreFindsAnObjectAnotherDeviceStored(t *testing.T) {
+	lfs := newEvsTestLfsStore(t)
+	ctx := context.Background()
+	content, oid := evsTestLfsObject("another device's object", 600)
+	lfs.writer.server.know(EvsLfsPath(oid))
+	reader := lfs.writer.world.reader(t, evsTestId("second device"))
+	reader.client.SetFormat2Source(func() bool { return true })
+	reader.client.EnableFormat2Reader()
+	// the read requests each call sends, by whether each asked for no cached head: a call's first request carries
+	// its freshness, and its later rounds build on the head that request pinned
+	var firstFresh atomic.Pointer[bool]
+	func() {
+		lfs.world.stateLock.Lock()
+		defer lfs.world.stateLock.Unlock()
+		lfs.world.beforeRead = func(read *protocol.EvsReadRequest) {
+			fresh := read.GetFresh()
+			firstFresh.CompareAndSwap(nil, &fresh)
+		}
+	}()
+	readerStore := NewEvsLfsStore(reader.client.Repo(lfs.world.repoId))
+	newest := func(what string) *EvsLfsObject {
+		t.Helper()
+		firstFresh.Store(nil)
+		objects, err := readerStore.Newest(ctx, []EvsLfsOid{oid}, false)
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if fresh := firstFresh.Load(); fresh == nil || !*fresh {
+			t.Fatalf("%s: a read of an object the cache did not hold took a cached head", what)
+		}
+		return objects[0]
+	}
+	if before := newest("before the put"); before.Present() {
+		t.Fatalf("before the put: %+v", before)
+	}
+	if _, err := lfs.put(t, oid, content); err != nil {
+		t.Fatal(err)
+	}
+	if after := newest("the first read after another device stored it"); !after.Present() || after.Version != 1 {
+		t.Fatalf("the first read after another device stored it: %+v", after)
+	}
+	// a second device that never read the object: its Get finds it at once
+	other := lfs.writer.world.reader(t, evsTestId("third device"))
+	other.client.SetFormat2Source(func() bool { return true })
+	other.client.EnableFormat2Reader()
+	out := &bytes.Buffer{}
+	if _, err := NewEvsLfsStore(other.client.Repo(lfs.world.repoId)).Get(ctx, oid, out); err != nil || !bytes.Equal(out.Bytes(), content) {
+		t.Fatalf("another device's get: %v", err)
 	}
 }
 

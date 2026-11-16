@@ -17,7 +17,8 @@
 //	            at path-level CAS, the loser getting the *EvsPathConflictError
 //	Newest      each object's newest version by head reads of LfsHeadReadPathCount (64) paths a request; a stored
 //	            object's is kept in a bounded cache that Put and Touch also fill, and an absent or removed one is
-//	            read again each time, since another writer may store it
+//	            read again each time, fresh from evs's cluster, since another writer may store it and a head evs or
+//	            this client cached before that would still show it missing
 //	RemoveMany  one push removing each object, each naming its version, so a concurrent touch wins at path-level CAS;
 //	            the purge deletes the content a minute after it commits (§11.13)
 //
@@ -178,7 +179,15 @@ func (self *EvsLfsStore) Put(ctx context.Context, oid EvsLfsOid, size int64, con
 // of an object that then fails its check, which the caller drops.
 func (self *EvsLfsStore) Get(ctx context.Context, oid EvsLfsOid, out io.Writer) (*EvsLfsObject, error) {
 	digest := sha256.New()
-	_, err := self.repo.ReadHead(ctx, &EvsReadArgs{RefName: EvsLfsRefName, Path: EvsLfsPath(oid)}, io.MultiWriter(out, digest))
+	read := func(fresh bool) error {
+		_, err := self.repo.ReadHead(ctx, &EvsReadArgs{RefName: EvsLfsRefName, Path: EvsLfsPath(oid), Fresh: fresh}, io.MultiWriter(out, digest))
+		return err
+	}
+	err := read(false)
+	if errors.Is(err, ErrEvsPathAbsent) {
+		// another writer may have stored it since a cached head: it is missing only by a fresh read
+		err = read(true)
+	}
 	if errors.Is(err, ErrEvsPathAbsent) {
 		objects, err := self.newest(ctx, []EvsLfsOid{oid}, true)
 		if err != nil {
@@ -260,8 +269,9 @@ func (self *EvsLfsObject) removedAt() time.Time {
 	return time.Time{}
 }
 
-// Each object's newest version, in oids' order: the cache's where it holds one and fresh is false, else head reads of
-// LfsHeadReadPathCount paths a request.
+// Each object's newest version, in oids' order: the cache's where it holds one and fresh is false, else fresh head reads
+// of LfsHeadReadPathCount paths a request. A read the cache cannot answer is always fresh: the object is one this store
+// last saw absent or removed, or never read, and another writer may have stored it since a cached head.
 func (self *EvsLfsStore) Newest(ctx context.Context, oids []EvsLfsOid, fresh bool) ([]*EvsLfsObject, error) {
 	return self.newest(ctx, oids, fresh)
 }
@@ -290,7 +300,7 @@ func (self *EvsLfsStore) newest(ctx context.Context, oids []EvsLfsOid, fresh boo
 		for _, i := range indexes {
 			paths = append(paths, EvsLfsPath(oids[i]))
 		}
-		result, err := self.repo.read(ctx, refId, paths, 0, fresh)
+		result, err := self.repo.read(ctx, refId, paths, 0, true)
 		if err != nil {
 			return nil, err
 		}

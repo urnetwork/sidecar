@@ -148,8 +148,9 @@ remote      tap to the first remote page, pre-warmed, on an indexer's warm cache
             a day: Wi-Fi p50 <= 300 ms and p95 <= 1 s, each later page <= 250 ms and <= 800 ms; LTE p50
             <= 500 ms and p95 <= 1.5 s, later pages <= 400 ms and <= 1.2 s; cold (no contract or Hello in
             10 min) adds <= 500 ms and <= 1.5 s, a failover Search.RemoteTimeout (3 s unmetered, 5 s
-            metered); §22.8's remote row measures them on T3 with real relays and netem, on surrogates from
-            the later of M10's and M8's exits
+            metered), the first page the faster of the two own indexers asked at once (§11.14's order row;
+            owner decision 391); §22.8's remote row measures them on T3 with real relays and netem, on
+            surrogates from the later of M10's and M8's exits
 ```
 
 ### 18.5 `sdk/sidecar.go`
@@ -1016,7 +1017,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 | Phones keep all in the background on any network | older results at once | tens to hundreds of MB over cellular, and battery | rejected (D-SDK-21) |
 | Browser tabs missing a condition prefetch all on a guessed Wi-Fi and charging state | parity with phones | Safari and Firefox expose no battery state, and desktop browsers no network type (MDN); a wrong guess spends cellular data | rejected (D-SDK-21) |
 | Phones download all at "search more" only for the fallback, asking a designated indexer first | no first download of ~110-165 MB for a five-year mailbox; verified hits | relays see when each search and page runs; the indexer's holder sees the words | chosen once an indexer is designated (D-SDK-26; owner decisions 175, 178) |
-| Hedging requests to other members' indexers | lower tail latency | the query reaches more devices | rejected: hedged only among own indexers (D-SDK-27) |
+| Hedging requests to other members' indexers | lower tail latency | the query reaches more devices | rejected: only the first two own indexers are asked at once (D-SDK-27) |
 | Other members' indexers by default, with no notice | owner decision 175's literal default | silent cross-member disclosure of search intent | rejected: one notice per answering member (D-SDK-26) |
 
 ### 18.12 Decisions proposed
@@ -1073,7 +1074,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-26 (proposed).** Where its network designates a search indexer that may answer, none being designated by default (owner decision 177), app hosts ask it at "search more" by default. The mode is per device and network: `on` (own indexers, then other members' that §11.14 allows, each new answering member only after the app's notice), `own` or `off`, kept in §5.9's non-derived search state, never in the config repo. Keystrokes search only the phone, and a repo none answers falls back to owner decision 155's download. *Why:* owner decisions 175 and 178; the notice and the setting make a member's disclosure of team-repo queries known and reversible without changing that default.
 
-**D-SDK-27 (proposed).** At foreground, an app host with remote search on sends Hello, with feature bit 1, to its first-choice own search indexer, which its hourly HeadCheck round counts among its own-device picks, unless its session there lives, and while in the foreground keeps that pair's §6.10 window with a Ping a minute, so no "search more" needs a new contract or Hello. It waits `Search.RemoteTimeout` (3 s unmetered, 5 s metered) before the next indexer, hedges only among own indexers, and skips a failed one for 2 min. *Why:* the contracts a search rides then open at foregrounds and window ends, not at the search unless it fails over or finds its session lost (owner decision 191), so connect's stored rows and reports keep owner decision 176's promise (owner decision 188); the first page saves 0.5-1.5 s; and no query reaches more devices than it must. The keepalive costs one small frame each way a minute while the app is in the foreground.
+**D-SDK-27 (proposed).** At foreground, an app host with remote search on sends Hello, with feature bit 1, to its first two own search indexers, which its hourly HeadCheck round counts among its own-device picks, unless a session there lives, and while in the foreground keeps both pairs' §6.10 windows with a Ping a minute (owner decision 391), so no "search more" needs a new contract or Hello. It waits `Search.RemoteTimeout` (3 s unmetered, 5 s metered) before the next indexer after asking those two at once with no hedge delay, and skips a failed one for 2 min. *Why:* the contracts a search rides then open at foregrounds and window ends, not at the search unless it fails over or finds its session lost (owner decision 191), so connect's stored rows and reports keep owner decision 176's promise (owner decision 188); the first page saves 0.5-1.5 s; and no query reaches more devices than it must. The keepalive costs one small frame each way a minute while the app is in the foreground.
 
 **D-SDK-28 (proposed).** Apps reach the team directory through `SidecarDirectory`, create private repos and announce or revoke repo announcements (owner decision 181), and decide access requests through `SidecarApprovals`. Phones fetch announcements only while the view is open, ask a designated indexer at "search more", else fetch buckets and all, and lease notices for their member's targets and their own requests' notice paths, so every decision wakes its requester; past the metered cap a view shows partial coverage it can continue. *Why:* owner decisions 170, 171 and 181; approvers and requesters in the apps need wakes, and a phone cannot follow a team's cards.
 
