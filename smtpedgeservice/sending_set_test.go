@@ -236,7 +236,18 @@ func TestSendingSetPicksTheLeastLoadedAddress(t *testing.T) {
 }
 
 func TestSmtpEdgeNotReadyWithoutFcrdns(t *testing.T) {
-	w := newEdgeWorld(t, func(w *edgeWorld) { w.world.SetPtr(testSendingAddress) })
+	w := newEdgeWorld(t, func(w *edgeWorld) {
+		w.world.SetPtr(testSendingAddress)
+		// a check interval shorter than the timeout of any call a move of it could bring, and than the store probe's
+		// interval, so the move to the second check brings that check alone. A move of the default ten minutes
+		// brought ten store probes as well, and one whose StoreTimeout the moving clock passed mid-call left the
+		// store unreachable for the readiness read after it.
+		w.settings.FcrdnsCheckInterval = time.Second
+		// every probe after the first fails, as such a probe did, so readiness holds only while no probe runs
+		if _, err := w.faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: "smtpedge.ActiveHalts", Nth: 2, Repeat: -1, Result: sidecartest.FailBeforeApply}); err != nil {
+			t.Fatal(err)
+		}
+	})
 	w.awaitProbes(1)
 	if w.service.Ready() {
 		t.Fatal("ready with no address whose FCrDNS holds")
@@ -246,8 +257,6 @@ func TestSmtpEdgeNotReadyWithoutFcrdns(t *testing.T) {
 	if err := w.service.AwaitSendingChecks(w.ctx, 2); err != nil {
 		t.Fatal(err)
 	}
-	w.clock.Advance(w.settings.HaltReloadInterval)
-	w.awaitProbes(2)
 	if !w.service.Ready() {
 		t.Fatal("not ready once FCrDNS holds")
 	}
