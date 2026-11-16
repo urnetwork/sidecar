@@ -516,3 +516,100 @@ func TestTlsCustomApiSpeaksTheRoutes(t *testing.T) {
 		t.Fatalf("with no token: %v", err)
 	}
 }
+
+// A TlsCustomApi for the loop's key change: Work from the script, each claim and progress event recorded, a claim
+// refused locked.
+type tlsCustomRolloverApi struct {
+	tlsCustomScriptedApi
+	claims []*TlsCustomClaimArgs
+	events []*TlsCustomProgressArgs
+}
+
+func (self *tlsCustomRolloverApi) Claim(ctx context.Context, args *TlsCustomClaimArgs) (*TlsCustomClaimResult, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.claims = append(self.claims, args)
+	return nil, &TlsCustomError{Status: 409, Refusal: TlsCustomRefusal{Reason: TlsCustomRefusalLocked, RetryAfterMs: 1000}}
+}
+
+func (self *tlsCustomRolloverApi) Progress(ctx context.Context, args *TlsCustomProgressArgs) (*TlsCustomClaimResult, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.events = append(self.events, args)
+	return &TlsCustomClaimResult{}, nil
+}
+
+// A work list with one account whose key file this desktop holds, and that file's key store.
+func newTlsCustomRolloverWorld(t *testing.T) (*tlsCustomRolloverApi, *tlsCustomTestKeys) {
+	t.Helper()
+	der, err := NewTlsCustomAccountKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := tlsCustomParseKey(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoId := NewId()
+	file := &TlsCustomKeyFile{Format: tlsCustomKeyFileFormat, Domain: "customer.example", Ca: "letsencrypt", AccountUri: "https://ca.example/acct/1", KeySeq: 2, Key: der, ShrunkAt: 5}
+	data, err := file.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := &TlsCustomAccount{Domain: "customer.example", Ca: "letsencrypt", AccountUri: file.AccountUri, KeySeq: 2, KeyThumbprint: TlsCustomKeyThumbprint(&key.PublicKey), KeyRepoId: repoId}
+	api := &tlsCustomRolloverApi{tlsCustomScriptedApi: tlsCustomScriptedApi{works: []*TlsCertsResult{{Accounts: []*TlsCustomAccount{account}}}, errs: []error{nil}}}
+	return api, &tlsCustomTestKeys{files: map[Id][]byte{repoId: data}, locals: map[string][]byte{}}
+}
+
+// A due key change this desktop may not make is reported once as rollover_due, with no claim, and not again while the
+// row names the same key (owner decision 425, 17.2.13).
+func TestTlsCustomOrdererReportsADueChangeItMayNotMake(t *testing.T) {
+	api, keys := newTlsCustomRolloverWorld(t)
+	orderer, err := NewTlsCustomDomainOrderer(&TlsCustomDomainOrdererDeps{
+		Api: api, Acme: &tlsCustomUnreachedCa{}, Devices: &tlsCustomTestDevices{}, Keys: keys, Roots: []string{"sidecar.example"},
+		Clock: newTlsTestClock(), Repos: &tlsCustomTestRepos{due: true, mayRoll: false},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for pass := range 3 {
+		report, err := orderer.RunOnce(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reported := 0 < len(report.RolloverDue); reported != (pass == 0) {
+			t.Fatalf("pass %d reported %v", pass, report.RolloverDue)
+		}
+	}
+	if len(api.events) != 1 || api.events[0].Event != TlsCustomEventRolloverDue || api.events[0].ClaimSeq != 0 || api.events[0].Domain != "customer.example" {
+		t.Fatalf("the events: %+v", api.events)
+	}
+	if len(api.claims) != 0 {
+		t.Fatalf("a claim for a change this desktop may not make: %+v", api.claims)
+	}
+}
+
+// A due key change this desktop may make is begun in the pass with a rollover claim, and a claim refused leaves it
+// due for the next pass, reporting nothing (owner decision 425: within one poll).
+func TestTlsCustomOrdererMakesADueChangeItMay(t *testing.T) {
+	api, keys := newTlsCustomRolloverWorld(t)
+	orderer, err := NewTlsCustomDomainOrderer(&TlsCustomDomainOrdererDeps{
+		Api: api, Acme: &tlsCustomUnreachedCa{}, Devices: &tlsCustomTestDevices{}, Keys: keys, Roots: []string{"sidecar.example"},
+		Clock: newTlsTestClock(), Repos: &tlsCustomTestRepos{due: true, mayRoll: true},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		report, err := orderer.RunOnce(context.Background())
+		if err != nil || 0 < len(report.Rolled) || 0 < len(report.RolloverDue) {
+			t.Fatalf("a pass whose claim was refused: %+v, %v", report, err)
+		}
+	}
+	if len(api.claims) != 2 || api.claims[0].Purpose != TlsCustomPurposeRollover || api.claims[0].KeySeq != 2 || api.claims[0].CertId != (Id{}) {
+		t.Fatalf("the claims: %+v", api.claims)
+	}
+	if len(api.events) != 0 {
+		t.Fatalf("events from a desktop that may make the change: %+v", api.events)
+	}
+}
