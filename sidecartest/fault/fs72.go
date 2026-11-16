@@ -241,8 +241,8 @@ func fs72RollbackSchedule(net *Net, rollBack bool) *Schedule {
 		{Actor: "writer2", Action: world.WriteVersioning("writer2", "k.bin", fs72Kind5Content("fs72 k 1"), sidecar.EvsVersioningOff)},
 		{Actor: "writer2", Action: world.WriteVersioning("writer2", "k.bin", fs72Kind5Content("fs72 k 2"), "")},
 		{Actor: "writer2", Action: world.WriteVersioning("writer2", "v.bin", fs72StagedContent("fs72 v"), sidecar.EvsVersioningOff)},
-		// the window folded on format 2, and a commit of evs1's carrying it, so no read but v.bin's needs a record of
-		// format 2's layout
+		// the window folded on format 2, a commit of evs1's carrying the fold, so a read of a.txt or u.bin needs no
+		// record but its own versions', which are of format 1's layout
 		{Actor: "folder", Action: world.Fold("evs1")},
 		{Actor: "writer2", Action: world.Write("writer2", "a.txt", EvsWorldContent("fs72 a 2", 100))},
 		{Actor: "check", Action: world.ExpectRepoFormat(sidecar.EvsRepoFormat2)},
@@ -301,7 +301,7 @@ func fs72RollbackSchedule(net *Net, rollBack bool) *Schedule {
 	}...)
 	schedule := &Schedule{Id: "FS-72 rollback", Steps: steps, Check: fs72Checks(world), Tiers: []Tier{TierT2, TierT3}}
 	if rollBack {
-		schedule.Refuses = "every push to the format-2 repo at a format-1 evs, 503 writing nothing, and v.bin's read, as needing format 2"
+		schedule.Refuses = "at a format-1 evs, the format-2 writer's push 503 writing nothing, the format-1 client's write and a write over v.bin as needing format 2 before any push, and k.bin's and v.bin's reads as needing format 2"
 	}
 	return schedule
 }
