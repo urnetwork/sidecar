@@ -1403,6 +1403,122 @@ On 2026-11-16 the owner said: "Accept all recommended decisions going forward. R
     - Not taken: (2) keeping the fill, a far-behind full reader anchoring its restart on the signer the rows it restarts from name, bounded by no hash chain.
     - Raised by the design details (DESIGN-DETAILS.md section 5; the build's ledger, QD-627, amending QD-456's fill).
 
+## The build's owner questions on repositories, releases and the build (2026-11-06 to 2026-11-16)
+
+The design-records track for §4 folded the answers below on 2026-11-16, each citing its ledger id: the owner items of that section accepted in bulk on 2026-11-06 (263-266, 269-271), those the owner decided one at a time from 2026-11-11 to 2026-11-15, and the recommendations of 2026-11-15 that the owner's instruction of 2026-11-16 accepted, which the ledger dates 2026-11-15. A decision that groups several answers carries its latest answer's date.
+
+263. **The mlswg's 16 MLS vector files stay committed in `testdata/mls/mlswg/` (option 2; the build recommended fetching them at test time and committing none until the mlswg grants a license).**
+    - Question: §4.4 and §10.4 run every mlswg vector file covering a v0 feature under suite 0x0001, but the mlswg's repository carries no license, §4.7 refuses unlicensed modules, and the 16 files had already landed in the `sidecar` branch's history.
+    - Answer: the files are committed in `testdata/mls/mlswg/` with their SOURCE and SHA256SUMS, as §4.4 and §10.4 say, and stay in git; no history is rewritten and no test fetches them. They are test data, never a required or linked module, so §4.7's list and `dependencies.yml` need no exception.
+    - Cost: unlicensed test vectors of an IETF working group sit in a public repository.
+    - Not taken: (1) keeping only SOURCE and SHA256SUMS in git, a `make mls-vectors` step fetching the files, the owner asking the mlswg for a license, and an exception to rewrite the landed history.
+    - Raised by the build (mls-base and plan-KEYS; the build's ledger, QD-002).
+
+264. **A release is promoted, not every build signed: the two holders sign a chosen release's sums offline, and ur.io publishes them with a pointer `install.sh` reads (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §4.10 has `SHA256SUMS` signed by an offline two-person Ed25519 key, and the release pipeline runs unattended and almost daily, so a signature on every release would stop each one for two people.
+    - Answer: every release builds `ur`'s artifacts and an unsigned `SHA256SUMS` as ordinary assets, and run.sh waits for no one. When both holders pick a release they sign its sums offline, and a commit on mmm publishes `SHA256SUMS`, `SHA256SUMS.sig` and `latest.json` under `https://ur.io/recurd/ur/`; `latest.json` is listed in the signed sums, and `ur-promote.zsh` never moves it backward. `install.sh` reads that pointer, verifies, and fetches the artifacts from the GitHub release. No private key touches the build host, a repo or vault.
+    - Cost: only promoted releases install through `install.sh`; a fresh install cannot tell an older signed pair from the newest, so ur.io could roll a new install back to an older signed release, which §4.10 states.
+    - Not taken: (2) stopping each release until the holders upload a signature, which also holds the apps' releases; (3) signing in the run with an online key on the build host, neither offline nor two-person.
+    - Raised by the build (plan-REPO; the build's ledger, QD-017).
+
+265. **A copy of the `ur` command sketch, cli/UI.md, goes to `sidecar/design/UI.md`, and its spellings replace the build's own (the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: DESIGN.md cites cli/UI.md for `ur`'s commands, and the file sits at `urnetwork/cli/UI.md`, outside every git repository, on no path the build can read.
+    - Answer: a copy is put at `sidecar/design/UI.md`. Until it is there the build keeps the spellings it filled in (`ur keychain pass` and `ur lock`, `--replace` on `ur login` and `ur connect --token`, `ur login --recover`, `ur daemon --port` from 17000) and what DESIGN.md quotes for every other command; the copy's spellings then replace those, each a one-line rename.
+    - Cost: the sketch becomes public with the repository's other design documents (owner decisions 117, 118).
+    - Not taken: building on the fills alone, the sketch staying outside every repository.
+    - Raised by the build (plan-CORE; the build's ledger, QD-024).
+
+266. **Proving key sets are downloaded on first send from a public path on ur.io, pinned by hash in the release, and never shipped in the `ur` package (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: `smtpproof`'s proving keys and setup transcripts are gigabytes across its shapes, and no section said where a sending desktop gets them.
+    - Answer: keys and transcripts download on first send from a public path on ur.io, pinned by hash in the release; the host verifies the transcript once per release and caches it; the fetch carries no token and no account. §2.8 lists what the path's host sees, the fetching address, which marks a prover host (smtp-7, owner decision 253). The 20 shapes are cut to what M7's census justifies before the first production setup.
+    - Cost: a download and a disk cost on every sending desktop, a slow first send, and a prover host's address marked to whoever serves ur.io's static files.
+    - Not taken: (2) shipping the keys in the `ur` package, a package of gigabytes; (3) a universal setup serving every shape, at several times the proving cost against a speed gate already at risk.
+    - Raised by the build (smtpproof; the build's ledger, QD-123).
+
+267. **server's competition graph and sn's release gates take sidecar as a repository before the first merge to `main`, the competition through new producer releases under the identifiers the build chose (option 1 of each question, the recommendations; the first accepted in bulk on 2026-11-06).**
+    - Question: server's competition evaluator and sn's release gates each hold a closed list of the repositories a build's sources come from, ten and thirteen, and sidecar is in neither, though server and sn compile it from M0. The evaluator's programs are sealed by hash, its source ledger pins every repository per generation, and one historical pin did not match the tree's file.
+    - Answer: both lists take `sidecar` in one change landing with M0's Gn-out, before server and sn merge to `main`: a fourteenth release repository with a new `sidecar_go_source_hash`, and an eleventh competition repository with an additive migration. The evaluator takes it through new producer releases, as minimum-work and work-coverage were added: six program files with sidecar last in their repository lists (evaluator-sidecar.sh, evaluator-minimum-work-sidecar.sh, evaluator-work-coverage-sidecar.sh and the three prepare-round-baseline programs that pin them), new dependency maps, and the selector `source_graph_policy`, whose value `sidecar/1` means the eleven repositories and whose omission the ten, an empty, null or unknown value refused. The historical producers and their pins stay byte for byte, except that the controller's entry for evaluator-work-coverage.sh is corrected to the tree's file, which is the ten-repository competition's qualified release and the sidecar producer's lineage. The source ledger stays strict: once the eleven-repository release is in use every epoch and generation pins sidecar, so it opens only with a new ledger, at a season boundary or by an explicit re-baseline. The owner qualifies the release on the evaluator hosts with the go1.27.4 re-qualification (owner decision 272); until then the evaluator stays at ten repositories and fails closed on a server commit that needs sidecar.
+    - Cost: a competition epoch boundary and a lock format change; server's `main` is not a competition epoch's source between the merge and the qualification; a season cannot switch midway, and once deployed the control plane on `main` cannot serve a season of the ten.
+    - Not taken: holding server's and sn's merges until an epoch and the testnet gate close; merging them at M0 without the two go.mod lines; a ledger whose earlier generations keep the ten repositories; keeping the controller's stale pin.
+    - Raised by the build (the consumer wiring and the competition's producers; the build's ledger, QD-128, QD-769, QD-874, QD-875, QD-877).
+
+268. **A Gn-out merges the commit set recorded at its gate, never the tip, and every Gn-out merge of connect waits for FS-125's sweep (option 1 of each question, the recommendations; the first accepted in bulk on 2026-11-06).**
+    - Question: the build runs M0-M10 straight through (owner decision 194), so by the time a Gn-out is approved its `sidecar` branches have run past that milestone, and §4.8 did not say which commits merge. C19's window accounting then landed on connect's `sidecar` branch eight milestones early, off by default, while §4.17 wants FS-125's sweep in connect's own tests before C19 reaches `main`.
+    - Answer: each gate's pinned commit set is recorded when its local checks are reported, and an approved Gn-out merges that set, never the tip, in §4.8's order; a later milestone's merge brings the rest, and a group's migration registration (D-OPS-6) is the one commit on top of the set. §4.17 holds to the letter at every gate: `TestX9ReadyForMain`, which the merge runs before any recorded commit reaches connect's `main`, refuses C19's marker while connect's tests hold no FS-125 sweep, so the sweep is built ahead of its milestone, before M1's Gn-out, and the sdk, sidecar and server merges behind connect's wait with it.
+    - Cost: one record per gate; M10's sweep in connect's tests is owed before M1's merge.
+    - Not taken: merging the tip at each approved Gn-out; holding every merge until M10's build ends; a hand-picked commit set that leaves C19 out; merging default-off C19 code unswept.
+    - Raised by the build (design-records and REPO-M1-01; the build's ledger, QD-131 and QD-929).
+
+269. **A new connect change, C20, lets a device fetch DNSSEC records over DoH, and `strict_chain` is true only when the device validates the whole chain itself; the validator moves from M9 to M7 (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §15.5's `strict_chain` claims a customer-signed MX-to-TLSA chain, but connect's `DohCache.Forward` asks for no DNSSEC data, so a receiver could not show it.
+    - Answer: C20, `DohCache.ForwardDnssec(ctx, qType, domain)`, sets EDNS0's DO bit on `Forward`'s query and returns the raw response: generic, additive, off by default, tested in connect and merged to connect `main` first (D-REPO-5). The device fetches MX, TLSA, DS and DNSKEY with RRSIGs and validates to its embedded root anchors, and `strict_chain` is true only when that passes for every MX host of every recipient domain and the host's TLSA, with this key, in zones outside `<root>` and bringyour.com. The chain's wire parser and validator move from M9 to M7, since FS-33 gates M7's exit, and ext-3 lists the DS and DNSKEY lookups.
+    - Cost: one more connect change, merged first; DoH resolvers see the added lookups.
+    - Not taken: (2) the device sending its own RFC 8484 queries outside connect's resolver policy; (3) trusting the AD bit from two public resolvers.
+    - Raised by the build (plan-MAIL; the build's ledger, QD-145).
+
+270. **The minio fork joins the warp, config, vault, xops and mmm group in the merge order, and its `master` plays `main` (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: owner decision 195 put D-OPS-20's MinIO build in a new fork with a `sidecar` branch, and neither the branch policy nor §4.8's order named it; its default branch is `master`.
+    - Answer: minio joins that group in §4.8's order and the branch policy, and `master` plays `main`. Its weekly merge in is a no-op while upstream stays archived. xops pins a commit of the fork in place of playbook-minio-clusters.yml's `minio_commit`, and that commit is on the public fork before a host runs it, as owner decision 195 keeps the AGPL source in one public place.
+    - Cost: none beyond the note that this repo's default branch has another name.
+    - Not taken: (2) a `main` created in the fork beside upstream's `master`; (3) the fork outside the order, xops pinning a commit of its `sidecar` branch.
+    - Raised by the build (design-records; the build's ledger, QD-238).
+
+271. **X11 joins §4.7's allowed licenses, read as MIT's text plus only its no-advertising clause (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: src.agwa.name/tlshacks, connect's ClientHello parser, is on every connect leg under MIT's text plus a clause that bars advertising with the author's name, which §4.7's list read as custom, so `make check` passed only by a one-module exception.
+    - Answer: X11 is allowed for any module, defined as MIT's text plus only that clause, so `check/` pins both texts, lets that one id through its refused phrases and drops the module's exception; `dependencies.yml` keeps `X11`, the closest SPDX id.
+    - Cost: one more license id in §4.7's list.
+    - Not taken: (2) allowing the one module by name, every later X11 module coming back to the owner; (3) refusing it, connect first replacing tlshacks.
+    - Raised by the build (make check; the build's ledger, QD-240).
+
+272. **Every repo moves from Go 1.27.3 to 1.27.4 for GO-2026-6859, server's lock follows by one authorized hand edit and re-pin, and two measurement harnesses stay on 1.27.3 until re-qualified.**
+    - Question: GO-2026-6859, an HTTP/1 server crash in net/http, fails `make check`'s govulncheck rule under go1.27.3, which every repo pinned. server's source-graph lock names the go line and only the owner edits it, and two harnesses require go1.27.3 for their frozen baselines.
+    - Answer: one coordinated change moves the go directive in every go.mod of connect, sidecar, sdk, server and sn, any toolchain line, the build images' Go base, `check/`'s rules that name the version and R-REPO-6's and §4.7's pin to go1.27.4; `check/` accepts no advisory, and the toolchain comes through the module proxy, checked against the checksum database. D-TEST-15's one-toolchain rule holds, since x/text chooses its tables by go1.27. Once the bumps land, lock.yml's go line is set to 1.27.4 and the siblings re-pinned, the one hand edit and re-pin the owner authorized; otherwise both stay the owner's. Server's competition evaluator and the tests repo's perf runner stay on go1.27.3 so their baselines stay comparable, and move when the owner re-qualifies them, at the latest before sidecar merges to `main`.
+    - Cost: on these branches the evaluator image cannot build server's module and a perf run fails its preflight until the re-qualification.
+    - Not taken: an advisory exception in `check/` while staying on go1.27.3; moving the two harnesses with the repos, their records no longer comparable.
+    - Raised by the build (TEAM-M2-21 and the bump's track; the build's ledger, QD-674, QD-697 and QD-698).
+
+273. **A design-records fold that writes a field into a proto fence drops that field's line from protocol's fence additions in the same commit.**
+    - Question: protocol's fence test holds every .proto declaration to its fence in DESIGN.md, a field the code declares ahead of a fold sitting in the test's additions lists. Writing that field into its fence fails the test until its line leaves the list, which is test code, outside a design-records track's files.
+    - Answer: a design-records track that writes a field into its DESIGN.md proto fence drops that field's line from protocol/design_unfenced_test.go's `testFenceAdditions` or `testFenceValueAdditions` in the same commit, touching only those entries. The fence rule stands: a fence never moves ahead of the code. Answered with owner decision 252's rule for a new row's or §4 id's guard line.
+    - Cost: one line of test code per folded field in a design-records commit.
+    - Not taken: a code track editing the fence; leaving the fence behind the wire for good.
+    - Raised by the build (the fold of §17 and §18; the build's ledger, QD-684).
+
+274. **`sidecarctl`, the one binary for every operations command this build adds, lives in server, not in the sidecar repo.**
+    - Question: the owner put every new operations command in one binary, `sidecarctl`, at first a module of the sidecar repo. §4.7's license list and §4.4's layering let no module there link server's model or an engine package, so the commands that read Postgres or schedule an engine's task could not be built.
+    - Answer: `sidecarctl` moves to server/sidecarctl: still one binary for every operations command this build adds, beside the model code its commands call and under server's own dependency, license and layering rules. The certs commands already built move once, with their tests and `check/`'s rows; `dns census`, `evs purge-turn-on`, `dns restoring`, `dns restore` and `dns ceremony` are built there, and later commands that read the database (`sidecar restore`, `network sidecar-limit`, the abuse commands) go there too. Existing `bringyourctl` and `warpctl` commands stay where they are, and the customer-facing `ur admin` commands stay in `ur`.
+    - Cost: the operations binary is server's, built and released with it.
+    - Not taken: a second binary in server for the commands that need it; widening the sidecar repo's license and layering rules for one module.
+    - Raised by the build (DNS-M0-01, OPS-M10-01 and DNS-M5-15; the build's ledger, QD-750).
+
+275. **The `ios_extension` leg's seed rule stands as written: a file it takes wrongly is renamed, and a declaration the closure needs is moved, never the rule narrowed or a tag dropped (option 1 of each question).**
+    - Question: `check/` seeds the `ios_extension` leg from every Forwarder file, the root's `bridge_forward*` among them, and holds the leg to the Forwarder's and the compiler's closure (owner decision 197). The sidecar role's forwarding setup was named bridge_forward_setup.go, so the rule took it for a Forwarder file, and the closure took evs_git_build.go, tagged `!ios_extension`, for one variable's initializer.
+    - Answer: the forwarding setup never runs in a VPN component, so it leaves the prefix, as bridge_setup_forward.go, the daemon's port forwards staying in bridge_daemon_forward.go; `EvsGitEmptyTreeOid` moves to evs_git_object.go, so evs_git_build.go keeps its tag and leaves the list. The regenerated list is exactly the Forwarder's and the compiler's closure, with no gate, filer, ACL engine or record file in it, and the rule still fails closed for a Forwarder file tagged out by mistake.
+    - Cost: a rename, a four-line move, and one 20-byte variable with its hash at start on the extension's leg.
+    - Not taken: narrowing the seed rule to named files; removing evs_git_build.go's tag, the tree builder joining the extension.
+    - Raised by the build (BRIDGE-M4-20 and its fix track; the build's ledger, QD-811 and QD-866).
+
+276. **Amending owner decision 251: on the page Worker's leg `sidecar.Id` stays its own type, a twin of `operator.Id`, and `operator.Id`'s JSON decode refuses what either id refused before the seam (option 1 of each question, the second as built).**
+    - Question: owner decision 251 made `sidecar.Id` an alias of `operator.Id` on every leg, so the page Worker's sdk.wasm linked connect and gVisor through it. And server.Id's JSON decode was looser than sidecar's, so the one moved type had to choose.
+    - Answer: on the `sidecar_http` leg only, `sidecar.Id` stays its own `[16]byte` type with methods and encodings identical to `operator.Id`'s, a build-tag twin of id.go, so the browser build links no connect or gVisor and §4.4's rule that the leg names no connect holds again; every other leg keeps the alias. The page Worker runs no engine and takes no `Env`, so nothing on that leg needs operator-core. `make size` then measures about 57.8 MB unstripped; D-SDK-19's 41,943,040 B goal stays a recorded slip and the 74,965,628 B gate stands. `operator.Id`'s `UnmarshalJSON` refuses everything server.Id or sidecar.Id refused: server's null and length refusals keep server's words, sidecar's (an unquoted value, a separator other than a dash, bad hex) answer `ErrInvalidId` without echoing input (I-13), and every refusal matches `operator.ErrInvalidId`. Well-formed ids decode as before, encodings are byte-identical, and the Scanner and Valuer stay server's exactly.
+    - Cost: two id declarations to hold equal, by a test; server accepts fewer malformed inputs than it did, none of which a conforming encoder produces.
+    - Not taken: the alias on the page Worker's leg, at connect's IP stack in every page; keeping server.Id's looser decode.
+    - Raised by the build (the operator-core seam; the build's ledger, QD-856 and QD-887).
+
+277. **§4.7's legs are sdk's table, which lists every target gomobile binds with the tags gomobile adds (option 1, the recommendation).**
+    - Question: sdk's leg table listed only the arm64 targets, so `make check` never read or compiled sidecar for 32-bit android/arm, android/amd64, macos/amd64 or the simulator, which sdk/build/Makefile binds.
+    - Answer: the legs stay sdk's table (sdk/dependency_boundary_test.go's `messagingBoundaryLegs`), and that table lists every target sdk/build/Makefile binds, each with gomobile's tags: android/arm and android/amd64 beside android/arm64, iossimulator/arm64 beside ios/arm64 (the `ios` tag), macos/amd64 beside macos/arm64 (the `macos` tag), and the extension bind's slices likewise. sidecar's `check/` mirrors the table and fails a row of sdk's with no leg here, so every rule reads sidecar, and the compile test builds it, for each. One list serves sdk and sidecar.
+    - Cost: more legs in every `make check`.
+    - Not taken: `check/` adding gomobile targets of its own, a second list to keep.
+    - Raised by the build (make check; the build's ledger, QD-908).
+
+278. **The release step keeps `third_party/` at the repository's top beside `v2026/` (option 1, the recommendation).**
+    - Question: the release moves the root's tree into `v2026/`. The patched go-smtp fork and the mox subset are modules of their own under `third_party/`, which cli's and mlsinterop's replaces reach as `../third_party/X`; moved into `v2026/`, those replaces pointed at nothing.
+    - Answer: `third_party` joins the names the release step gives `go_mod_fork`, as `design/` does, and `check/`'s release pattern, which mirrors them. On the release branch the root's replace is rebased to `../third_party/X`, cli's and mlsinterop's stand, smtpproof's becomes `../../third_party/X`, and server's, sn's and sdk's `../sidecar/third_party/X` keep resolving. The root's module zip leaves the forks out either way, so a consumer of the tag links upstream go-smtp and refuses, closed. The release fixture runs over a tree that holds `third_party/`.
+    - Cost: one more name in the release step and its mirror.
+    - Not taken: moving the forks into `v2026/` and rewriting each nested module's replaces at release.
+    - Raised by the build (MAIL-M5-02; the build's ledger, QD-920, on the fork QD-193 added).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

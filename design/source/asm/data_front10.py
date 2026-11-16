@@ -27,7 +27,12 @@ parts and smtp-7 (253), cert-1's chain, revocation reason and state time (254), 
 delete is off (255), the evs rows' words for their wire fields (256), the segment clusters' PUT reports (257), the
 file clusters' readiness object (258), api-14's sign-off ids (259), the tier cache key, an OAuth client's creator and
 a domain's TXT challenge (260), enrollment's attempt histories (261) and BASE records in a config head's folds (262);
-and the open owner question Q-REPO-6, which owner decision 213 asked for."""
+and the open owner question Q-REPO-6, which owner decision 213 asked for. Adds owner decisions 263-278 (folded
+2026-11-16 with §4's items): the mlswg vectors (263), release promotion (264), cli/UI.md's copy (265), proving key
+sets (266), the closed source graphs (267), what a Gn-out merges (268), C20 and strict_chain (269), minio's merge
+place, which the branch policy takes with the tests repo (270), X11 (271), Go 1.27.4 (272), proto fences (273),
+sidecarctl in server (274), the ios_extension leg's seed rule (275), the page Worker's Id, amending 251 (276),
+gomobile's legs (277) and third_party/ at release (278)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -275,6 +280,53 @@ INDEX = list(_P9['INDEX']) + [
     (262, "Config folds",
      "A config head's fold records include the BASE entries, each with its Signed ProjectionHeader, so the log's "
      "chain through the fold follows from the genesis and the head."),
+    (263, "mlswg vectors",
+     "The mlswg's 16 MLS vector files stay committed in `testdata/mls/mlswg/`, though their repository carries no "
+     "license; no history is rewritten and no test fetches them."),
+    (264, "Release promotion",
+     "A release is promoted, not every build signed: the two holders sign a chosen release's sums offline, and "
+     "ur.io publishes them with `latest.json`, which `install.sh` reads."),
+    (265, "cli/UI.md",
+     "A copy of the `ur` command sketch goes to `sidecar/design/UI.md`, and its spellings replace the build's own."),
+    (266, "Proving key sets",
+     "A prover host downloads its key set on first send from a public path on ur.io, pinned by hash in the release; "
+     "none ships in the `ur` package."),
+    (267, "Closed source graphs",
+     "server's competition takes sidecar as an eleventh repository through new producer releases, selected by "
+     "`source_graph_policy`, and sn's release gates as a fourteenth, before the first merge to `main`."),
+    (268, "Gn-out merges",
+     "A Gn-out merges the commit set recorded at its gate, never the tip, and every Gn-out merge of connect waits "
+     "for FS-125's sweep of C19 in connect's tests."),
+    (269, "C20, `strict_chain`",
+     "A new connect change, `DohCache.ForwardDnssec`, lets a device fetch and validate a custom MX host's DNSSEC "
+     "chain itself, which `strict_chain` requires; the validator moves from M9 to M7."),
+    (270, "minio's merges",
+     "The minio fork joins the warp, config, vault, xops and mmm group in the merge order, and its `master` plays "
+     "`main`."),
+    (271, "X11",
+     "X11 joins §4.7's allowed licenses, read as MIT's text plus only its no-advertising clause, so tlshacks needs "
+     "no exception."),
+    (272, "Go 1.27.4",
+     "Every repo moves to go1.27.4 for GO-2026-6859, server's lock following by one authorized re-pin; the "
+     "competition evaluator and the perf runner stay on go1.27.3 until re-qualified."),
+    (273, "Proto fences",
+     "A design-records fold that writes a field into a proto fence drops that field's line from protocol's fence "
+     "additions in the same commit; a fence never moves ahead of the code."),
+    (274, "`sidecarctl`",
+     "The one binary for every operations command this build adds lives in server/sidecarctl, where it may link "
+     "server's model and the engines."),
+    (275, "`ios_extension` leg",
+     "The leg's seed rule stands: a file it takes wrongly is renamed and a declaration its closure needs is moved, "
+     "never the rule narrowed or a tag dropped."),
+    (276, "`Id` on the page Worker",
+     "Amends @@OD:251@@: on the page Worker's leg `sidecar.Id` stays a twin of `operator.Id`, so the leg links no "
+     "connect; `operator.Id`'s JSON decode refuses what either id refused."),
+    (277, "gomobile legs",
+     "§4.7's legs are sdk's table, which lists every target gomobile binds, 32-bit android/arm, the simulator and "
+     "macos/amd64 among them, with gomobile's tags."),
+    (278, "Release, `third_party/`",
+     "The release step keeps `third_party/`, the go-smtp fork and the mox subset, at the repository's top beside "
+     "`v2026/`, so every replace still resolves."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -292,11 +344,14 @@ for _n, _old_end, _note in [
         # Owner decision 251 amends 19's: the host interfaces move to operator-core, and sidecar owns its SQL.
         (19, "owns migrations and routes, and hosts each engine.",
          " Amended by @@OD:251@@: the interfaces are operator-core's, rooted at its Env, which server/core implements; "
-         "sidecar owns its SQL and migrations, which server/core runs.")]:
+         "sidecar owns its SQL and migrations, which server/core runs."),
+        # Owner decision 276 amends 251's alias for the page Worker's leg.
+        (251, "operator.Id on every leg.",
+         " Amended by @@OD:276@@: the page Worker's leg keeps a twin of it and links no connect.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 263))
+assert [r[0] for r in INDEX] == list(range(1, 279))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -314,7 +369,11 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               248: '2026-11-06', 249: '2026-11-06', 250: '2026-11-06', 251: '2026-11-15',
               252: '2026-11-15', 253: '2026-11-11', 254: '2026-11-12', 255: '2026-11-15', 256: '2026-11-15',
               257: '2026-11-15', 258: '2026-11-15', 259: '2026-11-15', 260: '2026-11-15', 261: '2026-11-15',
-              262: '2026-11-10'})
+              262: '2026-11-10',
+              263: '2026-11-06', 264: '2026-11-06', 265: '2026-11-06', 266: '2026-11-06', 267: '2026-11-15',
+              268: '2026-11-15', 269: '2026-11-06', 270: '2026-11-06', 271: '2026-11-06', 272: '2026-11-11',
+              273: '2026-11-11', 274: '2026-11-12', 275: '2026-11-15', 276: '2026-11-15', 277: '2026-11-15',
+              278: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -365,7 +424,14 @@ SCOPE = SCOPE.replace(_SC_OLD, "through sn, warp, config, vault, build, xops, mm
 for _a, _b in [("and vault, and the `urnetwork/minio` fork (@@OD:195@@).",
                 "and vault, and the `urnetwork/minio` fork (@@OD:195@@); operator-core's opened later, with its seam "
                 "(@@OD:251@@)."),
-               ("in the order connect, sidecar, sdk, sn, server,", "in the order connect, operator-core, sidecar, sdk, sn, server,")]:
+               ("in the order connect, sidecar, sdk, sn, server,", "in the order connect, operator-core, sidecar, sdk, sn, server,"),
+               # Owner decision 270: minio merges with the ops group, its master playing main; the tests repo's
+               # branch follows build (§4.8).
+               ("warp/config/vault/xops/mmm, build, re-pinning",
+                "warp/config/vault/xops/mmm/minio, build, tests, re-pinning"),
+               ("operator-core's opened later, with its seam (@@OD:251@@).",
+                "operator-core's opened later, with its seam (@@OD:251@@), and the tests repo's, opened locally for "
+                "its fixtures. In minio, `master` plays `main` (@@OD:270@@).")]:
     assert BRANCH.count(_a) == 1, _a
     BRANCH = BRANCH.replace(_a, _b)
 _SC251 = "`sdk/sidecar.go`; the changes these need"
@@ -457,7 +523,13 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "words for their wire fields (256), the segment clusters' PUT reports (257), the file clusters' readiness "
     "object (258), api-14's sign-off ids (259), the tier cache key, an OAuth client's creator and a domain's TXT "
     "challenge (260), enrollment's attempt histories (261) and BASE records in a config head's folds (262), and "
-    "adds the Q- item @@OD:213@@ asked for, Q-REPO-6, open below. ")
+    "adds the Q- item @@OD:213@@ asked for, Q-REPO-6, open below. The fold of §4's the same day numbers the "
+    "repository's and the build's answers: the mlswg's vector files committed (263), releases promoted, not each "
+    "build signed (264), a copy of cli/UI.md in the repository (265), proving key sets fetched from ur.io (266), "
+    "the competition's and sn's source graphs taking sidecar (267), what a Gn-out merges (268), connect's C20 for "
+    "`strict_chain` (269), minio's place in the merge order (270), X11 (271), Go 1.27.4 (272), how a proto fence "
+    "takes a field (273), `sidecarctl` in server (274), the `ios_extension` leg's seed rule (275), the page "
+    "Worker's own `Id`, amending 251 (276), gomobile's legs (277) and `third_party/` at release (278). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

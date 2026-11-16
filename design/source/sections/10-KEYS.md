@@ -45,7 +45,7 @@ This section owns X12: the in-house MLS subset, ciphersuite, credentials and gro
 | KeyPackages, last resort; credential 0xF552 (§10, §16.8, §17.5) | yes |
 | PSK, ReInit, branching, application messages, external senders, standalone and Update proposals | refused |
 
-**Conformance.** No vectors exist for 0x0010, so every mlswg vector file covering a v0 feature runs under 0x0001; 0x0010 adds X-Wing known-answer tests (KATs) and owner decision 43's differential runs: mls-go under 0x0001, tmc/mls under 0x004F mapped to 0x0010, and OpenMLS's 0x004D once an M0 KAT matches its X-Wing to Go's. **The 0x0010 gate (D-KEYS-10)** adds what those cannot show:
+**Conformance.** No vectors exist for 0x0010, so every mlswg vector file covering a v0 feature runs under 0x0001, from the 16 files committed in testdata/mls/mlswg/, whose repository carries no license (§4.4; owner decision 263); 0x0010 adds X-Wing known-answer tests (KATs) and owner decision 43's differential runs: mls-go under 0x0001, tmc/mls under 0x004F mapped to 0x0010, and OpenMLS's 0x004D once an M0 KAT matches its X-Wing to Go's. **The 0x0010 gate (D-KEYS-10)** adds what those cannot show:
 
 ```text
 specified  the MLS wire (credential 0xF552, GkmCommitHeader, GenRotate, ur_group), the delivery wire
