@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !ios_extension
+//go:build !sidecar_http && !ios_extension && !js
 
 package sidecar
 
