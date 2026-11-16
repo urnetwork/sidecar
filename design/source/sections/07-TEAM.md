@@ -423,6 +423,10 @@ fold/<d>/<i>                       the i-th ConfigFold, i from 1 and d = i / 102
 service_settings, versioning_rules, bridge/block
                                    each one Signed record, verbatim
 bridge/share/<share_id hex>        a BridgeShareSigner; bridge/share-grant/<share_id hex> a BridgeShareGrant
+bridge/ledger/manifest, addresses, egress, aliases, rules/<xx>
+                                   the bridge ledger (§17.8; owner decision 473): the folded bridge
+                                   statements' rows by kind, rules in shards by rule id, and a manifest of
+                                   the others' hashes; ciphertext at evs, as every file here is
 socket/key                         K_sock's file, one SocketKeyFile record (§8.8, §9.4)
 policy.hujson                      the policy's source bytes (§8.8)
 tags, groups, rules, names, labels, resolve
@@ -829,7 +833,10 @@ fold       once the oldest statement or tick past the newest base's folded_throu
            through the tip and publishes its base, at its next start if it was offline, after a random 0-10
            min delay that another base cancels; so while any config writer runs, the unfolded tail stays
            within about 1,024 entries or a day, bounding re-application, {acl_}e's window and devices' kept
-           tails (about two such spans)
+           tails (about two such spans); a writer that publishes a base while a bridge statement is unfolded
+           folds through its tip (owner decision 473); a bridge body sealed to a generation that does not form
+           stops a fold until it is UnformedVoidWait old, and a fold stops only at or above the previous base,
+           so it waits for every such body under that base (§17.8; owner decision 478)
 limits     per network, api takes at most 60 statements a minute in bursts to 600 and 2,000 a day (20,000 on
            Team), and one base a minute and 200 a day (pro.yml, §20.4), counted in Redis {acl_<networkId>}q
            (TTL 25 h), answering 429 {retry_after_ms} beyond them; revocations of every kind, Suspend,
@@ -862,6 +869,10 @@ apply(e)   every admitted sidecar: e.n = my.n + 1 and e.prev_chain = my.A, else 
              and a rows-only verifier re-apply the tail by the bits and never re-judge it, so a tail statement
              whose rule reads what the base's head changed, or whose at lies below what the new device holds,
              gets the verdict the long-running readers gave it
+    ledger   (owner decision 473) a reader that opened the bridge statements folded since the previous base
+             checks that the head's bridge ledger (§17.8) equals the fold of the previous head's ledger and
+             those statements by the verdicts it judged them, and forks on a difference; a device that starts
+             at this base takes the ledger as it takes the rows
     shrunk   (owner decision 315) a verifier present at n-1 recomputes shrunk_repo_ids and forks on a
              difference, and one that starts at this base takes it, so every verifier sets
              AclRepo.holders_shrunk_at = n for exactly those repos (shrink)

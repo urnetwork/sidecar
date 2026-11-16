@@ -58,11 +58,11 @@
   "col": 46,
   "match": "every owner question",
   "snippet": "Owner decisions 1-150 settle every X item and every owner question raised before the v1 additions, the five raised in the 2026-11-04 peer review included (owner decisions 141-145: Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10); that re",
-  "reading": "Holds for owner decisions 1-150's scope, which the line states; the line now also names the two owner questions owner decision 197's design raised (Q-BRIDGE-8, Q-SDK-7), open, so it no longer says none is open.",
+  "reading": "Holds for owner decisions 1-150's scope, which the line states; the two owner questions owner decision 197's design raised, which the line also names, are decided: Q-SDK-7 by owner decisions 215 and 216, and Q-BRIDGE-8 by owner decision 484 (2026-11-16).",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-09"
+  "source": "hand-2026-11-16"
  },
  {
   "family": "decided_q_open",
@@ -1016,7 +1016,7 @@
  {
   "family": "mib64_trigger",
   "file": "07-TEAM.md",
-  "line": 468,
+  "line": 472,
   "col": 256,
   "match": "64 MiB",
   "snippet": "ing an honest writer gives each path it creates, existing paths keeping theirs (§11.7; owner decision 167); without the record the platform rule holds, versionless above 64 MiB of plaintext; Owners, Admins and Network admins write the record with `ur admin versioning`. The rules cover file-mode refs of every repo kind but config and mailcfg, ne",
@@ -1029,7 +1029,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1116,
+  "line": 1127,
   "col": 67,
   "match": "weekly",
   "snippet": "         to the member (owner decision 126); together these hold a weekly re-enroller near 14 admitted",
@@ -1042,7 +1042,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1190,
+  "line": 1201,
   "col": 118,
   "match": "14 days",
   "snippet": "**D-TEAM-1 (proposed).** P0 stage 1 refuses child and admin-refused tokens on all 37 routes before any sidecar, after 14 days log-only, confines `strict_exp` bearers to 7.4's route allowlist and closes AUTH.md:202. *Why:* owner decision 45.",
@@ -1055,7 +1055,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1246,
+  "line": 1257,
   "col": 1178,
   "match": "weekly",
   "snippet": "ry admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf ",
@@ -1068,7 +1068,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 1318,
+  "line": 1329,
   "col": 5844,
   "match": "member-device cap",
   "snippet": "19 an ephemeral client's refused join from a member invite; and §22.7's approval suite a cancel under the allowlist; §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener",
@@ -2392,35 +2392,9 @@
   "source": "hand-2026-11-06"
  },
  {
-  "family": "owner_or_peer_pending",
-  "file": "17-BRIDGE.md",
-  "line": 608,
-  "col": 737,
-  "match": "(proposed; Q-",
-  "snippet": "rk's untagged sidecars (17.6's rule 3; owner decision 120), a reach the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
-  "family": "owner_or_peer_pending",
-  "file": "17-BRIDGE.md",
-  "line": 608,
-  "col": 802,
-  "match": "*Decider:* owner",
-  "snippet": "ch the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
   "family": "decided_q_open",
   "file": "17-BRIDGE.md",
-  "line": 642,
+  "line": 700,
   "col": 91,
   "match": "until §22 measures; Q-BRIDGE-2",
   "snippet": "| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; the compile cap of owner decision 216, a network past it keeping its last verified state on that device and alarming; links fail closed meanwhile |",

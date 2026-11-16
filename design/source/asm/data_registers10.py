@@ -40,3 +40,12 @@ D['D-MAIL-9'] = "Owner accepts the scripted M7 census's loss before burners laun
 assert D['D-MCP-16'].startswith('Run taint is a monotone') and D['D-MCP-17'].startswith("MCP's evs tools never write"), 'MCP rows moved'
 D['D-MCP-16'] = "Run taint: a monotone, fsynced bit written before untrusted data leaves, shared by a harness process's runs; missing reads tainted."
 D['D-MCP-17'] = "MCP's evs tools never touch config, secret or directory repos, nor write `mailcfg`; MCP signs no authority statement."
+# §17's fold (2026-11-16): the config head's bridge ledger and unformed generations' void (owner decisions 473, 478),
+# the start gate (474), and Q-BRIDGE-8 decided as recommended (484).
+assert D['D-BRIDGE-6'].startswith('Bridge rules are signed config-repo statements') and D['D-BRIDGE-18'].startswith(
+    'Only a verified state opens') and Q['Q-BRIDGE-8'][1].startswith('(a) on demand'), 'BRIDGE rows moved'
+D['D-BRIDGE-6'] = ("Signed config-repo bridge statements; gates see only reach rules and BridgeRows; the head's ledger "
+                   "freezes each body's verdict.")
+D['D-BRIDGE-18'] = ("Only a verified state opens private destinations; states persist, never lowered by unsigned input; "
+                    "starts replay judged denials first.")
+Q['Q-BRIDGE-8'] = (Q['Q-BRIDGE-8'][0], "(a), owner decision 484: on demand, as §17.4 says; setup files no address.")

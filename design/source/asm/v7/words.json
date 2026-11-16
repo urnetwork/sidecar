@@ -2,17 +2,17 @@
  {
   "num": 1,
   "code": "CTX",
-  "words": 3829,
+  "words": 3832,
   "code_words": 52,
   "ceiling": 2200,
-  "over": 1629,
-  "over_pct": 74.0
+  "over": 1632,
+  "over_pct": 74.2
  },
  {
   "num": 2,
   "code": "TRUST",
   "words": 9716,
-  "code_words": 19156,
+  "code_words": 19157,
   "ceiling": 3000,
   "over": 6716,
   "over_pct": 223.9
@@ -20,11 +20,11 @@
  {
   "num": 3,
   "code": "ARCH",
-  "words": 4678,
+  "words": 4681,
   "code_words": 6761,
   "ceiling": 3000,
-  "over": 1678,
-  "over_pct": 55.9
+  "over": 1681,
+  "over_pct": 56.0
  },
  {
   "num": 4,
@@ -57,7 +57,7 @@
   "num": 7,
   "code": "TEAM",
   "words": 12408,
-  "code_words": 12723,
+  "code_words": 12886,
   "ceiling": 3500,
   "over": 8908,
   "over_pct": 254.5
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 7724,
-  "code_words": 4255,
+  "words": 9104,
+  "code_words": 4977,
   "ceiling": 3800,
-  "over": 3924,
-  "over_pct": 103.3
+  "over": 5304,
+  "over_pct": 139.6
  },
  {
   "num": 18,
@@ -200,10 +200,10 @@
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7083,
+  "words": 7086,
   "code_words": 1136,
   "ceiling": 2500,
-  "over": 4583,
-  "over_pct": 183.3
+  "over": 4586,
+  "over_pct": 183.4
  }
 ]
