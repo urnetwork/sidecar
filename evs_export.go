@@ -48,9 +48,6 @@ var evsExportSkippedRefNames = [][]byte{[]byte("ur/index"), []byte("ur/lfs")}
 // The top-level directory of the search index's files, which export leaves out of every tree.
 const evsExportSkippedDirectory = ".ur-index"
 
-// The parts one read asks for at once.
-const evsExportPartReadCount = 64
-
 // Rebuilds plain git from the repo's refs into args.Dir.
 func (self *EvsRepo) Export(ctx context.Context, args *EvsExportArgs) (*EvsExportResult, error) {
 	writer, err := newEvsGitObjectWriter(args.Dir)
@@ -797,104 +794,6 @@ func (self *evsGitExport) historyBlob(ctx context.Context, result *evsReadResult
 		return fmt.Errorf("%w: a history blob that is not its oid", ErrEvsSealInvalid)
 	}
 	return nil
-}
-
-// The push record of one verified statement, read by its push id and version, its statement equal to the one
-// verified and its payload checked against it (§11.6's checks row): a one-part push's payload, or a sealed push's
-// parts, read in rounds and checked whole as its stored seal is.
-func (self *EvsRepo) pushContent(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement) (*EvsCheckedPayload, error) {
-	push := statement.Statement.Push
-	if push.GetPartCount() == 0 {
-		return self.pushPayload(ctx, head, statement)
-	}
-	parts := make([][]byte, push.GetPartCount())
-	for start := uint32(1); start <= push.GetPartCount(); start += evsExportPartReadCount {
-		request := &protocol.EvsReadRequest{RefId: head.RefId.Bytes(), PinVersion: head.Version}
-		for part := start; part <= min(push.GetPartCount(), start+evsExportPartReadCount-1); part += 1 {
-			request.Pushes = append(request.Pushes, &protocol.EvsReadPush{PushId: push.GetPushId(), Version: statement.Version, Part: part})
-		}
-		if err := func() error {
-			_, objects, err := self.client.postRead(ctx, self.repoId, request)
-			if err != nil {
-				return err
-			}
-			defer objects.close()
-			for key, spill := range objects.objects {
-				if key.kind != protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD || key.number == 0 || uint64(push.GetPartCount()) < key.number {
-					continue
-				}
-				recordBytes, err := io.ReadAll(spill.reader())
-				if err != nil {
-					return err
-				}
-				record, err := ParseEvsBatchRecord(recordBytes)
-				if err != nil {
-					return fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
-				}
-				// a part record, or a re-seeded push's part, a reseed record holding a part's body (QD-818)
-				statementBytes, partBytes, _, _, err := ParseEvsSealPartRecord(record)
-				if err != nil {
-					return fmt.Errorf("%w: a part record that is not one part's", ErrEvsEntryRefused)
-				}
-				if !bytes.Equal(statementBytes, statement.Statement.Bytes) {
-					return fmt.Errorf("%w: a part record of another statement", ErrEvsEntryRefused)
-				}
-				parts[key.number-1] = partBytes
-			}
-			return nil
-		}(); err != nil {
-			return nil, err
-		}
-	}
-	for part, partBytes := range parts {
-		if partBytes == nil {
-			return nil, fmt.Errorf("%w: part %d evs did not serve", ErrEvsObjectMissing, part+1)
-		}
-	}
-	checked, _, err := EvsCheckStoredSeal(statement.Statement, parts)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
-	}
-	return checked, nil
-}
-
-// A one-part push's record, read by its push id and version, its statement equal to the one verified and its payload
-// checked against it.
-func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement) (*EvsCheckedPayload, error) {
-	request := &protocol.EvsReadRequest{
-		RefId:      head.RefId.Bytes(),
-		PinVersion: head.Version,
-		Pushes:     []*protocol.EvsReadPush{{PushId: statement.Statement.Push.GetPushId(), Version: statement.Version}},
-	}
-	_, objects, err := self.client.postRead(ctx, self.repoId, request)
-	if err != nil {
-		return nil, err
-	}
-	defer objects.close()
-	var record []byte
-	for key, spill := range objects.objects {
-		if key.kind == protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD && key.number == 0 {
-			record, err = io.ReadAll(spill.reader())
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	if record == nil {
-		return nil, fmt.Errorf("%w: a push record evs did not serve", ErrEvsObjectMissing)
-	}
-	// the batch record as its place holds it: its header, then the push's statement and payload, a re-seeded push's
-	// under the reseed type (QD-725)
-	batchRecord, err := ParseEvsBatchRecord(record)
-	if err != nil || (batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH && batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED) {
-		return nil, fmt.Errorf("%w: a push record that is not one push's", ErrEvsEntryRefused)
-	}
-	statementBytes, payload, err := ParseEvsPushRecordBody(batchRecord.Body)
-	if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
-		return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
-	}
-	// as evs keeps it, with no slot body: keys come from slot reads alone (QD-806)
-	return EvsCheckRecordPayload(statement.Statement, payload)
 }
 
 // One entry of a push reconstructed into a blob written to sink, its oid checked by reconstruction, and the file's
