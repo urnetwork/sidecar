@@ -810,8 +810,8 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 				skip = true
 				return nil
 			}
-			// the local ref moved: the hold goes
-			journal.HoldCode, journal.HoldMs, journal.HoldLocal = "", 0, ""
+			// the local ref moved: the hold goes, and the objects a git-lfs hold named with it
+			journal.HoldCode, journal.HoldMs, journal.HoldLocal, journal.HoldLfsOids = "", 0, "", nil
 			if err := self.engine.state.writeJournal(refId, journal); err != nil {
 				return err
 			}
@@ -869,6 +869,12 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 // Holds an owned ref's queue on a final refusal: `ur status` shows the code, and the queue waits for the local ref to
 // move or `ur evs retry`; the commits stay on the local ref.
 func (self *EvsGitReceiver) hold(ctx context.Context, refId Id, code string, local *EvsGitOid) error {
+	return self.holdNaming(ctx, refId, code, local, nil)
+}
+
+// A hold, and the objects a git-lfs hold waits for, nil for any other hold, in one journal write: a hold never shows
+// the objects of one before it, and the barrier after the write finds the hold whole.
+func (self *EvsGitReceiver) holdNaming(ctx context.Context, refId Id, code string, local *EvsGitOid, lfsOids []string) error {
 	defer testHookBarrier(evsLocalBarrierQueueHeld, self.engine.barrierKey(refId))
 	return self.withApply(ctx, refId, func() error {
 		journal, err := self.engine.state.journal(refId)
@@ -876,6 +882,7 @@ func (self *EvsGitReceiver) hold(ctx context.Context, refId Id, code string, loc
 			return err
 		}
 		journal.HoldCode, journal.HoldMs, journal.HoldLocal = code, self.clock.Now().UnixMilli(), evsOidText(local)
+		journal.HoldLfsOids = lfsOids
 		// what was sent is resolved from the history; the updates wait as LOCAL
 		for _, update := range journal.Updates {
 			update.State = EvsJournalLocal
@@ -888,20 +895,11 @@ func (self *EvsGitReceiver) hold(ctx context.Context, refId Id, code string, loc
 // Holds an owned ref's queue on objects the tip check found missing: `ur status` names them and the upload command,
 // and the queue waits for the local ref to move or `ur evs retry` once they are uploaded.
 func (self *EvsGitReceiver) holdLfs(ctx context.Context, refId Id, local *EvsGitOid, missing []*EvsLfsMissingObject) error {
-	if err := self.hold(ctx, refId, evsLfsTipCheckRefusal, local); err != nil {
-		return err
+	oids := make([]string, 0, len(missing))
+	for _, object := range missing {
+		oids = append(oids, object.Requirement.Oid.String())
 	}
-	return self.withApply(ctx, refId, func() error {
-		journal, err := self.engine.state.journal(refId)
-		if err != nil {
-			return err
-		}
-		journal.HoldLfsOids = nil
-		for _, object := range missing {
-			journal.HoldLfsOids = append(journal.HoldLfsOids, object.Requirement.Oid.String())
-		}
-		return self.engine.state.writeJournal(refId, journal)
-	})
+	return self.holdNaming(ctx, refId, evsLfsTipCheckRefusal, local, oids)
 }
 
 // Drops a shared update the receive journaled and then refused before any evs write.
@@ -937,7 +935,7 @@ func (self *EvsGitReceiver) Retry(ctx context.Context, refName []byte) ([][]byte
 			if journal.HoldCode == "" || (refName != nil && !bytes.Equal(journal.RefName, refName)) {
 				return nil
 			}
-			journal.HoldCode, journal.HoldMs, journal.HoldLocal = "", 0, ""
+			journal.HoldCode, journal.HoldMs, journal.HoldLocal, journal.HoldLfsOids = "", 0, "", nil
 			name = journal.RefName
 			return self.engine.state.writeJournal(refId, journal)
 		})

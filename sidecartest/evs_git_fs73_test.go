@@ -12,6 +12,7 @@ package sidecartest_test
 import (
 	"os"
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,10 +53,15 @@ func TestEvsGitFs73PrunedHistory(t *testing.T) {
 }
 
 func TestEvsGitFs73PruneLosesToATouch(t *testing.T) {
-	barrier := newEvsGitTwinBarrier(t)
-	evsgit.Fs73PruneLosesToATouch(t, newEvsGitFs73World(t), func(t testing.TB, name string) (<-chan struct{}, func()) {
-		return barrier.arm(name)
-	})
+	evsgit.Fs73PruneLosesToATouch(t, newEvsGitFs73World(t), newEvsGitFs73Barrier(t).hold)
+}
+
+func TestEvsGitFs73OverHttpAndSsh(t *testing.T) {
+	evsgit.Fs73OverHttpAndSsh(t, newEvsGitFs73World(t))
+}
+
+func TestEvsGitFs73OwnedRefHoldsWhenPrunedMeanwhile(t *testing.T) {
+	evsgit.Fs73OwnedRefHoldsWhenPrunedMeanwhile(t, newEvsGitFs73World(t), newEvsGitFs73Barrier(t).hold)
 }
 
 func TestEvsGitFs73SkipOptionsRefusedAlike(t *testing.T) {
@@ -76,4 +82,70 @@ func TestEvsGitFs73PruneRefusesWithARefMissing(t *testing.T) {
 
 func TestEvsGitFs73WindowBelowSevenReadsAsSeven(t *testing.T) {
 	evsgit.Fs73WindowBelowSevenReadsAsSeven(t, newEvsGitFs73World(t))
+}
+
+// The holds FS-73's race and owned clauses take on T2: a barrier hook of the test's own, where a site's next arrival,
+// <name> or <name>@<key> as sidecartest.BarrierSite writes it, holds until release.
+type evsGitFs73Barrier struct {
+	stateLock sync.Mutex
+	armed     map[string]*evsGitFs73Hold
+}
+
+// One armed site: arrived closes when an arrival holds, release lets it go.
+type evsGitFs73Hold struct {
+	arrived chan struct{}
+	release chan struct{}
+}
+
+func newEvsGitFs73Barrier(t *testing.T) *evsGitFs73Barrier {
+	t.Helper()
+	if !sidecartest.HooksLinked {
+		t.Skip("needs the sidecar_testhooks build")
+	}
+	barrier := &evsGitFs73Barrier{armed: map[string]*evsGitFs73Hold{}}
+	remove, err := sidecartest.InstallTestHooks(nil, barrier.hit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(remove)
+	return barrier
+}
+
+// An evsgit.Fs73Hold: site's next arrival holds until the answer is called, and arrived closes when it comes.
+func (self *evsGitFs73Barrier) hold(t testing.TB, site string) (<-chan struct{}, func()) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	hold := &evsGitFs73Hold{arrived: make(chan struct{}), release: make(chan struct{})}
+	self.armed[site] = hold
+	var once sync.Once
+	return hold.arrived, func() {
+		once.Do(func() {
+			self.stateLock.Lock()
+			// an arm nothing reached goes with its release
+			if self.armed[site] == hold {
+				delete(self.armed, site)
+			}
+			self.stateLock.Unlock()
+			close(hold.release)
+		})
+	}
+}
+
+func (self *evsGitFs73Barrier) hit(name string, key string) {
+	hold := func() *evsGitFs73Hold {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for _, site := range []string{sidecartest.BarrierSite(name, key), name} {
+			if hold, ok := self.armed[site]; ok {
+				delete(self.armed, site)
+				return hold
+			}
+		}
+		return nil
+	}()
+	if hold == nil {
+		return
+	}
+	close(hold.arrived)
+	<-hold.release
 }

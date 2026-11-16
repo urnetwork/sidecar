@@ -25,6 +25,12 @@
 //	           path-level CAS and reruns, keeping O
 //	skip       a commit whose new object is absent, pushed with --no-verify or with GIT_LFS_SKIP_PUSH=1, is refused
 //	           alike, naming the object, evs's tip unmoved; the same commit pushed with neither commits
+//	transports over git's http front on loopback and its ssh front (transport.go), an ordinary push storing its object
+//	           through the agent, and a push with each skip option refused alike, then committed with neither
+//	owned      an owned ref pushed while the device's mount is stopped, so its daemon takes the push and nothing
+//	           publishes it, its object pruned meanwhile by a device holding every ref evs holds: once the mount runs
+//	           again the queue's check before its first POST holds the entry, ur status naming the object and the
+//	           hold; after `git lfs push --object-id`, ur evs retry publishes it
 //	attributes a .gitattributes change that puts a stored pointer under filter=lfs checks its object: refused while
 //	           the store lacks it, committed once another device stores it
 //	import     ur evs import of a repository whose own git-lfs store holds its objects uploads them first, and another
@@ -37,11 +43,11 @@
 // The twin, a tip check switched off in a sidecar_testhooks build (fs73_testhooks.go), lets the pruned clause's force
 // push through, which the clause must catch.
 //
-// Left to the review phase and other hosts: the same clauses over git's http and ssh fronts and git-remote-ur (stock
-// git over the local transport reaches the same receive path behind the same hooks, and git-lfs's standalone agent
-// does not depend on the remote's transport), and §22.9's older matrix rows where the host holds them; an owned ref
-// published after an offline push holding when its object was pruned meanwhile, ur status naming it; the purge
-// following a prune, which evacuation's job runs (EVSB-M10-01); ur status's lines for a held ref.
+// Left to the review phase and other hosts: git-remote-ur, whose ur binary is cli's module's and which no world here
+// builds (the other clauses push over git's local transport, behind the same hooks and receive path the http and ssh
+// fronts run); §22.9's older matrix rows where the host holds them; the purge following a prune, which evacuation's
+// job runs (EVSB-M10-01) and which needs the store clock FS-73's catalog row names; ur status's own lines for a held
+// ref, which are cli's.
 
 package evsgit
 
@@ -65,14 +71,15 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // .gitattributes as `git lfs track "*.bin"` writes it.
 const fs73Attributes = "*.bin filter=lfs diff=lfs merge=lfs -text\n"
 
-// Holds the next arrival at a barrier until release: arrived closes once one is held. T2's test gives one on its own
-// barrier hook, and T3's on its Net's driver.
-type Fs73Hold func(t testing.TB, name string) (arrived <-chan struct{}, release func())
+// Holds the next arrival at a barrier site, <name> or <name>@<key> (sidecartest.BarrierSite), until release: arrived
+// closes once one is held. T2's test gives one on its own barrier hook, and T3's on its Net's driver.
+type Fs73Hold func(t testing.TB, site string) (arrived <-chan struct{}, release func())
 
 // A device's evs settings for FS-73's clauses: FS-5's, receive waits short enough that an answer that cannot come comes
 // back in a test's time.
@@ -476,14 +483,7 @@ func Fs73SkipOptionsRefusedAlike(t testing.TB, world *World) {
 	if out, ok := a.Push(dir, "origin", "HEAD:refs/heads/"+branch); !ok {
 		t.Fatalf("the base: %s", out)
 	}
-	for _, option := range []struct {
-		name string
-		args []string
-		env  []string
-	}{
-		{name: "no-verify", args: []string{"--no-verify"}},
-		{name: "skip-push", env: []string{"GIT_LFS_SKIP_PUSH=1"}},
-	} {
+	for _, option := range fs73SkipOptions() {
 		content, oid := fs73Object("fs73 skip "+option.name, 1500)
 		commit := a.Commit(dir, option.name, map[string]*string{option.name + ".bin": fs73Text(content)})
 		a.ResetLfsCalls()
@@ -512,6 +512,143 @@ func Fs73SkipOptionsRefusedAlike(t testing.TB, world *World) {
 			t.Fatalf("%s: evs's tip is %s, not %s", option.name, local, commit)
 		}
 		tip = commit
+	}
+}
+
+// One way a push leaves git-lfs's upload out.
+type fs73SkipOption struct {
+	name string
+	args []string
+	env  []string
+}
+
+// --no-verify, which skips git-lfs's pre-push hook, and GIT_LFS_SKIP_PUSH=1, which has it upload nothing.
+func fs73SkipOptions() []*fs73SkipOption {
+	return []*fs73SkipOption{
+		{name: "no-verify", args: []string{"--no-verify"}},
+		{name: "skip-push", env: []string{"GIT_LFS_SKIP_PUSH=1"}},
+	}
+}
+
+// The transports clause: see the file header.
+func Fs73OverHttpAndSsh(t testing.TB, world *World) {
+	t.Helper()
+	for _, transport := range []string{TransportHttp, TransportSsh} {
+		d, r := world.Device("fs73-"+transport, nil), world.Device("fs73-"+transport+"-r", nil)
+		branch := "fs73-" + transport
+		dir := d.CloneOver(transport)
+		push := func(env []string, args ...string) (string, bool) {
+			return d.GitIn(dir, env, append([]string{"push", "--porcelain"}, append(args, "origin", "HEAD:refs/heads/"+branch)...)...)
+		}
+		evsTip := func() string {
+			t.Helper()
+			if err := r.Replay(branch); err != nil {
+				t.Fatal(err)
+			}
+			return r.LocalRef("refs/heads/" + branch)
+		}
+		content, oid := fs73Object("fs73 "+transport, 2500)
+		d.ResetLfsCalls()
+		tip := d.Commit(dir, "over "+transport, map[string]*string{".gitattributes": Text(fs73Attributes), transport + ".bin": fs73Text(content)})
+		if out, ok := push(nil); !ok {
+			t.Fatalf("%s: the push: %s", transport, out)
+		}
+		if uploads := fs73Uploads(d.LfsCalls(), oid); len(uploads) != 1 || uploads[0].Err != nil || !uploads[0].Created {
+			t.Fatalf("%s: the object's uploads %+v", transport, uploads)
+		}
+		if local := evsTip(); local != tip {
+			t.Fatalf("%s: evs's tip is %s, not %s", transport, local, tip)
+		}
+		for _, option := range fs73SkipOptions() {
+			skipped, skippedOid := fs73Object("fs73 "+transport+" "+option.name, 1700)
+			commit := d.Commit(dir, option.name, map[string]*string{transport + "-" + option.name + ".bin": fs73Text(skipped)})
+			out, ok := push(option.env, option.args...)
+			fs73RefusedMissing(t, transport+" "+option.name, out, ok, skippedOid, false)
+			if local := evsTip(); local != tip {
+				t.Fatalf("%s %s: evs's tip is %s, not %s", transport, option.name, local, tip)
+			}
+			if out, ok := push(nil); !ok {
+				t.Fatalf("%s %s's commit with no skip option: %s", transport, option.name, out)
+			}
+			if local := evsTip(); local != commit {
+				t.Fatalf("%s %s: evs's tip is %s, not %s", transport, option.name, local, commit)
+			}
+			tip = commit
+		}
+	}
+}
+
+// The owned clause: see the file header.
+func Fs73OwnedRefHoldsWhenPrunedMeanwhile(t testing.TB, world *World, hold Fs73Hold) {
+	t.Helper()
+	a, p := world.Device("fs73-owned-a", nil), world.Device("fs73-owned-p", nil)
+	const base = "fs73-owned"
+	owned := "ur/" + a.SidecarId.String() + "/fs73"
+	content, oid := fs73Object("fs73 owned", 2200)
+	dir := a.Clone()
+	commitA := a.Commit(dir, "A holds O", map[string]*string{".gitattributes": Text(fs73Attributes), "o.bin": fs73Text(content)})
+	if out, ok := a.Push(dir, "origin", "HEAD:refs/heads/"+base); !ok {
+		t.Fatalf("A: %s", out)
+	}
+	a.Commit(dir, "B removes O", map[string]*string{"o.bin": nil})
+	if out, ok := a.Push(dir, "origin", "HEAD:refs/heads/"+base); !ok {
+		t.Fatalf("B: %s", out)
+	}
+	world.Jump(world.fs73Window(t, p) + 24*time.Hour)
+	// offline: the device's mount stopped, so its daemon takes the owned ref's push at once and its queue publishes
+	// nothing; git-lfs uploads nothing, since evs's base reaches A
+	a.Stop()
+	if out, ok := a.Push(dir, "origin", commitA+":refs/heads/"+owned); !ok {
+		t.Fatalf("the owned ref's push, offline: %s", out)
+	}
+	// meanwhile a prune by a device holding every ref evs holds removes O, which no tip of them needs
+	result, err := world.fs73Prune(world.ctx, p)
+	if err != nil || !slices.Contains(result.Removed, oid) {
+		t.Fatalf("the prune: %+v %v", result, err)
+	}
+	// online again: the queue's check before its first POST finds O missing and holds the entry, ur status naming it
+	refId, err := a.RefId(owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := sidecar.EvsKeyId(world.repoId) + ":" + sidecar.EvsKeyId(refId)
+	held, releaseHeld := hold(t, sidecartest.BarrierSite("evs.local.queue.held", key))
+	defer releaseHeld()
+	a.Start()
+	select {
+	case <-held:
+	case <-time.After(time.Minute):
+		t.Fatal("the owned ref's queue never held")
+	}
+	releaseHeld()
+	statuses, err := a.Mount.Receiver().JournalStatus()
+	if err != nil || len(statuses) != 1 || statuses[0].HoldCode != "lfs objects missing" || !slices.Equal(statuses[0].HoldLfsOids, []string{oid.String()}) {
+		t.Fatalf("ur status of the held queue %+v %v", statuses, err)
+	}
+	if summary := world.headSummary(t, p, refId); summary != nil {
+		t.Fatalf("evs holds the owned ref at version %d", summary.GetVersion())
+	}
+	// after the upload, ur evs retry releases the queue, which publishes A
+	a.MustGit(dir, "lfs", "push", "--object-id", "origin", oid.String())
+	applied, releaseApplied := hold(t, sidecartest.BarrierSite("evs.local.apply.done", key))
+	defer releaseApplied()
+	if released, err := a.Mount.Receiver().Retry(world.ctx, []byte(owned)); err != nil || len(released) != 1 {
+		t.Fatalf("ur evs retry released %q %v", released, err)
+	}
+	select {
+	case <-applied:
+	case <-time.After(time.Minute):
+		t.Fatal("the released queue's push never applied")
+	}
+	releaseApplied()
+	if statuses, err := a.Mount.Receiver().JournalStatus(); err != nil || len(statuses) != 0 {
+		t.Fatalf("ur status after the retry %+v %v", statuses, err)
+	}
+	if err := p.Replay(owned); err != nil {
+		t.Fatal(err)
+	}
+	if tip := p.LocalRef("refs/heads/" + owned); tip != commitA {
+		t.Fatalf("evs's owned ref is %q, not A %s", tip, commitA)
 	}
 }
 
