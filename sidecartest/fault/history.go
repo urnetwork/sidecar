@@ -291,7 +291,8 @@ func (self *History) Validate() error {
 }
 
 // The world's pushes as a history named name: each attempt an instance took (Attempts), with its times on the world's
-// logical clock, made by the device that posted its push id, at main, which is the one ref a world's devices write.
+// logical clock, made by the device that posted its push id, at the ref its statement named: main, the one ref a
+// general world's devices write, or a record-class world's stream (fs99_evs.go).
 // An attempt its instance never answered, and one answered 503 {outcome: unknown}, is unknown; a 200 commits at the
 // version it names; an answer that refuses aborts its push id; and an answer that refuses nothing is left out (the
 // file header). A device's own view of each push, the lb's answer, repeats an instance's answer, or reports that
@@ -302,13 +303,12 @@ func (self *EvsWorld) History(name string) *History {
 	for _, push := range self.Pushes() {
 		pushIdDevices[push.PushId] = push.Device
 	}
-	ref := HistoryRef{RepoId: self.RepoId, RefId: self.RefId()}
 	for _, attempt := range self.Attempts() {
 		operation := &Operation{
 			Kind:         OperationPush,
 			Actor:        pushIdDevices[attempt.PushId],
 			Instance:     attempt.Instance,
-			Ref:          ref,
+			Ref:          HistoryRef{RepoId: self.RepoId, RefId: self.pushRefId(attempt.PushId)},
 			PushId:       attempt.PushId,
 			Call:         attempt.Call,
 			Return:       attempt.Return,

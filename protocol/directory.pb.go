@@ -43,7 +43,7 @@ type DirectoryCard struct {
 	Seq           uint64                 `protobuf:"varint,3,opt,name=seq,proto3" json:"seq,omitempty"`                             // +1 a version; readers refuse one not above the last they accepted
 	At            *bridge.AuthPin        `protobuf:"bytes,4,opt,name=at,proto3" json:"at,omitempty"`                                // §7.9's pin, within 4,096 positions of the reader's state
 	WrittenMillis int64                  `protobuf:"varint,5,opt,name=written_millis,json=writtenMillis,proto3" json:"written_millis,omitempty"`
-	Items         []*Announcement        `protobuf:"bytes,6,rep,name=items,proto3" json:"items,omitempty"`      // <= 16: at most one worker item, then runs; <= 16,208 B in all
+	Items         []*Announcement        `protobuf:"bytes,6,rep,name=items,proto3" json:"items,omitempty"`      // <= 16: at most one worker item, then runs; <= 16,188 B in all
 	Version       uint32                 `protobuf:"varint,7,opt,name=version,proto3" json:"version,omitempty"` // 1
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

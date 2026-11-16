@@ -24,9 +24,12 @@
 // each in that table, which each sync keeps in step through urTunCarvedInterface, so the host reaches them by today's
 // route too, an off-link resolver among them, rather than through a tun that could only drop them (QD-808). On macOS
 // and Windows it goes on as IPv4's two halves (urTunExitsHalves), and connect's sockets are bound to the interface of
-// the host's own default route instead (tun_darwin.go, tun_windows.go). Where the platform cannot put it on, or the
-// host refuses it, the exits are held: the status says why, the host's other traffic keeps today's route, and the sync
-// tries again. Off exits, or once the tun ends, the route, the rules, the throws and the binding go.
+// the host's own default route instead (tun_darwin.go, tun_windows.go); there each carved address the host reaches
+// only by its default route, which a half would take into the tun, gets a host route by that route's gateway, kept
+// in step through urTunCarvedInterface as well (tun_host_routes.go; QD-869). Where the platform cannot put it on, or
+// the host refuses it, the exits are held: the status says why, the host's other traffic keeps today's route, and the
+// sync tries again. Off exits, or once the tun ends, the route, the rules, the throws, the host routes and the binding
+// go.
 //
 // A block of the network's that this device routes to another network, one it joined first holding the same block
 // (§17.4; bridge_shared_block.go), is withheld: each sync leaves the addresses, routes and names inside it off the
@@ -245,7 +248,8 @@ type urTunNamedInterface interface {
 }
 
 // An open tun whose platform passes the bridge's carved addresses back to the host's own route under exits, as Linux's
-// exits table does by a throw route each (tun_linux.go; QD-808), so the host's own traffic to one never meets the tun,
+// exits table does by a throw route each (tun_linux.go; QD-808) and macOS's and Windows' main table by a host route
+// for each one a half would take (tun_host_routes.go; QD-869), so the host's own traffic to one never meets the tun,
 // which could only drop it. Each sync hands it the carve after SetExits.
 type urTunCarvedInterface interface {
 	urTunInterface

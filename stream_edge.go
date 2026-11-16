@@ -117,9 +117,10 @@ type subprotocolProvideModes struct {
 }
 
 // Adds mode to what this dispatcher's client provides until the answer is called, on top of its own
-// Network (an edge's Service): Service while a tls/ or smtp/ registration lives (§13.6, SOCK-M5-11), and
-// FriendsAndFamily while an inbound share lives (PROTO-M6-01, ACL-M6-03). Holds count, so the mode goes
-// only once its last hold is released, and a release past the first does nothing. Public, and every mode
+// Network (an edge's Service): Service while a tls/ or smtp/ registration lives (§13.6, SOCK-M5-11) or a
+// ur/ stream this sidecar dialed does (QD-849, socket_dial.go), and FriendsAndFamily while an inbound share
+// lives (PROTO-M6-01, ACL-M6-03). Holds count, so the mode goes only once its last hold is released, and
+// a release past the first does nothing. Public, and every mode
 // but those two, is refused, since no sidecar provides Public (D-PROTO-6). The client's provide frame
 // goes to the platform at each change, so a hold costs one control message and the release another.
 func (self *Subprotocol) HoldProvideMode(mode connectprotocol.ProvideMode) (release func(), err error) {
