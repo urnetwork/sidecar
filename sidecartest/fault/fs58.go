@@ -12,11 +12,19 @@
 // head and the cache; a fold killed after its first entry write, then run again; two folds of the same versions on
 // two instances racing, one held before its entry write while the other finishes; reads at each step.
 //
+// The clause Fs58RecreatedAfterCollection (QD-879; question test-m2-04-recreate-after-collection): x.txt removed and
+// re-created by writerA, its versions continuing, then removed again; 70 versions on, a fold and a commit raise
+// folded_through past the removal by a base range and a marker collection deletes its marker. The reader, pinned
+// below the removal, and writerB, pinned past it, read x.txt absent, the first by the removal evs serves it from the
+// window and the second with nothing named; then writerA, the device that removed it, creates it again, which commits
+// at max(b, m) + 1, above every version it held (FI-15), and no device alarms.
+//
 // FS-58's page-out of a directory changed in every version, folds held until 255 versions (429 FOLD_BEHIND), the
 // idle ref's PATH_EPOCH folding every version, the newer-head and listing cases, the removal folds of D and D/x with
-// late marker PUTs, a file removed and re-created across a marker's collection and a path-epoch copy, versions not
-// max(b, m) + 1 refused, and the collection window with its clocks 50 ms off are EVS1-M2-41's report's; FI-15 holds
-// through the world's checks (TEST-M2-04).
+// late marker PUTs, a push based on a removed file's old version refused before and after its re-creation, a file
+// re-created after a path-epoch copy dropped its source marker, versions not max(b, m) + 1 refused, and the
+// collection window with its clocks 50 ms off are EVS1-M2-41's report's; FI-15 holds through the world's checks
+// (TEST-M2-04).
 
 package fault
 
@@ -109,4 +117,35 @@ func Fs58FoldKilledAndRaced(net *Net) *Schedule {
 		{Actor: "reader", Action: world.VerifyListing("reader", "docs", "a.txt", "b.txt", "c.txt")},
 	}...)
 	return &Schedule{Id: "FS-58 folds killed and raced", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
+}
+
+// See the file header.
+func Fs58RecreatedAfterCollection(net *Net) *Schedule {
+	world := NewEvsWorld(net, nil)
+	steps := []*Step{
+		{Actor: "writerA", Action: world.Setup},
+		{Actor: "writerA", Action: world.Write("writerA", "x.txt", EvsWorldContent("fs58 x 1", 200))},
+		{Actor: "reader", Action: world.Verify("reader", "x.txt")},
+		{Actor: "writerA", Action: world.Remove("writerA", "x.txt")},
+		// re-created under its marker: its versions continue
+		{Actor: "writerA", Action: world.Write("writerA", "x.txt", EvsWorldContent("fs58 x 2", 200))},
+		{Actor: "reader", Action: world.Verify("reader", "x.txt")},
+		{Actor: "writerA", Action: world.Remove("writerA", "x.txt")},
+		{Actor: "writerB", Action: world.WriteMany("writerB", "n/%03d.txt", 0, 35)},
+		{Actor: "writerB", Action: world.WriteMany("writerB", "n/%03d.txt", 35, 35)},
+		{Actor: "folder", Action: world.Fold("evs1")},
+		// raises folded_through past x.txt's removal by a base range
+		{Actor: "writerA", Action: world.Write("writerA", "y.txt", EvsWorldContent("fs58 y", 200))},
+		{Actor: "collector", Action: world.CollectMarkers()},
+		// the reader's pin is older than the removal, writerB's past it
+		{Actor: "reader", Action: world.Verify("reader", "x.txt")},
+		{Actor: "writerB", Action: world.Verify("writerB", "x.txt")},
+		// the device that removed it creates it again
+		{Actor: "writerA", Action: world.Write("writerA", "x.txt", EvsWorldContent("fs58 x 3", 200))},
+		{Actor: "check", Action: world.ExpectCommitted("writerA", "x.txt")},
+		{Actor: "reader", Action: world.Verify("reader", "x.txt", "y.txt")},
+		{Actor: "reader", Action: world.VerifyCached("reader", "x.txt", "y.txt")},
+		{Actor: "writerB", Action: world.Verify("writerB", "x.txt")},
+	}
+	return &Schedule{Id: "FS-58 re-created after a collection", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
 }
