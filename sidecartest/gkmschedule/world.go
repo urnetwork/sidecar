@@ -11,9 +11,10 @@ package gkmschedule
 // with each repo it read shrinking there; read_only leaves; the member's recovery bindings, a RecoveryBind and each
 // RecoveryRebind, newest first, a compromise one shrinking every repo the member reads, and a device the member's
 // recovery key admits, unadmitted until AdmitRecovered; Delegations, with the agents they admit and cover, a Suspend
-// dropping the Delegation's key, an Unsuspend, a DelegationRevoke ending it and a reap. What it leaves out:
-// owner-bound kinds, cascades (CascadeVoids answers false) and the config and directory groups' leaves rule past
-// their first 1,000 member devices.
+// dropping the Delegation's key, an Unsuspend, a DelegationRevoke ending it and a reap; and an owner-bound repo, a
+// mailbox, say, once Consent names its owner's consented devices: the world's member owns it (§8.5). What it leaves
+// out: an owner-bound repo's OwnerConfirm, parks and EvsShares, cascades (CascadeVoids answers false) and the config
+// and directory groups' leaves rule past their first 1,000 member devices.
 //
 // Interleavings are made at each device's transport, which holds a request while another device runs, loses an
 // answer gkm gave, or fails a request before gkm takes it, and at gkm's store, whose writes BlobWrite may fail or lose
@@ -166,6 +167,12 @@ func (self *FsKeysDevice) SidecarId() sidecar.Id {
 	return self.signer.SidecarId
 }
 
+// The device's identity key, which signs its statements: what another service's client of the device, its evs
+// client say, signs with.
+func (self *FsKeysDevice) Signer() *sidecartest.FakeGkmSigner {
+	return self.signer
+}
+
 // Whether the device holds a leaf: a member device.
 func (self *FsKeysDevice) member() bool {
 	return len(self.row.GetTagIds()) == 0
@@ -191,10 +198,12 @@ type FsKeysWorld struct {
 	// processes that hold another device's identity key and keychain, which take states but stand in no row
 	clones []*FsKeysDevice
 	// what the next position holds
-	readers        []sidecar.Id
-	writers        []sidecar.Id
-	admins         []sidecar.Id
-	depositors     []sidecar.Id
+	readers    []sidecar.Id
+	writers    []sidecar.Id
+	admins     []sidecar.Id
+	depositors []sidecar.Id
+	// an owner-bound repo's consented devices, nil while the repo is not owner-bound (Consent)
+	consented      []sidecar.Id
 	readerExpiries map[sidecar.Id]time.Time
 	suspended      map[sidecar.Id]bool
 	// the sidecars a rev/ object voids every token of (§7.8), which gkm reads before each request
@@ -799,6 +808,29 @@ func (self *FsKeysWorld) Depositor(devices ...*FsKeysDevice) {
 	}
 }
 
+// Makes the repo owner-bound by the world's member, as a mailbox or vault is (§8.5), devices among its consented
+// ones: the repo's row carries the owner and the consented devices from the next position, and KF1 forms its group
+// with the owner in ur_group. Only a consented owner device is added to the group; Grant still says who reads.
+func (self *FsKeysWorld) Consent(devices ...*FsKeysDevice) {
+	if self.consented == nil {
+		self.consented = []sidecar.Id{}
+	}
+	for _, device := range devices {
+		if !slices.Contains(self.consented, device.SidecarId()) {
+			self.consented = append(self.consented, device.SidecarId())
+		}
+	}
+}
+
+// The repo's owner, nil while it is not owner-bound.
+func (self *FsKeysWorld) owner() *sidecar.Id {
+	if self.consented == nil {
+		return nil
+	}
+	memberId := self.MemberId
+	return &memberId
+}
+
 // Ends a device's reading of the repo at at, a grant's expiry, which shows as the clock passes it with no entry
 // (§7.9's expiry row).
 func (self *FsKeysWorld) ExpireAt(device *FsKeysDevice, at time.Time) {
@@ -1001,7 +1033,14 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 			admins = append(admins, &protocol.AclRepoAdminRow{SidecarId: adminId.Bytes(), Signer: self.creator.Bytes(), At: 2})
 		}
 	}
-	repos := []*protocol.AclRepo{{RepoId: self.RepoId.Bytes(), Kind: self.Kind, Admins: admins, HoldersShrunkAt: self.shrunkAt[self.RepoId]}}
+	repo := &protocol.AclRepo{RepoId: self.RepoId.Bytes(), Kind: self.Kind, Admins: admins, HoldersShrunkAt: self.shrunkAt[self.RepoId]}
+	if owner := self.owner(); owner != nil {
+		repo.OwnerMemberId = owner.Bytes()
+		for _, sidecarId := range self.consented {
+			repo.ConsentedSidecarIds = append(repo.ConsentedSidecarIds, sidecarId.Bytes())
+		}
+	}
+	repos := []*protocol.AclRepo{repo}
 	if configShrunkAt := self.shrunkAt[self.ConfigRepoId]; self.ConfigRepoId != (sidecar.Id{}) && configShrunkAt != 0 {
 		// the config's row joins the rows at its first shrink, with no admins, sorted in, as TEAM's rows take it
 		// (QD-762); until then the view adds it from the fixture's ConfigRepoId
@@ -1207,9 +1246,13 @@ func (self *FsKeysWorld) putRepoState(state protocol.EvsRepoState) {
 func (self *FsKeysWorld) putRepoStateOf(repoId sidecar.Id, kind protocol.RepoKind, state protocol.EvsRepoState) {
 	self.t.Helper()
 	cluster := self.cluster()
-	body := self.marshal(&protocol.EvsRepoObject{
+	repoObject := &protocol.EvsRepoObject{
 		RepoId: repoId.Bytes(), Kind: kind, State: state, Format: 1, NetworkId: sidecar.Id(self.NetworkId).Bytes(),
-	})
+	}
+	if owner := self.owner(); owner != nil && repoId == self.RepoId {
+		repoObject.OwnerMemberId = owner.Bytes()
+	}
+	body := self.marshal(repoObject)
 	if err := self.putOver(cluster, gkmservice.GkmEvsRepoKey(repoId), body); err != nil {
 		self.t.Fatalf("repo/ %s: %v", state, err)
 	}
@@ -1227,7 +1270,9 @@ func (self *FsKeysWorld) Create(creator *FsKeysDevice) *sidecar.EvsRepoKey {
 	self.Place(creator)
 	var key *sidecar.EvsRepoKey
 	self.Again("KF1", func() (err error) {
-		key, err = creator.Client.CreateGroup(self.Ctx, &sidecar.GkmCreateGroupArgs{NetworkId: sidecar.Id(self.NetworkId), RepoId: self.RepoId, Kind: self.Kind})
+		key, err = creator.Client.CreateGroup(self.Ctx, &sidecar.GkmCreateGroupArgs{
+			NetworkId: sidecar.Id(self.NetworkId), RepoId: self.RepoId, Kind: self.Kind, OwnerMemberId: self.owner(),
+		})
 		return err
 	})
 	self.GroupId = key.GroupId()

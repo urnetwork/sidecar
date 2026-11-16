@@ -211,7 +211,7 @@ bound    overshoot past the balance is only what Redis loss over-admits, as for 
 cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Postgres round trip added
 ```
 
-**Empty balance.** A failed lease or relayed reservation, or an evs debit that finds no balance, marks the network *spent*: new streams get `quota` (§9.6), open ones reset as leases run out (§6.7), mxedge answers temporary failures (§15.6), evs refuses payload-adding uploads and pushes (20.7), and CreateContract refuses relayed sidecar contracts, so remote searches over them fail and phones search what they hold (§11.14); the network reads its own repos at `evs_unpaid_read_rate`, a phone's fallback download of all included, others' not at all.
+**Empty balance.** A failed lease or relayed reservation, or an evs debit that finds no balance, marks the network *spent*: new streams get `quota` (§9.6), open ones reset as leases run out (§6.7), mxedge answers temporary failures (§15.6), evs refuses payload-adding uploads and pushes (20.7), and CreateContract refuses relayed sidecar contracts, so remote searches over them fail and phones search what they hold (§11.14); the network reads its own repos at `evs_unpaid_read_rate`, a per-process token bucket per network at that rate divided by evs's blocks, so the network as a whole stays at the published rate, as §13.9's caps divide by blocks, a phone's fallback download of all included, others' not at all.
 
 ### 20.7 Enforcement points, counters, downgrade
 

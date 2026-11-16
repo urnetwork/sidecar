@@ -286,7 +286,7 @@ func NewSmtpEdgeService(ctx context.Context, host *ServiceHost, store SmtpEdgeSt
 func (self *SmtpSender) Send(ctx context.Context, message *SmtpOutboundMessage) (*SmtpSendResult, error)
 ```
 
-- **Shape.** One connect client per process on a platform JWT in `urnetwork-edge`, on the two sending hosts (§19.4); each dial binds one of its host's lb addresses in the sending set by fwmark; no lb route or inbound port.
+- **Shape.** One connect client per process in `urnetwork-edge`, its jwt from `server.NewPlatformClientSource` on the `edge` class's bearer (§13.6; owner decision 428), on the two sending hosts (§19.4); each dial binds one of its host's lb addresses in the sending set by fwmark; no lb route or inbound port.
 - **Prerequisites,** asked in M0, due at M9's entry review: HE's outbound TCP 25 and reverse delegation, with PTRs §12 serves from smtpedge.yml; the HELO names' A records and W7's rules (§19); SNDS, JMRP, Yahoo CFL and Postmaster Tools enrollment. No address sends until its PTR and its HELO name's A record agree (FCrDNS).
 - **Failure.** An edge crash resets its streams, and the sidecar retries on the §9 backup ticket; mail waits in the sender's queue or outbox, never at the edge. Losing Redis reloads halts from Postgres and restarts counters, failing open by at most a day's quota; DNS or MX failure returns TRY_LATER without a debit.
 - **Metrics** (`urnetwork_smtpedge_*`) carry results, modes, TLS levels and proof times, never network, domain or IP labels.
