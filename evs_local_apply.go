@@ -5,7 +5,8 @@
 // local/<repo_id>/, beside mirror/ and mounts/, each file rewritten whole:
 //
 //	ref/<ref_id>          EvsGitRef: name; version and chain; tip; applied_tip; deleted and the last tip; base; stuck_at
-//	                      and the spans a refusal stopped; tainted token paths; the source a version waits on
+//	                      with its signer and reason, and the spans a refusal stopped; tainted token paths; the source
+//	                      a version waits on, or the prefix rule set (held or update)
 //	tips/<ref_id>/<page>  the version-tip log, 4,096 versions a page, each {version, tip, flags}, appended as versions
 //	                      apply; commitless versions are left out (the tip before stands); a DELETE's tip is none
 //	tipindex/<oid byte>   commit oid -> (ref_id, version) for every tip a ref version had, 256 files by the first byte
@@ -173,6 +174,10 @@ type EvsGitRef struct {
 	Base *protocol.EvsOverlay
 	// The version a check refused, 0 for none: nothing applies past the version before it until a DELETE (8.5).
 	StuckAt uint64
+	// The refused version's signer and the alarm's reason, version_rule, tamper or prefix_rule, which `ur status`
+	// shows beside StuckAt; nil and empty for none.
+	StuckSigner *Id
+	StuckReason SidecarEvsAlarm
 	// Each span of versions a refusal stopped, [refused, the DELETE that ended it), 0 while it stands.
 	Stopped [][2]uint64
 	// The token paths the stopped versions changed, each with whether the last of those changes removed it, which the
@@ -181,6 +186,10 @@ type EvsGitRef struct {
 	// The source a version waits on, nil for none, and the version it waits for: no alarm of its own (8.5).
 	WaitingSource  *Id
 	WaitingVersion uint64
+	// The rule set a version's pin falls under, which this device holds pending or of a later release: the replay
+	// waits before that version with no alarm and no stuck_at (DESIGN-DETAILS 8.2.7's waiting u, 16.2.6), shown in
+	// `ur status` as held or update; empty for none.
+	WaitingRules EvsGitRuleWait
 	// The order replay applied this ref's newest version in, among the mount's refs: the higher, the more recent.
 	AppliedOrder uint64
 	// The epoch state of the head replay last reached, nil before one.
@@ -188,6 +197,16 @@ type EvsGitRef struct {
 	// ConflictBranchCount conflict branches stand: settle leaves the local ref alone.
 	SettleStopped bool
 }
+
+// Why a ref's replay waits on its repo's prefix rules (DESIGN-DETAILS 8.2.7's waiting u): a closed set.
+type EvsGitRuleWait string
+
+const (
+	// The rule set at a version's pin is pending on this device: its generation or its entry is not held yet.
+	EvsGitRuleWaitHeld EvsGitRuleWait = "held"
+	// The rule set at a version's pin is a later release's.
+	EvsGitRuleWaitUpdate EvsGitRuleWait = "update"
+)
 
 // EvsGitRef's stored form: ids and oids as hex.
 type evsGitRefRecord struct {
@@ -207,10 +226,13 @@ type evsGitRefRecord struct {
 	BaseRefId      string           `json:"base_ref_id,omitempty"`
 	BaseVersion    uint64           `json:"base_version,omitempty"`
 	StuckAt        uint64           `json:"stuck_at,omitempty"`
+	StuckSigner    string           `json:"stuck_signer,omitempty"`
+	StuckReason    string           `json:"stuck_reason,omitempty"`
 	Stopped        [][2]uint64      `json:"stopped,omitempty"`
 	Tainted        []EvsTaintedPath `json:"tainted,omitempty"`
 	WaitingSource  string           `json:"waiting_source,omitempty"`
 	WaitingVersion uint64           `json:"waiting_version,omitempty"`
+	WaitingRules   string           `json:"waiting_rules,omitempty"`
 	AppliedOrder   uint64           `json:"applied_order,omitempty"`
 	PathEpoch      []byte           `json:"path_epoch,omitempty"`
 	SettleStopped  bool             `json:"settle_stopped,omitempty"`
@@ -249,10 +271,13 @@ func (self *EvsGitRef) record() *evsGitRefRecord {
 		Peeled: evsOidText(self.Peeled), TipVersion: self.TipVersion, AppliedTip: evsOidText(self.AppliedTip),
 		Deleted: self.Deleted, LastTip: evsOidText(self.LastTip), StuckAt: self.StuckAt, Stopped: self.Stopped,
 		Tainted: self.Tainted, WaitingVersion: self.WaitingVersion, AppliedOrder: self.AppliedOrder,
-		SettleStopped: self.SettleStopped,
+		SettleStopped: self.SettleStopped, StuckReason: string(self.StuckReason), WaitingRules: string(self.WaitingRules),
 	}
 	if self.OwnerSidecarId != nil {
 		record.OwnerSidecarId = hex.EncodeToString(self.OwnerSidecarId[:])
+	}
+	if self.StuckSigner != nil {
+		record.StuckSigner = hex.EncodeToString(self.StuckSigner[:])
 	}
 	if self.Base != nil {
 		record.BaseRefId = hex.EncodeToString(self.Base.GetRefId())
@@ -293,7 +318,8 @@ func (self *evsGitRefRecord) ref() (*EvsGitRef, error) {
 		RefId: *refId, Name: self.Name, Kind: protocol.EvsRefKind(self.Kind), Mode: protocol.EvsRefMode(self.Mode),
 		Version: self.Version, Chain: [32]byte(chain), TipVersion: self.TipVersion, Deleted: self.Deleted,
 		StuckAt: self.StuckAt, Stopped: self.Stopped, Tainted: self.Tainted, WaitingVersion: self.WaitingVersion,
-		AppliedOrder: self.AppliedOrder, SettleStopped: self.SettleStopped,
+		AppliedOrder: self.AppliedOrder, SettleStopped: self.SettleStopped, StuckReason: SidecarEvsAlarm(self.StuckReason),
+		WaitingRules: EvsGitRuleWait(self.WaitingRules),
 	}
 	for _, field := range []struct {
 		text string
@@ -310,6 +336,9 @@ func (self *evsGitRefRecord) ref() (*EvsGitRef, error) {
 		return nil, invalid
 	}
 	if ref.WaitingSource, err = idOf(self.WaitingSource); err != nil {
+		return nil, invalid
+	}
+	if ref.StuckSigner, err = idOf(self.StuckSigner); err != nil {
 		return nil, invalid
 	}
 	if self.BaseRefId != "" {

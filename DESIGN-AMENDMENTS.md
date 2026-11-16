@@ -18,8 +18,8 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§8 Access control](#s8) | 1 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
-| [§15 The local email server, inbound mail, and burner email](#s15) | 11 | 19 |
-| [§16 The local MCP server and record primitives](#s16) | 28 | 21 |
+| [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
+| [§16 The local MCP server and record primitives](#s16) | 6 | 2 |
 | [§19 Server services](#s19) | 20 | 21 |
 | [§20 Tiers, quotas, metering, and billing](#s20) | 7 | 18 |
 | [§21 Abuse, safety, and legal process](#s21) | 17 | 17 |
@@ -210,260 +210,10 @@ Changes: BRIEF.md tlc bullet.
 
 Questions: `mail-m5-02-module-fetch.md`.
 
-### QD-106: What `creator` means, who may change a record, and what happens when the creator is gone
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8.*
-
-`creator` is the sidecar_id whose signed push wrote the record's first version, and a reader checks the field against that push's signer. §8's `mail:<alias>#listen` is evaluated at the reader's current state for the creator's subject: an untagged sidecar's member, a tagged one's tags, read from its `SidecarRow`, which outlives the device. So removing a device leaves its addresses standing, and revoking the grant ends them. A later version of `addr/` or `burner/` (burn, pause, resume, members) counts only if signed by a consented device (§8.5) of the member who owns the record's mailbox, or for a group by a repo admin of the group repo; another signer's version is ignored with `mail_receiver_alarm`. 'Created only if absent' bars a second first version, not a state change. After a compromise revocation the owner's devices list the addresses that device created.
-
-Changes: §15.7 mailcfg; §15.8 Address directory.
-
-Questions: `plan-MAIL-small-readings.md#15`.
-
-### QD-118: How the census reports per-ASN, by-volume SNI loss with no sender address kept
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Scripted census, the question's option 1, with the bar restated. A test network in main, dark (owner decision 91), takes mail one sender at a time: provider test accounts, ESPs and real sign-ups at the top-100 list. `sidecartest/mailcensus` joins each sender's window with the router's existing `urnetwork_mxedge_*` result counters and the test receiver's own view, one row per sender: sender, ASN, SNI, DANE, TLS version, plaintext fallback. The ASN column comes from the census's own sender list, never from `sender_ip` at the router, so mx-1, mx-2 and ops-1 stay as written. D-MAIL-9's 'by volume' cannot be measured this way, so the proposed bar becomes: the share of sign-up senders without SNI, each weighted 1/rank in the sign-up list, under 5%, shown beside the unweighted share. Report senders are listed but left out of the bar, because `rpt.bringyour.com` terminates every session, SNI or not (D-SMTP-19).
-
-Changes: D-MAIL-9.
-
-Questions: `plan-MAIL-census.md`.
-
-### QD-189: §15.6's router has no way to name the lapsed receivers it must wake
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-No new route. `{mxr_<net>}`'s value gains `receiver_sidecar_ids`, at most 64, newest first, from `mail_host_key` rows for that host in state published, which `model.ProjectMailRoutes` writes on each key change. On a miss the router calls `Push.HintSidecars(ctx, ids, &ClientHint{Topic: "mail", Kind: 0x1702, Body: MailHint{RECEIVER_NEEDED, host}, Forced: true})` asynchronously, so the hold never waits on it and no Postgres query joins the path. The host resolves sidecars to clients as plan-KEYS-hint-addressing settles. The direct-MX alert is raised off the path by the prober, which reads the same ids from `mail_host_key`, since `{mxr_}` drops a direct-MX network. A device that misses either sees `direct_mx` in `GET /mail/status`.
-
-Changes: §15.6 step 5; §15.15 {mxr_}.
-
-Questions: `plan-MAIL-hints.md#2`.
-
-### QD-196: A deposit's evidence exists only after the body, and §15.5 budgets the checks but not the upload
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11.*
-
-Keep `Deposit(name, reader)` and add no `BeginDeposit`. The sealed header goes last, inside the deposit's own stream: deposit plaintext = message bytes ‖ `MailDeposit` ‖ u32be(length of `MailDeposit`). The receiver's reader yields bytes from `mailSpool` as they arrive, blocks at the message's last byte until the checks finish, then yields the trailer, and EOF commits. Segments upload as they fill (8 MiB, §11.6), so a message under one segment uploads once, after the checks. To evs the trailer is body, sealed under the object key whose slot CONSUME and ERASE destroy, so it needs no K_dep and plan-EVS1-format-bytes#5's clause on §15.7's header drops. STREAM's final flag authenticates the tail, and a reader takes the trailer by ranged read before the body. The first repo streams live; a further repo, or a rebuild after 412 GATE_CLOSED, replays from the spool under a new object key and new slot ids, at most 4 at once, 2 on mobile. An aborted DATA ends the reader with an error, so no push commits and the uploads fall to §11.13's orphan rule. The spool stays sealed under a per-message key held only in memory.
-
-Changes: §15.5 Session; §15.7 Deposit; plan-EVS1-format-bytes#5 (its §15.7 clause).
-
-Questions: `plan-MAIL-deposit-shape.md`.
-
-### QD-208: One failure across several repos, and the retry that repeats the others
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §20, §4.*
-
-Any deposit failure answers `451 4.3.0`, and the sender's retry duplicates in repos that took it. To bound that: new `sidecar_abuse:` key `mail_inbound_repos_per_message: 8`. A RCPT that would add a ninth distinct repo gets `452 4.5.3`, and the sender sends those recipients in a later transaction (RFC 5321 §4.5.3.1.10). A group repo counts as one. `mail_inbound_recipients` stays 100.
-
-Changes: §15.5 Session; §20.4 sidecar_abuse.
-
-Questions: `plan-MAIL-small-readings.md#16`.
-
-### QD-228: No risk row says a compromised receiver can forge reception-time verdicts
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-Add a §15.16 row: "A compromised admitted receiver seals passing verdicts for forged mail, which ingest, checking only the hash and the signer, labels validated | Low | High | per-device keys, I-15, Team scopes, listed mail indexers and the undesignated-receiver alarm (D-MAIL-15); the label states its basis, and any re-check shows apart (D-MAIL-14)". Add a §2.10 row: adversary, a compromised receiver; threat, reads mail in transit and seals forged verdicts; mitigation, those same controls; residual, what it sealed until revoked, since readers never re-judge reception-time evidence. D-MAIL-14 and D-MAIL-15 stand.
-
-Changes: §15.16; §2.10.
-
-Questions: `g0-recheck-0-receiver-evidence.md#2`.
-
-### QD-243: Two roles cannot share one deployment service
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-[plan-MAIL-small-readings#19] Two warp services, `mxedge` and `mxedge-platform`, each a thin `server/cli/<dir>` over a shared `server/mxedgehost`, as OPS's reading 6. §15.15's Services line, §19.4's row, W4 and D-OPS-11's classes and §19.11's staged list name both. [plan-OPS-small-readings#6] `server/cli/dnsedge/` and `server/cli/mxedge-platform/` hold only a Makefile that builds the shared main and a Dockerfile that picks the role, so each plan's one binary stays one binary. W4 routes `rpt.bringyour.com`'s two interfaces to `mxedge-platform`. §19.4's mxedge row splits into two services, and §19.11's classes add `mxedge-platform` under `--only-older` and to the staged list after `mxedge`.
-
-Changes: §15.15; §19.4; §19.5 W4; D-OPS-11; §19.11.
-
-Questions: `plan-MAIL-small-readings.md#19`, `plan-OPS-small-readings.md#6`.
-
-### QD-255: Per-network caps cannot answer 421, since the network is known only after STARTTLS's 220
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Per-sender caps (/64 or /32, with /48 and /24 aggregates) are checked at connect and answer `421 4.7.0` before TLS. '2 sessions per sender /24 per network' and 'per network' are checked once SNI names the network and close in the handshake, a temporary failure that writes `{mxc_}` like any closed handshake. §15.4's cap row says so.
-
-Changes: §15.4 situation table.
-
-Questions: `plan-MAIL-small-readings.md#1`.
-
-### QD-262: §15.5 counts DohCache hits on a path that has no cache
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Option 1. §15.5 names MailDnsStub, a per-receiver cache in front of DohCache.Forward: answers kept by record TTL, at most 3,600 s; NXDOMAIN and NODATA for min(SOA minimum, 300 s), not at all without an SOA; never a failure, timeout or budget refusal; 4,096 entries, least recently used out; memory only. §15.5's dns row says "beyond stub hits" and AuthLimits.dns_queries's comment "stub hits excluded", with no field change. ext-3's "at most 64" stands.
-
-Changes: §15.5 dns row; AuthLimits.dns_queries comment.
-
-Questions: `g0-recheck-0-receiver-evidence.md#1`.
-
-### QD-277: FS-123's last clause contradicts §15.9's and §18.5's coverage copy
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18.*
-
-FS-123's clause reads: GetReceiverCoverage's copy speaks of no sending, and every send copy names no indexer, receiver or coverage setting.
-
-Changes: FS-123.
-
-Questions: `plan-MAIL-small-readings.md#21`.
-
-### QD-309: §15.10's `sent` copy is not in §15.7's layout
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A sent copy is an ordinary `m/` and `i/` entry with label `sent` in `f/`, pushed by the sending device.
-
-Questions: `plan-MAIL-small-readings.md#9`.
-
-### QD-329: A signature failing under a header section cut at 256 KiB
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-That signature is `incomplete`, not `fail`, and `limits.reason` sets bit 1.
-
-Questions: `plan-MAIL-small-readings.md#12`.
-
-### QD-332: mox answers permerror for any signature with `l=`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Keep it: a signature with `l=` is `permerror`, so no result, refusing no mail.
-
-Questions: `plan-MAIL-small-readings.md#11`.
-
-### QD-333: `DmarcResult` has no permerror
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-An invalid DMARC record maps to `none`.
-
-Questions: `plan-MAIL-small-readings.md#13`.
-
-### QD-349: mox's `junk` does not fit `s/model`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-MAIL-M7-12 builds a small per-mailbox naive Bayes filter of its own, kept in the one `s/model` file.
-
-Questions: `plan-MAIL-mox-subset.md#2`.
-
-### QD-352: A session with no network cannot leave a `mail_connection_record` row
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A session whose SNI is absent or unknown leaves no row and counts only in `urnetwork_mxedge_*`, which carries no network label.
-
-Questions: `plan-MAIL-small-readings.md#3`.
-
-### QD-353: `mail_operators.yml` with no YAML parser in the root
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`go generate` writes `mail_operators_gen.go` from the file, and `make check`'s stale-code rule keeps them equal.
-
-Questions: `plan-MAIL-small-readings.md#18`.
-
-### QD-370: Which EHLO is SPF's HELO identity
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-SPF's HELO check takes the post-TLS EHLO the receiver saw. `MailIngress.ehlo_name` stays the pre-TLS name.
-
-Questions: `plan-MAIL-small-readings.md#14`.
-
-### QD-405: Who raises `MailHint{deposit}`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §18.*
-
-Nobody. `deposit` stays reserved and is never sent. A new deposit reaches readers through evs's `evs:<repo_id>` hint and §18.7's wake, which covers topic `evs`.
-
-Changes: §15.15.
-
-Questions: `plan-MAIL-hints.md#1`.
-
-### QD-432: Who fixes the bytes of the §15 formats the design names but does not define
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §6, §14.*
-
-[plan-MAIL-format-bytes] Option 1. MAIL-M7-01 writes `protocol/mail.proto` and `protocol/MAIL-FORMAT.md`, pins them in `testdata/mail/` vectors, and `design-records` folds them into §15 for M7's Gn-in; nothing waits. Rows #1 to #7 give the values it uses. [plan-MAIL-format-bytes#1] In `protocol/mail.proto`: `message MailDeposit { uint32 version = 1; MailIngress ingress = 2; MailAuthEvidence evidence = 3; string mail_from = 4; bool require_tls = 5; repeated string recipients = 6; uint32 tls_version = 7; uint32 tls_suite = 8; bytes receiver_sidecar_id = 9; }`. `recipients` holds this repo's only. `tls_version` and `tls_suite` are the IANA values. A same-network deposit sets 1, 4 and 6 only, its signature being the deposit's EvsPush signer. It travels as plan-MAIL-deposit-shape's trailer, inside the body under the deposit's object key. [plan-MAIL-format-bytes#2] `message MailHint { uint32 kind = 1; string host = 2; }`, at most 256 B in `PushHint.hint`, with `PushHint.kind` 0x1702. `kind`: 1 DEPOSIT, reserved and never sent; 2 RECEIVER_NEEDED; 0 a protocol error (§6.11). `host` is `mx` or `mx.<scope>`. [plan-MAIL-format-bytes#4] Numbers follow §15.7's and §15.8's brace order; ids are 16-byte `bytes`, times `uint64` ms, enums have a zero UNSPECIFIED. `MailAddress`: kind 1 (1 admin, 2 id, 3 group, 4 agent, 5 burner, 6 bounce), mailbox 2 (repo id), members 3 (repeated), creator 4 (sidecar_id), effect_key 5. `MailBurner`: mailbox 1, state 2 (1 live, 2 paused, 3 burned), replying 3, created_ms 4, effect_key 5. `IndexEntry`: id 1, address 2, time_ms 3, from 4, subject 5, snippet 6 (at most 200 B), message_id 7, thread_key 8, size 9, attachments 10 (repeated {name 1, type 2, size 3}), auth_results 11, tls_label 12, tls_basis 13 ({rule 1: 1 requiretls, 2 operator; operator_id 2; list_version 3; strict_custom_mx 4}), spam_score 14, one_time_code 15. `VaultEntry`: entry_id 1, address 2, title 3, username 4, password 5, password_history 6, totp 7 ({secret 1, algorithm 2, digits 3, period 4}), urls 8, notes 9, used_at 10 (repeated {registrable_domain 1, first 2, last 3}), created 11, updated 12, state 13. `mailcfg` records take their signature from the version's EvsPush signer, so they need no SignedType. [plan-MAIL-format-bytes#5] One protobuf per file. `i/`: `MailIndexSegment{repeated IndexEntry entries = 1}`, at most 1 MiB or 4,096 entries, `<n>` decimal from 0 each month. `f/`: `MailFlagSegment{repeated MailFlagOp ops = 1}`, at most 4,096; `MailFlagOp{message_id 1, op 2 (1 seen, 2 flagged, 3 label, 4 trash), set 3, label 4, hlc_ms 5, hlc_count 6, sidecar_id 7}`. The clock: hlc_ms = max(wall ms, the highest hlc_ms seen), hlc_count 0 when wall time advanced it, else one more; last writer wins by (hlc_ms, hlc_count, sidecar_id) compared in that order. `r/`: `MailGroupRef{repo_id 1, message_id 2}`. `or/`: `MailOutcome{repeated SmtpDomainOutcome domains = 1}`, `SmtpDomainOutcome{domain 1, mode 2, byte_count 3, cap_byte_count 4, outcome 5 (1 sent, 2 queued, 3 deferred, 4 too_large, 5 refused, 6 tls_refused, 7 failed), reply_code 6, retry_after_ms 7, update_time_ms 8}`. `p/`: `MailProverRecord{data_proof_bytes 1, data_bytes_per_s 2, measure_time_ms 3}`. `forward`: `MailForward{address 1, burners 2, verified_time_ms 3}`, signed by its push. `ra/`: `MailReverseAlias{original_sender 1, burner_address 2}`. `s/model`: `MailSpamModel{version 1, counts 2}`, MAIL-M7-12 defining `counts`. `o/`: plan-SMTP-wire-gaps#4. [plan-MAIL-format-bytes#7] The router's builder holds `ip_listings` to at most 16 entries of at most 12 B, then, if the message still passes 1,024 B, drops `ptr_name` first and `ip_listings` from the end next. `version`, `sender_ip`, `sender_port`, `sni`, `ehlo_name` and `receive_time_millis` are never dropped. This reverses the question's order. [plan-SMTP-wire-gaps#4] `o/`: `u32be(length) ‖ Signed ‖ message bytes`. The `Signed` has `SIGNED_SMTP_OUTBOX = 0x1601`, purpose `smtp-outbox`, and its body is `SmtpOutboxEntry{effect_key 1, message_sha256 2, sender 3, recipients 4, flags 5, tl4_domains 6, create_time_ms 7}`. `or/` and `p/` are plan-MAIL-format-bytes#5's `MailOutcome` and `MailProverRecord`. [mail-proto-format-readings] Accept items 1 to 16 as landed in protocol/mail.proto, protocol/MAIL-FORMAT.md and testdata/mail/vectors.yml; design-records folds them into §15 with plan-MAIL-format-bytes. Item 2 adds `tls_level` to §14.5's MailOutcome. Item 3's `MAIL_TLS_MEMBER_SIGNED` is taken only if the push's signer may send as the From address. Item 9: MAIL-M7-16 decides whether a trash op's 30-day shred needs a guard against a slow device clock. [plan-MAIL-format-bytes#6] Nothing to do: `protocol/mail.proto` and `protocol/smtp.proto` exist on `sidecar`.
-
-Changes: §15.7; §15.15; §15.8; §15.5 MailIngress; §6.11 SignedType; §14.5; §15.5; §15.7; §15.8.
-
-Questions: `plan-MAIL-format-bytes.md`, `plan-MAIL-format-bytes.md#1`, `plan-MAIL-format-bytes.md#2`, `plan-MAIL-format-bytes.md#4`, `plan-MAIL-format-bytes.md#5`, `plan-MAIL-format-bytes.md#6`, `plan-MAIL-format-bytes.md#7`, `plan-SMTP-wire-gaps.md#4`, `mail-proto-format-readings.md`.
-
-### QD-470: go-imap v2 has only pre-release tags
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Pin v2.0.0-beta.8, or a newer v2 tag if one exists when MAIL-M8-07 starts, with its `dependencies.yml` row saying it is a pre-release.
-
-Changes: dependencies.yml.
-
-Questions: `plan-MAIL-small-readings.md#20`.
-
-### QD-478: `POST /mail/enable` and `GET /mail/status` have no bodies
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`POST /mail/enable` takes an empty body and returns `{enabled_time}`; plan-SMTP-report-seal-key adds no field. `GET /mail/status` returns `{enabled, storage_full, spent, direct_mx}`. A receiver reads status at most every 30 s for RCPT's `452 4.2.2`, and takes SIZE, `mail_inbound_recipients` and the burner limits from `GET /sidecar/limits`.
-
-Changes: §15.15.
-
-Questions: `plan-MAIL-small-readings.md#7`.
-
-### QD-480: `{mxr_<net>}`'s key and value
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`<net>` is the SNI's routable part: a label, an alias or a custom MX host's full name. The value holds `network_id`, the host (`mx` or `mx.<scope>`), flags, and plan-MAIL-hints#2's `receiver_sidecar_ids`. A suspended network has no entry, so its SNI closes in the handshake.
-
-Changes: §15.15.
-
-Questions: `plan-MAIL-small-readings.md#4`.
-
-### QD-535: SpfResult, DkimResult, DmarcResult, ArcResult and their verdict enums
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-[protos-services-unwritten-numbers#5] As landed in mail.proto: verdict enums of 0 unspecified then §15.5's values in order; DmarcResult.alignment bits 1 SPF aligned, 2 DKIM aligned; ArcResult{cv, repeated ArcSet}, ArcSet{domain, selector, public_key}. MAIL-M7-01 may renumber until M7's Gn-in (plan-MAIL-format-bytes). [plan-MAIL-format-bytes#3] As landed in protocol/mail.proto on `sidecar`: `SpfResult`, `DkimResult`, `DmarcResult`, `ArcResult`, `ArcSet` and their verdict enums, 0 unspecified then §15.5's values in order, numbers open to review until M7's Gn-in.
-
-Changes: §15.5.
-
-Questions: `protos-services-unwritten-numbers.md#5`, `plan-MAIL-format-bytes.md#3`.
-
-### QD-537: §15.4 fixes only one cap number
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`MxEdgeSettings` fields, set in `config/<env>/mxedge.yml`, tuned at T5: 8 sessions per sender /64 or /32, 32 per /48 or /24, 256 per network, and §15.4's 2 per sender /24 per network.
-
-Changes: §15.4.
-
-Questions: `plan-MAIL-small-readings.md#2`.
-
-### QD-540: The platform listener's message cap
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`PlatformMessageByteCount`, default 16 MiB, advertised in SIZE; past it `552 5.3.4`.
-
-Changes: §15.4.
-
-Questions: `plan-MAIL-small-readings.md#17`.
-
-### QD-541: Other pre-TLS commands have no reply
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Any other command before TLS (RSET, NOOP, VRFY, HELP and so on) gets `502 5.5.1`, within connect's 2,048 B and 510 B per line.
-
-Changes: §15.4.
-
-Questions: `plan-MAIL-small-readings.md#6`.
-
-### QD-543: go-smtp's `LIMITS RCPTMAX` is not in §15.5's EHLO list
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Leave `MaxRecipients` 0 and enforce `mail_inbound_recipients` in `Session.Rcpt` with `452 4.5.3`.
-
-Changes: §15.5 Session.
-
-Questions: `plan-MAIL-small-readings.md#10`.
-
-### QD-582: mox has no ARC
-*Settled by the agents from the design; work builds on it.*
-
-MAIL-M7-09 builds ARC in-house under §15.5's `arc` row, writing header canonicalization there since mox keeps its own unexported.
-
-Questions: `plan-MAIL-mox-subset.md#1`.
+Not folded (2026-11-16): it changes only the run's brief, which carries it (BRIEF.md's paragraph of 2026-11-08 on Go modules through the module proxy); DESIGN.md sets no rule for what a build track fetches, and §4's Go line already takes the toolchain through the module proxy, checked against Go's checksum database (owner decision 272).
 
 <a id="s16"></a>
 ## §16 The local MCP server and record primitives
-
-### QD-013: No path returns a non-grant ApprovalDecision to a deposit-only requester, or an admin's to a member
-*Decided by the owner: owner 2026-11-06. Also amends §7, §8, §6, §2, §10.*
-
-follow Proposed as the rule (the sealed ApprovalDelivery delta). (The recommendation it replaces: Add `ApprovalDelivery{header, requester_sidecar_id, sealed}`, a §7.9 delta with SignedType 0x1110, filed by the approver's device after it signs. `sealed` is the Signed ApprovalDecision or ApprovalCancel, HPKE-XWing to the requester's current ReaderKey (gkm/rk/<sidecar_id>, §10.5), so only the requester opens it, which is tighter than the question's sealing to the config generation. It counts against config_statements_per_day, adds one api-7 clause (signer, requester_sidecar_id, size) and authorizes nothing: the requester still runs §16.6's spend check. It serves tagged and ephemeral requesters, admin approvals of non-grant actions and §16.11's endorsement, so `filed_by` 3 keeps its meaning. Grants keep GrantActivate.)
-
-Changes: §16.6 flow; §16.8 Approvals; §16.11 endorse; §7.9 records; §8.8 statements; §6.11 SignedType; §2.8 api-7.
-
-Questions: `plan-RECORD-deposit-only-decisions.md`.
 
 ### QD-018: A forged SessionStart can leave a tainted run behind
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §5.*
@@ -474,113 +224,7 @@ Changes: D-MCP-16; §16.6 monotone; §16.6 run file; §16.6 rejoin; FS-27; §2.1
 
 Questions: `plan-MCP-taint-new-session.md`.
 
-### QD-041: How ur in a cloud VM gets its auth key, when setup is cached and environment variables reach the agent
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §5, §7.*
-
-Recommended: a key file, never an environment variable. The environment's setup step writes the whole key string to a mode 0600 file, which the platform's snapshot keeps. The `--project` cloud profile's committed SessionStart hook runs `ur connect --token-file <path> --ephemeral` before any other `ur` step (a new flag beside `--token`): `ur` reads the file, enrolls, unlinks it and erases its copy, so the key is gone from the running VM before the agent's first turn. `ur` reads no key from any environment variable and refuses to enroll if `ur-authkey-` appears in its own environment. The key is a Delegation key with `max_admits` above 1 and §7.8's 30-day cloud `not_after`, because every session starts from the same snapshot; where a platform runs setup per session, a single-use key works and is preferred. Since a paused VM loses its processes, a cloud sidecar keeps its keychain in a 0600 file rather than memory, so a restored VM rejoins until its client is reaped (§7.7, 30-36 min); after that `ur` stays Unenrolled, capture spools, and a new session enrolls. §16.9 states the residual: anyone who uses the environment can read the key in its setup text, every snapshot holds it, and a copy admits fresh agents until the Delegation ends (§7.9).
-
-Changes: §16.9; §5.6 ur connect row and Enrollment; §16.16 Provides.
-
-Questions: `plan-MCP-cloud-auth-key.md`.
-
-### QD-048: §16.10 fetches a hinted repo before phase 1, which contradicts D-EVS-50 and §2.8's promise for desktops
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §5, §2.*
-
-Recommended: no fetch at search time. Hint coalescing becomes leading-edge: the first hint for a repo in a quiet Search.HintCoalesce interval fetches at once, and later hints in it wait for its end. A search reads only the cache. A version hinted but not fetched when a search starts counts as uncovered, so coverage reports it and it is never silently absent (FI-18). §16.10's sync row drops 'brought current before phase 1', and its Targets row reads 'a commit hinted before a search starts, unless inside a burst already coalescing, in that search's phase 1'.
-
-Changes: §16.10 sync row; §16.10 Targets row; §5.4 HintCoalesce.
-
-Questions: `plan-SEARCH-sync-before-search.md`.
-
-### QD-064: Which CanonicalAction fields each server path may carry, and narrowing §16.8's "every field is sealed"
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §2.*
-
-§16.8 says "every field of an entry is sealed" and lists, per kind, what an action bound for a GrantActivate or a gate may set: kind, version, scope and the fields that path's gate sees. A grant: 8, 10, 11, 28, 29, and on a publish 5, 6, 7, 33 and 35. A version-3 access_request: 8, 10, 11, 14, 26, 27, 29. A `dns_*` action: 8 and 18-21. Whether a dial or route grant's prefixes and ports stay clear follows plan-BRIDGE-gate-row-prefixes.md#2, and this list follows that answer. api, every reader's GrantActivate check and each gate parse the stored bytes and refuse any other set field; MCP-M3-02's kind table gains that column. local_port, weight and alpn leave CanonicalAction (24, 25 and 34 become reserved, record.proto being unfrozen until M3) for sealed ApprovalRequest fields 14, 15 and 16, daemon-built and rendered by approvers (or `sealed_detail`, if that row's option is taken). `spendable`'s daemon side adds: d.request_sha256 = SHA-256(its stored ApprovalRequest), applying those values. Every O tool taking local_port binds it this way: socket_listen, tls_publish, bridge_forward and bridge_expose. api-10 gains kind, version, scope and the `dns_*` fields, api-7 gains kind, version and scope, and AD4 stands unchanged.
-
-Changes: §16.6; §16.8; §8.8; §2.8 api-7; §2.8 api-10.
-
-Questions: `protos-services-canonical-action.md`.
-
-### QD-073: The list of allowed passkey origins does not exist
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6.*
-
-[protos-bridge-presence-gaps#2] One constant table in protocol/bridge/signed_presence.go. iOS, macOS, Windows and every CTAP client: https://ur.io. Android: android:apk-key-hash:<base64url SHA-256 of the release signing certificate>, a release input the owner supplies. VerifySigned and VerifyPresenceCountersign read the table and refuse any other origin, so only signCount stays with callers and §6.9's signature does not change. ecdsa-p256-sha256 has no origin. [plan-MCP-presence-origins#1] §16.6's webauthn-es256 per-use row gains this table, held in `webAuthnOrigins` in protocol/bridge/signed_presence.go, which `VerifySigned` and `VerifyPresenceCountersign` read, so every verifier refuses alike and §6.9's signature stays. `https://ur.io`: iOS passkeys, Windows Hello through the platform WebAuthn API, and FIDO keys over CTAP2, where `ur` builds client data and writes this value. `android:apk-key-hash:<unpadded base64url of SHA-256 of the signing certificate>`: Android passkeys. Exact match, no subdomains, no wildcard; option 2 is refused. The Android entry holds only the certificate that signs released builds: `mmm/ur.io/astro/public/.well-known/assetlinks.json` lists five fingerprints, and android/DEEP_LINKS.md says developer debug keys are among them, so copying that list would accept a debug-signed build. The owner names that one fingerprint, and the entry lands with M8's Android host, verifiers before the app, since the table is values in a release and no frozen format. Tests use fixture origins in testdata/.
-
-Changes: §16.6; §6.9; §16.6 webauthn-es256 per use.
-
-Questions: `protos-bridge-presence-gaps.md#2`, `plan-MCP-presence-origins.md#1`.
-
-### QD-089: Under Padmé a private marker's entry is smaller than a full repo item, so evs can tell which new repos are private
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11.*
-
-Add `bytes pad = 14` (zero bytes) to `Announcement`. Every kind-repo announce entry, announcement or private marker, sets pad so the marshaled Announcement fills the next multiple of 2,048 B, which is exactly 2,048 B at every cap (a full item is under 1.2 KiB). Run and worker entries leave pad empty, and cards and r/ files keep their 2 KiB file steps. §16.11's caps row reads: entries by §11's Padmé, kind-repo announce entries at 2 KiB.
-
-Changes: §16.11 Announcement; §16.11 caps row.
-
-Questions: `plan-RECORD-m6-carrier.md#2`.
-
-### QD-100: approval_use lacks the not_after that its retention and sweep are measured from
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §8.*
-
-Add `not_after timestamp NOT NULL` to `approval_use`, holding the effective expiry the gate checked: the decision's `not_after_millis`, or the earliest under k approvers (§16.6's k approvers row). Every row carries it, done and cancelled alike. Add `CREATE INDEX approval_use_not_after ON approval_use (not_after)`. The taskworker sweep runs hourly and deletes rows where `not_after < now() - interval '1 day'`; it never reads `create_time`. Text edits: §16.6's `server` row gains the column. §2.8 api-10's `sees` reads "its index, effect key (...), state (done or cancelled), result, time and the decision's expiry", and its ttl reads "(ids, hashes, state, result and expiry only)". §8.10's sentence reads "`approval_use` only the approval id, use index, effect key, state, result and the decision's expiry". metadata_list.yml follows §2.8. The question's option 2 is refused: no 30-day ceiling exists to sweep by, since maxExpiry bounds grants and a rule may raise it (§8.6; acl.proto `AclRequestRule` field 8).
-
-Changes: §16.6 server; §2.8 api-10; §8.10 gate paragraph.
-
-Questions: `plan-MCP-approval-use-columns.md#1`.
-
-### QD-103: Sealing whole harness files would taint every run, so the seal must cover what ur installed
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§16.7's "sealing each file's hash" becomes "sealing a hash of `ur`'s entries in each file". The adapter extracts only what `ur` wrote. Claude Code: `mcpServers.ur` in `~/.claude.json` (`.mcp.json` with --project), and in `~/.claude/settings.json` (`.claude/settings.json` with --project) each `permissions.ask` rule and each hook entry whose command is this `ur`'s absolute path. Codex: `[mcp_servers.ur]` with its per-tool `approval_mode` in `~/.codex/config.toml`, and `ur`'s entries in `~/.codex/hooks.json`. Cursor: `mcpServers.ur` in `~/.cursor/mcp.json` and `ur`'s entries in `~/.cursor/hooks.json`. Each set is rendered as RFC 8785 canonical JSON (TOML parsed to the same form) and hashed with SHA-256, and the harness config hash, RECORD.md's `config_sha256`, is SHA-256 over the per-file hashes in that order: one rule for every file, no whole-file branch. The sealed value comes from `ur`'s own template at install, never from the file as found, so re-running `ur install-harness` restores entries and cannot bless a widened rule. The check at SessionStart and every 5 min compares a fresh extract and also counts as changed any other entry that can answer for a `ur` tool: a hook on PermissionRequest, PreToolUse or beforeMCPExecution whose matcher covers the `ur` server, or a `permissions.allow` rule naming it, in those files and, at SessionStart, in the project settings files of the session's working directory. An edit elsewhere in a file changes nothing.
-
-Changes: §16.7 install paragraph; RECORD.md section 5.1 config_sha256.
-
-Questions: `plan-MCP-config-hash-scope.md`.
-
-### QD-104: An agent's evs_write can reach the harness config, and a synced change re-seals hook hashes
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Two edits. (1) §16.5's `evs_write` and `evs_delete` row, §16.6's refused list and D-MCP-17 add the vault's `harness/` path. (2) §16.7's "changes rewrite the local files and their hashes" is struck: the config holds no hook, ask rule or MCP entry, those come only from `ur install-harness`'s own template, and no synced change rewrites a harness file or re-seals a hash. A config value applies at each run's next SessionStart and is fixed for that session (D-CORE-18's rule): a narrower value at once, a wider one (`pii` from hash to off, a wider `claims`) only after the member confirms on /dev/tty or in an app, never through MCP. The next run's Coverage names the change.
-
-Changes: §16.5 evs_write; §16.6 refused from MCP; §16.7 install paragraph; D-MCP-17.
-
-Questions: `plan-MCP-harness-config-schema.md#2`.
-
-### QD-105: Read literally, M6's fold lets any writer hide another's run by reusing its announcement_id
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§16.11's M6 carrier row changes: run and worker items fold per (writer_sidecar_id, announcement_id), the highest (version, renewed_millis) within that writer. Only repo items fold across writers by announcement_id, ties going to the higher writer_sidecar_id bytes. Two writers on one run or worker id are two items: each shows under its own writer, neither voids the other, and readers raise record_alarm with reason id_reuse. Format 2's `a/ || announcement_id` document name takes the writer too, or a copied id shadows the real one in search.
-
-Changes: §16.11 M6 carrier row; §16.11 documents row; FS-84's M6 case.
-
-Questions: `plan-RECORD-small-readings.md#2`.
-
-### QD-110: spendable never checks the SSHSIG that high risk requires
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Add to §16.6's `spendable`, after the evidence-list line: "and, where risk(a, P) is high, d.channel is device or presence and d.sshsig verifies (PROTOCOL.sshsig, namespace urnetwork-sidecar-approval, over RECORD.md section 5.1's bytes) under a KeyRow of d.approver_member_id with purpose sshsig, live at P". Under k approvers each decision carries its own. The verifier computes risk(a, P) from a and the matching rule and never reads ApprovalRequest.risk, since a gate holds no request. Gates run the same clause from `registered_keys`, and api-10 already lists SSHSIG as seen. The clause stands under any level set row #1 chooses, and goes only if SSHSIGs are dropped.
-
-Changes: §16.6 spendable.
-
-Questions: `plan-MCP-risk-classifier.md#3`.
-
-### QD-115: How a sponsor or admin sets a tagged sidecar's worker announcement, when no record carries it
-*Decided by the owner: owner 2026-11-06. Also amends §8.*
-
-follow Proposed as the rule (deployment policy). (The recommendation it replaces: Read §16.11's "set by its sponsor or an admin" as whoever controls the deployment: `ur directory worker on|off` on the sidecar's own host, by hand or from the script that provisions it, stored in that sidecar's local settings, over `ServiceSettings.directory.workers`. No record and no reader check, and the table says so. To stop a running agent's item from elsewhere a sponsor uses Suspend or a revocation (§8.8).)
-
-Changes: §16.11 Announcements table.
-
-Questions: `plan-RECORD-worker-setting.md`.
-
-### QD-116: Which harness config keys act, at which milestone, and what PII hashing means
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §1.*
-
-Recommended: two keys act. `record.redact.pii`, `off` or `hash`, default `hash`, from M3: email addresses and E.164 phone numbers become §16.7's marker with rule `pii-email` or `pii-phone`, each a redaction in the run's Coverage. `claims`, `{"default": auto|prompt|off, "projects": {<project key>: value}}`, from M6, read by CORE-M6-02 under D-CORE-18's rule. `agents.<label>` overrides those two keys only. `record.capture` is kept and ignored: capture stays §16.7's fixed set, since a narrowing control weakens R-MCP-4 and needs a person-only surface first. `reach`, `models` and `identity` are kept, ignored and warned about. §8.5's "a harness `reach:` block" files no request until a later design, and §8.5 and §1's row say so.
-
-Changes: §16.7 Redact before seal; §16.7 install paragraph; §8.5 policy paragraph; §1 Global harness config row.
-
-Questions: `plan-MCP-harness-config-schema.md#3`.
+Not folded (2026-11-16): RECORD.md section 4.3's part, the union of a harness process's runs for a run's binding, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as owner decision 448 (§16.6's run file, rejoin and monotone rows, D-MCP-16, §16.17, §2.10's P0 row and FS-27).
 
 ### QD-127: What P5:728's "a person approved a change" is, when approvals bind only outward actions
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -591,14 +235,7 @@ Changes: RECORD.md sections 6.3, 11 and 17; Q-RECORD-7; P5:728 copy.
 
 Questions: `record-md-change-approval.md`.
 
-### QD-137: Which attestation roots a release may pin, given the FIDO metadata terms
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23.*
-
-Recommended: pin only roots their vendors publish, and no MDS data. Apple's WebAuthn root for `apple`, Google's hardware attestation roots for `android-key`, and a short hand-kept list of vendor roots for `packed` and `tpm`, in one data file a release step refreshes. §16.6's "FIDO MDS roots the release pins" becomes "the vendor roots the release pins". A statement that does not verify, or a format whose root is pinned and whose chain fails, is refused; a valid statement chaining to no pinned root labels asserted, as `fmt none` does. The label changes no authorization (§16.6's labels row), so a key outside the list loses only the word attested.
-
-Changes: §16.6 webauthn-es256 registration; §23.7 Counsel.
-
-Questions: `plan-MCP-presence-origins.md#2`.
+Not folded (2026-11-16): RECORD.md sections 6.3, 11 and 17 and Q-RECORD-7, which RECORD.md still marks pending, and P5:728's copy in sidecar/design/pitch5.html, all outside design/source/; the DESIGN.md part is folded as owner decision 453 (§16.8's approvals bullet).
 
 ### QD-138: Nothing in the design writes a `record` repo's entries
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -609,41 +246,7 @@ Changes: RECORD.md sections 6.3 and 6.5; §16.8 matrix; Q-RECORD-4.
 
 Questions: `record-md-record-repo-writers.md`.
 
-### QD-162: q/ has no shard level, and the question's fix fails too: `<h>` as the id's first two hex digits shards nothing
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §15.*
-
-Notices move to `q/<h>/<tgt>/<rid>`. `<h>` stops being the id's first two hex digits: in §16.11's `<h>` row for d/, r/ and q/, and in §11.14's `w/<h>/<writer>`, it becomes hex of SHA-256(the name it shards)[0], §15.7's shards rule, the name being `<sid>`, `<repo>`, `<tgt>` or `<writer>` as its path text. That gives 256 shards, about 917,000 targets. Approvers lease `q/<h>/<tgt>/`, and §16.11's rows 2 and 5 and §11.10's caps row name that prefix. No removal rule is added.
-
-Changes: §16.11 ref cards table and `<h>` row; §16.11 Requests rows 2 and 5; §11.10 caps row; §11.14 paths row.
-
-Questions: `plan-RECORD-notice-path-bound.md`.
-
-### QD-166: M6's announce entries cannot express a withdrawal
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-`Announcement.state` gains 4 withdrawn, for kinds run and worker. A withdrawal is a newer announce entry from the item's writer at version + 1, holding only announcement_id, kind, version, renewed_millis, expires_millis, state 4 and who's member_id and sidecar_id. Readers fold it over the item at once and never show the item, as stale or ended. State 4 is terminal, so announcing again takes a new announcement_id. Repo items keep the private marker. §2.8 says that at M6 the earlier entries stay readable to every admitted sidecar until their 30 days or a directory admin's erasure, since a stream takes creates only.
-
-Changes: §16.11 Announcement.state; §16.11 withdraw and M6 carrier rows; §2.8 team directory disclosure; FS-84's M6 case.
-
-Questions: `plan-RECORD-m6-carrier.md#1`.
-
-### QD-169: A stream's one-level e/ directory fills at about 7.3 million entries
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-The stream path is `e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>`, n a stream's own counter from 1, each part decimal, with section 20's vectors: 2,048 entries to a leaf and about 15 billion to a stream. In a stream that holds no ingested entry n equals seq, so `DecisionRef` still derives its path, and §16.11's DecisionRef comment says so.
-
-Changes: RECORD.md section 5.2; §16.11 DecisionRef.
-
-Questions: `plan-RECORD-stream-names.md#4`.
-
-### QD-178: A pending socket request dies silently at rotation
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §9.*
-
-[plan-RECORD-small-readings#15] §16.11's expire row gains this: at the first sync that shows a newer K_sock, the requester's daemon runs §16.11's cancel on each pending socket request (a decision entry with outcome cancelled, then the notice's removal, which frees both pending counts) and raises access_decided with outcome expired, and `ur directory requests` names the rotation. The person or agent files again under the new token, with a new endorsement where one is needed. [plan-RECORD-stream-names#3] A socket's `<tgt>` is 32 lowercase hex of SHA-256(name_token)[:16], name_token being §9.4's t_1 || ... || t_n as `RequestTarget.socket_token` holds it, never the raw token path. It changes when K_sock rotates; plan-RECORD-small-readings #15 says what follows.
-
-Changes: §16.11 expire row; §16.11 ref cards table.
-
-Questions: `plan-RECORD-small-readings.md#15`, `plan-RECORD-stream-names.md#3`.
+Not folded (2026-11-16): RECORD.md sections 6.3 and 6.5 and Q-RECORD-4, which RECORD.md still marks pending, outside design/source/; the DESIGN.md part is folded as owner decision 454 (§16.8's logs table).
 
 ### QD-203: §16.8's total order for a log cannot span its streams
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -654,32 +257,7 @@ Changes: §16.8 order row; D-MCP-6; Q-RECORD-1.
 
 Questions: `record-md-log-order-across-streams.md`.
 
-### QD-205: D-MCP-17 bars the evs tools from the config repo, while §16.6 refuses only reads
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §7, §22.*
-
-D-MCP-17 stands. Every evs tool and ur://evs resource refuses kind config, as for the team directory, and evs_repos alone names it. Align §16.6's refused list, §16.5's row, §11.12 (11-EVS.md:1417), §7.9 (07-TEAM.md:213, a copy the question missed) and §22.7's actions row. Agents use team_members, team_agents, acl_grants and acl_check.
-
-Changes: §16.5; §16.6; §11.12; §7.9; §22.7.
-
-Questions: `g0-recheck-2-mcp-config-read-scope.md#1`.
-
-### QD-213: A presence prompt cannot finish inside ur hook's 300 ms
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Option 1. §16.7's How gains a second exception: on a host holding M's presence key, `ur hook` waits on a PermissionRequest (Cursor: `beforeMCPExecution`, the event `harness_ok` already pairs with it) for an O tool until the presence prompt ends, at most `Ingest.PresencePromptTimeout`, 60 s. Key signed: allow (`decision.behavior: allow`; Cursor `permission: allow`). Person refused: deny. Bound reached or prompt unavailable: no decision (Claude Code and Codex exit 0 with no output, the normal flow; Cursor `permission: ask`), and the O call then returns pending, so `ur approve` can finish it. Nothing is signed on refusal or timeout. `ur install-harness` writes `timeout: 75` on those hook entries, since Claude Code and Codex default to 600 s and Cursor states only a platform default. §16.6's presence prompt row names Cursor's event beside PermissionRequest. EXT-1 checks that an allow suppresses the harness's prompt under `permissions.ask`, since Claude Code says ask rules are still evaluated: if a prompt still shows, the person sees two and the key alone counts.
-
-Changes: §16.7 How; §16.6 presence prompt.
-
-Questions: `plan-MCP-presence-hook-timing.md`.
-
-### QD-222: §16.9 and §2.18 understate a Delegation key's reach by omitting the team directory
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §10.*
-
-A Delegation's reader key reads the config, a team network's directory and its tag repos (§10.5, §2.10). Change §16.9's "the config and its tags' repos" (16-MCP.md:671) and §2.18's "the config and tag repos" (02-TRUST.md:929) to say so.
-
-Changes: §16.9; §2.18.
-
-Questions: `g0-recheck-1-closed-item-text-errors.md#2`.
+Not folded (2026-11-16): Q-RECORD-1, which RECORD.md still lists as open, outside design/source/; the DESIGN.md parts are folded as text (§16.8's order row and D-MCP-6).
 
 ### QD-261: evidence_sha256 cannot hold the WebAuthn assertion that signs it
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -690,14 +268,7 @@ Changes: §16.8 ApprovalDecision comment; protocol/record.proto comment; Q-RECOR
 
 Questions: `record-md-presence-evidence-sha256.md`.
 
-### QD-269: I-EVS-14 lists a weaker signer test than §16.11's card row
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-A card's or notice's signer must pass §16.11's card row: admitted and not revoked, reaped, suspended or parked at the card's pin, and for a member device consented. I-EVS-14 (11-EVS.md:1101-1105) cites that row in place of "admitted and unrevoked". FI-25 (22-TEST.md:941), which the question missed, gains "unparked".
-
-Changes: I-EVS-14; FI-25.
-
-Questions: `g0-density-text-alignments.md#2`.
+Not folded (2026-11-16): Q-RECORD-2, which RECORD.md still lists as open, outside design/source/; the DESIGN.md part is folded as text (§16.8's ApprovalDecision comment), and protocol/record.proto's comment already reads so.
 
 ### QD-651: What bytes does `ur record open` write, and does a packet's `--content` take them?
 *Decided by the owner on 2026-11-10, asked one question at a time.*
@@ -708,47 +279,7 @@ Changes: RECORD follow-up at M6 entry review: DisclosureOpenings in record.proto
 
 Questions: `record-m6-05-open-file-format.md`.
 
-### QD-298: The text of ids in paths
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Every id in a path is 32 lowercase hex characters, never `Id.String()`'s dashed form: `<sid>`, `<repo>`, `<rid>` and a repo or sidecar `<tgt>`. How `<h>` is derived changes separately, under plan-RECORD-notice-path-bound.
-
-Questions: `plan-RECORD-stream-names.md#2`.
-
-### QD-320: §16's list of agent UIs
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-§16's list is §16.5's two named UIs, MCP Inspector and OpenClaw. TLS-M5-23's tlsProbeTarget holds a small versioned table of their response fingerprints and refuses and records a match, plus the daemon's API and MCP ports.
-
-Questions: `plan-TLS-small-readings.md#9`.
-
-### QD-327: A request to a closed target is refused by the daemon and ignored by readers
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The daemon answers FAILED_PRECONDITION naming the target when its folded item says requests closed, or when it has no item and §16.11's `requests` row defaults it closed (group inboxes, owner-bound repos). Readers ignore a notice to a closed target, and raise record_alarm over_limit only if the request entry's push came over 1 h after the entry that closed it.
-
-Questions: `plan-RECORD-small-readings.md#7`.
-
-### QD-330: Directory tools outside a team network
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`directory_list`, `directory_requests` and `directory_request` stay in the catalog and answer FAILED_PRECONDITION naming a personal network, and `ur directory` prints the same and exits non-zero. A team network whose directory does not exist yet gets the same answer, naming that.
-
-Questions: `plan-RECORD-small-readings.md#8`.
-
-### QD-331: `--window` at M6
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-At M6 `ur admin directory --window` refuses with FORMAT_UNSUPPORTED {needs_format: 2} and signs nothing. `--keep` and `--searchable` work, since they set a RetentionPolicy.
-
-Questions: `plan-RECORD-small-readings.md#14`.
-
-### QD-355: A person's declared task has no writer in v1
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`AnnounceWho.harness` keeps the value `none`, readers accept and show such a run, and no tool, `ur` command or SDK call files one in v1.
-
-Questions: `plan-RECORD-small-readings.md#5`.
+Not folded (2026-11-16): RECORD.md section 11's text naming the message, outside design/source/; the DESIGN.md part is folded as owner decision 456 (§16.8's disclosure row), and DisclosureOpenings itself waits on record.proto (RECORD-M6-06).
 
 ### QD-360: The requester's record of an outcome is a `copy` entry
 *Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
@@ -759,103 +290,7 @@ Changes: RECORD.md sections 6.3 and 6.4.
 
 Questions: `plan-RECORD-small-readings.md#6`.
 
-### QD-388: §16.9 and Q-ACL-9 omit the cascade void from what drops a Delegation's key
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §10.*
-
-§10.5 (10-KEYS.md:289) owns the list: DelegationRevoke, a revocation for any reason but reaped or a Suspend of one of its agents, a compromise revocation whose closure voids the Delegation, and not_after. Code follows it. Add "or a compromise revocation whose cascade voids it" to §16.9 (16-MCP.md:671) and Q-ACL-9 (08-ACL.md:472).
-
-Changes: §16.9; Q-ACL-9.
-
-Questions: `g0-recheck-1-closed-item-text-errors.md#1`.
-
-### QD-412: Query limits apply where each is stated: the wire value at the indexer, the normalized one in each engine
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The indexer checks SearchRequest.query as sent, NFC as typed, at 512 B and 16 terms, answering INVALID past that. Each engine applies §16.10's limits to the normalized query. A wire-valid query that normalizes past the cap answers INVALID in the padded reply, and the phone falls back.
-
-Questions: `plan-SEARCH-small-readings.md#7`.
-
-### QD-445: The bytes of a P-256 presence key
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-KeyRegister.public_key and KeyRow.public_key hold a SEC 1 uncompressed point, 65 bytes, for webauthn-es256 and ecdsa-p256-sha256 alike. A host converts a COSE key's x and y to it, and anything else is ErrSignedKey. KeyRegister.attestation keeps the raw attestation.
-
-Changes: §16.6.
-
-Questions: `protos-bridge-presence-gaps.md#1`.
-
-### QD-503: A cancelled approval_use row has no effect key
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`effect_key` is nullable, with `CHECK (state = 'cancelled' OR effect_key IS NOT NULL)`. `POST /approval/cancel` inserts each use_index in 0 .. uses-1 that no row holds, with `state = 'cancelled'`, `effect_key` NULL, `result` NULL and the decision's `not_after`, each `ON CONFLICT DO NOTHING`. `UNIQUE (approval_id, effect_key)` stays: Postgres treats NULLs as distinct, so many cancelled rows fit, and a racing gate's insert conflicts on the primary key, finds no use left and answers 409 SPENT by step 2. No synthetic key.
-
-Changes: §16.6 server.
-
-Questions: `plan-MCP-approval-use-columns.md#2`.
-
-### QD-513: The decider's journal row for a decision with no approval_id
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Append-only rows in `<state>/net/<network_id>/approvals/<request_id>`, file class `approval`, each fsynced before the step it guards: `Decide{request_id, step, payload, push_id, millis}`, step 1 intent (outcome, subject, expiry and note, before signing), 2 statement (the signed RepoGrant, EvsShare or ApprovalDecision; none for a denial), 3 entry (the signed decision entry), 4 notice (the version read and the rewrite). A restart resumes from the highest step with those bytes and push ids. For reach request_id is the approval_id, so the rows share that ledger file. §16.6's retention row, 30 d after not_after, outlasts §16.11's not_after + 1 d.
-
-Questions: `plan-RECORD-small-readings.md#9`.
-
-### QD-517: LocalSettings.RequestByteCount
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-4 MiB. The bound holds a 1 MiB body at up to 4x escaping, not all-control-byte text at 6x. A line past it closes its session, and a hook event lost that way counts as §16.7's coverage gap.
-
-Questions: `core-types-open-default-numbers.md#2`.
-
-### QD-519: Mcp.SessionWriteRate.Burst
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-20, a second's worth of §16.4's 20 W calls/s.
-
-Questions: `core-types-open-default-numbers.md#6`.
-
-### QD-520: Role and dial numbers
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`AnnounceWhat.roles`, and `DirectoryRequest.role` with a repo target, take acl.proto's RepoGrantRole: 1 deposit, 2 reader, 3 writer. With a sidecar or socket target `DirectoryRequest.role` is AclAction 1, dial. The target's kind says which, and 0 is refused.
-
-Changes: §16.11 DirectoryRequest and AnnounceWhat comments.
-
-Questions: `plan-RECORD-small-readings.md#4`.
-
-### QD-529: Where the harness config lives and its file syntax
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-One file, `harness/config.json`, on the `main` file-mode ref of the member's vault in each network: UTF-8 JSON, one object, `"version": 1`, at most 64 KiB, unknown keys kept verbatim on rewrite and ignored with a warning in `ur status`. A missing file means defaults. An unparsable file or an unknown version means defaults plus a `config_unreadable` coverage gap. A sidecar that cannot read the vault (tagged, cloud) uses defaults. JSON rather than the mock's YAML: `gopkg.in/yaml.v3` is on the test leg only (dependencies.yml), and this file is read and written on client legs (the redactor, `SetRuns`), where `encoding/json` adds no module.
-
-Changes: §16.7 install paragraph.
-
-Questions: `plan-MCP-harness-config-schema.md#1`.
-
-### QD-549: The command that registers a member's SSH key
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`ur keys add-ssh <path>` reads one OpenSSH `ssh-ed25519` public key file, shows its fingerprint and signs `KeyRegister{alg: ssh-ed25519, purpose: sshsig}` under §16.6's `register` row: after a device or presence decision, never harness, as a /dev/tty-confirmed method refused from MCP. Any other key type is refused, and the private key never reaches `ur`. `ur keys ls` and `ur keys rm` already cover the key. §16.16's Provides adds the command.
-
-Changes: §16.16 Provides.
-
-Questions: `plan-MCP-risk-classifier.md#2`.
-
-### QD-553: Several ports in CanonicalAction version 3
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §8.*
-
-For a worker target `grant_dst` holds one string per port, `sidecar:<32 lowercase hex id>:tcp:<decimal port>`, ports ascending with no duplicates, an empty `RequestTarget.tcp_ports` expanding at filing to the worker's announced bridge ports, and `grant_allow` is ["dial"]. `target_port` is that port when there is exactly one, else 0. Approvers and §8.8's GrantActivate check refuse a version-3 action whose target_port is set and differs from its one grant_dst port. A socket target's string keeps its token path, as §8.4's rows do.
-
-Changes: §16.8 CanonicalAction comment.
-
-Questions: `plan-RECORD-small-readings.md#10`.
-
-### QD-577: Where a member's per-project claims value lives
-*Settled by the agents from the design; work builds on it.*
-
-`ur directory runs` and `SetRuns` write `claims` into the harness config in the author's vault, per member and project, and CORE-M6-02 reads it at a session's start. Its file layout is plan-MCP-harness-config-schema's. A tagged sidecar, which reads no vault, takes the team default and `.ur`.
-
-Questions: `plan-RECORD-small-readings.md#11`.
+Not folded (2026-11-16): RECORD.md sections 6.3 and 6.4, CopyBody's comment and row 39's writer, outside design/source/; the DESIGN.md part is folded as text (§16.11's receipt row).
 
 ### QD-581: Product copy may not keep "per request" for model receipts
 *Settled by the agents from the design; work builds on it.*
@@ -866,12 +301,7 @@ Changes: P5:779 and P5:766 copy.
 
 Questions: `record-md-model-receipt-granularity.md`.
 
-### QD-585: Settings names: core-types' names stand, with RECORD.md's fields added
-*Settled by the agents from the design; work builds on it.*
-
-Keep `PushEntryCount`, `PushCoalesce`, `ReachReceiptCoalesce`, `CoverageIdleTimeout`, `TeamRecordKeepDays` and `TeamRecordSearchableDays`, and add RECORD.md section 18's other fields below them.
-
-Questions: `plan-RECORD-small-readings.md#1`.
+Not folded (2026-11-16): P5:779's and P5:766's copy in sidecar/design/pitch5.html, outside design/source/; DESIGN.md already says it, D-CTX-5 keeping per-request signing out of scope.
 
 <a id="s19"></a>
 ## §19 Server services
@@ -2015,17 +1445,6 @@ Questions: `details-13-lease-draw-size.md`.
 
 Partly folded (2026-11-10): §2.8 api-13's sizes landed with QD-657; §20.6's draw row waits for §20's fold.
 
-### QD-003: A requested grant's GrantActivate still shows its prefix and port to api, which clean rows do not fix
-*Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 220. Folds into §16 The local MCP server and record primitives. Also amends §2.*
-
-Owner decision 220's wire, which waits on the code: §16.8's CanonicalAction fence gains `bytes sealed_detail = 38` and the version it raises, and §2.8's api-7 and api-10 then say that a requested `dial` or `route` grant's GrantActivate carries its prefixes and ports only sealed. The rest is folded (2026-11-10): the decision, §17.8's placement, D-BRIDGE-6, §8.8's GrantActivate row and a comment in §16.8's fence naming the decision.
-
-Changes: §16.8 CanonicalAction's fence; §2.8 api-7; §2.8 api-10.
-
-Questions: `plan-BRIDGE-gate-row-prefixes.md#2`.
-
-Waits on: record.proto's `CanonicalAction.sealed_detail` and its version (ACL-M2-07, ACL-M4-02, MCP-M3-02, RECORD-M2-01), since protocol's fence test holds §16.8's fence to record.proto, and §2.8 keeps what api sees until the wire seals it.
-
 ### QD-077: X's pin of Y's ShareKey and Y's pin of each target host's identity key have no signed home
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Folds into §17 IP addresses, subnet routing, and port forwarding.*
 
@@ -2091,15 +1510,6 @@ Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M6-04 builds it;
 
 Questions: `details-12-ratchet-commit.md`.
 
-### QD-673: What keeps a mailbox's EvsShare subjects and audit reader out of its vault entries, which only the owner's consented devices may read?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §15 The local email server, inbound mail, and burner email.*
-
-Vault entries are narrowed by rule. §16.6's refused-from-MCP list and MCP-M3-12's McpGuard add every evs tool, search tool and ur://evs resource on a mailbox's vault/ family, and evs_list omits it, so an agent holding an EvsShare of the mailbox reaches vault entries by no path. §15.8 and §2.18 state the residual: a mailbox's EvsShare subjects and a Team's audit reader hold the keys that open vault entries, and clients (MailVault refusing every device but the owner's consented ones) enforce the narrower readership. A second seal to an owner-only vault key stays the option if the readership must later hold against a holder of the mailbox's keys.
-
-Changes: §16.6 refused list and McpGuard row for a mailbox's vault/ family (edge lane, MCP-M3-12's code); §15.8 and §2.18 residual sentences (design-records).
-
-Questions: `mail-m8-02-vault-readers.md`.
-
 ### QD-676: What should a VPN component's posture do once its overlay is full and no compile has run to clear it?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
 
@@ -2126,15 +1536,6 @@ warp's services.yml gains a list of exact hosts the lb sends no X-Frame-Options 
 Changes: ops-lane follow-up: warp services.yml no-frame-options host list, warpctl/config.go addSecurityHeaders, config test; mmm.yml fragment line for sidecar.ur.io.
 
 Questions: `ops-m4-01-lb-frame-options.md`.
-
-### QD-694: Should MAIL-M7-11's message parser call extractor 1's HTML and charset functions once SEARCH-M10-42 lands, so that an i/ snippet keeps saying what search indexes?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §15 The local email server, inbound mail, and burner email.*
-
-Once SEARCH-M10-42 has landed, MAIL-M7-11's message parser calls extractor 1's functions: mailHtmlText calls indexStripHtml and mailDecodeCharset calls indexDecodeCharset, and the mail lane's copies (its tag scanner, html.UnescapeString and htmlindex.Get) go, so an i/ snippet reads HTML and charsets as search indexes them. Encoded words, transfer encodings and the walk stay the mail lane's own readings: they feed MAIL-FORMAT.md's fields, which no other device rebuilds. An edge-lane change of a few lines in sidecar/mail_parse.go and mail_parse_text.go, after SEARCH-M10-42.
-
-Changes: edge-lane follow-up after SEARCH-M10-42: mail_parse.go and mail_parse_text.go call indexStripHtml and indexDecodeCharset.
-
-Questions: `details-11-mail-snippet-reading.md`.
 
 ### QD-696: Should a VPN component's narrowing_overdue alarm back off while a narrowing entry keeps waiting for a compile that never runs, instead of repeating every 10 minutes forever?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
@@ -2163,15 +1564,6 @@ Changes: the production AbuseRecordMailer seals and sends (ABUSE-M5-03, -05); th
 
 Questions: `abuse-m5-03-record-seal.md`.
 
-### QD-730: What does `KeyRegister.attestation` hold, given that every attestation format but `none` signs the create ceremony's client data, which the attestation object does not carry?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-KeyRegister.attestation holds a canonical CBOR map of two byte strings, {"attObj": the WebAuthn attestation object, "clientDataJSON": the create ceremony's client data}; a CTAP2 client (ur with a FIDO key) writes the JSON it hashed. The verifier (MCP-M3-08's VerifyPresenceAttestation) checks the client data's type is webauthn.create and its origin is on §16.6's table, checks each of packed, tpm, android-key and apple over SHA-256 of the client data against the roots the release pins, and leaves the challenge unchecked, since the credential key in authData, which must equal public_key, binds the attestation to the registration. fmt none and an empty attestation still label asserted. §16.6 gains the line, and api-7's words for what a key registration shows name the origin and the challenge. QD-137's interim (clients request none, no production roots) stands until roots ship.
-
-Changes: §16.6's registration row and §2.8's api-7 wording (design-records); VerifyPresenceAttestation reads the map and checks the four formats over the client data.
-
-Questions: `mcp-m2-01-attestation-client-data.md`.
-
 ### QD-732: Where does the keyless device role get the base, rows and entries that verify a BridgeState, when §18.6's `SetState(state)` takes the state alone?
 *Decided by the owner on 2026-11-12, asked one question at a time, then withdrawn. Folds into §18 SDK, apps, and extension integration.*
 
@@ -2191,15 +1583,6 @@ Changes: bridge.proto's BridgeRules.untagged = 10 (fenced by design-records); BR
 DESIGN-DETAILS 12.9 had answered it on this option (BridgeRules.untagged = 10, filled by the compile's reach pass), and section 12's tasks built it; this confirms it.
 Questions: `bridge-m4-09-other-client-rows.md`.
 
-### QD-740: How do protos-services-canonical-action's move of local_port, weight and alpn and plan-BRIDGE-gate-row-prefixes#2's sealed_detail combine in record.proto, and which CanonicalAction version does sealed_detail take?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-QD-064 and QD-003 combine by field. local_port, weight and alpn leave CanonicalAction (24, 25 and 34 reserved) for sealed ApprovalRequest fields 14, 15 and 16, daemon-built and rendered by approvers, for every kind that has them (socket_listen, tls_publish, bridge_forward, bridge_expose), since none is a grant's prefix or port; publishes keep their other clear fields. sealed_detail = 38 belongs to dial and route grants, as CanonicalAction version 4: a new record.proto message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; } under plan-TEAM-sealed-field-format's SealedBody, and those grants' clear fields then hold no prefix or port. A version-3 access_request to a worker's ports carries its port and sidecar:<id>:tcp:<port> text the same way in field 38, so version 3's clear set leaves 27 and port text out. CanonicalActionVersionKnown gains 4, and ParseStoredCanonicalAction names field 38. record.proto, MCP-M3-02's kind table and testdata/metadata/fields.yml change together once design-records writes §16.8's fence.
-
-Changes: §16.8's CanonicalAction fence: 24, 25, 34 reserved, sealed_detail = 38, version 4, CanonicalActionDetail (design-records); ApprovalRequest 14, 15, 16; MCP-M3-02's kind table and testdata/metadata/fields.yml.
-
-Questions: `record-m2-01-canonical-action-detail.md`.
-
 ### QD-744: Should §19.6's rule (3) hold a failed DELETE's key until every commit of it has answered and been reverted, since TLC finds two DELETEs on one key breaking FI-30 under the rule as written?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
 
@@ -2208,15 +1591,6 @@ Questions: `record-m2-01-canonical-action-detail.md`.
 Changes: §19.6's rule (3), D-OPS-20's cost and FI-30's last clause (design-records, with DESIGN-DETAILS 2.8's text); StoreSettle.tla models the held DELETE and passes TLC with DELETEs in the run (M2's Gn-in).
 
 Questions: `evs-models-settle-stalled-deletes.md`.
-
-### QD-748: When a repo is created with --private in a team network whose directory does not exist yet, how does it stay private once the directory appears?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-A repo-creating command run with --private in a team network that has no directory refuses before filing the RepoCreate, naming the missing directory; where the device is a directory admin it files the directory first and then creates the repo with its private marker. So every private repo has its marker, and §16.11's predating rule stays as written: a general or record repo that predates the directory is announced by the first of its admins' devices to sync it (owner decision 181's every repo by default). RECORD-M6-15's interim, writing a private marker for every predating repo, goes once the refusal lands.
-
-Changes: §16.11's private row gains the refusal (design-records); the repo-creating commands refuse --private with no directory; RECORD-M6-15's predating rule announces again.
-
-Questions: `record-m6-14-private-before-directory.md`.
 
 ### QD-751: Should certs renew stay on lego v4.35.2, the release certs issue runs, until someone checks lego v5's CLI, given that D-OPS-12 names v5 and v5 rejects the flags both commands pass?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
@@ -2290,24 +1664,6 @@ Changes: DESIGN-DETAILS 12.2.3: the stop below an Unopened filing is bounded; a 
 
 Questions: `bridge-m2-02-unopened-generation-stall.md`.
 
-### QD-771: What is CanonicalAction.sealed_detail's seal bound to, given that an action has no StatementHeader?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-CanonicalAction.sealed_detail's seal context is SignedType SIGNED_GRANT_ACTIVATE, the network id, and in the nonce's place the first 16 bytes of SHA-256 over the action's clear fields as stored with field 38 left out (kind, version, scope, 8, 10, 11, 28, 29; for version 3 also 14 and 26). A detail opens only beside the clear fields it was sealed with, in that network, so it cannot be moved to an action naming another subject, rule or destination. No new field and no new server-visible value; the seal is made after the clear fields are final.
-
-Changes: sidecar: one function derives the ConfigSealContext from an action; NewSealedCanonicalAction, OpenCanonicalActionDetail and their callers (the daemon's builders, the approver's render, the GrantActivate readers) use it; section 20 vectors; RECORD.md / the protocol document's CanonicalAction section states the derivation.
-
-Questions: `canonical-action-detail-seal-context.md`.
-
-### QD-772: May a socket_listen grant's GrantActivate carry the action's socket_name (field 23), or where else does an approver read the name?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-A socket_listen's socket name moves from CanonicalAction field 23 to the sealed ApprovalRequest, a new field 17 beside local_port and weight. The action carries only the grant's fields (QD-064's server column stands as written), the approver renders the name from the request, and a server sees only grant_dst's sock: entry in the form it may already see. CanonicalAction.socket_name leaves api-7's mapping. A listen's grant can then be activated on every server path.
-
-Changes: record.proto: ApprovalRequest field 17 socket_name; CanonicalAction field 23 no longer set for socket_listen (reserved if no other kind uses it), listed in protocol/design_unfenced_test.go's testFenceAdditions; MCP-M3-02's socket_listen row, the request's binding, the approver's render, CheckCanonicalActionForServer's socket_listen case; testdata/metadata/fields.yml: CanonicalAction.socket_name leaves api-7; §16.8 and §2.8 text by design-records.
-
-Questions: `canonical-action-detail-listen-socket-name.md`.
-
 ### QD-773: What does a reader that comes to hold a generation make of a bridge body sealed to it before it formed, once a fold has voided that body?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
 
@@ -2344,6 +1700,8 @@ Changes: DESIGN-DETAILS section 15 stands as written; SEARCH-M10-28's card versi
 
 Questions: `details-15-card-version.md`.
 
+Not folded (2026-11-16): RECORD.md 7.4's version sentence and section 8's Run cards paragraph, which DESIGN-DETAILS.md 15.8 proposes, outside design/source/; the DESIGN.md parts are folded as owner decision 459 (§16.8's erasure and search bullets, §16.10's run card row, §11.12's cut row, §11.14's version, cut and erase rows).
+
 ### QD-780: Should a run have one card for each stream that holds its entries, joined at display, in place of one card a log?
 *Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
 
@@ -2353,14 +1711,7 @@ Changes: DESIGN-DETAILS section 15 stands as written; SEARCH-M10-28's card ident
 
 Questions: `details-15-card-per-stream.md`.
 
-### QD-781: Should a record erasure destroy the entry's body before its index CUT, where the plan has every caller CUT first?
-*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
-
-A record erasure ERASEs the entry bodies, re-reads the stream heads, then CUTs. A card builder reads the log's erasure ref at the first build it makes at a new epoch and applies every ERASE on it before it folds, so no card built after the CUT holds an erased entry; a builder that holds the ERASE before the CUT builds no card for that run and holds that stream's coverage pin. Mail keeps the CUT first. If the eraser dies between the two, another device resumes with the CUT (§11.12's reconcile row). SEARCH-M10-16's seam is unchanged; its plan entry's order line is narrowed to mail.
-
-Changes: DESIGN-DETAILS section 15 stands as written; RECORD-M10-01 and RECORD-M6-03: the erase order, the late copy, a BASE that removes only entries whose erasure is complete; §16.8's Erasure text from 15.8.
-
-Questions: `details-15-erase-before-cut.md`.
+Not folded (2026-11-16): RECORD.md 7.1's fields row for a card, which DESIGN-DETAILS.md 15.8 proposes, outside design/source/; the DESIGN.md parts are folded as owner decision 459 (§16.8's search bullet, §16.10's documents, run card and group rows).
 
 ### QD-782: When a run's context entry is erased, may the agent label and session ids it gave the run's other entry documents stay in their index rows?
 *Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
@@ -2371,6 +1722,8 @@ Changes: DESIGN-DETAILS 15.2.8 stands as written; SEARCH-M10-28's reading of fie
 
 Questions: `details-15-context-fields.md`.
 
+Not folded (2026-11-16): RECORD.md 7.1's fields row for an entry and ur record erase's listing in section 8, outside design/source/; the DESIGN.md part is folded as owner decision 460 (§16.8's erasure bullet).
+
 ### QD-783: Nine small readings section 15 took for index erasure and run cards: are they right?
 *Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
 
@@ -2380,6 +1733,7 @@ Changes: DESIGN-DETAILS section 15 stands as written; RECORD.md 7.4's cadence an
 
 Questions: `details-15-small-readings.md`.
 
+Not folded (2026-11-16): RECORD.md 7.4's cadence and section 8's expiry row, which DESIGN-DETAILS.md 15.8 proposes, outside design/source/; the DESIGN.md parts are folded as owner decision 461 (§16.8's retention bullet and §16.10's run card row).
 
 ### QD-145: `strict_chain` claims a customer-signed chain that connect's DoH path cannot show
 *Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 269. Folds into §4 Repositories, code placement, branches, and build.*
@@ -2396,3 +1750,30 @@ Questions: `plan-MAIL-dnssec-evidence.md`, `dr2-s4-c20-x9-row.md`.
 Owner decision 265's file, which waits on the owner: the copy of cli/UI.md at sidecar/design/UI.md, since the sketch sits outside every repository, on no path the run reads. The rest is folded (2026-11-16): the decision and §4.11, which say the build keeps its own spellings until the copy is there.
 
 Changes: sidecar/design/UI.md (owner step); HANDOFF section 2.
+
+### QD-864: How does a reader of an Opening, a packet or an export line learn that its body is a version-2 AgentSignedBody?
+*Decided by the owner on 2026-11-15, asked one question at a time; owner decision 466. Folds into §16 The local MCP server and record primitives.*
+
+RECORD.md's part, which waits on RECORD.md's own change: section 5.5's `Opening` fence gains `uint32 version = 4`, which protocol/design_unfenced_test.go's `testFenceAdditions` holds until that fence writes it; section 9's jsonl export names the same answer `entry_version`; and section 11's openings read it. The rest is folded (2026-11-16): the decision and §16.8's disclosure row.
+
+Changes: RECORD.md 5.5, 9 and 11.
+
+Questions: `record-m6-03-opening-entry-version.md`.
+
+### QD-899: Which source kinds give a run card the fields RECORD.md 7.4 reads from claims, coverage and approval decisions?
+*Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
+
+RECORD.md's part, which waits on RECORD.md's own change: 7.3 and 7.4's sources row and mapping (a vault card's coverage and, in personal mode, claim and handoff; fields 13 and 14 and its row's expires; the team card's line counting approval requests), and DESIGN-DETAILS.md 15.2.2, the design agent's. The rest is folded (2026-11-16): the decision and §16.10's run card and group rows.
+
+Changes: RECORD.md 7.3 and 7.4; DESIGN-DETAILS.md 15.2.2.
+
+Questions: `search-m10-28-vault-card-sources.md`.
+
+### QD-900: How does record extractor 1 find a run's user prompts, for a vault card's title fallback and its prompt text?
+*Decided by the owner on 2026-11-15, asked one question at a time; owner decision 467. Folds into §16 The local MCP server and record primitives.*
+
+RECORD.md's part, which waits on RECORD.md and record.proto: section 5's `ContextBody` gains its repeated prompts field (or the new raw kind its fix track names), which record.proto and RECORD.md's fence take together, and 7.4's prompt row reads it. The rest is folded (2026-11-16): the decision, §16.7's context row and §16.10's run card row.
+
+Changes: RECORD.md 5's ContextBody and 7.4; record.proto.
+
+Questions: `search-m10-28-transcript-prompts.md`.
