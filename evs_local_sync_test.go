@@ -11,6 +11,17 @@
 // alone in one push that every reader takes, whether it stood before the stop or the stop planted it; a tainted path
 // left standing, or last removed and held by the new tree, that a re-creation leaves alone, refused; a record from a
 // writer that reads every taint as standing refused before any evs write; and a taint record stored before the field.
+//
+// And EVS1-M6-06's readers (DESIGN-DETAILS 8.6's evs-to-git row as amended for section 16 and QD-801), under a rule
+// set that holds a signer to agents/build: hand-built pushes refused with prefix_rule, each with its passing twin by
+// a signer the set names for every path, on overlay branches of main (a file written outside, refused before a commit
+// is read; an inherited file removed outside; a directory created over a file outside), the last file under the
+// prefix removed with the directories above it passing; a set pending at the pin leaving the ref waiting with no alarm
+// and no stuck_at, the replay going on once the set opens; new shared branches measured from main's tree or from
+// nothing; tags with a proof at a current and a past tip, and each way a named source is no proof; a first push
+// refused, deleted and pushed again; a re-creation writing a tainted token path outside; a push failing both the
+// tree's hash and the prefix line raising the tree's reason on two devices; and two mounts' one verdict on a tag,
+// which a hook that looks the tagged commit up in a device's own tip index breaks.
 
 package sidecar
 
@@ -25,6 +36,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // A second device of the publisher's world: a reader with a mount registry on its own state, the world's repo mounted,
@@ -945,4 +957,496 @@ func TestEvsLocalGitRefRecordOfTaintsBeforeRemovedOpens(t *testing.T) {
 	if err != nil || string(encoded) != `[{"epoch":1,"key":"t","removed":true},{"epoch":1,"key":""}]` {
 		t.Fatalf("stored as %s: %v", encoded, err)
 	}
+}
+
+
+// A git-mode world under a rule set at 5 that names the world's writer, a repo admin, for every path and holds a
+// second writer, held, to agents/build and docs/inner; a third writer, unnamed, the set names in no rule. The writer's client
+// publishes as any of them, its local refusal the engine's over the world's state, or, for a breach, skipped as a
+// device that does not run this code; devices replay under the same sets.
+type evsTestGitRules struct {
+	*evsPrefixTest
+	publisher *evsTestPublisher
+	unnamed   *evsTestSigner
+	// the paths the writer's local refusal drew, and whether the publish now is a breach
+	drawn  []string
+	breach bool
+}
+
+func newEvsTestGitRules(t *testing.T) *evsTestGitRules {
+	t.Helper()
+	publisher := newEvsTestPublisher(t)
+	world := publisher.writer.world
+	test := &evsTestGitRules{evsPrefixTest: newEvsPrefixTestOn(t, world), publisher: publisher, unnamed: newEvsTestSigner("unnamed writer")}
+	world.config.identityKeys[test.unnamed.sidecarId] = test.unnamed.publicKey()
+	world.config.writers = append(world.config.writers, test.unnamed.sidecarId)
+	world.config.rows[test.unnamed.sidecarId] = &bridge.SidecarRow{SidecarId: test.unnamed.sidecarId.Bytes()}
+	test.file(5, AclPrefixSetOpened, "agents/build", "docs/inner")
+	world.config.setPin(5)
+	publisher.writer.test.client.EnablePrefixRules(&EvsPrefixRulesArgs{
+		Sets:       func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return slices.Clone(test.sets), nil },
+		AllowWrite: test.allowWrite,
+	})
+	evsLocalPublishSkipPrefixHook = func(update *evsGitPublishUpdate) bool { return test.breach }
+	t.Cleanup(func() { evsLocalPublishSkipPrefixHook = nil })
+	return test
+}
+
+// AclEngine.AllowPrefixWrite's lines over the world's state, for the sidecar the writer's client signs as now, each
+// path drawn noted; a breach allows everything.
+func (self *evsTestGitRules) allowWrite(write *AclPrefixWrite) AclPrefixWriteDecision {
+	allowed := func(at uint64) AclPrefixWriteDecision {
+		return AclPrefixWriteDecision{AclDecision: AclDecision{Allowed: true, Reason: AclReasonPrefixRule, At: at}}
+	}
+	refused := func(detail AclPrefixDetail, at uint64, path string) AclPrefixWriteDecision {
+		return AclPrefixWriteDecision{AclDecision: AclDecision{Reason: AclReasonPrefixRule, At: at}, Detail: detail, Path: path}
+	}
+	if self.breach {
+		return allowed(0)
+	}
+	config := self.world.config
+	repo := config.Repo(write.RepoId)
+	if aclPrefixOutside(repo.GetKind(), write.RefKind, write.RefName, write.Flags) {
+		return allowed(0)
+	}
+	set, verdict, decided := aclPrefixSetInForce(repo.GetPrefixRules(), write.Sets, config.Pin().GetVersion())
+	if decided {
+		switch verdict.Outcome {
+		case AclPrefixAllowed:
+			return allowed(0)
+		case AclPrefixUpdate:
+			return refused(AclPrefixDetailUpdate, verdict.SetAt, "")
+		}
+		return refused(AclPrefixDetailPending, verdict.SetAt, "")
+	}
+	named := aclPrefixNamedRules(set, config.SidecarRow(self.publisher.writer.test.client.args.Identity().SidecarId))
+	for _, rule := range named {
+		if len(rule.GetPath()) == 0 {
+			return allowed(set.At)
+		}
+	}
+	if write.Paths != nil {
+		for path := range write.Paths {
+			self.drawn = append(self.drawn, path)
+			if path == "" {
+				return refused(AclPrefixDetailRefused, set.At, "")
+			}
+			if !aclPrefixRulesCoverNames(named, strings.Split(path, "/")) {
+				return refused(AclPrefixDetailRefused, set.At, path)
+			}
+		}
+	}
+	return allowed(set.At)
+}
+
+// The client a signer's pushes and commits name: the world's for the admin.
+func (self *evsTestGitRules) clientOf(signer *evsTestSigner) Id {
+	if signer == self.admin {
+		return evsTestId("world client")
+	}
+	return evsTestId("client of " + signer.sidecarId.String())
+}
+
+// A commit by signer's client of files on parents.
+func (self *evsTestGitRules) commitAs(signer *evsTestSigner, files map[string]string, parents ...EvsGitOid) EvsGitOid {
+	oid, _ := self.publisher.mount.history.commit(self.publisher.tree(files), self.clientOf(signer).String()+evsCommitterDomain, parents...)
+	return oid
+}
+
+// Publishes the ref of name to new as signer, a breach skipping the writer's own check.
+func (self *evsTestGitRules) publishAs(signer *evsTestSigner, breach bool, name string, new *EvsGitOid, configure ...func(args *EvsLocalPublishArgs)) (*EvsLocalPublishResult, error) {
+	self.t.Helper()
+	client := self.publisher.writer.test.client
+	identity, sign := client.args.Identity, client.args.Sign
+	as := &SidecarIdentity{NetworkId: testNetworkId, SidecarId: signer.sidecarId, ClientId: self.clientOf(signer)}
+	client.args.Identity = func() *SidecarIdentity { return as }
+	client.args.Sign = signer.sign
+	self.breach = breach
+	defer func() { client.args.Identity, client.args.Sign, self.breach = identity, sign, false }()
+	return self.publisher.publish(name, new, configure...)
+}
+
+// publishAs that must commit.
+func (self *evsTestGitRules) mustPublish(signer *evsTestSigner, breach bool, name string, new *EvsGitOid, configure ...func(args *EvsLocalPublishArgs)) *EvsLocalPublishResult {
+	self.t.Helper()
+	result, err := self.publishAs(signer, breach, name, new, configure...)
+	if err != nil {
+		self.t.Fatalf("%s: %v", name, err)
+	}
+	return result
+}
+
+// A device of the world under its rules.
+func (self *evsTestGitRules) device(name string) *evsTestDevice {
+	self.t.Helper()
+	device := newEvsTestDevice(self.t, self.publisher, name)
+	self.enable(device.test)
+	return device
+}
+
+// The name of signer's owned ref, which the stand-in serves as owned by signer, as evs's head holds an owned ref's kind
+// and owner from its first push.
+func (self *evsTestGitRules) ownedRef(signer *evsTestSigner, rest string) string {
+	name := evsOwnedRefPrefix + signer.sidecarId.String() + "/" + rest
+	world := self.publisher.writer.world.otherRef([]byte(name))
+	world.stateLock.Lock()
+	world.owned, world.signer = true, signer
+	world.stateLock.Unlock()
+	return name
+}
+
+// The ref's record held to a refusal at version by the prefix line, its local ref at tip (nil: none), and the device's
+// prefix_rule alarm for it naming signer and path, and no version_rule alarm.
+func (self *evsTestGitRules) refused(device *evsTestDevice, name string, version uint64, tip *EvsGitOid, signer *evsTestSigner, path string) {
+	self.t.Helper()
+	self.stopped(device, name, version, tip, signer)
+	self.alarmed(device, name, version, signer, path)
+}
+
+// The ref's record held to a refusal at version by the prefix line, its local ref at tip (nil: none).
+func (self *evsTestGitRules) stopped(device *evsTestDevice, name string, version uint64, tip *EvsGitOid, signer *evsTestSigner) {
+	self.t.Helper()
+	ref := device.ref(name)
+	if ref.StuckAt != version || ref.StuckReason != SidecarEvsAlarmPrefixRule || ref.StuckSigner == nil || *ref.StuckSigner != signer.sidecarId {
+		self.t.Fatalf("%s: the record %+v", name, ref)
+	}
+	if local := device.local(EvsGitRefOfName([]byte(name))); !evsOidEqual(local, tip) {
+		self.t.Fatalf("%s: the local ref is %v", name, local)
+	}
+}
+
+// The device's prefix_rule alarm with detail refused for the ref's version, naming signer and path, and no
+// version_rule alarm for the ref.
+func (self *evsTestGitRules) alarmed(device *evsTestDevice, name string, version uint64, signer *evsTestSigner, path string) {
+	self.t.Helper()
+	for _, alarm := range device.alarms() {
+		if alarm.EvsAlarm == SidecarEvsAlarmVersionRule && alarm.RefId != nil && *alarm.RefId == self.publisher.ref(name).refId {
+			self.t.Fatalf("%s: a version_rule alarm %+v", name, alarm)
+		}
+	}
+	for _, alarm := range device.alarms() {
+		if alarm.EvsAlarm == SidecarEvsAlarmPrefixRule && alarm.RefId != nil && *alarm.RefId == self.publisher.ref(name).refId && alarm.Version == version {
+			if alarm.EvsAlarmDetail != SidecarEvsAlarmDetailRefused || alarm.SidecarId == nil || *alarm.SidecarId != signer.sidecarId ||
+				alarm.Version != version || alarm.Path != path {
+				self.t.Fatalf("%s: the alarm %+v", name, alarm)
+			}
+			return
+		}
+	}
+	self.t.Fatalf("%s: no prefix_rule alarm in %+v", name, device.alarms())
+}
+
+// The ref's record applied through version at tip, with no stop and no wait.
+func (self *evsTestGitRules) applied(device *evsTestDevice, name string, version uint64, tip EvsGitOid) {
+	self.t.Helper()
+	ref := device.ref(name)
+	if ref.Version != version || ref.StuckAt != 0 || ref.WaitingRules != "" || ref.WaitingSource != nil || !evsOidEqual(ref.Tip, &tip) {
+		self.t.Fatalf("%s: the record %+v", name, ref)
+	}
+	if local := device.local(EvsGitRefOfName([]byte(name))); local == nil || *local != tip {
+		self.t.Fatalf("%s: the local ref is %v", name, local)
+	}
+}
+
+// Hand-built pushes by the held signer on overlay branches of main, each refused with prefix_rule and its twin by the
+// admin applied: a file written outside, refused early with no path; an inherited file removed outside and a
+// directory created over a file outside (its own files under docs/inner, a prefix), refused late naming the file,
+// though neither has a change at its own token path; and, passing for the held signer, a file written under the
+// prefix, and the last file under the prefix removed with the directories above it.
+func TestEvsLocalSyncPrefixRefusesFileChangesOutside(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	base := map[string]string{"README": "readme\n", "src/main.go": "main\n", "agents/build/out": "built\n", "docs": "docs\n"}
+	c1 := rules.commitAs(rules.admin, base)
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	with := func(changes map[string]string, removed ...string) map[string]string {
+		files := map[string]string{}
+		for path, content := range base {
+			files[path] = content
+		}
+		for path, content := range changes {
+			files[path] = content
+		}
+		for _, path := range removed {
+			delete(files, path)
+		}
+		return files
+	}
+	cases := []struct {
+		name  string
+		files map[string]string
+		// "" applies
+		path    string
+		refused bool
+	}{
+		{name: "written", files: with(map[string]string{"src/main.go": "breach\n"}), refused: true},
+		{name: "removed", files: with(nil, "README"), refused: true, path: "README"},
+		{name: "overfile", files: with(map[string]string{"docs/inner/x": "x\n"}, "docs"), refused: true, path: "docs"},
+		{name: "under", files: with(map[string]string{"agents/build/new": "new\n"})},
+		{name: "lastunder", files: with(nil, "agents/build/out")},
+	}
+	tips := map[string]EvsGitOid{}
+	for _, c := range cases {
+		rules.mustPublish(rules.admin, false, c.name, &c1)
+		tips[c.name] = rules.commitAs(rules.held, c.files, c1)
+		tip := tips[c.name]
+		rules.mustPublish(rules.held, c.refused, c.name, &tip)
+		// the admin's twin, named for every path
+		twin := "admin-" + c.name
+		rules.mustPublish(rules.admin, false, twin, &c1)
+		tips[twin] = rules.commitAs(rules.admin, c.files, c1)
+		twinTip := tips[twin]
+		rules.mustPublish(rules.admin, false, twin, &twinTip)
+	}
+	device := rules.device("device b")
+	for _, c := range cases {
+		device.replay(c.name)
+		device.replay("admin-" + c.name)
+		if c.refused {
+			rules.refused(device, c.name, 2, &c1, rules.held, c.path)
+		} else {
+			rules.applied(device, c.name, 2, tips[c.name])
+		}
+		rules.applied(device, "admin-"+c.name, 2, tips["admin-"+c.name])
+	}
+	if fsck := evsTestFsck(t, device.mount.BareDir); strings.Join(fsck, "") != "" {
+		t.Fatalf("fsck %v", fsck)
+	}
+}
+
+// A set pending at u's pin leaves the ref waiting before u, with no alarm and no stuck_at, as held; once the set
+// opens the replay goes on and applies u.
+func TestEvsLocalSyncPrefixWaitsOnAPendingSet(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	rules.file(7, AclPrefixSetPending, "agents/build")
+	rules.world.config.setPin(7)
+	c2 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built again\n"}, c1)
+	// the held writer could not send this under a set it cannot read; a device running other code does
+	rules.mustPublish(rules.held, true, "main", &c2)
+	device := rules.device("device b")
+	for range 2 {
+		device.replay("main")
+		ref := device.ref("main")
+		if ref.Version != 1 || ref.WaitingRules != EvsGitRuleWaitHeld || ref.StuckAt != 0 || ref.WaitingSource != nil {
+			t.Fatalf("the waiting record %+v", ref)
+		}
+	}
+	if alarms := device.alarms(); len(alarms) != 0 {
+		t.Fatalf("alarms %+v", alarms)
+	}
+	// the set opens
+	opened := *rules.sets[0]
+	opened.At, opened.State = 7, AclPrefixSetOpened
+	rules.sets[1] = &opened
+	device.replay("main")
+	rules.applied(device, "main", 2, c2)
+}
+
+// New shared branches (QD-801): measured from main's tree where main is their base, from nothing over the signer's
+// own branch or no base. The held signer's branch over its own branch with no change is refused naming the first
+// file of its tree outside the prefix; its branch over main with a change under the prefix applies, as does one at
+// main's tip with no change, and that one by a signer the set names in no rule; an orphan branch writing a file
+// outside is refused.
+func TestEvsLocalSyncPrefixNewSharedBranches(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	own := rules.ownedRef(rules.held, "work")
+	c2 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built\n", "agents/build/x": "x\n"}, c1)
+	rules.mustPublish(rules.held, false, own, &c2)
+	// a breaching writer creates release over its own branch, the nearest base
+	release := rules.mustPublish(rules.held, true, "release", &c2)
+	ownId := rules.publisher.ref(own).refId
+	if release.Base == nil || Id(release.Base.GetRefId()) != ownId {
+		t.Fatalf("release's base %v", release.Base)
+	}
+	// the design device takes main, the shared branch, for a branch whose tip descends from main's
+	f1 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built\n", "agents/build/f": "f\n"}, c1)
+	feature := rules.mustPublish(rules.held, false, "feature", &f1)
+	if feature.Base == nil || Id(feature.Base.GetRefId()) != rules.publisher.ref("main").refId {
+		t.Fatalf("feature's base %v", feature.Base)
+	}
+	rules.mustPublish(rules.held, false, "atmain", &c1)
+	rules.mustPublish(rules.unnamed, false, "unnamed", &c1)
+	orphan := rules.commitAs(rules.held, map[string]string{"agents/build/y": "y\n", "src/x": "x\n"})
+	rules.mustPublish(rules.held, true, "orphan", &orphan)
+	device := rules.device("device b")
+	for _, name := range []string{"release", "feature", "atmain", "unnamed", "orphan"} {
+		device.replay(name)
+	}
+	rules.refused(device, "release", 1, nil, rules.held, "README")
+	rules.applied(device, "feature", 1, f1)
+	rules.applied(device, "atmain", 1, c1)
+	rules.applied(device, "unnamed", 1, c1)
+	// the orphan writes src/x outside: the early test refuses it before a commit is read, holding no name for it
+	rules.refused(device, "orphan", 1, nil, rules.held, "")
+	// a ref refused at its first version has no tip and no local ref, and ur status lists it with its signer
+	if ref := device.ref("release"); ref.Tip != nil || ref.LastTip != nil || ref.Base == nil {
+		t.Fatalf("release's record %+v", ref)
+	}
+}
+
+// Tags (QD-801): with a proof naming main's current version or a past one, each passing for the held signer; with a
+// source that is an owned ref, a shared branch at another tip, or a tag of a commit its own push carries, each judged
+// from nothing and refused.
+func TestEvsLocalSyncPrefixTagProofs(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	c2 := rules.commitAs(rules.admin, map[string]string{"README": "readme two\n", "agents/build/out": "built\n"}, c1)
+	rules.mustPublish(rules.admin, false, "main", &c2)
+	mainId := rules.publisher.ref("main").refId
+	current := rules.mustPublish(rules.held, false, "refs/tags/current", &c2)
+	past := rules.mustPublish(rules.held, false, "refs/tags/past", &c1)
+	for name, result := range map[string]*EvsLocalPublishResult{"current": current, "past": past} {
+		if len(result.Sources) == 0 || Id(result.Sources[0].GetRefId()) != mainId || len(result.Commits) != 0 {
+			t.Fatalf("%s: sources %v, carried %d", name, result.Sources, len(result.Commits))
+		}
+	}
+	if current.Sources[0].GetVersion() != 2 || past.Sources[0].GetVersion() != 1 {
+		t.Fatalf("the proofs %v %v", current.Sources, past.Sources)
+	}
+	c3 := rules.commitAs(rules.held, map[string]string{"README": "readme three\n", "agents/build/out": "built\n"}, c2)
+	carried := rules.mustPublish(rules.held, true, "refs/tags/carried", &c3)
+	if len(carried.Commits) != 1 {
+		t.Fatalf("the carried tag carries %d", len(carried.Commits))
+	}
+	own := rules.ownedRef(rules.held, "work")
+	rules.mustPublish(rules.held, false, own, &c2)
+	ownId := rules.publisher.ref(own).refId
+	sources := func(sources ...*protocol.EvsOverlay) func(args *EvsLocalPublishArgs) {
+		return func(args *EvsLocalPublishArgs) {
+			evsLocalPublishUpdateHook = func(update *evsGitPublishUpdate) { update.git.Sources = sources }
+		}
+	}
+	defer func() { evsLocalPublishUpdateHook = nil }()
+	rules.mustPublish(rules.held, true, "refs/tags/owned", &c2, sources(&protocol.EvsOverlay{RefId: ownId.Bytes(), Version: 1}))
+	rules.mustPublish(rules.held, true, "refs/tags/other", &c1, sources(&protocol.EvsOverlay{RefId: mainId.Bytes(), Version: 2}))
+	evsLocalPublishUpdateHook = nil
+	device := rules.device("device b")
+	for _, name := range []string{"refs/tags/current", "refs/tags/past", "refs/tags/owned", "refs/tags/other", "refs/tags/carried"} {
+		device.replay(name)
+	}
+	rules.applied(device, "refs/tags/current", 1, c2)
+	rules.applied(device, "refs/tags/past", 1, c1)
+	rules.refused(device, "refs/tags/owned", 1, nil, rules.held, "README")
+	rules.refused(device, "refs/tags/other", 1, nil, rules.held, "README")
+	rules.refused(device, "refs/tags/carried", 1, nil, rules.held, "README")
+}
+
+// One verdict on a tag whatever the mount: the held signer tags its own commit c2, which was main's tip at version 2,
+// naming main at version 1 as its one source and carrying c2, so naming no proof. A long-running mount that follows
+// main and one made after the last push that replays only the tag, and main to version 1 for it, both refuse it with
+// prefix_rule; under a hook that looks the tagged commit up in a device's own tip index in place of the version the
+// push names, the mount that follows main passes it and the other refuses, which is why the proof is the named
+// version.
+func TestEvsLocalSyncPrefixOneVerdictOnATagWhateverTheMount(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"agents/build/out": "built\n", "README": "readme\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	c2 := rules.commitAs(rules.held, map[string]string{"agents/build/out": "built\n", "agents/build/x": "x\n", "README": "readme\n"}, c1)
+	rules.mustPublish(rules.held, false, "main", &c2)
+	c3 := rules.commitAs(rules.admin, map[string]string{"agents/build/out": "built\n", "agents/build/x": "x\n", "README": "readme three\n"}, c2)
+	rules.mustPublish(rules.admin, false, "main", &c3)
+	mainId := rules.publisher.ref("main").refId
+	blob := rules.publisher.mount.history.blob("x\n")
+	evsLocalPublishUpdateHook = func(update *evsGitPublishUpdate) {
+		sealed, _, err := evsGitSealCommit(context.Background(), update.objects, c2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		update.git.Sources = []*protocol.EvsOverlay{{RefId: mainId.Bytes(), Version: 1}}
+		update.commits, update.commitOids = []*protocol.EvsSealedCommit{sealed}, []EvsGitOid{c2}
+		update.carried.blobs[blob] = true
+	}
+	rules.mustPublish(rules.held, true, "refs/tags/v2", &c2)
+	evsLocalPublishUpdateHook = nil
+	verdicts := func(label string) (bool, bool) {
+		follower := rules.device("follows main " + label)
+		follower.replay("main")
+		follower.replay("refs/tags/v2")
+		later := rules.device("tag only " + label)
+		later.replay("refs/tags/v2")
+		for _, device := range []*evsTestDevice{follower, later} {
+			if ref := device.ref("refs/tags/v2"); ref.StuckAt != 0 && ref.StuckReason != SidecarEvsAlarmPrefixRule {
+				t.Fatalf("%s: refused for another reason %+v", label, ref)
+			}
+		}
+		return follower.ref("refs/tags/v2").StuckAt == 0, later.ref("refs/tags/v2").StuckAt == 0
+	}
+	if followerPassed, laterPassed := verdicts("named"); followerPassed || laterPassed {
+		t.Fatalf("by the named versions: %v %v", followerPassed, laterPassed)
+	}
+	evsLocalSyncProofHook = func(engine *EvsGitSyncEngine) func(ctx context.Context, peeled EvsGitOid) (bool, error) {
+		return func(ctx context.Context, peeled EvsGitOid) (bool, error) {
+			rows, err := engine.TipsOf(ctx, peeled)
+			for _, row := range rows {
+				if evsGitSourceSharedBranch(row) {
+					return true, err
+				}
+			}
+			return false, err
+		}
+	}
+	defer func() { evsLocalSyncProofHook = nil }()
+	if followerPassed, laterPassed := verdicts("own index"); !followerPassed || laterPassed {
+		t.Fatalf("by each device's own tip index: %v %v", followerPassed, laterPassed)
+	}
+}
+
+// A push that fails both the tree's hash and the prefix line late raises the tree's reason, on two devices alike: the
+// trees row comes before the late test.
+func TestEvsLocalSyncPrefixTheTreesReasonComesFirst(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	c2 := rules.commitAs(rules.held, map[string]string{"agents/build/out": "built\n"}, c1)
+	evsLocalPublishUpdateHook = func(update *evsGitPublishUpdate) {
+		// the sealed commit's changes no longer rebuild its tree
+		update.commits[0].Changes = nil
+	}
+	rules.mustPublish(rules.held, true, "main", &c2)
+	evsLocalPublishUpdateHook = nil
+	for _, name := range []string{"device b", "device c"} {
+		device := rules.device(name)
+		device.replay("main")
+		ref := device.ref("main")
+		if ref.StuckAt != 2 || ref.StuckReason != SidecarEvsAlarmVersionRule {
+			t.Fatalf("%s: %+v", name, ref)
+		}
+	}
+}
+
+// A branch whose first push was refused is still new after its DELETE (QD-801): pushed again by the held signer over
+// its own branch with no change it is refused again, and by the admin it applies.
+func TestEvsLocalSyncPrefixFirstPushRefusedDeletedAndPushedAgain(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	own := rules.ownedRef(rules.held, "work")
+	c2 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built two\n"}, c1)
+	rules.mustPublish(rules.held, false, own, &c2)
+	rules.mustPublish(rules.held, true, "release", &c2)
+	device := rules.device("device b")
+	device.replay("release")
+	rules.refused(device, "release", 1, nil, rules.held, "README")
+	// the admin deletes it: the stopped ref takes the DELETE and nothing else; the push that re-creates it repeats the
+	// head's base, which this device kept from the refused creation (the tests' publisher drops it at a DELETE)
+	record := device.ref("release")
+	rules.mustPublish(rules.admin, false, "release", nil)
+	rules.publisher.ref("release").base = record.Base
+	device.replay("release")
+	if ref := device.ref("release"); ref.StuckAt != 0 || !ref.Deleted || ref.LastTip != nil || ref.Base == nil {
+		t.Fatalf("after the DELETE %+v", ref)
+	}
+	rules.mustPublish(rules.held, true, "release", &c2)
+	device.replay("release")
+	// its alarm is counted into the window's next event for the same ref and signer
+	rules.stopped(device, "release", 3, nil, rules.held)
+	rules.mustPublish(rules.admin, false, "release", nil)
+	rules.publisher.ref("release").base = record.Base
+	rules.mustPublish(rules.admin, false, "release", &c2)
+	device.replay("release")
+	rules.applied(device, "release", 5, c2)
 }
