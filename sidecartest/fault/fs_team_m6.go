@@ -19,6 +19,9 @@
 //     SidecarRevoke{removed} of m's stale Worker, both under one countersignature, the act refused statement by
 //     statement without it; the twin is that act countersigned alone.
 //
+// Registered with §22.7's revocation suite, its member form (TEAM-M6-11, TEAM-M6-07): TeamMemberRevocationCheck, the
+// log's clause of member-remove and scim-active-false.
+//
 // Named schedules beside them: FS-97's AdminSet member at k = 2, whose stale Worker goes only by its own proposal
 // beside its new Worker's, each completed by the cosigner, a proposal never cosigned expiring at its not_after and the
 // next admission proposing it again; FS-97's cleanup at 90% of config_admissions, the list the same at every reader
@@ -600,3 +603,62 @@ func TeamMemberRevokeStatements(net *Net) *Schedule {
 		}),
 	)
 }
+
+// §22.7's revocation suite, the member form (M6; TEAM-M6-11's MemberRevoke, TEAM-M6-07's scim_signer): X is a member of
+// a Team at k = 2 with two devices, removed by an Admin's MemberRevoke (member-remove) or by the MemberRevoke the
+// sidecar ServiceSettings.scim_signer names signs at once, as SCIM's active=false asks (scim-active-false): an agent
+// the Owner sponsors, as its indexer, whose MemberRevoke every reader refuses until the head names it. TEAM's clause is
+// the log's: before the loss X's first device admits X's laptop, so the check judges a member that held something;
+// after it every reader revokes each of X's devices at the removal's position, masks it in the directory and drops it
+// from the directory's readers, and nothing X's devices sign afterwards is taken. What X can still read and hold is
+// the other areas' clauses (KEYS's keys, ACL's rights), whose checks name these ways as they compose them; api's
+// denial at once of a SCIM deactivation is server's (model.DenyNetworkMemberInTx).
+var TeamMemberRevocationCheck = sidecartest.RegisterRevocationCheck(&sidecartest.RevocationCheck{
+	Id:   "team/member-removed-signs-nothing",
+	Area: "TEAM",
+	Ways: []sidecartest.RevocationWay{sidecartest.RevocationMemberRemove, sidecartest.RevocationScimInactive},
+	Run: func(run *sidecartest.RevocationRun) (string, error) {
+		return "", fsTeamCatch(func() error {
+			tier, err := run.Net.AdmissionTier()
+			if err != nil {
+				return err
+			}
+			team := sidecartest.NewTeamNet(fsTeamFailer{}, tier, nil)
+			defer team.Close()
+			world := newTeamM6World()
+			world.adminSet(team)
+			owner, adminB := team.Owner(), world.devices["admin b"]
+			memberX, xFirst := team.ConsentedMember("x")
+			xLaptop := team.Device("x laptop", memberX)
+			team.AdmitDevice(xFirst, xLaptop, 0)
+
+			signer := adminB
+			if run.Way == sidecartest.RevocationScimInactive {
+				indexer := team.Device("the owner's indexer", sidecar.Id{})
+				team.MustLand(team.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+					team.Admission(indexer, []sidecar.Id{team.TagAtom("recurd")}, false, team.Clock().Now().Add(30*24*time.Hour).UnixMilli(), 0)))
+				team.MustRefuse(team.Sign(indexer, bridge.SignedType_SIGNED_MEMBER_REVOKE, team.MemberRevoke(memberX)), sidecar.ErrConfigRefused)
+				team.SetServiceSettings(&protocol.ServiceSettings{ScimSigner: indexer.SidecarId.Bytes()})
+				signer = indexer
+			}
+			removal := team.MustLand(team.Sign(signer, bridge.SignedType_SIGNED_MEMBER_REVOKE, team.MemberRevoke(memberX)))
+			directoryId, now := team.DirectoryId(), team.Clock().Now()
+			team.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+				readers := acl.RepoReaders(directoryId, now)
+				for _, device := range []*sidecartest.AdmissionDevice{xFirst, xLaptop} {
+					if row := state.SidecarRow(device.SidecarId); row.GetRevokedAt() != removal.Pin.GetVersion() {
+						return fmt.Errorf("%s revoked at %d, not at the removal's %d", device.Name, row.GetRevokedAt(), removal.Pin.GetVersion())
+					}
+					if !state.MaskedInDirectory(device.SidecarId) || slices.Contains(readers, device.SidecarId) {
+						return fmt.Errorf("%s is unmasked or reads the directory after the removal", device.Name)
+					}
+				}
+				return nil
+			})
+			// X's devices keep their keys and sign on: none of it is taken
+			team.MustRefuse(team.Sign(xFirst, bridge.SignedType_SIGNED_SIDECAR_ADMIT, team.Admission(team.Device("x spare", memberX), nil, false, 0, 0)), sidecar.ErrConfigRefused)
+			team.MustRefuse(team.Sign(xLaptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, team.Revocation(owner, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)), sidecar.ErrConfigRefused)
+			return nil
+		})
+	},
+})

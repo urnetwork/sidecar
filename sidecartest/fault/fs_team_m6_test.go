@@ -7,6 +7,8 @@ package fault
 
 import (
 	"testing"
+
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 func TestFs97Team(t *testing.T) {
@@ -31,4 +33,19 @@ func TestS3bMemberAdmitStatements(t *testing.T) {
 
 func TestS4bMemberRevokeStatements(t *testing.T) {
 	fsTeamRun(t, TeamMemberRevokeStatements)
+}
+
+// §22.7's revocation suite in its member form: X removed by an Admin's MemberRevoke and by the scim_signer's, each
+// way named, and TEAM's check judging in both.
+func TestRevocationSuiteMemberForm(t *testing.T) {
+	report := sidecartest.RunRevocationSuite(t, sidecartest.RevocationFormMember, nil)
+	for _, way := range sidecartest.RevocationFormMember.Ways() {
+		judged := false
+		for _, result := range report.Of(way) {
+			judged = judged || (result.CheckId == TeamMemberRevocationCheck.Id && result.Err == nil && result.Open == "")
+		}
+		if !judged {
+			t.Errorf("%s: TEAM's check did not judge", way)
+		}
+	}
 }
