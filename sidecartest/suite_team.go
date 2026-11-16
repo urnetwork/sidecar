@@ -3,13 +3,13 @@
 // Team's starting document and the team directory the Owner's first device files as team-create does (TEAM-M6-10), so
 // every reader standing, each new device and gate at a base and the writer's follower answers each row alike, and the
 // world fails a row the moment one stands elsewhere than the reference. T2 runs the rows on FakeApi here, T3 on
-// server's sequencer (server/api/sidecar_team_t3_test.go).
+// server's sequencer (server/api/sidecar_team_db_test.go, and over the local stack's MinIO sidecar_team_t3_test.go).
 //
 //	k of n       an Owner alone, an Admin from an invite (n = 2, k still 1), then a third AdminSet member: k = 2,
 //	             every authority statement a proposal its cosign completes and one signature refused, across bases,
 //	             a proposal never cosigned expiring at its not_after, the threshold field raising k and lowering it
-//	n <= 2       an AdminSet of two keeps k = 1 whatever its threshold asks, so either admin alone changes the
-//	             AdminSet or removes the other, and a third makes it 2 again
+//	n <= 2       an AdminSet of two that asks a threshold above 1 is refused, since n <= 2 forces k = 1, so either
+//	             admin alone changes the AdminSet or removes the other, and a third AdminSet member makes it 2
 //	seats        the 1,001st live member device, most of the first 1,000 one member's (no member-device cap), is
 //	             wrapped in the config group and the team directory's alike: it reads both, commits nothing, and
 //	             moves into the first 1,000 when a leaf-entitled device is revoked, nothing shrinking
