@@ -1,4 +1,4 @@
-# metadata_list.yml v37; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v38; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -130,6 +130,10 @@
 # smtp-2's Feedback-ID token, the network's report token, public in its _dmarc, with no key; smtp-5's sealed
 # copies, only of reports at a network's own token, <root>'s split by header_from with none; and mx-4's root
 # recipient, <root>'s rua.
+# v38, updated 2026-11-16 for §15's items (owner decision 443, the build's accepted fix QD-189 and its readings
+# QD-352 and QD-480), adds no row: dns-1's retire_spki_sha256, the hashes of the caller's own published keys a
+# key-record write retires; mx-2's rows, one a router session whose SNI names a network; and mx-3's route
+# projection, keyed by the SNI's routable part, with each entry's network, host, flags and published receivers.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -639,7 +643,7 @@ cert-2:
 dns-1:
   service: dns (API blocks and edges)
   store: dns_root (with custom_host_map_version and restore_incident_id), network_dns_zone, network_dns_record, network_dns_host_suspension, dns_zone_journal, network_dns_custom_host, dns_custom_host_map, dns_custom_host_map_applied, dns_restore_incident, dns_canary_verdict, dns_ns; Redis {dns}serial:<root>; edge snapshots, and after a reload the snapshot it replaced; a restore's incident record and admin events (api-8)
-  sees: system and user records (A, AAAA, CNAME, TXT, MX, SRV, wildcards), DKIM selectors and keys, TLSA per receiver key, CAA, null MX, direct-MX addresses, replying burners' selector records and the MX, A and AAAA copies at their labels, until the PSL listing (owner decision 79; §12.7), challenge TXT values, strong-mode probes' CAA canaries (the customer's pin plus a nonce; §12.8), custom-host maps with each custom host's state (pending, active, or withheld while a downgrade keeps a web host out of the map; §20.7, QD-840), CAA mode (strong or weak), full-chain check result, map version and readiness (§12.8); the map's versions and digests, and each lb interface's reported version, digest and nginx master and its route probes' results (§13.4); the sending lb addresses, listed in _spf.<root> and named in their reverse zones by PTRs under bringyour.com (owner decision 124); zone suspensions (network, reason, until) and host suspensions (network, host, creation time; §12.9), each record's creation time, an expiring record's expiry and a withheld record's withheld time; the journal of diffs; serials; each user or key write also as an admin event (api-8); after a restore, the RRsets (network_id, owner, type) that differ between an edge's replaced snapshot and the restored zone, and the custom hosts W1's regeneration adds or drops (§12.6), and each reclaimable name's CT leaf SHA-256; each lb interface's public addresses, router flag and the health an edge derives from its probes; each monitor source's canary verdict (source, serial, ok, time), overwritten in place; each NS's state, stopped time and reason; each network's report token, public in _dmarc
+  sees: system and user records (A, AAAA, CNAME, TXT, MX, SRV, wildcards), DKIM selectors and keys, TLSA per receiver key and the hashes of the caller's own published keys a key-record write retires (retire_spki_sha256; §15.5, owner decision 443), CAA, null MX, direct-MX addresses, replying burners' selector records and the MX, A and AAAA copies at their labels, until the PSL listing (owner decision 79; §12.7), challenge TXT values, strong-mode probes' CAA canaries (the customer's pin plus a nonce; §12.8), custom-host maps with each custom host's state (pending, active, or withheld while a downgrade keeps a web host out of the map; §20.7, QD-840), CAA mode (strong or weak), full-chain check result, map version and readiness (§12.8); the map's versions and digests, and each lb interface's reported version, digest and nginx master and its route probes' results (§13.4); the sending lb addresses, listed in _spf.<root> and named in their reverse zones by PTRs under bringyour.com (owner decision 124); zone suspensions (network, reason, until) and host suspensions (network, host, creation time; §12.9), each record's creation time, an expiring record's expiry and a withheld record's withheld time; the journal of diffs; serials; each user or key write also as an admin event (api-8); after a restore, the RRsets (network_id, owner, type) that differ between an edge's replaced snapshot and the restored zone, and the custom hosts W1's regeneration adds or drops (§12.6), and each reclaimable name's CT leaf SHA-256; each lb interface's public addresses, router flag and the health an edge derives from its probes; each monitor source's canary verdict (source, serial, ok, time), overwritten in place; each NS's state, stopped time and reason; each network's report token, public in _dmarc
   why: serve the zones and the sending addresses' reverse zones; takedown (§21); DNS data is public by nature (CONVENTIONS §0)
   ttl: records while published, withdrawn at once when their network is deleted (§12.5); PTRs while smtpedge.yml lists their address; challenges and canaries at most 1 h; journal 7 d; custom-host map versions 7 d, and interface reports while the interface is in the lb inventory; suspensions until Restore or their until time; {dns}serial projects dns_root (§19.7); a replaced snapshot until the restore step has its diff, at most 24 h after the reload, and deleted at once after a reload that is not a restore's; a restore's lists 400 d, in its incident record as in admin events (api-8); canary verdicts overwritten in place; NS rows while dns.yml lists the NS; report tokens with their network_dns_zone row
   owner: §12.6
@@ -709,14 +713,14 @@ mx-1:
 mx-2:
   service: mxedge
   store: mail_connection_record (hourly partitions; §15.4, §15.15)
-  sees: connection records; receiving network, time, size, result; no sender address, no burner label
+  sees: connection records, one a router session whose SNI names a network, a session with none leaving no row; receiving network, time, size, result; no sender address, no burner label
   why: abuse joins and per-network caps
   ttl: records dropped at 24 h, after any §21.9 hold has copied out its network's rows (owner decision 133); then only api-13's daily lease usage, a hold's copy excepted (api-14)
   owner: §15.4
 mx-3:
   service: mxedge, dns
   store: mail_network, mail_host_key, mail_direct_mx; Redis {mxr_<net>}
-  sees: mail-enabled networks; mail host keys (host mx or mx.<scope>, receiver sidecar_id, SPKI hash, state, publish and retire times); direct-MX receivers and addresses (Team); the route projection of mail-enabled labels, aliases, Team scopes and custom MX hosts; no burner table and no per-network address (owner decisions 32, 34)
+  sees: mail-enabled networks; mail host keys (host mx or mx.<scope>, receiver sidecar_id, SPKI hash, state, publish and retire times); direct-MX receivers and addresses (Team); the route projection of mail-enabled labels, aliases, Team scopes and custom MX hosts, keyed by the SNI's routable part, each with its network, host, flags and up to 64 receivers' sidecar_ids from its published host keys, newest first, for the router's wake hint (§15.6); no burner table and no per-network address (owner decisions 32, 34)
   why: route by SNI; verify direct MX (owner decision 33)
   ttl: mail_network until mail is turned off or its network deleted; host keys 30 d after retirement; direct-MX rows until DELETE or their receiver's removal; {mxr_} projects them (§19.7)
   owner: §15.15

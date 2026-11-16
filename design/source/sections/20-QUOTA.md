@@ -98,6 +98,8 @@ team:                                   # owner decisions 27, 122; pro:'s concur
 sidecar_abuse:                          # every tier; owners set defaults, §21 tightens
   mail_group_members: 100               # §15.7
   mail_inbound_recipients: 100          # per message; receivers apply it (§15.7)
+  mail_inbound_repos_per_message: 8     # distinct repos a message's recipients reach, a group repo once; past
+                                        # it RCPT gets 452 4.5.3, sent again in a later transaction (§15.5)
   probation_dns_entries: 5              # user RRsets while on probation (§21.7, owner decision 97)
   evs_closure_bytes_per_day: 64mib      # each erasing sidecar's own CLOSURE bytes a UTC day, uploads and inline
                                         # records, counted at the storage limit or while spent (20.7)

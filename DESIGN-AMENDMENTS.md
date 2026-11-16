@@ -18,7 +18,7 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§8 Access control](#s8) | 1 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
-| [§15 The local email server, inbound mail, and burner email](#s15) | 11 | 19 |
+| [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
 | [§16 The local MCP server and record primitives](#s16) | 28 | 21 |
 | [§19 Server services](#s19) | 20 | 21 |
 | [§20 Tiers, quotas, metering, and billing](#s20) | 7 | 18 |
@@ -210,248 +210,7 @@ Changes: BRIEF.md tlc bullet.
 
 Questions: `mail-m5-02-module-fetch.md`.
 
-### QD-106: What `creator` means, who may change a record, and what happens when the creator is gone
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8.*
-
-`creator` is the sidecar_id whose signed push wrote the record's first version, and a reader checks the field against that push's signer. §8's `mail:<alias>#listen` is evaluated at the reader's current state for the creator's subject: an untagged sidecar's member, a tagged one's tags, read from its `SidecarRow`, which outlives the device. So removing a device leaves its addresses standing, and revoking the grant ends them. A later version of `addr/` or `burner/` (burn, pause, resume, members) counts only if signed by a consented device (§8.5) of the member who owns the record's mailbox, or for a group by a repo admin of the group repo; another signer's version is ignored with `mail_receiver_alarm`. 'Created only if absent' bars a second first version, not a state change. After a compromise revocation the owner's devices list the addresses that device created.
-
-Changes: §15.7 mailcfg; §15.8 Address directory.
-
-Questions: `plan-MAIL-small-readings.md#15`.
-
-### QD-118: How the census reports per-ASN, by-volume SNI loss with no sender address kept
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Scripted census, the question's option 1, with the bar restated. A test network in main, dark (owner decision 91), takes mail one sender at a time: provider test accounts, ESPs and real sign-ups at the top-100 list. `sidecartest/mailcensus` joins each sender's window with the router's existing `urnetwork_mxedge_*` result counters and the test receiver's own view, one row per sender: sender, ASN, SNI, DANE, TLS version, plaintext fallback. The ASN column comes from the census's own sender list, never from `sender_ip` at the router, so mx-1, mx-2 and ops-1 stay as written. D-MAIL-9's 'by volume' cannot be measured this way, so the proposed bar becomes: the share of sign-up senders without SNI, each weighted 1/rank in the sign-up list, under 5%, shown beside the unweighted share. Report senders are listed but left out of the bar, because `rpt.bringyour.com` terminates every session, SNI or not (D-SMTP-19).
-
-Changes: D-MAIL-9.
-
-Questions: `plan-MAIL-census.md`.
-
-### QD-189: §15.6's router has no way to name the lapsed receivers it must wake
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-No new route. `{mxr_<net>}`'s value gains `receiver_sidecar_ids`, at most 64, newest first, from `mail_host_key` rows for that host in state published, which `model.ProjectMailRoutes` writes on each key change. On a miss the router calls `Push.HintSidecars(ctx, ids, &ClientHint{Topic: "mail", Kind: 0x1702, Body: MailHint{RECEIVER_NEEDED, host}, Forced: true})` asynchronously, so the hold never waits on it and no Postgres query joins the path. The host resolves sidecars to clients as plan-KEYS-hint-addressing settles. The direct-MX alert is raised off the path by the prober, which reads the same ids from `mail_host_key`, since `{mxr_}` drops a direct-MX network. A device that misses either sees `direct_mx` in `GET /mail/status`.
-
-Changes: §15.6 step 5; §15.15 {mxr_}.
-
-Questions: `plan-MAIL-hints.md#2`.
-
-### QD-196: A deposit's evidence exists only after the body, and §15.5 budgets the checks but not the upload
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11.*
-
-Keep `Deposit(name, reader)` and add no `BeginDeposit`. The sealed header goes last, inside the deposit's own stream: deposit plaintext = message bytes ‖ `MailDeposit` ‖ u32be(length of `MailDeposit`). The receiver's reader yields bytes from `mailSpool` as they arrive, blocks at the message's last byte until the checks finish, then yields the trailer, and EOF commits. Segments upload as they fill (8 MiB, §11.6), so a message under one segment uploads once, after the checks. To evs the trailer is body, sealed under the object key whose slot CONSUME and ERASE destroy, so it needs no K_dep and plan-EVS1-format-bytes#5's clause on §15.7's header drops. STREAM's final flag authenticates the tail, and a reader takes the trailer by ranged read before the body. The first repo streams live; a further repo, or a rebuild after 412 GATE_CLOSED, replays from the spool under a new object key and new slot ids, at most 4 at once, 2 on mobile. An aborted DATA ends the reader with an error, so no push commits and the uploads fall to §11.13's orphan rule. The spool stays sealed under a per-message key held only in memory.
-
-Changes: §15.5 Session; §15.7 Deposit; plan-EVS1-format-bytes#5 (its §15.7 clause).
-
-Questions: `plan-MAIL-deposit-shape.md`.
-
-### QD-208: One failure across several repos, and the retry that repeats the others
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §20, §4.*
-
-Any deposit failure answers `451 4.3.0`, and the sender's retry duplicates in repos that took it. To bound that: new `sidecar_abuse:` key `mail_inbound_repos_per_message: 8`. A RCPT that would add a ninth distinct repo gets `452 4.5.3`, and the sender sends those recipients in a later transaction (RFC 5321 §4.5.3.1.10). A group repo counts as one. `mail_inbound_recipients` stays 100.
-
-Changes: §15.5 Session; §20.4 sidecar_abuse.
-
-Questions: `plan-MAIL-small-readings.md#16`.
-
-### QD-228: No risk row says a compromised receiver can forge reception-time verdicts
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-Add a §15.16 row: "A compromised admitted receiver seals passing verdicts for forged mail, which ingest, checking only the hash and the signer, labels validated | Low | High | per-device keys, I-15, Team scopes, listed mail indexers and the undesignated-receiver alarm (D-MAIL-15); the label states its basis, and any re-check shows apart (D-MAIL-14)". Add a §2.10 row: adversary, a compromised receiver; threat, reads mail in transit and seals forged verdicts; mitigation, those same controls; residual, what it sealed until revoked, since readers never re-judge reception-time evidence. D-MAIL-14 and D-MAIL-15 stand.
-
-Changes: §15.16; §2.10.
-
-Questions: `g0-recheck-0-receiver-evidence.md#2`.
-
-### QD-243: Two roles cannot share one deployment service
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-[plan-MAIL-small-readings#19] Two warp services, `mxedge` and `mxedge-platform`, each a thin `server/cli/<dir>` over a shared `server/mxedgehost`, as OPS's reading 6. §15.15's Services line, §19.4's row, W4 and D-OPS-11's classes and §19.11's staged list name both. [plan-OPS-small-readings#6] `server/cli/dnsedge/` and `server/cli/mxedge-platform/` hold only a Makefile that builds the shared main and a Dockerfile that picks the role, so each plan's one binary stays one binary. W4 routes `rpt.bringyour.com`'s two interfaces to `mxedge-platform`. §19.4's mxedge row splits into two services, and §19.11's classes add `mxedge-platform` under `--only-older` and to the staged list after `mxedge`.
-
-Changes: §15.15; §19.4; §19.5 W4; D-OPS-11; §19.11.
-
-Questions: `plan-MAIL-small-readings.md#19`, `plan-OPS-small-readings.md#6`.
-
-### QD-255: Per-network caps cannot answer 421, since the network is known only after STARTTLS's 220
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Per-sender caps (/64 or /32, with /48 and /24 aggregates) are checked at connect and answer `421 4.7.0` before TLS. '2 sessions per sender /24 per network' and 'per network' are checked once SNI names the network and close in the handshake, a temporary failure that writes `{mxc_}` like any closed handshake. §15.4's cap row says so.
-
-Changes: §15.4 situation table.
-
-Questions: `plan-MAIL-small-readings.md#1`.
-
-### QD-262: §15.5 counts DohCache hits on a path that has no cache
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Option 1. §15.5 names MailDnsStub, a per-receiver cache in front of DohCache.Forward: answers kept by record TTL, at most 3,600 s; NXDOMAIN and NODATA for min(SOA minimum, 300 s), not at all without an SOA; never a failure, timeout or budget refusal; 4,096 entries, least recently used out; memory only. §15.5's dns row says "beyond stub hits" and AuthLimits.dns_queries's comment "stub hits excluded", with no field change. ext-3's "at most 64" stands.
-
-Changes: §15.5 dns row; AuthLimits.dns_queries comment.
-
-Questions: `g0-recheck-0-receiver-evidence.md#1`.
-
-### QD-277: FS-123's last clause contradicts §15.9's and §18.5's coverage copy
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18.*
-
-FS-123's clause reads: GetReceiverCoverage's copy speaks of no sending, and every send copy names no indexer, receiver or coverage setting.
-
-Changes: FS-123.
-
-Questions: `plan-MAIL-small-readings.md#21`.
-
-### QD-309: §15.10's `sent` copy is not in §15.7's layout
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A sent copy is an ordinary `m/` and `i/` entry with label `sent` in `f/`, pushed by the sending device.
-
-Questions: `plan-MAIL-small-readings.md#9`.
-
-### QD-329: A signature failing under a header section cut at 256 KiB
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-That signature is `incomplete`, not `fail`, and `limits.reason` sets bit 1.
-
-Questions: `plan-MAIL-small-readings.md#12`.
-
-### QD-332: mox answers permerror for any signature with `l=`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Keep it: a signature with `l=` is `permerror`, so no result, refusing no mail.
-
-Questions: `plan-MAIL-small-readings.md#11`.
-
-### QD-333: `DmarcResult` has no permerror
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-An invalid DMARC record maps to `none`.
-
-Questions: `plan-MAIL-small-readings.md#13`.
-
-### QD-349: mox's `junk` does not fit `s/model`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-MAIL-M7-12 builds a small per-mailbox naive Bayes filter of its own, kept in the one `s/model` file.
-
-Questions: `plan-MAIL-mox-subset.md#2`.
-
-### QD-352: A session with no network cannot leave a `mail_connection_record` row
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A session whose SNI is absent or unknown leaves no row and counts only in `urnetwork_mxedge_*`, which carries no network label.
-
-Questions: `plan-MAIL-small-readings.md#3`.
-
-### QD-353: `mail_operators.yml` with no YAML parser in the root
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`go generate` writes `mail_operators_gen.go` from the file, and `make check`'s stale-code rule keeps them equal.
-
-Questions: `plan-MAIL-small-readings.md#18`.
-
-### QD-370: Which EHLO is SPF's HELO identity
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-SPF's HELO check takes the post-TLS EHLO the receiver saw. `MailIngress.ehlo_name` stays the pre-TLS name.
-
-Questions: `plan-MAIL-small-readings.md#14`.
-
-### QD-405: Who raises `MailHint{deposit}`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §18.*
-
-Nobody. `deposit` stays reserved and is never sent. A new deposit reaches readers through evs's `evs:<repo_id>` hint and §18.7's wake, which covers topic `evs`.
-
-Changes: §15.15.
-
-Questions: `plan-MAIL-hints.md#1`.
-
-### QD-432: Who fixes the bytes of the §15 formats the design names but does not define
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §6, §14.*
-
-[plan-MAIL-format-bytes] Option 1. MAIL-M7-01 writes `protocol/mail.proto` and `protocol/MAIL-FORMAT.md`, pins them in `testdata/mail/` vectors, and `design-records` folds them into §15 for M7's Gn-in; nothing waits. Rows #1 to #7 give the values it uses. [plan-MAIL-format-bytes#1] In `protocol/mail.proto`: `message MailDeposit { uint32 version = 1; MailIngress ingress = 2; MailAuthEvidence evidence = 3; string mail_from = 4; bool require_tls = 5; repeated string recipients = 6; uint32 tls_version = 7; uint32 tls_suite = 8; bytes receiver_sidecar_id = 9; }`. `recipients` holds this repo's only. `tls_version` and `tls_suite` are the IANA values. A same-network deposit sets 1, 4 and 6 only, its signature being the deposit's EvsPush signer. It travels as plan-MAIL-deposit-shape's trailer, inside the body under the deposit's object key. [plan-MAIL-format-bytes#2] `message MailHint { uint32 kind = 1; string host = 2; }`, at most 256 B in `PushHint.hint`, with `PushHint.kind` 0x1702. `kind`: 1 DEPOSIT, reserved and never sent; 2 RECEIVER_NEEDED; 0 a protocol error (§6.11). `host` is `mx` or `mx.<scope>`. [plan-MAIL-format-bytes#4] Numbers follow §15.7's and §15.8's brace order; ids are 16-byte `bytes`, times `uint64` ms, enums have a zero UNSPECIFIED. `MailAddress`: kind 1 (1 admin, 2 id, 3 group, 4 agent, 5 burner, 6 bounce), mailbox 2 (repo id), members 3 (repeated), creator 4 (sidecar_id), effect_key 5. `MailBurner`: mailbox 1, state 2 (1 live, 2 paused, 3 burned), replying 3, created_ms 4, effect_key 5. `IndexEntry`: id 1, address 2, time_ms 3, from 4, subject 5, snippet 6 (at most 200 B), message_id 7, thread_key 8, size 9, attachments 10 (repeated {name 1, type 2, size 3}), auth_results 11, tls_label 12, tls_basis 13 ({rule 1: 1 requiretls, 2 operator; operator_id 2; list_version 3; strict_custom_mx 4}), spam_score 14, one_time_code 15. `VaultEntry`: entry_id 1, address 2, title 3, username 4, password 5, password_history 6, totp 7 ({secret 1, algorithm 2, digits 3, period 4}), urls 8, notes 9, used_at 10 (repeated {registrable_domain 1, first 2, last 3}), created 11, updated 12, state 13. `mailcfg` records take their signature from the version's EvsPush signer, so they need no SignedType. [plan-MAIL-format-bytes#5] One protobuf per file. `i/`: `MailIndexSegment{repeated IndexEntry entries = 1}`, at most 1 MiB or 4,096 entries, `<n>` decimal from 0 each month. `f/`: `MailFlagSegment{repeated MailFlagOp ops = 1}`, at most 4,096; `MailFlagOp{message_id 1, op 2 (1 seen, 2 flagged, 3 label, 4 trash), set 3, label 4, hlc_ms 5, hlc_count 6, sidecar_id 7}`. The clock: hlc_ms = max(wall ms, the highest hlc_ms seen), hlc_count 0 when wall time advanced it, else one more; last writer wins by (hlc_ms, hlc_count, sidecar_id) compared in that order. `r/`: `MailGroupRef{repo_id 1, message_id 2}`. `or/`: `MailOutcome{repeated SmtpDomainOutcome domains = 1}`, `SmtpDomainOutcome{domain 1, mode 2, byte_count 3, cap_byte_count 4, outcome 5 (1 sent, 2 queued, 3 deferred, 4 too_large, 5 refused, 6 tls_refused, 7 failed), reply_code 6, retry_after_ms 7, update_time_ms 8}`. `p/`: `MailProverRecord{data_proof_bytes 1, data_bytes_per_s 2, measure_time_ms 3}`. `forward`: `MailForward{address 1, burners 2, verified_time_ms 3}`, signed by its push. `ra/`: `MailReverseAlias{original_sender 1, burner_address 2}`. `s/model`: `MailSpamModel{version 1, counts 2}`, MAIL-M7-12 defining `counts`. `o/`: plan-SMTP-wire-gaps#4. [plan-MAIL-format-bytes#7] The router's builder holds `ip_listings` to at most 16 entries of at most 12 B, then, if the message still passes 1,024 B, drops `ptr_name` first and `ip_listings` from the end next. `version`, `sender_ip`, `sender_port`, `sni`, `ehlo_name` and `receive_time_millis` are never dropped. This reverses the question's order. [plan-SMTP-wire-gaps#4] `o/`: `u32be(length) ‖ Signed ‖ message bytes`. The `Signed` has `SIGNED_SMTP_OUTBOX = 0x1601`, purpose `smtp-outbox`, and its body is `SmtpOutboxEntry{effect_key 1, message_sha256 2, sender 3, recipients 4, flags 5, tl4_domains 6, create_time_ms 7}`. `or/` and `p/` are plan-MAIL-format-bytes#5's `MailOutcome` and `MailProverRecord`. [mail-proto-format-readings] Accept items 1 to 16 as landed in protocol/mail.proto, protocol/MAIL-FORMAT.md and testdata/mail/vectors.yml; design-records folds them into §15 with plan-MAIL-format-bytes. Item 2 adds `tls_level` to §14.5's MailOutcome. Item 3's `MAIL_TLS_MEMBER_SIGNED` is taken only if the push's signer may send as the From address. Item 9: MAIL-M7-16 decides whether a trash op's 30-day shred needs a guard against a slow device clock. [plan-MAIL-format-bytes#6] Nothing to do: `protocol/mail.proto` and `protocol/smtp.proto` exist on `sidecar`.
-
-Changes: §15.7; §15.15; §15.8; §15.5 MailIngress; §6.11 SignedType; §14.5; §15.5; §15.7; §15.8.
-
-Questions: `plan-MAIL-format-bytes.md`, `plan-MAIL-format-bytes.md#1`, `plan-MAIL-format-bytes.md#2`, `plan-MAIL-format-bytes.md#4`, `plan-MAIL-format-bytes.md#5`, `plan-MAIL-format-bytes.md#6`, `plan-MAIL-format-bytes.md#7`, `plan-SMTP-wire-gaps.md#4`, `mail-proto-format-readings.md`.
-
-### QD-470: go-imap v2 has only pre-release tags
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Pin v2.0.0-beta.8, or a newer v2 tag if one exists when MAIL-M8-07 starts, with its `dependencies.yml` row saying it is a pre-release.
-
-Changes: dependencies.yml.
-
-Questions: `plan-MAIL-small-readings.md#20`.
-
-### QD-478: `POST /mail/enable` and `GET /mail/status` have no bodies
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`POST /mail/enable` takes an empty body and returns `{enabled_time}`; plan-SMTP-report-seal-key adds no field. `GET /mail/status` returns `{enabled, storage_full, spent, direct_mx}`. A receiver reads status at most every 30 s for RCPT's `452 4.2.2`, and takes SIZE, `mail_inbound_recipients` and the burner limits from `GET /sidecar/limits`.
-
-Changes: §15.15.
-
-Questions: `plan-MAIL-small-readings.md#7`.
-
-### QD-480: `{mxr_<net>}`'s key and value
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`<net>` is the SNI's routable part: a label, an alias or a custom MX host's full name. The value holds `network_id`, the host (`mx` or `mx.<scope>`), flags, and plan-MAIL-hints#2's `receiver_sidecar_ids`. A suspended network has no entry, so its SNI closes in the handshake.
-
-Changes: §15.15.
-
-Questions: `plan-MAIL-small-readings.md#4`.
-
-### QD-535: SpfResult, DkimResult, DmarcResult, ArcResult and their verdict enums
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-[protos-services-unwritten-numbers#5] As landed in mail.proto: verdict enums of 0 unspecified then §15.5's values in order; DmarcResult.alignment bits 1 SPF aligned, 2 DKIM aligned; ArcResult{cv, repeated ArcSet}, ArcSet{domain, selector, public_key}. MAIL-M7-01 may renumber until M7's Gn-in (plan-MAIL-format-bytes). [plan-MAIL-format-bytes#3] As landed in protocol/mail.proto on `sidecar`: `SpfResult`, `DkimResult`, `DmarcResult`, `ArcResult`, `ArcSet` and their verdict enums, 0 unspecified then §15.5's values in order, numbers open to review until M7's Gn-in.
-
-Changes: §15.5.
-
-Questions: `protos-services-unwritten-numbers.md#5`, `plan-MAIL-format-bytes.md#3`.
-
-### QD-537: §15.4 fixes only one cap number
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`MxEdgeSettings` fields, set in `config/<env>/mxedge.yml`, tuned at T5: 8 sessions per sender /64 or /32, 32 per /48 or /24, 256 per network, and §15.4's 2 per sender /24 per network.
-
-Changes: §15.4.
-
-Questions: `plan-MAIL-small-readings.md#2`.
-
-### QD-540: The platform listener's message cap
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`PlatformMessageByteCount`, default 16 MiB, advertised in SIZE; past it `552 5.3.4`.
-
-Changes: §15.4.
-
-Questions: `plan-MAIL-small-readings.md#17`.
-
-### QD-541: Other pre-TLS commands have no reply
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Any other command before TLS (RSET, NOOP, VRFY, HELP and so on) gets `502 5.5.1`, within connect's 2,048 B and 510 B per line.
-
-Changes: §15.4.
-
-Questions: `plan-MAIL-small-readings.md#6`.
-
-### QD-543: go-smtp's `LIMITS RCPTMAX` is not in §15.5's EHLO list
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Leave `MaxRecipients` 0 and enforce `mail_inbound_recipients` in `Session.Rcpt` with `452 4.5.3`.
-
-Changes: §15.5 Session.
-
-Questions: `plan-MAIL-small-readings.md#10`.
-
-### QD-582: mox has no ARC
-*Settled by the agents from the design; work builds on it.*
-
-MAIL-M7-09 builds ARC in-house under §15.5's `arc` row, writing header canonicalization there since mox keeps its own unexported.
-
-Questions: `plan-MAIL-mox-subset.md#1`.
+Not folded (2026-11-16): it changes only the run's brief, which carries it (BRIEF.md's paragraph of 2026-11-08 on Go modules through the module proxy); DESIGN.md sets no rule for what a build track fetches, and §4's Go line already takes the toolchain through the module proxy, checked against Go's checksum database (owner decision 272).
 
 <a id="s16"></a>
 ## §16 The local MCP server and record primitives
@@ -2091,15 +1850,6 @@ Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M6-04 builds it;
 
 Questions: `details-12-ratchet-commit.md`.
 
-### QD-673: What keeps a mailbox's EvsShare subjects and audit reader out of its vault entries, which only the owner's consented devices may read?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §15 The local email server, inbound mail, and burner email.*
-
-Vault entries are narrowed by rule. §16.6's refused-from-MCP list and MCP-M3-12's McpGuard add every evs tool, search tool and ur://evs resource on a mailbox's vault/ family, and evs_list omits it, so an agent holding an EvsShare of the mailbox reaches vault entries by no path. §15.8 and §2.18 state the residual: a mailbox's EvsShare subjects and a Team's audit reader hold the keys that open vault entries, and clients (MailVault refusing every device but the owner's consented ones) enforce the narrower readership. A second seal to an owner-only vault key stays the option if the readership must later hold against a holder of the mailbox's keys.
-
-Changes: §16.6 refused list and McpGuard row for a mailbox's vault/ family (edge lane, MCP-M3-12's code); §15.8 and §2.18 residual sentences (design-records).
-
-Questions: `mail-m8-02-vault-readers.md`.
-
 ### QD-676: What should a VPN component's posture do once its overlay is full and no compile has run to clear it?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
 
@@ -2126,15 +1876,6 @@ warp's services.yml gains a list of exact hosts the lb sends no X-Frame-Options 
 Changes: ops-lane follow-up: warp services.yml no-frame-options host list, warpctl/config.go addSecurityHeaders, config test; mmm.yml fragment line for sidecar.ur.io.
 
 Questions: `ops-m4-01-lb-frame-options.md`.
-
-### QD-694: Should MAIL-M7-11's message parser call extractor 1's HTML and charset functions once SEARCH-M10-42 lands, so that an i/ snippet keeps saying what search indexes?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §15 The local email server, inbound mail, and burner email.*
-
-Once SEARCH-M10-42 has landed, MAIL-M7-11's message parser calls extractor 1's functions: mailHtmlText calls indexStripHtml and mailDecodeCharset calls indexDecodeCharset, and the mail lane's copies (its tag scanner, html.UnescapeString and htmlindex.Get) go, so an i/ snippet reads HTML and charsets as search indexes them. Encoded words, transfer encodings and the walk stay the mail lane's own readings: they feed MAIL-FORMAT.md's fields, which no other device rebuilds. An edge-lane change of a few lines in sidecar/mail_parse.go and mail_parse_text.go, after SEARCH-M10-42.
-
-Changes: edge-lane follow-up after SEARCH-M10-42: mail_parse.go and mail_parse_text.go call indexStripHtml and indexDecodeCharset.
-
-Questions: `details-11-mail-snippet-reading.md`.
 
 ### QD-696: Should a VPN component's narrowing_overdue alarm back off while a narrowing entry keeps waiting for a compile that never runs, instead of repeating every 10 minutes forever?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*

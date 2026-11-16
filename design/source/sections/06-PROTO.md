@@ -579,7 +579,8 @@ enum SignedType {
   //   SIGNED_EVS_IMPORT 0x1404 (§11.6's four)
   // 0x15xx §13: SIGNED_TLS_KEY_ATTESTATION 0x1501 (purpose tls-key), SIGNED_TLS_EDGE_LOGIN 0x1502
   //   (edge-login), SIGNED_TLS_LINK 0x1503 (tls-link)
-  // 0x16xx §14, 0x17xx §15, 0x1Bxx §12
+  // 0x16xx §14: SIGNED_SMTP_OUTBOX 0x1601 (purpose smtp-outbox), over §15.7's o/ entry, which signed.proto
+  //   takes with the outbox's sender (owner decision 445); 0x17xx §15, 0x1Bxx §12
   // 0x1Axx §5: SIGNED_SIDECAR_BINDING 0x1A01 (purposes binding-client and binding-identity),
   //   SIGNED_AGENT_CERT 0x1A02 (purpose agent-cert)
   // 0x18xx §16 records, ApprovalDecision (§16.8); 0x1805 SIGNED_DIRECTORY_CARD, 0x1806 SIGNED_DIRECTORY_REPO

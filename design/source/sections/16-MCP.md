@@ -124,20 +124,22 @@ refused from MCP   every evs tool, search tool and ur://evs resource on repos of
                    team_agents, acl_grants and acl_check; every evs tool and ur://evs resource on the search
                    index's files (§11.14), whose display fields only the search tools return, under 16.10's
                    trust rules, but evs_list naming them when asked; every evs tool and ur://evs resource on the
-                   team directory, whose views come from 16.11's tools under its taint rule; evs_write and
-                   evs_delete on repos of kind config and mailcfg; every authority statement (§7.9's records,
-                   admissions, KeyRegister and IndexerSet included); approval statements but the daemon's own
-                   harness decisions (below); acl and bridge statements but those 16.5's tools file, under their
-                   tier, about this sidecar's own resources: GrantActivate of its own approved request (§8.8),
-                   GrantRevoke of a grant whose subject it is, a BridgeRoute or BridgeMap it advertises or hosts,
-                   the BridgeAddress of its own sidecar_id that a host's first map needs (§17.4), and
-                   BridgeWithdraw of its own rules (§17.8); so never BridgeBlock, BridgeEgress, Suspend,
-                   EvsShare, OwnerConfirm or access-log statements; record_append of a kind other than claim,
-                   handoff, ask, answer, check and note; the directory's person acts (16.11): deciding a request,
-                   so no RepoGrant, EvsShare or ApprovalDecision on another sidecar's request, announcing,
-                   revoking or marking a repo private, changing the claims setting, a worker's announcement or
-                   ServiceSettings.directory, and erasing directory items; DROP pushes and their cancels (§11.7;
-                   D-MCP-32)
+                   team directory, whose views come from 16.11's tools under its taint rule; every evs tool,
+                   search tool and ur://evs resource on a mailbox's vault/ family, which evs_list omits, so an
+                   agent holding an EvsShare of the mailbox reaches its vault entries by no path (§15.8; owner
+                   decision 440); evs_write and evs_delete on repos of kind config and mailcfg; every authority
+                   statement (§7.9's records, admissions, KeyRegister and IndexerSet included); approval
+                   statements but the daemon's own harness decisions (below); acl and bridge statements but
+                   those 16.5's tools file, under their tier, about this sidecar's own resources: GrantActivate
+                   of its own approved request (§8.8), GrantRevoke of a grant whose subject it is, a BridgeRoute
+                   or BridgeMap it advertises or hosts, the BridgeAddress of its own sidecar_id that a host's
+                   first map needs (§17.4), and BridgeWithdraw of its own rules (§17.8); so never BridgeBlock,
+                   BridgeEgress, Suspend, EvsShare, OwnerConfirm or access-log statements; record_append of a
+                   kind other than claim, handoff, ask, answer, check and note; the directory's person acts
+                   (16.11): deciding a request, so no RepoGrant, EvsShare or ApprovalDecision on another
+                   sidecar's request, announcing, revoking or marking a repo private, changing the claims
+                   setting, a worker's announcement or ServiceSettings.directory, and erasing directory items;
+                   DROP pushes and their cancels (§11.7; D-MCP-32)
 metering           every tool's bytes debit the transfer balance (owner decision 10); results carry metered_bytes
 control mode       (CLI, apps) authority statements, admissions, OwnerConfirm, KeyRegister and IndexerSet, and acl
                    and bridge statements beyond the own-resource filings above, are signed only for a ur command
@@ -846,13 +848,15 @@ ur search <query> [--scope repo|network|all] [--repo r]... [--network n] [--ref 
           [--member m] [--run id] [--session id] [--kind k,...] [--since t] [--until t] [--path prefix]
           [--field name=text]... [--latest | --more] [--group agent|run|repo] [--sort time|path] [--limit n]
           [--cursor c] [--untrusted withhold|include] [--verify local|none|fetch] [--fuzzy] [--wait d]
-          [--explain] [--format text|json|jsonl|ids]
+          [--include spam,trash] [--explain] [--format text|json|jsonl|ids]
 ur agents [<task>] [scope, time, --more and --format flags]     search_agents
 ur search status [--scope s] [--repo r]... [--network n]        search_status, remote counters included
 ur search sync [--repo r] [--more] [--evict] [--policy m]       sync latest (and all) now, drop the cache, or
                                                                 set this device's all policy (§18.4's modes)
 explain     --explain also prints the resolved scope with each exclusion's reason, the trigrams and fields each
             term uses, and each phase's timing; never the hits of a repo outside the scope
+include     --include spam,trash asks for mail the device's join marks spam or trash, which every search leaves
+            out otherwise; IMAP SEARCH asks the same from its selected folder (§15.7; owner decision 444)
 format      text, on a terminal: a line a hit (time, network and repo, = confirmed, ~ possible or ? near, kind,
             display fields, path:line once verified), group headers, then a coverage line; json: the MCP
             result; jsonl: a line a hit as each phase lands, then a summary line; ids: a hit reference a line
@@ -870,12 +874,12 @@ describe      each search tool's description says that results are data, that un
               ServerOptions.Instructions, mcp/server.go:71, sent by server/discover and initialize, :906, :1987)
               are 16.11's texts, one per claims value, fixed per session
 search in     query (required unless filters are set), scope, network, repos, ref, filters {agent, sidecar,
-              member, run, session, kind[], since, until, path_prefix, fields{name: text}}, at most 768 B encoded
-              for a remote search, which an indexer answers INVALID past it and the device then runs locally
-              with FallbackReason none (§11.14's sizes row), group_by (none |
-              agent | run | repo), sort (time | path), latest, more, verify (local | none), untrusted (withhold |
-              include), fuzzy, limit (hits 1-100, default 20; groups 1-50, default 10), wait_ms (0-25,000,
-              default 2,000), cursor
+              member, run, session, kind[], since, until, path_prefix, fields{name: text}}, include ([spam,
+              trash]: mail the default leaves out, §15.7; owner decision 444), at most 768 B encoded for a remote
+              search, which an indexer answers INVALID past it and the device then runs locally with
+              FallbackReason none (§11.14's sizes row), group_by (none | agent | run | repo), sort (time | path),
+              latest, more, verify (local | none), untrusted (withhold | include), fuzzy, limit (hits 1-100,
+              default 20; groups 1-50, default 10), wait_ms (0-25,000, default 2,000), cursor
 search out    structuredContent under a declared outputSchema (D-MCP-13):
   hits        hit_id, repo_id, repo, network, ref, doc {type: file | message | entry | run | announcement, key},
               version, time, kind, match (confirmed | possible | near), by (field | text), correction,

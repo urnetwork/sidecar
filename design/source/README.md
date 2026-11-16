@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-438. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-446. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (439 onward)
+## Adding owner decision N (447 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -314,3 +314,20 @@ At the second piece `build.sh` reproduced DESIGN.md (SHA-256 `99737d47079c8c79f9
 At the third piece `build.sh` reproduced DESIGN.md (SHA-256 `ee1c5479d885d36a47c1f82cb38821282a2298e5630ade47bc187f77c86fb318`): all 438 rows present and cited; no new R-, D-, Q- or FS- item and no new §2.8 row, D-SMTP-2's, D-SMTP-20's and D-SMTP-22's register summaries following their changed text; two proto fences changed: §14.5's `SmtpPreamble` gained `proof_key_set = 10` and `SmtpProof` `key_commitment = 10`, `reply_count = 11`, `header_record_count = 12` and `carry = 13`, and §6.11's `MessageType` `SMTP_HANDSHAKE` 0x1607 and `SMTP_HANDSHAKE_RESULT` 0x1608, all of which protocol/smtp.proto and types.proto already declare, their five `testFenceAdditions` and two `testFenceValueAdditions` entries leaving `protocol/design_unfenced_test.go` in the same commit (owner decision 273's rule); `SidecarActionKind` 18, which `testUnfencedFence` writes, keeps its value addition, and `SmtpOutcome`, `SmtpStatus` and `SmtpHandshake` stay in text, held by `testUnfencedFence`; the metadata list at v37 (smtp-2's report token, smtp-5's sealed copies, mx-4's root recipient).
 
 Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md, `metadata_list.yml` and the seven guard entries in `protocol/design_unfenced_test.go` the third piece's fences took.
+
+## Validation after §15's and §16's items (2026-11-16)
+
+The design-records track for §15 and §16 (wave f39d) folds those sections' items from sidecar/DESIGN-AMENDMENTS.md, the "Later decisions" that name them, and the answers since QD-784 queued for them, a section a piece, each landed on its own.
+
+- **First piece, §15.** Owner decisions 439-446, each citing its ledger id: the scripted census and its rank-weighted bar (439: QD-118, the owner-class item accepted in bulk on 2026-11-06), vault entries kept to the owner by rule (440: QD-673), snippets read as extractor 1 reads (441: QD-694), the local mail credential (442: QD-859), TLSA retirement on rotation (443: QD-868), spam and trash on request (444: QD-898), the mail formats' bytes as landed (445: QD-912, which settles QD-432's fill) and the bare Postmaster (446: QD-921). As text, the defect fixes the owner accepted (QD-106's creator and later versions, QD-189's wake hint by receiver ids, QD-196's deposit trailer, QD-208's repos-per-message cap, QD-228's forged-verdict risk, QD-243's two services, QD-255's caps before and after SNI, QD-262's `MailDnsStub` and QD-277's FS-123 clause) and the build's readings, fills and settled items (QD-309, QD-329, QD-332, QD-333, QD-349, QD-352, QD-353, QD-370, QD-405, QD-432, QD-470, QD-478, QD-480, QD-535, QD-537, QD-540, QD-541, QD-543 and QD-582). The parts these name elsewhere went with them: §2.8's dns-1, mx-2 and mx-3, §2.10's compromised-receiver row and §2.18's vault-readers row; §5.4's `SearchRequest`; §6.11's `SignedType` comment; §12.8's key-record route; §14.5's outcomes; §16.6's refused list and §16.10's include argument and flag; §19.4's two mxedge rows, W4 and §19.11's classes; §20.4's `mail_inbound_repos_per_message`; and FS-123 in §22.8, rewrapped inside its schedule column, which sidecartest/fault's catalog reads by position. Left in sidecar/DESIGN-AMENDMENTS.md: QD-025, which changes only the run's brief.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `fdba65b381cae9b6fd8aabe0a31c2d7c43391685300bfaf323a794d8086240ef`) at the first piece, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed but in comments (§15.5's `MailIngress` and `AuthLimits`, §6.11's `SignedType`): the mail formats' messages are held by `testUnfencedFence`, so §15.5 and §15.7 write them in prose and text blocks. D-MAIL-3's and D-MAIL-9's register summaries follow their changed text.
+- **Owner decisions.** All 446 rows are present and cited; `LATE_DATES` gives each new row its date, and no new day joined the row pattern.
+- **Open owner questions.** Two, as before: Q-BRIDGE-8 and Q-REPO-6.
+- **Superseded options.** 308 grep hits, each with a reading; the changed lines raised no new hit. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v38, whose header names what it adds to dns-1, mx-2 and mx-3 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+
+Outside this folder the first piece touched DESIGN.md, DESIGN-AMENDMENTS.md and `metadata_list.yml`.

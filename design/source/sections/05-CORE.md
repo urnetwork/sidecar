@@ -412,6 +412,8 @@ type SearchRequest struct {
 	Since, Until time.Time           // zero: unbounded
 	Fuzzy        bool                // near hits even when 3 or more exact hits exist
 	Filters      []SearchFieldFilter // §16.10's doc-table filters: from, subject, agent, run, kind, path prefix
+	IncludeSpam  bool                // mail the device's join marks spam, which a search otherwise leaves out, and
+	IncludeTrash bool                //   trash likewise (§15.7, §16.10's include; owner decision 444)
 	AllowMetered bool                // scope all may fetch past §18.4's 25 MiB on a metered link
 	Remote       string              // "": the network's remote mode (5.9's state); "off": this search stays local
 	PageSize     int                 // default 50

@@ -737,6 +737,22 @@ INDEX = list(_P9['INDEX']) + [
      "A sealed report copy is HPKE-XWing in 64 KiB chunks bound to its row; `<root>`'s reports are sealed to none."),
     (438, "Pins per domain",
      "§14.4's TLS pin is kept per recipient domain and MX host."),
+    (439, "The scripted census",
+     "The M7 census takes mail one sender at a time, and D-MAIL-9's bar weights sign-up senders by rank."),
+    (440, "Vault readers by rule",
+     "A mailbox's vault entries stay the owner's by rule: MCP refuses their family, and clients refuse other devices."),
+    (441, "Snippets as indexed",
+     "The mail parser reads HTML and charsets through extractor 1's functions, so a snippet says what search indexes."),
+    (442, "The local mail credential",
+     "IMAP and submission take one credential per network, chosen by its secret; the daemon keeps a verifier only."),
+    (443, "TLSA retirement",
+     "A receiver retires its rotated-out key's TLSA by naming it in a repeat of its new key's write."),
+    (444, "Spam and trash on request",
+     "A search takes spam or trash only when asked: a request field, the MCP tool's include and `ur search --include`."),
+    (445, "Mail format bytes",
+     "The mail formats' bytes are as `protocol/mail.proto` and `MAIL-FORMAT.md` landed them."),
+    (446, "The bare Postmaster",
+     "go-smtp's fork accepts a bare `RCPT TO:<Postmaster>`, which each session maps to its own domain's postmaster."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -770,7 +786,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 439))
+assert [r[0] for r in INDEX] == list(range(1, 447))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -826,7 +842,9 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               422: '2026-11-06', 423: '2026-11-12', 424: '2026-11-16', 425: '2026-11-13', 426: '2026-11-13',
               427: '2026-11-13', 428: '2026-11-15', 429: '2026-11-16', 430: '2026-11-15', 431: '2026-11-15',
               432: '2026-11-15', 433: '2026-11-11', 434: '2026-11-11', 435: '2026-11-11', 436: '2026-11-12',
-              437: '2026-11-15', 438: '2026-11-15'})
+              437: '2026-11-15', 438: '2026-11-15',
+              439: '2026-11-06', 440: '2026-11-11', 441: '2026-11-11', 442: '2026-11-15', 443: '2026-11-15',
+              444: '2026-11-15', 445: '2026-11-15', 446: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(

@@ -30,3 +30,8 @@ D['D-SMTP-2'] = ("STARTTLS is mandatory; an unauthenticated MX needs the user's 
 D['D-SMTP-20'] = ("DATA mode proves every message octet in one-record parts within 2 h, up to `smtp_data_proof_bytes`; larger "
                   "mail gets a DSN.")
 D['D-SMTP-22'] = "14.5's relation proves the MX's replies and Z1 once, under a hiding key commitment; BDAT bodies stream unopened."
+# §15's fold (2026-11-16): the in-tree fork's two changes and ARC in-house (owner decision 446), and the scripted
+# census's rank-weighted bar (439).
+assert D['D-MAIL-3'].startswith('Receivers run emersion/go-smtp') and D['D-MAIL-9'].startswith('Owner accepts the M7 census'), 'MAIL rows moved'
+D['D-MAIL-3'] = "Receivers run emersion/go-smtp, forked in-tree with 15.5's two upstreamable changes, and verify with mox over DoH, ARC in-house."
+D['D-MAIL-9'] = "Owner accepts the scripted M7 census's loss before burners launch; proposed bar: under 5% of rank-weighted sign-up senders lack SNI."
