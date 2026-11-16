@@ -91,6 +91,10 @@ barrier certs.accept.write certsservice/order.go
 barrier certs.acme_order.after certsservice/acme.go
 barrier certs.acme_order.before certsservice/acme.go
 barrier certs.admit.transition certsservice/queue.go
+barrier certs.caa_canary.delete.after certsservice/caa_probe.go
+barrier certs.caa_canary.delete.before certsservice/caa_probe.go
+barrier certs.caa_canary.publish.after certsservice/caa_probe.go
+barrier certs.caa_canary.publish.before certsservice/caa_probe.go
 barrier certs.dns_write.after certsservice/solver_dns01.go
 barrier certs.dns_write.before certsservice/solver_dns01.go
 barrier certs.revocation.mark certsservice/run.go
