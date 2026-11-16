@@ -115,11 +115,20 @@ func TestGuardRefusesAnUnnamedDirectoryAct(t *testing.T) {
 	testDirectoryActRefused(t, McpDirectoryActErase+1)
 }
 
-// Every evs operation on the directory is refused, on any path and either ref, but evs_repos naming it; a search of
-// it is refused too, since the directory tools are its only readers.
+// Every evs operation on the directory is refused, on any path and either ref, but evs_repos naming it; from M10 a
+// search reads it through its index (owner decision 169; §16.11's tools row), its prose stubs, though never on its
+// index's own files.
 func TestGuardRefusesEveryEvsReachOfTheDirectory(t *testing.T) {
 	directory := protocol.RepoKind_REPO_KIND_DIRECTORY
-	for _, operation := range []McpRepoOperation{McpRepoList, McpRepoRead, McpRepoWrite, McpRepoDelete, McpRepoSearch} {
+	for _, path := range []string{"", "a/1", "r/repo"} {
+		if refusal := McpGuard([]McpTarget{testRepoTarget(directory, McpRepoSearch, "", path)}); refusal != nil {
+			t.Errorf("a search of the directory's %q: %v", path, refusal)
+		}
+	}
+	if refusal := McpGuard([]McpTarget{testRepoTarget(directory, McpRepoSearch, "", ".ur-index/x")}); refusal == nil {
+		t.Error("a search of the directory's index files passed")
+	}
+	for _, operation := range []McpRepoOperation{McpRepoList, McpRepoRead, McpRepoWrite, McpRepoDelete} {
 		for _, ref := range []string{"", "main", mcpIndexRefName} {
 			for _, path := range []string{"", "a", "a/1", "r/repo", ".ur-index/x", "s/0001/7"} {
 				refusal := McpGuard([]McpTarget{testRepoTarget(directory, operation, ref, path)})

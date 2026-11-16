@@ -196,7 +196,6 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 var mcpCatalogUnbuilt = []string{
 	"evs_drop_preview",
 	"mail_list", "mail_read", "mail_send", "mail_aliases", "mail_alias_create", "mail_alias_delete",
-	"search", "search_agents", "search_status",
 }
 
 // Whether a §16.5 tool is an evs or a search tool, the classes §16.6's refused table names: each reports what a call
