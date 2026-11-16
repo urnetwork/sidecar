@@ -7,9 +7,10 @@
 // until the leg compiles. Two kinds of file join besides. One outside the closure whose init function, or whose package
 // variable's initializer, reaches the closure's own functions or variables: leaving it out would change what the
 // closure does with no compile error, and the config rule table registers by init. And one that declares nothing, a
-// package's doc.go, which costs nothing. The two legs' closures make one list.
+// package's doc.go, which costs nothing. The extension legs' closures, one per slice the extension's bind builds, make
+// one list.
 //
-// This compiles the leg once a round and needs Xcode for the iOS one, so it runs beside make size, not in make check,
+// This compiles each leg once a round and needs Xcode for the iOS ones, so it runs beside make size, not in make check,
 // which holds the list as written (legrows_test.go). Without the variable it compares the list with the closure: a file
 // the closure needs and the list lacks fails, and one the list names past the closure is logged, the list being free to
 // shrink. With it, it rewrites the list, whose diff then shows each file the commit adds or drops:
@@ -427,7 +428,7 @@ func (self *repository) iosExtensionLegClosure(t testing.TB, leg *buildLeg, seed
 	return slices.Sorted(maps.Keys(memberSet)), len(files)
 }
 
-// The union of both extension legs' closures.
+// The union of every extension leg's closure.
 func (self *repository) iosExtensionLegClosures(t testing.TB, seedsOf func(rootFiles []string) []string) []string {
 	t.Helper()
 	union := map[string]bool{}
