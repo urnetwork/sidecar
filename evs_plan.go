@@ -137,6 +137,11 @@ type EvsPathWrite struct {
 	// plan then takes the version's setting from EvsVersioningFor over its own read of the path
 	// (evs_write_versionless.go; EVS2-M10-16), so a path keeps the setting of the version the push is held to.
 	Options evsWriteVersioning
+	// A new version citing the standing version's content as it stands, read and uploaded nowhere: its chain's
+	// locators and its sealed fields again, under the version's setting. The git-lfs store's touch (§11.11's touch
+	// row; evs_lfs_store.go), and only its writer's: the path must stand, its chain hold no staged or inline record,
+	// and the repo be general. Content is nil.
+	Touch bool
 }
 
 // What decides a written version's versioning on a plan's own read of its path: *EvsWriteOptions, on every leg that
@@ -146,6 +151,9 @@ type evsWriteVersioning interface {
 	// Whether the write is the search index's reserved writer's, the one writer of .ur-index/ and of ur/index
 	// (§11.7's choose row).
 	reservedIndex() bool
+	// Whether the write is the git-lfs store's, the one writer of ur/lfs (§11.11's store row), whose objects never
+	// stage (plan-EVS2-small-readings#8).
+	reservedLfs() bool
 }
 
 // A write evs's path CAS refused, with the written paths it names (QD-721). The planner's own: a write held to a
@@ -303,6 +311,11 @@ func evsIsIndexWrite(write *EvsPathWrite) bool {
 	return write.Options != nil && write.Options.reservedIndex()
 }
 
+// Whether write is the git-lfs store's, the one writer of ur/lfs (§11.11's store row).
+func evsIsLfsWrite(write *EvsPathWrite) bool {
+	return write.Options != nil && write.Options.reservedLfs()
+}
+
 // The ref the companion index rides (§11.14).
 var evsIndexRefName = []byte("ur/index")
 
@@ -427,15 +440,23 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	if len(args.Writes) == 0 {
 		return nil, fmt.Errorf("%w: no path", ErrEvsWriteInvalid)
 	}
-	// the index's own writes alone may go to ur/index (§11.14)
-	indexOnly := true
+	// the index's own writes alone may go to ur/index (§11.14), and the git-lfs store's alone to ur/lfs, which writes
+	// nowhere else (§11.11's store row); a touch is the store's alone
+	indexOnly, lfsOnly := true, true
 	for _, write := range args.Writes {
 		indexOnly = indexOnly && evsIsIndexWrite(write)
+		lfsOnly = lfsOnly && evsIsLfsWrite(write)
 	}
 	onIndexRef := bytes.Equal(args.RefName, evsIndexRefName)
+	onLfsRef := bytes.Equal(args.RefName, EvsLfsRefName)
 	for _, reserved := range evsReservedRefNames {
-		if bytes.Equal(args.RefName, reserved) && !(indexOnly && onIndexRef) {
+		if bytes.Equal(args.RefName, reserved) && !(indexOnly && onIndexRef) && !(lfsOnly && onLfsRef) {
 			return nil, fmt.Errorf("%w: a format-2 or v1 ref", ErrEvsReservedPath)
+		}
+	}
+	for _, write := range args.Writes {
+		if (evsIsLfsWrite(write) && !onLfsRef) || (write.Touch && !evsIsLfsWrite(write)) {
+			return nil, fmt.Errorf("%w: the git-lfs store's write off ur/lfs", ErrEvsReservedPath)
 		}
 	}
 	repoKind, err := self.repoKind()
@@ -457,7 +478,10 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		if writePaths[write.Path] {
 			return nil, fmt.Errorf("%w: a path written twice", ErrEvsWriteInvalid)
 		}
-		if write.Remove != (write.Content == nil) {
+		if write.Touch && (write.Remove || write.Content != nil) {
+			return nil, fmt.Errorf("%w: a touch with content or a removal", ErrEvsWriteInvalid)
+		}
+		if !write.Touch && write.Remove != (write.Content == nil) {
 			return nil, fmt.Errorf("%w: a removal with content, or a write with none", ErrEvsWriteInvalid)
 		}
 		if write.Content != nil && EvsFileMaxByteCount < write.Content.Size() {
@@ -868,6 +892,16 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 			planned.removalVersion = verified.Removal.GetPathVersion()
 		}
 		planned.Version = max(plan.BaseVersion, planned.removalVersion) + 1
+	}
+	if write.Touch {
+		// the git-lfs store's touch: the standing content cited, nothing read (evs_plan_versionless.go)
+		if !stands {
+			return nil, ErrEvsPathAbsent
+		}
+		if err := self.planTouch(ctx, plan, result, planned, write, verified); err != nil {
+			return nil, err
+		}
+		return planned, nil
 	}
 	oid, err := EvsGitBlobOid(io.NewSectionReader(write.Content, 0, write.Content.Size()), write.Content.Size())
 	if err != nil {

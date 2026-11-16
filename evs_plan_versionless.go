@@ -17,10 +17,14 @@
 //	          overwrite writes no slot
 //	off, on   the transitions are evs_plan_transition.go's
 //
-// Not built, failing closed: a rename, as the format-1 planner builds none (evs_plan.go's header), so a versionless
-// rename's citation of the removed path's unstaged kind-5 chain waits for it; a copy re-uploads, which a write does
-// anyway. ur/lfs objects never stage (plan-EVS2-small-readings#8), and the git-lfs store is EVS2-M10-24's, which this
-// planner refuses as a reserved ref until it lands.
+//	touch     the git-lfs store's (EvsPathWrite.Touch; EVS2-M10-24): a new version citing the standing chain as it
+//	          stands, its sealed fields again, nothing read or uploaded; under a lock it writes 0 and adopts the
+//	          kind-5 segments as kind 1 (the on row)
+//
+// ur/lfs objects never stage (plan-EVS2-small-readings#8), so a touch can always cite them. Not built, failing closed:
+// a rename, as the format-1 planner builds none (evs_plan.go's header), so a versionless rename's citation of the
+// removed path's unstaged kind-5 chain waits for it; a copy re-uploads, which a write does anyway; a touch in a
+// slot-keyed repo, which needs the chain's slot keys opened, is refused (ur/lfs lives in general repos).
 //
 // On every leg but ios_extension. Not safe for concurrent use: one plan at a time per write.
 
@@ -31,6 +35,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -85,7 +91,7 @@ func (self *EvsRepo) planFormat2Chain(ctx context.Context, plan *EvsWritePlan, p
 	}
 	args := &EvsPlanFormat2Args{
 		Versioning: planned.Versioning, Size: size, Oid: oid, Content: content, SlotKeyed: plan.slotKeyed,
-		RewriteAll: write.ForceCheckpoint || removeSince,
+		RewriteAll: write.ForceCheckpoint || removeSince, NoStaging: evsIsLfsWrite(write),
 	}
 	if previous != nil && verified != nil && verified.Entry != nil {
 		args.Previous = previous
@@ -128,5 +134,56 @@ func (self *EvsRepo) planFormat2Chain(ctx context.Context, plan *EvsWritePlan, p
 			planned.ReuseSlotKey = true
 		}
 	}
+	return nil
+}
+
+// A touch's version (EvsPathWrite.Touch): the standing version's chain cited as it stands and its sealed fields again,
+// read and uploaded nowhere, under the setting the write's options decide on this read of the path. A chain holding a
+// staged or inline record, which only its own version cites, and a slot-keyed repo are refused.
+func (self *EvsRepo) planTouch(ctx context.Context, plan *EvsWritePlan, result *evsReadResult, planned *EvsPlannedPath, write *EvsPathWrite, verified *EvsVerifiedPath) error {
+	if plan.slotKeyed {
+		return fmt.Errorf("%w: a touch in a slot-keyed repo", ErrEvsWriteInvalid)
+	}
+	manifest, err := result.keys.manifest(ctx, verified.Statement.Push.GetGeneration())
+	if err != nil {
+		return err
+	}
+	fields, err := EvsOpenFieldsFormat2(manifest, verified.Entry.GetSealedFields(), verified.Entry.GetVersioning())
+	if err != nil {
+		return err
+	}
+	planned.Fields = proto.Clone(fields).(*protocol.EvsSealedFields)
+	versioning := write.Versioning
+	if write.Options != nil {
+		if versioning, err = write.Options.writeVersioning(self, plan, write, verified); err != nil {
+			return err
+		}
+	}
+	planned.Versioning = versioning
+	versionless := versioning != uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT)
+	if versionless && len(planned.Fields.GetContentSha256()) == 0 {
+		// a versionless version carries content_sha256, which a versioned base's sealed fields lack
+		return fmt.Errorf("%w: a versionless touch of a version with no content_sha256", ErrEvsWriteInvalid)
+	}
+	if !versionless {
+		planned.Fields.ContentSha256 = nil
+	}
+	for _, locator := range verified.Entry.GetChain() {
+		kind := protocol.EvsLocatorKind(locator.GetKind())
+		switch {
+		case locator.GetStaged() || kind == protocol.EvsLocatorKind_EVS_LOCATOR_INLINE:
+			return fmt.Errorf("%w: a touch cites no staged or inline record", ErrEvsWriteInvalid)
+		case !versionless && kind == protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT:
+			// written 0 under a lock: the on row adopts the kind-5 segment as kind 1, kept for good
+			planned.Chain = append(planned.Chain, &EvsPlannedLink{Kept: locator, Kind: protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT})
+		default:
+			planned.Chain = append(planned.Chain, &EvsPlannedLink{Kept: locator, Kind: kind})
+		}
+	}
+	if len(planned.Chain) == 0 && planned.Fields.GetSize() != 0 {
+		return fmt.Errorf("%w: a touch of a version with no chain", ErrEvsWriteInvalid)
+	}
+	planned.Checkpoint = EvsCheckpointNone
+	planned.Inline = false
 	return nil
 }

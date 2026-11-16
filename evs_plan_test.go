@@ -115,6 +115,9 @@ type evsTestPushServer struct {
 	partUploads  map[uint32]int
 	// called as each map part arrives; an error answers 503 for it
 	onMapPart func(part uint32) error
+	// checks pushes as a format-2 evs does, taking versionless versions, kind-5 uploads and staged bytes; parts carry
+	// no staged bytes here
+	format2 bool
 }
 
 func newEvsTestPushServer(t *testing.T, world *evsTestWorld) *evsTestPushServer {
@@ -188,6 +191,12 @@ func (self *evsTestPushServer) serveSegment(writer http.ResponseWriter, request 
 	receipt := &protocol.EvsUploadReceipt{
 		RepoId: self.world.repoId.Bytes(), SegmentId: segmentId[:], PaddedSize: uint64(len(body)), UploadMs: uploadMs,
 		UploaderSidecarId: self.world.signer.sidecarId.Bytes(), KeyId: 1, Mac: make([]byte, 16),
+	}
+	// a format-2 evs marks a kind-5 segment's receipt versionless, and no other (§11.13's receipt row)
+	if pushId, err := IdFromBytes(evsTestHexBytes(request.URL.Query().Get("push"))); err == nil {
+		if _, versionless, err := EvsCheckSegmentUploadFormat2(body, uint64(len(body)), self.world.repoId, pushId); err == nil {
+			receipt.Versionless = versionless
+		}
 	}
 	reply, _ := proto.Marshal(receipt)
 	writer.WriteHeader(http.StatusOK)
@@ -328,7 +337,11 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 			parts = append(parts, partBytes)
 		}
 		var checkedParts []*EvsCheckedPart
-		checked, checkedParts, err = EvsCheckSeal(statement, parts, pushRequest.GetSlotBodies())
+		if self.format2 {
+			checked, checkedParts, err = EvsCheckSealFormat2(statement, parts, make([][]byte, len(parts)), pushRequest.GetSlotBodies())
+		} else {
+			checked, checkedParts, err = EvsCheckSeal(statement, parts, pushRequest.GetSlotBodies())
+		}
 		if err == nil {
 			partLeaves := [][][]byte{}
 			for _, checkedPart := range checkedParts {
@@ -340,7 +353,11 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 			tree, err = NewEvsPartedChangeTree(partLeaves)
 		}
 	} else {
-		checked, err = EvsCheckPayload(statement, pushRequest.GetPayload())
+		if self.format2 {
+			checked, err = EvsCheckPayloadFormat2(statement, pushRequest.GetPayload(), pushRequest.GetStaged())
+		} else {
+			checked, err = EvsCheckPayload(statement, pushRequest.GetPayload())
+		}
 		if err == nil && len(statement.Push.GetChangesRoot()) != 0 {
 			leaves := [][]byte{}
 			for _, change := range checked.Changes {
@@ -1434,4 +1451,13 @@ func TestEvsWriteConflictOnAParentAloneNamesNoWrittenPath(t *testing.T) {
 			t.Errorf("%s reads %q %v", path, read, err)
 		}
 	}
+}
+
+// The bytes of hex text, nil for text that is not hex.
+func evsTestHexBytes(text string) []byte {
+	decoded, err := hex.DecodeString(text)
+	if err != nil {
+		return nil
+	}
+	return decoded
 }

@@ -99,6 +99,11 @@ func (self *EvsWriteOptions) reservedIndex() bool {
 	return self != nil && self.Reserved == EvsReservedIndex
 }
 
+// Whether the write is the git-lfs store's (evsWriteVersioning).
+func (self *EvsWriteOptions) reservedLfs() bool {
+	return self != nil && self.Reserved == EvsReservedLfs
+}
+
 // A kept link's locator as the new version names it: as it stands, or relabeled to the link's kind, a kind-5 segment
 // adopted as kind 1 when versioning turns on (§11.7's on row).
 func evsKeptLocator(link *EvsPlannedLink) *protocol.EvsLocator {
