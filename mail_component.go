@@ -81,6 +81,7 @@ type mailComponentRun struct {
 	// the ingestor running and its repo
 	ingestRepoId Id
 	ingestCancel context.CancelFunc
+	ingestor     *MailIngestor
 	// the receiver running, what ends it, and what closes its parts after
 	receiver       *MailReceiver
 	receiverCancel context.CancelFunc
@@ -195,7 +196,7 @@ func (self *MailClient) stopRun(run *mailComponentRun) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		ingestCancel, receiverCancel, receiverClose := run.ingestCancel, run.receiverCancel, run.receiverClose
-		run.ingestCancel, run.receiverCancel, run.receiverClose, run.receiver = nil, nil, nil, nil
+		run.ingestCancel, run.receiverCancel, run.receiverClose, run.receiver, run.ingestor = nil, nil, nil, nil, nil
 		return ingestCancel, receiverCancel, receiverClose
 	}()
 	if ingestCancel != nil {
@@ -262,6 +263,24 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 	}
 	binding.Network = self.networkRow
 	binding.Config = sidecar.configState
+	binding.Designator = sidecar
+	if gkm := binding.Gkm; gkm != nil {
+		binding.ConfigKey = func(ctx context.Context) (*EvsRepoKey, error) {
+			state, err := sidecar.configState()
+			if err != nil {
+				return nil, err
+			}
+			acl, err := state.Acl()
+			if err != nil {
+				return nil, err
+			}
+			configRepoId, ok := acl.ConfigRepoId()
+			if !ok {
+				return nil, errors.New("no config repo in the verified state")
+			}
+			return gkm.CurrentRepoKey(ctx, configRepoId)
+		}
+	}
 	binding.Event = sidecar.emitEvent
 	// no host opens a designation's sealed services yet: its statement's header, which they are sealed under, is not
 	// in ConfigIndexer, so the designations stay unknown (mail_indexer.go) and nothing gates or alarms on them
@@ -343,6 +362,7 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 		previous := run.ingestCancel
 		run.ingestCancel = ingestCancel
 		run.ingestRepoId = mailboxId
+		run.ingestor = ingestor
 		return previous
 	}()
 	if previous != nil {
@@ -405,6 +425,8 @@ func (self *MailClient) passReceive(run *mailComponentRun, binding *MailBinding)
 		why = "policy grants this device no listen on smtp/25/mx"
 	case !self.receiverEligible(binding):
 		why = "under team_mail: indexers a tag:mail device registers no listener until an IndexerSet designates it for mail"
+	case self.inBackground():
+		why = "an app listens only while it is open"
 	}
 	receiver := func() *MailReceiver {
 		self.stateLock.Lock()
@@ -497,5 +519,21 @@ func (self *MailClient) stopReceiver(run *mailComponentRun) {
 	}
 	if receiverClose != nil {
 		receiverClose()
+	}
+}
+
+// An app's wake (§15.6 step 5; owner decision 197): the mailbox's ingest runs now, and nothing listens for it, so a
+// wake only resyncs mail a receiver took. Nothing while no generation runs the ingestor.
+func (self *MailClient) Resync() {
+	ingestor := func() *MailIngestor {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if run, ok := self.componentRun.(*mailComponentRun); ok {
+			return run.ingestor
+		}
+		return nil
+	}()
+	if ingestor != nil {
+		ingestor.Wake()
 	}
 }

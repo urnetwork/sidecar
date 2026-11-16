@@ -31,6 +31,9 @@ type MailSettings struct {
 	Codes *MailCodeSettings
 	// Burners' labels, limits and sites (mail_burner.go, mail_burner_labels.go).
 	Burner *MailBurnerSettings
+	// The host this runs on, which says when it receives and whether it may be a mail indexer (mail_host.go): a daemon
+	// unless ApplyMobileMailSettings names an app.
+	Profile MailHostProfile
 	// The most bytes Read takes of one message: the largest mail_inbound_message_bytes (50 MiB, §20.4) and the
 	// headers ingest adds, as ingest's own bound holds a deposit.
 	ReadMaxByteCount int
@@ -61,6 +64,7 @@ func DefaultMailSettings() *MailSettings {
 		Vault:                       DefaultMailVaultSettings(),
 		Codes:                       DefaultMailCodeSettings(),
 		Burner:                      DefaultMailBurnerSettings(),
+		Profile:                     MailHostProfileDaemon,
 		ReadMaxByteCount:            int(ingest.DepositMaxByteCount),
 		ReadHeaderValueMaxByteCount: 4 * 1024,
 		ReadHeaderMaxCount:          32,
@@ -76,4 +80,17 @@ func (self *MailSettings) valid() bool {
 		self.Send.valid() && self.Vault != nil && self.Codes.valid() && self.Burner.valid() &&
 		0 < self.ReadMaxByteCount && 0 < self.ReadHeaderValueMaxByteCount && 0 < self.ReadHeaderMaxCount &&
 		0 < self.AddressScanMaxCount && 0 < self.CheckInterval && 0 < self.UnboundCheckInterval
+}
+
+// §18.4's values for an app host of profile (MAIL-M8-04): the profile, which listens only while the app is open and
+// is never a mail indexer, and on the legs a receiver builds on its phone values: max_streams' 16 sessions and the 4
+// check slots as §15.5 fixes them, and 2 deposits at once, the spool keeping every message off the heap
+// (applyMobileMailSettings). A host on a phone adjusts what it is given with this rather than keeping a second copy of
+// a number.
+func ApplyMobileMailSettings(settings *MailSettings, profile MailHostProfile) {
+	if settings == nil {
+		return
+	}
+	settings.Profile = profile
+	applyMobileMailSettings(settings)
 }

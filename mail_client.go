@@ -89,6 +89,10 @@ type MailBinding struct {
 	IndexerServices MailIndexerServices
 	// Raises an event on the Sidecar, mail_receiver_alarm's; nil only logs it.
 	Event func(event SidecarEvent)
+	// What SetReceiverEnabled files a designation through, and the config generation's key its services are sealed
+	// to (mail_host.go); nil refuses it, and a nil key refuses the designation itself.
+	Designator MailIndexerDesignator
+	ConfigKey  func(ctx context.Context) (*EvsRepoKey, error)
 	// The labels directly under the network's apex it publishes a host at, which a burner label must not shadow
 	// (mail_burner_labels.go); nil for none.
 	PublishedHosts func() []string
@@ -209,6 +213,8 @@ type MailClient struct {
 	enabledLocally bool
 	enabledNetwork bool
 	receiverStatus MailClientReceiverStatus
+	// an app host's app is in the background, where a foreground-only host registers no listener (mail_host.go)
+	background bool
 	// the zone's row as the component last read it, which Network answers where the Sidecar binds
 	zoneRow NetworkLabelRow
 	// closed and replaced at each change the component looks at
