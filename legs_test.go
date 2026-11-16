@@ -178,7 +178,9 @@ WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 	.catch((err) => { console.error(err); nodeProcess.exit(1); });
 `
 
-// The environment the harness gives a program, where a Worker's has none: workerHarness says why.
+// The environment the harness gives a program, the one the page Worker's loader gives sidecar.wasm
+// (mmm's sidecar.ur.io/v1/worker.js, QD-909), so the leg runs here as it does there: workerHarness
+// says why.
 const workerHarnessGoEnv = `{GODEBUG: "gcstoptheworld=1"}`
 
 // The line the harness ends with, which names the bytes of linear memory the run grew to.
