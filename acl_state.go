@@ -319,9 +319,8 @@ type AclState struct {
 	principalAtoms map[string][]int32
 
 	repos map[Id]*aclRepoState
-	// the Genesis's config repo and the sidecar that signed it, zero for a view with no Genesis
-	configRepoId   Id
-	genesisOwnerId Id
+	// the Genesis's config repo, zero for a view with no Genesis
+	configRepoId Id
 
 	// subjects an active Suspend names (plan-ACL-folded-grant-state #1)
 	suspended map[Id]bool
@@ -838,9 +837,6 @@ func (self *AclState) indexConfigRepo() error {
 	genesis := self.view.Genesis()
 	if genesis == nil {
 		return nil
-	}
-	if ownerId, err := IdFromBytes(genesis.GetOwnerSidecarId()); err == nil {
-		self.genesisOwnerId = ownerId
 	}
 	configRepoId, err := IdFromBytes(genesis.GetConfigRepoId())
 	if err != nil || configRepoId == (Id{}) {

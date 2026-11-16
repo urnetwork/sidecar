@@ -168,7 +168,7 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 	if err != nil {
 		return nil, err
 	}
-	// the run's tainted bit rides a format-2 push's provenance (§16.6, EVS2-M10-15); format 1 ignores it
+	// the writing run's tainted bit rides the push's provenance, on format 1 too (§11.6's Records, from M3; QD-042)
 	metadata := &protocol.EvsSealedMetadata{Provenance: &protocol.EvsProvenance{Tainted: plan.Tainted}}
 	// an ERASE's and a CLOSURE's note, sealed with the push's metadata (§11.12's push and rekey rows; QD-682)
 	metadata.ErasureNote = plan.erasureNote

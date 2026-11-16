@@ -247,6 +247,10 @@ type evsGitReceiveCommand struct {
 	old    *EvsGitOid
 	new    *EvsGitOid
 	lines  []string
+	// WriteAtTip's alone: the writing run's tainted bit and its agent, which the push's sealed provenance carries
+	// (EvsLocalPublishArgs.RunTainted, AgentId). A git client's push is bound to no run and names neither.
+	runTainted bool
+	agentId    *Id
 }
 
 // proc-receive: git's protocol (gitprotocol-common's pkt-lines; githooks(5)'s proc-receive): the version, the
@@ -510,6 +514,7 @@ func (self *EvsGitReceiver) receiveShared(ctx context.Context, session *EvsGitRe
 		Mount: self.mount, Repo: self.repo, RefName: refName, Old: old, New: command.new,
 		BaseVersion: record.Version, BaseChain: record.Chain, Deleted: record.Deleted, LastTip: record.LastTip,
 		Tainted: record.Tainted, Base: record.Base, State: self.engine, OwnClient: self.ownClient(),
+		RunTainted: command.runTainted, AgentId: command.agentId,
 		OnAttempt: func(attempt *EvsGitPublishAttempt) error {
 			// a check over LfsCheckMaxAge old runs again before a push id's first POST
 			if checked != nil && self.settings.LfsCheckMaxAge < self.clock.Now().Sub(checked.CheckedAt) {

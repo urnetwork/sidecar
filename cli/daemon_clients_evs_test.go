@@ -216,9 +216,9 @@ func TestDaemonServesAGitSessionOverEvs(t *testing.T) {
 	if key, err := gkm.CurrentRepoKey(world.ctx, repoId); err != nil || key.Generation() != 1 {
 		t.Fatalf("the key client's key of the repo it formed: %v", err)
 	}
-	// gkm's tokens carry the scopes the state grants this sidecar, the config's rw and the new repo's admin among them,
-	// in one batch, as the composition sets them at each state
-	configScope, repoScope := "repo:"+network.ConfigRepoId().String()+":rw", "repo:"+repoId.String()+":admin"
+	// gkm's tokens carry the scopes the state grants this sidecar, the config's admin, a config writer's (QD-894), and
+	// the new repo's admin among them, in one batch, as the composition sets them at each state
+	configScope, repoScope := "repo:"+network.ConfigRepoId().String()+":admin", "repo:"+repoId.String()+":admin"
 	batched := false
 	for _, request := range engines.ScopeRequests() {
 		if request.Audience == "gkm" && slices.Contains(request.Scopes, configScope) && slices.Contains(request.Scopes, repoScope) {
