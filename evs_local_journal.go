@@ -75,6 +75,8 @@ type EvsJournalRef struct {
 	HoldMs   int64  `json:"hold_ms,omitempty"`
 	// The local ref when the hold came, so a move of it releases the hold.
 	HoldLocal string `json:"hold_local,omitempty"`
+	// A hold the git-lfs tip check made: the objects the local tip needs that the store does not hold, in hex.
+	HoldLfsOids []string `json:"hold_lfs_oids,omitempty"`
 }
 
 // One update of a ref.
@@ -379,6 +381,8 @@ type EvsJournalStatus struct {
 	Queued int
 	// A final refusal holding an owned ref's queue: its code, empty for none.
 	HoldCode string
+	// The objects a git-lfs hold waits for, in hex (evs_lfs_tipcheck.go).
+	HoldLfsOids []string
 }
 
 // Every ref's open work in the mount's journals.
@@ -393,7 +397,7 @@ func (self *EvsGitReceiver) JournalStatus() ([]*EvsJournalStatus, error) {
 		if err != nil {
 			return nil, err
 		}
-		status := &EvsJournalStatus{RefId: refId, RefName: journal.RefName, Pending: 0 < len(journal.Attempts), HoldCode: journal.HoldCode}
+		status := &EvsJournalStatus{RefId: refId, RefName: journal.RefName, Pending: 0 < len(journal.Attempts), HoldCode: journal.HoldCode, HoldLfsOids: journal.HoldLfsOids}
 		for _, update := range journal.Updates {
 			if update.State == EvsJournalLocal {
 				status.Queued += 1

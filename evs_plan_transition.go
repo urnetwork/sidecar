@@ -42,6 +42,9 @@ type EvsPlanFormat2Args struct {
 	PreviousChain      []*protocol.EvsLocator
 	PreviousContent    EvsGitDeltaSource
 	Unchanged          bool
+	// Uploads every record, whatever its size: the git-lfs store's objects, which a touch must be able to cite and a
+	// staged segment only its introducing version may (plan-EVS2-small-readings#8).
+	NoStaging bool
 }
 
 // The links of a format-2 version and why it checkpoints (see the file header).
@@ -117,7 +120,7 @@ func EvsPlanFormat2Links(args *EvsPlanFormat2Args) ([]*EvsPlannedLink, EvsCheckp
 	link := &EvsPlannedLink{Kind: writtenKind, Record: &EvsPlannedRecord{
 		Kind: protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT, RecordId: NewEvsSlotId(), Oid: args.Oid, Body: args.Content,
 	}}
-	if versionless {
+	if versionless && !args.NoStaging {
 		link.Staged = evsPlanStages(args.Size, args.SlotKeyed)
 	}
 	reason := EvsCheckpointNewFile
