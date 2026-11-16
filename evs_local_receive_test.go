@@ -6,7 +6,14 @@
 // non-fast-forward; a push whose answer a kill lost resolved from the history at the restart; an attempt killed before
 // its POST pending, then dead past its bound, with no statement sent again; an owned ref accepted at once, three
 // pushes coalesced into one; a client's push to an import helper refused and its deletion taken; pre-receive's
-// refusals; and git push --atomic refused before any write.
+// refusals; and git push --atomic refused before any write. And EVS1-M6-06's (DESIGN-DETAILS 8.6's receive row as
+// amended for section 16 and QD-801), with stock git on a device held to agents/build and docs/inner: ng prefix rule
+// naming the path with no request to evs and no journal entry, for a file changed outside, git rm -r of an inherited
+// directory on an overlay branch and a directory replacing a file; a two-ref push with one ref refused and one landing;
+// the same push to an owned ref answered ok; prefix rule: pending; a push sealed again after 412 GATE_CLOSED under a
+// narrower set refused at the second check and never sent; no shared base and not a shared branch's tip; main and a
+// tag in one push landing, the tag after the branch and naming its new version, and with the branch refused the tag
+// refused too; and, with no rule set, a push's branches published before its tags.
 
 package sidecar
 
@@ -470,5 +477,262 @@ func TestEvsLocalReceiveHeldQueueReleasedByRetry(t *testing.T) {
 	}
 	if statuses, _ := receiver.mount.receiver.JournalStatus(); len(statuses) != 0 {
 		t.Fatalf("the journal after the retry %+v", statuses)
+	}
+}
+
+// The receiving device as signer from here: the writer's client signs as it, and a clone's commits carry its client.
+func (self *evsTestGitRules) receiverAs(signer *evsTestSigner) *evsTestReceiver {
+	self.t.Helper()
+	receiver := newEvsTestReceiver(self.t, self.publisher)
+	client := self.publisher.writer.test.client
+	as := &SidecarIdentity{NetworkId: testNetworkId, SidecarId: signer.sidecarId, ClientId: self.clientOf(signer)}
+	client.args.Identity = func() *SidecarIdentity { return as }
+	client.args.Sign = signer.sign
+	self.publisher.email = self.clientOf(signer).String() + evsCommitterDomain
+	return receiver
+}
+
+// The status line git printed for a ref: its reason after "[remote rejected]", or "ok" for one that landed.
+func evsTestPushStatus(out string, gitRef string) string {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) < 3 || !strings.HasSuffix(fields[1], ":"+gitRef) {
+			continue
+		}
+		if fields[0] == "!" {
+			return strings.TrimSuffix(strings.TrimPrefix(fields[2], "[remote rejected] ("), ")")
+		}
+		return "ok"
+	}
+	return "absent"
+}
+
+// Removes paths from a clone's work tree with git rm -r, and commits.
+func (self *evsTestReceiver) remove(dir string, paths ...string) EvsGitOid {
+	self.t.Helper()
+	evsTestGit(self.t, dir, append([]string{"rm", "-r", "-q"}, paths...)...)
+	evsTestGit(self.t, dir, "commit", "-q", "-m", fmt.Sprint("remove ", time.Now().UnixNano()))
+	oid, err := evsGitOidDecodeHex([]byte(strings.TrimSpace(evsTestGit(self.t, dir, "rev-parse", "HEAD"))))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return oid
+}
+
+// A device held to its prefixes over stock git: each refusal names the path with no request to evs and leaves no
+// journal entry, its local ref unmoved; one landing beside one refused in a two-ref push; an owned ref answered ok
+// whatever it holds; a pending set answered pending.
+func TestEvsLocalReceivePrefixRefusesOverStockGit(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n", "docs/guide": "guide\n", "docs/more": "more\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	rules.mustPublish(rules.admin, false, "feature", &c1)
+	receiver := rules.receiverAs(rules.held)
+	ctx := context.Background()
+	for _, name := range []string{"main", "feature"} {
+		if err := receiver.mount.sync.Replay(ctx, rules.publisher.ref(name).refId); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := receiver.clone()
+	evsTestGit(t, dir, "fetch", "-q", "origin", "feature:feature")
+	refusedClean := func(label string, out string, gitRef string, want string) {
+		t.Helper()
+		if status := evsTestPushStatus(out, gitRef); status != want {
+			t.Fatalf("%s: %q, want %q in %s", label, status, want, out)
+		}
+		statuses, _ := receiver.mount.receiver.JournalStatus()
+		for _, status := range statuses {
+			if "refs/heads/"+string(status.RefName) == gitRef {
+				t.Fatalf("%s: the journal %+v", label, status)
+			}
+		}
+	}
+	// a file changed outside
+	before := rules.requests()
+	receiver.commit(dir, map[string]string{"README": "changed\n"})
+	out, _ := receiver.push(dir, "origin", "HEAD:refs/heads/main")
+	refusedClean("a file outside", out, "refs/heads/main", "prefix rule: README")
+	if after := rules.requests(); after != before {
+		t.Fatalf("requests %v, before %v", after, before)
+	}
+	if local := receiver.local("refs/heads/main"); local == nil || *local != c1 {
+		t.Fatalf("main moved to %v", local)
+	}
+	// git rm -r of an inherited directory on the overlay branch feature, and a directory replacing a file
+	evsTestGit(t, dir, "checkout", "-q", "feature")
+	receiver.remove(dir, "docs")
+	out, _ = receiver.push(dir, "origin", "HEAD:refs/heads/feature")
+	refusedClean("git rm -r of an inherited directory", out, "refs/heads/feature", "prefix rule: docs/guide")
+	evsTestGit(t, dir, "reset", "-q", "--hard", c1.String())
+	receiver.remove(dir, "README")
+	receiver.commit(dir, map[string]string{"README/inner": "x\n"})
+	out, _ = receiver.push(dir, "origin", "HEAD:refs/heads/feature")
+	refusedClean("a directory over a file", out, "refs/heads/feature", "prefix rule: README")
+	// two refs in one push: main refused, feature landing with a change under the prefix
+	evsTestGit(t, dir, "reset", "-q", "--hard", c1.String())
+	under := receiver.commit(dir, map[string]string{"agents/build/out": "built two\n"})
+	evsTestGit(t, dir, "checkout", "-q", "-b", "outside", c1.String())
+	receiver.commit(dir, map[string]string{"README": "changed again\n"})
+	out, _ = receiver.push(dir, "origin", "outside:refs/heads/main", under.String()+":refs/heads/feature")
+	if main, feature := evsTestPushStatus(out, "refs/heads/main"), evsTestPushStatus(out, "refs/heads/feature"); main != "prefix rule: README" || feature != "ok" {
+		t.Fatalf("a two-ref push: %q %q in %s", main, feature, out)
+	}
+	if local := receiver.local("refs/heads/feature"); local == nil || *local != under {
+		t.Fatalf("feature is %v", local)
+	}
+	// the same change to an owned ref of this device is answered ok, before evs
+	own := rules.ownedRef(rules.held, "scratch")
+	out, _ = receiver.push(dir, "origin", "outside:refs/heads/"+own)
+	if status := evsTestPushStatus(out, "refs/heads/"+own); status != "ok" {
+		t.Fatalf("an owned ref: %q in %s", status, out)
+	}
+	// a set this device holds pending at its installed pin
+	rules.file(7, AclPrefixSetPending, "agents/build")
+	rules.world.config.setPin(7)
+	evsTestGit(t, dir, "checkout", "-q", "feature")
+	evsTestGit(t, dir, "reset", "-q", "--hard", under.String())
+	receiver.commit(dir, map[string]string{"agents/build/out": "built three\n"})
+	out, _ = receiver.push(dir, "origin", "HEAD:refs/heads/feature")
+	refusedClean("a pending set", out, "refs/heads/feature", "prefix rule: pending")
+}
+
+// A push built under one set meets 412 GATE_CLOSED, and the set that its rebuild's state pins at holds the device to
+// docs/inner alone: the second check refuses it with the path, and the rebuilt statement is never sent.
+func TestEvsLocalReceivePrefixChecksAgainBeforeARebuiltStatement(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	receiver := rules.receiverAs(rules.held)
+	if err := receiver.mount.sync.Replay(context.Background(), rules.publisher.ref("main").refId); err != nil {
+		t.Fatal(err)
+	}
+	dir := receiver.clone()
+	receiver.commit(dir, map[string]string{"agents/build/out": "built two\n"})
+	server := rules.publisher.writer.server
+	server.stateLock.Lock()
+	server.pushRefusals = evsTestClosedGate(1)
+	server.stateLock.Unlock()
+	sent := 0
+	evsLocalReceiveKillHook = func(point string) error {
+		if point == "publish.sent" {
+			sent += 1
+			if sent == 1 {
+				// the first statement is built and journaled: a narrower set lands, and the device's state moves to
+				// it before the rebuild
+				rules.file(6, AclPrefixSetOpened, "docs/inner")
+				rules.world.config.setPin(6)
+			}
+		}
+		return nil
+	}
+	defer func() { evsLocalReceiveKillHook = nil }()
+	before, _ := server.sentCounts()
+	out, _ := receiver.push(dir, "origin", "HEAD:refs/heads/main")
+	if status := evsTestPushStatus(out, "refs/heads/main"); status != "prefix rule: agents/build/out" {
+		t.Fatalf("the rebuilt push: %q in %s", status, out)
+	}
+	if after, _ := server.sentCounts(); after != before+1 {
+		t.Fatalf("%d statements sent, the refused one alone expected", after-before)
+	}
+}
+
+// New shared refs from a held device (QD-801): a branch off main lands; one from an orphan history answers no shared
+// base; a tag of an unpublished commit answers not a shared branch's tip; main and a tag of its new tip in one push
+// land, the tag after the branch naming its new version; with the branch refused, its tag is refused too; each
+// refusal before any request to evs.
+func TestEvsLocalReceivePrefixNewSharedRefs(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	receiver := rules.receiverAs(rules.held)
+	if err := receiver.mount.sync.Replay(context.Background(), rules.publisher.ref("main").refId); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"feature", "lonely", "refs/tags/unpublished", "refs/tags/v1.0", "refs/tags/v2.0"} {
+		// the stand-in serves a ref a client creates once it is made
+		rules.publisher.ref(name)
+	}
+	dir := receiver.clone()
+	branch := receiver.commit(dir, map[string]string{"agents/build/f": "f\n"})
+	out, _ := receiver.push(dir, "origin", "HEAD:refs/heads/feature")
+	if status := evsTestPushStatus(out, "refs/heads/feature"); status != "ok" {
+		t.Fatalf("a branch off main: %q in %s", status, out)
+	}
+	before := rules.requests()
+	evsTestGit(t, dir, "checkout", "-q", "--orphan", "lonely")
+	evsTestGit(t, dir, "rm", "-r", "-q", "--cached", ".")
+	receiver.commit(dir, map[string]string{"agents/build/g": "g\n", "src/x": "x\n"})
+	out, _ = receiver.push(dir, "origin", "HEAD:refs/heads/lonely")
+	if status := evsTestPushStatus(out, "refs/heads/lonely"); !strings.HasPrefix(status, "prefix rule: no shared base: ") {
+		t.Fatalf("an orphan history: %q in %s", status, out)
+	}
+	evsTestGit(t, dir, "checkout", "-q", "-f", branch.String())
+	unpublished := receiver.commit(dir, map[string]string{"agents/build/u": "u\n"})
+	evsTestGit(t, dir, "tag", "unpublished", unpublished.String())
+	out, _ = receiver.push(dir, "origin", "refs/tags/unpublished")
+	if status := evsTestPushStatus(out, "refs/tags/unpublished"); status != "prefix rule: not a shared branch's tip: README" {
+		t.Fatalf("a tag of an unpublished commit: %q in %s", status, out)
+	}
+	if after := rules.requests(); after != before {
+		t.Fatalf("requests %v, before %v", after, before)
+	}
+	// main and a tag of its new tip in one push: the branch first, the tag naming its new version
+	evsTestGit(t, dir, "checkout", "-q", "-B", "main", c1.String())
+	next := receiver.commit(dir, map[string]string{"agents/build/out": "built two\n"})
+	evsTestGit(t, dir, "tag", "v1.0", next.String())
+	out, _ = receiver.push(dir, "origin", "main", "v1.0")
+	if main, tag := evsTestPushStatus(out, "refs/heads/main"), evsTestPushStatus(out, "refs/tags/v1.0"); main != "ok" || tag != "ok" {
+		t.Fatalf("main and v1.0: %q %q in %s", main, tag, out)
+	}
+	metadata := rules.publisher.metadata("refs/tags/v1.0", 1)
+	sources := metadata.GetGit().GetSources()
+	if len(sources) == 0 || Id(sources[0].GetRefId()) != rules.publisher.ref("main").refId || sources[0].GetVersion() != 2 {
+		t.Fatalf("the tag's sources %v", sources)
+	}
+	// main refused, so its tag finds no proof and is refused too
+	outside := receiver.commit(dir, map[string]string{"README": "changed\n"})
+	evsTestGit(t, dir, "tag", "v2.0", outside.String())
+	out, _ = receiver.push(dir, "origin", "main", "v2.0")
+	if main, tag := evsTestPushStatus(out, "refs/heads/main"), evsTestPushStatus(out, "refs/tags/v2.0"); main != "prefix rule: README" || tag != "prefix rule: not a shared branch's tip: README" {
+		t.Fatalf("main and v2.0: %q %q in %s", main, tag, out)
+	}
+}
+
+// With no rule set, one push of two tags and two branches reports each status, the branches published first.
+func TestEvsLocalReceivePublishesBranchesBeforeTags(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	receiver := newEvsTestReceiver(t, publisher)
+	for _, name := range []string{"b2", "refs/tags/t1", "refs/tags/t2"} {
+		publisher.ref(name)
+	}
+	dir := receiver.clone()
+	c1 := receiver.commit(dir, map[string]string{"a.txt": "one\n"})
+	evsTestGit(t, dir, "tag", "t1", c1.String())
+	evsTestGit(t, dir, "tag", "t2", c1.String())
+	evsTestGit(t, dir, "branch", "b2", c1.String())
+	out, ok := receiver.push(dir, "origin", "refs/tags/t1", "HEAD:refs/heads/main", "refs/tags/t2", "b2:refs/heads/b2")
+	if !ok {
+		t.Fatalf("the push: %s", out)
+	}
+	tagIds := map[Id]bool{publisher.ref("refs/tags/t1").refId: true, publisher.ref("refs/tags/t2").refId: true}
+	server := publisher.writer.server
+	server.stateLock.Lock()
+	posted := append([][]byte{}, server.postedStatements...)
+	server.stateLock.Unlock()
+	kinds := ""
+	for _, statementBytes := range posted {
+		statement, err := ParseEvsStatement(statementBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tagIds[Id(statement.Push.GetRefId())] {
+			kinds += "t"
+		} else {
+			kinds += "b"
+		}
+	}
+	if kinds != "bbtt" {
+		t.Fatalf("published in the order %q", kinds)
 	}
 }
