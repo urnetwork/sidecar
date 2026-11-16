@@ -57,8 +57,8 @@ type CertsTransition struct {
 	// Set when the CA gives one (RFC 9773).
 	AriWindowStart time.Time
 	AriWindowEnd   time.Time
-	// What the CA is to be told, set with To revoking. A row keeps a reason only while it is revoking:
-	// a transition to any other state clears it, and one set with another To is not written.
+	// What the CA is to be told, set with To revoking or custom_revoking (QD-741). A row keeps a reason only while
+	// it is in one of those: a transition to any other state clears it, and one set with another To is not written.
 	RevocationReason sidecar.TlsCertRevocationReason
 }
 
