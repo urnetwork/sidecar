@@ -112,6 +112,9 @@ type EvsEngineDeps struct {
 	// EVSB-M10-01's purge (purge.go), which EVS2-M10-06's step 7 hands each certain commit's candidates. nil queues
 	// nothing, which is safe: evacuation's sweep takes every list.
 	Purge PurgeSink
+	// EVSB-M10-03's drop table as step 8 appends each committed DROP and cancel to it (EVS2-M10-09; CONTRACTS.md C-14),
+	// and a push or read that meets a bit-5 window entry appends it again. nil appends to the engine's own DropTable.
+	Drops DropSink
 	// The holds a slot takeover reads (DESIGN-DETAILS 14.2.4): nil reads hold/ through a HoldCache of the engine's own.
 	Holds *HoldCache
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
@@ -152,9 +155,11 @@ type EvsEngine struct {
 	// hold/ as a slot takeover reads it, at most 5 s old
 	holds *HoldCache
 	// drops/<repo>/_, which the drop routes read and write (drop_table.go)
-	drops   *DropTable
-	metrics *evsMetrics
-	handler http.Handler
+	drops *DropTable
+	// the DROP bodies the fence and the read route meet, and the DROPs this process appended (drop_index.go)
+	dropIndex *DropIndex
+	metrics   *evsMetrics
+	handler   http.Handler
 	// what the router took at the start, in its order
 	servedRoutes []*EvsRoute
 
@@ -245,6 +250,7 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 		cancel()
 		return nil, err
 	}
+	self.dropIndex = NewDropIndex(settings.Drop, self.records, self.locator)
 	self.notifier = deps.CommitNotifier
 	if self.notifier == nil {
 		self.notifier = NewEvsHintNotifier(cancelCtx, clock, host.Redis, host.Push, deps.GateViews, log)

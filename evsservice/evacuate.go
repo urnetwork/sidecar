@@ -185,6 +185,8 @@ type EvacuatorDeps struct {
 	// The drop table a kept DROP record is appended to when the table lacks it (§11.13's who row; EVSB-M10-03), before
 	// its batch goes, so a lost step-8 append costs 26 h at most. nil appends nothing.
 	Drops DropSink
+	// D-TEST-12's checker the sweep runs under purge: observe (purge_observe.go; EVS2-M10-33). nil checks nothing.
+	Observe *PurgeObserveCheck
 	// a test's: called at each barrier, an error stopping the run there as a kill would
 	atStep func(name string, key string) error
 }
@@ -332,6 +334,7 @@ func NewEvacuator(host *sidecar.ServiceHost, deps *EvacuatorDeps) (*Evacuator, e
 		EvsSettings: evsSettings,
 		Settings:    deps.SweepSettings,
 		Log:         log,
+		Observe:     deps.Observe,
 		atStep:      deps.atStep,
 	})
 	if err != nil {

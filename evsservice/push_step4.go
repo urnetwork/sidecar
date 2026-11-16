@@ -48,6 +48,12 @@ type pushReads struct {
 	// each changed path's entry, by its token path's KeyString
 	entries map[string]*EvsPathRead
 	reuses  []*ReuseRead
+	// format 2's fence (push_drop.go): the push's own ref's DROPs at the head step 4 read, read again on a reread
+	// head, and each reuse source's ref's; nil at a format-1 instance
+	ownFence    *EvsDropFence
+	reuseFences map[sidecar.Id]*EvsDropFence
+	// a DROP's own reads at a one-part push or a seal
+	dropReads *PushDropReads
 	// what step 5 checks
 	view *PushView
 }
@@ -90,8 +96,14 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	if err != nil {
 		return self.unavailableOn(err), false
 	}
+	// the clock after the head's read, which a repair append of a DROP it shows takes as seen_ms
+	headReadAt := engine.clock.Now()
 	self.head = head
 	reads := &pushReads{readAt: readAt, entries: map[string]*EvsPathRead{}}
+	format2 := engine.format2Instance()
+	if format2 {
+		reads.reuseFences = map[sidecar.Id]*EvsDropFence{}
+	}
 
 	// the round after the head, issued together
 	var waitGroup sync.WaitGroup
@@ -155,7 +167,7 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 			waitGroup.Add(1)
 			go func() {
 				defer waitGroup.Done()
-				read, readErr := self.readReuse(reuse)
+				read, fence, met, readErr := self.readReuse(reuse, cached, format2)
 				entryLock.Lock()
 				defer entryLock.Unlock()
 				if readErr != nil {
@@ -163,8 +175,45 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 					return
 				}
 				reads.reuses[i] = read
+				if fence != nil {
+					if prior := reads.reuseFences[reuse.RefId]; prior == nil || prior.Cached && !fence.Cached {
+						reads.reuseFences[reuse.RefId] = fence
+					}
+				}
+				self.metDrops = append(self.metDrops, met...)
 			}()
 		}
+		// a DROP's own reads at a one-part push or a seal (push_drop.go)
+		if format2 && self.payload.Drop != nil && self.part == nil {
+			waitGroup.Add(1)
+			go func() {
+				defer waitGroup.Done()
+				dropReads, readErr := self.readDropReads(head)
+				entryLock.Lock()
+				defer entryLock.Unlock()
+				if readErr != nil {
+					entryErrs = append(entryErrs, readErr)
+					return
+				}
+				reads.dropReads = dropReads
+			}()
+		}
+	}
+	if format2 {
+		// 5h's fence on the push's own ref: the bodies of every bit-5 entry of the head's window (push_drop.go)
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			fence, met, readErr := self.readDropFence(self.refId, head, headReadAt)
+			entryLock.Lock()
+			defer entryLock.Unlock()
+			if readErr != nil {
+				entryErrs = append(entryErrs, readErr)
+				return
+			}
+			reads.ownFence = fence
+			self.metDrops = append(self.metDrops, met...)
+		}()
 	}
 	waitGroup.Wait()
 	switch {
@@ -273,31 +322,51 @@ func (self *pushAttempt) readOverlayBase(base *protocol.EvsOverlay) (*protocol.E
 }
 
 // One reuse source: its ref's head, then the version committed in that ref's entry or, with its statement, in its
-// window (§11.8 step 4's reuse). A ref or version step 4 finds none of leaves EntryVersion nil, which 5h refuses.
-func (self *pushAttempt) readReuse(reuse *sidecar.EvsReuse) (*ReuseRead, error) {
+// window (§11.8 step 4's reuse). A ref or version step 4 finds none of leaves EntryVersion nil, which 5h refuses. The
+// head comes from the cache when cached allows it, a cache entry serving only within 10 min of its own write
+// (DESIGN-DETAILS 10.2.7's cache stamp), and from the cluster on a rerun after a refusal; at a format-2 instance its
+// fence comes with it (push_drop.go), and the entry's drop mark and epoch, for 5h's fence.
+func (self *pushAttempt) readReuse(reuse *sidecar.EvsReuse, cached bool, format2 bool) (*ReuseRead, *EvsDropFence, []*metDrop, error) {
 	engine := self.engine
 	read := &ReuseRead{Reuse: reuse}
-	refHead, err := engine.heads.ReadCached(self.ctx, self.cluster, self.repoId, reuse.RefId, 0, false)
+	var refHead *EvsStoredHead
+	var err error
+	if cached {
+		refHead, err = engine.heads.ReadCached(self.ctx, self.cluster, self.repoId, reuse.RefId, 0, false)
+	} else {
+		refHead, err = engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, reuse.RefId)
+	}
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
+	}
+	readAt := engine.clock.Now()
+	read.HeadCached = refHead.Cached
+	var fence *EvsDropFence
+	var met []*metDrop
+	if format2 {
+		if fence, met, err = self.readDropFence(reuse.RefId, refHead, readAt); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	if refHead.Absent() || refHead.Version() == 0 {
-		return read, nil
+		return read, fence, met, nil
 	}
-	entryRead, err := ReadEntry(self.ctx, self.cluster, self.repoId, reuse.RefId, EvsHeadCurrentEpoch(refHead.Head), reuse.TokenPath, refHead.Head.GetFoldedThrough())
+	read.Epoch = EvsHeadCurrentEpoch(refHead.Head)
+	entryRead, err := ReadEntry(self.ctx, self.cluster, self.repoId, reuse.RefId, read.Epoch, reuse.TokenPath, refHead.Head.GetFoldedThrough())
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
+	read.DropMark = entryRead.Entry.GetDropMark()
 	for _, version := range entryRead.Entry.GetVersions() {
 		entryVersion, err := parseEvsEntryVersion(version.GetEntryVersion())
 		if err == nil && entryVersion.GetVersion() == reuse.EntryVersion && !version.GetElided() {
 			read.EntryVersion = entryVersion
-			return read, nil
+			return read, fence, met, nil
 		}
 	}
 	window, err := EvsHeadWindow(refHead.Head)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEvsHeadInvalid, err)
+		return nil, nil, nil, fmt.Errorf("%w: %v", ErrEvsHeadInvalid, err)
 	}
 	pushes := NewRecordPushSource(engine.records, engine.locator, self.cluster, self.repoId, reuse.RefId)
 	first := EvsHeadWindowFirstVersion(refHead.Head)
@@ -307,7 +376,7 @@ func (self *pushAttempt) readReuse(reuse *sidecar.EvsReuse) (*ReuseRead, error) 
 		}
 		changes, err := pushes.ChangesAt(self.ctx, first+uint64(i), window[i], reuse.TokenPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		for _, change := range changes {
 			if !change.TokenPath.Equal(reuse.TokenPath) || change.Removes() {
@@ -316,11 +385,11 @@ func (self *pushAttempt) readReuse(reuse *sidecar.EvsReuse) (*ReuseRead, error) 
 			entryVersion, err := parseEvsEntryVersion(change.EntryVersion)
 			if err == nil && entryVersion.GetVersion() == reuse.EntryVersion {
 				read.EntryVersion = entryVersion
-				return read, nil
+				return read, fence, met, nil
 			}
 		}
 	}
-	return read, nil
+	return read, fence, met, nil
 }
 
 // The view step 5 checks, over self.head and what step 4 read. again asks for step 4 again from the cluster.
@@ -404,8 +473,21 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 			}
 			pathRead.DirectoryVersion = version
 		}
+		if err := evsPathReadPlace(pathRead, change, reads.entries[key], head.Head); err != nil {
+			return refusedOutcome(newEvsCheckRefusal(EvsCheckReasonInvalid, "a source path that does not parse").Reply(self.pushId)), false
+		}
 		view.Paths[key] = pathRead
 	}
+	if reads.ownFence != nil {
+		// 5h's fence (check_dropped.go): the own ref's and each reuse source's ref's DROPs, the own one's on the head
+		// this view is built on
+		view.Fences = map[sidecar.Id]*EvsDropFence{}
+		for refId, fence := range reads.reuseFences {
+			view.Fences[refId] = fence
+		}
+		view.Fences[self.refId] = reads.ownFence
+	}
+	view.Drop = reads.dropReads
 	due, err := self.pathEpochDueOver(head.Head)
 	if err != nil {
 		return self.unavailableOn(err), false
@@ -429,6 +511,31 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 	view.ErasureRules = self.erasureRules
 	reads.view = view
 	return nil, false
+}
+
+// Where a changed path's newest version was read, for 5h's fence: a window version's is the head's current epoch and
+// the change's token path; an entry's, the epoch it was read in and the path's token path there, a source's from the
+// change's source paths; and the entry's drop mark, whichever served.
+func evsPathReadPlace(pathRead *PathRead, change *sidecar.EvsCheckedChange, read *EvsPathRead, head *protocol.EvsHead) error {
+	pathRead.Epoch, pathRead.TokenPath = EvsHeadCurrentEpoch(head), change.TokenPath
+	if read == nil || read.EvsEntryRead == nil {
+		return nil
+	}
+	pathRead.DropMark = read.Entry.GetDropMark()
+	if pathRead.Newest == nil || pathRead.Newest.FromWindow || read.SourceEpoch == 0 {
+		return nil
+	}
+	tokens, err := evsPathTokensOf(change)
+	if err != nil {
+		return err
+	}
+	for _, source := range tokens.Sources {
+		if source.Epoch == read.SourceEpoch {
+			pathRead.Epoch, pathRead.TokenPath = source.Epoch, source.TokenPath
+			return nil
+		}
+	}
+	return nil
 }
 
 // §11.7's newest for one changed path at self.head, and its listing where the push writes a directory's table. An

@@ -58,7 +58,14 @@ route rows with grant 1's via (344), prefix rules' subjects, admins and readings
 (346), sockets' client tokens (347), edge Finds under any audience (348), an admin's decision toward k (349),
 accept-invite's two forms (350), a deleted repo's admins (351), config writers as the config repo's admins (352),
 atoms for every declared tag and group (353), the ticket key command (354), AclState's readings (355) and
-re-application from the body (356)."""
+re-application from the body (356). Adds owner decisions 357-375 (folded 2026-11-16 with §10's items): a drop key's
+lifetime and renewal (357), the ReaderKey self-check (358), the X-Wing evidence for the freeze (359), the ladder's
+AAD widths (360), the last-resort extension (361), a re-formed group's epoch 1 floor (362), Welcome pointers by
+group and epoch (363), batched delegation key reads (364), an agent's repo's group (365), the MLS engine's memory
+(366), recovery wraps opened once admitted (367), a GroupForm's pin (368), the poison window (369), forwarding key
+objects by network, amending 202 (370), gkm's state over the gate cache (371), the Welcome HEAD (372), the
+bootstrap's config generation (373), the lb's 502 or 504 at gkm's client (374) and recommits after a newer
+generation (375)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -549,6 +556,44 @@ INDEX = list(_P9['INDEX']) + [
      "Autogroup membership, targets' encodings, kind defaults in the binary, consent's details and the ack route stand as built."),
     (356, "Re-application from the body",
      "`AclState.ReapplyStatement` derives its fold inputs from the body, the signers and the rebuilt rows, and judges nothing again."),
+    (357, "Drop key lifetime",
+     "A drop key lives `GkmSettings.DropKeyLifetime`, 90 days, and writers renew it by a SCHEDULE rotation once under 7 days are left."),
+    (358, "ReaderKey check",
+     "Each device checks daily that gkm serves under its id only ReaderKeys it signed, raising `key_changed` for another; ReaderKeys stay Ed25519."),
+    (359, "X-Wing evidence",
+     "The 0x0010 gate claims what it shows: the draft's vectors are X-Wing's only independent evidence, and tmc/mls's KEM check is wiring."),
+    (360, "Ladder AAD widths",
+     "The ladder's AADs take u64be for g and e and u8 for the cause, as built, and gen/1 carries cause REQUEST."),
+    (361, "Last-resort KeyPackage",
+     "draft-ietf-mls-extensions' `last_resort`, type 0x000A, marks a last-resort KeyPackage, whose joiner self-updates at once."),
+    (362, "A re-form's epoch 1",
+     "A re-formed group's epoch 1 takes its auth floor from the form's generation's GenRotate, since its epoch 0 carries none."),
+    (363, "Welcome pointers",
+     "Welcome pointers are keyed by recipient, group and epoch, `gkm/welcome/<sidecar_id>/<group_id>/<n>`, the KeyPackageRef inside."),
+    (364, "Delegation key batches",
+     "`POST /gkm/delegation-keys` answers up to 256 forwarding reader keys a request for a config rotator."),
+    (365, "An agent's repo's group",
+     "A config writer that reads and administers a repo an agent creates forms its group at gkm's hint; with none, the repo stays keying."),
+    (366, "MLS memory",
+     "The MLS engine meets the phone budget by keeping the tree on disk and streaming it; the SDK keeps bulk state on storage."),
+    (367, "Recovery wraps",
+     "A code-only device fetches its recovery wraps before admission and opens them once admitted."),
+    (368, "GroupForm pin",
+     "A GroupForm carries its signer's auth pin, at which members judge the signer."),
+    (369, "Poison window",
+     "A wrapped writer, or a leaf racing a poisoned commit, may seal to its generation until the refuser's REMOVE rotation: accepted."),
+    (370, "Forwarding key objects",
+     "Forwarding reader keys live at `gkm/dkey/<network_id>/<delegation_id>`, deleted 24 h after their end by tracked ends and a per-network sweep."),
+    (371, "gkm's gate state",
+     "gkm and its reconciler read authorization through ACL's one gate cache, which a taskworker start tells of every gkm network."),
+    (372, "Welcome HEAD",
+     "`HEAD /gkm/groups/<id>/welcome/<n>` tells any writer leaf a Welcome is missing, so it re-adds the joiner after 10 minutes."),
+    (373, "Bootstrap generation",
+     "A network's first device draws the config group's id and RK_1 before base 1 and signs GenRotate_1 after it."),
+    (374, "gkm behind the lb",
+     "gkm's client reads an lb 502 or 504 as no answer from gkm, never as its refusal."),
+    (375, "Stale-generation commits",
+     "A commit gkm refuses only because a newer generation stands is restaged on it and sent again, with no `refused` alarm."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -569,11 +614,14 @@ for _n, _old_end, _note in [
          "sidecar owns its SQL and migrations, which server/core runs."),
         # Owner decision 276 amends 251's alias for the page Worker's leg.
         (251, "operator.Id on every leg.",
-         " Amended by @@OD:276@@: the page Worker's leg keeps a twin of it and links no connect.")]:
+         " Amended by @@OD:276@@: the page Worker's leg keeps a twin of it and links no connect."),
+        # Owner decision 370 amends 202's key: the object names its network as well.
+        (202, "keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB.",
+         " Amended by @@OD:370@@: the key is `gkm/dkey/<network_id>/<delegation_id>`.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 357))
+assert [r[0] for r in INDEX] == list(range(1, 376))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -611,7 +659,11 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               337: '2026-11-10', 338: '2026-11-10', 339: '2026-11-11', 340: '2026-11-11', 341: '2026-11-12',
               342: '2026-11-12', 343: '2026-11-13', 344: '2026-11-15', 345: '2026-11-13', 346: '2026-11-14',
               347: '2026-11-15', 348: '2026-11-15', 349: '2026-11-15', 350: '2026-11-15', 351: '2026-11-15',
-              352: '2026-11-15', 353: '2026-11-15', 354: '2026-11-15', 355: '2026-11-15', 356: '2026-11-15'})
+              352: '2026-11-15', 353: '2026-11-15', 354: '2026-11-15', 355: '2026-11-15', 356: '2026-11-15',
+              357: '2026-11-06', 358: '2026-11-06', 359: '2026-11-06', 360: '2026-11-10', 361: '2026-11-10',
+              362: '2026-11-10', 363: '2026-11-10', 364: '2026-11-10', 365: '2026-11-11', 366: '2026-11-10',
+              367: '2026-11-10', 368: '2026-11-10', 369: '2026-11-11', 370: '2026-11-12', 371: '2026-11-15',
+              372: '2026-11-12', 373: '2026-11-14', 374: '2026-11-15', 375: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -797,7 +849,14 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "(347), edge Finds under any audience (348), an admin's decision toward k (349), accept-invite's two "
     "forms (350), a deleted repo's admins (351), config writers as the config repo's admins (352), atoms for "
     "every declared tag and group (353), the ticket key command (354), `AclState`'s readings (355) and "
-    "re-application from the body (356). ")
+    "re-application from the body (356). The fold of §10's the same day numbers the answers on group keys and "
+    "gkm: a drop key's lifetime and renewal (357), the ReaderKey self-check (358), the X-Wing evidence for the "
+    "freeze (359), the ladder's AAD widths (360), the last-resort extension (361), a re-formed group's epoch 1 "
+    "floor (362), Welcome pointers by group and epoch (363), batched delegation key reads (364), an agent's repo's "
+    "group (365), the MLS engine's memory (366), recovery wraps opened once admitted (367), a GroupForm's pin "
+    "(368), the poison window (369), forwarding key objects by network (370), amending @@OD:202@@, gkm's state "
+    "over the gate cache (371), the Welcome HEAD (372), the bootstrap's config generation (373), the lb's 502 or "
+    "504 at gkm's client (374) and recommits after a newer generation (375). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

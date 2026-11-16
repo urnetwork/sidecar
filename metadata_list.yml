@@ -1,4 +1,4 @@
-# metadata_list.yml v31; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v32; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -111,6 +111,9 @@
 # cert-1 network_tls_name_backoff, each URnetwork-zone name's failure backoff at a CA: the count of consecutive
 # failed authorizations since its last success there and the next allowed attempt time, kept until that success
 # or 8 d past that time.
+# v32, updated 2026-11-16 for §10's items (owner decisions 363 and 368), adds no row: gkm-1's GroupForm chain with
+# each form's auth pin, its signer's state when it signs; and gkm-5's Welcome pointers, keyed by recipient, group
+# and epoch, gkm/welcome/<sidecar_id>/<group_id>/<n>, each naming the KeyPackageRef its Add used.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -513,7 +516,7 @@ evs-30:
 gkm-1:
   service: gkm
   store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<network_id>/<delegation_id>
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer, and the signer's auth pin when it signs (owner decision 368)); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
   why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
   ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
   owner: §10.6
@@ -535,8 +538,8 @@ gkm-4:
   owner: §10.6
 gkm-5:
   service: gkm
-  store: gkm/<group_id>/welcome/<n> (the repo's metadata cluster), gkm/welcome/<sidecar_id>/<ref> (the first)
-  sees: Welcome objects and pointers; recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
+  store: gkm/<group_id>/welcome/<n> (the repo's metadata cluster), gkm/welcome/<sidecar_id>/<group_id>/<n> (the first)
+  sees: Welcome objects and pointers, the pointers keyed by recipient, group and epoch and naming the KeyPackageRef the Add used (owner decision 363); recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
   why: deliver joins
   ttl: until every recipient has acked, at most 90 d
   owner: §10.6

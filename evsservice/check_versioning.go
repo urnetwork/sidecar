@@ -8,9 +8,10 @@
 //	lock     409 VERSIONING for versioning 1, never 2 (owner decision 168), in a repo whose lock stands in the
 //	         authorization state evs validates the push against (5d's newest state), so a write validated before
 //	         the lock serializes before it: recorded, since a lock can change
-//	others   a DROP's and a cancel's rules are EVS2-M10-09's: until they land, such a push answers 503, refusing
-//	         nothing, so none commits on a check this file did not run; a CUT's 5c rules are check_cut.go's
-//	         (EVS2-M10-11), run here before the versioning refusals, and its 5d rule, the index epoch, after 5d's pins
+//	others   a DROP's and a cancel's 5c rules are check_drop.go's (EVS2-M10-09), run here in place of the versioning
+//	         refusals, its ref rules before the refs table and its boundary after 5h; a CUT's 5c rules are
+//	         check_cut.go's (EVS2-M10-11), run here before the versioning refusals, and its 5d rule, the index epoch,
+//	         after 5d's pins
 //
 // A value past 2 never reaches here: the payload checks refuse it as malformed. evs reads no rule: only each version's
 // own setting (§11.7's choose row). The citation rule, 5h's kind-5 rows, is check_citation.go's.
@@ -24,8 +25,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// Format 2's 5c for a push carrying format 2: a seam's rules when the view carries one (a test's), else the DROP's
-// wait, a CUT's rules and CheckVersioning. A format-1 push passes.
+// Format 2's 5c for a push carrying format 2: a seam's rules when the view carries one (a test's), else a DROP's
+// rules (check_drop.go), a CUT's rules and CheckVersioning. A format-1 push passes.
 func checkFormat2Refs(view *PushView) *EvsCheckRefusal {
 	if !view.NeedsFormat2 {
 		return nil
@@ -38,7 +39,8 @@ func checkFormat2Refs(view *PushView) *EvsCheckRefusal {
 	}
 	push := view.Statement.Push
 	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) != 0 || len(push.GetDropSha256()) != 0 {
-		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "a DROP's rules are EVS2-M10-09's")
+		// a DROP's written boundaries are versioning 0 by its boundary rule, so no versioning refusal applies
+		return CheckDrop(view)
 	}
 	if refusal := CheckCut(view); refusal != nil {
 		return refusal
