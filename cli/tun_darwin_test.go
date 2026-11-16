@@ -3,7 +3,9 @@
 // ur tun on macOS (tun_darwin.go, bridge_local_darwin.go, bridge_dns_darwin.go). Most run the device's calls behind a
 // recording kernel and a fake utun, the carved addresses' host routes under exits among them (QD-869): an off-link
 // resolver takes one by the default route's gateway and an on-link one none, a carve that changes adds and removes
-// them, a default route that moves takes them with it, and leaving exits and closing remove them all. The rest run on
+// them, a default route that moves takes them with it, and leaving exits and closing remove them all. IPv6's halves go
+// on after IPv4's and come off after them (QD-881), a refusal of them holding the exits where the host has an IPv6
+// default route and leaving IPv4's standing where it has none. The rest run on
 // this machine's own kernel where no root is needed: a daemon that runs as the person is refused a utun with words
 // that send no one to sudo and leaves no device behind, and a host route too, an interface's flags read through the
 // same ioctl path the device's set takes, and the routing socket's watch starts and ends. A real device and a real
@@ -96,11 +98,12 @@ func TestTunDarwinReadsAnInterfacesFlags(t *testing.T) {
 	}
 }
 
-// A route's message: a /32 a host route with no mask, a wider prefix with its mask, each through the link address of
-// the interface, and the dump's parse reads them back.
+// A route's message, of either family: a whole address a host route with no mask, a wider prefix with its mask, IPv6's
+// halves among them, each through the link address of the interface, and the dump's parse reads them back.
 func TestTunDarwinRouteMessagesReadBack(t *testing.T) {
 	for _, prefix := range []netip.Prefix{netip.MustParsePrefix("100.70.1.2/32"), netip.MustParsePrefix("10.20.0.0/16"),
-		netip.MustParsePrefix("0.0.0.0/1")} {
+		netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("::/1"), netip.MustParsePrefix("8000::/1"),
+		netip.MustParsePrefix("2001:db8::/64"), netip.MustParsePrefix("2001:db8::7/128")} {
 		message := urTunDarwinRouteMessage(unix.RTM_ADD, 42, prefix, 7, 9)
 		wire, err := message.Marshal()
 		if err != nil {
@@ -114,7 +117,7 @@ func TestTunDarwinRouteMessagesReadBack(t *testing.T) {
 		if !ok || parsed.Type != unix.RTM_ADD || parsed.Index != 42 || parsed.Seq != 9 {
 			t.Fatalf("%s: %+v", prefix, messages[0])
 		}
-		if (prefix.Bits() == 32) != (parsed.Flags&unix.RTF_HOST != 0) || parsed.Flags&unix.RTF_STATIC == 0 {
+		if prefix.IsSingleIP() != (parsed.Flags&unix.RTF_HOST != 0) || parsed.Flags&unix.RTF_STATIC == 0 {
 			t.Fatalf("%s: flags %#x", prefix, parsed.Flags)
 		}
 		held, ok := urTunDarwinParseRoute(parsed)
@@ -355,6 +358,15 @@ func (self *testDarwinWorld) open(t *testing.T) *urTunDarwinInterface {
 	return opened.(*urTunDarwinInterface)
 }
 
+// The calls that put each of the halves on, or take each off, in their order: IPv4's, then IPv6's (QD-881).
+func testDarwinHalvesCalls(verb string) []string {
+	calls := []string{}
+	for _, half := range append(urTunExitsHalves(), urTunExitsIpv6Halves()...) {
+		calls = append(calls, verb+" route "+half.String())
+	}
+	return calls
+}
+
 // The device takes the kernel's name and comes up; addresses and routes go on and come off as the sets ask, a route
 // another interface holds is counted and left to it, and the read wants the family header's room.
 func TestTunDarwinSetsWhatTheBridgeHolds(t *testing.T) {
@@ -393,9 +405,9 @@ func TestTunDarwinSetsWhatTheBridgeHolds(t *testing.T) {
 	}
 }
 
-// Under exits the binding goes on first, to the unscoped default route's interface, then the halves, then the kick;
-// a sync with nothing moved changes nothing, a default route that moved binds again, and off exits the halves come
-// off before the binding.
+// Under exits the binding goes on first, to the unscoped default route's interface, then IPv4's halves and IPv6's, then
+// the kick; a sync with nothing moved changes nothing, a default route that moved binds again, and off exits the halves
+// come off, IPv4's first, before the binding.
 func TestTunDarwinExitsBindTheTransportFirst(t *testing.T) {
 	world := newTestDarwinWorld(t)
 	iface := world.open(t)
@@ -408,8 +420,7 @@ func TestTunDarwinExitsBindTheTransportFirst(t *testing.T) {
 		t.Fatalf("bound to %v", binding)
 	}
 	<-world.kicks
-	halves := urTunExitsHalves()
-	if calls := world.kernel.take(); !slices.Equal(calls, []string{"add route " + halves[0].String(), "add route " + halves[1].String()}) {
+	if calls := world.kernel.take(); !slices.Equal(calls, testDarwinHalvesCalls("add")) {
 		t.Fatalf("halves: %v", calls)
 	}
 	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute || 0 < len(world.kernel.take()) ||
@@ -431,7 +442,7 @@ func TestTunDarwinExitsBindTheTransportFirst(t *testing.T) {
 	if err != nil || defaultRoute {
 		t.Fatalf("off: %v %v", defaultRoute, err)
 	}
-	if calls := world.kernel.take(); !slices.Equal(calls, []string{"delete route " + halves[0].String(), "delete route " + halves[1].String()}) {
+	if calls := world.kernel.take(); !slices.Equal(calls, testDarwinHalvesCalls("delete")) {
 		t.Fatalf("off: %v", calls)
 	}
 	if binding := <-world.bindings; binding != [2]uint32{0, 0} {
@@ -467,7 +478,94 @@ func TestTunDarwinExitsHoldWhatTheHostRefuses(t *testing.T) {
 	}
 }
 
-// Close takes the exits, the resolver files, the routes and the addresses off, and closes the device.
+// IPv6's halves under exits (QD-881). Where the host has an IPv6 default route, the binding takes its interface for IPv6
+// and a refusal of an IPv6 half holds the exits, nothing left on, the error saying IPv6 would leave outside them; where
+// it has none, the refusal holds nothing: IPv4's halves stand, kicked once, what of IPv6's went on comes off, and the
+// next SetExits tries IPv6's again with no kick, putting them on once the kernel takes them. A half of IPv6's another
+// program holds holds the exits on either host.
+func TestTunDarwinExitsTakeIpv6sHalves(t *testing.T) {
+	ipv6Halves := urTunExitsIpv6Halves()
+	ipv6DefaultRoute := urTunDarwinRoute{dst: netip.MustParsePrefix("::/0"), index: 6,
+		gateway: netip.MustParseAddr("fe80::1"), flags: unix.RTF_UP | unix.RTF_GATEWAY}
+
+	// a host with IPv6 of its own: the refusal of the second IPv6 half holds the exits
+	world := newTestDarwinWorld(t)
+	world.kernel.table = append(world.kernel.table, ipv6DefaultRoute)
+	iface := world.open(t)
+	world.kernel.take()
+	world.kernel.addErrs[ipv6Halves[1]] = unix.ENETUNREACH
+	defaultRoute, err := iface.SetExits(true)
+	if defaultRoute || err == nil || !strings.Contains(err.Error(), "IPv6 would leave outside the exits") ||
+		errors.Is(err, errUrTunExitsHalfInUse) {
+		t.Fatalf("a host with IPv6: %v %v", defaultRoute, err)
+	}
+	want := append(testDarwinHalvesCalls("add")[:3], testDarwinHalvesCalls("delete")[:3]...)
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a host with IPv6: %v", calls)
+	}
+	if bound, unbound := <-world.bindings, <-world.bindings; bound != [2]uint32{4, 6} || unbound != [2]uint32{0, 0} {
+		t.Fatalf("a host with IPv6: bindings %v %v", bound, unbound)
+	}
+	if 0 < len(world.kicks) || 0 < len(iface.exitsHalves) {
+		t.Fatalf("a host with IPv6: kicked, or halves %v left", iface.exitsHalves)
+	}
+
+	// a host with none: IPv4's halves stand, and IPv6's that went on comes back off
+	world = newTestDarwinWorld(t)
+	iface = world.open(t)
+	world.kernel.take()
+	world.kernel.addErrs[ipv6Halves[1]] = unix.ENETUNREACH
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("a host with no IPv6: %v %v", defaultRoute, err)
+	}
+	want = append(testDarwinHalvesCalls("add")[:3], "delete route "+ipv6Halves[0].String())
+	if calls := world.kernel.take(); !slices.Equal(calls, want) || !slices.Equal(iface.exitsHalves, urTunExitsHalves()) {
+		t.Fatalf("a host with no IPv6: %v, halves %v", calls, iface.exitsHalves)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{4, 4} {
+		t.Fatalf("a host with no IPv6: bound to %v", binding)
+	}
+	<-world.kicks
+	// the next sync's SetExits tries IPv6's again and kicks nothing
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute || 0 < len(world.kicks) {
+		t.Fatalf("again: %v %v", defaultRoute, err)
+	}
+	want = []string{"add route " + ipv6Halves[0].String(), "delete route " + ipv6Halves[0].String()}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("again: %v", calls)
+	}
+	// once the kernel takes them they go on
+	delete(world.kernel.addErrs, ipv6Halves[1])
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("taken: %v %v", defaultRoute, err)
+	}
+	if calls := world.kernel.take(); !slices.Equal(calls, testDarwinHalvesCalls("add")[2:]) {
+		t.Fatalf("taken: %v", calls)
+	}
+	<-world.kicks
+	if defaultRoute, err := iface.SetExits(false); err != nil || defaultRoute {
+		t.Fatalf("off: %v %v", defaultRoute, err)
+	}
+	if calls := world.kernel.take(); !slices.Equal(calls, testDarwinHalvesCalls("delete")) {
+		t.Fatalf("off: %v", calls)
+	}
+
+	// another program holds an IPv6 half: held on a host with no IPv6 too
+	world = newTestDarwinWorld(t)
+	iface = world.open(t)
+	world.kernel.take()
+	world.kernel.addErrs[ipv6Halves[0]] = unix.EEXIST
+	if defaultRoute, err := iface.SetExits(true); defaultRoute || !errors.Is(err, errUrTunExitsHalfInUse) {
+		t.Fatalf("a held IPv6 half: %v %v", defaultRoute, err)
+	}
+	want = append(testDarwinHalvesCalls("add")[:2], testDarwinHalvesCalls("delete")[:2]...)
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a held IPv6 half: %v", calls)
+	}
+}
+
+// Close takes the exits, IPv6's halves among them, the resolver files, the routes and the addresses off, and closes the
+// device.
 func TestTunDarwinCloseRemovesEverything(t *testing.T) {
 	world := newTestDarwinWorld(t)
 	iface := world.open(t)
@@ -482,9 +580,7 @@ func TestTunDarwinCloseRemovesEverything(t *testing.T) {
 	if err := iface.Close(); err != nil {
 		t.Fatal(err)
 	}
-	halves := urTunExitsHalves()
-	want := []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(), "delete route 100.70.1.2/32",
-		"delete address 100.70.9.9"}
+	want := append(testDarwinHalvesCalls("delete"), "delete route 100.70.1.2/32", "delete address 100.70.9.9")
 	if calls := world.kernel.take(); !slices.Equal(calls, want) {
 		t.Fatalf("close: %v", calls)
 	}
@@ -543,8 +639,7 @@ func TestTunDarwinCarvedHostRoutesFollowTheCarve(t *testing.T) {
 		t.Fatalf("exits: %v %v", defaultRoute, err)
 	}
 	halves := urTunExitsHalves()
-	want := []string{"add host route 203.0.113.53 by 192.0.2.1 on 4", "add route " + halves[0].String(),
-		"add route " + halves[1].String()}
+	want := append([]string{"add host route 203.0.113.53 by 192.0.2.1 on 4"}, testDarwinHalvesCalls("add")...)
 	if calls := world.kernel.take(); !slices.Equal(calls, want) {
 		t.Fatalf("exits: %v", calls)
 	}
@@ -585,8 +680,7 @@ func TestTunDarwinCarvedHostRoutesFollowTheCarve(t *testing.T) {
 	if err != nil || defaultRoute {
 		t.Fatalf("off: %v %v", defaultRoute, err)
 	}
-	want = []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
-		"delete host route 198.51.100.53 by 192.0.2.1 on 4"}
+	want = append(testDarwinHalvesCalls("delete"), "delete host route 198.51.100.53 by 192.0.2.1 on 4")
 	if calls := world.kernel.take(); !slices.Equal(calls, want) {
 		t.Fatalf("off: %v", calls)
 	}
@@ -751,10 +845,8 @@ func TestTunDarwinCloseRemovesTheCarvedHostRoutes(t *testing.T) {
 	if err := iface.Close(); err != nil {
 		t.Fatal(err)
 	}
-	halves := urTunExitsHalves()
-	want := []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
-		"delete host route 198.51.100.53 by 192.0.2.1 on 4", "delete host route 203.0.113.53 by 192.0.2.1 on 4",
-		"delete route 100.70.1.2/32"}
+	want := append(testDarwinHalvesCalls("delete"), "delete host route 198.51.100.53 by 192.0.2.1 on 4",
+		"delete host route 203.0.113.53 by 192.0.2.1 on 4", "delete route 100.70.1.2/32")
 	if calls := world.kernel.take(); !slices.Equal(calls, want) {
 		t.Fatalf("close: %v", calls)
 	}
@@ -782,12 +874,16 @@ func TestTunDarwinCloseRemovesTheCarvedHostRoutesOfAHeldHalf(t *testing.T) {
 	}
 	halves := urTunExitsHalves()
 	world.kernel.deleteErrs = map[netip.Prefix]error{halves[1]: unix.ENOBUFS}
-	// leaving exits keeps the host route while a half is still on
+	// leaving exits keeps the host route while an IPv4 half is still on
 	world.kernel.take()
 	if defaultRoute, err := iface.SetExits(false); err == nil || !defaultRoute {
 		t.Fatalf("a half that stays: %v %v", defaultRoute, err)
 	}
-	if calls := world.kernel.take(); !slices.Equal(calls, []string{"delete route " + halves[0].String()}) {
+	want := []string{"delete route " + halves[0].String()}
+	for _, half := range urTunExitsIpv6Halves() {
+		want = append(want, "delete route "+half.String())
+	}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
 		t.Fatalf("a half that stays: %v", calls)
 	}
 	if err := iface.Close(); err == nil {

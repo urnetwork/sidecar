@@ -8,7 +8,10 @@
 // refuses them, the resolver's rule follows the zones, and close removes everything. Under exits the carved addresses
 // take their host routes (QD-869): an off-link resolver one by the default route's next hop and an on-link one none,
 // a carve that changes adds and removes them, a default route that moves takes them with it, and leaving exits and
-// closing remove them all. A real adapter, which takes an elevated run on Windows, is not run here.
+// closing remove them all. IPv6's halves go on after IPv4's and come off after them (QD-881), a refusal of them holding
+// the exits where the host has an IPv6 default route and leaving IPv4's standing where it has none, and a row of
+// either family on link names that family's unspecified next hop. A real adapter, which takes an elevated run on
+// Windows, is not run here.
 
 package main
 
@@ -41,6 +44,8 @@ type testWindowsIpHelper struct {
 	table     []urTunWindowsRoute
 	adapters  []urTunWindowsAdapter
 	addErr    error
+	// what AddRoute answers for a prefix ahead of addErr, nil for none
+	addErrs map[netip.Prefix]error
 	// what DeleteRoute answers for a prefix, nil for success
 	deleteErrs map[netip.Prefix]error
 	// what AddHostRoute and DeleteHostRoute answer for an address, nil for success
@@ -69,6 +74,9 @@ func (self *testWindowsIpHelper) DeleteAddress(luid uint64, address netip.Addr) 
 func (self *testWindowsIpHelper) AddRoute(luid uint64, prefix netip.Prefix, metric uint32) error {
 	self.stateLock.Lock()
 	err := self.addErr
+	if prefixErr := self.addErrs[prefix]; prefixErr != nil {
+		err = prefixErr
+	}
 	self.stateLock.Unlock()
 	if err != nil {
 		return err
@@ -373,6 +381,15 @@ func TestTunWindowsHoldsTheDriverToItsPins(t *testing.T) {
 	}
 }
 
+// The calls that put each of the halves on, or take each off, in their order: IPv4's, then IPv6's (QD-881).
+func testWindowsHalvesCalls(verb string) []string {
+	calls := []string{}
+	for _, half := range append(urTunExitsHalves(), urTunExitsIpv6Halves()...) {
+		calls = append(calls, verb+" route "+half.String())
+	}
+	return calls
+}
+
 // Addresses and routes go on and come off as the sets ask; a prefix another interface's route holds is counted and
 // left to it.
 func TestTunWindowsSetsWhatTheBridgeHolds(t *testing.T) {
@@ -397,8 +414,8 @@ func TestTunWindowsSetsWhatTheBridgeHolds(t *testing.T) {
 	}
 }
 
-// Under exits the binding goes on first, to the default route whose metrics add up least and IPv6's own, then the
-// halves, then the kick; off exits the halves come off before the binding.
+// Under exits the binding goes on first, to the default route whose metrics add up least and IPv6's own, then IPv4's
+// halves and IPv6's, then the kick; off exits the halves come off, IPv4's first, before the binding.
 func TestTunWindowsExitsBindTheTransportFirst(t *testing.T) {
 	world := newTestWindowsWorld(t)
 	iface := world.open(t)
@@ -409,14 +426,13 @@ func TestTunWindowsExitsBindTheTransportFirst(t *testing.T) {
 		t.Fatalf("bound to %v", binding)
 	}
 	<-world.kicks
-	halves := urTunExitsHalves()
-	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"add route " + halves[0].String(), "add route " + halves[1].String()}) {
+	if calls := world.ipHelper.take(); !slices.Equal(calls, testWindowsHalvesCalls("add")) {
 		t.Fatalf("halves: %v", calls)
 	}
 	if defaultRoute, err := iface.SetExits(false); err != nil || defaultRoute {
 		t.Fatalf("off: %v %v", defaultRoute, err)
 	}
-	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"delete route " + halves[0].String(), "delete route " + halves[1].String()}) {
+	if calls := world.ipHelper.take(); !slices.Equal(calls, testWindowsHalvesCalls("delete")) {
 		t.Fatalf("off: %v", calls)
 	}
 	if binding := <-world.bindings; binding != [2]uint32{0, 0} {
@@ -437,8 +453,101 @@ func TestTunWindowsExitsHoldWhatTheHostRefuses(t *testing.T) {
 	if defaultRoute, err := iface.SetExits(true); defaultRoute || !errors.Is(err, errUrTunWindowsExitsHalfInUse) {
 		t.Fatalf("a held half: %v %v", defaultRoute, err)
 	}
+	world.ipHelper.table = append(table, urTunWindowsRoute{dst: urTunExitsIpv6Halves()[0], luid: 0x20, index: 21})
+	if defaultRoute, err := iface.SetExits(true); defaultRoute || !errors.Is(err, errUrTunWindowsExitsHalfInUse) {
+		t.Fatalf("a held IPv6 half: %v %v", defaultRoute, err)
+	}
 	if 0 < len(world.bindings) || 0 < len(world.ipHelper.take()) {
 		t.Fatal("something went on")
+	}
+}
+
+// IPv6's halves under exits (QD-881). Where the host has an IPv6 default route, a refusal of an IPv6 half holds the
+// exits, nothing left on, the error saying IPv6 would leave outside them; where it has none, the refusal holds nothing:
+// IPv4's halves stand, kicked once, what of IPv6's went on comes off, and the next SetExits tries IPv6's again with no
+// kick, putting them on once IP Helper takes them.
+func TestTunWindowsExitsTakeIpv6sHalves(t *testing.T) {
+	ipv6Halves := urTunExitsIpv6Halves()
+
+	// a host with IPv6 of its own, by Wi-Fi: the refusal of the second IPv6 half holds the exits
+	world := newTestWindowsWorld(t)
+	iface := world.open(t)
+	world.ipHelper.addErrs = map[netip.Prefix]error{ipv6Halves[1]: windows.ERROR_NOT_FOUND}
+	defaultRoute, err := iface.SetExits(true)
+	if defaultRoute || err == nil || !strings.Contains(err.Error(), "IPv6 would leave outside the exits") {
+		t.Fatalf("a host with IPv6: %v %v", defaultRoute, err)
+	}
+	want := append(testWindowsHalvesCalls("add")[:3], testWindowsHalvesCalls("delete")[:3]...)
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a host with IPv6: %v", calls)
+	}
+	if bound, unbound := <-world.bindings, <-world.bindings; bound != [2]uint32{10, 21} || unbound != [2]uint32{0, 0} {
+		t.Fatalf("a host with IPv6: bindings %v %v", bound, unbound)
+	}
+	if 0 < len(world.kicks) || 0 < len(iface.exitsHalves) {
+		t.Fatalf("a host with IPv6: kicked, or halves %v left", iface.exitsHalves)
+	}
+
+	// a host with none: IPv4's halves stand, and IPv6's that went on comes back off
+	world = newTestWindowsWorld(t)
+	world.ipHelper.table = slices.DeleteFunc(world.ipHelper.table, func(held urTunWindowsRoute) bool { return held.dst.Addr().Is6() })
+	iface = world.open(t)
+	world.ipHelper.addErrs = map[netip.Prefix]error{ipv6Halves[1]: windows.ERROR_NOT_FOUND}
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("a host with no IPv6: %v %v", defaultRoute, err)
+	}
+	want = append(testWindowsHalvesCalls("add")[:3], "delete route "+ipv6Halves[0].String())
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) || !slices.Equal(iface.exitsHalves, urTunExitsHalves()) {
+		t.Fatalf("a host with no IPv6: %v, halves %v", calls, iface.exitsHalves)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{10, 0} {
+		t.Fatalf("a host with no IPv6: bound to %v", binding)
+	}
+	<-world.kicks
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute || 0 < len(world.kicks) {
+		t.Fatalf("again: %v %v", defaultRoute, err)
+	}
+	want = []string{"add route " + ipv6Halves[0].String(), "delete route " + ipv6Halves[0].String()}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("again: %v", calls)
+	}
+	world.ipHelper.addErrs = nil
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("taken: %v %v", defaultRoute, err)
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, testWindowsHalvesCalls("add")[2:]) {
+		t.Fatalf("taken: %v", calls)
+	}
+	<-world.kicks
+	if defaultRoute, err := iface.SetExits(false); err != nil || defaultRoute {
+		t.Fatalf("off: %v %v", defaultRoute, err)
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, testWindowsHalvesCalls("delete")) {
+		t.Fatalf("off: %v", calls)
+	}
+}
+
+// A route row on link names the unspecified next hop of its prefix's family, an IPv6 half's IPv6's; one by a next hop
+// names it.
+func TestTunWindowsRouteRowsNameTheirFamilysNextHop(t *testing.T) {
+	for _, c := range []struct {
+		prefix  netip.Prefix
+		nextHop netip.Addr
+		want    netip.Addr
+	}{
+		{prefix: urTunExitsHalves()[0], want: netip.IPv4Unspecified()},
+		{prefix: urTunExitsIpv6Halves()[1], want: netip.IPv6Unspecified()},
+		{prefix: netip.MustParsePrefix("203.0.113.53/32"), nextHop: netip.MustParseAddr("192.0.2.1"),
+			want: netip.MustParseAddr("192.0.2.1")},
+	} {
+		row, err := urTunWindowsRouteRow(0x99, c.prefix, c.nextHop, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		destination, err := urTunWindowsSockaddrAddr(&row.DestinationPrefix.Prefix).Prefix(int(row.DestinationPrefix.PrefixLength))
+		if err != nil || destination != c.prefix || urTunWindowsSockaddrAddr(&row.NextHop) != c.want {
+			t.Fatalf("%s: %v by %v", c.prefix, destination, urTunWindowsSockaddrAddr(&row.NextHop))
+		}
 	}
 }
 
@@ -487,8 +596,7 @@ func TestTunWindowsCarvedHostRoutesFollowTheCarve(t *testing.T) {
 		t.Fatalf("exits: %v %v", defaultRoute, err)
 	}
 	halves := urTunExitsHalves()
-	want := []string{"add host route 203.0.113.53 by 192.0.2.1 on 0x10", "add route " + halves[0].String(),
-		"add route " + halves[1].String()}
+	want := append([]string{"add host route 203.0.113.53 by 192.0.2.1 on 0x10"}, testWindowsHalvesCalls("add")...)
 	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
 		t.Fatalf("exits: %v", calls)
 	}
@@ -529,8 +637,7 @@ func TestTunWindowsCarvedHostRoutesFollowTheCarve(t *testing.T) {
 	if err != nil || defaultRoute {
 		t.Fatalf("off: %v %v", defaultRoute, err)
 	}
-	want = []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
-		"delete host route 203.0.113.60 by 192.0.2.1 on 0x10"}
+	want = append(testWindowsHalvesCalls("delete"), "delete host route 203.0.113.60 by 192.0.2.1 on 0x10")
 	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
 		t.Fatalf("off: %v", calls)
 	}
@@ -705,10 +812,8 @@ func TestTunWindowsCloseRemovesTheCarvedHostRoutes(t *testing.T) {
 	if err := iface.Close(); err != nil {
 		t.Fatal(err)
 	}
-	halves := urTunExitsHalves()
-	want := []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
-		"delete host route 203.0.113.53 by 192.0.2.1 on 0x10", "delete host route 203.0.113.60 by 192.0.2.1 on 0x10",
-		"delete route 100.70.1.2/32"}
+	want := append(testWindowsHalvesCalls("delete"), "delete host route 203.0.113.53 by 192.0.2.1 on 0x10",
+		"delete host route 203.0.113.60 by 192.0.2.1 on 0x10", "delete route 100.70.1.2/32")
 	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
 		t.Fatalf("close: %v", calls)
 	}
@@ -736,12 +841,16 @@ func TestTunWindowsCloseRemovesTheCarvedHostRoutesOfAHeldHalf(t *testing.T) {
 	}
 	halves := urTunExitsHalves()
 	world.ipHelper.deleteErrs = map[netip.Prefix]error{halves[1]: windows.ERROR_NOT_ENOUGH_MEMORY}
-	// leaving exits keeps the host route while a half is still on
+	// leaving exits keeps the host route while an IPv4 half is still on
 	world.ipHelper.take()
 	if defaultRoute, err := iface.SetExits(false); err == nil || !defaultRoute {
 		t.Fatalf("a half that stays: %v %v", defaultRoute, err)
 	}
-	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"delete route " + halves[0].String()}) {
+	want := []string{"delete route " + halves[0].String()}
+	for _, half := range urTunExitsIpv6Halves() {
+		want = append(want, "delete route "+half.String())
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
 		t.Fatalf("a half that stays: %v", calls)
 	}
 	if err := iface.Close(); err == nil {
