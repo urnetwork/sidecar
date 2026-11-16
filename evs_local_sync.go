@@ -21,6 +21,12 @@
 //	                  tainted, each with whether its last change removed it, until a DELETE, which carries nothing to
 //	                  check: it applies, the local ref is deleted, and the push that re-creates the ref must write or
 //	                  remove each tainted token path, save one last removed that its new tree lacks (8.5; QD-826)
+//	                  a u that check's prefix line refuses: the same, its alarm prefix_rule with detail refused, the
+//	                  signer, and the first path found where this device holds its name (16.2.6; QD-793)
+//	  a waiting u     the rule set at u's pin, found from the pin and this device's state before u's record is read,
+//	                  is pending or a later release's: the replay ends before u as it does for a source it cannot
+//	                  reach, with no alarm and no stuck_at, the cause kept in EvsGitRef as held or update; it runs again
+//	                  at the next wake, which a moved config state or release asks (WakeRuleWaits)
 //
 //	check(u)  EvsGitCheckUpdate (evs_git_check.go), its sources replayed first: a source this mount cannot replay to the
 //	          version named leaves r waiting with no alarm, and a cycle of waits refuses u; then the objects through the
@@ -31,7 +37,12 @@
 //	          it a write or removal of every tainted token path as the new tree holds it or lacks it, save one whose last
 //	          stopped change was a removal and which the new tree lacks: the push states nothing there, and the stopped
 //	          removal stands for the net change's own (QD-826); on a tag ref none; a REKEY's entries each the mode and
-//	          oid of tree(peel(E)) at its path; and §11.7's per-path version rules on what this replay holds
+//	          oid of tree(peel(E)) at its path; and §11.7's per-path version rules on what this replay holds. Under a
+//	          general repo's prefix rules the check's prefix line (evs_git_check.go's header): its early test inside
+//	          EvsGitCheckUpdate, a tag's proof read from the named source's tips log, and the late test once S and N
+//	          stand, before the changes are held to the tree, measured from J: S, or the empty tree on a branch's
+//	          first tip, which this record holding neither a tip nor a last tip says, over a base that is no shared
+//	          branch by its own record
 //
 // An own push is replayed from evs like any other and checked like any other. SidecarCommitter refusing a committer
 // refuses the version; it is no error to retry. The sync engine never takes P_r, so it never waits on a push.
@@ -54,12 +65,23 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
 )
 
 // A source a version names that this mount cannot replay to the version named: the dependent ref waits, with no
 // alarm of its own (DESIGN-DETAILS 8.5's "a source ref cannot be replayed" row).
 var errEvsGitWaitSource = errors.New("evs: a source the ref waits on")
+
+// A version whose rule set at its pin this device holds pending or of a later release: the ref waits before it, with
+// no alarm and no stuck_at (DESIGN-DETAILS 8.2.7's waiting u).
+var errEvsGitWaitRules = errors.New("evs: a prefix rule set the ref waits on")
+
+// A test's hook that answers a tag's proof test by the device's own tip index in place of the version the push
+// names, which mounts that follow different refs disagree on (DESIGN-DETAILS 16.6's base independence); nil outside
+// tests.
+var evsLocalSyncProofHook func(engine *EvsGitSyncEngine) func(ctx context.Context, peeled EvsGitOid) (bool, error)
 
 // One mount's sync engine.
 type EvsGitSyncEngine struct {
@@ -354,12 +376,12 @@ func (self *EvsGitSyncEngine) replayWithSlot(ctx context.Context, refId Id, upTo
 		keys: newEvsReadKeys(self.repo), replaying: replaying,
 		paths: NewEvsReplayPathsOfMode(ref.Version, protocol.EvsRefMode_EVS_REF_GIT).WithOverlayOffset(overlayOffset),
 	}
-	if run.ref.WaitingSource != nil {
+	if run.ref.WaitingSource != nil || run.ref.WaitingRules != "" {
 		// tried again now: a wait still owed is recorded again below
-		run.ref.WaitingSource, run.ref.WaitingVersion, run.dirty = nil, 0, true
+		run.ref.WaitingSource, run.ref.WaitingVersion, run.ref.WaitingRules, run.dirty = nil, 0, "", true
 	}
 	err = run.replay(ctx, through)
-	if errors.Is(err, errEvsGitWaitSource) {
+	if errors.Is(err, errEvsGitWaitSource) || errors.Is(err, errEvsGitWaitRules) {
 		// what applied before the wait stands; the ref waits, and its next wake tries again
 		if flushErr := run.flush(ctx); flushErr != nil {
 			return nil, flushErr
@@ -562,6 +584,23 @@ func (self *evsGitReplayRun) apply(ctx context.Context, statement *EvsVerifiedSt
 		self.pass(statement)
 		return nil
 	}
+	// the prefix line's set, found from u's pin and this device's state before u's record is read (8.2.7): a set
+	// pending or of a later release ends the replay before u, with no alarm and no stuck_at
+	var line *EvsGitPrefixLine
+	if ref.StuckAt == 0 {
+		var err error
+		if line, err = engine.repo.gitPrefixLine(ctx, ref.RefId, statement.Statement); err != nil {
+			return err
+		}
+		if line.waits() {
+			ref.WaitingRules = EvsGitRuleWaitHeld
+			if line.Verdict.Outcome == AclPrefixUpdate {
+				ref.WaitingRules = EvsGitRuleWaitUpdate
+			}
+			self.dirty = true
+			return errEvsGitWaitRules
+		}
+	}
 	payload, err := engine.repo.pushContent(ctx, self.head, statement)
 	if err != nil {
 		if evsLocalRefusesVersion(err) {
@@ -611,7 +650,7 @@ func (self *evsGitReplayRun) apply(ctx context.Context, statement *EvsVerifiedSt
 	if err := self.store.learnReachable(ctx, evsGitMetadataCandidates(metadata)); err != nil {
 		return err
 	}
-	checked, err := EvsGitCheckUpdate(ctx, &EvsGitUpdateArgs{
+	checkArgs := &EvsGitUpdateArgs{
 		RepoId: engine.mount.RepoId, RefId: ref.RefId, RefName: ref.Name, Statement: statement.Statement, Payload: payload,
 		Metadata: metadata, PriorTip: ref.Tip, Creating: creating, SectionRefName: sectionRefName, HeadBase: headBase,
 		RefIdOf: func(refName []byte) (Id, error) {
@@ -626,7 +665,14 @@ func (self *evsGitReplayRun) apply(ctx context.Context, statement *EvsVerifiedSt
 			return engine.client.verifier.verifyImport(signed, engine.mount.RepoId, push)
 		},
 		Parents: self.parents,
-	})
+		// the prefix line: "first tip" is read from what this reader applied, so a ref whose first push was refused is
+		// still new after its DELETE (QD-801)
+		Prefix: line, HeldTip: ref.Tip != nil || ref.LastTip != nil, SharedBranch: engine.SharedBranch, SourceTip: self.sourceTip,
+	}
+	if evsLocalSyncProofHook != nil {
+		checkArgs.ProofOf = evsLocalSyncProofHook(engine)
+	}
+	checked, err := EvsGitCheckUpdate(ctx, checkArgs)
 	if err != nil {
 		if evsLocalRefusesVersion(err) {
 			return self.refuse(statement, payload, err)
@@ -662,7 +708,7 @@ func (self *evsGitReplayRun) apply(ctx context.Context, statement *EvsVerifiedSt
 	}
 	written, err := self.replayer.applyUpdate(ctx, self.head, statement, payload, metadata, checked)
 	if err == nil {
-		err = self.checkChanges(ctx, push, payload, metadata, checked, written, creating)
+		err = self.checkChanges(ctx, push, payload, metadata, checked, written, creating, line)
 	}
 	if err == nil {
 		entries := map[string][]byte{}
@@ -727,16 +773,32 @@ func evsGitMetadataCandidates(metadata *protocol.EvsSealedMetadata) []EvsGitOid 
 	return oids
 }
 
-// A refused version: alarmed, the ref stopped at the version before it, its token paths tainted, and passed (8.5).
+// A refused version: alarmed, the ref stopped at the version before it, its token paths tainted, and passed (8.5). A
+// prefix line's refusal alarms prefix_rule with detail refused, the signer and the first path found where this device
+// holds its name, in place of version_rule (16.2.6).
 func (self *evsGitReplayRun) refuse(statement *EvsVerifiedStatement, payload *EvsCheckedPayload, reason error) error {
 	engine := self.engine
 	ref := self.ref
-	engine.client.alarm(engine.mount.RepoId, ref.RefId, SidecarEvsAlarmVersionRule, "", evsSignerOf(statement.Statement.Bytes))
+	signerId := evsSignerOf(statement.Statement.Bytes)
+	alarm := SidecarEvsAlarmVersionRule
+	var prefixRefusal *EvsGitPrefixRefusal
+	if errors.As(reason, &prefixRefusal) {
+		alarm = SidecarEvsAlarmPrefixRule
+		engine.prefixAlarm(ref.RefId, statement, signerId, prefixRefusal.Path)
+	} else {
+		engine.client.alarm(engine.mount.RepoId, ref.RefId, SidecarEvsAlarmVersionRule, "", signerId)
+	}
 	// the reason names a rule, never a path or name (I-13)
 	engine.client.log.Warningf("[evs]ref %s of repo %s refused at version %d: %v", ref.RefId, engine.mount.RepoId, statement.Version, reason)
 	if ref.StuckAt == 0 {
 		ref.StuckAt = statement.Version
+		ref.StuckSigner, ref.StuckReason = signerId, alarm
 		ref.Stopped = append(ref.Stopped, [2]uint64{statement.Version, 0})
+	}
+	if base := self.head.Head.GetBase(); ref.Base == nil && base != nil {
+		// a ref whose creating push is refused still has the head's base, which never changes and which the push that
+		// re-creates it after its DELETE repeats (8.2.2's sections row)
+		ref.Base = proto.Clone(base).(*protocol.EvsOverlay)
 	}
 	if payload != nil {
 		self.taint(payload, statement.Statement.Push)
@@ -811,6 +873,11 @@ func (self *evsGitReplayRun) dependOn(ctx context.Context, sources []*protocol.E
 			return err
 		}
 		if !applied {
+			if evsGitStoppedThrough(sourceRef, version) {
+				// inside a span a DELETE ended: the version was skipped for good, so it has no tip this mount holds,
+				// and is no tag's proof either (8.2.7's tip held at v')
+				return fmt.Errorf("%w: a source at a version its ref's replay skipped", ErrEvsGitUpdateRefused)
+			}
 			// stopped at a refused version: the source cannot be replayed there, so this ref waits
 			self.ref.WaitingSource, self.ref.WaitingVersion, self.dirty = &refId, version, true
 			return errEvsGitWaitSource
@@ -822,6 +889,89 @@ func (self *evsGitReplayRun) dependOn(ctx context.Context, sources []*protocol.E
 	// the sources' tips moved refs/ur/evs/: what they reach is learned again
 	self.store.forgetReachable()
 	return nil
+}
+
+// Whether version lies inside a span of the ref that a refusal stopped and its DELETE ended: one replay never applies.
+func evsGitStoppedThrough(ref *EvsGitRef, version uint64) bool {
+	for _, span := range ref.Stopped {
+		if span[0] <= version && span[1] != 0 && version < span[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// The tip a source held at the version it names, by this mount's tips log once its replay reached it: nil where none
+// stands, inside a span a refusal stopped, before the ref had a tip or after its DELETE (8.2.7's tip held at v').
+func (self *evsGitReplayRun) sourceTip(ctx context.Context, source *protocol.EvsOverlay) (*EvsGitOid, error) {
+	refId, err := IdFromBytes(source.GetRefId())
+	if err != nil {
+		return nil, nil
+	}
+	sourceRef, err := self.engine.loadRef(ctx, refId)
+	if err != nil {
+		return nil, err
+	}
+	tip, applied, err := self.engine.state.tipAt(sourceRef, source.GetVersion())
+	if err != nil || !applied {
+		return nil, err
+	}
+	return tip, nil
+}
+
+// Whether a ref is a shared branch by its own history as this mount replayed it (DESIGN-DETAILS 8.2.4, 8.2.7): a
+// git-mode ref whose pushes carry the kind shared and whose name, from its creating push's sealed copy, is no tag's.
+// A ref this mount holds no name of is none.
+func (self *EvsGitSyncEngine) SharedBranch(ctx context.Context, refId Id) (bool, error) {
+	ref, err := self.loadRef(ctx, refId)
+	if err != nil {
+		return false, err
+	}
+	return ref.Mode == protocol.EvsRefMode_EVS_REF_GIT && ref.Kind == protocol.EvsRefKind_EVS_REF_SHARED && len(ref.Name) != 0 && !ref.tag(), nil
+}
+
+// Raises evs_alarm prefix_rule with detail refused for a version the prefix line refused (16.2.6, 16.2.10): through
+// the client's judge, which counts one event for each (repo, ref, signer) in its interval, else at once. The path goes
+// into the event and no log (I-13).
+func (self *EvsGitSyncEngine) prefixAlarm(refId Id, statement *EvsVerifiedStatement, signerId *Id, path string) {
+	repoId := self.mount.RepoId
+	pushId, _ := IdFromBytes(statement.Statement.Push.GetPushId())
+	if judge := self.client.prefixJudge(); judge != nil && signerId != nil {
+		judge.alarm(repoId, refId, *signerId, path, statement.Version, &pushId, SidecarEvsAlarmDetailRefused, 1)
+		return
+	}
+	self.client.log.Warningf("[evs]alarm %s (%s) on repo %s ref %s", SidecarEvsAlarmPrefixRule, SidecarEvsAlarmDetailRefused, repoId, refId)
+	self.client.emit(SidecarEvent{
+		Kind: SidecarEventEvsAlarm, RepoId: &repoId, RefId: &refId, SidecarId: signerId, Path: path, EvsAlarm: SidecarEvsAlarmPrefixRule,
+		EvsAlarmDetail: SidecarEvsAlarmDetailRefused, Version: statement.Version, PushId: &pushId, Count: 1,
+	})
+}
+
+// Asks a replay of every ref that waits on a prefix rule set or on a source (DESIGN-DETAILS 8.2.7's waiting u): what a
+// moved config state, a key generation gained or a new release calls, so a set that opened, voided or became readable
+// is judged again. It never blocks.
+func (self *EvsGitSyncEngine) WakeRuleWaits() error {
+	refs, err := self.state.gitRefs()
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		if ref.WaitingRules != "" || ref.WaitingSource != nil {
+			self.Wake(ref.RefId)
+		}
+	}
+	return nil
+}
+
+// Each mount's engine woken for its refs that wait on a rule set or a source, as one engine's call is.
+func (self *EvsMounts) WakeRuleWaits() error {
+	errs := []error{}
+	for _, mount := range self.List() {
+		if err := mount.Sync().WakeRuleWaits(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // A held commit's parents, read back from the bare repository.
@@ -942,7 +1092,7 @@ func (self *evsGitReplayRun) bornJournal() (map[string]uint64, error) {
 // save one whose last stopped change was a removal and which the new tree lacks, where the push states nothing and
 // the stopped removal stands for the net change's own (QD-826); then an overlay's held set and the born journal take
 // what the version changed.
-func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.EvsPush, payload *EvsCheckedPayload, metadata *protocol.EvsSealedMetadata, checked *EvsGitCheckedUpdate, written map[string]*evsGitWrittenFile, creating bool) error {
+func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.EvsPush, payload *EvsCheckedPayload, metadata *protocol.EvsSealedMetadata, checked *EvsGitCheckedUpdate, written map[string]*evsGitWrittenFile, creating bool, line *EvsGitPrefixLine) error {
 	refused := func(format string, values ...any) error {
 		return fmt.Errorf("%w: %s", ErrEvsGitUpdateRefused, fmt.Sprintf(format, values...))
 	}
@@ -951,6 +1101,14 @@ func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.Ev
 	if tagRef {
 		if len(payload.Changes) != 0 {
 			return refused("a tag ref's push with a change")
+		}
+		if checked.PrefixMeasure == EvsGitPrefixMeasureFromNothing {
+			// a tag with no proof: every file of the tagged tree, from nothing (QD-801)
+			next, err := self.treeOf(ctx, *checked.Peeled)
+			if err != nil {
+				return err
+			}
+			return EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{Line: line, Measure: checked.PrefixMeasure, Source: self.store, N: next})
 		}
 		return nil
 	}
@@ -968,6 +1126,22 @@ func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.Ev
 	if err != nil {
 		return err
 	}
+	epoch := push.GetPathEpoch()
+	if checked.PrefixMeasure != EvsGitPrefixMeasureNone {
+		// the prefix line's late test, once S and N stand: the files that differ between J and N, J being S here or
+		// the empty tree, and every tainted token path the push writes or removes (8.2.7)
+		tainted := map[string]bool{}
+		for _, path := range ref.Tainted {
+			if path.Epoch == epoch {
+				tainted[path.Key] = true
+			}
+		}
+		if err := EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{
+			Line: line, Measure: checked.PrefixMeasure, Source: self.store, J: stood, N: next, Changes: payload.Changes, Tainted: tainted,
+		}); err != nil {
+			return err
+		}
+	}
 	net, err := evsGitNetChange(ctx, self.store, stood, next)
 	if err != nil {
 		return err
@@ -978,7 +1152,6 @@ func (self *evsGitReplayRun) checkChanges(ctx context.Context, push *protocol.Ev
 			return err
 		}
 	}
-	epoch := push.GetPathEpoch()
 	expected := map[string]*EvsGitPathChange{}
 	for _, change := range net {
 		if overlay && change.removes() {

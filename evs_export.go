@@ -17,7 +17,11 @@
 //
 // A git-mode version that fails its check stops its ref at the version before, never skipped in silence: export
 // alarms version_rule, reports the version and why in EvsExportedRef.Refused, and goes on from the ref's next DELETE,
-// which carries nothing to check (8.5). Provenance goes in refs/notes/ur (evs_export_notes.go). ur/index and ur/lfs are
+// which carries nothing to check (8.5). Under a general repo's prefix write rules the check's prefix line runs as the
+// sync engine runs it, through EvsGitCheckUpdate with the same arguments and EvsGitCheckPrefixTrees once the
+// version's objects stand (DESIGN-DETAILS 8.2.7, 16.2.6): a breach stops the ref, alarmed prefix_rule and reported with
+// that reason; a set export cannot read, pending or a later release's, ends the export with EVS_PREFIX_RULE, since
+// export cannot wait. Export keeps no tainted token paths, so a re-creating push's are not judged here. Provenance goes in refs/notes/ur (evs_export_notes.go). ur/index and ur/lfs are
 // derived or stores, never exported, and .ur-index/ files are left out of every file-mode tree. A format-2 repo's
 // collected or dropped versions (M10's) refuse.
 //
@@ -227,9 +231,12 @@ type evsGitExportRef struct {
 	page   []*EvsVerifiedStatement
 	// the chain was held to the head and pinned
 	pinned bool
-	// its tip, nil before its creation and after a DELETE
-	tip    *EvsGitOid
-	exists bool
+	// its tip, nil before its creation and after a DELETE; the tip it had at its last DELETE, nil for none; and the
+	// kind its pushes carry, which with its name says whether it is a shared branch (DESIGN-DETAILS 8.2.7)
+	tip     *EvsGitOid
+	exists  bool
+	lastTip *EvsGitOid
+	kind    protocol.EvsRefKind
 	// a version that failed its check, 0 for none: nothing applies past it until a DELETE
 	stoppedAt uint64
 	refused   []*EvsExportRefusal
@@ -410,9 +417,19 @@ func (self *evsGitExport) replay(ctx context.Context, ref *evsGitExportRef, upTo
 	return nil
 }
 
-// A refused version: alarmed, reported, and the ref stopped at the version before it until a DELETE.
+// A refused version: alarmed, reported, and the ref stopped at the version before it until a DELETE. The prefix line's
+// refusal alarms prefix_rule with detail refused, and its reason says prefix_rule (16.2.6).
 func (self *evsGitExport) refuse(ref *evsGitExportRef, statement *EvsVerifiedStatement, reason error) error {
-	self.repo.client.alarm(self.repo.repoId, ref.refId, SidecarEvsAlarmVersionRule, "", nil)
+	var prefixRefusal *EvsGitPrefixRefusal
+	if errors.As(reason, &prefixRefusal) {
+		signerId := evsSignerOf(statement.Statement.Bytes)
+		pushId, _ := IdFromBytes(statement.Statement.Push.GetPushId())
+		if judge := self.repo.client.prefixJudge(); judge != nil && signerId != nil {
+			judge.alarm(self.repo.repoId, ref.refId, *signerId, prefixRefusal.Path, statement.Version, &pushId, SidecarEvsAlarmDetailRefused, 1)
+		}
+	} else {
+		self.repo.client.alarm(self.repo.repoId, ref.refId, SidecarEvsAlarmVersionRule, "", nil)
+	}
 	ref.stoppedAt = statement.Version
 	ref.stopped = append(ref.stopped, [2]uint64{statement.Version, 0})
 	ref.refused = append(ref.refused, &EvsExportRefusal{Version: statement.Version, Reason: reason.Error()})
@@ -435,6 +452,21 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 	}
 	if ref.stoppedAt != 0 && flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) == 0 {
 		return nil
+	}
+	ref.kind = protocol.EvsRefKind(push.GetRefKind())
+	// the prefix line's set at u's pin, before the record is read: export cannot wait, so a set it cannot read ends it
+	var line *EvsGitPrefixLine
+	if ref.stoppedAt == 0 {
+		var err error
+		if line, err = self.repo.gitPrefixLine(ctx, ref.refId, statement.Statement); err != nil {
+			return err
+		}
+		if line.waits() {
+			if line.Verdict.Outcome == AclPrefixUpdate {
+				return &EvsPrefixRuleError{Detail: EvsPrefixDetailUpdate}
+			}
+			return &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
+		}
 	}
 	payload, err := self.repo.pushContent(ctx, ref.head, statement)
 	if err != nil {
@@ -498,6 +530,8 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 			return self.repo.client.verifier.verifyImport(signed, self.repo.repoId, push)
 		},
 		Parents: self.parents,
+		// the prefix line, with the arguments the sync engine passes, so export judges alike
+		Prefix: line, HeldTip: ref.tip != nil || ref.lastTip != nil, SharedBranch: self.sharedBranch, SourceTip: self.sourceTip,
 	})
 	if err != nil {
 		if evsExportRefusesVersion(err) {
@@ -509,6 +543,9 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 	case protocol.EvsGitShape_EVS_GIT_DELETE:
 		if ref.stoppedAt != 0 {
 			ref.stopped[len(ref.stopped)-1][1] = statement.Version
+		}
+		if ref.tip != nil {
+			ref.lastTip = ref.tip
 		}
 		ref.tip, ref.exists, ref.stoppedAt = nil, false, 0
 		ref.tips = append(ref.tips, evsGitExportTip{version: statement.Version})
@@ -522,6 +559,12 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 		}
 		return err
 	}
+	if err := self.checkPrefixTrees(ctx, ref, metadata, checked, line, payload); err != nil {
+		if evsExportRefusesVersion(err) {
+			return self.refuse(ref, statement, err)
+		}
+		return err
+	}
 	ref.tip, ref.exists = checked.NewTip, true
 	ref.tips = append(ref.tips, evsGitExportTip{version: statement.Version, tip: checked.NewTip})
 	if creating && ref.name == nil {
@@ -530,6 +573,78 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 	}
 	ref.notes = append(ref.notes, &evsExportNote{commit: *checked.Peeled, statement: statement})
 	return nil
+}
+
+// The prefix line's late test on export's objects (DESIGN-DETAILS 8.2.7), as the sync engine runs it: J is the tree of
+// the tip before, the last tip's on a re-creation, the shared base's tip at its version on a branch's first tip, or
+// the empty tree. Export keeps no tainted token paths, so a re-creation's are not judged here.
+func (self *evsGitExport) checkPrefixTrees(ctx context.Context, ref *evsGitExportRef, metadata *protocol.EvsSealedMetadata, checked *EvsGitCheckedUpdate, line *EvsGitPrefixLine, payload *EvsCheckedPayload) error {
+	if checked.PrefixMeasure == EvsGitPrefixMeasureNone {
+		return nil
+	}
+	next, err := evsGitPeeledTree(ctx, self.objects, *checked.Peeled)
+	if err != nil {
+		return err
+	}
+	var stood *EvsGitOid
+	if checked.PrefixMeasure == EvsGitPrefixMeasureFromJ {
+		var from *EvsGitOid
+		switch {
+		case ref.tip != nil:
+			from = ref.tip
+		case ref.lastTip != nil:
+			from = ref.lastTip
+		case metadata.GetBase() != nil:
+			baseRefId, err := IdFromBytes(metadata.GetBase().GetRefId())
+			if err != nil {
+				return fmt.Errorf("%w: an overlay base that is no ref", ErrEvsGitUpdateRefused)
+			}
+			if base := self.refs[baseRefId]; base != nil {
+				if tip, applied := base.tipAt(metadata.GetBase().GetVersion()); applied {
+					from = tip
+				}
+			}
+			if from == nil {
+				return fmt.Errorf("%w: an overlay whose base version has no tip", ErrEvsGitUpdateRefused)
+			}
+		}
+		if from != nil {
+			tree, err := evsGitPeeledTree(ctx, self.objects, *from)
+			if err != nil {
+				return err
+			}
+			stood = &tree
+		}
+	}
+	return EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{
+		Line: line, Measure: checked.PrefixMeasure, Source: self.objects, J: stood, N: next, Changes: payload.Changes,
+	})
+}
+
+// Whether a ref export replayed is a shared branch by its own history: kind shared, a name that is no tag's.
+func (self *evsGitExport) sharedBranch(ctx context.Context, refId Id) (bool, error) {
+	ref := self.refs[refId]
+	if ref == nil {
+		return false, nil
+	}
+	return ref.kind == protocol.EvsRefKind_EVS_REF_SHARED && len(ref.name) != 0 && !bytes.HasPrefix(ref.name, []byte(evsGitTagRefPrefix)), nil
+}
+
+// The tip a source held at the version it names, as export applied it: nil where none stands.
+func (self *evsGitExport) sourceTip(ctx context.Context, source *protocol.EvsOverlay) (*EvsGitOid, error) {
+	refId, err := IdFromBytes(source.GetRefId())
+	if err != nil {
+		return nil, nil
+	}
+	ref := self.refs[refId]
+	if ref == nil {
+		return nil, nil
+	}
+	tip, applied := ref.tipAt(source.GetVersion())
+	if !applied {
+		return nil, nil
+	}
+	return tip, nil
 }
 
 // An UPDATE's objects, its sources replayed by the check: its blobs, its tags, then each commit's tree rebuilt and the
