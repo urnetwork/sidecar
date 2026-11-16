@@ -379,8 +379,8 @@ func (self *fsKeysMailboxSessionWorld) send(message []byte) *sidecartest.MailRep
 	return reply
 }
 
-// What a reader takes of one deposit: the message, the trailer that names who deposited it for whom, and the
-// generation it opened under.
+// What a reader takes of one deposit: the deposit as evs holds it, the message, and the trailer that names who
+// deposited it for whom.
 type fsKeysMailboxIngested struct {
 	deposit *sidecar.EvsDeposit
 	message []byte
@@ -458,14 +458,8 @@ func TestFsKeysMailboxTheReceiverAnswers451WithoutACoveredDropKey(t *testing.T) 
 	if len(ingested) != 1 || !bytes.Equal(ingested[0].message, first) {
 		t.Fatalf("a's ingest: %d deposits", len(ingested))
 	}
-	// the receiver's token reads nothing at evs, its own deposit ref included
-	receiverRepo := world.receiverEvs.Repo(keys.RepoId)
-	if _, err := receiverRepo.List(world.ctx, &sidecar.EvsReadArgs{RefId: refIdOfDeposits(keys.RepoId, world.receiver.SidecarId())}); err == nil {
-		t.Errorf("the receiver read its own deposit ref")
-	}
-	if err := receiverRepo.ReadDeposits(world.ctx, world.receiver.SidecarId(), 0, func(*sidecar.EvsDeposit, io.Reader) error { return nil }); err == nil {
-		t.Errorf("the receiver read deposits")
-	}
+	// every evs read route refuses the receiver's deposit-only token at its guard, on its own deposit ref too
+	world.refusesReceiverReads()
 
 	// both readers offline past the drop key's life: the receiver asks again each wait, then 451, and nothing is
 	// deposited
@@ -504,8 +498,37 @@ func TestFsKeysMailboxTheReceiverAnswers451WithoutACoveredDropKey(t *testing.T) 
 	}
 }
 
-// The receiver's own deposit ref.
-func refIdOfDeposits(repoId sidecar.Id, receiverId sidecar.Id) *sidecar.Id {
-	refId := sidecar.EvsDepositRefId(repoId, receiverId)
-	return &refId
+// evs's read, refs and log routes each answer the receiver's deposit-only token 403 at their guard, its own deposit
+// ref named or not: a deposit scope reads nothing (FS-23).
+func (self *fsKeysMailboxSessionWorld) refusesReceiverReads() {
+	self.t.Helper()
+	keys := self.keys
+	depositRefId := sidecar.EvsDepositRefId(keys.RepoId, self.receiver.SidecarId())
+	readRequest, err := proto.Marshal(&protocol.EvsReadRequest{RefId: depositRefId.Bytes(), Fresh: true})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	connectSidecarId := connect.Id(self.receiver.SidecarId())
+	token := keys.Host.Authenticator.Issue(&sidecar.Principal{
+		NetworkId: keys.NetworkId, ClientId: self.receiver.ClientId, SidecarId: &connectSidecarId, Audience: evsservice.EvsAudience,
+		Scopes: []string{"repo:" + keys.RepoId.String() + ":deposit"}, IssuedAt: keys.Clock.Now(), ExpiresAt: keys.Clock.Now().Add(15 * time.Minute),
+	})
+	for _, route := range []struct {
+		method string
+		path   string
+		body   []byte
+	}{
+		{method: http.MethodPost, path: "/read", body: readRequest},
+		{method: http.MethodGet, path: "/refs"},
+		{method: http.MethodGet, path: "/log?ref=" + sidecar.EvsKeyId(depositRefId) + "&since=1"},
+	} {
+		request := httptest.NewRequestWithContext(self.ctx, route.method, "https://evs.example/evs/v1/repos/"+sidecar.EvsKeyId(keys.RepoId)+route.path, bytes.NewReader(route.body))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/octet-stream")
+		recorder := httptest.NewRecorder()
+		self.engine.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			self.t.Errorf("%s %s under the receiver's deposit scope: %d", route.method, route.path, recorder.Code)
+		}
+	}
 }
