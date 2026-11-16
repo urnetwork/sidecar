@@ -13,9 +13,9 @@
 // answers in every state. Its admins are the config writers, each a member device of an AdminSet member that is not
 // read_only, at evs and gkm alike (QD-894): the exchange gives each the config's admin scope, and evs and gkm honor it
 // from here, to create the repo, push its head and form its group, and later to re-form the group (§10.8), post its
-// ladder and activate or re-place the repo after a restore. §7.9's bootstrap sidecar, the Genesis's owner_sidecar_id,
-// is the first of them, from base 1, and holds it only while it is one. The config has no access log, so no RepoAdmin
-// adds to them, and its admins drop nothing in it (D-ACL-25, acl_versioning.go).
+// ladder and activate the repo. §7.9's bootstrap sidecar, the Genesis's owner_sidecar_id, is the first of them, from
+// base 1, and holds it only while it is one. The config has no access log, so no RepoAdmin adds to them, and its
+// admins drop nothing in it (D-ACL-25, acl_versioning.go).
 //
 // §8.6's ceiling holds an ephemeral sidecar to the config's read, the directory's read and own-path writes,
 // kind-default deposits, and the rules, RepoGrants and EvsShares that name it: its sidecar atom, a tag it
