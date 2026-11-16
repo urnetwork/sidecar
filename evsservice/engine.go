@@ -596,8 +596,11 @@ func (self *EvsRequest) Engine() *EvsEngine {
 }
 
 // Guard step 5 for repoId: the strongest right the token holds of those rights takes, honored only while the
-// newest verified state agrees. A route on no one repo calls this itself once its body names the repo. false once
-// it has answered the refusal.
+// newest verified state agrees. The state is asked for that right together with each weaker right of its role that
+// the route takes: a live repo's admin writes and reads and its writer reads, so this asks no more of them, while a
+// deleted repo's standing admin holds admin alone (QD-880), so its admin token passes only the routes that take
+// admin and nothing weaker, DELETE and restore among them, and no read or write route. A route on no one repo
+// calls this itself once its body names the repo. false once it has answered the refusal.
 func (self *EvsRequest) AuthorizeRepo(repoId sidecar.Id, rights sidecar.AclEvsRights) bool {
 	if repoId == (sidecar.Id{}) {
 		self.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
@@ -608,7 +611,7 @@ func (self *EvsRequest) AuthorizeRepo(repoId sidecar.Id, rights sidecar.AclEvsRi
 		self.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		return false
 	}
-	switch self.engine.deps.AuthState.HonorScope(self.Principal, repoId, right, self.Now()) {
+	switch self.engine.deps.AuthState.HonorScope(self.Principal, repoId, right|impliedRights(right)&rights, self.Now()) {
 	case EvsAuthAllowed:
 	case EvsAuthDenied:
 		self.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
