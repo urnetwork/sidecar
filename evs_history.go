@@ -38,6 +38,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 )
@@ -119,6 +120,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 				Removed:         true,
 				Ignored:         ignored,
 				State:           "kept",
+				Epoch:           verified.Statement.Push.GetPathEpoch(),
 			})
 			statements = append(statements, &EvsVerifiedStatement{Version: removal.GetRemovalVersion(), Statement: verified.Statement})
 			if removal.GetPathVersion() <= 1 {
@@ -165,6 +167,8 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			Ignored:         ignored,
 			State:           state,
 			SlotIds:         slotIds,
+			EntrySha256:     evsHistoryEntrySha256(verified),
+			Epoch:           verified.Statement.Push.GetPathEpoch(),
 		})
 		statements = append(statements, &EvsVerifiedStatement{Version: verified.CommitVersion, Statement: verified.Statement})
 		if len(entry.GetPrevPushId()) == 0 || entry.GetVersion() <= 1 {
@@ -224,4 +228,13 @@ func (self *EvsRepo) writtenOverOf(ctx context.Context, head *EvsVerifiedHead, k
 		pushIds[pushId] = true
 	}
 	return pushIds
+}
+
+// A version's entry hash, as its statement's change names it, else its verified entry bytes' SHA-256.
+func evsHistoryEntrySha256(verified *EvsVerifiedPath) []byte {
+	if hash := verified.Change.GetEntrySha256(); len(hash) == sha256.Size {
+		return bytes.Clone(hash)
+	}
+	sum := sha256.Sum256(verified.EntryBytes)
+	return sum[:]
 }
