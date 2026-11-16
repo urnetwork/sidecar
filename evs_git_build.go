@@ -52,9 +52,6 @@ type EvsGitObjectSink interface {
 	Flush(ctx context.Context) error
 }
 
-// The empty tree's oid, git's 4b825dc6...: a commit with no file.
-var EvsGitEmptyTreeOid = evsGitObjectOid(evsGitTreeKind, nil)
-
 // What a tree held in the cache costs beyond its bytes: the entries' headers.
 const evsGitTreeEntryOverheadByteCount = 64
 
