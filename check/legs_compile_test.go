@@ -200,23 +200,27 @@ func TestLegsCompileWhereTheirToolchainIs(t *testing.T) {
 		{
 			hostGoos: "darwin", hostGoarch: "arm64",
 			want: []string{
-				"cgo linux/amd64", "cgo windows/amd64", "gomobile android/arm64", "tests cgo linux/amd64", "tests cgo windows/amd64",
+				"cgo linux/amd64", "cgo windows/amd64", "gomobile android/arm64", "gomobile android/arm", "gomobile android/amd64",
+				"tests cgo linux/amd64", "tests cgo windows/amd64",
 			},
 		},
 		{
 			hostGoos: "linux", hostGoarch: "amd64",
 			want: []string{
-				"cgo windows/amd64", "cgo darwin/arm64", "gomobile android/arm64", "gomobile ios/arm64",
-				"gomobile ios/arm64 extension", "gomobile macos/arm64", "gomobile macos/arm64 extension",
-				"cli darwin/amd64 keychain fallback", "cli darwin/arm64 keychain fallback",
+				"cgo windows/amd64", "cgo darwin/arm64", "gomobile android/arm64", "gomobile android/arm", "gomobile android/amd64",
+				"gomobile ios/arm64", "gomobile iossimulator/arm64", "gomobile macos/arm64", "gomobile macos/amd64",
+				"gomobile ios/arm64 extension", "gomobile iossimulator/arm64 extension", "gomobile macos/arm64 extension",
+				"gomobile macos/amd64 extension", "cli darwin/amd64 keychain fallback", "cli darwin/arm64 keychain fallback",
 				"tests cgo windows/amd64", "tests cgo darwin/arm64",
 			},
 		},
 		{
 			hostGoos: "linux", hostGoarch: "arm64",
 			want: []string{
-				"cgo linux/amd64", "cgo windows/amd64", "cgo darwin/arm64", "gomobile android/arm64", "gomobile ios/arm64",
-				"gomobile ios/arm64 extension", "gomobile macos/arm64", "gomobile macos/arm64 extension",
+				"cgo linux/amd64", "cgo windows/amd64", "cgo darwin/arm64", "gomobile android/arm64", "gomobile android/arm",
+				"gomobile android/amd64", "gomobile ios/arm64", "gomobile iossimulator/arm64", "gomobile macos/arm64",
+				"gomobile macos/amd64", "gomobile ios/arm64 extension", "gomobile iossimulator/arm64 extension",
+				"gomobile macos/arm64 extension", "gomobile macos/amd64 extension",
 				"cli darwin/amd64 keychain fallback", "cli darwin/arm64 keychain fallback",
 				"tests cgo linux/amd64", "tests cgo windows/amd64", "tests cgo darwin/arm64",
 			},
@@ -234,5 +238,46 @@ func TestLegsCompileWhereTheirToolchainIs(t *testing.T) {
 		if !slices.Equal(cgoOffLegs, c.want) {
 			t.Errorf("a %s/%s host compiles %v with cgo off, want %v", c.hostGoos, c.hostGoarch, cgoOffLegs, c.want)
 		}
+	}
+}
+
+// Each ios leg's cgo builds against its slice's SDK, as gomobile builds it: the simulator's on the simulator legs,
+// which otherwise build as the iPhone's, and the iPhone's on every other. Only the simulator legs are marked so, and
+// an ios leg on an arch clang is not named for here is refused rather than built for arm64.
+func TestIosLegsBuildAgainstTheirSlicesSdk(t *testing.T) {
+	simulatorLegCount := 0
+	for _, leg := range defaultBuildLegs() {
+		simulator := strings.Contains(leg.name, "iossimulator/")
+		if leg.iosSimulator != simulator {
+			t.Errorf("%s is marked a simulator leg: %t", leg.name, leg.iosSimulator)
+		}
+		if leg.goos != "ios" || !leg.cgoEnabled {
+			continue
+		}
+		sdk, versionFlag, clangArch, err := leg.iosSdk()
+		if err != nil {
+			t.Errorf("%s: %v", leg.name, err)
+			continue
+		}
+		wantSdk, wantVersionFlag := "iphoneos", "-miphoneos-version-min="
+		if simulator {
+			simulatorLegCount += 1
+			wantSdk, wantVersionFlag = "iphonesimulator", "-mios-simulator-version-min="
+		}
+		if sdk != wantSdk || versionFlag != wantVersionFlag || clangArch != "arm64" {
+			t.Errorf("%s builds against %s with %s and -arch %s, want %s with %s and -arch arm64",
+				leg.name, sdk, versionFlag, clangArch, wantSdk, wantVersionFlag)
+		}
+	}
+	if simulatorLegCount == 0 {
+		t.Fatal("CONTROL FAILED: no simulator leg was read")
+	}
+	simulatorAmd64 := &buildLeg{name: "planted iossimulator/amd64", goos: "ios", goarch: "amd64", cgoEnabled: true, iosSimulator: true}
+	if sdk, _, clangArch, err := simulatorAmd64.iosSdk(); err != nil || sdk != "iphonesimulator" || clangArch != "x86_64" {
+		t.Errorf("%s builds against %s for -arch %s (%v), want iphonesimulator for x86_64", simulatorAmd64.name, sdk, clangArch, err)
+	}
+	unnamedArch := &buildLeg{name: "planted ios/386", goos: "ios", goarch: "386", cgoEnabled: true}
+	if sdk, _, clangArch, err := unnamedArch.iosSdk(); err == nil {
+		t.Errorf("%s read %s for -arch %s rather than being refused", unnamedArch.name, sdk, clangArch)
 	}
 }
