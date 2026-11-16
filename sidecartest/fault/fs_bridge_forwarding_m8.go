@@ -19,7 +19,9 @@
 //     both live, the subject's own DelegationRevoke of its forwarding Delegation lands, the host's compile drops the
 //     Delegation and the bridge closes the forwarding key's flows alone, so that connection's upstream socket closes
 //     and a new connection through that window is refused, while the identity key's connection carries on
-//     (DESIGN-DETAILS 4.2.5, D-BRIDGE-21's order). Its twin keeps both open with no revocation.
+//     (DESIGN-DETAILS 4.2.5, D-BRIDGE-21's order). A supersession does the same: the subject's newer forwarding
+//     Delegation lands and the superseded key's connection ends, the identity key's carrying on. Their twin keeps both
+//     open with no revocation.
 //
 // None of these is in the fault catalog: §23.6's M8 row names §22.5's forwarding cases, not an FS-38 case, so each runs
 // as a schedule of its own until a design-records fold of DESIGN-DETAILS 4.6 gives FS-38 its M8-out case. What the
@@ -52,9 +54,10 @@ import (
 // FS-38's forwarding refusals beside their twin, the forged case beside the same twin, and a DelegationRevoke ending
 // its key's flows beside the same flows unrevoked.
 var (
-	Fs38ForwardingCase       = Twin(Fs38ForwardingRefusals, Fs38ForwardingDelegation)
-	Fs38ForwardingForgedCase = Twin(Fs38ForwardingMinted, Fs38ForwardingDelegation)
-	Fs38ForwardingRevokeCase = Twin(Fs38ForwardingRevokeEndsItsFlows, Fs38ForwardingFlowsStayUnrevoked)
+	Fs38ForwardingCase          = Twin(Fs38ForwardingRefusals, Fs38ForwardingDelegation)
+	Fs38ForwardingForgedCase    = Twin(Fs38ForwardingMinted, Fs38ForwardingDelegation)
+	Fs38ForwardingRevokeCase    = Twin(Fs38ForwardingRevokeEndsItsFlows, Fs38ForwardingFlowsStayUnrevoked)
+	Fs38ForwardingSupersedeCase = Twin(Fs38ForwardingSupersessionEndsItsFlows, Fs38ForwardingFlowsStayUnrevoked)
 )
 
 // Whether the host's state lists forwarding as its subject's live forwarding Delegation (BRIDGE-M8-04's compile).
@@ -344,6 +347,46 @@ func fsForwardingIdentityCarriesOn(world *fsBridgeWorld, connections *fsForwardi
 	})
 }
 
+// After the subject's forwarding Delegation ended, by end, which answers what the host's state must list in its place:
+// that key's connection's upstream socket closed, the identity key's stands, and the window opens no new one.
+func fsForwardingEndsItsFlows(world *fsBridgeWorld, forwarding **sidecartest.BridgeNetForwarding, connections *fsForwardingConnections,
+	end func() *sidecartest.BridgeNetForwarding,
+) *Step {
+	return fsBridgeDo("subject", world, func() error {
+		replacement := end()
+		world.world.Follow()
+		if replacement != nil {
+			if err := fsForwardingCompiled(world, replacement); err != nil {
+				return err
+			}
+		} else {
+			for _, identity := range world.host.State().GetIdentities() {
+				if bytes.Equal(identity.GetSidecarId(), (*forwarding).Subject.SidecarId().Bytes()) && 0 < len(identity.GetForwardDelegationId()) {
+					return errors.New("the host's state still lists the ended forwarding Delegation")
+				}
+			}
+		}
+		if !world.host.Upstream.WaitFor(world.world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+			accept, ok := fsForwardingAccept(accepts, "forward before;")
+			return ok && accept.Closed
+		}) {
+			return errors.New("the forwarding key's connection outlived its Delegation's end")
+		}
+		if accept, ok := fsForwardingAccept(world.host.Upstream.Accepts(), "identity before;"); !ok || accept.Closed {
+			return errors.New("the forwarding Delegation's end closed the identity key's connection")
+		}
+		dialsBefore := len(world.host.Dials())
+		if conn, err := connections.forwardWindow.DialTcp(netip.AddrPortFrom(world.host.Address, world.host.Upstream.TcpPort())); err == nil {
+			conn.Close()
+			return errors.New("the ended key's window opened a new connection")
+		}
+		if dials := world.host.Dials(); len(dials) != dialsBefore {
+			return fmt.Errorf("the ended key's window made %d new upstream dials", len(dials)-dialsBefore)
+		}
+		return nil
+	})
+}
+
 // A DelegationRevoke of the subject's forwarding Delegation, its own, ends exactly the flows that key admitted: that
 // connection's upstream socket closes and the window opens no new one, while the identity key's carries on.
 func Fs38ForwardingRevokeEndsItsFlows(net *Net) *Schedule {
@@ -352,36 +395,29 @@ func Fs38ForwardingRevokeEndsItsFlows(net *Net) *Schedule {
 	connections := &fsForwardingConnections{}
 	steps := fsForwardingRevocationSteps(world, &forwarding, connections)
 	steps = append(steps,
-		fsBridgeDo("subject", world, func() error {
+		fsForwardingEndsItsFlows(world, &forwarding, connections, func() *sidecartest.BridgeNetForwarding {
 			world.world.RevokeForwarding(world.subjects["subject"], forwarding)
-			world.world.Follow()
-			for _, identity := range world.host.State().GetIdentities() {
-				if bytes.Equal(identity.GetSidecarId(), forwarding.Subject.SidecarId().Bytes()) && 0 < len(identity.GetForwardDelegationId()) {
-					return errors.New("the host's state still lists the revoked forwarding Delegation")
-				}
-			}
-			if !world.host.Upstream.WaitFor(world.world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
-				accept, ok := fsForwardingAccept(accepts, "forward before;")
-				return ok && accept.Closed
-			}) {
-				return errors.New("the forwarding key's connection outlived its Delegation's revocation")
-			}
-			if accept, ok := fsForwardingAccept(world.host.Upstream.Accepts(), "identity before;"); !ok || accept.Closed {
-				return errors.New("the revocation closed the identity key's connection")
-			}
-			dialsBefore := len(world.host.Dials())
-			if conn, err := connections.forwardWindow.DialTcp(netip.AddrPortFrom(world.host.Address, world.host.Upstream.TcpPort())); err == nil {
-				conn.Close()
-				return errors.New("the revoked key's window opened a new connection")
-			}
-			if dials := world.host.Dials(); len(dials) != dialsBefore {
-				return fmt.Errorf("the revoked key's window made %d new upstream dials", len(dials)-dialsBefore)
-			}
 			return nil
 		}),
 		fsForwardingIdentityCarriesOn(world, connections),
 	)
 	return fsBridgeSchedule("FS-38", "a DelegationRevoke of a forwarding Delegation ends the flows its key admitted and opens no new one, leaving the identity key's", world, steps...)
+}
+
+// A newer forwarding Delegation of the subject supersedes the live one and ends exactly the flows the superseded key
+// admitted, the identity key's carrying on (§7.9's supersession row; DESIGN-DETAILS 4.2.5).
+func Fs38ForwardingSupersessionEndsItsFlows(net *Net) *Schedule {
+	world := newFsBridgeWorld()
+	var forwarding *sidecartest.BridgeNetForwarding
+	connections := &fsForwardingConnections{}
+	steps := fsForwardingRevocationSteps(world, &forwarding, connections)
+	steps = append(steps,
+		fsForwardingEndsItsFlows(world, &forwarding, connections, func() *sidecartest.BridgeNetForwarding {
+			return world.world.FileForwarding(world.subjects["subject"], "fs38 supersession")
+		}),
+		fsForwardingIdentityCarriesOn(world, connections),
+	)
+	return fsBridgeSchedule("FS-38", "a newer forwarding Delegation ends the flows the superseded key admitted and opens no new one, leaving the identity key's", world, steps...)
 }
 
 // The revocation schedule's twin: no revocation, and both connections carry on.

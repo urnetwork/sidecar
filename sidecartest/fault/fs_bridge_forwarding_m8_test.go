@@ -38,3 +38,7 @@ func TestFs38ForwardingRevokeEndsItsFlows(t *testing.T) {
 	fsForwardingRun(t, "FS-38's forwarding revocation twin", Fs38ForwardingFlowsStayUnrevoked)
 	fsForwardingRun(t, "FS-38's forwarding revocation", Fs38ForwardingRevokeCase)
 }
+
+func TestFs38ForwardingSupersessionEndsItsFlows(t *testing.T) {
+	fsForwardingRun(t, "FS-38's forwarding supersession", Fs38ForwardingSupersedeCase)
+}
