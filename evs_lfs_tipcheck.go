@@ -182,9 +182,9 @@ func (self *EvsGitReceiver) lfsStore() *EvsLfsStore {
 }
 
 // The check of an update from old to new on this receiver's mount, nil while the network is outside the format2 gate
-// or for a deletion.
+// or for a deletion, and in the sidecar_testhooks build where FS-73's twin switched it off (evs_lfs_tipcheck_testhooks.go).
 func (self *EvsGitReceiver) lfsTipCheck(ctx context.Context, old *EvsGitOid, new *EvsGitOid) (*EvsLfsTipCheckResult, error) {
-	if new == nil || !self.client.Format2Admitted() {
+	if new == nil || !self.client.Format2Admitted() || evsLfsTipCheckSwitchedOff(self.mount) {
 		return nil, nil
 	}
 	return EvsLfsTipCheck(ctx, &EvsLfsTipCheckArgs{Mount: self.mount, Store: self.lfsStore(), Old: old, New: *new})
