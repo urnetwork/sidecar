@@ -648,7 +648,8 @@ bytes      the leaf hash covers Signed.body, the header's bytes exactly as store
 kinds      RECORD.md's v1 registry; an unknown kind is kept, verified and shown generically, never refused
 values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decision and channel stay uint32, and
            record.proto declares their four enums, each 0 UNSPECIFIED, written by no one: SidecarActionKind 1
-           to 17 in §5.4's order, new kinds appending; SidecarRisk 1 normal, 2 high; ApprovalVerdict
+           to 18 in §5.4's order, new kinds appending, 18 being §14.4's TL4 allowance (owner decision
+           436); SidecarRisk 1 normal, 2 high; ApprovalVerdict
            (decision) 1 approve, 2 deny; ApprovalChannel (channel, and AclRequestRule.evidence) 1 device,
            2 presence, 3 harness, as RECORD.md section 6.2; audience and app_mode hold acl.proto's
            AclAudience and AclAppMode, a publish's action always writing the resolved non-zero value

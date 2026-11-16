@@ -229,14 +229,14 @@ func (self *Device) lfsHome() string {
 	return filepath.Join(self.directory, "lfs-home")
 }
 
-// The environment a device's git runs with in a world with git-lfs: the world's git-lfs first on PATH, a home of the
-// device's own, since a clone's work tree is no home, and the socket its agents relay to. Empty without git-lfs.
+// The environment a device's git runs with in a world with git-lfs, beside the world's git-lfs first on its PATH
+// (Device.gitSearchPath): a home of the device's own, since a clone's work tree is no home, and the socket its agents
+// relay to. Empty without git-lfs.
 func (self *Device) lfsEnvironment() []string {
 	if self.world.settings.Lfs == nil {
 		return nil
 	}
 	return []string{
-		"PATH=" + self.lfsBin() + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"HOME=" + self.lfsHome(),
 		"GIT_TERMINAL_PROMPT=0",
 		LfsSocketVariable + "=" + self.socket,

@@ -161,8 +161,9 @@ func TestEvsLfsPruneTwoDevicesAtOnce(t *testing.T) {
 	}
 }
 
-// The settings file's window: absent 30 days, under 7 read as 7, as written from 7; its write held to 7 to 365; and a
-// version no admin signed read as the default, alarming.
+// The settings file's window: absent 30 days, under 7 read as 7, as written from 7; its write held to 7 to 365; a
+// version no admin signed passed over with an alarm, the newest version an admin signed standing; and with none an
+// admin signed, the default, each version alarming.
 func TestEvsLfsWindowFromItsSettingsFile(t *testing.T) {
 	settings := DefaultEvsSettings()
 	for _, c := range []struct {
@@ -204,5 +205,23 @@ func TestEvsLfsWindowFromItsSettingsFile(t *testing.T) {
 	window, err := store.Window(ctx, func(Id, time.Time) bool { return false }, func(error) { alarms += 1 })
 	if err != nil || window != 30*24*time.Hour || alarms != 1 {
 		t.Fatalf("a version no admin signed: %s, %d alarms, %v", window, alarms, err)
+	}
+	// the signer loses admin, then writes 20 days: that version is passed over and the 10 days it wrote as an admin
+	// stand
+	demoted := prune.clock().Now()
+	prune.clock().advance(time.Hour)
+	if _, err := store.SetWindow(ctx, 20); err != nil {
+		t.Fatal(err)
+	}
+	heldAdmin := func(signerId Id, signedAt time.Time) bool { return !signedAt.After(demoted) }
+	alarms = 0
+	window, err = store.Window(ctx, heldAdmin, func(error) { alarms += 1 })
+	if err != nil || window != 10*24*time.Hour || alarms != 1 {
+		t.Fatalf("a version past its signer's admin over 10 days an admin wrote: %s, %d alarms, %v", window, alarms, err)
+	}
+	alarms = 0
+	window, err = store.Window(ctx, func(Id, time.Time) bool { return false }, func(error) { alarms += 1 })
+	if err != nil || window != 30*24*time.Hour || alarms != 2 {
+		t.Fatalf("two versions no admin signed: %s, %d alarms, %v", window, alarms, err)
 	}
 }
