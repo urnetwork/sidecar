@@ -245,6 +245,12 @@ type EvsSettings struct {
 	// The transfer agent precedes an object's complete event with a progress event when it is at least this large:
 	// 8 MiB, a segment's bound, past which git-lfs's progress bar otherwise sits still.
 	LfsProgressByteCount int64
+	// The tip check (evs_lfs_tipcheck.go): an object whose newest version was signed under LfsFreshAge ago, 5 days,
+	// is fresh; a check over LfsCheckMaxAge old, 1 h, runs again before a push id's first POST; and the hook names up
+	// to LfsMissingShownCount, 20, of the objects it finds missing.
+	LfsFreshAge          time.Duration
+	LfsCheckMaxAge       time.Duration
+	LfsMissingShownCount int
 }
 
 // The desktop daemon's evs settings.
@@ -336,5 +342,8 @@ func DefaultEvsSettings() *EvsSettings {
 		LfsHeadReadPathCount:     64,
 		LfsNewestCacheCount:      65536,
 		LfsProgressByteCount:     8 * 1024 * 1024,
+		LfsFreshAge:              5 * 24 * time.Hour,
+		LfsCheckMaxAge:           time.Hour,
+		LfsMissingShownCount:     20,
 	}
 }

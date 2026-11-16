@@ -15,8 +15,9 @@
 //	Touch       a new version of each object citing its stored content, no upload (EvsPathWrite.Touch), each naming
 //	            the version read, all in one push, parts as the sender needs; a racing removal or touch loses or wins
 //	            at path-level CAS, the loser getting the *EvsPathConflictError
-//	Newest      each object's newest version by head reads of LfsHeadReadPathCount (64) paths a request, kept in a
-//	            bounded cache that every Put, Touch and RemoveMany also fills
+//	Newest      each object's newest version by head reads of LfsHeadReadPathCount (64) paths a request; a stored
+//	            object's is kept in a bounded cache that Put and Touch also fill, and an absent or removed one is
+//	            read again each time, since another writer may store it
 //	RemoveMany  one push removing each object, each naming its version, so a concurrent touch wins at path-level CAS;
 //	            the purge deletes the content a minute after it commits (§11.13)
 //
@@ -243,10 +244,7 @@ func (self *EvsLfsStore) RemoveMany(ctx context.Context, objects []*EvsLfsObject
 		self.forget(objects)
 		return nil, err
 	}
-	now := self.clock.Now()
-	for i, object := range objects {
-		self.keep(&EvsLfsObject{Oid: object.Oid, Version: written.PathVersions[i] + 1, SignedAt: now, Removed: true})
-	}
+	self.forget(objects)
 	return written, nil
 }
 
@@ -294,7 +292,12 @@ func (self *EvsLfsStore) newest(ctx context.Context, oids []EvsLfsOid, fresh boo
 		}
 		for j, i := range indexes {
 			object := evsLfsObjectOf(oids[i], result.replies[j])
-			self.keep(object)
+			// only a stored object is kept: one absent or removed may be stored by another writer at any time
+			if object.Present() {
+				self.keep(object)
+			} else {
+				self.forget([]*EvsLfsObject{object})
+			}
 			found[i] = object
 		}
 	}

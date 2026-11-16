@@ -80,7 +80,7 @@ func (self *EvsGitSyncEngine) conflictWithLock(ctx context.Context, ref *EvsGitR
 	if err != nil {
 		return nil, err
 	}
-	journal.Updates, journal.Attempts, journal.HoldCode, journal.HoldMs, journal.HoldLocal = nil, nil, "", 0, ""
+	journal.Updates, journal.Attempts, journal.HoldCode, journal.HoldMs, journal.HoldLocal, journal.HoldLfsOids = nil, nil, "", 0, "", nil
 	if err := self.state.writeJournal(ref.RefId, journal); err != nil {
 		return nil, err
 	}
