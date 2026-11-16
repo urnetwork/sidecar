@@ -94,10 +94,14 @@ type BridgeNetSettings struct {
 	// starts or a compile lands, nor an exit's policy when it judges a packet, so those waits poll, bounded by
 	// WaitTimeout. Positive.
 	PollInterval time.Duration
-	// The largest read an upstream listener or a window's UDP socket takes at once: 64 KiB, a datagram's most.
+	// The largest read an upstream listener, a window's UDP socket or a scenario's check of a connection takes at once:
+	// 64 KiB, a datagram's most.
 	ReadByteCount int
 	// The strict_exp a sender's link gives each window client past the Net's clock: 7 days, §7.4's.
 	WindowClientLifetime time.Duration
+	// The packets a window's or a sender's userspace stack queues on its link (connect.TunSettings.ChannelSize): 64.
+	// Positive.
+	TunChannelSize int
 	// §16.6's spend check, which the network's api and readers install alike, so a GrantActivate spends an admin's
 	// decision for real, a share's activation among them (BridgeShareNet); nil installs none, and every GrantActivate
 	// is refused.
@@ -122,6 +126,7 @@ func DefaultBridgeNetSettings() *BridgeNetSettings {
 		PollInterval:             10 * time.Millisecond,
 		ReadByteCount:            64 * 1024,
 		WindowClientLifetime:     7 * 24 * time.Hour,
+		TunChannelSize:           64,
 		DaemonListenAttemptCount: 8,
 	}
 }
@@ -2283,7 +2288,7 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 		fail("the window's client: %v", err)
 	}
 
-	tunSettings := connect.DefaultTunSettingsWithBufferSize(64)
+	tunSettings := connect.DefaultTunSettingsWithBufferSize(self.settings.TunChannelSize)
 	tunSettings.Log = connect.NewNoopLogger()
 	tun, err := connect.CreateTun(ctx, tunSettings)
 	if err != nil {
@@ -2728,7 +2733,7 @@ func bridgeScenarioS8(run *ScenarioRun, settings *BridgeNetSettings) error {
 		return errors.New("the revoked subject's upstream socket stayed open")
 	}
 	conn.SetReadDeadline(time.Now().Add(waitTimeout))
-	if _, err := conn.Read(make([]byte, 16)); err == nil {
+	if _, err := conn.Read(make([]byte, world.Settings().ReadByteCount)); err == nil {
 		return errors.New("the revoked connection read on")
 	}
 	conn.Write(run.Canary("bridge payload after the revocation"))
@@ -2897,7 +2902,7 @@ func (self *BridgeNet) StartSender(senderDevice *BridgeNetDevice, settings *Brid
 		fail("the device role: %v", err)
 	}
 
-	tunSettings := connect.DefaultTunSettingsWithBufferSize(64)
+	tunSettings := connect.DefaultTunSettingsWithBufferSize(self.settings.TunChannelSize)
 	tunSettings.Log = connect.NewNoopLogger()
 	sender.tun, err = connect.CreateTun(ctx, tunSettings)
 	if err != nil {
