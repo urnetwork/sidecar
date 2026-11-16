@@ -1,9 +1,9 @@
-// FS-15, FS-18, FS-20, FS-22, FS-23, FS-24 and FS-105 (§22.8; §10; KEYS-M2-27, KEYS-M2-28): gkm's schedules from
-// sidecartest/gkmschedule, each run on the Net under every rule §22.8 gives its row. The world is gkm's group client
-// on the real MLS subset, every device its own engine, keychain and store, against gkmservice's engine on the Net's
-// stores, so every one of gkm's store requests passes the Net's fault queue and blob recorder and every barrier the
-// client and the engine name reaches the Net's driver (gkmschedule's net.go). A world's failure inside a step, a
-// Fatal, ends the step with its error, and an Errorf fails the step at its end.
+// FS-15, FS-18, FS-20, FS-22, FS-23, FS-24 and FS-105 (§22.8; §10; KEYS-M2-27, KEYS-M2-28, KEYS-M7-01): gkm's
+// schedules from sidecartest/gkmschedule, each run on the Net under every rule §22.8 gives its row. The world is
+// gkm's group client on the real MLS subset, every device its own engine, keychain and store, against gkmservice's
+// engine on the Net's stores, so every one of gkm's store requests passes the Net's fault queue and blob recorder
+// and every barrier the client and the engine name reaches the Net's driver (gkmschedule's net.go). A world's
+// failure inside a step, a Fatal, ends the step with its error, and an Errorf fails the step at its end.
 //
 // The rows' checks are FI-3 and FI-4, which are TEST-M2-05's oracles and not bound yet, so a schedule here names
 // FsKeysOneLadder, one ladder in each group, in FI-4's place, as fs_team.go names its agreement check; once FI-4
@@ -20,7 +20,9 @@
 //   - FS-20: an ordinary device's generation-0 external commit refused by gkm, beside its twin, the code-only
 //     device's generation-0 self-join over revoked lost leaves.
 //   - FS-22: a compromise rebind closing the gate at the old generation, beside a routine one's.
-//   - FS-23: a depositor refusing an older drop key after a removal, beside the depositor's honest follow.
+//   - FS-23: a depositor refusing an older drop key after a removal, beside the depositor's honest follow; and its
+//     mailbox case, M7's: a tag:mail receiver refusing a drop key that does not cover a removal and one that lapsed
+//     while the readers were offline, beside its following a rotation and a writer back renewing the key in time.
 //   - FS-24: an idle writer told pending at an unchanged epoch, after a Redis loss too.
 //   - FS-105: an advertisement valid past 7 days refused, beside the copied keychain's 60 days.
 //
@@ -41,13 +43,14 @@ import (
 )
 
 var (
-	Fs15  = Register("FS-15", "", []Tier{TierT2}, Fs15RotationRace)
-	Fs18  = Register("FS-18", "", []Tier{TierT2}, Fs18CoveredAgentSuspended)
-	Fs20  = Register("FS-20", "", []Tier{TierT2}, Twin(Fs20GenerationZeroRefused, Fs20RecoveryOverLostLeaves))
-	Fs22  = Register("FS-22", "", []Tier{TierT2}, Twin(Fs22CompromiseRebind, Fs22RoutineRebind))
-	Fs23  = Register("FS-23", "", []Tier{TierT2}, Twin(Fs23DepositorReplay, Fs23Depositor))
-	Fs24  = Register("FS-24", "", []Tier{TierT2}, Fs24IdleWriterHint)
-	Fs105 = Register("FS-105", "", []Tier{TierT2}, Twin(Fs105LongAdvertisement, Fs105CopiedAgentKeychain))
+	Fs15        = Register("FS-15", "", []Tier{TierT2}, Fs15RotationRace)
+	Fs18        = Register("FS-18", "", []Tier{TierT2}, Fs18CoveredAgentSuspended)
+	Fs20        = Register("FS-20", "", []Tier{TierT2}, Twin(Fs20GenerationZeroRefused, Fs20RecoveryOverLostLeaves))
+	Fs22        = Register("FS-22", "", []Tier{TierT2}, Twin(Fs22CompromiseRebind, Fs22RoutineRebind))
+	Fs23        = Register("FS-23", "", []Tier{TierT2}, Twin(Fs23DepositorReplay, Fs23Depositor))
+	Fs23Mailbox = Register("FS-23", "mailbox", []Tier{TierT2}, Twin(Fs23MailboxRefusals, Fs23MailboxFollows))
+	Fs24        = Register("FS-24", "", []Tier{TierT2}, Fs24IdleWriterHint)
+	Fs105       = Register("FS-105", "", []Tier{TierT2}, Twin(Fs105LongAdvertisement, Fs105CopiedAgentKeychain))
 )
 
 // A failure the gkm world raised inside a step.
@@ -185,16 +188,18 @@ func (self *fsKeysRun) checks() []Invariant {
 	})}
 }
 
-// One of gkmschedule's schedules, whole, as actor on the run's worlds: a refusal names what it expects refused.
-func fsKeysWhole(id string, refuses string, actor string, schedule func(t gkmschedule.FsKeysT, newWorld gkmschedule.FsKeysNewWorld)) Builder {
+// gkmschedule's schedules, each whole and in order as one step of actor's, each on worlds of its own on the run's Net:
+// a refusal names what it expects refused.
+func fsKeysWhole(id string, refuses string, actor string, schedules ...func(t gkmschedule.FsKeysT, newWorld gkmschedule.FsKeysNewWorld)) Builder {
 	return func(net *Net) *Schedule {
 		run := newFsKeysRun(net)
-		steps := []*Step{
-			run.step(actor, func(ctx context.Context) {
+		steps := []*Step{}
+		for _, schedule := range schedules {
+			steps = append(steps, run.step(actor, func(ctx context.Context) {
 				schedule(run.failer, run.world)
-			}),
-			run.cleanup(),
+			}))
 		}
+		steps = append(steps, run.cleanup())
 		return &Schedule{Id: id, Steps: steps, Check: run.checks(), Tiers: []Tier{TierT2}, Refuses: refuses}
 	}
 }
@@ -276,6 +281,17 @@ var Fs23DepositorReplay = fsKeysWhole("FS-23 depositor replay", "an older unexpi
 
 // FS-23's twin: the depositor follows the drop key (FsKeysScheduleDepositor).
 var Fs23Depositor = fsKeysWhole("FS-23 depositor", "", "keys", gkmschedule.FsKeysScheduleDepositor)
+
+// FS-23's mailbox case (KEYS-M7-01): the receiver refuses a drop key that does not cover a removal, and one that lapsed
+// while every reader was offline past its life (FsKeysScheduleMailboxReceiverAfterARemoval,
+// FsKeysScheduleMailboxReadersOffline).
+var Fs23MailboxRefusals = fsKeysWhole("FS-23 mailbox refusals", "an uncovered drop key after a removal, and a lapsed one", "keys",
+	gkmschedule.FsKeysScheduleMailboxReceiverAfterARemoval, gkmschedule.FsKeysScheduleMailboxReadersOffline)
+
+// FS-23 mailbox's twin: the receiver follows a writer's rotation, and a writer back renews the drop key before it
+// lapses (FsKeysScheduleMailboxReceiver, FsKeysScheduleMailboxRenewal).
+var Fs23MailboxFollows = fsKeysWhole("FS-23 mailbox follows", "", "keys",
+	gkmschedule.FsKeysScheduleMailboxReceiver, gkmschedule.FsKeysScheduleMailboxRenewal)
 
 // FS-24: see gkmschedule's FsKeysScheduleIdleWriterHint.
 var Fs24IdleWriterHint = fsKeysWhole("FS-24 idle writer hint", "", "keys", gkmschedule.FsKeysScheduleIdleWriterHint)
