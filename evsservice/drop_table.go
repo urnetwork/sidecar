@@ -239,6 +239,25 @@ type DropSettings struct {
 	// The usage window a job's stored-byte batch starts in, its start the checkpoint's time truncated to it: §20.6's
 	// 60 s, the usage batcher's WindowTimeout.
 	UsageWindowTimeout time.Duration
+
+	// The DROP push on evs (EVS2-M10-09) and serving its listed versions (EVS2-M10-10).
+	//
+	// A cancel commits only while evs's clock is this far before its drop's not_before_ms: 60 s (owner decision 183).
+	CancelMargin time.Duration
+	// 5c's 429 for a drop the table's bound refuses waits this long: 1 h, since entries leave only as jobs end.
+	TableFullRetryAfter time.Duration
+	// A process's parsed DROP bodies and list files' indexes and blooms, least recently used out past this: 64 MiB
+	// (DESIGN-DETAILS 10.2.2's DropIndexByteCount).
+	IndexByteCount int64
+	// How long a process trusts its listing of a repo's list files, and its read of drops/<repo>/_: 10 min
+	// (DropIndexRefresh).
+	IndexRefresh time.Duration
+	// DROP bodies one read reply carries: 1 MiB (DropBodyReplyByteCount); a path naming a drop past it carries its
+	// state with no body, which the reader reads again.
+	BodyReplyByteCount int
+	// How many committed DROPs a process remembers it has appended to their tables, so a push or read that meets a
+	// bit-5 window entry appends it again only once a process: 4,096.
+	AppendedCount int
 }
 
 // §11.13's and DESIGN-DETAILS 10.2.2's values. A fresh value each call.
@@ -273,6 +292,12 @@ func DefaultDropSettings() *DropSettings {
 		PreviewListedCount:      1048576,
 		TableCacheTtl:           5 * time.Second,
 		UsageWindowTimeout:      sidecar.DefaultQuotaUsageBatcherSettings().WindowTimeout,
+		CancelMargin:            60 * time.Second,
+		TableFullRetryAfter:     1 * time.Hour,
+		IndexByteCount:          64 * 1024 * 1024,
+		IndexRefresh:            10 * time.Minute,
+		BodyReplyByteCount:      1024 * 1024,
+		AppendedCount:           4096,
 	}
 }
 
@@ -302,6 +327,9 @@ func (self *DropSettings) Validate() error {
 		return fmt.Errorf("%w: an hdd pause share of %g", ErrDropSettings, self.HddPauseShare)
 	case self.PreviewRequestByteCount <= 0 || self.PreviewPathCount <= 0 || self.PreviewListedCount == 0:
 		return fmt.Errorf("%w: a dry run bound that is not positive", ErrDropSettings)
+	case self.CancelMargin < 0 || self.TableFullRetryAfter <= 0 || self.IndexByteCount < 0 || self.IndexRefresh <= 0 ||
+		self.BodyReplyByteCount <= 0 || self.AppendedCount < 0:
+		return fmt.Errorf("%w: a drop push or serving bound that is not positive", ErrDropSettings)
 	}
 	return nil
 }

@@ -162,6 +162,12 @@ type pushAttempt struct {
 	payloadBytes  []byte
 	payload       *sidecar.EvsCheckedPayload
 	formatRefusal *EvsCheckRefusal
+	// a DROP's DROP_LIST or DROP_STATE, which its payload checks found: payload is nil, and the refusal is recorded
+	// after 5a on a cluster head, as the refuse row has every other recorded refusal (EVS2-M10-09)
+	payloadRefusal *EvsCheckRefusal
+	// the bit-5 window entries step 4 met on heads read from the cluster, appended again off the reply path once a
+	// process, since the table may lack them (push_drop.go)
+	metDrops []*metDrop
 	// a one-part push's payload as its record keeps it, set beside payload: payloadBytes with section 7, the slot
 	// bodies, taken out (QD-806), which step 6 writes to their slots before it appends the record
 	recordPayloadBytes []byte
@@ -316,8 +322,15 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 		// carries format 2 is then 5c's question against the gate, and its own rules EVS2-M10-06's
 		payload, err := sidecar.EvsCheckPayloadFormat2(statement, body.GetPayload(), body.GetStaged())
 		if err != nil {
-			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(attempt.pushId))
-			return nil, false
+			refusal := EvsCheckRefusalOfCodec(err)
+			if !refusal.recordedCodec() {
+				request.Refuse(refusal.Reply(attempt.pushId))
+				return nil, false
+			}
+			// a DROP's lists or window, which the signed statement's own bytes settle: recorded after 5a
+			attempt.payloadRefusal = refusal
+			attempt.needsFormat2 = true
+			break
 		}
 		attempt.payload = payload
 		attempt.staged = body.GetStaged()
@@ -404,6 +417,15 @@ func (self *pushAttempt) run() *pushOutcome {
 		}
 	}()
 	outcome := self.runSteps()
+	if met := self.metDrops; 0 < len(met) {
+		// the bit-5 entries step 4 met on cluster heads, appended again once a process, off the reply path
+		networkId, clusterId := self.networkId, self.cluster.ClusterId()
+		self.engine.stepEightCount.Update(func(count int) int { return count + 1 })
+		go func() {
+			defer self.engine.stepEightDoneCount.Update(func(count int) int { return count + 1 })
+			self.engine.appendMetDrops(networkId, clusterId, self.repoId, met)
+		}()
+	}
 	if outcome.committed && outcome.ownCommit == nil && outcome.committedPlace != nil && self.part == nil {
 		// a 5a retry or a reread found the push committed by another attempt: its record's list is the purge's
 		// (EVS2-M10-06), off the reply path
@@ -451,7 +473,7 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 		}
 		refusal := self.check()
 		if refusal != nil {
-			if self.head.Cached {
+			if self.restsOnCache(refusal) {
 				// every refusal rests on a head read from the cluster
 				continue
 			}
@@ -463,6 +485,10 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 		// a re-seed is counted against nobody's allowance (QD-084)
 		if self.reseed == nil {
 			if outcome := self.countedRules(); outcome != nil {
+				return outcome
+			}
+			// a drop's table bound and evs_drops_per_day, at a one-part push or a seal (push_drop.go)
+			if outcome := self.countDrop(); outcome != nil {
 				return outcome
 			}
 		}
@@ -511,13 +537,34 @@ func (self *pushAttempt) check() *EvsCheckRefusal {
 		}
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's part and seal checks are not supplied")
 	}
+	if self.payloadRefusal != nil {
+		// a DROP whose lists or window its payload checks refused: the gate first, as for any format-2 push, then the
+		// refusal, recorded by the refuse row
+		if !self.engine.format2.Admits(self.networkId) {
+			return newEvsCheckRefusal(EvsCheckReasonFormat2Gate, "a DROP from a network outside the format2 gate")
+		}
+		return self.payloadRefusal
+	}
 	refusal := CheckPush(self.reads.view)
 	if refusal == nil && self.seal != nil {
 		// §11.8's seal row: 5g again for the parts against the head the seal commits on, which the joined payload's
 		// newest reads carry (push_seal.go)
 		refusal = CheckPaths(self.reads.view)
 	}
+	if refusal == nil && self.reads.view.Fences != nil {
+		// past the fence, before steps 6 and 7: a schedule holds a push here while a DROP commits
+		testHookBarrier(BarrierDropFence, barrierRefKey(self.repoId, self.refId))
+	}
 	return refusal
+}
+
+// Whether refusal rests on a head step 4 read from the cache, so step 4 runs again from the cluster before it is
+// answered: the push's own head, or for 5h's DROPPED any head the fence read (check_dropped.go).
+func (self *pushAttempt) restsOnCache(refusal *EvsCheckRefusal) bool {
+	if self.head.Cached {
+		return true
+	}
+	return refusal.Reason == EvsCheckReasonDropped && self.reads != nil && evsDroppedOnCachedHead(self.reads.view)
 }
 
 // 429 BUSY: another attempt of the push may still land, so the client retries the same statement.

@@ -91,10 +91,18 @@ func (self *pushAttempt) recheck(reread *EvsStoredHead) (*pushOutcome, bool) {
 	if outcome := self.readGateView(); outcome != nil {
 		return outcome, false
 	}
+	// 5h's fence on the reread head: a DROP may have committed since step 4 (push_drop.go)
+	if outcome := self.rereadOwnFence(); outcome != nil {
+		return outcome, false
+	}
 	if outcome, again := self.buildView(); outcome != nil || again {
 		return outcome, again
 	}
 	if refusal := self.check(); refusal != nil {
+		if self.restsOnCache(refusal) {
+			// a DROPPED on a reuse source's cached head: step 4 again, every head from the cluster
+			return nil, true
+		}
 		return self.refuse(refusal), false
 	}
 	return nil, false

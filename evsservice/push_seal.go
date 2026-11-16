@@ -66,6 +66,9 @@ type sealReads struct {
 	// Format 2: each part's purge list from its record's tail, nil for none, in part order: what the seal's list is
 	// made of (push_purge.go).
 	partLists []*protocol.EvsPurgeList
+	// A DROP's lists as its parts carry them, section 10's slices in part order, which 5h searches for each written
+	// lineage's base (check_drop.go).
+	dropListSlices [][]byte
 }
 
 // The parts' round, once per attempt: the head from the cluster and every part at its place together, then 5a on
@@ -178,13 +181,31 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	}
 	if err != nil {
 		refusal := EvsCheckRefusalOfCodec(err)
-		if refusal.Reason != EvsCheckReasonFormatUnsupported {
+		switch {
+		case format2 && refusal.recordedCodec():
+			// a DROP's lists or window, which the statement's own bytes settle: recorded after 5a (push.go's check)
+			self.payloadRefusal = refusal
+			self.needsFormat2 = true
+			self.seal.read = true
+			self.seal.head = head
+			return nil
+		case refusal.Reason != EvsCheckReasonFormatUnsupported:
 			return refusedOutcome(refusal.Reply(self.pushId))
 		}
 		self.formatRefusal = refusal
 		self.seal.read = true
 		self.seal.head = head
 		return nil
+	}
+	if format2 && payload.Drop != nil {
+		// the lists' slices as the parts carry them, never joined (DESIGN-DETAILS 10.2.5)
+		for _, part := range partBytes {
+			sections, err := evsPartSections(part)
+			if err != nil {
+				return refusedOutcome(EvsCheckRefusalOfCodec(err).Reply(self.pushId))
+			}
+			self.seal.dropListSlices = append(self.seal.dropListSlices, sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS))
+		}
 	}
 	parts := make([]*sidecar.EvsSealPart, len(checkedParts))
 	for i, checkedPart := range checkedParts {
