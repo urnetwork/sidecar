@@ -6,14 +6,13 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 247 decided items and 277 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 232 decided items and 257 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
-| [§4 Repositories, code placement, branches, and build](#s4) | 15 | 20 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
 | [§6 The sidecar subprotocol](#s6) | 7 | 17 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 25 | 5 |
@@ -56,308 +55,6 @@ Questions: `record-md-witness-carrier.md`.
 Not folded (2026-11-10): RECORD.md section 10.2's step 6 and Q-RECORD-8, which live in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md part is folded as owner decision 214 (D-ARCH-2, §3.5).
 
 Not folded (2026-11-16): the same two parts, still RECORD.md's, which no design-records track edits.
-
-<a id="s4"></a>
-## §4 Repositories, code placement, branches, and build
-
-### QD-002: Unlicensed MLS test vectors sit in the sidecar history
-*Decided by the owner: owner 2026-11-06. Also amends §10.*
-
-the file's option 2: commit the mlswg vector files in testdata/mls/mlswg/ as §4.4 and §10.4 say. This replaces Proposed and Interim: the files stay in git, and no history rewrite is needed. (The recommendation it replaces: [mls-base-mlswg-vector-license#1] Recommended: publish no mlswg bytes until a grant exists, and ask for one. testdata/mls/mlswg/ keeps only SOURCE and SHA256SUMS in git. `make mls-vectors` runs go mod download -json github.com/mlswg/mls-implementations@v0.0.0-20261007145543-2034fe72e0c8, copies test-vectors/*.json into that directory, which is gitignored, and checks SHA256SUMS. go:embed still covers every leg, wasm included, and a missing file fails a test, never skips it. The module is never required or linked, so §4.7 and dependencies.yml need no exception. The owner sends one email asking the mlswg to add a license; a grant turns this into one commit of the 16 files. The files are already in local `sidecar` history, so this answer also needs the owner's exception to the rule against rewriting landed history, taken before any push. [mls-base-mlswg-vector-license#2] Recommended: keep the four vectors in testdata/mls/xwing/ with attribution: SOURCE names each draft, its authors and the IETF Trust and cites BCP 78. If the owner or counsel objects, use the KEM 0x647a entries of GOROOT's crypto/hpke/testdata/hpke-pq.json, which carry Go's BSD license and may be copied with its notice.)
-
-Changes: §4.4 testdata row; §10.4 conformance; KEYS-M2-10's vector source; testdata/mls/xwing/SOURCE.
-
-Questions: `mls-base-mlswg-vector-license.md#1`, `mls-base-mlswg-vector-license.md#2`, `plan-KEYS-mlswg-license.md#1`.
-
-### QD-017: How does an offline, two-person signature fit a release pipeline that runs unattended and almost daily?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Promote, rather than sign every build. Every release builds `ur`'s artifacts and an unsigned `SHA256SUMS` as ordinary assets, and run.sh waits for no one. When both holders pick a release they sign its sums offline, and a commit on mmm publishes `SHA256SUMS`, `SHA256SUMS.sig` and `latest.json` under `https://ur.io/recurd/ur/`. `latest.json` is listed in the signed sums, and `ur-promote.zsh` never moves it backward. `install.sh` reads that pointer, verifies, and fetches artifacts from the GitHub release. No private key touches the build host, the repo or vault. Residual to state in §4.10: a fresh install cannot tell an older signed pair from the newest, so ur.io could roll a new install back to an older signed release.
-
-Changes: §4.10; D-REPO-7.
-
-Questions: `plan-REPO-release-signature-flow.md`.
-
-### QD-024: cli/UI.md is on no path this run can read
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Put a copy at sidecar/design/UI.md. Its spellings then replace #2, #4, #5 and #6 below, each a one-line rename behind registerUrCommand.
-
-Changes: §4.11; HANDOFF section 2.
-
-Questions: `plan-CORE-cli-ui-missing.md#1`.
-
-### QD-113: A Required session opens inbound frames while its signed-identity gate is pending or has rejected the key
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §5, §17.*
-
-Add a default-off `EncryptionSettings.GateReceiveOnSignedIdentity`, in its own change (D-REPO-5). On, `unwrapFrame` opens nothing for a session whose `keyHistoryState` is pending, rejected or store-unavailable and returns a distinct gated result. `Client.run` drops that frame with no ack and counts it, and must not call `NotifyUndecryptableWrap`, whose nack would drive a re-handshake; gating inside `decryptCiphers` alone would trigger exactly that. A pending peer's frames recover by the sender's resend once the gate clears. Sidecar clients and §17.5's bridge window clients set it on. Other Required clients stay off until their own production rollout. Reword `cipherWithLock`'s comment so it claims the receive side only with the setting on.
-
-Changes: §4.6 C15; connect/DESIGNNOTES3.md §5.4.
-
-Questions: `connect-m1-required-receive-gate.md`.
-
-### QD-123: Where proving keys and transcripts live, and whether a desktop carries gigabytes of them
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §14.*
-
-Option 1, after cutting shapes. Keys and transcripts download on first send from a public path on ur.io, pinned by hash in the release; the host verifies the transcript once per release (SPEC.md 10.2) and caches. No token and no account on the fetch. A new §2.8 row says the host sees the fetching IP, which marks a prover host. Reduce the 20 shapes to what M7's census justifies before the first production setup.
-
-Changes: §4.10; §2.8 (new row); §14.5; smtpproof/SPEC.md 10.3.
-
-Questions: `smtpproof-start-key-distribution.md`.
-
-### QD-128: Whether server's competition graph and sn's release gates take sidecar as a repository before the first merge to main
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: add `sidecar` to both lists in one change landing with M0's Gn-out, before server and sn merge to `main`: an eleventh competition repository with an additive migration and rebuilt evaluator images, and a fourteenth release repository with a new `sidecar_go_source_hash`.
-
-Changes: §4.7 Consumers; §4.8.
-
-Questions: `wire-consumers-closed-source-graphs.md`.
-
-### QD-131: Which commits does a Gn-out merge take once `sidecar` has run past that milestone?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23.*
-
-Recommend option 1: record each gate's pinned commit set when its local checks are reported, and at an approved Gn-out merge that set, never the tip, in §4.8's order; a later milestone's merge brings the rest. A group's migration registration (D-OPS-6) is the one commit on top of the set. §4.8 and §23.9 gain a sentence saying so.
-
-Changes: §4.8; §23.9.
-
-Questions: `design-records-gn-out-merge-commits.md`.
-
-### QD-145: `strict_chain` claims a customer-signed chain that connect's DoH path cannot show
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §15, §23.*
-
-Option 1, with the timing fixed. New connect change C20: `DohCache.ForwardDnssec(ctx, qType, domain)` sets EDNS0 DO on `Forward`'s query and returns the raw response; generic, additive, off by default, tested in connect and merged to connect `main` first (D-REPO-5). The device fetches MX, TLSA, DS and DNSKEY with RRSIGs and validates to its embedded root anchors. `strict_chain` is true only when that validation passes for every MX host of every recipient domain and the host's TLSA, with this key, in zones outside `<root>` and bringyour.com. SMTP-M9-05's wire parser and `SmtpDnssecChain.Validate` move to M7, because FS-33 gates M7-out and that task is M9's. ext-3's row gains the DS and DNSKEY lookups.
-
-Changes: §4.6 (new C20); §2.8 ext-3; §15.5; §23.4 (validator moves M9 to M7).
-
-Questions: `plan-MAIL-dnssec-evidence.md`.
-
-### QD-193: Patched mail libraries have no home
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §15, §22.*
-
-[plan-MAIL-go-smtp-fork] The in-tree fork of option 1, with one correction. `sidecar/third_party/go-smtp` keeps module path github.com/emersion/go-smtp and carries a URNETWORK.md naming the upstream tag and the patch, as server/third_party/pgx does. Replace lines: root `./third_party/go-smtp`; cli, smtpproof and mlsinterop `../third_party/go-smtp`; server, sn and the four sdk modules `../sidecar/third_party/go-smtp`. §4.7's list and `make check`'s hygiene row gain them. The correction: §4.9's and §22.4's release fixture builds the root at the tag with no replaces (REPO-M0-02), which links upstream go-smtp, so the root may name no fork-only symbol. The fork keeps D-MAIL-3's `ServeConn(conn, ServeConnOptions{AfterStartTls: true})` and adds `ServeTlsConn(conn *tls.Conn) error` over it, and `mail_smtp_serve.go` reaches that only through a local interface assertion on `*smtp.Server`. Against upstream's server the assertion fails and `mailSmtpServe` refuses, closed. If upstream takes the patch, delete the replaces and the assertion. Upstreaming stays an external action. [plan-MAIL-mox-subset] Option 1. `sidecar/third_party/mox` holds only the packages `dkim`, `dmarc` and `spf` need, with `mlog`'s three counters removed, a URNETWORK.md and both of mox's license files, behind the same replace lines as plan-MAIL-go-smtp-fork. `dependencies.yml` gains github.com/mjl-/mox as `MIT AND MPL-2.0` and github.com/mjl-/adns, client leg. No interface seam is needed: upstream's API is a superset, so the no-replace release fixture still builds, and `make check`'s legs run with the replace, so prometheus stays out of every leg. `mailAuthVerifiers` stays the one seam.
-
-Changes: §4.7 replaces and hygiene; D-REPO-1; D-REPO-6; §15.5 Library; §4.7 replaces; dependencies.yml.
-
-Questions: `plan-MAIL-go-smtp-fork.md`, `plan-MAIL-mox-subset.md`.
-
-### QD-201: D-REPO-7's "no single origin may ship a client" does not hold for `install.sh`
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-D-REPO-7 and §4.10 say what holds: GitHub alone cannot ship a client, but ur.io serves both the script and its pin, so ur.io alone can, to a new script install. EX7 names the case. `install.sh` prints the key's fingerprint and the repository path that publishes it, so a careful user can compare, and nothing more is built. Notarization and Authenticode remain second checks on the macOS and Windows artifacts.
-
-Changes: D-REPO-7; §4.10; §2.8 EX7.
-
-Questions: `plan-REPO-small-readings.md#11`.
-
-### QD-207: Should KEYS-M2-10 still build the mlswg interop client?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-No. Remove "and the mlswg interop client" from §4.4's mlsinterop/ row and from mlsinterop/doc.go, and the interop-client step from KEYS-M2-10. mlsinterop/ takes no code from the mlswg module and no grpc dependency.
-
-Changes: §4.4 mlsinterop row; mlsinterop/doc.go.
-
-Questions: `plan-KEYS-mlswg-license.md#2`.
-
-### QD-238: Where does the minio fork sit in the merge order, and which of its branches plays `main`?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23.*
-
-Recommend option 1: minio joins the warp/config/vault/xops/mmm group in §4.8's order and the branch policy, and its `master` plays `main`. Its weekly merge in is a no-op while upstream stays archived. In every option xops pins a commit of the fork in place of playbook-minio-clusters.yml's `minio_commit`, and that commit is on the public fork before a host runs it, as owner decision 195 keeps the AGPL source in one public place.
-
-Changes: branch policy; §4.8; §23.9.
-
-Questions: `design-records-minio-merge-rules.md`.
-
-### QD-240: Whether tlshacks's MIT-plus-advertising-clause licence may stay on every connect leg
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: add X11 to §4.7's allowed list and to check's allowedLicenses, defined as MIT's text plus only this no-advertising clause, so licensePhrases pins both and refusedLicensePhrases lets that one id through; remove the module's exception. dependencies.yml keeps `X11`, the closest SPDX id.
-
-Changes: §4.7; check/settings_test.go; check/deps_test.go.
-
-Questions: `make-check-tlshacks-x11.md`.
-
-### QD-246: How the keyless device role parses team hints, when Envelope and PushHint live in protocol
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6, §22, §18.*
-
-Move Envelope and Chunk (from envelope.proto) and PushReset, TopicVersion and PushHint (from push.proto) to a new protocol/bridge/push.proto; PollResponse stays in protocol/push.proto and imports them. Names and numbers do not change, so wire bytes do not, and the Go types become bridge.*. device/ keeps PUSH_RESET 0x0101 and PUSH_HINT 0x0102 as local constants, since MessageType stays in protocol/types.proto, with a test pinning them to it. Edit §4.4, §6.5, §6.8, §6.11's file list and §22.5's descriptor list, which gains protocol/bridge/push.proto. The move and the fence edit land together.
-
-Changes: §4.4; §6.5; §6.8; §6.11; §22.5; §18.6.
-
-Questions: `plan-PROTO-device-role-push-types.md`.
-
-### QD-282: §4.7 names too few consumers
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§4.7's Consumers line becomes: server, sn, build/all/acceptance and four sdk modules add the require and replace; server and sn also add `../sidecar/smtpproof`. sdk's `license.yml` is regenerated in the same change. HANDOFF's "sn repeats server's sidecar replace" follows.
-
-Changes: §4.7; D-REPO-6.
-
-Questions: `plan-REPO-small-readings.md#2`.
-
-### QD-284: Which routes C11 owes at M1, given that its row names only §7, §8 and §11
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §7, §8, §11, §20.*
-
-C11's M1 is when the spec lands, not when each route is served. connect-m1 keeps its 32 operations, marked `x-status: planned` and `x-internal: true`. Every other new route enters connect/api/bringyour.yml in the change of the task that first serves it, and that task lifts `planned`: CORE-M1-06 for `POST /sidecar/bind` and `GET /sidecar/identity/<sidecar_id>`, PROTO-M1-10 for the sync routes and poll, TEAM-M1-10 for `POST /sidecar/close`, KEYS-M2-01 for `/gkm/*`, the QUOTA tasks for §20.14's routes, each M6 Team task for its §7.17 route, and TEAM-M1-02, -03, -04 and -06 for field changes to served routes, since `TestSpecConformance` is SPEC ⊆ IMPL. EVS1-M2-21 teaches `TestSpecRoutesImplemented` and check-routes.sh to skip paths with their own `servers:` entry. `POST /evs/v1/repos/<id>/activate` follows plan-EVS1-repo-activate-route. design-records changes §4.6's C11 row to read `M1, then with each route's own task`.
-
-Changes: §4.6 C11 row.
-
-Questions: `connect-m1-c11-route-scope.md`.
-
-### QD-304: "No replaces" in the fixture
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The fixture strips every replace and proves module paths, nothing about the forks. `ur` as run.sh builds it keeps `go_mod_edit_gvisor`'s pin and the rebased sctp replace, and REPO-M1-01 proves that with `go version -m`.
-
-Questions: `plan-REPO-small-readings.md#3`.
-
-### QD-305: The consumer wiring and the release step
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The wiring owns the go.mod requires and replaces, the lock entry, the service compile test and the `sidecar` submodule. REPO-M0-01 and REPO-M0-02 own run.sh and the fixture. If the wiring lands either first, the task shrinks to its tests.
-
-Questions: `plan-REPO-small-readings.md#1`.
-
-### QD-326: The version string
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The Version sed writes `${WARP_VERSION}`, as sdk's does, so `ur --version` prints the `+` form; artifact names and tags use `${EXTERNAL_WARP_VERSION}`. sidecar.go's comment showing `$WARP_VERSION-$WARP_VERSION_CODE` is corrected.
-
-Questions: `plan-REPO-small-readings.md#6`.
-
-### QD-345: App groups
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`ur` claims both `6BGU69Q742.group.network.ur` and `6BGU69Q742.group.com.bringyour.urnetwork`, or a direct-download app cannot reach the daemon's app-group socket.
-
-Questions: `plan-REPO-small-readings.md#8`.
-
-### QD-348: Documents and the module zip
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`go_mod_fork` gets `design/`, `research_notes/` and DESIGN.md as arguments, so they stay beside the module on the release branch, as server's `connect/sim-latency/baseline` does. `LICENSE`, `NOTICE` and `README.md` move with the module.
-
-Questions: `plan-REPO-small-readings.md#5`.
-
-### QD-358: An engine package at M0
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The fixture takes the first `<svc>service` it finds, and until one lands it adds `pushservice/doc.go` to its copy and logs that it did.
-
-Questions: `plan-REPO-small-readings.md#4`.
-
-### QD-373: T1 "on all §4.7 legs"
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Every leg compiles, and tests run on each leg this host can run. A leg it cannot run reports `not run`, which a gate lists as open and never as a pass.
-
-Questions: `plan-TEST-small-readings.md#7`.
-
-### QD-381: Windows
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The zip holds `ur.exe`, a copied `git-remote-ur.exe`, `LICENSE` and a README naming the folder and the PATH step. No `wintun.dll` until plan-BRIDGE-windows-tun-driver is answered. Unlike windows/app/build.ps1, this step fails when no signing thumbprint is set.
-
-Questions: `plan-REPO-small-readings.md#12`.
-
-### QD-385: C19's row drops "acked and unacked" from counted bytes
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §6.*
-
-§6.10 (06-PROTO.md:453-454) governs: T is the client's counted bytes, acked and unacked. connect's C19 builds to that. Change C19's row (now 04-REPO.md:145) to "counted bytes, acked and unacked".
-
-Changes: §4.6 C19.
-
-Questions: `g0-density-text-alignments.md#4`.
-
-### QD-386: Whether P2pPeerSourceOnly accepts a multihop stream's far end
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §11.*
-
-Keep the strict rule. `ClientSettings.P2pPeerSourceOnly` holds a P2P carrier to its adjacent peer, so an opted-in client must not be the endpoint of a multihop stream, and SUBPROTOCOL.md §11.3 on sc/connect-m1 already says so. Default clients are unchanged. Multihop to a sidecar stays unsupported until someone needs it, which is then new work on option 2 with its first-Pack gap solved. design-records changes C3's citation from connect/transport_p2p.go:2345-2347 to `Client.run`, where the rule lives (`MatchesReceive` never sees a frame).
-
-Changes: §4.6 C3 citation.
-
-Questions: `connect-m1-multihop-endpoint.md`.
-
-### QD-417: Citations that have drifted
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §11, §19.*
-
-Records pass: run.sh's virustotal is at :2263 and notarize at :2649; §4.3's "None has a `sidecar` branch" and its hook sentence are history. §4.18's "x/text bump" needs no task, since every module is on v0.43.0, so `xTextIsNormalizerOnes` is on. §19.16's "the bundle filter (§4.8)" cites D-OPS-16 (OPS-M0-01). C3's `transport_p2p.go` citation is raised in connect-m1-multihop-endpoint.
-
-Changes: §4.3; §4.7; §4.18; §11.14; §19.16.
-
-Questions: `plan-REPO-small-readings.md#14`.
-
-### QD-431: The macOS bundle
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`ur.app`, id `network.ur.cli`, at `/usr/local/lib/ur/ur.app`, with `/usr/local/bin/ur` and `/usr/local/bin/git-remote-ur` as links to its executable. One `.pkg` and one `.tar.gz` per architecture, no universal binary.
-
-Changes: §4.10.
-
-Questions: `plan-REPO-small-readings.md#7`.
-
-### QD-453: Artifact names
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`ur-<version>-<os>-<arch>.tar.gz` and `.pkg`, `ur_<version>_<arch>.deb`, `ur-<version>.<rpmarch>.rpm`, `ur-<version>-<pkgarch>.pkg.tar.zst`, `ur-<version>-windows-<arch>.zip`, following build/all/linux/README.md's spellings. 14 files for six targets.
-
-Changes: §4.10.
-
-Questions: `plan-REPO-small-readings.md#9`.
-
-### QD-486: Signature names
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Namespace `ur-release`, identity `ur-release`, public key at `sidecar/RELEASE-KEY.pub` and `https://ur.io/recurd/release-key.pub`. Before the key exists neither file does, and `install.sh` refuses.
-
-Changes: §4.10.
-
-Questions: `plan-REPO-small-readings.md#10`.
-
-### QD-507: Build flags
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`GOEXPERIMENT=greenteagc` and `-ldflags "-w -s"` beside §4.10's `CGO_ENABLED=0 -trimpath`, as `sn_cli_release` (build/all/run.sh:2461-2481) builds release binaries.
-
-Changes: §4.10.
-
-Questions: `plan-REPO-small-readings.md#13`.
-
-### QD-531: Which seam carries the injected clock into the core and the engines?
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §22.*
-
-Root interface `sidecar.Clock` in clock.go, on every leg: `Now() time.Time`, `After(time.Duration) <-chan time.Time`, `AfterFunc(time.Duration, func()) (stop func() bool)`. `ServiceHost.Clock` and `SidecarSettings.Clock` hold it, nil meaning real time. `sidecartest.Clock` becomes an alias. make check refuses direct wall-clock calls in non-test files of the root, `<svc>service`, `mcp/` and `device/`, with a dated exception list, id.go first.
-
-Changes: §4.5; §22.8.
-
-Questions: `plan-TEST-clock-seam.md#1`.
-
-### QD-545: How engines read gates
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-A root interface `ServiceGates`, held as `ServiceHost.Gates`; server implements it over `CurrentSidecarConfig`. §4.5 picks up the field.
-
-Changes: §4.5.
-
-Questions: `plan-OPS-small-readings.md#1`.
-
-### QD-580: May a `sidecar` branch be opened in the `tests` repo?
-*Settled by the agents from the design; work builds on it.*
-
-Yes. Open `sidecar` from `main` in `tests`, locally with no push, so `track-new` can cut `sc/<track>`, and add `tests` to HANDOFF section 5's repo table and to §4.8's merge order after `build`. The hard limit on `tests/network-intensive-suite-lock.sh` still holds, so only fixture runs test these edits.
-
-Changes: §4.8; HANDOFF section 5.
-
-Questions: `plan-TEST-tests-repo-branch.md`.
-
-### QD-596: The x/text bump §4.7 and §11.14 ask for has already happened
-*Settled by the agents from the design; work builds on it. Also amends §11.*
-
-No bump is needed. What remains is §4.7's `make check` rule, and from M10 any x/text bump is a new normalizer and a rebuild. design-records corrects the citations in §4.7, §11.14's tables row and HANDOFF.md's 9.9.
-
-Changes: §4.7 versions (citation); §11.14 tables row (citation).
-
-Questions: `plan-SEARCH-small-readings.md#1`.
 
 <a id="s5"></a>
 ## §5 The Sidecar core
@@ -4784,15 +4481,6 @@ Changes: §16.6 refused list and McpGuard row for a mailbox's vault/ family (edg
 
 Questions: `mail-m8-02-vault-readers.md`.
 
-### QD-674: Should every repo move from Go 1.27.3 to 1.27.4 for GO-2026-6859, which now fails make check's govulncheck rule, and may sidecar tracks land meanwhile?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
-
-Every repo moves from Go 1.27.3 to go1.27.4 for GO-2026-6859 (an HTTP/1 server crash in net/http) in one coordinated ops-lane change: the go directive in every go.mod of connect, sidecar, sdk, server and sn, any toolchain line, the build images' Go base, any check/ rule that names the version, and R-REPO-6's and §4.9's pin. D-TEST-15's one-toolchain rule holds (x/text chooses tables by go1.27, which a patch release does not change). The go1.27.4 toolchain comes through the module proxy, checked against the checksum database (QD-025), as lowgo already uses it; check/ accepts no advisory. The host's /usr/local/go is the owner's to update; the run does not touch it, and lowgo keeps go1.27.4 first on PATH until then.
-
-Changes: ops-lane track go-1-27-4: go.mod go directives in connect, sidecar, sdk, server and sn; build images; check/ rules naming the version; R-REPO-6 and §4.9 pin to 1.27.4.
-
-Questions: `team-m2-21-govulncheck-go-1-27-4.md`.
-
 ### QD-675: When a forwarding Delegation's row leaves the rows before gkm's reconciler deleted its reader key object, what deletes gkm/dkey/<delegation_id> within its published ttl?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
 
@@ -4864,15 +4552,6 @@ An ERASE's and a CLOSURE's note go in a new EvsSealedMetadata.erasure_note (byte
 Changes: data-lane follow-up: EvsSealedMetadata.erasure_note, ERASE and CLOSURE builders, reconcile reads it; EVS-FORMAT.md layout; testFenceAdditions until design-records folds the fence; §11.12 push and rekey rows.
 
 Questions: `evs1-m2-30-erasure-note-format.md`.
-
-### QD-684: May a design-records track drop a field's line from protocol's fence additions in the commit that writes that field into its DESIGN.md fence, since the fence test fails until both change together?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
-
-A design-records track that writes a field into its DESIGN.md proto fence drops that field's line from protocol/design_unfenced_test.go's testFenceAdditions or testFenceValueAdditions in the same commit, touching only those list entries. The list carries a field the code declares until design-records folds it, so dropping its line is the fold's other half; the fence rule stands (never move a fence ahead of the code). First use: §17.8's Pending fence takes sidecar_id = 3 and identity_public_key = 4 (QD-211); Pending.forward_delegation_id = 5 and BridgeIdentity's fields 6 and 7 (DESIGN-DETAILS 4.2.2) follow when section 4 is folded. Answered with dr-s2-s3-new-metadata-rows (QD-683); the design-records brief allows exactly these edits.
-
-Changes: design-records brief: may drop a folded field's line from protocol/design_unfenced_test.go's additions lists in the same commit; follow-up design-records track: §17.8 Pending fence for QD-211.
-
-Questions: `dr-s17-s18-fence-additions.md`.
 
 ### QD-685: Should a search-index diff rest only on a full entry in its own writer's files, which that writer keeps, so that no merge or other device's push can take a base from under it?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
@@ -4981,24 +4660,6 @@ A VPN component raises bridge_alarm narrowing_overdue when a narrowing entry has
 Changes: design agent: section 4 amendment, 4.2.5 and 4.3 StalenessBound wording, Fwd.tla alarm clause; core-lane follow-up: device/ posture alarm timer backs off (SDK-M8-17's code).
 
 Questions: `details-4-overdue-alarm-repeat.md`.
-
-### QD-697: How does server's source-graph lock move to go1.27.4, when only the owner hand-edits lock.yml and runs a real re-pin?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
-
-Once the go1.27.4 bumps land in every repo, the orchestrator sets server/local/source-graph/lock.yml's go line to 1.27.4 and runs build/all/sidecar-branches.zsh repin, which moves each sibling's pin and build's gitlinks to its current sidecar tip and commits both in server and build (no push; the next checkpoint push carries them). The owner authorized this one hand edit and re-pin on 2026-11-11; otherwise lock.yml edits and real re-pins stay the owner's (REPO-M0-03).
-
-Changes: server/local/source-graph/lock.yml go line 1.27.4; build/all/sidecar-branches.zsh repin after the bump lands.
-
-Questions: `go-1-27-4-source-lock.md`.
-
-### QD-698: Do the two measurement harnesses that pin go1.27.3 on purpose move to go1.27.4 with the repos?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
-
-Server's competition evaluator (server/connect/sim-latency's image digest, GOVERSION guards and toolchain-policy test, server/competitionagent and server/cli/competitionsubeval) and the tests repo's perf runner (tests/runner/perf, whose h1 diagnostic requires a go1.27.3 producer and preflight manifest) stay on go1.27.3, so their frozen baselines stay comparable; they move when the owner re-qualifies them, at the latest before sidecar merges to main. On these branches the evaluator image cannot build server's module, which now requires 1.27.4, and a perf run of these branches would fail the h1 preflight. Neither harness module depends on a bumped module, so both still build. Records of past runs stay as written.
-
-Changes: no change to the two harnesses; before sidecar merges to main: re-qualify both on go1.27.4.
-
-Questions: `go-1-27-4-harnesses.md`.
 
 ### QD-699: Does a head reader decide whether a version is listed from the DROP's signed body alone, or does listed_sha256 become a Merkle root with proofs?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
@@ -5440,15 +5101,6 @@ Changes: evs-8's store line in metadata_list.yml; §19.7's tags, D-OPS-16's rdb 
 
 Questions: `evs1-m2-15-evsc-metadata-row.md`.
 
-### QD-750: Where does an operations command that reads Postgres live, given that sidecarctl, a module of the sidecar repo, cannot link any server package under §4.7's license and module rules?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
-
-sidecarctl moves from sidecar/sidecarctl to server/sidecarctl: still one binary for every operations command this build adds (C-23 and the owner's direction of 2026-11-07 keep their point; their path changes), beside the model code its commands call and under server's own dependency, license and layering rules, which let it link server's packages and the engine packages. The certs commands already landed in sidecar/sidecarctl move once, with their tests and check/'s sidecarctl rows. Then sidecarctl dns census is a thin command over model.CensusDnsNetworkNames behind server.RequirePgReadOnly(); sidecarctl evs purge-turn-on binds to server.CurrentSidecarConfig().Format2() and schedules evsservice.EvsSweepTurnOnTaskRequest() on the env's task queue (sidecarhost.NewTasks); dns restoring, dns restore and dns ceremony are short files over dnshost.NewRestoreStep and dnsservice's ceremony functions; and later commands that read the database (sidecar restore, network sidecar-limit, the abuse commands) go there too. OPS tasks write the commands, whichever lane runs them. Until the move lands, commands that need server or an engine stay refusing or unbuilt, as built.
-
-Changes: C-23's path and the brief's sidecarctl rule (server/sidecarctl); sidecar/sidecarctl moves to server/sidecarctl with its tests and check/'s rows; dns census, evs purge-turn-on, dns restoring, dns restore and dns ceremony are built there.
-
-Questions: `dns-m0-01-sidecarctl-server-link.md`, `ops-m10-01-purge-turn-on-links.md`, `dns-m5-15-dns-ops-commands.md`.
-
 ### QD-751: Should certs renew stay on lego v4.35.2, the release certs issue runs, until someone checks lego v5's CLI, given that D-OPS-12 names v5 and v5 rejects the flags both commands pass?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
 
@@ -5612,15 +5264,6 @@ Changes: evsservice/check_objects.go: 5h's deposit-ref condition (DESIGN-DETAILS
 Questions: `details-14-deposit-cited-slots.md`.
 
 
-### QD-769: How do the competition's sealed evaluator programs and sim-latency's source ledger take sidecar: a new producer release, and under which identifiers?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
-
-The competition's evaluator takes sidecar as an eleventh repository through new producer releases, as minimum-work and work-coverage were added: new program files with sidecar in their repository lists, new preparation programs pinning them, new dependency maps and a new selector in the round settings, with connect/sim-latency's list and ledger, run-main.sh and playbook.yml moved in the same change. The historical producers and their pins stay byte for byte. The owner names the identifiers and qualifies the release on the evaluator hosts together with the go1.27.4 re-qualification (QD-674). Until then the evaluator stays at ten repositories and fails closed on a server commit that needs sidecar, so server's main is not a competition epoch's source in between.
-
-Changes: connect/sim-latency/evaluator/container: new producer programs and preparation programs; controller/competition_round_baseline_preparation.go's dependency maps; the round settings' selector; connect/sim-latency's sourceRepositoryNames and ledger; run-main.sh and playbook.yml; owner steps outside the run: confirm the identifiers, build the evaluator images, qualify on the hosts with go1.27.4; decide whether launch/competition-production.yml.template's allowed patch paths gain sidecar/**.
-
-Questions: `competition-mg0-sealed-evaluator-producers.md`.
-
 ### QD-770: What enumerates a network's active publish grants for `model.ListTlsPublishedNames`, and in which process?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §13 The TLS edge and certificates.*
 
@@ -5747,3 +5390,19 @@ Changes: DESIGN-DETAILS section 15 stands as written; RECORD.md 7.4's cadence an
 
 Questions: `details-15-small-readings.md`.
 
+
+### QD-145: `strict_chain` claims a customer-signed chain that connect's DoH path cannot show
+*Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 269. Folds into §4 Repositories, code placement, branches, and build.*
+
+Owner decision 269's table row, which waits on the code: §4.6's table gains the row `| C20 | DohCache.ForwardDnssec ... | M7 |` in the change that gives check/x9_test.go's x9Rows its C20 entry (marker `ForwardDnssec`, milestone 7, the connect task that builds it and its default-off test), since TestX9RowsAreSection46 holds the table to that ledger row for row and a design-records track writes no such entry. The rest is folded (2026-11-16): the decision, a paragraph under §4.6's table that states C20, §2.8's ext-3 (list v27), §15.5's `strict_chain` evidence, §23.4's M7 row and §4.18.
+
+Changes: §4.6's table; check/x9_test.go x9Rows.
+
+Questions: `plan-MAIL-dnssec-evidence.md`, `dr2-s4-c20-x9-row.md`.
+
+### QD-024: cli/UI.md is on no path this run can read
+*Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 265. Folds into §4 Repositories, code placement, branches, and build.*
+
+Owner decision 265's file, which waits on the owner: the copy of cli/UI.md at sidecar/design/UI.md, since the sketch sits outside every repository, on no path the run reads. The rest is folded (2026-11-16): the decision and §4.11, which say the build keeps its own spellings until the copy is there.
+
+Changes: sidecar/design/UI.md (owner step); HANDOFF section 2.

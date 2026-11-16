@@ -2238,7 +2238,7 @@ tables    golang.org/x/text links Unicode 15.0.0 tables under Go < 1.27 and 17.0
           norm.Version does not fix NFC: v0.40.0 and v0.41.0 compose U+05D2 U+0307 to U+105C9 and U+05DA U+0307 to
           U+105E4 (U+FB32 and U+FB3A alike), where v0.42.0 and v0.43.0 keep them, all reporting 17.0.0, examples
           of a defect covering 19,960 two-rune strings, supplementary letters included (U+10044 U+0307 to U+1E0A;
-          §4.7), and connect/go.mod:33 and sdk/go.mod:97 still require v0.40.0 (server/go.mod:59, v0.43.0);
+          §4.7), which is why every module of connect, sdk, server and sn requires v0.43.0 (connect/go.mod:33);
           headers record norm.Version, cases.UnicodeVersion and the module version; another table or module
           version is another normalizer, and a rebuild
 trigrams  every 3-byte window of the normalized UTF-8; a document's set of distinct 24-bit keys; an aligned CJK

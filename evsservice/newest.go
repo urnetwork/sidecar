@@ -18,6 +18,19 @@
 // never cached it. Older ones are never needed here, since every version after h is in H's window. Readers check
 // what evs serves against its statements either way (§11.9's reader row).
 //
+// A removal whose marker a collection took (§11.7's collect row; QD-879). A marker goes once folded_through passed its
+// removal by a base range, while the window may still hold the removing version. The entry then names nothing, and
+// the rule above, which reads only the window versions after h, answers the path as never written; but a reader
+// whose pin is older than the removal walks the removing statement, and takes a path served as never written for one
+// no walked statement may change (§11.9's reader row), so it would refuse the reply and alarm, the device that
+// removed the path among them. NewestWalked therefore gives the rule one more case, for a read: a path the rule
+// finds neither standing nor removed takes the removal a window version in (after, h] made of it, its own or a
+// prefix's of a version the path held in that range, after being the reader's pin. So a reply names the removal its
+// reader's walk shows (§11.9's "from its marker or the window"), and a reader whose pin is at or past the removal,
+// whose walk never meets it, still reads the path as absent. 5g keeps Newest: a creation's version is max(b, m) + 1,
+// and a push's base is past any collected removal (§11.8), so b alone decides it there (I-EVS-8). Only versions of
+// the head's current path epoch are found, since the scan goes by the path's current token path.
+//
 // Pure over its inputs but for the push source's reads. Safe for concurrent use.
 
 package evsservice
@@ -95,6 +108,9 @@ type EvsNewest struct {
 	Change *EvsCommittedChange
 	// A prefix's removal ended it at CommitVersion.
 	RemovedByPrefix bool
+	// Its newest is a removal read from a window statement at or below h, its marker gone to a collection
+	// (NewestWalked). FromWindow stays unset: nothing after h names it.
+	Collected bool
 }
 
 // The window and entry one rule combines.
@@ -115,6 +131,31 @@ func Newest(ctx context.Context, read *EvsEntryRead, head *protocol.EvsHead, pus
 		return nil, err
 	}
 	return scan.below(head.GetVersion() + 1)
+}
+
+// Newest for a reader pinned at after: a path the rule finds neither standing nor removed takes the removal a window
+// version in (after, h] made of it, which its marker no longer names (see the file header). Any other path reads as
+// Newest gives it.
+func NewestWalked(ctx context.Context, read *EvsEntryRead, head *protocol.EvsHead, pushes EvsPushSource, after uint64) (*EvsNewest, error) {
+	scan, err := newNewestScan(ctx, read, head, pushes)
+	if err != nil {
+		return nil, err
+	}
+	limit := head.GetVersion() + 1
+	newest, err := scan.below(limit)
+	if err != nil || newest.Exists || newest.RemovalVersion != 0 {
+		return newest, err
+	}
+	collected, err := scan.collectedBelow(limit, after, scan.prefixDigests())
+	if err != nil {
+		return nil, err
+	}
+	if collected == nil || collected.Exists {
+		// nothing in the range, or a version the entry should hold and does not: the path stays as the rule read it,
+		// for its reader to judge against its walk
+		return newest, nil
+	}
+	return collected, nil
 }
 
 // The scan of read against head, once its rule's preconditions hold.
@@ -233,6 +274,77 @@ func (self *newestScan) below(limit uint64) (*EvsNewest, error) {
 		return entryNewest, nil
 	}
 	return &EvsNewest{}, nil
+}
+
+// The digest of the path and of each prefix holding it, down to the root's: what PathsDigest.MayChange hashes at
+// every call, here once for a scan of many window entries.
+func (self *newestScan) prefixDigests() []sidecar.EvsPathsDigest {
+	path := self.read.TokenPath
+	digests := make([]sidecar.EvsPathsDigest, 0, len(path)+1)
+	for length := len(path); 0 <= length; length -= 1 {
+		digests = append(digests, sidecar.EvsPathsDigest(0).With(path[:length]))
+	}
+	return digests
+}
+
+// The path's newest among the window versions in (after, h] below limit alone, the entry unread: the change that
+// wrote or removed it, or a prefix's removal over the version it held in that range. nil when none of them changes
+// the path, or when a prefix's removal found no version of the path in the range to end, which a reader pinned at
+// after never walked either.
+func (self *newestScan) collectedBelow(limit uint64, after uint64, prefixDigests []sidecar.EvsPathsDigest) (*EvsNewest, error) {
+	path := self.read.TokenPath
+	last := min(limit-1, self.read.FoldedThrough)
+	first := max(after+1, self.firstVersion, 1)
+	for version := last; first <= version; version -= 1 {
+		windowEntry := self.window[version-self.firstVersion]
+		if !slices.ContainsFunc(prefixDigests, func(digest sidecar.EvsPathsDigest) bool {
+			return windowEntry.PathsDigest&digest == digest
+		}) {
+			continue
+		}
+		changes, err := self.pushes.ChangesAt(self.ctx, version, windowEntry, path)
+		if err != nil {
+			return nil, err
+		}
+		var own *EvsCommittedChange
+		prefixRemoved := false
+		for _, change := range changes {
+			switch {
+			case change.TokenPath.Equal(path):
+				own = change
+			case path.HasPrefix(change.TokenPath) && change.Removes():
+				prefixRemoved = true
+			}
+		}
+		switch {
+		case own != nil:
+			newest, err := newestOfChange(version, windowEntry.PushId, own)
+			if err != nil {
+				return nil, err
+			}
+			newest.FromWindow = false
+			newest.Collected = !newest.Exists
+			return newest, nil
+		case prefixRemoved:
+			held, err := self.collectedBelow(version, after, prefixDigests)
+			if err != nil {
+				return nil, err
+			}
+			if held == nil || !held.Exists {
+				// already absent, or never seen standing: the prefix's removal adds no removal of its own
+				return held, nil
+			}
+			return &EvsNewest{
+				CommitVersion:   version,
+				RemovalVersion:  held.Version + 1,
+				PushId:          windowEntry.PushId,
+				Directory:       held.Directory,
+				RemovedByPrefix: true,
+				Collected:       true,
+			}, nil
+		}
+	}
+	return nil, nil
 }
 
 // The newest a window change on the path itself makes: a removal one past the version it removes, or the version

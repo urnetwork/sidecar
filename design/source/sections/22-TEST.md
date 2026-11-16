@@ -27,7 +27,7 @@ Unimportable Required test helpers (connect/transfer_encrypt_contract_test.go:21
 
 ### 22.4 Tiers and harness
 
-- **T1**, sidecar on all §4.7 legs: unit, property, vectors, fuzz seeds.
+- **T1**, sidecar on all §4.7 legs, which are sdk's table of every target gomobile binds (owner decision 277): unit, property, vectors, fuzz seeds. Every leg compiles, and tests run on each leg the host can run; a leg it cannot run reports `not run`, which a gate lists as open and never as a pass.
 - **T2**, `sidecartest`: sidecars and engines in one process; fake stores; injected clock, store results and barriers. The fakes of operator-core's interfaces and their conformance suites move to operator-core's test-only `coretest` module in the build's review phase, and every extension reuses them (§4.5; owner decision 251).
 - **T3**, server hosting engines on the stores below with Postgres and the in-process exchange; store suites and fault schedules. server/core runs `coretest`'s conformance suites against the real stack, and sidecar's SQL stores run their suites over server/core's db on the private test stack; sidecar never dials Postgres itself (owner decision 251).
 - **T4**, sdk: binding gates, wasm in Node, size, memory, and from M10 phone search on the ios32 and Android surrogates and page search in wasm (FS-77), with phone remote search on those surrogates from the later of M10's and M8's exits (FS-83).
@@ -765,7 +765,9 @@ barriers    each owning section names a barrier at every linearization point and
 unknown     ApplyThenDrop applies a write and shows the caller a transport error; every write in FS-1, FS-3, FS-15,
             FS-25, FS-43 to FS-45, FS-57, FS-63, FS-65, FS-72 and FS-75 also runs with it
 determinism fake clocks and barriers only, no sleeps; a schedule waiting over 10 s of real time for a barrier fails
-            with its trace; WARP_TEST_ENV_FAIL_FAST=1, so a failed attempt fails the run (R-TEST-9)
+            with its trace; WARP_TEST_ENV_FAIL_FAST=1, so a failed attempt fails the run (R-TEST-9); the clock
+            is §4.5's Clock, which ServiceHost.Clock and SidecarSettings.Clock carry into the engines and the
+            core, nil meaning real time, and make check refuses a wall-clock call outside it (§4.7)
 twins       every refusal schedule has a twin that must succeed, so a disabled feature fails
 real        T3 runs each T3 row through server's real handlers and stores (api, evs, gkm, the token exchange,
             Postgres, the 3-master Redis Cluster, D-OPS-20's MinIO build), never fixtures that pre-authorize
