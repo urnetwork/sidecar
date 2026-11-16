@@ -230,8 +230,8 @@ func RunTeamRow(t testing.TB, name string, tier *AdmissionTier, settings *TeamSu
 // Admin's new device (its own laptop counting as one), an Admin's revocation of its own lost laptop by its phone, a
 // RecoveryBind of an Admin's key and a MemberRevoke of an Admin; a proposal open across a base completes after it; one
 // never cosigned expires at its not_after, a cosign after that refused and its target unchanged; a member outside the
-// AdminSet admits and revokes its own device alone, an Admin alone admits and removes such a member, and that member's
-// cosign of a proposal is refused; the threshold field raises k to 3 of 3, and an AdminSet change at k = 3 back to 0
+// AdminSet admits and revokes its own device alone, an Admin alone removes such a member, and that member's cosign of
+// a proposal is refused; the threshold field raises k to 3 of 3, and an AdminSet change at k = 3 back to 0
 // lowers it to 2.
 func teamRowKOfN(t testing.TB, net *TeamNet) {
 	owner := net.Owner()
@@ -287,7 +287,7 @@ func teamRowKOfN(t testing.TB, net *TeamNet) {
 		t.Fatal("c holds no binding after the Owner's cosign")
 	}
 
-	// a member outside the AdminSet admits and revokes its own devices alone; an Admin alone admits and removes it;
+	// a member outside the AdminSet admits and revokes its own devices alone; an Admin alone removes such a member;
 	// its cosign of an authority proposal is refused
 	memberM, mFirst := net.ConsentedMember("m")
 	mTablet := net.Device("m tablet", memberM)
