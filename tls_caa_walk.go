@@ -258,6 +258,7 @@ type TlsCaaWalkSettings struct {
 	RecordMaxCount int
 }
 
+// The walk's defaults, each well past what any resolver answers.
 func DefaultTlsCaaWalkSettings() *TlsCaaWalkSettings {
 	return &TlsCaaWalkSettings{
 		HopMaxCount:        16,

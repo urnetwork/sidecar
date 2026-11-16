@@ -104,6 +104,7 @@ type CertsCaaSettings struct {
 	RecheckLifetimeFraction float64
 }
 
+// §12.8's numbers, with no operator zone: a host sets them.
 func DefaultCertsCaaSettings() *CertsCaaSettings {
 	return &CertsCaaSettings{
 		Walk:                    sidecar.DefaultTlsCaaWalkSettings(),
@@ -122,6 +123,7 @@ func DefaultCertsCaaSettings() *CertsCaaSettings {
 // A settings value the checks cannot run on. The wrapping error names the field.
 var ErrCertsCaaSettingsRefused = errors.New("certs caa settings refused")
 
+// Whether the checks can run on these settings. A refusal names the field.
 func (self *CertsCaaSettings) Validate() error {
 	if self == nil || self.Walk == nil {
 		return fmt.Errorf("%w: no settings", ErrCertsCaaSettingsRefused)
