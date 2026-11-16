@@ -475,8 +475,11 @@ type Device struct {
 	lfsCalls *lfsCalls
 	// the client's evs settings
 	clientSettings *sidecar.EvsSettings
-	cancel         context.CancelFunc
-	ran            chan error
+	// the remotes git's http and ssh fronts serve, by transport, each started at its first use (transport.go)
+	remotesLock sync.Mutex
+	remotes     map[string]*deviceRemote
+	cancel      context.CancelFunc
+	ran         chan error
 }
 
 // What a device is made as.
@@ -615,7 +618,8 @@ func (self *World) Device(label string, settings *DeviceSettings) *Device {
 	return device
 }
 
-// Stops the device's mount, as its daemon's exit would; a second call does nothing.
+// Stops the device's mount, as its daemon's exit would; a second call does nothing. The daemon still serves git's
+// hooks, so an owned ref's push is taken and queued while nothing publishes it.
 func (self *Device) Stop() {
 	if self.cancel == nil {
 		return
@@ -623,6 +627,18 @@ func (self *Device) Stop() {
 	self.cancel()
 	<-self.ran
 	self.cancel = nil
+}
+
+// Starts the device's stopped mount again, as its daemon's restart would: the restart's steps, then the sync engine
+// and the queue, which take up what was journaled; a running mount is left as it is.
+func (self *Device) Start() {
+	if self.cancel != nil {
+		return
+	}
+	mountCtx, cancel := context.WithCancel(self.world.ctx)
+	self.cancel = cancel
+	self.ran = make(chan error, 1)
+	go func() { self.ran <- self.Mount.Run(mountCtx) }()
 }
 
 // Places the repo as its creator would, its group the first device's: place/, repo/ active, and gkm's group form.
