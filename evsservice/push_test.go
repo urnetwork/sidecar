@@ -696,7 +696,7 @@ func TestPushWritesItsNewSlots(t *testing.T) {
 }
 
 // §11.8's Resolve rule: committed at its place, dead once the head passed b+64 or its time checks and a later fence,
-// else pending.
+// else pending. A push's record is judged by its statement's time, whatever time its resolver held it by.
 func TestResolvePush(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	plan := fixture.plan()
@@ -709,7 +709,7 @@ func TestResolvePush(t *testing.T) {
 		Body: sidecar.EvsPushRecordBody(body.Statement, body.Payload),
 	}
 	head := fixture.head()
-	resolution, err := fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, record, head.Head)
+	resolution, err := fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, record, head.Head, time.Time{})
 	if err != nil || resolution.State != EvsResolveCommitted || resolution.Version != 1 {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}
@@ -722,13 +722,13 @@ func TestResolvePush(t *testing.T) {
 		PushId: pending.PushId, SignerSidecarId: fixture.check.signerId, TimeMs: pending.TimeMs,
 		Body: sidecar.EvsPushRecordBody(pendingBody.Statement, pendingBody.Payload),
 	}
-	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, head.Head)
+	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, head.Head, time.Time{})
 	if err != nil || resolution.State != EvsResolvePending {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}
 	fenced := CloneEvsHead(head.Head)
 	fenced.FenceMs = time.UnixMilli(pending.TimeMs).Add(fixture.settings.ResolveStatementLife + time.Second).UnixMilli()
-	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, fenced)
+	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, fenced, time.Time{})
 	if err != nil || resolution.State != EvsResolveDead {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}
@@ -738,7 +738,7 @@ func TestResolvePush(t *testing.T) {
 		fixture.create(next, fmt.Sprintf("after %d", i))
 		fixture.requireCommitted(fixture.push(next), uint64(2+i))
 	}
-	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, fixture.head().Head)
+	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, fixture.head().Head, time.Time{})
 	if err != nil || resolution.State != EvsResolveDead {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}

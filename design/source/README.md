@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-251. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-262. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (252 onward)
+## Adding owner decision N (263 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -136,3 +136,23 @@ The design-records track for the operator-core seam folded QD-841, QD-842 and QD
 - **Superseded options.** 295 grep hits, each with a reading; the three on changed lines (4.5's `Env.Redis`, 4.8's weekly merges and §19.7's new bullet) were read on 2026-11-15. None is live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
 - **The metadata list** is unchanged: no §2.8 row changes.
+
+## Validation after owner decisions 252-262 (2026-11-16)
+
+On 2026-11-16 the owner said "Accept all recommended decisions going forward. Record the decisions in the design document." The design-records track for §2 and §3 (wave f39d, the first of twelve that fold the answers since 2026-11-10 section by section) folded in two pieces.
+
+- **First piece.** §2.8's block took the published list whole: list versions v12 to v25, which owners' answers had added to `metadata_list.yml` ahead of a fold through `check/metadata_list_test.go`'s additions (the mechanism owner decision 252 records), their rows' words and two rows, evs-29 and smtp-7. The additions list is empty, and the file is the block alone again. The items those lines came from keep their other parts for their own sections' folds; sidecar/DESIGN-AMENDMENTS.md's "Later decisions" says so.
+- **Second piece.** Owner decisions 252-262, each citing its ledger id: how the published list moves (252: QD-683, QD-886), smtp-2's proof parts and smtp-7 (253: QD-716), cert-1's chain, revocation reason and state time (254: QD-741, QD-742), evs-5's ttl while evacuation's delete of dead slots is off (255: QD-884), the evs rows' words for their wire fields (256: QD-910, QD-923, QD-932), the segment clusters' PUT reports (257: QD-934), the file clusters' readiness object, evs-30 (258: QD-918), api-14's sign-off ids (259: QD-916), the tier cache key, an OAuth client's creating member and a domain's TXT challenge (260: QD-939, QD-940), enrollment's attempt histories (261: QD-951) and BASE records in a config head's folds (262: QD-627, one of the items no section named). The three parts the first fold of §2 left for their guard lines went in under owner decision 252's rule: ext-11 (Cloudflare at https://ur.io, owner decision 211) and ext-12 (the abuse and legal-request mailboxes' provider, 208), each with its `planned` line in `testdata/metadata/fields.yml`, as evs-30 has, and Q-REPO-6 (how Linux users update without apt or yum, which 213 asked for) with its entry in `check/repo_matrix_test.go`. QD-621's wording (a VPN component never goes pending for a narrowing statement that waits on a compile) went into §18.10 under owner decision 216, which already recorded it. The parts these name elsewhere went with them: §4.10, §4.14 and §4.18 (Q-REPO-6), §7.6 and §7.8 (260, 261), §7.9's fold, BASE and retention rows (262), §11.8's keys row and §11.13's index row (258, 256), §13.8 and §13.15 (254), §14.15 (253), §19.4, §19.6's hdd row and §19.8 (258, 257), §21.10 (259), §22.7 (252) and §23.6 (Q-REPO-6). api-7's request-rules clause took the words owner decision 252's question gave for QD-727's default evidence channels.
+
+Left in sidecar/DESIGN-AMENDMENTS.md, each with its reason: QD-242's RECORD.md parts, and QD-007 and QD-052, which change only the run's brief.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `59eac0452e617b111feaa01a40c3eeb330564e3741b245ebe7f0df9b18f6b805`) at the second piece, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; one new Q- item, Q-REPO-6, with its register summary and its evidence line.
+- **Owner decisions.** All 262 rows are present and cited; `validate10.py`'s date pattern takes 2026-11-11 and 2026-11-12, and `LATE_DATES` each new row's date. The rows answered on the owner's instruction of 2026-11-16 carry the ledger's date, 2026-11-15.
+- **Open owner questions.** Two, Q-BRIDGE-8 and Q-REPO-6: the front matter's table lists both, §23.6 places Q-REPO-6 at M6, and §4.10 and §4.18 follow its recommendation, marked "(proposed, Q-REPO-6)". `data_front7.py`'s check allows it.
+- **Superseded options.** 298 grep hits, each with a reading; the four on changed lines (api-13's tier cache, Q-REPO-6's decider line, §13.8's weekly cap and §19.4's evs row) were read on 2026-11-16. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v26, whose header names what it adds, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+
+Outside this folder the fold touched only the guard lines owner decision 252 allows: the three `planned` lines, Q-REPO-6's evidence entry, and the additions that left `check/metadata_list_test.go` as the block took their text.

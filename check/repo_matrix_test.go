@@ -127,6 +127,9 @@ var repoMatrix = map[string][]repoEvidence{
 		{rule: "the root module requiring any module of this repository"},
 		{path: "smtpproof/go.mod"}, {path: "cli/go.mod"},
 	},
+	"Q-REPO-6": {
+		{path: "README.md"},
+	},
 }
 
 // The R-REPO, D-REPO and Q-REPO ids §4 names, in order of first appearance.

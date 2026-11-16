@@ -110,7 +110,7 @@ auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key
 ### 7.6 SSO, domains, JIT, SCIM
 
 - **OIDC only** (Q-TEAM-4): `network_idp` rows; code flow with PKCE S256, `state` and `nonce`; `private_key_jwt` or a vault-encrypted secret. Identity is `(idp_id, sub)`, never email (OIDC Core §5.7); just-in-time (JIT) provisioning links an existing user only after that user completes a login with its existing credential in the same flow, never by email alone (D-TEAM-23), and a team IdP authenticates only its network.
-- **Domains.** TXT `_urnetwork-challenge.<domain>` (TM:601), rechecked daily, dropped after 7 failed days, one network per domain; `POST /auth/sso-discover` routes verified domains to their IdP, and SSO-required teams refuse other sign-ins.
+- **Domains.** TXT `_urnetwork-challenge.<domain>` (TM:601), whose challenge value api keeps with the domain's verification and daily check times (api-3; owner decision 260), rechecked daily, dropped after 7 failed days, one network per domain; `POST /auth/sso-discover` routes verified domains to their IdP, and SSO-required teams refuse other sign-ins.
 - **JIT and SCIM** (Team v1, Q-TEAM-3). A first IdP login creates a `pending` member, since unsigned IdP data adds no reader; the admin device that admits it issues an invite to the IdP-verified email, from which the member's first device enrolls (§8.5). Without SCIM, `network_member.reauth_deadline` (7 d) bounds access after IdP disablement. SCIM 2.0 (RFC 7643/7644) at `/scim/v2/<network_id>/` takes a hashed bearer: `active=false` denies at once and queues a `MemberRevoke` (7.10); until an admin device signs it, members still encrypt to that member's devices, which the console lists, unless `ServiceSettings.scim_signer` names an admin's indexer (§3.6; owner decision 150), which signs such removals of members outside the AdminSet at once (D-TEAM-25). Group changes queue, each up to 7 days for an admin device; roles never sync (TM:450-468).
 
 ### 7.7 Clients: owners, names, tags, groups, approval
@@ -132,7 +132,11 @@ auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key
 
 ```text
 POST /network/enroll {auth_key, client_public_key, device_spec, declares_no_egress,
-                      admission?}                                Public; limited per key and IP
+                      admission?}                                Public; limited per key and IP: Redis
+                                                                 attempt histories for 10 min by default, one
+                                                                 by the auth key's id and one by the caller
+                                                                 address's peppered hash, never the address
+                                                                 (api-11; owner decision 261)
   -> {by_client_jwt, client_id, approval_state, admin_refused,   no_genesis: tagged or ephemeral, before base 1
       close?}                                                    close (/network/auth-client's too): an
                                                                  ephemeral mint's capability, 128 random bits
@@ -157,7 +161,7 @@ POST /oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 ```
 
 - **Enrollment** creates a top-level client with owner or `tagged`, sponsor, the mark and `acl_subject_client_id` (counted by §20.8), replacing RA:930's unscoped, unexpiring `urn_` key (server/apikey/apikey.go:20-53); pre-approved keys carry the genesis hash, head and a Delegation's signing and reader seeds only in a client-only `#<bundle>` that the client splits off before any request (D-TEAM-22); the enrollment request has no field for it, and `POST /network/enroll` refuses an `auth_key` containing `#`.
-- **OAuth clients** use `client_credentials` on `network_oauth_client` with scopes `devices:core`, `auth_keys`, `policy:read`, `logs:read`, `all` (TM:737-748); CI pairs `auth_keys`' ≤1 h keys with its Delegation. An auth key's Delegation's `not_after` is required, at most 90 days; CI and cloud Delegations default to 30 and are replaced, not extended. A forwarding Delegation has none (7.9's forwarding row).
+- **OAuth clients** use `client_credentials` on `network_oauth_client` with scopes `devices:core`, `auth_keys`, `policy:read`, `logs:read`, `all` (TM:737-748), intersected with those of the member that created the client, which its row keeps as `creator_member_id` for the client's whole life, so a re-joined creator's clients do not regain reach (7.5; api-11; owner decision 260); CI pairs `auth_keys`' ≤1 h keys with its Delegation. An auth key's Delegation's `not_after` is required, at most 90 days; CI and cloud Delegations default to 30 and are replaced, not extended. A forwarding Delegation has none (7.9's forwarding row).
 - **`ur-cli`** is the public client of `ur login` and `ur admin` (loopback PKCE, RFC 8252, or the RFC 8628 device grant) with code-matched consent, fresh `auth_time` and one-command DPoP tokens (§5.7); v0 ships only single-use auth keys of ≤5 min (§5.6):
 
   ```text
@@ -590,7 +594,7 @@ base       POST /network/config/projection {Signed ProjectionHeader, rows}: acce
            m >= tip - 1,024, so the writer never re-compiles under a stream of statements
 tick       api appends ApiTick entries at most once a minute per network
 fold       once the oldest statement or tick past the newest base's folded_through is 1,024 positions behind
-           the tip or 24 h old, a config writer saves a config head holding the statements and ticks
+           the tip or 24 h old, a config writer saves a config head holding the statements, ticks and bases
            through the tip and publishes its base, at its next start if it was offline, after a random 0-10
            min delay that another base cancels; so while any config writer runs, the unfolded tail stays
            within about 1,024 entries or a day, bounding re-application, {acl_}e's window and devices' kept
@@ -612,7 +616,10 @@ apply(e)   every admitted sidecar: e.n = my.n + 1 and e.prev_chain = my.A, else 
              the previous base's, its config head being that base's or a descendant, so no base rolls back
              policy; the config head chains to genesis through config writers and holds, as records, exactly
              the log's statements and ticks in (the previous base's folded_through, folded_through], each by
-             id with the position of the entry that carried it (a tick by its position);
+             id with the position of the entry that carried it (a tick by its position), and the BASE
+             entries there, each with its Signed ProjectionHeader as its body, which compile ignores and
+             this check compares like any record, so the chain A_1..A_folded_through is a function of the
+             genesis and the head (owner decision 262);
              SHA-256(compile(config head)) = rows_sha256; then the STATEMENT and TICK entries among
              folded_through+1..n-1 re-apply in order, a BASE among them skipped, its rows superseded by this
              base's, each keeping the verdict it got at its own position, so a later authority change never
@@ -637,7 +644,8 @@ users      the exchange, §8's gates, §10's reader sets, api-10's approvals (§
 retention  api keeps entries from the retention point, min(the previous base, the newest base's folded_through
            + 1), on for the network's life, deleting older entries, and rows no retained base names, 30 days
            after the newer base; a new device starts at the newest base b, verifying its signature and its
-           config head's chain to genesis, not the pruned entries, chains A_k back from b's prev_chain through
+           config head's chain to genesis, not the pruned entries, whose chain it recomputes from the head's
+           records, bases included (owner decision 262), chains A_k back from b's prev_chain through
            the kept entries to the retention point, so it judges every at as long-running readers do, and
            re-applies the statements and ticks among folded_through+1..b-1 as S(b) says
 site loss  (§19.10) the log comes back from devices, never re-sequenced, while sidecar.yml's reseed is true

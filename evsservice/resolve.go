@@ -10,6 +10,14 @@
 //	           checks (time_ms + EvsSettings.ResolveStatementLife, 35 min) with the head's fence_ms later than that
 //	pending    for Resolve: none of the above
 //
+// A one-part re-seeded push's record, an EVS_BATCH_RESEED record holding a push's body, resolves by its statement as a
+// push's does, with the fence in place of the time clause (the owner's answer QD-872): the reseed mode skips 5b's
+// time window and its statements are as old as the mirror, so a statement's time bounds no attempt's arrival. What
+// bounds it is the record: the attempt that can commit a record at its place is the one that appended it, which
+// arrived before the record was in its batch, so a fence_ms at or past a time the resolver already held the record
+// ends that attempt by §11.8's fence row, and the record, still not committed on that head, is dead. A fence_ms below
+// that time says nothing of it, and the record stays pending until the resolver raises the fence itself.
+//
 // A slot's takeover (DESIGN-DETAILS 14.2.4) asks the same of a statement it knows only by its origin, its push id
 // and statement prefix: EvsPushStandingInPrefix.
 //
@@ -159,12 +167,21 @@ type EvsResolution struct {
 // §11.8's Resolve rule for a batch record, which evacuation runs over every record of a batch past 25 h (§11.13): a
 // push's or seal's by its own statement against its ref's cluster head and log pages; a part follows its seal, so
 // it resolves as its statement's push, a re-seeded push's part, a reseed record holding a part's body, as any part
-// (QD-818); a one-part reseed counts as committed. head is the ref's head as the caller read it from the cluster, nil
-// when the ref has none.
-func (self *EvsEngine) ResolvePush(ctx context.Context, cluster sidecar.BlobCluster, record *sidecar.EvsBatchRecord, head *protocol.EvsHead) (*EvsResolution, error) {
-	return ResolveBatchRecord(ctx, record, head, self.settings.ResolveStatementLife, func(ctx context.Context, page uint64) (*LogPage, error) {
+// (QD-818); a one-part reseed by its statement too, with the fence in place of the time clause (QD-872; see the file
+// header). head is the ref's head as the caller read it from the cluster, nil when the ref has none. heldTime is a
+// time, on a clock that is sure (§19.6's clocks row), at which the caller already held record as its batch stores it;
+// zero from a caller with none, for which a reseed record no fence can be judged for stays pending.
+func (self *EvsEngine) ResolvePush(ctx context.Context, cluster sidecar.BlobCluster, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, heldTime time.Time) (*EvsResolution, error) {
+	return ResolveBatchRecord(ctx, record, head, self.settings.ResolveStatementLife, heldTime, func(ctx context.Context, page uint64) (*LogPage, error) {
 		return self.readLogPage(ctx, cluster, record.RepoId, record.RefId, page)
 	})
+}
+
+// Whether record is a one-part re-seeded push's: an EVS_BATCH_RESEED record holding a push's body, which Resolve
+// judges by the fence where it judges a push's by its statement's time (QD-872). A re-seeded push's part, a reseed
+// record holding a part's body, is a part (QD-818).
+func evsRecordIsReseededPush(record *sidecar.EvsBatchRecord) bool {
+	return record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED && !sidecar.EvsReseedRecordHoldsPart(record)
 }
 
 // A batch record's statement: a push's, part's, seal's or reseed's first item, a reseed's from a push record's body or,
@@ -189,12 +206,9 @@ func EvsBatchRecordStatement(record *sidecar.EvsBatchRecord) (*sidecar.EvsStatem
 }
 
 // ResolvePush's rule for a caller that holds no engine, taskworker's evacuation: statementLife is
-// EvsSettings.ResolveStatementLife, and readPage reads one log page of the record's ref, from log/ or, once packed,
-// from its pack.
-func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, statementLife time.Duration, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsResolution, error) {
-	if record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED && !sidecar.EvsReseedRecordHoldsPart(record) {
-		return &EvsResolution{State: EvsResolveCommitted}, nil
-	}
+// EvsSettings.ResolveStatementLife, heldTime is ResolvePush's, and readPage reads one log page of the record's ref,
+// from log/ or, once packed, from its pack.
+func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, statementLife time.Duration, heldTime time.Time, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsResolution, error) {
 	statement, err := EvsBatchRecordStatement(record)
 	if err != nil {
 		return nil, err
@@ -214,6 +228,15 @@ func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, hea
 	}
 	if head != nil && bound <= head.GetVersion() {
 		return &EvsResolution{State: EvsResolveDead}, nil
+	}
+	if evsRecordIsReseededPush(record) {
+		// the fence in place of the time clause: one at or past a time the caller held the record ends the attempt
+		// that appended it, the only one that can commit it at its place. The fence row's 100 ms under an arrival
+		// covers the two clocks, each within 50 ms of UTC, so equal times end it too
+		if head != nil && !heldTime.IsZero() && heldTime.UnixMilli() <= head.GetFenceMs() {
+			return &EvsResolution{State: EvsResolveDead}, nil
+		}
+		return &EvsResolution{State: EvsResolvePending}, nil
 	}
 	if expiresMs := time.UnixMilli(push.GetTimeMs()).Add(statementLife).UnixMilli(); head != nil && expiresMs < head.GetFenceMs() {
 		return &EvsResolution{State: EvsResolveDead}, nil

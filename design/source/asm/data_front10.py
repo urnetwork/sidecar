@@ -22,7 +22,12 @@ import's helper refs, overlay directories and tag refs), and the owner items of 
 tainted bit from M3, retention without the reclaim, compaction Later, the 2 GiB file cap, SHA-1 repos and working-tree
 sync and derived shares Later. Adds owner decision 251 (2026-11-15): the operator-core seam, whose Env server/core
 implements for the engines, amending 19, with operator-core in the branch policy's starts and merge order and in the
-scope."""
+scope. Adds owner decisions 252-262 (folded 2026-11-16): how the published metadata list moves (252), smtp-2's proof
+parts and smtp-7 (253), cert-1's chain, revocation reason and state time (254), evs-5's ttl while the dead-slot
+delete is off (255), the evs rows' words for their wire fields (256), the segment clusters' PUT reports (257), the
+file clusters' readiness object (258), api-14's sign-off ids (259), the tier cache key, an OAuth client's creator and
+a domain's TXT challenge (260), enrollment's attempt histories (261) and BASE records in a config head's folds (262);
+and the open owner question Q-REPO-6, which owner decision 213 asked for."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -237,6 +242,39 @@ INDEX = list(_P9['INDEX']) + [
      "operator-core holds the core services' interfaces and server's shared value types; its Env creates every "
      "service instance an engine holds, server/core implements it, sidecar owns its SQL, and sidecar.Id aliases "
      "operator.Id on every leg."),
+    (252, "The metadata list",
+     "The published list is §2.8's block plus named owner additions made ahead of a fold, and a design-records fold "
+     "adds the `planned` or evidence line that a new row or §4 id needs."),
+    (253, "smtp-2, smtp-7",
+     "smtp-2 lists a proof per part under a named key set, with the commitments the sidecar publishes, and smtp-7 "
+     "what the key set path on ur.io sees of a prover host's fetch."),
+    (254, "cert-1",
+     "A certificate row keeps its issued chain, a requested revocation's reason and `state_time`, and goes 30 days "
+     "after expiry, revocation or failure."),
+    (255, "evs-5",
+     "evs-5's ttl says a dead push's own slots stay until the repo is shredded while evacuation's delete of them is "
+     "off, in the release that brings slot origins."),
+    (256, "evs rows",
+     "The evs rows gain words for wire fields their families already hold: the CONSUME mark, a repo's creator, key "
+     "generations, read pins and states, purge marks and a `pidx/` record's batch place."),
+    (257, "evs-10",
+     "The hdd loop sums a segment cluster's PUT rate from each evs process's 5 s report in `{nvb_<cluster>}`, not "
+     "from MinIO's request metrics."),
+    (258, "evs-30",
+     "Each file cluster's readiness object, `sentinel/_`, written once by xops and read with each block's own "
+     "credentials, has its own row."),
+    (259, "api-14",
+     "api-14 names the legal and engineering sign-off ids that `legal_request` keeps, staff members' opaque ids as "
+     "reviewer ids are."),
+    (260, "api rows",
+     "api-13 names the tier's Redis cache key, api-11 an OAuth client's creating member, kept for the client's "
+     "life, and api-3 a verified domain's TXT challenge."),
+    (261, "Enrollment limits",
+     "`POST /network/enroll` is limited per auth key and per caller address hash through 10-minute Redis attempt "
+     "histories, which api-11 shows."),
+    (262, "Config folds",
+     "A config head's fold records include the BASE entries, each with its Signed ProjectionHeader, so the log's "
+     "chain through the fold follows from the genesis and the head."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -258,7 +296,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 252))
+assert [r[0] for r in INDEX] == list(range(1, 263))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -273,7 +311,10 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               233: '2026-11-10', 234: '2026-11-10', 235: '2026-11-10', 236: '2026-11-10', 237: '2026-11-10',
               238: '2026-11-10', 239: '2026-11-10', 240: '2026-11-10', 241: '2026-11-10', 242: '2026-11-10',
               243: '2026-11-10', 244: '2026-11-10', 245: '2026-11-06', 246: '2026-11-06', 247: '2026-11-06',
-              248: '2026-11-06', 249: '2026-11-06', 250: '2026-11-06', 251: '2026-11-15'})
+              248: '2026-11-06', 249: '2026-11-06', 250: '2026-11-06', 251: '2026-11-15',
+              252: '2026-11-15', 253: '2026-11-11', 254: '2026-11-12', 255: '2026-11-15', 256: '2026-11-15',
+              257: '2026-11-15', 258: '2026-11-15', 259: '2026-11-15', 260: '2026-11-15', 261: '2026-11-15',
+              262: '2026-11-10'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -348,14 +389,17 @@ for _k, _v in list(globals().items()):
 # Owner decision 197 (2026-11-09): designing it raised two owner questions, Q-BRIDGE-8 and Q-SDK-7, the first open
 # owner questions since owner decision 140's corrected record. The sections are written to each open one's
 # recommendation, marked "(proposed; Q-...)"; assemble10.py checks OPEN_OWNER against them. Owner decisions 215 and
-# 216 (2026-11-10) decide Q-SDK-7, so Q-BRIDGE-8 alone stays open.
+# 216 (2026-11-10) decide Q-SDK-7, so of those two Q-BRIDGE-8 stays open. Owner decision 213 (accepted 2026-11-06)
+# asked for a Q- item on Linux updates, Q-REPO-6, which joined them on 2026-11-16 with its evidence line in check/
+# (owner decision 252).
 _OPEN_OLD = "None. Every Q- item whose decider was the owner is decided. "
 assert OPEN_INTRO.count(_OPEN_OLD) == 1, 'open-questions lead moved'
 OPEN_INTRO = OPEN_INTRO.replace(
     _OPEN_OLD,
-    "One, raised on 2026-11-09 in designing owner decision 197's forwarding: Q-BRIDGE-8 (an app device's overlay "
-    "address), to whose recommendation the sections are written, marked \"(proposed; Q-BRIDGE-8)\". The other "
-    "raised with it, Q-SDK-7 (forwarding's budget in the iOS network extension), was decided on 2026-11-10 "
+    "Two: Q-BRIDGE-8 (an app device's overlay address), raised on 2026-11-09 in designing owner decision 197's "
+    "forwarding, and Q-REPO-6 (how Linux users update without apt or yum), which owner decision 213 asked for. The "
+    "sections are written to each recommendation, marked \"(proposed; Q-...)\". The other raised with owner "
+    "decision 197, Q-SDK-7 (forwarding's budget in the iOS network extension), was decided on 2026-11-10 "
     "(@@OD:215@@, @@OD:216@@). Every other Q- item whose decider was the owner is decided. ")
 OPEN_OWNER = [
     ("Q-BRIDGE-8", "Does an app device claim its overlay address when its forwarding is set up (owner decision 197)?",
@@ -364,9 +408,15 @@ OPEN_OWNER = [
      "(a): with no ACL document a hosted address opens the device's loopback to the network's untagged sidecars "
      "(owner decision 120), and (b) can follow by one filing",
      "nothing before M8's app hosts", "M8"),
+    ("Q-REPO-6", "How do Linux users update `ur`, now that v1 ships no apt or yum repository (owner decision 213)?",
+     "(a) re-run `install.sh`'s verified path or fetch the next `.deb` or `.rpm`; (b) apt and yum repositories "
+     "later, signed by a second offline two-person GPG key; (c) a self-updater checking the signed `SHA256SUMS`",
+     "(a) for v1, the owner deciding at v1's exit review whether Linux users need (b)",
+     "nothing before v1's channels", "M6"),
 ]
 for _a, _b in [("[open owner questions](#open-owner-questions) (none remain)",
-                "[open owner questions](#open-owner-questions) (@@NQOWNWORD@@, raised with owner decision 197)"),
+                "[open owner questions](#open-owner-questions) (@@NQOWNWORD@@, raised with owner decisions 197 "
+                "and 213)"),
                ("and @@NQW@@ withdrawn; none is open.", "@@NQW@@ withdrawn, and @@NQOPEN@@ open for the owner.")]:
     assert HOW.count(_a) == 1, _a
     HOW = HOW.replace(_a, _b)
@@ -400,7 +450,14 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "compaction Later (247), the 2 GiB file cap (248), SHA-1 repos (249) and working-tree sync and derived shares "
     "Later (250). On 2026-11-15 the owner put the core services' interfaces and server's shared value types in a new "
     "operator-core module, whose `Env` creates every service instance a hosted engine holds and server/core "
-    "implements, with sidecar owning its SQL (251), amending @@OD:19@@. ")
+    "implements, with sidecar owning its SQL (251), amending @@OD:19@@. On 2026-11-16 the owner accepted the "
+    "build's recommended decisions going forward and asked that they be recorded here; the fold of §2's that day "
+    "numbers how the published metadata list moves (252), smtp-2's proof parts and smtp-7 (253), cert-1's chain, "
+    "revocation reason and state time (254), evs-5's ttl while the dead-slot delete is off (255), the evs rows' "
+    "words for their wire fields (256), the segment clusters' PUT reports (257), the file clusters' readiness "
+    "object (258), api-14's sign-off ids (259), the tier cache key, an OAuth client's creator and a domain's TXT "
+    "challenge (260), enrollment's attempt histories (261) and BASE records in a config head's folds (262), and "
+    "adds the Q- item @@OD:213@@ asked for, Q-REPO-6, open below. ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
