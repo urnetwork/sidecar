@@ -55,6 +55,8 @@ const (
 	smtpConnectionResultTimeout = "timeout"
 	// The sidecar left, or a stream broke.
 	smtpConnectionResultEnded = "ended"
+	// The sending network's lease ran out.
+	smtpConnectionResultQuota = "quota"
 )
 
 // The engine's and the intake's families.
@@ -69,15 +71,25 @@ type smtpMetrics struct {
 	connections sidecar.MetricsCounter
 	// Time to verify one part, by mode.
 	proofSeconds sidecar.MetricsHistogram
+	// Time to verify one part, unlabelled (DESIGN-DETAILS 3.7).
+	verifySeconds sidecar.MetricsHistogram
+	// The parts one connection took, unlabelled (DESIGN-DETAILS 3.7).
+	connectionParts sidecar.MetricsHistogram
+	// Cuts and outcomes handed to §14.8's ladder, by how each went.
+	haltEvents sidecar.MetricsCounter
 }
 
 // Declares the families. Two engines in one process share them, as Metrics allows.
 func newSmtpMetrics(metrics sidecar.Metrics) *smtpMetrics {
 	return &smtpMetrics{
-		storeProbes:  metrics.Counter("urnetwork_smtpedge_store_probes_total", "Readiness probes of the store, by result.", "result"),
-		reports:      metrics.Counter("urnetwork_smtpedge_reports_total", "Reports taken at the report host, by kind and outcome.", "kind", "result"),
-		preambles:    metrics.Counter("urnetwork_smtpedge_preambles_total", "Preambles answered, by code.", "result"),
-		connections:  metrics.Counter("urnetwork_smtpedge_connections_total", "Connections ended, by result, mode and TLS level.", "result", "mode", "tls_level"),
-		proofSeconds: metrics.Histogram("urnetwork_smtpedge_proof_seconds", "Time to verify one proof part, by mode.", nil, "mode"),
+		storeProbes:   metrics.Counter("urnetwork_smtpedge_store_probes_total", "Readiness probes of the store, by result.", "result"),
+		reports:       metrics.Counter("urnetwork_smtpedge_reports_total", "Reports taken at the report host, by kind and outcome.", "kind", "result"),
+		preambles:     metrics.Counter("urnetwork_smtpedge_preambles_total", "Preambles answered, by code.", "result"),
+		connections:   metrics.Counter("urnetwork_smtpedge_connections_total", "Connections ended, by result, mode and TLS level.", "result", "mode", "tls_level"),
+		proofSeconds:  metrics.Histogram("urnetwork_smtpedge_proof_seconds", "Time to verify one proof part, by mode.", nil, "mode"),
+		verifySeconds: metrics.Histogram("urnetwork_smtpedge_part_verify_seconds", "Time to verify one proof part.", nil),
+		connectionParts: metrics.Histogram("urnetwork_smtpedge_connection_parts", "Proof parts one connection took.",
+			[]float64{1, 2, 4, 8, 16, 32, 64, 128}),
+		haltEvents: metrics.Counter("urnetwork_smtpedge_halt_events_total", "Cuts and outcomes handed to the halt rule, by result.", "result"),
 	}
 }

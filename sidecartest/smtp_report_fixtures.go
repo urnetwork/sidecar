@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -533,10 +534,37 @@ var _ smtpedgeservice.SmtpReportJoin = (*FakeSmtpReportJoin)(nil)
 
 // §21's case flow, recording each report it is handed: what ABUSE-M5-09's real sink stands in for.
 type FakeSmtpAbuseSink struct {
-	stateLock sync.Mutex
-	reports   []*smtpedgeservice.SmtpAbuseReport
+	stateLock   sync.Mutex
+	reports     []*smtpedgeservice.SmtpAbuseReport
+	suspensions []*smtpedgeservice.SmtpSuspensionRequest
 	// The error the next calls answer, until cleared.
 	failure error
+}
+
+// See SmtpAbuseSink.
+func (self *FakeSmtpAbuseSink) RequestSmtpSuspension(ctx context.Context, request *smtpedgeservice.SmtpSuspensionRequest) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.failure != nil {
+		return self.failure
+	}
+	kept := *request
+	kept.HaltIds = slices.Clone(request.HaltIds)
+	self.suspensions = append(self.suspensions, &kept)
+	return nil
+}
+
+// Every suspension asked, in order, as copies.
+func (self *FakeSmtpAbuseSink) Suspensions() []*smtpedgeservice.SmtpSuspensionRequest {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	suspensions := []*smtpedgeservice.SmtpSuspensionRequest{}
+	for _, request := range self.suspensions {
+		kept := *request
+		kept.HaltIds = slices.Clone(request.HaltIds)
+		suspensions = append(suspensions, &kept)
+	}
+	return suspensions
 }
 
 // Records everything.
