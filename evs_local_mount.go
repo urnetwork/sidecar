@@ -130,7 +130,9 @@ type EvsMounts struct {
 	// the receive sessions open, by id (evs_local_hook.go)
 	sessions map[string]*EvsGitReceiveSession
 	// what each hook file execs, its name appended, and what git-receive-pack runs with beside a session's id
-	hookCommand     []string
+	hookCommand []string
+	// ur's absolute path, written into a mount's clone as its git-lfs agent (evs_lfs_agent.go); empty writes none
+	lfsAgentPath    string
 	hookEnvironment []string
 	// this sidecar's client ids, Sidecar.ClientIds, nil for this client alone
 	ownClientIds func() ([]Id, error)
@@ -312,6 +314,19 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 				{"config", "committer.email", identity.ClientId.String() + evsCommitterDomain},
 			} {
 				if _, err := self.git.Run(ctx, args.Dir, setting...); err != nil {
+					return nil, err
+				}
+			}
+			// the clone's git-lfs agent, so its objects move through the daemon (§11.11's agent row)
+			self.stateLock.Lock()
+			lfsAgentPath := self.lfsAgentPath
+			self.stateLock.Unlock()
+			if lfsAgentPath != "" {
+				gitDir, err := self.git.Run(ctx, args.Dir, "rev-parse", "--absolute-git-dir")
+				if err != nil {
+					return nil, err
+				}
+				if err := EvsLfsConfigureClone(ctx, self.git, strings.TrimSpace(string(gitDir)), lfsAgentPath, EvsLfsAgentArgsFor("id:"+repoId.String())); err != nil {
 					return nil, err
 				}
 			}

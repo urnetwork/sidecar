@@ -269,6 +269,10 @@ func (self *evsImporter) importRepo(ctx context.Context, args *EvsImportArgs) (*
 		}
 		cuts = append(cuts, cut)
 	}
+	// the objects the imported tip requires that <dir>'s own git-lfs store holds go first (evs_lfs_tipcheck.go)
+	if err := self.uploadLfs(ctx, self.record.Dir, sourceTip); err != nil {
+		return self.result, err
+	}
 	if err := self.run(ctx, self.record.Target, sourceTip, cuts, 0, 0); err != nil {
 		return self.result, err
 	}

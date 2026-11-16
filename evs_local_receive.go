@@ -76,6 +76,8 @@ type EvsGitReceiver struct {
 	queueWakeup chan struct{}
 	// the last push the queue made per ref, which QueueInterval spaces
 	queuedAt map[Id]time.Time
+	// the repo's git-lfs store, which the tip check reads and touches (evs_lfs_tipcheck.go); made at first use
+	lfs *EvsLfsStore
 }
 
 // The receiver of mount.
@@ -239,11 +241,12 @@ func (self *evsLocalHookObjects) size(oid EvsGitOid) (int64, error) {
 	return size, nil
 }
 
-// One update proc-receive was given.
+// One update proc-receive was given, and the lines its answer prints to the pusher's terminal before the report.
 type evsGitReceiveCommand struct {
 	gitRef string
 	old    *EvsGitOid
 	new    *EvsGitOid
+	lines  []string
 }
 
 // proc-receive: git's protocol (gitprotocol-common's pkt-lines; githooks(5)'s proc-receive): the version, the
@@ -327,6 +330,11 @@ func (self *EvsGitReceiver) procReceive(ctx context.Context, session *EvsGitRece
 		}()
 	}
 	wait.Wait()
+	for _, command := range commands {
+		for _, line := range command.lines {
+			fmt.Fprintln(stderr, line)
+		}
+	}
 	answer := []EvsPktLine{}
 	for _, status := range statuses {
 		answer = append(answer, EvsPktLine{Kind: EvsPktLineData, Payload: []byte(status + "\n")})
@@ -476,14 +484,45 @@ func (self *EvsGitReceiver) receiveShared(ctx context.Context, session *EvsGitRe
 		// a stopped ref's deletion is built on the head's version with no old tip (8.5)
 		old = nil
 	}
+	// the git-lfs tip check (evs_lfs_tipcheck.go): old is the tip the push's TIP CAS names, none after a DELETE
+	checkOld := old
+	if record.Deleted {
+		checkOld = nil
+	}
+	refuseMissing := func(missing []*EvsLfsMissingObject) string {
+		command.lines = append(command.lines, EvsLfsMissingLines(command.gitRef, missing, self.settings)...)
+		self.dropReceived(ctx, refId, update)
+		return ng(evsLfsTipCheckRefusal)
+	}
+	checked, err := self.lfsTipCheck(ctx, checkOld, command.new)
+	if err != nil {
+		self.dropReceived(ctx, refId, update)
+		return ng("lfs objects unchecked: " + evsOneLine(err.Error()))
+	}
+	if checked != nil && 0 < len(checked.Missing) {
+		return refuseMissing(checked.Missing)
+	}
 	publishCtx, cancelPublish := context.WithTimeout(ctx, self.settings.ReceivePublishTimeout)
 	defer cancelPublish()
 	sent := false
+	var missingAgain []*EvsLfsMissingObject
 	result, err := EvsLocalPublish(publishCtx, &EvsLocalPublishArgs{
 		Mount: self.mount, Repo: self.repo, RefName: refName, Old: old, New: command.new,
 		BaseVersion: record.Version, BaseChain: record.Chain, Deleted: record.Deleted, LastTip: record.LastTip,
 		Tainted: record.Tainted, Base: record.Base, State: self.engine, OwnClient: self.ownClient(),
 		OnAttempt: func(attempt *EvsGitPublishAttempt) error {
+			// a check over LfsCheckMaxAge old runs again before a push id's first POST
+			if checked != nil && self.settings.LfsCheckMaxAge < self.clock.Now().Sub(checked.CheckedAt) {
+				again, err := self.lfsTipCheck(ctx, checkOld, command.new)
+				if err != nil {
+					return err
+				}
+				if again != nil && 0 < len(again.Missing) {
+					missingAgain = again.Missing
+					return ErrEvsLfsObjectsMissing
+				}
+				checked = again
+			}
 			sent = true
 			if err := self.journalAttempt(ctx, refId, attempt); err != nil {
 				return err
@@ -492,6 +531,9 @@ func (self *EvsGitReceiver) receiveShared(ctx context.Context, session *EvsGitRe
 			return evsLocalKilled(evsLocalReceiveKillHook, "publish.sent")
 		},
 	})
+	if errors.Is(err, ErrEvsLfsObjectsMissing) && 0 < len(missingAgain) {
+		return refuseMissing(missingAgain)
+	}
 	testHookBarrier(evsLocalBarrierPublishAnswer, self.engine.barrierKey(refId))
 	if killErr := evsLocalKilled(evsLocalReceiveKillHook, "publish.answer"); killErr != nil {
 		return ng("killed")
@@ -779,6 +821,12 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 	if err != nil || skip {
 		return err
 	}
+	// the git-lfs tip check before the first POST: a missing object holds the entry, ur status naming it
+	if checked, err := self.lfsTipCheck(ctx, record.Tip, local); err != nil {
+		return err
+	} else if checked != nil && 0 < len(checked.Missing) {
+		return self.holdLfs(ctx, refId, local, checked.Missing)
+	}
 	testHookBarrier(evsLocalBarrierQueueSend, self.engine.barrierKey(refId))
 	if err := evsLocalKilled(evsLocalReceiveKillHook, "queue.send"); err != nil {
 		return err
@@ -828,6 +876,40 @@ func (self *EvsGitReceiver) hold(ctx context.Context, refId Id, code string, loc
 			update.State = EvsJournalLocal
 		}
 		journal.Attempts = nil
+		return self.engine.state.writeJournal(refId, journal)
+	})
+}
+
+// Holds an owned ref's queue on objects the tip check found missing: `ur status` names them and the upload command,
+// and the queue waits for the local ref to move or `ur evs retry` once they are uploaded.
+func (self *EvsGitReceiver) holdLfs(ctx context.Context, refId Id, local *EvsGitOid, missing []*EvsLfsMissingObject) error {
+	if err := self.hold(ctx, refId, evsLfsTipCheckRefusal, local); err != nil {
+		return err
+	}
+	return self.withApply(ctx, refId, func() error {
+		journal, err := self.engine.state.journal(refId)
+		if err != nil {
+			return err
+		}
+		journal.HoldLfsOids = nil
+		for _, object := range missing {
+			journal.HoldLfsOids = append(journal.HoldLfsOids, object.Requirement.Oid.String())
+		}
+		return self.engine.state.writeJournal(refId, journal)
+	})
+}
+
+// Drops a shared update the receive journaled and then refused before any evs write.
+func (self *EvsGitReceiver) dropReceived(ctx context.Context, refId Id, update *EvsJournalUpdate) {
+	if update == nil {
+		return
+	}
+	self.withApply(ctx, refId, func() error {
+		journal, err := self.engine.state.journal(refId)
+		if err != nil {
+			return err
+		}
+		journal.deleteUpdate(update.Seq)
 		return self.engine.state.writeJournal(refId, journal)
 	})
 }

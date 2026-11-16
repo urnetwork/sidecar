@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/docopt/docopt-go"
 
@@ -311,6 +312,8 @@ func urEvsMountStatus(ctx context.Context, evs urEvsTarget, mount *sidecar.EvsLo
 	}
 	for _, journal := range journals {
 		switch {
+		case 0 < len(journal.HoldLfsOids):
+			lines = append(lines, fmt.Sprintf("ref %s held: git-lfs objects missing; run git lfs push --object-id <remote> %s, then ur evs retry", journal.RefName, strings.Join(journal.HoldLfsOids, " ")))
 		case journal.HoldCode != "":
 			lines = append(lines, fmt.Sprintf("ref %s held: %s; ur evs retry releases it", journal.RefName, journal.HoldCode))
 		case journal.Pending:
