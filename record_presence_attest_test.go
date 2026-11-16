@@ -1,6 +1,10 @@
 // §16.6's registration rows and labels (MCP-M3-08; FS-124): each attestation format on fixture roots, labelled attested,
 // and the refusals §22.7's presence row names, another key's attestation and a software key as apple among them, none of
-// them ever downgraded to asserted; fmt none and a Secure Enclave key asserted; KeyRegister.attestation's map of the
+// them ever downgraded to asserted; fmt none and a Secure Enclave key asserted; what a statement that verifies and
+// chains to no pinned root gets, per format (QD-137, QD-885): asserted for packed and tpm off the vendor list and for
+// any format whose pool is empty, refused for apple and android-key once their root is pinned, and attested for the
+// same bytes once a release pins the root; a statement that does not verify refused against any pool;
+// KeyRegister.attestation's map of the
 // object and its create ceremony's client data (QD-730), with a wrong origin, type or credential key refused, the object
 // alone refused for every format but none, and a map that is not canonical refused; and the canonical CBOR reader
 // refusing every non-canonical form. Fixture roots and certificates are made here from fixed seeds, deterministically, and
@@ -715,19 +719,25 @@ func TestPresenceAttestationRefusesAnotherKeysAttestation(t *testing.T) {
 	credential, other := testAttestCredentials(t)
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self", "none") {
 		object := newTestAttestation(cas, other).object(t, format)
-		_, err := verifyPresenceAttestationObject(object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
-		if !errors.Is(err, ErrPresenceAttestation) {
-			t.Errorf("%s: %v", format, err)
+		// with its root pinned and with none pinned alike
+		for i, roots := range []*presenceAttestationRoots{cas.roots(), presenceReleaseAttestationRoots()} {
+			_, err := verifyPresenceAttestationObject(object, testAttestClientDataHash(), credential.publicKey, roots, testAttestSettings(), testAttestAt)
+			if !errors.Is(err, ErrPresenceAttestation) {
+				t.Errorf("%s against pools %d: %v", format, i, err)
+			}
 		}
 	}
 	// a certificate for another key than the credential its statement names
 	for _, format := range []string{"android-key", "apple"} {
 		attestation := newTestAttestation(cas, credential)
 		attestation.certificateKey = other
-		_, err := verifyPresenceAttestationObject(
-			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
-		if !errors.Is(err, ErrPresenceAttestation) {
-			t.Errorf("%s with another key's certificate: %v", format, err)
+		object := attestation.object(t, format)
+		for i, roots := range []*presenceAttestationRoots{cas.roots(), presenceReleaseAttestationRoots()} {
+			_, err := verifyPresenceAttestationObject(
+				object, testAttestClientDataHash(), credential.publicKey, roots, testAttestSettings(), testAttestAt)
+			if !errors.Is(err, ErrPresenceAttestation) {
+				t.Errorf("%s with another key's certificate against pools %d: %v", format, i, err)
+			}
 		}
 	}
 	// a packed self attestation the credential did not sign
@@ -740,29 +750,113 @@ func TestPresenceAttestationRefusesAnotherKeysAttestation(t *testing.T) {
 	}
 }
 
-// A software key presented as apple: its certificate chains to a CA that is no apple root, and it is refused, never
-// labelled asserted. So is every format chained to that CA, and every format against the release's empty pools.
+// The single-vendor formats, whose chain failure refuses once the vendor's root is pinned, and the vendor lists, whose
+// statement off the list labels asserted (QD-885).
+var (
+	testAttestSingleVendorFormats = []string{"android-key", "apple"}
+	testAttestVendorListFormats   = []string{"packed", "tpm"}
+)
+
+// Pools with format's root left out, empty, and every other format's fixture root pinned.
+func (self *testAttestCas) rootsWithout(format string) *presenceAttestationRoots {
+	roots := self.roots()
+	switch format {
+	case "packed":
+		roots.packed = x509.NewCertPool()
+	case "tpm":
+		roots.tpm = x509.NewCertPool()
+	case "android-key":
+		roots.androidKey = x509.NewCertPool()
+	case "apple":
+		roots.apple = x509.NewCertPool()
+	}
+	return roots
+}
+
+// A software key presented as apple, a forged apple statement: it verifies in every way but its chain, which leads to a
+// CA that is no apple root, and with apple's root pinned it is refused, never labelled asserted. So is android-key
+// against Google's pinned root (QD-885's single-vendor formats).
 func TestPresenceAttestationRefusesASoftwareKeyAsApple(t *testing.T) {
 	cas := newTestAttestCas(t)
 	credential, _ := testAttestCredentials(t)
-	for _, format := range testAttestChainedFormats {
+	for _, format := range testAttestSingleVendorFormats {
 		attestation := newTestAttestation(cas, credential)
 		attestation.issuer = cas.software
 		label, err := verifyPresenceAttestationObject(
 			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
-			t.Errorf("%s by a software CA: %s, %v", format, label, err)
-		}
-		object := newTestAttestation(cas, credential).object(t, format)
-		label, err = verifyPresenceAttestationObject(
-			object, testAttestClientDataHash(), credential.publicKey, presenceReleaseAttestationRoots(), testAttestSettings(), testAttestAt)
-		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
-			t.Errorf("%s against the release's roots: %s, %v", format, label, err)
+			t.Errorf("%s by a software CA with its root pinned: %s, %v", format, label, err)
 		}
 	}
 }
 
-// A statement over another create ceremony's client data, in every format but none.
+// A valid packed or tpm statement of a vendor off the release's list: it verifies, chains to no listed root, and labels
+// asserted, as fmt none does, the key losing only the word attested (QD-137, QD-885).
+func TestPresenceAttestationOffTheVendorListLabelsAsserted(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, _ := testAttestCredentials(t)
+	for _, format := range testAttestVendorListFormats {
+		attestation := newTestAttestation(cas, credential)
+		attestation.issuer = cas.software
+		label, err := verifyPresenceAttestationObject(
+			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		if err != nil || label != PresenceLabelAsserted {
+			t.Errorf("%s of a vendor off the list: %s, %v; want %s", format, label, err, PresenceLabelAsserted)
+		}
+	}
+}
+
+// A format whose pool is empty labels a statement that otherwise verifies asserted, whichever CA made its chain: every
+// format against the release's pools, which pin nothing yet, and each format with its own pool alone empty beside the
+// others' pinned roots.
+func TestPresenceAttestationEmptyPoolLabelsAsserted(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, _ := testAttestCredentials(t)
+	for _, format := range testAttestChainedFormats {
+		for _, issuer := range []*testAttestCa{nil, cas.software} {
+			attestation := newTestAttestation(cas, credential)
+			attestation.issuer = issuer
+			object := attestation.object(t, format)
+			for i, roots := range []*presenceAttestationRoots{presenceReleaseAttestationRoots(), cas.rootsWithout(format)} {
+				label, err := verifyPresenceAttestationObject(
+					object, testAttestClientDataHash(), credential.publicKey, roots, testAttestSettings(), testAttestAt)
+				if err != nil || label != PresenceLabelAsserted {
+					t.Errorf("%s against empty pool %d, software CA %t: %s, %v; want %s", format, i, issuer != nil, label, err, PresenceLabelAsserted)
+				}
+			}
+		}
+	}
+	// a pool that is not there at all would mean the system's roots: refused, never asserted
+	for _, format := range testAttestChainedFormats {
+		object := newTestAttestation(cas, credential).object(t, format)
+		label, err := verifyPresenceAttestationObject(
+			object, testAttestClientDataHash(), credential.publicKey, &presenceAttestationRoots{}, testAttestSettings(), testAttestAt)
+		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+			t.Errorf("%s against a nil pool: %s, %v", format, label, err)
+		}
+	}
+}
+
+// The same statement a release with no root pinned labels asserted labels attested once a release pins its root, with
+// nothing about the registration changed (QD-885): the label is the check's answer under the reader's roots.
+func TestPresenceAttestationLabelRisesWhenItsRootIsPinned(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, _ := testAttestCredentials(t)
+	for _, format := range testAttestChainedFormats {
+		attestation := newTestAttestation(cas, credential).attestation(t, format)
+		before, err := verifyPresenceAttestation(attestation, credential.publicKey, cas.rootsWithout(format), testAttestSettings(), testAttestAt)
+		if err != nil || before != PresenceLabelAsserted {
+			t.Errorf("%s before its root is pinned: %s, %v", format, before, err)
+		}
+		after, err := verifyPresenceAttestation(attestation, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		if err != nil || after != PresenceLabelAttested {
+			t.Errorf("%s once its root is pinned: %s, %v", format, after, err)
+		}
+	}
+}
+
+// A statement over another create ceremony's client data does not verify, in every format but none: refused with its
+// root pinned and with none pinned alike, never asserted for want of a root.
 func TestPresenceAttestationRefusesAnotherClientData(t *testing.T) {
 	cas := newTestAttestCas(t)
 	credential, _ := testAttestCredentials(t)
@@ -770,24 +864,37 @@ func TestPresenceAttestationRefusesAnotherClientData(t *testing.T) {
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self") {
 		attestation := newTestAttestation(cas, credential)
 		attestation.signedClientDataHash = otherHash[:]
-		_, err := verifyPresenceAttestationObject(
-			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
-		if !errors.Is(err, ErrPresenceAttestation) {
-			t.Errorf("%s: %v", format, err)
+		object := attestation.object(t, format)
+		for i, roots := range []*presenceAttestationRoots{cas.roots(), presenceReleaseAttestationRoots()} {
+			label, err := verifyPresenceAttestationObject(
+				object, testAttestClientDataHash(), credential.publicKey, roots, testAttestSettings(), testAttestAt)
+			if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+				t.Errorf("%s against pools %d: %s, %v", format, i, label, err)
+			}
 		}
 	}
 }
 
-// Outside every fixture certificate's validity, nothing chains.
-func TestPresenceAttestationRefusesAnExpiredChain(t *testing.T) {
+// Outside every fixture certificate's validity nothing chains, so no format labels attested: apple and android-key,
+// their root pinned, are refused, and packed and tpm, which chain to no listed root at that time, label asserted.
+func TestPresenceAttestationOutsideAChainsValidity(t *testing.T) {
 	cas := newTestAttestCas(t)
 	credential, _ := testAttestCredentials(t)
-	for _, format := range testAttestChainedFormats {
+	expired := testAttestNotAfter.Add(time.Hour)
+	for _, format := range testAttestSingleVendorFormats {
 		object := newTestAttestation(cas, credential).object(t, format)
-		_, err := verifyPresenceAttestationObject(
-			object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestNotAfter.Add(time.Hour))
-		if !errors.Is(err, ErrPresenceAttestation) {
-			t.Errorf("%s: %v", format, err)
+		label, err := verifyPresenceAttestationObject(
+			object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), expired)
+		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+			t.Errorf("%s: %s, %v", format, label, err)
+		}
+	}
+	for _, format := range testAttestVendorListFormats {
+		object := newTestAttestation(cas, credential).object(t, format)
+		label, err := verifyPresenceAttestationObject(
+			object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), expired)
+		if err != nil || label != PresenceLabelAsserted {
+			t.Errorf("%s: %s, %v; want %s", format, label, err, PresenceLabelAsserted)
 		}
 	}
 }
@@ -839,7 +946,8 @@ func TestPresenceAttestationRefusesAuthData(t *testing.T) {
 	}
 }
 
-// Each format's own requirements, spoiled one at a time.
+// Each format's own requirements, spoiled one at a time: a statement that does not verify, refused with its root pinned
+// and with none pinned alike.
 func TestPresenceAttestationRefusesFormatRequirements(t *testing.T) {
 	cas := newTestAttestCas(t)
 	credential, _ := testAttestCredentials(t)
@@ -872,10 +980,13 @@ func TestPresenceAttestationRefusesFormatRequirements(t *testing.T) {
 	for _, c := range cases {
 		attestation := newTestAttestation(cas, credential)
 		c.spoil(attestation)
-		label, err := verifyPresenceAttestationObject(
-			attestation.object(t, c.format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
-		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
-			t.Errorf("%s: %s, %v", c.name, label, err)
+		object := attestation.object(t, c.format)
+		for i, roots := range []*presenceAttestationRoots{cas.roots(), presenceReleaseAttestationRoots()} {
+			label, err := verifyPresenceAttestationObject(
+				object, testAttestClientDataHash(), credential.publicKey, roots, testAttestSettings(), testAttestAt)
+			if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+				t.Errorf("%s against pools %d: %s, %v", c.name, i, label, err)
+			}
 		}
 	}
 }
@@ -1107,9 +1218,9 @@ func TestPresenceAttestationMapRefusesNonCanonicalAndOtherShapes(t *testing.T) {
 
 // Through a KeyRegister, against the release's roots: fmt none, with its client data or alone, an empty attestation and
 // packed self attestation label a webauthn-es256 key asserted, and an ecdsa-p256-sha256 key is asserted and carries
-// none. Every chained format is refused, never asserted, since no production root ships (QD-137); so are the raw
-// attestation object the field held before QD-730, a chained format without its client data, and client data from
-// another origin.
+// none. Every chained format that verifies is asserted too, since no production root ships and an empty pool labels
+// asserted (QD-137, QD-885), and one that does not verify is refused. So are the raw attestation object the field held
+// before QD-730, a chained format without its client data, and client data from another origin.
 func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 	cas := newTestAttestCas(t)
 	credential, other := testAttestCredentials(t)
@@ -1129,6 +1240,13 @@ func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).attestation(t, "packed self")),
 		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, nil),
 		register(bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256, nil),
+	}
+	for _, format := range testAttestChainedFormats {
+		// nothing is pinned, so a statement that verifies labels asserted, whichever CA made its chain
+		asserted = append(asserted, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).attestation(t, format)))
+		bySoftware := newTestAttestation(cas, credential)
+		bySoftware.issuer = cas.software
+		asserted = append(asserted, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, bySoftware.attestation(t, format)))
 	}
 	for i, keyRegister := range asserted {
 		label, err := VerifyPresenceAttestation(keyRegister, atMillis)
@@ -1157,9 +1275,12 @@ func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 	// a format §16.6 does not name
 	unknownFormat := testAttestObject("fido-u2f", testCborMap{}, testAttestAuthData(credential, testAttestFlags))
 	refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, EncodePresenceAttestation(unknownFormat, testAttestClientDataJson)))
+	otherHash := sha256.Sum256([]byte("another ceremony's client data"))
 	for _, format := range testAttestChainedFormats {
-		// nothing chains to the release's empty pools
-		refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).attestation(t, format)))
+		// a statement that does not verify, which no empty pool excuses
+		spoiled := newTestAttestation(cas, credential)
+		spoiled.signedClientDataHash = otherHash[:]
+		refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, spoiled.attestation(t, format)))
 	}
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self") {
 		alone := testAttestObjectAlone(newTestAttestation(cas, credential).object(t, format))
@@ -1205,7 +1326,10 @@ func testPresenceAttestationVectorFile(t *testing.T) *presenceAttestationVectorF
 			"the attestation object, and clientDataJSON, the create ceremony's client data (QD-730), whose origin is " +
 			"https://ur.io, QD-073's for every host but Android, which the release table holds. A vector is checked for " +
 			"public_key against roots \"fixture\", each format's fixture root below, or \"release\", this build's empty pools " +
-			"(QD-137), at at_ms. Bytes are lowercase hex. go test -run TestPresenceAttestationVectors " +
+			"(QD-137), at at_ms. A statement that does not verify is refused against either; one that verifies and chains to " +
+			"no pinned root is asserted where its pool is empty or its format is packed or tpm, and refused where its " +
+			"format is apple or android-key and that root is pinned (QD-885). Bytes are lowercase hex. " +
+			"go test -run TestPresenceAttestationVectors " +
 			"-update-presence-attestation-vectors rewrites this file, which is a format change.",
 		AtMs: testAttestAt.UnixMilli(),
 		Roots: map[string]hexBytes{
@@ -1231,13 +1355,22 @@ func testPresenceAttestationVectorFile(t *testing.T) *presenceAttestationVectorF
 	}
 	otherOrigin := testAttestClientData("webauthn.create", "https://presence.example")
 	assertionType := testAttestClientData("webauthn.get", testPresenceOrigin)
+	otherClientDataHash := sha256.Sum256([]byte("another ceremony's client data"))
 	for _, format := range testAttestChainedFormats {
 		add(format+" attested", newTestAttestation(cas, credential).attestation(t, format), "fixture", PresenceLabelAttested)
-		add(format+" without a pinned root", newTestAttestation(cas, credential).attestation(t, format), "release", 0)
+		add(format+" without a pinned root", newTestAttestation(cas, credential).attestation(t, format), "release", PresenceLabelAsserted)
+		overAnother := newTestAttestation(cas, credential)
+		overAnother.signedClientDataHash = otherClientDataHash[:]
+		add(format+" over another ceremony's client data without a pinned root", overAnother.attestation(t, format), "release", 0)
 		add(format+" for another key", newTestAttestation(cas, other).attestation(t, format), "fixture", 0)
 		bySoftware := newTestAttestation(cas, credential)
 		bySoftware.issuer = cas.software
-		add(format+" by a software key's CA", bySoftware.attestation(t, format), "fixture", 0)
+		// a vendor off packed's or tpm's list is asserted; apple and android-key have one vendor, whose root is pinned
+		bySoftwareLabel := PresenceLabel(0)
+		if slices.Contains(testAttestVendorListFormats, format) {
+			bySoftwareLabel = PresenceLabelAsserted
+		}
+		add(format+" by a software key's CA", bySoftware.attestation(t, format), "fixture", bySoftwareLabel)
 		add(format+" from an unlisted origin", newTestAttestation(cas, credential).withClientData(otherOrigin).attestation(t, format), "fixture", 0)
 		add(format+" with an assertion's client data", newTestAttestation(cas, credential).withClientData(assertionType).attestation(t, format), "fixture", 0)
 		add(format+" without its client data", testAttestObjectAlone(newTestAttestation(cas, credential).object(t, format)), "fixture", 0)

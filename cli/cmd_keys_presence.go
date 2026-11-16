@@ -85,6 +85,9 @@ type urPresenceKeyItem struct {
 	Position             uint64     `json:"position"`
 	NotAfterMillis       int64      `json:"not_after_millis"`
 	Held                 bool       `json:"held,omitempty"`
+	// §16.6's label as the registering release read the key's attestation, presence (asserted) or presence
+	// (attested), on a registration's answer; empty in a listing, whose rows keep no statement to read one from
+	Label string `json:"label,omitempty"`
 }
 
 // keys.list's reply.
@@ -101,7 +104,7 @@ type urKeysRemoveParams struct {
 
 // A key as keys.list answers it.
 func urPresenceKeyItemOf(key *sidecar.SidecarPresenceKey) *urPresenceKeyItem {
-	return &urPresenceKeyItem{
+	item := &urPresenceKeyItem{
 		KeyId:                hex.EncodeToString(key.KeyId),
 		Alg:                  key.Alg.String(),
 		RegisteringSidecarId: key.RegisteringSidecarId,
@@ -109,6 +112,10 @@ func urPresenceKeyItemOf(key *sidecar.SidecarPresenceKey) *urPresenceKeyItem {
 		NotAfterMillis:       key.NotAfter.UnixMilli(),
 		Held:                 key.Held,
 	}
+	if key.Label != 0 {
+		item.Label = key.Label.String()
+	}
+	return item
 }
 
 // The presence key methods over target, when it hosts a Sidecar.
@@ -179,6 +186,11 @@ func urAddPresenceKey(ctx context.Context, cli *urCli) error {
 	key := &urPresenceKeyItem{}
 	if err := cli.callDaemon(ctx, urMethodKeysAddPresence, nil, true, key); err != nil {
 		return err
+	}
+	// the label changes nothing the key may approve: it says what this release could check of where the key lives
+	if key.Label != "" {
+		cli.printf("presence key %s registered, %s, %s\n", key.KeyId, key.Alg, key.Label)
+		return nil
 	}
 	cli.printf("presence key %s registered, %s\n", key.KeyId, key.Alg)
 	return nil
