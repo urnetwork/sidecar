@@ -118,6 +118,13 @@ func TestFailureBackoffDoublesToADayAndNoFurther(t *testing.T) {
 	if got := settings.failureBackoffWait(2); got != 45*time.Minute {
 		t.Errorf("the second failure under a 45 min cap waits %v", got)
 	}
+	// and a cap near the longest duration there is never overflows the doubling
+	if got := certsFailureBackoffWait(math.MaxInt, time.Nanosecond, math.MaxInt64); got != math.MaxInt64 {
+		t.Errorf("under the longest cap: %v", got)
+	}
+	if got := certsFailureBackoffWait(63, time.Nanosecond, math.MaxInt64); got != time.Duration(1)<<62 {
+		t.Errorf("the 63rd failure from a nanosecond: %v", got)
+	}
 }
 
 // A backoff that would hold nothing, or one longer than its own cap, is refused by name.

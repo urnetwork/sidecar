@@ -157,7 +157,8 @@ type CertsOrdersReport struct {
 	// Orders their CA issued.
 	Issued []sidecar.Id
 	// Orders that queue again: a CA's refusal on a limit, which holds the CA, a failed authorization,
-	// which counts against its names, or a failure that may pass.
+	// which counts against its names, a failure that may pass, or, with no CA asked, a backoff one of its
+	// names began at its CA since its admission (QD-857).
 	Requeued []sidecar.Id
 	// Rows moved to failed: a CSR no CA can take, or an order past its give-up age (OrderGiveUpAge, never
 	// past its CA's OrderLifetime).

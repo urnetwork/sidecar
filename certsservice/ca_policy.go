@@ -144,8 +144,11 @@ func certsCaHeld(holdUntil time.Time, now time.Time) bool {
 // as the first.
 func certsFailureBackoffWait(failureCount int, start time.Duration, longest time.Duration) time.Duration {
 	wait := start
-	// doubling stops at longest, so it never overflows
-	for count := 1; count < failureCount && wait < longest; count += 1 {
+	for count := 1; count < failureCount && 0 < wait && wait < longest; count += 1 {
+		// a doubling past longest is longest, so the wait never overflows whatever longest is
+		if longest/2 < wait {
+			return longest
+		}
 		wait *= 2
 	}
 	return min(wait, longest)
