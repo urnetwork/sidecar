@@ -113,6 +113,11 @@ func (self *sendingWorld) usable() []netip.Addr {
 	return addresses
 }
 
+// Moves the clock one check interval and waits for the count'th check. The move comes once the check before was
+// counted (newSendingWorld's await, or the last recheck's), and the set counts a check only once its wait for the next
+// is armed, so the move always passes that wait's timer. FakeClock.AwaitTimers could tell the same thing here only by
+// counting every timer on the clock, the quota's and the breaker's among them; the set's own order says it for every
+// caller (loop_arming_test.go).
 func (self *sendingWorld) recheck(count int) {
 	self.t.Helper()
 	self.clock.Advance(self.settings.FcrdnsCheckInterval)
