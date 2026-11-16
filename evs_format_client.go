@@ -8,7 +8,8 @@
 //
 // The answer comes from the core state the composition keeps (SetFormat2Source), which reads the gates of the newest
 // core answer it holds; until one is set, or while it holds none, Format2Admitted answers false, which fails closed to
-// format 1.
+// format 1. A client whose EvsSettings.MaxFormat is 1 answers false whatever the gate says, so it writes, as it reads,
+// as a format-1 client does (EVS2-M10-30).
 //
 // On every leg but ios_extension. Safe for concurrent use.
 
@@ -42,5 +43,9 @@ func (self *EvsClient) Format2Admitted() bool {
 		defer self.stateLock.Unlock()
 		return self.format2Source
 	}()
+	// a client held to format 1 (EvsSettings.MaxFormat) writes as a format-1 one, which FS-72's rollback tests run
+	if self.settings != nil && self.settings.MaxFormat < 2 {
+		return false
+	}
 	return source != nil && source()
 }
