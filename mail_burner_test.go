@@ -447,7 +447,7 @@ func TestMailBurnerLabelsDrawFromTheEffectKey(t *testing.T) {
 func TestMailBurnerLocalPartAndSite(t *testing.T) {
 	for site, want := range map[string]string{
 		"https://shop.example.org/signup": "example", "example.org": "example", "EXAMPLE.ORG:8443": "example",
-		"https://news.example.co.uk": "example", "postmaster.example": "mail", "": "mail", "%%%": "mail",
+		"https://news.shop.test": "shop", "postmaster.example": "mail", "": "mail", "%%%": "mail",
 	} {
 		if got := mailBurnerLocalPart(site); got != want {
 			t.Errorf("%q: %q, not %q", site, got, want)

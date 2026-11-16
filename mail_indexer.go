@@ -34,26 +34,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A reader found a receiver or a record it alarms on (reading 8, reading 15; QD-534): SidecarId the receiver or the
-// record's signer, RepoId the repo, MailReceiverAlarm why.
-const SidecarEventMailReceiverAlarm SidecarEventKind = "mail_receiver_alarm"
-
-// Why a mail_receiver_alarm fired.
-type SidecarMailReceiverAlarm string
-
-const (
-	// Internet mail a receiver that is none of the network's mail indexers took, under team_mail: indexers.
-	SidecarMailReceiverAlarmUndesignated SidecarMailReceiverAlarm = "undesignated"
-	// A member scope's deposit from a receiver that is no consented device of the scope's member.
-	SidecarMailReceiverAlarmScope SidecarMailReceiverAlarm = "scope"
-	// A deposit ingest passed over or wrote as evidence unavailable: a wrong signer, evidence of another message, a
-	// depositor with no right there (MailIngestAlarm).
-	SidecarMailReceiverAlarmDeposit SidecarMailReceiverAlarm = "deposit"
-	// A mailcfg version a reader passed over: a creator that is not the push's signer, a signer that may not change
-	// the record (MailConfigAlarm; reading 15).
-	SidecarMailReceiverAlarmRecord SidecarMailReceiverAlarm = "record"
-)
-
 // Opens a designation's sealed services with the config generation's key, as ConfigState.SearchIndexersFor's argument
 // does; false where it cannot.
 type MailIndexerServices func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)
