@@ -417,8 +417,8 @@ agents cost no commit or leaf: a Delegation-admitted one reads at once by its re
   by re-wrapping but commits no Remove (owner decision 114)
 read-only page Workers at k = 1 and k = 2 send each refused statement directly (config
   statements, cosigns, Adds, approvals, admissions, wraps, GroupInfo): api, gkm and members
-  refuse every one, while the Worker's own SidecarRevoke lands, its HeadCheck counts as a
-  witness, its reads work and, under its r token alone, its ReaderKey and KeyPackage uploads,
+  refuse every one, while the Worker's own SidecarRevoke lands, its reads work (its HeadCheck
+  counts as a witness only from §4.6's C4) and, under its r token alone, its ReaderKey and KeyPackage uploads,
   path-only commit, resync and ack land and members adopt them (FS-106)
 a compromise revocation parks the closure P from its since_n, counting each record from its
   carrying entry, never its at: the revoked device, each device whose admission a device
@@ -1262,7 +1262,8 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
               receiver into a mailbox, fetches a rotated drop key, deposits and follows a                         mailbox at
               rotation, and every read, ReaderWrap, epoch, GroupInfo and recovery route                           M7-out
               refuses it; a depositor served an older, unexpired GenRotate after a removal
-              refuses to seal, with evs's gate off
+              refuses to seal, with evs's gate off; a deposit grant revoked or expired, the
+              sidecar still admitted, is refused at evs within §8.9's 5 s
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target

@@ -417,7 +417,8 @@ MG2     §8: network_acl_head, network_acl_ack, network_client.acl_subject_clien
 MG3-4   none
 MG5     §12: dns_*, network_dns_*; §13: network_tls_*, tls_connection_*; §16: approval_use (§12.8's DNS
         gate); §21's seven
-MG6     §7's Team tables; §8: network_acl_share; §17: network_bridge_share;
+MG6     §7's Team tables, network_team.scim_token_sha256 (nullable, §7.6) among them; §8: network_acl_share;
+        §17: network_bridge_share;
         §20: transfer_balance.tier, transfer_balance's team_credit index (built concurrently; pending
         from M4's dark comparator, behind escrow_draw_order, 19.11), stripe_meter_report,
         team_subscription (owner decision 199)
@@ -806,13 +807,15 @@ hardware   ops            new hardware with empty buckets passes §22's suite; r
                           re-seed uploads and GroupForms for absent repos, and opens api's log upload (§7.9)
 authority  token exchange re-seed mode (§7.8): until a network's log resumes, it mints only repo:<id>:admin,
                           for evs's /reseed and gkm's GroupForm, to the sidecars the restored rows list as that
-                          network's Owners and Admins; other requests get restore_required
+                          network's Owners and Admins; other requests get restore_required; the mode ends
+                          per network at the resumed marker of {acl_<networkId>}r (§7.9's held row)
            member devices upload the log entries they keep verbatim (POST /network/config/reseed, §7.9); api
                           checks their links, signatures, signer rules and agreement with the restored
                           network_acl_head, never re-sequencing, and adopts an entry at tip+1 only once devices
                           of two members hold it (one member's where the run's base admits uploading devices of
                           one member only, read_only ones not counting), so no lone device fills a position
-                          with a forged TICK; where none does, the log stops before it
+                          with a forged TICK; where none does, the log stops before it; at resume it checks
+                          the newest adopted base's head by descent, from the uploads' config pushes (§7.9)
            api            re-creates rev/ objects from its tombstones, and from each revocation as uploads and
                           the resumed log bring it, whichever is newer (§7.8)
            admin device   re-seeds the config repo, placed afresh (§11.8), from its mirror, which members
