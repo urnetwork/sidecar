@@ -22,10 +22,12 @@
 // The cursor passes only answered ids: it stops before the first unanswered one, and ids answered after it carry
 // their del rows, so a run that resumes skips those answered for good. Each checkpoint, at most once a
 // CheckpointInterval and at the end, writes the del rows and held ids since the last, then the job's cursor by CAS,
-// then the stored-byte delta as a usage batch whose id is the job's and the cursor range's (§20.6, producer
-// taskworker): each seg/ object's stored size once, when it is deleted or moves to held, a held object's later
-// DELETE reporting nothing, and slots, outside the stored count, nothing. A batch whose report fails is not retried:
-// under-billing, never double-billing.
+// then the stored-byte delta as a usage batch (§20.6, producer taskworker): each seg/ object's stored size once, when
+// it is deleted or moves to held, a held object's later DELETE reporting nothing, and slots, outside the stored
+// count, nothing. The batch's id is the job's and its position range's, §20.6's (scan id, cursor range) with the del
+// file sequence beside the cursor at each end: a checkpoint that frees bytes has written del rows, so its range is
+// its own even while the cursor stands before an unanswered id. A batch whose report fails is logged and not
+// retried: its bytes stay counted as stored until the nightly pass corrects the drift, and none is subtracted twice.
 //
 // Safe for concurrent use: each call holds its own state.
 
@@ -149,10 +151,17 @@ func dropDeleteResultLabel(outcome DropOutcome) string {
 	return "unknown"
 }
 
-// The cursor's bytes in a usage batch id: sequence u32 | row u32.
-func dropCursorBytes(cursor DropCursor) []byte {
-	encoded := binary.BigEndian.AppendUint32(nil, cursor.Sequence)
-	return binary.BigEndian.AppendUint32(encoded, cursor.Row)
+// Where the job stood at one end of a checkpoint: its cursor, and the next del file sequence.
+type dropUsagePosition struct {
+	cursor      DropCursor
+	delSequence uint32
+}
+
+// The position's bytes in a usage batch id: cursor sequence u32 | cursor row u32 | del sequence u32.
+func (self dropUsagePosition) bytes() []byte {
+	encoded := binary.BigEndian.AppendUint32(nil, self.cursor.Sequence)
+	encoded = binary.BigEndian.AppendUint32(encoded, self.cursor.Row)
+	return binary.BigEndian.AppendUint32(encoded, self.delSequence)
 }
 
 // One run's state.
@@ -554,6 +563,7 @@ func (self *dropDeleteRun) checkpoint(renew bool) error {
 		return nil
 	}
 	settings := self.deleter.settings
+	from := dropUsagePosition{cursor: self.reported, delSequence: self.delSequence}
 	for 0 < len(self.answers) {
 		chunk := self.answers[:min(len(self.answers), settings.FileRowCount)]
 		if err := self.files.Put(self.ctx, DropFileDel, self.delSequence, EncodeDropDelFile(self.request.RepoId, self.request.JobId, self.delSequence, chunk)); err != nil {
@@ -581,19 +591,18 @@ func (self *dropDeleteRun) checkpoint(renew bool) error {
 	}
 	self.leaseUntil = leaseUntil
 	self.result.Progress = progress
-	from := self.reported
 	self.reported = self.cursor
 	stored := progress.FreedByteCount + progress.HeldByteCount
 	self.freed, self.held = 0, 0
 	if 0 < stored {
-		self.report(from, progress.Cursor, stored)
+		self.report(from, dropUsagePosition{cursor: progress.Cursor, delSequence: self.delSequence}, stored)
 	}
 	return nil
 }
 
-// The stored-byte delta of one checkpoint, as a usage batch keyed by the job and its cursor range (§20.6): a failed
-// report is logged and dropped, under-billing and never double-billing.
-func (self *dropDeleteRun) report(from DropCursor, to DropCursor, storedByteCount uint64) {
+// The stored-byte delta of one checkpoint, as a usage batch keyed by the job and its position range (§20.6): a failed
+// report is logged and dropped, its bytes counted as stored until the nightly pass corrects the drift.
+func (self *dropDeleteRun) report(from dropUsagePosition, to dropUsagePosition, storedByteCount uint64) {
 	quota := self.deleter.host.Quota
 	networkId := self.request.NetworkId
 	if quota == nil || networkId == (sidecar.Id{}) {
@@ -603,9 +612,9 @@ func (self *dropDeleteRun) report(from DropCursor, to DropCursor, storedByteCoun
 	}
 	now := self.deleter.clock.Now()
 	batch := &sidecar.UsageBatch{
-		BatchId:     sidecar.NewDropUsageBatchId(connect.Id(self.request.JobId), dropCursorBytes(from), dropCursorBytes(to)),
+		BatchId:     sidecar.NewDropUsageBatchId(connect.Id(self.request.JobId), from.bytes(), to.bytes()),
 		Producer:    sidecar.QuotaProducerTaskworker,
-		WindowStart: now.Truncate(sidecar.DefaultQuotaUsageBatcherSettings().WindowTimeout),
+		WindowStart: now.Truncate(self.deleter.settings.UsageWindowTimeout),
 		// a stored-byte delta rides evs's meter, which storage counts on (QuotaUsageBatcher.AddStoredDelta)
 		Events: []*sidecar.UsageEvent{{NetworkId: connect.Id(networkId), Meter: sidecar.QuotaMeterEvs, StoredByteDelta: -int64(storedByteCount)}},
 	}
