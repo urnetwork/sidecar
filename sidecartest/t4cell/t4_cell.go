@@ -17,8 +17,8 @@
 // The figures are this host's on this leg: no surrogate figure is evidence for a device (owner decision 100), and
 // jetsam on a physical iPhone stays unmeasured.
 //
-// It imports only the standard library, so sdk's tests use it without taking on sidecartest's modules; sidecartest's
-// t4_cell.go names it for the sidecar module's own cells.
+// It imports only the standard library, so sdk's tests use it without taking on sidecartest's modules, and the sidecar
+// module's own cells (SEARCH-M10-38's phone cells among them) import it beside sidecartest.
 
 package t4cell
 
