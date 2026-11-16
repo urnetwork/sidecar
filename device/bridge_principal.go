@@ -20,7 +20,9 @@
 //
 // A share link's delegation, FriendsAndFamily under a ShareSigner, is §17.9's admit row (bridge_share.go): a
 // FriendsAndFamily contract takes that branch alone, and a Network one never does. An sdk provider verifies none until
-// C16 (§17.6's sdk exit NAT).
+// C16 (§17.6's sdk exit NAT); an sdk host after it verifies a Network contract's as a host does, and no
+// FriendsAndFamily one, since shares host only on sidecar-owned clients and its FriendsAndFamily stays Public
+// (BRIDGE-M8-01).
 
 package device
 
@@ -39,10 +41,12 @@ import (
 
 // connect.EgressHook: the contract's principal, or nil. See the file's comment.
 func (self *BridgeEgressPolicy) VerifyPrincipal(source connect.TransferPath, peer connect.Peer) *connect.BridgePrincipal {
-	if self.profile != BridgePolicyProfileHost {
+	switch {
+	case !self.profile.principals():
 		return nil
-	}
-	if peer.ProvideMode != protocol.ProvideMode_Network && peer.ProvideMode != protocol.ProvideMode_FriendsAndFamily {
+	case peer.ProvideMode == protocol.ProvideMode_Network:
+	case peer.ProvideMode == protocol.ProvideMode_FriendsAndFamily && !self.profile.publicRole():
+	default:
 		return nil
 	}
 	sessionKey, ok := peer.VerifiedClientPublicKey()

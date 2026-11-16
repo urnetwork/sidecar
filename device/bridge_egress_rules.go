@@ -715,9 +715,11 @@ func (self *bridgePolicyState) resolve(
 	reach *BridgeReachEvent,
 ) connect.EgressDecision {
 	deny := connect.EgressDecision{Verdict: connect.EgressVerdictDeny, PolicyGeneration: self.generation}
-	sdk := profile == BridgePolicyProfileSdkProvider
+	// the sdk provider before C16, which skips the principal and Sealed rows and rules 1 to 3 and 6; an sdk host takes
+	// them all, and keeps only the sdk provider's public role
+	sdk := !profile.principals()
 	mode := flow.ProvideMode
-	if sdk {
+	if profile.publicRole() {
 		if self.posture == PostureLegacy || (mode != protocol.ProvideMode_Network && mode != protocol.ProvideMode_Service) {
 			return connect.EgressDecision{Verdict: connect.EgressVerdictPass, PolicyGeneration: self.generation}
 		}
@@ -731,8 +733,9 @@ func (self *bridgePolicyState) resolve(
 	if protocolNumber == 0 {
 		return deny
 	}
-	// a host's FriendsAndFamily flow is a share's, which §17.9's row decides by its verified share alone
-	if !sdk && mode == protocol.ProvideMode_FriendsAndFamily {
+	// a host's FriendsAndFamily flow is a share's, which §17.9's row decides by its verified share alone; an sdk
+	// provider's, before C16 or after, passed above as Public
+	if mode == protocol.ProvideMode_FriendsAndFamily {
 		return self.resolveShare(settings, flow, protocolNumber, now, reach)
 	}
 
