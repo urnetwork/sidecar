@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v30; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v32; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -225,6 +225,13 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # activated grant's source rule, a share grant's network, inbox markers and prefix rule entries; api-13's gate
 # services; evs-6's member deposits; sock-1's dual registration by the listener's clock; and sock-3's ur/ ttl
 # by service.
+# v31, updated 2026-11-16 for the owner's answer QD-857 (ca-numbers-2026-11-m5-consecutive-failures), adds to
+# cert-1 network_tls_name_backoff, each URnetwork-zone name's failure backoff at a CA: the count of consecutive
+# failed authorizations since its last success there and the next allowed attempt time, kept until that success
+# or 8 d past that time.
+# v32, updated 2026-11-16 for §10's items (owner decisions 363 and 368), adds no row: gkm-1's GroupForm chain with
+# each form's auth pin, its signer's state when it signs; and gkm-5's Welcome pointers, keyed by recipient, group
+# and epoch, gkm/welcome/<sidecar_id>/<group_id>/<n>, each naming the KeyPackageRef its Add used.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -627,7 +634,7 @@ evs-30:
 gkm-1:
   service: gkm
   store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<network_id>/<delegation_id>
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer, and the signer's auth pin when it signs (owner decision 368)); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
   why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
   ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
   owner: §10.6
@@ -649,8 +656,8 @@ gkm-4:
   owner: §10.6
 gkm-5:
   service: gkm
-  store: gkm/<group_id>/welcome/<n> (the repo's metadata cluster), gkm/welcome/<sidecar_id>/<ref> (the first)
-  sees: Welcome objects and pointers; recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
+  store: gkm/<group_id>/welcome/<n> (the repo's metadata cluster), gkm/welcome/<sidecar_id>/<group_id>/<n> (the first)
+  sees: Welcome objects and pointers, the pointers keyed by recipient, group and epoch and naming the KeyPackageRef the Add used (owner decision 363); recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
   why: deliver joins
   ttl: until every recipient has acked, at most 90 d
   owner: §10.6
@@ -719,10 +726,10 @@ tls-4:
   owner: §13.9
 cert-1:
   service: certs (taskworker), api
-  store: network_tls_cert, network_tls_account, network_tls_custom_spend; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
-  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 8 days. Never the account key
+  store: network_tls_cert, network_tls_account, network_tls_custom_spend, network_tls_name_backoff; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
+  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 8 days; per URnetwork-zone name and CA, its failure backoff (the count of consecutive failed authorizations since its last success there and the next allowed attempt time). Never the account key
   why: order, renew and revoke certificates for device-held keys (owner decision 39; §13.8)
-  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 8 d; poll times 7 d
+  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 8 d; poll times 7 d; a name's failure backoff until a success at its CA, or 8 d past its next allowed attempt
   owner: §13.8
 cert-2:
   service: CAs (Let's Encrypt, GTS, ZeroSSL) and public CT logs
@@ -970,7 +977,7 @@ ext-12:
 | A breached server, where `ServiceSettings.scim_signer` names an indexer | Feeds that indexer SCIM removals no IdP sent, which it signs as `MemberRevoke`s | `GET /sidecar/scim-changes` answers only that indexer's client and only members outside the AdminSet (§7.6; owner decision 321); no reader is added (I-4); the designation is the owner's choice (owner decision 150) | A denial: members outside the AdminSet are removed on the server's unsigned word until an admin re-admits them |
 | A same-network peer, on a pair using P2P | Learns the other sidecar's public addresses through ICE | No network runs P2P until `SidecarProtocolSettings.EnablePeerP2p` is turned on, default off, at a later owner call (owner decision 296; D-PROTO-10); Required, Hello and HeadCheck hold across the move | Addresses shown to admitted peers of the same network; relays see no frames of that pair (connect-2) |
 | A compromised member device | Floods an indexer with searches, or probes repos through it | Per-requester rates and the indexer's own budget (§11.14, D-CORE-17); the indexer answers only repos the requester reads in its own evaluation | Load up to the requester's rate until it is revoked; nothing it could not read |
-| A network, or many, revoking, shredding or erasing within their own rates, by intent or in a wave | Drive one metadata cluster's P0 work past its write budget: 100 large Teams there, each shrinking every 5 minutes, ask ~2.9 TiB a day a drive of rotations, about twice the refill | Per-class rates per uploader, group and network; while it takes the refill, that cluster's pushes shed and its other classes held to what the write budget's bucket still holds, all restarting as it ends and ramping up as the bucket refills (§11.13); P0's excess forgiven, counted and shown against the drives' rating (owner decision 190); §19.8's P0 page within an hour and §19.10's runbook: capacity, placement, the networks driving it (owner decision 186) | While it lasts, that cluster's drives write past 0.8 DWPD and their 1 DWPD rating, and its other networks' pushes and evacuation stop; each wave's forgiven excess stays as wear, ~0.23 drive-writes for 6 hours of the one above (§11.21) |
+| A network, or many, revoking, shredding or erasing within their own rates, by intent or in a wave | Drive one metadata cluster's P0 work past its write budget: 100 large Teams there, each shrinking every 5 minutes, ask ~2.9 TiB a day a drive of rotations, about twice the refill | Per-class rates per uploader, group and network, gkm's counted in each process (§10.6); while it takes the refill, that cluster's pushes shed and its other classes held to what the write budget's bucket still holds, all restarting as it ends and ramping up as the bucket refills (§11.13); P0's excess forgiven, counted and shown against the drives' rating (owner decision 190); §19.8's P0 page within an hour and §19.10's runbook: capacity, placement, the networks driving it (owner decision 186) | While it lasts, that cluster's drives write past 0.8 DWPD and their 1 DWPD rating, and its other networks' pushes and evacuation stop; each wave's forgiven excess stays as wear, ~0.23 drive-writes for 6 hours of the one above (§11.21) |
 
 ### 2.11 Metadata retention
 
@@ -1049,7 +1056,7 @@ Decided (owner decisions 15, 108): recURd uses the main services; a dedicated is
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | A sidecar ships before §7's P0, or agents use an app's device token on AppAdmin routes before stage 3 | Medium | Critical | D-TRUST-3; stage 3 after app migration (owner decision 45) |
-| Unaudited cryptography: in-house MLS on draft ciphersuite 0x0010, post-quantum against passive adversaries only, the key ladder and its Ed25519 authority signatures, which a future forgery would make retroactive (§10.5), the storage format and path tokens, later the ZK mail proofs (owner decision 99) | Medium | Critical | mlswg vectors, differential tests (owner decision 43), fuzzing (owner decision 101); the security page discloses this row (owner decision 119) |
+| Unaudited cryptography: in-house MLS on draft ciphersuite 0x0010, post-quantum against passive adversaries only, the key ladder and its Ed25519 authority signatures, which a future forgery, by a forged admission or ReaderKey, would make retroactive (§10.5; owner decision 358), the storage format and path tokens, later the ZK mail proofs (owner decision 99) | Medium | Critical | mlswg vectors, differential tests (owner decision 43), fuzzing (owner decision 101); the security page discloses this row (owner decision 119) |
 | Without an ACL document, untagged sidecars reach providers' LAN, loopback, link-local and overlay addresses (owner decision 120) | High | High | Disclosed; any tier may write a policy (owner decision 73) |
 | A reaped or ephemerally expired Delegation-admitted agent, or a leaked reader seed, reads the config and tag repos until the Delegation's key drops; a leaked whole auth key also admits fresh agents, each with its own wraps, until the Delegation ends (owner decision 114) | Medium | High | Disclosed; `not_after` ≤ 90 d, 30 d for CI, replaced at each CI secret rotation and after a key drop; a `Suspend` or any non-reap revocation of one of its agents drops the key, and DelegationRevoke or a compromise revocation of one of them ends the Delegation, parking what it admitted from `since_n` (§7.9, §10.5); the revoke plan shows the three apart (§7.10) |
 | A site or Hurricane Electric outage stops both nameservers: every ur.network name, ACME DNS-01, DANE and, from M7, inbound mail (owner decision 123) | Medium | Critical | Accepted; paged at all hours from M5 (owner decision 143); an outage past a sender's retry window (14 h to 5 d, §15.3) bounces its mail |

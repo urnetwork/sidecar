@@ -139,7 +139,9 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	                             // reader alarms (RecordAlarm; §16); credential_store: an enrolled daemon found a
 	                             // readable network by_jwt in a host store (5.6), with no path or value, ur status
 	                             // naming the store kind; ct_alarm: §13's CT watch, Evidence[0] the leaf's
-	                             // SHA-256; mail_receiver_alarm: D-MAIL-15's (§15); bridge_alarm (§17)
+	                             // SHA-256; mail_receiver_alarm: D-MAIL-15's (§15); bridge_alarm (§17); key_changed:
+	                             // gkm serves under this sidecar's id a ReaderKey it never signed (§10.5's
+	                             // readerkey row; owner decision 358)
 	State       SidecarState
 	Reason      SidecarStateReason // Unenrolled: expired, refused, parent_lost, session_ended, keystore_lost;
 	                               // Revoked: signed (§18.5's GetStateReason)
@@ -175,7 +177,7 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	Evidence    [2][]byte        // head_alarm: my pin and the peer's or api's, as §6.5 encodes them (AuthPin,
 	                             // GroupHead, GenHead or RefHead); recovery_rebind at a void: the AuthPins
 	                             // at which keychain.wrap was sealed to the voided binding and re-sealed (5.9);
-	                             // ct_alarm: [0], the leaf's SHA-256
+	                             // ct_alarm: [0], the leaf's SHA-256; key_changed: [0], the foreign key's SHA-256
 	EvsAlarm    SidecarEvsAlarm  // evs_alarm, a closed set: missing_segment, tamper (a failed entry hash, AEAD,
 	                             // oid or statement), version_rule (off §11.7's rule), epoch_overdue (a writer
 	                             // 1 h past due_by_ms) or prefix_rule (from M6)
@@ -358,7 +360,8 @@ type MemberDevice struct { // Devices(): this member's admitted sidecars, this o
 	                     // removed its leaf as stale from every group this device is a leaf of that seated it,
 	                     // at least one) or revoked
 	AdmittedAt time.Time
-	LastChange time.Time // its newest leaf change in a group this device is a leaf of; zero: none seen
+	LastChange time.Time // its newest leaf change in a group this device is a leaf of, its credential's
+	                     // not_after less 90 days in that group's tree (§10.9); zero: none seen
 }
 type DeviceRevokeItem struct { // one row of a plan
 	Effect   string // park, void, stands, reseal (5.9's backup rule) or key (offered for KeyRevoke)

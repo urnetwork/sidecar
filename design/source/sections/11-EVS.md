@@ -1583,7 +1583,8 @@ cut       a CUT push (flag 512, format 2; admin, and in a directory repo the aut
           one staged record replaces its ref's set; an erasure that finds the set full cuts once pending ones
           complete, its first ERASE (closure, above) not waiting
 deposits  a depositor draws a random object key per deposit, seals the body under it, and puts HPKE-XWing(drop key
-          of g, object key) in a slot its deposit push introduces, so the drop private key, which every reader
+          of g, object key), info "UR evs 1.0 deposit" and aad repo_id || u64be(g) || slot_id (§10.5's HPKE-XWing),
+          in a slot its deposit push introduces, so the drop private key, which every reader
           derives from RK_g, opens a deposit only while its slot exists; CONSUME deletes the consumed entries and
           their slots; segments of consumed deposits go after 7 d
 after     readers mask in search, from its CUT or first ERASE, each document an erasure lists (11.14); readers and
@@ -1796,7 +1797,8 @@ budget   every metadata write spends its cluster's one budget: 0.8 DWPD and 50% 
 price    each write is priced before it is issued in drive bytes: the cost row above (§22.8's measurement) times k,
          the measured over the priced bytes of the last 10 min
 classes  P0, never queued, refused or paced, bounded only by its classes' own rate limits (§10.6's 60 commits an hour
-         per uploader and group; §7.9's per-network append limits; 11.12's ERASE rate), never by the budget: rev/,
+         per uploader and group, which each gkm process counts for itself; §7.9's per-network append limits; 11.12's
+         ERASE rate), never by the budget: rev/,
          proj/, repo/ lifecycle (deletion, restore), shred steps, ERASE, CUT and CLOSURE pushes within that rate and
          every slot rewrite, gkm Removes and REMOVE rotations, a staged delivery or claim of generation g+1 being P0
          only while gkm's newest verified state shows a shrink, an authorization expiry or a compromise retirement
@@ -3249,7 +3251,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | No writer able to map is online when an epoch is due, so creation stays blocked in a name-bearing repo, and dropped holders keep testing names past due elsewhere | Low | Medium | Writers alarm 1 h past due_by_ms, batched epochs included; `ur status` names the ref; any capable writer maps, a tail and a 2-min creation block landing it under steady creation |
 | A writer floods a ref with refusals, so others' refusals there answer 429 until a record lapses, at most about an hour for a seal's | Low | Low | 8 refusal records a ref, one added a second, each kept only until its statement's time bound plus 1 s; a refusal ends no other push's attempt, lease, part or seal; evs counts full lists; FS-1, FS-113 |
 | Counsel does not confirm owner decision 133's condition (shredding under a hold) | Low | High | §21's counsel item, before holds ship (M5) |
-| Site loss destroys repos no device mirrors | Low | High | Mirrors; coverage in `ur status`; re-seeding |
+| Site loss destroys repos no device mirrors | Low | Critical | Mirrors; coverage in `ur status`; re-seeding |
 | Read and subscription patterns leak more than 11.5 states | Medium | Medium | Whole small reads; 64 KiB alignment; publish the leak |
 | A client bug corrupts history, which the server cannot check | Low | High | Oid checks; replay; mirrors; export |
 | An import, hostile tenant or reconnect storm saturates the NVMe set | Medium | High | 11.13's write budget and fair share, part bounds, leases in Redis; §22.8; §19.9's triggers (owner decision 145) |
@@ -3266,7 +3268,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | The index is about twice the research's zstd sizes (~110-165 MB for five years at 100 messages a day) | Certain | Low | Phones fetch all only at "search more" or on Wi-Fi while charging; buckets ≤ ~5.4 MB |
 | A hold keeps the index files that existed at its placement, staged copies written to seg/ | Low | Low | Later churn is purged as usual (11.13's hold rule); holds are scoped |
 | Old or index-unaware clients leave commits unindexed | Medium | Low | Coverage, "not yet searchable", backfill within 10 min |
-| A purge bug deletes content a retained version needs | Low | High | Kind 5 adopted only through CAS bases and its header's push; I-EVS-9 and I-EVS-10 model-checked; the purge's reread; §19.11's observe mode first |
+| A purge bug deletes content a retained version needs | Low | Critical | Kind 5 adopted only through CAS bases and its header's push; I-EVS-9 and I-EVS-10 model-checked; the purge's reread; §19.11's observe mode first |
 | Users lose content they expected to keep | Medium | Medium | Versioning stays on below 64 MiB; history written while on stays; listings and `ur status` show the setting; a repo lock |
 | A versionless file replaced mid-download makes a slow reader restart | Medium | Low | The 60 s allowance; all files change only at roll-ups and erasures |
 | Pre-v1 devices in a migrated repo cannot read versionless files or the index | Medium | Low | FORMAT_UNSUPPORTED, never misread; §19.11's format2 gate |
