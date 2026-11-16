@@ -337,6 +337,15 @@ func (self *EvsEngine) appendMetDrops(networkId sidecar.Id, clusterId string, re
 	}
 }
 
+// appendMetDrops off the caller's path, counted as a step 8 is, so a test waits for it as for any step 8.
+func (self *EvsEngine) appendMetDropsAsync(networkId sidecar.Id, clusterId string, repoId sidecar.Id, met []*metDrop) {
+	self.stepEightCount.Update(func(count int) int { return count + 1 })
+	go func() {
+		defer self.stepEightDoneCount.Update(func(count int) int { return count + 1 })
+		self.appendMetDrops(networkId, clusterId, repoId, met)
+	}()
+}
+
 // One append through the sink, paid at P1 from networkId: one overwrite of the table. Logged when it does not land.
 func (self *EvsEngine) appendDrop(networkId sidecar.Id, clusterId string, repoId sidecar.Id, commit *DropCommit, seenAt time.Time) {
 	sink := self.dropSink()

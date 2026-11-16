@@ -1,12 +1,15 @@
 // A process's index of committed DROPs (DESIGN-DETAILS 10.2.7, 10.2.9; EVS2-M10-09, EVS2-M10-10): the parsed bodies of
-// the DROPs it has met, by the ref version each committed at, which 5h's fence and §11.9's serve rows read, and the
-// committed DROPs it has appended to their tables, so a push or read that meets a bit-5 window entry appends it
-// again only once a process.
+// the DROPs it has met, by the ref version each committed at, which 5h's fence and §11.9's serve rows read; per repo
+// what serving reads; and the committed DROPs it has appended to their tables, so a push or read that meets a bit-5
+// window entry appends it again only once a process.
 //
 //	bodies    a DROP's statement as received and its EvsDropHistory bytes, read from its record (a seal's from its
 //	          part 1, where the body rides whole: 10.2.5), checked against the statement's drop_sha256 and its shape
 //	          (sidecar.NewEvsDropLists) and kept by (cluster, repo, ref, version, push id), never changing once
-//	          committed; least recently used out past IndexByteCount, with what the list files keep (read_drop.go)
+//	          committed
+//	repos     per repo: drops/<repo>/_ as a GET cached TableCacheTtl, absent for a repo that never had a drop; its list
+//	          files, listed again each IndexRefresh; and the ids its running job's del and held files withhold
+//	bound     bodies and repos share one recency list, least recently used out past IndexByteCount
 //	appended  the (cluster, repo, ref, version) of each DROP whose append this process made, at most AppendedCount
 //
 // A record that is not the push its window entry names, or whose body does not hash to its statement's drop_sha256,
@@ -19,8 +22,10 @@ package evsservice
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -289,4 +294,119 @@ func (self *DropIndex) NoteAppended(clusterId string, repoId sidecar.Id, refId s
 		self.appendedOrder.Remove(oldest)
 		delete(self.appended, oldest.Value.(dropAppendedKey))
 	}
+}
+
+// What a process keeps of one repo's drops for serving (read_drop.go, read_withheld.go): its table and when it read
+// it, its list files and when it listed them, and the ids its job's del and held files withhold.
+type dropRepoState struct {
+	tableReadAt time.Time
+	// nil while drops/<repo>/_ is absent: the repo never had a drop
+	table *DropTableState
+
+	listedAt time.Time
+	lists    []*DropListFile
+	// the list files' bytes as read, which their index entry counts
+	listByteCount int64
+
+	withheldAt  time.Time
+	withheldJob sidecar.Id
+	withheld    map[DropScanId]bool
+}
+
+// One repo's serving state's key.
+type dropRepoKey struct {
+	clusterId string
+	repoId    sidecar.Id
+}
+
+// The repo's serving state, a copy the caller may fill and put back.
+func (self *DropIndex) repoState(clusterId string, repoId sidecar.Id) *dropRepoState {
+	if value, ok := self.get(dropRepoKey{clusterId: clusterId, repoId: repoId}); ok {
+		copied := *value.(*dropRepoState)
+		return &copied
+	}
+	return &dropRepoState{}
+}
+
+// Keeps the repo's serving state, counted at its list files' bytes and its withheld ids.
+func (self *DropIndex) putRepoState(clusterId string, repoId sidecar.Id, state *dropRepoState) {
+	byteCount := int64(256) + state.listByteCount + int64(len(state.withheld))*int64(sha256.Size+8)
+	self.put(dropRepoKey{clusterId: clusterId, repoId: repoId}, state, byteCount)
+}
+
+// The repo's drop table as a GET of drops/<repo>/_ cached TableCacheTtl, as repo/ is (DESIGN-DETAILS 10.2.9's step 0):
+// nil while it is absent, which is all a repo that never had a drop pays.
+func (self *DropIndex) Table(ctx context.Context, table *DropTable, cluster sidecar.BlobCluster, repoId sidecar.Id, now time.Time) (*DropTableState, error) {
+	state := self.repoState(cluster.ClusterId(), repoId)
+	if !state.tableReadAt.IsZero() && now.Sub(state.tableReadAt) < self.settings.TableCacheTtl {
+		return state.table, nil
+	}
+	read, err := table.Read(ctx, cluster, repoId)
+	if err != nil {
+		return nil, err
+	}
+	state.tableReadAt = now
+	state.table = nil
+	if read.Etag != "" {
+		state.table = read.State
+	}
+	self.putRepoState(cluster.ClusterId(), repoId, state)
+	return state.table, nil
+}
+
+// The repo's list files on the segment cluster, listed again each IndexRefresh, each read whole and held to its layout
+// (DESIGN-DETAILS 10.2.9's step 2). An unreadable file is an error: a read answers 503 rather than serve a version it
+// could not clear.
+func (self *DropIndex) Lists(ctx context.Context, segmentCluster sidecar.BlobCluster, clusterId string, repoId sidecar.Id, now time.Time) ([]*DropListFile, error) {
+	state := self.repoState(clusterId, repoId)
+	if !state.listedAt.IsZero() && now.Sub(state.listedAt) < self.settings.IndexRefresh {
+		return state.lists, nil
+	}
+	files, byteCount, err := ReadDropListFiles(ctx, segmentCluster, repoId, self.settings)
+	if err != nil {
+		return nil, err
+	}
+	state.listedAt, state.lists, state.listByteCount = now, files, byteCount
+	self.putRepoState(clusterId, repoId, state)
+	return files, nil
+}
+
+// The ids the repo's running job withholds (EVS2-M10-10's withheld-id set): every id its del files answer deleted,
+// held or packed and every id its held files keep, so no byte of one is served, a held one reading as a deleted one
+// (owner decision 184). Loaded through the table's job record from the segment cluster, again for another job or
+// each IndexRefresh; empty for a table with no job, which costs no read.
+func (self *DropIndex) Withheld(ctx context.Context, segmentCluster sidecar.BlobCluster, clusterId string, repoId sidecar.Id, table *DropTableState, now time.Time) (map[DropScanId]bool, error) {
+	if table == nil || table.Job == nil {
+		return nil, nil
+	}
+	state := self.repoState(clusterId, repoId)
+	if state.withheld != nil && state.withheldJob == table.Job.JobId && now.Sub(state.withheldAt) < self.settings.IndexRefresh {
+		return state.withheld, nil
+	}
+	files := NewDropFiles(segmentCluster, repoId, table.Job.JobId, self.settings)
+	withheld := map[DropScanId]bool{}
+	dels, err := files.ReadAll(ctx, DropFileDel)
+	if err != nil {
+		return nil, err
+	}
+	for _, del := range dels {
+		for _, answer := range del.Answers {
+			switch answer.Outcome {
+			case DropOutcomeDeleted, DropOutcomeHeld, DropOutcomePacked:
+				withheld[answer.DropScanId] = true
+			}
+		}
+	}
+	helds, err := files.ReadAll(ctx, DropFileHeld)
+	if err != nil {
+		return nil, err
+	}
+	for _, held := range helds {
+		for _, id := range held.Ids {
+			withheld[id] = true
+		}
+	}
+	state.withheldAt, state.withheldJob, state.withheld = now, table.Job.JobId, withheld
+	self.putRepoState(clusterId, repoId, state)
+	return withheld, nil
 }

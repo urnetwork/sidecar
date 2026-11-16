@@ -419,12 +419,7 @@ func (self *pushAttempt) run() *pushOutcome {
 	outcome := self.runSteps()
 	if met := self.metDrops; 0 < len(met) {
 		// the bit-5 entries step 4 met on cluster heads, appended again once a process, off the reply path
-		networkId, clusterId := self.networkId, self.cluster.ClusterId()
-		self.engine.stepEightCount.Update(func(count int) int { return count + 1 })
-		go func() {
-			defer self.engine.stepEightDoneCount.Update(func(count int) int { return count + 1 })
-			self.engine.appendMetDrops(networkId, clusterId, self.repoId, met)
-		}()
+		self.engine.appendMetDropsAsync(self.networkId, self.cluster.ClusterId(), self.repoId, met)
 	}
 	if outcome.committed && outcome.ownCommit == nil && outcome.committedPlace != nil && self.part == nil {
 		// a 5a retry or a reread found the push committed by another attempt: its record's list is the purge's
