@@ -1,14 +1,16 @@
 // The engine's lifecycle: construction, readiness, drain and close. It builds the outbound path's parts
 // from what its host gives: the send gate (SMTP-M9-10), quotas (SMTP-M9-11), MX and pre-TLS with the
-// sending set (SMTP-M9-12), and the preamble handler that runs them in order (preamble.go). The splice
-// and proof checks that serve a stream are SMTP-M9-13's, and the halt rule SMTP-M9-16's. It turns ready
-// only when everything those need is present, so no host can route mail to it early: in production
-// server injects no verifier until SMTP-M9-27's KeySet is pinned, and a nil verifier never turns ready
-// (R-SMTP-13); with no X-UR-Ref key, no gate or world, no Redis, or no sending address whose FCrDNS
-// holds, it is not ready either.
+// sending set (SMTP-M9-12), and the preamble handler that runs them in order (preamble.go); the streams,
+// connections, proof RPCs, leases, send log and outcomes (SMTP-M9-13: splice.go, connection.go,
+// proof_rpc.go, lease.go, send_log.go, outcome.go); and §14.8's ladder for cuts and bounces (SMTP-M9-16).
+// It turns ready only when everything those need is present, so no host can route mail to it early: in
+// production server injects no verifier until SMTP-M9-27's KeySet is pinned, and a nil verifier never
+// turns ready (R-SMTP-13); with no X-UR-Ref key, no gate or world, no Redis, or no sending address whose
+// FCrDNS holds, it is not ready either.
 //
-// Each probe reads ActiveHalts and holds every row it gives in the quota (SmtpQuota.ApplyHalt), in
-// memory and in Redis, so a halt survives Redis's loss and the memory holds what the store does (§14.9).
+// Each probe reloads the halts (halt_reload.go): it makes the quota's halts exactly ActiveHalts, in memory
+// and in Redis, so a halt survives Redis's loss, a lifted one leaves, and the memory holds what the store
+// does (§14.9).
 //
 // Every wait is on the host's sidecar.Clock, so a schedule moves them.
 
@@ -17,6 +19,7 @@ package smtpedgeservice
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 
 	"github.com/urnetwork/sidecar"
@@ -33,6 +36,14 @@ type SmtpEdgeDeps struct {
 	Dialer   sidecar.SmtpMxDialer
 	// The sending addresses' reverse names, for FCrDNS.
 	Ptr SmtpPtrResolver
+	// The dialing client's sidecar, for mail_send. nil answers every stream's preamble TRY_LATER.
+	Dialers SmtpDialerSource
+	// How the LAN splice reaches mxedge's LAN listener (lan_splice.go). nil dials TCP.
+	LanDial SmtpLanDial
+	// What §14.8's ladder reads for cuts and hard bounces, and §21's sink. Any nil leaves both unjudged.
+	Lookups SmtpReportLookups
+	Halts   SmtpHaltLookups
+	Sink    SmtpAbuseSink
 }
 
 // The engine. Everything here is safe for concurrent use.
@@ -54,6 +65,23 @@ type SmtpEdgeService struct {
 	issuer *smtpIssuer
 	// nil unless every part above and the gate and dialer are present.
 	preamble *smtpPreambleHandler
+	// nil with no store.
+	sendLog *smtpSendLog
+	// nil with no Quota on the host; leases then refuse every connection.
+	usage    *sidecar.QuotaUsageBatcher
+	leases   *smtpEdgeLeases
+	outcomes *smtpOutcomes
+	// nil unless the host has Quota and deps hold the ladder's reads and sink.
+	ladder   *SmtpHaltLadder
+	haltWork chan *smtpHaltWork
+	// the engine's own goroutines past run: the ladder's
+	workers sync.WaitGroup
+	// one per stream being served
+	streams sync.WaitGroup
+	// halt work the ladder finished, and waits a connection began for room, each counted once done, so a
+	// test can see one land
+	haltWorkCount *sidecar.MonitorValue[int]
+	heldWaitCount *sidecar.MonitorValue[int]
 
 	// What the last probe found.
 	storeReachable *sidecar.MonitorValue[bool]
@@ -65,6 +93,14 @@ type SmtpEdgeService struct {
 
 	stateLock sync.Mutex
 	draining  bool
+	closed    bool
+	// live connections by send_id, and what closes at each change
+	sendIdConnections  map[string]*smtpEdgeConnection
+	connectionsChanged chan struct{}
+	// streams reading their preamble, which Close ends: no connection holds them yet
+	preambleStreams map[io.ReadWriteCloser]bool
+	listener        *sidecar.SocketPlatformListener
+	handlerRemoves  []func()
 }
 
 // Starts the engine with no deps, so it is never ready: §14.9's signature, which a host that serves mail
@@ -110,6 +146,13 @@ func NewSmtpEdgeServiceWithDeps(
 		storeReachable: sidecar.NewMonitorValue(false),
 		probeCount:     sidecar.NewMonitorValue(0),
 		released:       make(chan struct{}),
+
+		sendIdConnections:  map[string]*smtpEdgeConnection{},
+		preambleStreams:    map[io.ReadWriteCloser]bool{},
+		connectionsChanged: make(chan struct{}),
+		haltWork:           make(chan *smtpHaltWork, settings.HaltEventMaxCount),
+		haltWorkCount:      sidecar.NewMonitorValue(0),
+		heldWaitCount:      sidecar.NewMonitorValue(0),
 	}
 	if deps != nil {
 		self.deps = *deps
@@ -135,17 +178,67 @@ func NewSmtpEdgeServiceWithDeps(
 			settings: settings,
 			frame:    sidecar.DefaultSmtpFrameSettings(),
 			clock:    self.clock,
+			gates:    host.GatesOrClosed(),
 			abuse:    host.AbuseOrUnloaded(),
 			gate:     self.deps.Gate,
 			quota:    self.quota,
-			mx:       newSmtpMxConnector(settings, self.clock, self.deps.Resolver, self.deps.Dialer, self.sendingSet, self.quota.DestinationCaps()),
+			mx:       newSmtpMxConnector(settings, self.clock, self.deps.Resolver, self.deps.Dialer, self.sendingSet, self.quota.DestinationCaps(), newSmtpLanDialer(settings, self.deps.LanDial)),
 			verifier: verifier,
 			issuer:   self.issuer,
 			metrics:  self.metrics,
 		}
 	}
+	if store != nil {
+		self.sendLog = newSmtpSendLog(cancelCtx, store, settings, self.clock, host.Metrics)
+	}
+	if host.Quota != nil {
+		usage, err := sidecar.NewQuotaUsageBatcher(cancelCtx, host, smtpUsageProducer, nil)
+		if err != nil {
+			self.closeParts()
+			cancel()
+			return nil, err
+		}
+		self.usage = usage
+	}
+	self.leases = newSmtpEdgeLeases(cancelCtx, host.Quota, self.usage, settings, self.clock)
+	if host.Quota != nil && store != nil && self.deps.Lookups != nil && self.deps.Halts != nil && self.deps.Sink != nil {
+		ladder, err := NewSmtpHaltLadder(host, &SmtpHaltLadderDeps{
+			Store:   store,
+			Lookups: self.deps.Lookups,
+			Halts:   self.deps.Halts,
+			Quota:   self.quota,
+			Sink:    self.deps.Sink,
+		}, settings)
+		if err != nil {
+			self.closeParts()
+			cancel()
+			return nil, err
+		}
+		self.ladder = ladder
+		self.workers.Add(1)
+		go self.runHalts()
+	}
+	self.outcomes = newSmtpOutcomes(settings, self.clock, host.Metrics, func(event *SmtpHaltEvent) {
+		self.haltEvent(event, nil)
+	})
 	go self.run()
 	return self, nil
+}
+
+// Closes what construction made before run started, on a construction that fails.
+func (self *SmtpEdgeService) closeParts() {
+	if self.sendLog != nil {
+		self.sendLog.close()
+	}
+	if self.usage != nil {
+		self.usage.Close()
+	}
+	if self.quota != nil {
+		self.quota.Breaker().Close()
+	}
+	if self.sendingSet != nil {
+		self.sendingSet.Close()
+	}
 }
 
 // Probes the store each HaltReloadInterval until the engine ends. A probe reads ActiveHalts, the
@@ -160,17 +253,8 @@ func (self *SmtpEdgeService) run() {
 			reachable = func() bool {
 				ctx, done := self.storeContext()
 				defer done()
-				halts, err := self.store.ActiveHalts(ctx)
-				if err != nil {
-					return false
-				}
-				if self.quota != nil {
-					for _, halt := range halts {
-						// a write that fails leaves the halt in memory, and the next probe writes it again
-						self.quota.ApplyHalt(ctx, halt)
-					}
-				}
-				return true
+				reloader := &smtpHaltReloader{store: self.store, quota: self.quota}
+				return reloader.reload(ctx) == nil
 			}()
 			testHookBarrier("smtpedge.probe.after", "")
 			if reachable {
@@ -217,22 +301,51 @@ func (self *SmtpEdgeService) Ready() bool {
 	return !self.draining
 }
 
-// See sidecar.Engine. With no connection path yet there is nothing in flight, so this returns at once;
-// SMTP-M9-13 waits here for connections up to DrainTimeout.
+// See sidecar.Engine: no new ticket or stream, then the connections finish, up to DrainTimeout on the
+// engine's clock, and what is left resets; its mail retries from its sender (§14.9). The open usage window
+// leaves at once.
 func (self *SmtpEdgeService) Drain() {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.draining = true
+	listener := func() *sidecar.SocketPlatformListener {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.draining = true
+		return self.listener
+	}()
+	if listener != nil {
+		listener.SetServing(false)
+	}
+	self.drainConnections()
+	if self.usage != nil {
+		self.usage.Drain(context.WithoutCancel(self.ctx))
+	}
 }
 
-// See sidecar.Engine.
+// See sidecar.Engine: the listener, every connection and every stream in its preamble end, and every goroutine
+// is joined. A second Close does nothing.
 func (self *SmtpEdgeService) Close() {
+	listener, removes, first := func() (*sidecar.SocketPlatformListener, []func(), bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.closed {
+			return nil, nil, false
+		}
+		self.closed = true
+		removes := self.handlerRemoves
+		self.handlerRemoves = nil
+		return self.listener, removes, true
+	}()
+	if !first {
+		return
+	}
+	for _, remove := range removes {
+		remove()
+	}
+	if listener != nil {
+		listener.Close()
+	}
+	self.closeConnections()
 	self.cancel()
 	<-self.released
-	if self.quota != nil {
-		self.quota.Breaker().Close()
-	}
-	if self.sendingSet != nil {
-		self.sendingSet.Close()
-	}
+	self.workers.Wait()
+	self.closeParts()
 }

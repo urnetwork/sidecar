@@ -46,7 +46,7 @@ sender MTA --TCP/25--> lb stream port (PROXY v1: sender address) --> mxedge rout
   §6 StreamOpen{ticket, MailIngress, early_data=ClientHello's first 2,048 B} on a Required stream (D-PROTO-6)
 receiver: tls.Server, no second 220; EHLO, MAIL, RCPT, BDAT/DATA; SPF, DKIM, DMARC and PTR as received
   --> deposit (§11.12): the body under its own key, that key in a slot to the drop key, a sealed header
-      with MailIngress and MailAuthEvidence --> 250 once durable
+      with MailIngress and MailAuthEvidence, a trailer of the body under that key --> 250 once durable
 reader: ingest; score and label from the sealed evidence (15.5); write the 15.7 layout
 
 report sender --TCP/25--> rpt.bringyour.com (two other lb interfaces) --> platform listener
@@ -421,7 +421,7 @@ mail_connection_record(network_id, start_time, byte_count, result) -- router ses
 | Spam loads devices; the edge filters no content | Medium | Medium | banner rejects, prefix caps, `max_streams`, burn |
 | A sender's many signatures, long identifiers or slow selectors tie up a receiver's authentication or overflow its evidence | Medium | Medium | 15.5's bounds: 8 DKIM signatures, 8 ARC sets, 64 queries, 30 s, 4 messages at once, 8,192 B of evidence; a cut check is no result, so it refuses no mail and strengthens no label (D-MAIL-14) |
 | A compromised receiver exposes mail in transit | Low | High | per-device keys, I-15, Team scopes, listed mail indexers and the undesignated-receiver alarm (D-MAIL-15) |
-| A site or Hurricane Electric outage stops both nameservers and with them every ur.network name, ACME, DANE and, from M7, inbound mail; a weekend outage can outlast senders' shorter retries (owner decision 123) | Medium | High | accepted; paged at all hours (owner decision 143); senders retry 14 h to 5 d (15.3) |
+| A site or Hurricane Electric outage stops both nameservers and with them every ur.network name, ACME, DANE and, from M7, inbound mail; a weekend outage can outlast senders' shorter retries (owner decision 123) | Medium | Critical | accepted; paged at all hours (owner decision 143); senders retry 14 h to 5 d (15.3) |
 | A direct MX publishes a mail indexer's address and depends on its uptime | Medium | Medium | two mail indexers, probes, `receiver_needed` |
 | A LAN host attacks submission or IMAP (owner decision 84) | Medium | Medium | TLS only off loopback (D-MAIL-11); `--listen` |
 | Phone search over older mail shows possible matches that lack the query: on 20 Newsgroups, about half of the top five for rare words | High | Medium | labeled possible; ranked by trigram overlap; confirmed against `i/`, a cached body or on open; desktops and indexers verify; a designated indexer's verified answer where one is online (owner decision 178) |

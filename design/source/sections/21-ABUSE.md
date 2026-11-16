@@ -109,7 +109,14 @@ It never reaches relay frames or dials (connect-2), inbound sender addresses (mx
 **Preservation holds (owner decisions 133, 184).** A hold keeps one network's in-scope records existing at placement until its kind's deadline (§2703(f): 90 days, renewable once; §2258A: 1 year), and collects nothing new. TTL sweeps skip those rows; `copied_rows` copies what drops or is overwritten on its own: rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks; owner decision 136); and api mirrors each hold as `hold/<network_id>/<case_id>/_` on the first metadata cluster (§11.8; owner decision 145), so §11.13's GC and §10.6's reconciler skip in-scope objects on every cluster, and evacuation moves a held network's batched records, a shredding repo's included, into packs and parcels that nothing deletes while the hold stands (evs-19). A drop of a path's history (§11.7) whose targets a hold covers still commits: it reads, lists and bills as finished, as an unheld drop would, and its dropped versions are served to no one, while its deletions wait until every covering hold has ended (§11.13); no answer, listing or bill tells the network that a hold exists, so a sealed order stays sealed (owner decision 184). A site loss voids what a hold kept on the file cluster, which has no off-site copy (owner decision 94); §19.10's restore returns its rows and tells counsel.
 
 ```text
-abuse_legal_hold(network_id, case_id, part, kind, scope, expire_time, copied_rows)
+abuse_legal_hold(network_id, case_id, part, kind, scope, place_time, report_time, renew_time, expire_time,
+                 copied_rows, copy_state)
+object   hold/<network_id>/<case_id>/_ is UTF-8 JSON of at most 1 KiB, unsigned, keys in this order:
+         {"version":1,"network_id":"<id>","case_id":"<id>","kind":"preserve_2703f"|"report_2258a",
+         "scope":"network"|["<repo_id>",...],"place_time_ms":<int>,"expire_time_ms":<int>}; a renewal rewrites
+         it If-Match, keeping place_time_ms; a body that does not parse, or an unknown version, kind or scope,
+         covers the whole network, and a record past expire_time_ms is no hold; renew_time set refuses a
+         second renewal, and report_2258a's deadline runs from report_time
 part     the primary key is (network_id, case_id, part): part 0 is the hold itself, and parts 1 and up each
          hold at most 16 MiB of compressed rows in copied_rows, so a busy network's tls-3 rows fit 21.16's
          seven tables
@@ -218,9 +225,9 @@ A semiannual report counts requests by instrument and country, accounts affected
 | Counsel rejects owner decision 133's condition or a hold kind | Low | High | asked before holds ship (M5) |
 | A drop used to destroy evidence before a hold arrives | Low | Medium | the 7-day window keeps every byte for a hold to cover (owner decision 183); `now` drops stay visible in push history (evs-12); held drops delete nothing (owner decision 184) |
 | False reports | Medium | Medium | reporter classes, host-level first, appeals |
-| Free Sybil networks | High | Medium | probation, verification, the send gate, creation limits, label-scoped halts |
+| Free Sybil networks | High | High | probation, verification, the send gate, creation limits, label-scoped halts |
 | A shared lb address is listed, for mail or a user name's phishing (§13.16), also blocking api and connect ingress there; with no separate mail pool to drain to and no warm-up (owner decision 124), enough listings degrade sending and the shared api and connect ingress together (accepted) | Medium | High | breakers; the address leaves the sending set (§14.6); per-domain and per-network reputation; 1 h kills; delisting |
-| Without a policy, untagged sidecars and their agents reach providers' LAN and loopback (accepted, disclosed; owner decisions 50, 120) | Medium | High | §2.18's disclosure; policies on any tier (owner decision 73); suspension |
+| Without a policy, untagged sidecars and their agents reach providers' LAN and loopback (accepted, disclosed; owner decisions 50, 120) | High | High | §2.18's disclosure; policies on any tier (owner decision 73); suspension |
 
 ### 21.18 Phasing
 

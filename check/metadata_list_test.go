@@ -67,42 +67,10 @@ type metadataListAddition struct {
 	list     string
 }
 
-// Design-records wrote every entry before these into §2.8's block with the fold of 2026-11-16 (owner decision
-// 252); each here waits for the next fold.
-var metadataListAdditions = []metadataListAddition{
-	{
-		// QD-857: the list's v31, for cert-1's name failure backoff
-		question: "ca-numbers-2026-11-m5-consecutive-failures",
-		block:    "# metadata_list.yml v30;",
-		list:     "# metadata_list.yml v31;",
-	},
-	{
-		question: "ca-numbers-2026-11-m5-consecutive-failures",
-		block:    "# services; evs-6's member deposits; sock-1's dual registration by the listener's clock; and sock-3's ur/ ttl\n# by service.\n",
-		list: "# services; evs-6's member deposits; sock-1's dual registration by the listener's clock; and sock-3's ur/ ttl\n# by service.\n" +
-			"# v31, updated 2026-11-16 for the owner's answer QD-857 (ca-numbers-2026-11-m5-consecutive-failures), adds to\n" +
-			"# cert-1 network_tls_name_backoff, each URnetwork-zone name's failure backoff at a CA: the count of consecutive\n" +
-			"# failed authorizations since its last success there and the next allowed attempt time, kept until that success\n" +
-			"# or 8 d past that time.\n",
-	},
-	{
-		// QD-857: certs keeps each URnetwork-zone name's failure backoff at a CA in Postgres, so a restart keeps it
-		question: "ca-numbers-2026-11-m5-consecutive-failures",
-		block:    "  store: network_tls_cert, network_tls_account, network_tls_custom_spend;",
-		list:     "  store: network_tls_cert, network_tls_account, network_tls_custom_spend, network_tls_name_backoff;",
-	},
-	{
-		question: "ca-numbers-2026-11-m5-consecutive-failures",
-		block:    "failed authorizations of the last 8 days. Never the account key",
-		list:     "failed authorizations of the last 8 days; per URnetwork-zone name and CA, its failure backoff (the count of consecutive failed authorizations since its last success there and the next allowed attempt time). Never the account key",
-	},
-	{
-		// QD-857: a success at the CA deletes the backoff, and the purge takes it 8 d past its time
-		question: "ca-numbers-2026-11-m5-consecutive-failures",
-		block:    "; spends 8 d; poll times 7 d\n",
-		list:     "; spends 8 d; poll times 7 d; a name's failure backoff until a success at its CA, or 8 d past its next allowed attempt\n",
-	},
-}
+// None waits now: design-records wrote every earlier entry's text into §2.8's block with the folds of 2026-11-16
+// (owner decision 252), QD-857's with §10's and QD-199's with §11's, so the list is the block alone until the next
+// answer.
+var metadataListAdditions = []metadataListAddition{}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {

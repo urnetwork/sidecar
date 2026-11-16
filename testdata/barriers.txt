@@ -620,6 +620,9 @@ barrier rpc.marked_pair_tick.before rpc_marked_pair.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go
+barrier search.cache.cut.applied state_search_delete.go
+barrier search.cache.erase.applied state_search_delete.go
+barrier search.cache.lost.applied state_search_delete.go
 barrier search.sync.fetched search_fetch.go
 barrier search.sync.replayed search_sync.go
 barrier search.sync.retired search_sync.go
@@ -633,6 +636,7 @@ barrier sidecar.attach.after sidecar_component.go
 barrier sidecar.attach.before sidecar_component.go
 barrier sidecar.authorize.after sidecar_gate.go
 barrier sidecar.authorize.before sidecar_gate.go
+barrier sidecar.drop.applied state_drop_apply.go
 barrier sidecar.generation.start.after sidecar_generation.go
 barrier sidecar.generation.start.before sidecar_generation.go
 barrier sidecar.generation.stop.after sidecar_generation.go
@@ -649,12 +653,20 @@ barrier smtp.pin_write.after smtp_pins.go
 barrier smtp.pin_write.before smtp_pins.go
 barrier smtp.tls_allowance_write.after smtp_tls_allowance.go
 barrier smtp.tls_allowance_write.before smtp_tls_allowance.go
+barrier smtpedge.debit_mail.after smtpedgeservice/connection.go
+barrier smtpedge.debit_mail.before smtpedgeservice/connection.go
+barrier smtpedge.halt_apply.after smtpedgeservice/halt.go
+barrier smtpedge.halt_apply.before smtpedgeservice/halt.go
+barrier smtpedge.join.after smtpedgeservice/attribution.go
+barrier smtpedge.join.before smtpedgeservice/attribution.go
 barrier smtpedge.probe.after smtpedgeservice/service.go
 barrier smtpedge.probe.before smtpedgeservice/service.go
 barrier smtpedge.report_accept.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_accept.before smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.before smtpedgeservice/report_intake.go
+barrier smtpedge.send_log.after smtpedgeservice/send_log.go
+barrier smtpedge.send_log.before smtpedgeservice/send_log.go
 barrier socket.admission.replay.after socket_admission.go
 barrier socket.admission.replay.before socket_admission.go
 barrier socket.registrations.after socket_registrar.go
@@ -826,6 +838,7 @@ secret recovery_ed25519_seed keys_recovery.go
 secret recovery_xwing_seed keys_recovery.go
 secret service_token api_routes_core.go
 secret share_secret socket_share.go
+secret smtp_x_ur_ref_key smtpedgeservice/attribution.go
 secret smtp_x_ur_ref_key smtpedgeservice/issue.go
 secret socket_ticket_seed socketsservice/ticket_keys.go
 secret spool_private_key record_spool.go

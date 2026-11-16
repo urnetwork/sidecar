@@ -51,3 +51,12 @@ func (self *SmtpBreaker) AwaitMedianReads(ctx context.Context, count int) error 
 func CheckSmtpGateForTest(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequest, now time.Time, settings *SmtpEdgeSettings) *SmtpGateDecision {
 	return checkSmtpGate(gate, abuse, request, now, settings)
 }
+
+// A whole report message as the intake parses it, for a test of the join alone.
+func ParseArfReportForTest(raw []byte, settings *SmtpEdgeSettings) (*SmtpArfReport, error) {
+	parts, err := parseSmtpReportMime(raw, settings)
+	if err != nil {
+		return nil, err
+	}
+	return parseSmtpArf(parts, settings)
+}
