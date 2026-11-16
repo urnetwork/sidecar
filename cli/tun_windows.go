@@ -24,11 +24,17 @@
 //	           egress_dial_sites_test.go pins at every dial site connect makes, so the daemon's own transport keeps the
 //	           host's route; its transports dial again, and each sync binds them to the default route's interface
 //	           again where it moved. The halves come off first and the binding last
+//	ipv6       under exits, IPv6's two halves on the adapter after IPv4's (urTunExitsIpv6Halves; QD-881), so the host's
+//	           IPv6 reaches the tun, where the bridge drops it and counts it, since no exit carries IPv6, while connect's
+//	           IPv6 sockets, bound to the IPv6 default route's interface (IPV6_UNICAST_IF), keep the host's route.
+//	           Where the host has an IPv6 default route, a refusal of IPv6's halves holds the exits as one of IPv4's
+//	           does; where it has none, IPv4's halves stand alone, since no IPv6 leaves the host to begin with, and the
+//	           next SetExits tries IPv6's again. A half another program's route holds holds the exits in either family
 //	carved     under exits, a host route for each IPv4 address the bridge carves that the host's own table reaches
 //	           only by its default route, an off-link resolver above all, by that route's next hop on its adapter
 //	           (tun_host_routes.go; QD-869; CreateIpForwardEntry2), as WireGuard for Windows routes an endpoint's /32.
 //	           They go on before the halves, follow each SetCarved and the default route where it moves, and come off
-//	           once no half is left
+//	           once no IPv4 half is left
 //
 // Only what this interface added is removed. Close takes the exits and the carved addresses' host routes off, reverts
 // the resolver, removes the routes and addresses and closes the adapter, which Wintun deletes with whatever was left
@@ -84,8 +90,9 @@ var (
 	// No default route leaves by another interface, so the daemon's own transport would have no way out.
 	errUrTunWindowsExitsNoDefault = errors.New("no default route leaves this host by another interface for the " +
 		"daemon's own transport to keep")
-	// Another program's route holds one of IPv4's halves, as another VPN's does.
-	errUrTunWindowsExitsHalfInUse = errors.New("another program's route holds half of IPv4's space, as another VPN's does")
+	// Another program's route holds one of IPv4's or IPv6's halves, as another VPN's does.
+	errUrTunWindowsExitsHalfInUse = errors.New("another program's route holds half of IPv4's or IPv6's space, as " +
+		"another VPN's does")
 	// A call of IP Helper's that this Windows does not have.
 	errUrTunWindowsCallMissing = errors.New("an IP Helper call is missing from this Windows")
 )
@@ -96,7 +103,7 @@ type urTunWindowsIpHelper interface {
 	// removing one that is not ERROR_NOT_FOUND.
 	AddAddress(luid uint64, address netip.Addr) error
 	DeleteAddress(luid uint64, address netip.Addr) error
-	// Adds or removes an IPv4 route on link through the adapter luid, at metric.
+	// Adds or removes a route of either family on link through the adapter luid, at metric.
 	AddRoute(luid uint64, prefix netip.Prefix, metric uint32) error
 	DeleteRoute(luid uint64, prefix netip.Prefix) error
 	// Adds or removes the IPv4 host route of address by nextHop through the adapter luid, at metric, or on link
@@ -438,8 +445,8 @@ func (self *urTunWindowsIphlpapi) DeleteAddress(luid uint64, address netip.Addr)
 	return urTunWindowsNetio(urTunWindowsDeleteUnicastAddress, unsafe.Pointer(row))
 }
 
-// The route row of an IPv4 prefix through luid, at metric, initialized as IP Helper's defaults have it: by nextHop, or
-// on link where nextHop is not valid.
+// The route row of a prefix of either family through luid, at metric, initialized as IP Helper's defaults have it: by
+// nextHop, or on link where nextHop is not valid or not of the prefix's family.
 func urTunWindowsRouteRow(luid uint64, prefix netip.Prefix, nextHop netip.Addr, metric uint32) (*windows.MibIpForwardRow2, error) {
 	row := &windows.MibIpForwardRow2{}
 	if err := urTunWindowsInitializeForwardEntry.Find(); err != nil {
@@ -450,9 +457,12 @@ func urTunWindowsRouteRow(luid uint64, prefix netip.Prefix, nextHop netip.Addr, 
 	prefix = prefix.Masked()
 	urTunWindowsSetSockaddr(&row.DestinationPrefix.Prefix, prefix.Addr())
 	row.DestinationPrefix.PrefixLength = uint8(prefix.Bits())
-	if !nextHop.Is4() {
+	if !nextHop.IsValid() || nextHop.Is4() != prefix.Addr().Is4() {
 		// on link: the unspecified next hop of the prefix's family
 		nextHop = netip.IPv4Unspecified()
+		if prefix.Addr().Is6() {
+			nextHop = netip.IPv6Unspecified()
+		}
 	}
 	urTunWindowsSetSockaddr(&row.NextHop, nextHop)
 	row.Metric = metric
@@ -769,8 +779,8 @@ type urTunWindowsInterface struct {
 	addresses   []netip.Addr
 	routes      []netip.Prefix
 	resolverSet bool
-	// what the exits put on, which SetExits(false) and Close take off: IPv4's halves, and connect's binding to the
-	// interfaces of the host's default routes
+	// what the exits put on, which SetExits(false) and Close take off: IPv4's halves and IPv6's (QD-881), and connect's
+	// binding to the interfaces of the host's default routes
 	exitsHalves []netip.Prefix
 	exitsBound  bool
 	boundIndex4 uint32
@@ -921,10 +931,12 @@ func (self *urTunWindowsInterface) SetResolver(resolver netip.Addr, zones []stri
 
 // Under exits, binds connect's sockets to the interfaces of the host's own default routes, puts on the host routes of
 // the carved addresses SetCarved last gave, by the default route as it is now, so one that moved takes them with it,
-// then puts IPv4's halves on the adapter, and has connect's transports dial again where the binding is new or moved,
-// so no socket made before it stays in the tun's way. It refuses, and leaves nothing on, where no default route leaves
-// by another interface or another program's route holds a half; a host route that will not go on refuses nothing, and
-// is SetCarved's to try again. Off exits, takes them off. Answers whether the default route rides the adapter.
+// then puts IPv4's halves on the adapter and IPv6's after them (QD-881), and has connect's transports dial again where
+// the binding is new or moved or a half went on, so no socket made before it stays in the tun's way. It refuses, and
+// leaves nothing on, where no default route leaves by another interface, another program's route holds a half of
+// either family, or the host has an IPv6 default route and IPv6's halves will not go on; where it has none, IPv4's
+// halves stand alone. A host route that will not go on refuses nothing, and is SetCarved's to try again. Off exits,
+// takes them off. Answers whether the default route rides the adapter.
 func (self *urTunWindowsInterface) SetExits(exits bool) (bool, error) {
 	rebound, defaultRoute, err := func() (bool, bool, error) {
 		self.stateLock.Lock()
@@ -949,7 +961,7 @@ func (self *urTunWindowsInterface) SetExits(exits bool) (bool, error) {
 		if index4 == 0 {
 			return false, false, errors.Join(errUrTunWindowsExitsNoDefault, self.clearExitsWithLock())
 		}
-		for _, half := range urTunExitsHalves() {
+		for _, half := range append(urTunExitsHalves(), urTunExitsIpv6Halves()...) {
 			if slices.ContainsFunc(table, func(held urTunWindowsRoute) bool { return held.dst == half && held.luid != self.luid }) {
 				return false, false, errors.Join(errUrTunWindowsExitsHalfInUse, self.clearExitsWithLock())
 			}
@@ -974,7 +986,28 @@ func (self *urTunWindowsInterface) SetExits(exits bool) (bool, error) {
 			self.exitsHalves = append(self.exitsHalves, half)
 			rebound = true
 		}
-		return rebound, true, nil
+		ipv6Added := false
+		for _, half := range urTunExitsIpv6Halves() {
+			if slices.Contains(self.exitsHalves, half) {
+				continue
+			}
+			err := self.system.ipHelper.AddRoute(self.luid, half, self.system.settings.RouteMetric)
+			if err == nil || errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
+				self.exitsHalves = append(self.exitsHalves, half)
+				ipv6Added = true
+				continue
+			}
+			if index6 != 0 {
+				return false, false, errors.Join(fmt.Errorf("IPv6's default route did not go on, and the host's IPv6 "+
+					"would leave outside the exits (%v)", err), self.clearExitsWithLock())
+			}
+			// no IPv6 leaves the host by a route of its own: IPv4's halves stand alone and the next call tries IPv6's
+			// again, and what of them would not come off is the next clear's
+			_ = self.clearHalvesWithLock(urTunExitsIpv6Halves())
+			ipv6Added = false
+			break
+		}
+		return rebound || ipv6Added, true, nil
 	}()
 	if rebound {
 		// a socket made before the binding takes the tun's way from here: connect's transports dial again, bound
@@ -983,8 +1016,8 @@ func (self *urTunWindowsInterface) SetExits(exits bool) (bool, error) {
 	return defaultRoute, err
 }
 
-// Sets the addresses the bridge carves (§17.4), the IPv4 ones counting, since the halves are IPv4's (QD-869). While a
-// half is on, the host routes follow at once, over the table as it reads now: one for each address the host reaches
+// Sets the addresses the bridge carves (§17.4), the IPv4 ones counting, since the host routes are IPv4's (QD-869): while
+// an IPv4 half is on, they follow at once, over the table as it reads now: one for each address the host reaches
 // only by its default route that holds none, those of addresses no longer carved, or that a route of the host's own
 // has come to reach, off, and those the default route moved from under replaced by its next hop now. Otherwise the
 // list waits for SetExits(true), and a host route a clear left on is tried off again. Answers what would not go on or
@@ -997,7 +1030,7 @@ func (self *urTunWindowsInterface) SetCarved(addresses []netip.Addr) error {
 	}
 	carvedAddrs := urTunCarvedIpv4Addrs(addresses)
 	self.carvedAddrs = carvedAddrs
-	if len(self.exitsHalves) == 0 {
+	if !self.ipv4HalvesWithLock() {
 		return self.setHostRoutesWithLock(nil, nil, nil)
 	}
 	if len(carvedAddrs) == 0 && len(self.hostRoutes) == 0 {
@@ -1043,20 +1076,13 @@ func (self *urTunWindowsInterface) setHostRoutesWithLock(carvedAddrs []netip.Add
 	return err
 }
 
-// Takes off what the exits put on, the halves first, keeping account of what would not come off, so a later call tries
-// it again; the carved addresses' host routes go once no half is left, since until then a lookup of one still needs
-// its own, and the binding goes then too, since a half without it would take the daemon's own transport.
+// Takes off what the exits put on, the halves first, IPv4's then IPv6's, keeping account of what would not come off,
+// so a later call tries it again; the carved addresses' host routes go once no IPv4 half is left, since until then a
+// lookup of one still needs its own, and the binding goes once no half of either family is, since a half without it
+// would take the daemon's own transport.
 func (self *urTunWindowsInterface) clearExitsWithLock() error {
-	var clearErr error
-	kept := []netip.Prefix{}
-	for _, half := range self.exitsHalves {
-		if err := self.system.ipHelper.DeleteRoute(self.luid, half); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
-			clearErr = errors.Join(clearErr, fmt.Errorf("the default route did not come off (%v)", err))
-			kept = append(kept, half)
-		}
-	}
-	self.exitsHalves = kept
-	if len(self.exitsHalves) == 0 {
+	clearErr := self.clearHalvesWithLock(self.exitsHalves)
+	if !self.ipv4HalvesWithLock() {
 		clearErr = errors.Join(clearErr, self.setHostRoutesWithLock(nil, nil, nil))
 	}
 	if self.exitsBound && len(self.exitsHalves) == 0 {
@@ -1064,6 +1090,30 @@ func (self *urTunWindowsInterface) clearExitsWithLock() error {
 		self.exitsBound, self.boundIndex4, self.boundIndex6 = false, 0, 0
 	}
 	return clearErr
+}
+
+// Takes off those of halves the exits put on, in their order, keeping those that would not come off, which a later
+// call tries again.
+func (self *urTunWindowsInterface) clearHalvesWithLock(halves []netip.Prefix) error {
+	var clearErr error
+	kept := []netip.Prefix{}
+	for _, half := range slices.Clone(self.exitsHalves) {
+		if !slices.Contains(halves, half) {
+			kept = append(kept, half)
+			continue
+		}
+		if err := self.system.ipHelper.DeleteRoute(self.luid, half); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+			clearErr = errors.Join(clearErr, fmt.Errorf("the default route did not come off (%v)", err))
+			kept = append(kept, half)
+		}
+	}
+	self.exitsHalves = kept
+	return clearErr
+}
+
+// Whether an IPv4 half is on, which the carved addresses' host routes stand by.
+func (self *urTunWindowsInterface) ipv4HalvesWithLock() bool {
+	return slices.ContainsFunc(self.exitsHalves, func(half netip.Prefix) bool { return half.Addr().Is4() })
 }
 
 // Takes the exits off, the carved addresses' host routes with them, removes the resolver's rule, the routes and the

@@ -25,7 +25,7 @@ message DirectoryCard {                     // d/<h>/<sidecar_id>, from format 2
   uint64 seq = 3;                           // +1 a version; readers refuse one not above the last they accepted
   AuthPin at = 4;                           // §7.9's pin, within 4,096 positions of the reader's state
   int64 written_millis = 5;
-  repeated Announcement items = 6;          // <= 16: at most one worker item, then runs; <= 16,208 B in all
+  repeated Announcement items = 6;          // <= 16: at most one worker item, then runs; <= 16,188 B in all
   uint32 version = 7;                       // 1
 }
 message RepoAnnouncement {                  // r/<h>/<repo_id>, from format 2

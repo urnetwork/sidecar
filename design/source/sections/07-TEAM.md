@@ -420,10 +420,12 @@ fold/<d>/<i>                       the i-th ConfigFold, i from 1 and d = i / 102
 service_settings, versioning_rules, bridge/block
                                    each one Signed record, verbatim
 bridge/share/<share_id hex>        a BridgeShareSigner; bridge/share-grant/<share_id hex> a BridgeShareGrant
-socket/key                         K_sock's file (§9)
+socket/key                         K_sock's file, one SocketKeyFile record (§8.8, §9.4)
 policy.hujson                      the policy's source bytes (§8.8)
 tags, groups, rules, names, labels, resolve
-                                   one deterministically encoded protobuf each
+                                   one deterministically encoded protobuf each: §8.8's ConfigAtomTable (tags
+                                   and groups), ConfigRuleTable, ConfigLabelTable and ConfigResolution, and
+                                   names' ConfigNameTable
 ConfigFold{after, folded_through, records: [ConfigRecord{id, n, time_ms, kind, body}]}
   id is the statement id (ids, below) for a STATEMENT and empty for a TICK; n and time_ms are the carrying
   entry's; kind is AuthEntry.kind, 1, 2 or 3; body is AuthEntry.body verbatim; records run in n order, the
@@ -656,8 +658,11 @@ entry 0   proj/<network_id>/00000000000000000000/_ holds the Signed Genesis byte
           written If-None-Match and kept for the network's life: retention never deletes n = 0; GET
           /network/config/projection?after=0 returns genesis beside the entries, to unadmitted clients too,
           and answers 503 while entry 1 exists without entry 0 (§2.8 api-7)
-exchange  issues repo:<config_repo_id>:admin from base 1 to that sidecar alone, which creates the repo
-          (§11.12), pushes the head and forms the group (§10.6); a race's loser is admitted like any device
+exchange  issues repo:<config_repo_id>:admin from base 1 to that sidecar, then the only config writer, which
+          creates the repo (§11.12), pushes the head and forms the group (§10.6); a race's loser is admitted
+          like any device; this is the first case of §8.5's rule that every config writer holds admin on the
+          config repo at evs and gkm, so that once that sidecar is gone a config writer re-forms the group
+          (§10.8), posts its ladder, and activates or re-places the repo after a restore (owner decision 352)
 enroll    before base 1, a tagged or ephemeral enrollment answers no_genesis
 ```
 

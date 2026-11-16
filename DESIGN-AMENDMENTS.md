@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 187 decided items and 209 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -15,8 +15,7 @@ Holds 187 decided items and 209 proposed ones, generated from the ledger on 2026
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§5 The Sidecar core](#s5) | 2 | 1 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 4 | 1 |
-| [§8 Access control](#s8) | 14 | 13 |
-| [§9 Abstract socket listeners and the scheduler](#s9) | 5 | 2 |
+| [§8 Access control](#s8) | 1 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 23 | 15 |
 | [§11 Encrypted versioned storage](#s11) | 25 | 37 |
 | [§12 DNS](#s12) | 7 | 0 |
@@ -152,114 +151,6 @@ Not folded (2026-11-16): the fenced blocks in §7.9, §8.8 and §17.8. Those rec
 <a id="s8"></a>
 ## §8 Access control
 
-### QD-044: In M's owner-bound repo, may M's device undo an admin's standing revoke, and can an admin revoke M's own device there?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22.*
-
-Recommend option 1. In an owner-bound repo, a later EvsShare to that subject from a consented device of the owner lifts a config writer's standing RepoRevoke, and the fold drops the row from AclRepo.revokes at that position. A RepoRevoke naming one of the owner's consented devices is refused, since SidecarRevoke and Suspend already remove a device.
-
-Changes: §8.8 RepoRevoke; §8.5; §22.5.
-
-Questions: `plan-ACL-owner-bound-standing-revoke.md`.
-
-### QD-055: Services with no database have no way to read rules or quotas
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19, §2, §20.*
-
-[plan-SOCK-gate-data] Add one internal read surface on api under `/internal/gate/`, a prefix the lb refuses from outside, each caller holding its own bearer from `secret_files`, verified by hash, as plan-TLS-internal-credentials and plan-DNS-internal-route-credential settle: `GET /internal/gate/projection/<network_id>?after=<n>` (the newest base and the entries after n, as `AuthEntry` bytes), `GET /internal/gate/rows/<network_id>/<rows_sha256>`, `GET /internal/gate/listen-facts/<network_id>` (`network_verified`, whether a `mail_network` row exists, each `network_tls_cert` row's name and expiry), and `GET /internal/gate/over-limit` (spent and storage-over networks apart). Gates verify entries' chain and signatures as from `proj/` (§8.9), so api stays a carrier. Refresh: projection on `{acl_<networkId>}v` and the 5-min poll, facts at most every 60 s per network off the inline path, over-limit every 5 s. On failure the last verified projection, facts and list keep serving. A process that has never loaded them stays not ready, and a `tls/` entry with no cached facts answers `unavailable`. §8.9 states this once for every gate, §19.4 and §19.16 list the routes and credentials, and api-13's service list gains sockets. Other gates' reads join this prefix under the same rules (plan-QUOTA-host-reach, plan-SMTP-report-seal-key, plan-ABUSE-review-held-names#2). [plan-QUOTA-host-reach] One internal surface on api, the one plan-SOCK-gate-data's option 1 builds, each call on the per-service credential plan-TLS-internal-credentials settles: read a network's limits; read the over-limit list, spent networks apart; post a usage batch; read a payer's draw-ordered balances with credit; mark a network spent. All off the inline path and cached, per I-12. `CountRate` and reservations go straight to Redis through `ServiceHost.Redis`. `quotahost.NewApiQuota` serves evs, gkm, sockets, tlsedge and mxedge; api, connect and taskworker keep `NewLocalQuota`. In a Postgres outage batches retry and drop as §20.6 states, and the lists go stale. §19.4, §19.16 and §20.14 name the routes.
-
-Changes: §8.9; §19.4; §19.16; §2.8 api-13; §20.14.
-
-Questions: `plan-SOCK-gate-data.md`, `plan-QUOTA-host-reach.md`.
-
-### QD-079: Folding the log drops suspensions and spent grants
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §16, §7, §9.*
-
-[plan-ACL-folded-grant-state#1] AclRows gains `repeated AclSuspension suspensions = 8`, with AclSuspension{bytes subject = 1; bytes suspend_id = 2; uint32 signer_class = 3; bytes signer = 4; uint64 at = 5}, class 1 owner or sponsor, 2 admin, 3 k of n. A fold keeps a Suspend until an Unsuspend of its own suspend_id lands, and signer_class settles §8.8's rule for who may lift it. hardDeny, §7.9's leaves rule and BridgeIdentity.suspended read it. §2.8 api-7's rows add it (I-18). [plan-ACL-folded-grant-state#2] A GrantActivate folds to an AclRule: rule_id = grant_id (32 B), new `bytes source_rule_id = 10` = the CanonicalAction's rule_id, src the subject's derived atom, targets and actions from grant_dst and grant_allow, expires = expires_millis, and a publish's app_mode and link_spki_sha256. compile drops the rule once source_rule_id names no AclRequestRule in this head (FS-14) or a GrantRevoke names it. A `sock:` entry in grant_dst holds §9.4's token path in hex, never an application name, since GrantActivate shows api the action. That path dies at the next K_sock rotation, so such a grant ends there, the closed direction, and is requested again; plan-SOCK-ksock-rotation should say so in its overlap rule. [plan-ACL-folded-grant-state#3] AclRows gains `repeated AclSpentGrant spent_grants = 9`, with AclSpentGrant{bytes grant_id = 1; int64 retain_until_ms = 2}. Every activated or revoked grant_id enters it. retain_until_ms is the latest not_after_millis among its decisions plus 60,000 (§8.6's skew). A GrantRevoke of an id no activation carried has no decisions to read, so it keeps retain_until_ms = 0, meaning the network's life; readers can verify only an admin's such revoke, so these stay few. compile drops a row once retain_until_ms is below the newest ConfigRecord.time_ms in the head, never a clock. §8.8's `refuse` row reads: a grant_id in spent_grants, in an active rule, or in an entry after folded_through, or one a GrantRevoke names.
-
-Changes: §8.8; §2.8 api-7; §16.8 grant_dst; §8.8 refuse.
-
-Questions: `plan-ACL-folded-grant-state.md#1`, `plan-ACL-folded-grant-state.md#2`, `plan-ACL-folded-grant-state.md#3`.
-
-### QD-080: No rule_id derivation, and hashing AclRule would move it at every K_sock rotation
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-A document rule's rule_id is 16 random bytes held in the sealed `rules` file, keyed by the SHA-256 of the rule's canonical form: RFC 8785 JCS of the parsed rule, lists sorted, `id` and `note` left out, socket names in clear. An unchanged rule keeps its id across saves and rotations. Any change of meaning makes a new id, so live grants under the old one end at that base (FS-14). Identical rules compile to one. compile refuses a rule with no row. An implicit-document rule takes the constant SHA-256("urnetwork-sidecar-v1/acl-implicit-rule" || 0x00 || u32be(index))[:16], with no table. An activated grant's rule_id is its grant_id. §8.5's `id` never enters rows (§8.7).
-
-Changes: §8.8.
-
-Questions: `plan-ACL-atom-and-rule-ids.md#3`.
-
-### QD-092: §8.10 scopes the Public refusal to networks with a head row; §20.8 refuses every declared client
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §20.*
-
-§20.8 wins. §8.10 takes "and Public ones from declared no-egress clients (§20.8)" out of the head-row Contract rule into its own sentence: CreateContract refuses them in any network, from M1. QUOTA-M1-04 refuses, and ACL-M4-01 calls the same check.
-
-Changes: §8.10.
-
-Questions: `plan-QUOTA-small-readings.md#14`.
-
-### QD-102: A `general` repo's drop key, slots and deposit rights rest on an inbox status nothing records
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §15, §11.*
-
-Option 1, widened to name the admin inbox. `RepoCreate{repo_id, kind, inbox}`: new `RepoInbox inbox = 4` in acl.proto and §8.8, 0 none, 1 group, 2 admin; valid only with kind general; 2 only from a config writer, once a network, and readers and api refuse a second. It lands with ACL-M2-06 before M2's freeze. Rotators set `drop_public_key` and `drop_not_after_ms` for a kind that takes deposits or when `inbox` is not 0 (KEYS-M2-20). Writers use §11.6's per-message slot rule for an inbox. `ur id group-create` files, beside the marker, `RepoGrant{role: deposit}` to `tag:mail` in a team network; an untagged receiver in a no-document network already reaches its deposit ref through the implicit document's `autogroup:member` write on `evs:*`. The marker is server-visible in the authorization log, so api-7's row adds it.
-
-Changes: D-KEYS-17; §8.8 RepoCreate; §2.8 api-7; §15.7; §15.8.
-
-Questions: `plan-MAIL-group-inbox.md`.
-
-### QD-136: D-MAIL-8 needs one member's device to deposit into another's mailbox, which §8.5 and §8.8 do not allow
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §20.*
-
-Option 1, narrowed. §8.5's `mailbox` deposit cell gains: any subject of the network that the projection marks `mail_send`. `vault` and `secret` stay as written, and §8.8's 'never in an owner-bound repo' stands. A member's device learns the mailbox from `mailcfg` and asks the token exchange for `repo:<id>:deposit`. §20's storage limits bound the harm, and the recipient's readers show 'from a member' by the push's signer (D-MAIL-8).
-
-Changes: §8.5 kind defaults; §2.8 evs-6 (disclosure).
-
-Questions: `plan-MAIL-member-deposit.md`.
-
-### QD-170: Rows cannot express client:, legacy, role: or principal: subjects
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §22.*
-
-Keep §8.4; rows name only what a writer can sign and never enumerate app clients. AclAtom gains `repeated bytes client_ids = 5`, `repeated bytes network_ids = 6`, `string role = 7` and `string principal = 8`; AclTarget gains `bytes client_id = 10`. A selector with no table name compiles to a derived atom, id = SHA-256("urnetwork-sidecar-v1/acl-atom" || 0x00 || kind || 0x00 || value)[:16], kind one byte (1 member, 2 sidecar, 3 client, 4 network, 5 role, 6 principal), unkeyed because each value is already server-visible. An app device with an owner row matches `user:`, `group:` and autogroups at the gate through `network_client_owner.member_id`, so app clients coming and going change no rows. A legacy client has no owner row and matches only `client:<id>`, `autogroup:untagged`, `autogroup:network` and `*`, and D-ACL-5's "naming it" is AclTarget.client_id under an unrestricted grant. `role:` and `principal:` match the identity getProvideRelationshipDetails's one query loads, never GetClientIdentity's Postgres fallback, so the gate stays under §22.5's DenyPostgresForTest. §2.8 api-7 adds these to atoms and targets (I-18).
-
-Changes: §8.8; §8.10; §2.8 api-7.
-
-Questions: `plan-ACL-nonsidecar-subjects.md`.
-
-### QD-172: Rows carry no tagOwners, though api must verify a tag owner's scoped admission
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-AclAtom gains `repeated bytes tag_owner_member_ids = 4`: a tag atom's tagOwners, expanded to member_ids at compile. A tag atom's `member_ids` stays empty, and its `sidecar_ids` lists the sidecars carrying it. `CanApplyTag` reads field 4, and subject evaluation never does. §2.8 api-7 adds tag owners (I-18).
-
-Changes: §8.8; §2.8 api-7.
-
-Questions: `plan-ACL-atom-and-rule-ids.md#4`.
-
-### QD-185: connect asks for a same-network reply as non-companion, so §8.10's rule refuses one-way grants' replies
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6, §22.*
-
-Leave connect alone. For a→b in a network with a head row, on the request's own `Companion` bit: (1) non-companion with reach(a,b): pass, class data. (2) non-companion without it but with reach(b,a): a reply. The gate returns that verdict from memory, then CreateContract runs `model.CompanionOriginExists` once, with the companion path's bounded origin wait, and an origin passes as class data. (3) Otherwise the witness exception gives class control, else NoPermission. (4) Companion: reach(b,a), as written. Step 2 must precede step 3, or a reply racing its origin sticks on a control contract. The gate's own decision stays under §22.5's DenyPostgresForTest; the origin read belongs to contract creation, runs only with a head row and only when reach(a,b) fails, and §22.5 says so. §6 states that sidecar RPC replies ride this rule. §8.3, §6.10.1 item 1, §6.11's citation of :912-927 and D-ACL-4 stop treating same-network replies as companions. §8.10 states the residual: while b's origin stands a holds a data contract to b, so a legacy b, which checks nothing, is reachable from a for that time, as under any reply path.
-
-Changes: D-ACL-4; §8.3; §8.10; §6.10.1; §6.11; §22.5.
-
-Questions: `plan-ACL-network-reply-contracts.md`.
-
-### QD-212: Q-EVS-3's v1 prefix rules have no record, field or path syntax
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §2, §7.*
-
-Specify through design-records at M6's entry, on RepoVersioning's pattern: a new access-log statement RepoPrefixRules {repo_id, rules (sealed)}, signed by a repo admin or a config writer (owner-bound: a consented device of its owner), rules sealed to the repo's current generation, so api and evs see only that rules exist. A rule is {subject atom, path prefix in whole components, write}. Readers fold it at each push's auth pin, and a version no rule allows is ignored and raises evs_alarm prefix_rule. Reserve the statement's number before M2's Gn-in, since §7.9's records freeze there, and add api-7's clause (I-18).
-
-Changes: §8.8; §11.22; D-ACL-11; §2.8 api-7.
-
-Questions: `plan-EVS1-v1-unspecified.md#5`.
-
-### QD-230: Who may file RepoCreate; the file's reading would break Team
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7.*
-
-The kind lets a member device, untagged, not ephemeral and not read_only, file RepoCreate of a general or record repo. A tagged or ephemeral sidecar may only under a rule giving it `admin` on `evs:*` or that repo, within §8.6's ceiling. team_record and mailcfg: a config writer, which no section names and these network-level repos need. Owner-bound kinds and directory stay as §8.8 says, config as §7.9's bootstrap. No `create` action is added, so a policy cannot stop a member creating repos.
-
-Changes: §8.8 RepoCreate.
-
-Questions: `plan-ACL-small-readings.md#4`.
-
 ### QD-265: §8.5's grant 1 lost its sidecars when D-ACL-20 narrowed autogroup:untagged
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
 
@@ -269,179 +160,7 @@ Changes: §8.5.
 
 Questions: `plan-ACL-team-grant1-src.md`.
 
-### QD-266: M2 versus M4: when §8.8's statements are checked and folded
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23.*
-
-Every §8.8 statement, GrantActivate, GrantRevoke, Suspend and Unsuspend included, is checked and folded at M2. M4 adds the filing flows, the contract gate and closing of open contracts. §8.19 and §23.4's M4 row say so.
-
-Changes: §8.19; §23.4.
-
-Questions: `plan-ACL-small-readings.md#1`.
-
-### QD-319: Grammar readings of §8.4 and §8.5 that ACL-M2-01 follows
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §9.*
-
-Accept all twenty as landed in `ParseAclPolicy`; design-records states reading 1 in §8.4's note and reading 3 in §8.5. Reading 1: a last segment that is exactly `*` takes every name below its prefix. Reading 2: a bare `*` dst, `sock:*` and a first-segment glob reach application sockets and `share/` only, never `tls/`, `smtp/` or §9.4's other reserved first segments. Reading 7's nesting bound of 4 runs before `encoding/json`.
-
-Changes: §8.4 note; §8.5.
-
-Questions: `acl-policy-small-readings.md`.
-
-### QD-359: Whether a `requests` rule may carry ports, audience, app mode, pin or expiry
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Keep `ip`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` and `expires` refused on a `requests` rule: a rule names who may ask and who answers, and the filed request names ports, audience and expiry. A Team narrows a rule through `dst`, `src` and `evidence`. Correct the ACL plan's "take a grant's fields" to match.
-
-Questions: `acl-policy-request-rule-fields.md`.
-
-### QD-367: What `GET /smtp/reports`' '§8 read' reads
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Read on the repo that holds the network mail key, by plan-SMTP-report-seal-key's rule: the same audience the sealed copy is sealed to.
-
-Questions: `plan-SMTP-small-readings.md#16`.
-
-### QD-392: autogroup:dst-owner for a socket means subjects holding `listen`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A socket's listeners are the subjects holding `listen` on it in the state at the statement's position, never live registrations. One owner or sponsor across them names that one; otherwise autogroup:admin.
-
-Questions: `plan-ACL-small-readings.md#5`.
-
-### QD-396: `evidence` compiles to the effective list; naming harness stays local
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A rule with no `evidence` compiles AclRequestRule.evidence to `evidenceDefault`, else device, presence and harness. Whether the rule itself names harness stays in AclLocalPolicy, read only by the signing daemon's harness_ok. api and readers check d.channel against the row.
-
-Questions: `plan-ACL-small-readings.md#7`.
-
-### QD-397: `admin` implies write and read
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`admin` on a repo implies write and read of that repo, within §8.6's ceiling, and a read_only sidecar still gets only r. A policy grant of `admin` therefore adds a key holder, which the preview names as a reader.
-
-Questions: `plan-ACL-small-readings.md#3`.
-
-### QD-410: public_name keeps its glob
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-AclTarget.public_name keeps the glob text, such as `*-preview`, matched by §8.4's rule that `*` stays within a label or segment. "Finer globs project to their literal prefix" applies only to socket_tokens.
-
-Questions: `plan-ACL-small-readings.md#10`.
-
-### QD-530: §4 never chose a HuJSON parser
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §4, §22.*
-
-In-repo. `aclStandardizeHujson` in sidecar/acl_hujson.go turns `//` and `/* */` comments and trailing commas into spaces, keeping byte offsets, refuses invalid UTF-8 and hands the result to encoding/json, on every leg. No new module and no dependencies.yml row. §22.6's compiler fuzz target covers it. A change to it counts as a format change, since every reader must parse one source alike.
-
-Changes: §8.5.
-
-Questions: `plan-ACL-hujson-parser.md`.
-
-### QD-532: The K_sock config file's path and bytes
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Path `socket/key` in the config repo, a single-record file beside `policy.hujson`, which plan-TEAM-config-head-format's layout should list under this name. Bytes: `SocketKeyFile{bytes current_key = 1; bytes previous_key = 2; int64 rotated_at_ms = 3}` in protocol/config.proto, keys 32 B, `previous_key` and `rotated_at_ms` set from a rotation until the head that clears them. A config writer creates the file with the repo.
-
-Changes: §8.8 Placement; protocol/config.proto.
-
-Questions: `plan-SOCK-ksock-rotation.md#2`.
-
-### QD-555: The change audit's command
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-The config repo's signed head history is the change audit. Read-only `ur acl log` lists each head's config_version, signer and time, and never runs through MCP (D-MCP-17). A rollback is `ur acl push` of an older source, a new head at a higher version (D-ACL-9). Rename freely if cli/UI.md turns up (plan-CORE-cli-ui-missing).
-
-Changes: §8.8; §8.17.
-
-Questions: `plan-ACL-small-readings.md#13`.
-
-### QD-561: CompileAcl's local output
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`CompileAclLocal(input *AclCompileInput) (*AclLocalPolicy, error)` runs on the same input as CompileAcl and holds what rows drop on purpose: exact socket globs, aliases, per-rule harness naming and names for previews. It is never serialized off the device. §8.17's Provides adds both names.
-
-Changes: §8.17.
-
-Questions: `plan-ACL-small-readings.md#12`.
-
-### QD-589: Ephemeral sidecars and autogroup:member
-*Settled by the agents from the design; work builds on it.*
-
-An untagged ephemeral sidecar is in autogroup:member and takes reach from rules naming it, while §8.6's ceiling alone limits its evs access. A tagged ephemeral sidecar gets no deposit from the implicit autogroup:tagged rule, which does not name it.
-
-Questions: `plan-ACL-small-readings.md#8`.
-
-### QD-592: Policy tests run on the writer's device only
-*Settled by the agents from the design; work builds on it.*
-
-The writer's device runs `tests` before signing, and a failure blocks the head. Readers do not rerun them at replay.
-
-Questions: `plan-ACL-small-readings.md#6`.
-
-<a id="s9"></a>
-## §9 Abstract socket listeners and the scheduler
-
-### QD-109: §9.7's `est` filter holds a listener with 11 or more dialers to about `max_streams` new streams per report interval
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Step 1 of §9.7 filters on `reported_inflight` alone, and `est` stays for step 3's comparison, so `busy` means the listener said it is full. §9.7's Fairness bullet says so. `PickSocketListeners`' filter and `TestEnoughShortDialersFillEstWithAListenerNearlyIdle` change by one line each.
-
-Changes: §9.7 step 1, Fairness bullet; §9.16.
-
-Questions: `sock-pure-est-reach.md`.
-
-### QD-122: During K_sock's overlap gates refuse every old token path, so the overlap protects nothing
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §2.*
-
-Keep the overlap at the gates. While the K_sock file holds a previous key, `CompileAcl` emits a second `AclTarget` under that key beside each `sock:` target, a pure function of head state, so gates' `MayListen` and `MayDial` need no change and readers recompile the same rows. A grant dropped by the rotating head drops on both paths. A requested grant's `sock:` entry is a literal token path (plan-ACL-folded-grant-state), so it gets no second path: it works while listeners register that path, through the overlap, and then its subject requests again. The first writer head at or after `rotated_at_ms` + 10 min clears the previous key. Listeners register both paths until `rotated_at_ms` + 10 min by their own clock, so sock-1's 10 min stays true even if no writer is online; a lister tries the previous key while the file holds it. api-7 then says rows hold both paths until that head, which links them for as long as those rows are kept, at least 30 days, not sock-1's 10 min.
-
-Changes: §9.4; §8.8; §2.8 sock-1; §2.8 api-7.
-
-Questions: `plan-SOCK-ksock-rotation.md`.
-
-### QD-130: What adds and removes * and @ A and AAAA, and whether a network's edge use shows in DNS at all
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §12, §7, §21.*
-
-Grant-driven, as §12.7 says. An edge grant is an active publish on dns:<host> in that zone, or the system publish: a network with a mail_network row and an approved smtp/25/mx listen grant, because mta-sts.<net>.<root> has no row of its own and resolves only through *. * has A and AAAA while the zone's set holds any host but @, or the system publish; @ has them while the set holds @. After each accepted POST /network/config/delta or /network/config/projection, once the object PUT has committed, api recomputes the set from S(n) and calls model.DnsSyncEdgeRecords, one journal write per transition and none otherwise. It is a separate transaction: §7.9 commits by conditional PUT, so the file's 'in the delta's transaction' does not exist. An hourly taskworker pass over §21.6's list reconciles both ways: it removes what expired and adds what a crash between the PUT and the write missed. Drop '(DNS)' from §9.4's FirstListen and LastUnlisten; they stay seams with no DNS consumer.
-
-Changes: §9.4; §12.7; §12.14.
-
-Questions: `plan-DNS-edge-record-trigger.md`.
-
-### QD-190: A 2-hour DATA connection cannot live on a `ur/` stream that §9.6 ends at 60 minutes
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6, §14.*
-
-Option 1. Grant length becomes per `ur/` service, default 60 min. `ur/smtpedge`: `grant_expire_time_millis` = issue + 125 min and `{svc_}` TTL 125 min, 2 h plus 5 min for the ticket's 30 s, pre-TLS and `SmtpOutcome`. Contracts keep §6.10.1's rule and roll at their 60-minute deadline while the pair lives. The edge's own timers still end the connection at §14.4's 30 min, or 2 h in DATA mode, so the longer grant adds no longer session. SOCK-M9-01 holds the constant.
-
-Changes: §9.6 SocketTicket and Edge Finds; §6.10.1 (unchanged rule, new TTL).
-
-Questions: `plan-SMTP-data-connection-lifetime.md`.
-
-### QD-241: `ur share add`'s default for an omitted --count
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: an omitted --count means uses = 1; --count=0 asks for unlimited until expiry and --count=n for n. State it in §9.9, and add that with uses = 0 only a Remove or expire_millis ends a share, since the end row's "a Done for each of uses Reserves" cannot fire.
-
-Changes: §9.9; §9.16.
-
-Questions: `g0-recheck-1-closed-item-text-errors.md#4`.
-
-### QD-369: Whether ejection's 'reporters from 2 networks' stays literal, since it fires only for ur/ names
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Keep the rule literal: `SocketReportersEject` requires reporters whose `dialer_network_id`s differ, in one function. Ejection and `ejections_total` then act on `ur/` names only, and other namespaces rely on exclusion, the backup ticket and the 45 s lease. Change nothing else. Option 2 can be revisited if `tls/` measurements show a real cost, as it is one function.
-
-Questions: `plan-SOCK-ejection-reporters.md`.
-
-### QD-425: Front matter says `ur share` must run, where §9.9 says the sharing sidecar
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A share is served while the sharing sidecar runs. Change "while `ur share` runs" at asm/data_front6.py:159 and asm/data_registers6.py:199, add "and an expiry (24 h by default, at most 30 days)" to D-SOCK-16's register row at asm/data_registers6.py:70, and rebuild DESIGN.md.
-
-Changes: front matter; Appendix A D-SOCK-16 summary.
-
-Questions: `g0-recheck-1-closed-item-text-errors.md#3`.
+Not folded (2026-11-16): line 1 of the worked example's ```hujson block in §8.5. The root package's `TestAclPolicyFixturesAreTheDesigns` holds that block byte for byte to testdata/acl/policy/worked_example.hujson, which is test data and a code track's: fix track team-grant1-via-self moves it with `acl_team_start.hujson`, and the block follows in the same change. The decision is folded as owner decision 344 and stated in §8.5's Grant 1 paragraph, with QD-867's `"via": ["autogroup:self"]`, which amends this item's text.
 
 <a id="s10"></a>
 ## §10 Group keys for evs: MLS and the GKM service
@@ -3501,26 +3220,6 @@ Questions: `details-13-lease-draw-size.md`.
 
 Partly folded (2026-11-10): §2.8 api-13's sizes landed with QD-657; §20.6's draw row waits for §20's fold.
 
-### QD-655: Should a gate service refuse for a network once it knows the authorization log moved and cannot verify the new entries, where QD-055 has the last verified state keep serving?
-*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §8 Access control. Also amends §9.*
-
-A sockets process answers unavailable for a network once it has had evidence for 5 s (§8.9's target for server gates) that the authorization log passed what it holds and it has not verified the new entries: the {acl_<networkId>}v event, a store answer naming a higher position, or after a resubscription a {acl_}v that differs from the one its state was loaded at. With no evidence, the last verified state serves without limit, so an api outage changes nothing (api is the log's only writer). This narrows QD-055's 'on failure the last verified projection, facts and list keep serving' to 'keep serving what nothing contradicts'. Section 13 specifies it for sockets; SOCK-M5-07 builds it; SockReg.tla checks the strict form.
-
-Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-07 builds it; QD-055 narrowed; §8.9 gates and §9.8 text (design-records).
-
-Questions: `details-13-gate-behind.md`.
-
-### QD-656: Should a tls/ or smtp/ Service pair live 15 minutes past its listener's last accepted registration, in place of its grant's expiry up to 24 hours?
-*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §9 Abstract socket listeners and the scheduler. Also amends §2.*
-
-A tls/ or smtp/ Service pair ({svc_<listener_client_id>} field <dialer_client_id>) is written by Find with a ttl of the lesser of the grant's remaining life and 15 min; a registration call that accepts an edge entry of the client renews its pairs, at most every 5 min a process; a removal leaves a floor that refuses a write allowed at an older position. A revoked, removed or dead listener's pairs end within 15 min whatever any sweep did. ur/ pairs keep §9.6's rule (60 min, refreshed per Find). sock-3's ttl text changes (design-records). SOCK-M5-18, SOCK-M5-05 and SOCK-M5-06 build it.
-
-Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06 build it; §9.6 edge Finds and §2.8 sock-3 ttl (design-records).
-
-Questions: `details-13-edge-pair-life.md`.
-
-Partly folded (2026-11-10): §2.8 sock-3's ttl landed with QD-657; §9.6's edge Finds wait for §9's fold.
-
 ### QD-003: A requested grant's GrantActivate still shows its prefix and port to api, which clean rows do not fix
 *Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 220. Folds into §16 The local MCP server and record primitives. Also amends §2.*
 
@@ -3731,24 +3430,6 @@ warp's services.yml gains a list of exact hosts the lb sends no X-Frame-Options 
 Changes: ops-lane follow-up: warp services.yml no-frame-options host list, warpctl/config.go addSecurityHeaders, config test; mmm.yml fragment line for sidecar.ur.io.
 
 Questions: `ops-m4-01-lb-frame-options.md`.
-
-### QD-679: Are these readings of §8.8's compile right, where CompileAcl had to fix a form the answers name without bytes?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §8 Access control.*
-
-The seven readings of §8.8's compile stand as written in acl-m2-04-compile-readings.md and as the code on sidecar does them: (1) the config head's tags, groups, rules, labels and resolve files are protocol/config.proto's ConfigAtomTable, ConfigRuleTable, ConfigLabelTable and ConfigResolution, none server-visible, so no §2.8 row; (2) a rule's canonical form is RFC 8785 JCS of one JSON object per rule with lists sorted as strings and id and note left out, a request writing its effective evidence, expires_default and max_expiry so a change of the document's defaults is a change of meaning (FS-14); (3) the implicit document's rule i counts its grants then its requests, and §8.5's tag:mail kind-default rules take ids from SHA-256("urnetwork-sidecar-v1/acl-kind-rule" || 0x00 || u32be(i)), i 0 the read and 1 the deposit; (4) network:* compiles to a derived atom of kind 4 over the one byte '*', naming no subject until §8.11's shares (ACL-M6-03); (5) compile drops an activated grant whose expiry is at or before the head's newest record time, and a member the log's rows no longer hold expands to nothing; (6) a grant allowing route adds its via subjects to its targets (QD-004); (7) AclEngine honors a rule until AclEngineSettings.ClockSkew (60 s) past its expiry by the local clock. design-records names readings 1 to 4 in §8.8 and §7.9's file list. No code change.
-
-Changes: §8.8 and §7.9's file list name readings 1 to 4 (design-records); no code change.
-
-Questions: `acl-m2-04-compile-readings.md`.
-
-### QD-680: Which task builds api's end of `/internal/gate/` (the projection and rows routes and their per-caller bearer check), and what body does the projection route answer?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §8 Access control.*
-
-A new ACL task builds api's end of QD-055's internal gate surface: GET /internal/gate/projection/<network_id>?after=<n> answering the Client route's body (TEAM-M2-13's NetworkConfigProjectionResult: {genesis, entries, rows, tip: {n, chain}, more}, each message verbatim in base64, paged, from the retention point when after is before it) as a thin wrap of model.ConfigLogSequencer.Read, and GET /internal/gate/rows/<network_id>/<rows_sha256> answering the ProjectionRows bytes verbatim (application/octet-stream), which the client holds to their hash; both behind a per-caller bearer verified by SHA-256 in constant time as QD-027 words it, with one caller-class vault file per gate service (connect first; the owner creates the files), the routes in server/api/api.go and route_authz.go, and the lb's refusal of the /internal/gate/ prefix from outside (W8's allow list). The listen-facts and over-limit routes join when SOCK and QUOTA need them. One encoding then serves devices and gates.
-
-Changes: new task ACL-M4-02: api's /internal/gate/ projection and rows handlers, bearer check, routes, lb prefix refusal; owner: one vault file per gate caller class, connect first.
-
-Questions: `acl-m4-01-internal-gate-routes.md`.
 
 ### QD-681: How does a reader verify a directory delta in a walked statement whose change list is under changes_root, when the read reply has no place for its inclusion proof?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
@@ -4038,15 +3719,6 @@ Changes: a KEYS task builds GkmAuthState and GkmReconcilerState in gkmservice; A
 
 Questions: `keys-m2-17-gkm-auth-state-owner.md`.
 
-### QD-719: Where does the config repo's own AclRepo row come from, since no RepoCreate files it and every gate reads it?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
-
-When a state's rows hold no AclRepo for the network's config repo, ACL's state build (NewAclState or ConfigState.Acl, acl_state.go) adds AclRepo{repo_id: Genesis.config_repo_id, kind: config} with no admins, so the kind's defaults answer it alike in every reader, gate and api, all of which hold the Genesis. No rows bytes change: base 1's compile stays empty and CompileAcl copies only the statements' repos, and a RepoCreate of kind config stays refused. The exchange's repo:<config_repo_id>:r and :rw, a forward_only client's config r (owner decision 197), evs's and gkm's HonorScope of config scopes, and evs's PUT of the config repo at bootstrap then answer from that row.
-
-Changes: ACL's state build adds the config repo's row from the Genesis (acl_state.go); the hand-built config rows in acl_evs_test.go's fixture and sidecartest/gkmschedule/world.go can go.
-
-Questions: `team-m2-15-config-repo-acl-row.md`.
-
 ### QD-721: Should EvsRepo's write take the path version its caller read, so a mail writer's append is a path CAS?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
 
@@ -4082,15 +3754,6 @@ A §21.10 record is sealed with HPKE-XWing as smtpedge's sealed report copies ar
 Changes: the production AbuseRecordMailer seals and sends (ABUSE-M5-03, -05); the owner creates abuse-mailbox.yml in vault and keeps the private key offline (an outward action).
 
 Questions: `abuse-m5-03-record-seal.md`.
-
-### QD-727: How does a verifier holding only rows check a decision's channel against evidenceDefault, for an action no requests rule governs?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
-
-AclRows gains repeated uint32 evidence_default = 10: the policy document's effective evidenceDefault (all three channels where the document names none), compiled at each base as each AclRequestRule's evidence list is (QD-396). Every verifier, the daemon, every server gate and every reader, checks a ruleless action's channel against it in §16.6's spendable: dns_set and dns_delete at POST /dns/records (§12.8) and bridge_expose approvals in ConfigState.CheckBridgeApproval. §2.8's api-7 names the field, since rows are server-visible (I-18); it shows api only which channels the network accepts by default, as each rule's row already does for grants. One spend check and one verdict everywhere (D-MCP-12), and a document's narrowing of evidenceDefault (to device alone, say) holds at the gates.
-
-Changes: AclRows.evidence_default = 10 (acl.proto; fenced by design-records); §2.8's api-7 names it (metadata_list.yml); SpendState reads it for a ruleless action, replacing SpendRefusalEvidenceUnknown's interim refusal.
-
-Questions: `mcp-m3-03-evidence-default-at-gates.md`.
 
 ### QD-729: Which SidecarActionKind and CanonicalAction fields carry §14.4's TL4 allowance for a recipient domain?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §14 The SMTP edge.*
@@ -4188,15 +3851,6 @@ QD-064 and QD-003 combine by field. local_port, weight and alpn leave CanonicalA
 Changes: §16.8's CanonicalAction fence: 24, 25, 34 reserved, sealed_detail = 38, version 4, CanonicalActionDetail (design-records); ApprovalRequest 14, 15, 16; MCP-M3-02's kind table and testdata/metadata/fields.yml.
 
 Questions: `record-m2-01-canonical-action-detail.md`.
-
-### QD-743: Should AclRepo's folded access log carry the RepoDelete's entry time and each removed admin's position, which readers need once those entries leave retention?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
-
-AclRepoDeletionRow gains int64 deleted_time_ms = 5, the RepoDelete entry's time_ms, and AclRepoAdminRow gains uint64 removed_at = 4: a RepoAdmin{remove} keeps the admin's row stamped with the removal's position instead of deleting it, until the next base's compile drops rows past retention. Readers, evs and taskworker then judge from rows alone: a RepoRestore within 7 days of a RepoDelete without now (§8.8) on any day of the window, taskworker's shred at 7 d 10 min after the RepoDelete's entry (§11.12), and a removed admin's right at a position before its removal (AclState.RepoAdminAt). Both values are already server-visible as their entries' times and positions, so §2.8's api-7 changes only in wording. Two additive fields before acl.proto freezes at M2.
-
-Changes: acl.proto's two fields (fenced by design-records); §2.8's api-7 wording (metadata_list.yml); ACL-M2-06's RepoRestore judgment, AclState.RepoAdminAt and taskworker's shred timing read the rows.
-
-Questions: `acl-m2-06-access-log-positions.md`.
 
 ### QD-744: Should §19.6's rule (3) hold a failed DELETE's key until every commit of it has answered and been reverted, since TLC finds two DELETEs on one key breaking FI-30 under the rule as written?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
@@ -4324,15 +3978,6 @@ Changes: DESIGN-DETAILS 12.2.3: the stop below an Unopened filing is bounded; a 
 
 Questions: `bridge-m2-02-unopened-generation-stall.md`.
 
-### QD-762: Where does the config repo's holders_shrunk_at live, now that its AclRepo row is the state's own and no rows hold it?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
-
-TEAM's configSetShrunkAt adds the config repo's row to the rows at the first entry that shrinks its key holders, AclRepo{repo_id, kind: config, holders_shrunk_at: n}, sorted in with the rest, and advances it there afterwards like any repo's; configAdvanceShrinks judges the config beside the rows' repos, and QD-746's shrunk_repo_ids may name it. ACL's state keeps a config row the rows hold and synthesizes one only where the rows hold none, with holders_shrunk_at 0 there. This amends QD-719: no rows bytes change at the row's creation, and the rows change only when there is a shrink to record.
-
-Changes: config_coverage.go: configSetShrunkAt and configAdvanceShrinks reach the config repo; acl_state.go's indexConfigRepo: the synthesized row's holders_shrunk_at is 0, not the state's position; the hand-built config rows leave sidecartest/gkmschedule/world.go, gkm_holders_test.go and gkmservice/reconciler_test.go.
-
-Questions: `acl-config-repo-row-shrunk-at.md`.
-
 ### QD-763: Since gkm/dkey/<delegation_id> names no network, what tells QD-675's sweep which network's rows an object answers to?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
 
@@ -4341,15 +3986,6 @@ A forwarding Delegation's reader key object is gkm/dkey/<network_id>/<delegation
 Changes: GkmDelegationKeyPath (gkm_paths.go) and its callers in the root and gkmservice; testdata/gkm/wrap_paths.json; the reconciler's per-network sweep of gkm/dkey/<network_id>/ (QD-675's second part); sidecar/metadata_list.yml gkm-1's store line; §10.6's object table through design-records.
 
 Questions: `core-owner-fixes-dkey-sweep-network.md`.
-
-### QD-764: Where do rows get a route rule's via subjects when it names no `via`, which QD-004 makes the advertisers its BridgeRoutes name, and how does a gate tell an exit rule's via subjects from its other targets?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
-
-BridgeRows gains repeated BridgeRouteRow routes = 2 {bytes route_id = 1; bytes advertiser = 2; repeated bytes route_rule_ids = 3;}, written at the fold for every approved route in force and applied by every verifier in log order after a base, as the egress mode is. AclState adds each advertiser to the via subjects of the no-via route rules its row names, which builds QD-004's second half. AclRule gains repeated AclTarget via = 12, so a rule's via subjects no longer share targets with its dial destinations and an internet rule that names a via holds to it at every gate. The server sees the ids §17.8 already describes, with an api-7 line.
-
-Changes: acl.proto and the bridge rows proto: BridgeRouteRow, BridgeRows.routes = 2, AclRule.via = 12, listed in protocol/design_unfenced_test.go's testFenceAdditions; the fold writing the routes rows, CompileAcl moving via subjects to via, AclState, MayRoute, AclEngine.AllowRoute, the contract gate's Reach, RouteRules and ExitRules; sidecar/metadata_list.yml api-7; BRIDGE-M4-16's subject rows for a no-via rule.
-
-Questions: `acl-m2-17-no-via-route-advertisers.md`.
 
 ### QD-765: Where should evs write which statement a slot object belongs to: object metadata, a field of EvsSlotObject, or nowhere?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
