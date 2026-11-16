@@ -613,9 +613,13 @@ func (self *evsPrefixJudge) allowWrite(ctx context.Context, repo *EvsRepo, ask *
 	if err != nil {
 		return err
 	}
+	paths := slices.Values(ask.paths)
+	if ask.drawn != nil {
+		paths = ask.drawn
+	}
 	decision := self.args.AllowWrite(&AclPrefixWrite{
 		RepoId: repo.repoId, RefKind: ask.refKind, RefMode: ask.refMode, RefName: ask.refName, Flags: ask.flags,
-		Paths: slices.Values(ask.paths), Sets: sets,
+		Paths: paths, Sets: sets,
 	})
 	if decision.Allowed {
 		return nil

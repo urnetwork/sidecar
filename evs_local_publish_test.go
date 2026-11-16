@@ -189,7 +189,7 @@ func TestEvsLocalCarriedNamesAPulledRefAsItsSource(t *testing.T) {
 		mainRefId: {RefId: mainRefId, Kind: protocol.EvsRefKind_EVS_REF_SHARED, Version: 7, Tip: m2, AppliedOrder: 3},
 		workRefId: {RefId: workRefId, Kind: protocol.EvsRefKind_EVS_REF_OWNED, Version: 2, Tip: w1, AppliedOrder: 4},
 	}}
-	carried, err := mount.repo.carried(context.Background(), workRefId, merge, []EvsGitOid{w1}, state)
+	carried, err := mount.repo.carried(context.Background(), workRefId, merge, []EvsGitOid{w1}, state, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestEvsLocalCarriedPastSixteenSources(t *testing.T) {
 	}
 	octopus := mount.commit("me@example.invalid", files, parents...)
 	mount.sync()
-	carried, err := mount.repo.carried(context.Background(), evsTestId("octopus ref"), octopus, []EvsGitOid{base}, state)
+	carried, err := mount.repo.carried(context.Background(), evsTestId("octopus ref"), octopus, []EvsGitOid{base}, state, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

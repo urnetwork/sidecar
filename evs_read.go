@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"slices"
 	"strings"
@@ -84,13 +85,16 @@ type evsPrefixReader interface {
 }
 
 // One write as the writer's local refusal is asked about it: the ref by its name and what the caller knows of its
-// kind and mode before any read, the push's flags, and each path's raw names joined by /.
+// kind and mode before any read, the push's flags, and each path's raw names joined by /: a list, or a sequence the
+// engine draws from and stops drawing at the first path it refuses (QD-801), which a git update measured from nothing
+// draws a tree's files through.
 type evsPrefixWriteAsk struct {
 	refName []byte
 	refKind protocol.EvsRefKind
 	refMode protocol.EvsRefMode
 	flags   uint32
 	paths   []string
+	drawn   iter.Seq[string]
 }
 
 // The effective version of a path whose newest event at evs this device ignores: its number, 0 for a path that is

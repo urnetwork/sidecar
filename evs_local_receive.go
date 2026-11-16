@@ -31,6 +31,16 @@
 // each ref reports its own status and `git push --atomic` fails before any write (receive.advertiseAtomic false). No
 // statement is sent again after a restart.
 //
+// Under a general repo's prefix rules (DESIGN-DETAILS 8.2.8, 16.2.7; QD-801) publish's own check answers before any
+// request to evs, the journal's update deleted and nothing sent: `ng <r> prefix rule: <path>`, the first refused file
+// in the tree reader's order; `prefix rule: pending` or `update` for a set this device cannot read, at the check or
+// where a 409's replay waits on one; `prefix rule: tainted paths` for a tainted token path it holds no name for; and
+// for a new shared ref, `prefix rule: no shared base: <path>` and `prefix rule: not a shared branch's tip: <path>`.
+// The path is the client's own, printed to its own git client and written to no log (I-13). An owned ref asks nothing.
+// Of one git push the tag updates are published after every branch update has been answered, each group
+// ReceiveRefCount at once, so a tag finds its proof in the tip index the branch's applied version wrote; the order
+// holds with or without a rule set.
+//
 // Desktop legs only. Safe for concurrent use.
 
 package sidecar
@@ -323,17 +333,23 @@ func (self *EvsGitReceiver) procReceive(ctx context.Context, session *EvsGitRece
 	}
 	statuses := make([]string, len(commands))
 	slots := make(chan struct{}, max(1, self.settings.ReceiveRefCount))
-	wait := sync.WaitGroup{}
-	for i, command := range commands {
-		wait.Add(1)
-		slots <- struct{}{}
-		go func() {
-			defer wait.Done()
-			defer func() { <-slots }()
-			statuses[i] = self.receive(ctx, session, command)
-		}()
+	// the branch updates first, every one answered, then the tag updates (DESIGN-DETAILS 8.2.8's tags after branches)
+	for _, tags := range []bool{false, true} {
+		wait := sync.WaitGroup{}
+		for i, command := range commands {
+			if strings.HasPrefix(command.gitRef, evsGitTagPrefix) != tags {
+				continue
+			}
+			wait.Add(1)
+			slots <- struct{}{}
+			go func() {
+				defer wait.Done()
+				defer func() { <-slots }()
+				statuses[i] = self.receive(ctx, session, command)
+			}()
+		}
+		wait.Wait()
 	}
-	wait.Wait()
 	for _, command := range commands {
 		for _, line := range command.lines {
 			fmt.Fprintln(stderr, line)
@@ -586,9 +602,18 @@ func (self *EvsGitReceiver) answerRefusal(ctx context.Context, refId Id, update 
 		})
 	}
 	evsError, isEvs := EvsErrorOf(err)
+	var ruleErr *EvsPrefixRuleError
 	switch {
+	case errors.As(err, &ruleErr):
+		// the prefix check refused before any request for this attempt: nothing planned, sealed or sent
+		drop()
+		return ng(evsGitPrefixRuleReason(ruleErr))
 	case errors.Is(err, ErrEvsGitTipMoved):
 		drop()
+		if wait := self.ruleWait(ctx, refId); wait != "" {
+			// the replay to the head waits on a rule set this device cannot read: no verdict, so no non-fast-forward
+			return ng("prefix rule: " + wait)
+		}
 		return ng("non-fast-forward")
 	case publishCtx.Err() != nil && ctx.Err() == nil:
 		if sent {
@@ -617,6 +642,48 @@ func (self *EvsGitReceiver) answerRefusal(ctx context.Context, refId Id, update 
 		drop()
 		return ng("refused: " + evsOneLine(err.Error()))
 	}
+}
+
+// The `ng` reason of a prefix refusal (DESIGN-DETAILS 8.2.8): the path is the client's own, quoted where it holds a
+// byte a status line cannot carry, and goes into no log (I-13).
+func evsGitPrefixRuleReason(ruleErr *EvsPrefixRuleError) string {
+	path := ruleErr.Path
+	if strings.ContainsFunc(path, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		path = fmt.Sprintf("%q", path)
+	}
+	switch ruleErr.Detail {
+	case EvsPrefixDetailPending:
+		return "prefix rule: pending"
+	case EvsPrefixDetailUpdate:
+		return "prefix rule: update"
+	case EvsPrefixDetailBase:
+		return "prefix rule: no shared base: " + path
+	case EvsPrefixDetailTag:
+		return "prefix rule: not a shared branch's tip: " + path
+	}
+	if path == "" {
+		return "prefix rule: tainted paths"
+	}
+	return "prefix rule: " + path
+}
+
+// What a ref's replay to its head waits on under the repo's prefix rules, as its `ng` names it: pending, update, or
+// empty where it waits on none.
+func (self *EvsGitReceiver) ruleWait(ctx context.Context, refId Id) string {
+	if err := self.engine.Replay(ctx, refId); err != nil {
+		return ""
+	}
+	ref, err := self.engine.GitRef(ctx, refId)
+	if err != nil {
+		return ""
+	}
+	switch ref.WaitingRules {
+	case EvsGitRuleWaitHeld:
+		return string(EvsPrefixDetailPending)
+	case EvsGitRuleWaitUpdate:
+		return string(EvsPrefixDetailUpdate)
+	}
+	return ""
 }
 
 // An error's text on one line, as a status line carries it.
