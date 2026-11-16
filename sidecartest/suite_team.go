@@ -379,7 +379,7 @@ func teamRowTwoForceOne(t testing.TB, net *TeamNet) {
 	net.Fold(true)
 }
 
-// §22.7's seats in a Team (owner decisions 144, 182; D-KEYS-23): LeafEntitledCount member devices, all but a few one
+// §22.7's seats in a Team (owner decisions 144, 182; D-KEYS-23): LeafEntitledCount member devices, nine in ten one
 // member's, then the 1,001st, which every reader ranks past the first 1,000 alike in the config group and the team
 // directory's: it reads the directory (ACL's directory default) and is no leaf there or in the config group, its
 // admission's signer writing its first wrap and committing no Add; a wrapped device's admission writes the new
@@ -476,8 +476,9 @@ func teamRowSeats(t testing.TB, net *TeamNet) {
 }
 
 // §20.4's Team config_admissions with no member-device cap (owner decision 144; QUOTA-M6-06's number): AdmissionCount
-// admissions, AgentCount of them tagged agents a Delegation admits and the rest member devices the first member's
-// device admits for every member, one member holding all past an even share, land at api and every reader; every
+// admissions, AgentCount of them tagged agents a Delegation admits and the rest member devices, each admitted by its own
+// member's first device, the Owner holding all past a quarter of an even share for each other member, land at api and
+// every reader; every
 // reader then counts AdmissionCount, the first 1,000 member devices by rank are leaf-entitled and the rest read by
 // wraps, and the cleanup list stays empty below 90% of a cap of twice the count. Readers start only at the bases a
 // fifth of the way apart and are compared there and at the end, since comparing every entry would cost the square.
