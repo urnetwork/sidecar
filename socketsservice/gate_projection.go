@@ -29,13 +29,19 @@
 // Evaluation (§8.10's sock row). A view reads its snapshot's AclState for the sidecar a request's token names,
 // the only subject a sockets caller has outside urnetwork-edge (QD-040): a listener's listen on its token path or
 // tls/ and smtp/ name, a dialer's dial by token path, and a listener's publish on its tls/ name's host, each a
-// grant whose rule id and expiry the verdict carries. Two checks wait on ACL-M5-01's AclGateView and refuse
-// meanwhile, the closed direction: an urnetwork-edge caller's tls/ dial and publish as autogroup:public (so every
-// edge Find of an ordinary tls/ name is denied), and the hard denies only servers know, abuse halts (§21). §13.9's
-// system publish, tls/443/mta-sts, is the engine's (system_publish.go): it asks a view only the receiver's own
-// smtp/25/mx listen, which stands in for the publish's tls/ grants, and never its tls/ listen, dial or publish.
-// urnetwork-edge itself holds no log, so its view refuses every check, and ur/ names are judged by no state
-// (namespace_ur.go).
+// grant whose rule id and expiry the verdict carries. An urnetwork-edge caller's tls/ dial and publish is a
+// visitor's Find, which runs as autogroup:public before any listener is picked (§13.5 step 4): it goes on wherever
+// a sidecar of the network holds a publish grant for the name, whatever the grant's audience, and is refused where
+// none does (QD-852; ACL-M5-01's AclState.MayEdgeFind, read on the view's own state so a Find stays at one
+// position). The audience and a raw link's pin are the listener's front's to judge from its own evaluation (§8.10,
+// §13.7), so a members visitor with no session reaches the front's edge login; each listener a Find picks is still
+// judged under its own sidecar. One check waits on a host that loads standings and is not made here: the hard
+// deny only servers know, an abuse halt (§21), which ACL-M5-01's AclGateView folds in for a host that has an
+// AbuseGate; a halted network's tls/ names stop at the kill set (§13.9) and its registrations at tls/'s listen
+// facts. §13.9's system publish, tls/443/mta-sts, is the engine's (system_publish.go): it asks a view only the
+// receiver's own smtp/25/mx listen, which stands in for the publish's tls/ grants, and never its tls/ listen, dial
+// or publish. urnetwork-edge itself holds no log, so its view refuses every check, and ur/ names are judged by no
+// state (namespace_ur.go).
 //
 // Safe for concurrent use.
 
@@ -799,10 +805,33 @@ func (self *socketProjectionView) MayListen(request *SocketGateRequest, now time
 	return self.verdict(self.snapshot.Acl.MayListen(subject, socket, now))
 }
 
-// See SocketGateView: dial for the request's sidecar on a token path. An edge's tls/ dial as autogroup:public is
-// ACL-M5-01's to judge and is refused until it lands; no other name is a sidecar's to dial (§9.4).
+// An urnetwork-edge caller's tls/ dial and publish, a visitor's Find as autogroup:public (§9.10, §13.5 step 4;
+// QD-852): allowed wherever a sidecar of the network holds a publish grant for the name, whatever its audience, the
+// verdict carrying that grant, and refused where none does. The front alone judges the audience (§13.7). A scope
+// host stands only for a scope the state holds, a member scope's only on its member's consented devices, as a
+// registration is held. Any other name is no edge's to dial here: smtp/ and the system publish are judged per
+// receiver, and a blinded name within its own network (§9.4).
+func (self *socketProjectionView) edgeFind(request *SocketGateRequest, now time.Time) *SocketGateVerdict {
+	if 0 < len(request.NameToken) || !strings.HasPrefix(request.Name, "tls/") {
+		return &SocketGateVerdict{}
+	}
+	if label, scoped := socketNameScope(request.Name); scoped {
+		scope, found := self.scopeOf(label)
+		if !found {
+			return &SocketGateVerdict{}
+		}
+		return self.verdict(self.snapshot.Acl.MayEdgeFindInScope(request.Name, scope, now))
+	}
+	return self.verdict(self.snapshot.Acl.MayEdgeFind(request.Name, now))
+}
+
+// See SocketGateView: dial for the request's sidecar on a token path, and an edge's tls/ dial as autogroup:public
+// (edgeFind); no other name is a sidecar's to dial (§9.4).
 func (self *socketProjectionView) MayDial(request *SocketGateRequest, now time.Time) *SocketGateVerdict {
-	if self.edgeCaller(request) || len(request.NameToken) == 0 {
+	if self.edgeCaller(request) {
+		return self.edgeFind(request, now)
+	}
+	if len(request.NameToken) == 0 {
 		return &SocketGateVerdict{}
 	}
 	subject, ok := socketGateSubject(request)
@@ -812,9 +841,12 @@ func (self *socketProjectionView) MayDial(request *SocketGateRequest, now time.T
 	return self.verdict(self.snapshot.Acl.MayDialSocket(subject, request.NameToken, now))
 }
 
-// See SocketGateView: publish for the request's sidecar on its tls/ name's host. A request with no sidecar, an
-// edge's before it has a listener, is ACL-M5-01's to judge as autogroup:public and is refused until it lands.
+// See SocketGateView: publish for the request's sidecar on its tls/ name's host. An edge's, before its Find has a
+// listener, is the network's as autogroup:public (edgeFind); any other request with no sidecar is refused.
 func (self *socketProjectionView) MayPublish(request *SocketGateRequest, now time.Time) *SocketGateVerdict {
+	if self.edgeCaller(request) {
+		return self.edgeFind(request, now)
+	}
 	host, found := strings.CutPrefix(request.Name, "tls/")
 	if !found {
 		return &SocketGateVerdict{}
