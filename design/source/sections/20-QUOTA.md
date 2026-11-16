@@ -318,7 +318,8 @@ note     §16.8's erasure entry, a new record, waits until the network is below 
 // carries the network's effective limits after network_sidecar_limit rows (NetworkSidecarLimits, 20.5), the
 // sidecar_abuse: directory_* keys among them, which §16.11's requesting daemons and directory readers apply
 // (D-QUOTA-11), so §21.7's tightening reaches them.
-// A refusal maps to 402 with x402 terms when a purchase lifts the limit, 429 with Retry-After when a
+// A refusal maps to 402 when a purchase lifts the limit, with x402 terms on api-hosted routes and upgrade:
+// true and no terms at evs, which cannot quote them (§11.20), 429 with Retry-After when a
 // window resets (server/controller/x402_controller.go:849; server/router/handler_utils.go:604-609),
 // else Error{RESOURCE_EXHAUSTED} (§6.5) or stream quota.
 type QuotaRefusal struct {
