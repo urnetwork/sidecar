@@ -13,4 +13,4 @@ func defaultMailReceiveSettings() *MailReceiveSettings {
 }
 
 // Nothing to adjust: the page Worker runs no receiver.
-func ApplyMobileMailSettings(settings *MailSettings) {}
+func applyMobileMailSettings(settings *MailSettings) {}
