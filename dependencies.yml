@@ -311,7 +311,7 @@ modules:
     leg: [client, engine, cli, test]
   - module: github.com/urnetwork/operator-core
     spdx: MPL-2.0
-    reason: the host contract between server and sidecar, Env and the interfaces ServiceHost aliases, and the Id the root's aliases on every leg (owner decision 251); a sibling replace
+    reason: the host contract between server and sidecar, Env and the interfaces ServiceHost aliases, and the Id the root's aliases on every leg but sidecar_http (owner decision 251, QD-856); a sibling replace
     leg: [client, engine, cli, test]
   - module: github.com/urnetwork/operator-core/coretest
     spdx: MPL-2.0
@@ -384,7 +384,7 @@ modules:
     leg: [engine, test]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
-    reason: connect's IP stack, which reaches the sidecar_http leg only through operator-core's Id, connect compiling for js/wasm (owner decision 251); a sibling replace
+    reason: connect's IP stack, kept out of the sidecar_http leg, which links neither connect nor operator-core (QD-856); a sibling replace
     leg: [client, engine, cli, test]
   - module: src.agwa.name/tlshacks
     spdx: X11

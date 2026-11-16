@@ -1,12 +1,16 @@
+//go:build !sidecar_http
+
 // The one clock the core and the engines read (§22.4, D-TEST-10, R-TEST-1). Every reading of time
 // and every wait goes through a Clock, so a test moves time with sidecartest's FakeClock and never
 // sleeps, and one host can run fast or slow beside the others, as FS-1's evs2 runs 150 ms ahead
 // through FakeClock.WithOffset (plan-TEST-clock-seam). ServiceHost.Clock carries an engine's,
 // SidecarSettings.Clock a Sidecar's, and nil in either is real time.
 //
-// The interface is operator-core's (owner decision 251), aliased here on every leg, sidecar_http
-// included, so it names no connect type. device/ may not
-// import the root, so it declares the same method set (device/clock.go), and one fake serves both.
+// The interface is operator-core's (owner decision 251), aliased here on every leg but sidecar_http,
+// which links no operator-core (QD-856): clock_http.go declares the same method set there, with this
+// file's RealClock and helpers, and TestClockTwinKeepsTheSharedSource holds the two equal. It names
+// no connect type. device/ may not import the root, so it declares the same method set
+// (device/clock.go), and one fake serves both.
 // connect's own timers stay real and connect does not change for this (X9): a schedule moves a link
 // with Net.SetLink, never connect's timers. Nor does a context's deadline stand in for a fake one,
 // as WithBlobDeadline says: a deadline on this clock is a timer on it.

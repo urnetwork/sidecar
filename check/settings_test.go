@@ -235,9 +235,25 @@ func defaultCheckSettings() *checkSettings {
 				why: "a ULID carries its minter's clock in its high bits by design (CODESTYLE's identifiers), so ids " +
 					"order by real creation time and never by a test's clock",
 			},
-			"clock.go time.Now":          {since: "2026-11-08", why: "RealClock is the root's real time"},
-			"clock.go time.After":        {since: "2026-11-08", why: "RealClock is the root's real time"},
-			"clock.go time.AfterFunc":    {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"id_http.go time.Now": {
+				since: "2026-11-15",
+				why:   "id.go's exception on its sidecar_http twin, which mints the same ULID (QD-856)",
+			},
+			"clock.go time.Now":       {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"clock.go time.After":     {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"clock.go time.AfterFunc": {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"clock_http.go time.Now": {
+				since: "2026-11-15",
+				why:   "clock.go's RealClock on its sidecar_http twin (QD-856)",
+			},
+			"clock_http.go time.After": {
+				since: "2026-11-15",
+				why:   "clock.go's RealClock on its sidecar_http twin (QD-856)",
+			},
+			"clock_http.go time.AfterFunc": {
+				since: "2026-11-15",
+				why:   "clock.go's RealClock on its sidecar_http twin (QD-856)",
+			},
 			"device/clock.go time.Now":   {since: "2026-11-08", why: "device.RealClock is the device role's real time"},
 			"device/clock.go time.After": {since: "2026-11-08", why: "device.RealClock is the device role's real time"},
 			"device/clock.go time.AfterFunc": {

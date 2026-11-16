@@ -261,11 +261,13 @@ func (self *repository) iosExtensionModuleFindings(t testing.TB) []string {
 	return findings
 }
 
-// §4.7, §18.10: a file of this repository that the sidecar_http leg compiles imports no connect or
-// gVisor package itself, nor one of the sctp fork that lives in connect's tree. The leg does link connect,
-// through operator-core's Id, which the root's Id aliases on every leg (owner decision 251), so the rule
-// reads each compiled file's own imports, not the leg's closure, and a file that names connect directly
-// still fails.
+// §4.7, §18.10 (QD-856): the sidecar_http leg's closure holds no connect or gVisor package, nor the sctp
+// fork that lives in connect's tree, nor operator-core, which imports connect: the page Worker runs no
+// engine and takes no Env, and the root's Id is its own type on this leg (id_http.go), so nothing there
+// needs any of them. Each is matched by the module the package comes from. The seam had read each
+// compiled file's own imports instead, the leg linking connect through operator-core's Id (owner decision
+// 251), which QD-856 amends for this one leg; that reading stays beside the closure's, since it names the
+// file of this repository that brings a refused package in.
 func (self *repository) sidecarHttpFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
@@ -275,7 +277,13 @@ func (self *repository) sidecarHttpFindings(t testing.TB) []string {
 			continue
 		}
 		for _, listed := range self.closure(t, leg) {
-			if listed.Module == nil || !underPath(firstPartyBase(listed.Module.Path), sidecarBasePath) {
+			if listed.Module == nil {
+				continue
+			}
+			if sidecarHttpRefuses(listed.Module.Path) {
+				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
+			}
+			if !underPath(firstPartyBase(listed.Module.Path), sidecarBasePath) {
 				continue
 			}
 			for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
@@ -292,8 +300,7 @@ func (self *repository) sidecarHttpFindings(t testing.TB) []string {
 				}
 				for _, spec := range parsed.Imports {
 					importPath := strings.Trim(spec.Path.Value, "\"`")
-					base := firstPartyBase(importPath)
-					if underPath(base, connectBasePath) || underPath(importPath, sctpBasePath) || underPath(importPath, gvisorBasePath) {
+					if sidecarHttpRefuses(importPath) {
 						findings = append(findings, findingf("%s compiles %s, which imports %s", leg.name, relativePath, importPath))
 					}
 				}
@@ -302,6 +309,14 @@ func (self *repository) sidecarHttpFindings(t testing.TB) []string {
 	}
 	slices.Sort(findings)
 	return findings
+}
+
+// Whether the sidecar_http leg links nothing under a path, a module's or a package's: connect, the sctp
+// fork in its tree, gVisor and operator-core (QD-856).
+func sidecarHttpRefuses(path string) bool {
+	base := firstPartyBase(path)
+	return underPath(base, connectBasePath) || underPath(base, sctpBasePath) || underPath(base, gvisorBasePath) ||
+		underPath(base, operatorCoreBasePath)
 }
 
 // R-MAIL-13: the leg's closure holds none of sidecarHttpRefusedMailModules, so a mail_ file that links
