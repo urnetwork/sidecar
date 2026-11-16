@@ -6,9 +6,14 @@
 //	register  makeCredential: a non-resident ES256 credential under a random user id, client data a webauthn.create;
 //	          the authenticator data must carry UP, UV and the attested credential, its rp id hash ur.io's; the key's
 //	          COSE point becomes a SEC 1 one (QD-445). The handle's attestation is KeyRegister.attestation's map
-//	          (QD-730): the JSON this client hashed as clientDataJSON, beside a fmt none attestation object over the
-//	          authenticator data, as a WebAuthn client asked for none conveyance gives: the authenticator's statement
-//	          is dropped and its aaguid zeroed, since no release pins roots to check one against (QD-137)
+//	          (QD-730): the JSON this client hashed as clientDataJSON, beside the attestation object the
+//	          authenticator answered, its fmt, its statement and its authenticator data as given (QD-885), where the
+//	          format is one §16.6 names: packed, tpm, android-key or apple. The registering device's check then
+//	          refuses a statement that does not verify and labels one that does, asserted until a release pins its
+//	          root and attested from then on with no second registration, so the key's model and its vendor's
+//	          attestation certificate ride in the registration. An authenticator that answered fmt none, or a
+//	          format §16.6 does not name, whose statement no check here reads, gets what a WebAuthn client asked
+//	          for none conveyance gives: a fmt none object, the statement dropped and the aaguid zeroed
 //	assert    getAssertion over the credential, client data a webauthn.get of the message (presence.go), UP and UV
 //	          asked and checked; each device tried in turn, one that holds no such credential passed over
 //	key_id    the first 16 bytes of SHA-256 of the credential id, which may pass KeyRegister's 64 bytes, so the provider
@@ -63,9 +68,15 @@ const (
 	// authenticator data's layout: the aaguid follows the rp id hash, the flags and the counter
 	urFidoAaguidOffset    = 32 + 1 + 4
 	urFidoAaguidByteCount = 16
+	// WebAuthn's attestation statement format for no statement
+	urFidoFormatNone = "none"
 	// the file of key_ids' credential ids under <state>/presence
 	urFidoCredentialsName = "fido.json"
 )
+
+// The attestation statement formats §16.6 names beside none, whose statement the root's VerifyPresenceAttestation reads:
+// a makeCredential's answer in one of them is carried as the authenticator gave it.
+var urFidoStatementFormats = []string{"packed", "tpm", "android-key", "apple"}
 
 var (
 	// The authenticator answered other than CTAP2's ok, or answered in a form CTAP2 does not have.
@@ -361,7 +372,8 @@ func (self *urFidoProvider) Register(ctx context.Context) (*sidecar.PresenceKeyH
 	if err != nil {
 		return nil, err
 	}
-	attestation, err := urFidoNoneAttestation(authenticatorData, clientData)
+	// CTAP2's attestation object members: 1 fmt, 2 authData, 3 attStmt
+	attestation, err := urFidoAttestation(answer[int64(1)], answer[int64(3)], authenticatorData, clientData)
 	if err != nil {
 		return nil, err
 	}
@@ -388,15 +400,49 @@ func (self *urFidoProvider) Register(ctx context.Context) (*sidecar.PresenceKeyH
 	}, nil
 }
 
-// KeyRegister.attestation for a makeCredential's authenticator data, which urFidoAttestedCredential has read, and the
-// client data whose hash it was asked under (QD-730): the root's map of a fmt none attestation object and that JSON.
-// The object holds the authenticator data with its aaguid zeroed and an empty statement, what WebAuthn's none
-// conveyance leaves of an attestation (WebAuthn §5.1.3), so the key's model does not ride in the registration.
+// KeyRegister.attestation for a makeCredential's answer, whose authenticator data urFidoAttestedCredential has read,
+// and the client data whose hash it was asked under (QD-730, QD-885): the root's map of that JSON and the attestation
+// object the authenticator answered, its format, its statement and its authenticator data unchanged, where the format
+// is one of urFidoStatementFormats. The object is written in canonical CBOR, which is what CTAP2 has the authenticator
+// answer in, and no statement signs its own encoding. fmt none, and a format §16.6 does not name, give
+// urFidoNoneAttestation's object. A named format whose answer has no statement map, or a statement with a value CBOR's
+// canonical form here does not write, is an error: nothing registers, rather than a statement the authenticator gave
+// being dropped unsaid.
+func urFidoAttestation(format any, statement any, authenticatorData []byte, clientData []byte) ([]byte, error) {
+	formatName, ok := format.(string)
+	if !ok {
+		return nil, fmt.Errorf("%w: no attestation format", errUrFido)
+	}
+	if !slices.Contains(urFidoStatementFormats, formatName) {
+		return urFidoNoneAttestation(authenticatorData, clientData)
+	}
+	if _, ok := statement.(map[any]any); !ok {
+		return nil, fmt.Errorf("%w: a %s attestation with no statement", errUrFido, formatName)
+	}
+	canonicalStatement, err := urCborCanonical(statement)
+	if err != nil {
+		return nil, fmt.Errorf("%w: a %s statement: %w", errUrFido, formatName, err)
+	}
+	attestationObject, err := urCborAppend(nil, urCborMap{
+		{Key: "fmt", Value: formatName},
+		{Key: "attStmt", Value: canonicalStatement},
+		{Key: "authData", Value: authenticatorData},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sidecar.EncodePresenceAttestation(attestationObject, clientData), nil
+}
+
+// KeyRegister.attestation with no statement, for an authenticator that gave none the root's check reads: the root's map
+// of the client data and a fmt none attestation object. The object holds the authenticator data with its aaguid zeroed
+// and an empty statement, what WebAuthn's none conveyance leaves of an attestation (WebAuthn §5.1.3), so the key's
+// model does not ride in a registration that carries no statement to check it by.
 func urFidoNoneAttestation(authenticatorData []byte, clientData []byte) ([]byte, error) {
 	anonymous := bytes.Clone(authenticatorData)
 	clear(anonymous[urFidoAaguidOffset : urFidoAaguidOffset+urFidoAaguidByteCount])
 	attestationObject, err := urCborAppend(nil, urCborMap{
-		{Key: "fmt", Value: "none"},
+		{Key: "fmt", Value: urFidoFormatNone},
 		{Key: "attStmt", Value: urCborMap{}},
 		{Key: "authData", Value: anonymous},
 	})
@@ -631,6 +677,37 @@ func urCborAppend(out []byte, value any) ([]byte, error) {
 			out = append(append(out, pair.key...), pair.value...)
 		}
 		return out, nil
+	}
+	return nil, fmt.Errorf("no CBOR form for %T", value)
+}
+
+// What urCborRead read, as a value urCborAppend writes: each map a urCborMap, which it sorts into canonical order, each
+// array's elements likewise, and integers, booleans, byte and text strings as they are. Null, which urCborRead reads
+// as nil, has no form urCborAppend writes and is an error.
+func urCborCanonical(value any) (any, error) {
+	switch typed := value.(type) {
+	case int64, bool, []byte, string:
+		return typed, nil
+	case []any:
+		elements := make([]any, 0, len(typed))
+		for _, element := range typed {
+			canonical, err := urCborCanonical(element)
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, canonical)
+		}
+		return elements, nil
+	case map[any]any:
+		pairs := make(urCborMap, 0, len(typed))
+		for key, element := range typed {
+			canonical, err := urCborCanonical(element)
+			if err != nil {
+				return nil, err
+			}
+			pairs = append(pairs, urCborPair{Key: key, Value: canonical})
+		}
+		return pairs, nil
 	}
 	return nil, fmt.Errorf("no CBOR form for %T", value)
 }
