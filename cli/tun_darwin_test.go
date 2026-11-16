@@ -1,10 +1,13 @@
 //go:build darwin
 
 // ur tun on macOS (tun_darwin.go, bridge_local_darwin.go, bridge_dns_darwin.go). Most run the device's calls behind a
-// recording kernel and a fake utun; the rest run on this machine's own kernel where no root is needed: a daemon that
-// runs as the person is refused a utun with words that send no one to sudo and leaves no device behind, an interface's
-// flags read through the same ioctl path the device's set takes, and the routing socket's watch starts and ends. A
-// real device, which takes root, runs only where UR_TUN_TEST_DEVICE=darwin and the test runs as root:
+// recording kernel and a fake utun, the carved addresses' host routes under exits among them (QD-869): an off-link
+// resolver takes one by the default route's gateway and an on-link one none, a carve that changes adds and removes
+// them, a default route that moves takes them with it, and leaving exits and closing remove them all. The rest run on
+// this machine's own kernel where no root is needed: a daemon that runs as the person is refused a utun with words
+// that send no one to sudo and leaves no device behind, and a host route too, an interface's flags read through the
+// same ioctl path the device's set takes, and the routing socket's watch starts and ends. A real device and a real
+// host route, which take root, run only where UR_TUN_TEST_DEVICE=darwin and the test runs as root:
 //
 //	sudo env UR_TUN_TEST_DEVICE=darwin go test -run TestTunDarwinDevice -v .
 //
@@ -15,6 +18,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -131,6 +135,9 @@ type testDarwinKernel struct {
 	table     []urTunDarwinRoute
 	// what AddRoute answers for a prefix, nil for success
 	addErrs map[netip.Prefix]error
+	// what AddHostRoute and DeleteHostRoute answer for an address, nil for success
+	hostAddErrs    map[netip.Addr]error
+	hostDeleteErrs map[netip.Addr]error
 }
 
 var _ urTunDarwinKernel = (*testDarwinKernel)(nil)
@@ -169,6 +176,52 @@ func (self *testDarwinKernel) AddRoute(index int, prefix netip.Prefix) error {
 func (self *testDarwinKernel) DeleteRoute(index int, prefix netip.Prefix) error {
 	self.record("delete route " + prefix.String())
 	return nil
+}
+
+// The flags the kernel shows a static host route by a gateway with.
+const testDarwinHostRouteFlags = unix.RTF_UP | unix.RTF_GATEWAY | unix.RTF_HOST | unix.RTF_STATIC
+
+// A host route that goes on joins the table, as the kernel's does, and leaves it as it comes off.
+func (self *testDarwinKernel) AddHostRoute(index int, address netip.Addr, gateway netip.Addr) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if err := self.hostAddErrs[address]; err != nil {
+		return err
+	}
+	self.calls = append(self.calls, testDarwinHostRouteCall("add", index, address, gateway))
+	self.table = append(self.table, urTunDarwinRoute{dst: netip.PrefixFrom(address, 32), index: index, gateway: gateway,
+		flags: testDarwinHostRouteFlags})
+	return nil
+}
+
+func (self *testDarwinKernel) DeleteHostRoute(index int, address netip.Addr, gateway netip.Addr) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if err := self.hostDeleteErrs[address]; err != nil {
+		return err
+	}
+	self.calls = append(self.calls, testDarwinHostRouteCall("delete", index, address, gateway))
+	self.table = slices.DeleteFunc(self.table, func(held urTunDarwinRoute) bool {
+		return held.dst == netip.PrefixFrom(address, 32) && held.index == index && held.gateway == gateway &&
+			held.flags == testDarwinHostRouteFlags
+	})
+	return nil
+}
+
+// A host route's call as the recorder keeps it.
+func testDarwinHostRouteCall(verb string, index int, address netip.Addr, gateway netip.Addr) string {
+	by := "the link"
+	if gateway.IsValid() {
+		by = gateway.String()
+	}
+	return fmt.Sprintf("%s host route %s by %s on %d", verb, address, by, index)
+}
+
+// Replaces the table's routes that match with routes.
+func (self *testDarwinKernel) replaceRoutes(match func(held urTunDarwinRoute) bool, routes ...urTunDarwinRoute) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.table = append(slices.DeleteFunc(self.table, match), routes...)
 }
 
 func (self *testDarwinKernel) Routes() ([]urTunDarwinRoute, error) {
@@ -249,7 +302,8 @@ type testDarwinWorld struct {
 func newTestDarwinWorld(t *testing.T) *testDarwinWorld {
 	t.Helper()
 	world := &testDarwinWorld{
-		kernel:   &testDarwinKernel{addErrs: map[netip.Prefix]error{}},
+		kernel: &testDarwinKernel{addErrs: map[netip.Prefix]error{}, hostAddErrs: map[netip.Addr]error{},
+			hostDeleteErrs: map[netip.Addr]error{}},
 		device:   newTestDarwinDevice(),
 		bindings: make(chan [2]uint32, 16),
 		kicks:    make(chan struct{}, 16),
@@ -438,6 +492,361 @@ func TestTunDarwinCloseRemovesEverything(t *testing.T) {
 	}
 	if err := iface.SetAddresses(nil); !errors.Is(err, errUrTunClosed) {
 		t.Fatalf("after close: %v", err)
+	}
+}
+
+// The host's own routes beside its default routes, as a host on 192.0.2.0/24 holds them: its subnet on link, its own
+// address local, a neighbor's cached link address, and loopback's.
+func testDarwinHostTable() []urTunDarwinRoute {
+	return []urTunDarwinRoute{
+		{dst: netip.MustParsePrefix("192.0.2.0/24"), index: 4, flags: unix.RTF_UP | unix.RTF_CLONING},
+		{dst: netip.MustParsePrefix("192.0.2.10/32"), index: 1, flags: unix.RTF_UP | unix.RTF_HOST | unix.RTF_LOCAL},
+		{dst: netip.MustParsePrefix("192.0.2.1/32"), index: 4, flags: unix.RTF_UP | unix.RTF_HOST | unix.RTF_LLINFO | unix.RTF_WASCLONED},
+		{dst: netip.MustParsePrefix("127.0.0.0/8"), index: 1, flags: unix.RTF_UP},
+	}
+}
+
+// The carve of that host: its own address, its gateway, a resolver on its link, loopback, an IPv6 address, and
+// resolvers beyond its networks.
+func testDarwinCarve(offLink ...string) []netip.Addr {
+	carve := []netip.Addr{netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.1"),
+		netip.MustParseAddr("192.0.2.53"), netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("2001:db8::53")}
+	for _, address := range offLink {
+		carve = append(carve, netip.MustParseAddr(address))
+	}
+	return carve
+}
+
+// Under exits a carved address the host reaches only by its default route, an off-link resolver, takes a host route
+// by that route's gateway and interface, before the halves go on; the host's own address, its gateway, an on-link
+// resolver, loopback and an IPv6 address take none. Off exits the carve waits. A sync that changed nothing writes
+// nothing, though the host route now reads in the table; a carve that changes adds and removes them; and leaving exits
+// takes them off after the halves and before the binding.
+func TestTunDarwinCarvedHostRoutesFollowTheCarve(t *testing.T) {
+	world := newTestDarwinWorld(t)
+	world.kernel.table = append(world.kernel.table, testDarwinHostTable()...)
+	iface := world.open(t)
+	world.kernel.take()
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53")); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.kernel.take(); 0 < len(calls) {
+		t.Fatalf("off exits: %v", calls)
+	}
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("exits: %v %v", defaultRoute, err)
+	}
+	halves := urTunExitsHalves()
+	want := []string{"add host route 203.0.113.53 by 192.0.2.1 on 4", "add route " + halves[0].String(),
+		"add route " + halves[1].String()}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("exits: %v", calls)
+	}
+	// the halves read in the table from here, through the tun
+	world.kernel.replaceRoutes(func(held urTunDarwinRoute) bool { return false },
+		urTunDarwinRoute{dst: halves[0], index: 99, flags: unix.RTF_UP | unix.RTF_STATIC},
+		urTunDarwinRoute{dst: halves[1], index: 99, flags: unix.RTF_UP | unix.RTF_STATIC})
+	// a sync with nothing changed
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53")); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.kernel.take(); 0 < len(calls) {
+		t.Fatalf("nothing changed: %v", calls)
+	}
+	// the carve changes: one resolver leaves it and another joins
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.54")); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"delete host route 203.0.113.53 by 192.0.2.1 on 4", "add host route 203.0.113.54 by 192.0.2.1 on 4"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a changed carve: %v", calls)
+	}
+	// a route of the host's own comes to hold the address: its host route would move it off that link
+	world.kernel.replaceRoutes(func(held urTunDarwinRoute) bool { return false },
+		urTunDarwinRoute{dst: netip.MustParsePrefix("203.0.113.0/24"), index: 6, flags: unix.RTF_UP | unix.RTF_CLONING})
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.54", "198.51.100.53")); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"delete host route 203.0.113.54 by 192.0.2.1 on 4", "add host route 198.51.100.53 by 192.0.2.1 on 4"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("an address a route came to hold: %v", calls)
+	}
+	<-world.bindings
+	defaultRoute, err := iface.SetExits(false)
+	if err != nil || defaultRoute {
+		t.Fatalf("off: %v %v", defaultRoute, err)
+	}
+	want = []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
+		"delete host route 198.51.100.53 by 192.0.2.1 on 4"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("off: %v", calls)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{0, 0} {
+		t.Fatalf("unbound to %v", binding)
+	}
+	// off exits the carve waits again
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53", "198.51.100.53")); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.kernel.take(); 0 < len(calls) {
+		t.Fatalf("off exits again: %v", calls)
+	}
+}
+
+// A default route that moves takes the host routes with it: to a new gateway on the same interface with no new
+// binding, and to another interface's route with one, the old route off and the new one on at the sync's SetExits.
+func TestTunDarwinCarvedHostRoutesFollowTheDefaultRoute(t *testing.T) {
+	world := newTestDarwinWorld(t)
+	world.kernel.table = append(world.kernel.table, testDarwinHostTable()...)
+	iface := world.open(t)
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	<-world.bindings
+	<-world.kicks
+	world.kernel.take()
+	isDefault := func(held urTunDarwinRoute) bool {
+		return held.dst.Bits() == 0 && held.flags&unix.RTF_IFSCOPE == 0
+	}
+	// another gateway on the same link
+	world.kernel.replaceRoutes(isDefault, urTunDarwinRoute{dst: netip.MustParsePrefix("0.0.0.0/0"), index: 4,
+		gateway: netip.MustParseAddr("192.0.2.254"), flags: unix.RTF_UP | unix.RTF_GATEWAY})
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"delete host route 203.0.113.53 by 192.0.2.1 on 4", "add host route 203.0.113.53 by 192.0.2.254 on 4"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a new gateway: %v", calls)
+	}
+	if 0 < len(world.bindings) || 0 < len(world.kicks) {
+		t.Fatal("bound again on the same interface")
+	}
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53")); err != nil || 0 < len(world.kernel.take()) {
+		t.Fatalf("the carve after the move: %v", err)
+	}
+	// the unscoped default route goes: the scoped one, on another interface, is the host's
+	world.kernel.replaceRoutes(isDefault)
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{5, 5} {
+		t.Fatalf("bound again to %v", binding)
+	}
+	<-world.kicks
+	want = []string{"delete host route 203.0.113.53 by 192.0.2.254 on 4", "add host route 203.0.113.53 by 198.51.100.1 on 5"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("another interface: %v", calls)
+	}
+	// a default route that names no gateway: the host route goes by its interface alone
+	world.kernel.replaceRoutes(func(held urTunDarwinRoute) bool { return held.dst.Bits() == 0 },
+		urTunDarwinRoute{dst: netip.MustParsePrefix("0.0.0.0/0"), index: 7, flags: unix.RTF_UP})
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"delete host route 203.0.113.53 by 198.51.100.1 on 5", "add host route 203.0.113.53 by the link on 7"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a default route with no gateway: %v", calls)
+	}
+}
+
+// What the host refuses of a host route: one whose address another route holds by the time it is written is left to
+// that route and never removed; one the kernel refuses is counted, with no address in the words, and tried again at
+// the next SetCarved; one that will not come off is kept and tried again; and exits another program's half holds
+// leave no host route on.
+func TestTunDarwinCarvedHostRoutesHoldWhatTheHostRefuses(t *testing.T) {
+	world := newTestDarwinWorld(t)
+	world.kernel.table = append(world.kernel.table, testDarwinHostTable()...)
+	iface := world.open(t)
+	world.kernel.take()
+	first := netip.MustParseAddr("203.0.113.53")
+	second := netip.MustParseAddr("203.0.113.54")
+	world.kernel.hostAddErrs[first] = unix.EEXIST
+	world.kernel.hostAddErrs[second] = unix.ENETUNREACH
+	if err := iface.SetCarved(testDarwinCarve(first.String(), second.String())); err != nil {
+		t.Fatal(err)
+	}
+	// SetExits refuses nothing for a host route
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("exits: %v %v", defaultRoute, err)
+	}
+	world.kernel.take()
+	err := iface.SetCarved(testDarwinCarve(first.String(), second.String()))
+	if err == nil || strings.Contains(err.Error(), "203.0.113") ||
+		!strings.Contains(err.Error(), "1 host routes of carved addresses did not go on") {
+		t.Fatalf("a refused host route: %v", err)
+	}
+	if calls := world.kernel.take(); 0 < len(calls) {
+		t.Fatalf("refused: %v", calls)
+	}
+	// the kernel takes it at the next call
+	delete(world.kernel.hostAddErrs, second)
+	if err := iface.SetCarved(testDarwinCarve(first.String(), second.String())); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.kernel.take(); !slices.Equal(calls, []string{"add host route 203.0.113.54 by 192.0.2.1 on 4"}) {
+		t.Fatalf("tried again: %v", calls)
+	}
+	// one that will not come off stays this interface's, and goes at the next call
+	world.kernel.hostDeleteErrs[second] = unix.ENOBUFS
+	err = iface.SetCarved(testDarwinCarve())
+	if err == nil || strings.Contains(err.Error(), "203.0.113") ||
+		!strings.Contains(err.Error(), "1 host routes of addresses no longer carved did not come off") {
+		t.Fatalf("a host route that would not come off: %v", err)
+	}
+	delete(world.kernel.hostDeleteErrs, second)
+	if err := iface.SetCarved(testDarwinCarve()); err != nil {
+		t.Fatal(err)
+	}
+	// the one another's route held was never this interface's to remove
+	if calls := world.kernel.take(); !slices.Equal(calls, []string{"delete host route 203.0.113.54 by 192.0.2.1 on 4"}) {
+		t.Fatalf("removed: %v", calls)
+	}
+	if _, err := iface.SetExits(false); err != nil {
+		t.Fatal(err)
+	}
+	world.kernel.take()
+	// a half another program holds: the host routes that went on before the halves come off with the partial set
+	delete(world.kernel.hostAddErrs, first)
+	halves := urTunExitsHalves()
+	world.kernel.addErrs[halves[1]] = unix.EEXIST
+	if err := iface.SetCarved(testDarwinCarve(first.String())); err != nil {
+		t.Fatal(err)
+	}
+	if defaultRoute, err := iface.SetExits(true); defaultRoute || !errors.Is(err, errUrTunExitsHalfInUse) {
+		t.Fatalf("a held half: %v %v", defaultRoute, err)
+	}
+	want := []string{"add host route 203.0.113.53 by 192.0.2.1 on 4", "add route " + halves[0].String(),
+		"delete route " + halves[0].String(), "delete host route 203.0.113.53 by 192.0.2.1 on 4"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a held half: %v", calls)
+	}
+}
+
+// Close takes the carved addresses' host routes off with the exits, after the halves, and a closed interface takes
+// no carve.
+func TestTunDarwinCloseRemovesTheCarvedHostRoutes(t *testing.T) {
+	world := newTestDarwinWorld(t)
+	world.kernel.table = append(world.kernel.table, testDarwinHostTable()...)
+	iface := world.open(t)
+	iface.SetRoutes([]netip.Prefix{netip.MustParsePrefix("100.70.1.2/32")})
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53", "198.51.100.53")); err != nil {
+		t.Fatal(err)
+	}
+	world.kernel.take()
+	if err := iface.Close(); err != nil {
+		t.Fatal(err)
+	}
+	halves := urTunExitsHalves()
+	want := []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
+		"delete host route 198.51.100.53 by 192.0.2.1 on 4", "delete host route 203.0.113.53 by 192.0.2.1 on 4",
+		"delete route 100.70.1.2/32"}
+	if calls := world.kernel.take(); !slices.Equal(calls, want) {
+		t.Fatalf("close: %v", calls)
+	}
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53")); !errors.Is(err, errUrTunClosed) {
+		t.Fatalf("after close: %v", err)
+	}
+	for _, held := range world.kernel.table {
+		if held.flags == testDarwinHostRouteFlags {
+			t.Fatalf("a host route stayed: %+v", held)
+		}
+	}
+}
+
+// Which routes of the table reach a carved address: a scoped route, a cached entry and a route through the tun do
+// not, so the address takes a host route; a route of the tun's own inside which it lies leaves it to the bridge; and
+// with no default route but the tun's, nothing goes on.
+func TestTunDarwinCarvedHostRoutesReadTheTable(t *testing.T) {
+	address := netip.MustParseAddr("203.0.113.53")
+	gateway := netip.MustParseAddr("192.0.2.1")
+	defaultRoute := urTunDarwinRoute{dst: netip.MustParsePrefix("0.0.0.0/0"), index: 4, gateway: gateway,
+		flags: unix.RTF_UP | unix.RTF_GATEWAY}
+	want := []urTunHostRoute{{address: address, gateway: gateway, link: 4}}
+	inside := netip.MustParsePrefix("203.0.113.0/24")
+	for name, held := range map[string]urTunDarwinRoute{
+		"a scoped route":          {dst: inside, index: 6, flags: unix.RTF_UP | unix.RTF_IFSCOPE},
+		"a cached entry":          {dst: netip.PrefixFrom(address, 32), index: 6, flags: unix.RTF_UP | unix.RTF_HOST | unix.RTF_LLINFO},
+		"a route through the tun": {dst: inside, index: 99, flags: unix.RTF_UP},
+		"a route that is down":    {dst: inside, index: 6},
+		"IPv6's default route":    {dst: netip.MustParsePrefix("::/0"), index: 6, flags: unix.RTF_UP},
+	} {
+		table := []urTunDarwinRoute{defaultRoute, held}
+		if hostRoutes := urTunDarwinHostRoutes([]netip.Addr{address}, table, 99, nil, nil); !slices.Equal(hostRoutes, want) {
+			t.Errorf("%s: %v", name, hostRoutes)
+		}
+	}
+	table := []urTunDarwinRoute{defaultRoute, {dst: inside, index: 6, flags: unix.RTF_UP}}
+	if hostRoutes := urTunDarwinHostRoutes([]netip.Addr{address}, table, 99, nil, nil); 0 < len(hostRoutes) {
+		t.Errorf("a route of the host's own: %v", hostRoutes)
+	}
+	// another program's host route at the address is the host's way to it, and this interface's own is not
+	table = []urTunDarwinRoute{defaultRoute, {dst: netip.PrefixFrom(address, 32), index: 4, gateway: gateway, flags: testDarwinHostRouteFlags}}
+	if hostRoutes := urTunDarwinHostRoutes([]netip.Addr{address}, table, 99, nil, nil); 0 < len(hostRoutes) {
+		t.Errorf("another's host route: %v", hostRoutes)
+	}
+	if hostRoutes := urTunDarwinHostRoutes([]netip.Addr{address}, table, 99, nil, want); !slices.Equal(hostRoutes, want) {
+		t.Errorf("its own host route: %v", hostRoutes)
+	}
+	table = []urTunDarwinRoute{defaultRoute}
+	if hostRoutes := urTunDarwinHostRoutes([]netip.Addr{address}, table, 99, []netip.Prefix{inside}, nil); 0 < len(hostRoutes) {
+		t.Errorf("inside a route of the tun's own: %v", hostRoutes)
+	}
+	if hostRoutes := urTunDarwinHostRoutes([]netip.Addr{address}, table, 4, nil, nil); 0 < len(hostRoutes) {
+		t.Errorf("no default route but the tun's: %v", hostRoutes)
+	}
+}
+
+// A host route's message: a host route by the gateway, static, with the interface named, which the dump's parse reads
+// back with its gateway; and with no gateway, the interface's link address in the gateway's place.
+func TestTunDarwinHostRouteMessagesReadBack(t *testing.T) {
+	address := netip.MustParseAddr("203.0.113.53")
+	gateway := netip.MustParseAddr("192.0.2.1")
+	for _, messageType := range []int{unix.RTM_ADD, unix.RTM_DELETE} {
+		wire, err := urTunDarwinHostRouteMessage(messageType, 4, address, gateway, 7, 9).Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages, err := route.ParseRIB(route.RIBTypeRoute, wire)
+		if err != nil || len(messages) != 1 {
+			t.Fatalf("%d messages, %v", len(messages), err)
+		}
+		parsed, ok := messages[0].(*route.RouteMessage)
+		if !ok || parsed.Type != messageType || parsed.Index != 4 || parsed.Seq != 9 ||
+			parsed.Flags != unix.RTF_UP|unix.RTF_STATIC|unix.RTF_HOST|unix.RTF_GATEWAY {
+			t.Fatalf("%+v", messages[0])
+		}
+		held, ok := urTunDarwinParseRoute(parsed)
+		if !ok || held.dst != netip.PrefixFrom(address, 32) || held.index != 4 || held.gateway != gateway {
+			t.Fatalf("read back as %+v", held)
+		}
+		if link, ok := parsed.Addrs[unix.RTAX_IFP].(*route.LinkAddr); !ok || link.Index != 4 {
+			t.Fatalf("the interface: %+v", parsed.Addrs[unix.RTAX_IFP])
+		}
+		if parsed.Addrs[unix.RTAX_NETMASK] != nil {
+			t.Fatalf("a host route with a mask: %+v", parsed.Addrs[unix.RTAX_NETMASK])
+		}
+	}
+	wire, err := urTunDarwinHostRouteMessage(unix.RTM_ADD, 7, address, netip.Addr{}, 7, 9).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := route.ParseRIB(route.RIBTypeRoute, wire)
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("%d messages, %v", len(messages), err)
+	}
+	parsed := messages[0].(*route.RouteMessage)
+	if link, ok := parsed.Addrs[unix.RTAX_GATEWAY].(*route.LinkAddr); !ok || link.Index != 7 ||
+		parsed.Flags&unix.RTF_GATEWAY != 0 || parsed.Flags&unix.RTF_HOST == 0 {
+		t.Fatalf("no gateway: %+v", parsed)
 	}
 }
 
@@ -637,6 +1046,69 @@ func TestTunDarwinDeviceCarriesTheBridge(t *testing.T) {
 	routes, _ = system.kernel.Routes()
 	if slices.ContainsFunc(routes, func(held urTunDarwinRoute) bool { return held.index == link.Index }) {
 		t.Fatal("a route outlived the tun")
+	}
+}
+
+// On this machine's kernel, as root: a carved address's host route goes on by the host's own default route's gateway
+// and interface, reads back in the table that way, and comes off, by the routing socket's messages as the tun writes
+// them. The address is documentation's, which no host holds. As a person, the kernel refuses the same message.
+func TestTunDarwinDeviceTakesAHostRoute(t *testing.T) {
+	kernel := &urTunDarwinSockets{}
+	table, err := kernel.Routes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := netip.MustParseAddr("203.0.113.53")
+	hostRoutes := urTunDarwinHostRoutes([]netip.Addr{address}, table, 0, nil, nil)
+	if os.Getenv("UR_TUN_TEST_DEVICE") != "darwin" || unix.Geteuid() != 0 {
+		if unix.Geteuid() != 0 && len(hostRoutes) == 1 {
+			err := kernel.AddHostRoute(int(hostRoutes[0].link), address, hostRoutes[0].gateway)
+			if !errors.Is(err, unix.EPERM) && !errors.Is(err, unix.EACCES) {
+				t.Fatalf("a person's host route: %v", err)
+			}
+			t.Logf("a person's host route is refused: %v", err)
+		}
+		t.Skip("changes the host's routes: runs only as root with UR_TUN_TEST_DEVICE=darwin")
+	}
+	if len(hostRoutes) != 1 {
+		t.Skipf("this host reaches the address by a route of its own, or has no default route: %d host routes", len(hostRoutes))
+	}
+	hostRoute := hostRoutes[0]
+	if err := kernel.AddHostRoute(int(hostRoute.link), address, hostRoute.gateway); err != nil {
+		t.Fatal(err)
+	}
+	removed := false
+	t.Cleanup(func() {
+		if !removed {
+			kernel.DeleteHostRoute(int(hostRoute.link), address, hostRoute.gateway)
+		}
+	})
+	isHostRoute := func(held urTunDarwinRoute) bool {
+		return held.dst == netip.PrefixFrom(address, 32) && held.index == int(hostRoute.link) &&
+			held.gateway == hostRoute.gateway && held.flags&unix.RTF_HOST != 0 && held.flags&unix.RTF_STATIC != 0
+	}
+	if table, err = kernel.Routes(); err != nil || !slices.ContainsFunc(table, isHostRoute) {
+		t.Fatalf("the host route does not read back: %v", err)
+	}
+	// its own host route is not the host's way to the address, and another's would be
+	if again := urTunDarwinHostRoutes([]netip.Addr{address}, table, 0, nil, hostRoutes); !slices.Equal(again, hostRoutes) {
+		t.Fatalf("over its own host route: %d host routes", len(again))
+	}
+	if other := urTunDarwinHostRoutes([]netip.Addr{address}, table, 0, nil, nil); 0 < len(other) {
+		t.Fatalf("over another's host route: %d host routes", len(other))
+	}
+	if err := kernel.AddHostRoute(int(hostRoute.link), address, hostRoute.gateway); !errors.Is(err, unix.EEXIST) {
+		t.Fatalf("a second add: %v", err)
+	}
+	if err := kernel.DeleteHostRoute(int(hostRoute.link), address, hostRoute.gateway); err != nil {
+		t.Fatal(err)
+	}
+	removed = true
+	if err := kernel.DeleteHostRoute(int(hostRoute.link), address, hostRoute.gateway); !errors.Is(err, unix.ESRCH) {
+		t.Fatalf("a second delete: %v", err)
+	}
+	if table, err = kernel.Routes(); err != nil || slices.ContainsFunc(table, isHostRoute) {
+		t.Fatalf("the host route stayed: %v", err)
 	}
 }
 

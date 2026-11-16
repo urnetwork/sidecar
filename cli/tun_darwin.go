@@ -18,9 +18,16 @@
 //	           interface first (IP_BOUND_IF, connect.SetEgressInterfaceIndex) and its transports dial again, so the
 //	           daemon's own transport, and every link the bridge sends on, keeps the host's route; each sync binds them
 //	           to the default route's interface again where it moved. The halves come off first and the binding last
+//	carved     under exits, a host route for each IPv4 address the bridge carves that the host's own table reaches
+//	           only by its default route, an off-link resolver above all, by that route's gateway and interface
+//	           (tun_host_routes.go; QD-869), written to the routing socket with the gateway as its next hop and the
+//	           interface named (RTA_IFP). They go on before the halves, follow each SetCarved and the default route
+//	           where it moves, and come off once no half is left
 //
-// Only what this interface added is removed. Close takes the exits off, reverts the resolver, removes the routes and
-// addresses and closes the device, which the kernel destroys with whatever was left on it, routes included.
+// Only what this interface added is removed. Close takes the exits and the carved addresses' host routes off, reverts
+// the resolver, removes the routes and addresses and closes the device, which the kernel destroys with whatever was
+// left on it, its own routes included. A host route leaves by another interface, so one a daemon that died left stays
+// until the host restarts or a person removes it: it reads as another program's route, which ur tun leaves alone.
 
 package main
 
@@ -76,6 +83,11 @@ type urTunDarwinKernel interface {
 	// prefix already, ESRCH where none is there to remove.
 	AddRoute(index int, prefix netip.Prefix) error
 	DeleteRoute(index int, prefix netip.Prefix) error
+	// Adds or removes the IPv4 host route of address by the next hop gateway through the interface at index, or
+	// through that interface alone where gateway is not valid, by the routing socket, answering as AddRoute and
+	// DeleteRoute do.
+	AddHostRoute(index int, address netip.Addr, gateway netip.Addr) error
+	DeleteHostRoute(index int, address netip.Addr, gateway netip.Addr) error
 	// Every route of both families.
 	Routes() ([]urTunDarwinRoute, error)
 }
@@ -216,30 +228,54 @@ func (self *urTunDarwinSystem) RoutedElsewhere(name string, prefix netip.Prefix)
 // multicast's, and a neighbor's cached link address.
 const urTunDarwinNotARouteFlags = unix.RTF_LOCAL | unix.RTF_BROADCAST | unix.RTF_MULTICAST | unix.RTF_LLINFO | unix.RTF_WASCLONED
 
-// The interfaces of the host's own default routes, IPv4's and IPv6's, other than ownIndex: the unscoped one where there
-// is one, else the first scoped one; 0 for a family with none.
-func (self *urTunDarwinSystem) defaultInterfaces(ownIndex int) (int, int, error) {
-	routes, err := self.kernel.Routes()
-	if err != nil {
-		return 0, 0, err
-	}
-	pick := func(ipv4 bool) int {
-		scoped := 0
-		for _, held := range routes {
+// The host's own default routes in table, IPv4's and IPv6's, other than ownIndex's: the unscoped one where there is
+// one, else the first scoped one; a route of index 0 for a family with none.
+func urTunDarwinDefaultRoutes(table []urTunDarwinRoute, ownIndex int) (urTunDarwinRoute, urTunDarwinRoute) {
+	pick := func(ipv4 bool) urTunDarwinRoute {
+		scoped := urTunDarwinRoute{}
+		for _, held := range table {
 			if !held.dst.IsValid() || held.dst.Bits() != 0 || held.dst.Addr().Is4() != ipv4 || held.index == 0 ||
 				held.index == ownIndex || held.flags&unix.RTF_UP == 0 {
 				continue
 			}
 			if held.flags&unix.RTF_IFSCOPE == 0 {
-				return held.index
+				return held
 			}
-			if scoped == 0 {
-				scoped = held.index
+			if scoped.index == 0 {
+				scoped = held
 			}
 		}
 		return scoped
 	}
-	return pick(true), pick(false), nil
+	return pick(true), pick(false)
+}
+
+// The flags of an entry the table holds under a route that made it, which reaches nothing in its own right: a
+// neighbor's cached link address or a route's clone.
+const urTunDarwinCachedRouteFlags = unix.RTF_LLINFO | unix.RTF_WASCLONED
+
+// The host routes the carved addresses take over table, the host's routes (urTunHostRoutes): by the gateway and
+// interface of the IPv4 default route that leaves by an interface other than ownIndex, none where there is none. An
+// address is reached where a route other than a default one holds it, but a route through ownIndex, which is the
+// tun's, a half among them; a scoped route, which only a socket bound to its interface takes; a cached entry; and,
+// for an address of onRoutes, its own host route, which this interface put on.
+func urTunDarwinHostRoutes(carvedAddrs []netip.Addr, table []urTunDarwinRoute, ownIndex int, ownRoutes []netip.Prefix,
+	onRoutes []urTunHostRoute) []urTunHostRoute {
+	defaultRoute, _ := urTunDarwinDefaultRoutes(table, ownIndex)
+	if defaultRoute.index == 0 {
+		return []urTunHostRoute{}
+	}
+	reached := func(address netip.Addr) bool {
+		ownHostRoute := slices.ContainsFunc(onRoutes, func(on urTunHostRoute) bool { return on.address == address })
+		return slices.ContainsFunc(table, func(held urTunDarwinRoute) bool {
+			if !held.dst.IsValid() || held.dst.Bits() == 0 || !held.dst.Contains(address) || held.index == ownIndex ||
+				held.flags&unix.RTF_UP == 0 || held.flags&(unix.RTF_IFSCOPE|urTunDarwinCachedRouteFlags) != 0 {
+				return false
+			}
+			return !(ownHostRoute && held.dst.IsSingleIP())
+		})
+	}
+	return urTunHostRoutes(carvedAddrs, defaultRoute.gateway, uint64(defaultRoute.index), ownRoutes, reached)
 }
 
 // The kernel's calls, each on a socket of its own.
@@ -369,10 +405,22 @@ func (self *urTunDarwinSockets) DeleteRoute(index int, prefix netip.Prefix) erro
 	return self.route(unix.RTM_DELETE, index, prefix)
 }
 
-// Writes one routing message of messageType for prefix through index. The kernel answers a refusal as the write's
-// errno.
+func (self *urTunDarwinSockets) AddHostRoute(index int, address netip.Addr, gateway netip.Addr) error {
+	return self.write(urTunDarwinHostRouteMessage(unix.RTM_ADD, index, address, gateway, os.Getpid(), int(self.sequence.Add(1))))
+}
+
+func (self *urTunDarwinSockets) DeleteHostRoute(index int, address netip.Addr, gateway netip.Addr) error {
+	return self.write(urTunDarwinHostRouteMessage(unix.RTM_DELETE, index, address, gateway, os.Getpid(), int(self.sequence.Add(1))))
+}
+
+// Writes one routing message of messageType for prefix through index.
 func (self *urTunDarwinSockets) route(messageType int, index int, prefix netip.Prefix) error {
-	wire, err := urTunDarwinRouteMessage(messageType, index, prefix, os.Getpid(), int(self.sequence.Add(1))).Marshal()
+	return self.write(urTunDarwinRouteMessage(messageType, index, prefix, os.Getpid(), int(self.sequence.Add(1))))
+}
+
+// Writes message to a routing socket of its own. The kernel answers a refusal as the write's errno.
+func (self *urTunDarwinSockets) write(message *route.RouteMessage) error {
+	wire, err := message.Marshal()
 	if err != nil {
 		return err
 	}
@@ -409,6 +457,29 @@ func urTunDarwinRouteMessage(messageType int, index int, prefix netip.Prefix, id
 		ID:      uintptr(id),
 		Seq:     sequence,
 		Addrs:   addrs,
+	}
+}
+
+// The routing message of the IPv4 host route of address by the next hop gateway, with the interface at index named
+// as the one it leaves by (RTA_IFP), so a gateway two interfaces reach takes the default route's; where gateway is not
+// valid, the interface's link address is the gateway, as a route through the tun's is.
+func urTunDarwinHostRouteMessage(messageType int, index int, address netip.Addr, gateway netip.Addr, id int,
+	sequence int) *route.RouteMessage {
+	if !gateway.Is4() {
+		return urTunDarwinRouteMessage(messageType, index, netip.PrefixFrom(address, address.BitLen()), id, sequence)
+	}
+	return &route.RouteMessage{
+		Version: unix.RTM_VERSION,
+		Type:    messageType,
+		Flags:   unix.RTF_UP | unix.RTF_STATIC | unix.RTF_HOST | unix.RTF_GATEWAY,
+		Index:   index,
+		ID:      uintptr(id),
+		Seq:     sequence,
+		Addrs: []route.Addr{
+			unix.RTAX_DST:     &route.Inet4Addr{IP: address.As4()},
+			unix.RTAX_GATEWAY: &route.Inet4Addr{IP: gateway.As4()},
+			unix.RTAX_IFP:     &route.LinkAddr{Index: index},
+		},
 	}
 }
 
@@ -506,10 +577,15 @@ type urTunDarwinInterface struct {
 	exitsBound  bool
 	boundIndex4 int
 	boundIndex6 int
+	// the IPv4 addresses the bridge carves, sorted (SetCarved), and the host routes this interface put on for those
+	// of them the host reaches only by its default route, which go with the halves
+	carvedAddrs []netip.Addr
+	hostRoutes  []urTunHostRoute
 	closed      bool
 }
 
 var _ urTunNamedInterface = (*urTunDarwinInterface)(nil)
+var _ urTunCarvedInterface = (*urTunDarwinInterface)(nil)
 
 // The kernel's utun<n>.
 func (self *urTunDarwinInterface) Name() string {
@@ -630,10 +706,12 @@ func (self *urTunDarwinInterface) SetResolver(resolver netip.Addr, zones []strin
 	return step, nil
 }
 
-// Under exits, binds connect's sockets to the interfaces of the host's own default routes, then puts IPv4's halves on
-// the device, and has connect's transports dial again where the binding is new or moved, so no socket made before it
-// stays in the tun's way. It refuses, and leaves nothing on, where no default route leaves by another interface or
-// another program holds a half. Off exits, takes them off. Answers whether the default route rides the device.
+// Under exits, binds connect's sockets to the interfaces of the host's own default routes, puts on the host routes of
+// the carved addresses SetCarved last gave, by the default route as it is now, so one that moved takes them with it,
+// then puts IPv4's halves on the device, and has connect's transports dial again where the binding is new or moved, so
+// no socket made before it stays in the tun's way. It refuses, and leaves nothing on, where no default route leaves by
+// another interface or another program holds a half; a host route that will not go on refuses nothing, and is
+// SetCarved's to try again. Off exits, takes them off. Answers whether the default route rides the device.
 func (self *urTunDarwinInterface) SetExits(exits bool) (bool, error) {
 	rebound, defaultRoute, err := func() (bool, bool, error) {
 		self.stateLock.Lock()
@@ -645,10 +723,12 @@ func (self *urTunDarwinInterface) SetExits(exits bool) (bool, error) {
 			err := self.clearExitsWithLock()
 			return false, 0 < len(self.exitsHalves), err
 		}
-		index4, index6, err := self.system.defaultInterfaces(self.index)
+		table, err := self.system.kernel.Routes()
 		if err != nil {
 			return false, false, errors.Join(fmt.Errorf("the routes did not read (%v)", err), self.clearExitsWithLock())
 		}
+		default4, default6 := urTunDarwinDefaultRoutes(table, self.index)
+		index4, index6 := default4.index, default6.index
 		if index4 == 0 {
 			return false, false, errors.Join(errUrTunExitsNoDefault, self.clearExitsWithLock())
 		}
@@ -660,6 +740,8 @@ func (self *urTunDarwinInterface) SetExits(exits bool) (bool, error) {
 			self.system.setEgressInterface(uint32(index4), uint32(index6))
 			self.exitsBound, self.boundIndex4, self.boundIndex6 = true, index4, index6
 		}
+		// before the halves, so no lookup of a carved address meets one
+		_ = self.setHostRoutesWithLock(self.carvedAddrs, table)
 		for _, half := range urTunExitsHalves() {
 			if slices.Contains(self.exitsHalves, half) {
 				continue
@@ -684,8 +766,64 @@ func (self *urTunDarwinInterface) SetExits(exits bool) (bool, error) {
 	return defaultRoute, err
 }
 
+// Sets the addresses the bridge carves (§17.4), the IPv4 ones counting, since the halves are IPv4's (QD-869). While a
+// half is on, the host routes follow at once, over the table as it reads now: one for each address the host reaches
+// only by its default route that holds none, those of addresses no longer carved, or that a route of the host's own
+// has come to reach, off, and those the default route moved from under replaced by its gateway now. Otherwise the list
+// waits for SetExits(true), and a host route a clear left on is tried off again. Answers what would not go on or come
+// off, which the next call tries again.
+func (self *urTunDarwinInterface) SetCarved(addresses []netip.Addr) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return errUrTunClosed
+	}
+	carvedAddrs := urTunCarvedIpv4Addrs(addresses)
+	self.carvedAddrs = carvedAddrs
+	if len(self.exitsHalves) == 0 {
+		return self.setHostRoutesWithLock(nil, nil)
+	}
+	if len(carvedAddrs) == 0 && len(self.hostRoutes) == 0 {
+		return nil
+	}
+	table, err := self.system.kernel.Routes()
+	if err != nil {
+		// what is on stays as it is for the next call
+		return fmt.Errorf("the routes did not read (%v)", err)
+	}
+	return self.setHostRoutesWithLock(carvedAddrs, table)
+}
+
+// Sets the host routes to those carvedAddrs take over table, the host's routes (urTunDarwinHostRoutes,
+// urTunSetHostRoutes): none for no addresses. Answers what would not go on or come off, kept as it is for the next
+// call.
+func (self *urTunDarwinInterface) setHostRoutesWithLock(carvedAddrs []netip.Addr, table []urTunDarwinRoute) error {
+	kernel := self.system.kernel
+	wanted := []urTunHostRoute{}
+	if 0 < len(carvedAddrs) {
+		wanted = urTunDarwinHostRoutes(carvedAddrs, table, self.index, self.routes, self.hostRoutes)
+	}
+	var err error
+	self.hostRoutes, err = urTunSetHostRoutes(self.hostRoutes, wanted, &urTunHostRouteCalls{
+		add: func(hostRoute urTunHostRoute) error {
+			return kernel.AddHostRoute(int(hostRoute.link), hostRoute.address, hostRoute.gateway)
+		},
+		remove: func(hostRoute urTunHostRoute) error {
+			return kernel.DeleteHostRoute(int(hostRoute.link), hostRoute.address, hostRoute.gateway)
+		},
+		held: func(err error) bool {
+			return errors.Is(err, unix.EEXIST)
+		},
+		gone: func(err error) bool {
+			return errors.Is(err, unix.ESRCH)
+		},
+	})
+	return err
+}
+
 // Takes off what the exits put on, the halves first, keeping account of what would not come off, so a later call tries
-// it again; the binding goes once no half is left, since a half without it would take the daemon's own transport.
+// it again; the carved addresses' host routes go once no half is left, since until then a lookup of one still needs
+// its own, and the binding goes then too, since a half without it would take the daemon's own transport.
 func (self *urTunDarwinInterface) clearExitsWithLock() error {
 	var clearErr error
 	kept := []netip.Prefix{}
@@ -696,6 +834,9 @@ func (self *urTunDarwinInterface) clearExitsWithLock() error {
 		}
 	}
 	self.exitsHalves = kept
+	if len(self.exitsHalves) == 0 {
+		clearErr = errors.Join(clearErr, self.setHostRoutesWithLock(nil, nil))
+	}
 	if self.exitsBound && len(self.exitsHalves) == 0 {
 		self.system.setEgressInterface(0, 0)
 		self.exitsBound, self.boundIndex4, self.boundIndex6 = false, 0, 0
@@ -703,8 +844,9 @@ func (self *urTunDarwinInterface) clearExitsWithLock() error {
 	return clearErr
 }
 
-// Takes the exits off, reverts the resolver, removes the routes and addresses it added, and closes the device, which
-// the kernel destroys with whatever is left on it. Waits for the device's event listener to end.
+// Takes the exits off, the carved addresses' host routes with them, reverts the resolver, removes the routes and
+// addresses it added, and closes the device, which the kernel destroys with whatever is left on it. Waits for the
+// device's event listener to end.
 func (self *urTunDarwinInterface) Close() error {
 	var closeErr error
 	func() {
