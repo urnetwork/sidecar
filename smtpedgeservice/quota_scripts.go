@@ -15,6 +15,8 @@
 //	                           QuotaMemberTimeout, renewed while the connection lives, so a crashed edge's
 //	                           members lapse and its concurrency and reservations heal by themselves
 //	h  h:<label>               a network's or a burner label's halt, as the ms it ends; until then
+//	hb:<yyyymmddhh>            hard bounces a network's SmtpOutcomes reported in one UTC hour (QD-199;
+//	                           SmtpQuotaBounceScript in halt.go); 48 h
 //
 // Lua holds numbers as doubles, exact below 2^53; every count here stays far under it, and times are ms
 // since the epoch. A script reads the master's clock (TIME), so every edge counts one UTC day.

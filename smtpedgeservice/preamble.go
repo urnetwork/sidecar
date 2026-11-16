@@ -6,11 +6,12 @@
 //
 // Nothing here touches Postgres (I-12, §22.5): the gate answers from memory, the quota with one script on
 // {smq_} (three for Community), the world through the resolver and the dialer. The edge reads the network,
-// client and sidecar from the ticket (smtpPreambleStream), never from the sidecar. The key set is asked of
-// the verifier before any dial, so KEYS dials nothing (DESIGN-DETAILS 3.2.5), and the session, which
-// needs the MX the dial chose, opens after it; a session that refuses the key set then still answers
-// KEYS, with the MX closed and the reservation released. A refusal after the reservation releases it, so
-// only the burst token is spent (§14.7, §14.9).
+// client and sidecar from the ticket (smtpPreambleStream), never from the sidecar; a stream whose sidecar
+// is not known yet answers TRY_LATER. The key set is asked of the verifier after the gate and before the
+// quota, so KEYS dials nothing and costs nothing, a burst token included (DESIGN-DETAILS 3.2.5, 3.7), and
+// the session, which needs the MX the dial chose, opens after it; a session that refuses the key set then
+// still answers KEYS, with the MX closed and the reservation released. A refusal after the reservation
+// releases it, so only the burst token is spent (§14.7, §14.9).
 //
 // What an OK outcome holds, the MX connection past STARTTLS's 220, the reservation, the session and the
 // send record's fields, is the splice's (SMTP-M9-13), which debits at MAIL, closes the quota at the end
@@ -46,6 +47,8 @@ const (
 	smtpPreambleReasonQuota   = "quota_unanswered"
 	smtpPreambleReasonIssue   = "issue"
 	smtpPreambleReasonSession = "session"
+	// The dialing client's sidecar is not known yet (SmtpDialerSource).
+	smtpPreambleReasonDialer = "dialer_unknown"
 )
 
 // What the stream's listener knows of its dialer, from the ticket (§14.5): never from the sidecar.
@@ -188,6 +191,9 @@ func (self *smtpPreambleHandler) decide(ctx context.Context, stream *smtpPreambl
 	if preamble == nil {
 		return self.refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, 0, smtpPreambleReasonBounds)
 	}
+	if stream.SidecarId == (sidecar.Id{}) {
+		return self.refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER, self.settings.GateRetryTimeout, smtpPreambleReasonDialer)
+	}
 	now := self.clock.Now()
 	gate := checkSmtpGate(self.gate, self.abuse, &SmtpGateRequest{
 		NetworkId:        stream.NetworkId,
@@ -197,6 +203,11 @@ func (self *smtpPreambleHandler) decide(ctx context.Context, stream *smtpPreambl
 	}, now, self.settings)
 	if gate.Code != protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK {
 		return self.refuse(gate.Code, gate.RetryAfter, gate.Reason)
+	}
+
+	// KEYS dials no MX and costs nothing, no burst token either (DESIGN-DETAILS 3.2.5, 3.7)
+	if self.verifier == nil || !self.verifier.HoldsKeySet(preamble.GetProofKeySet()) {
+		return self.refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS, 0, smtpPreambleReasonKeys)
 	}
 
 	quota, err := self.quota.Reserve(ctx, &SmtpQuotaRequest{
@@ -217,12 +228,6 @@ func (self *smtpPreambleHandler) decide(ctx context.Context, stream *smtpPreambl
 	reservation := quota.Reservation
 	release := func() {
 		self.quota.Release(ctx, reservation)
-	}
-
-	// KEYS dials no MX and debits nothing (DESIGN-DETAILS 3.2.5)
-	if self.verifier == nil || !self.verifier.HoldsKeySet(preamble.GetProofKeySet()) {
-		release()
-		return self.refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS, 0, smtpPreambleReasonKeys)
 	}
 
 	mx, code, retryAfter, reason := self.mx.connect(ctx, preamble.GetRecipientDomain(), gate.Limits)

@@ -79,13 +79,15 @@ type smtpMxConnector struct {
 	dialer     sidecar.SmtpMxDialer
 	sendingSet *SmtpSendingSet
 	caps       *SmtpDestinationCaps
+	// mxedge's router interfaces by the host LAN (lan_splice.go); nil when settings name none
+	lan *smtpLanDialer
 
 	stateLock sync.Mutex
 	// MX hosts a 421 banner backed off, until when
 	mxHostBackoffs map[string]time.Time
 }
 
-func newSmtpMxConnector(settings *SmtpEdgeSettings, clock sidecar.Clock, resolver sidecar.SmtpMxResolver, dialer sidecar.SmtpMxDialer, sendingSet *SmtpSendingSet, caps *SmtpDestinationCaps) *smtpMxConnector {
+func newSmtpMxConnector(settings *SmtpEdgeSettings, clock sidecar.Clock, resolver sidecar.SmtpMxResolver, dialer sidecar.SmtpMxDialer, sendingSet *SmtpSendingSet, caps *SmtpDestinationCaps, lan *smtpLanDialer) *smtpMxConnector {
 	return &smtpMxConnector{
 		settings:       settings,
 		clock:          clock,
@@ -93,6 +95,7 @@ func newSmtpMxConnector(settings *SmtpEdgeSettings, clock sidecar.Clock, resolve
 		dialer:         dialer,
 		sendingSet:     sendingSet,
 		caps:           caps,
+		lan:            lan,
 		mxHostBackoffs: map[string]time.Time{},
 	}
 }
@@ -311,7 +314,12 @@ func (self *smtpMxConnector) dial(ctx context.Context, mxHost string, mxAddress 
 	}
 	dialCtx, done := self.timeoutContext(ctx, self.settings.PreTlsTimeout)
 	defer done()
-	conn, err := self.dialer.DialMx(dialCtx, sendingAddress.Address, mxAddress)
+	dialer := self.dialer
+	if self.lan.routes(mxAddress) {
+		// a host cannot hairpin to its own lb address (D-SMTP-13)
+		dialer = self.lan
+	}
+	conn, err := dialer.DialMx(dialCtx, sendingAddress.Address, mxAddress)
 	if err != nil {
 		release()
 		return nil, err

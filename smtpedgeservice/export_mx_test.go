@@ -112,7 +112,7 @@ type TestMxConnection struct {
 }
 
 func NewTestMxConnector(settings *SmtpEdgeSettings, clock sidecar.Clock, resolver sidecar.SmtpMxResolver, dialer sidecar.SmtpMxDialer, sendingSet *SmtpSendingSet, caps *SmtpDestinationCaps) *TestMxConnector {
-	return &TestMxConnector{connector: newSmtpMxConnector(settings, clock, resolver, dialer, sendingSet, caps)}
+	return &TestMxConnector{connector: newSmtpMxConnector(settings, clock, resolver, dialer, sendingSet, caps, nil)}
 }
 
 func (self *TestMxConnector) Connect(ctx context.Context, domain string, limits *sidecar.QuotaLimits) (*TestMxConnection, protocol.SmtpPreambleCode, time.Duration, string) {

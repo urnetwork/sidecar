@@ -479,7 +479,7 @@ return count
 
 // {smq_<networkId>}'s hourly hard-bounce field for t's UTC hour (QD-199).
 func smtpBounceField(t time.Time) string {
-	return "b:" + t.UTC().Format("2006010215")
+	return "hb:" + t.UTC().Format("2006010215")
 }
 
 // Adds the outcome's hard bounces to their hour, then judges the window's against its recipients. With no
@@ -504,7 +504,7 @@ func (self *SmtpHaltLadder) applyHardBounces(ctx context.Context, event *SmtpHal
 	since := event.Time.Add(-self.settings.HaltWindow)
 	var bounceCount uint64
 	for field, value := range fields {
-		hourText, ok := strings.CutPrefix(field, "b:")
+		hourText, ok := strings.CutPrefix(field, "hb:")
 		if !ok {
 			continue
 		}

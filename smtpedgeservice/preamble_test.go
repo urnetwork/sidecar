@@ -35,6 +35,7 @@ type edgeWorld struct {
 	verifier *sidecartest.FakeSmtpProofVerifier
 	settings *smtpedgeservice.SmtpEdgeSettings
 	service  *smtpedgeservice.SmtpEdgeService
+	sink     *sidecartest.FakeSmtpAbuseSink
 
 	networkId sidecar.Id
 	clientId  sidecar.Id
@@ -43,6 +44,9 @@ type edgeWorld struct {
 	// Set by a change: start the engine with no store or no verifier.
 	storeOff    bool
 	verifierOff bool
+	// Set by a change: the LAN splice's dial, and the domain preambles name in place of dest.example.
+	lanDial         smtpedgeservice.SmtpLanDial
+	recipientDomain string
 }
 
 // The world's network, standard and verified, mail enabled two days ago, sending from n1.root.example
@@ -96,6 +100,10 @@ func newEdgeWorld(t *testing.T, change func(world *edgeWorld)) *edgeWorld {
 	self.gate.SetMailSend(self.networkId, self.sidecarId, true)
 	self.gate.SetBreaker(&smtpedgeservice.SmtpBreakerState{})
 	self.gate.SetCommunityLimits(communityLimits())
+	self.sink = sidecartest.NewFakeSmtpAbuseSink()
+	host.Quota.SetLimits(connect.Id(self.networkId), haltLimits("pro"))
+	// a balance the connections' leases draw on (§20.6)
+	host.Quota.SetBalance(connect.Id(self.networkId), 1024*1024*1024)
 	if change != nil {
 		change(self)
 	}
@@ -112,6 +120,10 @@ func newEdgeWorld(t *testing.T, change func(world *edgeWorld)) *edgeWorld {
 		Resolver: world,
 		Dialer:   world,
 		Ptr:      world,
+		Lookups:  self.store,
+		Halts:    self.store,
+		Sink:     self.sink,
+		LanDial:  self.lanDial,
 	}, self.settings)
 	if err != nil {
 		t.Fatal(err)
@@ -142,9 +154,13 @@ func (self *edgeWorld) mustWorld(err error) {
 
 // A preamble the gate and quota pass, to dest.example from n1.root.example.
 func (self *edgeWorld) preamble() *protocol.SmtpPreamble {
+	recipientDomain := testRecipientDomain
+	if self.recipientDomain != "" {
+		recipientDomain = self.recipientDomain
+	}
 	return &protocol.SmtpPreamble{
 		Version:          sidecar.SmtpPreambleVersion,
-		RecipientDomain:  testRecipientDomain,
+		RecipientDomain:  recipientDomain,
 		RecipientCount:   2,
 		MessageId:        "aaaaaaaaaaaaaaaaaaaaaaaaaa@n1.root.example",
 		HeaderFromDomain: "n1.root.example",
