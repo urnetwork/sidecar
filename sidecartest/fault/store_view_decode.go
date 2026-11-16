@@ -128,17 +128,17 @@ func (self *StoreView) Slot(ctx context.Context, repoId sidecar.Id, slotId sidec
 	return sidecar.EvsDecodeSlotObject(object.Body)
 }
 
-// A batch on any metadata cluster, pb/<yyyymmddhh>/<mm>/<instance>-<seq>, decoded by the root's batch codec; nil
-// when it is not there.
+// A batch on any metadata cluster, pb/<yyyymmddhh>/<mm>/<instance>-<seq>, decoded by the root's batch codec in
+// either format, a format-2 record's tail beside it; nil when it is not there.
 func (self *StoreView) Batch(ctx context.Context, clusterId string, key string) (*sidecar.EvsBatch, error) {
 	object, err := self.Object(ctx, clusterId, key)
 	if err != nil || object == nil {
 		return nil, err
 	}
-	return sidecar.ParseEvsBatch(object.Body)
+	return sidecar.ParseEvsBatchFormat2(object.Body)
 }
 
-// Every batch under pb/ on clusterId, with its key.
+// Every batch under pb/ on clusterId, with its key, in either format.
 func (self *StoreView) Batches(ctx context.Context, clusterId string) (map[string]*sidecar.EvsBatch, error) {
 	objects, err := self.Objects(ctx, clusterId, "pb/")
 	if err != nil {
@@ -146,7 +146,7 @@ func (self *StoreView) Batches(ctx context.Context, clusterId string) (map[strin
 	}
 	batches := map[string]*sidecar.EvsBatch{}
 	for _, object := range objects {
-		batch, err := sidecar.ParseEvsBatch(object.Body)
+		batch, err := sidecar.ParseEvsBatchFormat2(object.Body)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", object.Key, err)
 		}

@@ -868,7 +868,9 @@ func (self *evsStoreWalker) readVersion(repo *evsStoreRepo, refId sidecar.Id, ve
 	if err != nil {
 		return nil, err
 	}
-	record, err := sidecar.ParseEvsBatchRecord(recordBytes)
+	// a record of either format: a format-2 record's tail, its staged segments and purge list, is no part of its
+	// statement or payload (EVS2-M10-30)
+	record, _, err := sidecar.ParseEvsBatchRecordFormat2(recordBytes)
 	if err != nil {
 		return nil, fmt.Errorf("its record: %w", err)
 	}
@@ -906,7 +908,7 @@ func (self *evsStoreWalker) readVersion(repo *evsStoreRepo, refId sidecar.Id, ve
 			if err != nil {
 				return nil, fmt.Errorf("part %d: %w", k+1, err)
 			}
-			partRecord, err := sidecar.ParseEvsBatchRecord(partRecordBytes)
+			partRecord, _, err := sidecar.ParseEvsBatchRecordFormat2(partRecordBytes)
 			if err != nil {
 				return nil, fmt.Errorf("part %d: %w", k+1, err)
 			}
@@ -1532,7 +1534,14 @@ func fi1CheckDecrypt(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, er
 
 // A file version's sealed fields and every record of its chain, each header opened and every frame read.
 func fi1DecryptFile(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, keys *fi1Keys, manifest *sidecar.EvsManifestKey, fek *sidecar.EvsFekKey, entryVersion *protocol.EvsEntryVersion, erased map[string]bool) error {
-	fields, err := sidecar.EvsOpenFields(manifest, entryVersion.GetSealedFields())
+	// a versionless version's fields are format 2's, content_sha256 among them (EVS2-M10-30)
+	open := sidecar.EvsOpenFields
+	if versioning := entryVersion.GetVersioning(); versioning != uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT) {
+		open = func(manifest *sidecar.EvsManifestKey, sealed []byte) (*protocol.EvsSealedFields, error) {
+			return sidecar.EvsOpenFieldsFormat2(manifest, sealed, versioning)
+		}
+	}
+	fields, err := open(manifest, entryVersion.GetSealedFields())
 	if err != nil {
 		return fmt.Errorf("its sealed fields: %w", err)
 	}
