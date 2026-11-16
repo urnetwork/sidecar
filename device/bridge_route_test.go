@@ -2,7 +2,8 @@
 // clock fake: the default route untouched, a link entry's packet refused while its link builds and carried once it is
 // built, unassigned and service addresses rejected, TCP/25 to a link rejected and to the default route untouched, a
 // carve taking the default route, an entry whose advertiser is revoked rejecting for 600 s and then leaving, the egress
-// spec's exits and none, and RouteBurst's order, sameness and ownership.
+// spec's exits and none, IPv6 dropped and counted under exits and nowhere else (QD-881), and RouteBurst's order,
+// sameness and ownership.
 
 package device_test
 
@@ -177,6 +178,46 @@ func routeTestUdp(source string, destination string, port uint16) []byte {
 }
 
 const routeTestSource = "100.80.1.2"
+
+// An IPv6 packet of next header from source to destination, carrying transport.
+func routeTestIpv6Packet(nextHeader byte, source string, destination string, transport []byte) []byte {
+	packet := make([]byte, 40+len(transport))
+	packet[0] = 0x60
+	binary.BigEndian.PutUint16(packet[4:6], uint16(len(transport)))
+	packet[6] = nextHeader
+	packet[7] = 64
+	sourceOctets := netip.MustParseAddr(source).As16()
+	copy(packet[8:24], sourceOctets[:])
+	destinationOctets := netip.MustParseAddr(destination).As16()
+	copy(packet[24:40], destinationOctets[:])
+	copy(packet[40:], transport)
+	return packet
+}
+
+// An IPv6 TCP SYN from source port 40000 to destination's port.
+func routeTestIpv6Tcp(source string, destination string, port uint16) []byte {
+	transport := make([]byte, 20)
+	binary.BigEndian.PutUint16(transport[0:2], 40000)
+	binary.BigEndian.PutUint16(transport[2:4], port)
+	transport[12] = 0x50
+	transport[13] = 0x02
+	return routeTestIpv6Packet(6, source, destination, transport)
+}
+
+// An IPv6 UDP datagram from source port 40000 to destination's port.
+func routeTestIpv6Udp(source string, destination string, port uint16) []byte {
+	transport := make([]byte, 12)
+	binary.BigEndian.PutUint16(transport[0:2], 40000)
+	binary.BigEndian.PutUint16(transport[2:4], port)
+	binary.BigEndian.PutUint16(transport[4:6], 12)
+	return routeTestIpv6Packet(17, source, destination, transport)
+}
+
+// This host's IPv6 address in the IPv6 route tests, and a destination beyond it.
+const (
+	routeTestIpv6Source      = "2001:db8::2"
+	routeTestIpv6Destination = "2001:db8:1::9"
+)
 
 // Whether client refuses a packet, leaving it the caller's: a link still building.
 func routeTestRefuses(client connect.UserNatClient) bool {
@@ -359,6 +400,131 @@ func TestBridgeRouteFollowsTheEgressSpec(t *testing.T) {
 	test = newRouteTest(t, none, nil)
 	if _, ok := test.bridge.Route(routeTestUdp(routeTestSource, "203.0.113.9", 443)).(*device.BridgeRejectClient); !ok {
 		t.Fatal("under none a public destination was not rejected")
+	}
+}
+
+// Under the egress spec's exits an IPv6 packet goes nowhere (QD-881): Route hands each one, TCP/25 and a short one
+// among them, to the client that drops it, never to an exit's pins, with no allocation and nothing written back into
+// the tun, and the status counts every one dropped; a burst sends its IPv6 run to that client while its IPv4 run rides
+// the exit as before, each packet to exactly one send and the pool balanced after; no link is built for any of it.
+func TestBridgeRouteDropsIpv6UnderExits(t *testing.T) {
+	fixture := routeTestFixture()
+	fixture.Egress = &sidecartest.BridgeRulesFixtureEgress{
+		Mode:  bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS,
+		Exits: []sidecartest.BridgeRulesFixtureLink{{Target: 8, Route: 2}},
+	}
+	test := newRouteTest(t, fixture, nil)
+	exit := test.awaitLink(routeTestUdp(routeTestSource, "203.0.113.9", 443))
+	drop := test.bridge.Ipv6DropForTest()
+	ipv6Packets := [][]byte{
+		routeTestIpv6Udp(routeTestIpv6Source, routeTestIpv6Destination, 443),
+		routeTestIpv6Tcp(routeTestIpv6Source, routeTestIpv6Destination, 443),
+		routeTestIpv6Tcp(routeTestIpv6Source, routeTestIpv6Destination, 25),
+		// an ICMPv6 echo request
+		routeTestIpv6Packet(58, routeTestIpv6Source, routeTestIpv6Destination, []byte{128, 0, 0, 0, 0, 1, 0, 1}),
+		{0x60, 0, 0, 0},
+	}
+	for i, packet := range ipv6Packets {
+		if client := test.bridge.Route(packet); client != drop {
+			t.Fatalf("IPv6 packet %d under exits routed to %T, not the drop", i, client)
+		}
+	}
+	if allocs := testing.AllocsPerRun(1000, func() { test.bridge.Route(ipv6Packets[0]) }); allocs != 0 {
+		t.Fatalf("%v allocations an IPv6 route", allocs)
+	}
+	for _, packet := range ipv6Packets {
+		if !drop.SendPacket(connect.TransferPath{}, protocol.ProvideMode_Network, bytes.Clone(packet), time.Second) {
+			t.Fatal("the drop refused a packet, leaving it the caller's")
+		}
+	}
+	if status := test.bridge.Status(); status.Ipv6DroppedCount != uint64(len(ipv6Packets)) ||
+		status.RejectSentCount != 0 || status.RejectUnsentCount != 0 {
+		t.Fatalf("dropped %d of %d, rejects %d sent and %d unsent", status.Ipv6DroppedCount, len(ipv6Packets),
+			status.RejectSentCount, status.RejectUnsentCount)
+	}
+
+	// a burst whose IPv4 and IPv6 packets alternate: two sends, the exit's IPv4 run and the drop's IPv6 run
+	takenBefore, returnedBefore, _ := connect.MessagePoolCounts()
+	violationsBefore := connect.MessagePoolViolationCount()
+	exitBefore := len(exit.Packets())
+	packets := [][]byte{}
+	for i := range 10 {
+		packet := routeTestUdp(routeTestSource, "203.0.113.9", uint16(1000+i))
+		if i%2 == 1 {
+			packet = routeTestIpv6Udp(routeTestIpv6Source, routeTestIpv6Destination, uint16(1000+i))
+		}
+		pooled := connect.MessagePoolGet(len(packet))
+		copy(pooled, packet)
+		packets = append(packets, pooled)
+	}
+	type sent struct {
+		client connect.UserNatClient
+		count  int
+	}
+	sends := []sent{}
+	test.bridge.RouteBurst(packets, func(client connect.UserNatClient, batch [][]byte) {
+		for _, packet := range batch {
+			if client == nil || !client.SendPacket(connect.TransferPath{}, protocol.ProvideMode_Network, packet, time.Second) {
+				connect.MessagePoolReturn(packet)
+			}
+		}
+		sends = append(sends, sent{client: client, count: len(batch)})
+	})
+	if len(sends) != 2 || sends[0].client != exit || sends[0].count != 5 || sends[1].client != drop || sends[1].count != 5 {
+		t.Fatalf("the burst's sends %+v", sends)
+	}
+	exitPackets := exit.Packets()[exitBefore:]
+	if len(exitPackets) != 5 {
+		t.Fatalf("the exit took %d of the burst's packets", len(exitPackets))
+	}
+	for _, packet := range exitPackets {
+		if packet[0]>>4 != 4 {
+			t.Fatal("an IPv6 packet rode the exit")
+		}
+	}
+	if status := test.bridge.Status(); status.Ipv6DroppedCount != uint64(len(ipv6Packets)+5) {
+		t.Fatalf("dropped %d after the burst", status.Ipv6DroppedCount)
+	}
+	takenAfter, returnedAfter, _ := connect.MessagePoolCounts()
+	if takenAfter-takenBefore != returnedAfter-returnedBefore {
+		t.Fatalf("pool: %d taken, %d returned", takenAfter-takenBefore, returnedAfter-returnedBefore)
+	}
+	if connect.MessagePoolViolationCount() != violationsBefore {
+		t.Fatal("a pool buffer was returned twice")
+	}
+	if received := test.takeReceived(); len(received) != 0 {
+		t.Fatalf("%d packets written back into the tun for dropped IPv6", len(received))
+	}
+	if builds := test.host.Builds(); len(builds) != 1 {
+		t.Fatalf("%d links built", len(builds))
+	}
+}
+
+// Off exits the bridge counts no IPv6 drop and IPv4 routes as before: under auto IPv6 keeps today's route, and under
+// none it is rejected, as every packet the default route takes is.
+func TestBridgeRouteLeavesIpv6ToTheEgressSpecOffExits(t *testing.T) {
+	test := newRouteTest(t, routeTestFixture(), nil)
+	if client := test.bridge.Route(routeTestIpv6Tcp(routeTestIpv6Source, routeTestIpv6Destination, 443)); client != nil {
+		t.Fatalf("under auto IPv6 routed to %T", client)
+	}
+	if client := test.bridge.Route(routeTestUdp(routeTestSource, "203.0.113.9", 443)); client != nil {
+		t.Fatalf("under auto IPv4 routed to %T", client)
+	}
+	none := routeTestFixture()
+	none.Egress = &sidecartest.BridgeRulesFixtureEgress{Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE}
+	test = newRouteTest(t, none, nil)
+	packet := routeTestIpv6Tcp(routeTestIpv6Source, routeTestIpv6Destination, 443)
+	reject, ok := test.bridge.Route(packet).(*device.BridgeRejectClient)
+	if !ok {
+		t.Fatal("under none IPv6 was not rejected")
+	}
+	reject.SendPacket(connect.TransferPath{}, protocol.ProvideMode_Network, packet, time.Second)
+	received := test.takeReceived()
+	if len(received) != 1 || received[0][0]>>4 != 6 {
+		t.Fatalf("under none %d rejects written", len(received))
+	}
+	if status := test.bridge.Status(); status.Ipv6DroppedCount != 0 {
+		t.Fatalf("dropped %d off exits", status.Ipv6DroppedCount)
 	}
 }
 

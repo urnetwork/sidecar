@@ -14,7 +14,8 @@
 //	revoked     an entry left with no advertiser rejects for RejectEntryHoldTimeout, then leaves the table (§17.8's
 //	            revocation row): a link the rules dropped with no drain was revoked, so its pins drop at once
 //	default     no entry: today's route under the egress spec's auto, or with none set; under exits, the pins pick one
-//	            of the approved exits; under none, a reject (§17.9's egress spec)
+//	            of the approved exits for an IPv4 packet, and an IPv6 packet goes nowhere, dropped and counted, since
+//	            the overlay and the exits carry no IPv6 (§17.4; QD-881); under none, a reject (§17.9's egress spec)
 //
 // RouteBurst splits a burst by route in place, keeping flow order. What Route reads is rebuilt off the packet path from
 // the state the bridge adopts, the overlay narrowing it, the links Retain names and this device's local addresses, and
@@ -29,6 +30,7 @@ import (
 	"encoding/binary"
 	"net/netip"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/urnetwork/connect"
@@ -98,6 +100,32 @@ func (self bridgeRefusalClient) SecurityPolicyStats(reset bool) connect.Security
 
 func (self bridgeRefusalClient) SetLocalSecurityBypass(localSecurityBypass bool) {}
 
+// What Route hands an IPv6 packet under the egress spec's exits (QD-881): the overlay and the exits carry IPv4 alone
+// (§17.4), so the packet goes nowhere, never to an exit's pins, and its source, which hears nothing back, falls back
+// to IPv4. It takes each packet, returns it to the pool and counts it. Safe for concurrent use.
+type bridgeDropClient struct {
+	droppedCount atomic.Uint64
+}
+
+var _ connect.UserNatClient = (*bridgeDropClient)(nil)
+
+// Takes packet and drops it: always true, since the packet is disposed of here.
+func (self *bridgeDropClient) SendPacket(source connect.TransferPath, provideMode protocol.ProvideMode, packet []byte, timeout time.Duration) bool {
+	self.droppedCount.Add(1)
+	connect.MessagePoolReturn(packet)
+	return true
+}
+
+func (self *bridgeDropClient) Close() {}
+
+func (self *bridgeDropClient) Shuffle() {}
+
+func (self *bridgeDropClient) SecurityPolicyStats(reset bool) connect.SecurityPolicyStats {
+	return connect.SecurityPolicyStats{}
+}
+
+func (self *bridgeDropClient) SetLocalSecurityBypass(localSecurityBypass bool) {}
+
 // §18.6's deviceBridge.Route: what carries packet, by the file's rows; nil is the default route. Lock- and
 // allocation-free.
 func (self *Bridge) Route(packet []byte) connect.UserNatClient {
@@ -147,10 +175,15 @@ func (self *Bridge) routeLink(entryState *BridgeEntryState, packet []byte) conne
 }
 
 // A packet no entry holds, by the egress spec: today's route, an exit, or a reject. A carved address keeps the default
-// route under every mode, since the physical path needs it.
+// route under every mode, since the physical path needs it. Under exits an IPv6 packet goes nowhere, dropped and
+// counted (QD-881): no exit carries IPv6, and `ur tun` puts the host's IPv6 default route through the tun beside IPv4's
+// so it does not leave by today's route instead.
 func (self *Bridge) routeDefault(state *bridgeRouteState, packet []byte) connect.UserNatClient {
 	switch state.egressMode {
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
+		if bridgeRouteIpv6(packet) {
+			return self.ipv6Drop
+		}
 		if state.carved(packet) {
 			return nil
 		}
@@ -206,6 +239,11 @@ func bridgeRouteDestinationPort(packet []byte) (uint16, bool) {
 		return 0, false
 	}
 	return binary.BigEndian.Uint16(packet[headerByteCount+2 : headerByteCount+4]), true
+}
+
+// Whether packet is IPv6, by its version, whatever else it holds.
+func bridgeRouteIpv6(packet []byte) bool {
+	return 0 < len(packet) && packet[0]>>4 == 6
 }
 
 // Whether packet is IPv4 TCP to port 25.
