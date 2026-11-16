@@ -76,7 +76,7 @@ func TestDropKeepsSharedChunks(t *testing.T) {
 	for _, segment := range []struct {
 		body []byte
 		id   []byte
-	}{{onlyBody, onlyId}, {sharedBody, sharedId}, {headBody, headId}, {failingBody, failingId}} {
+	}{{body: onlyBody, id: onlyId}, {body: sharedBody, id: sharedId}, {body: headBody, id: headId}, {body: failingBody, id: failingId}} {
 		if err := mirror.Put(EvsMirrorSegmentKey(segment.id), bytes.NewReader(segment.body)); err != nil {
 			t.Fatal(err)
 		}
