@@ -203,6 +203,8 @@ reverse zones of the sending lb addresses (owner decision 124), delegated by HE 
 <address>          PTR its HELO name under bringyour.com, from smtpedge.yml       §14.6
 ```
 
+**Edge address records (owner decision 335).** `*` and `@` A and AAAA are grant-driven. An edge grant is an active publish on `dns:<host>` in that zone, or the system publish: a network with a `mail_network` row and an approved `smtp/25/mx` listen grant, since `mta-sts.<net>.<root>` has no row of its own and resolves only through `*`. `*` has A and AAAA while the zone's set holds any host but `@`, or the system publish; `@` has them while the set holds `@`. After each accepted `POST /network/config/delta` or `POST /network/config/projection`, once the object PUT has committed, api recomputes the set from the state at that position and calls `model.DnsSyncEdgeRecords`, which makes one journal write per transition and none otherwise, in a transaction of its own, since §7.9 commits by conditional PUT and has no transaction to join. An hourly taskworker pass over §21.6's list reconciles both ways: it removes what expired and adds what a crash between the PUT and the write missed. §9.4's `FirstListen` and `LastUnlisten` have no DNS consumer, so whether a listener is up never shows in DNS.
+
 User records:
 
 | Type | Owners | Rules |
@@ -341,7 +343,7 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 
 ### 12.14 Interfaces
 
-- **Provides:** `ResolveNetworkLabel(root, text, interactive) (networkId, kind)` (§8, §9, §13, §15); certs' DNS-01 and canary-CAA routes; §13-§15's records and reverse zones, direct MX and the custom-host map with each host's state and CAA mode (§13.4, §13.8); label reclaim and the restore step, with its edges' diffs and abuse flags (§19.10, §21); suspension (§21); `LocalZone` (§17, §18); entry counts (§20).
+- **Provides:** `ResolveNetworkLabel(root, text, interactive) (networkId, kind)` (§8, §9, §13, §15); certs' DNS-01 and canary-CAA routes; §13-§15's records and reverse zones, direct MX and the custom-host map with each host's state and CAA mode (§13.4, §13.8); label reclaim and the restore step, with its edges' diffs and abuse flags (§19.10, §21); suspension (§21); `LocalZone` (§17, §18); entry counts (§20); `model.DnsSyncEdgeRecords`, which api calls after each accepted delta or projection, and taskworker's hourly reconcile of edge address records (12.7).
 - **Consumes:** §7's DNS permission, `network_domain`, `RenameNetwork`, admin events, client names; §8 grants, owner consent, scope labels, §8.10's gate; §13 certs and its CAA walk; §14, §15 record content, the direct-MX check; §16 decisions, the spend check and `approval_use` (D-MCP-11, D-MCP-12); §6 topic `dns`; §4 C14; §19 dns edge hosts, router interfaces, W1's reload and drain, the restore (§19.10), the rota (owner decision 143); §20 quotas; §21 `ScreenName`, `network_verified`, probation caps, open cases.
 - **Subprotocol messages:** `DnsZoneChanged` (0x1B01, §6.11) on push topic `dns` (§6.8), versioned by the zone serial.
 - **API routes:** §12.8.
