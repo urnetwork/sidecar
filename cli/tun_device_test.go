@@ -4,9 +4,10 @@
 // counted; a reply is copied behind the device's headroom; a sync sets the device to the bridge's addresses, routes and
 // zones, and follows each change; the local addresses reach the bridge without the bridge's own resolvers and only when
 // they change; close removes everything on each path; the default route rides the tun under exits and leaves it off
-// exits, a platform's refusal holding the exits with its reason and the tun up; and the daemon refuses a platform with
-// no tun, a network with no bridge, a second network and an app's held block. Every wait is on a channel, bounded by
-// urTestTimeout.
+// exits, a platform's refusal holding the exits with its reason and the tun up; the status counts the IPv6 the bridge
+// drops under exits since the tun came up, and the output says IPv6 goes nowhere there; and the daemon refuses a
+// platform with no tun, a network with no bridge, a second network and an app's held block. Every wait is on a
+// channel, bounded by urTestTimeout.
 
 package main
 
@@ -817,6 +818,41 @@ func TestTunStartsWithTheExitsHeld(t *testing.T) {
 	}
 }
 
+// The status counts, beside default_count, the IPv6 the network's bridge dropped under exits since the tun came up
+// (QD-881): the bridge's own count less what it had dropped before, so a tun that comes up again starts from none.
+func TestTunCountsTheIpv6TheBridgeDrops(t *testing.T) {
+	system := newTestTunSystem()
+	tunBridge := newTestTunBridge()
+	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.status.Ipv6DroppedCount = 5
+	tun, err := startUrTun(context.Background(), &urTunArgs{
+		Name:      "ur-test",
+		NetworkId: sidecar.NewId(),
+		System:    system,
+		Bridge:    tunBridge,
+		Links:     &testTunLinks{},
+		Settings:  testUrTunSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tun.close)
+	if status := tun.status(); status.Ipv6DroppedCount != 0 {
+		t.Fatalf("up: %d dropped", status.Ipv6DroppedCount)
+	}
+	tunBridge.stateLock.Lock()
+	tunBridge.status.Ipv6DroppedCount = 12
+	tunBridge.stateLock.Unlock()
+	status := tun.status()
+	if status.Ipv6DroppedCount != 7 {
+		t.Fatalf("after drops: %d dropped", status.Ipv6DroppedCount)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil || !strings.Contains(string(encoded), `"default_count":0,"ipv6_dropped_count":7,`) {
+		t.Fatalf("the reply %s %v", encoded, err)
+	}
+}
+
 // A default route that will not come off when the mode leaves exits is the sync's error, tried again, not a hold.
 func TestTunRetriesADefaultRouteThatStays(t *testing.T) {
 	tun, system, tunBridge, _, _ := startTestUrTun(t)
@@ -1026,7 +1062,7 @@ func TestTunIpShowsAndClaims(t *testing.T) {
 }
 
 // The commands against a daemon whose tun methods a test stands in for: ur tun prints the device, the block, the
-// address, each route and the names, and ur tun ip what it shows.
+// address, each route and the names, that under exits IPv6 goes nowhere (QD-881), and ur tun ip what it shows.
 func TestTunCommandsPrintWhatTheDaemonHolds(t *testing.T) {
 	previous := urTunPlatform
 	t.Cleanup(func() { urTunPlatform = previous })
@@ -1057,7 +1093,8 @@ func TestTunCommandsPrintWhatTheDaemonHolds(t *testing.T) {
 	}
 	printed := stdout.String()
 	for _, want := range []string{"ur-test carries network", "100.70.0.0/16", "100.70.9.9", "100.70.1.2/32",
-		"net.example through 100.70.0.53", "exits      the default route rides ur tun"} {
+		"net.example through 100.70.0.53", "exits      the default route rides ur tun",
+		"IPv6 goes nowhere, since no exit carries it", "the host falls back to IPv4"} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("ur tun printed no %q:\n%s", want, printed)
 		}

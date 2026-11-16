@@ -17,6 +17,13 @@
 //	           the rest takes the tun but for the daemon's own connect sockets, which carry connect's egress mark
 //	           (QD-800); the mark goes on first and comes off last, connect's transports dial again once the rules are
 //	           on, so no socket made before the mark stays in the tun's way
+//	ipv6       under exits, IPv6's half after IPv4's (QD-881): ::/0 through the device in ExitsTable, the table's IPv6
+//	           side, and IPv6's copies of the two rules, so the host's IPv6 reaches the tun, where the bridge drops it
+//	           and counts it, since no exit carries IPv6, while the daemon's own IPv6 sockets, marked as its IPv4 ones
+//	           are, keep the host's route. Where the main table routes IPv6 off the host by a default route, a refusal
+//	           of IPv6's half holds the exits as one of IPv4's does; where it routes none and the kernel will not take
+//	           IPv6's half, a kernel without IPv6 or a device with it off, IPv4's stands alone, since no IPv6 leaves
+//	           the host to begin with, and the next SetExits tries IPv6's again
 //	carved     under exits, a throw route in ExitsTable for each IPv4 /32 the bridge carves (§17.4: this host's
 //	           interface addresses, gateways and resolvers, which the tun hands Bridge.SetLocalAddresses and SetCarved
 //	           alike), beside the table's default route, so a lookup of one leaves the table for the main table's rule
@@ -509,13 +516,13 @@ func urTunLinuxParseRule(data []byte) urTunLinuxRule {
 	return rule
 }
 
-// The rule message of one of the exits' two rules, at priority and of ur's protocol, so a delete matches only ur's
-// (wg-quick's rules): with suppress, `lookup main suppress_prefixlength 0`, which keeps every route of the main table
-// but its default ahead of the tun; without, `not fwmark <mark> lookup <table>`, which sends everything but the
-// daemon's own marked sockets to the exits table, whose default route is the tun.
-func urTunLinuxRuleBody(priority uint32, suppress bool, table uint32, mark uint32) []byte {
+// The rule message of one of the exits' two rules of family, AF_INET or AF_INET6, at priority and of ur's protocol, so
+// a delete matches only ur's (wg-quick's rules): with suppress, `lookup main suppress_prefixlength 0`, which keeps every
+// route of the main table but its default ahead of the tun; without, `not fwmark <mark> lookup <table>`, which sends
+// everything but the daemon's own marked sockets to the exits table, whose default route is the tun.
+func urTunLinuxRuleBody(family uint8, priority uint32, suppress bool, table uint32, mark uint32) []byte {
 	body := make([]byte, urTunLinuxRuleHeaderByteCount)
-	body[0] = unix.AF_INET
+	body[0] = family
 	body[7] = unix.FR_ACT_TO_TBL
 	lookup := table
 	if suppress {
@@ -676,26 +683,35 @@ func urTunLinuxAddressBody(index int, address netip.Addr) []byte {
 	return body
 }
 
-// The route message of an IPv4 prefix through index in table, ur's, at metric: for an add, unicast in the link's scope;
-// for a delete, any type and scope of ur's protocol through index. The default route names no destination.
+// The route message of a prefix of either family through index in table, ur's, at metric: for an add, unicast, in the
+// link's scope for IPv4 and the universe's for IPv6, whose routes the kernel scopes no other way; for a delete, any
+// type of ur's protocol through index, in any scope. The default route names no destination.
 func urTunLinuxRouteBody(index int, prefix netip.Prefix, table uint32, metric uint32, add bool) []byte {
-	octets := prefix.Masked().Addr().As4()
+	prefix = prefix.Masked()
 	body := make([]byte, unix.SizeofRtMsg)
 	body[0] = unix.AF_INET
+	if prefix.Addr().Is6() {
+		body[0] = unix.AF_INET6
+	}
 	body[1] = uint8(prefix.Bits())
 	// the header's one byte names a table under 256; RTA_TABLE names any, and wins
 	if table < 256 {
 		body[4] = uint8(table)
 	}
 	body[5] = urTunRouteProtocol
-	if add {
+	switch {
+	case prefix.Addr().Is6():
+		body[6] = unix.RT_SCOPE_UNIVERSE
+	case add:
 		body[6] = unix.RT_SCOPE_LINK
-		body[7] = unix.RTN_UNICAST
-	} else {
+	default:
 		body[6] = unix.RT_SCOPE_NOWHERE
 	}
+	if add {
+		body[7] = unix.RTN_UNICAST
+	}
 	if 0 < prefix.Bits() {
-		body = append(body, urNetlinkAttribute(unix.RTA_DST, octets[:])...)
+		body = append(body, urNetlinkAttribute(unix.RTA_DST, prefix.Addr().AsSlice())...)
 	}
 	body = append(body, urNetlinkAttribute(unix.RTA_OIF, urNetlinkUint32(uint32(index)))...)
 	body = append(body, urNetlinkAttribute(unix.RTA_PRIORITY, urNetlinkUint32(metric))...)
@@ -750,11 +766,14 @@ type urTunLinuxInterface struct {
 	routes      []netip.Prefix
 	resolverSet bool
 	// what the exits put on, which SetExits(false) and Close take off: connect's egress mark, the default route in the
-	// exits table, and its two rules
-	exitsMark         bool
-	exitsRoute        bool
-	exitsSuppressRule bool
-	exitsMarkRule     bool
+	// exits table, and its two rules; and IPv6's default route there and its two rules (QD-881)
+	exitsMark             bool
+	exitsRoute            bool
+	exitsSuppressRule     bool
+	exitsMarkRule         bool
+	exitsIpv6Route        bool
+	exitsIpv6SuppressRule bool
+	exitsIpv6MarkRule     bool
 	// the IPv4 addresses the bridge carves, sorted (SetCarved), and those a throw route in the exits table holds now
 	carvedAddrs []netip.Addr
 	throwAddrs  []netip.Addr
@@ -878,12 +897,14 @@ func (self *urTunLinuxInterface) SetResolver(resolver netip.Addr, zones []string
 
 // Under exits, marks the daemon's own connect sockets, then puts the default route through the device in the exits table,
 // a throw beside it for each carved address SetCarved last gave, and wg-quick's two rules ahead of the main table's (the
-// file's comment), and has connect's transports dial again, so no socket made before the mark stays in the tun's way. It
-// refuses, and leaves nothing on, where another program holds the table or the mark, or a strict reverse path filter
-// would drop the daemon's replies; a throw that will not go on refuses nothing, and is SetCarved's to try again. Off
-// exits, takes them off. Answers whether the default route rides the device.
+// file's comment), then IPv6's default route and rules the same way (QD-881), and has connect's transports dial again
+// once a rule that sends traffic to the tun first stands, so no socket made before the mark stays in the tun's way. It
+// refuses, and leaves nothing on, where another program holds the table or the mark, a strict reverse path filter would
+// drop the daemon's replies, or the main table routes IPv6 off the host and IPv6's half will not go on; a throw that
+// will not go on refuses nothing, and is SetCarved's to try again. Off exits, takes them off. Answers whether a default
+// route rides the device.
 func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
-	installed, defaultRoute, err := func() (bool, bool, error) {
+	kick, defaultRoute, err := func() (bool, bool, error) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.closed {
@@ -891,28 +912,31 @@ func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
 		}
 		if !exits {
 			err := self.clearExitsWithLock()
-			return false, self.exitsMarkRule && self.exitsRoute, err
+			return false, (self.exitsMarkRule && self.exitsRoute) || (self.exitsIpv6MarkRule && self.exitsIpv6Route), err
 		}
-		if self.exitsMark && self.exitsRoute && self.exitsSuppressRule && self.exitsMarkRule {
+		if self.exitsMark && self.exitsRoute && self.exitsSuppressRule && self.exitsMarkRule && self.exitsIpv6Route &&
+			self.exitsIpv6SuppressRule && self.exitsIpv6MarkRule {
 			return false, true, nil
 		}
-		leftAddrs, err := self.system.exitsRefusal(self.index)
+		host, err := self.system.exitsRefusal(self.index)
 		if err != nil {
 			return false, false, errors.Join(err, self.clearExitsWithLock())
 		}
 		// a past end's throws are this one's to keep in step, so one of an address no longer carved comes off
-		for _, address := range leftAddrs {
+		for _, address := range host.throwAddrs {
 			if !slices.Contains(self.throwAddrs, address) {
 				self.throwAddrs = append(self.throwAddrs, address)
 			}
 		}
-		if err := self.setExitsWithLock(); err != nil {
+		// the mark has stood since the first rule went on, so a rule that joins it later needs no new dial
+		marked := self.exitsMarkRule || self.exitsIpv6MarkRule
+		if err := self.setExitsWithLock(host.ipv6Routed); err != nil {
 			// nothing of a partial set stays on behind a refusal
 			return false, false, errors.Join(err, self.clearExitsWithLock())
 		}
-		return true, true, nil
+		return !marked, true, nil
 	}()
-	if installed {
+	if kick {
 		// a socket made before the mark takes the tun's way from here: connect's transports dial again, marked
 		self.system.networkChanged()
 	}
@@ -921,64 +945,91 @@ func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
 
 // Puts on what the exits need that is not on yet: the mark first, so every socket connect makes from here keeps
 // today's route, then the default route in the exits table and a throw beside it for each carved address, the rule that
-// keeps the main table's other routes ahead of it, and last the rule that sends the rest to it. A throw that will not go
-// on refuses nothing: its address meets the table's default route, and the tun drops it, until the SetCarved that
-// follows each sync tries it again and answers why.
-func (self *urTunLinuxInterface) setExitsWithLock() error {
-	settings := self.system.settings
+// keeps the main table's other routes ahead of it, and last the rule that sends the rest to it; then IPv6's half
+// (setIpv6ExitsWithLock), whose refusal refuses the whole where ipv6Routed. A throw that will not go on refuses nothing:
+// its address meets the table's default route, and the tun drops it, until the SetCarved that follows each sync tries
+// it again and answers why.
+func (self *urTunLinuxInterface) setExitsWithLock(ipv6Routed bool) error {
 	if !self.exitsMark {
-		self.system.setEgressMark(settings.ExitsMark)
+		self.system.setEgressMark(self.system.settings.ExitsMark)
 		self.exitsMark = true
 	}
 	if !self.exitsRoute {
-		body := urTunLinuxRouteBody(self.index, netip.PrefixFrom(netip.IPv4Unspecified(), 0), settings.ExitsTable,
-			settings.RouteMetric, true)
-		if err := self.system.request(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil {
+		if err := self.requestExitsRouteWithLock(unix.AF_INET, true); err != nil {
 			return fmt.Errorf("the default route did not go on (%v)", err)
 		}
 		self.exitsRoute = true
 	}
 	// before the rule that reaches the table, so no lookup of a carved address meets its default route
 	_ = self.setThrowsWithLock(self.carvedAddrs)
-	// a rule already there at the same priority, ur's protocol on it, is this daemon's from an end it did not see
 	if !self.exitsSuppressRule {
-		body := urTunLinuxRuleBody(settings.ExitsRulePriority, true, settings.ExitsTable, settings.ExitsMark)
-		if err := self.system.request(unix.RTM_NEWRULE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil &&
-			!errors.Is(err, unix.EEXIST) {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET, true, true); err != nil {
 			return fmt.Errorf("the rule that keeps the main table's routes ahead did not go on (%v)", err)
 		}
 		self.exitsSuppressRule = true
 	}
 	if !self.exitsMarkRule {
-		body := urTunLinuxRuleBody(settings.ExitsRulePriority+1, false, settings.ExitsTable, settings.ExitsMark)
-		if err := self.system.request(unix.RTM_NEWRULE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil &&
-			!errors.Is(err, unix.EEXIST) {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET, false, true); err != nil {
 			return fmt.Errorf("the rule that sends unmarked traffic to the tun did not go on (%v)", err)
 		}
 		self.exitsMarkRule = true
 	}
+	return self.setIpv6ExitsWithLock(ipv6Routed)
+}
+
+// Puts on what of IPv6's half of the exits is not on yet, in IPv4's order (QD-881): its default route in the exits
+// table, then its rule that keeps the main table's other routes ahead, then its rule that sends the rest to the table.
+// The host's IPv6 then reaches the tun, where the bridge drops it, and the daemon's marked IPv6 sockets keep today's
+// route. Where a part will not go on and ipv6Routed, the main table routing IPv6 off the host by a default route, it
+// refuses, since the host's IPv6 would leave outside the exits. Where the main table routes none, no IPv6 leaves the
+// host to begin with: what of the half went on comes off, IPv4's stands alone, and the next SetExits tries again.
+func (self *urTunLinuxInterface) setIpv6ExitsWithLock(ipv6Routed bool) error {
+	refused := func(what string, err error) error {
+		if ipv6Routed {
+			return fmt.Errorf("%s did not go on, and the host's IPv6 would leave outside the exits (%v)", what, err)
+		}
+		// what would not come off stays this interface's, which the next clear tries again
+		_ = self.clearIpv6ExitsWithLock()
+		return nil
+	}
+	if !self.exitsIpv6Route {
+		if err := self.requestExitsRouteWithLock(unix.AF_INET6, true); err != nil {
+			return refused("IPv6's default route", err)
+		}
+		self.exitsIpv6Route = true
+	}
+	if !self.exitsIpv6SuppressRule {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET6, true, true); err != nil {
+			return refused("IPv6's rule that keeps the main table's routes ahead", err)
+		}
+		self.exitsIpv6SuppressRule = true
+	}
+	if !self.exitsIpv6MarkRule {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET6, false, true); err != nil {
+			return refused("IPv6's rule that sends unmarked traffic to the tun", err)
+		}
+		self.exitsIpv6MarkRule = true
+	}
 	return nil
 }
 
-// Takes off what the exits put on, the rule that sends traffic to the tun first, keeping account of what would not come
-// off, so a later call tries it again. While that rule stays, the main table's rule ahead of it and the mark stay too,
-// and the default route goes anyway, so a stuck rule finds an empty table and leaves the rest to the main table. The
-// carved addresses' throws go once that rule or the default route has: until then a lookup of one still needs its throw.
+// Takes off what the exits put on, IPv4's first, the rule that sends traffic to the tun first, keeping account of what
+// would not come off, so a later call tries it again; then IPv6's half the same way (clearIpv6ExitsWithLock); and the
+// mark last, once neither family's rule that sends traffic to the tun stands. While such a rule stays, the main table's
+// rule ahead of it stays too, and its default route goes anyway, so a stuck rule finds an empty table and leaves the
+// rest to the main table. The carved addresses' throws go once IPv4's rule or default route has: until then a lookup of
+// one still needs its throw.
 func (self *urTunLinuxInterface) clearExitsWithLock() error {
-	settings := self.system.settings
 	var clearErr error
 	if self.exitsMarkRule {
-		body := urTunLinuxRuleBody(settings.ExitsRulePriority+1, false, settings.ExitsTable, settings.ExitsMark)
-		if err := self.system.request(unix.RTM_DELRULE, 0, body); err != nil && !errors.Is(err, unix.ENOENT) {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET, false, false); err != nil {
 			clearErr = errors.Join(clearErr, fmt.Errorf("the rule that sends unmarked traffic to the tun did not come off (%v)", err))
 		} else {
 			self.exitsMarkRule = false
 		}
 	}
 	if self.exitsRoute {
-		body := urTunLinuxRouteBody(self.index, netip.PrefixFrom(netip.IPv4Unspecified(), 0), settings.ExitsTable,
-			settings.RouteMetric, false)
-		if err := self.system.request(unix.RTM_DELROUTE, 0, body); err != nil && !errors.Is(err, unix.ESRCH) {
+		if err := self.requestExitsRouteWithLock(unix.AF_INET, false); err != nil {
 			clearErr = errors.Join(clearErr, fmt.Errorf("the default route did not come off (%v)", err))
 		} else {
 			self.exitsRoute = false
@@ -988,25 +1039,97 @@ func (self *urTunLinuxInterface) clearExitsWithLock() error {
 		clearErr = errors.Join(clearErr, self.setThrowsWithLock(nil))
 	}
 	if self.exitsSuppressRule && !self.exitsMarkRule {
-		body := urTunLinuxRuleBody(settings.ExitsRulePriority, true, settings.ExitsTable, settings.ExitsMark)
-		if err := self.system.request(unix.RTM_DELRULE, 0, body); err != nil && !errors.Is(err, unix.ENOENT) {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET, true, false); err != nil {
 			clearErr = errors.Join(clearErr, fmt.Errorf("the rule that keeps the main table's routes ahead did not come off (%v)", err))
 		} else {
 			self.exitsSuppressRule = false
 		}
 	}
-	if self.exitsMark && !self.exitsMarkRule {
+	clearErr = errors.Join(clearErr, self.clearIpv6ExitsWithLock())
+	if self.exitsMark && !self.exitsMarkRule && !self.exitsIpv6MarkRule {
 		self.system.setEgressMark(0)
 		self.exitsMark = false
 	}
 	return clearErr
 }
 
-// Sets the addresses the bridge carves (§17.4), the IPv4 ones counting, since the exits table is IPv4's (QD-808). While
-// the rule that reaches the exits table and its default route are both on, the throws follow at once: one for each
-// address that holds none, and those of addresses no longer carved off. Otherwise the list waits for SetExits(true),
-// and a throw a clear left on is tried off again. Answers what would not go on or come off, which the next call tries
-// again.
+// Takes IPv6's half of the exits off as clearExitsWithLock takes IPv4's: its rule that sends traffic to the tun first,
+// then its default route, then, once that rule is off, its rule that keeps the main table's routes ahead. The mark is
+// clearExitsWithLock's.
+func (self *urTunLinuxInterface) clearIpv6ExitsWithLock() error {
+	var clearErr error
+	if self.exitsIpv6MarkRule {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET6, false, false); err != nil {
+			clearErr = errors.Join(clearErr, fmt.Errorf("IPv6's rule that sends unmarked traffic to the tun did not come off (%v)", err))
+		} else {
+			self.exitsIpv6MarkRule = false
+		}
+	}
+	if self.exitsIpv6Route {
+		if err := self.requestExitsRouteWithLock(unix.AF_INET6, false); err != nil {
+			clearErr = errors.Join(clearErr, fmt.Errorf("IPv6's default route did not come off (%v)", err))
+		} else {
+			self.exitsIpv6Route = false
+		}
+	}
+	if self.exitsIpv6SuppressRule && !self.exitsIpv6MarkRule {
+		if err := self.requestExitsRuleWithLock(unix.AF_INET6, true, false); err != nil {
+			clearErr = errors.Join(clearErr, fmt.Errorf("IPv6's rule that keeps the main table's routes ahead did not come off (%v)", err))
+		} else {
+			self.exitsIpv6SuppressRule = false
+		}
+	}
+	return clearErr
+}
+
+// Puts the exits' default route of family, AF_INET or AF_INET6, through the device in the exits table on, exclusively,
+// or takes it off, one already gone counting as off.
+func (self *urTunLinuxInterface) requestExitsRouteWithLock(family int, on bool) error {
+	settings := self.system.settings
+	unspecified := netip.IPv4Unspecified()
+	if family == unix.AF_INET6 {
+		unspecified = netip.IPv6Unspecified()
+	}
+	body := urTunLinuxRouteBody(self.index, netip.PrefixFrom(unspecified, 0), settings.ExitsTable, settings.RouteMetric, on)
+	if on {
+		return self.system.request(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body)
+	}
+	if err := self.system.request(unix.RTM_DELROUTE, 0, body); err != nil && !errors.Is(err, unix.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+// Puts one of the exits' two rules of family, AF_INET or AF_INET6, on or takes it off (urTunLinuxRuleBody): with
+// suppress the rule that keeps the main table's routes ahead, at ExitsRulePriority, and without it the rule that sends
+// unmarked traffic to the exits table, at the priority after. A rule already there at the same priority, ur's protocol
+// on it, is this daemon's from an end it did not see, and counts as on; one already gone counts as off.
+func (self *urTunLinuxInterface) requestExitsRuleWithLock(family int, suppress bool, on bool) error {
+	settings := self.system.settings
+	priority := settings.ExitsRulePriority
+	if !suppress {
+		priority += 1
+	}
+	body := urTunLinuxRuleBody(uint8(family), priority, suppress, settings.ExitsTable, settings.ExitsMark)
+	if on {
+		if err := self.system.request(unix.RTM_NEWRULE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil &&
+			!errors.Is(err, unix.EEXIST) {
+			return err
+		}
+		return nil
+	}
+	if err := self.system.request(unix.RTM_DELRULE, 0, body); err != nil && !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	return nil
+}
+
+// Sets the addresses the bridge carves (§17.4), the IPv4 ones counting, since the throws are IPv4's (QD-808): the
+// table's IPv6 side holds none, and the host's IPv6 to a carved address goes nowhere with the rest of its IPv6 (QD-881).
+// While IPv4's rule that reaches the exits table and its default route are both on, the throws follow at once: one for
+// each address that holds none, and those of addresses no longer carved off. Otherwise the list waits for
+// SetExits(true), and a throw a clear left on is tried off again. Answers what would not go on or come off, which the
+// next call tries again.
 func (self *urTunLinuxInterface) SetCarved(addresses []netip.Addr) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -1080,48 +1203,69 @@ func (self *urTunLinuxInterface) setThrowsWithLock(wantedAddrs []netip.Addr) err
 	return setErr
 }
 
+// What the host holds that the exits go on beside, as exitsRefusal reads it.
+type urTunLinuxExitsHost struct {
+	// the carved addresses whose throw of ur's the exits table already holds, a past end's among them
+	throwAddrs []netip.Addr
+	// whether the main table routes IPv6 off the host by a default route through another interface, so that IPv6's
+	// half of the exits must go on, or the host's IPv6 would leave outside them (QD-881)
+	ipv6Routed bool
+}
+
 // Why the exits' default route may not go on now, nil when it may: another program's route in the exits table, or rule
-// on the exits mark or table, which ur tun's would mix with; or a strict reverse path filter on an interface the main
-// table's default route leaves by, which would drop the daemon's own replies there, since a reply arrives unmarked and
-// the filter's lookup of its way back finds the tun. A setting that does not read refuses too. Where it may, answers the
-// addresses whose throw of ur's the table already holds, a past end's among them.
-func (self *urTunLinuxSystem) exitsRefusal(index int) ([]netip.Addr, error) {
+// of either family on the exits mark or table, which ur tun's would mix with; or a strict reverse path filter on an
+// interface the main table's IPv4 default route leaves by, which would drop the daemon's own replies there, since a
+// reply arrives unmarked and the filter's lookup of its way back finds the tun. A setting that does not read refuses
+// too. Where it may, answers the addresses whose throw of ur's the table already holds, a past end's among them, and
+// whether the host routes IPv6 off itself.
+func (self *urTunLinuxSystem) exitsRefusal(index int) (*urTunLinuxExitsHost, error) {
 	settings := self.settings
 	routes, err := self.routes(unix.AF_UNSPEC)
 	if err != nil {
 		return nil, fmt.Errorf("the routes did not read (%v)", err)
 	}
-	throwAddrs := []netip.Addr{}
+	host := &urTunLinuxExitsHost{throwAddrs: []netip.Addr{}}
 	defaultIndexes := []int{}
 	for _, route := range routes {
 		if urTunLinuxOwnThrow(route, settings.ExitsTable) {
-			throwAddrs = append(throwAddrs, route.dst.Addr())
+			host.throwAddrs = append(host.throwAddrs, route.dst.Addr())
 			continue
 		}
 		if route.table == settings.ExitsTable && (route.protocol != urTunRouteProtocol || !slices.Contains(route.oifs, index)) {
 			return nil, fmt.Errorf("%w, table %d", errUrTunExitsTableInUse, settings.ExitsTable)
 		}
-		if route.family != unix.AF_INET || route.table != unix.RT_TABLE_MAIN || route.routeType != unix.RTN_UNICAST ||
-			route.dst.Bits() != 0 {
+		if route.table != unix.RT_TABLE_MAIN || route.routeType != unix.RTN_UNICAST || route.dst.Bits() != 0 {
 			continue
 		}
 		for _, oif := range route.oifs {
-			if oif != 0 && oif != index && !slices.Contains(defaultIndexes, oif) {
-				defaultIndexes = append(defaultIndexes, oif)
+			if oif == 0 || oif == index {
+				continue
+			}
+			switch route.family {
+			case unix.AF_INET:
+				if !slices.Contains(defaultIndexes, oif) {
+					defaultIndexes = append(defaultIndexes, oif)
+				}
+			case unix.AF_INET6:
+				host.ipv6Routed = true
 			}
 		}
 	}
-	rules, err := self.rules(unix.AF_INET)
+	// both families' rules, IPv6's being the exits' too
+	rules, err := self.rules(unix.AF_UNSPEC)
 	if err != nil {
 		return nil, fmt.Errorf("the policy rules did not read (%v)", err)
 	}
 	for _, rule := range rules {
+		if rule.family != unix.AF_INET && rule.family != unix.AF_INET6 {
+			continue
+		}
 		if rule.protocol != urTunRouteProtocol && ((rule.markSet && rule.mark == settings.ExitsMark) || rule.table == settings.ExitsTable) {
 			return nil, fmt.Errorf("%w, mark %#x and table %d", errUrTunExitsMarkInUse, settings.ExitsMark, settings.ExitsTable)
 		}
 	}
 	if len(defaultIndexes) == 0 {
-		return throwAddrs, nil
+		return host, nil
 	}
 	all, err := self.reversePathFilter("all")
 	if err != nil {
@@ -1141,7 +1285,7 @@ func (self *urTunLinuxSystem) exitsRefusal(index int) ([]netip.Addr, error) {
 			return nil, fmt.Errorf("%w on %s: set its rp_filter and all's to 2, loose", errUrTunExitsStrictReversePath, name)
 		}
 	}
-	return throwAddrs, nil
+	return host, nil
 }
 
 // The rp_filter of an interface, or of all: 0 off, 1 strict, 2 loose.
