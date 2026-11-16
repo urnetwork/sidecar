@@ -1449,3 +1449,41 @@ func TestEvsLocalSyncPrefixFirstPushRefusedDeletedAndPushedAgain(t *testing.T) {
 	device.replay("release")
 	rules.applied(device, "release", 5, c2)
 }
+
+// Export judges with the sync engine's function and arguments (DESIGN-DETAILS 8.6's export bullet): the export of a
+// git-mode ref a held signer breached stops at the breach, reports it with reason prefix_rule and alarms prefix_rule,
+// its tip the version before; a set export cannot read ends it with EVS_PREFIX_RULE. Beside the git harness, which
+// evs_export_test.go's legs do not build.
+func TestEvsExportPrefixStopsAtABreach(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	c2 := rules.commitAs(rules.held, map[string]string{"README": "breach\n", "agents/build/out": "built\n"}, c1)
+	rules.mustPublish(rules.held, true, "main", &c2)
+	c3 := rules.commitAs(rules.admin, map[string]string{"README": "breach\n", "agents/build/out": "built three\n"}, c2)
+	rules.mustPublish(rules.admin, false, "main", &c3)
+	exporter := rules.world.reader(t, evsTestId("exporter"))
+	rules.enable(exporter)
+	result, err := exporter.client.Repo(rules.world.repoId).Export(context.Background(), &EvsExportArgs{Dir: t.TempDir() + "/export.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refs) != 1 || result.Refs[0].Tip != c1 || len(result.Refs[0].Refused) != 1 || result.Refs[0].Refused[0].Version != 2 ||
+		!strings.Contains(result.Refs[0].Refused[0].Reason, "prefix_rule") {
+		t.Fatalf("the export %+v", result.Refs)
+	}
+	alarms := evsPrefixTestAlarms(exporter)
+	if len(alarms) != 1 || alarms[0].EvsAlarmDetail != SidecarEvsAlarmDetailRefused || *alarms[0].SidecarId != rules.held.sidecarId {
+		t.Fatalf("the export's alarms %+v", alarms)
+	}
+	// a set the exporter holds pending at a push's pin ends the export: it cannot wait
+	pending := rules.world.reader(t, evsTestId("pending exporter"))
+	pendingSets := []*AclPrefixRuleSet{{At: 5, Signer: rules.admin.sidecarId, State: AclPrefixSetPending}}
+	pending.client.EnablePrefixRules(&EvsPrefixRulesArgs{
+		Sets: func(ctx context.Context, repoId Id) ([]*AclPrefixRuleSet, error) { return pendingSets, nil },
+	})
+	_, err = pending.client.Repo(rules.world.repoId).Export(context.Background(), &EvsExportArgs{Dir: t.TempDir() + "/pending.git"})
+	if detail, _ := evsTestPrefixRefusal(err); detail != EvsPrefixDetailPending {
+		t.Fatalf("an export under a pending set: %v", err)
+	}
+}
