@@ -942,9 +942,13 @@ memory      forwarding's Go heap at most 4 MiB steady, inside the iOS tunnel's 2
             macOS extensions it is admitted only when 5 x rows + 2 x head + 1 MiB fits a 10 MiB per-compile
             cap and the room under a 30 MiB process ceiling, about 4,300 devices at the tunnel's connected
             baseline, waiting for room under provider load; a larger network keeps its last verified state
-            on that device, applies every revocation it can check, raises bridge_alarm once a statement that
-            could narrow reach has waited 10 minutes and never goes pending for that wait, while it compiles on
-            Android, Windows and Linux (owner decision 216); measured on surrogates only (owner decision 100)
+            on that device, applies at once every revocation it can check by signature, and raises
+            bridge_alarm, with the waiting statement's age, once a statement that could narrow reach and that
+            it cannot check by signature has waited NarrowingOverdueTimeout (10 minutes) for a compile,
+            again while it waits; no VPN component goes pending for that wait, so forwarding never drops
+            for it, the next compile judging every waiting statement, at the accepted cost that such a
+            revocation may not apply on a device that cannot compile; it compiles on Android, Windows and
+            Linux (owner decision 216); measured on surrogates only (owner decision 100)
 ```
 - **Pruning.** No `net/rpc`, templates or dynamic reflect lookups (sdk/build/mobile_method_pruning_test.go:27); the worker needs protobuf v1.36.12, the first that keeps pruning (sdk/build/go.mod:98; sdk/js/go.mod:97 has v1.36.11), and sidecar generates with v1.36.11 (§6).
 - **Tags.** sdk's sidecar-role files carry `!ios_extension`, and §5.10's Keychain tag keeps gomobile's darwin slices (sdk/dependency_boundary_test.go:91) on the app's `SidecarKeyStore`.

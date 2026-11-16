@@ -18,11 +18,14 @@
 //	           a leak of objects of at most 8 KiB that loses no key
 //	pending    the ref's fence is raised, one head CAS with fence_ms, and the record resolved again on the fenced
 //	           head. While this process's clock is unsure no fence is raised and the record stays. A ref with no
-//	           head has nothing to fence and its record stays too: how a fence reaches such a ref is
-//	           DESIGN-DETAILS.md's problem 2, which this file does not answer
-//	           (questions/evsb-m2-11-pending-record-no-head)
-//	reseed     counts as committed, and is kept at the version its ref's history names its push at; a re-seeded
-//	           push's part, a reseed record holding a part's body, follows its seal as any part does (QD-818)
+//	           head is fenced by a placeholder head created with its fence raised (DESIGN-DETAILS 2.2.3)
+//	reseed     a one-part re-seeded push's record resolves by its statement as a push's does, with the fence in place
+//	           of the time clause (the owner's answer QD-872; resolve.go): committed at its place it is kept at its
+//	           version; committed at another place it is a second copy, dropped; otherwise it is pending, its ref's
+//	           fence is raised, and still not committed on a head fenced since this run held it, it is dead. A dead
+//	           reseed record goes with nothing else: the reseed mode's step 6 writes no slot, so none it lists is its
+//	           own. A re-seeded push's part, a reseed record holding a part's body, follows its seal as any part does
+//	           (QD-818), and no part call writes a slot either
 //
 // A kept record's bytes go to the run's spool, a local file, so a run holds no batch in memory past its parse, and
 // its segments and a dead record's slots are read from the new-objects list of its payload or part.
@@ -34,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -260,6 +264,12 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 	}
 	switch resolution.State {
 	case EvsResolveDead:
+		if record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED {
+			// nothing else goes with a reseed record, and nothing of it is counted as left: the reseed mode writes
+			// no slot at step 6 or in a part call, so no slot its record lists is one its attempt made (QD-872)
+			self.result.DeadCount += 1
+			return
+		}
 		// each slot it lists is decided on its object in deleteMinute, by the record's statement (14.2.5); with the
 		// switch off, or a statement that does not parse, each stays, counted
 		_, slotIds, err := evacuateRecordObjects(record)
@@ -383,7 +393,17 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 		return nil, "head unread", err
 	}
 	statementLife := self.evacuator.evsSettings.ResolveStatementLife
-	resolution, err := ResolveBatchRecord(self.ctx, record, head.Head, statementLife, readPage)
+	// The run holds the record now, read from its batch: a fence_ms at or past this reading ends the attempt that
+	// appended it, which is what makes a one-part reseed record dead (resolve.go; QD-872). Read only while this
+	// process's clock is sure, since an unsure one could set it below a fence older than the record; with none, such a
+	// record stays pending, as every pending record does on an unsure clock.
+	sure := false
+	heldTime := time.Time{}
+	if clockCheck := self.evacuator.host.ClockCheck; clockCheck != nil && clockCheck.Sure() {
+		sure = true
+		heldTime = self.evacuator.clock.Now()
+	}
+	resolution, err := ResolveBatchRecord(self.ctx, record, head.Head, statementLife, heldTime, readPage)
 	if err != nil {
 		return nil, "resolve", err
 	}
@@ -394,7 +414,7 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 	// A ref with no head is fenced like any other: RaiseFence creates the placeholder head with its fence raised
 	// (DESIGN-DETAILS 2.2.3), so a pending record always has a head to be resolved again on.
 	refKey := barrierRefKey(record.RepoId, record.RefId)
-	if clockCheck := self.evacuator.host.ClockCheck; clockCheck == nil || !clockCheck.Sure() {
+	if !sure {
 		return resolution, "pending while the clock is unsure", nil
 	}
 	fenced, err := self.fence(minute, record.RepoId, record.RefId, head)
@@ -408,7 +428,7 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 	}
 	self.refHeads[refKey] = fenced
 	self.result.FenceCount += 1
-	resolution, err = ResolveBatchRecord(self.ctx, record, fenced.Head, statementLife, readPage)
+	resolution, err = ResolveBatchRecord(self.ctx, record, fenced.Head, statementLife, heldTime, readPage)
 	if err != nil {
 		return nil, "resolve", err
 	}
@@ -445,9 +465,9 @@ func (self *evacuateRun) fence(minute *evacuateMinute, repoId sidecar.Id, refId 
 	return fenced, nil
 }
 
-// Whether a committed record is the copy its ref's history names, and the version it committed at: a push or seal
-// at the place its version's entry names; a part, a re-seeded one included (QD-818), when its committed seal's
-// record names its place; a one-part reseed at the version its ref's history names its push at.
+// Whether a committed record is the copy its ref's history names, and the version it committed at: a push, a seal or
+// a one-part re-seeded push's record (QD-872) at the place its version's entry names; a part, a re-seeded one
+// included (QD-818), when its committed seal's record names its place.
 func (self *evacuateRun) committedHere(record *sidecar.EvsBatchRecord, place *protocol.EvsPlace, resolution *EvsResolution) (bool, uint64, error) {
 	recordType := record.Type
 	if sidecar.EvsReseedRecordHoldsPart(record) {
@@ -457,30 +477,6 @@ func (self *evacuateRun) committedHere(record *sidecar.EvsBatchRecord, place *pr
 	case protocol.EvsBatchRecordType_EVS_BATCH_PART:
 		named, err := self.sealNamesPart(record, place, resolution.Place)
 		return named, resolution.Version, err
-	case protocol.EvsBatchRecordType_EVS_BATCH_RESEED:
-		statement, err := EvsBatchRecordStatement(record)
-		if err != nil {
-			return false, 0, err
-		}
-		head, err := self.refHead(record.RepoId, record.RefId)
-		if err != nil {
-			return false, 0, err
-		}
-		push := statement.Push
-		gitMode := protocol.EvsRefMode(push.GetRefMode()) == protocol.EvsRefMode_EVS_REF_GIT
-		standing, err := EvsPushStandingIn(self.ctx, head.Head, record.PushId, statement.Sha256, push.GetBaseVersion(), gitMode,
-			func(ctx context.Context, page uint64) (*LogPage, error) {
-				return self.readLogPage(ctx, record.RepoId, record.RefId, page)
-			})
-		if err != nil {
-			return false, 0, err
-		}
-		if !standing.Committed {
-			// committed by rule, at a version nothing here can name: it stays until EVSB-M2-20's re-seed says
-			// how its ref's history names it
-			return false, 0, fmt.Errorf("%w: a reseed record its ref's history does not name", errEvacuateRepoWaits)
-		}
-		return true, standing.Version, nil
 	}
 	return placesEqual(resolution.Place, place), resolution.Version, nil
 }
