@@ -8,9 +8,17 @@
 //	2 inclusion  leaf(opening.header) reaches the note's root at its size by the path (RFC 9162 section 2.1.3.2)
 //	3 header     VerifySigned(record-entry) under a key in keys; log_id equals the packet's
 //	4 body       where opened, body_commitment recomputes
-//	5 content    each content Opening's own header verifies, and its entry_id and body_commitment equal a ContentRef's
-//	6 approval   approval_decision: VerifySigned(approval, SIGNED_APPROVAL_DECISION) under a key in keys; beside its
-//	             approval entry, request_sha256 is SHA-256 of that body and payload_sha256 of its canonical_action
+//	  message    an opened body is read as its Opening's version says, an absent one reading 1 (QD-864): the kind's
+//	             message at 1; at 2 an AgentSignedBody holding it, whose agent signature is checked under the
+//	             writer's key in keys and reported verified or agent_asserted, a failed one failing the entry; a
+//	             later version is kept on its commitment alone and shown generically. The version is the opener's
+//	             word, so a wrong one fails here or at step 6 and nothing is read by how bytes happen to parse
+//	5 content    each content Opening's own header verifies, its entry_id and body_commitment equal a ContentRef's,
+//	             and its body reads as its version says
+//	6 approval   approval: its request parses. approval_decision: VerifySigned(approval, SIGNED_APPROVAL_DECISION)
+//	             under a key in keys; beside its approval entry, request_sha256 is SHA-256 of that body and
+//	             payload_sha256 of its canonical_action. Both from the kind's message as its version gives it, and
+//	             an opened one that is not read fails
 //	7 ssh        not checked: the owner dropped SSHSIGs from v0 (plan-MCP-risk-classifier#1), so an sshsig field is
 //	             ignored and never trusted, and asking for the check is refused rather than passed
 //	8 report     for each entry what passed, and each key's label marked as the team's statement
@@ -63,6 +71,8 @@ type RecordVerifyArgs struct {
 	Quorum int
 	// --ssh-key was given: refused, since nothing here checks an sshsig.
 	SshKeys bool
+	// The certificate bounds a version-2 entry's agent signature is held to: nil for the defaults, the format's.
+	AgentSubkeys *SidecarAgentSubkeySettings
 }
 
 // One cosignature a note carries under a pinned witness key.
@@ -94,8 +104,18 @@ type RecordVerifyEntry struct {
 	Inclusion bool
 	Header    bool
 	Body      bool
-	Content   bool
-	Approval  bool
+	// The opened body reads as its version says, its agent signature not failing: true for a header alone, and for
+	// a version this build does not read, which BodyGeneric marks.
+	Message  bool
+	Content  bool
+	Approval bool
+	// The opening's version, an absent one reading 1: the opener's word for what the body is.
+	Version uint32
+	// A version this build does not read: the body stands on its commitment alone and nothing in it was checked.
+	BodyGeneric bool
+	// What a version-2 body's agent signature came to: verified or agent_asserted, or invalid beside its failure.
+	// Empty for version 1, whose agent is the writer's word.
+	AgentProvenance RecordAgentProvenance
 	// How many content openings the entry carries.
 	ContentCount int
 	Failures     []string
@@ -158,6 +178,55 @@ func recordDisclosedKeyFor(keys []*protocol.DisclosedKey, signed *bridge.Signed)
 		}
 	}
 	return nil
+}
+
+// What the verifier reads of one opening's body.
+type recordVerifyBody struct {
+	version uint32
+	// salt and body recompute the header's commitment: true for a header alone
+	committed bool
+	// the kind's message as the version gives it: nil for a header alone, a body that did not commit, one that does
+	// not read as its version says, and a version this build does not read
+	message    []byte
+	provenance RecordAgentProvenance
+	generic    bool
+	// why the body does not read as its version says, empty where it does
+	failure string
+}
+
+// Step 4 and the reading after it for one opening: the commitment, then the body as the opening's version says,
+// a version-2 entry's agent signature under the key keys states for the header's writer.
+func recordVerifyOpeningBody(keys []*protocol.DisclosedKey, opening *protocol.Opening, settings *SidecarAgentSubkeySettings) *recordVerifyBody {
+	body := &recordVerifyBody{version: max(opening.GetVersion(), recordEntryVersion)}
+	opened, err := VerifyRecordOpening(opening)
+	if err != nil {
+		return body
+	}
+	body.committed = true
+	if len(opened.Salt) == 0 {
+		return body
+	}
+	var identityPublicKey []byte
+	if _, signed, err := recordSignedHeader(opening.GetHeader()); err == nil && bytes.Equal(signed.GetSignerId(), opened.Header.Header.GetWriterSidecarId()) {
+		if key := recordDisclosedKeyFor(keys, signed); key != nil && bridge.SignedKeyAlg(key.GetAlg()) == bridge.SignedKeyAlgEd25519 {
+			identityPublicKey = key.GetPublicKey()
+		}
+	}
+	message, provenance, err := opened.KindBody(identityPublicKey, settings)
+	switch {
+	case errors.Is(err, ErrRecordOpeningVersion):
+		body.generic = true
+	case err != nil:
+		body.failure = fmt.Sprintf("its body does not read as version %d of its kind", body.version)
+	case provenance == RecordAgentProvenanceInvalid:
+		// never attributed, and never read on: a wrong version lands here as often as a bad signature
+		body.provenance = provenance
+		body.failure = "its agent's signature does not verify"
+	default:
+		body.message = message
+		body.provenance = provenance
+	}
+	return body
 }
 
 // Step 3 for one stored header: its Signed verifies as a record entry's under a key in keys, as signed by its
@@ -277,19 +346,18 @@ func VerifyRecordDisclosurePacket(packetBytes []byte, args *RecordVerifyArgs) (*
 		}
 	}
 
-	// the approval requests the packet opens, by approval id, for step 6
+	// each entry's body as its opening's version gives it, and the approval requests the packet opens, by approval
+	// id, for step 6
+	bodies := make([]*recordVerifyBody, len(packet.GetEntries()))
 	approvalRequests := map[Id]*StoredApprovalRequest{}
-	headers := make([]*StoredRecordHeader, len(packet.GetEntries()))
 	for i, entry := range packet.GetEntries() {
+		bodies[i] = recordVerifyOpeningBody(packet.GetKeys(), entry.GetOpening(), args.AgentSubkeys)
 		header, _, err := recordSignedHeader(entry.GetOpening().GetHeader())
-		if err != nil {
+		if err != nil || header.Kind() != RecordKindApproval || bodies[i].message == nil {
 			continue
 		}
-		headers[i] = header
-		if header.Kind() == RecordKindApproval && len(entry.GetOpening().GetBody()) != 0 {
-			if request, err := ParseStoredApprovalRequest(entry.GetOpening().GetBody()); err == nil {
-				approvalRequests[request.ApprovalId()] = request
-			}
+		if request, err := ParseStoredApprovalRequest(bodies[i].message); err == nil {
+			approvalRequests[request.ApprovalId()] = request
 		}
 	}
 
@@ -333,11 +401,20 @@ func VerifyRecordDisclosurePacket(packetBytes []byte, args *RecordVerifyArgs) (*
 			failEntry("entry %s names no checkpoint the packet holds", reportEntry.EntryId)
 		}
 
-		// 4 body
-		if _, err := VerifyRecordOpening(opening); err != nil {
-			failEntry("entry %s: its body does not open its commitment", reportEntry.EntryId)
-		} else {
+		// 4 body, and the message its version says it holds
+		body := bodies[i]
+		reportEntry.Version = body.version
+		reportEntry.BodyGeneric = body.generic
+		reportEntry.AgentProvenance = body.provenance
+		if body.committed {
 			reportEntry.Body = true
+		} else {
+			failEntry("entry %s: its body does not open its commitment", reportEntry.EntryId)
+		}
+		if body.failure == "" {
+			reportEntry.Message = true
+		} else {
+			failEntry("entry %s: %s", reportEntry.EntryId, body.failure)
 		}
 
 		// 5 content
@@ -359,17 +436,36 @@ func VerifyRecordDisclosurePacket(packetBytes []byte, args *RecordVerifyArgs) (*
 				failEntry("entry %s: a content opening that none of its ContentRefs names", reportEntry.EntryId)
 				continue
 			}
-			if _, err := VerifyRecordOpening(content); err != nil {
+			contentBody := recordVerifyOpeningBody(packet.GetKeys(), content, args.AgentSubkeys)
+			if !contentBody.committed {
 				reportEntry.Content = false
 				failEntry("entry %s: a content opening whose body does not open its commitment", reportEntry.EntryId)
+			} else if contentBody.failure != "" {
+				reportEntry.Content = false
+				failEntry("entry %s: a content opening: %s", reportEntry.EntryId, contentBody.failure)
 			}
 		}
 
 		// 6 approval
 		reportEntry.Approval = true
-		if header.Kind() == RecordKindApprovalDecision && reportEntry.Opened {
+		if (header.Kind() == RecordKindApproval || header.Kind() == RecordKindApprovalDecision) && reportEntry.Opened {
 			reportEntry.Approval = false
-			decision, err := ParseStoredApprovalDecision(opening.GetBody())
+			if body.message == nil {
+				// not committed, not what its version says, or a version this build does not read: nothing of it is
+				// parsed, and nothing passes on it
+				failEntry("entry %s: its %s is not read, so nothing of it is checked", reportEntry.EntryId, header.Kind())
+				continue
+			}
+		}
+		if header.Kind() == RecordKindApproval && reportEntry.Opened {
+			if _, err := ParseStoredApprovalRequest(body.message); err != nil {
+				failEntry("entry %s: its request does not parse", reportEntry.EntryId)
+				continue
+			}
+			reportEntry.Approval = true
+		}
+		if header.Kind() == RecordKindApprovalDecision && reportEntry.Opened {
+			decision, err := ParseStoredApprovalDecision(body.message)
 			if err != nil {
 				failEntry("entry %s: its decision does not parse", reportEntry.EntryId)
 				continue

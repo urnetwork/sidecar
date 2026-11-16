@@ -29,7 +29,7 @@ func aclTestRights(state *AclState, sidecarId Id, repoId Id, audience AclTokenAu
 }
 
 // The config gives every admitted sidecar r, gkm rw to member devices but read_only ones, and evs rw only
-// to config writers; an ephemeral sidecar never writes it (§7.9, §10.6, FS-19).
+// to config writers, who administer it at both (QD-894); an ephemeral sidecar never writes it (§7.9, §10.6, FS-19).
 func TestAclEvsAccessConfigByAudience(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -56,7 +56,7 @@ func TestAclEvsAccessConfigByAudience(t *testing.T) {
 		sidecarId Id
 		evs, gkm  AclEvsRights
 	}{
-		{sidecarId: writer, evs: AclEvsRead | AclEvsWrite, gkm: AclEvsRead | AclEvsWrite},
+		{sidecarId: writer, evs: AclEvsRead | AclEvsWrite | AclEvsAdmin, gkm: AclEvsRead | AclEvsWrite | AclEvsAdmin},
 		{sidecarId: memberDevice, evs: AclEvsRead, gkm: AclEvsRead | AclEvsWrite},
 		{sidecarId: pageWorker, evs: AclEvsRead | AclEvsDeposit, gkm: AclEvsRead | AclEvsDeposit},
 		{sidecarId: ephemeral, evs: AclEvsRead, gkm: AclEvsRead},
@@ -76,16 +76,26 @@ func TestAclEvsAccessConfigByAudience(t *testing.T) {
 	}
 }
 
-// §7.9's bootstrap: the Genesis's owner sidecar administers the config repo at both audiences while it stands as a
-// config writer, the scope the exchange gives it alone to create the repo, push its head and form its group. No other
-// config writer does, nor that sidecar once it is no config writer, read_only, parked or revoked.
-func TestAclEvsAccessConfigAdminIsTheBootstrapSidecars(t *testing.T) {
+// QD-894: every config writer administers the config repo at both audiences, the scope the exchange gives each to
+// create the repo, push its head and form its group, and later to re-form the group and re-place the repo. §7.9's
+// bootstrap sidecar, the Genesis's owner sidecar, is one of them and no more: another config writer holds the same
+// admin, with it and once it is revoked, and it holds none once it is no config writer, read_only, parked or revoked.
+// A member device that writes no config head, an ephemeral sidecar and a tagged one administer nothing there.
+func TestAclEvsAccessConfigAdminIsEveryConfigWriters(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	member := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	tagId := fixture.tag(owner)
 	first := fixture.device(owner)
 	second := fixture.device(owner)
 	fixture.view.configWriters[first] = true
 	fixture.view.configWriters[second] = true
+	memberDevice := fixture.device(member)
+	ephemeral := fixture.device(owner)
+	fixture.admission(ephemeral).Ephemeral = true
+	fixture.view.configWriters[ephemeral] = true
+	agent := fixture.agent(owner, tagId)
+	fixture.view.configWriters[agent] = true
 	configId := fixture.configRepo(first, owner)
 	all := AclEvsRead | AclEvsWrite | AclEvsAdmin
 	state := fixture.state(t)
@@ -93,14 +103,49 @@ func TestAclEvsAccessConfigAdminIsTheBootstrapSidecars(t *testing.T) {
 		if rights := aclTestRights(state, first, configId, audience); rights != all {
 			t.Errorf("the bootstrap sidecar at %d: %b", audience, rights)
 		}
-		if rights := aclTestRights(state, second, configId, audience); rights != AclEvsRead|AclEvsWrite {
+		if rights := aclTestRights(state, second, configId, audience); rights != all {
 			t.Errorf("another config writer at %d: %b", audience, rights)
 		}
+		for name, sidecarId := range map[string]Id{"a member device": memberDevice, "an ephemeral sidecar": ephemeral, "a tagged sidecar": agent} {
+			if rights := aclTestRights(state, sidecarId, configId, audience); rights.Has(AclEvsAdmin) {
+				t.Errorf("%s administers the config at %d: %b", name, audience, rights)
+			}
+		}
 	}
-	access := state.EvsAccess(AclSidecarSubject(first), configId, AclTokenAudienceEvs, aclTestNow)
-	if !access.Allowed || access.Reason != AclReasonKindDefault {
-		t.Errorf("the bootstrap sidecar's decision: %+v", access)
+	for _, sidecarId := range []Id{first, second} {
+		access := state.EvsAccess(AclSidecarSubject(sidecarId), configId, AclTokenAudienceEvs, aclTestNow)
+		if !access.Allowed || access.Reason != AclReasonKindDefault {
+			t.Errorf("a config writer's decision: %+v", access)
+		}
 	}
+	// a config drop stays refused to its admins (D-ACL-25)
+	for _, sidecarId := range []Id{first, second} {
+		if decision := state.MayDrop(sidecarId, configId, aclTestNow); decision.Allowed || decision.Reason != AclReasonNoGrant {
+			t.Errorf("a config writer's drop in the config: %+v", decision)
+		}
+	}
+	// the writers are who the rows say, not who signed the Genesis: a config with a stranger's Genesis answers alike
+	strangers := newAclTestFixture()
+	strangerOwner := strangers.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	strangerWriter := strangers.device(strangerOwner)
+	strangers.view.configWriters[strangerWriter] = true
+	strangerConfigId := strangers.configRepo(Id{}, Id{})
+	if rights := aclTestRights(strangers.state(t), strangerWriter, strangerConfigId, AclTokenAudienceGkm); rights != all {
+		t.Errorf("a config writer that is not the Genesis's sidecar: %b", rights)
+	}
+
+	// the bootstrap sidecar's revocation leaves the other config writer the config's admin
+	fixture.admission(first).Row.RevokedAt = fixture.next()
+	state = fixture.state(t)
+	for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+		if rights := aclTestRights(state, first, configId, audience); rights != 0 {
+			t.Errorf("the revoked bootstrap sidecar at %d: %b", audience, rights)
+		}
+		if rights := aclTestRights(state, second, configId, audience); rights != all {
+			t.Errorf("another config writer at %d once the bootstrap sidecar is revoked: %b", audience, rights)
+		}
+	}
+	fixture.admission(first).Row.RevokedAt = 0
 
 	fixture.view.configWriters[first] = false
 	state = fixture.state(t)
@@ -744,7 +789,8 @@ func TestAclEvsAccessDeletedRepoGivesItsStandingAdminsAdminAlone(t *testing.T) {
 }
 
 // A deleted repo of a kind that takes no RepoDelete, or that this code does not know, gives no one a right: the
-// config's bootstrap admin is a kind default, which a deletion drops, and an unknown kind has no admins to keep.
+// config's admin, its config writers', is a kind default, which a deletion drops, and an unknown kind has no admins
+// to keep.
 func TestAclEvsAccessDeletedRepoOfAKindWithNoStandingAdmins(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -756,12 +802,12 @@ func TestAclEvsAccessDeletedRepoOfAKindWithNoStandingAdmins(t *testing.T) {
 	unknown.Deletion = &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), DeletedAt: 9}
 	state := fixture.state(t)
 	if rights := aclTestRights(state, bootstrap, configId, AclTokenAudienceEvs); !rights.Has(AclEvsAdmin) {
-		t.Fatalf("the live config's bootstrap admin: %b", rights)
+		t.Fatalf("the live config's admin: %b", rights)
 	}
 	if access := state.EvsAccess(AclSidecarSubject(bootstrap), unknownId, AclTokenAudienceEvs, aclTestNow); access.Rights != 0 || access.Reason != AclReasonRepoDeleted {
 		t.Errorf("a deleted repo of an unknown kind: %+v", access)
 	}
-	// no fold writes a config row with a deletion; a state handed one keeps the bootstrap sidecar out of it
+	// no fold writes a config row with a deletion; a state handed one keeps its config writers out of it
 	state.repos[configId].deleted = true
 	if access := state.EvsAccess(AclSidecarSubject(bootstrap), configId, AclTokenAudienceEvs, aclTestNow); access.Rights != 0 || access.Reason != AclReasonRepoDeleted {
 		t.Errorf("a deleted config: %+v", access)

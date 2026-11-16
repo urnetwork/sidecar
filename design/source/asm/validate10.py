@@ -305,7 +305,7 @@ for n, head in sorted(entries.items()):
             named_open.append({'decision': n, 'q': q, 'issue': 'no such item'})
 open_items = [q for q, st in qstatus.items() if st == 'open']
 qf = json.loads((V7 / 'qfields.json').read_text())
-out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 279)),
+out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 332)),
                        'q_named_by_decisions': sum(len(re.findall(r'Q-[A-Z]+-\d+', h)) for h in entries.values()),
                        'named_but_open': named_open,
                        'open_items': open_items,
@@ -429,7 +429,7 @@ out['registers'] = {
 # ---------------------------------------------------------------- 16. decisions-by-number rows and dates
 # From 198 the design-records tracks number the build's owner answers as they fold them, so a later number can carry
 # the bulk acceptance's earlier date; each such decision's date is listed here. 2026-11-15 joins the row pattern with
-# owner decision 251, and 2026-11-11 and 2026-11-12 with 253 and 254.
+# owner decision 251, 2026-11-11 and 2026-11-12 with 253 and 254, and 2026-11-13 and 2026-11-14 with 286 and 287.
 LATE_DATES = {198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '2026-11-10', 202: '2026-11-10',
               203: '2026-11-10', 204: '2026-11-10', 205: '2026-11-10', 206: '2026-11-10', 207: '2026-11-06',
               208: '2026-11-06', 209: '2026-11-06', 210: '2026-11-06', 211: '2026-11-06',
@@ -446,9 +446,20 @@ LATE_DATES = {198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '202
               261: '2026-11-15', 262: '2026-11-10', 263: '2026-11-06', 264: '2026-11-06', 265: '2026-11-06',
               266: '2026-11-06', 267: '2026-11-15', 268: '2026-11-15', 269: '2026-11-06', 270: '2026-11-06',
               271: '2026-11-06', 272: '2026-11-11', 273: '2026-11-11', 274: '2026-11-12', 275: '2026-11-15',
-              276: '2026-11-15', 277: '2026-11-15', 278: '2026-11-15'}
-idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-(?:0[34569]|1[0125])) \|', doc, re.M)
-out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 279)),
+              276: '2026-11-15', 277: '2026-11-15', 278: '2026-11-15', 279: '2026-11-06', 280: '2026-11-06',
+              281: '2026-11-06', 282: '2026-11-06', 283: '2026-11-06', 284: '2026-11-06', 285: '2026-11-06',
+              286: '2026-11-13', 287: '2026-11-14', 288: '2026-11-15', 289: '2026-11-15', 290: '2026-11-15',
+              291: '2026-11-15', 292: '2026-11-15', 293: '2026-11-15', 294: '2026-11-15', 295: '2026-11-06',
+              296: '2026-11-06', 297: '2026-11-15', 298: '2026-11-15', 299: '2026-11-15', 300: '2026-11-15',
+              301: '2026-11-15',
+              302: '2026-11-06', 303: '2026-11-06', 304: '2026-11-06', 305: '2026-11-06', 306: '2026-11-06',
+              307: '2026-11-10', 308: '2026-11-10', 309: '2026-11-10', 310: '2026-11-12', 311: '2026-11-12',
+              312: '2026-11-12', 313: '2026-11-12', 314: '2026-11-15', 315: '2026-11-15', 316: '2026-11-12',
+              317: '2026-11-13', 318: '2026-11-14', 319: '2026-11-14', 320: '2026-11-14', 321: '2026-11-15',
+              322: '2026-11-15', 323: '2026-11-15', 324: '2026-11-15', 325: '2026-11-15', 326: '2026-11-15',
+              327: '2026-11-15', 328: '2026-11-15', 329: '2026-11-15', 330: '2026-11-15', 331: '2026-11-15'}
+idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-(?:0[34569]|1[012345])) \|', doc, re.M)
+out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 332)),
                         'dates_ok': all(d == ('2026-11-03' if int(n) <= 111 else '2026-11-04' if int(n) <= 145 else '2026-11-05' if int(n) <= 187 else '2026-11-06' if int(n) <= 196 else '2026-11-09' if int(n) == 197 else LATE_DATES.get(int(n))) for n, d in idx_rows),
                         'known_gaps_heading': '### Known gaps' in doc,
                         'closed_by_peer_review_text': len(re.findall(r'closed by peer review', doc))}

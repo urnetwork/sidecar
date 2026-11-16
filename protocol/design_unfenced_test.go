@@ -1142,47 +1142,6 @@ var testFenceAdditions = []struct {
 		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
 	},
 	{
-		message:  "Error",
-		field:    testFenceField{name: "min_version", number: 5, typeName: "uint32"},
-		question: "plan-PROTO-version-error-range",
-	},
-	{
-		message:  "Error",
-		field:    testFenceField{name: "max_version", number: 6, typeName: "uint32"},
-		question: "plan-PROTO-version-error-range",
-	},
-	{
-		message:  "ProjectionHeader",
-		field:    testFenceField{name: "tail_verdicts", number: 10, typeName: "bytes"},
-		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
-	},
-	// QD-746: a base carries the repos its own change shrinks, which a verifier that starts at it cannot compute
-	{
-		message:  "ProjectionHeader",
-		field:    testFenceField{name: "shrunk_repo_ids", number: 11, typeName: "bytes", repeated: true},
-		question: "team-m2-09-base-shrinks",
-	},
-	{
-		message:  "ProjectionRows",
-		field:    testFenceField{name: "proposals", number: 7, typeName: "ProposalRow", repeated: true},
-		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
-	},
-	{
-		message:  "ProjectionRows",
-		field:    testFenceField{name: "settings", number: 8, typeName: "ProjectionSettings"},
-		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
-	},
-	{
-		message:  "ProjectionRows",
-		field:    testFenceField{name: "ring", number: 9, typeName: "RingRow", repeated: true},
-		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
-	},
-	{
-		message:  "ProjectionRows",
-		field:    testFenceField{name: "indexers", number: 10, typeName: "IndexerRow", repeated: true},
-		question: "team-m2-07-indexer-rows",
-	},
-	{
 		message:  "EvsReadFrame",
 		field:    testFenceField{name: "error", number: 8, typeName: "EvsRefusalReply"},
 		question: "evs1-m2-40-unfolded-listing-frame",
@@ -1287,6 +1246,13 @@ var testFenceAdditions = []struct {
 		message:  "ReachReceipt",
 		field:    testFenceField{name: "server_name", number: 11, typeName: "string"},
 		question: "tls-m6-06-reach-receipt-server-name",
+	},
+	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
+	// whether body is the kind's message or the AgentSignedBody holding it
+	{
+		message:  "Opening",
+		field:    testFenceField{name: "version", number: 4, typeName: "uint32"},
+		question: "record-m6-03-opening-entry-version",
 	},
 }
 

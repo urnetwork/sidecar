@@ -38,7 +38,7 @@ Blocks are `beta 1 + g1 99` on every lb host unless noted.
 |---|---|---|---|
 | api (existing) | `api.bringyour.com`: `/network/*`, `/sidecar/*`, `/acl/*`, `/approval/*`, `/tls/*`, `/smtp/*`, `/mail/*`, `/abuse/*` | — | the oauth issuer's signing keys; the first metadata cluster (`proj/`, `projrows/`, `rev/`, `hold/`) |
 | evs (§11) | `evs.bringyour.com`: `/evs/*`, segments on `streamable_paths`; W2 | §11.8's objects; each cluster's sentinel readable: `sentinel/_`, which xops writes at provisioning and evs's, gkm's and taskworker's hosts HEAD every 30 s with their block's own credentials, so the check is that these credentials reach this bucket, a missing or unreadable one reading not ready (§2.8's evs-30; owner decision 258) | JWKS, redis, every cluster, from v1 with DELETE on the segment bucket for §11.13's purge, receipt MAC keys (current and previous) |
-| gkm (§10) | `gkm.bringyour.com`: `/gkm/*`; W2 | §10.6's objects | JWKS, redis, metadata clusters |
+| gkm (§10) | `gkm.bringyour.com`: `/gkm/*`; W2; reaches api's internal `POST /sidecar/identity/clients` for §6.8's hint addressing (§5.15) | §10.6's objects | JWKS, redis, metadata clusters, the internal-route credential |
 | sockets (§9) | `sockets.bringyour.com`: `/socket/*`; W2 | Redis; ticket key; projection loaded | JWKS, redis, ticket keys |
 | dns (§12): API; host-pinned `dnsedge` on each dns edge | `dns.bringyour.com`: §12.8's routes, journal feed; edges: UDP, TCP 53 | API: `dns_*`, `{dns}`; edge: current snapshot, verified key set | API: JWKS, pg, redis, DNSKEY windows; edge: current ZSK |
 | tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; owner decision 121) | `{tes_}`, `{vhk}tls:`; K platform clients | platform credential |
@@ -410,13 +410,15 @@ Each migration group is named for the milestone whose code first reads it ungate
 group   tables, by owning section
 MG0     §7's P0: network_client_owner; altered account_api_key and auth_code
 MG1     §5: sidecar_identity, sidecar_identity_binding; §7: network_auth_key, network_admin_event,
-        admin_token_use (ur-cli's admin tokens); §18: network_client_lease; §20: network_sidecar_limit
+        admin_token_use (ur-cli's admin tokens), network_client_owner.client_public_key (nullable, §7.7);
+        §18: network_client_lease; §20: network_sidecar_limit
 MG2     §8: network_acl_head, network_acl_ack, network_client.acl_subject_client_id;
         §20: network_quota_state, network_service_usage, service_debit_journal, service_usage_batch
 MG3-4   none
 MG5     §12: dns_*, network_dns_*; §13: network_tls_*, tls_connection_*; §16: approval_use (§12.8's DNS
         gate); §21's seven
-MG6     §7's Team tables; §8: network_acl_share; §17: network_bridge_share;
+MG6     §7's Team tables, network_team.scim_token_sha256 (nullable, §7.6) among them; §8: network_acl_share;
+        §17: network_bridge_share;
         §20: transfer_balance.tier, transfer_balance's team_credit index (built concurrently; pending
         from M4's dark comparator, behind escrow_draw_order, 19.11), stripe_meter_report,
         team_subscription (owner decision 199)
@@ -805,13 +807,15 @@ hardware   ops            new hardware with empty buckets passes §22's suite; r
                           re-seed uploads and GroupForms for absent repos, and opens api's log upload (§7.9)
 authority  token exchange re-seed mode (§7.8): until a network's log resumes, it mints only repo:<id>:admin,
                           for evs's /reseed and gkm's GroupForm, to the sidecars the restored rows list as that
-                          network's Owners and Admins; other requests get restore_required
+                          network's Owners and Admins; other requests get restore_required; the mode ends
+                          per network at the resumed marker of {acl_<networkId>}r (§7.9's held row)
            member devices upload the log entries they keep verbatim (POST /network/config/reseed, §7.9); api
                           checks their links, signatures, signer rules and agreement with the restored
                           network_acl_head, never re-sequencing, and adopts an entry at tip+1 only once devices
                           of two members hold it (one member's where the run's base admits uploading devices of
                           one member only, read_only ones not counting), so no lone device fills a position
-                          with a forged TICK; where none does, the log stops before it
+                          with a forged TICK; where none does, the log stops before it; at resume it checks
+                          the newest adopted base's head by descent, from the uploads' config pushes (§7.9)
            api            re-creates rev/ objects from its tombstones, and from each revocation as uploads and
                           the resumed log bring it, whichever is newer (§7.8)
            admin device   re-seeds the config repo, placed afresh (§11.8), from its mirror, which members

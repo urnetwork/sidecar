@@ -2,7 +2,7 @@
 
 ### 7.1 Purpose and scope
 
-This section owns the server's identity model (networks, members, roles, invitations, Team SSO, SCIM), enrollment, credentials, sponsors and names, scoped tokens, revocation objects and edge login, the admin audit log, the P0 fix against client tokens administering their network, and the config repo with its authorization log and read cache, X3's membership half (owner decisions 3, 5-8, 110, 112-114, 126-129, 136, 144, 149). §8 owns policy, gate rows and owner consent, §10 MLS and the write gate, §6 HeadCheck, §11 the `config` kind, §5 local keys, §20 counting.
+This section owns the server's identity model (networks, members, roles, invitations, Team SSO, SCIM), enrollment, credentials, sponsors and names, scoped tokens, revocation objects and edge login, the admin audit log, the P0 fix against client tokens administering their network, and the config repo with its authorization log and read cache, X3's membership half (owner decisions 3, 5-8, 110, 112-114, 126-129, 136, 144, 149, and the build's answers, 302-331). §8 owns policy, gate rows and owner consent, §10 MLS and the write gate, §6 HeadCheck, §11 the `config` kind, §5 local keys, §20 counting.
 
 ### 7.2 Requirements
 
@@ -19,7 +19,7 @@ This section owns the server's identity model (networks, members, roles, invitat
 | R-TEAM-9 | A breached server adds no reader; admins alone add none to owner-bound repos but the audit reader | P5:745; TM:939-1012; owner decisions 3, 126 |
 | R-TEAM-10 | Admin audit log, export, SIEM | TM:1021-1029 |
 | R-TEAM-11 | Removal revokes a member or device everywhere, MLS included | P5:729 |
-| R-TEAM-12 | New credential paths send the security notice | server/model/security_notice_api_key.go:3-7 |
+| R-TEAM-12 | New credential paths, those that can admit devices or sign people in, send the security notice | server/model/security_notice_api_key.go:3-7; owner decision 308 |
 | R-TEAM-13 | Released names cannot be taken over | [R:server-identity] §5 |
 | R-TEAM-14 | Published names are authenticated by default | P5:698; §13.7 |
 
@@ -54,19 +54,27 @@ allowlist  a strict_exp bearer reaches only:
              routes route_authz.go classifies sidecar: those §5-§21 add (/sidecar/*, /network/config/*,
                /network/enroll, /network/bridge/share/*, /acl/*, POST /approval/cancel, /tls/*, /mail/*,
                /smtp/*, /socket/*, /dns/*, GET /abuse/status) and POST /oauth/token's exchange; each route's
-               own class still applies, so /smtp/appeal and /mail/direct-mx stay refused
+               own class still applies, so /smtp/appeal and /mail/direct-mx stay refused, and GET
+               /sidecar/scim-changes answers only the client of the sidecar scim_signer names (7.6; owner
+               decision 321)
            every other route answers 403 "A sidecar token cannot call this route." (403, so the sdk does not
            sign out): no payment, purchase, redemption, rename, account, stats, provider or extender route;
            TestSidecarTokenRoutes runs §22.7's S1-S10 and an approval cancel with the allowlist on, so a
            missing route fails a test
-preview    (D-TRUST-3) until stage 2 is live in an environment, POST /network/enroll and /network/auth-client
-           refuse strict_exp: true outside config/<env>/sidecar.yml's preview_networks
+preview    (D-TRUST-3) until stage 2 is live in an environment, which runs an api built with the tag
+           sidecar_stage2 (Stage 2, below; owner decision 328), POST /network/enroll and /network/auth-client
+           refuse strict_exp: true outside config/<env>/sidecar.yml's preview_networks, each with the
+           structured code not_preview in the form the route refuses in: enroll answers 403 {"error": "<text>",
+           "code": "not_preview"}, and auth-client's 200 error object carries "code": "not_preview" beside its
+           message; the sidecar reads only the code, mapping not_preview and no_genesis (7.8) to their own
+           refusals and anything else to a refusal with its status and code, ur prints "this network is not
+           in the preview yet", and nothing is persisted on a refusal (owner decision 326)
 auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key is removed; the network token
            it mints carries the key's id, and removing the key revokes it (server/session/AUTH.md:202's gap)
 ```
 
 - **Check.** `model.ClientRefusesAdmin` is true for a child (`source_client_id IS NOT NULL`), an `admin_refused` owner row, or a lookup error; no owner row means a legacy client. Both facts are immutable and cached. No shipped client sends a child token here (server/AUTHZ1.md §4), so 14 days log-only (`urnetwork_auth_child_admin_calls_total`) precede enforcement.
-- **Mark.** `POST /network/enroll` and `/network/auth-client` take `admin_refused: true` and `strict_exp: true`, which `sidecar` and `sdk/sidecar.go` always send, and a marked client's children inherit both (§5). App device clients minted `admin_refused` (§18.7), and so their window clients, carry no `strict_exp`. A sidecar's forwarding client (§18.6; owner decision 197) also carries `forward_only`, which its children inherit and which narrows the allowlist above to refresh, `POST /network/auth-client` for its own children, the exchange for the config's `r` scope alone (7.8), `GET /network/config/projection`, `GET /sidecar/identity/<sidecar_id>`, §6.8's long-poll for `team` hints, `GET /key/<id>` and `POST /connect/control`.
+- **Mark.** `POST /network/enroll` and `/network/auth-client` take `admin_refused: true` and `strict_exp: true`, which `sidecar` and `sdk/sidecar.go` always send, and a marked client's children inherit both (§5). The by_jwt carries an `admin_refused` claim, set from the owner row at mint as `strict_exp` and `declares_no_egress` are, additive and read by no other client, so any holder of a token reads its marks, and §5.4's `Pair` requires it with `strict_exp` before it sends anything (owner decision 291); until the claim lands, `Pair` checks `strict_exp` alone, which confines the token to the allowlist above, holding no admin route, and the app checks its own mint's `admin_refused` before handing the token over. App device clients minted `admin_refused` (§18.7), and so their window clients, carry no `strict_exp`. A sidecar's forwarding client (§18.6; owner decision 197) also carries `forward_only`, which its children inherit and which narrows the allowlist above to refresh, `POST /network/auth-client` for its own children, the exchange for the config's `r` scope alone (7.8), `GET /network/config/projection`, `GET /sidecar/identity/<sidecar_id>`, §6.8's long-poll for `team` hints, `GET /key/<id>` and `POST /connect/control`. Every forwarding setup generates a new key set, files its Delegation and then mints a new forwarding client, and api answers one at the exchange only while it is the newest active forwarding child of its sidecar's current bound client (7.8; owner decision 331).
 - **Expiry (D-TEAM-14, owner decisions 103, 131).** `strict_exp` tokens carry a 7-day `exp` and the root claim (server/session/AUTH.md:229), enforced by session's one verifier, used by every API route, the exchange and connect's transport auth, whatever `reject_expired` or `AcceptUntil` say; past `exp`, a sidecar re-enrolls under its `sidecar_id`. Window clients, which never refresh, keep today's lifetime until fleet-wide expiry follows app adoption (server/session/AUTH.md:234-238).
 - **Proof (Q-CORE-4).** A `strict_exp` bearer proves its ClientKey to renew, exchange or mint:
 
@@ -75,8 +83,16 @@ auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key
   proof     DPoP (RFC 9449): header {typ dpop+jwt, alg EdDSA, jwk};
             claims {jti, htm, htu, iat, ath = SHA-256(token)}
   key       the client's newest sidecar_identity_binding key (§2.8 api-5), else the client_public_key its
-            mint named, enroll's or, for a forwarding client, auth-client's (§18.6); with none bound, refused
+            mint named, enroll's or, for a forwarding client, auth-client's (§18.6), which
+            network_client_owner.client_public_key holds (7.7); with neither, refused; POST /sidecar/bind
+            refuses a binding whose client_public_key differs from a non-NULL column, and a client_id
+            binds once, a repeat succeeding only for equal bytes (§5.15)
   replay    SET {dpop_<client_id>}<jti> 1 NX EX 120; iat within ±60 s
+  clock     a sidecar signs iat by the api's clock: it keeps its offset from the Date header (or a server_time
+            field) of its api answers, as §9.6's registrar reads the sockets service's, and signs iat at its own
+            time plus that offset; a refusal for iat refreshes the offset once and retries; the ±60 s window
+            and the replay ttl stay as they are, at api and in sidecartest's fake api, so a strict_exp sidecar
+            10 min fast or slow still renews, exchanges and mints (§22.8's skew row; owner decision 316)
   sdk       Api.SetDpopSigner(func(method, url, ath string) (string, error)), installed by sdk/sidecar.go from
             the core's ClientKey before D-CORE-8's core refresher is switched off on any host; a strict_exp
             refresh without a signer is not sent (unenrolled, not proofless)
@@ -84,16 +100,16 @@ auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key
             its client until exp, at most 7 days: it receives the client's hints and can displace its resident,
             while peers refuse it at Hello for lack of the identity key
   ```
-- **Stage 2**, before the first desktop sidecar and after the app and extension releases (§18.7, D-SDK-11) that stop persisting a readable network credential, `.auth_state`'s and the extension's `by_jwt` in `chrome.storage.local` (extension/src/background/index.ts:134, :201-206), which the moved routes still take: `/auth/code-create`, `/auth/add-auth`, `/auth/remove-auth`, `/auth/regenerate-seedphrase`, `/auth/generate-seedphrase` and `/auth/network-delete` become `routeAccessNetwork` (server/api/route_authz.go:122-131; sdk/api_network_credential.go:57), refusing app device tokens that same-user agents can read (owner decision 47); until then `ur` refuses to enroll beside either store (§5.6, D-TRUST-3).
+- **Stage 2**, before the first desktop sidecar and after the app and extension releases (§18.7, D-SDK-11) that stop persisting a readable network credential, `.auth_state`'s and the extension's `by_jwt` in `chrome.storage.local` (extension/src/background/index.ts:134, :201-206), which the moved routes still take: `/auth/code-create`, `/auth/add-auth`, `/auth/remove-auth`, `/auth/regenerate-seedphrase`, `/auth/generate-seedphrase` and `/auth/network-delete` become `routeAccessNetwork` (server/api/route_authz.go:122-131; sdk/api_network_credential.go:57), refusing app device tokens that same-user agents can read (owner decision 47). `ur` refuses to enroll beside either store while it holds a readable network `by_jwt`, whatever the stage, by a check of the host's state that takes no signal from api (§5.6, D-TRUST-3; owner decision 283). The build tag `sidecar_stage2` switches stage 2, never `sidecar.yml` (owner decision 328): route_authz.go's table holds the six routes as `routeAccessNetwork`, their end state, which sdk's copy matches; `routeAccessFor` keeps them AppAdmin while `model.SidecarStage2Live()`, a constant the tag chooses, is false, and `model.SidecarPreviewAllowed` stops refusing outside `preview_networks` once it is true. Without the tag stage 2 is off, so every binary built before M3-out keeps stage 1's routes and the preview gate; a config push turns stage 2 neither on early nor off late, turning it on is a deploy of an api built with the tag (§23.7), and §19.11 has no key for it.
 - **Stage 3, the hard gate** (server/session/AUTH.md:164-169): all 27 AppAdmin routes refuse client credentials once under 1% of active app clients send them there for 14 days, or `upgrade_required` enforces SDK `bc72b109`.
 
 ### 7.5 Networks, members, roles, invitations
 
-**Networks (owner decisions 23, 55, 59).** A team is one network whose members' sidecars are its clients, beside members' personal networks. `POST /network/team-create` (Q-TEAM-2) adds `network_team` (§20), kept for the network's life, sets `admin_user_id` to a synthetic owner-of-record and makes the caller the first Owner, so every human is removable. That Owner's bootstrapping device (7.9), after the config repo's first base, files the team directory's `RepoCreate{repo_id, kind directory}` (§8.8) and becomes its repo admin, beside every config writer; an admin device that finds a team without one files it, api and readers refuse a second, and api one outside the `team` tier (§16.11; owner decision 171; D-TEAM-28). Team routes (members, invitations, IdPs, domains, SCIM, OAuth clients, admin events and audit webhooks; 7.17) check `NetworkTierOf` (§20.5) and refuse a network outside the `team` tier with §20's `QuotaRefusal` (`upgrade`).
+**Networks (owner decisions 23, 55, 59).** A team is one network whose members' sidecars are its clients, beside members' personal networks. `POST /network/team-create` (Q-TEAM-2) adds `network_team` (§20), kept for the network's life, sets `admin_user_id` to a synthetic owner-of-record and makes the caller the first Owner, so every human is removable. That Owner's bootstrapping device (7.9), after the config repo's first base, files the team directory's `RepoCreate{repo_id, kind directory}` (§8.8) and becomes its repo admin, beside every config writer; an admin device that finds a team without one files it, api and readers refuse a second, and api one outside the `team` tier (§16.11; owner decision 171; D-TEAM-28). Right after the directory's, the same device files the team record's `RepoCreate{repo_id, kind team_record}`, and an admin device that finds a team whose access logs hold no `team_record` RepoCreate files it; api and readers refuse a second live one in a network, and api one outside the `team` tier, and its admins are its creator and every config writer, as the directory's are. A `RepoDelete` of it stands: only a person's /dev/tty-confirmed admin command files a new one, so a Team may decline the ledger and route as personal networks do (RECORD.md section 4.2; owner decision 303). Team routes (members, invitations, IdPs, domains, SCIM, OAuth clients, admin events and audit webhooks; 7.17) check `NetworkTierOf` (§20.5) and refuse a network outside the `team` tier with §20's `QuotaRefusal` (`upgrade`).
 
 **Members.** `network_member.member_id`, new per join, rides in tokens and `rev/` objects, so a re-invite never revives an old token.
 
-**Roles.** One per member, signed in the config repo (`AdminSet`, under k of n, for the table's first four, which sign config records; else `MemberAdmit`) and mirrored by the server. `routePermissionByRoute` maps the 75 Network and AppAdmin routes to permissions, unmapped ones owner-only; API keys and OAuth tokens get scopes ∩ their creator's.
+**Roles.** One per member, signed in the config repo (`AdminSet`, under k of n, for the table's first four, which sign config records; else `MemberAdmit`) and mirrored by the server. `routePermissionByRoute` maps the 75 Network and AppAdmin routes to permissions, unmapped ones owner-only; API keys and OAuth tokens get scopes ∩ their creator's. `MemberRole` numbers the table's rows from 1 in the order written, 0 being unspecified (7.9's record bytes).
 
 | Role | May |
 |---|---|
@@ -105,17 +121,36 @@ auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key
 | Auditor | read (settings, clients, audit) |
 | Member | own devices |
 
+**The last Owner** (owner decision 329). An account deletion is refused while its user is the last Owner of any team: the route answers which team and what to do first, make another member Owner or delete the team; nothing is deleted on the refusal, and the user deletes freely once the team is handed on or gone, so every team stays administrable at the server (inviting, roles, buying, cancelling, deleting) through a person holding the Owner role. Where a deletion proceeds, it deletes the user's `network_member` and `network_idp_identity` rows in its transaction. An Owner lost any other way (a restore that dropped the member row, a user removed outside this route) comes back through the team's own authority: a signed `AdminSet` naming another member Owner reaches the server's role mirror, which writes that member's role; the server never originates a role.
+
 **Invitations.** `POST /network/member-invite {email, role, expire_days ≤30}` stores a hashed token for a sign-in with that email; the link's fragment, never sent to the server, carries the genesis hash and authorization pin (7.9), the inviter's device key and a one-time secret MACing the join request an admin device admits; api and that device refuse an ephemeral client's join, so the invite stays unspent and the member's first device from it is never ephemeral (§8.5's invited clause). A token names one network (server/IDP.md §2); `POST /auth/network-switch` honors the target's sign-in rule.
+
+```text
+invite    ur-invite-<invite_id>-<secret>[#<base64url(fragment)>]                    (owner decision 324)
+  bearer    <invite_id> and <secret>, each lowercase RFC 4648 base32 with no padding, as an auth key's are
+            (7.8); <secret> is 32 random bytes, of which network_invite.token_sha256 keeps only the SHA-256
+            (api-3's column)
+  fragment  never sent to a server and no proto message, a fixed 153-byte layout:
+            u8 version (1) || genesis_sha256 (32) || u64be authorization pin version || pin chain (32) ||
+            inviter sidecar_id (16) || inviter Ed25519 identity key (32) || join secret (32)
+            a later form takes another version byte, so links already sent keep working
+  join MAC  HMAC-SHA256(join secret, "urnetwork-sidecar-v1/invite-join" || 0x00 || network_id || invite_id ||
+            sidecar_id || identity key || member_id), over the joining device's request; a join that is
+            ephemeral or read_only is refused; the admitting device sets SIDECAR_CAPABILITY_INVITED on the
+            admission only after this MAC verifies (7.9's record bytes; §8.5)
+  redact    redaction treats the whole string as an auth key's bundle (7.8)
+```
 
 ### 7.6 SSO, domains, JIT, SCIM
 
-- **OIDC only** (Q-TEAM-4): `network_idp` rows; code flow with PKCE S256, `state` and `nonce`; `private_key_jwt` or a vault-encrypted secret. Identity is `(idp_id, sub)`, never email (OIDC Core §5.7); just-in-time (JIT) provisioning links an existing user only after that user completes a login with its existing credential in the same flow, never by email alone (D-TEAM-23), and a team IdP authenticates only its network.
+- **OIDC only** (Q-TEAM-4): `network_idp` rows; code flow with PKCE S256, `state` and `nonce`; `private_key_jwt` or a vault-encrypted secret. Identity is `(idp_id, sub)`, never email (OIDC Core §5.7); just-in-time (JIT) provisioning links an existing user only after that user completes a login with its existing credential in the same flow, never by email alone (D-TEAM-23), and a team IdP authenticates only its network. api keeps a sign-in's flow state between its start and `GET /auth/sso/callback` (state, nonce, PKCE code_verifier, IdP, network, redirect and the signed-in user that began it, for D-TEAM-23's link) as JSON under the Redis key `{sso_<state>}`, set with a ttl that is a settings field, 10 minutes by default, and taken with GETDEL, so a replayed `state` finds nothing; it is soft state, with no table and no cookie, and a lost Redis only restarts sign-ins in flight (§19.7; api-3; owner decision 310).
 - **Domains.** TXT `_urnetwork-challenge.<domain>` (TM:601), whose challenge value api keeps with the domain's verification and daily check times (api-3; owner decision 260), rechecked daily, dropped after 7 failed days, one network per domain; `POST /auth/sso-discover` routes verified domains to their IdP, and SSO-required teams refuse other sign-ins.
-- **JIT and SCIM** (Team v1, Q-TEAM-3). A first IdP login creates a `pending` member, since unsigned IdP data adds no reader; the admin device that admits it issues an invite to the IdP-verified email, from which the member's first device enrolls (§8.5). Without SCIM, `network_member.reauth_deadline` (7 d) bounds access after IdP disablement. SCIM 2.0 (RFC 7643/7644) at `/scim/v2/<network_id>/` takes a hashed bearer: `active=false` denies at once and queues a `MemberRevoke` (7.10); until an admin device signs it, members still encrypt to that member's devices, which the console lists, unless `ServiceSettings.scim_signer` names an admin's indexer (§3.6; owner decision 150), which signs such removals of members outside the AdminSet at once (D-TEAM-25). Group changes queue, each up to 7 days for an admin device; roles never sync (TM:450-468).
+- **JIT and SCIM** (Team v1, Q-TEAM-3). A first IdP login creates a `pending` member, since unsigned IdP data adds no reader; the admin device that admits it issues an invite to the IdP-verified email, from which the member's first device enrolls (§8.5). Without SCIM, `network_member.reauth_deadline` (7 d) bounds access after IdP disablement. SCIM 2.0 (RFC 7643/7644) at `/scim/v2/<network_id>/` takes a hashed bearer (below): `active=false` denies at once and queues a `MemberRevoke` (7.10); until an admin device signs it, members still encrypt to that member's devices, which the console lists, unless `ServiceSettings.scim_signer` names an admin's indexer (§3.6; owner decision 150), which signs such removals of members outside the AdminSet at once (D-TEAM-25). Group changes queue, each up to 7 days for an admin device; roles never sync (TM:450-468).
+- **SCIM's bearer and queue** (owner decision 321). The Owner-only Team route `POST /network/scim-token {remove?}` answers `ur-scim-<secret>` once, 32 random bytes in base32 as an invite's are written, and stores only its SHA-256 in the nullable column `network_team.scim_token_sha256` (MG6; api-2); a new bearer replaces the old at once, and `remove` clears the column, which turns SCIM off. api checks a presented bearer's SHA-256 against the column and answers 401 where the column is empty or differs, and SCIM's credential stays apart from CI's `client_credentials` grant. `GET /network/scim-changes` stays the console's and `ur admin`'s; the indexer `scim_signer` names reads the queue through the sidecar-classified `GET /sidecar/scim-changes` (7.4's allowlist), which api serves only to the client whose sidecar the newest projection's `ProjectionSettings.scim_signer` names, answering the queued `member_revoke` changes of members outside the AdminSet by the same rows and 403 to any other client; the daemon there signs those removals at once. That indexer acts on api's unsigned word, so a breached server can have it remove members outside the AdminSet, a denial only, since no reader is added (I-4), on a designation that is the owner's choice (owner decision 150; §2.10).
 
 ### 7.7 Clients: owners, names, tags, groups, approval
 
-- **Owner.** `network_client_owner`, set at mint: `owner_user_id`, `member_id`, `sponsor_user_id`, `auth_key_id`, `tagged`, `ephemeral`, `admin_refused`, `strict_exp`, `acl_enforcing` (Q-ACL-5), `declares_no_egress` (§20.8), `acl_subject_client_id` (D-ACL-3), deleted with its client. A tagged client's sponsor is its admitting member until an admin's `SponsorSet` (7.9, owner decision 83), which `sponsor_user_id` mirrors.
+- **Owner.** `network_client_owner`, set at mint: `owner_user_id`, `member_id`, `sponsor_user_id`, `auth_key_id`, `tagged`, `ephemeral`, `admin_refused`, `strict_exp`, `acl_enforcing` (Q-ACL-5), `declares_no_egress` (§20.8), and `client_public_key` (nullable bytea, 32 B; MG1), which `POST /network/enroll` writes once and which is 7.4's proof key until the client binds, deleted with its client; `model.SetClientPublicKey` stays out of this. The ACL subject is no column of this row: it is the nullable `network_client.acl_subject_client_id`, added in MG2 (§19.7), never in MG0; M1's enrollment writes none, NULL reading as the client itself for a top-level client and else as its source client's subject (D-ACL-3), and from MG2 the mint writes it once at creation (7.8's Enrollment bullet). A tagged client's sponsor is its admitting member until an admin's `SponsorSet` (7.9, owner decision 83), which `sponsor_user_id` mirrors.
 - **Names** are DNS labels keyed on the `sidecar_id`, duplicates taking `-2`, `-3` in admission order (RA:948-971); private names derive from them (owner decision 85, §12.9). Signers and verifiers refuse reserved names and owners (§12.5, §12.7), word-number labels (§15.9) and scope labels (§13.8) as client names, and client names as publishes or scope labels.
 - **Tags** (`tag:[a-z0-9-]{1,50}`), set at admission within §8's `tagOwners` so a change re-admits, and **groups** of members (`group:<name>`, or SCIM's `group:<name>@<domain>`) live in the config repo (owner decision 46). **Approval** is admission: an unadmitted client holds no grants (§8).
 - **Ephemeral** clients: at the mint api inserts `network_client_lease{client_id, seen_time = now, close_sha256}` and returns the close capability once (7.8); one with no open connection is reaped once its newest disconnect and its lease's `seen_time` are both over 35 min old, so 30-36 min after its last poll and 35-36 min after its last disconnect, or at once on `POST /sidecar/close` with that capability (§18.8; Tailscale: 30-60 min, https://tailscale.com/kb/1111/ephemeral-nodes); their evs access is §8.6's ceiling, which keeps every sidecar's config read (owner decision 6).
@@ -137,30 +172,43 @@ POST /network/enroll {auth_key, client_public_key, device_spec, declares_no_egre
                                                                  by the auth key's id and one by the caller
                                                                  address's peppered hash, never the address
                                                                  (api-11; owner decision 261)
-  -> {by_client_jwt, client_id, approval_state, admin_refused,   no_genesis: tagged or ephemeral, before base 1
+  -> {by_client_jwt, client_id, approval_state, admin_refused,   no_genesis: tagged or ephemeral, before base 1;
+                                                                 not_preview: 7.4's preview refusal; each a
+                                                                 403 {"error", "code"} (owner decision 326)
       close?}                                                    close (/network/auth-client's too): an
                                                                  ephemeral mint's capability, 128 random bits
                                                                  returned once, api keeping its SHA-256 (7.7)
 ur-authkey-<id>-<secret>[#<base64url(AuthKeyBundle)>]            QR and MDM carry the same string
-  <id>-<secret>  the bearer: the only auth_key enroll sends
+  <id>-<secret>  the bearer: the only auth_key enroll sends, with or without the ur-authkey- prefix; <id> is
+                 the key's 16-byte id and <secret> 32 bytes from crypto/rand, each lowercase RFC 4648 base32
+                 without padding (26 and 52 characters), so neither holds a "-" and the string splits once; a
+                 non-canonical encoding is refused, and api stores only SHA-256 of the 32 secret bytes
+                 (owner decision 323)
+  tags           in POST /network/auth-keys each of tags is a tag id as 32 lowercase hex characters; anything
+                 else, an autogroup's form (fifteen zero bytes, then the value) or a repeat is refused, so a
+                 tag name is never stored (owner decision 323)
   #<bundle>      client-only, like an invite's fragment (7.5): never sent, logged or passed to MCP; a request
                  body holding its prefix is refused before sending; redaction covers both parts
-  AuthKeyBundle{version 1, genesis_sha256, head AuthPin (7.9), delegation_id, delegation_signing_seed (32 B),
-                delegation_reader_seed (32 B), tag_ids}, ~200 B; the daemon signs its own SidecarAdmit with the
-                Delegation's key (a scoped statement: exactly its tag_ids and, unless ephemeral, a not_after no
-                earlier than the Delegation's; 7.9), keeps only the reader seed (§5.6), erases the rest; every
-                other copy of the string keeps both seeds, so it admits until the Delegation ends and reads
-                until its key drops (7.9's delegation row, §10.5)
+  AuthKeyBundle{version 1, genesis_sha256, head AuthPin (7.9), delegation_id (32 B: §10.5's, the SHA-256 of
+                the Delegation's signed bytes, which rows, §6.9's signer table and the daemon's SidecarAdmit
+                name; owner decision 313), delegation_signing_seed (32 B), delegation_reader_seed (32 B),
+                tag_ids}, ~200 B, its fields numbered in the order written; the daemon signs its own
+                SidecarAdmit with the Delegation's key (a scoped statement: exactly its tag_ids and, unless
+                ephemeral, a not_after no earlier than the Delegation's; 7.9), keeps only the reader seed
+                (§5.6), erases the rest; every other copy of the string keeps both seeds, so it admits until
+                the Delegation ends and reads until its key drops (7.9's delegation row, §10.5)
 POST /oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
      subject_token=<by_client_jwt>  subject_token_type=urn:ur:params:oauth:token-type:client-jwt
      resource=<service URI>  scope=<within the service's>  DPoP: <proof by the ClientKey>
-  -> access token {aud, scope, proj_v (log position n, 7.9), ur_client_id, ur_subject_client_id,
-                   ur_sidecar_id, member_id, act?}
+  -> access token {aud, scope, network_id, proj_v (log position n, 7.9), ur_client_id,
+                   ur_subject_client_id, ur_sidecar_id, member_id, act?}, beside the registered claims iss,
+                   iat, exp and jti; network_id, the claim name the ID token uses, is the subject client's
+                   network, set by the exchange, and a service refuses a token without it
      at most 64 repo: scopes, keeping the bearer under the lb's 8 KiB header line
      (warp/warpctl/config.go:1299); 300 repos cost 5 exchanges per audience per 15 min
 ```
 
-- **Enrollment** creates a top-level client with owner or `tagged`, sponsor, the mark and `acl_subject_client_id` (counted by §20.8), replacing RA:930's unscoped, unexpiring `urn_` key (server/apikey/apikey.go:20-53); pre-approved keys carry the genesis hash, head and a Delegation's signing and reader seeds only in a client-only `#<bundle>` that the client splits off before any request (D-TEAM-22); the enrollment request has no field for it, and `POST /network/enroll` refuses an `auth_key` containing `#`.
+- **Enrollment** creates a top-level client with owner or `tagged`, sponsor, the mark and, from MG2, `network_client.acl_subject_client_id` (7.7; counted by §20.8), replacing RA:930's unscoped, unexpiring `urn_` key (server/apikey/apikey.go:20-53); pre-approved keys carry the genesis hash, head and a Delegation's signing and reader seeds only in a client-only `#<bundle>` that the client splits off before any request (D-TEAM-22); the enrollment request has no field for it, and `POST /network/enroll` refuses an `auth_key` containing `#`.
 - **OAuth clients** use `client_credentials` on `network_oauth_client` with scopes `devices:core`, `auth_keys`, `policy:read`, `logs:read`, `all` (TM:737-748), intersected with those of the member that created the client, which its row keeps as `creator_member_id` for the client's whole life, so a re-joined creator's clients do not regain reach (7.5; api-11; owner decision 260); CI pairs `auth_keys`' ≤1 h keys with its Delegation. An auth key's Delegation's `not_after` is required, at most 90 days; CI and cloud Delegations default to 30 and are replaced, not extended. A forwarding Delegation has none (7.9's forwarding row).
 - **`ur-cli`** is the public client of `ur login` and `ur admin` (loopback PKCE, RFC 8252, or the RFC 8628 device grant) with code-matched consent, fresh `auth_time` and one-command DPoP tokens (§5.7); v0 ships only single-use auth keys of ≤5 min (§5.6):
 
@@ -172,11 +220,23 @@ POST /oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
   api          checks DPoP's htm and htu, recomputes cmd from the request and refuses a mismatch; in the
                command's own transaction inserts admin_token_use(jti PRIMARY KEY, member_id, cmd, result,
                time); a replay of the jti returns the stored result; rows go 1 h after exp (§2.8 api-11)
+  page         the consent page is ur.io's, mmm/ur.io/react/src/components/OauthConsent.jsx on mmm's sidecar
+               branch, showing the matching code and the one command from authorization_details: it is the
+               issuer's authorization_endpoint and a security control, not product UI, so it is in scope
+               under owner rule 6 (owner decision 306)
+  device       an RFC 8628 device authorization waits in Redis between POST /oauth/device_authorization and
+               the token poll: {oauthdev_<device_code_sha256>} holds its JSON (the ur-cli request with scope,
+               resource, the DPoP key's thumbprint, the command's authorization_details and digest; the user
+               code; the poll interval and last poll; once approved, the approving user, network and sign-in
+               time) with a ttl of its life, 10 min, and {oauthuser_<user_code>} points at it with the same
+               ttl; the token poll redeems it by GETDEL, so it is taken once; soft state, a lost Redis only
+               restarting sign-ins in flight; api installs the store, so the device endpoint serves and the
+               issuer's metadata names it (§2.8 api-11; owner decision 322)
   ```
 - **ur.io's key origin** (§18.8) has no public client of its own: a ur.io page hands it a one-time `/auth/code-create` code by postMessage, which it redeems at `/auth/code-login` for a network token, mints the page Worker's `admin_refused`, `strict_exp` client with `POST /network/auth-client` and drops the token, and it re-mints the same way after a lapse (owner decision 219).
-- **Token exchange** (RFC 8693) checks the ClientKey's DPoP proof (RFC 9449; 7.4's proof rule, jti single-use), refuses expired subject tokens and inactive, reaped or unadmitted clients (an unadmitted client of member M may get only `recovery:<member_id>` at gkm, for M's own recovery wraps, 7.9), and never issues the API audience. evs and gkm capabilities (`scope=repo:<id>:r|rw|admin|deposit`, owner decision 2) come from §8's rows in the newest projection: a read-only sidecar gets only `r` scopes and §16.8's receipt deposit, whatever else it is; a `forward_only` client (7.4), which acts as its sidecar, gets only `repo:<config_repo_id>:r` at evs and gkm, while that sidecar's forwarding Delegation is live (7.9), whatever its sidecar reads (owner decision 197); readers of an owner-bound repo who are not its writers also get `repo:<id>:deposit` for receipts (§16.8); member devices other than read-only ones get gkm `rw` on the config group (7.9's `commit`); in a team network every admitted sidecar that is not read_only gets `repo:<directory>:rw` (read_only ones `r`), and only the directory's admins, its creator and the config writers, each consented (§8.5) and not read_only, get its `admin`, which alone carries its ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete`, as in every repo: evs cannot see whose copies a key covers, so it checks the authority before any key mutation (§11.12, §16.11). **Re-seed mode** (§19.10): while `sidecar.yml`'s `reseed` is true and the network's log has not resumed (7.9's site loss), the exchange mints only `repo:<id>:admin`, honored only by evs's `POST /evs/v1/repos/<id>/reseed` and gkm's GroupForm, to the sidecars the restored rows list under the network's Owners and Admins, and answers other requests `restore_required`. Tokens stay in the daemon (I-7), but for §11's v1 read-only git view.
+- **Token exchange** (RFC 8693) checks the ClientKey's DPoP proof (RFC 9449; 7.4's proof rule, jti single-use), refuses expired subject tokens and inactive, reaped or unadmitted clients (an unadmitted client of member M may get only `recovery:<member_id>` at gkm, for M's own recovery wraps, 7.9), and never issues the API audience. evs and gkm capabilities (`scope=repo:<id>:r|rw|admin|deposit`, owner decision 2) come from §8's rows in the newest projection: a read-only sidecar gets only `r` scopes and §16.8's receipt deposit, whatever else it is; a `forward_only` client (7.4), which acts as its sidecar, gets only `repo:<config_repo_id>:r` at evs and gkm, while that sidecar's forwarding Delegation is live (7.9) and the client is the newest active forwarding child of that sidecar's current bound client, whatever its sidecar reads (owner decision 197): since every forwarding setup files its Delegation and then mints a new forwarding client, a Delegation superseded by one naming other keys ends the old client's exchange at the new one's mint, however long the old component keeps refreshing, while a repeat setup for the same key reissues the client; two windows are accepted, the old client exchanging between the new Delegation and the new mint, and the component's follow refused between that mint and its taking the hand-off (§18.6); binding the client to its delegation_id can replace this later without changing what the sidecar sends (owner decision 331); readers of an owner-bound repo who are not its writers also get `repo:<id>:deposit` for receipts (§16.8); member devices other than read-only ones get gkm `rw` on the config group (7.9's `commit`); in a team network every admitted sidecar that is not read_only gets `repo:<directory>:rw` (read_only ones `r`), and only the directory's admins, its creator and the config writers, each consented (§8.5) and not read_only, get its `admin`, which alone carries its ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete`, as in every repo: evs cannot see whose copies a key covers, so it checks the authority before any key mutation (§11.12, §16.11). **Re-seed mode** (§19.10): while `sidecar.yml`'s `reseed` is true and the network's log has not resumed (7.9's site loss), which api reads per network from the resumed marker of `{acl_<networkId>}r`, `reseed` staying the switch that allows the mode at all (owner decision 312), the exchange mints only `repo:<id>:admin`, honored only by evs's `POST /evs/v1/repos/<id>/reseed` and gkm's GroupForm with its ladder route (§10.8), to the sidecars the restored rows list under the network's Owners and Admins, and answers other requests `restore_required`. Tokens stay in the daemon (I-7), but for §11's v1 read-only git view.
 - **Keys.** Admin, service and ID tokens use disjoint ES256 key sets (`kid` prefixes `adm-`, `svc-`, `id-`), private to api's issuer, `auth.bringyour.com` (owner decisions 16, 108; server/oauth/keys.go:3-13).
-- **Notices.** New credentials, IdPs, domains, Delegations and admin-set changes notify Owners and Admins; auth codes carry their `api_key_id`, so removing the key ends the code and its network token, closing server/session/AUTH.md:202's gap (7.4). Tokens are never stored (§2.8 api-11).
+- **Notices.** New credentials, IdPs, domains, Delegations and admin-set changes notify Owners and Admins, a notice being owed by a path that can admit devices or sign people in: a forwarding Delegation, which admits nothing and whose device's own admission already carried its notice, owes none (owner decision 308); auth codes carry their `api_key_id`, so removing the key ends the code and its network token, closing server/session/AUTH.md:202's gap (7.4). Tokens are never stored (§2.8 api-11).
 
 **Revocation objects** (owner decision 2):
 
@@ -209,6 +269,11 @@ front    checks signature (issuer JWKS), aud, nonce = cookie, exp, and the membe
 front    counts that session only on same-origin requests and top-level GET or HEAD navigations
          (§13.7's Other origins row), since SameSite cannot separate networks while all of
          <root> is one site (§12.4); other requests arrive anonymous
+ports    the origin carries its port when it is not 443 (owner decision 311): the issuer accepts client_id
+         https://<host>.<net>.<root>:<port> for the four tlsedge ports, 443 written bare, with redirect_uri
+         on that same origin and the ID token's aud that origin, and checks the members publish grant for
+         (host, port); each endpoint stays its own origin and audience, so a 443 session never counts on
+         8443 or the reverse, and the front signs members in on every tlsedge port
 ```
 
 ### 7.9 The config repo: customer-held key authority (X3)
@@ -228,7 +293,7 @@ MemberAdmit{member_id, role: billing_admin | auditor | member}         an Owner 
   | MemberRevoke{member_id}                                              member is in the AdminSet
 SidecarAdmit{network_id, sidecar_id, identity_public_key, identity_alg, an Owner, Admin or IT admin, or scoped;
              member_id | tag_ids, ephemeral, not_after (agents only),    authority for an AdminSet member's
-             capabilities (bit 1 read_only)}                             device; owner-bound reads need §8.5's
+             capabilities (bit 1 read_only, bit 2 invited)}              device; owner-bound reads need §8.5's
   | SidecarRevoke{sidecar_id, reason: lost | reaped | removed |          consent (owner decision 126)
                   compromise, since_n}
 AdmissionConfirm{sidecar_id}                                           any signer allowed to admit it
@@ -258,9 +323,10 @@ Delegation{pubkey, reader_xwing_public_key (§10.5), tag_ids,           owner, a
            host_client_id, host_client_public_key)}                      DelegationRevoke may also come from a
   | DelegationRevoke{delegation_id, since_n: 0, or for a leaked          device allowed to revoke that sidecar
                      bundle the position from which it parks}            (§5.6) or an admin
-ServiceSettings{team_mail: indexers | member scopes (owner             owner or admin; directory from v1
-                decisions 58, 150; §15.5, §15.6); stale_leaf_days:     (M6)
-                90 (§10.9's stale Removes); self_admit: on (owner
+ServiceSettings{team_mail: indexers | member scopes (indexers;         owner or admin; directory from v1
+                owner decisions 58, 150, 304; §15.5, §15.6);           (M6)
+                stale_leaf_days: 90 (§10.9's stale Removes);
+                self_admit: on (owner
                 decision 112; device-signed self-admission only);
                 witness_bound_hours: 72, 24 to 168 (D-TRUST-10,
                 owner decision 129); scim_signer: none | the
@@ -268,7 +334,10 @@ ServiceSettings{team_mail: indexers | member scopes (owner             owner or 
                 {runs: auto | prompt | off (auto), workers: on |
                 off (on)}, a Team's defaults for run and worker
                 announcements (§16.11; owner decisions 170, 171),
-                reserved in config.proto at M2}
+                reserved in config.proto at M2; mail_strict: off
+                (§15.4); record_cost: on (owner decision 302);
+                record_required: off (§16.7; owner decision 305):
+                settings fields, below}
 VersioningRules{rules: [{kinds, repo_ids, path_glob,                   an Owner, Admin or Network admin
                          size_above_bytes, versioning: on | off}]}
   ordered, first match wins, an empty selector matching all and
@@ -342,9 +411,54 @@ leaves     (owner decisions 144, 182) in the config group and in the team direct
            decisions 64, 114)
 ```
 
+**Paths.** The config head is the files of the repo's file-mode `main` ref at one config_version:
+
+```text
+genesis                            the Signed Genesis, verbatim, which the first head writes
+fold/<d>/<i>                       the i-th ConfigFold, i from 1 and d = i / 1024, each zero-padded to 8
+                                   digits: one file per head that advances folded_through
+service_settings, versioning_rules, bridge/block
+                                   each one Signed record, verbatim
+bridge/share/<share_id hex>        a BridgeShareSigner; bridge/share-grant/<share_id hex> a BridgeShareGrant
+socket/key                         K_sock's file (§9)
+policy.hujson                      the policy's source bytes (§8.8)
+tags, groups, rules, names, labels, resolve
+                                   one deterministically encoded protobuf each
+ConfigFold{after, folded_through, records: [ConfigRecord{id, n, time_ms, kind, body}]}
+  id is the statement id (ids, below) for a STATEMENT and empty for a TICK; n and time_ms are the carrying
+  entry's; kind is AuthEntry.kind, 1, 2 or 3; body is AuthEntry.body verbatim; records run in n order, the
+  BASE entries in (after, folded_through] among them as kind 1 with the Signed ProjectionHeader as body
+  (owner decision 262); apply's BASE check reads the fold files whose ranges lie in (the previous
+  folded_through, folded_through]
+resolve  ConfigResolution{members: [{email, member_id}], networks: [{text, network_id}], clients:
+         [{client_id, sidecar_id}]}, sealed: one row per selector the policy names and no others, so it adds
+         no email beyond the emails the policy names; compile reads only it and refuses a selector with no
+         row, so compile stays a pure function of the head (§8.8's Saving)
+```
+
+**Record bytes.** The records above take field numbers in the order written, a statement's `StatementHeader` being field 1, and each named list numbers its values from 1 in the order written, 0 being unspecified: `MemberRole` (7.5), `RepoKind` (§11.12), `AclAction` and `AclAutogroup` (§8.4), and each `a | b` choice; `SIDECAR_CAPABILITY_READ_ONLY` is 2 and `SIDECAR_CAPABILITY_INVITED` is 4. `not_after`, `expires` and `drain_until` are int64 milliseconds since the epoch under the design's names, and `AuthorityProposal.statement` is the proposed type's whole body as signed, only the proposal's own header being judged for replay and expiry. Genesis, ProjectionHeader, ServiceSettings, VersioningRules and BridgeBlock carry no header; every other record, MemberAdmit and Delegation included, carries one and enters the log (Writes). The admitting device sets the `invited` capability bit only after the invite's join MAC verifies (7.5), a JIT member's first device included, from the invite that device issued (7.6); rows carry it in `SidecarRow.capabilities`, and §8.5's invited clause reads it. A presence key's `KeyRegister` carries the new key's own proof in two fields written last and set only for purpose presence, `key_signature = 9` and `key_webauthn = 10` (a `WebAuthnEvidence`): the new key signs the received body bytes before field 9, as `UrMlsCredential` signs its fields 1-7 with its signature last (§10.4), so a verifier slices at field 9's first byte, never re-marshals or empties a field, and refuses a body where anything follows fields 9 and 10; the signed bytes are §6.9's with purpose `key-proof` and type `SIGNED_KEY_REGISTER`, `webauthn-es256` taking their hash as its challenge with UP and UV set and its evidence in `key_webauthn`, and `ecdsa-p256-sha256` putting a DER signature in `key_signature`; the identity key's `Signed` covers the whole body, and any countersignature stays in `Signed.webauthn`. The log's rule for a `KeyRegister` never reads `attestation`: it checks that proof, which needs no roots, so api, evs, gkm and every member device give one verdict on one statement whatever FIDO roots their release pins (D-TEAM-32); the refusal of a failing attestation stays on the device about to sign, which signs no `KeyRegister` whose present attestation fails and never downgrades it to asserted, and each reader computes §16.6's label locally, at the carrying entry's time, for records and approver screens only, so a label can differ between releases while state, the key's liveness and the demand for its countersignature cannot (owner decision 327).
+
+**Sealed bodies.** Each statement shows only what §2.8's api-7 lists, the rest in a sealed field that stays `bytes`: a `sealed_body` (IndexerSet's `sealed_services`, RepoVersioning's `sealed_rules`) opens to a `*Body` message, for IndexerSet, RecoveryBind, RecoveryRebind, RepoVersioning and every §17.8 delta but BridgeWithdraw, and BridgeAlias shows only its header.
+
+```text
+sealed  u64be(g) || nonce (24 random B) || XChaCha20-Poly1305(K, nonce, pt, aad)
+  K     HKDF-SHA256(RK_g, salt repo_id, info "UR evs 1.0 statement" || u64be(g)), 32 B (§10.5's purpose
+        statement); repo_id is the config repo's, or for an owner-bound repo's RepoVersioning rules that
+        repo's own
+  aad   "urnetwork-sidecar-v1/sealed-body" || 0x00 || u32be(SignedType) || header.network_id ||
+        header.nonce || u64be(g)
+  pt    the *Body message, deterministically encoded, then 0x80, then zeros to a multiple of 256 B
+  open  a reader that holds RK_g opens it; one that lacks g keeps the entry pending and applies its id-level
+        effect, opening it once RK_g arrives; if the AEAD or the padding fails, the id-level effect stands,
+        the sealed effect is void and the reader alarms; api and sidecar/device's posture never open one
+        (SealConfigBody and OpenConfigBody, sidecar/config_seal.go)
+```
+
+**Settings fields** (owner decisions 302, 304, 305). `ServiceSettings` numbers its fields in the order written, `team_mail` 1 to `directory` 6, then `mail_strict = 7`, `record_cost = 8` and `record_required = 9`, each network-wide, signed by an Owner or Admin and reserved before M2's freeze as `directory` was (D-PHASE-9), so older readers ignore them. A zero `team_mail` (`TEAM_MAIL_MODE_UNSPECIFIED`) reads as `indexers`: a `tag:mail` device still needs an `IndexerSet` for mail before it registers (D-MAIL-15), and member scopes stays an explicit choice, which turns `{mxr_}`'s scope routes on (owner decision 304). `mail_strict`, false by default, is the field §15.4's `mail.strict` and `MailAuthEvidence.strict_chain`'s comment name; a reader that does not know it never claims `strict_custom_mx`. Per-run cost totals (tokens by model and reported amounts, never a model_call) go to the team record by default: `ur record cost` groups by project, client or month, never ranks people and folds groups under 5 members into `other`; a Team turns that off with `record_cost`, and every member's `ur status` names the setting (RECORD.md sections 6.3 and 13.1; owner decision 302). `record_required`, false by default, read from M6 and never set through MCP, makes each member's `ur install-harness` write fail-closed hooks (§16.7; owner decision 305).
+
 **Authority statements** (owner decision 110) need `authority`: one signature (7.5) admits or revokes only members outside the AdminSet and their devices, and no lone signer mints or removes a config-signing key, though n ≤ 2 forces k = 1 (7.18).
 
-**Indexers** (owner decisions 150, 175, 177, 178; D-TEAM-27). A network starts with no `IndexerSet`; an indexer exists only once an Owner or Admin designates one at network scope, or a member's consented device at member scope, and every service keeps its fallback until then, a phone's "search more" downloading all and searching its own index (§3.6; owner decision 177). An `IndexerSet` designates one of §3.6's indexers, its subject a sidecar that is neither ephemeral nor read_only and, at member scope, a consented device of the signer's member; readers ignore a designation of any other subject. The newest one per (sidecar_id, scope) holds, a device designated at both scopes running their union; `retire` ends it, as does the subject's revocation, and a parked subject serves nothing until lifted. Scope `network` covers network services within the subject's access: a personal network's mail or, under `team_mail: indexers`, a Team's on a `tag:mail` device (§8.5, §15.5); mirrors of the team record, the team directory, `record` ledgers and the config on an admin's device, or of the team record on an auditor's; search upkeep of the indexes it reads outside members' own repos (§11.14), the team directory's roll-ups included; removal of revoked sidecars' directory cards and notices (§16.11). Scope `member` covers its member's own repos (owner decision 126) and, in a Team member scope (owner decision 58), that scope's mail; a Team's network mail indexers only deposit, so members' own indexers keep their mailboxes' mirrors and indexes. A personal network's designations are network scope and also cover its owner's repos. For remote search (§11.14), `search` also answers app hosts' "search more": at network scope, any member's app hosts over the team repos the subject reads; at member scope, its own member's over any repo it reads and an `EvsShare` reader's over the repo shared. So an owner-bound repo reaches only a consented device of its owner (owner decision 126), and a tagged subject, never consented, answers only team repos, the asking app naming its sponsor. No app host answers (`ur indexer add` refuses `search` there and app builds never serve it), nor a browser Worker, which is read_only or ephemeral; the subject retires the designation to stop answering. A designation grants no key, grant or read, and readers ignore a service value they do not know. It enters the log at once, api seeing its signer, subject, scope and `retire`, while `services` is sealed to the config's current generation as §17.8 seals rule bodies. `ur indexer add|rm [--services mail,mirror,search]` signs only for a /dev/tty-confirmed command or in an app's UI, never through MCP (§5.8), since an indexer's mirror and index downloads spend the transfer balance (owner decision 10), and at network scope `--services search` warns when the host has harness hooks installed, since its same-user agents could read members' queries (§2.4's TB1); `ur indexer ls` lists the network's indexers.
+**Indexers** (owner decisions 150, 175, 177, 178; D-TEAM-27). A network starts with no `IndexerSet`; an indexer exists only once an Owner or Admin designates one at network scope, or a member's consented device at member scope, and every service keeps its fallback until then, a phone's "search more" downloading all and searching its own index (§3.6; owner decision 177). An `IndexerSet` designates one of §3.6's indexers, its subject a sidecar that is neither ephemeral nor read_only and, at member scope, a consented device of the signer's member; readers ignore a designation of any other subject. The newest one per (sidecar_id, scope) holds, a device designated at both scopes running their union; `retire` ends it, as does the subject's revocation, and a parked subject serves nothing until lifted. Scope `network` covers network services within the subject's access: a personal network's mail or, under `team_mail: indexers`, a Team's on a `tag:mail` device (§8.5, §15.5); mirrors of the team record, the team directory, `record` ledgers and the config on an admin's device, or of the team record on an auditor's; search upkeep of the indexes it reads outside members' own repos (§11.14), the team directory's roll-ups included; removal of revoked sidecars' directory cards and notices (§16.11). Scope `member` covers its member's own repos (owner decision 126) and, in a Team member scope (owner decision 58), that scope's mail; a Team's network mail indexers only deposit, so members' own indexers keep their mailboxes' mirrors and indexes. A personal network's designations are network scope and also cover its owner's repos. For remote search (§11.14), `search` also answers app hosts' "search more": at network scope, any member's app hosts over the team repos the subject reads; at member scope, its own member's over any repo it reads and an `EvsShare` reader's over the repo shared. So an owner-bound repo reaches only a consented device of its owner (owner decision 126), and a tagged subject, never consented, answers only team repos, the asking app naming its sponsor. No app host answers (`ur indexer add` refuses `search` there and app builds never serve it), nor a browser Worker, which is read_only or ephemeral; the subject retires the designation to stop answering. A designation grants no key, grant or read, and readers ignore a service value they do not know. It enters the log at once, api seeing its signer, subject, scope and `retire`, while `services` is sealed to the config's current generation as §17.8 seals rule bodies; each designation that holds is also a row of `ProjectionRows.indexers` (sidecar_id, scope, signer, position and the sealed services, ordered by sidecar_id then scope), so it survives every fold and a new device, a rows-only gate and a long-running reader read the same designations (owner decision 330). `ur indexer add|rm [--services mail,mirror,search]` signs only for a /dev/tty-confirmed command or in an app's UI, never through MCP (§5.8), since an indexer's mirror and index downloads spend the transfer balance (owner decision 10), and at network scope `--services search` warns when the host has harness hooks installed, since its same-user agents could read members' queries (§2.4's TB1); `ur indexer ls` lists the network's indexers.
 
 **Versioning rules** (owner decision 164). A network's VersioningRules set the versioning an honest writer gives each path it creates, existing paths keeping theirs (§11.7; owner decision 167); without the record the platform rule holds, versionless above 64 MiB of plaintext; Owners, Admins and Network admins write the record with `ur admin versioning`. The rules cover file-mode refs of every repo kind but config and mailcfg, never git-mode or creates-only refs, the search index's files or git-lfs's store. A repo's own rules in its RepoVersioning (§8.8) replace them for that repo; an owner-bound repo's rules are sealed to that repo's own generation, so only its readers open them, not every admitted sidecar, while the network's record and other repos' rules are sealed to the config's generation (§8.8; owner decision 126); either way the server never sees a glob. A locked repo takes no versioning off; in an owner-bound repo the owner's devices apply the rules like any writer, and the owner may lock it.
 
@@ -366,17 +480,33 @@ message StatementHeader {    // begins every statement that enters the authoriza
 replay      (D-TEAM-20) api and readers refuse a statement whose at is off their chain, over 4,096 positions
             old or before the retention point of the state it lands on (retention; every reader, a new device
             included, holds A_k from it, so equal pins give equal verdicts), that has expired, or whose id is
-            among the last 4,096 entries; type rules close the rest: a sidecar_id is admitted once and
+            among the statements that took effect in the last 4,096 entries (ids); type rules close the rest:
+            a sidecar_id is admitted once and
             tombstoned until its admission's not_after, which tagged and ephemeral admissions require; a member
             device's admission carrying one is refused, so leaves' rank depends on the log alone; GrantActivate
             is once per grant_id (§8.8); a decision activates at most its uses BridgeRoute or BridgeMap rules,
             counted by the rule id §17.8 derives from each use's effect_key (a retry adds none), and none whose
             id a BridgeWithdraw named; Suspend carries a random suspend_id that only Unsuspend{subject,
             suspend_id} lifts; revocations are idempotent
+ids         a statement's id is bridge.SignedBytesSha256(purpose, type, body), the SHA-256 of §6.9's signed
+            bytes, never of the Signed around them, so a copy under another wrapper (another signature
+            encoding or countersignature) is the same statement, and a retry under one returns its entry; the
+            proposal_id, the delegation_id and a SidecarAdmit's admission_sha256 (SidecarRow's and
+            UrMlsCredential's, §10.4) are that hash, an admission's taken over the SidecarAdmit body from
+            Signed.body or from AuthorityProposal.statement, one rule for both paths, the first device's
+            naming genesis_sha256; rows' ring keeps the first 16 bytes of the id of each statement that took
+            effect, so a copy a reader refused burns no id; A_0 and genesis_sha256, C_v (§11.8) and §16's
+            hashes stay hashes of their own bytes: they are pinned or chained, never checked for a repeat, so
+            another wrapper there fails closed
 several     k-of-n and recovery-signed statements (owner decisions 110, 127, 149; D-TEAM-21): AdminSet and
             authority-key changes, an AdminSet member's admission or revocation, AuditOptIn, recovery admissions
-proposal    an AuthorityProposal by the first counted signer, proposal_id = SHA-256(Signed AuthorityProposal),
-            then an AuthorityCosign from each further one, each under its own header
+proposal    an AuthorityProposal by the first counted signer, proposal_id its statement id (ids), then an
+            AuthorityCosign from each further one, each under its own header; rows carry every proposal still
+            open at a base as a ProposalRow (its id, statement type and statement, each signer with its
+            position, its not_after_ms, a recovery-signed one's window entry and time, and its kind), compiled
+            from the head's fold records like every other row, so a proposal folded under a base stays open
+            and closes at its k-th counted cosign, its window's ApiTick or its not_after, and api, the gates,
+            a new device and a long-running reader hold the same S(n) after a fold (owner decision 314)
 counted     distinct member_ids among the AdminSet's Owners and Admins at the completing entry's state; a
             member's devices and its recovery key count once; neither the target device nor an AdminSet change's
             or MemberRevoke's target member counts, but an AdminSet member's existing device counts as one for
@@ -388,7 +518,14 @@ completion  the entry holding the k-th valid counted signature or, for a stateme
 k = 1       a single signed statement with no recovery-key signature needs no proposal
 self_admit  off: a scoped recovery admission is a proposal by the recovery key that completes on one cosign by
             an admission signer (an Owner, Admin or IT admin device), under a binding a void restored only at
-            Recovery's activation
+            Recovery's activation; a proposal's kind is fixed at its entry, from its signer's kind, whether
+            the member is in the AdminSet, whether the binding is one a void restored, and self_admit then, so
+            an activation reads nothing but the row and a self_admit change between the proposal and its tick
+            decides nothing: ProposalKind is authority (1), recovery_scoped (2), restored (3: activates with
+            no counted cosign, owner decision 149) or restored_cosigned (4: a restored binding's scoped
+            admission filed while self_admit was off, which activates only if one admission signer's cosign
+            is among its signers); until value 4 is declared, readers take self_admit from rows at the tick,
+            which keeps them agreeing (owner decision 314)
 cascade     (D-TEAM-26) SidecarRevoke{reason: compromise, since_n} parks a closure P. since_n is a log position
             with no default: the signing device proposes the first entry timed at or after the loss time its
             person gives, which the person may move earlier, lists for its person and admins what P parks and
@@ -422,6 +559,13 @@ lift        a parked sidecar reads, writes and witnesses nothing and is a shrink
             staying parked or void until re-signed outside P; rows keep each such record's signer and position,
             so api, evs and gkm build P as readers do; what a stolen device admitted, at any depth, or bound
             stops with it, and a legitimate device costs a confirmation
+spans       (owner decision 330) a SidecarRow keeps one span per compromise cascade that held the sidecar in
+            P: from is since_n for the revoked sidecar and, for any other, the entry that pulled it into P;
+            until is the revocation's entry; what the sidecar signed at a position at with from <= at < until
+            is void, at every reader, rows-only gates and new devices included, after any fold and any lift of
+            a park; what a recovery key or a Delegation signed follows from the row that names its signer and
+            position, so binding, key and share rows carry no void marker, and a sidecar no cascade reached
+            carries no span
 delegation  (D-TEAM-30) a Delegation ends at the first of its DelegationRevoke, its void (cascade) and a
             compromise revocation of a sidecar it admitted: from that position api and readers refuse a
             SidecarAdmit or AdmissionConfirm its key signs, as past its not_after or max_admits, and its key is
@@ -438,12 +582,21 @@ forwarding  (D-TEAM-33; owner decision 197) a Delegation with forward set is its
             its reach is the config alone (§10.5); a newer one of S supersedes it at its position; it ends at
             its DelegationRevoke (since_n 0 only), S's revocation for any reason, a newer one or its void
             (cascade), and its key drops while S is parked or suspended; hosts admit S's flows under its key
-            only while it is live (§17.9's verify)
+            only while it is live (§17.9's verify); a superseded or ended one's row leaves ProjectionRows at
+            the first base whose retention point passes the later of its superseded_at and ended_at by 4,096
+            positions, one rule of the base compile over rows and positions alone, so every reader drops it
+            alike: past that point the replay row already refuses its Signed bytes and nothing admits under a
+            non-live forwarding key, a DelegationRevoke naming a dropped id is refused as unknown, and holder
+            sets read only live rows (owner decision 309)
 read_only   (D-TEAM-24) page Workers are admitted read_only (§18.8); every verifier (api's, members' devices,
             gkm, evs) accepts from such a device only its own SidecarRevoke (sign-out), its own key upkeep
             under its r scopes at gkm (§10.6's scopes: its ReaderKeys, signed reader-key, its KeyPackages,
             whose credentials it signs mls-credential, and its leaf's path-only commits, resyncs and acks),
-            leaving, `read` record entries and receipt deposits (§16.8), and HeadCheck replies, and refuses
+            leaving, `read` record entries and receipt deposits (§16.8) and, from §4.6's C4 (Later), HeadCheck
+            replies (until then a page Worker runs no HeadCheck: it neither witnesses nor is witnessed, raises
+            no unwitnessed alarm, seals nothing and shows no witnessed_at, keeping its digests and newest 64
+            KiB as retain says but uploading nothing, since the site-loss upload refuses read_only devices),
+            and refuses
             its ApprovalDecisions, admissions of any kind, OwnerConfirm, EvsShare, KeyRegister and KeyRevoke,
             IndexerSet, RecoveryBind and RecoveryRebind, every authority, acl and bridge statement, its
             ReaderWraps, DelegationWraps, GenRotates, Welcomes and group-info writes (§10.6's info row; its
@@ -490,15 +643,25 @@ presence    (owner decisions 185, 187; D-TEAM-32) a statement listed in covers, 
 
 ```text
 who       the network's first untagged sidecar of its owner (admin_user_id's user, or a team's first Owner)
-device    signs Genesis, the first config head and base 1, whose prev_chain is A_0 = SHA-256(Signed Genesis)
-api       accepts base 1 only with that Genesis, as entry 1 with If-None-Match, so one genesis wins a race,
-          and only if Genesis names such a sidecar
+device    signs Genesis, the first config head, which holds the Signed Genesis at genesis (paths), and base
+          1, whose prev_chain is A_0 = SHA-256(Signed Genesis); sha256(Genesis), AuthKeyBundle's and Pending's
+          genesis_sha256 and an invite's hash all mean that A_0; the first head's EvsPush is signed before
+          base 1, so it carries auth {0, A_0}, since A_1 hashes that head's C_1 and a pin of A_1 would be
+          circular, and evs takes that pin only on a config repo's first push (§11.8)
+api       accepts base 1 only with that Genesis, sent as the request's genesis and required only at version
+          1: it checks SHA-256(genesis) = prev_chain and that Genesis names such a sidecar, then PUTs
+          projrows, entry 1 (If-None-Match, the race's commit point, so one genesis wins) and entry 0, and a
+          retry of base 1 repeats a missing step
+entry 0   proj/<network_id>/00000000000000000000/_ holds the Signed Genesis bytes verbatim, no AuthEntry,
+          written If-None-Match and kept for the network's life: retention never deletes n = 0; GET
+          /network/config/projection?after=0 returns genesis beside the entries, to unadmitted clients too,
+          and answers 503 while entry 1 exists without entry 0 (§2.8 api-7)
 exchange  issues repo:<config_repo_id>:admin from base 1 to that sidecar alone, which creates the repo
           (§11.12), pushes the head and forms the group (§10.6); a race's loser is admitted like any device
 enroll    before base 1, a tagged or ephemeral enrollment answers no_genesis
 ```
 
-**Writes.** Readers, and api for bases, replay config heads from genesis, refusing a record whose signer lacks the role at its parent head; tag and group names leave sealed tables only as keyed HMACs. Scoped statements, revocations, proposals, cosigns, vetoes, confirmations, `SponsorSet`, `IndexerSet`, `KeyRegister`, `RecoveryBind`, `RecoveryRebind` and §8.8's statements enter the log at once, a proposal taking effect at its completion, and api and readers verify them against the state at their position until a writer folds them in (owner decisions 8, 74).
+**Writes.** Readers replay config heads from genesis, refusing a record whose signer lacks the role at its parent head, while api, which never reads or opens the config repo, checks only that each base's head descends from the last (the log's `descent` row). Tag and group names leave sealed tables only as opaque ids, with no key: an atom's id is 16 bytes of crypto/rand, drawn by the writer the first time a head names the tag or group, redrawn if its first 15 bytes are all zero (acl.proto keeps that form for autogroups) and kept beside its name in the config's sealed `tags` or `groups` file for as long as the name lives; compile reads it there and refuses a name with no row, signed tag_ids stay valid because an id never changes, and a tag deleted and made again gets a new id, so old admissions do not regain it. Every record that opens with a `StatementHeader` enters the log at once, through `POST /network/config/delta`: scoped statements, `MemberAdmit`, `Delegation`, an admin's `SidecarAdmit`, `AdminSet` (inside an `AuthorityProposal` at k > 1, alone at k = 1), revocations, proposals, cosigns, vetoes, confirmations, `SponsorSet`, `IndexerSet`, `KeyRegister`, `RecoveryBind`, `RecoveryRebind` and §8.8's statements, a proposal taking effect at its completion, and api and readers verify them against the state at their position until a writer folds them in (owner decisions 8, 74). `ServiceSettings`, `VersioningRules` and `BridgeBlock` carry no header: they ride heads only and take effect at the base naming the head, as the config's files do (policy, tags, groups, names, labels, `K_sock`, the `BridgeShareSigner`s), which is what the cascade's "the base whose config head first holds it" covers.
 
 **Authorization log** (D-TEAM-19). One linear, hash-chained log per network orders bases and statements. Its position n, advancing on every entry, is the projection version everywhere, A_n its chain digest, and (n, A_n), the `AuthPin`, names a state for readers, gates, gkm, MLS commit headers, evs heads, tokens (`proj_v` = n), BridgeState and approvals.
 
@@ -546,21 +709,47 @@ message ProjectionHeader {           // §6 Signed, purpose authority, by a conf
   uint64 config_version = 5; bytes config_head_sha256 = 6;
   bytes  rows_sha256 = 7; uint32 rows_byte_count = 8;   // ProjectionRows, <= 4 MiB (§8.8)
   uint32 threshold = 9;
+  bytes  tail_verdicts = 10;         // (owner decision 325) 2 bits per entry among
+                                     // folded_through+1..version-1, in position order: entry
+                                     // folded_through+1+j is bits 2j and 2j+1 of byte j/4, bit 0 the byte's
+                                     // least significant; 0 refused or a BASE, 1 took effect, 2 took effect
+                                     // and completed a proposal (an AuthorityProposal at k = 1 or the k-th
+                                     // AuthorityCosign only), 3 never; exactly
+                                     // ceil(2*(version-1-folded_through)/8) bytes, padding bits 0; empty
+                                     // when nothing is unfolded
+  repeated bytes shrunk_repo_ids = 11;  // (owner decision 315) the repos whose key holders this base's own
+                                     // config head change shrinks (shrink, below), which the writer computes
+                                     // from S(version-1) and S(version): 16-byte repo_ids of the rows, in
+                                     // ascending byte order, none twice; empty for none
 }
-message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_; for the cascade a *_signer
-                                     // names a sidecar_id, a recovery key's hash or a delegation_id, and a
-                                     // *_at is the position n of the entry carrying the record
+message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a rows-only verifier's whole
+                                     // state at folded_through; for the cascade a *_signer names a
+                                     // sidecar_id, a recovery key's hash or a delegation_id, and a *_at is
+                                     // the position n of the entry carrying the record
   repeated MemberRow members = 1;    // member_id, role, recovery_key_sha256 (the binding in effect, windowed
                                      // while a newer one below is void), bindings newest first {key_sha256,
                                      // signer, at, reason}, kept for the membership's life
-  repeated SidecarRow sidecars = 2;  // sidecar_id, admission_sha256, admission_signers (each counted one),
-                                     // admitted_at, confirm_signer and confirmed_at (its newest
-                                     // AdmissionConfirm), owner_confirm_signer, owner_confirmed_at,
+  repeated SidecarRow sidecars = 2;  // sidecar_id, admission_sha256 (ids; the genesis owner's row, which
+                                     // base 1's compile writes, names SHA-256(Signed Genesis), as §10.4's
+                                     // credential does; owner decision 320), admission_signers (each
+                                     // counted one), admitted_at, confirm_signer and confirmed_at (its
+                                     // newest AdmissionConfirm), owner_confirm_signer, owner_confirmed_at,
                                      // revoked_at, parked_at, sponsor, capabilities, delegation_id,
-                                     // live_since (leaves); tombstones until not_after
+                                     // live_since (leaves), not_after (tombstones until then); 16-20 its
+                                     // admission's identity_public_key, identity_alg, member_id, tag_ids
+                                     // and ephemeral, about 80 B a sidecar; 21 confirmations, every
+                                     // AdmissionConfirm and OwnerConfirm that took effect; 22 cascades
+                                     // (spans; owner decision 330); 23 admitted_time_ms, the time_ms of the
+                                     // entry its admission took effect at (the admitting entry's, the
+                                     // completing cosign's or the tick's), set at apply and carried through
+                                     // bases as admitted_at is, 0 for the Genesis's device (owner decision
+                                     // 307)
   repeated DelegationRow delegations = 3;   // delegation_id, signer, at, tag atoms, not_after,
                                             // key_dropped_at (§10.5), ended_at and the admissions
-                                            // it has made (7.9's delegation and scoped rows)
+                                            // it has made (7.9's delegation and scoped rows); 9-11 its
+                                            // pubkey, reader_xwing_public_key and max_admits; 12-16 a
+                                            // forwarding one's sidecar, host client id and key,
+                                            // superseded_at and reader key digest (forwarding)
   repeated KeyRow registered_keys = 4;      // each KeyRegister's key_id, member_id, alg, public_key,
                                             // purpose, signer, at and not_after, with its KeyRevoke's
                                             // position: what the presence row reads
@@ -568,6 +757,18 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_; f
                                      // imports nothing, each EvsShare with its signer and at; with
                                      // AclRepo.holders_shrunk_at (below); sidecar/device's posture reads
                                      // only its has_document (field 1)
+                                     // 6 stays unused until M6, when Team scopes define repeated
+                                     // TeamScopeRow team_scopes {label, member_id or tag atom}; format-1
+                                     // readers skip it
+  repeated ProposalRow proposals = 7;       // every AuthorityProposal open at folded_through, by proposal_id
+                                            // (7.9's proposal row; owner decision 314)
+  ProjectionSettings settings = 8;          // the ServiceSettings values a verifier judges by, self_admit
+                                            // and scim_signer (owner decision 205)
+  repeated RingRow ring = 9;                // the statements that took effect among the 4,096 entries
+                                            // through folded_through, in position order, each the first
+                                            // 16 B of its id with its position (replay, ids)
+  repeated IndexerRow indexers = 10;        // each IndexerSet designation that holds, by (sidecar_id,
+                                            // scope) (Indexers; owner decision 330)
 }
 message ApiTick {                    // kind TICK: api's own facts, each checked by content
   repeated bytes reaped_sidecar_ids = 1;     // ephemeral admissions only (7.10); coalesced per minute
@@ -577,22 +778,40 @@ message ApiTick {                    // kind TICK: api's own facts, each checked
 
 ```text
 state      S(n) = the newest base b <= n, whose rows compile its config head, plus the STATEMENT and TICK
-           entries among folded_through+1..b-1, re-applied in order (a BASE there is skipped, its rows
-           superseded by b's), and every entry b+1..n, in order; a config head takes effect only at the base
+           entries among folded_through+1..b-1, re-applied in order by the verdicts b's tail_verdicts
+           carries (a BASE there is skipped, its rows superseded by b's), and every entry b+1..n, in order: a
+           verdict is judged once, at the entry's position, by the verifiers present there, and every later
+           verifier takes it from the next base (owner decision 325); a config head takes effect only at the base
            that names it: readers show a newer one with no base as pending and alarm after 10 min, and any
            config writer may publish its base
 statement  POST /network/config/delta {Signed}: api verifies it against S(tip) (header, type rules, the
            signer's authority; else 403 with the tip, and the signer re-evaluates), PUTs tip+1, and on 412
            re-verifies against the new tip and tries the next position; replies {n, A_n}; a retry of the same
-           Signed bytes found among the last 4,096 entries returns that entry's {n, A_n}: the statement id
-           SHA-256(Signed) is the retry identity
-base       POST /network/config/projection {Signed ProjectionHeader, rows}: accepted only if version = tip+1,
-           prev_chain = A_tip, SHA-256(rows) = rows_sha256, and config_version and folded_through are each at
-           least the newest base's, its config head being that base's or a descendant; api PUTs projrows, then
-           the entry; if the tip moved, 409 {tip, A_tip} and the writer re-signs, re-compiling only when an
+           statement found among the last 4,096 entries returns that entry's {n, A_n}: the statement id
+           (ids) is the retry identity
+base       POST /network/config/projection {Signed ProjectionHeader, rows, config_pushes, genesis (version 1
+           only; Bootstrap)}: accepted only if version = tip+1, prev_chain = A_tip, SHA-256(rows) =
+           rows_sha256, config_version and folded_through are each at least the newest base's, its config head
+           is that base's or a descendant (descent), and its tail_verdicts covers exactly
+           folded_through+1..version-1 and agrees with api's own verdict at each position; api PUTs projrows,
+           then the entry; if the tip moved, 409 {tip, A_tip} and the writer re-signs, re-compiling only when an
            intervening base moved the config head or the fold; folded_through may stay at its old m while
            m >= tip - 1,024, so the writer never re-compiles under a stream of statements
-tick       api appends ApiTick entries at most once a minute per network
+descent    api judges a base's head by descent only, from Signed EvsPush statements the writer supplies:
+           records, signer roles and compile stay with readers; config_head_sha256 is C_v of the config repo's
+           main ref at config_version (§11.8); config_pushes holds the Signed EvsPush of each version in (the
+           previous base's config_version, config_version], oldest first, at most 4,096, and is empty when
+           the version is unchanged, when config_head_sha256 must equal the previous base's; api walks forward
+           from the previous base's config_head_sha256, for base 1 from C_0 = SHA-256("UR evs 1.0 ref" ||
+           repo_id || ref_id) with Genesis's config_repo_id: each push names that repo, its base_version and
+           base_chain equal the running (v, C), and C_v = SHA-256(C_{v-1} || push_id_v || SHA-256(Signed
+           EvsPush_v)); a mismatch answers 403; the pushes are not stored, so the log's bytes do not change
+tick       api appends ApiTick entries at most once a minute per network; it schedules each recovery
+           activation by a run-once task per proposal and no periodic sweep: after each statement append, for
+           each proposal whose window moved at that entry, RunOnce("config_log_activation", proposal_id) at
+           its window time + 72 h, which checks the ProposalRow at the tip (still open, its kind, its counted
+           signatures, its window time) and appends an ApiTick naming the activation, which every reader
+           judges from the row (owner decision 314)
 fold       once the oldest statement or tick past the newest base's folded_through is 1,024 positions behind
            the tip or 24 h old, a config writer saves a config head holding the statements, ticks and bases
            through the tip and publishes its base, at its next start if it was offline, after a random 0-10
@@ -626,12 +845,45 @@ apply(e)   every admitted sidecar: e.n = my.n + 1 and e.prev_chain = my.A, else 
              undoes an earlier revocation, while effects that depend on rows, such as a GrantActivate whose
              rule the new config head deleted, follow the new rows, the same for every reader; sidecar/device's
              posture checks only the signature, prev_chain, rows_sha256 and the two versions
+    verdicts (owner decision 325) the base's tail_verdicts carry those verdicts: a reader that judged the
+             tail compares the bits with its own, a BASE among them 0, and forks on a difference; a new device
+             and a rows-only verifier re-apply the tail by the bits and never re-judge it, so a tail statement
+             whose rule reads what the base's head changed, or whose at lies below what the new device holds,
+             gets the verdict the long-running readers gave it
+    shrunk   (owner decision 315) a verifier present at n-1 recomputes shrunk_repo_ids and forks on a
+             difference, and one that starts at this base takes it, so every verifier sets
+             AclRepo.holders_shrunk_at = n for exactly those repos (shrink)
+    anchor   (owner decision 318) a reader that starts at a base b judges the head b names by descent, as api
+             does: the chain must run from C_0 to C_v, and each push's signature must verify under an identity
+             key b's rows admit; the writer role at each push's own pin, for which the reader holds no state,
+             is left unjudged, and a push whose signer b's rows no longer admit is unjudgeable and withholds
+             the head; every push after the anchor is judged in full at its own pin, and the anchor's cost
+             stays bounded by the head, not the log; accepted: a config writer removed before b, whose
+             identity b still admits, could have a past push taken as a writer's, inside a head that b's
+             signer, a config writer at b, signed for, and bound by the compile check from the next base on; a
+             device following in order whose head pins before its window withholds and re-anchors so
+    no key   (owner decision 319) while a device holds no generation of the config repo, its follower applies
+             bases as sidecar/device's posture does and hands its key client those states, which serve only
+             to join the config group: to take its Welcome (KF2) or wrap and to open the config repo's
+             generation keys; nothing else acts on them, no seal, commit, rotation or admission, until the
+             follower stands; once it holds the key it re-reads every base it applied rows-only, from its
+             anchor, judging each head in full, and stands only when that pass agrees, a head that fails
+             withholding as ever; the network's first device and a device restarting with its keys keep the
+             full check from the start
+    follower (owner decision 317) ur daemon runs one config follower per network it hosts, the device's one
+             judge of this log: its projection reader over that Sidecar's api, the config repo's head reader
+             through evs (the file-mode read of main at a ref version, every path of the head, checked
+             against C_v on the ref's chain through config writers' pushes, §11.8), its authlog/ store and
+             gkm's keys; components, the bridge among them, read through it and build no follower of their
+             own, and until the head reader and the network's evs and gkm clients are composed the follower
+             withholds every base
   STATEMENT  its header, its type's signer rule and 7.9's presence row at S(my.n); apply
   TICK       every reaped id is an ephemeral admission (7.7); every activated proposal meets the window
   my.(n, A) := (e.n, A_n)
 retain     A_k for every k from api's retention point (below) on, and each base's (n, A_n) for 30 days, 40 B
-           each; the previous and current bases' rows; the last 4,096 entries' statement ids (16 B each,
-           64 KiB); every sidecar, phones, page Workers and agents included, its newest entries' verbatim
+           each; the previous and current bases' rows; the ring, the first 16 B of the id of each statement
+           that took effect among the last 4,096 entries (64 KiB at most; ids); every sidecar, phones, page
+           Workers and agents included, its newest entries' verbatim
            bytes up to a HeadCheckProof's 64 KiB (bases as headers, §6.5) and, while it sends proven, the
            proof it verified, so any holder or relayer answers §6.4's HeadCheckProofRequest; member devices on
            §18.4's desktop and CLI hosts (ur daemon) also every entry's verbatim bytes from that point, for a
@@ -639,29 +891,39 @@ retain     A_k for every k from api's retention point (below) on, and each base'
            itself as withheld
 check      readers pin (n, A_n) for §6's HeadCheck, which any admitted reader, agents included, may witness;
            unwitnessed, writers in shared groups alarm at 24 h and stop at witness_bound_hours, though
-           rotations, Removes and revocations never stop (I-16; D-TRUST-10, owner decision 129)
+           rotations, Removes and revocations, a RecoveryRebind with reason compromise among them, never stop
+           (I-16; D-TRUST-10, owner decision 129)
 users      the exchange, §8's gates, §10's reader sets, api-10's approvals (§16.6)
 retention  api keeps entries from the retention point, min(the previous base, the newest base's folded_through
-           + 1), on for the network's life, deleting older entries, and rows no retained base names, 30 days
-           after the newer base; a new device starts at the newest base b, verifying its signature and its
+           + 1), on for the network's life, deleting older entries, never entry 0, and rows no retained base
+           names, 30 days after the newer base; a new device starts at the newest base b, verifying its
+           signature and its
            config head's chain to genesis, not the pruned entries, whose chain it recomputes from the head's
            records, bases included (owner decision 262), chains A_k back from b's prev_chain through
-           the kept entries to the retention point, so it judges every at as long-running readers do, and
-           re-applies the statements and ticks among folded_through+1..b-1 as S(b) says
+           the kept entries to the retention point, so it judges every later at as long-running readers do,
+           takes the verdict of each entry among folded_through+1..b-1 from b's tail_verdicts and re-applies
+           them as S(b) says, judging nothing before b+1 (owner decision 325)
 site loss  (§19.10) the log comes back from devices, never re-sequenced, while sidecar.yml's reseed is true
-  upload     POST /network/config/reseed {entries, rows of their bases, pins} from member devices other than
-             read_only ones, whose code the server serves: the verbatim run a device keeps (retain), or a
-             phone's (k, A_k) pins; api checks the prev_chain links, every base's and statement's signature,
-             each signer rule from the run's first base on, and agreement with the restored
-             network_acl_head's (n, A_n) (§8.17); no network that row names takes a new base 1
+  upload     POST /network/config/reseed {genesis, entries, rows of their bases, pins, config_pushes} from
+             member devices other than read_only ones, whose code the server serves: the Signed Genesis, the
+             verbatim run a device keeps (retain), or a phone's (k, A_k) pins; api checks the prev_chain
+             links, every base's and statement's signature, each signer rule from the run's first base on, and
+             agreement with the restored network_acl_head's (n, A_n) (§8.17); no network that row names takes
+             a new base 1, and entry 0's bytes come back from devices under adopt's two-member rule
+  held       (owner decisions 136, 312) api keeps the uploads in the Redis soft-state family
+             {acl_<networkId>}r: one hash field per uploading sidecar holding its newest upload, the key's ttl
+             a settings field, 24 h by default, and a resumed marker field set when the network's resume base
+             lands; devices send their uploads again until their network resumes, so uploads that reach
+             different api instances adopt, and re-seed mode (7.8) ends per network at the marker
   adopt      api adopts entries in position order from the oldest that devices of two members hold, each on
              its predecessor's digest once devices of two members hold its own, by bytes or pin (one member's
              where the run's base admits uploading devices, member devices that are not read_only, of one
              member only), so no lone compromised device fills a position with a forged TICK, a reordered
              statement or one it signs; where no bytes reach two members, the log stops before that position
   resume     an admin's device re-seeds the config repo and publishes a base at tip+1 over it; api first
-             checks the newest adopted base as a new device's start does (its config head's chain to genesis)
-             against that repo, discarding the adopted run if it fails; then api appends and re-derives its
+             checks the newest adopted base by descent: the reseed's config_pushes run from version 1 to the
+             re-seeded head, and api discards the adopted run unless that base's (config_version,
+             config_head_sha256) lies on the walk from C_0 (descent); then api appends and re-derives its
              ticks, and signers re-submit statements no adopted entry holds, re-signed if expired
   after      positions and digests resume unchanged, so readers apply them without a FORK; an entry's time
              is api's own unless two members' devices forged it, and a forged activation raises
@@ -675,7 +937,16 @@ shrink    entry n shrinks repo R if KeyHolders(R, n-1, t_n) is not a subset of K
           RecoveryRebind with reason compromise, or a DelegationRevoke with since_n > 0, signed for a
           leaked bundle), though the holder's identity may stay; identity
           (R, n, A_n); rows carry AclRepo.holders_shrunk_at, the newest such n, which writers compile into
-          bases and readers, api, evs and gkm advance per entry
+          bases and readers, api, evs and gkm advance per entry; a base is such an entry for the repos its
+          shrunk_repo_ids lists, those whose holders its own config head change shrinks, so a new device or
+          cold gate that starts there learns them (apply's shrunk row); entry n also shrinks R when it drops
+          a holder of KeyHolders(R, n-1, t_s) from KeyHolders(R, n, t_s), t_s being the time of the entry at
+          R's holders_shrunk_at (R's creation when that is 0): every generation the gate still passes was
+          formed at or after t_s, and a holder only leaves as t grows, so a removal of a holder whose access
+          had already ended by time (a RepoRevoke or GrantRevoke of a lapsed grant, a SidecarRevoke of an
+          agent past its not_after, or a base that drops it) raises holders_shrunk_at, the gate keeps
+          refusing the generation the expiry closed and the rotation is asked; an expiry moved earlier with
+          both ends after R's last shrink stays open, for the review phase (owner decision 315)
 expiry    an authorization expiry: a holder whose RepoGrant or requested grant expires, or whose SidecarAdmit
           (an uncovered agent's) or Delegation not_after passes, at T_e, leaves at T_e with no entry; identity
           (R, T_e); a covered agent's own not_after drops no holder where it is covered: an ephemeral one
@@ -686,9 +957,13 @@ expiry    an authorization expiry: a holder whose RepoGrant or requested grant e
 coverage  generation g of R, whose GenRotate carries auth pin (n_g, A_g) and time t_g, covers a shrink at n_r
           iff n_g >= n_r and A_g lies on the verifier's chain, and an expiry at T_e iff t_g >= T_e; §10.6's
           write gate requires a write's generation to cover both, and §11.8 enforces it at each ref's head CAS
-tokens    evs and gkm honor a capability for R only while its subject reads (r) or writes (rw, admin) R in
-          their newest verified state, besides rev/ objects, by a cached per-repo bitset, so a subject that a
-          group edit or Suspend drops loses scope within §8.9's 5 s, not the token's 15 min
+tokens    evs and gkm honor a capability for R only while its subject holds that right on R in their newest
+          verified state, besides rev/ objects: r while it reads R, rw and admin while it writes R, and
+          deposit while §8 gives it deposit on R or it reads an owner-bound R it does not write (§16.8's
+          receipts), by a cached per-repo bitset of those three rights; the deposit bit is computed as the
+          exchange computes its deposit scope, and gkm's drop-key route takes the same check, though the key
+          it serves is public; so a subject that a group edit, a Suspend or a revoked or expired deposit
+          grant drops loses scope within §8.9's 5 s, not the token's 15 min
 ```
 
 **Recovery** (owner decisions 3, 62, 112, 126-128, 149; D-TEAM-21). A member M's recovery key (`RecoveryBind`) admits M's new untagged device:
@@ -713,8 +988,9 @@ admission   (GET /network/config/projection?after=), submit a recovery-signed st
             and veto bound the admission, not what a code holder reads: a rebind or a cascade void stops new
             wraps, and the code keeps opening what was wrapped to it and reads the current generation until
             the next rotation, which --compromise makes a remove rotation with a path epoch at once (§5.9,
-            §2.10); the statement carries the recovery Ed25519 public key, whose hash api and readers match
-            to MemberRow.recovery_key_sha256, compiled from RecoveryBind
+            §2.10); the statement carries the recovery Ed25519 public key, raw in Signed.key_id with
+            signer_id the member_id (§6.9's signers), whose hash api and readers match to
+            MemberRow.recovery_key_sha256, compiled from RecoveryBind
 pending     an authority statement with a recovery-key signature, in its proposal or a cosign, and any admission
             by a binding a void restored (cascade), a proposal by the table above, is pending and admits
             nothing: members refuse an Add, Welcome or wrap to its device, and it shows as recovery_window on
@@ -770,8 +1046,10 @@ after       it self-joins, revokes M's lost devices and rotates as §10.8 says, 
             RecoveryRebind's compromise shrinks every repo M reads, so the next rotation is cause REMOVE and
             starts a path epoch at once, while routine and lost request a rotation; old wraps are deleted in
             every case; no rebind or void reaches a keychain backup sealed before it, whose keychain.wrap the
-            retired or voided code still opens (§5.9: the device's identity key, ClientKey seed, ReaderKeys and
-            key cache), so after a compromise rebind or a void M revokes for compromise, and enrolls anew, each
+            retired or voided code still opens (§5.9: all of keychain.ur, the client jwt, ClientKey seed,
+            identity and agent keys, ReaderKeys, a Delegation's reader key, unlanded statements and §10's key
+            cache, and, by keys derived from R_n, approvals/, runs/, restore/ and component state), so
+            after a compromise rebind or a void M revokes for compromise, and enrolls anew, each
             device whose backups may hold such a sealing, since --replace keeps its identity key (§5.5); after
             a compromise rebind by §5.9's procedure, the rebind's signer last (owner decision 212)
 no code     lacking the member's consent, an admin re-add restores team repos only; short of k signers, the
@@ -823,10 +1101,12 @@ stale    (D-TEAM-29) the device that admits a member's page Worker (§18.8), the
          Workers, but a Worker no group of its admitting device seated stays admitted, one per eviction,
          until the member's consented device answers, without bound for a member with none, such as one
          with only page Workers, which §8.5 never consents, or one that never answers (7.18)
-cleanup  (D-TEAM-29) from 90% of the config_admissions cap of the tier its token declares (§20.4) until
-         the count falls below it, every admin device raises admissions_near_cap (§5.4) and lists, per
-         member, its admitted page Workers but its newest, oldest first, each with its admission time and
-         its leaf's last change where a group the device is a leaf of shows one; an admin's revoke signs
+cleanup  (D-TEAM-29) from 90% of the network's config_admissions, which an admin's device reads from GET
+         /sidecar/limits, where it also sees §21.7's rows (§20.4), until the count falls below it, every
+         admin device raises admissions_near_cap (§5.4) and lists, per member, its admitted page Workers
+         but its newest, oldest first, each with its admission time, rows' admitted_time_ms beside its
+         position (owner decision 307), and its leaf's last change where a group the device is a leaf of
+         shows one; an admin's revoke signs
          SidecarRevoke{reason: removed} for those listed (signer row; an AdminSet member's at k > 1 as
          proposals; 7.9's presence row), so Workers no member device answers for are freed before api
          refuses an admission at the cap (§20.7); one still in use signs out and is enrolled again
@@ -871,7 +1151,7 @@ confirm  the revoking device shows the revocation unwitnessed until a HeadCheck 
 
 ### 7.11 Audit log and SIEM
 
-- **Server log.** `network_admin_event` records every admin action the server executes (per-network `seq`, actor, action, target, result, request id, hash chain; no client IP) for 400 days; Auditors and above read `GET /network/admin-events`, and HMAC-SHA256-signed SIEM webhooks retry for 24 h.
+- **Server log.** `network_admin_event` records every admin action the server executes (per-network `seq`, actor, action, target, result, request id, hash chain; no client IP) for 400 days; Auditors and above read `GET /network/admin-events`, and HMAC-SHA256-signed SIEM webhooks retry for 24 h. The chain is `chain_sha256 = SHA-256(prev_sha256 || canonical)`: `prev_sha256` is the previous event's chain value, or 32 zero bytes before seq 1, and `canonical` is a u16-length-prefixed domain string "urnetwork network_admin_event v1", then network_id (16 bytes), seq (i64 big-endian), event time (i64 big-endian Unix microseconds), actor kind, actor id, action, target kind, target id, result and request id, strings u16-length-prefixed and ids as 0x00 when absent or 0x01 and 16 bytes. Each row stores its own `prev_sha256`, so a retained run verifies from its oldest row after the 400-day sweep; when every event of a network has aged out, its next event starts again at seq 1 from the zero value, which a reader sees because seq 1 follows a later time, and an event's time never falls below the previous event's (owner decision 323).
 - **Server-visible fields** and TTLs: §2.8's api-1, api-3 to api-8, api-11; member, IdP, IdP-identity and webhook rows stay until removed.
 
 ### 7.12 Network names for teams
@@ -919,7 +1199,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-14 (proposed).** Sidecar-held child and admin-refused tokens expire after 7 days under `strict_exp`, which one verifier enforces everywhere, and renew only with the ClientKey proof. *Why:* owner decisions 103, 131, with no app release.
 
-**D-TEAM-15 (proposed).** Edge login issues members a 60 s, nonce-bound, one-origin ID token; its session counts only on same-origin requests or navigations (§13.7). *Why:* no open redirect, replay or cross-network forgery.
+**D-TEAM-15 (proposed).** Edge login issues members a 60 s, nonce-bound, one-origin ID token; its session counts only on same-origin requests or navigations (§13.7); an origin carries its port when it is not 443, so each tlsedge port is its own origin and audience (owner decision 311). *Why:* no open redirect, replay or cross-network forgery.
 
 **D-TEAM-16 (proposed).** A member's consented devices admit its untagged devices unless `self_admit` is off, and revoke them whatever `self_admit` says; its recovery key admits them too, with one admin's cosign while `self_admit` is off; admins alone add no other reader to owner-bound repos (§8.5); tag owners and Delegations admit within scope. *Why:* owner decisions 5, 63, 112, 126.
 
@@ -927,9 +1207,9 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-18 (proposed).** The first 1,000 live member devices by `live_since` are the leaves of the config group and of the team directory's, promoted in rank order and never demoted while live; later ones and agents hold wraps; an admission's or revocation's signer commits it there, a wrapped one by wrap or rotation (7.9). *Why:* owner decisions 114, 128, 144, 182.
 
-**D-TEAM-19 (proposed).** One linear, hash-chained authorization log per network orders bases and statements; its position n is the projection version and (n, A_n) the pin every consumer names; api's If-None-Match PUT of `proj/<network_id>/<n>/_` linearizes it, within per-network append limits; no base lowers its config head or fold point, and a config writer folds it every 1,024 entries or 24 h; after a site loss, member devices' verbatim entries resume it unchanged, each adopted once devices of two members hold it (7.9). *Why:* bases plus delta sequence numbers commit neither content nor order, so readers could agree on different states; a re-sequenced log would fork every reader, and one device's upload could pre-empt a position.
+**D-TEAM-19 (proposed).** One linear, hash-chained authorization log per network orders bases and statements; its position n is the projection version and (n, A_n) the pin every consumer names; api's If-None-Match PUT of `proj/<network_id>/<n>/_` linearizes it, within per-network append limits; no base lowers its config head or fold point, and a config writer folds it every 1,024 entries or 24 h; after a site loss, member devices' verbatim entries resume it unchanged, each adopted once devices of two members hold it; a base carries the verdict of every entry in its tail and the repos its own head change shrinks, and its rows every open proposal, each holding designation and each cascade's spans, so a new device and a gate reach a long-running reader's S(n) without judging a tail (7.9; owner decisions 314, 315, 325, 330). *Why:* bases plus delta sequence numbers commit neither content nor order, so readers could agree on different states; a re-sequenced log would fork every reader, and one device's upload could pre-empt a position.
 
-**D-TEAM-20 (proposed).** Every log statement carries a StatementHeader (network, the signer's AuthPin, nonce, not_after ≤ 7 d), refused when off-chain, more than 4,096 positions old or before the retention point, expired or repeated; type rules close the rest (7.9). *Why:* typed signed statements still need replay rules, which every reader, a new device included, must judge alike.
+**D-TEAM-20 (proposed).** Every log statement carries a StatementHeader (network, the signer's AuthPin, nonce, not_after ≤ 7 d), refused when off-chain, more than 4,096 positions old or before the retention point, expired or repeated, a statement's id being the hash of its signed bytes (purpose, type and body), never of its wrapper; type rules close the rest (7.9). *Why:* typed signed statements still need replay rules, which every reader present must judge alike and every later one takes from the next base, and an id over the wrapper would let a server replay a statement under a new one.
 
 **D-TEAM-21 (proposed).** k-of-n and recovery-signed statements are an AuthorityProposal plus AuthorityCosigns, counted per distinct member; an authority statement with a recovery-key signature, in its proposal or a cosign, or a scoped admission by a binding a cascade restored, stays pending, delivering no key to the proposed device, until an api tick 72 h after its newest such signature's entry with no valid RecoveryVeto, and a veto kept off the log forks only devices that held it before the activation (7.9). *Why:* owner decisions 110, 127 and 149 need a wire form, a clock and an activation path, a late recovery cosign must not skip the window, and a veto's `at` is its signer's claim.
 
@@ -945,9 +1225,9 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-27 (proposed).** A network designates its indexers (§3.6) by `IndexerSet` statements in the config repo (7.9): an Owner or Admin at network scope, a member's consented device at member scope for that member's own devices, and the subject itself to retire either; a designation names services, grants no key, grant or read, and decides only who runs a service first, so each service keeps a fallback when none is designated. A network starts with none (owner decision 177). For search, a designation also bounds which devices a phone asks, so a query reaches only designated devices (owner decisions 175, 178). *Why:* owner decisions 150 and 177; owner decision 126 leaves members' own repos to their own devices, and a duty must never widen reach.
 
-**D-TEAM-28 (proposed).** `team-create`'s first Owner device files the directory's `RepoCreate` after the config's first base. `ServiceSettings.directory`, signed by an Owner or Admin, holds the team's defaults: for runs (auto unless set) and for workers (on). *Why:* owner decisions 170 and 171; one record holds a network's defaults (7.9).
+**D-TEAM-28 (proposed).** `team-create`'s first Owner device files the directory's `RepoCreate` after the config's first base, and the team record's right after it, which a Team may delete and so decline (7.5; owner decision 303). `ServiceSettings.directory`, signed by an Owner or Admin, holds the team's defaults: for runs (auto unless set) and for workers (on). *Why:* owner decisions 170 and 171; one record holds a network's defaults (7.9).
 
-**D-TEAM-29 (proposed).** Whichever device admits a member's page Worker, an admin's where `self_admit` is off included, signs in that act, under its one presence check where 7.9's presence row asks (owner decision 187), `SidecarRevoke{reason: removed}` for each of the member's page Workers that §10.9 removed as stale from every group it is a leaf of that seated it, at least one, and that holds a leaf in none of them, checking again before each post or retry, and for an AdminSet member at k > 1 as proposals of their own beside the admission's, which its cosigners also cosign; in its admission act an admin's device revokes or lists no other device of the member, while the member's consented device revokes the stale Workers its own groups show and offers to revoke the rest, in its own admission act or, after an admin's, at its `OwnerConfirm` or admission-alarm answer (7.10's `stale` row); from 90% of `config_admissions` every admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf in that group, an admin's device sees the member's owner-bound groups only through the member's own share, and revoking a live device in an admission act stays the member's choice (owner decision 126); and a member with no device that answers, such as one with only page Workers, would reach the cap unseen, while an admin may revoke a member's device (owner decision 126), so admins see the pile and free it first.
+**D-TEAM-29 (proposed).** Whichever device admits a member's page Worker, an admin's where `self_admit` is off included, signs in that act, under its one presence check where 7.9's presence row asks (owner decision 187), `SidecarRevoke{reason: removed}` for each of the member's page Workers that §10.9 removed as stale from every group it is a leaf of that seated it, at least one, and that holds a leaf in none of them, checking again before each post or retry, and for an AdminSet member at k > 1 as proposals of their own beside the admission's, which its cosigners also cosign; in its admission act an admin's device revokes or lists no other device of the member, while the member's consented device revokes the stale Workers its own groups show and offers to revoke the rest, in its own admission act or, after an admin's, at its `OwnerConfirm` or admission-alarm answer (7.10's `stale` row); from 90% of the network's `config_admissions`, which an admin's device reads from `GET /sidecar/limits`, every admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf in that group, an admin's device sees the member's owner-bound groups only through the member's own share, and revoking a live device in an admission act stays the member's choice (owner decision 126); and a member with no device that answers, such as one with only page Workers, would reach the cap unseen, while an admin may revoke a member's device (owner decision 126), so admins see the pile and free it first.
 
 **D-TEAM-30 (proposed).** A Delegation other than a forwarding one (D-TEAM-33) admits only sidecars carrying exactly its tag_ids and, unless ephemeral, a `not_after` no earlier than its own, up to `max_admits`, which rows count for its life; it ends at its `DelegationRevoke`, its void or a compromise revocation of a sidecar it admitted, after which api and every reader refuse an admission its key signs; a `DelegationRevoke` with `since_n`, and that compromise revocation, park the sidecars it admitted from `since_n` on as the cascade parks, the rest reading on as uncovered agents; a `Suspend`, or a lost or removed revocation, of one of its agents drops only its key (7.9's delegation row, §10.5). *Why:* a covered agent must read exactly what its Delegation's key opens; every copy of a reusable auth key holds the signing seed, which an honest daemon's erasure cannot reach and a colluding operator's fresh client cannot stop, so a leak needs a customer-signed end with a positional park; ending admissions at every key drop would stop a CI pipeline's enrollments at one agent's removal.
 
@@ -955,13 +1235,13 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-32 (proposed).** A `SidecarRevoke{reason: compromise}`, a presence key's `KeyRegister` or `KeyRevoke`, any other `SidecarRevoke` or `Suspend` of another sidecar, a `DelegationRevoke` with `since_n` > 0 and a `RecoveryVeto`, a `SidecarAdmit`, `AdmissionConfirm` or `OwnerConfirm` of an untagged sidecar, an AdminSet change, a `MemberRevoke`, a `RecoveryBind` or `RecoveryRebind`, and an `AuthorityProposal` carrying one or an `AuthorityCosign` of it, signed by a sidecar that registered a live presence key, carry that key's countersignature in §6.9's `Signed.webauthn`, which api, evs, gkm and every member device verify, each statement alone by its inclusion path to the act's Merkle root, UV required; a sidecar with none signs on its person's confirmation (D-CORE-13) (7.9's presence row). *Why:* owner decisions 185 and 187: a presence check that only the signing device ran was skipped by modified software on a stolen unlocked device, which could then lock the member out; one prompt must still cover an act of several statements that land separately; without the `KeyRegister` rule a thief would register a key of its own to countersign with; without the `DelegationRevoke` rule a compromised device would park other devices with no presence check (owner decision 192); and without the admission, confirmation and binding rules a thief would admit a device with no key, or rebind the member's recovery code, and act from there (owner decision 189).
 
-**D-TEAM-33 (proposed).** A sidecar authorizes its app's forwarding by a forwarding Delegation that it alone signs, naming the keys its VPN component generated: it admits nothing, its key signs only that sidecar's `WindowDelegation`s, its reader key reads the config alone, a newer one supersedes it, and it has no `not_after`, ending only at its `DelegationRevoke`, its sidecar's revocation or its void (7.9's forwarding row; §18.6). *Why:* owner decision 197's self-contained forwarding, on the Delegation's existing signer path, rows, reader wraps, revocation and cascade, without a second sidecar per device or an expiry that would wait on the app.
+**D-TEAM-33 (proposed).** A sidecar authorizes its app's forwarding by a forwarding Delegation that it alone signs, naming the keys its VPN component generated: it admits nothing, its key signs only that sidecar's `WindowDelegation`s, its reader key reads the config alone, a newer one supersedes it, and it has no `not_after`, ending only at its `DelegationRevoke`, its sidecar's revocation or its void (7.9's forwarding row; §18.6); api answers a forwarding client at the exchange only while it is the newest active forwarding child of its sidecar's current bound client, so a superseded Delegation's client stops at the next one's mint (7.8; owner decision 331). *Why:* owner decision 197's self-contained forwarding, on the Delegation's existing signer path, rows, reader wraps, revocation and cascade, without a second sidecar per device or an expiry that would wait on the app.
 
 ### 7.15 Open questions
 
 **Q-TEAM-1.** How far does the P0 go? **Decided by owner 2026-11-03 (owner decision 45):** three stages, the last a hard gate (7.4). *Residual:* none.
 
-**Q-TEAM-2.** Convert personal networks? **Decided by owner 2026-11-03 (owner decision 55):** (a) no; new team networks only. *Residual:* none.
+**Q-TEAM-2.** Convert personal networks? **Decided by owner 2026-11-03 (owner decision 55):** (a) no; new team networks only. *Residual:* a team's last Owner cannot delete their account until another member is Owner or the team is deleted (7.5; owner decision 329).
 
 **Q-TEAM-3.** Is SCIM in Team v1? **Decided by owner 2026-11-03 (owner decision 56):** (a) yes. *Residual:* none.
 
@@ -998,13 +1278,16 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
                        POST /auth/network-switch; POST /network/idp; POST /network/domain-add|domain-verify|
                        domain-remove; GET|POST /network/auth-keys|oauth-clients; POST /network/auth-key-revoke|
                        oauth-client-revoke|audit-webhook; GET /network/admin-events|scim-changes;
+                       POST /network/scim-token (Owner only; 7.6);
                        GET /network/clients gains acl_enforcing (owner decision 106); POST /account/api-key
                        gains scopes and expiry
   Public               POST /network/enroll; POST /network/member-invite-accept; POST /auth/sso-discover;
                        GET /auth/sso/callback; /scim/v2/<network_id>/...; POST /oauth/device_authorization;
                        three new /oauth/token grants; published origins at /oauth/authorize
-  Client               GET /network/config/projection?after=; POST /network/config/projection|delta;
+  Client               GET /network/config/projection?after= (genesis beside the entries at after=0); POST
+                       /network/config/projection (with config_pushes and, at version 1, genesis)|delta;
                        POST /network/config/reseed (member devices but read_only ones, reseed only; 7.9);
+                       GET /sidecar/scim-changes (the scim_signer's client only; 7.6);
                        GET /auth/refresh and POST /network/auth-client gain DPoP for strict_exp bearers (7.4)
   ```
 - **Tables:** owner `api`; migrations 926+, before code; new columns on large tables nullable.
@@ -1013,9 +1296,9 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
   new      network_client_owner, network_team, network_member, network_invite, network_idp,
            network_idp_identity, network_domain, network_auth_key, network_oauth_client,
            network_scim_change, network_admin_event, network_audit_webhook, admin_token_use
-  altered  account_api_key, auth_code (api_key_id)
+  altered  account_api_key, auth_code (api_key_id); network_team.scim_token_sha256 (nullable, MG6; 7.6)
   ```
-- **Services and config:** `api` (log sequencer and verifier, gate cache, `rev/` writer, the only writer of `{acl_<networkId>}e` and of the append limiter's `{acl_<networkId>}q`, Redis `{dpop_<client_id>}` jtis for 120 s); `server/oauth` (grants, key sets, edge login); `taskworker` (rechecks, expiries, the reaper, `rev/` deletion, webhooks); `pro.yml` via `Pro()`; `config/<env>/sidecar.yml`'s `preview_networks` (7.4) and `reseed` (7.8, 7.9); vault (IdP secrets, OAuth keys); sidecar repo (`protocol/config.proto`; `protocol/bridge/auth.proto` for the log and what `sidecar/device`'s posture verifies; verifier; `git-credential-ur`).
+- **Services and config:** `api` (log sequencer and verifier, gate cache, `rev/` writer, the only writer of `{acl_<networkId>}e` and of the append limiter's `{acl_<networkId>}q`, Redis `{dpop_<client_id>}` jtis for 120 s, IdP sign-in flows under `{sso_<state>}` (7.6), device authorizations under `{oauthdev_<device_code_sha256>}` and `{oauthuser_<user_code>}` (7.8) and, during a site-loss restore, re-seed uploads under `{acl_<networkId>}r` (7.9)); `server/oauth` (grants, key sets, edge login); `taskworker` (rechecks, expiries, the reaper, `rev/` deletion, webhooks, and the run-once `config_log_activation` target, 7.9's tick row); `pro.yml` via `Pro()`; `config/<env>/sidecar.yml`'s `preview_networks` (7.4) and `reseed` (7.8, 7.9); vault (IdP secrets, OAuth keys); sidecar repo (`protocol/config.proto`; `protocol/bridge/auth.proto` for the log and what `sidecar/device`'s posture verifies; verifier; `git-credential-ur`).
 - **Assumptions about other sections:** §10 follows 7.9's leaves, wraps, `commit` (a reap's admission signer included) and coverage, in the team directory's group as in the config group, §10.5's key holders and rotation wraps treating that group's wrapped member devices as the config group's (D-KEYS-23), makes a generation covering an authorization expiry cause REMOVE, lets no read_only device claim `gen/`, sign a wrap or write GroupInfo while taking its own ReaderKeys, KeyPackages, path-only commits, resyncs and acks under r (§10.6's scopes), parks owner-bound Adds lacking §8.5's consent, removes a restored config leaf that lost entitlement, reads recovery bindings from the config and wraps to none that a void restored until re-signed, giving a device such a binding admitted, once activated, KF2's late ReaderWrap of the config group's current generation and a staged one at each later rotation while the tree lacks it, from which it anchors (7.9's `restored`) before it self-joins the config group, KF2 adding it to its other groups; §11.6 dates path epochs for those expiries; §4.4 and §6.11 place `auth.proto`'s messages (`ApiTick`, `ProjectionRows` with its rows, and `Suspend`, `Unsuspend` and `GrantRevoke`, which §8.8 declares there) in `protocol/bridge`, beside §6.9's `Signed`, whose `webauthn` field carries 7.9's presence countersignature, which §16.6's countersign row checks, §5.6 and §18.5 produce, and §17's forwarding role checks at its next compile (owner decisions 185, 187, 197); §17.8 derives a decision-carrying rule's id from its effect_key; §5.4 and §18.5 alarm on admissions under a member its own keys did not sign, on each RecoveryRebind of it the device did not itself sign (`recovery_rebind`, offering to revoke the signer for compromise) and on a veto first verified after its activation, and §18.5's deny signs `RecoveryVeto`; §5.6, §5.9, §10.8 and §2.8 EX5 cite 7.9's recovery `anchor`, its `restored` order (a ReaderWrap, not an Add, under a binding a void restored) and §5.4's `head_alarm` (fork) on failure, §5.6 the cascade's `since_n`, §5.6's `recovery_window` and §18.5's veto cover a restored binding's admission proposal, and §5.9 re-seals `keychain.wrap` whenever the cascade changes the member's current binding, with no HPKE copy while none is current, and applies 7.9's backup rule to each device that sealed to a voided binding; §18.7, §18.15 and D-SDK-11 schedule the extension release that stops persisting `by_jwt` before stage 2, which §23.7 and D-PHASE-3 list inside M3's gate; §18.8 reaps by 7.7's 35 min threshold and lease row, and §6.18 and §18.17 phase the close capability and `POST /sidecar/close` with that row (MG1, M1); §18.4 states 7.9's device retention; D-TRUST-10 and §2.8 take `witness_bound_hours`, and §2.8's rows add `strict_exp`, the log and `{dpop_}`, api-4 each ephemeral client's lease (`seen_time`, at most once per 300 s) and its close capability's SHA-256, and api-7 `live_since`, `parked_at`, the signers and positions the cascade reads (AdmissionConfirms' included), recovery bindings as ids with the rest sealed, `{acl_}q` and 7.9's retention point as its ttl, while §8.8's AclRows keep each EvsShare's signer and position; §11.13 prices `proj/` and `rev/` writes as never-shed P0 within 7.9's append limits, which §20.4 carries in pro.yml; §11 and §19 keep `proj/`, `projrows/` and `rev/` on the first metadata cluster (owner decision 145); §8.9, §2.8 api-7 and §19.7 cite 7.9's `{acl_}e`, and FS-62 loses it; §19.10 resumes the log as 7.9's site loss says, I-16 names that beside EvsReseed, and FS-41 sees no FORK, refuses one member's forged TICK and resumes a Team whose other members hold only read_only page Workers from one member's uploads; FS-14 tests a stale re-signed base (api refuses it, readers FORK), a new device starting after the 30-day retention at a base folded below the previous one, a GrantActivate whose rule a new config head deleted, and a statement whose at predates the retention point after two quick bases, refused by api and every reader, a new device included; §22.7 and FS-16 test a late recovery cosign, a rebind of a cosigning code's member voiding its proposal and a veto backdated after an activation (devices past it only alarm; those before it fork until a compromise revocation of the recovered device), and a code-only recovery served a forged genesis that admits the real rotators, or a RecoveryWrap forged from M's recovery public keys (it alarms and seals nothing); §22.7's cascade case also an admission under a Delegation the device signed, a rebound key K' admitting E and E admitting F before the revocation (both parked), the revoked device's OwnerConfirm of an admin-admitted device, its only consent (parked), and of one consented otherwise (not parked), a personal network revoking its first device from a device that device admitted (refused at since_n 0, accepted at the loss position), a voided compromise rebind (the code it retired admits only through the window and gets no wrap), an admin's AdmissionConfirm of a device a parked device self-admitted (no owner-bound read until the member's own confirmation), and the restored code of a Team member whose only device was stolen (a plain SidecarAdmit refused; its proposal shown in `recovery_window` and, unvetoed, activating 72 h on with no counted cosign; the device then anchoring from the config ReaderWrap a config writer gives it, a forged one raising `head_alarm` (fork), reading the config, self-joining and offering recovery-rotate) and, in the K' case, M's device that sealed to K' re-sealing at the void and listed for compromise revocation; FS-17 a phone holder; FS-19 an ephemeral client's refused join from a member invite; and §22.7's approval suite a cancel under the allowlist; §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener under `team_mail: indexers`; §8.8 and §11.12 refuse a second `directory` RepoCreate in a network, api also one outside the `team` tier (7.5), and §16.11 takes `ServiceSettings.directory` as the team's defaults and 7.10's `cards` row; §11.14 and §18.4 apply the Indexers paragraph's remote-search scope, and §8.8 and §11.7 seal an owner-bound repo's RepoVersioning rules to its own generation, which every reader of that repo holds; §10.5 takes a Delegation's reach from 7.9's scoped tag rule, drops its key at a Suspend of one of its agents and at its end (the delegation row), and counts an ephemeral covered agent's own not_after as no drop; §2.6, §2.10 and §2.18 disclose the split between the shared key and the admission authority; §22.7's suites, FS-18 and FS-102 test 7.9's delegation row and 7.10's agents row.
 
 ### 7.18 Risks

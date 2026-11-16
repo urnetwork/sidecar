@@ -88,15 +88,28 @@ func (self *testArmedClock) awaitArmed(t testing.TB, want time.Duration) {
 	}
 }
 
-// The opener a dial runs on: each listener's Hello and answer.
+// The opener a dial runs on: each listener's Hello and answer, and the Service holds it was asked for.
 type testDialOpener struct {
 	listeners map[Id]*testDialListener
 	// a dead listener's open has started and waits for its timeout
 	waiting chan Id
+	// refuses every Service hold, as a dispatcher that closed does
+	holdErr error
+	// runs inside each open, before its answer
+	onOpen func()
 
 	stateLock sync.Mutex
 	opened    []Id
 	verified  []Id
+	// each accepted stream's far end, in order
+	farEnds []*socketPipeEnd
+	// Service holds taken, and how many of them are still held
+	holdCount int
+	heldCount int
+	// "hold", "open" and "release", in the order they came
+	events []string
+	// one signal for each hold released, which a stream's end brings on a goroutine of its own; made at first use
+	released chan struct{}
 }
 
 func (self *testDialOpener) verify(ctx context.Context, clientId Id) (*SubprotocolPeerIdentity, error) {
@@ -113,7 +126,11 @@ func (self *testDialOpener) verify(ctx context.Context, clientId Id) (*Subprotoc
 func (self *testDialOpener) open(ctx context.Context, clientId Id, request *StreamOpenRequest) (socketStream, error) {
 	self.stateLock.Lock()
 	self.opened = append(self.opened, clientId)
+	self.events = append(self.events, "open")
 	self.stateLock.Unlock()
+	if self.onOpen != nil {
+		self.onOpen()
+	}
 	listener := self.listeners[clientId]
 	if listener.timeout {
 		self.waiting <- clientId
@@ -123,8 +140,50 @@ func (self *testDialOpener) open(ctx context.Context, clientId Id, request *Stre
 	if listener.reject {
 		return nil, &StreamRejectError{Code: listener.code, RetryAfter: listener.retryAfter}
 	}
-	dialer, _ := newSocketStreamPipe(1024)
+	dialer, farEnd := newSocketStreamPipe(1024)
+	self.stateLock.Lock()
+	self.farEnds = append(self.farEnds, farEnd)
+	self.stateLock.Unlock()
 	return dialer, nil
+}
+
+// See socketStreamOpener. Each hold counts until its release, which counts once.
+func (self *testDialOpener) holdService() (release func(), err error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.holdErr != nil {
+		return nil, self.holdErr
+	}
+	self.holdCount += 1
+	self.heldCount += 1
+	self.events = append(self.events, "hold")
+	if self.released == nil {
+		self.released = make(chan struct{}, 1024)
+	}
+	var releaseOnce sync.Once
+	return func() {
+		releaseOnce.Do(func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.heldCount -= 1
+			self.events = append(self.events, "release")
+			self.released <- struct{}{}
+		})
+	}, nil
+}
+
+// How many Service holds were taken, how many are still held, and the hold, open and release events in order.
+func (self *testDialOpener) holds() (holdCount int, heldCount int, events []string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.holdCount, self.heldCount, append([]string(nil), self.events...)
+}
+
+// The far end of accepted stream number index.
+func (self *testDialOpener) farEnd(index int) *socketPipeEnd {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.farEnds[index]
 }
 
 func (self *testDialOpener) openedIds() []Id {

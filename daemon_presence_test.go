@@ -5,7 +5,10 @@
 // registers nothing; a failed or refused prompt signs nothing and takes the new key off the authenticator; a second key
 // from a device holding a live one is countersigned; a key is removed only from a device with a live key of its own;
 // the daemon's prompt yields a presence decision; each act asks the authenticator afresh; and a registration carries
-// the attestation its authenticator's client answered (QD-730's map) only where it verifies.
+// the attestation its authenticator's client answered (QD-730's map) only where it verifies, answering the label its
+// release reads of it (QD-885): asserted for a packed statement off the vendor list and for any statement while its
+// format's pool is empty, attested where its root is pinned, and nothing signed for a forged apple statement against
+// apple's pinned root or for a statement that does not verify.
 
 package sidecar
 
@@ -367,7 +370,7 @@ func TestFreshContextEachAct(t *testing.T) {
 
 // A registration carries what its authenticator's client answered as the key's attestation, QD-730's map of a fmt none
 // object and the create ceremony's client data, once it verifies. One that fails, another key's, client data from an
-// origin off the table, the object with no map around it, or a chained format with no pinned root, registers nothing,
+// origin off the table, the object with no map around it, or a statement that does not verify, registers nothing,
 // never as asserted, and the new key is taken off the authenticator.
 func TestRegistrationCarriesOnlyAnAttestationThatVerifies(t *testing.T) {
 	cas := newTestAttestCas(t)
@@ -378,6 +381,9 @@ func TestRegistrationCarriesOnlyAnAttestationThatVerifies(t *testing.T) {
 	key, err := world.sidecar.RegisterPresenceKey(t.Context(), world.provider, SidecarActConfirmed, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if key.Label != PresenceLabelAsserted {
+		t.Errorf("a fmt none registration's label: %s", key.Label)
 	}
 	posted := postedStatements(t, world.sidecar)
 	if len(posted) != 1 {
@@ -403,7 +409,18 @@ func TestRegistrationCarriesOnlyAnAttestationThatVerifies(t *testing.T) {
 			return newTestAttestation(cas, key).withClientData(clientData).attestation(t, "none")
 		},
 		func(key *testPresenceKey) []byte { return newTestAttestation(cas, key).none() },
-		func(key *testPresenceKey) []byte { return newTestAttestation(cas, key).attestation(t, "packed") },
+		// a packed statement over another ceremony's client data: no empty pool excuses a signature that fails
+		func(key *testPresenceKey) []byte {
+			attestation := newTestAttestation(cas, key)
+			attestation.signedClientDataHash = bytes.Repeat([]byte{0x5a}, sha256.Size)
+			return attestation.attestation(t, "packed")
+		},
+		// and an apple statement whose certificate is another key's
+		func(key *testPresenceKey) []byte {
+			attestation := newTestAttestation(cas, key)
+			attestation.certificateKey = other
+			return attestation.attestation(t, "apple")
+		},
 	} {
 		world.provider.attest = attest
 		removedCount := len(world.provider.removed)
@@ -426,5 +443,159 @@ func TestRegistrationCarriesOnlyAnAttestationThatVerifies(t *testing.T) {
 	}
 	if len(postedStatements(t, enclave.sidecar)) != 0 {
 		t.Error("a statement was signed")
+	}
+}
+
+// The KeyRegister a registration under roots posted, the one statement its world's sidecar has signed, and the key the
+// registration answered.
+func registerTestAttestedKey(
+	t *testing.T,
+	world *testPresenceWorld,
+	roots *presenceAttestationRoots,
+) (*SidecarPresenceKey, *protocol.KeyRegister) {
+	t.Helper()
+	key, err := world.sidecar.registerPresenceKey(t.Context(), world.provider, SidecarActConfirmed, nil, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted := postedStatements(t, world.sidecar)
+	if len(posted) != 1 {
+		t.Fatalf("%d statements posted", len(posted))
+	}
+	register := &protocol.KeyRegister{}
+	if err := proto.Unmarshal(posted[0].GetBody(), register); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPresenceRegistration(register, posted[0]); err != nil {
+		t.Fatalf("the key's own proof beside its attestation: %v", err)
+	}
+	return key, register
+}
+
+// A valid packed statement of a vendor off the release's list registers, labelled asserted (QD-137, QD-885): the
+// statement verifies and chains to no listed root, and the KeyRegister carries it whole.
+func TestValidPackedStatementOffTheListRegistersAsserted(t *testing.T) {
+	cas := newTestAttestCas(t)
+	world := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	var carried []byte
+	world.provider.attest = func(key *testPresenceKey) []byte {
+		attestation := newTestAttestation(cas, key)
+		attestation.issuer = cas.software
+		carried = attestation.attestation(t, "packed")
+		return carried
+	}
+	key, register := registerTestAttestedKey(t, world, cas.roots())
+	if key.Label != PresenceLabelAsserted {
+		t.Errorf("the label: %s; want %s", key.Label, PresenceLabelAsserted)
+	}
+	if !bytes.Equal(register.GetAttestation(), carried) || len(carried) == 0 {
+		t.Error("the KeyRegister does not carry the authenticator's statement")
+	}
+}
+
+// A forged apple statement, a software key's that verifies in every way but its chain, registers nothing while apple's
+// root is pinned: no statement is signed, never one labelled asserted, and the key is taken off the authenticator.
+func TestForgedAppleStatementWithApplesRootPinnedRefuses(t *testing.T) {
+	cas := newTestAttestCas(t)
+	for _, format := range testAttestSingleVendorFormats {
+		world := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+		world.provider.attest = func(key *testPresenceKey) []byte {
+			attestation := newTestAttestation(cas, key)
+			attestation.issuer = cas.software
+			return attestation.attestation(t, format)
+		}
+		key, err := world.sidecar.registerPresenceKey(t.Context(), world.provider, SidecarActConfirmed, nil, cas.roots())
+		if !errors.Is(err, ErrPresenceKeyInvalid) || !errors.Is(err, ErrPresenceAttestation) || key != nil {
+			t.Errorf("%s by a software CA with its root pinned: %+v, %v", format, key, err)
+		}
+		if len(postedStatements(t, world.sidecar)) != 0 || len(world.provider.removed) != 1 {
+			t.Errorf("%s: posted %d, removed %d", format, len(postedStatements(t, world.sidecar)), len(world.provider.removed))
+		}
+	}
+}
+
+// With an empty pool, the release's until QD-137's step pins roots, a statement that verifies registers labelled
+// asserted in every format, whichever CA made its chain, through the exported registration.
+func TestEmptyPoolRegistersAsserted(t *testing.T) {
+	cas := newTestAttestCas(t)
+	for _, format := range testAttestChainedFormats {
+		for _, issuer := range []*testAttestCa{nil, cas.software} {
+			world := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+			world.provider.attest = func(key *testPresenceKey) []byte {
+				attestation := newTestAttestation(cas, key)
+				attestation.issuer = issuer
+				return attestation.attestation(t, format)
+			}
+			key, err := world.sidecar.RegisterPresenceKey(t.Context(), world.provider, SidecarActConfirmed, nil)
+			if err != nil {
+				t.Fatalf("%s, software CA %t: %v", format, issuer != nil, err)
+			}
+			if key.Label != PresenceLabelAsserted || len(postedStatements(t, world.sidecar)) != 1 {
+				t.Errorf("%s, software CA %t: label %s, posted %d", format, issuer != nil, key.Label, len(postedStatements(t, world.sidecar)))
+			}
+		}
+	}
+}
+
+// A statement that fails to verify registers nothing, with its format's root pinned and with none pinned alike: each
+// format over another ceremony's client data.
+func TestStatementThatFailsToVerifyRefuses(t *testing.T) {
+	cas := newTestAttestCas(t)
+	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self") {
+		for i, roots := range []*presenceAttestationRoots{presenceReleaseAttestationRoots(), cas.roots()} {
+			world := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+			world.provider.attest = func(key *testPresenceKey) []byte {
+				attestation := newTestAttestation(cas, key)
+				attestation.signedClientDataHash = bytes.Repeat([]byte{0x5a}, sha256.Size)
+				return attestation.attestation(t, format)
+			}
+			key, err := world.sidecar.registerPresenceKey(t.Context(), world.provider, SidecarActConfirmed, nil, roots)
+			if !errors.Is(err, ErrPresenceKeyInvalid) || !errors.Is(err, ErrPresenceAttestation) || key != nil {
+				t.Errorf("%s against pools %d: %+v, %v", format, i, key, err)
+			}
+			if len(postedStatements(t, world.sidecar)) != 0 || len(world.provider.removed) != 1 {
+				t.Errorf("%s against pools %d: posted %d, removed %d", format, i, len(postedStatements(t, world.sidecar)), len(world.provider.removed))
+			}
+		}
+	}
+}
+
+// A statement chaining to a root the release pins registers labelled attested, in every chained format.
+func TestPinnedRootRegistersAttested(t *testing.T) {
+	cas := newTestAttestCas(t)
+	for _, format := range testAttestChainedFormats {
+		world := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+		world.provider.attest = func(key *testPresenceKey) []byte {
+			return newTestAttestation(cas, key).attestation(t, format)
+		}
+		key, _ := registerTestAttestedKey(t, world, cas.roots())
+		if key.Label != PresenceLabelAttested {
+			t.Errorf("%s: %s; want %s", format, key.Label, PresenceLabelAttested)
+		}
+	}
+}
+
+// A key registered while its format's pool was empty, labelled asserted, labels attested under a later release that
+// pins its root, from the KeyRegister it posted and the time it was registered at alone: no second ceremony, and
+// nothing stored but the statement (QD-885).
+func TestRegisteredLabelRisesWhenALaterReleasePinsItsRoot(t *testing.T) {
+	cas := newTestAttestCas(t)
+	for _, format := range testAttestChainedFormats {
+		world := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+		world.provider.attest = func(key *testPresenceKey) []byte {
+			return newTestAttestation(cas, key).attestation(t, format)
+		}
+		key, register := registerTestAttestedKey(t, world, presenceReleaseAttestationRoots())
+		if key.Label != PresenceLabelAsserted {
+			t.Errorf("%s before its root is pinned: %s", format, key.Label)
+		}
+		registeredAt := world.sidecar.clock.Now()
+		label, err := verifyPresenceRegisterAttestation(register, cas.roots(), DefaultPresenceAttestationSettings(), registeredAt)
+		if err != nil || label != PresenceLabelAttested {
+			t.Errorf("%s under a release that pins its root: %s, %v", format, label, err)
+		}
+		if world.provider.registerCount != 1 {
+			t.Errorf("%s: %d registrations", format, world.provider.registerCount)
+		}
 	}
 }

@@ -1,5 +1,8 @@
 // MCP-M3-09's CLI half on fakes: a CTAP2 authenticator in memory behind presence_fido.go's provider, its keys
-// registering and asserting in the bytes the root's per-use profile verifies, its refusals failing closed; the CBOR
+// registering and asserting in the bytes the root's per-use profile verifies, its refusals failing closed; a
+// registration carrying the authenticator's own attestation statement where §16.6 names its format (QD-885), which the
+// root's check labels asserted while no root is pinned and refuses where it does not verify, and a fmt none object for
+// an authenticator that gave no statement the check reads; the CBOR
 // codec's canonical form and its refusals; and ur keys add-presence, rm and ls, each signing only on a yes on the
 // terminal through a Confirm method, with ur login's offer.
 
@@ -12,9 +15,13 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"math/big"
 	"strings"
 	"sync"
 	"testing"
@@ -52,10 +59,82 @@ type testFidoDevice struct {
 	// the client data hash its makeCredential was asked under, and the authenticator data it answered
 	createdHash     []byte
 	createdAuthData []byte
+	// what its makeCredential answers as its attestation, one of the testFidoStatement values, and the statement it
+	// answered, as canonical CBOR, nil where it answered none
+	statement        string
+	createdStatement []byte
 }
 
-// The model the test authenticator reports, which a registration must not carry.
+// What a test authenticator answers a makeCredential with.
+const (
+	// packed with its vendor's attestation certificate, as a security key answers: the default
+	testFidoStatementPacked = ""
+	// packed self attestation, signed by the credential key
+	testFidoStatementPackedSelf = "packed self"
+	// packed with a certificate, its signature over another ceremony's client data
+	testFidoStatementForged = "forged"
+	// packed with no attStmt member at all
+	testFidoStatementMissing = "missing"
+	// fmt none, as an authenticator that attests nothing answers
+	testFidoStatementNone = "none"
+	// a format §16.6 does not name
+	testFidoStatementU2f = "fido-u2f"
+)
+
+// The model the test authenticator reports, which rides in a registration only beside a statement that signs it.
 var testFidoAaguid = bytes.Repeat([]byte{0xa6}, 16)
+
+// A packed statement with a synthetic vendor's attestation certificate over signedData (WebAuthn §8.2): the
+// certificate's subject, its basic constraints and its aaguid extension as §8.2.1 has them, issued by a vendor CA no
+// release pins, and the attestation key's ES256 signature.
+func testFidoPackedStatement(t testing.TB, signedData []byte) urCborMap {
+	newKey := func() *ecdsa.PrivateKey {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	notBefore := time.Now().Add(-time.Hour)
+	notAfter := time.Now().Add(24 * time.Hour)
+	vendorKey := newKey()
+	vendor := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Synthetic Security Key Vendor Root", Organization: []string{"Synthetic Authenticators"}},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	aaguidExtension, err := asn1.Marshal(testFidoAaguid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestationKey := newKey()
+	leaf, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject: pkix.Name{
+			Country:            []string{"US"},
+			Organization:       []string{"Synthetic Authenticators"},
+			OrganizationalUnit: []string{"Authenticator Attestation"},
+			CommonName:         "Synthetic Security Key",
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		BasicConstraintsValid: true,
+		ExtraExtensions:       []pkix.Extension{{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 1, 1, 4}, Value: aaguidExtension}},
+	}, vendor, &attestationKey.PublicKey, vendorKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(signedData)
+	signature, err := ecdsa.SignASN1(rand.Reader, attestationKey, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return urCborMap{{Key: "alg", Value: urFidoCoseEs256}, {Key: "sig", Value: signature}, {Key: "x5c", Value: []any{leaf}}}
+}
 
 func newTestFidoDevice(t testing.TB) *testFidoDevice {
 	return &testFidoDevice{t: t, settings: defaultUrFidoSettings(), flags: urFidoFlagUserPresent | urFidoFlagUserVerified, keepalives: 2, channelId: 0x01020304}
@@ -149,11 +228,42 @@ func (self *testFidoDevice) ctapWithLock(command byte, encoded []byte) []byte {
 		authenticatorData = append(append(authenticatorData, self.credentialId...), coseKey...)
 		self.createdHash = bytes.Clone(request[int64(1)].([]byte))
 		self.createdAuthData = bytes.Clone(authenticatorData)
-		// a security key answers with its own statement, here packed self attestation's shape, which the client drops
-		answer, err := urCborAppend([]byte{urFidoStatusOk}, urCborMap{
-			{Key: int64(1), Value: "packed"}, {Key: int64(2), Value: authenticatorData},
-			{Key: int64(3), Value: urCborMap{{Key: "alg", Value: urFidoCoseEs256}, {Key: "sig", Value: []byte("a statement the client drops")}}},
-		})
+		// a security key answers with its own statement over authData || the client data hash it was asked under
+		signedData := append(bytes.Clone(authenticatorData), self.createdHash...)
+		format := "packed"
+		var statement urCborMap
+		switch self.statement {
+		case testFidoStatementPacked:
+			statement = testFidoPackedStatement(self.t, signedData)
+		case testFidoStatementForged:
+			statement = testFidoPackedStatement(self.t, append(bytes.Clone(authenticatorData), bytes.Repeat([]byte{0x5a}, sha256.Size)...))
+		case testFidoStatementPackedSelf:
+			digest := sha256.Sum256(signedData)
+			signature, err := ecdsa.SignASN1(rand.Reader, self.key, digest[:])
+			if err != nil {
+				self.t.Fatal(err)
+			}
+			statement = urCborMap{{Key: "alg", Value: urFidoCoseEs256}, {Key: "sig", Value: signature}}
+		case testFidoStatementMissing:
+		case testFidoStatementNone:
+			format = urFidoFormatNone
+			statement = urCborMap{}
+		case testFidoStatementU2f:
+			format = testFidoStatementU2f
+			statement = urCborMap{{Key: "sig", Value: []byte("a statement no check here reads")}, {Key: "x5c", Value: []any{[]byte("a certificate")}}}
+		default:
+			self.t.Fatalf("statement %q", self.statement)
+		}
+		self.createdStatement = nil
+		members := urCborMap{{Key: int64(1), Value: format}, {Key: int64(2), Value: authenticatorData}}
+		if statement != nil {
+			self.createdStatement, err = urCborAppend(nil, statement)
+			if err != nil {
+				self.t.Fatal(err)
+			}
+			members = append(members, urCborPair{Key: int64(3), Value: statement})
+		}
+		answer, err := urCborAppend([]byte{urFidoStatusOk}, members)
 		if err != nil {
 			self.t.Fatal(err)
 		}
@@ -264,10 +374,68 @@ func TestFidoRegisterAndAssertVerify(t *testing.T) {
 	}
 }
 
+// What a registration's handle carries as KeyRegister.attestation, read back: the client data and the attestation
+// object's format, its statement as canonical CBOR, and its authenticator data.
+type testFidoCarried struct {
+	clientData []byte
+	format     string
+	statement  []byte
+	authData   []byte
+}
+
+// Reads a handle's attestation, QD-730's map of exactly attObj and clientDataJSON around an object of exactly fmt,
+// attStmt and authData.
+func readTestFidoAttestation(t *testing.T, device *testFidoDevice, attestation []byte) *testFidoCarried {
+	t.Helper()
+	value, rest, err := urCborRead(attestation, device.settings.CborDepthCount)
+	if err != nil || len(rest) != 0 {
+		t.Fatalf("the map: %v, %d bytes after", err, len(rest))
+	}
+	container, ok := value.(map[any]any)
+	if !ok || len(container) != 2 {
+		t.Fatalf("the map: %+v", value)
+	}
+	carried := &testFidoCarried{}
+	carried.clientData, _ = container["clientDataJSON"].([]byte)
+	encodedObject, _ := container["attObj"].([]byte)
+	value, rest, err = urCborRead(encodedObject, device.settings.CborDepthCount)
+	if err != nil || len(rest) != 0 {
+		t.Fatalf("the object: %v, %d bytes after", err, len(rest))
+	}
+	object, ok := value.(map[any]any)
+	if !ok || len(object) != 3 {
+		t.Fatalf("the object: %+v", value)
+	}
+	carried.format, _ = object["fmt"].(string)
+	carried.authData, _ = object["authData"].([]byte)
+	statement, ok := object["attStmt"].(map[any]any)
+	if !ok {
+		t.Fatalf("the statement: %+v", object["attStmt"])
+	}
+	canonical, err := urCborCanonical(statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried.statement, err = urCborAppend(nil, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return carried
+}
+
+// The KeyRegister a handle would register, for the root's attestation check.
+func testFidoKeyRegister(handle *sidecar.PresenceKeyHandle) *protocol.KeyRegister {
+	return &protocol.KeyRegister{
+		KeyId: handle.KeyId, Alg: handle.Alg, PublicKey: handle.PublicKey, Attestation: handle.Attestation,
+		Purpose: bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
+	}
+}
+
 // A registration's attestation is KeyRegister.attestation's map (QD-730): the client data this client hashed for the
-// makeCredential, a webauthn.create from the table's origin, beside a fmt none attestation object over the
-// authenticator's data with its aaguid zeroed and its statement dropped, which the root's check labels asserted for the
-// handle's key and refuses for another.
+// makeCredential, a webauthn.create from the table's origin, beside the attestation object the authenticator answered
+// (QD-885): its packed statement and its authenticator data as given, aaguid included, since the statement signs them.
+// The root's check labels it asserted for the handle's key, no release pinning the vendor's root, and refuses it for
+// another key.
 func TestFidoRegistrationCarriesItsClientData(t *testing.T) {
 	device := newTestFidoDevice(t)
 	provider := newTestFidoProvider(t, device)
@@ -275,10 +443,7 @@ func TestFidoRegistrationCarriesItsClientData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	register := &protocol.KeyRegister{
-		KeyId: handle.KeyId, Alg: handle.Alg, PublicKey: handle.PublicKey, Attestation: handle.Attestation,
-		Purpose: bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
-	}
+	register := testFidoKeyRegister(handle)
 	label, err := sidecar.VerifyPresenceAttestation(register, time.Now().UnixMilli())
 	if err != nil || label != sidecar.PresenceLabelAsserted {
 		t.Fatalf("the attestation, %d bytes: %s, %v", len(handle.Attestation), label, err)
@@ -296,39 +461,106 @@ func TestFidoRegistrationCarriesItsClientData(t *testing.T) {
 		t.Errorf("the attestation for another key: %v", err)
 	}
 
-	value, rest, err := urCborRead(handle.Attestation, device.settings.CborDepthCount)
-	if err != nil || len(rest) != 0 {
-		t.Fatalf("the map: %v, %d bytes after", err, len(rest))
-	}
-	container, ok := value.(map[any]any)
-	if !ok || len(container) != 2 {
-		t.Fatalf("the map: %+v", value)
-	}
-	clientData, _ := container["clientDataJSON"].([]byte)
-	clientDataHash := sha256.Sum256(clientData)
+	carried := readTestFidoAttestation(t, device, handle.Attestation)
+	clientDataHash := sha256.Sum256(carried.clientData)
 	if !bytes.Equal(clientDataHash[:], device.createdHash) {
-		t.Errorf("the client data carried is not what the authenticator was asked under: %s", clientData)
+		t.Errorf("the client data carried is not what the authenticator was asked under: %s", carried.clientData)
 	}
-	if !bytes.Contains(clientData, []byte(`"type":"webauthn.create"`)) || !bytes.Contains(clientData, []byte(`"origin":"`+urPresenceOrigin+`"`)) {
-		t.Errorf("the client data: %s", clientData)
+	if !bytes.Contains(carried.clientData, []byte(`"type":"webauthn.create"`)) || !bytes.Contains(carried.clientData, []byte(`"origin":"`+urPresenceOrigin+`"`)) {
+		t.Errorf("the client data: %s", carried.clientData)
 	}
-	encodedObject, _ := container["attObj"].([]byte)
-	value, rest, err = urCborRead(encodedObject, device.settings.CborDepthCount)
-	if err != nil || len(rest) != 0 {
-		t.Fatalf("the object: %v, %d bytes after", err, len(rest))
+	if carried.format != "packed" || len(device.createdStatement) == 0 || !bytes.Equal(carried.statement, device.createdStatement) {
+		t.Errorf("the object carries fmt %q and %d bytes of statement, not the authenticator's %d", carried.format, len(carried.statement), len(device.createdStatement))
 	}
-	object, ok := value.(map[any]any)
-	if !ok || len(object) != 3 || object["fmt"] != "none" {
-		t.Fatalf("the object: %+v", value)
+	if !bytes.Equal(carried.authData, device.createdAuthData) {
+		t.Error("the authenticator data is not the authenticator's, byte for byte")
 	}
-	if statement, ok := object["attStmt"].(map[any]any); !ok || len(statement) != 0 {
-		t.Errorf("the statement: %+v", object["attStmt"])
+}
+
+// Packed self attestation is carried as given too, and labels asserted: it proves only that the key signed.
+func TestFidoRegistrationCarriesPackedSelfAttestation(t *testing.T) {
+	device := newTestFidoDevice(t)
+	device.statement = testFidoStatementPackedSelf
+	handle, err := newTestFidoProvider(t, device).Register(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	anonymous := bytes.Clone(device.createdAuthData)
-	clear(anonymous[urFidoAaguidOffset : urFidoAaguidOffset+urFidoAaguidByteCount])
-	authData, _ := object["authData"].([]byte)
-	if !bytes.Equal(authData, anonymous) || bytes.Contains(handle.Attestation, testFidoAaguid) {
-		t.Error("the authenticator data is not the authenticator's with its aaguid zeroed")
+	label, err := sidecar.VerifyPresenceAttestation(testFidoKeyRegister(handle), time.Now().UnixMilli())
+	if err != nil || label != sidecar.PresenceLabelAsserted {
+		t.Fatalf("the attestation: %s, %v", label, err)
+	}
+	carried := readTestFidoAttestation(t, device, handle.Attestation)
+	if carried.format != "packed" || !bytes.Equal(carried.statement, device.createdStatement) || !bytes.Equal(carried.authData, device.createdAuthData) {
+		t.Errorf("the object carries fmt %q, not the authenticator's statement and data", carried.format)
+	}
+}
+
+// The authenticator's statement is carried even where it does not verify, a packed signature over another ceremony's
+// client data here: the client hides nothing behind fmt none, and the registering device's check refuses it, so
+// nothing registers (the root's RegisterPresenceKey).
+func TestFidoRegistrationCarriesAStatementTheCheckRefuses(t *testing.T) {
+	device := newTestFidoDevice(t)
+	device.statement = testFidoStatementForged
+	handle, err := newTestFidoProvider(t, device).Register(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried := readTestFidoAttestation(t, device, handle.Attestation)
+	if carried.format != "packed" || !bytes.Equal(carried.statement, device.createdStatement) {
+		t.Errorf("the object carries fmt %q, not the authenticator's statement", carried.format)
+	}
+	label, err := sidecar.VerifyPresenceAttestation(testFidoKeyRegister(handle), time.Now().UnixMilli())
+	if !errors.Is(err, sidecar.ErrPresenceAttestation) || label != 0 {
+		t.Errorf("a statement that does not verify: %s, %v", label, err)
+	}
+}
+
+// An authenticator that answers fmt none, or a format §16.6 does not name, whose statement no check reads, registers
+// with a fmt none object: no statement, and the authenticator data with its aaguid zeroed, so the key's model does not
+// ride where nothing signs it. It labels asserted.
+func TestFidoRegistrationWithoutAReadableStatementIsNone(t *testing.T) {
+	for _, statement := range []string{testFidoStatementNone, testFidoStatementU2f} {
+		device := newTestFidoDevice(t)
+		device.statement = statement
+		handle, err := newTestFidoProvider(t, device).Register(t.Context())
+		if err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+		label, err := sidecar.VerifyPresenceAttestation(testFidoKeyRegister(handle), time.Now().UnixMilli())
+		if err != nil || label != sidecar.PresenceLabelAsserted {
+			t.Fatalf("%s: %s, %v", statement, label, err)
+		}
+		carried := readTestFidoAttestation(t, device, handle.Attestation)
+		emptyStatement, err := urCborAppend(nil, urCborMap{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if carried.format != urFidoFormatNone || !bytes.Equal(carried.statement, emptyStatement) {
+			t.Errorf("%s: the object carries fmt %q and a statement of %d bytes", statement, carried.format, len(carried.statement))
+		}
+		anonymous := bytes.Clone(device.createdAuthData)
+		clear(anonymous[urFidoAaguidOffset : urFidoAaguidOffset+urFidoAaguidByteCount])
+		if !bytes.Equal(carried.authData, anonymous) || bytes.Contains(handle.Attestation, testFidoAaguid) {
+			t.Errorf("%s: the authenticator data is not the authenticator's with its aaguid zeroed", statement)
+		}
+	}
+}
+
+// A format §16.6 names answered with no statement registers nothing: the client does not make it fmt none.
+func TestFidoRegistrationRefusesANamedFormatWithNoStatement(t *testing.T) {
+	device := newTestFidoDevice(t)
+	device.statement = testFidoStatementMissing
+	provider := newTestFidoProvider(t, device)
+	handle, err := provider.Register(t.Context())
+	if !errors.Is(err, errUrFido) || handle != nil {
+		t.Errorf("packed with no statement: %+v, %v", handle, err)
+	}
+	if _, err := urFidoAttestation(nil, map[any]any{}, device.createdAuthData, []byte("{}")); !errors.Is(err, errUrFido) {
+		t.Errorf("an answer with no format: %v", err)
+	}
+	// a statement holding a value with no canonical form here, CBOR's null
+	if _, err := urFidoAttestation("packed", map[any]any{"alg": nil}, device.createdAuthData, []byte("{}")); !errors.Is(err, errUrFido) {
+		t.Errorf("a statement holding null: %v", err)
 	}
 }
 
@@ -391,6 +623,17 @@ func TestFidoCborCanonical(t *testing.T) {
 		!bytes.Equal(decoded[int64(1)].([]byte), []byte{1, 2}) || decoded["id"].([]any)[0] != int64(-7) {
 		t.Errorf("decoded %+v", decoded)
 	}
+	// what was read writes back as the same canonical bytes, whatever order its maps were read into
+	canonical, err := urCborCanonical(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := urCborAppend(nil, canonical); err != nil || !bytes.Equal(again, encoded) {
+		t.Errorf("read and written again: %x, %v; want %x", again, err, encoded)
+	}
+	if _, err := urCborCanonical(map[any]any{"a": []any{nil}}); err == nil {
+		t.Error("a null made canonical")
+	}
 	for name, bad := range map[string]string{
 		"indefinite": "5f", "float": "f93c00", "duplicate key": "a201010102", "short": "43010203"[:6], "tag": "c101",
 		"deep": "818181818101",
@@ -424,6 +667,8 @@ type testUrPresenceKeysTarget struct {
 	removed       [][]byte
 	// what addPresenceKey answers, nil to add
 	addErr error
+	// the label a registration answers, 0 for none
+	label sidecar.PresenceLabel
 }
 
 func (self *testUrPresenceKeysTarget) presenceKeys() ([]*sidecar.SidecarPresenceKey, bool, error) {
@@ -441,7 +686,10 @@ func (self *testUrPresenceKeysTarget) addPresenceKey(ctx context.Context) (*side
 	self.added += 1
 	key := &sidecar.SidecarPresenceKey{KeyId: []byte{0xaa, byte(self.added)}, Alg: bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256, Held: true, NotAfter: time.Now()}
 	self.keys = append(self.keys, key)
-	return key, nil
+	// a registration answers the label it read; the listed row keeps none
+	registered := *key
+	registered.Label = self.label
+	return &registered, nil
 }
 
 func (self *testUrPresenceKeysTarget) removeKey(ctx context.Context, keyId []byte) error {
@@ -469,8 +717,13 @@ func TestKeysAddPresenceAndRemoveOnTheTerminal(t *testing.T) {
 		t.Fatalf("a no: exit %d, %d added", code, target.added)
 	}
 	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"yes"}}, nil }
+	target.label = sidecar.PresenceLabelAsserted
 	if code := cli.main(context.Background(), []string{"ur", "keys", "add-presence"}); code != urExitOk || target.added != 1 {
 		t.Fatalf("a yes: exit %d, %d added", code, target.added)
+	}
+	// the registration's line says what the release read of the key's attestation
+	if !strings.Contains(stdout.String(), "presence key aa01 registered, KEY_ALG_ECDSA_P256_SHA256, presence (asserted)\n") {
+		t.Errorf("the registration's line: %s", stdout.String())
 	}
 	if code := cli.main(context.Background(), []string{"ur", "keys", "ls"}); code != urExitOk || !strings.Contains(stdout.String(), "aa01  KEY_ALG_ECDSA_P256_SHA256") {
 		t.Errorf("the list: exit %d: %s", code, stdout.String())

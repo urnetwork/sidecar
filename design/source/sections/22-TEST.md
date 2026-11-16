@@ -50,7 +50,8 @@ func testHookBarrier(name string, key string)   // at each named protocol step (
 // newest committed versions and scans their text under the index's published normalization tables, sharing no
 // index code
 func (self *Net) SearchOracle() *SearchOracle
-func (self *SearchOracle) Matches(query string, scope *SearchScope) []*DocumentKey // what a search must find
+func (self *SearchOracle) Matches(query string, scope *SearchScope) []*DocumentKey // what a search must find;
+	// sidecartest.SearchScope, a struct holding one of §5.4's SearchScope and one of §16.10's SearchBreadth
 func (self *SearchOracle) Covered(scope *SearchScope) []*DocumentKey               // newest commit indexed
 ```
 
@@ -64,7 +65,8 @@ release   EC:8 (the segment cluster), so host loss, QuorumLoss and DriveMiss run
           metadata cluster as one 8-drive process (FS-63)
 lint      CROSSSLOT: every multi-key command and Lua script in sidecar engines and server's sidecar code runs once
           against keys spread over the 3 masters and fails on CROSSSLOT, and a static check refuses a multi-key call
-          whose keys lack one shared hash tag
+          whose keys lack one shared hash tag: each key of the call carries the tag, so a bare key beside a
+          tagged key whose tag equals its name is refused, and a single key needs none
 not       canary, which has no edges or mail (§19.11); a one-node Redis
 release   build/all/run.sh's rewrite functions on a fixture copy, the tags served through GOPROXY=file:// with
 fixture   GOWORK=off, an empty module cache and no replaces: root, protocol and an engine package import at the tag;
@@ -415,8 +417,8 @@ agents cost no commit or leaf: a Delegation-admitted one reads at once by its re
   by re-wrapping but commits no Remove (owner decision 114)
 read-only page Workers at k = 1 and k = 2 send each refused statement directly (config
   statements, cosigns, Adds, approvals, admissions, wraps, GroupInfo): api, gkm and members
-  refuse every one, while the Worker's own SidecarRevoke lands, its HeadCheck counts as a
-  witness, its reads work and, under its r token alone, its ReaderKey and KeyPackage uploads,
+  refuse every one, while the Worker's own SidecarRevoke lands, its reads work (its HeadCheck
+  counts as a witness only from §4.6's C4) and, under its r token alone, its ReaderKey and KeyPackage uploads,
   path-only commit, resync and ack land and members adopt them (FS-106)
 a compromise revocation parks the closure P from its since_n, counting each record from its
   carrying entry, never its at: the revoked device, each device whose admission a device
@@ -1260,7 +1262,8 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
               receiver into a mailbox, fetches a rotated drop key, deposits and follows a                         mailbox at
               rotation, and every read, ReaderWrap, epoch, GroupInfo and recovery route                           M7-out
               refuses it; a depositor served an older, unexpired GenRotate after a removal
-              refuses to seal, with evs's gate off
+              refuses to seal, with evs's gate off; a deposit grant revoked or expired, the
+              sidecar still admitted, is refused at evs within §8.9's 5 s
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target
@@ -2618,7 +2621,8 @@ FS-125 §4,6   C19's windows (owner decisions 176, 188) on a fake clock, with a 
               multiple of 128 KiB and F, each ±1 B, then 0 to 5 exchanges of exact envelope
               sizes added, both directions, the bytes split across the window's first
               contract, a session re-establishment's contract and an overflow successor, and
-              windows ending mid-exchange: both clients report F on the first contract and 0
+              windows ending mid-exchange: both clients report F on the first contract, the
+              lowest contract id a frame rode (§6.10's first row), and 0
               on the others, identical across the sweep, at the window's end and never before;
               past the allowance, and at a sixth exchange, F plus 128 KiB steps; the review's
               case, 120 KiB of background and one 16 KiB page, reports F both ways. Root

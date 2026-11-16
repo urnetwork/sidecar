@@ -18,6 +18,9 @@
 //	record      write-ahead: a device that writes or deposits to the log files a disclosure entry and holds its
 //	            commit in evs before the packet is returned; a receipt-only reader deposits read receipts, purpose 4,
 //	            instead; a reader that can do neither discloses nothing; an act whose record cannot land is refused
+//	version     an opened entry's Opening states its RecordEntry.version where that is above 1 (QD-864), so the
+//	            packet's reader knows a version-2 body is the AgentSignedBody holding the kind's message; an
+//	            author's Opening rides as content as the author wrote it, its version with it
 //	erased      an erased entry goes as a header alone, showing it existed and is gone
 //	no keys     a packet holds salts and bodies of what it opens, never an entry key, slot row or log key
 //
@@ -574,6 +577,7 @@ func (self *RecordDisclosure) Disclose(ctx context.Context, args *RecordDisclose
 		if choice.opened {
 			opening.Salt = bytes.Clone(entry.Salt)
 			opening.Body = bytes.Clone(entry.CommittedBody())
+			opening.Version = recordOpeningVersion(entry.Version)
 			if _, err := VerifyRecordOpening(opening); err != nil {
 				return nil, err
 			}
@@ -679,6 +683,7 @@ func (self *RecordDisclosure) Open(ctx context.Context, args *RecordOpenArgs) (*
 		if entry.Body != nil && entry.State != RecordEntryErased {
 			opening.Salt = bytes.Clone(entry.Salt)
 			opening.Body = bytes.Clone(entry.CommittedBody())
+			opening.Version = recordOpeningVersion(entry.Version)
 			if _, err := VerifyRecordOpening(opening); err != nil {
 				return nil, err
 			}

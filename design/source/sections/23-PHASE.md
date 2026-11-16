@@ -226,7 +226,7 @@ Each item gives (due; start).
 
 **D-PHASE-2 (proposed).** No code is written before G0, which the owner signed on 2026-11-06, its re-checks, density review and RECORD.md draft running beside M0's bootstrap (owner decision 193; 23.8); an unsettled blocker defers what it blocks; until the owner decides an open question, text written at its recommendation is marked "(proposed; Q-...)" (D-ARCH-4); and an implementation finding that changes a D- item returns to review as a Q- item, as do those re-checks' and that review's findings. *Why:* R-PHASE-1; owner rule 8.
 
-**D-PHASE-3 (proposed).** §7.4's stage 1 and D-TEAM-14 reach production log-only at M0's Gn-out, so the 14 log-only days overlap M1; the desktop app and extension releases with §18.7's credential rules, then stage 2, reach production before M3's pilot; until stage 2 is live, sidecar enrollment is limited to `config/<env>/sidecar.yml`'s `preview_networks`. *Why:* D-TRUST-3, kept off the critical path.
+**D-PHASE-3 (proposed).** §7.4's stage 1 and D-TEAM-14 reach production log-only at M0's Gn-out, so the 14 log-only days overlap M1; the desktop app and extension releases with §18.7's credential rules, then stage 2, a deploy of an api built with the tag `sidecar_stage2` that no config push turns on or off (§7.4; owner decision 328), reach production before M3's pilot; until stage 2 is live, sidecar enrollment is limited to `config/<env>/sidecar.yml`'s `preview_networks`. *Why:* D-TRUST-3, kept off the critical path.
 
 **D-PHASE-4 (proposed).** 23.7's M0 items, and §10.4's MLS subset with its X-Wing KAT, start in M0. *Why:* each is slow or unpredictable to finish, and the subset is M2's critical path (23.5).
 
