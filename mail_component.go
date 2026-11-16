@@ -81,6 +81,7 @@ type mailComponentRun struct {
 	// the ingestor running and its repo
 	ingestRepoId Id
 	ingestCancel context.CancelFunc
+	ingestor     *MailIngestor
 	// the receiver running, what ends it, and what closes its parts after
 	receiver       *MailReceiver
 	receiverCancel context.CancelFunc
@@ -93,6 +94,8 @@ type mailComponentSeams struct {
 	mayReceive func() bool
 	// builds the receiver; nil asks mailSidecarReceiverFactory over the client's Sidecar
 	factory mailReceiverFactory
+	// whether this device registers a listener by its own choice (MailReceiverEligible); nil asks the bound config
+	eligible func() bool
 }
 
 // "mail".
@@ -193,7 +196,7 @@ func (self *MailClient) stopRun(run *mailComponentRun) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		ingestCancel, receiverCancel, receiverClose := run.ingestCancel, run.receiverCancel, run.receiverClose
-		run.ingestCancel, run.receiverCancel, run.receiverClose, run.receiver = nil, nil, nil, nil
+		run.ingestCancel, run.receiverCancel, run.receiverClose, run.receiver, run.ingestor = nil, nil, nil, nil, nil
 		return ingestCancel, receiverCancel, receiverClose
 	}()
 	if ingestCancel != nil {
@@ -253,26 +256,44 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 				Label:     zone.Label,
 				Alias:     zone.Alias,
 			})
+			// what a burner label must not shadow, as this pass read it
+			publishedHosts := mailBurnerPublishedLabels(zone)
+			binding.PublishedHosts = func() []string { return publishedHosts }
 		}
 	}
 	binding.Network = self.networkRow
+	binding.Config = sidecar.configState
+	binding.Designator = sidecar
+	if gkm := binding.Gkm; gkm != nil {
+		binding.ConfigKey = func(ctx context.Context) (*EvsRepoKey, error) {
+			state, err := sidecar.configState()
+			if err != nil {
+				return nil, err
+			}
+			acl, err := state.Acl()
+			if err != nil {
+				return nil, err
+			}
+			configRepoId, ok := acl.ConfigRepoId()
+			if !ok {
+				return nil, errors.New("no config repo in the verified state")
+			}
+			return gkm.CurrentRepoKey(ctx, configRepoId)
+		}
+	}
+	binding.Event = sidecar.emitEvent
+	// no host opens a designation's sealed services yet: its statement's header, which they are sealed under, is not
+	// in ConfigIndexer, so the designations stay unknown (mail_indexer.go) and nothing gates or alarms on them
+	binding.IndexerServices = nil
 	binding.MailIndexer = func() (bool, error) {
-		indexers, err := sidecar.Indexers()
+		state, err := sidecar.configState()
 		if err != nil {
 			return false, err
 		}
-		if len(indexers) == 0 {
-			return false, nil
-		}
-		// a designation stands, and its services ride sealed under its statement's header, which the rows do not keep
-		return false, errMailIndexerServicesSealed
+		return mailIndexerCovers(state, self.sidecarId, binding.IndexerServices)
 	}
 	self.Bind(binding)
 }
-
-// Whether a standing designation serves mail cannot be told here: its services are sealed under its statement's
-// header, which ConfigIndexer does not carry.
-var errMailIndexerServicesSealed = errors.New("mail: an indexer's services are sealed")
 
 // The network's EvsClient: the evs component's, nil while none is attached.
 func (self *Sidecar) mailEvsClient() *EvsClient {
@@ -320,9 +341,11 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 		},
 		Message: func(message *MailMessage) {
 			self.invalidateMonth(message.RepoId, message.Month)
+			self.judgeReceiver(binding, message)
 		},
 		Alarm: func(alarm *MailIngestAlarm) {
 			self.log.Warningf("[mail]ingest alarm %s on %s", alarm.Kind, alarm.RepoId)
+			self.raiseReceiverAlarm(SidecarMailReceiverAlarmDeposit, alarm.DepositorId, alarm.RepoId)
 		},
 		Clock:    self.clock,
 		Log:      self.log,
@@ -339,6 +362,7 @@ func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) 
 		previous := run.ingestCancel
 		run.ingestCancel = ingestCancel
 		run.ingestRepoId = mailboxId
+		run.ingestor = ingestor
 		return previous
 	}()
 	if previous != nil {
@@ -373,6 +397,22 @@ func (self *MailClient) mayReceive(binding *MailBinding) bool {
 	return state.MayListen(AclSidecarSubject(self.sidecarId), AclSocketName{PublicName: aclMailReceiverName}, self.clock.Now()).Allowed
 }
 
+// Whether this device registers a receiver's listener by its own choice at the bound config (MailReceiverEligible):
+// a host that binds no config gates nothing here, policy's grant of the listen deciding alone.
+func (self *MailClient) receiverEligible(binding *MailBinding) bool {
+	if seams := self.seams(); seams != nil && seams.eligible != nil {
+		return seams.eligible()
+	}
+	if binding.Config == nil {
+		return true
+	}
+	state, err := binding.Config()
+	if err != nil {
+		return false
+	}
+	return MailReceiverEligible(state, self.sidecarId, binding.IndexerServices)
+}
+
 // Starts the receiver where mail is on, receive is set and the listen is granted; ends it where any of those stops.
 func (self *MailClient) passReceive(run *mailComponentRun, binding *MailBinding) {
 	why := ""
@@ -383,6 +423,10 @@ func (self *MailClient) passReceive(run *mailComponentRun, binding *MailBinding)
 		why = "this device does not receive"
 	case !self.mayReceive(binding):
 		why = "policy grants this device no listen on smtp/25/mx"
+	case !self.receiverEligible(binding):
+		why = "under team_mail: indexers a tag:mail device registers no listener until an IndexerSet designates it for mail"
+	case self.inBackground():
+		why = "an app listens only while it is open"
 	}
 	receiver := func() *MailReceiver {
 		self.stateLock.Lock()
@@ -475,5 +519,21 @@ func (self *MailClient) stopReceiver(run *mailComponentRun) {
 	}
 	if receiverClose != nil {
 		receiverClose()
+	}
+}
+
+// An app's wake (§15.6 step 5; owner decision 197): the mailbox's ingest runs now, and nothing listens for it, so a
+// wake only resyncs mail a receiver took. Nothing while no generation runs the ingestor.
+func (self *MailClient) Resync() {
+	ingestor := func() *MailIngestor {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if run, ok := self.componentRun.(*mailComponentRun); ok {
+			return run.ingestor
+		}
+		return nil
+	}()
+	if ingestor != nil {
+		ingestor.Wake()
 	}
 }

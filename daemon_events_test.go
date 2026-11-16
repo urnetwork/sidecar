@@ -390,6 +390,7 @@ var testDaemonEventKeys = map[string][]string{
 	"EvsAlarm": {"evs_alarm"}, "EvsAlarmDetail": {"evs_alarm_detail"}, "Version": {"version"}, "PushId": {"push_id"},
 	"Count": {"count"}, "VerifiedSince": {"verified_since_ms"}, "RecordAlarm": {"record_alarm"},
 	"BridgeAlarm": {"bridge_alarm"}, "DnsAlarm": {"dns_alarm"}, "CtAlarm": {"ct_alarm"},
+	"MailReceiverAlarm": {"mail_receiver_alarm"},
 }
 
 // Every field an event carries reaches the reply under its key, its times in milliseconds, and the reply shares
