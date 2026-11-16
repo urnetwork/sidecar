@@ -405,10 +405,11 @@ func (self *IndexBuilder) collect(ctx context.Context, view *indexView, normaliz
 	paths = slices.Compact(paths)
 
 	extractor := &indexBuildExtractor{
-		builder:    self,
 		view:       view,
 		normalizer: normalizer,
 		refId:      refId,
+		refKey:     self.args.refKey,
+		groupInbox: self.args.groupInbox,
 	}
 	for _, path := range paths {
 		if indexExcluded(indexPlace{repoKind: view.repoKind, groupInbox: self.args.groupInbox, path: path}) {
@@ -463,12 +464,17 @@ func (self *IndexBuilder) collect(ctx context.Context, view *indexView, normaliz
 	return ref, extractor.entries, nil
 }
 
-// One content ref's extraction into full entries.
+// One content ref's extraction into full entries: a build's, and a host's check of another writer's entries against
+// its own text (evs_index_check_text.go).
 type indexBuildExtractor struct {
-	builder    *IndexBuilder
 	view       *indexView
 	normalizer *indexNormalizer
 	refId      Id
+	// K_ref, which every doc_key is a MAC under.
+	refKey     []byte
+	groupInbox bool
+	// Whether a listed document is kept: a check compares what the text gives, erased or not.
+	keepErased bool
 	entries    []*indexEntry
 }
 
@@ -478,11 +484,11 @@ func (self *indexBuildExtractor) take(name []byte, chunk uint32, version uint64,
 		// the root is written whole, so a chunk D6 skips needs no tombstone: nothing of it stays
 		return nil
 	}
-	key, err := indexDocKey(self.builder.args.refKey, self.refId, name, chunk)
+	key, err := indexDocKey(self.refKey, self.refId, name, chunk)
 	if err != nil {
 		return err
 	}
-	if self.view.erased(key, version) {
+	if !self.keepErased && self.view.erased(key, version) {
 		return nil
 	}
 	self.entries = append(self.entries, &indexEntry{
@@ -513,7 +519,7 @@ func (self *indexBuildExtractor) extract(path string, state *indexContentState, 
 	if state.content == nil {
 		return nil
 	}
-	kind := indexExtractorKind(indexPlace{repoKind: view.repoKind, groupInbox: self.builder.args.groupInbox, path: path})
+	kind := indexExtractorKind(indexPlace{repoKind: view.repoKind, groupInbox: self.groupInbox, path: path})
 	streamArgs := &indexStreamArgs{
 		template:   &IndexDocument{Kind: kind, Name: name, Version: state.version, Tainted: state.tainted, Outside: state.outside},
 		byteCount:  state.byteCount,
