@@ -90,7 +90,7 @@ An active or compelled operator keeps:
 - **EX4.** A send the user allowed to an unauthenticated MX (owner decision 38), labeled "readable by an active URnetwork edge".
 - **EX5.** Trust on first use of a genesis key no invite or auth key carried (owner decision 5); safety numbers; a code-only recovered device, which has no admitter, commits, wraps, seals or signs nothing until the config head its RecoveryWrap, or under a binding a cascade void restored the ReaderWrap it is given (§7.9's restored order), opens chains to a genesis its RecoveryBind's `genesis_sig` signs under the key its code derives (§7.9's anchor), so the recovery public keys every config reader and rotator holds let no server fake that genesis; a server can forge the wrap or the ReaderKey gkm serves, but not a head that chains to that genesis.
 - **EX6.** connect key substitution at first contact until M2's admission check (§6.4); first-use pins.
-- **EX7.** Code URnetwork ships: signed releases (owner decision 77) and labeled decrypting web pages (owner decision 76); undetected; any script in a decrypting page's origin reads views while it runs (§18.8). Cloudflare terminates https://ur.io, so it sees page requests and can alter page script, and through it request views while that script runs, never the key origin's code, key or token, since `sidecar.ur.io` is served direct (§19.5's W10; owner decision 211). The key origin serves only a promoted build, whose loader and `sidecar.wasm` the release's signed `SHA256SUMS` lists, so anyone can compare the served bytes, though no browser checks them on load (§18.8; owner decision 221).
+- **EX7.** Code URnetwork ships: signed releases (owner decision 77) and labeled decrypting web pages (owner decision 76); undetected; any script in a decrypting page's origin reads views while it runs (§18.8). Cloudflare terminates https://ur.io, so it sees page requests and can alter page script, and through it request views while that script runs, never the key origin's code, key or token, since `sidecar.ur.io` is served direct (§19.5's W10; owner decision 211). The key origin serves only a promoted build, whose loader and `sidecar.wasm` the release's signed `SHA256SUMS` lists, so anyone can compare the served bytes, though no browser checks them on load (§18.8; owner decision 221). For `ur`, GitHub alone cannot ship a client, since `install.sh` checks the release against the offline key's signed sums, but ur.io serves both that script and its pin, so ur.io alone can ship one to a new script install, or hand it an older signed release; the script prints the key's fingerprint and the repository path that publishes it, for a user who compares (§4.10; owner decision 264).
 - **EX8.** URnetwork login as the `members` audience authority (owner decision 42); undetected (§13.7).
 
 **Exposure bound** (owner decision 129): a writer learns of a withheld Remove at its first HeadCheck with a device that holds it, or with a peer that relays it as `proven` or `unverified` within 8 hops of a holder (D-TRUST-10, §6.4); with the withholding proof it stops at once, and without it the pin stays UNVERIFIED, so, as with no consistent witness, the writer stops sealing shared-group content at `ServiceSettings.witness_bound_hours` (default 72 h, 24-168 h). Exposure is unbounded across a split, where the server leaves no HeadCheck path of up to 8 hops between a holder and the writer, including when every device that holds the Remove is offline, and in own groups, where writers only alarm: personal networks, and with them the v0 pilot (owner decision 102), have no bound.
@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v26; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v27; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -206,6 +206,8 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # evs-17, evs-25 and evs-28 (256); evs-10's segment PUT reports (257); api-14's sign-off ids (259); api-13's tier
 # cache, api-11's creating member and api-3's TXT challenge (260); api-11's enrollment attempt histories (261);
 # and api-7's default evidence channels (252).
+# v27, updated 2026-11-16 for the owner's answer QD-145 (plan-MAIL-dnssec-evidence; owner decision 269), adds to
+# ext-3 the MX, TLSA, DS and DNSKEY lookups by which a mail.strict receiver validates its custom MX hosts' chain.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -836,7 +838,7 @@ ext-2:
 ext-3:
   service: DoH resolvers
   store: external
-  sees: domains, MX, TLSA, DKIM selectors and MTA-STS names sidecars look up; receivers' reception-time lookups for each message, at most 64 (SPF, DKIM and ARC keys, DMARC, the sender's forward-confirmed PTR; D-MAIL-14, §15.5), and any re-check a reader shows apart; the device IP
+  sees: domains, MX, TLSA, DKIM selectors and MTA-STS names sidecars look up; under mail.strict, the MX, TLSA, DS and DNSKEY lookups, asked with EDNS0's DO bit, by which a receiver validates its custom MX hosts' chain to the root (§15.5; owner decision 269); receivers' reception-time lookups for each message, at most 64 (SPF, DKIM and ARC keys, DMARC, the sender's forward-confirmed PTR; D-MAIL-14, §15.5), and any re-check a reader shows apart; the device IP
   why: reception-time evidence for §15.5's labels (D-MAIL-14), independent MX checks (TL3) and the zone watch (§14.4, D-TRUST-9)
   ttl: the provider's
   owner: §14.4
