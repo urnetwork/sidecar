@@ -223,23 +223,45 @@ func (self *SearchRemoteServer) Handle(ctx context.Context, request *Subprotocol
 	// step 3: Z8 (b) to (f)
 	parsed, status := searchRemoteParseRequest(request.Body, self.wire)
 	if status != protocol.SearchStatus_SEARCH_OK {
-		return searchRemoteFailureReply(status, parsed, self.wire)
+		return self.failure(status, parsed)
 	}
 
 	// step 4
 	action, cursor := self.table.lookup(requesterId, parsed)
 	switch action {
 	case searchRemoteCursorExpired:
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, parsed, self.wire)
+		return self.failure(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, parsed)
 	case searchRemoteCursorInvalid:
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_INVALID, parsed, self.wire)
+		return self.failure(protocol.SearchStatus_SEARCH_INVALID, parsed)
 	case searchRemoteCursorRepeat:
 		admission.Release()
 		return self.repeat(cursor, parsed)
-	case searchRemoteCursorOpen:
-		return self.openPage(ctx, admission, state, selfId, requesterId, cursor, parsed)
 	}
-	return self.nextPage(ctx, admission, state, selfId, requesterId, cursor, parsed)
+	// steps 5 to 7 under the cursor's pageLock; a cursor that must end ends once it is released
+	var failed protocol.SearchStatus
+	var body []byte
+	var end bool
+	if action == searchRemoteCursorOpen {
+		body, failed, end = self.openPage(ctx, admission, state, selfId, requesterId, cursor, parsed)
+	} else {
+		body, failed, end = self.nextPage(ctx, admission, state, selfId, requesterId, cursor, parsed)
+	}
+	if end {
+		self.table.end(cursor)
+	}
+	if body == nil {
+		return self.failure(failed, parsed)
+	}
+	return body, nil
+}
+
+// Z7's reply for a failure after parsing, never an Error: only settings off the protocol's reach leave none to send.
+func (self *SearchRemoteServer) failure(status protocol.SearchStatus, request *protocol.SearchRequest) ([]byte, error) {
+	body, err := searchRemoteFailureReply(status, request, self.wire)
+	if err != nil {
+		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAVAILABLE}
+	}
+	return body, nil
 }
 
 // Step 2's standing: the newest verified state, in which the requester passes E3 and this device holds a designation
@@ -268,22 +290,23 @@ func (self *SearchRemoteServer) repeat(cursor *searchRemoteCursor, request *prot
 	cursor.pageLock.Lock()
 	defer cursor.pageLock.Unlock()
 	switch {
-	case cursor.ended:
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, request, self.wire)
+	case cursor.ended.Load():
+		return self.failure(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, request)
 	case cursor.page != request.GetPage() || cursor.lastReply == nil:
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_INVALID, request, self.wire)
+		return self.failure(protocol.SearchStatus_SEARCH_INVALID, request)
 	}
 	return cursor.lastReply, nil
 }
 
 // Steps 5 to 7 for a new cursor: each repo authorized to its coverage row, the served ones pinned, the served record
-// written, then page 0.
+// written, then page 0. Answers the page, else the status to answer with and whether the cursor ends, which the caller
+// ends once the pageLock is released.
 func (self *SearchRemoteServer) openPage(ctx context.Context, admission *SidecarRemoteAdmission, state *ConfigState, selfId Id,
-	requesterId Id, cursor *searchRemoteCursor, request *protocol.SearchRequest) ([]byte, error) {
+	requesterId Id, cursor *searchRemoteCursor, request *protocol.SearchRequest) ([]byte, protocol.SearchStatus, bool) {
 	cursor.pageLock.Lock()
 	defer cursor.pageLock.Unlock()
-	if cursor.ended {
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, request, self.wire)
+	if cursor.ended.Load() {
+		return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, false
 	}
 	query := &searchRemoteQuery{
 		text: request.GetQuery(), scopeAll: request.GetScope() == 2, sinceMs: request.GetSinceMs(), untilMs: request.GetUntilMs(),
@@ -292,40 +315,41 @@ func (self *SearchRemoteServer) openPage(ctx context.Context, admission *Sidecar
 	cursor.steps = searchRemoteFailureSteps(request, self.wire)
 	cursor.query = query
 	// step 5: rows 1 to 3 in this device's state
+	repos := []*searchRemoteCursorRepo{}
 	asks := []searchRemoteRefAsk{}
 	askIndexes := []int{}
 	for place, named := range request.GetRepos() {
 		repoId, err := IdFromBytes(named.GetRepoId())
 		if err != nil {
-			self.table.end(cursor)
-			return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_INVALID, request, self.wire)
+			return nil, protocol.SearchStatus_SEARCH_INVALID, true
 		}
 		repo := &searchRemoteCursorRepo{repoId: repoId, refId: named.GetRefId(), place: uint16(place)}
 		served, ok := searchRemoteConfigVerdict(state, selfId, requesterId, repoId, self.args.Services)
 		repo.row = &protocol.SearchCoverage{RepoId: repoId.Bytes(), RefId: searchRemoteRowRefId(named.GetRefId(), repoId), Served: uint32(served)}
 		if ok {
 			asks = append(asks, searchRemoteRefAsk{repoId: repoId, refId: named.GetRefId(), place: uint16(place)})
-			askIndexes = append(askIndexes, len(cursor.repos))
+			askIndexes = append(askIndexes, len(repos))
 		}
-		cursor.repos = append(cursor.repos, repo)
+		repos = append(repos, repo)
 	}
 	// step 6: rows 4 to 8, the snapshots and text views
 	if 0 < len(asks) {
 		view, rows, err := self.corpus.Open(ctx, query, asks)
 		switch {
 		case errors.Is(err, errSearchRemoteQuery):
-			self.table.end(cursor)
-			return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_INVALID, request, self.wire)
+			return nil, protocol.SearchStatus_SEARCH_INVALID, true
 		case err != nil:
-			self.table.end(cursor)
-			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAVAILABLE}
+			if self.log.V(1).Enabled() {
+				self.log.Infof("[search]a remote search's snapshots were not opened: %s", searchRemoteErrorClass(err))
+			}
+			return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, true
 		}
 		cursor.view = view
 		for i, row := range rows {
 			if len(askIndexes) <= i {
 				break
 			}
-			repo := cursor.repos[askIndexes[i]]
+			repo := repos[askIndexes[i]]
 			repo.row.Served = uint32(row.served)
 			if searchRemoteServes(row.served) {
 				repo.row.RefId = row.refId.Bytes()
@@ -338,7 +362,7 @@ func (self *SearchRemoteServer) openPage(ctx context.Context, admission *Sidecar
 		}
 		// the served record, once a search, for a repo read only by an EvsShare; none written serves it not
 		for _, index := range askIndexes {
-			repo := cursor.repos[index]
+			repo := repos[index]
 			if !searchRemoteServes(protocol.SearchServed(repo.row.GetServed())) || !searchRemoteSharedRead(state, requesterId, repo.repoId) {
 				continue
 			}
@@ -348,28 +372,26 @@ func (self *SearchRemoteServer) openPage(ctx context.Context, admission *Sidecar
 			}
 		}
 	}
+	// the repos an erasure's EndRepo reads, set under the table's lock too
+	self.table.setRepos(cursor, repos)
 	return self.pageWithLock(ctx, admission, cursor, request)
 }
 
-// Steps 5 to 7 for a later page: the requester and each served repo authorized again, one that fails ending the cursor,
-// then the page, or the repeat a page in flight became.
+// Steps 5 to 7 for a later page: the requester and each served repo authorized again, one that fails ending the cursor
+// (7.1's K), then the page, or the repeat a page in flight became. Answers as openPage does.
 func (self *SearchRemoteServer) nextPage(ctx context.Context, admission *SidecarRemoteAdmission, state *ConfigState, selfId Id,
-	requesterId Id, cursor *searchRemoteCursor, request *protocol.SearchRequest) ([]byte, error) {
+	requesterId Id, cursor *searchRemoteCursor, request *protocol.SearchRequest) ([]byte, protocol.SearchStatus, bool) {
 	cursor.pageLock.Lock()
+	defer cursor.pageLock.Unlock()
 	switch cursor.decideWithLock(request.GetPage()) {
 	case searchRemoteCursorExpired:
-		cursor.pageLock.Unlock()
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, request, self.wire)
+		return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, false
 	case searchRemoteCursorRepeat:
-		reply := cursor.lastReply
-		cursor.pageLock.Unlock()
 		admission.Release()
-		return reply, nil
+		return cursor.lastReply, protocol.SearchStatus_SEARCH_OK, false
 	case searchRemoteCursorInvalid:
-		cursor.pageLock.Unlock()
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_INVALID, request, self.wire)
+		return nil, protocol.SearchStatus_SEARCH_INVALID, false
 	}
-	// step 5 at a later page (7.1's K): a read lost since page 0 ends the cursor
 	authorized := searchRemoteRequesterStands(state, requesterId)
 	for _, repo := range cursor.repos {
 		if !authorized || !searchRemoteServes(protocol.SearchServed(repo.row.GetServed())) {
@@ -379,32 +401,30 @@ func (self *SearchRemoteServer) nextPage(ctx context.Context, admission *Sidecar
 			authorized = false
 		}
 	}
-	if authorized && cursor.view != nil && cursor.view.Ended() {
-		authorized = false
+	if !authorized || cursor.view != nil && cursor.view.Ended() {
+		return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, true
 	}
-	if !authorized {
-		cursor.pageLock.Unlock()
-		self.table.end(cursor)
-		return searchRemoteFailureReply(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, request, self.wire)
-	}
-	defer cursor.pageLock.Unlock()
 	return self.pageWithLock(ctx, admission, cursor, request)
 }
 
 // Step 7, with the cursor's pageLock held: the page computed and stored as the cursor's last reply, then the barrier,
-// then sent. A failure to compute ends the cursor, answered UNAVAILABLE, naming nothing.
+// then sent. A page an erasure ended while it was computed is not sent, and a failure to compute ends the cursor; both
+// answer CURSOR_EXPIRED, naming nothing.
 func (self *SearchRemoteServer) pageWithLock(ctx context.Context, admission *SidecarRemoteAdmission, cursor *searchRemoteCursor,
-	request *protocol.SearchRequest) ([]byte, error) {
+	request *protocol.SearchRequest) ([]byte, protocol.SearchStatus, bool) {
 	body, err := self.computePageWithLock(ctx, cursor, request.GetPage(), admission.Page())
 	if err != nil {
-		go self.table.end(cursor)
 		if self.log.V(1).Enabled() {
 			self.log.Infof("[search]a remote page was not computed: %s", searchRemoteErrorClass(err))
 		}
-		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAVAILABLE}
+		return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, true
+	}
+	if cursor.view != nil && cursor.view.Ended() {
+		cursor.lastReply = nil
+		return nil, protocol.SearchStatus_SEARCH_CURSOR_EXPIRED, true
 	}
 	testHookBarrier("search.remote.reply", cursor.barrierKey())
-	return body, nil
+	return body, protocol.SearchStatus_SEARCH_OK, false
 }
 
 // Ends every cursor that serves repoId, dropping its last reply before it returns: CORE-M10-04's ApplyErase, ApplyCut

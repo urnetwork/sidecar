@@ -507,9 +507,10 @@ func searchRemoteMismatch(mismatches []time.Time, now time.Time, settings *Sidec
 
 // One mismatch against indexerId in repoId: search_alarm{mismatch, indexer, repo}, and past RemoteMismatchCount within
 // RemoteMismatchInterval, every claim and span of its legs in this client's open searches void, the indexer distrusted
-// RemoteDistrustTimeout, and its repos back to the plan. Answers the keys whose rows the voiding changed in the search
-// that called it; the others change at their next step.
-func (self *SearchRemoteClient) mismatch(indexerId Id, repoId Id) []searchRemoteMergeKey {
+// RemoteDistrustTimeout, and its repos back to the plan. caller, the search whose step raised it (nil for none), is
+// voided at once, under the pageLock its step holds; every other search at its own next step. Answers the keys whose
+// rows the voiding changed in caller.
+func (self *SearchRemoteClient) mismatch(caller *searchRemoteSearch, indexerId Id, repoId Id) []searchRemoteMergeKey {
 	self.raise(SidecarEvent{Kind: SidecarEventSearchAlarm, SearchAlarm: SidecarSearchAlarmMismatch, SidecarId: &indexerId, RepoId: &repoId})
 	now := self.clock.Now()
 	distrust := func() bool {
@@ -528,7 +529,34 @@ func (self *SearchRemoteClient) mismatch(indexerId Id, repoId Id) []searchRemote
 	}
 	touched := []searchRemoteMergeKey{}
 	for _, search := range self.openSearches() {
-		touched = append(touched, search.distrust(indexerId)...)
+		if search == caller {
+			touched = append(touched, search.distrust(indexerId)...)
+		} else {
+			search.queueDistrust(indexerId)
+		}
+	}
+	return touched
+}
+
+// Keeps indexerId for this search's next step to void, from another search's step, which holds no lock of this one's.
+func (self *searchRemoteSearch) queueDistrust(indexerId Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.pendingDistrust = append(self.pendingDistrust, indexerId)
+}
+
+// Voids what other searches' steps queued, at this search's step.
+func (self *searchRemoteSearch) applyDistrust() []searchRemoteMergeKey {
+	pending := func() []Id {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		pending := self.pendingDistrust
+		self.pendingDistrust = nil
+		return pending
+	}()
+	touched := []searchRemoteMergeKey{}
+	for _, indexerId := range pending {
+		touched = append(touched, self.distrust(indexerId)...)
 	}
 	return touched
 }
@@ -609,6 +637,7 @@ func (self *SearchRemoteClient) CheckOpened(stream *SearchStream, hit SearchHit,
 func (self *searchRemoteSearch) checkOpened(hit SearchHit, opened *SearchOpened) (*SearchHit, error) {
 	self.pageLock.Lock()
 	defer self.pageLock.Unlock()
+	self.applyDistrust()
 	key := searchRemoteMergeKeyOf(&hit)
 	claim := self.merge.strongest(key)
 	if claim == nil {
@@ -670,7 +699,7 @@ func (self *searchRemoteSearch) voidClaim(claim *searchRemoteClaim, key searchRe
 	if len(self.merge.claims[key]) == 0 {
 		delete(self.merge.claims, key)
 	}
-	self.client.mismatch(claim.source.indexerId, key.repoId)
+	self.client.mismatch(self, claim.source.indexerId, key.repoId)
 }
 
 // Whether the query holds in the opened chunk whose doc_key is key's, by the confirmer's own verification; false where

@@ -129,6 +129,8 @@ type searchRemoteSearch struct {
 
 	stateLock sync.Mutex
 	closed    bool
+	// indexers other searches' mismatches distrusted, for this search's next step to void
+	pendingDistrust []Id
 }
 
 // One download over repos no indexer answers.
@@ -293,6 +295,7 @@ func (self *searchRemoteSearch) Next() ([]SearchHit, SearchProgress, bool, error
 		touched = append(touched, ownTouched...)
 		touched = append(touched, self.plan()...)
 	} else {
+		touched = append(touched, self.applyDistrust()...)
 		touched = append(touched, self.recheck()...)
 		for _, leg := range self.legs {
 			if leg.state == searchRemoteLegIdle {
@@ -679,7 +682,7 @@ func (self *searchRemoteSearch) handle(event *searchRemoteLegEvent) []searchRemo
 		case leg.lost[repoId]:
 			continue
 		case !leg.served[repoId]:
-			touched = append(touched, client.mismatch(leg.indexerId, repoId)...)
+			touched = append(touched, client.mismatch(self, leg.indexerId, repoId)...)
 			continue
 		}
 		if hit, ok := searchRemoteHitOfWire(wireHit, name); ok {

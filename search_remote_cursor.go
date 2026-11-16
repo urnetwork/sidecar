@@ -50,6 +50,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -76,8 +77,8 @@ type searchRemoteCursor struct {
 	// the page last given, and whether no later page holds a hit
 	page uint32
 	done bool
-	// set when the cursor ends, under the table's lock too
-	ended bool
+	// set when the cursor ends, under the table's lock, and read under either lock
+	ended atomic.Bool
 	// what page 0 asked: its steps, query and repos
 	steps int
 	query *searchRemoteQuery
@@ -96,10 +97,24 @@ type searchRemoteCursor struct {
 	tailDone       bool
 	lastReply      []byte
 
-	// the table's: when it was last used, and its place in the budget's least recently used list
-	usedAt  time.Time
-	touch   func()
-	release func()
+	// the table's: when it was last used
+	usedAt time.Time
+	// its place in the budget's least recently used list, set once the cursor is in the table
+	budgetLock sync.Mutex
+	touch      func()
+	release    func()
+}
+
+// Takes the cursor off the budget's list, once its place there is known; a cursor that ended before it was placed is
+// taken off as it is placed.
+func (self *searchRemoteCursor) releaseBudget() {
+	self.budgetLock.Lock()
+	release := self.release
+	self.release = nil
+	self.budgetLock.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 // One repo a cursor's page 0 named: its coverage row, and where it stands in the request.
@@ -170,7 +185,7 @@ func (self *searchRemoteTable) sweepWithLock(now time.Time) []*searchRemoteCurso
 // table's lock held. The caller closes it outside the lock (closeEnded).
 func (self *searchRemoteTable) endWithLock(requester *searchRemoteRequesterCursors, cursor *searchRemoteCursor, now time.Time) *searchRemoteCursor {
 	delete(requester.live, cursor.searchId)
-	cursor.ended = true
+	cursor.ended.Store(true)
 	requester.ended[cursor.searchId] = now
 	for self.settings.RemoteEndedIdCount < len(requester.ended) {
 		oldestId, oldestAt := uint64(0), time.Time{}
@@ -188,9 +203,7 @@ func (self *searchRemoteTable) endWithLock(requester *searchRemoteRequesterCurso
 // Frees what each ended cursor held: its views, last reply and place in the budget. Outside every lock.
 func (self *searchRemoteTable) closeEnded(cursors []*searchRemoteCursor) {
 	for _, cursor := range cursors {
-		key := cursor.barrierKey()
-		testHookBarrier("search.remote.ended", key)
-		func() {
+		key := func() string {
 			cursor.pageLock.Lock()
 			defer cursor.pageLock.Unlock()
 			if cursor.view != nil {
@@ -200,10 +213,10 @@ func (self *searchRemoteTable) closeEnded(cursors []*searchRemoteCursor) {
 			cursor.lastReply = nil
 			cursor.tailHeld = nil
 			cursor.query = nil
+			return cursor.barrierKey()
 		}()
-		if cursor.release != nil {
-			cursor.release()
-		}
+		testHookBarrier("search.remote.ended", key)
+		cursor.releaseBudget()
 	}
 }
 
@@ -230,10 +243,9 @@ func (self *searchRemoteTable) lookup(requesterId Id, request *protocol.SearchRe
 			switch {
 			case wasEnded:
 				action = searchRemoteCursorExpired
-			case live != nil && live.page == 0:
-				action, cursor = searchRemoteCursorRepeat, live
 			case live != nil:
-				action, cursor = searchRemoteCursorInvalid, live
+				// a repeat of page 0, or INVALID where the cursor is past it, which repeat judges under its pageLock
+				action, cursor = searchRemoteCursorRepeat, live
 			default:
 				if superseded := requester.live[request.GetSupersedes()]; superseded != nil && request.GetSupersedes() != searchId {
 					ended = append(ended, self.endWithLock(requester, superseded, now))
@@ -268,10 +280,22 @@ func (self *searchRemoteTable) lookup(requesterId Id, request *protocol.SearchRe
 	self.closeEnded(ended)
 	if action == searchRemoteCursorOpen && self.budget != nil {
 		touch, release := self.budget.AddCursor(func() { self.end(cursor) })
-		cursor.touch, cursor.release = touch, release
+		func() {
+			cursor.budgetLock.Lock()
+			defer cursor.budgetLock.Unlock()
+			cursor.touch, cursor.release = touch, release
+		}()
+		if cursor.ended.Load() {
+			cursor.releaseBudget()
+		}
 	}
-	if cursor != nil && cursor.touch != nil && action != searchRemoteCursorInvalid {
-		cursor.touch()
+	if cursor != nil && action != searchRemoteCursorInvalid {
+		cursor.budgetLock.Lock()
+		touch := cursor.touch
+		cursor.budgetLock.Unlock()
+		if touch != nil {
+			touch()
+		}
 	}
 	return action, cursor
 }
@@ -280,7 +304,7 @@ func (self *searchRemoteTable) lookup(requesterId Id, request *protocol.SearchRe
 // done, else INVALID; an ended cursor is CURSOR_EXPIRED.
 func (self *searchRemoteCursor) decideWithLock(page uint32) searchRemoteCursorAction {
 	switch {
-	case self.ended:
+	case self.ended.Load():
 		return searchRemoteCursorExpired
 	case page == self.page && self.lastReply != nil:
 		return searchRemoteCursorRepeat
@@ -351,7 +375,14 @@ func (self *searchRemoteTable) liveCount(requesterId Id) int {
 	return 0
 }
 
-// Whether the cursor serves repoId. Its repos are set once at page 0, before the cursor is shared, and never change.
+// Sets the cursor's repos once page 0 has decided them, under the table's lock, where an erasure's endRepo reads them.
+func (self *searchRemoteTable) setRepos(cursor *searchRemoteCursor, repos []*searchRemoteCursorRepo) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	cursor.repos = repos
+}
+
+// Whether the cursor serves repoId, with the table's lock held. Its repos are set once, at page 0, under it.
 func (self *searchRemoteCursor) serves(repoId Id) bool {
 	for _, repo := range self.repos {
 		if repo.repoId == repoId && searchRemoteServes(protocol.SearchServed(repo.row.GetServed())) {
@@ -450,7 +481,8 @@ func (self *SearchRemoteServer) computePageWithLock(ctx context.Context, cursor 
 	candidatesLeft := firstAfterExamined != nil
 	// the tail, once every candidate is examined: the hits of repos served from the index
 	tailHits := slices.Clone(cursor.tailHeld)
-	tailDone := cursor.tailDone
+	// with nothing served there is no tail
+	tailDone := cursor.tailDone || view == nil
 	if !candidatesLeft && hitCount < wire.HitMaxCount && !stoppedOnBudget && view != nil {
 		for !tailDone && hitCount+len(tailHits) < wire.HitMaxCount {
 			taken, done, err := view.Tail(ctx, wire.HitMaxCount-hitCount-len(tailHits))

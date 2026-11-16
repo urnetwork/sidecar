@@ -245,7 +245,7 @@ func TestThreeMismatchesVoidTheIndexer(t *testing.T) {
 	fixture := newTestSearchRemoteAsker(t, team, team.danaPhone)
 	nas := team.danaNas.sidecarId
 	for i := 0; i < fixture.settings.RemoteMismatchCount; i += 1 {
-		fixture.client.mismatch(nas, team.danaVault)
+		fixture.client.mismatch(nil, nas, team.danaVault)
 	}
 	until, err := fixture.world.state.DistrustUntil(nas)
 	if err != nil || until.IsZero() {

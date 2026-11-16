@@ -261,3 +261,29 @@ func TestTheServedRecordNamesNoQuery(t *testing.T) {
 		t.Errorf("search.state holds the query")
 	}
 }
+
+// A query the indexer's engine cannot run, one that normalizes past §16.10's caps or a filter it cannot apply, is
+// answered INVALID at the request's size, never an Error, and its id is ended: no lock is held across the cursor's end.
+func TestAQueryTheIndexerCannotRunIsInvalid(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteServer(t, team, team.danaNas)
+	fixture.corpus.serveText(team.danaVault, 5, testSearchRemoteDocs("vault ", 900)...)
+	fixture.corpus.queryError = true
+	body := testSearchRemoteRequest(t, fixture.wire, 91, 0, "plan", team.danaVault)
+	if reply := fixture.page(t, team.danaPhone, body, 91, 0); reply.GetStatus() != uint32(protocol.SearchStatus_SEARCH_INVALID) {
+		t.Fatalf("status %d", reply.GetStatus())
+	}
+	if reply := fixture.page(t, team.danaPhone, body, 91, 0); reply.GetStatus() != uint32(protocol.SearchStatus_SEARCH_CURSOR_EXPIRED) {
+		t.Errorf("the ended id: %d", reply.GetStatus())
+	}
+}
+
+// A request every repo of which is refused is answered complete, with its coverage and no hits.
+func TestNothingServedIsComplete(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteServer(t, team, team.danaNas)
+	reply := fixture.page(t, team.danaPhone, testSearchRemoteRequest(t, fixture.wire, 92, 0, "plan", team.benVault), 92, 0)
+	if !reply.GetComplete() || len(reply.GetHits()) != 0 || len(reply.GetCoverage()) != 1 || reply.GetPhase() != 3 {
+		t.Errorf("complete %v, %d hits, %d rows, phase %d", reply.GetComplete(), len(reply.GetHits()), len(reply.GetCoverage()), reply.GetPhase())
+	}
+}

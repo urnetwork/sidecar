@@ -47,11 +47,13 @@ type testSearchRemoteRef struct {
 
 // A corpus serving what refs holds, by repo. It counts its opens, passes and the all shards its passes read.
 type testSearchRemoteCorpus struct {
-	refs      map[Id]*testSearchRemoteRef
-	opens     int
-	passes    int
-	allReads  int
-	openViews int
+	refs map[Id]*testSearchRemoteRef
+	// every Open answers errSearchRemoteQuery, as a query past §16.10's caps does
+	queryError bool
+	opens      int
+	passes     int
+	allReads   int
+	openViews  int
 }
 
 func newTestSearchRemoteCorpus() *testSearchRemoteCorpus {
@@ -69,6 +71,9 @@ func (self *testSearchRemoteCorpus) serveText(repoId Id, version uint64, docs ..
 
 func (self *testSearchRemoteCorpus) Open(ctx context.Context, query *searchRemoteQuery, asks []searchRemoteRefAsk) (searchRemoteView, []searchRemoteRefRow, error) {
 	self.opens += 1
+	if self.queryError {
+		return nil, nil, errSearchRemoteQuery
+	}
 	view := &testSearchRemoteView{corpus: self, query: query}
 	rows := []searchRemoteRefRow{}
 	for _, ask := range asks {
