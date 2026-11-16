@@ -2077,6 +2077,143 @@ The design-records track for §8 and §9 folded the answers below on 2026-11-16,
     - Not taken: (2) keeping the fallback under which a fold follows a check that may refuse for a head-only reason.
     - Raised by the build (TEAM-M2-09; the build's ledger, QD-954).
 
+## The build's owner questions on group keys and gkm (2026-11-06 to 2026-11-16)
+
+The design-records track for §10 folded the answers below on 2026-11-16, each citing its ledger id: the owner items of §10 accepted in bulk on 2026-11-06 (357-359), those the owner decided one at a time from 2026-11-10 to 2026-11-15, and the recommendations of 2026-11-15 that the owner's instruction of 2026-11-16 accepted, which the ledger dates 2026-11-15. A decision that groups several answers carries its latest answer's date. QD-644, on what `Gkm.tla`'s `MembersSkipRosterCheck` twin shows, carries no number: the model and DESIGN-DETAILS.md 6.6 are the design agent's, and no section names the model, as with QD-628.
+
+357. **A drop key lives 90 days, one setting for every kind that takes deposits, and writers renew it once under 7 days are left (option 2 with option 3's renewal, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: GenRotate's `drop_not_after_ms` had no value, which sets how long a mailbox takes mail with no reader online, and nothing renewed a drop key in a repo that only takes deposits, so a lapse closed no gate and a returning writer could find nothing to write.
+    - Answer: `drop_not_after_ms` is `time_ms` + `GkmSettings.DropKeyLifetime`, 90 days, one value for every kind that takes deposits, a later value applying from the next generation. A GET of a drop key whose newest GenRotate has under 7 days left hints `pending` to the repo's writers, at most hourly per group and process, and a writer on that hint, and every writer at its hourly resync, rotates with cause SCHEDULE, with no write of its own. Members' rotation checks and the depositor rule require `time_ms` < `drop_not_after_ms` <= `time_ms` + DropKeyLifetime + 10 min, so no signer voids the backstop with a far-future value (§10.5's depositor row, §10.6's drop keys duty, §10.9's rotation checks, D-KEYS-8, D-KEYS-17, FS-23).
+    - Cost: mail keeps arriving through about 60 days with every device offline at worst, 90 at best, and a rotation withheld from a depositor can reach a removed reader for up to 90 days in owner-bound groups; renewal needs a writer online.
+    - Not taken: (1) 37 days, the 30-day schedule plus a week, under which about a week with every device offline stops mail with 451 and senders' retries may lapse; a lifetime with no renewal.
+    - Raised by the build (plan-KEYS; the build's ledger, QD-031, QD-065).
+
+358. **A device checks daily that gkm serves under its id only ReaderKeys it signed, raising `key_changed` for any other, and ReaderKeys take no post-quantum signature (option 2 on top of the text fix, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: an adversary that can forge Ed25519 and that the operator serves could forge a holder's ReaderKey, to which an honest rotator or hinted holder then seals RK_g with no person acting; §10.5 named only forged admissions, and nothing detected a key the device never signed.
+    - Answer: §10.5 names the route, and that RK_g, which an external commit needs, rests on those signatures; §2.18's row names the forged admission or ReaderKey. Once a day, at its ReaderKey upkeep, a device GETs `/gkm/reader-key/<its own id>` and compares the key's digest with those it signed: a key it never signed raises `SidecarEvent` `key_changed` with the foreign digest, whose remedy is an active clone's, `SidecarRevoke{reason: compromise}` and a new enrollment. ReaderKey keeps its three fields, and Q-KEYS-2's residual stands (§10.5's Ladder and readerkey rows, §10.15, §5.4, §2.18).
+    - Cost: one GET a day and one defined alarm; it detects a replaced key only after wraps may have been issued, and only where the operator does not hide it, but it also flags a classical clone.
+    - Not taken: (1) the text fix alone, under which a forged or cloned ReaderKey raises no alarm anywhere; (3) an ML-DSA-65 signature on ReaderKeys from v0, which closes this route only, leaving admissions forgeable, adds ML-DSA keys to admissions and about 3.3 KB per ReaderKey, and pulls §10.16's Later work forward.
+    - Raised by the G0 re-check (the build's ledger, QD-046).
+
+359. **The 0x0010 gate keeps its rows and claims what they show: the draft's vectors are X-Wing's only independent evidence, and tmc/mls's comparison checks wiring (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: tmc/mls takes X-Wing from Go's crypto/hpke, as mls_* does, so §10.4's kem row passed by construction, and §10.4 left out the draft KATs that §22.10 has.
+    - Answer: §10.4's kem row takes §22.10's first clause, the draft's X-Wing vectors passing for crypto/hpke's MLKEM768X25519, DeriveKeyPair included, and both rows say tmc/mls's comparison shares that code, so it checks wiring, not X-Wing; the artifact states that the draft's vectors are the only independent X-Wing evidence. OpenMLS stays as §22.10's required row has it, needed only if a required step has a gap, and the stacks row's tree, key schedule, framing and Welcome evidence stands (§10.4, §22.10).
+    - Cost: a drift that Go and tmc/mls shared would surface only at IANA's assignment, which D-KEYS-12's migration covers.
+    - Not taken: (2) OpenMLS's X-Wing KAT required for the freeze, a Rust build on the test leg that the freeze then waits on; (3) a small pure-Go X-Wing in mlsinterop/ for KATs, ours over Go's ML-KEM and only partly independent.
+    - Raised by the build (plan-KEYS; the build's ledger, QD-273).
+
+360. **The ladder's AADs take the widths as built, u64be for g and e and u8 for the cause, and gen/1 carries cause REQUEST (option 1, the recommendation).**
+    - Question: §10.5 wrote the ladder's AADs as concatenations without widths, and named no cause for generation 1, which has no parent.
+    - Answer: GenLink's AAD is repo_id || u64be(g) || u8(cause_g), 25 B; GenWrap's and LeafWrap's group_id || u64be(e) || u64be(g), 32 B; GroupInfo's group_id || u64be(e), 24 B. gen/1 carries cause REQUEST, and a reader refuses REMOVE there; testdata/gkm/ladder.json pins the bytes (§10.5).
+    - Cost: none in code; the widths freeze with the delivery wire at M2's exit.
+    - Not taken: (2) u32be for the cause, the field's width, a line of code and regenerated vectors; (3) gen/1's cause free between REQUEST and SCHEDULE, two shapes for one statement.
+    - Raised by the design details (DESIGN-DETAILS.md section 6, restating keys-ladder-aad-widths; the build's ledger, QD-615).
+
+361. **draft-ietf-mls-extensions' `last_resort` extension, type 0x000A, marks a last-resort KeyPackage (option 1, the recommendation).**
+    - Question: §10.4 lists last-resort KeyPackages and named no extension or number that marks one.
+    - Answer: the `last_resort` extension, type 0x000A with empty extension_data, in KeyPackage.extensions only, every leaf listing 0x000A and 0xF553 in its capabilities; a device that joined through its last-resort KeyPackage commits a path-only self-update at its first opportunity and replaces the KeyPackage at its next upkeep pass. D-KEYS-12's suite migration moves the number if the draft's does (§10.4).
+    - Cost: a draft's number, which a migration would move with the suite's.
+    - Not taken: (2) a private-use type beside ur_group, 0xF554, stable but read by no other stack; (3) no extension, the route or gkm's key saying which, which changes QD-526's accepted request and gkm-4's row.
+    - Raised by the design details (DESIGN-DETAILS.md section 6, restating keys-m2-07-last-resort; the build's ledger, QD-616).
+
+362. **A re-formed group's epoch 0 carries no auth pin, and epoch 1 takes its floor from `gen/<the form's generation>`'s auth (option 1, the recommendation).**
+    - Question: the epoch PUT check holds each epoch's auth pin to the previous epoch's, and a re-formed group's epoch 0 carries none, so epoch 1 had no floor.
+    - Answer: the check gives epoch 1 of a re-formed group the floor of `gen/<form.generation>`'s auth, which the ladder writes before the group takes any commit, wrap or claim (§10.8's wait row); no wire change (§10.6's epoch PUT check).
+    - Cost: one sentence; KEYS-M2-25 had built it.
+    - Not taken: (2) the form's generation's Signed GenRotate in the reform request and a ladder check, the same bytes twice; (3) epoch 0 written through the epochs route after the ladder, a special case there and a third route in deleted mode.
+    - Raised by the design details (DESIGN-DETAILS.md section 6, restating keys-wire-reform-epoch-zero; the build's ledger, QD-617).
+
+363. **Welcome pointers are keyed `gkm/welcome/<sidecar_id>/<group_id>/<n>`, and the KeyPackageRef moves into the pointer (option 1, the recommendation).**
+    - Question: pointers keyed by the KeyPackageRef their Add used collided when one last-resort KeyPackage served two Adds, and the later overwrote the earlier Welcome's.
+    - Answer: a pointer's key names its recipient, group and epoch, n in 20 digits, and `GkmWelcomePointer` carries `key_package_ref = 3`; a device holding several pointers for one group takes the highest n above the newest epoch it reached. One Welcome, one key. It changes the family's key form in QD-442's encoding, and §2.8's gkm-5 says the pointers' key and their ref (§10.6, gkm-5).
+    - Cost: one key-form change and one field, unfrozen until M2's exit.
+    - Not taken: (2) `<ref>` for one-time KeyPackages and `<ref>/<group_id>` for the last-resort one, two key forms in one family and a path-prefix pair; (3) keeping the key and overwriting, with a committer re-adding after 10 minutes, a delay per lost join that still loses the Welcome.
+    - Raised by the design details (DESIGN-DETAILS.md section 6, restating keys-m2-13-last-resort-welcome-pointer; the build's ledger, QD-618).
+
+364. **gkm answers forwarding Delegations' reader keys in batches of up to 256, `POST /gkm/delegation-keys`, beside the GET (option 1, the recommendation).**
+    - Question: a config rotator read each forwarding Delegation's reader key by a GET of its own, about 3,300 requests a rotation at Team scale.
+    - Answer: `POST /gkm/delegation-keys {delegation_ids, at most 256}` answers each stored key or none, in order, under the GET's scope, a reader of the network's config, as the reader-keys route does; one request and one reply message before M8's freeze. A config rotator reads through it, about 13 requests a rotation at Team scale (§10.5's step 3, §10.6's scopes, §10.14).
+    - Cost: one route and two messages.
+    - Not taken: (2) the GET alone, each rotator caching the keys it verified, about 4 MB of keychain per config writer, a phone's included; (3) the GET alone, issued concurrently, about 3,300 requests a rotation that §11.13's read side and the lb all see.
+    - Raised by the build (KEYS-M8-01; the build's ledger, QD-637).
+
+365. **A member device forms the group of a repo a tagged or ephemeral sidecar creates, as a config writer that reads the repo and holds its admin at gkm (option 2 of the first question, then option 3 for M2, each the recommendation).**
+    - Question: KF1's epoch 0 needs its creator's leaf and an agent holds none, so a repo an agent creates had no group; and then which member device may form it when no config writer reads that repo or holds its admin scope.
+    - Answer: the agent files the RepoCreate, places the repo and stays its admin (owner decision 8). gkm hints `pending` to the network's config writers for a keying repo with no GroupForm; the first to act that is a key holder of the repo and holds admin on it at gkm, which §8.5's implicit document gives every member device, runs KF1 as the group's creator, epoch 0 holding its own leaf, and wraps generation 1 to the agent, which then has evs activate the repo. Activation waits for that device, as an agent's every Add does; a repo an agent creates while no such device is online, or under a narrower ACL document that gives no member device both rights, stays keying, which leaks nothing. Revisited when Team policies can narrow member devices' evs rights (M6), the candidate being the first acting config writer filing `RepoGrant{reader}` and `RepoAdmin{add}` for itself (§10.7's KF1, §10.6's pending row, §8.8's RepoCreate). QD-659 governs QD-638's "the first member device to act".
+    - Cost: a hint rule and a second device in KF1; an agent's repo waits for a member device online.
+    - Not taken: for the former, (1) agents creating no repo that needs a group of its own, which changes §8.8's row and an agent's record repo; (3) a group with an empty tree, which is not RFC 9420; for its rights, (1) the acting config writer granting itself read and admin now; (2) hinting the repo's member-device readers that hold its admin instead, leaving a repo with none keying with an alarm.
+    - Raised by the build (KEYS-M2-19 and KEYS-M2-32; the build's ledger, QD-638, QD-659).
+
+366. **The MLS engine meets the phone budget by keeping the tree on disk and streaming it, and the SDK keeps bulk state on storage (option 1, the recommendation, with the owner's direction).**
+    - Question: a 1,000-leaf group's join, path commit and resync measured 27 to 63 MB of heap above their baseline, three to six times the phone budget's estimate.
+    - Answer: the review phase brings the engine under the budget, measured on the ios32 cell first: the ratchet tree and other large state stay on disk and stream, a path sealed and written a node at a time and the tree hashed and encoded from its on-disk sections, with one decode for a resync and a copy-on-write of the path in place of a whole-tree clone before a commit; no format or flow changes. The owner's direction: "Optimize in review. The sdk should offload to memory to storage where possible. The iso extension and apps have much more fast nvme storage available than ram." The SDK, the apps and their VPN components keep bulk state on storage and hold RAM as a working set. Until then the harness reports the peaks and fails nothing on them; if the cell still reads over budget, bounding a 32 MiB leg's roles is raised as its own question (§10.5, D-KEYS-14, §10.15).
+    - Cost: engine work in the review phase; the blank-parent path's own output is 1.18 MB plus 999 encapsulations, so the estimate may still be out of reach there.
+    - Not taken: (2) bounding a phone's roles, never the committer of a large blank path and never a leaf of a tree past a size, reading larger groups by wraps, a rule every committer must hold; (3) changing the claim and the iOS budget.
+    - Raised by the build (KEYS-M2-23; the build's ledger, QD-641).
+
+367. **A code-only device fetches its recovery wraps before admission and opens them once admitted (option 1, the recommendation, as built).**
+    - Question: §10.8 and §7.9 said the code opens M's recovery wraps at once, before admission, but an unadmitted client reads only 8 bytes of C_g, which the wrap's AAD binds whole, and reaches no gen/ route.
+    - Answer: before admission the device fetches its wraps under `recovery:<member_id>` and keeps the newest per group in its keychain; it opens them once admitted, when `gen/<g>` reaches it: the config group's first, then §7.9's anchor, then the rest. A code holder with the operator's ciphertext and gen/ objects still reads every generation wrapped to the key, so §2.10's disclosure stands (§10.8, §7.9's before-admission row).
+    - Cost: none; no format or scope change.
+    - Not taken: (2) the recovery read answering all of C_g, a field and a gkm-8 line, the opened key still unjudged until admission; (3) letting `recovery:<member_id>` read gen/, a scope change with the same unjudged key.
+    - Raised by the build (KEYS-M2-24; the build's ledger, QD-642).
+
+368. **A GroupForm carries its signer's auth pin, and members judge the signer at that pin (option 1, the recommendation).**
+    - Question: members judged a form's signer at their newest state, which strands a lagging member once the re-former is revoked.
+    - Answer: `GroupForm` gains `AuthPin auth = 5`, the signer's state when it signs. Members judge the signer by §10.6's rule at that pin where their retained log reaches it, and not at all before it, as every other judged statement is judged; gkm holds the pin to its newest state as it holds a claim's, on the chain and not ahead (§10.6, §10.8's members row, §2.8 gkm-1).
+    - Cost: one field before M2's freeze and gkm-1's words.
+    - Not taken: (2) a filing time gkm stamps, unsigned and movable by a server; (3) the newest state, documenting that a lagging member returns by a re-add or its recovery code.
+    - Raised by the build (KEYS-M2-25; the build's ledger, QD-643).
+
+369. **The window in which a wrapped writer, or a leaf racing a poisoned commit, seals to the generation it carried until the refusing member's REMOVE rotation reaches it is accepted (option 1, the recommendation).**
+    - Question: after a compromised leaf commits a tree that holds a party dropped at the commit's own header, the members that process it refuse it, but a wrapped writer, which reads no commit, and a leaf whose seal races the commit may seal to the generation it carried until the refusing member's rotation reaches them.
+    - Answer: the window stands: the commit needs a compromised leaf, which already holds that generation's key and could hand the dropped party the same content or the key itself, so the window adds no reach the attacker lacks, and the refuser's rotation ends it at once. No rule, format or model change (§10.9's window row).
+    - Cost: content sealed in the window reaches the dropped party only through an attacker that could pass it on anyway.
+    - Not taken: (2) a narrowing rule for the review phase, wrapped writers checking each generation's commit roster or a signed refusal notice that gkm relays, at the cost of MLS processing on agents or a new notice, and latency on rotations.
+    - Raised by the orchestrator's review of DESIGN-DETAILS.md section 6 (the build's ledger, QD-695).
+
+370. **A forwarding Delegation's reader key object is `gkm/dkey/<network_id>/<delegation_id>`, and gkm's reconciler deletes it 24 h after the Delegation's end by tracked ends and a sweep of the network's prefix (option 1 of each question, the recommendations).**
+    - Question: a forwarding Delegation's row can leave the rows before the reconciler deleted its key object, so the object outlived §2.8's ttl; and a sweep after a restart could not tell which network's rows a key named only by its `delegation_id` answers to.
+    - Answer: the object's key names the network the token gives at the upload and the read, an opaque id (I-13); the reconciler keeps a tracked end of a forwarding Delegation past its row's leaving the rows and deletes the object `DelegationKeyRetention`, 24 h, after the end, and now and then, and after a restart, lists one network's prefix and deletes at once any object that no forwarding row in the state's rows and no tracked end names, its row gone and its retention passed by at least 4,096 positions. A network's shred or a hold finds its key objects by the prefix, and §2.8's ttl holds at any entry rate and across restarts. This amends owner decision 202's key, `gkm/dkey/<delegation_id>`, and QD-442's path form for the family, which nothing in production held (§10.6, gkm-1).
+    - Cost: a list of one network's prefix now and then.
+    - Not taken: for the deletion, (2) a diff of two states' Delegations at each base, keeping the previous state per network; (3) accepting the leak, which weakens a published ttl; for the network, (2) object metadata naming it, a HEAD per unnamed object and a change to §19.6's metadata rule; (3) a marker object beside each key; (4) no sweep, an object standing until its network's shred.
+    - Raised by the build (TEAM-M2-21 and the core lane's owner fixes; the build's ledger, QD-675, QD-763).
+
+371. **gkm and taskworker's gkm reconciler read authorization through ACL's one gate cache, which a taskworker start tells of every gkm network (option 2 of the first question, option 1 of the second, the recommendations).**
+    - Question: no plan built gkm's authorization state over the gate cache, for the gkm block or for taskworker's reconciler; and after a restart that cache held only networks whose log had moved since, so a quiet network's pending hints, key deletions and sweeps waited for its next entry and §2.8's ttls slipped.
+    - Answer: a KEYS task builds both views in gkmservice over the gate cache's exported API: the gkm block's, a token's standing and its honored scope through ACL's scope check for the gkm audience with the answers only gkm needs (readers, writers, pins, Delegations, late holders and dropped holders), and the reconciler's, each network's moves, the networks the host holds, a network's newest state and a sidecar's network. ACL adds to the cache, as a small separate change, its network list, a sidecar-to-network index and a callback when a network's new state is installed, so a reconciler a hint wakes reads the new snapshot. Every gate check stays in ACL's one cache, and until both views land the gkm block and the reconciler fail closed. At a taskworker runtime's start the reconciler's cache is told of every network with a config log and a gkm-gated service enabled (sidecar.yml's `gkm:` networks), listed from Postgres a page at a time under the cache's load concurrency and a page rate, both settings, and a network the bounded cache evicts is told again when the reconciler next reads it (§10.6, §8.9).
+    - Cost: a cold load of every gkm network at each taskworker start, spread by the page rate (§8.18's fan-out risk), and a cache sized for them all or one that cycles.
+    - Not taken: for the builder, (1) ACL building gkm's state beside evs's and KEYS the reconciler's; (3) a second copy of the scope check until ACL's lands, which the one cache exists to prevent; for the networks, (2) a durable index of what the reconciler must come back to, a new family §2.8 must list; (3) waiting for each quiet network's next entry.
+    - Raised by the build (KEYS-M2-17 and the gkm-auth-state track; the build's ledger, QD-718, QD-893).
+
+372. **gkm answers whether an epoch's Welcome stands, `HEAD /gkm/groups/<id>/welcome/<n>`, so any writer leaf re-adds a joiner whose Welcome never came (option 1, the recommendation).**
+    - Question: §10.6 has a writer leaf remove and re-add a joiner whose Welcome the uploader never wrote, but no leaf other than the uploader could learn that the Welcome was missing.
+    - Answer: `HEAD /gkm/groups/<id>/welcome/<n>` under rw answers 200 or 404 with no body. A writer leaf that adopted an Add at epoch n asks once after `GkmSettings.WelcomeTimeout`, 10 minutes, and on a 404 removes and re-adds the joiner in one commit. It discloses nothing beyond gkm-5's Welcome objects, whose keys every reader can compute; a false 200 leaves the joiner waiting and a false 404 costs one Remove and Add (§10.6's Welcomes row, §10.14).
+    - Cost: one route.
+    - Not taken: (2) a flag per entry in the epochs reply, read at catch-up rather than 10 minutes later, with a §2.8 line; (3) a joiner asking by a new hint kind and route, from a device that holds no key or leaf.
+    - Raised by the build (KEYS-M2-19; the build's ledger, QD-747).
+
+373. **A network's first device draws the config group's id and RK_1 before base 1 and signs GenRotate_1 after it (option 1, the recommendation).**
+    - Question: base 1 names the first config head, whose push is sealed and signed before base 1 under a generation pin, while GenRotate_1's auth pin must be past position 0 and gkm's gate holds nothing before base 1.
+    - Answer: at bootstrap the first device draws the config group's id and RK_1 before base 1 and keeps them as KF1's draft; it seals and signs the first head's push with them, auth {0, A_0} and generation pin {group_id, 1, C_1}, and publishes base 1; then it signs GenRotate_1 at S(1) over that RK_1, runs the rest of KF1 and sends the push. C_g holds no pin, which makes the split sound, and every rule stands: the push's pin, every GenRotate's pin floor and gkm's gate holding nothing before base 1 (§7.9's bootstrap, §10.7's KF1).
+    - Cost: a bootstrap draft at the group client, the config kind's prepare and commit at the evs client, and the bootstrap's order.
+    - Not taken: (2) a config generation pinned at the genesis, a second pin exception with a holders hash that names no holder, reaching gkm before its gate holds a log; (3) base 1 naming no head, which changes the bootstrap row, api's base-1 check and every reader's base check.
+    - Raised by the build (the daemon's evs and gkm clients; the build's ledger, QD-824).
+
+374. **gkm's client reads a 502 or 504 the lb answers as no answer from gkm, never as gkm's refusal (option 1, the recommendation).**
+    - Question: gkm never answers 502 or 504 itself, its routes buffering at the lb, yet its client read them as gkm's refusals.
+    - Answer: a 502 or 504 whose body is not a gkm refusal is the lb's, no answer from gkm at all, an error its callers take as a transport error: KF7's fallback is taken, the Welcome watch is kept, and a write's outcome is unknown and resolved as after a lost answer, never judged refused (§10.7's KF7).
+    - Cost: a few lines in the client.
+    - Not taken: (2) leaving it, so a transient lb answer drops a Welcome watch, misses KF7's fallback or judges refused a write that may have applied.
+    - Raised by the build (evs-502-retry; the build's ledger, QD-876).
+
+375. **A committer that gkm refuses only because a newer generation stands takes it and commits again without alarming, and each pass starts from gkm's newest generation (option 3, with option 2 as its first step, the recommendation).**
+    - Question: a wrapped rotation can move gen/ past a commit's header between the committer's read and its PUT, so gkm's epoch PUT check refused a commit whose checks had passed, and the committer alarmed `refused` on a benign race.
+    - Answer: on a 403 to its own commit whose checks it passed, the committer reads gkm's generations once (`GET gen?since=` its header's); if a newer generation stands, it takes it under the rotation checks and the ladder, restages the commit with that generation in its header and commits again, as one of the pass's attempts, raising no alarm; it alarms `refused` and waits only when no newer generation explains the refusal, or when the newer one fails its checks, which raises that check's own alarm. Each pass of the pending engine also reads gkm's newest generation before its first commit. `refused` keeps its meaning, evidence against a party (§10.6's refused row, §10.9).
+    - Cost: one read per pass and one on a 403.
+    - Not taken: (1) keeping the alarm on the race, liveness resting on the hint or the hourly resync; (2) the per-pass read alone, which narrows the race to a rotation between that read and the PUT.
+    - Raised by the build (KEYS-M2-27; the build's ledger, QD-956).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

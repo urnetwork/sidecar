@@ -67,7 +67,7 @@ All sidecar work happens on a branch named `sidecar` in every repo it touches (o
 
 ## Owner decisions
 
-The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, [Q-SDK-7](#1813-open-questions), which owner decisions [215](#od-215) and [216](#od-216) decide, and [Q-BRIDGE-8](#1714-open-questions), open below. From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's horizon (204), amending [owner decision 183](#od-183), settings in rows (205), the sweep's triggers (206), a reported URL's path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled (222), the ur.io/recurd page (223), C16's latch (224), the store's DELETE that names its object (225) and its whole LIST (226), a fold's source deletes (227), a map's source below the window (228), the crossing creation refused (229), the copy's map check (230), the root directory (231), a new ref's epoch (232), inline leaf places (233), extending [owner decision 200](#od-200), key path prefixes (234), format 1 reading past index_epoch (235), imports as bytes (236), history blobs (237), a push's sources (238), changeless parts (239), conflict branches (240), one import statement per push (241), an import's helper refs (242), overlay directories (243), tag refs (244), the tainted bit from M3 (245), retention without the reclaim (246), compaction Later (247), the 2 GiB file cap (248), SHA-1 repos (249) and working-tree sync and derived shares Later (250). On 2026-11-15 the owner put the core services' interfaces and server's shared value types in a new operator-core module, whose `Env` creates every service instance a hosted engine holds and server/core implements, with sidecar owning its SQL (251), amending [owner decision 19](#od-19). On 2026-11-16 the owner accepted the build's recommended decisions going forward and asked that they be recorded here; the fold of §2's that day numbers how the published metadata list moves (252), smtp-2's proof parts and smtp-7 (253), cert-1's chain, revocation reason and state time (254), evs-5's ttl while the dead-slot delete is off (255), the evs rows' words for their wire fields (256), the segment clusters' PUT reports (257), the file clusters' readiness object (258), api-14's sign-off ids (259), the tier cache key, an OAuth client's creator and a domain's TXT challenge (260), enrollment's attempt histories (261) and BASE records in a config head's folds (262), and adds the Q- item [owner decision 213](#od-213) asked for, [Q-REPO-6](#414-open-questions), open below. The fold of §4's the same day numbers the repository's and the build's answers: the mlswg's vector files committed (263), releases promoted, not each build signed (264), a copy of cli/UI.md in the repository (265), proving key sets fetched from ur.io (266), the competition's and sn's source graphs taking sidecar (267), what a Gn-out merges (268), connect's C20 for `strict_chain` (269), minio's place in the merge order (270), X11 (271), Go 1.27.4 (272), how a proto fence takes a field (273), `sidecarctl` in server (274), the `ios_extension` leg's seed rule (275), the page Worker's own `Id`, amending 251 (276), gomobile's legs (277) and `third_party/` at release (278). The fold of §5's and §6's the same day numbers the core's and the subprotocol's answers: SSHSIGs dropped until a customer asks (279), approved recipients (280), the safety number (281), service urls from the host table (282), the readable-credential check by state (283), the keychain's auto-lock (284), `AgentRevoke` as a local act (285), the bind re-mint's adoption (286), the `events` control method (287), the mail control methods (288), the search cache's wrapped keys (289), host-held presence keys in remote mode (290), the `admin_refused` claim (291), a compromise revocation's `since_n` (292), the `git-hook` hello mode (293), the served record's daily rows (294), the unsigned minimum-version raise (295), same-network P2P behind a setting (296), settings objects for every limit (297), the `ur/` pair's key and the dialer's Service hold (298), late versions pages and retry waits (299), the `rollback` head alarm (300) and companion contracts without a `WindowDelegation` (301). The fold of §7's the same day numbers the answers on networks, teams, enrollment and the authorization log: cost totals in the team record (302), the team record's `RepoCreate` (303), a zero `team_mail` (304), `record_required` (305), the OAuth consent page (306), admission times in rows (307), no notice for a forwarding Delegation (308), forwarding rows leaving the rows (309), the IdP flow state (310), edge login ports (311), re-seed uploads (312), the bundle's `delegation_id` (313), open proposals in rows (314), a base's shrunk repos (315), the DPoP `iat` (316), the daemon's config follower (317), the anchor by descent (318), a device with no config key (319), the genesis owner's row (320), SCIM's bearer and queue (321), device authorizations (322), the auth key and admin event encodings (323), the invite's bytes (324), tail verdicts (325), `not_preview` (326), attestation outside the log (327), stage 2's build tag (328), the last Owner (329), cascade spans and indexer rows (330) and a superseded forwarding client (331). The fold of §8's and §9's the same day numbers the answers on access control and sockets: an owner-bound repo's standing revoke (332), member deposits into mailboxes (333), `K_sock`'s overlap at the gates (334), grant-driven edge address records (335), `ur share`'s count default and stdin link (336), a gate behind the log (337), an edge pair's life (338), the compile's forms (339), the internal gate routes (340), the config repo's row (341), `evidence_default` in rows (342), access-log positions and the deletion's signer (343), via subjects and route rows with grant 1's `via` (344), prefix rules' subjects, admins and readings (345), a share grant's network (346), sockets' client tokens (347), edge Finds under any audience (348), an admin's decision toward k (349), accept-invite's two forms (350), a deleted repo's admins (351), config writers as the config repo's admins (352), atoms for every declared tag and group (353), the ticket key command (354), `AclState`'s readings (355) and re-application from the body (356). This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
+The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, [Q-SDK-7](#1813-open-questions), which owner decisions [215](#od-215) and [216](#od-216) decide, and [Q-BRIDGE-8](#1714-open-questions), open below. From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's horizon (204), amending [owner decision 183](#od-183), settings in rows (205), the sweep's triggers (206), a reported URL's path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled (222), the ur.io/recurd page (223), C16's latch (224), the store's DELETE that names its object (225) and its whole LIST (226), a fold's source deletes (227), a map's source below the window (228), the crossing creation refused (229), the copy's map check (230), the root directory (231), a new ref's epoch (232), inline leaf places (233), extending [owner decision 200](#od-200), key path prefixes (234), format 1 reading past index_epoch (235), imports as bytes (236), history blobs (237), a push's sources (238), changeless parts (239), conflict branches (240), one import statement per push (241), an import's helper refs (242), overlay directories (243), tag refs (244), the tainted bit from M3 (245), retention without the reclaim (246), compaction Later (247), the 2 GiB file cap (248), SHA-1 repos (249) and working-tree sync and derived shares Later (250). On 2026-11-15 the owner put the core services' interfaces and server's shared value types in a new operator-core module, whose `Env` creates every service instance a hosted engine holds and server/core implements, with sidecar owning its SQL (251), amending [owner decision 19](#od-19). On 2026-11-16 the owner accepted the build's recommended decisions going forward and asked that they be recorded here; the fold of §2's that day numbers how the published metadata list moves (252), smtp-2's proof parts and smtp-7 (253), cert-1's chain, revocation reason and state time (254), evs-5's ttl while the dead-slot delete is off (255), the evs rows' words for their wire fields (256), the segment clusters' PUT reports (257), the file clusters' readiness object (258), api-14's sign-off ids (259), the tier cache key, an OAuth client's creator and a domain's TXT challenge (260), enrollment's attempt histories (261) and BASE records in a config head's folds (262), and adds the Q- item [owner decision 213](#od-213) asked for, [Q-REPO-6](#414-open-questions), open below. The fold of §4's the same day numbers the repository's and the build's answers: the mlswg's vector files committed (263), releases promoted, not each build signed (264), a copy of cli/UI.md in the repository (265), proving key sets fetched from ur.io (266), the competition's and sn's source graphs taking sidecar (267), what a Gn-out merges (268), connect's C20 for `strict_chain` (269), minio's place in the merge order (270), X11 (271), Go 1.27.4 (272), how a proto fence takes a field (273), `sidecarctl` in server (274), the `ios_extension` leg's seed rule (275), the page Worker's own `Id`, amending 251 (276), gomobile's legs (277) and `third_party/` at release (278). The fold of §5's and §6's the same day numbers the core's and the subprotocol's answers: SSHSIGs dropped until a customer asks (279), approved recipients (280), the safety number (281), service urls from the host table (282), the readable-credential check by state (283), the keychain's auto-lock (284), `AgentRevoke` as a local act (285), the bind re-mint's adoption (286), the `events` control method (287), the mail control methods (288), the search cache's wrapped keys (289), host-held presence keys in remote mode (290), the `admin_refused` claim (291), a compromise revocation's `since_n` (292), the `git-hook` hello mode (293), the served record's daily rows (294), the unsigned minimum-version raise (295), same-network P2P behind a setting (296), settings objects for every limit (297), the `ur/` pair's key and the dialer's Service hold (298), late versions pages and retry waits (299), the `rollback` head alarm (300) and companion contracts without a `WindowDelegation` (301). The fold of §7's the same day numbers the answers on networks, teams, enrollment and the authorization log: cost totals in the team record (302), the team record's `RepoCreate` (303), a zero `team_mail` (304), `record_required` (305), the OAuth consent page (306), admission times in rows (307), no notice for a forwarding Delegation (308), forwarding rows leaving the rows (309), the IdP flow state (310), edge login ports (311), re-seed uploads (312), the bundle's `delegation_id` (313), open proposals in rows (314), a base's shrunk repos (315), the DPoP `iat` (316), the daemon's config follower (317), the anchor by descent (318), a device with no config key (319), the genesis owner's row (320), SCIM's bearer and queue (321), device authorizations (322), the auth key and admin event encodings (323), the invite's bytes (324), tail verdicts (325), `not_preview` (326), attestation outside the log (327), stage 2's build tag (328), the last Owner (329), cascade spans and indexer rows (330) and a superseded forwarding client (331). The fold of §8's and §9's the same day numbers the answers on access control and sockets: an owner-bound repo's standing revoke (332), member deposits into mailboxes (333), `K_sock`'s overlap at the gates (334), grant-driven edge address records (335), `ur share`'s count default and stdin link (336), a gate behind the log (337), an edge pair's life (338), the compile's forms (339), the internal gate routes (340), the config repo's row (341), `evidence_default` in rows (342), access-log positions and the deletion's signer (343), via subjects and route rows with grant 1's `via` (344), prefix rules' subjects, admins and readings (345), a share grant's network (346), sockets' client tokens (347), edge Finds under any audience (348), an admin's decision toward k (349), accept-invite's two forms (350), a deleted repo's admins (351), config writers as the config repo's admins (352), atoms for every declared tag and group (353), the ticket key command (354), `AclState`'s readings (355) and re-application from the body (356). The fold of §10's the same day numbers the answers on group keys and gkm: a drop key's lifetime and renewal (357), the ReaderKey self-check (358), the X-Wing evidence for the freeze (359), the ladder's AAD widths (360), the last-resort extension (361), a re-formed group's epoch 1 floor (362), Welcome pointers by group and epoch (363), batched delegation key reads (364), an agent's repo's group (365), the MLS engine's memory (366), recovery wraps opened once admitted (367), a GroupForm's pin (368), the poison window (369), forwarding key objects by network (370), amending [owner decision 202](#od-202), gkm's state over the gate cache (371), the Welcome HEAD (372), the bootstrap's config generation (373), the lb's 502 or 504 at gkm's client (374) and recommits after a newer generation (375). This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
 
 ### Cross-cutting decisions X1-X20
 
@@ -330,7 +330,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-199"></a>199 | 2026-11-10 | Team billing | A `team_subscription` row (MG6) records each Team's Stripe subscription, customer, anchor and start, written at the first `invoice.paid` and ended at `customer.subscription.deleted`; only a live row is granted a period. | §2, §19, §20 |
 | <a id="od-200"></a>200 | 2026-11-10 | Path epochs | The fold records each folded version's place in its statement's change list (`leaf_part`, `leaf_index`), so evs serves the proof of a version an older path epoch wrote and the reader checks the leaf names its token. | §2, §11 |
 | <a id="od-201"></a>201 | 2026-11-10 | Group owner | A group's first object is `gkm/<group_id>/owner` (repo and network), created If-None-Match from the token; every group route resolves through it, so no other repo's form can claim the group. | §2, §10 |
-| <a id="od-202"></a>202 | 2026-11-10 | Forwarding keys | A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object `gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB. | §2, §10 |
+| <a id="od-202"></a>202 | 2026-11-10 | Forwarding keys | A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object `gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB. Amended by [owner decision 370](#od-370): the key is `gkm/dkey/<network_id>/<delegation_id>`. | §2, §10 |
 | <a id="od-203"></a>203 | 2026-11-10 | Segment GC | An unadopted segment goes once no batch is left from before its upload + 24 h + 2 min, 49 to 75 h, so GC raises no fence; evacuation fences a ref with no head by a placeholder head. | §2, §11, §19, §22 |
 | <a id="od-204"></a>204 | 2026-11-10 | Drop history | A drop job marks only once evacuation's horizon has passed each covered drop's commit by 2 min, so a `now` drop's deletions start about 25 to 26 h after it, amending [owner decision 183](#od-183)'s 25-minute fence. | §2, §11, §22 |
 | <a id="od-205"></a>205 | 2026-11-10 | Settings in rows | `self_admit` and `scim_signer` compile into `ProjectionRows.settings`, which full readers check against the head and api and the gates take, so every verifier judges a self-admission alike. | §2, §7 |
@@ -485,6 +485,25 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-354"></a>354 | 2026-11-15 | Ticket key command | `sidecarctl sockets ticket-keygen` writes the sockets ticket key file. | §9 |
 | <a id="od-355"></a>355 | 2026-11-15 | AclState's readings | Autogroup membership, targets' encodings, kind defaults in the binary, consent's details and the ack route stand as built. | §8 |
 | <a id="od-356"></a>356 | 2026-11-15 | Re-application from the body | `AclState.ReapplyStatement` derives its fold inputs from the body, the signers and the rebuilt rows, and judges nothing again. | §8 |
+| <a id="od-357"></a>357 | 2026-11-06 | Drop key lifetime | A drop key lives `GkmSettings.DropKeyLifetime`, 90 days, and writers renew it by a SCHEDULE rotation once under 7 days are left. | §10, §22 |
+| <a id="od-358"></a>358 | 2026-11-06 | ReaderKey check | Each device checks daily that gkm serves under its id only ReaderKeys it signed, raising `key_changed` for another; ReaderKeys stay Ed25519. | §2, §5, §10 |
+| <a id="od-359"></a>359 | 2026-11-06 | X-Wing evidence | The 0x0010 gate claims what it shows: the draft's vectors are X-Wing's only independent evidence, and tmc/mls's KEM check is wiring. | §10, §22 |
+| <a id="od-360"></a>360 | 2026-11-10 | Ladder AAD widths | The ladder's AADs take u64be for g and e and u8 for the cause, as built, and gen/1 carries cause REQUEST. | §10 |
+| <a id="od-361"></a>361 | 2026-11-10 | Last-resort KeyPackage | draft-ietf-mls-extensions' `last_resort`, type 0x000A, marks a last-resort KeyPackage, whose joiner self-updates at once. | §10 |
+| <a id="od-362"></a>362 | 2026-11-10 | A re-form's epoch 1 | A re-formed group's epoch 1 takes its auth floor from the form's generation's GenRotate, since its epoch 0 carries none. | §10 |
+| <a id="od-363"></a>363 | 2026-11-10 | Welcome pointers | Welcome pointers are keyed by recipient, group and epoch, `gkm/welcome/<sidecar_id>/<group_id>/<n>`, the KeyPackageRef inside. | §2, §10 |
+| <a id="od-364"></a>364 | 2026-11-10 | Delegation key batches | `POST /gkm/delegation-keys` answers up to 256 forwarding reader keys a request for a config rotator. | §10 |
+| <a id="od-365"></a>365 | 2026-11-11 | An agent's repo's group | A config writer that reads and administers a repo an agent creates forms its group at gkm's hint; with none, the repo stays keying. | §8, §10 |
+| <a id="od-366"></a>366 | 2026-11-10 | MLS memory | The MLS engine meets the phone budget by keeping the tree on disk and streaming it; the SDK keeps bulk state on storage. | §10 |
+| <a id="od-367"></a>367 | 2026-11-10 | Recovery wraps | A code-only device fetches its recovery wraps before admission and opens them once admitted. | §7, §10 |
+| <a id="od-368"></a>368 | 2026-11-10 | GroupForm pin | A GroupForm carries its signer's auth pin, at which members judge the signer. | §2, §10 |
+| <a id="od-369"></a>369 | 2026-11-11 | Poison window | A wrapped writer, or a leaf racing a poisoned commit, may seal to its generation until the refuser's REMOVE rotation: accepted. | §10 |
+| <a id="od-370"></a>370 | 2026-11-12 | Forwarding key objects | Forwarding reader keys live at `gkm/dkey/<network_id>/<delegation_id>`, deleted 24 h after their end by tracked ends and a per-network sweep. | §10 |
+| <a id="od-371"></a>371 | 2026-11-15 | gkm's gate state | gkm and its reconciler read authorization through ACL's one gate cache, which a taskworker start tells of every gkm network. | §8, §10 |
+| <a id="od-372"></a>372 | 2026-11-12 | Welcome HEAD | `HEAD /gkm/groups/<id>/welcome/<n>` tells any writer leaf a Welcome is missing, so it re-adds the joiner after 10 minutes. | §10 |
+| <a id="od-373"></a>373 | 2026-11-14 | Bootstrap generation | A network's first device draws the config group's id and RK_1 before base 1 and signs GenRotate_1 after it. | §7, §10 |
+| <a id="od-374"></a>374 | 2026-11-15 | gkm behind the lb | gkm's client reads an lb 502 or 504 as no answer from gkm, never as its refusal. | §10 |
+| <a id="od-375"></a>375 | 2026-11-15 | Stale-generation commits | A commit gkm refuses only because a newer generation stands is restaged on it and sent again, with no `refused` alarm. | §10 |
 
 ## Contents
 
@@ -854,7 +873,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v30; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v31; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -963,6 +982,9 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # activated grant's source rule, a share grant's network, inbox markers and prefix rule entries; api-13's gate
 # services; evs-6's member deposits; sock-1's dual registration by the listener's clock; and sock-3's ur/ ttl
 # by service.
+# v31, updated 2026-11-16 for §10's items (owner decisions 363 and 368), adds no row: gkm-1's GroupForm chain with
+# each form's auth pin, its signer's state when it signs; and gkm-5's Welcome pointers, keyed by recipient, group
+# and epoch, gkm/welcome/<sidecar_id>/<group_id>/<n>, each naming the KeyPackageRef its Add used.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -1365,7 +1387,7 @@ evs-30:
 gkm-1:
   service: gkm
   store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<network_id>/<delegation_id>
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer, and the signer's auth pin when it signs (owner decision 368)); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
   why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
   ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
   owner: §10.6
@@ -1387,8 +1409,8 @@ gkm-4:
   owner: §10.6
 gkm-5:
   service: gkm
-  store: gkm/<group_id>/welcome/<n> (the repo's metadata cluster), gkm/welcome/<sidecar_id>/<ref> (the first)
-  sees: Welcome objects and pointers; recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
+  store: gkm/<group_id>/welcome/<n> (the repo's metadata cluster), gkm/welcome/<sidecar_id>/<group_id>/<n> (the first)
+  sees: Welcome objects and pointers, the pointers keyed by recipient, group and epoch and naming the KeyPackageRef the Add used (owner decision 363); recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
   why: deliver joins
   ttl: until every recipient has acked, at most 90 d
   owner: §10.6
@@ -1708,7 +1730,7 @@ ext-12:
 | A breached server, where `ServiceSettings.scim_signer` names an indexer | Feeds that indexer SCIM removals no IdP sent, which it signs as `MemberRevoke`s | `GET /sidecar/scim-changes` answers only that indexer's client and only members outside the AdminSet (§7.6; [owner decision 321](#od-321)); no reader is added (I-4); the designation is the owner's choice ([owner decision 150](#od-150)) | A denial: members outside the AdminSet are removed on the server's unsigned word until an admin re-admits them |
 | A same-network peer, on a pair using P2P | Learns the other sidecar's public addresses through ICE | No network runs P2P until `SidecarProtocolSettings.EnablePeerP2p` is turned on, default off, at a later owner call ([owner decision 296](#od-296); D-PROTO-10); Required, Hello and HeadCheck hold across the move | Addresses shown to admitted peers of the same network; relays see no frames of that pair (connect-2) |
 | A compromised member device | Floods an indexer with searches, or probes repos through it | Per-requester rates and the indexer's own budget (§11.14, D-CORE-17); the indexer answers only repos the requester reads in its own evaluation | Load up to the requester's rate until it is revoked; nothing it could not read |
-| A network, or many, revoking, shredding or erasing within their own rates, by intent or in a wave | Drive one metadata cluster's P0 work past its write budget: 100 large Teams there, each shrinking every 5 minutes, ask ~2.9 TiB a day a drive of rotations, about twice the refill | Per-class rates per uploader, group and network; while it takes the refill, that cluster's pushes shed and its other classes held to what the write budget's bucket still holds, all restarting as it ends and ramping up as the bucket refills (§11.13); P0's excess forgiven, counted and shown against the drives' rating ([owner decision 190](#od-190)); §19.8's P0 page within an hour and §19.10's runbook: capacity, placement, the networks driving it ([owner decision 186](#od-186)) | While it lasts, that cluster's drives write past 0.8 DWPD and their 1 DWPD rating, and its other networks' pushes and evacuation stop; each wave's forgiven excess stays as wear, ~0.23 drive-writes for 6 hours of the one above (§11.21) |
+| A network, or many, revoking, shredding or erasing within their own rates, by intent or in a wave | Drive one metadata cluster's P0 work past its write budget: 100 large Teams there, each shrinking every 5 minutes, ask ~2.9 TiB a day a drive of rotations, about twice the refill | Per-class rates per uploader, group and network, gkm's counted in each process (§10.6); while it takes the refill, that cluster's pushes shed and its other classes held to what the write budget's bucket still holds, all restarting as it ends and ramping up as the bucket refills (§11.13); P0's excess forgiven, counted and shown against the drives' rating ([owner decision 190](#od-190)); §19.8's P0 page within an hour and §19.10's runbook: capacity, placement, the networks driving it ([owner decision 186](#od-186)) | While it lasts, that cluster's drives write past 0.8 DWPD and their 1 DWPD rating, and its other networks' pushes and evacuation stop; each wave's forgiven excess stays as wear, ~0.23 drive-writes for 6 hours of the one above (§11.21) |
 
 ### 2.11 Metadata retention
 
@@ -1787,7 +1809,7 @@ Decided (owner decisions [15](#od-15), [108](#od-108)): recURd uses the main ser
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | A sidecar ships before §7's P0, or agents use an app's device token on AppAdmin routes before stage 3 | Medium | Critical | D-TRUST-3; stage 3 after app migration ([owner decision 45](#od-45)) |
-| Unaudited cryptography: in-house MLS on draft ciphersuite 0x0010, post-quantum against passive adversaries only, the key ladder and its Ed25519 authority signatures, which a future forgery would make retroactive (§10.5), the storage format and path tokens, later the ZK mail proofs ([owner decision 99](#od-99)) | Medium | Critical | mlswg vectors, differential tests ([owner decision 43](#od-43)), fuzzing ([owner decision 101](#od-101)); the security page discloses this row ([owner decision 119](#od-119)) |
+| Unaudited cryptography: in-house MLS on draft ciphersuite 0x0010, post-quantum against passive adversaries only, the key ladder and its Ed25519 authority signatures, which a future forgery, by a forged admission or ReaderKey, would make retroactive (§10.5; [owner decision 358](#od-358)), the storage format and path tokens, later the ZK mail proofs ([owner decision 99](#od-99)) | Medium | Critical | mlswg vectors, differential tests ([owner decision 43](#od-43)), fuzzing ([owner decision 101](#od-101)); the security page discloses this row ([owner decision 119](#od-119)) |
 | Without an ACL document, untagged sidecars reach providers' LAN, loopback, link-local and overlay addresses ([owner decision 120](#od-120)) | High | High | Disclosed; any tier may write a policy ([owner decision 73](#od-73)) |
 | A reaped or ephemerally expired Delegation-admitted agent, or a leaked reader seed, reads the config and tag repos until the Delegation's key drops; a leaked whole auth key also admits fresh agents, each with its own wraps, until the Delegation ends ([owner decision 114](#od-114)) | Medium | High | Disclosed; `not_after` ≤ 90 d, 30 d for CI, replaced at each CI secret rotation and after a key drop; a `Suspend` or any non-reap revocation of one of its agents drops the key, and DelegationRevoke or a compromise revocation of one of them ends the Delegation, parking what it admitted from `since_n` (§7.9, §10.5); the revoke plan shows the three apart (§7.10) |
 | A site or Hurricane Electric outage stops both nameservers: every ur.network name, ACME DNS-01, DANE and, from M7, inbound mail ([owner decision 123](#od-123)) | Medium | Critical | Accepted; paged at all hours from M5 ([owner decision 143](#od-143)); an outage past a sender's retry window (14 h to 5 d, §15.3) bounces its mail |
@@ -3184,7 +3206,9 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	                             // reader alarms (RecordAlarm; §16); credential_store: an enrolled daemon found a
 	                             // readable network by_jwt in a host store (5.6), with no path or value, ur status
 	                             // naming the store kind; ct_alarm: §13's CT watch, Evidence[0] the leaf's
-	                             // SHA-256; mail_receiver_alarm: D-MAIL-15's (§15); bridge_alarm (§17)
+	                             // SHA-256; mail_receiver_alarm: D-MAIL-15's (§15); bridge_alarm (§17); key_changed:
+	                             // gkm serves under this sidecar's id a ReaderKey it never signed (§10.5's
+	                             // readerkey row; owner decision 358)
 	State       SidecarState
 	Reason      SidecarStateReason // Unenrolled: expired, refused, parent_lost, session_ended, keystore_lost;
 	                               // Revoked: signed (§18.5's GetStateReason)
@@ -3220,7 +3244,7 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	Evidence    [2][]byte        // head_alarm: my pin and the peer's or api's, as §6.5 encodes them (AuthPin,
 	                             // GroupHead, GenHead or RefHead); recovery_rebind at a void: the AuthPins
 	                             // at which keychain.wrap was sealed to the voided binding and re-sealed (5.9);
-	                             // ct_alarm: [0], the leaf's SHA-256
+	                             // ct_alarm: [0], the leaf's SHA-256; key_changed: [0], the foreign key's SHA-256
 	EvsAlarm    SidecarEvsAlarm  // evs_alarm, a closed set: missing_segment, tamper (a failed entry hash, AEAD,
 	                             // oid or statement), version_rule (off §11.7's rule), epoch_overdue (a writer
 	                             // 1 h past due_by_ms) or prefix_rule (from M6)
@@ -3403,7 +3427,8 @@ type MemberDevice struct { // Devices(): this member's admitted sidecars, this o
 	                     // removed its leaf as stale from every group this device is a leaf of that seated it,
 	                     // at least one) or revoked
 	AdmittedAt time.Time
-	LastChange time.Time // its newest leaf change in a group this device is a leaf of; zero: none seen
+	LastChange time.Time // its newest leaf change in a group this device is a leaf of, its credential's
+	                     // not_after less 90 days in that group's tree (§10.9); zero: none seen
 }
 type DeviceRevokeItem struct { // one row of a plan
 	Effect   string // park, void, stands, reseal (5.9's backup rule) or key (offered for KeyRevoke)
@@ -5012,7 +5037,9 @@ ur-authkey-<id>-<secret>[#<base64url(AuthKeyBundle)>]            QR and MDM carr
                 SidecarAdmit with the Delegation's key (a scoped statement: exactly its tag_ids and, unless
                 ephemeral, a not_after no earlier than the Delegation's; 7.9), keeps only the reader seed
                 (§5.6), erases the rest; every other copy of the string keeps both seeds, so it admits until
-                the Delegation ends and reads until its key drops (7.9's delegation row, §10.5)
+                the Delegation ends and reads until its key drops (7.9's delegation row, §10.5); the reader
+                seed is X-Wing's own 32-byte seed, crypto/hpke's MLKEM768X25519().NewPrivateKey(seed) being
+                the key whose public bytes are the Delegation's reader_xwing_public_key
 POST /oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
      subject_token=<by_client_jwt>  subject_token_type=urn:ur:params:oauth:token-type:client-jwt
      resource=<service URI>  scope=<within the service's>  DPoP: <proof by the ClientKey>
@@ -5465,7 +5492,10 @@ device    signs Genesis, the first config head, which holds the Signed Genesis a
           1, whose prev_chain is A_0 = SHA-256(Signed Genesis); sha256(Genesis), AuthKeyBundle's and Pending's
           genesis_sha256 and an invite's hash all mean that A_0; the first head's EvsPush is signed before
           base 1, so it carries auth {0, A_0}, since A_1 hashes that head's C_1 and a pin of A_1 would be
-          circular, and evs takes that pin only on a config repo's first push (§11.8)
+          circular, and evs takes that pin only on a config repo's first push (§11.8); the device draws the
+          config group's id and RK_1 before base 1, keeping them as KF1's draft, and seals that push under
+          them with the generation pin {group_id, 1, C_1}, signing GenRotate_1 at S(1) over that RK_1 once
+          base 1 stands, since C_g holds no pin (§10.7's KF1; owner decision 373)
 api       accepts base 1 only with that Genesis, sent as the request's genesis and required only at version
           1: it checks SHA-256(genesis) = prev_chain and that Genesis names such a sidecar, then PUTs
           projrows, entry 1 (If-None-Match, the race's commit point, so one genesis wins) and entry 0, and a
@@ -5475,7 +5505,8 @@ entry 0   proj/<network_id>/00000000000000000000/_ holds the Signed Genesis byte
           /network/config/projection?after=0 returns genesis beside the entries, to unadmitted clients too,
           and answers 503 while entry 1 exists without entry 0 (§2.8 api-7)
 exchange  issues repo:<config_repo_id>:admin from base 1 to that sidecar, then the only config writer, which
-          creates the repo (§11.12), pushes the head and forms the group (§10.6); a race's loser is admitted
+          creates the repo (§11.12), forms the group from its draft, the repo activating once generation 1's
+          deliveries stand (§10.7's KF1), and then pushes the head; a race's loser is admitted
           like any device; this is the first case of §8.5's rule that every config writer holds admin on the
           config repo at evs and gkm, so that once that sidecar is gone a config writer re-forms the group
           (§10.8), posts its ladder, and activates or re-places the repo after a restore (owner decision 352)
@@ -5805,13 +5836,16 @@ personal network (k = 1)  the proposal alone                          at activat
 before      after ur login (§5.6) the device holds an unadmitted client of M; it may only read the log
 admission   (GET /network/config/projection?after=), submit a recovery-signed statement (POST
             /network/config/delta) and fetch M's recovery wraps under recovery:<member_id> (aud gkm, only
-            GET /gkm/recovery/<member_id>/wraps, M from the token), which the code opens at once: the window
-            and veto bound the admission, not what a code holder reads: a rebind or a cascade void stops new
-            wraps, and the code keeps opening what was wrapped to it and reads the current generation until
-            the next rotation, which --compromise makes a remove rotation with a path epoch at once (§5.9,
-            §2.10); the statement carries the recovery Ed25519 public key, raw in Signed.key_id with
-            signer_id the member_id (§6.9's signers), whose hash api and readers match to
-            MemberRow.recovery_key_sha256, compiled from RecoveryBind
+            GET /gkm/recovery/<member_id>/wraps, M from the token), which it keeps, the newest per group,
+            and opens once admitted, when gen/<g> reaches it: the config group's first, then the anchor,
+            then the rest (§10.8; owner decision 367); the window and veto bound the admission, not what a
+            code holder reads: with the operator's ciphertext and gen/ objects the code opens every
+            generation wrapped to it, a rebind or a cascade void stops new wraps, and the code keeps opening
+            what was wrapped to it and reads the current generation until the next rotation, which
+            --compromise makes a remove rotation with a path epoch at once (§5.9, §2.10); the statement
+            carries the recovery Ed25519 public key, raw in Signed.key_id with signer_id the member_id
+            (§6.9's signers), whose hash api and readers match to MemberRow.recovery_key_sha256, compiled
+            from RecoveryBind
 pending     an authority statement with a recovery-key signature, in its proposal or a cosign, and any admission
             by a binding a void restored (cascade), a proposal by the table above, is pending and admits
             nothing: members refuse an Add, Welcome or wrap to its device, and it shows as recovery_window on
@@ -5900,7 +5934,8 @@ stale    (D-TEAM-29) the device that admits a member's page Worker (§18.8), the
          presence check where 7.9's presence row asks (owner decision 187), SidecarRevoke{reason: removed}
          for each of that member's page Workers whose leaf,
          in every group the admitting device is a leaf of that seated it, at least one, §10.9 removed as
-         stale, or that is due for that Remove (stale_leaf_days past its leaf's last change) and whose
+         stale, or that is due for that Remove (stale_leaf_days past its leaf's last change, its credential's
+         not_after less 90 days, §10.9) and whose
          Remove the admitting device, a writer leaf there, commits first (§10.9's Remove row), with no
          later Add or resync (KF2, KF5); it decides at each group's current epoch, which it fetches first,
          and again before each post or retry (§5.9), dropping unposted a revocation whose Worker holds a
@@ -5926,8 +5961,8 @@ cleanup  (D-TEAM-29) from 90% of the network's config_admissions, which an admin
          /sidecar/limits, where it also sees §21.7's rows (§20.4), until the count falls below it, every
          admin device raises admissions_near_cap (§5.4) and lists, per member, its admitted page Workers
          but its newest, oldest first, each with its admission time, rows' admitted_time_ms beside its
-         position (owner decision 307), and its leaf's last change where a group the device is a leaf of
-         shows one; an admin's revoke signs
+         position (owner decision 307), and its leaf's last change, read from its credential as §10.9 reads
+         it, where a group the device is a leaf of shows one; an admin's revoke signs
          SidecarRevoke{reason: removed} for those listed (signer row; an AdminSet member's at k > 1 as
          proposals; 7.9's presence row), so Workers no member device answers for are freed before api
          refuses an admission at the cap (§20.7); one still in use signs out and is enrolled again
@@ -6492,10 +6527,10 @@ RepoCreate{repo_id, kind, inbox}                                   a sidecar the
   second; the marker is server-visible in the log (§2.8            only under a rule giving it admin on evs:* or
   api-7); acl.proto takes it as field 4, before M2's freeze        that repo, within 8.6's ceiling; owner-bound
                                                                    kinds, a consented device of the owner;
-                                                                   directory, team_record and mailcfg, a config
-                                                                   writer (D-TEAM-28); config, none (§7.9's
-                                                                   bootstrap); no create action exists, so a
-                                                                   policy cannot stop a member creating repos
+  a tagged or ephemeral creator's repo stays keying until a        directory, team_record and mailcfg, a config
+  config writer that reads it and holds its admin forms its        writer (D-TEAM-28); config, none (§7.9's
+  group (§10.7's KF1; owner decision 365), which §8.5's            bootstrap); no create action exists, so a
+  implicit document always allows                                  policy cannot stop a member creating repos
 RepoAdmin{repo_id, sidecar_id, add | remove}                       a repo admin or a config writer; in an
   a remove keeps the admin's row, stamped with its position        owner-bound repo an add only by a consented
   (Repo rows, above)                                               device of its owner (8.5), any of which
@@ -6604,7 +6639,7 @@ void      a set whose seal does not open, whose rules break the format, or whose
 
 **Clients.** Every admitted sidecar follows the config repo and §7's `team` hints, verifies config heads and the authorization log (§7.9) and evaluates its own rules in `AclEngine`, with no always-on compiler ([owner decision 6](#od-6)). The engine swaps compiled state through an `atomic.Pointer`, checks without locks or allocation, and compares its auth pin (n, A_n) in HeadCheck (§6.4), which any admitted reader, agents included, may witness ([owner decision 129](#od-129)): it refuses a lower pin, and reconciles, alarms, relays (`proven`) and stops sealing in shared groups as §6.4's auth rules say. An app's forwarding role follows them itself in its VPN component, by its forwarding Delegation's reader key, through the same engine (§18.6; [owner decision 197](#od-197)), and between its compiles `sidecar/device`'s posture checks bases' signatures and chain only.
 
-**Gates.** api's verifier (§7.9) keeps each network's newest base and the entries after it, which api, evs and gkm read from §7.9's verified Redis cache `{acl_<networkId>}e` when it reaches `{acl_}v` and every pin they hold, else from `proj/` on the first metadata cluster ([owner decision 136](#od-136)); only api writes that cache, which decides nothing, and other gate services fetch from api, as only those three and taskworker reach the metadata tier (§2.8 evs-10). Each process caches them per (network, n), loading asynchronously outside packet locks on api's `INCR {acl_<networkId>}v` (class `$`, xops/redis-set-notify-keyspace-events.sh:23) after every entry it appends and on a 5-min poll; a network without a config repo costs one map miss (R-ACL-8). Gates check every entry's chain from their own pin wherever they read it, and refuse a lower n, or a second A_n at one n, with an alarm.
+**Gates.** api's verifier (§7.9) keeps each network's newest base and the entries after it, which api, evs and gkm read from §7.9's verified Redis cache `{acl_<networkId>}e` when it reaches `{acl_}v` and every pin they hold, else from `proj/` on the first metadata cluster ([owner decision 136](#od-136)); only api writes that cache, which decides nothing, and other gate services fetch from api, as only those three and taskworker reach the metadata tier (§2.8 evs-10). Each process caches them per (network, n), loading asynchronously outside packet locks on api's `INCR {acl_<networkId>}v` (class `$`, xops/redis-set-notify-keyspace-events.sh:23) after every entry it appends and on a 5-min poll; a network without a config repo costs one map miss (R-ACL-8). Gates check every entry's chain from their own pin wherever they read it, and refuse a lower n, or a second A_n at one n, with an alarm. Taskworker's gkm reconciler tells its cache at its runtime's start of every network with a config log and a gkm-gated service enabled (sidecar.yml's `gkm:` networks), listed from Postgres a page at a time under the cache's load concurrency and page rate, both settings, and again of a network the bounded cache evicted when it next reads it, so a quiet network's hints, key deletions and sweeps run after a restart; gkm and the reconciler read their state through this cache (§10.6; [owner decision 371](#od-371)).
 
 **The internal gate surface ([owner decision 340](#od-340)).** Services with no database read rules, facts and quotas from one read surface on api under `/internal/gate/`, a prefix the lb refuses from outside. Each caller class holds its own bearer in `secret_files`, one vault file per gate caller class, connect's first, which api verifies by its SHA-256 in constant time (§19.4, §19.16). `GET /internal/gate/projection/<network_id>?after=<n>` answers the body of the Client route `GET /network/config/projection` (§7.9): `{genesis, entries, rows, tip: {n, chain}, more}`, each message verbatim in base64, paged, from the retention point when `after` is before it; `GET /internal/gate/rows/<network_id>/<rows_sha256>` answers the ProjectionRows bytes verbatim (`application/octet-stream`), which the caller holds to their hash; `GET /internal/gate/listen-facts/<network_id>` answers `network_verified`, whether a `mail_network` row exists, and each `network_tls_cert` row's name and expiry; and `GET /internal/gate/over-limit` answers §20.7's list, spent and storage-over networks apart. One encoding serves devices and gates, and gates verify entries' chain and signatures as they do from `proj/`, so api stays a carrier. A gate refreshes a network's projection on `{acl_<networkId>}v` and the 5-min poll, its facts at most every 60 s off the inline path, and the over-limit list every 5 s. A process that has never loaded them stays not ready, and a `tls/` entry with no cached facts answers `unavailable`. Other gates' reads and §20.14's quota routes join the prefix under the same rules.
 
@@ -7257,16 +7292,18 @@ This section owns X12: the in-house MLS subset, ciphersuite, credentials and gro
 | KeyPackages, last resort; credential 0xF552 (§10, §16.8, §17.5) | yes |
 | PSK, ReInit, branching, application messages, external senders, standalone and Update proposals | refused |
 
-**Conformance.** No vectors exist for 0x0010, so every mlswg vector file covering a v0 feature runs under 0x0001, from the 16 files committed in testdata/mls/mlswg/, whose repository carries no license (§4.4; [owner decision 263](#od-263)); 0x0010 adds X-Wing known-answer tests (KATs) and [owner decision 43](#od-43)'s differential runs: mls-go under 0x0001, tmc/mls under 0x004F mapped to 0x0010, and OpenMLS's 0x004D once an M0 KAT matches its X-Wing to Go's. **The 0x0010 gate (D-KEYS-10)** adds what those cannot show:
+**Conformance.** No vectors exist for 0x0010, so every mlswg vector file covering a v0 feature runs under 0x0001, from the 16 files committed in testdata/mls/mlswg/, whose repository carries no license (§4.4; [owner decision 263](#od-263)); 0x0010 adds X-Wing known-answer tests (KATs) and [owner decision 43](#od-43)'s differential runs: mls-go under 0x0001, tmc/mls patched to 0x0010, and OpenMLS's 0x004D once an M0 KAT matches its X-Wing to Go's. The patch is literal: mlsinterop/ builds tmc/mls at v0.0.0-20260930074835-1c42a372504a with one build overlay changing its provisional 0x004F, wire.go:39's constant, to 0x0010, which no other tmc/mls suite uses, so both stacks sign and hash one number; the artifact records the patch, and that tmc/mls cites the suite's draft -06 where this section cites -07. **The 0x0010 gate (D-KEYS-10)** adds what those cannot show:
 
 ```text
 specified  the MLS wire (credential 0xF552, GkmCommitHeader, GenRotate, ur_group), the delivery wire
            (ReaderKey, KeyDelivery under its ReaderWrap and DelegationWrap types, 10.6's wrap and recovery
            paths) and suite 0x0010, at M2's entry review; no field is removed after it
 frozen     at M2's exit review (D-PHASE-7), on §22.10's 0x0010 interop artifact:
-  kem      X-Wing KATs: tmc/mls's encapsulation and decapsulation equal Go's crypto/hpke MLKEM768X25519() on
-           fixed seeds
-  stacks   one scripted lifecycle in both directions between mls_* and tmc/mls (0x004F mapped to 0x0010): at
+  kem      X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519(), DeriveKeyPair
+           included, the only independent X-Wing evidence; tmc/mls's encapsulation and decapsulation equal
+           Go's on fixed seeds, a check of wiring, not of X-Wing, since tmc/mls runs that same code
+           (owner decision 359)
+  stacks   one scripted lifecycle in both directions between mls_* and tmc/mls (patched to 0x0010, above): at
            least 10 epochs with a Welcome, path commits, a Remove, an external commit with ExternalInit and a
            PrivateMessage decrypted per epoch, both sides computing equal epoch_authenticator and "UR evs 1.0
            kek" exporter outputs
@@ -7304,7 +7341,11 @@ message UrMlsCredential {                         // sidecar/protocol/gkm.proto
   bytes sidecar_id = 1;                           // durable leaf identity (§5)
   bytes identity_public_key = 2; string identity_alg = 3;  // §5; ed25519 in v0
   bytes mls_signature_public_key = 4;             // rotated by self-update
-  uint32 cipher_suite = 5; int64 not_after = 6;   // 0x0010 (owner decision 44)
+  uint32 cipher_suite = 5; int64 not_after = 6;   // 0x0010 (owner decision 44); not_after: ms since the
+                                                  // epoch, the signing time plus 90 days, KeyPackages'
+                                                  // life; every UpdatePath leaf and external join
+                                                  // re-signs it, so the tree carries each leaf's last
+                                                  // change (10.9's Remove row)
   bytes admission_sha256 = 7;                     // its §7.9 SidecarAdmit's statement id (§7.9's ids), from
                                                   // Signed.body or AuthorityProposal.statement; for the
                                                   // first device SHA-256(Signed Genesis)
@@ -7319,6 +7360,7 @@ message UrMlsCredential {                         // sidecar/protocol/gkm.proto
 
 - **Admission (owner decisions [3](#od-3), [5](#od-5), [110](#od-110), [112](#od-112), [127](#od-127)).** Members accept a credential only if an unrevoked, unparked `SidecarAdmit`, verified through the authorization log back to the genesis and signed as §7.9 allows (one admin, the member's own device unless `self_admit` is off, or k of n for AdminSet members), names its sidecar_id and identity key. Only a network's first device is trusted on first use, against its safety number (§2.8 EX5). Clients pin that key, refuse a second and share pins through §6's `Hello` (D-PROTO-13). After a `SidecarRevoke`, GKM deletes the sidecar's KeyPackages.
 - **Self-updates and forks.** A leaf that commits no path for 7 days (30 in groups above 50 leaves) commits a path-only commit (D-KEYS-14). Clients pin each push's sealed (group_id, epoch, epoch_authenticator) (§11.6) and each generation's C_g, refuse a lower or conflicting pin with an alarm and compare pins by §6's `HeadCheck`, whose generation heads serve holders that are not leaves (I-16, D-PROTO-14, D-TRUST-10; [owner decision 129](#od-129)).
+- **Last resort ([owner decision 361](#od-361)).** A last-resort KeyPackage carries draft-ietf-mls-extensions' `last_resort` extension, type 0x000A with empty extension_data, in its own extensions only, and every leaf lists 0x000A and 0xF553 in its capabilities; a device that joined through it commits a path-only self-update at its first opportunity and replaces it at its next upkeep pass. D-KEYS-12's suite migration moves the number if the draft's does.
 
 ### 10.5 The key hierarchy: what "one session key stored in GKM" means
 
@@ -7326,35 +7368,49 @@ The MLS exporter changes every epoch, is not forward-secure (draft-ietf-mls-exte
 
 ```text
 MLS epoch e --MLS-Exporter("UR evs 1.0 kek", repo_id, 32)--> KEK_e (key-encryption key)
-RK_g: repo key generation g, 32 random bytes = PLAN's "session key"; cause_g ∈ {remove, request, schedule}
+RK_g: repo key generation g, 32 random bytes = PLAN's "session key"; cause_g ∈ {remove, request, schedule};
+      gen/1 carries cause REQUEST, and a reader refuses REMOVE there (owner decision 360)
+C_g = SHA-256("UR evs 1.0 commit" || repo_id || u64be(g) || RK_g)                 the generation's commitment
 GKM stores only:
   GenRotate_g = the Signed record in gen/<g> (below): C_g, parent C_{g-1}, cause, auth pin, time, holders
                 hash, the wrap count, GenLink_g, an optional LeafWrap, the drop key and its expiry
-  GenLink_g   = XChaCha20-Poly1305(K_link_g, RK_{g-1}; aad repo_id||g||cause_g)         the ladder
-  GenWrap_e   = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||e||g)    in epoch object e, g its newest
-  LeafWrap    = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||e||g)    in GenRotate_g, for every leaf of e
-  GroupInfo_e = XChaCha20-Poly1305(K_groupinfo, GroupInfo incl. ratchet_tree; aad group_id||e)
-                inside each epoch object at <= 16 leaves; on demand above (10.6)
-  RecoveryWrap_{m,g}   = HPKE-XWing(recovery_pub_m, RK_g)                                    (10.8)
+  GenLink_g   = XChaCha20-Poly1305(K_link_g, RK_{g-1}; aad repo_id||u64be(g)||u8(cause_g), 25 B)   the ladder
+  GenWrap_e   = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||u64be(e)||u64be(g), 32 B)    in epoch object e,
+                g its newest
+  LeafWrap    = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||u64be(e)||u64be(g), 32 B)    in GenRotate_g,
+                for every leaf of e
+  GroupInfo_e = XChaCha20-Poly1305(K_groupinfo, GroupInfo incl. ratchet_tree; aad group_id||u64be(e), 24 B)
+                inside each epoch object at <= 16 leaves; on demand above (10.6); these widths are as built,
+                and testdata/gkm/ladder.json pins the bytes (owner decision 360)
+  RecoveryWrap_{m,g}   = HPKE-XWing(recovery_pub_m, RK_g), unsigned, bare enc || ct, 1,168 B (a 1,120 B enc,
+                         the 32 B RK_g, a 16 B tag), info "UR evs 1.0 recovery", aad member_id || group_id ||
+                         u64be(g) || C_g || SHA-256(the binding's Ed25519 key)[0:8], the bytes b8 spells (10.8)
   ReaderWrap_{g,s,k}   = §6 Signed, purpose reader-wrap, a KeyDelivery (below): {group_id, g, C_g, s, k,
                          staged or late, a late one's auth pin and time, HPKE-XWing(ReaderKey_{s,k}, RK_g)}
   DelegationWrap_{g,d} = the same to the reader key of d, which d fixes, d = delegation_id = the Signed
                          Delegation's statement id, the SHA-256 of its signed bytes (§7.9's ids); k = SHA-256
                          of the X-Wing public key sealed to, its incarnation
+HPKE-XWing = HPKE base mode with KEM 0x647a (X-Wing), KDF HKDF-SHA256 (0x0001) and AEAD AES-128-GCM (0x0001),
+             by crypto/hpke's NewSender and Sender.Seal, since hpke.Seal takes no AAD, for ReaderWraps,
+             DelegationWraps, RecoveryWraps and deposit slots, a slot's info "UR evs 1.0 deposit" and its aad
+             repo_id || u64be(g) || slot_id (§11.12)
 RK_g --HKDF-SHA256(salt repo_id, info "UR evs 1.0 "||purpose||u64be(g) [||group_id||u64be(e)])-->
      link|fek|manifest|path|ref|drop|groupinfo|index|statement (the last: §7.9's sealed bodies)
-ReaderKey_{s,k} = §6 Signed, purpose reader-key, {sidecar_id, xwing_public_key, not_after}, not_after at most
-              7 days after signing; every reader holds one, a fresh X-Wing pair once it is 6 days old, k its
-              incarnation (readerkey, below)
-ur_group    = GroupContext extension {network_id, repo_id, kind, owner_member_id}, fixed at creation; kind is
-              one of §11.12's kinds, directory among them from M2's reservation (owner decision 171)
+ReaderKey_{s,k} = §6 Signed, purpose reader-key, ReaderKey{sidecar_id = 1, xwing_public_key = 2, int64
+              not_after = 3}, not_after in ms since the epoch, at most 7 days after signing; every reader
+              holds one, a fresh X-Wing pair once it is 6 days old, k its incarnation (readerkey, below)
+ur_group    = GroupContext extension 0xF553 (RFC 9420 §17.3's private use), listed in required_capabilities and
+              fixed at creation, in TLS presentation (RFC 9420 §2.1.2): struct { opaque network_id<V>; opaque
+              repo_id<V>; uint8 kind; opaque owner_member_id<V>; }; kind is acl.proto's RepoKind, one of
+              §11.12's kinds, general 1 to secret 9, directory among them from M2's reservation (owner
+              decision 171); owner_member_id is empty for a repo that is not owner-bound
 ```
 
 - **PLAN.md:53, precisely.** One current key, RK_g, encrypts every new object, and GKM stores it only wrapped (I-1). It rotates when a key holder drops or its authorization expires (`remove`), on `ur keys rotate` (`request`) and after 30 days (`schedule`); Adds and self-updates keep it, so in-flight writes stay valid.
-- **Ladder.** RK_g opens every earlier generation, so a joiner gets the whole history; to withhold history, use a new repo (§11). A removed reader gets no later KEK, RK or wrap, but keeps every generation it held and opens files untouched since its removal until they are rewritten or `ur evs rekey` re-checkpoints them. MLS updates heal the tree and its KEKs, but a copied keychain derives every KEK until the device's own next path commit (10.4) and opens every delivery to a ReaderKey it holds, to which a rotator or deliverer seals only before that key's not_after, at most 7 days after its signing, whatever advertisement gkm serves (readerkey, below); so content heals only at the first generation sealed after both. A passive copy (the keychain's bytes, used only to open what the operator serves, a stale advertisement included) therefore reads, while the device runs, what is sealed up to about 37 days after the copy, 60 above 50 leaves (the path commit within 7 days, 30 above 50 leaves, the newest copied ReaderKey's not_after within 7, then up to 30 days to the next generation), and every earlier generation through the ladder; while the device does not run, its copied leaf derives each later epoch's KEK until it commits again or a stale Remove (10.9) removes it, and a copy of a wrapped reader's keychain heals at that not_after whether or not the device runs. An active clone, one that uses the copy's identity key or ClientKey, signs fresh ReaderKeys and KeyPackages and commits as the device, so no path commit or key replacement ends it: only a `SidecarRevoke{reason: compromise}` from a since_n at or before the copy, whose cascade parks what the clone admitted (§7.9), and the device's enrollment anew, since `--replace` keeps its identity key (§5.5), as for a compromised backup (10.8). A Delegation's reader key in it reads as the Residual below says. X-Wing protects ciphertext against harvest-now-decrypt-later by a passive adversary ([owner decision 44](#od-44)); signatures are Ed25519, so an adversary that can forge them (a future quantum computer, say) and that the operator serves could forge admissions and, through the ladder, read all retained history. External resync needs RK_g, under which the GroupInfo is sealed, never a published identity key alone.
+- **Ladder.** RK_g opens every earlier generation, so a joiner gets the whole history; to withhold history, use a new repo (§11). A removed reader gets no later KEK, RK or wrap, but keeps every generation it held and opens files untouched since its removal until they are rewritten or `ur evs rekey` re-checkpoints them. MLS updates heal the tree and its KEKs, but a copied keychain derives every KEK until the device's own next path commit (10.4) and opens every delivery to a ReaderKey it holds, to which a rotator or deliverer seals only before that key's not_after, at most 7 days after its signing, whatever advertisement gkm serves (readerkey, below); so content heals only at the first generation sealed after both. A passive copy (the keychain's bytes, used only to open what the operator serves, a stale advertisement included) therefore reads, while the device runs, what is sealed up to about 37 days after the copy, 60 above 50 leaves (the path commit within 7 days, 30 above 50 leaves, the newest copied ReaderKey's not_after within 7, then up to 30 days to the next generation), and every earlier generation through the ladder; while the device does not run, its copied leaf derives each later epoch's KEK until it commits again or a stale Remove (10.9) removes it, and a copy of a wrapped reader's keychain heals at that not_after whether or not the device runs. An active clone, one that uses the copy's identity key or ClientKey, signs fresh ReaderKeys and KeyPackages and commits as the device, so no path commit or key replacement ends it: only a `SidecarRevoke{reason: compromise}` from a since_n at or before the copy, whose cascade parks what the clone admitted (§7.9), and the device's enrollment anew, since `--replace` keeps its identity key (§5.5), as for a compromised backup (10.8). A Delegation's reader key in it reads as the Residual below says. X-Wing protects ciphertext against harvest-now-decrypt-later by a passive adversary ([owner decision 44](#od-44)); signatures are Ed25519, so an adversary that can forge them (a future quantum computer, say) and that the operator serves could forge admissions, or a holder's ReaderKey, to which an honest rotator or hinted holder then seals RK_g with no person acting, and, through the ladder, read all retained history; a device's daily check of the ReaderKey gkm serves under its id (readerkey, below) shows such a key only after deliveries to it, and only where the operator does not hide it from the device ([owner decision 358](#od-358)). An external commit needs RK_g, under which the GroupInfo is sealed, so a published identity key alone commits nothing; RK_g itself rests on those signatures.
 - **Authentication.** The key schedule and every GroupInfo signature bind `ur_group`; clients accept RK_g only if it matches `gen/<g>`'s signed C_g; the newer, verified generation authenticates each GenLink, whose AAD covers the cause §11's rewrap rule reads; a missing key is refused, never defaulted (ePrint 2024/546).
 
-**Generations (D-KEYS-15).** C_g = SHA-256("UR evs 1.0 commit" ‖ repo_id ‖ u64be(g) ‖ RK_g), and every evs head carries the generation pin {group_id, g, C_g} (§11.8). `gkm/<group_id>/gen/<g>`, created If-None-Match, is the only place a generation exists: MLS commits change the tree and give joiners the newest generation's key in GenWrap_e, and the rotation a Remove requires is a separate gen/ claim, by any writer.
+**Generations (D-KEYS-15).** Every evs head carries the generation pin {group_id, g, C_g}, C_g as the block above defines it (§11.8). `gkm/<group_id>/gen/<g>`, created If-None-Match, is the only place a generation is created, which a gen pack later holds verbatim (10.16): MLS commits change the tree and give joiners the newest generation's key in GenWrap_e, and the rotation a Remove requires is a separate gen/ claim, by any writer.
 
 ```proto
 message GenRotate {              // sidecar/protocol/gkm.proto; §6 Signed, purpose gen-rotate, by the rotator's identity key
@@ -7372,9 +7428,11 @@ message GenRotate {              // sidecar/protocol/gkm.proto; §6 Signed, purp
   bytes   genlink = 11;          // GenLink_g
   LeafWrap leaf_wrap = 12;       // optional: one wrap for every leaf of that epoch, 72 B
   bytes   drop_public_key = 13;  // only for kinds that take deposits (D-KEYS-17)
-  int64   drop_not_after_ms = 14;
+  int64   drop_not_after_ms = 14;  // time_ms + GkmSettings.DropKeyLifetime, 90 days (owner decision 357);
+                                 //   members refuse one past time_ms + DropKeyLifetime + 10 min (10.9)
 }
-message LeafWrap { uint64 epoch = 1; bytes ciphertext = 2; }  // RK_g under KEK_epoch, aad group_id||epoch||g
+message LeafWrap { uint64 epoch = 1; bytes ciphertext = 2; }  // RK_g under KEK_epoch,
+                                                              //   aad group_id||u64be(epoch)||u64be(g)
 message KeyDelivery {              // the body of a ReaderWrap or DelegationWrap, gkm's wrap/ object (10.6)
   bytes   group_id = 1;
   uint64  generation = 2;          // g
@@ -7403,7 +7461,9 @@ Rotate: one algorithm for every cause and every rotator
 2  g = the newest generation (GET gen/<g+1> answers 404); RK' = 32 random bytes; persist RK' and the
    GenRotate draft in my keychain
 3  stage deliveries for g+1, each a STAGED KeyDelivery at wrap/<g+1>/<c8>/<recipient>/<k8> (10.6), c8 =
-   hex(C_{g+1}[0:8]), up to 16 PUTs at once:
+   hex(C_{g+1}[0:8]), in batches of at most 256, up to 4 at once, RecoveryWraps by their own batch route
+   (10.14), reading the recipients' ReaderKeys, and a config rotator its forwarding Delegations' reader keys,
+   in batches of up to 256 (owner decision 364):
      leaves        if I am a leaf at the current epoch e and e's tree holds no leaf outside H, one leaf_wrap
                    under KEK_e inside GenRotate; else a ReaderWrap to each leaf's ReaderKey
      wrapped       in the config and directory groups, member devices in H that e's tree lacks, wrapped or not
@@ -7453,8 +7513,11 @@ live(d)        = d has not ended (§7.9's delegation row) at S, t < d.not_after,
                  since it can close itself, and api can reap it, at any time before (§7.7), and §7.9's
                  scoped rule refuses a non-ephemeral one whose not_after precedes d's
 identity bytes = kind byte (1 leaf, 2 agent, 3 delegation, 4 recovery, 5 forwarding) || sidecar_id | delegation_id
-                 | member_id | a forwarding Delegation's sidecar_id, so a newer forwarding Delegation of one
-                 sidecar keeps its holder's identity, as a ReaderKey replacement does
+                 | member_id | a forwarding Delegation's sidecar_id, 17 B for every kind but 3's 33 B, so a
+                 newer forwarding Delegation of one sidecar keeps its holder's identity, as a ReaderKey
+                 replacement does; holders_sha256 = SHA-256 of the identities sorted ascending by
+                 bytes.Compare and joined with no separator or count, the kind byte fixing each length and
+                 each identity appearing once, KeyHolders being a set
 readerkey  every reader, leaves included, keeps a current ReaderKey at gkm/rk/<sidecar_id>, replacing it with a
            fresh X-Wing pair once it is 6 days old, its not_after at most 7 days after signing, never re-signing
            an old pair, and keeping a replaced or lapsed private key until 30 days past its not_after, for the
@@ -7462,7 +7525,10 @@ readerkey  every reader, leaves included, keeps a current ReaderKey at gkm/rk/<s
            the ReaderKey gkm serves at its time_ms, only if s's admitted identity key signed it and time_ms <
            not_after <= time_ms + 7 days + 10 min; a lapse stops deliveries, not authorization, so it is no
            expiry (§7.9), KeyHolders stays a function of the log and time, and s gets a late delivery to its
-           new key, which one to an older key never blocks (10.6, 10.9)
+           new key, which one to an older key never blocks (10.6, 10.9); once a day, at this upkeep, each
+           device GETs reader-key/<its own id> and compares the key's digest with those it signed: a key it
+           never signed raises §5.4's key_changed with the foreign digest, whose remedy is an active
+           clone's, SidecarRevoke{reason: compromise} and a new enrollment (owner decision 358)
 covered    a covered agent reads R through its Delegation's wrap and holds no ReaderWrap there; it holds a key
            in its own right only where a grant names it
 dwraps     the device that signs a Delegation, an admin's or for a forwarding one its sidecar's (§18.6), writes
@@ -7523,7 +7589,7 @@ DelegationRevoke of a forwarding          the forwarding holder of its        sh
 | `manifest` | Names, entry fields, push metadata and ref names (§11) |
 | `path` | Token keys per path epoch (§11.6, [owner decision 2](#od-2)) |
 | `ref` | Ref ids and the search index's document keys, from RK_1 for the repo's life, since ref ids name every `head/`, `log/` and `idx/` key (§11.6) and a document's key must not change at a rotation (§11.14) |
-| `drop` | An X-Wing key pair for deposits that depositors cannot read back, published in its generation's GenRotate under the depositor rule below |
+| `drop` | An X-Wing key pair for deposits that depositors cannot read back, `hpke.MLKEM768X25519().DeriveKeyPair(K_drop)`, K_drop being this 32-byte derivation, published in its generation's GenRotate under the depositor rule below |
 | `groupinfo` | Seals GroupInfo and its tree per (group_id, epoch) |
 | `index` | Draws the keyed pad that hides which trigrams a search-index shard's documents share (§11.14); per generation, which the shard's header names, so a removed reader cannot predict a later shard's size |
 
@@ -7531,43 +7597,54 @@ DelegationRevoke of a forwarding          the forwarding holder of its        sh
 depositor (D-KEYS-17)  before sealing to generation g's drop key, a depositor, which reads the config,
            requires: GenRotate_g verifies; g is the newest generation gkm serves (10.14's drop-key route); g
            covers R's holders_shrunk_at and every holder expiry up to now in its own state (§7.9); now <
-           drop_not_after_ms; g is not below its pin for R, which it then raises; else it waits for a newer
-           rotation, which the gate makes writers write
+           drop_not_after_ms, and g's time_ms < drop_not_after_ms <= time_ms + DropKeyLifetime + 10 min, as
+           readerkey's check is, so no signer voids the backstop with a far-future value (owner decision 357);
+           g is not below its pin for R, which it then raises; else it waits for a newer rotation, which the
+           gate, or for a drop key with under 7 days left 10.6's renewal, makes writers write
 ```
 
-Clients cache every RK_g in the §5 keychain and, beside it from v0's first generation, each verified GenRotate's Signed bytes, since a signature cannot be rebuilt later and a re-formed group's ladder carries them (10.8); they keep MLS state, trees included, on disk under §5's AEAD, load one group's tree at a time (§18.4's budgets) and delete other epoch secrets (RFC 9420 §9.2). Every derivation and unwrap calls §22's `testHookSecret`.
+Clients cache every RK_g in the §5 keychain and, beside it from v0's first generation, each verified GenRotate's Signed bytes, since a signature cannot be rebuilt later and a re-formed group's ladder carries them (10.8); they keep MLS state, trees included, on disk under §5's AEAD, load one group's tree at a time (§18.4's budgets) and delete other epoch secrets (RFC 9420 §9.2). The engine keeps a large tree on disk and streams it rather than holding it whole: a path sealed and written a node at a time, the tree hashed and encoded from its on-disk sections, one decode for a resync, and a copy-on-write of the path in place of a whole-tree clone before a commit, so that a 1,000-leaf group's join, path commit and resync fit a phone's budget; the review phase brings the engine there, measured on §22.8's ios32 cell first, its harness reporting the peaks and failing nothing until then ([owner decision 366](#od-366)). Every derivation and unwrap calls §22's `testHookSecret`.
 
 ### 10.6 GKM: the Delivery Service and wrapped-key store
 
-GKM is a strongly consistent Delivery Service (DS; RFC 9750 §5.2.1) with no state of its own: its records are metadata-cluster objects ordered by conditional writes (owner decisions [2](#od-2), [21](#od-21), [145](#od-145)). It verifies 15-minute capability tokens offline (aud `gkm`; scopes `repo:<id>:r|rw|admin`, `deposit` on the drop-key route only, and an unadmitted client's `recovery:<member_id>` for that member's own recovery wraps), honors an `r`, `rw` or `admin` scope only while its subject reads or writes the repo, as the scope says, in gkm's newest verified state, and `deposit` only while its subject may deposit there, the drop-key route taking that check though the key it serves is public (§8.12; §7.9's tokens row), and honors §7.8's `rev/` objects. Each route takes the scope the scopes block below gives.
+GKM is a strongly consistent Delivery Service (DS; RFC 9750 §5.2.1) with no state of its own: its records are metadata-cluster objects ordered by conditional writes (owner decisions [2](#od-2), [21](#od-21), [145](#od-145)). It verifies 15-minute capability tokens offline (aud `gkm`; scopes `repo:<id>:r|rw|admin`, `deposit` on the drop-key route only, and an unadmitted client's `recovery:<member_id>` for that member's own recovery wraps), honors an `r`, `rw` or `admin` scope only while its subject reads or writes the repo, as the scope says, in gkm's newest verified state, and `deposit` only while its subject may deposit there, the drop-key route taking that check though the key it serves is public (§8.12; §7.9's tokens row), and honors §7.8's `rev/` objects. gkm reads that state, and taskworker's reconciler each network's, through ACL's one gate cache (§8.9), whose scope check for the gkm audience both share, adding only what gkm alone answers: readers, writers, pins, Delegations, late holders and dropped holders; the cache lists the networks it holds, maps a sidecar to the network that admits it and calls back when a network's new state is installed, and until both views stand the gkm block and the reconciler fail closed ([owner decision 371](#od-371)). Each route takes the scope the scopes block below gives.
 
 ```text
-object (epochs zero-padded)                   written                       holds
+object (keys: below)                          written                       holds
 on the repo's cluster
+gkm/<group_id>/owner                          If-None-Match, by gkm from    GkmGroupOwner {repo_id, network_id}, the
+                                                the token, before the form  group's one repo, through which alone gkm
+                                                at a creation or re-form    resolves it (owner decision 201)
 gkm/repo/<repo_id>/<seq>                      If-None-Match                 GroupForm, Signed by a repo admin's device
                                                                             (for owner-bound kinds, only the owner's
                                                                             consented device) or by a network admin's
-                                                                            outside owner-bound kinds
-gkm/<group_id>/epoch/<n>                      If-None-Match, once n-1       0: creation; else the commit, header,
-                                                exists                      uploader, time, GenWrap_n of the newest
-                                                                            generation; at most 16 leaves, the sealed
-                                                                            GroupInfo
+                                                                            outside owner-bound kinds; its auth pin is
+                                                                            the signer's state when it signs, at which
+                                                                            members judge the signer (owner decision
+                                                                            368)
+gkm/<group_id>/epoch/<n>                      If-None-Match, once n-1       a GkmEpochObject: 0, creation or re-form;
+                                                exists                      else the commit, header, uploader, time,
+                                                                            GenWrap_n of the newest generation; at
+                                                                            most 16 leaves, the sealed GroupInfo and
+                                                                            the generation that seals it
 gkm/<group_id>/gen/<g>                        If-None-Match, by the         the Signed GenRotate, for the repo's life,
                                                 rotating writer (10.5)      or until a gen pack holds it (10.16)
-gkm/<group_id>/group-info                     If-Match, rising              at most 16 leaves, a pointer {epoch},
-                                                                            rewritten at each Add and by gkm with any
-                                                                            epoch object carrying a GroupInfo 16 or
-                                                                            more past it, so a crash between the two
-                                                                            PUTs heals at the next commit; above, the
-                                                                            sealed GroupInfo a leaf writes on demand,
-                                                                            at most once per epoch and only for a join
-                                                                            or resync, never with another commit,
-                                                                            since a 1,000-leaf GroupInfo is ~0.7 MB on
-                                                                            each drive; a resyncing device reads the
-                                                                            pointer and probes epoch/<n+1>.. until a
-                                                                            404, uncapped, ~16 GETs without a crash
-gkm/<group_id>/welcome/<n>                    after epoch n, by its         the Welcome; recipients' KeyPackageRefs in
-                                                uploader                    the clear
+gkm/<group_id>/group-info                     If-Match, rising              a GkmGroupInfoObject: at most 16 leaves, a
+                                                                            pointer {epoch}, rewritten at each Add and
+                                                                            by gkm with any epoch object carrying a
+                                                                            GroupInfo 16 or more past it, so a crash
+                                                                            between the two PUTs heals at the next
+                                                                            commit; above, the sealed GroupInfo and
+                                                                            the generation it names, which a leaf
+                                                                            writes on demand, at most once per epoch
+                                                                            and only for a join or resync, never with
+                                                                            another commit, since a 1,000-leaf
+                                                                            GroupInfo is ~0.7 MB on each drive; a
+                                                                            resyncing device reads the pointer and
+                                                                            probes epoch/<n+1>.. until a 404,
+                                                                            uncapped, ~16 GETs without a crash
+gkm/<group_id>/welcome/<n>                    after epoch n, by its         the Welcome, its MLSMessage bytes;
+                                                uploader                    recipients' KeyPackageRefs in the clear
 gkm/<group_id>/wrap/<g>/<c8>/<recipient>/<k8> If-None-Match; staged before  ReaderWrap (s:<sidecar_id>) or
                                                 a claim, or late by any     DelegationWrap (d:<delegation_id>),
                                                 holder but a read_only one  sealed to the key k8 names,
@@ -7576,15 +7653,29 @@ gkm/recovery/<member_id>/<group_id>/<g>/<c8>/<b8>
                                               If-None-Match, staged like    RecoveryWrap (bindings: §7.9's
                                                 wraps or by a rebind        RecoveryBind) of the binding b8 names:
                                                 (10.8)                      hex(SHA-256(its Ed25519 key)[0:8])
-on the first cluster, per sidecar
-gkm/welcome/<sidecar_id>/<ref>                with the Welcome              pointer {group_id, n}
+on the first cluster, per sidecar or network
+gkm/welcome/<sidecar_id>/<group_id>/<n>       with the Welcome              a GkmWelcomePointer {group_id, n,
+                                                                            key_package_ref}, one per Welcome, so a
+                                                                            last-resort KeyPackage's Welcomes never
+                                                                            share a key; a device holding several for
+                                                                            one group takes the highest n above the
+                                                                            newest epoch it reached (owner decision
+                                                                            363)
 gkm/kp/<sidecar_id>/<ref>                     by the sidecar                a one-time or last-resort KeyPackage
-gkm/kp/<sidecar_id>/<ref>.claim               If-None-Match, then <ref>     {group_id, claimer}
+gkm/kp/<sidecar_id>/<ref>.claim               If-None-Match, then <ref>     a GkmKeyPackageClaim {group_id, claimer}
                                                 deleted
-gkm/rk/<sidecar_id>                           by the sidecar                ReaderKey
+gkm/rk/<sidecar_id>                           by the sidecar                its Signed ReaderKey
+gkm/dkey/<network_id>/<delegation_id>         If-None-Match, by the         a forwarding Delegation's 1,216 B X-Wing
+                                                sidecar its row names, the  reader key (owner decision 202), deleted
+                                                network the token's         24 h after the Delegation ends or is
+                                                                            superseded (owner decision 370)
 in Redis (soft state, owner decision 136)
 {gka_<group_id>}                              gkm for the leaf, at most     each leaf's newest applied epoch and when;
                                                 daily                       since, the family's creation time; 31 d
+keys: <n>, <g> and <seq> are 20 decimal digits, zero-padded, as proj/'s are (§7.9), <seq> from 1; sidecar_id,
+  member_id, repo_id, group_id and network_id 32 lowercase hex characters with no dashes, not Id.String()'s form;
+  delegation_id and <ref> 64; c8, k8 and b8 16; s: and d: literal ASCII prefixes; testdata/gkm/wrap_paths.json
+  pins them
 c8 = hex(C_g[0:8]); staged objects whose c8 is not gen/<g>'s are deleted after 24 h; a recipient's delivery of
   g to an older key goes 30 days after one of g to a newer key of that recipient exists
 
@@ -7598,6 +7689,24 @@ placement (owner decision 145): a group's objects live on the cluster its repo's
 ```
 
 ```text
+bodies (protocol/gkm.proto, fields bytes unless typed; a Signed, a KeyPackage, a Welcome and a RecoveryWrap's
+  ciphertext are stored bare)
+GroupForm           repo_id = 1, group_id = 2, previous_group_id = 3, uint64 generation = 4, AuthPin auth = 5;
+                    §6 Signed, purpose group-form, its signer Signed's (owner decision 368)
+GkmGroupOwner       repo_id = 1, network_id = 2 (owner decision 201)
+GkmEpochObject      commit = 1, GkmCommitHeader header = 2, uploader = 3, int64 time_ms = 4, gen_wrap = 5,
+                    sealed_group_info = 6, uint64 group_info_generation = 7, network_id = 8, uint32
+                    cipher_suite = 9; gkm writes header, uploader and time_ms itself, from the commit, the token
+                    and its clock, so an upload has none to state falsely; 8 and 9 only in epoch 0, whose commit
+                    is empty and whose uploader is gkm-1's creator, its header gen/1's generation and auth at a
+                    creation, the form's generation and no auth at a re-form
+GkmGroupInfoObject  uint64 epoch = 1, uint64 generation = 2, sealed_group_info = 3: at most 16 leaves the
+                    pointer {epoch}, that epoch's object holding the sealed GroupInfo; above, all three
+GkmWelcomePointer   group_id = 1, uint64 epoch = 2, key_package_ref = 3 (owner decision 363)
+GkmKeyPackageClaim  group_id = 1, claimer = 2, the target being the sidecar_id in its key
+```
+
+```text
 duty               mechanism
 one commit         epoch/<n> is created with If-None-Match once epoch/<n-1> exists; the first wins, and the loser
                    gets 409 with the winner
@@ -7608,7 +7717,7 @@ checks             the token scopes the repo, whose newest GroupForm names the g
                    flight at a shred lands before §11.12 repeats the group's deletion; an external commit names
                    the uploader; the header passes the epoch PUT check, gen/ claims the claim checks and wraps
                    the wrap checks below, each route under its scope (scopes, below); sizes; 60 commits per
-                   hour per uploader per group; §11.13's NVMe write budget, which never refuses Removes and
+                   hour per uploader per group (rates); §11.13's NVMe write budget, which never refuses Removes and
                    REMOVE rotations and queues other commits, Adds, Welcomes, KeyPackages, ReaderKeys, LATE
                    deliveries and GroupInfo per network, refusing the heaviest first (429, RESOURCE_EXHAUSTED);
                    a staged delivery or claim of g+1 is a REMOVE rotation's only while gkm's newest verified
@@ -7618,15 +7727,20 @@ checks             the token scopes the repo, whose newest GroupForm names the g
                    only while that state shows a holder dropped since epoch/<n-1>'s auth pin and time (10.9's
                    roster row); else each is §11.13's P1
 Welcomes           written only after their epoch object, by its uploader, so a loser's never exist; joiners get
-                   a pointer and a welcome hint; if the uploader crashes first, a writer leaf removes and re-adds
-                   the joiner after 10 minutes
+                   a pointer, keyed by group and epoch (owner decision 363), and a welcome hint; a writer leaf
+                   that adopted an Add at epoch n asks HEAD welcome/<n> once GkmSettings.WelcomeTimeout, 10
+                   minutes, has passed, and on a 404, the uploader having crashed first, removes and re-adds the
+                   joiner in one commit, whichever leaf uploaded the epoch (owner decision 372)
 GroupInfo          with an Add, for its joiners, and inside every epoch object in groups of at most 16 leaves,
-                   for recovery with no leaf online (10.8); else a resyncing device's ?want= hints wrap-pending
-                   every 60 s until a leaf writes the current epoch's (KF5)
+                   for recovery with no leaf online (10.8), a generation-0 self-join's included: it moves the
+                   pointer as any epoch does and seals under K_groupinfo of the newest generation the joiner
+                   holds, named in its group_info_generation, while its header says generation 0 and it carries
+                   no GenWrap; else a resyncing device's ?want= hints wrap-pending every 60 s until a leaf writes
+                   the current epoch's (KF5)
 KeyPackages        up to 128 one-time and 1 last-resort per sidecar, valid 90 days, refilled below 32; a sidecar's
                    first upload hints pending to the writers of each repo it reads (KF2); a claim creates
                    <ref>.claim with If-None-Match, then deletes <ref>, so a one-time KeyPackage serves one claim,
-                   for a target the newest state lists as a reader; 10 per minute per (claimer, target)
+                   for a target the newest state lists as a reader; 10 per minute per (claimer, target) (rates)
 retention          (Q-KEYS-11) the reconciler deletes epoch/<n> once it is 30 days old and every ack written in
                    the last 30 days has passed n, never the newest epoch, and only while the ack family has
                    existed 30 days, so a lost family delays deletions and never causes one; before deleting the
@@ -7635,7 +7749,10 @@ retention          (Q-KEYS-11) the reconciler deletes epoch/<n> once it is 30 da
 pending changes    the reconciler hints pending on the per-client gkm topic of the group's writers, the revoking
                    device first, when an entry shrinks or grows the repo's key holders, and every 60 s while its
                    gate is closed; in the directory group this hint, and a first KeyPackage upload's, goes only
-                   to the signer of the statement it answers and to the config writers (10.9)
+                   to the signer of the statement it answers and to the config writers (10.9); for a keying
+                   repo with no GroupForm, which an agent created, it hints the network's config writers, the
+                   first that reads the repo and holds its admin at gkm forming its group (KF1; owner decision
+                   365)
 late wraps         a recipient whose GET wraps/<g> finds no delivery of g, the newest generation, to a key it
                    holds asks with ?want=<its current k8>&since=<its first ask>, at most once a minute; gkm then
                    hints wrap-pending naming it on the per-client gkm topic of R's writers (in the directory
@@ -7645,6 +7762,26 @@ late wraps         a recipient whose GET wraps/<g> finds no delivery of g, the n
                    KeyHolders (10.5), GETs the recipient's ReaderKey, checks it (10.5's readerkey) and PUTs a
                    LATE delivery to it at that state (10.9's late row); a 412 returns the winner, which it judges
                    (10.9), and an unknown outcome repeats the PUT, which then answers 201 or 412
+drop keys          a GET of a drop key whose newest GenRotate has under 7 days to drop_not_after_ms hints pending
+                   to R's writers, at most once an hour per group and process; a writer on that hint, and every
+                   writer at its hourly resync (§6.8), rotates with cause SCHEDULE when R takes deposits and its
+                   newest drop key has under 7 days left, with no write of its own (owner decision 357)
+Delegation keys    the reconciler deletes gkm/dkey/<network_id>/<delegation_id> DelegationKeyRetention, 24 h,
+                   after its forwarding Delegation ends or is superseded, keeping each end it tracks past the
+                   row's leaving the rows, and now and then, and after a restart, lists one network's dkey/
+                   prefix and deletes at once each object that no forwarding row in the state's rows and no
+                   tracked end names, its retention having passed with its row (owner decision 370)
+rates              gkm counts its per-uploader limits per process, in memory, as §9.10 counts sockets', so each
+                   is the stated rate times the process count and a restart forgets it: the 60 commits and 60
+                   claims an hour per uploader and group, the STAGED bound and the 10 KeyPackage claims a minute
+                   per (claimer, target), each a GkmServiceSettings field; the 24 h ReaderKey rule stays exact,
+                   read from the stored object
+networks           at a taskworker runtime's start the reconciler's gate cache is told of every network with a
+                   config log and a gkm-gated service enabled (sidecar.yml's gkm: networks), listed from
+                   Postgres a page at a time under the cache's load concurrency and page rate, both settings,
+                   and a network the bounded cache evicts is told again when the reconciler next reads it, so a
+                   quiet network's hints, key deletions and sweeps run after a restart and §2.8's ttls hold
+                   (owner decision 371)
 
 claim checks, POST /gkm/groups/<id>/gen/<g>
 scope      rw on the repo, or in the config group a member device's rw, never a read_only one's (§7.8)
@@ -7653,9 +7790,14 @@ auth       auth.version >= gen/<g-1>'s and the previous base's position, and aut
 time       time_ms within 10 min of gkm's clock
 signer     admitted, not read_only, and not revoked, parked or suspended in gkm's newest state
 leaf wrap  its epoch exists
-rate       60 per hour per uploader per group
+rate       60 per hour per uploader per group, in each process (rates)
 
-wrap checks, POST /gkm/groups/<id>/wraps/<g>/<c8>
+wrap checks, POST /gkm/groups/<id>/wraps/<g>/<c8>, each item of its batch
+batch      a GkmWrapBatch of 1 to 256 Signed ReaderWraps and DelegationWraps, and at recovery-wraps/<g>/<c8> a
+           GkmRecoveryWrapBatch of 1 to 256 RecoveryWraps {member_id, b8, ciphertext}, answered by a 200 whose
+           GkmWrapResults give each item, in order, 201, 412 with the winner, 403, 409, 429, or 0 for not
+           tried; gkm runs each item through these checks, 16 PUTs at once, and starts no PUT past 20 s into
+           the request, under the lb's 30 s, marking the rest 0; If-None-Match makes a retry safe
 object     wrap/<g>/<c8>/<recipient>/<k8>, If-None-Match; the body's group, generation, commitment prefix,
            recipient and key digest agree with the path; STAGED only while gen/<g> is absent, or of generation 1
            by gen/1's signer while the repo is keying for its creation (KF1); LATE only once gen/<g> exists, is
@@ -7667,36 +7809,48 @@ late       auth.version >= gen/<g>'s and the previous base's position, auth matc
 bound      one object per (recipient, key); the late row's key check allows one LATE one per ReaderKey a
            recipient publishes, which own's upload limit bounds (scopes, below), and §11.13's budget queues
            them; an uploader's STAGED objects in a group stay within 60 an hour per reader and live
-           Delegation of R, the claim rate's worth
+           Delegation of R, the claim rate's worth, counted per item in each process (rates)
 
 epoch PUT check, POST /gkm/groups/<id>/epochs/<n>
 header     GkmCommitHeader.generation is gen/'s newest index as gkm read it before the PUT (a rotation landing
            in between is harmless: joiners fetch a late wrap) and never below the previous epoch's; its auth
-           pin exists and never falls; one exception: an external commit by a device that its member's
-           recovery key admitted may say generation 0 and carry no GenWrap (10.8), and the group's next
-           commit carries gen/'s newest generation
+           pin exists and never falls below the previous epoch's or, for epoch 1 of a re-formed group, whose
+           epoch 0 carries none, below gen/<the form's generation>'s auth (owner decision 362); one exception:
+           an external commit by a device that its member's recovery key admitted may say generation 0 and
+           carry no GenWrap (10.8), and the group's next commit carries gen/'s newest generation
+refused    a committer that gets 403 for its own commit whose checks it passed reads gen?since= its header's
+           generation once; while a newer generation stands, it takes it under 10.9's rotation checks and the
+           ladder, restages the commit with it in GkmCommitHeader and commits again as one of the pass's
+           attempts, raising no alarm; only when none explains the refusal, or the newer one fails its checks
+           (that check's own alarm), does it alarm refused and wait; each pass of its pending engine also
+           reads gkm's newest generation before its first commit (owner decision 375)
 
 scopes, per route (aud gkm; §7.8's exchange gives a read_only device, and a reader that writes nothing, only r)
-own        POST /gkm/reader-key and /gkm/key-packages: any gkm token whose ur_sidecar_id is the record's
-           sidecar_id (a KeyPackage's, its credential's), of a sidecar admitted and not revoked, parked or
-           suspended in gkm's newest state; KeyPackages only from member devices (untagged, not ephemeral);
-           a ReaderKey at most once per 24 h per sidecar after its first
+own        POST /gkm/reader-key and /gkm/key-packages: a gkm token holding an r, rw or admin scope on some
+           repo whose ur_sidecar_id is the record's sidecar_id (a KeyPackage's, its credential's), of a
+           sidecar admitted and not revoked, parked or suspended in gkm's newest state; KeyPackages only from
+           member devices (untagged, not ephemeral); a ReaderKey at most once per 24 h per sidecar after its
+           first; PUT delegation-keys/<delegation_id>: the sidecar a forwarding Delegation's row names
 read       GET of a group, its epochs, gen/, wraps (the caller's own: its s: objects and its covering
-           Delegation's d: ones), group-info and Welcomes, and POST ack (its own leaf's): r, rw or admin;
-           GET reader-key/<sidecar_id>, a public record, under any gkm token of an admitted sidecar
+           Delegation's d: ones), group-info, Welcomes and a repo's forms, and POST ack (its own leaf's): r,
+           rw or admin; GET reader-key/<sidecar_id> and POST reader-keys, a public record, under a gkm token
+           holding an r, rw or admin scope on some repo, of an admitted sidecar; GET and POST
+           delegation-keys: r, rw or admin on the network's config repo
 leaf       POST epochs/<n>: r, rw or admin, from a member device reading R; gkm sees no proposal in a
            PrivateMessage, so members refuse what its committer may not commit (10.9), from a read_only
            device all but a path-only commit; an external commit names its uploader and removes at most its
            own old leaf, but for 10.9's recovery self-join
 info       POST group-info: r, rw or admin, from a member device reading R that is not read_only
-deliver    POST wraps/<g>/<c8>: r, rw or admin, under the wrap checks
-write      POST gen/<g> (claim checks), key-packages/claim and welcome/<n> (epoch n's uploader only): rw, or
-           in the config and directory groups the rw §7.8 gives a member device or a sidecar that is not
-           read_only; admin: POST /gkm/groups and forms
+deliver    POST wraps/<g>/<c8>, and a rotator's RecoveryWraps at recovery-wraps/<g>/<c8>: r, rw or admin,
+           from a sidecar that is not read_only, under the wrap checks
+write      POST gen/<g> (claim checks), key-packages/claim and welcome/<n> (epoch n's uploader only), and HEAD
+           welcome/<n>: rw, or in the config and directory groups the rw §7.8 gives a member device or a
+           sidecar that is not read_only; admin: POST /gkm/groups, forms and ladder
 recovery   GET recovery/<member_id>/wraps: a device of that member, or its unadmitted client under
-           recovery:<member_id> (§7.9); POST: a rotator staging, or that member's device re-wrapping after a
-           rebind (10.8), under r, rw or admin of the group's repo; DELETE: that member's device
-deposit    reaches GET drop-key only, which r, rw and admin also reach (10.14)
+           recovery:<member_id> (§7.9); POST: that member's device re-wrapping after a rebind (10.8), under r,
+           rw or admin of the group's repo; DELETE ?binding=<b8>: that member's device
+deposit    reaches GET repos/<id>/drop-key only, which r, rw and admin also reach (10.14); a token whose only
+           repo scopes are deposit reaches nothing else at gkm
 ```
 
 **Write gate (D-KEYS-6; D-EVS-18).** The predicate below, over §7.9's causal identities, decides which writes a key-holder change blocks; §11.8 enforces it at each ref's head CAS. Target: p99 close-to-reopen ≤5 min with a writer online, in the directory group a hinted or pushing one (10.9); alarm at 1 h.
@@ -7765,7 +7919,7 @@ capacity     gkm/ holds ~15M objects, ~70 GB of each 1.92 TB drive, in year one 
 
 ```yaml
 gkm-1:
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer, and the signer's auth pin when it signs (owner decision 368)); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
   why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
   ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
 gkm-2:
@@ -7779,7 +7933,7 @@ gkm-4:
   why: asynchronous adds; wrapped readers
   ttl: KeyPackages until claimed, or 90 d; claims 90 d; ReaderKeys until replaced or past their not_after, at most 7 d
 gkm-5:
-  sees: Welcome objects and pointers; recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
+  sees: Welcome objects and pointers, the pointers keyed by recipient, group and epoch and naming the KeyPackageRef the Add used (owner decision 363); recipient sidecar_ids and KeyPackageRefs in the clear; secrets and GroupInfo encrypted
   why: deliver joins
   ttl: until every recipient has acked, at most 90 d
 gkm-6:
@@ -7806,7 +7960,7 @@ gkm-10:
 
 ### 10.7 Flows
 
-**KF1. Create a repo.** A member's device C files §8.8's `RepoCreate`, creates the repo in evs as `keying` (§11.12), placing it ([owner decision 145](#od-145)), and becomes its admin ([owner decision 8](#od-8)); a config repo follows §7.9's bootstrap. `POST /gkm/groups` writes `epoch/0` (a random 16-byte group_id, GenWrap_0 and the sealed GroupInfo), `gen/1` (the GenRotate of a new RK_1, without a parent) and C's GroupForm. C writes generation 1's deliveries (10.5's step 3: ReaderWraps, DelegationWraps, RecoveryWraps) while the repo is still keying, resuming from its keychain after a crash, and only then has evs activate it, so no content predates its recovery wraps. C then adds the other leaves in one Add-only commit with its Welcome and GroupInfo.
+**KF1. Create a repo.** A member's device C files §8.8's `RepoCreate`, creates the repo in evs as `keying` (§11.12), placing it ([owner decision 145](#od-145)), and becomes its admin ([owner decision 8](#od-8)); a config repo follows §7.9's bootstrap. `POST /gkm/groups` takes C's Signed GroupForm, epoch 0's GenWrap_0 and sealed GroupInfo (a random 16-byte group_id) and `gen/1`'s Signed GenRotate of a new RK_1, without a parent, and writes the group's owner marker ([owner decision 201](#od-201)), the GroupForm, `epoch/0` and `gen/1` in that order, each If-None-Match, equal bytes answering success, so KF1 resumes after a crash. C writes generation 1's deliveries (10.5's step 3: ReaderWraps, DelegationWraps, RecoveryWraps) while the repo is still keying, resuming from its keychain after a crash, and only then has evs activate it, so no content predates its recovery wraps. C then adds the other leaves in one Add-only commit with its Welcome and GroupInfo. A tagged or ephemeral sidecar, which holds no leaf for an epoch 0, files the `RepoCreate`, places the repo and stays its admin, and a member device forms the group: gkm hints `pending` to the network's config writers for a keying repo with no GroupForm (10.6), and the first to act that is a key holder of the repo and holds admin on it at gkm, which §8.5's implicit document gives every member device, runs the steps above as the group's creator, epoch 0 holding its own leaf, and wraps generation 1 to the agent, which then has evs activate the repo; a repo an agent creates while no such device is online, or under an ACL document that gives no member device both, stays keying, which leaks nothing, a rule revisited at M6, when Team policies can narrow member devices' evs rights ([owner decision 365](#od-365)). A network's first device splits KF1 for its config repo at bootstrap (§7.9): before base 1 it draws the config group's id and RK_1, keeping them as KF1's draft, seals and signs the first config head's push with them, auth {0, A_0} and generation pin {group_id, 1, C_1}, and publishes base 1; after it, it signs GenRotate_1 at S(1) over that RK_1, runs the rest of KF1 and sends the push, C_g holding no pin ([owner decision 373](#od-373)).
 
 **KF2. Add a device D.** D enrolls, its `SidecarAdmit` enters the authorization log (§5.6, §7.9), and it uploads a ReaderKey and, as a member device, KeyPackages (a device a restored binding admitted, only once anchored, 10.8). Once the state lists D where its subject reads, and again at D's first KeyPackage upload (10.6), GKM hints `pending` to the writers, and a committer per 10.9 claims a KeyPackage and commits the Add with other pending changes, the Welcome, the sealed GroupInfo and GenWrap; an agent, or in the config or directory group a member device that is wrapped or has no KeyPackage (10.4; owner decisions [144](#od-144), [182](#od-182)), gets a late ReaderWrap of the current generation instead, signed at a state that lists D (10.9's late row), and a covered agent reads at once through its Delegation's wrap. D checks RK_g against `gen/<g>`'s C_g and walks the ladder (10.5). A newly admitted device holds no generation of the config repo, so until it does it joins on states its config follower applied rows-only, which serve only to take its config Welcome or wrap and open the config repo's generation keys; once it holds the key the follower re-reads those bases in full before it stands, and D signs, seals, commits and rotates nothing before that (§7.9's no key row; [owner decision 319](#od-319)). Owner-bound repos park a D without its owner's consent (§8.5; [owner decision 126](#od-126)), whose devices raise `approval_pending` until an `OwnerConfirm`.
 
@@ -7823,11 +7977,11 @@ gkm-10:
 5  |                 |<--write at g+1, auth >= n'---------|   the gate passes it
 ```
 
-**KF5. Offline catch-up.** Up to 100 epochs behind, the device replays each later commit in order (each epoch derives from the previous `init_secret`). Further behind, or if commits were pruned, processing fails or its leaf was removed as stale, it opens the current sealed GroupInfo (10.6) with the key of the generation it names, from its wrap (a device none of whose keys opens a delivery of it, its ReaderKey lapsed or past retention, publishes a new one and asks for a late delivery to it, 10.6's late wraps), and resyncs by external commit (ExternalInit, a Remove of its old leaf, GenWrap_{e+1}); else it awaits a re-add or uses its recovery code (10.8). Nothing is lost.
+**KF5. Offline catch-up.** Up to 100 epochs behind, the device replays each later commit in order (each epoch derives from the previous `init_secret`). Further behind, or if commits were pruned, processing fails or its leaf was removed as stale, it opens the current sealed GroupInfo (10.6) with the key of the generation it names, its object's group_info_generation or generation, from its wrap (a device none of whose keys opens a delivery of it, its ReaderKey lapsed or past retention, publishes a new one and asks for a late delivery to it, 10.6's late wraps), and resyncs by external commit (ExternalInit, a Remove of its old leaf, GenWrap_{e+1}); else it awaits a re-add or uses its recovery code (10.8). Nothing is lost.
 
 **KF6. Concurrent commits.** The 409 loser, having stored no Welcome, processes the winner and retries what remains. Rotations race only on `gen/<g+1>` (10.5).
 
-**KF7. gkm unavailable.** Cached keys serve reads and deposits; evs checks the gate itself from the authorization log, so writes continue while every shrink is covered, and a removal still stops them until gkm returns and a writer rotates. Joins, catch-up and membership changes wait.
+**KF7. gkm unavailable.** Cached keys serve reads and deposits; evs checks the gate itself from the authorization log, so writes continue while every shrink is covered, and a removal still stops them until gkm returns and a writer rotates. Joins, catch-up and membership changes wait. gkm never answers 502 or 504 itself, its routes buffering at the lb, so its client takes one whose body is no gkm refusal as no answer from gkm, as it takes a transport error: this fallback holds, a Welcome watch stays, and a write's outcome is unknown and resolved as after a lost answer, never judged refused ([owner decision 374](#od-374)).
 
 ### 10.8 Revocation, erasure, recovery, re-seeding, key domains
 
@@ -7836,7 +7990,7 @@ gkm-10:
 **Erasure ([owner decision 61](#od-61)).** An entry's key lives only in a deletable slot (§11.12), so an ERASE push deleting it, cached copies and mirrors' slot copies (§11.12) shred the entry even if ciphertext survives; §11.12's CUT first fences the index's publication of it, then its CLOSURE rewrites the search index's files holding its postings without it, under fresh keys in new slots, and the ERASE destroys their old slots' keys, one of which every older stored version of those files uses, staged bytes in a batch included (§11.14); no operator copy holds slots or wraps ([owner decision 90](#od-90)), and owner devices' mirrors hold slot copies and apply each erasure (§11.13). gkm, like evs, refuses a `deleted` repo but for a re-seed's GroupForm (below; [owner decision 82](#od-82)); its shred (§11.12) deletes the repo's gkm objects and `{gka_}` acks, and again after 10 min for writes in flight (10.6's checks), even under a preservation hold, subject to counsel ([owner decision 133](#od-133)), and members drop its keys.
 
 **Recovery when M loses every device (owner decisions [62](#od-62), [127](#od-127), [128](#od-128), [149](#od-149)).** §5.9's recovery code derives X-Wing and Ed25519 keys that §7.9's `RecoveryBind` binds to M, each by HKDF-SHA256 from the code's 16 bytes under its own info string, with no BIP-39 PBKDF2 step (§5.9); every rotator, agents included, wraps RK_g to every reading member's current X-Wing recovery key, a public key every config reader holds, and the ladder opens older generations.
-- With the code, a new device is admitted by the recovery key under §7.9's window and veto, meanwhile reading only the authorization log and M's own recovery wraps (10.14). The window and veto bound admission, not those wraps, which the code opens at once: a code holder with M's login holds every generation wrapped to M's recovery key and, through the ladder, each earlier one, and with the operator's ciphertext reads them, whatever a veto does: a rebind or a cascade void stops new wraps, and the code keeps opening what was wrapped to it and reads the current generation until the next rotation, which `RecoveryRebind{reason: compromise}` makes a remove rotation with a path epoch at once; revoking the device it admitted does not retire the code (§2.10). It fetches its recovery wraps (the newest per group whose b8 names its code's binding, 10.6) and, once admitted, first passes §7.9's `anchor` on its config-group RecoveryWrap, raising §5.4's `head_alarm` (fork) and acting no further otherwise; only then does it open each group's sealed GroupInfo, self-join by external commit the config group and every group M writes ([owner decision 128](#od-128)), join the others through KF2, revoke M's lost devices through §5.6's calls (D-CORE-20; k of n for an AdminSet member's devices, its own signature counting as one), remove their leaves and rotate (10.5), in any order: a self-join may leave revoked leaves if it carries no GenWrap (generation 0) and its next commit removes them, so no generation reaches a thief's leaves. Above 16 leaves, a self-join waits for one leaf online to write the current GroupInfo; past the first 1,000, the device reads the config and the team directory by their RecoveryWraps, then by wraps (§7.9; owner decisions [144](#od-144), [182](#od-182)).
+- With the code, a new device is admitted by the recovery key as §7.9's table says: at once outside the AdminSet, or at the cosign with `self_admit` off; through the 72 h window and veto for AdminSet members, k = 1 networks and restored bindings; meanwhile it reads only the authorization log and M's own recovery wraps (10.14). Where they apply, the window and veto bound admission, not those wraps, which the device fetches at once and opens once admitted ([owner decision 367](#od-367)): yet a code holder with M's login holds every generation wrapped to M's recovery key and, through the ladder, each earlier one, and with the operator's ciphertext and gen/ objects reads them, whatever a veto does: a rebind or a cascade void stops new wraps, and the code keeps opening what was wrapped to it and reads the current generation until the next rotation, which `RecoveryRebind{reason: compromise}` makes a remove rotation with a path epoch at once; revoking the device it admitted does not retire the code (§2.10). Before admission it fetches its recovery wraps under `recovery:<member_id>`, keeping the newest per group whose b8 names its code's binding (10.6); once admitted, when `gen/<g>` reaches it, it opens its config-group RecoveryWrap first and passes §7.9's `anchor` on it, raising §5.4's `head_alarm` (fork) and acting no further otherwise; only then does it open the rest and each group's sealed GroupInfo, self-join by external commit the config group and every group M writes ([owner decision 128](#od-128)), join the others through KF2, revoke M's lost devices through §5.6's calls (D-CORE-20; k of n for an AdminSet member's devices, its own signature counting as one), remove their leaves and rotate (10.5), in any order: a self-join may leave revoked leaves if it carries no GenWrap (generation 0) and its next commit removes them, so no generation reaches a thief's leaves. Above 16 leaves, a self-join waits for one leaf online to write the current GroupInfo; past the first 1,000, the device reads the config and the team directory by their RecoveryWraps, then by wraps (§7.9; owner decisions [144](#od-144), [182](#od-182)).
 - A binding a void restored takes no RecoveryWrap until a signer outside P signs it again (§7.9's cascade), so the device it admits, once its proposal activates, keeps §7.9's `restored` order, anchoring on a ReaderWrap, never an Add: it uploads its ReaderKey but no KeyPackage, fetches the late ReaderWrap of the config group's current generation that a config writer gives it (KF2), or one a later rotation stages while e's tree lacks it (10.5), and passes the anchor on that wrap's RK_g, with the same alarm and stop on a failure. Only then does it self-join the config group if leaf-entitled, by the one sealed GroupInfo that RK_g opens (else reading the config by those wraps), upload KeyPackages, so that KF2 adds it to its other groups, revoke, remove and rotate as above, and offer `ur keychain recovery-rotate` (§5.9), whose binding takes RecoveryWraps again; a group whose leaves are all in P opens to it only through that binding's surviving RecoveryWraps.
 - `ur keychain recovery-rotate` (§5.9) signs a `RecoveryRebind` (§7.9), re-wraps each group's current generation to the new binding at that binding's own b8 path (10.6), deletes M's old binding's wraps only once every new one exists, so a crash between leaves both and its retry finishes, and requests a `request` rotation in M's groups, or, for a code retired as compromised (`RecoveryRebind{reason: compromise}`), a `remove` one, which starts an immediate path epoch and full checkpoints (§11.6, §11.7). No rebind or void reaches a keychain backup sealed before it, whose `keychain.wrap` the retired or voided code still opens (§5.9), yielding all of that device's `keychain.ur` (its client jwt, ClientKey seed, identity and agent keys, ReaderKeys, a Delegation's reader key, unlanded statements and this section's key cache) and, by keys derived from R_n, `approvals/`, `runs/`, `restore/` and component state, so after a compromise rebind or a void each device whose backups may hold such a sealing is revoked as compromised (§7.9) and enrolled anew, since `--replace` keeps its identity key (§5.5); after a rebind by §5.9's procedure, which keeps the rebind standing and revokes its signer last ([owner decision 212](#od-212)).
 - Without the code, admins revoke the lost devices and admit a new one (§7.9), moving every team repo M read to a new generation; M's owner-bound repos, which need M's consent ([owner decision 126](#od-126)), and single-member repos are lost.
@@ -7855,7 +8009,8 @@ route     POST /gkm/groups/<id>/ladder, admin scope, at most 64 Signed GenRotate
           k <= the form's generation, writes each If-None-Match, equal bytes answering success, and skips
           the claim checks' time and signer rows
 wait      the group takes no commit, wrap or claim until gen/<form's generation> exists
-members   check the form's signer by 10.6's rule and each C_k against their cached one, a mismatch being an
+members   check the form's signer by 10.6's rule at the auth pin the form carries, where their retained log
+          reaches it and not before (owner decision 368), and each C_k against their cached one, a mismatch being an
           alarm and no adoption, and judge each GenRotate's signature and 10.9's rotation checks only where
           their retained log reaches, as 10.9's judged row does
 delivery  for g <= the form's generation, 10.9's delivery checks compare a body's group_id with the path's
@@ -7868,7 +8023,7 @@ after     later rotations run as usual
 
 A repo re-seeded as deleted (§11.13) takes only that GroupForm, with its epoch 0 and ladder, while deleted ([owner decision 82](#od-82)): devices open its files from their cached RK_g once it is restored, its readers rejoin by KF2 and late wraps, and a shred deletes the group. Slots return from owner devices' mirrors (§11.13). Repos no device holds are lost (§2.18).
 
-**Key domains ([R:product](design/design-research/product.md) S4)**, each its own repo and group, take §8.5's kind defaults as readers, which policy narrows (owner-bound kinds: [owner decision 126](#od-126)).
+**Key domains ([R:product](design/design-research/product.md) S4)**, each its own repo and group, take §8.5's kind defaults as readers (owner-bound kinds: [owner decision 126](#od-126)).
 
 | Domain | Readers (agents by wrap) | Deposits by drop key |
 |---|---|---|
@@ -7882,7 +8037,7 @@ A repo re-seeded as deleted (§11.13) takes only that GroupForm, with its epoch 
 
 ### 10.9 Authorization of MLS operations
 
-GKM sees no proposal ([owner decision 59](#od-59)), so members verify each decrypted commit and each wrap against its header, the authorization state at its auth pin (§7.9) and the repo's access log (§8.8). On a mismatch a member alarms and never adopts or encrypts to the epoch or generation; a bad commit can stall a group until an admin revokes its committer and the group re-forms through the ladder. GKM originates nothing; no group has external senders (I-4).
+GKM sees no proposal ([owner decision 59](#od-59)), so members verify each decrypted commit and each wrap against its header, the authorization state at its auth pin (§7.9) and the repo's access log (§8.8). On a mismatch a member alarms and never adopts or encrypts to the epoch or generation; a bad commit can stall a group until an admin revokes its committer and the group re-forms through the ladder. The `refused` alarm is evidence against a party: a committer whose own commit gkm refuses only because a newer generation stands takes that generation and commits again, raising none (10.6's refused row; [owner decision 375](#od-375)). GKM originates nothing; no group has external senders (I-4).
 
 **Committers (owner decisions [113](#od-113), [114](#od-114), [128](#od-128), [144](#od-144), [182](#od-182)).** The signed input, not the committer, carries the authority, so no membership change waits for an admin, and members reject a commit without it. Wrapped writers (agents, and the config and directory groups' wrapped member devices, 10.4) rotate by re-wrapping but never commit an Add or Remove.
 
@@ -7904,9 +8059,13 @@ Remove         committer  a writer leaf, the revoking device first; in the confi
                check      its signed input: a SidecarRevoke or MemberRevoke (which a server deactivation
                           follows), a park (§7.9), a Suspend, a revoked or expired grant, in the config and
                           directory groups the target's loss of leaf entitlement at the auth pin under §7.9's
-                          rank (it reads on by wraps), or staleness, whose input is §7.9's stale_leaf_days (90)
-                          past the target leaf's last change epoch, which members check against their own record
-                          and the epochs' times; a stale-removed device returns by resync (KF5)
+                          rank (it reads on by wraps), or staleness: a stale Remove is valid iff the target's
+                          credential in the prior epoch's tree has not_after - 90 days + §7.9's stale_leaf_days
+                          (90), read at the commit's auth pin, <= my clock + 60 s, so a member judges it from the
+                          tree alone and a day-old joiner and an old member agree; a writer leaf commits one only
+                          a day past that, and only if its own record shows no later change of that leaf; the
+                          value is evidence only, refusing no commit, so a leaf that inflates it delays only its
+                          own stale Remove; a stale-removed device returns by resync (KF5)
 Rotation       committer  any writer that holds the key, as a holder or covered by a Delegation, at a pin
   alone                   covering what it rotates for, wrapped ones included (owner decision 114); in the config
                           group also the signer of the admission or revocation (owner decision 128) or, after
@@ -7944,12 +8103,19 @@ holders   holders_sha256 equals my recomputation; each staged delivery I read pa
 cause     REMOVE iff the generation covers a shrink, an authorization expiry (10.6's expiries) or a compromise
           retirement since the parent, or its parent is poisoned (below)
 time      time_ms <= my clock + 60 s and >= the parent's
+drop      where R takes deposits, time_ms < drop_not_after_ms <= time_ms + DropKeyLifetime + 10 min, as
+          readerkey's check is, so no signer voids the backstop with a far-future value (owner decision 357)
 poisoned  a delivery the delivery checks below judge invalid: members alarm, never seal to the generation and
           rotate at once (cause REMOVE), and admins revoke the signer
 roster    every commit's roster lies within the key holders at its auth pin, and in the config and directory
           groups within the leaf-entitled devices (§7.9), except a recovery self-join's revoked leaves (10.8),
           whose generation-0 epoch has no GenWrap; the next leaf commit after a leaf's drop, or its loss of
           leaf entitlement there, removes it, and no leaf wrap uses an epoch whose tree holds a non-holder
+window    after a compromised leaf's commit whose tree holds a party dropped at the commit's own header, a
+          wrapped writer, which reads no commit, and a leaf whose seal races that commit may seal to the
+          generation it carried until the refusing member's REMOVE rotation reaches them; accepted, since the
+          commit needs a compromised leaf, which already holds that generation's key and could hand the
+          dropped party the same content or the key itself (owner decision 369)
 
 delivery checks: every member, for each ReaderWrap or DelegationWrap it reads (its own when it fetches it,
 others' when it answers wrap-pending), judged at the delivery's own state, never at the member's later one
@@ -8001,7 +8167,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-7 (withdrawn).** Superseded by owner decisions [113](#od-113) and [128](#od-128): the signed statement, not an admin committer, authorizes each membership change (10.9).
 
-**D-KEYS-8 (proposed).** Drop keys in each generation's signed GenRotate give write-only deposits, which depositors accept only if the generation covers every shrink they know (10.5); each key domain is its own repo. *Why:* agents deposit sessions they cannot read (R-KEYS-9).
+**D-KEYS-8 (proposed).** Drop keys in each generation's signed GenRotate give write-only deposits, which depositors accept only if the generation covers every shrink they know (10.5); each lives `GkmSettings.DropKeyLifetime`, 90 days, and writers renew it once under 7 days are left ([owner decision 357](#od-357)); each key domain is its own repo. *Why:* agents deposit sessions they cannot read (R-KEYS-9).
 
 **D-KEYS-9 (proposed).** Rotating devices wrap each generation to every reading member's current `RecoveryBind` key; Team's only escrow is a visible audit reader. *Why:* owner decisions [62](#od-62), [63](#od-63), with no server-guessable secret.
 
@@ -8013,13 +8179,13 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-13 (proposed).** After a site loss, repo admins' devices, and for owner-bound kinds the owner's consented devices, re-seed each group from their keychains under a GroupForm linked through the ladder (10.8): the form draws a new group_id and names the previous one and its generation, the old Signed GenRotates go up byte for byte from the copies clients keep, and pins follow (g, C_g) only along a verified GroupForm chain. *Why:* gkm has no off-site copy (owner decisions [90](#od-90), [94](#od-94)); a GenRotate's signature cannot be rebuilt, and GenLink's AAD and C_g hold no group_id.
 
-**D-KEYS-14 (proposed).** Groups scale by 10.6's sizes: 10.4's self-update interval, KF5's resync, GroupInfo on demand above 16 leaves, daily acks, trees on disk. *Why:* a full 1,000-leaf tree is 2.8 MB, which a per-epoch GroupInfo would rewrite about 143 times a day.
+**D-KEYS-14 (proposed).** Groups scale by 10.6's sizes: 10.4's self-update interval, KF5's resync, GroupInfo on demand above 16 leaves, daily acks, trees on disk, which the engine streams rather than holding whole ([owner decision 366](#od-366)). *Why:* a full 1,000-leaf tree is 2.8 MB, which a per-epoch GroupInfo would rewrite about 143 times a day.
 
-**D-KEYS-15 (proposed).** `gkm/<group_id>/gen/<g>`, created If-None-Match by the rotating writer, is the only place a generation exists; MLS commits never raise the generation, and a removal is a Remove commit followed by an independent rotation (10.5). *Why:* two paths minting g+1 fork the ladder; one claim object serializes every rotator (owner decisions [1](#od-1), [114](#od-114), [128](#od-128)).
+**D-KEYS-15 (proposed).** `gkm/<group_id>/gen/<g>`, created If-None-Match by the rotating writer, is the only place a generation is created, which a gen pack later holds verbatim (10.16); MLS commits never raise the generation, and a removal is a Remove commit followed by an independent rotation (10.5). *Why:* two paths minting g+1 fork the ladder; one claim object serializes every rotator (owner decisions [1](#od-1), [114](#od-114), [128](#od-128)).
 
 **D-KEYS-16 (proposed).** KeyHolders are leaves (in the config and directory groups, member devices past their first 1,000 by wrap), uncovered agents, live Delegations over their reach (the config, a team's directory and the repos a grant names one of their tags for; a forwarding Delegation's, the config alone, its holder its sidecar's forwarding, which a newer one keeps; [owner decision 197](#od-197)) and recovery keys; live Delegations get DelegationWraps keyed by delegation_id; a covered agent's reap, or an ephemeral one's own `not_after`, is no shrink, and a Delegation's key drops at its end (`DelegationRevoke`, a void, or a compromise revocation of one of its agents; §7.9), at `not_after`, and at any other revocation but a reap, or any `Suspend`, of one of its agents, which no `Unsuspend` undoes (10.5). *Why:* [owner decision 114](#od-114)'s read-at-once, bounded, with no dropped party signing the rotation that excludes it; a suspended agent must lose what the server can still deliver to its Delegation's key, and an ephemeral agent can close itself, or api reap it, before any cutoff keyed to its own expiry.
 
-**D-KEYS-17 (proposed).** Drop keys ride each generation's signed GenRotate, only for kinds that take deposits and for a general repo whose `RepoCreate` marks it a group or admin inbox (§8.5, §8.8), rotators setting `drop_public_key` and `drop_not_after_ms` for both; a depositor seals only to a generation that covers every shrink and expiry it knows and is not below its pin; the deposit scope reaches only the drop-key route (10.6, 10.14). *Why:* a stale but unexpired drop key would reach a removed reader.
+**D-KEYS-17 (proposed).** Drop keys ride each generation's signed GenRotate, only for kinds that take deposits and for a general repo whose `RepoCreate` marks it a group or admin inbox (§8.5, §8.8), rotators setting `drop_public_key` and `drop_not_after_ms` for both; a depositor seals only to a generation that covers every shrink and expiry it knows and is not below its pin, and whose drop key is unexpired and lives at most `DropKeyLifetime` past its time ([owner decision 357](#od-357)); the deposit scope reaches only the drop-key route (10.6, 10.14). *Why:* a stale but unexpired drop key would reach a removed reader.
 
 **D-KEYS-18 (proposed).** At most 16 leaves, the epoch object carries the sealed GroupInfo and `group-info` is a pointer rewritten at each Add and by gkm with any epoch 16 or more past it, resync probing to a 404; KF1 writes its first wraps, recovery wraps included, before evs activates the repo; above 16, recovery and resync need one leaf online (10.6-10.8). *Why:* a crash between two PUTs must not break code-only recovery.
 
@@ -8037,7 +8203,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-25 (proposed).** A ReaderKey is valid at most 7 days after signing and replaced at 6 days, its private key kept 30 days past its not_after, and rotators and deliverers seal only to an unexpired one valid no longer than that; so a passive keychain copy heals at the first generation after the device's next path commit and that not_after, about 37 days after the copy (60 above 50 leaves) whatever advertisement gkm serves, and an active clone, which signs fresh keys, ends only at a compromise revocation and a new enrollment (10.5). *Why:* gkm serves one overwriteable advertisement with no authenticated retirement, so only the key's own validity bounds a stale one, and whoever holds an identity key can sign another.
 
-**D-KEYS-26 (proposed).** gkm's routes take 10.6's scopes: a sidecar's own ReaderKey and KeyPackages under any gkm token of its own; reads, acks and a member device's commits under r; GroupInfo and deliveries under r from a sidecar that is not read_only; claims, Welcomes and KeyPackage claims under rw; members, not gkm, check what a commit carries (10.9). *Why:* reader-only and read_only leaves must keep their keys and leaves current (D-TEAM-24), and gkm cannot see a PrivateMessage's proposals.
+**D-KEYS-26 (proposed).** gkm's routes take 10.6's scopes: a sidecar's own ReaderKey and KeyPackages under a gkm token of its own that holds an r, rw or admin scope on some repo, a token whose only repo scopes are deposit reaching the drop-key route alone; reads, acks and a member device's commits under r; GroupInfo and deliveries under r from a sidecar that is not read_only; claims, Welcomes and KeyPackage claims under rw; members, not gkm, check what a commit carries (10.9). *Why:* reader-only and read_only leaves must keep their keys and leaves current (D-TEAM-24), and gkm cannot see a PrivateMessage's proposals.
 
 ### 10.12 Open questions
 
@@ -8083,30 +8249,54 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 ### 10.14 Interfaces
 
 - **Provides:** `GkmClient` (`CurrentRepoKey`, `RepoKey(repoId, generation)`, `EnsureWritable`, which first commits the pending changes its device may, `DropKey`); `EvsRepoKey.DeriveKey(purpose, context)`; credential validation and pins (also for §6's `Hello`); GenRotates and drop keys, ReaderWraps and DelegationWraps (`KeyDelivery`, 10.5) with 10.9's delivery checks, and recovery wraps; 10.5's KeyHolders and 10.6's gate predicate (§7.9, §11.8, §11.12).
-- **Consumes:** keys, bindings, keychain, recovery code, `SidecarEvent` (§5); topics, `Signed`, `HeadCheck` (§6); tokens, `rev/` (§7.8); the authorization log, `AuthPin`, causal identities, recovery, the `leaves` rule and removals (§7.9, §7.10); `RepoReaders`, seats, kind defaults, consent, `OwnerConfirm`, access logs, `audit`, `EvsShare` (§8); kinds, `repo/` state, `place/`, slots, manifests, path epochs, the head-CAS gate and the write budget (§11); `ServiceHost.Blobs` per cluster and Redis (§4.5, §19).
-- **Subprotocol messages:** `GkmHint{group_id, epoch, kind, recipient}` in `PushHint` (§6.11, 0x1301): commit on `gkm:<group_id>` (version = epoch × 2^24 + generation); pending, welcome, key-packages-low and wrap-pending (a GenWrap, wrap or sealed GroupInfo is missing; for 10.6's late wraps, `recipient` names the ask's `s:` or `d:` recipient, and a hint lost or coalesced comes again at the next ask) on the per-client `gkm` topic (§6.8).
+- **Consumes:** keys, bindings, keychain, recovery code, `SidecarEvent` (§5); topics, `Signed`, `HeadCheck` (§6); tokens, `rev/` (§7.8); the authorization log, `AuthPin`, causal identities, recovery, the `leaves` rule and removals (§7.9, §7.10); `RepoReaders`, seats, kind defaults, consent, `OwnerConfirm`, access logs, `audit`, `EvsShare`, and the gate cache with its network list, sidecar index and install callback (§8, §8.9); kinds, `repo/` state, `place/`, slots, manifests, path epochs, the head-CAS gate and the write budget (§11); `ServiceHost.Blobs` per cluster and Redis (§4.5, §19).
+- **Subprotocol messages:** `GkmHint{group_id = 1, uint64 epoch = 2, GkmHintKind kind = 3, recipient = 4}` in `PushHint` (§6.11, 0x1301), `GkmHintKind` being COMMIT 1, PENDING 2, WELCOME 3, KEY_PACKAGES_LOW 4 and WRAP_PENDING 5, and `recipient` bytes in the wrap path's `s:` or `d:` form: commit on `gkm:<group_id>` (version = epoch × 2^24 + generation); pending, welcome, key-packages-low and wrap-pending (a GenWrap, wrap or sealed GroupInfo is missing; for 10.6's late wraps, `recipient` names the ask's `s:` or `d:` recipient, and a hint lost or coalesced comes again at the next ask) on the per-client `gkm` topic (§6.8).
 - **API routes:** Client class, under 10.6's tokens and scopes, specified in connect/api/bringyour.yml.
 
   ```text
-  POST /gkm/key-packages, /gkm/key-packages/claim, /gkm/reader-key;  GET /gkm/reader-key/<sidecar_id>
-  POST /gkm/groups;  GET /gkm/groups/<id>;  POST /gkm/repos/<id>/forms    (GroupForm: create, re-form)
+  POST /gkm/key-packages                       bare KeyPackages, whose own extensions say which is last-resort
+  POST /gkm/key-packages/claim                 a KeyPackage of the target for the group, 404 when it holds none
+  POST /gkm/reader-key;  GET /gkm/reader-key/<sidecar_id>
+  POST /gkm/reader-keys                        up to 256 sidecar_ids: each one's Signed ReaderKey, or an empty
+                                               Signed, in order, under GET reader-key's scope
+  PUT|GET /gkm/delegation-keys/<delegation_id> a forwarding Delegation's reader key (owner decision 202)
+  POST /gkm/delegation-keys                    up to 256 delegation_ids: each stored key, or none, in order,
+                                               under the GET's scope (owner decision 364)
+  POST /gkm/groups                             creation (KF1): the Signed GroupForm, epoch 0's GenWrap_0 and
+                                               sealed GroupInfo, and gen/1's Signed GenRotate, written after the
+                                               owner marker in that order, each If-None-Match, equal bytes
+                                               answering success; 409 on other bytes
+  GET  /gkm/groups/<id>                        the GroupForm that names the group, and nothing else
+  GET  /gkm/repos/<id>/forms                   r, rw, admin: the repo's Signed GroupForms, oldest first
+  POST /gkm/repos/<id>/forms                   admin: a re-form only (10.8); 409 on other bytes
   POST /gkm/groups/<id>/ladder                 admin: a re-formed group's old Signed GenRotates, at most 64 a
                                                call, before its epoch/1 (10.8)
-  GET  /gkm/groups/<id>/epochs?after=          epoch objects, in order, with their sizes
+  GET  /gkm/groups/<id>/epochs?after=          epoch objects, in order, with their sizes, to gkm's bound, a
+                                               client asking again after its last until none comes
   POST /gkm/groups/<id>/epochs/<n>             200, 409 (with the winner), 403, 429
   POST /gkm/groups/<id>/gen/<g>                the claim: 201, 412 (with the winner), 403, 429
-  POST /gkm/groups/<id>/wraps/<g>/<c8>         staged or late ReaderWraps and DelegationWraps: 201, 412 (with
-                                               the winner), 403, 409 (stale kind, generation or key), 429
-  POST /gkm/groups/<id>/welcome/<n>, /group-info, /ack (Redis)
-  GET  /gkm/groups/<id>/gen?since=;  GET /gkm/welcomes
+  POST /gkm/groups/<id>/wraps/<g>/<c8>         a batch of 1 to 256 staged or late ReaderWraps and
+                                               DelegationWraps: 200, each item's 201, 412 (with the winner),
+                                               403, 409 (stale kind, generation or key), 429 or 0 (not tried)
+  POST /gkm/groups/<id>/recovery-wraps/<g>/<c8>  a rotator's 1 to 256 RecoveryWraps, answered as a wrap batch
+  POST /gkm/groups/<id>/welcome/<n>            the Welcome, naming each recipient's sidecar_id beside its ref
+  HEAD /gkm/groups/<id>/welcome/<n>            rw: 200 or 404, no body, whether epoch n's Welcome stands (owner
+                                               decision 372)
+  POST /gkm/groups/<id>/group-info (409 when its epoch does not rise), /ack (Redis)
+  GET  /gkm/groups/<id>/gen?since=             GenRotates, in order, to gkm's bound, as the epochs route
+  GET  /gkm/welcomes                           each pointer with its Welcome, which no other route serves
   GET  /gkm/groups/<id>/wraps/<g>?recipient=&want=<k8>&since=   the caller's deliveries of g, the object at
                                                want first, the recipient's prefix on a miss, which hints
                                                wrap-pending (10.6's late wraps)
-  GET  /gkm/groups/<id>/drop-key?since=<g>     deposit, r, rw, admin: the newest GenRotate, up to 64 after since
+  GET  /gkm/repos/<id>/drop-key?since=<g>      deposit, r, rw, admin: the newest GenRotate of the repo's newest
+                                               GroupForm's group, up to 64 after since
   GET  /gkm/groups/<id>/group-info?want=<epoch>  sealed; an older one also hints wrap-pending (KF5)
   GET|POST|DELETE /gkm/recovery/<member_id>/wraps  GET also under an unadmitted client's recovery:<member_id>,
-                                                   for that member's own wraps only (§7.8, §7.9)
+                                                   for that member's own wraps only (§7.8, §7.9); POST, a
+                                                   rebind's re-wrap, 201 or 412; DELETE ?binding=<b8>
   ```
+
+  Each body is a protocol/gkm.proto message or a bare `Signed`, as `application/octet-stream`, as §6.8's `PollResponse` is.
 - **Tables:** none; gkm's durable state is 10.6's objects (owner decisions [2](#od-2), [21](#od-21), [145](#od-145)), and Redis `{gka_<group_id>}` holds acks as soft state ([owner decision 136](#od-136)). §6.8's per-client hints need a client id for each `sidecar_id`: gkm, which reads no Postgres, resolves them through api's internal `POST /sidecar/identity/clients` behind the `Push.HintSidecars` seam, with a 5-minute map in each process, and counts and passes over a failed call, the hourly resync covering a lost hint (§5.15).
 - **Services and config:** `server/cli/gkm` hosts `gkmservice` from v0; root `mls_*` and `gkm_*` files and the nested `mlsinterop/` test module (D-REPO-2, D-REPO-3, D-OPS-2); the reconciler (retention, hints, staged-wrap GC) in taskworker; limits in config/all/pro.yml.
 - **Assumptions about other sections:**
@@ -8125,16 +8315,16 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 | Every app device's forwarding Delegation adds a DelegationWrap of about 1.2 KB to each config rotation, about 6 MB at a 5,000-device team's ([owner decision 197](#od-197)) | High | Low | config rotations follow removals and the 30-day schedule, not rule edits; a newer forwarding Delegation is no shrink (10.5) |
 | A copied forwarding reader key opens the config generations wrapped to it until its Delegation ends | Low | Medium | it never leaves the VPN component (§5.9); the app rotates it at every new client generation and after 90 days; `DelegationRevoke` shrinks the config at once (10.5) |
 | A member stalls a group with a commit the others refuse | Low | Medium | Alarms; revocation; re-forming (10.9) |
-| A rogue or compromised admin admits a device under a member | Medium | Medium | Consent gates owner-bound repos ([owner decision 126](#od-126); 10.9); the member's devices alarm (§5.4); team repos stay readable until revocation |
+| A rogue or compromised admin admits a device under a member | Medium | High | Consent gates owner-bound repos ([owner decision 126](#od-126); 10.9); the member's devices alarm (§5.4); team repos stay readable until revocation |
 | A removed leaf stays in a repo's MLS tree until a writer leaf commits its Remove (owner decisions [114](#od-114), [144](#od-144), [182](#od-182)) | Medium | Low | Wrapped writers' rotations reopen the gate meanwhile, and no leaf wrap uses an epoch that holds it (10.5); hints wake writer leaves |
 | A reaped Delegation-admitted agent, an ephemeral one past its own `not_after`, or a leaked reader seed reads later config, directory and tag-repo generations, and a leaked whole auth key admits fresh agents ([owner decision 114](#od-114)) | Medium | High | `not_after` ≤ 90 d (30 d for CI), replaced at each CI secret rotation and after a key drop; any `Suspend` or non-reap revocation of its agents, or a cascade voiding it, drops the key; a `DelegationRevoke` or a compromise revocation of one of its agents ends its admissions (10.5, §7.9) |
-| Large groups strain phones (10.6's sizes); a large Team's leaves sit in two 1,000-leaf groups, the config's and the directory's | Medium | Medium | D-KEYS-14; §22.8's benchmark |
+| Large groups strain phones (10.6's sizes); a large Team's leaves sit in two 1,000-leaf groups, the config's and the directory's | Medium | Medium | D-KEYS-14, the engine keeping trees on disk and streaming them ([owner decision 366](#od-366)); §22.8's benchmark |
 | Short grants (1 h requested grants) expire often, and each covering generation is REMOVE, so files re-checkpoint at their next write and a repo's batched path epoch recurs daily, ~17 h of copying for a 1M-file ref (§11.6) | Medium | Medium | One rotation covers every expiry up to its time_ms, and writers batch them at a pending hint or their next write (KF4); 16-diff chains checkpoint anyway; at most one batched path epoch per repo a day (§11.6); §11.13's inputs and §19.9's gen/ row count these rotations and epochs, and §22.8's fixture of 1 h requested grants on large repos reports rotations, full checkpoints and path-epoch copy operations a day |
 | A config or directory rotation stages a wrap per wrapped reader and a RecoveryWrap per member, up to ~6,000 objects (~7.5 MB, ~50 MiB a drive) at §20.4's 5,000 Team admissions, and a wrap per leaf more if its rotator is wrapped; the directory, whose writers push often, rotates at nearly every shrink of a Team's sidecars, and racing rotators would multiply each | Medium | Low | A leaf rotator's one LeafWrap covers every leaf; covered agents' reaps rotate nothing (10.5); the directory group hints only a statement's signer and the config writers, and unhinted writers rotate after a jitter (10.9); §11.13 runs REMOVE rotations at once as P0, never refusing them, so many large Teams shrinking at once can wear a cluster's drives past the budget ([owner decision 186](#od-186); §11.21's P0 row), and §19.9's projection counts both groups' rotations |
 | With no witness, shared writes stop at `witness_bound_hours` (default 72 h), a lone cloud agent's included (§2.8's bound, which a split defeats) | Medium | Medium | Agents witness ([owner decision 129](#od-129)); 24 h alarm; up to 168 h; Removes, rotations and revocations never stop |
 | After a void leaves M no current binding, M, its network's only config writer, loses every device: no config writer remains to give the device M's restored code admits its ReaderWrap (KF2), so it anchors only once a config holder that is not read_only, among the up to 64 other holders gkm hints 15 min after its ask (10.6's late wraps), runs, and never if none does ([owner decision 149](#od-149)) | Low | High | M's devices raise `recovery_rebind` at the void (§5.4), and any of them can run `ur keychain recovery-rotate` (§5.9) to bind a code that takes wraps; meanwhile only surviving RecoveryWraps open (10.8) |
 | A device offline past its ReaderKey's 7-day not_after gets no staged wrap and, back with a new key, waits for a late delivery, longer where no writer is online | Medium | Low | Lapsed private keys kept 30 days for what was staged (10.5); any holder but a read_only one delivers, gkm hinting writers, then after 15 min up to 64 other holders (10.6); a leaf also takes the next GenWrap |
-| An active clone of a keychain (its identity key and ClientKey) reads and acts as the device past any path commit or ReaderKey replacement | Low | High | `SidecarRevoke{reason: compromise}` from a since_n before the copy, whose cascade parks what it admitted, and a new enrollment (10.5, 10.8); the 37-day heal is a passive copy's (§2.10) |
+| An active clone of a keychain (its identity key and ClientKey) reads and acts as the device past any path commit or ReaderKey replacement | Low | High | `SidecarRevoke{reason: compromise}` from a since_n before the copy, whose cascade parks what it admitted, and a new enrollment (10.5, 10.8); each device's daily check of the ReaderKey gkm serves under its id raises `key_changed` for one it never signed ([owner decision 358](#od-358)); the 37-day heal is a passive copy's (§2.10) |
 | Site loss erases every gkm object ([owner decision 94](#od-94)) | Low | Critical | Device re-seed (D-KEYS-13); owner-device mirrors |
 
 ### 10.16 Phasing
@@ -9729,7 +9919,8 @@ cut       a CUT push (flag 512, format 2; admin, and in a directory repo the aut
           one staged record replaces its ref's set; an erasure that finds the set full cuts once pending ones
           complete, its first ERASE (closure, above) not waiting
 deposits  a depositor draws a random object key per deposit, seals the body under it, and puts HPKE-XWing(drop key
-          of g, object key) in a slot its deposit push introduces, so the drop private key, which every reader
+          of g, object key), info "UR evs 1.0 deposit" and aad repo_id || u64be(g) || slot_id (§10.5's HPKE-XWing),
+          in a slot its deposit push introduces, so the drop private key, which every reader
           derives from RK_g, opens a deposit only while its slot exists; CONSUME deletes the consumed entries and
           their slots; segments of consumed deposits go after 7 d
 after     readers mask in search, from its CUT or first ERASE, each document an erasure lists (11.14); readers and
@@ -9942,7 +10133,8 @@ budget   every metadata write spends its cluster's one budget: 0.8 DWPD and 50% 
 price    each write is priced before it is issued in drive bytes: the cost row above (§22.8's measurement) times k,
          the measured over the priced bytes of the last 10 min
 classes  P0, never queued, refused or paced, bounded only by its classes' own rate limits (§10.6's 60 commits an hour
-         per uploader and group; §7.9's per-network append limits; 11.12's ERASE rate), never by the budget: rev/,
+         per uploader and group, which each gkm process counts for itself; §7.9's per-network append limits; 11.12's
+         ERASE rate), never by the budget: rev/,
          proj/, repo/ lifecycle (deletion, restore), shred steps, ERASE, CUT and CLOSURE pushes within that rate and
          every slot rewrite, gkm Removes and REMOVE rotations, a staged delivery or claim of generation g+1 being P0
          only while gkm's newest verified state shows a shrink, an authorization expiry or a compromise retirement
@@ -11395,7 +11587,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | No writer able to map is online when an epoch is due, so creation stays blocked in a name-bearing repo, and dropped holders keep testing names past due elsewhere | Low | Medium | Writers alarm 1 h past due_by_ms, batched epochs included; `ur status` names the ref; any capable writer maps, a tail and a 2-min creation block landing it under steady creation |
 | A writer floods a ref with refusals, so others' refusals there answer 429 until a record lapses, at most about an hour for a seal's | Low | Low | 8 refusal records a ref, one added a second, each kept only until its statement's time bound plus 1 s; a refusal ends no other push's attempt, lease, part or seal; evs counts full lists; FS-1, FS-113 |
 | Counsel does not confirm [owner decision 133](#od-133)'s condition (shredding under a hold) | Low | High | §21's counsel item, before holds ship (M5) |
-| Site loss destroys repos no device mirrors | Low | High | Mirrors; coverage in `ur status`; re-seeding |
+| Site loss destroys repos no device mirrors | Low | Critical | Mirrors; coverage in `ur status`; re-seeding |
 | Read and subscription patterns leak more than 11.5 states | Medium | Medium | Whole small reads; 64 KiB alignment; publish the leak |
 | A client bug corrupts history, which the server cannot check | Low | High | Oid checks; replay; mirrors; export |
 | An import, hostile tenant or reconnect storm saturates the NVMe set | Medium | High | 11.13's write budget and fair share, part bounds, leases in Redis; §22.8; §19.9's triggers ([owner decision 145](#od-145)) |
@@ -11412,7 +11604,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | The index is about twice the research's zstd sizes (~110-165 MB for five years at 100 messages a day) | Certain | Low | Phones fetch all only at "search more" or on Wi-Fi while charging; buckets ≤ ~5.4 MB |
 | A hold keeps the index files that existed at its placement, staged copies written to seg/ | Low | Low | Later churn is purged as usual (11.13's hold rule); holds are scoped |
 | Old or index-unaware clients leave commits unindexed | Medium | Low | Coverage, "not yet searchable", backfill within 10 min |
-| A purge bug deletes content a retained version needs | Low | High | Kind 5 adopted only through CAS bases and its header's push; I-EVS-9 and I-EVS-10 model-checked; the purge's reread; §19.11's observe mode first |
+| A purge bug deletes content a retained version needs | Low | Critical | Kind 5 adopted only through CAS bases and its header's push; I-EVS-9 and I-EVS-10 model-checked; the purge's reread; §19.11's observe mode first |
 | Users lose content they expected to keep | Medium | Medium | Versioning stays on below 64 MiB; history written while on stays; listings and `ur status` show the setting; a repo lock |
 | A versionless file replaced mid-download makes a slow reader restart | Medium | Low | The 60 s allowance; all files change only at roll-ups and erasures |
 | Pre-v1 devices in a migrated repo cannot read versionless files or the index | Medium | Low | FORMAT_UNSUPPORTED, never misread; §19.11's format2 gate |
@@ -12990,7 +13182,7 @@ mail_connection_record(network_id, start_time, byte_count, result) -- router ses
 | Spam loads devices; the edge filters no content | Medium | Medium | banner rejects, prefix caps, `max_streams`, burn |
 | A sender's many signatures, long identifiers or slow selectors tie up a receiver's authentication or overflow its evidence | Medium | Medium | 15.5's bounds: 8 DKIM signatures, 8 ARC sets, 64 queries, 30 s, 4 messages at once, 8,192 B of evidence; a cut check is no result, so it refuses no mail and strengthens no label (D-MAIL-14) |
 | A compromised receiver exposes mail in transit | Low | High | per-device keys, I-15, Team scopes, listed mail indexers and the undesignated-receiver alarm (D-MAIL-15) |
-| A site or Hurricane Electric outage stops both nameservers and with them every ur.network name, ACME, DANE and, from M7, inbound mail; a weekend outage can outlast senders' shorter retries ([owner decision 123](#od-123)) | Medium | High | accepted; paged at all hours ([owner decision 143](#od-143)); senders retry 14 h to 5 d (15.3) |
+| A site or Hurricane Electric outage stops both nameservers and with them every ur.network name, ACME, DANE and, from M7, inbound mail; a weekend outage can outlast senders' shorter retries ([owner decision 123](#od-123)) | Medium | Critical | accepted; paged at all hours ([owner decision 143](#od-143)); senders retry 14 h to 5 d (15.3) |
 | A direct MX publishes a mail indexer's address and depends on its uptime | Medium | Medium | two mail indexers, probes, `receiver_needed` |
 | A LAN host attacks submission or IMAP ([owner decision 84](#od-84)) | Medium | Medium | TLS only off loopback (D-MAIL-11); `--listen` |
 | Phone search over older mail shows possible matches that lack the query: on 20 Newsgroups, about half of the top five for rare words | High | Medium | labeled possible; ranked by trigram overlap; confirmed against `i/`, a cached body or on open; desktops and indexers verify; a designated indexer's verified answer where one is online ([owner decision 178](#od-178)) |
@@ -17601,7 +17793,7 @@ None: owner decisions [18](#od-18), [94](#od-94) and [145](#od-145) keep MinIO, 
 | The MinIO source stalls with an open CVE | Medium | Medium | LAN only, pinned source, conformance suite |
 | Drive writes, objects or inodes outrun the metadata cluster before the next one lands, at about 1.25× year one (1.2× with v1's search index on 4 KiB blocks), or `gen/` objects, kept for their repo's life, grow near their bound (19.9) | Medium | High | §11.13's write budget sheds the heaviest network; 19.9's projected triggers, with §22.8's M2 count of rotations and path-epoch copies, expiry-driven ones included; §10.16's gen packs at 19.9's gen trigger; D-OPS-17; Q-OPS-2 |
 | A P0 storm, legal safety work past the refill (100 large Teams on one cluster each shrinking every 5 minutes ask ~2.9 TiB a day a drive, about twice it), runs at once ([owner decision 186](#od-186)): the cluster's busiest drive writes past 0.8 DWPD and the PM9A3's 1 DWPD rating while it lasts, every push there is shed and evacuation waits once P0 empties the bucket, so batches stay on NVMe past 26 h until the storm ends, its forgiven excess stays as wear, ~0.23 drive-writes a 6-hour storm at that stress, and the M2 sizing bounds no such wear | Low | High | P0's per-class rate limits; pushes and evacuation restarting as the storm ends, ramping up as the bucket refills, and each storm's forgiven excess counted against the ~420 drive-writes of rating that five years at the refill leave, ~1,800 such storms (§11.13; [owner decision 190](#od-190)); 19.8's P0 page within an hour and 19.10's runbook: capacity, place_new, the networks driving it; FS-117 |
-| Measured costs hold a set below ~400 pushes/s (~530 on 1 KiB blocks) at the ~1-1.6 records a batch of a set near capacity, so year two needs more than six clusters (19.9) | Medium | Medium | §22.8's records per batch per cluster order them within the lead time; 1 KiB blocks; §11's later per-cluster batcher |
+| Measured costs hold a set below ~400 pushes/s (~530 on 1 KiB blocks) at the ~1-1.6 records a batch of a set near capacity, so year two needs more than six clusters (19.9) | Medium | High | §22.8's records per batch per cluster order them within the lead time; 1 KiB blocks; §11's later per-cluster batcher |
 | v1's search index adds ~2 KiB a push on 4 KiB blocks and ~4 on 1 KiB, cutting a set near capacity to ~385-430 pushes/s (~475-535) and putting 2× year one at ~42-45 KiB a push on 4 KiB blocks, at D-TEST-11's 43 (§11.13) | Medium | Medium | [owner decision 172](#od-172)'s cadence; 1 KiB blocks (~34-37 KiB a push at 2× year one); D-TEST-13's computed gate, confirmed on production after the freeze ([owner decision 174](#od-174)); the write budget sheds the heaviest network |
 | The first metadata cluster fails: writes stop on every cluster, since each checks `rev/` there, as do new repos, log appends and Adds (19.10) | Low | High | EC:4 with the cold spare; it pages as a cluster refusing writes; processes keep reading repos they hold placement and state for |
 | Placement moves only new repos, so a cluster's repos (its cohort), or the first cluster's control plane, can outgrow it before a move tool exists while new clusters stand mostly empty ([owner decision 145](#od-145)) | Medium | High | triggers stop new repos with over a third of the budget and half the space left; shedding; 19.9's cohorts row projects each cluster's own exhaustion and builds the move tool before the earliest, and until then holds a cluster at 80% raw or 70% inodes to maintenance (507 CLUSTER_FULL); FS-119 drills it |
@@ -18401,9 +18593,9 @@ A semiannual report counts requests by instrument and country, accounts affected
 | Counsel rejects [owner decision 133](#od-133)'s condition or a hold kind | Low | High | asked before holds ship (M5) |
 | A drop used to destroy evidence before a hold arrives | Low | Medium | the 7-day window keeps every byte for a hold to cover ([owner decision 183](#od-183)); `now` drops stay visible in push history (evs-12); held drops delete nothing ([owner decision 184](#od-184)) |
 | False reports | Medium | Medium | reporter classes, host-level first, appeals |
-| Free Sybil networks | High | Medium | probation, verification, the send gate, creation limits, label-scoped halts |
+| Free Sybil networks | High | High | probation, verification, the send gate, creation limits, label-scoped halts |
 | A shared lb address is listed, for mail or a user name's phishing (§13.16), also blocking api and connect ingress there; with no separate mail pool to drain to and no warm-up ([owner decision 124](#od-124)), enough listings degrade sending and the shared api and connect ingress together (accepted) | Medium | High | breakers; the address leaves the sending set (§14.6); per-domain and per-network reputation; 1 h kills; delisting |
-| Without a policy, untagged sidecars and their agents reach providers' LAN and loopback (accepted, disclosed; owner decisions [50](#od-50), [120](#od-120)) | Medium | High | §2.18's disclosure; policies on any tier ([owner decision 73](#od-73)); suspension |
+| Without a policy, untagged sidecars and their agents reach providers' LAN and loopback (accepted, disclosed; owner decisions [50](#od-50), [120](#od-120)) | High | High | §2.18's disclosure; policies on any tier ([owner decision 73](#od-73)); suspension |
 
 ### 21.18 Phasing
 
@@ -19680,7 +19872,10 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
               rotation, and every read, ReaderWrap, epoch, GroupInfo and recovery route                           M7-out
               refuses it; a depositor served an older, unexpired GenRotate after a removal
               refuses to seal, with evs's gate off; a deposit grant revoked or expired, the
-              sidecar still admitted, is refused at evs within §8.9's 5 s
+              sidecar still admitted, is refused at evs within §8.9's 5 s; a GenRotate whose
+              drop_not_after_ms passes its time_ms + DropKeyLifetime + 10 min is refused by
+              members and the depositor; at M7 a writer back with nothing to ingest renews a
+              drop key with under 7 days left by a SCHEDULE rotation (owner decision 357)
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target
@@ -20550,7 +20745,9 @@ FS-97  §7,18  stale page Workers (D-TEAM-29) on a fake clock: a member's page W
               it again; a kill between an admission and its revocations: the restart re-checks
               and posts the same statements, one entry each; a Worker that resyncs after its
               admitting device last fetched the group, during a retry, or before a k = 2
-              proposal's cosign is not revoked
+              proposal's cosign is not revoked; a Remove of a leaf whose credential shows a
+              change inside the window, from a dishonest writer leaf, is refused by a member
+              one day old, which judges it from the tree alone (§10.9)
 FS-98  §5,18  a member revokes another of its own devices (D-CORE-20) in a personal network    I-4,15,FI-2 T2+T3  M3-out;
               and a Team with self_admit on and off, from a phone app with a presence signer,              +T4    Team at
               a remote-mode desktop app signing the first call's bytes, and ur devices revoke                     M6-out;
@@ -20896,31 +21093,31 @@ FS-116 §11,19 the governor alone on the fake clock with exact prices (k = 1) an
               a mutant that debits funded P2 from T as well admits ~7.3 pushes an interval and
               fails
 FS-117 §10,11 P0 alone past the refill for 24 h of fake counters on one metadata set, every    FI-3,14     T2     M2-out
-              uploader, group and network under its own rate: 100 Teams of 5,000 admissions,
-              each revoking a sidecar every 5 min, each revocation asking a config and a
-              directory rotation of ~6,000 deliveries, with full 1,000-leaf Removes, 16-slot
-              ERASEs at each network's 60 a minute, 10,000-slot ERASEs and --now shreds of
-              1M-object repos, a Pro network's pushes and 2x year one's mix beside them, and,
-              in other groups, a SCHEDULE and a REQUEST rotation whose claims state cause
-              REMOVE though no shrink, authorization expiry or compromise retirement lies past
-              gen/<g>'s auth pin; then the storm stops and the run goes on 24 h; then again
-              with the governor killed for 10 min, its processes on fallback, and again with
-              {nvb_<set>} lost mid-storm: every P0 write issues on arrival, none queued,
-              refused or paced, every gate's close-to-reopen p99 stays under §10.6's 5 minutes
-              and nothing commits after a gate closes at a generation a revoked holder reads;
-              P1 and unfunded P2 issue nothing while P0 takes the refill, funded P2 nothing
-              past what B holds, and B never falls below zero; the two mislabeled rotations'
-              deliveries and claims are charged as P1 and shed; pushes and evacuation resume
-              within one interval of the storm's end, evacuation's oldest minute directories
-              first, T following its factor of B each interval; the other classes' writes hold
-              FI-14 (a) in every 24 h window, a lost state restarting B and W at zero; the P0
-              page fires within an hour of P0 passing the refill and never in a control day of
-              2x year one's mix with a --now shred of a 1M-object repo; the run reports P0's
-              forgiven excess by kind, the 24 h windows past 0.8 and 1 DWPD, the ramp's time
-              to half and 90% of r, the pushes shed and the oldest batch's age past 26 h;
-              §19.8's gauges and counters equal the oracle's; a mutant flooring T at a fifth
-              of the refill while B is empty, one queuing P0 behind B, and one repaying P0's
-              excess, B going below zero, each fail
+              uploader, group and network under its own rate in each process: 100 Teams of
+              5,000 admissions, each revoking a sidecar every 5 min, each revocation asking a
+              config and a directory rotation of ~6,000 deliveries, with full 1,000-leaf
+              Removes, 16-slot ERASEs at each network's 60 a minute, 10,000-slot ERASEs and
+              --now shreds of 1M-object repos, a Pro network's pushes and 2x year one's mix
+              beside them, and, in other groups, a SCHEDULE and a REQUEST rotation whose
+              claims state cause REMOVE though no shrink, authorization expiry or compromise
+              retirement lies past gen/<g>'s auth pin; then the storm stops and the run goes
+              on 24 h; then again with the governor killed for 10 min, its processes on
+              fallback, and again with {nvb_<set>} lost mid-storm: every P0 write issues on
+              arrival, none queued, refused or paced, every gate's close-to-reopen p99 stays
+              under §10.6's 5 minutes and nothing commits after a gate closes at a generation
+              a revoked holder reads; P1 and unfunded P2 issue nothing while P0 takes the
+              refill, funded P2 nothing past what B holds, and B never falls below zero; the
+              two mislabeled rotations' deliveries and claims are charged as P1 and shed;
+              pushes and evacuation resume within one interval of the storm's end,
+              evacuation's oldest minute directories first, T following its factor of B each
+              interval; the other classes' writes hold FI-14 (a) in every 24 h window, a lost
+              state restarting B and W at zero; the P0 page fires within an hour of P0 passing
+              the refill and never in a control day of 2x year one's mix with a --now shred of
+              a 1M-object repo; the run reports P0's forgiven excess by kind, the 24 h windows
+              past 0.8 and 1 DWPD, the ramp's time to half and 90% of r, the pushes shed and
+              the oldest batch's age past 26 h; §19.8's gauges and counters equal the
+              oracle's; a mutant flooring T at a fifth of the refill while B is empty, one
+              queuing P0 behind B, and one repaying P0's excess, B going below zero, each fail
 FS-118 §11,19 path-epoch copies for 7 days of fake clock on one metadata cluster, entries and  FI-1,6,14   T2     M2-out
               copy limits scaled by 1/100 together: at the planned copy load (live entries of
               rotating refs times epochs a day times 3: half the cluster's 21.6M operations a
@@ -21148,9 +21345,12 @@ data rule                     before a final freeze, only local, T3, canary and 
 
 ```text
 0x0010 interop artifact
-kem       X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519, and tmc/mls's encapsulation
-          and decapsulation equal it on fixed seeds; OpenMLS's 0x004D X-Wing agrees once the M0 KAT matches
-stacks    mls_* and tmc/mls (its provisional 0x004F, mapped to 0x0010) run one scripted lifecycle in both directions:
+kem       X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519, DeriveKeyPair included,
+          the only independent X-Wing evidence, which the artifact says; tmc/mls's encapsulation and decapsulation
+          equal it on fixed seeds, a check of wiring, not of X-Wing, since tmc/mls runs that same code
+          (owner decision 359); OpenMLS's 0x004D X-Wing agrees once the M0 KAT matches
+stacks    mls_* and tmc/mls (its provisional 0x004F, patched to 0x0010 by a build overlay, §10.4) run one scripted
+          lifecycle in both directions:
           create, Add with Welcome, path commits, Remove, an external commit with ExternalInit, at least 10 epochs, a
           PrivateMessage decrypted per epoch; both compute equal epoch_authenticator and exporter outputs at every
           epoch, the "UR evs 1.0 kek" label included
@@ -21251,7 +21451,7 @@ None. PLAN.md says nothing about testing.
 | The governor's accounts charge P2 twice, let a class other than P0 issue while P0 holds the bucket empty, or keep the other classes stopped after a P0 storm ends, so pushes are refused early or the drives wear past the budget by more than P0's forgiven excess | Low | High | one conservation equation and FI-14 (a) and (b), checked after every step; FS-116's exact-cost schedule and its mutant before D-TEST-11's hardware run; FS-117's day of P0 alone past the refill, the day after it, and its mutants |
 | HE refuses port 25, blocking outbound conformance | Unknown | High | asked in M0 (§23.7) |
 | Test hooks reach a release, exposing keys or stalling steps | Low | Critical | build tag; `make check` |
-| A jetsam regression reaches users | Medium | Medium | surrogates; `make size` |
+| A jetsam regression reaches users | High | High | surrogates; `make size` |
 | A purge bug deletes a newest version's content | Low | Critical | observe mode and its soak (D-TEST-12); FI-16 model-checked; FS-64 to FS-71 |
 | The oracle shares a normalization bug with the index | Medium | Medium | written apart, sharing only the published tables; fixed vectors; 22.6's reference extractor |
 | A phone's "search more" leaks the query through what it fetches | Low | High | FI-23's trace equality; no body fetched before an open; a remote search's sizes and evs logs are FI-24's |
@@ -21566,7 +21766,7 @@ Each item gives (due; start).
 | Format 2 misses D-TEST-13 at 2× year one with the index on everywhere ([owner decision 156](#od-156)), holding M10's freeze | Medium | High | 1 KiB blocks chosen at M2 on its projection (D-TEST-11); [owner decision 172](#od-172)'s companion cadence; the write budget sheds; the next cluster sooner (§19.9) |
 | A purge, drop or migration bug destroys live content on production | Low | Critical | D-PHASE-10's and D-PHASE-12's staged rollouts, D-TEST-12's and D-TEST-18's soaks; FS-64 to FS-72 and FS-89 to FS-96 at M10-out |
 | M10's engineers are not hired by M4's exit, and search lands after RS2 | Medium | Medium | 23.5's fallback, M10 after M6, which returns to the owner; no stage waits for it |
-| No indexer is designated, so phones download all at "search more" ([owner decision 177](#od-177)) | High | Low | [owner decision 155](#od-155)'s model; the app's indexer prompt names remote search; `ur indexer add --services search` |
+| No indexer is designated, so phones download all at "search more" ([owner decision 177](#od-177)) | High | Medium | [owner decision 155](#od-155)'s model; the app's indexer prompt names remote search; `ur indexer add --services search` |
 | Format 2's computed write cost misses on production after the freeze | Medium | High | [owner decision 174](#od-174)'s accepted risk: §19.9's next cluster sooner ([owner decision 145](#od-145)) or a later format change; the gate holds at internal networks and design partners meanwhile (D-TEST-13) |
 | A rollback to format-1 binaries after format-2 data exists strands staged content | Low | High | FS-72's rollback case; format-2 batches left to a format-2 evacuator |
 | A G0 re-check or the density review, running beside M0's bootstrap, finds something that changes what is already built ([owner decision 193](#od-193)) | Medium | Medium | Findings return as Q- items (D-PHASE-2); the first format freeze is M2's (23.8), so a finding before it touches no frozen format |
@@ -21733,14 +21933,14 @@ Every D- item, in section order: 460 items, 16 of them withdrawn and 1 decided b
 | D-KEYS-5 | GKM keeps no state of its own; it orders, claims, delivers and retains through conditional writes on its repo's cluster. | [§10](#1011-decisions-proposed) |
 | D-KEYS-6 | Commit before write: a log entry shrinking a repo's key holders closes evs's gate until a covering generation is claimed. | [§10](#1011-decisions-proposed) |
 | D-KEYS-7 | **Withdrawn.** Superseded by owner decisions [113](#od-113) and [128](#od-128): the signed statement, not an admin committer, authorizes each membership change. | [§10](#1011-decisions-proposed) |
-| D-KEYS-8 | Drop keys in each signed GenRotate give write-only deposits to covering generations; each key domain is its own repo. | [§10](#1011-decisions-proposed) |
+| D-KEYS-8 | Drop keys in signed GenRotates, 90-day and renewed, give write-only deposits to covering generations; one repo per key domain. | [§10](#1011-decisions-proposed) |
 | D-KEYS-9 | Rotating devices wrap each generation to every reading member's RecoveryBind key; Team's only escrow is a visible audit reader. | [§10](#1011-decisions-proposed) |
 | D-KEYS-10 | M2's entry fixes MLS wire fields, its exit freezes them on §22.10's interop artifact; the security page discloses unaudited MLS. | [§10](#1011-decisions-proposed) |
 | D-KEYS-11 | Tagged, ephemeral, CI and cloud sidecars read and write through ReaderWraps; live Delegations get DelegationWraps ([owner decision 114](#od-114)). | [§10](#1011-decisions-proposed) |
 | D-KEYS-12 | MLS is 10.4's subset on ciphersuite 0x0010 from v0, migrating through GroupForm if IANA assigns another value. | [§10](#1011-decisions-proposed) |
 | D-KEYS-13 | After a site loss, repo admins' or owners' consented devices re-seed each group from their keychains under a ladder-linked GroupForm. | [§10](#1011-decisions-proposed) |
-| D-KEYS-14 | Groups scale by 10.6's sizes: self-update interval, KF5 resync, GroupInfo on demand above 16 leaves, daily acks, trees on disk. | [§10](#1011-decisions-proposed) |
-| D-KEYS-15 | `gkm/<group_id>/gen/<g>`, created If-None-Match by the rotator, alone holds a generation; MLS commits never raise it. | [§10](#1011-decisions-proposed) |
+| D-KEYS-14 | Groups scale by 10.6's sizes: self-update interval, KF5 resync, GroupInfo on demand above 16 leaves, daily acks, streamed on-disk trees. | [§10](#1011-decisions-proposed) |
+| D-KEYS-15 | `gkm/<group_id>/gen/<g>`, created If-None-Match by the rotator, alone creates a generation; MLS commits never raise it. | [§10](#1011-decisions-proposed) |
 | D-KEYS-16 | KeyHolders: leaves, uncovered agents, live Delegations, recovery keys; a Delegation's key drops at revocation, not_after, Suspend or non-reap revocation. | [§10](#1011-decisions-proposed) |
 | D-KEYS-17 | Drop keys ride each signed GenRotate for deposit kinds; depositors seal only to generations covering every known shrink and expiry. | [§10](#1011-decisions-proposed) |
 | D-KEYS-18 | At most 16 leaves, the epoch object carries sealed GroupInfo; above 16, recovery and resync need one leaf online. | [§10](#1011-decisions-proposed) |
@@ -22919,7 +23119,7 @@ Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections th
 
 ## Appendix G. Server-visible metadata list
 
-§2.8 holds `metadata_list.yml` (v30, updated 2026-11-16 for §8's and §9's items), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 99 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-12; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
+§2.8 holds `metadata_list.yml` (v31, updated 2026-11-16 for §10's items), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 99 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-12; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
 
 ## Appendix H. Research sources
 

@@ -16,7 +16,7 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§5 The Sidecar core](#s5) | 2 | 1 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 4 | 1 |
 | [§8 Access control](#s8) | 1 | 0 |
-| [§10 Group keys for evs: MLS and the GKM service](#s10) | 23 | 15 |
+| [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 25 | 37 |
 | [§12 DNS](#s12) | 7 | 0 |
 | [§13 The TLS edge and certificates](#s13) | 3 | 13 |
@@ -36,7 +36,7 @@ Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with i
 
 Sections 8 and 9's owner answers are folded as owner decisions (2026-11-10): section 9's QD-607 to QD-610, QD-612, QD-632 and QD-633 as 227-233, with QD-613 (section 6's key prefixes) as 234 and QD-640 as 235, and section 8's QD-598 to QD-606 as 236-244, each stated in §11 where it binds. Their proposed DESIGN.md text (8.8, 9.8) waits for the design agent's amendments above, and is folded only with them.
 
-Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
+Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 8.8's evs-4 words; and 9.8's evs-11 ttl. 6.8's gkm-5 pointers went into §2.8's gkm-5 with §10's items (QD-618, owner decision 363).
 
 <a id="s3"></a>
 ## §3 Architecture overview and end-to-end flows
@@ -165,15 +165,6 @@ Not folded (2026-11-16): line 1 of the worked example's ```hujson block in §8.5
 <a id="s10"></a>
 ## §10 Group keys for evs: MLS and the GKM service
 
-### QD-031: How long does a drop key live, that is, how long does a mailbox take mail with no reader online?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: drop_not_after_ms = time_ms + 90 days, the setting GkmSettings.DropKeyLifetime, one value for every kind that takes deposits, together with row 2's renewal.
-
-Changes: §10.5 GenRotate field 14; D-KEYS-8; D-KEYS-17.
-
-Questions: `plan-KEYS-drop-key-lifetime.md#1`.
-
 ### QD-046: A forged reader key, beyond correcting the text
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §5.*
 
@@ -183,282 +174,7 @@ Changes: §10.5 Ladder bullet; §2.18 unaudited-cryptography row; ledger row for
 
 Questions: `g0-recheck-0-readerkey-forgery.md#1`, `g0-recheck-0-readerkey-forgery.md#2`.
 
-### QD-057: New members cannot judge removal of a stale device
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §5.*
-
-[plan-KEYS-stale-remove-evidence] Not the question's option 1: give every member the same signed evidence. UrMlsCredential.not_after, field 6, today undefined, is ms since the epoch: the signing time plus 90 days, KeyPackages' life, and every UpdatePath leaf and external join re-signs the credential, so the tree carries each leaf's last change under its own identity key, and a Welcome joiner receives it. §10.9's Remove row: a stale Remove is valid iff the target's credential in the prior epoch's tree has not_after - 90 days + stale_leaf_days, read at the commit's auth pin, <= my clock + 60 s. Members judge this from the tree alone, so a one-day joiner and an old member agree. A writer leaf commits one only a day past that, and only if its own record shows no later change of that leaf. The value is evidence only: no commit is refused over it, and a leaf that inflates it delays only its own stale Remove. §7.10's "last change" and MemberDevice.LastChange read the same value. FS-97 adds: a Remove of a leaf inside the window refused by a member one day old. [plan-KEYS-wire-gaps#15] As plan-KEYS-stale-remove-evidence.md: ms since the epoch, the signing time plus 90 days, re-signed in every UpdatePath leaf and external join. It is evidence only, so no leaf already in a tree is refused over it.
-
-Changes: §10.4 UrMlsCredential field 6; §10.9 Remove row; §7.10 stale and cleanup rows; §5.4 MemberDevice.LastChange; FS-97.
-
-Questions: `plan-KEYS-stale-remove-evidence.md`, `plan-KEYS-wire-gaps.md#15`.
-
-### QD-065: Nothing renews a drop key: a lapse closes no gate, and a returning writer may never write
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6.*
-
-§10.5's depositor row ends: "else it waits for a newer rotation, which the gate, or for a drop key with under 7 days left §10.6's renewal, makes writers write". §10.6 gains a duty row: a GET drop-key whose newest GenRotate has under 7 days to drop_not_after_ms hints pending to R's writers, at most once an hour per group and process; a writer on that hint, and every writer at its hourly resync (§6.8), rotates with cause SCHEDULE if its repo's kind takes deposits and the newest drop key has under 7 days left, with no write of its own. §10.9's rotation checks and the depositor rule add: time_ms < drop_not_after_ms <= time_ms + DropKeyLifetime + 10 min, as readerkey's check does, so no signer can void the backstop with a far-future value. KEYS-M7-01 adds: a returning writer renews with nothing to ingest.
-
-Changes: §10.5 depositor row; §10.6 duties; §10.9 rotation checks; D-KEYS-17; FS-23.
-
-Questions: `plan-KEYS-drop-key-lifetime.md#2`.
-
-### QD-066: How does a ~6,000-delivery rotation fit §10.6's 5-minute gate target under W2's 1,200 gkm requests a minute?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Option 1, at M2's entry, recovery wraps included. POST /gkm/groups/<id>/wraps/<g>/<c8> takes GkmWrapBatch{repeated bytes deliveries = 1}, 1 to 256 Signed ReaderWraps and DelegationWraps, and answers 200 with GkmWrapBatchReply{repeated GkmWrapResult results = 1}, GkmWrapResult{uint32 status = 1; bytes winner = 2}, in order: 201, 412 with the winner, 403, 409, 429, or 0 for not tried. New POST /gkm/groups/<id>/recovery-wraps/<g>/<c8> does the same for a rotator's RecoveryWraps, items {member_id, b8, ciphertext}; POST /gkm/recovery/<member_id>/wraps stays for a rebind. New POST /gkm/reader-keys {sidecar_ids, at most 256} answers each Signed ReaderKey or none, under the read row's scope. gkm runs each item through the wrap checks as today, 16 PUTs at once, starts no PUT past 20 s into the request, under the lb's 30 s, and marks the rest 0; If-None-Match makes a retry safe. §10.6's STAGED bound counts items. §10.5's step 3 reads "in batches of at most 256, up to 4 at once". A 6,000-object rotation is then about 45 requests, and W2 stands. KEYS-M6-03 adds a T3 case: a full rotation through the real lb limit.
-
-Changes: §10.5 Rotate step 3; §10.6 wrap checks; §10.14 routes.
-
-Questions: `plan-KEYS-wrap-route-rate.md`.
-
-### QD-156: Row (h): no route reads GroupForms, and a depositor cannot learn its group id
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Add GET /gkm/repos/<id>/forms under r, rw and admin: the repo's Signed GroupForms, oldest first. Replace §10.14's GET /gkm/groups/<id>/drop-key?since=<g> with GET /gkm/repos/<id>/drop-key?since=<g>, scopes deposit, r, rw and admin, gkm resolving the newest GroupForm. D-KEYS-17's "only the drop-key route" stands.
-
-Changes: §10.14 routes; §10.6 scopes.
-
-Questions: `plan-KEYS-wire-gaps.md#8`.
-
-### QD-165: Row (i): dropping GroupInfo from a generation-0 epoch object would wedge recovery
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Not the proposed text. A generation-0 epoch object still carries the sealed GroupInfo at 16 leaves or fewer and moves the pointer as any epoch does. It seals under K_groupinfo of the newest generation the self-joiner holds, named in GkmEpochObject.group_info_generation; GkmCommitHeader.generation stays 0 and it carries no GenWrap. KF5's "the generation it names" reads that field in every epoch object.
-
-Changes: §10.6 GroupInfo row; §10.7 KF5.
-
-Questions: `plan-KEYS-wire-gaps.md#9`.
-
-### QD-177: `own`, `read` and D-KEYS-26 say any gkm token, while deposit reaches only the drop-key route
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-A token whose only repo scopes are deposit reaches GET drop-key and nothing else at gkm. §10.6's own and read rows and D-KEYS-26 change "any gkm token" to "a gkm token holding an r, rw or admin scope on some repo"; the rest of each row stands, and a token mixing deposit and r reaches them through its r. KEYS-M2-12's route matrix asserts deposit refused on POST /gkm/reader-key, POST /gkm/key-packages and GET /gkm/reader-key/<sidecar_id>.
-
-Changes: D-KEYS-26; §10.6 own and read rows.
-
-Questions: `g0-recheck-0-deposit-scope.md#2`.
-
-### QD-181: Where does gkm count its per-uploader rates, given §22.7 allows it no Redis family for them?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §2, §22, §9.*
-
-Option 1. §10.6 says: gkm counts these limits per process, in memory, as §9.10 counts sockets', so each is the stated rate times the process count and a restart forgets it. That covers the 60 commits, the 60 claims, the STAGED bound and the 10 KeyPackage claims; the 24 h ReaderKey rule stays exact, read from the stored object. §11.13's classes row and §2.10's P0 row say per process, FS-117 reads "under its own rate in each process", and each limit is a GkmServiceSettings field. No Redis family, and no §2.8 or §22.7 change, since gkm-9 already gives rate limits as a purpose.
-
-Changes: §10.6 checks and claim rows; §11.13 classes row; §2.10 P0 row; FS-117.
-
-Questions: `plan-KEYS-rate-counters.md`.
-
-### QD-229: §10.8 claims a window and veto that §7.9's table does not give most members
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7.*
-
-Replace §10.8's "a new device is admitted by the recovery key under §7.9's window and veto" (10-KEYS.md:610) with "a new device is admitted by the recovery key as §7.9's table says: at once outside the AdminSet, or at the cosign with self_admit off; through the 72 h window and veto for AdminSet members, k = 1 networks and restored bindings".
-
-Changes: §10.8.
-
-Questions: `g0-recheck-1-wr-n4-recovery-window.md#1`.
-
-### QD-273: §10.4's kem row passes by construction: is the draft's KAT enough X-Wing evidence for the freeze?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22.*
-
-Recommended: option 1. Keep §22.10's rows and make the claim exact. §10.4's kem row takes §22.10's first clause, "X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519", extended to DeriveKeyPair, and both rows say tmc/mls's comparison shares that code, so it checks wiring, not X-Wing. ARTIFACT.md states that the draft's vectors are the only independent X-Wing evidence. OpenMLS stays as §22.10's required row has it: needed only if a required step has a gap. The stacks row's tree, key schedule, framing and Welcome evidence stands.
-
-Changes: §10.4 kem row; §22.10 kem row.
-
-Questions: `plan-KEYS-interop-independence.md#2`.
-
-### QD-280: D-KEYS-15 says gen/<g> is the only place a generation exists
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Change D-KEYS-15 and §10.5 from "is the only place a generation exists" to "is the only place a generation is created; a gen pack later holds it verbatim (10.16)", matching §10.6's row (10-KEYS.md:326-327). No behavior changes in this build.
-
-Changes: D-KEYS-15; §10.5.
-
-Questions: `g0-recheck-2-gen-pack-trigger.md#3`.
-
-### QD-281: §10.8 says policy narrows kind defaults; nothing can
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-No document narrows a kind default; only hard denies remove access there. Delete ", which policy narrows" from §10.8's Key domains line.
-
-Changes: §10.8.
-
-Questions: `plan-ACL-small-readings.md#2`.
-
-### QD-615: Should §10.5 fix the ladder's AAD widths as built (u64be for g and e, u8 for cause) and gen/1's cause as REQUEST? (keys-ladder-aad-widths, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-§10.5's ladder AADs take the widths KEYS-M2-02 built: GenLink repo_id || u64be(g) || u8(cause) (25 B); GenWrap and LeafWrap group_id || u64be(e) || u64be(g) (32 B); GroupInfo group_id || u64be(e) (24 B). gen/1 carries cause REQUEST, and a reader refuses REMOVE there. Text only for design-records; testdata/gkm/ladder.json pins the bytes.
-
-Changes: §10.5 text (design-records); testdata/gkm/ladder.json stands.
-
-Questions: `details-6-ladder-aad-widths.md`, `keys-ladder-aad-widths.md`.
-
-### QD-616: Which extension marks a last-resort KeyPackage, and at what type number? (keys-m2-07-last-resort, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A last-resort KeyPackage is marked by draft-ietf-mls-extensions' last_resort extension, type 0x000A, empty extension_data, in KeyPackage.extensions only and listed in every leaf's capabilities, as mls_extension.go builds it. Section 6.2.2's two rules apply: a device that joined through its last-resort KeyPackage self-updates at once and replaces it at its next upkeep pass. D-KEYS-12's suite migration moves the number if the draft's changes. design-records adds the line to §10.4's credential block (6.8).
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; §10.4 credential block line (design-records).
-
-Questions: `details-6-last-resort-extension.md`, `keys-m2-07-last-resort.md`.
-
-### QD-617: A re-formed group's epoch 0 carries no auth pin: should epoch 1's floor be gen/<the form's generation>'s auth? (keys-wire-reform-epoch-zero, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A re-formed group's epoch 0 carries no auth pin, and the epoch PUT check gives epoch 1 its floor from gen/<form.generation>'s auth, which plan-KEYS-reform-ladder's rule 5 requires to exist before any commit, wrap or claim. No wire change; one sentence in §10.6's epoch PUT check (design-records). DESIGN-DETAILS.md section 6 is built on this, and KEYS-M2-25 has landed it.
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; KEYS-M2-25 (landed) stands; §10.6 epoch PUT check sentence (design-records).
-
-Questions: `details-6-reform-epoch-zero-floor.md`, `keys-wire-reform-epoch-zero.md`.
-
-### QD-618: Welcome pointers keyed by (recipient, group, epoch): is `gkm/welcome/<sidecar_id>/<group_id>/<n>` approved? (keys-m2-13-last-resort-welcome-pointer, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-Welcome pointers are keyed gkm/welcome/<sidecar_id>/<group_id>/<n> (n 20 digits), with the KeyPackageRef moved into GkmWelcomePointer.key_package_ref = 3; a device holding several pointers for one group takes the highest n above the newest epoch it reached. One Welcome, one key. The key form changes in §10.6, QD-442 and wrap_paths.json, with one proto field and gkm-5's wording (design-records), all unfrozen until M2's exit. DESIGN-DETAILS.md section 6 is built on this; KEYS-M2-19 carries the format change.
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; KEYS-M2-19 carries it; §10.6, QD-442, wrap_paths.json, gkm-5 (design-records).
-
-Questions: `details-6-welcome-pointer-key.md`, `keys-m2-13-last-resort-welcome-pointer.md`.
-
-### QD-637: Should a rotator read forwarding Delegations' reader keys in batches of up to 256, as it reads ReaderKeys, rather than by one GET each?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-gkm gains POST /gkm/delegation-keys {delegation_ids, at most 256} beside the GET, answering each stored forwarding reader key or none, in order, under the GET's scope (a reader of the network's config), as QD-066's POST /gkm/reader-keys does; one request and one reply message in gkm.proto with their gkm-1 lines, before M8's freeze. A config rotator reads delegation keys through it, about 13 requests a rotation at Team scale. Until it lands KEYS-M8-01 reads by the GET, one at a time.
-
-Changes: KEYS follow-up: the batched route, its proto messages and the rotator's use of it; §10.14's routes and gkm-1 lines (design-records).
-
-Questions: `keys-m8-01-delegation-key-batch-read.md`.
-
-### QD-638: Who makes the group of a repo that a tagged or ephemeral sidecar creates, since KF1's epoch 0 needs its creator's leaf and an agent holds none?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A tagged or ephemeral sidecar files the RepoCreate and places the repo, and stays its admin (owner decision 8). gkm hints pending to the network's config writers for a keying repo with no form; the first member device to act runs KF1's steps 2 to 4 as the group's creator (epoch 0 with its own leaf) and wraps generation 1 to the agent. Activation waits for that device, as an agent's every Add already does; a repo an agent creates while no member device is online stays keying until one returns. No format change; KF1 (§10.7) gains the second device (design-records). A KEYS follow-up builds the hint rule and the member device's step.
-
-Changes: KEYS follow-up: gkm's pending hint for a formless keying repo; a member device forms the group and wraps gen 1 to the agent; KF1 §10.7 text (design-records).
-
-Questions: `keys-m2-19-agent-created-repo-group.md`.
-
-### QD-641: A 1,000-leaf group's join, path commit and resync measure 27 to 63 MB of heap above their baseline, three to six times DESIGN-DETAILS 6.4's "under ~10 MB": is the engine to be brought under the phone budget, or the budget and the claim changed?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The MLS engine is brought under the phone budget in the review phase, measured by KEYS-M2-31's harness on the ios32 cell first. The owner directs that the SDK offload memory to storage wherever possible, since the iOS network extension and the apps have much more fast NVMe storage than RAM: hold the ratchet tree and other large state on disk and stream it (a path sealed and written a node at a time, the tree hashed and encoded from its on-disk sections, which mls_state.go already writes a node at a time), one decode for a resync, and a copy-on-write of the path in place of a whole-tree clone before a commit. No format or flow changes. Until then the harness reports the peaks and fails nothing on them. If the cell still reads over budget after this work, bounding a 32 MiB leg's roles is raised as its own question.
-
-Changes: review phase: KEYS-M2-06, -08 and -09's engine files, storage-backed tree and streamed path; standing owner direction: SDK, apps and iOS extension offload memory to storage (BRIEF.md); DESIGN-DETAILS 6.4's memory row restated by the design agent.
-
-Questions: `keys-m2-23-large-group-memory.md`.
-
-### QD-642: Can a code-only device open its recovery wraps before it is admitted, or only fetch them?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §7, §2.*
-
-Before admission a code-only device fetches its recovery wraps under recovery:<member_id> and keeps the newest per group in its keychain; it opens them once admitted, when gen/<g> reaches it: first the config group's wrap, then the anchor, then the rest (gkm_recovery.go as built). Text only: §10.8, §7.9 and DESIGN-DETAILS 6.2.4 step 1 say 'fetches' where they say 'opens at once' (design-records; the design agent for 6.2.4). No format or scope change; §2.10's disclosure is unaffected.
-
-Changes: §10.8 and §7.9 wording (design-records); DESIGN-DETAILS 6.2.4 step 1 wording (design agent).
-
-Questions: `keys-m2-24-recovery-wrap-opens-before-admission.md`.
-
-### QD-643: At which state does a member judge a GroupForm's signer, when the GroupForm carries no auth pin?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §2.*
-
-GroupForm gains bridge.AuthPin auth = 5, the signer's state when it signs. Members judge the form's signer by §10.6's rule at that pin where their retained log reaches it, and not at all before it, as R1's judged row does for every other judged statement; gkm holds the pin to its newest state as it holds a claim's (on the chain, not ahead). One field before M2's freeze and a §2.8 gkm-1 line for the form chain's pin (design-records). KEYS follow-up: gkmParseGroupForm reads the pin and GkmFormSignerAllowed runs at state.At(pin); the re-forming client fills it. Until then the client judges at the newest state, refusing with an alarm.
-
-Changes: KEYS follow-up: GroupForm.auth = 5 in gkm.proto, gkm_reform.go judging at the pin, gkm's check, tests; §10.6 GroupForm row and §2.8 gkm-1 line (design-records).
-
-Questions: `keys-m2-25-groupform-signer-judged-at.md`.
-
-### QD-644: What should Gkm.tla's `MembersSkipRosterCheck` twin show, when the model's reach is computed from the store and a bad commit breaks the invariant the moment it stands?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-Gkm.tla models what a member's refusal buys: a poisoned set of generations and an Inject action for a hostile leaf's commit; members that process it refuse and poison its generation; Seal refuses a poisoned generation; the invariant is that no content sealed after the injection is readable by the dropped leaf. The MembersSkipRosterCheck twin lets Seal use the poisoned generation and must break it. About 40 lines of model and one invariant, by the design agent (section 6.6's record) within the disk rule.
-
-Changes: sidecartest/model/details/Gkm.tla and DESIGN-DETAILS 6.6 (design agent).
-
-Questions: `keys-m2-19-members-skip-roster-twin.md`.
-
-### QD-343: What does 'tmc/mls under 0x004F mapped to 0x0010' mean, when the suite number is inside signed bytes?
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-"Mapped" means patched. mlsinterop/ builds tmc/mls at v0.0.0-20260930074835-1c42a372504a with one build overlay changing wire.go:39's constant from 0x004F to 0x0010, which no other tmc/mls suite uses, so both stacks sign and hash one number and testdata/mls/0x0010/ holds genuine 0x0010 transcripts. ARTIFACT.md records the patch, and that tmc/mls cites draft -06 where §10.4 cites -07.
-
-Questions: `plan-KEYS-interop-independence.md#1`.
-
-### QD-441: Row (d): the KDF and AEAD of HPKE-XWing
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §11.*
-
-HPKE-XWing means KEM 0x647a, KDF HKDF-SHA256 (0x0001), AEAD AES-128-GCM (0x0001), base mode, by crypto/hpke's NewSender and Sender.Seal, since hpke.Seal takes no AAD. It holds for ReaderWraps, DelegationWraps, RecoveryWraps and deposit slots; a deposit slot uses info "UR evs 1.0 deposit" and aad = repo_id || u64be(g) || slot_id.
-
-Changes: §10.5 HPKE-XWing; §11.12 deposits row.
-
-Questions: `plan-KEYS-wire-gaps.md#4`.
-
-### QD-442: Row (g): padding and id encoding in gkm's object keys
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §7.*
-
-In gkm's keys, <n>, <g> and <seq> are 20 decimal digits, zero-padded, as proj/ is (§7.9); <seq> starts at 1. sidecar_id, member_id, repo_id and group_id are 32 lowercase hex characters with no dashes, not Id.String()'s form; delegation_id and <ref> are 64; c8, k8 and b8 are 16. s: and d: are literal ASCII prefixes. testdata/gkm/wrap_paths.json pins these.
-
-Changes: §10.6 object table.
-
-Questions: `plan-KEYS-wire-gaps.md#7`.
-
-### QD-463: Numbers for ReaderKey, GkmHint and GkmHintKind
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-As landed in gkm.proto: ReaderKey{sidecar_id = 1, xwing_public_key = 2, int64 not_after = 3}, in ms since the epoch, keeping §10.5's name, as plan-KEYS-wire-gaps.md#2 also answers; GkmHint{group_id = 1, epoch = 2, kind = 3, recipient = 4}, recipient as bytes in the wrap path's s: or d: form; GkmHintKind COMMIT 1, PENDING 2, WELCOME 3, KEY_PACKAGES_LOW 4, WRAP_PENDING 5. design-records writes them into §10.14.
-
-Changes: §10.5; §10.14.
-
-Questions: `protos-services-unwritten-numbers.md#2`.
-
-### QD-464: Row (m): POST /gkm/groups against POST /gkm/repos/<id>/forms
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-POST /gkm/groups serves creation and takes all three bodies: the Signed GroupForm, epoch 0 and generation 1's Signed GenRotate, written in that order, each If-None-Match, equal bytes answering success, so KF1 resumes after a crash. POST /gkm/repos/<id>/forms serves only a re-form.
-
-Changes: §10.14 routes.
-
-Questions: `plan-KEYS-wire-gaps.md#13`.
-
-### QD-465: Row (k): how holders_sha256 sorts and joins
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-holders_sha256 = SHA-256 of the identities sorted ascending by bytes.Compare and concatenated with no separator or count. Identities are 17 B (kinds 1, 2 and 4: the kind byte and a 16-byte id) or 33 B (kind 3: the kind byte and a 32-byte delegation_id), so the kind byte fixes each length, and each appears once, KeyHolders being a set.
-
-Changes: §10.5 identity bytes.
-
-Questions: `plan-KEYS-wire-gaps.md#11`.
-
-### QD-466: Row (l): the drop key pair's derivation and the Delegation seed's mapping
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §7.*
-
-Drop pair: hpke.MLKEM768X25519().DeriveKeyPair(K_drop), K_drop being the 32-byte `drop` derivation of RK_g. Delegation: hpke.MLKEM768X25519().NewPrivateKey(delegation_reader_seed), X-Wing's own 32-byte seed, and reader_xwing_public_key is its public key's bytes.
-
-Changes: §10.5 drop purpose; §7.8 AuthKeyBundle.
-
-Questions: `plan-KEYS-wire-gaps.md#12`.
-
-### QD-467: Row (f): bodies of epoch/<n>, group-info, the Welcome pointer and <ref>.claim
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Four messages in protocol/gkm.proto. GkmEpochObject{bytes commit = 1; GkmCommitHeader header = 2; bytes uploader = 3; int64 time_ms = 4; bytes gen_wrap = 5; bytes sealed_group_info = 6; uint64 group_info_generation = 7; bytes network_id = 8; uint32 cipher_suite = 9}: fields 8 and 9 in epoch 0 only, whose commit is empty and whose uploader is gkm-1's creator. GkmGroupInfoObject{uint64 epoch = 1; uint64 generation = 2; bytes sealed_group_info = 3}: epoch alone is the pointer, all three above 16 leaves. GkmWelcomePointer{bytes group_id = 1; uint64 epoch = 2}. GkmKeyPackageClaim{bytes group_id = 1; bytes claimer = 2}. A Welcome or KeyPackage object is the MLSMessage bytes themselves. gkm.proto's header comment drops "none is declared here".
-
-Changes: §10.6 objects.
-
-Questions: `plan-KEYS-wire-gaps.md#6`.
-
-### QD-468: Row (c): RecoveryWrap's body, HPKE info and AAD
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-RecoveryWrap is unsigned, bare enc || ct, 1,168 B: 1,120 B enc, a 32 B RK_g and a 16 B tag. HPKE base mode, info "UR evs 1.0 recovery", aad = member_id (16 B) || group_id (16 B) || u64be(g) || C_g (32 B) || SHA-256(the binding's Ed25519 key)[0:8], the raw bytes b8 spells in hex.
-
-Changes: §10.5 RecoveryWrap; §10.6 sizes.
-
-Questions: `plan-KEYS-wire-gaps.md#3`.
-
-### QD-469: Row (e): ur_group's extension number and encoding
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §17, §2.*
-
-ur_group is GroupContext extension type 0xF553, RFC 9420 §17.3's private use, listed in required_capabilities. TLS presentation with RFC 9420 §2.1.2's vectors: struct { opaque network_id<V>; opaque repo_id<V>; uint8 kind; opaque owner_member_id<V>; }. kind is the RepoKind number in acl.proto, general 1 to secret 9; owner_member_id is empty when the repo is not owner-bound.
-
-Changes: §10.5 ur_group.
-
-Questions: `plan-KEYS-wire-gaps.md#5`.
+Not folded (2026-11-16): the ledger's row for R3's HNDL major, whose "Nothing" becomes this residual, since that row is in DESIGN-REVIEW-RESPONSE.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as owner decision 358 (§10.5's Ladder and readerkey rows, §10.15's active clone row, §5.4's `key_changed`, §2.18's unaudited-cryptography row).
 
 ### QD-471: Numbers for GroupForm, which only §2.8's gkm-1 lists
 *Proposed fill: a gap the agents filled; work builds on it. Also amends §2.*
@@ -469,41 +185,7 @@ Changes: §10.6.
 
 Questions: `protos-services-unwritten-numbers.md#3`.
 
-### QD-526: Bodies for §10.6's objects and §10.14's routes, which §10 names and gives no bytes
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Accept rows 1 to 10 as landed in protocol/gkm.proto, every route `x-status: planned`, and design-records folds them into §10.14. Row 4: `GET /gkm/welcomes` answers each pointer with its Welcome. Row 7: the epochs and gen lists stop at gkm's bound, and a client asks again after its last item. The three items it left open follow plan-KEYS-wire-gaps#8, plan-KEYS-wire-gaps#13 and plan-KEYS-wrap-route-rate.
-
-Changes: §10.14.
-
-Questions: `keys-wire-route-bodies.md`.
-
-### QD-528: Row (b): ReaderKey as a proto message
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-ReaderKey stands as landed in protocol/gkm.proto: sidecar_id = 1, xwing_public_key = 2, not_after = 3, an int64 of ms since the epoch. The name stays not_after, §10.5's own, not the question's not_after_ms.
-
-Changes: §10.5 ReaderKey unit.
-
-Questions: `plan-KEYS-wire-gaps.md#2`.
-
-### QD-569: Nine risks carry two ratings in different sections
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §11, §15, §19, §21, §22, §23.*
-
-One rating each, the higher of the pair: rogue admin admits a device Medium/High (fix 10-KEYS.md:869); site or Hurricane Electric outage Medium/Critical (15-MAIL.md:419); costs hold a set below ~400 pushes/s Medium/High (19-OPS.md:959); Sybil free networks High/High (21-ABUSE.md:214); iOS jetsam regression Medium/High (22-TEST.md:2777); no ACL document High/High (21-ABUSE.md:216); purge bug Low/Critical (11-EVS.md:3133); site loss Low/Critical (11-EVS.md:3116); no indexer designated High/Medium (23-PHASE.md:296).
-
-Changes: §10.15; §11.21; §15.16; §19.17; §21.17; §22.16; §23.15.
-
-Questions: `g0-density-text-alignments.md#10`.
-
-### QD-588: C_g sits in a paragraph, not a fence
-*Settled by the agents from the design; work builds on it.*
-
-C_g = SHA-256("UR evs 1.0 commit" || repo_id || u64be(g) || RK_g), as written. design-records moves that line into §10.5's fence unchanged, which clause 2 of the density rule asks.
-
-Changes: §10.5.
-
-Questions: `g0-density-text-alignments.md#8`.
+Not folded (2026-11-16): the ```proto fence for GroupForm in §10.6. GroupForm's declaration is held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do; the numbers are folded as text, with QD-643's `auth = 5` (owner decision 368), in §10.6's bodies block.
 
 <a id="s11"></a>
 ## §11 Encrypted versioned storage
@@ -3260,15 +2942,6 @@ Changes: §11.6 statement and parts rows (design-records); EVS1-M2-48: statement
 
 Questions: `evs1-m2-48-changeless-push-in-parts.md`.
 
-### QD-659: Which member device may form the group of a repo an agent creates, when no config writer reads that repo or holds its admin scope?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-QD-638's former stays as built for M2: a config writer forms the group of a repo an agent creates only when it is a key holder of the repo (R3) and holds admin on it at gkm, which §8.5's implicit document always gives every member device. An agent's repo needs a member device that reads and administers it; under a narrower ACL document with none, the repo stays keying (fails closed, nothing leaks). Revisit when Team policies can narrow member devices' evs rights (M6), with the first acting config writer filing RepoGrant{reader} and RepoAdmin{add} for itself as the candidate.
-
-Changes: KF1 §10.7 and §8.8 RepoCreate notes (design-records); M6 revisit noted on TEAM/ACL policy tasks.
-
-Questions: `keys-m2-32-agent-repo-former-rights.md`.
-
 ### QD-660: Should a push attempt read evs's newest authorization state again when it reruns steps 4 and 5, instead of judging 5d against the gate view it bound at arrival?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
 
@@ -3394,15 +3067,6 @@ Vault entries are narrowed by rule. §16.6's refused-from-MCP list and MCP-M3-12
 Changes: §16.6 refused list and McpGuard row for a mailbox's vault/ family (edge lane, MCP-M3-12's code); §15.8 and §2.18 residual sentences (design-records).
 
 Questions: `mail-m8-02-vault-readers.md`.
-
-### QD-675: When a forwarding Delegation's row leaves the rows before gkm's reconciler deleted its reader key object, what deletes gkm/dkey/<delegation_id> within its published ttl?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-gkm's reconciler keeps a tracked end of a forwarding Delegation after its row leaves the rows (QD-648) and deletes gkm/dkey/<delegation_id> on schedule, DelegationKeyRetention (24 h) after the end. After a restart, a sweep of the network's gkm/dkey/ prefix, now and then, deletes at once any object whose id no forwarding row in the state's rows names: its row is gone, so its retention has passed by at least 4,096 positions and nothing a rotator seals still needs it. §2.8's published ttl then holds at any entry rate and across restarts; no row or format changes. A KEYS-lane change in sidecar/gkmservice/reconciler.go (core lane).
-
-Changes: core-lane follow-up (KEYS): gkmservice/reconciler.go keeps tracked ends past their rows and sweeps gkm/dkey/ for unnamed ids; §2.8's gkm ttl text stands.
-
-Questions: `team-m2-21-dropped-forwarding-key-objects.md`.
 
 ### QD-676: What should a VPN component's posture do once its overlay is full and no compile has run to clear it?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
@@ -3538,15 +3202,6 @@ Once SEARCH-M10-42 has landed, MAIL-M7-11's message parser calls extractor 1's f
 Changes: edge-lane follow-up after SEARCH-M10-42: mail_parse.go and mail_parse_text.go call indexStripHtml and indexDecodeCharset.
 
 Questions: `details-11-mail-snippet-reading.md`.
-
-### QD-695: Should section 6 accept the window in which a wrapped writer, or a leaf whose seal races a poisoned commit, seals to the generation the commit carried until the refusing member's REMOVE rotation reaches it?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-Section 6's window stands as accepted: after a compromised leaf's commit whose tree holds a party dropped at the commit's own header, a wrapped writer (which reads no commit), and a leaf whose seal races the injection, may seal to the generation the commit carried until the refusing member's REMOVE rotation reaches it. The commit needs a compromised leaf, which already holds that generation's key and could hand the dropped party the same content or the key itself, so the window adds no reach the attacker lacks; the refuser's rotation at once ends it. No rule, format or model change; DESIGN-DETAILS.md 6.3's text stands.
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; §10.9 notes the accepted window (design-records).
-
-Questions: `details-6-poison-window.md`.
 
 ### QD-696: Should a VPN component's narrowing_overdue alarm back off while a narrowing entry keeps waiting for a compile that never runs, instead of repeating every 10 minutes forever?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
@@ -3710,15 +3365,6 @@ Changes: §11.8's Authorization row (design-records); EvsBindingSource goes and 
 
 Questions: `acl-m2-11-evs-binding-source.md`.
 
-### QD-718: Who builds gkm's authorization state over the gate cache, GkmAuthState for the gkm block and GkmReconcilerState for taskworker's reconciler, which no plan's Provides names?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-A KEYS task after ACL-M2-14 builds both real seams in gkmservice over AclGateCache's exported API: GkmAuthState (a token's standing and honored scope through ACL-M2-14's HonorScope for the gkm audience, with the gkm-only answers KEYS defines: readers, writers, pins, Delegations, late holders and HoldersDropped over sidecar.GkmRemoveDue) and GkmReconcilerState (each network's moves, the networks the host holds, a network's newest state as a GkmAuthView, and a sidecar's network). ACL adds to AclGateCache, as a small separate change in its own files, the list of networks it holds, an index from a sidecar to the network that admits it, and a callback when a network's new state is installed, so a reconciler woken by a hint reads the new snapshot. Every gate check stays in ACL's one cache (C-09); until both land the gkm block and taskworker's reconciler stay failed closed as built.
-
-Changes: a KEYS task builds GkmAuthState and GkmReconcilerState in gkmservice; AclGateCache gains its network list, a sidecar-to-network index and an installed-state callback.
-
-Questions: `keys-m2-17-gkm-auth-state-owner.md`.
-
 ### QD-721: Should EvsRepo's write take the path version its caller read, so a mail writer's append is a path CAS?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
 
@@ -3861,15 +3507,6 @@ Changes: §19.6's rule (3), D-OPS-20's cost and FI-30's last clause (design-reco
 
 Questions: `evs-models-settle-stalled-deletes.md`.
 
-### QD-747: How does a writer leaf other than the uploader learn that an epoch's Welcome was never written, so it can remove and re-add the joiner after 10 minutes?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-gkm answers whether an epoch's Welcome stands: HEAD /gkm/groups/<group_id>/welcome/<n> under rw, 200 or 404 with no body. A writer leaf that adopted an Add at epoch n asks once after GkmSettings.WelcomeTimeout (10 minutes) and, on a 404, removes and re-adds the joiner in one commit (GkmPendingChanges' Unwelcomed, which CheckCommit accepts), so §10.6's re-add fires for any writer leaf, not only the epoch's uploader. It discloses nothing beyond gkm-5's Welcome objects, whose keys every reader can compute; a false 200 leaves the joiner waiting as today and a false 404 costs one Remove and Add. §11.20's or §10.6's route list gains the route.
-
-Changes: gkm's HEAD welcome route (§10.6 route list, design-records); the engine passes Unwelcomed leaves for epochs another leaf uploaded (KEYS-M2-21).
-
-Questions: `keys-m2-19-welcome-timeout-evidence.md`.
-
 ### QD-748: When a repo is created with --private in a team network whose directory does not exist yet, how does it stay private once the directory appears?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
 
@@ -3977,15 +3614,6 @@ A config writer that has held every generation the config repo's gkm head names 
 Changes: DESIGN-DETAILS 12.2.3: the stop below an Unopened filing is bounded; a short amendment by the design agent; FoldBridgeLedger and BridgeLedgerFold.Stopped (BRIDGE-M4-23), with the wait as a settings field; then a fix track in the lane holding BRIDGE.
 
 Questions: `bridge-m2-02-unopened-generation-stall.md`.
-
-### QD-763: Since gkm/dkey/<delegation_id> names no network, what tells QD-675's sweep which network's rows an object answers to?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-A forwarding Delegation's reader key object is gkm/dkey/<network_id>/<delegation_id>. The engine takes the network from the token at the upload and the read; gkm's reconciler lists one network's prefix at its pass now and then and deletes at once any object that no forwarding row in the state's rows and no tracked end names, which is QD-675's sweep. A network's shred or a hold finds its key objects by the prefix. The network id in the key is an opaque id (I-13), as a group's and a repo's are. This changes QD-442's path form for this family; nothing in production holds one.
-
-Changes: GkmDelegationKeyPath (gkm_paths.go) and its callers in the root and gkmservice; testdata/gkm/wrap_paths.json; the reconciler's per-network sweep of gkm/dkey/<network_id>/ (QD-675's second part); sidecar/metadata_list.yml gkm-1's store line; §10.6's object table through design-records.
-
-Questions: `core-owner-fixes-dkey-sweep-network.md`.
 
 ### QD-765: Where should evs write which statement a slot object belongs to: object metadata, a field of EvsSlotObject, or nowhere?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*

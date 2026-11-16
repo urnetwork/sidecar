@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-356. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-375. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (357 onward)
+## Adding owner decision N (376 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -244,3 +244,25 @@ The fold landed in two commits; the second added §8.8's via subjects and route 
 - **The metadata list** is v30, whose header names what it adds to api-7, api-13, evs-6, sock-1 and sock-3 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
 
 Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md, `metadata_list.yml` and the six guard entries in `protocol/design_unfenced_test.go`.
+
+## Validation after owner decisions 357-375 (2026-11-16)
+
+The design-records track for §10 (wave f39d) folded that section's items from sidecar/DESIGN-AMENDMENTS.md, the six "Later decisions" that named §10, and the four answers since QD-784 queued for it.
+
+- **Owner decisions 357-375**, each citing its ledger id: a drop key's 90-day lifetime and its renewal (357: QD-031, QD-065), the daily ReaderKey self-check and `key_changed` (358: QD-046), the X-Wing evidence the 0x0010 gate claims (359: QD-273), the ladder's AAD widths and gen/1's cause (360: QD-615), the last-resort extension at 0x000A (361: QD-616), a re-formed group's epoch 1 floor (362: QD-617), Welcome pointers keyed by recipient, group and epoch (363: QD-618), batched forwarding key reads (364: QD-637), the former of an agent's repo's group (365: QD-638, QD-659), the MLS engine's tree on disk and the SDK's storage over RAM (366: QD-641), recovery wraps fetched before admission and opened after (367: QD-642), a GroupForm's auth pin (368: QD-643), the accepted poison window (369: QD-695), forwarding reader key objects by network, with their tracked ends and sweep, amending 202, whose row notes it (370: QD-675, QD-763), gkm's state over ACL's gate cache and the reconciler's networks after a restart (371: QD-718, QD-893), the Welcome HEAD (372: QD-747), the bootstrap's config generation (373: QD-824), the lb's 502 or 504 at gkm's client (374: QD-876) and recommits after a newer generation (375: QD-956). A decision that groups several answers carries its latest answer's date.
+- **Where a later answer governs.** QD-659 narrows QD-638's former to a config writer that is a key holder of the repo and holds its admin at gkm; QD-763 amends QD-675's key and owner decision 202's; QD-763 and QD-618 amend QD-442's key forms for their two families, and QD-618 QD-526's pointer key. QD-065's renewal went into 357 with QD-031, whose answer names it.
+- **As text**, without a number: the defect fixes the owner accepted (QD-057, the credential's `not_after` as a stale Remove's evidence; QD-066, the wrap batches; QD-156, the forms read and the repo-keyed drop key; QD-165, a generation-0 epoch's GroupInfo; QD-177, deposit-only tokens; QD-181, rates per process; QD-229, the recovery admission's terms; QD-280, gen/ as where a generation is created; QD-281, kind defaults no policy narrows) and the build's readings, fills and settled items (QD-343, QD-441, QD-442, QD-463, QD-464, QD-465, QD-466, QD-467, QD-468, QD-469, QD-526, QD-528, QD-569 and QD-588). QD-644 names no change here: `Gkm.tla` and DESIGN-DETAILS.md 6.6 are the design agent's, and no section names the model, as with QD-628.
+- **Elsewhere.** The parts these name went with them: §2.8's gkm-1 and gkm-5, §2.10's P0 row and §2.18's unaudited-cryptography row; §5.4's `key_changed` and `MemberDevice.LastChange`; §7.8's reader seed, §7.9's bootstrap and before-admission rows and §7.10's stale and cleanup rows; §8.8's RepoCreate and §8.9's gates; §11.12's deposits row and §11.13's classes row; FS-23, FS-97 and FS-117 in §22.8, and §22.10's kem and stacks rows; and QD-569's single ratings in §10.15, §11.21, §15.16, §19.17, §21.17, §22.16 and §23.15, the jetsam pair taking High/High, since owner decision 197's design raised §18.16's row to that after QD-569 was written. The group owner marker (owner decision 201) took a row in §10.6's object table, and the forwarding reader key's PUT and GET (202) their lines in §10.14's routes, since QD-464's order and QD-637's batch name them.
+- **In text, not fenced.** GroupForm's numbers with `auth = 5` (QD-471, QD-643), the epoch, group-info, Welcome pointer and claim bodies (QD-467), ReaderKey's (QD-463, QD-528) and GkmHint's (QD-463) are written in text blocks and prose: their declarations are held by `testUnfencedFence`, which a design-records track does not edit.
+- **Left in sidecar/DESIGN-AMENDMENTS.md**, each with its reason: QD-046, for the review ledger's HNDL row in DESIGN-REVIEW-RESPONSE.md, outside this folder; and QD-471, for GroupForm's proto fence. Their other parts are folded.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `29acbef88adc3863a31a31399c771b10b0392770cd16a4bba9ea4b1f6ca96fe9`) at this fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed: §10.4's and §10.5's fences changed in their comments only.
+- **Owner decisions.** All 375 rows are present and cited; `LATE_DATES` gives each new row its date, no new day joined the row pattern, and row 202 notes decision 370's amendment.
+- **Open owner questions.** Two, as before: Q-BRIDGE-8 and Q-REPO-6.
+- **Superseded options.** 303 grep hits, each with a reading; the one on a changed line (§8.9's start-up listing from Postgres, a read by taskworker, not gkm state) was read on 2026-11-16, and the carried hit on §10.14's acks route left with that line's rewrap. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v31, whose header names what it changes in gkm-1 and gkm-5 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+
+Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md and `metadata_list.yml`.
