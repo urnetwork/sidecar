@@ -62,6 +62,9 @@ type aclM6World struct {
 	requestsRuleId []byte
 	// the config repo's key, under which a reach grant's ports are sealed (QD-740)
 	configKey *sidecar.EvsRepoKey
+	// the id start creates the directory under: zero takes the world's own, and a schedule whose evs fakes hold the
+	// directory names theirs (fs_acl_m8.go's wakes)
+	directoryId sidecar.Id
 }
 
 // One directory request as §16.11 files it, and what became of it.
@@ -134,7 +137,14 @@ func (self *aclM6World) start(body func(net *sidecartest.AdmissionNet) error) *S
 				return errors.New("the saved head names no tag:recurd")
 			}
 			world.ids["tag recurd"] = tagId.Bytes()
-			world.ids["directory"] = aclCreateRepo(team, owner, "directory", protocol.RepoKind_REPO_KIND_DIRECTORY).Bytes()
+			directoryId := world.directoryId
+			if directoryId == (sidecar.Id{}) {
+				directoryId = team.Id("repo directory")
+			}
+			team.MustLand(team.Sign(owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+				Header: team.Header(), RepoId: directoryId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_DIRECTORY,
+			}))
+			world.ids["directory"] = directoryId.Bytes()
 			// a second directory is refused: one per network
 			second := team.Sign(owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
 				Header: team.Header(), RepoId: team.Id("repo a second directory").Bytes(), Kind: protocol.RepoKind_REPO_KIND_DIRECTORY,
