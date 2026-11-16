@@ -12,14 +12,14 @@
 // The table, in its order, before rules 0 to 8 (bridge_egress_rules.go):
 //
 //	sdk provider    legacy: every flow passes, as with no hook (§17.8's legacy); every mode but Network and Service
-//	                passes to today's public-only rules (plan-BRIDGE-small-readings #7)
+//	and sdk host    passes to today's public-only rules (plan-BRIDGE-small-readings #7)
 //	host            every mode but Network and FriendsAndFamily denies (#7)
-//	both            a contract class other than data denies, control and unset alike (#6, D-PROTO-18); Service denies
+//	every profile   a contract class other than data denies, control and unset alike (#6, D-PROTO-18); Service denies
 //	host            FriendsAndFamily is a share's: §17.9's row (bridge_share.go) decides it, from the principal's verified
 //	                share alone, and nothing below
-//	host            no verified principal, or its subject revoked or suspended here, denies (D-BRIDGE-17); not sealed
-//	                denies (D-PROTO-6)
-//	both            pending, legacy at a host and rules that did not parse deny every Network flow (§17.8)
+//	host and        no verified principal, or its subject revoked or suspended here, denies (D-BRIDGE-17); not sealed
+//	sdk host        denies (D-PROTO-6)
+//	every profile   pending, legacy at a host and rules that did not parse deny every Network flow (§17.8)
 //
 // The sdk provider skips the principal and Sealed rows and rules 1 to 3 and 6 until C16, keeping rules 0, 4, 5, 7 and 8
 // and the block deny (§17.6's sdk exit NAT). Its subject is C13's sealed client id resolved through
@@ -28,8 +28,16 @@
 // (bridge-m4-09-other-client-rows, DESIGN-DETAILS 12.2.2). Every such client shares the zero subject id in its rule
 // tags, so the bridge can end their flows together.
 //
+// The sdk host is an sdk provider after C16 that hosts (D-BRIDGE-5, §18.6's host row; BRIDGE-M8-01): its public role
+// keeps the sdk provider's rows above, byte for byte, so FriendsAndFamily stays Public and FriendsAndFamilyEgress stays
+// false, since shares host only on sidecar-owned clients; its Network flows take the host's rows whole, a verified
+// principal over a sealed session and rules 0 to 8 with maps, hosted addresses and served prefixes (D-BRIDGE-17, there
+// from C16). A Network source that brings no principal, a legacy client's own NetworkPeer exit among them, is denied:
+// §17.6's row holds at every provider from C16 on.
+//
 // A Deny is never an Incident. A Pass or Map of a flow with a principal holds the flow for the link's idles, 600 s for
-// TCP and 5 min otherwise (§17.5's idle row), and every other flow keeps its NAT's.
+// TCP and 5 min otherwise (§17.5's idle row), and every other flow keeps its NAT's, a public flow at an sdk host
+// included.
 //
 // Safe for concurrent use.
 
@@ -56,6 +64,9 @@ const (
 	BridgePolicyProfileHost BridgePolicyProfile = 0
 	// The sdk's exit NAT until C16, whose sources may be plaintext (the file's comment).
 	BridgePolicyProfileSdkProvider BridgePolicyProfile = 1
+	// The sdk's exit NAT after C16 in the device client's network, where the device hosts: the sdk provider's public
+	// role and the host's Network rows (the file's comment).
+	BridgePolicyProfileSdkHost BridgePolicyProfile = 2
 )
 
 // The name `ur bridge` shows.
@@ -65,9 +76,23 @@ func (self BridgePolicyProfile) String() string {
 		return "host"
 	case BridgePolicyProfileSdkProvider:
 		return "sdk_provider"
+	case BridgePolicyProfileSdkHost:
+		return "sdk_host"
 	default:
 		return "unknown"
 	}
+}
+
+// Whether the profile serves a public role beside its Network rows: an sdk provider's exit NAT, before C16 or after.
+// Legacy and every mode but Network and Service then pass, as with no hook.
+func (self BridgePolicyProfile) publicRole() bool {
+	return self == BridgePolicyProfileSdkProvider || self == BridgePolicyProfileSdkHost
+}
+
+// Whether the profile admits Network flows only from a verified principal over a sealed session (D-BRIDGE-17): every
+// profile but the sdk provider's before C16.
+func (self BridgePolicyProfile) principals() bool {
+	return self != BridgePolicyProfileSdkProvider
 }
 
 // The rules a tag names that carry no rule id: one byte holding the rule's number (plan-BRIDGE-small-readings #11),

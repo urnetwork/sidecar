@@ -19,8 +19,8 @@ type BridgeSettings struct {
 	Clock Clock
 	// The posture the bridge embeds. Nil is DefaultPostureSettings.
 	PostureSettings *PostureSettings
-	// Which of §17.6's tables the bridge's provider hook runs: a sidecar-owned host's, the zero value, or the sdk exit
-	// NAT's until C16 (BridgePolicyProfileSdkProvider).
+	// Which of §17.6's tables the bridge's provider hook runs: a sidecar-owned host's, the zero value, the sdk exit NAT's
+	// until C16 (BridgePolicyProfileSdkProvider), or an app device's that hosts after it (BridgePolicyProfileSdkHost).
 	PolicyProfile BridgePolicyProfile
 	// The revocations Bridge.Revoke holds between states, each until a state at or past its position confirms or
 	// reverses it: 4,096, as many as the posture's overlay. Past it Revoke refuses, and the next state, which carries
