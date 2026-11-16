@@ -3460,7 +3460,8 @@ type Opening struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Header        []byte                 `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"` // RecordEntry.header, the whole Signed, as stored
 	Salt          []byte                 `protobuf:"bytes,2,opt,name=salt,proto3" json:"salt,omitempty"`
-	Body          []byte                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"` // both empty: the header alone
+	Body          []byte                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`        // both empty: the header alone
+	Version       uint32                 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"` // QD-864: RecordEntry.version of the entry this was made from, absent
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3514,6 +3515,13 @@ func (x *Opening) GetBody() []byte {
 		return x.Body
 	}
 	return nil
+}
+
+func (x *Opening) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
 }
 
 type CopyBody struct {
@@ -5561,11 +5569,12 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\x06key_id\x18\x03 \x01(\fR\x05keyId\x12\x1c\n" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x1d\n" +
 	"\n" +
-	"agent_cert\x18\x05 \x01(\fR\tagentCert\"I\n" +
+	"agent_cert\x18\x05 \x01(\fR\tagentCert\"c\n" +
 	"\aOpening\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\fR\x06header\x12\x12\n" +
 	"\x04salt\x18\x02 \x01(\fR\x04salt\x12\x12\n" +
-	"\x04body\x18\x03 \x01(\fR\x04body\"@\n" +
+	"\x04body\x18\x03 \x01(\fR\x04body\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\rR\aversion\"@\n" +
 	"\bCopyBody\x124\n" +
 	"\aentries\x18\x01 \x03(\v2\x1a.urnetwork.sidecar.OpeningR\aentries\"\x82\x01\n" +
 	"\x0eTranscriptBody\x12\x1d\n" +

@@ -19,10 +19,12 @@
 // whitespace, ids in lowercase hex, header, salt and body in standard base64, times in RFC 3339 UTC with
 // milliseconds. header, salt and body verify a line given its writer's public key, which no line carries. salt, body,
 // fields and agent_label appear only with bodies, so a plain line holds what the header holds. fields is the body by
-// proto field name, a convenience: body is what verifies. An erased entry is a stub: its state and its header's
-// fields while the header is held, and nothing of its body. Slot rows are never exported: a line holds a salt, never
-// a key. §11.12's token_path and entry_hash, which an evs export's stub names, are not on RecordStreams and are left
-// out.
+// proto field name, a convenience: body is what verifies. A line with bodies whose entry is above version 1 carries
+// entry_version, which is Opening.version for jsonl (QD-864): body is then what that version seals, the
+// AgentSignedBody holding the kind's message at 2, and a line without the key is version 1. An erased entry is a
+// stub: its state and its header's fields while the header is held, and nothing of its body. Slot rows are never
+// exported: a line holds a salt, never a key. §11.12's token_path and entry_hash, which an evs export's stub names,
+// are not on RecordStreams and are left out.
 //
 // ocsf (record_export_ocsf.go) and otel (record_export_otel.go) carry, of a body, only its numbers, booleans, ids,
 // hashes and listed identifier strings, never prose, captured bytes, an action, relays or cidrs, and no string that

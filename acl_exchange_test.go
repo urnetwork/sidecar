@@ -102,7 +102,8 @@ func TestAclExchangeScopesForAMemberDevice(t *testing.T) {
 
 // QD-719 on TEAM's log: the rows hold no AclRepo for the config repo, a RepoCreate of it being refused and base 1's
 // compile empty, and the state's own row answers the exchange: every admitted sidecar's r, a config writer's rw at evs,
-// a member device's rw at gkm, and §7.9's bootstrap admin for the Genesis's owner sidecar alone, at both audiences.
+// a member device's rw at gkm, and the config's admin for every config writer, at both audiences (QD-894), §7.9's
+// bootstrap sidecar among them and the other still once that one is revoked.
 func TestAclExchangeScopesReadTheConfigRepoFromTheGenesis(t *testing.T) {
 	net := newAclExchangeNet(t)
 	state := net.log.State()
@@ -132,8 +133,7 @@ func TestAclExchangeScopesReadTheConfigRepoFromTheGenesis(t *testing.T) {
 	all := []string{configR, configRw, configAdmin}
 	for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
 		aclExchangeCheck(t, fmt.Sprintf("the bootstrap sidecar at %d", audience), net.exchange(t, net.owner, audience, all...), all, []string{})
-		aclExchangeCheck(t, fmt.Sprintf("another config writer at %d", audience), net.exchange(t, secondOwnerDevice, audience, all...),
-			[]string{configR, configRw}, []string{configAdmin})
+		aclExchangeCheck(t, fmt.Sprintf("another config writer at %d", audience), net.exchange(t, secondOwnerDevice, audience, all...), all, []string{})
 		aclExchangeCheck(t, fmt.Sprintf("a read_only device at %d", audience), net.exchange(t, net.readOnly, audience, all...),
 			[]string{configR}, []string{configRw, configAdmin})
 		aclExchangeCheck(t, fmt.Sprintf("an ephemeral device at %d", audience), net.exchange(t, net.ephemeral, audience, all...),
@@ -141,6 +141,18 @@ func TestAclExchangeScopesReadTheConfigRepoFromTheGenesis(t *testing.T) {
 	}
 	aclExchangeCheck(t, "a member device at evs", net.exchange(t, net.phone, AclTokenAudienceEvs, all...), []string{configR}, []string{configRw, configAdmin})
 	aclExchangeCheck(t, "a member device at gkm", net.exchange(t, net.phone, AclTokenAudienceGkm, all...), []string{configR, configRw}, []string{configAdmin})
+
+	// the bootstrap sidecar's revocation: it gets nothing, and the other config writer still administers the config
+	net.mustPost(secondOwnerDevice, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(net.owner, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED))
+	for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+		aclExchangeCheck(t, fmt.Sprintf("the revoked bootstrap sidecar at %d", audience), net.exchange(t, net.owner, audience, all...), []string{}, all)
+		aclExchangeCheck(t, fmt.Sprintf("another config writer at %d once the bootstrap sidecar is revoked", audience),
+			net.exchange(t, secondOwnerDevice, audience, all...), all, []string{})
+		aclExchangeCheck(t, fmt.Sprintf("a read_only device at %d once the bootstrap sidecar is revoked", audience),
+			net.exchange(t, net.readOnly, audience, all...), []string{configR}, []string{configRw, configAdmin})
+	}
+	aclExchangeCheck(t, "a member device at gkm once the bootstrap sidecar is revoked", net.exchange(t, net.phone, AclTokenAudienceGkm, all...),
+		[]string{configR, configRw}, []string{configAdmin})
 }
 
 // FS-19's scope rows: a read_only sidecar gets only r and the receipt deposit, an ephemeral one no config rw at either
