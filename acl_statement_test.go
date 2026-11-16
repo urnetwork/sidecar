@@ -658,8 +658,12 @@ func TestAclRepoDeleteAndRestore(t *testing.T) {
 	if row := state.Repo(repoId).GetDeletion(); row.GetDeletedAt() != statement.N || row.GetDeletedTimeMs() != statement.TimeMs {
 		t.Fatalf("the deletion row %+v", row)
 	}
-	if rights := aclTestRights(state, cast.laptop, repoId, AclTokenAudienceEvs); rights != 0 {
-		t.Errorf("a deleted repo: %b", rights)
+	// its admin keeps admin alone, which §11.12's DELETE and restore take, and no one else holds anything (QD-880)
+	if rights := aclTestRights(state, cast.laptop, repoId, AclTokenAudienceEvs); rights != AclEvsAdmin {
+		t.Errorf("a deleted repo's admin: %b", rights)
+	}
+	if rights := aclTestRights(state, cast.phone, repoId, AclTokenAudienceEvs); rights != 0 {
+		t.Errorf("a deleted repo, to a sidecar that is no admin of it: %b", rights)
 	}
 
 	window := DefaultAclAccessLogSettings().RepoRestoreWindow.Milliseconds()

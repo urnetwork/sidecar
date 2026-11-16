@@ -11,6 +11,9 @@
 //	            pins, a forwarding Delegation's key and reach, late holders and dropped holders
 //	reconciler  a hint ({acl_<networkId>}v's INCR) while the load it starts is held open wakes nothing and the old
 //	            state still reads; once the load installs, the reconciler's pass reads the new state, never the old
+//	deleted     a repo's RepoDelete leaves its standing admin gkm's admin scope alone (QD-880): r and rw are refused
+//	            to everyone, so a token held to either passes no route, and with repo/ deleted the admin's own write
+//	            is refused by gkm's repo/ recheck; a RepoRestore brings the scopes back
 //
 // No sleeps: each load is awaited by the cache's OnLoad, a load is held open in its source, and the clock is the
 // Net's.
@@ -693,4 +696,124 @@ func TestGkmReconcilerStateIsToldOnceTheGateInstalls(t *testing.T) {
 		t.Errorf("a read no change asked for, at %d", pin.GetVersion())
 	default:
 	}
+}
+
+// QD-880 at gkm, the real state over the real gate cache on the admission world's log: a RepoDelete leaves the repo's
+// standing admin gkm's admin scope alone at the gate's next load. Its r and rw are refused there with a writer's, so
+// a token held to either passes no route of the repo, no sidecar counts as its reader or writer, and with repo/
+// deleted the admin's own write, which the guard honors, is refused by gkm's repo/ recheck (§10.6's checks row). A
+// RepoRestore brings every scope back.
+func TestGkmAuthStateHoldsADeletedReposAdminToAdminAlone(t *testing.T) {
+	world := newGkmAclStateWorld(t)
+	admission := world.admission
+	now := world.net.Clock().Now
+	_, admin := admission.ConsentedMember("gkm deleted admin")
+	_, writer := admission.ConsentedMember("gkm deleted writer")
+	repoId := admission.Id("gkm deleted repo")
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+		Header: admission.Header(), RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+	}))
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{
+		Header: admission.Header(), RepoId: repoId.Bytes(), Subject: writer.SidecarId.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER,
+	}))
+	world.load()
+	world.place(repoId, admin)
+	first, err := world.net.Host().Blobs.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoObject := &protocol.EvsRepoObject{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 1}
+	repoBytes, err := proto.Marshal(repoObject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoEtag, err := first.PutIfNoneMatch(t.Context(), gkmservice.GkmEvsRepoKey(repoId), repoBytes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allowed, denied := gkmservice.GkmAuthAllowed, gkmservice.GkmAuthDenied
+	read, write, administer := sidecar.AclEvsRead, sidecar.AclEvsWrite, sidecar.AclEvsAdmin
+	forms := gkmAclStateFormsPath(repoId)
+	r, rw := gkmAclStateScope(repoId, "r"), gkmAclStateScope(repoId, "rw")
+	check := func(name string, deleted bool) {
+		t.Helper()
+		implied, status := allowed, http.StatusOK
+		if deleted {
+			implied, status = denied, http.StatusForbidden
+		}
+		for _, c := range []struct {
+			name   string
+			device *AdmissionDevice
+			right  sidecar.AclEvsRights
+			want   gkmservice.GkmAuthAnswer
+		}{
+			{name: "the admin's admin", device: admin, right: administer, want: allowed},
+			{name: "the admin's rw", device: admin, right: write, want: implied},
+			{name: "the admin's r", device: admin, right: read, want: implied},
+			{name: "the writer's rw", device: writer, right: write, want: implied},
+			{name: "the writer's r", device: writer, right: read, want: implied},
+			// the world's rules give every member device admin on a general repo while it lives; no rule gives a
+			// right on a deleted one
+			{name: "the writer's admin", device: writer, right: administer, want: implied},
+		} {
+			if answer := world.state.HonorScope(world.principal(c.device), repoId, c.right, now()); answer != c.want {
+				t.Errorf("%s: %s: %d, want %d", name, c.name, answer, c.want)
+			}
+		}
+		if answer := world.state.Reads(world.principal(admin), repoId, admin.SidecarId, now()); answer != implied {
+			t.Errorf("%s: whether the admin reads: %d, want %d", name, answer, implied)
+		}
+		readerIds, readersAnswer := world.state.RepoReaders(world.principal(admin), repoId, now())
+		writerIds, writersAnswer := world.state.RepoWriters(world.principal(admin), repoId, now())
+		if readersAnswer != allowed || writersAnswer != allowed {
+			t.Errorf("%s: readers %d, writers %d", name, readersAnswer, writersAnswer)
+		}
+		for _, holderIds := range [][]sidecar.Id{readerIds, writerIds} {
+			if deleted && len(holderIds) != 0 {
+				t.Errorf("%s: a deleted repo's readers or writers: %v", name, holderIds)
+			}
+			if !deleted && !(slices.Contains(holderIds, admin.SidecarId) && slices.Contains(holderIds, writer.SidecarId)) {
+				t.Errorf("%s: readers or writers without the admin and the writer: %v", name, holderIds)
+			}
+		}
+		// a token held to r or rw, through gkm's guard
+		for _, c := range []struct {
+			name   string
+			device *AdmissionDevice
+			scope  string
+		}{{"the admin's r token", admin, r}, {"the admin's rw token", admin, rw}, {"the writer's rw token", writer, rw}} {
+			if got := world.serve(http.MethodGet, forms, c.device, c.scope); got != status {
+				t.Errorf("%s: %s: %d, want %d", name, c.name, got, status)
+			}
+		}
+	}
+	check("live", false)
+
+	deletionId := admission.Id("gkm deletion")
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
+		Header: admission.Header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
+	}))
+	world.load()
+	check("deleted", true)
+
+	// evs's DELETE moves repo/ to deleted; the admin's write to the repo, a re-form, then passes the guard, which
+	// honors its admin, and is refused by the repo/ recheck, the re-seed mode being off
+	repoObject.State = protocol.EvsRepoState_EVS_REPO_DELETED
+	repoObject.DeletionId = deletionId.Bytes()
+	if repoBytes, err = proto.Marshal(repoObject); err != nil {
+		t.Fatal(err)
+	}
+	if repoEtag, err = first.PutIfMatch(t.Context(), gkmservice.GkmEvsRepoKey(repoId), repoEtag, repoBytes, nil); err != nil {
+		t.Fatal(err)
+	}
+	if status := world.serve(http.MethodPost, forms, admin, gkmAclStateScope(repoId, "admin")); status != http.StatusForbidden {
+		t.Errorf("the admin's write with repo/ deleted: %d", status)
+	}
+
+	admission.MustLand(admission.Sign(admin, bridge.SignedType_SIGNED_REPO_RESTORE, &protocol.RepoRestore{
+		Header: admission.Header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
+	}))
+	world.load()
+	check("restored", false)
 }

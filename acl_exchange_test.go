@@ -3,7 +3,8 @@
 // The exchange's repo scope table on TEAM's log (FS-19's scope rows, §7.8): each scope judged alone against the newest
 // verified state, a read_only sidecar held to r and the receipt deposit, an ephemeral one to the config's r at both
 // audiences, gkm's config rw for member devices, an owner-bound reader's receipt deposit, a forward_only client held to
-// the config's r while its forwarding Delegation lives, and a 65th repo scope refusing the request. Pure, on every leg.
+// the config's r while its forwarding Delegation lives, a 65th repo scope refusing the request, and a deleted repo,
+// for which only admin is minted and only to its standing admins (QD-880). Pure, on every leg.
 
 package sidecar
 
@@ -181,13 +182,14 @@ func TestAclExchangeScopesRefusals(t *testing.T) {
 	aclExchangeCheck(t, "no sidecar", grant, []string{}, []string{notesR})
 
 	scopes := []string{}
-	for i := range AclExchangeMaxRepoScopeCount + 1 {
+	repoScopeMaxCount := DefaultAclExchangeSettings().RepoScopeMaxCount
+	for i := range repoScopeMaxCount + 1 {
 		scopes = append(scopes, aclExchangeScope(testConfigId(fmt.Sprintf("repo %d", i)), "r"))
 	}
 	if _, err := AclExchangeScopes(net.log.State(), &AclExchangeRequest{SidecarId: net.phone.sidecarId, Audience: AclTokenAudienceEvs, Scopes: scopes}); !errors.Is(err, ErrAclExchangeScope) {
 		t.Errorf("65 repo scopes: %v", err)
 	}
-	if _, err := AclExchangeScopes(net.log.State(), &AclExchangeRequest{SidecarId: net.phone.sidecarId, Audience: AclTokenAudienceEvs, Scopes: scopes[:AclExchangeMaxRepoScopeCount]}); err != nil {
+	if _, err := AclExchangeScopes(net.log.State(), &AclExchangeRequest{SidecarId: net.phone.sidecarId, Audience: AclTokenAudienceEvs, Scopes: scopes[:repoScopeMaxCount]}); err != nil {
 		t.Errorf("64 repo scopes: %v", err)
 	}
 	if _, err := AclExchangeScopes(nil, &AclExchangeRequest{}); !errors.Is(err, ErrAclExchangeScope) {
@@ -214,4 +216,46 @@ func TestAclExchangeScopesForAForwardOnlyClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	aclExchangeCheck(t, "while it lives", grant, []string{configR}, []string{configRw, notesR})
+}
+
+// §11.12's refused row at the exchange (QD-880), on TEAM's log: once a repo admin's RepoDelete lands, with now or
+// without, the exchange mints only admin for the repo, at evs and at gkm, and only to its standing admin, whose r, rw
+// and deposit are refused with every scope of a member the rules let write it; a RepoRestore brings every scope back.
+func TestAclExchangeScopesMintOnlyAdminForADeletedRepo(t *testing.T) {
+	for _, now := range []bool{false, true} {
+		net := newAclExchangeNet(t)
+		net.withAclRows(func(rows *protocol.AclRows) {
+			for _, repo := range rows.Repos {
+				if Id(repo.GetRepoId()) == net.notesId {
+					repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: net.owner.sidecarId.Bytes(), Signer: net.owner.sidecarId.Bytes(), At: 1}}
+				}
+			}
+		})
+		deposit, r, rw, admin := aclExchangeScope(net.notesId, "deposit"), aclExchangeScope(net.notesId, "r"), aclExchangeScope(net.notesId, "rw"), aclExchangeScope(net.notesId, "admin")
+		live := func(name string) {
+			for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+				aclExchangeCheck(t, name+", the admin", net.exchange(t, net.owner, audience, deposit, r, rw, admin), []string{r, rw, admin}, []string{deposit})
+				aclExchangeCheck(t, name+", a member", net.exchange(t, net.phone, audience, deposit, r, rw, admin), []string{r, rw}, []string{deposit, admin})
+			}
+		}
+		live("before the RepoDelete")
+
+		deletionId := testConfigId("exchange deletion")
+		net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
+			Header: net.header(), RepoId: net.notesId.Bytes(), DeletionId: deletionId.Bytes(), Now: now,
+		})
+		for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+			aclExchangeCheck(t, "deleted, the admin", net.exchange(t, net.owner, audience, deposit, r, rw, admin), []string{admin}, []string{deposit, r, rw})
+			aclExchangeCheck(t, "deleted, a member", net.exchange(t, net.phone, audience, deposit, r, rw, admin), []string{}, []string{deposit, r, rw, admin})
+			aclExchangeCheck(t, "deleted, a read_only device", net.exchange(t, net.readOnly, audience, deposit, r, rw, admin), []string{}, []string{deposit, r, rw, admin})
+		}
+		// the rest of the table is as it was
+		configR := aclExchangeScope(net.configId, "r")
+		aclExchangeCheck(t, "deleted, another repo", net.exchange(t, net.phone, AclTokenAudienceEvs, configR), []string{configR}, []string{})
+		if now {
+			continue
+		}
+		net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_RESTORE, &protocol.RepoRestore{Header: net.header(), RepoId: net.notesId.Bytes(), DeletionId: deletionId.Bytes()})
+		live("after the RepoRestore")
+	}
 }
