@@ -92,17 +92,6 @@ type socketSuiteWorld struct {
 // engine's settings.
 func newSocketSuiteWorld(t *testing.T, mutate func(settings *socketsservice.SocketsSettings)) *socketSuiteWorld {
 	t.Helper()
-	return newSocketSuiteWorldGated(t, mutate, nil)
-}
-
-// newSocketSuiteWorld with the engine's gate what gate makes of the production one, which stays the world's gate;
-// nil gives the engine the production gate itself.
-func newSocketSuiteWorldGated(
-	t *testing.T,
-	mutate func(settings *socketsservice.SocketsSettings),
-	gate func(world *socketSuiteWorld, production *socketsservice.SocketProjectionGate) socketsservice.SocketGate,
-) *socketSuiteWorld {
-	t.Helper()
 	ctx := t.Context()
 	net := sidecartest.NewNet(ctx, nil)
 	t.Cleanup(net.Close)
@@ -164,11 +153,7 @@ func newSocketSuiteWorldGated(
 			return nil, err
 		}
 		world.gate = production
-		var engineGate socketsservice.SocketGate = production
-		if gate != nil {
-			engineGate = gate(world, production)
-		}
-		service, err := socketsservice.NewSocketsService(engineCtx, host, world.store, engineGate, settings)
+		service, err := socketsservice.NewSocketsService(engineCtx, host, world.store, production, settings)
 		if err != nil {
 			production.Close()
 			return nil, err

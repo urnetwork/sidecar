@@ -1,12 +1,16 @@
-// The root's identifier, on every leg: operator-core's Id (owner decision 251), which is server.Id moved,
-// connect.Id's [16]byte layout with its parsing, formatting and comparison delegating to connect. sidecar
-// keeps its own generator, NewId on crypto/rand, and its own strict ParseId and IdFromBytes, which answer
-// the alias. connect-facing files still convert at their boundary, connect.Id(id) and Id(connectId), plain
-// conversions between two [16]byte types.
+//go:build !sidecar_http
+
+// The root's identifier on every leg but the page Worker's: operator-core's Id (owner decision 251), which
+// is server.Id moved, connect.Id's [16]byte layout with its parsing, formatting and comparison delegating
+// to connect. sidecar keeps its own generator, NewId on crypto/rand, and its own strict ParseId and
+// IdFromBytes, which answer the alias. connect-facing files still convert at their boundary,
+// connect.Id(id) and Id(connectId), plain conversions between two [16]byte types.
 //
-// The alias brings connect into every leg that links this file, the page Worker's sidecar_http leg and the
-// iOS extension's included (§4.4): a root file of the sidecar_http leg still imports no connect package
-// itself (§4.7), and both legs' sizes are measured again for the owner (owner decision 251).
+// The alias brings connect into every leg that links this file, the iOS extension's included (§4.4). The
+// sidecar_http leg, the page Worker's sdk.wasm, links neither connect nor operator-core (QD-856): there
+// id_http.go declares Id as its own [16]byte type with the same methods and the same encodings, and with
+// this file's generator and parsing, which TestIdTwinKeepsTheSharedSource holds equal to these, function
+// by function.
 
 package sidecar
 
