@@ -354,6 +354,8 @@ func (self *SearchCache) applyDrop(ctx context.Context, drop *SidecarExecutedDro
 		}
 		applied.CacheFileCount += 1
 	}
+	// a read of a replaced version holds its unwrapped object key until it ends
+	self.endReads(drop.IndexReplaced)
 	listed := map[Id]map[[indexIdByteCount]byte]uint64{}
 	refIds := []Id{}
 	for _, version := range drop.Versions {

@@ -288,6 +288,11 @@ func TestEraseLeavesNoDecryptedCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer read.Close()
+	replacedRead, err := world.cache.OpenRecordRead(ctx, replaced.record.Key, &evsTestReadGkm{newest: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacedRead.Close()
 	table, runIds := world.table(t,
 		SearchVersionRecord{Key: erasedKey, Version: 3, File: SearchVersionFile{Path: ".ur-index/i1/b/20080/s/0", Version: 1}},
 		SearchVersionRecord{Key: keptKey, Version: 2, File: SearchVersionFile{Path: ".ur-index/i1/b/20080/s/1", Version: 1}})
@@ -314,6 +319,9 @@ func TestEraseLeavesNoDecryptedCopy(t *testing.T) {
 	}
 	if _, err := read.ReadFrame(0, nil); !errors.Is(err, ErrSearchCacheReadEnded) {
 		t.Errorf("the open read of the destroyed key's record goes on: %v", err)
+	}
+	if _, err := replacedRead.ReadFrame(0, nil); !errors.Is(err, ErrSearchCacheReadEnded) || replacedRead.objectKey != nil {
+		t.Errorf("the open read of the replaced version goes on: %v", err)
 	}
 	if _, err := world.cache.OpenRecord(staying.record.Key); err != nil {
 		t.Errorf("another slot key's record went: %v", err)
@@ -594,9 +602,25 @@ func TestLostReadDeletesRepoFiles(t *testing.T) {
 		t.Fatal("nothing held before the lost read")
 	}
 	keptBefore := testDeleteNamesOf(t, world.cache, otherRepoId)
+	lostRead, err := world.cache.OpenRecordRead(ctx, SearchCacheKey{RepoId: repoId, RefId: otherRefId, Path: ".ur-index/i1/b/20080/s/0", Version: 1}, &evsTestReadGkm{newest: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lostRead.Close()
+	keptRead, err := world.cache.OpenRecordRead(ctx, SearchCacheKey{RepoId: otherRepoId, RefId: refId, Path: ".ur-index/i1/b/20080/s/0", Version: 1}, &evsTestReadGkm{newest: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keptRead.Close()
 
 	if err := world.cache.ApplyLostRead(ctx, repoId, nil); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := lostRead.ReadFrame(0, nil); !errors.Is(err, ErrSearchCacheReadEnded) {
+		t.Errorf("a read of the lost repo goes on: %v", err)
+	}
+	if _, err := keptRead.ReadFrame(0, nil); err != nil {
+		t.Errorf("a read of another repo ended: %v", err)
 	}
 	if names := testDeleteNamesOf(t, world.cache, repoId); len(names) != 0 {
 		t.Errorf("the lost repo's files stay: %v", names)

@@ -366,6 +366,11 @@ func TestOfflineDropAppliesAtSync(t *testing.T) {
 		t.Fatalf("a drop inside its window: %v", err)
 	}
 	world.clock.advance(9 * 24 * time.Hour)
+	replacedRead, err := cache.OpenRecordRead(ctx, replacedKey, &evsTestReadGkm{newest: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacedRead.Close()
 	for _, void := range []func(drop *SidecarExecutedDrop){
 		func(drop *SidecarExecutedDrop) { drop.Cancelled = true },
 		func(drop *SidecarExecutedDrop) { drop.Refused = true },
@@ -390,6 +395,9 @@ func TestOfflineDropAppliesAtSync(t *testing.T) {
 	}
 	if _, err := cache.OpenRecord(replacedKey); !errors.Is(err, ErrSidecarStoreAbsent) {
 		t.Errorf("the replaced index file stays: %v", err)
+	}
+	if _, err := replacedRead.ReadFrame(0, nil); !errors.Is(err, ErrSearchCacheReadEnded) {
+		t.Errorf("the open read of the replaced index file goes on: %v", err)
 	}
 	if _, err := cache.OpenDerived(replacedKey, SearchCachePartBlockIndex); !errors.Is(err, ErrSidecarStoreAbsent) {
 		t.Errorf("the replaced index file's derived data stays: %v", err)

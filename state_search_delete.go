@@ -367,6 +367,8 @@ func (self *SearchCache) ApplyErase(ctx context.Context, erase *SearchErase) err
 			errs = append(errs, err)
 		}
 	}
+	// a read of a replaced version holds its unwrapped object key until it ends
+	self.endReads(erase.Replaced)
 	if err := self.DropRetained(repoId); err != nil {
 		errs = append(errs, err)
 	}
@@ -573,8 +575,27 @@ func (self *SearchCache) ApplyLostRead(ctx context.Context, repoId Id, refId *Id
 	} else if err := self.DropRef(repoId, *refId); err != nil {
 		errs = append(errs, err)
 	}
+	self.endReadsOf(repoId, refId)
 	testHookBarrier("search.cache.lost.applied", repoId.String())
 	return errors.Join(errs...)
+}
+
+// Ends every open read of a kept record of the repo, or with refId of one ref of it, clearing the object key each
+// holds: what a lost read leaves no reader holding.
+func (self *SearchCache) endReadsOf(repoId Id, refId *Id) {
+	keys := func() []SearchCacheKey {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		keys := []SearchCacheKey{}
+		for read := range self.reads {
+			key := read.frames.key
+			if key.RepoId == repoId && (refId == nil || key.RefId == *refId) {
+				keys = append(keys, key)
+			}
+		}
+		return keys
+	}()
+	self.endReads(keys)
 }
 
 // The order masks keep: by key.
