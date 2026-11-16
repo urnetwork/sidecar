@@ -508,11 +508,11 @@ func TestTunWindowsCarvedHostRoutesFollowTheCarve(t *testing.T) {
 	}
 	// a route of the host's own comes to hold the address: its host route would move it off that link
 	world.ipHelper.replaceRoutes(func(held urTunWindowsRoute) bool { return false },
-		urTunWindowsRoute{dst: netip.MustParsePrefix("203.0.113.0/24"), luid: 0x20, index: 20, nextHop: netip.IPv4Unspecified()})
-	if err := iface.SetCarved(testWindowsCarve("203.0.113.54", "203.0.114.53")); err != nil {
+		urTunWindowsRoute{dst: netip.MustParsePrefix("203.0.113.54/31"), luid: 0x20, index: 20, nextHop: netip.IPv4Unspecified()})
+	if err := iface.SetCarved(testWindowsCarve("203.0.113.54", "203.0.113.60")); err != nil {
 		t.Fatal(err)
 	}
-	want = []string{"delete host route 203.0.113.54 by 192.0.2.1 on 0x10", "add host route 203.0.114.53 by 192.0.2.1 on 0x10"}
+	want = []string{"delete host route 203.0.113.54 by 192.0.2.1 on 0x10", "add host route 203.0.113.60 by 192.0.2.1 on 0x10"}
 	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
 		t.Fatalf("an address a route came to hold: %v", calls)
 	}
@@ -522,7 +522,7 @@ func TestTunWindowsCarvedHostRoutesFollowTheCarve(t *testing.T) {
 		t.Fatalf("off: %v %v", defaultRoute, err)
 	}
 	want = []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
-		"delete host route 203.0.114.53 by 192.0.2.1 on 0x10"}
+		"delete host route 203.0.113.60 by 192.0.2.1 on 0x10"}
 	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
 		t.Fatalf("off: %v", calls)
 	}
@@ -530,7 +530,7 @@ func TestTunWindowsCarvedHostRoutesFollowTheCarve(t *testing.T) {
 		t.Fatalf("unbound to %v", binding)
 	}
 	// off exits the carve waits again
-	if err := iface.SetCarved(testWindowsCarve("203.0.113.53", "203.0.114.53")); err != nil {
+	if err := iface.SetCarved(testWindowsCarve("203.0.113.53", "203.0.113.60")); err != nil {
 		t.Fatal(err)
 	}
 	if calls := world.ipHelper.take(); 0 < len(calls) {
@@ -690,7 +690,7 @@ func TestTunWindowsCloseRemovesTheCarvedHostRoutes(t *testing.T) {
 	if _, err := iface.SetExits(true); err != nil {
 		t.Fatal(err)
 	}
-	if err := iface.SetCarved(testWindowsCarve("203.0.113.53", "203.0.114.53")); err != nil {
+	if err := iface.SetCarved(testWindowsCarve("203.0.113.53", "203.0.113.60")); err != nil {
 		t.Fatal(err)
 	}
 	world.ipHelper.take()
@@ -699,7 +699,7 @@ func TestTunWindowsCloseRemovesTheCarvedHostRoutes(t *testing.T) {
 	}
 	halves := urTunExitsHalves()
 	want := []string{"delete route " + halves[0].String(), "delete route " + halves[1].String(),
-		"delete host route 203.0.113.53 by 192.0.2.1 on 0x10", "delete host route 203.0.114.53 by 192.0.2.1 on 0x10",
+		"delete host route 203.0.113.53 by 192.0.2.1 on 0x10", "delete host route 203.0.113.60 by 192.0.2.1 on 0x10",
 		"delete route 100.70.1.2/32"}
 	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
 		t.Fatalf("close: %v", calls)
