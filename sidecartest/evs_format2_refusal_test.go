@@ -371,6 +371,10 @@ type format2World struct {
 	format2     *evsservice.EvsEngine
 	format1Log  *format2Log
 
+	// devices are this code's client held to format 1 by EvsSettings.MaxFormat, with the format-2 reader installed
+	// and core's gates admitting the network, rather than clients made with no format-2 reader (EVS2-M10-30)
+	heldToFormat1 bool
+
 	stateLock sync.Mutex
 	// the engine the devices' requests reach
 	serving *evsservice.EvsEngine
@@ -595,10 +599,15 @@ func (self *format2World) writerToken() string {
 	return self.token(self.writer.SidecarId, []string{"repo:" + self.repoId.String() + ":rw"})
 }
 
-// A format-1 device of signer.
+// A format-1 device of signer: a client made with no format-2 reader, or with heldToFormat1 one whose settings hold it
+// to format 1 whatever its reader and gates say.
 func (self *format2World) device(signer *FakeGkmSigner) *format2Device {
 	self.t.Helper()
 	device := &format2Device{world: self, signer: signer}
+	settings := sidecar.DefaultEvsSettings()
+	if self.heldToFormat1 {
+		settings.MaxFormat = 1
+	}
 	gkmClient := self.gkm.Client(signer.SidecarId, signer.Sign)
 	gkmClient.AuthAdvanced(self.view)
 	identity := &sidecar.SidecarIdentity{
@@ -624,12 +633,16 @@ func (self *format2World) device(signer *FakeGkmSigner) *format2Device {
 		},
 		Clock:    self.clock,
 		Log:      sidecar.NewNoopLogger(),
-		Settings: sidecar.DefaultEvsSettings(),
+		Settings: settings,
 	})
 	if err != nil {
 		self.t.Fatal(err)
 	}
 	self.t.Cleanup(client.Close)
+	if self.heldToFormat1 {
+		client.SetFormat2Source(func() bool { return true })
+		client.EnableFormat2Reader()
+	}
 	device.client = client
 	return device
 }
@@ -1473,8 +1486,21 @@ var format2ReaderDrivers = map[string]func(world *format2World) *format2ReaderCa
 // no fork, tamper or missing-segment alarm, and still reads the format-1 paths beside it; an ignored construct
 // changes nothing it reads. Each twin, tampered with or unsigned, alarms.
 func TestEvsFormat2ConstructsAtAFormat1Reader(t *testing.T) {
+	format2ReaderRows(t, false)
+}
+
+// The reader rows at this code's client held to format 1 by EvsSettings.MaxFormat, its format-2 reader installed and
+// core's gates admitting the network: format 1's refusals stay reachable through the setting (EVS2-M10-30). The
+// writer that commits each construct's format-1 sibling is held so too.
+func TestEvsFormat2ConstructsAtAMaxFormat1Reader(t *testing.T) {
+	format2ReaderRows(t, true)
+}
+
+// The reader rows, with devices held to format 1 by their settings when heldToFormat1 is set.
+func format2ReaderRows(t *testing.T, heldToFormat1 bool) {
 	for _, row := range format2RefusalRowsOf(t, "reader", format2ReaderDrivers) {
 		world := newFormat2World(t)
+		world.heldToFormat1 = heldToFormat1
 		writer := world.device(world.writer)
 		kept := format2KeptContent
 		world.serve(world.format2)
@@ -1877,8 +1903,20 @@ var format2WriterDrivers = map[string]struct {
 // or ur/lfs, and no versionless file, each refused before any request reaches evs; the name or setting beside each
 // commits.
 func TestEvsFormat2WritesRefusedAtAFormat1Writer(t *testing.T) {
+	format2WriterRows(t, false)
+}
+
+// The writer rows at this code's client held to format 1 by EvsSettings.MaxFormat, its format-2 reader installed and
+// core's gates admitting the network: format 1's refusals stay reachable through the setting (EVS2-M10-30).
+func TestEvsFormat2WritesRefusedAtAMaxFormat1Writer(t *testing.T) {
+	format2WriterRows(t, true)
+}
+
+// The writer rows, with devices held to format 1 by their settings when heldToFormat1 is set.
+func format2WriterRows(t *testing.T, heldToFormat1 bool) {
 	for _, row := range format2RefusalRowsOf(t, "writer", format2WriterDrivers) {
 		world := newFormat2World(t)
+		world.heldToFormat1 = heldToFormat1
 		device := world.device(world.writer)
 		driver := format2WriterDrivers[row.Name]
 		requestsBefore := world.requests()

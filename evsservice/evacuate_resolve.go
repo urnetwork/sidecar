@@ -82,13 +82,15 @@ type evacuateRepo struct {
 	moveErr       error
 }
 
-// One kept record: where it committed, where it sat and where the spool holds its bytes.
+// One kept record: where it committed, where it sat and where the spool holds its bytes. A format-2 record is spooled
+// without its staged bytes, so its spooled length is less than its place's, and only spoolByteCount reads it back.
 type evacuateKept struct {
-	refId       sidecar.Id
-	version     uint64
-	place       *protocol.EvsPlace
-	spoolOffset int64
-	segmentIds  [][32]byte
+	refId          sidecar.Id
+	version        uint64
+	place          *protocol.EvsPlace
+	spoolOffset    int64
+	spoolByteCount int
+	segmentIds     [][32]byte
 }
 
 // A place as a map key.
@@ -325,7 +327,7 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 			return
 		}
 		repo.kept = append(repo.kept, &evacuateKept{
-			refId: record.RefId, version: version, place: place, spoolOffset: spoolOffset, segmentIds: segmentIds,
+			refId: record.RefId, version: version, place: place, spoolOffset: spoolOffset, spoolByteCount: len(recordBytes), segmentIds: segmentIds,
 		})
 		repo.keptByteCount += int64(len(recordBytes))
 		minute.moveRepoIds[record.RepoId] = true
