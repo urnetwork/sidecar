@@ -21,7 +21,8 @@
 //	          file names no connect type, since it links on sidecar_http
 //
 // Remote search (SEARCH-M10-33) asks an indexer beside this; a request's Remote is CORE's to resolve, and this engine
-// answers locally whatever it says. Phase 1's near hits are a phone's one-edit variants probed in the partitions
+// answers locally whatever it says. Mail's joins (search_join.go) leave out a mail hit the device knows to be spam or
+// trash, unless asked, from what it already holds. Phase 1's near hits are a phone's one-edit variants probed in the partitions
 // (search_typo.go); a desktop's local vocabulary is not given yet. Safe for concurrent use.
 
 package sidecar
@@ -57,6 +58,9 @@ type SearchEngineArgs struct {
 	Display func(repoId Id, refId Id) SearchDisplaySource
 	// This host's local layer of a ref (search_local_layer.go), nil where it keeps none.
 	Local func(repoId Id, refId Id) *SearchLocalLayer
+	// Mail's joins (search_join.go): a mail hit's flags from what the device holds of f/ and i/, which leave out spam
+	// and trash unless asked. Nil joins nothing, and every mail hit shows.
+	Join SearchJoinSource
 	// index_malformed's sink (Sidecar.searchEvents); nil drops.
 	Events func(event SidecarEvent)
 	// Nil is real time.
@@ -175,7 +179,7 @@ func (self *SearchEngine) SearchIn(ctx context.Context, session Id, request *Sea
 	}
 	stream := &searchEngineStream{
 		engine: self, session: session, request: &kept, query: query, filters: filters, normalizer: normalizer,
-		excluded: excluded, moreCursors: map[[2]Id]*SearchMoreCursor{},
+		excluded: excluded, joinAsk: searchJoinAskOf(&kept), moreCursors: map[[2]Id]*SearchMoreCursor{},
 	}
 	if err := stream.open(ctx, scoped); err != nil {
 		stream.Close()
@@ -301,6 +305,8 @@ type searchEngineStream struct {
 	filters    *searchRowFilters
 	normalizer *indexNormalizer
 	excluded   []SearchExclusion
+	// What the request asks of mail's joins.
+	joinAsk SearchJoinAsk
 
 	// One page at a time.
 	pageLock sync.Mutex
@@ -524,7 +530,14 @@ func (self *searchEngineStream) NextContext(ctx context.Context) ([]SearchHit, S
 		}
 		self.tooBroad = self.tooBroad || ranked.counts.tooBroad
 		for _, hit := range ranked.hits {
-			give(searchHitOf(hit))
+			// mail's joins leave out spam and trash unless asked, on what the device already holds (I-19)
+			kept, _, err := searchJoinMailHit(pageCtx, self.engine.args.Join, self.joinAsk, hit.repoId, hit.row)
+			if err != nil {
+				return nil, self.progressNow(), false, err
+			}
+			if kept {
+				give(searchHitOf(hit))
+			}
 		}
 		self.current = ranked.counts
 		if !ranked.phaseDone {

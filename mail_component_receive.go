@@ -52,6 +52,21 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 		}
 		root := args.Root
 		config := args.Config
+		strict := NewMailStrictPolicy(&MailStrictPolicyArgs{
+			Strict: func() bool {
+				state, err := sidecar.configState()
+				if err != nil {
+					return false
+				}
+				settings, known := state.HeadSettings()
+				return known && MailStrictSetting(settings)
+			},
+			Root: func() string { return root },
+			Chain: func(ctx context.Context, sniHost string, recipientDomains []string, spkiSha256 []byte) bool {
+				watch := sidecar.mailDnsWatch()
+				return watch != nil && watch.StrictChain(ctx, sniHost, recipientDomains, spkiSha256)
+			},
+		})
 		sessions, err := NewMailSessionServer(&MailSessionArgs{
 			ReceiverSidecarId: identity.SidecarId,
 			Resolve: func(ctx context.Context, address string) (*MailSessionRecipient, error) {
@@ -66,15 +81,16 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 				}
 				return &MailSessionRecipient{Known: lookup.Known, Address: recipient.Address(), RepoId: lookup.MailboxRepoId}, nil
 			},
-			Status:     args.Api.MailStatus,
-			Limits:     args.Api.Limits,
-			Checker:    NewMailAuthChecker(stub, args.Clock, receive.Auth),
-			Slots:      NewMailAuthSlots(receive.Auth),
-			Depositor:  depositor,
-			SpoolStore: args.Store,
-			Clock:      args.Clock,
-			Log:        args.Log,
-			Settings:   receive.Session,
+			Status:      args.Api.MailStatus,
+			Limits:      args.Api.Limits,
+			Checker:     NewMailAuthChecker(stub, args.Clock, receive.Auth),
+			Slots:       NewMailAuthSlots(receive.Auth),
+			Depositor:   depositor,
+			SpoolStore:  args.Store,
+			StrictChain: strict.StrictChain,
+			Clock:       args.Clock,
+			Log:         args.Log,
+			Settings:    receive.Session,
 		})
 		if err != nil {
 			closeParts()
@@ -103,7 +119,10 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 					}
 				}
 			},
-			Serve:       sessions.Serve,
+			Serve: sessions.Serve,
+			Admit: func(ctx context.Context, metadata []byte, spkiSha256 []byte) bool {
+				return strict.AdmitMetadata(ctx, metadata, receive.Session.IngressMaxByteCount, spkiSha256)
+			},
 			TlsSettings: sidecar.settings.Tls,
 			Clock:       args.Clock,
 			Log:         args.Log,

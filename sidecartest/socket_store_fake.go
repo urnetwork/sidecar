@@ -22,6 +22,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -1089,7 +1090,8 @@ func (self *FakeSocketStore) ClaimSweep(ctx context.Context, networkId connect.I
 // Every value the store holds, raw, as CC3's Redis class: what server's store keeps in {sg_}, {sn_}, {sc_} and
 // {svc_} (§2.8's sock-1, sock-3 to sock-5), so the privacy harness scans what a sockets process keeps (SOCK-M5-16):
 // a source for PrivacyCapture.AddSource. Each item is one group, client set or listener's pairs, its fields written
-// raw, so a value a scan looks for is in it as the store would hold it.
+// raw, so a value a scan looks for is in it as the store would hold it: a tls/ lease's certified names and ACME names
+// with their claims included, which m:<L> keeps after the claim (DESIGN-DETAILS 17.2.10).
 func (self *FakeSocketStore) PrivacyItems() []*PrivacyItem {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -1113,6 +1115,13 @@ func (self *FakeSocketStore) PrivacyItems() []*PrivacyItem {
 				body.WriteString(registration.AppMode)
 				for _, alpn := range registration.Alpn {
 					body.WriteString(alpn)
+				}
+				for _, certifiedName := range registration.CertifiedNames {
+					body.WriteString(certifiedName)
+				}
+				for _, acmeName := range registration.AcmeNames {
+					body.WriteString(acmeName.Name)
+					body.WriteString(strconv.FormatUint(acmeName.ClaimSeq, 10))
 				}
 			}
 		}
