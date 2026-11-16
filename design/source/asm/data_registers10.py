@@ -35,3 +35,8 @@ D['D-SMTP-22'] = "14.5's relation proves the MX's replies and Z1 once, under a h
 assert D['D-MAIL-3'].startswith('Receivers run emersion/go-smtp') and D['D-MAIL-9'].startswith('Owner accepts the M7 census'), 'MAIL rows moved'
 D['D-MAIL-3'] = "Receivers run emersion/go-smtp, forked in-tree with 15.5's two upstreamable changes, and verify with mox over DoH, ARC in-house."
 D['D-MAIL-9'] = "Owner accepts the scripted M7 census's loss before burners launch; proposed bar: under 5% of rank-weighted sign-up senders lack SNI."
+# §16's fold (2026-11-16): a harness process's runs share taint (owner decision 448), and MCP's evs tools never touch
+# the config repo or a mailbox's vault family (QD-205, owner decision 440).
+assert D['D-MCP-16'].startswith('Run taint is a monotone') and D['D-MCP-17'].startswith("MCP's evs tools never write"), 'MCP rows moved'
+D['D-MCP-16'] = "Run taint: a monotone, fsynced bit written before untrusted data leaves, shared by a harness process's runs; missing reads tainted."
+D['D-MCP-17'] = "MCP's evs tools never touch config, secret or directory repos, nor write `mailcfg`; MCP signs no authority statement."

@@ -1072,11 +1072,6 @@ var testFenceAdditions = []struct {
 		question: "DESIGN-DETAILS 16.2.2 (QD-212)",
 	},
 	{
-		message:  "Announcement",
-		field:    testFenceField{name: "pad", number: 14, typeName: "bytes"},
-		question: "plan-RECORD-m6-carrier",
-	},
-	{
 		message:  "Pending",
 		field:    testFenceField{name: "sidecar_id", number: 3, typeName: "bytes"},
 		question: "plan-SDK-pending-sidecar-id",
@@ -1133,47 +1128,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "written_over", number: 9, typeName: "bytes", repeated: true},
 		question: "evs1-m6-04-repair-written-over",
 	},
-	// QD-740: a dial or route grant's prefixes and ports ride sealed, at CanonicalAction version 4, and local_port,
-	// weight and alpn ride the ApprovalRequest, which is sealed in its entry
-	{
-		message:  "CanonicalAction",
-		field:    testFenceField{name: "sealed_detail", number: 38, typeName: "bytes"},
-		question: "record-m2-01-canonical-action-detail",
-	},
-	{
-		message:  "ApprovalRequest",
-		field:    testFenceField{name: "local_port", number: 14, typeName: "uint32"},
-		question: "record-m2-01-canonical-action-detail",
-	},
-	{
-		message:  "ApprovalRequest",
-		field:    testFenceField{name: "weight", number: 15, typeName: "int32"},
-		question: "record-m2-01-canonical-action-detail",
-	},
-	{
-		message:  "ApprovalRequest",
-		field:    testFenceField{name: "alpn", number: 16, typeName: "string", repeated: true},
-		question: "record-m2-01-canonical-action-detail",
-	},
-	// QD-772: a socket_listen's name rides the ApprovalRequest beside its local port and weight, and its action names
-	// the socket by its grant_dst alone
-	{
-		message:  "ApprovalRequest",
-		field:    testFenceField{name: "socket_name", number: 17, typeName: "string"},
-		question: "canonical-action-detail-listen-socket-name",
-	},
-	// QD-799: an egress_change action's mode, beside its subject and, under exits, its exits in grant_dst
-	{
-		message:  "CanonicalAction",
-		field:    testFenceField{name: "egress_mode", number: 39, typeName: "uint32"},
-		question: "bridge-m4-19-egress-change-action",
-	},
-	// QD-850: the name a visitor asked for, the TLS SNI, on the TLS front's publish receipts, apart from relays
-	{
-		message:  "ReachReceipt",
-		field:    testFenceField{name: "server_name", number: 11, typeName: "string"},
-		question: "tls-m6-06-reach-receipt-server-name",
-	},
 	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
 	// whether body is the kind's message or the AgentSignedBody holding it
 	{
@@ -1196,12 +1150,6 @@ type testFenceReservation struct {
 // reservations, so both directions stay exact, and one the design comes to reserve, or stops writing, fails until its
 // line here leaves.
 var testFenceReservations = []testFenceReservation{
-	// QD-740: local_port, weight and alpn leave CanonicalAction for ApprovalRequest's 14, 15 and 16
-	{message: "CanonicalAction", name: "local_port", number: 24, question: "record-m2-01-canonical-action-detail"},
-	{message: "CanonicalAction", name: "weight", number: 25, question: "record-m2-01-canonical-action-detail"},
-	{message: "CanonicalAction", name: "alpn", number: 34, question: "record-m2-01-canonical-action-detail"},
-	// QD-772: socket_name leaves CanonicalAction for ApprovalRequest's 17, and no other kind fills 23
-	{message: "CanonicalAction", name: "socket_name", number: 23, question: "canonical-action-detail-listen-socket-name"},
 }
 
 // One value an owner's answer adds to an enum the design fences.

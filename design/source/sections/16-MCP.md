@@ -34,7 +34,7 @@ This section owns `sidecar/mcp`, the stdio MCP server in the §5 daemon: its cat
 ### 16.4 The MCP server in the daemon
 
 - **Entry.** `ur mcp [--agent <name>] [--instance <i>]` always speaks MCP, as does bare `ur` when stdin is not a terminal (owner decision 57). Both send §5.8's hello (mode `mcp`) and relay newline-delimited JSON-RPC to one go-sdk `ServerSession` over `IOTransport`. The daemon hosts a `Sidecar` per network, so tools take an optional `network`, resolved by §5.8's `.ur` rules (owner decision 23).
-- **Sessions.** Each holds its agent, run bindings and subscriptions; its run's taint lives in the run's file (D-MCP-16). A session runs at most 8 in-flight calls, 20 W calls/s, and `Search.SessionSearchCount` searches at once (§5.4; 2 by default) and 5 a second (16.10); results over 256 KiB become a `resource_link` from 2025-06-18, else a text naming the `ur://` resource (D-MCP-13). Calls time out at 30 s, under Codex's 60 s `tool_timeout_sec` default (https://learn.chatgpt.com/docs/extend/mcp?surface=cli); one awaiting a person returns `pending` at once. Restarts fail in-flight calls retryably; the relay replays `initialize` and subscriptions for pre-2026-07-28 peers.
+- **Sessions.** Each holds its agent, run bindings and subscriptions; its run's taint lives in the run's file (D-MCP-16). A session runs at most 8 in-flight calls, 20 W calls/s (`Mcp.SessionWriteRate`, burst 20, a second's worth), and `Search.SessionSearchCount` searches at once (§5.4; 2 by default) and 5 a second (16.10); results over 256 KiB become a `resource_link` from 2025-06-18, else a text naming the `ur://` resource (D-MCP-13). Calls time out at 30 s, under Codex's 60 s `tool_timeout_sec` default (https://learn.chatgpt.com/docs/extend/mcp?surface=cli); one awaiting a person returns `pending` at once. Restarts fail in-flight calls retryably; the relay replays `initialize` and subscriptions for pre-2026-07-28 peers.
 - **Locked or Unenrolled.** Tools return FAILED_PRECONDITION naming `ur unlock` or `ur login` for the person's own terminal; MCP never asks for the pass and has no admin path (§5.7).
 
 ### 16.5 Tool, resource, and notification catalog
@@ -43,13 +43,13 @@ Tiers (16.6): **R** read, with `readOnlyHint`; **W** in-network write; **O** out
 
 | Tool | Tier | Side effects (owner) |
 |---|---|---|
-| `evs_repos`, `evs_list`, `evs_history`, `evs_read`, `evs_drop_preview` | R | §11; untrusted content taints; never a `secret` repo, nor the config's, the team directory's or the search index's contents (16.6); `evs_history` and `evs_read` report `drop_pending` and `dropped` with the drop's id and signer (§11.9); `evs_drop_preview` on admin-scoped sidecars only, within the repo's daily dry runs, reports what a drop would free and never drops (D-MCP-32) |
-| `evs_write`, `evs_delete` | W; O for agent-config files in shared repos (CLAUDE.md, AGENTS.md, `.mcp.json`, hooks; sidecar/design/pitch5.html:737) | a signed push on either ref mode (below), this sidecar as committer (owner decision 81), `agent_id` sealed; a conflict → FAILED_PRECONDITION; refuses repos of kind `config`, `mailcfg`, `secret` and `directory`, and the search index's files (§11.14); versioning off where §11.7 or a repo's lock refuses it → FAILED_PRECONDITION |
+| `evs_repos`, `evs_list`, `evs_history`, `evs_read`, `evs_drop_preview` | R | §11; untrusted content taints, a version's trust read from its push's sealed provenance (16.6's taint row); never a `secret` repo, nor the config repo, the team directory, a mailbox's `vault/` family or the search index's contents, `evs_repos` alone naming the config repo and `evs_list` omitting the `vault/` family (16.6); `evs_history` and `evs_read` report `drop_pending` and `dropped` with the drop's id and signer (§11.9); `evs_drop_preview` on admin-scoped sidecars only, within the repo's daily dry runs, reports what a drop would free and never drops (D-MCP-32) |
+| `evs_write`, `evs_delete` | W; O for agent-config files in shared repos (CLAUDE.md, AGENTS.md, `.mcp.json`, hooks; sidecar/design/pitch5.html:737) | a signed push on either ref mode (below), this sidecar as committer (owner decision 81), its sealed provenance carrying the writing run's `tainted` bit (owner decision 245) and, where the session has an agent, its `agent_id` (owner decision 470); a conflict → FAILED_PRECONDITION; refuses repos of kind `config`, `mailcfg`, `secret` and `directory`, the search index's files (§11.14) and the vault's `harness/` path (16.7); versioning off where §11.7 or a repo's lock refuses it → FAILED_PRECONDITION |
 | `mail_list`, `mail_read` | R | outside mail taints (§15) |
 | `mail_send` | W only when every non-member recipient has an approval record (§15.10's `rcpt/`; owner decision 280) and the run is untainted; else O | an entry listing every recipient, BCC included; quota (§14, §20) |
 | `mail_aliases`; `mail_alias_create`, `mail_alias_delete` | R; O | a signed `mailcfg` record, written only after the decision (§15.8); public address (§8 `mail:`) |
 | `socket_list`, `socket_status`; `socket_listen`; `socket_unlisten` | R; O, or W under a covering grant; W | §9.9 |
-| `tls_publish`; `tls_unpublish` | O; W | expiry per §13.9; the key stays in the sidecar (X1); refuses agent control UIs (MCP Inspector, OpenClaw; sidecar/design/market2.md:504) |
+| `tls_publish`; `tls_unpublish` | O; W | expiry per §13.9; the key stays in the sidecar (X1); refuses agent control UIs (MCP Inspector, OpenClaw; sidecar/design/market2.md:504) by a small versioned table of their response fingerprints, recording a match, and the daemon's own API and MCP ports |
 | `bridge_list`; `bridge_forward`, `bridge_expose`; `bridge_close` | R; O; W | §17: `bridge_expose` files its `BridgeRoute` or `BridgeMap` (a host's first map also its `BridgeAddress`), `bridge_close` a `GrantRevoke` or `BridgeWithdraw` (16.6) |
 | `dns_records`; `dns_set`, `dns_delete` | R; O | `GET /dns/zone`; `POST /dns/records` (§12.8) |
 | `team_members`, `team_agents`, `acl_grants`, `acl_check`, `record_query`, `run_coverage`, `approval_status` | R | §7, §8, 16.8 |
@@ -119,27 +119,28 @@ resources, all subscribable: ur://evs/{repo}/{+path}  ur://mail/{alias}  ur://re
 
 ```text
 refused from MCP   every evs tool, search tool and ur://evs resource on repos of kind secret, which evs_repos
-                   and search_status omit; evs_read and ur://evs reads of the config repo, whose records hold
-                   K_sock and each share's ShareSigner seed (§7.9, §17.9), its views coming from team_members,
-                   team_agents, acl_grants and acl_check; every evs tool and ur://evs resource on the search
-                   index's files (§11.14), whose display fields only the search tools return, under 16.10's
-                   trust rules, but evs_list naming them when asked; every evs tool and ur://evs resource on the
-                   team directory, whose views come from 16.11's tools under its taint rule; every evs tool,
-                   search tool and ur://evs resource on a mailbox's vault/ family, which evs_list omits, so an
-                   agent holding an EvsShare of the mailbox reaches its vault entries by no path (§15.8; owner
-                   decision 440); evs_write and evs_delete on repos of kind config and mailcfg; every authority
-                   statement (§7.9's records, admissions, KeyRegister and IndexerSet included); approval
-                   statements but the daemon's own harness decisions (below); acl and bridge statements but
-                   those 16.5's tools file, under their tier, about this sidecar's own resources: GrantActivate
-                   of its own approved request (§8.8), GrantRevoke of a grant whose subject it is, a BridgeRoute
-                   or BridgeMap it advertises or hosts, the BridgeAddress of its own sidecar_id that a host's
-                   first map needs (§17.4), and BridgeWithdraw of its own rules (§17.8); so never BridgeBlock,
-                   BridgeEgress, Suspend, EvsShare, OwnerConfirm or access-log statements; record_append of a
-                   kind other than claim, handoff, ask, answer, check and note; the directory's person acts
-                   (16.11): deciding a request, so no RepoGrant, EvsShare or ApprovalDecision on another
-                   sidecar's request, announcing, revoking or marking a repo private, changing the claims
-                   setting, a worker's announcement or ServiceSettings.directory, and erasing directory items;
-                   DROP pushes and their cancels (§11.7; D-MCP-32)
+                   and search_status omit; every evs tool and ur://evs resource on the config repo, which
+                   evs_repos alone names, whose records hold K_sock and each share's ShareSigner seed (§7.9,
+                   §17.9), its views coming from team_members, team_agents, acl_grants and acl_check; every evs
+                   tool and ur://evs resource on the search index's files (§11.14), whose display fields only
+                   the search tools return, under 16.10's trust rules, but evs_list naming them when asked;
+                   every evs tool and ur://evs resource on the team directory, whose views come from 16.11's
+                   tools under its taint rule; every evs tool, search tool and ur://evs resource on a mailbox's
+                   vault/ family, which evs_list omits, so an agent holding an EvsShare of the mailbox reaches
+                   its vault entries by no path (§15.8; owner decision 440); evs_write and evs_delete on repos
+                   of kind mailcfg and on the vault's harness/ path (16.7); every authority statement (§7.9's
+                   records, admissions, KeyRegister and IndexerSet included); approval statements but the
+                   daemon's own harness decisions (below); acl and bridge statements but those 16.5's tools
+                   file, under their tier, about this sidecar's own resources: GrantActivate of its own approved
+                   request (§8.8), GrantRevoke of a grant whose subject it is, a BridgeRoute or BridgeMap it
+                   advertises or hosts, the BridgeAddress of its own sidecar_id that a host's first map needs
+                   (§17.4), and BridgeWithdraw of its own rules (§17.8); so never BridgeBlock, BridgeEgress,
+                   Suspend, EvsShare, OwnerConfirm or access-log statements; record_append of a kind other than
+                   claim, handoff, ask, answer, check and note; the directory's person acts (16.11): deciding a
+                   request, so no RepoGrant, EvsShare or ApprovalDecision on another sidecar's request,
+                   announcing, revoking or marking a repo private, changing the claims setting, a worker's
+                   announcement or ServiceSettings.directory, and erasing directory items; DROP pushes and their
+                   cancels (§11.7; D-MCP-32)
 metering           every tool's bytes debit the transfer balance (owner decision 10); results carry metered_bytes
 control mode       (CLI, apps) authority statements, admissions, OwnerConfirm, KeyRegister and IndexerSet, and acl
                    and bridge statements beyond the own-resource filings above, are signed only for a ur command
@@ -189,7 +190,13 @@ register                  a consented, approval-capable device signs KeyRegister
                           signature over its body (WebAuthn: UP and UV set; fields 9 and 10 under purpose
                           key-proof, §7.9's record bytes) and, from a device that registered a live presence
                           key, that key's countersignature (countersign, below); the device about to sign
-                          refuses a key whose present attestation fails and never downgrades it to asserted
+                          refuses a key whose present attestation fails and never downgrades it to asserted;
+                          a P-256 key's public_key, in KeyRegister and KeyRow alike, is a SEC 1 uncompressed
+                          point, 65 bytes, for both profiles below, a host converting a COSE key's x and y to
+                          it, anything else being ErrSignedKey; ur keys add-ssh <path> reads one OpenSSH
+                          ssh-ed25519 public key file, shows its fingerprint and signs KeyRegister{alg:
+                          ssh-ed25519, purpose: sshsig} under this row, a /dev/tty-confirmed method refused
+                          from MCP, any other key type refused and the private key never reaching ur
 remove                    ur keys rm <key_id> signs KeyRevoke of the member's SSH key, or of a presence key only
                           from a device that registered a live presence key of its own, under countersign, for a
                           /dev/tty-confirmed command; ur keys ls lists the member's keys with each one's
@@ -202,15 +209,36 @@ labels                    records and approver screens show presence (attested) 
                           channel presence; the policy grammar is unchanged; each reader computes the label
                           locally, at the carrying entry's time, and for a logged key whose attestation fails
                           under its own roots shows presence (attestation refused), neither attested nor
-                          asserted, the log's KeyRegister rule reading no attestation (§7.9; owner decision 327)
+                          asserted, the log's KeyRegister rule reading no attestation (§7.9; owner decision 327);
+                          a label changes no authorization, and an asserted key's label rises to attested when
+                          a release pins its root, with no re-registration (owner decision 455)
 webauthn-es256 (COSE -7)  FIDO2 keys and Windows Hello through the platform WebAuthn API; passkeys in the iOS
                           and Android apps
-  registration            attestation packed, tpm, android-key or apple, verified against the FIDO MDS roots the
-                          release pins: attested; fmt none: asserted
+  registration            KeyRegister.attestation is a canonical CBOR map of two byte strings, {"attObj": the
+                          attestation object, "clientDataJSON": the create ceremony's client data}, a CTAP2
+                          client writing the JSON it hashed; the verifier checks the client data's type is
+                          webauthn.create and its origin is on per use's table, and packed, tpm, android-key
+                          or apple over SHA-256 of the client data against the vendor roots the release pins
+                          (Apple's WebAuthn root for apple, Google's hardware attestation roots for android-key,
+                          a short hand-kept vendor list for packed and tpm, in one data file a release step
+                          refreshes; never FIDO MDS data), leaving the challenge unchecked, since authData's
+                          credential key, which must equal public_key, binds the attestation to the
+                          registration: a statement that does not verify is refused, as is an apple or
+                          android-key chain that fails once its root is pinned; a packed or tpm statement that
+                          verifies and chains to no listed root, any format with no root pinned, fmt none and
+                          an empty attestation label asserted; any other attested (owner decision 455)
   per use                 authenticatorData: rpIdHash = SHA-256("ur.io"), UP and UV set, signCount above the
                           stored one when either is non-zero; clientDataJSON: type webauthn.get, challenge =
-                          base64url(SHA-256(§6.9's signed bytes)), origin on the profile's per-platform list; DER
+                          base64url(SHA-256(§6.9's signed bytes)), origin exactly one the origins row lists; DER
                           ECDSA P-256 over authenticatorData || SHA-256(clientDataJSON)
+  origins                 webAuthnOrigins, one table in protocol/bridge/signed_presence.go that VerifySigned and
+                          VerifyPresenceCountersign read, so every verifier refuses alike and §6.9's signature
+                          stays: https://ur.io for iOS passkeys, Windows Hello through the platform WebAuthn API
+                          and FIDO keys over CTAP2, where ur builds the client data; android:apk-key-hash:<the
+                          unpadded base64url SHA-256 of the signing certificate> for Android passkeys, only the
+                          certificate that signs released builds, which the owner names and which lands with
+                          M8's Android host (the published assetlinks.json also lists debug keys); exact match,
+                          no subdomain or wildcard; tests use fixture origins in testdata/
 ecdsa-p256-sha256         Secure Enclave keys created with kSecAccessControlUserPresence: the iOS app, and the
                           macOS ur bundle through purego (D-CORE-12)
   registration            no remote attestation of a Secure Enclave key's access control exists on an unmanaged
@@ -241,8 +269,14 @@ spendable(d, a, s, P)   decision d, canonical action a, spender s, the spender's
       since its previous base, §7.9), the digests are equal
   and under P the approver is still eligible, d.channel is in the governing evidence list (the matching
       requests rule's, else evidenceDefault), and a still falls inside the matching rule where one governs
-k approvers  a rule asking for k needs k decisions with one request_sha256 from distinct eligible approvers;
-             the budget is the smallest uses, the expiry the earliest not_after
+  and, on the daemon, d.request_sha256 = SHA-256(its stored ApprovalRequest), whose daemon-built
+      local_port, weight, alpn and socket_name it applies (16.8)
+k approvers  a rule asking for k needs k decisions with one request_sha256 from distinct approvers the rule
+             names (autogroup:admin, a group the member is in, or autogroup:dst-owner resolving to an admin
+             where no owner or sponsor stands, D-ACL-23), as the authorization log's quorum counts them
+             (owner decision 349); an Owner's or Admin's decision the rule does not name only meets §8.6's
+             admin clause where that applies, never one of the k (owner decision 471); the budget is the
+             smallest uses, the expiry the earliest not_after
 multi-use    a decision with uses > 1 binds a template, a CanonicalAction with scope = true whose non-empty
              fields every use equals, recipients a subset; each use's full action is what D-MCP-11 hashes
 grants       an approval activates one grant, by §8.8's GrantActivate under the grant_id the approval fixes,
@@ -274,7 +308,8 @@ never            a harness decision authorizes no KeyRegister (but a member's fi
                  another of the member's devices (§5.6), nor an acl or bridge statement beyond an O tool's own
                  filings (above; §8.6); those are signed directly, for a /dev/tty-confirmed command or in an
                  app's UI (D-CORE-13)
-presence prompt  where the daemon's host holds M's presence key, it answers a matching PermissionRequest with a
+presence prompt  where the daemon's host holds M's presence key, it answers a matching PermissionRequest (Cursor:
+                 beforeMCPExecution), waiting up to Ingest.PresencePromptTimeout (16.7's how), with a
                  presence prompt over the decision's signed bytes (Secure Enclave with LocalAuthentication
                  through the ur bundle on macOS, Windows Hello, or a FIDO key): channel presence, and harness_ok
                  is never needed
@@ -292,7 +327,8 @@ agent    --O tool-------> daemon: Sidecar.Authorize (§5.4) builds CanonicalActi
 daemon   --ApprovalRequest entry--> approver's log (16.8) --evs hint, else §18.7 wake--> approver device
 approver device: recompute payload_sha256; render the daemon-built fields; show summary and preview as
          untrusted; sign
-approver --ApprovalDecision--> requester's log --hint--> daemon (agent watches ur://approval/{id})
+approver --ApprovalDecision--> requester's log --hint--> daemon (agent watches ur://approval/{id}); a
+         requester that reads no vault gets it as an ApprovalDelivery sealed to it (16.8)
 agent    --same arguments--> daemon: rebuild the action; spendable; request_sha256 binds run and agent
 harness evidence
 harness  --PermissionRequest hook--> daemon: note (session, tool, SHA-256 of the arguments), or, on a host
@@ -318,9 +354,12 @@ action_id   SHA-256("urnetwork-sidecar-v1/action" || approval_id || this use's C
             uses = 1 it is ApprovalRequest.action_id, computed at proposal (R-MCP-6)
 effect_key  SHA-256("urnetwork-sidecar-v1/effect" || approval_id || action_id)
 server      approval_use(network_id, approval_id, use_index, effect_key, state, result, create_time,
-            PRIMARY KEY (approval_id, use_index), UNIQUE (approval_id, effect_key)) in api's Postgres, written
-            in the transaction of each server-gated effect: in v0 only §12.8's POST /dns/records, since grant
-            activations, §13's publishes included, use grant_id (§8.8)
+            not_after, PRIMARY KEY (approval_id, use_index), UNIQUE (approval_id, effect_key), CHECK (state =
+            'cancelled' OR effect_key IS NOT NULL)), with the index approval_use_not_after, in api's Postgres,
+            written in the transaction of each server-gated effect: in v0 only §12.8's POST /dns/records, since
+            grant activations, §13's publishes included, use grant_id (§8.8); not_after is the expiry the gate
+            checked, the decision's not_after_millis or the earliest under k approvers, on every row, done and
+            cancelled alike
 spend       Sidecar.Authorize with a decision (§5.4):
   1  take the approval's in-process mutex; spendable, without its expiry test when a Reserve for this
      action_id exists (a retry, which expiry below bounds)
@@ -348,7 +387,8 @@ spend       Sidecar.Authorize with a decision (§5.4):
      happened; else uncertain
 gate        one transaction per request:
   1  SELECT result FROM approval_use WHERE approval_id = $1 AND effect_key = $2; found: answer it, past
-     not_after too, while the row lasts; else the spend check at server time, refused: answer, writing nothing
+     not_after too, while the row lasts; else the spend check at server time, only the rule's named
+     approvers counting toward k (owner decision 471), refused: answer, writing nothing
   2  for n in 0 .. uses-1: INSERT approval_use(n, effect_key, 'done', ...) ON CONFLICT DO NOTHING; the first
      success wins use n; none left: the row a racing request committed for this effect_key answers, else
      409 SPENT (the keys serialize racing gates without session locks, which PgBouncer's transaction
@@ -361,13 +401,17 @@ retry       the same action, through a fresh MCP session too, returns the record
             uncertain one under its effect_key; a different action never takes a reserved use; an uncertain
             use stays consumed
 cancel      an approver signs ApprovalCancel{approval_id}, delivered like a decision; the daemon appends
-            Cancel; for a server-gated decision, POST /approval/cancel {the cancel, the decision} inserts the
-            remaining use_index rows as cancelled; a local reservation made before the cancel still
-            completes, a server-gated one only if its gate committed first
+            Cancel; for a server-gated decision, POST /approval/cancel {the cancel, the decision} inserts each
+            use_index in 0 .. uses-1 that no row holds, state cancelled, effect_key and result NULL and the
+            decision's not_after, each ON CONFLICT DO NOTHING, so a racing gate's insert conflicts on the
+            primary key, finds no use left and answers 409 SPENT by step 2, and many cancelled rows fit
+            UNIQUE (approval_id, effect_key), since Postgres takes NULLs as distinct; a local reservation
+            made before the cancel still completes, a server-gated one only if its gate committed first
 expiry      a local use is reserved until not_after and completes until not_after + 10 min; a server-gated
             use is reserved until not_after - 60 s, a first presentation past not_after (server time) is
             refused, and a replay gets its stored result while the row lasts; past these, a retry only reconciles
-retention   approval files 30 d after not_after; approval_use rows 1 d after (§2.8 api-10)
+retention   approval files 30 d after not_after; approval_use rows 1 d after their not_after, which
+            taskworker's hourly sweep deletes, never reading create_time (§2.8 api-10)
 AU1  for every approval, effects <= uses, counted at each step 5 component (outbox objects, approval_use
      rows, grant_ids, bridge rule ids, evs versions, alias records, restores)
 AU2  every effect has a durable Reserve or approval_use row, committed before it or in its transaction
@@ -382,20 +426,28 @@ AU4  a retry of the same action returns the original outcome
 - **Secrets (I-7).** Results matching the daemon's credentials are refused; errors never echo input matching a secret rule.
 
 ```text
-taint       once the run reads untrusted data through ur (outside mail, files from outside or a tainted run,
-            flagged entries, untrusted search hits' text, 16.10, the team directory's announcement, request and
-            decision prose, 16.11), by MCP or by a ur command whose process ancestry binds it to the run (16.7),
-            or a hook reports a web tool (WebFetch, WebSearch, curl), and while hook coverage lapses: no hook
-            event bound it, none came within 60 s of a tool call, or a harness config hash changed (checked at
-            SessionStart and every 5 min)
-run file    <state>/net/<network_id>/runs/<run_id>, file class run (§5.9): {run_id, harness, session_ids[],
-            worktree, tainted, taint_reasons[], gaps[], first_seq, last_seq}
+taint       once the run reads untrusted data through ur (outside mail, files from outside or a tainted run, a
+            version's trust read from its push's sealed provenance, its tainted bit, signer and import label, and
+            every version untrusted where that provenance cannot be read (owner decisions 245, 470), flagged
+            entries, untrusted search hits' text, 16.10, the team directory's announcement, request and decision
+            prose, 16.11), by MCP or by a ur command whose process ancestry binds it to the run (16.7), or a hook
+            reports a web tool (WebFetch, WebSearch, curl), and while hook coverage lapses: no hook event bound
+            it, none came within 60 s of a tool call, or a harness config hash changed (checked at SessionStart
+            and every 5 min)
+run file    <state>/net/<network_id>/runs/<run_id>, file class run (§5.9): {run_id, harness,
+            harness_process (pid and start time; local, never shown), session_ids[], worktree, tainted,
+            taint_reasons[], gaps[], first_seq, last_seq}
 write-ahead tainted = true is fsynced before the daemon returns untrusted data to the agent or acks a hook
             reporting a web tool; if that write fails, the call fails
 rejoin      after a daemon or relay restart a session rejoins its run by (harness, session_id) at the next
             hook event; until one binds it, it is unbound and so tainted; a missing or unreadable run file
-            means tainted
-monotone    tainted never returns to false within a run; a new run starts untainted
+            means tainted; every session or event under a harness process binds to the union of that
+            process's runs, ended ones included, so a new run there starts with their taint, fsynced, until
+            the process exits; only a SessionStart reporting a fresh start opens a new run, a session with no
+            live harness ancestor binds nothing and reads tainted, and SessionEnd clears nothing (owner
+            decision 448)
+monotone    tainted never returns to false within a run; a new run starts untainted unless a run of its
+            harness process is tainted
 retention   until the run's Coverage entry is sealed, then 30 days, for restore (16.7)
 TS1         once a run is tainted, no outward action in it passes the gate on a standing grant, an approved
             recipient or a decision whose request was untainted, across any restart; a use reserved before
@@ -406,12 +458,18 @@ TS1         once a run is tainted, no outward action in it passes the gate on a 
 
 ### 16.7 Harness integration, ingest and restore
 
-`ur install-harness <claude-code|codex|cursor> [--agent <n>] [--instance <i>] [--project]` shows a diff, then writes the MCP entry, the O-tool ask rule and the hooks (absolute path, §4.10), sealing each file's hash for 16.6's check; `--project` writes the committed files cloud sessions load, and §5.8's `.ur`. The global harness config, with per-agent overrides, lives in the author vault (sidecar/design/mocks/recurd-app.html:986-1009); changes rewrite the local files and their hashes. While a Team's `ServiceSettings.record_required` is set (§7.9; owner decision 305), `ur install-harness` writes `onFailure: block` (Claude Code) and `failClosed: true` (Cursor) on every `ur hook` entry, adds `--required` to the hook command and seals that form; `ur hook --required` exits 2 when the daemon cannot take the event, because the hook otherwise exits 0 and neither setting would ever fire. The config-hash check counts a fail-open form as a changed config, so such a run taints, and `ur status` names each fail-closed harness. Codex documents no fail-closed setting, so there `--required`'s exit 2 blocks a PreToolUse only while the hook runs, and `ur status` says so. Enforcement stops at a member's own daemon: a same-uid edit taints but cannot be prevented.
+`ur install-harness <claude-code|codex|cursor> [--agent <n>] [--instance <i>] [--project]` shows a diff, then writes the MCP entry, the O-tool ask rule and the hooks (absolute path, §4.10), sealing a hash of `ur`'s entries in each file for 16.6's check (below); `--project` writes the committed files cloud sessions load, and §5.8's `.ur`. While a Team's `ServiceSettings.record_required` is set (§7.9; owner decision 305), `ur install-harness` writes `onFailure: block` (Claude Code) and `failClosed: true` (Cursor) on every `ur hook` entry, adds `--required` to the hook command and seals that form; `ur hook --required` exits 2 when the daemon cannot take the event, because the hook otherwise exits 0 and neither setting would ever fire. The config-hash check counts a fail-open form as a changed config, so such a run taints, and `ur status` names each fail-closed harness. Codex documents no fail-closed setting, so there `--required`'s exit 2 blocks a PreToolUse only while the hook runs, and `ur status` says so. Enforcement stops at a member's own daemon: a same-uid edit taints but cannot be prevented.
+
+**The config hash.** The adapter extracts only what `ur` wrote: Claude Code's `mcpServers.ur` in `~/.claude.json` (`.mcp.json` with `--project`) and, in `~/.claude/settings.json` (`.claude/settings.json` with `--project`), each `permissions.ask` rule and each hook entry whose command is this `ur`'s absolute path; Codex's `[mcp_servers.ur]` with its per-tool `approval_mode` in `~/.codex/config.toml`, and `ur`'s entries in `~/.codex/hooks.json`; Cursor's `mcpServers.ur` in `~/.cursor/mcp.json` and `ur`'s entries in `~/.cursor/hooks.json`. Each set is rendered as RFC 8785 canonical JSON (TOML parsed to the same form) and hashed with SHA-256, and the harness config hash, RECORD.md's `config_sha256`, is SHA-256 over the per-file hashes in that order, one rule for every file. The sealed value comes from `ur`'s own template at install, never from the file as found, so re-running `ur install-harness` restores entries and cannot bless a widened rule. The check at SessionStart and every 5 min compares a fresh extract, and also counts as changed any other entry that can answer for a `ur` tool: a hook on PermissionRequest, PreToolUse or `beforeMCPExecution` whose matcher covers the `ur` server, or a `permissions.allow` rule naming it, in those files and, at SessionStart, in the project settings files of the session's working directory. An edit elsewhere in a file changes nothing.
+
+**The harness config** (sidecar/design/mocks/recurd-app.html:986-1009), with per-agent overrides, is one file, `harness/config.json`, on the `main` file-mode ref of the member's vault in each network: UTF-8 JSON, one object, `"version": 1`, at most 64 KiB, unknown keys kept verbatim on rewrite and ignored with a warning in `ur status`. A missing file means defaults, an unparsable file or an unknown version means defaults and a `config_unreadable` coverage gap, and a sidecar that cannot read the vault (tagged, cloud) uses defaults. It holds no hook, ask rule or MCP entry: those come only from `ur install-harness`'s own template, and no synced change rewrites a harness file or re-seals a hash. Two keys act (owner decision 452): `record.redact.pii`, `off` or `hash`, default `hash`, from M3 (Redact before seal, below), and `claims`, `{"default": auto|prompt|off, "projects": {<project key>: value}}`, from M6, which `ur directory runs` and `SetRuns` write per member and project and CORE-M6-02 reads at a session's start under D-CORE-18's rule (16.11), a tagged sidecar, which reads no vault, taking the team default and `.ur`; `agents.<label>` overrides those two keys only. `record.capture` is kept and ignored, capture staying this section's fixed set, since a narrowing control weakens R-MCP-4 and needs a person-only surface first; `reach`, `models` and `identity` are kept, ignored and warned about, so a `reach:` block files no request until a later design (§8.5). A value applies at each run's next SessionStart and is fixed for that session: a narrower one at once, a wider one (`pii` from `hash` to `off`, a wider `claims`) only after the member confirms on `/dev/tty` or in an app, never through MCP, and the next run's Coverage names the change.
+
+**Model calls** (owner decision 463). A Codex run's come from its PostModelRequest hook alone, one `model_call` entry a call with its request id and token counts, and `ur install-harness` writes no `[otel]` table for Codex, removing one an earlier install wrote. A Claude Code run's come from its OpenTelemetry export: `ur install-harness` draws 32 random bytes per install and seals them under `<state>/harness/` beside the template's seal, writes them into Claude Code's `env` block as `OTEL_EXPORTER_OTLP_HEADERS` with an endpoint naming the loopback port it chose and sealed with them, and a re-install restores both; the daemon's receiver (`mcp.IngestTelemetry`) accepts that token, compared in constant time, for `model_call` entries alone, labeled source hook, refuses anything else 401 with nothing recorded, and passes over any record whose resource names Codex. Cursor documents no exporter. The token only adds the harness's own reports, which any same-uid process can already add through `ur hook` (owner decisions 47, 75), so I-7, which keeps out credentials that administer, read or sign, admits it (§2.9).
 
 | Harness | MCP entry; O-tool ask rule | Hooks (`ur hook <harness>`) | Transcript |
 |---|---|---|---|
-| Claude Code | `claude mcp add --scope user ur` (`.mcp.json` with `--project`); `permissions.ask` | SessionStart to SessionEnd (1.5 s there), PermissionRequest; fail open unless `onFailure: block` (v2.1.295+), which a Team's `record_required` writes | `transcript_path` JSONL |
-| Codex | `[mcp_servers.ur]` in `~/.codex/config.toml`; per-tool `approval_mode` | `~/.codex/hooks.json`, trusted by hash; PermissionRequest; PreToolUse and PostToolUse for shell, `apply_patch` and MCP; SessionEnd 1 s; no fail-closed setting, so under `record_required` only `--required`'s exit 2 blocks | `transcript_path` |
+| Claude Code | `claude mcp add --scope user ur` (`.mcp.json` with `--project`); `permissions.ask` | SessionStart to SessionEnd (1.5 s there), PermissionRequest; fail open unless `onFailure: block` (v2.1.295+), which a Team's `record_required` writes; its OpenTelemetry exporter to the daemon's loopback receiver (model calls, above) | `transcript_path` JSONL |
+| Codex | `[mcp_servers.ur]` in `~/.codex/config.toml`; per-tool `approval_mode` | `~/.codex/hooks.json`, trusted by hash; PermissionRequest; PreToolUse and PostToolUse for shell, `apply_patch` and MCP; PostModelRequest (model calls, above); SessionEnd 1 s; no fail-closed setting, so under `record_required` only `--required`'s exit 2 blocks | `transcript_path` |
 | Cursor | `mcpServers.ur` in `~/.cursor/mcp.json`; `beforeMCPExecution` answers `ask` | `~/.cursor/hooks.json` v1: that hook, afterShellExecution, afterMCPExecution, afterFileEdit; `failClosed: true` under `record_required` | `transcript_path`, null if disabled |
 
 Sources (2026-11-03; edit payloads and `session_title` re-read 2026-11-05): https://code.claude.com/docs/en/hooks, https://code.claude.com/docs/en/tools-reference, https://code.claude.com/docs/en/mcp, https://learn.chatgpt.com/docs/hooks.md, https://learn.chatgpt.com/docs/extend/mcp?surface=cli, https://cursor.com/docs/agent/hooks, https://cursor.com/docs/context/mcp.
@@ -420,16 +478,17 @@ Sources (2026-11-03; edit payloads and `session_title` re-read 2026-11-05): http
 |---|---|---|
 | Transcript | `transcript_path`, tailed at Stop, SubagentStop, PreCompact, SessionEnd and every 30 s | author vault, per run |
 | Tool calls | the PostToolUse family; the daemon's own MCP calls | vault |
+| Model calls | Codex's PostModelRequest hook; Claude Code's OpenTelemetry export (above) | vault, one `model_call` entry a call |
 | Diffs, restore point | the restore point and ledger of D-MCP-15 (HEAD plus dirty-file copies, per-path before and after hashes), rescanned at each hook; file events in v1 | vault, one evs push per tree, multi-part when large (§11.8); a `change` entry with hashes in the team record |
-| Context | SessionStart, InstructionsLoaded, model, harness version, `permission_mode` | `context` entry; instruction files by hash |
+| Context | SessionStart, InstructionsLoaded, model, harness version, `permission_mode`; the run's redacted user prompts (UserPromptSubmit) as they arrive | `context` entries, the prompts in a stage-2 entry's `ContextBody.prompts` (owner decision 467), so a run card reads them from the record; instruction files by hash |
 | Run title, run card | Claude Code's `session_title` at SessionStart or UserPromptSubmit when set (`--name`, `/rename`), else the run's first user prompt; tool names, touched paths and times from the rows above | the run card in the vault's index, and in the team record's from its own entries (16.10) |
 | Run announcement | SessionStart's title, project and branch (team networks, `claims` auto; 16.11) | the team directory (an `announce` entry at M6, the card from M10); nothing else from the session (I-20) |
 | Approvals | PermissionRequest events, permission modes, I-8 decisions | team record (single-member networks: vault) |
 
-- **How.** `ur hook` passes its stdin to the daemon (hello mode `hook`) and exits 0 within 300 ms, a PreToolUse once the daemon holds the paths it names (else their before is unknown, below). Events bind to a run by (harness, `session_id`), and an MCP session joins it through the peer pids' ancestry.
+- **How.** `ur hook` passes its stdin to the daemon (hello mode `hook`) and exits 0 within 300 ms, with two exceptions: a PreToolUse waits until the daemon holds the paths it names (else their before is unknown, below), and, on a host holding M's presence key, a PermissionRequest (Cursor: `beforeMCPExecution`) for an O tool waits until the presence prompt ends, at most `Ingest.PresencePromptTimeout` (60 s): the key signed, allow (`decision.behavior: allow`; Cursor `permission: allow`); the person refused, deny; the bound reached or no prompt available, no decision (Claude Code and Codex exit 0 with no output, the normal flow; Cursor `permission: ask`), the O call then returning pending for `ur approve`; nothing is signed on a refusal or a timeout. `ur install-harness` writes `timeout: 75` on those hook entries, since Claude Code and Codex default to 600 s and Cursor states only a platform default, and EXT-1 checks that an allow suppresses the harness's own prompt under `permissions.ask`, which Claude Code still evaluates: should a prompt still show, the person sees two and the key alone counts. Events bind to a run by (harness, `session_id`), and an MCP session joins it through the peer pids' ancestry.
 - **Spool.** Capture spools locally, encrypted (1 GiB cap); a locked daemon seals to a spool public key (`crypto/hpke`, rotated at each unlock), so capture continues while locked.
-- **Redact before seal.** A vendored gitleaks rule subset (MIT), PEM blocks, JWTs, the `urn_`, `ur-authkey-` (with any `#` bundle) and `ur_sk_` formats, and high-entropy assignments become `[REDACTED:<rule>:<8 hex of HMAC(local key, value)>]`; PII hashing follows the harness config, and shared writes refuse on a match.
-- **Limits** (settings): 1 MiB per hook payload or tool body; files over 8 MiB by hash and size; 256 MiB per run-hour; vault bytes count toward storage (§20). Every cut, missed event or changed config is a coverage gap.
+- **Redact before seal.** A vendored gitleaks rule subset (MIT), PEM blocks, JWTs, the `urn_`, `ur-authkey-` (with any `#` bundle) and `ur_sk_` formats, and high-entropy assignments become `[REDACTED:<rule>:<8 hex of HMAC(local key, value)>]`; under the harness config's `record.redact.pii`, `hash` by default from M3, email addresses and E.164 phone numbers become that marker with rule `pii-email` or `pii-phone`, each a redaction in the run's Coverage; shared writes refuse on a match.
+- **Limits** (settings): 1 MiB per hook payload or tool body; a control line at most `LocalSettings.RequestByteCount` (4 MiB, a 1 MiB body at up to 4x escaping), a longer one closing its session; files over 8 MiB by hash and size; 256 MiB per run-hour; vault bytes count toward storage (§20). Every cut, missed event, changed config or event lost with a closed session is a coverage gap.
 
 **Restore (D-MCP-8, D-MCP-15).** `run_restore` runs on the worktree's device from its local restore point, never the vault's redacted copy, so it needs no network:
 
@@ -524,15 +583,16 @@ Readers and depositors follow §8.5's kind defaults and `audit` block, ahead of 
 |---|---|---|---|
 | Author vault (`vault`, owner-bound; one per member: the first consented, not read_only device with an entry to write files RepoCreate, and the member's live vault with the lowest log position is the vault, a device whose own empty repo lost filing RepoDelete{now} for it, §11.12) | the author's consented devices (§8.5); `EvsShare` recipients (§8.8) | those devices; the author's other untagged sidecars and sponsored tagged ones deposit | the author's consented indexer (§3.6) |
 | Coordination log: in a team network the team directory (`directory`, 16.11); a personal network uses the vault for every kind | every admitted sidecar of the team (owner decision 171) | every admitted sidecar that is not read_only, its own paths and stream | a directory admin's indexer |
-| Other ledgers (`record`) | members per §8, and the agents a grant names, through wraps (owner decision 114) | members' sidecars and agents granted write; other tagged sidecars deposit | an admin's indexer |
+| Other ledgers (`record`) | members per §8, and the agents a grant names, through wraps (owner decision 114) | members' sidecars and agents granted write; other tagged sidecars deposit; where a log admin's `ledger_scope` entry (RECORD.md's kind 43) names the repos and projects a ledger covers, each sidecar with write on it copies there each of those runs' entries bound for the team record, its projection, never a vault body, with no tool change and no agent choosing a log, and `ur status` names each `record` log a daemon copies to (owner decision 454) | an admin's indexer |
 | Team record (`team_record`) | admins' and auditors' devices | members' and tagged sidecars deposit; authors keep copies | an admin's or auditor's indexer |
 
 A mirror exists once such an indexer is designated; a network has none by default, and `ur status` names each unmirrored log (owner decision 177).
 
 ```proto
 // sidecar/protocol/record.proto; frozen at M3's entry review (D-MCP-6). Frozen means wire-stable: numbers and
-// meanings never change, versions add fields; every hash and signature covers stored bytes. Every field is
-// sealed: each RecordEntry is a file in its writer's stream (§11.8), and evs sees only §2.8's evs rows. The leaf
+// meanings never change, versions add fields; every hash and signature covers stored bytes. Every field of an
+// entry is sealed: each RecordEntry is a file in its writer's stream (§11.8), and evs sees only §2.8's evs rows; a
+// CanonicalAction bound for a GrantActivate or a gate sets only what the freeze block's server row lists. The leaf
 // hash SHA-256(0x00 || Signed.body) (RFC 9162) admits M6's verifiable log (16.18). §6.11 SignedType: 0x1801
 // SIGNED_RECORD_HEADER, 0x1802 SIGNED_APPROVAL_DECISION, 0x1803 SIGNED_APPROVAL_CANCEL, 0x1804
 // SIGNED_RETENTION_POLICY.
@@ -574,32 +634,48 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   string host = 5; uint32 port = 6; uint32 audience = 7; int64 expires_millis = 8;
   repeated string cidrs = 9; repeated string grant_dst = 10; repeated string grant_allow = 11;
                                             // a sock: entry in grant_dst is §9.4's token path in hex, never an
-                                            // application name, since GrantActivate shows api the action (§8.8)
+                                            // application name, since GrantActivate shows api the action (§8.8);
+                                            // in versions 3 and 4 the clear grant_dst names destinations with no
+                                            // port or prefix text, sealed_detail's holding that: a worker
+                                            // target's is one sidecar:<32 lowercase hex id>:tcp:<port> a port,
+                                            // ascending, no duplicates, grant_allow ["dial"], target_port that
+                                            // port when there is one, else 0, and any other refused (16.11)
   uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
-                                            // 10, 11, 14, 26, 27 and 29, which approvers that do not know it refuse
+                                            // 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
+                                            // 10, 11, 28, 29 and 38, a share's also 40 (owner decisions 220,
+                                            // 457); approvers that do not know a version refuse it
   bool scope = 13;                          // a multi-use template (16.6)
   bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
                                                         // evs_delete; mail_alias_delete's mailcfg record (16.6)
   string dns_name = 18; string dns_type = 19; string dns_value = 20; uint32 dns_ttl = 21;     // dns_set, dns_delete
   string alias = 22;                                                     // mail_alias_*; mail_send's from_alias
-  string socket_name = 23; uint32 local_port = 24; int32 weight = 25;                        // socket_listen
-  bytes target_sidecar_id = 26; uint32 target_port = 27;                                     // bridge_forward, _expose
+  reserved 23, 24, 25, 34;                  // socket_name, local_port, weight, alpn: ApprovalRequest's 17 and 14
+                                            // to 16, daemon-built (owner decision 457)
+  bytes target_sidecar_id = 26; uint32 target_port = 27;                                     // bridge_expose
   bytes rule_id = 28; bytes subject = 29;                // a grant (§8.8), with 8, 10 and 11; a publish's also 33, 35
   bytes restore_run_id = 30; repeated string restore_paths = 31; bytes restore_preview_id = 32; // run_restore
-  uint32 app_mode = 33; repeated string alpn = 34; bytes link_spki_sha256 = 35;              // tls_publish (§13.7)
+  uint32 app_mode = 33; bytes link_spki_sha256 = 35;                                         // tls_publish (§13.7)
   string alias_group = 36;                                                   // mail_alias_create's group (§15.8)
   uint32 versioning = 37;                   // O-tier evs_write: its version's setting, 0 on, 1 off (§11.7); set
                                             // only in version 2, which approvers that do not know it refuse
+  bytes sealed_detail = 38;                 // versions 3 and 4: a CanonicalActionDetail{cidrs, target_port,
+                                            // grant_dst} in §7.9's sealed-body format, the prefixes and ports,
+                                            // which approvers and readers open and no server does; its aad's
+                                            // SignedType is SIGNED_GRANT_ACTIVATE and network the action's, and
+                                            // in a header nonce's place the first 16 bytes of SHA-256 over this
+                                            // action as stored with field 38 left out, so it opens only beside
+                                            // the clear fields it was sealed with (owner decisions 220, 457)
+  uint32 egress_mode = 39;                  // egress_change: BridgeEgressMode, beside its subject (29) and,
+                                            // under exits, its exits in grant_dst (sidecar:<id> entries or one
+                                            // tag entry); version 1, on no server path (owner decision 462)
   bytes share_network_id = 40;              // a share's grant (§8.11): the other network, 16 bytes, on a dial or
                                             // route grant alone, beside its subject, the requesting sidecar; an
                                             // admin's approval covers it as it covers every field (§8.8; owner
                                             // decision 346)
-  // owner decision 220: a dial or route grant's cidrs (9), target_port (27) and grant_dst's ip and port text move
-  // to bytes sealed_detail = 38 under a raised version, which joins record.proto and this fence together
 }
-// Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, and
-// ApprovalRequest.summary and preview as untrusted text, so an agent cannot carry trusted rdata, an alias or a
-// path in prose.
+// Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, with the
+// request's daemon-built 14 to 17 and an opened sealed_detail, and ApprovalRequest.summary and preview as
+// untrusted text, so an agent cannot carry trusted rdata, an alias or a path in prose.
 message ApprovalRequest {                   // body of an approval entry
   bytes approval_id = 1; bytes action_id = 2; bytes run_id = 3; bytes agent_id = 4;
   bytes canonical_action = 5; bytes payload_sha256 = 6;  // SHA-256(canonical_action as stored)
@@ -607,6 +683,12 @@ message ApprovalRequest {                   // body of an approval entry
   uint32 risk = 8;                          // SidecarRisk: 1 normal for every action (owner decision 279)
   bytes requester_sidecar_id = 9; bool tainted = 10; repeated bytes approvers = 11; int64 not_after_millis = 12;
   uint32 version = 13;                      // 1
+  uint32 local_port = 14; int32 weight = 15; repeated string alpn = 16;  // daemon-built and rendered by
+                                            // approvers, under request_sha256: the local port a socket_listen,
+                                            // tls_publish, bridge_forward or bridge_expose binds, a listen's
+                                            // weight and a publish's ALPNs (owner decision 457)
+  string socket_name = 17;                  // a socket_listen's name, which agrees with its action's one sock:
+                                            // entry in grant_dst; no server sees it (owner decision 457)
 }
 message ApprovalDecision {                  // inside §6 Signed, purpose approval; holds no run or agent id
   bytes approval_id = 1;
@@ -620,16 +702,20 @@ message ApprovalDecision {                  // inside §6 Signed, purpose approv
   uint32 channel = 8;                       // evidence: device, presence or harness (owner decision 75)
   bytes sshsig = 9;                         // reserved: ignored, never trusted (owner decision 279)
   bytes evidence_sha256 = 10;               // harness: the matched hook event, which stays in the record;
-                                            // presence: the WebAuthn assertion
+                                            // device and presence: empty, a presence decision's assertion
+                                            // riding in Signed.webauthn
   bytes requester_sidecar_id = 11;          // the only sidecar that may spend it (16.6)
   AuthPin auth_pin = 12;                    // §7.9's pin the approver evaluated the request under
   uint32 version = 13;                      // 1
 }
 message ApprovalCancel { bytes approval_id = 1; }  // inside §6 Signed, purpose approval (16.6's ledger)
-message ReachReceipt {                      // coalesced per (grant, peer) per 5 min
+message ReachReceipt {                      // coalesced per (grant, peer) per 5 min, and a TLS front's publish
+                                            // receipts per server name too
   bytes grant_id = 1; uint64 policy_version = 2; uint32 kind = 3; bytes owner = 4; bytes approver = 5;
   int64 window_start_millis = 6; repeated bytes peers = 7; uint64 stream_count = 8; uint64 byte_count = 9;
   repeated string relays = 10;              // host, IP and operator of each relay or edge in the path
+  string server_name = 11;                  // the name the visitor asked for, the TLS SNI, which only the TLS
+                                            // front's publish receipts set; never a relay (owner decision 465)
 }
 message Coverage {                          // at run end, or after 10 min idle without SessionEnd
   bytes run_id = 1; string harness = 2; string version = 3; repeated string sources = 4;
@@ -659,23 +745,39 @@ values     CanonicalAction.kind, ApprovalRequest.risk and ApprovalDecision.decis
            spender or gate refuses 0 or an unknown value of any of these, the kinds row's "kept" covering
            RecordHeader.kind only; kinds 5, 6, 7 and 16 have no O tool and no row in the kind table, so
            NewCanonicalAction refuses each until its owner names its fields
-order      a log's total order, for RECORD.md's verifiable log (M6), is (evs push version, position in the
-           push), each push's entries sorted by (writer, seq): no log-wide sequence, no format change
+server     a CanonicalAction bound for a GrantActivate or a gate sets only kind, version, scope and the fields
+           that path's gate sees: a grant 8, 10, 11, 28 and 29, version 4's also 38, sealed, and a share's
+           40, a publish's also 5, 6, 7, 33 and 35; a version-3 access_request 8, 10, 11, 14, 26, 29 and 38;
+           a dns_* action 8 and 18 to 21; api, every reader's GrantActivate check and each gate parse the
+           stored bytes and refuse any other set field, so a socket_listen's grant carries only its grant_dst's
+           sock: entry and an egress_change goes to no server; AD4 stands (16.6)
+order      within one stream, (evs push version, position in the push), each push's entries sorted by
+           (writer, seq); across a log's streams RECORD.md's verifiable log (M6) appends in batches, batch by
+           batch and, within one, streams by ref_id bytes, each checkpoint entry listing its frontier and
+           leaves: no log-wide sequence and no format change, fixed with the envelope at M3's entry review
+           (D-MCP-6)
 disclosure body_commitment opens with (salt, body), which only key holders have until erasure; a client
-           disclosure packet (RECORD.md, M6) carries both; erasure makes later disclosure impossible, by design
+           disclosure packet (RECORD.md, M6) carries both; erasure makes later disclosure impossible, by design;
+           an Opening{header, salt, body, version} names in version the RecordEntry.version it was made from,
+           absent reading 1, so its reader parses body as the kind's own message (1) or the AgentSignedBody
+           holding it (2), never inferring it from how bytes parse, the version being the opener's unsigned
+           word (owner decision 466); ur record open writes, and ur record disclose --content reads, a
+           DisclosureOpenings{version, log_id, openings, keys, purpose} file, which no reader can take for a
+           DisclosurePacket, the vault's disclosure entry of act 2 recording its SHA-256 as packet_sha256
+           (owner decision 456)
 semantics  DESIGN.md's, which RECORD.md may not change: the logs' reader and writer matrix (§8.5's
            kind defaults), per-entry key slots, the source and tainted labels, and approvals bound by
            request_sha256 and payload_sha256
 ```
 
-- **Storage (Q-ARCH-9 (a); owner decision 2).** Entries are named by sequence, 2,048 to a directory, whose name table (about 128 B a row: child token, kind, and a sealed name with its nonce and tag; up to 140 B while a path-epoch copy carries it with its `EvsName.epoch`) stays within 256 KiB, 280 KiB carried, inside §11.7's 4,096 children and 448 KiB of name table; per entry evs sees only a token path, padded size, key slot and push time, never record kinds, agents, runs or bodies. A push carries up to 64 entries or 1 s of them into the append-only stream, in one part, their keys 64 to a slot object (owner decisions 137, 140), spilling inline bodies to segments (§11.8). Slot ids are random per push statement (§11.6): a retry of the same statement keeps them, and a push rebuilt after a refusal, such as a deposit re-wrapped to a newer drop key after 412 GATE_CLOSED, draws new ones; `key_slot_id` and `key_index` lie outside the signed header, so re-slotting re-signs no entry.
+- **Storage (Q-ARCH-9 (a); owner decision 2).** Entries are named by a stream's own counter n from 1, at `e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>`, each part decimal (RECORD.md section 5.2), 2,048 to a leaf directory and about 15 billion to a stream, n equal to seq in a stream that holds no ingested entry; a directory's name table (about 128 B a row: child token, kind, and a sealed name with its nonce and tag; up to 140 B while a path-epoch copy carries it with its `EvsName.epoch`) stays within 256 KiB, 280 KiB carried, inside §11.7's 4,096 children and 448 KiB of name table; per entry evs sees only a token path, padded size, key slot and push time, never record kinds, agents, runs or bodies. A push carries up to 64 entries or 1 s of them into the append-only stream, in one part, their keys 64 to a slot object (owner decisions 137, 140), spilling inline bodies to segments (§11.8). Slot ids are random per push statement (§11.6): a retry of the same statement keeps them, and a push rebuilt after a refusal, such as a deposit re-wrapped to a newer drop key after 412 GATE_CLOSED, draws new ones; `key_slot_id` and `key_index` lie outside the signed header, so re-slotting re-signs no entry.
 - **Chain.** `seq` and `prev_sha256` chain each writer's entries, so writers never contend and work offline. Readers verify chains after decrypting and pin each writer's head (I-16): a withheld or rewritten entry shows as a gap or a fork. Ingested deposits keep their writer's chain.
-- **Erasure.** The body (paths, commands, recipients, text) is sealed under a per-entry key kept with its 256-bit salt in its own key slot (owner decision 61), apart from the entry file's key; `key_slot_id` and `key_index` name it. An ERASE push naming that key (§11.12), which no backup holds (owner decision 90), erases the body at once, under a preservation hold too (owner decision 133), and needs no CLOSURE, so it goes first even at the storage limit; in a format-2 repo a CUT on the repo's `ur/index` lists the entry and each run card holding it, at its current version, so no index push built before the CUT publishes them (§11.12), and CLOSUREs after the CUT rewrite in place the search-index files holding the entry's postings and re-project each run card that holds the entry (§11.14, 16.10), each followed by its ERASE of the old keys: on its hint, readers and mirrors delete the key, its slot copies and every decrypted copy of the body they hold (entry, search and `ur://record` caches), and refuse the key; copies an agent already took stay beyond recall (§11.12's residual). An `erasure` entry follows in the eraser's stream, retried while §11.13's limit refuses it (at the storage limit, or while spent); until it lands, the committed ERASE on the `erasure` ref records the erasure. Headers and chains still verify.
+- **Erasure.** The body (paths, commands, recipients, text) is sealed under a per-entry key kept with its 256-bit salt in its own key slot (owner decision 61), apart from the entry file's key; `key_slot_id` and `key_index` name it. An ERASE push naming that key (§11.12), which no backup holds (owner decision 90), erases the body at once, under a preservation hold too (owner decision 133), and needs no CLOSURE, so it goes first even at the storage limit; the eraser then reads the stream heads again and ERASEs any copy found now, and in a format-2 repo a CUT on the repo's `ur/index` then lists the entry and, through its epoch, the run card of each stream holding it, so every projection made before the CUT is listed, and none made after it can hold the entry, since a builder that reads a new epoch reads the log's erasure ref first and applies every ERASE on it before it folds (§11.12; owner decision 460); the eraser folds each of those cards again in its own index head, and CLOSUREs rewrite in place the search-index files holding the entry's postings and the cards' listed versions (§11.14, 16.10), each followed by its ERASE of the old keys. Mail keeps its CUT first (§15.7). Should the eraser die between the ERASE and the CUT, another device resumes with the CUT (§11.12's reconcile row), and between the two a builder that holds the ERASE builds no card or entry document of that run. An erasure of a context entry lists that entry and its run's card; the run's other entry documents written before it keep the agent label and session ids it gave them (fields 9 and 11), and from its CUT on a builder takes them from the first context entry of the run its stream holds that no erasure names, which `ur record erase` says when it lists what it will destroy (owner decision 460). On its hint, readers and mirrors delete the key, its slot copies and every decrypted copy of the body they hold (entry, search and `ur://record` caches), and refuse the key; copies an agent already took stay beyond recall (§11.12's residual). An `erasure` entry follows in the eraser's stream, retried while §11.13's limit refuses it (at the storage limit, or while spent); until it lands, the committed ERASE on the `erasure` ref records the erasure. Headers and chains still verify.
 - **Mirrors and site loss (D-MCP-10).** After a site loss, the table's designated mirrors (slot copies included; `ur status` reports one partial past 1 h behind, §11.13) and depositors' spools, each deposit kept until a CONSUME's consumed_through mark passes it (§11.12), re-upload signed entries verbatim (§19.10), so chains and pins verify; entries in neither are lost.
-- **Approvals.** A request goes to a log its approver reads, copied to any team record: the member's vault; for a tagged sidecar, its sponsor's by deposit, or the team record while it has none (§7.10); for an admin, the team record. A directory access request takes this route for its endorsement, then the directory's (16.11). A member's decision returns through that vault; admin approvals, and all for deposit-only requesters, activate requested grants once, as §8.8 `GrantActivate` deltas (D-ACL-7, D-MCP-12), which every admitted sidecar reads. Verifiers run 16.6's spend check against §7.9's admissions, §8.5's consent, `KeyRegister` records and pins (I-16).
-- **Reach receipts** (owner decision 25) come from the endpoint enforcing the grant: the listener for listens and publishes (§9 tickets, §13.7's front), the provider for forwards and routes (§17.9; sealed source subject, grant), §14.9's `SmtpSender` for sends and §15.7's ingest for received mail. The TLS front's receipt names the publishing sidecar as `owner`, leaves `approver` empty, takes as `grant_id` the lowest agreeing rule_id bytewise, the header's grant_id set only for a 32-byte activated grant's id, and as `policy_version` the config version the grant was read at; a stream counts when its first target connection opens and its TLS bytes, both ways, when it ends, in windows aligned to `ReachReceiptCoalesce` from the epoch (§13.7; owner decision 431).
-- **Retention.** Defaults: 400 days (90 searchable) for the team record, owner-set for the vault. Expiry erases entries as above, from the log admin's device; an admin BASE then re-lists the live set, keeping every push statement (§11.8's refs table), and the expired ciphertext stays, keyless, until a later GC, unscheduled (§11.13; owner decision 246), which a preservation hold would pause as it pauses every server-side GC (§21.9; owner decision 133). A team's own legal hold (Later) suspends expiry.
-- **Search (16.10).** Each log's index holds only documents built from that log's own entries, for its own readers: its coordination entries and, in the vault and the team record, one run card per run, registered as `run/` || run_id; the directory's documents and fields are 16.11's. Each entry's header fields come from the verified entry, as §11.14's fields 6-15 for this class: 6 kind, 7 writer sidecar_id, 8 agent_id, 9 agent label, 10 run_id, 11 session ids, 12 tools, 13 claim expires, 14 claim state, 15 reserved; the title is field 4 and the text field 5. `searchable_days` masks older entries at query time.
+- **Approvals.** A request goes to a log its approver reads, copied to any team record: the member's vault; for a tagged sidecar, its sponsor's by deposit, or the team record while it has none (§7.10); for an admin, the team record. A directory access request takes this route for its endorsement, then the directory's (16.11). A member's decision returns through that vault; admin approvals, and all for deposit-only requesters, activate requested grants once, as §8.8 `GrantActivate` deltas (D-ACL-7, D-MCP-12), which every admitted sidecar reads. A decision on any other action, or a cancel, for a requester that reads no vault (a tagged or ephemeral sidecar), and an admin's decision on a member's, return as an `ApprovalDelivery{header, requester_sidecar_id, sealed}`, a §7.9 delta with SignedType 0x1110 that the approver's device files after it signs, `sealed` being the Signed `ApprovalDecision` or `ApprovalCancel` HPKE-XWing to the requester's current ReaderKey (`gkm/rk/<sidecar_id>`, §10.5), so only the requester opens it; it counts against `config_statements_per_day`, shows api its signer, requester and size (§2.8's api-7) and authorizes nothing, since the requester still runs the spend check, and it serves 16.11's endorsement too, `filed_by` 3 keeping its meaning (owner decision 447). Verifiers run 16.6's spend check against §7.9's admissions, §8.5's consent, `KeyRegister` records and pins (I-16). A person's statement about a change is no approval: an `attestation` entry (RECORD.md's kind 29), which `ur record attest` files on `/dev/tty` or in an app's UI, says one reviewed, tested or approved named commits, with an SSHSIG where the member holds a key; it sits outside the I-8 gate and is never called an approval (owner decision 453).
+- **Reach receipts** (owner decision 25) come from the endpoint enforcing the grant: the listener for listens and publishes (§9 tickets, §13.7's front), the provider for forwards and routes (§17.9; sealed source subject, grant), §14.9's `SmtpSender` for sends and §15.7's ingest for received mail. The TLS front's receipt names the publishing sidecar as `owner`, leaves `approver` empty, carries in `server_name` the name the visitor asked for, the TLS SNI, publish receipts coalescing per (grant, peer, server name, window), so a visitor who reaches two aliases in a window gets two receipts and `relays` keeps R-MCP-7's meaning (owner decision 465), takes as `grant_id` the lowest agreeing rule_id bytewise, the header's grant_id set only for a 32-byte activated grant's id, and as `policy_version` the config version the grant was read at; a stream counts when its first target connection opens and its TLS bytes, both ways, when it ends, in windows aligned to `ReachReceiptCoalesce` from the epoch (§13.7; owner decision 431).
+- **Retention.** Defaults: 400 days (90 searchable) for the team record, owner-set for the vault. Expiry erases entries as above, from the log admin's device; an admin BASE then re-lists the live set, removing only entries whose erasure is complete (owner decision 461), keeping every push statement (§11.8's refs table), and the expired ciphertext stays, keyless, until a later GC, unscheduled (§11.13; owner decision 246), which a preservation hold would pause as it pauses every server-side GC (§21.9; owner decision 133). A team's own legal hold (Later) suspends expiry.
+- **Search (16.10).** Each log's index holds only documents built from that log's own entries, for its own readers: its coordination entries and, in the vault and the team record, one run card per run and stream, registered as `run/` || run_id under its stream's ref_id (16.10; owner decision 459); the directory's documents and fields are 16.11's. Each entry's header fields come from the verified entry, as §11.14's fields 6-15 for this class: 6 kind, 7 writer sidecar_id, 8 agent_id, 9 agent label, 10 run_id, 11 session ids, 12 tools, 13 claim expires, 14 claim state, 15 reserved; the title is field 4 and the text field 5. `searchable_days` masks older entries at query time.
 - **Reads by others (R-TRUST-7; owner decisions 63, 126).** Beyond the author's consented devices, only `EvsShare` recipients and a Team's `audit` reader, which every member sees, read the vault, each first depositing a `read` entry to the repo's drop key under D-MCP-18's budget, before it decrypts any object the entry names, which the author's devices ingest and evs's request log (§2.8 evs-7) attests again; receipts are cooperative. A device admitted under the author without the author's consent, as by one admin alone, stays parked: it only deposits, and the author's devices alarm, until a consented device signs its `OwnerConfirm` through `ur approve` on `/dev/tty` or the app after the safety-number check, never through MCP (D-CORE-13).
 
 ```text
@@ -694,19 +796,22 @@ read receipt  from every reader of an owner-bound repo that is not its writer (E
 ### 16.9 server/mcp, remote MCP, and cloud agents
 
 - **server/mcp stays separate (D-MCP-7).** URnetwork sees its inputs, so it serves public-web lookups only.
-- **Cloud agents (owner decision 49).** Claude Code cloud loads a repository's committed `.mcp.json` and hooks and proxies egress to allow-listed domains (https://code.claude.com/docs/en/cloud-environments). `ur` runs in the VM as a tagged, ephemeral sidecar holding its keys (§3.6), which its sandbox operator can also reach: the operator is inside the device boundary (§2.4). It is admitted by its auth key's Delegation and reaches the bringyour.com hosts §18.9 publishes over HTTP CONNECT (§4 C8). It reads the config and its tags' repos at once by the Delegation's reader key, with no member device online (owner decision 114), and deposits capture; its reap, or its own `not_after`, ends only what its own grants gave it, while the Delegation's reader key it holds reads on until that key drops (`DelegationRevoke`, `not_after`, or a revocation for any reason but reaped or a `Suspend` of one of the Delegation's agents; §10.5), and a copy of the whole auth key admits fresh agents until the Delegation ends (§7.9's delegation row). Other admitted readers, agents included, witness its pins; unwitnessed, it alarms at 24 h, and from `witness_bound_hours` (72 h by default) its shared-group writes stop and capture spools (owner decision 129; D-TRUST-10). Codex blocks agent-phase internet by default ([R:product] §5 item 9), so its daemon spools. Chat connectors run no process and get no sidecar tools.
+- **Cloud agents (owner decision 49).** Claude Code cloud loads a repository's committed `.mcp.json` and hooks and proxies egress to allow-listed domains (https://code.claude.com/docs/en/cloud-environments). `ur` runs in the VM as a tagged, ephemeral sidecar holding its keys (§3.6), which its sandbox operator can also reach: the operator is inside the device boundary (§2.4). It is admitted by its auth key's Delegation, which it takes from a key file, never an environment variable (owner decision 449): the environment's setup step writes the whole key string to a mode 0600 file, which the platform's snapshot keeps, and the `--project` cloud profile's committed SessionStart hook runs `ur connect --token-file <path> --ephemeral` before any other `ur` step, `ur` reading the file, enrolling, unlinking it and erasing its copy, so the key is gone from the running VM before the agent's first turn; `ur` reads no key from its environment and refuses to enroll if `ur-authkey-` appears there. The key is a Delegation key with `max_admits` above 1 and §7.8's 30-day cloud `not_after`, since every session starts from the same snapshot, a single-use key serving and preferred where a platform runs setup per session; and since a paused VM loses its processes, a cloud sidecar keeps its keychain in a 0600 file rather than memory, so a restored VM rejoins until its client is reaped (§7.7, 30-36 min), after which `ur` stays Unenrolled, capture spools and a new session enrolls. The residual: anyone who uses the environment can read the key in its setup text, every snapshot holds it, and a copy of the whole key admits fresh agents until the Delegation ends (§7.9's delegation row). It reaches the bringyour.com hosts §18.9 publishes over HTTP CONNECT (§4 C8). It reads the config, a team network's directory and its tags' repos at once by the Delegation's reader key, with no member device online (owner decision 114), and deposits capture; its reap, or its own `not_after`, ends only what its own grants gave it, while the Delegation's reader key it holds reads on until that key drops (`DelegationRevoke`, `not_after`, a revocation for any reason but reaped or a `Suspend` of one of the Delegation's agents, or a compromise revocation whose cascade voids the Delegation; §10.5, which owns the list). Other admitted readers, agents included, witness its pins; unwitnessed, it alarms at 24 h, and from `witness_bound_hours` (72 h by default) its shared-group writes stop and capture spools (owner decision 129; D-TRUST-10). Codex blocks agent-phase internet by default ([R:product] §5 item 9), so its daemon spools. Chat connectors run no process and get no sidecar tools.
 
 ### 16.10 Search
 
 The daemon searches readable repos' encrypted indexes (§11.14; owner decision 151) on the device for `ur search`, `ur agents` and three R tools, in one root-package engine (`search_*.go`, every leg, §5.4) that the sdk shares (§18.5). On daemon hosts, queries, hits and cursors never leave the device; an app host may ask a designated indexer (§11.14), whose daemon serves it from this engine outside every session. A search writes nothing to evs but the read receipts below, and index objects arrive by sync position, never by query (I-19; D-MCP-20).
 
 ```text
-query       <= 512 B and 16 terms, after the index's own normalization (§11.14's normalizer 1); each word or
-            "quoted phrase" is a required substring term; a OR b; -term excludes only where this device confirms
-            the term; field:text confines a term to one doc-table field (below); a term of 1-2 normalized bytes
-            matches as a whole word through its space-padded trigrams; fuzzy asks for §11.14's near hits even
-            where 3 or more exact hits exist (a desktop's local vocabulary, a phone's one-edit variants checked
-            in the index); an empty query with filters lists; no regex in v1
+query       <= 512 B and 16 terms: the indexer checks the query as sent, NFC as typed, answering INVALID past
+            them, and each engine applies them to the query after the index's own normalization (§11.14's
+            normalizer 1), a wire-valid query that normalizes past them answering INVALID in the padded reply, so
+            the phone falls back; each word or "quoted phrase" is a required substring term; a OR b; -term
+            excludes only where this device confirms the term; field:text confines a term to one doc-table field
+            (below); a term of 1-2 normalized bytes matches as a whole word through its space-padded trigrams;
+            fuzzy asks for §11.14's near hits even where 3 or more exact hits exist (a desktop's local
+            vocabulary, a phone's one-edit variants checked in the index); an empty query with filters lists; no
+            regex in v1
 scope       the breadth, §5.4's SearchBreadth (SearchBreadthRepo, SearchBreadthNetwork, SearchBreadthAll), apart
             from its SearchScope, which names partitions
             repo: the repos named (config display names, or id:<repo_id>), on the default ref or a named ref
@@ -729,12 +834,15 @@ owner-bound searched only by its readers: the owner's consented devices, EvsShar
 ```
 
 ```text
-sync        latest of every repo in scope is kept current from hints, coalesced to once a minute a repo, and
-            brought current before phase 1 for any repo a hint has moved; all follows §18.4's device policy
-            through §5.9's Search.AllPolicy (owner decision 154); a repo followed only for search holds a lease
-            on its index root (§11.10): the .ur-index/ token prefix of a file-mode ref, or its whole ur/index
-            ref; a desktop syncs in the background, so a search's timing shows nothing, while an ephemeral
-            sidecar's first sync of a repo shows when it first searched
+sync        latest of every repo in scope is kept current from hints, coalesced on the leading edge: the first
+            hint for a repo in a quiet Search.HintCoalesce interval (1 min) fetches at once, and later ones in it
+            wait for its end; a search reads only the cache, never fetching for itself, and a version hinted but
+            not yet fetched when a search starts counts as uncovered, so coverage reports it (FI-18; owner
+            decision 450); all follows §18.4's device policy through §5.9's Search.AllPolicy (owner decision
+            154); a repo followed only for search holds a lease on its index root (§11.10): the .ur-index/ token
+            prefix of a file-mode ref, or its whole ur/index ref; a desktop syncs in the background, so a
+            search's timing shows nothing, while an ephemeral sidecar's first sync of a repo shows when it first
+            searched
 phase 1     both latest buckets (owner decision 152), an expired one until its roll-up lands (owner decision
             157), a dropped one this device keeps until its cached all covers it (§5.9), and the local layer,
             the commits past indexed_through (§11.14's coverage) that this device indexed from its own
@@ -780,27 +888,41 @@ directory   16.11's fields
 **Records and agents (R-MCP-13).** RECORD.md's kind registry gives each kind's text:
 
 ```text
-documents   coordination log: in a team network the directory's announcements and entries (16.11); vault: one
-            run card per run, and every claim, handoff, ask, answer, check and note entry in a personal network;
-            team record: one run card per run built only from its own entries (context, change, approval,
-            publish, route, reach, coverage), so it never holds a title, prompt or path that only the vault holds;
-            a record repo: its own entries
-run card    title: the harness's custom session title (Claude Code's session_title, set by --name or /rename,
-            reported at SessionStart and UserPromptSubmit), else the first user prompt's first line, 120 B after
-            redaction; agent label, harness, model, project (repo display name and branch), tool names with
-            counts, up to 256 touched paths, the first 2 KiB of user prompts, started, last activity, ended; at
-            most 16 KiB of text; re-indexed by the log's writer (the capturing daemon, or the reader that ingests
-            a deposit) at the run's start, at most once every 5 min while the run moves, and at its end; derived,
-            so a rebuild reproduces it and an erasure re-projects it without the erased entry
+documents   coordination log: in a team network the directory's announcements and entries (16.11); vault: one run
+            card per run and stream, and every claim, handoff, ask, answer, check and note entry in a personal
+            network; team record: one run card per run and stream built only from its own entries (context,
+            change, approval, publish, route, reach, coverage), so it never holds a title, prompt or path that
+            only the vault holds; a record repo: its own entries
+run card    one per run and stream (owner decision 459), the fold of the run's source entries that stream holds,
+            in (seq in their writer's chain, entry_id bytes) order, a run whose every source entry is erased
+            having none (owner decision 461): title: the harness's custom session title (Claude Code's
+            session_title, set by --name or /rename, reported at SessionStart and UserPromptSubmit), else the
+            run's first user prompt's first line, 120 B after redaction; agent label, harness, model, project
+            (repo display name and branch), tool names with counts, up to 256 touched paths, the first 2 KiB of
+            user prompts, read from its context entries' prompts (16.7), started, last activity, ended; a vault
+            card's sources add coverage and, in a personal network, claim and handoff, its claim state being the
+            claim's own or handed_off as of the fold, never expired, which a reader computes, its claim expiry
+            the newest claim's, and its row's expires the newest coverage's time once the run has ended; a team
+            card counts each action kind asked for approval (owner decision 467); at most 16 KiB of text;
+            re-indexed in its stream writer's companion push (§11.14), which a record log makes every
+            RecordSettings.CardInterval (5 min) while the run moves, at once at the run's first source entry and
+            at the coverage entry that ends it (owner decision 461); its version is E * 2^32 + c, E the
+            index_epoch its push names and c the stream version at which the run last gained a source entry
+            there, a stream version or epoch at or past 2^32 writing no card
+            (IndexFormatSettings.CardVersionBitCount; owner decision 459); derived, a function of its stream at
+            that version and of the erasures whose CUT precedes that epoch, so a rebuild reproduces it, and an
+            erasure lists it through its CUT's epoch and folds it again without the erased entry (16.8)
 rule        a log's index holds only what that log's own entries and files hold, for that log's readers; nothing
             crosses from a vault into another log's index, and a run reaches the directory only as its
             announcement (16.11; I-20)
 group       by agent: key (network, sidecar_id, agent label, else agent_id), showing the label, the sidecar's
             config name, its member or sponsor, last_activity (its newest hit), active (an unexpired claim not
-            handed off, an unexpired run announcement in state active, or a run card whose run has no Coverage
-            entry and moved within 10 min), runs (run_id, title, harness, started, last activity, ended), claims
-            (entry_id or claim_id, text, targets, expires, state), hit_count and its top 3 hits; active groups
-            first, then the newest; by run: key run_id; by repo: key repo_id
+            handed off, an unexpired run announcement in state active, or a run card whose row carries no
+            expires, its run having no Coverage entry, and that moved within 10 min, vault and team cards alike),
+            a run's cards joined by run_id, started the earliest, last activity the latest, title and fields the
+            card's whose row time is newer (owner decisions 459, 467), runs (run_id, title, harness, started,
+            last activity, ended), claims (entry_id or claim_id, text, targets, expires, state), hit_count and
+            its top 3 hits; active groups first, then the newest; by run: key run_id; by repo: key repo_id
 agents      search_agents(task) is search(task, kind [claim, handoff, ask, note, run], group_by agent), since 30 d
             unless set; without a task it lists the agents active in the window; in a team network it groups the
             directory's run announcements, adding the caller's own vault run cards and, for admins and auditors,
@@ -950,7 +1072,8 @@ one repo, all held (<= 200 MB)                             first verified page p
                                                            <= 2 s
 search_agents over coordination logs, vault, team record   first page p95 <= 300 ms
   and the team directory
-a commit hinted before a search starts                     in that search's phase 1
+a commit hinted before a search starts, unless inside a    in that search's phase 1
+  burst already coalescing (owner decision 450)
 more, cold                                                 the cold contract below, not a warm-cache target
 verification from local plaintext, a 3.6 KB message        <= 0.5 ms a candidate
 MCP overhead                                               <= 5 ms a call
@@ -1025,12 +1148,18 @@ mirror      a directory admin's indexer, slot copies included (D-MCP-10); with n
 ```text
 ref cards          shared, file mode, one per directory; from format 2 its d/, r/ and q/ files are versionless by
                    kind (owner decisions 158, 161), a rewrite's replaced content purged about a minute later
-  d/<h>/<sid>      card: Signed DirectoryCard, <= 16 items in <= 16,208 B, padded in 2 KiB steps
+  d/<h>/<sid>      card: Signed DirectoryCard, <= 16 items in <= 16,188 B, so its whole Signed fits 16,384 B
+                   whatever its varints, padded in 2 KiB steps to at most eight (owner decision 464)
   r/<h>/<repo>     repo file: Signed RepoAnnouncement, an announcement or a private marker, <= 4 KiB, 2 KiB steps
-  q/<tgt>/<rid>    notice of request <rid> to <tgt> (a repo_id, a sidecar_id or a socket's name token), <= 256 B;
-                   an ordinary versioned file in format 1
+  q/<h>/<tgt>/<rid>
+                   notice of request <rid> to <tgt>: a repo_id or sidecar_id, or for a socket 32 lowercase hex of
+                   SHA-256(name_token)[:16], name_token being §9.4's t_1 || ... || t_n as RequestTarget.socket_token
+                   holds it, never the raw token path, so it changes when K_sock rotates (Requests' expire row);
+                   <= 256 B; an ordinary versioned file in format 1
   .ur-index/i1/    §11.14's in-ref index of the ref's documents
-  <h>              the id's first two hex digits, so no directory passes §11.7's 4,096 children
+  <h>              hex of SHA-256(the name it shards)[0], the name being <sid>, <repo> or <tgt> as its path text:
+                   256 shards, about 917,000 targets, so no directory passes §11.7's 4,096 children; every id in
+                   a path is 32 lowercase hex characters, never Id.String()'s dashed form
 streams            each writer's own record-class stream (§11.8, creates only): announce entries (M6) and request,
                    decision, ask, answer, check and note entries, as 16.8's RecordEntry
 ur/index, erasure  the streams' companion index from format 2 (§11.14); §11.12's ERASE ref
@@ -1042,7 +1171,8 @@ path rules         readers check every version against its push's signer and aut
   r/<h>/<repo>     written and removed by a repo admin of <repo> at its push's auth pin, as the classes' repo file
                    row judges it, for an owner-bound repo only by its owner's consented device; removed by any
                    writer once <repo> is deleted; ignored for a config, mailcfg or directory repo
-  q/<tgt>/<rid>    written pending by the requester whose stream holds <rid>, at its creation and in repair of a
+  q/<h>/<tgt>/<rid>
+                   written pending by the requester whose stream holds <rid>, at its creation and in repair of a
                    pending one; rewritten by an approver eligible for <tgt> only as Requests' decide and
                    duplicates rows say, decided, or pending with the first approval of a rule that asks two;
                    removed by the requester, that approver, or any writer past not_after + 1 d
@@ -1064,8 +1194,10 @@ drop               the files are versionless and each entry has one version, so 
 **Index and search.**
 
 ```text
-documents   derived (§11.14): one per announcement, registered as a/ || announcement_id, from the card or repo
-            file holding it, M6's announce entries folding into it; one per stream entry
+documents   derived (§11.14): one per announcement, registered as a/ || writer_sidecar_id || announcement_id for
+            a run or worker item, so a copied id shadows no other writer's, and as a/ || announcement_id for a
+            repo item, which folds across its admins, from the card or repo file holding it, M6's announce
+            entries folding into it; one per stream entry
 versions    an announcement document's version is Announcement.version: a content change raises it; a renewal
             keeps it and writes no index entry, nor does an ended item dropped from its card; only a withdrawal
             or a revocation writes a tombstone
@@ -1101,7 +1233,7 @@ no query    I-19 holds: index files arrive by sync position, and nothing of a se
 | Kind | Who (attested) | What | Where | Filed by | Default |
 |---|---|---|---|---|---|
 | run | member (a tagged sidecar's sponsor), sidecar, agent id and label, harness, model | title (≤ 120 B, redacted), claims, state, times, handoff, run_id, tainted | repo_id and, if the repo is announced, its name and the branch, else `private`; or `.ur`'s project label or the git remote's host and path, and the branch; host label | the daemon of the sidecar running it | `claims` auto in team networks (owner decision 170) |
-| worker | member or sponsor, sidecar, tags | harnesses, agent labels, services (sockets, TLS hosts, bridge ports, each with a description), requests open or closed | host label, platform, ephemeral | that sidecar | on (`ServiceSettings.directory.workers`), off per device, a tagged sidecar's set by its sponsor or an admin; never phones, page Workers or the quick burner |
+| worker | member or sponsor, sidecar, tags | harnesses, agent labels, services (sockets, TLS hosts, bridge ports, each with a description), requests open or closed | host label, platform, ephemeral | that sidecar | on (`ServiceSettings.directory.workers`), off per device: `ur directory worker on` or `off` on the sidecar's own host, by hand or from the script that provisions it, kept in its local settings over that default, so a tagged sidecar's is set by whoever controls its deployment, its sponsor or an admin, with no record and no reader check, and a sponsor stops a running agent's item from elsewhere by `Suspend` or a revocation (§8.8; owner decision 451); never phones, page Workers or the quick burner |
 | repo | the signing repo admin's member, the repo's admins | display name (≤ 128 B), description, kind, topics, roles offered, requests open or closed | repo_id, network | a repo admin; for an owner-bound repo only its owner's consented device | general and record repos at creation (owner decision 181) |
 
 ```proto
@@ -1114,7 +1246,7 @@ message DirectoryCard {                     // d/<h>/<sidecar_id>, from format 2
   uint64 seq = 3;                           // +1 a version; readers refuse one not above the last they accepted
   AuthPin at = 4;                           // §7.9's pin, within 4,096 positions of the reader's state
   int64 written_millis = 5;
-  repeated Announcement items = 6;          // <= 16: at most one worker item, then runs; <= 16,208 B in all
+  repeated Announcement items = 6;          // <= 16: at most one worker item, then runs; <= 16,188 B in all
   uint32 version = 7;                       // 1
 }
 message RepoAnnouncement {                  // r/<h>/<repo_id>, from format 2
@@ -1130,11 +1262,15 @@ message Announcement {
   uint64 version = 3;                       // +1 at each content change; a renewal keeps it
   int64 started_millis = 4; int64 renewed_millis = 5;
   int64 expires_millis = 6;                 // runs: renewed + 90 min; workers: renewed + 26 h; repos: none (0)
-  uint32 state = 7;                         // 1 active, 2 ended, 3 handed_off
+  uint32 state = 7;                         // 1 active, 2 ended, 3 handed_off, 4 withdrawn (runs and workers:
+                                            // terminal, folded over the item at once and never shown)
   bool tainted = 8;                         // the writing run's taint when this version was written (16.6)
   AnnounceWho who = 9; AnnounceWhat what = 10; AnnounceWhere where = 11;
   repeated Claim claims = 12;               // <= 4: record_append(kind: claim)
   Handoff handoff = 13;                     // record_append(kind: handoff), or the run's end
+  bytes pad = 14;                           // zero bytes: a kind-repo announce entry, announcement or private
+                                            // marker, fills the marshaled Announcement to the next multiple of
+                                            // 2,048 B; runs and workers leave it empty
 }
 message AnnounceWho {                       // attested: readers check every id against §7.9's state
   bytes member_id = 1;                      // the member, or a tagged or ephemeral sidecar's sponsor
@@ -1143,7 +1279,8 @@ message AnnounceWho {                       // attested: readers check every id 
                                             // readers display their own config's
   bytes agent_id = 4;                       // runs
   string agent_label = 5;                   // runs: [a-z0-9-]{1,64}, the daemon's normalization of §5.5's label
-  string harness = 6;                       // runs: claude-code, codex, cursor, or none (a person's task)
+  string harness = 6;                       // runs: claude-code, codex, cursor, or none (a person's task, which
+                                            // readers show, though nothing files one in v1)
   string model = 7;                         // runs: an identifier <= 64 B, or empty
   repeated bytes tag_ids = 8;               // workers: opaque tag ids (§7.9)
 }
@@ -1157,7 +1294,8 @@ message AnnounceWhat {
   uint32 requests = 7;                      // workers, repos: 1 open, 2 closed
   repeated string topics = 8;               // repos: [a-z0-9-]{1,32}, <= 8
   uint32 repo_kind = 9;                     // repos: §11.12's kind
-  repeated uint32 roles = 10;               // repos: the roles offered (reader, writer, deposit)
+  repeated uint32 roles = 10;               // repos: the roles offered, as RepoGrantRole: 1 deposit, 2 reader,
+                                            // 3 writer
 }
 message AnnounceWhere {
   bytes repo_id = 1;                        // runs in an evs repo; repos
@@ -1166,7 +1304,9 @@ message AnnounceWhere {
   bool private = 4;                         // runs: the run's repo has no live announcement; repos: a private
                                             // marker, holding only who, repo_id, repo_kind and requests
   string host_label = 5;                    // the sidecar's config name (§7.7), for the index
-  uint32 platform = 6;                      // workers: darwin, linux, windows, android, ios, wasm
+  uint32 platform = 6;                      // workers: 1 darwin, 2 linux, 3 windows, 4 android, 5 ios, 6 wasm;
+                                            // 0 is never written and reads as unknown, as does a number a
+                                            // reader does not know; new ones are appended (owner decision 468)
   bool ephemeral = 7;
 }
 message Service {
@@ -1189,15 +1329,20 @@ message Handoff {
 ```text
 classes     attested: ids, kinds, times, states, the tainted and private bits, roles, which readers check against
             §7.9's state, showing their own config's names; identifier: agent label, harness, model, project,
-            branch, claim targets, topics, service names, in restricted charsets (labels [a-z0-9-], branches by
-            git check-ref-format, paths in NFC with no C0 or C1 control, bidi override or whitespace run); prose:
-            title, description, claim text, handoff note, request reason, decision note, in NFC with controls and
-            bidi overrides dropped; each capped as the proto states
+            branch, claim targets, topics, service names, in restricted charsets: labels and service names their
+            ASCII grammars, labels [a-z0-9-]; the path-class fields (project, model, claim targets and the like)
+            and branches, which also pass git check-ref-format, in NFC with no C0 or C1 control, bidi override,
+            whitespace run, default-ignorable or format character or line separator, so no Unicode category Cf
+            code point, none with Variation_Selector or Other_Default_Ignorable_Code_Point, and no U+2028 or
+            U+2029 (owner decision 469); prose: title, description, claim text, handoff note, request reason,
+            decision note, in NFC with controls and bidi overrides dropped; each capped as the proto states
 redaction   the daemon runs 16.7's redactor over every identifier and prose field before it signs; a matching
             field becomes [REDACTED:<rule>]
-caps        a writer refuses an overrun, and readers ignore a version past one and alarm; cards and repo files pad
-            to 2 KiB steps, notices to 256 B and entries by §11's Padmé, so a card's size shows at most whether
-            its sidecar has more than about two runs
+caps        a writer refuses an overrun, and readers ignore a version past one and alarm; cards and repo files
+            pad to 2 KiB steps, notices to 256 B, and entries by §11's Padmé, kind-repo announce entries at 2 KiB
+            through Announcement.pad, announcement and private marker alike, a full item being under 1.2 KiB; a
+            card's items take at most 16,188 B (owner decision 464), so a card's size shows at most whether its
+            sidecar has more than about two runs
 card        §6.9's Signed by the sidecar's identity key, purpose directory, SIGNED_DIRECTORY_CARD, pushed by that
             sidecar; a reader accepts a version only if both signatures verify, seq rises, its pin at lies within
             4,096 positions of the reader's state, and the signer is admitted and not revoked, reaped, suspended
@@ -1221,7 +1366,8 @@ who         member_id is the signer's member, or a tagged or ephemeral sidecar's
             item; agent labels stay agent_asserted (§5.5), and an agent subkey may sign inside an entry, never a
             card
 start       claims auto: at SessionStart the daemon adds the run's item to its card within 10 s, coalescing other
-            card changes; prompt: at the run's first claim; a person's declared task is a run with harness none
+            card changes; prompt: at the run's first claim; a person's declared task is a run with harness none,
+            which readers accept and show, though no tool, ur command or SDK call files one in v1
 renew       hourly at a random offset of ±5 min (§5.4's Directory.RenewJitter) while any of the card's runs moved
             (a hook event or tool call) in the past hour, one card write renewing every moving run, and the
             worker item daily; a renewal raises renewed and expires, never version
@@ -1233,15 +1379,24 @@ claims      record_append(kind: claim, targets, text, expires) adds a Claim to t
 end         at SessionEnd or the run's Coverage entry (16.8), state ended, or handed_off where a handoff names a
             member or agent; the item stays 24 h, then the card's next write drops it, writing no index entry
 withdraw    ur directory withdraw <id>, a project's claims set to off mid-run, or the app's toggle, removes the
-            item and tombstones its document; destroying keys at once is a directory admin's erasure (below)
+            item and tombstones its document, at M6 by a newer announce entry from the item's writer one version
+            up, holding only announcement_id, kind, version, renewed_millis, expires_millis, state 4 withdrawn
+            and who's member_id and sidecar_id, which readers fold over the item at once and never show as stale
+            or ended; state 4 is terminal, so announcing again takes a new announcement_id; repo items keep the
+            private marker; destroying keys at once is a directory admin's erasure (below)
 offline     an offline sidecar stops renewing, so its items expire; on its return it ends the runs that ended
             meanwhile
 M6 carrier  until the directory reaches format 2, items ride announce entries (RECORD.md's registry), body
-            Announcement, in the writer's stream: per announcement_id the highest (version, renewed_millis) wins,
-            the writer's sidecar_id breaking a tie, run and worker items under the card rules and repo items under
-            the repo file's, the entry's push's auth pin standing for at; a renewal is a new entry at the same
-            version; at the directory's first format-2 push (§11.6's migration) daemons write cards and repo files
-            instead, readers reading both until the last entry expires
+            Announcement, in the writer's stream: run and worker items fold per (writer_sidecar_id,
+            announcement_id), the highest (version, renewed_millis) within that writer winning, so two writers on
+            one run or worker id are two items, each shown under its own writer and neither voiding the other,
+            readers raising record_alarm id_reuse, and only repo items fold across writers by announcement_id,
+            ties going to the higher writer_sidecar_id bytes; run and worker items under the card rules and repo
+            items under the repo file's, the entry's push's auth pin standing for at; a renewal is a new entry at
+            the same version; at the directory's first format-2 push (§11.6's migration) daemons write cards and
+            repo files instead, readers reading both until the last entry expires; a stream takes creates only,
+            so the earlier entries stay readable to every admitted sidecar until their 30 days or a directory
+            admin's erasure (§2.8)
 ```
 
 **Repos (owner decision 181).**
@@ -1262,27 +1417,34 @@ groups      a group inbox (§15.8: a general repo whose readers are a mail group
             by ur id group-add, which writes the group's mailcfg record and its RepoGrant together, never by a
             RepoGrant alone
 private     at creation the repo's owner (its creating repo admin; owner-bound, its owner) may mark it private
-            (--private on every repo-creating command), and the creating device writes a private marker instead:
-            where.private true, who the signer, what only repo_kind and requests, padded like an announcement so
-            evs cannot tell the two apart; no device announces a private repo on its own, and its owner may later
-            announce it (ur directory announce repo), a full item at a higher version
+            (--private on every repo-creating command, which in a team network whose directory does not exist yet
+            refuses before filing the RepoCreate, naming the missing directory, unless the device is a directory
+            admin, which files the directory first, so every private repo has its marker; owner decision 458),
+            and the creating device writes a private marker instead: where.private true, who the signer, what
+            only repo_kind and requests, padded like an announcement so evs cannot tell the two apart; no device
+            announces a private repo on its own, and its owner may later announce it (ur directory announce
+            repo), a full item at a higher version
 revoke      the owner (a repo admin; owner-bound, a consented device of its owner) may revoke at any time (ur
-            directory revoke <repo>, or the app): (1) it writes the private marker over the item (from format 2 an
-            r/ overwrite, purged about a minute later, owner decision 161; at M6 a newer announce entry), so every
-            honest reader stops showing the name at once; (2) it appends to its stream an erasure_request entry,
-            DirectoryErasureRequest (Requests), journaled before the marker so a restart files it once, in the
-            marker's push at M6; (3) the directory's erasure runner (Erasure and removal) checks that the entry's
-            signer is a repo admin of the repo at its push's pin (owner-bound: its owner's consented device) and
-            that the marker is still the repo's newest item, then erases every copy holding the name, the repo's
-            and its runs': a per-entry ERASE of each earlier announce entry for the repo or a run naming it (16.8)
-            and, from format 2, a CUT on the cards ref and on ur/index listing the documents that name it
-            (§11.12), a CLOSURE rewriting under fresh keys the index files holding them, then the ERASE of the old
-            slots' keys (§11.12, §11.14), each ERASE's sealed note naming the request; at each later sync while
-            the marker stands, for 30 days, it erases any copy naming the repo that a daemon wrote after the
-            request; a request whose check fails erases nothing and alarms, naming its signer; (4) until an ERASE
-            names the request, the revoking device, ur directory revoke and ur status show the erasure pending
-            with its age, and past 24 h every directory admin's device raises directory_erasure (§5.4); a reader
-            that syncs the copies meanwhile keeps them, as §2.8 discloses
+            directory revoke <repo>, or the app): (1) it writes the private marker over the item (from format 2
+            an r/ overwrite, purged about a minute later, owner decision 161; at M6 a newer announce entry), so
+            every honest reader stops showing the name at once; (2) it appends to its stream an erasure_request
+            entry, DirectoryErasureRequest (Requests), journaled before the marker so a restart files it once, in
+            the marker's push at M6; (3) the directory's erasure runner (Erasure and removal) checks that the
+            entry's signer is a repo admin of the repo at its push's pin (owner-bound: its owner's consented
+            device) and that the marker is still the repo's newest item, then erases every copy holding the name,
+            the repo's and its runs': a per-entry ERASE of each earlier announce entry for the repo or a run
+            naming it (16.8) and, from format 2, a CUT on the cards ref and on ur/index listing the documents
+            that name it (§11.12), a CLOSURE rewriting under fresh keys the index files holding them, then the
+            ERASE of the old slots' keys (§11.12, §11.14), each ERASE's sealed note naming the request; at each
+            later sync while the marker stands, for 30 days, it erases any copy naming the repo that a daemon
+            wrote after the request; a request whose check fails erases nothing and alarms, naming its signer; a
+            request that lapsed because its repo was announced again stays lapsed, the runner comparing its
+            marker_version with the version of the announcement that replaced its marker, which it keeps per
+            request in the fold, not only with the standing marker, so a later revocation's marker revives none
+            and each ERASE names the revocation a person just made (owner decision 472); (4) until an ERASE names
+            the request, the revoking device, ur directory revoke and ur status show the erasure pending with its
+            age, and past 24 h every directory admin's device raises directory_erasure (§5.4); a reader that
+            syncs the copies meanwhile keeps them, as §2.8 discloses
 runs        a run in an evs repo with no live, non-private item (private, revoked, not announced by default, or
             not yet) announces its repo_id with private true and project and branch empty, its daemon rewriting a
             live item so once it reads the repo's marker; readers that read the repo show its name from their own
@@ -1314,8 +1476,12 @@ stubs       directory_list, directory_requests, search, search_agents, record_qu
             rule names it (owner decision 142)
 people      ur directory and ur agents print prose on a terminal after tainting each run whose harness process is
             an ancestor, and withhold it on a non-terminal (16.10's cli rule); the apps show prose to people
-residual    identifier fields can still carry short words ("ignore-previous-instructions" is a valid branch name):
-            they are capped, inside the untrusted-data markers and labeled with their writer
+residual    identifier fields can still carry short words ("ignore-previous-instructions" is a valid branch
+            name): they are capped, inside the untrusted-data markers and labeled with their writer; an emoji ZWJ
+            sequence or a ZWNJ in an identifier cannot be announced as written: the daemon drops such characters
+            when it normalizes a project, model or claim target, a writer whose branch holds one announces no
+            branch, and a reader refuses an item whose identifier holds one, so no stub carries words a person
+            reviewing the item cannot see (owner decision 469)
 ```
 
 **Requests (D-MCP-30).**
@@ -1333,7 +1499,8 @@ message DirectoryRequest {                  // body of a RecordEntry kind reques
   bytes request_id = 1;                     // random 16 B; for reach, also the ApprovalRequest's approval_id
   RequestTarget target = 2;
   bytes subject = 3; bool subject_is_member = 4;  // the member_id, or the requesting sidecar_id
-  uint32 role = 5;                          // repos: reader, writer, deposit; reach: dial
+  uint32 role = 5;                          // repos: RepoGrantRole, 1 deposit, 2 reader, 3 writer; a worker or a
+                                            // socket: AclAction 1, dial; 0 refused
   int64 grant_expires_millis = 6;           // asked; 0 asks for the approver's default
   int64 not_after_millis = 7;               // the request's own expiry: 7 d by default, at most 30 d
   string reason = 8;                        // <= 512 B (prose)
@@ -1372,7 +1539,8 @@ message DirectoryNotice {                   // q/<tgt>/<request_id>, <= 256 B
 }
 message DecisionRef {                       // a decision entry in its decider's stream (16.8)
   bytes decider_sidecar_id = 1;
-  uint64 seq = 2;                           // the entry's seq there, which names its path
+  uint64 seq = 2;                           // the entry's seq there, which names its path: a stream that holds
+                                            // no ingested entry numbers its paths by seq (16.8's storage)
   bytes header_sha256 = 3;                  // SHA-256 of the entry's Signed header
 }
 message DirectoryErasureRequest {           // body of a RecordEntry kind erasure_request, in a revoker's stream
@@ -1384,9 +1552,13 @@ message DirectoryErasureRequest {           // body of a RecordEntry kind erasur
 
 ```text
 1 file      the requester's daemon writes the request entry, after the endorsement below for agents and tagged
-            sidecars, then the notice under q/<target>/; readers compute the target's approvers from their own
-            state, so the notice never names them
-2 notify    approvers' devices lease q/<target>/ for every target they approve (§11.10): repo admins for their
+            sidecars, then the notice under q/<h>/<tgt>/; to a target whose folded item has requests closed, or
+            with no item where the repos block's requests row defaults it closed (group inboxes, owner-bound
+            repos), the daemon answers FAILED_PRECONDITION naming the target, and readers ignore a notice to a
+            closed target, raising record_alarm over_limit only if the request entry's push came over 1 h after
+            the entry that closed it; readers compute the target's approvers from their own state, so the notice
+            never names them
+2 notify    approvers' devices lease q/<h>/<tgt>/ for every target they approve (§11.10): repo admins for their
             repos, owners and sponsors for their workers and owner-bound repos, admins for the targets the table
             gives admins; evs hints them, §18.7 wakes their phones from M8, and a desktop raises SidecarEvent
             access_request (§5.4)
@@ -1394,25 +1566,33 @@ message DirectoryErasureRequest {           // body of a RecordEntry kind erasur
             them, the requester's prose as untrusted text, filed_by with its endorsement's evidence label, and the
             run's taint (D-MCP-17's rendering rule)
 4 decide    a person approves or denies on /dev/tty (ur directory approve|deny) or in an app on a device that is
-            not read_only, both by one resumable protocol: the device journals the decision in its approval
-            ledger (D-MCP-11) before it signs; an approval signs the target's statement, filing a RepoGrant or
-            EvsShare at once and, for reach, signing an ApprovalDecision on channel device or presence, never
-            harness, which the entry carries; a denial signs none; either then appends its decision entry, and
-            last rewrites the notice from the version it read: an approval adds its DecisionRef, the notice
-            turning decided, approved, once it holds the rule's count of approvals (one for repos), and a denial
-            makes it decided, denied, naming the denial alone; after a crash, at its restart and at each
-            directory sync, the device resumes each unfinished ledger row with the same signed bytes and push
-            ids, filing, appending or rewriting only what is missing, until the notice names its decision or is
-            gone, keeping the row until not_after + 1 d (path rules' repair row)
-5 receipt   the requester's devices lease each pending notice's own path (§11.10), so each rewrite hints them
-            and, from M8, wakes a phone; at decided they read that version and, by its DecisionRefs, the one or
-            two decision entries it names, each a head read of its decider's stream at the path its seq names
-            (16.8), and accept them only if each writer and header hash match, each binds this request
-            (request_id and request_entry_sha256), the outcome is the notice's, and each decider is eligible for
-            the target at its push's pin, else ignore them and alarm; then they check an approval's statement
-            in the authorization log (repos), or run 16.6's spend check and file the GrantActivate (reach), raise
-            access_decided with the outcome (§5.4) and record it in the member's vault; for a repo, KF3 then
-            seats the subject; no stream is scanned and no index is asked, at M6 as from format 2
+            not read_only, both by one resumable protocol: the device journals the decision before it signs, as
+            append-only rows in <state>/net/<network_id>/approvals/<request_id>, file class approval, each
+            fsynced before the step it guards, Decide{request_id, step, payload, push_id, millis}: step 1 intent
+            (outcome, subject, expiry and note, before signing), 2 statement (the signed RepoGrant, EvsShare or
+            ApprovalDecision; none for a denial), 3 entry (the signed decision entry), 4 notice (the version read
+            and the rewrite), a reach decision's in its approval's own ledger file, its request_id being the
+            approval_id (D-MCP-11); an approval signs the target's statement, filing a RepoGrant or EvsShare at
+            once and, for reach, signing an ApprovalDecision on channel device or presence, never harness, which
+            the entry carries; a denial signs none; either then appends its decision entry, and last rewrites the
+            notice from the version it read: an approval adds its DecisionRef, the notice turning decided,
+            approved, once it holds the rule's count of approvals (one for repos), and a denial makes it decided,
+            denied, naming the denial alone; after a crash, at its restart and at each directory sync, the device
+            resumes from each unfinished ledger's highest step with the same signed bytes and push ids, filing,
+            appending or rewriting only what is missing, until the notice names its decision or is gone, keeping
+            the row until not_after + 1 d (path rules' repair row)
+5 receipt   the requester's devices lease each pending notice's own path, q/<h>/<tgt>/<rid> (§11.10), so each
+            rewrite hints them and, from M8, wakes a phone; at decided they read that version and, by its
+            DecisionRefs, the one or two decision entries it names, each a head read of its decider's stream at
+            the path its seq names (16.8), and accept them only if each writer and header hash match, each binds
+            this request (request_id and request_entry_sha256), the outcome is the notice's, and each decider is
+            eligible for the target at its push's pin, else ignore them and alarm; then they check an approval's
+            statement in the authorization log (repos), or run 16.6's spend check and file the GrantActivate
+            (reach), raise access_decided with the outcome (§5.4) and record it in the member's vault as a copy
+            entry (kind 39), its CopyBody one Opening (header, salt, body) per decision entry the notice names, a
+            tagged requester depositing it to its sponsor's vault and writing none while it has no sponsor, an
+            erasure of the decision in the directory not reaching it; for a repo, KF3 then seats the subject; no
+            stream is scanned and no index is asked, at M6 as from format 2
 6 close     the requester removes an approved notice once it has recorded the outcome, and a denied one only past
             not_after + 1 d, still leasing it, so a repo approval that a denial beat still reaches the requester
             by its rewrite to approved; past not_after + 1 d any writer may
@@ -1421,8 +1601,11 @@ deny        decide's protocol with outcome denied, a note and no statement: its 
 cancel      the requester's decision entry with outcome cancelled, then the notice's removal from the pending
             version it read, so a cancel that a decided rewrite beat fails and shows that decision; after an
             approval, cancelling is a GrantRevoke or RepoRevoke
-expire      past not_after a pending request is expired in every reader's view, with no entry written, never shown
-            as denied
+expire      past not_after a pending request is expired in every reader's view, with no entry written, never
+            shown as denied; at the first sync that shows a newer K_sock, which renames a socket's target, the
+            requester's daemon runs the cancel row on each pending socket request, freeing both pending counts,
+            raises access_decided with outcome expired, and ur directory requests names the rotation, the person
+            or agent filing again under the new token, with a new endorsement where one is needed
 duplicates  a decision on a decided notice signs nothing; racing deciders meet at the notice's rewrite, each
             rereading on a conflict: a denial that finds it decided is void and shown superseded, an approval
             that finds it approved is a duplicate, a repo's RepoGrant showing the same access twice in the log,
@@ -1445,11 +1628,12 @@ workers     reach only (owner decision 179), under the directory's default reque
             and need no request; delegating a task stays a coordination ask to a worker's agent label, carrying
             no authority
 endorse     directory_request is O: §5.4's Authorize builds a CanonicalAction of kind access_request, version 3,
-            in fields 8, 10, 11, 14, 26, 27 and 29 (16.8), and needs the member's decision before anything is
-            filed (owner decision 74): harness under harness_ok in an untainted run (owner decision 75), device or
-            presence in a tainted one, since no requests rule governs the endorsement (owner decision 142); a
-            tagged or ephemeral sidecar's request goes to its sponsor as 16.8 routes approvals, and is filed after
-            the sponsor's decision
+            in fields 8, 10, 11, 14, 26, 29 and 38, a worker's ports sealed in 38 (16.8), and needs the member's
+            decision before anything is filed (owner decision 74): harness under harness_ok in an untainted run
+            (owner decision 75), device or presence in a tainted one, since no requests rule governs the
+            endorsement (owner decision 142); a tagged or ephemeral sidecar's request goes to its sponsor as 16.8
+            routes approvals, and is filed after the sponsor's decision, which reaches it as an ApprovalDelivery
+            (16.8)
 limits      §20.4's sidecar_abuse keys (D-QUOTA-11), which the requesting daemon and the directory's readers read
             through QuotaLimits (GET /sidecar/limits; §20.7), so a §21 tightening by network_sidecar_limit rows
             reaches both (§21.7): per requester directory_requests_pending 20, directory_requests_per_day 50 and
@@ -1575,8 +1759,12 @@ signing       announce, revoke, approve, deny, erase, a runs value wider than .u
 output        16.10's cli rule: prose on a terminal after tainting ancestor harness runs, stubs otherwise
 revoke        ur directory revoke prints the marker's commit, then erasure pending with its age until an ERASE
               names its erasure_request; ur status names each one still pending past 24 h
+window        at M6 ur admin directory --window refuses with FORMAT_UNSUPPORTED {needs_format: 2} and signs
+              nothing; --keep and --searchable work, setting a RetentionPolicy
 mcp           16.5's directory_list and directory_requests (R) and directory_request (O); record_append maps as
-              above; 16.6 refuses the person acts
+              above; 16.6 refuses the person acts; outside a team network, or in one whose directory does not
+              exist yet, the three tools answer FAILED_PRECONDITION naming the personal network or the missing
+              directory, and ur directory prints the same and exits non-zero
 instructions  go-sdk's Instructions are per Server (NewServer copies its options, mcp/server.go:182-190; a
               ServerSessionOptions carries none, :1349-1353), so the daemon keeps one Server per text below, all
               with the same static tools, and connects each relay session (16.4) to the one its claims value picks
@@ -1666,7 +1854,7 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 
 **D-MCP-5 (proposed).** Ingest uses command hooks, transcript tails and hook-boundary scans through a sealed, pre-redacted spool. Hooks fail open but lapses taint the run; a Team "record required" policy may install fail-closed hooks (Claude Code `onFailure: block`, Cursor `failClosed`). *Why:* PLAN.md:109; an outage must not stop work, nor a removed hook reopen egress.
 
-**D-MCP-6 (proposed).** Freeze 16.8's envelope at M3's entry review, after RECORD.md's (owner decision 25), gated by §22's vectors and peer review, not external review (owner decision 99), with 16.8's freeze rules (versions, stored-byte hashing, an open kind registry, log order, semantic commitments). *Why:* sealed chains, per-entry slots and salts, commitments and daemon-built requests cannot be retrofitted (REC:223).
+**D-MCP-6 (proposed).** Freeze 16.8's envelope at M3's entry review, after RECORD.md's (owner decision 25), gated by §22's vectors and peer review, not external review (owner decision 99), with 16.8's freeze rules (versions, stored-byte hashing, an open kind registry, log order within a stream and across a log's streams, semantic commitments). *Why:* sealed chains, per-entry slots and salts, commitments and daemon-built requests cannot be retrofitted (REC:223).
 
 **D-MCP-7 (proposed).** No URnetwork-hosted MCP serves sidecar tools; cloud agents run `ur` in their VM (owner decision 49). *Why:* the owner directive forbids server-side plaintext.
 
@@ -1686,9 +1874,9 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 
 **D-MCP-15 (proposed).** Restore points are local and exact (HEAD plus dirty-file copies); a change is the run's edit only when its edits' before and after hashes, each before checked against the bytes the edit applied to, chain across the scan interval, else shell or foreign; restore writes only attributed edits, shell paths only when named after a dry run as an O action. *Why:* scans cannot tell this run's edits from a person's or another run's, and an after-hash alone absorbs a person's earlier edit of the same path.
 
-**D-MCP-16 (proposed).** Run taint is a monotone, fsynced bit in the run's file, written before untrusted data leaves the daemon; a missing or unreadable file means tainted. *Why:* a restart must not reopen egress (I-9).
+**D-MCP-16 (proposed).** Run taint is a monotone, fsynced bit in the run's file, written before untrusted data leaves the daemon; a missing or unreadable file means tainted, and a run of a harness process starts with the union of that process's runs' taint, so a forged SessionStart opens no clean run (owner decision 448). *Why:* neither a restart nor a fresh session may reopen egress (I-9).
 
-**D-MCP-17 (proposed).** MCP's evs tools and `ur://evs` resources never touch `secret` repos or the team directory, never read or write the search index's files, never read the config repo and never write it or `mailcfg`, and `mail_alias_*` write their `mailcfg` record only after the decision; MCP signs no authority statement, only the acl and bridge statements 16.6 lists about this sidecar's own resources (its grants, rules and host address), and no approval statement but the daemon's harness decisions. `CanonicalAction` carries every field an O tool acts on, and approvers render only those. *Why:* the approver must see the daemon's action, not the agent's text; no agent changes policy, membership or consent, or reads a key (an ACME account key or a ShareKey, each in a `secret` repo; `K_sock` or a ShareSigner seed in the config; R-MCP-9); an index's outside text reaches agents only under 16.10's trust rules and the directory's prose only under 16.11's, and no agent writes an index or turns one off, or acts for a person in the directory.
+**D-MCP-17 (proposed).** MCP's evs tools and `ur://evs` resources never touch `secret` repos, the config repo, which `evs_repos` alone names, the team directory or a mailbox's `vault/` family, never read or write the search index's files, never write `mailcfg` or the vault's `harness/` path, and `mail_alias_*` write their `mailcfg` record only after the decision; MCP signs no authority statement, only the acl and bridge statements 16.6 lists about this sidecar's own resources (its grants, rules and host address), and no approval statement but the daemon's harness decisions. `CanonicalAction` carries every field an O tool acts on, and approvers render only those. *Why:* the approver must see the daemon's action, not the agent's text; no agent changes policy, membership or consent, or reads a key (an ACME account key or a ShareKey, each in a `secret` repo; `K_sock` or a ShareSigner seed in the config; R-MCP-9); an index's outside text reaches agents only under 16.10's trust rules and the directory's prose only under 16.11's, and no agent writes an index or turns one off, or acts for a person in the directory.
 
 **D-MCP-18 (proposed).** Read receipts are budgeted deposits made before decryption, a first read that cannot deposit fails closed, and ingest refuses, with an alarm, a receipt-only depositor's other entries. *Why:* a read-only reader cannot write the author's vault or inject into it, the author sees an attempt, and receipts must not need the author online.
 
@@ -1752,7 +1940,7 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 
 ### 16.16 Interfaces
 
-- **Provides:** `ur mcp`, `ur hook`, `ur install-harness`, `ur approve` (decisions; D-CORE-13's `OwnerConfirm`; a device revocation proposal's `AuthorityCosign`, §5.6), `ur keys add-presence`, `ur keys rm` and `ur keys ls` (16.6's remove row), `ur search`, `ur agents` and `ur directory`; the 16.5 catalog, each O tool's effect a §5.4 `SidecarEffect` with its kind's registered `SidecarEffectLookup`, with 16.10's search tools, record projection and run cards, 16.11's directory tools and `evs_drop_preview`; the team directory and `directory.proto` (16.11), with its erasure runner, `erasure_request` entries and the decision protocol's `DecisionRef`s; `record.proto` and the record API (`RecordWriter.Append`, `ApprovalRequest`, `ApprovalDecision`, `ApprovalCancel`, `ReachReceipt`, `Coverage`) for §5's gate, §9, §13-§15 and §17; I-8's channels, presence profiles, the spend check and D-MCP-11's `effect_key` and `Lookup`; read receipts; record mirrors.
+- **Provides:** `ur mcp`, `ur hook`, `ur install-harness`, `ur approve` (decisions; D-CORE-13's `OwnerConfirm`; a device revocation proposal's `AuthorityCosign`, §5.6), `ur keys add-presence`, `ur keys add-ssh`, `ur keys rm` and `ur keys ls` (16.6's register and remove rows), `ur search`, `ur agents` and `ur directory`; the `--project` cloud profile's key-file enrollment (16.9); the daemon's loopback telemetry receiver (16.7's model calls); the 16.5 catalog, each O tool's effect a §5.4 `SidecarEffect` with its kind's registered `SidecarEffectLookup`, with 16.10's search tools, record projection and run cards, 16.11's directory tools and `evs_drop_preview`; the team directory and `directory.proto` (16.11), with its erasure runner, `erasure_request` entries and the decision protocol's `DecisionRef`s; `record.proto` and the record API (`RecordWriter.Append`, `ApprovalRequest`, `ApprovalDecision`, `ApprovalCancel`, `ApprovalDelivery`, `ReachReceipt`, `Coverage`) for §5's gate, §9, §13-§15 and §17; I-8's channels, presence profiles, the spend check and D-MCP-11's `effect_key` and `Lookup`; read receipts; record mirrors.
 - **Consumes:** §5 (daemon, hello, `.ur`, `Authorize`, `Sign`, `SidecarEvent`, admission alarms, file classes, §5.9's index cache); §11.14's search index (partitions and manifests, entry versions' `content_sha256`, doc tables, coverage, the index root); §6 (`Signed`, `SignedType`, topics, `HeadCheck`); §2 D-TRUST-10, TB1, I-19, I-20; §7.8's receipt scopes and admin tokens; §7.9 (admissions, `read_only`, `AuthPin`, Delegations, `SponsorSet`, `KeyRegister`, `IndexerSet`, deltas, `ServiceSettings.directory` and the leaves rule); §8 (evaluation, kind defaults, consent, `OwnerConfirm`, `evidence`, `audit`, `GrantActivate`, D-ACL-7, `autogroup:dst-owner` and the directory's default rule); §10's directory group; §9 tickets; §10 drop keys, wraps and slots; §11 (streams, multi-part pushes, deposits, head reads and path history for `Lookup`, subscriptions, ERASE pushes, mirrors, §11.11's local tier for git-mode writes, §11.12's `directory` kind, §11.9's drop states and §11.13's dry run, §11.14's remote rules); §12-§15 and §17's tools, idempotent per `effect_key` (§15.8's alias records and §17.8's rule ids carry it); §18.4's search policy, §18.5 `SidecarApprovals`, §18.7 wakes, §18.9's host list; §19.10; §20 quotas; §21.9 holds; §4 C8.
 - **Subprotocol messages:** none in 0x18 for v0; records and directory notices use §11's hints. §6.11's `SignedType` gains 0x1801-0x1806 (16.8, 16.11), and §6.9's purposes `directory`.
 - **API routes:** `POST /approval/cancel` (Client, sidecar-classified; a signed `ApprovalCancel` for a server-gated decision; D-MCP-11).
@@ -1769,6 +1957,9 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 | An editor, shell or second harness writes a path while restore applies | Medium | High | apply checks the bytes it moves aside, never an earlier read, and installs only into a free name, so a concurrent write stays at the path or in a conflict copy (RV4); a write through a handle opened before apply that lands after its end reaches the deleted moved-aside file, as under git checkout |
 | An approver signs unread, an agent drives the approver's device, or a harness prompt shows only the agent's arguments | Medium | High | devices render the daemon's action, the summary untrusted; each decision binds one action or a rendered template, each use spent once; per-call harness prompts; `evidence` may exclude `harness` |
 | A same-uid process, such as a prompt-injected agent's shell, forges a PermissionRequest hook event (owner decisions 47, 75) | Medium | High | presence prompt and default presence key (16.6); never for key, consent or authority statements; in a tainted run only where a `requests` rule names harness (owner decision 142); records mark `source = hook` |
+| A process that leaves the harness's process tree (setsid, a launchd or systemd job, a second harness started detached) inherits no run's taint and can use what §5.5 leaves to any local process, so I-9 binds runs, not all of a user's processes (owner decision 47) | Medium | Medium | every run of a harness process takes the union of its runs' taint (owner decision 448); FS-27 forges SessionStart and SessionEnd |
+| Anyone who uses a cloud agent's environment can read its auth key in the setup text, every snapshot holds it, and a copy admits fresh agents until the Delegation ends | Medium | High | the key leaves the running VM before the agent's first turn (owner decision 449); `max_admits`, a 30-day `not_after`, `DelegationRevoke` (§7.9) |
+| The harness's telemetry token sits in its exporter settings, so a same-uid process can add false model-call reports to a run | Medium | Low | the receiver takes `model_call` entries alone, labeled source hook, as `ur hook` already lets any same-uid process do; the token administers, reads and signs nothing (I-7; owner decision 463) |
 | Both of a member's devices run agents, and one approves the other's requests | Low | Medium | presence keys (16.6); approver screens render the daemon's action |
 | A member's only presence key, a security key, is lost, so the device that registered it signs nothing §7.9's presence row covers, a new key's `KeyRegister` included, until another device of the member revokes it or its `not_after` passes | Low | Medium | `ur keys rm` from another of the member's devices, countersigned by that device's own presence key, which a device with none first registers (16.6's register and remove rows); a second key registered while the first works; a member with no other device admits one by its recovery code (§5.9), since the lost key also blocks that device's admissions (owner decision 189); platform keys (Secure Enclave, Windows Hello, passkeys) are lost only with their device |
 | An admin admits a device under the author to read the vault or approve as them | Medium | High | parked and alarmed until the author's `OwnerConfirm`, which MCP never signs (owner decision 126; D-CORE-13); unconsented devices give no evidence and register no keys |
@@ -1794,7 +1985,7 @@ sdk           GetDirectory() *SidecarDirectory, nil outside a team network: List
 
 - **v0 (M3), with I-8 and I-9 before M4's first O tools:** in-daemon MCP and `.ur`; R and W tools with `run_restore` and its restore points; version-aware results; Claude Code, Codex and Cursor hooks, ask rules and config hashes; transcript tails, scans, the redactor; persisted taint; the vault record, envelope frozen, with its mirror and its `EvsShare` readers' receipts (D-MCP-18), so no owner-bound share is read unreceipted; device, presence and harness approvals (owner decision 142's tainted-run rule), the spend check and use ledger; coverage.
 - **M4-M9:** O tools with their components: §17, and C8 for cloud agents, in M4; §12 in M5, with its gate's `approval_use` and `POST /approval/cancel`; §13 in M5; §15's mail tools and same-network `mail_send` in M7; internet `mail_send` with §14 in M9; app approvals and wakes with §18's app hosts (owner decision 88).
-- **v1 (M6):** the team record and, in team networks, the team directory as the coordination log (16.11: its repo, keys, streams, `announce` entries, requests and decisions with their completion protocol, erasure requests with the erasure runner, `claims` and its instructions, `directory_list`, `directory_requests` and `directory_request`, `ur directory`), mirrored on admins' indexers once designated (Team; owner decisions 102, 150, 171, 177), the directory's notices waking phones from M8; reach receipts; agent subkeys; filesystem events; model calls (Codex PostModelRequest, harness OpenTelemetry); retention policies; the `audit` reader (owner decision 63), with its receipts; RECORD.md's verifiable log and client disclosure packets, RS2's (sidecar/design/pitch5.html:898), over 16.8's leaf hashes, order and commitments.
+- **v1 (M6):** the team record and, in team networks, the team directory as the coordination log (16.11: its repo, keys, streams, `announce` entries, requests and decisions with their completion protocol, erasure requests with the erasure runner, `claims` and its instructions, `directory_list`, `directory_requests` and `directory_request`, `ur directory`), mirrored on admins' indexers once designated (Team; owner decisions 102, 150, 171, 177), the directory's notices waking phones from M8; reach receipts; agent subkeys; filesystem events; model calls (Codex's PostModelRequest hook alone, Claude Code's OpenTelemetry export under an install-sealed token; owner decision 463); retention policies; the `audit` reader (owner decision 63), with its receipts; RECORD.md's verifiable log and client disclosure packets, RS2's (sidecar/design/pitch5.html:898), over 16.8's leaf hashes, order and commitments.
 - **v1, §23's M10 (owner decision 169), with format 2 (owner decision 163):** the evs tools' versioning argument and fields (§11.7); `ur search`, `ur agents`, `search`, `search_agents` and `search_status`, the vault's run cards and §5.9's index cache; once M6's team record and directory exist, their projections and other members' agents; the directory's cards, repo files and index, with `search_agents` and `ur search` over it with history; `evs_drop_preview` and the drop states in `evs_history`, `evs_read` and `run_restore`; the engine's remote serving on designated indexers (§11.14); mailboxes search once §15's mailbox carries the index.
 - **Later:** a team's own legal holds (§23's assurance stage); regex queries (codesearch's planner); semantic search on desktops and indexers; transcript text in the vault's index once §22.8 measures it; delegating tasks to a worker's agent and sharing its run sessions (owner decision 179); requests sealed to their approvers; a guest view of the directory for cross-network shares.
 - **Blocked by:** D-CORE-9, §5.4's gate and §5.8's `.ur`; §7.8's receipt scope; §7.9's config repo, authorization log and `read_only` admissions; §6.11's `SignedType`; §8.5's consent (M2; owner decision 126); §11's streams, multi-part pushes, deposits, slots, ERASE pushes and mirrors; D-ACL-7; RECORD.md, with its search text per kind; §11's search index and versionless storage (owner decisions 159, 163); for 16.11, M2's reservations of the `directory` kind, `autogroup:dst-owner`, `EvsShare.expires` and `ServiceSettings.directory`, and §7.9's leaves rule for its group.

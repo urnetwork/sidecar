@@ -188,7 +188,7 @@ Each item gives (due; start).
 - **dns edge** (M5; M0): two new hosts at the site, with their own addresses (owner decisions 69, 71, 123).
 - **Platform names, company MX** (M5; M2): off ur.network before the NS switch (§12.4).
 - **On-call, abuse readiness** (M3, M5, then M6; M2): a two-person out-of-hours infrastructure rota on one pager service, 30 min to acknowledge before escalation (owner decision 143); DMCA agent, registrar and Search Console contacts, business-hours abuse review, and registrar, registry and law-enforcement notices on that pager from M5 (owner decisions 95, 134); 24/7 review from M6 (§19.8).
-- **Counsel** (M5; M3): confirms owner decision 133's condition and each hold kind's applicability (`preserve_2703f`, `report_2258a`) before holds ship (§21.9).
+- **Counsel** (M5; M3): confirms owner decision 133's condition and each hold kind's applicability (`preserve_2703f`, `report_2258a`) before holds ship (§21.9). A release pins only the presence-attestation roots their vendors publish, never FIDO metadata (MDS) data, whose terms bar copying and redistribution, so attestation needs no counsel item (§16.6; owner decision 455).
 - **DNSSEC** (M7; M5): 30 clean days before the DS (§12.6).
 - **HE TCP 25 egress, reverse delegation, feedback loops** (M9's entry; M0): unknown, so ask first; PTRs name bringyour.com hosts (owner decision 124; §14.9).
 - **App releases** (M3, then M8; M1): 18.7's credential rules, in the desktop app and extension releases that stop persisting `by_jwt` (the extension's in `chrome.storage.local`), before §7.4's stage 2 (owner decision 45; D-SDK-11, D-TRUST-3), then the burner and bridge seams (§18.15).

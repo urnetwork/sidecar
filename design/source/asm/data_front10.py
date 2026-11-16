@@ -753,6 +753,58 @@ INDEX = list(_P9['INDEX']) + [
      "The mail formats' bytes are as `protocol/mail.proto` and `MAIL-FORMAT.md` landed them."),
     (446, "The bare Postmaster",
      "go-smtp's fork accepts a bare `RCPT TO:<Postmaster>`, which each session maps to its own domain's postmaster."),
+    (447, 'Approval deliveries',
+     "A decision no vault carries back reaches its requester as an `ApprovalDelivery`, sealed to the requester's ReaderKey."),
+    (448, "A harness process's taint",
+     "Every run of a harness process takes the union of its runs' taint, so a forged SessionStart opens no clean run."),
+    (449, 'The cloud key file',
+     "A cloud VM's `ur` takes its auth key from a file the setup writes and its first hook unlinks, never the environment."),
+    (450, 'No fetch at search time',
+     'Hints coalesce on the leading edge, a search reads only the cache, and a hinted version not yet fetched is uncovered.'),
+    (451, 'Worker items by deployment',
+     "A tagged sidecar's worker announcement is set on its own host by whoever controls its deployment, with no record."),
+    (452, 'Harness config keys',
+     'PII hashing from M3 and `claims` from M6 act; capture narrowing, `reach`, `models` and `identity` wait.'),
+    (453, 'Attestation entries',
+     "A person's statement about a change is an `attestation` entry, never an approval."),
+    (454, 'Ledger scopes',
+     "A log admin's `ledger_scope` entry decides what a `record` repo copies, and no agent chooses a log."),
+    (455, 'Presence attestations',
+     "Vendor roots only, checked over the create ceremony's client data; a statement chaining to no listed root is asserted."),
+    (456, 'Disclosure openings',
+     '`ur record open` writes a `DisclosureOpenings` file, which no reader can take for a packet.'),
+    (457, 'Sealed action details',
+     "A grant's prefixes and ports ride `sealed_detail`, bound to its clear fields; requests carry ports, weights, ALPNs and socket names."),
+    (458, 'Private before a directory',
+     '`--private` refuses where a team has no directory yet, unless the device files the directory first.'),
+    (459, 'Run cards per stream',
+     "A run card is one per run and stream, versioned by epoch above stream version, and listed through a CUT's epoch."),
+    (460, 'Erase before the CUT',
+     "A record erasure destroys bodies before its CUT; an erased context entry's label stays in earlier entry rows."),
+    (461, 'Card and erasure readings',
+     "Section 15's nine readings for index erasure and run cards stand as built."),
+    (462, 'Egress change fields',
+     'An `egress_change` action carries its subject, `egress_mode` and, under exits, its exits.'),
+    (463, 'Model call sources',
+     "Codex's PostModelRequest hook, and Claude Code's OpenTelemetry export under an install-sealed token for model calls alone."),
+    (464, 'Card items cap',
+     'A directory card holds 16 items in at most 16,188 B, so every Signed card fits 16 KiB.'),
+    (465, 'Receipt server names',
+     "`ReachReceipt.server_name` holds the visitor's SNI, and publish receipts coalesce per server name."),
+    (466, 'Opening versions',
+     "An `Opening` names its entry's version, so a reader knows whether its body is an `AgentSignedBody`."),
+    (467, 'Run card sources',
+     "Vault cards fold coverage, claims and handoffs, and ingest writes a run's prompts into its context entries."),
+    (468, 'Platform numbers',
+     '`AnnounceWhere.platform` numbers six platforms 1 to 6, 0 reading unknown.'),
+    (469, 'Invisible characters',
+     'Directory identifiers and branches refuse invisible format characters and line separators.'),
+    (470, 'Write provenance',
+     "evs writes seal the run's tainted bit and the session's durable agent id, and reads return each version's provenance."),
+    (471, 'Named approvers toward k',
+     "The spend check counts toward k only the approvers a rule names, as the log's quorum does."),
+    (472, 'Lapsed erasure requests',
+     'An erasure request that lapsed when its repo was announced again stays lapsed through a later revocation.'),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -786,7 +838,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 447))
+assert [r[0] for r in INDEX] == list(range(1, 473))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -844,7 +896,13 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               432: '2026-11-15', 433: '2026-11-11', 434: '2026-11-11', 435: '2026-11-11', 436: '2026-11-12',
               437: '2026-11-15', 438: '2026-11-15',
               439: '2026-11-06', 440: '2026-11-11', 441: '2026-11-11', 442: '2026-11-15', 443: '2026-11-15',
-              444: '2026-11-15', 445: '2026-11-15', 446: '2026-11-15'})
+              444: '2026-11-15', 445: '2026-11-15', 446: '2026-11-15',
+              447: '2026-11-06', 448: '2026-11-06', 449: '2026-11-06', 450: '2026-11-06', 451: '2026-11-06',
+              452: '2026-11-06', 453: '2026-11-06', 454: '2026-11-06', 455: '2026-11-15', 456: '2026-11-10',
+              457: '2026-11-12', 458: '2026-11-12', 459: '2026-11-13', 460: '2026-11-13', 461: '2026-11-13',
+              462: '2026-11-13', 463: '2026-11-15', 464: '2026-11-15', 465: '2026-11-15', 466: '2026-11-15',
+              467: '2026-11-15', 468: '2026-11-15', 469: '2026-11-15', 470: '2026-11-16', 471: '2026-11-16',
+              472: '2026-11-16'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(

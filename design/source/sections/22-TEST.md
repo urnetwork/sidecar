@@ -539,25 +539,26 @@ presence   each profile refuses a wrong key or another key's attestation, a repl
            another act's root, another signer's act and an act over 65,535 statements, ignores
            signCount, and passes a five-statement act's vectors, each statement verified alone (owner
            decision 185; FS-124)
-actions    an admin sidecar's agent calling evs_write or evs_read, or reading ur://evs, on the config repo, and ur
-           acl push from a non-terminal caller, are refused, while team_members, team_agents, acl_grants and
-           acl_check answer; on a secret repo holding a fixture ACME account key, evs_repos omits it and evs_list,
-           evs_history, evs_read, evs_write, evs_delete and ur://evs reads and subscriptions are refused, CC4
-           finding no testHookSecret key in any of these results; every MCP evs tool and ur://evs read and
-           subscription on the search index's files (.ur-index/ on file-mode refs, the ur/index ref) is refused,
-           evs_list naming them only when asked, as is every one on the team directory (§16.5, §16.6, D-MCP-17);
-           deciding a directory_request (its RepoGrant, EvsShare or another's ApprovalDecision), announcing, revoking
-           or marking a repo private, and a DROP push or its cancel are refused from MCP (§16.6, D-MCP-32); in a team
-           network under claims off, record_append(kind: claim or handoff) answers FAILED_PRECONDITION naming the
-           setting and announces nothing (§16.11's claims row); each MCP session's initialize and server/discover
-           return the instructions for the claims value fixed at its start, one go-sdk Server per text (§16.11's
-           instructions row), and a later change of claims leaves an open session's instructions unchanged; through
-           MCP, bridge_expose files its own BridgeRoute, a re-signed retry keeping its rule id, and a host's first
-           map files its own BridgeAddress, then the BridgeMap, and completes, while a path that would sign a
-           BridgeAddress naming another sidecar_id or a second one for an addressed host, a BridgeBlock,
-           BridgeEgress, Suspend, EvsShare, OwnerConfirm or access-log statement, or a GrantRevoke or BridgeWithdraw
-           of another sidecar's grant or rule, is refused; an approver shown a dns_set whose preview claims other
-           rdata sees dns_value; a descriptor lint finds every O tool filling its kind's fields
+actions    an admin sidecar's agent calling any evs tool, or reading or subscribing to ur://evs, on the config
+           repo, which evs_repos alone names, and ur acl push from a non-terminal caller, are refused, while
+           team_members, team_agents, acl_grants and acl_check answer; on a secret repo holding a fixture ACME
+           account key, evs_repos omits it and evs_list, evs_history, evs_read, evs_write, evs_delete and
+           ur://evs reads and subscriptions are refused, CC4 finding no testHookSecret key in any of these
+           results; every MCP evs tool and ur://evs read and subscription on the search index's files (.ur-index/
+           on file-mode refs, the ur/index ref) is refused, evs_list naming them only when asked, as is every one
+           on the team directory (§16.5, §16.6, D-MCP-17); deciding a directory_request (its RepoGrant, EvsShare
+           or another's ApprovalDecision), announcing, revoking or marking a repo private, and a DROP push or its
+           cancel are refused from MCP (§16.6, D-MCP-32); in a team network under claims off, record_append(kind:
+           claim or handoff) answers FAILED_PRECONDITION naming the setting and announces nothing (§16.11's
+           claims row); each MCP session's initialize and server/discover return the instructions for the claims
+           value fixed at its start, one go-sdk Server per text (§16.11's instructions row), and a later change
+           of claims leaves an open session's instructions unchanged; through MCP, bridge_expose files its own
+           BridgeRoute, a re-signed retry keeping its rule id, and a host's first map files its own
+           BridgeAddress, then the BridgeMap, and completes, while a path that would sign a BridgeAddress naming
+           another sidecar_id or a second one for an addressed host, a BridgeBlock, BridgeEgress, Suspend,
+           EvsShare, OwnerConfirm or access-log statement, or a GrantRevoke or BridgeWithdraw of another
+           sidecar's grant or rule, is refused; an approver shown a dns_set whose preview claims other rdata sees
+           dns_value; a descriptor lint finds every O tool filling its kind's fields
 restore suite (FS-26, FS-115; §16's RV1-RV4)
            sessions A and B share one worktree: B's edit of f and new g between A's start and an unrelated A hook
            stay untouched and are reported foreign; f edited through an Edit hook and then by hand is chain-broken,
@@ -971,7 +972,7 @@ FI-24  remote search: a query leaves an app host only for a designated search in
        window but at its start, a session re-establishment or overflow (§4.6, §6.10, §11.14, §18.4, §2)
 FI-25  directory authorship: every card, notice and run or worker announce entry a reader shows or acts on was written
        and signed as §16.11's path and signing rules require, by a signer that is admitted, unrevoked, unreaped,
-       unsuspended and, for a member device, consented in the reader's state, and every repo item by a signer that
+       unsuspended, unparked and, for a member device, consented in the reader's state, and every repo item by a signer that
        held the right at its push's pin by retained history, its own pin within 4,096 positions before that one
        (§16.11's repo file row); evs takes a directory ERASE, CUT, CLOSURE, closure upload or slot deletion only at
        admin scope, so no other writer's erasure destroys a key, and readers count one only from a directory admin, a
@@ -1295,7 +1296,8 @@ FS-26  §16    two runs and a hand edit interleaved, hooks firing around B's edi
               never reverted; again across a restart
 FS-27  §16    an untrusted read, a daemon and relay kill, a restart and a benign hook: an      FI-7        T2     M3-out
               outward call under a standing grant needs a fresh approval; a corrupt run file
-              reads as tainted
+              reads as tainted; a forged SessionStart under a tainted run's harness process
+              opens no clean run, and a forged SessionEnd clears nothing (owner decision 448)
 FS-28  §16    a same-uid process (a shell child of the harness) submits a hook event for a     FI-7        T2     M3-out
               pending outward tool: in a tainted run no harness decision results unless the
               matching requests rule names harness, never through evidenceDefault
@@ -2007,7 +2009,9 @@ FS-84  §16,11 directory writers: a card signed or pushed by another sidecar, by
               is accepted, with an alarm on the member's devices; any writer may remove a
               revoked sidecar's card; run and worker items expire at expires_millis under
               +-60 s of skew, repo items never; announce entries and cards of one announcement
-              fold to the same state
+              fold to the same state; at M6 two writers on one run or worker id show as two
+              items, each under its writer, with record_alarm id_reuse, and a withdrawal at
+              version + 1 hides its item at once, never as stale (§16.11's M6 carrier)
 FS-85  §8,16  request lifecycle: a repo request that any repo admin approves yields one        FI-26       T2+T3  M6-out;
               RepoGrant with the asked subject and expiry, and a decision entry naming its log                    M8-out
               position, after which KF3 seats the subject, a request to a private repo by its                     (wakes)
@@ -2229,8 +2233,12 @@ FS-99  §16,11 directory erasure authority (meta review F01): writers A and B wi
               admins' devices; an admin's daemon then starts and erases exactly the copies
               naming P (its announce entries and its runs', from M10 the cards' old versions
               and index documents by CLOSURE), each ERASE naming the request; a request by a
-              non-admin of P, or after P is announced again, erases nothing and alarms; the
-              runner killed between its CLOSURE and its ERASE, and two runners racing: one
+              non-admin of P, or after P is announced again, erases nothing and alarms; in
+              one repo, revoke P (request 1), announce P again (request 1 lapses) and revoke
+              P again (request 2): the runner's next pass works request 2 alone, its ERASEs
+              naming request 2, and the second revocation reads complete, request 1 staying
+              lapsed (owner decision 472); the runner killed between its CLOSURE and its
+              ERASE, and two runners racing: one
               ERASE commits and the other skips; a fresh member device with an empty cache
               then opens every historical entry of A and B that names no P
 FS-100 §16,18 directory decisions reach requesters (meta review F16): requester R a surrogate  FI-26       T2+T3  M6-out
