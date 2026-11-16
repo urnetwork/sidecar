@@ -146,6 +146,9 @@ type DropPreviewResolveResult struct {
 	// Versions read, for progress.
 	VersionCount  uint64
 	ScanByteCount int64
+	// The entry hashes of the versions the dry run's paths would list, which its mark counts as naming nothing: a dry
+	// run writes no list file, since a reader takes a list file's rows as a drop's.
+	Listed map[[32]byte]bool
 }
 
 // Resolve (EVSB-M10-04).
@@ -169,8 +172,11 @@ type DropMarkRequest struct {
 	// Each ref's M_{r-1}: a later round reads only versions after it, and a ref absent here from version 1.
 	Since    map[sidecar.Id]uint64
 	Liveness *DropLiveness
-	Pace     func(ctx context.Context, byteCount int64) error
-	Renew    func(ctx context.Context) error
+	// A dry run's: the entry hashes of the versions its paths would list, which mark nothing beside those the list
+	// files hold under executed drops. nil for a job, whose own drops' versions its resolve's list files hold.
+	Listed map[[32]byte]bool
+	Pace   func(ctx context.Context, byteCount int64) error
+	Renew  func(ctx context.Context) error
 }
 
 // What mark found.
