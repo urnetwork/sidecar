@@ -6,13 +6,12 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 252 decided items and 277 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 247 decided items and 277 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
-| [§2 Trust model and threat model](#s2) | 3 | 0 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§4 Repositories, code placement, branches, and build](#s4) | 15 | 20 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
@@ -32,7 +31,7 @@ Holds 252 decided items and 277 proposed ones, generated from the ledger on 2026
 | [§21 Abuse, safety, and legal process](#s21) | 17 | 17 |
 | [§22 Testing and verification](#s22) | 7 | 15 |
 | [§23 Phasing, milestones, and rollout](#s23) | 3 | 3 |
-| [No section named](#s0) | 4 | 0 |
+| [No section named](#s0) | 2 | 0 |
 
 ## DESIGN-DETAILS.md sections to fold
 
@@ -41,42 +40,6 @@ Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with i
 Sections 8 and 9's owner answers are folded as owner decisions (2026-11-10): section 9's QD-607 to QD-610, QD-612, QD-632 and QD-633 as 227-233, with QD-613 (section 6's key prefixes) as 234 and QD-640 as 235, and section 8's QD-598 to QD-606 as 236-244, each stated in §11 where it binds. Their proposed DESIGN.md text (8.8, 9.8) waits for the design agent's amendments above, and is folded only with them.
 
 Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
-
-<a id="s2"></a>
-## §2 Trust model and threat model
-
-### QD-012: How sidecar.ur.io is served, given that Cloudflare terminates ur.io
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §19.*
-
-Serve `sidecar.ur.io` direct: it joins warpctl's `domains` and mmm's `expose_aliases` as W10 does, under a W5 certificate at the lb, as an unproxied record, and `warpctl dns` refuses it proxied (a new name starts unproxied today, warp/warpctl/dns_cloudflare.go:252). Those values live in vault, so that edit is external. Add an ext row and an EX7 clause to §2.8 saying Cloudflare terminates https://ur.io: it sees page requests and can alter page script, so views while it runs, never the key origin's code, key or token.
-
-Changes: §2.8 EX7; §2.8 ext rows; §2.4 TB1; §18.8; §19.5 W10.
-
-Questions: `plan-SDK-small-readings.md#3`.
-
-Not folded (2026-11-10): the ext row for Cloudflare, since a new §2.8 row needs its `planned` line in testdata/metadata/fields.yml in the same commit, which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 211 (§2.8 EX7, §2.4 TB1, §2.10, §18.8, §19.5's W10).
-
-### QD-023: Which key signs apt and yum metadata, and where do those repositories live?
-*Decided by the owner: owner 2026-11-06. Also amends §4.*
-
-the file's option 3: drop apt and yum from v1, and keep .deb and .rpm as direct downloads through install.sh's verified path. No GPG key and no repository host. §4.18 loses that item, and `apt upgrade` needs a Q- item. This replaces Proposed. (The recommendation it replaces: A second offline key, a GPG key held and used in the same two-person ceremony as the SSH key: `InRelease` and rpm signatures are made at promotion, and the trees publish under `https://ur.io/recurd/apt/` and `https://ur.io/recurd/yum/` through mmm. If the owner would rather cut scope, drop apt and yum from v1 and keep `.deb` and `.rpm` as direct downloads, with a Q- item.)
-
-Changes: §2.6; §4.10; §4.18.
-
-Questions: `plan-REPO-v1-channels.md`.
-
-Not folded (2026-11-10): the Q- item for `apt upgrade` that the owner asked for, since a new §4 id needs its evidence line in check/repo_matrix_test.go's repoMatrix in the same commit (TestEveryRepoIdHasEvidence), which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 213 (§2.6, §4.10, §4.18).
-
-### QD-030: Who holds the abuse and legal-request mailboxes, and what can that provider read?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §19.*
-
-Both mailboxes sit at one provider outside URnetwork's Postgres and clusters, the owner naming it. Every record is sealed to a vault-held HPKE key before it leaves the process, so the provider and SES see sender, time and size only; §19.10's restore opens them with that key. api-14 names both mailboxes' copies: action records "kept as api-14's actions", hold records until the hold's `expire_time`. A new ext row lists the provider with what it sees: sealed records, their time and size.
-
-Changes: §2.8 api-14; §2.8 ext rows; §21.10; §21.16; §19.10.
-
-Questions: `plan-ABUSE-metadata-rows.md#4`.
-
-Not folded (2026-11-10): the new ext row for the mailboxes' provider, since a new §2.8 row needs its `planned` line in testdata/metadata/fields.yml in the same commit, which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 208 (§2.8 api-14, §19.10, §21.10, §21.16).
 
 <a id="s3"></a>
 ## §3 Architecture overview and end-to-end flows
@@ -91,6 +54,8 @@ Changes: D-ARCH-2; §3.5 planes; RECORD.md section 10.2; Q-RECORD-8.
 Questions: `record-md-witness-carrier.md`.
 
 Not folded (2026-11-10): RECORD.md section 10.2's step 6 and Q-RECORD-8, which live in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md part is folded as owner decision 214 (D-ARCH-2, §3.5).
+
+Not folded (2026-11-16): the same two parts, still RECORD.md's, which no design-records track edits.
 
 <a id="s4"></a>
 ## §4 Repositories, code placement, branches, and build
@@ -1248,7 +1213,7 @@ Questions: `protos-bridge-unwritten-numbers.md#1`.
 ### QD-456: The config repo's paths and the fold record format
 *Proposed fill: a gap the agents filled; work builds on it.*
 
-Option 2, sharded. On the config repo's file-mode `main` ref: `genesis` (Signed Genesis, verbatim, first head only); `fold/<d>/<i>`, the i-th fold, i from 1 and d = i / 1024, each zero-padded to 8 digits, one file per head that advances folded_through; `service_settings`, `versioning_rules`, `bridge/block`, each one Signed record verbatim; `bridge/share/<share_id hex>`, a BridgeShareSigner; `socket/key` (plan-SOCK-ksock-rotation); `policy.hujson`, the source bytes; `tags`, `groups`, `rules`, `names`, `labels`, `resolve`, one deterministically encoded protobuf each. config.proto adds `message ConfigRecord { bytes id = 1; uint64 n = 2; int64 time_ms = 3; uint32 kind = 4; bytes body = 5; }` and `message ConfigFold { uint64 after = 1; uint64 folded_through = 2; repeated ConfigRecord records = 3; }`. id is SHA-256(Signed) for a STATEMENT and empty for a TICK; n and time_ms are the carrying entry's; kind is AuthEntry.kind, 2 or 3; body is AuthEntry.body verbatim; records run in n order with no BASE. §7.9's BASE check reads the fold files whose ranges lie in (previous folded_through, folded_through].
+Option 2, sharded. On the config repo's file-mode `main` ref: `genesis` (Signed Genesis, verbatim, first head only); `fold/<d>/<i>`, the i-th fold, i from 1 and d = i / 1024, each zero-padded to 8 digits, one file per head that advances folded_through; `service_settings`, `versioning_rules`, `bridge/block`, each one Signed record verbatim; `bridge/share/<share_id hex>`, a BridgeShareSigner; `socket/key` (plan-SOCK-ksock-rotation); `policy.hujson`, the source bytes; `tags`, `groups`, `rules`, `names`, `labels`, `resolve`, one deterministically encoded protobuf each. config.proto adds `message ConfigRecord { bytes id = 1; uint64 n = 2; int64 time_ms = 3; uint32 kind = 4; bytes body = 5; }` and `message ConfigFold { uint64 after = 1; uint64 folded_through = 2; repeated ConfigRecord records = 3; }`. id is SHA-256(Signed) for a STATEMENT and empty for a TICK; n and time_ms are the carrying entry's; kind is AuthEntry.kind, 1, 2 or 3; body is AuthEntry.body verbatim; records run in n order, the BASE entries in (after, folded_through] among them as kind 1 with the Signed ProjectionHeader as body, ignored by compile and compared by the head check like any record (amended by QD-627, owner decision 262, which §7.9's BASE, fold and retention rows already carry). §7.9's BASE check reads the fold files whose ranges lie in (previous folded_through, folded_through].
 
 Changes: §7.9.
 
@@ -4575,6 +4540,8 @@ Changes: BRIEF.md Where you work, only under options 2 and 3.
 
 Questions: `connect-m1-stray-self-link.md`, `connect-c14-c9-stray-symlink-blocks-landing.md`.
 
+Not folded (2026-11-16): it changes only the run's BRIEF.md and the main checkouts' stray links, outside design/source/; DESIGN.md states nothing about the build machine's checkouts, so nothing of it belongs there.
+
 ### QD-052: Seven sdk worktrees under ~/urnetwork/temp were relinked by a mistaken `git worktree repair`
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
 
@@ -4584,28 +4551,14 @@ Changes: BRIEF.md hard limits.
 
 Questions: `wire-consumers-sdk-worktree-links.md`.
 
-### QD-621: What should a VPN component do when a statement that could narrow reach has waited for a compile that has not run?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A VPN component never goes pending because a narrowing statement it cannot check by signature has waited for a compile. It keeps its last compiled state, applies at once every revocation it can check by signature (as before), and raises an alarm (bridge_alarm, with the waiting statement's age) once such a statement has waited NarrowingOverdueTimeout (10 min), repeating while it waits; the next compile judges every waiting statement. Forwarding never drops for this reason, at the accepted cost that a revocation the posture cannot check may not apply on a device that cannot compile. DESIGN-DETAILS.md section 4 (4.2.5, 4.3 and the Fwd.tla invariant that a revoked forwarding key is eventually refused) was built on option 1, so the design agent amends it; SDK-M8-17's plan entry carries the override until then.
-
-Changes: DESIGN-DETAILS.md 4.2.5, 4.3 and Fwd.tla amended by the design agent; SDK-M8-17's plan entry: Details line with the override; QD-620's wording no longer says pending after 10 min.
-
-Questions: `details-4-compile-deadline.md`.
-
-### QD-627: Should a fold's ConfigRecords include the BASE entries, so the config head holds every entry's body and a reader recomputes the chain from the genesis through the head?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A fold's ConfigRecords include the BASE entries in (after, folded_through] as ConfigRecord kind 1, the Signed ProjectionHeader as body, ignored by compile and compared by the head check like any record, so the chain A_1..A_folded_through is a function of the genesis and the head. This amends QD-456's fill ('records run in n order with no BASE') before the format freezes. DESIGN-DETAILS.md section 5 is built on this, and TEAM-M2-08, -09 and -10 have landed it.
-
-Changes: DESIGN-DETAILS.md section 5 stands as written; TEAM-M2-08, -09 and -10 (landed) stand; QD-456's fill amended (design-records).
-
-Questions: `details-5-base-records-in-folds.md`.
+Not folded (2026-11-16): it changes only the run's BRIEF.md and a clone's worktree links, outside design/source/; DESIGN.md states nothing about the build machine's worktrees, so nothing of it belongs there.
 
 <a id="later"></a>
 ## Later decisions
 
 Decisions taken after this file was generated, each naming the section it folds into. A design-records track folds the ones that name its sections, with that section's items above, and deletes them here.
+
+§2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`.
 
 ### QD-652: Should closure pacing admit by seat, each seat good only in its own second, in place of a bucket that admits by arrival?
 *Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
@@ -4912,15 +4865,6 @@ Changes: data-lane follow-up: EvsSealedMetadata.erasure_note, ERASE and CLOSURE 
 
 Questions: `evs1-m2-30-erasure-note-format.md`.
 
-### QD-683: May a design-records track add the code-side line a new design id needs, a new §2.8 row's `rows:` line in testdata/metadata/fields.yml or a new §4 id's line in check/repo_matrix_test.go, since each guard needs both in one commit?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §2 Trust model and threat model.*
-
-A design-records track that adds a new §2.8 row or a new §4 id adds the code-side line its guard needs in the same commit: the row's planned line in testdata/metadata/fields.yml's rows: section (ext-11 for Cloudflare terminating https://ur.io, QD-012, and ext-12 for the abuse and legal-request mailboxes' provider, QD-030, each planned at the milestone that first serves its value), and a new id's repoMatrix entry in check/repo_matrix_test.go (Q-REPO-6 for QD-023's apt upgrade item, mapped to a path or rule that holds the install path as Q-REPO-4 and Q-REPO-5 are). One line of test data or test code per id, outside the design files otherwise; the row and its planned line are one fact. The design-records brief allows exactly these lines.
-
-Changes: design-records brief: may add a new id's fields.yml rows: line and repoMatrix entry in the same commit; follow-up design-records track: ext-11, ext-12 and Q-REPO-6.
-
-Questions: `dr-s2-s3-new-metadata-rows.md`.
-
 ### QD-684: May a design-records track drop a field's line from protocol's fence additions in the commit that writes that field into its DESIGN.md fence, since the fence test fails until both change together?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
 
@@ -5209,15 +5153,6 @@ Changes: DESIGN-DETAILS.md 3.2.7, 3.5 and 3.9 stand as written (design-records).
 
 Questions: `details-3-key-rotation.md`.
 
-### QD-716: Can §2.8's smtp-2 row be amended and a smtp-7 row added for what section 3's proofs and key fetch show a server?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §2 Trust model and threat model.*
-
-§2.8's metadata list, in its next version, amends smtp-2 and adds smtp-7 as DESIGN-DETAILS.md 3.8 writes them. smtp-2 (smtpedge, connection memory only) lists the id of the key set the sidecar proves under; a proof per part (the key part, one per envelope group, one per header record and, in DATA mode, one per body record), each with its reply count and, once, the header block's record count; and the key commitment and scan-state commitments the sidecar publishes, uniformly random group elements that depend on no key and no plaintext. smtp-7 is new: the key set path on ur.io, where per fetch the origin sees the client's address and time, the key set's id and the file names fetched, which mark the address as a mail prover host, on which key set and with which TLS families prepared; the request carries no account, token, cookie or sidecar id. Its ttl reads "as ur.io's other static downloads (§4.10)", which the ops owner confirms against how ur.io serves and logs its static files (EX7). The key set fetch stays off until smtp-7 has landed (I-18). Key sets are fetched, not bundled in the `ur` package, as QD-123 decided.
-
-Changes: §2.8 smtp-2 amended and smtp-7 added (DESIGN-DETAILS 3.8; design-records); SMTP-M9-35's proto fields and SMTP-M9-40's fetch may reach a release once smtp-7 has landed; the ops owner confirms smtp-7's ttl line (EX7).
-
-Questions: `details-3-metadata-rows.md`.
-
 ### QD-717: How does evs match a token's ur_sidecar_id to §5's binding, when the authorization log carries no client ids and evs has no Postgres?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
 
@@ -5441,24 +5376,6 @@ QD-064 and QD-003 combine by field. local_port, weight and alpn leave CanonicalA
 Changes: §16.8's CanonicalAction fence: 24, 25, 34 reserved, sealed_detail = 38, version 4, CanonicalActionDetail (design-records); ApprovalRequest 14, 15, 16; MCP-M3-02's kind table and testdata/metadata/fields.yml.
 
 Questions: `record-m2-01-canonical-action-detail.md`.
-
-### QD-741: Does §2.8's cert-1 cover two values network_tls_cert must hold between steps: an issued chain, and a pending revocation's reason?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §2 Trust model and threat model.*
-
-§2.8's cert-1 sees gains "issued chains until 30 d after expiry or revocation, and a requested revocation's reason", a list version bump in §2.8 and metadata_list.yml. TLS-M5-16's store keeps a URnetwork-zone row's issued chain, which GET /tls/cert-order/<id> answers after a restart or to a device that was offline, and TLS-M5-16 and TLS-M5-17 carry a requested revocation's reason (keyCompromise from POST /tls/cert-revoke, cessationOfOperation for §21.6's takedowns) in the row until the sweep's revocation reaches the CA. Neither value adds anything a CT log (cert-2) or a CA's CRL does not already publish. The 30 d is a settings field with that default (QD-702).
-
-Changes: §2.8's cert-1 and metadata_list.yml (a list version bump); TLS-M5-16's store gains the chain and reason columns; TLS-M5-17's sweep revokes with the stored reason.
-
-Questions: `tls-m5-05-cert-row-values.md`.
-
-### QD-742: When does a revoked or failed network_tls_cert row's 30 days start, given cert-1 names no time for either?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §2 Trust model and threat model.*
-
-network_tls_cert gains state_time timestamp NOT NULL, set with every state change, in MG5's CREATE while the group is pending (so no running release sees a migration), and §2.8's cert-1 sees gains "the time of its latest state". cert-1's ttl reads "30 d after expiry, revocation or failure": CertsStore's purge (and TLS-M5-17's) reads not_after for an expired row and state_time for a revoked or failed one. §13.8's budget rebuild of a lost {tcb_} key may read an order's admission from it. If M5's Gn-out came first, it would list this open; it no longer needs to.
-
-Changes: §2.8's cert-1 sees and ttl (metadata_list.yml); network_tls_cert.state_time in MG5's CREATE; CertsStore.PurgeEnded and TLS-M5-17's purge read it.
-
-Questions: `tls-m5-14-cert-row-end-time.md`.
 
 ### QD-743: Should AclRepo's folded access log carry the RepoDelete's entry time and each removed admin's position, which readers need once those entries leave retention?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*

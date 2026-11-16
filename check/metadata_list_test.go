@@ -68,7 +68,7 @@ type metadataListAddition struct {
 }
 
 // None waits now: design-records wrote every earlier entry's text into §2.8's block with the fold of 2026-11-16
-// (QD-886), so the list is the block alone until the next answer.
+// (owner decision 252), so the list is the block alone until the next answer.
 var metadataListAdditions = []metadataListAddition{}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
