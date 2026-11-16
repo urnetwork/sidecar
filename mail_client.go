@@ -42,8 +42,9 @@ const mailComponentName = "mail"
 // The sealed directory's file that says mail is on for this device's network.
 const mailEnabledFileName = "enabled.json"
 
-// §15.6's prompt, which `ur status` and the apps show until a mail indexer stands. Product copy, so a fixed text.
-const MailIndexerPrompt = "A phone alone cannot reliably receive mail: an indexer, an always-on device (a desktop `ur daemon`, a NAS or VPS), is needed; time-sensitive codes may not arrive"
+// §15.6's prompt, which `ur status` and the apps show until a mail indexer stands: §15.9's and §18.5's foreground-only
+// copy too (MailCoverageForegroundOnlyCopy), one text. Product copy, so a fixed text.
+const MailIndexerPrompt = "A phone alone cannot reliably receive mail: an indexer, an always-on device (a desktop ur daemon, a NAS or VPS), is needed; time-sensitive codes may not arrive"
 
 var (
 	// No EvsClient, or no engine with a verified state, is there to work on yet.
@@ -198,6 +199,8 @@ type MailClient struct {
 	views        map[Id]*MailView
 	// the mailbox's store as IMAP sees it, by mailbox, built at first use over the binding (mail_imap_store.go)
 	imapStores map[Id]*MailImapStore
+	// the member's vault, by mailbox, built at first use over the binding (mail_codes.go)
+	vaults map[Id]*MailVault
 	// whether mail is on: this device's enable, kept in the store, or the network's status as last read
 	enabledLoaded  bool
 	enabledLocally bool
@@ -240,6 +243,7 @@ func NewMailClient(args *MailClientArgs) (*MailClient, error) {
 		imapHints:  NewMonitorValue(uint64(0)),
 		views:      map[Id]*MailView{},
 		imapStores: map[Id]*MailImapStore{},
+		vaults:     map[Id]*MailVault{},
 		changed:    make(chan struct{}),
 	}, nil
 }
@@ -310,6 +314,7 @@ func (self *MailClient) Bind(binding *MailBinding) {
 		self.configRepoId = Id{}
 		self.views = map[Id]*MailView{}
 		self.imapStores = map[Id]*MailImapStore{}
+		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()
 	}()
 	if closeConfig != nil {
@@ -765,6 +770,7 @@ func (self *MailClient) closeParts() {
 		self.repos = nil
 		self.views = map[Id]*MailView{}
 		self.imapStores = map[Id]*MailImapStore{}
+		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()
 		return config
 	}()

@@ -70,7 +70,7 @@ func (self *mailSendTestParts) Writes(senderSidecarId Id, repoId Id) bool {
 	return true
 }
 
-func (self *mailSendTestParts) depositRepo(repoId Id) mailDepositRepo {
+func (self *mailSendTestParts) depositRepo(repoId Id) mailSendDepositRepo {
 	return &mailSendTestDepositRepo{parts: self, repoId: repoId}
 }
 

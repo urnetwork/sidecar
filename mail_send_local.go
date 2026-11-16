@@ -137,6 +137,11 @@ func mailSendMayDeposit(state *AclState, senderSidecarId Id, repoId Id, now time
 	return MailSendDelivered
 }
 
+// Where one repo's same-network deposit goes: EvsRepo.Deposit, or a test's.
+type mailSendDepositRepo interface {
+	Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDepositResult, error)
+}
+
 // One repo's recipients of a send, in the order first named.
 type mailSendTarget struct {
 	repoId     Id
@@ -146,7 +151,7 @@ type mailSendTarget struct {
 // Deposits message to each target's repo, one deposit a repo naming its own recipients only, in order: each target's
 // outcome, delivered or failed. A failure stops nothing: the rest are still tried, and the caller sends the failed
 // ones again.
-func mailSendDeposit(ctx context.Context, repo func(repoId Id) mailDepositRepo, message []byte, mailFrom string, targets []*mailSendTarget) []MailSendOutcome {
+func mailSendDeposit(ctx context.Context, repo func(repoId Id) mailSendDepositRepo, message []byte, mailFrom string, targets []*mailSendTarget) []MailSendOutcome {
 	outcomes := make([]MailSendOutcome, len(targets))
 	for index, target := range targets {
 		outcomes[index] = MailSendFailed

@@ -148,7 +148,7 @@ func (self *MailSendResult) Delivered() []string {
 // What a send reaches beyond MailClient's parts, where a test's parts stand in: the authority and the deposits.
 type mailSendParts interface {
 	sendAuthority() MailSendAuthority
-	depositRepo(repoId Id) mailDepositRepo
+	depositRepo(repoId Id) mailSendDepositRepo
 }
 
 // The send's settings, the defaults where none were set.
@@ -194,7 +194,7 @@ func (self *MailClient) Send(ctx context.Context, args *MailSendArgs) (*MailSend
 		},
 		Clock: self.clock,
 	})
-	depositRepo := func(repoId Id) mailDepositRepo {
+	depositRepo := func(repoId Id) mailSendDepositRepo {
 		if binding.Evs == nil {
 			return nil
 		}
