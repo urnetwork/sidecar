@@ -67,6 +67,8 @@ type EvsCommitted struct {
 	RequestByteCount int64
 	// The record's purge list for the purge, nil when it lists none the purge takes (push_purge.go).
 	Purge *PurgeCommit
+	// The engine's clock read after step 7's 200, never earlier: a DROP's seen_ms (push_drop.go).
+	SeenAt time.Time
 }
 
 // Step 8's push sequence and hints (§11.10), which EVS1-M2-15 builds: raises {evsq_<repo_id>} and returns its new
@@ -698,12 +700,15 @@ func (self *pushAttempt) newCommitted(head *EvsStoredHead) *EvsCommitted {
 		RecordByteCount:  self.recordByteCount(),
 		RequestByteCount: self.request.requestByteCount,
 		Purge:            self.purgeCommit(head.Version()),
+		// read after step 7's 200 returned, whichever path calls this
+		SeenAt: self.engine.clock.Now(),
 	}
 }
 
 // Step 8, off the reply path, in this order: the push sequence and hints, which the head cache entry records, so
-// the sequence is raised first; usage; the head cache; the fold trigger. Each failure is logged and costs only
-// latency: everything here is soft state.
+// the sequence is raised first; usage; the head cache; the fold trigger; a DROP's or cancel's append to its table
+// (push_drop.go). Each failure is logged and costs only latency: everything here is soft state, and a DROP's lost
+// append is evacuation's to make.
 func (self *EvsEngine) afterCommit(committed *EvsCommitted) {
 	self.stepEightCount.Update(func(count int) int { return count + 1 })
 	go func() {
@@ -734,6 +739,7 @@ func (self *EvsEngine) afterCommit(committed *EvsCommitted) {
 		if push := committed.Statement.Push; push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
 			self.queueEpochCopy(ctx, committed.RepoId, committed.RefId, push.GetPathEpoch())
 		}
+		self.appendCommittedDrop(committed)
 	}()
 }
 

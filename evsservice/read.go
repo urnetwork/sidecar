@@ -175,6 +175,9 @@ type readAttempt struct {
 	source *RecordPushSource
 	// format 2: the staged segments the served versions name, for the ranges that follow (read_staged.go)
 	staged map[[sha256.Size]byte]*readStagedSegment
+	// format 2: the repo's drops as this read found them, and the DROP statements and bodies it has carried
+	// (read_drop.go)
+	drops *readDrops
 }
 
 // The attempt for body, its paths parsed and its bounds held.
@@ -571,6 +574,10 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 		}
 		// format 2: a replaced versionless version answers `collected` from its T (read_collected.go)
 		if err := self.answerCollected(path, reply); err != nil {
+			return nil, err
+		}
+		// format 2: a version a DROP lists answers its drop's state (read_drop.go)
+		if err := self.answerDropped(path, reply); err != nil {
 			return nil, err
 		}
 		return reply, nil

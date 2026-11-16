@@ -254,6 +254,14 @@ type EvsSettings struct {
 	LfsFreshAge          time.Duration
 	LfsCheckMaxAge       time.Duration
 	LfsMissingShownCount int
+	// The daily prune (evs_lfs_prune.go; plan-EVS2-lfs-settings, QD-258): N, the window, is LfsPruneWindow, 30 days,
+	// while the settings file sets none, and never under LfsPruneWindowFloor, 7 days, on which the tip check's 5-day
+	// freshness rests; `ur evs lfs window` takes 7 to LfsWindowMaxDays, 365; and a prune whose removal loses
+	// path-level CAS runs again from its start read at most LfsPruneRerunCount times, 3.
+	LfsPruneWindow      time.Duration
+	LfsPruneWindowFloor time.Duration
+	LfsWindowMaxDays    uint32
+	LfsPruneRerunCount  int
 
 	// The drop engine (evs_drop_lineage.go, evs_drop_preview.go). A head-mode device walks at most this much history
 	// for one drop, 4 MiB, counted at a statement's bound a version, past which a device that mirrors the repo drops
@@ -360,6 +368,10 @@ func DefaultEvsSettings() *EvsSettings {
 		LfsFreshAge:              5 * 24 * time.Hour,
 		LfsCheckMaxAge:           time.Hour,
 		LfsMissingShownCount:     20,
+		LfsPruneWindow:           30 * 24 * time.Hour,
+		LfsPruneWindowFloor:      7 * 24 * time.Hour,
+		LfsWindowMaxDays:         365,
+		LfsPruneRerunCount:       3,
 		HeadDropFetchByteCount:   4 * 1024 * 1024,
 		DropPreviewPollInterval:  2 * time.Second,
 		DropPreviewPollCount:     300,
