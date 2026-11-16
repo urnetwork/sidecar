@@ -1142,16 +1142,6 @@ var testFenceAdditions = []struct {
 		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
 	},
 	{
-		message:  "Error",
-		field:    testFenceField{name: "min_version", number: 5, typeName: "uint32"},
-		question: "plan-PROTO-version-error-range",
-	},
-	{
-		message:  "Error",
-		field:    testFenceField{name: "max_version", number: 6, typeName: "uint32"},
-		question: "plan-PROTO-version-error-range",
-	},
-	{
 		message:  "ProjectionHeader",
 		field:    testFenceField{name: "tail_verdicts", number: 10, typeName: "bytes"},
 		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
