@@ -1400,17 +1400,19 @@ func (x *ApprovalCancel) GetApprovalId() []byte {
 }
 
 type ReachReceipt struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	GrantId           []byte                 `protobuf:"bytes,1,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
-	PolicyVersion     uint64                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
-	Kind              uint32                 `protobuf:"varint,3,opt,name=kind,proto3" json:"kind,omitempty"`
-	Owner             []byte                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`
-	Approver          []byte                 `protobuf:"bytes,5,opt,name=approver,proto3" json:"approver,omitempty"`
-	WindowStartMillis int64                  `protobuf:"varint,6,opt,name=window_start_millis,json=windowStartMillis,proto3" json:"window_start_millis,omitempty"`
-	Peers             [][]byte               `protobuf:"bytes,7,rep,name=peers,proto3" json:"peers,omitempty"`
-	StreamCount       uint64                 `protobuf:"varint,8,opt,name=stream_count,json=streamCount,proto3" json:"stream_count,omitempty"`
-	ByteCount         uint64                 `protobuf:"varint,9,opt,name=byte_count,json=byteCount,proto3" json:"byte_count,omitempty"`
-	Relays            []string               `protobuf:"bytes,10,rep,name=relays,proto3" json:"relays,omitempty"` // host, IP and operator of each relay or edge in the path
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// receipts per server name too
+	GrantId           []byte   `protobuf:"bytes,1,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
+	PolicyVersion     uint64   `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	Kind              uint32   `protobuf:"varint,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	Owner             []byte   `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`
+	Approver          []byte   `protobuf:"bytes,5,opt,name=approver,proto3" json:"approver,omitempty"`
+	WindowStartMillis int64    `protobuf:"varint,6,opt,name=window_start_millis,json=windowStartMillis,proto3" json:"window_start_millis,omitempty"`
+	Peers             [][]byte `protobuf:"bytes,7,rep,name=peers,proto3" json:"peers,omitempty"`
+	StreamCount       uint64   `protobuf:"varint,8,opt,name=stream_count,json=streamCount,proto3" json:"stream_count,omitempty"`
+	ByteCount         uint64   `protobuf:"varint,9,opt,name=byte_count,json=byteCount,proto3" json:"byte_count,omitempty"`
+	Relays            []string `protobuf:"bytes,10,rep,name=relays,proto3" json:"relays,omitempty"`                           // host, IP and operator of each relay or edge in the path
+	ServerName        string   `protobuf:"bytes,11,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"` // the name the visitor asked for, the TLS SNI, which only the TLS
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1513,6 +1515,13 @@ func (x *ReachReceipt) GetRelays() []string {
 		return x.Relays
 	}
 	return nil
+}
+
+func (x *ReachReceipt) GetServerName() string {
+	if x != nil {
+		return x.ServerName
+	}
+	return ""
 }
 
 type Coverage struct {
@@ -5341,7 +5350,7 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\aversion\x18\r \x01(\rR\aversion\"1\n" +
 	"\x0eApprovalCancel\x12\x1f\n" +
 	"\vapproval_id\x18\x01 \x01(\fR\n" +
-	"approvalId\"\xb6\x02\n" +
+	"approvalId\"\xd7\x02\n" +
 	"\fReachReceipt\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\fR\agrantId\x12%\n" +
 	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12\x12\n" +
@@ -5354,7 +5363,9 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\n" +
 	"byte_count\x18\t \x01(\x04R\tbyteCount\x12\x16\n" +
 	"\x06relays\x18\n" +
-	" \x03(\tR\x06relays\"\xbb\x01\n" +
+	" \x03(\tR\x06relays\x12\x1f\n" +
+	"\vserver_name\x18\v \x01(\tR\n" +
+	"serverName\"\xbb\x01\n" +
 	"\bCoverage\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\fR\x05runId\x12\x18\n" +
 	"\aharness\x18\x02 \x01(\tR\aharness\x12\x18\n" +
