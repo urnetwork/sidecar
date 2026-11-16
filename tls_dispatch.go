@@ -93,9 +93,11 @@ func (self *tlsDispatch) baseConfig(certificate *tls.Certificate, nextProtos []s
 // The decision for one hello, recorded on conn as its route.
 func (self *tlsDispatch) configFor(conn *TlsFrontConn, hello *tls.ClientHelloInfo) (*tls.Config, error) {
 	serverName := strings.ToLower(hello.ServerName)
-	if serverName != conn.open.GetServerName() || !self.front.target.serves(serverName) {
+	if serverName != conn.open.GetServerName() || !self.front.serves(serverName) {
 		return nil, errTlsDispatchServerName
 	}
+	// a custom host's or alias's own certificate, or none (17.2.10)
+	custom := !self.front.target.serves(serverName)
 	now := self.front.clock.Now()
 	if slices.Contains(hello.SupportedProtos, tlsAlpnAcme) {
 		certificate := self.front.responder.certificate(serverName, now)
@@ -116,9 +118,19 @@ func (self *tlsDispatch) configFor(conn *TlsFrontConn, hello *tls.ClientHelloInf
 		// no_application_protocol here, and nothing routes
 		return self.baseConfig(nil, nextProtos), nil
 	}
-	certificate, err := self.front.certificate(serverName)
-	if err != nil || certificate == nil {
-		return nil, errTlsDispatchCertificate
+	var certificate *tls.Certificate
+	if custom {
+		certificate = self.front.customCertificate(serverName, now)
+		if certificate == nil {
+			// no certificate at all: crypto/tls answers unrecognized_name, and no other name's certificate is shown
+			return self.baseConfig(nil, nextProtos), nil
+		}
+	} else {
+		var err error
+		certificate, err = self.front.certificate(serverName)
+		if err != nil || certificate == nil {
+			return nil, errTlsDispatchCertificate
+		}
 	}
 	config := self.baseConfig(certificate, nextProtos)
 	if route == tlsFrontRouteRaw && grant.Audience == protocol.AclAudience_ACL_AUDIENCE_LINK {

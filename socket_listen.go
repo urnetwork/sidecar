@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -621,6 +622,39 @@ func (self *SocketListener) SetServing(serving bool) {
 	if registration != nil {
 		registration.setServing(serving)
 	}
+}
+
+// Changes a tls/ registration's ALPN ids, certified names and ACME names under the same listen_id and sends the page
+// now, through the registrar (DESIGN-DETAILS 17.2.10): what a front calls as its challenges and custom certificates
+// come and go. The service keeps only the names its rows bear out (ValidateListen). Refused on a listener of another
+// namespace, and with a list past what a registration may carry.
+func (self *SocketListener) UpdateTls(alpns []string, certifiedNames []string, acmeNames []*SocketAcmeName) error {
+	if self.namespace != SocketNamespaceTls {
+		return fmt.Errorf("%w: UpdateTls is a tls/ listener's", errSocketRegistrationInvalid)
+	}
+	if socketListenMaxAlpnCount < len(alpns) || slices.Contains(alpns, "") {
+		return fmt.Errorf("%w: too many ALPN ids, or an empty one", errSocketRegistrationInvalid)
+	}
+	for _, acmeName := range acmeNames {
+		if acmeName == nil || acmeName.Name == "" {
+			return fmt.Errorf("%w: an ACME name with no name", errSocketRegistrationInvalid)
+		}
+	}
+	registration := func() *socketRegistration {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.registration
+	}()
+	if registration == nil {
+		return &SocketCodeError{Err: ErrSocketUnavailable}
+	}
+	registration.setTls(alpns, certifiedNames, acmeNames)
+	return nil
+}
+
+// UpdateTls with a front's update.
+func (self *SocketListener) updateTls(update *TlsFrontUpdate) error {
+	return self.UpdateTls(update.Alpn, update.CertifiedNames, update.AcmeNames)
 }
 
 // How many streams are in flight.

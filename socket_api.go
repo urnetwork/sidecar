@@ -69,7 +69,24 @@ type SocketRegistration struct {
 	// A marshaled bridge.Signed by the identity key, purpose socket-registration, over a
 	// protocol.SocketRegistrationClaim. Find returns it with tickets for the dialer's check (§9.6).
 	Claim []byte `json:"claim"`
+	// tls/: the custom hosts and aliases mapped to this name for which the listener has an unexpired certificate
+	// installed (DESIGN-DETAILS 17.2.10). Not in the signed claim: they route, and the certificate the listener
+	// presents is the proof a visitor checks. ValidateListen keeps only those the server's rows bear out.
+	CertifiedNames []string `json:"certified_names,omitempty"`
+	// tls/: the names it holds a pending TLS-ALPN-01 challenge for, each with the claim it holds (17.2.10), which
+	// ValidateListen holds to the account's lock.
+	AcmeNames []*SocketAcmeName `json:"acme_names,omitempty"`
 }
+
+// One name a tls/ listener answers TLS-ALPN-01 for, and the account lock's claim sequence it answers under
+// (DESIGN-DETAILS 17.2.6, 17.2.10).
+type SocketAcmeName struct {
+	Name     string `json:"name"`
+	ClaimSeq uint64 `json:"claim_seq"`
+}
+
+// RFC 8737's ALPN id, which a TLS-ALPN-01 validation offers alone: an identifier.
+const SocketAlpnAcme = "acme-tls/1"
 
 // What a registration sorts and pages by (§9.5): an edge name's bytes, or a blinded name's token path.
 // Pages, the client's set and the listing all order by these bytes, and a registration naming both or
@@ -179,10 +196,16 @@ type SocketFindArgs struct {
 	// Other names: the token path.
 	NameToken []byte `json:"name_token,omitempty"`
 	// The network the name is in, resolved per call (D-SOCK-1). ur/ names: urnetwork-edge.
-	NetworkId  *connect.Id `json:"network_id"`
-	Protocol   string      `json:"-"`
-	MinVersion int         `json:"-"`
-	Alpn       []string    `json:"-"`
+	NetworkId *connect.Id `json:"network_id"`
+	// §9.7's filter, which sock-2 lists: "" and 0 ask nothing, and no ALPN ids match every listener but one
+	// answering TLS-ALPN-01 alone.
+	Protocol   string   `json:"protocol,omitempty"`
+	MinVersion int      `json:"min_version,omitempty"`
+	Alpn       []string `json:"alpn,omitempty"`
+	// The hello's server name, set by tlsedge exactly when it resolved the name through the custom-host map or the
+	// alias table; empty for a name under the network's own zone (DESIGN-DETAILS 17.2.10). With one a Find takes
+	// only a listener certified for it, or offering acme-tls/1 the one holding the newest claim for it.
+	ServerName string `json:"server_name,omitempty"`
 	// tlsedge's keyed hash of the visitor's /24 or /48, which only a Find's own request holds (§9.7).
 	AffinityKey []byte `json:"affinity_key,omitempty"`
 	// Tickets this dialer's last Find returned that failed it.

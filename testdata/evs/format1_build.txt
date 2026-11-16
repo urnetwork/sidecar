@@ -1,0 +1,12 @@
+# The last format-1 commits, which FS-72's T3 rollback builds real binaries from (EVS2-M10-30; §22.10's "a rollback to
+# format-1 binaries", D-PHASE-10, FS-72). A setting cannot prove what old code does, so T3's rollback runs evs and
+# taskworker built from these commits over data format 2 wrote. Each is the parent of the first commit of EVS2-M10-05,
+# which first let an engine take a format-2 value; EVS2-M2-01's reservations, which a rolled-back binary must keep,
+# are in both.
+#
+# sidecar: the module evs's engine and taskworker's evs jobs link
+# server:  evshost and taskworker, which host them
+#
+# repo     commit                                    date        last commit's subject
+sidecar    bb35730d66b292793abe78334fdf970ee4280786  2026-11-10  Walk format 2's writes against format 1's reservations (EVS2-M2-01)
+server     11d2faebab40d04874ee5cc5c14fb90608efd394  2026-11-09  Run evs's path-epoch copy in taskworker (EVS1-M2-17)

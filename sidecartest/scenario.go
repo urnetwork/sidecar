@@ -94,12 +94,16 @@ func scenarioRows() []*ScenarioRow {
 			"forged-admission-refused", "forged-keypackage-refused", "forged-readerkey-refused", "readerkey-past-its-not-after-refused",
 			"readerkey-valid-over-7-days-refused", "adds-and-wraps-only-for-readers", "late-wrap-judged-at-its-pin",
 		}},
-		{Id: "S3b", Flow: "F3", Tiers: t2t3, Gates: []string{"M6-out"}, Owners: []string{"KEYS-M6-03", "TEAM-M6-12"}, HeaderOnly: true},
+		{Id: "S3b", Flow: "F3", Tiers: t2t3, Gates: []string{"M6-out"}, Owners: []string{"KEYS-M6-03", "TEAM-M6-12"}, HeaderOnly: true, Clauses: []string{
+			"member-admit-statements", "adds-only-for-readers", "directory-add-and-first-wrap",
+		}},
 		{Id: "S4a", Flow: "F9", Tiers: t2t3, Gates: []string{"M2-out"}, Owners: []string{"TEST-M2-11", "TEST-M2-12"}, HeaderOnly: true, Clauses: []string{
 			"writers-seal-nothing-to-x", "gates-closed-until-a-covering-generation", "members-refuse-a-bad-commit",
 			"tokens-fail-in-their-windows", "next-generation-fails-under-xs-keys", "path-epoch-and-checkpoint",
 		}},
-		{Id: "S4b", Flow: "F9", Tiers: t2t3, Gates: []string{"M6-out"}, Owners: []string{"KEYS-M6-03", "TEAM-M6-12"}, HeaderOnly: true},
+		{Id: "S4b", Flow: "F9", Tiers: t2t3, Gates: []string{"M6-out"}, Owners: []string{"KEYS-M6-03", "TEAM-M6-12"}, HeaderOnly: true, Clauses: []string{
+			"member-revoke-statements", "every-right-dropped", "directory-removes-and-rotation", "revocation-suite-member-form",
+		}},
 		{Id: "S5", Flow: "F4", Tiers: t2t3t6, Gates: []string{"M5-out"}, Owners: []string{"TLS-M5-25"}},
 		{Id: "S6", Flow: "F5", Tiers: t2t3t6, Gates: []string{"M9-out"}, Owners: []string{"SMTP-M9-31"}},
 		{Id: "S7", Flow: "F6", Tiers: t2t3t6, Gates: []string{"M7-out"}, Owners: []string{"MAIL-M7-27"}},
@@ -250,6 +254,13 @@ var (
 	_ = registerScenarioT3("S1", "code-create-403", "TestScenarioS1CodeCreateOnT3")
 	_ = registerScenarioT3("S1", "token-never-in-mcp-env-or-logs", "TestScenarioS1TokenOnT3")
 	_ = registerScenarioT3("S1", "genesis-other-than-the-invites-refused", "TestScenarioS1GenesisOnT3")
+	// S3b and S4b (TEAM-M6-12): one builder each in sidecartest/scenarios, composing TEAM's statements, ACL's checks and
+	// KEYS's key parts, on T2 here and on T3 in server's sidecart3; S4b's revocation suite in its member form runs as
+	// fault's suite test on T2 and on server's sequencer for T3
+	_ = registerScenarioParts("S3b", []string{"member-admit-statements", "adds-only-for-readers", "directory-add-and-first-wrap"}, "TestScenarioS3b")
+	_ = registerScenarioParts("S4b", []string{"member-revoke-statements", "every-right-dropped", "directory-removes-and-rotation"}, "TestScenarioS4b")
+	_ = RegisterScenario("S4b", "revocation-suite-member-form", ScenarioTierT2, &ScenarioTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest/fault", Name: "TestRevocationSuiteMemberForm", Tags: "sidecar_testhooks"})
+	_ = RegisterScenario("S4b", "revocation-suite-member-form", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/api", Name: "TestRevocationSuiteMemberFormOnServersSequencer", Tags: "sidecar_testhooks,sidecar_pending"})
 )
 
 // Registers clause of scenarioId on T3 alone, to name in server's sidecart3.

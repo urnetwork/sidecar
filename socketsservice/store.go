@@ -213,6 +213,10 @@ type SocketStorePickRequest struct {
 	// the store reads the whole group, never a sample, and picks by rendezvous order among the listeners that
 	// opted in (affinity.go). Empty asks none.
 	AffinityKey []byte
+	// A custom host's or an alias's server name (DESIGN-DETAILS 17.2.10), which lives for this call alone (sock-2):
+	// with one, the store reads the whole group, never a sample, since the listeners certified for it or holding
+	// its claim may be few. Empty asks none.
+	ServerName string
 	// Two uniform draws for the weighted sample (§9.7's step 2).
 	FirstDraw  uint32
 	SecondDraw uint32
