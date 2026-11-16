@@ -4,8 +4,11 @@
 # commit of EVS2-M10-05, which first let an engine take a format-2 value. EVS2-M2-01's reservations and its 503 for a
 # push to a format-2 repo/ are in both, but not its guard for format-2 data (evsservice/format1_guard.go: no fold,
 # page-out, path-epoch copy or marker collection on a format-2 repo), which landed in one commit with EVS2-M10-05's
-# raise, so no commit is a format-1 binary carrying it: which build a rollback goes to is question
-# evs2-m10-30-format1-rollback-binary, and these pins stand until it is answered.
+# raise, so no commit is a format-1 binary carrying it. The owner answered question evs2-m10-30-format1-rollback-binary
+# (QD-854): a rollback is a configuration, evs's and taskworker's blocks taking EvsSettings.InstanceFormat from their
+# block config (2 from M10's release, 1 in a rollback's), and T3 runs a real binary built from a pinned release commit
+# with InstanceFormat 1 set through that config. These pins move to the first commit with that config field, which no
+# commit has yet; until then they stand, and build.
 #
 # sidecar: the module evs's engine and taskworker's evs jobs link
 # server:  evshost and taskworker, which host them

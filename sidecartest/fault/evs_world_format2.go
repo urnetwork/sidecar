@@ -15,8 +15,8 @@
 //	formats     FormatHolds, read after every step, holds repo/'s format to §11.6's row: it never falls, and it stands
 //	            at 2 once the ledger saw a versionless write commit, since the raise precedes its push's step 7
 //
-// A rolled-back binary is this code at InstanceFormat 1 here: T2 stands for old code by a setting. What old code itself
-// does, server's T3 rollback runs on binaries built from testdata/evs/format1_build.txt's commits.
+// A rolled-back binary is this code at InstanceFormat 1 here, as a rollback deploys it (QD-854: a rollback is a
+// configuration of a real binary, its blocks taking InstanceFormat from their config).
 
 package fault
 

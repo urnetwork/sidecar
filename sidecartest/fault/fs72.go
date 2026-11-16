@@ -2,9 +2,10 @@
 // the evs world (evs_world.go) with format 2's gate, instances and devices (evs_world_format2.go): a repo migrated
 // while a format-1 client pushes and reads, a migration killed at each step, and evs and taskworker rolled back to
 // format 1 after format-2 data exists. The format-1 client is this code's client held to format 1 by
-// EvsSettings.MaxFormat, and a rolled-back binary this code at EvsSettings.InstanceFormat 1, since T2 runs one tree;
-// server's T3 rollback runs real binaries built from testdata/evs/format1_build.txt's commits. FS-72 is on §22.8's
-// unknown list, so every write each case issues also runs with its response lost.
+// EvsSettings.MaxFormat, and a rolled-back binary this code at EvsSettings.InstanceFormat 1, which is what a rollback
+// deploys (QD-854: a rollback is a configuration of a real binary); server's T3 runs these cases through evshost's
+// block, and the real-binary run waits on that configuration's field (testdata/evs/format1_build.txt). FS-72 is on
+// §22.8's unknown list, so every write each case issues also runs with its response lost.
 //
 //	migration  Fs72Migration: a format-1 repo on format-2 evs, its network in the format2 gate, written by a format-2
 //	           writer and a format-1 client. The format-1 client commits a.txt; the format-2 writer's versionless
