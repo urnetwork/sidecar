@@ -327,18 +327,26 @@ func TestEveryIosExtensionRefusalIsPlanted(t *testing.T) {
 	}
 }
 
+// Each planted import is found twice: in the leg's closure, which is the rule (QD-856), and in the file of
+// this repository that brings it in.
 func TestLegsFailsOnSidecarHttpLinkingConnect(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs(sidecarHttpLegName)
 	fixture.edit("connect_require.go", "//go:build !sidecar_http\n\n", "")
-	wantFindings(t, fixture.open().sidecarHttpFindings(t), "compiles connect_require.go, which imports @connect@")
+	wantFindings(t, fixture.open().sidecarHttpFindings(t),
+		"compiles connect_require.go, which imports @connect@",
+		"links github.com/pion/sctp",
+		"links @connect@",
+		"links gvisor.dev/gvisor/pkg/tcpip")
 }
 
 func TestLegsFailsOnSidecarHttpLinkingGvisor(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs(sidecarHttpLegName)
 	fixture.write("planted.go", "//go:build sidecar_http\n\npackage sidecar\n\nimport _ \"gvisor.dev/gvisor/pkg/tcpip\"\n")
-	wantFindings(t, fixture.open().sidecarHttpFindings(t), "compiles planted.go, which imports gvisor.dev/gvisor/pkg/tcpip")
+	wantFindings(t, fixture.open().sidecarHttpFindings(t),
+		"compiles planted.go, which imports gvisor.dev/gvisor/pkg/tcpip",
+		"links gvisor.dev/gvisor/pkg/tcpip")
 }
 
 // §4.7 reads the leg over the root and protocol, and the root need not import protocol yet.
@@ -347,17 +355,22 @@ func TestLegsFailsOnSidecarHttpThroughProtocol(t *testing.T) {
 	fixture.keepLegs(sidecarHttpLegName)
 	fixture.write("protocol/planted.go", "package protocol\n\nimport _ \"@connect@/protocol\"\n")
 	findings := fixture.open().sidecarHttpFindings(t)
-	if !slices.ContainsFunc(findings, func(finding string) bool {
-		return strings.HasSuffix(finding, fixtureTokens.Replace("compiles protocol/planted.go, which imports @connect@/protocol"))
-	}) {
-		t.Errorf("findings %v lack connect/protocol", findings)
+	for _, want := range []string{
+		"compiles protocol/planted.go, which imports @connect@/protocol",
+		"links @connect@/protocol",
+	} {
+		if !slices.ContainsFunc(findings, func(finding string) bool {
+			return strings.HasSuffix(finding, fixtureTokens.Replace(want))
+		}) {
+			t.Errorf("findings %v lack %q", findings, want)
+		}
 	}
 }
 
-// The leg links connect through operator-core's Id, which the root's Id aliases on every leg (owner
-// decision 251): a root file importing operator-core passes though connect is in the closure, which the
-// rule before the alias, a closure holding no connect package, would have failed.
-func TestLegsAllowsSidecarHttpLinkingConnectThroughOperatorCore(t *testing.T) {
+// The seam let the leg link connect through operator-core's Id (owner decision 251); QD-856 gives the leg
+// its own Id, so a root file that imports operator-core there fails, for operator-core and for the connect
+// and gVisor it brings.
+func TestLegsFailsOnSidecarHttpLinkingOperatorCore(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs(sidecarHttpLegName)
 	data, err := os.ReadFile(filepath.Join(fixture.directory, "sidecar", "go.mod"))
@@ -366,17 +379,12 @@ func TestLegsAllowsSidecarHttpLinkingConnectThroughOperatorCore(t *testing.T) {
 	}
 	fixture.write("go.mod", string(data)+"\nrequire @operator-core@ v0.0.0\n")
 	fixture.write("operator_require.go", "package sidecar\n\nimport _ \"@operator-core@\"\n")
-	repository := fixture.open()
-	linksConnect := false
-	for _, listed := range repository.closure(t, repository.legs[0]) {
-		if listed.Module != nil && firstPartyBase(listed.Module.Path) == connectBasePath {
-			linksConnect = true
-		}
-	}
-	if !linksConnect {
-		t.Fatalf("the plant links no connect package, so it shows nothing")
-	}
-	wantFindings(t, repository.sidecarHttpFindings(t))
+	wantFindings(t, fixture.open().sidecarHttpFindings(t),
+		"compiles operator_require.go, which imports @operator-core@",
+		"links github.com/pion/sctp",
+		"links @connect@",
+		"links @operator-core@",
+		"links gvisor.dev/gvisor/pkg/tcpip")
 }
 
 // One package of a module, by the path a mail_ file would import.

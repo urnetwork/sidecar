@@ -1,6 +1,10 @@
-// The quota types every leg decodes (§20.7): SidecarApi reads them in the page Worker too, so they
-// name no connect type. They are operator-core's (owner decision 251), aliased here; host_quota.go
-// holds what only hosted engines use.
+//go:build !sidecar_http
+
+// The quota types every leg decodes (§20.7). They are operator-core's (owner decision 251), aliased
+// here on every leg but sidecar_http: SidecarApi reads them in the page Worker too, which links no
+// operator-core (QD-856), so api_quota_http.go declares the same structs there, and
+// TestQuotaTwinEncodesAsOperatorCoresDoes holds their JSON equal on both legs. They name no connect
+// type. host_quota.go holds what only hosted engines use.
 
 package sidecar
 
