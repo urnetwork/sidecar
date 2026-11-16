@@ -600,3 +600,28 @@ func TestFs99MutantEvsWithoutTheAdminScopeRuleFails(t *testing.T) {
 		t.Fatalf("the mutant failed elsewhere: %v", result.Err)
 	}
 }
+
+// FS-99's evs clause on T2 (fs99_evs.go): the directory's ERASE, ?closure=1 upload and slots/delete below admin, on
+// the real engine and client, before a preservation hold and under it.
+func TestFs99EvsScope(t *testing.T) {
+	RunClause(t, "FS-99", "evs scope", Fs99EvsScope, nil)
+}
+
+// §7.8's directory rule gone: an exchange that mints X what its client asks for lets its ERASE of A's entry slots
+// commit, and the clause fails at that step.
+func TestFs99EvsScopeMutantExchangeMintingXAdminFails(t *testing.T) {
+	ctx := context.Background()
+	net := sidecartest.NewNet(ctx, nil)
+	defer net.Close()
+	settings := DefaultFs99EvsSettings()
+	settings.Mutant = true
+	schedule := Fs99EvsScopeOf(net, settings)
+	schedule.Id = "FS-99's evs scope mutant"
+	result := Run(ctx, schedule, net)
+	if result.Err == nil {
+		t.Fatal("the mutant passed")
+	}
+	if !strings.Contains(result.Err.Error(), "X's ERASE naming A's entry slots was not refused") {
+		t.Fatalf("the mutant failed elsewhere: %v", result.Err)
+	}
+}
