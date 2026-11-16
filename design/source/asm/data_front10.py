@@ -76,7 +76,9 @@ stale all (393), documents past a shard (394), resting diffs at erasure (395), a
 evacuation (404), ref names, inline records and purge lists (405), record streams (406), a write's path CAS
 (407), evs route bodies (408), subscriptions (409), evs behind the lb (410), placement and auth codes (411), the
 format rollback and turn-on (412), price tables (413), the due classification (414), prefix breaches (415) and
-new refs under prefix rules, amending 345 (416)."""
+new refs under prefix rules, amending 345 (416). Adds owner decisions 417-421 (folded 2026-11-16 with §12's items):
+dns's internal route bearers (417), running NS (418), names inside a network's zone (419), withheld custom hosts
+(420) and the sidecar label route (421)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -686,6 +688,16 @@ INDEX = list(_P9['INDEX']) + [
      "A breaching push stops a git-mode ref; file mode repairs unasked within bounds; a re-creation clears a removed taint; a repair names what it writes over."),
     (416, "New refs under prefix rules",
      "A new shared ref is judged from a shared branch's tree, the pin push reaches only shared branches with a tip, and evs refuses a stale-pinned creation."),
+    (417, "dns's internal route bearers",
+     "Each internal caller class holds its own bearer, verified by hash, on routes under `/dns/internal/` that the lb refuses from outside."),
+    (418, "Running NS",
+     "`dns_ns` keeps each NS running or stopped; ready and the restore count only running NS, and a stopped NS returns by reload."),
+    (419, "Names inside a zone",
+     "§12.5's reserved block guards the names below `<root>`; a network's record owners and published hosts take the brand rules."),
+    (420, "Withheld custom hosts",
+     "A downgrade sets a custom domain's web host `withheld`, out of the map with its row kept; a release re-enters it pending."),
+    (421, "Sidecar label route",
+     "api's `GET /sidecar/label` answers a sidecar its own network's label and alias, allocating on first need."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -719,7 +731,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 417))
+assert [r[0] for r in INDEX] == list(range(1, 422))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -770,7 +782,8 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               401: '2026-11-12', 402: '2026-11-15', 403: '2026-11-14', 404: '2026-11-15', 405: '2026-11-12',
               406: '2026-11-15', 407: '2026-11-12', 408: '2026-11-15', 409: '2026-11-15', 410: '2026-11-12',
               411: '2026-11-15', 412: '2026-11-15', 413: '2026-11-15', 414: '2026-11-15', 415: '2026-11-15',
-              416: '2026-11-13'})
+              416: '2026-11-13',
+              417: '2026-11-06', 418: '2026-11-06', 419: '2026-11-14', 420: '2026-11-15', 421: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -975,7 +988,10 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "reseed records at evacuation (404), ref names, inline records and purge lists (405), record streams (406), a "
     "write's path CAS (407), evs route bodies (408), subscriptions (409), evs behind the lb (410), placement and "
     "auth codes (411), the format rollback and turn-on (412), price tables (413), the due classification (414), "
-    "prefix breaches (415) and new refs under prefix rules (416), amending @@OD:345@@. ")
+    "prefix breaches (415) and new refs under prefix rules (416), amending @@OD:345@@. The fold of §12's, §13's "
+    "and §14's the same day numbers the answers on DNS, the TLS edge and certificates, and the SMTP edge: dns's "
+    "internal route bearers (417), running NS (418), names inside a network's zone (419), withheld custom hosts "
+    "(420) and the sidecar label route (421). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

@@ -18,7 +18,6 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§8 Access control](#s8) | 1 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
-| [§12 DNS](#s12) | 7 | 0 |
 | [§13 The TLS edge and certificates](#s13) | 3 | 13 |
 | [§14 The SMTP edge](#s14) | 8 | 13 |
 | [§15 The local email server, inbound mail, and burner email](#s15) | 11 | 19 |
@@ -200,72 +199,6 @@ Changes: §11.6 EvsPush; §11.8 EvsHead and the 200 reply; §2.8 evs-3; §16.8 M
 Questions: `plan-RECORD-depositor-spool.md`.
 
 Not folded (2026-11-16): RECORD.md sections 5.4 and 5.7's part, the depositor spool's pruning at the mark, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as text (§11.6's EvsPush and §11.8's EvsHead fences take consumed_through, §11.12's deposits paragraph, §11.8's step 8 and 5f, §2.8's evs-3 and evs-12, and §16.8's mirrors bullet).
-
-<a id="s12"></a>
-## §12 DNS
-
-### QD-027: How internal services prove who they are
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19, §7, §13.*
-
-[plan-DNS-internal-route-credential] One bearer per caller class, the same scheme as plan-TLS-internal-credentials: 256 random bits in one vault file per caller (internal-dnsedge-1.yml, internal-dnsedge-2.yml, internal-monitor.yml, internal-monitor-outside.yml), each holding current and previous values so a rotation needs no downtime, read once at start from secret_files. The dns API block holds only their SHA-256, in internal-verify.yml, and compares in constant time. Each route takes only its class: dns edges on journal, snapshot, reload-diff and route-probes; the site monitor on canary and canary-report; the outside monitor on canary-report only. Every internal route moves under /dns/internal/, and the lb answers 403 there unless the source is in a new per-service allow list holding the site's ranges and the off-site monitor host's address, carried with W8. An edge needs neither the issuer nor Postgres to keep serving (D-DNS-3). [plan-TLS-internal-credentials] One bearer per caller class, as plan-DNS-internal-route-credential words it: internal-certs.yml in taskworker's secret_files and internal-lbmap.yml in the lb's, verified by hash on the dns API block. Each route takes only its class: certs on acme-challenge, caa-canary and ready; lbmap on custom-host-map and its applied route. lbmap sends its interface name in the request and the API checks it against the lb inventory. Do not build a per-interface secret: playbook-edges.yml copies the whole vault to every edge host, so it would isolate nothing, and §13.4 counts a report only once a dns edge's route probe of that version passes. POST /tls/suspend stays a model call inside api and taskworker, and its route is built only when a caller outside them exists. warp reads the file and sends a header, so it needs no JWT code.
-
-Changes: §12.8; §19.4; §19.5 W8; §7.8; §13.15.
-
-Questions: `plan-DNS-internal-route-credential.md`, `plan-TLS-internal-credentials.md`.
-
-### QD-063: The DNS health check has no route or store
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §13.*
-
-[plan-DNS-canary-route-state] Add two internal routes to §12.8. POST /dns/canary {root, value}, site monitor only: value is at most 64 printable ASCII bytes and starts with the writer's unix milliseconds; it writes canary.<root> TXT, TTL 60, through model.DnsWriteInTx (one serial, one journal row), answers {serial}, and answers 503 while restoring. POST /dns/canary-report {root, source, serial, ok}, source site or outside: ok is true only if the TXT validated through every running NS against the configured KSK anchor. Only the site copy of monitor writes; the outside copy reads, validates, checks the value is under 180 s old and reports, so no write credential leaves the site. Keep verdicts in a new table dns_canary_verdict(root, source, serial, ok, report_time), primary key (root, source), not in dns_root columns. Clean means the site row has ok true with report_time under 180 s old, and no outside row has ok false under 180 s old. A missing site row reads as failing. A stale outside row alone does not hold orders; it raises a visibility alert. No Redis family is added. [plan-TLS-canary-signal] GET /dns/ready?serial=s answers stale, ready or canary_failing, checked in that order: stale as today; while any running NS is below s it keeps holding; then canary_failing if plan-DNS-canary-route-state's clean rule fails, else ready. CertsDns.CanaryClean reads that answer. An order keeps waiting on canary_failing with no rewrite and no new serial, unlike stale, which writes again. A strong-mode CAA probe treats canary_failing as ready at both of its ready checks, because §13.8 ties the canary to orders only and the probe's RD=0 queries validate no DNSSEC. The delegated challenge route passes all three answers through.
-
-Changes: §12.6; §12.8; §12.14; §2.8 dns-1; §13.8.
-
-Questions: `plan-DNS-canary-route-state.md`, `plan-TLS-canary-signal.md`.
-
-### QD-082: Record bookkeeping columns, and a suspended flag that cannot cover a host answered through *
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-network_dns_record gains create_time, expire_time and withheld_time, named in v9's dns-1, ttl with the record. Zone suspension (reason, until) sits on network_dns_zone. Do not use a suspended flag for hosts: use network_dns_host_suspension(network_id, host, create_time), and carry each row as a withheld owner in the journal and snapshots, which dnsedge answers NODATA for every qtype, so * no longer covers it. tlsedge and mxedge read the same rows. dns-1's store names the table.
-
-Changes: §12.9; §12.14; §2.8 dns-1.
-
-Questions: `plan-DNS-metadata-rows.md#5`.
-
-### QD-124: What makes an NS running for /dns/ready and the restore step, and where a stopped NS is kept
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §19.*
-
-A table dns_ns(root, ns, state, stopped_time, reason), state running or stopped, rows seeded from dns.yml. Running means state = running, whether or not the NS answers now. The restore step writes stopped; bringyourctl dns ns stop|start writes it by hand; an NS leaves stopped only once it serves at or above restore_serial. GET /dns/ready counts only running NS, and a running NS that does not answer keeps ready waiting. restoring clears once every running NS answers restore_serial. §19.8 pages only when both NS fail, so add a business-hours page when one running NS has failed SOA reads for 1 h, since orders are then held.
-
-Changes: §12.6; §12.14; §2.8 dns-1; §19.8.
-
-Questions: `plan-DNS-running-ns.md`.
-
-### QD-147: Sidecars cannot read their label or zone, or file a label reclaim, on Network-class routes
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §13, §16, §19, §6, §7, §8.*
-
-Add two routes to §12.8 on the dns block, both under §7.4's /dns/*. GET /dns/zone (service token, aud dns, any admitted sidecar of the network): the label, allocating on first need, the alias, the zone version, and this caller's view: the RRsets and custom-host states (state, CAA mode, readiness, pending interfaces) of owners on which it holds publish or admin on dns:<host>, by §8's gate. It is not the whole GET /network/dns body, which §12.8 keeps to read roles and §7.5 denies the Member role. POST /dns/label-reclaim (aud dns): the same tuple and signature as /network/dns/label-reclaim, with the token's network equal to the tuple's network_id. §16.5's dns_records maps to GET /dns/zone, and dns_set and dns_delete keep POST /dns/records. §13.4, §13.8 and §6.8's dns refetch read GET /dns/zone for sidecars, and §19.10's labels step names POST /dns/label-reclaim. /network/dns* stay for the console and network credentials.
-
-Changes: §12.8; §13.4; §13.8; §16.5; §19.10; §6.8.
-
-Questions: `plan-DNS-sidecar-zone-read.md`.
-
-### QD-175: No route carries a delegated DNS-01 value from an ordering desktop to certs, and <token> is undefined
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §13, §7, §2, §8.*
-
-Add network_domain.acme_token: 16 bytes from crypto/rand, lowercase base32 with no padding, minted by api when the domain first verifies (§7.6), fixed for the row's life, shown to admins in GET /network/dns as the CNAME target <acme_token>.acme.<root>. Add POST /tls/custom-challenge (service token, aud certs; the caller holds an active §8 publish grant on a host mapped under that domain; body {domain, value}, value the 43-character base64url DNS-01 digest) and GET /tls/custom-challenge/<id>. certs, still the only writer, writes the TXT through POST /dns/acme-challenge at <acme_token>.acme.<root>: at most 2 values, TTL 60, 10 per name per hour, gone after 1 h. The GET wraps /dns/ready with all its answers, stale and canary_failing included; the desktop asks the CA only on ready and posts the value again on stale. DNS-01 orders never wait on map readiness (§13.4).
-
-Changes: §12.8; §13.15; §7.6; §2.8 api-3.
-
-Questions: `plan-TLS-delegated-dns01.md`.
-
-### QD-257: §12.6 raises a version it reads from a table the restore leaves empty
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§12.6's step reads: raise the custom-host map's version 2^24 above max(every `network_dns_custom_host.map_version`, every version in `dns_custom_host_map_applied`, 0). Both tables are in the dump.
-
-Changes: §12.6.
-
-Questions: `xops-dump-short-ttl-list.md#3`.
 
 <a id="s13"></a>
 ## §13 The TLS edge and certificates

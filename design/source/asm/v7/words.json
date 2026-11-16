@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9465,
-  "code_words": 18648,
+  "code_words": 18711,
   "ceiling": 3000,
   "over": 6465,
   "over_pct": 215.5
@@ -48,7 +48,7 @@
   "num": 6,
   "code": "PROTO",
   "words": 9322,
-  "code_words": 5044,
+  "code_words": 5053,
   "ceiling": 3800,
   "over": 5522,
   "over_pct": 145.3
@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12248,
-  "code_words": 12715,
+  "words": 12334,
+  "code_words": 12723,
   "ceiling": 3500,
-  "over": 8748,
-  "over_pct": 249.9
+  "over": 8834,
+  "over_pct": 252.4
  },
  {
   "num": 8,
@@ -101,20 +101,20 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 4867,
-  "code_words": 1637,
+  "words": 5813,
+  "code_words": 1919,
   "ceiling": 3000,
-  "over": 1867,
-  "over_pct": 62.2
+  "over": 2813,
+  "over_pct": 93.8
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 6462,
-  "code_words": 774,
+  "words": 6598,
+  "code_words": 789,
   "ceiling": 3800,
-  "over": 2662,
-  "over_pct": 70.1
+  "over": 2798,
+  "over_pct": 73.6
  },
  {
   "num": 14,
@@ -137,11 +137,11 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 12789,
+  "words": 12791,
   "code_words": 16646,
   "ceiling": 3500,
-  "over": 9289,
-  "over_pct": 265.4
+  "over": 9291,
+  "over_pct": 265.5
  },
  {
   "num": 17,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 8150,
-  "code_words": 9264,
+  "words": 8261,
+  "code_words": 9296,
   "ceiling": 3500,
-  "over": 4650,
-  "over_pct": 132.9
+  "over": 4761,
+  "over_pct": 136.0
  },
  {
   "num": 20,
@@ -182,11 +182,11 @@
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 3956,
+  "words": 3997,
   "code_words": 456,
   "ceiling": 2500,
-  "over": 1456,
-  "over_pct": 58.2
+  "over": 1497,
+  "over_pct": 59.9
  },
  {
   "num": 22,

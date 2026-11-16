@@ -375,7 +375,7 @@ mail               §14, §15         the writer's clock in ms, per client, rais
                                     durable sequence
 tls                §13              the writer's clock in ms, per client, as mail's
 dns                §12              zone serial, which a restore raises above every serial issued before
-                                    it (§12.6)
+                                    it (§12.6); a sidecar refetches its zone through GET /dns/zone (§12.8)
 gkm (per client)   §10              gkm's clock in µs, which the script raises to the stored value plus one,
                                     by HINCRBY, when not above it, so while Redis keeps that value, skew
                                     between gkm instances never makes a work hint (pending, wrap-pending,

@@ -51,7 +51,7 @@ Tiers (16.6): **R** read, with `readOnlyHint`; **W** in-network write; **O** out
 | `socket_list`, `socket_status`; `socket_listen`; `socket_unlisten` | R; O, or W under a covering grant; W | §9.9 |
 | `tls_publish`; `tls_unpublish` | O; W | expiry per §13.9; the key stays in the sidecar (X1); refuses agent control UIs (MCP Inspector, OpenClaw; sidecar/design/market2.md:504) |
 | `bridge_list`; `bridge_forward`, `bridge_expose`; `bridge_close` | R; O; W | §17: `bridge_expose` files its `BridgeRoute` or `BridgeMap` (a host's first map also its `BridgeAddress`), `bridge_close` a `GrantRevoke` or `BridgeWithdraw` (16.6) |
-| `dns_records`; `dns_set`, `dns_delete` | R; O | `POST /dns/records` (§12.8) |
+| `dns_records`; `dns_set`, `dns_delete` | R; O | `GET /dns/zone`; `POST /dns/records` (§12.8) |
 | `team_members`, `team_agents`, `acl_grants`, `acl_check`, `record_query`, `run_coverage`, `approval_status` | R | §7, §8, 16.8 |
 | `record_append` | W | source `agent` (16.8); in a team network, the directory (16.11) |
 | `directory_list`, `directory_requests`; `directory_request` | R; O | 16.11: announcements and requests as stubs; an access request through §5.4's gate (owner decisions 74, 179, 180) |

@@ -51,12 +51,12 @@ allowlist  a strict_exp bearer reaches only:
                both marks
              POST /network/remove-client, for its own client or children
              GET /key/<id>; POST /connect/control (connect/api.go:508)
-             routes route_authz.go classifies sidecar: those §5-§21 add (/sidecar/*, /network/config/*,
-               /network/enroll, /network/bridge/share/*, /acl/*, POST /approval/cancel, /tls/*, /mail/*,
-               /smtp/*, /socket/*, /dns/*, GET /abuse/status) and POST /oauth/token's exchange; each route's
-               own class still applies, so /smtp/appeal and /mail/direct-mx stay refused, and GET
-               /sidecar/scim-changes answers only the client of the sidecar scim_signer names (7.6; owner
-               decision 321)
+             routes route_authz.go classifies sidecar: those §5-§21 add (/sidecar/*, GET /sidecar/label
+               among them (§12.5; owner decision 421), /network/config/*, /network/enroll,
+               /network/bridge/share/*, /acl/*, POST /approval/cancel, /tls/*, /mail/*, /smtp/*, /socket/*,
+               /dns/*, GET /abuse/status) and POST /oauth/token's exchange; each route's own class still
+               applies, so /smtp/appeal and /mail/direct-mx stay refused, and GET /sidecar/scim-changes
+               answers only the client of the sidecar scim_signer names (7.6; owner decision 321)
            every other route answers 403 "A sidecar token cannot call this route." (403, so the sdk does not
            sign out): no payment, purchase, redemption, rename, account, stats, provider or extender route;
            TestSidecarTokenRoutes runs §22.7's S1-S10 and an approval cancel with the allowlist on, so a
@@ -144,7 +144,7 @@ invite    ur-invite-<invite_id>-<secret>[#<base64url(fragment)>]                
 ### 7.6 SSO, domains, JIT, SCIM
 
 - **OIDC only** (Q-TEAM-4): `network_idp` rows; code flow with PKCE S256, `state` and `nonce`; `private_key_jwt` or a vault-encrypted secret. Identity is `(idp_id, sub)`, never email (OIDC Core §5.7); just-in-time (JIT) provisioning links an existing user only after that user completes a login with its existing credential in the same flow, never by email alone (D-TEAM-23), and a team IdP authenticates only its network. api keeps a sign-in's flow state between its start and `GET /auth/sso/callback` (state, nonce, PKCE code_verifier, IdP, network, redirect and the signed-in user that began it, for D-TEAM-23's link) as JSON under the Redis key `{sso_<state>}`, set with a ttl that is a settings field, 10 minutes by default, and taken with GETDEL, so a replayed `state` finds nothing; it is soft state, with no table and no cookie, and a lost Redis only restarts sign-ins in flight (§19.7; api-3; owner decision 310).
-- **Domains.** TXT `_urnetwork-challenge.<domain>` (TM:601), whose challenge value api keeps with the domain's verification and daily check times (api-3; owner decision 260), rechecked daily, dropped after 7 failed days, one network per domain; `POST /auth/sso-discover` routes verified domains to their IdP, and SSO-required teams refuse other sign-ins.
+- **Domains.** TXT `_urnetwork-challenge.<domain>` (TM:601), whose challenge value api keeps with the domain's verification and daily check times (api-3; owner decision 260), rechecked daily, dropped after 7 failed days, one network per domain; at the first verification api mints the domain's `acme_token`, 16 random bytes in lowercase base32 with no padding, fixed for the row's life, the target `<acme_token>.acme.<root>` of the customer's one-time `_acme-challenge` CNAME (§12.8 step 3); `POST /auth/sso-discover` routes verified domains to their IdP, and SSO-required teams refuse other sign-ins.
 - **JIT and SCIM** (Team v1, Q-TEAM-3). A first IdP login creates a `pending` member, since unsigned IdP data adds no reader; the admin device that admits it issues an invite to the IdP-verified email, from which the member's first device enrolls (§8.5). Without SCIM, `network_member.reauth_deadline` (7 d) bounds access after IdP disablement. SCIM 2.0 (RFC 7643/7644) at `/scim/v2/<network_id>/` takes a hashed bearer (below): `active=false` denies at once and queues a `MemberRevoke` (7.10); until an admin device signs it, members still encrypt to that member's devices, which the console lists, unless `ServiceSettings.scim_signer` names an admin's indexer (§3.6; owner decision 150), which signs such removals of members outside the AdminSet at once (D-TEAM-25). Group changes queue, each up to 7 days for an admin device; roles never sync (TM:450-468).
 - **SCIM's bearer and queue** (owner decision 321). The Owner-only Team route `POST /network/scim-token {remove?}` answers `ur-scim-<secret>` once, 32 random bytes in base32 as an invite's are written, and stores only its SHA-256 in the nullable column `network_team.scim_token_sha256` (MG6; api-2); a new bearer replaces the old at once, and `remove` clears the column, which turns SCIM off. api checks a presented bearer's SHA-256 against the column and answers 401 where the column is empty or differs, and SCIM's credential stays apart from CI's `client_credentials` grant. `GET /network/scim-changes` stays the console's and `ur admin`'s; the indexer `scim_signer` names reads the queue through the sidecar-classified `GET /sidecar/scim-changes` (7.4's allowlist), which api serves only to the client whose sidecar the newest projection's `ProjectionSettings.scim_signer` names, answering the queued `member_revoke` changes of members outside the AdminSet by the same rows and 403 to any other client; the daemon there signs those removals at once. That indexer acts on api's unsigned word, so a breached server can have it remove members outside the AdminSet, a denial only, since no reader is added (I-4), on a designation that is the owner's choice (owner decision 150; §2.10).
 
@@ -164,6 +164,7 @@ invite    ur-invite-<invite_id>-<secret>[#<base64url(fragment)>]                
 | API key `urn_…`, gaining scopes, expiry and creator | ≤365 d (legacy: none) | creator ∩ scopes |
 | Admin token (aud = API), for `ur admin` and the console | 1 h; DPoP-bound; one command, bound by its `cmd` digest and used once (below) | member ∩ scopes |
 | Service token (aud = evs, gkm, dns, certs or mail) | 15 min (owner decision 2) | the client |
+| Internal bearer, one per platform caller class (the dns edges, monitors, certs and lbmap on dns's `/dns/internal/`; the gate services on api's `/internal/gate/`), its SHA-256 alone on the API it calls | until rotated; current and previous | its class's internal routes alone (§8.9, §12.8; owner decisions 340, 417) |
 
 ```text
 POST /network/enroll {auth_key, client_public_key, device_spec, declares_no_egress,

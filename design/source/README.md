@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-416. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-421. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (417 onward)
+## Adding owner decision N (422 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -289,3 +289,18 @@ The design-records track for §11 (wave f39d) folds that section's items from si
 - **The metadata list** is v34, after the first piece's v33, each header naming what it adds to the evs rows and api-14 and that it adds no row; v34 also takes smtp-4's hourly self-reported hard bounces (QD-199), which SMTP-M9-16 had published through check's additions, so its addition left `check/metadata_list_test.go` as the block took its text (owner decision 252) and QD-199's §14 and §20 parts wait for §14's fold; `make metadata` copied the block to `metadata_list.yml`; the block and the file are the same bytes, and every phrase testdata's metadata rows quote stands.
 
 Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md, `metadata_list.yml`, the three guard entries in `protocol/design_unfenced_test.go` the first piece's fences took, and QD-199's entry in `check/metadata_list_test.go`'s additions, which left as the block took its text.
+
+## Validation after §12's, §13's and §14's items (2026-11-16)
+
+The design-records track for §12, §13 and §14 (wave f39d) folds those sections' items from sidecar/DESIGN-AMENDMENTS.md, the "Later decisions" that name them, and the answers since QD-784 queued for them, a section a piece, each landed on its own.
+
+- **First piece, §12.** Owner decisions 417-421, each citing its ledger id: dns's internal routes, one bearer per caller class under `/dns/internal/`, which the lb refuses from outside (417: QD-027, the owner-class item accepted in bulk on 2026-11-06, with plan-TLS-internal-credentials' half for certs and lbmap and `POST /tls/suspend` kept a model call), running NS in `dns_ns` (418: QD-124, its `bringyourctl dns ns` command written as `sidecarctl`'s under owner decision 274), §12.5's reserved block kept to the names below `<root>` (419: QD-807), withheld custom hosts (420: QD-840) and `GET /sidecar/label` (421: QD-935). As text, the defect fixes the owner accepted: the canary's routes, verdicts and ready's `canary_failing` (QD-063), record bookkeeping times and host suspensions (QD-082), `GET /dns/zone` and `POST /dns/label-reclaim` for sidecars (QD-147), a custom domain's `acme_token` and the delegated DNS-01 route (QD-175) and the restore's map version read from the dumped tables (QD-257). The parts these name elsewhere went with them: §2.8's dns-1, §6.8's `dns` row, §7.4's allowlist, §7.6's domains, §7.8's credentials, §13.4's and §13.8's readiness and challenge rows and §13.15's routes, §16.5's dns tools, §19.4's secret files, W1's and W8's rows, §19.8's business pages, §19.10's dns and labels steps and §21.6's names. Every internal route's path in §12, §13 and §19 takes the prefix; FS-42's row in §22.8 still writes `/dns/ready`, since its fixed-width table cannot take the longer path without rewrapping columns sidecartest/fault's catalog parses, and §12.8 states the prefix for every internal route.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `97ca9eae0282a5525e33010a091077b0ba77e6a71ed4d71267f84c5fbe34904c`) at the first piece, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed.
+- **Owner decisions.** All 421 rows are present and cited; `LATE_DATES` gives each new row its date, and no new day joined the row pattern.
+- **Open owner questions.** Two, as before: Q-BRIDGE-8 and Q-REPO-6.
+- **Superseded options.** 306 grep hits, each with a reading; the two new ones (the off-site monitor host on dns's allow list, in §12.8 and W8) were read on 2026-11-16. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v35, whose header names what it adds to dns-1 (QD-082's host suspension table and record times) and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
