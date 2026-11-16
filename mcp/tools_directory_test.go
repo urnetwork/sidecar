@@ -470,7 +470,7 @@ func TestDirectoryToolsAnswerFailedPreconditionWithoutADirectory(t *testing.T) {
 }
 
 // The directory's person acts have no tool, the guard refuses a tool that reports one, and every evs operation on the
-// directory repo but naming it is refused.
+// directory repo but naming it is refused; from M10 a search reads it through its index (owner decision 169).
 func TestDirectoryPersonActsHaveNoTool(t *testing.T) {
 	catalog := NewMcpCatalog(sidecar.DefaultSidecarSettings().Mcp, sidecartest.NewFakeClock(sidecartest.DefaultClockStart()), nil)
 	addDirectoryTools(catalog, DefaultMcpDirectorySettings())
@@ -483,10 +483,13 @@ func TestDirectoryPersonActsHaveNoTool(t *testing.T) {
 			t.Errorf("the guard passes directory act %d", act)
 		}
 	}
-	for _, operation := range []McpRepoOperation{McpRepoRead, McpRepoWrite, McpRepoSearch} {
+	for _, operation := range []McpRepoOperation{McpRepoRead, McpRepoWrite} {
 		if refusal := McpGuard([]McpTarget{{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_DIRECTORY, Operation: operation, Ref: "cards"}}); refusal == nil {
 			t.Errorf("the guard passes evs operation %d on the directory", operation)
 		}
+	}
+	if refusal := McpGuard([]McpTarget{{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_DIRECTORY, Operation: McpRepoSearch}}); refusal != nil {
+		t.Errorf("a search of the directory is refused: %v", refusal)
 	}
 	if refusal := McpGuard([]McpTarget{{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_DIRECTORY, Operation: McpRepoName}}); refusal != nil {
 		t.Errorf("naming the directory is refused: %v", refusal)

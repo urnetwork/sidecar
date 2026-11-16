@@ -214,6 +214,7 @@ rows:
       - {name: FuzzDotUr, package: ".", owner: CORE-M3-05, milestone: M3, seeds: [testdata/fuzz/FuzzDotUr]}
       - {name: FuzzHookPayload, package: mcp, owner: MCP-M3-15, milestone: M3, seeds: [../testdata/harness]}
       - {name: FuzzMcpArguments, package: mcp, owner: MCP-M3-12, milestone: M3}
+      - {name: FuzzSearchToolArguments, package: mcp, owner: SEARCH-M10-29, milestone: M10}
 
   - id: index-files
     bullet: "Index files"

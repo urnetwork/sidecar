@@ -477,6 +477,9 @@ type daemonSession struct {
 	projectErr  error
 	// closed once the caller is gone (DaemonCall.SessionDone); nil for a session no reader watches, which never ends
 	done <-chan struct{}
+	// the request being answered's notifier (DaemonCall.Notify), set before each request of a control session; nil
+	// elsewhere
+	notify func(method string, params any) error
 }
 
 // The session's `.ur`, found on first use.
