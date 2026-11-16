@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v36; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v37; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -244,6 +244,10 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # as a withheld owner, and each record's creation, expiry and withheld times.
 # v36, updated 2026-11-16 for §13's owner decisions (424), adds no row: cert-1's custom-domain spends, kept 15 d
 # so a budget's replay can start two windows back, and the times it sees of the last 15 days.
+# v37, updated 2026-11-16 for §14's items (owner decision 437 and the build's accepted fix QD-157), adds no row:
+# smtp-2's Feedback-ID token, the network's report token, public in its _dmarc, with no key; smtp-5's sealed
+# copies, only of reports at a network's own token, <root>'s split by header_from with none; and mx-4's root
+# recipient, <root>'s rua.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -774,7 +778,7 @@ smtp-1:
 smtp-2:
   service: smtpedge
   store: memory
-  sees: "per connection the network and sidecar (from the ticket), the sending IP (one of its host's shared lb addresses, owner decision 124) and its helo_name (that address's PTR name, already public by FCrDNS), the recipient domain's MX, TLSA and A lookups, MX host and IP, banner and pre-TLS EHLO and STARTTLS replies, TLS version and suite, SNI (the MX host), the MX's certificate (TLS 1.2's in clear with its ServerKeyExchange, TLS 1.3's under the server handshake secret the sidecar discloses; E2), the DNSSEC chain, the id of the key set the sidecar proves under; a proof per part: the key part, one per envelope group, one per header record and, in DATA mode, one per body record (owner decision 125), each with its reply count and, once, the header block's record count; the key commitment and the scan-state commitments the sidecar publishes, uniformly random group elements that depend on no key and no plaintext (D-SMTP-22), the length and timing of every client and server record it relays (client records unpadded, Z3, so each command's length, every RCPT TO's included; server records a part's public inputs, Z7), bytes, result, the self-reported SmtpOutcome; the issued send_id, X-UR-Ref and Feedback-ID (a keyed network token, constant for burners); the retry delay smtpedge sets from smtp-4's counters; the sidecar subprotocol's framing of each stream with the sending sidecar, its Envelope, Chunk, Error and Stream* fields (ids, codes, offsets, windows, retry times and versions), in which StreamOpen.target holds only the <net>:<name> socket or service target the edge already routes by and early_data only bytes of the connection it already carries; no key that opens application data, so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)"
+  sees: "per connection the network and sidecar (from the ticket), the sending IP (one of its host's shared lb addresses, owner decision 124) and its helo_name (that address's PTR name, already public by FCrDNS), the recipient domain's MX, TLSA and A lookups, MX host and IP, banner and pre-TLS EHLO and STARTTLS replies, TLS version and suite, SNI (the MX host), the MX's certificate (TLS 1.2's in clear with its ServerKeyExchange, TLS 1.3's under the server handshake secret the sidecar discloses; E2), the DNSSEC chain, the id of the key set the sidecar proves under; a proof per part: the key part, one per envelope group, one per header record and, in DATA mode, one per body record (owner decision 125), each with its reply count and, once, the header block's record count; the key commitment and the scan-state commitments the sidecar publishes, uniformly random group elements that depend on no key and no plaintext (D-SMTP-22), the length and timing of every client and server record it relays (client records unpadded, Z3, so each command's length, every RCPT TO's included; server records a part's public inputs, Z7), bytes, result, the self-reported SmtpOutcome; the issued send_id, X-UR-Ref and Feedback-ID (the network's report token, public in its _dmarc, constant for burners); the retry delay smtpedge sets from smtp-4's counters; the sidecar subprotocol's framing of each stream with the sending sidecar, its Envelope, Chunk, Error and Stream* fields (ids, codes, offsets, windows, retry times and versions), in which StreamOpen.target holds only the <net>:<name> socket or service target the edge already routes by and early_data only bytes of the connection it already carries; no key that opens application data, so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)"
   why: send, verify proofs, attribute, rate-limit (§14.4, §14.5)
   ttl: connection memory; record lengths, the disclosed secret and proofs never stored (D-SMTP-10); then smtp-3, without the MX IP
   owner: §14.5
@@ -795,7 +799,7 @@ smtp-4:
 smtp-5:
   service: smtpedge (report intake)
   store: smtp_complaint (with sealed_report), smtp_dmarc_daily
-  sees: reports parsed header-only, and aggregate attachments (DMARC XML, TLS-RPT JSON, gzip, or a zip of one file under gzip's 8 MiB and 100:1 bounds, a second entry refused) parsed under size, ratio, entity and depth bounds, each report_id counted once (§14.8); reporter, type, arrival, the attribution fields (domain, DKIM d= and s= with result, Message-ID hash, X-UR-Ref, Feedback-ID) and join result; the last-hop Received IP and time for the join only; RUA and TLS-RPT aggregates per network, day and reporter (header_from domains, burner labels included, counts and results for URnetwork's sending addresses); sealed report copies
+  sees: reports parsed header-only, and aggregate attachments (DMARC XML, TLS-RPT JSON, gzip, or a zip of one file under gzip's 8 MiB and 100:1 bounds, a second entry refused) parsed under size, ratio, entity and depth bounds, each report_id counted once (§14.8); reporter, type, arrival, the attribution fields (domain, DKIM d= and s= with result, Message-ID hash, X-UR-Ref, Feedback-ID) and join result; the last-hop Received IP and time for the join only; RUA and TLS-RPT aggregates per network, day and reporter (header_from domains, burner labels included, counts and results for URnetwork's sending addresses); sealed report copies, only of reports at a network's own token, none of <root>'s, whose counts are split by header_from's label
   why: attribution, halts and breakers (§14.8, §21.5)
   ttl: complaint rows and aggregates 13 months (§14.14); sealed copies 30 d (owner decision 78); Received IPs, other third-party IPs and bodies never stored
   owner: §14.8
@@ -837,7 +841,7 @@ mx-3:
 mx-4:
   service: mxedge (platform listener)
   store: memory, then smtp-5 and api-14
-  sees: mail to URnetwork at rpt.bringyour.com's platform listener (D-MAIL-10); sessions it terminates, SNI or not, with sender IP, EHLO, MAIL FROM and RCPT (<token>@rpt.bringyour.com, abuse@ and postmaster@ on <root>); messages parsed for headers and aggregate report data only (D-SMTP-23; §14.8)
+  sees: mail to URnetwork at rpt.bringyour.com's platform listener (D-MAIL-10); sessions it terminates, SNI or not, with sender IP, EHLO, MAIL FROM and RCPT (<token>@rpt.bringyour.com, a network's report token, or root for <root>'s own rua; abuse@ and postmaster@ on <root>); messages parsed for headers and aggregate report data only (D-SMTP-23; §14.8)
   why: URnetwork is the recipient of reports and role mail (§21.8)
   ttl: the envelope only in memory; raw bytes sealed to the network's mail key for 30 d or dropped unread; fields as smtp-5 and api-14; enclosed message bodies and attachments never decoded
   owner: §15.4

@@ -209,13 +209,17 @@ group:<group>       a general repo on a file-mode ref, whose readers are the gro
                         wins by hybrid logical clock
   o/<h>/<effect_key>    outbox: internet mail queued for a desktop sender, created only if absent
                         (15.10; §16 D-MCP-11), a forward's key derived from its message id; removed
-                        once sent and past its approval's retry window; mailboxes only
+                        once sent and past its approval's retry window; it carries a phone's approved
+                        TL4 domains, tl4_domains, with the approval's id (§14.4); mailboxes only
   or/<h>/<effect_key>   that send's outcome per recipient domain (§14.5: mode, bytes, cap, outcome),
-                        written by the sending device; kept 30 days; mailboxes only
+                        written by the sending device, the prover host its effect_key's rendezvous hash
+                        picks writing queued as it starts and again each 5 min while it sends; kept 30
+                        days; mailboxes only
   rcpt/<h>/<address>    MailRecipientApproval{alias, recipient, decision, action}: an approved recipient
                         (15.10; owner decision 280), in the mailbox or group repo that holds that alias's
                         mail, never in mailcfg; created only if absent, and kept until a person removes it
-  p/<sidecar_id>        a prover host's measured smtp_data_proof_bytes and DATA rate (§14.5),
+  p/<sidecar_id>        a prover host's measured smtp_data_proof_bytes and DATA rate (§14.5), its time
+                        a part and what a part holds, and the key set and suites it has ready,
                         rewritten at each measurement; mailboxes only
   forward               the verified forwarding address and the opted-in burners (15.10); mailboxes only
   ra/<h>/<token>        reverse alias: original sender and burner address (15.10); mailboxes only
@@ -266,7 +270,7 @@ A group repo is a `general` repo whose `RepoCreate` marks it an inbox: `group`, 
 - **Local parts** match `[a-z0-9][a-z0-9._-]{0,63}`; `admin`, `postmaster`, `abuse`, `mailer-daemon`, `bounces` and `r-*` are reserved. No device can terminate cli/UI.md:21's shared `you@ur.network`, so cli/UI.md:68's form holds.
 - **Address directory.** A receiver honors a creator-signed `mailcfg` record only if §8's policy grants the creator `mail:<alias>#listen` (D-ACL-12). Policy and `mailcfg` are encrypted, and the projection carries only `mail_send` (§8.8), so alias names never reach the server. Creating an alias or a burner is an I-8 outward action: the `mail` component writes the record only once `Authorize` passes (§5.4), for `ur id`, the apps and §16's `mail_alias_*` alike. The record is created only if absent and, under a decision, carries the use's `effect_key`, which also seeds the DRBG a burner draws its candidate labels from, so a retry or a restart's `Lookup` finds its own record (§16 D-MCP-11). MCP's evs tools never write `mailcfg` (D-MCP-17).
 - **Same-network mail** is deposited to the recipient's drop key and signed with the sender's identity key (§6.9), without smtpedge, send quota or DKIM; that signature replaces the TLS label (D-MAIL-8). The sender's device learns the mailbox from `mailcfg` and asks the exchange for `repo:<id>:deposit`, which §8.5's mailbox row gives any subject of the network that the projection marks `mail_send` (owner decision 333); §20's storage limits bound it, and the recipient's readers show the message as from a member by the push's signer.
-- **Network mail key:** the admin mailbox's drop key, carried in each of that repo's GenRotates (a scope's: its member's mailbox; D-KEYS-17); §14.8 seals reports to it, burners' included.
+- **Network mail key:** the drop key of a personal network's owner's `mailbox`, of a team's general repo whose signed `RepoCreate.inbox` is 2 (§8.8), or, for a scope, of its member's mailbox, carried in each of that repo's GenRotates (D-KEYS-17); §14.8 seals to it the reports that reach the network's own token, burners' once the PSL listing sends theirs there, and finds it through api's rows alone, so `POST /mail/enable` takes no field.
 - **Vault entries** (MM:594-605) each have their own slot, so deleting one shreds every version of it (owner decision 61); only the owner's consented devices (§8.5) read them or write "Used at".
 
 ```text
