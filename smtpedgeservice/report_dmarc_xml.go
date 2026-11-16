@@ -2,7 +2,7 @@
 // than user content (D-SMTP-23). Parsed with encoding/xml in strict mode and no entity map, after a
 // scan that refuses any DOCTYPE or ENTITY declaration outright, so no DTD and no external entity is
 // ever read; any other directive is refused as it is met. Nesting is held to ReportNestingDepth, and
-// each kept value to smtpAggregateValueMaxByteCount. Elements are matched by local name, so RFC 9990's
+// each kept value to ReportAggregateValueMaxByteCount. Elements are matched by local name, so RFC 9990's
 // namespace and RFC 7489's lack of one parse alike.
 //
 // Rows whose source_ip is not a sending address are dropped here, at parse: third-party IPs are never
@@ -21,10 +21,6 @@ import (
 	"strings"
 	"time"
 )
-
-// The longest value an aggregate field may hold: every field kept is an identifier, a name, a word or
-// a number, and RFC 1035 bounds a name at 253 octets.
-const smtpAggregateValueMaxByteCount = 1024
 
 // What an aggregate report says of URnetwork's sends.
 type SmtpAggregateRows struct {
@@ -122,7 +118,7 @@ func parseSmtpDmarcXml(data []byte, settings *SmtpEdgeSettings) (*SmtpAggregateR
 		}
 		count, err := strconv.ParseUint(strings.TrimSpace(record.count), 10, 64)
 		domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(record.headerFrom)), ".")
-		if err != nil || !smtpLdhName(domain) {
+		if err != nil || !settings.ldhName(domain) {
 			rows.DroppedRowCount += 1
 			return
 		}
@@ -223,7 +219,7 @@ func parseSmtpDmarcXml(data []byte, settings *SmtpEdgeSettings) (*SmtpAggregateR
 			value = nil
 		case xml.CharData:
 			if value != nil {
-				if smtpAggregateValueMaxByteCount < len(*value)+len(element) {
+				if settings.ReportAggregateValueMaxByteCount < len(*value)+len(element) {
 					return nil, fmt.Errorf("%w: an XML value past the bound", ErrSmtpReportRefused)
 				}
 				*value += string(element)

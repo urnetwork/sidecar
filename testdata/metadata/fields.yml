@@ -36,6 +36,8 @@ pending_until: M2
 key_sources:
   - host_*.go
   - evs_repo_place.go
+  # TlsKillKey and TlsKillTriggerKey, the {tes_} keys tlsedge, sockets and api's kill switch share (tls-4)
+  - tls_api.go
 
 roots:
   # protocol/envelope.proto
@@ -807,6 +809,10 @@ values:
   "the rdb bundles of existing Redis families": ops-3
   # a prover host's fetch of its pinned key set from ur.io, smtpproof's setup_fetch.go (DESIGN-DETAILS 3.2.7)
   "the key set's id and the names of the files fetched": smtp-7
+  # what certs' ACME order hands a CA, the CSR's names from TlsIdentifierSet, and the logs then publish
+  # (certsservice's order.go and acme.go)
+  "every SAN, that is <net>.<root>, *.<net>.<root>, live aliases and Team scope labels": cert-2
+  "URnetwork's ACME accounts": cert-2
 
 not_keys:
   "http/1.1": "an ALPN id, the second a route probe's hello offers, which the lb's http branch selects (§13.4)"
@@ -852,8 +858,9 @@ rows:
   gkm-8: {planned: M2}
   gkm-9: {planned: M2}
   gkm-10: {planned: M2}
-  tls-4: {planned: M5}
-  cert-2: {planned: M5}
+  tls-3: {server: [tls_connection_record, tls_connection_day]}
+  tls-4: {server: [network_tls_suspension]}
+  cert-1: {server: [network_tls_cert]}
   dns-2: {planned: M5}
   smtp-3: {planned: M9}
   smtp-4: {planned: M9}

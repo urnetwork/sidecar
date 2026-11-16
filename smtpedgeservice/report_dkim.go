@@ -51,8 +51,6 @@ const (
 const (
 	smtpDkimAlgorithmRsaSha256     = "rsa-sha256"
 	smtpDkimAlgorithmEd25519Sha256 = "ed25519-sha256"
-	// RFC 8301 §3.2: verifiers must not accept a smaller key.
-	smtpDkimRsaKeyMinBitCount = 1024
 )
 
 // TXT records by name: DNS, behind an interface so tests and hosts choose the resolver. Safe for
@@ -129,8 +127,8 @@ func (self *smtpDkimSignature) result(verdict string) *SmtpDkimResult {
 }
 
 // Whether selector is a DNS name a key could sit under.
-func smtpDkimSelectorValid(selector string) bool {
-	return smtpLdhName(selector)
+func smtpDkimSelectorValid(selector string, settings *SmtpEdgeSettings) bool {
+	return settings.ldhName(selector)
 }
 
 // A base64 tag value, whitespace and folding removed.
@@ -140,7 +138,7 @@ func smtpDkimBase64(value string) ([]byte, bool) {
 }
 
 // A DKIM-Signature field, with what can be decided from its tags alone.
-func parseSmtpDkimSignature(field *smtpHeaderField) *smtpDkimSignature {
+func parseSmtpDkimSignature(field *smtpHeaderField, settings *SmtpEdgeSettings) *smtpDkimSignature {
 	signature := &smtpDkimSignature{field: field, refusal: SmtpDkimResultPermError}
 	tags, ok := smtpDkimTagList(smtpUnfold(field.value))
 	if !ok {
@@ -149,7 +147,7 @@ func parseSmtpDkimSignature(field *smtpHeaderField) *smtpDkimSignature {
 	signature.domain = strings.ToLower(tags["d"])
 	signature.selector = strings.ToLower(tags["s"])
 	signature.algorithm = strings.ToLower(tags["a"])
-	if tags["v"] != "1" || !smtpLdhName(signature.domain) || !smtpDkimSelectorValid(signature.selector) {
+	if tags["v"] != "1" || !settings.ldhName(signature.domain) || !smtpDkimSelectorValid(signature.selector, settings) {
 		return signature
 	}
 	switch signature.algorithm {
@@ -248,7 +246,7 @@ func smtpDkimKeyFrom(algorithm string, publicKey []byte, settings *SmtpEdgeSetti
 		if rsaKey == nil {
 			return nil, SmtpDkimResultPermError
 		}
-		if bitCount := rsaKey.N.BitLen(); bitCount < smtpDkimRsaKeyMinBitCount || settings.ReportDkimRsaKeyBitCount < bitCount {
+		if bitCount := rsaKey.N.BitLen(); bitCount < settings.ReportDkimRsaKeyMinBitCount || settings.ReportDkimRsaKeyBitCount < bitCount {
 			return nil, SmtpDkimResultPolicy
 		}
 		return &smtpDkimKey{algorithm: algorithm, rsaKey: rsaKey}, ""
@@ -323,7 +321,7 @@ func (self *SmtpDkimVerifier) signatures(fields []*smtpHeaderField) []*smtpDkimS
 		if self.settings.ReportDkimSignatureCount <= len(signatures) {
 			break
 		}
-		signatures = append(signatures, parseSmtpDkimSignature(field))
+		signatures = append(signatures, parseSmtpDkimSignature(field, self.settings))
 	}
 	return signatures
 }

@@ -144,6 +144,8 @@ type evsCall struct {
 	rawBody []byte
 	// Whether a 429 or a 503 that refuses nothing goes again (reads only).
 	retry bool
+	// Whether a 202 answers as a 200 does: a route that queues its work, as POST .../drops/preview does.
+	accepted bool
 }
 
 // The client's half of evs's HTTP surface.
@@ -275,7 +277,7 @@ func (self *evsHttp) sendOnce(ctx context.Context, call *evsCall) (*http.Respons
 		// a transport error may hold the url, which holds only ids, but never the token
 		return nil, fmt.Errorf("evs %s: %w", call.route, err)
 	}
-	if response.StatusCode == http.StatusOK {
+	if response.StatusCode == http.StatusOK || (call.accepted && response.StatusCode == http.StatusAccepted) {
 		// the body's reader ends the deadline once it is closed
 		response.Body = &evsHttpBody{ReadCloser: response.Body, done: func() { stop(); cancel() }}
 		return response, nil

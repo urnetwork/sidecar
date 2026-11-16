@@ -125,7 +125,7 @@ func FuzzSmtpAggregate(f *testing.F) {
 		}
 		if rows != nil {
 			for _, row := range rows.Rows {
-				if !smtpLdhName(row.Domain) {
+				if !settings.ldhName(row.Domain) {
 					t.Fatalf("a row kept the domain %q", row.Domain)
 				}
 			}

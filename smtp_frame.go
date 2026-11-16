@@ -29,6 +29,10 @@ import (
 // The header's layout (plan-SMTP-wire-gaps#3): the length and the type.
 const SmtpFrameHeaderByteCount = 4 + 2
 
+// SmtpPreamble.version, which a sender writes and an edge requires (§14.5): an identifier, raised by a
+// change to what the preamble means. An edge answers a preamble of another version DENIED.
+const SmtpPreambleVersion uint32 = 1
+
 // What both ends of the frames agree on (plan-SMTP-wire-gaps#3). Its one limit is a protocol value, so a
 // deployment never changes it on one side alone (QD-702).
 type SmtpFrameSettings struct {

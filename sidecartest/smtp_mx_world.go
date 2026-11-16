@@ -5,8 +5,10 @@
 // dnssec_chain built here validates against TrustAnchorDs and nothing else, and it serves MX, null MX,
 // implicit MX, wildcard MX, TLSA, addresses, NSEC3 denials, unsigned zones, broken chains (an expired
 // signature, an unpublished key, a DS that matches no key) and MTA-STS policies. It implements
-// sidecar.SmtpMxResolver as a validating resolver would answer, and sidecar.SmtpMxDialer over MxPipes
-// to the MxServers placed at addresses, so nothing touches port 25 and nothing sleeps.
+// sidecar.SmtpMxResolver as a validating resolver would answer, sidecar.SmtpMxDialer over MxPipes to
+// the MxServers placed at addresses, so nothing touches port 25 and nothing sleeps, and
+// smtpedgeservice.SmtpPtrResolver over PTR names a test sets, unsigned as the sending addresses'
+// reverse zones are (§12.7).
 //
 // A chain follows plan-SMTP-small-readings#2's reading of RFC 9102's order: the answer RRsets with
 // their RRSIGs, or their NSEC3 denial, then for every zone from the deepest to the root its DNSKEY
@@ -35,6 +37,7 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/smtpedgeservice"
 )
 
 var (
@@ -94,13 +97,16 @@ type MxWorld struct {
 	servers map[netip.Addr]MxServer
 	// MTA-STS policy bodies by domain
 	policies map[string]string
-	dials    []netip.Addr
+	// PTR names by address
+	addressPtrs map[netip.Addr][]string
+	dials       []netip.Addr
 	// every connection a server is serving
 	serving sync.WaitGroup
 }
 
 var _ sidecar.SmtpMxResolver = (*MxWorld)(nil)
 var _ sidecar.SmtpMxDialer = (*MxWorld)(nil)
+var _ smtpedgeservice.SmtpPtrResolver = (*MxWorld)(nil)
 var _ MxChainSource = (*MxWorld)(nil)
 
 // A world with a signed root and a signed example. under it. A nil settings is
@@ -114,11 +120,12 @@ func NewMxWorld(settings *MxWorldSettings) (*MxWorld, error) {
 		clock = sidecar.RealClock{}
 	}
 	world := &MxWorld{
-		settings: settings,
-		clock:    clock,
-		zones:    map[string]*mxWorldZone{},
-		servers:  map[netip.Addr]MxServer{},
-		policies: map[string]string{},
+		settings:    settings,
+		clock:       clock,
+		zones:       map[string]*mxWorldZone{},
+		servers:     map[netip.Addr]MxServer{},
+		policies:    map[string]string{},
+		addressPtrs: map[netip.Addr][]string{},
 	}
 	if err := world.addZone(".", &MxWorldZoneOptions{}); err != nil {
 		return nil, err
@@ -314,6 +321,28 @@ func (self *MxWorld) SetMtaStsPolicy(domain string, id string, policy string) er
 	zone.add(&dns.TXT{Hdr: dns.RR_Header{Name: "_mta-sts." + name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: mxWorldTtl}, Txt: []string{"v=STSv1; id=" + id}})
 	self.policies[strings.TrimSuffix(name, ".")] = policy
 	return nil
+}
+
+// address's PTR names, replacing any; none removes them.
+func (self *MxWorld) SetPtr(address netip.Addr, names ...string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if len(names) == 0 {
+		delete(self.addressPtrs, address.Unmap())
+		return
+	}
+	self.addressPtrs[address.Unmap()] = slices.Clone(names)
+}
+
+// See smtpedgeservice.SmtpPtrResolver: sidecar.ErrSmtpMxNoSuchDomain for an address with no PTR.
+func (self *MxWorld) LookupPtr(ctx context.Context, address netip.Addr) ([]string, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	names, ok := self.addressPtrs[address.Unmap()]
+	if !ok {
+		return nil, sidecar.ErrSmtpMxNoSuchDomain
+	}
+	return slices.Clone(names), nil
 }
 
 // The root's DS, the only trust anchor a chain from here validates under, as an uncompressed wire RR.
