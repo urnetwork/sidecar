@@ -202,6 +202,12 @@ func (self *TlsEdgeService) KillChanges() (count uint64, changed chan struct{}) 
 	return self.killChangeCount.Get()
 }
 
+// Connections that have run to their end, each counted after its result, and a channel that closes at the next:
+// what a test of the composition waits on before it reads what a connection left.
+func (self *TlsEdgeService) ConnectionEnds() (count uint64, changed chan struct{}) {
+	return self.connectionEndCount.Get()
+}
+
 // See sidecar.Engine: the store and the dialer given, the label map's first snapshot read, the kill
 // switch read, and the dialer holding K clients.
 func (self *TlsEdgeService) Ready() bool {

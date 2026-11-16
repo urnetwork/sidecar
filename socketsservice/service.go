@@ -202,6 +202,12 @@ func (self *SocketsService) Removals() (count int, changed chan struct{}) {
 	return self.removals.finishedClientIds.Get()
 }
 
+// Rounds of the kills reader finished, each counted once its wait is armed, and a channel that closes at the next:
+// what a test of the composition waits on after a {tes_} key event.
+func (self *SocketsService) KillReads() (count int, changed chan struct{}) {
+	return self.killSet.readCount.Get()
+}
+
 // Lays config/<env>/sidecar.yml's sockets_control_qps over the control bound's sidecar rate and burst
 // (§19.11): the host calls it each time it rereads the file. A rate or burst that is not positive changes
 // nothing.
