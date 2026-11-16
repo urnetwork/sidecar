@@ -125,4 +125,8 @@ type BridgeStatus struct {
 	// What the posture's last call refused or found, and what the bridge itself holds back.
 	PostureAlarms []PostureAlarm
 	Alarms        []BridgeAlarm
+	// Set while a narrowing entry the posture could not check has waited past NarrowingOverdueTimeout, as the bridge
+	// last read its posture (DecisionNow at each alarm time): the oldest such entry's position and age, a report that
+	// enforces nothing (DESIGN-DETAILS 4.2.5, QD-696).
+	Overdue *PostureOverdue
 }
