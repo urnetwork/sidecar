@@ -111,7 +111,7 @@ func TestDestinationConcurrencyPerSendingAddressAndSlash24(t *testing.T) {
 	q := newQuotaWorld(t)
 	caps := q.quota.DestinationCaps()
 	sendingA, sendingB := netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.11")
-	mx1, mx2, other := netip.MustParseAddr("203.0.113.5"), netip.MustParseAddr("203.0.113.200"), netip.MustParseAddr("203.0.114.5")
+	mx1, mx2, other := netip.MustParseAddr("203.0.113.5"), netip.MustParseAddr("203.0.113.200"), netip.MustParseAddr("198.51.100.5")
 	releaseOne, ok := caps.Acquire(sendingA, mx1, 2)
 	if !ok {
 		t.Fatal("the first slot refused")

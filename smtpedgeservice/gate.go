@@ -213,7 +213,11 @@ func checkSmtpGate(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequ
 	standing, standingOk := abuse.Standing(connect.Id(request.NetworkId))
 	verified, verifiedOk := abuse.Verified(connect.Id(request.NetworkId))
 	breaker, breakerOk := gate.Breaker()
+	mailSend := gate.MaySendMail(request.NetworkId, request.SidecarId, now)
 	if !factsOk || facts == nil || !standingOk || !verifiedOk || !breakerOk || breaker == nil {
+		return unloaded
+	}
+	if !mailSend.Allowed && mailSend.Reason == sidecar.AclReasonNoState {
 		return unloaded
 	}
 
@@ -238,11 +242,8 @@ func checkSmtpGate(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequ
 		return smtpGateRefusal(protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER, start.Sub(now), smtpGateReasonMailNew)
 	}
 
-	decision := gate.MaySendMail(request.NetworkId, request.SidecarId, now)
-	if !decision.Allowed {
-		switch decision.Reason {
-		case sidecar.AclReasonNoState:
-			return unloaded
+	if !mailSend.Allowed {
+		switch mailSend.Reason {
 		case sidecar.AclReasonQuota:
 			return smtpGateRefusal(protocol.SmtpPreambleCode_SMTP_PREAMBLE_QUOTA, settings.SpentRetryTimeout, smtpGateReasonSpent)
 		}

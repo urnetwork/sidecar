@@ -107,6 +107,16 @@ func TestSmtpGateUnloadedAnswersTryLaterAndAsksForALoad(t *testing.T) {
 	g.expect("n1.root.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER, "unloaded")
 }
 
+func TestSmtpGateColdNetworkAsksForEveryLoadAtOnce(t *testing.T) {
+	g := newGateWorld(t)
+	g.gate.Unload(g.networkId)
+	g.expect("n1.root.example", 0, protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER, "unloaded")
+	// the facts and the mail_send state each asked for theirs in one preamble
+	if asks := g.gate.LoadAsks(g.networkId); asks != 2 {
+		t.Fatalf("%d loads asked", asks)
+	}
+}
+
 func TestSmtpGateDeniesProbation(t *testing.T) {
 	g := newGateWorld(t)
 	g.abuse.SetStanding(connect.Id(g.networkId), sidecar.AbuseStandingProbation)

@@ -171,6 +171,12 @@ func TestSmtpEdgeSettingsRefusals(t *testing.T) {
 		}},
 		{name: "a zero bound", change: func(settings *smtpedgeservice.SmtpEdgeSettings) { settings.ReportInflateRatio = 0 }},
 		{name: "a negative timeout", change: func(settings *smtpedgeservice.SmtpEdgeSettings) { settings.ClientIdleTimeout = -time.Second }},
+		{name: "an issue key id past one octet", change: func(settings *smtpedgeservice.SmtpEdgeSettings) { settings.XUrRefIssueKeyId = 256 }},
+		{name: "a renew interval not under the member's life", change: func(settings *smtpedgeservice.SmtpEdgeSettings) {
+			settings.QuotaMemberRenewInterval = settings.QuotaMemberTimeout
+		}},
+		{name: "a port past 65535", change: func(settings *smtpedgeservice.SmtpEdgeSettings) { settings.MxPort = 65536 }},
+		{name: "a zero reply bound", change: func(settings *smtpedgeservice.SmtpEdgeSettings) { settings.MxReplyMaxByteCount = 0 }},
 	}
 	for _, c := range cases {
 		settings := testSettings()

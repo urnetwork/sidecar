@@ -170,10 +170,10 @@ budgets:
     module: server
     package: ""
     name: smtpedge.preamble-gate
-    settings: "the preamble gate on server's host, every feature on"
-    limits: {postgres: 0}
+    settings: "the preamble gate on server's host for a Pro network's preamble, every feature on"
+    limits: {postgres: 0, redis_calls: 1}
     reviewed: ""
-    note: "redis_calls is SMTP-M9-10's to set; until it does, the row reads missing"
+    note: "one {smq_} script a preamble (§14.7); a Community preamble adds one single-key script for each fleet counter (plan-SMTP-shared-counters), 3 in all. smtpedgeservice's TestPreamblePathAsksNoStoreAndOneScript holds the count on the fakes; server's InlinePath of this name has not landed, so the row reads missing"
   - id: quota-lease-inline
     spec: "§22.5: quota leases inline, no PostgreSQL"
     kind: path
