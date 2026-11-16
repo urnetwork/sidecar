@@ -41,6 +41,8 @@ type testWindowsIpHelper struct {
 	table     []urTunWindowsRoute
 	adapters  []urTunWindowsAdapter
 	addErr    error
+	// what DeleteRoute answers for a prefix, nil for success
+	deleteErrs map[netip.Prefix]error
 	// what AddHostRoute and DeleteHostRoute answer for an address, nil for success
 	hostAddErrs    map[netip.Addr]error
 	hostDeleteErrs map[netip.Addr]error
@@ -76,6 +78,12 @@ func (self *testWindowsIpHelper) AddRoute(luid uint64, prefix netip.Prefix, metr
 }
 
 func (self *testWindowsIpHelper) DeleteRoute(luid uint64, prefix netip.Prefix) error {
+	self.stateLock.Lock()
+	err := self.deleteErrs[prefix]
+	self.stateLock.Unlock()
+	if err != nil {
+		return err
+	}
 	self.record("delete route " + prefix.String())
 	return nil
 }
@@ -706,6 +714,41 @@ func TestTunWindowsCloseRemovesTheCarvedHostRoutes(t *testing.T) {
 	}
 	if err := iface.SetCarved(testWindowsCarve("203.0.113.53")); !errors.Is(err, errUrTunClosed) {
 		t.Fatalf("after close: %v", err)
+	}
+	for _, held := range world.ipHelper.table {
+		if held.protocol == windows.MIB_IPPROTO_NETMGMT && held.dst.IsSingleIP() {
+			t.Fatalf("a host route stayed: %+v", held)
+		}
+	}
+}
+
+// A half that will not come off at close goes with the adapter, so the host routes that waited on it come off once the
+// adapter is closed: none outlives the tun.
+func TestTunWindowsCloseRemovesTheCarvedHostRoutesOfAHeldHalf(t *testing.T) {
+	world := newTestWindowsWorld(t)
+	world.ipHelper.table = testWindowsHostTable()
+	iface := world.open(t)
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := iface.SetCarved(testWindowsCarve("203.0.113.53")); err != nil {
+		t.Fatal(err)
+	}
+	halves := urTunExitsHalves()
+	world.ipHelper.deleteErrs = map[netip.Prefix]error{halves[1]: windows.ERROR_NOT_ENOUGH_MEMORY}
+	// leaving exits keeps the host route while a half is still on
+	world.ipHelper.take()
+	if defaultRoute, err := iface.SetExits(false); err == nil || !defaultRoute {
+		t.Fatalf("a half that stays: %v %v", defaultRoute, err)
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"delete route " + halves[0].String()}) {
+		t.Fatalf("a half that stays: %v", calls)
+	}
+	if err := iface.Close(); err == nil {
+		t.Fatal("close answered nothing of the half that would not come off")
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"delete host route 203.0.113.53 by 192.0.2.1 on 0x10"}) {
+		t.Fatalf("close: %v", calls)
 	}
 	for _, held := range world.ipHelper.table {
 		if held.protocol == windows.MIB_IPPROTO_NETMGMT && held.dst.IsSingleIP() {

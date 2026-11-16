@@ -1067,8 +1067,9 @@ func (self *urTunWindowsInterface) clearExitsWithLock() error {
 }
 
 // Takes the exits off, the carved addresses' host routes with them, removes the resolver's rule, the routes and the
-// addresses it added, and closes the adapter, which Wintun deletes with whatever is left on it. Waits for the adapter's
-// event listener to end.
+// addresses it added, and closes the adapter, which Wintun deletes with whatever is left on it, a half that would not
+// come off among them; a host route that waited on such a half sits on another adapter, which Windows keeps, so it is
+// taken off once the adapter is closed. Waits for the adapter's event listener to end.
 func (self *urTunWindowsInterface) Close() error {
 	var closeErr error
 	func() {
@@ -1097,6 +1098,9 @@ func (self *urTunWindowsInterface) Close() error {
 		}
 		self.addresses = nil
 		closeErr = errors.Join(closeErr, self.device.Close())
+		// no half outlives the adapter, so none of these is needed after it
+		self.exitsHalves = nil
+		closeErr = errors.Join(closeErr, self.setHostRoutesWithLock(nil, nil, nil))
 	}()
 	<-self.eventsDone
 	return closeErr

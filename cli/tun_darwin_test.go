@@ -133,8 +133,9 @@ type testDarwinKernel struct {
 	stateLock sync.Mutex
 	calls     []string
 	table     []urTunDarwinRoute
-	// what AddRoute answers for a prefix, nil for success
-	addErrs map[netip.Prefix]error
+	// what AddRoute and DeleteRoute answer for a prefix, nil for success
+	addErrs    map[netip.Prefix]error
+	deleteErrs map[netip.Prefix]error
 	// what AddHostRoute and DeleteHostRoute answer for an address, nil for success
 	hostAddErrs    map[netip.Addr]error
 	hostDeleteErrs map[netip.Addr]error
@@ -174,8 +175,13 @@ func (self *testDarwinKernel) AddRoute(index int, prefix netip.Prefix) error {
 }
 
 func (self *testDarwinKernel) DeleteRoute(index int, prefix netip.Prefix) error {
-	self.record("delete route " + prefix.String())
-	return nil
+	self.stateLock.Lock()
+	err := self.deleteErrs[prefix]
+	self.stateLock.Unlock()
+	if err == nil {
+		self.record("delete route " + prefix.String())
+	}
+	return err
 }
 
 // The flags the kernel shows a static host route by a gateway with.
@@ -754,6 +760,41 @@ func TestTunDarwinCloseRemovesTheCarvedHostRoutes(t *testing.T) {
 	}
 	if err := iface.SetCarved(testDarwinCarve("203.0.113.53")); !errors.Is(err, errUrTunClosed) {
 		t.Fatalf("after close: %v", err)
+	}
+	for _, held := range world.kernel.table {
+		if held.flags == testDarwinHostRouteFlags {
+			t.Fatalf("a host route stayed: %+v", held)
+		}
+	}
+}
+
+// A half that will not come off at close goes with the device, so the host routes that waited on it come off once the
+// device is closed: none outlives the tun.
+func TestTunDarwinCloseRemovesTheCarvedHostRoutesOfAHeldHalf(t *testing.T) {
+	world := newTestDarwinWorld(t)
+	world.kernel.table = append(world.kernel.table, testDarwinHostTable()...)
+	iface := world.open(t)
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := iface.SetCarved(testDarwinCarve("203.0.113.53")); err != nil {
+		t.Fatal(err)
+	}
+	halves := urTunExitsHalves()
+	world.kernel.deleteErrs = map[netip.Prefix]error{halves[1]: unix.ENOBUFS}
+	// leaving exits keeps the host route while a half is still on
+	world.kernel.take()
+	if defaultRoute, err := iface.SetExits(false); err == nil || !defaultRoute {
+		t.Fatalf("a half that stays: %v %v", defaultRoute, err)
+	}
+	if calls := world.kernel.take(); !slices.Equal(calls, []string{"delete route " + halves[0].String()}) {
+		t.Fatalf("a half that stays: %v", calls)
+	}
+	if err := iface.Close(); err == nil {
+		t.Fatal("close answered nothing of the half that would not come off")
+	}
+	if calls := world.kernel.take(); !slices.Equal(calls, []string{"delete host route 203.0.113.53 by 192.0.2.1 on 4"}) {
+		t.Fatalf("close: %v", calls)
 	}
 	for _, held := range world.kernel.table {
 		if held.flags == testDarwinHostRouteFlags {

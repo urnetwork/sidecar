@@ -845,8 +845,9 @@ func (self *urTunDarwinInterface) clearExitsWithLock() error {
 }
 
 // Takes the exits off, the carved addresses' host routes with them, reverts the resolver, removes the routes and
-// addresses it added, and closes the device, which the kernel destroys with whatever is left on it. Waits for the
-// device's event listener to end.
+// addresses it added, and closes the device, which the kernel destroys with whatever is left on it, a half that would
+// not come off among them; a host route that waited on such a half leaves by another interface, which the kernel
+// keeps, so it is taken off once the device is closed. Waits for the device's event listener to end.
 func (self *urTunDarwinInterface) Close() error {
 	var closeErr error
 	func() {
@@ -875,6 +876,9 @@ func (self *urTunDarwinInterface) Close() error {
 		}
 		self.addresses = nil
 		closeErr = errors.Join(closeErr, self.device.Close())
+		// no half outlives the device, so none of these is needed after it
+		self.exitsHalves = nil
+		closeErr = errors.Join(closeErr, self.setHostRoutesWithLock(nil, nil))
 	}()
 	<-self.eventsDone
 	return closeErr
