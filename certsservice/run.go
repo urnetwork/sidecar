@@ -32,6 +32,12 @@
 // Every move carries the pass's clock as the row's state time (QD-742), from which a revoked or failed
 // row's retention counts.
 //
+// A name's failure backoff at a CA (QD-857) holds an order there at admission (queue.go) and again just
+// before the order goes, since one of its names may have failed there since: a pass's orders run side by
+// side, and a pass that died left its orders under way. Held, the order queues again, and the admission
+// pass may take it to another CA. A failed authorization counts against the order's names at its CA, and
+// an issuance ends their backoff there. A renewal skips the backoff, as it skips every limit.
+//
 // Each move publishes a TlsHint (hints.go).
 
 package certsservice
@@ -185,10 +191,13 @@ const (
 type certsOrderOutcome struct {
 	end   certsOrderEnd
 	hints CertsHintCounts
+	// a name's backoff the store could not read, count or end, which the pass returns
+	err error
 }
 
 // One pass of the order chain from after afterCertId in the queue. A store or budget error ends the
-// admission with what it has admitted, whose orders still run, and is returned with the report.
+// admission with what it has admitted, whose orders still run, and is returned with the report, as is a
+// name's backoff an order could not read, count or end.
 func (self *CertsService) RunOrders(ctx context.Context, afterCertId sidecar.Id) (*CertsOrdersReport, error) {
 	report := &CertsOrdersReport{}
 	if self.acmeClosed() {
@@ -267,6 +276,7 @@ func (self *CertsService) RunOrders(ctx context.Context, afterCertId sidecar.Id)
 			report.More = true
 		}
 		report.Hints.add(outcome.hints)
+		passErr = errors.Join(passErr, outcome.err)
 	}
 	return report, passErr
 }
@@ -292,6 +302,25 @@ func (self *CertsService) runOrder(ctx context.Context, order *certsRunOrder) ce
 	row := order.cert
 	ca := CertsCa(row.Ca)
 	underWay := []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}
+	if order.predecessor == nil {
+		until, err := self.nameBackoffUntil(ctx, row, ca)
+		if err != nil {
+			// unread, the backoff might hold it: the row stays under way for the next pass
+			outcome.end = certsOrderInterrupted
+			outcome.err = err
+			return outcome
+		}
+		if !until.IsZero() {
+			moved, moveErr := self.transition(ctx, &CertsTransition{CertId: row.CertId, From: underWay, To: sidecar.TlsCertStateQueued, At: self.clock.Now()})
+			if moveErr != nil || !moved {
+				outcome.end = certsOrderInterrupted
+				return outcome
+			}
+			outcome.end = certsOrderRequeued
+			self.hintCounted(ctx, &outcome.hints, row, protocol.TlsHintKind_TLS_HINT_ORDER)
+			return outcome
+		}
+	}
 	testHookBarrier("certs.run_order.before", row.CertId.String())
 	issued, err := self.acme.Order(ctx, &CertsAcmeOrder{
 		Ca:       ca,
@@ -314,7 +343,7 @@ func (self *CertsService) runOrder(ctx context.Context, order *certsRunOrder) ce
 		case errors.As(err, &rateLimit):
 			self.HoldCa(ca, rateLimit.RetryAfter)
 		case errors.As(err, &authorization):
-			self.RecordAuthorizationFailures(authorization.Names)
+			outcome.err = self.recordOrderFailure(ctx, row, ca, authorization.Names)
 		}
 		// an order that keeps failing ends, never later than its CA keeps an order alive, so its device
 		// hears and may order again; a renewal of a certificate still valid keeps trying, since nothing
@@ -359,6 +388,7 @@ func (self *CertsService) runOrder(ctx context.Context, order *certsRunOrder) ce
 		return outcome
 	}
 	outcome.end = certsOrderIssued
+	outcome.err = self.resetNameBackoffs(ctx, row, ca)
 	self.hintCounted(ctx, &outcome.hints, row, protocol.TlsHintKind_TLS_HINT_ISSUED)
 	return outcome
 }

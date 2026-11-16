@@ -69,6 +69,20 @@ type CertsSettings struct {
 	// keeps one in hand. Positive.
 	FailedAuthorizationCount  int
 	FailedAuthorizationWindow time.Duration
+	// After a name's k-th failed authorization at a CA since its last success there, no order for it goes
+	// to that CA for min(2^(k-1) x FailureBackoff, FailureBackoffMax), while another CA in the order may
+	// take it (QD-857). From its seventh failure there on, a failing name fails at a CA about once a day,
+	// which LE's daily refill of its 1,152 consecutive failed authorizations a name and account hands back,
+	// so LE's count stays near seven, far from the pause LE puts on a name past them (LE's rate-limits page,
+	// read 2026-11-15). Defaults 30 min and 24 h, DESIGN-DETAILS 17.2.8's failure backoff for a custom
+	// host. The store keeps the count and the time, so a restart keeps them, and a success at the CA ends
+	// them. Positive, and FailureBackoff at most FailureBackoffMax.
+	FailureBackoff    time.Duration
+	FailureBackoffMax time.Duration
+	// A name's backoff at a CA stays this long past the time it holds orders until, then goes (cert-1's
+	// ttl). By then the CA has handed back, one a day, every failure the backoff lets a name keep counted
+	// there. Default 8 d, as DESIGN-DETAILS 17.2.15 keeps a custom host's failures. Positive.
+	FailureBackoffRetention time.Duration
 	// How long past a CA's Retry-After the orders it holds wait, since the CA's clock and this one
 	// differ by seconds. Positive.
 	RetryAfterMargin time.Duration
@@ -176,6 +190,9 @@ func DefaultCertsSettings() *CertsSettings {
 		// 2026-11-15)
 		FailedAuthorizationCount:  4,
 		FailedAuthorizationWindow: 1 * time.Hour,
+		FailureBackoff:            30 * time.Minute,
+		FailureBackoffMax:         24 * time.Hour,
+		FailureBackoffRetention:   8 * 24 * time.Hour,
 		RetryAfterMargin:          1 * time.Minute,
 		DefaultRetryAfter:         1 * time.Hour,
 		BudgetTtl:                 7 * 24 * time.Hour,
@@ -209,6 +226,12 @@ func (self *CertsSettings) caOrder(ephemeral bool) []CertsCa {
 		return self.EphemeralCaOrder
 	}
 	return self.CaOrder
+}
+
+// How long a name waits at a CA after its failureCount-th failed authorization there since its last
+// success there (certsFailureBackoffWait). The store calls it as it counts a failure.
+func (self *CertsSettings) failureBackoffWait(failureCount int) time.Duration {
+	return certsFailureBackoffWait(failureCount, self.FailureBackoff, self.FailureBackoffMax)
 }
 
 // How old an order at ca grows before a failure fails it rather than queueing it again: OrderGiveUpAge,
@@ -264,6 +287,9 @@ func (self *CertsSettings) Validate() error {
 		"RepeatSetRefill":           int64(self.RepeatSetRefill),
 		"FailedAuthorizationCount":  int64(self.FailedAuthorizationCount),
 		"FailedAuthorizationWindow": int64(self.FailedAuthorizationWindow),
+		"FailureBackoff":            int64(self.FailureBackoff),
+		"FailureBackoffMax":         int64(self.FailureBackoffMax),
+		"FailureBackoffRetention":   int64(self.FailureBackoffRetention),
 		"RetryAfterMargin":          int64(self.RetryAfterMargin),
 		"DefaultRetryAfter":         int64(self.DefaultRetryAfter),
 		"BudgetTtl":                 int64(self.BudgetTtl),
@@ -294,6 +320,9 @@ func (self *CertsSettings) Validate() error {
 	}
 	if !(0 < self.RenewalLifetimeFraction && self.RenewalLifetimeFraction < 1) {
 		return fmt.Errorf("%w: RenewalLifetimeFraction is not between 0 and 1", ErrCertsSettingsRefused)
+	}
+	if self.FailureBackoffMax < self.FailureBackoff {
+		return fmt.Errorf("%w: FailureBackoff is longer than FailureBackoffMax", ErrCertsSettingsRefused)
 	}
 	return nil
 }

@@ -7,6 +7,10 @@
 // holds back the scan (connect/CODESTYLE.md:135). A row moves only from queued, so two passes never
 // admit one row twice; a budget unit spent for a row another pass admitted first is spent once, under
 // the row's own id, and only overcounts.
+//
+// A name's failure backoff at a CA (QD-857) is read from the store once a row, and holds the row at that
+// CA alone: the next CA in the order is tried, under its own hold, rule and budget, and the row waits
+// only when none is open. A renewal skips it, as it skips every limit.
 
 package certsservice
 
@@ -129,6 +133,11 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 			return nil
 		}
 	}
+	// each name's backoff at every CA, which the loop below reads a CA at a time
+	backoffs, err := self.store.ListNameBackoffs(ctx, names)
+	if err != nil {
+		return err
+	}
 
 	ephemeral, err := self.store.ClientEphemeral(ctx, row.ClientId)
 	if err != nil {
@@ -156,6 +165,10 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 		caSettings := self.settings.Cas[ca]
 		if hold := self.caHold(ca); certsCaHeld(hold, now) {
 			note(CertsWaitCaHold, hold)
+			continue
+		}
+		if until := certsNameBackoffUntil(backoffs, ca, now); !until.IsZero() {
+			note(CertsWaitNameBackoff, until)
 			continue
 		}
 		if kind == CertsOrderRepeatSet && caSettings.RepeatSetLimited {
