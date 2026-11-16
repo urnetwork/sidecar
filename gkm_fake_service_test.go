@@ -95,6 +95,12 @@ type gkmFakeStore struct {
 	routeRefusalCounts map[string]int
 	// gkm stopped: every call fails as a transport would (KF7)
 	down bool
+	// the lb's own answer a test planted at a route, a 502 or 504, once each (QD-876): in place of gkm acting, both of
+	// nginx's tries having failed, or after gkm acted, the block having died once it wrote
+	lbBeforeStatuses map[string][]int
+	lbAfterStatuses  map[string][]int
+	// the lb answers every call with this status, gkm's blocks gone behind it; 0 for none
+	lbStatus int
 	// what a test runs once just before the next call of a route acts, with no lock held: another device's flow, so
 	// two race at one object in the order the test chose
 	routeHooks map[string]func()
@@ -127,6 +133,8 @@ func newGkmFakeStore(t *testing.T, clock sidecar.Clock) *gkmFakeStore {
 		clock:              clock,
 		beforeFaults:       map[string]int{},
 		afterFaults:        map[string]int{},
+		lbBeforeStatuses:   map[string][]int{},
+		lbAfterStatuses:    map[string][]int{},
 		routeRefusals:      map[string]int{},
 		routeRefusalCounts: map[string]int{},
 		groupInfos:         map[sidecar.Id]*protocol.GkmGroupInfoObject{},
@@ -177,6 +185,25 @@ func (self *gkmFakeStore) refuseTimes(route string, status int, count int) {
 	defer self.stateLock.Unlock()
 	self.routeRefusals[route] = status
 	self.routeRefusalCounts[route] = count - 1
+}
+
+// Has the lb answer status, its own 502 or 504, once at the next call of route: in place of gkm acting when before,
+// else after gkm has acted, so the write stands and its answer is the lb's.
+func (self *gkmFakeStore) plantLb(route string, status int, before bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if before {
+		self.lbBeforeStatuses[route] = append(self.lbBeforeStatuses[route], status)
+	} else {
+		self.lbAfterStatuses[route] = append(self.lbAfterStatuses[route], status)
+	}
+}
+
+// Has the lb answer every call with status, its own 502 or 504, gkm acting on none; 0 ends it.
+func (self *gkmFakeStore) setLb(status int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.lbStatus = status
 }
 
 // Stops gkm, or starts it again.
@@ -283,9 +310,16 @@ func (self *gkmFakeApi) call(route string, act func() error) error {
 	if store.down {
 		return errGkmFakeFault
 	}
+	if store.lbStatus != 0 {
+		return gkmFakeLbAnswer(store.lbStatus)
+	}
 	if 0 < store.beforeFaults[route] {
 		store.beforeFaults[route] -= 1
 		return errGkmFakeFault
+	}
+	if statuses := store.lbBeforeStatuses[route]; 0 < len(statuses) {
+		store.lbBeforeStatuses[route] = statuses[1:]
+		return gkmFakeLbAnswer(statuses[0])
 	}
 	if status, ok := store.routeRefusals[route]; ok {
 		if 0 < store.routeRefusalCounts[route] {
@@ -302,7 +336,19 @@ func (self *gkmFakeApi) call(route string, act func() error) error {
 		store.afterFaults[route] -= 1
 		return errGkmFakeFault
 	}
+	if statuses := store.lbAfterStatuses[route]; 0 < len(statuses) {
+		store.lbAfterStatuses[route] = statuses[1:]
+		return gkmFakeLbAnswer(statuses[0])
+	}
 	return nil
+}
+
+// The lb's own answer of status as the client reads it off its transport: nginx's error page, which GkmApi's mapping
+// turns into the error its callers see (QD-876).
+func gkmFakeLbAnswer(status int) error {
+	text := fmt.Sprintf("%d %s", status, http.StatusText(status))
+	page := "<html>\r\n<head><title>" + text + "</title></head>\r\n<body>\r\n<center><h1>" + text + "</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+	return sidecar.GkmAnswerError(status, http.Header{"Content-Type": {"text/html"}}, []byte(page))
 }
 
 // gkm's refusal with status, carrying a winner's bytes.

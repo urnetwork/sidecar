@@ -16,7 +16,10 @@
 //	          new key's KeyRegister, carrying the key's own signature over the body before field 9 (QD-086), and the
 //	          act's countersignature where this device registered a live key, which the act takes from the log's
 //	          presence row, never from a caller. What the authenticator's client answered as the key's attestation
-//	          (QD-730's map) is checked by VerifyPresenceAttestation first: one that fails registers nothing
+//	          (QD-730's map) is checked by VerifyPresenceAttestation first: one it refuses registers nothing, and
+//	          the label it reads, asserted or attested, is answered with the key (QD-885). The label changes no
+//	          authorization, and nothing stores it: the statement stays in the KeyRegister, and a reader's release
+//	          labels it again
 //	remove    RevokePresenceKey: KeyRevoke of one of the member's keys, on a confirmation alone, a presence key only
 //	          from a device that registered a live one of its own, the act countersigned
 //	list      PresenceKeys: the member's live presence keys, each with its registering device and position
@@ -52,7 +55,8 @@ type PresenceKeyHandle struct {
 	PublicKey []byte
 	// KeyRegister.attestation's bytes for a webauthn-es256 key: EncodePresenceAttestation's map of the create ceremony's
 	// attestation object and its client data, the clientDataJSON a platform API returned or the JSON a CTAP2 client
-	// hashed (QD-730). Clients ask for none conveyance until release roots ship (QD-137), so the object is fmt none.
+	// hashed (QD-730). The object is the authenticator's own, statement included, where its format is one §16.6 names
+	// (QD-885): one that verifies and chains to no pinned root still registers, labelled asserted.
 	// Empty for an ecdsa-p256-sha256 key, which carries none, and for a client that kept none.
 	Attestation []byte
 }
@@ -177,6 +181,9 @@ type SidecarPresenceKey struct {
 	NotAfter             time.Time
 	// Whether this host's authenticator holds it.
 	Held bool
+	// What this release reads of the key's attestation (§16.6's labels), set by the registration that just checked it
+	// and 0 for a key listed from the state, whose row keeps no statement to read one from.
+	Label PresenceLabel
 }
 
 // The member's live presence keys, by registering device then key_id, each marked held where provider, nil for none,
@@ -218,8 +225,21 @@ func (self *Sidecar) PresenceKeys(provider PresenceProvider) ([]*SidecarPresence
 // §16.6's register row for a new key of provider's: on the person's confirmation alone, a KeyRegister of this sidecar's
 // member carrying the key's own proof, signed as an act, countersigned by check where the log covers it (a live key
 // this device registered). A first presence key needs no check. The new key is taken off the authenticator again when
-// nothing was signed. Answers the key as ur keys ls lists it, its position 0 until it lands.
+// nothing was signed. Answers the key as ur keys ls lists it, its position 0 until it lands, with the label this
+// release reads of its attestation.
 func (self *Sidecar) RegisterPresenceKey(ctx context.Context, provider PresenceProvider, origin SidecarActOrigin, check SidecarPresenceCheck) (*SidecarPresenceKey, error) {
+	return self.registerPresenceKey(ctx, provider, origin, check, presenceReleaseAttestationRoots())
+}
+
+// RegisterPresenceKey with the attestation checked against roots, the release's for every caller but a test, which
+// pins fixture roots.
+func (self *Sidecar) registerPresenceKey(
+	ctx context.Context,
+	provider PresenceProvider,
+	origin SidecarActOrigin,
+	check SidecarPresenceCheck,
+	roots *presenceAttestationRoots,
+) (*SidecarPresenceKey, error) {
 	if origin != SidecarActConfirmed {
 		return nil, ErrSidecarActMode
 	}
@@ -260,8 +280,15 @@ func (self *Sidecar) RegisterPresenceKey(ctx context.Context, provider PresenceP
 		Purpose:     bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
 		NotAfter:    notAfter.UnixMilli(),
 	}
-	// the device about to sign refuses an attestation that fails, never signing it as asserted (§16.6's labels)
-	if _, err := VerifyPresenceAttestation(register, self.clock.Now().UnixMilli()); err != nil {
+	// the device about to sign refuses an attestation the check refuses, never signing it as asserted, and keeps the
+	// label of one it takes (§16.6's labels; QD-885)
+	label, err := verifyPresenceRegisterAttestation(
+		register,
+		roots,
+		DefaultPresenceAttestationSettings(),
+		time.UnixMilli(self.clock.Now().UnixMilli()),
+	)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPresenceKeyInvalid, err)
 	}
 	// QD-086: the new key signs the body before field 9, header included, which AddSealed has set by now
@@ -309,6 +336,7 @@ func (self *Sidecar) RegisterPresenceKey(ctx context.Context, provider PresenceP
 		RegisteringSidecarId: identity.SidecarId,
 		NotAfter:             time.UnixMilli(notAfter.UnixMilli()),
 		Held:                 true,
+		Label:                label,
 	}
 	if 0 < len(pins) && pins[0] != nil {
 		key.Position = pins[0].GetVersion()
