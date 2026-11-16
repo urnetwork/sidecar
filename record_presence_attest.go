@@ -49,9 +49,10 @@
 // the root adds no module. Certificate chains are checked at the time the caller judges the registration at, the
 // carrying entry's for a reader labelling a logged key, so readers of one log under one release label one key alike.
 // Releases pin different roots, so a label, and a single-vendor refusal, can differ between releases: the device about
-// to sign a KeyRegister runs this, refuses a failing attestation and answers the label it read (RegisterPresenceKey),
-// and question mcp-m2-01-attestation-in-the-log-rule asks whether §7.9's rule, which every reader must judge alike, may
-// read the attestation at all.
+// to sign a KeyRegister runs this, refuses a failing attestation and answers the label it read (RegisterPresenceKey).
+// §7.9's rule, which every reader must judge alike, never reads the attestation, and each reader labels a logged key
+// locally (QD-924): a key logged while its single-vendor pool was empty whose chain fails once that root is pinned is
+// refused here from then on, which changes what a reader shows of it and nothing of its state or its authorization.
 //
 // No key is created, derived or unwrapped here, so nothing calls testHookSecret. Package-level functions are safe for
 // concurrent use. On every leg: nothing here names a connect type.
