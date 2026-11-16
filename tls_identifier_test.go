@@ -210,10 +210,17 @@ func TestTlsCustomIdentifierSetIsOneHostOutsideEveryRoot(t *testing.T) {
 		"App.customer.example",
 		"app.customer.example.",
 		"",
+		// past a name's 253 bytes, and past a label's 63
+		strings.Repeat("abcdefghij.", 24) + "customer.example",
+		strings.Repeat("a", 64) + ".customer.example",
 	} {
 		if _, err := TlsCustomIdentifierSet(host, roots); !errors.Is(err, ErrTlsIdentifierSet) {
 			t.Errorf("%q: %v", host, err)
 		}
+	}
+	// the apex of a customer's domain is a custom host like any other (17.6)
+	if set, err := TlsCustomIdentifierSet("customer.example", roots); err != nil || !slices.Equal(set, []string{"customer.example"}) {
+		t.Errorf("the apex: %v, %v", set, err)
 	}
 	// a name that only ends in a root's letters is not under it
 	if _, err := TlsCustomIdentifierSet("notsidecar.example", roots); err != nil {

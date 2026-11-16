@@ -10,8 +10,10 @@
 //	         (WorldSettings.Evs; server/evshost's TestFs5OnT3)
 //	devices  each a sidecar of the network with its own identity key, client id, sealed store and EvsClient, a mount
 //	         registry on its own state with the repo's bare repository, and a daemon whose git-hook mode serves that
-//	         bare repository's hooks; each mount runs as ur daemon runs it (EvsLocalRepo.Run), so an owned ref's queue
-//	         publishes on its own
+//	         bare repository's hooks and whose git mode hands git-remote-ur's sessions to the client's git service;
+//	         each mount runs as ur daemon runs it (EvsLocalRepo.Run), so an owned ref's queue publishes on its own
+//	remotes  git's http and ssh fronts and git-remote-ur, each a transport a clone can take besides git's local one
+//	         (transport.go)
 //	hooks    a test binary that builds a world names a test of its own in HookCommand which calls HookHelper:
 //	         git's hooks exec it, and it relays the hook to the daemon whose socket HookSocketVariable names
 //	git      stock git as each device's client, at the path the settings name, in plain clones whose committer is
@@ -87,6 +89,9 @@ type WorldSettings struct {
 	Format2 bool
 	// git-lfs in each device's clones, its objects moving through the device's daemon (lfs.go); nil for none.
 	Lfs *WorldLfs
+	// What git execs as git-remote-ur for a ur:// remote, git's <remote> and <url> appended: the test binary, a
+	// -test.run naming the test that calls RemoteHelper, then "--" (transport.go). Nil serves no ur:// remote.
+	RemoteHelperCommand []string
 }
 
 // A world's defaults: the caller names its HookCommand.
@@ -595,8 +600,19 @@ func (self *World) Device(label string, settings *DeviceSettings) *Device {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// git-remote-ur's sessions go to the client's git service as ur daemon's composition hands them; this daemon
+	// hosts no Sidecar, so <net> is not resolved among hosted networks (transport.go)
+	if err := daemon.RegisterMode(sidecar.DaemonModeGit, func(ctx context.Context, hello *sidecar.DaemonHello, stream io.ReadWriter) error {
+		_, repo, _ := strings.Cut(hello.Repo, "/")
+		return client.ServeGit(ctx, &sidecar.DaemonGitSession{Hello: hello, Repo: repo, Service: hello.Service, Stream: stream})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if self.settings.Lfs != nil {
 		device.serveLfs(daemon)
+	}
+	if len(self.settings.RemoteHelperCommand) != 0 {
+		device.installRemoteHelper()
 	}
 	daemonRan := make(chan error, 1)
 	go func() { daemonRan <- daemon.Run() }()
@@ -685,13 +701,27 @@ func (self *Device) Email() string {
 }
 
 // Runs the world's git in dir, answering its combined output and whether it succeeded. In a world with git-lfs, git
-// finds the world's git-lfs first on its PATH and the agent it starts finds the device's daemon (lfs.go).
+// finds the world's git-lfs first on its PATH and the agent it starts finds the device's daemon (lfs.go); in one with
+// git-remote-ur, git finds the world's helper, which finds the device's daemon (transport.go).
 func (self *Device) GitIn(dir string, env []string, args ...string) (string, bool) {
 	command := exec.Command(self.world.gitPath, append([]string{"-C", dir}, args...)...)
-	command.Env = append([]string{"HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "PATH=" + os.Getenv("PATH"), "LC_ALL=C"}, self.lfsEnvironment()...)
+	command.Env = append([]string{"HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "PATH=" + self.gitSearchPath(), "LC_ALL=C"}, self.lfsEnvironment()...)
+	command.Env = append(command.Env, self.remoteEnvironment()...)
 	command.Env = append(command.Env, env...)
 	out, err := command.CombinedOutput()
 	return string(out), err == nil
+}
+
+// The PATH a device's git runs with: the world's git-lfs and git-remote-ur first, where the world has them.
+func (self *Device) gitSearchPath() string {
+	directories := []string{}
+	if self.world.settings.Lfs != nil {
+		directories = append(directories, self.lfsBin())
+	}
+	if len(self.world.settings.RemoteHelperCommand) != 0 {
+		directories = append(directories, self.urBin())
+	}
+	return strings.Join(append(directories, os.Getenv("PATH")), string(os.PathListSeparator))
 }
 
 // git in dir that must succeed, its output.
@@ -853,20 +883,20 @@ func HookHelper() {
 			if err != nil {
 				return nil, err
 			}
-			return &hookStream{ReadWriter: client.Stream(), client: client}, nil
+			return &daemonStream{ReadWriter: client.Stream(), client: client}, nil
 		},
 		Getenv: os.Getenv, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 	})
 	os.Exit(code)
 }
 
-// A hook session's stream, closed with its client.
-type hookStream struct {
+// A daemon session's stream, a hook's or git-remote-ur's, closed with its client.
+type daemonStream struct {
 	io.ReadWriter
 	client *sidecar.DaemonClient
 }
 
-func (self *hookStream) Close() error {
+func (self *daemonStream) Close() error {
 	return self.client.Close()
 }
 

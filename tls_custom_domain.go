@@ -42,10 +42,14 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	mathrand "math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // RFC 8737's and RFC 8555's challenge types an order's authorization offers.
@@ -345,10 +349,12 @@ type TlsCustomAlpnPath interface {
 
 // The ordering desktop's tunables (17.2.15). DefaultTlsCustomSettings is the only source of a default.
 type TlsCustomSettings struct {
-	// The loop runs again PollInterval, jittered by a fifth, after a pass that listed work, IdlePollInterval after one
-	// that did not.
+	// The loop (Run) runs again PollInterval, moved by up to PollJitter of it either way, after a pass that listed
+	// work, and IdlePollInterval after one that did not or failed. Both positive; PollJitter a fifth, at least 0 and
+	// below 1.
 	PollInterval     time.Duration
 	IdlePollInterval time.Duration
+	PollJitter       float64
 	// How often an order or authorization is read again while processing or pending.
 	OrderPollInterval time.Duration
 	// The holder's local deadline is the claim's send plus lease_ms less this.
@@ -366,6 +372,9 @@ type TlsCustomSettings struct {
 	AriRefreshInterval time.Duration
 	// A kill deactivates and reads the order again at most this many times.
 	DeactivateTryCount int
+	// The longest key file a read takes from a secret repo: 16 KiB, far past a file's two P-256 keys in base64. A
+	// longer one is a key file this desktop cannot read.
+	KeyFileMaxByteCount int
 	// The ACME profile every order names: tlsserver's 45 days and 7 h authorization reuse (A1, A2).
 	Profile string
 	// A2, read only by tests.
@@ -377,19 +386,21 @@ type TlsCustomSettings struct {
 // 17.2.15's numbers.
 func DefaultTlsCustomSettings() *TlsCustomSettings {
 	return &TlsCustomSettings{
-		PollInterval:       60 * time.Second,
-		IdlePollInterval:   5 * time.Minute,
-		OrderPollInterval:  2 * time.Second,
-		LeaseMargin:        10 * time.Second,
-		OrderDeadline:      10 * time.Minute,
-		ChallengeLifetime:  10 * time.Minute,
-		NonceRetryCount:    3,
-		ProbeCount:         2,
-		ProbeTimeout:       10 * time.Second,
-		AriRefreshInterval: 6 * time.Hour,
-		DeactivateTryCount: 3,
-		Profile:            "tlsserver",
-		AuthorizationReuse: 7 * time.Hour,
+		PollInterval:        60 * time.Second,
+		IdlePollInterval:    5 * time.Minute,
+		PollJitter:          1.0 / 5.0,
+		OrderPollInterval:   2 * time.Second,
+		LeaseMargin:         10 * time.Second,
+		OrderDeadline:       10 * time.Minute,
+		ChallengeLifetime:   10 * time.Minute,
+		NonceRetryCount:     3,
+		ProbeCount:          2,
+		ProbeTimeout:        10 * time.Second,
+		AriRefreshInterval:  6 * time.Hour,
+		DeactivateTryCount:  3,
+		KeyFileMaxByteCount: 16 * 1024,
+		Profile:             "tlsserver",
+		AuthorizationReuse:  7 * time.Hour,
 	}
 }
 
@@ -407,6 +418,9 @@ type TlsCustomDomainOrdererDeps struct {
 	Clock Clock
 	// The desktop's local alarms (17.2.14). nil drops them.
 	Alarm func(name string)
+	// The key repos a key change reads (17.2.13): with them each pass makes a due change this desktop may make and
+	// reports one it may not; nil leaves key changes to RollAccount's callers.
+	Repos TlsCustomKeyRepos
 }
 
 // See the file header. Safe for concurrent use: one pass runs at a time.
@@ -416,6 +430,9 @@ type TlsCustomDomainOrderer struct {
 	clock    Clock
 
 	passLock sync.Mutex
+	// Each domain's rollover_due as sent, at its row's key sequence plus one, so a standing due change is reported
+	// once a key sequence. Under passLock.
+	rolloverDueSent map[string]uint64
 }
 
 // An orderer on deps, settings nil taking the defaults. It starts nothing: RunOnce is one pass of the loop.
@@ -426,11 +443,15 @@ func NewTlsCustomDomainOrderer(deps *TlsCustomDomainOrdererDeps, settings *TlsCu
 	if settings == nil {
 		settings = DefaultTlsCustomSettings()
 	}
+	// a wait that is not positive would spin the loop and the order's polls
+	if settings.PollInterval <= 0 || settings.IdlePollInterval <= 0 || settings.OrderPollInterval <= 0 || !(0 <= settings.PollJitter && settings.PollJitter < 1) {
+		return nil, errors.New("the custom-domain orderer's waits are not positive")
+	}
 	clock := deps.Clock
 	if clock == nil {
 		clock = RealClock{}
 	}
-	return &TlsCustomDomainOrderer{deps: deps, settings: settings, clock: clock}, nil
+	return &TlsCustomDomainOrderer{deps: deps, settings: settings, clock: clock, rolloverDueSent: map[string]uint64{}}, nil
 }
 
 // Raises a local alarm (17.2.14), when the host takes them.
@@ -606,6 +627,9 @@ type TlsCustomPassReport struct {
 	Failed    []Id
 	WorkSeen  bool
 	NewOrders int
+	// Accounts whose key changed in the pass, and those whose due change it reported as one it may not make.
+	Rolled      []string
+	RolloverDue []string
 }
 
 // One pass of 17.2.7's loop: the work list; for each account whose key file checks, the first row with no wait this
@@ -621,8 +645,12 @@ func (self *TlsCustomDomainOrderer) RunOnce(ctx context.Context) (*TlsCustomPass
 	}
 	report.WorkSeen = 0 < len(work.QueuedCsrs)
 	for _, account := range work.Accounts {
-		_, key, keySeq, err := self.accountKey(ctx, account)
+		file, key, keySeq, err := self.accountKey(ctx, account)
 		if err != nil {
+			continue
+		}
+		if self.rollover(ctx, report, account, file) {
+			// the next pass orders under the key the row then names
 			continue
 		}
 		for _, row := range work.QueuedCsrs {
@@ -1428,4 +1456,450 @@ func (self *TlsCustomDomainOrderer) rollState(ctx context.Context, account *TlsC
 		}
 	}
 	return tlsCustomRollLost, nil
+}
+
+// 17.2.7's loop until ctx ends: a pass, then PollInterval moved by up to PollJitter of it either way after a pass that
+// listed work, else IdlePollInterval, the same after a pass that failed. report, when not nil, takes each pass's
+// report and error, nil for no failure.
+func (self *TlsCustomDomainOrderer) Run(ctx context.Context, report func(passReport *TlsCustomPassReport, err error)) {
+	for {
+		passReport, err := self.RunOnce(ctx)
+		if report != nil {
+			report(passReport, err)
+		}
+		wait := self.settings.IdlePollInterval
+		if err == nil && passReport.WorkSeen {
+			wait = self.settings.PollInterval
+			if spread := time.Duration(self.settings.PollJitter * float64(wait)); 0 < spread {
+				wait += time.Duration(mathrand.Int64N(int64(2*spread)+1)) - spread
+			}
+		}
+		if self.wait(ctx, wait) != nil {
+			return
+		}
+	}
+}
+
+// What `ur tls account status` shows of one account: the server's row, which of its keys this desktop's key file
+// gives, and whether a key change is due and may be made here (17.2.13).
+type TlsCustomAccountStatus struct {
+	Account *TlsCustomAccount
+	// The key sequence of the key this desktop holds for the row, 0 for none: the row's key_seq, or one more while a
+	// key change owes its last step.
+	KeySeq uint64
+	// A key change is due for the key file this desktop holds, and whether this desktop may make it.
+	RolloverDue bool
+	MayRoll     bool
+	// The account's rows on the work list.
+	WorkCount int
+}
+
+// Each account of the work list, with domain "" for all, as this desktop holds it.
+func (self *TlsCustomDomainOrderer) AccountStatus(ctx context.Context, domain string, repos TlsCustomKeyRepos) ([]*TlsCustomAccountStatus, error) {
+	work, err := self.deps.Api.Work(ctx)
+	if err != nil {
+		return nil, err
+	}
+	statuses := []*TlsCustomAccountStatus{}
+	for _, account := range work.Accounts {
+		if domain != "" && account.Domain != domain {
+			continue
+		}
+		status := &TlsCustomAccountStatus{Account: account}
+		for _, row := range work.QueuedCsrs {
+			if row.CustomDomain == account.Domain {
+				status.WorkCount += 1
+			}
+		}
+		if file, _, keySeq, err := self.accountKey(ctx, account); err == nil {
+			status.KeySeq = keySeq
+			if repos != nil {
+				status.RolloverDue, status.MayRoll = repos.RolloverDue(account.KeyRepoId, file.ShrunkAt)
+			}
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
+}
+
+// The account of the work list for domain, nil for none.
+func (self *TlsCustomDomainOrderer) Account(ctx context.Context, domain string) (*TlsCustomAccount, error) {
+	work, err := self.deps.Api.Work(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, account := range work.Accounts {
+		if account.Domain == domain {
+			return account, nil
+		}
+	}
+	return nil, nil
+}
+
+// The secret repos' key files as the host reaches evs: TlsCustomKeyStore's repo half, which cli/ gives the orderer
+// (DESIGN-DETAILS 17.2.3). Safe for concurrent use.
+type TlsCustomRepoFiles interface {
+	// The key file of domain in repoId. ErrTlsCustomKeyUnavailable when this desktop cannot read it.
+	ReadKeyFile(ctx context.Context, repoId Id, domain string) ([]byte, error)
+	// Writes it, returning once the push has committed.
+	WriteKeyFile(ctx context.Context, repoId Id, domain string, data []byte) error
+}
+
+// TlsCustomApi on api's routes, each call under a service token for aud certs from token: Sidecar.ServiceToken for
+// SidecarTlsSettings.CertsResource, which caches it.
+type sidecarTlsCustomApi struct {
+	api   *SidecarApi
+	token func(ctx context.Context) (string, error)
+}
+
+// TlsCustomApi on api, each call under token's service token.
+func NewTlsCustomApi(api *SidecarApi, token func(ctx context.Context) (string, error)) TlsCustomApi {
+	return &sidecarTlsCustomApi{api: api, token: token}
+}
+
+// See TlsCustomApi.
+func (self *sidecarTlsCustomApi) Work(ctx context.Context) (*TlsCertsResult, error) {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return self.api.TlsCustomWork(ctx, serviceToken)
+}
+
+// See TlsCustomApi.
+func (self *sidecarTlsCustomApi) Claim(ctx context.Context, args *TlsCustomClaimArgs) (*TlsCustomClaimResult, error) {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return self.api.TlsCustomClaim(ctx, serviceToken, args)
+}
+
+// See TlsCustomApi.
+func (self *sidecarTlsCustomApi) Progress(ctx context.Context, args *TlsCustomProgressArgs) (*TlsCustomClaimResult, error) {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return self.api.TlsCustomProgress(ctx, serviceToken, args)
+}
+
+// See TlsCustomApi.
+func (self *sidecarTlsCustomApi) Register(ctx context.Context, args *TlsCertRegisterArgs) error {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return err
+	}
+	return self.api.TlsCertRegister(ctx, serviceToken, args)
+}
+
+// See TlsCustomApi.
+func (self *sidecarTlsCustomApi) Account(ctx context.Context, args *TlsCustomAccountArgs) (*TlsCustomAccount, error) {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return self.api.TlsCustomAccount(ctx, serviceToken, args)
+}
+
+// See TlsCustomApi.
+func (self *sidecarTlsCustomApi) Challenge(ctx context.Context, args *TlsCustomChallengeArgs) (*TlsCustomChallengeResult, error) {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return self.api.TlsCustomChallenge(ctx, serviceToken, args)
+}
+
+// See TlsCustomApi.
+func (self *sidecarTlsCustomApi) ChallengeStatus(ctx context.Context, challengeId uint64) (*TlsCustomChallengeResult, error) {
+	serviceToken, err := self.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return self.api.TlsCustomChallengeStatus(ctx, serviceToken, challengeId)
+}
+
+// The name a key file's local copy has in the keychain's tls namespace, beside the device key (17.2.3).
+func tlsCustomLocalKeyName(domain string) string {
+	return "acme/" + domain + ".json"
+}
+
+// TlsCustomKeyStore on the host's repo files and this Sidecar's keychain, whose tls namespace keeps each key file's
+// local copy beside the device key (17.2.3).
+type sidecarTlsCustomKeyStore struct {
+	files   TlsCustomRepoFiles
+	secrets SidecarSecrets
+}
+
+// See TlsCustomKeyStore.
+func (self *sidecarTlsCustomKeyStore) ReadKeyFile(ctx context.Context, repoId Id, domain string) ([]byte, error) {
+	return self.files.ReadKeyFile(ctx, repoId, domain)
+}
+
+// See TlsCustomKeyStore.
+func (self *sidecarTlsCustomKeyStore) WriteKeyFile(ctx context.Context, repoId Id, domain string, data []byte) error {
+	return self.files.WriteKeyFile(ctx, repoId, domain, data)
+}
+
+// The local copy, nil for none or while the keychain is locked.
+func (self *sidecarTlsCustomKeyStore) LocalKeyFile(domain string) []byte {
+	data, err := self.secrets.Get(tlsCustomLocalKeyName(domain))
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	return data
+}
+
+// See TlsCustomKeyStore.
+func (self *sidecarTlsCustomKeyStore) SetLocalKeyFile(domain string, data []byte) error {
+	return self.secrets.Put(tlsCustomLocalKeyName(domain), data)
+}
+
+// TlsCustomDevices and TlsCustomKeyRepos on this Sidecar's own verified view: the authority's admissions and the
+// config follower's AclState, never a server's answer (17.2.7 step 3, 17.2.13). With no state standing yet every
+// device reads as unadmitted and every grant as absent, the closed direction.
+type sidecarTlsCustomDevices struct {
+	sidecar   *Sidecar
+	networkId Id
+	sidecarId Id
+}
+
+// The verified AclState, nil while none stands.
+func (self *sidecarTlsCustomDevices) state() *AclState {
+	follower := self.sidecar.ConfigFollower()
+	if follower == nil {
+		return nil
+	}
+	engine := follower.AclEngine()
+	if engine == nil {
+		return nil
+	}
+	return engine.State()
+}
+
+// The tls/ ports a publish names (§13.10), on any of which a device serves its custom host.
+var tlsCustomPublishPorts = []int{443, 8443, 8883, 5671}
+
+// Whether sidecarId holds an active approved publish grant on tls/<port>/<ownerLabel> for one of ports, in either
+// mode.
+func (self *sidecarTlsCustomDevices) granted(sidecarId Id, ownerLabel string, ports []int) bool {
+	state := self.state()
+	if state == nil || ownerLabel == "" {
+		return false
+	}
+	now := self.sidecar.clock.Now()
+	subject := AclSubject{Kind: AclSubjectSidecar, Id: sidecarId}
+	for _, port := range ports {
+		socketName := "tls/" + strconv.Itoa(port) + "/" + ownerLabel
+		for _, appMode := range []protocol.AclAppMode{protocol.AclAppMode_ACL_APP_MODE_HTTP, protocol.AclAppMode_ACL_APP_MODE_RAW} {
+			if _, decision := state.PublishGrant(subject, socketName, appMode, now); decision.Allowed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// See TlsCustomDevices: a revoked or parked admission is none.
+func (self *sidecarTlsCustomDevices) Device(sidecarId Id, ownerLabel string) ([]byte, bool) {
+	authority := self.sidecar.authority()
+	if authority == nil {
+		return nil, false
+	}
+	admission := authority.Admission(sidecarId)
+	if admission == nil || admission.Row == nil || admission.Row.GetRevokedAt() != 0 || admission.Row.GetParkedAt() != 0 {
+		return nil, false
+	}
+	return admission.Row.GetIdentityPublicKey(), self.granted(sidecarId, ownerLabel, tlsCustomPublishPorts)
+}
+
+// See TlsCustomDevices.
+func (self *sidecarTlsCustomDevices) Holds443(ownerLabel string) bool {
+	return self.granted(self.sidecarId, ownerLabel, []int{443})
+}
+
+// See TlsCustomDevices.
+func (self *sidecarTlsCustomDevices) SidecarId() Id {
+	return self.sidecarId
+}
+
+// See TlsCustomDevices.
+func (self *sidecarTlsCustomDevices) NetworkId() Id {
+	return self.networkId
+}
+
+// This desktop's member, zero for a tagged admission, which names none, or no admission.
+func (self *sidecarTlsCustomDevices) memberId() Id {
+	authority := self.sidecar.authority()
+	if authority == nil {
+		return Id{}
+	}
+	admission := authority.Admission(self.sidecarId)
+	if admission == nil {
+		return Id{}
+	}
+	return admission.MemberId
+}
+
+// See TlsCustomKeyRepos. A repo the state does not hold is due, and no desktop may roll it from here.
+func (self *sidecarTlsCustomDevices) RolloverDue(repoId Id, shrunkAt uint64) (bool, bool) {
+	state := self.state()
+	if state == nil {
+		return false, false
+	}
+	repo := state.Repo(repoId)
+	if repo == nil {
+		return true, false
+	}
+	ownerId, err := IdFromBytes(repo.GetOwnerMemberId())
+	ownerMember := err == nil && state.view.Member(ownerId) != nil
+	due := shrunkAt < repo.GetHoldersShrunkAt() || !ownerMember
+	memberId := self.memberId()
+	mayRoll := memberId != (Id{}) && state.memberAdmin(memberId) && (!ownerMember || memberId == ownerId)
+	return due, mayRoll
+}
+
+// See TlsCustomKeyRepos: repoId when this desktop's member owns it. Moving the key into this user's own secret repo,
+// shared by EvsShare with repoId's standing subjects (R2), waits on EvsShare filing from the ordering desktop, so it
+// is refused, the closed direction: such a change is left due.
+func (self *sidecarTlsCustomDevices) RollTarget(ctx context.Context, repoId Id) (Id, uint64, error) {
+	state := self.state()
+	if state == nil {
+		return Id{}, 0, ErrTlsCustomRollTarget
+	}
+	repo := state.Repo(repoId)
+	if repo == nil {
+		return Id{}, 0, ErrTlsCustomRollTarget
+	}
+	ownerId, err := IdFromBytes(repo.GetOwnerMemberId())
+	if err != nil || ownerId != self.memberId() {
+		return Id{}, 0, ErrTlsCustomRollTarget
+	}
+	return repoId, repo.GetHoldersShrunkAt(), nil
+}
+
+// A key change that would move the key into another repo, which waits on EvsShare filing (17.2.13's R2).
+var ErrTlsCustomRollTarget = errors.New("the key change moves the key into another secret repo, which waits on EvsShare filing")
+
+// This member's own secret repo in the verified state, the first by id that is not deleted (17.2.13's creation step
+// 1). A zero RepoId when the member has none yet, which the host creates; a zero MemberId while this sidecar's
+// admission names no member or no state stands.
+func (self *sidecarTlsCustomDevices) secretRepo() *TlsCustomSecretRepo {
+	secret := &TlsCustomSecretRepo{MemberId: self.memberId()}
+	state := self.state()
+	if state == nil || secret.MemberId == (Id{}) {
+		return &TlsCustomSecretRepo{}
+	}
+	for _, repoId := range state.RepoIds() {
+		repo := state.Repo(repoId)
+		deletion := repo.GetDeletion()
+		if repo.GetKind() != protocol.RepoKind_REPO_KIND_SECRET || (deletion != nil && deletion.GetDeletedAt() != 0 && deletion.GetRestoredAt() == 0) {
+			continue
+		}
+		if ownerId, err := IdFromBytes(repo.GetOwnerMemberId()); err == nil && ownerId == secret.MemberId {
+			secret.RepoId = repoId
+			secret.ShrunkAt = repo.GetHoldersShrunkAt()
+			return secret
+		}
+	}
+	return secret
+}
+
+// What an ordering desktop's orderer takes from this Sidecar (DESIGN-DETAILS 17.2.7): the custom routes under a
+// service token for aud certs, its own verified view of the network's devices and grants, each key file's local copy
+// beside the device key, the network's root from its zone, its clock, and its local alarms, which it logs. The host
+// gives the CA (cli/'s acmez client), the resolver and the secret repos' key files (cli/'s evs), so no sdk leg links
+// them; the TLS-ALPN-01 path stays nil, DNS-01 alone, until the front serves a challenge. ErrTlsCertsUnconfigured with
+// no certs audience configured, as for the device's own orders.
+func (self *Sidecar) TlsCustomOrdererDeps(ctx context.Context, acme TlsAcmeClient, resolver TlsCustomResolver, files TlsCustomRepoFiles) (*TlsCustomDomainOrdererDeps, TlsCustomKeyRepos, error) {
+	if acme == nil || resolver == nil || files == nil {
+		return nil, nil, fmt.Errorf("%w: the orderer needs its CA, resolver and key files", errInvalidSettings)
+	}
+	resource := self.settings.Tls.CertsResource
+	if resource == "" {
+		return nil, nil, ErrTlsCertsUnconfigured
+	}
+	networkId := self.enrolledNetworkId()
+	identity := self.currentIdentity()
+	if networkId == nil || identity == nil || self.instance == nil {
+		return nil, nil, fmt.Errorf("%w: the orderer needs an enrolled network", errInvalidSettings)
+	}
+	names, err := self.tlsCertNames(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	devices := &sidecarTlsCustomDevices{sidecar: self, networkId: *networkId, sidecarId: identity.SidecarId}
+	deps := &TlsCustomDomainOrdererDeps{
+		Api: NewTlsCustomApi(self.sidecarApi, func(ctx context.Context) (string, error) {
+			return self.ServiceToken(ctx, resource, nil)
+		}),
+		Acme:     acme,
+		Resolver: resolver,
+		Devices:  devices,
+		Keys:     &sidecarTlsCustomKeyStore{files: files, secrets: self.instance.secrets(*networkId, tlsSecretsNamespace)},
+		Roots:    []string{names.Root},
+		Clock:    self.clock,
+		Repos:    devices,
+		// a name only, never a host, a key or a path (I-13)
+		Alarm: func(name string) {
+			self.log.Warningf("[tls]custom-domain alarm %s\n", name)
+		},
+	}
+	return deps, devices, nil
+}
+
+// A member's own secret repo, where a new account's key file goes (17.2.13's creation step 1).
+type TlsCustomSecretRepo struct {
+	// The member, whom a new secret repo names as owner; zero while this sidecar's admission names none.
+	MemberId Id
+	// The repo, zero when the member has none yet, which the host creates; and its holders_shrunk_at.
+	RepoId   Id
+	ShrunkAt uint64
+}
+
+// This sidecar's member's own secret repo in its verified view (17.2.13's creation step 1).
+func (self *Sidecar) TlsCustomSecretRepo() *TlsCustomSecretRepo {
+	networkId := self.enrolledNetworkId()
+	identity := self.currentIdentity()
+	if networkId == nil || identity == nil {
+		return &TlsCustomSecretRepo{}
+	}
+	devices := &sidecarTlsCustomDevices{sidecar: self, networkId: *networkId, sidecarId: identity.SidecarId}
+	return devices.secretRepo()
+}
+
+// 17.2.13's change in a pass, due when the key file's repo's holders shrank since the key was made or its owner left
+// (owner decision 425): made now when this desktop may make it, so the first admin desktop online makes it within one
+// poll, a change in flight resumed the same way, and a due change it may not make, or may make only by moving the key
+// into another repo (ErrTlsCustomRollTarget), reported once a key sequence as rollover_due, which the server raises as
+// tls_account_rollover_due. Whether the account's key moved, so the pass orders nothing more under the old one.
+func (self *TlsCustomDomainOrderer) rollover(ctx context.Context, report *TlsCustomPassReport, account *TlsCustomAccount, file *TlsCustomKeyFile) bool {
+	if self.deps.Repos == nil {
+		return false
+	}
+	due, mayRoll := self.deps.Repos.RolloverDue(account.KeyRepoId, file.ShrunkAt)
+	inFlight := 0 < len(account.NextKeyThumbprint)
+	if !due && !inFlight {
+		return false
+	}
+	if mayRoll {
+		err := self.RollAccount(ctx, account, self.deps.Repos)
+		if err == nil {
+			report.Rolled = append(report.Rolled, account.Domain)
+			return true
+		}
+		if !errors.Is(err, ErrTlsCustomRollTarget) {
+			// the next pass tries again; ordering goes on under the key the row names
+			return false
+		}
+	}
+	// sent once for each key sequence the row names, so a standing due change is not reported each poll
+	if due && self.rolloverDueSent[account.Domain] != account.KeySeq+1 {
+		if _, err := self.deps.Api.Progress(ctx, &TlsCustomProgressArgs{Domain: account.Domain, Event: TlsCustomEventRolloverDue}); err == nil {
+			self.rolloverDueSent[account.Domain] = account.KeySeq + 1
+			report.RolloverDue = append(report.RolloverDue, account.Domain)
+		}
+	}
+	return false
 }

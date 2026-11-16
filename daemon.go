@@ -449,6 +449,11 @@ func (self *Daemon) serveRpc(reader *bufio.Reader, conn net.Conn, session *daemo
 		}
 	}()
 	writer := bufio.NewWriter(conn)
+	// a call's notifications and its answer share the writer: a notification goes out only while its own request is
+	// the one being answered, so none follows the answer, nor one a timed-out handler sends into a later request's
+	writeLock := sync.Mutex{}
+	answering := uint64(0)
+	requestCount := uint64(0)
 	for {
 		var line []byte
 		select {
@@ -458,7 +463,44 @@ func (self *Daemon) serveRpc(reader *bufio.Reader, conn net.Conn, session *daemo
 			return
 		}
 		self.noteRequest()
+		requestCount += 1
+		if session.hello.Mode == DaemonModeControl {
+			request := requestCount
+			session.notify = func(method string, params any) error {
+				if err := checkDaemonReplyTo(params, self.settings.Local.ReplyMaxDepth); err != nil {
+					return err
+				}
+				encodedParams, err := json.Marshal(params)
+				if err != nil {
+					return err
+				}
+				encoded, err := json.Marshal(&daemonRpcRequest{JsonRpc: "2.0", Method: method, Params: encodedParams})
+				if err != nil {
+					return err
+				}
+				writeLock.Lock()
+				defer writeLock.Unlock()
+				if answering != request {
+					return errDaemonNotifyEnded
+				}
+				if _, err := writer.Write(append(encoded, '\n')); err != nil {
+					return err
+				}
+				return writer.Flush()
+			}
+			func() {
+				writeLock.Lock()
+				defer writeLock.Unlock()
+				answering = request
+			}()
+		}
 		response := self.dispatch(line, session, self.runBounded)
+		// from here the answer alone writes: a notification of this request finished before this lock, and none starts
+		func() {
+			writeLock.Lock()
+			defer writeLock.Unlock()
+			answering = 0
+		}()
 		if response == nil {
 			continue
 		}

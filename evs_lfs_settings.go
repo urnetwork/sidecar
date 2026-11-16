@@ -14,7 +14,9 @@
 //	         LfsPruneWindowFloor (7 days); 7 or more as written. The tip check's 5-day freshness rests on N >= 7, so no
 //	         value reads below the floor
 //	signer   a version counts only if its push's signer held repo admin (§8.8) at its signed time in the state the
-//	         reader holds; a version no admin signed alarms and the window reads LfsPruneWindow, which keeps content
+//	         reader holds; a version no admin signed alarms and is passed over, the newest version an admin signed
+//	         standing, found by the path's history; with none before a removal, the creation or History's bound, the
+//	         window reads LfsPruneWindow, which keeps content
 //	write    `ur evs lfs window <days>` writes it, 7 to LfsWindowMaxDays (365), as the store's reserved writer at
 //	         versioning 0
 //
@@ -85,9 +87,11 @@ func EvsLfsWindow(windowDays uint32, settings *EvsSettings) time.Duration {
 	return time.Duration(windowDays) * 24 * time.Hour
 }
 
-// The window the store's settings file sets, read now: the default when the file is absent, does not parse, or its
-// newest version's signer did not hold repo admin by isAdmin (nil: none is checked, which only a test passes), the
-// last alarming through alarm.
+// The window the store's settings file sets, read now: the default when the file is absent or does not parse, the
+// last alarming through alarm. A version counts only if its push's signer held repo admin by isAdmin (nil: none is
+// checked, which only a test passes): each newer version no admin signed alarms and is passed over, and the newest
+// version an admin signed stands, found by the path's history (QD-258); a removal, the path's creation or History's
+// bound reached first reads the default, which keeps content.
 func (self *EvsLfsStore) Window(ctx context.Context, isAdmin func(signerId Id, signedAt time.Time) bool, alarm func(err error)) (time.Duration, error) {
 	body := &bytes.Buffer{}
 	info, err := self.repo.ReadHead(ctx, &EvsReadArgs{RefName: EvsLfsRefName, Path: EvsLfsSettingsPath, Fresh: true}, body)
@@ -98,10 +102,15 @@ func (self *EvsLfsStore) Window(ctx context.Context, isAdmin func(signerId Id, s
 		return 0, err
 	}
 	if isAdmin != nil && !isAdmin(info.SignerSidecarId, info.Time) {
-		if alarm != nil {
-			alarm(fmt.Errorf("a git-lfs settings version %d no repo admin signed: the window reads its default", info.Version))
+		evsLfsAlarmUnsigned(alarm, info.Version)
+		body.Reset()
+		found, err := self.readAdminSettings(ctx, info.Version, isAdmin, alarm, body)
+		if err != nil {
+			return 0, err
 		}
-		return self.settings.LfsPruneWindow, nil
+		if !found {
+			return self.settings.LfsPruneWindow, nil
+		}
 	}
 	windowDays, err := DecodeEvsLfsSettings(body.Bytes())
 	if err != nil {
@@ -111,6 +120,38 @@ func (self *EvsLfsStore) Window(ctx context.Context, isAdmin func(signerId Id, s
 		return self.settings.LfsPruneWindow, nil
 	}
 	return EvsLfsWindow(windowDays, self.settings), nil
+}
+
+// Reads into body the newest settings version below below that a repo admin signed by isAdmin, each newer one no admin
+// signed alarming: false when a removal, the path's creation or History's bound comes first.
+func (self *EvsLfsStore) readAdminSettings(ctx context.Context, below uint64, isAdmin func(signerId Id, signedAt time.Time) bool, alarm func(err error), body *bytes.Buffer) (bool, error) {
+	history, err := self.repo.History(ctx, &EvsReadArgs{RefName: EvsLfsRefName, Path: EvsLfsSettingsPath, Fresh: true})
+	if err != nil {
+		return false, err
+	}
+	for _, version := range history.Versions {
+		switch {
+		case below <= version.Version:
+			continue
+		case version.Removed:
+			return false, nil
+		case !isAdmin(version.SignerSidecarId, version.Time):
+			evsLfsAlarmUnsigned(alarm, version.Version)
+			continue
+		}
+		if _, err := self.repo.ReadVersion(ctx, &EvsReadArgs{RefName: EvsLfsRefName, Path: EvsLfsSettingsPath, Version: version.Version}, body); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// Alarms a settings version no repo admin signed, which a reader passes over.
+func evsLfsAlarmUnsigned(alarm func(err error), version uint64) {
+	if alarm != nil {
+		alarm(fmt.Errorf("a git-lfs settings version %d no repo admin signed: passed over for the newest version an admin signed", version))
+	}
 }
 
 // Writes the settings file with windowDays, 7 to LfsWindowMaxDays: `ur evs lfs window <days>`. A write that moved

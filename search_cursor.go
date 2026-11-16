@@ -19,17 +19,34 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
+	"errors"
 	"slices"
 	"sync"
 	"time"
 )
 
-// A cursor token's parts: its id and its tag.
+// A cursor token's parts: its id and its tag; and the label a hit id's MAC starts with.
 const (
 	searchCursorIdByteCount  = 16
 	searchCursorTagByteCount = 16
 	searchCursorLabel        = "UR search cursor 1"
+	searchHitIdLabel         = "UR search hit 1"
 )
+
+// A hit id no live cursor of the session gave: forged, another session's, or its cursor gone.
+var ErrSearchHitUnknown = errors.New("search: the hit is none a live cursor of this session gave")
+
+// What a hit id opens (§16.10's open row): for the session whose cursor gave it, while that cursor lives.
+type SearchHitRef struct {
+	RepoId Id
+	RefId  Id
+	// The path, or a derived document's registered name.
+	Path    string
+	Version uint64
+	DocKey  [indexIdByteCount]byte
+	DocKind int
+}
 
 // The engine's cursors.
 type searchCursorTable struct {
@@ -48,6 +65,11 @@ type searchCursor struct {
 	stream   *searchEngineStream
 	openedAt time.Time
 	usedAt   time.Time
+	// The hits its pages gave, by hit id, which open while it lives; the oldest forgotten first past a caller's bound.
+	hits     map[string]*SearchHitRef
+	hitOrder []string
+	// Its search completed and its stream closed (finish): no page is left, and its hit ids open until it idles out.
+	finished bool
 }
 
 // A table with a fresh key.
@@ -103,15 +125,25 @@ func (self *searchCursorTable) open(session Id, stream *searchEngineStream) (str
 	return base64.RawURLEncoding.EncodeToString(token), nil
 }
 
-// The stream of session's cursor token: ErrSearchCursorInvalid for a token this session cannot hold, and
-// ErrSearchCursorExpired for one idle past Search.CursorTimeout, dropped, or ended by its scope.
-func (self *searchCursorTable) take(session Id, token string) (*searchEngineStream, error) {
+// The cursor id of session's token, false for a token the session cannot hold: forged, another session's, or
+// malformed.
+func (self *searchCursorTable) cursorId(session Id, token string) ([searchCursorIdByteCount]byte, bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil || len(raw) != searchCursorIdByteCount+searchCursorTagByteCount {
-		return nil, ErrSearchCursorInvalid
+		return [searchCursorIdByteCount]byte{}, false
 	}
 	id := [searchCursorIdByteCount]byte(raw[:searchCursorIdByteCount])
 	if !hmac.Equal(raw[searchCursorIdByteCount:], self.tag(session, id)) {
+		return [searchCursorIdByteCount]byte{}, false
+	}
+	return id, true
+}
+
+// The stream of session's cursor token: ErrSearchCursorInvalid for a token this session cannot hold, and
+// ErrSearchCursorExpired for one idle past Search.CursorTimeout, dropped, or ended by its scope.
+func (self *searchCursorTable) take(session Id, token string) (*searchEngineStream, error) {
+	id, ok := self.cursorId(session, token)
+	if !ok {
 		return nil, ErrSearchCursorInvalid
 	}
 	now := self.clock.Now()
@@ -122,9 +154,13 @@ func (self *searchCursorTable) take(session Id, token string) (*searchEngineStre
 		if cursor == nil {
 			return nil, true
 		}
-		if now.Sub(cursor.usedAt) > self.settings.CursorTimeout || cursor.stream.ended() {
+		if now.Sub(cursor.usedAt) > self.settings.CursorTimeout || !cursor.finished && cursor.stream.ended() {
 			delete(self.cursors, id)
 			return cursor, true
+		}
+		if cursor.finished {
+			// its search completed: no page is left
+			return nil, true
 		}
 		cursor.usedAt = now
 		return cursor, false
@@ -138,6 +174,94 @@ func (self *searchCursorTable) take(session Id, token string) (*searchEngineStre
 	return cursor.stream, nil
 }
 
+// The hit id of hit for session: opaque, the same each time this engine gives that version of that document in that
+// session, and no other session's (§16.10's hit_id). A stub's is its whole hit's.
+func (self *searchCursorTable) hitId(session Id, hit *SearchHit) string {
+	mac := hmac.New(sha256.New, self.key)
+	mac.Write([]byte(searchHitIdLabel))
+	mac.Write(session.Bytes())
+	mac.Write(hit.Repo.Bytes())
+	mac.Write(hit.Ref.Bytes())
+	mac.Write(hit.DocKey[:])
+	mac.Write(binary.BigEndian.AppendUint64(nil, hit.Version))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:searchCursorTagByteCount])
+}
+
+// Notes the hits a call of session gave on its cursor token, whole, so their ids open while the cursor lives: at most
+// maxCount a cursor, the oldest forgotten first. A token the session cannot hold, or a cursor gone, notes nothing.
+func (self *searchCursorTable) noteHits(session Id, token string, hits []SearchHit, maxCount int) {
+	id, ok := self.cursorId(session, token)
+	if !ok || len(hits) == 0 {
+		return
+	}
+	hitIds := make([]string, 0, len(hits))
+	for index := range hits {
+		hitIds = append(hitIds, self.hitId(session, &hits[index]))
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	cursor := self.cursors[id]
+	if cursor == nil {
+		return
+	}
+	if cursor.hits == nil {
+		cursor.hits = map[string]*SearchHitRef{}
+	}
+	for index, hitId := range hitIds {
+		hit := &hits[index]
+		if _, held := cursor.hits[hitId]; !held {
+			cursor.hitOrder = append(cursor.hitOrder, hitId)
+		}
+		cursor.hits[hitId] = &SearchHitRef{
+			RepoId: hit.Repo, RefId: hit.Ref, Path: hit.Path, Version: hit.Version, DocKey: hit.DocKey, DocKind: hit.DocKind,
+		}
+	}
+	for maxCount < len(cursor.hitOrder) {
+		delete(cursor.hits, cursor.hitOrder[0])
+		cursor.hitOrder = cursor.hitOrder[1:]
+	}
+}
+
+// Ends the search of session's token as complete: its stream closes, and the cursor stays, finished, its hit ids
+// opening until it idles past Search.CursorTimeout or is dropped; a page of it answers ErrSearchCursorExpired. A token
+// the session cannot hold finishes nothing.
+func (self *searchCursorTable) finish(session Id, token string) {
+	id, ok := self.cursorId(session, token)
+	if !ok {
+		return
+	}
+	stream := func() *searchEngineStream {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		cursor := self.cursors[id]
+		if cursor == nil {
+			return nil
+		}
+		cursor.finished = true
+		return cursor.stream
+	}()
+	if stream != nil {
+		stream.Close()
+	}
+}
+
+// What session's hit id names, while a live cursor of the session holds it; ErrSearchHitUnknown otherwise.
+func (self *searchCursorTable) openHit(session Id, hitId string) (*SearchHitRef, error) {
+	self.sweep()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, cursor := range self.cursors {
+		if cursor.session != session {
+			continue
+		}
+		if ref, ok := cursor.hits[hitId]; ok {
+			opened := *ref
+			return &opened, nil
+		}
+	}
+	return nil, ErrSearchHitUnknown
+}
+
 // Ends every cursor idle past Search.CursorTimeout or ended by its scope.
 func (self *searchCursorTable) sweep() {
 	now := self.clock.Now()
@@ -146,7 +270,7 @@ func (self *searchCursorTable) sweep() {
 		defer self.stateLock.Unlock()
 		ended := []*searchCursor{}
 		for id, cursor := range self.cursors {
-			if now.Sub(cursor.usedAt) > self.settings.CursorTimeout || cursor.stream.ended() {
+			if now.Sub(cursor.usedAt) > self.settings.CursorTimeout || !cursor.finished && cursor.stream.ended() {
 				delete(self.cursors, id)
 				ended = append(ended, cursor)
 			}

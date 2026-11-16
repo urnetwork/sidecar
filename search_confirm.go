@@ -129,6 +129,8 @@ type searchFieldFilter struct {
 	fieldName string
 	term      *SearchTerm
 	values    []string
+	// No row holds it: a member filter naming no sidecar.
+	none bool
 }
 
 // Whether an entry time passes the time filters.
@@ -247,6 +249,9 @@ func (self *searchConfirmer) filtersHold(texts *searchRowTexts) (bool, error) {
 		return false, nil
 	}
 	for _, filter := range filters.fields {
+		if filter.none {
+			return false, nil
+		}
 		term := &SearchTerm{Field: filter.field, FieldName: filter.fieldName}
 		field := self.termField(term, row)
 		if field == 0 {
