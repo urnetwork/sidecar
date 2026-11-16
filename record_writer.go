@@ -888,6 +888,8 @@ type recordSealedOpening struct {
 	salt   []byte
 	// a version-2 entry's sealed plaintext, which its commitment covers in place of the kind's body; nil for version 1
 	committed []byte
+	// RecordEntry.version as sealed, which a copy's Opening states
+	version uint32
 }
 
 // Seals one entry of draft into route's log, kind and body its own, and queues it for the log's next push or
@@ -914,6 +916,7 @@ func (self *recordWriter) sealOne(draft *recordSpoolDraft, route *recordRoute, k
 		signed:    bytes.Clone(sealed.Signed),
 		salt:      bytes.Clone(sealed.Salt),
 		committed: sealed.agentBody,
+		version:   max(sealed.Version, recordEntryVersion),
 	}
 	sealed.agentBody = nil
 	self.enqueue(route, sealed, kind)
@@ -983,7 +986,7 @@ func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRout
 			if sealed.committed != nil {
 				copiedBody = sealed.committed
 			}
-			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: copiedBody}})
+			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: copiedBody, Version: sealed.version}})
 			clear(sealed.salt)
 			if err != nil {
 				return refs, err
