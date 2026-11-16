@@ -21,11 +21,14 @@
 // heads it reads in its own store; the replay of the ref stays in memory between reads, bounded by that head (a
 // storage-backed replay is QD-641's review-phase work).
 //
-// Off the ios_extension leg: the replay reads push records through evs_export.go and evs_reseed_record.go, which the
-// Apple extensions' leg leaves out by tag (DESIGN-DETAILS 4.2.3), so those extensions build no head reader yet
-// (question sdk-m8-04-forwarding-heads-on-the-leg) and compile nothing: a role's posture there stays pending after its
-// hand-off, the closed direction. Android's VPN service and the desktop app services link it. Not a bridge_forward file, so the leg's seed
-// rule does not take it. Safe for concurrent use; one read replays at a time.
+// Off the ios_extension leg still. The push records the replay reads are on the leg since QD-839
+// (evs_push_record.go, evs_reseed_record.go), so this file and evs_config_head.go compile there with their tags
+// taken off; but the reader links an EvsClient, and with it the forwarding leg adds 7,009,216 B stripped to the iOS
+// extension, past DESIGN-DETAILS 4.2.3's 6,291,456 B (6,008,480 B without it; make size, 2026-11-15). So the tags stay
+// until question ios-leg-head-reader-size-over-budget is answered: the Apple extensions build no head reader and
+// compile nothing, and a role's posture there stays pending after its hand-off, the closed direction. Android's VPN
+// service and the desktop app services link it. Not a bridge_forward file, so the leg's seed rule does not take it;
+// on the leg it becomes one, since the VPN component calls it. Safe for concurrent use; one read replays at a time.
 
 package sidecar
 

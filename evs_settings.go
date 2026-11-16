@@ -39,6 +39,9 @@ type EvsSettings struct {
 	// The most of a delta base a reconstruction holds in memory: 1 MiB (§11.7); a larger base spills to the sealed
 	// local store, so a whole path streams within R-EVS-14's 4 MiB on phones.
 	DeltaBaseMemoryByteCount int64
+	// The parts of a sealed push one read asks for at once, as a replaying reader takes its record (evs_push_record.go):
+	// 64, the most one read names (§11.9's request row). Non-positive reads a part a round.
+	PushPartReadCount int
 	// The most versions one History walks: 1,000, a page of the log's.
 	HistoryVersionCount int
 	// The trees a replay's tree builder keeps decoded, least recently used out: 64 MiB (DESIGN-DETAILS 8.2.2's
@@ -275,6 +278,7 @@ func DefaultEvsSettings() *EvsSettings {
 		CatchUpByteCount:         4 * 1024 * 1024,
 		HeadReadRecordCount:      16384,
 		DeltaBaseMemoryByteCount: 1024 * 1024,
+		PushPartReadCount:        64,
 		HistoryVersionCount:      1000,
 		TreeCacheByteCount:       64 * 1024 * 1024,
 		ObjectSinkChunkByteCount: 64 * 1024 * 1024,
