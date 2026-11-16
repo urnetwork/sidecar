@@ -632,6 +632,8 @@ type SidecarEvent struct {
 	DnsAlarm SidecarDnsAlarm
 	// ct_alarm (D-TLS-8's CT watch). SidecarId names the attesting identity of a recent_identity alarm.
 	CtAlarm SidecarCtAlarm
+	// mail_receiver_alarm (D-MAIL-15, reading 8): SidecarId the receiver or the record's signer, RepoId the repo.
+	MailReceiverAlarm SidecarMailReceiverAlarm
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait

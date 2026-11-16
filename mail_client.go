@@ -81,6 +81,13 @@ type MailBinding struct {
 	Api MailApi
 	// Whether a mail indexer stands for the network (§7.9's IndexerSet for mail, §15.6); nil reads unknown.
 	MailIndexer func() (bool, error)
+	// §7.9's verified config, which the designations and team_mail are read from (mail_indexer.go); nil leaves the
+	// designations unknown, so nothing gates on them or alarms over them.
+	Config func() (*ConfigState, error)
+	// Opens a designation's sealed services; nil opens none, so the designations are unknown (mail_indexer.go).
+	IndexerServices MailIndexerServices
+	// Raises an event on the Sidecar, mail_receiver_alarm's; nil only logs it.
+	Event func(event SidecarEvent)
 }
 
 // How a MailClient reaches a repo's parts: over the bound EvsClient, or a test's stand-ins.
@@ -421,9 +428,12 @@ func (self *MailClient) mailConfig() (*MailConfig, error) {
 		SidecarId: self.sidecarId,
 		Authority: &MailConfigAclAuthority{Engine: binding.Engine},
 		Gate:      binding.Gate,
-		Clock:     self.clock,
-		Log:       self.log,
-		Settings:  self.settings.Config,
+		Alarm: func(alarm *MailConfigAlarm) {
+			self.raiseReceiverAlarm(SidecarMailReceiverAlarmRecord, alarm.SidecarId, alarm.RepoId)
+		},
+		Clock:    self.clock,
+		Log:      self.log,
+		Settings: self.settings.Config,
 	})
 	if err != nil {
 		return nil, err
