@@ -1,8 +1,8 @@
 //go:build !sidecar_http && !ios_extension
 
 // §13.7's reach receipts (owner decision 25, R-MCP-7, §16.8, I-13): the front, the endpoint enforcing a publish grant,
-// writes one ReachReceipt of kind publish per grant, visitor and window of SidecarRecordSettings.ReachReceiptCoalesce
-// (5 min), through the record's writer, which journals it and never waits on evs (RecordWriter.Append). A visitor is
+// writes one ReachReceipt of kind publish per grant, visitor, server name and window of
+// SidecarRecordSettings.ReachReceiptCoalesce (5 min; QD-850), through the record's writer, which journals it and never waits on evs (RecordWriter.Append). A visitor is
 // its address's /32 or /64, as the front's share counts it (tls_front_limits.go), and a receipt names it only by a
 // hash this device keys:
 //
@@ -12,19 +12,22 @@
 //	                front
 //	grant_id        the lowest of the grant's rule_ids, bytewise, and the header's grant_id too when it is 32 bytes, an
 //	                activated grant's (§8.8)
+//	server_name     the name the visitor asked for, the connection's SNI in lowercase, one of the names the endpoint
+//	                serves (its host, the network's @ name, an alias or a custom name), so a visitor who reaches two
+//	                of them in one window has two receipts; a field of its own, never a relay (QD-850)
 //	policy_version  the newest config version a counted connection's grant was read at
 //	owner           this sidecar, which holds the publish grant
 //	stream_count    connections whose pass opened the target, each counted once, in the window its first target
 //	                connection opened in
 //	byte_count      what those streams carried either way, TLS records included, in the window each ended in
 //
-// Receipts are held in memory by grant, peer and window, and written when their window ends, when their grant's
+// Receipts are held in memory by grant, peer, server name and window, and written when their window ends, when their grant's
 // expiry passes, and at the front's close; when one more would pass ReachReceiptMaxCount, all held are written at
 // once, off the visitor's path, so an overflow writes early and never drops. A connection that ends after the close
 // writes its own receipt at once.
 //
-// Not written yet: approver; relays, the edge's host, IP and operator, which the front does not learn (RECORD-M6-02's
-// relays row); and the visitor's SNI, which ReachReceipt has no field for (tls-m6-06-reach-receipt-server-name).
+// Not written yet: approver; and relays, the edge's host, IP and operator, which the front does not learn
+// (RECORD-M6-02's relays row).
 //
 // The key reaches testHookSecret where it is derived. Nothing here logs an address, a hash or a name (I-13). Safe for
 // concurrent use.
@@ -71,10 +74,12 @@ type tlsReachReceiptsArgs struct {
 	Log       Logger
 }
 
-// One receipt's key: its grant, its visitor's hash and its window's start.
+// One receipt's key: its grant, its visitor's hash, the name the visitor asked for and its window's start.
 type tlsReachKey struct {
-	grantId           string
-	peer              [tlsReachPeerByteCount]byte
+	grantId string
+	peer    [tlsReachPeerByteCount]byte
+	// the connection's SNI, lowercase; empty for a connection that has none, whose receipt names none
+	serverName        string
 	windowStartMillis int64
 }
 
@@ -105,7 +110,8 @@ type tlsReachReceipts struct {
 	visitorKey []byte
 	ctx        context.Context
 	cancel     context.CancelFunc
-	// a receipt with an earlier deadline than the loop waits for arrived
+	// a receipt with an earlier deadline than the loop waits for arrived; sent and taken under stateLock, so one
+	// pending is always for a receipt the loop has yet to read
 	wake chan struct{}
 	// closed once the loop has returned
 	done chan struct{}
@@ -191,8 +197,9 @@ func (self *tlsReachReceipts) deadline(key tlsReachKey, count *tlsReachCount) ti
 	return deadline
 }
 
-// Counts streamCount connections and byteCount bytes of clientIp's visitor under grant, in the window now is in.
-func (self *tlsReachReceipts) note(grant *TlsPublishGrant, clientIp []byte, streamCount uint64, byteCount uint64) {
+// Counts streamCount connections and byteCount bytes of clientIp's visitor under grant, reached by serverName, in
+// the window now is in.
+func (self *tlsReachReceipts) note(grant *TlsPublishGrant, clientIp []byte, serverName string, streamCount uint64, byteCount uint64) {
 	if self == nil || grant == nil || len(grant.GrantIds) == 0 {
 		return
 	}
@@ -204,13 +211,14 @@ func (self *tlsReachReceipts) note(grant *TlsPublishGrant, clientIp []byte, stre
 	key := tlsReachKey{
 		grantId:           string(slices.MinFunc(grant.GrantIds, bytes.Compare)),
 		peer:              peer,
+		serverName:        serverName,
 		windowStartMillis: nowMillis - nowMillis%self.coalesce.Milliseconds(),
 	}
-	closed, wake := func() (bool, bool) {
+	closed := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.closed {
-			return true, false
+			return true
 		}
 		count, found := self.counts[key]
 		if !found {
@@ -230,8 +238,15 @@ func (self *tlsReachReceipts) note(grant *TlsPublishGrant, clientIp []byte, stre
 		count.policyVersion = max(count.policyVersion, grant.PolicyVersion)
 		count.streamCount += streamCount
 		count.byteCount += byteCount
-		deadline := self.deadline(key, count)
-		return false, self.armedTime.IsZero() || deadline.Before(self.armedTime)
+		if deadline := self.deadline(key, count); self.armedTime.IsZero() || deadline.Before(self.armedTime) {
+			// under the lock, so the loop, which takes its pending wake as it reads the receipts, wakes only for a
+			// receipt it has not read
+			select {
+			case self.wake <- struct{}{}:
+			default:
+			}
+		}
+		return false
 	}()
 	if closed {
 		self.write([]*tlsReachDrained{{key: key, count: &tlsReachCount{
@@ -239,17 +254,10 @@ func (self *tlsReachReceipts) note(grant *TlsPublishGrant, clientIp []byte, stre
 			streamCount:   streamCount,
 			byteCount:     byteCount,
 		}}})
-		return
-	}
-	if wake {
-		select {
-		case self.wake <- struct{}{}:
-		default:
-		}
 	}
 }
 
-// Takes the receipts due says are due out of memory, in window, grant and peer order.
+// Takes the receipts due says are due out of memory, in window, grant, peer and server name order.
 func (self *tlsReachReceipts) drainWithLock(due func(key tlsReachKey, count *tlsReachCount) bool) []*tlsReachDrained {
 	drained := []*tlsReachDrained{}
 	for key, count := range self.counts {
@@ -263,6 +271,7 @@ func (self *tlsReachReceipts) drainWithLock(due func(key tlsReachKey, count *tls
 			cmp.Compare(a.key.windowStartMillis, b.key.windowStartMillis),
 			cmp.Compare(a.key.grantId, b.key.grantId),
 			bytes.Compare(a.key.peer[:], b.key.peer[:]),
+			cmp.Compare(a.key.serverName, b.key.serverName),
 		)
 	})
 	return drained
@@ -284,6 +293,7 @@ func (self *tlsReachReceipts) write(drained []*tlsReachDrained) {
 				Peers:             [][]byte{bytes.Clone(receipt.key.peer[:])},
 				StreamCount:       receipt.count.streamCount,
 				ByteCount:         receipt.count.byteCount,
+				ServerName:        receipt.key.serverName,
 			},
 		}
 		if len(receipt.key.grantId) == recordHashByteCount {
@@ -303,6 +313,11 @@ func (self *tlsReachReceipts) run() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
 			self.armedTime = time.Time{}
+			// a wake sent before this read is for a receipt this read sees
+			select {
+			case <-self.wake:
+			default:
+			}
 			for key, count := range self.counts {
 				if deadline := self.deadline(key, count); self.armedTime.IsZero() || deadline.Before(self.armedTime) {
 					self.armedTime = deadline
