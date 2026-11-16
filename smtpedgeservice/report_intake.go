@@ -142,6 +142,9 @@ const (
 type SmtpAbuseSink interface {
 	// Opens or adds to a case for an attributed report.
 	OpenSmtpCase(ctx context.Context, report *SmtpAbuseReport) error
+	// Asks §21 to suspend a network that reached §14.8's halts in 30 days, until review (SMTP-M9-16). Once
+	// per reaching: the ladder asks when the count reaches its number.
+	RequestSmtpSuspension(ctx context.Context, request *SmtpSuspensionRequest) error
 }
 
 // SMTP-M9-15's attribution, as the intake calls it. Safe for concurrent use.
@@ -163,6 +166,8 @@ type SmtpReportIntakeDeps struct {
 	Join   SmtpReportJoin
 	// Required with Join, since an attributed role mail must reach §21.
 	Sink SmtpAbuseSink
+	// §14.8's halt rule, which each stored loop complaint goes to (SMTP-M9-16). nil halts nothing.
+	Halts *SmtpHaltLadder
 	// nil discards.
 	Log sidecar.Logger
 }
@@ -623,6 +628,19 @@ func (self *SmtpReportIntake) acceptComplaint(ctx context.Context, route *smtpRe
 		return "", err
 	}
 	if route.kind != smtpReportRouteRole {
+		if self.deps.Halts != nil {
+			_, err := self.deps.Halts.Apply(ctx, &SmtpHaltEvent{
+				Kind:      SmtpHaltEventComplaint,
+				NetworkId: complaint.NetworkId,
+				Time:      message.ArrivalTime,
+				Complaint: complaint,
+			})
+			if err != nil {
+				// the complaint is stored, so the reporter is not asked again, which would count it twice;
+				// its halt waits for the network's next complaint, which counts it in the rates
+				self.log.Infof("[smtpedge]a complaint's halt rule could not be run")
+			}
+		}
 		return SmtpReportOutcomeComplaint, nil
 	}
 	err = func() error {

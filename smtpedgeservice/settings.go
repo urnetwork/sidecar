@@ -47,6 +47,10 @@ type SmtpEdgeSettings struct {
 	Root string `yaml:"root"`
 	// rpt.bringyour.com in production (D-SMTP-19): the host every network's rua names. No default.
 	ReportHostName string `yaml:"report_host"`
+	// The domain every sending address's HELO name sits under: bringyour.com in production, whose
+	// o<k>.out names are the PTRs (owner decision 124, §14.6). No default; the edge's config refuses a file
+	// without it (SmtpEdgeConfig), and the intake reads none.
+	HeloDomain string `yaml:"helo_domain"`
 	// The sending set (§14.6). Report rows from any other source IP are dropped at parse, since
 	// third-party addresses are never stored (§2.8 smtp-5). The edge is not ready with none.
 	SendingAddresses []SmtpSendingAddress `yaml:"sending_addresses"`
@@ -78,6 +82,30 @@ type SmtpEdgeSettings struct {
 	SendBatchCount int `yaml:"send_batch_count"`
 	// How long a send record may wait for its batch. Default 10 s, as §15.4's connection records.
 	SendBatchInterval time.Duration `yaml:"send_batch_interval"`
+	// The longest TLS record a connection relays either way, its 5-octet header included: TLS 1.2's bound on
+	// ciphertext, 2^14 + 2,048 (RFC 5246 §6.2.3), past any 1.3 record's 2^14 + 256 (RFC 8446 §5.2). Default
+	// 18,437: a protocol limit, never a deployment's.
+	RecordMaxByteCount int `yaml:"-"`
+	// The largest SmtpProof or SmtpHandshake request taken (DESIGN-DETAILS 3.7): a part is under 3 KiB.
+	// Default 16,384.
+	ProofMaxByteCount int `yaml:"-"`
+	// The most client octets a connection hands its session that the session has not yet cleared for the MX:
+	// past it the edge stops reading the sidecar's stream until a part clears them, back-pressure and never a
+	// buffer (§14.5's E3 holds records for their part). Default 256 KiB, many times a header block and a
+	// pipelined envelope.
+	ConnectionHeldMaxByteCount int `yaml:"connection_held_bytes"`
+	// How long after a stream ends its dialer's SmtpOutcome is taken (plan-SMTP-wire-gaps#1). Default 15 min.
+	OutcomeAcceptTimeout time.Duration `yaml:"-"`
+	// The most ended sends remembered for their outcome; past it the oldest is forgotten. Default 100,000.
+	OutcomeMaxCount int `yaml:"outcome_max"`
+	// How long one Quota.Lease call may take before the connection ends unaccounted. Default 10 s.
+	LeaseTimeout time.Duration `yaml:"lease_timeout"`
+	// The most send records waiting for their batch; past it the oldest is dropped and counted. Default
+	// 50,000, a hundred batches.
+	SendLogMaxCount int `yaml:"send_log_max"`
+	// The most cuts and outcomes waiting for the halt rule; past it the newest is dropped and counted.
+	// Default 1,000.
+	HaltEventMaxCount int `yaml:"halt_event_max"`
 	// How long Drain waits for connections before Close resets them. Default 10 min, tlsedge's drain_s
 	// (§13.5): a longer send retries on the §9 backup ticket (§14.9).
 	DrainTimeout time.Duration `yaml:"drain_timeout"`
@@ -114,6 +142,12 @@ type SmtpEdgeSettings struct {
 	ReportFeedbackTypeMaxByteCount int `yaml:"-"`
 	// How long one report's DNS reads may take in all. Default 30 s, D-MAIL-14's bound for mail.
 	ReportDnsTimeout time.Duration `yaml:"report_dns_timeout"`
+	// How far the last-hop Received time may be from a send's start, either way, for a join (§14.8's ±10
+	// min, D-SMTP-8). Default 10 min: a rule of attribution, never a deployment's.
+	ReportJoinWindow time.Duration `yaml:"-"`
+	// The most sends one join reads back from the store. Default 64: a join keys on a network, an address
+	// and a 20 min window, or on a Message-ID's hash, and past this the join is too wide to name one send.
+	ReportJoinSendMaxCount int `yaml:"-"`
 
 	// The longest name in text form. Default 253, RFC 1035's.
 	HostNameMaxByteCount int `yaml:"-"`
@@ -162,6 +196,39 @@ type SmtpEdgeSettings struct {
 	// How often the Community breaker rereads {smg_median}. Default 60 s.
 	BreakerMedianRefreshInterval time.Duration `yaml:"breaker_median_refresh_interval"`
 
+	// The trailing window §14.8's rates, record cuts, hard bounces and second label count over. Default 24 h,
+	// as §14.8 has it.
+	HaltWindow time.Duration `yaml:"-"`
+	// Pro's complaint rate past which the network halts, in basis points of its recipients over HaltWindow.
+	// Default 50, §14.8's 0.5% (owner decision 37).
+	HaltProComplaintBasisPoints int `yaml:"-"`
+	// The fewest complaints that halt a Pro network. Default 2.
+	HaltProComplaintFloor int `yaml:"-"`
+	// Team's rate, in basis points. Default 10, §14.8's 0.1%.
+	HaltTeamComplaintBasisPoints int `yaml:"-"`
+	// The fewest complaints that halt a Team network. Default 5.
+	HaltTeamComplaintFloor int `yaml:"-"`
+	// The halted labels within HaltWindow that halt a Community network. Default 2: a second one.
+	HaltCommunityLabelCount int `yaml:"-"`
+	// The record cuts within HaltWindow that halt any network (§14.7, §14.8). Default 2.
+	HaltRecordCutCount int `yaml:"-"`
+	// The network halts within HaltSuspendWindow that ask §21 to suspend the network. Default 3.
+	HaltSuspendCount int `yaml:"-"`
+	// Default 30 days, §14.8's.
+	HaltSuspendWindow time.Duration `yaml:"-"`
+	// How long an hourly hard-bounce field of {smq_<networkId>} lives (QD-199). Default 48 h.
+	HaltBounceFieldTimeout time.Duration `yaml:"-"`
+	// The most complaints one count reads back. Default 10,000: Team halts at 0.1% of its 100,000
+	// recipients a day, far below.
+	HaltComplaintReadMaxCount int `yaml:"-"`
+
+	// mxedge's router interfaces (§19.5's W4): the lb addresses whose TCP 25 is mxedge's router, which a
+	// sending host cannot reach by hairpin to its own lb address (D-SMTP-13). An MX on one is reached over the
+	// host LAN instead (lan_splice.go). Empty by default: config/<env>/smtpedge.yml names them.
+	RouterInterfaces []netip.Addr `yaml:"router_interfaces"`
+	// mxedge's LAN listener for these splices (MAIL-M9-05), on the host LAN. Unset by default, which leaves an
+	// MX on a router interface unreached, so the preamble answers TRY_LATER.
+	RouterLanAddress netip.AddrPort `yaml:"router_lan"`
 	// The TCP port an MX listens on. Default 25.
 	MxPort int `yaml:"-"`
 	// Ranges the edge never dials, beyond what is not public unicast IPv4 (owner decision 34): private,
@@ -195,27 +262,37 @@ type SmtpEdgeSettings struct {
 // not pass Validate.
 func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 	return &SmtpEdgeSettings{
-		PreambleTimeout:          30 * time.Second,
-		PreTlsTimeout:            5 * time.Minute,
-		ClientIdleTimeout:        10 * time.Minute,
-		ServerIdleTimeout:        5 * time.Minute,
-		ConnectionTimeout:        30 * time.Minute,
-		DataConnectionTimeout:    2 * time.Hour,
-		HaltReloadInterval:       60 * time.Second,
-		StoreTimeout:             5 * time.Second,
-		SendBatchCount:           500,
-		SendBatchInterval:        10 * time.Second,
-		DrainTimeout:             10 * time.Minute,
-		ReportHeaderByteCount:    64 * 1024,
-		ReportInflateByteCount:   8 * 1024 * 1024,
-		ReportInflateRatio:       100,
-		ReportNestingDepth:       32,
-		ReportMimeDepth:          8,
-		ReportMimePartCount:      32,
-		ReportDkimSignatureCount: 8,
-		ReportDkimKeyRecordCount: 4,
-		ReportDkimRsaKeyBitCount: 4096,
-		ReportDnsTimeout:         30 * time.Second,
+		PreambleTimeout:            30 * time.Second,
+		PreTlsTimeout:              5 * time.Minute,
+		ClientIdleTimeout:          10 * time.Minute,
+		ServerIdleTimeout:          5 * time.Minute,
+		ConnectionTimeout:          30 * time.Minute,
+		DataConnectionTimeout:      2 * time.Hour,
+		HaltReloadInterval:         60 * time.Second,
+		StoreTimeout:               5 * time.Second,
+		SendBatchCount:             500,
+		SendBatchInterval:          10 * time.Second,
+		DrainTimeout:               10 * time.Minute,
+		RecordMaxByteCount:         5 + 16*1024 + 2048,
+		ProofMaxByteCount:          16 * 1024,
+		ConnectionHeldMaxByteCount: 256 * 1024,
+		OutcomeAcceptTimeout:       15 * time.Minute,
+		OutcomeMaxCount:            100000,
+		LeaseTimeout:               10 * time.Second,
+		SendLogMaxCount:            50000,
+		HaltEventMaxCount:          1000,
+		ReportHeaderByteCount:      64 * 1024,
+		ReportInflateByteCount:     8 * 1024 * 1024,
+		ReportInflateRatio:         100,
+		ReportNestingDepth:         32,
+		ReportMimeDepth:            8,
+		ReportMimePartCount:        32,
+		ReportDkimSignatureCount:   8,
+		ReportDkimKeyRecordCount:   4,
+		ReportDkimRsaKeyBitCount:   4096,
+		ReportDnsTimeout:           30 * time.Second,
+		ReportJoinWindow:           10 * time.Minute,
+		ReportJoinSendMaxCount:     64,
 
 		ReportAggregateValueMaxByteCount: 1024,
 		ReportDkimRsaKeyMinBitCount:      1024,
@@ -240,6 +317,17 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		QuotaFallbackNetworkMaxCount: 100000,
 		HourCounterTimeout:           2 * time.Hour,
 		BreakerMedianRefreshInterval: 60 * time.Second,
+		HaltWindow:                   24 * time.Hour,
+		HaltProComplaintBasisPoints:  50,
+		HaltProComplaintFloor:        2,
+		HaltTeamComplaintBasisPoints: 10,
+		HaltTeamComplaintFloor:       5,
+		HaltCommunityLabelCount:      2,
+		HaltRecordCutCount:           2,
+		HaltSuspendCount:             3,
+		HaltSuspendWindow:            30 * 24 * time.Hour,
+		HaltBounceFieldTimeout:       48 * time.Hour,
+		HaltComplaintReadMaxCount:    10000,
 
 		MxPort: 25,
 		MxRefusedPrefixes: []netip.Prefix{
@@ -373,6 +461,14 @@ func (self *SmtpEdgeSettings) Validate() error {
 	}
 	if self.QuotaMemberTimeout <= self.QuotaMemberRenewInterval {
 		return fmt.Errorf("%w: quota_member_renew_interval is not under quota_member_timeout", ErrSmtpEdgeSettingsRefused)
+	}
+	for _, routerInterface := range self.RouterInterfaces {
+		if !routerInterface.Is4() || routerInterface.IsUnspecified() || routerInterface.IsLoopback() {
+			return fmt.Errorf("%w: router_interfaces holds an address no MX sits on", ErrSmtpEdgeSettingsRefused)
+		}
+	}
+	if self.RouterLanAddress.IsValid() && self.RouterLanAddress.Port() == 0 {
+		return fmt.Errorf("%w: router_lan names no port", ErrSmtpEdgeSettingsRefused)
 	}
 	if 65535 < self.MxPort {
 		return fmt.Errorf("%w: MxPort is past a port", ErrSmtpEdgeSettingsRefused)

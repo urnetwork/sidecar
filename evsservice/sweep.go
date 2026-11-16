@@ -98,6 +98,9 @@ type SweepDeps struct {
 	Settings *SweepSettings
 	// Alarms. nil discards.
 	Log sidecar.Logger
+	// D-TEST-12's checker (purge_observe.go), which under purge: observe reads every retained version that could name a
+	// kept list's candidate. nil checks nothing.
+	Observe *PurgeObserveCheck
 	// a test's: called at each barrier, an error stopping the sweep there as a kill would
 	atStep func(name string, key string) error
 }
@@ -274,7 +277,11 @@ func (self *Sweep) SweepList(ctx context.Context, cluster sidecar.BlobCluster, t
 		return result, nil
 	}
 	if self.format2.PurgeMode() != sidecar.Format2On {
-		// observe mode keeps it, and the turn-on pass deletes it
+		// observe mode keeps it, and the turn-on pass deletes it; D-TEST-12's check counts what a retained version
+		// names among its candidates first (purge_observe.go)
+		if self.deps.Observe != nil && self.format2.PurgeMode() == sidecar.Format2Observe {
+			self.deps.Observe.Check(ctx, cluster, target)
+		}
 		return keep()
 	}
 	segmentCluster, err := self.blobs.SegmentCluster()

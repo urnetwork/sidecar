@@ -41,6 +41,7 @@ func TestQuotaScriptsPassTheCrossslotLint(t *testing.T) {
 	for _, script := range []*sidecar.RedisScript{
 		smtpedgeservice.SmtpQuotaReserveScript, smtpedgeservice.SmtpQuotaDebitScript, smtpedgeservice.SmtpQuotaCloseScript,
 		smtpedgeservice.SmtpQuotaHaltScript, smtpedgeservice.SmtpHourCountScript, smtpedgeservice.SmtpHourUncountScript,
+		smtpedgeservice.SmtpQuotaBounceScript,
 	} {
 		if strings.Contains(script.Source, "KEYS[2]") {
 			t.Errorf("%s names a second key", script.Name)

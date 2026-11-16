@@ -15,6 +15,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,14 +25,21 @@ import (
 
 var _ certsservice.CertsStore = (*FakeCertsStore)(nil)
 
-// network_tls_cert and network_client_owner's ephemeral flag, in memory.
+// network_tls_cert, network_tls_name_backoff and network_client_owner's ephemeral flag, in memory.
 type FakeCertsStore struct {
 	faults *FaultQueue
 
 	stateLock        sync.Mutex
 	rows             map[sidecar.Id]*sidecar.TlsCertRecord
+	nameBackoffs     map[certsFakeNameKey]*certsservice.CertsNameBackoff
 	ephemeralClients map[sidecar.Id]bool
 	opCounts         map[string]int
+}
+
+// network_tls_name_backoff's key.
+type certsFakeNameKey struct {
+	name string
+	ca   certsservice.CertsCa
 }
 
 // A nil faults takes a fresh queue.
@@ -42,6 +50,7 @@ func NewFakeCertsStore(faults *FaultQueue) *FakeCertsStore {
 	return &FakeCertsStore{
 		faults:           faults,
 		rows:             map[sidecar.Id]*sidecar.TlsCertRecord{},
+		nameBackoffs:     map[certsFakeNameKey]*certsservice.CertsNameBackoff{},
 		ephemeralClients: map[sidecar.Id]bool{},
 		opCounts:         map[string]int{},
 	}
@@ -374,6 +383,91 @@ func (self *FakeCertsStore) PurgeChains(ctx context.Context, before time.Time) (
 		return nil
 	})
 	return
+}
+
+// The backoffs keep holds, in name and CA order, as copies.
+func (self *FakeCertsStore) sortedNameBackoffsWithLock(keep func(backoff *certsservice.CertsNameBackoff) bool) []*certsservice.CertsNameBackoff {
+	backoffs := []*certsservice.CertsNameBackoff{}
+	for _, backoff := range self.nameBackoffs {
+		if keep(backoff) {
+			copied := *backoff
+			backoffs = append(backoffs, &copied)
+		}
+	}
+	slices.SortFunc(backoffs, func(a *certsservice.CertsNameBackoff, b *certsservice.CertsNameBackoff) int {
+		if a.Name != b.Name {
+			return strings.Compare(a.Name, b.Name)
+		}
+		return strings.Compare(string(a.Ca), string(b.Ca))
+	})
+	return backoffs
+}
+
+func (self *FakeCertsStore) ListNameBackoffs(ctx context.Context, names []string) (backoffs []*certsservice.CertsNameBackoff, err error) {
+	err = self.call(ctx, "ListNameBackoffs", func() error {
+		backoffs = self.sortedNameBackoffsWithLock(func(backoff *certsservice.CertsNameBackoff) bool {
+			return slices.Contains(names, backoff.Name)
+		})
+		return nil
+	})
+	return
+}
+
+func (self *FakeCertsStore) AddNameFailure(ctx context.Context, name string, ca certsservice.CertsCa, failureTime time.Time, wait func(failureCount int) time.Duration) (backoff *certsservice.CertsNameBackoff, err error) {
+	if name == "" || ca == "" || failureTime.IsZero() || wait == nil {
+		return nil, certsservice.ErrCertsNameFailure
+	}
+	err = self.call(ctx, "AddNameFailure", func() error {
+		key := certsFakeNameKey{name: name, ca: ca}
+		stored, ok := self.nameBackoffs[key]
+		if !ok {
+			stored = &certsservice.CertsNameBackoff{Name: name, Ca: ca}
+			self.nameBackoffs[key] = stored
+		}
+		stored.FailureCount += 1
+		// a later time already kept stands
+		if next := failureTime.Add(wait(stored.FailureCount)); next.After(stored.NextOrderTime) {
+			stored.NextOrderTime = next
+		}
+		copied := *stored
+		backoff = &copied
+		return nil
+	})
+	return
+}
+
+func (self *FakeCertsStore) ClearNameBackoffs(ctx context.Context, names []string, ca certsservice.CertsCa) (removedCount int, err error) {
+	err = self.call(ctx, "ClearNameBackoffs", func() error {
+		for _, name := range names {
+			key := certsFakeNameKey{name: name, ca: ca}
+			if _, ok := self.nameBackoffs[key]; ok {
+				delete(self.nameBackoffs, key)
+				removedCount += 1
+			}
+		}
+		return nil
+	})
+	return
+}
+
+func (self *FakeCertsStore) PurgeNameBackoffs(ctx context.Context, before time.Time) (removedCount int, err error) {
+	err = self.call(ctx, "PurgeNameBackoffs", func() error {
+		for key, backoff := range self.nameBackoffs {
+			if backoff.NextOrderTime.Before(before) {
+				delete(self.nameBackoffs, key)
+				removedCount += 1
+			}
+		}
+		return nil
+	})
+	return
+}
+
+// Every name's backoff, in name and CA order, as copies.
+func (self *FakeCertsStore) NameBackoffs() []*certsservice.CertsNameBackoff {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.sortedNameBackoffsWithLock(func(backoff *certsservice.CertsNameBackoff) bool { return true })
 }
 
 // Marks clientId as an ephemeral sidecar's, as network_client_owner.ephemeral does.

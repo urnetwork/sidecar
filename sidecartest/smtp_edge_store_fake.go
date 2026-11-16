@@ -20,6 +20,7 @@ import (
 
 var _ smtpedgeservice.SmtpEdgeStore = (*FakeSmtpEdgeStore)(nil)
 var _ smtpedgeservice.SmtpReportLookups = (*FakeSmtpEdgeStore)(nil)
+var _ smtpedgeservice.SmtpHaltLookups = (*FakeSmtpEdgeStore)(nil)
 
 // What smtp_send's primary key is.
 type fakeSmtpSendKey struct {
@@ -351,4 +352,101 @@ func (self *FakeSmtpEdgeStore) PrivacyItems() []*PrivacyItem {
 		items = append(items, &PrivacyItem{Class: "CC3", Name: "smtp_send", Body: []byte(send.RecipientDomain + "\x00" + send.MxHost + "\x00" + send.Result)})
 	}
 	return items
+}
+
+// See SmtpHaltLookups.
+func (self *FakeSmtpEdgeStore) FindComplaints(ctx context.Context, key *smtpedgeservice.SmtpComplaintKey) ([]*smtpedgeservice.SmtpComplaint, error) {
+	var found []*smtpedgeservice.SmtpComplaint
+	err := self.call(ctx, "FindComplaints", func() error {
+		for _, complaint := range self.complaints {
+			if complaint.NetworkId != key.NetworkId {
+				continue
+			}
+			if len(key.MessageIdHash) != 0 && !bytes.Equal(key.MessageIdHash, complaint.MessageIdHash) {
+				continue
+			}
+			if !key.Since.IsZero() && complaint.ArrivalTime.Before(key.Since) {
+				continue
+			}
+			kept := copySmtpComplaint(complaint)
+			kept.SealedReport = nil
+			found = append(found, kept)
+		}
+		slices.SortStableFunc(found, func(a *smtpedgeservice.SmtpComplaint, b *smtpedgeservice.SmtpComplaint) int {
+			return a.ArrivalTime.Compare(b.ArrivalTime)
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// See SmtpHaltLookups.
+func (self *FakeSmtpEdgeStore) FindHalts(ctx context.Context, networkId sidecar.Id, since time.Time) ([]*smtpedgeservice.SmtpHalt, error) {
+	var found []*smtpedgeservice.SmtpHalt
+	err := self.call(ctx, "FindHalts", func() error {
+		for _, halt := range self.halts {
+			if halt.NetworkId == networkId && !halt.StartTime.Before(since) {
+				kept := *halt
+				found = append(found, &kept)
+			}
+		}
+		slices.SortFunc(found, func(a *smtpedgeservice.SmtpHalt, b *smtpedgeservice.SmtpHalt) int {
+			if c := a.StartTime.Compare(b.StartTime); c != 0 {
+				return c
+			}
+			return a.HaltId.Cmp(b.HaltId)
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// See SmtpHaltLookups.
+func (self *FakeSmtpEdgeStore) CountSends(ctx context.Context, networkId sidecar.Id, since time.Time, result string) (uint64, error) {
+	var count uint64
+	err := self.call(ctx, "CountSends", func() error {
+		for _, send := range self.sends {
+			if send.NetworkId == networkId && !send.StartTime.Before(since) && send.Result == result {
+				count += 1
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// See SmtpHaltLookups.
+func (self *FakeSmtpEdgeStore) SendingClients(ctx context.Context, networkId sidecar.Id, since time.Time) ([]sidecar.Id, error) {
+	var clientIds []sidecar.Id
+	err := self.call(ctx, "SendingClients", func() error {
+		seen := map[sidecar.Id]bool{}
+		for _, send := range self.sends {
+			if send.NetworkId == networkId && !send.StartTime.Before(since) && !seen[send.ClientId] {
+				seen[send.ClientId] = true
+				clientIds = append(clientIds, send.ClientId)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return clientIds, nil
+}
+
+// See SmtpHaltLookups.
+func (self *FakeSmtpEdgeStore) DeleteHalt(ctx context.Context, haltId sidecar.Id) error {
+	return self.call(ctx, "DeleteHalt", func() error {
+		delete(self.halts, haltId)
+		return nil
+	})
 }

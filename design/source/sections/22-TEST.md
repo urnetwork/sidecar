@@ -230,7 +230,7 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
 - **DNS feed, synthesis, validator; `dnssec_chain`:** no non-public or refused record; broken chains refused.
 - **HuJSON compiler; `BridgeEgressPolicy`:** equal the reference.
 - **Daemon hello, `.ur`, `ur hook` payloads, MCP arguments:** no secret echoed.
-- **Index files** (slots, large entries, bucket and all shards, doc and tombstone tables, manifests, settings, the lock): decoding total and memory-bounded; tampering fails AEAD or the plaintext hash before use; re-encoding reproduces the bytes; non-minimal VByte, unsorted or repeated keys and docids, bitsets off their threshold, a key in both of a shard's tables and a tombstone in an all shard refused (FI-22); a current diff's chain that does not resolve leaves its document not yet searchable, never a miss, and a superseded diff's raises nothing.
+- **Index files** (slots, large entries, bucket and all shards, doc and tombstone tables, manifests, settings, the lock): decoding total and memory-bounded; tampering fails AEAD or the plaintext hash before use; re-encoding reproduces the bytes; non-minimal VByte, unsorted or repeated keys and docids, an empty dictionary block or one past 64 keys, a pad past IndexFileHeader.body_length that is not all zero bytes (index_malformed), bitsets off their threshold, a key in both of a shard's tables and a tombstone in an all shard refused (FI-22); a current diff's chain that does not resolve leaves its document not yet searchable, never a miss, and a superseded diff's raises nothing.
 - **Normalizer and trigram extractor:** idempotent; output within a fixed multiple of input; invalid UTF-8 mapped by one rule; trigram sets equal to a reference extractor's written apart.
 - **Search arguments and cursors** (`ur search` and `ur agents` flags, MCP search arguments, §16.10's parser, planner and cursor decoder): bounded postings touched; forged or foreign cursors refused; no panic; no secret echoed.
 - **`SearchRequest` and `SearchReply`** (pads, sizes, coverage, hits past their caps, unknown codes, repeated pages): decoding total and memory-bounded; the indexer answers a body off 4,016 B or with a non-zero pad as INVALID and a repeated page with its cursor's last reply; the phone refuses a reply off its steps × 16,384 B, drops hits and fields past their caps before the merge, and never reads an unknown status or served code as OK or served.
@@ -899,8 +899,8 @@ FI-14  write budget: (a) with the budget on, on each metadata set's busiest driv
 FI-15  file-mode CAS (I-EVS-8): a file-mode push commits at u only if each file path it changes has, in the head
        history through u-1, newest version equal to its base_entry_version, 0 naming the path absent (never
        written, or removed), a removal being one of its versions, one past its last, which its marker keeps, and
-       each creation's version max(its push's effective base version, the newest removal its marker or the window
-       holds) + 1, an overlay's base counting its chain's base versions, so a path's versions never restart
+       each creation's version max(its push's base version, the newest removal its marker or the window holds) + 1,
+       so a path's versions never restart
        (owner decision 148) and no push based on a version from before a removal commits after it (5g while either
        holds the removal, 5f's base range once its marker is collected), however folds, reruns, copies and
        collection windows interleave, and 11.7's two-way directory checks hold; a head read or listing at head v
@@ -912,8 +912,10 @@ FI-16  purge: the content of a versionless version (a kind-5 segment, a staged r
        later names it; unknown and refused pushes purge nothing; every path's newest committed version keeps all its
        content; each candidate goes within the sweep's period once those conditions hold, and purged content never
        returns, a stale re-seed included (§11)
-FI-17  versioning: a committed version names a kind-5 segment only as §11.7's citation rule allows, and a staged
-       record only from its introducing version; versioning 1 never commits in config or mailcfg repos, on git-mode or
+FI-17  versioning: a committed version names a kind-5 segment only as §11.7's citation rule allows, a staged
+       record only from its introducing version, and a versionless path's slot only from that path's versions and,
+       in turn, the rename target of the push that removes it, each removed path's segment or slot named by at
+       most one new version (I-EVS-10); versioning 1 never commits in config or mailcfg repos, on git-mode or
        creates-only refs or under a repo lock, and versioning 2 only under an index root (.ur-index/ on a file-mode
        ref, or ur/index) of a repo that may hold an index, a lock keeping it (owner decision 168); every version
        written with versioning on keeps its content for the repo's life (FI-1), whatever the path's later setting,
@@ -1245,10 +1247,11 @@ FS-20  §10    an epoch commits and its committer crashes before GroupInfo is pu
               inline GroupInfo at 16 leaves or fewer; revoked lost leaves still in the tree:
               the self-join carries no GenWrap and gkm accepts its generation 0, its next
               commit removes them, and the rotation that follows is the first new generation;
-              a kill at each KF1 step, then the creator's only device lost: the repo is still
-              keying, or code-only recovery opens all it holds; gkm killed between an epoch's
-              PUT 16 past the pointer and the pointer's rewrite: gkm rewrites it with the
-              next epoch, and a resync's probe, run uncapped to a 404, finds the newest epoch
+              a kill at each KF1 step, after the activate route's CAS (its retry answering
+              200) included, then the creator's only device lost: the repo is still keying,
+              or code-only recovery opens all it holds; gkm killed between an epoch's PUT 16
+              past the pointer and the pointer's rewrite: gkm rewrites it with the next
+              epoch, and a resync's probe, run uncapped to a 404, finds the newest epoch
 FS-21  §2,6   a document giving the writer's peers no reach to each other (a personal          FI-10       T3     M4-out;
               network's from M4, Team's default from M6): HeadCheck flows over control                            Team at
               contracts, and streams and IP on them are refused; a server partitioning relays:                    M6-out
@@ -1266,7 +1269,13 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
               rotation, and every read, ReaderWrap, epoch, GroupInfo and recovery route                           M7-out
               refuses it; a depositor served an older, unexpired GenRotate after a removal
               refuses to seal, with evs's gate off; a deposit grant revoked or expired, the
-              sidecar still admitted, is refused at evs within §8.9's 5 s
+              sidecar still admitted, is refused at evs within §8.9's 5 s; a GenRotate whose
+              drop_not_after_ms passes its time_ms + DropKeyLifetime + 10 min is refused by
+              members and the depositor; at M7 a writer back with nothing to ingest renews a
+              drop key with under 7 days left by a SCHEDULE rotation (owner decision 357);
+              130 CONSUME versions between two deposits, and a depositor restarted with no
+              state, each recovering through 409 BASE_STALE's EvsDepositHead with every read
+              route still refused
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target
@@ -1382,13 +1391,14 @@ FS-41  §19    drives lost past parity first (readers alarm on heads naming miss
               whose tail passes a position filled after resumption sees a FORK; readers
               accept a head below their pin only under an EvsReseed; an unread record entry
               comes back from a full mirror; an entry erased after a stale mirror's last sync
-              stays erased once the eraser's device re-seeds; with only stale mirrors, the
-              close report names the erasure; a shredded repo is not resurrected; a vault is
-              re-formed by its owner's devices; a recovery-code-only member keeps access;
-              each later step at its mechanism's Gn-out: CT replay re-binds a label allocated
-              after the dump and TLS endpoints re-register (M5), meter rows re-send without
-              double-billing (M6), a mailbox is re-formed and mail host keys re-register
-              (M7), push tokens re-register (M8)
+              stays erased once the eraser's device re-seeds; a slot re-seeded with one
+              erased and one live key keeps the live key, which reads, and loses the erased
+              one; with only stale mirrors, the close report names the erasure; a shredded
+              repo is not resurrected; a vault is re-formed by its owner's devices; a
+              recovery-code-only member keeps access; each later step at its mechanism's
+              Gn-out: CT replay re-binds a label allocated after the dump and TLS endpoints
+              re-register (M5), meter rows re-send without double-billing (M6), a mailbox is
+              re-formed and mail host keys re-register (M7), push tokens re-register (M8)
 FS-42  §19    Postgres primary lost, both edge-6 dumps restored, in each order of their        FI-12       T3     M3-out;
               snapshot times: with the main dump older, a network, member and sidecar newer                       M5 to M9
               than it come back with their ids and rows, a network name or login a main-dump                      per step
@@ -1621,11 +1631,14 @@ FS-64  §11    a 20 MiB versionless file X at version k, five 4 MiB kind-5 chunk
               and collected; chunks 1, 3 and 5, which k+1 cites, stay; a push based on k gets
               409, and a copy citing k's chunks from another path 409 VERSIONING; one push
               removing X and creating X' from k+1's chunks keeps them; a client re-uploading
-              the exact sealed bytes of u's chunk 2 for a version k+2 gets 409 VERSIONING, the
-              kind-5 header naming u's push, a versioned segment's equal bytes get an unmarked
-              receipt no kind-5 locator may name, and the purge's reread keeps any candidate
-              the path's newest version names, so k+2 reads whole; the twin without the
-              overwrite deletes nothing
+              the exact sealed bytes of u's chunk 2 for a version k+2 gets 409 VERSIONING,
+              the kind-5 header naming u's push, a versioned segment's equal bytes get an
+              unmarked receipt no kind-5 locator may name, and the purge's reread keeps any
+              candidate the path's newest version names, so k+2 reads whole; in a slot-keyed
+              repo, one push removing X and creating X' names X's slot and reuses its key,
+              and a push naming one removed path's slot or kind-5 segment from two new
+              versions gets 409 VERSIONING, checked across parts at the seal; the twin
+              without the overwrite deletes nothing
 FS-65  §11    u's head CAS applied, its response dropped, the store then unreachable: evs1     FI-1,2,16   T2+T3  M10-out
               answers 503 unknown and purges nothing; the client's retry on evs2 resolves u
               committed, and the replaced content goes once, after that certainty and the
@@ -1639,25 +1652,30 @@ FS-65  §11    u's head CAS applied, its response dropped, the store then unreac
               other conclusive refusal after candidates were computed purges nothing; evs1's
               clock 150 ms fast, or its offset unknown: no DELETE before 60 s of checked time;
               a DELETE delayed to §19.6's request deadline removes only its own candidate
-FS-66  §11    a staged head file replaced 10 min after its write: its record is dropped at its FI-6,16     T2+T3  M10-out;
-              batch's evacuation, never reaching seg/, and from 60 s after the replacement                        hold case
-              history reads answer collected; one still newest at its batch's evacuation:                         M5 (23.6)
-              written to seg/ (If-None-Match, its id as checksum) before the batch DELETE,
-              then replaced and purged by the committing process after the allowance;
-              evacuation killed between the seg/ PUT and the batch DELETE, then rerun: equal
-              bytes on 412, one object; a reader at each step gets the bytes, retrying seg/
-              after a batch-range 404; a dead push's staged record never reaches seg/; one
-              whose replacing push is pending at evacuation: the ref's fence, Resolve, then
-              written or dropped; under a hold, staged records from batches before its
-              placement are written at evacuation, and content written and replaced during the
-              hold is purged as usual
+FS-66  §11    a staged head file replaced 10 min after its write: its record is dropped at     FI-6,16     T2+T3  M10-out;
+              its batch's evacuation, never reaching seg/, and by 120 s after the                                 hold case
+              replacement, from the end of the replacing record's EvsPlace minute plus 60 s,                      M5 (23.6)
+              history reads answer collected, whether or not the bytes remain; one still
+              newest at its batch's evacuation: written to seg/ (If-None-Match, its id as
+              checksum) before the batch DELETE, then replaced and purged by the committing
+              process after the allowance; evacuation killed between the seg/ PUT and the
+              batch DELETE, then rerun: equal bytes on 412, one object; a reader at each step
+              gets the bytes, retrying seg/ after a batch-range 404; a dead push's staged
+              record never reaches seg/; one whose replacing push is pending at evacuation:
+              the ref's fence, Resolve, then written or dropped; under a hold, staged records
+              from batches before its placement are written at evacuation, and content
+              written and replaced during the hold is purged as usual
 FS-67  §11    a bucket directory removed by one push listing each versionless file below it:   FI-16       T2     M10-out
               each file's content is purged after certainty and the allowance; one file left
-              unlisted: the removal fold alarms and carries its kind-5 segment and slot ids in
-              its marker, whose collection deletes them; a ref DELETE listing its versionless
-              files; a path re-created below the removed directory in that push keeps its own
-              content; a removal racing a write of a listed file: one commits, the other gets
-              409, and nothing the survivor names goes
+              unlisted: the removal fold alarms and carries its kind-5 segment and slot ids
+              in its marker, whose collection deletes them; a ref DELETE listing its
+              versionless files; a path re-created below the removed directory in that push
+              keeps its own content; a removal racing a write of a listed file: one commits,
+              the other gets 409, and nothing the survivor names goes; a re-creation's fold
+              over a marker with carried ids, a fold's creation over an unlisted versionless
+              entry and a copy's unmoved delete of a source marker with carried ids each
+              first put an orphan marker under _o/, killed after it and rerun with one
+              object, which the collection deletes as a marker
 FS-68  §11,7  on to off on a chunked file cites its chunks as kind 1, uploads nothing and      FI-1,17     T2+T3  M10-out
               never purges them; on to off on a small diffed file writes one checkpoint; off
               to on adopts uploaded kind-5 chunks as kind 1, never purged after; a repo under
@@ -1699,22 +1717,24 @@ FS-71  §11,20 at the exact storage limit, deleting versionless files is accepte
               deletes turn on
 FS-72  §11,7  format-1 code (M2) given each signed, well-formed format-2 construct (an entry   FI-1,2,17   T2+T3  M2-out;
               version with versioning 1 or 2, a kind-5 locator, a staged mark, a kind-5                           the rest at
-              header, a versionless receipt, a format-2 batch, a window entry with bit 4 or 5,                    M10-out
-              an EvsPush with flag 256 or 512 or field 33 or 34, a read reply's drop_pending
-              or dropped state, repo/'s format 2, a write to .ur-index/, ur/index or ur/lfs)
-              refuses each entry, locator, push and state as FORMAT_UNSUPPORTED
-              {needs_format: 2}, ignores bits 4 and 5, from M3 sets and honors a push
-              provenance's tainted bit (owner decision 245), and on repo/'s format 2 refuses
-              pushes and serves stored bytes, writing nothing
-              and raising no fork, tamper or missing-segment alarm, while a malformed or
-              unsigned construct still alarms; given a config head holding a VersioningRules
-              record it applies nothing from the record and still applies the head, with no
-              FORK and no stall, and given a RepoVersioning statement it verifies it, folds
-              its lock and enforces nothing, its rows equal to a format-2 device's; an
-              EvsShare past its expires grants nothing, the directory kind is known and, given
-              a team network's projection, its kind-default readers and writers equal an M6
-              build's, agents' directory Adds and wraps accepted without alarm, an
-              autogroup:dst-owner approver evaluates as §8.4 states, and
+              header, a versionless receipt, a format-2 batch, a window entry with bit 4 or                       M10-out
+              5, an EvsPush with flag 256 or 512 or field 33 or 34, a read reply's
+              drop_pending or dropped state, repo/'s format 2, a write to .ur-index/,
+              ur/index or ur/lfs) refuses each entry, locator, push and state as
+              FORMAT_UNSUPPORTED {needs_format: 2}, ignores bits 4 and 5, from M3 sets and
+              honors a push provenance's tainted bit (owner decision 245), and on repo/'s
+              format 2 refuses pushes and serves stored bytes, writing nothing and raising no
+              fork, tamper or missing-segment alarm, while a malformed or unsigned construct
+              still alarms; rolling: a format-1 evs answers a format-2 construct 409
+              FORMAT_UNSUPPORTED, recorded, and a format-2 evs in §19.11's gate meets the
+              retry and answers the recorded refusal; given a config head holding a
+              VersioningRules record it applies nothing from the record and still applies the
+              head, with no FORK and no stall, and given a RepoVersioning statement it
+              verifies it, folds its lock and enforces nothing, its rows equal to a format-2
+              device's; an EvsShare past its expires grants nothing, the directory kind is
+              known and, given a team network's projection, its kind-default readers and
+              writers equal an M6 build's, agents' directory Adds and wraps accepted without
+              alarm, an autogroup:dst-owner approver evaluates as §8.4 states, and
               ServiceSettings.directory is ignored; the descriptor lint finds format 1's
               reserved numbers equal the decided list, none for keep-last-n; at M10, a repo
               migrated by §11's step while a format-1 client pushes and reads: its versioned
@@ -1730,39 +1750,44 @@ FS-73  §11    stock git and git-lfs push commits with LFS files: the transfer a
               or a client holding every ref removes objects that no ref tip and no commit,
               upload or touch of the last 30 days (a repo setting) references, the purge
               following, and a client missing a ref refuses to prune; a git push racing the
-              prune touches its objects first, so the prune's removal fails path-level CAS and
-              reruns; an old commit whose objects were pruned checks out with pointer files
-              under lfs.skipdownloaderrors (and GIT_LFS_SKIP_SMUDGE), ur naming them and when
-              their prune committed; the tip check, with no skip option set: A holds pointer
-              O and B, the tip, removes it, A and O's last version aged past N on the fake
-              clock and O pruned, a force push from B back to A, a new branch and a tag at A
-              each get lfs objects missing, naming O and git lfs push --object-id, the evs
-              tip staying B until that upload, after which the push commits with O's version
-              fresh; O unpruned and its version past N: the force push touches O before
-              its POST, and a prune paused between its start read (tip B) and its removal
-              fails path-level CAS and reruns, keeping O; a commit whose new object is
-              absent, pushed with --no-verify or GIT_LFS_SKIP_PUSH=1, is refused alike; a
+              prune touches its objects first, so the prune's removal fails path-level CAS
+              and reruns; an old commit whose objects were pruned checks out with pointer
+              files under lfs.skipdownloaderrors (and GIT_LFS_SKIP_SMUDGE), ur naming them
+              and when their prune committed; the tip check, with no skip option set: A holds
+              pointer O and B, the tip, removes it, A and O's last version aged past N on the
+              fake clock and O pruned, a force push from B back to A, a new branch and a tag
+              at A each get lfs objects missing, naming O and git lfs push --object-id, the
+              evs tip staying B until that upload, after which the push commits with O's
+              version fresh; O unpruned and its version past N: the force push touches O
+              before its POST, and a prune paused between its start read (tip B) and its
+              removal fails path-level CAS and reruns, keeping O; a commit whose new object
+              is absent, pushed with --no-verify or GIT_LFS_SKIP_PUSH=1, is refused alike; a
               .gitattributes change that puts a stored pointer under filter=lfs checks its
               object; ur evs import uploads its directory's objects first; an owned ref
               published after an offline push holds when its object was pruned meanwhile, ur
               status naming it; ordinary pushes upload each object once and write no extra
-              touch, pointer bytes and oids exact; a settings file naming N below 7 days
-              reads as 7
+              touch, pointer bytes and oids exact; ur/lfs's settings file naming N below 7
+              days reads as 7, absent or 0 as 30, a version a non-admin signed ignored with
+              an alarm while the newest admin version stands, and ur evs lfs window refusing
+              values outside 7 to 365
 FS-74  §11    two writers' pushes to one file-mode ref, each changing only its own head file   FI-18,20    T2+T3  M10-out
               in the current bucket, land at v+1 and v+2, both documents found; one sidecar's
               two concurrent pushes race on its head file: one commits, the other gets 409,
               and its index code merges its delta into the winner's file and retries, losing
               and duplicating nothing, where a user's versionless file is never retried this
               way; a seal, only at 16,208 B and never on idle, racing the writer's next
-              commit: the commit lands in the next slot or the seal reruns; two mergers of one
-              bucket's seals race: equal plaintext, one commits, the other's uploads become
-              orphans (§11.13); on a git-mode ref, a writer killed between its git push and
-              its companion index push: that commit's documents are searched from local text
-              where a device holds it, else reported not yet searchable, until a companion
-              push or a backfill covers them; a commit from a client that skips the index, an
-              old client or a phone, likewise until an indexer designated for search, else the
-              next capable writer, backfills it; a commit just past a bucket boundary by its
-              signed time writes its first slot in the new current bucket
+              commit: the commit lands in the next slot or the seal reruns; two mergers of
+              one bucket's seals race: equal plaintext, one commits, the other's uploads
+              become orphans (§11.13); on a git-mode ref, a writer killed between its git
+              push and its companion index push: that commit's documents are searched from
+              local text where a device holds it, else reported not yet searchable, until a
+              companion push or a backfill covers them; a commit from a client that skips the
+              index, an old client or a phone, likewise until an indexer designated for
+              search, else the next capable writer, backfills it; a commit just past a bucket
+              boundary by its signed time writes its first slot in the new current bucket; a
+              push changing no document carries index_none and counts toward indexed_through,
+              and a host with the text that finds such a push changed a document raises
+              index_mismatch naming the signer and backfills it
 FS-75  §11    the indexer designated for search rolls an expired bucket and is killed at each  FI-18,19,20 T2+T3  M10-out
               barrier (the lock taken, the merge built, its uploads, its batch write, its head
               CAS with the response dropped, after the commit before the purge): each rerun
@@ -1843,27 +1868,29 @@ FS-77  §11,18 an ios32 and an Android surrogate cell and a page Worker, each ho
               defaults (§5.9's rebuild row); a phone runs its merges and roll-ups only in
               windows, within its cap (FS-75)
 FS-78  §11,15 a mailbox and a vault, both indexed, at the exact storage limit and spent, the   FI-5,13c,19 T2+T3  M10-out;
-              eraser at evs_closure_bytes_floor: an admin's erasure of one email first commits                    mailbox
-              its CUT and an ERASE of the email's own keys, both at once, the email masked in                     M7, holds
-              search from the CUT, then rewrites in place, by CLOSURE pushes, every                               M5 (23.6)
+              eraser at evs_closure_bytes_floor: an admin's erasure of one email first                            mailbox
+              commits its CUT and an ERASE of the email's own keys, both at once, the email                       M7, holds
+              masked in search from the CUT, then rewrites in place, by CLOSURE pushes, every                     M5 (23.6)
               versionless index file holding its postings or display fields (its bucket's
               files, the all files holding it), each upload at most 1,088 KiB and each chain
               within Padmé of the one it replaces, then the ERASE destroys the old keys; the
-              old ciphertext is purged after certainty and the allowance, staged bytes leaving
-              with their batches; the erasure completes within the days and turns §11.13's
-              wait row gives for its closure bytes on the fake clock, its postings openable to
-              key holders until its part's ERASE commits and never after; on the hint each
-              reader drops the replaced index files, its local overlay and vocabulary entries
-              for the document, any retained bucket and the document's journaled companion
-              entries, so the desktop, the phone and the daemon's cache all miss it; a
-              companion push built before the CUT gets 409 INDEX_EPOCH and rebuilds without
-              the document, and no watch follows the ERASE (§11.14); a note edited across
-              several windows has every all file holding any of its versions rewritten; an
-              iOS-only eraser fetches the files holding the document, not all; under a hold
-              the keys go at once and the ciphertext stays; a CLOSURE that would create,
-              delete or grow an index file past its replaced length is refused; an ephemeral
-              sidecar's in-memory index cache stays inside MemoryBudgetByteCount on a "search
-              more" larger than it
+              old ciphertext is purged after certainty and the allowance, staged bytes
+              leaving with their batches; the erasure completes within the days and turns
+              §11.13's wait row gives for its closure bytes on the fake clock, its postings
+              openable to key holders until its part's ERASE commits and never after; on the
+              hint each reader drops the replaced index files, its local overlay and
+              vocabulary entries for the document, any retained bucket and the document's
+              journaled companion entries, so the desktop, the phone and the daemon's cache
+              all miss it; a companion push built before the CUT gets 409 INDEX_EPOCH and
+              rebuilds without the document, and no watch follows the ERASE (§11.14); a note
+              edited across several windows has every all file holding any of its versions
+              rewritten; an iOS-only eraser fetches the files holding the document, not all;
+              under a hold the keys go at once and the ciphertext stays; a CLOSURE that would
+              create, delete or grow an index file past its replaced length is refused, and
+              one whose canonical rebuild in blocks of 64 outgrows the replaced length keeps
+              the replaced shard's block partition and fits, with its pad_generation; an
+              ephemeral sidecar's in-memory index cache stays inside MemoryBudgetByteCount on
+              a "search more" larger than it
 FS-79  §11    a repo admin turns the index on: one full build by a device holding the text     FI-18,21    T2+T3  M10-out
               lands, searches answering not yet searchable until it does, two devices racing
               it building equal plaintext with one committing; turned off: one push removes
@@ -1934,28 +1961,28 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               repos the requester does not read in its own state, and a read revoked
               mid-cursor refuses that repo on the next page; notice: no request reaches the
               other member's indexer before the notice is answered, "only my devices" sets
-              own, and a new answering member asks again; sizes: every request body is 4,016 B
-              and every reply steps x 16,384 B in one frame sequence, for queries with 0, 1
-              and 20 hits, TOO_BROAD, INVALID, CURSOR_EXPIRED and UNSUPPORTED_VERSION, and no
-              Cancel is sent; connect: the pair's close reports follow C19's windows in both
-              directions whatever ran in them (FS-125), and a pair whose Hellos carried no
-              bit 1 reports its bytes exactly; evs: both devices' evs request logs are
-              identical with and without
-              the remote search, the indexer issuing no read at search time even with a hint
-              pending; merge: against SearchOracle, the merged list equals the oracle's
-              verified set over SERVED_TEXT repos, a local possible match inside the checked
-              span that no page returned collapses, one outside it or newer than the pinned
-              version stays, an ERASE mid-cursor answers CURSOR_EXPIRED and the erased
-              document never shows; a fabricated hit is dropped on open with
-              search_alarm{mismatch}, and a display-field match the indexer omits inside its
-              span raises search_alarm{omission}; failover: the first own indexer killed
-              before and after page 0, the second answers; both killed, the network indexer is
-              never asked for the vault, which falls back to the download under the metered
-              rule; limits: a fifth concurrent search queues or is refused, a requester past
-              30 requests a minute gets RESOURCE_EXHAUSTED, and 100 requesters at once never
-              push local searches past §16.10's targets; logs: the query canary is in no log,
-              metric, trace, crash report or state file on either device, and the served
-              record names no query
+              own, and a new answering member asks again; sizes: every request body is 4,016
+              B, filters past 768 B answered INVALID and searched locally with FallbackReason
+              none, and every reply steps x 16,384 B in one frame sequence, for queries with
+              0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR_EXPIRED and UNSUPPORTED_VERSION,
+              and no Cancel is sent; connect: the pair's close reports follow C19's windows
+              in both directions whatever ran in them (FS-125), and a pair whose Hellos
+              carried no bit 1 reports its bytes exactly; evs: both devices' evs request logs
+              are identical with and without the remote search, the indexer issuing no read
+              at search time even with a hint pending; merge: against SearchOracle, the
+              merged list equals the oracle's verified set over SERVED_TEXT repos, a local
+              possible match inside the checked span that no page returned collapses, one
+              outside it or newer than the pinned version stays, an ERASE mid-cursor answers
+              CURSOR_EXPIRED and the erased document never shows; a fabricated hit is dropped
+              on open with search_alarm{mismatch}, and a display-field match the indexer
+              omits inside its span raises search_alarm{omission}; failover: the first own
+              indexer killed before and after page 0, the second answers; both killed, the
+              network indexer is never asked for the vault, which falls back to the download
+              under the metered rule; limits: a fifth concurrent search queues or is refused,
+              a requester past 30 requests a minute gets RESOURCE_EXHAUSTED, and 100
+              requesters at once never push local searches past §16.10's targets; logs: the
+              query canary is in no log, metric, trace, crash report or state file on either
+              device, and the served record names no query
 FS-84  §16,11 directory writers: a card signed or pushed by another sidecar, by a parked,      FI-25       T2     M6-out
               revoked, reaped or suspended one, with a seq not above the last or an auth pin                      (entries);
               out of range; a repo announcement by a non-admin, or for an owner-bound repo by                     later of
@@ -2085,22 +2112,25 @@ FS-94  §11    a shared inline record: one push writes small X and Y, Y a copy o
               deletes nothing, since compaction is Later (owner decision 247), keeps every
               byte Y needs
 FS-95  §11,8  refusals: config and mailcfg (409 DROP_KIND); git-mode and creates-only refs     FI-17,27    T2+T3  M10-out;
-              (409 REF_MODE); the ur/index and ur/lfs refs, .ur-index/ and a path naming a                        format-1
-              directory (409 DROP_PATH); a versionless head (409 VERSIONING); a locked repo,                      cases at
-              and a lock filed during a window voiding the drop at its start; owner-bound: an                     M2-out
-              admin not the owner's consented device (409 DROP_CONSENT), the owner's device
-              accepted, its page Worker refused; a non-admin (403); a written version whose
-              oid differs (readers raise SidecarEvent history_drop in state invalid, naming
-              the signer, and list nothing; §11.7, §5.4); a list missing or adding one version
-              (refused {mismatch}, nothing deleted); a cancel after not_before less 60 s
-              (409 DROP_STATE); a cancel accepted at the storage limit and after the network
-              has spent its evs_drops_per_day, while its next drop gets 429; no MCP tool can
+              (409 REF_MODE); a path naming a directory, and ur/index's and .ur-index/'s                          format-1
+              files at versioning 2 (409 DROP_PATH, recorded); ur/lfs's objects at versioning                     cases at
+              1 and a versionless head (409 VERSIONING, recorded), each reserved name also                        M2-out
+              refused by honest clients, a modified client's DROP there raising history_drop
+              in state invalid at readers; a locked repo, and a lock filed during a window
+              voiding the drop at its start; owner-bound: an admin not the owner's consented
+              device (409 DROP_CONSENT), the owner's device accepted, its page Worker
+              refused; a non-admin (403); a written version whose oid differs (readers raise
+              SidecarEvent history_drop in state invalid, naming the signer, and list
+              nothing; §11.7, §5.4); a list missing or adding one version (refused
+              {mismatch}, nothing deleted); a cancel after not_before less 60 s (409
+              DROP_STATE); a cancel accepted at the storage limit and after the network has
+              spent its evs_drops_per_day, while its next drop gets 429; no MCP tool can
               drop; at the storage limit an inline-head drop accepted and one needing an
               upload refused; format-1 code given flag 256 or field 33 refusing them as
               FORMAT_UNSUPPORTED, and ignoring window bit 5; from M2, format-1 evs refusing a
-              version naming a slot that neither its push introduced nor a version step 4 read
-              names (§11.8's 5h), and a new-slot PUT meeting an equal object over 23 h old
-              with 409 SLOT_STALE (step 6)
+              version naming a slot that neither its push introduced nor a version step 4
+              read names (§11.8's 5h), and a new-slot PUT meeting an equal object over 23 h
+              old with 409 SLOT_STALE (step 6)
 FS-96  §11,19 interactions: a versionless era inside the range stays collected, a              FI-5,13,16, T2+T3  M10-out
               kind-5-headed segment adopted as kind 1 and listed goes, one a live versionless  19,27
               head names stays; an ERASE meeting a slot the drop deleted counts done; the
@@ -2136,7 +2166,9 @@ FS-97  §7,18  stale page Workers (D-TEAM-29) on a fake clock: a member's page W
               it again; a kill between an admission and its revocations: the restart re-checks
               and posts the same statements, one entry each; a Worker that resyncs after its
               admitting device last fetched the group, during a retry, or before a k = 2
-              proposal's cosign is not revoked
+              proposal's cosign is not revoked; a Remove of a leaf whose credential shows a
+              change inside the window, from a dishonest writer leaf, is refused by a member
+              one day old, which judges it from the tree alone (§10.9)
 FS-98  §5,18  a member revokes another of its own devices (D-CORE-20) in a personal network    I-4,15,FI-2 T2+T3  M3-out;
               and a Team with self_admit on and off, from a phone app with a presence signer,              +T4    Team at
               a remote-mode desktop app signing the first call's bytes, and ur devices revoke                     M6-out;
@@ -2482,31 +2514,31 @@ FS-116 §11,19 the governor alone on the fake clock with exact prices (k = 1) an
               a mutant that debits funded P2 from T as well admits ~7.3 pushes an interval and
               fails
 FS-117 §10,11 P0 alone past the refill for 24 h of fake counters on one metadata set, every    FI-3,14     T2     M2-out
-              uploader, group and network under its own rate: 100 Teams of 5,000 admissions,
-              each revoking a sidecar every 5 min, each revocation asking a config and a
-              directory rotation of ~6,000 deliveries, with full 1,000-leaf Removes, 16-slot
-              ERASEs at each network's 60 a minute, 10,000-slot ERASEs and --now shreds of
-              1M-object repos, a Pro network's pushes and 2x year one's mix beside them, and,
-              in other groups, a SCHEDULE and a REQUEST rotation whose claims state cause
-              REMOVE though no shrink, authorization expiry or compromise retirement lies past
-              gen/<g>'s auth pin; then the storm stops and the run goes on 24 h; then again
-              with the governor killed for 10 min, its processes on fallback, and again with
-              {nvb_<set>} lost mid-storm: every P0 write issues on arrival, none queued,
-              refused or paced, every gate's close-to-reopen p99 stays under §10.6's 5 minutes
-              and nothing commits after a gate closes at a generation a revoked holder reads;
-              P1 and unfunded P2 issue nothing while P0 takes the refill, funded P2 nothing
-              past what B holds, and B never falls below zero; the two mislabeled rotations'
-              deliveries and claims are charged as P1 and shed; pushes and evacuation resume
-              within one interval of the storm's end, evacuation's oldest minute directories
-              first, T following its factor of B each interval; the other classes' writes hold
-              FI-14 (a) in every 24 h window, a lost state restarting B and W at zero; the P0
-              page fires within an hour of P0 passing the refill and never in a control day of
-              2x year one's mix with a --now shred of a 1M-object repo; the run reports P0's
-              forgiven excess by kind, the 24 h windows past 0.8 and 1 DWPD, the ramp's time
-              to half and 90% of r, the pushes shed and the oldest batch's age past 26 h;
-              §19.8's gauges and counters equal the oracle's; a mutant flooring T at a fifth
-              of the refill while B is empty, one queuing P0 behind B, and one repaying P0's
-              excess, B going below zero, each fail
+              uploader, group and network under its own rate in each process: 100 Teams of
+              5,000 admissions, each revoking a sidecar every 5 min, each revocation asking a
+              config and a directory rotation of ~6,000 deliveries, with full 1,000-leaf
+              Removes, 16-slot ERASEs at each network's 60 a minute, 10,000-slot ERASEs and
+              --now shreds of 1M-object repos, a Pro network's pushes and 2x year one's mix
+              beside them, and, in other groups, a SCHEDULE and a REQUEST rotation whose
+              claims state cause REMOVE though no shrink, authorization expiry or compromise
+              retirement lies past gen/<g>'s auth pin; then the storm stops and the run goes
+              on 24 h; then again with the governor killed for 10 min, its processes on
+              fallback, and again with {nvb_<set>} lost mid-storm: every P0 write issues on
+              arrival, none queued, refused or paced, every gate's close-to-reopen p99 stays
+              under §10.6's 5 minutes and nothing commits after a gate closes at a generation
+              a revoked holder reads; P1 and unfunded P2 issue nothing while P0 takes the
+              refill, funded P2 nothing past what B holds, and B never falls below zero; the
+              two mislabeled rotations' deliveries and claims are charged as P1 and shed;
+              pushes and evacuation resume within one interval of the storm's end,
+              evacuation's oldest minute directories first, T following its factor of B each
+              interval; the other classes' writes hold FI-14 (a) in every 24 h window, a lost
+              state restarting B and W at zero; the P0 page fires within an hour of P0 passing
+              the refill and never in a control day of 2x year one's mix with a --now shred of
+              a 1M-object repo; the run reports P0's forgiven excess by kind, the 24 h windows
+              past 0.8 and 1 DWPD, the ramp's time to half and 90% of r, the pushes shed and
+              the oldest batch's age past 26 h; §19.8's gauges and counters equal the
+              oracle's; a mutant flooring T at a fifth of the refill while B is empty, one
+              queuing P0 behind B, and one repaying P0's excess, B going below zero, each fail
 FS-118 §11,19 path-epoch copies for 7 days of fake clock on one metadata cluster, entries and  FI-1,6,14   T2     M2-out
               copy limits scaled by 1/100 together: at the planned copy load (live entries of
               rotating refs times epochs a day times 3: half the cluster's 21.6M operations a
@@ -2734,9 +2766,12 @@ data rule                     before a final freeze, only local, T3, canary and 
 
 ```text
 0x0010 interop artifact
-kem       X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519, and tmc/mls's encapsulation
-          and decapsulation equal it on fixed seeds; OpenMLS's 0x004D X-Wing agrees once the M0 KAT matches
-stacks    mls_* and tmc/mls (its provisional 0x004F, mapped to 0x0010) run one scripted lifecycle in both directions:
+kem       X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519, DeriveKeyPair included,
+          the only independent X-Wing evidence, which the artifact says; tmc/mls's encapsulation and decapsulation
+          equal it on fixed seeds, a check of wiring, not of X-Wing, since tmc/mls runs that same code
+          (owner decision 359); OpenMLS's 0x004D X-Wing agrees once the M0 KAT matches
+stacks    mls_* and tmc/mls (its provisional 0x004F, patched to 0x0010 by a build overlay, §10.4) run one scripted
+          lifecycle in both directions:
           create, Add with Welcome, path commits, Remove, an external commit with ExternalInit, at least 10 epochs, a
           PrivateMessage decrypted per epoch; both compute equal epoch_authenticator and exporter outputs at every
           epoch, the "UR evs 1.0 kek" label included
@@ -2837,7 +2872,7 @@ None. PLAN.md says nothing about testing.
 | The governor's accounts charge P2 twice, let a class other than P0 issue while P0 holds the bucket empty, or keep the other classes stopped after a P0 storm ends, so pushes are refused early or the drives wear past the budget by more than P0's forgiven excess | Low | High | one conservation equation and FI-14 (a) and (b), checked after every step; FS-116's exact-cost schedule and its mutant before D-TEST-11's hardware run; FS-117's day of P0 alone past the refill, the day after it, and its mutants |
 | HE refuses port 25, blocking outbound conformance | Unknown | High | asked in M0 (§23.7) |
 | Test hooks reach a release, exposing keys or stalling steps | Low | Critical | build tag; `make check` |
-| A jetsam regression reaches users | Medium | Medium | surrogates; `make size` |
+| A jetsam regression reaches users | High | High | surrogates; `make size` |
 | A purge bug deletes a newest version's content | Low | Critical | observe mode and its soak (D-TEST-12); FI-16 model-checked; FS-64 to FS-71 |
 | The oracle shares a normalization bug with the index | Medium | Medium | written apart, sharing only the published tables; fixed vectors; 22.6's reference extractor |
 | A phone's "search more" leaks the query through what it fetches | Low | High | FI-23's trace equality; no body fetched before an open; a remote search's sizes and evs logs are FI-24's |

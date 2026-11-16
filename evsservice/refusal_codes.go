@@ -170,6 +170,35 @@ const (
 	// 5d: a CUT's or an index push's index_epoch above the head's: 409 INDEX_EPOCH, recorded, since a later CUT could
 	// bring the head there.
 	EvsCheckReasonIndexEpochAbove
+
+	// 5c, a DROP (§11.7's refused row; EVS2-M10-09): a DROP or its cancel in a config or mailcfg repo, whose replaying
+	// readers verify authority from every version: 409 DROP_KIND, final.
+	EvsCheckReasonDropKind
+	// 5c, a DROP: a ref that takes no drop, a git-mode ref, an overlay or a creates-only ref: 409 REF_MODE, final.
+	EvsCheckReasonDropRefMode
+	// 5c, a DROP in an owner-bound repo whose signer is not a consented, not-read-only device of its owner (D-ACL-25):
+	// 409 DROP_CONSENT, recorded, since consent can change.
+	EvsCheckReasonDropConsent
+	// 5c, a DROP whose written lineage's head is a directory or versioning 2 (plan-EVS2-drop-path-visibility): 409
+	// DROP_PATH, recorded.
+	EvsCheckReasonDropPath
+	// 5c, a DROP whose written lineage's head is versioning 1, or a drop under a standing lock: 409 VERSIONING,
+	// recorded (plan-EVS2-small-readings#3).
+	EvsCheckReasonDropVersioning
+	// 5c, a cancel whose drop did not commit on this ref at cancels_version, is not pending, or whose window closes
+	// within the cancel margin; a drop whose not_before_ms is neither of its values (plan-EVS2-small-readings#2): 409
+	// DROP_STATE, recorded.
+	EvsCheckReasonDropState
+	// 5h, a DROP's boundary rules (§11.7's boundary row, DESIGN-DETAILS 10.2.5): a written boundary that is not the
+	// path's next version, of versioning 0 and self-contained, or a removed one that is not the standing removal, or a
+	// change no written lineage names: 409 DROP_BOUNDARY, recorded.
+	EvsCheckReasonDropBoundary
+	// 5h, a DROP's lists: their count, order, repeats or hash, or a written lineage's list missing the base step 4 read
+	// (§11.7's action row): 409 DROP_LIST, recorded.
+	EvsCheckReasonDropList
+	// 5h's fence (DESIGN-DETAILS 10.2.7): a base, a deleted path or a reuse source that a DROP in the window lists, or
+	// one below its entry's drop mark: 409 DROPPED, recorded on a head read from the cluster.
+	EvsCheckReasonDropped
 )
 
 // One row of the table.
@@ -243,6 +272,16 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonCutShape:        {name: "cut_shape", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, fate: EvsRefusalFinal},
 	EvsCheckReasonIndexEpochBelow: {name: "index_epoch_below", code: protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH, fate: EvsRefusalFinal},
 	EvsCheckReasonIndexEpochAbove: {name: "index_epoch_above", code: protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH, fate: EvsRefusalRecorded},
+
+	EvsCheckReasonDropKind:       {name: "drop_kind", code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_KIND, fate: EvsRefusalFinal},
+	EvsCheckReasonDropRefMode:    {name: "drop_ref_mode", code: protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE, fate: EvsRefusalFinal},
+	EvsCheckReasonDropConsent:    {name: "drop_consent", code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_CONSENT, fate: EvsRefusalRecorded},
+	EvsCheckReasonDropPath:       {name: "drop_path", code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_PATH, fate: EvsRefusalRecorded},
+	EvsCheckReasonDropVersioning: {name: "drop_versioning", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
+	EvsCheckReasonDropState:      {name: "drop_state", code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_STATE, fate: EvsRefusalRecorded},
+	EvsCheckReasonDropBoundary:   {name: "drop_boundary", code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_BOUNDARY, fate: EvsRefusalRecorded},
+	EvsCheckReasonDropList:       {name: "drop_list", code: protocol.EvsRefusalCode_EVS_REFUSAL_DROP_LIST, fate: EvsRefusalRecorded},
+	EvsCheckReasonDropped:        {name: "dropped", code: protocol.EvsRefusalCode_EVS_REFUSAL_DROPPED, fate: EvsRefusalRecorded},
 }
 
 // The reason's name, for the service log and metrics: a closed set.
@@ -333,7 +372,7 @@ func (self *EvsCheckRefusal) Reply(pushId sidecar.Id) *protocol.EvsRefusalReply 
 }
 
 // The refusal a codec error from the root's parse and payload checks makes: FORMAT_UNSUPPORTED with needs_format 2
-// for a format-2 construct, else INVALID (EvsRefusalCodeOf's mapping).
+// for a format-2 construct, a DROP's DROP_LIST and DROP_STATE, else INVALID (EvsRefusalCodeOf's mapping).
 func EvsCheckRefusalOfCodec(err error) *EvsCheckRefusal {
 	switch sidecar.EvsRefusalCodeOf(err) {
 	case protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED:
@@ -343,6 +382,18 @@ func EvsCheckRefusalOfCodec(err error) *EvsCheckRefusal {
 	case protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING:
 		// format 2's payload checks: a staged segment naming another push (EVS2-M10-06)
 		return newEvsCheckRefusal(EvsCheckReasonVersioningPayload, "a staged segment of another push")
+	case protocol.EvsRefusalCode_EVS_REFUSAL_DROP_LIST:
+		// a DROP's lists, which EvsCheckDropPayload checks where their bytes are first whole (EVS2-M10-09)
+		return newEvsCheckRefusal(EvsCheckReasonDropList, "a DROP's lists")
+	case protocol.EvsRefusalCode_EVS_REFUSAL_DROP_STATE:
+		// a drop's not_before_ms (plan-EVS2-small-readings#2)
+		return newEvsCheckRefusal(EvsCheckReasonDropState, "a drop's not_before_ms")
 	}
 	return newEvsCheckRefusal(EvsCheckReasonInvalid, "the statement or payload's shape")
+}
+
+// Whether a codec refusal is one the push route records after 5a rather than answers at once: a DROP's DROP_LIST and
+// DROP_STATE, which a signed statement's own bytes settle (§11.8's refuse row).
+func (self *EvsCheckRefusal) recordedCodec() bool {
+	return self.Reason == EvsCheckReasonDropList || self.Reason == EvsCheckReasonDropState
 }

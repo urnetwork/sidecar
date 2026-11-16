@@ -1038,21 +1038,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "agent_cert", number: 5, typeName: "bytes"},
 		question: "plan-CORE-agent-revoke",
 	},
-	{
-		message:  "EvsPush",
-		field:    testFenceField{name: "consumed_through", number: 35, typeName: "uint64"},
-		question: "plan-RECORD-depositor-spool",
-	},
-	{
-		message:  "EvsPushPart",
-		field:    testFenceField{name: "sections", number: 8, typeName: "bytes"},
-		question: "plan-EVS2-drop-list-parts",
-	},
-	{
-		message:  "EvsHead",
-		field:    testFenceField{name: "consumed_through", number: 27, typeName: "uint64"},
-		question: "plan-RECORD-depositor-spool",
-	},
 	// QD-764: a rule's via subjects apart from its targets, and an approved route's ids in the rows, whose advertisers
 	// a route rule with no via takes as its via subjects (QD-004's second half)
 	{

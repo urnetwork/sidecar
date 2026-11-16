@@ -67,9 +67,16 @@ type metadataListAddition struct {
 	list     string
 }
 
-// None waits now: design-records wrote every earlier entry's text into §2.8's block with the fold of 2026-11-16
-// (owner decision 252), so the list is the block alone until the next answer.
-var metadataListAdditions = []metadataListAddition{}
+// Design-records wrote every earlier entry's text into §2.8's block with the folds of 2026-11-16 (owner decision
+// 252), QD-857's with §10's; what follows waits for the next fold.
+var metadataListAdditions = []metadataListAddition{
+	{
+		// {smq_<networkId>}'s 24 hourly bounce fields, 48 h expiry, added to smtp-4's sees (SMTP-M9-16)
+		question: "plan-SMTP-small-readings#8 (QD-199)",
+		block:    "per network the day's connection and recipient counts and reservations, bursts and concurrency;",
+		list:     "per network the day's connection and recipient counts and reservations, bursts and concurrency, and its self-reported hard bounces by UTC hour, each hour's field kept 48 h (QD-199);",
+	},
+}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {

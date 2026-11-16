@@ -3,7 +3,7 @@
 // (cmd_evs_rekey.go), lock and unlock ACL-M10-01's (cmd_evs_lock.go); §11's own parts, ls, log, delete, restore,
 // import, export, retry and status, are EVS1-M2-38's (cmd_evs_repo.go), reseed EVSB-M2-20's (evs_reseed.go, the name
 // its plan entry gives it), versioning and ls -l EVS2-M10-16's (cmd_evs_versioning.go), rules and repair EVS1-M6-05's
-// (cmd_evs_rules.go, cmd_evs_repair.go), and EVS2's add the rest.
+// (cmd_evs_rules.go, cmd_evs_repair.go), lfs window EVS2-M10-28's (cmd_evs_lfs.go), and EVS2's add the rest.
 
 package main
 
@@ -40,8 +40,9 @@ func init() {
 			"  ur evs rules <repo_id> set <file> [--as-written]",
 			"  ur evs rules <repo_id> lift",
 			"  ur evs repair <repo_id> [<path>]",
+			"  ur evs lfs <repo_id> window <days>",
 		}, "\n"),
-		summary: "a repo in evs: its files, history, life, imports and exports; rekey; each file's versioning, and its lock; a mount's open work; its re-seed after a site loss; its prefix write rules and their repairs",
+		summary: "a repo in evs: its files, history, life, imports and exports; rekey; each file's versioning, and its lock; a mount's open work; its re-seed after a site loss; its prefix write rules and their repairs; its git-lfs prune window",
 		run:     runUrEvs,
 	})
 }
@@ -79,6 +80,8 @@ func runUrEvs(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return runUrEvsRules(ctx, cli, options)
 	case urOptionBool(options, "repair"):
 		return runUrEvsRepair(ctx, cli, options)
+	case urOptionBool(options, "lfs"):
+		return runUrEvsLfs(ctx, cli, options)
 	}
-	return errors.New("ur evs takes rekey, lock, unlock, ls, versioning, log, delete, restore, import, export, retry, status, reseed, rules or repair")
+	return errors.New("ur evs takes rekey, lock, unlock, ls, versioning, log, delete, restore, import, export, retry, status, reseed, rules, repair or lfs")
 }

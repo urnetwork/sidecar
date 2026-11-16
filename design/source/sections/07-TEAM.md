@@ -196,7 +196,9 @@ ur-authkey-<id>-<secret>[#<base64url(AuthKeyBundle)>]            QR and MDM carr
                 SidecarAdmit with the Delegation's key (a scoped statement: exactly its tag_ids and, unless
                 ephemeral, a not_after no earlier than the Delegation's; 7.9), keeps only the reader seed
                 (§5.6), erases the rest; every other copy of the string keeps both seeds, so it admits until
-                the Delegation ends and reads until its key drops (7.9's delegation row, §10.5)
+                the Delegation ends and reads until its key drops (7.9's delegation row, §10.5); the reader
+                seed is X-Wing's own 32-byte seed, crypto/hpke's MLKEM768X25519().NewPrivateKey(seed) being
+                the key whose public bytes are the Delegation's reader_xwing_public_key
 POST /oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
      subject_token=<by_client_jwt>  subject_token_type=urn:ur:params:oauth:token-type:client-jwt
      resource=<service URI>  scope=<within the service's>  DPoP: <proof by the ClientKey>
@@ -234,7 +236,7 @@ POST /oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
                issuer's metadata names it (§2.8 api-11; owner decision 322)
   ```
 - **ur.io's key origin** (§18.8) has no public client of its own: a ur.io page hands it a one-time `/auth/code-create` code by postMessage, which it redeems at `/auth/code-login` for a network token, mints the page Worker's `admin_refused`, `strict_exp` client with `POST /network/auth-client` and drops the token, and it re-mints the same way after a lapse (owner decision 219).
-- **Token exchange** (RFC 8693) checks the ClientKey's DPoP proof (RFC 9449; 7.4's proof rule, jti single-use), refuses expired subject tokens and inactive, reaped or unadmitted clients (an unadmitted client of member M may get only `recovery:<member_id>` at gkm, for M's own recovery wraps, 7.9), and never issues the API audience. evs and gkm capabilities (`scope=repo:<id>:r|rw|admin|deposit`, owner decision 2) come from §8's rows in the newest projection: a read-only sidecar gets only `r` scopes and §16.8's receipt deposit, whatever else it is; a `forward_only` client (7.4), which acts as its sidecar, gets only `repo:<config_repo_id>:r` at evs and gkm, while that sidecar's forwarding Delegation is live (7.9) and the client is the newest active forwarding child of that sidecar's current bound client, whatever its sidecar reads (owner decision 197): since every forwarding setup files its Delegation and then mints a new forwarding client, a Delegation superseded by one naming other keys ends the old client's exchange at the new one's mint, however long the old component keeps refreshing, while a repeat setup for the same key reissues the client; two windows are accepted, the old client exchanging between the new Delegation and the new mint, and the component's follow refused between that mint and its taking the hand-off (§18.6); binding the client to its delegation_id can replace this later without changing what the sidecar sends (owner decision 331); readers of an owner-bound repo who are not its writers also get `repo:<id>:deposit` for receipts (§16.8); member devices other than read-only ones get gkm `rw` on the config group (7.9's `commit`); in a team network every admitted sidecar that is not read_only gets `repo:<directory>:rw` (read_only ones `r`), and only the directory's admins, its creator and the config writers, each consented (§8.5) and not read_only, get its `admin`, which alone carries its ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete`, as in every repo: evs cannot see whose copies a key covers, so it checks the authority before any key mutation (§11.12, §16.11). **Re-seed mode** (§19.10): while `sidecar.yml`'s `reseed` is true and the network's log has not resumed (7.9's site loss), which api reads per network from the resumed marker of `{acl_<networkId>}r`, `reseed` staying the switch that allows the mode at all (owner decision 312), the exchange mints only `repo:<id>:admin`, honored only by evs's `POST /evs/v1/repos/<id>/reseed` and gkm's GroupForm with its ladder route (§10.8), to the sidecars the restored rows list under the network's Owners and Admins, and answers other requests `restore_required`. Tokens stay in the daemon (I-7), but for §11's v1 read-only git view.
+- **Token exchange** (RFC 8693) checks the ClientKey's DPoP proof (RFC 9449; 7.4's proof rule, jti single-use), refuses expired subject tokens and inactive, reaped or unadmitted clients (an unadmitted client of member M may get only `recovery:<member_id>` at gkm, for M's own recovery wraps, 7.9), and never issues the API audience. evs and gkm capabilities (`scope=repo:<id>:r|rw|admin|deposit`, owner decision 2) come from §8's rows in the newest projection: a read-only sidecar gets only `r` scopes and §16.8's receipt deposit, whatever else it is; a `forward_only` client (7.4), which acts as its sidecar, gets only `repo:<config_repo_id>:r` at evs and gkm, while that sidecar's forwarding Delegation is live (7.9) and the client is the newest active forwarding child of that sidecar's current bound client, whatever its sidecar reads (owner decision 197): since every forwarding setup files its Delegation and then mints a new forwarding client, a Delegation superseded by one naming other keys ends the old client's exchange at the new one's mint, however long the old component keeps refreshing, while a repeat setup for the same key reissues the client; two windows are accepted, the old client exchanging between the new Delegation and the new mint, and the component's follow refused between that mint and its taking the hand-off (§18.6); binding the client to its delegation_id can replace this later without changing what the sidecar sends (owner decision 331); readers of an owner-bound repo who are not its writers also get `repo:<id>:deposit` for receipts (§16.8); member devices other than read-only ones get gkm `rw` on the config group (7.9's `commit`); in a team network every admitted sidecar that is not read_only gets `repo:<directory>:rw` (read_only ones `r`), and only the directory's admins, its creator and the config writers, each consented (§8.5) and not read_only, get its `admin`, which alone carries its ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete`, as in every repo: evs cannot see whose copies a key covers, so it checks the authority before any key mutation (§11.12, §16.11). **Re-seed mode** (§19.10): while `sidecar.yml`'s `reseed` is true and the network's log has not resumed (7.9's site loss), which api reads per network from the resumed marker of `{acl_<networkId>}r`, `reseed` staying the switch that allows the mode at all (owner decision 312), the exchange mints only `repo:<id>:admin`, honored only by evs's `POST /evs/v1/repos/<id>/reseed` and gkm's GroupForm with its ladder route (§10.8), to the sidecars the restored rows list under the network's Owners and Admins, and answers other requests `restore_required`. Tokens stay in the daemon (I-7).
 - **Keys.** Admin, service and ID tokens use disjoint ES256 key sets (`kid` prefixes `adm-`, `svc-`, `id-`), private to api's issuer, `auth.bringyour.com` (owner decisions 16, 108; server/oauth/keys.go:3-13).
 - **Notices.** New credentials, IdPs, domains, Delegations and admin-set changes notify Owners and Admins, a notice being owed by a path that can admit devices or sign people in: a forwarding Delegation, which admits nothing and whose device's own admission already carried its notice, owes none (owner decision 308); auth codes carry their `api_key_id`, so removing the key ends the code and its network token, closing server/session/AUTH.md:202's gap (7.4). Tokens are never stored (§2.8 api-11).
 
@@ -649,7 +651,10 @@ device    signs Genesis, the first config head, which holds the Signed Genesis a
           1, whose prev_chain is A_0 = SHA-256(Signed Genesis); sha256(Genesis), AuthKeyBundle's and Pending's
           genesis_sha256 and an invite's hash all mean that A_0; the first head's EvsPush is signed before
           base 1, so it carries auth {0, A_0}, since A_1 hashes that head's C_1 and a pin of A_1 would be
-          circular, and evs takes that pin only on a config repo's first push (§11.8)
+          circular, and evs takes that pin only on a config repo's first push (§11.8); the device draws the
+          config group's id and RK_1 before base 1, keeping them as KF1's draft, and seals that push under
+          them with the generation pin {group_id, 1, C_1}, signing GenRotate_1 at S(1) over that RK_1 once
+          base 1 stands, since C_g holds no pin (§10.7's KF1; owner decision 373)
 api       accepts base 1 only with that Genesis, sent as the request's genesis and required only at version
           1: it checks SHA-256(genesis) = prev_chain and that Genesis names such a sidecar, then PUTs
           projrows, entry 1 (If-None-Match, the race's commit point, so one genesis wins) and entry 0, and a
@@ -659,7 +664,8 @@ entry 0   proj/<network_id>/00000000000000000000/_ holds the Signed Genesis byte
           /network/config/projection?after=0 returns genesis beside the entries, to unadmitted clients too,
           and answers 503 while entry 1 exists without entry 0 (§2.8 api-7)
 exchange  issues repo:<config_repo_id>:admin from base 1 to that sidecar, then the only config writer, which
-          creates the repo (§11.12), pushes the head and forms the group (§10.6); a race's loser is admitted
+          creates the repo (§11.12), forms the group from its draft, the repo activating once generation 1's
+          deliveries stand (§10.7's KF1), and then pushes the head; a race's loser is admitted
           like any device; this is the first case of §8.5's rule that every config writer holds admin on the
           config repo at evs and gkm, so that once that sidecar is gone a config writer re-forms the group
           (§10.8), posts its ladder, and activates or re-places the repo after a restore (owner decision 352)
@@ -989,13 +995,16 @@ personal network (k = 1)  the proposal alone                          at activat
 before      after ur login (§5.6) the device holds an unadmitted client of M; it may only read the log
 admission   (GET /network/config/projection?after=), submit a recovery-signed statement (POST
             /network/config/delta) and fetch M's recovery wraps under recovery:<member_id> (aud gkm, only
-            GET /gkm/recovery/<member_id>/wraps, M from the token), which the code opens at once: the window
-            and veto bound the admission, not what a code holder reads: a rebind or a cascade void stops new
-            wraps, and the code keeps opening what was wrapped to it and reads the current generation until
-            the next rotation, which --compromise makes a remove rotation with a path epoch at once (§5.9,
-            §2.10); the statement carries the recovery Ed25519 public key, raw in Signed.key_id with
-            signer_id the member_id (§6.9's signers), whose hash api and readers match to
-            MemberRow.recovery_key_sha256, compiled from RecoveryBind
+            GET /gkm/recovery/<member_id>/wraps, M from the token), which it keeps, the newest per group,
+            and opens once admitted, when gen/<g> reaches it: the config group's first, then the anchor,
+            then the rest (§10.8; owner decision 367); the window and veto bound the admission, not what a
+            code holder reads: with the operator's ciphertext and gen/ objects the code opens every
+            generation wrapped to it, a rebind or a cascade void stops new wraps, and the code keeps opening
+            what was wrapped to it and reads the current generation until the next rotation, which
+            --compromise makes a remove rotation with a path epoch at once (§5.9, §2.10); the statement
+            carries the recovery Ed25519 public key, raw in Signed.key_id with signer_id the member_id
+            (§6.9's signers), whose hash api and readers match to MemberRow.recovery_key_sha256, compiled
+            from RecoveryBind
 pending     an authority statement with a recovery-key signature, in its proposal or a cosign, and any admission
             by a binding a void restored (cascade), a proposal by the table above, is pending and admits
             nothing: members refuse an Add, Welcome or wrap to its device, and it shows as recovery_window on
@@ -1084,7 +1093,8 @@ stale    (D-TEAM-29) the device that admits a member's page Worker (§18.8), the
          presence check where 7.9's presence row asks (owner decision 187), SidecarRevoke{reason: removed}
          for each of that member's page Workers whose leaf,
          in every group the admitting device is a leaf of that seated it, at least one, §10.9 removed as
-         stale, or that is due for that Remove (stale_leaf_days past its leaf's last change) and whose
+         stale, or that is due for that Remove (stale_leaf_days past its leaf's last change, its credential's
+         not_after less 90 days, §10.9) and whose
          Remove the admitting device, a writer leaf there, commits first (§10.9's Remove row), with no
          later Add or resync (KF2, KF5); it decides at each group's current epoch, which it fetches first,
          and again before each post or retry (§5.9), dropping unposted a revocation whose Worker holds a
@@ -1110,8 +1120,8 @@ cleanup  (D-TEAM-29) from 90% of the network's config_admissions, which an admin
          /sidecar/limits, where it also sees §21.7's rows (§20.4), until the count falls below it, every
          admin device raises admissions_near_cap (§5.4) and lists, per member, its admitted page Workers
          but its newest, oldest first, each with its admission time, rows' admitted_time_ms beside its
-         position (owner decision 307), and its leaf's last change where a group the device is a leaf of
-         shows one; an admin's revoke signs
+         position (owner decision 307), and its leaf's last change, read from its credential as §10.9 reads
+         it, where a group the device is a leaf of shows one; an admin's revoke signs
          SidecarRevoke{reason: removed} for those listed (signer row; an AdminSet member's at k > 1 as
          proposals; 7.9's presence row), so Workers no member device answers for are freed before api
          refuses an admission at the cap (§20.7); one still in use signs out and is enrolled again

@@ -13,7 +13,8 @@
 // What lives where:
 //
 //   - settings.go, CertsSettings.
-//   - store.go, CertsStore: network_tls_cert, the only way this engine reaches Postgres.
+//   - store.go, CertsStore: network_tls_cert and network_tls_name_backoff, the only way this engine
+//     reaches Postgres.
 //   - order.go, POST /tls/cert-order's acceptance.
 //   - ca_policy.go, the policy's pure rules.
 //   - budget.go, CertsBudget, {tcb_<ca>_<registered_domain>}.
@@ -22,8 +23,10 @@
 //   - run.go, the chains' passes: orders, renewals and the revocation sweep (TLS-M5-17).
 //   - hints.go, TlsHint on topic tls.
 //
-// A CA's Retry-After and the names' failed authorizations are held in the process, as the extender's
-// hold is: a restart forgets them, and the CA's next refusal holds again.
+// A CA's Retry-After and each name's failed authorizations of the hour are held in the process, as the
+// extender's hold is: a restart forgets them, and the CA's next refusal holds again. A name's failure
+// backoff at each CA (QD-857) is the store's, so a restart keeps it: each failed authorization there
+// doubles the name's wait there up to FailureBackoffMax, and a success there ends it.
 
 package certsservice
 
@@ -269,21 +272,78 @@ func (self *CertsService) HoldCa(ca CertsCa, retryAfter time.Time) {
 	}
 }
 
-// Counts a failed authorization of each name at now (a *CertsAcmeAuthorizationError), which holds a
-// name at FailedAuthorizationCount inside the window.
-func (self *CertsService) RecordAuthorizationFailures(names []string) {
+// Counts a failed authorization of each name at ca at now (a *CertsAcmeAuthorizationError) twice: in the
+// process, where FailedAuthorizationCount of them inside the window hold the name at every CA, and in the
+// store, where they back the name off at ca alone (QD-857), which a restart keeps. The store's count is
+// written on a bound of its own, so a pass that ends as its CA answers still counts what the CA refused.
+// Returns what the store refused; the process counts every name whatever it answers.
+func (self *CertsService) RecordAuthorizationFailures(ctx context.Context, ca CertsCa, names []string) error {
 	now := self.clock.Now()
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	for _, name := range names {
-		kept := []time.Time{}
-		for _, failureTime := range self.nameFailures[name] {
-			if now.Sub(failureTime) < self.settings.FailedAuthorizationWindow {
-				kept = append(kept, failureTime)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for _, name := range names {
+			kept := []time.Time{}
+			for _, failureTime := range self.nameFailures[name] {
+				if now.Sub(failureTime) < self.settings.FailedAuthorizationWindow {
+					kept = append(kept, failureTime)
+				}
 			}
+			self.nameFailures[name] = append(kept, now)
 		}
-		self.nameFailures[name] = append(kept, now)
+	}()
+	callCtx, cancel := self.callContext(context.WithoutCancel(ctx))
+	defer cancel()
+	errs := []error{}
+	for _, name := range names {
+		testHookBarrier("certs.name_backoff.add", name)
+		if _, err := self.store.AddNameFailure(callCtx, name, ca, now, self.settings.failureBackoffWait); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	return errors.Join(errs...)
+}
+
+// Counts an order's failed authorization at ca against the names of row's CSR the CA refused, or all of
+// them when it named none of them (certsRefusedNames).
+func (self *CertsService) recordOrderFailure(ctx context.Context, row *sidecar.TlsCertRecord, ca CertsCa, refusedNames []string) error {
+	// the CA was sent this CSR, so it parsed
+	csrNames, _ := certsCsrNames(row.Csr)
+	return self.RecordAuthorizationFailures(ctx, ca, certsRefusedNames(csrNames, refusedNames))
+}
+
+// Ends the backoff at ca of the names of row, whose order there just issued: a success starts the CA's
+// count of their consecutive failed authorizations again (QD-857). The hour's hold in the process stays,
+// since a success hands back none of the CA's hourly failures. Written on a bound of its own, as a
+// failure is.
+func (self *CertsService) resetNameBackoffs(ctx context.Context, row *sidecar.TlsCertRecord, ca CertsCa) error {
+	names, err := certsCsrNames(row.Csr)
+	if err != nil || len(names) == 0 {
+		return err
+	}
+	callCtx, cancel := self.callContext(context.WithoutCancel(ctx))
+	defer cancel()
+	testHookBarrier("certs.name_backoff.clear", row.CertId.String())
+	_, err = self.store.ClearNameBackoffs(callCtx, names, ca)
+	return err
+}
+
+// Until when the backoffs of row's names hold an order for it at ca, zero when none does now: an order
+// admitted before one of its names failed at ca, or left under way by a pass that ended, waits out the
+// backoff as one admitted now would. A CSR that does not parse names nothing, and its order fails at the
+// CA as before.
+func (self *CertsService) nameBackoffUntil(ctx context.Context, row *sidecar.TlsCertRecord, ca CertsCa) (time.Time, error) {
+	names, err := certsCsrNames(row.Csr)
+	if err != nil || len(names) == 0 {
+		return time.Time{}, nil
+	}
+	callCtx, cancel := self.callContext(ctx)
+	defer cancel()
+	backoffs, err := self.store.ListNameBackoffs(callCtx, names)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return certsNameBackoffUntil(backoffs, ca, self.clock.Now()), nil
 }
 
 // ca's hold, zero when it has none.
@@ -355,11 +415,14 @@ type CertsPurgeReport struct {
 	ChainCount int
 	// Rows deleted.
 	RowCount int
+	// Names' failure backoffs deleted.
+	NameBackoffCount int
 }
 
 // Drops the chains past ChainRetention from their certificate's expiry or revocation, then deletes the
-// rows past RowRetention from their expiry, revocation or failure (cert-1; CertsStore.PurgeChains,
-// CertsStore.PurgeEnded). An error ends it with what it has done.
+// rows past RowRetention from their expiry, revocation or failure, then the names' failure backoffs past
+// FailureBackoffRetention from the time each held orders until (cert-1; CertsStore.PurgeChains,
+// CertsStore.PurgeEnded, CertsStore.PurgeNameBackoffs). An error ends it with what it has done.
 func (self *CertsService) Purge(ctx context.Context) (*CertsPurgeReport, error) {
 	report := &CertsPurgeReport{}
 	now := self.clock.Now()
@@ -375,5 +438,10 @@ func (self *CertsService) Purge(ctx context.Context) (*CertsPurgeReport, error) 
 		return report, err
 	}
 	report.RowCount = rowCount
+	backoffCount, err := self.store.PurgeNameBackoffs(callCtx, now.Add(-self.settings.FailureBackoffRetention))
+	if err != nil {
+		return report, err
+	}
+	report.NameBackoffCount = backoffCount
 	return report, nil
 }

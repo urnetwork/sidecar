@@ -16,8 +16,8 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§5 The Sidecar core](#s5) | 2 | 1 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 4 | 1 |
 | [§8 Access control](#s8) | 1 | 0 |
-| [§10 Group keys for evs: MLS and the GKM service](#s10) | 23 | 15 |
-| [§11 Encrypted versioned storage](#s11) | 25 | 37 |
+| [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
+| [§11 Encrypted versioned storage](#s11) | 1 | 0 |
 | [§12 DNS](#s12) | 7 | 0 |
 | [§13 The TLS edge and certificates](#s13) | 3 | 13 |
 | [§14 The SMTP edge](#s14) | 8 | 13 |
@@ -36,7 +36,7 @@ Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with i
 
 Sections 8 and 9's owner answers are folded as owner decisions (2026-11-10): section 9's QD-607 to QD-610, QD-612, QD-632 and QD-633 as 227-233, with QD-613 (section 6's key prefixes) as 234 and QD-640 as 235, and section 8's QD-598 to QD-606 as 236-244, each stated in §11 where it binds. Their proposed DESIGN.md text (8.8, 9.8) waits for the design agent's amendments above, and is folded only with them.
 
-Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
+Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 8.8's evs-4 words; and 9.8's evs-11 ttl. 6.8's gkm-5 pointers went into §2.8's gkm-5 with §10's items (QD-618, owner decision 363).
 
 <a id="s3"></a>
 ## §3 Architecture overview and end-to-end flows
@@ -165,15 +165,6 @@ Not folded (2026-11-16): line 1 of the worked example's ```hujson block in §8.5
 <a id="s10"></a>
 ## §10 Group keys for evs: MLS and the GKM service
 
-### QD-031: How long does a drop key live, that is, how long does a mailbox take mail with no reader online?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: drop_not_after_ms = time_ms + 90 days, the setting GkmSettings.DropKeyLifetime, one value for every kind that takes deposits, together with row 2's renewal.
-
-Changes: §10.5 GenRotate field 14; D-KEYS-8; D-KEYS-17.
-
-Questions: `plan-KEYS-drop-key-lifetime.md#1`.
-
 ### QD-046: A forged reader key, beyond correcting the text
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §5.*
 
@@ -183,282 +174,7 @@ Changes: §10.5 Ladder bullet; §2.18 unaudited-cryptography row; ledger row for
 
 Questions: `g0-recheck-0-readerkey-forgery.md#1`, `g0-recheck-0-readerkey-forgery.md#2`.
 
-### QD-057: New members cannot judge removal of a stale device
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §5.*
-
-[plan-KEYS-stale-remove-evidence] Not the question's option 1: give every member the same signed evidence. UrMlsCredential.not_after, field 6, today undefined, is ms since the epoch: the signing time plus 90 days, KeyPackages' life, and every UpdatePath leaf and external join re-signs the credential, so the tree carries each leaf's last change under its own identity key, and a Welcome joiner receives it. §10.9's Remove row: a stale Remove is valid iff the target's credential in the prior epoch's tree has not_after - 90 days + stale_leaf_days, read at the commit's auth pin, <= my clock + 60 s. Members judge this from the tree alone, so a one-day joiner and an old member agree. A writer leaf commits one only a day past that, and only if its own record shows no later change of that leaf. The value is evidence only: no commit is refused over it, and a leaf that inflates it delays only its own stale Remove. §7.10's "last change" and MemberDevice.LastChange read the same value. FS-97 adds: a Remove of a leaf inside the window refused by a member one day old. [plan-KEYS-wire-gaps#15] As plan-KEYS-stale-remove-evidence.md: ms since the epoch, the signing time plus 90 days, re-signed in every UpdatePath leaf and external join. It is evidence only, so no leaf already in a tree is refused over it.
-
-Changes: §10.4 UrMlsCredential field 6; §10.9 Remove row; §7.10 stale and cleanup rows; §5.4 MemberDevice.LastChange; FS-97.
-
-Questions: `plan-KEYS-stale-remove-evidence.md`, `plan-KEYS-wire-gaps.md#15`.
-
-### QD-065: Nothing renews a drop key: a lapse closes no gate, and a returning writer may never write
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6.*
-
-§10.5's depositor row ends: "else it waits for a newer rotation, which the gate, or for a drop key with under 7 days left §10.6's renewal, makes writers write". §10.6 gains a duty row: a GET drop-key whose newest GenRotate has under 7 days to drop_not_after_ms hints pending to R's writers, at most once an hour per group and process; a writer on that hint, and every writer at its hourly resync (§6.8), rotates with cause SCHEDULE if its repo's kind takes deposits and the newest drop key has under 7 days left, with no write of its own. §10.9's rotation checks and the depositor rule add: time_ms < drop_not_after_ms <= time_ms + DropKeyLifetime + 10 min, as readerkey's check does, so no signer can void the backstop with a far-future value. KEYS-M7-01 adds: a returning writer renews with nothing to ingest.
-
-Changes: §10.5 depositor row; §10.6 duties; §10.9 rotation checks; D-KEYS-17; FS-23.
-
-Questions: `plan-KEYS-drop-key-lifetime.md#2`.
-
-### QD-066: How does a ~6,000-delivery rotation fit §10.6's 5-minute gate target under W2's 1,200 gkm requests a minute?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Option 1, at M2's entry, recovery wraps included. POST /gkm/groups/<id>/wraps/<g>/<c8> takes GkmWrapBatch{repeated bytes deliveries = 1}, 1 to 256 Signed ReaderWraps and DelegationWraps, and answers 200 with GkmWrapBatchReply{repeated GkmWrapResult results = 1}, GkmWrapResult{uint32 status = 1; bytes winner = 2}, in order: 201, 412 with the winner, 403, 409, 429, or 0 for not tried. New POST /gkm/groups/<id>/recovery-wraps/<g>/<c8> does the same for a rotator's RecoveryWraps, items {member_id, b8, ciphertext}; POST /gkm/recovery/<member_id>/wraps stays for a rebind. New POST /gkm/reader-keys {sidecar_ids, at most 256} answers each Signed ReaderKey or none, under the read row's scope. gkm runs each item through the wrap checks as today, 16 PUTs at once, starts no PUT past 20 s into the request, under the lb's 30 s, and marks the rest 0; If-None-Match makes a retry safe. §10.6's STAGED bound counts items. §10.5's step 3 reads "in batches of at most 256, up to 4 at once". A 6,000-object rotation is then about 45 requests, and W2 stands. KEYS-M6-03 adds a T3 case: a full rotation through the real lb limit.
-
-Changes: §10.5 Rotate step 3; §10.6 wrap checks; §10.14 routes.
-
-Questions: `plan-KEYS-wrap-route-rate.md`.
-
-### QD-156: Row (h): no route reads GroupForms, and a depositor cannot learn its group id
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Add GET /gkm/repos/<id>/forms under r, rw and admin: the repo's Signed GroupForms, oldest first. Replace §10.14's GET /gkm/groups/<id>/drop-key?since=<g> with GET /gkm/repos/<id>/drop-key?since=<g>, scopes deposit, r, rw and admin, gkm resolving the newest GroupForm. D-KEYS-17's "only the drop-key route" stands.
-
-Changes: §10.14 routes; §10.6 scopes.
-
-Questions: `plan-KEYS-wire-gaps.md#8`.
-
-### QD-165: Row (i): dropping GroupInfo from a generation-0 epoch object would wedge recovery
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Not the proposed text. A generation-0 epoch object still carries the sealed GroupInfo at 16 leaves or fewer and moves the pointer as any epoch does. It seals under K_groupinfo of the newest generation the self-joiner holds, named in GkmEpochObject.group_info_generation; GkmCommitHeader.generation stays 0 and it carries no GenWrap. KF5's "the generation it names" reads that field in every epoch object.
-
-Changes: §10.6 GroupInfo row; §10.7 KF5.
-
-Questions: `plan-KEYS-wire-gaps.md#9`.
-
-### QD-177: `own`, `read` and D-KEYS-26 say any gkm token, while deposit reaches only the drop-key route
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-A token whose only repo scopes are deposit reaches GET drop-key and nothing else at gkm. §10.6's own and read rows and D-KEYS-26 change "any gkm token" to "a gkm token holding an r, rw or admin scope on some repo"; the rest of each row stands, and a token mixing deposit and r reaches them through its r. KEYS-M2-12's route matrix asserts deposit refused on POST /gkm/reader-key, POST /gkm/key-packages and GET /gkm/reader-key/<sidecar_id>.
-
-Changes: D-KEYS-26; §10.6 own and read rows.
-
-Questions: `g0-recheck-0-deposit-scope.md#2`.
-
-### QD-181: Where does gkm count its per-uploader rates, given §22.7 allows it no Redis family for them?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §2, §22, §9.*
-
-Option 1. §10.6 says: gkm counts these limits per process, in memory, as §9.10 counts sockets', so each is the stated rate times the process count and a restart forgets it. That covers the 60 commits, the 60 claims, the STAGED bound and the 10 KeyPackage claims; the 24 h ReaderKey rule stays exact, read from the stored object. §11.13's classes row and §2.10's P0 row say per process, FS-117 reads "under its own rate in each process", and each limit is a GkmServiceSettings field. No Redis family, and no §2.8 or §22.7 change, since gkm-9 already gives rate limits as a purpose.
-
-Changes: §10.6 checks and claim rows; §11.13 classes row; §2.10 P0 row; FS-117.
-
-Questions: `plan-KEYS-rate-counters.md`.
-
-### QD-229: §10.8 claims a window and veto that §7.9's table does not give most members
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7.*
-
-Replace §10.8's "a new device is admitted by the recovery key under §7.9's window and veto" (10-KEYS.md:610) with "a new device is admitted by the recovery key as §7.9's table says: at once outside the AdminSet, or at the cosign with self_admit off; through the 72 h window and veto for AdminSet members, k = 1 networks and restored bindings".
-
-Changes: §10.8.
-
-Questions: `g0-recheck-1-wr-n4-recovery-window.md#1`.
-
-### QD-273: §10.4's kem row passes by construction: is the draft's KAT enough X-Wing evidence for the freeze?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22.*
-
-Recommended: option 1. Keep §22.10's rows and make the claim exact. §10.4's kem row takes §22.10's first clause, "X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519", extended to DeriveKeyPair, and both rows say tmc/mls's comparison shares that code, so it checks wiring, not X-Wing. ARTIFACT.md states that the draft's vectors are the only independent X-Wing evidence. OpenMLS stays as §22.10's required row has it: needed only if a required step has a gap. The stacks row's tree, key schedule, framing and Welcome evidence stands.
-
-Changes: §10.4 kem row; §22.10 kem row.
-
-Questions: `plan-KEYS-interop-independence.md#2`.
-
-### QD-280: D-KEYS-15 says gen/<g> is the only place a generation exists
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Change D-KEYS-15 and §10.5 from "is the only place a generation exists" to "is the only place a generation is created; a gen pack later holds it verbatim (10.16)", matching §10.6's row (10-KEYS.md:326-327). No behavior changes in this build.
-
-Changes: D-KEYS-15; §10.5.
-
-Questions: `g0-recheck-2-gen-pack-trigger.md#3`.
-
-### QD-281: §10.8 says policy narrows kind defaults; nothing can
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-No document narrows a kind default; only hard denies remove access there. Delete ", which policy narrows" from §10.8's Key domains line.
-
-Changes: §10.8.
-
-Questions: `plan-ACL-small-readings.md#2`.
-
-### QD-615: Should §10.5 fix the ladder's AAD widths as built (u64be for g and e, u8 for cause) and gen/1's cause as REQUEST? (keys-ladder-aad-widths, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-§10.5's ladder AADs take the widths KEYS-M2-02 built: GenLink repo_id || u64be(g) || u8(cause) (25 B); GenWrap and LeafWrap group_id || u64be(e) || u64be(g) (32 B); GroupInfo group_id || u64be(e) (24 B). gen/1 carries cause REQUEST, and a reader refuses REMOVE there. Text only for design-records; testdata/gkm/ladder.json pins the bytes.
-
-Changes: §10.5 text (design-records); testdata/gkm/ladder.json stands.
-
-Questions: `details-6-ladder-aad-widths.md`, `keys-ladder-aad-widths.md`.
-
-### QD-616: Which extension marks a last-resort KeyPackage, and at what type number? (keys-m2-07-last-resort, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A last-resort KeyPackage is marked by draft-ietf-mls-extensions' last_resort extension, type 0x000A, empty extension_data, in KeyPackage.extensions only and listed in every leaf's capabilities, as mls_extension.go builds it. Section 6.2.2's two rules apply: a device that joined through its last-resort KeyPackage self-updates at once and replaces it at its next upkeep pass. D-KEYS-12's suite migration moves the number if the draft's changes. design-records adds the line to §10.4's credential block (6.8).
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; §10.4 credential block line (design-records).
-
-Questions: `details-6-last-resort-extension.md`, `keys-m2-07-last-resort.md`.
-
-### QD-617: A re-formed group's epoch 0 carries no auth pin: should epoch 1's floor be gen/<the form's generation>'s auth? (keys-wire-reform-epoch-zero, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A re-formed group's epoch 0 carries no auth pin, and the epoch PUT check gives epoch 1 its floor from gen/<form.generation>'s auth, which plan-KEYS-reform-ladder's rule 5 requires to exist before any commit, wrap or claim. No wire change; one sentence in §10.6's epoch PUT check (design-records). DESIGN-DETAILS.md section 6 is built on this, and KEYS-M2-25 has landed it.
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; KEYS-M2-25 (landed) stands; §10.6 epoch PUT check sentence (design-records).
-
-Questions: `details-6-reform-epoch-zero-floor.md`, `keys-wire-reform-epoch-zero.md`.
-
-### QD-618: Welcome pointers keyed by (recipient, group, epoch): is `gkm/welcome/<sidecar_id>/<group_id>/<n>` approved? (keys-m2-13-last-resort-welcome-pointer, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-Welcome pointers are keyed gkm/welcome/<sidecar_id>/<group_id>/<n> (n 20 digits), with the KeyPackageRef moved into GkmWelcomePointer.key_package_ref = 3; a device holding several pointers for one group takes the highest n above the newest epoch it reached. One Welcome, one key. The key form changes in §10.6, QD-442 and wrap_paths.json, with one proto field and gkm-5's wording (design-records), all unfrozen until M2's exit. DESIGN-DETAILS.md section 6 is built on this; KEYS-M2-19 carries the format change.
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; KEYS-M2-19 carries it; §10.6, QD-442, wrap_paths.json, gkm-5 (design-records).
-
-Questions: `details-6-welcome-pointer-key.md`, `keys-m2-13-last-resort-welcome-pointer.md`.
-
-### QD-637: Should a rotator read forwarding Delegations' reader keys in batches of up to 256, as it reads ReaderKeys, rather than by one GET each?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-gkm gains POST /gkm/delegation-keys {delegation_ids, at most 256} beside the GET, answering each stored forwarding reader key or none, in order, under the GET's scope (a reader of the network's config), as QD-066's POST /gkm/reader-keys does; one request and one reply message in gkm.proto with their gkm-1 lines, before M8's freeze. A config rotator reads delegation keys through it, about 13 requests a rotation at Team scale. Until it lands KEYS-M8-01 reads by the GET, one at a time.
-
-Changes: KEYS follow-up: the batched route, its proto messages and the rotator's use of it; §10.14's routes and gkm-1 lines (design-records).
-
-Questions: `keys-m8-01-delegation-key-batch-read.md`.
-
-### QD-638: Who makes the group of a repo that a tagged or ephemeral sidecar creates, since KF1's epoch 0 needs its creator's leaf and an agent holds none?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A tagged or ephemeral sidecar files the RepoCreate and places the repo, and stays its admin (owner decision 8). gkm hints pending to the network's config writers for a keying repo with no form; the first member device to act runs KF1's steps 2 to 4 as the group's creator (epoch 0 with its own leaf) and wraps generation 1 to the agent. Activation waits for that device, as an agent's every Add already does; a repo an agent creates while no member device is online stays keying until one returns. No format change; KF1 (§10.7) gains the second device (design-records). A KEYS follow-up builds the hint rule and the member device's step.
-
-Changes: KEYS follow-up: gkm's pending hint for a formless keying repo; a member device forms the group and wraps gen 1 to the agent; KF1 §10.7 text (design-records).
-
-Questions: `keys-m2-19-agent-created-repo-group.md`.
-
-### QD-641: A 1,000-leaf group's join, path commit and resync measure 27 to 63 MB of heap above their baseline, three to six times DESIGN-DETAILS 6.4's "under ~10 MB": is the engine to be brought under the phone budget, or the budget and the claim changed?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The MLS engine is brought under the phone budget in the review phase, measured by KEYS-M2-31's harness on the ios32 cell first. The owner directs that the SDK offload memory to storage wherever possible, since the iOS network extension and the apps have much more fast NVMe storage than RAM: hold the ratchet tree and other large state on disk and stream it (a path sealed and written a node at a time, the tree hashed and encoded from its on-disk sections, which mls_state.go already writes a node at a time), one decode for a resync, and a copy-on-write of the path in place of a whole-tree clone before a commit. No format or flow changes. Until then the harness reports the peaks and fails nothing on them. If the cell still reads over budget after this work, bounding a 32 MiB leg's roles is raised as its own question.
-
-Changes: review phase: KEYS-M2-06, -08 and -09's engine files, storage-backed tree and streamed path; standing owner direction: SDK, apps and iOS extension offload memory to storage (BRIEF.md); DESIGN-DETAILS 6.4's memory row restated by the design agent.
-
-Questions: `keys-m2-23-large-group-memory.md`.
-
-### QD-642: Can a code-only device open its recovery wraps before it is admitted, or only fetch them?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §7, §2.*
-
-Before admission a code-only device fetches its recovery wraps under recovery:<member_id> and keeps the newest per group in its keychain; it opens them once admitted, when gen/<g> reaches it: first the config group's wrap, then the anchor, then the rest (gkm_recovery.go as built). Text only: §10.8, §7.9 and DESIGN-DETAILS 6.2.4 step 1 say 'fetches' where they say 'opens at once' (design-records; the design agent for 6.2.4). No format or scope change; §2.10's disclosure is unaffected.
-
-Changes: §10.8 and §7.9 wording (design-records); DESIGN-DETAILS 6.2.4 step 1 wording (design agent).
-
-Questions: `keys-m2-24-recovery-wrap-opens-before-admission.md`.
-
-### QD-643: At which state does a member judge a GroupForm's signer, when the GroupForm carries no auth pin?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §2.*
-
-GroupForm gains bridge.AuthPin auth = 5, the signer's state when it signs. Members judge the form's signer by §10.6's rule at that pin where their retained log reaches it, and not at all before it, as R1's judged row does for every other judged statement; gkm holds the pin to its newest state as it holds a claim's (on the chain, not ahead). One field before M2's freeze and a §2.8 gkm-1 line for the form chain's pin (design-records). KEYS follow-up: gkmParseGroupForm reads the pin and GkmFormSignerAllowed runs at state.At(pin); the re-forming client fills it. Until then the client judges at the newest state, refusing with an alarm.
-
-Changes: KEYS follow-up: GroupForm.auth = 5 in gkm.proto, gkm_reform.go judging at the pin, gkm's check, tests; §10.6 GroupForm row and §2.8 gkm-1 line (design-records).
-
-Questions: `keys-m2-25-groupform-signer-judged-at.md`.
-
-### QD-644: What should Gkm.tla's `MembersSkipRosterCheck` twin show, when the model's reach is computed from the store and a bad commit breaks the invariant the moment it stands?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-Gkm.tla models what a member's refusal buys: a poisoned set of generations and an Inject action for a hostile leaf's commit; members that process it refuse and poison its generation; Seal refuses a poisoned generation; the invariant is that no content sealed after the injection is readable by the dropped leaf. The MembersSkipRosterCheck twin lets Seal use the poisoned generation and must break it. About 40 lines of model and one invariant, by the design agent (section 6.6's record) within the disk rule.
-
-Changes: sidecartest/model/details/Gkm.tla and DESIGN-DETAILS 6.6 (design agent).
-
-Questions: `keys-m2-19-members-skip-roster-twin.md`.
-
-### QD-343: What does 'tmc/mls under 0x004F mapped to 0x0010' mean, when the suite number is inside signed bytes?
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-"Mapped" means patched. mlsinterop/ builds tmc/mls at v0.0.0-20260930074835-1c42a372504a with one build overlay changing wire.go:39's constant from 0x004F to 0x0010, which no other tmc/mls suite uses, so both stacks sign and hash one number and testdata/mls/0x0010/ holds genuine 0x0010 transcripts. ARTIFACT.md records the patch, and that tmc/mls cites draft -06 where §10.4 cites -07.
-
-Questions: `plan-KEYS-interop-independence.md#1`.
-
-### QD-441: Row (d): the KDF and AEAD of HPKE-XWing
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §11.*
-
-HPKE-XWing means KEM 0x647a, KDF HKDF-SHA256 (0x0001), AEAD AES-128-GCM (0x0001), base mode, by crypto/hpke's NewSender and Sender.Seal, since hpke.Seal takes no AAD. It holds for ReaderWraps, DelegationWraps, RecoveryWraps and deposit slots; a deposit slot uses info "UR evs 1.0 deposit" and aad = repo_id || u64be(g) || slot_id.
-
-Changes: §10.5 HPKE-XWing; §11.12 deposits row.
-
-Questions: `plan-KEYS-wire-gaps.md#4`.
-
-### QD-442: Row (g): padding and id encoding in gkm's object keys
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §7.*
-
-In gkm's keys, <n>, <g> and <seq> are 20 decimal digits, zero-padded, as proj/ is (§7.9); <seq> starts at 1. sidecar_id, member_id, repo_id and group_id are 32 lowercase hex characters with no dashes, not Id.String()'s form; delegation_id and <ref> are 64; c8, k8 and b8 are 16. s: and d: are literal ASCII prefixes. testdata/gkm/wrap_paths.json pins these.
-
-Changes: §10.6 object table.
-
-Questions: `plan-KEYS-wire-gaps.md#7`.
-
-### QD-463: Numbers for ReaderKey, GkmHint and GkmHintKind
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-As landed in gkm.proto: ReaderKey{sidecar_id = 1, xwing_public_key = 2, int64 not_after = 3}, in ms since the epoch, keeping §10.5's name, as plan-KEYS-wire-gaps.md#2 also answers; GkmHint{group_id = 1, epoch = 2, kind = 3, recipient = 4}, recipient as bytes in the wrap path's s: or d: form; GkmHintKind COMMIT 1, PENDING 2, WELCOME 3, KEY_PACKAGES_LOW 4, WRAP_PENDING 5. design-records writes them into §10.14.
-
-Changes: §10.5; §10.14.
-
-Questions: `protos-services-unwritten-numbers.md#2`.
-
-### QD-464: Row (m): POST /gkm/groups against POST /gkm/repos/<id>/forms
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-POST /gkm/groups serves creation and takes all three bodies: the Signed GroupForm, epoch 0 and generation 1's Signed GenRotate, written in that order, each If-None-Match, equal bytes answering success, so KF1 resumes after a crash. POST /gkm/repos/<id>/forms serves only a re-form.
-
-Changes: §10.14 routes.
-
-Questions: `plan-KEYS-wire-gaps.md#13`.
-
-### QD-465: Row (k): how holders_sha256 sorts and joins
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-holders_sha256 = SHA-256 of the identities sorted ascending by bytes.Compare and concatenated with no separator or count. Identities are 17 B (kinds 1, 2 and 4: the kind byte and a 16-byte id) or 33 B (kind 3: the kind byte and a 32-byte delegation_id), so the kind byte fixes each length, and each appears once, KeyHolders being a set.
-
-Changes: §10.5 identity bytes.
-
-Questions: `plan-KEYS-wire-gaps.md#11`.
-
-### QD-466: Row (l): the drop key pair's derivation and the Delegation seed's mapping
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §7.*
-
-Drop pair: hpke.MLKEM768X25519().DeriveKeyPair(K_drop), K_drop being the 32-byte `drop` derivation of RK_g. Delegation: hpke.MLKEM768X25519().NewPrivateKey(delegation_reader_seed), X-Wing's own 32-byte seed, and reader_xwing_public_key is its public key's bytes.
-
-Changes: §10.5 drop purpose; §7.8 AuthKeyBundle.
-
-Questions: `plan-KEYS-wire-gaps.md#12`.
-
-### QD-467: Row (f): bodies of epoch/<n>, group-info, the Welcome pointer and <ref>.claim
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Four messages in protocol/gkm.proto. GkmEpochObject{bytes commit = 1; GkmCommitHeader header = 2; bytes uploader = 3; int64 time_ms = 4; bytes gen_wrap = 5; bytes sealed_group_info = 6; uint64 group_info_generation = 7; bytes network_id = 8; uint32 cipher_suite = 9}: fields 8 and 9 in epoch 0 only, whose commit is empty and whose uploader is gkm-1's creator. GkmGroupInfoObject{uint64 epoch = 1; uint64 generation = 2; bytes sealed_group_info = 3}: epoch alone is the pointer, all three above 16 leaves. GkmWelcomePointer{bytes group_id = 1; uint64 epoch = 2}. GkmKeyPackageClaim{bytes group_id = 1; bytes claimer = 2}. A Welcome or KeyPackage object is the MLSMessage bytes themselves. gkm.proto's header comment drops "none is declared here".
-
-Changes: §10.6 objects.
-
-Questions: `plan-KEYS-wire-gaps.md#6`.
-
-### QD-468: Row (c): RecoveryWrap's body, HPKE info and AAD
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-RecoveryWrap is unsigned, bare enc || ct, 1,168 B: 1,120 B enc, a 32 B RK_g and a 16 B tag. HPKE base mode, info "UR evs 1.0 recovery", aad = member_id (16 B) || group_id (16 B) || u64be(g) || C_g (32 B) || SHA-256(the binding's Ed25519 key)[0:8], the raw bytes b8 spells in hex.
-
-Changes: §10.5 RecoveryWrap; §10.6 sizes.
-
-Questions: `plan-KEYS-wire-gaps.md#3`.
-
-### QD-469: Row (e): ur_group's extension number and encoding
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §17, §2.*
-
-ur_group is GroupContext extension type 0xF553, RFC 9420 §17.3's private use, listed in required_capabilities. TLS presentation with RFC 9420 §2.1.2's vectors: struct { opaque network_id<V>; opaque repo_id<V>; uint8 kind; opaque owner_member_id<V>; }. kind is the RepoKind number in acl.proto, general 1 to secret 9; owner_member_id is empty when the repo is not owner-bound.
-
-Changes: §10.5 ur_group.
-
-Questions: `plan-KEYS-wire-gaps.md#5`.
+Not folded (2026-11-16): the ledger's row for R3's HNDL major, whose "Nothing" becomes this residual, since that row is in DESIGN-REVIEW-RESPONSE.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as owner decision 358 (§10.5's Ladder and readerkey rows, §10.15's active clone row, §5.4's `key_changed`, §2.18's unaudited-cryptography row).
 
 ### QD-471: Numbers for GroupForm, which only §2.8's gkm-1 lists
 *Proposed fill: a gap the agents filled; work builds on it. Also amends §2.*
@@ -469,152 +185,10 @@ Changes: §10.6.
 
 Questions: `protos-services-unwritten-numbers.md#3`.
 
-### QD-526: Bodies for §10.6's objects and §10.14's routes, which §10 names and gives no bytes
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Accept rows 1 to 10 as landed in protocol/gkm.proto, every route `x-status: planned`, and design-records folds them into §10.14. Row 4: `GET /gkm/welcomes` answers each pointer with its Welcome. Row 7: the epochs and gen lists stop at gkm's bound, and a client asks again after its last item. The three items it left open follow plan-KEYS-wire-gaps#8, plan-KEYS-wire-gaps#13 and plan-KEYS-wrap-route-rate.
-
-Changes: §10.14.
-
-Questions: `keys-wire-route-bodies.md`.
-
-### QD-528: Row (b): ReaderKey as a proto message
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-ReaderKey stands as landed in protocol/gkm.proto: sidecar_id = 1, xwing_public_key = 2, not_after = 3, an int64 of ms since the epoch. The name stays not_after, §10.5's own, not the question's not_after_ms.
-
-Changes: §10.5 ReaderKey unit.
-
-Questions: `plan-KEYS-wire-gaps.md#2`.
-
-### QD-569: Nine risks carry two ratings in different sections
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §11, §15, §19, §21, §22, §23.*
-
-One rating each, the higher of the pair: rogue admin admits a device Medium/High (fix 10-KEYS.md:869); site or Hurricane Electric outage Medium/Critical (15-MAIL.md:419); costs hold a set below ~400 pushes/s Medium/High (19-OPS.md:959); Sybil free networks High/High (21-ABUSE.md:214); iOS jetsam regression Medium/High (22-TEST.md:2777); no ACL document High/High (21-ABUSE.md:216); purge bug Low/Critical (11-EVS.md:3133); site loss Low/Critical (11-EVS.md:3116); no indexer designated High/Medium (23-PHASE.md:296).
-
-Changes: §10.15; §11.21; §15.16; §19.17; §21.17; §22.16; §23.15.
-
-Questions: `g0-density-text-alignments.md#10`.
-
-### QD-588: C_g sits in a paragraph, not a fence
-*Settled by the agents from the design; work builds on it.*
-
-C_g = SHA-256("UR evs 1.0 commit" || repo_id || u64be(g) || RK_g), as written. design-records moves that line into §10.5's fence unchanged, which clause 2 of the density rule asks.
-
-Changes: §10.5.
-
-Questions: `g0-density-text-alignments.md#8`.
+Not folded (2026-11-16): the ```proto fence for GroupForm in §10.6. GroupForm's declaration is held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do; the numbers are folded as text, with QD-643's `auth = 5` (owner decision 368), in §10.6's bodies block.
 
 <a id="s11"></a>
 ## §11 Encrypted versioned storage
-
-### QD-011: A re-creation's fold or a path-epoch copy can drop a marker's carried ids, so the published ttl fails and the content stays for good
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-Carried ids never leave with their entry. Before a write or delete would drop them, the fold or copy first PUTs an orphan marker at idx/<repo>/<ref>/_o/<r as 20 digits>-<first 8 B of SHA-256(ids) in hex>.e (If-None-Match, equal bytes on 412 success) holding {removing push id, r, token path, kind-5 segment ids, slot ids}, then proceeds, so a crash only repeats the PUT. The cases are a fold's creation over a marker with carried ids, a fold's creation over an entry whose newest versionless version a prefix removal in the same fold range did not list (no marker was ever written), and a copy's unmoved delete of a source marker with carried ids. §11.7's collect row adds one LIST of idx/<repo>/<ref>/_o/ per ref and collects each with r at or below the window's through exactly as a marker: the same margins, clock and hold rules, a hold leaving it for a window after the hold ends. It deletes only ids the path's newest version does not name. The key sits outside any epoch, so copies never move it. evs-4's and evs-5's ttls then hold as published, and evs-11's store row gains the key.
-
-Changes: §11.7 fold row; §11.7 collect row; §11.6 copy row; §11.8 idx/ row; §2.8 evs-11; FS-67.
-
-Questions: `plan-EVS2-marker-carried-ids.md`.
-
-### QD-058: A hold's stored form and columns are undefined
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §2.*
-
-[plan-ABUSE-hold-format#2] The object is UTF-8 JSON, at most 1 KiB, keys in this order: {"version":1,"network_id":"<id>","case_id":"<id>","kind":"preserve_2703f"|"report_2258a","scope":"network"|["<repo_id>",...],"place_time_ms":<int>,"expire_time_ms":<int>}. Unsigned. A renewal rewrites it If-Match, keeping `place_time_ms`. A body that does not parse, or an unknown version, kind or scope, covers the whole network; a record past `expire_time_ms` is no hold. The table is `abuse_legal_hold(network_id, case_id, part, kind, scope, place_time, report_time, renew_time, expire_time, copied_rows, copy_state)`, primary key on the first three. `renew_time` set refuses a second renewal, and `report_2258a`'s deadline runs from `report_time`. §11.8's row, api-14 and evs-19 name these fields. [plan-ABUSE-metadata-rows#2] As plan-ABUSE-hold-format.md#2: api-14 and evs-19 gain `place_time`, and api-14 also `report_time`, `renew_time`, `part` and `copy_state`.
-
-Changes: §11.8; §21.9; §2.8 api-14; §2.8 evs-19.
-
-Questions: `plan-ABUSE-hold-format.md#2`, `plan-ABUSE-metadata-rows.md#2`.
-
-### QD-061: taskworker cannot find a repo's network, so a hold could miss a repo
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-Option 1. Add network_id to repo/<repo> at creation: EvsRepoObject field 10, set from the token's network, checked against the projection's AclRepo, never changed, and kept in the shredded tombstone. §11.8's repo/ row lists it, and evs-1 reads 'its network, stored at creation'. taskworker matches hold/ and reports stored bytes from it. A re-seed writes it from the projection. A reader that finds it absent treats the repo as held and keeps everything.
-
-Changes: §11.8 repo/ row; §2.8 evs-1; §11.12 Naming and creation.
-
-Questions: `plan-EVSB-repo-network.md`.
-
-### QD-069: A depositor loses any usable base on its own deposit ref, since every read route refuses it and a CONSUME moves the chain
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Keep every read route closed, so FS-23 stands as written, and hand the depositor the head where it already talks to evs. Add EvsDepositHead {version, chain} to evs.proto; it needs no path epoch, since plan-EVS1-epoch-kinds.md#2 keeps deposit refs at epoch 1. (1) A push's 200 on the caller's own deposit ref carries it: for a commit, the version committed; for a 5a retry, the current head. (2) 5f's refusal on the caller's own deposit ref carries it, read from the cluster head. Name file mode's 5f refusal 409 BASE_STALE in §11.20; the refuse row already makes it final, so nothing is recorded. (3) The depositor keeps the newest EvsDepositHead in its sealed store and builds each push on it. After BASE_STALE it rebuilds under a new push id and new slot ids, keeping receipts under 24 h old. A new ref's first push uses version 0 and C_0, which it can compute. (4) §11.12 says plainly that a depositor learns its own ref's version and chain, so it can infer that and when a reader consumed, and nothing else of the head. (5) FS-23 adds two cases: 130 CONSUME versions between two deposits, and a depositor restarted with no state, each recovering through the refusal with every read route still refused. plan-RECORD-depositor-spool's consumed_through rides this same message.
-
-Changes: §11.8 step 8 and 5f; §11.12 Deposits; §11.20 push refusals; FS-23.
-
-Questions: `plan-EVS1-deposit-head.md`.
-
-### QD-095: No route moves a repo from keying to active, so no repo could ever open
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §10.*
-
-Option 1. Add POST /evs/v1/repos/<id>/activate (admin), no body, to C11 and §11.20. evs reads repo/ from the cluster. keying: it lists gkm/repo/<id>/, reads the newest GroupForm, HEADs gkm/<group_id>/gen/1 and CASes repo/ to active by If-Match; no GroupForm or no gen/1 answers 409 GROUP_NOT_READY. active: 200, so a retry is harmless. Any later state: that state's refusal. The write is P1 for the creating network. evs cannot see whether wraps are complete, so KF1's order on the creator stays the guarantee. §11.12's state row names the route, and FS-20 adds a kill after the CAS.
-
-Changes: §11.12 state row; §11.20 API routes; §10.7 KF1; C11; FS-20.
-
-Questions: `plan-EVS1-repo-activate-route.md`.
-
-### QD-096: At a re-seed, a slot holding an erased key beside live keys: strip or refuse
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-evs strips. §11.13's row reads: evs applies every ERASE before it serves a slot, accepts a slot only if a re-seeded version names it, and strips from it every key an ERASE it holds covers, as an ERASE's rewrite does, leaving key indexes unchanged; a slot left with no key is not stored. An ERASE taken after a slot rewrites it as at commit. §19.10 says the same and gains "a re-seeded version names it". §11.8's fence gains: on a re-seed a 412 compares bytes after stripping. §11.12's device-side subtraction stays as an optimization. /reseed gains no refusal. FS-41 adds a slot with one erased and one live key: the erased key is gone and the live one reads.
-
-Changes: §11.8; §11.12; §11.13; §19.10; FS-41.
-
-Questions: `g0-recheck-2-reseed-slot-keys.md#1`.
-
-### QD-099: A rename in a slot-keyed repo needs the removed path's slot, which 5h and I-EVS-10 forbid
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Extend the rename exception to slots. 5h: a version the push creates may name the slot of a path this push removes, and a versionless version's kind-1 locators may come from that path too. I-EVS-10's last clause: 'a versionless path's slot only that path's versions and, in turn, the rename target of the push that removes it'. §11.7's keys row likewise. Add one rule the text lacks: each kind-5 segment or slot of a removed path is named by at most one new version of the push, else 409 VERSIONING, checked across parts at the seal. The target then reuses the key until checkpoint rule (4), a CLOSURE or a rekey. Staged segments stay uncited, and a rename re-stages them. FS-64 gains a slot-keyed case and a two-target refusal, and EvsCommit.tla's I-EVS-10 follows.
-
-Changes: §11.8 5h; I-EVS-10; §11.7 keys row; D-EVS-36; FS-64; FI-17.
-
-Questions: `plan-EVS2-slot-rename.md`.
-
-### QD-101: What seals a deposit's record headers, entry fields and metadata, since a depositor holds no manifest key
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §15.*
-
-Seal them under a key derived from the deposit's own object key: K_dep = HKDF-SHA256(object key, salt repo_id, info "UR evs 1.0 deposit"). K_dep seals the record header (#3's layout, key_ref_kind 1) and EvsEntryVersion.sealed_fields, with §11.6's AEAD and nonce rules. §15.7's sealed header is plan-MAIL-deposit-shape's trailer, which is body, under the object key. A deposit push's sealed metadata goes under the K_dep of its first entry. Bodies stay under the object key itself. sealed_ref_name stays empty and deposit entries carry no name row, since their tokens are random ids. A reader takes the slot from the entry's cleartext slot_ids, opens it with the drop private key, then derives K_dep. §11.6's record row reads 'sealed under manifest, or on a deposit ref under K_dep'.
-
-Changes: §11.6 record row; §11.12 deposits row; §15.7 Deposit.
-
-Questions: `plan-EVS1-format-bytes.md#5`.
-
-### QD-153: A flat listed_sha256 cannot prove a list range, so §11.9's membership proof does not exist
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Delete 'and the list range proving membership' from §11.9's reply row. A head reader decides membership from the signed body alone: version V is listed iff some EvsDropPath's lineage holds V's token path in V's epoch, V is below through_version, and V has an entry. Every reader checks drop_sha256 over the body. listed_sha256 and the listed-set equality move to the replaying clause of §11.7's states row, since only a replaying reader holds the whole list. listed_sha256 stays a flat hash, and §11.13's resolve still proves the list exact before anything is deleted. No format change.
-
-Changes: §11.9 reply row; §11.7 states row; §11.9 dropped row.
-
-Questions: `plan-EVS2-drop-list-proof.md`.
-
-### QD-155: Format-1 evs answers a format-2 construct 409 FORMAT_UNSUPPORTED, recorded, and 5c and the refuse row must say so
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-Option 1. (1) Format-1 evs answers a format-2 construct in a push, part or seal 409 FORMAT_UNSUPPORTED {needs_format: 2}, added to §11.20 and the code table. (2) In the refuse row FORMAT_UNSUPPORTED is recorded, and so is 5c's 409 VERSIONING from §19.11's gate or a repo lock; 5c's VERSIONING from kind or ref rules is final. (3) 5c's 'repo's format' VERSIONING stays a format-2 evs's answer outside the gate. (4) A format-2 repo/ on a format-1 binary answers 503 with Retry-After before step 4 and writes nothing, as §11.6 and FS-72 say; it refuses nothing, so I-EVS-3 needs no record. (5) FS-72 adds a rolling case: a format-1 evs refuses, and a format-2 evs in the gate meets the retry and answers the recorded refusal.
-
-Changes: §11.8 5c and refuse row; §11.20 push refusals; FS-72.
-
-Questions: `plan-EVS1-format-unsupported.md`.
-
-### QD-167: A multi-part DROP's body and lists have no field in EvsPushPart, and neither does any other payload section
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Before format 1's bytes freeze at M2's Gn-out, add one general field to EvsPushPart: `bytes sections = 8`, this part's slice of every payload section §11.6's payload row names beyond fields 3-6: the part hashes, new-objects list, new slot bodies, erased list, a DROP's body and lists, tail moves, source paths, reuse list and Merkle proofs, in that row's order and EVS-FORMAT.md's framing. Concatenated over the parts in part order, the slices equal what a one-part push carries. A DROP rides as two sections of that framing (plan-EVS1-format-bytes#7's 9 and 10): its EvsDropHistory bytes, then each EvsDropPath's list in `paths` order as bare 32 B values; a slice may split anywhere. parts_sha256 covers it because it sits inside EvsPushPart, and it counts against the part's 1 MiB. The seal, never a part, runs the DROP's body and list checks, streaming the slices, since only the seal reads every part. Format 1 needs no new refusal: flag 256 already refuses a DROP as FORMAT_UNSUPPORTED before the section is read. Lists are not capped to one part.
-
-Changes: §11.6 EvsPushPart; §11.6 payload row; §11.8 parts row; §11.8 part record.
-
-Questions: `plan-EVS2-drop-list-parts.md`.
-
-### QD-173: §11.14's shrink row is false for front-coded blocks, so a CLOSURE rewrite can outgrow its pad and stall an erasure
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22.*
-
-Any rewrite padded to a replaced length (a CLOSURE, a DROP's rewrite, a roll-up's step-4 rewrite) first builds the shard canonically, in blocks of 64. If that fits the replaced length, it pads and is done. If not, it rebuilds keeping the replaced shard's block partition: each block keeps its surviving keys, prefix sharing resetting at each block's first key, and an emptied block goes. A removed key saves at least 4 B and costs the next key at most 2, so this always fits. The rewrite keeps the replaced header's pad_generation. Decoders accept blocks of 1 to 64 keys and refuse an empty or larger one, re-encoding from the file's own partition. Merges and roll-ups always re-block by 64. Both outcomes are functions of the inputs, so reproduction holds. §11.14's shrink, dictionary and determinism rows say so, and §11.12's residual row discloses that a short block shows current readers roughly which key ranges only the erased document held, until the next merge.
-
-Changes: §11.14 shrink row; §11.14 dictionary row; §11.14 determinism row; §11.12 residual row; §22.6 index files; FS-78.
-
-Questions: `plan-SEARCH-shrink-claim.md`.
 
 ### QD-176: A depositor cannot see a CONSUME, so D-MCP-10's "spool until consumed" has no mechanism
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §16.*
@@ -625,410 +199,7 @@ Changes: §11.6 EvsPush; §11.8 EvsHead and the 200 reply; §2.8 evs-3; §16.8 M
 
 Questions: `plan-RECORD-depositor-spool.md`.
 
-### QD-179: drops/<repo>/_ cannot hold what its limits allow, and its 30-day expiry already loses cancelled and refused drops
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-Keep 64 KiB. (1) The table holds fixed-size records only: a drop at most 128 B (ids, ref, push id, version, place, not_before_ms, state, phase, freed and held bytes, preview_id), a dry run at most 64 B, the running job at most 256 B, which also points at any job still holding ids. A dry run's paths, lists and results and a job's snapshots, covered drops and sets go in dropscan/. (2) An entry leaves 30 d after it ends, or sooner when a write would pass 64 KiB: ended entries go oldest first, never one whose DROP committed under 27 h ago, since evacuation re-appends a committed DROP the table lacks. Pending, executing and observed entries never leave. (3) A held entry occupies, lists and leaves the table exactly as its done twin would, its resume state in the job's dropscan/ held files, so no count or listing shows a hold. (4) A cancelled or refused drop leaves a 17 B void record {drop_id, state} for the repo's life; an entry absent with no void record means executed, which is the safe default for §11.9's serve row. (5) 5c reads the table for a drop and answers 429 when pending, executing and observed entries plus void records would pass 48 KiB. Held entries never count, a cancel is never refused, and dry runs only evict. evs-28's ttl becomes 'at most 30 d' plus the void record, whose id every DROP statement already holds.
-
-Changes: §11.8 drops/ row; §2.8 evs-28; §11.13 who row; §11.9 serve row.
-
-Questions: `plan-EVS2-drop-table-bound.md`.
-
-### QD-198: evs cannot answer DROP_PATH for ur/index, ur/lfs and .ur-index/, because X2 hides ref and path names from it
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-evs answers 409 DROP_PATH when a lineage's head is a directory entry or versioning 2, and 409 VERSIONING when it is versioning 1, both recorded by §11.8's refuse row. The reserved names are refused by name at honest clients and by readers: a DROP whose lineage resolves to ur/index, ur/lfs or .ur-index/ raises history_drop in state invalid, naming the signer, and readers ignore its written version there, as §11.7's setting row already ignores any version under an index root that no §11.14 mechanism wrote. §11.7's refused row and D-EVS-62's 'derived refs' say who refuses what, and FS-95's ur/lfs case expects VERSIONING at evs plus the client refusal. Disclose the residual in §11.7: an admin on a modified client can drop old versions of a versioned file there (`<root>/settings`, ur/lfs's settings, or an ur/lfs object written at versioning 0 under a since-lifted lock), the head staying each time.
-
-Changes: D-EVS-62; §11.7 refused row; FS-95.
-
-Questions: `plan-EVS2-drop-path-visibility.md`.
-
-### QD-202: Local git over HTTP has no credential
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §4, §5, §15.*
-
-[plan-EVS1-git-http-credential] Option 1, for https off loopback too. At ur mount add the daemon draws 32 random bytes per mount, kept in the sealed store (§5.9). The http front takes Basic with username ur and that secret, compared in constant time, and answers 401 otherwise. git-credential-ur is a local helper: it dials the daemon's control socket, where §5.8's peer-uid check is the real authentication, and prints the username and secret for a host and port the daemon serves, nothing for any other. ur mount add and ur mount share set credential.<url>.helper in the clone's config. The secret never enters a remote URL, an environment variable, MCP output or a log, and it grants only what the daemon grants its OS user, as §15.10's credential does (owner decision 47). No service token is involved, so I-7 takes no exception. Keep git-credential-ur in §7.17 and add it to §4.10 and §11.11; drop only §7.8's 'but for §11's v1 read-only git view', which differs from plan-TEAM-git-credential-ur's option 1. If cli/UI.md turns up and says otherwise, it wins. [plan-TEAM-git-credential-ur] Delete ", but for §11's v1 read-only git view" from §7.8's Token exchange bullet. `git-credential-ur` stays in §7.17 as plan-EVS1-git-http-credential's local helper, which holds a per-mount secret and no service token. Service tokens never leave the daemon, and git reaches a repo only through §11.11's local server and `git-remote-ur`.
-
-Changes: §11.11 Binding; §7.8 token exchange; §7.17; §4.10; §7.8.
-
-Questions: `plan-EVS1-git-http-credential.md`, `plan-TEAM-git-credential-ur.md`.
-
-### QD-209: A push that changes no document reads as unindexed, and on a phone-only ref it stays that way
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Format 2 adds `index_none` to a push's sealed metadata, under sealed_metadata_sha256. An index-aware writer sets it when its push changes no document: every changed path falls under §11.14's never row, or is binary or skipped with no prior indexed version (a version that turns binary is already a tombstone). A push then counts toward indexed_through if it changes its writer's head, a coverage reaches it, it touches only .ur-index/ or ur/index, or it carries the mark. A reader may classify a mailbox's non-m/ token prefixes with no fetch. Hosts with the text check a marked push as an omitted document (D-EVS-56), raise index_mismatch naming the signer, and re-enter it as a backfill. An old client's push has no mark and stays unindexed until backfilled. Nothing server-visible changes.
-
-Changes: §11.14 coverage rows; §11.14 in-ref row; §11.6 sealed metadata; FS-74.
-
-Questions: `plan-SEARCH-no-document-pushes.md`.
-
-### QD-215: `pad` cannot add 1, 2, 130 or 16,387 bytes, and SearchFilters has no cap, so some bodies cannot be sized
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16.*
-
-Builder rule, no wire change: every field but `pad` stops at the body's size less 131 B, so `pad` is at least 131 B and its length varint two bytes, which removes the 1, 2 and 130 holes. A multi-step reply whose pad would be exactly 16,387 B holds one hit back. A reply holds hits for the next page. Cap one thing: SearchFilters at most 768 B encoded in a SearchRequest. Page 0 then holds at most 2,987 + 3 + 768 = 3,758 B against the 3,885 B budget, so every request fits and none needs splitting. The indexer answers a larger one INVALID, and §11.14's status row and §16.10 say so. A search whose filters pass 768 B stays on the device with FallbackReason `none`; local search keeps no such cap. A body that cannot be sized is never sent short.
-
-Changes: §11.14 sizes row; §11.14 status row; §16.10 filters; FS-83.
-
-Questions: `plan-SEARCH-exact-body-sizes.md`.
-
-### QD-218: Nothing says when a member's vault is made, and "one per member" has no refusal behind it
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16, §10.*
-
-§11.12 and §16.8 state this: the first consented, not read_only device of member M with an entry to write files RepoCreate{kind vault} (§10's KF1). M's vault is M's live vault repo whose RepoCreate has the lowest log position, live as RECORD.md section 4.2 reads it, and writers, depositors and readers all use that rule at their pin. Once its RepoCreate lands, and before its first write, a device reads the log; if another repo is the vault, it ingests any deposit into that one and files RepoDelete{now} for its own empty repo.
-
-Changes: §11.12 kinds; §16.8 logs table.
-
-Questions: `plan-RECORD-small-readings.md#3`.
-
-### QD-219: evs must answer `collected` by a time rule, since §11.9's 404 test cannot deliver FS-66 or keep a hold hidden
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Let T be the end of the UTC minute in the replacing record's EvsPlace, plus 60 s. Before T evs serves a replaced versionless version; from T every read of it answers `collected` by evs's checked clock, whether or not its bytes remain (staged in a batch, purge: observe, or kept by a hold). §11.9's collected row becomes 'a replaced versionless version from T, and any version whose kind-5 segment or staged range 404s'. FS-66 reads 'by 120 s'. Never use time_ms, which may trail the commit by 10 min (30 for a seal). Client reads must stay version-addressed so that the rule always applies.
-
-Changes: §11.9 collected row; FS-66.
-
-Questions: `plan-EVS2-small-readings.md#5`.
-
-### QD-244: §11.13's equations need fields that its reports row and evs-10 do not carry
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §19.*
-
-Option 1. Add to §11.13's reports row and evs-10's sees, per process every 5 s: priced bytes issued by class (P1, unfunded P2, funded P2), priced bytes in flight, and the funded backlog by P2 rank (evacuation, page-out folds, other folds, copies, packing, retention, GC, drops). The loop sums them: k is measured bytes over all priced bytes issued in the last 10 min, P0's included; T and A2 subtract in-flight; A2 is handed out rank by rank. Add a per-cluster at_limit flag to {nvb_<set>}, which the budget loop sets from FileClusterAdminInfo at 80% summed raw use or 70% inodes (§19.9). evs reads it with its allowance and keeps the last value while the key is absent. No network or repo id, and no new ttl.
-
-Changes: §11.13 reports row; §2.8 evs-10; §19.6 budget row; §19.9 cohorts row.
-
-Questions: `plan-EVSB-nvb-fields.md`.
-
-### QD-251: evs cannot quote x402 terms
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §20.*
-
-evs answers 402 with the `QuotaRefusal` body, `upgrade: true`, and no terms; only api-hosted routes quote them. §11.20's segment row and §20.7's mapping comment say so.
-
-Changes: §11.20; §20.7.
-
-Questions: `plan-QUOTA-small-readings.md#18`.
-
-### QD-256: x/text's cases.Fold() swaps Cherokee case, so normalizer 1 is not idempotent and Cherokee search misses
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Normalizer 1's case-fold step is cases.Fold() followed by a fixed map, U+AB70-U+ABBF to U+13A0-U+13EF and U+13F8-U+13FD to U+13F0-U+13F5, before the accent step, published with its tables so SearchOracle applies it too. testdata/index/ gains two vectors: U+13A0 and U+AB70 both give U+13A0, U+13F0 and U+13F8 both give U+13F0. The map is a no-op on a correct fold, so a later x/text fix changes no output, and a module bump is another normalizer anyway.
-
-Changes: §11.14 text row; §11.14 tables row.
-
-Questions: `plan-SEARCH-cherokee-fold.md`.
-
-### QD-258: ur/lfs's signed settings file has no path, bytes, signer rule or command
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §8.*
-
-A versioned file `settings` at ur/lfs's root, one path component of those 8 bytes, versioning 0 in every repo though the store's objects are 1, written as an inline record. Body: `message EvsLfsSettings { uint32 window_days = 1; }` in evs.proto, marshaled deterministically and sealed as any file, so it needs no §2.8 row. N is 30 when the file is absent or window_days is 0; 1-6 read as 7; 7 or more as written. A version counts only if its push's signer held repo admin (§8.8) at that push's auth pin; else devices alarm and use the newest version such a signer wrote. A prune reads it at its start s. `ur evs lfs window <days>` writes it, 7-365. An 8-letter top-level name cannot collide with an object's 2-character first directory.
-
-Changes: §11.11 prune row; §11.7 choose row; FS-73; evs.proto (new message).
-
-Questions: `plan-EVS2-lfs-settings.md`.
-
-### QD-270: ur/lfs objects must never stage, which narrows D-EVS-36 and §11.7's staged row
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-An ur/lfs object of any size is a kind-5 upload, never staged, so a touch always cites it. §11.7's staged row, §11.8's step 2 and D-EVS-36 gain 'except ur/lfs objects'. evs refuses nothing new, since 5h already takes a small kind-5 upload. ur/lfs's settings file is versioned and unaffected.
-
-Changes: D-EVS-36; §11.7 staged row; §11.8 step 2.
-
-Questions: `plan-EVS2-small-readings.md#8`.
-
-### QD-286: EVS1-M2-01, -04 and -05 write format 1's missing bytes, and design-records folds them in before Gn-in
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Option 1. EVS1-M2-01, -04 and -05 write protocol/EVS-FORMAT.md from rows #2 to #9 and pin it in testdata/evs/ vectors, and design-records folds it into §11.6 before M2's Gn-in, where peer review judges real bytes. Rows #4 and #5 are not layout, so they take their own answers first.
-
-Changes: §11.6 (additions only).
-
-Questions: `plan-EVS1-format-bytes.md#1`.
-
-### QD-300: Who writes down §11.14's open byte layouts before format 2's vector schemas are fixed
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-SEARCH-M10-01 writes `protocol/INDEX-FORMAT.md` with the values in rows #1 to #8, pinned by testdata/index/ vectors, and the design-records track folds them into §11.14 for Gn-in's peer review. Nothing waits on the design team.
-
-Questions: `plan-SEARCH-index-format-bytes.md`.
-
-### QD-337: ERASE notes: the erasure's id is the request's id
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The runner's `erasure_id` is the `DirectoryErasureRequest.request_id`, carried in §11.12's existing sealed note, so no note field is added. Racing runners and the 30-day sweep share that one id, and RECORD.md's `ErasureBody.request_id` holds the same value.
-
-Questions: `plan-RECORD-small-readings.md#12`.
-
-### QD-387: A term running past the 256 B overlap misses across a chunk boundary, with no FI-18 exception needed
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The 256 B overlap stands. A document is one 1 MiB chunk plus the next 256 file bytes (§11.14's document row), so a term reaching further past a boundary is in no document, and likewise terms ANDed across two chunks. The 512 B query cap stays. SearchOracle evaluates each query per document as §11.14 defines it, not per file, and its query sets stay within the overlap.
-
-Questions: `plan-SEARCH-small-readings.md#2`.
-
-### QD-389: 5h's fence reads every bit-5 window entry's body, whatever its digest says
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Step 4 adds, in its one round, the statement and DROP body of every window version with bit 5 set, whatever its digest and whether or not it is above folded_through, from the process cache or a batch range. The fence reads the body only, never the lists. 5h tests each base, deleted path and reuse source against those bodies.
-
-Changes: §11.8 step 4 (wording).
-
-Questions: `plan-EVS2-small-readings.md#4`.
-
-### QD-390: A DROP lists only versions with an entry hash, so removals below through_version are not listed
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-'every version below through_version' in §11.7's action row and §11.13's resolve row means the versions with an entry_sha256. A removal has none: it is never listed, never counted in EvsDropPath.count, and does not fail resolve's set equality.
-
-Changes: §11.13 resolve row (wording).
-
-Questions: `plan-EVS2-small-readings.md#1`.
-
-### QD-391: A drop with any other not_before_ms is refused 409 DROP_STATE and fails readers' checks
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-evs refuses a drop (action 1) whose not_before_ms is neither time_ms + 604,800,000 nor time_ms with 409 DROP_STATE, recorded first by §11.8's refuse row. A cancel carries 0. Readers add the same equality to §11.7's states-row checks, and a failure raises history_drop in state invalid.
-
-Changes: §11.7 refused row (wording); §11.7 states row (wording).
-
-Questions: `plan-EVS2-small-readings.md#2`.
-
-### QD-398: A replaced versionless version always exports as a pointer, whether or not its bytes survive
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Export writes every replaced versionless version as the git-lfs pointer to its content_sha256 and size, noted in refs/notes/ur, whether or not bytes survive in a store, batch or cache. Only a path's newest version exports its content.
-
-Changes: §11.12 Export (wording).
-
-Questions: `plan-EVS2-small-readings.md#7`.
-
-### QD-399: FI-15 carries an overlay clause on a file-mode invariant
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-No code or model changes: only git-mode refs take overlays (11-EVS.md:390, :676), so in FI-15's scope the effective base version is base_version. Drop "effective" and ", an overlay's base counting its chain's base versions" at 22-TEST.md:877-878, so FI-15 reads as I-EVS-8 does. 5g's effective-base rule stays in §11.7.
-
-Changes: FI-15 wording.
-
-Questions: `g0-density-text-alignments.md#7`.
-
-### QD-406: A manifest's shard figures go stale after a CLOSURE and are only bounds
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-After a CLOSURE, IndexShard.docs is an upper bound and first_day to last_day a covering range. No verify step compares them with a shard's header, and the next merge or roll-up recomputes them. An eraser still finds a document by a/m's days and the shard's doc table.
-
-Questions: `plan-SEARCH-small-readings.md#4`.
-
-### QD-408: `purge: observe` keeps staged content too, by writing it to seg/ at evacuation
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §19.*
-
-While §19.11's purge is observe, evacuation treats a replaced staged segment as kept: it writes it to seg/<repo>/<id> before the batch's DELETE and logs it as a candidate. Reads still answer `collected`. The turn-on pass deletes it, as §11.13's sweep row says of what observe mode kept.
-
-Changes: §11.13 staged row (wording).
-
-Questions: `plan-EVS2-small-readings.md#6`.
-
-### QD-409: A prune's 'commit of the last N days' counts a commit by committer date or its introducing push's time_ms
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A commit counts as 'of the last N days' at start s if its committer date or the time_ms of the first push that introduced it falls in [s - N days, s]. Either is enough, so a prune keeps the union.
-
-Questions: `plan-EVS2-small-readings.md#9`.
-
-### QD-415: §11.8's 1 MiB record bound counts a record's staged tail
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A record's 1 MiB bound counts everything in it, its staged tail included, so the push sender counts staged bytes against a part's bound. evs's purge list counts too: when listing candidates would pass 1 MiB, evs writes §11.13's existing mark instead, whatever the id count.
-
-Changes: §11.13 purge row (wording).
-
-Questions: `plan-EVS2-small-readings.md#13`.
-
-### QD-416: A repo is always created at format 1, and a raise whose push fails leaves format 2 over format-1 data
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-PUT /evs/v1/repos/<id> always writes format 1. §11.6's raise, by If-Match on repo/ before step 7, is the only path to format 2, and a raise whose push then fails stands, since format-1 data is valid format 2. Nothing lowers it.
-
-Questions: `plan-EVS2-small-readings.md#11`.
-
-### QD-420: PageCpu and RemoteCpuPerMinute charge a compute slot's busy wall time
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-PageCpu and RemoteCpuPerMinute charge the busy wall time of a compute slot on the injected clock, summed across slots for RemoteCpuPerMinute. It over-counts under contention, so a page ends PARTIAL early and never late.
-
-Questions: `plan-SEARCH-small-readings.md#5`.
-
-### QD-426: 5c's VERSIONING is final from a repo kind, ref mode or creates-only ref, and recorded otherwise
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §19.*
-
-VERSIONING from a config or mailcfg repo, a git-mode ref or a creates-only ref is final. VERSIONING from the lock, §19.11's gate or a DROP's versionless head is recorded before it is answered, since each can change. 5h's VERSIONING stays recorded, as the refuse row says.
-
-Changes: §11.8 refuse row (wording).
-
-Questions: `plan-EVS2-small-readings.md#3`.
-
-### QD-428: Year-two DWPD labels pair the wrong figures in §11.20 and §19.9
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §19.*
-
-§11.13's row holds: ~69 MiB/s is 3.3 DWPD on one set at ~5 records a batch, and 3.7-4.0 DWPD is a near-capacity set's ~1-1.6 records a batch. Make 11-EVS.md:3097 carry both pairs, and 19-OPS.md:552-553 read "3.3 DWPD on one set at ~5 records a batch, 3.7-4.0 (2.8-3.0) near capacity, five sets' worth".
-
-Changes: §11.20; §19.9.
-
-Questions: `g0-recheck-1-closed-item-text-errors.md#6`.
-
-### QD-439: Numbers and carrier for §11.9's read states
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-In evs.proto: enum EvsReadPathState { EVS_READ_PATH_STATE_UNSPECIFIED = 0; EVS_READ_PATH_COLLECTED = 1; EVS_READ_PATH_DROP_PENDING = 2; EVS_READ_PATH_DROPPED = 3; }, the state field of the per-path entry in EVS1-M2-01's EvsReadFrame, with the states' payloads (drop_id, not_before_ms, version) as ordinary fields of that entry. EVS2-M2-01 adds the three to testdata/evs/reserved_numbers.yml, and design-records writes them into §11.9. Format-1 code refuses each as FORMAT_UNSUPPORTED {needs_format: 2}.
-
-Changes: §11.9.
-
-Questions: `protos-services-read-states.md`.
-
-### QD-443: How a canonical decoder takes a CLOSURE's pad on a slot or large entry
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Every index file carries IndexFileHeader.body_length, and everything after those bytes is pad, which must be all zero bytes, else index_malformed. A decoder accepts any such pad on any file type within the file's size bound, and re-encoding takes the pad length from the file. A writer's next head rewrite writes no pad.
-
-Questions: `plan-SEARCH-index-format-bytes.md#6`.
-
-### QD-444: VByte's encoding and the widths of the kind fields
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-VByte is unsigned LEB128, as encoding/binary.AppendUvarint writes it: 7 bits a byte, least significant group first, the high bit set on every byte but the last, minimal, at most 10 bytes. An entry's kind, a row's doc kind and a tombstone's kind are one byte each: entry 1-4, doc kind 1 file, 2 mail, 3 record, 4 derived (SearchHit.doc_kind's values), tombstone 3-4. Any other value is non-canonical. doc_key and ref_id are 16 raw bytes.
-
-Questions: `plan-SEARCH-index-format-bytes.md#1`.
-
-### QD-460: Numbers for EvsHeadChanged
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-As landed: EvsHeadChanged{ref_id = 1, version = 2, chain = 3, push_id = 4}, in PushHint.hint, version being the ref's while PushHint.version is the repo's push sequence. design-records writes them into §11.10.
-
-Changes: §11.10.
-
-Questions: `protos-services-unwritten-numbers.md#4`.
-
-### QD-461: Enum values and the EvsRefusal code table
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-ref_kind: 1 shared, 2 owned, 3 deposit, 4 erasure. EvsEntryVersion.kind and EvsName.kind: 1 file, 2 directory. Record kind: 1 checkpoint, 2 diff, 3 chunk. Batch record type: 1 push, 2 part, 3 seal, 4 reseed. repo/ kind: acl.proto's RepoKind, general 1 to secret 9. repo/ state: 1 keying, 2 active, 3 deleted, 4 shredding, 5 shredded. EvsRefusal.code is an EvsRefusalCode value, each with a fixed status: 1 SCOPE 403, 2 TIME_STALE 409, 3 REPO_KEYING 409, 4 REPO_DELETED 409, 5 QUOTA_PAYMENT 402, 6 QUOTA_LIMIT 403, 7 CLUSTER_FULL 507, 8 GATE_CLOSED 412, 9 INDEX_EPOCH 409, 10 MAP_PARTS 409, 11 EPOCH_SOURCES_FULL 412, 12 PATH_EPOCH_DUE 412, 13 DIRECTORY_FULL 409, 14 SEGMENT_GONE 409, 15 VERSIONING 409, 16 SLOT_UNKNOWN 409, 17 SLOT_STALE 409, 18 NOTHING_TO_ERASE 409, 19 DROPPED 409, 20 DROP_PATH 409, 21 DROP_CONSENT 409, 22 DROP_STATE 409, 23 DROP_BOUNDARY 409, 24 DROP_LIST 409, 25 FORMAT_UNSUPPORTED 409. QUOTA_LIMIT is 403 and never 429, since a 429 refuses nothing (§11.8). New names for §11.20: SCOPE, TIME_STALE, REPO_KEYING, REPO_DELETED, QUOTA_PAYMENT, QUOTA_LIMIT, MAP_PARTS, SLOT_UNKNOWN, FORMAT_UNSUPPORTED and, unrecorded, 5f's BASE_STALE.
-
-Changes: §11.6; §11.8 refusal row; §11.20 push refusals.
-
-Questions: `plan-EVS1-format-bytes.md#6`.
-
-### QD-462: The encodings of repo/, place/, slot/, idx/, sealed fields and ids in keys
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Objects are proto3: EvsRepoObject {repo_id 1, kind 2, owner_member_id 3, state 4, state_ms 5, state_signer 6, deletion_id 7, format 8, sealed_name 9, network_id 10}; EvsRepoPlacement {cluster_id 1, creator_sidecar_id 2}; EvsSlotObject {keys 1} with EvsSlotKey {key_index 1, generation 2, wrapped 3}, an erased key leaving the list and no index shifting; EvsIndexEntry {versions 1, names 2, names_through 3, marker 4, drop_mark 5}. sealed_fields and sealed metadata are proto3 (EvsSealedFields {file_id 1, mode 2, git_oid 3, oid_kind 4, size 5, content_sha256 6}; EvsSealedMetadata), sealed as 24 B nonce | ciphertext | 16 B tag under manifest_g, AAD "UR evs 1.0 fields" or "UR evs 1.0 metadata" || repo_id || u64be(g). In object keys: repo, ref, slot and parcel ids are lowercase hex with no dashes, segment ids lowercase hex of 32 B, tokens 26 lowercase RFC 4648 base32 characters unpadded, and versions, epochs, page numbers and parts decimal zero-padded to 20 digits. The deepest idx/ key is 956 B, within §11.3's 1,024.
-
-Changes: §11.6; §11.8 object table.
-
-Questions: `plan-EVS1-format-bytes.md#9`.
-
-### QD-473: The dictionary's offset bases, a bitset's bit order and N
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-A block's two VByte offsets are absolute: its first entry's from the first byte after the block index, its first list's from the first byte of the postings. In a bitset, docid d is bit d & 7 (least significant first) of byte d >> 3, and unused high bits of the last byte are zero. N is the shard's live document count, IndexFileHeader.count, so ⌈N/8⌉ is that count's bitset.
-
-Questions: `plan-SEARCH-index-format-bytes.md#4`.
-
-### QD-474: Extractor 1's charsets and HTML stripping rules
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Charsets: a MIME part, RFC 2047 word or RFC 2231 value decodes through golang.org/x/text/encoding/htmlindex from the pinned module. No charset or an unknown label is treated as UTF-8, and invalid bytes go to U+FFFD at normalization. HTML: our own scanner on the decoded text, no parser library. <script> and <style> go with their content, up to the matching end tag, case-insensitive. Comments, <!...> and <?...> go. A tag is '<', then a letter or '/', to the next '>' outside quotes. A tag in the block list (address, article, aside, blockquote, br, center, dd, details, dialog, dir, div, dl, dt, fieldset, figcaption, figure, footer, form, h1-h6, header, hgroup, hr, li, main, menu, nav, ol, p, pre, section, summary, table, tbody, td, tfoot, th, thead, tr, ul) becomes one space; any other tag becomes nothing. Then entities decode by the standard library's html.UnescapeString, so '&lt;' stays text.
-
-Questions: `plan-SEARCH-index-format-bytes.md#8`.
-
-### QD-475: Spellings of <S>, <n>, <k>, L<seq> and a/<k>/ in index paths
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-[plan-SEARCH-index-format-bytes#5] ASCII throughout. <S> is the bucket's start day as unpadded decimal. <n> is an unpadded decimal shard number from 0: a new shard takes the manifest's highest n plus 1, and joined shards keep the lower n. <k> in w/ is unpadded decimal 0-15, and L<seq> is 'L' and unpadded decimal seq. <writer> is the sidecar_id in lowercase hex and <h> its first two digits. Shards below n = 3,499 sit at a/<n>, and from there at a/<k>/<n> with k = (n - 3,499) / 1,000 rounded down, so no file moves and a/ holds at most 3,500 files with m. Directory numbers follow search-format-all-directory-names, which corrects k. [search-format-all-directory-names] Number the directories from where the files stop: k = 3,499 + (n - 3,499) / 1,000, rounded down, so shard 3,499 is `a/3499/3499` and shard 4,499 is `a/3500/4499`. This corrects plan-SEARCH-index-format-bytes#5's k from 0. Nothing moves at the split, and `a/` stays inside §11.7's 3,584 names until some 84,000 shards. `protocol/INDEX-FORMAT.md` and SEARCH-M10-05's path builder take this value of k.
-
-Changes: §11.14 paths.
-
-Questions: `plan-SEARCH-index-format-bytes.md#5`, `search-format-all-directory-names.md`.
-
-### QD-476: A row's field order, and which field is cut when the caps exceed 2 KiB
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Row order: doc kind, flags, size, chunk, trigram count, started, expires, ref_id (ur/index only), locator, subject, from, to, title. File and mail rows stop there; record and derived rows then hold fields 6-15 in number order, each with its length, 0 when empty. Each field is first cut to its own cap (locator 512 B, subject, from, to and title 160 B, fields 6-15 256 B), setting flag bit 2+n for field n. If the row still passes 2,048 B, walk locator, then fields 1-4, then 6-15, each keeping what the 2,048 B leaves after the fixed part and the fields before it, cut on a code point, its flag bit set. Flag bit 18 is new: the locator is cut, or held a non-UTF-8 path mapped to U+FFFD, so it is not the exact path.
-
-Questions: `plan-SEARCH-index-format-bytes.md#3`.
-
-### QD-477: A slot's entry order, and where a replacing entry goes
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-A slot's entries sort ascending by their 16-byte key (doc_key, or ref_id for a ref tombstone), then by kind, one entry a key. A replaced entry goes and its successor takes its sorted place, so a head is a function of its entry set and not of arrival order. Decoders refuse out-of-order or repeated keys.
-
-Questions: `plan-SEARCH-index-format-bytes.md#2`.
-
-### QD-506: Encoding and field names of planned route entries the design leaves unwritten
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-An entry whose section states no encoding stays `application/octet-stream` with its fields in prose while it is `x-status: planned`, and the task that serves the route fixes the encoding when it lifts `planned`. Auth-key routes keep `duration_seconds`, `max_uses` and `bundle_still_admits` unless TEAM-M1-03 renames them in the same change. `POST .../path-epoch` takes §11.6's map row (`EvsPathMap` parts) as its body. `/path-epoch` and `/path-epoch/block` sit under `/evs/v1/repos/<id>/`, not under `/push/<push_id>/`, since a block names a ref and a map uploads before any push exists; design-records splits §11.20's line, which reads as if they hung off `/push/<push_id>/`.
-
-Questions: `connect-m1-c11-route-scope.md#2`.
-
-### QD-522: The HTTP bodies and the framed read reply
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §22.*
-
-Bodies are proto3 messages in evs.proto, application/x-protobuf, except a segment PUT's raw bytes. EvsPushRequest {statement 1, payload 2, receipts 3, staged 4, part_places 5}: statement holds the Signed EvsPush bytes as received, and a seal sets part_places and no payload. EvsPartRequest {statement 1, part 2, receipts 3, staged 4}. EvsLeaseRequest {ref_id 1, base_version 2, ms 3}. EvsPushReply {version 1, place 2, deposit_head 3}. EvsRefusalReply {push_id 1, code 2, recorded 3, retry_after_ms 4, paths 5, outcome 6, needs_format 7, quota 8, deposit_head 9}. The read reply is a stream of u32 length | EvsReadFrame, each frame one of §11.9's parts by its set fields, with no oneof (§22.5's lint), ending in a frame with end true. Per-path state: enum EvsReadPathState {0 unspecified, 1 collected, 2 drop_pending, 3 dropped}, which joins the reservation lint.
-
-Changes: §11.9 reply row; §11.20 API routes; D-PHASE-9's reservation list.
-
-Questions: `plan-EVS1-format-bytes.md#8`.
-
-### QD-523: Integer widths, byte order and payload framing
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-All integers big-endian. Batch header, 32 B: "URpb" | format u8 | 3 zero bytes | instance u32 | minute u32 (minutes since the Unix epoch, UTC) | seq u32 | created_ms i64 | record_count u32. Record: type u8 | 3 zero bytes | repo_id 16 | ref_id 16 | push_id 16 | signer_sidecar_id 16 | time_ms i64 | length u32 | body. Index: offset u32 | length u32 per record, in record order. Trailer: index_offset u32 | SHA-256. EvsPlace, 20 B: minute, instance, seq, offset, length, each u32. EvsWindowEntry: §11.8's 64 B, paths_digest a u64 whose bit i is index i, flags a u32. EvsRefusal: §11.8's 16 B, code u16, until_s u32. Digest indexes: u32(h[0:4]) mod 64 and u32(h[4:8]) mod 64. Payload: sections of type u8 | length u32 | bytes, ascending, each at most once, absent when empty: 1 entry versions, 2 sealed metadata, 3 inline records, 4 change list, 5 part hashes, 6 new objects, 7 slot bodies, 8 erased list, 9 DROP body, 10 DROP lists, 11 tail moves, 12 source paths, 13 reuse list, 14 Merkle proofs. Repeated items in a section are u32 length | bytes, part hashes are bare 32 B values, and each *_sha256 statement field hashes its section's bytes. A new-objects item is kind u8 (1 segment, 2 staged segment, 3 slot) | id (32 B, a slot's 16 B) | padded_size u64 | upload_day u32 (days since the Unix epoch, 0 for staged and slots). Staged bytes follow the last section, outside every hash.
-
-Changes: §11.6 payload row; §11.8 entry, refusal, digest and Batches rows.
-
-Questions: `plan-EVS1-format-bytes.md#7`.
-
-### QD-524: Where a general repo's wrapped object key sits
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-In a general repo's kind-1 segment, a 72 B wrapped-key block sits at byte 32, right after the public header: 24 B nonce | 32 B object key sealed | 16 B tag, XChaCha20-Poly1305 under fek_g, g the header's generation, AAD "UR evs 1.0 object key" || repo_id || u64be(g). Records follow at byte 104. Format 2's kind-5 segment puts the same block at byte 48. For an inline chain, the same block opens the first inline record's EvsLocator.inline bytes, and the chain's later records use that key. A record reaches it through key_ref_kind 0 (#3). Slot-keyed repos and deposits have no block. The public header, padding and evs's checks do not change.
-
-Changes: §11.6 segment and object key rows.
-
-Questions: `plan-EVS1-format-bytes.md#2`.
-
-### QD-525: The record header's field widths
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-The 160 B header is 24 B nonce | 120 B sealed | 16 B tag, XChaCha20-Poly1305 under manifest_g (deposits: #5), g the segment header's generation or an inline record's push generation, AAD "UR evs 1.0 record" || repo_id || u64be(g). The 120 B, integers big-endian: record_id 16 | base_record_id 16 (zero unless a diff) | oid 32 | slot_id 16 (zero unless key_ref_kind 1) | generation 8 | body_length 8 | key_index 2 | kind 1 | key_ref_kind 1 (0 the container's own key, #2; 1 a slot) | oid_kind 1 (1 SHA-1, left-aligned and zero-filled; 2 SHA-256) | nonce_prefix 19.
-
-Changes: §11.6 record row.
-
-Questions: `plan-EVS1-format-bytes.md#3`.
-
-### QD-562: dropscan/'s <f> spelling
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-<f> is the kind (snap, cand, mark, del or held), a hyphen and a 10-digit zero-padded decimal sequence from 0: `mark-0000000042`. <id> is the job's or dry run's 16-byte id in lowercase hex. A checkpoint writes the next sequence, never overwrites.
-
-Questions: `plan-EVS2-small-readings.md#12`.
-
-### QD-568: Which devices prune, and when in the day each starts
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Any device holding every ref that may write ur/lfs prunes daily. Offset = u64be(SHA-256(sidecar_id || repo_id)[0:8]) mod 43,200 s. An unretired, unparked IndexerSet subject starts at 00:00 UTC plus its offset, any other such device at 12:00 UTC plus its offset, and a device asleep then runs at its next wake that UTC day. Any service list qualifies, since holding every ref is the real test.
-
-Questions: `plan-EVS2-small-readings.md#10`.
-
-### QD-575: TLC is on this machine
-*Settled by the agents from the design; work builds on it.*
-
-Done: the owner placed tla2tools.jar at ROOT/.stack/tools/. Run models with `tlc <track> [TLC args...] Spec.tla`, which refuses a jar with any other hash, and name revision d8fb231 wherever a TLC result is reported.
-
-Questions: `plan-EVS1-tlc-tool.md`.
-
-### QD-579: K_index_g's derivation context and how "pad" joins the hash input
-*Settled by the agents from the design; work builds on it.*
-
-K_index_g = HKDF-SHA256(RK_g, salt repo_id, info "UR evs 1.0 index" || u64be(g)), with no further context, g being the header's pad_generation. The pad's HMAC input is the 3 ASCII bytes "pad" then the 32-byte SHA-256 of the shard before its pad, || being plain concatenation.
-
-Questions: `plan-SEARCH-index-format-bytes.md#7`.
+Not folded (2026-11-16): RECORD.md sections 5.4 and 5.7's part, the depositor spool's pruning at the mark, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as text (§11.6's EvsPush and §11.8's EvsHead fences take consumed_through, §11.12's deposits paragraph, §11.8's step 8 and 5f, §2.8's evs-3 and evs-12, and §16.8's mirrors bullet).
 
 <a id="s12"></a>
 ## §12 DNS
@@ -3189,7 +2360,7 @@ Not folded (2026-11-16): it changes only the run's BRIEF.md and a clone's worktr
 
 Decisions taken after this file was generated, each naming the section it folds into. A design-records track folds the ones that name its sections, with that section's items above, and deletes them here.
 
-§2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`.
+§2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`. The §10 fold wrote QD-857's v31 lines (cert-1's name failure backoff), which check's additions had published, into the block the same way on 2026-11-16, its entries leaving check's list, and took v32 for itself; QD-857's §13 parts fold with §13.
 
 ### QD-652: Should closure pacing admit by seat, each seat good only in its own second, in place of a bucket that admits by arrival?
 *Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
@@ -3259,15 +2430,6 @@ A statement in parts may state an empty change list: change_count 0, changes_roo
 Changes: §11.6 statement and parts rows (design-records); EVS1-M2-48: statement shape, ParseEvsStatement, the seal's root, the builder.
 
 Questions: `evs1-m2-48-changeless-push-in-parts.md`.
-
-### QD-659: Which member device may form the group of a repo an agent creates, when no config writer reads that repo or holds its admin scope?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-QD-638's former stays as built for M2: a config writer forms the group of a repo an agent creates only when it is a key holder of the repo (R3) and holds admin on it at gkm, which §8.5's implicit document always gives every member device. An agent's repo needs a member device that reads and administers it; under a narrower ACL document with none, the repo stays keying (fails closed, nothing leaks). Revisit when Team policies can narrow member devices' evs rights (M6), with the first acting config writer filing RepoGrant{reader} and RepoAdmin{add} for itself as the candidate.
-
-Changes: KF1 §10.7 and §8.8 RepoCreate notes (design-records); M6 revisit noted on TEAM/ACL policy tasks.
-
-Questions: `keys-m2-32-agent-repo-former-rights.md`.
 
 ### QD-660: Should a push attempt read evs's newest authorization state again when it reruns steps 4 and 5, instead of judging 5d against the gate view it bound at arrival?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
@@ -3394,15 +2556,6 @@ Vault entries are narrowed by rule. §16.6's refused-from-MCP list and MCP-M3-12
 Changes: §16.6 refused list and McpGuard row for a mailbox's vault/ family (edge lane, MCP-M3-12's code); §15.8 and §2.18 residual sentences (design-records).
 
 Questions: `mail-m8-02-vault-readers.md`.
-
-### QD-675: When a forwarding Delegation's row leaves the rows before gkm's reconciler deleted its reader key object, what deletes gkm/dkey/<delegation_id> within its published ttl?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-gkm's reconciler keeps a tracked end of a forwarding Delegation after its row leaves the rows (QD-648) and deletes gkm/dkey/<delegation_id> on schedule, DelegationKeyRetention (24 h) after the end. After a restart, a sweep of the network's gkm/dkey/ prefix, now and then, deletes at once any object whose id no forwarding row in the state's rows names: its row is gone, so its retention has passed by at least 4,096 positions and nothing a rotator seals still needs it. §2.8's published ttl then holds at any entry rate and across restarts; no row or format changes. A KEYS-lane change in sidecar/gkmservice/reconciler.go (core lane).
-
-Changes: core-lane follow-up (KEYS): gkmservice/reconciler.go keeps tracked ends past their rows and sweeps gkm/dkey/ for unnamed ids; §2.8's gkm ttl text stands.
-
-Questions: `team-m2-21-dropped-forwarding-key-objects.md`.
 
 ### QD-676: What should a VPN component's posture do once its overlay is full and no compile has run to clear it?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
@@ -3538,15 +2691,6 @@ Once SEARCH-M10-42 has landed, MAIL-M7-11's message parser calls extractor 1's f
 Changes: edge-lane follow-up after SEARCH-M10-42: mail_parse.go and mail_parse_text.go call indexStripHtml and indexDecodeCharset.
 
 Questions: `details-11-mail-snippet-reading.md`.
-
-### QD-695: Should section 6 accept the window in which a wrapped writer, or a leaf whose seal races a poisoned commit, seals to the generation the commit carried until the refusing member's REMOVE rotation reaches it?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-Section 6's window stands as accepted: after a compromised leaf's commit whose tree holds a party dropped at the commit's own header, a wrapped writer (which reads no commit), and a leaf whose seal races the injection, may seal to the generation the commit carried until the refusing member's REMOVE rotation reaches it. The commit needs a compromised leaf, which already holds that generation's key and could hand the dropped party the same content or the key itself, so the window adds no reach the attacker lacks; the refuser's rotation at once ends it. No rule, format or model change; DESIGN-DETAILS.md 6.3's text stands.
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; §10.9 notes the accepted window (design-records).
-
-Questions: `details-6-poison-window.md`.
 
 ### QD-696: Should a VPN component's narrowing_overdue alarm back off while a narrowing entry keeps waiting for a compile that never runs, instead of repeating every 10 minutes forever?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
@@ -3710,15 +2854,6 @@ Changes: §11.8's Authorization row (design-records); EvsBindingSource goes and 
 
 Questions: `acl-m2-11-evs-binding-source.md`.
 
-### QD-718: Who builds gkm's authorization state over the gate cache, GkmAuthState for the gkm block and GkmReconcilerState for taskworker's reconciler, which no plan's Provides names?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-A KEYS task after ACL-M2-14 builds both real seams in gkmservice over AclGateCache's exported API: GkmAuthState (a token's standing and honored scope through ACL-M2-14's HonorScope for the gkm audience, with the gkm-only answers KEYS defines: readers, writers, pins, Delegations, late holders and HoldersDropped over sidecar.GkmRemoveDue) and GkmReconcilerState (each network's moves, the networks the host holds, a network's newest state as a GkmAuthView, and a sidecar's network). ACL adds to AclGateCache, as a small separate change in its own files, the list of networks it holds, an index from a sidecar to the network that admits it, and a callback when a network's new state is installed, so a reconciler woken by a hint reads the new snapshot. Every gate check stays in ACL's one cache (C-09); until both land the gkm block and taskworker's reconciler stay failed closed as built.
-
-Changes: a KEYS task builds GkmAuthState and GkmReconcilerState in gkmservice; AclGateCache gains its network list, a sidecar-to-network index and an installed-state callback.
-
-Questions: `keys-m2-17-gkm-auth-state-owner.md`.
-
 ### QD-721: Should EvsRepo's write take the path version its caller read, so a mail writer's append is a path CAS?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
 
@@ -3861,15 +2996,6 @@ Changes: §19.6's rule (3), D-OPS-20's cost and FI-30's last clause (design-reco
 
 Questions: `evs-models-settle-stalled-deletes.md`.
 
-### QD-747: How does a writer leaf other than the uploader learn that an epoch's Welcome was never written, so it can remove and re-add the joiner after 10 minutes?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-gkm answers whether an epoch's Welcome stands: HEAD /gkm/groups/<group_id>/welcome/<n> under rw, 200 or 404 with no body. A writer leaf that adopted an Add at epoch n asks once after GkmSettings.WelcomeTimeout (10 minutes) and, on a 404, removes and re-adds the joiner in one commit (GkmPendingChanges' Unwelcomed, which CheckCommit accepts), so §10.6's re-add fires for any writer leaf, not only the epoch's uploader. It discloses nothing beyond gkm-5's Welcome objects, whose keys every reader can compute; a false 200 leaves the joiner waiting as today and a false 404 costs one Remove and Add. §11.20's or §10.6's route list gains the route.
-
-Changes: gkm's HEAD welcome route (§10.6 route list, design-records); the engine passes Unwelcomed leaves for epochs another leaf uploaded (KEYS-M2-21).
-
-Questions: `keys-m2-19-welcome-timeout-evidence.md`.
-
 ### QD-748: When a repo is created with --private in a team network whose directory does not exist yet, how does it stay private once the directory appears?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
 
@@ -3977,15 +3103,6 @@ A config writer that has held every generation the config repo's gkm head names 
 Changes: DESIGN-DETAILS 12.2.3: the stop below an Unopened filing is bounded; a short amendment by the design agent; FoldBridgeLedger and BridgeLedgerFold.Stopped (BRIDGE-M4-23), with the wait as a settings field; then a fix track in the lane holding BRIDGE.
 
 Questions: `bridge-m2-02-unopened-generation-stall.md`.
-
-### QD-763: Since gkm/dkey/<delegation_id> names no network, what tells QD-675's sweep which network's rows an object answers to?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
-
-A forwarding Delegation's reader key object is gkm/dkey/<network_id>/<delegation_id>. The engine takes the network from the token at the upload and the read; gkm's reconciler lists one network's prefix at its pass now and then and deletes at once any object that no forwarding row in the state's rows and no tracked end names, which is QD-675's sweep. A network's shred or a hold finds its key objects by the prefix. The network id in the key is an opaque id (I-13), as a group's and a repo's are. This changes QD-442's path form for this family; nothing in production holds one.
-
-Changes: GkmDelegationKeyPath (gkm_paths.go) and its callers in the root and gkmservice; testdata/gkm/wrap_paths.json; the reconciler's per-network sweep of gkm/dkey/<network_id>/ (QD-675's second part); sidecar/metadata_list.yml gkm-1's store line; §10.6's object table through design-records.
-
-Questions: `core-owner-fixes-dkey-sweep-network.md`.
 
 ### QD-765: Where should evs write which statement a slot object belongs to: object metadata, a field of EvsSlotObject, or nowhere?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*

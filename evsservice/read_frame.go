@@ -2,11 +2,12 @@
 // each statement after the pin, `behind`, each path, then the objects the request names, the last frame with end
 // set (sidecar.EncodeEvsReadFrame). Objects are streamed as they are read, in round 2:
 //
-//	slots     slot/<repo>/<id>, whole; a 404 answers missing
+//	slots     slot/<repo>/<id>, whole; a 404 answers missing, as does one a drop's job deleted or holds (read_withheld.go)
 //	maps      pmap/<repo>/<ref>/<p>/<map>/<part>/_, whole, over frames past 1 MiB
 //	pages     log/<repo>/<ref>/<n>, this process's cache, the object, or its container through pidx/
 //	records   a push's record at the place its version's entry names, as stored, with no slot body (QD-806), or a
-//	          part's at the place its seal names
+//	          part's at the place its seal names; a dropped version's inline-holding entry version zeroed, same length
+//	          (read_elide.go)
 //	ranges    a segment through SegmentLocator: up to 256 KiB read whole from offset 0, larger ones in 64 KiB-aligned
 //	          ranges covering what was asked, each range over frames past 1 MiB, offset naming each frame's first byte;
 //	          a staged segment a path of the request stages, from its push's record or seg/ (read_staged.go)
@@ -211,6 +212,18 @@ func (self *readAttempt) streamObjects(stream *readStream) bool {
 	engine := self.engine
 	body := self.body
 	for _, slotId := range body.GetSlotIds() {
+		// a slot a drop's job deleted or holds answers missing, stored or not (read_withheld.go)
+		withheld, err := self.withheldSlot(sidecar.Id(slotId))
+		switch {
+		case err != nil:
+			stream.fail("withheld_read_failed", err)
+			return false
+		case withheld:
+			if !stream.missing(protocol.EvsReadObjectKind_EVS_READ_OBJECT_SLOT, slotId, 0) {
+				return false
+			}
+			continue
+		}
 		object, err := self.cluster.Get(self.ctx, SlotKey(self.repoId, sidecar.Id(slotId)))
 		if !self.streamObject(stream, protocol.EvsReadObjectKind_EVS_READ_OBJECT_SLOT, slotId, 0, object, err) {
 			return false
@@ -290,12 +303,26 @@ func (self *readAttempt) streamPushRecord(stream *readStream, readPush *protocol
 		stream.fail("record_read_failed", err)
 		return false
 	}
+	// a dropped version's inline record goes as zeros of its length (read_elide.go)
+	if recordBytes, err = self.elideRecord(recordBytes, readPush.GetVersion()); err != nil {
+		stream.fail("record_elide_failed", err)
+		return false
+	}
 	return stream.object(self.settings, kind, pushId, number, 0, bytes.NewReader(recordBytes))
 }
 
 // One segment range: whole up to ReadSegmentWholeByteCount, else the aligned range covering it (§11.9's rounds
 // row). A segment evs holds no copy of answers missing.
 func (self *readAttempt) streamRange(stream *readStream, readRange *protocol.EvsReadRange) bool {
+	// a segment a drop's job deleted, holds or packed answers missing, stored or not (read_withheld.go)
+	withheld, err := self.withheldSegment([32]byte(readRange.GetSegmentId()))
+	switch {
+	case err != nil:
+		stream.fail("withheld_read_failed", err)
+		return false
+	case withheld:
+		return stream.missing(protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT, readRange.GetSegmentId(), 0)
+	}
 	// format 2: a staged segment one of the request's paths stages is read in its push's record (read_staged.go)
 	if handled, ok := self.streamStagedRange(stream, readRange); handled || !ok {
 		return ok

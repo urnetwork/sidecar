@@ -34,6 +34,43 @@ func RegisterSmtpQuotaScripts(redis *FakeRedis) {
 	redis.RegisterScript(smtpedgeservice.SmtpQuotaHaltScript.Name, smtpQuotaHaltTwin)
 	redis.RegisterScript(smtpedgeservice.SmtpHourCountScript.Name, smtpHourCountTwin)
 	redis.RegisterScript(smtpedgeservice.SmtpHourUncountScript.Name, smtpHourUncountTwin)
+	redis.RegisterScript(smtpedgeservice.SmtpQuotaBounceScript.Name, smtpQuotaBounceTwin)
+}
+
+// smtpedgeservice.SmtpQuotaBounceScript.
+func smtpQuotaBounceTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	if len(call.Keys) != 1 || len(call.Args) != 4 {
+		return nil, errSmtpTwinArguments
+	}
+	key := call.Keys[0]
+	delta, err := smtpTwinArg(call, 1)
+	if err != nil {
+		return nil, err
+	}
+	fieldTtl, err := smtpTwinArg(call, 2)
+	if err != nil {
+		return nil, err
+	}
+	keyTtl, err := smtpTwinArg(call, 3)
+	if err != nil {
+		return nil, err
+	}
+	count, err := smtpTwinHashAdd(call, key, call.Args[0], delta)
+	if err != nil {
+		return nil, err
+	}
+	if count == delta {
+		if err := call.HashExpire(key, []string{call.Args[0]}, time.Duration(fieldTtl)*time.Millisecond); err != nil {
+			return nil, err
+		}
+	}
+	// PTTL: -1 with no expiry, which is under any ttl
+	if entry := call.redis.entries[key]; entry != nil && (entry.expiresAt.IsZero() || entry.expiresAt.Sub(call.Now()) < time.Duration(keyTtl)*time.Millisecond) {
+		if _, err := call.Expire(key, time.Duration(keyTtl)*time.Millisecond); err != nil {
+			return nil, err
+		}
+	}
+	return RedisIntegerReply(count), nil
 }
 
 // tonumber of an argument.

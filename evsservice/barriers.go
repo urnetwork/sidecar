@@ -133,6 +133,11 @@ const (
 	BarrierReadCollected = "evs.read.collected"
 )
 
+// EVS2-M10-09: 5h's fence on a DROP's listed versions (check_dropped.go), keyed by <repo>:<ref>: after step 5 passed a
+// push at a format-2 instance, fence included, and before steps 6 and 7, so a schedule commits a DROP while a push
+// validated before it waits, and its step 7 past the window reruns 4 and 5 (FS-91 (b)).
+const BarrierDropFence = "evs.drop.fence"
+
 // EVS1-M6-01: the streams read (§11.9's streams row), keyed by the repo.
 const (
 	// Around its heads' reads, before its first frame.
