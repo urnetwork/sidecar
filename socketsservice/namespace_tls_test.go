@@ -1202,3 +1202,205 @@ func TestTlsListenNarrowingComposesIntoTheRegistrationPath(t *testing.T) {
 		}
 	}
 }
+
+// A world for 17.6's routing rows: a process with tls/ open over facts the test sets, count listeners of tls/443/web
+// each holding the network's pair, a public publish and dial of it, and an edge with two clients.
+type testTlsRouteScene struct {
+	world     *testSocketWorld
+	process   *testSocketProcess
+	hooks     *socketsservice.TlsNamespaceHooks
+	source    *testTlsFactsSource
+	networkId connect.Id
+	listeners []*testSocketSidecar
+	versions  []uint64
+	edge      *testSocketEdge
+	facts     *socketsservice.TlsListenFacts
+}
+
+func newTestTlsRouteScene(t *testing.T, count int) *testTlsRouteScene {
+	t.Helper()
+	world := newTestSocketWorld(t)
+	scene := &testTlsRouteScene{
+		world:     world,
+		process:   world.newProcess(nil),
+		source:    newTestTlsFactsSource(),
+		networkId: testSocketId(),
+		edge:      world.newEdge(2),
+	}
+	hooks, err := socketsservice.NewTlsNamespaceHooks(world.ctx, scene.source, world.clock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(hooks.Close)
+	scene.hooks = hooks
+	if err := scene.process.service.RegisterNamespace(sidecar.SocketNamespaceTls, hooks); err != nil {
+		t.Fatal(err)
+	}
+	now := world.clock.Now()
+	scene.facts = &socketsservice.TlsListenFacts{Verified: true, Standing: sidecar.AbuseStandingStandard, Tier: "team"}
+	for range count {
+		listener := world.newSidecar(scene.networkId)
+		scene.process.gate.SetIdentityKey(scene.networkId, listener.sidecarId, listener.publicKey())
+		scene.process.gate.AllowListenPrefix(scene.networkId, listener.sidecarId, nil, testSocketGrant("listen"))
+		scene.facts.Certs = append(scene.facts.Certs, &socketsservice.TlsListenCert{SidecarId: listener.sidecarId, NotAfter: now.Add(30 * 24 * time.Hour), NetworkPair: true})
+		scene.listeners = append(scene.listeners, listener)
+		scene.versions = append(scene.versions, 0)
+	}
+	scene.process.gate.AllowPublish(scene.networkId, []byte("tls/443/web"), sidecartest.FakeSocketGrant{
+		GrantId:  []byte("web-publish"),
+		Audience: protocol.AclAudience_ACL_AUDIENCE_PUBLIC,
+	})
+	scene.process.gate.AllowPublicDial(scene.networkId, []byte("tls/443/web"), testSocketGrant("public"))
+	scene.process.gate.Load(scene.networkId)
+	scene.loadFacts(t)
+	return scene
+}
+
+// Hands the source the scene's facts and has the hooks read them.
+func (self *testTlsRouteScene) loadFacts(t *testing.T) {
+	t.Helper()
+	self.source.set(self.networkId, self.facts)
+	if err := self.hooks.LoadFacts(self.world.ctx, self.networkId); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Listener index's heartbeat of tls/443/web, listing certified and acme, its status ok.
+func (self *testTlsRouteScene) heartbeat(t *testing.T, index int, alpns []string, certified []string, acme []*sidecar.SocketAcmeName) {
+	t.Helper()
+	listener := self.listeners[index]
+	registration := listener.edgeRegistration(t, "tls/443/web", "tls", "http")
+	registration.Alpn = alpns
+	registration.CertifiedNames = certified
+	registration.AcmeNames = acme
+	self.versions[index] += 1
+	code, result := self.process.register(listener.token, &sidecar.SocketRegistrationsArgs{SetVersion: self.versions[index], Registrations: []*sidecar.SocketRegistration{registration}})
+	if code != http.StatusOK || result.Error != nil || result.Statuses[0] != sidecar.SocketRegistrationStatusOk {
+		t.Fatalf("listener %d's heartbeat answered %d, %+v", index, code, result)
+	}
+}
+
+// The edge's Find of tls/443/web offering alpns for serverName: the listeners its primary and backup name, by index,
+// -1 for none, or the refusal's code.
+func (self *testTlsRouteScene) find(t *testing.T, alpns []string, serverName string) (int, int, sidecar.SocketErrorCode) {
+	t.Helper()
+	networkId := self.networkId
+	code, result := self.process.find(self.edge.token, &sidecar.SocketFindArgs{
+		Name:       "tls/443/web",
+		NetworkId:  &networkId,
+		ClientIds:  self.edge.clientIdArgs(),
+		Protocol:   "tls",
+		Alpn:       alpns,
+		ServerName: serverName,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("the Find answered %d", code)
+	}
+	if result.Error != nil {
+		return -1, -1, result.Error.Code
+	}
+	index := func(findTicket *sidecar.SocketFindTicket) int {
+		if findTicket == nil {
+			return -1
+		}
+		ticket := self.world.verifyTicket(findTicket)
+		for listenerIndex, listener := range self.listeners {
+			if bytes.Equal(ticket.GetListenerClientId(), listener.clientId.Bytes()) {
+				return listenerIndex
+			}
+		}
+		t.Fatal("a ticket names no listener of the scene")
+		return -1
+	}
+	return index(result.Primary), index(result.Backup), ""
+}
+
+// 17.6's challenge routing on T2: of three listeners on tls/443/web, every acme-tls/1 dial for the custom host reaches
+// the one whose claim the account's lock holds, primary only, a stale holder's listing dropped; after a takeover every
+// one reaches the new holder; and a dial for a network name offering acme-tls/1 finds no listener.
+func TestTlsListenRoutesTheChallengeToTheClaimHolder(t *testing.T) {
+	scene := newTestTlsRouteScene(t, 3)
+	host := "app.customer.example"
+	acmeAlpns := []string{"h2", "http/1.1", "acme-tls/1"}
+	scene.facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{{SidecarId: scene.listeners[1].sidecarId, Owner: "web", Name: host, ClaimSeq: 5}}
+	scene.loadFacts(t)
+	scene.heartbeat(t, 0, acmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: host, ClaimSeq: 4}})
+	scene.heartbeat(t, 1, acmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: host, ClaimSeq: 5}})
+	scene.heartbeat(t, 2, []string{"h2", "http/1.1"}, nil, nil)
+	for range 20 {
+		primary, backup, code := scene.find(t, []string{"acme-tls/1"}, host)
+		if code != "" || primary != 1 || backup != -1 {
+			t.Fatalf("a challenge reached %d and %d (%s)", primary, backup, code)
+		}
+	}
+	// a takeover: the lock's claim 6 is listener 2's, which lists it at once and is read again for it
+	scene.facts.AcmeClaims = []*socketsservice.TlsListenAcmeClaim{{SidecarId: scene.listeners[2].sidecarId, Owner: "web", Name: host, ClaimSeq: 6}}
+	scene.source.set(scene.networkId, scene.facts)
+	scene.heartbeat(t, 2, acmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: host, ClaimSeq: 6}})
+	scene.heartbeat(t, 1, acmeAlpns, nil, []*sidecar.SocketAcmeName{{Name: host, ClaimSeq: 5}})
+	for range 20 {
+		primary, backup, code := scene.find(t, []string{"acme-tls/1"}, host)
+		if code != "" || primary != 2 || backup != -1 {
+			t.Fatalf("after the takeover a challenge reached %d and %d (%s)", primary, backup, code)
+		}
+	}
+	if _, _, code := scene.find(t, []string{"acme-tls/1"}, ""); code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("a network name's acme-tls/1 dial answered %s", code)
+	}
+}
+
+// 17.6's eligibility on T2: of five listeners each listing the custom host, the rows certify two, and 1,000 visitor
+// dials for it reach only those two; when one's certificate enters the margin, only the other; with none, no_listener.
+func TestTlsListenRoutesVisitorsOnlyToCertifiedListeners(t *testing.T) {
+	scene := newTestTlsRouteScene(t, 5)
+	host := "app.customer.example"
+	now := scene.world.clock.Now()
+	margin := socketsservice.DefaultTlsNamespaceSettings().CertifiedMargin
+	scene.facts.CustomCertified = []*socketsservice.TlsListenCustomName{
+		{SidecarId: scene.listeners[1].sidecarId, Owner: "web", Name: host, NotAfter: now.Add(30 * 24 * time.Hour)},
+		{SidecarId: scene.listeners[3].sidecarId, Owner: "web", Name: host, NotAfter: now.Add(30 * 24 * time.Hour)},
+	}
+	scene.loadFacts(t)
+	visitorAlpns := []string{"h2", "http/1.1"}
+	for index := range scene.listeners {
+		scene.heartbeat(t, index, visitorAlpns, []string{host}, nil)
+	}
+	reached := map[int]int{}
+	for range 1000 {
+		primary, backup, code := scene.find(t, []string{"h2"}, host)
+		if code != "" {
+			t.Fatalf("a visitor's dial answered %s", code)
+		}
+		reached[primary] += 1
+		if backup != -1 {
+			reached[backup] += 1
+		}
+		if (primary != 1 && primary != 3) || (backup != -1 && backup != 1 && backup != 3) {
+			t.Fatalf("a visitor's dial reached %d and %d", primary, backup)
+		}
+	}
+	if len(reached) != 2 || reached[1] == 0 || reached[3] == 0 {
+		t.Fatalf("1,000 dials reached %v", reached)
+	}
+	// listener 1's certificate enters the margin: its next heartbeat lists the name no more
+	scene.facts.CustomCertified[0].NotAfter = now.Add(margin / 2)
+	scene.loadFacts(t)
+	scene.heartbeat(t, 1, visitorAlpns, []string{host}, nil)
+	for range 50 {
+		primary, backup, code := scene.find(t, []string{"h2"}, host)
+		if code != "" || primary != 3 || backup != -1 {
+			t.Fatalf("inside the margin a dial reached %d and %d (%s)", primary, backup, code)
+		}
+	}
+	// none certified: no listener, and never a listener presenting another name
+	scene.facts.CustomCertified = nil
+	scene.loadFacts(t)
+	scene.heartbeat(t, 3, visitorAlpns, []string{host}, nil)
+	if _, _, code := scene.find(t, []string{"h2"}, host); code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("with none certified a dial answered %s", code)
+	}
+	// a visitor of a network name still reaches every listener
+	if primary, _, code := scene.find(t, []string{"h2"}, ""); code != "" || primary < 0 {
+		t.Fatalf("a network name's dial answered %s", code)
+	}
+}
