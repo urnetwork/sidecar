@@ -97,6 +97,9 @@ type Sidecar struct {
 	configFollower atomic.Value
 	// The network's mail (Sidecar.Mail, mail_client.go). Held as any, as search is: the forwarding leg holds no mail.
 	mail atomic.Value
+	// What an executed drop reaches beside the mirror and the index cache (state_drop_apply.go). Held as any, as search
+	// is: the forwarding leg applies no drop.
+	drops atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
