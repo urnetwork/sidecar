@@ -28,14 +28,15 @@
 //     and its visitor gets unrecognized_name, and a host whose grant left the policy is denied at the gate's next
 //     load.
 //
-// Where the composition stops: the edge's stream to the listener is an in-memory pair, and the listener's end is a
-// TLS server on the device's key and chain, not §13.7's front over a SocketListener. sidecartest has no edge-role
-// connect client on its exchange yet, so no test here runs SocketEdgeDialer's open, §9.6's admission or the front
-// (FS-34's front half is TestTlsFrontZeroBytesBeforeAuthentication's). Every edge Find is judged by the production
-// gate itself, as an urnetwork-edge caller's tls/ dial and publish (SOCK-M5-07 on ACL-M5-01's AclState.MayEdgeFind):
-// the gate reads no audience, which is the listener's front's to judge (§8.10, §13.7). Nothing sleeps: loads, kills,
-// sweeps and connection ends are awaited by the engines' own counts, time is the Net's FakeClock, and a real timer is
-// only a guard that fails a hung test.
+// Where the composition stops: the edge's stream to the listener is an in-memory pair, and the listener's end here is
+// a TLS server on the device's key and chain, not §13.7's front over a SocketListener. sidecartest has no edge-role
+// connect client on its exchange yet, so no test runs SocketEdgeDialer's open or §9.6's admission; the front itself
+// runs at the listener's end in tls_front_suite_test.go, on the sidecar_testhooks build, which holds S5's visitor
+// half and FS-34 on T2 (the front's own FS-34 table is TestTlsFrontZeroBytesBeforeAuthentication's). Every edge Find
+// is judged by the production gate itself, as an urnetwork-edge caller's tls/ dial and publish (SOCK-M5-07 on
+// ACL-M5-01's AclState.MayEdgeFind): the gate reads no audience, which is the listener's front's to judge (§8.10,
+// §13.7). Nothing sleeps: loads, kills, sweeps and connection ends are awaited by the engines' own counts, time is the
+// Net's FakeClock, and a real timer is only a guard that fails a hung test.
 
 package sidecartest_test
 
@@ -161,10 +162,21 @@ func (self *tlsSuiteWorld) savePublish(audience string, expires time.Time, hosts
 	self.savePublishes(expires, publishes...)
 }
 
-// One host a policy publishes on tls/443, under its audience.
+// One host a policy publishes on tls/443, under its audience: over http unless raw, and then with pin as a link's
+// link_spki_sha256.
 type tlsSuitePublish struct {
 	host     string
 	audience string
+	raw      bool
+	pin      string
+}
+
+// The registration's app mode the publish's grant gives.
+func (self tlsSuitePublish) appMode() string {
+	if self.raw {
+		return "raw"
+	}
+	return "http"
 }
 
 // Saves a policy giving members publish and listen on each publish's tls/443 name under its own audience, all
@@ -173,8 +185,15 @@ func (self *tlsSuiteWorld) savePublishes(expires time.Time, publishes ...tlsSuit
 	self.t.Helper()
 	grants := []string{`{ "src": ["autogroup:member"], "dst": ["sock:app/*"], "allow": ["listen", "dial"] }`}
 	for _, publish := range publishes {
-		grants = append(grants, fmt.Sprintf(`{ "src": ["autogroup:member"], "dst": ["dns:%s", "sock:tls/443/%s"], "allow": ["publish", "listen"], "audience": %q, "expires": %q }`,
-			publish.host, publish.host, publish.audience, expires.UTC().Format(time.RFC3339)))
+		mode := ""
+		if publish.raw {
+			mode = `, "app_mode": "raw"`
+		}
+		if publish.pin != "" {
+			mode += fmt.Sprintf(`, "link_spki_sha256": %q`, publish.pin)
+		}
+		grants = append(grants, fmt.Sprintf(`{ "src": ["autogroup:member"], "dst": ["dns:%s", "sock:tls/443/%s"], "allow": ["publish", "listen"], "audience": %q, "expires": %q%s }`,
+			publish.host, publish.host, publish.audience, expires.UTC().Format(time.RFC3339), mode))
 	}
 	self.admission.SaveAclPolicy([]byte(`{"grants": [`+strings.Join(grants, ",\n")+`]}`), sidecartest.AclSaveMembers{})
 	count, _ := self.gate.Loads()
@@ -185,13 +204,19 @@ func (self *tlsSuiteWorld) savePublishes(expires time.Time, publishes ...tlsSuit
 // caller's registration of an edge name, http, with a claim its identity key signs.
 func (self *tlsSuiteWorld) edgeRegistration(caller *socketSuiteSidecar, name string) *sidecar.SocketRegistration {
 	self.t.Helper()
+	return self.edgeRegistrationIn(caller, name, "http")
+}
+
+// caller's registration of an edge name in appMode, http or raw, with a claim its identity key signs.
+func (self *tlsSuiteWorld) edgeRegistrationIn(caller *socketSuiteSidecar, name string, appMode string) *sidecar.SocketRegistration {
+	self.t.Helper()
 	listenId := connect.NewId()
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.SocketRegistrationClaim{
 		NetworkId: self.networkId.Bytes(),
 		Name:      name,
 		ListenId:  listenId.Bytes(),
 		Protocol:  "tls",
-		AppMode:   "http",
+		AppMode:   appMode,
 	})
 	if err != nil {
 		self.t.Fatal(err)
@@ -209,7 +234,7 @@ func (self *tlsSuiteWorld) edgeRegistration(caller *socketSuiteSidecar, name str
 		Name:       name,
 		ListenId:   &listenId,
 		Protocol:   "tls",
-		AppMode:    "http",
+		AppMode:    appMode,
 		Alpn:       []string{"h2", "http/1.1"},
 		Weight:     100,
 		MaxStreams: 256,

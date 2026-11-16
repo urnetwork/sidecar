@@ -1,5 +1,6 @@
 // §8.8's GrantActivate on the fake view: grant_id's fixed vectors, each quorum branch (k = 1 and 2, a non-eligible
-// approver, evidence, expiry, the spend check), the admin clause and its dst-owner exception, the match checks, the
+// approver, evidence, expiry, the spend check), the admin clause and its dst-owner exception, an admin's decision
+// counting toward k only where the rule's approvers name it (QD-863), the match checks, the
 // fold, and replays refused after activation, expiry and a GrantRevoke. Then FS-14 through TEAM's log: a grant whose
 // requests rule a new config head deleted ends at that base. A dial or route grant here is a bridge_forward's at
 // version 4, its ports and prefixes in a sealed_detail no verifier opens (QD-740), and the match checks hold the
@@ -298,6 +299,92 @@ func TestAclGrantActivateAdminClause(t *testing.T) {
 		if c.refusal == nil && err != nil || c.refusal != nil && !errors.Is(err, c.refusal) {
 			t.Errorf("%s: %v, want %v", c.name, err, c.refusal)
 		}
+	}
+}
+
+// An Owner's or Admin's decision counts toward k only where the rule's approvers name it (the owner's answer to
+// acl-m6-05-admin-alone-reach, QD-863): under the directory's rule, autogroup:dst-owner alone, an admin's lone decision
+// activates no reach to a worker another member sponsors or to that member's device, and the sponsor's does; under a
+// rule naming autogroup:admin, or a group the admin is in, the admin's counts; and where autogroup:dst-owner finds no
+// standing sponsor it resolves to autogroup:admin, whose decision then counts (D-ACL-23). An admin's decision that
+// only meets the clause never makes up k.
+func TestAclGrantActivateAdminCountsWhereNamed(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	tagId := fixture.tag(cast.strangerUser)
+	worker := fixture.agent(cast.strangerUser, tagId)
+	orphanWorker := fixture.agent(cast.strangerUser, tagId)
+	delete(fixture.view.sponsors, orphanWorker)
+	member := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)
+	dstOwner := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_DST_OWNER)
+	adminAtom := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_ADMIN)
+	targets := []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_TAGGED)}
+	dial := []protocol.AclAction{protocol.AclAction_ACL_ACTION_DIAL}
+	device := protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE
+	presence := protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE
+	// the directory's rule, as Team's starting document compiles it
+	directoryRule := fixture.requestRule([]Id{member}, targets, dial, []Id{dstOwner}, 1, device, presence)
+	adminRule := fixture.requestRule([]Id{member}, targets, dial, []Id{adminAtom}, 1, device, presence)
+	groupRule := fixture.requestRule([]Id{member}, targets, dial, []Id{fixture.group(cast.admin)}, 1, device, presence)
+	dstOwnerTwo := fixture.requestRule([]Id{member}, targets, dial, []Id{dstOwner}, 2, device, presence)
+	dstOwnerAndAdmin := fixture.requestRule([]Id{member}, targets, dial, []Id{dstOwner, adminAtom}, 2, device, presence)
+	state := fixture.state(t)
+	spend := &aclTestSpendCheck{}
+	reach := func(ruleId []byte, destination Id) *aclTestGrant {
+		return newAclTestGrant(t, ruleId, cast.laptop, []string{aclTestDst(destination)}, []string{"dial"}, 0)
+	}
+	cases := []struct {
+		name    string
+		grant   *aclTestGrant
+		refusal error
+	}{
+		{name: "an admin alone for a sponsored worker under the directory's rule", grant: reach(directoryRule, worker).approve(t, cast.admin, device, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "the owner alone for a sponsored worker under the directory's rule", grant: reach(directoryRule, worker).approve(t, cast.owner, device, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "the owner and an admin for a sponsored worker under the directory's rule", grant: reach(directoryRule, worker).
+			approve(t, cast.owner, device, aclTestDecisionNotAfter).approve(t, cast.admin, presence, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "an admin alone for another member's device under the directory's rule", grant: reach(directoryRule, cast.stranger).approve(t, cast.admin, device, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "the sponsor for its worker", grant: reach(directoryRule, worker).approve(t, cast.strangerUser, device, aclTestDecisionNotAfter)},
+		{name: "the sponsor's presence for its worker", grant: reach(directoryRule, worker).approve(t, cast.strangerUser, presence, aclTestDecisionNotAfter)},
+		{name: "the sponsor and an admin for its worker", grant: reach(directoryRule, worker).
+			approve(t, cast.admin, device, aclTestDecisionNotAfter).approve(t, cast.strangerUser, device, aclTestDecisionNotAfter)},
+		{name: "an admin under a rule naming autogroup:admin", grant: reach(adminRule, worker).approve(t, cast.admin, device, aclTestDecisionNotAfter)},
+		{name: "the owner under a rule naming autogroup:admin", grant: reach(adminRule, worker).approve(t, cast.owner, device, aclTestDecisionNotAfter)},
+		{name: "the sponsor under a rule naming autogroup:admin alone", grant: reach(adminRule, worker).approve(t, cast.strangerUser, device, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "an admin under a rule naming its group", grant: reach(groupRule, worker).approve(t, cast.admin, device, aclTestDecisionNotAfter)},
+		{name: "the owner under a rule naming a group it is not in", grant: reach(groupRule, worker).approve(t, cast.owner, device, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "an admin for a worker whose sponsor is gone", grant: reach(directoryRule, orphanWorker).approve(t, cast.admin, device, aclTestDecisionNotAfter)},
+		{name: "the owner for a worker whose sponsor is gone", grant: reach(directoryRule, orphanWorker).approve(t, cast.owner, device, aclTestDecisionNotAfter)},
+		{name: "its former sponsor for a worker whose sponsor is gone", grant: reach(directoryRule, orphanWorker).approve(t, cast.strangerUser, device, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "the sponsor and an admin where dst-owner needs two", grant: reach(dstOwnerTwo, worker).
+			approve(t, cast.strangerUser, device, aclTestDecisionNotAfter).approve(t, cast.admin, device, aclTestDecisionNotAfter), refusal: ErrConfigAuthority},
+		{name: "the sponsor and an admin where dst-owner and autogroup:admin need two", grant: reach(dstOwnerAndAdmin, worker).
+			approve(t, cast.strangerUser, device, aclTestDecisionNotAfter).approve(t, cast.admin, device, aclTestDecisionNotAfter)},
+		{name: "two admins where dst-owner and autogroup:admin need two", grant: reach(dstOwnerAndAdmin, worker).
+			approve(t, cast.owner, device, aclTestDecisionNotAfter).approve(t, cast.admin, device, aclTestDecisionNotAfter)},
+	}
+	for _, c := range cases {
+		_, err := state.CheckStatement(fixture.statement(bridge.SignedType_SIGNED_GRANT_ACTIVATE, c.grant.activate(), cast.laptop), spend)
+		if c.refusal == nil && err != nil || c.refusal != nil && !errors.Is(err, c.refusal) {
+			t.Errorf("%s: %v, want %v", c.name, err, c.refusal)
+		}
+	}
+
+	// an admin's decision that only meets the clause is held to the spend check as a counted one is: refused there, it
+	// meets nothing, so the requester's owner alone reaches no other member's device
+	selfRuleFixture := newAclStatementCast()
+	selfRule := selfRuleFixture.fixture.requestRule([]Id{member}, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)}, dial,
+		[]Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}, 1)
+	selfState := selfRuleFixture.fixture.state(t)
+	clause := func() *aclTestGrant {
+		return newAclTestGrant(t, selfRule, selfRuleFixture.laptop, []string{aclTestDst(selfRuleFixture.stranger)}, []string{"dial"}, 0).
+			approve(t, selfRuleFixture.member, device, aclTestDecisionNotAfter).approve(t, selfRuleFixture.admin, device, aclTestDecisionNotAfter)
+	}
+	if _, err := selfState.CheckStatement(selfRuleFixture.fixture.statement(bridge.SignedType_SIGNED_GRANT_ACTIVATE, clause().activate(), selfRuleFixture.laptop), spend); err != nil {
+		t.Errorf("the requester's owner and an admin under autogroup:self: %v", err)
+	}
+	refuseAdmin := &aclTestSpendCheck{refused: map[Id]bool{selfRuleFixture.admin: true}}
+	if _, err := selfState.CheckStatement(selfRuleFixture.fixture.statement(bridge.SignedType_SIGNED_GRANT_ACTIVATE, clause().activate(), selfRuleFixture.laptop), refuseAdmin); !errors.Is(err, ErrConfigAuthority) {
+		t.Errorf("an admin's clause decision the spend check refuses: %v", err)
 	}
 }
 

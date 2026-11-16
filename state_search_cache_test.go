@@ -4,7 +4,8 @@ package sidecar
 // query, drops and refetches a file that fails AEAD, reads one frame at a time, and drops decoded state and cursors at a
 // lock. QD-838: a kept record reopens in a later round under RK_g alone, from the wrapped object key, generation and
 // file id kept beside it; no other generation's key opens it; no plaintext key is ever stored; a record kept before
-// those reads as lacking them for the next round to fetch again; a slot-keyed record keeps none.
+// those reads as lacking them for the next round to fetch again. A slot-keyed record's keys and its drop at an ERASE's
+// hint (QD-845) are state_search_cache_slot_test.go's.
 
 import (
 	"bytes"
@@ -942,79 +943,5 @@ func TestRecordKeptBeforeKeysReadsAsLacking(t *testing.T) {
 		if err != nil || !bytes.Equal(whole, kept.plaintext) {
 			t.Errorf("earlier meta %d: fetched again, it reads %v", index, err)
 		}
-	}
-}
-
-// QD-838's block is the one a container's segment header carries. A container-keyed record without it, with a short
-// one or without its file id is refused, and so is a block offered on a slot-keyed record, whose key is in a slot the
-// cache does not keep; nothing reaches the medium. A slot-keyed record is kept with nothing that opens it, marked kept
-// so no round fetches it again for keys it cannot carry: it reads to the round holding its keys and answers
-// ErrSearchCacheSlotKeyed to a reader with RK_g alone.
-func TestSlotKeyedRecordKeepsNoKey(t *testing.T) {
-	world := newTestSearchCacheWorld(t, 1<<30)
-	key := SearchCacheKey{RepoId: NewId(), RefId: NewId(), Path: ".ur-index/i1/b/20060/0", Version: 1}
-	plaintext := testSearchPlaintext("slot", 3000)
-	for label, change := range map[string]func(record *SearchCacheRecord){
-		"no block": func(record *SearchCacheRecord) { record.WrappedObjectKey = nil },
-		"a short one": func(record *SearchCacheRecord) {
-			record.WrappedObjectKey = record.WrappedObjectKey[:EvsWrappedKeyByteCount-1]
-		},
-		"no file id": func(record *SearchCacheRecord) { record.FileId = Id{} },
-	} {
-		refused := newTestSearchRecord(t, key, SearchCachePartition{StartDay: 20060}, plaintext)
-		change(refused.record)
-		if err := world.cache.PutRecord(t.Context(), refused.record); !errors.Is(err, ErrSearchCacheArgs) {
-			t.Errorf("%s: %v", label, err)
-		}
-	}
-
-	// a slot-keyed record names its key's slot, and its segment carries no block
-	manifestKey, err := NewEvsManifestKey(evsTestRepoKey(key.RepoId, 1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	slotKey := NewEvsObjectKey()
-	fileId := NewId()
-	header := evsTestHeader(key.Path, protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT, len(plaintext))
-	header.KeyRefKind = protocol.EvsKeyRefKind_EVS_KEY_REF_SLOT
-	header.SlotId = evsTestId("slot")
-	header.KeyIndex = 3
-	sealed, opened := evsTestWriteRecord(t, manifestKey, slotKey, fileId, header, plaintext)
-	slotKeyed := &SearchCacheRecord{
-		Key: key, RefVersion: 4, ContentSha256: sha256.Sum256(plaintext), Partition: SearchCachePartition{StartDay: 20060},
-		SealedHeader: sealed[:EvsRecordHeaderByteCount], SealedFrames: sealed[EvsRecordHeaderByteCount:], Header: &opened,
-		ObjectKey: slotKey, FileId: fileId,
-	}
-	withBlock := *slotKeyed
-	withBlock.WrappedObjectKey = make([]byte, EvsWrappedKeyByteCount)
-	if err := world.cache.PutRecord(t.Context(), &withBlock); !errors.Is(err, ErrSearchCacheArgs) {
-		t.Errorf("a block on a slot-keyed record: %v", err)
-	}
-	if paths := world.searchPaths(t); len(paths) != 0 {
-		t.Fatalf("refused records left %v", paths)
-	}
-
-	if err := world.cache.PutRecord(t.Context(), slotKeyed); err != nil {
-		t.Fatal(err)
-	}
-	ref, err := world.cache.Ref(key.RepoId, key.RefId)
-	if err != nil || ref == nil || len(ref.Files) != 1 || !ref.Files[0].KeysKept {
-		t.Fatalf("held %+v, %v", ref, err)
-	}
-	frames, err := world.cache.OpenRecord(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if frames.Generation() != 0 || frames.WrappedObjectKey() != nil {
-		t.Errorf("a slot-keyed record kept generation %d and a block", frames.Generation())
-	}
-	if _, err := frames.OpenRead(evsTestRepoKey(key.RepoId, 1)); !errors.Is(err, ErrSearchCacheSlotKeyed) {
-		t.Errorf("a read under RK_1: %v", err)
-	}
-	if _, err := world.cache.OpenRecordRead(t.Context(), key, &evsTestReadGkm{newest: 1}); !errors.Is(err, ErrSearchCacheSlotKeyed) {
-		t.Errorf("a read through gkm: %v", err)
-	}
-	if whole, err := testReadKeptRecord(t, world.cache, slotKeyed); err != nil || !bytes.Equal(whole, plaintext) {
-		t.Errorf("the round's own read: %v", err)
 	}
 }

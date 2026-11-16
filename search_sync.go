@@ -41,7 +41,8 @@
 //
 // Not here: the settings file's signer, which the view judges where it reads it (SEARCH-M10-08); indexed_through,
 // which searchSyncCoverage computes where one is given (SEARCH-M10-12's reader), and reads 0, claiming nothing, where
-// none is; the erasure and drop paths, which call EndRepo and the cache's DropRetained (CORE-M10-04).
+// none is; the erasure and drop paths, which call EndRepo and the cache's DropRetained and, with the slot keys an
+// ERASE names, its DropErasedSlotKeys (CORE-M10-04; QD-845).
 //
 // On every leg but ios_extension: root Id, no connect type. Safe for concurrent use.
 
@@ -100,8 +101,11 @@ type searchSyncSource interface {
 	Replay(ctx context.Context, pin SearchSyncPin) (*searchSyncReplay, error)
 	// Every file under the ref's index roots and its erasure set at the head, one read a directory.
 	List(ctx context.Context) (*indexListing, error)
-	// Whole files at their versions, as evs sealed them, with what opens each: a collected version answers with
-	// collected set and no record. At most the engine's read limits a call.
+	// Whole files at their versions, as evs sealed them, with what opens each and what reopens it after the round
+	// (QD-838, QD-845): its file id and the 72 B block wrapping its object key, from its segment's header or, for a
+	// slot-keyed record, from the slot object the read answered, with that slot key's generation and the segment's
+	// (SearchCacheRecord.SetSlotKey). A collected version answers with collected set and no record. At most the
+	// engine's read limits a call.
 	Fetch(ctx context.Context, files []*indexFileVersion) ([]*searchSyncFetched, error)
 }
 
