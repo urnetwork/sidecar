@@ -177,8 +177,14 @@ func TestReseedStatementHeldWhileTheHeadMovesIsReplacedByTheNext(t *testing.T) {
 // version 5, on a base 3 below the head.
 func newReseedLivePushRace(t *testing.T) (*reseedFixture, *reseedDevice, *reseedTwoDeviceHistory) {
 	t.Helper()
+	return reseedLivePushRaceOn(newReseedFixture(t))
+}
+
+// newReseedLivePushRace on fixture's world, a recovery that holds nothing of the ref yet.
+func reseedLivePushRaceOn(fixture *reseedFixture) (*reseedFixture, *reseedDevice, *reseedTwoDeviceHistory) {
+	t := fixture.t
+	t.Helper()
 	history := newReseedTwoDeviceHistory(t)
-	fixture := newReseedFixture(t)
 	device := fixture.device()
 	device.holds(history, 4)
 	if ref := device.reseed(); ref.Stopped != nil || ref.Version != 4 {
