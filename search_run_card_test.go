@@ -115,6 +115,12 @@ func TestCardVersion(t *testing.T) {
 	if _, _, err := testRunCard(t, stream, runId, 7, nil, nil); !errors.Is(err, errIndexCardVersionSpace) {
 		t.Fatalf("a stream version at 2^32: %v", err)
 	}
+	// the build writes no card and holds the stream's pin below the run
+	err = testRecordSource(t, stream, 7, nil, nil).IndexDocuments(context.Background(), stream.readTo, func(document *IndexDocument) error { return nil })
+	blocked := &IndexRecordBlockedError{}
+	if !errors.As(err, &blocked) || blocked.Version != 1 {
+		t.Fatalf("a build past the version's bits: %v", err)
+	}
 }
 
 // QD-783 #3: entries out of seq order in the stream fold in seq order, then entry_id order, so "newest" and "first"

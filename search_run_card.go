@@ -225,7 +225,9 @@ func indexRunCardMap(args *indexRunCardArgs, folded []*indexRecordEntry) *IndexD
 					toolCounts[body.GetToolName()] += 1
 				}
 				for _, path := range body.GetPaths() {
-					paths[path] = path != ""
+					if path != "" {
+						paths[path] = true
+					}
 				}
 			}
 		case RecordKindChange:
@@ -234,7 +236,9 @@ func indexRunCardMap(args *indexRunCardArgs, folded []*indexRecordEntry) *IndexD
 					commits = appendOnce(commits, commit)
 				}
 				for _, changed := range body.GetPaths() {
-					paths[changed.GetPath()] = changed.GetPath() != ""
+					if changed.GetPath() != "" {
+						paths[changed.GetPath()] = true
+					}
 				}
 			}
 		case RecordKindApproval:
@@ -280,11 +284,9 @@ func indexRunCardMap(args *indexRunCardArgs, folded []*indexRecordEntry) *IndexD
 		lines = append(lines, indexRecordPair(contextBody.GetProject(), contextBody.GetBranch()))
 		lines = append(lines, tools...)
 		lines = append(lines, commits...)
-		touched := []string{}
-		for path, kept := range paths {
-			if kept {
-				touched = append(touched, path)
-			}
+		touched := make([]string, 0, len(paths))
+		for path := range paths {
+			touched = append(touched, path)
 		}
 		slices.SortFunc(touched, func(a string, b string) int { return bytes.Compare([]byte(a), []byte(b)) })
 		lines = append(lines, touched[:min(len(touched), settings.CardPathCount)]...)

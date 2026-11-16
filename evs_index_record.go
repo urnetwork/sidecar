@@ -504,7 +504,8 @@ func (self *IndexRecordSource) build(ctx context.Context, refVersion uint64) (*i
 			logKind: logKind, entries: entries, runId: runId, epoch: self.args.epoch, erasedAtEpoch: erasedAtEpoch,
 			settings: self.settings, format: self.args.format,
 		})
-		if errors.Is(err, errIndexCardBlocked) {
+		if errors.Is(err, errIndexCardBlocked) || errors.Is(err, errIndexCardVersionSpace) {
+			// no card: the pin on R stops below the run, which reads not yet searchable (15.2.8, 15.2.9)
 			built.blockedRuns[runId] = true
 			block(built.runVersions[runId][0])
 			continue
