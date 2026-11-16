@@ -58,7 +58,15 @@ type DaemonCall struct {
 	// bound. The handler's context does not end with it, so a call a caller left still finishes as before; a long
 	// poll ends its wait on it (daemon_events.go). Nil, which never closes, for a call no session reader watches.
 	SessionDone <-chan struct{}
+	// Sends a JSON-RPC notification, a method and its params with no id, on the call's session before its answer: what
+	// a method streams as it runs, as search's search.progress (§16.10's wire row). Its params pass the reply walk, so
+	// none carries a secret. A notification once the call answered, or past its session's end, is dropped with an
+	// error, so none follows the answer. Nil outside a control session no reader watches.
+	Notify func(method string, params any) error
 }
+
+// A notification sent once its call answered, or past its session's end: dropped.
+var errDaemonNotifyEnded = errors.New("the call answered: no notification follows its answer")
 
 // A value no reply may carry: the root's types holding a token, a key, a seed or a pass carry this method, so the
 // reply walk refuses them wherever they sit.
@@ -211,7 +219,7 @@ func (self *Daemon) dispatch(line []byte, session *daemonSession, run func(handl
 	if method.Confirm && !confirmed {
 		return answer(DaemonRpcConfirmationRequired, "this call needs a person's confirmation on /dev/tty or in an app")
 	}
-	call := &DaemonCall{Hello: hello, Params: request.Params, Confirmed: confirmed, SessionDone: session.done}
+	call := &DaemonCall{Hello: hello, Params: request.Params, Confirmed: confirmed, SessionDone: session.done, Notify: session.notify}
 	if method.Network {
 		call.Network = daemonCallNetwork(request.Params)
 		networkId, err := self.resolveSessionNetwork(session, call.Network)
