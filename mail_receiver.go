@@ -151,6 +151,11 @@ type MailReceiverArgs struct {
 	// Each stream past its handshake, on its own goroutine, until ctx ends: §15.5's session (MAIL-M7-14), which owns
 	// the stream. Nil closes every stream after its handshake.
 	Serve func(ctx context.Context, stream *MailReceiverStream)
+	// Whether a stream the router ticketed is taken, from its open metadata (the router's MailIngress) and the served
+	// key's SPKI SHA-256, before its handshake: strict mode's admission (MailStrictPolicy.AdmitMetadata, MAIL-M7-24).
+	// A stream it refuses gets a TLS alert and its end before any SMTP byte, so the sender retries. Nil takes every
+	// stream.
+	Admit func(ctx context.Context, metadata []byte, spkiSha256 []byte) bool
 	// The self-signed leaf's lifetime and backdate (§13.8); nil takes the defaults.
 	TlsSettings *SidecarTlsSettings
 	// Nil is real time.
@@ -455,6 +460,22 @@ func (self *MailReceiver) serve(ctx context.Context, listener MailReceiverListen
 		// only the router dials a receiver, and its open metadata is trusted only from it (§15.4)
 		conn.reset(protocol.StreamResetCode_RST_IDENTITY)
 		return
+	}
+	if self.args.Admit != nil {
+		served := func() []byte {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.served == nil {
+				return nil
+			}
+			return bytes.Clone(self.served.spkiSha256[:])
+		}()
+		if !self.args.Admit(ctx, conn.OpenMetadata(), served) {
+			// before any SMTP byte: a fatal alert and the stream's end, a temporary failure the sender retries
+			conn.Write(mailStrictRefusalAlert)
+			conn.Close()
+			return
+		}
 	}
 	presented := &mailReceiverServedKey{}
 	tlsConn := tls.Server(conn, self.newTlsConfig(presented))

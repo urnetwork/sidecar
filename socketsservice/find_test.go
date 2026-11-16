@@ -524,6 +524,74 @@ func TestSocketFindReadsItsSizesFromSettings(t *testing.T) {
 	}
 }
 
+// §9.7's filter and DESIGN-DETAILS 17.2.10's server name on Find's wire, each held to the process's settings (QD-702)
+// before anything is read: a server name on any name but a tls/ one, or past ServerNameMaxByteCount; an empty ALPN id,
+// one past AlpnMaxByteCount, or more ids than AlpnMaxCount; a protocol past ProtocolMaxByteCount; and a negative least
+// version are each invalid. A Find whose values sit at each bound is formed, and goes on to the gate.
+func TestSocketFindRefusesAFilterOrServerNamePastItsBounds(t *testing.T) {
+	world := newTestSocketWorld(t)
+	process := world.newProcess(func(settings *socketsservice.SocketsSettings) {
+		settings.ServerNameMaxByteCount = 20
+		settings.Format.AlpnMaxCount = 2
+		settings.Format.AlpnMaxByteCount = 8
+		settings.Format.ProtocolMaxByteCount = 4
+	})
+	networkId := testSocketId()
+	edge := world.newEdge(1)
+	dialer := world.newSidecar(networkId)
+	process.gate.Load(networkId)
+	edgeFind := func(args *sidecar.SocketFindArgs) *sidecar.SocketFindArgs {
+		args.Name = "tls/443/blog"
+		args.NetworkId = &networkId
+		args.ClientIds = edge.clientIdArgs()
+		return args
+	}
+	for index, call := range []struct {
+		token string
+		args  *sidecar.SocketFindArgs
+	}{
+		{token: dialer.token, args: &sidecar.SocketFindArgs{NameToken: testSocketTokenPath(t, 1), NetworkId: &networkId, ServerName: "app.customer.example"}},
+		{token: edge.token, args: &sidecar.SocketFindArgs{Name: "smtp/25/mx", NetworkId: &networkId, ClientIds: edge.clientIdArgs(), ServerName: "app.customer.example"}},
+		{token: edge.token, args: edgeFind(&sidecar.SocketFindArgs{Protocol: "tls", ServerName: "www.app.customer.example"})},
+		{token: edge.token, args: edgeFind(&sidecar.SocketFindArgs{Protocol: "tls", Alpn: []string{"h2", ""}})},
+		{token: edge.token, args: edgeFind(&sidecar.SocketFindArgs{Protocol: "tls", Alpn: []string{"http/1.1x"}})},
+		{token: edge.token, args: edgeFind(&sidecar.SocketFindArgs{Protocol: "tls", Alpn: []string{"h2", "http/1.1", "h3"}})},
+		{token: edge.token, args: edgeFind(&sidecar.SocketFindArgs{Protocol: "tlsv1"})},
+		{token: edge.token, args: edgeFind(&sidecar.SocketFindArgs{Protocol: "tls", MinVersion: -1})},
+	} {
+		code, result := process.find(call.token, call.args)
+		if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeInvalid {
+			t.Errorf("call %d answered %d, %+v", index, code, result)
+		}
+	}
+	if count := world.fakeStore.OpCount("Pick"); count != 0 {
+		t.Fatalf("%d picks", count)
+	}
+	// at each bound the Find is formed: nothing publishes tls/443/blog, so the gate denies it
+	code, result := process.find(edge.token, edgeFind(&sidecar.SocketFindArgs{
+		Protocol:   "tls",
+		Alpn:       []string{"h2", "http/1.1"},
+		MinVersion: 1,
+		ServerName: "app.customer.example",
+	}))
+	if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeDenied {
+		t.Fatalf("a Find at its bounds answered %d, %+v", code, result)
+	}
+	// and the first two without their server name are formed too, so the name alone made them invalid
+	for index, args := range []*sidecar.SocketFindArgs{
+		{NameToken: testSocketTokenPath(t, 1), NetworkId: &networkId},
+		{Name: "smtp/25/mx", NetworkId: &networkId, ClientIds: edge.clientIdArgs()},
+	} {
+		token := dialer.token
+		if args.Name != "" {
+			token = edge.token
+		}
+		if code, result := process.find(token, args); code != http.StatusOK || (result.Error != nil && result.Error.Code == sidecar.SocketErrorCodeInvalid) {
+			t.Errorf("call %d without its server name answered %d, %+v", index, code, result)
+		}
+	}
+}
+
 // The kill set refuses a tls/ name before anything is read (§13.9).
 func TestSocketFindRefusesAKilledName(t *testing.T) {
 	world := newTestSocketWorld(t)
