@@ -136,6 +136,22 @@ type SearchHit struct {
 	Correction string
 	// "": this device; else the answering indexer's config name (§11.14).
 	By string
+	// What the row holds beside its fields (§11.14's row; search.proto's SearchHit): the doc_key, the same on every
+	// reader; the doc kind (1 file, 2 mail, 3 record, 4 derived); whether a tainted run wrote the version, and whether
+	// it came from outside the network or by an import; and a run's or claim's started and expires, zero where none.
+	DocKey  [16]byte
+	DocKind int
+	Tainted bool
+	Outside bool
+	Started time.Time
+	Expires time.Time
+	// §16.10's partition by name: local, current, previous, older or all; "" for a scan of a ref with no index.
+	PartitionName string
+	// §16.10's trust relative to the reader (search_trust.go): own, member or untrusted; "" until judged, which reads
+	// untrusted. An indexer's hit carries the trust it judged for its requester.
+	Trust SearchTrust
+	// A stub (§16.10's withhold row): an untrusted hit with its text withheld, or one whose text held a credential.
+	Withheld bool
 }
 
 // §5.4's progress, which each page carries.

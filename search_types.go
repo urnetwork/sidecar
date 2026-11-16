@@ -131,8 +131,21 @@ func searchHitOf(hit *searchRankedHit) SearchHit {
 	if hit.partition == searchPartitionAll {
 		result.Partition = SearchPartitionAll
 	}
+	result.PartitionName = searchPartitionName(hit.partition, hit.scanned)
+	if !hit.scanned {
+		result.DocKey = hit.key
+	}
 	if hit.row != nil {
 		result.Path = hit.row.locator
+		result.DocKind = int(hit.row.docKind)
+		result.Tainted = hit.row.flags&indexRowTainted != 0
+		result.Outside = hit.row.flags&indexRowOutside != 0
+		if hit.row.startedSeconds != 0 {
+			result.Started = time.Unix(int64(hit.row.startedSeconds), 0).UTC()
+		}
+		if hit.row.expiresSeconds != 0 {
+			result.Expires = time.Unix(int64(hit.row.expiresSeconds), 0).UTC()
+		}
 		for field := indexFieldSubject; field <= indexFieldTitle; field += 1 {
 			if text := hit.row.fields[field]; text != "" {
 				result.Fields = append(result.Fields, SearchField{Field: field, Text: text})
@@ -142,7 +155,11 @@ func searchHitOf(hit *searchRankedHit) SearchHit {
 			if writer, err := ParseId(hit.row.fields[searchFieldWriter]); err == nil {
 				result.Signer = writer
 			}
-			for field := searchFieldWriter + 1; field <= indexFieldLast; field += 1 {
+			for field := indexFieldFirstRegistered; field <= indexFieldLast; field += 1 {
+				if field == searchFieldWriter {
+					// the hit's Signer
+					continue
+				}
 				if text := hit.row.fields[field]; text != "" {
 					result.Fields = append(result.Fields, SearchField{Field: field, Text: text})
 				}
@@ -160,6 +177,25 @@ func searchHitOf(hit *searchRankedHit) SearchHit {
 		result.State = SearchPossible
 	}
 	return result
+}
+
+// §16.10's name of the partition a hit came from: local, current, previous, older or all; "" for a scan of a ref with
+// no index (§16.10's source content).
+func searchPartitionName(partition searchPartitionKind, scanned bool) string {
+	if scanned {
+		return ""
+	}
+	switch partition {
+	case searchPartitionLocal:
+		return "local"
+	case searchPartitionPrevious:
+		return "previous"
+	case searchPartitionOlder:
+		return "older"
+	case searchPartitionAll:
+		return "all"
+	}
+	return "current"
 }
 
 // About the bytes a hit takes in an MCP page (§16.10's result row): its strings and a fixed share for the rest, so a
