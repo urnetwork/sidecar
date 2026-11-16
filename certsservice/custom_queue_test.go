@@ -1,7 +1,8 @@
-// The pure half of Team custom-domain certificates (TLS-M6-05; DESIGN-DETAILS 17.2.8, 17.2.11, 17.6; QD-990): the
-// replayed bucket's level and wait, never above a reference bucket fed the same spends and equal to it after a quiet
-// window, and 17.4's pacing of a host's devices; the failure backoff; the renew time spread across the ARI window over
-// 10,000 ids; the custom branch's CSR test; and the settings' refusals.
+// The pure half of Team custom-domain certificates (TLS-M6-05; DESIGN-DETAILS 17.2.8, 17.2.11, 17.6; QD-990, QD-994):
+// the replayed bucket's level and wait, never above a reference bucket fed the same spends whatever the retention and
+// equal to it with a quiet window within the retention, and 17.4's pacing of a host's devices; the failure backoff;
+// the renew time spread across the ARI window over 10,000 ids; the custom branch's CSR test; and the settings'
+// refusals.
 
 package certsservice_test
 
@@ -22,7 +23,7 @@ import (
 func TestCertsCustomBucketLevelAndWait(t *testing.T) {
 	now := time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
 	set := certsservice.DefaultCertsCustomSettings().SetBucket()
-	if set.Capacity != 5 || set.Refill != 34*time.Hour || set.ReplaySpan() != 2*5*34*time.Hour {
+	if set.Capacity != 5 || set.Refill != 34*time.Hour || set.Retention != 15*24*time.Hour {
 		t.Fatalf("the set bucket: %+v", set)
 	}
 	// a replay with no spends is full
@@ -40,45 +41,40 @@ func TestCertsCustomBucketLevelAndWait(t *testing.T) {
 	if wait := set.Wait(spends, now, 1); wait != 0 {
 		t.Fatalf("the wait for one: %v", wait)
 	}
-	// the replay starts empty two windows back, so the burst's window reads full at its start and a refill later the
-	// burst reads two, the truth, where one window back read one (QD-990)
+	// a quiet window precedes the burst, so the replay starts full there and a refill later reads two, the truth
 	if level := set.Level(spends, now.Add(34*time.Hour)); level != 2 {
 		t.Fatalf("a refill on: %v", level)
 	}
 	if wait := set.Wait(spends, now.Add(34*time.Hour), 2); wait != 0 {
 		t.Fatalf("the wait for two a refill on: %v", wait)
 	}
+	// a window after the last spend the bucket is full
 	if level := set.Level(spends, now.Add(5*34*time.Hour)); level != 5 {
 		t.Fatalf("a window on: %v", level)
 	}
-	if level := set.Level(spends, now.Add(30*24*time.Hour)); level != 5 {
-		t.Fatalf("long after: %v", level)
-	}
-	// spread spends, one each refill, after a quiet window: each token is back before the next spend, so four
-	// remain, as a bucket full before them holds
+	// spread spends, one each refill: each token is back before the next spend, so four remain
 	spread := []time.Time{now.Add(-3 * 34 * time.Hour), now.Add(-2 * 34 * time.Hour), now.Add(-34 * time.Hour), now}
 	if level := set.Level(spread, now); level != 4 {
 		t.Fatalf("spread spends: %v", level)
 	}
-	// a spend inside the replay but before the window is refilled by now; one before the replay counts for nothing
+	// a spend a window back is refilled; spends before the retention, or exactly at its start, count for nothing
 	if level := set.Level([]time.Time{now.Add(-6 * 34 * time.Hour)}, now); level != 5 {
 		t.Fatalf("an old spend: %v", level)
 	}
 	if level := set.Level([]time.Time{now.Add(-11 * 34 * time.Hour), now.Add(-11 * 34 * time.Hour)}, now); level != 5 {
-		t.Fatalf("spends before the replay: %v", level)
+		t.Fatalf("spends before the retention: %v", level)
 	}
-	// a spend exactly at the replay's start has left it, which is open there
 	if level := set.Level([]time.Time{set.ReplayStart(now)}, now); level != 5 {
-		t.Fatalf("a spend at the replay's start: %v", level)
+		t.Fatalf("a spend at the retention's start: %v", level)
 	}
-	// 17.2.8's literal replay, one window back, for comparison: the burst reads one a refill on
-	literal := certsservice.CertsCustomBucket{Capacity: 5, Refill: 34 * time.Hour, Windows: 1}
-	if level := literal.Level(spends, now.Add(34*time.Hour)); level != 1 {
-		t.Fatalf("one window back, a refill on: %v", level)
+	// a spend each refill reaching back past the retention: no quiet window lies within it, so the replay starts
+	// empty at its start, 20 h before the oldest retained spend, and stays under the truth's four
+	chain := []time.Time{}
+	for at := now; !at.Before(now.Add(-374 * time.Hour)); at = at.Add(-34 * time.Hour) {
+		chain = append(chain, at)
 	}
-	// below one window reads as one
-	if (certsservice.CertsCustomBucket{Capacity: 5, Refill: 34 * time.Hour}).ReplaySpan() != literal.ReplaySpan() {
-		t.Fatalf("no window count")
+	if level := set.Level(chain, now); 1 <= level || level != float64(20*time.Hour-34*time.Hour)/float64(34*time.Hour) {
+		t.Fatalf("a chain past the retention: %v", level)
 	}
 }
 
@@ -110,84 +106,87 @@ func (self *testCertsCustomReference) run(start time.Time, stepCount int, stepMa
 	return spends, end, truth
 }
 
-// A reference bucket, full long before the replay and fed the same spends, never holds less than the replay: the
-// replay starts empty, so it never counts more than the truth, whatever its window count (17.2.8, C5, QD-990).
+// A reference bucket, full long before and fed the same spends, never holds less than the replay, whatever the
+// retention: the replay starts full only where a quiet window shows the bucket full, else empty (17.2.8, C5, QD-994).
 func TestCertsCustomBucketNeverAboveTheTruth(t *testing.T) {
 	random := mathrand.New(mathrand.NewPCG(1, 2))
 	start := time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
-	for _, windows := range []int{1, 2, 3} {
-		bucket := certsservice.CertsCustomBucket{Capacity: 5, Refill: time.Hour, Windows: windows}
+	for _, retention := range []time.Duration{5 * time.Hour, 10 * time.Hour, 30 * time.Hour, 200 * time.Hour} {
+		bucket := certsservice.CertsCustomBucket{Capacity: 5, Refill: time.Hour, Retention: retention}
 		reference := &testCertsCustomReference{random: random, capacity: 5, refill: time.Hour}
 		for round := range 2000 {
-			spends, end, truth := reference.run(start, 24, 3*time.Hour, 3*time.Hour)
+			spends, end, truth := reference.run(start, 24, 6*time.Hour, 3*time.Hour)
 			if level := bucket.Level(spends, end); truth+1e-9 < level {
-				t.Fatalf("%d windows, round %d: the replay holds %v, the truth %v", windows, round, level, truth)
+				t.Fatalf("a retention of %v, round %d: the replay holds %v, the truth %v", retention, round, level, truth)
 			}
 		}
 	}
 }
 
-// With no spend in the first of its two windows, the replay is full where its second starts, as the truth is, so
-// it reads the truth exactly (QD-990).
+// With a quiet window within the retention, the replay reads the truth exactly, whatever spends and gaps follow it
+// (QD-994).
 func TestCertsCustomBucketReadsTheTruthAfterAQuietWindow(t *testing.T) {
 	random := mathrand.New(mathrand.NewPCG(3, 4))
-	bucket := certsservice.CertsCustomBucket{Capacity: 5, Refill: time.Hour, Windows: 2}
-	window := time.Duration(bucket.Capacity) * bucket.Refill
+	// every run spans at most 24 × 8 h and 8 h, so a retention of 250 h holds a quiet window before its first spend
+	bucket := certsservice.CertsCustomBucket{Capacity: 5, Refill: time.Hour, Retention: 250 * time.Hour}
 	start := time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
 	reference := &testCertsCustomReference{random: random, capacity: 5, refill: time.Hour}
-	for round := range 2000 {
-		// every spend and the end inside one window from start, which a quiet window precedes
-		spends, end, truth := reference.run(start, 12, 20*time.Minute, 20*time.Minute)
-		if window < end.Sub(start) {
-			continue
-		}
+	for round := range 4000 {
+		spends, end, truth := reference.run(start, 24, 8*time.Hour, 8*time.Hour)
 		if level := bucket.Level(spends, end); 1e-9 < math.Abs(level-truth) {
 			t.Fatalf("round %d: the replay holds %v, the truth %v", round, level, truth)
 		}
 	}
 }
 
-// 17.4's pacing on the set bucket with the defaults: after a burst of four certificates for a host, the fifth to the
-// ninth device are each granted 34 h after the one before, and each refusal's wait is answered by a grant (QD-990).
-// A replay of two windows reaches a full bucket only through the ninth: the tenth device's replay starts within the
-// burst's window, reads one token under the truth, and waits until the burst leaves the replay, 340 h after it.
+// 17.4's pacing on the set bucket: after a burst of four certificates for a host, each further device is granted 34 h
+// after the one before, and each refusal's wait is answered by a grant, while the host's busy stretch is shorter than
+// the retention less one window (QD-994). With the default 15 d that holds through the ninth device, 170 h after the
+// burst; the tenth's turn at 204 h finds no quiet window within the retention, reads one token under the truth, and
+// is granted only 340 h after the burst, a window after the ninth. A 16 d retention paces the tenth at 204 h.
 func TestCertsCustomSetBucketPacesDevices(t *testing.T) {
+	pace := func(settings *certsservice.CertsCustomSettings, paced int) (time.Time, []time.Time) {
+		set := settings.SetBucket()
+		need := settings.SetReserve + 1
+		burst := time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
+		spends := []time.Time{burst, burst, burst, burst}
+		now := burst
+		for device := 5; device < 5+paced; device += 1 {
+			wait := set.Wait(spends, now, need)
+			if wait != 34*time.Hour {
+				t.Fatalf("a retention of %v, device %d: a wait of %v", set.Retention, device, wait)
+			}
+			now = now.Add(wait)
+			if wait := set.Wait(spends, now, need); wait != 0 {
+				t.Fatalf("a retention of %v, device %d: refused at its retry, %v more", set.Retention, device, wait)
+			}
+			spends = append(spends, now)
+		}
+		return now, spends
+	}
 	settings := certsservice.DefaultCertsCustomSettings()
 	set := settings.SetBucket()
 	need := settings.SetReserve + 1
-	burst := time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
-	spends := []time.Time{burst, burst, burst, burst}
-	now := burst
-	for device := 5; device <= 9; device += 1 {
+	now, spends := pace(settings, 5)
+	burst := spends[0]
+	// the tenth: refused at each retry until a window after the ninth
+	for now.Sub(burst) < 340*time.Hour {
 		wait := set.Wait(spends, now, need)
-		if wait != 34*time.Hour {
-			t.Fatalf("device %d: a wait of %v", device, wait)
+		if wait == 0 {
+			t.Fatalf("the tenth device granted %v after the burst", now.Sub(burst))
 		}
 		now = now.Add(wait)
-		if wait := set.Wait(spends, now, need); wait != 0 {
-			t.Fatalf("device %d: refused at its retry, %v more", device, wait)
+		if burst.Add(340 * time.Hour).Before(now) {
+			now = burst.Add(340 * time.Hour)
 		}
-		spends = append(spends, now)
-	}
-	// the tenth: refused at each 34 h retry until the burst leaves the replay
-	for retry := range 4 {
-		wait := set.Wait(spends, now, need)
-		if wait != 34*time.Hour {
-			t.Fatalf("the tenth device, retry %d: a wait of %v", retry, wait)
-		}
-		now = now.Add(wait)
-		if now.Sub(burst) < set.ReplaySpan() {
-			if wait := set.Wait(spends, now, need); wait == 0 {
-				t.Fatalf("the tenth device granted %v after the burst", now.Sub(burst))
-			}
-		}
-	}
-	if now = now.Add(34 * time.Hour); now.Sub(burst) != set.ReplaySpan() {
-		t.Fatalf("the replay's span is %v", set.ReplaySpan())
 	}
 	if wait := set.Wait(spends, now, need); wait != 0 {
-		t.Fatalf("the tenth device once the burst left the replay: %v", wait)
+		t.Fatalf("the tenth device a window after the ninth: %v", wait)
 	}
+	// a retention past the tenth's busy stretch and a window paces it at 34 h
+	longer := certsservice.DefaultCertsCustomSettings()
+	longer.SpendRetention = 16 * 24 * time.Hour
+	pace(longer, 6)
 }
 
 func TestCertsCustomFailureBackoffDoublesToItsCap(t *testing.T) {
@@ -269,10 +268,8 @@ func TestCertsCustomSettingsRefuseWhatLeavesARuleUnenforced(t *testing.T) {
 		func(settings *certsservice.CertsCustomSettings) { settings.HoldMax = settings.HoldDefault - 1 },
 		func(settings *certsservice.CertsCustomSettings) { settings.LapseWarnFraction = 0.9 },
 		func(settings *certsservice.CertsCustomSettings) { settings.ChainMaxCount = 0 },
-		func(settings *certsservice.CertsCustomSettings) { settings.ReplayWindowCount = 0 },
-		// spends purged inside a replay would read the set bucket above the truth: 8 d against its 2 × 170 h
-		func(settings *certsservice.CertsCustomSettings) { settings.SpendRetention = 8 * 24 * time.Hour },
-		func(settings *certsservice.CertsCustomSettings) { settings.ReplayWindowCount = 3 },
+		// a retention shorter than the domain bucket's 7 d window holds no quiet window of it
+		func(settings *certsservice.CertsCustomSettings) { settings.SpendRetention = 6 * 24 * time.Hour },
 	} {
 		settings := certsservice.DefaultCertsCustomSettings()
 		change(settings)

@@ -1013,6 +1013,81 @@ func (self *BridgeNet) RevokeDevice(device *BridgeNetDevice) uint64 {
 	return self.Land(self.admission.Owner(), bridge.SignedType_SIGNED_SIDECAR_REVOKE, revoke)
 }
 
+// A sidecar's forwarding Delegation (§7.9's forwarding row, D-TEAM-33; owner decision 197; BRIDGE-M8-07): the id the
+// log gave it, the forwarding key its app's VPN component would hold, which never leaves the component there and here
+// signs the subject's WindowDelegations alone, and the position it landed at.
+type BridgeNetForwarding struct {
+	Subject      *BridgeNetDevice
+	DelegationId []byte
+	Key          ed25519.PrivateKey
+	At           uint64
+}
+
+// Files device's forwarding Delegation, signed by its own identity key as §18.6's setup signs it, for a forwarding key
+// from label and no host client, which must land; a newer one of the same device supersedes the one live before it. A
+// host compiles it into the device's BridgeIdentity at its next adoption (Follow).
+func (self *BridgeNet) FileForwarding(device *BridgeNetDevice, label string) *BridgeNetForwarding {
+	self.t.Helper()
+	statement, key := self.admission.DelegationStatement("bridge forwarding "+label, nil, 0, 0)
+	statement.Forward = &bridge.ForwardScope{ForwardSidecarId: device.SidecarId().Bytes()}
+	signed := self.admission.Sign(device.Device, bridge.SignedType_SIGNED_DELEGATION, statement)
+	self.admission.MustLand(signed)
+	return &BridgeNetForwarding{
+		Subject:      device,
+		DelegationId: AdmissionStatementId(signed),
+		Key:          key,
+		At:           self.admission.Tip().GetVersion(),
+	}
+}
+
+// A DelegationRevoke of forwarding with since_n 0, signed by signer, its own sidecar's device or an admin's (§7.9's
+// forwarding row), which must land: the position it landed at.
+func (self *BridgeNet) RevokeForwarding(signer *BridgeNetDevice, forwarding *BridgeNetForwarding) uint64 {
+	self.t.Helper()
+	return self.Land(signer.Device, bridge.SignedType_SIGNED_DELEGATION_REVOKE, self.admission.DelegationRevoke(forwarding.DelegationId, 0))
+}
+
+// A window's WindowDelegation as an app's forwarding signer writes it (§18.6's Signing; §17.9's sign row): the
+// subject's own over this window client and its key, to the window's host, lapsing DelegationLifetime past the Net's
+// clock, signed by forwarding's key with signer_id the Delegation's 32-byte id and key_id the SHA-256 of the key.
+// edit, nil for none, changes the body before it is signed and keyId, nil for the key's digest, the key id it names.
+func (self *BridgeNet) SignForwardingDelegation(window *BridgeNetWindow, forwarding *BridgeNetForwarding, edit func(delegation *bridge.WindowDelegation), keyId []byte) []byte {
+	self.t.Helper()
+	delegation := &bridge.WindowDelegation{
+		NetworkId:             self.NetworkId().Bytes(),
+		SubjectSidecarId:      window.Subject.SidecarId().Bytes(),
+		WindowClientId:        window.Client.ClientId.Bytes(),
+		WindowClientPublicKey: window.Client.Client.ClientKeyManager().PublicKey(),
+		TargetSidecarId:       window.Host.Device.SidecarId().Bytes(),
+		NotAfterMs:            self.net.Clock().Now().Add(self.settings.DelegationLifetime).UnixMilli(),
+	}
+	if edit != nil {
+		edit(delegation)
+	}
+	if keyId == nil {
+		keySha256 := sha256.Sum256(forwarding.Key.Public().(ed25519.PublicKey))
+		keyId = keySha256[:]
+	}
+	// written whole here, not through bridge.WindowDelegationSigned, whose own checks refuse to sign the malformed
+	// key ids a refusal must reach the host with
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(delegation)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	signedType := bridge.SignedType_SIGNED_WINDOW_DELEGATION
+	signed, err := proto.MarshalOptions{Deterministic: true}.Marshal(&bridge.Signed{
+		Body:      body,
+		SignerId:  bytes.Clone(forwarding.DelegationId),
+		KeyId:     bytes.Clone(keyId),
+		Signature: ed25519.Sign(forwarding.Key, bridge.SignedBytes(bridge.SignedPurposeWindowDelegation, signedType, body)),
+		Type:      uint32(signedType),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return signed
+}
+
 // Waits until every host's follower stands at the network's tip and its bridge has published what it adopted
 // there, failing the test past WaitTimeout.
 func (self *BridgeNet) Follow() {
