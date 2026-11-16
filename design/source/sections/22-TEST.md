@@ -1266,7 +1266,10 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
               rotation, and every read, ReaderWrap, epoch, GroupInfo and recovery route                           M7-out
               refuses it; a depositor served an older, unexpired GenRotate after a removal
               refuses to seal, with evs's gate off; a deposit grant revoked or expired, the
-              sidecar still admitted, is refused at evs within §8.9's 5 s
+              sidecar still admitted, is refused at evs within §8.9's 5 s; a GenRotate whose
+              drop_not_after_ms passes its time_ms + DropKeyLifetime + 10 min is refused by
+              members and the depositor; at M7 a writer back with nothing to ingest renews a
+              drop key with under 7 days left by a SCHEDULE rotation (owner decision 357)
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target
@@ -2136,7 +2139,9 @@ FS-97  §7,18  stale page Workers (D-TEAM-29) on a fake clock: a member's page W
               it again; a kill between an admission and its revocations: the restart re-checks
               and posts the same statements, one entry each; a Worker that resyncs after its
               admitting device last fetched the group, during a retry, or before a k = 2
-              proposal's cosign is not revoked
+              proposal's cosign is not revoked; a Remove of a leaf whose credential shows a
+              change inside the window, from a dishonest writer leaf, is refused by a member
+              one day old, which judges it from the tree alone (§10.9)
 FS-98  §5,18  a member revokes another of its own devices (D-CORE-20) in a personal network    I-4,15,FI-2 T2+T3  M3-out;
               and a Team with self_admit on and off, from a phone app with a presence signer,              +T4    Team at
               a remote-mode desktop app signing the first call's bytes, and ur devices revoke                     M6-out;
@@ -2482,31 +2487,31 @@ FS-116 §11,19 the governor alone on the fake clock with exact prices (k = 1) an
               a mutant that debits funded P2 from T as well admits ~7.3 pushes an interval and
               fails
 FS-117 §10,11 P0 alone past the refill for 24 h of fake counters on one metadata set, every    FI-3,14     T2     M2-out
-              uploader, group and network under its own rate: 100 Teams of 5,000 admissions,
-              each revoking a sidecar every 5 min, each revocation asking a config and a
-              directory rotation of ~6,000 deliveries, with full 1,000-leaf Removes, 16-slot
-              ERASEs at each network's 60 a minute, 10,000-slot ERASEs and --now shreds of
-              1M-object repos, a Pro network's pushes and 2x year one's mix beside them, and,
-              in other groups, a SCHEDULE and a REQUEST rotation whose claims state cause
-              REMOVE though no shrink, authorization expiry or compromise retirement lies past
-              gen/<g>'s auth pin; then the storm stops and the run goes on 24 h; then again
-              with the governor killed for 10 min, its processes on fallback, and again with
-              {nvb_<set>} lost mid-storm: every P0 write issues on arrival, none queued,
-              refused or paced, every gate's close-to-reopen p99 stays under §10.6's 5 minutes
-              and nothing commits after a gate closes at a generation a revoked holder reads;
-              P1 and unfunded P2 issue nothing while P0 takes the refill, funded P2 nothing
-              past what B holds, and B never falls below zero; the two mislabeled rotations'
-              deliveries and claims are charged as P1 and shed; pushes and evacuation resume
-              within one interval of the storm's end, evacuation's oldest minute directories
-              first, T following its factor of B each interval; the other classes' writes hold
-              FI-14 (a) in every 24 h window, a lost state restarting B and W at zero; the P0
-              page fires within an hour of P0 passing the refill and never in a control day of
-              2x year one's mix with a --now shred of a 1M-object repo; the run reports P0's
-              forgiven excess by kind, the 24 h windows past 0.8 and 1 DWPD, the ramp's time
-              to half and 90% of r, the pushes shed and the oldest batch's age past 26 h;
-              §19.8's gauges and counters equal the oracle's; a mutant flooring T at a fifth
-              of the refill while B is empty, one queuing P0 behind B, and one repaying P0's
-              excess, B going below zero, each fail
+              uploader, group and network under its own rate in each process: 100 Teams of
+              5,000 admissions, each revoking a sidecar every 5 min, each revocation asking a
+              config and a directory rotation of ~6,000 deliveries, with full 1,000-leaf
+              Removes, 16-slot ERASEs at each network's 60 a minute, 10,000-slot ERASEs and
+              --now shreds of 1M-object repos, a Pro network's pushes and 2x year one's mix
+              beside them, and, in other groups, a SCHEDULE and a REQUEST rotation whose
+              claims state cause REMOVE though no shrink, authorization expiry or compromise
+              retirement lies past gen/<g>'s auth pin; then the storm stops and the run goes
+              on 24 h; then again with the governor killed for 10 min, its processes on
+              fallback, and again with {nvb_<set>} lost mid-storm: every P0 write issues on
+              arrival, none queued, refused or paced, every gate's close-to-reopen p99 stays
+              under §10.6's 5 minutes and nothing commits after a gate closes at a generation
+              a revoked holder reads; P1 and unfunded P2 issue nothing while P0 takes the
+              refill, funded P2 nothing past what B holds, and B never falls below zero; the
+              two mislabeled rotations' deliveries and claims are charged as P1 and shed;
+              pushes and evacuation resume within one interval of the storm's end,
+              evacuation's oldest minute directories first, T following its factor of B each
+              interval; the other classes' writes hold FI-14 (a) in every 24 h window, a lost
+              state restarting B and W at zero; the P0 page fires within an hour of P0 passing
+              the refill and never in a control day of 2x year one's mix with a --now shred of
+              a 1M-object repo; the run reports P0's forgiven excess by kind, the 24 h windows
+              past 0.8 and 1 DWPD, the ramp's time to half and 90% of r, the pushes shed and
+              the oldest batch's age past 26 h; §19.8's gauges and counters equal the
+              oracle's; a mutant flooring T at a fifth of the refill while B is empty, one
+              queuing P0 behind B, and one repaying P0's excess, B going below zero, each fail
 FS-118 §11,19 path-epoch copies for 7 days of fake clock on one metadata cluster, entries and  FI-1,6,14   T2     M2-out
               copy limits scaled by 1/100 together: at the planned copy load (live entries of
               rotating refs times epochs a day times 3: half the cluster's 21.6M operations a
@@ -2734,9 +2739,12 @@ data rule                     before a final freeze, only local, T3, canary and 
 
 ```text
 0x0010 interop artifact
-kem       X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519, and tmc/mls's encapsulation
-          and decapsulation equal it on fixed seeds; OpenMLS's 0x004D X-Wing agrees once the M0 KAT matches
-stacks    mls_* and tmc/mls (its provisional 0x004F, mapped to 0x0010) run one scripted lifecycle in both directions:
+kem       X-Wing KATs from the draft's vectors pass for Go's crypto/hpke MLKEM768X25519, DeriveKeyPair included,
+          the only independent X-Wing evidence, which the artifact says; tmc/mls's encapsulation and decapsulation
+          equal it on fixed seeds, a check of wiring, not of X-Wing, since tmc/mls runs that same code
+          (owner decision 359); OpenMLS's 0x004D X-Wing agrees once the M0 KAT matches
+stacks    mls_* and tmc/mls (its provisional 0x004F, patched to 0x0010 by a build overlay, §10.4) run one scripted
+          lifecycle in both directions:
           create, Add with Welcome, path commits, Remove, an external commit with ExternalInit, at least 10 epochs, a
           PrivateMessage decrypted per epoch; both compute equal epoch_authenticator and exporter outputs at every
           epoch, the "UR evs 1.0 kek" label included
@@ -2837,7 +2845,7 @@ None. PLAN.md says nothing about testing.
 | The governor's accounts charge P2 twice, let a class other than P0 issue while P0 holds the bucket empty, or keep the other classes stopped after a P0 storm ends, so pushes are refused early or the drives wear past the budget by more than P0's forgiven excess | Low | High | one conservation equation and FI-14 (a) and (b), checked after every step; FS-116's exact-cost schedule and its mutant before D-TEST-11's hardware run; FS-117's day of P0 alone past the refill, the day after it, and its mutants |
 | HE refuses port 25, blocking outbound conformance | Unknown | High | asked in M0 (§23.7) |
 | Test hooks reach a release, exposing keys or stalling steps | Low | Critical | build tag; `make check` |
-| A jetsam regression reaches users | Medium | Medium | surrogates; `make size` |
+| A jetsam regression reaches users | High | High | surrogates; `make size` |
 | A purge bug deletes a newest version's content | Low | Critical | observe mode and its soak (D-TEST-12); FI-16 model-checked; FS-64 to FS-71 |
 | The oracle shares a normalization bug with the index | Medium | Medium | written apart, sharing only the published tables; fixed vectors; 22.6's reference extractor |
 | A phone's "search more" leaks the query through what it fetches | Low | High | FI-23's trace equality; no body fetched before an open; a remote search's sizes and evs logs are FI-24's |

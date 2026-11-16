@@ -243,7 +243,7 @@ func TestPushOutsideTheFormat2GateIsRefusedVersioningAndRecorded(t *testing.T) {
 
 // Inside the gate with no stand-in for format 2's rules, EVS2-M10-06's own check the push: a versionless version
 // riding inline breaks the citation rule and answers 409 VERSIONING, recorded, nothing committing and the repo not
-// raised; and a DROP, whose rules are EVS2-M10-09's, answers 503, refusing nothing.
+// raised. A DROP's own rules are check_drop.go's (check_drop_test.go).
 func TestPushInTheGateIsCheckedByFormat2sOwnRules(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	fixture.openFormat2()

@@ -3,7 +3,8 @@ package evsservice
 // EVS2-M10-06's 5c and 5h for a format-2 push, each refusal with a passing twin (§22.8's twins rule): VERSIONING
 // final on a git-mode ref, a creates-only ref (deposit, erasure, a record-class stream) and in config and mailcfg
 // repos; recorded for versioning 1 under a lock in the state evs validates against, versioning 2 passing it and an
-// unlocked twin committing; a DROP waiting on its own task's rules (503); and the citation rule over what
+// unlocked twin committing; a DROP whose body no payload check gave refusing 503 (its own rules are check_drop.go's,
+// EVS2-M10-09); and the citation rule over what
 // step 4 read (FS-64's evs clauses): a kind-5 locator naming this push's versionless upload passes, one naming an
 // unmarked upload, another path's kind-5 content or a reuse source's is VERSIONING, a staged segment of this push
 // passes and cited again by a later version is refused, and an inline record in a versionless version is refused.
@@ -190,9 +191,9 @@ func TestCheckVersioningUnderALock(t *testing.T) {
 	requireCheckRefusal(t, "no state", CheckVersioning(unknown), EvsCheckReasonGateUnknown)
 }
 
-// A DROP's rules are another task's: it waits 503, refusing nothing, so none commits unchecked. A CUT's are
-// check_cut.go's (check_cut_test.go).
-func TestCheckFormat2WaitsOnDropRules(t *testing.T) {
+// A DROP's rules are check_drop.go's (check_drop_test.go): a view whose payload holds no checked body, which no route
+// builds, refuses 503, refusing nothing, so none commits unchecked. A CUT's are check_cut.go's (check_cut_test.go).
+func TestCheckFormat2DropWithoutItsBodyRefuses503(t *testing.T) {
 	fixture := newCheckFixture(t)
 	plan := fixture.plan()
 	plan.Changes = []*sidecar.EvsPlannedChange{{TokenPath: checkTestPath("a"), EntryVersion: fixture.versionedEntry(plan, 1, protocol.EvsVersioning_EVS_VERSIONING_KEPT,

@@ -218,9 +218,9 @@ A semiannual report counts requests by instrument and country, accounts affected
 | Counsel rejects owner decision 133's condition or a hold kind | Low | High | asked before holds ship (M5) |
 | A drop used to destroy evidence before a hold arrives | Low | Medium | the 7-day window keeps every byte for a hold to cover (owner decision 183); `now` drops stay visible in push history (evs-12); held drops delete nothing (owner decision 184) |
 | False reports | Medium | Medium | reporter classes, host-level first, appeals |
-| Free Sybil networks | High | Medium | probation, verification, the send gate, creation limits, label-scoped halts |
+| Free Sybil networks | High | High | probation, verification, the send gate, creation limits, label-scoped halts |
 | A shared lb address is listed, for mail or a user name's phishing (§13.16), also blocking api and connect ingress there; with no separate mail pool to drain to and no warm-up (owner decision 124), enough listings degrade sending and the shared api and connect ingress together (accepted) | Medium | High | breakers; the address leaves the sending set (§14.6); per-domain and per-network reputation; 1 h kills; delisting |
-| Without a policy, untagged sidecars and their agents reach providers' LAN and loopback (accepted, disclosed; owner decisions 50, 120) | Medium | High | §2.18's disclosure; policies on any tier (owner decision 73); suspension |
+| Without a policy, untagged sidecars and their agents reach providers' LAN and loopback (accepted, disclosed; owner decisions 50, 120) | High | High | §2.18's disclosure; policies on any tier (owner decision 73); suspension |
 
 ### 21.18 Phasing
 

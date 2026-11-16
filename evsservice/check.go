@@ -62,6 +62,12 @@ type PathRead struct {
 	// base to. Newest gives a window version's; a folded table keeps none, so step 4 reads its delta's at names_through
 	// (push_step4.go). 0 for any other path, and for one that does not stand as a directory.
 	DirectoryVersion uint64
+	// Where step 4 read the path's newest version, for 5h's fence (check_dropped.go): the epoch and token path of the
+	// entry it came from, the head's current ones for a window version; and that entry's drop mark, nil for none. A
+	// view built without them reads as the current epoch's path with no mark.
+	Epoch     uint64
+	TokenPath sidecar.EvsTokenPath
+	DropMark  *protocol.EvsDropMark
 }
 
 // A reuse source step 4 read: the committed version a reuse item names.
@@ -69,6 +75,11 @@ type ReuseRead struct {
 	Reuse *sidecar.EvsReuse
 	// The version committed in its ref's entry or window, nil when step 4 found none.
 	EntryVersion *protocol.EvsEntryVersion
+	// For 5h's fence: the epoch it was read in, its ref's current one, the drop mark of the entry step 4 read it
+	// from, nil for none, and whether its ref's head came from the cache, which no DROPPED refusal rests on.
+	Epoch      uint64
+	DropMark   *protocol.EvsDropMark
+	HeadCached bool
 }
 
 // Classifies a push against the storage limit: QuotaGate, or a test's stand-in. Answers from memory.
@@ -159,6 +170,14 @@ type PushView struct {
 	// A stand-in for format 2's rules of a push inside the gate, run at 5c in place of check_versioning.go's and
 	// check_citation.go's: a test's, to hold the gate to a push those rules would refuse. nil runs EVS2-M10-06's own.
 	Format2Rules func(view *PushView) *EvsCheckRefusal
+
+	// EVS2-M10-09's 5h fence (check_dropped.go): for the push's own ref and each reuse source's ref, the DROPs of
+	// action 1 in the window of the head step 4 read of it. nil at a format-1 instance, which knows no drop and runs
+	// no fence; a ref the map lacks has none.
+	Fences map[sidecar.Id]*EvsDropFence
+	// What step 4 read for a DROP's own rules (check_drop.go), nil for any other push and for a DROP's part, whose
+	// body rules are its seal's.
+	Drop *PushDropReads
 }
 
 // Whether the push's flags include flag.
@@ -185,8 +204,9 @@ func CheckPush(view *PushView) *EvsCheckRefusal {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no statement or payload in the view")
 	}
 	// format 2's 5c runs right after 5c's gate, so a format-2 push no rule yet checks answers 503 before a format-1
-	// rule could record a refusal of it; its 5h after format 1's
-	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckRefs, checkFormat2Refs, CheckGate, CheckIndexEpoch, CheckPathEpoch}
+	// rule could record a refusal of it; its 5h after format 1's. A DROP's kind and ref rules run before the refs
+	// table, so its final answers do not depend on which of the table's rules its changes meet first (check_drop.go)
+	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckDropRefs, CheckRefs, checkFormat2Refs, CheckGate, CheckIndexEpoch, CheckPathEpoch}
 	switch view.Stage {
 	case PushStageOnePart:
 		checks = append(checks, CheckBase, CheckPaths, CheckObjects)
@@ -197,7 +217,8 @@ func CheckPush(view *PushView) *EvsCheckRefusal {
 	default:
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "a view of no stage")
 	}
-	checks = append(checks, checkFormat2Objects)
+	// 5h's DROP rules and fence after format 1's 5h and the citation rule (check_drop.go, check_dropped.go)
+	checks = append(checks, checkFormat2Objects, CheckDropBoundary, CheckDropped)
 	for _, check := range checks {
 		if refusal := check(view); refusal != nil {
 			return refusal
