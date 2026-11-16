@@ -551,3 +551,123 @@ func TestGkmLateAsksKeepTheirPaceAndSince(t *testing.T) {
 		t.Error("an ask after its delivery did not start afresh")
 	}
 }
+
+// nginx's error page for status with its headers, as the lb answers when its tries at gkm's blocks failed or timed
+// out.
+func gkmTestLbAnswer(status int) (int, http.Header, []byte) {
+	text := fmt.Sprintf("%d %s", status, http.StatusText(status))
+	page := "<html>\r\n<head><title>" + text + "</title></head>\r\n<body>\r\n<center><h1>" + text + "</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+	return status, http.Header{"Content-Type": {"text/html"}, "Server": {"nginx"}}, []byte(page)
+}
+
+// QD-876: a 502 or 504 is the lb's answer and no answer from gkm at all, so it is ErrGkmNoAnswer and never a
+// *GkmError, on a read, a write and the Welcome's HEAD alike. A read does not go again on it, as it does not on a
+// transport error; nothing of nginx's page reaches the error; and a page past the reply bound is still no answer,
+// not an invalid reply.
+func TestGkmApiReadsTheLbs502And504AsNoAnswer(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusGatewayTimeout} {
+		clock := newGkmTestClock()
+		transport := &gkmTestTransport{}
+		transport.serve = func(request *gkmTestRequest) (int, http.Header, []byte) {
+			return gkmTestLbAnswer(status)
+		}
+		api := newGkmTestApi(t, transport, newGkmTestTokens(), clock)
+		scopes := gkmTestScopes(1, GkmScopeRoleWrite)
+		api.SetRepoScopes(scopes)
+		repoId, groupId := scopes[0].RepoId, NewId()
+		ctx := context.Background()
+
+		noAnswer := func(name string, err error) {
+			t.Helper()
+			if !errors.Is(err, ErrGkmNoAnswer) {
+				t.Fatalf("%d: %s: %v", status, name, err)
+			}
+			if gkmError, refused := GkmErrorOf(err); refused {
+				t.Errorf("%d: %s read as gkm's refusal: %+v", status, name, gkmError)
+			}
+			if errors.Is(err, ErrGkmReplyInvalid) || errors.Is(err, ErrGkmTokenRefused) {
+				t.Errorf("%d: %s read as another answer: %v", status, name, err)
+			}
+			if text := err.Error(); strings.Contains(text, "nginx") || strings.Contains(text, "html") || strings.Contains(text, "gkm.example") || strings.Contains(text, "test-gkm-token") {
+				t.Errorf("%d: %s: the error repeats the answer or the request: %s", status, name, text)
+			}
+		}
+
+		_, err := api.Group(ctx, repoId, groupId)
+		noAnswer("a read", err)
+		if count := len(transport.taken()); count != 1 {
+			t.Errorf("%d: a read was sent %d times", status, count)
+		}
+		select {
+		case wait := <-clock.armed:
+			t.Errorf("%d: a read waited %s to go again", status, wait)
+		default:
+		}
+		noAnswer("a commit", api.CommitEpoch(ctx, repoId, groupId, 3, &protocol.GkmEpochRequest{}))
+		noAnswer("a claim", api.ClaimGeneration(ctx, repoId, groupId, 2, &bridge.Signed{}))
+		noAnswer("a creation", api.CreateGroup(ctx, repoId, &protocol.GkmGroupCreateRequest{}))
+		stands, err := api.WelcomeStands(ctx, repoId, groupId, 7)
+		noAnswer("the Welcome's ask", err)
+		if stands {
+			t.Errorf("%d: a Welcome stands by the lb's answer", status)
+		}
+		// a read whose 404 means none
+		readerKey, err := api.ReaderKey(ctx, NewId())
+		noAnswer("a ReaderKey's read", err)
+		if readerKey != nil {
+			t.Errorf("%d: a ReaderKey by the lb's answer", status)
+		}
+
+		// a page past the reply bound: its body is never read
+		settings := DefaultGkmSettings()
+		settings.ReplyMaxByteCount = 16
+		bounded, err := NewGkmApi(&GkmApiArgs{GkmUrl: "https://gkm.example", Transport: transport, ServiceToken: newGkmTestTokens().serviceToken, Settings: settings, Clock: clock})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bounded.SetRepoScopes(scopes)
+		noAnswer("a write whose page is past the bound", bounded.CommitEpoch(ctx, repoId, groupId, 3, &protocol.GkmEpochRequest{}))
+	}
+}
+
+// QD-876's other half: every answer of gkm's own keeps its meaning with its body. A 409 and a 412 are refusals
+// carrying the winner, a 403 and a 404 refusals with none, a 429 and a 503 refusals of nothing with their
+// Retry-After, and none of them is no answer.
+func TestGkmApiKeepsAGkmRefusalWithItsBody(t *testing.T) {
+	winner := []byte("the winner gkm stored")
+	cases := []struct {
+		status     int
+		header     http.Header
+		body       []byte
+		winner     []byte
+		retryAfter time.Duration
+		nothing    bool
+	}{
+		{status: http.StatusConflict, body: winner, winner: winner},
+		{status: http.StatusPreconditionFailed, body: winner, winner: winner},
+		{status: http.StatusForbidden},
+		{status: http.StatusNotFound},
+		{status: http.StatusBadRequest},
+		{status: http.StatusTooManyRequests, header: http.Header{"Retry-After": {"7"}}, retryAfter: 7 * time.Second, nothing: true},
+		{status: http.StatusServiceUnavailable, header: http.Header{"Retry-After": {"2"}}, retryAfter: 2 * time.Second, nothing: true},
+		{status: http.StatusNotImplemented},
+	}
+	for _, c := range cases {
+		transport := &gkmTestTransport{}
+		transport.serve = func(request *gkmTestRequest) (int, http.Header, []byte) {
+			return c.status, c.header, c.body
+		}
+		api := newGkmTestApi(t, transport, newGkmTestTokens(), newGkmTestClock())
+		scopes := gkmTestScopes(1, GkmScopeRoleWrite)
+		api.SetRepoScopes(scopes)
+		// a write, which never goes again here
+		err := api.CommitEpoch(context.Background(), scopes[0].RepoId, NewId(), 3, &protocol.GkmEpochRequest{})
+		gkmError, refused := GkmErrorOf(err)
+		if !refused || errors.Is(err, ErrGkmNoAnswer) {
+			t.Fatalf("%d: not read as gkm's refusal: %v", c.status, err)
+		}
+		if gkmError.Status != c.status || !bytes.Equal(gkmError.Winner, c.winner) || gkmError.RetryAfter != c.retryAfter || gkmError.RefusesNothing() != c.nothing {
+			t.Errorf("%d: the refusal: %+v", c.status, gkmError)
+		}
+	}
+}

@@ -16,10 +16,13 @@
 // URLs carry opaque ids only, 32 lowercase hex characters (QD-442), and an error never repeats a url or a body
 // (I-13).
 //
-// Answers map to typed errors: 401 is ErrGkmTokenRefused, any other answer but a success is a *GkmError carrying its
-// status, its Retry-After and, for a 409 or 412, the winner gkm stored. A read retries a 429 or 503 after its
-// Retry-After; a write never retries here, since each flow resolves its own unknown outcome by rereading (§10.5's
-// Rotate, §10.6's late wraps).
+// Answers map to typed errors: 401 is ErrGkmTokenRefused, any other answer of gkm's but a success is a *GkmError
+// carrying its status, its Retry-After and, for a 409 or 412, the winner gkm stored. A 502 or 504 is the lb's
+// answer, no answer from gkm at all, and is ErrGkmNoAnswer, never a *GkmError (QD-876, as QD-758 has evs's client
+// read one): its callers take it as they take a transport error, so gkm is unreachable for KF7, and a write's
+// outcome is unknown and read back, never judged refused. A read retries a 429 or 503 after its Retry-After; a
+// write never retries here, since each flow resolves its own unknown outcome by rereading (§10.5's Rotate, §10.6's
+// late wraps).
 //
 // Safe for concurrent use.
 
@@ -68,12 +71,18 @@ var (
 	ErrGkmReplyInvalid = errors.New("gkm: reply invalid")
 	// The client holds no repo scope a call could present: its state gives it none yet.
 	ErrGkmNoScope = errors.New("gkm: no repo scope to present")
+	// The lb answered in gkm's place, a 502 or a 504, and gkm gave no answer at all (QD-876). gkm answers neither
+	// itself, and its routes buffer at the lb, so nginx answers one only after its tries at gkm's blocks failed or
+	// timed out, and a block may have applied a write before it died. Never read as a refusal: a caller takes it as
+	// it takes a transport error, gkm unreachable and a write's outcome unknown.
+	ErrGkmNoAnswer = errors.New("gkm: no answer")
 )
 
 // A service token for an audience url with scopes, Sidecar.ServiceToken's shape: for an in-process caller only.
 type GkmServiceTokenFunction func(ctx context.Context, resource string, scopes []string) (string, error)
 
-// Every answer of gkm's but a success (§10.14). Its text names the status and never a path, an id or a token.
+// Every answer of gkm's but a success (§10.14). Its text names the status and never a path, an id or a token. The
+// lb's 502 or 504 is no answer of gkm's and never one of these (ErrGkmNoAnswer).
 type GkmError struct {
 	Status int
 	// A 429's or 503's Retry-After.
@@ -298,7 +307,8 @@ func gkmBody(message proto.Message) ([]byte, error) {
 }
 
 // Sends call, retrying as call.retry allows, and answers a success's status and body, at most ReplyMaxByteCount, or
-// an error for any other answer.
+// an error for any other answer. Only gkm's own 429 or 503 goes again: no answer, the lb's 502 or 504 among them,
+// comes back at once, as a transport error does.
 func (self *GkmApi) do(ctx context.Context, call *gkmCall) (int, []byte, error) {
 	attempts := 1
 	if call.retry {
@@ -359,6 +369,10 @@ func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall) (int, []byte, err
 		return 0, nil, fmt.Errorf("gkm %s: %w", call.route, err)
 	}
 	defer response.Body.Close()
+	if gkmStatusIsNoAnswer(response.StatusCode) {
+		// the lb's answer: nothing of its body is read, so an error page past the bound or cut short changes nothing
+		return 0, nil, gkmErrorOfAnswer(call.route, response.StatusCode, response.Header, nil)
+	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, self.settings.ReplyMaxByteCount+1))
 	if err != nil {
 		return 0, nil, fmt.Errorf("%w: %s: the answer was cut short", ErrGkmReplyInvalid, call.route)
@@ -366,20 +380,40 @@ func (self *GkmApi) doOnce(ctx context.Context, call *gkmCall) (int, []byte, err
 	if self.settings.ReplyMaxByteCount < int64(len(body)) {
 		return 0, nil, fmt.Errorf("%w: %s: an answer past %d bytes", ErrGkmReplyInvalid, call.route, self.settings.ReplyMaxByteCount)
 	}
-	switch response.StatusCode {
-	case http.StatusOK, http.StatusCreated:
+	if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
 		return response.StatusCode, body, nil
-	case http.StatusUnauthorized:
-		return 0, nil, fmt.Errorf("%w: %s", ErrGkmTokenRefused, call.route)
 	}
-	gkmError := &GkmError{Status: response.StatusCode}
-	if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && 0 < seconds {
+	return 0, nil, gkmErrorOfAnswer(call.route, response.StatusCode, response.Header, body)
+}
+
+// Whether an answer of status is the lb's and none of gkm's: a 502 or a 504 (QD-876). gkm answers neither on any
+// route (§10.14), and no refusal of gkm's has a body form a 502 or 504 could carry (a 409's or 412's body is the
+// winner, and every other refusal has none), so no body is read to tell: every one is nginx's, when both of its
+// tries at gkm's blocks failed, or each passed its read timeout.
+func gkmStatusIsNoAnswer(status int) bool {
+	return status == http.StatusBadGateway || status == http.StatusGatewayTimeout
+}
+
+// The error an answer of route that is no success gives, from its status, header and body. A 401 is
+// ErrGkmTokenRefused. A 502 or 504 is ErrGkmNoAnswer, with nothing of its header or body read: the lb's answer says
+// nothing of what gkm did, so it carries no Retry-After and no winner, and it is no *GkmError, which every caller
+// reads as gkm's refusal. Any other status is gkm's refusal, a *GkmError with its Retry-After and, for a 409 or
+// 412, its body as the winner.
+func gkmErrorOfAnswer(route string, status int, header http.Header, body []byte) error {
+	switch {
+	case status == http.StatusUnauthorized:
+		return fmt.Errorf("%w: %s", ErrGkmTokenRefused, route)
+	case gkmStatusIsNoAnswer(status):
+		return fmt.Errorf("%w: %s: the lb answered %d", ErrGkmNoAnswer, route, status)
+	}
+	gkmError := &GkmError{Status: status}
+	if seconds, err := strconv.Atoi(header.Get("Retry-After")); err == nil && 0 < seconds {
 		gkmError.RetryAfter = time.Duration(seconds) * time.Second
 	}
-	if response.StatusCode == http.StatusConflict || response.StatusCode == http.StatusPreconditionFailed {
+	if status == http.StatusConflict || status == http.StatusPreconditionFailed {
 		gkmError.Winner = body
 	}
-	return 0, nil, gkmError
+	return gkmError
 }
 
 // Sends call and unmarshals a success's body into reply, which may be nil for none.
