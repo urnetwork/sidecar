@@ -102,11 +102,13 @@ func releaseStepSed(t testing.TB) string {
 	return ""
 }
 
-// What both twins start from beyond the fixture: the declaration the sed fills, and the documents
+// What both twins start from beyond the fixture: the declaration the sed fills, a file naming
+// operator-core and coretest, whose paths take separate tags (owner decision 251), and the documents
 // that stay out of the module.
 func (self *fixture) writeReleaseInputs() {
 	self.t.Helper()
 	self.write("sidecar.go", "package sidecar\n\nvar Version string = \"\"\n\nfunc Sidecar() {}\n")
+	self.write("host_test.go", "package sidecar\n\nimport (\n\t_ \"@operator-core@\"\n\t_ \"@operator-core@/coretest\"\n)\n")
 	self.write("LICENSE", fixtureMplLicense)
 	for _, name := range []string{"DESIGN.md", "DESIGN-REVIEW1.md", "HANDOFF.md", "FEEDBACK-SYSTEM.md", "design/source/a.md", "research_notes/a.md"} {
 		self.write(name, "a document\n")

@@ -248,6 +248,10 @@ type MailMessage struct {
 	Untrusted bool
 	// The message's bytes as received.
 	ByteCount uint64
+	// A receiver's deposit, internet mail, rather than a same-network one, and the SNI its sealed MailIngress names,
+	// empty for none: what a reader's mail_receiver_alarm judges (MAIL-M7-25).
+	ReceiverDeposit bool
+	Sni             string
 }
 
 // Whether a message's row marks it untrusted (R-MAIL-10, I-9): every label but MAIL_TLS_MEMBER_SIGNED, which only a
@@ -720,6 +724,7 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 	ingested := &MailMessage{
 		RepoId: self.repoId, Id: messageId, Month: month, Entry: entry, Label: label, DepositorId: depositorId,
 		Untrusted: MailEntryUntrusted(entry), ByteCount: uint64(len(message)),
+		ReceiverDeposit: mailReceiverDeposit(effective), Sni: dnsAsciiLower(effective.GetIngress().GetSni()),
 	}
 	self.noteReach(effective, ingested)
 	self.noteUsedAt(ctx, effective, parsed, receiveTimeMillis)
