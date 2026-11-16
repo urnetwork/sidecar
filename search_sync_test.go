@@ -50,6 +50,10 @@ type testSyncSource struct {
 	mutate func(statement *searchSyncStatement)
 	// Replays so far.
 	replays int
+	// The ref is a slot-keyed repo's (QD-845): each path's records share the one key of a slot of its own, at
+	// generation 1, in segments of generation 2, and a fetch takes each record's slot key from its slot object.
+	slotKeyed bool
+	slots     map[string]*testSearchSlot
 }
 
 func newTestSyncSource(t *testing.T, ref *testIndexRef, repoId Id, refId Id) *testSyncSource {
@@ -164,11 +168,36 @@ func (self *testSyncSource) Fetch(ctx context.Context, files []*indexFileVersion
 			plaintext[len(plaintext)-1] ^= 1
 		}
 		key := SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.path, Version: file.version}
+		if slot := self.slotOf(file.path); slot != nil {
+			// sealed under the path's slot key, with its block taken from the slot object the read answered (QD-845)
+			record := slot.record(self.t, key, SearchCachePartition{}, plaintext, 0, 2)
+			fetched = append(fetched, &searchSyncFetched{file: file, record: record.record})
+			continue
+		}
 		// sealed under RK_1, with its object key's block as its segment header carries it (QD-838)
 		record := newTestSearchRecord(self.t, key, SearchCachePartition{}, plaintext)
 		fetched = append(fetched, &searchSyncFetched{file: file, record: record.record})
 	}
 	return fetched, nil
+}
+
+// A slot-keyed ref's slot for path, made at its first fetch and kept by its later versions; nil for a general repo's.
+func (self *testSyncSource) slotOf(path string) *testSearchSlot {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !self.slotKeyed {
+		return nil
+	}
+	slot, ok := self.slots[path]
+	if !ok {
+		slot = newTestSearchSlot(self.repoId, path)
+		slot.addKey(self.t, 0, 1)
+		if self.slots == nil {
+			self.slots = map[string]*testSearchSlot{}
+		}
+		self.slots[path] = slot
+	}
+	return slot
 }
 
 // The fetch log, flattened.

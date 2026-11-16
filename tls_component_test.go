@@ -843,15 +843,22 @@ type testTlsLeaseCall struct {
 }
 
 // The sockets service as §9.5's lease: each call that reaches it holds each entry it carries for 45 s on its clock,
-// answering ok with the fixture's keys and urnetwork-edge. A suspended app's calls reach no service, which a failed
-// call stands in for.
+// answering ok with the fixture's keys and urnetwork-edge. A suspended app's calls reach no service: each is held,
+// whatever its context, until the test fails it. A frozen app sees its call fail only once it runs again, so the
+// registrar reads the failure's time after the clock's jump and never in the middle of it, where the test clock stops
+// at each timer on its way: a failure read there has its retry due, or fired, before the jump ends, and the app would
+// fail a second time while suspended and wait a doubled backoff.
 type testTlsLeaseService struct {
 	clock         Clock
 	registrar     *socketRegistrar
 	urnetworkEdge Id
 	calls         chan *testTlsLeaseCall
-	// the registrar's wait count at each call a suspended app made
-	failed chan uint64
+	// the registrar's wait count at each call a suspended app made, as the call is held
+	held chan uint64
+	// each value fails one held call
+	fail chan struct{}
+	// closed at the test's end, which fails every call still held
+	done <-chan struct{}
 
 	stateLock sync.Mutex
 	suspended bool
@@ -875,7 +882,11 @@ func (self *testTlsLeaseService) registrations(ctx context.Context, args *Socket
 		return false
 	}()
 	if suspended {
-		self.failed <- waits
+		self.held <- waits
+		select {
+		case <-self.fail:
+		case <-self.done:
+		}
 		return nil, errors.New("a suspended app's call reaches no service")
 	}
 	self.calls <- &testTlsLeaseCall{args: args, waits: waits}
@@ -966,10 +977,10 @@ func tlsListenTestVisitThroughAdmission(t *testing.T, fixture *testListenFixture
 }
 
 // §13.17's app listener through suspension, over the real registrar and admission (TLS-M8-01's foreground listen,
-// background lapse and resume): an app listens and is served; suspended, its calls reach no service while its clock
-// jumps two hours, so its 45 s lease lapses at the service, and nothing here closes the listener, its registration or
-// its entry; on resume the registrar's next try sends the whole set, which registers the same listen again, and a
-// visitor reaches Accept as before.
+// background lapse and resume): an app listens and is served; suspended, its heartbeat's call reaches no service and
+// hangs while its clock jumps two hours, so its 45 s lease lapses at the service, and nothing here closes the
+// listener, its registration or its entry; the call fails once, after the jump, and on resume the registrar's next
+// try sends the whole set, which registers the same listen again, and a visitor reaches Accept as before.
 func TestTlsListenerLapsesByLeaseAndRegistersAgainOnResume(t *testing.T) {
 	fixture := newTestListenFixture(t)
 	registrar := fixture.component.registrar
@@ -978,7 +989,9 @@ func TestTlsListenerLapsesByLeaseAndRegistersAgainOnResume(t *testing.T) {
 		registrar:     registrar,
 		urnetworkEdge: fixture.service.urnetworkEdge,
 		calls:         make(chan *testTlsLeaseCall, 64),
-		failed:        make(chan uint64, 64),
+		held:          make(chan uint64, 64),
+		fail:          make(chan struct{}, 64),
+		done:          t.Context().Done(),
 		leases:        map[string]time.Time{},
 	}
 	registrar.attach(t.Context(), service.registrations, fixture.generation.identity.IdentityPublicKey)
@@ -1002,11 +1015,18 @@ func TestTlsListenerLapsesByLeaseAndRegistersAgainOnResume(t *testing.T) {
 	// the heartbeat is armed
 	awaitTlsListenRegistrarWait(t, registrar, first.waits)
 
-	// suspended for two hours: the heartbeat's call reaches nothing, and the lease lapses
+	// suspended for two hours: the heartbeat's call reaches nothing and hangs through the jump, and the lease lapses
 	service.setSuspended(true)
 	fixture.clock.advance(2 * time.Hour)
-	waits := testSocketAwait(t, service.failed, "a suspended app's heartbeat")
+	waits := testSocketAwait(t, service.held, "a suspended app's heartbeat")
+	// the call fails where the jump left the clock, so the one retry is armed from there
+	service.fail <- struct{}{}
 	awaitTlsListenRegistrarWait(t, registrar, waits)
+	select {
+	case <-service.held:
+		t.Fatal("the suspended app called a second time before its retry was due")
+	default:
+	}
 	if service.leased(tlsFrontTestName) {
 		t.Error("the lease outlived the suspension")
 	}

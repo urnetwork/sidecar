@@ -10,7 +10,12 @@
 //
 // Each file: SearchCache.PutRecord, which keeps it only once its plaintext's SHA-256 is its entry version's
 // content_sha256, with what reopens it after the round beside it (QD-838): the source's record carries the 72 B block
-// its segment header held, wrapping its object key under fek_g, and its file id, which PutRecord keeps with g. Then
+// its segment header held, wrapping its object key under fek_g, and its file id, which PutRecord keeps with g. A
+// slot-keyed repo's record (record-class repos and group inboxes) has its key in a slot instead, and the source, while
+// its read holds the slot object, takes from it the 72 B block at the key the record's header names, exactly as the
+// slot carries it, and that key's generation, and gives the generation of the segment that carried the record
+// (SearchCacheRecord.SetSlotKey; QD-845); the engine passes all three to PutRecord with the record, which refuses a
+// slot-keyed record without them, so none is kept that could not reopen or that an ERASE's hint could not find. Then
 // indexValidateFile over the kept copy; then staged in the plan with its two times, the window or coverage its header
 // names, a small file's plaintext, and the version-table run built from it while its keys are at hand. A file that
 // fails either check is listed bad at that version, its copy dropped, and raises index_malformed {repo, ref, path,
@@ -284,7 +289,8 @@ func (self *SearchSync) stage(ctx context.Context, ref *searchSyncRef, plan *Sea
 	if record == nil {
 		return nil, fmt.Errorf("%w: a read answered no record", ErrSearchCacheArgs)
 	}
-	// the record is kept as this round's listing names it, whatever the source said of it
+	// the record is kept as this round's listing names it, whatever the source said of it, with what reopens it as the
+	// source took it at the read: its wrapped object key and file id, and a slot-keyed record's two generations
 	kept := *record
 	kept.Key, kept.RefVersion, kept.ContentSha256, kept.Partition = key, plan.Target.Version, wanted.ContentSha256, wanted.Partition
 	if err := cache.PutRecord(ctx, &kept); err != nil {
