@@ -7,8 +7,8 @@
 //	       where this device may re-add at its state, due WelcomeTimeout after the epoch's time, which is never past
 //	       this device's clock, so a stamp a server chose postpones no ask
 //	ask    once per watch, when due and when this device still may re-add: 200 ends the watch; 404 marks its
-//	       joiners Unwelcomed for Pending; a refusal ends it, since gkm will not tell this device; no answer leaves
-//	       it due
+//	       joiners Unwelcomed for Pending; a refusal ends it, since gkm will not tell this device; no answer, the
+//	       lb's 502 or 504 among them (QD-876), leaves it due
 //	valid  the watches hold only while this device's group is the one they name at the epoch they were last noted
 //	       at: a join, a resync or a re-form reaches an epoch by no commit this device saw, and it forgets them
 //
@@ -133,7 +133,8 @@ func (self *gkmGroupManager) dropWelcomeWatches() error {
 
 // The file header's ask, for each watch due at this device's clock, with the group's flow held: the engine's step
 // between its catch-up and Pending, so a re-add another leaf already committed has ended its watch before any ask.
-// An ask gkm does not answer fails nothing here; the watch stays due.
+// An ask gkm does not answer fails nothing here; the watch stays due. The lb's 502 or 504 is such an ask (QD-876):
+// ErrGkmNoAnswer is no refusal of gkm's, so it never drops a watch as a refusal does.
 func (self *gkmGroupManager) askWelcomesInFlow(ctx context.Context, state GkmAuthView, pins *gkmRepoPins) error {
 	client := self.client
 	record, err := self.pendingRecord()
@@ -168,11 +169,12 @@ func (self *gkmGroupManager) askWelcomesInFlow(ctx context.Context, state GkmAut
 			kept = append(kept, watch)
 			changed = true
 		case refused && !gkmError.RefusesNothing():
-			// gkm will not tell this device, whose token no longer carries rw there
+			// gkm's own answer: it will not tell this device, whose token no longer carries rw there
 			changed = true
 		case ctx.Err() != nil:
 			return ctx.Err()
 		default:
+			// no answer of gkm's, the lb's 502 or 504 among them, or one that refuses nothing: asked again
 			if client.log.V(1).Enabled() {
 				client.log.Infof("[gkm]the Welcome of epoch %d was not asked for: %v", watch.epoch, err)
 			}

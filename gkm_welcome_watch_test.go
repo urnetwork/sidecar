@@ -183,6 +183,42 @@ func TestAnAskGkmDoesNotAnswerIsAskedAgain(t *testing.T) {
 	}
 }
 
+// QD-876: an ask the lb answers 502 or 504 is no answer of gkm's. The watch survives it, where gkm's own refusal ends
+// one; no one is removed and the run fails nothing; the ask goes again at the next run, and gkm's 404 then brings the
+// re-add.
+func TestAnAskTheLbAnswersKeepsItsWatch(t *testing.T) {
+	world, d := newGkmWelcomeWatchWorld(t, 2, true)
+	b := world.flows[world.b]
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	world.advance(sidecar.DefaultGkmSettings().WelcomeTimeout)
+	for asked, status := range []int{http.StatusBadGateway, http.StatusGatewayTimeout} {
+		world.store.plantLb("WelcomeStands", status, true)
+		if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+			t.Fatalf("a run whose ask the lb answered %d: %v", status, err)
+		}
+		if newest, _ := world.store.newestEpoch(world.groupId); newest != 2 || world.store.callCount("WelcomeStands") != asked+1 {
+			t.Fatalf("the lb's %d: epoch %d, %d asks", status, newest, world.store.callCount("WelcomeStands"))
+		}
+		if _, epoch, watchEpochs := world.welcomeWatches(world.b); epoch != 2 || !slices.Equal(watchEpochs, []uint64{2}) {
+			t.Fatalf("the lb's %d: the watches at epoch %d: %v", status, epoch, watchEpochs)
+		}
+	}
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if newest, _ := world.store.newestEpoch(world.groupId); newest != 3 || world.store.callCount("WelcomeStands") != 3 {
+		t.Errorf("the ask answered: epoch %d, %d asks", newest, world.store.callCount("WelcomeStands"))
+	}
+	if epochs := world.store.welcomeEpochs(d); !slices.Equal(epochs, []uint64{3}) {
+		t.Errorf("d's Welcome pointers: %v", epochs)
+	}
+	if len(b.alarms) != 0 {
+		t.Errorf("the lb's answer alarmed: %+v", b.alarms[0])
+	}
+}
+
 // A joiner that committed has joined: the leaf that watched its Add adopts that commit and asks nothing, even where
 // gkm would answer 404.
 func TestAJoinerThatCommittedIsAskedAfterNoMore(t *testing.T) {

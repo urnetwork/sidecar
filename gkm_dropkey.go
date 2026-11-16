@@ -137,7 +137,7 @@ func (self *gkmGroupManager) newestDropGenerationInFlow(ctx context.Context, sta
 	}
 	var newest *GkmGeneration
 	first := true
-	for pageCount := 0; pageCount < gkmGenerationPageMaxCount; pageCount += 1 {
+	for pageCount := 0; pageCount < client.settings.GenerationPageMaxCount; pageCount += 1 {
 		reply, err := client.args.Api.DropKeys(ctx, self.repoId, since)
 		if err != nil {
 			return nil, err
@@ -253,7 +253,7 @@ func (self *GkmGroupClient) RenewDropKey(ctx context.Context, repoId Id) error {
 		return err
 	}
 	rotate := top.generation.Rotate
-	renewAt := time.UnixMilli(rotate.GetDropNotAfterMs()).Add(-gkmDropKeyRenewBefore)
+	renewAt := time.UnixMilli(rotate.GetDropNotAfterMs()).Add(-self.settings.DropKeyRenewBefore)
 	if 0 < len(rotate.GetDropPublicKey()) && self.clock.Now().Before(renewAt) {
 		return nil
 	}

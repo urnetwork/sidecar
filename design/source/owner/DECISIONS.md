@@ -1519,6 +1519,171 @@ The design-records track for §4 folded the answers below on 2026-11-16, each ci
     - Not taken: moving the forks into `v2026/` and rewriting each nested module's replaces at release.
     - Raised by the build (MAIL-M5-02; the build's ledger, QD-920, on the fork QD-193 added).
 
+## The build's owner questions on the sidecar core and the subprotocol (2026-11-06 to 2026-11-16)
+
+The design-records track for §5 and §6 folded the answers below on 2026-11-16, each citing its ledger id: the owner items of those sections decided or accepted in bulk on 2026-11-06 (279-285, 295, 296), those the owner decided one at a time from 2026-11-11 to 2026-11-15, and the recommendations of 2026-11-15 that the owner's instruction of 2026-11-16 accepted, which the ledger dates 2026-11-15. A decision that groups several answers carries its latest answer's date.
+
+279. **SSHSIGs are dropped from v0 and every milestone until a customer asks; every action's risk stays normal (option 3; the build recommended two risk levels with a classifier and an SSHSIG on high-risk decisions).**
+    - Question: §16.6 added the member's SSHSIG to a high-risk approval, and nothing said what makes an action high risk or who computes it.
+    - Answer: no decision needs an SSHSIG. `ApprovalDecision.sshsig` stays a reserved field, ignored wherever it is presented and never trusted; `SidecarRisk` keeps its two values and every action is normal, no policy field and no classifier raising one, so `AclRequestRule` gains no risk field. R-MCP-7 says so, and §3's approval flow, §5.4's `Risk` and §16.6's channels follow.
+    - Cost: no second factor separates a public publish or a wide mailing from any other approved action until a customer asks for one.
+    - Not taken: (1) two levels, normal and high, with a fixed classifier and a policy field on request rules, a high-risk decision adding the approver's SSHSIG; (2) the same with the classifier only.
+    - Raised by the build (plan-MCP; the build's ledger, QD-014).
+
+280. **An approved recipient is a (sending alias, recipient) pair with an approval record in the repo that holds that alias's mail (the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §16.5 made `mail_send` W "to approved recipients", and no section said what an approved recipient is, where the list lives, who sees it or what evidence creates an entry.
+    - Answer: the record sits at `rcpt/<h>/<address>` in `mailbox:<member>` or the `group:<group>` repo, never in mailcfg, and its body `MailRecipientApproval{alias, recipient, decision, action}` holds the stored bytes of one `ApprovalDecision` on channel device or presence and of the `CanonicalAction` of kind `mail_send` listing that recipient. The daemon writes one record per recipient after that use's Outcome is done, created only if absent; a harness decision sends its one message and creates none. Every device re-verifies the embedded decision at each use under its current pin, so a file an agent wrote, or one whose approver was revoked, approves nothing. A record lasts until a person removes it with `ur mail recipients rm` on `/dev/tty` or in an app, and MCP's evs tools refuse `rcpt/`. `mail_send` is W only when every non-member recipient has a record and the run is untainted; a tainted run ignores records (§15.7, §15.10, §16.5, §16.6).
+    - Cost: one small record a recipient in the mail repo, which its readers see; the first mail to each outside address needs a device or presence decision.
+    - Not taken: (1) a signed mailcfg record per approved pair; (2) local per-sidecar state in the mail component, so a person approves again on each device; (3) no standing list, each send O unless an unspent multi-use decision covers it.
+    - Raised by the build (plan-MCP; the build's ledger, QD-034).
+
+281. **The safety number is 60 decimal digits over the genesis's hash and the device's identity key, shown as 12 groups of 5 (the recommendation, accepted in bulk on 2026-11-06).**
+    - Question: EX5 and §5.6 show a safety number, and no section gave its bytes, length or display.
+    - Answer: digest = SHA-256("urnetwork-sidecar-v1/safety-number" || 0x00 || genesis_sha256 || identity_public_key), both 32 bytes, genesis_sha256 being the SHA-256 of the Signed Genesis. The number is the digest read big-endian, mod 10^60, zero-padded to 60 digits and shown as 12 groups of 5 in three lines of 4 groups. `ur` and `SidecarApprovals` show it identically, with one vector byte-equal on every leg (§5.6's safety row, D-CORE-13, §2.8's EX5).
+    - Cost: 60 digits to compare by eye or voice.
+    - Not taken: (1) the hash's low 100 bits as 30 decimal digits in six groups of five; (2) 8 BIP-39 words, which reuse the recovery code's alphabet; (3) hex of the first 16 bytes.
+    - Raised by the build (plan-CORE; the build's ledger, QD-039).
+
+282. **`DefaultSidecarSettings` leaves the service urls empty, and hosts fill them from §18.9's embedded host table, the one copy of those names (the recommendation, accepted in bulk on 2026-11-06).**
+    - Question: the build's hard limit keeps production hostnames out of code, and §5.4's defaults named the public service urls.
+    - Answer: the defaults carry no url, so `NewSidecar` refuses until a host sets them; cli and sdk hosts fill them from §18.9's table, the data file `ur` embeds and publishes, which is the one exception to the limit. Tests stay on `.example` names (§5.4, §18.9).
+    - Cost: a host that forgets to set them fails at construction.
+    - Not taken: (1) the public service urls in the root's settings.go, as the design said.
+    - Raised by the build (core-types; the build's ledger, QD-119).
+
+283. **`ur` refuses to enroll beside a readable network credential by the host's state, with no signal from api (the recommendation, accepted in bulk on 2026-11-06).**
+    - Question: D-TRUST-3 has `ur` refuse to enroll, and an enrolled daemon alarm, where an app's or the extension's store holds a readable network `by_jwt`, until §7.4's stage 2; nothing said how `ur` learns that the stage arrived.
+    - Answer: it does not. The check is by state: `ur` refuses to enroll, and an enrolled daemon raises `credential_store` at each start and at each `SyncRefetchInterval`, while a store holds a readable network `by_jwt`, whatever the stage. A host the releases cleaned passes by itself, and a later `ur` release drops the check once the fleet has moved. No reply field, config key or other spoofable input turns it off (D-TRUST-3, §5.6, §7.4).
+    - Cost: a host with an old app or extension stays refused after stage 2 until that app updates.
+    - Not taken: (1) a `stage2` field in enroll's reply and `core`'s fetch, set from config; (3) dropping the host check and relying on `preview_networks` and policy.
+    - Raised by the build (plan-CORE; the build's ledger, QD-120).
+
+284. **The keychain auto-locks after 10 minutes with no request on any local socket, never while the daemon is busy (the recommendation, accepted in bulk on 2026-11-06).**
+    - Question: §5.9 named an auto-lock and gave no value, no meaning of idle and no rule for daemons that are always on.
+    - Answer: `AutoLockTimeout` defaults to 10 minutes. Idle means no request on any local socket (control, mcp, hook, git) for that long, and it never applies while the daemon's busy rule holds: mail, sockets or bridge on, or an indexer. Locking drops U and every R_n and enters Locked; where a key store holds U, the next local request unlocks by itself. Zero never locks, for a host to set on purpose (§5.4, §5.9).
+    - Cost: a daemon that serves mail, sockets or a bridge never auto-locks.
+    - Not taken: (2) locking only where the pass is the only unlock; (3) never locking by default; (4) another value, or one per host class.
+    - Raised by the build (core-types; the build's ledger, QD-121).
+
+285. **`AgentRevoke` is a local act, not a record (the recommendation, accepted in bulk on 2026-11-06).**
+    - Question: §5.5 ended an agent subkey by `AgentRevoke`, and a subkey never leaves the daemon, so nothing said what a record of it would tell a reader.
+    - Answer: `Sidecar.AgentRevoke(agentId)` deletes the subkey from `keychain.ur`, and the daemon signs nothing more with it. Readers bound a subkey by its certificate's `not_after_ms`, at most 30 days. A compromised daemon is a `SidecarRevoke{reason: compromise}`, and provenance from its `since_n` on reads unattributed. No proto number is reserved for a revocation record (§5.5, D-CORE-6).
+    - Cost: a subkey a compromised daemon copied stays valid to readers until its certificate lapses or the daemon is revoked.
+    - Not taken: (1) a sealed `AgentRevoke{agent_id}` record beside the certificate; (3) dropping agent subkeys from v1.
+    - Raised by the build (plan-CORE; the build's ledger, QD-232).
+
+286. **The sidecar adopts the `by_client_jwt` that `POST /sidecar/bind` re-mints with its `sidecar_id`, and sdk's host session takes it too.**
+    - Question: bind re-mints the client token with the `sidecar_id` claim that sockets and other gates read, and neither the core nor an app's host session kept the new token, so a refresh went on from the old one.
+    - Answer: `SidecarApi.Bind` returns the re-minted token beside the generation, after checking that it names the same network, client and device. Enrollment, child enrollment and pairing persist it in place of the pre-bind token, and a `restore_required` re-registration installs it. Refresh keeps the claim as presented and adds none from the binding row. sdk's host Api session implements the core's optional `SidecarTokenSourceRemint`, whose `AdoptByJwt` holds the token and sets it on the Api, refusing when the session is closed or holds none, so an app's sidecar keeps its `sidecar_id` across the host's refreshes (§5.6, §5.15, §18.7).
+    - Cost: until both land, sockets denies a sidecar's authenticated `/socket/*` calls, the closed direction.
+    - Not taken: refresh adding the claim from the client's binding row, a read on every refresh; a host callback on the enroll credential, a second seam for the same hand-off.
+    - Raised by the build (the sockets client verifier and sdk's host services; the build's ledger, QD-797 and QD-805).
+
+287. **A remote-mode Sidecar hears the daemon's events over a control method, `events` (option 1).**
+    - Question: §18.5's listener carries every §5.4 event kind, and no §5.8 control method carried events, so a remote-mode app heard `state` alone.
+    - Answer: the daemon registers a control method `events`: `{after: <cursor>, wait_ms}` answers the events past the cursor from a bounded per-daemon ring, each with its generation and kind and the ids §18.5 lists, never a secret, or `gap: true` when the ring has passed the cursor, after which the app reads `GetState`. The ring's size and the longest wait are settings fields. sdk's remote backend keeps one long-poll open on a second control session and feeds `AddEventListener` from it, and the native host adds `events` to its allow-list, so the extension hears the alarms. It is a method, not a hello mode (§5.8, §18.5).
+    - Cost: a second control session an app, and a ring of events in the daemon's memory.
+    - Not taken: (2) a new hello mode whose session is a one-way stream of event lines; (3) polling `status`, with the pending approvals and alarms added to what a poll reads.
+    - Raised by the build (SDK-M8-02; the build's ledger, QD-821).
+
+288. **§5.8 gains the control methods `mail.check_send`, `mail.send_result` and `mail.send` (option 1).**
+    - Question: §18.5's `CheckSend`, `GetSendResult` and `Send` had no control method, so a desktop app on `ur daemon` could not send internet mail or read a send's outcome.
+    - Answer: `mail.check_send` takes the draft's fields and answers the root's `SmtpSendCheck` as JSON, and `mail.send_result` takes a `send_id` and answers `SmtpSendResult`; both are reads that sign and send nothing, so neither needs §5.8's confirmation. `mail.send` goes through the daemon's gate like a submission, held for an I-8 approval (§15.10 step 1). sdk's remote backend calls each (§5.8, §18.5).
+    - Cost: three more methods on the control socket.
+    - Not taken: (2) no remote path, desktop apps neither checking nor following internet sends through the sdk; (3) folding the outcomes into the `mail_send` event, the check staying local.
+    - Raised by the build (SDK-M9-01; the build's ledger, QD-853).
+
+289. **The search cache keeps each kept record's wrapped object key, in slot-keyed repos the slot's block, and an ERASE hint drops every kept record whose slot key it destroys (option 1 of each question).**
+    - Question: §5.9's cache keeps index files and never a key, so a search could not reopen a kept file after the round that fetched it without reading evs; in slot-keyed repos the key sits in a slot, not in the segment's header.
+    - Answer: beside each kept record the cache keeps the record's file id and its wrapped object key exactly as stored, about 100 B a file: in general repos as the segment header carried it, and in slot-keyed repos (record-class repos and group inboxes) the slot's 72 B block, under fek of the slot key's generation with AAD "UR evs 1.0 object key", with that generation and the segment's, about 80 B more. A reader that holds the repo key at those generations, from `GkmClient` as any evs read does, unwraps per file and opens the record one 64 KiB frame at a time; a wrapped key is not a key, so the cache still holds none. I-EVS-13 is read as evs's storage plus a device cache that drops at the ERASE hint: the hint deletes at once every kept record whose slot key the ERASE destroys, not only the versions a CLOSURE replaced (§5.9's holds and delete rows, §11.14's keys row).
+    - Cost: about 100 to 180 B a kept file; between an ERASE and its hint's arrival a device that still holds the generation's key can unwrap an erased document's kept index file.
+    - Not taken: (2) keeping each fetched index file's plaintext as derived data sealed under the local search key, in place of evs's record; (3) reading evs for the segment header at search time, and in slot-keyed repos leaving shards unmatched once their round ends.
+    - Raised by the build (SEARCH-M10-19 and the search cache; the build's ledger, QD-838 and QD-845).
+
+290. **A remote-mode app's act is checked by the daemon host's own prompt when that host's authenticator holds every live presence key (option 2).**
+    - Question: §5.6 runs the presence check where the key is, and a remote-mode app's two-call acts assumed the app holds the key.
+    - Answer: at the hold, when every live presence key of this sidecar is one the daemon host's own authenticator holds, the first call answers no bytes and the second runs the daemon's presence prompt over the act's bytes before signing, the person's wait outside the request bound; otherwise the app's `SidecarPresenceSigner` countersigns as before. For the app's own `KeyRegister` beside a host-held live key, the app proves its new key and the daemon's prompt countersigns. sdk does not change (§5.6, §5.8).
+    - Cost: the person answers a prompt on the daemon's host, not in the app.
+    - Not taken: (1) as built, a two-call act always the app's to countersign, so an app beside a host-held key could not revoke, decide or add its own key; (3) the first call naming the key ids it accepts, with an sdk fallback to one confirmed call.
+    - Raised by the build (CORE-M8-03; the build's ledger, QD-897).
+
+291. **The by_jwt carries an `admin_refused` claim, and `Pair` requires it with `strict_exp` (option 3, with option 1 meanwhile; the recommendation).**
+    - Question: D-CORE-7 pairs only a child client that is `strict_exp` and `admin_refused`, and `Sidecar.Pair` is handed only the child's jwt, which showed `strict_exp` alone.
+    - Answer: api adds an `admin_refused` claim to the by_jwt, set from the owner row at mint as `strict_exp` and `declares_no_egress` are, additive and read by no other client. `Pair(ctx, childJwt)` requires both claims, and the jwt naming this network, before anything is sent, which makes D-CORE-7 exact for every path that receives a token it did not mint. Until the claim lands, the check of `strict_exp` alone stands, which confines the token to §7.4's allowlist with no admin route, and the app checks its own mint's `admin_refused` before handing the token over (§5.4, §5.8, D-CORE-7, §7.4).
+    - Cost: one more claim in every by_jwt; the interim check rests on the app's own.
+    - Not taken: (1) alone, `strict_exp` standing for both marks; (2) `Pair` taking the app's mint answer beside the jwt.
+    - Raised by the build (CORE-M6-02; the build's ledger, QD-907).
+
+292. **A compromise revocation proposes the tip as `since_n` when no entry is timed at or after the loss time, and answers REVOKE_SINCE when given neither a loss time nor a position (option 1, the recommendation, as built).**
+    - Question: `PreviewDeviceRevoke` proposes `since_n` as the first entry timed at or after the loss time; nothing said what it proposes when the loss time is later than the log's newest entry, or when the person gives none.
+    - Answer: where the loss time is in the past and later than the newest entry, the proposal is the tip, the largest `since_n` §7.9's verifier accepts for a revocation landing at the next position. The plan shows what that voids before anything is signed, and the person may move `since_n` earlier, never later. With no loss time and no position the call answers REVOKE_SINCE: no default is guessed, least of all the target's admission entry. `ur devices revoke <name> --compromise` with no `--since` asks on the terminal for an RFC 3339 time or a log position and fails without a terminal; a future loss time and a `since_n` past the tip stay REVOKE_SINCE (§5.4, §5.6).
+    - Cost: a person must give a time or a position for every compromise revocation.
+    - Not taken: (2) answering REVOKE_SINCE where no entry is timed at or after the loss, with a hint to revoke as lost; (3) defaulting to the target's admission entry, which voids everything the device ever signed.
+    - Raised by the build (CORE-M2-05; the build's ledger, QD-955).
+
+293. **§5.8's hello gains a fifth mode, `git-hook` (option 1, the recommendation, as built).**
+    - Question: a mount's pre-receive and proc-receive hooks run `ur git-hook <name>`, which must reach the daemon, and §5.8's hello had no mode for it.
+    - Answer: the mode's `service` is the hook's name, pre-receive or proc-receive, and it names no `repo`. After the hello the relay sends one JSON header line `{session, object_directory, alternate_object_directories}`, the session being the one the daemon set in `UR_GIT_SESSION` when it started git-receive-pack; then both sides send frames of one channel byte, a 4-byte big-endian length and the bytes: stdin and its end from the relay; stdout, stderr and the one-byte exit code from the daemon. The stream may stay open up to `ReceivePublishTimeout` (30 min). The daemon registers the mode as it does mcp and git, under §5.8's peer-uid check. It is a protocol, never a privilege (D-CORE-9): the session id grants nothing, and a relay that cannot reach the daemon exits 1, so the push is refused, never taken unhooked.
+    - Cost: one more mode on the control socket.
+    - Not taken: (2) carrying the hook inside the git mode under a reserved `service` value; (3) a per-session Unix socket the daemon names in `UR_GIT_SESSION`.
+    - Raised by the build (EVS1-M2-35; the build's ledger, QD-959).
+
+294. **An owner's indexer keeps its served record as one row per requester, repo and UTC day, with `Search.ServedRecordCount` as a last bound (option 2 with option 1's cap, the recommendation).**
+    - Question: D-CORE-17 bounds the served record only by its 30 days, so one reader's rate set how much an owner's indexer stored.
+    - Answer: the record is one row per (requester sidecar_id, repo_id, UTC day): `{requester, repo, day, count, first time, last time}`, written at page 0 once a search and naming no query. The first remote search an EvsShare reader makes in an owner-bound repo on a day adds the row, and each later one that day raises its count and moves its last time. Rows are kept `Search.ServedRecordTimeout` (30 days) by their day, so the owner's view of who read what holds exact counts in at most readers x repos x 30 rows whatever the rate; `Search.ServedRecordCount` (8,192) is a last bound on rows, the oldest days dropped first. Nothing changes on the wire (§5.9's state row, D-CORE-17, R-CORE-19).
+    - Cost: the individual times inside a day are not kept.
+    - Not taken: (1) the count cap alone, under which abuse drops the oldest records, the evidence of it; (3) every record in per-day sealed files, growing with the requester's rate.
+    - Raised by the build (CORE-M10-02; the build's ledger, QD-961).
+
+295. **An unsigned raise of the minimum secure version is a live denial, never stored state (the recommendation, accepted in bulk on 2026-11-06).**
+    - Question: the `core` topic can raise `MinSecureVersion`, and the raise is unsigned, so a forged one could cut every peer below it for good.
+    - Answer: a device applies the lesser of the floor `GET /sidecar/sync/core` currently reports and its own compiled `secure_version`, never below its compiled `MinSecureVersion`, and persists nothing. A forged floor then never refuses a peer at this device's version or newer, and it ends when the operator stops asserting it. A value above the device's own version prompts an upgrade through `ur status`. §2.8 discloses the raise under I-4 as a denial (§6.4, §5.15, §2.8's connect-4).
+    - Cost: the operator can deny peers older than a device's own version for as long as it asserts the floor; a real raise does not outlive an api outage.
+    - Not taken: the reading it replaces, a raised floor that only rises and persists in local state, with which one forged high floor cuts every peer pair for good.
+    - Raised by the build (plan-CORE and plan-PROTO; the build's ledger, QD-032).
+
+296. **Same-network P2P is built at M6 behind `SidecarProtocolSettings.EnablePeerP2p`, default off (the recommendation, accepted in bulk on 2026-11-06).**
+    - Question: §6.18 ended relay-only for same-network pairs once C3 was tested, without saying whether P2P would then be on by default or at which milestone.
+    - Answer: it is built at M6 behind the setting, default off, and pairs stay relay-only until a later owner call made on its fault schedule and measurement. Before any network turns it on, §2.8's connect rows and §2.10 say that a pair on P2P learns each other's public addresses through ICE and that relays see no frames of that pair. §6.18's line reads "able to end relay-only" (D-PROTO-10, §6.6, §6.18, §17.18).
+    - Cost: every same-network byte stays relayed, and debited, until that call.
+    - Not taken: (2) treating it as Later, with no code; (3) M10, beside the other v1 work.
+    - Raised by the build (plan-PROTO; the build's ledger, QD-045, with the milestone settled as QD-583).
+
+297. **Every limit is a field of a settings object, protocol and format limits included; only identifiers stay constants, and legacy constants move when the function that reads them is edited.**
+    - Question: the owner asked for configuration objects for all settings and no global constants. D-PROTO-16 held protocol values such as the 4,080 B envelope as constants, and the first answer left open whether a one-line wiring change into upstream code must move the constants around it.
+    - Answer: every value that sets a limit, size, count, time, interval, threshold, retry or budget is a field of its owning component's settings object, set only by that object's `Default...Settings()` constructor and read from the instance where it is used; no package-level const or var holds one, and no such literal is written into logic. Protocol and format limits are fields too: their defaults are the protocol's values, and changing one is a protocol change, never made on one side alone. Only identifiers stay named constants: enum values, proto field numbers, error, type and statement codes, version numbers, magic strings and cryptographic constants. All code this build wrote moves now; upstream code that predates it moves when a change edits the function that reads the limit, a wiring line or an added struct field moving nothing; file-wide and system-wide legacy constants, server's `model.DefaultContractExpiration` among them, move in the review phase's sweep, one track per legacy area that builds that area's settings object once; vendored third_party code stays as upstream wrote it. Tests may use literals to configure settings (§6.6's bounds, D-PROTO-16).
+    - Cost: a sweep of the code already drafted; a protocol limit now looks tunable, and only the rule says it is not.
+    - Not taken: keeping the protocol exception, tunables in settings and protocol and format values as named constants; the literal reading of move-on-touch, every track that touches a legacy file migrating every limit in it.
+    - Raised by the owner (2026-11-11) and the build (PROTO-M4-02; the build's ledger, QD-702 and QD-958).
+
+298. **A Service pair is keyed by its non-edge end in every namespace, and a sidecar that dials a `ur/` name holds Service while its `ur/` stream lives (option 1 of each question).**
+    - Question: §6.10.1 item 3 records a pair as field `<dialer>` of `{svc_<listener>}`. For a `ur/` name the edge listens and a sidecar dials, so CreateContract would read a key under the edge; and the dialing sidecar advertised no Service, so the edge's replies got no Service contract.
+    - Answer: a `ur/` Find writes field `<edge listener client_id>` of `{svc_<sidecar dialer client_id>}`, the roles swapped in the key and the ticket unchanged, so CreateContract's one Redis read is always field `<edge>` of `{svc_<sidecar>}` whichever end listens. Revocation and unlisten remove a `ur/` pair from the dialer's key; the edge's last unlisten does not reach it, so a `ur/` pair ends at its 60 min ttl. A sidecar holds Service from a `ur/` ticket's open until its last `ur/` stream ends, as a `tls/` or `smtp/` listener holds it for its lease, with one provide frame at the first hold and one at the last release, so a sidecar that sends mail through `ur/smtpedge` without receiving any works. While held, edges get Service contracts to the sidecar only for its live pairs, the inline handler admits from a Service source only stream frames, Ping, Pong and answers to the sidecar's own calls, and an edge's StreamOpen reaches only listeners the sidecar has (§6.10.1 items 2 and 3, §13.6, §2.8's sock-3).
+    - Cost: a `ur/` pair outlives the edge's unlisten by up to 60 min; a dialing sidecar advertises Service while its stream lives.
+    - Not taken: for the key, (2) reading the listener's key when the source is an edge, which refuses the edge's replies to a `ur/` dialer, and (3) two reads; for the hold, (2) Service whenever the mail role may send, stream or not, and (3) the edge's replies settling in another mode.
+    - Raised by the build (PROTO-M5-04; the build's ledger, QD-728 and QD-849).
+
+299. **A versions page that arrives late takes only its rises, and a reconnect ends a failed refetch's retry wait (option 2 and option 3).**
+    - Question: a `versions` page api read before a resident's reset could apply after it and raise a false alarm or end a reset run; and a resync asked for during a failed refetch's backoff waited the backoff out even when the client had just reconnected.
+    - Answer: the push machine counts its inputs, each reset part and hint applied, and each refetch notes the count when it starts. A page whose refetch began before an input since applied takes only its rises: a durable topic it shows lower, or an open reset run it would end, sends the client to `versions` again, one more refetch at most, and a clock topic it shows lower waits for the next page; a page begun after every applied input keeps the rules, its alarms and adopted falls included. A reconnect, the connect generation's or the long-poll generation's first successful poll after a failure, ends a pending retry wait at once and refetches; every other ask (a seq gap, an abandoned reset run, an undecodable frame, a poll's incomplete reset) is kept and served when the wait ends, and the next failure's wait goes on doubling from where it stood. No wire or format change (§6.8).
+    - Cost: at most one more refetch after a late page.
+    - Not taken: for the page, (1) the machine as it was, §6.8 saying a late page may alarm, and (3) holding the resident's frames while a refetch is in flight; for the wait, (1) keeping it for every ask and (2) ending it on any ask, which loses the backoff's protection against a hint storm during an outage.
+    - Raised by the build (the push state machine's tests; the build's ledger, QD-905 and QD-906).
+
+300. **A push reset that lowers a durable topic raises `head_alarm` with a fifth kind, `rollback` (option 2, the recommendation).**
+    - Question: §6.8 has a reset that lowers a persisted durable version alarm, and §5.4's `SidecarHeadAlarm` had no value for it but `fork`, which means two pins that disagree.
+    - Answer: `SidecarHeadAlarm` gains `rollback` beside fork, withheld, unverified and unwitnessed. A push reset that presents a durable topic (team, dns, `gkm:<group_id>`) below the version the client holds raises `head_alarm` with that kind, its Evidence the two `TopicVersion`s as protobuf bytes, the held one first, then the offered one. `Consistent()` turns false until reconciled, as for every head alarm, so inbound state still fails closed. `fork` stays reserved for two pins that disagree (§5.4, §6.4, §6.8, §18.5).
+    - Cost: one more alarm kind for apps to name.
+    - Not taken: (1) keeping `fork` with `TopicVersion` evidence, which shows a person a fork where api lowered a version.
+    - Raised by the build (PROTO-M1-07; the build's ledger, QD-928).
+
+301. **A companion contract seals no `WindowDelegation`; it inherits its forward contract's subject, source network and class (option 1, the recommendation, as built).**
+    - Question: D-PROTO-19 and C13 had companion contracts inherit the forward contract's seals, the subject's `WindowDelegation` among them, and the signer holds those bytes nowhere and a companion request carries none.
+    - Answer: the delegation is the forward contract's alone. A companion request carries none, the signer copies none and the server keeps no forward contract's delegation: no `transfer_contract` column and no Redis family, so §2.8 gains no row. Nothing is lost: §17.9's verify row admits a native flow only when the delegation's `window_client_id` is the contract's own source, and a companion's source is the replying provider, so an inherited copy would fail at any host exactly as an empty one does (D-PROTO-19, §4.6's C13, §6.10.1 items 4 and 5, §17.9's sign row).
+    - Cost: none.
+    - Not taken: (2) keeping each forward contract's delegation server-side, a column or a Redis family with its §2.8 row; (3) connect copying the forward contract's delegation into the companion request, a client-supplied value no receiver checks.
+    - Raised by the build (PROTO-M4-02; the build's ledger, QD-957).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

@@ -617,6 +617,12 @@ type GkmSettings struct {
 	LateAskInterval time.Duration
 	// QD-031 (decided): a GenRotate's drop key lives this long, drop_not_after_ms = time_ms + this: 90 days.
 	DropKeyLifetime time.Duration
+	// How long before a drop key lapses a writer renews it with a SCHEDULE rotation, at its hourly resync and at
+	// gkm's renewal hint: 7 days (plan-KEYS-drop-key-lifetime's rule, which gkm's hint holds alike).
+	DropKeyRenewBefore time.Duration
+	// How many pages of gen/ one refresh, first wrap or drop-key read takes before it gives up for this pass: 1,024.
+	// gkm answers in pages, and a device asks again after the last until none comes.
+	GenerationPageMaxCount int
 	// KF2 and KF3 (DESIGN-DETAILS 6.2.2): a writer leaf that did not sign the statement a pending change answers
 	// waits this long before it commits it, so the granting device normally commits alone: 15 s.
 	PendingCommitDelay time.Duration
@@ -707,6 +713,8 @@ func DefaultGkmSettings() *GkmSettings {
 		AckInterval:                  24 * time.Hour,
 		LateAskInterval:              1 * time.Minute,
 		DropKeyLifetime:              90 * 24 * time.Hour,
+		DropKeyRenewBefore:           7 * 24 * time.Hour,
+		GenerationPageMaxCount:       1024,
 		PendingCommitDelay:           15 * time.Second,
 		PendingCommitJitter:          5 * time.Second,
 		DirectoryRotateWait:          15 * time.Second,
