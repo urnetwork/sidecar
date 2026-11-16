@@ -1,31 +1,34 @@
-# The last format-1 commits, which FS-72's T3 rollback builds real binaries from (EVS2-M10-30; §22.10's "a rollback to
-# format-1 binaries", D-PHASE-10, FS-72). A setting cannot prove what old code does, so T3's rollback runs evs and
-# taskworker built from these commits over data format 2 wrote. sidecar's and server's are each the parent of the first
-# commit of EVS2-M10-05, which first let an engine take a format-2 value. EVS2-M2-01's reservations and its 503 for a
-# push to a format-2 repo/ are in both, but not its guard for format-2 data (evsservice/format1_guard.go: no fold,
-# page-out, path-epoch copy or marker collection on a format-2 repo), which landed in one commit with EVS2-M10-05's
-# raise, so no commit is a format-1 binary carrying it. The owner answered question evs2-m10-30-format1-rollback-binary
-# (QD-854): a rollback is a configuration, evs's and taskworker's blocks taking EvsSettings.InstanceFormat from their
-# block config (2 from M10's release, 1 in a rollback's), and T3 runs a real binary built from a pinned release commit
-# with InstanceFormat 1 set through that config. These pins move to the first commit with that config field, which no
-# commit has yet; until then they stand, and build.
+# The release commits FS-72's T3 rollback builds real binaries from (EVS2-M10-30; §22.10's "a rollback to format-1
+# binaries", D-PHASE-10, FS-72). The owner answered question evs2-m10-30-format1-rollback-binary (QD-854): a rollback is
+# a configuration of a real binary. evs's and taskworker's blocks take EvsSettings.InstanceFormat from their block
+# config, config/<env>/evs.yml's instance_format (server/evshost/block_config.go): 2 from M10's release and 1 in a
+# rollback's, under which the block keeps format 1's rules and its guard for format-2 data
+# (evsservice/format1_guard.go), which no build from before format 2 holds. T3 proves that on a real binary built from
+# a pinned release commit with instance format 1 set through that config.
+#
+# These pins are the first commits with the config field: server's is the commit that carries the field in evshost and
+# taskworker with the harness that hosts the block under T3's seams, and sidecar's is the commit that server commit
+# builds on. server/evshost/fs72_rollback_test.go's TestFs72RollbackOnThePinnedBuildOnT3 puts each repo's commit in one
+# directory with `git archive`, builds server's ./cli/evs and ./cli/taskworker and the pinned evshost's own tests from
+# them, and runs the pinned TestFs72RollbackThroughTheBlockConfigOnT3. A pin moves only to a later release commit a
+# rollback would deploy, and server's and sidecar's move together.
 #
 # sidecar: the module evs's engine and taskworker's evs jobs link
-# server:  evshost and taskworker, which host them
-# the rest: the siblings server's go.mod replaces (../<repo>), each at its sidecar branch's first-parent commit before
-#           sidecar's pin was committed (2026-11-10T02:21:04-06:00), all on go 1.27.3's line, before QD-674 moved every
-#           go.mod to 1.27.4: a tree of these ten, each `git archive` of its commit into one directory, builds
-#           server's ./cli/evs and ./cli/taskworker with go1.27.4, GOTOOLCHAIN=local, GOFLAGS=-mod=readonly and
-#           GOPROXY=off from the run's module cache (checked 2026-11-15)
+# server:  evshost and taskworker, which host them, and the harness
+# the rest: the siblings server's go.mod replaces (../<repo>), each at its sidecar branch's commit when server's pin
+#           was committed (2026-11-16), all on go 1.27.4's line (QD-674): a tree of these twelve builds with go1.27.4,
+#           GOTOOLCHAIN=local, GOFLAGS=-mod=readonly and GOPROXY=off from the run's module cache (checked 2026-11-16)
 #
 # repo           commit                                    date        its subject, cut short
-sidecar          bb35730d66b292793abe78334fdf970ee4280786  2026-11-10  Walk format 2's writes against format 1's reservations (EVS2-M2-01)
-server           11d2faebab40d04874ee5cc5c14fb90608efd394  2026-11-09  Run evs's path-epoch copy in taskworker (EVS1-M2-17)
-connect          c8a159e05209e2203ca0002b25f205c627e54653  2026-11-10  Document the role gate's 403 RolePermissionRefused and the team IdP routes
-proxy            676ef48f285443c9274cc72de90366c843605eb6  2026-11-06  Merge fix/govuln-xnet-proxy: golang.org/x/net v0.62.0 (GO-2026-6603, ...)
-sdk              92bc07b402580d1031d2a5558bd3a25615f74224  2026-11-10  Recognize the server's role refusal (TEAM-M6-03): RolePermissionRefused
-glog             af8d9e76bfcfa908e785c3c0789d76c90c78302b  2026-11-05  .gitignore update
-goidenticons     39ccec1b69db3a6f67e7346d6f44863499e6241d  2026-10-21  Require Go 1.27.3 for active modules
-userwireguard    70ecd6e7f97715718f1079cc9be9fd42a8ebe82c  2026-10-30  Serialize on-demand peer installation and invalidate revoked resolutions
-sn               409d56c2fe52ad9572dd07d3f725ed5ea4fa66d8  2026-11-09  Require mox's subset with adns and flate, which sidecar's root now links
-gvisor           e21e4a40b9c9a5a111f05e2334fabc83c5f2a82a  2026-11-05  .gitignore update
+sidecar          afd36efe5023ff6c84a6c73465b87cec2df994b2  2026-11-16  Merge sidecar into the evs-instance-format-config track
+server           5ea5af7c1a31e4b443c39be1f399e1098358d919  2026-11-16  Run FS-72's rollback through the block config on T3, and on binarie...
+connect          c04afb4688064582999e053faecfff5b98248623  2026-11-15  Document POST and DELETE /mail/direct-mx, a Team's direct MX
+operator-core    0e491cdfc02970be77324a7a14e2e4500478e683  2026-11-15  State Db's default access as server's helpers keep it, the session'...
+proxy            f8be96b4faf4e665775984e24eeadb26f7b22630  2026-11-11  Go 1.27.4 for GO-2026-6859 (owner, QD-674)
+sdk              915583af15789824b92c6a77b75b800dd27daa1f  2026-11-16  Say why the Apple extensions' forwarding role still reads no config...
+glog             558c4ce3f36671f72aad851170b4f0a2cbc41e78  2026-11-11  Go 1.27.4 for GO-2026-6859 (owner, QD-674)
+goidenticons     6fad29428ad9f5a82d1fd05b4a231b217d54a752  2026-11-11  Go 1.27.4 for GO-2026-6859 (owner, QD-674)
+userwireguard    a195364e1a82ca6d399d30150deeae61199c451f  2026-11-11  Go 1.27.4 for GO-2026-6859 (owner, QD-674)
+warp             1d42711eee1ee1b5fff8815c13eb69f219f71b61  2026-11-14  Mount the push sender's APNs and FCM keys on taskworker: its fragme...
+sn               40d094a11bbfea9cf3b4562230df1f819aab80f3  2026-11-15  Repeat operator-core's sibling replace, which sidecar's root now re...
+gvisor           ea2498a59c73d9f1b6d5b3f32d8a9b20b36506ee  2026-11-11  Go 1.27.4 for GO-2026-6859 (owner, QD-674)
