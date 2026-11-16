@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9450,
-  "code_words": 17773,
+  "code_words": 18114,
   "ceiling": 3000,
   "over": 6450,
   "over_pct": 215.0
@@ -47,17 +47,17 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9235,
+  "words": 9322,
   "code_words": 5044,
   "ceiling": 3800,
-  "over": 5435,
-  "over_pct": 143.0
+  "over": 5522,
+  "over_pct": 145.3
  },
  {
   "num": 7,
   "code": "TEAM",
   "words": 12255,
-  "code_words": 12507,
+  "code_words": 12578,
   "ceiling": 3500,
   "over": 8755,
   "over_pct": 250.1
@@ -65,47 +65,47 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 7363,
-  "code_words": 2738,
+  "words": 11520,
+  "code_words": 3714,
   "ceiling": 3800,
-  "over": 3563,
-  "over_pct": 93.8
+  "over": 7720,
+  "over_pct": 203.2
  },
  {
   "num": 9,
   "code": "SOCK",
-  "words": 4400,
-  "code_words": 1604,
+  "words": 5228,
+  "code_words": 1628,
   "ceiling": 3000,
-  "over": 1400,
-  "over_pct": 46.7
+  "over": 2228,
+  "over_pct": 74.3
  },
  {
   "num": 10,
   "code": "KEYS",
-  "words": 10203,
+  "words": 10226,
   "code_words": 7259,
   "ceiling": 4500,
-  "over": 5703,
-  "over_pct": 126.7
+  "over": 5726,
+  "over_pct": 127.2
  },
  {
   "num": 11,
   "code": "EVS",
-  "words": 22073,
-  "code_words": 39407,
+  "words": 22075,
+  "code_words": 39428,
   "ceiling": 5000,
-  "over": 17073,
+  "over": 17075,
   "over_pct": 341.5
  },
  {
   "num": 12,
   "code": "DNS",
-  "words": 4668,
+  "words": 4867,
   "code_words": 1637,
   "ceiling": 3000,
-  "over": 1668,
-  "over_pct": 55.6
+  "over": 1867,
+  "over_pct": 62.2
  },
  {
   "num": 13,
@@ -119,38 +119,38 @@
  {
   "num": 14,
   "code": "SMTP",
-  "words": 7224,
+  "words": 7241,
   "code_words": 1098,
   "ceiling": 4500,
-  "over": 2724,
-  "over_pct": 60.5
+  "over": 2741,
+  "over_pct": 60.9
  },
  {
   "num": 15,
   "code": "MAIL",
-  "words": 8742,
+  "words": 8860,
   "code_words": 1703,
   "ceiling": 4500,
-  "over": 4242,
-  "over_pct": 94.3
+  "over": 4360,
+  "over_pct": 96.9
  },
  {
   "num": 16,
   "code": "MCP",
-  "words": 12675,
-  "code_words": 16550,
+  "words": 12742,
+  "code_words": 16618,
   "ceiling": 3500,
-  "over": 9175,
-  "over_pct": 262.1
+  "over": 9242,
+  "over_pct": 264.1
  },
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 7656,
-  "code_words": 4192,
+  "words": 7724,
+  "code_words": 4255,
   "ceiling": 3800,
-  "over": 3856,
-  "over_pct": 101.5
+  "over": 3924,
+  "over_pct": 103.3
  },
  {
   "num": 18,
@@ -164,20 +164,20 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 8002,
+  "words": 8150,
   "code_words": 9021,
   "ceiling": 3500,
-  "over": 4502,
-  "over_pct": 128.6
+  "over": 4650,
+  "over_pct": 132.9
  },
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 4623,
+  "words": 4707,
   "code_words": 3919,
   "ceiling": 2500,
-  "over": 2123,
-  "over_pct": 84.9
+  "over": 2207,
+  "over_pct": 88.3
  },
  {
   "num": 21,
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7299,
-  "code_words": 35431,
+  "code_words": 35488,
   "ceiling": 2500,
   "over": 4799,
   "over_pct": 192.0
@@ -200,10 +200,10 @@
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7023,
+  "words": 7043,
   "code_words": 1136,
   "ceiling": 2500,
-  "over": 4523,
-  "over_pct": 180.9
+  "over": 4543,
+  "over_pct": 181.7
  }
 ]

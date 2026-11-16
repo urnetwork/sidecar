@@ -152,7 +152,7 @@ control mode       (CLI, apps) authority statements, admissions, OwnerConfirm, K
                    owner decisions 185, 187)
 ```
 
-**Approval channels (I-8).** Decisions are §6.9 `Signed` statements (purpose `approval`) labeled with their evidence. No decision needs an SSHSIG, in v0 and every milestone until a customer asks (owner decision 279): every action's risk stays normal, no policy field or classifier raises it, and `ApprovalDecision.sshsig` stays reserved, ignored wherever it is presented and never trusted. A network accepts only the channels that the matching `requests` rule's `evidence`, else `evidenceDefault`, lists (§8.5, §8.6; owner decision 75), harness in a tainted run only where the rule's own list names it (owner decision 142). Email replies, MCP elicitation and the pass never count (owner decisions 75, 80; §5.9).
+**Approval channels (I-8).** Decisions are §6.9 `Signed` statements (purpose `approval`) labeled with their evidence. No decision needs an SSHSIG, in v0 and every milestone until a customer asks (owner decision 279): every action's risk stays normal, no policy field or classifier raises it, and `ApprovalDecision.sshsig` stays reserved, ignored wherever it is presented and never trusted. A network accepts only the channels that the matching `requests` rule's `evidence`, else `evidenceDefault`, lists (§8.5, §8.6; owner decision 75), harness in a tainted run only where the rule's own list names it (owner decision 142). Rows carry both as effective lists, a rule's in its `AclRequestRule` and the document's default in `AclRows.evidence_default`, so every verifier, the daemon, every server gate and every reader, checks a ruleless action's channel against the default in the spend check: `dns_set` and `dns_delete` at `POST /dns/records` (§12.8) and `bridge_expose` approvals; a document that narrows `evidenceDefault`, to device alone say, holds at the gates (§8.8; owner decision 342). Email replies, MCP elicitation and the pass never count (owner decisions 75, 80; §5.9).
 
 | Evidence | Channel; signer |
 |---|---|
@@ -571,6 +571,8 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   bytes body_sha256 = 3; string preview = 4;  // preview <= 2 KiB, rendered as untrusted text
   string host = 5; uint32 port = 6; uint32 audience = 7; int64 expires_millis = 8;
   repeated string cidrs = 9; repeated string grant_dst = 10; repeated string grant_allow = 11;
+                                            // a sock: entry in grant_dst is §9.4's token path in hex, never an
+                                            // application name, since GrantActivate shows api the action (§8.8)
   uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
                                             // 10, 11, 14, 26, 27 and 29, which approvers that do not know it refuse
   bool scope = 13;                          // a multi-use template (16.6)
@@ -586,6 +588,10 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   string alias_group = 36;                                                   // mail_alias_create's group (§15.8)
   uint32 versioning = 37;                   // O-tier evs_write: its version's setting, 0 on, 1 off (§11.7); set
                                             // only in version 2, which approvers that do not know it refuse
+  bytes share_network_id = 40;              // a share's grant (§8.11): the other network, 16 bytes, on a dial or
+                                            // route grant alone, beside its subject, the requesting sidecar; an
+                                            // admin's approval covers it as it covers every field (§8.8; owner
+                                            // decision 346)
   // owner decision 220: a dial or route grant's cidrs (9), target_port (27) and grant_dst's ip and port text move
   // to bytes sealed_detail = 38 under a raised version, which joins record.proto and this fence together
 }

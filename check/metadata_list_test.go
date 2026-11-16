@@ -71,16 +71,16 @@ type metadataListAddition struct {
 // 252); each here waits for the next fold.
 var metadataListAdditions = []metadataListAddition{
 	{
-		// QD-857: the list's v30, for cert-1's name failure backoff
+		// QD-857: the list's v31, for cert-1's name failure backoff
 		question: "ca-numbers-2026-11-m5-consecutive-failures",
-		block:    "# metadata_list.yml v29;",
-		list:     "# metadata_list.yml v30;",
+		block:    "# metadata_list.yml v30;",
+		list:     "# metadata_list.yml v31;",
 	},
 	{
 		question: "ca-numbers-2026-11-m5-consecutive-failures",
-		block:    "# admissions among the statements, and a presence key registration's own proof.\n",
-		list: "# admissions among the statements, and a presence key registration's own proof.\n" +
-			"# v30, updated 2026-11-16 for the owner's answer QD-857 (ca-numbers-2026-11-m5-consecutive-failures), adds to\n" +
+		block:    "# services; evs-6's member deposits; sock-1's dual registration by the listener's clock; and sock-3's ur/ ttl\n# by service.\n",
+		list: "# services; evs-6's member deposits; sock-1's dual registration by the listener's clock; and sock-3's ur/ ttl\n# by service.\n" +
+			"# v31, updated 2026-11-16 for the owner's answer QD-857 (ca-numbers-2026-11-m5-consecutive-failures), adds to\n" +
 			"# cert-1 network_tls_name_backoff, each URnetwork-zone name's failure backoff at a CA: the count of consecutive\n" +
 			"# failed authorizations since its last success there and the next allowed attempt time, kept until that success\n" +
 			"# or 8 d past that time.\n",

@@ -4,8 +4,9 @@
 // format 1 after format-2 data exists. The format-1 client is this code's client held to format 1 by
 // EvsSettings.MaxFormat, and a rolled-back binary this code at EvsSettings.InstanceFormat 1, which is what a rollback
 // deploys (QD-854: a rollback is a configuration of a real binary); server's T3 runs these cases through evshost's
-// block, and the real-binary run waits on that configuration's field (testdata/evs/format1_build.txt). FS-72 is on
-// §22.8's unknown list, so every write each case issues also runs with its response lost.
+// block, each instance's format set through the block's config, and runs the rollback on binaries and a harness built
+// from the release commits testdata/evs/format1_build.txt pins. FS-72 is on §22.8's unknown list, so every write each
+// case issues also runs with its response lost.
 //
 //	migration  Fs72Migration: a format-1 repo on format-2 evs, its network in the format2 gate, written by a format-2
 //	           writer and a format-1 client. The format-1 client commits a.txt; the format-2 writer's versionless

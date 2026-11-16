@@ -104,8 +104,11 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       refused alike by api and every member device (7.9's presence row): FS-124
 §8    (deterministic compile; compiled = reference; one definition's fixed vectors) readers' AclRows equal the
       writer's; lower or forked versions refused; suspension <= 5 s; no Network-mode edge or share contract; a
-      non-admin's RepoGrant refused, a config writer's RepoRevoke winning; §8.5's no-document rules; §8.10's
-      legacy-client rule; gate < 1 us, 0 allocs; the ephemeral ceiling: FS-19
+      non-admin's RepoGrant refused, a config writer's RepoRevoke winning, but in an owner-bound repo lifted by
+      its owner's later EvsShare and refused when it names the owner's consented device; §8.5's no-document
+      rules; §8.10's legacy-client rule, and its reply step: the gate's verdict reads no Postgres
+      (DenyPostgresForTest), the origin read being contract creation's, run only with a head row and only when
+      reach(a,b) fails; gate < 1 us, 0 allocs; the ephemeral ceiling: FS-19
 §9    (P2C vs a stale-load oracle; admission; fixed vectors for 9.4's K_tok, K_seal, tokens and 152 B seals, a moved
       or mismatched seal dropped) replay refused; drain; one script per Find; a 3,000-name set registers
       as three pages under one set_version, none refused for size, each unlistening only names in its own key range;
@@ -113,12 +116,12 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       of pages rebuilds the set; a client looping registrations or Finds is shed with unavailable before signing,
       one with many established streams never limited; a spent network's Find answers quota with no ticket; an
       unused edge ticket from another source, or an edge-marked ticket for an application name, is refused invalid
-      before any application byte, a valid edge splice working; ur share: no get or resume at or past
-      expire_millis, a live stream reset there, a sharer restarted past it serving nothing, --expires over 30 days
-      refused, uses never exceeded across a crash after a Reserve; on a fake clock, one dialer's 100 ms
-      connections to one 256-stream listener: Find issues the bucket's 50 tickets a second after its burst
-      of 500, none refused or delayed by 9.7's clamp, that dialer adding at most 25 to est between reports,
-      and a second dialer that redeems none moving est by at most 25
+      before any application byte, a valid edge splice working; ur share: an omitted --count is one use; no get
+      or resume at or past expire_millis, a live stream reset there, a sharer restarted past it serving nothing,
+      --expires over 30 days refused, uses never exceeded across a crash after a Reserve; on a fake clock, one
+      dialer's 100 ms connections to one 256-stream listener: Find issues the bucket's 50 tickets a second after
+      its burst of 500, none refused or delayed by 9.7's clamp or by est, that dialer adding at most 25 to est
+      between reports, and a second dialer that redeems none moving est by at most 25
 §10   (§10.4's mapped vectors; X-Wing KATs; ladder; missing key refused) KF1-KF7 (one commit per epoch, one claim
       per KeyPackage, no early Welcome, retention by acks, which live in Redis: FS-62); path-only self-updates by
       any leaf, an Update proposal refused; no commit past the projection; once every ack has expired the newest

@@ -395,7 +395,8 @@ func EvsWorldAlarmsName(alarms []string, alarm string) bool {
 }
 
 // A step action: one hourly evacuation run on the repo's cluster as taskworker's job runs it at format (taskworker
-// rolled back to a format-1 binary, or forward to format 2's), reading the world's format2 gate, its spool in the
+// rolled back to format 1, or forward to format 2), with the engine settings the Net's tier gives taskworker's jobs
+// at that format where it names any (EvsTier.JobSettings), reading the world's format2 gate, its spool in the
 // system's temporary directory, which the run removes; check gets the run's result and every alarm it raised. A run
 // a store error ends runs once more, as Evacuate's does, and check reads that run alone.
 func (self *EvsWorld) EvacuateAt(format uint32, check func(result *evsservice.EvacuationResult, alarms []string) error) func(ctx context.Context, net *Net) error {
@@ -407,6 +408,17 @@ func (self *EvsWorld) EvacuateAt(format uint32, check func(result *evsservice.Ev
 		run := func() (*evsservice.EvacuationResult, []string, error) {
 			evsSettings := evsservice.DefaultEvsSettings()
 			evsSettings.InstanceFormat = format
+			if tier := evsTierOf(net); tier != nil && tier.JobSettings != nil {
+				// the tier's taskworker, which must run as the format the schedule rolled it to
+				tierSettings, err := tier.JobSettings(format)
+				if err != nil {
+					return nil, nil, err
+				}
+				if tierSettings == nil || tierSettings.InstanceFormat != format {
+					return nil, nil, fmt.Errorf("the tier's taskworker does not run as instance format %d: %+v", format, tierSettings)
+				}
+				evsSettings = tierSettings
+			}
 			log := &evsWorldAlarmLog{}
 			evacuator, err := evsservice.NewEvacuator(net.Host(), &evsservice.EvacuatorDeps{
 				Settings: evsservice.DefaultEvacuatorSettings(), EvsSettings: evsSettings, Log: log,

@@ -1053,37 +1053,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "consumed_through", number: 27, typeName: "uint64"},
 		question: "plan-RECORD-depositor-spool",
 	},
-	{
-		message:  "AclRows",
-		field:    testFenceField{name: "suspensions", number: 8, typeName: "AclSuspension", repeated: true},
-		question: "plan-ACL-folded-grant-state",
-	},
-	{
-		message:  "AclRows",
-		field:    testFenceField{name: "spent_grants", number: 9, typeName: "AclSpentGrant", repeated: true},
-		question: "plan-ACL-folded-grant-state",
-	},
-	{
-		message:  "AclRows",
-		field:    testFenceField{name: "evidence_default", number: 10, typeName: "uint32", repeated: true},
-		question: "mcp-m3-03-evidence-default-at-gates",
-	},
 	// QD-764: a rule's via subjects apart from its targets, and an approved route's ids in the rows, whose advertisers
 	// a route rule with no via takes as its via subjects (QD-004's second half)
 	{
 		message:  "AclRule",
 		field:    testFenceField{name: "via", number: 12, typeName: "AclTarget", repeated: true},
 		question: "acl-m2-17-no-via-route-advertisers",
-	},
-	{
-		message:  "BridgeRows",
-		field:    testFenceField{name: "routes", number: 2, typeName: "BridgeRouteRow", repeated: true},
-		question: "acl-m2-17-no-via-route-advertisers",
-	},
-	{
-		message:  "AclTarget",
-		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
-		question: "plan-ACL-nonsidecar-subjects",
 	},
 	// QD-743: the folded access log keeps a RepoDelete's entry time and a removed admin's removal position, which
 	// readers need once those entries leave the log's retention
@@ -1207,12 +1182,6 @@ var testFenceAdditions = []struct {
 		message:  "CanonicalAction",
 		field:    testFenceField{name: "egress_mode", number: 39, typeName: "uint32"},
 		question: "bridge-m4-19-egress-change-action",
-	},
-	// QD-820: a share's grant names the other network, beside its subject, the requesting sidecar
-	{
-		message:  "CanonicalAction",
-		field:    testFenceField{name: "share_network_id", number: 40, typeName: "bytes"},
-		question: "acl-m6-03-share-grant-subject",
 	},
 	// QD-712 and QD-716: parts bound to one key part (DESIGN-DETAILS 3.2.5), the key set a connection proves under,
 	// the key commitment, each part's reply count, the header block's record count and a scan's carry
