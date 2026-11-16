@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,11 +83,16 @@ func certsSuiteCases() []certsSuiteCase {
 		{name: "a row and a transition with no time are refused", run: caseCertsStateTimeRequired},
 		{name: "a state's time moves with its state, and only then", run: caseCertsStateTime},
 		{name: "an issued chain is kept, and a reason only while revoking", run: caseCertsChainAndReason},
+		{name: "a name's failures count up at each CA apart, keeping the later time", run: caseCertsNameFailures},
+		{name: "a failure with no name, CA, time or wait is refused", run: caseCertsNameFailureRefused},
+		{name: "failures of one name counted at once count each", run: caseCertsNameFailuresAtOnce},
+		{name: "a success ends a name's backoff at its CA alone", run: caseCertsClearNameBackoffs},
 		// the purges' cases sit in decades of their own before every other case's times, earliest
 		// first, so each one's purge finds only rows of cases that have ended
 		{name: "a chain is dropped once its certificate ended, and its row kept", run: caseCertsPurgeChains},
 		{name: "a purge takes what ended before its time, and only that", run: caseCertsPurge},
 		{name: "a revoked or failed row is purged by its state's time", run: caseCertsPurgeByStateTime},
+		{name: "a name's backoff is purged once its time is past the purge's, and only then", run: caseCertsPurgeNameBackoffs},
 		{name: "an ephemeral client reads as one", run: caseCertsEphemeral},
 	}
 }
@@ -1037,4 +1044,233 @@ func caseCertsEphemeral(ctx context.Context, store certsservice.CertsStore, hook
 		return fmt.Errorf("a marked client: %v, %v", ephemeral, err)
 	}
 	return nil
+}
+
+// A name of the case's own, under the reserved example domain.
+func certsSuiteName() string {
+	return fmt.Sprintf("n%x.root.example", certsSuiteRandom(8))
+}
+
+// Whether backoffs are want, field for field, in order, times compared as instants.
+func certsSuiteSameBackoffs(got []*certsservice.CertsNameBackoff, want ...*certsservice.CertsNameBackoff) error {
+	same := len(got) == len(want)
+	for index := 0; same && index < len(got); index += 1 {
+		same = got[index].Name == want[index].Name && got[index].Ca == want[index].Ca &&
+			got[index].FailureCount == want[index].FailureCount && got[index].NextOrderTime.Equal(want[index].NextOrderTime)
+	}
+	if !same {
+		describe := func(backoffs []*certsservice.CertsNameBackoff) []string {
+			lines := []string{}
+			for _, backoff := range backoffs {
+				lines = append(lines, fmt.Sprintf("%s at %s: %d until %s", backoff.Name, backoff.Ca, backoff.FailureCount, backoff.NextOrderTime))
+			}
+			return lines
+		}
+		return fmt.Errorf("read %v, want %v", describe(got), describe(want))
+	}
+	return nil
+}
+
+func caseCertsNameFailures(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	name := certsSuiteName()
+	quiet := certsSuiteName()
+	// an hour for each failure counted, so each count's time is plain
+	wait := func(failureCount int) time.Duration { return time.Duration(failureCount) * time.Hour }
+	steps := []struct {
+		ca          certsservice.CertsCa
+		failureTime time.Time
+		wait        func(failureCount int) time.Duration
+		want        *certsservice.CertsNameBackoff
+	}{
+		{ca: certsservice.CertsCaLetsEncrypt, failureTime: base, wait: wait, want: &certsservice.CertsNameBackoff{
+			Name: name, Ca: certsservice.CertsCaLetsEncrypt, FailureCount: 1, NextOrderTime: base.Add(time.Hour),
+		}},
+		{ca: certsservice.CertsCaLetsEncrypt, failureTime: base.Add(10 * time.Minute), wait: wait, want: &certsservice.CertsNameBackoff{
+			Name: name, Ca: certsservice.CertsCaLetsEncrypt, FailureCount: 2, NextOrderTime: base.Add(2*time.Hour + 10*time.Minute),
+		}},
+		// another CA counts apart
+		{ca: certsservice.CertsCaGts, failureTime: base.Add(20 * time.Minute), wait: wait, want: &certsservice.CertsNameBackoff{
+			Name: name, Ca: certsservice.CertsCaGts, FailureCount: 1, NextOrderTime: base.Add(time.Hour + 20*time.Minute),
+		}},
+		// a failure counted late, whose own time would end sooner, keeps the later time
+		{ca: certsservice.CertsCaLetsEncrypt, failureTime: base.Add(5 * time.Minute), wait: func(int) time.Duration { return time.Minute }, want: &certsservice.CertsNameBackoff{
+			Name: name, Ca: certsservice.CertsCaLetsEncrypt, FailureCount: 3, NextOrderTime: base.Add(2*time.Hour + 10*time.Minute),
+		}},
+	}
+	for index, step := range steps {
+		got, err := store.AddNameFailure(ctx, name, step.ca, step.failureTime, step.wait)
+		if err != nil {
+			return fmt.Errorf("failure %d: %w", index, err)
+		}
+		if err := certsSuiteSameBackoffs([]*certsservice.CertsNameBackoff{got}, step.want); err != nil {
+			return fmt.Errorf("failure %d: %w", index, err)
+		}
+	}
+	listed, err := store.ListNameBackoffs(ctx, []string{quiet, name})
+	if err != nil {
+		return err
+	}
+	// by name, then CA
+	if err := certsSuiteSameBackoffs(listed, steps[2].want, steps[3].want); err != nil {
+		return err
+	}
+	for _, names := range [][]string{{quiet}, {}, nil} {
+		listed, err := store.ListNameBackoffs(ctx, names)
+		if err != nil {
+			return err
+		}
+		if len(listed) != 0 {
+			return fmt.Errorf("names %v read %d backoffs", names, len(listed))
+		}
+	}
+	return nil
+}
+
+func caseCertsNameFailureRefused(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	name := certsSuiteName()
+	wait := func(int) time.Duration { return time.Hour }
+	for _, refused := range []struct {
+		why         string
+		name        string
+		ca          certsservice.CertsCa
+		failureTime time.Time
+		wait        func(failureCount int) time.Duration
+	}{
+		{why: "no name", ca: certsservice.CertsCaLetsEncrypt, failureTime: base, wait: wait},
+		{why: "no CA", name: name, failureTime: base, wait: wait},
+		{why: "no time", name: name, ca: certsservice.CertsCaLetsEncrypt, wait: wait},
+		{why: "no wait", name: name, ca: certsservice.CertsCaLetsEncrypt, failureTime: base},
+	} {
+		if _, err := store.AddNameFailure(ctx, refused.name, refused.ca, refused.failureTime, refused.wait); !errors.Is(err, certsservice.ErrCertsNameFailure) {
+			return fmt.Errorf("a failure with %s answered %v", refused.why, err)
+		}
+	}
+	listed, err := store.ListNameBackoffs(ctx, []string{name, ""})
+	if err != nil {
+		return err
+	}
+	if len(listed) != 0 {
+		return fmt.Errorf("a refused failure was kept: %d backoffs", len(listed))
+	}
+	return nil
+}
+
+func caseCertsNameFailuresAtOnce(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	name := certsSuiteName()
+	const failureCount = 8
+	errs := make([]error, failureCount)
+	start := make(chan struct{})
+	var counting sync.WaitGroup
+	for index := range failureCount {
+		counting.Add(1)
+		go func() {
+			defer counting.Done()
+			<-start
+			_, errs[index] = store.AddNameFailure(ctx, name, certsservice.CertsCaLetsEncrypt, base.Add(time.Duration(index)*time.Minute), func(int) time.Duration { return time.Hour })
+		}()
+	}
+	close(start)
+	counting.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	listed, err := store.ListNameBackoffs(ctx, []string{name})
+	if err != nil {
+		return err
+	}
+	// whatever order they took, every failure counts once, and the latest failure's time stands
+	return certsSuiteSameBackoffs(listed, &certsservice.CertsNameBackoff{
+		Name: name, Ca: certsservice.CertsCaLetsEncrypt, FailureCount: failureCount, NextOrderTime: base.Add((failureCount-1)*time.Minute + time.Hour),
+	})
+}
+
+func caseCertsClearNameBackoffs(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	succeeded := certsSuiteName()
+	other := certsSuiteName()
+	never := certsSuiteName()
+	wait := func(int) time.Duration { return time.Hour }
+	for _, failure := range []struct {
+		name string
+		ca   certsservice.CertsCa
+	}{{succeeded, certsservice.CertsCaLetsEncrypt}, {succeeded, certsservice.CertsCaGts}, {other, certsservice.CertsCaLetsEncrypt}} {
+		if _, err := store.AddNameFailure(ctx, failure.name, failure.ca, base, wait); err != nil {
+			return err
+		}
+	}
+	// a name with no backoff ends nothing
+	removedCount, err := store.ClearNameBackoffs(ctx, []string{succeeded, never}, certsservice.CertsCaLetsEncrypt)
+	if err != nil {
+		return err
+	}
+	if removedCount != 1 {
+		return fmt.Errorf("a success ended %d backoffs, want 1", removedCount)
+	}
+	listed, err := store.ListNameBackoffs(ctx, []string{succeeded, other, never})
+	if err != nil {
+		return err
+	}
+	ordered := []*certsservice.CertsNameBackoff{
+		{Name: succeeded, Ca: certsservice.CertsCaGts, FailureCount: 1, NextOrderTime: base.Add(time.Hour)},
+		{Name: other, Ca: certsservice.CertsCaLetsEncrypt, FailureCount: 1, NextOrderTime: base.Add(time.Hour)},
+	}
+	slices.SortFunc(ordered, func(a *certsservice.CertsNameBackoff, b *certsservice.CertsNameBackoff) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	if err := certsSuiteSameBackoffs(listed, ordered...); err != nil {
+		return fmt.Errorf("after the success: %w", err)
+	}
+	removedCount, err = store.ClearNameBackoffs(ctx, []string{succeeded}, certsservice.CertsCaLetsEncrypt)
+	if err != nil || removedCount != 0 {
+		return fmt.Errorf("a second success: %d, %v", removedCount, err)
+	}
+	// a failure after the success counts from one again
+	again, err := store.AddNameFailure(ctx, succeeded, certsservice.CertsCaLetsEncrypt, base.Add(time.Minute), wait)
+	if err != nil {
+		return err
+	}
+	return certsSuiteSameBackoffs([]*certsservice.CertsNameBackoff{again}, &certsservice.CertsNameBackoff{
+		Name: succeeded, Ca: certsservice.CertsCaLetsEncrypt, FailureCount: 1, NextOrderTime: base.Add(time.Hour + time.Minute),
+	})
+}
+
+func caseCertsPurgeNameBackoffs(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	// a decade of its own, before every other case's backoffs, which sit from 2100 on
+	base := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(certsSuiteRandom(1)[0]) * time.Hour)
+	ended := certsSuiteName()
+	kept := certsSuiteName()
+	wait := func(int) time.Duration { return time.Hour }
+	if _, err := store.AddNameFailure(ctx, ended, certsservice.CertsCaLetsEncrypt, base, wait); err != nil {
+		return err
+	}
+	if _, err := store.AddNameFailure(ctx, kept, certsservice.CertsCaLetsEncrypt, base.Add(2*time.Hour), wait); err != nil {
+		return err
+	}
+	read := func() ([]*certsservice.CertsNameBackoff, error) {
+		return store.ListNameBackoffs(ctx, []string{ended, kept})
+	}
+	// at its time a backoff stays
+	if _, err := store.PurgeNameBackoffs(ctx, base.Add(time.Hour)); err != nil {
+		return err
+	}
+	if listed, err := read(); err != nil || len(listed) != 2 {
+		return fmt.Errorf("at the time: %d backoffs, %v", len(listed), err)
+	}
+	removedCount, err := store.PurgeNameBackoffs(ctx, base.Add(time.Hour+time.Microsecond))
+	if err != nil {
+		return err
+	}
+	if removedCount < 1 {
+		return fmt.Errorf("purged %d", removedCount)
+	}
+	listed, err := read()
+	if err != nil {
+		return err
+	}
+	return certsSuiteSameBackoffs(listed, &certsservice.CertsNameBackoff{
+		Name: kept, Ca: certsservice.CertsCaLetsEncrypt, FailureCount: 1, NextOrderTime: base.Add(3 * time.Hour),
+	})
 }
