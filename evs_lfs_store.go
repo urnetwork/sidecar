@@ -161,6 +161,10 @@ func (self *EvsLfsStore) Put(ctx context.Context, oid EvsLfsOid, size int64, con
 		if err != nil {
 			return nil, err
 		}
+		if !objects[0].Present() {
+			// the path moved and holds no object now: the creation did not store it
+			return nil, conflict
+		}
 		return objects[0], nil
 	case err != nil:
 		return nil, err

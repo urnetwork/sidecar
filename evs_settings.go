@@ -251,6 +251,17 @@ type EvsSettings struct {
 	LfsFreshAge          time.Duration
 	LfsCheckMaxAge       time.Duration
 	LfsMissingShownCount int
+
+	// The drop engine (evs_drop_lineage.go, evs_drop_preview.go). A head-mode device walks at most this much history
+	// for one drop, 4 MiB, counted at a statement's bound a version, past which a device that mirrors the repo drops
+	// it (QD-705's HeadDropFetchByteCount).
+	HeadDropFetchByteCount int64
+	// A dry run is read again every DropPreviewPollInterval, 2 s, at most DropPreviewPollCount times, 300, before the
+	// command gives up on it.
+	DropPreviewPollInterval time.Duration
+	DropPreviewPollCount    int
+	// Drops names at most this many paths a drop covers: 1,024 (I-13).
+	DropNamesCount int
 }
 
 // The desktop daemon's evs settings.
@@ -345,5 +356,9 @@ func DefaultEvsSettings() *EvsSettings {
 		LfsFreshAge:              5 * 24 * time.Hour,
 		LfsCheckMaxAge:           time.Hour,
 		LfsMissingShownCount:     20,
+		HeadDropFetchByteCount:   4 * 1024 * 1024,
+		DropPreviewPollInterval:  2 * time.Second,
+		DropPreviewPollCount:     300,
+		DropNamesCount:           1024,
 	}
 }
