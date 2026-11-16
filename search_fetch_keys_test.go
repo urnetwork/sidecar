@@ -5,7 +5,9 @@ package sidecar
 // QD-838 through the sync engine's fetch path (search_fetch.go): every record a round keeps carries the 72 B block its
 // segment header held, its generation and its file id into the cache, so a file kept in one round reopens in a later
 // round under RK_g alone, with no read of evs; and a record the cache kept before it kept them is fetched again by the
-// next round, alone and in the fetch order, after which it reopens and no further round fetches it.
+// next round, alone and in the fetch order, after which it reopens and no further round fetches it. QD-845: a
+// slot-keyed repo's records carry their slot's block and their two generations the same way, reopen in a later round,
+// and drop at the hint of the ERASE that destroys their slot key.
 
 import (
 	"crypto/sha256"
@@ -15,11 +17,11 @@ import (
 	"testing"
 )
 
-// Opens every file a snapshot holds through OpenRecordRead, with gkm's RK_1 as the fake source sealed under, and
+// Opens every file a snapshot holds through OpenRecordRead, with gkm's keys as the fake source sealed under, and
 // checks each reads back whole to its content_sha256. Answers how many it opened.
 func (self *testSyncWorld) assertReopens(t *testing.T, snapshot *SearchSyncSnapshot) int {
 	t.Helper()
-	gkm := &evsTestReadGkm{newest: 1}
+	gkm := &evsTestReadGkm{newest: 2}
 	for _, file := range snapshot.Files() {
 		key := SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.Path, Version: file.Version}
 		read, err := self.cache.cache.OpenRecordRead(t.Context(), key, gkm)
@@ -120,5 +122,82 @@ func TestARecordKeptBeforeKeysIsFetchedAgain(t *testing.T) {
 	world.round(t)
 	if fetched := world.source.fetched()[before:]; len(fetched) != 0 {
 		t.Errorf("a third round fetched %v", fetched)
+	}
+}
+
+// QD-845 through the fetch path: a slot-keyed repo's files, each record's key in its path's slot at generation 1 and
+// its segment at generation 2, are kept with the slot's block and both generations as the source took them from the
+// slot object, so every file a round kept reopens in a later round with no read of evs, a path's later version under
+// the slot key its earlier one had. The hint of an ERASE naming one path's slot key then drops that path's kept
+// versions alone: they reopen for no one, and every other file still does.
+func TestASlotKeyedFileReopensInALaterRoundAndDropsAtItsErase(t *testing.T) {
+	world := newTestSyncWorld(t, false)
+	world.source.slotKeyed = true
+	world.push(t, evsTestId("writer"), "first", 2)
+	world.round(t)
+	first := world.snapshot(t)
+	world.push(t, evsTestId("second writer"), "second", 2)
+	world.round(t)
+	later := world.snapshot(t)
+	if world.assertReopens(t, first) == 0 {
+		t.Fatal("the first round kept no file")
+	}
+	world.assertReopens(t, later)
+	cache := world.cache.cache
+	for _, file := range later.Files() {
+		frames, err := cache.OpenRecord(SearchCacheKey{RepoId: world.repoId, RefId: world.refId, Path: file.Path, Version: file.Version})
+		if err != nil {
+			t.Fatal(err)
+		}
+		slot := world.source.slotOf(file.Path)
+		slotKey, ok := frames.SlotKey()
+		if !ok || slotKey.SlotId != slot.slotId || slotKey.KeyIndex != 0 || frames.Generation() != 1 || frames.HeaderGeneration() != 2 {
+			t.Fatalf("%s kept slot key %+v at generations %d and %d", file.Path, slotKey, frames.Generation(), frames.HeaderGeneration())
+		}
+		if !slices.Equal(frames.WrappedObjectKey(), slot.block(t, 0)) {
+			t.Fatalf("%s kept another block than its slot object's", file.Path)
+		}
+	}
+
+	// the ERASE names the slot key of a path both snapshots hold, at one version or two
+	held, err := cache.Ref(world.repoId, world.refId)
+	if err != nil || held == nil {
+		t.Fatalf("held %+v, %v", held, err)
+	}
+	erasedPath := later.Files()[0].Path
+	erasedCount := 0
+	for _, file := range held.Files {
+		if file.Kind == searchCacheKindRecord && file.Key.Path == erasedPath {
+			erasedCount += 1
+		}
+	}
+	slot := world.source.slotOf(erasedPath)
+	dropped, err := cache.DropErasedSlotKeys(world.repoId, []*EvsErasedKey{{SlotId: slot.slotId, KeyIndex: 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if erasedCount == 0 || len(dropped) != erasedCount {
+		t.Fatalf("the hint dropped %v of %d kept versions", dropped, erasedCount)
+	}
+	gkm := &evsTestReadGkm{newest: 2}
+	for _, snapshot := range []*SearchSyncSnapshot{first, later} {
+		for _, file := range snapshot.Files() {
+			key := SearchCacheKey{RepoId: world.repoId, RefId: world.refId, Path: file.Path, Version: file.Version}
+			read, err := cache.OpenRecordRead(t.Context(), key, gkm)
+			if file.Path == erasedPath {
+				if !errors.Is(err, ErrSidecarStoreAbsent) {
+					t.Errorf("%s@%d reopens after its ERASE: %v", file.Path, file.Version, err)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%s@%d: %v", file.Path, file.Version, err)
+			}
+			whole, err := testReadThrough(t, read)
+			read.Close()
+			if err != nil || sha256.Sum256(whole) != file.ContentSha256 {
+				t.Errorf("%s@%d reads back otherwise after another path's ERASE: %v", file.Path, file.Version, err)
+			}
+		}
 	}
 }
