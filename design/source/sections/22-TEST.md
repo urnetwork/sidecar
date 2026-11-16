@@ -681,8 +681,9 @@ nvme     on 4 KiB and on 1 KiB XFS blocks, every namespace at the 512 B LBA form
          push refused by the budget, no ref at FOLD_BEHIND and evacuation keeping every batch under 26 h, so a push's
          bytes include the P2 work it causes, charged once from the wallet, after FS-116 passes; P0's bytes by kind
          against the refill, which set §19.8's P0 warn line, its page silent at that mix, the gate bounding that mix
-         only (owner decision 186; FS-117); the per-operation costs become §11.13's price table; at
-         M10, format 2's mix is priced by this run's per-operation table, its counts from the index row (D-TEST-13)
+         only (owner decision 186; FS-117); the per-operation costs become §11.13's price table, as a code change at
+         M2's exit and again before M3's pilot (owner decision 413); at M10, format 2's mix is priced by this run's
+         per-operation table, its counts from the index row (D-TEST-13)
 fold     the twenty-agent test and a mailbox stream at §19.6's rates: index writes per push (the fold ratio), records
          per batch per cluster and per parcel, how long a ref stays unfolded, and removal markers standing and their
          age at GC (owner decision 148); at M10, the search index's head-file overwrites, seals and merges per push
@@ -864,7 +865,10 @@ FI-5   lifecycle: restore and shred have one winner; a restored repo holds its w
 FI-6   visibility: nothing uncommitted evicts a file's newest committed version, which readers find in its entry or
        the head window, and no directory delta leaves the window before its name table holds it; every uncommitted
        object (a dead record with its slots, an unadopted segment, a staged wrap, an abandoned path map) becomes
-       reclaimable after its deadline, found without the log; nothing committed or unknown is reclaimed (§11)
+       reclaimable after its deadline, found without the log, but a slot whose origin names a statement no
+       batch, container or head names, its attempt dead between its slot round and its record (owner decision
+       400), and, while evacuation's delete of them is off, a dead record's slots (owner decision 399); nothing
+       committed or unknown is reclaimed (§11)
 FI-7   effects: an approval use is reserved before its effect and stays consumed or explicitly uncertain after any
        crash; no second effect; run taint and requester bindings survive restarts (§16)
 FI-8   attribution: a run restore changes only state attributable to its run, or reports ambiguity, and checks its
@@ -940,8 +944,8 @@ FI-19  index erasure: once the erasure of a document completes, no committed ver
        a search or a cache (§11, §15, §16)
 FI-20  roll-up: each expired bucket of a ref is rolled into all by at most one committed roll-up, whose plaintext
        equals the deterministic merge of its inputs; the bucket's files leave the index only in the push that commits
-       all holding their postings; a rerun after any crash converges to that result; until it commits, searches merge
-       the expired bucket (§11)
+       all, or a newer bucket's shards, holding their postings (owner decision 385); a rerun after any crash converges
+       to that result; until it commits, searches merge the expired bucket (§11)
 FI-21  search scope and taint: every hit is from a repo the caller's subject may read by §8's local evaluation and
        §8.5's consent, an EvsShare or audit reader having deposited, and evs having acknowledged, a read receipt
        naming each index object before decrypting it; no hit, snippet or display field comes from a secret, config or
@@ -988,13 +992,13 @@ FI-27  drop history: a drop deletes a segment or slot only if (1) every version 
        before its end and whose list equals its lineage's versions below its boundary; (2) the job's mark and its
        independent verification, at snapshots after every such drop's fence, found no other committed version naming
        it; (3) no hold covering the repo stood when the DELETE issued (a hold keeping what existed at its placement);
-       and (4) the object was over 25 h old by a checked clock; no version commits naming a listed version as a base,
-       rename or reuse source after its drop's fence; every path's newest version keeps all its content, a written
-       boundary carrying its base's oid and mode; readers show a listed version as pending or dropped, never as
-       missing or tampered, and alarm on a drop failing its checks; a cancelled, refused or observed drop deletes
-       nothing; a crash, retry, stale job instance or concurrent push changes neither the delete set nor what
-       survives; deleted content never returns, except from a stale mirror at a site-loss re-seed until the re-seeded
-       drop's job runs again, which §19.10's close report names (§11)
+       and (4) evacuation's horizon had passed the object's LastModified + 24 h + 2 min (owner decision 397); no
+       version commits naming a listed version as a base, rename or reuse source after its drop's fence; every path's
+       newest version keeps all its content, a written boundary carrying its base's oid and mode; readers show a
+       listed version as pending or dropped, never as missing or tampered, and alarm on a drop failing its checks; a
+       cancelled, refused or observed drop deletes nothing; a crash, retry, stale job instance or concurrent push
+       changes neither the delete set nor what survives; deleted content never returns, except from a stale mirror at
+       a site-loss re-seed until the re-seeded drop's job runs again, which §19.10's close report names (§11)
 FI-28  deliveries: each delivery of g has one immutable identity (group, g, C_g, recipient and the key sealed
        to), and one to a key never blocks, replaces or opens as one to another; every verifier, the oracle among
        them, judges each delivery at its own state (a staged one at its claim's) to one verdict, which no later
@@ -1111,8 +1115,9 @@ FS-7   §11    five writers push one path from one base: one commits and the oth
               reader sees the committed version throughout, folded or in the window, across
               the losers' evacuation and a restart
 FS-8   §11    kills after a segment upload, between parts, before a seal, and between a push's FI-6,13c    T2+T3  M2-out
-              batch record and its slot PUTs; the fake clock passes 26 h, 2 d and 3 d:
-              evacuation has dropped every dead record and its slots at 26 h and GC has
+              slot PUTs and its batch record (owner decision 400); the fake clock passes 26
+              h, 2 d and 3 d: evacuation has dropped every dead record at 26 h, its slots
+              staying until its delete of them is on (owner decision 399), and GC has
               deleted every orphan segment at 3 d (owner decision 203), leaving a committed
               and an unknown commit beside them; a delayed step-7 PUT after a fence write
               fails
@@ -1740,7 +1745,9 @@ FS-72  §11,7  format-1 code (M2) given each signed, well-formed format-2 constr
               migrated by §11's step while a format-1 client pushes and reads: its versioned
               pushes commit, and it refuses format-2 entries as needing format 2; a migration
               killed at each step resumes, no repo left half-migrated; evs and taskworker
-              rolled back to format-1 binaries after format-2 data exists refuse format-2
+              rolled back to format 1 after format-2 data exists, a real binary built from a
+              pinned release commit with InstanceFormat 1 set through its block config (owner
+              decision 412), refuse format-2
               pushes, purge nothing, and leave batches holding staged records to a format-2
               evacuator, alarming, so no newest version's content is lost
 FS-73  §11    stock git and git-lfs push commits with LFS files: the transfer agent writes     FI-9,16     T3     M10-out

@@ -65,7 +65,18 @@ group and epoch (363), batched delegation key reads (364), an agent's repo's gro
 (366), recovery wraps opened once admitted (367), a GroupForm's pin (368), the poison window (369), forwarding key
 objects by network, amending 202 (370), gkm's state over the gate cache (371), the Welcome HEAD (372), the
 bootstrap's config generation (373), the lb's 502 or 504 at gkm's client (374) and recommits after a newer
-generation (375)."""
+generation (375). Adds owner decisions 376-416 (folded 2026-11-16 with §11's items): changeless parts (376), evs's
+gate view and binding (377), read frames and proofs (378), reads of a deleted repo (379), removed paths (380), a
+carried creation's keys (381), a whole LIST mid-overwrite (382), records through pidx/ (383), erasure notes (384),
+own bases and promotion (385), late index entries (386), merges keeping one version (387), the index readings
+(388), extractor 1's own rules (389), one body encoding (390), two own indexers (391), the remote merge (392), a
+stale all (393), documents past a shard (394), resting diffs at erasure (395), a DROP's body, bounds and signer
+(396), the drop waits, amending 204 (397), drop records kept (398), slot origins (399), no slot bodies in records
+(400), record slot rows (401), the reseed route (402), read records after a re-seed (403), reseed records at
+evacuation (404), ref names, inline records and purge lists (405), record streams (406), a write's path CAS
+(407), evs route bodies (408), subscriptions (409), evs behind the lb (410), placement and auth codes (411), the
+format rollback and turn-on (412), price tables (413), the due classification (414), prefix breaches (415) and
+new refs under prefix rules, amending 345 (416)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -593,7 +604,88 @@ INDEX = list(_P9['INDEX']) + [
     (374, "gkm behind the lb",
      "gkm's client reads an lb 502 or 504 as no answer from gkm, never as its refusal."),
     (375, "Stale-generation commits",
-     "A commit gkm refuses only because a newer generation stands is restaged on it and sent again, with no `refused` alarm."),
+     "A commit gkm refuses only because a newer generation stands is restaged on it and sent again, with no `refused` alarm."),    (376, "Changeless parts",
+     "A statement in parts may state no change, a DROP's lists may fill changeless parts after its last change, and a seal's part item may name the root's empty path."),
+    (377, "evs's gate view and binding",
+     "Each run of step 4 reads the gate view again for 5d, and evs takes a token's (sidecar, client) pair as the exchange bound it."),
+    (378, "Read frames and proofs",
+     "A directory's unfolded deltas ride a frame each with their proofs, an unencodable frame ends the stream with an error, and a prefix's delta proves present."),
+    (379, "Reads of a deleted repo",
+     "evs's read, refs, log and subscription routes refuse a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING."),
+    (380, "Removed paths",
+     "evs serves a removed path's earlier versions and lives by number, a collected removal from the window, and a folded directory's marker as names_through + 1."),
+    (381, "A carried creation's keys",
+     "A reader opens each sealed value of an unfolded version with its own statement's generation."),
+    (382, "Whole LIST mid-overwrite",
+     "The in-house MinIO build makes a LIST whole for a key whose overwrite is in flight, or answers 503."),
+    (383, "Records through pidx/",
+     "Every reader of a window version's record falls back to pidx/ once evacuation moved its batch."),
+    (384, "Erasure notes",
+     "An ERASE's and a CLOSURE's note is EvsSealedMetadata.erasure_note: the erasure id, a completion byte and the caller's bytes."),
+    (385, "Own bases and promotion",
+     "A search-index diff rests only on its own writer's full entries, and a roll-up promotes a carried entry into a newer bucket's shards."),
+    (386, "Late index entries",
+     "An index push drops entries its content pin supersedes and is sent within 5 min of its signed time, an evs counter the named fallback."),
+    (387, "Merges keep one version",
+     "A merge keeps dropping a document's older version from its shard; the lazy alternative is measured before M10's exit."),
+    (388, "Index readings",
+     "Fourteen readings of §11.14 stand as section 1 of the design details writes them."),
+    (389, "Extractor 1's own rules",
+     "Extractor 1's decoders are the format's rules, a header is cut at 16,384 B, and thirteen readings stand."),
+    (390, "One body encoding",
+     "A remote-search body that is not its message's one deterministic encoding, or holds an unknown field, is refused."),
+    (391, "Two own indexers",
+     "A remote search asks the first two own indexers at once, both kept warm, with no hedge delay; eleven readings stand."),
+    (392, "Remote merge",
+     "A phone's merged row is the strongest claim by class first, and it folds its possible matches only where the indexer saw their push."),
+    (393, "A stale all",
+     "A device searches a cached all only while a bridge vouches for it, else its buckets until it fetches all's changes."),
+    (394, "Documents past a shard",
+     "A document that alone would not fit a shard is skipped at extraction, and a layout tests joins and removals against the bound."),
+    (395, "Resting diffs at erasure",
+     "An erasure re-enters an edit whose diff rests on an erased version, and at the limit only those two files wait."),
+    (396, "A DROP's body, bounds and signer",
+     "Membership comes from a DROP's body alone, a DROP holds at most 256 KiB and 2^20 listed values, and a phone signs only a history it walked."),
+    (397, "Drop waits",
+     "A drop job marks 12 min past each drop's seen_ms, and a candidate is young until the horizon passes LastModified + 24 h + 2 min, amending @@OD:204@@."),
+    (398, "Drop records kept",
+     "A drop job's listed entry hashes stay for the repo's life, the table's entry carries its end day, and a dry run keeps its request and reply."),
+    (399, "Slot origins",
+     "A slot object names its creating statement, which governs step 6, a retoken's takeover, a deposit's slots and evacuation's deletes."),
+    (400, "No slot bodies in records",
+     "Step 6 writes slots before the record, which keeps no slot body, and a push in parts carries its slot bodies in its seal."),
+    (401, "Record slot rows",
+     "A record-class slot holds an entry's key and salt in one 104 B wrapped block."),
+    (402, "The reseed route",
+     "POST .../reseed takes one EvsReseedRequest a call and runs the push path in a reseed mode, with 5f's window and slots only under re-seeded versions."),
+    (403, "Read records after a re-seed",
+     "A read record keeps its entry's commit version, and a verified EvsReseed drops only the records the incident lost."),
+    (404, "Reseed records at evacuation",
+     "Evacuation resolves a reseed record by its statement, the fence in place of the time clause."),
+    (405, "Ref names, inline records, purge lists",
+     "A creating push carries its sealed ref name and overlay base, inline records ride their locators, and a seal lists a push in parts' purge candidates."),
+    (406, "Record streams",
+     "A record stream takes add-only directory deltas, and its ref name spells its sidecar id as Id.String()."),
+    (407, "A write's path CAS",
+     "EvsRepo's write takes the path version its caller read, so a write is a path CAS."),
+    (408, "evs route bodies",
+     "The path-epoch, block and subscription bodies are proto3 messages as landed, and evs-8 names each lease's expiry."),
+    (409, "Subscriptions",
+     "evs writes {evsc_} on evs-8's row, and a whole-repo lease with no prefix matches in any path epoch."),
+    (410, "evs behind the lb",
+     "evs's client reads a 502 or 504 that is not an evs refusal as no answer, and retries."),
+    (411, "Placement and auth codes",
+     "evs's placement 409 carries REPO_PLACED and its 401 UNAUTHENTICATED."),
+    (412, "Format rollback and turn-on",
+     "A format rollback is InstanceFormat in the blocks' config, and the purge's turn-on pass waits until its taskworker reads on."),
+    (413, "Price tables",
+     "Each nvme run's measured price table reaches the write budget as a code change."),
+    (414, "Due classification",
+     "evs classes a due crossing on its own state, immediate for every shrink until it judges from the log."),
+    (415, "Prefix breaches",
+     "A breaching push stops a git-mode ref; file mode repairs unasked within bounds; a re-creation clears a removed taint; a repair names what it writes over."),
+    (416, "New refs under prefix rules",
+     "A new shared ref is judged from a shared branch's tree, the pin push reaches only shared branches with a tip, and evs refuses a stale-pinned creation."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -617,11 +709,17 @@ for _n, _old_end, _note in [
          " Amended by @@OD:276@@: the page Worker's leg keeps a twin of it and links no connect."),
         # Owner decision 370 amends 202's key: the object names its network as well.
         (202, "keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB.",
-         " Amended by @@OD:370@@: the key is `gkm/dkey/<network_id>/<delegation_id>`.")]:
+         " Amended by @@OD:370@@: the key is `gkm/dkey/<network_id>/<delegation_id>`."),
+        # Owner decision 397 amends 204's 2 min: 12 min past each drop's seen_ms.
+        (204, "amending @@OD:183@@'s 25-minute fence.",
+         " Amended by @@OD:397@@: 12 min past each drop's seen_ms, so 25 h 12 min to 26 h 12 min."),
+        # Owner decision 416 narrows 345's reading of the shared refs a set's pin push reaches.
+        (345, "at most 256 sets.",
+         " Amended by @@OD:416@@: the filer's pin push reaches only shared branches with a tip.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 376))
+assert [r[0] for r in INDEX] == list(range(1, 417))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -663,7 +761,16 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               357: '2026-11-06', 358: '2026-11-06', 359: '2026-11-06', 360: '2026-11-10', 361: '2026-11-10',
               362: '2026-11-10', 363: '2026-11-10', 364: '2026-11-10', 365: '2026-11-11', 366: '2026-11-10',
               367: '2026-11-10', 368: '2026-11-10', 369: '2026-11-11', 370: '2026-11-12', 371: '2026-11-15',
-              372: '2026-11-12', 373: '2026-11-14', 374: '2026-11-15', 375: '2026-11-15'})
+              372: '2026-11-12', 373: '2026-11-14', 374: '2026-11-15', 375: '2026-11-15',
+              376: '2026-11-12', 377: '2026-11-12', 378: '2026-11-15', 379: '2026-11-11', 380: '2026-11-15',
+              381: '2026-11-11', 382: '2026-11-11', 383: '2026-11-11', 384: '2026-11-11', 385: '2026-11-11',
+              386: '2026-11-11', 387: '2026-11-11', 388: '2026-11-11', 389: '2026-11-11', 390: '2026-11-11',
+              391: '2026-11-11', 392: '2026-11-11', 393: '2026-11-11', 394: '2026-11-12', 395: '2026-11-13',
+              396: '2026-11-11', 397: '2026-11-11', 398: '2026-11-15', 399: '2026-11-15', 400: '2026-11-15',
+              401: '2026-11-12', 402: '2026-11-15', 403: '2026-11-14', 404: '2026-11-15', 405: '2026-11-12',
+              406: '2026-11-15', 407: '2026-11-12', 408: '2026-11-15', 409: '2026-11-15', 410: '2026-11-12',
+              411: '2026-11-15', 412: '2026-11-15', 413: '2026-11-15', 414: '2026-11-15', 415: '2026-11-15',
+              416: '2026-11-13'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -856,7 +963,19 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "group (365), the MLS engine's memory (366), recovery wraps opened once admitted (367), a GroupForm's pin "
     "(368), the poison window (369), forwarding key objects by network (370), amending @@OD:202@@, gkm's state "
     "over the gate cache (371), the Welcome HEAD (372), the bootstrap's config generation (373), the lb's 502 or "
-    "504 at gkm's client (374) and recommits after a newer generation (375). ")
+    "504 at gkm's client (374) and recommits after a newer generation (375). The fold of §11's the same day "
+    "numbers the answers on encrypted versioned storage: changeless parts (376), evs's gate view and binding (377), "
+    "read frames and proofs (378), reads of a deleted repo (379), removed paths (380), a carried creation's keys "
+    "(381), a whole LIST mid-overwrite (382), records through pidx/ (383), erasure notes (384), own bases and "
+    "promotion (385), late index entries (386), merges keeping one version (387), the index readings (388), "
+    "extractor 1's own rules (389), one body encoding (390), two own indexers (391), the remote merge (392), a "
+    "stale all (393), documents past a shard (394), resting diffs at erasure (395), a DROP's body, bounds and "
+    "signer (396), the drop waits (397), amending @@OD:204@@, drop records kept (398), slot origins (399), no slot "
+    "bodies in records (400), record slot rows (401), the reseed route (402), read records after a re-seed (403), "
+    "reseed records at evacuation (404), ref names, inline records and purge lists (405), record streams (406), a "
+    "write's path CAS (407), evs route bodies (408), subscriptions (409), evs behind the lb (410), placement and "
+    "auth codes (411), the format rollback and turn-on (412), price tables (413), the due classification (414), "
+    "prefix breaches (415) and new refs under prefix rules (416), amending @@OD:345@@. ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
