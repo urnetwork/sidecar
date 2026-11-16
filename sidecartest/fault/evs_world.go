@@ -68,6 +68,10 @@ type EvsTier struct {
 	NewHost func(ctx context.Context, host *sidecar.ServiceHost, settings *evsservice.EvsSettings, deps *EvsTierDeps) (EvsTierHost, error)
 	// A token for principal that host's Authenticator verifies.
 	IssueToken func(principal *sidecar.Principal) (string, error)
+	// The engine settings taskworker's evs jobs run with at an instance format, as the tier's taskworker takes them:
+	// server's T3 reads them through taskworker's own loader from a block config that names the format (QD-854).
+	// nil: this code's defaults at the format.
+	JobSettings func(format uint32) (*evsservice.EvsSettings, error)
 }
 
 // The seams a world gives an instance's block.
