@@ -83,11 +83,14 @@ func TestSubprotocolStreamDeadlineLeavesTheStreamUsable(t *testing.T) {
 	// a deadline on the dispatcher's clock wakes a waiting read when the clock reaches it
 	accepted.SetReadDeadline(a.clock.Now().Add(time.Second))
 	readErr := make(chan error, 1)
+	// counted before the read starts: a read that set its wait before the count was taken would leave the await one
+	// wait short, which hung the test under load
+	waits := a.clock.waitCount.Value()
 	go func() {
 		_, err := accepted.Read(make([]byte, 8))
 		readErr <- err
 	}()
-	a.clock.awaitWaitCount(a.clock.waitCount.Value() + 1)
+	a.clock.awaitWaitCount(waits + 1)
 	a.clock.Advance(time.Second)
 	if err := testAwait(t, readErr, "the read at its deadline"); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("the read at its deadline: %v", err)
