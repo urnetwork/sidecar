@@ -31,6 +31,10 @@
 // this device follows above one it ignores, so only such a version's sealed metadata is opened, one more round each;
 // the list is for display alone, so one that does not read or open marks nothing and fails nothing.
 //
+// A History that asks for it (EvsReadArgs.Provenance) gives each listed version's push's sealed provenance, a
+// removal's included, one more round per push (evs_read_provenance.go): a push whose metadata does not open fails
+// the History, and one evs serves no record of reads nil.
+//
 // On every leg. Safe for concurrent use.
 
 package sidecar
@@ -178,6 +182,14 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		version = entry.GetVersion() - 1
 	}
 	self.markWrittenOver(ctx, history, statements, head, keys)
+	if args.Provenance && head != nil {
+		reads := newEvsProvenanceReads(self, refId, head, keys)
+		for i, listed := range history.Versions {
+			if listed.Provenance, err = reads.of(ctx, statements[i]); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return history, nil
 }
 

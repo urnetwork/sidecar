@@ -1278,6 +1278,13 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "server_name", number: 11, typeName: "string"},
 		question: "tls-m6-06-reach-receipt-server-name",
 	},
+	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
+	// whether body is the kind's message or the AgentSignedBody holding it
+	{
+		message:  "Opening",
+		field:    testFenceField{name: "version", number: 4, typeName: "uint32"},
+		question: "record-m6-03-opening-entry-version",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

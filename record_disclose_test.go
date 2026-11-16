@@ -46,6 +46,19 @@ type testDiscloseWorld struct {
 
 func newTestDiscloseWorld(t *testing.T, witnesses ...*testLogWitness) *testDiscloseWorld {
 	t.Helper()
+	return newTestDiscloseWorldWith(t, &testDiscloseOptions{}, witnesses...)
+}
+
+// How a disclosure world's member records its run.
+type testDiscloseOptions struct {
+	// The agent the run's entries name, the decision's apart: a person decides.
+	agentId *sidecar.Id
+	// Runs on the member's device before its record opens, to bind a signer for its agents' entries.
+	prepareMember func(member *testRecordDevice)
+}
+
+func newTestDiscloseWorldWith(t *testing.T, options *testDiscloseOptions, witnesses ...*testLogWitness) *testDiscloseWorld {
+	t.Helper()
 	world := &testDiscloseWorld{testLogWorld: newTestLogWorld(t)}
 	world.admin = world.testLogWorld.admin()
 	var witness sidecar.RecordLogWitness = testLogNoWitness{t: t}
@@ -55,6 +68,9 @@ func newTestDiscloseWorld(t *testing.T, witnesses ...*testLogWitness) *testDiscl
 	world.adminRecord = world.admin.openWith(witness)
 	testLogOn(t, world.testLogWorld, world.adminRecord, witnesses...)
 	world.member = world.memberDevice(true)
+	if options.prepareMember != nil {
+		options.prepareMember(world.member)
+	}
 	world.memberRecord = world.member.open()
 	world.runId = sidecar.NewId()
 	world.runs.StartRun(world.runId)
@@ -82,6 +98,9 @@ func newTestDiscloseWorld(t *testing.T, witnesses ...*testLogWitness) *testDiscl
 		}},
 	}
 	for i, draft := range drafts {
+		if draft.RunId != nil {
+			draft.AgentId = options.agentId
+		}
 		refs, err := world.memberRecord.Writer().Append(draft)
 		if err != nil {
 			t.Fatalf("draft %d, a %s: %v", i, draft.Kind, err)

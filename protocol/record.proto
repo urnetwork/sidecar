@@ -343,6 +343,9 @@ message AgentSignedBody {                   // the sealed plaintext of RecordEnt
 message Opening {                           // an entry with what opens it
   bytes header = 1;                         // RecordEntry.header, the whole Signed, as stored
   bytes salt = 2; bytes body = 3;           // both empty: the header alone
+  uint32 version = 4;                       // QD-864: RecordEntry.version of the entry this was made from, absent
+                                            // reading 1: body is the kind's message at 1 and the AgentSignedBody
+                                            // holding it at 2. The opener's word, unsigned: the commitment binds body
 }
 message CopyBody { repeated Opening entries = 1; }  // copy (M6): <= 64 entries the daemon deposited to T
 message TranscriptBody {                    // transcript: a chunk of §16.7's tail

@@ -30,6 +30,11 @@
 // (QD-819), is the one write that is not one push: sealed and found past it before anything is uploaded, it goes as
 // its halves, each its own write, splitting again in turn (evs_write_split.go).
 //
+// A write made in a run names the run's tainted bit, and one made for an agent names it (EvsWritePathsArgs.Tainted,
+// AgentId): every push of the write seals both in its provenance, on format 1 too (§11.6's Records, from M3; QD-042,
+// QD-851), where a reader's EvsFileInfo.Provenance finds them. A write bound to no run seals tainted false and no
+// agent. Neither is anything evs reads (§11.5, I-18).
+//
 // On every leg. Safe for concurrent use, each call its own push.
 
 package sidecar
@@ -51,6 +56,10 @@ type EvsWritePathsArgs struct {
 	Writes  []*EvsPathWrite
 	// The agent the push is made for (EvsWriteArgs.AgentId), nil for none.
 	AgentId *Id
+	// The writing run's tainted bit as the caller read it when the write was asked (Sidecar.RunTainted, §16.6), which
+	// each push's sealed provenance carries: a version so marked reads untrusted (§11.6's Records). False for a write
+	// bound to no run.
+	Tainted bool
 }
 
 // What a committed WritePaths did.
@@ -93,7 +102,9 @@ func (self *EvsRepo) Write(ctx context.Context, args *EvsWriteArgs) (*EvsWriteRe
 		}
 		write.Content = spill
 	}
-	result, err := self.WritePaths(ctx, &EvsWritePathsArgs{RefName: args.RefName, Writes: []*EvsPathWrite{write}, AgentId: args.AgentId})
+	result, err := self.WritePaths(ctx, &EvsWritePathsArgs{
+		RefName: args.RefName, Writes: []*EvsPathWrite{write}, AgentId: args.AgentId, Tainted: args.Tainted,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +164,7 @@ func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsA
 	rebuilds := 0
 	dueWaits := 0
 	for attempt := 0; ; attempt += 1 {
-		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds, extras, args.AgentId)
+		result, plan, err := self.writeOnce(ctx, args, refName, refId, 0 < attempt, &rebuilds, extras)
 		switch {
 		case err == nil:
 			return result, plan, nil
@@ -191,7 +202,7 @@ func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsA
 				return nil, plan, err
 			}
 			// read the removal the first read did not show, and plan once more, unless a creation now stands
-			retried, retriedPlan, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, extras, args.AgentId, creations)
+			retried, retriedPlan, retryErr := self.writeOnce(ctx, args, refName, refId, true, &rebuilds, extras, creations)
 			if retryErr == nil {
 				return retried, retriedPlan, nil
 			}
@@ -210,7 +221,8 @@ var errEvsCreationStands = errors.New("evs: a path created concurrently")
 
 // One attempt: see the file header. creations, when given, are paths the last plan created, refused with
 // errEvsCreationStands if this plan finds one standing. rebuilds counts the write's rebuilds and retokens.
-func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refName []byte, refId Id, fresh bool, rebuilds *int, extras *evsPushExtras, agentId *Id, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
+func (self *EvsRepo) writeOnce(ctx context.Context, args *EvsWritePathsArgs, refName []byte, refId Id, fresh bool, rebuilds *int, extras *evsPushExtras, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
+	writes := args.Writes
 	repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
 	if err != nil {
 		return nil, nil, err
@@ -224,7 +236,10 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 	if err != nil {
 		return nil, nil, err
 	}
-	planArgs := &EvsPlanArgs{RefName: refName, RefId: refId, Writes: planWrites, Generation: repoKey.Generation(), Fresh: fresh, AgentId: agentId}
+	planArgs := &EvsPlanArgs{
+		RefName: refName, RefId: refId, Writes: planWrites, Generation: repoKey.Generation(), Fresh: fresh,
+		Tainted: args.Tainted, AgentId: args.AgentId,
+	}
 	if extras != nil {
 		// the prefix rules leave a CLOSURE's, an ERASE's and a CUT's push outside them (DESIGN-DETAILS 16.2.4's line 1)
 		planArgs.Flags = extras.flags

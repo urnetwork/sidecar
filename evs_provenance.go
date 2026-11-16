@@ -17,7 +17,12 @@
 //	         entry's time and SidecarAgentSubkeySettings' bound: verified, or refused, which the reader alarms as
 //	         tampering (SidecarEvsAlarmTamper) and never attributes to the agent. A writer revoked for compromise is the
 //	         caller's to judge before it asks (QD-232)
-//	tainted  the run's bit rides beside them (plan-MCP-format1-tainted-files), read as it stands
+//	tainted  the run's bit rides beside them, on format 1 too from M3 (plan-MCP-format1-tainted-files, QD-042; QD-851):
+//	         a write made in a run names its bit (EvsWritePathsArgs.Tainted, EvsWriteAtTipArgs.Tainted,
+//	         EvsWriteEffect.Tainted), read as it stands; a push bound to no run carries none
+//	import   a push carrying a signed EvsImport reads imported, its versions from outside the network
+//
+// EvsPushProvenance is evs_repo.go's, on every leg, since a read's EvsFileInfo carries it (evs_read_provenance.go).
 //
 // On every leg but the ios_extension legs. Package-level functions are safe for concurrent use.
 
@@ -81,29 +86,6 @@ func evsSignPushProvenance(provenance *protocol.EvsProvenance, sign EvsSignProve
 	return nil
 }
 
-// How a push's provenance reads (QD-159).
-type EvsPushProvenanceState int
-
-const (
-	// No agent: the push is its sidecar's own.
-	EvsProvenanceUnattributed EvsPushProvenanceState = iota + 1
-	// An agent with no subkey signature: the writer's word (§5.5's agent_asserted).
-	EvsProvenanceAsserted
-	// The certificate, the push's time and the subkey's signature all hold.
-	EvsProvenanceVerified
-)
-
-// A push's provenance as a reader takes it.
-type EvsPushProvenance struct {
-	State EvsPushProvenanceState
-	// The agent the push names, nil when unattributed, a refused signature's included.
-	AgentId *Id
-	// The writing run's tainted bit.
-	Tainted bool
-	// A subkey signature that did not hold, which the reader alarmed: the agent reads as unattributed.
-	Refused bool
-}
-
 // What EvsCheckPushProvenance checks.
 type EvsPushProvenanceCheck struct {
 	RepoId Id
@@ -118,13 +100,16 @@ type EvsPushProvenanceCheck struct {
 }
 
 // A reader's check of a push's agent provenance: see the file header. An error wrapping ErrAgentProvenanceInvalid
-// is a signature that does not hold, which the caller alarms on; its answer still says the tainted bit, with no agent.
+// is a signature that does not hold, which the caller alarms on; its answer still says the tainted bit and the import,
+// with no agent.
 func EvsCheckPushProvenance(check *EvsPushProvenanceCheck) (*EvsPushProvenance, error) {
 	if check == nil || check.Statement == nil || check.Metadata == nil {
 		return nil, fmt.Errorf("%w: nothing to check", ErrAgentProvenanceInvalid)
 	}
 	provenance := check.Metadata.GetProvenance()
-	read := &EvsPushProvenance{State: EvsProvenanceUnattributed, Tainted: provenance.GetTainted()}
+	read := &EvsPushProvenance{
+		State: EvsProvenanceUnattributed, Tainted: provenance.GetTainted(), Imported: 0 < len(check.Metadata.GetSignedImport()),
+	}
 	if len(provenance.GetAgentId()) == 0 {
 		if len(provenance.GetAgentCert()) != 0 || len(provenance.GetAgentSignature()) != 0 {
 			return read, fmt.Errorf("%w: a subkey signature naming no agent", ErrAgentProvenanceInvalid)

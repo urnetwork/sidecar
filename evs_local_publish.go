@@ -93,6 +93,10 @@ type EvsLocalPublishArgs struct {
 	// re-creates it after a DELETE; a new branch's is chosen here by the base search (evs_local_overlay.go), nil for
 	// none.
 	Base *protocol.EvsOverlay
+	// The writing run's tainted bit and the agent the push is made for, which its sealed provenance carries
+	// (EvsGitPlanArgs.RunTainted, AgentId): WriteAtTip's, false and nil for a git client's push, which no run binds.
+	RunTainted bool
+	AgentId    *Id
 	// An import's push: every carried commit is listed by an EvsImport this sidecar signs, as a repo admin, over the
 	// push's own commits (8.2.6), held to git's graph alone.
 	Import bool
@@ -535,6 +539,7 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 	planArgs := &EvsGitPlanArgs{
 		RefName: self.args.RefName, RefId: self.refId, Update: git, Changes: self.changes, BaseVersion: baseVersion,
 		Base: self.base, Blobs: self.objects, Generation: repoKey.Generation(),
+		RunTainted: self.args.RunTainted, AgentId: self.args.AgentId,
 	}
 	if 0 < len(self.tainted) {
 		planArgs.Tainted = self.tainted
