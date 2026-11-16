@@ -95,6 +95,9 @@ func evsGitObjectOid(kind string, content []byte) EvsGitOid {
 	return EvsGitOid(objectHash.Sum(nil))
 }
 
+// The empty tree's oid, git's 4b825dc6...: a commit with no file.
+var EvsGitEmptyTreeOid = evsGitObjectOid(evsGitTreeKind, nil)
+
 // The running hash of a blob whose size is known before its bytes, so a reader checks a file's oid
 // as the file streams past and never holds it (R-EVS-14). Not safe for concurrent use.
 type evsGitBlobHash struct {

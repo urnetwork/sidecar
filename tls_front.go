@@ -1124,7 +1124,7 @@ func (self *TlsFrontConn) openTarget(ctx context.Context, pass *tlsAudiencePass)
 	}
 	// the visitor reached the service: the connection counts once, under the grant of its first pass
 	if pass.grant != nil && self.reachGrant.CompareAndSwap(nil, pass.grant) {
-		self.front.reach.note(pass.grant, self.open.GetClientIp(), 1, 0)
+		self.front.reach.note(pass.grant, self.open.GetClientIp(), self.serverName, 1, 0)
 	}
 	return target, nil
 }
@@ -1132,7 +1132,7 @@ func (self *TlsFrontConn) openTarget(ctx context.Context, pass *tlsAudiencePass)
 // Counts the ended connection's bytes toward its reach, when its pass opened the target.
 func (self *TlsFrontConn) noteReachEnd() {
 	if grant := self.reachGrant.Load(); grant != nil {
-		self.front.reach.note(grant, self.open.GetClientIp(), 0, self.stream.byteCount.Load())
+		self.front.reach.note(grant, self.open.GetClientIp(), self.serverName, 0, self.stream.byteCount.Load())
 	}
 }
 
