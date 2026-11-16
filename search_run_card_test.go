@@ -5,7 +5,8 @@
 // devices folding one stream alike and a gap filled later moving the version, a rebuild writing the same bytes at the
 // build's epoch, entries erased at the epoch left out while still counting toward c, a builder holding an ERASE before
 // its CUT blocked and one without it folding the entry, a run with every source erased having no card, a team record's
-// card holding nothing only the vault holds, and each log's mapping of row and text; all on a fake stream.
+// card holding nothing only the vault holds, each log's mapping of row and text, all on a fake stream; and the fence
+// on SEARCH-M10-16's CUT, which lists every projection made at the epoch it names and none folded after it.
 
 package sidecar
 
@@ -431,5 +432,55 @@ func TestCardTeamMapping(t *testing.T) {
 	card, _, err = testRunCard(t, stream, runId, 1, nil, nil)
 	if err != nil || card.ExpiresSeconds != 0 {
 		t.Fatalf("a re-opened run's expires %d, %v", card.ExpiresSeconds, err)
+	}
+}
+
+// 15.2.10's fence and 15.6's TestCardRaceAfterTheRead, on SEARCH-M10-16's CUT: the CUT lists a card through the epoch
+// it names, so the card the eraser read and a projection that folded one more entry after that read, both made at
+// that epoch, are listed; a fold at the epoch the CUT moved to leaves out the entry its erasure names and is above
+// the list.
+func TestCardRaceAfterTheRead(t *testing.T) {
+	world := testNewHeadWorld()
+	writer := evsTestId("writer a")
+	world.push(t, writer, testLive("d", 1, 1, 0, testHeadKeys(1, 0)))
+	eraser := testNewEraser(t, world.ref.store(evsTestId("eraser")), false, &testIndexWorldClock{world: world}, nil)
+	epoch := world.view(t, writer).head.indexEpoch
+	runId := evsTestId("run")
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "race")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Harness: "codex"}))
+	erased := stream.add(t, testRecordEntry(t, "secret", RecordKindToolCall, runId, 2, &protocol.ToolCallBody{ToolName: "Secret"}))
+	read, _, err := testRunCard(t, stream, runId, epoch, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// an ingester's projection lands between the eraser's read and its CUT, folding one more entry
+	stream.add(t, testRecordEntry(t, "later", RecordKindToolCall, runId, 3, &protocol.ToolCallBody{ToolName: "Later"}))
+	late, _, err := testRunCard(t, stream, runId, epoch, nil, nil)
+	if err != nil || late.Version <= read.Version {
+		t.Fatalf("the late projection's version %d, the read's %d, %v", late.Version, read.Version, err)
+	}
+	refKey := bytes.Repeat([]byte{0x3d}, 32)
+	cardKey, err := indexDocKey(refKey, stream.refId, read.Name, read.Chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := testCut(t, eraser, "card erasure", &IndexCutDocument{Key: cardKey, ThroughEpoch: true})
+	view := world.view(t, writer)
+	if result.Epoch != epoch || !view.erased(cardKey, read.Version) || !view.erased(cardKey, late.Version) {
+		t.Fatalf("the CUT at epoch %d lists the read %v and the late projection %v", result.Epoch, view.erased(cardKey, read.Version), view.erased(cardKey, late.Version))
+	}
+	// the builder after the CUT holds the ERASE and the set that lists its erasure: the entry is erased at its epoch
+	for _, entry := range stream.entries {
+		if entry.entryId == erased.entryId {
+			entry.keyGone, entry.body = true, nil
+		}
+	}
+	erasures := []*RecordStreamErasure{testRecordErase(t, evsTestId("card erasure"), false, 1, nil, erased.entryId)}
+	after, _, err := testRunCard(t, stream, runId, view.head.indexEpoch, erasures, testErasureSetOf(t, view))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.erased(cardKey, after.Version) || testRecordField(after, indexFieldFirstRegistered+6) != "Later:1" {
+		t.Fatalf("the fold after the CUT: listed %v, tools %q", view.erased(cardKey, after.Version), after.Fields[indexFieldFirstRegistered+6])
 	}
 }
