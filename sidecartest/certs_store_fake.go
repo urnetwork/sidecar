@@ -127,7 +127,7 @@ func (self *FakeCertsStore) InsertCert(ctx context.Context, row *sidecar.TlsCert
 		}
 		stored := certsFakeCopy(row)
 		// a reason waits only in a revoking row
-		if stored.State != sidecar.TlsCertStateRevoking {
+		if stored.State != sidecar.TlsCertStateRevoking && stored.State != sidecar.TlsCertStateCustomRevoking {
 			stored.RevocationReason = ""
 		}
 		self.rows[row.CertId] = stored
@@ -290,7 +290,7 @@ func (self *FakeCertsStore) TransitionCert(ctx context.Context, transition *cert
 		}
 		row.State = transition.To
 		// a reason waits only in a revoking row
-		if transition.To != sidecar.TlsCertStateRevoking {
+		if transition.To != sidecar.TlsCertStateRevoking && transition.To != sidecar.TlsCertStateCustomRevoking {
 			row.RevocationReason = ""
 		} else if transition.RevocationReason != "" {
 			row.RevocationReason = transition.RevocationReason

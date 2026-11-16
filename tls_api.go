@@ -12,6 +12,7 @@
 package sidecar
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -144,31 +145,257 @@ type TlsCertRecord struct {
 	// What the CA is to be told, while State is revoking. Empty in any other state: the row drops it once the CA
 	// has taken the revocation.
 	RevocationReason TlsCertRevocationReason `json:"revocation_reason,omitempty"`
-	// Why a custom row failed, or went back to custom_queued (17.2.3's custom_reason). Off the wire until TLS-M6-05
-	// gives it its json name with §2.8's lines (17.2.16), so no answer sets it yet and a device reads none: the
-	// certificate manager's new CSR after TlsCustomReasonAttestation waits on that.
-	CustomReason string `json:"-"`
+	// A Team custom row's host and its domain (DESIGN-DETAILS 17.2.5). Empty on every other row.
+	CustomHost   string `json:"custom_host,omitempty"`
+	CustomDomain string `json:"custom_domain,omitempty"`
+	// Why a custom row failed, or went back to custom_queued (17.2.3's custom_reason): a TlsCustomReason.
+	CustomReason string `json:"custom_reason,omitempty"`
+
+	// On a row of an ordering desktop's work list only (TlsCertsResult.QueuedCsrs), computed for the answer:
+	//
+	// How long its budgets or holds ask it to wait, in milliseconds from the answer. Zero: claimable now.
+	WaitMs uint32 `json:"wait_ms,omitempty"`
+	// Its custom host is active with every lb interface current for it (§13.4), so TLS-ALPN-01 can reach it.
+	HostReady bool `json:"host_ready,omitempty"`
+	// The host owner's label, owner(c), whose tls/ names a TLS-ALPN-01 listener registers.
+	Owner string `json:"owner,omitempty"`
 }
 
 // GET /tls/certs's answer: its network's certificates and their attestations, for the CT watch (D-TLS-8) and for a
-// device checking that its row survived a restore.
+// device checking that its row survived a restore. With ?work=1 an ordering desktop gets its accounts and its work
+// list alone, so a poll carries no chains (DESIGN-DETAILS 17.2.5).
 type TlsCertsResult struct {
 	Certs []*TlsCertRecord `json:"certs"`
-	// A custom domain's CSRs waiting for an ordering desktop (§13.8, v1).
+	// A custom domain's rows waiting for an ordering desktop, in 17.2.8's plan order, each with its CSR, attestation
+	// and wait: the work list of an ordering desktop.
 	QueuedCsrs []*TlsCertRecord `json:"queued_csrs,omitempty"`
+	// The ordering desktop's accounts.
+	Accounts []*TlsCustomAccount `json:"accounts,omitempty"`
 }
 
-// POST /tls/cert-register's body: a custom domain's chain, from a desktop that ordered it (§13.8, v1). The chain's key
-// and names must match a queued or attested row, so a device cannot register another's key.
+// POST /tls/cert-register's body: a custom domain's chain, registered on the row the caller holds its account's lock
+// for (DESIGN-DETAILS 17.2.5). Every custom certificate is a row first, so there is no body that attests its own key.
 type TlsCertRegisterArgs struct {
-	// The queued row this chain answers. Zero when the caller attests its own key instead.
-	CertId Id `json:"cert_id,omitzero"`
-	// SignTlsKeyAttestation's answer for the chain's key and names. Empty with a queued row, which holds its own.
-	Attestation []byte `json:"attestation,omitempty"`
+	// The custom_ordering row this chain answers.
+	CertId Id `json:"cert_id"`
+	// The claim the caller holds the account's lock under.
+	ClaimSeq uint64 `json:"claim_seq"`
 	// Each certificate in DER, leaf first.
 	Chain [][]byte `json:"chain"`
-	// The customer's ACME account that ordered it.
+	// The customer's ACME account that ordered it, which must be the account row's.
 	AccountUri string `json:"account_uri"`
+	// RFC 9773's suggested window, zero when the CA gives none.
+	AriWindowStart time.Time `json:"ari_window_start,omitzero"`
+	AriWindowEnd   time.Time `json:"ari_window_end,omitzero"`
+}
+
+// A claim's purposes (DESIGN-DETAILS 17.2.6).
+const (
+	TlsCustomPurposeOrder    = "order"
+	TlsCustomPurposeRevoke   = "revoke"
+	TlsCustomPurposeRollover = "rollover"
+)
+
+// POST /tls/custom-progress's events (DESIGN-DETAILS 17.2.5).
+const (
+	// The granted newOrder's URL, which must answer 200 before anything else goes to the CA.
+	TlsCustomEventOrderRecorded = "order_recorded"
+	// The recorded order is dead at the CA, or the granted newOrder was refused.
+	TlsCustomEventOrderInvalid = "order_invalid"
+	// The order's authorization failed, with the problem's type.
+	TlsCustomEventAuthzFailed = "authz_failed"
+	// The CA answered 429, with its Retry-After.
+	TlsCustomEventRateLimited = "rate_limited"
+	// The CA refused the newOrder for its replaces.
+	TlsCustomEventNotExempt = "not_exempt"
+	// The holder gives the lock up.
+	TlsCustomEventRelease = "release"
+	// The row cannot be certified, with the reason.
+	TlsCustomEventFailed = "failed"
+	// A revocation reached the CA.
+	TlsCustomEventRevoked = "revoked"
+	// Renewal windows the CA moved, with no claim.
+	TlsCustomEventAri = "ari"
+	// A key change is due that this desktop may not make, with no claim.
+	TlsCustomEventRolloverDue = "rollover_due"
+)
+
+// POST /tls/custom-account's operations (DESIGN-DETAILS 17.2.5, 17.2.13).
+const (
+	TlsCustomAccountCreate    = "create"
+	TlsCustomAccountRollBegin = "roll_begin"
+	TlsCustomAccountRollEnd   = "roll_end"
+	TlsCustomAccountRollAbort = "roll_abort"
+	TlsCustomAccountRepair    = "repair"
+)
+
+// A custom route's refusal reasons (DESIGN-DETAILS 17.2.5).
+const (
+	TlsCustomRefusalCsr       = "csr"
+	TlsCustomRefusalGrant     = "grant"
+	TlsCustomRefusalHost      = "host"
+	TlsCustomRefusalNoAccount = "no_account"
+	TlsCustomRefusalInFlight  = "in_flight"
+	TlsCustomRefusalOrderer   = "orderer"
+	TlsCustomRefusalKeySeq    = "key_seq"
+	TlsCustomRefusalLocked    = "locked"
+	TlsCustomRefusalState     = "state"
+	TlsCustomRefusalBudget    = "budget"
+	TlsCustomRefusalHold      = "hold"
+	TlsCustomRefusalClaim     = "claim"
+	TlsCustomRefusalChain     = "chain"
+	TlsCustomRefusalExists    = "exists"
+	TlsCustomRefusalRequest   = "request"
+)
+
+// A custom row's custom_reason values, beside TlsCustomReasonAttestation.
+const (
+	// A newer CSR of the same device and host took its place while it was queued.
+	TlsCustomReasonSuperseded = "superseded"
+	// Its CSR did not check at the ordering desktop.
+	TlsCustomReasonCsr = "csr"
+	// The CA refused the identifier or the CSR, so the same request would fail again.
+	TlsCustomReasonCaRefused = "ca_refused"
+	// The CA handed back a chain on another key or for other names.
+	TlsCustomReasonForeign = "foreign"
+	// The desktop's own probe of the challenge path failed, before the CA was asked.
+	TlsCustomReasonNoRoute = "no_route"
+	// No desktop had a challenge path for the row.
+	TlsCustomReasonNoPath = "no_path"
+	// Its device, host or domain was removed.
+	TlsCustomReasonRemoved = "removed"
+)
+
+// A custom route's refusal, the whole body of its answer. Durations are milliseconds from the answer.
+type TlsCustomRefusal struct {
+	Reason       string `json:"reason"`
+	RetryAfterMs uint32 `json:"retry_after_ms,omitempty"`
+	// 409 in_flight: the row to claim instead.
+	CertId Id `json:"cert_id,omitzero"`
+	// 409 key_seq: the account row's key sequence.
+	KeySeq uint64 `json:"key_seq,omitempty"`
+}
+
+// A custom route's refusal as an error: its status and body, which api's router answers.
+type TlsCustomError struct {
+	Status  int
+	Refusal TlsCustomRefusal
+}
+
+// The status and the reason.
+func (self *TlsCustomError) Error() string {
+	return fmt.Sprintf("%d %s", self.Status, self.Refusal.Reason)
+}
+
+// The body the router answers with.
+func (self *TlsCustomError) HttpErrorResultBody() any {
+	refusal := self.Refusal
+	return &refusal
+}
+
+// Whole seconds of the refusal's wait, rounded up; zero for none. api's router sets Retry-After from it.
+func (self *TlsCustomError) RetryAfterSeconds() int {
+	return int((self.Refusal.RetryAfterMs + 999) / 1000)
+}
+
+// An ordering desktop's view of one account (DESIGN-DETAILS 17.2.5): public values only. Never the account key.
+type TlsCustomAccount struct {
+	Domain     string `json:"domain"`
+	Ca         string `json:"ca"`
+	AccountUri string `json:"account_uri"`
+	KeySeq     uint64 `json:"key_seq"`
+	// RFC 7638's SHA-256 thumbprint of the current account key.
+	KeyThumbprint []byte `json:"key_thumbprint"`
+	// The secret repo that holds the key file.
+	KeyRepoId Id `json:"key_repo_id"`
+	// While a key change is in flight: the next key's thumbprint and repo.
+	NextKeyThumbprint []byte `json:"next_key_thumbprint,omitempty"`
+	NextKeyRepoId     Id     `json:"next_key_repo_id,omitzero"`
+	// The lock's holder while it holds it, and how long until its lease ends.
+	LockSidecarId    Id     `json:"lock_sidecar_id,omitzero"`
+	LockRetryAfterMs uint32 `json:"lock_retry_after_ms,omitempty"`
+	// What remains of the CA's 429 holds: no order outside an ARI renewal, and no order at all.
+	HoldNewMs uint32 `json:"hold_new_ms,omitempty"`
+	HoldAllMs uint32 `json:"hold_all_ms,omitempty"`
+	// The TXT owner name DNS-01 values are written at: <acme_token>.acme.<root> (QD-175).
+	AcmeName string `json:"acme_name"`
+}
+
+// POST /tls/custom-claim's body: take or renew an account's lock for one row or for a key change.
+type TlsCustomClaimArgs struct {
+	Domain  string `json:"domain"`
+	Purpose string `json:"purpose"`
+	// Zero for a rollover.
+	CertId Id `json:"cert_id,omitzero"`
+	// The key_seq of the key file the caller holds.
+	KeySeq uint64 `json:"key_seq"`
+}
+
+// POST /tls/custom-claim's answer.
+type TlsCustomClaimResult struct {
+	ClaimSeq uint64 `json:"claim_seq"`
+	LeaseMs  uint32 `json:"lease_ms"`
+	// The row with its CSR and attestation, and for a revoke its chain.
+	Record *TlsCertRecord `json:"record,omitempty"`
+	// The order to resume. Empty when none is recorded.
+	OrderUrl string `json:"order_url,omitempty"`
+	// One newOrder is granted. False with an OrderUrl.
+	MayOrder bool `json:"may_order,omitempty"`
+	// The predecessor's leaf in DER when the order names it in replaces (RFC 9773). Empty for none.
+	ReplacesLeaf []byte `json:"replaces_leaf,omitempty"`
+}
+
+// POST /tls/custom-progress's body.
+type TlsCustomProgressArgs struct {
+	Domain string `json:"domain"`
+	// Required for every event but ari and rollover_due.
+	ClaimSeq uint64 `json:"claim_seq,omitempty"`
+	CertId   Id     `json:"cert_id,omitzero"`
+	Event    string `json:"event"`
+	// order_recorded.
+	OrderUrl string `json:"order_url,omitempty"`
+	// rate_limited.
+	RetryAfterMs uint32 `json:"retry_after_ms,omitempty"`
+	// failed, authz_failed.
+	Reason string `json:"reason,omitempty"`
+	// ari.
+	Ari []*TlsCustomAri `json:"ari,omitempty"`
+}
+
+// One renewal window the CA gives a custom row's certificate.
+type TlsCustomAri struct {
+	CertId         Id        `json:"cert_id"`
+	AriWindowStart time.Time `json:"ari_window_start"`
+	AriWindowEnd   time.Time `json:"ari_window_end"`
+}
+
+// POST /tls/custom-account's body: network admins' desktops only.
+type TlsCustomAccountArgs struct {
+	Domain     string `json:"domain"`
+	Op         string `json:"op"`
+	AccountUri string `json:"account_uri"`
+	// The row's key_seq as the caller read it; 0 for create.
+	KeySeq        uint64 `json:"key_seq"`
+	KeyThumbprint []byte `json:"key_thumbprint"`
+	KeyRepoId     Id     `json:"key_repo_id"`
+	// roll_*: the rollover claim.
+	ClaimSeq uint64 `json:"claim_seq,omitempty"`
+}
+
+// POST /tls/custom-challenge's body (QD-175): a DNS-01 value for a host mapped under domain, which certs writes at
+// <acme_token>.acme.<root>.
+type TlsCustomChallengeArgs struct {
+	Domain string `json:"domain"`
+	// The 43-character base64url DNS-01 digest.
+	Value string `json:"value"`
+}
+
+// POST /tls/custom-challenge's answer, and GET /tls/custom-challenge/<id>'s: whether the dns edges serve the value,
+// GET /dns/ready's answer passed through (stale, ready, canary_failing or waiting).
+type TlsCustomChallengeResult struct {
+	// The serial the write took, which GET /tls/custom-challenge/<id> asks /dns/ready about.
+	ChallengeId uint64 `json:"challenge_id"`
+	Readiness   string `json:"readiness,omitempty"`
 }
 
 // POST /tls/cert-revoke's body.
