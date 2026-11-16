@@ -95,6 +95,9 @@ type BridgeStatus struct {
 	// receive kept back (§17.5's rejects row).
 	RejectSentCount   uint64
 	RejectUnsentCount uint64
+	// IPv6 packets the default route dropped under the egress spec's exits since the bridge started: no exit carries
+	// IPv6, so it goes nowhere (QD-881).
+	Ipv6DroppedCount uint64
 	// Entries answering with rejects since they lost their last advertiser (§17.8's revocation row), and subnet routes
 	// dropped for overlapping a local network (§17.7).
 	HeldRejectCount    int
