@@ -22,15 +22,20 @@
 //     again.
 //   - The route probe (§13.4): a hello offering ur-route-probe gets unrecognized_name with no Find, no ticket and no
 //     record.
+//   - S5's edge half under each audience (QD-852): the production gate passes an edge's Find under a members,
+//     members-device, link or public publish alike, the ticket resting on the listener's own grant, and a visitor's
+//     hello for each reaches the listener through tlsedge; a host no grant names is denied before any group is read
+//     and its visitor gets unrecognized_name, and a host whose grant left the policy is denied at the gate's next
+//     load.
 //
 // Where the composition stops: the edge's stream to the listener is an in-memory pair, and the listener's end is a
 // TLS server on the device's key and chain, not §13.7's front over a SocketListener. sidecartest has no edge-role
 // connect client on its exchange yet, so no test here runs SocketEdgeDialer's open, §9.6's admission or the front
-// (FS-34's front half is TestTlsFrontZeroBytesBeforeAuthentication's). The production gate refuses every edge tls/
-// Find until SOCK-M5-07 wires ACL-M5-01's view, so tlsSuiteEdgeGate answers that one check as §8.10 has it, any
-// audience passing (question tls-m5-22-edge-find-audience). Nothing sleeps: loads, kills, sweeps and connection ends
-// are awaited by the engines' own counts, time is the Net's FakeClock, and a real timer is only a guard that fails a
-// hung test.
+// (FS-34's front half is TestTlsFrontZeroBytesBeforeAuthentication's). Every edge Find is judged by the production
+// gate itself, as an urnetwork-edge caller's tls/ dial and publish (SOCK-M5-07 on ACL-M5-01's AclState.MayEdgeFind):
+// the gate reads no audience, which is the listener's front's to judge (§8.10, §13.7). Nothing sleeps: loads, kills,
+// sweeps and connection ends are awaited by the engines' own counts, time is the Net's FakeClock, and a real timer is
+// only a guard that fails a hung test.
 
 package sidecartest_test
 
@@ -74,85 +79,6 @@ import (
 	"github.com/urnetwork/sidecar/tlsedgeservice"
 )
 
-// The production gate with an urnetwork-edge caller's tls/ dial and publish answered as §8.10 has an edge Find stand:
-// a visitor's Find runs as autogroup:public and passes where a sidecar of the network holds a publish grant for the
-// name's host, whatever its audience, which only the listener's front enforces (§13.7). SocketProjectionGate refuses
-// every edge tls/ Find until SOCK-M5-07's gate takes ACL-M5-01's view (sock-m5-07's report), so this stands in for
-// that wiring; every other answer, the listener check Find makes of each picked listener under its own sidecar
-// included, is the production gate's on the network's real log.
-type tlsSuiteEdgeGate struct {
-	*socketsservice.SocketProjectionGate
-	edgeNetworkId connect.Id
-	// the network's sidecars a publish grant is looked for under, read once the world has them
-	publishers func() []connect.Id
-	clock      sidecar.Clock
-}
-
-var _ socketsservice.SocketGateFollower = (*tlsSuiteEdgeGate)(nil)
-
-func (self *tlsSuiteEdgeGate) View(networkId connect.Id) (socketsservice.SocketGateView, error) {
-	view, err := self.SocketProjectionGate.View(networkId)
-	if err != nil {
-		return nil, err
-	}
-	return &tlsSuiteEdgeView{SocketGateView: view, gate: self}, nil
-}
-
-func (self *tlsSuiteEdgeGate) MayDial(ctx context.Context, request *socketsservice.SocketGateRequest) (*socketsservice.SocketGateVerdict, error) {
-	view, err := self.View(request.NetworkId)
-	if err != nil {
-		return nil, err
-	}
-	return view.MayDial(request, self.clock.Now()), nil
-}
-
-func (self *tlsSuiteEdgeGate) MayPublish(ctx context.Context, request *socketsservice.SocketGateRequest) (*socketsservice.SocketGateVerdict, error) {
-	view, err := self.View(request.NetworkId)
-	if err != nil {
-		return nil, err
-	}
-	return view.MayPublish(request, self.clock.Now()), nil
-}
-
-// One network's state with the edge's tls/ answers above.
-type tlsSuiteEdgeView struct {
-	socketsservice.SocketGateView
-	gate *tlsSuiteEdgeGate
-}
-
-// Whether request is an urnetwork-edge caller's on a tls/ name.
-func (self *tlsSuiteEdgeView) edgeTls(request *socketsservice.SocketGateRequest) bool {
-	return request.CallerNetworkId == self.gate.edgeNetworkId && strings.HasPrefix(request.Name, "tls/")
-}
-
-// The first publish grant a sidecar of the network holds for the name's host, as the production view judges it under
-// that sidecar, or a refusal.
-func (self *tlsSuiteEdgeView) edgeVerdict(request *socketsservice.SocketGateRequest, now time.Time) *socketsservice.SocketGateVerdict {
-	for _, sidecarId := range self.gate.publishers() {
-		publisher := *request
-		publisher.CallerNetworkId = request.NetworkId
-		publisher.SidecarId = &sidecarId
-		if verdict := self.SocketGateView.MayPublish(&publisher, now); verdict != nil && verdict.Allowed {
-			return verdict
-		}
-	}
-	return &socketsservice.SocketGateVerdict{}
-}
-
-func (self *tlsSuiteEdgeView) MayDial(request *socketsservice.SocketGateRequest, now time.Time) *socketsservice.SocketGateVerdict {
-	if self.edgeTls(request) {
-		return self.edgeVerdict(request, now)
-	}
-	return self.SocketGateView.MayDial(request, now)
-}
-
-func (self *tlsSuiteEdgeView) MayPublish(request *socketsservice.SocketGateRequest, now time.Time) *socketsservice.SocketGateVerdict {
-	if self.edgeTls(request) {
-		return self.edgeVerdict(request, now)
-	}
-	return self.SocketGateView.MayPublish(request, now)
-}
-
 // The socket suite's world with tls/ open over facts the test sets.
 type tlsSuiteWorld struct {
 	*socketSuiteWorld
@@ -165,16 +91,7 @@ type tlsSuiteWorld struct {
 // A world whose network is verified, at Community, and whose listener holds the network's pair until a day from now.
 func newTlsSuiteWorld(t *testing.T) *tlsSuiteWorld {
 	t.Helper()
-	world := &tlsSuiteWorld{socketSuiteWorld: newSocketSuiteWorldGated(t, nil, func(world *socketSuiteWorld, production *socketsservice.SocketProjectionGate) socketsservice.SocketGate {
-		return &tlsSuiteEdgeGate{
-			SocketProjectionGate: production,
-			edgeNetworkId:        world.edgeNetworkId,
-			publishers: func() []connect.Id {
-				return []connect.Id{connect.Id(world.listener.device.SidecarId), connect.Id(world.dialer.device.SidecarId)}
-			},
-			clock: world.net.Clock(),
-		}
-	})}
+	world := &tlsSuiteWorld{socketSuiteWorld: newSocketSuiteWorld(t, nil)}
 	world.facts = &socketsservice.TlsListenFacts{
 		Verified: true,
 		Standing: sidecar.AbuseStandingStandard,
@@ -237,10 +154,27 @@ func (self *tlsSuiteWorld) savePublish(audience string, expires time.Time, hosts
 	if len(hosts) == 0 {
 		hosts = []string{"blog"}
 	}
-	grants := []string{`{ "src": ["autogroup:member"], "dst": ["sock:app/*"], "allow": ["listen", "dial"] }`}
+	publishes := []tlsSuitePublish{}
 	for _, host := range hosts {
+		publishes = append(publishes, tlsSuitePublish{host: host, audience: audience})
+	}
+	self.savePublishes(expires, publishes...)
+}
+
+// One host a policy publishes on tls/443, under its audience.
+type tlsSuitePublish struct {
+	host     string
+	audience string
+}
+
+// Saves a policy giving members publish and listen on each publish's tls/443 name under its own audience, all
+// expiring at expires, and has the gate load it. None leaves the members' app/* grant alone.
+func (self *tlsSuiteWorld) savePublishes(expires time.Time, publishes ...tlsSuitePublish) {
+	self.t.Helper()
+	grants := []string{`{ "src": ["autogroup:member"], "dst": ["sock:app/*"], "allow": ["listen", "dial"] }`}
+	for _, publish := range publishes {
 		grants = append(grants, fmt.Sprintf(`{ "src": ["autogroup:member"], "dst": ["dns:%s", "sock:tls/443/%s"], "allow": ["publish", "listen"], "audience": %q, "expires": %q }`,
-			host, host, audience, expires.UTC().Format(time.RFC3339)))
+			publish.host, publish.host, publish.audience, expires.UTC().Format(time.RFC3339)))
 	}
 	self.admission.SaveAclPolicy([]byte(`{"grants": [`+strings.Join(grants, ",\n")+`]}`), sidecartest.AclSaveMembers{})
 	count, _ := self.gate.Loads()
@@ -1391,5 +1325,99 @@ func TestTlsSuiteHelloWithoutTheProbeReachesTheListener(t *testing.T) {
 	}
 	if open := stream.open(t); open.GetServerName() != edge.serverName("blog") || !slices.Equal(open.GetAlpn(), []string{"http/1.1"}) {
 		t.Fatalf("the listener's open %+v", open)
+	}
+}
+
+// The host the suite publishes under each §13.7 audience.
+var tlsSuiteAudienceHosts = []tlsSuitePublish{
+	{host: "team", audience: "members"},
+	{host: "vault", audience: "members-device"},
+	{host: "share", audience: "link"},
+	{host: "blog", audience: "public"},
+}
+
+// S5's edge half under each §13.7 audience, on the production gate (QD-852): with one host published under each of
+// members, members-device, link and public and the listener's lease of each registered, the engine signs an edge's
+// Find of every one a ticket to the listener at the log's position, ending with the grant, and a visitor's hello for
+// every one reaches the listener through tlsedge and one Find. The gate judges no audience: a members visitor with no
+// session has to reach the listener, whose front sends it to edge login (§13.7).
+func TestTlsSuiteEdgeFindPassesUnderEachAudiencesPublish(t *testing.T) {
+	edge := newTlsSuiteEdgeBare(t)
+	expires := edge.net.Clock().Now().Add(24 * time.Hour).Truncate(time.Second)
+	edge.savePublishes(expires, tlsSuiteAudienceHosts...)
+	registrations := []*sidecar.SocketRegistration{}
+	for _, publish := range tlsSuiteAudienceHosts {
+		registrations = append(registrations, edge.edgeRegistration(edge.listener, "tls/443/"+publish.host))
+	}
+	edge.setVersion += 1
+	edge.registerOk(edge.listener, edge.setVersion, registrations...)
+
+	position := edge.admission.Tip().GetVersion()
+	for _, publish := range tlsSuiteAudienceHosts {
+		name := "tls/443/" + publish.host
+		code, ticket := edge.edgeFind(name)
+		if code != "" {
+			t.Fatalf("an edge Find under a %s publish answered %q", publish.audience, code)
+		}
+		if !bytes.Equal(ticket.GetListenerClientId(), edge.listener.clientId.Bytes()) || ticket.GetName() != name ||
+			!bytes.Equal(ticket.GetDialerNetworkId(), edge.edgeNetworkId.Bytes()) {
+			t.Fatalf("a %s publish's ticket names another listener, name or dialer network", publish.audience)
+		}
+		if ticket.GetPolicyVersion() != position || ticket.GetGrantExpireTimeMillis() != uint64(expires.UnixMilli()) || len(ticket.GetGrantId()) == 0 {
+			t.Fatalf("a %s publish's ticket stands at %d on a grant ending at %d, the log at %d and the grant at %d",
+				publish.audience, ticket.GetPolicyVersion(), ticket.GetGrantExpireTimeMillis(), position, expires.UnixMilli())
+		}
+
+		dials := edge.dialer.dials.Load()
+		serverName := edge.serverName(publish.host)
+		edge.handshake(serverName, []string{"http/1.1"}, nil)
+		stream := edge.dialer.awaitOpened(t)
+		if edge.dialer.dials.Load() != dials+1 {
+			t.Fatalf("a %s host's visitor made %d Finds", publish.audience, edge.dialer.dials.Load()-dials)
+		}
+		if open := stream.open(t); open.GetServerName() != serverName || stream.ticket.GetName() != name ||
+			!bytes.Equal(stream.ticket.GetListenerClientId(), edge.listener.clientId.Bytes()) {
+			t.Fatalf("a %s host's visitor reached %+v under a ticket for %s", publish.audience, open, stream.ticket.GetName())
+		}
+	}
+}
+
+// With no publish grant the edge's Find is refused, whatever leases the store holds: a host no grant ever named is
+// denied before any group is read and its visitor gets unrecognized_name with nothing signed, and once a host's grant
+// has left the policy and the gate has loaded that, an edge Find of it is denied while its lease still stands.
+func TestTlsSuiteEdgeFindIsDeniedWithNoPublish(t *testing.T) {
+	edge := newTlsSuiteEdgeBare(t)
+	expires := edge.net.Clock().Now().Add(24 * time.Hour)
+	edge.savePublishes(expires, tlsSuitePublish{host: "team", audience: "members"}, tlsSuitePublish{host: "blog", audience: "public"})
+	edge.setVersion += 1
+	edge.registerOk(edge.listener, edge.setVersion, edge.edgeRegistration(edge.listener, "tls/443/team"), edge.edgeRegistration(edge.listener, "tls/443/blog"))
+	if code, _ := edge.edgeFind("tls/443/team"); code != "" {
+		t.Fatalf("an edge Find under a members publish answered %q", code)
+	}
+
+	metrics := edge.net.Fakes().Metrics
+	signed := metrics.Value("urnetwork_sockets_find_total", "ok")
+	picks := edge.store.OpCount("Pick")
+	if code, _ := edge.edgeFind("tls/443/shop"); code != sidecar.SocketErrorCodeDenied {
+		t.Fatalf("an edge Find of a host no grant names answered %q", code)
+	}
+	refused := edge.awaitHandshake(edge.handshake(edge.serverName("shop"), []string{"http/1.1"}, nil))
+	if refused.err == nil || !strings.Contains(refused.err.Error(), "unrecognized name") {
+		t.Fatalf("a visitor of a host no grant names: %v", refused.err)
+	}
+	if edge.store.OpCount("Pick") != picks || metrics.Value("urnetwork_sockets_find_total", "ok") != signed {
+		t.Fatal("a Find with no publish grant read a group or had a ticket signed")
+	}
+
+	// the members grant leaves the policy: the lease stands until its next heartbeat, and the edge's Find is denied
+	edge.savePublishes(expires, tlsSuitePublish{host: "blog", audience: "public"})
+	if code, _ := edge.edgeFind("tls/443/team"); code != sidecar.SocketErrorCodeDenied {
+		t.Fatalf("an edge Find of a host whose grant left the policy answered %q", code)
+	}
+	if code, _ := edge.edgeFind("tls/443/blog"); code != "" {
+		t.Fatalf("an edge Find of the host still published answered %q", code)
+	}
+	if edge.store.OpCount("Pick") != picks+1 {
+		t.Fatal("the denied Find read its group")
 	}
 }
