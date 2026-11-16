@@ -350,7 +350,13 @@ func (self *SearchCache) ApplyErase(ctx context.Context, erase *SearchErase) err
 		againUnits = searchEraseAgainUnits(record, erase.ErasureId)
 	}
 
-	// the cache's own files and masks: the linearization point
+	// the cache's own masks, then its files: the linearization point. The masks go first, so a search that starts
+	// meanwhile finds the documents masked in every file not yet reached
+	for _, refId := range refIds {
+		if err := self.maskErased(repoId, refId, documents[refId]); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if 0 < len(erase.Keys) {
 		if _, err := self.DropErasedSlotKeys(repoId, erase.Keys); err != nil {
 			errs = append(errs, err)
@@ -363,11 +369,6 @@ func (self *SearchCache) ApplyErase(ctx context.Context, erase *SearchErase) err
 	}
 	if err := self.DropRetained(repoId); err != nil {
 		errs = append(errs, err)
-	}
-	for _, refId := range refIds {
-		if err := self.maskErased(repoId, refId, documents[refId]); err != nil {
-			errs = append(errs, err)
-		}
 	}
 	testHookBarrier("search.cache.erase.applied", repoId.String())
 
