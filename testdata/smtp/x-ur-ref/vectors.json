@@ -1,0 +1,106 @@
+{
+  "vectors": [
+    {
+      "key_id": 1,
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "send_id": "000102030405060708090a0b",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefawtrdlxwcdbqrfa"
+    },
+    {
+      "key_id": 1,
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "send_id": "000102030405060708090a0b",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a91",
+      "day": 20407,
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefawxslkmco7m2g5u"
+    },
+    {
+      "key_id": 1,
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "send_id": "000102030405060708090a0b",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20408,
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefax25wk4wqbazogi"
+    },
+    {
+      "key_id": 2,
+      "key": "20699c604631de5577007308d526d1c929e68e7ce259cf868e502b8fd34c8773",
+      "send_id": "ffeeddccbbaa998877665544",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 0,
+      "x_ur_ref": "1.al765xomxovjtcdxmzkujhnvpcnbpq4ppi"
+    },
+    {
+      "key_id": 255,
+      "key": "50f0871456d6344aa08fcf0b9271d2ab834eb77b5902cf6ce8c6e0e8897f69895a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "send_id": "000000000000000000000000",
+      "network_id": "ffffffffffffffffffffffffffffffff",
+      "day": 4294967295,
+      "x_ur_ref": "1.74aaaaaaaaaaaaaaaaaabsrob4mv3pi3ti"
+    }
+  ],
+  "refusals": [
+    {
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefawxslkmco7m2g5u",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "issued to another network: a replay under this network fails"
+    },
+    {
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefax25wk4wqbazogi",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "issued on another day"
+    },
+    {
+      "x_ur_ref": "1.amaacaqdaqcqmbyibefawtrdlxwcdbqrfa",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "a key id the edge does not hold"
+    },
+    {
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibeaawtrdlxwcdbqrfa",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "a character of the send id changed"
+    },
+    {
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefawtrdlxwcabqrfa",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "a character of the MAC changed"
+    },
+    {
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefawtrdlxwcdbqrfb",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "the last character changed in its unused bits only: one reference has one form"
+    },
+    {
+      "x_ur_ref": "2.aeaacaqdaqcqmbyibefawtrdlxwcdbqrfa",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "another version"
+    },
+    {
+      "x_ur_ref": "1.AEAACAQDAQCQMBYIBEFAWTRDLXWCDBQRFA",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "upper case: the form is lowercase only"
+    },
+    {
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefawtrdlxwcdbqrfaa",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "one character too many"
+    },
+    {
+      "x_ur_ref": "1.aeaacaqdaqcqmbyibefawtrdlxwcdbqrf",
+      "network_id": "0199d6a1c0007c3a9b2f4e5d6c7b8a90",
+      "day": 20407,
+      "why": "one character too few"
+    }
+  ]
+}
