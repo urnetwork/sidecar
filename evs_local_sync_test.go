@@ -960,9 +960,9 @@ func TestEvsLocalGitRefRecordOfTaintsBeforeRemovedOpens(t *testing.T) {
 }
 
 // A git-mode world under a rule set at 5 that names the world's writer, a repo admin, for every path and holds a
-// second writer, held, to agents/build and docs/inner; a third writer, unnamed, the set names in no rule. The writer's client
-// publishes as any of them, its local refusal the engine's over the world's state, or, for a breach, skipped as a
-// device that does not run this code; devices replay under the same sets.
+// second writer, held, to agents/build and docs/inner; a third writer, unnamed, the set names in no rule. The
+// writer's client publishes as any of them, its local refusal the engine's over the world's state, or, for a breach,
+// skipped as a device that does not run this code; devices replay under the same sets.
 type evsTestGitRules struct {
 	*evsPrefixTest
 	publisher *evsTestPublisher
