@@ -89,6 +89,9 @@ type MailBinding struct {
 	IndexerServices MailIndexerServices
 	// Raises an event on the Sidecar, mail_receiver_alarm's; nil only logs it.
 	Event func(event SidecarEvent)
+	// The labels directly under the network's apex it publishes a host at, which a burner label must not shadow
+	// (mail_burner_labels.go); nil for none.
+	PublishedHosts func() []string
 }
 
 // How a MailClient reaches a repo's parts: over the bound EvsClient, or a test's stand-ins.
@@ -436,9 +439,10 @@ func (self *MailClient) mailConfig() (*MailConfig, error) {
 		Alarm: func(alarm *MailConfigAlarm) {
 			self.raiseReceiverAlarm(SidecarMailReceiverAlarmRecord, alarm.SidecarId, alarm.RepoId)
 		},
-		Clock:    self.clock,
-		Log:      self.log,
-		Settings: self.settings.Config,
+		BurnerLabels: self.burnerLabels(),
+		Clock:        self.clock,
+		Log:          self.log,
+		Settings:     self.settings.Config,
 	})
 	if err != nil {
 		return nil, err

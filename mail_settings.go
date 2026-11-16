@@ -29,6 +29,8 @@ type MailSettings struct {
 	// The member's vault (mail_vault.go) and what OneTimeCodes reads (mail_codes.go).
 	Vault *MailVaultSettings
 	Codes *MailCodeSettings
+	// Burners' labels, limits and sites (mail_burner.go, mail_burner_labels.go).
+	Burner *MailBurnerSettings
 	// The most bytes Read takes of one message: the largest mail_inbound_message_bytes (50 MiB, §20.4) and the
 	// headers ingest adds, as ingest's own bound holds a deposit.
 	ReadMaxByteCount int
@@ -58,6 +60,7 @@ func DefaultMailSettings() *MailSettings {
 		Send:                        DefaultMailSendSettings(),
 		Vault:                       DefaultMailVaultSettings(),
 		Codes:                       DefaultMailCodeSettings(),
+		Burner:                      DefaultMailBurnerSettings(),
 		ReadMaxByteCount:            int(ingest.DepositMaxByteCount),
 		ReadHeaderValueMaxByteCount: 4 * 1024,
 		ReadHeaderMaxCount:          32,
@@ -70,7 +73,7 @@ func DefaultMailSettings() *MailSettings {
 // Whether every value is in range.
 func (self *MailSettings) valid() bool {
 	return self != nil && self.Config != nil && self.Ingest != nil && self.Store != nil && self.Receive != nil && self.Imap != nil &&
-		self.Send.valid() && self.Vault != nil && self.Codes.valid() &&
+		self.Send.valid() && self.Vault != nil && self.Codes.valid() && self.Burner.valid() &&
 		0 < self.ReadMaxByteCount && 0 < self.ReadHeaderValueMaxByteCount && 0 < self.ReadHeaderMaxCount &&
 		0 < self.AddressScanMaxCount && 0 < self.CheckInterval && 0 < self.UnboundCheckInterval
 }

@@ -255,6 +255,9 @@ func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
 				Label:     zone.Label,
 				Alias:     zone.Alias,
 			})
+			// what a burner label must not shadow, as this pass read it
+			publishedHosts := mailBurnerPublishedLabels(zone)
+			binding.PublishedHosts = func() []string { return publishedHosts }
 		}
 	}
 	binding.Network = self.networkRow
