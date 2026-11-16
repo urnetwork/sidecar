@@ -169,12 +169,12 @@ func TestEvsExportKeyAndItsPrefix(t *testing.T) {
 		prefix [][]byte
 		under  bool
 	}{
-		{names("a", "b"), names("a"), true},
-		{names("a", "b"), names("a", "b"), true},
-		{names("a", "b"), nil, true},
-		{names("a"), names("a", "b"), false},
-		{names("ab", "c"), names("a"), false},
-		{names("a", "b"), names("b"), false},
+		{names: names("a", "b"), prefix: names("a"), under: true},
+		{names: names("a", "b"), prefix: names("a", "b"), under: true},
+		{names: names("a", "b"), prefix: nil, under: true},
+		{names: names("a"), prefix: names("a", "b"), under: false},
+		{names: names("ab", "c"), prefix: names("a"), under: false},
+		{names: names("a", "b"), prefix: names("b"), under: false},
 	} {
 		if under := evsNamesHavePrefix(test.names, test.prefix); under != test.under {
 			t.Errorf("%q under %q: %t", test.names, test.prefix, under)
