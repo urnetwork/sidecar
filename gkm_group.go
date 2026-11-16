@@ -1273,12 +1273,13 @@ func (self *GkmGroupClient) heldRepoOfGroup(groupId Id) (Id, bool) {
 }
 
 // Takes gkm's hints (§10.14): pending runs the engine, the granting device at once and every other writer after
-// PendingCommitDelay plus jitter; welcome joins; wrap-pending answers with a late delivery after its own wait; and
-// each resync runs all three for every repo held, so a lost hint costs at most the resync interval. A hint is only
-// a wake: whatever it names is refetched and verified. commit catches up or resyncs (KF5, gkm_sync.go), and a
-// resync also runs each repo's due self-update and its drop key's renewal. Each wake's work runs on its own
-// goroutine until ctx ends,
-// one at a time per repo and kind, so a wait never holds the intake and a repeated hint piles nothing up.
+// PendingCommitDelay plus jitter, then the drop key's renewal, since gkm hints pending to a repo's writers when its
+// drop key has under 7 days left (§10.6's drop keys row); welcome joins; wrap-pending answers with a late delivery
+// after its own wait; and each resync runs all three for every repo held, so a lost hint costs at most the resync
+// interval. A hint is only a wake: whatever it names is refetched and verified. commit catches up or resyncs (KF5,
+// gkm_sync.go), and a resync also runs each repo's due self-update and its drop key's renewal. Each wake's work runs
+// on its own goroutine until ctx ends, one at a time per repo and kind, so a wait never holds the intake and a
+// repeated hint piles nothing up.
 func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 	if hints == nil {
 		return
@@ -1299,6 +1300,9 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 				return
 			}
 			self.logFlowError("pending", self.RunPending(ctx, repoId))
+			// a pending run rotates only past ScheduleInterval, and a drop key with under DropKeyRenewBefore left
+			// renews whatever the generation's age (QD-065)
+			self.logFlowError("drop key renewal", self.RenewDropKey(ctx, repoId))
 		})
 	}
 	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_PENDING, func(ctx context.Context, wake *GkmHintWake) {
