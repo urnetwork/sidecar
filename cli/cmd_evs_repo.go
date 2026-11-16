@@ -18,7 +18,9 @@
 //	ur evs retry <repo_id> [--ref=<ref>]                      an owned ref's held queue released (DESIGN-DETAILS 8.2.8)
 //	ur evs status <repo_id>                                   the mount's open work: unfinished imports and leftover
 //	                                                          helper refs, conflict branches, refs stopped at a refused
-//	                                                          version or waiting on a source, pending outcomes, holds
+//	                                                          version (with the alarm's reason and signer) or waiting
+//	                                                          on a source or on a prefix rule set (held or update),
+//	                                                          pending outcomes, holds
 //
 // Delete and restore are Confirm methods, so nothing but a control call a person confirmed reaches them. Paths and ref
 // names are the person's own and go only between ur and its daemon on this device.
@@ -299,9 +301,23 @@ func urEvsMountStatus(ctx context.Context, evs urEvsTarget, mount *sidecar.EvsLo
 		}
 		switch {
 		case ref.StuckAt != 0:
-			lines = append(lines, fmt.Sprintf("ref %s refused at version %d: it takes only a deletion", name, ref.StuckAt))
+			// with the alarm's reason and the signer, which a ref refused at its first version, holding no tip and no
+			// local ref, is listed by (DESIGN-DETAILS 8.2.7's failure, QD-801)
+			why := ""
+			if ref.StuckReason != "" {
+				why = fmt.Sprintf(" (%s", ref.StuckReason)
+				if ref.StuckSigner != nil {
+					why += fmt.Sprintf(", signer %s", ref.StuckSigner)
+				}
+				why += ")"
+			}
+			lines = append(lines, fmt.Sprintf("ref %s refused at version %d%s: it takes only a deletion", name, ref.StuckAt, why))
 		case ref.WaitingSource != nil:
 			lines = append(lines, fmt.Sprintf("ref %s waiting_source %s at version %d", name, ref.WaitingSource, ref.WaitingVersion))
+		case ref.WaitingRules == sidecar.EvsGitRuleWaitHeld:
+			lines = append(lines, fmt.Sprintf("ref %s held at version %d: the prefix rule set at the next push's pin is pending here", name, ref.Version))
+		case ref.WaitingRules == sidecar.EvsGitRuleWaitUpdate:
+			lines = append(lines, fmt.Sprintf("ref %s update at version %d: the prefix rule set at the next push's pin is a later release's", name, ref.Version))
 		case ref.SettleStopped:
 			lines = append(lines, fmt.Sprintf("ref %s stops settling: its conflict branches are at the bound", name))
 		}

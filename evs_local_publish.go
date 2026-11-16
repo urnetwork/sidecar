@@ -35,6 +35,26 @@
 //	           SLOT_STALE, TIME_STALE and GATE_CLOSED build again under a new push id, at most PushRebuildCount
 //	           times; 412 PATH_EPOCH_DUE waits as WritePaths does; any other refusal is the caller's
 //
+// Under a general repo's prefix write rules a shared ref's update passes this device's own check before anything is
+// planned (DESIGN-DETAILS 8.2.5's prefix check, 16.2.7; QD-801), so its push passes 8.2.7's prefix line at every reader:
+//
+//	held      at step 1, for an update that creates a shared branch or is a tag's, one AllowPrefixWrite call for the
+//	          path of no component at the installed state: a device the set names in no rule of no path is held. A
+//	          held device takes its new branch's base from the shared branches alone, on every parent line
+//	          (evs_local_overlay.go), and names its tag's proof first among the sources (evs_local_commits.go); a set
+//	          pending or newer ends the update there
+//	check     at the top of every attempt, so again before each statement signed on another state's pin (the landed
+//	          rebuild after 412 GATE_CLOSED or a stale segment, a build again from step 3 after a REKEY or a pin push,
+//	          a retoken): AllowPrefixWrite over the files measured from J, every path that is a file in J or in N and
+//	          not the same mode and oid in both, drawn from the net change, or from nothing, every file of N drawn in
+//	          the tree reader's order, the engine stopping at the first it refuses and drawing none for a device
+//	          named for every path; then each tainted token path the re-creating push writes or removes, on its token
+//	          path against this sidecar's prefixes in the push's epoch. J is S but on a branch's first tip over a base
+//	          that is no shared branch, or none, and on a tag with no proof, where it is the empty tree. A DELETE skips
+//	          it, a FORCE is outside the rules, and an owned ref asks nothing. A refusal is EVS_PREFIX_RULE with the
+//	          path and detail refused, pending or update, or base for a new branch measured from nothing and tag for a
+//	          tag with no proof; a tainted token path names none
+//
 // A refusal before any evs write names the commit, tree or path, never its bytes (I-13). The history segments and the
 // write's spills are dropped on every exit. Memory holds one push's sealed commits and its history blobs' records as
 // they are sealed: the spool to disk 8.2.5 asks for is not built (incomplete).
@@ -51,6 +71,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"slices"
 
 	"google.golang.org/protobuf/proto"
@@ -274,7 +295,17 @@ type evsGitPublishUpdate struct {
 	// a branch update's new tree, and the tainted token paths its re-creating push writes or removes (8.5)
 	nextTree EvsGitOid
 	tainted  []EvsTaintedPath
+	// the prefix check's measure (8.2.5): from J, which is S here, or from nothing over N, the commit the update peels
+	// to, and the detail a refusal from nothing takes; a tag's proof, nil for none
+	measure      EvsGitPrefixMeasure
+	peeled       EvsGitOid
+	measureEmpty EvsPrefixDetail
+	proof        *EvsGitSourceRef
 }
+
+// A test's hook that skips the prefix check, as a device that does not run this code would, to build a push every
+// reader refuses; nil outside tests.
+var evsLocalPublishSkipPrefixHook func(update *evsGitPublishUpdate) bool
 
 // Steps 1 and 2 of the file header, and the net change, which no attempt changes.
 func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refId Id, objects *EvsLocalObjects) (*evsGitPublishUpdate, error) {
@@ -335,17 +366,28 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 	if args.State == nil {
 		return nil, fmt.Errorf("%w: a publish with no replay state", ErrEvsWriteInvalid)
 	}
+	// step 1 under the repo's prefix rules: whether this device is held, for an update that creates a shared branch or
+	// is a tag's (8.2.4, 8.2.5; QD-801)
+	held, err := self.askHeld(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// an overlay's base: a new branch's from the base search, else the head's; its tip is held by every reader, and a
 	// new overlay states its first net change against the base tip's tree (8.2.4)
 	self.base = args.Base
 	var baseTip *EvsGitOid
+	baseShared := false
 	switch {
 	case self.tagRef:
 		if self.base != nil {
 			return nil, fmt.Errorf("%w: a tag ref with a base", ErrEvsGitUpdateInvalid)
 		}
 	case self.base == nil && self.creating && !args.Deleted:
-		found, err := args.Mount.overlayBase(ctx, refId, peeled, args.State, args.Repo.client.settings.OverlayBaseSearchCount)
+		search := args.Mount.overlayBase
+		if held {
+			search = args.Mount.overlayBaseShared
+		}
+		found, err := search(ctx, refId, peeled, args.State, args.Repo.client.settings.OverlayBaseSearchCount)
 		if err != nil {
 			return nil, err
 		}
@@ -353,6 +395,7 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 			self.base = &protocol.EvsOverlay{RefId: found.RefId.Bytes(), Version: found.Version}
 			tip := found.Tip
 			baseTip = &tip
+			baseShared = evsGitSourceSharedBranch(found)
 		}
 	case self.base != nil:
 		baseRefId, err := IdFromBytes(self.base.GetRefId())
@@ -367,6 +410,9 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 			return nil, fmt.Errorf("%w: an overlay whose base version replay has not applied", ErrEvsGitUpdateInvalid)
 		}
 		baseTip = &tip
+		if baseShared, err = evsGitStateSharedBranch(ctx, args.State, baseRefId); err != nil {
+			return nil, err
+		}
 	}
 	if baseTip != nil {
 		peeledBase, _, err := evsGitPeel(ctx, objects, *baseTip)
@@ -374,11 +420,19 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 			return nil, err
 		}
 		excl = append(excl, peeledBase)
-		if self.creating && !args.Deleted {
+		if self.creating && (!args.Deleted || args.LastTip == nil) {
+			// an overlay's first push, or the push re-creating one whose every earlier push was refused, which never
+			// held a tip, states its net change against its base tip's tree, as its readers hold it (8.2.4)
 			stood = &peeledBase
 		}
 	}
-	carried, err := args.Mount.carried(ctx, refId, peeled, excl, args.State)
+	if self.tagRef && held {
+		// a held device names its tag's proof first among the sources, or none, and is then measured from nothing
+		if self.proof, err = evsGitTagProof(ctx, args.State, peeled); err != nil {
+			return nil, err
+		}
+	}
+	carried, err := args.Mount.carried(ctx, refId, peeled, excl, args.State, self.proof)
 	if err != nil {
 		return nil, err
 	}
@@ -425,10 +479,204 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 		}
 		self.nextTree, self.tainted = nextTree, evsGitPublishTaints(args)
 	}
+	// step 3's measure (8.2.5's new ref row): J is S but on a branch's first tip over a base that is no shared branch,
+	// or none, and on a tag with no proof, where every file of N is asked about from nothing
+	self.peeled = peeled
+	switch {
+	case self.tagRef:
+		if self.proof == nil {
+			self.measure, self.measureEmpty = EvsGitPrefixMeasureFromNothing, EvsPrefixDetailTag
+		}
+	case args.Old != nil || args.LastTip != nil || baseShared:
+		self.measure = EvsGitPrefixMeasureFromJ
+	default:
+		self.measure, self.measureEmpty = EvsGitPrefixMeasureFromNothing, EvsPrefixDetailBase
+	}
 	if evsLocalPublishUpdateHook != nil {
 		evsLocalPublishUpdateHook(self)
 	}
 	return self, nil
+}
+
+// Step 1's question under the repo's prefix rules (8.2.4, 8.2.5's new shared name): for an update that creates a
+// shared branch, or is a tag's, whether this device is held, by one AllowPrefixWrite call for the path of no component
+// at the installed state. A set pending or newer ends the update with EVS_PREFIX_RULE; an owned ref, a branch's
+// re-creation, whose base is the head's, and a repo with no set ask nothing.
+func (self *evsGitPublishUpdate) askHeld(ctx context.Context) (bool, error) {
+	if _, owned := EvsOwnedRefOwner(self.args.RefName); owned || !self.creating || (!self.tagRef && self.args.Deleted) {
+		return false, nil
+	}
+	ruled, err := self.repo.prefixRuled()
+	if err != nil || ruled == nil {
+		return false, err
+	}
+	err = ruled.allowWrite(ctx, self.repo, &evsPrefixWriteAsk{
+		refName: self.args.RefName, refKind: protocol.EvsRefKind_EVS_REF_SHARED, refMode: protocol.EvsRefMode_EVS_REF_GIT,
+		flags: self.flags, paths: []string{""},
+	})
+	var ruleErr *EvsPrefixRuleError
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.As(err, &ruleErr) && ruleErr.Detail == EvsPrefixDetailRefused && ruleErr.Path == "":
+		return true, nil
+	}
+	return false, err
+}
+
+// Whether the state holds a ref as a shared branch: by the ref's own history where the state answers it (the sync
+// engine's SharedBranch), else by its row with a tip; a ref it holds neither of is none, which measures from nothing.
+func evsGitStateSharedBranch(ctx context.Context, state EvsGitSourceState, refId Id) (bool, error) {
+	if history, ok := state.(interface {
+		SharedBranch(ctx context.Context, refId Id) (bool, error)
+	}); ok {
+		return history.SharedBranch(ctx, refId)
+	}
+	source, held, err := state.SourceRef(ctx, refId)
+	if err != nil || !held {
+		return false, err
+	}
+	return evsGitSourceSharedBranch(source), nil
+}
+
+// Step 3's prefix check (see the file header's check row): nil where the update passes, else EVS_PREFIX_RULE.
+func (self *evsGitPublishUpdate) checkPrefix(ctx context.Context) error {
+	if self.git.GetShape() == protocol.EvsGitShape_EVS_GIT_DELETE {
+		return nil
+	}
+	if _, owned := EvsOwnedRefOwner(self.args.RefName); owned {
+		return nil
+	}
+	if evsLocalPublishSkipPrefixHook != nil && evsLocalPublishSkipPrefixHook(self) {
+		return nil
+	}
+	ruled, err := self.repo.prefixRuled()
+	if err != nil || ruled == nil {
+		return err
+	}
+	ask := &evsPrefixWriteAsk{
+		refName: self.args.RefName, refKind: protocol.EvsRefKind_EVS_REF_SHARED, refMode: protocol.EvsRefMode_EVS_REF_GIT,
+		flags: self.flags,
+	}
+	var walkErr error
+	switch self.measure {
+	case EvsGitPrefixMeasureFromJ:
+		ask.drawn = self.changedFiles()
+	case EvsGitPrefixMeasureFromNothing:
+		// a tag's tree is read only once the engine draws a path, so a device named for every path reads nothing
+		files := func(yield func(string) bool) {
+			tree := self.nextTree
+			if self.tagRef {
+				if tree, walkErr = evsGitTreeOf(ctx, self.objects, self.peeled); walkErr != nil {
+					return
+				}
+			}
+			evsGitTreeFiles(ctx, newEvsGitCachedTrees(self.objects, self.repo.client.settings.TreeCacheByteCount), tree, &walkErr)(yield)
+		}
+		ask.drawn = files
+	}
+	err = ruled.allowWrite(ctx, self.repo, ask)
+	if walkErr != nil {
+		// a tree the walk could not read refuses: a check that drew short of it decided nothing
+		return walkErr
+	}
+	var ruleErr *EvsPrefixRuleError
+	if errors.As(err, &ruleErr) && ruleErr.Detail == EvsPrefixDetailRefused && ruleErr.Path != "" && self.measureEmpty != "" {
+		// what the ref lacked, since the path alone would mislead (8.2.8): no shared base, or no proof
+		ruleErr.Detail = self.measureEmpty
+	}
+	if err != nil {
+		return err
+	}
+	return self.checkTaints(ctx)
+}
+
+// The files measured from J where J is S (8.2.5's files row): from the net change in its order, the tree reader's,
+// each path that is a file in S or in N and not the same mode and oid in both, a write, a removal, an inherited file a
+// held directory's table drops and a file a directory is created over among them.
+func (self *evsGitPublishUpdate) changedFiles() iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for _, change := range self.changes {
+			if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_FILE || change.Stood == protocol.EvsEntryKind_EVS_ENTRY_FILE {
+				if !yield(change.Path) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// Every file of the tree at root, each path its raw names joined by /, drawn in the tree reader's order: names sorted
+// by their bytes, depth first, a tree read only as the drawing reaches it. A read that fails ends the sequence and is
+// set in walkErr, which the caller must take as a refusal.
+func evsGitTreeFiles(ctx context.Context, source EvsGitObjectSource, root EvsGitOid, walkErr *error) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		var walk func(prefix string, tree EvsGitOid) bool
+		walk = func(prefix string, tree EvsGitOid) bool {
+			entries, err := evsGitSortedEntries(ctx, source, &tree)
+			if err != nil {
+				*walkErr = err
+				return false
+			}
+			for _, entry := range entries {
+				path := string(entry.Name)
+				if prefix != "" {
+					path = prefix + "/" + path
+				}
+				if entry.CanonMode == EvsGitModeDirectory {
+					if !walk(path, entry.Oid) {
+						return false
+					}
+					continue
+				}
+				if !yield(path) {
+					return false
+				}
+			}
+			return true
+		}
+		walk("", root)
+	}
+}
+
+// The re-creating push's tainted token paths (8.5) against this sidecar's prefixes in the push's epoch at the
+// installed state, on the token paths themselves, since this device may hold no name for one: EVS_PREFIX_RULE with
+// no path to name where one lies outside. Every taint is asked, a last-removed one the new tree lacks included, which
+// the push states nothing at: a held device refuses some re-creations every reader would take, and never sends one
+// they refuse.
+func (self *evsGitPublishUpdate) checkTaints(ctx context.Context) error {
+	if len(self.tainted) == 0 {
+		return nil
+	}
+	state, err := self.repo.client.verifier.config()
+	if err != nil {
+		return err
+	}
+	identity := self.repo.client.args.Identity()
+	line, err := self.repo.gitPrefixLine(ctx, self.refId, &EvsStatement{Push: &protocol.EvsPush{
+		SignerSidecarId: identity.SidecarId.Bytes(), Auth: state.Pin(), RefKind: uint32(protocol.EvsRefKind_EVS_REF_SHARED),
+		RefMode: uint32(protocol.EvsRefMode_EVS_REF_GIT), Flags: self.flags, PathEpoch: self.tainted[0].Epoch,
+	}})
+	switch {
+	case err != nil:
+		return err
+	case line.waits() && line.Verdict.Outcome == AclPrefixUpdate:
+		return &EvsPrefixRuleError{Detail: EvsPrefixDetailUpdate}
+	case line.waits():
+		return &EvsPrefixRuleError{Detail: EvsPrefixDetailPending}
+	case !line.judges():
+		return nil
+	}
+	for _, taint := range self.tainted {
+		tokenPath, err := parseEvsTokenPathKey(taint.Key)
+		if err != nil {
+			return fmt.Errorf("%w: a tainted token path that does not parse", ErrEvsGitUpdateInvalid)
+		}
+		if !line.under(tokenPath) {
+			return &EvsPrefixRuleError{Detail: EvsPrefixDetailRefused}
+		}
+	}
+	return nil
 }
 
 // A test's hook on an update once its carried set and net change are fixed, before any attempt: what a test breaks a
@@ -528,6 +776,10 @@ func (self *evsGitPublishTree) EntriesAt(ctx context.Context, path string) ([]Ev
 // One attempt on base version baseVersion: steps 3 to 6 of the file header, under a fresh generation and push ids.
 func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion uint64, rebuilds *int) (*EvsLocalPublishResult, error) {
 	repo := self.repo
+	// step 3's prefix check, at the state whose pin this attempt's statement carries, before anything is planned
+	if err := self.checkPrefix(ctx); err != nil {
+		return nil, err
+	}
 	repoKey, err := repo.client.args.Gkm.EnsureWritable(ctx, repo.repoId)
 	if err != nil {
 		return nil, err

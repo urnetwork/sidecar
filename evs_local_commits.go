@@ -11,6 +11,10 @@
 //	          tip. At most 16: past that C is taken again against excl and the sixteen's tips alone, and what it
 //	          gains is carried, and must then be this sidecar's own
 //	blobs     B: every blob git rev-list --objects peel(new) --not excl tips(S) lists, which the readers do not hold
+//	proof     under a general repo's prefix rules, a held device's tag names its proof first among S (8.2.4, QD-801):
+//	          of the tip index's rows for peel(new) whose ref is a shared branch, a ref whose applied tip it is now
+//	          first, then the lower ref id, then the highest version. It is a source like the others, counted among
+//	          the 16, and changes nothing else: a past tip a forced update dropped is carried again by C
 //
 // Every commit of C that no EvsImport covers is new, and held to 8.2.3's rule before anything is sent: its object
 // canonical (EvsGitCommitDecode), its committer a strict ident whose email is a client of this sidecar
@@ -86,8 +90,9 @@ func evsGitOidHexes(oids []EvsGitOid) []string {
 	return hexes
 }
 
-// What the update of refId to peeled carries over excl (see the file header).
-func (self *EvsLocalRepo) carried(ctx context.Context, refId Id, peeled EvsGitOid, excl []EvsGitOid, state EvsGitSourceState) (*evsGitCarried, error) {
+// What the update of refId to peeled carries over excl (see the file header), first, a tag's proof, named first among
+// its sources where it is not nil.
+func (self *EvsLocalRepo) carried(ctx context.Context, refId Id, peeled EvsGitOid, excl []EvsGitOid, state EvsGitSourceState, first *EvsGitSourceRef) (*evsGitCarried, error) {
 	commits, boundaries, err := self.revList(ctx, peeled, excl, true)
 	if err != nil {
 		return nil, err
@@ -97,7 +102,16 @@ func (self *EvsLocalRepo) carried(ctx context.Context, refId Id, peeled EvsGitOi
 		candidates = []EvsGitOid{peeled}
 	}
 	carried := &evsGitCarried{commits: commits}
-	named := map[Id]bool{}
+	// one source a (ref, version): a proof at a past version and the same ref at its tip are two
+	type refVersion struct {
+		refId   Id
+		version uint64
+	}
+	named := map[refVersion]bool{}
+	if first != nil {
+		named[refVersion{refId: first.RefId, version: first.Version}] = true
+		carried.sources = append(carried.sources, first)
+	}
 	for _, candidate := range candidates {
 		reached, err := self.reachedBy(ctx, candidate, excl)
 		if err != nil {
@@ -113,8 +127,8 @@ func (self *EvsLocalRepo) carried(ctx context.Context, refId Id, peeled EvsGitOi
 		if source == nil {
 			return nil, fmt.Errorf("%w: commit %x is held by no ref replay holds", ErrEvsGitUpdateInvalid, candidate[:])
 		}
-		if !named[source.RefId] {
-			named[source.RefId] = true
+		if key := (refVersion{refId: source.RefId, version: source.Version}); !named[key] {
+			named[key] = true
 			carried.sources = append(carried.sources, source)
 		}
 	}
@@ -140,6 +154,36 @@ func (self *EvsLocalRepo) carried(ctx context.Context, refId Id, peeled EvsGitOi
 	}
 	carried.blobs = blobs
 	return carried, nil
+}
+
+// A held device's tag's proof (see the file header's proof row): nil where the commit is no shared branch's tip, now
+// or before, as far as this device has replayed, and the tag is then measured from nothing.
+func evsGitTagProof(ctx context.Context, state EvsGitSourceState, peeled EvsGitOid) (*EvsGitSourceRef, error) {
+	rows, err := state.TipsOf(ctx, peeled)
+	if err != nil {
+		return nil, err
+	}
+	var chosen *EvsGitSourceRef
+	chosenNow := false
+	for _, row := range rows {
+		if !evsGitSourceSharedBranch(row) || row.Version == 0 {
+			continue
+		}
+		current, held, err := state.SourceRef(ctx, row.RefId)
+		if err != nil {
+			return nil, err
+		}
+		now := held && current.Tip == peeled
+		better := chosen == nil || (now && !chosenNow)
+		if !better && now == chosenNow {
+			order := bytes.Compare(row.RefId[:], chosen.RefId[:])
+			better = order < 0 || (order == 0 && chosen.Version < row.Version)
+		}
+		if better {
+			chosen, chosenNow = row, now
+		}
+	}
+	return chosen, nil
 }
 
 // rev-list --topo-order --reverse of peeled --not excl, and every refs/ur/evs/ tip when glob: the commits, and the
