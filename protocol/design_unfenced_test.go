@@ -1282,6 +1282,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "carry", number: 13, typeName: "bytes"},
 		question: "details-3-key-commitment",
 	},
+	// QD-850: the name a visitor asked for, the TLS SNI, on the TLS front's publish receipts, apart from relays
+	{
+		message:  "ReachReceipt",
+		field:    testFenceField{name: "server_name", number: 11, typeName: "string"},
+		question: "tls-m6-06-reach-receipt-server-name",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
