@@ -46,7 +46,7 @@ sender MTA --TCP/25--> lb stream port (PROXY v1: sender address) --> mxedge rout
   §6 StreamOpen{ticket, MailIngress, early_data=ClientHello's first 2,048 B} on a Required stream (D-PROTO-6)
 receiver: tls.Server, no second 220; EHLO, MAIL, RCPT, BDAT/DATA; SPF, DKIM, DMARC and PTR as received
   --> deposit (§11.12): the body under its own key, that key in a slot to the drop key, a sealed header
-      with MailIngress and MailAuthEvidence --> 250 once durable
+      with MailIngress and MailAuthEvidence, a trailer of the body under that key --> 250 once durable
 reader: ingest; score and label from the sealed evidence (15.5); write the 15.7 layout
 
 report sender --TCP/25--> rpt.bringyour.com (two other lb interfaces) --> platform listener
