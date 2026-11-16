@@ -33,3 +33,8 @@ func TestFs38ForwardingRefusals(t *testing.T) {
 func TestFs38ForwardingForged(t *testing.T) {
 	fsForwardingRun(t, "FS-38's forwarding forged case", Fs38ForwardingForgedCase)
 }
+
+func TestFs38ForwardingRevokeEndsItsFlows(t *testing.T) {
+	fsForwardingRun(t, "FS-38's forwarding revocation twin", Fs38ForwardingFlowsStayUnrevoked)
+	fsForwardingRun(t, "FS-38's forwarding revocation", Fs38ForwardingRevokeCase)
+}

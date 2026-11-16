@@ -15,6 +15,11 @@
 //   - the forged case, the operator's (T2 alone; its twin carries T3): a window client the operator minted, its
 //     contract HMACed under the host's provide secret and sealed to claim the subject, carrying a forwarding delegation
 //     the operator signed or the subject's real one of another window client replayed, opens no socket.
+//   - a revocation: with one TCP connection the subject's forwarding key admitted and one its identity key admitted,
+//     both live, the subject's own DelegationRevoke of its forwarding Delegation lands, the host's compile drops the
+//     Delegation and the bridge closes the forwarding key's flows alone, so that connection's upstream socket closes
+//     and a new connection through that window is refused, while the identity key's connection carries on
+//     (DESIGN-DETAILS 4.2.5, D-BRIDGE-21's order). Its twin keeps both open with no revocation.
 //
 // None of these is in the fault catalog: §23.6's M8 row names §22.5's forwarding cases, not an FS-38 case, so each runs
 // as a schedule of its own until a design-records fold of DESIGN-DETAILS 4.6 gives FS-38 its M8-out case. What the
@@ -31,6 +36,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/urnetwork/connect"
@@ -41,10 +49,12 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// FS-38's forwarding refusals beside their twin, and the forged case beside the same twin.
+// FS-38's forwarding refusals beside their twin, the forged case beside the same twin, and a DelegationRevoke ending
+// its key's flows beside the same flows unrevoked.
 var (
 	Fs38ForwardingCase       = Twin(Fs38ForwardingRefusals, Fs38ForwardingDelegation)
 	Fs38ForwardingForgedCase = Twin(Fs38ForwardingMinted, Fs38ForwardingDelegation)
+	Fs38ForwardingRevokeCase = Twin(Fs38ForwardingRevokeEndsItsFlows, Fs38ForwardingFlowsStayUnrevoked)
 )
 
 // Whether the host's state lists forwarding as its subject's live forwarding Delegation (BRIDGE-M8-04's compile).
@@ -245,4 +255,155 @@ func Fs38ForwardingMinted(net *Net) *Schedule {
 	schedule.Tiers = []Tier{TierT2}
 	schedule.Forged = true
 	return schedule
+}
+
+// The two live connections of a revocation schedule: one its forwarding key admitted, one its identity key admitted.
+type fsForwardingConnections struct {
+	forwardWindow  *sidecartest.BridgeNetWindow
+	identityWindow *sidecartest.BridgeNetWindow
+	forwardConn    net.Conn
+	identityConn   net.Conn
+}
+
+// The upstream's accepted connection whose bytes begin with prefix, false for none.
+func fsForwardingAccept(accepts []sidecartest.BridgeNetAccept, prefix string) (sidecartest.BridgeNetAccept, bool) {
+	for _, accept := range accepts {
+		if strings.HasPrefix(string(accept.Bytes), prefix) {
+			return accept, true
+		}
+	}
+	return sidecartest.BridgeNetAccept{}, false
+}
+
+// The steps a revocation schedule and its twin share: the subject's forwarding Delegation, and a TCP connection through
+// a window its forwarding key signed for beside one its identity key signed for, each carrying its first bytes to the
+// upstream.
+func fsForwardingRevocationSteps(world *fsBridgeWorld, forwarding **sidecartest.BridgeNetForwarding, connections *fsForwardingConnections) []*Step {
+	return []*Step{
+		fsBridgeSetup(world, "subject"),
+		fsBridgeDo("subject", world, func() error {
+			*forwarding = world.world.FileForwarding(world.subjects["subject"], "fs38 revocation")
+			world.world.Follow()
+			return fsForwardingCompiled(world, *forwarding)
+		}),
+		fsBridgeDo("windows", world, func() error {
+			subject := world.subjects["subject"]
+			address := netip.AddrPortFrom(world.host.Address, world.host.Upstream.TcpPort())
+			connections.forwardWindow = fsForwardingWindow(world, "fs38 forwarding live", subject, *forwarding, nil, nil)
+			connections.identityWindow = world.world.OpenWindow("fs38 identity live", subject, world.host, nil)
+			var err error
+			if connections.forwardConn, err = connections.forwardWindow.DialTcp(address); err != nil {
+				return fmt.Errorf("the forwarding key's connection: %w", err)
+			}
+			if connections.identityConn, err = connections.identityWindow.DialTcp(address); err != nil {
+				return fmt.Errorf("the identity key's connection: %w", err)
+			}
+			for conn, payload := range map[net.Conn]string{connections.forwardConn: "forward before;", connections.identityConn: "identity before;"} {
+				if _, err := conn.Write([]byte(payload)); err != nil {
+					return err
+				}
+			}
+			if !world.host.Upstream.WaitFor(world.world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+				_, forwardOpen := fsForwardingAccept(accepts, "forward before;")
+				_, identityOpen := fsForwardingAccept(accepts, "identity before;")
+				return forwardOpen && identityOpen
+			}) {
+				return errors.New("the two connections' first bytes never reached the upstream")
+			}
+			return nil
+		}),
+	}
+}
+
+// The last step a revocation schedule and its twin share: the identity key's connection still carries bytes, and
+// everything the schedule opened closes.
+func fsForwardingIdentityCarriesOn(world *fsBridgeWorld, connections *fsForwardingConnections) *Step {
+	return fsBridgeDo("windows", world, func() error {
+		defer func() {
+			for _, conn := range []net.Conn{connections.forwardConn, connections.identityConn} {
+				if conn != nil {
+					conn.Close()
+				}
+			}
+			for _, window := range []*sidecartest.BridgeNetWindow{connections.forwardWindow, connections.identityWindow} {
+				if window != nil {
+					window.Close()
+				}
+			}
+		}()
+		if _, err := connections.identityConn.Write([]byte("identity after;")); err != nil {
+			return fmt.Errorf("the identity key's connection: %w", err)
+		}
+		if !world.host.Upstream.WaitFor(world.world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+			accept, ok := fsForwardingAccept(accepts, "identity before;")
+			return ok && strings.HasSuffix(string(accept.Bytes), "identity after;") && !accept.Closed
+		}) {
+			return errors.New("the identity key's connection stopped carrying bytes")
+		}
+		return nil
+	})
+}
+
+// A DelegationRevoke of the subject's forwarding Delegation, its own, ends exactly the flows that key admitted: that
+// connection's upstream socket closes and the window opens no new one, while the identity key's carries on.
+func Fs38ForwardingRevokeEndsItsFlows(net *Net) *Schedule {
+	world := newFsBridgeWorld()
+	var forwarding *sidecartest.BridgeNetForwarding
+	connections := &fsForwardingConnections{}
+	steps := fsForwardingRevocationSteps(world, &forwarding, connections)
+	steps = append(steps,
+		fsBridgeDo("subject", world, func() error {
+			world.world.RevokeForwarding(world.subjects["subject"], forwarding)
+			world.world.Follow()
+			for _, identity := range world.host.State().GetIdentities() {
+				if bytes.Equal(identity.GetSidecarId(), forwarding.Subject.SidecarId().Bytes()) && 0 < len(identity.GetForwardDelegationId()) {
+					return errors.New("the host's state still lists the revoked forwarding Delegation")
+				}
+			}
+			if !world.host.Upstream.WaitFor(world.world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+				accept, ok := fsForwardingAccept(accepts, "forward before;")
+				return ok && accept.Closed
+			}) {
+				return errors.New("the forwarding key's connection outlived its Delegation's revocation")
+			}
+			if accept, ok := fsForwardingAccept(world.host.Upstream.Accepts(), "identity before;"); !ok || accept.Closed {
+				return errors.New("the revocation closed the identity key's connection")
+			}
+			dialsBefore := len(world.host.Dials())
+			if conn, err := connections.forwardWindow.DialTcp(netip.AddrPortFrom(world.host.Address, world.host.Upstream.TcpPort())); err == nil {
+				conn.Close()
+				return errors.New("the revoked key's window opened a new connection")
+			}
+			if dials := world.host.Dials(); len(dials) != dialsBefore {
+				return fmt.Errorf("the revoked key's window made %d new upstream dials", len(dials)-dialsBefore)
+			}
+			return nil
+		}),
+		fsForwardingIdentityCarriesOn(world, connections),
+	)
+	return fsBridgeSchedule("FS-38", "a DelegationRevoke of a forwarding Delegation ends the flows its key admitted and opens no new one, leaving the identity key's", world, steps...)
+}
+
+// The revocation schedule's twin: no revocation, and both connections carry on.
+func Fs38ForwardingFlowsStayUnrevoked(net *Net) *Schedule {
+	world := newFsBridgeWorld()
+	var forwarding *sidecartest.BridgeNetForwarding
+	connections := &fsForwardingConnections{}
+	steps := fsForwardingRevocationSteps(world, &forwarding, connections)
+	steps = append(steps,
+		fsBridgeDo("windows", world, func() error {
+			if _, err := connections.forwardConn.Write([]byte("forward after;")); err != nil {
+				return fmt.Errorf("the forwarding key's connection: %w", err)
+			}
+			if !world.host.Upstream.WaitFor(world.world.Settings().WaitTimeout, func(accepts []sidecartest.BridgeNetAccept, datagrams [][]byte) bool {
+				accept, ok := fsForwardingAccept(accepts, "forward before;")
+				return ok && strings.HasSuffix(string(accept.Bytes), "forward after;") && !accept.Closed
+			}) {
+				return errors.New("the forwarding key's connection stopped carrying bytes with no revocation")
+			}
+			return nil
+		}),
+		fsForwardingIdentityCarriesOn(world, connections),
+	)
+	return fsBridgeSchedule("FS-38", "", world, steps...)
 }
