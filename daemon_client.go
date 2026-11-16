@@ -175,6 +175,12 @@ func startDaemonClient(conn net.Conn, hello *DaemonHello, settings *DaemonClient
 // person confirmed this call on /dev/tty or in an app's UI (D-CORE-13), which only a control session carries. A
 // refusal is a *DaemonRpcError. ctx's end closes the session, since an answer still on its way cannot be framed.
 func (self *DaemonClient) Call(ctx context.Context, method string, params any, confirmed bool, result any) error {
+	return self.CallNotified(ctx, method, params, confirmed, result, nil)
+}
+
+// Call, with each notification the daemon sends on the session before the answer handed to notified in order: a
+// method and its params as sent (DaemonCall.Notify). Nil notified drops them.
+func (self *DaemonClient) CallNotified(ctx context.Context, method string, params any, confirmed bool, result any, notified func(method string, params json.RawMessage)) error {
 	self.nextId += 1
 	id := json.RawMessage(strconv.FormatInt(self.nextId, 10))
 	request := &daemonRpcRequest{JsonRpc: "2.0", Id: id, Method: method, UrConfirmed: confirmed}
@@ -196,16 +202,34 @@ func (self *DaemonClient) Call(ctx context.Context, method string, params any, c
 	if _, err := self.conn.Write(append(encoded, '\n')); err != nil {
 		return err
 	}
-	line, err := readDaemonLine(self.reader, self.settings.AnswerByteCount)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	var response *daemonRpcResponse
+	for {
+		line, err := readDaemonLine(self.reader, self.settings.AnswerByteCount)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
 		}
-		return err
-	}
-	response := &daemonRpcResponse{}
-	if err := json.Unmarshal(line, response); err != nil || string(response.Id) != string(id) {
-		return errors.New("daemon rpc: not this call's answer")
+		response = &daemonRpcResponse{}
+		if err := json.Unmarshal(line, response); err != nil {
+			return errors.New("daemon rpc: not this call's answer")
+		}
+		if response.Id == nil {
+			// a line with no id is a notification of this call's, which its answer follows
+			notification := &daemonRpcRequest{}
+			if err := json.Unmarshal(line, notification); err != nil || notification.Method == "" {
+				return errors.New("daemon rpc: not this call's answer")
+			}
+			if notified != nil {
+				notified(notification.Method, notification.Params)
+			}
+			continue
+		}
+		if string(response.Id) != string(id) {
+			return errors.New("daemon rpc: not this call's answer")
+		}
+		break
 	}
 	if response.Error != nil {
 		return response.Error

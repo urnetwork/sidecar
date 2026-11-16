@@ -1,11 +1,11 @@
 //go:build !sidecar_http && !js && !ios && !android && !sdk_mobile_bind && !windows
 
 // FS-73's clauses (evsgit/fs73.go) on T2: the engine in this process, a world a clause, each with the network in the
-// format2 gate, this host's stock git-lfs on PATH in every clone, its transfer agent this test binary relaying to the
-// device's daemon, and a clock that follows real time until a clause moves it by days. Server's evshost TestFs73OnT3
-// runs the same clauses on T3's stores, across §22.9's matrix rows the host holds. FS-73 is a T3 row; these are the
-// same schedules on the fakes, so a divergence shows. The race clause and the twin hold or switch the real code, so they
-// need the sidecar_testhooks build and skip without it.
+// format2 gate, this host's stock git-lfs on PATH in every clone, its transfer agent and git-remote-ur this test
+// binary relaying to the device's daemon, and a clock that follows real time until a clause moves it by days. Server's
+// evshost TestFs73OnT3 runs the same clauses on T3's stores, across §22.9's matrix rows the host holds. FS-73 is a T3
+// row; these are the same schedules on the fakes, so a divergence shows. The race clause and the twin hold or switch
+// the real code, so they need the sidecar_testhooks build and skip without it.
 
 package sidecartest_test
 
@@ -25,7 +25,13 @@ func TestEvsGitLfsAgentHelperProcess(t *testing.T) {
 	evsgit.LfsAgentHelper()
 }
 
-// A world for FS-73: format 2, git-lfs, and a clock that follows real time.
+// Not a test: git-remote-ur as a world's git execs it for a ur:// remote, dialing its device's daemon in git mode
+// (evsgit.RemoteHelper).
+func TestEvsGitRemoteHelperProcess(t *testing.T) {
+	evsgit.RemoteHelper()
+}
+
+// A world for FS-73: format 2, git-lfs, git-remote-ur, and a clock that follows real time.
 func newEvsGitFs73World(t *testing.T) *evsgit.World {
 	t.Helper()
 	gitLfs, err := exec.LookPath("git-lfs")
@@ -41,6 +47,7 @@ func newEvsGitFs73World(t *testing.T) *evsgit.World {
 	settings.Clock = evsgit.FollowRealTime(t, sidecartest.NewFakeClock(time.Now()), 10*time.Millisecond)
 	settings.Format2 = true
 	settings.Lfs = &evsgit.WorldLfs{AgentCommand: []string{binary, "-test.run=^TestEvsGitLfsAgentHelperProcess$"}, GitLfs: gitLfs}
+	settings.RemoteHelperCommand = []string{binary, "-test.run=^TestEvsGitRemoteHelperProcess$", "--"}
 	return evsgit.NewWorld(t, settings)
 }
 
@@ -56,8 +63,8 @@ func TestEvsGitFs73PruneLosesToATouch(t *testing.T) {
 	evsgit.Fs73PruneLosesToATouch(t, newEvsGitFs73World(t), newEvsGitFs73Barrier(t).hold)
 }
 
-func TestEvsGitFs73OverHttpAndSsh(t *testing.T) {
-	evsgit.Fs73OverHttpAndSsh(t, newEvsGitFs73World(t))
+func TestEvsGitFs73OverEachTransport(t *testing.T) {
+	evsgit.Fs73OverEachTransport(t, newEvsGitFs73World(t))
 }
 
 func TestEvsGitFs73OwnedRefHoldsWhenPrunedMeanwhile(t *testing.T) {

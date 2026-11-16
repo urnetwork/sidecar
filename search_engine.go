@@ -29,6 +29,7 @@ package sidecar
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -44,6 +45,11 @@ type SearchEngineArgs struct {
 	// Nil takes DefaultSearchResultSettings and DefaultIndexFormatSettings.
 	Results *SearchResultSettings
 	Format  *IndexFormatSettings
+	// search_agents' and grouping's bounds (search_group.go); nil takes DefaultSearchGroupSettings.
+	Groups *SearchGroupSettings
+	// The sidecars whose rows a member filter matches as their writer: the member's devices and the tagged sidecars it
+	// sponsors, at the newest verified state. Nil, and a member it names no sidecar of, match no row.
+	Members func(memberId Id) []Id
 	Cache   *SearchCache
 	Sync    *SearchSync
 	// §18.4's policy, which "search more" and the background window follow. Nil fetches nothing: SearchAll then reads
@@ -73,6 +79,7 @@ type SearchEngine struct {
 	args       SearchEngineArgs
 	results    *SearchResultSettings
 	format     *IndexFormatSettings
+	groups     *SearchGroupSettings
 	clock      Clock
 	log        Logger
 	limits     *searchLimits
@@ -107,13 +114,20 @@ func NewSearchEngine(args *SearchEngineArgs) (*SearchEngine, error) {
 	if format == nil {
 		format = DefaultIndexFormatSettings()
 	}
+	groups := args.Groups
+	if groups == nil {
+		groups = DefaultSearchGroupSettings()
+	}
+	if err := groups.check(); err != nil {
+		return nil, err
+	}
 	clock := clockOrReal(args.Clock)
 	cursors, err := newSearchCursorTable(settings, clock)
 	if err != nil {
 		return nil, err
 	}
 	engine := &SearchEngine{
-		args: *args, results: results, format: format, clock: clock, log: loggerOrDefault(args.Log),
+		args: *args, results: results, format: format, groups: groups, clock: clock, log: loggerOrDefault(args.Log),
 		limits: newSearchLimits(settings, clock), cursors: cursors, streams: map[*searchEngineStream]bool{},
 	}
 	if args.Policy != nil {
@@ -140,6 +154,16 @@ func (self *SearchEngine) Search(ctx context.Context, request *SearchRequest) (*
 // One search in session: the stream, and the cursor token that resumes it in that session alone. Waits for its
 // admission until ctx ends (wait_ms), then ErrSearchBusy.
 func (self *SearchEngine) SearchIn(ctx context.Context, session Id, request *SearchRequest) (*SearchStream, string, error) {
+	stream, token, err := self.open(ctx, session, request)
+	if err != nil {
+		return nil, "", err
+	}
+	return NewSearchStream(stream), token, nil
+}
+
+// SearchIn's search as the engine's own callers page it (the search tools, search_agents): its stream and cursor
+// token.
+func (self *SearchEngine) open(ctx context.Context, session Id, request *SearchRequest) (*searchEngineStream, string, error) {
 	if request == nil || request.PageSize < 0 {
 		return nil, "", ErrSearchRequest
 	}
@@ -162,7 +186,7 @@ func (self *SearchEngine) SearchIn(ctx context.Context, session Id, request *Sea
 	if query.Empty() && len(request.Filters) == 0 {
 		return nil, "", fmt.Errorf("%w: a query or a filter", ErrSearchRequest)
 	}
-	filters, err := searchRowFiltersOf(request, normalizer)
+	filters, err := searchRowFiltersOf(request, normalizer, self.args.Members)
 	if err != nil {
 		return nil, "", err
 	}
@@ -198,7 +222,7 @@ func (self *SearchEngine) SearchIn(ctx context.Context, session Id, request *Sea
 		stream.Close()
 		return nil, "", err
 	}
-	return NewSearchStream(stream), token, nil
+	return stream, token, nil
 }
 
 // The stream of session's cursor token, to page on: ErrSearchCursorInvalid for a token the session cannot hold,
@@ -256,8 +280,10 @@ func (self *SearchEngine) Close() {
 }
 
 // §16.10's doc-table filters and time bounds as a confirmation applies them: from, subject, to and title confined to
-// their fields; agent, sidecar, run, session and kind to a record's registered fields; path_prefix to the locator.
-func searchRowFiltersOf(request *SearchRequest, normalizer *indexNormalizer) (*searchRowFilters, error) {
+// their fields; agent, run and session to a registered class's fields; kind[] to one of its kinds; sidecar to the
+// row's writer, field 7 in both registries, as rows spell ids (lowercase hex); member to one of the sidecars members
+// names for it; path_prefix to the locator.
+func searchRowFiltersOf(request *SearchRequest, normalizer *indexNormalizer, members func(memberId Id) []Id) (*searchRowFilters, error) {
 	filters := &searchRowFilters{}
 	if !request.Since.IsZero() {
 		filters.sinceSeconds = uint64(max(request.Since.Unix(), 0))
@@ -265,12 +291,37 @@ func searchRowFiltersOf(request *SearchRequest, normalizer *indexNormalizer) (*s
 	if !request.Until.IsZero() {
 		filters.untilSeconds = uint64(max(request.Until.Unix(), 0))
 	}
+	var kinds *searchFieldFilter
 	for _, filter := range request.Filters {
 		switch filter.Name {
 		case "path_prefix":
 			filters.pathPrefix = filter.Value
 		case "kind":
-			filters.fields = append(filters.fields, &searchFieldFilter{fieldName: "kind", values: []string{filter.Value}})
+			// kind[]: one of the kinds named (§16.10's search in row)
+			if kinds == nil {
+				kinds = &searchFieldFilter{fieldName: "kind"}
+				filters.fields = append(filters.fields, kinds)
+			}
+			kinds.values = append(kinds.values, filter.Value)
+		case "sidecar":
+			sidecarId, err := ParseId(filter.Value)
+			if err != nil {
+				return nil, fmt.Errorf("%w: a sidecar filter that is no id", ErrSearchRequest)
+			}
+			filters.fields = append(filters.fields, &searchFieldFilter{field: searchFieldWriter, values: []string{hex.EncodeToString(sidecarId[:])}})
+		case "member":
+			memberId, err := ParseId(filter.Value)
+			if err != nil {
+				return nil, fmt.Errorf("%w: a member filter that is no id", ErrSearchRequest)
+			}
+			member := &searchFieldFilter{field: searchFieldWriter}
+			if members != nil {
+				for _, sidecarId := range members(memberId) {
+					member.values = append(member.values, hex.EncodeToString(sidecarId[:]))
+				}
+			}
+			member.none = len(member.values) == 0
+			filters.fields = append(filters.fields, member)
 		case "from", "subject", "to", "title":
 			term, ok, err := searchNewTerm(normalizer, filter.Value)
 			if err != nil {
@@ -279,8 +330,8 @@ func searchRowFiltersOf(request *SearchRequest, normalizer *indexNormalizer) (*s
 			if ok {
 				filters.fields = append(filters.fields, &searchFieldFilter{field: searchQueryHeaderFields[filter.Name], term: term})
 			}
-		case "agent", "run", "session", "sidecar":
-			name := map[string]string{"agent": "agent", "run": "run_id", "session": "session_ids", "sidecar": "writer"}[filter.Name]
+		case "agent", "run", "session":
+			name := map[string]string{"agent": "agent", "run": "run_id", "session": "session_ids"}[filter.Name]
 			term, ok, err := searchNewTerm(normalizer, filter.Value)
 			if err != nil {
 				return nil, err
@@ -322,8 +373,11 @@ type searchEngineStream struct {
 	moreFinished map[[2]Id]bool
 	more         SearchMoreProgress
 	waiting      string
-	// Hits ranked and held back past PageByteCount, given first on the next page.
+	// Hits ranked and held back past PageByteCount, or given back past a caller's limit (holdBack), first on the next
+	// page.
 	held []SearchHit
+	// The calling page's progress report, set for that call alone (nextReporting).
+	report func(progress SearchProgress)
 	// The running counts of the phases given, and of the one in progress.
 	finished SearchHitCounts
 	current  searchRankCounts
@@ -333,6 +387,8 @@ type searchEngineStream struct {
 
 	stateLock sync.Mutex
 	closed    bool
+	// Called once the search ends (onClose).
+	ends []func()
 }
 
 // Opens each scoped ref: its snapshot, held until the search ends, its plan, its mask and its confirmer. A ref with no
@@ -466,8 +522,18 @@ func (self *searchEngineStream) Next() ([]SearchHit, SearchProgress, bool, error
 // hits, then phase 2's, a page never revised; done once no later page holds a hit. ErrSearchCursorExpired once the
 // search's scope ended it.
 func (self *searchEngineStream) NextContext(ctx context.Context) ([]SearchHit, SearchProgress, bool, error) {
+	return self.nextReporting(ctx, nil)
+}
+
+// NextContext's page, report getting the search's progress while "search more" fetches within it, on this goroutine
+// or the fetch's, and never after this returns; nil reports nothing.
+func (self *searchEngineStream) nextReporting(ctx context.Context, report func(progress SearchProgress)) ([]SearchHit, SearchProgress, bool, error) {
 	self.pageLock.Lock()
 	defer self.pageLock.Unlock()
+	self.report = report
+	defer func() {
+		self.report = nil
+	}()
 	if self.isClosed() {
 		return nil, self.progressNow(), true, ErrSearchCursorExpired
 	}
@@ -671,10 +737,27 @@ func (self *searchEngineStream) beginNext(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// Runs "search more" for one ref within ctx: each shard it lands matched at once and queued as a phase-2 partition.
+// Runs "search more" for one ref within ctx: each shard it lands matched at once and queued as a phase-2 partition,
+// and each of its progress reports passed to the page's report as the search's progress.
 func (self *searchEngineStream) runMore(ctx context.Context, ref *searchOpenedRef) error {
 	engine := self.engine
 	key := [2]Id{ref.repoId, ref.refId}
+	// the search's progress as the fetch starts, which each report takes the fetch's figures into: the page holds the
+	// search's own state until it returns, and a report may come on the fetch's goroutine
+	base := self.progressNow()
+	report := self.report
+	onProgress := func(progress SearchMoreProgress) {
+		if report == nil {
+			return
+		}
+		reported := base
+		reported.Coverage = slices.Clone(base.Coverage)
+		reported.Excluded = slices.Clone(base.Excluded)
+		reported.FetchBytes = progress.MissingByteCount - progress.FetchedByteCount
+		reported.FetchedBytes = progress.MeteredByteCount
+		reported.Waiting = progress.Waiting
+		report(reported)
+	}
 	if engine.args.Policy == nil {
 		// no policy, no fetch: all is searched as held, and coverage says what it lacks
 		self.moreFinished[key] = true
@@ -683,7 +766,7 @@ func (self *searchEngineStream) runMore(ctx context.Context, ref *searchOpenedRe
 	landed := []*searchShardSource{}
 	more, err := NewSearchMore(&SearchMoreArgs{
 		Sync: engine.args.Sync, Policy: engine.args.Policy, Settings: engine.args.Settings, RepoId: ref.repoId, RefId: ref.refId,
-		AllowMetered: self.request.AllowMetered, Cursor: self.moreCursors[key], Clock: engine.clock,
+		AllowMetered: self.request.AllowMetered, Cursor: self.moreCursors[key], Clock: engine.clock, OnProgress: onProgress,
 		OnShard: func(ctx context.Context, file *SearchManifestFile) error {
 			source, err := ref.landedSource(ctx, file)
 			if err != nil || source == nil {
@@ -774,6 +857,37 @@ func (self *searchEngineStream) progressNow() SearchProgress {
 	return progress
 }
 
+// The search's progress now, between pages.
+func (self *searchEngineStream) currentProgress() SearchProgress {
+	self.pageLock.Lock()
+	defer self.pageLock.Unlock()
+	return self.progressNow()
+}
+
+// Gives hits back to the stream, in their order, first on its next page: what a caller paged past its limit, so no page
+// it returned is revised.
+func (self *searchEngineStream) holdBack(hits []SearchHit) {
+	self.pageLock.Lock()
+	defer self.pageLock.Unlock()
+	self.held = append(slices.Clone(hits), self.held...)
+}
+
+// Calls end once the search ends, as Close does, or at once where it ended already.
+func (self *searchEngineStream) onClose(end func()) {
+	ended := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.closed {
+			return true
+		}
+		self.ends = append(self.ends, end)
+		return false
+	}()
+	if ended {
+		end()
+	}
+}
+
 // Whether the search was closed.
 func (self *searchEngineStream) isClosed() bool {
 	self.stateLock.Lock()
@@ -790,9 +904,14 @@ func (self *searchEngineStream) Close() {
 	}
 	self.closed = true
 	refs := self.refs
+	ends := self.ends
+	self.ends = nil
 	self.stateLock.Unlock()
 	for _, ref := range refs {
 		ref.close()
+	}
+	for _, end := range ends {
+		end()
 	}
 	self.engine.stateLock.Lock()
 	delete(self.engine.streams, self)
