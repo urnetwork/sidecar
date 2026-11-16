@@ -15,6 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -76,6 +79,11 @@ func runGitRemoteUr(ctx context.Context, cli *urCli, args []string) int {
 		return urExitUsage
 	}
 	cli.instance = instance
+	// the clone's git-lfs agent, written from GIT_DIR during the fetch so the first checkout's smudge finds it
+	// (§11.11's agent row); a clone it cannot configure still fetches, and the tip check refuses what never arrived
+	if err := urConfigureRemoteLfs(ctx, cli, args[1]); err != nil {
+		fmt.Fprintf(cli.stderr, "git-remote-ur: git-lfs's agent is not configured: %s\n", err)
+	}
 	return sidecar.EvsGitRemoteHelper(ctx, &sidecar.EvsGitRemoteHelperArgs{
 		Url: args[1],
 		Dial: func(ctx context.Context, repo string, service string) (io.ReadWriteCloser, error) {
@@ -91,4 +99,37 @@ func runGitRemoteUr(ctx context.Context, cli *urCli, args []string) int {
 		Stdout: cli.stdout,
 		Stderr: cli.stderr,
 	})
+}
+
+// Writes the git-lfs agent's keys into the config of the clone git runs this helper for, GIT_DIR's, naming this ur
+// and the url's repo. Nothing without GIT_DIR, which git sets for a remote helper.
+func urConfigureRemoteLfs(ctx context.Context, cli *urCli, url string) error {
+	gitDir := cli.getenv("GIT_DIR")
+	if gitDir == "" {
+		return nil
+	}
+	repo, err := sidecar.EvsGitRemoteRepo(url)
+	if err != nil {
+		return err
+	}
+	gitDir, err = filepath.Abs(gitDir)
+	if err != nil {
+		return err
+	}
+	urPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return err
+	}
+	if gitPath, err = filepath.Abs(gitPath); err != nil {
+		return err
+	}
+	runner, err := sidecar.NewEvsGitRunner(ctx, gitPath, os.TempDir(), sidecar.DefaultEvsSettings(), nil)
+	if err != nil {
+		return err
+	}
+	return sidecar.EvsLfsConfigureClone(ctx, runner, gitDir, urPath, sidecar.EvsLfsAgentArgsFor(repo))
 }
