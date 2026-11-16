@@ -577,6 +577,19 @@ func TestSocketFindRefusesAFilterOrServerNamePastItsBounds(t *testing.T) {
 	if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeDenied {
 		t.Fatalf("a Find at its bounds answered %d, %+v", code, result)
 	}
+	// and the first two without their server name are formed too, so the name alone made them invalid
+	for index, args := range []*sidecar.SocketFindArgs{
+		{NameToken: testSocketTokenPath(t, 1), NetworkId: &networkId},
+		{Name: "smtp/25/mx", NetworkId: &networkId, ClientIds: edge.clientIdArgs()},
+	} {
+		token := dialer.token
+		if args.Name != "" {
+			token = edge.token
+		}
+		if code, result := process.find(token, args); code != http.StatusOK || (result.Error != nil && result.Error.Code == sidecar.SocketErrorCodeInvalid) {
+			t.Errorf("call %d without its server name answered %d, %+v", index, code, result)
+		}
+	}
 }
 
 // The kill set refuses a tls/ name before anything is read (§13.9).
