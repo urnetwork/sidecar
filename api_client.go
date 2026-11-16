@@ -310,6 +310,9 @@ type sidecarApiRequest struct {
 	bearer bool
 	// Carries a DPoP proof over the jwt (§7.4).
 	dpop bool
+	// Reads a refusal's whole body as the route's own, when set: the error it answers stands for the refusal, and nil
+	// leaves it a *SidecarApiError. It reads only fields of known shape, never the body's text.
+	refusal func(status int, body []byte) error
 }
 
 // Sends request and returns the body of its 2xx answer. A refusal is a *SidecarApiError, and a
@@ -428,6 +431,11 @@ func (self *SidecarApi) sendOnce(ctx context.Context, request *sidecarApiRequest
 		self.log.Infof("[api]%s %d\n", request.route, response.StatusCode)
 	}
 	if response.StatusCode < 200 || 300 <= response.StatusCode {
+		if request.refusal != nil && !tooLarge {
+			if refusalErr := request.refusal(response.StatusCode, responseBody); refusalErr != nil {
+				return nil, refusalErr
+			}
+		}
 		return nil, newSidecarApiError(request.route, response, responseBody, self.apiNow)
 	}
 	if tooLarge {
