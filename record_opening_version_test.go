@@ -436,7 +436,11 @@ func TestRecordOpeningVersionOfAnAuthorsOpening(t *testing.T) {
 			}
 		}
 	})
-	if report.Ok || !anyTestEntry(report, func(entry *sidecar.RecordVerifyEntry) bool { return !entry.Content && entry.Body }) {
+	contentFailed := false
+	for _, entry := range report.Entries {
+		contentFailed = contentFailed || (!entry.Content && entry.Body)
+	}
+	if report.Ok || !contentFailed {
 		t.Fatalf("a version-2 content opening stated as 1 verified: %v", testVerifyFailures(report))
 	}
 }
