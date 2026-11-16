@@ -817,6 +817,7 @@ secret recovery_ed25519_seed keys_recovery.go
 secret recovery_xwing_seed keys_recovery.go
 secret service_token api_routes_core.go
 secret share_secret socket_share.go
+secret smtp_x_ur_ref_key smtpedgeservice/issue.go
 secret socket_ticket_seed socketsservice/ticket_keys.go
 secret spool_private_key record_spool.go
 secret spool_private_key record_spool_locked.go

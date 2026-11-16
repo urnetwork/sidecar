@@ -69,7 +69,7 @@ func parseSmtpTlsRptJson(data []byte, settings *SmtpEdgeSettings) (*SmtpAggregat
 		return nil, fmt.Errorf("%w: JSON that does not parse as TLS-RPT", ErrSmtpReportRefused)
 	}
 	reportId := strings.TrimSpace(report.ReportId)
-	if reportId == "" || smtpAggregateValueMaxByteCount < len(reportId) {
+	if reportId == "" || settings.ReportAggregateValueMaxByteCount < len(reportId) {
 		return nil, fmt.Errorf("%w: a report with no usable report-id", ErrSmtpReportRefused)
 	}
 	rows := &SmtpAggregateRows{Kind: SmtpAggregateKindTlsRpt, ReportId: reportId}
@@ -82,7 +82,7 @@ func parseSmtpTlsRptJson(data []byte, settings *SmtpEdgeSettings) (*SmtpAggregat
 	for _, policy := range report.Policies {
 		policyType := strings.ToLower(strings.TrimSpace(policy.Policy.PolicyType))
 		domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(policy.Policy.PolicyDomain)), ".")
-		if !smtpTlsRptPolicyTypes[policyType] || !smtpLdhName(domain) {
+		if !smtpTlsRptPolicyTypes[policyType] || !settings.ldhName(domain) {
 			rows.DroppedRowCount += 1
 			continue
 		}
