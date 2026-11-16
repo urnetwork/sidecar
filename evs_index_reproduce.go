@@ -154,10 +154,12 @@ type indexHeldStore struct {
 	base *indexReproduceBase
 }
 
+// See indexRefStore.
 func (self *indexHeldStore) Head(ctx context.Context) (*indexRefHead, error) {
 	return self.base.listing.head, nil
 }
 
+// See indexRefStore.
 func (self *indexHeldStore) List(ctx context.Context, refVersion uint64) (*indexListing, error) {
 	if refVersion != 0 && refVersion != self.base.listing.head.version {
 		return nil, errIndexReproduceLacking
@@ -165,6 +167,7 @@ func (self *indexHeldStore) List(ctx context.Context, refVersion uint64) (*index
 	return self.base.listing, nil
 }
 
+// See indexRefStore.
 func (self *indexHeldStore) History(ctx context.Context, path string, refVersion uint64) ([]*indexFileVersion, error) {
 	for _, file := range self.base.listing.files {
 		if file.path == path {
@@ -174,6 +177,7 @@ func (self *indexHeldStore) History(ctx context.Context, path string, refVersion
 	return nil, nil
 }
 
+// See indexRefStore.
 func (self *indexHeldStore) Read(ctx context.Context, file *indexFileVersion) ([]byte, error) {
 	plaintext, held, err := self.base.held(ctx, file)
 	if err != nil {
@@ -188,6 +192,7 @@ func (self *indexHeldStore) Read(ctx context.Context, file *indexFileVersion) ([
 	return plaintext, nil
 }
 
+// See indexRefStore.
 func (self *indexHeldStore) Commit(ctx context.Context, push *indexPush) (*indexCommitted, error) {
 	return nil, errIndexReproduceLacking
 }
