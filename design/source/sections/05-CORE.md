@@ -92,11 +92,13 @@ type SidecarAction struct { // every outward action (I-8)
 	                            // DNS user record set or delete; mail to a non-member with no approved-recipient
 	                            // record (§15.7's rcpt/; owner decision 280), or to any non-member in a tainted
 	                            // run; an access request through the team directory (§16.11; CanonicalAction
-	                            // version 3); payment; a restore. On the wire one verb a value (§16.8): 1 publish,
+	                            // version 3); payment; a restore; a TL4 allowance for a recipient domain (§14.4).
+	                            // On the wire one verb a value (§16.8): 1 publish,
 	                            // 2 listen, 3 forward, 4 expose, 5 egress_change, 6 invite, 7 share,
 	                            // 8 alias_create (burners too, §15.8), 9 alias_delete, 10 agent_config_write,
 	                            // 11 agent_config_delete, 12 dns_set, 13 dns_delete, 14 mail_send,
-	                            // 15 access_request, 16 payment, 17 restore, new kinds appending; publish and
+	                            // 15 access_request, 16 payment, 17 restore, 18 mail_tls_unauthenticated (owner
+	                            // decision 436), new kinds appending; publish and
 	                            // listen cover tls/ and smtp/ alike, since host and socket_name say which
 	Canonical []byte            // built by the daemon; payload_sha256 = SHA-256(Canonical)
 	Risk      SidecarRisk       // 1 normal, 2 high, the wire's values (§16.8); every action is normal: no policy

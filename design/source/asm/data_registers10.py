@@ -22,3 +22,11 @@ D['D-KEYS-8'] = "Drop keys in signed GenRotates, 90-day and renewed, give write-
 D['D-KEYS-14'] = ("Groups scale by 10.6's sizes: self-update interval, KF5 resync, GroupInfo on demand above 16 leaves, daily acks, "
                   "streamed on-disk trees.")
 D['D-KEYS-15'] = "`gkm/<group_id>/gen/<g>`, created If-None-Match by the rotator, alone creates a generation; MLS commits never raise it."
+# §14's fold (2026-11-16): pins per recipient domain and MX host (owner decision 438), parts of one record (433), and the
+# key schedule proven once under a hiding commitment (433).
+assert D['D-SMTP-2'].endswith('pinned hosts are never downgraded.') and '2-minute parts' in D['D-SMTP-20'], 'SMTP rows moved'
+D['D-SMTP-2'] = ("STARTTLS is mandatory; an unauthenticated MX needs the user's per-domain consent; no domain goes below its "
+                 "pin on a host.")
+D['D-SMTP-20'] = ("DATA mode proves every message octet in one-record parts within 2 h, up to `smtp_data_proof_bytes`; larger "
+                  "mail gets a DSN.")
+D['D-SMTP-22'] = "14.5's relation proves the MX's replies and Z1 once, under a hiding key commitment; BDAT bodies stream unopened."

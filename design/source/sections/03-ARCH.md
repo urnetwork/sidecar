@@ -306,7 +306,7 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
 3  |            |--preamble-------------->|--STARTTLS->|
 4  |            |<--result----------------|            |
 5  |            |<============ handshake, spliced ====>|
-6  |            |--pi1-pi3 (+ DATA parts)>|[verify]    |
+6  |            |--key, then parts------->|[verify]    |
 7  |            |<========= records after each proof =>|
 8  |            |--outcome--------------->|            |
 
@@ -328,13 +328,15 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
 5  the daemon's handshake (SNI = MX host) passes through the splice; it authenticates the MX by DANE
    (TL1, validating step 4's chain), MTA-STS (TL2) or an independent lookup (TL3), and refuses an
    unauthenticated MX unless the user allowed that domain (owner decision 38; §14.4)
-6  every SmtpProof part binds the session keys to the observed handshake: pi1 covers EHLO; pi2 the
-   EHLO reply, which fixes BDAT or DATA mode (BDAT only after CHUNKING), and the envelope (MAIL, one
-   RCPT per recipient and, in DATA mode, DATA); pi3 the envelope replies (in DATA, the 354) and the
-   header block, with the DKIM-Signature by this sidecar's own key, plus in BDAT the BDAT command and
-   the final QUIT record, the body streaming unopened under §14.5's count bound, or in DATA the first
-   body part, each later part having its own proof; DATA proves at most smtp_data_proof_bytes (about
-   1 MiB on an M1), so a larger message to an MX without CHUNKING gets a DSN before MAIL and a
+6  the first SmtpProof part, the key part, binds the session keys to the observed handshake once and
+   publishes a perfectly hiding commitment to them, which every later part opens (owner decision 433);
+   a part a group of envelope commands (MAIL and RCPTs, and in DATA mode DATA) proves the replies
+   before it, the EHLO reply among them, which fixes BDAT or DATA mode (BDAT only after CHUNKING); the
+   message part proves the last replies (in DATA, the 354) and opens the header block's first record,
+   with the DKIM-Signature by this sidecar's own key, each further header record taking a part of its
+   own, the last in BDAT also the final QUIT record, the body streaming unopened under §14.5's count
+   bound, while in DATA each body record has its own part; DATA proves at most smtp_data_proof_bytes
+   (about 3 MiB on an M1), so a larger message to an MX without CHUNKING gets a DSN before MAIL and a
    too_large outcome for that recipient domain alone, which CheckSend predicts once the domain's mode
    is known (owner decisions 35, 36, 125; §14.5, D-SMTP-20, D-SMTP-22)
 7  smtpedge forwards each client record only after the proof covering it verifies (§14.5)
