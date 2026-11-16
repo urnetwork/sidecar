@@ -40,7 +40,16 @@ the search cache's wrapped keys (289), host-held presence keys in remote mode (2
 a compromise revocation's since_n (292), the git-hook hello mode (293), the served record's daily rows (294), the
 unsigned minimum-version raise (295), same-network P2P behind a setting (296), settings objects for every limit
 (297), the ur/ pair's key and the dialer's Service hold (298), late versions pages and retry waits (299), the
-rollback head alarm (300) and companion contracts without a WindowDelegation (301)."""
+rollback head alarm (300) and companion contracts without a WindowDelegation (301). Adds owner decisions 302-331
+(folded 2026-11-16 with §7's items): cost totals in the team record (302), the team record's RepoCreate (303), a
+zero team_mail (304), record_required (305), the OAuth consent page (306), admission times in rows (307), no notice
+for a forwarding Delegation (308), forwarding rows leaving (309), the IdP flow state (310), edge login ports (311),
+re-seed uploads (312), the bundle's delegation id (313), open proposals in rows (314), a base's shrunk repos (315),
+the DPoP iat (316), the daemon's config follower (317), the anchor by descent (318), a device with no config key
+(319), the genesis owner's row (320), SCIM's bearer and queue (321), device authorizations (322), the auth key and
+admin event encodings (323), the invite's bytes (324), tail verdicts (325), not_preview (326), attestation outside
+the log (327), stage 2's build tag (328), the last Owner (329), cascade spans and indexer rows (330) and a
+superseded forwarding client (331)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -403,6 +412,84 @@ INDEX = list(_P9['INDEX']) + [
     (301, "Companion contracts",
      "A companion contract inherits its forward contract's subject, source network and class and seals no "
      "`WindowDelegation`."),
+    (302, "Cost in the team record",
+     "Per-run cost totals go to the team record by default, grouped and never ranked, and a Team turns "
+     "them off with `ServiceSettings.record_cost`."),
+    (303, "Team record's `RepoCreate`",
+     "The team record's `RepoCreate` follows the directory's rule, and a `RepoDelete` of it stands, so a "
+     "Team may decline the ledger."),
+    (304, "Zero `team_mail`",
+     "An unset `team_mail` reads as `indexers`; member scopes stays an explicit choice."),
+    (305, "`record_required`",
+     "A Team requires fail-closed hooks with the signed `ServiceSettings.record_required`, read from M6 "
+     "and never set through MCP."),
+    (306, "OAuth consent page",
+     "ur.io's OAuth consent page is in scope as the issuer's security control; owner rule 6 does not reach "
+     "it."),
+    (307, "Admission time in rows",
+     "`SidecarRow.admitted_time_ms` carries the time of the entry each admission took effect at, which "
+     "§7.10's cleanup list reads."),
+    (308, "Forwarding notice",
+     "A forwarding Delegation owes Owners and Admins no authority notice."),
+    (309, "Forwarding rows leave",
+     "A superseded or ended forwarding Delegation's row leaves the rows once retention passes it by 4,096 "
+     "positions."),
+    (310, "IdP flow state",
+     "A team IdP sign-in's flow state waits in Redis under `{sso_<state>}` for 10 minutes and is taken "
+     "once."),
+    (311, "Edge login ports",
+     "The issuer accepts an edge login origin on each tlsedge port, each port its own origin and audience."),
+    (312, "Re-seed uploads",
+     "api keeps re-seed uploads in the Redis soft-state family `{acl_<networkId>}r`, whose resumed marker "
+     "ends re-seed mode per network."),
+    (313, "Bundle's delegation id",
+     "An `AuthKeyBundle` carries the 32-byte `delegation_id` the log names."),
+    (314, "Open proposals in rows",
+     "Rows carry every open proposal with its kind, api schedules each recovery activation by a run-once "
+     "task, and a restored binding's admission filed with `self_admit` off has its own kind."),
+    (315, "A base's shrunk repos",
+     "A base names the repos its own head change shrinks, and a removal of a holder whose access had "
+     "already ended by time counts as a shrink."),
+    (316, "DPoP `iat`",
+     "A sidecar signs its DPoP `iat` by api's clock, refreshing the offset once on a refusal."),
+    (317, "Config follower",
+     "`ur daemon` runs one config follower per hosted network, the device's one judge of the log, over a "
+     "head reader evs provides."),
+    (318, "Anchor by descent",
+     "A reader that starts at a base judges that base's head by descent, each push's signature under an "
+     "identity the base's rows admit."),
+    (319, "No config key yet",
+     "A device with no config key applies bases rows-only, joins the config group on those states, then "
+     "re-reads them in full before it stands."),
+    (320, "Genesis owner's row",
+     "The genesis owner's row names SHA-256(Signed Genesis) as its admission hash, as its credential does."),
+    (321, "SCIM's bearer and queue",
+     "SCIM's bearer is a hashed column an Owner-only route sets, and the indexer `scim_signer` names reads "
+     "its queue at `GET /sidecar/scim-changes`."),
+    (322, "Device authorizations",
+     "RFC 8628 device authorizations wait in Redis for their 10-minute life and are taken once."),
+    (323, "Auth key and event encodings",
+     "The auth key bearer, a key's tag ids and the admin event hash chain are encoded as built."),
+    (324, "Invite bytes",
+     "A member invite is `ur-invite-<invite_id>-<secret>` with a fixed 153-byte fragment, and a join "
+     "carries an HMAC under the fragment's join secret."),
+    (325, "Tail verdicts",
+     "A base carries the verdict of every entry in its tail, judged once at its position, and later "
+     "verifiers take verdicts from it."),
+    (326, "`not_preview`",
+     "A preview refusal at enrollment and at `auth-client` answers the code `not_preview`."),
+    (327, "Attestation outside the log",
+     "The log's `KeyRegister` rule never reads the attestation; the registering device refuses a failing "
+     "one, and readers label keys locally."),
+    (328, "Stage 2's switch",
+     "§7.4's stage 2 is turned on by the build tag `sidecar_stage2`, never by a config push."),
+    (329, "Last Owner",
+     "A team's last Owner cannot delete their account until another member is Owner or the team is "
+     "deleted."),
+    (330, "Cascade spans, indexer rows",
+     "Rows keep each compromise cascade's span per sidecar and each indexer designation that holds."),
+    (331, "Superseded forwarding client",
+     "Only the newest active forwarding client of a sidecar's bound client is answered at the exchange."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -427,7 +514,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 302))
+assert [r[0] for r in INDEX] == list(range(1, 332))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -454,7 +541,13 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               284: '2026-11-06', 285: '2026-11-06', 286: '2026-11-13', 287: '2026-11-14', 288: '2026-11-15',
               289: '2026-11-15', 290: '2026-11-15', 291: '2026-11-15', 292: '2026-11-15', 293: '2026-11-15',
               294: '2026-11-15', 295: '2026-11-06', 296: '2026-11-06', 297: '2026-11-15', 298: '2026-11-15',
-              299: '2026-11-15', 300: '2026-11-15', 301: '2026-11-15'})
+              299: '2026-11-15', 300: '2026-11-15', 301: '2026-11-15',
+              302: '2026-11-06', 303: '2026-11-06', 304: '2026-11-06', 305: '2026-11-06', 306: '2026-11-06',
+              307: '2026-11-10', 308: '2026-11-10', 309: '2026-11-10', 310: '2026-11-12', 311: '2026-11-12',
+              312: '2026-11-12', 313: '2026-11-12', 314: '2026-11-15', 315: '2026-11-15', 316: '2026-11-12',
+              317: '2026-11-13', 318: '2026-11-14', 319: '2026-11-14', 320: '2026-11-14', 321: '2026-11-15',
+              322: '2026-11-15', 323: '2026-11-15', 324: '2026-11-15', 325: '2026-11-15', 326: '2026-11-15',
+              327: '2026-11-15', 328: '2026-11-15', 329: '2026-11-15', 330: '2026-11-15', 331: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -620,7 +713,17 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "served record's daily rows (294), the unsigned minimum-version raise (295), same-network P2P behind a "
     "setting (296), settings objects for every limit (297), the `ur/` pair's key and the dialer's Service hold "
     "(298), late versions pages and retry waits (299), the `rollback` head alarm (300) and companion contracts "
-    "without a `WindowDelegation` (301). ")
+    "without a `WindowDelegation` (301). The fold of §7's the same day numbers the answers on networks, teams, "
+    "enrollment and the authorization log: cost totals in the team record (302), the team record's `RepoCreate` "
+    "(303), a zero `team_mail` (304), `record_required` (305), the OAuth consent page (306), admission times in "
+    "rows (307), no notice for a forwarding Delegation (308), forwarding rows leaving the rows (309), the IdP "
+    "flow state (310), edge login ports (311), re-seed uploads (312), the bundle's `delegation_id` (313), open "
+    "proposals in rows (314), a base's shrunk repos (315), the DPoP `iat` (316), the daemon's config follower "
+    "(317), the anchor by descent (318), a device with no config key (319), the genesis owner's row (320), "
+    "SCIM's bearer and queue (321), device authorizations (322), the auth key and admin event encodings (323), "
+    "the invite's bytes (324), tail verdicts (325), `not_preview` (326), attestation outside the log (327), "
+    "stage 2's build tag (328), the last Owner (329), cascade spans and indexer rows (330) and a superseded "
+    "forwarding client (331). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

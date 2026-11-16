@@ -51,7 +51,7 @@ type socketPipeEnd struct {
 	writeClosed   bool
 }
 
-var _ socketStream = (*socketPipeEnd)(nil)
+var _ socketEndingStream = (*socketPipeEnd)(nil)
 
 // Two connected ends, each direction holding at most capacity bytes.
 func newSocketStreamPipe(capacity int) (*socketPipeEnd, *socketPipeEnd) {
@@ -224,6 +224,25 @@ func (self *socketPipeEnd) Reset(code protocol.StreamResetCode) error {
 	}
 	self.pipe.notifyWithLock()
 	return nil
+}
+
+// See socketEndingStream: the pipe was reset, or both ends sent FIN and this end read the peer's bytes through or
+// stopped reading.
+func (self *socketPipeEnd) waitEnded() {
+	for {
+		ended, changed := func() (bool, chan struct{}) {
+			self.pipe.stateLock.Lock()
+			defer self.pipe.stateLock.Unlock()
+			in := self.pipe.directions[1-self.index]
+			out := self.pipe.directions[self.index]
+			ended := 0 <= self.pipe.resetIndex || (out.finished && in.finished && (self.closed || len(in.buffer) == 0))
+			return ended, self.pipe.changed
+		}()
+		if ended {
+			return
+		}
+		<-changed
+	}
 }
 
 // See socketStream.
