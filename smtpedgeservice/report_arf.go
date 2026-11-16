@@ -28,13 +28,6 @@ import (
 	"time"
 )
 
-const (
-	// RFC 5322 §2.1.1's longest line, which bounds a Message-ID kept.
-	smtpMessageIdMaxByteCount = 998
-	// The longest Feedback-Type token kept. RFC 5965's registry's longest is twelve.
-	smtpFeedbackTypeMaxByteCount = 32
-)
-
 var (
 	// plan-SMTP-small-readings#3: 1. and 34 lowercase base32 characters.
 	smtpXUrRefPattern = regexp.MustCompile(`^1\.[a-z2-7]{34}$`)
@@ -108,7 +101,7 @@ func parseSmtpArf(parts *SmtpReportParts, settings *SmtpEdgeSettings) (*SmtpArfR
 				return nil, err
 			}
 			feedbackType := strings.ToLower(strings.TrimSpace(smtpHeaderValue(fields, "Feedback-Type")))
-			if feedbackType == "" || smtpFeedbackTypeMaxByteCount < len(feedbackType) || !smtpFeedbackTypePattern.MatchString(feedbackType) {
+			if feedbackType == "" || settings.ReportFeedbackTypeMaxByteCount < len(feedbackType) || !smtpFeedbackTypePattern.MatchString(feedbackType) {
 				return nil, fmt.Errorf("%w: a feedback report with no Feedback-Type", ErrSmtpReportRefused)
 			}
 			report.FeedbackType = feedbackType
@@ -227,7 +220,7 @@ func parseSmtpReportHeaders(block []byte, settings *SmtpEdgeSettings) (*SmtpRepo
 			}
 			domain := strings.ToLower(tags["d"])
 			selector := strings.ToLower(tags["s"])
-			if smtpLdhName(domain) && smtpDkimSelectorValid(selector) {
+			if settings.ldhName(domain) && smtpDkimSelectorValid(selector, settings) {
 				headers.DkimSignatures = append(headers.DkimSignatures, SmtpReportSignature{Domain: domain, Selector: selector})
 			}
 		case "message-id":
@@ -236,7 +229,7 @@ func parseSmtpReportHeaders(block []byte, settings *SmtpEdgeSettings) (*SmtpRepo
 			}
 			messageId := strings.TrimSpace(smtpUnfold(field.value))
 			if strings.HasPrefix(messageId, "<") && strings.HasSuffix(messageId, ">") && strings.Contains(messageId, "@") &&
-				len(messageId) <= smtpMessageIdMaxByteCount && smtpPrintableAscii(messageId) {
+				len(messageId) <= settings.ReportMessageIdMaxByteCount && smtpPrintableAscii(messageId) {
 				headers.MessageId = messageId
 			}
 		case "x-ur-ref":
@@ -249,7 +242,7 @@ func parseSmtpReportHeaders(block []byte, settings *SmtpEdgeSettings) (*SmtpRepo
 			}
 		case "from":
 			if headers.FromDomain == "" {
-				headers.FromDomain = smtpAddressDomain(smtpUnfold(field.value))
+				headers.FromDomain = smtpAddressDomain(smtpUnfold(field.value), settings)
 			}
 		case "received":
 			if receivedFound {
@@ -291,7 +284,7 @@ func smtpAsciiLower(value string) string {
 // The domain of a From field's first address, lowercased, when it is an LDH name, else empty. The
 // display name is never decoded: only the addr-spec is read, inside the first angle brackets when there
 // are any.
-func smtpAddressDomain(value string) string {
+func smtpAddressDomain(value string, settings *SmtpEdgeSettings) string {
 	address := value
 	if open := strings.IndexByte(value, '<'); 0 <= open {
 		if close := strings.IndexByte(value[open:], '>'); 0 <= close {
@@ -309,7 +302,7 @@ func smtpAddressDomain(value string) string {
 		domain = domain[:end]
 	}
 	domain = strings.TrimSuffix(strings.ToLower(domain), ".")
-	if !smtpLdhName(domain) {
+	if !settings.ldhName(domain) {
 		return ""
 	}
 	return domain

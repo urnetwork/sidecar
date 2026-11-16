@@ -24,6 +24,8 @@ const (
 	smtpPreambleResultNoMx     = "no_mx"
 	smtpPreambleResultNoTls    = "no_tls"
 	smtpPreambleResultTryLater = "try_later"
+	// The edge holds no key set of the id the preamble names (DESIGN-DETAILS 3.2.5).
+	smtpPreambleResultKeys = "keys"
 )
 
 // A connection's mode (§14.4), unknown until the proofs fix it.

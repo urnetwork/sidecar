@@ -16,6 +16,13 @@
 //     reported headers.
 //   - report_seal.go, the sealed copy's format.
 //   - report_intake.go, SmtpReportIntake: what the platform listener calls for each report.
+//   - preamble.go, one preamble's path at the edge: bounds, gate, quota, key set, MX, issued values.
+//   - gate.go, the send gate over SmtpGate's memory and §21.5's breaker state.
+//   - issue.go, send_id, X-UR-Ref and Feedback-ID.
+//   - quota.go, quota_scripts.go, breaker.go and destination.go, §14.7's enforcement on Redis.
+//   - mx_resolve.go, mx_chain.go, mx_pretls.go and mx_reply.go, MX resolution, dnssec_chain and the
+//     pre-TLS dialog; sending_set.go, the sending addresses and their FCrDNS; mx_dial_linux.go, the
+//     fwmark dial.
 //
 // Nothing here logs report text, an envelope, a recipient or an address (I-13; §2.8 mx-4).
 package smtpedgeservice
