@@ -8,8 +8,9 @@
 //
 //	card    a Signed DirectoryCard, by the sidecar's identity key under purpose directory, SIGNED_DIRECTORY_CARD:
 //	        network_id, its own sidecar_id, seq, at (§7.9's pin as written), written_millis, at most 16 items, at most
-//	        one worker item first and then runs, in at most 16,192 B (QD-834), and version 1; the whole Signed at most
-//	        16 KiB, eight steps, past which a writer puts none and a reader parses none
+//	        one worker item first and then runs, in at most 16,188 B (QD-858), and version 1; the whole Signed at most
+//	        16 KiB, eight steps, which every card within its items' bytes fits, and past which a writer puts none and
+//	        a reader parses none
 //	write   WriteCard puts the items it is given, less those that show no more: a withdrawal, which a card says by
 //	        leaving the item out, an ended or handed-off item 24 h after its renewal, an active one past its stale 24 h.
 //	        Each passes DirectoryCheckItem with this sidecar as who; past a cap the writer refuses
@@ -99,12 +100,14 @@ type DirectoryCardSettings struct {
 	ItemCount int
 	// Worker items among them, first: 1.
 	WorkerItemCount int
-	// The items' bytes, each item's field tag and length included: 16,192 B (QD-834).
+	// The items' bytes, each item's field tag and length included: 16,188 B (QD-858, amending QD-834's 16,192), the
+	// most at which every Signed card fits CardFileByteCount.
 	ItemsByteCount int
 	// A card file's bytes, the Signed and all, past which a writer puts none and a reader parses none: 16 KiB, §20.4's
-	// directory_card_bytes, eight steps. A card whose items are within ItemsByteCount fits it whenever its seq and its
-	// position are below 2^56, whatever its written_millis; past that, which no count rising one at a time reaches,
-	// such a card can be up to 16,388 B, and this bound refuses it on both sides.
+	// directory_card_bytes, eight steps. A card whose items are within ItemsByteCount fits it whatever its seq, its
+	// position and its written_millis: the card's and the Signed's own fields take at most 196 B, with those three
+	// varints at their widest. The bound stands on its own on both sides, so settings that raise ItemsByteCount alone
+	// still put and parse no larger file.
 	CardFileByteCount int
 	// A repo file's bytes: 4 KiB.
 	RepoFileByteCount int
@@ -124,7 +127,7 @@ func DefaultDirectoryCardSettings() *DirectoryCardSettings {
 	return &DirectoryCardSettings{
 		ItemCount:         DirectoryCardItemCount,
 		WorkerItemCount:   1,
-		ItemsByteCount:    16192,
+		ItemsByteCount:    16188,
 		CardFileByteCount: 16 * 1024,
 		RepoFileByteCount: DirectoryRepoFileByteCount,
 		FileStepByteCount: DirectoryFileStepByteCount,
