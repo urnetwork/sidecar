@@ -617,6 +617,9 @@ barrier rpc.marked_pair_tick.before rpc_marked_pair.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go
+barrier search.cache.cut.applied state_search_delete.go
+barrier search.cache.erase.applied state_search_delete.go
+barrier search.cache.lost.applied state_search_delete.go
 barrier search.sync.fetched search_fetch.go
 barrier search.sync.replayed search_sync.go
 barrier search.sync.retired search_sync.go

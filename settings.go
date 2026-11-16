@@ -270,6 +270,10 @@ type SidecarSearchSettings struct {
 	// above a record's 160 B sealed header, 72 B wrapped key and ids. One past it reads as failed, and the file is
 	// dropped to fetch again.
 	CacheMetaByteCount int
+	// The erasure masks one ref of the index cache holds ahead of its version table, an ERASE's keys and a CUT's
+	// documents applied at once (CORE-M10-04): 16,384, a reading, the documents of some twenty full erasure sets
+	// (§11.14's x, 16,208 B). One past it masks every candidate of the ref until the ref is dropped and synced again.
+	EraseMaskCount int
 	// Sync downloads a day a network, since each debits the transfer balance: 1 GiB (§16.10).
 	BackgroundByteCount int64
 	// Downloads a "search more" call, where its page turns partial: 1 GiB (§16.10).
@@ -958,6 +962,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 			VersionCacheByteCount:  256 * 1024,
 			CacheHoldingsByteCount: 16 * 1024 * 1024,
 			CacheMetaByteCount:     64 * 1024,
+			EraseMaskCount:         16384,
 			BackgroundByteCount:    1024 * 1024 * 1024,
 			MoreByteCount:          1024 * 1024 * 1024,
 			AllPolicy:              "background",
