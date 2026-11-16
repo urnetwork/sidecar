@@ -64,6 +64,7 @@ require (
 	github.com/theodorsm/covert-dtls v1.5.1 // indirect
 	github.com/urnetwork/connect v0.0.0 // indirect
 	github.com/urnetwork/glog v0.0.0 // indirect
+	github.com/urnetwork/operator-core v0.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
 	golang.org/x/mod v0.41.0 // indirect
@@ -82,6 +83,8 @@ require (
 replace github.com/urnetwork/sidecar => ..
 
 replace github.com/urnetwork/connect => ../../connect
+
+replace github.com/urnetwork/operator-core => ../../operator-core
 
 replace github.com/pion/sctp => ../../connect/sctp
 

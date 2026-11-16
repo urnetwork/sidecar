@@ -3,7 +3,12 @@
 // What a hosting process supplies to a server engine, and what the engine gives back (§4.5). Engines
 // are the <svc>service child packages. server hosts them, and they never import it, so go-redis,
 // minio-go and prometheus stay out of this module, and a host other than URnetwork's could supply
-// these same interfaces (D-REPO-3).
+// these same interfaces.
+//
+// The interfaces and the engine contract are operator-core's (owner decision 251), whose Env is the
+// root factory of these services; the host_ files keep Go type aliases of them, and ServiceHost stays
+// a struct of those types, so every engine compiles unchanged until the build's review phase moves
+// the call sites to the Env (§4.18). Each ServiceHost.<member> names the Env accessor of that name.
 //
 // Every host_ file carries !sidecar_http, since no hosted engine runs in the page Worker (§4.4), and
 // so may name connect types, connect.Id included: §20.7 declares Quota in them.
@@ -14,8 +19,7 @@
 package sidecar
 
 import (
-	"net"
-	"net/http"
+	operator "github.com/urnetwork/operator-core"
 )
 
 // Built by the hosting process and passed to each engine's constructor. An engine needs only some of
@@ -75,40 +79,13 @@ func (self *ServiceHost) AbuseOrUnloaded() AbuseGate {
 }
 
 // What every engine a server/cli/<svc> hosts gives its host, which wraps it with readiness, /status,
-// stats and PROXY-unwrapped listeners. pushservice's types run inside existing services instead. Safe
-// for concurrent use.
-//
-// §4.5 declares one interface whose first member is Handler() or Serve. This is a reading of it, since
-// no Go interface says "one or the other", and smtpedge dials out and listens on nothing (§14.9), so it
-// has neither: an engine serves through HttpEngine, StreamEngine or both, and one that listens on
-// nothing is an Engine alone. What that costs is that a Handler of the wrong signature still compiles
-// as an Engine, so each engine package says what it is, as var _ sidecar.HttpEngine = (*EvsEngine)(nil).
-type Engine interface {
-	// Whether the stores this engine needs are reachable and its state is loaded, the column §19.4
-	// gives each service. The host gates its /status on this.
-	Ready() bool
-	// Takes no new work and returns once work in flight has finished or the engine's own bound has
-	// passed. New connections are the host's to stop: it closes the listeners.
-	Drain()
-	// Ends everything at once and releases what the engine holds. Safe after Drain, and more than
-	// once.
-	Close()
-}
+// stats and PROXY-unwrapped listeners: operator-core's engine contract. An engine serves through
+// HttpEngine, StreamEngine or both, and one that listens on nothing, as smtpedge, is an Engine alone, so
+// each engine package says what it is, as var _ sidecar.HttpEngine = (*EvsEngine)(nil).
+type Engine = operator.Engine
 
 // An engine served over HTTP.
-type HttpEngine interface {
-	Engine
-	// One handler for every route of the service, built once. The host mounts it behind readiness
-	// and §19.8's route metrics.
-	Handler() http.Handler
-}
+type HttpEngine = operator.HttpEngine
 
 // An engine that serves raw connections, as tlsedge and mxedge do.
-type StreamEngine interface {
-	Engine
-	// §4.5's Serve(net.Listener), returning why it stopped, nil when the engine closed. Accepts on
-	// listener until it closes or the engine closes, and then returns. The host's
-	// listeners have already taken any PROXY header off. The host calls this once for each listener,
-	// each on its own goroutine, as tlsedge's four ports need.
-	Serve(listener net.Listener) error
-}
+type StreamEngine = operator.StreamEngine

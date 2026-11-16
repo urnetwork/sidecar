@@ -1,30 +1,37 @@
-// The root's own identifier, on every leg. connect.Id has the same [16]byte layout, but naming it
-// links gVisor into the importer (§4.4), so every-leg files use this type and connect-facing files
-// convert at their boundary: connect.Id(id) and Id(connectId), plain conversions between two
-// [16]byte types. The methods read, sort and encode as connect/id.go's do, so an id means the same
-// on both sides of that boundary.
+// The root's identifier, on every leg: operator-core's Id (owner decision 251), which is server.Id moved,
+// connect.Id's [16]byte layout with its parsing, formatting and comparison delegating to connect. sidecar
+// keeps its own generator, NewId on crypto/rand, and its own strict ParseId and IdFromBytes, which answer
+// the alias. connect-facing files still convert at their boundary, connect.Id(id) and Id(connectId), plain
+// conversions between two [16]byte types.
+//
+// The alias brings connect into every leg that links this file, the page Worker's sidecar_http leg and the
+// iOS extension's included (§4.4): a root file of the sidecar_http leg still imports no connect package
+// itself (§4.7), and both legs' sizes are measured again for the owner (owner decision 251).
 
 package sidecar
 
 import (
-	"bytes"
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"sync"
 	"time"
+
+	operator "github.com/urnetwork/operator-core"
 )
 
 // connect.Id's layout, a ULID: a 48-bit big-endian millisecond timestamp, then 80 bits of entropy,
 // so ids sort by creation time. The timestamp is the clock of whatever minted the id: a dependable
-// order within one source, and no global clock across sources. Comparable, so it keys maps.
-type Id [16]byte
+// order within one source, and no global clock across sources. Comparable, so it keys maps. Its
+// methods are operator-core's: Bytes, Less and LessThan, Cmp, String, the JSON and database/sql codecs
+// and Hash.
+type Id = operator.Id
 
 // The bytes one id draws: 2 and 8 for a new millisecond's entropy, 4 for an increment within it.
 const idDrawByteCount = 14
 
-var errInvalidId = errors.New("invalid id")
+// operator-core's, so a refusal here and one of Id's JSON decode match the same errors.Is.
+var errInvalidId = operator.ErrInvalidId
 
 // Strictly increasing ids: the timestamp never falls, and an id minted in the same millisecond, or
 // after the wall clock stepped back, adds a random increment to the one before it. Safe for
@@ -110,55 +117,4 @@ func ParseId(idStr string) (Id, error) {
 		return Id{}, errInvalidId
 	}
 	return id, nil
-}
-
-// A copy, since the receiver is one, so a write to it leaves the id alone.
-func (self Id) Bytes() []byte {
-	return self[0:16]
-}
-
-// Whether this id sorts before b, by creation time within one source.
-func (self Id) LessThan(b Id) bool {
-	return self.Cmp(b) < 0
-}
-
-// -1, 0 or 1, by byte, as bytes.Compare gives.
-func (self Id) Cmp(b Id) int {
-	return bytes.Compare(self[:], b[:])
-}
-
-// Lowercase hex in the 8-4-4-4-12 form, connect's and the database's uuid.
-func (self Id) String() string {
-	var encoded [36]byte
-	hex.Encode(encoded[0:8], self[0:4])
-	encoded[8] = '-'
-	hex.Encode(encoded[9:13], self[4:6])
-	encoded[13] = '-'
-	hex.Encode(encoded[14:18], self[6:8])
-	encoded[18] = '-'
-	hex.Encode(encoded[19:23], self[8:10])
-	encoded[23] = '-'
-	hex.Encode(encoded[24:36], self[10:16])
-	return string(encoded[:])
-}
-
-// A value receiver, so an Id field has one encoding whether its struct is marshaled by value or by
-// pointer: a pointer receiver leaves a non-addressable Id to encoding/json's byte array form.
-func (self Id) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + self.String() + `"`), nil
-}
-
-// Takes a quoted id and refuses everything else, JSON null included, as connect does. That covers
-// what is sent, not what is left out: a field absent from the JSON never reaches this, so it keeps its
-// value, the zero id in a fresh struct, with no error. A reader of a required id compares it to Id{}.
-func (self *Id) UnmarshalJSON(src []byte) error {
-	if len(src) != 38 || src[0] != '"' || src[37] != '"' {
-		return errInvalidId
-	}
-	id, err := ParseId(string(src[1:37]))
-	if err != nil {
-		return err
-	}
-	*self = id
-	return nil
 }

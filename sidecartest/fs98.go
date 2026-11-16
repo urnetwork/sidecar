@@ -377,7 +377,9 @@ func (self *Fs98World) AddHost(name string, memberId sidecar.Id, admitter *Admis
 	}
 	host.restoreAuthority = testSidecar.Sidecar().InstallAuthority(fs98Authority{ConfigAuthority: follower.Authority()})
 	daemon.SetPresenceProvider(host.Presence)
-	for _, method := range sidecar.DaemonDevicesMethods(daemon) {
+	// what ur daemon serves (cli's urDevicesMethods): the devices methods, and the two-call methods of a remote-mode
+	// app's decisions and presence key (fs98_app.go)
+	for _, method := range append(sidecar.DaemonDevicesMethods(daemon), sidecar.DaemonApprovalsMethods(daemon)...) {
 		if err := daemon.RegisterMethod(method); err != nil {
 			self.t.Fatal(err)
 		}

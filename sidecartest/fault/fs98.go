@@ -29,8 +29,8 @@
 // `ur approve` signs them (Fs124CliApprovals), `ur approve <proposal_id>`'s cosign (Fs124CliCosign), and
 // `ur keychain recovery-rotate` (Fs124CliRecoveryRotate).
 //
-// What waits: the phone and remote-mode rows (CORE-M8-03), and the Team rows with self_admit on and off (the rows' team
-// case, M6-out).
+// The phone and remote-mode rows are the app-host case's (fs98_app.go, CORE-M8-03), and the Team rows with self_admit
+// on and off the team case's (fs98_team.go, M6-out).
 
 package fault
 

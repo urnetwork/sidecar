@@ -73,6 +73,7 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/theodorsm/covert-dtls v1.5.1 // indirect
 	github.com/urnetwork/glog v0.0.0 // indirect
+	github.com/urnetwork/operator-core v0.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
@@ -93,6 +94,8 @@ replace github.com/urnetwork/sidecar => ..
 replace github.com/urnetwork/sidecar/smtpproof => ../smtpproof
 
 replace github.com/urnetwork/connect => ../../connect
+
+replace github.com/urnetwork/operator-core => ../../operator-core
 
 replace github.com/pion/sctp => ../../connect/sctp
 

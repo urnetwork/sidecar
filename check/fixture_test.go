@@ -95,6 +95,7 @@ var fixtureTokens = strings.NewReplacer(
 	"@module@", sidecarBasePath,
 	"@connect@", connectBasePath,
 	"@glog@", glogBasePath,
+	"@operator-core@", operatorCoreBasePath,
 	"@server@", serverBasePath,
 	"@sdk@", sdkBasePath,
 	"@sn@", snBasePath,
@@ -105,6 +106,8 @@ var fixtureTokens = strings.NewReplacer(
 // §4.7's replaces, from the root module.
 const fixtureSiblingReplaces = `
 replace @connect@ => ../connect
+
+replace @operator-core@ => ../operator-core
 
 replace github.com/pion/sctp => ../connect/sctp
 
@@ -117,11 +120,24 @@ replace gvisor.dev/gvisor => ../gvisor
 const fixtureNestedReplaces = `
 replace @connect@ => ../../connect
 
+replace @operator-core@ => ../../operator-core
+
 replace github.com/pion/sctp => ../../connect/sctp
 
 replace @glog@ => ../../glog
 
 replace gvisor.dev/gvisor => ../../gvisor
+`
+
+// operator-core's own replaces: connect's, beside it (owner decision 251).
+const fixtureOperatorCoreReplaces = `
+replace @connect@ => ../connect
+
+replace github.com/pion/sctp => ../connect/sctp
+
+replace @glog@ => ../glog
+
+replace gvisor.dev/gvisor => ../gvisor
 `
 
 // What connect brings, which every module on a connect leg lists.
@@ -170,6 +186,9 @@ var fixtureFiles = map[string]string{
 	"connect/sctp/LICENSE":         fixtureMitLicense,
 	"connect/sctp/sctp.go":         "package sctp\n",
 	"glog/go.mod":                  "module @glog@\n\ngo 1.27.4\n",
+	"operator-core/go.mod":         "module @operator-core@\n\ngo 1.27.4\n\nrequire @connect@ v0.0.0\n" + fixtureIndirectRequires + fixtureOperatorCoreReplaces,
+	"operator-core/LICENSE":        fixtureMplLicense,
+	"operator-core/operator.go":    "package operator\n\nimport _ \"@connect@\"\n",
 	"glog/LICENSE":                 fixtureApache,
 	"glog/glog.go":                 "package glog\n",
 	"gvisor/go.mod":                "module gvisor.dev/gvisor\n\ngo 1.27.4\n",
