@@ -71,18 +71,20 @@ func DefaultIndexBackfillSettings() *IndexBackfillSettings {
 	return &IndexBackfillSettings{BackfillAge: 10 * time.Minute, AttemptCount: 8}
 }
 
-// What a record log's backfill asks of its run cards (DESIGN-DETAILS 15.2.8 and 15.2.9): SEARCH-M10-28's fold. Nil on
-// every other ref.
+// What a record log's backfill asks of its run cards (DESIGN-DETAILS 15.2.8 and 15.2.9): SEARCH-M10-28's fold
+// (IndexRecordLog). Nil on every other ref. erasureSet is the index's erasure set at the push's base, nil for none,
+// which with the ERASEs the log holds says which entries are erased at epoch (15.2.2).
 type indexBackfillCards interface {
 	// Reads the log's erasure ref from evs, not from a cache, brings the replica to it and applies every ERASE (15.2.9's
 	// step 2a). The backfiller calls it before the first card it folds at an index epoch it has not built at.
 	ReadErasures(ctx context.Context) error
-	// The lowest version of stream refId in (afterVersion, pin] whose run's card is blocked at epoch (15.2.2), else 0.
-	BlockedFrom(ctx context.Context, refId Id, afterVersion uint64, pin uint64, epoch uint64) (uint64, error)
+	// The lowest version of stream refId in (afterVersion, pin] that a blocked document holds at epoch (15.2.2): a
+	// blocked card's source entries, or an entry document whose context entry is blocked; else 0.
+	BlockedFrom(ctx context.Context, refId Id, afterVersion uint64, pin uint64, epoch uint64, erasureSet *protocol.IndexErasureSet) (uint64, error)
 	// The card of each run whose newest source entry at pin was created by one of versions: fold(R, r, pin, E) at
 	// E * 2^32 + c(R, r, pin), a derived document named run/ || run_id at chunk 0. A run whose fold gives nothing is left
 	// out.
-	Cards(ctx context.Context, refId Id, versions []uint64, pin uint64, epoch uint64) ([]*IndexDocument, error)
+	Cards(ctx context.Context, refId Id, versions []uint64, pin uint64, epoch uint64, erasureSet *protocol.IndexErasureSet) ([]*IndexDocument, error)
 }
 
 // What a backfiller reads its index and its content with.
@@ -436,25 +438,38 @@ func (self *indexBackfillBuild) refWork(ctx context.Context, content indexConten
 			break
 		}
 	}
+	dueThrough := func(h uint64) []*indexCountedPush {
+		due := []*indexCountedPush{}
+		for _, counted := range coverage.pushes {
+			if counted.count == indexPushUnindexed && counted.push.version <= h {
+				due = append(due, counted)
+			}
+		}
+		return due
+	}
+	due := dueThrough(h)
+	if len(due) == 0 {
+		return ref, nil
+	}
 	cards := args.cards != nil && view.companion
 	epoch := view.head.indexEpoch
 	if cards {
-		blocked, err := args.cards.BlockedFrom(ctx, refId, max(coverage.horizon, self.backfiller.floor(refId)), ref.pin, epoch)
+		// a record log's erasure ref is read before its cards are judged at an epoch this device has not built at
+		// (15.2.9's step 2a), so a blocked card is one whose ERASE this device holds and whose erasure has no CUT below
+		// the epoch, never one an ERASE it has not keyed yet would excuse
+		if err := self.backfiller.readErasuresAt(ctx, epoch); err != nil {
+			return nil, err
+		}
+		blocked, err := args.cards.BlockedFrom(ctx, refId, max(coverage.horizon, self.backfiller.floor(refId)), ref.pin, epoch, view.erasureSet)
 		if err != nil {
 			return nil, err
 		}
 		if blocked != 0 && blocked <= h {
 			h = blocked - 1
+			if due = dueThrough(h); len(due) == 0 {
+				return ref, nil
+			}
 		}
-	}
-	due := []*indexCountedPush{}
-	for _, counted := range coverage.pushes {
-		if counted.count == indexPushUnindexed && counted.push.version <= h {
-			due = append(due, counted)
-		}
-	}
-	if len(due) == 0 {
-		return ref, nil
 	}
 	ref.h = h
 	entryCount := len(self.pending)
@@ -513,17 +528,14 @@ func (self *indexBackfillBuild) refWork(ctx context.Context, content indexConten
 			self.pending = append(self.pending, &indexPendingDocument{kind: indexEntryRefTombstone, key: key, version: deleted})
 		}
 	}
-	// a record log's cards of the runs the due versions touched, folded at the push's epoch after the erasure ref is
-	// read at an epoch this device has not built at (15.2.9)
+	// a record log's cards of the runs the due versions touched, folded at the push's epoch, the erasure ref read above
+	// (15.2.9)
 	if cards {
 		versions := make([]uint64, 0, len(due))
 		for _, counted := range due {
 			versions = append(versions, counted.push.version)
 		}
-		if err := self.backfiller.readErasuresAt(ctx, epoch); err != nil {
-			return nil, err
-		}
-		documents, err := args.cards.Cards(ctx, refId, versions, ref.pin, epoch)
+		documents, err := args.cards.Cards(ctx, refId, versions, ref.pin, epoch, view.erasureSet)
 		if err != nil {
 			return nil, err
 		}

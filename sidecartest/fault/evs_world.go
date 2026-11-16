@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -176,6 +177,12 @@ type EvsWorldSettings struct {
 	// Every instance's handler serves through the Net's privacy capture (CC1) and logs to it (§22.7), for a
 	// scenario that scans what servers held.
 	Capture bool
+	// §19.11's format2 gate as Setup sets it, nil leaving the world's network out of it, as format 1's rows run
+	// (evs_world_format2.go).
+	Format2 *EvsWorldFormat2Settings
+	// Each instance's EvsSettings.InstanceFormat at its first start, 1 for an instance it does not name: the format
+	// M2's rows run every instance at. SetInstanceFormat changes it for the instance's next start.
+	InstanceFormats map[string]uint32
 }
 
 // One device of a world.
@@ -188,6 +195,10 @@ type EvsWorldDeviceSettings struct {
 	// Its own configuration and gkm client say it writes the repo while the world's, which evs and every other device
 	// read, list it as a reader: FS-10's forger (fs10.go).
 	ForgesWriter bool
+	// Its client reads format 2 and writes it while the world's gates admit the network, as a composition installs
+	// the format-2 reader and core's gates; its EvsSettings.MaxFormat, which AdjustClient may set to 1, still holds
+	// it to format 1 (evs_world_format2.go).
+	Format2 bool
 }
 
 // Two writers, each with an instance of its own and a second the lb re-sends to, and a reader on an instance no
@@ -277,10 +288,12 @@ type evsWorldWrite struct {
 	device string
 	// nil for a removal
 	content []byte
-	state   evsWorldWriteState
-	version uint64
-	pushId  sidecar.Id
-	err     error
+	// §18.5's setting it was written with, "" for the path's
+	versioning string
+	state      evsWorldWriteState
+	version    uint64
+	pushId     sidecar.Id
+	err        error
 }
 
 type evsWorldWriteState int
@@ -348,6 +361,10 @@ type EvsWorld struct {
 	// by device, when its read of the repo ends (ExpireReader), and how many path-epoch blocks the lb carried
 	readerExpiries    map[string]time.Time
 	blockRequestCount int
+	// each instance's format at its next start, by instance, and the format2 gate's modes as the gates hold them, nil
+	// with the network out of it (evs_world_format2.go)
+	instanceFormats map[string]uint32
+	format2         *EvsWorldFormat2Settings
 }
 
 // One attempt of a push as an instance took it, for a history check of §11.8's commit rule (Porcupine, EVS1-M2-42):
@@ -391,6 +408,14 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		heldProjections: map[string]*evsWorldProjection{},
 		lifecycleEnds:   map[string][]error{},
 		readerExpiries:  map[string]time.Time{},
+		instanceFormats: maps.Clone(settings.InstanceFormats),
+	}
+	if self.instanceFormats == nil {
+		self.instanceFormats = map[string]uint32{}
+	}
+	if settings.Format2 != nil {
+		format2 := *settings.Format2
+		self.format2 = &format2
 	}
 	for _, deviceSettings := range settings.Devices {
 		device := &EvsWorldDevice{
@@ -489,8 +514,7 @@ func (self *EvsWorld) creator() *EvsWorldDevice {
 func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 	inspect := sidecartest.InspectContext(ctx)
 	fakes := net.Fakes()
-	network := connect.Id(self.NetworkId).String()
-	if err := fakes.Gates.Set(fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n", network)); err != nil {
+	if err := fakes.Gates.Set(self.gatesText()); err != nil {
 		return err
 	}
 	fakes.Quota.SetBalance(connect.Id(self.NetworkId), self.settings.QuotaBalanceByteCount)
@@ -759,7 +783,7 @@ func (self *EvsWorld) StartInstance(instance string) error {
 // One instance's block: see the file header.
 func (self *EvsWorld) buildInstance(ctx context.Context, host *sidecar.ServiceHost, instance string) (sidecar.Engine, error) {
 	settings := evsservice.DefaultEvsSettings()
-	settings.InstanceFormat = sidecar.EvsRepoFormat1
+	settings.InstanceFormat = self.instanceFormat(instance)
 	settings.BatchFlushDelay = 0
 	settings.PushUnknownRereadInterval = 0
 	// the clock stands still between steps, so a cached repo/ would never lapse
@@ -1006,6 +1030,9 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 	})
 	if err != nil {
 		return err
+	}
+	if device.settings.Format2 {
+		self.enableFormat2(client)
 	}
 	device.Client = client
 	device.Repo = client.Repo(self.RepoId)
@@ -1544,15 +1571,20 @@ func (self *EvsWorld) WriteMany(device string, pattern string, first int, count 
 // One write through device, in the ledger. The error is the world's, not the write's: a write's own end is in the
 // ledger entry.
 func (self *EvsWorld) write(ctx context.Context, deviceName string, path string, content []byte) (*evsWorldWrite, error) {
+	return self.writeSetting(ctx, deviceName, path, content, "")
+}
+
+// write with §18.5's versioning setting, "" keeping the path's (evs_world_format2.go's WriteVersioning).
+func (self *EvsWorld) writeSetting(ctx context.Context, deviceName string, path string, content []byte, versioning string) (*evsWorldWrite, error) {
 	device := self.Device(deviceName)
 	if device.Repo == nil {
 		return nil, fmt.Errorf("device %s is not started: Setup runs first", deviceName)
 	}
-	write := &evsWorldWrite{device: deviceName, content: bytes.Clone(content), state: evsWorldWritePending}
+	write := &evsWorldWrite{device: deviceName, content: bytes.Clone(content), versioning: versioning, state: evsWorldWritePending}
 	self.stateLock.Lock()
 	self.pathWrites[path] = append(self.pathWrites[path], write)
 	self.stateLock.Unlock()
-	args := &sidecar.EvsWriteArgs{Path: path, Remove: content == nil}
+	args := &sidecar.EvsWriteArgs{Path: path, Remove: content == nil, Versioning: versioning}
 	if content != nil {
 		args.Content = bytes.NewReader(content)
 		args.Size = int64(len(content))

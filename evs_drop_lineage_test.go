@@ -1,10 +1,13 @@
 //go:build !ios_extension
 
 // The drop engine's lineages, lists and dry run (EVS2-M10-20; FS-89's and FS-93's lineage clauses as far as one path
-// epoch goes): a path's every version listed by entry hash at a written boundary, a removed path's at a removed one;
-// the reserved refs, the index's root and a directory refused by name with nothing sent; the dry run's map_parts
-// copied, list_match false and linked false each stopping the command; a pending prefix rule set stopping it before
-// the dry run; and Drops listing the table's drops.
+// epoch goes): a path's every version listed by entry hash at a written boundary, a removed path's at a removed one,
+// and a path created after another push, past version 1, walked to its creation; the reserved refs, the index's root
+// and a directory refused by name with nothing sent; the dry run's map_parts copied, list_match false and linked false
+// each stopping the command; under prefix rules (DESIGN-DETAILS 10.6's amended rows) a pending set stopping it before
+// the dry run, an ignored newest version repaired first by a mirroring device and listed, a head-mode signer and a
+// device the set does not name stopping with EVS_PREFIX_RULE before the dry run, and a path a breach created dropped
+// at a removed boundary; and Drops listing the table's drops.
 
 package sidecar
 
@@ -263,5 +266,161 @@ func TestEvsDropsListsTheTable(t *testing.T) {
 	drops, err := writer.repo.Drops(context.Background(), &EvsDropsArgs{KnownPaths: []string{"a.txt"}})
 	if err != nil || len(drops) != 1 || drops[0].Status.GetVersion() != 7 || len(drops[0].Paths) != 0 {
 		t.Fatalf("drops %+v %v", drops, err)
+	}
+}
+
+// A writer of a world under prefix rules (evs_prefix_repair_test.go's) whose client reaches the drop routes too: the
+// world's admin, held to nothing, beside a second writer held to agents/build whose writes outside it are breaches.
+func newEvsPrefixDropTest(t *testing.T) (*evsPrefixWriterTest, *evsTestDropServer) {
+	t.Helper()
+	test := newEvsPrefixWriterTest(t)
+	server := &evsTestDropServer{writer: test.writer, expect: map[string]*protocol.EvsDropPath{}}
+	test.writer.test.client.args.Transport = &evsTestTransport{handler: server}
+	test.writer.test.client.http.transport = wrapSidecarApiTransport(test.writer.test.client.args.Transport)
+	return test, server
+}
+
+// DESIGN-DETAILS 10.2.4's prefix rules row (10.7's amended item, 10.6's amended test): under a rule set, a path whose
+// newest version the builder ignores, a breach, is written back first by the repair form on a device that mirrors
+// the ref, one push, and the lineage is built on the head it left: the repair's version newest and at
+// through_version, the breach's version listed with every other, and the dry run sent after it.
+func TestEvsDropLineageRepairsAnIgnoredNewestVersionFirst(t *testing.T) {
+	test, server := newEvsPrefixDropTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	test.enableRepairs(DefaultAclPrefixSettings())
+	test.mirrorRef()
+	good := evsTestContent("good", 64*1024)
+	if _, err := writer.write(t, "src/main.go", good); err != nil {
+		t.Fatal(err)
+	}
+	breached := bytes.Clone(good)
+	breached[10] ^= 0xff
+	test.breach("src/main.go", breached)
+	statements, _ := writer.server.sentCounts()
+	lineage, err := writer.repo.DropLineage(ctx, nil, "src/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements+1 {
+		t.Fatalf("%d statements before the lineage, not the repair's one", after-statements)
+	}
+	head, _ := writer.world.head()
+	if lineage.DropPath.GetBoundary() != EvsDropBoundaryWritten || lineage.DropPath.GetThroughVersion() != head+1 || lineage.DropPath.GetCount() != 3 {
+		t.Fatalf("the lineage on the repair's head %d: %v", head, lineage.DropPath)
+	}
+	if len(lineage.Versions) == 0 || lineage.Versions[0].Version != head {
+		t.Fatalf("the newest version walked is not the repair's at %d", head)
+	}
+	want := server.expectPath(t, "src/main.go")
+	if len(lineage.Listed) != len(want) {
+		t.Fatalf("listed %d, the path's versions %d", len(lineage.Listed), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(lineage.Listed[i], want[i]) {
+			t.Fatalf("listed value %d is not the path's", i)
+		}
+	}
+	// the repair wrote the effective content back: a ruled reader reads it with nothing ignored
+	content, info, err := test.read(test.ruledReader("reader"), "src/main.go")
+	if err != nil || !bytes.Equal([]byte(content), good) || info.IgnoredAbove != 0 {
+		t.Fatalf("after the repair: %+v %v", info, err)
+	}
+	// the dry run follows on the repaired head, and nothing more is written
+	if _, err := writer.repo.DropHistoryPreview(ctx, &EvsDropPreviewArgs{Paths: []string{"src/main.go"}}); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := writer.server.sentCounts(); after != statements+1 || len(server.requests) != 1 {
+		t.Fatalf("the preview wrote again or sent no dry run: %d statements, %d dry runs", after-statements, len(server.requests))
+	}
+}
+
+// A device that cannot repair the path stops before the dry run with EVS_PREFIX_RULE detail refused naming the path
+// and `ur evs repair`: one that does not mirror the ref, as a head-mode signer, and one the set does not give the
+// path. Nothing is pushed and no dry run is sent.
+func TestEvsDropLineageIgnoredNewestVersionRefusedWithoutARepair(t *testing.T) {
+	test, server := newEvsPrefixDropTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	test.enableRepairs(DefaultAclPrefixSettings())
+	good := evsTestContent("good", 64*1024)
+	if _, err := writer.write(t, "src/main.go", good); err != nil {
+		t.Fatal(err)
+	}
+	breached := bytes.Clone(good)
+	breached[10] ^= 0xff
+	test.breach("src/main.go", breached)
+	statements, _ := writer.server.sentCounts()
+	refused := func(what string) {
+		t.Helper()
+		_, err := writer.repo.DropHistoryPreview(ctx, &EvsDropPreviewArgs{Paths: []string{"src/main.go"}})
+		var ruleErr *EvsPrefixRuleError
+		if evsPrefixTestDetail(err) != EvsPrefixDetailRefused || !errors.As(err, &ruleErr) || ruleErr.Path != "src/main.go" {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if after, _ := writer.server.sentCounts(); after != statements || len(server.requests) != 0 {
+			t.Fatalf("%s: %d statements and %d dry runs sent", what, after-statements, len(server.requests))
+		}
+		if what == "a head-mode signer" && !strings.Contains(err.Error(), "ur evs repair") {
+			t.Fatalf("%s: the refusal names no repair: %v", what, err)
+		}
+	}
+	// no mirror of the ref: the signer reads in head mode
+	refused("a head-mode signer")
+	// mirroring, but the set does not give this device the path
+	test.mirrorRef()
+	test.refuse = &AclPrefixWriteDecision{AclDecision: AclDecision{Reason: AclReasonPrefixRule}, Detail: AclPrefixDetailRefused, Path: "src/main.go"}
+	refused("a device the set does not name")
+}
+
+// A path only a breach created is removed by the repair, its effective state being absent, and dropped at a removed
+// boundary through the repair's removal, the breach's version listed.
+func TestEvsDropLineageBreachCreatedPathDropsAtARemovedBoundary(t *testing.T) {
+	test, _ := newEvsPrefixDropTest(t)
+	writer := test.writer
+	ctx := context.Background()
+	test.enableRepairs(DefaultAclPrefixSettings())
+	test.mirrorRef()
+	if _, err := writer.write(t, "src/main.go", evsTestContent("good", 4096)); err != nil {
+		t.Fatal(err)
+	}
+	test.breach("src/new.go", evsTestContent("breach", 4096))
+	lineage, err := writer.repo.DropLineage(ctx, nil, "src/new.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := writer.world.head()
+	// a removed boundary's through_version is the standing removal's version, the repair's
+	if lineage.DropPath.GetBoundary() != EvsDropBoundaryRemoved || lineage.DropPath.GetThroughVersion() != head || lineage.DropPath.GetCount() != 1 {
+		t.Fatalf("the breach-created path's lineage on the repair's head %d: %v", head, lineage.DropPath)
+	}
+	if _, _, err := test.read(test.ruledReader("reader"), "src/new.go"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Fatalf("after the repair the path reads %v, not absent", err)
+	}
+}
+
+// A path created after another push takes max(b, m) + 1, past 1, with nothing at the number below it: the walk ends at
+// its creation and lists its versions alone. The walk once asked History for that number and failed on the absence.
+func TestEvsDropLineagePathCreatedAfterAnotherPush(t *testing.T) {
+	writer, server := newEvsTestDropWriter(t)
+	if _, err := writer.write(t, "first.txt", []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i += 1 {
+		if _, err := writer.write(t, "later.txt", evsTestEdited("later", 2000, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := server.expectPath(t, "later.txt")
+	lineage, err := writer.repo.DropLineage(context.Background(), nil, "later.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := writer.world.head()
+	if lineage.DropPath.GetBoundary() != EvsDropBoundaryWritten || lineage.DropPath.GetThroughVersion() != head+1 || lineage.DropPath.GetCount() != 3 || len(want) != 3 {
+		t.Fatalf("the later path's lineage: %v", lineage.DropPath)
+	}
+	if oldest := lineage.Versions[len(lineage.Versions)-1]; oldest.Version <= 1 {
+		t.Fatalf("the later path's creation at version %d, not past 1", oldest.Version)
 	}
 }

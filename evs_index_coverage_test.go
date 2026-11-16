@@ -800,14 +800,14 @@ func (self *testBackfillCards) ReadErasures(ctx context.Context) error {
 	return nil
 }
 
-func (self *testBackfillCards) BlockedFrom(ctx context.Context, refId Id, afterVersion uint64, pin uint64, epoch uint64) (uint64, error) {
+func (self *testBackfillCards) BlockedFrom(ctx context.Context, refId Id, afterVersion uint64, pin uint64, epoch uint64, erasureSet *protocol.IndexErasureSet) (uint64, error) {
 	if afterVersion < self.blocked && self.blocked <= pin {
 		return self.blocked, nil
 	}
 	return 0, nil
 }
 
-func (self *testBackfillCards) Cards(ctx context.Context, refId Id, versions []uint64, pin uint64, epoch uint64) ([]*IndexDocument, error) {
+func (self *testBackfillCards) Cards(ctx context.Context, refId Id, versions []uint64, pin uint64, epoch uint64, erasureSet *protocol.IndexErasureSet) ([]*IndexDocument, error) {
 	self.asked = append(self.asked, slices.Clone(versions))
 	card := &IndexDocument{Kind: IndexDocDerived, Name: []byte("run/r1"), Version: epoch<<32 + versions[len(versions)-1]}
 	card.Fields[indexFieldBody] = []byte("deployment checklist run")
