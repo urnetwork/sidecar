@@ -98,11 +98,14 @@ func (self *fixture) toRelease() {
 	edit(filepath.Join(self.directory, "connect", "v2026", "go.mod"), "-module="+connectBasePath+releaseSuffix,
 		"-droprequire="+glogBasePath, "-require="+glogBasePath+releaseSuffix+version)
 
-	// the sibling edits of a module whose directory climbs to the siblings with climbs
+	// the sibling edits of a module whose directory climbs to the siblings with climbs. operator-core's
+	// development replace climbs with the move, as gVisor's and sctp's do, until build's run.sh takes
+	// operator-core's own release step and rewrites it to that tag (owner decision 251)
 	siblings := func(climbs string) []string {
 		return []string{
 			"-droprequire=" + connectBasePath, "-droprequire=" + glogBasePath,
 			"-dropreplace=" + connectBasePath, "-dropreplace=" + glogBasePath,
+			"-replace=" + operatorCoreBasePath + "=" + climbs + "operator-core",
 			"-require=" + connectBasePath + releaseSuffix + version, "-require=" + glogBasePath + releaseSuffix + version,
 			"-replace=" + connectBasePath + releaseSuffix + "=" + climbs + "connect/v2026",
 			"-replace=" + glogBasePath + releaseSuffix + "=" + climbs + "glog/v2026",

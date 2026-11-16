@@ -114,6 +114,8 @@ type Daemon struct {
 	events *DaemonEvents
 	// the host's platform authenticator, which the daemon's presence prompt asks (daemon_presence.go); nil for none
 	presenceProvider PresenceProvider
+	// the acts a remote-mode app's calls hold between them (daemon_approvals.go), made on first use
+	presenceActs *daemonPresenceActs
 }
 
 // Takes the instance's lock and listens on its socket or pipe. ErrDaemonRunning when another daemon holds the lock.

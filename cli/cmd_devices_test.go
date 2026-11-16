@@ -399,9 +399,10 @@ func (self *testUrDevicesTarget) devicesDaemon() *sidecar.Daemon {
 	return self.daemon
 }
 
-// The methods ur daemon serves over a target with a daemon hold the root's devices methods, the two that sign marked
-// Confirm; a harness hook's session and an unconfirmed control call are refused them at the daemon, their
-// confirmation flag set or not (D-CORE-13), and a target with no daemon serves none.
+// The methods ur daemon serves over a target with a daemon hold the root's devices methods and a remote-mode app's
+// two-call methods (CORE-M8-03), every one that signs marked Confirm and only the three readers not; a harness hook's
+// session and an unconfirmed control call are refused each signing one at the daemon, their confirmation flag set or
+// not (D-CORE-13), and a target with no daemon serves none.
 func TestDevicesSigningMethodsAreConfirmOnly(t *testing.T) {
 	if methods := urDevicesMethods(&testUrDaemonTarget{}); len(methods) != 0 {
 		t.Error("a target with no daemon serves the devices methods")
@@ -419,9 +420,26 @@ func TestDevicesSigningMethodsAreConfirmOnly(t *testing.T) {
 	for _, method := range urDevicesMethods(target) {
 		confirm[method.Name] = method.Confirm
 	}
-	if len(confirm) != 5 || !confirm[sidecar.DaemonMethodDevicesRevoke] || !confirm[sidecar.DaemonMethodDevicesCosign] ||
-		confirm[sidecar.DaemonMethodDevicesList] || confirm[sidecar.DaemonMethodDevicesPreview] || confirm[sidecar.DaemonMethodDevicesProposal] {
+	readers := []string{sidecar.DaemonMethodDevicesList, sidecar.DaemonMethodDevicesPreview, sidecar.DaemonMethodDevicesProposal}
+	signers := []string{
+		sidecar.DaemonMethodDevicesRevoke, sidecar.DaemonMethodDevicesCosign,
+		sidecar.DaemonMethodDevicesRevokeBegin, sidecar.DaemonMethodDevicesRevokeFinish,
+		sidecar.DaemonMethodDevicesCosignBegin, sidecar.DaemonMethodDevicesCosignFinish,
+		sidecar.DaemonMethodApprovalsDecideBegin, sidecar.DaemonMethodApprovalsDecideFinish,
+		sidecar.DaemonMethodKeysPresenceBegin, sidecar.DaemonMethodKeysPresenceProve, sidecar.DaemonMethodKeysPresenceFinish,
+	}
+	if len(confirm) != len(readers)+len(signers) {
 		t.Fatalf("the devices methods: %v", confirm)
+	}
+	for _, name := range readers {
+		if registered, ok := confirm[name]; !ok || registered {
+			t.Errorf("%s: registered %t, Confirm %t", name, ok, registered)
+		}
+	}
+	for _, name := range signers {
+		if !confirm[name] {
+			t.Errorf("%s is no Confirm method", name)
+		}
 	}
 	cli, _, _ := newTestUrCli(daemon.socketPath)
 	for _, c := range []struct {
@@ -440,7 +458,7 @@ func TestDevicesSigningMethodsAreConfirmOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.mode, err)
 		}
-		for _, method := range []string{sidecar.DaemonMethodDevicesRevoke, sidecar.DaemonMethodDevicesCosign} {
+		for _, method := range signers {
 			var rpcError *sidecar.DaemonRpcError
 			err := client.Call(context.Background(), method, map[string]string{}, c.confirmed, nil)
 			if !errors.As(err, &rpcError) || rpcError.Code != sidecar.DaemonRpcConfirmationRequired {

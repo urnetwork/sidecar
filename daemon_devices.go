@@ -2,7 +2,7 @@
 
 // The daemon's control methods for §5.6's revocation of a member's own devices (CORE-M3-04; D-CORE-20, D-CORE-13,
 // I-4, FS-98, FS-124): what `ur devices`, `ur devices revoke` and `ur approve <proposal_id>` send, and what a
-// remote-mode app's control calls reach (CORE-M8-03).
+// remote-mode app's control calls reach (CORE-M8-03, D-SDK-30).
 //
 //	devices.list      Devices(): this member's admitted sidecars, this one first
 //	devices.preview   PreviewDeviceRevoke: the plan a person reads, of a device named by its sidecar_id or its config
@@ -12,8 +12,15 @@
 //	                  Presence it runs the daemon's presence prompt (daemon_presence.go) over the act's countersigned
 //	                  bytes; a host with no authenticator, or one holding no live key of this sidecar's, signs nothing
 //	                  (REVOKE_CANCELLED). At k > 1 it answers the proposal's id, the target suspended in the same act
+//	devices.revoke.begin, devices.revoke.finish
+//	                  a remote-mode app's RevokeDevice by §5.8's two calls (daemon_approvals.go): the first, with
+//	                  devices.revoke's params, builds the act and answers its countersigned bytes and an act id,
+//	                  signing nothing; the second sends the evidence the app's SignWithPresence made over them and
+//	                  answers devices.revoke's reply, the daemon signing only then. Both are Confirm methods
 //	devices.proposal  PreviewRevokeProposal: an open revocation proposal's plan, for a cosigner to read
 //	devices.cosign    CosignRevokeProposal: a Confirm method, under the same approval and prompt
+//	devices.cosign.begin, devices.cosign.finish
+//	                  a remote-mode app's cosign by the same two calls, the second answering devices.cosign's reply
 //
 // §5.6's refusals are answers, not rpc errors: a reply carries {code, position} in refusal and nothing else, so a
 // caller shows REVOKE_PARKS_SELF's entry and never parses a message. Everything else, a locked or unenrolled sidecar
@@ -29,6 +36,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The methods.
@@ -43,6 +52,14 @@ const (
 	DaemonMethodDevicesProposal = "devices.proposal"
 	// ur approve <proposal_id>, confirmed.
 	DaemonMethodDevicesCosign = "devices.cosign"
+	// A remote-mode app's RevokeDevice, its first call: the act built, its countersigned bytes answered.
+	DaemonMethodDevicesRevokeBegin = "devices.revoke.begin"
+	// Its second call: the evidence in, the act signed.
+	DaemonMethodDevicesRevokeFinish = "devices.revoke.finish"
+	// A remote-mode app's cosign, its first call.
+	DaemonMethodDevicesCosignBegin = "devices.cosign.begin"
+	// Its second call.
+	DaemonMethodDevicesCosignFinish = "devices.cosign.finish"
 )
 
 // One of §5.6's refusals as a reply carries it.
@@ -273,6 +290,66 @@ func daemonDevicesTarget(running *Sidecar, device string) (Id, error) {
 	return named[0], nil
 }
 
+// The plan and the selected keys devices.revoke's params name, as devices.revoke and devices.revoke.begin take them.
+func daemonDevicesRevokeArgs(call *DaemonCall) (Id, [][]byte, error) {
+	params := &DaemonDevicesRevokeParams{}
+	if err := decodeDaemonDevicesParams(call, params); err != nil {
+		return Id{}, nil, err
+	}
+	if params.PlanId == (Id{}) {
+		return Id{}, nil, errDaemonDevicesParams
+	}
+	revokeKeyIds := make([][]byte, 0, len(params.RevokeKeyIds))
+	for _, keyIdText := range params.RevokeKeyIds {
+		keyId, err := hex.DecodeString(keyIdText)
+		if err != nil || len(keyId) == 0 {
+			return Id{}, nil, errDaemonDevicesParams
+		}
+		revokeKeyIds = append(revokeKeyIds, keyId)
+	}
+	return params.PlanId, revokeKeyIds, nil
+}
+
+// What RevokeDevicePlan did as devices.revoke's reply carries it, and devices.revoke.finish's: §5.6's refusal and a
+// lost post's pending are answers; any other error is the rpc's. What an app's local backend answers the same way.
+func NewDaemonDevicesRevokeReply(revocation *DeviceRevocation, err error) (*DaemonDevicesRevokeReply, error) {
+	reply := &DaemonDevicesRevokeReply{}
+	if revocation != nil {
+		reply.Position = revocation.Entry.GetVersion()
+		reply.ProposalId = hex.EncodeToString(revocation.ProposalId)
+		reply.Joined = daemonDeviceRevokeItems(revocation.Joined)
+		for _, keyId := range revocation.RevokedKeyIds {
+			reply.RevokedKeyIds = append(reply.RevokedKeyIds, hex.EncodeToString(keyId))
+		}
+		reply.Pending = revocation.Pending
+	}
+	switch refusal := daemonDeviceRefusal(err); {
+	case refusal != nil:
+		reply.Refusal = refusal
+	case errors.Is(err, ErrSidecarActPending):
+		reply.Pending = true
+	case err != nil:
+		return nil, err
+	}
+	return reply, nil
+}
+
+// What CosignRevokeProposal did as devices.cosign's reply carries it, and devices.cosign.finish's.
+func newDaemonDevicesCosignReply(entry *bridge.AuthPin, err error) (*DaemonDevicesCosignReply, error) {
+	reply := &DaemonDevicesCosignReply{Position: entry.GetVersion()}
+	switch refusal := daemonDeviceRefusal(err); {
+	case refusal != nil:
+		reply.Refusal = refusal
+	case errors.Is(err, ErrSidecarRevokeProposalUnknown):
+		reply.Unknown = true
+	case errors.Is(err, ErrSidecarActPending):
+		reply.Pending = true
+	case err != nil:
+		return nil, err
+	}
+	return reply, nil
+}
+
 // §7.9's proposal_id a call names in hex.
 func daemonDevicesProposalId(call *DaemonCall) ([]byte, error) {
 	params := &DaemonDevicesProposalParams{}
@@ -352,42 +429,53 @@ func DaemonDevicesMethods(daemon *Daemon) []*DaemonMethod {
 			Network: true,
 			Confirm: true,
 			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
-				params := &DaemonDevicesRevokeParams{}
+				planId, revokeKeyIds, err := daemonDevicesRevokeArgs(call)
+				if err != nil {
+					return nil, err
+				}
+				// Confirm let only a confirmed control call here; the origin says so to the act, which checks it again
+				return NewDaemonDevicesRevokeReply(call.Sidecar.RevokeDevicePlan(ctx, planId, revokeKeyIds, SidecarActConfirmed, daemon.PresencePrompt(call.Sidecar)))
+			},
+		},
+		{
+			Name:    DaemonMethodDevicesRevokeBegin,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				planId, revokeKeyIds, err := daemonDevicesRevokeArgs(call)
+				if err != nil {
+					return nil, err
+				}
+				running := call.Sidecar
+				act, step, err := daemon.heldActs().begin(ctx, call, daemonPresenceKindDevicesRevoke, "plan/"+planId.String(),
+					func(ctx context.Context, act *daemonPresenceAct) (any, error) {
+						// held before it signs: the app's evidence over the act's bytes is the second call's
+						return running.RevokeDevicePlan(ctx, planId, revokeKeyIds, SidecarActConfirmed, act.check())
+					})
+				if err != nil {
+					return nil, err
+				}
+				return daemonPresenceBeginAnswer(act, step)
+			},
+		},
+		{
+			Name:    DaemonMethodDevicesRevokeFinish,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				params := &DaemonPresenceFinishParams{}
 				if err := decodeDaemonDevicesParams(call, params); err != nil {
 					return nil, err
 				}
-				if params.PlanId == (Id{}) {
-					return nil, errDaemonDevicesParams
-				}
-				revokeKeyIds := make([][]byte, 0, len(params.RevokeKeyIds))
-				for _, keyIdText := range params.RevokeKeyIds {
-					keyId, err := hex.DecodeString(keyIdText)
-					if err != nil || len(keyId) == 0 {
-						return nil, errDaemonDevicesParams
-					}
-					revokeKeyIds = append(revokeKeyIds, keyId)
-				}
-				// Confirm let only a confirmed control call here; the origin says so to the act, which checks it again
-				revocation, err := call.Sidecar.RevokeDevicePlan(ctx, params.PlanId, revokeKeyIds, SidecarActConfirmed, daemon.PresencePrompt(call.Sidecar))
-				reply := &DaemonDevicesRevokeReply{}
-				if revocation != nil {
-					reply.Position = revocation.Entry.GetVersion()
-					reply.ProposalId = hex.EncodeToString(revocation.ProposalId)
-					reply.Joined = daemonDeviceRevokeItems(revocation.Joined)
-					for _, keyId := range revocation.RevokedKeyIds {
-						reply.RevokedKeyIds = append(reply.RevokedKeyIds, hex.EncodeToString(keyId))
-					}
-					reply.Pending = revocation.Pending
-				}
-				switch refusal := daemonDeviceRefusal(err); {
-				case refusal != nil:
-					reply.Refusal = refusal
-				case errors.Is(err, ErrSidecarActPending):
-					reply.Pending = true
-				case err != nil:
+				step, err := daemon.heldActs().next(ctx, call, daemonPresenceKindDevicesRevoke, params.ActId, params.Evidence, false)
+				if err != nil {
 					return nil, err
 				}
-				return reply, nil
+				if step.hold != nil {
+					return nil, errDaemonPresenceHeldTwice
+				}
+				revocation, _ := step.result.(*DeviceRevocation)
+				return NewDaemonDevicesRevokeReply(revocation, step.err)
 			},
 		},
 		{
@@ -435,19 +523,48 @@ func DaemonDevicesMethods(daemon *Daemon) []*DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				entry, err := call.Sidecar.CosignRevokeProposal(ctx, proposalId, SidecarActConfirmed, daemon.PresencePrompt(call.Sidecar))
-				reply := &DaemonDevicesCosignReply{Position: entry.GetVersion()}
-				switch refusal := daemonDeviceRefusal(err); {
-				case refusal != nil:
-					reply.Refusal = refusal
-				case errors.Is(err, ErrSidecarRevokeProposalUnknown):
-					reply.Unknown = true
-				case errors.Is(err, ErrSidecarActPending):
-					reply.Pending = true
-				case err != nil:
+				return newDaemonDevicesCosignReply(call.Sidecar.CosignRevokeProposal(ctx, proposalId, SidecarActConfirmed, daemon.PresencePrompt(call.Sidecar)))
+			},
+		},
+		{
+			Name:    DaemonMethodDevicesCosignBegin,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				proposalId, err := daemonDevicesProposalId(call)
+				if err != nil {
 					return nil, err
 				}
-				return reply, nil
+				running := call.Sidecar
+				act, step, err := daemon.heldActs().begin(ctx, call, daemonPresenceKindDevicesCosign, "proposal/"+hex.EncodeToString(proposalId),
+					func(ctx context.Context, act *daemonPresenceAct) (any, error) {
+						return running.CosignRevokeProposal(ctx, proposalId, SidecarActConfirmed, act.check())
+					})
+				if err != nil {
+					return nil, err
+				}
+				// a proposal that is not open refuses before anything is built: ErrSidecarRevokeProposalUnknown, the rpc's
+				return daemonPresenceBeginAnswer(act, step)
+			},
+		},
+		{
+			Name:    DaemonMethodDevicesCosignFinish,
+			Network: true,
+			Confirm: true,
+			Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
+				params := &DaemonPresenceFinishParams{}
+				if err := decodeDaemonDevicesParams(call, params); err != nil {
+					return nil, err
+				}
+				step, err := daemon.heldActs().next(ctx, call, daemonPresenceKindDevicesCosign, params.ActId, params.Evidence, false)
+				if err != nil {
+					return nil, err
+				}
+				if step.hold != nil {
+					return nil, errDaemonPresenceHeldTwice
+				}
+				entry, _ := step.result.(*bridge.AuthPin)
+				return newDaemonDevicesCosignReply(entry, step.err)
 			},
 		},
 	}
