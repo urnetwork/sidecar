@@ -940,14 +940,28 @@ func (self *tlsSuiteEdge) lift(host string) {
 	})
 }
 
+// An ALPN id no registration offers: an edge Find offering only it is refused, or picks no listener.
+const tlsSuiteKillProbeAlpn = "sidecartest-kill-probe"
+
 // Writes the network's {tes_} hash with write, INCRs its trigger, and waits until tlsedge's kill set has changed and
-// the engine's kills reader has read the hash since the event reached it, which its answer to an edge Find of name,
-// denied or not as killed says, shows.
+// the engine's kill set judges name as killed says.
+//
+// The engine's side is read by an edge Find of name offering only tlsSuiteKillProbeAlpn. Find's step 2 answers it
+// denied while the kill set kills the name, and once it does not, the pick finds no listener offering that ALPN and
+// answers no_listener, so the Find never reaches a listener. That is the point: a Find that picks the listener while
+// the engine's read of the kill lands between its steps 2 and 7 has the listener refused at step 7 and its lease
+// removed for cause (DESIGN-DETAILS 13.2.3's find path), which is the engine's to do, and the lease the test then
+// asserts on is gone. This wait's Find once did just that under make check's load, after a read already under way
+// when the wait took its count ended without the kill (tls_suite_kill_race_test.go fixes that schedule). Each
+// answer is the one meant, exactly: a lift is taken when the Find answers no_listener, not any answer but denied.
+//
+// The count is taken once the event has reached the engine. The Find is asked then and after each of the engine's
+// next two kill reads: the read under way when the count was taken may have begun before the event, and the one
+// after it began after, so it read the hash as written.
 func (self *tlsSuiteEdge) writeKill(name string, killed bool, write func(ctx context.Context, redis sidecar.Redis, key string) error) {
 	self.t.Helper()
 	redis := self.net.Fakes().Redis
 	edgeChanges, _ := self.service.KillChanges()
-	engineReads, _ := self.engine.KillReads()
 	if err := write(self.ctx, redis, sidecar.TlsKillKey(sidecar.Id(self.networkId))); err != nil {
 		self.t.Fatal(err)
 	}
@@ -958,16 +972,26 @@ func (self *tlsSuiteEdge) writeKill(name string, killed bool, write func(ctx con
 		self.t.Fatal(err)
 	}
 	tlsSuiteAwait(self.t, "tlsedge's kill change", self.service.KillChanges, edgeChanges)
-	// the event came after engineReads was read: the round that reads the hash ends past it, the first to end unless
-	// one was under way when it was read, and then the second
+	want := sidecar.SocketErrorCodeNoListener
+	if killed {
+		want = sidecar.SocketErrorCodeDenied
+	}
+	engineReads, _ := self.engine.KillReads()
 	for past := engineReads; ; past += 1 {
-		tlsSuiteAwait(self.t, "the engine's kill read", self.engine.KillReads, past)
-		if code, _ := self.edgeFind(name); (code == sidecar.SocketErrorCodeDenied) == killed {
+		result, err := self.dialer.find(self.ctx, sidecar.Id(self.networkId), name, []string{tlsSuiteKillProbeAlpn})
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		if result.Error == nil {
+			self.t.Fatalf("the kill's Find of %s reached a listener", name)
+		}
+		if result.Error.Code == want {
 			return
 		}
-		if engineReads < past {
-			self.t.Fatalf("the engine's Find of %s answers as before two kill reads after the event", name)
+		if engineReads+2 <= past {
+			self.t.Fatalf("the engine's Find of %s answered %q two kill reads after the event", name, result.Error.Code)
 		}
+		tlsSuiteAwait(self.t, fmt.Sprintf("a kill read after the engine's Find of %s answered %q", name, result.Error.Code), self.engine.KillReads, past)
 	}
 }
 
