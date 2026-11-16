@@ -4,12 +4,27 @@
 // where the key lives, which records and approver screens show as presence (attested) or presence (asserted), both
 // channel presence, the policy grammar unchanged.
 //
-// A webauthn-es256 key is attested when its attestation is packed with a certificate chain, tpm, android-key or apple
-// and chains to a root the release pins for that format; it is asserted for fmt none, for an empty attestation, and for
-// packed self attestation, which proves only that the key signed, as its KeyRegister's own proof already does. An
-// ecdsa-p256-sha256 key, a Secure Enclave's, is always asserted, since no remote attestation of a Secure Enclave key's
-// access control exists on an unmanaged device, and carries no attestation. A present attestation that fails is
-// refused, never downgraded to asserted, so a software key cannot pass as apple and then show as anything.
+// A webauthn-es256 key is attested when its attestation is packed with a certificate chain, tpm, android-key or apple,
+// verifies, and chains to a root the release pins for that format. It is asserted for fmt none, for an empty
+// attestation, and for packed self attestation, which proves only that the key signed, as its KeyRegister's own proof
+// already does. An ecdsa-p256-sha256 key, a Secure Enclave's, is always asserted, since no remote attestation of a
+// Secure Enclave key's access control exists on an unmanaged device, and carries no attestation.
+//
+// What a statement that chains to no pinned root gets is per format (QD-137, QD-885), and the label changes no
+// authorization (§16.6's labels row), so a key off the list loses only the word attested:
+//
+//	refused   a statement that does not verify, in any format and against any pool: its signature, its certificate's
+//	          own requirements, its key, its client data. And apple or android-key, each one vendor's, whose chain
+//	          fails once the release pins that vendor's root, so a software key cannot pass as apple
+//	asserted  packed with a certificate chain or tpm, whose roots are a short hand-kept vendor list, where the
+//	          statement verifies and chains to no listed root, as fmt none labels; and any format whose pool is
+//	          empty, where the statement otherwise verifies
+//	attested  a statement that verifies and chains to a root its format's pool holds
+//
+// So a client carries the authenticator's real statement before any root ships, and since the statement stays in the
+// logged KeyRegister, a later release that pins its root labels the same registration attested, with no second
+// ceremony: the label is this check's answer over the stored KeyRegister under the reader's release, never a stored
+// value.
 //
 // KeyRegister.attestation is a canonical CBOR map of two byte strings (QD-730): attObj, the WebAuthn attestation
 // object, and clientDataJSON, the create ceremony's client data, which every format but none signs or embeds a hash of
@@ -22,19 +37,21 @@
 //	             challenge is left unread: the credential key below is what binds the attestation to the registration
 //	object       canonical CBOR of exactly fmt, attStmt and authData; the authenticator data's rp id is ur.io, with UP, UV
 //	             and attested credential data, and its credential key equals the KeyRegister's public_key
-//	statement    packed, tpm, android-key or apple over authData || SHA-256(clientDataJSON), chained to the roots the
-//	             release pins for the format
+//	statement    packed, tpm, android-key or apple over authData || SHA-256(clientDataJSON), each format's own
+//	             requirements, which refuse where they fail
+//	chain        the statement's certificates to the roots the release pins for the format, which gives the label or
+//	             the single-vendor refusal above
 //
-// One thing holds the attested label back in this build, failing closed: no production roots ship and clients request
-// none conveyance (QD-137's interim), so the release's pools are empty and nothing chains. Every format's check is built
-// and runs in the tests on fixture roots.
+// No production roots ship in this build (QD-137's release step pins them), so the release's pools are empty and a
+// statement that verifies labels asserted. Every format's check is built and runs in the tests on fixture roots.
 //
 // The map and the object are parsed by record_presence_cbor.go's canonical reader, and certificates by crypto/x509, so
 // the root adds no module. Certificate chains are checked at the time the caller judges the registration at, the
 // carrying entry's for a reader labelling a logged key, so readers of one log under one release label one key alike.
-// Releases pin different roots, so a label can differ between releases: the device about to sign a KeyRegister runs
-// this and refuses a failing attestation (RegisterPresenceKey), and question mcp-m2-01-attestation-in-the-log-rule asks
-// whether §7.9's rule, which every reader must judge alike, may read the attestation at all.
+// Releases pin different roots, so a label, and a single-vendor refusal, can differ between releases: the device about
+// to sign a KeyRegister runs this, refuses a failing attestation and answers the label it read (RegisterPresenceKey),
+// and question mcp-m2-01-attestation-in-the-log-rule asks whether §7.9's rule, which every reader must judge alike, may
+// read the attestation at all.
 //
 // No key is created, derived or unwrapped here, so nothing calls testHookSecret. Package-level functions are safe for
 // concurrent use. On every leg: nothing here names a connect type.
@@ -69,8 +86,9 @@ import (
 type PresenceLabel int
 
 const (
-	// Nothing vouches for where the key lives but the device that registered it: fmt none, no attestation, packed
-	// self attestation, or a Secure Enclave key.
+	// Nothing the release pins vouches for where the key lives, only the device that registered it: fmt none, no
+	// attestation, packed self attestation, a Secure Enclave key, or a statement that verifies and chains to no pinned
+	// root where its format does not refuse that (the file header).
 	PresenceLabelAsserted PresenceLabel = iota + 1
 	// The key's attestation chains to a root the release pins for its format.
 	PresenceLabelAttested
@@ -87,8 +105,9 @@ func (self PresenceLabel) String() string {
 	return fmt.Sprintf("presence label %d", int(self))
 }
 
-// The attestation is present and does not verify, its format is not one §16.6 names, or its key, rp or client data is
-// not the registration's. Never a reason to label the key asserted instead.
+// The attestation is present and does not verify, its format is not one §16.6 names, its key, rp or client data is not
+// the registration's, or it is apple's or android-key's and its chain fails against that vendor's pinned root. Never a
+// reason to label the key asserted instead.
 var ErrPresenceAttestation = errors.New("presence attestation refused")
 
 // §16.6's bounds on a registration's attestation, which every device that labels a key holds alike (QD-702): the
@@ -174,7 +193,8 @@ const (
 
 // The roots a release pins, one pool per format §16.6 names, which a release step refreshes from the FIDO metadata
 // service's roots, Apple's WebAuthn root and Google's hardware attestation roots (QD-137). A pool is never nil: an empty
-// one chains nothing, where a nil one would mean the system's.
+// one chains nothing and is a format with no root pinned yet, where a nil one would mean the system's. apple and
+// androidKey are single-vendor pools, packed and tpm vendor lists (presenceChainLabel).
 type presenceAttestationRoots struct {
 	packed     *x509.CertPool
 	tpm        *x509.CertPool
@@ -183,7 +203,7 @@ type presenceAttestationRoots struct {
 }
 
 // This build's: empty, since no production roots ship until QD-137's release step pins them, so no key labels
-// attested.
+// attested and a statement that verifies labels asserted.
 func presenceReleaseAttestationRoots() *presenceAttestationRoots {
 	return &presenceAttestationRoots{
 		packed:     x509.NewCertPool(),
@@ -200,7 +220,25 @@ func presenceReleaseAttestationRoots() *presenceAttestationRoots {
 // KeyRegister.attestation is read as QD-730's map (the file header): an empty field and fmt none label a webauthn-es256
 // key asserted, and packed, tpm, android-key and apple are checked over SHA-256 of the map's client data against the
 // release's roots. An ecdsa-p256-sha256 key is asserted and carries none.
+//
+// Nothing stores the label: a reader runs this again over the logged KeyRegister, so a release that pins a root labels
+// attested a key an earlier release labelled asserted (QD-885).
 func VerifyPresenceAttestation(register *protocol.KeyRegister, atMillis int64) (PresenceLabel, error) {
+	return verifyPresenceRegisterAttestation(
+		register,
+		presenceReleaseAttestationRoots(),
+		DefaultPresenceAttestationSettings(),
+		time.UnixMilli(atMillis),
+	)
+}
+
+// VerifyPresenceAttestation against roots, the release's for every caller but a test, which pins fixture roots.
+func verifyPresenceRegisterAttestation(
+	register *protocol.KeyRegister,
+	roots *presenceAttestationRoots,
+	settings *PresenceAttestationSettings,
+	at time.Time,
+) (PresenceLabel, error) {
 	if register == nil {
 		return 0, fmt.Errorf("%w: no KeyRegister", ErrPresenceAttestation)
 	}
@@ -218,13 +256,7 @@ func VerifyPresenceAttestation(register *protocol.KeyRegister, atMillis int64) (
 		if len(attestation) == 0 {
 			return PresenceLabelAsserted, nil
 		}
-		return verifyPresenceAttestation(
-			attestation,
-			register.GetPublicKey(),
-			presenceReleaseAttestationRoots(),
-			DefaultPresenceAttestationSettings(),
-			time.UnixMilli(atMillis),
-		)
+		return verifyPresenceAttestation(attestation, register.GetPublicKey(), roots, settings, at)
 	}
 	return 0, fmt.Errorf("%w: algorithm %s", ErrPresenceAttestation, register.GetAlg())
 }
@@ -272,8 +304,9 @@ func verifyPresenceAttestation(
 // A WebAuthn attestation object's label for the credential key publicKey, a SEC 1 point: the object parses as canonical
 // CBOR with exactly fmt, attStmt and authData; the authenticator data's rp id is ur.io, UP, UV and attested credential
 // data are set, and its credential key is an ES256 COSE key equal to publicKey, so another key's attestation is
-// refused; then the format's statement over authData || clientDataHash, chained to roots' pool for the format at time
-// at. A nil clientDataHash, no client data to check against, passes fmt none alone.
+// refused; then the format's statement over authData || clientDataHash, which refuses where it does not verify, and
+// its chain to roots' pool for the format at time at, which gives the label (presenceChainLabel). A nil clientDataHash,
+// no client data to check against, passes fmt none alone.
 func verifyPresenceAttestationObject(
 	attestationObject []byte,
 	clientDataHash []byte,
@@ -465,6 +498,37 @@ func verifyPresenceChain(certificates []*x509.Certificate, pool *x509.CertPool, 
 	return nil
 }
 
+// The label of a statement that has verified in every way but its chain, from certificates' chain to its format's
+// pool at time at (QD-137, QD-885):
+//
+//   - it chains to a root of pool: attested
+//   - pool is empty, no root pinned for the format yet: asserted
+//   - it chains to no root of a vendor list, packed's or tpm's (singleVendor false), whether its vendor is off the list
+//     or its chain is outside its validity at that time: asserted, which is what fmt none gives anyone
+//   - it chains to no root of a pinned single-vendor pool, apple's or android-key's: refused, since the one vendor
+//     that can make the statement did not
+//
+// A nil pool, which would mean the system's roots, is refused for every format.
+func presenceChainLabel(
+	certificates []*x509.Certificate,
+	pool *x509.CertPool,
+	singleVendor bool,
+	at time.Time,
+) (PresenceLabel, error) {
+	if pool == nil {
+		return 0, fmt.Errorf("%w: no roots", ErrPresenceAttestation)
+	}
+	err := verifyPresenceChain(certificates, pool, at)
+	if err == nil {
+		return PresenceLabelAttested, nil
+	}
+	pinned := !pool.Equal(x509.NewCertPool())
+	if singleVendor && pinned {
+		return 0, err
+	}
+	return PresenceLabelAsserted, nil
+}
+
 // A statement's alg, which must be one of algs.
 func presenceStatementAlg(statement *presenceCborItem, algs ...int64) (int64, error) {
 	algItem, ok := statement.textKey("alg")
@@ -528,8 +592,9 @@ func checkPresenceAaguidExtension(certificate *x509.Certificate, aaguid []byte) 
 	return nil
 }
 
-// WebAuthn §8.2: packed. With x5c, the attestation certificate's ES256 signature over signedData, its §8.2.1
-// requirements, and its chain to pool: attested. Without, self attestation by the credential key: asserted.
+// WebAuthn §8.2: packed. With x5c, the attestation certificate's ES256 signature over signedData and its §8.2.1
+// requirements, which refuse where they fail, then its chain to pool, a vendor list: attested, or asserted where it
+// chains to no listed root. Without, self attestation by the credential key: asserted.
 func verifyPresencePacked(
 	statement *presenceCborItem,
 	authData *presenceAuthData,
@@ -580,14 +645,12 @@ func verifyPresencePacked(
 	if err := checkPresenceAaguidExtension(leaf, authData.aaguid); err != nil {
 		return 0, err
 	}
-	if err := verifyPresenceChain(certificates, pool, at); err != nil {
-		return 0, err
-	}
-	return PresenceLabelAttested, nil
+	return presenceChainLabel(certificates, pool, false, at)
 }
 
 // WebAuthn §8.3: tpm. pubArea is the credential key's TPMT_PUBLIC, certInfo a TPMS_ATTEST certifying it over a hash of
-// signedData, signed by the AIK certificate in x5c, whose §8.3.1 requirements hold and which chains to pool.
+// signedData, signed by the AIK certificate in x5c, whose §8.3.1 requirements hold, all of which refuse where they
+// fail; then its chain to pool, a vendor list: attested, or asserted where it chains to no listed root.
 func verifyPresenceTpm(
 	statement *presenceCborItem,
 	authData *presenceAuthData,
@@ -660,10 +723,7 @@ func verifyPresenceTpm(
 	if err := checkPresenceAikCertificate(aik, authData.aaguid); err != nil {
 		return 0, err
 	}
-	if err := verifyPresenceChain(certificates, pool, at); err != nil {
-		return 0, err
-	}
-	return PresenceLabelAttested, nil
+	return presenceChainLabel(certificates, pool, false, at)
 }
 
 // TPMT_PUBLIC (TPM 2.0 Part 2 §12.2.4) of an ECC P-256 key: its nameAlg and the point. Refuses any other type, curve, a
@@ -832,7 +892,9 @@ func checkPresenceTpmAlternativeName(value []byte) error {
 
 // WebAuthn §8.4: android-key. The credential certificate's key is the credential key and signs signedData; its key
 // description holds clientDataHash as the challenge, was made in a TEE or StrongBox, not for all applications, by the
-// key's own generation and for signing; and it chains to pool.
+// key's own generation and for signing, all of which refuse where they fail; then its chain to pool, Google's hardware
+// attestation roots in a release: attested, refused where the pool holds a root and the chain fails, and asserted
+// while the pool is empty.
 func verifyPresenceAndroidKey(
 	statement *presenceCborItem,
 	authData *presenceAuthData,
@@ -875,10 +937,7 @@ func verifyPresenceAndroidKey(
 	if err := checkPresenceAndroidKeyDescription(description, clientDataHash); err != nil {
 		return 0, err
 	}
-	if err := verifyPresenceChain(certificates, pool, at); err != nil {
-		return 0, err
-	}
-	return PresenceLabelAttested, nil
+	return presenceChainLabel(certificates, pool, true, at)
 }
 
 // Android's KeyDescription: attestationVersion, attestationSecurityLevel, keymasterVersion, keymasterSecurityLevel,
@@ -1023,8 +1082,10 @@ func presenceDerElement(input []byte) (byte, bool, int, []byte, []byte, bool) {
 	return class, constructed, number, input[offset : offset+length], input[offset+length:], true
 }
 
-// WebAuthn §8.8: apple. The credential certificate's nonce extension holds SHA-256(signedData), its key is the
-// credential key, and it chains to pool, Apple's WebAuthn root in a release.
+// WebAuthn §8.8: apple. The credential certificate's nonce extension holds SHA-256(signedData) and its key is the
+// credential key, which refuse where they fail; then its chain to pool, Apple's WebAuthn root in a release: attested,
+// refused where the pool holds the root and the chain fails, so a software key cannot pass as apple, and asserted while
+// the pool is empty.
 func verifyPresenceApple(
 	statement *presenceCborItem,
 	authData *presenceAuthData,
@@ -1063,8 +1124,5 @@ func verifyPresenceApple(
 	if !bytes.Equal(presenceCertificateKey(leaf), authData.credentialPublicKey) {
 		return 0, fmt.Errorf("%w: the credential certificate is another key's", ErrPresenceAttestation)
 	}
-	if err := verifyPresenceChain(certificates, pool, at); err != nil {
-		return 0, err
-	}
-	return PresenceLabelAttested, nil
+	return presenceChainLabel(certificates, pool, true, at)
 }
