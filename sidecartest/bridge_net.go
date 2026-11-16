@@ -33,10 +33,11 @@
 //
 // What is not the system here: each sidecar's binding is signed by the world and reaches the host's component through
 // its store's binding cache, since no api serves these sidecars' identities (the component's fetcher has no api and
-// fetches nothing); the host's daemon listener is one the world opens and names; a LAN host behind a route is the
-// upstream's loopback listener, which the NAT's dial reaches in its place; and on T3 a client's key reaches server
-// through the platform rather than in band, since the exchange carries no ControlId frame to server. Waits are on
-// monitors and sockets, bounded by BridgeNetSettings.WaitTimeout of real time, since connect's timers are real (X9).
+// fetches nothing); the host's daemon listener is one the world opens, on a port none of its upstream's listeners took,
+// and names; a LAN host behind a route is the upstream's loopback listener, which the NAT's dial reaches in its place;
+// and on T3 a client's key reaches server through the platform rather than in band, since the exchange carries no
+// ControlId frame to server. Waits are on monitors and sockets, bounded by BridgeNetSettings.WaitTimeout of real time,
+// since connect's timers are real (X9).
 //
 // Safe for concurrent use. A BridgeNet is closed by its test, before its Net.
 
@@ -101,20 +102,27 @@ type BridgeNetSettings struct {
 	// decision for real, a share's activation among them (BridgeShareNet); nil installs none, and every GrantActivate
 	// is refused.
 	AclSpendCheck sidecar.AclSpendCheck
+	// Opens one offer of a host's stand-in daemon listener, given the upstream whose ports it must stay clear of
+	// (bridgeNetDaemonListener); nil listens on loopback at a port the kernel picks.
+	ListenDaemon func(upstream *BridgeNetUpstream) (net.Listener, error)
+	// How many offers a host's daemon listener takes at most before StartHost fails: one on a port of the upstream's
+	// is held open while the next is asked for, so the kernel hands out another number: 8. Under one counts as one.
+	DaemonListenAttemptCount int
 }
 
 func DefaultBridgeNetSettings() *BridgeNetSettings {
 	return &BridgeNetSettings{
-		Block:                netip.MustParsePrefix("100.80.0.0/16"),
-		WaitTimeout:          30 * time.Second,
-		DelegationLifetime:   time.Hour,
-		ContractByteCount:    8 * 1024 * 1024,
-		SendTimeout:          5 * time.Second,
-		BindingRetainTimeout: 7 * 24 * time.Hour,
-		BindingMaxCount:      16,
-		PollInterval:         10 * time.Millisecond,
-		ReadByteCount:        64 * 1024,
-		WindowClientLifetime: 7 * 24 * time.Hour,
+		Block:                    netip.MustParsePrefix("100.80.0.0/16"),
+		WaitTimeout:              30 * time.Second,
+		DelegationLifetime:       time.Hour,
+		ContractByteCount:        8 * 1024 * 1024,
+		SendTimeout:              5 * time.Second,
+		BindingRetainTimeout:     7 * 24 * time.Hour,
+		BindingMaxCount:          16,
+		PollInterval:             10 * time.Millisecond,
+		ReadByteCount:            64 * 1024,
+		WindowClientLifetime:     7 * 24 * time.Hour,
+		DaemonListenAttemptCount: 8,
 	}
 }
 
@@ -1555,7 +1563,7 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 		}
 		host.ownsUpstream = true
 	}
-	host.Daemon, err = net.Listen("tcp4", "127.0.0.1:0")
+	host.Daemon, err = bridgeNetDaemonListener(host.Upstream, self.settings.ListenDaemon, self.settings.DaemonListenAttemptCount)
 	if err != nil {
 		fail("the daemon's listener: %v", err)
 	}
@@ -1672,6 +1680,41 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 	self.stateLock.Unlock()
 	host.WaitAdopted(self.admission.Tip().GetVersion())
 	return host
+}
+
+// A host's stand-in daemon listener, the first offer of listen's on no port of upstream's listeners; nil listen takes
+// loopback at a port the kernel picks. Rule 0 matches a daemon listener by its port on the host's addresses whatever
+// a flow's protocol, since the state lists each as host:port, and the kernel numbers TCP and UDP ports apart, so a
+// daemon on the number it gave the upstream's UDP listener denied every datagram to the upstream (FS-38's twin,
+// tip-check at 54e31119). An offer on an upstream port is held open while the next is asked for, so the kernel hands
+// out another number, and closed once one is clear. At most attemptCount offers, under one counting as one.
+func bridgeNetDaemonListener(upstream *BridgeNetUpstream, listen func(upstream *BridgeNetUpstream) (net.Listener, error), attemptCount int) (net.Listener, error) {
+	if listen == nil {
+		listen = func(upstream *BridgeNetUpstream) (net.Listener, error) {
+			return net.Listen("tcp4", "127.0.0.1:0")
+		}
+	}
+	var refused []net.Listener
+	defer func() {
+		for _, listener := range refused {
+			listener.Close()
+		}
+	}()
+	for range max(attemptCount, 1) {
+		listener, err := listen(upstream)
+		if err != nil {
+			return nil, err
+		}
+		port := -1
+		if address, ok := listener.Addr().(*net.TCPAddr); ok {
+			port = address.Port
+		}
+		if port != int(upstream.TcpPort()) && port != int(upstream.UdpPort()) {
+			return listener, nil
+		}
+		refused = append(refused, listener)
+	}
+	return nil, fmt.Errorf("each of %d offers took a port of the upstream's, %d or %d", len(refused), upstream.TcpPort(), upstream.UdpPort())
 }
 
 // Ends the host's generation, its component, its role and its upstream. Idempotent.
