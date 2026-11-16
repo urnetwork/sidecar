@@ -49,7 +49,16 @@ the DPoP iat (316), the daemon's config follower (317), the anchor by descent (3
 (319), the genesis owner's row (320), SCIM's bearer and queue (321), device authorizations (322), the auth key and
 admin event encodings (323), the invite's bytes (324), tail verdicts (325), not_preview (326), attestation outside
 the log (327), stage 2's build tag (328), the last Owner (329), cascade spans and indexer rows (330) and a
-superseded forwarding client (331)."""
+superseded forwarding client (331). Adds owner decisions 332-356 (folded 2026-11-16 with §8's and §9's items): an
+owner-bound repo's standing revoke (332), member deposits into mailboxes (333), K_sock's overlap at the gates (334),
+grant-driven edge address records (335), ur share's count default and stdin link (336), a gate behind the log
+(337), an edge pair's life (338), the compile's forms (339), the internal gate routes (340), the config repo's
+row (341), evidence_default in rows (342), access-log positions and the deletion's signer (343), via subjects and
+route rows with grant 1's via (344), prefix rules' subjects, admins and readings (345), a share grant's network
+(346), sockets' client tokens (347), edge Finds under any audience (348), an admin's decision toward k (349),
+accept-invite's two forms (350), a deleted repo's admins (351), config writers as the config repo's admins (352),
+atoms for every declared tag and group (353), the ticket key command (354), AclState's readings (355) and
+re-application from the body (356)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -490,6 +499,56 @@ INDEX = list(_P9['INDEX']) + [
      "Rows keep each compromise cascade's span per sidecar and each indexer designation that holds."),
     (331, "Superseded forwarding client",
      "Only the newest active forwarding client of a sidecar's bound client is answered at the exchange."),
+    (332, "Owner-bound standing revoke",
+     "In an owner-bound repo the owner's later `EvsShare` lifts a config writer's standing `RepoRevoke`, and one naming the owner's consented device is refused."),
+    (333, "Member deposits into mailboxes",
+     "Any subject of the network that the projection marks `mail_send` may deposit into a member's mailbox."),
+    (334, "`K_sock`'s overlap at the gates",
+     "While the `socket/key` file holds a previous key, compile writes a second target under it, until the first writer head 10 min after the rotation."),
+    (335, "Edge address records",
+     "`*` and `@` A and AAAA follow edge grants: api recomputes them after each accepted delta or projection, and an hourly pass reconciles."),
+    (336, "`ur share` count and link",
+     "An omitted `--count` is one use and `--count=0` unlimited until expiry; `ur share get` also reads its link from stdin."),
+    (337, "A gate behind the log",
+     "A sockets process answers unavailable for a network 5 s after evidence the log passed what it verified; with none, its last verified state serves."),
+    (338, "An edge pair's life",
+     "A `tls/` or `smtp/` Service pair lives at most 15 min past its listener's last accepted registration, with a floor after a removal."),
+    (339, "The compile's forms",
+     "The head tables' messages, a rule's canonical form, constant rule ids, `network:*`'s atom, clockless drops and the engine's skew stand as built."),
+    (340, "Internal gate routes",
+     "api serves gates the Client projection route's body and the rows' bytes under `/internal/gate/`, each caller class behind its own bearer."),
+    (341, "The config repo's row",
+     "The config repo's `AclRepo` row is synthesized from the Genesis, and the rows gain it only at the first shrink of its key holders."),
+    (342, "`evidence_default` in rows",
+     "`AclRows` carries the document's effective default evidence channels, which every verifier checks for a ruleless action."),
+    (343, "Access-log positions",
+     "Rows keep a removed admin's removal position and the RepoDelete's entry time and signer."),
+    (344, "Via subjects, route rows",
+     "Rows carry a route rule's via subjects apart from its targets and each approved route by its ids; grant 1 names `via` `autogroup:self`."),
+    (345, "Prefix rules",
+     "Prefix rules name only subjects an admission fixes and bind a repo's admins; only a general repo takes them, at most 256 sets."),
+    (346, "A share grant's network",
+     "A share grant's CanonicalAction names the other network, and the fold writes that network's atom as the rule's source."),
+    (347, "sockets' client tokens",
+     "sockets verifies Client-class tokens by a verify-only keyring and the revocation record, and the token carries a `sidecar_id` claim."),
+    (348, "Edge Finds' audience",
+     "An edge Find for a `tls/` name passes under any publish grant for the host, and the listener's front judges the audience."),
+    (349, "An admin's decision toward k",
+     "An Owner's or Admin's decision counts toward a rule's k only where its approvers name it or dst-owner resolves to an admin; follows @@OD:180@@."),
+    (350, "accept-invite's forms",
+     "`POST /acl/accept-invite` takes a claim by the code's hash, which binds a share and takes a use, and then a completion."),
+    (351, "A deleted repo's admins",
+     "A deleted repo's standing admins keep the evs `admin` right alone, and the exchange mints only it."),
+    (352, "The config repo's admins",
+     "Every config writer holds `admin` on the config repo at evs and gkm."),
+    (353, "Atoms for declared tags",
+     "compile writes an atom for every declared tag and group, named by a rule or not."),
+    (354, "Ticket key command",
+     "`sidecarctl sockets ticket-keygen` writes the sockets ticket key file."),
+    (355, "AclState's readings",
+     "Autogroup membership, targets' encodings, kind defaults in the binary, consent's details and the ack route stand as built."),
+    (356, "Re-application from the body",
+     "`AclState.ReapplyStatement` derives its fold inputs from the body, the signers and the rebuilt rows, and judges nothing again."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -514,7 +573,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 332))
+assert [r[0] for r in INDEX] == list(range(1, 357))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -547,7 +606,12 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               312: '2026-11-12', 313: '2026-11-12', 314: '2026-11-15', 315: '2026-11-15', 316: '2026-11-12',
               317: '2026-11-13', 318: '2026-11-14', 319: '2026-11-14', 320: '2026-11-14', 321: '2026-11-15',
               322: '2026-11-15', 323: '2026-11-15', 324: '2026-11-15', 325: '2026-11-15', 326: '2026-11-15',
-              327: '2026-11-15', 328: '2026-11-15', 329: '2026-11-15', 330: '2026-11-15', 331: '2026-11-15'})
+              327: '2026-11-15', 328: '2026-11-15', 329: '2026-11-15', 330: '2026-11-15', 331: '2026-11-15',
+              332: '2026-11-06', 333: '2026-11-06', 334: '2026-11-06', 335: '2026-11-06', 336: '2026-11-15',
+              337: '2026-11-10', 338: '2026-11-10', 339: '2026-11-11', 340: '2026-11-11', 341: '2026-11-12',
+              342: '2026-11-12', 343: '2026-11-13', 344: '2026-11-15', 345: '2026-11-13', 346: '2026-11-14',
+              347: '2026-11-15', 348: '2026-11-15', 349: '2026-11-15', 350: '2026-11-15', 351: '2026-11-15',
+              352: '2026-11-15', 353: '2026-11-15', 354: '2026-11-15', 355: '2026-11-15', 356: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -723,9 +787,25 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "SCIM's bearer and queue (321), device authorizations (322), the auth key and admin event encodings (323), "
     "the invite's bytes (324), tail verdicts (325), `not_preview` (326), attestation outside the log (327), "
     "stage 2's build tag (328), the last Owner (329), cascade spans and indexer rows (330) and a superseded "
-    "forwarding client (331). ")
+    "forwarding client (331). The fold of §8's and §9's the same day numbers the answers on access control and "
+    "sockets: an owner-bound repo's standing revoke (332), member deposits into mailboxes (333), `K_sock`'s "
+    "overlap at the gates (334), grant-driven edge address records (335), `ur share`'s count default and "
+    "stdin link (336), a gate behind the log (337), an edge pair's life (338), the compile's forms (339), the "
+    "internal gate routes (340), the config repo's row (341), `evidence_default` in rows (342), access-log "
+    "positions and the deletion's signer (343), via subjects and route rows with grant 1's `via` (344), "
+    "prefix rules' subjects, admins and readings (345), a share grant's network (346), sockets' client tokens "
+    "(347), edge Finds under any audience (348), an admin's decision toward k (349), accept-invite's two "
+    "forms (350), a deleted repo's admins (351), config writers as the config repo's admins (352), atoms for "
+    "every declared tag and group (353), the ticket key command (354), `AclState`'s readings (355) and "
+    "re-application from the body (356). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
 INDEX[_i183] = (183, INDEX[_i183][1], INDEX[_i183][2] + " Amended by @@OD:204@@: a `now` drop's deletions wait "
                 "for evacuation's horizon, about 25 to 26 h.")
+# QD-425 (2026-11-16): a share is served while the sharing sidecar runs (§9.9), whether or not `ur share` does.
+_i_ctx4 = [r[0] for r in PEER].index("Q-CTX-4")
+assert PEER[_i_ctx4][2].count("while `ur share` runs") == 1, 'Q-CTX-4 moved'
+PEER = list(PEER)
+PEER[_i_ctx4] = (PEER[_i_ctx4][0], PEER[_i_ctx4][1],
+                 PEER[_i_ctx4][2].replace("while `ur share` runs", "while the sharing sidecar runs")) + tuple(PEER[_i_ctx4][3:])

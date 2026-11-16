@@ -1898,6 +1898,185 @@ The design-records track for §7 folded the answers below on 2026-11-16, each ci
     - Not taken: (2) binding the client to its `delegation_id`, a new owner-row column, an api-4 phrase and a request field, which can replace this later; (3) leaving the removal to the sidecar, which a crash leaves undone.
     - Raised by the build (TEAM-M8-02; the build's ledger, QD-963).
 
+## The build's owner questions on access control and sockets (2026-11-06 to 2026-11-16)
+
+The design-records track for §8 and §9 folded the answers below on 2026-11-16, each citing its ledger id: the owner items of those sections decided or accepted in bulk on 2026-11-06 (332-335, and 336's first half), those the owner decided one at a time from 2026-11-10 to 2026-11-15, and the recommendations of 2026-11-15 that the owner's instruction of 2026-11-16 accepted, which the ledger dates 2026-11-15. A decision that groups several answers carries its latest answer's date.
+
+332. **In an owner-bound repo the owner's later `EvsShare` lifts a config writer's standing `RepoRevoke`, and a `RepoRevoke` cannot remove the owner's consented device (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: a config writer's `RepoRevoke` stands until a config writer grants the subject again, and an owner-bound repo takes no `RepoGrant`, so nothing lifted one there; and nothing said whether a revoke could name the owner's own device.
+    - Answer: in an owner-bound repo a later `EvsShare` to that subject from a consented device of the owner lifts the revoke, the fold dropping its row from `AclRepo.revokes` at that position. A `RepoRevoke` naming one of the owner's consented devices is refused, since `SidecarRevoke` and `Suspend` already remove a device (§8.5's owner consent, §8.8's RepoRevoke row).
+    - Cost: an admin's revoke of a share in a member's repo can be undone by that member's device.
+    - Not taken: (2) the revoke stands for good and the subject returns only under a new sidecar identity, which strands a legitimate share and gives admins a permanent lever over a member's repo; (3) a `RepoRevokeLift` statement for config writers, a new statement at M2's freeze that hands admins a say in who reads a member's repo.
+    - Raised by the build (plan-ACL; the build's ledger, QD-044).
+
+333. **Any subject of the network that the projection marks `mail_send` may deposit into a member's mailbox (option 1, narrowed, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: D-MAIL-8 delivers same-network mail by deposit, which needs one member's device to deposit into another member's mailbox, and §8.5 and §8.8 allowed no such deposit.
+    - Answer: §8.5's `mailbox` deposit cell gains any subject of the network that the projection marks `mail_send`. `vault` and `secret` stay as written, and §8.8's "never in an owner-bound repo" stands for `RepoGrant`. The sender's device learns the mailbox from `mailcfg` and asks the token exchange for `repo:<id>:deposit`; the recipient's readers show the message as from a member by the push's signer (§8.5's kind defaults, §15.8, §2.8 evs-6).
+    - Cost: a member can fill another member's mailbox up to §20's storage limits, as any outside sender could, and evs sees which members' devices deposit into which mailboxes.
+    - Not taken: (2) an owner's consented device files `RepoGrant{role: deposit}` on its own mailbox, an exception to §8.8's "never" and a statement per mailbox; (3) a relay through a receiver, which needs a running receiver and a new carrier for the sender's signature.
+    - Raised by the build (plan-MAIL; the build's ledger, QD-136).
+
+334. **`K_sock`'s rotation overlap is kept at the gates: while the key file holds a previous key, compile writes a second target under it (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: listeners register both token paths for 10 minutes after a rotation, but rows carried only the newest paths, so gates refused every old path and the overlap protected nothing; and the key file had no path or bytes.
+    - Answer: one config file, `socket/key`, holds the current key and, after a rotation, the previous key with `rotated_at_ms`. While it holds a previous key, `CompileAcl` writes a second `AclTarget` under that key beside each `sock:` target, a pure function of the head, so gates' checks do not change and readers recompile the same rows; a grant the rotating head drops is dropped on both paths. A requested grant's `sock:` entry is a literal token path and gets no second path: it works while listeners register that path and then its subject requests again. The first writer head at or after `rotated_at_ms` + 10 min clears the previous key, listeners register both paths until then by their own clock, and a lister tries the previous key while the file holds it (§8.8, §9.4, §2.8 api-7 and sock-1).
+    - Cost: `sock:` targets double until the clearing head, and rows link the old and new paths for as long as they are kept, at least 30 days, not sock-1's 10 minutes.
+    - Not taken: (2) no overlap at the gates, a denied dialer refetching the config once, which drops §9.4's dual registration and leaves a lagging listener unreachable; (3) gates keep the previous base's socket rows for 10 minutes, which keeps a grant the rotating head dropped alive on old paths.
+    - Raised by the build (plan-SOCK; the build's ledger, QD-122).
+
+335. **`*` and `@` address records are grant-driven: api recomputes them after each accepted delta or projection and an hourly pass reconciles (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §12.7 gave `*` its A and AAAA "with an edge grant" while §9.4 named `FirstListen` and `LastUnlisten` DNS hooks, and nothing acted when a grant simply expired.
+    - Answer: an edge grant is an active publish on `dns:<host>` in the zone, or the system publish, a network with a `mail_network` row and an approved `smtp/25/mx` listen grant. `*` has A and AAAA while the zone's set holds any host but `@`, or the system publish; `@` while the set holds `@`. After each accepted `POST /network/config/delta` or `/network/config/projection`, once the object PUT has committed, api recomputes the set and calls `model.DnsSyncEdgeRecords`, one journal write per transition, in a transaction of its own. An hourly taskworker pass over §21.6's list removes what expired and adds what a crash missed. §9.4's `FirstListen` and `LastUnlisten` stay seams with no DNS consumer (§12.7, §12.14, §9.4).
+    - Cost: a removal lags its grant's expiry by up to an hour, and a network's edge use shows in DNS from its grants whether or not a listener is up.
+    - Not taken: (2) listen-driven records through `FirstListen` and `LastUnlisten`, where a lease's expiry has no event and a restarting device makes `*` flap, each flap a signed write; (3) `*` and `@` present from zone creation for every network, which amends D-DNS-6 and invites connections tlsedge refuses.
+    - Raised by the build (plan-DNS; the build's ledger, QD-130).
+
+336. **`ur share add` without `--count` gives one use, and `ur share get` also reads its link from stdin (the recommendations; the count's default accepted with the build's owner items in bulk on 2026-11-06, the stdin form option 3 on 2026-11-15).**
+    - Question: §9.9 stated `--expires`'s default and not `--count`'s, and the end rule had no reading for unlimited uses; and `ur share get <link> <out>` puts the share's reusable 256-bit secret in argv, `ps` and shell history.
+    - Answer: an omitted `--count` means one use, `--count=n` n, and `--count=0` unlimited uses until the expiry; with `uses` 0 only a Remove or `expire_millis` ends a share. `ur share get` keeps `<link> <out>` and also accepts `-` for the link, reading it from stdin; cli/commands.go names the share link beside `ur connect --token` as a stated exception for the plain form, with its residual exposure, and cli/UI.md's row notes the `-` form (§9.9, §9.16).
+    - Cost: a sharer who wants many gets must say so, and the plain form still shows the link in `ps`, /proc and history while a get runs.
+    - Not taken: for the count, unlimited uses by default, which widens §9.16's leaked-link risk; for the link, (1) the plain form alone with a stated exception; (2) `ur share get <out>` reading the link from the terminal, which changes §9.9's spelling.
+    - Raised by the build (the G0 re-check, SOCK-M5-14; the build's ledger, QD-241, QD-967).
+
+337. **A sockets process answers `unavailable` for a network 5 s after evidence that the authorization log passed what it verified; with no evidence its last verified state serves (option 2, the recommendation).**
+    - Question: QD-055 had the last verified projection keep serving for as long as its source failed, so a revoked `tls/` listener kept its visitors at a process cut off from api while the log moved.
+    - Answer: a sockets process answers `unavailable` for a network once it has had evidence for 5 s, §8.9's target for server gates, that the log passed what it holds and it has not verified the new entries: the `{acl_<networkId>}v` event, a store answer naming a higher position, or after a resubscription a `{acl_}v` that differs from the one its state was loaded at. With no evidence the last verified state serves without limit, so an api outage changes nothing, api being the log's only writer (§8.9, §9.8).
+    - Cost: a process that learns the log moved and cannot reach api refuses that network's registrations and Finds until it can.
+    - Not taken: (1) the last verified state serving for as long as the source fails; (3) refusing on age alone after one missed poll, which stops every Find within 6 minutes of any api outage.
+    - Raised by the build (DESIGN-DETAILS.md section 13; the build's ledger, QD-655).
+
+338. **A `tls/` or `smtp/` Service pair lives at most 15 minutes past its listener's last accepted registration (option 2, the recommendation).**
+    - Question: §9.6 wrote an edge pair to the grant's expiry, up to 24 hours, deleted on revocation, so a pair that a sweep missed or a Find rewrote authorized contracts for a revoked listener for up to a day.
+    - Answer: Find writes a `tls/` or `smtp/` pair with a ttl of the lesser of the grant's remaining life and 15 min; a registration call that accepts an edge entry of the client renews its pairs, at most every 5 min a process; a removal leaves a floor that refuses a write allowed at an older position. `ur/` pairs keep §9.6's rule, their service's grant length refreshed per Find (§9.6's Edge Finds, §6.10.1, §2.8 sock-3).
+    - Cost: a pair write per accepted registration interval, and a listener whose registrations stop for 15 minutes loses its edge contracts' successor.
+    - Not taken: (1) the grant's expiry up to 24 h; (3) a contract-gate check of the listener's grant at CreateContract, a gate read on the contract path for platform clients, which §8.10 exempts.
+    - Raised by the build (DESIGN-DETAILS.md section 13; the build's ledger, QD-656).
+
+339. **The compile's forms stand as built: the head tables' messages, a rule's canonical form, the constant rule ids, `network:*`'s atom, what compile drops without a clock, and the engine's skew (option 1, the recommendation).**
+    - Question: §8.8's compile named forms without bytes: the sealed tables' messages, what a rule's id is keyed by, ids no table holds, `network:*`, and what leaves the rows without a clock.
+    - Answer: `tags` and `groups` are `ConfigAtomTable`, `rules` `ConfigRuleTable`, `labels` `ConfigLabelTable` and `resolve` `ConfigResolution`. A rule's canonical form is RFC 8785 JCS of one JSON object per rule, lists sorted, `id` and `note` left out. The implicit document's rule ids and the `tag:mail` kind rules' are constants derived by SHA-256 from fixed labels and an index. `network:*` is a derived atom of kind 4 over the one byte `*`, naming no subject until shares. An activated grant at or past the head's newest record time leaves the rows, and a member the rows no longer hold expands to nothing. `AclEngine` honors a rule until `AclEngineSettings.ClockSkew` past its expiry. The sixth reading, a route rule's via subjects among its targets, is replaced by owner decision 344 (§8.8's Placement, Atoms and Rule ids, §8.6's Direction, §7.9's paths).
+    - Cost: the four byte-level forms are frozen with M2's records.
+    - Not taken: (2) correcting any reading by number before M2's entry.
+    - Raised by the build (ACL-M2-04; the build's ledger, QD-679).
+
+340. **api serves gates the Client projection route's body under `/internal/gate/`, each caller class behind its own bearer (option 1, the recommendation).**
+    - Question: QD-055 gave services with no database one internal read surface on api, and no task built api's end or fixed the projection route's body.
+    - Answer: `GET /internal/gate/projection/<network_id>?after=<n>` answers the Client route's body, `{genesis, entries, rows, tip: {n, chain}, more}`, each message verbatim in base64, paged, from the retention point when `after` is before it, and `GET /internal/gate/rows/<network_id>/<rows_sha256>` answers the ProjectionRows bytes verbatim, which the caller holds to their hash. Both sit behind a per-caller bearer that api verifies by SHA-256 in constant time, one vault file per gate caller class, connect's first, and the lb refuses the prefix from outside. The listen-facts and over-limit routes join when sockets and quotas need them (§8.9, §19.4, §19.16).
+    - Cost: one vault file per gate caller class for the operator to create and rotate.
+    - Not taken: (2) folding api's end into sockets' task, which keeps connect's contract gate dark until M5; (3) giving connect read access to `proj/` and `projrows/`, which widens the metadata tier to every connect host.
+    - Raised by the build (ACL-M4-01; the build's ledger, QD-680).
+
+341. **The config repo's `AclRepo` row is the state's own, synthesized from the Genesis, and the rows gain it only at the first shrink of its key holders (option 1 of each question, the recommendations).**
+    - Question: no `RepoCreate` files the config repo's row and every gate reads it; and once the row was the state's own, its `holders_shrunk_at` had nowhere to live.
+    - Answer: where a state's rows hold no `AclRepo` for the network's config repo, ACL's state build adds `AclRepo{repo_id: Genesis.config_repo_id, kind: config}` with no admins and `holders_shrunk_at` 0, so the kind's defaults answer it alike at every reader, gate and api, and base 1's compile stays empty; a `RepoCreate` of kind config stays refused. The rows gain the row at the first entry that shrinks the config's key holders, `AclRepo{repo_id, kind: config, holders_shrunk_at: n}`, sorted in with the rest and advanced there afterwards like any repo's, which a base's `shrunk_repo_ids` may name; the state keeps a config row the rows hold (§8.8's Repo rows).
+    - Cost: the rows' bytes change at a network's first config shrink.
+    - Not taken: for the row, (2) the base compile writing it from the Genesis, which changes base 1's rows; (3) gates special-casing the config repo at each call site; for the shrink position, (2) a new header field outside the rows; (3) the state's own position, which re-keys the config group after every log entry.
+    - Raised by the build (TEAM-M2-15 and the config repo row's fix; the build's ledger, QD-719, QD-762).
+
+342. **`AclRows` carries the document's effective `evidence_default`, field 10, and every verifier checks a ruleless action's channel against it (option 1, the recommendation).**
+    - Question: a verifier holding only rows could not check a decision's channel against `evidenceDefault` for an action no `requests` rule governs, so a document's narrowing held only in the daemon.
+    - Answer: `AclRows` gains `repeated uint32 evidence_default = 10`, the document's effective default, all three channels where it names none, compiled at each base as each rule's list is. The daemon, every server gate and every reader check a ruleless action's channel against it in the spend check: `dns_set` and `dns_delete` at `POST /dns/records` and `bridge_expose` approvals (§8.6, §8.8's fence, §16.6, §2.8 api-7).
+    - Cost: api sees which channels a network accepts by default, as each rule's row already shows for grants.
+    - Not taken: (2) rows-only verifiers taking all three channels, so that a forged harness decision passes the gates where the document excluded harness; (3) a `requests` rule for every O action, a policy-grammar change.
+    - Raised by the build (MCP-M3-03; the build's ledger, QD-727).
+
+343. **A repo's folded access log keeps a removed admin's removal position and the RepoDelete's entry time and signer (option 1 of each question, the recommendations).**
+    - Question: readers, evs and taskworker judge a restore's 7-day window, a shred's time and a removed admin's old right from entries that leave the log's retention, and evs's reconciler could not name a RepoDelete's signer once its entry had left.
+    - Answer: `AclRepoAdminRow` gains `removed_at = 4`: a removal keeps the row, stamped with its position, until the next base's compile drops a row whose removal its retention point has passed. `AclRepoDeletionRow` gains `deleted_time_ms = 5`, the RepoDelete entry's time, and `signer = 6`, its signer. A RepoRestore's window, taskworker's shred, `AclState.RepoAdminAt` and evs's reconciler then read rows alone, on any day (§8.8's Repo rows, §2.8 api-7).
+    - Cost: three additive fields before acl.proto freezes at M2, each a value the server already sees as an entry's time, position or signer.
+    - Not taken: (2) judging from the retained log only and refusing beyond it, or letting `repo/`'s deleted state carry no signer; (3) evs's `repo/` object as the only judge of the window, or the reconciler applying a RepoDelete only while the log keeps its entry.
+    - Raised by the build (ACL-M2-06 and its fix; the build's ledger, QD-743, QD-798).
+
+344. **Rows carry a route rule's via subjects apart from its targets and each approved route by its ids, and grant 1 names `"via": ["autogroup:self"]` (option 1, the recommendation, for the rows; option 2 for grant 1, where the build recommended dropping `route` unless a member's own routing was meant).**
+    - Question: a route rule that names no `via` routes through the advertisers its approved routes name, which rows did not hold, and a gate could not tell an exit rule's via subjects from its other targets; grant 1's `route` then granted nothing.
+    - Answer: `AclRule` gains `via = 12`, a rule's via subjects apart from its targets, and `BridgeRows` gains `routes = 2`, `BridgeRouteRow{route_id, advertiser, route_rule_ids}`, written at the fold for every approved route in force and applied by every verifier in log order after a base; the state adds each advertiser to the via subjects of the no-via route rules its row names. §8.5's grant 1, and Team's starting document with it, read `{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "via": ["autogroup:self"], "allow": ["dial", "route"] }`, so a member's devices reach each other and the prefixes their own devices' approved routes serve (§8.5, §8.8's fence and Folded grants, §17.8, §2.8 api-7).
+    - Cost: api sees each approved route's advertiser and the rules it serves, and the starting document's golden rows change.
+    - Not taken: for the rows, (2) refusing a `route` grant that names no `via`; (3) a no-via route grant that opens nothing; for grant 1, (1) leaving it as it was, a `route` that reads as granting and does not; (3) dropping `route` from it.
+    - Raised by the build (ACL-M2-17 and the route rows' fix; the build's ledger, QD-764, QD-867).
+
+345. **Prefix rules name only subjects an admission fixes, bind a repo's admins like every signer, and stand as built in eleven readings (option 1 of each question, the recommendations).**
+    - Question: Q-EVS-3's v1 prefix rules had a record and a row but no rule for which subjects a rule may name, whether admins are exempt, or which repos, refs and pushes a set binds.
+    - Answer: a rule's subject is a sidecar, a member's untagged devices, a tag, or `autogroup:sidecar`, `member`, `tagged` or `ephemeral`; a group's atom names nobody, and `ur evs rules` refuses `group:<name>` with its members' `user:` subjects to file instead. Admins are held to the rules: `ur evs rules` writes a rule for each standing admin into every set it files, and `set --as-written` files a set without them. Only a `general` repo takes a set; a set binds every shared ref and every signer, from the first push pinned at or above it; a void set leaves the one below in force with an alarm; index files, the `ur/index` and `ur/lfs` refs and admin-flagged pushes are outside the rules; a repo holds at most 256 sets for its life; a cascade voids none; a device built before M6 enforces nothing; and every number is an `AclPrefixSettings` field (§8.8's RepoPrefixRules, D-ACL-11).
+    - Cost: a group's membership change needs a new set, and a set filed by other code can lock an admin out until an admin lifts the rules.
+    - Not taken: for subjects, (2) any §8.4 atom judged at the push's pin, under which two devices can show different files; (3) the admin's daemon refiling at each group change; for admins, (2) exempting them, which needs each admin's spans kept in rows for the repo's life.
+    - Raised by the build (DESIGN-DETAILS.md section 16; the build's ledger, QD-791, QD-792, QD-795).
+
+346. **A share grant's CanonicalAction names the other network, and the fold writes that network's atom as the rule's source (option 1, the recommendation).**
+    - Question: a share's requested grant had no way to name `network:Y` as its source in the rows, so the contract gate's share half found no rule.
+    - Answer: a share grant's CanonicalAction carries the other network in `share_network_id = 40`, beside its subject, the requesting sidecar; the request rule's `network:` source is matched against it, and the fold writes the derived network atom, kind 4, as the rule's source. The admin's approval covers the network as it covers every field (§8.8's Folded grants, §8.11, §16.8's fence, §2.8 api-7).
+    - Cost: a record.proto field and a fold branch before M6's freeze.
+    - Not taken: (2) shares only under a standing document grant naming the network, which leaves no share without a document; (3) `network:*` naming every network a live share pin holds, which a gate that reads no config file cannot see.
+    - Raised by the build (ACL-M6-03; the build's ledger, QD-820).
+
+347. **sockets verifies Client-class tokens through `sidecarhost`'s Authenticator, a verify-only keyring and the revocation record, and the token carries a `sidecar_id` claim (option 1, the recommendation).**
+    - Question: the sockets block's authenticated routes needed a Client-class verifier with no SQL, and no plan task held it.
+    - Answer: `sidecarhost`'s Authenticator takes a Client-class verifier for the sockets audience over `server/session`'s verify-only by_jwt keyring, mounted from `secret_files`, and the revocation-record check: a valid record passes, a tombstone or rotation answers 401, a Redis failure answers unavailable, a miss answers unavailable with `retry_after_ms`, and a miss within 120 s of a valid check counts as valid. by_client_jwt gains the `sidecar_id` claim, re-minted by `POST /sidecar/bind` and kept by refresh. `revocation_record_enabled` is on in production before M5 (§9.8, §19.4).
+    - Cost: a Redis failure fails the sockets routes closed, and a revoked client keeps at most 120 s where its record is missing.
+    - Not taken: (2) the sockets track building all of it, editing files other areas own.
+    - Raised by the build (SOCK-M5-07; the build's ledger, QD-848).
+
+348. **An edge Find for a `tls/` name passes under any publish grant for the host, and the listener's front judges the audience (option 1, the recommendation).**
+    - Question: the gate's edge check passed only a `public` audience, so no visitor reached a `members`, `members-device` or `link` endpoint through tlsedge.
+    - Answer: an edge (`autogroup:public`) Find for a `tls/` name passes under any publish grant for the host, whatever its audience; the gate reports the audience and judges neither it nor a raw link's pin, which the listener's front does from its own evaluation. A members visitor without a session then reaches the edge login at the front, and a link URL's token is traded for its cookie (§8.10's dns publish row, §9.10).
+    - Cost: tlsedge opens streams to private endpoints' fronts for any visitor, and the front's check is the only audience check.
+    - Not taken: (2) public only, which leaves §13.7's private audiences with no path through tlsedge.
+    - Raised by the build (TLS-M5-22; the build's ledger, QD-852).
+
+349. **An Owner's or Admin's decision counts toward a rule's k only where the rule's approvers name it or `autogroup:dst-owner` resolves to an admin (option 1, the recommendation).**
+    - Question: under the directory's default rule the directory asked the touched member's owner or sponsor alone, while the log's quorum also took an Admin's lone decision.
+    - Answer: an admin's decision meets §8.6's admin clause but counts toward k only where the rule's approvers name it, `autogroup:admin` or a group the admin is in, or where `autogroup:dst-owner` resolves to an admin because no owner or sponsor stands. An Admin's lone decision activates no reach grant to another member's worker under the default rule; a rule whose approver is `autogroup:self` reaching another member's device needs the requester's owner and an admin; and an Admin who wants to grant reach alone writes a document rule (§8.6's Requests, §8.8's quorum row, D-ACL-23). It follows owner decision 180.
+    - Cost: an Admin cannot approve reach to another member's worker by one decision under the default rule.
+    - Not taken: (2) the directory adding `autogroup:admin` to every reach request that touches another member, which notifies every Admin device; (3) leaving the directory and the log with two eligibility sets.
+    - Raised by the build (ACL-M6-05; the build's ledger, QD-863).
+
+350. **`POST /acl/accept-invite` takes a claim by the code's hash and then a completion (option 1, the recommendation, as built).**
+    - Question: the invited network had no way to read a share's target table or learn the share's id before it accepted, and a multi-use code had no mapping to shares.
+    - Answer: a claim with the code's hash alone takes a use, binds the invited network to a share, the invite's own row first and then a new row of the same target table for each later claim of a multi-use code, and answers the share's id with the sharing network's sealed targets; a repeat claim answers the share the network already holds and takes no use. A completion with the share id, the sealed accept and the status stores them once. A claim binds before the invitee's preflight, so a refused preflight still holds its use and completes with a refusal status (§8.11's Invite, §17.16).
+    - Cost: a failed preflight spends a use of the code.
+    - Not taken: (2) a read-only peek and one accept, under which two accepters of a multi-use code plan under one share id; (3) one share row per use at invite time.
+    - Raised by the build (ACL-M6-03; the build's ledger, QD-871).
+
+351. **A deleted repo's standing admins keep the evs `admin` right alone, and the exchange mints only it (option 1, the recommendation).**
+    - Question: the rights table gave a repo with an unrestored RepoDelete no right at all, so §11.12's DELETE never passed evs's guard under the real gate state.
+    - Answer: a repo whose rows' newest RepoDelete stands unrestored gives its standing admins `admin` alone: no read, write or deposit, and no rule or kind-default right. The token exchange mints only `admin` for it, evs's guard honors it for DELETE, with and without now, while read and write routes stay refused, gkm's guard reads the same rights and its own recheck refuses its writes, and a RepoRestore lifts the deletion (§8.8's Repo rows, §8.10, §11.12's refused row).
+    - Cost: a deleted repo's admins hold a live scope for it until its shred.
+    - Not taken: (2) evs's DELETE route judging the admin from the rows beside the guard, with a token that must predate the RepoDelete; (3) leaving deletion to the reconciler's daily walk.
+    - Raised by the build (the deletion row's fix; the build's ledger, QD-880).
+
+352. **Every config writer holds `admin` on the config repo at evs and gkm (option 2, the recommendation).**
+    - Question: only the Genesis's owner sidecar administered the config repo, so once that device was gone the config group could not be re-formed nor the repo re-activated short of re-seed mode.
+    - Answer: every config writer, a member device of an AdminSet member that is not read_only, holds `admin` on the network's config repo at evs and gkm, and the token exchange grants `repo:<config_repo_id>:admin` to each. §7.9's bootstrap row, the Genesis's owner sidecar from base 1, is the first case of the rule. A config writer can then re-form the config group, post its ladder, and activate or re-place the repo after a restore; a config drop stays refused (§8.5's kind defaults, §7.9's exchange row).
+    - Cost: every config writer holds the erase and closure rights on the config repo wherever evs lets an admin use them.
+    - Not taken: (1) the bootstrap sidecar alone, as it was built; (3) the bootstrap sidecar for the first form and config writers for later forms, two rules for one right.
+    - Raised by the build (the config repo row's fix; the build's ledger, QD-894).
+
+353. **compile writes an `AclAtom` for every declared tag and group, named by a rule or not (option 1, the recommendation).**
+    - Question: a tag declared in `tagOwners` that no grant or request named had no atom, so `CanApplyTag` refused its owners at admission, far from the document's save.
+    - Answer: `CompileAcl` writes an atom for every tag in `tagOwners` and every group in `groups`, whether or not a rule names it, so a declared tag can be applied by a Delegation or a tagged `SidecarAdmit`, its sidecars holding what `autogroup:tagged` and the kind defaults give them (§8.8's Atoms).
+    - Cost: rows hold an atom for each declared tag and group, within their 4,096-atom bound.
+    - Not taken: (2) validation refusing a declared tag no rule names; (3) leaving such a tag declared and unusable.
+    - Raised by the build (ACL-M2-16; the build's ledger, QD-901).
+
+354. **`sidecarctl sockets ticket-keygen` writes the sockets ticket key file (option 1, the recommendation).**
+    - Question: the plan's keygen subcommand of the sockets binary would have been an operations command outside sidecarctl.
+    - Answer: `sidecarctl sockets ticket-keygen -out <file> [-in <file>]` reads the existing file if given, adds a new Ed25519 key expiring RotationInterval (30 days) plus KeyOverlap (1 day) after its creation, drops expired keys, writes the file 0600, refusing to overwrite unless `-in` names the same file, and prints no key. The operator runs it every 30 days and places the file in vault, and the block rereads it every minute (§9.8, §19.4).
+    - Cost: a manual step every 30 days until it is scheduled.
+    - Not taken: (2) a `keygen` subcommand of the sockets binary.
+    - Raised by the build (SOCK-M5-07; the build's ledger, QD-902).
+
+355. **AclState's twelve readings stand as built, later decisions governing where they differ (option 1, the recommendation, as built).**
+    - Question: §8.4-§8.6, §8.8 and §8.12 left forms and gaps that the state had to fix: autogroup membership, targets' encodings in rows, where kind defaults live, a grant's subject, hard denies, consent's details, approver fallbacks, D-ACL-3's child clients and the ack route.
+    - Answer: the readings stand as `AclState`, the consent predicate, the approver resolution and api's acl tables have them: role autogroups hold untagged subjects by role, and app devices are in `autogroup:untagged` only; a `repo_id` of sixteen zero bytes is the wildcard repo, `socket_tokens` are alternative paths of one name, and `public_name` keeps its glob; kind defaults are evaluated in the binary, never compiled into rules; a grant's subject names a sidecar, a member or an atom; an admission ends at exactly its `not_after`; consent counts a signer consented strictly before its position; `autogroup:self` with no owner or sponsor resolves to `autogroup:admin`; a child client is its own subject only when it asks for `strict_exp` itself; and an ack's body is `{version, time_ms}`. Owner decisions 344, 351, 352 and 353 govern where they changed a point (§8.4, §8.5, §8.6, §8.8's AclTarget, §8.9, §8.12, D-ACL-3).
+    - Cost: the target encodings are frozen with M2's rows.
+    - Not taken: (2) correcting any reading by number before M2's entry.
+    - Raised by the build (ACL-M2-02; the build's ledger, QD-914).
+
+356. **`AclState.ReapplyStatement` derives its fold inputs from the statement's body, its signers and the rebuilt rows, and judges nothing again (option 1, the recommendation).**
+    - Question: re-applying a base's tail took verdict parts from a check run again, which can refuse for a reason that only a later head gives, so the fold could differ between verifiers.
+    - Answer: `ReapplyStatement` takes only the verdict parts the body and signers give, the signer and an OwnerConfirm's target, and derives every other fold input from the body and the rebuilt rows it folds into: a Suspend's or Unsuspend's class and whether an Unsuspend lifts, a RepoRevoke's or RepoGrant's config-writer standing, a RepoCreate's owner and consented sidecars, a GrantRevoke's `retain_until_ms` and a GrantActivate's grant. Each is a pure function of body, signers and rebuilt rows, so a new device, a gate that started at the base and a long-running reader fold alike (§8.8's Grant chains).
+    - Cost: none beyond the change.
+    - Not taken: (2) keeping the fallback under which a fold follows a check that may refuse for a head-only reason.
+    - Raised by the build (TEAM-M2-09; the build's ledger, QD-954).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

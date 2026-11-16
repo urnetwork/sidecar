@@ -305,7 +305,7 @@ for n, head in sorted(entries.items()):
             named_open.append({'decision': n, 'q': q, 'issue': 'no such item'})
 open_items = [q for q, st in qstatus.items() if st == 'open']
 qf = json.loads((V7 / 'qfields.json').read_text())
-out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 332)),
+out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 357)),
                        'q_named_by_decisions': sum(len(re.findall(r'Q-[A-Z]+-\d+', h)) for h in entries.values()),
                        'named_but_open': named_open,
                        'open_items': open_items,
@@ -457,9 +457,14 @@ LATE_DATES = {198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '202
               312: '2026-11-12', 313: '2026-11-12', 314: '2026-11-15', 315: '2026-11-15', 316: '2026-11-12',
               317: '2026-11-13', 318: '2026-11-14', 319: '2026-11-14', 320: '2026-11-14', 321: '2026-11-15',
               322: '2026-11-15', 323: '2026-11-15', 324: '2026-11-15', 325: '2026-11-15', 326: '2026-11-15',
-              327: '2026-11-15', 328: '2026-11-15', 329: '2026-11-15', 330: '2026-11-15', 331: '2026-11-15'}
+              327: '2026-11-15', 328: '2026-11-15', 329: '2026-11-15', 330: '2026-11-15', 331: '2026-11-15',
+              332: '2026-11-06', 333: '2026-11-06', 334: '2026-11-06', 335: '2026-11-06', 336: '2026-11-15',
+              337: '2026-11-10', 338: '2026-11-10', 339: '2026-11-11', 340: '2026-11-11', 341: '2026-11-12',
+              342: '2026-11-12', 343: '2026-11-13', 344: '2026-11-15', 345: '2026-11-13', 346: '2026-11-14',
+              347: '2026-11-15', 348: '2026-11-15', 349: '2026-11-15', 350: '2026-11-15', 351: '2026-11-15',
+              352: '2026-11-15', 353: '2026-11-15', 354: '2026-11-15', 355: '2026-11-15', 356: '2026-11-15'}
 idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-(?:0[34569]|1[012345])) \|', doc, re.M)
-out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 332)),
+out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 357)),
                         'dates_ok': all(d == ('2026-11-03' if int(n) <= 111 else '2026-11-04' if int(n) <= 145 else '2026-11-05' if int(n) <= 187 else '2026-11-06' if int(n) <= 196 else '2026-11-09' if int(n) == 197 else LATE_DATES.get(int(n))) for n, d in idx_rows),
                         'known_gaps_heading': '### Known gaps' in doc,
                         'closed_by_peer_review_text': len(re.findall(r'closed by peer review', doc))}
