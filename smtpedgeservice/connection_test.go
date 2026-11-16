@@ -658,9 +658,19 @@ func TestCloseEndsAStreamInItsPreamble(t *testing.T) {
 		defer close(served)
 		w.service.ServeTestStream(w.networkId, w.clientId, w.sidecarId, edgeEnd)
 	}()
-	// the preamble's timer, armed once the stream reads its frame
-	if err := w.clock.AwaitTimers(w.ctx, len(w.clock.PendingTimers())+1); err != nil {
-		t.Fatal(err)
+	// the preamble's timer, armed once the stream reads its frame, found by its deadline: a count of the clock's timers
+	// taken once the stream had started could already hold it, and then waited for one more that never came
+	deadline := w.clock.Now().Add(w.settings.PreambleTimeout)
+	for {
+		pending, added := w.clock.WatchTimers()
+		if slices.ContainsFunc(pending, func(at time.Time) bool { return at.Equal(deadline) }) {
+			break
+		}
+		select {
+		case <-added:
+		case <-w.ctx.Done():
+			t.Fatal("the preamble's timer was never armed")
+		}
 	}
 	w.service.Close()
 	<-served
