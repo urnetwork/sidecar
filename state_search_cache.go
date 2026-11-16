@@ -31,7 +31,8 @@
 // The store's layout under net/<network_id>/search/, every file sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search")
 // with XChaCha20-Poly1305 and a random nonce prefix, its name in the AAD (state_seal.go):
 //
-//	<repo>/<ref>/holdings                           the ref's record: its verified version, its files, retained buckets
+//	<repo>/<ref>/holdings                           the ref's record: its verified version, its files, retained buckets,
+//	                                                the erasure masks applied ahead of the table (state_search_delete.go)
 //	<repo>/<ref>/p<hex path>/<version>/<part>/m     one kept file's meta, written last: its commit point
 //	<repo>/<ref>/p<hex path>/<version>/<part>/<i>   its frame i
 //
@@ -64,6 +65,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -198,14 +200,42 @@ type SearchCacheRef struct {
 	Files      []SearchCacheFile
 	// Buckets a roll-up dropped, kept while a stale all is cached (state_search_bounds.go).
 	Retained []SearchCacheRetained
+	// The erasure masks this device applied at once, at an ERASE's or a CUT's hint, ahead of the version table the sync
+	// engine builds at its next swap, sorted by key (state_search_delete.go). Derived, so they go with the ref's files.
+	Erased []SearchCacheErased
+	// More masks were asked of the ref than Search.EraseMaskCount, or a mask did not decode: every probe of the ref
+	// fails, so every candidate is masked, until the ref is dropped (state_search_delete.go).
+	ErasedOverflow bool
+}
+
+// One erasure mask of a doc key in a ref (state_search_delete.go).
+type SearchCacheErased struct {
+	Key [indexIdByteCount]byte
+	// An ERASE names it: every version is masked while no erasure set this device holds lists it (DESIGN-DETAILS
+	// 15.2.10's masks).
+	Erase bool
+	// A CUT's erasure set this device applied lists it at this version and below, 0 for none, in the erasure of Epoch,
+	// the highest epoch of those that list it.
+	Through uint64
+	Epoch   uint64
 }
 
 // The holdings record's encoding, sealed in the store.
 type searchCacheHoldingsWire struct {
-	Version    int                       `json:"version"`
-	RefVersion uint64                    `json:"ref_version"`
-	Files      []searchCacheFileWire     `json:"files"`
-	Retained   []searchCacheRetainedWire `json:"retained,omitempty"`
+	Version        int                       `json:"version"`
+	RefVersion     uint64                    `json:"ref_version"`
+	Files          []searchCacheFileWire     `json:"files"`
+	Retained       []searchCacheRetainedWire `json:"retained,omitempty"`
+	Erased         []searchCacheErasedWire   `json:"erased,omitempty"`
+	ErasedOverflow bool                      `json:"erased_overflow,omitempty"`
+}
+
+// One erasure mask of the holdings record.
+type searchCacheErasedWire struct {
+	Key     string `json:"key"`
+	Erase   bool   `json:"erase,omitempty"`
+	Through uint64 `json:"through,omitempty"`
+	Epoch   uint64 `json:"epoch,omitempty"`
 }
 
 // One file of the holdings record.
@@ -286,6 +316,9 @@ type SearchCache struct {
 	// decoded index state, within Search.MemoryByteCount, and version-table pages within VersionCacheByteCount
 	decoded      *searchDecodedCache
 	versionPages *searchDecodedCache
+	// what a deletion reaches beside the cache's files, state_search_delete.go's hook sets, held as any so this file,
+	// which every leg links, names none of their types
+	deleteHooks atomic.Value
 
 	// one mutation at a time: a put, a removal, an eviction
 	operationLock sync.Mutex
@@ -324,7 +357,7 @@ func NewSearchCache(ctx context.Context, store SidecarStore, settings *SidecarSe
 	}
 	if settings.CacheByteCount < 0 || settings.MemoryByteCount <= 0 || settings.VersionCacheByteCount <= 0 ||
 		settings.MemoryByteCount < settings.VersionCacheByteCount || settings.CacheHoldingsByteCount <= 0 ||
-		settings.CacheMetaByteCount <= 0 {
+		settings.CacheMetaByteCount <= 0 || settings.EraseMaskCount <= 0 {
 		return nil, fmt.Errorf("%w: the search settings' bounds", ErrSearchCacheArgs)
 	}
 	self := &SearchCache{
@@ -524,6 +557,19 @@ func (self *SearchCache) loadRefWithLock(repoId Id, refId Id) (*SearchCacheRef, 
 		for _, retained := range wire.Retained {
 			ref.Retained = append(ref.Retained, retained.retained())
 		}
+		ref.ErasedOverflow = wire.ErasedOverflow
+		for _, erased := range wire.Erased {
+			key, err := hex.DecodeString(erased.Key)
+			if err != nil || len(key) != indexIdByteCount {
+				// a mask that does not read could unmask an erased document: the ref masks everything instead
+				ref.ErasedOverflow = true
+				continue
+			}
+			ref.Erased = append(ref.Erased, SearchCacheErased{
+				Key: [indexIdByteCount]byte(key), Erase: erased.Erase, Through: erased.Through, Epoch: erased.Epoch,
+			})
+		}
+		slices.SortFunc(ref.Erased, func(a SearchCacheErased, b SearchCacheErased) int { return bytes.Compare(a.Key[:], b.Key[:]) })
 	case errors.Is(err, ErrSidecarStoreAbsent):
 	case errors.Is(err, ErrSidecarStoreFailed):
 		self.log.Warningf("[search]a ref's cache record failed: dropped")
@@ -542,10 +588,10 @@ func (self *SearchCache) loadRefWithLock(repoId Id, refId Id) (*SearchCacheRef, 
 // Writes a ref's holdings record, or removes it once the ref holds nothing.
 func (self *SearchCache) storeRefWithLock(ref *SearchCacheRef) error {
 	name := searchCacheRefName(ref.RepoId, ref.RefId) + "/" + searchCacheHoldingsName
-	if ref.RefVersion == 0 && len(ref.Files) == 0 && len(ref.Retained) == 0 {
+	if ref.holdsNothing() {
 		return self.removeCounted(name)
 	}
-	wire := &searchCacheHoldingsWire{Version: searchCacheHoldingsVer, RefVersion: ref.RefVersion}
+	wire := &searchCacheHoldingsWire{Version: searchCacheHoldingsVer, RefVersion: ref.RefVersion, ErasedOverflow: ref.ErasedOverflow}
 	for _, file := range ref.Files {
 		fileWire := searchCacheFileWire{
 			Path:     file.Key.Path,
@@ -566,11 +612,23 @@ func (self *SearchCache) storeRefWithLock(ref *SearchCacheRef) error {
 	for _, retained := range ref.Retained {
 		wire.Retained = append(wire.Retained, retainedWireOf(retained))
 	}
+	for _, erased := range ref.Erased {
+		wire.Erased = append(wire.Erased, searchCacheErasedWire{
+			Key: hex.EncodeToString(erased.Key[:]), Erase: erased.Erase, Through: erased.Through, Epoch: erased.Epoch,
+		})
+	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
 		return err
 	}
 	return self.writeSmall(name, encoded, true)
+}
+
+// Whether the ref's holdings record holds nothing: no verified version, no file, no retained bucket and no erasure mask,
+// so it is not kept.
+func (self *SearchCacheRef) holdsNothing() bool {
+	return self.RefVersion == 0 && len(self.Files) == 0 && len(self.Retained) == 0 && len(self.Erased) == 0 &&
+		!self.ErasedOverflow
 }
 
 // A small sealed file's plaintext, at most maxByteCount.
@@ -917,12 +975,13 @@ func (self *SearchCache) Ref(repoId Id, refId Id) (*SearchCacheRef, error) {
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if ref.RefVersion == 0 && len(ref.Files) == 0 && len(ref.Retained) == 0 {
+	if ref.holdsNothing() {
 		return nil, nil
 	}
 	copied := *ref
 	copied.Files = slices.Clone(ref.Files)
 	copied.Retained = slices.Clone(ref.Retained)
+	copied.Erased = slices.Clone(ref.Erased)
 	return &copied, nil
 }
 
