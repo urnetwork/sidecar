@@ -3,8 +3,10 @@
 // authorization log (socket_suite_test.go), with tls/'s ValidateListen registered over a fake listen facts source; and
 // in front of it tlsedge, on the Net's host, serving loopback 443 behind its PROXY listener, its label map a
 // FakeTlsEdgeStore holding the network's label, every Find it makes going through the sockets engine's own route as an
-// urnetwork-edge platform client. Each component's own rows stay in its task (namespace_tls_test.go's refusal table,
-// tlsedge's alert table, the front's FS-34 and audiences); what is here is what only the composition shows:
+// urnetwork-edge platform client; and certs on Pebble for the device's certificate. The privacy harness's TLS canaries
+// and the revocation suite run on the same world (tls_privacy_test.go, tls_revocation_test.go). Each component's own
+// rows stay in its task (namespace_tls_test.go's refusal table, tlsedge's alert table, the front's FS-34 and
+// audiences); what is here is what only the composition shows:
 //
 //   - S5's registration half: the publish grant §8's evaluator gives a member device for tls/443/blog, under each §13.7
 //     audience, admits the registration; at Community a grant of 8 days is refused and one of 7 passes, the 8-day grant
@@ -24,9 +26,11 @@
 // Where the composition stops: the edge's stream to the listener is an in-memory pair, and the listener's end is a
 // TLS server on the device's key and chain, not §13.7's front over a SocketListener. sidecartest has no edge-role
 // connect client on its exchange yet, so no test here runs SocketEdgeDialer's open, §9.6's admission or the front
-// (FS-34's front half is TestTlsFrontZeroBytesBeforeAuthentication's). Nothing sleeps: loads, kills and connection
-// ends are awaited by the engines' own counts, time is the Net's FakeClock, and a real timer is only a guard that
-// fails a hung test.
+// (FS-34's front half is TestTlsFrontZeroBytesBeforeAuthentication's). The production gate refuses every edge tls/
+// Find until SOCK-M5-07 wires ACL-M5-01's view, so tlsSuiteEdgeGate answers that one check as §8.10 has it, any
+// audience passing (question tls-m5-22-edge-find-audience). Nothing sleeps: loads, kills, sweeps and connection ends
+// are awaited by the engines' own counts, time is the Net's FakeClock, and a real timer is only a guard that fails a
+// hung test.
 
 package sidecartest_test
 
@@ -749,30 +753,41 @@ func (self *tlsSuiteRecordingListener) Accept() (net.Conn, error) {
 // The world with tlsedge in front of its sockets engine.
 type tlsSuiteEdge struct {
 	*tlsSuiteWorld
-	store    *sidecartest.FakeTlsEdgeStore
-	service  *tlsedgeservice.TlsEdgeService
-	dialer   *tlsSuiteDialer
-	label    string
-	address  string
-	accepted chan *tlsSuiteVisitorConn
+	// tlsedge's store: the label map, network_tls_suspension and the connection records
+	edgeStore *sidecartest.FakeTlsEdgeStore
+	service   *tlsedgeservice.TlsEdgeService
+	dialer    *tlsSuiteDialer
+	label     string
+	address   string
+	accepted  chan *tlsSuiteVisitorConn
+	// the listener's newest page's set_version
+	setVersion uint64
 }
 
 // The engine's process name on the Net.
 const tlsSuiteEdgeEngine = "tlsedge"
 
-// A world whose network publishes tls/443/blog to the public for a day, its listener's lease registered, and tlsedge
-// ready in front of it: the network's label in the map, a balance and Community's caps for meter tls, the tlsedge gate
-// open to it, and the {tes_*}n family on the host's one subscriber, handing each event to both engines as
-// server/cli/tlsedge and server/cli/sockets each do.
+// A world whose network publishes tls/443/blog to the public for a day, its listener's lease registered, with tlsedge
+// in front of it (newTlsSuiteEdgeBare).
 func newTlsSuiteEdge(t *testing.T) *tlsSuiteEdge {
+	t.Helper()
+	edge := newTlsSuiteEdgeBare(t)
+	edge.publish("blog")
+	return edge
+}
+
+// A world with tlsedge ready in front of it and nothing published: the network's label in the map, a balance and
+// Community's caps for meter tls, the tlsedge gate open to it, and the {tes_*}n family on the host's one subscriber,
+// handing each event to both engines as server/cli/tlsedge and server/cli/sockets each do.
+func newTlsSuiteEdgeBare(t *testing.T) *tlsSuiteEdge {
 	t.Helper()
 	world := newTlsSuiteWorld(t)
 	edge := &tlsSuiteEdge{
 		tlsSuiteWorld: world,
-		store:         sidecartest.NewFakeTlsEdgeStore(nil),
+		edgeStore:     sidecartest.NewFakeTlsEdgeStore(nil),
 		accepted:      make(chan *tlsSuiteVisitorConn, 64),
 	}
-	label, err := edge.store.AddLabel(tlsSuiteRoot, sidecar.Id(world.networkId))
+	label, err := edge.edgeStore.AddLabel(tlsSuiteRoot, sidecar.Id(world.networkId))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -805,7 +820,7 @@ func newTlsSuiteEdge(t *testing.T) *tlsSuiteEdge {
 		ExpiresAt: now.Add(48 * time.Hour),
 	})
 	engine, err := world.net.AddEngine(tlsSuiteEdgeEngine, func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
-		return tlsedgeservice.NewTlsEdgeService(ctx, host, edge.store, edge.dialer, settings)
+		return tlsedgeservice.NewTlsEdgeService(ctx, host, edge.edgeStore, edge.dialer, settings)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -853,12 +868,23 @@ func newTlsSuiteEdge(t *testing.T) *tlsSuiteEdge {
 		proxyListener.Close()
 		<-served
 	})
-
-	world.savePublish("public", now.Add(24*time.Hour))
-	if status := world.status(world.listener, 1, world.edgeRegistration(world.listener, "tls/443/blog")); status != sidecar.SocketRegistrationStatusOk {
-		t.Fatalf("the listener's tls/443/blog answered %s", status)
-	}
 	return edge
+}
+
+// Publishes tls/443/<host> to the public for a day and registers the listener's lease of it.
+func (self *tlsSuiteEdge) publish(host string) {
+	self.t.Helper()
+	self.savePublish("public", self.net.Clock().Now().Add(24*time.Hour), host)
+	if status := self.nextStatus("tls/443/" + host); status != sidecar.SocketRegistrationStatusOk {
+		self.t.Fatalf("the listener's tls/443/%s answered %s", host, status)
+	}
+}
+
+// The status the listener's next whole-set page gives its one registration of name.
+func (self *tlsSuiteEdge) nextStatus(name string) sidecar.SocketRegistrationStatus {
+	self.t.Helper()
+	self.setVersion += 1
+	return self.status(self.listener, self.setVersion, self.edgeRegistration(self.listener, name))
 }
 
 // The name a visitor reaches host of the network by.
@@ -936,7 +962,7 @@ func (self *tlsSuiteEdge) awaitEnded(count uint64) {
 // event reaches both engines through the host's subscriber. Returns once both have taken it in.
 func (self *tlsSuiteEdge) kill(host string, until time.Time) {
 	self.t.Helper()
-	self.store.SetSuspension(&sidecar.TlsSuspendArgs{NetworkId: sidecar.Id(self.networkId), Host: host, Reason: "case", Until: until})
+	self.edgeStore.SetSuspension(&sidecar.TlsSuspendArgs{NetworkId: sidecar.Id(self.networkId), Host: host, Reason: "case", Until: until})
 	value, err := json.Marshal(&sidecar.TlsKillEntry{Host: host, Reason: "case", Until: until})
 	if err != nil {
 		self.t.Fatal(err)
@@ -949,7 +975,7 @@ func (self *tlsSuiteEdge) kill(host string, until time.Time) {
 // Lifts host's kill: the row, then the field and its trigger.
 func (self *tlsSuiteEdge) lift(host string) {
 	self.t.Helper()
-	self.store.LiftSuspension(sidecar.Id(self.networkId), host)
+	self.edgeStore.LiftSuspension(sidecar.Id(self.networkId), host)
 	self.writeKill("tls/443/"+host, false, func(ctx context.Context, redis sidecar.Redis, key string) error {
 		return redis.HashDelete(ctx, key, []string{host})
 	})
@@ -1026,6 +1052,7 @@ type tlsSuiteCerts struct {
 	t       *testing.T
 	ctx     context.Context
 	pebble  *sidecartest.Pebble
+	host    *sidecartest.FakeHost
 	store   *sidecartest.FakeCertsStore
 	service *certsservice.CertsService
 }
@@ -1079,7 +1106,7 @@ func newTlsSuiteCerts(t *testing.T) *tlsSuiteCerts {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &tlsSuiteCerts{t: t, ctx: ctx, pebble: pebble, store: store, service: service}
+	return &tlsSuiteCerts{t: t, ctx: ctx, pebble: pebble, host: host, store: store, service: service}
 }
 
 // A device's key for the network's set: its own P-256 key, which never leaves it, and the chain certs ordered from
@@ -1349,7 +1376,7 @@ func TestTlsSuiteRouteProbeMakesNoFind(t *testing.T) {
 		t.Fatal("a route probe's hello had a ticket signed")
 	}
 	edge.service.Close()
-	if records := edge.store.Records(); len(records) != 0 {
+	if records := edge.edgeStore.Records(); len(records) != 0 {
 		t.Fatalf("a route probe left %d records", len(records))
 	}
 }
