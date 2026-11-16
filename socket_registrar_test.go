@@ -1508,3 +1508,43 @@ func TestSocketRegistrationsRoute(t *testing.T) {
 		t.Errorf("no args: %v", err)
 	}
 }
+
+// 17.2.10's UpdateTls on the registrar: a tls/ entry's ALPN ids, certified names and ACME names change under its listen
+// id with the claim it had, the set goes at once, and setting what is set changes nothing; another namespace's entry
+// takes none.
+func TestSocketRegistrarTlsListsGoAtOnceUnderTheSameListenId(t *testing.T) {
+	state := newTestSocketState(nil, 0.5)
+	signer := newTestSocketSigner("a")
+	entry := addTestSocketEntry(t, state, signer, nil, testSocketArgs("tls/443/blog"), testSocketNow)
+	calls := runTestSocketRound(t, state, testSocketNow)
+	before := calls[0].args.Registrations[0]
+	if len(before.CertifiedNames) != 0 || len(before.AcmeNames) != 0 {
+		t.Fatalf("a new entry lists %v and %v", before.CertifiedNames, before.AcmeNames)
+	}
+	alpns := []string{"h2", "http/1.1", "acme-tls/1"}
+	certifiedNames := []string{"app.customer.example"}
+	acmeNames := []*SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 7}}
+	if !state.setTls(entry.listenId, alpns, certifiedNames, acmeNames) {
+		t.Fatal("the lists did not change")
+	}
+	if state.setTls(entry.listenId, alpns, certifiedNames, []*SocketAcmeName{{Name: "app.customer.example", ClaimSeq: 7}}) {
+		t.Error("the same lists changed the set")
+	}
+	now := testSocketNow.Add(1 * time.Second)
+	calls = runTestSocketRound(t, state, now)
+	if len(calls) != 1 || len(calls[0].args.Registrations) != 1 {
+		t.Fatalf("the change went as %d calls", len(calls))
+	}
+	after := calls[0].args.Registrations[0]
+	if *after.ListenId != *before.ListenId || !bytes.Equal(after.Claim, before.Claim) {
+		t.Error("the lists moved the entry's listen id or claim")
+	}
+	if !slices.Equal(after.Alpn, alpns) || !slices.Equal(after.CertifiedNames, certifiedNames) || len(after.AcmeNames) != 1 ||
+		*after.AcmeNames[0] != *acmeNames[0] {
+		t.Fatalf("the entry went as %v, %v, %v", after.Alpn, after.CertifiedNames, after.AcmeNames)
+	}
+	other := addTestSocketEntry(t, state, signer, nil, testSocketArgs("smtp/25/mx"), now)
+	if state.setTls(other.listenId, alpns, certifiedNames, acmeNames) {
+		t.Error("an smtp/ entry took tls/ lists")
+	}
+}

@@ -576,7 +576,11 @@ type tlsFrontFixture struct {
 	grantExpireMillis uint64
 	// where reach receipts go; nil writes none
 	record RecordWriter
-	front  *TlsFront
+	// the custom names the front serves (17.2.10), nil for none; with one, each update the front sends lands in
+	// updates
+	custom  TlsFrontCustomSource
+	updates chan *TlsFrontUpdate
+	front   *TlsFront
 }
 
 // A fixture whose front serves tls/443/app over http to an http backend, its grant public, configure changing any
@@ -625,6 +629,14 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 	if configure != nil {
 		configure(fixture)
 	}
+	var updateTls func(update *TlsFrontUpdate) error
+	if fixture.custom != nil {
+		fixture.updates = make(chan *TlsFrontUpdate, 64)
+		updateTls = func(update *TlsFrontUpdate) error {
+			fixture.updates <- update
+			return nil
+		}
+	}
 	front, err := NewTlsFront(context.Background(), &TlsFrontArgs{
 		Settings:  fixture.settings,
 		Target:    fixture.target,
@@ -646,9 +658,11 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 		AlpnChanged: func() {
 			fixture.alpnChanges <- struct{}{}
 		},
-		Record: fixture.record,
-		Clock:  clock,
-		Log:    fixture.log,
+		Record:    fixture.record,
+		Custom:    fixture.custom,
+		UpdateTls: updateTls,
+		Clock:     clock,
+		Log:       fixture.log,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1135,5 +1149,173 @@ func TestTlsFrontZeroBytesBeforeAuthentication(t *testing.T) {
 	acmeConn, err := fixture.dialTls(tlsFrontTestClientConfig(tlsAlpnAcme), nil)
 	if err != nil || acmeConn.ConnectionState().NegotiatedProtocol != tlsAlpnAcme {
 		t.Errorf("TLS-ALPN-01: %v", err)
+	}
+}
+
+// A custom source a test fills: its entries, and a channel that closes at each change.
+type testTlsFrontCustomSource struct {
+	stateLock sync.Mutex
+	entries   []*TlsFrontCustomCertificate
+	changed   chan struct{}
+}
+
+func newTestTlsFrontCustomSource(entries ...*TlsFrontCustomCertificate) *testTlsFrontCustomSource {
+	return &testTlsFrontCustomSource{entries: entries, changed: make(chan struct{})}
+}
+
+// See TlsFrontCustomSource.
+func (self *testTlsFrontCustomSource) CustomCertificates() []*TlsFrontCustomCertificate {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.entries)
+}
+
+// See TlsFrontCustomSource.
+func (self *testTlsFrontCustomSource) CustomChanged() <-chan struct{} {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.changed
+}
+
+// Replaces the entries and signals the change.
+func (self *testTlsFrontCustomSource) set(entries ...*TlsFrontCustomCertificate) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.entries = entries
+	close(self.changed)
+	self.changed = make(chan struct{})
+}
+
+// The custom host the tests serve, and a certificate for it on a key of its own.
+const tlsFrontTestCustomName = "app.customer.example"
+
+func tlsFrontTestCustomCertificate(t *testing.T, clock Clock, names ...string) *tls.Certificate {
+	t.Helper()
+	key, err := newTlsDeviceKey(clock.Now(), TlsKeyRotationNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := newTlsSelfSignedCertificate(key, names, clock.Now(), DefaultSidecarTlsSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certificate
+}
+
+// A visitor's handshake for serverName on a fresh stream whose TlsEdgeOpen names it.
+func (self *tlsFrontFixture) dialName(serverName string, nextProtos ...string) (*tls.Conn, error) {
+	self.t.Helper()
+	config := tlsFrontTestClientConfig(nextProtos...)
+	config.ServerName = serverName
+	return self.dialTls(config, func(ticket *protocol.SocketTicket, open *protocol.TlsEdgeOpen) []byte {
+		open.ServerName = serverName
+		return nil
+	})
+}
+
+// Waits for the front's next update.
+func (self *tlsFrontFixture) nextUpdate() *TlsFrontUpdate {
+	self.t.Helper()
+	select {
+	case update := <-self.updates:
+		return update
+	case <-time.After(tlsFrontTestGuard):
+		self.t.Fatal("no update")
+		return nil
+	}
+}
+
+// 17.2.10: a custom name with an installed certificate is served on it; one with none, or past its not_after, fails the
+// handshake with unrecognized_name and never shows the self-signed leaf or the network's certificate.
+func TestTlsFrontServesACustomNameOnlyOnItsOwnCertificate(t *testing.T) {
+	var source *testTlsFrontCustomSource
+	var custom *tls.Certificate
+	fixture := newTlsFrontFixture(t, func(fixture *tlsFrontFixture) {
+		custom = tlsFrontTestCustomCertificate(t, fixture.clock, tlsFrontTestCustomName)
+		source = newTestTlsFrontCustomSource(&TlsFrontCustomCertificate{
+			Name:        tlsFrontTestCustomName,
+			Certificate: custom,
+			NotAfter:    fixture.clock.Now().Add(24 * time.Hour),
+		})
+		fixture.custom = source
+	})
+	conn, err := fixture.dialName(tlsFrontTestCustomName, tlsAlpnHttp11)
+	if err != nil {
+		t.Fatalf("an installed custom name: %v", err)
+	}
+	if presented := conn.ConnectionState().PeerCertificates; len(presented) == 0 || !slices.Equal(presented[0].Raw, custom.Leaf.Raw) {
+		t.Fatal("the front presented another certificate for the custom name")
+	}
+	conn.Close()
+	// none installed: unrecognized_name, and nothing presented
+	source.set(&TlsFrontCustomCertificate{Name: tlsFrontTestCustomName})
+	if _, err := fixture.dialName(tlsFrontTestCustomName, tlsAlpnHttp11); !tlsFrontTestAlert(err, "unrecognized name") {
+		t.Fatalf("a custom name with no certificate: %v", err)
+	}
+	// past its not_after: the same
+	source.set(&TlsFrontCustomCertificate{Name: tlsFrontTestCustomName, Certificate: custom, NotAfter: fixture.clock.Now()})
+	if _, err := fixture.dialName(tlsFrontTestCustomName, tlsAlpnHttp11); !tlsFrontTestAlert(err, "unrecognized name") {
+		t.Fatalf("an expired custom name: %v", err)
+	}
+	// a name the source does not list is no name of this endpoint's
+	if _, err := fixture.dialName("other.customer.example", tlsAlpnHttp11); err == nil {
+		t.Fatal("a hello for an unlisted custom name completed")
+	}
+	// the network's own names keep their certificate
+	if _, err := fixture.dialTls(tlsFrontTestClientConfig(tlsAlpnHttp11), nil); err != nil {
+		t.Fatalf("the network's name: %v", err)
+	}
+}
+
+// 17.2.10: the front sends its lists at start and at each change: the mode's ALPN ids, a custom name from install until
+// not_after less CertifiedMargin or until the source drops it, and a claimed challenge's name with its claim.
+func TestTlsFrontKeepsItsRegistrationsListsInStep(t *testing.T) {
+	var source *testTlsFrontCustomSource
+	var notAfter time.Time
+	var custom *tls.Certificate
+	fixture := newTlsFrontFixture(t, func(fixture *tlsFrontFixture) {
+		custom = tlsFrontTestCustomCertificate(t, fixture.clock, tlsFrontTestCustomName)
+		notAfter = fixture.clock.Now().Add(3 * time.Hour)
+		source = newTestTlsFrontCustomSource(&TlsFrontCustomCertificate{Name: tlsFrontTestCustomName, Certificate: custom, NotAfter: notAfter})
+		fixture.custom = source
+	})
+	update := fixture.nextUpdate()
+	if !slices.Equal(update.Alpn, []string{tlsAlpnH2, tlsAlpnHttp11}) || !slices.Equal(update.CertifiedNames, []string{tlsFrontTestCustomName}) ||
+		len(update.AcmeNames) != 0 {
+		t.Fatalf("the first update %+v", update)
+	}
+	// a claimed challenge for the custom name joins the ACME names and acme-tls/1 the ALPN ids
+	if err := fixture.front.SetCustomAlpnChallenge(tlsFrontTestCustomName, "key-authorization", fixture.clock.Now().Add(time.Hour), 7); err != nil {
+		t.Fatal(err)
+	}
+	update = fixture.nextUpdate()
+	if !slices.Contains(update.Alpn, tlsAlpnAcme) || len(update.AcmeNames) != 1 || *update.AcmeNames[0] != (SocketAcmeName{Name: tlsFrontTestCustomName, ClaimSeq: 7}) {
+		t.Fatalf("after the challenge %+v", update)
+	}
+	if err := fixture.front.SetCustomAlpnChallenge("other.customer.example", "key-authorization", fixture.clock.Now().Add(time.Hour), 7); err == nil {
+		t.Fatal("a challenge for a name the source does not list")
+	}
+	fixture.front.ClearAlpnChallenge(tlsFrontTestCustomName)
+	update = fixture.nextUpdate()
+	if slices.Contains(update.Alpn, tlsAlpnAcme) || len(update.AcmeNames) != 0 {
+		t.Fatalf("after the challenge ended %+v", update)
+	}
+	// the clock reaches the margin: the name leaves the list, while the certificate still serves
+	fixture.clock.advance(notAfter.Sub(fixture.clock.Now()) - fixture.settings.CertifiedMargin)
+	update = fixture.nextUpdate()
+	if len(update.CertifiedNames) != 0 {
+		t.Fatalf("inside the margin the name is still listed: %+v", update)
+	}
+	if _, err := fixture.dialName(tlsFrontTestCustomName, tlsAlpnHttp11); err != nil {
+		t.Fatalf("inside the margin the certificate no longer serves: %v", err)
+	}
+	// a renewal installs a later certificate: listed again; then the row changes and the source drops it: not listed
+	source.set(&TlsFrontCustomCertificate{Name: tlsFrontTestCustomName, Certificate: custom, NotAfter: notAfter.Add(30 * 24 * time.Hour)})
+	if update = fixture.nextUpdate(); !slices.Equal(update.CertifiedNames, []string{tlsFrontTestCustomName}) {
+		t.Fatalf("after the renewal %+v", update)
+	}
+	source.set()
+	if update = fixture.nextUpdate(); len(update.CertifiedNames) != 0 {
+		t.Fatalf("after the row changed %+v", update)
 	}
 }

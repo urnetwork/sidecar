@@ -236,6 +236,9 @@ type DropSettings struct {
 	PreviewListedCount uint64
 	// How long a GET .../drops answer is served from this process's cache: 5 s, as repo/ is.
 	TableCacheTtl time.Duration
+	// The usage window a job's stored-byte batch starts in, its start the checkpoint's time truncated to it: §20.6's
+	// 60 s, the usage batcher's WindowTimeout.
+	UsageWindowTimeout time.Duration
 }
 
 // §11.13's and DESIGN-DETAILS 10.2.2's values. A fresh value each call.
@@ -269,6 +272,7 @@ func DefaultDropSettings() *DropSettings {
 		PreviewPathCount:        1024,
 		PreviewListedCount:      1048576,
 		TableCacheTtl:           5 * time.Second,
+		UsageWindowTimeout:      sidecar.DefaultQuotaUsageBatcherSettings().WindowTimeout,
 	}
 }
 
@@ -284,7 +288,8 @@ func (self *DropSettings) Validate() error {
 	case self.LeaseTime <= self.LeaseMargin || self.LeaseLapse <= 0 || self.LeaseMargin <= 0 || self.DeleteDeadlineMargin <= 0 ||
 		self.LeaseMargin <= self.DeleteDeadlineMargin:
 		return fmt.Errorf("%w: a lease of %s with a margin of %s", ErrDropSettings, self.LeaseTime, self.LeaseMargin)
-	case self.CheckpointInterval <= 0 || self.HorizonRetryInterval <= 0 || self.HorizonRetryLag <= 0 || self.PauseRetryInterval <= 0:
+	case self.CheckpointInterval <= 0 || self.HorizonRetryInterval <= 0 || self.HorizonRetryLag <= 0 || self.PauseRetryInterval <= 0 ||
+		self.UsageWindowTimeout <= 0:
 		return fmt.Errorf("%w: an interval that is not positive", ErrDropSettings)
 	case self.TableByteCount < dropTableHeaderByteCount+dropTableJobByteCount+dropTableTrailerByteCount ||
 		self.TableAdmitByteCount <= 0 || self.TableByteCount < self.TableAdmitByteCount:

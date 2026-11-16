@@ -137,7 +137,8 @@ func TestFilterKeepsEachFitListener(t *testing.T) {
 		{name: "no least version", fit: func(c *SocketCandidate) { c.Version = 0 }},
 		{name: "a newer version", fit: func(c *SocketCandidate) { c.Version = 7 }, request: func(r *SocketPickRequest) { r.MinVersion = 2 }},
 		{name: "the one alpn", fit: func(c *SocketCandidate) { c.Alpns = []string{"h2"} }, request: func(r *SocketPickRequest) { r.Alpns = []string{"h2"} }},
-		{name: "one offered alpn of several", fit: func(c *SocketCandidate) { c.Alpns = []string{"http/1.1", "h2"} }, request: func(r *SocketPickRequest) { r.Alpns = []string{"acme-tls/1", "h2"} }},
+		// acme-tls/1 among the offered takes 17.2.10's ACME route, so another id stands for the one not served
+		{name: "one offered alpn of several", fit: func(c *SocketCandidate) { c.Alpns = []string{"http/1.1", "h2"} }, request: func(r *SocketPickRequest) { r.Alpns = []string{"mqtt", "h2"} }},
 		{name: "no alpn offered to a listener serving some", fit: func(c *SocketCandidate) { c.Alpns = []string{"h2"} }},
 		{name: "no alpn offered to a listener serving none"},
 		{name: "est one below max_streams", fit: func(c *SocketCandidate) { testLoad(c, 255) }},
@@ -644,5 +645,143 @@ func TestSettingsMoveThePick(t *testing.T) {
 	}
 	if got := SocketEstimate(listener, testNowMillis+5, settings); got != 0 {
 		t.Errorf("est %d", got)
+	}
+}
+
+// A tls/ listener of the default shape, serving h2 and http/1.1, certified for certified and claiming acme.
+func testTlsCandidate(index int, certified []string, acme map[string]uint64) *SocketCandidate {
+	candidate := testCandidate(index)
+	candidate.Protocol = "tls"
+	candidate.Alpns = []string{"h2", "http/1.1"}
+	candidate.CertifiedNames = certified
+	candidate.AcmeNames = acme
+	return candidate
+}
+
+// DESIGN-DETAILS 17.2.10's table: acme by custom by an acme-only listener by a visitor with no ALPN. An acme-tls/1 Find
+// for a custom name takes the claim holder alone, whatever its serving state; one for a network name finds no
+// listener; a visitor never reaches an acme-only listener; with a custom name only certified listeners match; with
+// neither, exactly today's rule.
+func TestPickSocketListenersRoutesByCertifiedNamesAndClaims(t *testing.T) {
+	host := "app.customer.example"
+	acmeOnly := func(index int, acme map[string]uint64) *SocketCandidate {
+		candidate := testTlsCandidate(index, nil, acme)
+		candidate.Alpns = []string{"acme-tls/1"}
+		return candidate
+	}
+	cases := []struct {
+		name       string
+		candidates []*SocketCandidate
+		alpns      []string
+		serverName string
+		outcome    SocketPickOutcome
+		primary    int
+		backup     int
+	}{
+		{name: "acme, custom: the claim holder, not serving and draining", candidates: []*SocketCandidate{
+			testTlsCandidate(1, []string{host}, nil),
+			func() *SocketCandidate {
+				candidate := acmeOnly(2, map[string]uint64{host: 4})
+				candidate.Serving = false
+				candidate.Draining = true
+				return candidate
+			}(),
+		}, alpns: []string{"acme-tls/1"}, serverName: host, outcome: SocketPickFound, primary: 2, backup: -1},
+		{name: "acme among other ids, custom: still the ACME route", candidates: []*SocketCandidate{
+			testTlsCandidate(1, []string{host}, nil),
+			testTlsCandidate(2, nil, map[string]uint64{host: 1}),
+		}, alpns: []string{"h2", "acme-tls/1"}, serverName: host, outcome: SocketPickFound, primary: 2, backup: -1},
+		{name: "acme, custom, no claim", candidates: []*SocketCandidate{
+			testTlsCandidate(1, []string{host}, nil),
+			acmeOnly(2, map[string]uint64{"www.customer.example": 3}),
+		}, alpns: []string{"acme-tls/1"}, serverName: host, outcome: SocketPickNoListener, primary: -1, backup: -1},
+		{name: "acme, a network name", candidates: []*SocketCandidate{
+			acmeOnly(1, map[string]uint64{host: 3}),
+			testTlsCandidate(2, nil, nil),
+		}, alpns: []string{"acme-tls/1"}, outcome: SocketPickNoListener, primary: -1, backup: -1},
+		{name: "acme, custom, a lapsed lease", candidates: []*SocketCandidate{
+			func() *SocketCandidate {
+				candidate := acmeOnly(1, map[string]uint64{host: 9})
+				candidate.LeaseExpireMillis = testNowMillis
+				return candidate
+			}(),
+			acmeOnly(2, map[string]uint64{host: 2}),
+		}, alpns: []string{"acme-tls/1"}, serverName: host, outcome: SocketPickFound, primary: 2, backup: -1},
+		{name: "visitor, custom: certified alone", candidates: []*SocketCandidate{
+			testTlsCandidate(1, nil, nil),
+			testTlsCandidate(2, []string{"www.customer.example", host}, nil),
+			testTlsCandidate(3, []string{"www.customer.example"}, nil),
+		}, serverName: host, outcome: SocketPickFound, primary: 2, backup: -1},
+		{name: "visitor, custom: none certified", candidates: []*SocketCandidate{
+			testTlsCandidate(1, nil, map[string]uint64{host: 5}),
+			testTlsCandidate(2, []string{"www.customer.example"}, nil),
+		}, serverName: host, outcome: SocketPickNoListener, primary: -1, backup: -1},
+		{name: "visitor with no ALPN, an acme-only listener and a plain one", candidates: []*SocketCandidate{
+			acmeOnly(1, map[string]uint64{host: 5}),
+			testTlsCandidate(2, nil, nil),
+		}, outcome: SocketPickFound, primary: 2, backup: -1},
+		{name: "visitor with no ALPN, acme-only listeners alone", candidates: []*SocketCandidate{
+			acmeOnly(1, map[string]uint64{host: 5}),
+			acmeOnly(2, nil),
+		}, outcome: SocketPickNoListener, primary: -1, backup: -1},
+		{name: "visitor offering h2, custom, an acme-only listener certified", candidates: []*SocketCandidate{
+			func() *SocketCandidate {
+				candidate := acmeOnly(1, nil)
+				candidate.CertifiedNames = []string{host}
+				return candidate
+			}(),
+		}, alpns: []string{"h2"}, serverName: host, outcome: SocketPickNoListener, primary: -1, backup: -1},
+	}
+	for _, c := range cases {
+		request := testRequest()
+		request.Alpns = c.alpns
+		request.ServerName = c.serverName
+		testWantPick(t, c.name, PickSocketListeners(c.candidates, request, DefaultSocketSchedulerSettings()), c.outcome, c.primary, c.backup)
+	}
+}
+
+// The ACME pick takes the highest claim, the lowest client id on a tie, and never a backup; est, weight, ejection and
+// a dialer's exclusion count for nothing.
+func TestPickSocketListenersAcmeTakesTheNewestClaim(t *testing.T) {
+	host := "app.customer.example"
+	settings := DefaultSocketSchedulerSettings()
+	full := testLoad(testTlsCandidate(3, nil, map[string]uint64{host: 12}), 256)
+	full.Weight = 1
+	full.Ejection = SocketEjectionState{ConsecutiveCount: 1, StartMillis: testNowMillis}
+	full.DialerClientIdShares[testDialerId] = &SocketDialerShare{Exclusion: SocketEjectionState{ConsecutiveCount: 1, StartMillis: testNowMillis}}
+	candidates := []*SocketCandidate{
+		testTlsCandidate(1, nil, map[string]uint64{host: 11}),
+		full,
+		testTlsCandidate(2, nil, map[string]uint64{host: 7}),
+	}
+	request := testRequest()
+	request.Alpns = []string{"acme-tls/1"}
+	request.ServerName = host
+	testWantPick(t, "the highest claim", PickSocketListeners(candidates, request, settings), SocketPickFound, 3, -1)
+	tied := []*SocketCandidate{
+		testTlsCandidate(5, nil, map[string]uint64{host: 12}),
+		testTlsCandidate(4, nil, map[string]uint64{host: 12}),
+		testTlsCandidate(6, nil, map[string]uint64{host: 2}),
+	}
+	testWantPick(t, "a tie", PickSocketListeners(tied, request, settings), SocketPickFound, 4, -1)
+}
+
+// A registration with neither list and a Find with no server name pick exactly as before 17.2.10, on the same draws.
+func TestPickSocketListenersWithNoNamesIsUnchanged(t *testing.T) {
+	settings := DefaultSocketSchedulerSettings()
+	for draw := range uint32(40) {
+		plain := []*SocketCandidate{testLoad(testCandidate(1), 3), testLoad(testCandidate(2), 9), testLoad(testCandidate(3), 0)}
+		listed := []*SocketCandidate{testLoad(testCandidate(1), 3), testLoad(testCandidate(2), 9), testLoad(testCandidate(3), 0)}
+		listed[0].CertifiedNames = []string{"app.customer.example"}
+		listed[1].AcmeNames = map[string]uint64{"app.customer.example": 3}
+		request := testRequest()
+		request.FirstDraw = draw * 977
+		request.SecondDraw = draw * 7919
+		want := PickSocketListeners(plain, request, settings)
+		got := PickSocketListeners(listed, request, settings)
+		if got.Outcome != want.Outcome || got.Primary.ListenerClientId != want.Primary.ListenerClientId ||
+			(got.Backup == nil) != (want.Backup == nil) || (got.Backup != nil && got.Backup.ListenerClientId != want.Backup.ListenerClientId) {
+			t.Fatalf("draw %d: the lists moved a Find with no server name", draw)
+		}
 	}
 }

@@ -13,7 +13,9 @@
 //	5  the proxy, under the check's pass: the front's own __Host-ur- cookies are stripped, as are every client-sent
 //	   Forwarded and X-Forwarded- header (Rewrite's rule); the visitor's address goes only as the service asked, a
 //	   Forwarded header or a PROXY v2 header on each target connection; the answer loses its Alt-Svc h3 entries,
-//	   since the edge carries no QUIC (D-TLS-10), and any Set-Cookie for the front's cookies
+//	   since the edge carries no QUIC (D-TLS-10), and any Set-Cookie for the front's cookies. On §13.9's system
+//	   publish the target's component handler answers in place of the proxy, under the same pass, the request
+//	   stripped alike and carrying no visitor address (TLS-M8-02)
 //
 // A WebSocket upgrade is a request like any other, so it passes only after the check, and the hijacked stream
 // carries bytes only after the target answered it. Each visitor connection has its own target transport, so target
@@ -169,7 +171,54 @@ func (self *tlsHttpFront) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		self.notice.serve(w, r)
 		return
 	}
-	self.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tlsAudiencePassKey{}, verdict.pass)))
+	passed := r.WithContext(context.WithValue(r.Context(), tlsAudiencePassKey{}, verdict.pass))
+	if handler := self.front.target.Handler; handler != nil {
+		self.serveHandler(w, passed, handler)
+		return
+	}
+	self.proxy.ServeHTTP(w, passed)
+}
+
+// §13.9's system publish: the component answers the request the check passed, as the proxy would have forwarded it
+// (the front's cookies, Forwarded and X-Forwarded- gone), and its answer loses Alt-Svc h3 and the front's cookies.
+func (self *tlsHttpFront) serveHandler(w http.ResponseWriter, r *http.Request, handler http.Handler) {
+	if tlsAudiencePassOf(r.Context()) == nil {
+		// no request reaches a target without its pass (FI-11)
+		tlsHttpAnswer(w, http.StatusForbidden)
+		return
+	}
+	inner := r.Clone(r.Context())
+	tlsHttpStripFrontCookies(inner.Header)
+	for name := range inner.Header {
+		if name == "Forwarded" || strings.HasPrefix(name, "X-Forwarded-") {
+			inner.Header.Del(name)
+		}
+	}
+	handler.ServeHTTP(&tlsHttpHandlerWriter{ResponseWriter: w}, inner)
+}
+
+// What a component's answer goes through: its headers lose Alt-Svc h3 and the front's cookies as they are written.
+type tlsHttpHandlerWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+// See http.ResponseWriter.
+func (self *tlsHttpHandlerWriter) WriteHeader(status int) {
+	if !self.wroteHeader {
+		self.wroteHeader = true
+		tlsHttpStripAltSvcH3(self.Header())
+		tlsHttpStripFrontSetCookies(self.Header())
+	}
+	self.ResponseWriter.WriteHeader(status)
+}
+
+// See http.ResponseWriter.
+func (self *tlsHttpHandlerWriter) Write(b []byte) (int, error) {
+	if !self.wroteHeader {
+		self.WriteHeader(http.StatusOK)
+	}
+	return self.ResponseWriter.Write(b)
 }
 
 // The front's own paths.

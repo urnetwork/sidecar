@@ -460,6 +460,60 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "custom-host maps with each custom host's CAA mode (strong or weak)",
 		list:     "custom-host maps with each custom host's state (pending, active, or withheld while a downgrade keeps a web host out of the map; §20.7, QD-840), CAA mode (strong or weak)",
 	},
+	{
+		// 17.2.16's list version, after v24's
+		question: "details-17-small-readings",
+		block:    "# metadata_list.yml v24;",
+		list:     "# metadata_list.yml v25;",
+	},
+	{
+		// 17.2.16: v25's line, after v24's
+		question: "details-17-small-readings",
+		block:    "# custom host's state, withheld among them, a web host a downgrade keeps out of the map and routing (§20.7).\n",
+		list:     "# custom host's state, withheld among them, a web host a downgrade keeps out of the map and routing (§20.7).\n# v25, updated 2026-11-15 for section 17 of DESIGN-DETAILS.md (QD-784 to QD-790; 17.2.16), adds cert-1's Team\n# custom-domain accounts, locks, holds and spends, cert-2's customer accounts and orders, sock-1's certified and\n# ACME names, sock-2's server name of a dial by a custom host or alias, and api-8's custom-certificate events.\n",
+	},
+	{
+		// 17.2.16: cert-1's store gains the account and spend tables
+		question: "details-17-small-readings",
+		block:    "store: network_tls_cert; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)",
+		list:     "store: network_tls_cert, network_tls_account, network_tls_custom_spend; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)",
+	},
+	{
+		// 17.2.16: cert-1's sees gains the custom rows' fields, the accounts, the lock, holds, poll times and spends
+		question: "details-17-small-readings",
+		block:    "each CA's and registered domain's new-set orders of the last 7 days\n",
+		list:     "each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 8 days. Never the account key\n",
+	},
+	{
+		// 17.2.16: cert-1's ttl gains the account row's, the spends' and the poll times'
+		question: "details-17-small-readings",
+		block:    "budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss",
+		list:     "budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 8 d; poll times 7 d",
+	},
+	{
+		// 17.2.16: cert-2's sees gains a Team custom domain's account, its key changes, orders and revocations
+		question: "details-17-small-readings",
+		block:    "Team custom domains' names; never hosts under a wildcard; URnetwork's ACME accounts; DNS-01 lookups through dns-2",
+		list:     "Team custom domains' names; never hosts under a wildcard; URnetwork's ACME accounts; DNS-01 lookups through dns-2; for a Team custom domain the customer's ACME account, its key changes, every order and revocation, and the public address each ordering desktop reaches the CA from",
+	},
+	{
+		// 17.2.16: sock-1's sees gains each tls/ listener's certified and ACME names
+		question: "details-17-small-readings",
+		block:    "ejection state and its Signed claim (the sidecar's identity key); per lease",
+		list:     "ejection state and its Signed claim (the sidecar's identity key); per tls/ listener the custom hosts and aliases it is certified for, and the names it holds an ACME claim for with the claim sequence; per lease",
+	},
+	{
+		// 17.2.16: sock-2's sees gains a custom host's or alias's server name
+		question: "details-17-small-readings",
+		block:    "a dial's protocol, minimum version and offered ALPN ids, affinity key",
+		list:     "a dial's protocol, minimum version and offered ALPN ids, the server name of a dial that came by a custom host or an alias, affinity key",
+	},
+	{
+		// 17.2.16: api-8's sees gains 17.2.14's events
+		question: "details-17-small-readings",
+		block:    "DNS user and key writes included; SIEM webhook endpoints",
+		list:     "DNS user and key writes included; the custom-certificate events of DESIGN-DETAILS 17.2.14, naming a host, a device and a time; SIEM webhook endpoints",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

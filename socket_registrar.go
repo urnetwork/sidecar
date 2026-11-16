@@ -131,6 +131,9 @@ type socketRegistrarEntry struct {
 	exclusive  bool
 	affinity   bool
 	owner      *socketRegistration
+	// tls/: DESIGN-DETAILS 17.2.10's two lists, which UpdateTls changes with alpns
+	certifiedNames []string
+	acmeNames      []*SocketAcmeName
 
 	serving  bool
 	draining bool
@@ -264,6 +267,10 @@ func (self *socketRegistrarEntry) registration(row *socketRegistrarRow) *SocketR
 		Draining:   self.draining,
 		Inflight:   self.inflight,
 		Claim:      row.claim,
+	}
+	registration.CertifiedNames = slices.Clone(self.certifiedNames)
+	for _, acmeName := range self.acmeNames {
+		registration.AcmeNames = append(registration.AcmeNames, &SocketAcmeName{Name: acmeName.Name, ClaimSeq: acmeName.ClaimSeq})
 	}
 	if row.tokenPath == nil {
 		registration.Name = self.name
@@ -532,6 +539,28 @@ func (self *socketRegistrarState) setServing(listenId Id, serving bool) bool {
 		return false
 	}
 	entry.serving = serving
+	self.roundPending = true
+	return true
+}
+
+// A tls/ entry's ALPN ids and 17.2.10's two lists, none of which its claim covers, so its rows stand. True when it
+// changed the set, which a round then sends at once.
+func (self *socketRegistrarState) setTls(listenId Id, alpns []string, certifiedNames []string, acmeNames []*SocketAcmeName) bool {
+	entry := self.entries[listenId]
+	if entry == nil || entry.namespace != SocketNamespaceTls {
+		return false
+	}
+	before := &TlsFrontUpdate{Alpn: entry.alpns, CertifiedNames: entry.certifiedNames, AcmeNames: entry.acmeNames}
+	after := &TlsFrontUpdate{Alpn: alpns, CertifiedNames: certifiedNames, AcmeNames: acmeNames}
+	if before.equal(after) {
+		return false
+	}
+	entry.alpns = slices.Clone(alpns)
+	entry.certifiedNames = slices.Clone(certifiedNames)
+	entry.acmeNames = nil
+	for _, acmeName := range acmeNames {
+		entry.acmeNames = append(entry.acmeNames, &SocketAcmeName{Name: acmeName.Name, ClaimSeq: acmeName.ClaimSeq})
+	}
 	self.roundPending = true
 	return true
 }
@@ -1077,6 +1106,13 @@ func (self *socketRegistration) resolve(status SocketRegistrationStatus, err err
 func (self *socketRegistration) setServing(serving bool) {
 	self.registrar.update(func(state *socketRegistrarState) bool {
 		return state.setServing(self.listenId, serving)
+	})
+}
+
+// A tls/ entry's ALPN ids, certified names and ACME names (17.2.10), sent at once under the same listen_id.
+func (self *socketRegistration) setTls(alpns []string, certifiedNames []string, acmeNames []*SocketAcmeName) {
+	self.registrar.update(func(state *socketRegistrarState) bool {
+		return state.setTls(self.listenId, alpns, certifiedNames, acmeNames)
 	})
 }
 

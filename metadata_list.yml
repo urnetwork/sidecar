@@ -1,4 +1,4 @@
-# metadata_list.yml v24; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v25; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -78,6 +78,9 @@
 # part, and that no record keeps it (QD-806).
 # v24, updated 2026-11-15 for the owner's answer QD-840 (dns-m6-05-custom-host-withheld-state), adds to dns-1 each
 # custom host's state, withheld among them, a web host a downgrade keeps out of the map and routing (§20.7).
+# v25, updated 2026-11-15 for section 17 of DESIGN-DETAILS.md (QD-784 to QD-790; 17.2.16), adds cert-1's Team
+# custom-domain accounts, locks, holds and spends, cert-2's customer accounts and orders, sock-1's certified and
+# ACME names, sock-2's server name of a dial by a custom host or alias, and api-8's custom-certificate events.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -189,7 +192,7 @@ api-7:
 api-8:
   service: api
   store: network_admin_event, network_audit_webhook
-  sees: admin events (per-network seq, actor, action, target, result, request id, hash chain; no client IP), DNS user and key writes included; SIEM webhook endpoints and deliveries; each webhook's signing key, HMAC-SHA256 of the vault resource network_audit_webhook_key over a fixed domain string and the webhook's id, answered once when the webhook is added and never stored
+  sees: admin events (per-network seq, actor, action, target, result, request id, hash chain; no client IP), DNS user and key writes included; the custom-certificate events of DESIGN-DETAILS 17.2.14, naming a host, a device and a time; SIEM webhook endpoints and deliveries; each webhook's signing key, HMAC-SHA256 of the vault resource network_audit_webhook_key over a fixed domain string and the webhook's id, answered once when the webhook is added and never stored
   why: audit (§7.11)
   ttl: 400 d; deliveries retried 24 h; webhook settings until removed; signing keys never stored, derived again from vault and the webhook's id to sign
   owner: §7.11
@@ -240,14 +243,14 @@ api-15:
 sock-1:
   service: sockets
   store: Redis {sg_<network_id>_<h16(name)>} (listener fields m, r, i and e, and x, a removal's tombstone; version v) and its lease-ordered ZSET (suffix ix)
-  sees: network_id; the name as a token path (16 B a segment, HMAC under a key from the config repo's K_sock, owner decision 67) or, for tls/, smtp/ and ur/, in plaintext; per listener the sealed name, client_id, listen_id, protocol, version, ALPN, application mode (http or raw), weight, max_streams, flags (exclusive, affinity, serving, draining), reported in-flight and issued counts, ejection state and its Signed claim (the sidecar's identity key); per lease the listener's sidecar_id, the authorization log position it was admitted at and the set_version of the page that wrote it; for 10 min after a removal for cause (60 s after an unlisten), the listener's client_id with the position and set version of the removal; the group version
+  sees: network_id; the name as a token path (16 B a segment, HMAC under a key from the config repo's K_sock, owner decision 67) or, for tls/, smtp/ and ur/, in plaintext; per listener the sealed name, client_id, listen_id, protocol, version, ALPN, application mode (http or raw), weight, max_streams, flags (exclusive, affinity, serving, draining), reported in-flight and issued counts, ejection state and its Signed claim (the sidecar's identity key); per tls/ listener the custom hosts and aliases it is certified for, and the names it holds an ACME claim for with the claim sequence; per lease the listener's sidecar_id, the authorization log position it was admitted at and the set_version of the page that wrote it; for 10 min after a removal for cause (60 s after an unlisten), the listener's client_id with the position and set version of the removal; the group version
   why: Find, scheduling and sampling (§9.5-§9.8); a tombstone refuses a later write admitted below the removal's position or from an older set
   ttl: 45 s lease renewed by heartbeat; ejections at most 300 s; tombstones 10 min after a removal for cause or the client's removal, 60 s after an unlisten; a K_sock rotation's 10 min dual registration links old and new token paths; outside the Redis bundles (D-OPS-16)
   owner: §9.5
 sock-2:
   service: sockets
   store: memory; per-dialer fields in sock-1's hash
-  sees: each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
+  sees: each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, the server name of a dial that came by a custom host or an alias, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
   why: admission, scheduling and outlier ejection (§9.6, §9.7)
   ttl: the request; tickets 30 s; dialer shares and exclusions at most 300 s; no per-dial record (D-SOCK-9)
   owner: §9.6
@@ -565,15 +568,15 @@ tls-4:
   owner: §13.9
 cert-1:
   service: certs (taskworker), api
-  store: network_tls_cert; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
-  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days
+  store: network_tls_cert, network_tls_account, network_tls_custom_spend; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
+  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 8 days. Never the account key
   why: order, renew and revoke certificates for device-held keys (owner decision 39; §13.8)
-  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss
+  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 8 d; poll times 7 d
   owner: §13.8
 cert-2:
   service: CAs (Let's Encrypt, GTS, ZeroSSL) and public CT logs
   store: external, public
-  sees: every SAN, that is <net>.<root>, *.<net>.<root>, live aliases and Team scope labels (owner decision 40), and Team custom domains' names; never hosts under a wildcard; URnetwork's ACME accounts; DNS-01 lookups through dns-2
+  sees: every SAN, that is <net>.<root>, *.<net>.<root>, live aliases and Team scope labels (owner decision 40), and Team custom domains' names; never hosts under a wildcard; URnetwork's ACME accounts; DNS-01 lookups through dns-2; for a Team custom domain the customer's ACME account, its key changes, every order and revocation, and the public address each ordering desktop reaches the CA from
   why: CA rules
   ttl: permanent and public
   owner: §13.8

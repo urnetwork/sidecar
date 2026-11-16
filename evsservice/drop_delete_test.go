@@ -350,6 +350,45 @@ func TestDropDeleteStopsTheCursorBeforeAnUnansweredId(t *testing.T) {
 	}
 }
 
+// While an unanswered id holds the cursor still, each later checkpoint that frees bytes sends a batch of its own id: a
+// run that resumes before the same id and deletes a candidate the last run found young reports its bytes too, where
+// a batch keyed by the cursor range alone would repeat the last one's id and api would apply it as a no-op.
+func TestDropDeleteReportsEachBatchWhileTheCursorStandsBeforeAnUnansweredId(t *testing.T) {
+	fixture := newDropDeleteFixture(t)
+	world := fixture.world
+	stuck, a, b := fixture.putSegment("stuck", 50), fixture.putSegment("a", 200), fixture.putSegment("b", 400)
+	world.clock.Advance(30 * time.Hour)
+	young := fixture.putSegment("young", 800)
+	fixture.horizon = world.clock.Now()
+	if _, err := world.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+		Op: sidecartest.FaultOpDelete, KeyPrefix: SegmentKey(world.repoId, stuck.Id), ClusterId: "seg-1", Result: sidecartest.Held, Repeat: -1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result := fixture.run(stuck, a, b, young); result.Unanswered != 1 || result.YoungBound.IsZero() {
+		t.Fatalf("the first run: %+v", result)
+	}
+	if delta := world.host.Quota.StoredDelta(connect.Id(testId("network-a"))); delta != -600 {
+		t.Fatalf("stored delta after the first run %d, want -600", delta)
+	}
+	// the next run, past the young candidate's bound, still stops before the stuck id
+	world.clock.Advance(30 * time.Hour)
+	fixture.horizon = world.clock.Now()
+	if result := fixture.run(stuck, a, b, young); result.Unanswered != 1 || fixture.stored(young) {
+		t.Fatalf("the second run: %+v", result)
+	}
+	if fixture.checkpoints[0].Cursor != fixture.checkpoints[len(fixture.checkpoints)-1].Cursor {
+		t.Fatalf("the cursor moved: %+v", fixture.checkpoints)
+	}
+	sent := world.host.Quota.SentBatches()
+	if len(sent) != 2 || sent[0].BatchId == sent[1].BatchId {
+		t.Fatalf("sent batches %+v", sent)
+	}
+	if delta := world.host.Quota.StoredDelta(connect.Id(testId("network-a"))); delta != -1400 {
+		t.Fatalf("stored delta %d, want -1400: the second run's bytes went unreported", delta)
+	}
+}
+
 // FS-90's stale instance: a DELETE delayed in the network until past the lease's deadline is refused by the store on
 // arrival, so the object stays, and the id is left unanswered for the instance that holds the job next.
 func TestDropDeleteStaleDeleteIsRefusedPastItsDeadline(t *testing.T) {

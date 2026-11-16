@@ -44,6 +44,9 @@ type SocketListenCheck struct {
 	// tls/443/mta-sts, it is the caller's own smtp/25/mx listen grant, which stands in for the tls/ listen and
 	// publish grants (system_publish.go): what makes the caller a receiver.
 	Listen *SocketGateVerdict
+	// The page's view S, which every check of the page reads (DESIGN-DETAILS 13.2.3): tls/'s ValidateListen asks it
+	// the entry's publish grant (§13.9). nil on ur/, which §8 judges not.
+	View SocketGateView
 }
 
 // One namespace's owner (§9.4). Safe for concurrent use.

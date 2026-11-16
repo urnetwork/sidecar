@@ -10,9 +10,16 @@
 // meta review CC-06). Nothing here caps names, listeners or streams (owner decision 66).
 //
 // The store samples: a group above §9.7's 64 listeners comes here as its random 64 (ZRANDMEMBER runs
-// in the script, where no draw of this file can reach it), unless the Find carries an affinity key, which
-// reads the whole group. Affinity is a branch after the filter (affinity.go): with a key and a listener
-// that opted in, rendezvous order picks; otherwise P2C stands.
+// in the script, where no draw of this file can reach it), unless the Find carries an affinity key or a
+// server name, either of which reads the whole group. Affinity is a branch after the filter (affinity.go):
+// with a key and a listener that opted in, rendezvous order picks; otherwise P2C stands.
+//
+// A server name, a custom host's or an alias's (DESIGN-DETAILS 17.2.10), routes only to a listener that
+// proved it. A Find offering acme-tls/1 takes the live lease holding the highest claim for the name, the
+// lowest client id on a tie, primary only, reading nothing else of a listener, since it is one handshake;
+// without a server name it finds no listener, those names being certs' and DNS-01's. Any other Find never
+// matches a listener whose one ALPN id is acme-tls/1, and with a server name matches only the listeners
+// certified for it. A Find with neither picks exactly as before.
 
 package socketsservice
 
@@ -21,6 +28,8 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // The scheduler's tunables (§9.6, §9.7). SOCK-M5-03's SocketsSettings carries these, so that a ticket's
@@ -100,6 +109,10 @@ type SocketCandidate struct {
 	Ejection SocketEjectionState
 	// Each dialer it holds a share or an exclusion for.
 	DialerClientIdShares map[connect.Id]*SocketDialerShare
+	// tls/: the custom hosts and aliases ValidateListen kept certified for this listener (17.2.10).
+	CertifiedNames []string
+	// tls/: the names it holds a TLS-ALPN-01 claim for, by claim sequence (17.2.10).
+	AcmeNames map[string]uint64
 }
 
 // One Find's half of a pick, with what would otherwise be read from the world.
@@ -113,7 +126,9 @@ type SocketPickRequest struct {
 	Alpns      []string
 	// §9.7's affinity key, which lives for the request alone (sock-2): empty asks none, and P2C picks.
 	AffinityKey []byte
-	NowMillis   int64
+	// A custom host's or an alias's server name, empty for none (17.2.10).
+	ServerName string
+	NowMillis  int64
 	// Two uniform draws, one per sampled candidate, which the caller makes: random ARGV to a script.
 	FirstDraw  uint32
 	SecondDraw uint32
@@ -195,6 +210,9 @@ func drawSocketCandidate(candidates []*SocketCandidate, draw uint32, skip int) i
 // by rendezvous order instead (affinity.go). The arguments are unchanged, so the caller records the
 // primary's ticket itself.
 func PickSocketListeners(candidates []*SocketCandidate, request *SocketPickRequest, settings *SocketSchedulerSettings) *SocketPickResult {
+	if slices.Contains(request.Alpns, sidecar.SocketAlpnAcme) {
+		return pickSocketAcme(candidates, request)
+	}
 	matches := func(candidate *SocketCandidate) bool {
 		if request.NowMillis >= candidate.LeaseExpireMillis || !candidate.Serving || candidate.Draining || candidate.Weight <= 0 {
 			return false
@@ -203,6 +221,13 @@ func PickSocketListeners(candidates []*SocketCandidate, request *SocketPickReque
 			return false
 		}
 		if candidate.Version < request.MinVersion {
+			return false
+		}
+		// a listener only for TLS-ALPN-01 serves no visitor
+		if len(candidate.Alpns) == 1 && candidate.Alpns[0] == sidecar.SocketAlpnAcme {
+			return false
+		}
+		if request.ServerName != "" && !slices.Contains(candidate.CertifiedNames, request.ServerName) {
 			return false
 		}
 		return len(request.Alpns) == 0 || slices.ContainsFunc(request.Alpns, func(alpn string) bool {
@@ -263,4 +288,29 @@ func PickSocketListeners(candidates []*SocketCandidate, request *SocketPickReque
 		first, second = second, first
 	}
 	return &SocketPickResult{Outcome: SocketPickFound, Primary: first, Backup: second}
+}
+
+// 17.2.10's ACME branch: a Find offering acme-tls/1 goes to the live lease that holds a claim for its server name,
+// the highest claim and then the lowest client id, primary only. Serving, draining, weight, est, ejections and
+// exclusions are not read, since the CA's validation is one handshake. No server name, or no claim for it, finds no
+// listener.
+func pickSocketAcme(candidates []*SocketCandidate, request *SocketPickRequest) *SocketPickResult {
+	if request.ServerName == "" {
+		return &SocketPickResult{Outcome: SocketPickNoListener}
+	}
+	var best *SocketCandidate
+	bestClaimSeq := uint64(0)
+	for _, candidate := range candidates {
+		claimSeq, claimed := candidate.AcmeNames[request.ServerName]
+		if !claimed || candidate.LeaseExpireMillis <= request.NowMillis {
+			continue
+		}
+		if best == nil || bestClaimSeq < claimSeq || (claimSeq == bestClaimSeq && candidate.ListenerClientId.Cmp(best.ListenerClientId) < 0) {
+			best, bestClaimSeq = candidate, claimSeq
+		}
+	}
+	if best == nil {
+		return &SocketPickResult{Outcome: SocketPickNoListener}
+	}
+	return &SocketPickResult{Outcome: SocketPickFound, Primary: best}
 }

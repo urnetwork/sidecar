@@ -157,6 +157,9 @@ func socketSuiteCases() []socketSuiteCase {
 		{name: "a client's removal works its set in batches and fences every lease", run: caseSocketRemoveClientInBatches, settings: func(settings *socketsservice.SocketStoreSettings) { settings.RemoveClientBatchCount = 3 }},
 		{name: "a sweep is claimed once per position, renewed by its holder, and never listed", run: caseSocketClaimSweep},
 		{name: "a page says whether the client's set still holds an edge name", run: caseSocketEdgeEntriesRemain},
+		{name: "a registration's certified and ACME names round-trip and read as the candidate's", run: caseSocketCertifiedNamesRoundTrip},
+		{name: "a pick by server name and an ACME pick match PickSocketListeners over the whole group", run: caseSocketServerNamePickMatchesScheduler},
+		{name: "an ACME pick takes the highest claim, the lowest id on a tie, and no backup", run: caseSocketAcmePickTakesTheNewestClaim},
 		{name: "a removal says whether each listener's set still holds an edge name", run: caseSocketRemovalSaysWhetherEdgeEntriesRemain},
 	}
 }
@@ -850,6 +853,7 @@ func (self *socketSuiteEnv) pickAgainstScheduler(request *socketsservice.SocketS
 		MinVersion:     request.MinVersion,
 		Alpns:          request.Alpns,
 		AffinityKey:    request.AffinityKey,
+		ServerName:     request.ServerName,
 		NowMillis:      self.clock.Now().UnixMilli(),
 		FirstDraw:      request.FirstDraw,
 		SecondDraw:     request.SecondDraw,
@@ -2134,6 +2138,187 @@ func caseSocketRemovalSaysWhetherEdgeEntriesRemain(env *socketSuiteEnv) error {
 	}
 	if len(removals) != 2 || removals[0].Removed == nil || removals[0].EdgeEntriesRemain || removals[1].Removed == nil || removals[1].EdgeEntriesRemain {
 		return fmt.Errorf("the last edge name and a blinded one in one call: %+v", removals)
+	}
+	return nil
+}
+
+// DESIGN-DETAILS 17.2.10: a tls/ registration's certified names and ACME names, as ValidateListen left them, come back
+// from a read in the registration and in the candidate the pick reads, and a registration with neither reads none.
+func caseSocketCertifiedNamesRoundTrip(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	name := "tls/443/" + socketSuiteEdgeName()
+	clientId, plainClientId := socketSuiteId(), socketSuiteId()
+	registration := socketSuiteRegistration(name)
+	registration.Alpn = []string{"h2", "http/1.1", sidecar.SocketAlpnAcme}
+	registration.CertifiedNames = []string{"app.customer.example", "www.customer.example"}
+	registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: "shop.customer.example", ClaimSeq: 18446744073709551615}, {Name: "app.customer.example", ClaimSeq: 3}}
+	if err := env.mustApplyWhole(networkId, clientId, 1, registration); err != nil {
+		return err
+	}
+	if err := env.mustApplyWhole(networkId, plainClientId, 1, socketSuiteRegistration(name)); err != nil {
+		return err
+	}
+	listener, err := env.lease(networkId, clientId, []byte(name))
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(listener.Registration.CertifiedNames, registration.CertifiedNames) || len(listener.Registration.AcmeNames) != 2 ||
+		*listener.Registration.AcmeNames[0] != *registration.AcmeNames[0] || *listener.Registration.AcmeNames[1] != *registration.AcmeNames[1] {
+		return fmt.Errorf("the lists read back as %v and %v", listener.Registration.CertifiedNames, listener.Registration.AcmeNames)
+	}
+	if !slices.Equal(listener.Candidate.CertifiedNames, registration.CertifiedNames) || len(listener.Candidate.AcmeNames) != 2 ||
+		listener.Candidate.AcmeNames["shop.customer.example"] != 18446744073709551615 || listener.Candidate.AcmeNames["app.customer.example"] != 3 {
+		return fmt.Errorf("the candidate reads %v and %v", listener.Candidate.CertifiedNames, listener.Candidate.AcmeNames)
+	}
+	plain, err := env.lease(networkId, plainClientId, []byte(name))
+	if err != nil {
+		return err
+	}
+	if len(plain.Registration.CertifiedNames) != 0 || len(plain.Registration.AcmeNames) != 0 || len(plain.Candidate.CertifiedNames) != 0 ||
+		len(plain.Candidate.AcmeNames) != 0 {
+		return errors.New("a registration with neither list reads some")
+	}
+	// a heartbeat that drops the lists drops them
+	registration.CertifiedNames = nil
+	registration.AcmeNames = nil
+	if err := env.mustApplyWhole(networkId, clientId, 2, registration); err != nil {
+		return err
+	}
+	if listener, err = env.lease(networkId, clientId, []byte(name)); err != nil {
+		return err
+	}
+	if len(listener.Registration.CertifiedNames) != 0 || len(listener.Candidate.AcmeNames) != 0 {
+		return errors.New("a heartbeat with no lists kept them")
+	}
+	return nil
+}
+
+// 17.2.10's pick on what the store holds, a group past the sample's size: listeners certified for one custom host or
+// another, ACME claims at several sequences, acme-only listeners, draining and non-serving ones; Finds by a custom
+// host's server name, one no listener holds included, offering acme-tls/1 or h2 or nothing. The store reads the whole
+// group for a server name, and each pick is the pure function's.
+func caseSocketServerNamePickMatchesScheduler(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	name := "tls/443/" + socketSuiteEdgeName()
+	random := mathrand.New(mathrand.NewPCG(17, 210))
+	hosts := []string{"app.customer.example", "www.customer.example", "shop.customer.example"}
+	for index := range env.settings.SampleCount + 8 {
+		registration := socketSuiteRegistration(name)
+		registration.MaxStreams = 64
+		registration.Inflight = random.IntN(70)
+		registration.Weight = 1 + random.IntN(1000)
+		registration.Alpn = []string{"h2", "http/1.1"}
+		switch index % 7 {
+		case 0:
+			registration.Alpn = []string{sidecar.SocketAlpnAcme}
+		case 1:
+			registration.Alpn = append(registration.Alpn, sidecar.SocketAlpnAcme)
+		}
+		registration.Serving = index%11 != 3
+		registration.Draining = index%13 == 5
+		for _, host := range hosts {
+			if random.IntN(3) == 0 {
+				registration.CertifiedNames = append(registration.CertifiedNames, host)
+			}
+			if random.IntN(5) == 0 {
+				registration.AcmeNames = append(registration.AcmeNames, &sidecar.SocketAcmeName{Name: host, ClaimSeq: uint64(1 + random.IntN(4))})
+			}
+		}
+		if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, registration); err != nil {
+			return err
+		}
+	}
+	// each Find names a server, which reads the whole group: one with none samples, as the sampled case holds
+	serverNames := append([]string{"other.customer.example"}, hosts...)
+	offers := [][]string{nil, {"h2"}, {sidecar.SocketAlpnAcme}, {"h2", sidecar.SocketAlpnAcme}, {"mqtt"}}
+	for round := range 150 {
+		if _, err := env.pickAgainstScheduler(&socketsservice.SocketStorePickRequest{
+			NetworkId:       networkId,
+			NameKey:         []byte(name),
+			DialerClientId:  socketSuiteId(),
+			DialerNetworkId: networkId,
+			Alpns:           offers[round%len(offers)],
+			ServerName:      serverNames[round%len(serverNames)],
+			FirstDraw:       random.Uint32(),
+			SecondDraw:      random.Uint32(),
+		}); err != nil {
+			return fmt.Errorf("round %d: %w", round, err)
+		}
+		env.clock.Advance(time.Duration(random.IntN(200)) * time.Millisecond)
+	}
+	return nil
+}
+
+// 17.2.10's ACME branch exactly: of three listeners claiming the host, the one with the highest claim takes every
+// acme-tls/1 Find, draining, not serving and full alike, with no backup; on a tie the lowest client id; a Find for a
+// name no one claims, or one with no server name, finds no listener, and a visitor's Find never reaches an acme-only
+// listener.
+func caseSocketAcmePickTakesTheNewestClaim(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	name := "tls/443/" + socketSuiteEdgeName()
+	host := "app.customer.example"
+	clientIds := []connect.Id{socketSuiteId(), socketSuiteId(), socketSuiteId()}
+	slices.SortFunc(clientIds, func(a connect.Id, b connect.Id) int { return a.Cmp(b) })
+	// every listener is full, and the newest holder draining as well: neither counts in one handshake
+	register := func(clientId connect.Id, setVersion uint64, claimSeq uint64, acmeOnly bool, draining bool) error {
+		registration := socketSuiteRegistration(name)
+		registration.Alpn = []string{"h2", "http/1.1", sidecar.SocketAlpnAcme}
+		if acmeOnly {
+			registration.Alpn = []string{sidecar.SocketAlpnAcme}
+		}
+		registration.AcmeNames = []*sidecar.SocketAcmeName{{Name: host, ClaimSeq: claimSeq}}
+		registration.Draining = draining
+		registration.Inflight = registration.MaxStreams
+		return env.mustApplyWhole(networkId, clientId, setVersion, registration)
+	}
+	for index, claimSeq := range []uint64{7, 9, 8} {
+		if err := register(clientIds[index], 1, claimSeq, index == 2, index == 1); err != nil {
+			return err
+		}
+	}
+	acme := func(serverName string) (*socketsservice.SocketStorePickResult, error) {
+		return env.store.Pick(env.ctx, &socketsservice.SocketStorePickRequest{
+			NetworkId:       networkId,
+			NameKey:         []byte(name),
+			DialerClientId:  socketSuiteId(),
+			DialerNetworkId: networkId,
+			Alpns:           []string{sidecar.SocketAlpnAcme},
+			ServerName:      serverName,
+		})
+	}
+	for range 5 {
+		result, err := acme(host)
+		if err != nil {
+			return err
+		}
+		if result.Outcome != socketsservice.SocketPickFound || result.Primary.Candidate.ListenerClientId != clientIds[1] || result.Backup != nil {
+			return fmt.Errorf("an ACME pick answered %v", result.Outcome)
+		}
+	}
+	// a tie at 9: the lowest client id
+	if err := register(clientIds[0], 2, 9, false, false); err != nil {
+		return err
+	}
+	if result, err := acme(host); err != nil || result.Primary == nil || result.Primary.Candidate.ListenerClientId != clientIds[0] {
+		return fmt.Errorf("a tie answered %v", err)
+	}
+	for _, serverName := range []string{"", "www.customer.example"} {
+		if result, err := acme(serverName); err != nil || result.Outcome != socketsservice.SocketPickNoListener {
+			return fmt.Errorf("an ACME pick for %q answered %v, %v", serverName, result, err)
+		}
+	}
+	// a visitor's Find: the two that serve visitors are full, and the acme-only one is never matched
+	visitor, err := env.store.Pick(env.ctx, &socketsservice.SocketStorePickRequest{
+		NetworkId:       networkId,
+		NameKey:         []byte(name),
+		DialerClientId:  socketSuiteId(),
+		DialerNetworkId: networkId,
+	})
+	if err != nil {
+		return err
+	}
+	if visitor.Outcome != socketsservice.SocketPickBusy {
+		return fmt.Errorf("a visitor's pick answered %v", visitor.Outcome)
 	}
 	return nil
 }

@@ -55,6 +55,7 @@ import (
 	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -833,6 +834,41 @@ func (self *socketProjectionView) MayPublish(request *SocketGateRequest, now tim
 	return self.verdict(self.snapshot.Acl.MayPublish(subject, host, now))
 }
 
+// See SocketGateView: the request's sidecar's grant by §8's agreement rule (AclState.PublishGrant), which refuses a
+// mode other than appMode, raw under an audience but public or link and a raw link with no pin. A scope host's is held
+// to its scope and, in a member scope, to its member's consented devices, as MayPublish holds it.
+func (self *socketProjectionView) PublishGrant(request *SocketGateRequest, appMode string, now time.Time) *sidecar.AclPublishGrant {
+	host, found := strings.CutPrefix(request.Name, "tls/")
+	if !found {
+		return nil
+	}
+	host = host[strings.IndexByte(host, '/')+1:]
+	subject, ok := socketGateSubject(request)
+	if !ok || host == "" {
+		return nil
+	}
+	var mode protocol.AclAppMode
+	switch appMode {
+	case socketDefaultTlsAppMode:
+		mode = protocol.AclAppMode_ACL_APP_MODE_HTTP
+	case socketRawTlsAppMode:
+		mode = protocol.AclAppMode_ACL_APP_MODE_RAW
+	default:
+		return nil
+	}
+	if label, scoped := socketHostScope(host); scoped {
+		scope, found := self.scopeOf(label)
+		if !found || !self.snapshot.Acl.MayPublishInScope(subject, host, scope, now).Allowed {
+			return nil
+		}
+	}
+	grant, decision := self.snapshot.Acl.PublishGrant(subject, request.Name, mode, now)
+	if !decision.Allowed {
+		return nil
+	}
+	return grant
+}
+
 // See SocketGateView: the identity key the log admits for the sidecar, while its admission stands.
 func (self *socketProjectionView) IdentityKey(sidecarId connect.Id) ([]byte, bool) {
 	publicKey := self.snapshot.Config.IdentityKey(sidecar.Id(sidecarId))
@@ -880,6 +916,11 @@ func (self socketPlatformView) MayDial(request *SocketGateRequest, now time.Time
 // See SocketGateView: refused.
 func (self socketPlatformView) MayPublish(request *SocketGateRequest, now time.Time) *SocketGateVerdict {
 	return &SocketGateVerdict{}
+}
+
+// See SocketGateView: none.
+func (self socketPlatformView) PublishGrant(request *SocketGateRequest, appMode string, now time.Time) *sidecar.AclPublishGrant {
+	return nil
 }
 
 // See SocketGateView: none.
