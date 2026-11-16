@@ -35,6 +35,8 @@ package sidecar
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -255,6 +257,22 @@ func (self *MailSessionServer) Serve(ctx context.Context, stream *MailReceiverSt
 		// the router always sends one, so a stream without is no sender's
 		return
 	}
+	self.serveSession(ctx, stream, ingress)
+}
+
+// One direct-MX session past its handshake (MailDirectListener, mail_direct.go): tlsConn on the key whose SPKI
+// SHA-256 is spkiSha256, with the MailIngress the listener built of its own connection. The same session and deposit
+// as a spliced stream's. Returns when the session ends, with the connection closed.
+func (self *MailSessionServer) ServeDirect(ctx context.Context, tlsConn *tls.Conn, spkiSha256 [sha256.Size]byte, ingress *protocol.MailIngress) {
+	defer tlsConn.Close()
+	if ingress == nil || ingress.GetVersion() != mailFormatVersion {
+		return
+	}
+	self.serveSession(ctx, &MailReceiverStream{Tls: tlsConn, SpkiSha256: spkiSha256}, ingress)
+}
+
+// One session over stream, its ingress read already.
+func (self *MailSessionServer) serveSession(ctx context.Context, stream *MailReceiverStream, ingress *protocol.MailIngress) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	closeStream := func() {
