@@ -114,6 +114,12 @@ type SmtpEdgeSettings struct {
 	ReportFeedbackTypeMaxByteCount int `yaml:"-"`
 	// How long one report's DNS reads may take in all. Default 30 s, D-MAIL-14's bound for mail.
 	ReportDnsTimeout time.Duration `yaml:"report_dns_timeout"`
+	// How far the last-hop Received time may be from a send's start, either way, for a join (§14.8's ±10
+	// min, D-SMTP-8). Default 10 min: a rule of attribution, never a deployment's.
+	ReportJoinWindow time.Duration `yaml:"-"`
+	// The most sends one join reads back from the store. Default 64: a join keys on a network, an address
+	// and a 20 min window, or on a Message-ID's hash, and past this the join is too wide to name one send.
+	ReportJoinSendMaxCount int `yaml:"-"`
 
 	// The longest name in text form. Default 253, RFC 1035's.
 	HostNameMaxByteCount int `yaml:"-"`
@@ -161,6 +167,32 @@ type SmtpEdgeSettings struct {
 	HourCounterTimeout time.Duration `yaml:"-"`
 	// How often the Community breaker rereads {smg_median}. Default 60 s.
 	BreakerMedianRefreshInterval time.Duration `yaml:"breaker_median_refresh_interval"`
+
+	// The trailing window §14.8's rates, record cuts, hard bounces and second label count over. Default 24 h,
+	// as §14.8 has it.
+	HaltWindow time.Duration `yaml:"-"`
+	// Pro's complaint rate past which the network halts, in basis points of its recipients over HaltWindow.
+	// Default 50, §14.8's 0.5% (owner decision 37).
+	HaltProComplaintBasisPoints int `yaml:"-"`
+	// The fewest complaints that halt a Pro network. Default 2.
+	HaltProComplaintFloor int `yaml:"-"`
+	// Team's rate, in basis points. Default 10, §14.8's 0.1%.
+	HaltTeamComplaintBasisPoints int `yaml:"-"`
+	// The fewest complaints that halt a Team network. Default 5.
+	HaltTeamComplaintFloor int `yaml:"-"`
+	// The halted labels within HaltWindow that halt a Community network. Default 2: a second one.
+	HaltCommunityLabelCount int `yaml:"-"`
+	// The record cuts within HaltWindow that halt any network (§14.7, §14.8). Default 2.
+	HaltRecordCutCount int `yaml:"-"`
+	// The network halts within HaltSuspendWindow that ask §21 to suspend the network. Default 3.
+	HaltSuspendCount int `yaml:"-"`
+	// Default 30 days, §14.8's.
+	HaltSuspendWindow time.Duration `yaml:"-"`
+	// How long an hourly hard-bounce field of {smq_<networkId>} lives (QD-199). Default 48 h.
+	HaltBounceFieldTimeout time.Duration `yaml:"-"`
+	// The most complaints one count reads back. Default 10,000: Team halts at 0.1% of its 100,000
+	// recipients a day, far below.
+	HaltComplaintReadMaxCount int `yaml:"-"`
 
 	// The TCP port an MX listens on. Default 25.
 	MxPort int `yaml:"-"`
@@ -216,6 +248,8 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		ReportDkimKeyRecordCount: 4,
 		ReportDkimRsaKeyBitCount: 4096,
 		ReportDnsTimeout:         30 * time.Second,
+		ReportJoinWindow:         10 * time.Minute,
+		ReportJoinSendMaxCount:   64,
 
 		ReportAggregateValueMaxByteCount: 1024,
 		ReportDkimRsaKeyMinBitCount:      1024,
@@ -240,6 +274,17 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		QuotaFallbackNetworkMaxCount: 100000,
 		HourCounterTimeout:           2 * time.Hour,
 		BreakerMedianRefreshInterval: 60 * time.Second,
+		HaltWindow:                   24 * time.Hour,
+		HaltProComplaintBasisPoints:  50,
+		HaltProComplaintFloor:        2,
+		HaltTeamComplaintBasisPoints: 10,
+		HaltTeamComplaintFloor:       5,
+		HaltCommunityLabelCount:      2,
+		HaltRecordCutCount:           2,
+		HaltSuspendCount:             3,
+		HaltSuspendWindow:            30 * 24 * time.Hour,
+		HaltBounceFieldTimeout:       48 * time.Hour,
+		HaltComplaintReadMaxCount:    10000,
 
 		MxPort: 25,
 		MxRefusedPrefixes: []netip.Prefix{

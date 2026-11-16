@@ -54,6 +54,8 @@ const (
 	SmtpLimitCommunityMedianMultiple       = "smtp_community_median_multiple"
 	SmtpLimitDestinationConnectionsPerHour = "smtp_destination_connections_per_hour"
 	SmtpLimitDestinationConcurrency        = "smtp_destination_concurrency"
+	SmtpLimitHardBouncePercent             = "smtp_hard_bounce_percent"
+	SmtpLimitHardBounceFloor               = "smtp_hard_bounce_floor"
 )
 
 // The quota's reasons for a refusal, the script's words and these.
@@ -504,10 +506,7 @@ func (self *SmtpQuota) ApplyHalt(ctx context.Context, halt *SmtpHalt) error {
 			labelEnds[label] = end
 		}
 	}()
-	field := "h"
-	if label != "" {
-		field = "h:" + label
-	}
+	field := smtpHaltField(label)
 	callCtx, done := self.callContext(ctx)
 	defer done()
 	_, err := self.redis.RunScript(callCtx, SmtpQuotaHaltScript, []string{smtpQuotaKey(halt.NetworkId)}, []string{
@@ -515,5 +514,94 @@ func (self *SmtpQuota) ApplyHalt(ctx context.Context, halt *SmtpHalt) error {
 		strconv.FormatInt(end.UnixMilli(), 10),
 		strconv.FormatInt(self.settings.QuotaKeyTimeout.Milliseconds(), 10),
 	})
+	return err
+}
+
+// The {smq_} field a halt's flag sits in.
+func smtpHaltField(label string) string {
+	if label == "" {
+		return "h"
+	}
+	return "h:" + label
+}
+
+// Takes a lifted halt out of this process's memory and Redis's flag, then holds again each of remaining, the
+// network's halts still standing, which may share that flag (SmtpHaltLadder.Lift).
+func (self *SmtpQuota) LiftHalt(ctx context.Context, lifted *SmtpHalt, remaining []*SmtpHalt) error {
+	label := strings.ToLower(lifted.Label)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if label == "" {
+			delete(self.halts.networkIdEnds, lifted.NetworkId)
+			return
+		}
+		if labelEnds, ok := self.halts.networkIdLabelEnds[lifted.NetworkId]; ok {
+			delete(labelEnds, label)
+		}
+	}()
+	err := func() error {
+		callCtx, done := self.callContext(ctx)
+		defer done()
+		return self.redis.HashDelete(callCtx, smtpQuotaKey(lifted.NetworkId), []string{smtpHaltField(label)})
+	}()
+	for _, halt := range remaining {
+		if strings.ToLower(halt.Label) == label {
+			err = errors.Join(err, self.ApplyHalt(ctx, halt))
+		}
+	}
+	return err
+}
+
+// Makes this process's halts exactly halts, the store's active set (halt_reload.go): each is held, in memory
+// and Redis, and a halt memory held that the set no longer has, one lifted since, leaves memory and its flag
+// leaves Redis.
+func (self *SmtpQuota) ReplaceHalts(ctx context.Context, halts []*SmtpHalt) error {
+	now := self.clock.Now()
+	type scope struct {
+		networkId sidecar.Id
+		label     string
+	}
+	kept := map[scope]bool{}
+	for _, halt := range halts {
+		if halt.ActiveAt(now) {
+			kept[scope{networkId: halt.NetworkId, label: strings.ToLower(halt.Label)}] = true
+		}
+	}
+	gone := func() []scope {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		gone := []scope{}
+		for networkId := range self.halts.networkIdEnds {
+			if !kept[scope{networkId: networkId}] {
+				gone = append(gone, scope{networkId: networkId})
+				delete(self.halts.networkIdEnds, networkId)
+			}
+		}
+		for networkId, labelEnds := range self.halts.networkIdLabelEnds {
+			for label := range labelEnds {
+				if !kept[scope{networkId: networkId, label: label}] {
+					gone = append(gone, scope{networkId: networkId, label: label})
+					delete(labelEnds, label)
+				}
+			}
+			if len(labelEnds) == 0 {
+				delete(self.halts.networkIdLabelEnds, networkId)
+			}
+		}
+		return gone
+	}()
+	var err error
+	for _, scope := range gone {
+		err = errors.Join(err, func() error {
+			callCtx, done := self.callContext(ctx)
+			defer done()
+			return self.redis.HashDelete(callCtx, smtpQuotaKey(scope.networkId), []string{smtpHaltField(scope.label)})
+		}())
+	}
+	for _, halt := range halts {
+		// a write that fails leaves the halt in memory, and the next reload writes it again
+		err = errors.Join(err, self.ApplyHalt(ctx, halt))
+	}
 	return err
 }

@@ -160,17 +160,8 @@ func (self *SmtpEdgeService) run() {
 			reachable = func() bool {
 				ctx, done := self.storeContext()
 				defer done()
-				halts, err := self.store.ActiveHalts(ctx)
-				if err != nil {
-					return false
-				}
-				if self.quota != nil {
-					for _, halt := range halts {
-						// a write that fails leaves the halt in memory, and the next probe writes it again
-						self.quota.ApplyHalt(ctx, halt)
-					}
-				}
-				return true
+				reloader := &smtpHaltReloader{store: self.store, quota: self.quota}
+				return reloader.reload(ctx) == nil
 			}()
 			testHookBarrier("smtpedge.probe.after", "")
 			if reachable {
