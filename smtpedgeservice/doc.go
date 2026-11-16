@@ -22,7 +22,14 @@
 //   - quota.go, quota_scripts.go, breaker.go and destination.go, §14.7's enforcement on Redis.
 //   - mx_resolve.go, mx_chain.go, mx_pretls.go and mx_reply.go, MX resolution, dnssec_chain and the
 //     pre-TLS dialog; sending_set.go, the sending addresses and their FCrDNS; mx_dial_linux.go, the
-//     fwmark dial.
+//     fwmark dial; lan_splice.go, the LAN splice to mxedge's router.
+//   - splice.go, the ur/smtpedge listener and its streams; connection.go, one connection's splice through
+//     its proof session; record_split.go, whole TLS records; proof_rpc.go, the SMTP_PROOF and SMTP_HANDSHAKE
+//     handlers; lease.go, the lease on meter smtp; send_log.go, the batched send records; outcome.go,
+//     SmtpOutcome.
+//   - attribution.go, which network a report names and how surely; halt.go and halt_reload.go, §14.8's
+//     ladder and the edges' reload of halts.
+//   - config.go, smtpedge.yml as the edge block reads it.
 //
 // Nothing here logs report text, an envelope, a recipient or an address (I-13; §2.8 mx-4).
 package smtpedgeservice

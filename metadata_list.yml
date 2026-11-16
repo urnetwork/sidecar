@@ -658,7 +658,7 @@ smtp-3:
 smtp-4:
   service: smtpedge
   store: Redis {smq_<networkId>}; {smg_<yyyymmddhh>} and {smg_median}, the Community total for a UTC hour and its trailing median; {smd_<hex(SHA-256(domain)[0:16])>_<yyyymmddhh>}, a destination domain's Community connections for a UTC hour; smtp_halt; edge memory
-  sees: per network the day's connection and recipient counts and reservations, bursts and concurrency; halt flags and smtp_halt rows (network or burner label, trigger, start); Community breaker totals and per-destination-domain counters, with no network and the domain only as a SHA-256 prefix, and the trailing 168 hours' median that an hourly taskworker job writes from smtp_send rows; concurrency per sending address and destination /24
+  sees: per network the day's connection and recipient counts and reservations, bursts and concurrency, and its self-reported hard bounces by UTC hour, each hour's field kept 48 h (QD-199); halt flags and smtp_halt rows (network or burner label, trigger, start); Community breaker totals and per-destination-domain counters, with no network and the domain only as a SHA-256 prefix, and the trailing 168 hours' median that an hourly taskworker job writes from smtp_send rows; concurrency per sending address and destination /24
   why: quotas (§14.7); halts (owner decision 37; §14.8)
   ttl: counters 48 h; halts 24 h; smtp_halt rows 13 months (§14.14); breaker and destination counters 2 h after their UTC hour starts, the median 2 h; concurrency only in memory
   owner: §14.7
