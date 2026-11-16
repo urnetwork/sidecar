@@ -424,11 +424,13 @@ type SidecarSearchSettings struct {
 	RemoteOnlineTimeout time.Duration
 	// A repo an indexer refused in coverage is not asked of it for this long: 10 min (DESIGN-DETAILS 7.2.1).
 	RemoteRefusedTimeout time.Duration
-	// Mismatches from one indexer within RemoteMismatchInterval that void it for RemoteDistrustTimeout: 3, in 24 h, for
-	// 24 h (§11.14's merge row, DESIGN-DETAILS 7.2.6).
-	RemoteMismatchCount    int
+	// Mismatches from one indexer within RemoteMismatchInterval that void it for RemoteDistrustTimeout: 3 (§11.14's merge
+	// row, DESIGN-DETAILS 7.2.6).
+	RemoteMismatchCount int
+	// The window RemoteMismatchCount is counted over: 24 h, three mismatches in a day (§11.14's merge row).
 	RemoteMismatchInterval time.Duration
-	RemoteDistrustTimeout  time.Duration
+	// How long an indexer past RemoteMismatchCount is not asked, kept in search.state: 24 h (§11.14's merge row).
+	RemoteDistrustTimeout time.Duration
 	// evs's time check both ways, which bounds a fold below an indexer's pinned push: 40 min, 10 min ahead on the pinned
 	// push and 30 min behind on a push in parts (§11.8's 5b; DESIGN-DETAILS 7.2.1, QD-709). A value of the format and of
 	// evs's check, so no deployment changes it on one side alone.

@@ -42,6 +42,7 @@ type searchEngineRemoteCorpus struct {
 	textPin func(repoId Id, refId Id) (SearchSyncPin, uint32, bool)
 }
 
+// The corpus over engine, the text pins textPin names.
 func newSearchEngineRemoteCorpus(engine *SearchEngine, textPin func(repoId Id, refId Id) (SearchSyncPin, uint32, bool)) *searchEngineRemoteCorpus {
 	return &searchEngineRemoteCorpus{engine: engine, textPin: textPin}
 }
