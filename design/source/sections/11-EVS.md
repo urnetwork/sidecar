@@ -802,7 +802,9 @@ keys      no key is a path prefix of another, an existing key followed by / at t
           reverse, which MinIO's directory-object listing needs (11.3; owner decision 234), so a byte prefix such
           as §10.6's gkm/kp/<sidecar_id>/<ref>.claim beside gkm/kp/<sidecar_id>/<ref> stands: entries end in .e
           beside their children's directory; map, spidx, hold and drops keys end in /_, pidx/ keys under a ref
-          have fixed lengths, and no dropscan/ name is a path prefix of another
+          have fixed lengths, and no dropscan/ name is a path prefix of another; sentinel/_, each file cluster's
+          readiness object, which xops writes once (§19.4; evs-30; owner decision 258), prefixes no family's
+          key, none starting with sentinel
 ```
 
 **Placement (owner decision 145).** The metadata tier grows only by whole clusters, never MinIO pools, whose PUTs can pass a precondition in a pool the key is not in (11.3):
@@ -1900,8 +1902,10 @@ skip      every P2 write for a repo (folds, moves, packing, copies) rereads repo
           the hold stands; phases 5-6 remove a shredding repo's once it ends (11.12)
 index     pidx/<repo>/<ref>/<v_first>-<id> (v_first zero-padded to 20 digits, <id> the container's pack_id or
           parcel_id, the first 16 B of SHA-256 over its bytes; nothing extends it, and containers never share a
-          key): {container kind, versions v_first..v_last with each record's kind, offset and length, the log pages
-          a pack holds (a parcel's entry lists none), the segment ids its records introduce}; a push whose parts
+          key): {container kind, versions v_first..v_last with each record's kind, offset and length and the 20 B
+          place it had in the batch it left (11.8's EvsPlace), by which a seal, naming its parts by place, finds
+          a part once evacuation has deleted the batch (evs-17; owner decision 256), the log pages a pack holds
+          (a parcel's entry lists none), the segment ids its records introduce}; a push whose parts
           and seal evacuate in different runs has an entry in each container; a parcel is replaced by its pack's
           entries first, then the parcel and its entries are deleted
 readers   a record whose batch is gone is found by LIST pidx/<repo>/<ref>/ (cached; entries never change), a pack's

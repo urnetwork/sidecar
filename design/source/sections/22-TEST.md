@@ -284,7 +284,8 @@ schema guard (I-18): every server-visible column (helo_name, network_client_leas
   stopping at bytes the design seals; testdata/metadata/fields.yml and each area's
   metadata_rows.yml map each to its row, and "and back" holds for a row once its owning
   milestone has landed, a row ahead of it carrying planned: Mn there, never in
-  metadata_list.yml, which stays §2.8's block byte for byte
+  metadata_list.yml, which stays §2.8's block byte for byte, but for the additions an owner's
+  answer makes ahead of a fold, each named in check/ with its question (owner decision 252)
 self-test: a sidecar_leaktest build leaks into each class, which must catch it
 assert every stored commit but an external commit parses as PrivateMessage, and in S3
          and S4 GkmCommitHeader carries only the generation and the auth pin (D-KEYS-3)

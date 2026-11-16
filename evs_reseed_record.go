@@ -1,5 +1,3 @@
-//go:build !ios_extension
-
 // A re-seeded push's records as readers meet them (§11.8's record row, §11.13's re-seed row; QD-725, QD-818). A
 // one-part push re-seeds as one EVS_BATCH_RESEED record holding a push record's body, its statement and payload, at
 // the place its version's window entry names. A push in parts re-seeds as one EVS_BATCH_RESEED record per part, each
@@ -12,6 +10,9 @@
 // push body holds two items and a part body at least three, the last of 8 bytes, so neither parses as the other, and
 // a reseed record holding a part at a version's place, or one holding a push at a seal's part place, is refused. The
 // type stays the mark the reseed route's slot rule reads.
+//
+// On every leg, the ios_extension leg included: a replaying reader takes a sealed push's parts through
+// ParseEvsSealPartRecord (evs_push_record.go; QD-839).
 
 package sidecar
 
