@@ -25,10 +25,11 @@ const releaseSuffix = "/v2026"
 // the arguments run.sh's sidecar_release_edit gives go_mod_fork.
 var releaseDocumentPattern = regexp.MustCompile(`^(design|research_notes|DESIGN.*|HANDOFF\.md|FEEDBACK-SYSTEM\.md)$`)
 
-// The go_mod_fork steps, in the order §4.9 gives them, on connect and glog as earlier release steps
-// leave them and on this repository: every module's quoted paths rewritten, smtpproof's before the
-// root's, each tree moved into v2026/ beside its nested modules, and the relative replaces rebased.
-// connect and glog keep a local replace here, where a release has their tags in a proxy.
+// The go_mod_fork steps, in the order §4.9 gives them, on connect, glog and operator-core as earlier
+// release steps leave them and on this repository: every module's quoted paths rewritten, smtpproof's
+// before the root's and coretest's before operator-core's, each tree moved into v2026/ beside its
+// nested modules, and the relative replaces rebased. connect, glog and operator-core keep a local
+// replace here, where a release has their tags in a proxy.
 func (self *fixture) toRelease() {
 	self.t.Helper()
 	top := filepath.Join(self.directory, "sidecar")
@@ -59,7 +60,8 @@ func (self *fixture) toRelease() {
 	}
 	rewrite(filepath.Join(self.directory, "glog"), glogBasePath)
 	rewrite(filepath.Join(self.directory, "connect"), connectBasePath, glogBasePath)
-	rewrite(top, smtpproofPath, sidecarBasePath, connectBasePath, glogBasePath)
+	rewrite(filepath.Join(self.directory, "operator-core"), operatorCoreTestBasePath, operatorCoreBasePath, connectBasePath, glogBasePath)
+	rewrite(top, smtpproofPath, sidecarBasePath, connectBasePath, glogBasePath, operatorCoreTestBasePath, operatorCoreBasePath)
 
 	// moves a tree into v2026/, leaving what holds its own go.mod where it is, and the documents. As
 	// go_mod_fork_prepare's zsh `for f in *` does, a dotfile stays, so a checkout's .git keeps its place.
@@ -86,6 +88,7 @@ func (self *fixture) toRelease() {
 	}
 	move(filepath.Join(self.directory, "glog"))
 	move(filepath.Join(self.directory, "connect"))
+	move(filepath.Join(self.directory, "operator-core"))
 	move(top)
 	move(filepath.Join(top, "smtpproof"))
 
@@ -98,20 +101,31 @@ func (self *fixture) toRelease() {
 	edit(filepath.Join(self.directory, "connect", "v2026", "go.mod"), "-module="+connectBasePath+releaseSuffix,
 		"-droprequire="+glogBasePath, "-require="+glogBasePath+releaseSuffix+version)
 
-	// the sibling edits of a module whose directory climbs to the siblings with climbs. operator-core's
-	// development replace climbs with the move, as gVisor's and sctp's do, until build's run.sh takes
-	// operator-core's own release step and rewrites it to that tag (owner decision 251)
-	siblings := func(climbs string) []string {
+	// connect's and glog's tags in a module whose directory climbs to the siblings with climbs, with
+	// sctp's and gVisor's replaces climbing with the move
+	connectSiblings := func(climbs string) []string {
 		return []string{
 			"-droprequire=" + connectBasePath, "-droprequire=" + glogBasePath,
 			"-dropreplace=" + connectBasePath, "-dropreplace=" + glogBasePath,
-			"-replace=" + operatorCoreBasePath + "=" + climbs + "operator-core",
 			"-require=" + connectBasePath + releaseSuffix + version, "-require=" + glogBasePath + releaseSuffix + version,
 			"-replace=" + connectBasePath + releaseSuffix + "=" + climbs + "connect/v2026",
 			"-replace=" + glogBasePath + releaseSuffix + "=" + climbs + "glog/v2026",
 			"-replace=" + sctpBasePath + "=" + climbs + "connect/sctp",
 			"-replace=" + gvisorBasePath + "=" + climbs + "gvisor",
 		}
+	}
+	// operator-core's own release step, which run.sh runs after connect's and before this repository's
+	// (owner decision 251)
+	edit(filepath.Join(self.directory, "operator-core", "v2026", "go.mod"),
+		append(connectSiblings("../../"), "-module="+operatorCoreBasePath+releaseSuffix)...)
+
+	// the sibling edits of each module here: those, and operator-core's tag, which run.sh's edits give
+	// every module of this repository in place of its development require and replace
+	siblings := func(climbs string) []string {
+		return append(connectSiblings(climbs),
+			"-droprequire="+operatorCoreBasePath, "-dropreplace="+operatorCoreBasePath,
+			"-require="+operatorCoreBasePath+releaseSuffix+version,
+			"-replace="+operatorCoreBasePath+releaseSuffix+"="+climbs+"operator-core/v2026")
 	}
 	edit(filepath.Join(top, "v2026", "go.mod"), append(siblings("../../"), "-module="+sidecarBasePath+releaseSuffix)...)
 	edit(filepath.Join(top, "smtpproof", "v2026", "go.mod"), append(siblings("../../../"),
