@@ -321,8 +321,9 @@ func TestAclGateHonorScopeClosesByEventAndByPoll(t *testing.T) {
 
 // QD-719 at the real gate, over TEAM's log: no rows hold the config repo's AclRepo, and the cache's state, built from
 // those rows and the Genesis, honors the config's scopes for evs and for gkm as §8.5's kind default gives them: every
-// admitted sidecar's r, a config writer's rw at evs, a member device's rw at gkm, §7.9's bootstrap admin for the
-// Genesis's owner sidecar alone; and a revocation closes a live config scope at the next load.
+// admitted sidecar's r, a config writer's rw at evs, a member device's rw at gkm, the config's admin for every config
+// writer (QD-894); and a revocation closes a live config scope at the next load, the bootstrap sidecar's own leaving
+// the other config writer the config's admin.
 func TestAclGateHonorScopeHonorsTheConfigRepo(t *testing.T) {
 	net := newTestConfigNet(t)
 	phone := net.admitMemberDevice("config scope")
@@ -360,15 +361,17 @@ func TestAclGateHonorScopeHonorsTheConfigRepo(t *testing.T) {
 		{name: "places the repo at evs", device: net.owner, scope: AclEvsAdmin, audience: evs, want: AclScopeHonored},
 		{name: "and forms its group at gkm", device: net.owner, scope: AclEvsAdmin, audience: gkm, want: AclScopeHonored},
 		{name: "another config writer writes heads at evs", device: ownerPhone, scope: AclEvsWrite, audience: evs, want: AclScopeHonored},
-		{name: "and administers nothing at evs", device: ownerPhone, scope: AclEvsAdmin, audience: evs, want: AclScopeRefused},
-		{name: "or at gkm", device: ownerPhone, scope: AclEvsAdmin, audience: gkm, want: AclScopeRefused},
+		{name: "and administers the config at evs", device: ownerPhone, scope: AclEvsAdmin, audience: evs, want: AclScopeHonored},
+		{name: "and at gkm", device: ownerPhone, scope: AclEvsAdmin, audience: gkm, want: AclScopeHonored},
 		{name: "a member device reads at evs", device: phone, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
 		{name: "reads at gkm", device: phone, scope: AclEvsRead, audience: gkm, want: AclScopeHonored},
 		{name: "writes no head at evs", device: phone, scope: AclEvsWrite, audience: evs, want: AclScopeRefused},
 		{name: "commits the group at gkm", device: phone, scope: AclEvsWrite, audience: gkm, want: AclScopeHonored},
-		{name: "and administers nothing", device: phone, scope: AclEvsAdmin, audience: gkm, want: AclScopeRefused},
+		{name: "and administers nothing at gkm", device: phone, scope: AclEvsAdmin, audience: gkm, want: AclScopeRefused},
+		{name: "or at evs", device: phone, scope: AclEvsAdmin, audience: evs, want: AclScopeRefused},
 		{name: "a read_only device reads at evs", device: readOnly, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
 		{name: "and commits nothing at gkm", device: readOnly, scope: AclEvsWrite, audience: gkm, want: AclScopeRefused},
+		{name: "and administers nothing", device: readOnly, scope: AclEvsAdmin, audience: evs, want: AclScopeRefused},
 		{name: "an ephemeral device reads at evs", device: ephemeral, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
 		{name: "reads at gkm", device: ephemeral, scope: AclEvsRead, audience: gkm, want: AclScopeHonored},
 		{name: "and writes at neither", device: ephemeral, scope: AclEvsWrite, audience: gkm, want: AclScopeRefused},
@@ -394,6 +397,25 @@ func TestAclGateHonorScopeHonorsTheConfigRepo(t *testing.T) {
 		}
 		if answer := cache.HonorScope(net.networkId, readOnly.sidecarId, configId, AclEvsRead, audience, now); answer != AclScopeHonored {
 			t.Errorf("another device's config r at %d after the revocation: %d", audience, answer)
+		}
+	}
+
+	// the bootstrap sidecar is revoked by the other config writer, which keeps the config's admin at both audiences
+	net.mustPost(ownerPhone, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(net.owner, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED))
+	source.publish(net)
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil {
+		t.Fatal(load.err)
+	}
+	for _, audience := range []AclTokenAudience{evs, gkm} {
+		if answer := cache.HonorScope(net.networkId, net.owner.sidecarId, configId, AclEvsAdmin, audience, now); answer != AclScopeRefused {
+			t.Errorf("the revoked bootstrap sidecar's config admin at %d: %d", audience, answer)
+		}
+		if answer := cache.HonorScope(net.networkId, ownerPhone.sidecarId, configId, AclEvsAdmin, audience, now); answer != AclScopeHonored {
+			t.Errorf("another config writer's config admin at %d once the bootstrap sidecar is revoked: %d", audience, answer)
+		}
+		if answer := cache.HonorScope(net.networkId, readOnly.sidecarId, configId, AclEvsAdmin, audience, now); answer != AclScopeRefused {
+			t.Errorf("a read_only device's config admin at %d: %d", audience, answer)
 		}
 	}
 }

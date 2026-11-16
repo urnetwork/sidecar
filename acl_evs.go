@@ -10,9 +10,12 @@
 // add nothing to config, directory or secret repos (D-ACL-13, D-ACL-24).
 //
 // The config repo's row is the state's own where the rows hold none (acl_state.go, QD-719), so its kind default
-// answers in every state. Its one admin is §7.9's bootstrap sidecar, the Genesis's owner_sidecar_id while it stands as
-// a config writer: the exchange gives that sidecar the config's admin scope to create the repo, push its head and form
-// its group, and evs and gkm honor it from here.
+// answers in every state. Its admins are the config writers, each a member device of an AdminSet member that is not
+// read_only, at evs and gkm alike (QD-894): the exchange gives each the config's admin scope, and evs and gkm honor it
+// from here, to create the repo, push its head and form its group, and later to re-form the group (§10.8), post its
+// ladder and activate the repo. §7.9's bootstrap sidecar, the Genesis's owner_sidecar_id, is the first of them, from
+// base 1, and holds it only while it is one. The config has no access log, so no RepoAdmin adds to them, and its
+// admins drop nothing in it (D-ACL-25, acl_versioning.go).
 //
 // §8.6's ceiling holds an ephemeral sidecar to the config's read, the directory's read and own-path writes,
 // kind-default deposits, and the rules, RepoGrants and EvsShares that name it: its sidecar atom, a tag it
@@ -198,11 +201,10 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 				accumulator.add(AclEvsWrite, kindDefault)
 			}
 		}
-		// §7.9's bootstrap: the exchange gives repo:<config_repo_id>:admin to the Genesis's owner sidecar alone, while
-		// it stands as a config writer, to create the repo, push its head and form its group, and a gate honors a
-		// scope only for a subject that holds it here (D-ACL-21), so that sidecar holds it at both audiences. The
-		// config has no other admin and no access log
-		if self.genesisOwnerId != (Id{}) && sidecar.id == self.genesisOwnerId && sidecar.configWriter && memberDevice && !sidecar.readOnly {
+		// every config writer administers it, at both audiences (QD-894): the exchange gives each
+		// repo:<config_repo_id>:admin, and a gate honors a scope only for a subject that holds it here (D-ACL-21).
+		// §7.9's bootstrap sidecar is the first of them, and no access log adds another
+		if sidecar.configWriter && memberDevice && !sidecar.readOnly {
 			accumulator.add(AclEvsAdmin, kindDefault)
 		}
 	case protocol.RepoKind_REPO_KIND_DIRECTORY:
@@ -286,8 +288,8 @@ func (self *AclState) deletedRepoAccess(sidecar *aclSidecarState, repo *aclRepoS
 // Whether §8.8's access log counts the sidecar as one of the repo's admins now, read_only never: in its standing
 // admins; in the directory those and every config writer, each while consented (D-ACL-24); in an owner-bound repo
 // only an admin that is a consented device of its owner. This is the admin right the live table gives from the
-// access log alone, with no rule and no kind default in it, so the config, whose one admin is §7.9's bootstrap
-// sidecar by kind default, has none here, and neither has a kind this code does not know.
+// access log alone, with no rule and no kind default in it, so the config, whose admins are its config writers by
+// kind default (QD-894), has none here, and neither has a kind this code does not know.
 func (self *AclState) standingRepoAdmin(sidecar *aclSidecarState, repo *aclRepoState) bool {
 	if sidecar.readOnly {
 		return false

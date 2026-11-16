@@ -204,7 +204,8 @@ type EvsPlanArgs struct {
 	Generation uint64
 	// Reads the cluster's head, not evs's cache.
 	Fresh bool
-	// The writing run's tainted bit (§16.6), which a format-2 push's provenance carries; format 1 ignores it.
+	// The writing run's tainted bit (§16.6), which the push's sealed provenance carries, on format 1 too (§11.6's
+	// Records, from M3; QD-042): EvsWritePathsArgs.Tainted, false for a write bound to no run.
 	Tainted bool
 	// The agent the push is made for, which its sealed provenance names and its subkey signs, nil for none.
 	AgentId *Id
@@ -1477,6 +1478,11 @@ type EvsGitPlanArgs struct {
 	// for none (DESIGN-DETAILS 8.5; see the tainted row).
 	Tainted  []EvsTaintedPath
 	NextTree EvsGitTreeEntries
+	// The writing run's tainted bit and the agent the push is made for, which its sealed provenance carries as a
+	// file-mode push's does (EvsPlanArgs.Tainted, AgentId): false and nil for an update bound to no run, a person's
+	// own git push among them. Another fact than Tainted above, which names token paths a stopped version left.
+	RunTainted bool
+	AgentId    *Id
 }
 
 // A git update's new tree as its plan names a tainted token path in it (DESIGN-DETAILS 8.5): the entries of the
@@ -1579,7 +1585,7 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 				RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 				Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 				Generation: args.Generation, keys: result.keys, floors: map[string]uint64{}, gitUpdate: args.Update,
-				blobs: args.Blobs,
+				blobs: args.Blobs, Tainted: args.RunTainted, AgentId: args.AgentId,
 			}
 			if err := plan.setGitRef(head, args.RefName, self.client.args.Identity().SidecarId); err != nil {
 				return err

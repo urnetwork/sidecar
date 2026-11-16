@@ -461,8 +461,8 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
 6  the approver's identity key on another device, or a presence key, signs the ApprovalDecision; a
    single-device user approves in the harness's own prompt, which in a tainted run counts only where
    the matching `requests` rule names harness evidence, or with a presence prompt. The record labels
-   the evidence type, a network policy may demand stronger evidence, and high risk adds an SSHSIG; no
-   approval comes by email (owner decisions 75, 80, 142; §16.6)
+   the evidence type, and a network policy may demand stronger evidence; no decision needs an SSHSIG
+   (owner decision 279), and no approval comes by email (owner decisions 75, 80, 142; §16.6)
 7  the daemon executes only if the decision's hash matches its own canonical payload and the decision
    names this sidecar, reserving the use before the effect (§16 D-MCP-4, D-MCP-11, D-MCP-12); once
    the run is tainted, no standing grant or approved recipient passes, and it refuses as stale a

@@ -1142,16 +1142,6 @@ var testFenceAdditions = []struct {
 		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
 	},
 	{
-		message:  "Error",
-		field:    testFenceField{name: "min_version", number: 5, typeName: "uint32"},
-		question: "plan-PROTO-version-error-range",
-	},
-	{
-		message:  "Error",
-		field:    testFenceField{name: "max_version", number: 6, typeName: "uint32"},
-		question: "plan-PROTO-version-error-range",
-	},
-	{
 		message:  "ProjectionHeader",
 		field:    testFenceField{name: "tail_verdicts", number: 10, typeName: "bytes"},
 		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
@@ -1287,6 +1277,13 @@ var testFenceAdditions = []struct {
 		message:  "ReachReceipt",
 		field:    testFenceField{name: "server_name", number: 11, typeName: "string"},
 		question: "tls-m6-06-reach-receipt-server-name",
+	},
+	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
+	// whether body is the kind's message or the AgentSignedBody holding it
+	{
+		message:  "Opening",
+		field:    testFenceField{name: "version", number: 4, typeName: "uint32"},
+		question: "record-m6-03-opening-entry-version",
 	},
 }
 

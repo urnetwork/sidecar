@@ -12,18 +12,23 @@
 //	reads      over EvsRepo, the read's purpose and run in its context, so an owner-bound repo's reader that is not
 //	           its writer deposits its receipt and awaits evs's 200 before anything decrypts (EVS1-M3-01's gate,
 //	           D-MCP-18); a first read that cannot deposit is refused, the gate's own refusal
-//	trust      a version is this sidecar's own words only where this sidecar signed it in an untainted run and it
-//	           imported nothing, and a member's untainted version is member's, which the push's sealed provenance
-//	           says (QD-042, plan-MCP-format1-tainted-files). EvsRepo's writes do not set the tainted bit from the
-//	           writing run on format 1 yet, nor do its reads return the provenance, so no version can show either:
-//	           every version reads untrusted, this sidecar's own included, and taints the run before its bytes
-//	           return (D-MCP-16), the closed reading until they do (question mcp-m3-16-format1-tainted-bit-owner)
-//	writes     a push on either ref mode, this sidecar as committer (owner decision 81): a file-mode ref by path CAS on
-//	           base_version, a conflict answering FAILED_PRECONDITION; a git-mode ref through the local tier's
-//	           WriteAtTip, which rebuilds on a newer tip while the path is unchanged, at most EvsSettings'
-//	           WriteAtTipTryCount tips (owner decision 141), the tool calling it once and its tries running out
-//	           answering a retryable failure; a daemon with no local tier answers EVS_GIT_REF; versioning on alone,
-//	           format 1's, off answering FAILED_PRECONDITION
+//	trust      by the version's push's sealed provenance, which the read asks EvsRepo for (EvsReadArgs.Provenance,
+//	           EvsFileInfo.Provenance; QD-042, QD-851; plan-MCP-format1-tainted-files): untrusted where a tainted run
+//	           wrote it, a signed import brought it in, its agent's subkey signature was refused, or the read gives
+//	           no provenance (evs serves no record of the push, or the push sealed none, one from before the field),
+//	           and reading it taints the run before its bytes return, fenced (D-MCP-16); else own where this sidecar
+//	           signed it, its words from an untainted run; else member, another sidecar's untainted version, which
+//	           taints nothing. A push bound to no run, a person's own git push among them, carries no bit and reads
+//	           by its signer (§16.17's residual)
+//	writes     a push on either ref mode, this sidecar as committer (owner decision 81), sealing the call's run's
+//	           tainted bit as the call read it (McpCall.Tainted) in the push's provenance, so the version reads back
+//	           untrusted in any run where a tainted run wrote it; the session's agent rides as the commit's label,
+//	           and no agent_id is sealed, since a session holds a label and no agent id (question
+//	           evs-provenance-taint-session-agent-id). A file-mode ref by path CAS on base_version, a conflict
+//	           answering FAILED_PRECONDITION; a git-mode ref through the local tier's WriteAtTip, which rebuilds on a
+//	           newer tip while the path is unchanged, at most EvsSettings' WriteAtTipTryCount tips (owner decision
+//	           141), the tool calling it once and its tries running out answering a retryable failure; a daemon with
+//	           no local tier answers EVS_GIT_REF; versioning on alone, format 1's, off answering FAILED_PRECONDITION
 //	outward    a write or delete of Ingest.AgentConfigPaths in a shared repo goes through §5.4's gate with the evs
 //	           effect (EvsWriteEffect, EVS1-M3-01), which pushes only while its Lookup finds nothing and looks again
 //	           after a refusal, so a crash after the effect takes no second push; pending answers approval_pending
@@ -359,7 +364,7 @@ type mcpEvsReadOut struct {
 	Size          uint64 `json:"size"`
 	// utf-8, or base64 for bytes that are not
 	Encoding string `json:"encoding"`
-	// between the untrusted markers where the version is not this sidecar's
+	// between the untrusted markers where the version reads untrusted
 	Content    string `json:"content"`
 	Versioning string `json:"versioning"`
 	State      string `json:"state"`
@@ -399,8 +404,22 @@ func mcpEvsEntryKindName(kind protocol.EvsEntryKind) string {
 	return strings.TrimPrefix(strings.ToLower(kind.String()), "evs_entry_")
 }
 
-// A read of one path's version into the result: its bytes held to the settings' bound, the run tainted first, since no
-// version can show yet that an untainted run wrote it (the header's trust row), and its content fenced then. The
+// How a version reads by its signer and its push's sealed provenance (the header's trust row): untrusted where the
+// provenance is unknown, a tainted run's, an import's or one whose agent signature was refused; else own for this
+// sidecar's version, member for another's.
+func mcpEvsTrust(info *sidecar.EvsFileInfo, ownSidecarId sidecar.Id) McpTrust {
+	provenance := info.Provenance
+	switch {
+	case provenance == nil || provenance.Tainted || provenance.Imported || provenance.Refused:
+		return McpTrustUntrusted
+	case info.SignerSidecarId == ownSidecarId:
+		return McpTrustOwn
+	}
+	return McpTrustMember
+}
+
+// A read of one path's version into the result: its bytes held to the settings' bound, its trust by its push's
+// provenance (mcpEvsTrust), and for an untrusted version the run tainted first and its content fenced then. The
 // resource of the path is named for an over-limit result.
 func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpEvsRepo, path string, version uint64, result *McpResult) (*mcpEvsReadOut, error) {
 	network, ok := mcpToolNetworkOf(call)
@@ -417,7 +436,7 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 	ctx = sidecar.WithEvsReadContext(ctx, &sidecar.EvsReadContext{Purpose: sidecar.RecordReadPurposeRead, RunId: &runId})
 	limit := call.Session.server.settings.Mcp.ResourceByteCount
 	content := &mcpLimitedBuffer{limit: limit}
-	info, err := repo.ReadHead(ctx, &sidecar.EvsReadArgs{Path: path, Version: version}, content)
+	info, err := repo.ReadHead(ctx, &sidecar.EvsReadArgs{Path: path, Version: version, Provenance: true}, content)
 	if err != nil {
 		if content.over {
 			return nil, errMcpEvsTooLarge
@@ -441,11 +460,18 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 		out.Encoding = "base64"
 		text = base64.StdEncoding.EncodeToString(content.buffer.Bytes())
 	}
-	// taint before data: the run file is fsynced before these bytes leave the daemon (D-MCP-16)
-	if err := result.Untrusted(ctx); err != nil {
-		return nil, err
+	switch mcpEvsTrust(info, identity.SidecarId) {
+	case McpTrustOwn:
+	case McpTrustMember:
+		result.Member()
+	default:
+		// taint before data: the run file is fsynced before these bytes leave the daemon (D-MCP-16)
+		if err := result.Untrusted(ctx); err != nil {
+			return nil, err
+		}
+		text = result.Fence(text)
 	}
-	out.Content = result.Fence(text)
+	out.Content = text
 	return out, nil
 }
 
@@ -475,9 +501,12 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	if agent := call.Session.Agent(); agent != nil {
 		agentLabel = agent.Label
 	}
+	// the run's taint as this call finds it, before anything is written: what the push's provenance seals, so a
+	// tainted run's words read back untrusted in every run (QD-042). An unbound session's placeholder reads tainted
+	tainted := call.Tainted()
 	shared := mcpEvsShared(network.RepoKind(repoId))
 	if shared && McpAgentConfigPath(call.Session.server.settings.Ingest, path) {
-		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel)
+		return mcpEvsWriteOutward(ctx, call, network, repoId, path, base, content, remove, message, agentLabel, tainted)
 	}
 	if shared && !remove {
 		scanner, err := sidecar.NewRedactor(rand.Reader)
@@ -492,7 +521,7 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	if !remove {
 		write.Content = bytes.NewReader(content)
 	}
-	written, err := repo.WritePaths(ctx, &sidecar.EvsWritePathsArgs{Writes: []*sidecar.EvsPathWrite{write}})
+	written, err := repo.WritePaths(ctx, &sidecar.EvsWritePathsArgs{Writes: []*sidecar.EvsPathWrite{write}, Tainted: tainted})
 	if err == nil {
 		McpMeter(ctx, int64(len(content)))
 		return &mcpEvsWriteOut{Status: "written", Version: written.PathVersions[0], PushId: written.PushId.String()}, nil
@@ -503,6 +532,7 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 	// a git-mode ref: a commit through the local tier on the current tip, while the path is unchanged
 	committed, err := repo.WriteAtTip(ctx, &sidecar.EvsWriteAtTipArgs{
 		Path: path, BaseVersion: base, Content: content, Remove: remove, Message: message, AgentLabel: agentLabel,
+		Tainted: tainted,
 	})
 	if err != nil {
 		return nil, mcpEvsError(err)
@@ -513,7 +543,7 @@ func mcpEvsWrite(ctx context.Context, call *McpCall, repoId sidecar.Id, path str
 
 // An agent-config write or delete as an outward action (§16.5): its action, and the evs effect, through §5.4's gate.
 func mcpEvsWriteOutward(ctx context.Context, call *McpCall, network McpEvsNetwork, repoId sidecar.Id, path string, base uint64,
-	content []byte, remove bool, message string, agentLabel string) (*mcpEvsWriteOut, error) {
+	content []byte, remove bool, message string, agentLabel string, tainted bool) (*mcpEvsWriteOut, error) {
 	authorizer, ok := call.Network.(mcpAuthorizer)
 	if !ok {
 		return nil, errMcpEvsOutward
@@ -536,7 +566,9 @@ func mcpEvsWriteOutward(ctx context.Context, call *McpCall, network McpEvsNetwor
 	if err != nil {
 		return nil, errMcpEvsOutward
 	}
-	effect := &sidecar.EvsWriteEffect{Path: path, BaseVersion: base, Remove: remove, Message: message, AgentLabel: agentLabel}
+	effect := &sidecar.EvsWriteEffect{
+		Path: path, BaseVersion: base, Remove: remove, Message: message, AgentLabel: agentLabel, Tainted: tainted,
+	}
 	if !remove {
 		effect.Content = content
 	}
@@ -713,7 +745,7 @@ func addEvsTools(catalog *McpCatalog) {
 	AddTool(catalog, &McpToolSpec[mcpEvsReadIn]{
 		Name:        "evs_read",
 		Tier:        McpTierRead,
-		Description: "Reads a file of a repo, its newest version or an older one; content another writer made, or a tainted run wrote, comes back marked untrusted, and reading it taints the run.",
+		Description: "Reads a file of a repo, its newest version or an older one; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
 		Targets: func(call *McpCall, in *mcpEvsReadIn) ([]McpTarget, error) {
 			repoId, err := mcpEvsRepoId(in.Repo)
 			if err != nil {
