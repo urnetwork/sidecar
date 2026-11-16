@@ -195,8 +195,6 @@ type TeamRow struct {
 	// The row's name, as the T2 and T3 tests run it.
 	Name string
 	Run  func(t testing.TB, net *TeamNet)
-	// Whether the row takes the full-scale settings when its test asks for them (the admissions row).
-	Scaled bool
 }
 
 // The suite's rows.
@@ -205,7 +203,7 @@ func TeamRows() []*TeamRow {
 		{Name: "k of n end to end", Run: teamRowKOfN},
 		{Name: "n at most 2 forces k = 1", Run: teamRowTwoForceOne},
 		{Name: "seats in the directory group", Run: teamRowSeats},
-		{Name: "admissions meet no member-device cap", Run: teamRowAdmissions, Scaled: true},
+		{Name: "admissions meet no member-device cap", Run: teamRowAdmissions},
 		{Name: "an ephemeral writes no config", Run: teamRowEphemeralConfig},
 	}
 }
