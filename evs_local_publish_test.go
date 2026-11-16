@@ -189,7 +189,7 @@ func TestEvsLocalCarriedNamesAPulledRefAsItsSource(t *testing.T) {
 		mainRefId: {RefId: mainRefId, Kind: protocol.EvsRefKind_EVS_REF_SHARED, Version: 7, Tip: m2, AppliedOrder: 3},
 		workRefId: {RefId: workRefId, Kind: protocol.EvsRefKind_EVS_REF_OWNED, Version: 2, Tip: w1, AppliedOrder: 4},
 	}}
-	carried, err := mount.repo.carried(context.Background(), workRefId, merge, []EvsGitOid{w1}, state)
+	carried, err := mount.repo.carried(context.Background(), workRefId, merge, []EvsGitOid{w1}, state, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestEvsLocalCarriedPastSixteenSources(t *testing.T) {
 	}
 	octopus := mount.commit("me@example.invalid", files, parents...)
 	mount.sync()
-	carried, err := mount.repo.carried(context.Background(), evsTestId("octopus ref"), octopus, []EvsGitOid{base}, state)
+	carried, err := mount.repo.carried(context.Background(), evsTestId("octopus ref"), octopus, []EvsGitOid{base}, state, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1372,5 +1372,171 @@ func TestEvsLocalPublishARecreationWithNoTaintPlansAsItDid(t *testing.T) {
 	}
 	if _, exported := publisher.export("main"); exported.Refs[0].Tip != c2 {
 		t.Fatalf("exported %+v", exported.Refs[0])
+	}
+}
+
+// EVS1-M6-06's writer tests (DESIGN-DETAILS 8.6's git-to-evs row as amended for section 16 and QD-801), on a device held
+// to agents/build and docs/inner: publish's own check, before anything is planned, sealed or sent.
+
+// The stand-in's sent statements and uploads, and the reads it served: what a refusal before any request leaves as it
+// was.
+func (self *evsTestGitRules) requests() [3]int {
+	statements, uploads := self.publisher.writer.server.sentCounts()
+	world := self.publisher.writer.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	return [3]int{statements, uploads, world.reads}
+}
+
+// EVS_PREFIX_RULE's detail and path, empty for any other error.
+func evsTestPrefixRefusal(err error) (EvsPrefixDetail, string) {
+	var ruleErr *EvsPrefixRuleError
+	if errors.As(err, &ruleErr) {
+		return ruleErr.Detail, ruleErr.Path
+	}
+	return "", ""
+}
+
+// A held device's update that changes a file outside its prefixes ends with EVS_PREFIX_RULE, detail refused, naming
+// the first file in the tree reader's order, with no request to evs; one under its prefixes, and the same change by a
+// device the set names for every path, publish; and an owned ref of the held device asks nothing.
+func TestEvsLocalPublishPrefixRefusesAFileOutsideBeforeAnyRequest(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	outside := rules.commitAs(rules.held, map[string]string{"README": "changed\n", "agents/build/out": "built two\n", "src/x": "x\n"}, c1)
+	before := rules.requests()
+	_, err := rules.publishAs(rules.held, false, "main", &outside)
+	if detail, path := evsTestPrefixRefusal(err); detail != EvsPrefixDetailRefused || path != "README" || !errors.Is(err, ErrEvsPrefixRule) || strings.Contains(err.Error(), "README") {
+		t.Fatalf("a file outside: %v", err)
+	}
+	if after := rules.requests(); after != before {
+		t.Fatalf("requests %v, before %v", after, before)
+	}
+	under := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built two\n"}, c1)
+	rules.mustPublish(rules.held, false, "main", &under)
+	byAdmin := rules.commitAs(rules.admin, map[string]string{"README": "changed\n", "agents/build/out": "built two\n", "src/x": "x\n"}, under)
+	rules.drawn = nil
+	rules.mustPublish(rules.admin, false, "main", &byAdmin)
+	if len(rules.drawn) != 0 {
+		t.Fatalf("a device named for every path drew %q", rules.drawn)
+	}
+	own := rules.ownedRef(rules.held, "scratch")
+	mine := rules.commitAs(rules.held, map[string]string{"src/anything": "x\n"}, c1)
+	rules.mustPublish(rules.held, false, own, &mine)
+	if len(rules.drawn) != 0 {
+		t.Fatalf("an owned ref drew %q", rules.drawn)
+	}
+}
+
+// A held device's new branch takes its base from the shared branches alone, on every parent line: its work of two
+// commits merged main's newer tip on a second-parent line, so main at that version is chosen though its own branch,
+// which the first-parent walk reaches first, leaves fewer commits; the branch is measured from main's tree and publishes. With no shared branch among its ancestors
+// the branch is measured from nothing: refused with detail base and the first file outside, with no request, and
+// published where every file of its tree lies under the prefixes. A device the set names for every path keeps the
+// nearest base and draws no path.
+func TestEvsLocalPublishPrefixHeldDeviceBase(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	c2 := rules.commitAs(rules.admin, map[string]string{"README": "readme two\n", "agents/build/out": "built\n"}, c1)
+	rules.mustPublish(rules.admin, false, "main", &c2)
+	own := rules.ownedRef(rules.held, "work")
+	w1 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built\n", "agents/build/w": "w\n"}, c1)
+	w2 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built\n", "agents/build/w": "w two\n"}, w1)
+	rules.mustPublish(rules.held, false, own, &w2)
+	merged, _ := rules.publisher.mount.history.commit(rules.publisher.tree(map[string]string{"README": "readme two\n", "agents/build/out": "built\n", "agents/build/w": "w two\n"}),
+		rules.clientOf(rules.held).String()+evsCommitterDomain, w2, c2)
+	mainId := rules.publisher.ref("main").refId
+	ownId := rules.publisher.ref(own).refId
+	// the first-parent walk, which a device not held takes, finds its own branch nearer
+	rules.publisher.mount.sync()
+	nearest, err := rules.publisher.mount.repo.overlayBase(context.Background(), evsTestId("any ref"), merged, rules.publisher.state, 100)
+	if err != nil || nearest == nil || nearest.RefId != ownId {
+		t.Fatalf("the nearest base %+v %v", nearest, err)
+	}
+	feature := rules.mustPublish(rules.held, false, "feature", &merged)
+	if feature.Base == nil || Id(feature.Base.GetRefId()) != mainId || feature.Base.GetVersion() != 2 {
+		t.Fatalf("feature's base %v", feature.Base)
+	}
+	// no shared branch among its ancestors: measured from nothing
+	orphan := rules.commitAs(rules.held, map[string]string{"agents/build/y": "y\n", "docs/inner/z": "z\n", "src/x": "x\n"})
+	before := rules.requests()
+	_, err = rules.publishAs(rules.held, false, "orphan", &orphan)
+	if detail, path := evsTestPrefixRefusal(err); detail != EvsPrefixDetailBase || path != "src/x" {
+		t.Fatalf("an orphan with a file outside: %v", err)
+	}
+	if after := rules.requests(); after != before {
+		t.Fatalf("requests %v, before %v", after, before)
+	}
+	inside := rules.commitAs(rules.held, map[string]string{"agents/build/y": "y\n", "docs/inner/z": "z\n"})
+	if result := rules.mustPublish(rules.held, false, "inside", &inside); result.Base != nil {
+		t.Fatalf("an orphan under the prefixes has the base %v", result.Base)
+	}
+	// the admin keeps the nearest base, its own branch, and draws no path
+	adminOwn := rules.ownedRef(rules.admin, "work")
+	a1 := rules.commitAs(rules.admin, map[string]string{"README": "readme two\n", "agents/build/out": "built\n", "src/a": "a\n"}, c2)
+	rules.mustPublish(rules.admin, false, adminOwn, &a1)
+	rules.drawn = nil
+	adminBranch := rules.mustPublish(rules.admin, false, "admin-branch", &a1)
+	if adminBranch.Base == nil || Id(adminBranch.Base.GetRefId()) != rules.publisher.ref(adminOwn).refId || len(rules.drawn) != 0 {
+		t.Fatalf("the admin's branch: base %v, drew %q", adminBranch.Base, rules.drawn)
+	}
+}
+
+// A held device names its tag's proof first among the sources: a tag of main's tip carries nothing; a tag of a tip
+// that a forced update dropped names that version and carries the commit again. A tag of a commit no shared branch
+// held as its tip, its own unpublished commit or the middle commit of a push to main, is measured from nothing and
+// refused with detail tag before any request; the admin tags the same commits with no proof named.
+func TestEvsLocalPublishPrefixHeldDeviceTags(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	h2 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built two\n"}, c1)
+	rules.mustPublish(rules.held, false, "main", &h2)
+	mainId := rules.publisher.ref("main").refId
+	tip := rules.mustPublish(rules.held, false, "refs/tags/tip", &h2)
+	if len(tip.Sources) != 1 || Id(tip.Sources[0].GetRefId()) != mainId || tip.Sources[0].GetVersion() != 2 || len(tip.Commits) != 0 {
+		t.Fatalf("a tag of main's tip: sources %v, carried %d", tip.Sources, len(tip.Commits))
+	}
+	// main gains h3, then the admin forces it back to h2: h3 is a past tip no evs tip reaches
+	h3 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "built three\n"}, h2)
+	rules.mustPublish(rules.held, false, "main", &h3)
+	rules.mustPublish(rules.admin, false, "main", &h2)
+	dropped := rules.mustPublish(rules.held, false, "refs/tags/dropped", &h3)
+	if len(dropped.Sources) == 0 || Id(dropped.Sources[0].GetRefId()) != mainId || dropped.Sources[0].GetVersion() != 3 || len(dropped.Commits) != 1 {
+		t.Fatalf("a tag of a dropped tip: sources %v, carried %d", dropped.Sources, len(dropped.Commits))
+	}
+	// no proof: the device's own unpublished commit, and the middle commit of a push of three
+	unpublished := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "unpublished\n"}, c1)
+	m1 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "m1\n"}, h2)
+	m2 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "m2\n"}, m1)
+	m3 := rules.commitAs(rules.held, map[string]string{"README": "readme\n", "agents/build/out": "m3\n"}, m2)
+	rules.mustPublish(rules.held, false, "main", &m3)
+	for name, commit := range map[string]EvsGitOid{"refs/tags/unpublished": unpublished, "refs/tags/middle": m2} {
+		before := rules.requests()
+		_, err := rules.publishAs(rules.held, false, name, &commit)
+		if detail, path := evsTestPrefixRefusal(err); detail != EvsPrefixDetailTag || path != "README" {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if after := rules.requests(); after != before {
+			t.Fatalf("%s: requests %v, before %v", name, after, before)
+		}
+	}
+	rules.drawn = nil
+	rules.mustPublish(rules.admin, false, "refs/tags/middle", &m2)
+	if len(rules.drawn) != 0 {
+		t.Fatalf("the admin's tag drew %q", rules.drawn)
+	}
+	// a device replays the tags, each passing on its proof, and main, whose FORCE by the admin is outside the rules
+	device := rules.device("device b")
+	for _, name := range []string{"refs/tags/tip", "refs/tags/dropped", "refs/tags/middle", "main"} {
+		device.replay(name)
+		if ref := device.ref(name); ref.StuckAt != 0 || ref.Tip == nil {
+			t.Fatalf("%s: %+v", name, ref)
+		}
+	}
+	if ref := device.ref("main"); ref.Version != 5 || *ref.Tip != m3 {
+		t.Fatalf("main past the FORCE: %+v", ref)
 	}
 }
