@@ -10,7 +10,9 @@
 //	item           kind u8 (1 record, 2 log page) | 3 zero bytes | ref_id 16 | number u64 | length u32 | bytes
 //
 // A record item's number is the version it committed, a part's its seal's, and its bytes are the batch record's as
-// its batch held them, so a range read of them parses as a read at its place did. A log page's number is its page.
+// its batch held them, so a range read of them parses as a read at its place did, less a format-2 record's staged
+// bytes, which no container holds (§11.13's staged row; sidecar.EvsBatchRecordBytesWithoutStaged): such a record's
+// length is under its place's, and its pidx/ entry gives both. A log page's number is its page.
 // Items go records first, by ref, version and place, then log pages by ref and page.
 //
 // WriteContainer writes the container and then one create-only pidx/ entry per ref (pidx.go), in that order, so a
@@ -146,8 +148,14 @@ func BuildContainer(kind protocol.EvsContainerKind, records []*ContainerRecord, 
 		return offset
 	}
 	for _, record := range records {
-		if record.Place == nil || uint32(len(record.Bytes)) != record.Place.GetLength() {
-			return nil, fmt.Errorf("%w: a record's bytes are not its place's length", ErrEvsContainerInvalid)
+		if record.Place == nil || record.Place.GetLength() < uint32(len(record.Bytes)) {
+			return nil, fmt.Errorf("%w: a record's bytes past its place's length", ErrEvsContainerInvalid)
+		}
+		// under it only as a whole record, a format-2 record without its staged bytes, never cut short
+		if uint32(len(record.Bytes)) < record.Place.GetLength() {
+			if _, _, err := sidecar.ParseEvsBatchRecordFormat2(record.Bytes); err != nil {
+				return nil, fmt.Errorf("%w: a record under its place's length that is no whole record: %w", ErrEvsContainerInvalid, err)
+			}
 		}
 		recordType, err := containerRecordType(record.Bytes)
 		if err != nil {

@@ -440,7 +440,7 @@ func (self *evacuateRun) moveRepo(repo *evacuateRepo) error {
 		}
 	}
 	for _, kept := range fresh {
-		agedByteCount += int64(kept.place.GetLength()) + containerItemHeaderByteCount
+		agedByteCount += int64(kept.spoolByteCount) + containerItemHeaderByteCount
 	}
 	for _, record := range parcelRecords {
 		agedByteCount += int64(len(record.Bytes)) + containerItemHeaderByteCount
@@ -455,7 +455,8 @@ func (self *evacuateRun) moveRepo(repo *evacuateRepo) error {
 
 	freshRecords := make([]*ContainerRecord, 0, len(fresh))
 	for _, kept := range fresh {
-		recordBytes, err := self.spool.read(kept.spoolOffset, int(kept.place.GetLength()))
+		// the record as spooled, a format-2 record's staged bytes gone (§11.13's staged row), not its place's length
+		recordBytes, err := self.spool.read(kept.spoolOffset, kept.spoolByteCount)
 		if err != nil {
 			return err
 		}

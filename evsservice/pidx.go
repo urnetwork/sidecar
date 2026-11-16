@@ -92,7 +92,8 @@ func validateEvsPidxEntry(entry *protocol.EvsPidxEntry) error {
 			return invalid("a record of %d bytes", record.GetLength())
 		}
 		place := record.GetPlace()
-		if place == nil || place.GetOffset() < sidecar.EvsBatchHeaderByteCount || place.GetLength() != record.GetLength() {
+		// a container's record is its batch record, less a format-2 record's staged bytes (container.go)
+		if place == nil || place.GetOffset() < sidecar.EvsBatchHeaderByteCount || place.GetLength() < record.GetLength() {
 			return invalid("a record with no place its batch could hold")
 		}
 	}

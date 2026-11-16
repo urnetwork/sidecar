@@ -227,7 +227,9 @@ func (self *fsShareFlows) expectOpen(payload string) error {
 // how many packets the window's link refused, the host's latest decision of the flow, the NAT's dials to the
 // decision's target since dialCount of them, and whether the upstream took payload, unless payload is nil. The world
 // keeps no record of a packet between the window's link and the host's hook, so a flow the host never decided, with
-// nothing refused, was lost on that way.
+// nothing refused, was lost on that way. A denied flow says what the hook was handed and where the host's daemon
+// listens, since rule 0 refuses a daemon listener's port whatever the flow's protocol: tip-check's red at 54e31119 said
+// only "deny to invalid AddrPort" of a datagram to a port the daemon's TCP listener had taken.
 func (self *fsShareFlows) seenOf(ipProtocol connect.IpProtocol, to netip.AddrPort, payload []byte, dialCount int) string {
 	host := self.world.share.Host
 	seen := []string{fmt.Sprintf("the window's link refused %d packets", self.window.RefusedCount())}
@@ -240,8 +242,16 @@ func (self *fsShareFlows) seenOf(ipProtocol connect.IpProtocol, to netip.AddrPor
 	if decision == nil {
 		return strings.Join(append(seen, fmt.Sprintf("the host decided no %s flow of it to %s", ipProtocol, to)), ", ")
 	}
+	if !decision.Opens() {
+		principal := "no principal"
+		if decision.Principal != nil {
+			principal = fmt.Sprintf("a principal of share %s and network %s", decision.Principal.ShareId, decision.Principal.Network)
+		}
+		seen = append(seen, fmt.Sprintf("the host decided %s at generation %d, the flow sealed=%v with %s, the host's daemon listening at %s", decision.Verdict, decision.Generation, decision.Sealed, principal, host.Daemon.Addr()))
+		return strings.Join(seen, ", ")
+	}
 	seen = append(seen, fmt.Sprintf("the host decided %s to %s", decision.Verdict, decision.Target))
-	if !decision.Opens() || ipProtocol == connect.IpProtocolIcmp {
+	if ipProtocol == connect.IpProtocolIcmp {
 		return strings.Join(seen, ", ")
 	}
 	target := netip.AddrPortFrom(decision.Target.Addr(), cmpPort(decision.Target.Port(), decision.To.Port())).String()
