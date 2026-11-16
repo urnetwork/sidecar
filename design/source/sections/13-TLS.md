@@ -143,7 +143,7 @@ Each tlsedge process runs K connect clients in the platform network `urnetwork-e
 
 Contracts in both directions use §6.10.1's Service mode (C9; owner decision 11), issued only while §9's Find-recorded pair lives.
 
-A sidecar provides Service only while it holds a `tls/` or §15 `smtp/` registration, within §6.7's edge-peer budget; above half of GOMEMLIMIT, new streams open at 64 KiB windows. Sidecars get `TlsHint` (orders, issuance, revocation) on topic `tls`, and suspensions through `sock` (§9.5).
+A sidecar provides Service only while it holds a `tls/` or §15 `smtp/` registration, or while it holds a `ur/` stream, from a `ur/` ticket's open until its last `ur/` stream ends (§6.10.1 item 2; owner decision 298), within §6.7's edge-peer budget; above half of GOMEMLIMIT, new streams open at 64 KiB windows. Sidecars get `TlsHint` (orders, issuance, revocation) on topic `tls`, and suspensions through `sock` (§9.5).
 
 **Accounting (X11, owner decision 10).** tlsedge spends §20.6 leases (meter `tls`) for the listening network (PLAN.md:353); bytes per host exist only in 13.9's 24 h records. An empty balance refuses new connections (Find `quota`) and resets open streams with QUOTA.
 
@@ -313,7 +313,7 @@ Flags: `--port` (443, or a listed port), `--expires`, `--audience`, `--alpn`, `-
 
 - **Provides:** tlsedge; the split, its custom-host map with versions, interface reports and readiness, gate, probe and route probes (§12, §19); certs (13.8, D-TLS-7); `TlsEdgeOpen`, `TlsHint`; the `tls` component, its `AppMode` dispatch and publish receipts (13.7, §16); `tls/` hooks with the MTA-STS system publish (13.9; §9, §15); mail-host and off-loopback listener certificates (§15; D-TRUST-8, owner decision 130); the kill switch, published-names list and CT hook (§21); lease spends (§20).
 - **Consumes:** §4 C9, `ServiceHost`, acmez v3; §5 keychain, `Signed`, `Authorize`; §6 streams, Service, topic `tls`; §7 membership, edge login, client names; §8 grants (`audience`, `app_mode`, `link_spki_sha256`), approvals, consent, `EvsShare`; §9 Find, hooks, the signed `AppMode`; §11 owner-bound repos; §12 label and custom-host maps (with CAA mode), records, probe, pending custom hosts, DNS-01 and canary-CAA writes, ready and its `stale` answer across a restore, `canary.<root>`; §15 `mail_network`, receivers' `smtp/25/mx` grants; §16 `ReachReceipt`, approval channels; §19 W1 (drained rollout, map and port-80 reloads), W7, monitor, §19.8's pager, §19.10's abuse step; §20 leases, caps; §21 `network_abuse_state`, `network_verified`, `ScreenName`, holds.
-- **Subprotocol messages:** `TlsEdgeOpen` (0x1501; StreamOpen metadata, edge→listener); `TlsHint` (0x1502; push `tls`).
+- **Subprotocol messages:** `TlsEdgeOpen` (0x1501; StreamOpen metadata, edge→listener); `TlsHint` (0x1502; push `tls`, whose version is the writer's clock in ms, per client, with no durable sequence; §6.8).
 - **API routes** (api; bringyour.yml, route_authz.go):
   - `POST /tls/cert-order` (service token, aud `certs`; caller holds a §8 `tls/` or `smtp/` grant; CSR, attestation); `GET /tls/cert-order/<id>` (state, retry_after, chain, ARI window).
   - `POST /tls/cert-register` (Client; a custom domain's chains, v1); `GET /tls/certs` (Client; certificates, attestations and queued custom-domain CSRs).

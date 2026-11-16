@@ -94,8 +94,13 @@ message UrMlsCredential {                         // sidecar/protocol/gkm.proto
   bytes mls_signature_public_key = 4;             // rotated by self-update
   uint32 cipher_suite = 5; int64 not_after = 6;   // 0x0010 (owner decision 44)
   bytes admission_sha256 = 7;                     // its §7.9 SidecarAdmit; Genesis for the first device
-  bytes identity_signature = 8;                   // §6 signing, purpose mls-credential, fields 1-7
+  bytes identity_signature = 8;                   // §6 signing, purpose mls-credential, fields 1-7:
+                                                  // over "urnetwork-sidecar-v1/mls-credential" || 0x00 ||
+                                                  // u32be(0x1306, SIGNED_UR_MLS_CREDENTIAL) || the
+                                                  // credential's received bytes before field 8's tag
 }
+// A credential encodes fields 1 to 7 in ascending order with no unknown field, then field 8 last with nothing
+// after it, or it is refused; a verifier checks that prefix, never a re-marshal.
 ```
 
 - **Admission (owner decisions 3, 5, 110, 112, 127).** Members accept a credential only if an unrevoked, unparked `SidecarAdmit`, verified through the authorization log back to the genesis and signed as §7.9 allows (one admin, the member's own device unless `self_admit` is off, or k of n for AdminSet members), names its sidecar_id and identity key. Only a network's first device is trusted on first use, against its safety number (§2.8 EX5). Clients pin that key, refuse a second and share pins through §6's `Hello` (D-PROTO-13). After a `SidecarRevoke`, GKM deletes the sidecar's KeyPackages.
@@ -315,7 +320,7 @@ depositor (D-KEYS-17)  before sealing to generation g's drop key, a depositor, w
            rotation, which the gate makes writers write
 ```
 
-Clients cache every RK_g in the §5 keychain, keep MLS state, trees included, on disk under §5's AEAD, load one group's tree at a time (§18.4's budgets) and delete other epoch secrets (RFC 9420 §9.2). Every derivation and unwrap calls §22's `testHookSecret`.
+Clients cache every RK_g in the §5 keychain and, beside it from v0's first generation, each verified GenRotate's Signed bytes, since a signature cannot be rebuilt later and a re-formed group's ladder carries them (10.8); they keep MLS state, trees included, on disk under §5's AEAD, load one group's tree at a time (§18.4's budgets) and delete other epoch secrets (RFC 9420 §9.2). Every derivation and unwrap calls §22's `testHookSecret`.
 
 ### 10.6 GKM: the Delivery Service and wrapped-key store
 
@@ -615,13 +620,38 @@ gkm-10:
 
 **Erasure (owner decision 61).** An entry's key lives only in a deletable slot (§11.12), so an ERASE push deleting it, cached copies and mirrors' slot copies (§11.12) shred the entry even if ciphertext survives; §11.12's CUT first fences the index's publication of it, then its CLOSURE rewrites the search index's files holding its postings without it, under fresh keys in new slots, and the ERASE destroys their old slots' keys, one of which every older stored version of those files uses, staged bytes in a batch included (§11.14); no operator copy holds slots or wraps (owner decision 90), and owner devices' mirrors hold slot copies and apply each erasure (§11.13). gkm, like evs, refuses a `deleted` repo but for a re-seed's GroupForm (below; owner decision 82); its shred (§11.12) deletes the repo's gkm objects and `{gka_}` acks, and again after 10 min for writes in flight (10.6's checks), even under a preservation hold, subject to counsel (owner decision 133), and members drop its keys.
 
-**Recovery when M loses every device (owner decisions 62, 127, 128, 149).** §5.9's recovery code derives X-Wing and Ed25519 keys that §7.9's `RecoveryBind` binds to M; every rotator, agents included, wraps RK_g to every reading member's current X-Wing recovery key, a public key every config reader holds, and the ladder opens older generations.
+**Recovery when M loses every device (owner decisions 62, 127, 128, 149).** §5.9's recovery code derives X-Wing and Ed25519 keys that §7.9's `RecoveryBind` binds to M, each by HKDF-SHA256 from the code's 16 bytes under its own info string, with no BIP-39 PBKDF2 step (§5.9); every rotator, agents included, wraps RK_g to every reading member's current X-Wing recovery key, a public key every config reader holds, and the ladder opens older generations.
 - With the code, a new device is admitted by the recovery key under §7.9's window and veto, meanwhile reading only the authorization log and M's own recovery wraps (10.14). The window and veto bound admission, not those wraps, which the code opens at once: a code holder with M's login holds every generation wrapped to M's recovery key and, through the ladder, each earlier one, and with the operator's ciphertext reads them, whatever a veto does: a rebind or a cascade void stops new wraps, and the code keeps opening what was wrapped to it and reads the current generation until the next rotation, which `RecoveryRebind{reason: compromise}` makes a remove rotation with a path epoch at once; revoking the device it admitted does not retire the code (§2.10). It fetches its recovery wraps (the newest per group whose b8 names its code's binding, 10.6) and, once admitted, first passes §7.9's `anchor` on its config-group RecoveryWrap, raising §5.4's `head_alarm` (fork) and acting no further otherwise; only then does it open each group's sealed GroupInfo, self-join by external commit the config group and every group M writes (owner decision 128), join the others through KF2, revoke M's lost devices through §5.6's calls (D-CORE-20; k of n for an AdminSet member's devices, its own signature counting as one), remove their leaves and rotate (10.5), in any order: a self-join may leave revoked leaves if it carries no GenWrap (generation 0) and its next commit removes them, so no generation reaches a thief's leaves. Above 16 leaves, a self-join waits for one leaf online to write the current GroupInfo; past the first 1,000, the device reads the config and the team directory by their RecoveryWraps, then by wraps (§7.9; owner decisions 144, 182).
 - A binding a void restored takes no RecoveryWrap until a signer outside P signs it again (§7.9's cascade), so the device it admits, once its proposal activates, keeps §7.9's `restored` order, anchoring on a ReaderWrap, never an Add: it uploads its ReaderKey but no KeyPackage, fetches the late ReaderWrap of the config group's current generation that a config writer gives it (KF2), or one a later rotation stages while e's tree lacks it (10.5), and passes the anchor on that wrap's RK_g, with the same alarm and stop on a failure. Only then does it self-join the config group if leaf-entitled, by the one sealed GroupInfo that RK_g opens (else reading the config by those wraps), upload KeyPackages, so that KF2 adds it to its other groups, revoke, remove and rotate as above, and offer `ur keychain recovery-rotate` (§5.9), whose binding takes RecoveryWraps again; a group whose leaves are all in P opens to it only through that binding's surviving RecoveryWraps.
-- `ur keychain recovery-rotate` (§5.9) signs a `RecoveryRebind` (§7.9), re-wraps each group's current generation to the new binding at that binding's own b8 path (10.6), deletes M's old binding's wraps only once every new one exists, so a crash between leaves both and its retry finishes, and requests a `request` rotation in M's groups, or, for a code retired as compromised (`RecoveryRebind{reason: compromise}`), a `remove` one, which starts an immediate path epoch and full checkpoints (§11.6, §11.7). No rebind or void reaches a keychain backup sealed before it, whose `keychain.wrap` the retired or voided code still opens (§5.9), yielding that device's identity key, ClientKey seed, ReaderKeys and key cache, so after a compromise rebind or a void each device whose backups may hold such a sealing is revoked as compromised (§7.9) and enrolled anew, since `--replace` keeps its identity key (§5.5); after a rebind by §5.9's procedure, which keeps the rebind standing and revokes its signer last (owner decision 212).
+- `ur keychain recovery-rotate` (§5.9) signs a `RecoveryRebind` (§7.9), re-wraps each group's current generation to the new binding at that binding's own b8 path (10.6), deletes M's old binding's wraps only once every new one exists, so a crash between leaves both and its retry finishes, and requests a `request` rotation in M's groups, or, for a code retired as compromised (`RecoveryRebind{reason: compromise}`), a `remove` one, which starts an immediate path epoch and full checkpoints (§11.6, §11.7). No rebind or void reaches a keychain backup sealed before it, whose `keychain.wrap` the retired or voided code still opens (§5.9), yielding all of that device's `keychain.ur` (its client jwt, ClientKey seed, identity and agent keys, ReaderKeys, a Delegation's reader key, unlanded statements and this section's key cache) and, by keys derived from R_n, `approvals/`, `runs/`, `restore/` and component state, so after a compromise rebind or a void each device whose backups may hold such a sealing is revoked as compromised (§7.9) and enrolled anew, since `--replace` keeps its identity key (§5.5); after a rebind by §5.9's procedure, which keeps the rebind standing and revokes its signer last (owner decision 212).
 - Without the code, admins revoke the lost devices and admit a new one (§7.9), moving every team repo M read to a new generation; M's owner-bound repos, which need M's consent (owner decision 126), and single-member repos are lost.
 
-**Site loss (D-KEYS-13; order in §19.10).** gkm objects have no off-site copy (owner decisions 90, 94), but devices keep each group's MLS state and every RK_g: a device 10.6's GroupForm rules allow, a repo admin's and for owner-bound kinds the owner's consented device, re-forms each group under a GroupForm linked to the cached RK_g, re-uploads the ladder and re-adds readers and RecoveryWraps, and members check the signer and their cached C_g. A repo re-seeded as deleted (§11.13) takes only that GroupForm, with its epoch 0 and ladder, while deleted (owner decision 82): devices open its files from their cached RK_g once it is restored, its readers rejoin by KF2 and late wraps, and a shred deletes the group. Slots return from owner devices' mirrors (§11.13). Repos no device holds are lost (§2.18).
+**Site loss (D-KEYS-13; order in §19.10).** gkm objects have no off-site copy (owner decisions 90, 94), but devices keep each group's MLS state and every RK_g: a device 10.6's GroupForm rules allow, a repo admin's and for owner-bound kinds the owner's consented device, re-forms each group under a GroupForm linked to the cached RK_g, re-uploads the ladder and re-adds readers and RecoveryWraps, and members check the signer and their cached C_g. A re-formed group carries the ladder by these rules:
+
+```text
+form      a re-form draws a new 16-byte group_id, and its GroupForm names previous_group_id and generation,
+          the newest g the re-former holds
+bytes     the new group's gen/<k>, k <= the form's generation, holds the old Signed GenRotate byte for byte,
+          naming its old group_id, from the copy each client keeps beside RK_g (10.5); GenLink's AAD and C_g
+          hold no group_id, so the ladder carries over
+route     POST /gkm/groups/<id>/ladder, admin scope, at most 64 Signed GenRotates a call in ascending order,
+          open only while the newest GroupForm names the group and before its epoch/1 exists, and in
+          re-seed mode with the form: gkm checks the order, parent_commitment against gen/<k-1> and
+          k <= the form's generation, writes each If-None-Match, equal bytes answering success, and skips
+          the claim checks' time and signer rows
+wait      the group takes no commit, wrap or claim until gen/<form's generation> exists
+members   check the form's signer by 10.6's rule and each C_k against their cached one, a mismatch being an
+          alarm and no adoption, and judge each GenRotate's signature and 10.9's rotation checks only where
+          their retained log reaches, as 10.9's judged row does
+delivery  for g <= the form's generation, 10.9's delivery checks compare a body's group_id with the path's
+          group, not gen/<g>'s
+pins      generation pins compare (g, C_g); a new group_id at an equal (g, C_g), and a new epoch pin from
+          epoch 0, are taken only along a verified GroupForm chain, and evs and readers resolve a statement's
+          gen/<g> through the repo's newest GroupForm (§11.8)
+after     later rotations run as usual
+```
+
+A repo re-seeded as deleted (§11.13) takes only that GroupForm, with its epoch 0 and ladder, while deleted (owner decision 82): devices open its files from their cached RK_g once it is restored, its readers rejoin by KF2 and late wraps, and a shred deletes the group. Slots return from owner devices' mirrors (§11.13). Repos no device holds are lost (§2.18).
 
 **Key domains ([R:product] S4)**, each its own repo and group, take §8.5's kind defaults as readers, which policy narrows (owner-bound kinds: owner decision 126).
 
@@ -709,7 +739,8 @@ roster    every commit's roster lies within the key holders at its auth pin, and
 delivery checks: every member, for each ReaderWrap or DelegationWrap it reads (its own when it fetches it,
 others' when it answers wrap-pending), judged at the delivery's own state, never at the member's later one
 body      it verifies as its SignedType under the signer's identity key; group_id, generation and commitment
-          equal gen/<g>'s; recipient and recipient_key_sha256 match its path's recipient and k8 (10.6)
+          equal gen/<g>'s, or for g at or below a re-form's generation the group_id is the path's group
+          (10.8's delivery row); recipient and recipient_key_sha256 match its path's recipient and k8 (10.6)
 staged    STAGED: no auth or time; the signer is gen/<g>'s; the recipient is in the KeyHolders set whose hash
           gen/<g> carries, and wrap_count counts it
 late      LATE, a first delivery or a replacement to a newer key alike: auth (n_d, A_d) lies on my chain with
@@ -765,7 +796,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-12 (proposed).** MLS is 10.4's subset on ciphersuite 0x0010 from v0, migrating through GroupForm and the ladder if IANA assigns this suite another value. *Why:* owner decision 44.
 
-**D-KEYS-13 (proposed).** After a site loss, repo admins' devices, and for owner-bound kinds the owner's consented devices, re-seed each group from their keychains under a GroupForm linked through the ladder (10.8). *Why:* gkm has no off-site copy (owner decisions 90, 94).
+**D-KEYS-13 (proposed).** After a site loss, repo admins' devices, and for owner-bound kinds the owner's consented devices, re-seed each group from their keychains under a GroupForm linked through the ladder (10.8): the form draws a new group_id and names the previous one and its generation, the old Signed GenRotates go up byte for byte from the copies clients keep, and pins follow (g, C_g) only along a verified GroupForm chain. *Why:* gkm has no off-site copy (owner decisions 90, 94); a GenRotate's signature cannot be rebuilt, and GenLink's AAD and C_g hold no group_id.
 
 **D-KEYS-14 (proposed).** Groups scale by 10.6's sizes: 10.4's self-update interval, KF5's resync, GroupInfo on demand above 16 leaves, daily acks, trees on disk. *Why:* a full 1,000-leaf tree is 2.8 MB, which a per-epoch GroupInfo would rewrite about 143 times a day.
 
@@ -844,6 +875,8 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
   ```text
   POST /gkm/key-packages, /gkm/key-packages/claim, /gkm/reader-key;  GET /gkm/reader-key/<sidecar_id>
   POST /gkm/groups;  GET /gkm/groups/<id>;  POST /gkm/repos/<id>/forms    (GroupForm: create, re-form)
+  POST /gkm/groups/<id>/ladder                 admin: a re-formed group's old Signed GenRotates, at most 64 a
+                                               call, before its epoch/1 (10.8)
   GET  /gkm/groups/<id>/epochs?after=          epoch objects, in order, with their sizes
   POST /gkm/groups/<id>/epochs/<n>             200, 409 (with the winner), 403, 429
   POST /gkm/groups/<id>/gen/<g>                the claim: 201, 412 (with the winner), 403, 429
@@ -859,7 +892,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
   GET|POST|DELETE /gkm/recovery/<member_id>/wraps  GET also under an unadmitted client's recovery:<member_id>,
                                                    for that member's own wraps only (§7.8, §7.9)
   ```
-- **Tables:** none; gkm's durable state is 10.6's objects (owner decisions 2, 21, 145), and Redis `{gka_<group_id>}` holds acks as soft state (owner decision 136).
+- **Tables:** none; gkm's durable state is 10.6's objects (owner decisions 2, 21, 145), and Redis `{gka_<group_id>}` holds acks as soft state (owner decision 136). §6.8's per-client hints need a client id for each `sidecar_id`: gkm, which reads no Postgres, resolves them through api's internal `POST /sidecar/identity/clients` behind the `Push.HintSidecars` seam, with a 5-minute map in each process, and counts and passes over a failed call, the hourly resync covering a lost hint (§5.15).
 - **Services and config:** `server/cli/gkm` hosts `gkmservice` from v0; root `mls_*` and `gkm_*` files and the nested `mlsinterop/` test module (D-REPO-2, D-REPO-3, D-OPS-2); the reconciler (retention, hints, staged-wrap GC) in taskworker; limits in config/all/pro.yml.
 - **Assumptions about other sections:**
   - §7.9 defines the authorization log, `AuthPin`, the causal identities (a compromise retirement shrinks though a rebind keeps the holder's identity; ReaderKey lapses are no expiry, 10.5) and `holders_shrunk_at`, `RecoveryBind` and its reasons, `stale_leaf_days`, Delegations, the recovery window, `anchor` and `restored` order, the compromise cascade, the Delegations it voids and the bindings it restores, which take no wrap until re-signed, the Delegations it or a `DelegationRevoke` ends, parking their agents admitted from `since_n`, the scoped rule giving each Delegation-signed admission exactly the Delegation's tags and, unless ephemeral, a not_after no earlier than its own, with `max_admits` counted for the Delegation's life, and the `leaves` rule of the config and directory groups, refusing a not_after on a member device's admission; §7.8 gives member devices other than read_only ones gkm `rw` in the config group, every sidecar but read_only ones `rw` in the team directory, and issues the `deposit` and `recovery:<member_id>` scopes; §7.10 and §8.12 name 10.9's committers, §7.10 also the reaped agent's admission signer, §8.12 the data repos' seats, which the directory does not take, and §8.5 consent and the directory kind default (every admitted sidecar of a team network reads, every one not read_only writes; §16.11), and §8.6's ceiling passes the config kind default's read row, so ephemeral sidecars read the config as 10.5's depositor rule needs; §7.9's read_only row accepts a read_only device's own ReaderKeys, KeyPackages, path-only commits, resyncs and acks under its r scopes and refuses its wraps and GroupInfo (10.6's scopes), and §5.9 keeps ReaderKeys and their private keys as 10.5's readerkey row says; §5.4 alarms on admissions a member's devices did not sign and raises `head_alarm` (fork) on a failed recovery anchor, and §5.9 has each device re-seal `keychain.wrap` at every change to its member's current binding, a void included, with no HPKE copy while none is current.

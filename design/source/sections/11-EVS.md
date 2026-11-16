@@ -242,7 +242,7 @@ format          a repo's format is repo/'s object format: 1, or 2 from v1; evs t
                 bytes, refuses its pushes (503) and purges nothing
 ```
 
-**Records** are `checkpoint`, `diff` (a git pack delta against the file's previous version, https://git-scm.com/docs/gitformat-pack) or `chunk`. Trees are not stored: directory names and each child's sealed {mode, oid} rebuild them exactly, except an imported tree that does not, which travels as its bytes beside the commit that brought it (`EvsSealedCommit.trees`), the tree builder using them once git's reading of them equals the entries it built; an imported commit travels as its bytes, and only a sidecar's new commits meet the strict codec, so owner decision 81's committer rule stays as strict as it is (owner decision 236). Commits travel sealed in push records with provenance (§5.5's `agent_id`; agent-subkey signatures from v1; from M3, format 1 included, the writing run's `tainted` bit, so §16.6 and the search index mark files from a tainted run: a version so marked reads `trust: untrusted` and reading it taints the run first, while a push bound to no run, a person's own `git push` included, carries none; owner decision 245) and §10's `epoch_authenticator`. A file's random 16-B `file_id`, sealed in its entry, lets a rename keep its chain and stops evs swapping chains between files.
+**Records** are `checkpoint`, `diff` (a git pack delta against the file's previous version, https://git-scm.com/docs/gitformat-pack) or `chunk`. Trees are not stored: directory names and each child's sealed {mode, oid} rebuild them exactly, except an imported tree that does not, which travels as its bytes beside the commit that brought it (`EvsSealedCommit.trees`), the tree builder using them once git's reading of them equals the entries it built; an imported commit travels as its bytes, and only a sidecar's new commits meet the strict codec, so owner decision 81's committer rule stays as strict as it is (owner decision 236). Commits travel sealed in push records with provenance (§5.5's `agent_id`; agent-subkey signatures from v1, each with its `AgentCert`, a `Signed` of purpose `agent-cert` that rides in the push's sealed metadata and that a reader checks under the pushing sidecar's identity key before the subkey's signature, an absent certificate reading `agent_asserted`; from M3, format 1 included, the writing run's `tainted` bit, so §16.6 and the search index mark files from a tainted run: a version so marked reads `trust: untrusted` and reading it taints the run first, while a push bound to no run, a person's own `git push` included, carries none; owner decision 245) and §10's `epoch_authenticator`. A file's random 16-B `file_id`, sealed in its entry, lets a rename keep its chain and stops evs swapping chains between files.
 
 ```proto
 message EvsPush {                       // sidecar/protocol/evs.proto, inside §6 Signed, purpose evs-push; <= 1 KiB signed
@@ -439,7 +439,7 @@ why tip   a path-disjoint landing gives a git ref a tree no git commit has, so e
 
 **Checkpoints (PLAN.md:63)** are written when (1) the chain has N = 16 diffs; (2) its diffs exceed 50% of the file's size (Mercurial's revlog rule, [R:ext-storage-crypto] §2.10); (3) the file is new, or the delta outgrows it; or (4) a REMOVE generation (§10.5's GenRotate `cause`: it covers a shrink, an authorization expiry or a compromise retirement) is newer than the chain's key, which is PLAN.md:50's rewrap rule (owner decision 64); or (5) a DROP writes the path's kept head (Dropped history, below); every checkpoint draws a fresh object key, except that a slot-keyed repo's versionless path keeps its key until (4), a CLOSURE or a rekey replaces it. A versionless file's every version is a checkpoint or a chunk set: (1)-(3) do not apply to it, and (4) makes its next write re-encrypt every chunk.
 
-**Large files** over 8 MiB are 4 MiB `chunk` records, rewritten only where touched; fixed sizes avoid content-defined chunking, whose chunk sizes leak and whose keyed variants were broken in 2025 (ePrint 2025/558). A file is capped at 2,147,483,648 B of plaintext (512 chunks) through M10, versionless files and git-lfs objects included: writers and the git-lfs agent refuse a larger one by name (`EVS_FILE_TOO_LARGE`), so `git push` fails before the ref moves, and a later raise to about 8 GiB is a constant and tests, with no format change (owner decision 248).
+**Large files** over 8 MiB are 4 MiB `chunk` records, rewritten only where touched; fixed sizes avoid content-defined chunking, whose chunk sizes leak and whose keyed variants were broken in 2025 (ePrint 2025/558). A file is capped at 2,147,483,648 B of plaintext (512 chunks) through M10, versionless files and git-lfs objects included: writers and the git-lfs agent refuse a larger one by name (`EVS_FILE_TOO_LARGE`), so `git push` fails before the ref moves, and a later raise to about 8 GiB is a settings default and tests, with no format change (owner decision 248).
 
 **Versionless files (owner decisions 158-165).** A file version whose `versioning` is 1 or 2 is versionless: its path keeps only its newest version's content, and the purge deletes a replaced version's content once its replacement commits (11.13). Format 2 (v1) carries it (11.6).
 
@@ -1164,7 +1164,10 @@ I-EVS-13 in a slot-keyed repo, once an erasure completes, no stored index file v
          older version still stored, staged copies included, shares a slot key its ERASEs destroyed, and after
          its CUT on that ref no push but a CLOSURE wrote it into an index file version (I-EVS-17), a CLOSURE
          only into a file whose replaced version held it, which the erasure's list or path CAS then covers;
-         this holds whatever pushes were prepared, delayed or sealed late, with no indexer and every hint lost
+         this holds whatever pushes were prepared, delayed or sealed late, with no indexer and every hint lost;
+         it speaks of evs's storage, and a device's search cache, which keeps a kept record's wrapped slot key
+         block, drops every record whose slot key an ERASE destroys at that ERASE's hint (§5.9's holds and
+         delete rows; owner decision 289)
 I-EVS-14 every directory card, repo file and notice a reader accepts was written by the sidecar §16.11's path rules
          allow at the version's auth pin, and, where the format signs inside, signed by the same key; a card's or
          notice's signer is admitted and unrevoked and, for a member device, consented, and a repo file's held
@@ -1198,7 +1201,9 @@ I-EVS-17 a CUT, or a push other than a CLOSURE creating or replacing an index fi
 
 ```text
 pins      every statement declares the authorization pin auth = (n, A_n) (§7.9's AuthPin) and the generation pin
-          {group_id, generation, C_g}; the head records the newest committed ones
+          {group_id, generation, C_g}; the head records the newest committed ones; generation pins compare
+          (g, C_g), a new group_id at an equal (g, C_g) being taken only along a verified GroupForm chain, and
+          evs and readers resolve a statement's gen/<g> through the repo's newest GroupForm (§10.8's re-form)
 fence     step 7 commits only if (1) the push's pins pass §10.6's gate predicate against the newest authorization
           state evs holds, and (2) neither pin is below the head's (equal versions need equal chains and
           commitments); the head If-Match makes (2) atomic with the commit, so once any commit carries a newer
@@ -1314,7 +1319,9 @@ trusts    for a path it has never read or no longer remembers (its record evicte
           push's entry); every later change is verified; its next HeadCheck with a replaying peer confirms the pin
           (v, C_v), not those versions (§2.8)
 budget    a mobile catch-up fetches at most 4 MiB of statements and proofs (4,000-8,000 versions); further behind,
-          the reader re-pins at the head and marks the gap, shown as "verified since <time>"
+          the reader re-pins at the head and marks the gap, shown as "verified since <time>": the pin record
+          holds the time of the newest re-pin past the budget, each such re-pin raises §5.4's evs_gap, and
+          EvsRepo.VerifiedSince(refId) answers that time, zero when nothing was skipped (§18.5 mirrors it)
 ```
 
 ### 11.10 Subscriptions
@@ -1416,8 +1423,9 @@ journal   per ref update, before any evs write, the daemon appends {ref, old, ne
           on PARTS_MISSING, and waits on 429, PATH_EPOCH_DUE and GATE_CLOSED (re-sealing at the next generation) for up
           to the hook's 3 min, journaling each new push id before its POST; unknown -> `ng <ref> remote outcome pending`,
           the journal resolving it; any other refusal -> `ng <ref> <code>`
-restart   the daemon resolves each unfinished entry by retrying its push id: committed -> settle the ref (below);
-          refused -> drop the entry
+restart   the daemon resolves each unfinished entry by retrying its push id: committed -> settle the ref (below),
+          raising §5.4's evs_conflict, an ordinary event naming the repo, the path and the local conflict ref,
+          where that leaves one; refused -> drop the entry
 settle    whenever evs's tip for a ref changes, the local ref follows it when it is the tip last applied or an
           ancestor of evs's, and stays when it is ahead by its own queue; otherwise its commits go, in the git ref
           transaction that moves it, to a conflict branch ur/<sidecar_id>/conflicts/<ref's name>/<time>, <time>
@@ -2796,7 +2804,11 @@ keys      in slot-keyed repos (record-class repos, group inboxes) each versionle
           is versioned), in a slot that only
           that path's versions name, reused by each next version until checkpoint rule (4), a CLOSURE or a rekey
           draws a fresh one in a new slot (11.7's versionless keys), so an overwrite writes no slot; in general
-          repos it sits in the segment header (11.6) and goes with the segment
+          repos it sits in the segment header (11.6) and goes with the segment; a device's search cache keeps
+          each kept record's wrapped key beside it, never a key: the segment header's in general repos, and in
+          slot-keyed ones the slot's 72 B block (under fek of the slot key's generation, AAD "UR evs 1.0
+          object key") with that generation and the segment's, so a search reopens a kept file after the
+          round that fetched it without reading evs (§5.9's holds row; owner decision 289)
 cut       an erasure's first push on the index's ref (the entry's own, or ur/index) is its CUT (11.12): it adds its
           documents to the ref's erasure set (x, Files and format) and moves the ref's index_epoch, so every index
           push but a CLOSURE built before it is refused and rebuilt without them (commit path's epoch row); readers

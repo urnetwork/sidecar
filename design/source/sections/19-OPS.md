@@ -38,7 +38,7 @@ Blocks are `beta 1 + g1 99` on every lb host unless noted.
 |---|---|---|---|
 | api (existing) | `api.bringyour.com`: `/network/*`, `/sidecar/*`, `/acl/*`, `/approval/*`, `/tls/*`, `/smtp/*`, `/mail/*`, `/abuse/*` | — | the oauth issuer's signing keys; the first metadata cluster (`proj/`, `projrows/`, `rev/`, `hold/`) |
 | evs (§11) | `evs.bringyour.com`: `/evs/*`, segments on `streamable_paths`; W2 | §11.8's objects; each cluster's sentinel readable: `sentinel/_`, which xops writes at provisioning and evs's, gkm's and taskworker's hosts HEAD every 30 s with their block's own credentials, so the check is that these credentials reach this bucket, a missing or unreadable one reading not ready (§2.8's evs-30; owner decision 258) | JWKS, redis, every cluster, from v1 with DELETE on the segment bucket for §11.13's purge, receipt MAC keys (current and previous) |
-| gkm (§10) | `gkm.bringyour.com`: `/gkm/*`; W2 | §10.6's objects | JWKS, redis, metadata clusters |
+| gkm (§10) | `gkm.bringyour.com`: `/gkm/*`; W2; reaches api's internal `POST /sidecar/identity/clients` for §6.8's hint addressing (§5.15) | §10.6's objects | JWKS, redis, metadata clusters, the internal-route credential |
 | sockets (§9) | `sockets.bringyour.com`: `/socket/*`; W2 | Redis; ticket key; projection loaded | JWKS, redis, ticket keys |
 | dns (§12): API; host-pinned `dnsedge` on each dns edge | `dns.bringyour.com`: §12.8's routes, journal feed; edges: UDP, TCP 53 | API: `dns_*`, `{dns}`; edge: current snapshot, verified key set | API: JWKS, pg, redis, DNSKEY windows; edge: current ZSK |
 | tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; owner decision 121) | `{tes_}`, `{vhk}tls:`; K platform clients | platform credential |
@@ -410,7 +410,8 @@ Each migration group is named for the milestone whose code first reads it ungate
 group   tables, by owning section
 MG0     §7's P0: network_client_owner; altered account_api_key and auth_code
 MG1     §5: sidecar_identity, sidecar_identity_binding; §7: network_auth_key, network_admin_event,
-        admin_token_use (ur-cli's admin tokens); §18: network_client_lease; §20: network_sidecar_limit
+        admin_token_use (ur-cli's admin tokens), network_client_owner.client_public_key (nullable, §7.7);
+        §18: network_client_lease; §20: network_sidecar_limit
 MG2     §8: network_acl_head, network_acl_ack, network_client.acl_subject_client_id;
         §20: network_quota_state, network_service_usage, service_debit_journal, service_usage_batch
 MG3-4   none

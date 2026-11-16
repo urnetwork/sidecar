@@ -371,7 +371,9 @@ message BridgeShareSigner {            // Y's config file per accepted share; si
 sign     BridgeHost gets one per window client it builds, signed by the subject's identity key where the
          sidecar role builds the link (a daemon), by its forwarding key in an app's VPN component (§18.6),
          or on a share link by a ShareSigner (share signers, below), and passes it in CreateContract; the
-         contract signer copies it unchanged into StoredContract (C13)
+         contract signer copies it unchanged into StoredContract (C13); a companion contract's request
+         carries none and its contract seals none, the delegation being the forward contract's alone
+         (D-PROTO-19; owner decision 301)
 verify   once per contract, before the first flow's dial: the signature, by the subject's identity key
          pinned through its SidecarAdmit and neither revoked nor suspended at this state, by the key of the
          subject's forwarding Delegation live at this state (§7.9's forwarding row: forward names the
@@ -639,5 +641,5 @@ Without an active grant, these commands print the approval prompt and wait (§16
 
 - **v0, M4 (same network; Linux and WSL2 first):** C5 with its dial fence, C6a, C13 with `WindowDelegation`s, C14; statements in the config repo and 17.8's states, the rule table and the compile of `BridgeRows` landing at M2 with §7.9's records, though nothing files a bridge statement until M4; router, hook (rule 0 included), userspace stack; `ur tun` on Linux; private names via `ur tun`'s resolver and C14's seam, dark on app paths; forwards, expose and egress under I-8 approvals; HA, pins, dispositions, block changes and the CGNAT carve; sidecar-owned hosts; the sdk insertion behind `EnableBridge`. Blocked by §7.9's config repo and authorization log (M2), §8's grant chains and gates, and C13.
 - **v0, M8** (with §18's app hosts): forwarding in every app's VPN component, with its own keys, compile and signing (owner decision 197): sending from M8, hosting after C16 in the device client's network, once M8's entry has measured the plaintext an Opportunistic peer has in flight at C16's latch (owner decision 224), iOS links after §22.9's measurement, private names on app paths.
-- **v1:** cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight, and `ur tun` on macOS and Windows (M6); P2P after C3 (§6).
+- **v1:** cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight, and `ur tun` on macOS and Windows (M6); P2P after C3, built at M6 behind §6.6's `EnablePeerP2p` and off until a later owner call (owner decision 296).
 - **Later:** L3 delivery, multi-hop maps, IPv6 subnet routes.

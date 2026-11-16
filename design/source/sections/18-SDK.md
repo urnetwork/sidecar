@@ -190,12 +190,17 @@ func (self *Sidecar) GetStateReason() string // unenrolled: expired|refused|pare
 func (self *Sidecar) AddEventListener(listener SidecarEventListener) Sub // §5.4's SidecarEvent kinds: state,
 	// approval_pending, member_added, member_removed, key_changed, refused, admission_alarm, recovery_rebind,
 	// recovery_window, recovery_unseen, head_alarm (§6.4: fork, withheld, unverified or unwitnessed, with both
-	// pins), access_request, access_decided {request_id, outcome} and directory_erasure {repo_id, outcome} (§16.11),
+	// pins; rollback, with the held and offered TopicVersions, owner decision 300), access_request, access_decided {request_id, outcome} and directory_erasure {repo_id, outcome} (§16.11),
 	// history_drop {repo_id, drop_id, state, not_before_ms}, admissions_near_cap (admin devices, §7.10's cleanup
 	// list), mail_send {send_id} (§14.5),
 	// search_alarm {mismatch or omission, indexer, repo}, index_mismatch and index_malformed (§11.14), erasure
 	// {repo_id, SidecarErasure: fenced|rewriting|waiting|done|stalled, objects and bytes left, next try, finish}
-	// (§5.4, §11.12, §11.13's wait); each carries the repo, ref and path its kind names
+	// (§5.4, §11.12, §11.13's wait), evs_conflict {repo_id, ref_id, path}, evs_alarm {repo_id, ref_id, path,
+	// signer, reason}, evs_gap {repo_id, ref_id, verified_since_ms}, record_alarm {repo_id, sidecar_id, reason},
+	// credential_store (no path or value), ct_alarm, mail_receiver_alarm {sidecar_id, repo_id} and bridge_alarm
+	// {reason}, each as §5.4 lists it; each carries the repo, ref and path its kind names. A remote-mode Sidecar
+	// feeds this listener from one long-poll of §5.8's events method on a second control session, so every kind
+	// reaches a remote-mode app, and a gap answer sends it to GetState (owner decision 287)
 func (self *Sidecar) SetPushToken(platform string, token string, callback SidecarResultCallback) // "apns"|"fcm"; "" deletes
 func (self *Sidecar) SignEdgeLogin(origin string, nonceBase64 string, callback SidecarResultCallback) // §13.7 members-device; v1 (M6)
 func (self *Sidecar) GetSidecarId() *Id
@@ -221,6 +226,8 @@ func (self *SidecarEvs) Write(repoId *Id, path string, data []byte, versioning s
 	// owner decision 167); a versionless path's 409 is surfaced, never retried by rebasing (§11.7);
 	// EVS_GIT_REF on a git-mode ref (§11.7)
 func (self *SidecarEvs) AddRepoChangeListener(repoId *Id, listener SidecarRepoChangeListener) Sub
+func (self *SidecarEvs) VerifiedSince(repoId *Id, refId *Id) int64 // ms: §5.4's evs_gap time for the ref, the newest
+	// re-pin past §11.9's budget; 0 when nothing was skipped; a seam for a later view, no UI (owner rule 6)
 // Drop history (§11.7, §11.13; owner decisions 173, 183): a preview, drop or cancel only by a repo admin, in an
 // owner-bound repo only its owner's consented devices that are not read_only (owner decision 126), each a person's
 // act in the app's UI; the Drops listing by any reader (§11.20)
@@ -241,7 +248,9 @@ func (self *SidecarEvs) Erasures(repoId *Id, callback SidecarErasuresCallback) /
 	// and a restart
 func (self *SidecarMail) GetAliases() *SidecarAliasList
 func (self *SidecarMail) Send(draft *SidecarDraft, callback SidecarResultCallback) // internet mail: §14's outbox unless this host proves;
-	// the result names its send_id, whose outcomes GetSendResult reads and the mail_send event announces
+	// the result names its send_id, whose outcomes GetSendResult reads and the mail_send event announces; a
+	// remote-mode Sidecar calls §5.8's mail.send, mail.check_send and mail.send_result for Send, CheckSend and
+	// GetSendResult, so desktop apps on `ur daemon` get all three (owner decision 288)
 func (self *SidecarMail) CheckSend(draft *SidecarDraft, callback SidecarSendCheckCallback) // for the composer, per recipient
 	// domain: mode (bdat|data|unknown), encoded bytes, the DATA cap, expected delay and ok|too_large|unknown (§14.5)
 func (self *SidecarMail) GetSendResult(sendId *Id, callback SidecarSendResultCallback) // per recipient domain:
@@ -266,6 +275,9 @@ func (self *SidecarApprovals) GetPending() *SidecarApprovalList // §16.8 reques
                                                                  // on admin devices, admissions_near_cap's cleanup list
                                                                  // (§7.10's cleanup row)
 func (self *SidecarApprovals) AddPendingListener(listener SidecarApprovalListener) Sub
+func (self *SidecarApprovals) CreateRecoveryCode(callback SidecarResultCallback) // §5.9's recovery setup for apps: runs
+	// in process, draws the code, signs RecoveryBind or RecoveryRebind through the sidecar and hands the 12 words
+	// to the host's UI once, never over control mode
 func (self *SidecarApprovals) Decide(approvalId *Id, decision string, callback SidecarResultCallback) // single use (§16.8):
 	// request: approve|deny, an ApprovalDecision (§16.6); admission: approve signs the SidecarAdmit (§5.6), with one
 	// presence check over the act where §7.9's presence row asks (owner decisions 187, 189), and for
@@ -647,7 +659,7 @@ host     in D's network, the device's hosted address, maps and served prefixes r
 
 | Service | sdk host | Into §5.4's `SidecarHost` |
 |---|---|---|
-| JWT, refresh | an Api session holding only the child token (sdk/api.go:182-192), `strict_exp` for 7 days (owner decision 131); `StartJwtRefresh` at 40-50% of lifetime; refresh carries a DPoP proof from a signer sdk/sidecar.go installs (`Api.SetDpopSigner`, Go only, from the core's ClientKey), and none is sent without one | `TokenSource()`; D-CORE-8's refresher off once the signer is installed |
+| JWT, refresh | an Api session holding only the child token (sdk/api.go:182-192), `strict_exp` for 7 days (owner decision 131); `StartJwtRefresh` at 40-50% of lifetime; refresh carries a DPoP proof from a signer sdk/sidecar.go installs (`Api.SetDpopSigner`, Go only, from the core's ClientKey), and none is sent without one | `TokenSource()`; D-CORE-8's refresher off once the signer is installed; the host's Api session implements the core's optional `SidecarTokenSourceRemint`, whose `AdoptByJwt` takes the `by_client_jwt` that `POST /sidecar/bind` re-mints with the `sidecar_id`, at child enrollment and at a re-registration, so the claim survives the host's refreshes (§5.6; owner decision 286) |
 | Logout | `AddAuthLogoutEventListener` (confirmed 401, with its generation; `IsAuthLogoutCurrent` at the transition) | `Unenrolled` with a reason; `Revoked` only on a verified `SidecarRevoke` (D-SDK-14) |
 | State, secrets | `StateDir` or IndexedDB; the app's `SidecarKeyStore` | `Store()`, re-sealing tokens on refresh; `KeyStore()` |
 | Conditions, foreground, background windows | the app's `SetConditions` and `SetForeground` on each change, `SetForeground` at start too, a page Worker's frame reporting tab visibility, and the app's OS window calling `RunBackgroundSync` (below); daemon hosts report no foreground, and an unreported state counts as background | the search engine's sync windows and the foreground row below (D-SDK-23) |
@@ -711,7 +723,8 @@ control     a remote-mode Sidecar forwards Search, GetStatus and SetPolicy over 
            tokrev and SET tok, or DEL tok for a tombstone; an EXPIRED or failed apply rereads t0 and the
            row and applies again, at most 3 times; a POST equal to the row commits nothing and applies the
            row as it stands; revisions stay far below 2^53, so the script compares them exactly
-1 hint     §6.8's one EVALSHA on {scp_<C>}: HSET ver if higher; XADD hint -> h; INCR n; return {h, tok, live}
+1 hint     §6.8's one EVALSHA on {scp_<C>}: HSET ver if higher; INCR n -> seq; XADD hint with seq -> h;
+           return {h, tok, live}
 2 enqueue  after the script, the owning service, only if tok and the topic is mail, team, evs or core, XADDs
            to {wakeq_<hash(C) mod 16>}: due now if forced or live is absent, else now + 15 s (a deferred
            check); forced: §15.6's router on a receiver miss, and POST /sidecar/wake (§6), which writes a core
@@ -901,7 +914,7 @@ cost         one narrow-row write per ephemeral page per 5 min (about 33/s for 1
 | 2 | H1 via HTTP CONNECT (`HTTPS_PROXY`) | §4 C8 (M4), including API dials | everything |
 | 3 | HTTPS-only | the required hosts below | evs, records, long-poll; no streams, sockets or mail send |
 
-Owner decision 49 runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path, as `{"version":1,"hosts":[{"host":"...","tcp":443,"need":"..."}]}` generated from the one table `ur` embeds:
+Owner decision 49 runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path, as `{"version":1,"hosts":[{"host":"...","tcp":443,"need":"..."}]}` generated from the one table `ur` embeds, which is also the one copy of the service urls: `DefaultSidecarSettings` leaves them empty, `NewSidecar` refuses until a host sets them, and cli and sdk hosts fill them from this table (§5.4; owner decision 282), tests staying on `.example` names:
 
 ```text
 host                          tcp  need

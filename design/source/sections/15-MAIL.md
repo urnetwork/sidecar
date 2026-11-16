@@ -212,6 +212,9 @@ group:<group>       a general repo on a file-mode ref, whose readers are the gro
                         once sent and past its approval's retry window; mailboxes only
   or/<h>/<effect_key>   that send's outcome per recipient domain (§14.5: mode, bytes, cap, outcome),
                         written by the sending device; kept 30 days; mailboxes only
+  rcpt/<h>/<address>    MailRecipientApproval{alias, recipient, decision, action}: an approved recipient
+                        (15.10; owner decision 280), in the mailbox or group repo that holds that alias's
+                        mail, never in mailcfg; created only if absent, and kept until a person removes it
   p/<sidecar_id>        a prover host's measured smtp_data_proof_bytes and DATA rate (§14.5),
                         rewritten at each measurement; mailboxes only
   forward               the verified forwarding address and the opted-in burners (15.10); mailboxes only
@@ -289,10 +292,12 @@ VaultEntry{entry_id, address, title, username, password, password_history,
 ### 15.10 Sending
 
 The local server is the MTA (PLAN.md:104), on §5.8's submission port under D-MAIL-11 and D-TRUST-8's certificate rule (owner decisions 84, 130). AUTH uses a per-instance keychain credential granting only what the daemon grants its OS user (owner decision 47). Agents use §16's `mail_send`; both paths pass §5.4's outward-action gate (I-8). For each message the server:
-1. checks From against `mail:<alias>#send` (D-ACL-12) and holds mail to unapproved recipients until an I-8 channel approves it (`ur approve <id>`, §16.6);
+1. checks From against `mail:<alias>#send` (D-ACL-12) and holds mail to unapproved recipients, non-members with no approval record (below), until an I-8 channel approves it (`ur approve <id>`, §16.6);
 2. stores a copy in `sent`, and deposits same-network mail directly;
 3. for BURNER sends, applies the header rules: removes every Received header and adds none, rewrites Date to UTC at minute precision, strips User-Agent, X-Mailer and client `X-*` headers, and regenerates the MIME boundaries and the Message-ID under `<blabel>.<net>.<root>`, so replies reveal no device, client or timezone (§14.4 step 3);
 4. queues the rest at `o/<h>/<effect_key>`, created only if absent (§16 D-MCP-11), for §14's `SmtpSender.Send`, which holds it on HALTED, QUOTA or TRY_LATER (§14.7-14.8); probation and anonymous-only networks deliver only same-network deposits (§21.7, D-SMTP-14). The sending device writes each recipient domain's outcome to `or/<h>/<effect_key>` (§14.5), from which the composing device raises `mail_send` (§18.5).
+
+**Approved recipients (owner decision 280).** An approved recipient is a (sending alias, recipient address) pair with an approval record in the repo that holds that alias's mail, `mailbox:<member>` or the `group:<group>` repo, at `rcpt/<h>/<address>` (15.7), never in mailcfg. Its body, `MailRecipientApproval{alias, recipient, decision, action}`, holds the stored bytes of one `ApprovalDecision` on channel device or presence and of the `CanonicalAction` of kind `mail_send` listing that recipient. The daemon writes one record per recipient after that use's Outcome is done, created only if absent; a decision on channel harness sends its one message and creates no record. Every device re-verifies the embedded decision at each use under its current pin (its signer eligible, its channel in the governing list), so a file an agent wrote, or one whose approver was revoked, approves nothing. A record lasts until a person removes it with `ur mail recipients rm` on `/dev/tty` or in an app, and MCP's evs tools refuse `rcpt/`. `mail_send` is W only when every non-member recipient has a record and the run is untainted, else O; in a tainted run records are ignored (§16.6's TS1).
 
 Internet sending waits for smtpedge's BDAT and DATA proofs (M9, owner decisions 35, 125), which only desktop-class hosts run, so the owner's consented `ur daemon` sidecars, indexers among them (owner decision 150), send what a phone queues (D-SMTP-18). Each such prover host records its measured cap and DATA rate at `p/<sidecar_id>`, so a phone's composer can show them (§14.5).
 
@@ -382,7 +387,7 @@ PLAN.md:104's `mail.<me>.ur.network` becomes `mx.<net>.<root>` (owner decision 3
 
 - **Provides:** the `mail` component (15.5-15.10, with mail, burner, vault, coverage and one-time-code APIs for §16 and §18); the `mxedgeservice` engine (15.4); `MailIngress`, `MailAuthEvidence`, `MailDeposit`, the network mail key (15.8) and the operator list (D-MAIL-13).
 - **Consumes:** §5 (the outward-action gate, tainted runs); §6 (`mail` topic, 0x17); §7.9 (`IndexerSet`, `team_mail`); §8 (grants, consent, data-repo seats, `RepoAdmin`); §9; §10 (GenRotate drop keys and the depositor rule, D-KEYS-17; ReaderWraps); §11 (deposit slots, ERASE and CLOSURE's bound, file-mode refs, the write gate and budget); §12 (D-DNS-11's burner copies); §13 (certificates, the MTA-STS publish); §14 (`SmtpSender`, D-SMTP-13's LAN splice); §16 (D-MCP-11's effect keys); §18 (receiver hosting, forced wakes); §19 (lb ports, feed credential); §20; §11.14's search engine and remote search, and §18.4's device policy, notice and setting (D-MAIL-16).
-- **Subprotocol messages:** `MailIngress` (0x1701; mxedge to receiver; StreamOpen metadata on a Required stream); `MailHint{kind: deposit|receiver_needed}` (0x1702; `mail` push; server to client).
+- **Subprotocol messages:** `MailIngress` (0x1701; mxedge to receiver; StreamOpen metadata on a Required stream); `MailHint{kind: deposit|receiver_needed}` (0x1702; `mail` push; server to client), on a topic whose version is the writer's clock in ms, per client, so mxedge, smtpedge and api may all write it (§6.8).
 - **API routes:** `POST /mail/enable` (Client class) turns on §12's mail records and the MTA-STS publish; `GET /mail/status`; `POST` and `DELETE /mail/direct-mx` (Network class, Admin role, Team only, an I-8 outward action; 15.4).
 - **Tables** (mxedge; migrations ≥926) and Redis keys:
 
