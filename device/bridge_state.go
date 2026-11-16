@@ -252,7 +252,7 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 	self.links.SetIdentity(decision.NetworkId, decision.SidecarId)
 	var routeRules *bridge.BridgeRules
 	if decision.State.Enforcing() {
-		routeRules = rules
+		routeRules = bridgeRouteRulesFor(rules, self.settings)
 	}
 	routeState, routeFindings, routeNext := self.buildRouteWithLock(routeRules, slices.Concat(decision.Overlay, self.revocations), now)
 	var previousRoutes []netip.Prefix
