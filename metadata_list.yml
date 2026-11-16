@@ -1,4 +1,4 @@
-# metadata_list.yml v29; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v30; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -101,6 +101,10 @@
 # confirmation, the cascades' spans, open authority proposals, the applied-id ring, indexer designations folded
 # into rows, tag and group ids as random table-held bytes, member admissions, Delegations and an admin's
 # admissions among the statements, and a presence key registration's own proof.
+# v30, updated 2026-11-16 for the owner's answer QD-857 (ca-numbers-2026-11-m5-consecutive-failures), adds to
+# cert-1 network_tls_name_backoff, each URnetwork-zone name's failure backoff at a CA: the count of consecutive
+# failed authorizations since its last success there and the next allowed attempt time, kept until that success
+# or 8 d past that time.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -595,10 +599,10 @@ tls-4:
   owner: §13.9
 cert-1:
   service: certs (taskworker), api
-  store: network_tls_cert, network_tls_account, network_tls_custom_spend; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
-  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 8 days. Never the account key
+  store: network_tls_cert, network_tls_account, network_tls_custom_spend, network_tls_name_backoff; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
+  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 8 days; per URnetwork-zone name and CA, its failure backoff (the count of consecutive failed authorizations since its last success there and the next allowed attempt time). Never the account key
   why: order, renew and revoke certificates for device-held keys (owner decision 39; §13.8)
-  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 8 d; poll times 7 d
+  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 8 d; poll times 7 d; a name's failure backoff until a success at its CA, or 8 d past its next allowed attempt
   owner: §13.8
 cert-2:
   service: CAs (Let's Encrypt, GTS, ZeroSSL) and public CT logs
