@@ -1,8 +1,9 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
 // ur://evs/{repo}/{+path} (§16.5; D-MCP-17, I-9; MCP-M3-13): a file's newest version as evs_read reads it, under the
-// same guard, allow, trust and taint rule (tools_evs.go's header), an untrusted version tainting the run before it
-// returns.
+// same guard, allow, trust and taint rule (tools_evs.go's header): its trust by its push's sealed provenance, own or
+// member for an untainted run's version, and an untrusted one, a tainted run's or an import's, tainting the run
+// before it returns (QD-042, QD-851).
 //
 //	subscribe  judged at once: the guard on the repo and path, then §8's allow of read, so a subscription on a refused
 //	           repo refuses at subscribe, never at its first event; then §11's token-prefix subscription on the path
@@ -130,7 +131,7 @@ func addEvsResource(resources *McpResources, server *McpServer) {
 	resources.Add(&McpResourceSpec{
 		UriTemplate: "ur://evs/{repo}/{+path}",
 		Name:        "evs",
-		Description: "A file of a repo at its newest version, as evs_read reads it; content another writer made, or a tainted run wrote, comes back marked untrusted, and reading it taints the run.",
+		Description: "A file of a repo at its newest version, as evs_read reads it; content a tainted run wrote, or an import brought in from outside, comes back marked untrusted, and reading it taints the run.",
 		Read: func(ctx context.Context, call *McpCall, uri string, variables map[string]string, result *McpResult) (any, error) {
 			repoId, path, err := mcpEvsUriVariables(variables)
 			if err != nil {

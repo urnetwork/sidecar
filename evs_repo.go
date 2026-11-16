@@ -66,6 +66,10 @@ type EvsReadArgs struct {
 	Settings bool
 	// List: shows the index files' root, which a listing of a ref's root hides otherwise (§16.2).
 	IndexFiles bool
+	// ReadHead, ReadVersion and History: reads each version's push's sealed provenance too (EvsFileInfo.Provenance,
+	// EvsHistoryVersion.Provenance), one more round per push, since a path read carries no push's sealed metadata
+	// (evs_read_provenance.go). A read that does not ask gives none.
+	Provenance bool
 }
 
 // One file version as a read shows it, verified against its signed statement (§11.9).
@@ -92,6 +96,38 @@ type EvsFileInfo struct {
 	// or a later release's, holds back everything above the version shown, empty otherwise.
 	IgnoredAbove int
 	RuleState    string
+	// The version's push's sealed provenance, for a read that asked for it (EvsReadArgs.Provenance): the writing
+	// run's tainted bit, its agent and whether a signed import brought the version in. Nil where the read did not
+	// ask, where evs no longer serves the push's record, where the push sealed none, a push from before the field,
+	// and on the forwarding role's legs: a caller reads nil as unknown, which is never an untainted run's word.
+	Provenance *EvsPushProvenance
+}
+
+// How a push's provenance reads (QD-159).
+type EvsPushProvenanceState int
+
+const (
+	// No agent: the push is its sidecar's own.
+	EvsProvenanceUnattributed EvsPushProvenanceState = iota + 1
+	// An agent with no subkey signature: the writer's word (§5.5's agent_asserted).
+	EvsProvenanceAsserted
+	// The certificate, the push's time and the subkey's signature all hold.
+	EvsProvenanceVerified
+)
+
+// A push's provenance as a reader takes it (evs_provenance.go).
+type EvsPushProvenance struct {
+	State EvsPushProvenanceState
+	// The agent the push names, nil when unattributed, a refused signature's included.
+	AgentId *Id
+	// The writing run's tainted bit (§11.6's Records, from M3; QD-042): false for a push bound to no run.
+	Tainted bool
+	// The push carries a signed EvsImport: its commits came from outside the network (DESIGN-DETAILS 8.2.6), so its
+	// versions keep that label whoever signed the push. Read from the sealed metadata as it stands: the reader that
+	// applies the push checks the import itself (evs_git_check.go).
+	Imported bool
+	// A subkey signature that did not hold, which the reader alarmed: the agent reads as unattributed.
+	Refused bool
 }
 
 // A directory's children as List shows them, each name checked against its token (§11.7's name row).
@@ -150,6 +186,8 @@ type EvsHistoryVersion struct {
 	// what an erasure names to destroy the version (§11.12's closure row: "each retained version's slot keys"). None
 	// for a general repo's version, whose keys ride its segments, and for a removal.
 	SlotIds []Id
+	// The version's push's sealed provenance, for a History that asked for it, as EvsFileInfo.Provenance reads.
+	Provenance *EvsPushProvenance
 }
 
 // What Write changes (EVS1-M2-25, EVS1-M2-26).
@@ -158,6 +196,8 @@ type EvsWriteArgs struct {
 	// The agent the write is made for, which the push's sealed provenance names and its subkey signs (§5.5); nil
 	// for the sidecar's own.
 	AgentId *Id
+	// The writing run's tainted bit (EvsWritePathsArgs.Tainted): false for a write bound to no run.
+	Tainted bool
 	Path    string
 	// The new content, Size bytes; nil with Remove.
 	Content io.Reader
