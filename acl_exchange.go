@@ -17,13 +17,18 @@
 // answer in every state.
 //	deposit  §8 gives it deposit, or it reads an owner-bound repo it does not write (§16.8's receipts)
 //
+// A repo whose newest RepoDelete stands unrestored takes one scope, admin, and only for its standing admins (§11.12's
+// refused row, QD-880): EvsAccess gives them admin alone there, so their r, rw and deposit are refused with everyone
+// else's every scope, and the admin token is what §11.12's DELETE and restore take. A RepoRestore brings the table
+// above back.
+//
 // A read_only sidecar gets only r and the receipt deposit, whatever else it is (D-TEAM-24); in a team network every
 // admitted sidecar but a read_only one gets the directory's rw. A forward_only client (§7.4), which acts as its
 // sidecar, gets only repo:<config_repo_id>:r, and only while that sidecar's forwarding Delegation is live (§7.9's
 // forwarding row, owner decision 197), whatever its sidecar reads.
 //
-// One token carries at most 64 repo: scopes (§7.8), keeping its bearer under the lb's 8 KiB header line, and a request
-// for more is refused whole. A scope that is not repo:<id>:<role> is not this table's: it is refused here, and the
+// One token carries at most RepoScopeMaxCount repo: scopes, §7.8's 64, keeping its bearer under the lb's 8 KiB header
+// line, and a request for more is refused whole. A scope that is not repo:<id>:<role> is not this table's: it is refused here, and the
 // exchange judges §7.8's other scopes before it asks. A subject that is no sidecar holds no repo scope. A scope's id may
 // be in either of ParseId's forms; a granted scope is returned as it was asked.
 //
@@ -38,8 +43,21 @@ import (
 	"time"
 )
 
-// The most repo: scopes one token carries (§7.8).
-const AclExchangeMaxRepoScopeCount = 64
+// §7.8's limits on one exchange, which api and every service that reads a token hold alike (QD-702): the protocol's
+// values, so changing one is a protocol change no deployment makes on one side alone. AclExchangeScopes reads
+// DefaultAclExchangeSettings(); threading each side's own instance through it is the review phase's settings sweep
+// (QD-706).
+type AclExchangeSettings struct {
+	// The most repo: scopes one token carries: 64 (§7.8). Positive.
+	RepoScopeMaxCount int
+}
+
+// §7.8's values. A fresh value each call.
+func DefaultAclExchangeSettings() *AclExchangeSettings {
+	return &AclExchangeSettings{
+		RepoScopeMaxCount: 64,
+	}
+}
 
 // The scope prefix every repo capability starts with (§7.8).
 const aclExchangeRepoScopePrefix = "repo:"
@@ -109,7 +127,7 @@ func parseAclExchangeRepoScope(scope string) (Id, AclEvsRights, bool) {
 }
 
 // The scopes the newest verified state grants the request: the table above, each scope judged alone, so one refused
-// scope refuses only itself. ErrAclExchangeScope for a request over the 64 repo scopes, or with no state.
+// scope refuses only itself. ErrAclExchangeScope for a request over RepoScopeMaxCount repo scopes, or with no state.
 func AclExchangeScopes(state *ConfigState, request *AclExchangeRequest) (*AclExchangeGrant, error) {
 	if state == nil || request == nil {
 		return nil, fmt.Errorf("%w: no state or no request", ErrAclExchangeScope)
@@ -124,8 +142,8 @@ func AclExchangeScopes(state *ConfigState, request *AclExchangeRequest) (*AclExc
 			repoScopeCount += 1
 		}
 	}
-	if AclExchangeMaxRepoScopeCount < repoScopeCount {
-		return nil, fmt.Errorf("%w: %d repo scopes, over %d", ErrAclExchangeScope, repoScopeCount, AclExchangeMaxRepoScopeCount)
+	if settings := DefaultAclExchangeSettings(); settings.RepoScopeMaxCount < repoScopeCount {
+		return nil, fmt.Errorf("%w: %d repo scopes, over %d", ErrAclExchangeScope, repoScopeCount, settings.RepoScopeMaxCount)
 	}
 
 	grant := &AclExchangeGrant{Scopes: []string{}, Refused: []string{}, ProjVersion: state.Pin().GetVersion()}

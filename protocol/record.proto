@@ -157,10 +157,13 @@ message ApprovalDecision {                  // inside §6 Signed, purpose approv
   uint32 version = 13;                      // 1
 }
 message ApprovalCancel { bytes approval_id = 1; }  // inside §6 Signed, purpose approval (16.6's ledger)
-message ReachReceipt {                      // coalesced per (grant, peer) per 5 min
+message ReachReceipt {                      // coalesced per (grant, peer) per 5 min, and a TLS front's publish
+                                            // receipts per server name too
   bytes grant_id = 1; uint64 policy_version = 2; uint32 kind = 3; bytes owner = 4; bytes approver = 5;
   int64 window_start_millis = 6; repeated bytes peers = 7; uint64 stream_count = 8; uint64 byte_count = 9;
   repeated string relays = 10;              // host, IP and operator of each relay or edge in the path
+  string server_name = 11;                  // the name the visitor asked for, the TLS SNI, which only the TLS
+                                            // front's publish receipts set (§13.7; QD-850); never a relay
 }
 message Coverage {                          // at run end, or after 10 min idle without SessionEnd
   bytes run_id = 1; string harness = 2; string version = 3; repeated string sources = 4;

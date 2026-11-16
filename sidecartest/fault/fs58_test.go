@@ -16,3 +16,7 @@ func TestFs58(t *testing.T) {
 func TestFs58FoldKilledAndRaced(t *testing.T) {
 	RunClause(t, "FS-58", "folds killed and raced", Fs58FoldKilledAndRaced, nil)
 }
+
+func TestFs58RecreatedAfterCollection(t *testing.T) {
+	RunClause(t, "FS-58", "re-created after a collection", Fs58RecreatedAfterCollection, nil)
+}

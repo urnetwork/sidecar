@@ -8,15 +8,12 @@ package fault
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
-	"github.com/urnetwork/sidecar/evsservice"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
@@ -247,12 +244,38 @@ func TestFi15CatchesAReadServingAVersionNewerThanItsHead(t *testing.T) {
 
 // The evs world's instances and readers through changes, removals, re-creations and a directory, a fold, a page of
 // writes past a removal's base range and a marker collection, then the re-creation past it: every check reads clean,
-// the readers' replies held to the replay (FS-58's collection clauses, on a correct build).
+// the readers' replies held to the replay (FS-58's collection clauses, on a correct build). writerB, whose reads
+// never walked x.txt's removal, creates it again.
 func TestFi15ReadsAWorldRunThroughACollectionClean(t *testing.T) {
+	fi15WorldRun(t, "writerB")
+}
+
+// The same run with writerA, which removed x.txt, creating it again after the collection took the removal's marker
+// (QD-879; question test-m2-04-recreate-after-collection): writerA's pin is older than its own removal, so its plan's
+// read walks the removing statement, and evs serves it the removal from the window, where its marker served it
+// before; the write commits at max(b, m) + 1 and no device alarms.
+func TestFi15TheRemoverCreatesItsPathAgainAfterACollection(t *testing.T) {
+	fi15WorldRun(t, "writerA")
+}
+
+// FI-15's healthy run on the evs world, creator creating x.txt again after the collection. Between the collection
+// and that creation writerB, whose pin is past the removal, and the reader, whose pin is older than it, read x.txt:
+// evs answers the first absent and the second its removal, from the window.
+func fi15WorldRun(t *testing.T, creator string) {
 	net := sidecartest.NewNet(t.Context(), nil)
 	t.Cleanup(net.Close)
 	world := NewEvsWorld(net, nil)
-	var collected *evsservice.MarkerCollectResult
+	removedAt := uint64(0)
+	var pastReads, walkedReads, creatorReads []*LedgerRead
+	// action, keeping the read replies evs served during it
+	reading := func(reads *[]*LedgerRead, action func(ctx context.Context, net *Net) error) func(ctx context.Context, net *Net) error {
+		return func(ctx context.Context, net *Net) error {
+			before := len(LedgerOf(net).Reads())
+			err := action(ctx, net)
+			*reads = LedgerOf(net).Reads()[before:]
+			return err
+		}
+	}
 	steps := []*Step{
 		{Actor: "writerA", Action: world.Setup},
 		{Actor: "writerA", Action: world.Write("writerA", "x.txt", EvsWorldContent("fi15 x 1", 200))},
@@ -266,28 +289,29 @@ func TestFi15ReadsAWorldRunThroughACollectionClean(t *testing.T) {
 		{Actor: "writerB", Action: world.Write("writerB", "docs/b.txt", EvsWorldContent("fi15 docs/b", 200))},
 		{Actor: "writerB", Action: world.Remove("writerB", "docs/a.txt")},
 		{Actor: "reader", Action: world.VerifyListing("reader", "docs", "b.txt")},
-		{Actor: "writerA", Action: world.Remove("writerA", "x.txt")},
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			if err := world.Remove("writerA", "x.txt")(ctx, net); err != nil {
+				return err
+			}
+			version, _, err := world.CommittedVersion("writerA", "x.txt")
+			removedAt = version
+			return err
+		}},
 		{Actor: "writerB", Action: world.WriteMany("writerB", "n/%03d.txt", 0, 35)},
 		{Actor: "writerB", Action: world.WriteMany("writerB", "n/%03d.txt", 35, 35)},
 		{Actor: "folder", Action: world.Fold("evs1")},
 		// raises folded_through past x's removal by a base range
 		{Actor: "writerA", Action: world.Write("writerA", "y.txt", EvsWorldContent("fi15 y", 200))},
-		{Actor: "collector", Action: func(ctx context.Context, net *Net) error {
-			result, err := fi15Collect(ctx, net, world)
-			collected = result
-			return err
-		}},
-		// writerB creates x again: writerA, which removed it, refuses the absent reply evs serves once the marker is
-		// collected, walking its own removal (questions/test-m2-04-recreate-after-collection.md)
-		{Actor: "writerB", Action: world.Write("writerB", "x.txt", EvsWorldContent("fi15 x 4", 200))},
+		{Actor: "collector", Action: world.CollectMarkers()},
+		// writerB's pin is past the removal, the reader's older than it
+		{Actor: "writerB", Action: reading(&pastReads, world.Verify("writerB", "x.txt"))},
+		{Actor: "reader", Action: reading(&walkedReads, world.Verify("reader", "x.txt"))},
+		{Actor: creator, Action: reading(&creatorReads, world.Write(creator, "x.txt", EvsWorldContent("fi15 x 4", 200)))},
 		{Actor: "reader", Action: world.Verify("reader", "x.txt", "y.txt", "docs/b.txt")},
 		{Actor: "reader", Action: world.VerifyCached("reader", "x.txt", "y.txt")},
 		{Actor: "reader", Action: world.VerifyListing("reader", "docs", "b.txt")},
 	}
-	fiRequirePass(t, Run(t.Context(), &Schedule{Id: "fi15-world", Steps: steps, Check: world.Checks(FI(2), FI(15))}, net))
-	if collected == nil || collected.MarkerDeletedCount == 0 {
-		t.Fatalf("the collection deleted no marker (%+v), so the re-creation past it proves nothing", collected)
-	}
+	fiRequirePass(t, Run(t.Context(), &Schedule{Id: "fi15-world-" + creator, Steps: steps, Check: world.Checks(FI(2), FI(15))}, net))
 	reads := LedgerOf(net).Reads()
 	pathCount := 0
 	for _, read := range reads {
@@ -296,7 +320,37 @@ func TestFi15ReadsAWorldRunThroughACollectionClean(t *testing.T) {
 	if len(reads) == 0 || pathCount == 0 {
 		t.Fatalf("the ledger holds %d reads of %d paths, so FI-15's read clause judged nothing", len(reads), pathCount)
 	}
-	version, _, err := world.CommittedVersion("writerB", "x.txt")
+	// what evs served of x.txt once its marker was gone
+	removals := func(reads []*LedgerRead) (removalCount int, absentCount int) {
+		for _, read := range reads {
+			for _, path := range read.Paths {
+				switch removal := path.GetRemoval(); {
+				case removal != nil && removal.GetRemovalVersion() == removedAt:
+					removalCount += 1
+				case removal == nil && path.GetVersion() == nil && path.GetNames() == nil && len(path.GetDeltas()) == 0:
+					absentCount += 1
+				}
+			}
+		}
+		return removalCount, absentCount
+	}
+	if removedAt == 0 {
+		t.Fatal("x.txt's removal committed nowhere")
+	}
+	if removalCount, absentCount := removals(pastReads); removalCount != 0 || absentCount == 0 {
+		t.Fatalf("writerB, pinned past x.txt's removal at %d, was served it %d times and absent %d times", removedAt, removalCount, absentCount)
+	}
+	if removalCount, _ := removals(walkedReads); removalCount == 0 {
+		t.Fatalf("the reader, pinned below x.txt's removal at %d, was not served it from the window", removedAt)
+	}
+	removalCount, absentCount := removals(creatorReads)
+	switch {
+	case creator == "writerA" && removalCount == 0:
+		t.Fatalf("writerA, which removed x.txt at %d, was not served its removal from the window", removedAt)
+	case creator == "writerB" && (removalCount != 0 || absentCount == 0):
+		t.Fatalf("writerB, pinned past x.txt's removal at %d, was served it %d times and absent %d times", removedAt, removalCount, absentCount)
+	}
+	version, _, err := world.CommittedVersion(creator, "x.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,49 +361,4 @@ func TestFi15ReadsAWorldRunThroughACollectionClean(t *testing.T) {
 	if version != head.GetVersion() {
 		t.Fatalf("x.txt's last write committed at %d, not at main's head %d", version, head.GetVersion())
 	}
-}
-
-// One marker collection of the world's main, as taskworker's nightly pass queues it, its waits moving the Net's clock
-// as a run's would: §11.7's window opens, waits out every fold planned on an older head and deletes the markers the
-// horizon passed by a base range.
-func fi15Collect(ctx context.Context, net *Net, world *EvsWorld) (*evsservice.MarkerCollectResult, error) {
-	host := *net.Host()
-	host.Clock = &fi15SteppingClock{clock: net.Clock()}
-	collector, err := evsservice.NewMarkerCollector(&host, nil)
-	if err != nil {
-		return nil, err
-	}
-	first, err := net.Host().Blobs.FirstCluster()
-	if err != nil {
-		return nil, err
-	}
-	result, err := collector.Collect(ctx, first.ClusterId(), world.RepoId, world.RefId())
-	if err != nil {
-		return result, err
-	}
-	if result.Skipped != "" {
-		return result, errors.New("the collection was skipped: " + result.Skipped)
-	}
-	return result, nil
-}
-
-// The Net's clock for a collection run: a wait moves it as far as the wait asks, so a window's 15 s pass in the
-// step that waits.
-type fi15SteppingClock struct {
-	clock *sidecartest.FakeClock
-}
-
-func (self *fi15SteppingClock) Now() time.Time {
-	return self.clock.Now()
-}
-
-func (self *fi15SteppingClock) After(wait time.Duration) <-chan time.Time {
-	self.clock.Advance(wait)
-	fired := make(chan time.Time, 1)
-	fired <- self.clock.Now()
-	return fired
-}
-
-func (self *fi15SteppingClock) AfterFunc(wait time.Duration, function func()) (stop func() bool) {
-	return self.clock.AfterFunc(wait, function)
 }

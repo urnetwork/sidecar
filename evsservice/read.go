@@ -5,8 +5,8 @@
 //	         and the request not fresh (a client reads fresh past a hinted version); else the cluster's. Nothing is
 //	         served above this head: a folded version above its v sends evs to a newer head from the cluster
 //	round 1  every path's entry by §11.6's read rule (its source copies while the head lists sources), and the
-//	         records of the window versions after folded_through whose digest may touch a path, which §11.7's newest
-//	         rule and a directory's listing then read from this process's cache
+//	         records of the window versions after folded_through, or after an older pin_version, whose digest may
+//	         touch a path, which §11.7's newest rule and a directory's listing then read from this process's cache
 //	round 2  the statements after pin_version from the window's places, any statement that wrote a served version
 //	         below the pin, the records the proofs need, the log page an older version's statement sits in, and the
 //	         slots, maps, log pages, push records and segment ranges the request names
@@ -18,7 +18,9 @@
 //	         each later statement whose list is not inline and whose prefixes reach the path, with the inclusion
 //	         proof of a prefix's delta in place of them where the statement changed that prefix so (QD-681); a
 //	         removed path its
-//	         removal's push id, version and path version from its marker or the window; an overlay's path it holds
+//	         removal's push id, version and path version from its marker or the window, a window version at or
+//	         below folded_through among them once the marker's collection took it, for a reader whose pin is below
+//	         that version (NewestWalked; QD-879); an overlay's path it holds
 //	         no version of `base`; a directory its folded table as its entry holds it, names_through and the deltas
 //	         after it, or with no table that stands (none folded, or a removal or creation in the window since) no
 //	         table and the deltas since the window's last creation of it, each delta in a frame of its own after the
@@ -418,7 +420,9 @@ func (self *readAttempt) readEntries() error {
 	return firstErr
 }
 
-// The places of the window versions after folded_through whose digest may touch a path or a prefix holding it.
+// The places of the window versions after folded_through whose digest may touch a path or a prefix holding it, and
+// of those after a pin below it, where a removal whose marker a collection took may sit (NewestWalked): records the
+// statements after the pin read in round 2 either way.
 func (self *readAttempt) windowPlacesTouching() []*protocol.EvsPlace {
 	head := self.head.Head
 	window, err := EvsHeadWindow(head)
@@ -426,9 +430,10 @@ func (self *readAttempt) windowPlacesTouching() []*protocol.EvsPlace {
 		return nil
 	}
 	first := EvsHeadWindowFirstVersion(head)
+	after := min(head.GetFoldedThrough(), self.body.GetPinVersion())
 	places := []*protocol.EvsPlace{}
 	for i, entry := range window {
-		if first+uint64(i) <= head.GetFoldedThrough() {
+		if first+uint64(i) <= after {
 			continue
 		}
 		for _, path := range self.paths {
@@ -441,12 +446,12 @@ func (self *readAttempt) windowPlacesTouching() []*protocol.EvsPlace {
 	return places
 }
 
-// §11.7's newest for one path at the head, and a standing directory's listing. An entry the head's window does not
-// reach past is read again after the head.
+// §11.7's newest for one path at the head, as a reader pinned at pin_version walks it (NewestWalked), and a standing
+// directory's listing. An entry the head's window does not reach past is read again after the head.
 func (self *readAttempt) resolvePath(path *readPath) error {
 	head := self.head.Head
 	for attempt := 0; attempt < 2; attempt += 1 {
-		newest, err := Newest(self.ctx, path.read.EvsEntryRead, head, self.source)
+		newest, err := NewestWalked(self.ctx, path.read.EvsEntryRead, head, self.source, self.body.GetPinVersion())
 		if errors.Is(err, ErrEvsEntryBehindWindow) && attempt == 0 {
 			reread, readErr := ReadPathEntry(self.ctx, self.cluster, self.repoId, self.refId, head, path.tokens)
 			if readErr != nil {

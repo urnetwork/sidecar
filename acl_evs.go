@@ -22,6 +22,13 @@
 // with it (D-TEAM-24), and a reader of an owner-bound repo that does not write gets the receipt deposit too
 // (§16.8).
 //
+// A repo whose rows' newest RepoDelete stands unrestored gives admin alone, and only to its standing admins: the
+// sidecars §8.8's access log counts as the repo's admins now, which are the ones it lets sign the RepoDelete, a
+// RepoDelete{now} after it and the RepoRestore. Such an admin holds no read, write or deposit there, and no rule or
+// kind default gives anyone a right on the repo, so the exchange mints only admin for it and a gate honors only
+// admin, which §11.12's DELETE and restore take (QD-880). Everyone else gets nothing, as AclReasonRepoDeleted. A
+// RepoRestore's restored_at lifts the deletion and the table above answers again.
+//
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
 package sidecar
@@ -169,7 +176,7 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 		return AclEvsAccess{AclDecision: aclDeny(AclReasonNoRepo)}
 	}
 	if repo.deleted {
-		return AclEvsAccess{AclDecision: aclDeny(AclReasonRepoDeleted)}
+		return self.deletedRepoAccess(sidecar, repo)
 	}
 	accumulator := aclEvsAccumulator{}
 	kindDefault := AclDecision{Reason: AclReasonKindDefault}
@@ -261,6 +268,51 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 	}
 	accumulator.decision.Allowed = true
 	return AclEvsAccess{Rights: rights, AclDecision: accumulator.decision}
+}
+
+// EvsAccess on a repo whose newest RepoDelete stands unrestored (QD-880): AclEvsAdmin alone for a standing admin,
+// with no read, write or deposit beside it, and AclReasonRepoDeleted for everyone else. A caller that takes admin
+// to imply write or read must not: on a deleted repo it implies neither.
+func (self *AclState) deletedRepoAccess(sidecar *aclSidecarState, repo *aclRepoState) AclEvsAccess {
+	if !self.standingRepoAdmin(sidecar, repo) {
+		return AclEvsAccess{AclDecision: aclDeny(AclReasonRepoDeleted)}
+	}
+	return AclEvsAccess{
+		Rights:      AclEvsAdmin,
+		AclDecision: AclDecision{Allowed: true, Reason: AclReasonRepoAdmin, At: aclStandingAdminAt(repo, sidecar.id)},
+	}
+}
+
+// Whether §8.8's access log counts the sidecar as one of the repo's admins now, read_only never: in its standing
+// admins; in the directory those and every config writer, each while consented (D-ACL-24); in an owner-bound repo
+// only an admin that is a consented device of its owner. This is the admin right the live table gives from the
+// access log alone, with no rule and no kind default in it, so the config, whose one admin is §7.9's bootstrap
+// sidecar by kind default, has none here, and neither has a kind this code does not know.
+func (self *AclState) standingRepoAdmin(sidecar *aclSidecarState, repo *aclRepoState) bool {
+	if sidecar.readOnly {
+		return false
+	}
+	switch {
+	case repo.kind == protocol.RepoKind_REPO_KIND_DIRECTORY:
+		return (repo.admins[sidecar.id] || sidecar.configWriter) && self.sidecarConsented(sidecar)
+	case aclRepoKindOwnerBound(repo.kind):
+		return repo.admins[sidecar.id] && sidecar.memberId == repo.ownerId && repo.consents[sidecar.id] && self.sidecarConsented(sidecar)
+	case aclRepoKindTakesGrants(repo.kind):
+		return repo.admins[sidecar.id]
+	}
+	return false
+}
+
+// The position of the sidecar's standing RepoAdmin row in the repo's access log, zero when it holds none, as a
+// config writer administering the directory does not.
+func aclStandingAdminAt(repo *aclRepoState, sidecarId Id) uint64 {
+	var at uint64
+	for _, admin := range repo.row.GetAdmins() {
+		if Id(admin.GetSidecarId()) == sidecarId && AclRepoAdminStands(admin) {
+			at = admin.GetAt()
+		}
+	}
+	return at
 }
 
 // An owner-bound repo's rights: its owner's consented devices read and write, and those of them in its
@@ -389,13 +441,7 @@ func (self *AclState) namesSidecar(sidecar *aclSidecarState, subject Id, withinC
 // writer's standing RepoRevoke overrides (§8.8).
 func (self *AclState) addAccessLogRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repo *aclRepoState, nowMs int64) {
 	if repo.admins[sidecar.id] {
-		var at uint64
-		for _, admin := range repo.row.GetAdmins() {
-			if Id(admin.GetSidecarId()) == sidecar.id && AclRepoAdminStands(admin) {
-				at = admin.GetAt()
-			}
-		}
-		accumulator.add(AclEvsAdmin, AclDecision{Reason: AclReasonRepoAdmin, At: at})
+		accumulator.add(AclEvsAdmin, AclDecision{Reason: AclReasonRepoAdmin, At: aclStandingAdminAt(repo, sidecar.id)})
 	}
 	if repo.revoked[sidecar.id] {
 		return

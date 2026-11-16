@@ -144,7 +144,6 @@ evs_drop_payload.go
 evs_epoch.go
 evs_epoch_read.go
 evs_format_settings.go
-evs_git_build.go
 evs_git_delta.go
 evs_git_object.go
 evs_hint.go

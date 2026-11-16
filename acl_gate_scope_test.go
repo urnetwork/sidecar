@@ -5,8 +5,8 @@
 // is never a pass, and FS-14's closing case through the real cache over TEAM's log: a subject a group edit drops loses
 // its scope at the gate the moment the edit's {acl_}v event loads, and with the event lost, at the poll. Then a
 // RepoDelete as a gate holds it: dated by its row (QD-743) and signed by the log's entry or, once the gate's log no
-// longer keeps it or never held it, by its row (QD-798). No sleeps: the fake clock fires the poll and loads report as
-// they finish.
+// longer keeps it or never held it, by its row (QD-798), and the scopes it leaves: admin alone, to the repo's standing
+// admins (QD-880). No sleeps: the fake clock fires the poll and loads report as they finish.
 
 package sidecar
 
@@ -585,4 +585,81 @@ func TestAclGateSignsARepoDeleteFromItsRowAtAGateLoadedAtALaterBase(t *testing.T
 	if kept := reader.RepoDeletion(repoId); kept == nil || !kept.Signed || kept.SignerSidecarId != deletion.SignerSidecarId {
 		t.Errorf("the reader keeping the entry: %+v", kept)
 	}
+}
+
+// QD-880 through the real cache over TEAM's log: a RepoDelete in the log's tail, before any base folds it, leaves the
+// repo's standing admin its admin scope alone at the gate's next load, at evs and at gkm, so §11.12's DELETE and
+// restore are honored while its r, rw and deposit, and admin asked together with rw, are refused, as is a reader's r;
+// the RepoRestore brings them back, and a RepoDelete{now} closes them again.
+func TestAclGateHonorScopeHoldsADeletedReposAdminToAdminAlone(t *testing.T) {
+	net := newTestConfigNet(t)
+	device := net.admitMemberDevice("deleted repo reader")
+	repoId := testConfigId("gate scope deleted repo")
+	groupAtom := testConfigId("gate scope deleted group")
+	net.withAclRows(func(rows *protocol.AclRows) {
+		proto.Merge(rows, aclScopeGroupRows(groupAtom, repoId, device.memberId))
+		for _, repo := range rows.Repos {
+			if Id(repo.GetRepoId()) == repoId {
+				repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: net.owner.sidecarId.Bytes(), Signer: net.owner.sidecarId.Bytes(), At: 1}}
+			}
+		}
+	})
+	source := newAclGateTestSource()
+	source.publish(net)
+	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), nil)
+	cache.Changed(net.networkId)
+	aclGateTestNextLoad(t, loads)
+	reload := func() {
+		t.Helper()
+		source.publish(net)
+		cache.Changed(net.networkId)
+		if load := aclGateTestNextLoad(t, loads); load.err != nil {
+			t.Fatal(load.err)
+		}
+	}
+	check := func(name string, deleted bool) {
+		t.Helper()
+		for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+			honor := func(sidecarId Id, scope AclEvsRights) AclScopeAnswer {
+				return cache.HonorScope(net.networkId, sidecarId, repoId, scope, audience, aclTestNow)
+			}
+			if answer := honor(net.owner.sidecarId, AclEvsAdmin); answer != AclScopeHonored {
+				t.Errorf("%s, audience %d: the admin's admin: %d", name, audience, answer)
+			}
+			implied := AclScopeHonored
+			if deleted {
+				implied = AclScopeRefused
+			}
+			for _, scope := range []AclEvsRights{AclEvsRead, AclEvsWrite, AclEvsAdmin | AclEvsWrite, AclEvsAdmin | AclEvsWrite | AclEvsRead} {
+				if answer := honor(net.owner.sidecarId, scope); answer != implied {
+					t.Errorf("%s, audience %d: the admin's scope %b: %d, want %d", name, audience, scope, answer, implied)
+				}
+			}
+			if answer := honor(net.owner.sidecarId, AclEvsDeposit); answer != AclScopeRefused {
+				t.Errorf("%s, audience %d: the admin's deposit: %d", name, audience, answer)
+			}
+			if answer := honor(device.sidecarId, AclEvsRead); answer != implied {
+				t.Errorf("%s, audience %d: a reader's r: %d, want %d", name, audience, answer, implied)
+			}
+			if answer := honor(device.sidecarId, AclEvsAdmin); answer != AclScopeRefused {
+				t.Errorf("%s, audience %d: a reader's admin: %d", name, audience, answer)
+			}
+		}
+	}
+	check("live", false)
+
+	deletionId := testConfigId("gate scope deletion")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{Header: net.header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes()})
+	reload()
+	check("deleted", true)
+
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_RESTORE, &protocol.RepoRestore{Header: net.header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes()})
+	reload()
+	check("restored", false)
+
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
+		Header: net.header(), RepoId: repoId.Bytes(), DeletionId: testConfigId("gate scope deletion now").Bytes(), Now: true,
+	})
+	reload()
+	check("deleted now", true)
 }
