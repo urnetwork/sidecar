@@ -56,13 +56,14 @@ func (self *urDaemonNetwork) devicesDaemon() *sidecar.Daemon {
 	return self.daemon
 }
 
-// The root's devices methods over target's daemon, each finding its network's Sidecar per call.
+// The root's devices methods over target's daemon, each finding its network's Sidecar per call, with the two-call
+// methods a remote-mode app's decisions and presence key take (CORE-M8-03).
 func urDevicesMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	devices, ok := target.(urDevicesTarget)
 	if !ok || devices.devicesDaemon() == nil {
 		return nil
 	}
-	return sidecar.DaemonDevicesMethods(devices.devicesDaemon())
+	return append(sidecar.DaemonDevicesMethods(devices.devicesDaemon()), sidecar.DaemonApprovalsMethods(devices.devicesDaemon())...)
 }
 
 // What §5.6's codes mean, for the line ur prints beside each.

@@ -508,7 +508,7 @@ func (self *DropPreviews) preview(ctx context.Context, cluster sidecar.BlobClust
 	}
 	marked, err := self.deps.Marker.Mark(ctx, &DropMarkRequest{
 		Cluster: cluster, SegmentCluster: segmentCluster, RepoId: repoId, JobId: taken.PreviewId, Round: 1, Horizon: horizon,
-		Since: map[sidecar.Id]uint64{}, Liveness: dropLiveness(read.State, nil), Pace: pace,
+		Since: map[sidecar.Id]uint64{}, Liveness: dropLiveness(read.State, nil), Listed: resolved.Listed, Pace: pace,
 		Renew: func(ctx context.Context) error { return nil },
 	})
 	if err != nil {

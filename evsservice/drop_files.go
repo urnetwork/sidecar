@@ -499,12 +499,24 @@ func (self *DropFiles) Sequences(ctx context.Context, kind DropFileKind) ([]uint
 	}
 }
 
+// The most bytes a file of any kind but list holds under the settings: FileRowCount rows of the widest row and a
+// cursor row, or a dry run's request, inside the envelope. A read bound, past which a file is not one this job wrote.
+func (self *DropFiles) maxByteCount() int64 {
+	rows := int64(self.settings.FileRowCount+1) * dropFileSnapDropRowByteCount
+	return int64(dropFileHeaderByteCount+dropFileTrailerByteCount) + max(rows, self.settings.PreviewRequestByteCount)
+}
+
 // One file, nil when it does not exist.
 func (self *DropFiles) Read(ctx context.Context, kind DropFileKind, sequence uint32) (*DropFile, error) {
-	encoded, err := readBlob(ctx, self.cluster, DropFileKey(self.repoId, self.jobId, kind, sequence))
+	object, err := self.cluster.Get(ctx, DropFileKey(self.repoId, self.jobId, kind, sequence))
 	if errors.Is(err, sidecar.ErrBlobNotFound) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer object.Body.Close()
+	encoded, err := readAllLimited(object, self.maxByteCount())
 	if err != nil {
 		return nil, err
 	}

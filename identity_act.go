@@ -14,10 +14,11 @@
 //	          first; a statement whose answer is lost stays pending with the rest of its act, and PostPendingStatements
 //	          retries the same bytes in the same order until its not_after
 //
-// The check is the caller's function value: the daemon's presence prompt, §16's, or an app's SidecarPresenceSigner;
-// a remote-mode app's takes two calls, CountersignedBytes and Countersign (CORE-M8-03). A sidecar with no live key
-// signs on the person's confirmation alone, which the origin carries, and a recovery key's statements are not this
-// runner's.
+// The check is the caller's function value: the daemon's presence prompt, §16's, or an app's SidecarPresenceSigner.
+// A remote-mode app's takes two calls (CORE-M8-03): the daemon holds the act through Run's context (sidecarActHold)
+// once it is built, the first call answering its countersigned bytes and the second bringing the evidence, which
+// Countersign verifies. A sidecar with no live key signs on the person's confirmation alone, which the origin carries,
+// and a recovery key's statements are not this runner's.
 //
 // Mode grants nothing (D-CORE-13): an act whose origin is not a person's confirmation, MCP's, a hook's or an
 // unconfirmed control call's, signs only §5.8's own-resource filings, a closed list of types (sidecarOwnResourceTypes),
@@ -62,6 +63,22 @@ const (
 // The check an act runs when the log covers it: given the act's countersigned bytes, the presence key's evidence over
 // them (§16.6's countersign profile), or an error when the person refused or the key failed.
 type SidecarPresenceCheck func(countersignedBytes []byte) (*bridge.WebAuthnEvidence, error)
+
+// What a caller holds an act at, carried by the context Run takes (withSidecarActHold), for a remote-mode app's two
+// calls (§5.8; daemon_approvals.go, CORE-M8-03): once the act's statements are built and its countersigned bytes known,
+// and before any check or signature, Run hands the hold those bytes and whether the log covers them, then goes on with
+// what it answers, in place of the check: the evidence a covered act verifies as Countersign does, and nothing for an
+// act the log does not cover. An error signs nothing, and so does a covered act's missing or failing evidence. The
+// first call answers the bytes and the act waits here, unsigned, for the second, whether or not the log covers it.
+type sidecarActHold func(countersignedBytes []byte, presence bool) (*bridge.WebAuthnEvidence, error)
+
+// The context key of an act's hold.
+type sidecarActHoldKey struct{}
+
+// ctx, with every act Run under it held at hold.
+func withSidecarActHold(ctx context.Context, hold sidecarActHold) context.Context {
+	return context.WithValue(ctx, sidecarActHoldKey{}, hold)
+}
 
 var (
 	// The act's origin is not a person's confirmation, and a statement is not an own-resource filing (D-CORE-13).
@@ -403,6 +420,18 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 	if self.countersigned == nil {
 		if _, _, err := self.CountersignedBytes(); err != nil {
 			return nil, err
+		}
+	}
+	if hold, ok := ctx.Value(sidecarActHoldKey{}).(sidecarActHold); ok && hold != nil && self.evidence == nil {
+		// a remote-mode app's first call ends here, and its second brings what goes on
+		evidence, err := hold(bytes.Clone(self.countersigned), self.presence)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrSidecarActPresence, err)
+		}
+		if self.presence {
+			if err := self.Countersign(evidence); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if self.presence && self.evidence == nil {
