@@ -27,7 +27,8 @@
 //   - the owner-bound request: only a consented device of the owner decides it, every reader refuses an admin's
 //     EvsShare, and the share's expires ends it with no device online;
 //   - the worker request: only its owner's or sponsor's device or presence decision approves it, a harness decision
-//     is refused, and the requester's GrantActivate passes the spend check once;
+//     is refused, an Admin's or the Owner's lone decision is refused at api and every reader (QD-863), and the
+//     requester's GrantActivate passes the spend check once;
 //   - the copied decision: a decision copied onto another request activates nothing.
 //
 // S13's grant steps and S3b's and S4b's acl checks are schedules RECORD-M6-26's s13_test.go and the scenario runs
@@ -508,9 +509,11 @@ func (self *aclM6World) cast() map[string]*sidecartest.AdmissionDevice {
 // ports limited to the sealed one, and the same spend again is a replay. A second request, to a device m owns, takes
 // m's presence decision.
 //
-// What the log's own quorum makes of an Admin's lone decision is not judged here: acl_grant.go counts an admin toward
-// k for a grant touching another member, while the directory names the sponsor alone as its decider (question
-// acl-m6-05-admin-alone-reach).
+// The log's quorum follows the directory (the owner's answer to acl-m6-05-admin-alone-reach, QD-863): a GrantActivate
+// carrying only the Admin's device decision, only the Owner's, or the two together, is refused at api and at every
+// reader, since the rule names the worker's sponsor alone and an admin's decision counts toward k only where a rule's
+// approvers name it; on T2 a malicious api's append of the Admin's lone spend is refused at its position and opens
+// nothing.
 func Fs85AclWorkerRequest(net *Net) *Schedule {
 	world := newAclM6World()
 	return world.schedule("FS-85 acl worker request",
@@ -534,6 +537,31 @@ func Fs85AclWorkerRequest(net *Net) *Schedule {
 				return err
 			}
 			net.MustRefuse(world.grantActivate(net, request, bFirst, own), sidecar.ErrConfigAuthority)
+			return aclM6ExpectReach(net, bFirst, world.cast(), "b first", "b worker")
+		}),
+		world.do("adminFirst", func(net *sidecartest.AdmissionNet) error {
+			bFirst, adminFirst, ownerFirst := world.devices["b first"], world.devices["admin first"], world.devices["owner first"]
+			request := world.requests[0]
+			// an Admin's and the Owner's device decisions, each one §8.6's admin clause takes for a grant touching
+			// another member, and neither one of the rule's k: the sponsor's decision is the one the rule asks (QD-863)
+			admin, err := world.deviceDecision(net, request, adminFirst, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE)
+			if err != nil {
+				return err
+			}
+			owner, err := world.deviceDecision(net, request, ownerFirst, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE)
+			if err != nil {
+				return err
+			}
+			adminAlone := world.grantActivate(net, request, bFirst, admin)
+			net.MustRefuse(adminAlone, sidecar.ErrConfigAuthority)
+			net.MustRefuse(world.grantActivate(net, request, bFirst, owner), sidecar.ErrConfigAuthority)
+			net.MustRefuse(world.grantActivate(net, request, bFirst, admin, owner), sidecar.ErrConfigAuthority)
+			if net.ForgedAppends() {
+				pin := net.SequenceAnyway(bridge.AuthEntryKindStatement, adminAlone)
+				if verdict := net.VerdictAt(pin.GetVersion()); verdict.Accepted() || !errors.Is(verdict.Refusal, sidecar.ErrConfigAuthority) {
+					return fmt.Errorf("the forged spend of an Admin's lone decision at %d: %v", pin.GetVersion(), verdict.Refusal)
+				}
+			}
 			return aclM6ExpectReach(net, bFirst, world.cast(), "b first", "b worker")
 		}),
 		world.do("mFirst", func(net *sidecartest.AdmissionNet) error {
