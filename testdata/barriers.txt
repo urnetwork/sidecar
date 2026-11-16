@@ -284,6 +284,7 @@ barrier evs.index.rollup.pushed evs_index_rollup_runner.go
 barrier evs.index.rollup.uploaded evs_index_rollup_runner.go
 barrier evs.lease.cas.after evsservice/push_lease.go
 barrier evs.lease.cas.before evsservice/push_lease.go
+barrier evs.lfs.prune.remove evs_lfs_prune.go
 barrier evs.lfs.prune.start evs_lfs_prune.go
 barrier evs.local.apply.done evs_local_apply.go
 barrier evs.local.apply.ref evs_local_apply.go
@@ -623,6 +624,9 @@ barrier rpc.marked_pair_tick.before rpc_marked_pair.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
 barrier rpc.witness_refresh rpc_headcheck_witness.go
+barrier search.cache.cut.applied state_search_delete.go
+barrier search.cache.erase.applied state_search_delete.go
+barrier search.cache.lost.applied state_search_delete.go
 barrier search.sync.fetched search_fetch.go
 barrier search.sync.replayed search_sync.go
 barrier search.sync.retired search_sync.go
@@ -636,6 +640,7 @@ barrier sidecar.attach.after sidecar_component.go
 barrier sidecar.attach.before sidecar_component.go
 barrier sidecar.authorize.after sidecar_gate.go
 barrier sidecar.authorize.before sidecar_gate.go
+barrier sidecar.drop.applied state_drop_apply.go
 barrier sidecar.generation.start.after sidecar_generation.go
 barrier sidecar.generation.start.before sidecar_generation.go
 barrier sidecar.generation.stop.after sidecar_generation.go

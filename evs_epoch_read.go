@@ -868,6 +868,8 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 			roundFresh = false
 			continue
 		}
+		// choose settles every path of a ref with no head absent, sending no token of it
+		noHead := state.version == 0 && self.client.epochs.committedVersion(self.repoId, refId) == 0
 		asked, needFresh, err := self.choose(ctx, refId, keys, state, paths)
 		if err != nil {
 			return nil, err
@@ -893,7 +895,10 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 			round.objects.close()
 			continue
 		}
-		if !evsSamePathEpoch(round.head.Head.GetPathEpoch(), state.epoch) {
+		// a round chosen on a ref this client saw with no head asked no path, so a head evs answers now, another writer's
+		// first push, is a state to ask every path again on, whatever its epoch
+		created := noHead && round.head.Head.GetVersion() != 0
+		if created || !evsSamePathEpoch(round.head.Head.GetPathEpoch(), state.epoch) {
 			// a head of another epoch state: pinned, adopted, and every path asked again on it
 			round.objects.close()
 			if err := self.client.verifier.Pin(round.head); err != nil {

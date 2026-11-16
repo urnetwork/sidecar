@@ -8,9 +8,11 @@
 //	          surrogate devices' own runs (a phone holding the profile, tests/runner/perf's ios32 and android) are the
 //	          same harness there, and external
 //	measure   a step runs under the profile's Go memory limit; the heap's live objects are sampled every
-//	          HeapSampleInterval while it runs, the peak taken over the heap at the step's start, then after the step
-//	          and runtime/debug.FreeOSMemory the steady heap over the cell's baseline: a sampled peak, not an
-//	          allocation total, and it counts garbage the collector had not yet freed
+//	          HeapSampleInterval while it runs and at each Sample the step calls where it holds the most, the peak
+//	          taken over the heap at the step's start, then after the step and runtime/debug.FreeOSMemory the steady
+//	          heap over the cell's baseline: a sampled peak, not an allocation total, and it counts garbage the
+//	          collector had not yet freed. Under a limit below the process's heap the collector runs at once, so a
+//	          transient the timed samples happen to miss is caught only by a Sample at its high-water mark
 //	budgets   each row names its budget, and CheckWithin fails a row past it, so a step that keeps more than the budget
 //	          fails, as a deliberate over-allocation shows
 //
@@ -30,6 +32,7 @@ import (
 	"runtime/metrics"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -113,12 +116,35 @@ func (self *Row) Within() bool {
 	return self.PeakByteCount <= self.BudgetByteCount
 }
 
-// One cell: a profile's steps and their rows. Not safe for concurrent steps.
+// One cell: a profile's steps and their rows. Not safe for concurrent steps; Sample is safe from any goroutine.
 type Cell struct {
 	profile *Profile
 	// the heap when the cell began, after FreeOSMemory: what steady figures are over
 	baselineByteCount int64
 	rows              []*Row
+	// the step Measure runs now, which Sample notes into; nil between steps
+	measuring atomic.Pointer[cellStep]
+}
+
+// The peak of the step running, which the sampler and Sample raise.
+type cellStep struct {
+	stateLock     sync.Mutex
+	peakByteCount int64
+}
+
+// Raises the step's peak to the heap now.
+func (self *cellStep) note() {
+	heap := heap()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.peakByteCount = max(self.peakByteCount, heap)
+}
+
+// The step's peak so far.
+func (self *cellStep) peak() int64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.peakByteCount
 }
 
 // A cell under profile, its baseline read now.
@@ -157,14 +183,9 @@ func (self *Cell) Measure(step string, budgetByteCount int64, holds string, run 
 	defer debug.SetMemoryLimit(previousLimit)
 	startByteCount := settledHeap()
 
-	var peakLock sync.Mutex
-	peak := startByteCount
-	note := func() {
-		heap := heap()
-		peakLock.Lock()
-		defer peakLock.Unlock()
-		peak = max(peak, heap)
-	}
+	measuring := &cellStep{peakByteCount: startByteCount}
+	self.measuring.Store(measuring)
+	defer self.measuring.Store(nil)
 	stop := make(chan struct{})
 	sampled := make(chan struct{})
 	go func() {
@@ -176,32 +197,38 @@ func (self *Cell) Measure(step string, budgetByteCount int64, holds string, run 
 			case <-stop:
 				return
 			case <-ticker.C:
-				note()
+				measuring.note()
 			}
 		}
 	}()
 	started := time.Now()
 	keep, err := run()
 	duration := time.Since(started)
-	note()
+	measuring.note()
 	close(stop)
 	<-sampled
 	steady := settledHeap() - self.baselineByteCount
 	runtime.KeepAlive(keep)
 
-	peakLock.Lock()
 	row := &Row{
 		Profile:         self.profile.Name,
 		Step:            step,
-		PeakByteCount:   max(0, peak-startByteCount),
+		PeakByteCount:   max(0, measuring.peak()-startByteCount),
 		SteadyByteCount: max(0, steady),
 		BudgetByteCount: budgetByteCount,
 		Holds:           holds,
 		Duration:        duration,
 	}
-	peakLock.Unlock()
 	self.rows = append(self.rows, row)
 	return row, err
+}
+
+// Samples the heap into the step Measure runs now: a step calls it where it holds the most, so a transient's peak is
+// measured whatever the timed samples' luck. Between steps it does nothing.
+func (self *Cell) Sample() {
+	if measuring := self.measuring.Load(); measuring != nil {
+		measuring.note()
+	}
 }
 
 // Every row so far.

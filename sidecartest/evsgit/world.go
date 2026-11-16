@@ -16,8 +16,12 @@
 //	         git's hooks exec it, and it relays the hook to the daemon whose socket HookSocketVariable names
 //	git      stock git as each device's client, at the path the settings name, in plain clones whose committer is
 //	         the device's agent label at <client_id>@ur.invalid (owner decision 81)
-//	clock    real time for everything: git stamps commits by its own clock, and the queue's delays and the receive
-//	         path's waits run on it
+//	clock    real time for everything: the queue's delays and the receive path's waits run on it, and Commit stamps
+//	         commits by it; or a fake clock that follows real time plus what Jump moved it (FollowRealTime), which
+//	         every device, T2's engine and each commit read, so a schedule ages stored state by days (FS-73)
+//	format2  WorldSettings.Format2 puts the network in §19.11's format2 gate and has every device read format 2
+//	lfs      WorldSettings.Lfs gives every clone stock git-lfs, its transfer agent a test binary that relays each
+//	         object to the device's daemon, which serves it from the repo's ur/lfs store (lfs.go)
 //
 // Not safe to share between tests. Its methods are safe for concurrent use as the devices are.
 
@@ -75,6 +79,14 @@ type WorldSettings struct {
 	TokenLifetime time.Duration
 	// How long before the world's start its receipt key took effect, so every receipt it signs is current: 48 h.
 	ReceiptKeyAge time.Duration
+	// The clock every device, T2's engine and every commit's dates read, kept at real time plus what Jump moved it
+	// (FollowRealTime); nil runs on real time, which nothing moves.
+	Clock *FollowingClock
+	// The world's network in §19.11's format2 gate: T2's gates list it, and each device's client reads the gate as
+	// admitting it and reads format 2. A T3 caller's block lists it in the gates it writes.
+	Format2 bool
+	// git-lfs in each device's clones, its objects moving through the device's daemon (lfs.go); nil for none.
+	Lfs *WorldLfs
 }
 
 // A world's defaults: the caller names its HookCommand.
@@ -206,6 +218,17 @@ func ClientGit(settings *WorldSettings) string {
 	return path
 }
 
+// The gates a world's evs reads: evs open to the network, and §19.11's format2 gate too when format2 is set, with its
+// purge and drops in observe, as §23.9's rollout opens it. A T3 caller's block writes these.
+func WorldGates(networkId sidecar.Id, format2 bool) string {
+	network := connect.Id(networkId).String()
+	gates := fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n", network)
+	if format2 {
+		gates += fmt.Sprintf("  format2: {enabled: true, networks: [%q], percent: 0, purge: \"observe\", drop: \"observe\"}\n", network)
+	}
+	return gates
+}
+
 // A world with no device yet: its repo placed on the cluster, its group held by no one until the first device.
 func NewWorld(t testing.TB, settings *WorldSettings) *World {
 	t.Helper()
@@ -217,7 +240,10 @@ func NewWorld(t testing.TB, settings *WorldSettings) *World {
 		t.Skip("no git on this host")
 	}
 	ctx := t.Context()
-	clock := sidecar.RealClock{}
+	var clock sidecar.Clock = sidecar.RealClock{}
+	if settings.Clock != nil {
+		clock = settings.Clock.Fake()
+	}
 	world := &World{
 		t: t, ctx: ctx, settings: settings, clock: clock, networkId: sidecar.NewId(), memberId: sidecar.NewId(),
 		repoId: sidecar.NewId(), authLog: sidecartest.NewFakeGkmAuthLog(), gitPath: gitPath,
@@ -244,7 +270,7 @@ func (self *World) hostEngine() {
 	host := sidecartest.NewFakeHost(self.ctx, self.clock, nil, nil, hostSettings)
 	sidecartest.RegisterEvsTwins(host.Redis)
 	self.host = host
-	if err := host.Gates.Set(fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n", connect.Id(self.networkId).String())); err != nil {
+	if err := host.Gates.Set(WorldGates(self.networkId, self.settings.Format2)); err != nil {
 		t.Fatal(err)
 	}
 	host.Quota.SetBalance(connect.Id(self.networkId), 1024*1024*1024*1024)
@@ -335,6 +361,26 @@ func (self *World) Engine() *evsservice.EvsEngine {
 	return self.engine
 }
 
+// The network's id.
+func (self *World) NetworkId() sidecar.Id {
+	return self.networkId
+}
+
+// The clock every device reads.
+func (self *World) Clock() sidecar.Clock {
+	return self.clock
+}
+
+// Moves the world's clock forward by d, as days pass: every device's, evs's and the next commit's. A world on real
+// time cannot, and fails.
+func (self *World) Jump(d time.Duration) {
+	self.t.Helper()
+	if self.settings.Clock == nil {
+		self.t.Fatal("a world on real time cannot move its clock")
+	}
+	self.settings.Clock.Jump(d)
+}
+
 // The world's state as the log's next position: the repo's row, its readers, writers and admins.
 func (self *World) publishWithLock() {
 	row := &protocol.AclRepo{RepoId: self.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, OwnerMemberId: self.memberId.Bytes()}
@@ -420,9 +466,17 @@ type Device struct {
 	Client    *sidecar.EvsClient
 	Mounts    *sidecar.EvsMounts
 	Mount     *sidecar.EvsLocalRepo
-	socket    string
-	cancel    context.CancelFunc
-	ran       chan error
+	// The repo's git-lfs store as the device's daemon serves it to its clones' agents, nil without WorldSettings.Lfs.
+	Lfs    *sidecar.EvsLfsStore
+	socket string
+	// the device's own directory beside its state, short enough for a socket's path
+	directory string
+	// what the device's daemon did for its agents, nil without WorldSettings.Lfs
+	lfsCalls *lfsCalls
+	// the client's evs settings
+	clientSettings *sidecar.EvsSettings
+	cancel         context.CancelFunc
+	ran            chan error
 }
 
 // What a device is made as.
@@ -470,6 +524,7 @@ func (self *World) Device(label string, settings *DeviceSettings) *Device {
 	if clientSettings == nil {
 		clientSettings = sidecar.DefaultEvsSettings()
 	}
+	device.clientSettings = clientSettings
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.networkId,
 		EvsUrl:    "https://evs.example",
@@ -495,10 +550,16 @@ func (self *World) Device(label string, settings *DeviceSettings) *Device {
 	}
 	t.Cleanup(client.Close)
 	device.Client = client
+	if self.settings.Format2 {
+		// core's gates, as the composition reads them, admit the network
+		client.SetFormat2Source(func() bool { return true })
+		client.EnableFormat2Reader()
+	}
 	if first {
 		self.placeRepo(gkmClient, sidecarId)
 	}
 	directory := shortDirectory(t)
+	device.directory = directory
 	home := filepath.Join(directory, "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
@@ -530,6 +591,9 @@ func (self *World) Device(label string, settings *DeviceSettings) *Device {
 		return mounts.ServeGitHook(ctx, hello.Service, stream)
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if self.settings.Lfs != nil {
+		device.serveLfs(daemon)
 	}
 	daemonRan := make(chan error, 1)
 	go func() { daemonRan <- daemon.Run() }()
@@ -604,10 +668,12 @@ func (self *Device) Email() string {
 	return self.ClientId.String() + "@ur.invalid"
 }
 
-// Runs the world's git in dir, answering its combined output and whether it succeeded.
+// Runs the world's git in dir, answering its combined output and whether it succeeded. In a world with git-lfs, git
+// finds the world's git-lfs first on its PATH and the agent it starts finds the device's daemon (lfs.go).
 func (self *Device) GitIn(dir string, env []string, args ...string) (string, bool) {
 	command := exec.Command(self.world.gitPath, append([]string{"-C", dir}, args...)...)
-	command.Env = append([]string{"HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "PATH=" + os.Getenv("PATH"), "LC_ALL=C"}, env...)
+	command.Env = append([]string{"HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "PATH=" + os.Getenv("PATH"), "LC_ALL=C"}, self.lfsEnvironment()...)
+	command.Env = append(command.Env, env...)
 	out, err := command.CombinedOutput()
 	return string(out), err == nil
 }
@@ -622,19 +688,31 @@ func (self *Device) MustGit(dir string, args ...string) string {
 	return out
 }
 
-// A clone of the mount's bare repository, its committer this device's client under its label.
+// A clone of the mount's bare repository, its committer this device's client under its label. In a world with git-lfs
+// its agent is configured before the checkout, as ur mount add and git-remote-ur write it, so the checkout's smudge
+// already reads through the daemon.
 func (self *Device) Clone() string {
 	t := self.world.t
 	t.Helper()
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "clone")
-	if out, ok := self.GitIn(parent, nil, "clone", "-q", self.Mount.BareDir, dir); !ok {
+	cloneArgs := []string{"clone", "-q", self.Mount.BareDir, dir}
+	if self.world.settings.Lfs != nil {
+		cloneArgs = []string{"clone", "-q", "--no-checkout", self.Mount.BareDir, dir}
+	}
+	if out, ok := self.GitIn(parent, nil, cloneArgs...); !ok {
 		t.Fatalf("clone: %s", out)
 	}
 	for _, setting := range [][]string{
 		{"user.name", self.Label}, {"user.email", self.Email()}, {"committer.name", self.Label}, {"committer.email", self.Email()},
 	} {
 		self.MustGit(dir, "config", setting[0], setting[1])
+	}
+	if self.world.settings.Lfs != nil {
+		self.configureLfs(dir)
+		if _, born := self.GitIn(dir, nil, "rev-parse", "--verify", "-q", "HEAD"); born {
+			self.MustGit(dir, "checkout", "-q")
+		}
 	}
 	return dir
 }
@@ -659,7 +737,11 @@ func (self *Device) Commit(dir string, message string, files map[string]*string)
 		}
 	}
 	self.MustGit(dir, "add", "-A")
-	self.MustGit(dir, "commit", "-q", "--allow-empty", "-m", message)
+	// stamped by the world's clock, which a world's Jump moves past real time
+	date := fmt.Sprintf("@%d +0000", self.world.clock.Now().Unix())
+	if out, ok := self.GitIn(dir, []string{"GIT_AUTHOR_DATE=" + date, "GIT_COMMITTER_DATE=" + date}, "commit", "-q", "--allow-empty", "-m", message); !ok {
+		t.Fatalf("git commit: %s", out)
+	}
 	return strings.TrimSpace(self.MustGit(dir, "rev-parse", "HEAD"))
 }
 
