@@ -1003,12 +1003,15 @@ func (self *daemonSearchSessions) of(call *DaemonCall) Id {
 	return sessionId
 }
 
-// What the control methods act through, for the call's Sidecar. A nil Tools or TaintAncestors takes the Sidecar's own.
+// What the control methods act through, for the call's Sidecar. A nil Tools, TaintAncestors or Secret takes the
+// Sidecar's own.
 type DaemonSearchBackends struct {
 	// The network's search tools: Sidecar.SearchTools.
 	Tools func(sidecar *Sidecar) (*SearchTools, error)
 	// Taints, fsynced, each run of the network whose harness process is an ancestor of pid: Sidecar.TaintAncestorRuns.
 	TaintAncestors func(ctx context.Context, sidecar *Sidecar, pid int) error
+	// The daemon's credentials as a matcher (I-7): Sidecar.SecretMatcher's, an error while it cannot be read.
+	Secret func(sidecar *Sidecar) (func(text []byte) bool, error)
 }
 
 // search's control params: the tool's arguments, the call's network, and whether to stream search.progress.
@@ -1049,6 +1052,16 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 			return sidecar.TaintAncestorRuns(ctx, pid)
 		}
 	}
+	secretOf := backends.Secret
+	if secretOf == nil {
+		secretOf = func(sidecar *Sidecar) (func(text []byte) bool, error) {
+			matcher, err := sidecar.SecretMatcher()
+			if err != nil {
+				return nil, err
+			}
+			return matcher.Matches, nil
+		}
+	}
 	sessions := &daemonSearchSessions{}
 	decode := func(call *DaemonCall, params any) error {
 		if len(call.Params) == 0 {
@@ -1084,10 +1097,17 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 				return taintAncestors(ctx, call.Sidecar, pid)
 			},
 		}
-		if matcher, err := call.Sidecar.SecretMatcher(); err == nil {
-			env.Secret = matcher.Matches
-		}
 		return tools, env, nil
+	}
+	// the daemon's credentials, which a hit holding one is withheld for (I-7): a call whose result could carry text is
+	// refused while they cannot be read, as MCP's tools are
+	matcherOf := func(call *DaemonCall, env *SearchToolEnv) error {
+		secret, err := secretOf(call.Sidecar)
+		if err != nil {
+			return fmt.Errorf("the daemon's credentials cannot be read to check the result: %w", err)
+		}
+		env.Secret = secret
+		return nil
 	}
 	return []*DaemonMethod{
 		{
@@ -1100,6 +1120,9 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 				}
 				tools, env, err := envOf(call)
 				if err != nil {
+					return nil, err
+				}
+				if err := matcherOf(call, env); err != nil {
 					return nil, err
 				}
 				if params.Progress && call.Notify != nil {
@@ -1121,6 +1144,9 @@ func DaemonSearchMethods(backends *DaemonSearchBackends) []*DaemonMethod {
 				}
 				tools, env, err := envOf(call)
 				if err != nil {
+					return nil, err
+				}
+				if err := matcherOf(call, env); err != nil {
 					return nil, err
 				}
 				return tools.Agents(ctx, env, &params.SearchAgentsToolArgs)

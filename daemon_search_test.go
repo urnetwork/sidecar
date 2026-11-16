@@ -296,6 +296,7 @@ type testSearchBackends struct {
 	stateLock sync.Mutex
 	taintPids []int
 	taintErr  error
+	secretErr error
 	tools     *SearchTools
 }
 
@@ -309,6 +310,14 @@ func (self *testSearchBackends) backends() *DaemonSearchBackends {
 			defer self.stateLock.Unlock()
 			self.taintPids = append(self.taintPids, pid)
 			return self.taintErr
+		},
+		Secret: func(sidecar *Sidecar) (func(text []byte) bool, error) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.secretErr != nil {
+				return nil, self.secretErr
+			}
+			return testSearchSecret, nil
 		},
 	}
 }
@@ -382,5 +391,15 @@ func TestDaemonSearchMethods(t *testing.T) {
 	}
 	if response = dispatch(DaemonModeControl, pid, `{"jsonrpc":"2.0","id":7,"method":"search","params":{"query":"limiter","colour":"blue"}}`); response.Error == nil {
 		t.Fatal("an unknown argument was taken")
+	}
+	// I-7: while the daemon's credentials cannot be read, no search answers, since its hits could not be checked
+	fakes.secretErr = ErrSidecarStoreLocked
+	for _, line := range []string{
+		`{"jsonrpc":"2.0","id":8,"method":"search","params":{"query":"limiter"}}`,
+		`{"jsonrpc":"2.0","id":9,"method":"search.agents","params":{"task":"limiter"}}`,
+	} {
+		if response = dispatch(DaemonModeControl, pid, line); response.Error == nil || response.Result != nil {
+			t.Fatalf("a search answered unchecked: %+v %s", response.Error, response.Result)
+		}
 	}
 }
