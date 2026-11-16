@@ -110,9 +110,10 @@ func (self *PushView) drop() bool {
 }
 
 // 5c's DROP rules that need no body, at every stage, before the refs table: see the file header. A push that is no
-// DROP passes, and so does a view with no repo/, which CheckRefs refuses 503.
+// DROP passes, and so does a view with no repo/, which CheckRefs refuses 503, and one whose test stands in for format
+// 2's rules (PushView.Format2Rules), a DROP's among them.
 func CheckDropRefs(view *PushView) *EvsCheckRefusal {
-	if !view.drop() || view.Repo == nil {
+	if !view.drop() || view.Repo == nil || view.Format2Rules != nil {
 		return nil
 	}
 	push := view.Statement.Push
@@ -239,9 +240,10 @@ func evsDropNewestTokenPath(path *protocol.EvsDropPath) (sidecar.EvsTokenPath, e
 }
 
 // 5h's DROP rules at a one-part push or a seal: each lineage's boundary against the push's changes, and each written
-// lineage's list holding its base. See the file header. Any other push, and a part, passes.
+// lineage's list holding its base. See the file header. Any other push, a part, and a view whose test stands in for
+// format 2's rules pass.
 func CheckDropBoundary(view *PushView) *EvsCheckRefusal {
-	if !view.drop() || view.Stage == PushStagePart {
+	if !view.drop() || view.Stage == PushStagePart || view.Format2Rules != nil {
 		return nil
 	}
 	checked := view.Payload.Drop

@@ -253,6 +253,10 @@ func (self *pushAttempt) countDrop() *pushOutcome {
 	if self.part != nil || self.payload == nil || self.payload.Drop == nil || self.payload.Drop.Cancel() {
 		return nil
 	}
+	if self.engine.deps.Format2Rules != nil {
+		// a test's stand-in for format 2's rules, a drop's counts among them
+		return nil
+	}
 	settings := self.settings.Drop
 	table, err := self.engine.drops.Read(self.ctx, self.cluster, self.repoId)
 	if err != nil {
