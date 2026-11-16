@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9465,
-  "code_words": 18648,
+  "code_words": 18749,
   "ceiling": 3000,
   "over": 6465,
   "over_pct": 215.5
@@ -47,20 +47,20 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9322,
-  "code_words": 5044,
+  "words": 9335,
+  "code_words": 5065,
   "ceiling": 3800,
-  "over": 5522,
-  "over_pct": 145.3
+  "over": 5535,
+  "over_pct": 145.7
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12248,
-  "code_words": 12715,
+  "words": 12334,
+  "code_words": 12723,
   "ceiling": 3500,
-  "over": 8748,
-  "over_pct": 249.9
+  "over": 8834,
+  "over_pct": 252.4
  },
  {
   "num": 8,
@@ -101,29 +101,29 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 4867,
-  "code_words": 1637,
+  "words": 5813,
+  "code_words": 1919,
   "ceiling": 3000,
-  "over": 1867,
-  "over_pct": 62.2
+  "over": 2813,
+  "over_pct": 93.8
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 6462,
-  "code_words": 774,
+  "words": 9040,
+  "code_words": 954,
   "ceiling": 3800,
-  "over": 2662,
-  "over_pct": 70.1
+  "over": 5240,
+  "over_pct": 137.9
  },
  {
   "num": 14,
   "code": "SMTP",
-  "words": 7241,
+  "words": 7250,
   "code_words": 1098,
   "ceiling": 4500,
-  "over": 2741,
-  "over_pct": 60.9
+  "over": 2750,
+  "over_pct": 61.1
  },
  {
   "num": 15,
@@ -137,11 +137,11 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 12789,
+  "words": 12864,
   "code_words": 16646,
   "ceiling": 3500,
-  "over": 9289,
-  "over_pct": 265.4
+  "over": 9364,
+  "over_pct": 267.5
  },
  {
   "num": 17,
@@ -164,35 +164,35 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 8150,
-  "code_words": 9264,
+  "words": 8274,
+  "code_words": 9400,
   "ceiling": 3500,
-  "over": 4650,
-  "over_pct": 132.9
+  "over": 4774,
+  "over_pct": 136.4
  },
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 4707,
+  "words": 4737,
   "code_words": 3936,
   "ceiling": 2500,
-  "over": 2207,
-  "over_pct": 88.3
+  "over": 2237,
+  "over_pct": 89.5
  },
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 3956,
+  "words": 4028,
   "code_words": 456,
   "ceiling": 2500,
-  "over": 1456,
-  "over_pct": 58.2
+  "over": 1528,
+  "over_pct": 61.1
  },
  {
   "num": 22,
   "code": "TEST",
   "words": 7319,
-  "code_words": 36052,
+  "code_words": 36065,
   "ceiling": 2500,
   "over": 4819,
   "over_pct": 192.8

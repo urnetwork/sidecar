@@ -47,8 +47,13 @@ type CertsCustomSettings struct {
 	LockLease time.Duration
 	// How often the sweep runs. Positive.
 	SweepInterval time.Duration
-	// How long a spend is kept: past every bucket's window. Positive.
+	// How long a spend is kept: 15 d, past every bucket's replay, ReplayWindowCount of its windows, so no spend a
+	// replay reads is gone, which would read a bucket above the truth (QD-990). At least each bucket's replay span.
 	SpendRetention time.Duration
+	// How many of a bucket's windows (cap × refill) back its replay starts empty (17.2.8's level): 2, so a window's
+	// start reads the true level whenever the window before it held no burst, and the level stays never above the
+	// truth (QD-990, C5). 1 is 17.2.8's literal replay. Positive.
+	ReplayWindowCount int
 	// A CA's 429: the hold it sets, clamped to [HoldDefault, HoldMax]. Positive.
 	HoldDefault time.Duration
 	HoldMax     time.Duration
@@ -97,7 +102,8 @@ func DefaultCertsCustomSettings() *CertsCustomSettings {
 	return &CertsCustomSettings{
 		LockLease:               120 * time.Second,
 		SweepInterval:           10 * time.Minute,
-		SpendRetention:          8 * 24 * time.Hour,
+		SpendRetention:          15 * 24 * time.Hour,
+		ReplayWindowCount:       2,
 		HoldDefault:             1 * time.Hour,
 		HoldMax:                 7 * 24 * time.Hour,
 		RenewalLifetimeFraction: 2.0 / 3.0,
@@ -135,6 +141,7 @@ func (self *CertsCustomSettings) Validate() error {
 		"LockLease":              int64(self.LockLease),
 		"SweepInterval":          int64(self.SweepInterval),
 		"SpendRetention":         int64(self.SpendRetention),
+		"ReplayWindowCount":      int64(self.ReplayWindowCount),
 		"HoldDefault":            int64(self.HoldDefault),
 		"HoldMax":                int64(self.HoldMax - self.HoldDefault + 1),
 		"ChainMaxCount":          int64(self.ChainMaxCount),
@@ -166,21 +173,57 @@ func (self *CertsCustomSettings) Validate() error {
 	if !(0 < self.LapseWarnFraction && self.LapseWarnFraction <= self.RenewalLifetimeFraction && self.RenewalLifetimeFraction < 1) {
 		return fmt.Errorf("%w: LapseWarnFraction and RenewalLifetimeFraction are not 0 < warn <= renew < 1", ErrCertsCustomSettingsRefused)
 	}
+	// a spend purged inside a replay would read its bucket above the truth
+	for name, bucket := range map[string]CertsCustomBucket{"set": self.SetBucket(), "domain": self.DomainBucket(), "orders": self.OrderBucket()} {
+		if self.SpendRetention < bucket.ReplaySpan() {
+			return fmt.Errorf("%w: SpendRetention is shorter than the %s bucket's replay", ErrCertsCustomSettingsRefused, name)
+		}
+	}
 	return nil
 }
 
-// One budget of 17.2.8: Capacity tokens refilling one each Refill.
+// 17.2.8's set bucket, per CA and custom host.
+func (self *CertsCustomSettings) SetBucket() CertsCustomBucket {
+	return CertsCustomBucket{Capacity: self.SetCap, Refill: self.SetRefill, Windows: self.ReplayWindowCount}
+}
+
+// 17.2.8's domain bucket, per CA and registered domain.
+func (self *CertsCustomSettings) DomainBucket() CertsCustomBucket {
+	return CertsCustomBucket{Capacity: self.DomainCap, Refill: self.DomainRefill, Windows: self.ReplayWindowCount}
+}
+
+// 17.2.8's orders bucket, per CA and account.
+func (self *CertsCustomSettings) OrderBucket() CertsCustomBucket {
+	return CertsCustomBucket{Capacity: self.OrderCap, Refill: self.OrderRefill, Windows: self.ReplayWindowCount}
+}
+
+// One budget of 17.2.8: Capacity tokens refilling one each Refill, replayed from Windows windows back.
 type CertsCustomBucket struct {
 	Capacity int
 	Refill   time.Duration
+	// How many windows of Capacity × Refill back the replay starts empty: CertsCustomSettings.ReplayWindowCount
+	// (QD-990). Below 1 reads as 1, 17.2.8's literal replay.
+	Windows int
 }
 
-// The bucket's level at now, in refill units so nothing rounds, replayed from spends: empty at the window's start,
-// now − Capacity × Refill, so never above the truth, then each spend in (start, now] taking one, after the time
-// since the last refilled it (17.2.8's level). A level may go below zero: a spend the replay could not afford.
+// How far back from a time its replay starts: Windows windows of Capacity × Refill.
+func (self CertsCustomBucket) ReplaySpan() time.Duration {
+	return time.Duration(max(1, self.Windows)) * time.Duration(self.Capacity) * self.Refill
+}
+
+// Where the replay at now starts: it reads the spends after this, which a store reads from.
+func (self CertsCustomBucket) ReplayStart(now time.Time) time.Time {
+	return now.Add(-self.ReplaySpan())
+}
+
+// The bucket's level at now, in refill units so nothing rounds, replayed from spends: empty at the replay's start,
+// Windows windows back, so never above the truth, then each spend in (start, now] taking one, after the time since
+// the last refilled it, the level never above Capacity (17.2.8's level, QD-990). A window with no spend refills the
+// replay to Capacity, so the level is the truth from there on. A level may go below zero: a spend the replay could
+// not afford.
 func (self CertsCustomBucket) levelDuration(spends []time.Time, now time.Time) time.Duration {
 	full := time.Duration(self.Capacity) * self.Refill
-	at := now.Add(-full)
+	at := self.ReplayStart(now)
 	times := []time.Time{}
 	for _, spend := range spends {
 		if at.Before(spend) && !now.Before(spend) {
