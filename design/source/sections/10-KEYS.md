@@ -1042,7 +1042,8 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
                                                want first, the recipient's prefix on a miss, which hints
                                                wrap-pending (10.6's late wraps)
   GET  /gkm/repos/<id>/drop-key?since=<g>      deposit, r, rw, admin: the newest GenRotate of the repo's newest
-                                               GroupForm's group, up to 64 after since
+                                               GroupForm's group, up to 64 after since; api reads it for §14.8's
+                                               report intake under a deposit token it issues itself
   GET  /gkm/groups/<id>/group-info?want=<epoch>  sealed; an older one also hints wrap-pending (KF5)
   GET|POST|DELETE /gkm/recovery/<member_id>/wraps  GET also under an unadmitted client's recovery:<member_id>,
                                                    for that member's own wraps only (§7.8, §7.9); POST, a

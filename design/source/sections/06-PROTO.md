@@ -550,9 +550,11 @@ enum MessageType {
   reserved "EVS_HEAD_CHECK", "EVS_HEAD_CHECK_RESULT";
   SEARCH = 0x1404; SEARCH_RESULT = 0x1405;    // §11.14; peer RPC, remote search (owner decision 175)
   TLS_EDGE_OPEN = 0x1501; TLS_HINT = 0x1502;  // §13; StreamOpen metadata; push tls
-  SMTP_PREAMBLE = 0x1601; SMTP_PREAMBLE_RESULT = 0x1602; SMTP_OUTCOME = 0x1603; // §14; stream to smtpedge
+  SMTP_PREAMBLE = 0x1601; SMTP_PREAMBLE_RESULT = 0x1602; SMTP_OUTCOME = 0x1603; // §14; stream to smtpedge, the
+                                              // outcome a NO_REPLY envelope to the ticket's listener
   SMTP_STATUS = 0x1604;                       // §14; push mail
   SMTP_PROOF = 0x1605; SMTP_PROOF_RESULT = 0x1606;                            // §14; BDAT and DATA proofs, RPC to smtpedge, M9
+  SMTP_HANDSHAKE = 0x1607; SMTP_HANDSHAKE_RESULT = 0x1608;                    // §14; TLS 1.3's disclosed SHTS, RPC to smtpedge, M9
   MAIL_INGRESS = 0x1701; MAIL_HINT = 0x1702;  // §15; StreamOpen metadata; push mail
   // 0x18 §16 MCP: none in v0 or v1; the directory's notices ride §11's hints (§16.11)
   // 0x19 §17: none; bridge rules ride the config repo (owner decision 5)
@@ -590,8 +592,10 @@ enum SignedType {
 ```text
 edge codes, numbered here beside ErrorCode (6.5) and StreamRejectCode and StreamResetCode (6.7)
 SmtpPreambleResult.code (§14)       UNSPECIFIED 0, OK 1, HALTED 2, QUOTA 3, DENIED 4, NO_MX 5, NO_TLS 6,
-                                    TRY_LATER 7
+                                    TRY_LATER 7, KEYS 8
 SmtpProofResult.code (§14)          UNSPECIFIED 0, OK 1, INVALID 2
+SmtpHandshakeResult.code (§14)      UNSPECIFIED 0, OK 1, INVALID 2
+SmtpStatus.kind (§14)               UNSPECIFIED 0, HALTED 1, QUOTA 2, CLEAR 3, in PushHint.hint on topic mail
 TlsEdgeOpen (§13), MailIngress      no code of their own: the listener answers StreamAccept, or StreamReject
   (§15) streams                     with a StreamRejectCode, and ends with a StreamResetCode
 zero                                every code but ErrorCode starts at UNSPECIFIED 0, which no sender sets; a

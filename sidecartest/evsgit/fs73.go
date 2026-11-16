@@ -25,8 +25,9 @@
 //	           path-level CAS and reruns, keeping O
 //	skip       a commit whose new object is absent, pushed with --no-verify or with GIT_LFS_SKIP_PUSH=1, is refused
 //	           alike, naming the object, evs's tip unmoved; the same commit pushed with neither commits
-//	transports over git's http front on loopback and its ssh front (transport.go), an ordinary push storing its object
-//	           through the agent, and a push with each skip option refused alike, then committed with neither
+//	transports over git's http front on loopback, its ssh front and git-remote-ur through the daemon's git mode
+//	           (transport.go), an ordinary push storing its object through the agent, and a push with each skip option
+//	           refused alike, then committed with neither; a transport this host cannot serve is logged as skipped
 //	owned      an owned ref pushed while the device's mount is stopped, so its daemon takes the push and nothing
 //	           publishes it, its object pruned meanwhile by a device holding every ref evs holds: once the mount runs
 //	           again the queue's check before its first POST holds the entry, ur status naming the object and the
@@ -38,16 +39,18 @@
 //	missing    a device whose replay of one ref fails refuses to prune (ErrEvsLfsPruneRefMissing), removing nothing;
 //	           the same device, the ref readable, prunes
 //	window     a settings file naming 3 days reads as 7: an object of a 5-day-old history is kept, of an 8-day-old one
-//	           removed
+//	           removed; a newer version a device with no repo admin signed is passed over with an alarm, the admin's
+//	           version standing
 //
 // The twin, a tip check switched off in a sidecar_testhooks build (fs73_testhooks.go), lets the pruned clause's force
 // push through, which the clause must catch.
 //
-// Left to the review phase and other hosts: git-remote-ur, whose ur binary is cli's module's and which no world here
-// builds (the other clauses push over git's local transport, behind the same hooks and receive path the http and ssh
-// fronts run); §22.9's older matrix rows where the host holds them; the purge following a prune, which evacuation's
-// job runs (EVSB-M10-01) and which needs the store clock FS-73's catalog row names; ur status's own lines for a held
-// ref, which are cli's.
+// Left to the review phase and other hosts: git-remote-ur as cli's own ur binary, which no world here builds (the
+// world's helper runs the root's helper protocol into the daemon's git mode, not cli's composition, which also writes a
+// clone's git-lfs agent from GIT_DIR during the fetch; the other clauses push over git's local transport, behind the
+// same hooks and receive path); §22.9's older matrix rows where the host holds them; the purge following a prune,
+// which evacuation's job runs (EVSB-M10-01), which no evs block or taskworker builds a Purger for yet, and which needs
+// the store clock FS-73's catalog row names; ur status's own lines for a held ref, which are cli's.
 
 package evsgit
 
@@ -531,12 +534,16 @@ func fs73SkipOptions() []*fs73SkipOption {
 }
 
 // The transports clause: see the file header.
-func Fs73OverHttpAndSsh(t testing.TB, world *World) {
+func Fs73OverEachTransport(t testing.TB, world *World) {
 	t.Helper()
-	for _, transport := range []string{TransportHttp, TransportSsh} {
+	for _, transport := range []string{TransportHttp, TransportSsh, TransportUr} {
 		d, r := world.Device("fs73-"+transport, nil), world.Device("fs73-"+transport+"-r", nil)
 		branch := "fs73-" + transport
-		dir := d.CloneOver(transport)
+		dir, skip := d.CloneOver(transport)
+		if dir == "" {
+			t.Logf("FS-73's transports clause skipped %s: %s", transport, skip)
+			continue
+		}
 		push := func(env []string, args ...string) (string, bool) {
 			return d.GitIn(dir, env, append([]string{"push", "--porcelain"}, append(args, "origin", "HEAD:refs/heads/"+branch)...)...)
 		}
@@ -810,6 +817,15 @@ func Fs73WindowBelowSevenReadsAsSeven(t testing.TB, world *World) {
 	}()
 	if window := world.fs73Window(t, p); window != 7*24*time.Hour {
 		t.Fatalf("3 days read as %s", window)
+	}
+	// a newer version, 20 days, from a device with no repo admin: passed over with an alarm, the admin's 3 days
+	// standing, which the prunes below read
+	if _, err := p.Lfs.SetWindow(ctx, 20); err != nil {
+		t.Fatalf("the settings version no admin signed: %v", err)
+	}
+	alarms := 0
+	if window, err := p.Lfs.Window(ctx, world.isAdmin, func(error) { alarms += 1 }); err != nil || window != 7*24*time.Hour || alarms != 1 {
+		t.Fatalf("a version no admin signed over the admin's 3 days: %s, %d alarms, %v", window, alarms, err)
 	}
 	content, oid := fs73Object("fs73 window", 700)
 	dir := a.Clone()

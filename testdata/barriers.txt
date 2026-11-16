@@ -635,6 +635,8 @@ barrier search.sync.replayed search_sync.go
 barrier search.sync.retired search_sync.go
 barrier search.sync.swapped search_retained.go
 barrier search.sync.tables search_retained.go
+barrier search.trust.taint.after search_trust.go
+barrier search.trust.taint.before search_trust.go
 barrier setup_cache.rename.after smtpproof/setup_cache.go
 barrier setup_cache.rename.before smtpproof/setup_cache.go
 barrier setup_keys.shape_state.after smtpproof/setup_keys.go

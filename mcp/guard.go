@@ -203,7 +203,10 @@ var mcpGuardRows = []mcpGuardRow{
 	{
 		refusal: NewMcpError(McpCodeRefused, "MCP never reads or writes the team directory through evs: use the directory tools", false),
 		refuses: func(target *McpTarget) bool {
-			return target.Kind == McpTargetRepo && target.RepoKind == protocol.RepoKind_REPO_KIND_DIRECTORY && target.Operation != McpRepoName
+			// a search reads it through its index, its prose withheld as stubs unless the run is tainted first (owner
+			// decision 169; §16.11's tools and stubs rows)
+			return target.Kind == McpTargetRepo && target.RepoKind == protocol.RepoKind_REPO_KIND_DIRECTORY &&
+				target.Operation != McpRepoName && target.Operation != McpRepoSearch
 		},
 	},
 	{

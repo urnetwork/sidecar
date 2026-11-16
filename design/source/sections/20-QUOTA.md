@@ -111,6 +111,8 @@ sidecar_abuse:                          # every tier; owners set defaults, §21 
   directory_requests_per_run: 5         # ignore the excess and alarm
   directory_target_pending: 100         # pending per target; past it, older ones show first and new ones wait
   directory_card_bytes: 16kib           # a card's padded record: <= 16 items in 16,208 B (§16.11)
+  smtp_hard_bounce_percent: 10          # §14.8: a network halts once its self-reported hard bounces pass this
+  smtp_hard_bounce_floor: 10            # share of the trailing 24 h's recipients and at least this many were sent
   # with the caps of §11.10, §12.7, §13.9 (per visitor) and §14.7;
   # forwarding and sockets have none (owner decision 66)
 ```

@@ -1168,33 +1168,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "egress_mode", number: 39, typeName: "uint32"},
 		question: "bridge-m4-19-egress-change-action",
 	},
-	// QD-712 and QD-716: parts bound to one key part (DESIGN-DETAILS 3.2.5), the key set a connection proves under,
-	// the key commitment, each part's reply count, the header block's record count and a scan's carry
-	{
-		message:  "SmtpPreamble",
-		field:    testFenceField{name: "proof_key_set", number: 10, typeName: "bytes"},
-		question: "details-3-metadata-rows",
-	},
-	{
-		message:  "SmtpProof",
-		field:    testFenceField{name: "key_commitment", number: 10, typeName: "bytes"},
-		question: "details-3-key-commitment",
-	},
-	{
-		message:  "SmtpProof",
-		field:    testFenceField{name: "reply_count", number: 11, typeName: "uint32"},
-		question: "details-3-key-commitment",
-	},
-	{
-		message:  "SmtpProof",
-		field:    testFenceField{name: "header_record_count", number: 12, typeName: "uint32"},
-		question: "details-3-key-commitment",
-	},
-	{
-		message:  "SmtpProof",
-		field:    testFenceField{name: "carry", number: 13, typeName: "bytes"},
-		question: "details-3-key-commitment",
-	},
 	// QD-850: the name a visitor asked for, the TLS SNI, on the TLS front's publish receipts, apart from relays
 	{
 		message:  "ReachReceipt",
@@ -1243,8 +1216,6 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
-	{enum: "MessageType", name: "SMTP_HANDSHAKE", number: 0x1607, question: "smtpproof-start-shts-wire"},
-	{enum: "MessageType", name: "SMTP_HANDSHAKE_RESULT", number: 0x1608, question: "smtpproof-start-shts-wire"},
 	// §14.4's TL4 allowance for a recipient domain (QD-729), appended to the enum testUnfencedFence writes
 	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED", number: 18, question: "smtp-m9-06-tl4-allowance-action"},
 }
