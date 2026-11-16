@@ -21,6 +21,10 @@
 //	modes    a file-mode ref through WritePaths with base_version as its CAS (EvsPathWrite.IfBaseVersion); a git-mode
 //	         ref, which Write answers EVS_GIT_REF, through the local tier's WriteAtTip (evs_local_write.go), a client
 //	         with no local tier answering EVS_GIT_REF
+//	run      the effect's push seals the run's tainted bit and the agent it is made for in its provenance, on either ref
+//	         mode (EvsWriteEffect.Tainted, AgentId; §11.6's Records, §16.5's evs_write row; QD-851), as the caller read
+//	         them when the action was asked; Lookup compares neither, since a version is the action's by its signer and
+//	         content alone
 //	restart  NewEvsEffectLookup reads only the stored CanonicalAction (repo_id, path, content_sha256, base_version), so
 //	         a restart reconciles a reserved use with no caller alive; none is uncertain there, since an attempt the
 //	         last run sent may still commit
@@ -272,6 +276,10 @@ type EvsWriteAtTipArgs struct {
 	// The commit's message, and the agent label its committer name carries, the mount's when empty.
 	Message    string
 	AgentLabel string
+	// The writing run's tainted bit and the agent the push is made for, which its sealed provenance carries as a
+	// file-mode write's does (EvsWritePathsArgs.Tainted, AgentId): false and nil for a write bound to no run.
+	Tainted bool
+	AgentId *Id
 }
 
 // What a committed WriteAtTip did, as Lookup found it after the receive path's ok.
@@ -299,6 +307,10 @@ type EvsWriteEffect struct {
 	// A git-mode ref's commit: its message, and the agent label its committer name carries (owner decision 81).
 	Message    string
 	AgentLabel string
+	// The run's tainted bit as the caller read it when the action was asked, and the agent it is made for, nil for
+	// none: what the effect's push seals in its provenance (EvsWritePathsArgs.Tainted, AgentId).
+	Tainted bool
+	AgentId *Id
 }
 
 // What Lookup asks of the effect: its content by git oid, which the live effect can compute.
@@ -376,7 +388,9 @@ func (self *EvsWriteEffect) write(ctx context.Context) ([]byte, error) {
 	if !self.Remove {
 		write.Content = bytes.NewReader(self.Content)
 	}
-	result, err := self.Repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.RefName, Writes: []*EvsPathWrite{write}})
+	result, err := self.Repo.WritePaths(ctx, &EvsWritePathsArgs{
+		RefName: self.RefName, Writes: []*EvsPathWrite{write}, AgentId: self.AgentId, Tainted: self.Tainted,
+	})
 	if err == nil {
 		return EvsEffectRef(result.PushId, result.PathVersions[0]), nil
 	}
@@ -385,7 +399,7 @@ func (self *EvsWriteEffect) write(ctx context.Context) ([]byte, error) {
 	}
 	written, err := self.Repo.WriteAtTip(ctx, &EvsWriteAtTipArgs{
 		RefName: self.RefName, Path: self.Path, BaseVersion: self.BaseVersion, Content: self.Content, Mode: self.Mode,
-		Remove: self.Remove, Message: self.Message, AgentLabel: self.AgentLabel,
+		Remove: self.Remove, Message: self.Message, AgentLabel: self.AgentLabel, Tainted: self.Tainted, AgentId: self.AgentId,
 	})
 	if err != nil {
 		return nil, err

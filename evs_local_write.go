@@ -12,6 +12,8 @@
 //	         (git read-tree, update-index, write-tree), then git commit-tree on the tip: author and committer the agent
 //	         label as name and <client_id>@ur.invalid as email, so the commit is one of this sidecar's new commits by
 //	         8.2.3's rule, dated by the client's clock; its objects are loose in the bare repository
+//	run      the push seals the writing run's tainted bit and its agent in its provenance (EvsWriteAtTipArgs.Tainted,
+//	         AgentId), which the receive path carries to the publish with the command, never from a git client's push
 //	publish  the receive path's own per-ref flow for a shared branch, P_r, settle, the journal, EvsLocalPublish and the
 //	         replay that moves the local ref (evs_local_receive.go), so the push is journaled, resolved after a kill
 //	         and answered by G7's rules as a git client's would be
@@ -145,7 +147,9 @@ func (self *EvsRepo) WriteAtTip(ctx context.Context, args *EvsWriteAtTipArgs) (*
 		if err != nil {
 			return nil, err
 		}
-		status := mount.receiver.receive(ctx, nil, &evsGitReceiveCommand{gitRef: gitRef, old: ref.Tip, new: &commit})
+		status := mount.receiver.receive(ctx, nil, &evsGitReceiveCommand{
+			gitRef: gitRef, old: ref.Tip, new: &commit, runTainted: args.Tainted, agentId: args.AgentId,
+		})
 		reason := strings.TrimPrefix(status, "ng "+gitRef+" ")
 		switch {
 		case status == "ok "+gitRef, reason == "committed remotely, local update pending":

@@ -63,7 +63,7 @@ func (self *EvsRepo) writeSplit(ctx context.Context, args *EvsWritePathsArgs) (*
 	result := &EvsWritePathsResult{PathVersions: []uint64{}}
 	var plan *EvsWritePlan
 	for _, writes := range [][]*EvsPathWrite{args.Writes[:half], args.Writes[half:]} {
-		halfResult, halfPlan, err := self.writePathsPlanned(ctx, &EvsWritePathsArgs{RefName: args.RefName, Writes: writes, AgentId: args.AgentId}, nil)
+		halfResult, halfPlan, err := self.writePathsPlanned(ctx, &EvsWritePathsArgs{RefName: args.RefName, Writes: writes, AgentId: args.AgentId, Tainted: args.Tainted}, nil)
 		if err != nil {
 			return nil, halfPlan, err
 		}
