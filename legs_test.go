@@ -1,8 +1,8 @@
 //go:build !js
 
-// Proves §4.4's build rule: the sidecar_http js leg links no connect or gVisor package, every file
-// that names one carries !sidecar_http, and every host_ file does whether it names one or not. These
-// run on the host, where go and the source tree are, and read the leg through an explicit go/build
+// Proves §4.4's build rule: the sidecar_http js leg links no connect, gVisor or operator-core package
+// (QD-856), every file that names one carries !sidecar_http, and every host_ file does whether it names
+// one or not. These run on the host, where go and the source tree are, and read the leg through an explicit go/build
 // context or `go list`, which -tags does not reach. It also runs that leg's tests in a Worker's shape,
 // and holds the seams later tracks build on, each proved on a planted violation: NewSidecar runs
 // validate, requests go through the transport files, and engines authenticate through the host.
@@ -45,9 +45,13 @@ func rootGoFiles(t *testing.T) []string {
 	return goFiles
 }
 
+// connect, gVisor, which package connect links into every importer, or operator-core, which imports
+// connect: what the sidecar_http leg names none of (QD-856).
 func namesConnect(importPath string) bool {
 	return importPath == "github.com/urnetwork/connect" ||
 		strings.HasPrefix(importPath, "github.com/urnetwork/connect/") ||
+		importPath == "github.com/urnetwork/operator-core" ||
+		strings.HasPrefix(importPath, "github.com/urnetwork/operator-core/") ||
 		strings.HasPrefix(importPath, "gvisor.dev/")
 }
 
@@ -465,6 +469,15 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWireLockedErrorCodesRead",
 		"TestWireLockedRejectCodesRead",
 		"TestWireLockedResetCodesRead",
+		// this leg's own Id, Clock, quota types and standing read as operator-core's do (QD-856)
+		"TestIdTwinReadsAsOperatorIdDoes",
+		"TestIdTwinReadsASweepAsOperatorIdDoes",
+		"TestIdTwinOrdersByByte",
+		"TestIdTwinRefusesInOperatorIdsWords",
+		"TestIdTwinHoldsOperatorIdsMethods",
+		"TestClockTwinHoldsOperatorCoresMethods",
+		"TestQuotaTwinEncodesAsOperatorCoresDoes",
+		"TestAbuseStandingTwinHoldsOperatorCoresValues",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
@@ -637,41 +650,168 @@ func TestAuthenticatorRuleCatchesAPlantedRead(t *testing.T) {
 	}
 }
 
-// What `make check` enforces from M1 (§4.7), read off the whole transitive graph: no package of this
-// module on the sidecar_http leg imports a connect or gVisor package, and the leg links connect only
-// through operator-core's Id, which the root's Id aliases on every leg (owner decision 251), so every
-// import of one comes from connect's or gVisor's own trees or from operator-core.
-func TestHttpLegLinksConnectOnlyThroughOperatorCore(t *testing.T) {
-	command := exec.Command("go", "list", "-deps", "-tags", "sidecar_http", "-f", `{{.ImportPath}} {{join .Imports " "}}`, ".")
-	command.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
-	output, err := command.Output()
-	if err != nil {
-		stderr := ""
-		if exitError, ok := err.(*exec.ExitError); ok {
-			stderr = string(exitError.Stderr)
-		}
-		t.Fatalf("go list: %v\n%s", err, stderr)
+// What `make check` enforces from M1 (§4.7), on the whole transitive graph: the page Worker's leg links
+// no connect or gVisor package, and no operator-core, which imports connect. The root's Id is its own
+// type there, id_http.go's (QD-856, amending owner decision 251 for this one leg).
+func TestHttpLegLinksNoConnectOrGvisor(t *testing.T) {
+	deps := goListDeps(t, []string{"GOOS=js", "GOARCH=wasm"}, "-tags", "sidecar_http", ".")
+	if !slices.Contains(deps, "github.com/urnetwork/sidecar") {
+		t.Fatalf("deps %v", deps)
 	}
-	operatorCore := "github.com/urnetwork/operator-core"
-	listed := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
+	for _, dep := range deps {
+		if namesConnect(dep) {
+			t.Errorf("the sidecar_http leg links %s", dep)
 		}
-		importer := fields[0]
-		listed[importer] = true
-		if namesConnect(importer) || importer == operatorCore {
-			continue
+	}
+}
+
+// The source of each top-level declaration of a root file, its doc comment included, by name: a function
+// by its own, a method as its receiver's type, a dot and its own, and a type, variable or constant by
+// its own.
+func declarationSources(t *testing.T, goFile string) map[string]string {
+	t.Helper()
+	source, err := os.ReadFile(goFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, goFile, source, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := func(doc *ast.CommentGroup, node ast.Node) string {
+		start := node.Pos()
+		if doc != nil {
+			start = doc.Pos()
 		}
-		for _, imported := range fields[1:] {
-			if namesConnect(imported) {
-				t.Errorf("%s, on the sidecar_http leg, imports %s", importer, imported)
+		return string(source[fileSet.Position(start).Offset:fileSet.Position(node.End()).Offset])
+	}
+	sources := map[string]string{}
+	for _, decl := range file.Decls {
+		switch decl := decl.(type) {
+		case *ast.FuncDecl:
+			name := decl.Name.Name
+			if decl.Recv != nil && len(decl.Recv.List) == 1 {
+				receiver := decl.Recv.List[0].Type
+				if star, ok := receiver.(*ast.StarExpr); ok {
+					receiver = star.X
+				}
+				if receiverName, ok := receiver.(*ast.Ident); ok {
+					name = receiverName.Name + "." + name
+				}
+			}
+			sources[name] = text(decl.Doc, decl)
+		case *ast.GenDecl:
+			for _, spec := range decl.Specs {
+				switch spec := spec.(type) {
+				case *ast.TypeSpec:
+					sources[spec.Name.Name] = text(decl.Doc, decl)
+				case *ast.ValueSpec:
+					for _, name := range spec.Names {
+						sources[name.Name] = text(decl.Doc, decl)
+					}
+				}
 			}
 		}
 	}
-	if !listed["github.com/urnetwork/sidecar"] || !listed[operatorCore] {
-		t.Fatalf("the leg holds neither the root nor operator-core: %v", listed)
+	return sources
+}
+
+// Where a declaration a file shares with its sidecar_http twin differs between the two, or is gone from
+// either, and where either file is on the wrong leg: the twin repeats the declaration because the two
+// files compile on opposite legs (QD-856), so a change to one that skips the other would give the page
+// Worker a different rule.
+func twinSourceFindings(t *testing.T, goFile string, twinGoFile string, names ...string) []string {
+	t.Helper()
+	findings := []string{}
+	buildContext := sidecarHttpBuildContext()
+	for _, c := range []struct {
+		goFile string
+		onLeg  bool
+	}{
+		{goFile: goFile, onLeg: false},
+		{goFile: twinGoFile, onLeg: true},
+	} {
+		matched, err := buildContext.MatchFile(filepath.Dir(c.goFile), filepath.Base(c.goFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matched != c.onLeg {
+			findings = append(findings, c.goFile+" on the sidecar_http leg: "+strconv.FormatBool(matched))
+		}
+	}
+	sources := declarationSources(t, goFile)
+	twinSources := declarationSources(t, twinGoFile)
+	for _, name := range names {
+		source, found := sources[name]
+		twinSource, twinFound := twinSources[name]
+		if !found || !twinFound {
+			findings = append(findings, name+" is not in both "+goFile+" and "+twinGoFile)
+			continue
+		}
+		if source != twinSource {
+			findings = append(findings, name+" differs between "+goFile+" and "+twinGoFile+":\n"+source+"\n\n"+twinSource)
+		}
+	}
+	return findings
+}
+
+// id_http.go's generator and parsing are id.go's.
+func TestIdTwinKeepsTheSharedSource(t *testing.T) {
+	for _, finding := range twinSourceFindings(t, "id.go", "id_http.go",
+		"idDrawByteCount", "idGenerator", "processIdGenerator", "NewId", "idGenerator.next", "IdFromBytes", "ParseId") {
+		t.Error(finding)
+	}
+}
+
+// clock_http.go's RealClock and helpers are clock.go's.
+func TestClockTwinKeepsTheSharedSource(t *testing.T) {
+	for _, finding := range twinSourceFindings(t, "clock.go", "clock_http.go",
+		"RealClock", "RealClock.Now", "RealClock.After", "RealClock.AfterFunc", "clockOrReal", "SidecarSettings.ClockOrReal") {
+		t.Error(finding)
+	}
+}
+
+// The rule above finds a twin that strays, in its code or its comment, one that drops a declaration, and
+// a file on the wrong leg.
+func TestTwinSourceRuleCatchesAPlantedDifference(t *testing.T) {
+	directory := t.TempDir()
+	write := func(name string, source string) string {
+		goFile := filepath.Join(directory, name)
+		if err := os.WriteFile(goFile, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return goFile
+	}
+	shared := "// Doubles.\nfunc double(n int) int {\n\treturn n * 2\n}\n"
+	offLeg := "//go:build !sidecar_http\n\npackage sidecar\n\n"
+	onLeg := "//go:build sidecar_http\n\npackage sidecar\n\n"
+	goFile := write("planted.go", offLeg+shared)
+	same := write("planted_same.go", onLeg+shared)
+
+	for _, c := range []struct {
+		goFile     string
+		twinGoFile string
+		want       string
+	}{
+		{goFile: goFile, twinGoFile: same, want: ""},
+		{goFile: goFile, twinGoFile: write("planted_strayed.go", onLeg+strings.Replace(shared, "n * 2", "n + n", 1)), want: "double differs"},
+		{goFile: goFile, twinGoFile: write("planted_recommented.go", onLeg+strings.Replace(shared, "Doubles.", "Twice.", 1)), want: "double differs"},
+		{goFile: goFile, twinGoFile: write("planted_dropped.go", onLeg), want: "double is not in both"},
+		// a first file the leg compiles too would declare everything twice
+		{goFile: write("planted_untagged.go", "package sidecar\n\n"+shared), twinGoFile: same, want: "planted_untagged.go on the sidecar_http leg: true"},
+		{goFile: goFile, twinGoFile: write("planted_off.go", offLeg+shared), want: "planted_off.go on the sidecar_http leg: false"},
+	} {
+		findings := twinSourceFindings(t, c.goFile, c.twinGoFile, "double")
+		if c.want == "" {
+			if len(findings) != 0 {
+				t.Errorf("%s: findings %q", c.twinGoFile, findings)
+			}
+			continue
+		}
+		if len(findings) != 1 || !strings.Contains(findings[0], c.want) {
+			t.Errorf("%s and %s: findings %q, want %q", c.goFile, c.twinGoFile, findings, c.want)
+		}
 	}
 }
 

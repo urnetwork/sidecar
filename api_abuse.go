@@ -1,8 +1,9 @@
 //go:build !ios_extension
 
-// §21's types every leg decodes: a network's §21.7 standing, and GET /abuse/status's body, which a
-// sidecar reads with its own client token and the page Worker reads too, so nothing here names a
-// connect type. host_abuse.go holds ServiceHost.Abuse, which only hosted engines read.
+// §21's types every leg decodes: GET /abuse/status's body, which a sidecar reads with its own client
+// token and the page Worker reads too, so nothing here names a connect type or operator-core. A
+// network's §21.7 standing is in api_abuse_standing.go, operator-core's, and in its sidecar_http twin
+// (QD-856). host_abuse.go holds ServiceHost.Abuse, which only hosted engines read.
 //
 // The status tells a network nothing about a hold or a barred case. A hold has no field here
 // (D-ABUSE-8), and api lists no action of a case that a sealing order or a CSAM case bars, so such a
@@ -17,26 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	operator "github.com/urnetwork/operator-core"
-)
-
-// A network's §21.7 standing, as ServiceHost.Abuse and GET /abuse/status give it: operator-core's
-// (owner decision 251), with its Known. The values are a format: server's model.AbuseStanding holds the
-// same strings.
-type AbuseStanding = operator.AbuseStanding
-
-const (
-	// Under 7 days old: probation's limits.
-	AbuseStandingProbation = operator.AbuseStandingProbation
-	// 7 or more days old, and 30 days without an action: the tier's defaults (§20).
-	AbuseStandingStandard = operator.AbuseStandingStandard
-	// A Team with a verified domain, paid 30 days and clean 90.
-	AbuseStandingTrusted = operator.AbuseStandingTrusted
-	// A network halt or a kill within 30 days: probation's limits.
-	AbuseStandingRestricted = operator.AbuseStandingRestricted
-	// A §8 suspension until reviewed.
-	AbuseStandingSuspended = operator.AbuseStandingSuspended
 )
 
 // GET /abuse/status's body (§21.16): the caller's own network's standing, whether it is verified,
