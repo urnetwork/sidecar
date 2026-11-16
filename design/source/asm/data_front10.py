@@ -32,7 +32,15 @@ and the open owner question Q-REPO-6, which owner decision 213 asked for. Adds o
 sets (266), the closed source graphs (267), what a Gn-out merges (268), C20 and strict_chain (269), minio's merge
 place, which the branch policy takes with the tests repo (270), X11 (271), Go 1.27.4 (272), proto fences (273),
 sidecarctl in server (274), the ios_extension leg's seed rule (275), the page Worker's Id, amending 251 (276),
-gomobile's legs (277) and third_party/ at release (278)."""
+gomobile's legs (277) and third_party/ at release (278). Adds owner decisions 279-301 (folded 2026-11-16 with §5's
+and §6's items): SSHSIGs dropped (279), approved recipients (280), the safety number (281), service urls from the
+host table (282), the readable-credential check by state (283), the keychain's auto-lock (284), AgentRevoke as a
+local act (285), the bind re-mint's adoption (286), the events control method (287), the mail control methods (288),
+the search cache's wrapped keys (289), host-held presence keys in remote mode (290), the admin_refused claim (291),
+a compromise revocation's since_n (292), the git-hook hello mode (293), the served record's daily rows (294), the
+unsigned minimum-version raise (295), same-network P2P behind a setting (296), settings objects for every limit
+(297), the ur/ pair's key and the dialer's Service hold (298), late versions pages and retry waits (299), the
+rollback head alarm (300) and companion contracts without a WindowDelegation (301)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -327,6 +335,74 @@ INDEX = list(_P9['INDEX']) + [
     (278, "Release, `third_party/`",
      "The release step keeps `third_party/`, the go-smtp fork and the mox subset, at the repository's top beside "
      "`v2026/`, so every replace still resolves."),
+    (279, "SSHSIGs dropped",
+     "No decision needs an SSHSIG, in v0 and every milestone until a customer asks: the field stays reserved and "
+     "ignored, and every action's risk stays normal."),
+    (280, "Approved recipients",
+     "An approved recipient is a (sending alias, recipient) pair with a `rcpt/` record in the repo that holds the "
+     "alias's mail, re-verified at each use and ignored in a tainted run."),
+    (281, "Safety number",
+     "60 decimal digits of SHA-256 over the genesis's hash and the device's identity key, shown as 12 groups of 5."),
+    (282, "Service urls",
+     "`DefaultSidecarSettings` leaves the service urls empty, and hosts fill them from §18.9's embedded host table, "
+     "the one copy of those names."),
+    (283, "Readable credentials",
+     "`ur` refuses to enroll, and an enrolled daemon alarms, beside a readable network credential by the host's "
+     "state, whatever the stage; no signal turns the check off."),
+    (284, "Auto-lock",
+     "The keychain locks after 10 minutes with no request on any local socket, never while the daemon is busy; "
+     "zero never locks."),
+    (285, "`AgentRevoke`",
+     "A local act, not a record: the subkey is deleted, readers bound it by its certificate's 30 days, and a "
+     "compromised daemon is a `SidecarRevoke`."),
+    (286, "Bind's re-minted token",
+     "The sidecar adopts the `by_client_jwt` that `POST /sidecar/bind` re-mints with its `sidecar_id`, and sdk's "
+     "host session takes it, so the claim survives refreshes."),
+    (287, "Control `events`",
+     "A remote-mode Sidecar hears every event kind by long-polling a control method `events` over a bounded ring, "
+     "a gap sending it to `GetState`."),
+    (288, "Mail control methods",
+     "§5.8 gains `mail.check_send` and `mail.send_result`, plain reads, and `mail.send`, which goes through the "
+     "daemon's gate."),
+    (289, "Search cache keys",
+     "The search cache keeps each kept record's wrapped object key, in slot-keyed repos the slot's block, and an "
+     "ERASE hint drops every kept record whose slot key it destroys."),
+    (290, "Host-held presence",
+     "A remote-mode app's act runs the daemon host's own presence prompt when that host's authenticator holds "
+     "every live presence key."),
+    (291, "`admin_refused` claim",
+     "The by_jwt carries an `admin_refused` claim, and `Pair` requires it with `strict_exp`; until it lands, "
+     "`strict_exp` alone stands and the app checks its own mint."),
+    (292, "Compromise `since_n`",
+     "A compromise revocation proposes the tip when no entry is timed at or after the loss, and answers "
+     "REVOKE_SINCE given neither a loss time nor a position."),
+    (293, "`git-hook` mode",
+     "§5.8's hello gains a fifth mode that relays a mount's pre-receive and proc-receive hooks to the daemon; a "
+     "protocol, never a privilege."),
+    (294, "Served record",
+     "An owner's indexer keeps one row per requester, repo and UTC day, with a count and first and last times, "
+     "for 30 days; `Search.ServedRecordCount` is a last bound."),
+    (295, "Minimum-version raise",
+     "An unsigned raise of the minimum secure version is a live denial a device bounds by its own compiled "
+     "version and never persists."),
+    (296, "Same-network P2P",
+     "Built at M6 behind `SidecarProtocolSettings.EnablePeerP2p`, default off; relay-only stays until a later "
+     "owner call."),
+    (297, "Settings objects",
+     "Every limit, protocol and format limits included, is a field of a settings object; only identifiers stay "
+     "constants, and legacy constants move when the function that reads them is edited."),
+    (298, "`ur/` pairs and Service",
+     "A Service pair is keyed by its non-edge end in every namespace, and a sidecar dialing a `ur/` name holds "
+     "Service while its `ur/` stream lives."),
+    (299, "Late pages, retry waits",
+     "A `versions` page that arrives late takes only its rises, and a reconnect ends a failed refetch's retry "
+     "wait at once."),
+    (300, "`rollback` alarm",
+     "A push reset that lowers a durable topic raises `head_alarm` with a fifth kind, `rollback`, its evidence "
+     "the held and offered versions."),
+    (301, "Companion contracts",
+     "A companion contract inherits its forward contract's subject, source network and class and seals no "
+     "`WindowDelegation`."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -351,7 +427,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 279))
+assert [r[0] for r in INDEX] == list(range(1, 302))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -373,7 +449,12 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               263: '2026-11-06', 264: '2026-11-06', 265: '2026-11-06', 266: '2026-11-06', 267: '2026-11-15',
               268: '2026-11-15', 269: '2026-11-06', 270: '2026-11-06', 271: '2026-11-06', 272: '2026-11-11',
               273: '2026-11-11', 274: '2026-11-12', 275: '2026-11-15', 276: '2026-11-15', 277: '2026-11-15',
-              278: '2026-11-15'})
+              278: '2026-11-15',
+              279: '2026-11-06', 280: '2026-11-06', 281: '2026-11-06', 282: '2026-11-06', 283: '2026-11-06',
+              284: '2026-11-06', 285: '2026-11-06', 286: '2026-11-13', 287: '2026-11-14', 288: '2026-11-15',
+              289: '2026-11-15', 290: '2026-11-15', 291: '2026-11-15', 292: '2026-11-15', 293: '2026-11-15',
+              294: '2026-11-15', 295: '2026-11-06', 296: '2026-11-06', 297: '2026-11-15', 298: '2026-11-15',
+              299: '2026-11-15', 300: '2026-11-15', 301: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -529,7 +610,17 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "the competition's and sn's source graphs taking sidecar (267), what a Gn-out merges (268), connect's C20 for "
     "`strict_chain` (269), minio's place in the merge order (270), X11 (271), Go 1.27.4 (272), how a proto fence "
     "takes a field (273), `sidecarctl` in server (274), the `ios_extension` leg's seed rule (275), the page "
-    "Worker's own `Id`, amending 251 (276), gomobile's legs (277) and `third_party/` at release (278). ")
+    "Worker's own `Id`, amending 251 (276), gomobile's legs (277) and `third_party/` at release (278). The fold "
+    "of §5's and §6's the same day numbers the core's and the subprotocol's answers: SSHSIGs dropped until a "
+    "customer asks (279), approved recipients (280), the safety number (281), service urls from the host table "
+    "(282), the readable-credential check by state (283), the keychain's auto-lock (284), `AgentRevoke` as a "
+    "local act (285), the bind re-mint's adoption (286), the `events` control method (287), the mail control "
+    "methods (288), the search cache's wrapped keys (289), host-held presence keys in remote mode (290), the "
+    "`admin_refused` claim (291), a compromise revocation's `since_n` (292), the `git-hook` hello mode (293), the "
+    "served record's daily rows (294), the unsigned minimum-version raise (295), same-network P2P behind a "
+    "setting (296), settings objects for every limit (297), the `ur/` pair's key and the dialer's Service hold "
+    "(298), late versions pages and retry waits (299), the `rollback` head alarm (300) and companion contracts "
+    "without a `WindowDelegation` (301). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

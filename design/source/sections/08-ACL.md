@@ -229,6 +229,8 @@ message AclRequestRule {
   int64 max_expiry_seconds = 8;           // maxExpiry: 30 days unless the rule overrides it
   repeated uint32 evidence = 9;           // accepted ApprovalDecision.channel values (§16.8); default all three
 }
+// In a *_atoms field an autogroup is 16 bytes: fifteen zero bytes, then its AclAutogroup value, 1 to 14,
+// autogroup:dst-owner (ACL_AUTOGROUP_DST_OWNER) being 14; no tag or group id takes that form.
 message AclAudit {                        // a reader every member sees (owner decision 63)
   repeated bytes reader_atoms = 1; repeated uint32 repo_kinds = 2; repeated bytes repo_ids = 3;
   bytes audit_opt_in = 4;                 // the k-of-n AuditOptIn record, which api and readers verify

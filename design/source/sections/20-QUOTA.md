@@ -503,7 +503,7 @@ cost       year two's ~1,000 Team networks x 3 meters: ~3,000 events a day; hour
 
 - **Provides:** `NetworkTierOf`, `ProConfig.TierFor`, `NetworkSidecarLimits`; `ServiceHost.Quota`, `UsageBatch`, and every leg's `QuotaRefusal` and `QuotaLimits`; 20.4's limits and prices; the stored-byte count; usage rollups; 20.8's counting; `escrowDrawLess`; Team checkout and meters.
 - **Consumes:** §4 `ServiceHost`, C9, C19; §5.6, §7.7 the declaration; §6 modes, stream codes, Hello's requester bit; §7 Team tables, deltas, admissions; §8 grant activation, contract gate, `acl_*` checks; §9 `ValidateListen`; §11.13 usage batches (the purge's, evacuation's and drop job's frees included), the nightly pass and fair share; §11.14's index files; §12 entry counts; §13-§15 leases; §16 approvals; §19.6's cost per usable TB; §21 overrides; server/model/subscription_redis_admission.go's reservations.
-- **Subprotocol messages:** none new; reuses `Error{RESOURCE_EXHAUSTED}` (§6.5), the stream codes and topic `team` (§6.8).
+- **Subprotocol messages:** none new; reuses `Error{RESOURCE_EXHAUSTED}` (§6.5), the stream codes and topic `team` (§6.8), whose version is the authorization log position, so a limit change raises none and reaches clients at the hourly resync.
 - **API routes:** `GET /network/usage` (Network, read roles; usage and limits); `GET /sidecar/limits` (Client; `QuotaLimits` for local pre-checks); `POST /network/team-checkout` (Network, Owner or Billing admin).
 - **Tables** (api; additive; §2.8 api-13):
 

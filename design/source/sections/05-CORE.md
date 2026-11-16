@@ -26,7 +26,7 @@ This section owns `sidecar.Sidecar` (lifecycle, components, events, the outward-
 | R-CORE-16 | Admission and revocation only by signed config-repo records, from v0 | owner decisions 3, 5, 110, 112, 127 |
 | R-CORE-17 | Owner-bound repos take only consented devices; members' devices alarm on admissions under them that they did not sign | owner decision 126 |
 | R-CORE-18 | Each network's search index cache stays sealed on the device, is fetched by sync position, holds no query, and is deleted with the content or access it derives from | owner decision 166; §11 D-EVS-26 |
-| R-CORE-19 | An indexer's remote serving leaves local searches their targets and persists no query | owner decision 175; I-13 |
+| R-CORE-19 | An indexer's remote serving leaves local searches their targets and persists no query, its served record one row a requester, repo and day | owner decisions 175, 294; I-13 |
 
 ### 5.3 What exists today
 
@@ -89,14 +89,36 @@ type Sidecar struct {
 type SidecarAction struct { // every outward action (I-8)
 	Kind      SidecarActionKind // tls/ or smtp/ publish or listen; forward; expose; egress change; invite or share;
 	                            // alias create or delete; agent-config write or delete in a shared repo (§16.5);
-	                            // DNS user record set or delete; mail to a non-member not yet approved, or to
-	                            // any non-member in a tainted run; an access request through the team
-	                            // directory (§16.11; CanonicalAction version 3); payment
+	                            // DNS user record set or delete; mail to a non-member with no approved-recipient
+	                            // record (§15.7's rcpt/; owner decision 280), or to any non-member in a tainted
+	                            // run; an access request through the team directory (§16.11; CanonicalAction
+	                            // version 3); payment; a restore. On the wire one verb a value (§16.8): 1 publish,
+	                            // 2 listen, 3 forward, 4 expose, 5 egress_change, 6 invite, 7 share,
+	                            // 8 alias_create (burners too, §15.8), 9 alias_delete, 10 agent_config_write,
+	                            // 11 agent_config_delete, 12 dns_set, 13 dns_delete, 14 mail_send,
+	                            // 15 access_request, 16 payment, 17 restore, new kinds appending; publish and
+	                            // listen cover tls/ and smtp/ alike, since host and socket_name say which
 	Canonical []byte            // built by the daemon; payload_sha256 = SHA-256(Canonical)
-	Risk      SidecarRisk       // max(policy, daemon classifier); an agent may only raise it
+	Risk      SidecarRisk       // 1 normal, 2 high, the wire's values (§16.8); every action is normal: no policy
+	                            // field and no classifier raises one, and no decision needs an SSHSIG, in v0 and
+	                            // every milestone until a customer asks (owner decision 279)
 	RunId     *Id               // a decision binds (approval_id, run_id, agent_id) and authorizes at most
 	AgentId   *Id               // `uses` distinct actions, each once (§16 D-MCP-11)
+	Effect    SidecarEffect     // live, set by the caller: what Authorize runs once the use is reserved (§16.6)
+	Outcome   *SidecarOutcome   // set by Authorize
 }
+
+type SidecarEffect interface { // one outward action's effect, idempotent per effectKey, which is empty under a
+	// standing grant, where no ledger row is kept
+	Run(ctx context.Context, effectKey []byte) (effectRef []byte, err error)
+}
+type SidecarOutcome struct { // what a use's effect came to (§16.6)
+	State     string // done, not_done or uncertain
+	EffectRef []byte // the component's reference to what it did
+}
+// A kind's lookup reads only the stored action, so a restart reconciles a reserved use with no caller alive; a
+// kind with no registered lookup is refused before its Reserve.
+type SidecarEffectLookup func(ctx context.Context, canonical []byte, effectKey []byte) (*SidecarOutcome, error)
 
 type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (§18.5), ur://acl/grants
 	Kind        SidecarEventKind // state, approval_pending, member_added, member_removed, key_changed, refused,
@@ -110,18 +132,29 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	                             // outcome; directory_erasure: a repo owner's revocation still waiting for the
 	                             // directory's erasure runner past 24 h, then done (§16.11); erasure: an erasure
 	                             // this device runs or may finish changed state (§11.12); mail_send: an internet
-	                             // send's outcome for a recipient domain changed (§14.5)
+	                             // send's outcome for a recipient domain changed (§14.5); evs_conflict: §11.11's
+	                             // restart row left a local conflict ref, an ordinary event; evs_alarm: storage
+	                             // that fails a reader's or writer's check (EvsAlarm); evs_gap: a re-pin past
+	                             // §11.9's budget (VerifiedSince); record_alarm: the record's and the directory's
+	                             // reader alarms (RecordAlarm; §16); credential_store: an enrolled daemon found a
+	                             // readable network by_jwt in a host store (5.6), with no path or value, ur status
+	                             // naming the store kind; ct_alarm: §13's CT watch, Evidence[0] the leaf's
+	                             // SHA-256; mail_receiver_alarm: D-MAIL-15's (§15); bridge_alarm (§17)
 	State       SidecarState
 	Reason      SidecarStateReason // Unenrolled: expired, refused, parent_lost, session_ended, keystore_lost;
 	                               // Revoked: signed (§18.5's GetStateReason)
 	GroupId     *Id // membership kinds: the §10 group
 	SidecarId   *Id // membership kinds: the leaf or wrapped reader; admission_alarm: the admitted sidecar;
-	                // recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer;
-	                // index alarms and history_drop: the signer; search_alarm: the indexer
-	RepoId      *Id    // index alarms, search_alarm, history_drop, directory_erasure, erasure
-	RefId       *Id    // index alarms, history_drop
+	                // recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer,
+	                // nil for a fork evs shows; index alarms, history_drop and evs_alarm: the signer;
+	                // search_alarm: the indexer; record_alarm: the writer or signer; mail_receiver_alarm: the
+	                // receiver
+	RepoId      *Id    // index alarms, search_alarm, history_drop, directory_erasure, erasure, evs_conflict,
+	                   // evs_alarm, evs_gap, record_alarm, mail_receiver_alarm
+	RefId       *Id    // index alarms, history_drop, evs_alarm, evs_gap; evs_conflict: the local conflict ref
 	Path        string // index alarms: the alarmed path; history_drop: its first listed path (§18.5's Drops
-	                   // lists all); a path local to this device, never logged (I-13)
+	                   // lists all); evs_conflict, evs_alarm: its path; a path local to this device, never
+	                   // logged (I-13)
 	DropId      *Id              // history_drop
 	DropState   SidecarDropState // history_drop: pending, cancelled, executing, done (a held drop reads done,
 	                             // owner decision 184), refused, or invalid: it failed this device's checks (§11.7)
@@ -132,11 +165,34 @@ type SidecarEvent struct { // AddEventCallback, `ur status`, the sdk listener (�
 	Outcome     string // access_decided: approved, denied, cancelled or expired; directory_erasure: pending or done
 	SendId      *Id // mail_send: the send, whose outcomes §18.5's GetSendResult reads
 	ApprovalId  *Id
-	HeadAlarm   SidecarHeadAlarm // head_alarm: fork, withheld (PROOF OF WITHHOLDING), unverified, or unwitnessed
-	                             // (24 h without a consistent witness; 1 h for a revocation it signed)
+	HeadAlarm   SidecarHeadAlarm // head_alarm: fork (two pins that disagree; a head evs serves that does not
+	                             // extend this device's pin is one, SidecarId nil and Evidence this device's
+	                             // RefHead and evs's), withheld (PROOF OF WITHHOLDING), unverified, unwitnessed
+	                             // (24 h without a consistent witness; 1 h for a revocation it signed), or
+	                             // rollback: a push reset presenting a durable topic below the version this
+	                             // client holds (§6.8; owner decision 300), SidecarId nil and Evidence the
+	                             // two TopicVersions as protobuf bytes, the held one first
 	Evidence    [2][]byte        // head_alarm: my pin and the peer's or api's, as §6.5 encodes them (AuthPin,
 	                             // GroupHead, GenHead or RefHead); recovery_rebind at a void: the AuthPins
-	                             // at which keychain.wrap was sealed to the voided binding and re-sealed (5.9)
+	                             // at which keychain.wrap was sealed to the voided binding and re-sealed (5.9);
+	                             // ct_alarm: [0], the leaf's SHA-256
+	EvsAlarm    SidecarEvsAlarm  // evs_alarm, a closed set: missing_segment, tamper (a failed entry hash, AEAD,
+	                             // oid or statement), version_rule (off §11.7's rule), epoch_overdue (a writer
+	                             // 1 h past due_by_ms) or prefix_rule (from M6)
+	VerifiedSince time.Time      // evs_gap: the time of the newest re-pin past §11.9's budget, which the pin
+	                             // record holds; EvsRepo.VerifiedSince(refId) answers it later, zero when
+	                             // nothing was skipped
+	RecordAlarm SidecarRecordAlarm // record_alarm, a closed set of 14: chain_gap, chain_fork, bad_entry (RECORD.md
+	                             // section 5.4's steps 1-4, section 5.5's steps 1-3, 5 and 6), depositor_kind,
+	                             // early_removal (a BASE or ERASE taking an entry before keep_days, or a class 7
+	                             // entry), path_rule, parked_writer, over_cap, over_limit (§16.11's limits row),
+	                             // id_reuse, bad_erasure (an ERASE, CUT or CLOSURE from another signer, or an
+	                             // erasure_request that fails its check), bad_decision, log_check (RECORD.md
+	                             // section 10.2) and moderation, which apps show as a notice; head_alarm stays
+	                             // HeadCheck's, index_mismatch the index's and evs_alarm storage tampering's
+	BridgeAlarm string           // bridge_alarm: block_conflict (§17.4), share_holder_removed (§17.9),
+	                             // principal_mismatch (§17.9's verify), state_unverified (§17.8) or block_refused
+	                             // (D-BRIDGE-16)
 	Erasure     *SidecarErasure  // erasure: its id, state and what is left (§11.12, §11.13's wait)
 }
 
@@ -158,31 +214,59 @@ type SidecarStatus struct { // Status(): `ur status`, §18.5's GetState and GetS
 	Generation  int64     // the bound client generation (5.5)
 	WitnessedAt time.Time // the newest consistent HeadCheck witness (§6.4); zero: none yet
 	Unverified  [][]byte  // the open UNVERIFIED auth pins (§6.4), as AuthPin bytes; empty: none
+	CtWatchDegraded bool  // §13's CT watch cannot run as it should
+	Lines       []string  // one line a condition, such as an unmirrored log or a waiting erasure, filled by each
+	                      // component through the core's status seam and printed by `ur status` as is; nothing
+	                      // parses them
 }
 
 type SidecarIdentityBinding struct { // 5.5; signed by the ClientKey and the identity key
 	NetworkId, SidecarId, ClientId Id
-	Generation                     int64 // n+1 for every new client: re-enrollment, pairing, fallback (5.8)
+	Generation                     int64 // 1 for a sidecar_id's first binding, then n+1 for every new client:
+	                                     // re-enrollment, pairing, fallback (5.8)
 	ClientPublicKey                []byte
 	IdentityPublicKey              []byte
 	IssuedAt                       time.Time
 }
+// On the wire, in protocol/bridge/auth.proto: SidecarIdentityBinding{network_id = 1, sidecar_id = 2,
+// client_id = 3, generation = 4 (int64), client_public_key = 5, identity_public_key = 6, issued_at_ms = 7 (int64)},
+// carried as SignedSidecarIdentityBinding{body = 1, client_signature = 2, identity_signature = 3}, body being the
+// first message's bytes. Each signature is Ed25519 over §6.9's signed bytes with SIGNED_SIDECAR_BINDING = 0x1A01:
+// purpose binding-client by the ClientKey, binding-identity by the identity key. Verifiers check the received body
+// bytes, never a re-marshal. Hello.binding and POST /sidecar/bind carry the marshalled wrapper, and 5.15's
+// signatures column stores those bytes verbatim, since the table's other columns cannot rebuild them.
 
-type SidecarSettings struct {
+type SidecarSettings struct { // validate refuses every number that is not positive, on every leg, so zero is
+	// never unlimited or off; only a field tagged settings:"zero" gives zero a meaning, which its comment states:
+	// Search.CacheByteCount (in memory), AutoLockTimeout (never), IdleExitTimeout (never)
 	Instance, ApiUrl, PlatformUrl, AuthUrl, AppVersion string
-	EvsUrl, GkmUrl, SocketsUrl, DnsUrl                 string // defaults from §19.4
+	EvsUrl, GkmUrl, SocketsUrl, DnsUrl                 string // every url empty in DefaultSidecarSettings, so
+	                             // NewSidecar refuses until its host sets them from §18.9's embedded host table,
+	                             // the one copy of these names (§19.4's; owner decision 282)
 	Connect               *SidecarConnectSettings      // client generations (below)
 	ProtocolSettings      *SidecarProtocolSettings     // §6.6
 	TokenRefreshSettings  *SidecarTokenRefreshSettings // sdk's schedule (sdk/device_token_manager.go:20-27, :266-275): jti-drawn 0.4-0.5 window, 5 min floor, 15 min retry
-	KeychainSettings      *SidecarKeychainSettings     // Argon2id parameters, auto-lock, pass attempts (5 per 10 min)
-	LocalSettings         *SidecarLocalSettings        // sockets, idle exit, request bound
+	KeychainSettings      *SidecarKeychainSettings     // Argon2id parameters, pass attempts (5 per 10 min) and
+	                             // AutoLockTimeout: 10 min with no request on any local socket (control, mcp, hook,
+	                             // git), never while 5.8's busy rule holds; zero never locks (5.9; owner decision 284)
+	LocalSettings         *SidecarLocalSettings        // sockets; IdleExitTimeout: 10 min, zero never exits, counted
+	                             // only by an auto-spawned daemon (5.8); RequestTimeout: 30 s for a local request's
+	                             // own work, a person's wait (a /dev/tty confirmation, the daemon's presence
+	                             // prompt) running under its method's own bound, and git-mode streams and MCP
+	                             // sessions keeping theirs (Mcp.CallTimeout); FirstPort: 17000 (5.8);
+	                             // EventRingEventCount and EventWaitTimeout: 5.8's events method
 	Mcp                   *SidecarMcpSettings          // §16
 	Ingest                *SidecarIngestSettings       // §16.7
 	Record                *SidecarRecordSettings       // §16.8
 	Search                *SidecarSearchSettings       // §16.10; 5.9's index cache; §11.14's remote search
 	Directory             *SidecarDirectorySettings    // §16.11
-	ComponentQueueMessageCount, ComponentQueueByteCount int
-	MemoryBudgetByteCount int64 // contains §6's process-wide reassembly, idempotency and credit caps
+	ComponentQueueMessageCount, ComponentQueueByteCount int // 256 envelopes, four of §6.6's 64-message peer
+	                             // queues; 1 MiB, 256 envelopes in their 4 KiB pool class, a reassembled body
+	                             // counting by its size, so one 256 KiB body takes a quarter of the queue
+	MemoryBudgetByteCount int64 // contains §6's process-wide reassembly, idempotency and credit caps; proving
+	                            // (§14) sits outside it: SmtpSenderSettings.ProverConcurrency defaults to 1, and a
+	                            // host records p/ only after Prover.Measure finishes its largest shape, one that
+	                            // cannot recording none and only queueing
 	StreamChunkByteCount  int
 	Log                   Logger // nil: connect.DefaultLogger() (glog), adapted; sidecar_http: none unless set
 }
@@ -225,7 +309,12 @@ type SidecarSearchSettings struct { // §16.10's limits, 5.9's cache and §11.14
 	RemoteCursorCount      int              // 64 open remote cursors, the oldest dropped
 	RemoteRequesterRate    SidecarRate      // 30 a minute, burst 10: per requester at an indexer, and per
 	                                        // indexer at a requester
-	ServedRecordTimeout    time.Duration    // 30 d: an owner's indexer keeps 5.9's served records
+	ServedRecordTimeout    time.Duration    // 30 d: an owner's indexer keeps 5.9's served records, by their day
+	ServedRecordCount      int              // 8,192 served rows at most, the oldest days dropped first: a last
+	                                        // bound that ordinary use and one abusive reader never reach (owner
+	                                        // decision 294)
+	CompanionInterval      time.Duration    // 5 min on every host: the companion push's cadence (§11.14); 1 min once
+	                                        // D-TEST-11's M2 run fixes 1 KiB blocks; no server signal carries it
 }
 
 type SidecarRate struct { // Count per Interval, bursting to Burst
@@ -246,7 +335,9 @@ type SidecarDirectorySettings struct { // §16.11's team directory, in team netw
 func DefaultSidecarSettings() *SidecarSettings
 func (self *Sidecar) Unlock(passphrase []byte) error // nil: the key store's wrap of U (5.9)
 func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCredential) error
-func (self *Sidecar) Authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error // nil, or *ApprovalPendingError
+func (self *Sidecar) Authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error // runs the
+	// effect: nil once action.Outcome exists, *ApprovalPendingError while pending, any other error a refusal
+func (self *Sidecar) RegisterEffectLookup(kind SidecarActionKind, lookup SidecarEffectLookup) func()
 func (self *Sidecar) Sign(purpose string, signedType bridge.SignedType, body []byte, agentId *Id) (*bridge.Signed, error) // §6.9
 func (self *Sidecar) ServiceToken(ctx context.Context, resource string, scopes []string) (string, error)
 func (self *Sidecar) Status() SidecarStatus
@@ -294,7 +385,8 @@ type DeviceRevokeError struct { // every refusal of the two calls below
 }
 func (self *Sidecar) Devices() ([]MemberDevice, error) // FAILED_PRECONDITION while Locked or Unenrolled
 func (self *Sidecar) PreviewDeviceRevoke(ctx context.Context, sidecarId Id, reason string, lostAt time.Time,
-	sinceN uint64) (*DeviceRevokePlan, error) // sinceN 0: the proposed position; lost ignores both
+	sinceN uint64) (*DeviceRevokePlan, error) // sinceN 0: the proposed position, which needs a loss time (5.6's
+	// plan; owner decision 292); lost ignores both
 func (self *Sidecar) RevokeDevice(ctx context.Context, planId Id, revokeKeyIds [][]byte,
 	presence func(challenge []byte) ([]byte, error)) (entry *bridge.AuthPin, proposalId []byte, err error)
 	// presence: the host's check over the act's countersigned bytes (§7.9's presence row), returning §6.9's
@@ -307,7 +399,11 @@ func (self *Sidecar) RevokeDevice(ctx context.Context, planId Id, revokeKeyIds [
 type SearchRequest struct {
 	Text         string              // §16.10's query
 	Repos        []Id                // empty: every readable repo with its index on (never secret, config, mailcfg)
-	Scope        SearchScope         // SearchCached (default: buckets and any cached all), SearchLatest, SearchAll
+	Scope        SearchScope         // SearchCached (default: buckets and any cached all), SearchLatest, SearchAll:
+	                                 // the partitions; §16.10's breadth is SearchBreadth (SearchBreadthRepo,
+	                                 // SearchBreadthNetwork, SearchBreadthAll), §22.4's oracle parameter
+	                                 // sidecartest.SearchScope, a struct holding one of each, and search.proto's
+	                                 // scope keeps its own 1 and 2
 	Since, Until time.Time           // zero: unbounded
 	Fuzzy        bool                // near hits even when 3 or more exact hits exist
 	Filters      []SearchFieldFilter // §16.10's doc-table filters: from, subject, agent, run, kind, path prefix
@@ -379,18 +475,21 @@ type SidecarEnv struct { // immutable; Ctx ends with the generation
 	Secrets     SidecarSecrets // keychain namespace
 	Store       SidecarStore   // component directory, streaming I/O
 	Subprotocol *Subprotocol   // §6: inline, zero-wait handlers; streams
-	Authorize   func(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error // the gate
+	Authorize   func(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error // the gate: takes
+	                                                    // the same action, its Effect included, and sets its Outcome
 	Log         Logger
 }
 
 func NewSidecar(ctx context.Context, host SidecarHost, components []SidecarComponent, settings *SidecarSettings) (*Sidecar, error)
-func (self *Sidecar) Pair(ctx context.Context, childJwt string) error // 5.8: same network, new ClientKey, generation n+1
+func (self *Sidecar) Pair(ctx context.Context, childJwt string) error // 5.8: same network, new ClientKey, generation n+1;
+	// before anything is sent, childJwt must name this network and carry both the strict_exp and the admin_refused
+	// claim (§7.4; D-CORE-7; owner decision 291)
 func (self *Sidecar) AddComponent(component SidecarComponent) (func(), error)
 ```
 
 **Lifecycle.** Per client generation, `run()` builds the client, registers §6's id 21842, handles §6's `core` push, and calls `Attach` outside `stateLock`; in the `sidecar_http` leg a generation is its long-poll (§6.8), which carries `core`, and no component attaches: §18.10's kept files run on `SidecarApi` and the keychain. Complete envelopes go to their component's bounded, zero-wait queue, which drops and counts when full (connect/CODESTYLE.md:119). `StreamData` fills per-stream buffers bounded by §6.7's credit instead, since stream bytes cannot be dropped (:123); an overrun resets the stream with PROTOCOL. Callbacks never block or call `CloseAndWait` (:171).
 
-**Outward-action gate (I-8).** Every outward method calls `Authorize`, which passes under an active approved grant (§8) or a §16.6 decision that passes its spend check (owner decision 75), reserving the use durably before the effect (§16 D-MCP-11); otherwise it writes an `ApprovalRequest`, emits `approval_pending` and returns pending. In a tainted run (I-9) each outward action needs a fresh decision: the daemon spends no further use of a decision whose request was untainted (§16.6's TS1), and harness evidence counts only if the matching `requests` rule names it (owner decision 142). MCP, control mode, the CLI, local SMTP submission and the sdk remote backend all pass it; server-visible actions carry the decision to §8.10's gate.
+**Outward-action gate (I-8).** Every outward method calls `Authorize`, which passes under an active approved grant (§8) or a §16.6 decision that passes its spend check (owner decision 75), reserving the use durably before the effect (§16 D-MCP-11); otherwise it writes an `ApprovalRequest`, emits `approval_pending` and returns pending. `Authorize` runs the effect itself: under a decision, §16.6's steps 1 to 6 with the action's `Effect`; under a standing grant, the effect with an empty key and no ledger row. A retry returns the recorded `Outcome` without calling `Run` again unless that outcome is uncertain, and the approval's mutex covers steps 1 to 4 only, never `Run`. A kind with no registered `SidecarEffectLookup` is refused before its Reserve. In a tainted run (I-9) each outward action needs a fresh decision: the daemon spends no further use of a decision whose request was untainted (§16.6's TS1), and harness evidence counts only if the matching `requests` rule names it (owner decision 142). MCP, control mode, the CLI, local SMTP submission and the sdk remote backend all pass it; server-visible actions carry the decision to §8.10's gate.
 
 ### 5.5 Identity (X10)
 
@@ -403,9 +502,10 @@ func (self *Sidecar) AddComponent(component SidecarComponent) (func(), error)
 | Agent | `agent_id` in the sidecar | per registration | Ed25519 subkey, `not_after` ≤30 d (v1) | an attribution label |
 | Forwarding (apps; owner decision 197) | its forwarding Delegation's `delegation_id` | until revoked, superseded or its sidecar's revocation | Ed25519 forwarding key; X-Wing forwarding reader key; its forwarding clients' ClientKeys, all generated in the VPN component and never exported | its sidecar's forwarding Delegation (§7.9, §18.6) |
 
-- **Binding.** `POST /sidecar/bind` appends each `SidecarIdentityBinding` (5.4) to a never-reaped log, which §6's `Hello` checks (D-PROTO-13). Each new client (5.8) binds generation n+1 under the same `sidecar_id` and identity key, keeping admissions and grants. The binding names the client id as well as its key, so a peer resolves a client to its sidecar from signed bytes (§17.9). The `sidecar_id` names MLS leaves, ReaderKeys, statements, admissions, client names and bridge addresses; the client id stays the transport, contract and policy subject. Git committers (owner decision 81) and §8's `sidecar:<id>` and `client:<id>` resolve through the log, and a sidecar reads a repo iff a subject it hosts does.
+- **Binding.** `POST /sidecar/bind` appends each `SidecarIdentityBinding` (5.4) to a never-reaped log, which §6's `Hello` checks (D-PROTO-13). A `sidecar_id`'s first binding has generation 1 and creates its `sidecar_identity` row; each new client (5.8) binds generation n+1, the newest plus one, under the same `sidecar_id` and identity key, which that row holds, keeping admissions and grants. A client binds once, whatever the `sidecar_id`: `sidecar_identity_binding.client_id` is unique across every sidecar, so a copied token cannot bind a key of its own, and a binding must carry the key enrollment stored in `network_client_owner.client_public_key` where that column is set (§7.4, §7.7; 5.15's refusals). The binding names the client id as well as its key, so a peer resolves a client to its sidecar from signed bytes (§17.9). The `sidecar_id` names MLS leaves, ReaderKeys, statements, admissions, client names and bridge addresses; the client id stays the transport, contract and policy subject. Git committers (owner decision 81) and §8's `sidecar:<id>` and `client:<id>` resolve through the log, and a sidecar reads a repo iff a subject it hosts does.
 - **Agents.** A device or `--instance` is one sidecar per network. Agents are attribution labels on its client (`source = agent_asserted`) holding no credential or group key; the daemon signs, decrypts and enforces per-agent reads for them. Own reach (grants, an overlay address, an ssh key) needs the agent's own sidecar under its own OS user, container or VM (owner decision 4); otherwise grants attach to the sidecar, usable by any local process (owner decision 47).
-- **Signatures.** §6's typed `Signed` (a purpose and §6.11's `SignedType`), Ed25519 in v0: the identity key signs every statement the server stores or verifies, and approvals unless a presence key does (§16.6); agent subkeys only sealed provenance, revoked by `AgentRevoke`; the ClientKey only the binding and §7.4's DPoP proofs; an app's forwarding key only its sidecar's `WindowDelegation`s (§17.9). A compromised identity key means a `SidecarRevoke` for compromise and a new `sidecar_id`.
+- **Signatures.** §6's typed `Signed` (a purpose and §6.11's `SignedType`), Ed25519 in v0: the identity key signs every statement the server stores or verifies, and approvals unless a presence key does (§16.6); agent subkeys only sealed provenance, ended by a local `AgentRevoke` and by `not_after` (below); the ClientKey only the binding and §7.4's DPoP proofs; an app's forwarding key only its sidecar's `WindowDelegation`s (§17.9). A compromised identity key means a `SidecarRevoke` for compromise and a new `sidecar_id`.
+- **Agent subkeys (v1).** The identity key signs `AgentCert{sidecar_id, agent_id, public_key, not_after_ms}`, `not_after_ms` at most 30 days after signing, as a typed `Signed` with purpose `agent-cert` and `SIGNED_AGENT_CERT = 0x1A02` (§6.11). That `Signed` rides inside the sealed provenance it vouches for, RECORD.md section 5.3's `AgentSignedBody` and a push's sealed metadata (§11.6), never a log statement or config record. A reader checks the certificate under the identity key of the sidecar that signed the carrying entry, that the entry's time is before `not_after_ms`, and then the subkey's signature: a bad signature alarms, and an absent certificate reads `agent_asserted`. `AgentRevoke` is a local act, not a record (owner decision 285): `Sidecar.AgentRevoke(agentId)` deletes the subkey from `keychain.ur`, and the daemon signs nothing more with it, since a subkey never leaves the daemon; readers bound a subkey by its certificate's `not_after_ms`. A compromised daemon is a `SidecarRevoke{reason: compromise}`, and provenance from its `since_n` on reads unattributed.
 
 ### 5.6 Login, enrollment, admission, refresh, revocation
 
@@ -415,7 +515,9 @@ func (self *Sidecar) AddComponent(component SidecarComponent) (func(), error)
 | `ur connect --token ur-authkey-…` | A §7 auth key (expiry, uses, tags, ephemeral), whose server part alone enrollment sends (§7.8); from a pre-approved key's client-only `#<bundle>` the daemon signs its own `SidecarAdmit` with the Delegation's key, carrying exactly the Delegation's tags and, unless `--ephemeral`, a `not_after` no earlier than the Delegation's (§7.9's scoped), and keeps only its reader key (§10.5); `urn_` keys are refused | top-level; tagged or user-owned |
 | sdk host | The device's token mints the child (`admin_refused: true`); the host's `TokenSource` refreshes it (§18.7), with the core's DPoP signer installed (`Api.SetDpopSigner`) | child |
 
-- **Enrollment.** The daemon generates the ClientKey seed, identity key, ReaderKey and `sidecar_id`, calls `POST /network/enroll` (§7) or `/network/auth-client`, declaring no provider egress unless `ur proxy` or a public exit is set (§20.8), then `POST /sidecar/bind`, and persists the keychain only if the reply confirms `admin_refused`. Until §7.4's stage 2 is live, `ur` refuses to enroll, and an enrolled daemon alarms, where an sdk `.auth_state` (sdk/local_state_auth.go:31-35) or the URnetwork extension's `chrome.storage.local` in a browser profile (extension/src/background/index.ts:134) holds a readable network `by_jwt` (D-TRUST-3). An `--ephemeral` keychain stays in memory; reaping revokes it (§7.10).
+- **Enrollment.** The daemon generates the ClientKey seed, identity key, ReaderKey and `sidecar_id`, calls `POST /network/enroll` (§7) or `/network/auth-client`, declaring no provider egress unless `ur proxy` or a public exit is set (§20.8), then `POST /sidecar/bind`, and persists the keychain only if the reply confirms `admin_refused`. The bind re-mints the client's `by_client_jwt` with its `sidecar_id` (§7.4), and the sidecar adopts it (owner decision 286): `SidecarApi.Bind` returns the re-minted token beside the generation, after checking that it names the same network, client and device; enrollment, child enrollment and pairing persist it in place of the pre-bind token, and `restore_required`'s re-registration (below) installs it through the token manager. A refresh keeps the claim as presented and never adds it from the binding row. An sdk host's Api session takes the re-mint the same way, by the core's optional `SidecarTokenSourceRemint`, whose `AdoptByJwt` holds the token and then sets it on the host's `Api`, refusing when the session is closed or holds no token, so an app's sidecar keeps its `sidecar_id` across the host's refreshes (§18.7). An `--ephemeral` keychain stays in memory; reaping revokes it (§7.10).
+- **Readable credentials (D-TRUST-3; owner decision 283).** `ur` refuses to enroll, and an enrolled daemon alarms at each start and at each `SyncRefetchInterval` (the `credential_store` event, 5.4), while a store on its host holds a readable network `by_jwt`, whatever §7.4's stage. The check is by state, with no signal: no reply field, config key or other spoofable input turns it off, a host the app and extension releases cleaned passes by itself, and a later `ur` release drops the check once the fleet has moved. It reports a store only if this user can read it and it holds a token, and never copies, logs or sends a value. App stores: under `%LOCALAPPDATA%\URnetwork`, `$XDG_STATE_HOME/urnetwork`, `~/Documents` and the Documents of the macOS containers `network.ur` and `com.bringyour.urnetwork`, any `.by/.auth_state` whose JSON `by_jwt` is non-empty (sdk/local_state_auth.go:31-35), or a non-empty legacy `.by/.by_jwt`. Extension stores (extension/src/background/index.ts:134): a Chrome, Chromium, Edge or Brave profile's `Extensions/*/*/manifest.json` naming URnetwork, or a Firefox profile's `extensions.json` naming `urnetwork@bringyour.com`, at a version below D-SDK-11's first non-persisting release, which stays unset, so every version counts, until that release ships. No extension's storage is opened, and no LevelDB or IndexedDB is parsed.
+- **Recovery setup.** `ur login`, once its device is admitted or has signed Genesis and base 1 and its member has no current binding, offers recovery setup on `/dev/tty` (5.9's recovery code). `ur login --recover` is a code-only recovered device's command, reading the 12 words only from `/dev/tty`, as the pass is, never argv, env or stdin. `ur login --replace` and `ur connect --token <key> --replace` run on a restored state directory whose machine-id hash differs: they keep the `sidecar_id` and identity key, bind generation n+1 on the new client and remove the old client (5.9's backup).
 - **Admission (owner decisions 3, 5, 6, 110, 112-114, 126-128, 144, 149).** Until a config-repo `SidecarAdmit` (§7.9) names it, a sidecar gets no peer, MLS group, wrap or grant. The rules:
 
 ```text
@@ -435,6 +537,11 @@ genesis  before the owner's first untagged device signs it (§7.9), tagged and e
              signs under the Ed25519 key its code derives
          a failed check raises head_alarm (fork, with that base's AuthPin) and it acts no further
          (§2.8 EX5)
+safety   the safety number (owner decision 281): digest = SHA-256("urnetwork-sidecar-v1/safety-number" ||
+         0x00 || genesis_sha256 || identity_public_key), both 32 bytes, genesis_sha256 being
+         SHA-256(the Signed Genesis); N is the digest read big-endian, and the number is N mod 10^60,
+         zero-padded to 60 decimal digits, shown as 12 groups of 5 in three lines of 4 groups; ur and
+         §18.5's SidecarApprovals show it identically, and one vector is byte-equal on every leg
 signers  one admin: a device of a member outside the AdminSet
          alone, the member's consented device (§8.5): its own untagged devices, admitting them
            unless the network turns self_admit off and revoking them always (§7.10); its recovery
@@ -499,7 +606,7 @@ revoke   any writer leaf commits the Removes a signed revocation requires, never
 ```
 
 - **Refresh.** `sidecarTokenManager`, a root file in both legs, runs the sdk schedule on `GET /auth/refresh` through `SidecarApi` with a DPoP proof that crypto/ed25519 signs by the ClientKey (§7.4), and on a refused credential (connect's `AuthorizationClosed`, connect/transport.go:528, or a 401), against §7's 7-day, no-grace expiry (D-TEAM-14); it installs tokens in `SidecarApi` and the keychain and, where connect links, by `api.SetByJwt` and `transport.SetAuth` (:1924). A refused refresh returns the sidecar to `Unenrolled` with its identity and admission; only a `SidecarRevoke` that verifies against the config, announced by the `core` push or a refused bind, means `Revoked`; an unverifiable claim leaves it Unenrolled and alarms (`refused`). Events of an older client generation are dropped. After a Postgres restore, a refresh whose identity, binding or registration api lacks answers `restore_required`, and the daemon re-registers its identity and newest binding (`POST /sidecar/bind`, taken once the re-published projection admits the key), then its mail host keys, TLS endpoints and push token (§19.10).
-- **Revocation.** `ur logout` signs a `SidecarRevoke` (`removed`) for its own `sidecar_id`, removes its client (`POST /network/remove-client`) and wipes state. A signer allowed above revokes a lost device as `lost`, or as `compromise` with `since_n` (above): the device proposes the first entry timed at or after the loss time the person gives, which the person may move earlier, and lists what P parks and voids before the person confirms on `/dev/tty` or in an app's UI; it signs none whose P holds its own sidecar. The server removes the revoked client (§7.10), closing its connections within about 90 s (server/session/AUTH.md:197). Stale revocations (§7.10's `stale` row) ride the act that carries them, under that act's confirmation and, wherever this sidecar registered a live presence key, its one presence check (owner decision 187): a page Worker's admission, the member's `OwnerConfirm` of an admin-admitted page Worker (`ur approve` on `/dev/tty` included, D-CORE-13), or its answer to that admission's alarm. Every other revocation by a member of another of its own devices runs as 5.4's `PreviewDeviceRevoke` and `RevokeDevice` (D-CORE-20), §18.5's alarm answers that revoke a named device included (the admission alarm, `recovery_rebind` and `recovery_unseen`), with the `since_n` the alarm fixes; a `ur` command confirmed on `/dev/tty`, §18.5's `SidecarApprovals` in an app's UI and a remote-mode app's control calls (5.8) reach them, never MCP. `ur devices` lists 5.4's `Devices()`; `ur devices revoke <name|sidecar_id> [--compromise [--since <time|position>]] [--keep-key <key_id>]...` prints the plan, signs once the person confirms on `/dev/tty`, under Presence after the daemon's presence prompt, and at k > 1 also signs the target's `Suspend` (sign); `ur approve <proposal_id>` prints a revocation proposal's plan and signs its `AuthorityCosign` under the same approval. The rules:
+- **Revocation.** `ur logout` signs a `SidecarRevoke` (`removed`) for its own `sidecar_id`, removes its client (`POST /network/remove-client`) and wipes state. A signer allowed above revokes a lost device as `lost`, or as `compromise` with `since_n` (above): the device proposes the first entry timed at or after the loss time the person gives, or the tip where that time is past but later than the log's newest entry (plan, below; owner decision 292), which the person may move earlier, and lists what P parks and voids before the person confirms on `/dev/tty` or in an app's UI; it signs none whose P holds its own sidecar. The server removes the revoked client (§7.10), closing its connections within about 90 s (server/session/AUTH.md:197). Stale revocations (§7.10's `stale` row) ride the act that carries them, under that act's confirmation and, wherever this sidecar registered a live presence key, its one presence check (owner decision 187): a page Worker's admission, the member's `OwnerConfirm` of an admin-admitted page Worker (`ur approve` on `/dev/tty` included, D-CORE-13), or its answer to that admission's alarm. Every other revocation by a member of another of its own devices runs as 5.4's `PreviewDeviceRevoke` and `RevokeDevice` (D-CORE-20), §18.5's alarm answers that revoke a named device included (the admission alarm, `recovery_rebind` and `recovery_unseen`), with the `since_n` the alarm fixes; a `ur` command confirmed on `/dev/tty`, §18.5's `SidecarApprovals` in an app's UI and a remote-mode app's control calls (5.8) reach them, never MCP. `ur devices` lists 5.4's `Devices()`; `ur devices revoke <name|sidecar_id> [--compromise [--since <time|position>]] [--keep-key <key_id>]...`, which with `--compromise` and no `--since` asks on the terminal for an RFC 3339 time or a log position before it calls the daemon and fails without a terminal, prints the plan, signs once the person confirms on `/dev/tty`, under Presence after the daemon's presence prompt, and at k > 1 also signs the target's `Suspend` (sign); `ur approve <proposal_id>` prints a revocation proposal's plan and signs its `AuthorityCosign` under the same approval. The rules:
 
 ```text
 scope     a sidecar whose admission names this sidecar's member M: M's untagged devices, page
@@ -525,7 +632,13 @@ reasons   lost: SidecarRevoke{reason: lost}, no cascade, what the device signed 
           compromise: SidecarRevoke{reason: compromise, since_n}, §7.9's cascade from since_n
           parking P and voiding what P signed as 7.9 lists, and a compromise retirement, so each
           repo the device read rotates as cause REMOVE with a path epoch at once (§10.8, §11.6)
-plan      PreviewDeviceRevoke derives at the tip: since_n as above, never later than proposed, and
+plan      PreviewDeviceRevoke derives at the tip: since_n as above, the first entry timed at or after
+          the loss time or, where that time is past but later than the log's newest entry, the tip, the
+          largest since_n §7.9's verifier accepts for a revocation landing at the next position
+          (0 < since_n < n), the plan then showing what that voids, the tip entry itself where the
+          target signed it; a compromise with neither a loss time nor a position answers REVOKE_SINCE,
+          since nothing says where P starts and no default is guessed, least of all the target's
+          admission entry (owner decision 292); never later than proposed, and
           after a compromise rebind at r clamped to r + 1 for the rebind's signer and for any device
           whose closure would reach it, so the rebind stands, unless the person moves it earlier, when
           the plan shows the rebind voiding and who must sign it again (5.9; owner decision 212);
@@ -564,7 +677,8 @@ codes     REVOKE_SELF         the target is this sidecar: sign out instead
           REVOKE_NOT_CAPABLE  this device is not approval-capable for M, or is suspended
           REVOKE_CANCELLED    the person cancelled, or the presence check failed, was refused or,
                               under Presence, sent no evidence verifying against such a key
-          REVOKE_SINCE        a since_n later than proposed or past the tip, or a future loss time
+          REVOKE_SINCE        a since_n later than proposed or past the tip, a future loss time, or
+                              a compromise with neither a loss time nor a position
           REVOKE_PARKS_SELF   P would hold this sidecar; it names the entry that puts it there
           REVOKE_STALE        the plan's PlanId changed at the tip: preview again
           REVOKE_REFUSED      api or a verifier refused a statement at the tip, or none landed by
@@ -573,7 +687,7 @@ codes     REVOKE_SELF         the target is this sidecar: sign out instead
           api is unreachable before anything is signed
 ```
 
-- **Presence countersignature (owner decisions 185, 187).** Wherever this sidecar registered a live presence key, an act that signs a statement §7.9's presence row covers runs one presence check over the act's root and puts that key's countersignature on each statement it signs, and api and every member device refuse a covered statement without it (D-TEAM-32). Such acts are 5.4's `RevokeDevice`, with its `Suspend` at k > 1 and §18.5's alarm answers that run through it; `ur approve <proposal_id>` and `Decide`'s cosign of a covered proposal; an admin's revocation of another member's device, §7.10's `cleanup` revocations included; an admin's or tag owner's revocation of a tagged sidecar (§7.10's `agents` row) and a `DelegationRevoke` that parks its agents (`since_n` > 0, §7.9's `delegation` row; owner decision 192); a page Worker's admission, `OwnerConfirm` or alarm answer that carries §7.10's stale revocations; a `Suspend` of another sidecar and a `RecoveryVeto`, from a `ur` command or `Decide`; `ur keys add-presence` and `ur keys rm` for a presence key, a device's first key needing none, since it has no live one; and, under owner decision 189, the admission or confirmation of a member device (the signers and alarm rows above, `ur approve` and `Decide` included), an admin's AdminSet change or member removal, and a `RecoveryBind` or `RecoveryRebind`, `ur keychain recovery-rotate`'s included. The device builds the act's statements first, so the check covers their exact bytes, and keeps them with their countersignatures in `keychain.ur` until each lands (5.9), a kill retrying the same bytes. The check runs where the key is, by the daemon's presence prompt or an app's `SidecarPresenceSigner`, a remote-mode app's by 5.8's two calls, with UV (§16.6's countersign row); one that fails, is refused or returns no evidence verifying against such a key signs nothing, which 5.4's calls answer `REVOKE_CANCELLED`. A sidecar with no live presence key signs these on the person's confirmation (D-CORE-13), and a recovery key's statements carry none.
+- **Presence countersignature (owner decisions 185, 187).** Wherever this sidecar registered a live presence key, an act that signs a statement §7.9's presence row covers runs one presence check over the act's root and puts that key's countersignature on each statement it signs, and api and every member device refuse a covered statement without it (D-TEAM-32). Such acts are 5.4's `RevokeDevice`, with its `Suspend` at k > 1 and §18.5's alarm answers that run through it; `ur approve <proposal_id>` and `Decide`'s cosign of a covered proposal; an admin's revocation of another member's device, §7.10's `cleanup` revocations included; an admin's or tag owner's revocation of a tagged sidecar (§7.10's `agents` row) and a `DelegationRevoke` that parks its agents (`since_n` > 0, §7.9's `delegation` row; owner decision 192); a page Worker's admission, `OwnerConfirm` or alarm answer that carries §7.10's stale revocations; a `Suspend` of another sidecar and a `RecoveryVeto`, from a `ur` command or `Decide`; `ur keys add-presence` and `ur keys rm` for a presence key, a device's first key needing none, since it has no live one; and, under owner decision 189, the admission or confirmation of a member device (the signers and alarm rows above, `ur approve` and `Decide` included), an admin's AdminSet change or member removal, and a `RecoveryBind` or `RecoveryRebind`, `ur keychain recovery-rotate`'s included. The device builds the act's statements first, so the check covers their exact bytes, and keeps them with their countersignatures in `keychain.ur` until each lands (5.9), a kill retrying the same bytes. The check runs where the key is, by the daemon's presence prompt or an app's `SidecarPresenceSigner`, a remote-mode app's by 5.8's two calls, with UV (§16.6's countersign row). A remote-mode app's two-call act decides at its hold where that is: when every live presence key of this sidecar's is one the daemon host's own authenticator holds, the first call answers no bytes and the second runs the daemon's presence prompt over the act's bytes before signing, the person's wait outside the request bound; otherwise the app's `SidecarPresenceSigner` countersigns as above; and for the app's own `KeyRegister` beside a host-held live key, the app proves its new key and the daemon's prompt countersigns (owner decision 290). A check that fails, is refused or returns no evidence verifying against such a key signs nothing, which 5.4's calls answer `REVOKE_CANCELLED`. A sidecar with no live presence key signs these on the person's confirmation (D-CORE-13), and a recovery key's statements carry none.
 
 ### 5.7 AUTHZ1: a sidecar token must not administer the network
 
@@ -594,6 +708,7 @@ ur status, ur login, app -------+   peer-credential check          a Sidecar per
 
 hello   {"ur_local":1,"mode":"mcp"|"control"|"hook","version","harness","agent","cwd","pid"}
         {"ur_local":1,"mode":"git","version","repo":"<net>/<repo>","service":"git-upload-pack"|"git-receive-pack"}
+        {"ur_local":1,"mode":"git-hook","version","service":"pre-receive"|"proc-receive"}    names no repo
 .ur     network = "k7q2m9"        # TOML at a project root: a label or alias
         agent = "api-refactor"    # optional default for --agent
         claims = "off"            # optional: off < prompt < auto, §16.11's announcement setting; narrower than
@@ -602,16 +717,18 @@ hello   {"ur_local":1,"mode":"mcp"|"control"|"hook","version","harness","agent",
 
 pair    app (device client D, same network) --control socket--> daemon
         app: POST /network/auth-client {source_client_id: D, admin_refused: true} -> child C's jwt
-        app --Pair(C's jwt)--> daemon: new ClientKey; POST /sidecar/bind generation n+1; remove any
+        app --Pair(C's jwt)--> daemon: C's jwt must name this network and carry the strict_exp and
+                                       admin_refused claims, else nothing is sent (owner decision 291);
+                                       new ClientKey; POST /sidecar/bind generation n+1; remove any
                                        top-level client; the SidecarAdmit stands (it names sidecar_id)
 lost    D removed or reaped -> C ends (5.3) -> daemon Unenrolled (parent_lost), identity kept -> ur login
         or re-pair
 unpair  ur login -> top-level client as the next generation -> remove C
 ```
 
-- **One daemon per instance.** `ur mcp`, and bare `ur` when stdin is not a terminal (owner decision 57), relay to the daemon, where MCP runs (§16), never logging to stdout. If none answers, `ur` spawns `ur daemon` detached; a flock on `<state>/lock` keeps one, and an auto-spawned daemon exits when idle unless mail, sockets or bridge is on or its device is an indexer (§3.6; owner decision 150), which runs from its unit (below) and never idles out. It hosts a `Sidecar` per network, sharing the unlock key U (5.9) and MCP endpoint but no client, root key or identity key (Q-CORE-6). Where a network designates it for search (§7.9), it registers §6.11's SEARCH handler on that network's `Sidecar` and sets Hello feature bit 0 (§6.4) while `Search.RemoteServe` is on, and serves §11.14's remote searches in its search engine within D-CORE-17's budget, outside every MCP session and run, so serving taints none (I-9).
-- **Protocol.** After the hello, the socket carries newline-delimited JSON-RPC 2.0 or, after a `git` hello, raw pkt-line bytes for one repo of that `<net>`'s `Sidecar` (§11.11). The mode selects a protocol, never a privilege: authority statements, admissions, a revocation of another of the member's devices (5.6, with its presence check), `OwnerConfirm`, `KeyRegister`, `IndexerSet` and `ServiceSettings.directory` (§7.9), acl and bridge statements other than §16.6's own-resource filings, and the acts of control mode's `ur directory` methods (§16.11: announcing a repo or revoking its announcement, approving or denying a request, erasing, a `claims` value wider than `.ur`'s) are signed only for a `ur` command confirmed on /dev/tty or in an app's UI (D-CORE-13); a directory request passes 5.4's gate as an `access_request`. Where an act signs a statement §7.9's presence row covers and the live presence key the daemon registered is a remote-mode app's, the app's call takes two: the first returns the act's countersigned bytes over the statements the daemon built, which the app signs by `SignWithPresence` and sends back in the second, and only then does the daemon sign them, each carrying the countersignature (5.6's approval and presence countersignature); `RevokeDevice`, `Decide`'s admissions, confirmations, cosigns and vetoes, and the app's `KeyRegister` take that path alike. The own-resource filings (a `GrantActivate` of this sidecar's own approved request, §8.8; a `GrantRevoke` of a grant whose subject it is; its own `BridgeAddress` for its first map as a host, §17.4; the `BridgeRoute`, `BridgeMap` and `BridgeWithdraw` of its own rules, §17.8) are signed from any mode, one for an outward action only through 5.4's gate. Version skew is refused; replies never carry tokens, keys, the pass or the recovery code. A control-mode `search` (§16.10) or `ur directory` listing (§16.11) returns untrusted text only when the call asks for it, as `ur search` and `ur directory` do by default only when stdout is a terminal, and first taints each run whose harness process is the caller's ancestor (§16.6; §16.7's pid ancestry).
-- **Authentication.** The peer uid must equal the daemon's (SO_PEERCRED; LOCAL_PEERCRED in a 0700 directory; a go-winio pipe with a user-SID DACL); same-user agents may call it (owner decision 47), and outward actions still pass the gate. Control uses nothing else (owner decision 84): `--port` (cli/UI.md:17-18) sets the first port of the local services (git, submission, IMAP; §11, §15), which bind `0.0.0.0/::` unless `--listen` narrows them (cli/UI.md:11), authenticate every caller and, off loopback, serve only TLS, or ssh for git (owner decision 130).
+- **One daemon per instance.** `ur mcp`, and bare `ur` when stdin is not a terminal (owner decision 57), relay to the daemon, where MCP runs (§16), never logging to stdout. If none answers, `ur` spawns `ur daemon` detached, which is R-SDK-9's local device that listens: §18.5's `NewSidecarRemote` with no daemon reports `offline` and embeds none. A flock on `<state>/lock` keeps one, and an auto-spawned daemon exits when idle for `LocalSettings.IdleExitTimeout` (10 minutes) unless mail, sockets or bridge is on or its device is an indexer (§3.6; owner decision 150), which runs from its unit (below) and never idles out; a unit-run daemon never counts it. It hosts a `Sidecar` per network, sharing the unlock key U (5.9) and MCP endpoint but no client, root key or identity key (Q-CORE-6). Where a network designates it for search (§7.9), it registers §6.11's SEARCH handler on that network's `Sidecar` and sets Hello feature bit 0 (§6.4) while `Search.RemoteServe` is on, and serves §11.14's remote searches in its search engine within D-CORE-17's budget, outside every MCP session and run, so serving taints none (I-9).
+- **Protocol.** After the hello, the socket carries newline-delimited JSON-RPC 2.0 or, after a `git` hello, raw pkt-line bytes for one repo of that `<net>`'s `Sidecar` (§11.11). A `git-hook` hello (owner decision 293) carries `ur git-hook <name>`'s relay of a mount's pre-receive and proc-receive hooks: its `service` is the hook's name, and after the hello the relay sends one JSON header line `{session, object_directory, alternate_object_directories}`, the session being the one the daemon set in `UR_GIT_SESSION` when it started git-receive-pack; then both sides send frames of one channel byte, a 4-byte big-endian length and the bytes: stdin and stdin's end from the relay; stdout, stderr and the one-byte exit code from the daemon. That stream may stay open up to `ReceivePublishTimeout` (30 min), not `RequestTimeout`; the session id grants nothing, and a relay that cannot reach the daemon exits 1, so the push is refused, never taken unhooked. The daemon registers each mode on the control socket under the peer-uid check below. The mode selects a protocol, never a privilege (D-CORE-9): authority statements, admissions, a revocation of another of the member's devices (5.6, with its presence check), `OwnerConfirm`, `KeyRegister`, `IndexerSet` and `ServiceSettings.directory` (§7.9), acl and bridge statements other than §16.6's own-resource filings, and the acts of control mode's `ur directory` methods (§16.11: announcing a repo or revoking its announcement, approving or denying a request, erasing, a `claims` value wider than `.ur`'s) are signed only for a `ur` command confirmed on /dev/tty or in an app's UI (D-CORE-13); a directory request passes 5.4's gate as an `access_request`. Where an act signs a statement §7.9's presence row covers and the live presence key the daemon registered is a remote-mode app's, the app's call takes two: the first returns the act's countersigned bytes over the statements the daemon built, which the app signs by `SignWithPresence` and sends back in the second, and only then does the daemon sign them, each carrying the countersignature (5.6's approval and presence countersignature); `RevokeDevice`, `Decide`'s admissions, confirmations, cosigns and vetoes, and the app's `KeyRegister` take that path alike. Where every live presence key of this sidecar's is instead one the daemon host's own authenticator holds, the first call answers no bytes, which the app shows as the host's prompt, and the second runs the daemon's presence prompt over the act's bytes before signing, the person's wait outside the request bound; for the app's own `KeyRegister` beside a host-held live key, the app proves its new key and the daemon's prompt countersigns (5.6; owner decision 290). The own-resource filings (a `GrantActivate` of this sidecar's own approved request, §8.8; a `GrantRevoke` of a grant whose subject it is; its own `BridgeAddress` for its first map as a host, §17.4; the `BridgeRoute`, `BridgeMap` and `BridgeWithdraw` of its own rules, §17.8) are signed from any mode, one for an outward action only through 5.4's gate. Version skew is refused; replies never carry tokens, keys, the pass or the recovery code, which a walk of each reply holds them to. A remote-mode `Sidecar` hears the daemon's events through the control method `events` (owner decision 287), a method, not a mode: `{after: <cursor>, wait_ms}` answers the events past the cursor from a bounded per-daemon ring, each with its generation and kind and the ids §18.5 lists, never a secret, or `gap: true` when the ring has passed the cursor, after which the app reads `GetState` for where things stand; the ring's size and the longest wait are settings (`LocalSettings.EventRingEventCount`, `EventWaitTimeout`). The sdk's remote backend keeps one long-poll open on a second control session and feeds `AddEventListener` from it, so every event kind reaches a remote-mode app, and the native host's allow-list carries `events`, so the extension hears the alarms. Mail adds three methods to the core's table (owner decision 288): `mail.check_send`, taking a draft's fields and answering §14.5's `SmtpSendCheck` as JSON (each recipient domain's mode, the encoded bytes, the DATA cap, the expected delay and the prediction), and `mail.send_result`, taking a `send_id` and answering `SmtpSendResult` (each domain's outcome), both plain reads that sign and send nothing and so need no confirmation (D-CORE-13); and `mail.send`, which goes through the daemon's gate like a submission, held for an I-8 approval (§15.10's step 1). The sdk's remote backend calls each, so desktop apps on `ur daemon` get §18.5's `CheckSend`, `GetSendResult` and `Send`. A control-mode `search` (§16.10) or `ur directory` listing (§16.11) returns untrusted text only when the call asks for it, as `ur search` and `ur directory` do by default only when stdout is a terminal, and first taints each run whose harness process is the caller's ancestor (§16.6; §16.7's pid ancestry).
+- **Authentication.** The peer uid must equal the daemon's (SO_PEERCRED; LOCAL_PEERCRED in a 0700 directory; a go-winio pipe with a user-SID DACL); same-user agents may call it (owner decision 47), and outward actions still pass the gate. Control uses nothing else (owner decision 84): `--port` (cli/UI.md:17-18) sets the first port of the local services (§11, §15), `LocalSettings.FirstPort`, 17000 by default, in this order: git http or https 17000, git ssh 17001, submission 17002, IMAP 17003; a second instance on one host passes its own `--port`, and a taken port fails naming the flag. They bind `0.0.0.0/::` unless `--listen` narrows them (cli/UI.md:11), authenticate every caller and, off loopback, serve only TLS, or ssh for git (owner decision 130).
 - **Project file (owner decisions 23, 170).** `.ur` names a label or alias, never a legacy network_name (D-DNS-2), holds no secret and may be committed. The daemon finds it from the hello's `cwd` up to the git top level or `$HOME`. A network-scoped call uses its `network` argument, else `.ur`, else the only network; otherwise it fails with FAILED_PRECONDITION naming the networks. A committed `.ur`'s `claims` narrows a member's setting at once and widens it only after the member confirms once, on /dev/tty or in an app, never through MCP; the value is fixed for each session (D-CORE-18; owner decision 170).
 - **Pairing (owner decisions 4, 87).** A desktop app in remote mode (§18.4) pairs over the control socket, a sandboxed app (apple/app/app.xcodeproj/project.pbxproj:1129, :1762) through its app-group socket (5.9); the daemon never holds the device's token.
 - **Units.** The daemon runs as the user (Q-CORE-3). `install-daemon` writes a LaunchAgent `network.ur.ur.<instance>` (macOS), `systemctl --user enable --now ur@<instance>` plus linger when headless (Linux), or a Task Scheduler logon task (Windows); `uninstall-daemon` removes it, first retiring the device's indexer designations (§7.9), and `--purge` also revokes the client and `sidecar_id` and deletes the state; `ur indexer add` installs the unit if absent, so an indexer restarts at the user's login, or at boot under linger (owner decision 150).
@@ -636,7 +753,9 @@ unpair  ur login -> top-level client as the next generation -> remove C
                     reader key (§7.8), a pending recovery proposal's or admission's id (§7.9),
                     statements signed and not yet landed, such as a revocation
                     and its KeyRevokes (5.6) or an admission and §7.10's stale revocations, each stale
-                    one re-checked before a retry (§7.10), §10's key cache
+                    one re-checked before a retry (§7.10), §10's key cache, which from v0's first
+                    generation keeps each verified GenRotate's Signed bytes beside its RK_g, since a
+                    signature cannot be rebuilt later and a re-formed group's ladder carries them (§10.8)
     authlog/        §7.9's retained log: A_k digests; the newest entries' bytes, up to HeadCheckProof's
                     64 KiB (bases as headers), and while it sends proven the proof it verified (§6.4);
                     on a member device, every entry from api's retention point on, for a site loss (§19.10)
@@ -666,7 +785,16 @@ socket   $XDG_RUNTIME_DIR/ur/<i>.sock; macOS DARWIN_USER_TEMP_DIR (104-byte sun_
 ```text
 holds     per indexed ref this device follows: the ref version it verified (§11.9) and each index file it
           keeps, as the sealed evs records it fetched under the repo's object keys, checked against its entry
-          version's content_sha256 before it is kept (a mirror of the ref shares its copies); derived data
+          version's content_sha256 before it is kept (a mirror of the ref shares its copies), and beside
+          each kept record its file id and its wrapped object key exactly as its segment header carried it,
+          sealed under the repo generation's key, about 100 B a file, so no plaintext key rests on the device
+          and the cache still holds no key: a reader that holds the repo key at that generation, from §10's
+          client as any evs read does, unwraps it per file and opens the record one 64 KiB frame at a time, so
+          searches read kept shards, postings and slots without reading evs; for a slot-keyed repo
+          (record-class repos and group inboxes, §11.14's keys row) the slot's 72 B wrapped object key block
+          exactly as the slot object carried it, that slot key's generation and the segment's generation
+          whose manifest_g seals the record header, about 80 B more a file, a reader asking gkm for both
+          generations when they differ (owner decision 289); derived data
           sealed under HKDF(R_n, "urnetwork-sidecar-v1/local/search") with XChaCha20-Poly1305, random nonces,
           AAD = repo || ref || path || version || part: the search manifest, each shard's dictionary block
           index and n_d array, the version table (below), and on desktops the local layer (commits past
@@ -686,9 +814,15 @@ versions  the version table, per index root: for each doc key and ref id the par
           probes it
 state     not derived, so ur search sync --evict, DropCache and the bounds row's eviction keep it: per-device
           policy overrides (§18.4); remote search's mode, its notice answers and, for 24 h, which repos each
-          indexer served (§18.4, §11.14); on an owner's indexer, a served record {requester sidecar_id, repo_id,
-          time} for each remote search an EvsShare reader made in an owner-bound repo, naming no query, kept
-          Search.ServedRecordTimeout (30 days; D-CORE-17); deleted with the network's local state
+          indexer served (§18.4, §11.14); on an owner's indexer, the served record, one row per (requester
+          sidecar_id, repo_id, UTC day): {requester, repo, day, count, first time, last time}, written at page
+          0 once a search and naming no query; the first remote search an EvsShare reader makes in an
+          owner-bound repo on a day adds the row, and each later one that day raises its count and moves its
+          last time; rows are kept Search.ServedRecordTimeout (30 days) by their day, so the owner's view
+          holds exact counts for the whole 30 days in at most readers x repos x 30 rows whatever a requester's
+          rate, only the times inside a day going unkept, with Search.ServedRecordCount (8,192) a last bound,
+          the oldest days dropped first (D-CORE-17; owner decision 294); deleted with the network's local
+          state
 never     a query, query history, hit, snippet, cursor (memory only, 10 min), result count or per-query verdict,
           local or remote, on the asking phone and on the answering indexer (owner decision 175); a file no
           verified entry version named
@@ -700,7 +834,10 @@ policy    latest of every repo in scope, from hints; all by Search.AllPolicy, §
           a merge, roll-up or erasure rewrite from files it holds and check content_sha256 instead of
           downloading it (§11.14)
 delete    at once, on an ERASE or CLOSURE hint (§11.12, §16.8): every cached version the CLOSURE replaced with
-          its derived data, the erased keys from the key cache, the repo's retained buckets, the erased
+          its derived data, every kept record whose slot key the ERASE destroys, so the time a device could
+          still unwrap an erased document's key ends at that deletion (I-EVS-13, read as evs's storage plus a
+          device cache that drops at the ERASE hint; owner decision 289), the erased keys from the key cache,
+          the repo's retained buckets, the erased
           documents' local-layer entries and those this device journaled for its next companion push
           (§11.14), and their words in the vocabulary (decremented from the text read before it is deleted),
           their keys masked until the replacements are cached; on a CUT's hint or a synced erasure set, the
@@ -731,9 +868,10 @@ rebuild   all of it but state is derived: an AEAD failure drops the file and ref
           with the cache, so its next Worker enrolls as a new sidecar_id (§18.8)
 ```
 
-- **Pass (cli/UI.md:82-85).** Argon2id at 64 MiB, t=3, p=4 (RFC 9106 §4), or 19 MiB, t=2, p=1 on mobile and wasm (OWASP). The pass or the OS keystore yields U, which opens every R_n (owner decision 23's shared unlock); a pass change rewraps U, and `ur keychain rotate` rotates U and every R_n. The CLI reads the pass only from `/dev/tty` with echo off, and the pass approves nothing (owner decisions 47, 75).
-- **Recovery code (owner decisions 62, 127, 149).** 128 bits as 12 BIP-39 words, shown once per membership, so no recovery key links a person's networks (owner decision 23) and no device keeps a master secret. It derives X-Wing and Ed25519 recovery keys, which a `RecoveryBind` config record binds to the member (§7.9); devices wrap that network's R_n and the member's repo key generations to the X-Wing key (§10.8). With the code alone, a new device restores, reading before admission only the authorization log and its member's recovery wraps (§7.9), admits itself under 5.6's signers, passes §7.9's recovery anchor in 5.6's order (genesis), then joins its groups (above 16 leaves, once one leaf is online to write the current GroupInfo) and revokes the lost devices, rotating their groups (§10.8). `ur keychain recovery-rotate` signs a `RecoveryRebind` (§7.9), countersigned where §7.9's presence row asks (owner decision 189): the old code then admits nothing and gets no new wrap, and if §7.9's cascade voids the rebind, admits only through the recovery window and gets none until a signer outside P signs its restored binding again (5.6); it opens at once what was wrapped to it before, whatever the window or a veto, and reads the current generation until the next rotation, which `--compromise` makes a remove rotation with a path epoch at once (§10.8). A device a restored binding admits anchors on a config ReaderWrap (5.6's genesis), whose RK_g opens only the config group's sealed GroupInfo to it: it self-joins that group if entitled, KF2 adds it to its other groups once it uploads KeyPackages, and a group whose leaves are all in P opens to it only through that binding's surviving wraps; it then offers `recovery-rotate`, whose rebind gives its member a current binding again (§7.9's after).
-- **Backup.** OS-keystore wraps are device-bound, so a backup restores only with the pass (U) or a network's code (its R_n); new hardware keeps the `sidecar_id` only via `--replace`, which revokes the old client. No re-seal reaches a backup sealed before it, whose `keychain.wrap` the code it was sealed to still opens, and with it the identity key, ClientKey seed, ReaderKeys and key cache. So each device whose backups may hold a sealing to a code retired for compromise, or to a binding §7.9's cascade voids (the span its `recovery_rebind` names, 5.6), is revoked for compromise and enrolled anew, never moved by `--replace`, which keeps its identity key (§7.9, §10.8); for a void, each device that may revoke it offers that revocation from a since_n at the voided binding's entry, since no keychain was sealed to that binding earlier. For a compromise rebind landing at position r, `recovery-rotate --compromise` lists each device of the member live while the retired binding was current, raises `recovery_rebind` naming that span on its own device too, and offers each a compromise revocation, since_n defaulting to §7.9's loss-time proposal, clamped to r + 1 for the rebind's signer and for any device whose closure would reach that signer, so the rebind stands; a person who believes a clone acted may move it earlier, and the plan then shows the rebind voiding and who must sign it again. The rebind's signer goes last: it enrolls a replacement, which revokes it from a since_n after that admission, so where no signer outside exists, what a clone signed before that position stands (owner decision 212).
+- **Pass (cli/UI.md:82-85).** Argon2id at 64 MiB, t=3, p=4 (RFC 9106 §4), or 19 MiB, t=2, p=1 on mobile and wasm (OWASP). The pass or the OS keystore yields U, which opens every R_n (owner decision 23's shared unlock); a pass change, `ur keychain pass`, rewraps U under a new pass, and `ur keychain rotate` rotates U and every R_n. The CLI reads the pass only from `/dev/tty` with echo off, and the pass approves nothing (owner decisions 47, 75).
+- **Auto-lock (owner decision 284).** `KeychainSettings.AutoLockTimeout` defaults to 10 minutes. Idle means no request on any local socket (control, mcp, hook, git) for that long, and the lock never applies while 5.8's busy rule holds: mail, sockets or bridge on, or an indexer. Locking drops U and every R_n from memory and enters Locked; where a key store holds U, the next local request runs `Unlock(nil)` by itself. Zero never locks, for a host to set on purpose. `ur lock` drops U and every R_n at once, as auto-lock does, and needs no confirmation, since it only narrows.
+- **Recovery code (owner decisions 62, 127, 149).** 128 bits as 12 BIP-39 words, shown once per membership, so no recovery key links a person's networks (owner decision 23) and no device keeps a master secret. The words are BIP-39 of 16 random bytes E with its standard 4-bit checksum (the first 4 bits of SHA-256 of the 16 bytes), on the English list, which the root embeds, so it gains no module; a bad checksum is refused at entry. The keys derive from E, not from the words and with no BIP-39 PBKDF2 step: `ed25519_seed = HKDF-SHA256(ikm = E, salt empty, info "urnetwork-sidecar-v1/recovery-ed25519", 32 bytes)`, and `xwing_seed` the same with info `"urnetwork-sidecar-v1/recovery-xwing"`, used as crypto/hpke's `MLKEM768X25519().NewPrivateKey(xwing_seed)`; E is zeroed once both are derived, and testdata/recovery/ pins a code to both public keys and a `genesis_sig`, byte-equal on every leg. The first code is made at `ur login`'s recovery setup (5.6); `ur keychain recovery-rotate` runs the same path, signing `RecoveryBind` when the member has no binding and `RecoveryRebind` otherwise. The `ur` process draws the 16 bytes, derives both keys, computes `genesis_sig` from the network id and Genesis hash the daemon returns, prints the 12 words once on `/dev/tty`, and sends the daemon only the two public keys and `genesis_sig` to sign, under §7.9's presence row; declining leaves no binding, so `keychain.wrap` has no HPKE copy and `ur status` says so. For apps, §18.5's `CreateRecoveryCode` on `SidecarApprovals` runs in process and hands the words to the host's UI, never over control mode. The code derives X-Wing and Ed25519 recovery keys, which a `RecoveryBind` config record binds to the member (§7.9); devices wrap that network's R_n and the member's repo key generations to the X-Wing key (§10.8). With the code alone, a new device restores, reading before admission only the authorization log and its member's recovery wraps (§7.9), admits itself under 5.6's signers, passes §7.9's recovery anchor in 5.6's order (genesis), then joins its groups (above 16 leaves, once one leaf is online to write the current GroupInfo) and revokes the lost devices, rotating their groups (§10.8). `ur keychain recovery-rotate` signs a `RecoveryRebind` (§7.9), countersigned where §7.9's presence row asks (owner decision 189): the old code then admits nothing and gets no new wrap, and if §7.9's cascade voids the rebind, admits only through the recovery window and gets none until a signer outside P signs its restored binding again (5.6); it opens at once what was wrapped to it before, whatever the window or a veto, and reads the current generation until the next rotation, which `--compromise` makes a remove rotation with a path epoch at once (§10.8). A device a restored binding admits anchors on a config ReaderWrap (5.6's genesis), whose RK_g opens only the config group's sealed GroupInfo to it: it self-joins that group if entitled, KF2 adds it to its other groups once it uploads KeyPackages, and a group whose leaves are all in P opens to it only through that binding's surviving wraps; it then offers `recovery-rotate`, whose rebind gives its member a current binding again (§7.9's after).
+- **Backup.** OS-keystore wraps are device-bound, so a backup restores only with the pass (U) or a network's code (its R_n); new hardware keeps the `sidecar_id` only via `--replace` (`ur login --replace`, or `ur connect --token <key> --replace`; 5.6), which binds generation n+1 on the new client and removes the old client. No re-seal reaches a backup sealed before it, whose `keychain.wrap` the code it was sealed to still opens, and with it all of `keychain.ur` (the client jwt, ClientKey seed, identity and agent keys, ReaderKeys, a Delegation's reader key, unlanded statements and §10's key cache) and, by keys derived from R_n, `approvals/`, `runs/`, `restore/` and component state. So each device whose backups may hold a sealing to a code retired for compromise, or to a binding §7.9's cascade voids (the span its `recovery_rebind` names, 5.6), is revoked for compromise and enrolled anew, never moved by `--replace`, which keeps its identity key (§7.9, §10.8); for a void, each device that may revoke it offers that revocation from a since_n at the voided binding's entry, since no keychain was sealed to that binding earlier. For a compromise rebind landing at position r, `recovery-rotate --compromise` lists each device of the member live while the retired binding was current, raises `recovery_rebind` naming that span on its own device too, and offers each a compromise revocation, since_n defaulting to §7.9's loss-time proposal, clamped to r + 1 for the rebind's signer and for any device whose closure would reach that signer, so the rebind stands; a person who believes a clone acted may move it earlier, and the plan then shows the rebind voiding and who must sign it again. The rebind's signer goes last: it enrolls a replacement, which revokes it from a since_n after that admission, so where no signer outside exists, what a clone signed before that position stands (owner decision 212).
 - **Store states (D-CORE-15).** The OS key stores and the sdk's `SidecarKeyStore` (§18.5) answer reads with one of four statuses and writes with Ok, Locked or Failed:
 
 ```text
@@ -800,9 +938,9 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 
 **D-CORE-5 (proposed).** Durable identity is the `sidecar_id` and identity key, admitted by a config-repo `SidecarAdmit` and bound to each client generation, its id and key, by a never-reaped, dual-signed binding. *Why:* clients are reaped and re-parented; operator attestation could add readers.
 
-**D-CORE-6 (proposed).** The identity key signs every statement; agent subkeys sign only sealed provenance. *Why:* domain separation; survival across client generations; no agent id on the server (§11.5).
+**D-CORE-6 (proposed).** The identity key signs every statement; agent subkeys sign only sealed provenance, each under an `AgentCert` of at most 30 days that the identity key signs, ended by a local `AgentRevoke` and by `not_after` (5.5; owner decision 285). *Why:* domain separation; survival across client generations; no agent id on the server (§11.5).
 
-**D-CORE-7 (proposed).** Enrollment uses only one-time or scoped credentials, never a network credential or `urn_` key; the daemon declares no provider egress by default and fails closed without the admin-refused mark. *Why:* AUTHZ1, D-TEAM-6, §20.8.
+**D-CORE-7 (proposed).** Enrollment uses only one-time or scoped credentials, never a network credential or `urn_` key; the daemon declares no provider egress by default and fails closed without the admin-refused mark, `Pair` requiring both the `strict_exp` and the `admin_refused` claim of a token it did not mint (owner decision 291). *Why:* AUTHZ1, D-TEAM-6, §20.8.
 
 **D-CORE-8 (proposed).** The core reimplements the sdk refresh schedule, and a refused refresh ends the client generation, not the sidecar; only a verified `SidecarRevoke` revokes. *Why:* connect has no refresh, sdk is not importable (§4.6), and a lost client is no revocation.
 
@@ -814,7 +952,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 
 **D-CORE-12 (proposed).** macOS wraps the unlock key in the data protection keychain via purego, from a bundled `ur`. *Why:* §4 forbids cgo; a bare CLI cannot use access groups; TN3137 puts the file-based keychain "on the road to deprecation" (https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
 
-**D-CORE-13 (proposed).** Members' devices alarm as 5.6 states and sign `OwnerConfirm` only through `ur approve` on `/dev/tty` or the app after the safety-number check, never MCP. *Why:* owner decision 126; no rogue admin or stolen recovery code adds a reader, and no stolen device rebinds its member's code, unseen.
+**D-CORE-13 (proposed).** Members' devices alarm as 5.6 states and sign `OwnerConfirm` only through `ur approve` on `/dev/tty` or the app after the safety-number check (5.6's safety row; owner decision 281), never MCP. *Why:* owner decision 126; no rogue admin or stolen recovery code adds a reader, and no stolen device rebinds its member's code, unseen.
 
 **D-CORE-14 (proposed).** Local roots are per network under one instance unlock key. *Why:* owner decision 23's shared unlock must not let one network's recovery code open another's keys.
 
@@ -822,7 +960,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 
 **D-CORE-16 (proposed).** The index cache is per-network sealed local state (5.9) on every host: the sealed evs records fetched by sync position, each checked against its entry version's `content_sha256`, plus derived data under the local `search` key, which includes the version table that searches mask their candidates against, never a query, hit or cursor. It deletes at once what an erasure replaces, with its derived data, local-layer and journaled entries and vocabulary words, what a newer ref version drops (a dropped bucket is kept only until the cached all covers its roll-up), and every file of a repo the sidecar stops reading or whose index is turned off. *Why:* an index is a representation of its documents, which D-EVS-26 requires erasure to destroy, every decrypted copy included (§11.12); per-network roots keep networks unlinked (D-CORE-14).
 
-**D-CORE-17 (proposed).** A daemon designated for search answers remote searches (§11.14) within its own budget (5.4's `Remote*` settings): 4 at once beside the 4 local searches and 16 queued for at most 1 s, 30 s of CPU a minute, 2 s and 1,000 verifications a page, 64 cursors, and per-requester rates. It keeps all of every repo it reads within a 16 GiB cache, and persists no query, hit, snippet, cursor or result count, only the owner-bound served record, for 30 days (5.9). *Why:* owner decision 175's phones must not starve local agents' searches (§16.10's targets), I-13 bars queries from every log, and an owner keeps D-MCP-18's view of shared reads without an evs write at search time.
+**D-CORE-17 (proposed).** A daemon designated for search answers remote searches (§11.14) within its own budget (5.4's `Remote*` settings): 4 at once beside the 4 local searches and 16 queued for at most 1 s, 30 s of CPU a minute, 2 s and 1,000 verifications a page, 64 cursors, and per-requester rates. It keeps all of every repo it reads within a 16 GiB cache, and persists no query, hit, snippet, cursor or result count, only the owner-bound served record, one row per requester, repo and UTC day with its count and its first and last times, for 30 days and at most `Search.ServedRecordCount` rows (5.9; owner decision 294). *Why:* owner decision 175's phones must not starve local agents' searches (§16.10's targets), I-13 bars queries from every log, and an owner keeps D-MCP-18's view of shared reads without an evs write at search time.
 
 **D-CORE-18 (proposed).** The harness config's `claims` (auto, prompt, off), set per member and per project, defaults to auto in team networks, unless `ServiceSettings.directory.runs` sets the team's default (§7.9), and to off in personal ones. A committed `.ur` may set it and the `project` label its runs announce: a narrower value applies at once, a wider one after one confirmation on /dev/tty or in an app, never through MCP. The value is fixed for each session with its instructions. *Why:* owner decision 170; a committed file must not widen what a member shares.
 
@@ -850,15 +988,18 @@ None: PLAN.md:14 and :59's git identity hold, and D-CORE-1 reads "encryption key
 
 ### 5.15 Interfaces
 
-- **Provides:** the 5.4 API, its alarms, state reasons and `Status()` with `witnessed_at` and open UNVERIFIED pins; its every-leg root types and `SidecarApi`; the identity key, ReaderKey and binding; the client side of admission, owner consent, pairing and recovery; the per-network keychain and its store states; 5.8's local JSON-RPC, `git` mode, `ur directory` methods and `.ur` rules, with `claims` and `project` (D-CORE-18); 5.9's index cache and search state, the served record included, and 5.4's `Search` and `Directory` settings; the search engine's API (5.4); remote serving within D-CORE-17's budget; local deletion of dropped content (D-CORE-19); a member's revocation of its own other devices, through 5.4's `Devices`, `PreviewDeviceRevoke` and `RevokeDevice` under 5.6's rules and `REVOKE_` codes (D-CORE-20), with `ur devices` and `ur devices revoke`.
+- **Provides:** the 5.4 API, its alarms, state reasons and `Status()` with `witnessed_at`, open UNVERIFIED pins and the components' status lines; `Authorize` with its effect seam (`SidecarEffect`, `SidecarOutcome`, `RegisterEffectLookup`); 5.8's `events`, `mail.check_send`, `mail.send_result` and `mail.send` control methods and its `git-hook` mode; its every-leg root types and `SidecarApi`; the identity key, ReaderKey and binding; the client side of admission, owner consent, pairing and recovery; the per-network keychain and its store states; 5.8's local JSON-RPC, `git` mode, `ur directory` methods and `.ur` rules, with `claims` and `project` (D-CORE-18); 5.9's index cache and search state, the served record included, and 5.4's `Search` and `Directory` settings; the search engine's API (5.4); remote serving within D-CORE-17's budget; local deletion of dropped content (D-CORE-19); a member's revocation of its own other devices, through 5.4's `Devices`, `PreviewDeviceRevoke` and `RevokeDevice` under 5.6's rules and `REVOKE_` codes (D-CORE-20), with `ur devices` and `ur devices revoke`.
 - **Consumes:** §6 (id 21842, typed `Signed` and §6.11's `SignedType`, both in `protocol/bridge`, `Hello` and its feature bit 0, `core` push, `SidecarProtocolSettings`, HeadCheck's `witnessed_at` and alarms, §6.11's SEARCH pair); §7 (enrollment, auth keys and their client-only bundle, Delegations, `ur-cli`, token exchange, P0 with its route allowlist and DPoP proof, D-TEAM-14, config records, the leaves rule); §8 (`autogroup:sidecar`, `sidecar:<id>`, consent); §10 (ReaderWraps, recovery wraps, external commits, the config and directory groups' leaves and wraps); §11.7's executed drops and drop states; §11.11; §11.14's search index (files, their entry versions' plaintext hashes, manifests, ERASE and CLOSURE hints, index alarms) and remote rules; §16 (`ur approve`, D-MCP-11's ledger, presence keys, the `Mcp`, `Ingest` and `Record` settings, 16.10's search limits, sync policy and taint rule, 16.11's directory, its signing rules and `claims`); §18 (`TokenSource`, `SidecarKeyStore`, remote mode, `sidecar_http`, 18.4's search modes, caps and working sets, 18.8's search store); §19.10; §20.8; §4 (purego, the bundle, §4.4's build tags).
-- **Subprotocol messages:** `core` push (server → sidecar: a revocation hint, verified against the config (5.6); forced resync; §6).
+- **Subprotocol messages:** `core` push (server → sidecar: a revocation hint, verified against the config (5.6); forced resync; §6). Its body is protocol/core.proto's `CoreHint{kind = 1, sidecar_id = 2, min_secure_version = 3}`, with `CoreHintKind` REVOCATION 1, RESYNC 2, WAKE 3, MIN_SECURE 4 and GATES 5 after UNSPECIFIED 0: `PushHint.kind` is 0x1A01 and `PushHint.hint` the marshalled message, under 256 B. `sidecar_id` is this client's own, set only on REVOCATION, and `min_secure_version` only on MIN_SECURE; an unknown kind or a dropped body is a bare resync, and no field carries authority (5.6).
 - **API routes:** existing `POST /network/auth-client` (also the pairing child) and `POST /network/remove-client` (OwnClient), `GET /auth/refresh` (Client), auth-client and refresh taking a `strict_exp` bearer's DPoP proof (§7.4); refresh gains one error, `restore_required` (5.6, §19.10). New, classified by §7:
-  - `POST /sidecar/bind` (Client; also re-registration after a restore);
-  - `GET /sidecar/identity/<sidecar_id>` (Client, for the caller's own network or one with an active §8.11 share): `identity_public_key`, `identity_alg`, `status` and the current binding, never `user_id`.
+  - `POST /sidecar/bind` (Client; also re-registration after a restore, which stays gated on the projection admitting the identity key): the request is JSON `{"binding": "<base64 of the wrapper>"}`, 5.4's `SignedSidecarIdentityBinding`, and the reply 200 `{"generation": n}` with the re-minted `by_client_jwt` (5.6). A refusal uses the server's existing coded body, `{"error": "<text>", "code": "<code>"}`: 403 `sidecar_revoked`; 400 `binding_invalid` for a bad signature, a malformed body, or a bearer token whose client differs from the binding's `client_id` or whose network differs from its `network_id`; 409 `generation_conflict` for a later binding that is not the newest plus one or does not carry the row's `identity_public_key`; 409 `client_bound` for a second binding of a client, whatever its `sidecar_id`, and for a binding whose `client_public_key` differs from a non-NULL `network_client_owner.client_public_key`. A retry whose wrapper bytes equal the stored row's answers 200 with that generation and writes nothing, which also covers re-registration after a restore; any other bytes for a bound client answer `client_bound`.
+  - `GET /sidecar/identity/<sidecar_id>` (Client, for the caller's own network or one with an active §8.11 share): `identity_public_key`, `identity_alg`, `status` and the current binding, never `user_id`, and `bindings`: that sidecar's stored wrappers in base64, newest first, 64 a page, `?before_generation=<g>` for the next.
+  - `POST /sidecar/identity/clients` (internal, under §19.4's internal-route credential, never a client's token): `{sidecar_ids}`, at most 1,000, answering each id's current `client_id` and `generation` and omitting unknown or revoked ids; it logs no per-target record. Hosts that keep Postgres off §6.8's hint path, `server/cli/gkm` and mxedge's router among them, call it behind the `Push.HintSidecars` seam, each process keeping a map of at most 65,536 entries with a 5-minute TTL, a miss batching one call and a failed call returning an error the caller counts and passes over, since §6.8's hourly resync covers a lost hint; taskworker, which may read Postgres, resolves from `sidecar_identity_binding`.
+  - `GET /sidecar/sync/core` (Client): §6.8's `core` state, JSON `{"version", "min_secure_version", "gates", "revoked"}`, always 200; `revoked` is a candidate the client verifies against the config (5.6), and `min_secure_version` an unsigned floor a device applies only as §6.4's live denial, never persisting it (owner decision 295).
+  - `GET /sidecar/identity?client_id=<id>` (Client, under the same caller rule): `{sidecar_id, identity_public_key, identity_alg, status, binding}` for that client's binding of any generation, 404 if none. Verifiers check both signatures and the identity key against their pin, so api stays untrusted. Its callers are a replaying reader, only for a commit whose committer differs from `<client_id>@ur.invalid` taken from that push's own `EvsPush.client_id`, under the signature it already verifies (an equal committer passes with no lookup), which requires the binding's `sidecar_id` to equal the push's `signer_sidecar_id`, `SidecarCommitter` refusing what stays unresolved; §8's selector resolution; and §17's compile, for a subject's client ids. Never the packet path.
 - **Tables:** owned by api; migration ≥926; never reaped, but deleted with their network.
   - `sidecar_identity(sidecar_id, network_id, identity_public_key, identity_alg, status, create_time, revoke_time)`;
-  - `sidecar_identity_binding(sidecar_id, generation, client_id, client_public_key, signatures, create_time)`, append-only.
+  - `sidecar_identity_binding(sidecar_id, generation, client_id, client_public_key, signatures, create_time)`, append-only, `client_id` unique across every sidecar and `signatures` the wrapper's bytes verbatim (5.4).
 - **Services and config:** no new server service; 5.8's client units, the `.ur` file and the macOS bundle.
 - **Assumptions about other sections:** §7.9 and §8.8 define the signers, `self_admit`, the recovery window and its start p, how a restored binding's scoped admission enters it (owner decision 149), its veto, a late veto's precedence and `recovery_unseen`, the rebind alarm, the leaves rule of the config and directory groups (owner decisions 144, 182), `RecoveryBind`, `OwnerConfirm`, `SidecarRevoke`'s reasons and compromise cascade from `since_n`, the voids at which 5.6 alarms and 5.9 re-seals, `no_genesis` and the recovery `anchor` with its `restored` order, by which a device a restored binding admitted, which no RecoveryWrap reaches until that binding is signed again, anchors on the late config ReaderWrap a config writer gives it (KF2) or a later rotation stages (§10.5) before it uploads a KeyPackage or self-joins; §7.4 the DPoP rule and stage 2's wait for the app and extension releases; §10 makes member devices the leaves (in the config and directory groups the first 1,000 by §7.9's rank, the rest wrapped), agents wrapped readers and the signing leaf those groups' committer (owner decisions 114, 128, 182), and parks unconsented devices; §6.6 and §16 define `SidecarProtocolSettings` and the `Mcp`, `Ingest` and `Record` settings, and §16.6 the own-resource filings 5.8 admits from any mode and TS1's refusal (5.4); §7.9's retain row and fold cadence bound the log 5.9 retains, and §18.4 applies them per host; §6.4 and §7.9's anchor define `head_alarm`'s alarms; §18.5 relays 5.4's alarms, `recovery_rebind` (at a void too) and `head_alarm` included, offers admins the veto of a restored binding's admission, and maps its state reasons; §18.10's leg links only 5.4's every-leg files; §11.11 serves the `git` mode; §11.14's entry versions carry each index file's plaintext SHA-256 and a/m marks each roll-up, so 5.9 checks files and keeps a dropped bucket until all covers it; §16.10 binds a `ur` caller to its run by process ancestry (§16.7); §11.7 reports a held drop as done (owner decision 184) and states the reader checks whose failure 5.4 reports as `invalid`; §18.4 keeps its policy overrides, remote mode and notice answers in 5.9's search state; §18.5 binds 5.6's device revocation for apps, its presence check by the host's `SidecarPresenceSigner`, a remote-mode app's over 5.8's two calls, and lets other AdminSet devices cosign a revocation's AuthorityProposal through `Decide`; §16.8's membership entries carry the revocation's approval evidence; §7.10's `stale` row has the member's consented device, at its `OwnerConfirm` of an admin-admitted page Worker or its answer to that admission's alarm, revoke the member's stale Workers its groups show (D-TEAM-29); §7.9's `scoped` row lets the member's consented device revoke its own untagged devices whatever `self_admit` says, its `counted` and `authority` rows count an AdminSet member's existing device as one of the k, never the target, and its cascade adds a confirmation's subject to P only if that confirmation lifted the subject's park or the subject's consent rests on it alone; §8.8's `Suspend` signer row lets the owner of an AdminSet member's device suspend it alone (5.6's sign); §7.9's presence row and §6.9's `Signed.webauthn` define the countersignature 5.6's acts carry, §16.6's countersign row its check with UV, and §18.5's `SignWithPresence` returns its evidence (owner decisions 185, 187).
 
