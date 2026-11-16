@@ -20,7 +20,7 @@
 //     then reaping its admission (§7.10), so the mailbox's and the config's key holders shrink there and the vault's do
 //     not, a deposit holding no key. The lease's own reap, 30-36 min after the last poll, is FS-37's.
 //
-// FS-85's acl wakes, a clause RunClause runs beside RECORD-M8-01's registered wakes case (fs100_wake_test.go, which
+// FS-85's acl wakes, a T2 clause RunClause runs beside RECORD-M8-01's registered wakes case (fs100_wake_test.go, which
 // holds a woken phone's reads and the requester's receipt on fixtures of the state): which phones a request's notice
 // wakes is which phones lease its target's notice prefix, and each phone computes that from its own state now
 // (§16.11's notify row, directory_notice.go's approverPrefixes), here the admission world's real one through
@@ -201,7 +201,7 @@ func (self *fs19M8World) enroll(ctx context.Context, net *Net, admission *sideca
 	return self.expectBurner(admission, sidecar.AclEvsDeposit)
 }
 
-// An EvsShare of the mailbox to the burner, signed by signer, ending at expires, 0 for none.
+// An EvsShare of the mailbox to the burner, signed by signer, ending at expires; the zero time ends it never.
 func (self *fs19M8World) mailboxShare(net *sidecartest.AdmissionNet, signer *sidecartest.AdmissionDevice, expires time.Time) []byte {
 	share := &protocol.EvsShare{Header: net.Header(), RepoId: self.mailboxId.Bytes(), Subject: self.burner.Bytes()}
 	if !expires.IsZero() {
@@ -210,10 +210,10 @@ func (self *fs19M8World) mailboxShare(net *sidecartest.AdmissionNet, signer *sid
 	return net.Sign(signer, bridge.SignedType_SIGNED_EVS_SHARE, share)
 }
 
-// Fails unless, at every reader, the burner holds the ceiling and mailbox on the mailbox, and nothing else: the
-// config's read by a wrap, the vault's deposit, nothing on the general, record and secret repos, the mailbox's key by a
-// wrap exactly when it reads it and never by a leaf; it is no config writer, consented device or approver; and the
-// exchange issues it exactly those scopes at both audiences.
+// Fails unless, at every reader, the burner holds §8.6's ceiling and, on the mailbox, exactly the rights mailbox names,
+// and nothing else: the config's read by a wrap, the vault's deposit, nothing on the general, record and secret repos,
+// and the mailbox's key by a wrap exactly when it reads it, never by a leaf; it is no config writer, consented device
+// or approver; and the exchange issues it exactly those scopes at both audiences.
 func (self *fs19M8World) expectBurner(net *sidecartest.AdmissionNet, mailbox sidecar.AclEvsRights) error {
 	if err := fs19M4ExpectRights(net, self.burner, map[sidecar.Id]sidecar.AclEvsRights{
 		self.configId:  sidecar.AclEvsRead,
