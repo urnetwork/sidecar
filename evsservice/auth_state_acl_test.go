@@ -3,7 +3,8 @@
 // case, 403 with no clock moving), a grant's expiry closes it at its time and a projection that drops it at the next
 // state (FS-3's inputs to step 7's recheck); cold state answers 503 and starts a load; a token's sidecar is served
 // while its network's state admits it, whichever client the exchange bound it to (QD-717), and refused once revoked,
-// when another network admitted it and when none did; rev/ and repo facts answer as the state and their seam do. The
+// when another network admitted it and when none did; rev/ and repo facts answer as the state and their seam do; and a
+// repo whose rows hold an unrestored RepoDelete is open to its standing admin's DELETE and restore alone (QD-880). The
 // gate cache's own event and poll timing is acl_gate_scope_test.go's, on TEAM's real log.
 
 package evsservice
@@ -17,6 +18,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/connect"
 
@@ -569,5 +572,199 @@ func TestAclEvsAuthStateReconcilesARepoDeleteFromItsRow(t *testing.T) {
 			len(probe.groupCalls) != 0 {
 			t.Errorf("the start: %v %v %s, gkm %v", outcome, err, state, probe.groupCalls)
 		}
+	}
+}
+
+// The network's state for QD-880's cases: a general repo admin administers, writer writes and depositor deposits into
+// by RepoGrant, with the deletion row given, nil for none.
+func (self *aclAuthFixture) installGrantedRepo(admin sidecar.Id, writer sidecar.Id, depositor sidecar.Id, deletion *protocol.AclRepoDeletionRow) {
+	self.t.Helper()
+	rows := &protocol.AclRows{HasDocument: true, Repos: []*protocol.AclRepo{{
+		RepoId: self.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+		Admins: []*protocol.AclRepoAdminRow{{SidecarId: admin.Bytes(), Signer: admin.Bytes(), At: 2}},
+		Grants: []*protocol.AclRepoGrantRow{
+			{Subject: writer.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER, Signer: admin.Bytes(), At: 3},
+			{Subject: depositor.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_DEPOSIT, Signer: admin.Bytes(), At: 4},
+		},
+		Deletion: deletion,
+	}}}
+	if err := self.states.Install(sidecar.Id(self.networkId), rows, self.view); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// The repo scopes the exchange's table gives the sidecar in the installed state, each of §7.8's roles judged alone
+// against EvsAccess as AclExchangeScopes judges it (acl_exchange_test.go runs the table itself on TEAM's log).
+func (self *aclAuthFixture) mintedScopes(sidecarId sidecar.Id) []string {
+	self.t.Helper()
+	snapshot, status := self.states.State(sidecar.Id(self.networkId))
+	if status != sidecar.AclGateLoaded {
+		self.t.Fatalf("no state: %d", status)
+	}
+	rights := snapshot.Acl.EvsAccess(sidecar.AclSidecarSubject(sidecarId), self.repoId, sidecar.AclTokenAudienceEvs, self.clock.Now()).Rights
+	scopes := []string{}
+	for _, role := range []struct {
+		name  string
+		right sidecar.AclEvsRights
+	}{{"deposit", sidecar.AclEvsDeposit}, {"r", sidecar.AclEvsRead}, {"rw", sidecar.AclEvsWrite}, {"admin", sidecar.AclEvsAdmin}} {
+		if rights.Has(role.right) {
+			scopes = append(scopes, repoScope(self.repoId, role.name))
+		}
+	}
+	return scopes
+}
+
+// QD-880 through evs's guard under the real state, the rows holding the RepoDelete while repo/ is still active, as
+// between a device's RepoDelete and its DELETE: the repo's standing admin is minted admin alone, and that token
+// passes DELETE, with now and without, and no route that takes r, rw or deposit, each refused 403 SCOPE before it
+// runs, as are the tokens it held before for r, rw and deposit; a writer and a depositor by RepoGrant are minted
+// nothing, their live tokens are refused, and a token naming admin for one of them does not pass DELETE. Once the
+// rows hold the RepoRestore the same admin's restore answers 200 and every right is back.
+func TestAclEvsAuthStateHoldsADeletedReposAdminToDeleteAndRestore(t *testing.T) {
+	for _, now := range []bool{false, true} {
+		// the right sets of the read routes, the lease and the push
+		readProbe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe-read", evsReadRights, false, false, false)
+		readProbe.route.Name = "probe read"
+		writeProbe := newProbeRoute(http.MethodPost, "/evs/v1/repos/{repo_id}/probe-write", sidecar.AclEvsWrite|sidecar.AclEvsAdmin, true, false, false)
+		writeProbe.route.Name = "probe write"
+		pushProbe := newProbeRoute(http.MethodPost, "/evs/v1/repos/{repo_id}/probe-push", sidecar.AclEvsWrite|sidecar.AclEvsDeposit|sidecar.AclEvsAdmin, true, false, false)
+		pushProbe.route.Name = "probe push"
+		fixture := newAclAuthFixture(t, readProbe.route, writeProbe.route, pushProbe.route)
+		repoId, admin := fixture.repoId, fixture.device
+		writer := fixture.view.AddDevice(fixture.view.AddMember(bridge.MemberRole_MEMBER_ROLE_MEMBER))
+		depositor := fixture.view.AddDevice(fixture.view.AddMember(bridge.MemberRole_MEMBER_ROLE_MEMBER))
+		repoPath := "/evs/v1/repos/" + sidecar.EvsKeyId(repoId)
+		role := func(name string) string { return repoScope(repoId, name) }
+		probes := []struct {
+			name   string
+			method string
+			path   string
+			probe  *probeRoute
+		}{
+			{name: "read", method: http.MethodGet, path: repoPath + "/probe-read", probe: readProbe},
+			{name: "lease", method: http.MethodPost, path: repoPath + "/probe-write", probe: writeProbe},
+			{name: "push", method: http.MethodPost, path: repoPath + "/probe-push", probe: pushProbe},
+		}
+
+		fixture.installGrantedRepo(admin, writer, depositor, nil)
+		if status := fixture.putRepo(repoId, admin); status != http.StatusOK {
+			t.Fatalf("now %t: create: %d", now, status)
+		}
+		fixture.formGroup(repoId, testId("deleted repo group"), true)
+		if status := fixture.lifecycle(http.MethodPost, repoId, "/activate", admin); status != http.StatusOK {
+			t.Fatalf("now %t: activate: %d", now, status)
+		}
+		live := func(name string) {
+			t.Helper()
+			if scopes := fixture.mintedScopes(admin); !slices.Equal(scopes, []string{role("r"), role("rw"), role("admin")}) {
+				t.Errorf("now %t, %s: the admin is minted %v", now, name, scopes)
+			}
+			if scopes := fixture.mintedScopes(writer); !slices.Equal(scopes, []string{role("r"), role("rw")}) {
+				t.Errorf("now %t, %s: the writer is minted %v", now, name, scopes)
+			}
+			if scopes := fixture.mintedScopes(depositor); !slices.Equal(scopes, []string{role("deposit")}) {
+				t.Errorf("now %t, %s: the depositor is minted %v", now, name, scopes)
+			}
+			for _, c := range probes {
+				if code := fixture.serve(c.method, c.path, fixture.token(admin, role("admin")), nil).Code; code != http.StatusOK {
+					t.Errorf("now %t, %s: the admin's %s: %d", now, name, c.name, code)
+				}
+			}
+			if code := fixture.serve(http.MethodGet, repoPath+"/refs", fixture.token(admin, role("admin")), nil).Code; code != http.StatusOK {
+				t.Errorf("now %t, %s: the admin's refs: %d", now, name, code)
+			}
+			if code := fixture.serve(http.MethodGet, repoPath, fixture.token(admin, role("r")), nil).Code; code != http.StatusOK {
+				t.Errorf("now %t, %s: the admin's repo/: %d", now, name, code)
+			}
+			if code := fixture.serve(http.MethodPost, repoPath+"/probe-write", fixture.token(writer, role("rw")), nil).Code; code != http.StatusOK {
+				t.Errorf("now %t, %s: the writer's lease: %d", now, name, code)
+			}
+			if code := fixture.serve(http.MethodPost, repoPath+"/probe-push", fixture.token(depositor, role("deposit")), nil).Code; code != http.StatusOK {
+				t.Errorf("now %t, %s: the depositor's push: %d", now, name, code)
+			}
+		}
+		live("live")
+
+		deletionId := testId("acl deletion")
+		deletion := &protocol.AclRepoDeletionRow{
+			DeletionId: deletionId.Bytes(), Now: now, DeletedAt: 9, DeletedTimeMs: fixture.clock.Now().Add(-time.Minute).UnixMilli(), Signer: admin.Bytes(),
+		}
+		fixture.installGrantedRepo(admin, writer, depositor, deletion)
+		if scopes := fixture.mintedScopes(admin); !slices.Equal(scopes, []string{role("admin")}) {
+			t.Fatalf("now %t: the deleted repo's admin is minted %v", now, scopes)
+		}
+		if scopes := append(fixture.mintedScopes(writer), fixture.mintedScopes(depositor)...); len(scopes) != 0 {
+			t.Fatalf("now %t: a deleted repo's writer and depositor are minted %v", now, scopes)
+		}
+		refused := func(name string) {
+			t.Helper()
+			calls := readProbe.calls + writeProbe.calls + pushProbe.calls
+			for _, c := range probes {
+				// the minted token, and the same sidecar's tokens from before the RepoDelete
+				for _, scopes := range [][]string{{role("admin")}, {role("r"), role("rw"), role("admin")}, {role("rw")}, {role("r")}, {role("deposit")}} {
+					recorder := fixture.serve(c.method, c.path, fixture.token(admin, scopes...), nil)
+					if recorder.Code != http.StatusForbidden || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE {
+						t.Errorf("now %t, %s: the admin's %s with %v: %d", now, name, c.name, scopes, recorder.Code)
+					}
+				}
+			}
+			for _, c := range []struct {
+				name   string
+				method string
+				path   string
+				token  string
+			}{
+				{name: "the admin's refs", method: http.MethodGet, path: repoPath + "/refs", token: fixture.token(admin, role("admin"))},
+				{name: "the admin's log", method: http.MethodGet, path: repoPath + "/log", token: fixture.token(admin, role("admin"))},
+				{name: "the admin's repo/", method: http.MethodGet, path: repoPath, token: fixture.token(admin, role("admin"))},
+				{name: "the writer's read", method: http.MethodGet, path: repoPath + "/probe-read", token: fixture.token(writer, role("rw"))},
+				{name: "the writer's lease", method: http.MethodPost, path: repoPath + "/probe-write", token: fixture.token(writer, role("rw"))},
+				{name: "the depositor's push", method: http.MethodPost, path: repoPath + "/probe-push", token: fixture.token(depositor, role("deposit"))},
+				{name: "the writer's DELETE", method: http.MethodDelete, path: repoPath, token: fixture.token(writer, role("admin"))},
+				{name: "the writer's DELETE with now", method: http.MethodDelete, path: repoPath + "?now=1", token: fixture.token(writer, role("admin"))},
+				{name: "the depositor's restore", method: http.MethodPost, path: repoPath + "/restore", token: fixture.token(depositor, role("admin"))},
+			} {
+				recorder := fixture.serve(c.method, c.path, c.token, nil)
+				if recorder.Code != http.StatusForbidden || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE {
+					t.Errorf("now %t, %s: %s: %d", now, name, c.name, recorder.Code)
+				}
+			}
+			if after := readProbe.calls + writeProbe.calls + pushProbe.calls; after != calls {
+				t.Errorf("now %t, %s: %d refused requests ran their routes", now, name, after-calls)
+			}
+		}
+		refused("before DELETE")
+		if state := fixture.repoObject(repoId).GetState(); state != protocol.EvsRepoState_EVS_REPO_ACTIVE {
+			t.Fatalf("now %t: repo/ %s before DELETE", now, state)
+		}
+
+		suffix, deletedState := "", protocol.EvsRepoState_EVS_REPO_DELETED
+		if now {
+			suffix, deletedState = "?now=1", protocol.EvsRepoState_EVS_REPO_SHREDDING
+		}
+		if code := fixture.serve(http.MethodDelete, repoPath+suffix, fixture.token(admin, fixture.mintedScopes(admin)...), nil).Code; code != http.StatusOK {
+			t.Fatalf("now %t: the admin's DELETE: %d", now, code)
+		}
+		if object := fixture.repoObject(repoId); object.GetState() != deletedState || !bytes.Equal(object.GetDeletionId(), deletionId.Bytes()) {
+			t.Fatalf("now %t: repo/ after DELETE: %v", now, object)
+		}
+		refused("after DELETE")
+		if now {
+			continue
+		}
+
+		// the admin's restore before the rows hold a RepoRestore passes the guard and finds no statement
+		requireRefusal(t, fixture.serve(http.MethodPost, repoPath+"/restore", fixture.token(admin, role("admin")), nil),
+			http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING)
+		restored := proto.Clone(deletion).(*protocol.AclRepoDeletionRow)
+		restored.RestoredAt = 10
+		fixture.installGrantedRepo(admin, writer, depositor, restored)
+		if code := fixture.serve(http.MethodPost, repoPath+"/restore", fixture.token(admin, role("admin")), nil).Code; code != http.StatusOK {
+			t.Fatalf("the admin's restore: %d", code)
+		}
+		if state := fixture.repoObject(repoId).GetState(); state != protocol.EvsRepoState_EVS_REPO_ACTIVE {
+			t.Fatalf("repo/ %s after the restore", state)
+		}
+		live("restored")
 	}
 }

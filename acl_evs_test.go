@@ -1,6 +1,7 @@
 // §8.12's evs rights on hand-made rows: the config by audience, the directory, owner-bound repos, kind
 // defaults that * never reaches, deposit granting no read, §8.6's ephemeral ceiling, the access log, and
-// the reader and writer sets. Pure, on every leg.
+// the reader and writer sets, and a deleted repo, which gives admin alone to its standing admins (QD-880). Pure, on
+// every leg.
 
 package sidecar
 
@@ -507,8 +508,8 @@ func TestAclAuditBlock(t *testing.T) {
 	}
 }
 
-// What EvsAccess refuses outright: a repo the rows lack, a deleted one, a subject that is no sidecar, and a
-// hard denied sidecar.
+// What EvsAccess refuses outright: a repo the rows lack, a deleted one to a sidecar that is no admin of it, a
+// subject that is no sidecar, and a hard denied sidecar.
 func TestAclEvsAccessRefusals(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -542,6 +543,228 @@ func TestAclEvsAccessRefusals(t *testing.T) {
 	}
 	if rights := aclTestRights(state, device, restoredId, AclTokenAudienceEvs); rights != AclEvsRead {
 		t.Errorf("restored repo: %b", rights)
+	}
+}
+
+// One world of QD-880's cases: every kind that takes a RepoDelete, each with the sidecars §8.8 counts as its
+// admins and the ones a rule, a grant, a share or a kind default gives rights on it while it lives.
+type aclDeletedRepoWorld struct {
+	fixture *aclTestFixture
+	rows    []*protocol.AclRepo
+	// general
+	generalId, generalAdmin, generalSecondAdmin, generalRemovedAdmin, generalReadOnlyAdmin, generalSuspendedAdmin Id
+	generalEphemeralAdmin, generalWriter, generalRuleAdmin, generalMember                                         Id
+	// directory
+	directoryId, directoryCreator, directoryWriter, directoryUnconsentedWriter, directoryMember Id
+	// vault
+	vaultId, vaultAdmin, vaultOwnerDevice, vaultStrangerAdmin, vaultFriend Id
+	// team record and mailcfg
+	teamRecordId, teamRecordAdmin, teamRecordReader Id
+	mailcfgId, mailcfgAdmin, mailcfgWriter          Id
+}
+
+func newAclDeletedRepoWorld() *aclDeletedRepoWorld {
+	fixture := newAclTestFixture()
+	world := &aclDeletedRepoWorld{fixture: fixture}
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	member := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	tagId := fixture.tag(owner)
+	adminRow := func(sidecarId Id) *protocol.AclRepoAdminRow {
+		return &protocol.AclRepoAdminRow{SidecarId: sidecarId.Bytes(), Signer: sidecarId.Bytes(), At: fixture.next()}
+	}
+
+	world.generalAdmin = fixture.device(member)
+	world.generalSecondAdmin = fixture.device(owner)
+	world.generalRemovedAdmin = fixture.device(member)
+	world.generalReadOnlyAdmin = fixture.device(member)
+	fixture.admission(world.generalReadOnlyAdmin).Row.Capabilities = uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY)
+	world.generalSuspendedAdmin = fixture.device(member)
+	fixture.rows.Suspensions = []*protocol.AclSuspension{{Subject: world.generalSuspendedAdmin.Bytes()}}
+	world.generalEphemeralAdmin = fixture.device(member)
+	fixture.admission(world.generalEphemeralAdmin).Ephemeral = true
+	world.generalWriter = fixture.device(member)
+	world.generalRuleAdmin = fixture.agent(owner, tagId)
+	world.generalMember = fixture.device(member)
+	generalId, general := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	world.generalId = generalId
+	removed := adminRow(world.generalRemovedAdmin)
+	removed.RemovedAt = fixture.next()
+	general.Admins = []*protocol.AclRepoAdminRow{
+		adminRow(world.generalAdmin), adminRow(world.generalSecondAdmin), removed, adminRow(world.generalReadOnlyAdmin),
+		adminRow(world.generalSuspendedAdmin), adminRow(world.generalEphemeralAdmin),
+	}
+	general.Grants = []*protocol.AclRepoGrantRow{
+		{Subject: world.generalWriter.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER, Signer: world.generalAdmin.Bytes(), At: fixture.next()},
+	}
+	// a rule naming the repo gives its tag admin while the repo lives, and every member reads through the wildcard
+	fixture.rule([]Id{tagId}, []*protocol.AclTarget{aclRepoTarget(generalId)}, protocol.AclAction_ACL_ACTION_ADMIN)
+	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), []*protocol.AclTarget{aclWildcardRepoTarget()}, protocol.AclAction_ACL_ACTION_READ)
+
+	directoryOwner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	world.directoryCreator = fixture.invitedDevice(directoryOwner)
+	world.directoryWriter = fixture.device(directoryOwner, world.directoryCreator.Bytes())
+	fixture.view.configWriters[world.directoryWriter] = true
+	world.directoryUnconsentedWriter = fixture.device(member, NewId().Bytes())
+	fixture.view.configWriters[world.directoryUnconsentedWriter] = true
+	world.directoryMember = fixture.device(member, NewId().Bytes())
+	directoryId, directory := fixture.repo(protocol.RepoKind_REPO_KIND_DIRECTORY, Id{})
+	world.directoryId = directoryId
+	directory.Admins = []*protocol.AclRepoAdminRow{adminRow(world.directoryCreator)}
+
+	vaultOwner := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	inviter := fixture.member(bridge.MemberRole_MEMBER_ROLE_ADMIN)
+	world.vaultAdmin = fixture.invitedDevice(vaultOwner)
+	world.vaultOwnerDevice = fixture.device(vaultOwner, world.vaultAdmin.Bytes())
+	world.vaultStrangerAdmin = fixture.invitedDevice(inviter)
+	world.vaultFriend = fixture.invitedDevice(inviter)
+	vaultId, vault := fixture.repo(protocol.RepoKind_REPO_KIND_VAULT, vaultOwner)
+	world.vaultId = vaultId
+	vault.ConsentedSidecarIds = [][]byte{world.vaultAdmin.Bytes(), world.vaultOwnerDevice.Bytes()}
+	// an admin row for a device that is not its owner's administers nothing, live or deleted
+	vault.Admins = []*protocol.AclRepoAdminRow{adminRow(world.vaultAdmin), adminRow(world.vaultStrangerAdmin)}
+	vault.Shares = []*protocol.AclRepoShareRow{{Subject: world.vaultFriend.Bytes(), Signer: world.vaultAdmin.Bytes(), At: fixture.next()}}
+
+	world.teamRecordAdmin = fixture.device(member)
+	world.teamRecordReader = fixture.device(owner)
+	teamRecordId, teamRecord := fixture.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
+	world.teamRecordId = teamRecordId
+	teamRecord.Admins = []*protocol.AclRepoAdminRow{adminRow(world.teamRecordAdmin)}
+
+	world.mailcfgAdmin = fixture.device(member)
+	world.mailcfgWriter = fixture.device(member)
+	mailcfgId, mailcfg := fixture.repo(protocol.RepoKind_REPO_KIND_MAILCFG, Id{})
+	world.mailcfgId = mailcfgId
+	mailcfg.Admins = []*protocol.AclRepoAdminRow{adminRow(world.mailcfgAdmin)}
+
+	world.rows = []*protocol.AclRepo{general, directory, vault, teamRecord, mailcfg}
+	return world
+}
+
+// The world's state with every repo's deletion row set to deletion, nil for none.
+func (self *aclDeletedRepoWorld) state(t *testing.T, deletion *protocol.AclRepoDeletionRow) *AclState {
+	t.Helper()
+	for _, row := range self.rows {
+		row.Deletion = deletion
+	}
+	return self.fixture.state(t)
+}
+
+// QD-880: a repo whose newest RepoDelete stands unrestored, with now or without, gives AclEvsAdmin alone to the
+// sidecars §8.8 counts as its admins, at both audiences, and nothing to anyone else, as AclReasonRepoDeleted: a
+// writer by grant, a reader by rule or kind default, a share's subject, an admin by rule, a removed admin, a
+// read_only one, an unconsented config writer in the directory, and an admin row of an owner-bound repo for a device
+// that is not its owner's. A suspended admin is refused as suspended. No one reads or writes it, a RepoRestore
+// brings the live table back, and no one a deleted repo calls admin lacks admin on it live.
+func TestAclEvsAccessDeletedRepoGivesItsStandingAdminsAdminAlone(t *testing.T) {
+	world := newAclDeletedRepoWorld()
+	all := AclEvsRead | AclEvsWrite | AclEvsAdmin
+	cases := []struct {
+		name      string
+		repoId    Id
+		sidecarId Id
+		// its rights while the repo lives
+		live AclEvsRights
+		// whether it keeps admin once the repo is deleted
+		admin bool
+		// why it gets nothing when it is not AclReasonRepoDeleted
+		reason AclReason
+	}{
+		{name: "general admin", repoId: world.generalId, sidecarId: world.generalAdmin, live: all, admin: true},
+		{name: "general second admin", repoId: world.generalId, sidecarId: world.generalSecondAdmin, live: all, admin: true},
+		{name: "general ephemeral admin", repoId: world.generalId, sidecarId: world.generalEphemeralAdmin, live: all, admin: true},
+		{name: "general removed admin", repoId: world.generalId, sidecarId: world.generalRemovedAdmin, live: AclEvsRead},
+		{name: "general read_only admin", repoId: world.generalId, sidecarId: world.generalReadOnlyAdmin, live: AclEvsRead | AclEvsDeposit},
+		{name: "general suspended admin", repoId: world.generalId, sidecarId: world.generalSuspendedAdmin, reason: AclReasonSuspended},
+		{name: "general writer by grant", repoId: world.generalId, sidecarId: world.generalWriter, live: AclEvsRead | AclEvsWrite},
+		{name: "general admin by rule", repoId: world.generalId, sidecarId: world.generalRuleAdmin, live: all},
+		{name: "general reader by rule", repoId: world.generalId, sidecarId: world.generalMember, live: AclEvsRead},
+		{name: "directory creator", repoId: world.directoryId, sidecarId: world.directoryCreator, live: all, admin: true},
+		{name: "directory config writer", repoId: world.directoryId, sidecarId: world.directoryWriter, live: all, admin: true},
+		{name: "directory unconsented config writer", repoId: world.directoryId, sidecarId: world.directoryUnconsentedWriter, live: AclEvsRead | AclEvsWrite},
+		{name: "directory member", repoId: world.directoryId, sidecarId: world.directoryMember, live: AclEvsRead | AclEvsWrite},
+		{name: "vault admin", repoId: world.vaultId, sidecarId: world.vaultAdmin, live: all, admin: true},
+		{name: "vault owner device", repoId: world.vaultId, sidecarId: world.vaultOwnerDevice, live: AclEvsRead | AclEvsWrite},
+		{name: "vault admin row of another member's device", repoId: world.vaultId, sidecarId: world.vaultStrangerAdmin},
+		{name: "vault share", repoId: world.vaultId, sidecarId: world.vaultFriend, live: AclEvsRead | AclEvsDeposit},
+		{name: "team record admin", repoId: world.teamRecordId, sidecarId: world.teamRecordAdmin, live: all | AclEvsDeposit, admin: true},
+		{name: "team record reader", repoId: world.teamRecordId, sidecarId: world.teamRecordReader, live: AclEvsRead | AclEvsDeposit},
+		{name: "mailcfg admin", repoId: world.mailcfgId, sidecarId: world.mailcfgAdmin, live: all, admin: true},
+		{name: "mailcfg writer", repoId: world.mailcfgId, sidecarId: world.mailcfgWriter, live: AclEvsRead | AclEvsWrite},
+	}
+	live := world.state(t, nil)
+	restored := world.state(t, &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), DeletedAt: 90, DeletedTimeMs: 1, RestoredAt: 91})
+	for _, c := range cases {
+		for name, state := range map[string]*AclState{"live": live, "restored": restored} {
+			if rights := aclTestRights(state, c.sidecarId, c.repoId, AclTokenAudienceEvs); rights != c.live {
+				t.Errorf("%s, %s: %b, want %b", c.name, name, rights, c.live)
+			}
+		}
+	}
+	for _, now := range []bool{false, true} {
+		deleted := world.state(t, &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), Now: now, DeletedAt: 90, DeletedTimeMs: 1})
+		for _, c := range cases {
+			for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+				access := deleted.EvsAccess(AclSidecarSubject(c.sidecarId), c.repoId, audience, aclTestNow)
+				switch {
+				case c.admin:
+					if access.Rights != AclEvsAdmin || !access.Allowed || access.Reason != AclReasonRepoAdmin {
+						t.Errorf("%s, now %t, audience %d: %+v, want admin alone", c.name, now, audience, access)
+					}
+					if !c.live.Has(AclEvsAdmin) {
+						t.Errorf("%s: an admin of the deleted repo that is none of the live one", c.name)
+					}
+				default:
+					reason := c.reason
+					if reason == 0 {
+						reason = AclReasonRepoDeleted
+					}
+					if access.Rights != 0 || access.Allowed || access.Reason != reason {
+						t.Errorf("%s, now %t, audience %d: %+v, want nothing as %s", c.name, now, audience, access, reason)
+					}
+				}
+			}
+		}
+		for _, repoId := range []Id{world.generalId, world.directoryId, world.vaultId, world.teamRecordId, world.mailcfgId} {
+			if readers := deleted.RepoReaders(repoId, aclTestNow); len(readers) != 0 {
+				t.Errorf("now %t: readers of a deleted repo %v", now, readers)
+			}
+			if writers := deleted.RepoWriters(repoId, aclTestNow); len(writers) != 0 {
+				t.Errorf("now %t: writers of a deleted repo %v", now, writers)
+			}
+		}
+		// the admin's decision names its standing row, and a config writer of the directory, which holds none, names none
+		general := deleted.Repo(world.generalId)
+		if access := deleted.EvsAccess(AclSidecarSubject(world.generalAdmin), world.generalId, AclTokenAudienceEvs, aclTestNow); access.At != general.GetAdmins()[0].GetAt() {
+			t.Errorf("now %t: the general admin's row at %d, want %d", now, access.At, general.GetAdmins()[0].GetAt())
+		}
+		if access := deleted.EvsAccess(AclSidecarSubject(world.directoryWriter), world.directoryId, AclTokenAudienceEvs, aclTestNow); access.At != 0 {
+			t.Errorf("now %t: a config writer's directory admin at %d", now, access.At)
+		}
+	}
+}
+
+// A deleted repo of a kind that takes no RepoDelete, or that this code does not know, gives no one a right: the
+// config's bootstrap admin is a kind default, which a deletion drops, and an unknown kind has no admins to keep.
+func TestAclEvsAccessDeletedRepoOfAKindWithNoStandingAdmins(t *testing.T) {
+	fixture := newAclTestFixture()
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	bootstrap := fixture.device(owner)
+	fixture.view.configWriters[bootstrap] = true
+	configId := fixture.configRepo(bootstrap, owner)
+	unknownId, unknown := fixture.repo(protocol.RepoKind(99), Id{})
+	unknown.Admins = []*protocol.AclRepoAdminRow{{SidecarId: bootstrap.Bytes(), Signer: bootstrap.Bytes(), At: fixture.next()}}
+	unknown.Deletion = &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), DeletedAt: 9}
+	state := fixture.state(t)
+	if rights := aclTestRights(state, bootstrap, configId, AclTokenAudienceEvs); !rights.Has(AclEvsAdmin) {
+		t.Fatalf("the live config's bootstrap admin: %b", rights)
+	}
+	if access := state.EvsAccess(AclSidecarSubject(bootstrap), unknownId, AclTokenAudienceEvs, aclTestNow); access.Rights != 0 || access.Reason != AclReasonRepoDeleted {
+		t.Errorf("a deleted repo of an unknown kind: %+v", access)
+	}
+	// no fold writes a config row with a deletion; a state handed one keeps the bootstrap sidecar out of it
+	state.repos[configId].deleted = true
+	if access := state.EvsAccess(AclSidecarSubject(bootstrap), configId, AclTokenAudienceEvs, aclTestNow); access.Rights != 0 || access.Reason != AclReasonRepoDeleted {
+		t.Errorf("a deleted config: %+v", access)
 	}
 }
 
