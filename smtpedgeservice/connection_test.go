@@ -583,3 +583,85 @@ func TestConnectionOutcomeIsTakenFromItsDialerOnce(t *testing.T) {
 		t.Fatalf("halts %+v", halts)
 	}
 }
+
+// Drain lets a live connection finish, and returns once it has; Close then joins a stream still in its
+// preamble rather than waiting out its timeout.
+func TestDrainWaitsForConnectionsAndCloseEndsPreambles(t *testing.T) {
+	w := newEdgeWorld(t, func(world *edgeWorld) {
+		world.settings.QuotaMemberTimeout = 2 * time.Hour
+		world.settings.QuotaMemberRenewInterval = time.Hour
+		world.settings.ClientIdleTimeout = 7*time.Minute + 17*time.Second
+		world.mustWorld(world.world.SetMx("quiet.example", &sidecar.SmtpMxHost{Preference: 10, Host: "mx.quiet.example"}))
+		world.mustWorld(world.world.AddMx("mx.quiet.example", netip.MustParseAddr("192.0.2.26"), silentMx{}))
+	})
+	sidecarEnd, edgeEnd := sidecartest.NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
+	defer sidecarEnd.Close()
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		w.service.ServeTestStream(w.networkId, w.clientId, w.sidecarId, edgeEnd)
+	}()
+	preamble := w.preamble()
+	preamble.RecipientDomain = "quiet.example"
+	if err := sidecar.WriteSmtpPreamble(sidecarEnd, preamble, nil); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := sidecar.ReadSmtpPreambleResult(sidecarEnd, nil); err != nil || result.GetCode() != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK) {
+		t.Fatalf("result %v, %v", result, err)
+	}
+	deadline := w.clock.Now().Add(w.settings.ClientIdleTimeout)
+	for {
+		pending, added := w.clock.WatchTimers()
+		if slices.ContainsFunc(pending, func(at time.Time) bool { return at.Equal(deadline) }) {
+			break
+		}
+		select {
+		case <-added:
+		case <-w.ctx.Done():
+			t.Fatal("the idle timer was never armed")
+		}
+	}
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		w.service.Drain()
+	}()
+	// a live connection holds the drain: it cannot return before the connection ends
+	select {
+	case <-drained:
+		t.Fatal("the drain returned with a connection live")
+	default:
+	}
+	// the connection's own limit ends it, and the drain with it
+	w.clock.Advance(w.settings.ClientIdleTimeout)
+	<-served
+	<-drained
+	if w.service.Ready() {
+		t.Fatal("a drained engine is ready")
+	}
+	// a drained engine takes no new stream
+	other, otherEdge := sidecartest.NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
+	defer other.Close()
+	w.service.ServeTestStream(w.networkId, w.clientId, w.sidecarId, otherEdge)
+	if _, err := other.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a drained engine took a stream")
+	}
+}
+
+// Close ends a stream waiting in its preamble at once.
+func TestCloseEndsAStreamInItsPreamble(t *testing.T) {
+	w := newEdgeWorld(t, nil)
+	sidecarEnd, edgeEnd := sidecartest.NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
+	defer sidecarEnd.Close()
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		w.service.ServeTestStream(w.networkId, w.clientId, w.sidecarId, edgeEnd)
+	}()
+	// the preamble's timer, armed once the stream reads its frame
+	if err := w.clock.AwaitTimers(w.ctx, len(w.clock.PendingTimers())+1); err != nil {
+		t.Fatal(err)
+	}
+	w.service.Close()
+	<-served
+}

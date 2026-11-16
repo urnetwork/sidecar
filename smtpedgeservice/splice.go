@@ -191,7 +191,25 @@ func smtpAbortStream(conn io.ReadWriteCloser) {
 
 // Serves one stream from its preamble to its connection's end.
 func (self *SmtpEdgeService) serveStream(conn io.ReadWriteCloser, stream *smtpPreambleStream) {
+	tracked := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.closed {
+			return false
+		}
+		self.preambleStreams[conn] = true
+		return true
+	}()
+	if !tracked {
+		smtpAbortStream(conn)
+		return
+	}
 	outcome, err := self.preamble.serve(self.ctx, stream, conn)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		delete(self.preambleStreams, conn)
+	}()
 	if err != nil {
 		smtpAbortStream(conn)
 		return
@@ -291,10 +309,22 @@ const (
 	smtpHaltEventDropped = "dropped"
 )
 
-// Ends every connection and waits for each stream's goroutine.
+// Ends every connection and every stream still in its preamble, then waits for each stream's goroutine.
 func (self *SmtpEdgeService) closeConnections() {
 	for _, connection := range self.liveConnections() {
 		connection.end(smtpConnectionResultEnded)
+	}
+	pending := func() []io.ReadWriteCloser {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		pending := make([]io.ReadWriteCloser, 0, len(self.preambleStreams))
+		for conn := range self.preambleStreams {
+			pending = append(pending, conn)
+		}
+		return pending
+	}()
+	for _, conn := range pending {
+		smtpAbortStream(conn)
 	}
 	self.streams.Wait()
 }

@@ -102,6 +102,7 @@ func newEdgeWorld(t *testing.T, change func(world *edgeWorld)) *edgeWorld {
 	self.gate.SetCommunityLimits(communityLimits())
 	self.sink = sidecartest.NewFakeSmtpAbuseSink()
 	host.Quota.SetLimits(connect.Id(self.networkId), haltLimits("pro"))
+	host.Gates.OpenService(sidecar.ServiceGateSmtpedge, connect.Id(self.networkId))
 	// a balance the connections' leases draw on (§20.6)
 	host.Quota.SetBalance(connect.Id(self.networkId), 1024*1024*1024)
 	if change != nil {
@@ -514,4 +515,21 @@ func BenchmarkSmtpGate(b *testing.B) {
 	if counts := gate.OpCounts(); counts["Facts"] == 0 {
 		b.Fatal("the gate was not asked")
 	}
+}
+
+// Out of sidecar.yml's smtpedge gate a preamble answers TRY_LATER before anything else, and the engine stays
+// ready (R-SMTP-13, D-OPS-10).
+func TestPreambleOutOfTheDarkGateTriesLater(t *testing.T) {
+	w := newEdgeWorld(t, func(world *edgeWorld) {
+		world.host.Gates.OpenService(sidecar.ServiceGateSmtpedge)
+	})
+	outcome := w.expect(w.preamble(), protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER)
+	if outcome.Reason != "dark" || !w.service.Ready() {
+		t.Fatalf("reason %q, ready %v", outcome.Reason, w.service.Ready())
+	}
+	if dials := w.world.Dials(); len(dials) != 0 {
+		t.Fatalf("dials %v", dials)
+	}
+	w.host.Gates.OpenService(sidecar.ServiceGateSmtpedge, connect.Id(w.networkId))
+	w.expect(w.preamble(), protocol.SmtpPreambleCode_SMTP_PREAMBLE_OK).Abandon(w.ctx)
 }

@@ -471,7 +471,8 @@ func (self *smtpEdgeConnection) finish() {
 	mailDebited := self.mailDebited
 	self.stateLock.Unlock()
 
-	service.quota.Close(service.ctx, self.reservation, byteCount)
+	// past the engine's own end, so a close still returns what the connection held
+	service.quota.Close(context.WithoutCancel(service.ctx), self.reservation, byteCount)
 	service.leases.release(self.lease)
 	self.mx.release()
 

@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/urnetwork/connect"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -49,6 +51,8 @@ const (
 	smtpPreambleReasonSession = "session"
 	// The dialing client's sidecar is not known yet (SmtpDialerSource).
 	smtpPreambleReasonDialer = "dialer_unknown"
+	// The network is out of sidecar.yml's smtpedge gate (D-OPS-10, R-SMTP-13).
+	smtpPreambleReasonDark = "dark"
 )
 
 // What the stream's listener knows of its dialer, from the ticket (§14.5): never from the sidecar.
@@ -91,6 +95,8 @@ type smtpPreambleHandler struct {
 	settings *SmtpEdgeSettings
 	frame    *sidecar.SmtpFrameSettings
 	clock    sidecar.Clock
+	// §19.11's gates, which the host rereads every 60 s
+	gates    sidecar.ServiceGates
 	abuse    sidecar.AbuseGate
 	gate     SmtpGate
 	quota    *SmtpQuota
@@ -190,6 +196,11 @@ func (self *smtpPreambleHandler) decide(ctx context.Context, stream *smtpPreambl
 	preamble = checkSmtpPreamble(preamble, self.settings)
 	if preamble == nil {
 		return self.refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_DENIED, 0, smtpPreambleReasonBounds)
+	}
+	// out of config/<env>/sidecar.yml's smtpedge gate a preamble waits, and the engine stays ready: off until
+	// D-SMTP-16 passes (R-SMTP-13, D-OPS-10)
+	if !self.gates.Service(sidecar.ServiceGateSmtpedge).Admits(connect.Id(stream.NetworkId)) {
+		return self.refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER, self.settings.GateRetryTimeout, smtpPreambleReasonDark)
 	}
 	if stream.SidecarId == (sidecar.Id{}) {
 		return self.refuse(protocol.SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER, self.settings.GateRetryTimeout, smtpPreambleReasonDialer)

@@ -19,6 +19,7 @@ package smtpedgeservice
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 
 	"github.com/urnetwork/sidecar"
@@ -96,8 +97,10 @@ type SmtpEdgeService struct {
 	// live connections by send_id, and what closes at each change
 	sendIdConnections  map[string]*smtpEdgeConnection
 	connectionsChanged chan struct{}
-	listener           *sidecar.SocketPlatformListener
-	handlerRemoves     []func()
+	// streams reading their preamble, which Close ends: no connection holds them yet
+	preambleStreams map[io.ReadWriteCloser]bool
+	listener        *sidecar.SocketPlatformListener
+	handlerRemoves  []func()
 }
 
 // Starts the engine with no deps, so it is never ready: §14.9's signature, which a host that serves mail
@@ -145,6 +148,7 @@ func NewSmtpEdgeServiceWithDeps(
 		released:       make(chan struct{}),
 
 		sendIdConnections:  map[string]*smtpEdgeConnection{},
+		preambleStreams:    map[io.ReadWriteCloser]bool{},
 		connectionsChanged: make(chan struct{}),
 		haltWork:           make(chan *smtpHaltWork, settings.HaltEventMaxCount),
 		haltWorkCount:      sidecar.NewMonitorValue(0),
@@ -174,6 +178,7 @@ func NewSmtpEdgeServiceWithDeps(
 			settings: settings,
 			frame:    sidecar.DefaultSmtpFrameSettings(),
 			clock:    self.clock,
+			gates:    host.GatesOrClosed(),
 			abuse:    host.AbuseOrUnloaded(),
 			gate:     self.deps.Gate,
 			quota:    self.quota,
@@ -315,16 +320,23 @@ func (self *SmtpEdgeService) Drain() {
 	}
 }
 
-// See sidecar.Engine: the listener and every connection end, and every goroutine is joined.
+// See sidecar.Engine: the listener, every connection and every stream in its preamble end, and every goroutine
+// is joined. A second Close does nothing.
 func (self *SmtpEdgeService) Close() {
-	listener, removes := func() (*sidecar.SocketPlatformListener, []func()) {
+	listener, removes, first := func() (*sidecar.SocketPlatformListener, []func(), bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		if self.closed {
+			return nil, nil, false
+		}
 		self.closed = true
 		removes := self.handlerRemoves
 		self.handlerRemoves = nil
-		return self.listener, removes
+		return self.listener, removes, true
 	}()
+	if !first {
+		return
+	}
 	for _, remove := range removes {
 		remove()
 	}
