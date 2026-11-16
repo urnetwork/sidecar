@@ -853,6 +853,7 @@ rows:
   evs-26: {planned: M10}
   evs-27: {planned: M6}
   evs-28: {planned: M10}
+  evs-30: {planned: M2}
   gkm-5: {planned: M2}
   gkm-6: {planned: M2}
   gkm-8: {planned: M2}
@@ -877,3 +878,5 @@ rows:
   ext-7: {planned: M6}
   ext-8: {planned: M8}
   ext-10: {planned: M1}
+  ext-11: {planned: M4}
+  ext-12: {planned: M5}

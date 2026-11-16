@@ -128,7 +128,7 @@ counsel  before holds ship (M5), confirms each kind's applicability and owner de
 
 ### 21.10 Retention and access
 
-§2.8's list is the only TTL table (D-ABUSE-7): cases, actions and appeals stay 13 months after their case closes, legal requests, productions and `abuse_access_log` 3 years, holds until their kind's deadline (21.9), `network_abuse_state` only while current. An `abuse` role, separate from ops, looks up only by case id or join key, never in bulk; each read writes `abuse_access_log`; productions need legal and engineering sign-off.
+§2.8's list is the only TTL table (D-ABUSE-7): cases, actions and appeals stay 13 months after their case closes, legal requests, productions and `abuse_access_log` 3 years, holds until their kind's deadline (21.9), `network_abuse_state` only while current. An `abuse` role, separate from ops, looks up only by case id or join key, never in bulk; each read writes `abuse_access_log`; productions need legal and engineering sign-off, and `legal_request` keeps who signed, `legal_signoff_id` and `engineering_signoff_id`, each a staff member's opaque id from abuse-staff.yml as a reviewer id is, which api-14 names (owner decision 259).
 
 **Restore.** A Postgres restore returns §21's tables, `network_tls_suspension`, zone and host suspensions and halts to the sidecar dump's age (§19.10); it lifts no recorded action:
 

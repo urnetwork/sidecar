@@ -69,6 +69,10 @@
   "Q-REPO-1": [
    "How do PLAN.md:5-7's repos split a service?",
    "(a), amended by owner decision 251: engines take operator-core's Env, which server/core implements."
+  ],
+  "Q-REPO-6": [
+   "How do Linux users update ur, now that v1 ships no apt or yum repository?",
+   "(a) re-run install.sh or fetch the next package; repositories decided at v1's exit."
   ]
  }
 }
