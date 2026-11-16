@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 11330,
-  "code_words": 3706,
+  "words": 11520,
+  "code_words": 3714,
   "ceiling": 3800,
-  "over": 7530,
-  "over_pct": 198.2
+  "over": 7720,
+  "over_pct": 203.2
  },
  {
   "num": 9,
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 7688,
+  "words": 7724,
   "code_words": 4255,
   "ceiling": 3800,
-  "over": 3888,
-  "over_pct": 102.3
+  "over": 3924,
+  "over_pct": 103.3
  },
  {
   "num": 18,
