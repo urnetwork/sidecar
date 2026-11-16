@@ -783,7 +783,7 @@ FCM   data message, priority high                  {"data":{"t":"mail","v":"42"}
       exponent, within uint64, and FCM's stays a string
 ```
 
-- **Directory notices (D-SDK-28).** From M8 a phone leases the team directory's `q/<target>/` prefixes for the targets its member approves, and the notice path of each of its own pending requests (§16.11, §11.10), so a decision, a denial's included, rewrites a notice the phone leases. Their hints are `evs:<repo_id>` hints like any lease's (§6.8), so they are wake-class: a request or its decision wakes the phone under topic class `evs`, naming no directory, target or request.
+- **Directory notices (D-SDK-28).** From M8 a phone leases the team directory's `q/<h>/<tgt>/` prefixes for the targets its member approves, and the notice path of each of its own pending requests (§16.11, §11.10), so a decision, a denial's included, rewrites a notice the phone leases. Their hints are `evs:<repo_id>` hints like any lease's (§6.8), so they are wake-class: a request or its decision wakes the phone under topic class `evs`, naming no directory, target or request.
 
 ### 18.8 The browser sidecar (X14): the extension and ur.io pages
 

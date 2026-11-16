@@ -1,7 +1,14 @@
 // EVS1-M2-49's check tests (DESIGN-DETAILS 8.6's codec and builder row, 8.2.7's check(u)): each line of the check
 // broken in turn by a hand-built push, from one that passes: the shape against the flags and the ref's kind, a
 // creating push's sections, old_tip, the sources, the commits' oids and parents, the import over exactly the push's
-// commits or the new-commit rule, the tags, the tip and descent, and the history blobs' shape.
+// commits or the new-commit rule, the tags, the tip and descent, and the history blobs' shape. And EVS1-M6-06's
+// prefix line (8.2.7, 16.2.6; QD-801), over hand-built lines whose signer is held to agents/build: the early test
+// refusing a written file outside before a commit is read, its passing twins; a set pending at the pin waiting
+// before anything is asked; a tag's proof among its sources and each way a source is no proof; a branch's measure
+// from J or from nothing; and the late test over two trees on an op-counting source: a file written, removed, or
+// replaced by a directory outside refused, the last file under the prefix removed with the directories above it
+// passing, the walk from nothing stopping at the first file outside and passing a directory under the prefix whole,
+// a signer named for every path reading no tree, and a tainted token path outside refused.
 
 package sidecar
 
@@ -610,5 +617,401 @@ func TestEvsGitCheckUpdateRefusesEachBrokenLine(t *testing.T) {
 	historyBlob(world, args, goodBlob(), [][]byte{segmentId}, true)
 	if _, err := EvsGitCheckUpdate(ctx, args); err != nil {
 		t.Errorf("a history blob: %v", err)
+	}
+}
+
+// An object source in memory that counts its reads: the op-counting source of DESIGN-DETAILS 8.6's prefix rows.
+type evsTestCountedObjects struct {
+	kinds    map[EvsGitOid]string
+	contents map[EvsGitOid][]byte
+	reads    int
+}
+
+func newEvsTestCountedObjects() *evsTestCountedObjects {
+	return &evsTestCountedObjects{kinds: map[EvsGitOid]string{}, contents: map[EvsGitOid][]byte{}}
+}
+
+func (self *evsTestCountedObjects) ReadGitObject(ctx context.Context, oid EvsGitOid) (string, []byte, error) {
+	self.reads += 1
+	kind, ok := self.kinds[oid]
+	if !ok {
+		return "", nil, ErrEvsGitObjectMissing
+	}
+	return kind, self.contents[oid], nil
+}
+
+// A tree of files by path, each file's content its own blob, directories nested as git builds them.
+func (self *evsTestCountedObjects) tree(t *testing.T, files map[string]string) EvsGitOid {
+	t.Helper()
+	write := func(kind string, content []byte) EvsGitOid {
+		oid := evsGitObjectOid(kind, content)
+		self.kinds[oid], self.contents[oid] = kind, content
+		return oid
+	}
+	var build func(files map[string]string) EvsGitOid
+	build = func(files map[string]string) EvsGitOid {
+		children := map[string]map[string]string{}
+		tree := &EvsGitTree{}
+		for path, content := range files {
+			name, rest, nested := strings.Cut(path, "/")
+			if !nested {
+				tree.Entries = append(tree.Entries, EvsGitTreeEntry{Mode: EvsGitModeFile, Name: []byte(name), Oid: write(evsGitBlobKind, []byte(content))})
+				continue
+			}
+			if children[name] == nil {
+				children[name] = map[string]string{}
+			}
+			children[name][rest] = content
+		}
+		for name, below := range children {
+			tree.Entries = append(tree.Entries, EvsGitTreeEntry{Mode: EvsGitModeDirectory, Name: []byte(name), Oid: build(below)})
+		}
+		encoded, err := tree.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return write(evsGitTreeKind, encoded)
+	}
+	return build(files)
+}
+
+// The path key of the check world's epoch 1.
+func evsTestPrefixPathKey(t *testing.T) *EvsPathKey {
+	t.Helper()
+	pathKey, err := NewEvsPathKey(evsTestRepoKey(evsTestId("check repo"), 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pathKey
+}
+
+// A path's token path under pathKey, the root's empty.
+func evsTestPrefixTokens(t *testing.T, pathKey *EvsPathKey, path string) EvsTokenPath {
+	t.Helper()
+	if path == "" {
+		return EvsTokenPath{}
+	}
+	names := [][]byte{}
+	for _, name := range strings.Split(path, "/") {
+		names = append(names, []byte(name))
+	}
+	tokenPath, err := EvsPathTokens(pathKey, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tokenPath
+}
+
+// A line whose set at 5 gives the signer prefixes, "" for every path.
+func evsTestPrefixLine(t *testing.T, prefixes ...string) *EvsGitPrefixLine {
+	t.Helper()
+	pathKey := evsTestPrefixPathKey(t)
+	line := &EvsGitPrefixLine{Verdict: AclPrefixVerdict{Outcome: AclPrefixAllowed, Reason: AclPrefixReasonNoChange, SetAt: 5}, PathKey: pathKey}
+	for _, prefix := range prefixes {
+		line.Prefixes = append(line.Prefixes, evsTestPrefixTokens(t, pathKey, prefix))
+	}
+	return line
+}
+
+// A change writing a file entry at path.
+func evsTestPrefixWrite(t *testing.T, path string) *EvsCheckedChange {
+	change := evsTestCheckChange(1, false)
+	change.TokenPath = evsTestPrefixTokens(t, evsTestPrefixPathKey(t), path)
+	return change
+}
+
+// The early test: a file entry written outside the signer's prefix refuses the push with prefix_rule before a commit is
+// read (no commit's parents held, no committer asked), naming no path, which it holds no name for; the same push by a
+// signer the set names for every path, one writing under the prefix, a directory's entry outside, and a line with no
+// set in force each pass. A REKEY of a file outside is refused the same way.
+func TestEvsGitCheckPrefixEarlyTestRefusesBeforeACommitIsRead(t *testing.T) {
+	ctx := context.Background()
+	asked := 0
+	counted := func(args *EvsGitUpdateArgs) {
+		held, committer := args.Held, args.Committer
+		args.Held = func(oid EvsGitOid) bool {
+			asked += 1
+			return held(oid)
+		}
+		args.Committer = func(ctx context.Context, ident *EvsGitIdent, push *protocol.EvsPush) error {
+			asked += 1
+			return committer(ctx, ident, push)
+		}
+	}
+	world := newEvsTestCheckWorld()
+	args := world.update(t)
+	counted(args)
+	args.Prefix = evsTestPrefixLine(t, "agents/build")
+	args.Payload.Changes = []*EvsCheckedChange{evsTestPrefixWrite(t, "agents/build/out"), evsTestPrefixWrite(t, "src/main.go")}
+	_, err := EvsGitCheckUpdate(ctx, args)
+	var refusal *EvsGitPrefixRefusal
+	if !errors.As(err, &refusal) || refusal.Row != EvsGitPrefixRowWritten || refusal.Path != "" || !errors.Is(err, ErrEvsGitUpdateRefused) ||
+		!errors.Is(err, ErrEvsGitPrefixRule) || strings.Contains(err.Error(), "src") || asked != 0 {
+		t.Fatalf("a file written outside: %v, %d objects asked", err, asked)
+	}
+	passing := map[string]func(args *EvsGitUpdateArgs){
+		"a signer named for every path": func(args *EvsGitUpdateArgs) { args.Prefix = evsTestPrefixLine(t, "") },
+		"a write under the prefix": func(args *EvsGitUpdateArgs) {
+			args.Payload.Changes = []*EvsCheckedChange{evsTestPrefixWrite(t, "agents/build/out")}
+		},
+		"a directory's entry outside": func(args *EvsGitUpdateArgs) {
+			change := evsTestCheckChange(1, true)
+			change.TokenPath = evsTestPrefixTokens(t, evsTestPrefixPathKey(t), "agents")
+			args.Payload.Changes = []*EvsCheckedChange{evsTestPrefixWrite(t, "agents/build/out"), change}
+		},
+		"no set in force": func(args *EvsGitUpdateArgs) {
+			args.Prefix = &EvsGitPrefixLine{Verdict: AclPrefixVerdict{Outcome: AclPrefixAllowed, Reason: AclPrefixReasonNoSet}}
+		},
+	}
+	for label, mutate := range passing {
+		world := newEvsTestCheckWorld()
+		args := world.update(t)
+		args.Prefix = evsTestPrefixLine(t, "agents/build")
+		args.Payload.Changes = []*EvsCheckedChange{evsTestPrefixWrite(t, "src/main.go")}
+		mutate(args)
+		if checked, err := EvsGitCheckUpdate(ctx, args); err != nil || (label == "a write under the prefix" && checked.PrefixMeasure != EvsGitPrefixMeasureFromJ) {
+			t.Errorf("%s: %+v %v", label, checked, err)
+		}
+	}
+	// a REKEY re-checkpoints only under its signer's prefixes
+	world = newEvsTestCheckWorld()
+	args = world.update(t)
+	args.Metadata.Commits = nil
+	args.Metadata.Git = &protocol.EvsGitUpdate{Shape: protocol.EvsGitShape_EVS_GIT_REKEY}
+	rekeyed := evsTestPrefixWrite(t, "src/main.go")
+	rekeyed.Change.BaseEntryVersion = 3
+	args.Payload.Changes = []*EvsCheckedChange{rekeyed}
+	args.Prefix = evsTestPrefixLine(t, "agents/build")
+	if _, err := EvsGitCheckUpdate(ctx, args); !errors.As(err, &refusal) || refusal.Row != EvsGitPrefixRowWritten {
+		t.Errorf("a REKEY of a file outside: %v", err)
+	}
+	args.Prefix = evsTestPrefixLine(t, "")
+	if _, err := EvsGitCheckUpdate(ctx, args); err != nil {
+		t.Errorf("a REKEY by a signer named for every path: %v", err)
+	}
+}
+
+// A set pending or newer at u's pin is a wait, answered before anything else is asked, and never a refusal.
+func TestEvsGitCheckPrefixWaitsOnASetItCannotRead(t *testing.T) {
+	for _, outcome := range []AclPrefixOutcome{AclPrefixWait, AclPrefixUpdate} {
+		world := newEvsTestCheckWorld()
+		args := world.update(t)
+		asked := 0
+		args.Held = func(oid EvsGitOid) bool { asked += 1; return true }
+		args.Prefix = &EvsGitPrefixLine{Verdict: AclPrefixVerdict{Outcome: outcome, SetAt: 7}}
+		args.Payload.Changes = []*EvsCheckedChange{evsTestPrefixWrite(t, "src/main.go")}
+		if _, err := EvsGitCheckUpdate(context.Background(), args); !errors.Is(err, ErrEvsGitPrefixWait) || errors.Is(err, ErrEvsGitUpdateRefused) || asked != 0 {
+			t.Errorf("%s: %v, %d asked", outcome, err, asked)
+		}
+	}
+}
+
+// A tag ref's creation of "c2": its proof is a source whose ref is a shared branch and whose tip at the named version
+// is the commit the tag peels to, and then no file is judged; an owned ref's version, a tag ref's, a shared branch's
+// at another tip, and a tag naming no source are no proof, measured from nothing; a signer named for every path asks
+// no source.
+func TestEvsGitCheckPrefixTagProof(t *testing.T) {
+	ctx := context.Background()
+	shared, owned, tagged := evsTestId("main ref"), evsTestId("owned ref"), evsTestId("tag ref")
+	tagArgs := func(world *evsTestCheckWorld, sources ...Id) (*EvsGitUpdateArgs, *int) {
+		args := world.update(t)
+		tag := evsTestTag(world.oids["c2"], evsGitCommitKind, "v1")
+		tagOid := evsGitObjectOid(evsGitTagKind, tag)
+		args.PriorTip, args.Creating = nil, true
+		args.Statement.Push.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_IMMUTABLE)
+		args.RefId, args.SectionRefName, args.RefName = evsTestId("check ref refs/tags/v1"), []byte("refs/tags/v1"), []byte("refs/tags/v1")
+		args.Metadata.RefName = []byte("refs/tags/v1")
+		args.Metadata.Git = &protocol.EvsGitUpdate{Shape: protocol.EvsGitShape_EVS_GIT_UPDATE, NewTip: tagOid[:], Tags: [][]byte{tag}}
+		for _, source := range sources {
+			args.Metadata.Git.Sources = append(args.Metadata.Git.Sources, &protocol.EvsOverlay{RefId: source.Bytes(), Version: 3})
+		}
+		asked := 0
+		args.SharedBranch = func(ctx context.Context, refId Id) (bool, error) {
+			asked += 1
+			return refId == shared, nil
+		}
+		return args, &asked
+	}
+	tipOf := func(world *evsTestCheckWorld, name string) func(ctx context.Context, source *protocol.EvsOverlay) (*EvsGitOid, error) {
+		return func(ctx context.Context, source *protocol.EvsOverlay) (*EvsGitOid, error) {
+			oid := world.oids[name]
+			return &oid, nil
+		}
+	}
+	world := newEvsTestCheckWorld()
+	args, _ := tagArgs(world, owned, shared)
+	args.SourceTip = tipOf(world, "c2")
+	args.Prefix = evsTestPrefixLine(t, "agents/build")
+	checked, err := EvsGitCheckUpdate(ctx, args)
+	if err != nil || checked.PrefixMeasure != EvsGitPrefixMeasureNone || checked.PrefixProof == nil || Id(checked.PrefixProof.GetRefId()) != shared {
+		t.Fatalf("a tag of a shared branch's tip: %+v %v", checked, err)
+	}
+	for label, build := range map[string]func(world *evsTestCheckWorld) *EvsGitUpdateArgs{
+		"an owned ref's tip": func(world *evsTestCheckWorld) *EvsGitUpdateArgs {
+			args, _ := tagArgs(world, owned)
+			args.SourceTip = tipOf(world, "c2")
+			return args
+		},
+		"a tag ref's": func(world *evsTestCheckWorld) *EvsGitUpdateArgs {
+			args, _ := tagArgs(world, tagged)
+			args.SourceTip = tipOf(world, "c2")
+			return args
+		},
+		"a shared branch at another tip": func(world *evsTestCheckWorld) *EvsGitUpdateArgs {
+			args, _ := tagArgs(world, shared)
+			args.SourceTip = tipOf(world, "E")
+			return args
+		},
+		"a version with no tip": func(world *evsTestCheckWorld) *EvsGitUpdateArgs {
+			args, _ := tagArgs(world, shared)
+			args.SourceTip = func(ctx context.Context, source *protocol.EvsOverlay) (*EvsGitOid, error) { return nil, nil }
+			return args
+		},
+		"no source": func(world *evsTestCheckWorld) *EvsGitUpdateArgs {
+			args, _ := tagArgs(world)
+			args.SourceTip = tipOf(world, "c2")
+			return args
+		},
+	} {
+		world := newEvsTestCheckWorld()
+		args := build(world)
+		args.Prefix = evsTestPrefixLine(t, "agents/build")
+		checked, err := EvsGitCheckUpdate(ctx, args)
+		if err != nil || checked.PrefixMeasure != EvsGitPrefixMeasureFromNothing || checked.PrefixProof != nil {
+			t.Errorf("%s: %+v %v", label, checked, err)
+		}
+	}
+	world = newEvsTestCheckWorld()
+	args, asked := tagArgs(world, owned, shared)
+	args.SourceTip = tipOf(world, "c2")
+	args.Prefix = evsTestPrefixLine(t, "")
+	if checked, err := EvsGitCheckUpdate(ctx, args); err != nil || checked.PrefixMeasure != EvsGitPrefixMeasureNone || *asked != 0 {
+		t.Errorf("a signer named for every path: %+v %v, %d asked", checked, err, *asked)
+	}
+}
+
+// A branch is measured from J, which is S where it held a tip, or on its first tip over a shared branch; from nothing
+// on its first tip over an owned base, or none.
+func TestEvsGitCheckPrefixMeasureOfABranch(t *testing.T) {
+	ctx := context.Background()
+	sharedBase, ownedBase := evsTestId("main ref"), evsTestId("owned ref")
+	cases := []struct {
+		label   string
+		heldTip bool
+		base    *Id
+		want    EvsGitPrefixMeasure
+	}{
+		{label: "a tip before", heldTip: true, want: EvsGitPrefixMeasureFromJ},
+		{label: "a first tip over a shared branch", base: &sharedBase, want: EvsGitPrefixMeasureFromJ},
+		{label: "a first tip over an owned branch", base: &ownedBase, want: EvsGitPrefixMeasureFromNothing},
+		{label: "a first tip with no base", want: EvsGitPrefixMeasureFromNothing},
+	}
+	for _, c := range cases {
+		world := newEvsTestCheckWorld()
+		args := world.update(t)
+		args.HeldTip = c.heldTip
+		if !c.heldTip {
+			args.PriorTip, args.Creating = nil, true
+			args.Metadata.Git.OldTip = nil
+			args.Metadata.Commits = []*protocol.EvsSealedCommit{world.commits["c2"]}
+			args.RefId, args.SectionRefName = evsTestId("check ref feature"), []byte("feature")
+			args.Metadata.RefName = []byte("feature")
+			if c.base != nil {
+				base := &protocol.EvsOverlay{RefId: c.base.Bytes(), Version: 2}
+				args.Metadata.Base, args.HeadBase = base, base
+				args.Payload.Base = base
+			}
+		}
+		args.SharedBranch = func(ctx context.Context, refId Id) (bool, error) { return refId == sharedBase, nil }
+		args.Prefix = evsTestPrefixLine(t, "agents/build")
+		checked, err := EvsGitCheckUpdate(ctx, args)
+		if err != nil || checked.PrefixMeasure != c.want {
+			t.Errorf("%s: %+v %v", c.label, checked, err)
+		}
+	}
+}
+
+// The late test over two trees on an op-counting source, by a signer held to agents/build: each file that differs is
+// judged and the first outside named; the directories are not, so the last file under the prefix goes with the
+// directories above it; a directory under the prefix is passed whole; a signer named for every path reads no tree.
+func TestEvsGitCheckPrefixTreesJudgesTheFilesThatDiffer(t *testing.T) {
+	ctx := context.Background()
+	base := map[string]string{"agents/build/out": "built\n", "agents/deploy/x": "deploy\n", "src/main.go": "main\n", "README": "readme\n"}
+	with := func(changes map[string]string, removed ...string) map[string]string {
+		files := map[string]string{}
+		for path, content := range base {
+			files[path] = content
+		}
+		for path, content := range changes {
+			files[path] = content
+		}
+		for _, path := range removed {
+			delete(files, path)
+		}
+		return files
+	}
+	cases := []struct {
+		label   string
+		next    map[string]string
+		refused string
+	}{
+		{label: "a file written under the prefix", next: with(map[string]string{"agents/build/out": "again\n", "agents/build/new": "new\n"})},
+		{label: "a file written outside", next: with(map[string]string{"src/main.go": "changed\n"}), refused: "src/main.go"},
+		{label: "a file removed outside", next: with(nil, "README"), refused: "README"},
+		{label: "a directory created over a file outside", next: with(map[string]string{"README/inner": "x\n"}, "README"), refused: "README"},
+		{label: "the last file under the prefix removed, with the directories above it", next: with(nil, "agents/build/out")},
+		{label: "a subtree removed outside, its first file named", next: with(nil, "agents/deploy/x", "src/main.go"), refused: "agents/deploy/x"},
+	}
+	for _, c := range cases {
+		objects := newEvsTestCountedObjects()
+		j, n := objects.tree(t, base), objects.tree(t, c.next)
+		err := EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{Line: evsTestPrefixLine(t, "agents/build"), Measure: EvsGitPrefixMeasureFromJ, Source: objects, J: &j, N: n})
+		var refusal *EvsGitPrefixRefusal
+		switch {
+		case c.refused == "" && err != nil:
+			t.Errorf("%s: %v", c.label, err)
+		case c.refused != "" && (!errors.As(err, &refusal) || refusal.Path != c.refused || refusal.Row != EvsGitPrefixRowChanged || strings.Contains(err.Error(), c.refused)):
+			t.Errorf("%s: %v, want %s", c.label, err, c.refused)
+		}
+	}
+	// from nothing: the first file outside in the tree reader's order, and the prefix's directory passed whole
+	objects := newEvsTestCountedObjects()
+	n := objects.tree(t, map[string]string{"agents/build/a/b/c": "c\n", "agents/build/d": "d\n", "docs/x": "x\n", "src/y": "y\n"})
+	err := EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{Line: evsTestPrefixLine(t, "agents/build"), Measure: EvsGitPrefixMeasureFromNothing, Source: objects, N: n})
+	var refusal *EvsGitPrefixRefusal
+	if !errors.As(err, &refusal) || refusal.Path != "docs/x" || refusal.Row != EvsGitPrefixRowFromNothing {
+		t.Fatalf("from nothing: %v", err)
+	}
+	// the root, agents and docs read; agents/build passed whole, src never reached
+	if objects.reads != 3 {
+		t.Errorf("from nothing read %d trees", objects.reads)
+	}
+	allowed := newEvsTestCountedObjects()
+	under := allowed.tree(t, map[string]string{"agents/build/a/b/c": "c\n", "agents/build/d": "d\n"})
+	if err := EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{Line: evsTestPrefixLine(t, "agents/build"), Measure: EvsGitPrefixMeasureFromNothing, Source: allowed, N: under}); err != nil || allowed.reads != 2 {
+		t.Errorf("a whole tree under the prefix: %v, %d reads", err, allowed.reads)
+	}
+	// a signer named for every path reads no tree
+	whole := newEvsTestCountedObjects()
+	wholeTree := whole.tree(t, map[string]string{"src/y": "y\n"})
+	if err := EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{Line: evsTestPrefixLine(t, "agents/build", ""), Measure: EvsGitPrefixMeasureFromNothing, Source: whole, N: wholeTree}); err != nil || whole.reads != 0 {
+		t.Errorf("a signer named for every path: %v, %d reads", err, whole.reads)
+	}
+	// a tainted token path the push writes outside, judged on its token path whatever the trees say
+	tainted := newEvsTestCountedObjects()
+	same := tainted.tree(t, base)
+	write := evsTestPrefixWrite(t, "src/main.go")
+	err = EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{
+		Line: evsTestPrefixLine(t, "agents/build"), Measure: EvsGitPrefixMeasureFromJ, Source: tainted, J: &same, N: same,
+		Changes: []*EvsCheckedChange{write}, Tainted: map[string]bool{write.TokenPath.KeyString(): true},
+	})
+	if !errors.As(err, &refusal) || refusal.Row != EvsGitPrefixRowTainted || refusal.Path != "" {
+		t.Errorf("a tainted token path outside: %v", err)
+	}
+	if err := EvsGitCheckPrefixTrees(ctx, &EvsGitPrefixTreesArgs{
+		Line: evsTestPrefixLine(t, "agents/build"), Measure: EvsGitPrefixMeasureFromJ, Source: tainted, J: &same, N: same,
+		Changes: []*EvsCheckedChange{write},
+	}); err != nil {
+		t.Errorf("the same write at a path no taint names, the trees unchanged: %v", err)
 	}
 }
