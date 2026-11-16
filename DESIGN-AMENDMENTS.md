@@ -18,7 +18,6 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§8 Access control](#s8) | 1 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
-| [§13 The TLS edge and certificates](#s13) | 3 | 13 |
 | [§14 The SMTP edge](#s14) | 8 | 13 |
 | [§15 The local email server, inbound mail, and burner email](#s15) | 11 | 19 |
 | [§16 The local MCP server and record primitives](#s16) | 28 | 21 |
@@ -199,127 +198,6 @@ Changes: §11.6 EvsPush; §11.8 EvsHead and the 200 reply; §2.8 evs-3; §16.8 M
 Questions: `plan-RECORD-depositor-spool.md`.
 
 Not folded (2026-11-16): RECORD.md sections 5.4 and 5.7's part, the depositor spool's pruning at the mark, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as text (§11.6's EvsPush and §11.8's EvsHead fences take consumed_through, §11.12's deposits paragraph, §11.8's step 8 and 5f, §2.8's evs-3 and evs-12, and §16.8's mirrors bullet).
-
-<a id="s13"></a>
-## §13 The TLS edge and certificates
-
-### QD-107: ValidateListen must enforce verification and the publish time box
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22, §21, §20.*
-
-Add two rows to §13.9's ValidateListen table. network: no network_verified (§21.7). time box: a grant with no expires, or more remaining life than its cap, in a network at Community (7 d) or in probation or restricted state (24 h); Pro and Team may hold standing names. A network whose tier fell keeps a standing grant until §20.7's 14-day clock ends. The system publish keeps its own lines. An unknown fact refuses. Facts come through TlsListenFactsSource.
-
-Changes: §13.9 ValidateListen; §22.5's §13 row.
-
-Questions: `plan-TLS-small-readings.md#4`.
-
-### QD-134: What a link audience's guest token is: one use on one device, or a shareable signed link
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6.*
-
-A link is a signed token, reusable until its grant ends. TlsLinkToken { bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4; } under SIGNED_TLS_LINK = 0x1503, purpose tls-link, signed by the publishing device's identity key, with expire_time_millis at most the grant's expires. The URL is https://<host>/.well-known/ur/link?t=<base64url(Signed)>. The front verifies the signature against the projection, that the signer is the sidecar the grant names, that grant_id is active and that host equals the SNI, then sets __Host-ur-link (HttpOnly, Secure, SameSite=Lax, 12 h, capped by the token's expiry) holding the same token, and answers 302 to / with Referrer-Policy: no-referrer. Any listener of the grant honors it with no shared state. GrantRevoke or expiry ends every link of the grant.
-
-Changes: §13.7; §6.11 SignedType.
-
-Questions: `plan-TLS-small-readings.md#8`.
-
-### QD-188: No gate screens a published host
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21.*
-
-§13.9's `ValidateListen` table gains a row: `host ScreenName refuses it, or sends it to review without a screen_allow`. It screens on each registration through a short per-process cache of the verdict, its facts arriving on plan-SOCK-gate-data's surface, and TLS-M5-22 adds the call. A refusal at the gate needs no change to the signed `GrantActivate`, which api cannot rewrite.
-
-Changes: §13.9; §21.6.
-
-Questions: `plan-ABUSE-review-held-names.md#2`.
-
-### QD-288: Where acmez and the CAA walk sit
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The CAA walk is pure code in the root behind TlsCaaResolver. For desktops, acmez and its resolver sit in cli/, injected as provers are, so neither reaches an sdk leg. certs keeps acmez on the engine leg (§13.8). dependencies.yml lists acmez for engine and cli only.
-
-Questions: `plan-TLS-small-readings.md#17`.
-
-### QD-294: ParseClientHello for mxedge
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-ReadClientHello, ParseClientHello, NormalizeSni and WriteTlsAlert export from tlsedgeservice, and server/mxedgehost passes them into MxEdgeDeps as functions, so no engine imports another.
-
-Questions: `plan-TLS-small-readings.md#15`.
-
-### QD-313: TlsEdgeOpen's 512 B bound against a long ALPN list
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-tlsedge keeps offered ids in hello order while the encoded TlsEdgeOpen stays at most 512 B, and passes that same list to Find. The listener decides from the real hello, so the field is informational. A hello whose only matching id was trimmed gets no listener, the closed direction.
-
-Questions: `plan-TLS-small-readings.md#6`.
-
-### QD-322: An unknown ALPN at Find, and the negative cache's key
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Keep internal_error when Find finds no listener for the offered ALPN, since no application byte moves and FS-34 holds; §13.7's no_application_protocol covers hellos that reach the front. The 30 s negative cache keys on (name, port, sorted offered ALPN set), so one scanner's bogus ALPN cannot refuse every visitor to a name.
-
-Questions: `plan-TLS-small-readings.md#18`.
-
-### QD-335: Drained interfaces in Route 53
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-warpctl dns reads sidecar.drained from config/<env>/sidecar.yml and leaves those interfaces out of the <env>-lb sets, keeping their health checks. One list drives Route 53 and the dns edges.
-
-Questions: `plan-TLS-small-readings.md#16`.
-
-### QD-339: `evs_unpaid_read_rate`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-QUOTA-M2-10 owns it, as a per-process token bucket per network at `evs_unpaid_read_rate` divided by evs blocks, so the network stays at the published rate. The question's "up to N times the rate" misreads §13.9, whose caps divide by blocks to keep the total.
-
-Questions: `plan-QUOTA-small-readings.md#8`.
-
-### QD-344: Certificate rows lost in a restore
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §19, §9.*
-
-The certificate manager compares GET /tls/certs with its local chain. A live local chain with no row re-orders: POST /tls/cert-order with a fresh attestation and replaces naming the old leaf's ARI id, so §13.8's limits skip it. replaces rides the request and no row stores it. ValidateListen keeps refusing until the new row exists. §19.10's 're-registers ... TLS endpoints' is this re-order followed by the §9 registration. An old certificate with no row may raise a CT alarm on a peer; that false alarm is the safe direction and stays.
-
-Questions: `plan-TLS-small-readings.md#7`.
-
-### QD-375: Route bodies for §13.15
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §2.*
-
-TLS-M5-05 defines the JSON bodies of §13.15's routes from §13.8 and §2.8 cert-1. A stored field cert-1 lacks needs a row first (I-18). A request-only value, such as reading 7's replaces, is stored nowhere.
-
-Questions: `plan-TLS-small-readings.md#3`.
-
-### QD-376: Alerts for a killed name, a malformed hello and an unready edge
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A killed name answers unrecognized_name, as denied names do. A hello that does not parse answers decode_error. A cap, the gate being off or an unready map answers internal_error.
-
-Questions: `plan-TLS-small-readings.md#5`.
-
-### QD-377: Limits on tlsedge's inline path
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Limits load in the background through ServiceHost.Quota.Limits, cached per network. Until a network's limits arrive it gets Community's caps, never a refusal. The kill switch does not depend on this.
-
-Questions: `plan-TLS-small-readings.md#11`.
-
-### QD-492: TlsHint's body
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-In protocol/tls.proto: message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; } and enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }, the shape of SocketHint. cert_id is the 16-byte row id. The client refetches GET /tls/certs, so a hint is never authoritative.
-
-Questions: `plan-TLS-small-readings.md#1`.
-
-### QD-493: The tls-key attestation's body
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-message TlsKeyAttestation { bytes network_id = 1; bytes sidecar_id = 2; bytes spki_sha256 = 3; bytes identifier_set_sha256 = 4; uint64 issue_time_millis = 5; } under SIGNED_TLS_KEY_ATTESTATION = 0x1501, purpose tls-key, signed by the device's identity key. identifier_set_sha256 is SHA-256 over the lowercase ASCII names, a wildcard written *.x, sorted bytewise, each followed by one 0x00 byte. SIGNED_TLS_EDGE_LOGIN = 0x1502, purpose edge-login, at M6.
-
-Questions: `plan-TLS-small-readings.md#2`.
-
-### QD-584: Where the PROXY listener lives
-*Settled by the agents from the design; work builds on it.*
-
-pires/go-proxyproto is on the engine leg, so tlsedgeservice.NewProxyHeaderListener holds it, server/cli/tlsedge applies it, and server/cli/mxedge may call it, since server may import both engines.
-
-Questions: `plan-TLS-small-readings.md#14`.
 
 <a id="s14"></a>
 ## §14 The SMTP edge
@@ -2295,7 +2173,7 @@ Not folded (2026-11-16): it changes only the run's BRIEF.md and a clone's worktr
 
 Decisions taken after this file was generated, each naming the section it folds into. A design-records track folds the ones that name its sections, with that section's items above, and deletes them here.
 
-§2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`. The §10 fold wrote QD-857's v31 lines (cert-1's name failure backoff), which check's additions had published, into the block the same way on 2026-11-16, its entries leaving check's list, and took v32 for itself; QD-857's §13 parts fold with §13. The §11 fold wrote QD-199's smtp-4 words, which SMTP-M9-16 had published through check's additions, into the block the same way, in the list's v34, after its own v33.
+§2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`. The §10 fold wrote QD-857's v31 lines (cert-1's name failure backoff), which check's additions had published, into the block the same way on 2026-11-16, its entries leaving check's list, and took v32 for itself; QD-857's §13 parts were folded with §13 (owner decision 430). The §11 fold wrote QD-199's smtp-4 words, which SMTP-M9-16 had published through check's additions, into the block the same way, in the list's v34, after its own v33.
 
 ### QD-652: Should closure pacing admit by seat, each seat good only in its own second, in place of a bucket that admits by arrival?
 *Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
@@ -2645,15 +2523,6 @@ A config writer that has held every generation the config repo's gkm head names 
 Changes: DESIGN-DETAILS 12.2.3: the stop below an Unopened filing is bounded; a short amendment by the design agent; FoldBridgeLedger and BridgeLedgerFold.Stopped (BRIDGE-M4-23), with the wait as a settings field; then a fix track in the lane holding BRIDGE.
 
 Questions: `bridge-m2-02-unopened-generation-stall.md`.
-
-### QD-770: What enumerates a network's active publish grants for `model.ListTlsPublishedNames`, and in which process?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §13 The TLS edge and certificates.*
-
-ACL adds a read-only AclState.PublishedNames(now): every rule allowing publish, grouped by host and port, with PublishGrant's agreement rule deciding audience and expiry and disagreeing rules listed as the closed audience. taskworker reads it through a gate cache and installs it as model.SetTlsPublishedNamesSource's source; a name's label and aliases come from network_edge_label and the verified domains. The abuse check's audience and expiry are then what the gates enforce, by one reading of the rules. A process with no source still answers unavailable, which the hourly check treats as a failed pass.
-
-Changes: sidecar: AclState.PublishedNames(now), sharing PublishGrant's agreement rule; server: taskworker hosts or reads a gate cache and installs the published-names source, joining network_edge_label and verified domains; ABUSE's §21.6 hourly check reads real names once the source is installed.
-
-Questions: `tls-m5-16-published-names-enumeration.md`.
 
 ### QD-771: What is CanonicalAction.sealed_detail's seal bound to, given that an action has no StatementHeader?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*

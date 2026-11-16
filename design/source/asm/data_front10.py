@@ -78,7 +78,10 @@ evacuation (404), ref names, inline records and purge lists (405), record stream
 format rollback and turn-on (412), price tables (413), the due classification (414), prefix breaches (415) and
 new refs under prefix rules, amending 345 (416). Adds owner decisions 417-421 (folded 2026-11-16 with §12's items):
 dns's internal route bearers (417), running NS (418), names inside a network's zone (419), withheld custom hosts
-(420) and the sidecar label route (421)."""
+(420) and the sidecar label route (421). Adds owner decisions 422-432 (folded 2026-11-16 with §13's items):
+link tokens (422), published names (423), custom-domain budgets (424), the custom account key (425), custom rows and
+ALPN (426), the custom-domain readings (427), edge clients (428), certs' installs (429), a zone name's failure backoff
+(430), the members-device readings (431) and the ACME account's rollover (432)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -698,6 +701,28 @@ INDEX = list(_P9['INDEX']) + [
      "A downgrade sets a custom domain's web host `withheld`, out of the map with its row kept; a release re-enters it pending."),
     (421, "Sidecar label route",
      "api's `GET /sidecar/label` answers a sidecar its own network's label and alias, allocating on first need."),
+    (422, "Link tokens",
+     "A link audience's guest link is a signed `TlsLinkToken`, reusable until its grant ends, traded for a `__Host-ur-link` cookie."),
+    (423, "Published names",
+     "taskworker lists a network's published names from ACL's `AclState.PublishedNames`, one reading of the rules with the gates."),
+    (424, "Custom-domain budgets",
+     "One host for one device, the CA's limits as settings, half a registered domain's limit, budgets replayed from two windows back."),
+    (425, "Custom account key",
+     "An admin's devices and its shared ordering desktops hold a custom domain's account key; an admin's desktop rolls it at once."),
+    (426, "Custom rows and ALPN",
+     "Every custom certificate is a row claimed under the account's lock, and TLS-ALPN-01 needs the host's port 443 grant."),
+    (427, "Custom-domain readings",
+     "Section 17's eleven readings for Team custom-domain certificates stand as built."),
+    (428, "Edge clients",
+     "An edge block mounts the `edge` class's bearer; api mints fixed client jwts by environment, host, block, slot and index."),
+    (429, "certs' installs",
+     "certs installs behind sidecar.yml's `certs` switch; holders of `devices` revoke; cert-order asks the gate one question."),
+    (430, "Name failure backoff",
+     "certs backs a URnetwork-zone name off at a CA where it keeps failing, doubling up to a day, across restarts."),
+    (431, "Members-device readings",
+     "§13.7's members-device logins and the front's reach receipts take the build's nine readings."),
+    (432, "ACME account rollover",
+     "Account keys are in vault before any CA knows them, and certs rolls over yearly only to a next key placed there."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -731,7 +756,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 422))
+assert [r[0] for r in INDEX] == list(range(1, 433))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -783,7 +808,10 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               406: '2026-11-15', 407: '2026-11-12', 408: '2026-11-15', 409: '2026-11-15', 410: '2026-11-12',
               411: '2026-11-15', 412: '2026-11-15', 413: '2026-11-15', 414: '2026-11-15', 415: '2026-11-15',
               416: '2026-11-13',
-              417: '2026-11-06', 418: '2026-11-06', 419: '2026-11-14', 420: '2026-11-15', 421: '2026-11-15'})
+              417: '2026-11-06', 418: '2026-11-06', 419: '2026-11-14', 420: '2026-11-15', 421: '2026-11-15',
+              422: '2026-11-06', 423: '2026-11-12', 424: '2026-11-16', 425: '2026-11-13', 426: '2026-11-13',
+              427: '2026-11-13', 428: '2026-11-15', 429: '2026-11-16', 430: '2026-11-15', 431: '2026-11-15',
+              432: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -991,7 +1019,10 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "prefix breaches (415) and new refs under prefix rules (416), amending @@OD:345@@. The fold of §12's, §13's "
     "and §14's the same day numbers the answers on DNS, the TLS edge and certificates, and the SMTP edge: dns's "
     "internal route bearers (417), running NS (418), names inside a network's zone (419), withheld custom hosts "
-    "(420) and the sidecar label route (421). ")
+    "(420), the sidecar label route (421), link tokens (422), published names (423), custom-domain budgets (424), "
+    "the custom account key (425), custom rows and ALPN (426), the custom-domain readings (427), edge clients (428), "
+    "certs' installs (429), a zone name's failure backoff (430), the members-device readings (431) and the ACME "
+    "account's rollover (432). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

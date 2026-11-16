@@ -41,9 +41,9 @@ Blocks are `beta 1 + g1 99` on every lb host unless noted.
 | gkm (§10) | `gkm.bringyour.com`: `/gkm/*`; W2; reaches api's internal `POST /sidecar/identity/clients` for §6.8's hint addressing (§5.15) | §10.6's objects | JWKS, redis, metadata clusters, the internal-route credential |
 | sockets (§9) | `sockets.bringyour.com`: `/socket/*`; W2; reaches api's `/internal/gate/*` (§8.9) | Redis; ticket key; projection loaded | JWKS (the verify-only keyring of §9.8's Client tokens), redis, ticket keys (written by `sidecarctl sockets ticket-keygen`, §9.8), its gate bearer |
 | dns (§12): API; host-pinned `dnsedge` on each dns edge | `dns.bringyour.com`: §12.8's routes, journal feed, its internal routes under `/dns/internal/`; edges: UDP, TCP 53 | API: `dns_*`, `{dns}`; edge: current snapshot, verified key set | API: JWKS, pg, redis, DNSKEY windows, the SHA-256 of each internal caller class's bearer (`internal-verify.yml`); edge: current ZSK, its own bearer (`internal-dnsedge-1.yml` or `-2.yml`) |
-| tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; owner decision 121) | `{tes_}`, `{vhk}tls:`; K platform clients | platform credential |
-| mxedge (§15): router; platform listener | TCP 25 (W4) | §15's tables, `{mxr_}`, `{mxc_}`, `{vhk}mx:` | redis, both blocks; platform and feed credentials; platform-mail key (listener only) |
-| smtpedge (§14): g1 1 on 2 sending hosts; `exposed: false`, `cap_net_admin` | outbound 25 from its hosts' shared lb addresses by fwmark (warp/warpctl/config.go:2689; owner decision 124) | `smtp_*`, `{smq_}`; addresses bound | platform credential, X-UR-Ref keys |
+| tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; owner decision 121) | `{tes_}`, `{vhk}tls:`; K platform clients | the `edge` class's gate bearer (§13.6) |
+| mxedge (§15): router; platform listener | TCP 25 (W4) | §15's tables, `{mxr_}`, `{mxc_}`, `{vhk}mx:` | redis, both blocks; the `edge` class's gate bearer (§13.6) and feed credentials; platform-mail key (listener only) |
+| smtpedge (§14): g1 1 on 2 sending hosts; `exposed: false`, `cap_net_admin` | outbound 25 from its hosts' shared lb addresses by fwmark (warp/warpctl/config.go:2689; owner decision 124) | `smtp_*`, `{smq_}`; addresses bound | the `edge` class's gate bearer (§13.6), X-UR-Ref keys |
 | taskworker (existing) | — | the jobs §7, §10-§14, §20 and §21 list; the push sender | adds every cluster (GC, hourly evacuation and packing with v1's versionless sweep, shreds, gkm's reconciler, and from v1 §11.13's drop dry runs and jobs, P2 under D-OPS-21, with the segment-bucket DELETE it already holds) and the write budget's and HDD capacity's loops, ACME, EAB, Web Risk, APNs and FCM keys, certs' bearer for dns's internal routes (`internal-certs.yml`) |
 
 Gate services with no database, sockets, tlsedge and mxedge, and evs and gkm for quotas, read projections, rows, listen facts, the over-limit list and §20.14's quota routes from api's `/internal/gate/` surface: each caller class holds its own bearer, one vault file per class, connect's first, which api verifies by its SHA-256 in constant time, and the lb refuses the prefix from outside (§8.9; owner decision 340). dns's internal routes, under `/dns/internal/`, take the same scheme from their own callers (§12.8; owner decision 417): the dns edges' bearers above, the site's and the outside monitor's (`internal-monitor.yml`, `internal-monitor-outside.yml`), certs' in taskworker's `secret_files` and lbmap's (`internal-lbmap.yml`) in the lb's, each its own vault file holding current and previous values, verified by the dns API block from `internal-verify.yml`.
@@ -754,6 +754,10 @@ a drop job refused         it deletes nothing, stays refused and pages as a    {
                                                                                {mismatch}: compare its signed list
                                                                                with resolve's, then likewise if
                                                                                resolve erred
+an ACME account a year     certs reports it due and not ready (its work's      generate its next key into vault as the
+  old with no next key     rollover_due_cas) and rolls nothing over; given a   CA file's next_private_key; once rolled
+                           next key, it rolls over at its next pass (§13.8)    over, promote it to private_key with a
+                                                                               new key_create_time (owner decision 432)
 a drop job stuck           another taskworker takes it once its lease lapsed   read its lease, phase and cursor in
                            30 s, resuming at its cursor (§11.13); a job waits  drops/<repo>/_; a wait for HDD load,
                            while its cluster is past 50% of capacity, under a  a hold, a deleted repo, an unsure
@@ -819,7 +823,8 @@ labels     taskworker     re-reads CT for <root> names logged since the sidecar 
 rows       daemons        a refresh whose identity, binding or registration api lacks answers
                           restore_required; the daemon re-registers its identity and newest binding (api takes
                           them only once the projection, after a site loss the resumed log, admits that
-                          identity key), then its mail host keys, TLS endpoints and push token
+                          identity key), then its mail host keys, TLS endpoints, a certificate whose row the
+                          dump lost re-ordered first with replaces (§13.8), and push token
 billing    taskworker     recomputes stripe_meter_report rows newer than the dump from network_service_usage
                           and re-sends them (§20.9's daily rows replace, never add); debits lost with the dump
                           go unbilled
@@ -905,7 +910,9 @@ sidecar:
                              # MG6's index (19.7), never off while a team_credit balance is in window
   reseed: false              # 19.10, site loss only
   place_new: meta-1          # 19.9: the metadata cluster that takes new repos; absent, the first
-  drained: []                # W1: lb interfaces the dns edges leave out of their answers
+  drained: []                # W1: lb interfaces the dns edges and warpctl dns's <env>-lb sets leave out
+  certs: {enabled: false}    # §13.15's two installs, api's and taskworker's: off, nothing of certs runs, so the
+                             # first real CA order is the owner's act (owner decision 429)
   preview_networks: []       # §7.4 (D-PHASE-3): networks that enroll sidecars before stage 2
   sockets_control_qps: {rate: 50, burst: 500}  # §9.10 (D-SOCK-15), per process and calling client; edges: W2's 2,000 Finds/s
   urnetwork_edge: <network_id>                 # §6.10.1, §9.6: the urnetwork-edge platform network's id
