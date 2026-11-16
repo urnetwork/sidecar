@@ -27,6 +27,9 @@
 // next admission proposing it again; FS-97's cleanup at 90% of config_admissions, the list the same at every reader
 // and an Admin's revocations freeing it; and TeamMemberAdmitStatements and TeamMemberRevokeStatements, S3b's and S4b's
 // statement parts, which sidecartest/scenarios/team.go composes with ACL's and KEYS's parts.
+//
+// Every schedule here checks the verifiers' agreement after every step (FsTeamAgreement) in place of FI-2's and FI-25's
+// oracles: FI-2's holds evs's pushes alone, which no schedule here makes, and FI-25's is not bound yet (RECORD-M6-26).
 
 package fault
 
