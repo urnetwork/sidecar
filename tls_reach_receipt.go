@@ -2,9 +2,9 @@
 
 // §13.7's reach receipts (owner decision 25, R-MCP-7, §16.8, I-13): the front, the endpoint enforcing a publish grant,
 // writes one ReachReceipt of kind publish per grant, visitor, server name and window of
-// SidecarRecordSettings.ReachReceiptCoalesce (5 min; QD-850), through the record's writer, which journals it and never waits on evs (RecordWriter.Append). A visitor is
-// its address's /32 or /64, as the front's share counts it (tls_front_limits.go), and a receipt names it only by a
-// hash this device keys:
+// SidecarRecordSettings.ReachReceiptCoalesce (5 min; QD-850), through the record's writer, which journals it and never
+// waits on evs (RecordWriter.Append). A visitor is its address's /32 or /64, as the front's share counts it
+// (tls_front_limits.go), and a receipt names it only by a hash this device keys:
 //
 //	peers           one: HMAC-SHA256(k, family || the prefix's address bytes)[:16], family 4 or 6; k is HKDF-SHA256 of
 //	                the front's session root in keychain.ur (tls_session.go), salt the network_id, info
@@ -21,10 +21,10 @@
 //	                connection opened in
 //	byte_count      what those streams carried either way, TLS records included, in the window each ended in
 //
-// Receipts are held in memory by grant, peer, server name and window, and written when their window ends, when their grant's
-// expiry passes, and at the front's close; when one more would pass ReachReceiptMaxCount, all held are written at
-// once, off the visitor's path, so an overflow writes early and never drops. A connection that ends after the close
-// writes its own receipt at once.
+// Receipts are held in memory by grant, peer, server name and window, and written when their window ends, when their
+// grant's expiry passes, and at the front's close; when one more would pass ReachReceiptMaxCount, all held are
+// written at once, off the visitor's path, so an overflow writes early and never drops. A connection that ends after
+// the close writes its own receipt at once.
 //
 // Not written yet: approver; and relays, the edge's host, IP and operator, which the front does not learn
 // (RECORD-M6-02's relays row).
