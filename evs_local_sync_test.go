@@ -1487,3 +1487,37 @@ func TestEvsExportPrefixStopsAtABreach(t *testing.T) {
 		t.Fatalf("an export under a pending set: %v", err)
 	}
 }
+
+// A re-creating push that writes a tainted token path outside its signer's prefixes is refused with prefix_rule (8.5,
+// 8.2.7's tainted row): a breach stops main at version 2 with README tainted; the admin deletes it; the held signer's
+// re-creation writes README back as the tree holds it, which every reader refuses on the token path alone, and the
+// admin's same re-creation applies.
+func TestEvsLocalSyncPrefixRefusesATaintedPathOutside(t *testing.T) {
+	rules := newEvsTestGitRules(t)
+	c1 := rules.commitAs(rules.admin, map[string]string{"README": "readme\n", "agents/build/out": "built\n"})
+	rules.mustPublish(rules.admin, false, "main", &c1)
+	c2 := rules.commitAs(rules.held, map[string]string{"README": "breach\n", "agents/build/out": "built\n"}, c1)
+	rules.mustPublish(rules.held, true, "main", &c2)
+	device := rules.device("device b")
+	device.replay("main")
+	rules.refused(device, "main", 2, &c1, rules.held, "")
+	rules.mustPublish(rules.admin, false, "main", nil)
+	device.replay("main")
+	stopped := device.ref("main")
+	if len(stopped.Tainted) == 0 || !stopped.Deleted {
+		t.Fatalf("after the DELETE %+v", stopped)
+	}
+	recreate := func(signer *evsTestSigner) {
+		rules.publisher.ref("main").lastTip = stopped.LastTip
+		rules.mustPublish(signer, true, "main", &c1, func(args *EvsLocalPublishArgs) { args.Tainted = stopped.Tainted })
+	}
+	recreate(rules.held)
+	device.replay("main")
+	rules.stopped(device, "main", 4, nil, rules.held)
+	rules.mustPublish(rules.admin, false, "main", nil)
+	device.replay("main")
+	stopped = device.ref("main")
+	recreate(rules.admin)
+	device.replay("main")
+	rules.applied(device, "main", 6, c1)
+}

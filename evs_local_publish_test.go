@@ -1528,12 +1528,15 @@ func TestEvsLocalPublishPrefixHeldDeviceTags(t *testing.T) {
 	if len(rules.drawn) != 0 {
 		t.Fatalf("the admin's tag drew %q", rules.drawn)
 	}
-	// a device replays the tags: each passes on its proof
+	// a device replays the tags, each passing on its proof, and main, whose FORCE by the admin is outside the rules
 	device := rules.device("device b")
-	for _, name := range []string{"refs/tags/tip", "refs/tags/dropped", "refs/tags/middle"} {
+	for _, name := range []string{"refs/tags/tip", "refs/tags/dropped", "refs/tags/middle", "main"} {
 		device.replay(name)
 		if ref := device.ref(name); ref.StuckAt != 0 || ref.Tip == nil {
 			t.Fatalf("%s: %+v", name, ref)
 		}
+	}
+	if ref := device.ref("main"); ref.Version != 5 || *ref.Tip != m3 {
+		t.Fatalf("main past the FORCE: %+v", ref)
 	}
 }

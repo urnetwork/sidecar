@@ -963,7 +963,7 @@ func (self *EvsGitSyncEngine) WakeRuleWaits() error {
 	return nil
 }
 
-// WakeRuleWaits on every mount of the registry.
+// Each mount's engine woken for its refs that wait on a rule set or a source, as one engine's call is.
 func (self *EvsMounts) WakeRuleWaits() error {
 	errs := []error{}
 	for _, mount := range self.List() {

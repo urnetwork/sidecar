@@ -563,13 +563,17 @@ func (self *evsGitPublishUpdate) checkPrefix(ctx context.Context) error {
 	case EvsGitPrefixMeasureFromJ:
 		ask.drawn = self.changedFiles()
 	case EvsGitPrefixMeasureFromNothing:
-		tree := self.nextTree
-		if self.tagRef {
-			if tree, err = evsGitTreeOf(ctx, self.objects, self.peeled); err != nil {
-				return err
+		// a tag's tree is read only once the engine draws a path, so a device named for every path reads nothing
+		files := func(yield func(string) bool) {
+			tree := self.nextTree
+			if self.tagRef {
+				if tree, walkErr = evsGitTreeOf(ctx, self.objects, self.peeled); walkErr != nil {
+					return
+				}
 			}
+			evsGitTreeFiles(ctx, newEvsGitCachedTrees(self.objects, self.repo.client.settings.TreeCacheByteCount), tree, &walkErr)(yield)
 		}
-		ask.drawn = evsGitTreeFiles(ctx, newEvsGitCachedTrees(self.objects, self.repo.client.settings.TreeCacheByteCount), tree, &walkErr)
+		ask.drawn = files
 	}
 	err = ruled.allowWrite(ctx, self.repo, ask)
 	if walkErr != nil {
