@@ -96,7 +96,8 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 	if !self.posture.Enforcing() || self.rulesRefused {
 		return admission
 	}
-	sdk := profile == BridgePolicyProfileSdkProvider
+	// the sdk provider before C16; an sdk host admits as a host does, its public role holding no tag
+	sdk := !profile.principals()
 	subjects := make([]*bridgePolicySubject, 0, len(self.subjectBySidecarId)+1)
 	for _, subject := range self.subjectBySidecarId {
 		subjects = append(subjects, subject)
@@ -181,8 +182,8 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 			add(served.routeId, atoms...)
 		}
 	}
-	// a share's flows at a host, by their own tags (bridge_share.go)
-	if !sdk {
+	// a share's flows at a host, by their own tags (bridge_share.go); an sdk host serves no share
+	if profile == BridgePolicyProfileHost {
 		self.shareAdmission(admission, at)
 	}
 	return admission
@@ -210,7 +211,9 @@ func bridgeShareTargetAtom(target *bridgePolicyShareTarget) string {
 }
 
 // The tags previous admitted under at previousAt whose atoms next, at now, no longer holds all of, sorted (the file's
-// comment). At an sdk provider legacy passes every flow, as no hook does, so a move to it ends nothing.
+// comment). At an sdk provider legacy passes every flow, as no hook does, so a move to it ends nothing. An sdk host's
+// move to legacy ends every tag its host rows admitted, as at a host: a map into loopback or the LAN stands only on a
+// state, and a new flow at legacy passes as sent, never mapped.
 func bridgeDispositionTags(
 	previous *bridgePolicyState,
 	previousAt time.Time,
