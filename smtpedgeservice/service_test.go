@@ -16,20 +16,7 @@ import (
 	"github.com/urnetwork/sidecar/smtpedgeservice"
 )
 
-// A verifier with no circuits behind it: enough for readiness, which needs one present.
-type refusingVerifier struct{}
-
-// Holds no key set.
-func (self refusingVerifier) HoldsKeySet(keySet []byte) bool {
-	return false
-}
-
-// Refuses every session.
-func (self refusingVerifier) NewSmtpProofSession(preamble *sidecar.SmtpProofPreamble) (sidecar.SmtpProofSession, error) {
-	return nil, errors.New("no circuits in this test")
-}
-
-// Settings for these tests: documentation names and one RFC 5737 sending address.
+// Settings for the settings tests: documentation names and one RFC 5737 sending address.
 func testSettings() *smtpedgeservice.SmtpEdgeSettings {
 	settings := smtpedgeservice.DefaultSmtpEdgeSettings()
 	settings.Root = "root.example"
@@ -40,104 +27,72 @@ func testSettings() *smtpedgeservice.SmtpEdgeSettings {
 	return settings
 }
 
-// One engine on a fake host and the fake store.
-type testEdge struct {
-	ctx     context.Context
-	clock   *sidecartest.FakeClock
-	faults  *sidecartest.FaultQueue
-	host    *sidecartest.FakeHost
-	store   *sidecartest.FakeSmtpEdgeStore
-	service *smtpedgeservice.SmtpEdgeService
-}
-
-// Builds the engine with what a test chooses, leaving it closed at the test's end.
-func newTestEdge(t *testing.T, withStore bool, verifier sidecar.SmtpProofVerifier, settings *smtpedgeservice.SmtpEdgeSettings) *testEdge {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
-	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
-	faults := sidecartest.NewFaultQueue()
-	host := sidecartest.NewFakeHost(ctx, clock, faults, nil, nil)
-	self := &testEdge{ctx: ctx, clock: clock, faults: faults, host: host}
-	var store smtpedgeservice.SmtpEdgeStore
-	if withStore {
-		self.store = sidecartest.NewFakeSmtpEdgeStore(clock, faults)
-		store = self.store
-	}
-	service, err := smtpedgeservice.NewSmtpEdgeService(ctx, host.ServiceHost(), store, verifier, settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(service.Close)
-	self.service = service
-	return self
-}
-
 // Waits for count probes, then fails on a metrics rule broken.
-func (self *testEdge) awaitProbes(t *testing.T, count int) {
-	t.Helper()
+func (self *edgeWorld) awaitProbes(count int) {
+	self.t.Helper()
 	if err := self.service.AwaitProbes(self.ctx, count); err != nil {
-		t.Fatal(err)
+		self.t.Fatal(err)
 	}
 	if violations := self.host.Metrics.Violations(); len(violations) != 0 {
-		t.Fatalf("metrics: %v", violations)
+		self.t.Fatalf("metrics: %v", violations)
 	}
 }
 
-func TestSmtpEdgeNotReadyWithoutVerifier(t *testing.T) {
-	edge := newTestEdge(t, true, nil, testSettings())
-	edge.awaitProbes(t, 1)
-	if edge.service.Ready() {
-		t.Fatal("ready with no verifier")
-	}
-	edge.clock.Advance(testSettings().HaltReloadInterval)
-	edge.awaitProbes(t, 2)
-	if edge.service.Ready() {
-		t.Fatal("ready with no verifier after a second probe reached the store")
-	}
-	if value := edge.host.Metrics.Value("urnetwork_smtpedge_store_probes_total", "ok"); value != 2 {
-		t.Fatalf("%v probes reached the store, want 2: readiness failed for want of the verifier alone", value)
-	}
-}
-
-func TestSmtpEdgeReadyWithStoreVerifierAndAddresses(t *testing.T) {
-	edge := newTestEdge(t, true, refusingVerifier{}, testSettings())
-	edge.awaitProbes(t, 1)
-	if !edge.service.Ready() {
+func TestSmtpEdgeReadyWithEverythingPresent(t *testing.T) {
+	w := newEdgeWorld(t, nil)
+	w.awaitProbes(1)
+	if !w.service.Ready() {
 		t.Fatal("not ready with everything present")
 	}
 }
 
+func TestSmtpEdgeNotReadyWithoutVerifier(t *testing.T) {
+	w := newEdgeWorld(t, func(w *edgeWorld) { w.verifierOff = true })
+	w.awaitProbes(1)
+	if w.service.Ready() {
+		t.Fatal("ready with no verifier")
+	}
+	w.clock.Advance(w.settings.HaltReloadInterval)
+	w.awaitProbes(2)
+	if w.service.Ready() {
+		t.Fatal("ready with no verifier after a second probe reached the store")
+	}
+	if value := w.host.Metrics.Value("urnetwork_smtpedge_store_probes_total", "ok"); value != 2 {
+		t.Fatalf("%v probes reached the store, want 2: readiness failed for want of the verifier alone", value)
+	}
+}
+
 func TestSmtpEdgeNotReadyWithoutStore(t *testing.T) {
-	edge := newTestEdge(t, false, refusingVerifier{}, testSettings())
-	edge.awaitProbes(t, 1)
-	if edge.service.Ready() {
+	w := newEdgeWorld(t, func(w *edgeWorld) { w.storeOff = true })
+	w.awaitProbes(1)
+	if w.service.Ready() {
 		t.Fatal("ready with no store")
 	}
 }
 
 func TestSmtpEdgeNotReadyWithoutSendingAddresses(t *testing.T) {
-	settings := testSettings()
-	settings.SendingAddresses = nil
-	edge := newTestEdge(t, true, refusingVerifier{}, settings)
-	edge.awaitProbes(t, 1)
-	if edge.service.Ready() {
+	w := newEdgeWorld(t, func(w *edgeWorld) { w.settings.SendingAddresses = nil })
+	w.awaitProbes(1)
+	if w.service.Ready() {
 		t.Fatal("ready with no sending address")
 	}
 }
 
-func TestSmtpEdgeReadinessFollowsTheStoreProbe(t *testing.T) {
+func TestSmtpEdgeNotReadyWithoutAnXUrRefKey(t *testing.T) {
+	w := newEdgeWorld(t, func(w *edgeWorld) { w.settings.XUrRefKeys = nil })
+	w.awaitProbes(1)
+	if w.service.Ready() {
+		t.Fatal("ready with no X-UR-Ref key")
+	}
+}
+
+func TestSmtpEdgeNotReadyWithoutDeps(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
-	faults := sidecartest.NewFaultQueue()
-	// the first probe fails, before the engine even starts
-	if _, err := faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: "smtpedge.ActiveHalts", Result: sidecartest.FailBeforeApply}); err != nil {
-		t.Fatal(err)
-	}
-	host := sidecartest.NewFakeHost(ctx, clock, faults, nil, nil)
-	store := sidecartest.NewFakeSmtpEdgeStore(clock, faults)
-	service, err := smtpedgeservice.NewSmtpEdgeService(ctx, host.ServiceHost(), store, refusingVerifier{}, testSettings())
+	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+	settings := worldSettings()
+	service, err := smtpedgeservice.NewSmtpEdgeService(ctx, host.ServiceHost(), sidecartest.NewFakeSmtpEdgeStore(clock, nil), sidecartest.NewFakeSmtpProofVerifier(nil), settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,30 +101,40 @@ func TestSmtpEdgeReadinessFollowsTheStoreProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	if service.Ready() {
+		t.Fatal("ready with no gate and no world")
+	}
+}
+
+func TestSmtpEdgeReadinessFollowsTheStoreProbe(t *testing.T) {
+	w := newEdgeWorld(t, func(w *edgeWorld) {
+		// the first probe fails, before the engine even starts
+		if _, err := w.faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: "smtpedge.ActiveHalts", Result: sidecartest.FailBeforeApply}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if w.service.Ready() {
 		t.Fatal("ready after a probe that failed")
 	}
-	clock.Advance(testSettings().HaltReloadInterval)
-	if err := service.AwaitProbes(ctx, 2); err != nil {
-		t.Fatal(err)
-	}
-	if !service.Ready() {
+	w.clock.Advance(w.settings.HaltReloadInterval)
+	w.awaitProbes(2)
+	if !w.service.Ready() {
 		t.Fatal("not ready after a probe that reached the store")
 	}
-	if host.Metrics.Value("urnetwork_smtpedge_store_probes_total", "failed") != 1 {
+	if w.host.Metrics.Value("urnetwork_smtpedge_store_probes_total", "failed") != 1 {
 		t.Fatal("the failed probe was not counted")
 	}
 }
 
 func TestSmtpEdgeDrainAndCloseEndReadiness(t *testing.T) {
-	edge := newTestEdge(t, true, refusingVerifier{}, testSettings())
-	edge.awaitProbes(t, 1)
-	edge.service.Drain()
-	if edge.service.Ready() {
+	w := newEdgeWorld(t, nil)
+	w.awaitProbes(1)
+	w.service.Drain()
+	if w.service.Ready() {
 		t.Fatal("ready while draining")
 	}
-	edge.service.Close()
-	edge.service.Close()
-	if edge.service.Ready() {
+	w.service.Close()
+	w.service.Close()
+	if w.service.Ready() {
 		t.Fatal("ready after close")
 	}
 }
