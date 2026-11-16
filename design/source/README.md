@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-301. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-331. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (302 onward)
+## Adding owner decision N (332 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -198,3 +198,24 @@ The design-records track for §5 and §6 (wave f39d) folded those sections' item
 - **The metadata list** is v28, whose header names what it changes in seven rows and that it adds none, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
 
 Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md, `metadata_list.yml` and the two guard entries in `protocol/design_unfenced_test.go`.
+
+## Validation after owner decisions 302-331 (2026-11-16)
+
+The design-records track for §7 (wave f39d) folded that section's items from sidecar/DESIGN-AMENDMENTS.md, the eight "Later decisions" that named §7, and the answers since QD-784 queued for it.
+
+- **Owner decisions 302-331**, each citing its ledger id: cost totals in the team record by default (302: QD-019), the team record's `RepoCreate` (303: QD-050), a zero `team_mail` (304: QD-117), `record_required` (305: QD-139), the OAuth consent page in scope (306: QD-129), `SidecarRow.admitted_time_ms` (307: QD-646), no authority notice for a forwarding Delegation (308: QD-647), forwarding rows leaving the rows (309: QD-648), the IdP flow state in `{sso_<state>}` (310: QD-720), edge login origins on the tlsedge ports (311: QD-723), re-seed uploads in `{acl_<networkId>}r` (312: QD-724), the bundle's 32-byte `delegation_id` (313: QD-731), open proposals in rows, the run-once activation task and the restored-cosigned kind (314: QD-736, QD-745, QD-952), a base's `shrunk_repo_ids` and the shrink's second comparison (315: QD-746, QD-883), the DPoP `iat` by api's clock (316: QD-757), the daemon's one config follower and its head reader (317: QD-796, QD-804), the anchor judged by descent (318: QD-814), a device with no config key (319: QD-817), the genesis owner's admission hash (320: QD-825), SCIM's bearer and the signer's queue route (321: QD-828, QD-829), device authorizations in Redis (322: QD-830), the auth key and admin event encodings (323: QD-911), the invite's string, fragment and join MAC (324: QD-964), `tail_verdicts` (325: QD-915), the `not_preview` code (326: QD-919), attestation outside the log's rule (327: QD-924), stage 2's build tag (328: QD-933), the last Owner's account deletion (329: QD-941), cascade spans and indexer rows (330: QD-947, QD-948) and a superseded forwarding client (331: QD-963). A decision that groups several answers carries its latest answer's date. None amends an earlier numbered decision, so no row of the index gained a note.
+- **As text**, without a number: the defect fixes the owner accepted (QD-001, QD-005, QD-059, QD-062, QD-068, QD-070, QD-071, QD-072, QD-081, QD-086, QD-171, QD-174, QD-204, QD-227, QD-245 and QD-250) and the build's readings and fills (QD-287, QD-451, QD-456, QD-497 and QD-498). QD-628 names no change here: AuthLog.tla and DESIGN-DETAILS.md 5.3 are the design agent's, and §7.9 already holds a recovery-signed proposal pending at its k-th cosign.
+- **Elsewhere.** The parts these name went with them: §2.8's api-7, §2.10's SCIM row and I-16; §6.9's `key-proof` purpose; §8.4's enum numbering, §8.5's invited clause and D-ACL-22, §8.7, §8.8's `team_record` paragraph, RepoCreate row, rules row and Saving, §8.10's evs row, §8.12, D-ACL-21, Q-ACL-8 and §8.18; §10.4's credential comment, §10.5's `delegation_id` and `statement` purpose, §10.6's opening and §10.7's KF2; §11.8's pins and §11.12; §15.4 and §15.5; §16.6's register and labels rows, §16.7 and §16.11; §17.8; §18.8; §19.7's MG6 and §19.10's site-loss rows; §22.7 and FS-23; §23.7's app releases.
+- **In text, ahead of the code.** `ServiceSettings`' `mail_strict = 7`, `record_cost = 8` and `record_required = 9`, and `PROPOSAL_KIND_RESTORED_COSIGNED = 4`, are written in §7.9's prose and text blocks only; no ```proto fence names them, and config.proto and auth.proto take them with their code tracks. §7.9's record lists stay text blocks: their declarations are held by `testUnfencedFence`, which a design-records track does not edit.
+- **Left in sidecar/DESIGN-AMENDMENTS.md**, each with its reason: QD-019 (RECORD.md sections 6.3 and 13.1 and Q-RECORD-6), QD-050 (Q-RECORD-3) and QD-129 (HANDOFF section 5's mmm row), for the parts in files no design-records track edits; QD-062, for api-7's two phrases that testdata/config/metadata_rows.yml quotes word for word, api-7 saying in a clause of its own that an atom's id is random; and QD-451, for the fenced blocks. Their other parts are folded.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `85c532338257fd212e18ce720607321773ad993aeac3d589ccc764a628565b31`) at this fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no `planned` guard line was needed. One proto fence changed, §7.9's: `ProjectionHeader` gained `tail_verdicts = 10` and `shrunk_repo_ids = 11`, and `ProjectionRows` gained `proposals = 7`, `settings = 8`, `ring = 9` and `indexers = 10`, all of which protocol/bridge/auth.proto already declares, and their six entries left `protocol/design_unfenced_test.go`'s `testFenceAdditions` in the same commit (owner decision 273's rule). The fence's other changes are comments.
+- **Owner decisions.** All 331 rows are present and cited; `LATE_DATES` gives each new row its date, and no new day joined the row pattern.
+- **Open owner questions.** Two, as before: Q-BRIDGE-8 and Q-REPO-6.
+- **Superseded options.** 302 grep hits, each with a reading; the one on a changed line (§7.7's owner fields, which lost `acl_subject_client_id`) was read on 2026-11-16. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v29, whose header names what it adds to api-7 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+
+Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md, `metadata_list.yml` and the six guard entries in `protocol/design_unfenced_test.go`.

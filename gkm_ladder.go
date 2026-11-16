@@ -28,7 +28,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -36,17 +35,16 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// How many pages of gen/ one refresh or first wrap reads before it gives up for this pass: gkm answers in pages,
-// and a device asks again after the last until none comes.
-const gkmGenerationPageMaxCount = 1024
-
 // Whether an error says gkm could not be reached or would not answer now, a 429 or 503 among them, rather than
-// that it refused: KF7's case, in which cached keys serve reads and deposits and everything else waits.
+// that it refused: KF7's case, in which cached keys serve reads and deposits and everything else waits. The lb's
+// 502 or 504 is such an error (QD-876): ErrGkmNoAnswer is no *GkmError and none of the errors below, so it reads
+// as a transport error does, gkm having answered nothing.
 func gkmUnreachable(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
 	}
 	if gkmError, refused := GkmErrorOf(err); refused {
+		// gkm's own answer: only one that refuses nothing leaves it unreachable
 		return gkmError.RefusesNothing()
 	}
 	for _, known := range []error{
@@ -119,7 +117,7 @@ func (self *gkmGroupManager) refreshGenerationsInFlow(ctx context.Context, state
 		return err
 	}
 	yield := client.newYield()
-	for pageCount := 0; pageCount < gkmGenerationPageMaxCount; pageCount += 1 {
+	for pageCount := 0; pageCount < client.settings.GenerationPageMaxCount; pageCount += 1 {
 		top, err := client.newestHeldGeneration(self.repoId)
 		if err != nil {
 			return err
@@ -213,7 +211,7 @@ func (self *gkmGroupManager) firstWrapInFlow(ctx context.Context, state GkmAuthV
 	// the newest generation and its parent
 	var newest, parent *bridge.Signed
 	since := uint64(0)
-	for pageCount := 0; pageCount < gkmGenerationPageMaxCount; pageCount += 1 {
+	for pageCount := 0; pageCount < client.settings.GenerationPageMaxCount; pageCount += 1 {
 		page, err := self.generationsPage(ctx, groupId, since)
 		if err != nil {
 			return err
@@ -379,7 +377,3 @@ func (self *gkmGroupManager) walkLadderForLater(ctx context.Context, state GkmAu
 		self.client.log.Infof("[gkm]the ladder walk stopped: %v", err)
 	}
 }
-
-// How long before a drop key lapses a writer renews it with a SCHEDULE rotation, at its hourly resync and at gkm's
-// renewal hint: 7 days (plan-KEYS-drop-key-lifetime's rule, which gkm's hint holds alike).
-const gkmDropKeyRenewBefore = 7 * 24 * time.Hour
