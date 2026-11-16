@@ -791,8 +791,13 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 			version = state.newest
 		}
 		held := state.versions[version]
-		if held == nil {
+		if held == nil && version == state.newest {
 			return nil, nil, fmt.Errorf("no such version")
+		}
+		if held == nil {
+			// an older version by number that nothing holds, as below a creation at max(b, m) + 1: the path with no
+			// version, which a reader takes as absent at that number (evsservice's olderVersion)
+			return reply, nil, nil
 		}
 		reply.Version = &protocol.EvsIndexVersion{PushId: held.pushId, CommitVersion: held.commitVersion, EntryVersion: held.entryBytes}
 		commitVersion = held.commitVersion

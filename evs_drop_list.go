@@ -5,11 +5,15 @@
 // never a count or a hash evs supplied (QD-705).
 //
 //	pages    History answers at most HistoryVersionCount versions a call; the walk asks again below the last one
-//	         until a creation's earlier life, or version 1
-//	lives    a creation's version is one past the removal below it (versions never restart, I-EVS-8), so the version
-//	         below a creation is the removal of the path's earlier life. That life shares the lineage's token path
-//	         when its removal committed in the creation's epoch, and its versions are walked and listed too; one whose
-//	         removal is in an older epoch was removed before a cut-over, another lineage, and the walk stops
+//	         until version 1, or until nothing stands at the number below it
+//	lives    History follows each version's prev pointers, so a creation over a standing removal walks on into the
+//	         life that removal ended. That life shares the lineage's token path when its removal committed in the
+//	         creation's epoch, and its versions are walked and listed too; one whose removal is in an older epoch was
+//	         removed before a cut-over, another lineage, and the walk stops. A creation with no removal standing
+//	         under it took max(b, m) + 1 (§11.6's version, I-EVS-8), which may be past 1 with nothing below it: evs
+//	         answers the number below absent, and the walk ends there. A walk that misses a version evs holds, as
+//	         one cut at a page's end between a creation and the removal it names, leaves a list the dry run answers
+//	         list_match false, which stops the command (10.2.4's head-mode signer)
 //	budget   a head-mode device (one holding no local tier) walks at most HeadDropFetchByteCount, counted at
 //	         StatementMaxByteCount a version, past which it answers ErrEvsDropTooLarge naming `ur history drop` on a
 //	         device that mirrors the repo; a device with a local tier walks as far as History goes
@@ -20,6 +24,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -42,6 +47,10 @@ func (self *EvsRepo) dropWalk(ctx context.Context, refName []byte, path string) 
 	version := uint64(0)
 	for {
 		history, err := self.History(ctx, &EvsReadArgs{RefName: refName, Path: path, Version: version, Fresh: version == 0})
+		if 0 < version && errors.Is(err, ErrEvsPathAbsent) {
+			// nothing at the number below the oldest version walked: the path's first creation (see the file header)
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
