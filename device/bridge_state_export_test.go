@@ -61,6 +61,11 @@ func (self *BridgeLogFixtureForTest) SidecarRevoke(sidecarId []byte) uint64 {
 		&bridge.SidecarRevoke{Header: self.fixture.header(), SidecarId: sidecarId, Reason: bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED})
 }
 
+// This device's sidecar's own sign-out: its SidecarRevoke of itself, which takes the posture back to legacy.
+func (self *BridgeLogFixtureForTest) OwnSignOut() uint64 {
+	return self.fixture.sidecarRevoke(self.fixture.self, self.fixture.self, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+}
+
 // A MemberRevoke of memberId.
 func (self *BridgeLogFixtureForTest) MemberRevoke(memberId []byte) uint64 {
 	return self.fixture.statement(self.fixture.ownerPhone, bridge.SignedPurposeAuthority, bridge.SignedType_SIGNED_MEMBER_REVOKE,

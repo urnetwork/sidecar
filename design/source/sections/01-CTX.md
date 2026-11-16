@@ -80,7 +80,7 @@ Consumers (PLAN.md:5-31; D-CTX-1):
 | Agent chat from web and phone; a broadcast "global mic"; agent-to-agent mail | RA:736-744,1304; MM:739-745 | §15, §16 |
 | QR and MDM join | TM:648-771 | §7.8 |
 | Every receipt names its relay | EXT:176-180 | §16.8 `ReachReceipt.relays` |
-| Global harness config with per-agent overrides, re-synced on save | RA:986-1009 | §16.7 |
+| Global harness config with per-agent overrides: two keys act, PII hashing from M3 and `claims` from M6, applied at each run's next SessionStart, while capture narrowing, `reach`, `models` and `identity` wait for a later design (owner decision 452) | RA:986-1009 | §16.7 |
 | Versionless objects; an encrypted per-repo search index; search in `ur` and MCP | owner decisions 151-166 | §11, §15, §16, §18 (R-CTX-34 to R-CTX-36) |
 | A team directory of runs, workers and repos, with requested access; a phone's search through an indexer; an admin drop-history action | owner decisions 170, 171, 173, 175-184 | §4.6, §7.9, §8, §10, §11.7, §11.12-§11.14, §16.11, §18 (R-CTX-37 to R-CTX-39) |
 

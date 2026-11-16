@@ -1378,9 +1378,9 @@ I-EVS-13 in a slot-keyed repo, once an erasure completes, no stored index file v
          delete rows; owner decision 289)
 I-EVS-14 every directory card, repo file and notice a reader accepts was written by the sidecar §16.11's path rules
          allow at the version's auth pin, and, where the format signs inside, signed by the same key; a card's or
-         notice's signer is admitted and unrevoked and, for a member device, consented, and a repo file's held
-         the right at its push's pin, judged by retained history (§16.11's repo file row); any other version is
-         ignored and alarms
+         notice's signer passes §16.11's card row, admitted and not revoked, reaped, suspended or parked at the
+         card's pin and, for a member device, consented, and a repo file's held the right at its push's pin, judged
+         by retained history (§16.11's repo file row); any other version is ignored and alarms
 I-EVS-15 a drop deletes a kind-1 segment or a slot only once every committed version naming it is listed by a drop
          whose window passed with no cancel and whose list its job proved exact, the job's two scans at snapshots
          after every such drop's fence found no other version naming it, evacuation's horizon has passed the object's
@@ -1616,7 +1616,7 @@ slots    every script touches one hash tag ({evsl_<repo_id>}, {evsq_<repo_id>}, 
          so no command crosses Redis Cluster slots
 caps     pro.yml's sidecar_abuse: 1,000 subscribed clients per repo, except the team directory, up to the
          network's config_admissions, whose readers poll the cards ref (§16.11) and lease only notice prefixes
-         q/<target>/; 500 repos per client, counted in {evsc_<client_id>}, a sorted set of repo ids scored by last
+         q/<h>/<tgt>/; 500 repos per client, counted in {evsc_<client_id>}, a sorted set of repo ids scored by last
          subscribe or renewal ms: one script drops members older than 7 d, refuses if the repo is absent and the set
          holds evs_repos_per_client, else adds it, and sets EXPIRE 8 d; a DELETE removes the repo once the client's
          last lease on it goes; a loss fails open, and renewals rebuild the set within a day; evs writes the family
@@ -1822,15 +1822,15 @@ push      POST .../slots/delete (admin) commits an ERASE push on the repo's `era
           staying P0 (11.13)
 closure   the erasing device names every key of the entry's representations: each retained version's slot keys;
           each derived-field chain (§15.7's i/ segment holding the message's IndexEntry, and each search-index file
-          holding the entry's postings, 11.14), which it first
-          re-checkpoints without the entry under a fresh object key by a CLOSURE push, then lists the old chain's
-          keys; and an unconsumed deposit's slot (the deposit id is the message id); in a format-2 repo that may
-          hold an index, a CUT (below) on each index ref of its documents precedes every list of index files; its
-          first ERASE carries at least the entry's own keys and deposit slot, which re-key nothing, so at the
-          storage limit and while spent its body goes at once and its derived chains follow in CLOSURE and ERASE
-          pairs (rekey, below; 11.13's wait); a record entry's erasure is
-          then noted by §16.8's `erasure` entry, a new record, which its device holds while the network is at the
-          storage limit or spent (11.13), the committed ERASE, with its erasure_note of what the keys covered,
+          holding the entry's postings, 11.14), which it first re-checkpoints without the entry under a fresh
+          object key by a CLOSURE push, then lists the old chain's keys; and an unconsumed deposit's slot (the
+          deposit id is the message id); in a format-2 repo that may hold an index, a CUT (below) on each index ref
+          of its documents precedes every list of index files, and for a record entry the ERASE of its body
+          precedes that CUT (§16.8; owner decision 460); its first ERASE carries at least the entry's own keys and
+          deposit slot, which re-key nothing, so at the storage limit and while spent its body goes at once and its
+          derived chains follow in CLOSURE and ERASE pairs (rekey, below; 11.13's wait); a record entry's erasure
+          is then noted by §16.8's `erasure` entry, a new record, which its device holds while the network is at
+          the storage limit or spent (11.13), the committed ERASE, with its erasure_note of what the keys covered,
           standing as the record meanwhile
 rekey     a CLOSURE push (flag 128, admin) on the entry's ref, or on `ur/index` for its search-index files (11.14),
           carries in erased_sha256 and its payload the list of the ERASE that follows it, and an erasure_note of its
@@ -1852,17 +1852,18 @@ rekey     a CLOSURE push (flag 128, admin) on the entry's ref, or on `ur/index` 
           and commits; the bytes count and debit as usual, and an upload no CLOSURE push adopts is an orphan (11.13)
 cut       a CUT push (flag 512, format 2; admin, and in a directory repo the authority the directory row gives an
           ERASE) on an index ref of its documents (their file-mode ref, under .ur-index/, or the repo's ur/index,
-          which a CUT creates if absent), the index on or off, changes one file only, the ref's erasure set (11.14's
-          x), created or replaced, staged, at most 16,208 B: per erasure its id, its eraser, the index_epoch its CUT
-          named, its time and, per document of it the ref indexes, the doc_key and the newest version erased; the CUT
-          keeps every erasure still pending and every one whose CUT named an epoch at or above the set's
+          which a CUT creates if absent), the index on or off, changes one file only, the ref's erasure set
+          (11.14's x), created or replaced, staged, at most 16,208 B: per erasure its id, its eraser, the
+          index_epoch its CUT named, its time and, per document of it the ref indexes, the doc_key and the newest
+          version erased, and for a run card every version through the epoch the CUT names (owner decision 459);
+          the CUT keeps every erasure still pending and every one whose CUT named an epoch at or above the set's
           listed_since, drops a complete one only by raising listed_since past the epoch that one's CUT named, and
           adds its own; evs takes it only at the head's index_epoch, which its step 7 sets to the CUT's version
-          (11.8's 5d), else 409 INDEX_EPOCH, or 409 with the paths past those bounds; so no index push but a CLOSURE
-          built before it commits after it, and a list of index files taken at or after it is complete (11.14's epoch
-          and erase rows); at the storage limit and while spent it is maintenance, spending no allowance, since its
-          one staged record replaces its ref's set; an erasure that finds the set full cuts once pending ones
-          complete, its first ERASE (closure, above) not waiting
+          (11.8's 5d), else 409 INDEX_EPOCH, or 409 with the paths past those bounds; so no index push but a
+          CLOSURE built before it commits after it, and a list of index files taken at or after it is complete
+          (11.14's epoch and erase rows); at the storage limit and while spent it is maintenance, spending no
+          allowance, since its one staged record replaces its ref's set; an erasure that finds the set full cuts
+          once pending ones complete, its first ERASE (closure, above) not waiting
 deposits  a depositor draws a random object key per deposit, seals the body under it and the record header, the
           entry's sealed fields and, under its first entry's, the push's sealed metadata under K_dep from it (11.6's
           Bytes), and puts HPKE-XWing(drop key of g, object key), info "UR evs 1.0 deposit" and aad repo_id ||
@@ -2576,11 +2577,12 @@ key       doc_key = HMAC-SHA256(K_ref, "UR evs 1.0 doc" || ref_id || u16be(len(n
           name = the path's bytes, or a derived document's registered name (a run card run/ || run_id, a directory
           announcement a/ || announcement_id); K_ref from RK_1 (§10.5), so keys survive rotations and path epochs;
           a rename is a removal and a creation
-version   the path's entry version (11.7's versions: known before the commit, never restarting, overlays
-          included); a derived document's, its writer's sequence; everywhere the newest version of a key wins, and
-          a removal is a tombstone at its version, as is a version that drops a chunk, for that chunk's key; a ref
-          DELETE is a ref tombstone at the ref version it commits at, above every version of the ref's documents
-          before it and below every re-creation's (11.7's versions)
+version   the path's entry version (11.7's versions: known before the commit, never restarting, overlays included);
+          a run card's, the index_epoch its push names times 2^32 plus the stream version of its run's newest
+          source entry (§16.10; owner decision 459), and a directory announcement's, the Announcement's; everywhere
+          the newest version of a key wins, and a removal is a tombstone at its version, as is a version that drops
+          a chunk, for that chunk's key; a ref DELETE is a ref tombstone at the ref version it commits at, above
+          every version of the ref's documents before it and below every re-creation's (11.7's versions)
 sniff     a file is text when its first 8,000 bytes hold no NUL and are valid UTF-8 but for a cut final sequence
           (git's rule), or it opens with a UTF-16 byte-order mark and is decoded; a chunk whose key set would
           encode past 512 KiB, which nearly every query would match, is skipped; a version that turns binary or
@@ -2667,7 +2669,7 @@ trigrams  every 3-byte window of the normalized UTF-8; a document's set of disti
 ```text
 paths     <root>/settings, <root>/lock, <root>/a/m and <root>/a/<n> (the all partition); per bucket <root>/b/<S>/m,
           <root>/b/<S>/s/<n> (bucket shards) and <root>/b/<S>/w/<h>/<writer>/<k> (slots: <writer> the sidecar_id in
-          hex, <h> its first two hex digits, k 0-15) and .../<writer>/L<seq> (large entries); per ref, beside its
+          hex, <h> hex of SHA-256(<writer>)[0], k 0-15) and .../<writer>/L<seq> (large entries); per ref, beside its
           roots, its erasure set x (.ur-index/x on a file-mode ref, x on ur/index), an IndexErasureSet only a CUT
           writes (11.12); names are sealed and tokenized like any path; ASCII throughout: <S> the bucket's start
           day as unpadded decimal, <n> an unpadded decimal shard number from 0, a new shard taking the manifest's
@@ -3333,28 +3335,30 @@ keys      in slot-keyed repos (record-class repos, group inboxes) each versionle
 cut       an erasure's first push on the index's ref (the entry's own, or ur/index) is its CUT (11.12): it adds its
           documents to the ref's erasure set (x, Files and format) and moves the ref's index_epoch, so every index
           push but a CLOSURE built before it is refused and rebuilt without them (commit path's epoch row); readers
-          mask each listed document, at or below its version, from the CUT on; a set version from a signer who may
-          not erase its documents is ignored and alarms (the directory, §16.11)
+          mask each listed document, at or below its version, from the CUT on, a run card being listed through the
+          epoch its CUT names, so at every version of that epoch or an older one (owner decision 459); a set
+          version from a signer who may not erase its documents is ignored and alarms (the directory, §16.11)
 erase     at a head at or after its CUT the eraser lists every index file holding the document: each writer's slots
           and large entries in each bucket, the bucket shard holding it, and the one all shard holding it, found by
           a/m's days and that shard's doc table (I-EVS-11), a list no later push lengthens; CLOSURE pushes on the
           index's ref rewrite each in place without the document (at the storage limit or while spent, in pairs
           sized to the eraser's allowance, 11.13's wait), padded to the replaced version's exact length, so 11.12's
           rekey bound holds and the size shows nothing, each under a fresh key in a new slot; each pair's ERASE
-          destroys the old slots' keys (the entry's own going with the erasure's first ERASE, owner decision 61), and
-          every stored version of those files, staged bytes still in a batch included, shares one of them; the purge
-          deletes the old ciphertext and slots a minute later; the ERASEs also name the key of every index path whose
-          retained version still holds the document (a version a hold kept, a writer slot reused after a merge, a
-          shard the document left, a bucket a roll-up removed, found from the ref's history), a live one rewritten
-          under a fresh key by a CLOSURE first, so no stored version keeps an openable key (owner decisions 61,
-          133; FI-19); a CLOSURE refused 409 for a path another push changed after the list rereads that path's
-          history and rebuilds; no watch follows an ERASE, and no indexer takes part; a diff resting on an erased
-          version is erased content: the eraser composes the surviving edit's version from the diff and its base,
-          reading index files only, and enters it full in its own head by an ordinary index push before any
-          CLOSURE of the base's or the diff's file, the erasure's list takes in every slot holding such a diff, and
-          a CLOSURE removes the diff with the listed entries; a merge or roll-up composes such a diff through its
-          listed base while the base stands, and a reader passes over a diff whose base is gone and listed, with
-          no alarm (owner decision 395)
+          destroys the old slots' keys (the entry's own going with the erasure's first ERASE, owner decision 61),
+          and every stored version of those files, staged bytes still in a batch included, shares one of them; the
+          purge deletes the old ciphertext and slots a minute later; the ERASEs also name the key of every index
+          path whose retained version still holds the document (a version a hold kept, a writer slot reused after a
+          merge, a shard the document left, a bucket a roll-up removed, found from the ref's history), a live one
+          rewritten under a fresh key by a CLOSURE first, so no stored version keeps an openable key (owner
+          decisions 61, 133; FI-19); a CLOSURE refused 409 for a path another push changed after the list rereads
+          that path's history and rebuilds; no watch follows an ERASE, and no indexer takes part; a diff resting on
+          an erased version is erased content: the eraser composes the surviving edit's version from the diff and
+          its base, reading index files only, and enters it full in its own head by an ordinary index push before
+          any CLOSURE of the base's or the diff's file, the erasure's list takes in every slot holding such a diff,
+          and a CLOSURE removes the diff with the listed entries; in the same re-entry the eraser folds each run
+          card its CUT lists again from its stream's head and enters it full in its own head (§16.8, §16.10; owner
+          decision 459); a merge or roll-up composes such a diff through its listed base while the base stands, and
+          a reader passes over a diff whose base is gone and listed, with no alarm (owner decision 395)
 bound     an erasure's cost is the index file versions erase lists, not its document count: one message or entry with
           one version is one document per 1 MiB chunk of its text, each chunk in a writer's slot or a large entry,
           then a bucket shard, then all, and a backfill, a late companion push, an absorbed slot or a hold adds

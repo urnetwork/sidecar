@@ -19,8 +19,8 @@ type BridgeSettings struct {
 	Clock Clock
 	// The posture the bridge embeds. Nil is DefaultPostureSettings.
 	PostureSettings *PostureSettings
-	// Which of §17.6's tables the bridge's provider hook runs: a sidecar-owned host's, the zero value, or the sdk exit
-	// NAT's until C16 (BridgePolicyProfileSdkProvider).
+	// Which of §17.6's tables the bridge's provider hook runs: a sidecar-owned host's, the zero value, the sdk exit NAT's
+	// until C16 (BridgePolicyProfileSdkProvider), or an app device's that hosts after it (BridgePolicyProfileSdkHost).
 	PolicyProfile BridgePolicyProfile
 	// The revocations Bridge.Revoke holds between states, each until a state at or past its position confirms or
 	// reverses it: 4,096, as many as the posture's overlay. Past it Revoke refuses, and the next state, which carries
@@ -105,6 +105,12 @@ type BridgeSettings struct {
 	// reads connect.LocalIpv4Networks, which is itself nil where interfaces cannot be enumerated, and then only the
 	// carve of Bridge.SetLocalAddresses applies.
 	LocalIpv4Networks func() []netip.Prefix
+	// Leaves every packet no entry holds on today's route, whatever the egress spec of the state in force says (§17.9,
+	// D-BRIDGE-13): an app device's VPN component, whose forwarding is the device's IP and port forwarding alone (owner
+	// decision 197), until §17.9's egress spec on app devices is switched on (§18.17; BRIDGE-M8-02). The bridge then
+	// builds no link to an exit and its status reads the spec as auto. Entries are routed as ever. False, the default,
+	// routes such packets by the spec: an approved exit's link under exits, a reject under none.
+	EgressSpecOff bool
 
 	// How long a private name's answer may be cached (§12.9): 60 s, so a name a new state moves resolves anew within
 	// a minute. Positive.

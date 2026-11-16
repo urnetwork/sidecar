@@ -107,18 +107,20 @@ func egressReferenceResolve(
 	deny := func(row string) egressReferenceDecision {
 		return egressReferenceDecision{verdict: connect.EgressVerdictDeny, row: row, untagged: untaggedRows}
 	}
+	// the sdk provider before C16; an sdk host after it walks the sdk provider's public rows and a host's from there on
 	sdk := profile == device.BridgePolicyProfileSdkProvider
+	publicRole := sdk || profile == device.BridgePolicyProfileSdkHost
 	mode := flow.ProvideMode
 	rules := input.Rules
 
 	// before the numbered rules
-	if sdk && input.State == device.PostureLegacy {
+	if publicRole && input.State == device.PostureLegacy {
 		return egressReferenceDecision{verdict: connect.EgressVerdictPass, row: "legacy"}
 	}
-	if sdk && mode != protocol.ProvideMode_Network && mode != protocol.ProvideMode_Service {
+	if publicRole && mode != protocol.ProvideMode_Network && mode != protocol.ProvideMode_Service {
 		return egressReferenceDecision{verdict: connect.EgressVerdictPass, row: "mode"}
 	}
-	if !sdk && mode != protocol.ProvideMode_Network && mode != protocol.ProvideMode_FriendsAndFamily {
+	if !publicRole && mode != protocol.ProvideMode_Network && mode != protocol.ProvideMode_FriendsAndFamily {
 		return deny("mode")
 	}
 	if flow.ContractClass == connect.ContractClassControl || flow.ContractClass == connect.ContractClassUnset {
@@ -132,8 +134,8 @@ func egressReferenceResolve(
 	if !known {
 		return deny("protocol")
 	}
-	// a host's FriendsAndFamily flow is a share's: §17.9's row, walked on its own
-	if !sdk && mode == protocol.ProvideMode_FriendsAndFamily {
+	// a host's FriendsAndFamily flow is a share's: §17.9's row, walked on its own; an sdk provider's or host's passed
+	if !publicRole && mode == protocol.ProvideMode_FriendsAndFamily {
 		return egressReferenceShare(input, flow, now, protocolNumber, tcpIdle, otherIdle)
 	}
 
@@ -849,7 +851,8 @@ var (
 // A state from the stream.
 func (self *egressGen) state() *egressGenState {
 	generated := &egressGenState{
-		profile: egressGenPick(self, device.BridgePolicyProfileHost, device.BridgePolicyProfileHost, device.BridgePolicyProfileSdkProvider),
+		profile: egressGenPick(self, device.BridgePolicyProfileHost, device.BridgePolicyProfileHost, device.BridgePolicyProfileSdkProvider,
+			device.BridgePolicyProfileSdkHost),
 	}
 	fixture := &sidecartest.BridgeRulesFixture{}
 	blockBase := egressGenPick(self, "100.80", "10.20", "172.20", "192.168")
@@ -1220,6 +1223,9 @@ func TestBridgeEgressPolicyEqualsTheReference(t *testing.T) {
 			if decision.untagged {
 				rows["untagged "+decision.row+" "+decision.verdict.String()] += 1
 			}
+			if state.profile == device.BridgePolicyProfileSdkHost {
+				rows["sdk_host "+decision.row+" "+decision.verdict.String()] += 1
+			}
 		}
 		if difference := egressCompare(state, flows, nows); difference != "" {
 			t.Fatal(difference)
@@ -1238,6 +1244,16 @@ func TestBridgeEgressPolicyEqualsTheReference(t *testing.T) {
 		"share_5 deny", "share_6 map", "share_8 deny",
 	} {
 		if rows[row] < 50 {
+			t.Errorf("%s reached %d times", row, rows[row])
+		}
+	}
+	// an app device that hosts after C16 (BRIDGE-M8-01), a quarter of the states: the sdk provider's public role and a
+	// host's Network rows, its rarest rows reached a few dozen times
+	for _, row := range []string{
+		"sdk_host legacy pass", "sdk_host mode pass", "sdk_host principal deny", "sdk_host 1 map", "sdk_host 3 map",
+		"sdk_host 2 deny", "sdk_host 6 pass", "sdk_host 7 pass", "sdk_host 7 deny",
+	} {
+		if rows[row] < 20 {
 			t.Errorf("%s reached %d times", row, rows[row])
 		}
 	}

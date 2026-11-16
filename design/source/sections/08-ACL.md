@@ -78,7 +78,7 @@ acl.proto numbers `AclAutogroup` and `AclAction` from 1 in the order the lists a
 
 ### 8.5 Policy document and worked examples
 
-The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` (sidecar/acl_hujson.go) turns `//` and `/* */` comments and trailing commas into spaces, keeping byte offsets, refuses invalid UTF-8 and hands the result to `encoding/json`, on every leg, with no new module and no dependencies.yml row; a change to it counts as a format change, since every reader must parse one source alike, and §22.6's compiler fuzz target covers it. Beyond the example it has `hosts`, with Tailscale's meaning: a name for an address or CIDR, used as `ip:<name>` and resolved at parse, so an unknown name is refused; grant fields `id`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` (8.4) and `note`; an `approvers` count on `requests`, which subjects, a harness `reach:` block (recurd-app.html:1743-1749) or a team directory request (§16.11) file; and document-level `expiresDefault` (1 h) and `evidenceDefault` (all §16.6 channels; harness only in untainted runs unless a rule names it, owner decision 142, §16.6). A `requests` rule refuses `ip`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` and `expires`: a rule names who may ask and who answers, and the filed request names ports, audience and expiry, so a Team narrows a rule through `dst`, `src` and `evidence`.
+The policy is HuJSON in the config repo, parsed in-repo: `aclStandardizeHujson` (sidecar/acl_hujson.go) turns `//` and `/* */` comments and trailing commas into spaces, keeping byte offsets, refuses invalid UTF-8 and hands the result to `encoding/json`, on every leg, with no new module and no dependencies.yml row; a change to it counts as a format change, since every reader must parse one source alike, and §22.6's compiler fuzz target covers it. Beyond the example it has `hosts`, with Tailscale's meaning: a name for an address or CIDR, used as `ip:<name>` and resolved at parse, so an unknown name is refused; grant fields `id`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` (8.4) and `note`; an `approvers` count on `requests`, which subjects or a team directory request (§16.11) file, a harness `reach:` block (recurd-app.html:1743-1749) filing none until a later design (§16.7; owner decision 452); and document-level `expiresDefault` (1 h) and `evidenceDefault` (all §16.6 channels; harness only in untainted runs unless a rule names it, owner decision 142, §16.6). A `requests` rule refuses `ip`, `via`, `sock`, `audience`, `app_mode`, `link_spki_sha256` and `expires`: a rule names who may ask and who answers, and the filed request names ports, audience and expiry, so a Team narrows a rule through `dst`, `src` and `evidence`.
 
 ```hujson
 {
@@ -361,6 +361,11 @@ RepoVersioning{repo_id, lock: locked | unlocked,                   a repo admin 
 RepoPrefixRules{repo_id, rules (sealed)}; v1 (owner decision       a repo admin or a config writer; only in a
   345), see below; SignedType 0x1111, after the row order's        general repo that is not deleted
   0x1101 to 0x110F (§6.11)
+ApprovalDelivery{header, requester_sidecar_id, sealed}; SignedType the approver's device that signed the decision
+  0x1110 (owner decision 447): the Signed ApprovalDecision or      or cancel it carries, after it signs
+  ApprovalCancel, HPKE-XWing to the requester's ReaderKey; api
+  sees its signer, requester and size, and it authorizes nothing
+  (§16.8)
 directory (one per team network, §16.11; owner decision 171): its admins are its creator and every config
   writer, each counted while consented (8.5) and not read_only, alone holding its admin scope (§7.8); api's
   verifier and readers refuse its RepoAdmin adds, RepoGrant, RepoRevoke and RepoVersioning and a second
@@ -377,6 +382,9 @@ GrantActivate checks (api's projection verifier and every reader):
 grant_id  SHA-256("urnetwork-sidecar-v1/grant" || approval_id || payload_sha256), fixed by the approval
 match     SHA-256(canonical_action) = every decision's payload_sha256, and the action's subject = every
           decision's requester_sidecar_id
+fields    the stored action sets only kind, version, scope and §16.8's server row's fields for a grant (8, 10,
+          11, 28 and 29, version 4's sealed 38 and a share's 40), any other set field refusing it, so a
+          requested dial or route grant shows api no prefix or port (owner decisions 220, 457)
 quorum    the rule's approvers (autogroup:dst-owner resolved from grant_dst at the statement's position,
           8.4), count k, evidence and 8.6's admin clause are met, an Owner's or Admin's decision counting
           toward k only where the rule's approvers name it or dst-owner resolves to an admin (8.6; owner
@@ -454,7 +462,7 @@ void      a set whose seal does not open, whose rules break the format, or whose
 
 ### 8.10 Enforcement points
 
-Server gates are coarse (who talks to whom, holds a name, fetches ciphertext) and read `AclRows`; clients check direction, port, socket, alias and path where access yields plaintext or a local effect. An outward action passes a server gate only under a standing grant, a request whose §7.9 delta carries the approval and whose GrantActivate signatures verify, or a decision sent with `Idempotency-Key: <effect_key>`: the gate first answers a use committed under that key from its `approval_use` row while the row lasts, and otherwise runs §16.6's spend check and consumes a use in the effect's own transaction (one row per approval and effect key, §16 D-MCP-11), so a lifted token cannot publish (I-8) and a retry past `not_after` gets its stored result; a gate keeps the decision only in memory, and `approval_use` only the approval id, use index, effect key and result (§2.8 api-10). Platform and ControlId clients skip the contract gate; nothing is checked per packet (connect/CODESTYLE.md:106-107).
+Server gates are coarse (who talks to whom, holds a name, fetches ciphertext) and read `AclRows`; clients check direction, port, socket, alias and path where access yields plaintext or a local effect. An outward action passes a server gate only under a standing grant, a request whose §7.9 delta carries the approval and whose GrantActivate signatures verify, or a decision sent with `Idempotency-Key: <effect_key>`: the gate first answers a use committed under that key from its `approval_use` row while the row lasts, and otherwise runs §16.6's spend check and consumes a use in the effect's own transaction (one row per approval and effect key, §16 D-MCP-11), so a lifted token cannot publish (I-8) and a retry past `not_after` gets its stored result; a gate keeps the decision only in memory, and `approval_use` only the approval id, use index, effect key, state, result and the decision's expiry (§2.8 api-10). Platform and ControlId clients skip the contract gate; nothing is checked per packet (connect/CODESTYLE.md:106-107).
 
 | resource | server point: rows read | client point |
 |---|---|---|
@@ -587,7 +595,7 @@ wrapped   a wrapped config or directory member commits no Add or Remove in that 
 
 **Q-ACL-8.** Which names may server-stored policy carry? **Decided by owner 2026-11-03 (implied by owner decision 59):** moot; the rows carry ids, opaque atom ids (16 random bytes the config's sealed tables hold beside each name, §7.9), socket token paths (owner decision 67) and public names. *Residual:* none.
 
-**Q-ACL-9.** Cross-cutting (§7, §10). May tagged, ephemeral, CI and cloud sidecars read and write through per-generation X-Wing wraps instead of MLS leaves? **Decided by owner 2026-11-04 (owner decision 114):** (a) yes, in every repo granting them access, amending owner decision 60 (§8.12). A leaf's Remove still waits for a leaf, and a reaped Delegation-admitted agent, or any holder of its reader seed, reads later generations until the Delegation's key drops: when one of its agents is revoked rather than reaped, or is suspended, at a `DelegationRevoke`, and at the latest at its `not_after`; a holder of the whole auth key also admits fresh agents, each with its own wraps, until the Delegation ends (§7.9's delegation row, §10.5). Owner decision 144 extends config wraps to member devices past §7.9's first 1,000. *Residual:* none.
+**Q-ACL-9.** Cross-cutting (§7, §10). May tagged, ephemeral, CI and cloud sidecars read and write through per-generation X-Wing wraps instead of MLS leaves? **Decided by owner 2026-11-04 (owner decision 114):** (a) yes, in every repo granting them access, amending owner decision 60 (§8.12). A leaf's Remove still waits for a leaf, and a reaped Delegation-admitted agent, or any holder of its reader seed, reads later generations until the Delegation's key drops: when one of its agents is revoked rather than reaped, or is suspended, at a `DelegationRevoke` or a compromise revocation whose cascade voids it (§10.5), and at the latest at its `not_after`; a holder of the whole auth key also admits fresh agents, each with its own wraps, until the Delegation ends (§7.9's delegation row, §10.5). Owner decision 144 extends config wraps to member devices past §7.9's first 1,000. *Residual:* none.
 
 **Q-ACL-10.** Cross-cutting (§7, §10, §11). Does owner decision 8's "network admins can always grant or revoke" reach owner-bound kinds? **Decided by owner 2026-11-04 (owner decision 126):** (a) no: there admins revoke and add only owner decision 63's visible audit reader, and other readers need the member's signed consent (§8.5), keeping pitch5.html:640's "Sessions open only when the developer shares them", for session contents (owner decision 170). *Residual:* none.
 
