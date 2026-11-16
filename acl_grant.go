@@ -13,8 +13,21 @@
 //
 // The admin clause: a grant touching another member's devices, a share or autogroup:public needs an admin's approval
 // whatever the rule says, except that a touched member who approves as autogroup:dst-owner meets it for reach to a
-// device it owns or sponsors (owner decision 180). An admin's approval counts toward k there even where the rule
-// names no admin.
+// device it owns or sponsors (owner decision 180). An Owner's or Admin's approval meets the clause wherever it
+// applies, but counts toward k only as any approver's does, where the rule's approvers name it (the owner's answer to
+// acl-m6-05-admin-alone-reach, QD-863): autogroup:admin, a user or group listing the member, another role autogroup
+// it holds, or an owner slot that resolves to autogroup:admin because no one owner or sponsor stands, as
+// autogroup:dst-owner does for a worker whose sponsor is gone (D-ACL-23, acl_approver.go). So the approvers the log
+// counts are the ones the directory asks (directory_auth.go; FI-26), and:
+//
+//	autogroup:dst-owner alone   an admin's lone decision activates no reach to another member's device or to a
+//	                            worker another member sponsors: that owner's or sponsor's decision does
+//	autogroup:self alone        reach to another member's device takes the requester's owner, who is the k, and an
+//	                            admin, whose decision meets the clause and counts for nothing else
+//	autogroup:admin named       an admin's decision is one of the k and meets the clause
+//
+// An admin's decision that only meets the clause is held to everything a counted one is: the rule's evidence, its
+// expiry and the spend check.
 //
 // A GrantActivate folds to an AclRule (plan-ACL-folded-grant-state #2): rule_id the grant_id, src its subject's
 // sidecar atom, targets and actions from grant_dst and grant_allow, a route grant's subjects in grant_dst its via too
@@ -294,8 +307,8 @@ func (self *AclState) grantTouches(ask *AclGrantAsk, audience protocol.AclAudien
 	return adminOnly, touchedMemberIds
 }
 
-// quorum: k distinct eligible approvers, each decision on an evidence channel, unexpired and spendable, and §8.6's
-// admin clause.
+// quorum: k distinct approvers the rule names, each decision on an evidence channel, unexpired and spendable, and
+// §8.6's admin clause, which an admin's decision meets whether or not it is one of the k (QD-863).
 func (self *AclState) grantQuorum(statement *AclStatement, rule *protocol.AclRequestRule, ask *AclGrantAsk, action *StoredCanonicalAction,
 	decisions []*StoredApprovalDecision, spendCheck AclSpendCheck) error {
 	now := aclTime(statement.TimeMs)
@@ -311,6 +324,8 @@ func (self *AclState) grantQuorum(statement *AclStatement, rule *protocol.AclReq
 	adminOnly, touchedMemberIds := self.grantTouches(ask, protocol.AclAudience(action.Action.GetAudience()), statement.TimeMs)
 	adminNeeded := adminOnly || 0 < len(touchedMemberIds)
 
+	// the members whose decision was taken, and those of them the rule's approvers name, who alone count toward k
+	taken := []Id{}
 	counted := []Id{}
 	adminApproved := false
 	var spendError error
@@ -318,18 +333,22 @@ func (self *AclState) grantQuorum(statement *AclStatement, rule *protocol.AclReq
 		body := decision.Decision
 		memberId := Id(body.GetApproverMemberId())
 		if !slices.Contains(evidence, body.GetChannel()) || body.GetNotAfterMillis()+aclDecisionSkewMs < statement.TimeMs ||
-			slices.Contains(counted, memberId) {
+			slices.Contains(taken, memberId) {
 			continue
 		}
+		named := self.Approves(approvers, memberId)
 		admin := self.memberAdmin(memberId)
-		if !self.Approves(approvers, memberId) && !(adminNeeded && admin) {
+		if !named && !(adminNeeded && admin) {
 			continue
 		}
 		if err := spendCheck.Spendable(self, decision, action, ask.Subject, self.pin, now); err != nil {
 			spendError = err
 			continue
 		}
-		counted = append(counted, memberId)
+		taken = append(taken, memberId)
+		if named {
+			counted = append(counted, memberId)
+		}
 		adminApproved = adminApproved || admin
 	}
 	if len(counted) < required {
