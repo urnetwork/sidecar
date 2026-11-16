@@ -3,15 +3,19 @@
 // §10.5's depositor rule on the fake gkm (KEYS-M2-22; DESIGN-DETAILS 6.6's TestDropKeyFollowsTheDepositorRule,
 // FS-23's M2 half as a unit): a depositor that reads nothing of the repo seals only to the newest GenRotate it can
 // verify and that covers its state, its pin never falls, a lapsed key waits, gkm's absence costs it nothing while
-// what it holds still covers, and a writer renews a drop key with under 7 days left.
+// what it holds still covers, and a writer renews a drop key with under 7 days left, at its resync and on gkm's
+// pending hint.
 
 package sidecar_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -208,5 +212,71 @@ func TestAWriterRenewsADropKeyWithUnderSevenDaysLeft(t *testing.T) {
 	general := newGkmEngineWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
 	if err := general.flows[general.a].client.RenewDropKey(general.ctx, general.repoId); err != nil || general.store.newestGeneration(general.groupId) != 1 {
 		t.Errorf("a general repo's writer renewed a drop key: %v", err)
+	}
+}
+
+// The renewal on gkm's pending hint (§10.6's drop keys row; QD-065): gkm hints pending to a mailbox's writers once its
+// drop key has under 7 days left, and a writer on that hint rotates with cause SCHEDULE though the generation is
+// younger than the ScheduleInterval past which a pending run rotates, as it is under a 20-day drop key life.
+func TestAPendingHintRenewsADropKeyWithUnderSevenDaysLeft(t *testing.T) {
+	world := newGkmEngineWorld(t, protocol.RepoKind_REPO_KIND_MAILBOX)
+	settings := sidecar.DefaultGkmSettings()
+	settings.DropKeyLifetime = 20 * 24 * time.Hour
+	// the hint's run commits at once, so nothing in it waits on the clock
+	settings.PendingCommitDelay = 0
+	settings.PendingCommitJitter = 0
+	world.settings = settings
+	a := world.flows[world.a]
+	a.restart()
+	world.advance(time.Minute)
+	if _, err := a.client.RotateRepo(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(world.ctx)
+	defer cancel()
+	hints, err := sidecar.NewGkmHints(ctx, &sidecar.GkmHintsArgs{Clock: world.clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hints.Close()
+	a.client.AttachHints(ctx, hints)
+	hint, err := proto.Marshal(&protocol.GkmHint{Kind: protocol.GkmHintKind_GKM_HINT_PENDING, GroupId: world.groupId.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 6 days left of generation 2's drop key, the generation 14 days old
+	world.advance(settings.DropKeyLifetime - settings.DropKeyRenewBefore + 24*time.Hour)
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	world.store.plantHook("a", "ClaimGeneration", func() {
+		close(reached)
+		<-release
+	})
+	hints.Receive(sidecar.PushNotice{Topic: sidecar.PushTopicGkm, Version: 1, Kind: uint32(protocol.MessageType_GKM_HINT), Hint: hint})
+	select {
+	case <-reached:
+	case <-time.After(10 * time.Second):
+		// a guard: the hint's work claims nothing unless it renews
+		t.Fatal("the pending hint renewed no drop key")
+	}
+	released = true
+	close(release)
+	// the hint's work holds the repo's flow until its rotation ends, so a renewal after it finds the key renewed
+	if err := a.client.RenewDropKey(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if newest := world.store.newestGeneration(world.groupId); newest != 3 {
+		t.Fatalf("generation %d after the hint", newest)
+	}
+	gen3 := world.storedGeneration(world.log.Tip(), 3).Rotate
+	if sidecar.GkmCause(gen3.GetCause()) != sidecar.GkmCauseSchedule || gen3.GetDropNotAfterMs() != gen3.GetTimeMs()+settings.DropKeyLifetime.Milliseconds() {
+		t.Errorf("the renewal on the hint: cause %d", gen3.GetCause())
 	}
 }

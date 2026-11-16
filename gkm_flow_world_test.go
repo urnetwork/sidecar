@@ -53,6 +53,8 @@ type gkmFlowWorld struct {
 	recoveryKeys map[sidecar.Id]*sidecar.GkmRecoveryKey
 	// the jitter every client draws
 	jitter time.Duration
+	// what every client runs under from its next restart, nil for the defaults
+	settings *sidecar.GkmSettings
 	// epoch 1's header, encoded
 	headerBytes []byte
 }
@@ -165,6 +167,7 @@ func (self *gkmFlowDevice) restart() {
 		ReportFork: func(fork sidecar.HeadFork) { self.forks = append(self.forks, fork) },
 		HoldsState: func() bool { return !self.stateless },
 		Jitter:     func(max time.Duration) time.Duration { return min(world.jitter, max) },
+		Settings:   world.settings,
 		Clock:      world.clock,
 	}
 	if len(self.row.GetTagIds()) == 0 {

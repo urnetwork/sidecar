@@ -137,9 +137,11 @@ func (self *FsKeysWorld) RefusesReceiver(receiver *FsKeysDevice, generation uint
 			}
 		}
 	}
-	// a deposit scope reaches no route of the caller's own reads either (QD-177)
-	if status := self.RawStatus(receiver, http.MethodGet, "/gkm/welcomes", nil, depositScope); status != http.StatusForbidden && status != http.StatusUnauthorized {
-		self.t.Errorf("GET /gkm/welcomes under the receiver's deposit scope: %d", status)
+	// a deposit scope reaches no read of the caller's own either, nor another sidecar's ReaderKey (QD-177)
+	for _, path := range []string{"/gkm/welcomes", "/gkm/reader-key/" + sidecar.EvsKeyId(receiver.SidecarId())} {
+		if status := self.RawStatus(receiver, http.MethodGet, path, nil, depositScope); status != http.StatusForbidden && status != http.StatusUnauthorized {
+			self.t.Errorf("GET %s under the receiver's deposit scope: %d", path, status)
+		}
 	}
 	if status := self.RawStatus(receiver, http.MethodGet, "/gkm/repos/"+repoId+"/drop-key?since=0", nil, depositScope); status != http.StatusOK {
 		self.t.Errorf("the drop-key route under the receiver's deposit scope: %d", status)
@@ -163,13 +165,22 @@ func (self *FsKeysWorld) PendingHintCount(device *FsKeysDevice) int {
 	return count
 }
 
+// Waits until every hint gkm queued has been sent, telling the Net's barrier driver it blocks where the world runs
+// on one.
+func (self *FsKeysWorld) awaitHintsSent() {
+	self.t.Helper()
+	var err error
+	self.block(func() { err = self.Engine.AwaitHints(self.Ctx) })
+	if err != nil {
+		self.t.Fatal(err)
+	}
+}
+
 // The receiver's drop key, read through gkm, after which every hint the read queued has been sent.
 func (self *FsKeysWorld) receiverDropKey(receiver *FsKeysDevice) (*sidecar.GkmDropKey, error) {
 	self.t.Helper()
 	dropKey, err := receiver.Client.DropKey(self.Ctx, self.RepoId)
-	if hintErr := self.Engine.AwaitHints(self.Ctx); hintErr != nil {
-		self.t.Fatal(hintErr)
-	}
+	self.awaitHintsSent()
 	return dropKey, err
 }
 
@@ -337,9 +348,7 @@ func FsKeysScheduleMailboxRenewal(t FsKeysT, newWorld FsKeysNewWorld) {
 	renewBefore := sidecar.DefaultGkmSettings().DropKeyRenewBefore
 	a.Offline = true
 	b.Offline = true
-	if err := world.Engine.AwaitHints(world.Ctx); err != nil {
-		t.Fatal(err)
-	}
+	world.awaitHintsSent()
 	aHints, bHints := world.PendingHintCount(a), world.PendingHintCount(b)
 
 	world.Clock.AdvanceTo(notAfter.Add(-renewBefore - 24*time.Hour))
@@ -358,9 +367,7 @@ func FsKeysScheduleMailboxRenewal(t FsKeysT, newWorld FsKeysNewWorld) {
 	}
 	world.Clock.Advance(time.Hour - time.Minute)
 	world.MailboxDeposit(receiver, 1)
-	if err := world.Engine.AwaitHints(world.Ctx); err != nil {
-		t.Fatal(err)
-	}
+	world.awaitHintsSent()
 	if world.PendingHintCount(a) != aHints+1 {
 		t.Errorf("a second read within the hour hinted again")
 	}
@@ -411,9 +418,7 @@ func FsKeysScheduleMailboxReadersOffline(t FsKeysT, newWorld FsKeysNewWorld) {
 
 	world.Clock.AdvanceTo(notAfter.Add(-time.Millisecond))
 	world.MailboxDeposit(receiver, 1)
-	if err := world.Engine.AwaitHints(world.Ctx); err != nil {
-		t.Fatal(err)
-	}
+	world.awaitHintsSent()
 	aHints := world.PendingHintCount(a)
 	world.Clock.AdvanceTo(notAfter.Add(time.Hour))
 	if _, err := world.receiverDropKey(receiver); !errors.Is(err, sidecar.ErrGkmWait) {

@@ -81,7 +81,9 @@ dns's internal route bearers (417), running NS (418), names inside a network's z
 (420) and the sidecar label route (421). Adds owner decisions 422-432 (folded 2026-11-16 with §13's items):
 link tokens (422), published names (423), custom-domain budgets (424), the custom account key (425), custom rows and
 ALPN (426), the custom-domain readings (427), edge clients (428), certs' installs (429), a zone name's failure backoff
-(430), the members-device readings (431) and the ACME account's rollover (432)."""
+(430), the members-device readings (431) and the ACME account's rollover (432). Adds owner decisions 433-438
+(folded 2026-11-16 with §14's items): one key part (433), envelope groups (434), ceremony re-runs (435), the TL4
+allowance's action (436), sealed report bytes (437) and pins per recipient domain (438)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -723,6 +725,18 @@ INDEX = list(_P9['INDEX']) + [
      "§13.7's members-device logins and the front's reach receipts take the build's nine readings."),
     (432, "ACME account rollover",
      "Account keys are in vault before any CA knows them, and certs rolls over yearly only to a next key placed there."),
+    (433, "One key part",
+     "Part 1 proves the key schedule once and publishes a perfectly hiding commitment; D-SMTP-16's m5.large rows take the bench's numbers."),
+    (434, "Envelope groups",
+     "Many recipients at one domain go as envelope groups on one connection, each group's replies proven with the next."),
+    (435, "Ceremony re-runs",
+     "The proofs' setup runs again only on a circuit or catalog change or a suspected exposure of its host."),
+    (436, "TL4 allowance action",
+     "§14.4's TL4 allowance for a recipient domain is `SidecarActionKind` 18, `mail_tls_unauthenticated`."),
+    (437, "Sealed report bytes",
+     "A sealed report copy is HPKE-XWing in 64 KiB chunks bound to its row; `<root>`'s reports are sealed to none."),
+    (438, "Pins per domain",
+     "§14.4's TLS pin is kept per recipient domain and MX host."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -756,7 +770,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 433))
+assert [r[0] for r in INDEX] == list(range(1, 439))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -811,7 +825,8 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               417: '2026-11-06', 418: '2026-11-06', 419: '2026-11-14', 420: '2026-11-15', 421: '2026-11-15',
               422: '2026-11-06', 423: '2026-11-12', 424: '2026-11-16', 425: '2026-11-13', 426: '2026-11-13',
               427: '2026-11-13', 428: '2026-11-15', 429: '2026-11-16', 430: '2026-11-15', 431: '2026-11-15',
-              432: '2026-11-15'})
+              432: '2026-11-15', 433: '2026-11-11', 434: '2026-11-11', 435: '2026-11-11', 436: '2026-11-12',
+              437: '2026-11-15', 438: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1021,8 +1036,9 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "internal route bearers (417), running NS (418), names inside a network's zone (419), withheld custom hosts "
     "(420), the sidecar label route (421), link tokens (422), published names (423), custom-domain budgets (424), "
     "the custom account key (425), custom rows and ALPN (426), the custom-domain readings (427), edge clients (428), "
-    "certs' installs (429), a zone name's failure backoff (430), the members-device readings (431) and the ACME "
-    "account's rollover (432). ")
+    "certs' installs (429), a zone name's failure backoff (430), the members-device readings (431), the ACME "
+    "account's rollover (432), one key part (433), envelope groups (434), ceremony re-runs (435), the TL4 "
+    "allowance's action (436), sealed report bytes (437) and pins per recipient domain (438). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

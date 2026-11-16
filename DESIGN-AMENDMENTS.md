@@ -18,7 +18,6 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§8 Access control](#s8) | 1 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
-| [§14 The SMTP edge](#s14) | 8 | 13 |
 | [§15 The local email server, inbound mail, and burner email](#s15) | 11 | 19 |
 | [§16 The local MCP server and record primitives](#s16) | 28 | 21 |
 | [§19 Server services](#s19) | 20 | 21 |
@@ -198,194 +197,6 @@ Changes: §11.6 EvsPush; §11.8 EvsHead and the 200 reply; §2.8 evs-3; §16.8 M
 Questions: `plan-RECORD-depositor-spool.md`.
 
 Not folded (2026-11-16): RECORD.md sections 5.4 and 5.7's part, the depositor spool's pruning at the mark, which lives in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as text (§11.6's EvsPush and §11.8's EvsHead fences take consumed_through, §11.12's deposits paragraph, §11.8's step 8 and 5f, §2.8's evs-3 and evs-12, and §16.8's mirrors bullet).
-
-<a id="s14"></a>
-## §14 The SMTP edge
-
-### QD-075: The intake cannot reach the network mail key, and a client-supplied mapping would let a member redirect sealed reports
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §15, §10, §7, §19.*
-
-Not option 1's column. Which repo: a personal network's owner `mailbox`; a team's general repo whose signed `RepoCreate.inbox` is 2 (plan-MAIL-group-inbox); a scope's, its member's mailbox. api already verifies those rows, so `POST /mail/enable` takes no field and `mail_network` gains no column. Which key: api's gate read surface (plan-SOCK-gate-data's option 1) answers a network id with the newest GenRotate, fetched from gkm under a self-issued 15-minute `repo:<id>:deposit` token, aud gkm, through plan-KEYS-wire-gaps#8's `GET /gkm/repos/<id>/drop-key?since=<g>`, so no group id is stored. That scope reaches only this public-key read, and evs refuses the token. The intake seals only if g is the newest served, now is before `drop_not_after_ms`, and api's rows show g covers `holders_shrunk_at`, caching at most 5 min. Otherwise the raw bytes are dropped unread and the fields kept, which is every report before M7.
-
-Changes: §14.8; §15.8; §10.14; §7.8; §19.4.
-
-Questions: `plan-SMTP-report-seal-key.md`.
-
-### QD-098: Where the TL4 allowance lives
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §15, §8, §2.*
-
-Per recipient domain. A desktop keeps its approved allowance in `SidecarStore`. For a phone's message, the approved domains ride the signed `o/` entry (`tl4_domains`, plan-SMTP-wire-gaps#4) with the approval's id. A prover host honors them only if that entry's signature verifies and its signer is a consented device (§8.5) of the mailbox's owner, for that message only, and never copies them to its own store. Such mail keeps §2.8 EX4's label.
-
-Changes: §14.4; §15.7 o/.
-
-Questions: `plan-SMTP-small-readings.md#11`.
-
-### QD-144: Re-proving Z1 in every part puts D-SMTP-16's m5.large bar out of reach
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Measure first on a real M1 and m5.large (SMTP-M9-32's `bench`) and keep D-SMTP-22 as written. If the miss is confirmed, relax the m5.large row of D-SMTP-16 rather than reopen the relation: the one hiding commitment saves about 1.4M of an estimated 6M to 7M constraints, and the m5.large budget is about 2.4M, so it cannot meet the bar alone and would add a new zero-knowledge argument to unaudited circuits. Set the new bar from the measured number.
-
-Changes: D-SMTP-16; D-SMTP-22 (options 2 and 3 only).
-
-Questions: `smtpproof-start-z1-reproof-cost.md`.
-
-### QD-157: Mail report addresses use a hash nothing can reverse
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §12, §2.*
-
-[plan-DNS-rua-token] network_dns_zone.report_token: 16 bytes from crypto/rand, lowercase base32 with no padding (26 characters), unique index, written in the zone's creating transaction, fixed for the network's life. _dmarc and _smtp._tls publish rua=mailto:<report_token>@rpt.bringyour.com in the label zone and its alias and scope zones. §14.6's nettoken becomes this value, with no key: Feedback-ID carries it through SmtpGate's cache, so the preamble path stays off Postgres. mxedge's platform listener maps token to network by the index. <root>'s _dmarc uses the fixed local part root, which no 26-character token can equal, and its rows split by header_from. [plan-SMTP-net-token] Option 1. `network_dns_zone.report_token`: 16 random octets, written at zone creation, shown as 26 lowercase base32 characters, unique-indexed, never rotated. It is `<token>` in `_dmarc` and `_smtp._tls` and `<nettoken>` in Feedback-ID. api and dns read the column; the intake finds a network by the index; `SmtpGate`'s cache carries it, so the preamble path stays off Postgres. 'Constant for burners' means a network's burners share its token, with no per-label value. `_dmarc.<root>`'s rua uses the fixed local part `root`, which no 26-character token can equal, and the intake splits those rows by header_from's `<net>` label, so burner domains that fall back to it still count once. §14.6 and smtp-2 read 'a random per-network token', and dns-1 gains the column.
-
-Changes: §14.6; §12.7; §12.14; §2.8 dns-1; §2.8 mx-4; §2.8 smtp-2.
-
-Questions: `plan-DNS-rua-token.md`, `plan-SMTP-net-token.md`.
-
-### QD-187: A send's size is declared before its mode is known
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-[plan-SMTP-preamble-byte-count] Keep the one field. The sidecar declares the count for the expected mode: its pin's, else BDAT's unstuffed form. Issued headers have fixed lengths (plan-SMTP-small-readings#3 and #4), so every length is known first. After the post-TLS EHLO, if the mode that §14.4 selects cannot meet the declared count, the sidecar ends the connection before MAIL and reconnects once with the other count and `retry_of_send_id` set, costing a burst token and no unit (§14.7). A second mismatch is `deferred` on the retry schedule. This applies both ways, so an MX that offers CHUNKING gets BDAT, which corrects SPEC.md reading 14 and prover.go's 'a count only DATA can meet means DATA', since that can report a false `too_large`. [plan-SMTP-small-readings#3] `1.` then lowercase unpadded base32 of `key_id` (1 octet) ‖ `send_id` (12 random octets) ‖ HMAC-SHA256(key, send_id ‖ network_id (16 octets) ‖ day)[0:8], day a u32be count of UTC days since the Unix epoch: 21 octets, 34 characters, 36 in all. [plan-SMTP-small-readings#4] `<class>` is `n` for network mail or `b` for burners; `<tier>` is `c`, `p` or `t`; `<nettoken>` is 26 characters (plan-SMTP-net-token); the fourth field is `urnetwork`: 40 characters in all.
-
-Changes: §14.5 SmtpPreamble; §14.6; smtpproof/SPEC.md 13.14.
-
-Questions: `plan-SMTP-preamble-byte-count.md`, `plan-SMTP-small-readings.md#3`, `plan-SMTP-small-readings.md#4`.
-
-### QD-191: `SmtpOutcome` has no message, no way past a cut, and no way to carry bounces that arrive later
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6.*
-
-`message SmtpOutcome { bytes send_id = 1; uint32 tls_level = 2; uint32 mode = 3; repeated uint32 reply_codes = 4; uint32 dsn_count = 5; uint32 hard_bounce_count = 6; bool downgrade_refused = 7; }`, 0x1603, a NO_REPLY envelope of type `SMTP_OUTCOME` to the ticket's listener, not an in-band frame. The edge accepts it from the connection's dialer for 15 min after the stream ends, then drops it. `dsn_count` and `hard_bounce_count` cover every DSN the sidecar made or received since its last accepted outcome, so bounces that arrive hours later ride the next send, and a sidecar that sends nothing more reports nothing. Self-report only, it only tightens, and it never feeds attribution.
-
-Changes: §14.14; §14.4 step 5; §6.11 SMTP_OUTCOME's carrier comment; §14.8 Self-reports.
-
-Questions: `plan-SMTP-wire-gaps.md#1`.
-
-### QD-199: 'Over 10% hard bounces in 24 h' has no floor and no stored count
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §20, §2.*
-
-New `sidecar_abuse:` keys `smtp_hard_bounce_percent: 10` and `smtp_hard_bounce_floor: 10`. The network halts when self-reported hard bounces pass 10% of recipients sent in the trailing 24 h and at least 10 recipients were sent, rates using recipients, not connections. `{smq_<networkId>}` gains 24 hourly bounce fields, 48 h expiry, added to smtp-4's sees.
-
-Changes: §14.8 Self-reports; §20.4 sidecar_abuse; §2.8 smtp-4.
-
-Questions: `plan-SMTP-small-readings.md#8`.
-
-Partly folded (2026-11-16): §2.8's smtp-4 words, which SMTP-M9-16 had published through check's additions, went into the block with §11's fold (the list's v34), and their addition left check's list (owner decision 252); §14.8's and §20.4's parts wait for §14's fold.
-
-### QD-217: §14.4's 'retry, then DSN' has no schedule, and retries spend the daily unit
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-First retry at 30 min, doubling to 4 h, then every 4 h, with a DSN at 5 days. HALTED, QUOTA and TRY_LATER honor `retry_after_ms` and still end at 5 days. New `SmtpSenderSettings.RetryUnitsPerMessagePerDay`, default 2: a message's retries that reach MAIL spend at most 2 connection units a UTC day, and past that it waits for the next UTC day. This raises the question's 15 min to 30.
-
-Changes: §14.4; §14.9 SmtpSender.
-
-Questions: `plan-SMTP-small-readings.md#9`.
-
-### QD-306: What a REQUIRETLS message needs
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A message flagged REQUIRETLS needs TL1 or TL2 and the post-TLS keyword. TL3 does not qualify, which narrows the question's 'TL1 to TL3'. Otherwise it ends before MAIL as `tls_refused`, and the DSN uses `5.7.30` for a missing keyword and `5.7.10` for missing TLS authentication.
-
-Changes: §14.5 Outcomes.
-
-Questions: `plan-SMTP-small-readings.md#12`.
-
-### QD-310: E1-E3 and the dialog live in `smtpproof`, not the engine or `SmtpSender`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-That split stands: `edgeSession` runs E1-E3 and `Prover` the dialog, through smtp_proof.go's seams. The engine keeps the gate, quota, MX, pre-TLS, splice, timers and send log, and `SmtpSender` everything around `SendSmtp`.
-
-Questions: `plan-SMTP-small-readings.md#1`.
-
-### QD-334: `dnssec_chain` must hold more than its comment says
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`dnssec_chain` carries every cut's DS and DNSKEY as well as the MX and TLSA RRsets with RRSIGs, in RFC 9102's order. The sidecar embeds every key in IANA's current root-anchors file, updated by release.
-
-Changes: §14.5 field comment.
-
-Questions: `plan-SMTP-small-readings.md#2`.
-
-### QD-366: The gate's data
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`SmtpGate` answers from memory only, a miss answers TRY_LATER and starts a refresh, and its feed is what plan-SOCK-gate-data settles for every gate.
-
-Questions: `plan-SMTP-small-readings.md#20`.
-
-### QD-448: The frames ahead of raw TLS have no bytes
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Frames apply only to `SmtpPreamble` and `SmtpPreambleResult`: u32be body length ‖ u16be MessageType ‖ body, body at most 65,536 B. Raw TLS follows an OK result, and any other result ends the stream after its frame. A bad length or type resets with PROTOCOL. A `dnssec_chain` that would pass the bound is sent empty, so TL1 is not available on that connection.
-
-Changes: §14.5.
-
-Questions: `plan-SMTP-wire-gaps.md#3`.
-
-### QD-449: §14.9's store has no DKIM key or recipient-count read
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-The six `SmtpEdgeStore` methods stay verbatim, and a second interface, `SmtpReportLookups`, adds `FindDkimKey` and the recipient count.
-
-Changes: §14.9.
-
-Questions: `plan-SMTP-small-readings.md#17`.
-
-### QD-452: Where an aggregate's sealed copy lives
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-An aggregate gets a `smtp_complaint` row of type `rua` or `tlsrpt`, which counts as no complaint and feeds no halt, so `sealed_report` has a home. `smtp_dmarc_daily` keeps the counts.
-
-Changes: §14.14.
-
-Questions: `plan-SMTP-small-readings.md#14`.
-
-### QD-487: No message carries TLS 1.3's disclosed SHTS
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §6.*
-
-A new RPC: `message SmtpHandshake { bytes send_id = 1; bytes shts = 2; }`, `SMTP_HANDSHAKE = 0x1607`, sidecar to edge, sent as soon as the handshake ends, and `message SmtpHandshakeResult { uint32 code = 1; }`, `SMTP_HANDSHAKE_RESULT = 0x1608`: 1 OK, 2 INVALID, on which the edge ends the connection, 0 a protocol error. TLS 1.2 sends none. The edge forgets SHTS after E2 (D-SMTP-10). It needs `send_id` and a result, so two ids and two fields, not the question's one and one.
-
-Changes: §14.5; §6.11.
-
-Questions: `smtpproof-start-shts-wire.md`.
-
-### QD-489: warp gives a block one fwmark
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §19.*
-
-`smtpedge.yml` lists (address, HELO name, fwmark) tuples, the block's own mark being the default, and a host with several sending addresses needs W7 to add the other rules.
-
-Changes: §14.9; §19.5 W7.
-
-Questions: `plan-SMTP-small-readings.md#18`.
-
-### QD-490: `SmtpStatus` has no message
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §6.*
-
-`message SmtpStatus { uint32 kind = 1; uint32 retry_after_ms = 2; }`, 0x1604, in `PushHint.hint` on topic `mail`: 1 HALTED, 2 QUOTA, 3 CLEAR, 0 a protocol error (§6.11). No `label`, unlike the question's draft: the client reads a halt's scope from `GET /smtp/status`. smtpedge's halt job hints the clients with a send in the last 24 h, off the path; a client that misses it gets HALTED at its next preamble.
-
-Changes: §14.14.
-
-Questions: `plan-SMTP-wire-gaps.md#2`.
-
-### QD-521: Selectors' form
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-26 lowercase base32 characters from 16 random octets, one DNS label.
-
-Changes: §14.6.
-
-Questions: `plan-SMTP-small-readings.md#5`.
-
-### QD-542: Which prover host takes an outbox entry
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §15, §22.*
-
-Rendezvous hash of `effect_key` over the consented hosts in `p/`. The chosen host writes `or/<h>/<effect_key>` with outcome `queued` at the start and rewrites it at least every 5 min while the send runs. The next host takes over only after 10 min with no change to `or/`. A crash can still send twice, which §22.7 allows.
-
-Changes: §14.5 Outcomes; §15.7 or/.
-
-Questions: `plan-SMTP-small-readings.md#10`.
-
-### QD-586: When `smtp_bytes_per_day` counts
-*Settled by the agents from the design; work builds on it.*
-
-It counts at close, so one message may pass it, and the next preamble's script answers QUOTA.
-
-Questions: `plan-SMTP-small-readings.md#7`.
 
 <a id="s15"></a>
 ## §15 The local email server, inbound mail, and burner email
@@ -2173,7 +1984,7 @@ Not folded (2026-11-16): it changes only the run's BRIEF.md and a clone's worktr
 
 Decisions taken after this file was generated, each naming the section it folds into. A design-records track folds the ones that name its sections, with that section's items above, and deletes them here.
 
-§2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`. The §10 fold wrote QD-857's v31 lines (cert-1's name failure backoff), which check's additions had published, into the block the same way on 2026-11-16, its entries leaving check's list, and took v32 for itself; QD-857's §13 parts were folded with §13 (owner decision 430). The §11 fold wrote QD-199's smtp-4 words, which SMTP-M9-16 had published through check's additions, into the block the same way, in the list's v34, after its own v33.
+§2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`. The §10 fold wrote QD-857's v31 lines (cert-1's name failure backoff), which check's additions had published, into the block the same way on 2026-11-16, its entries leaving check's list, and took v32 for itself; QD-857's §13 parts were folded with §13 (owner decision 430). The §11 fold wrote QD-199's smtp-4 words, which SMTP-M9-16 had published through check's additions, into the block the same way, in the list's v34, after its own v33; QD-199's §14 and §20 parts were folded with §14.
 
 ### QD-652: Should closure pacing admit by seat, each seat good only in its own second, in place of a bucket that admits by arrival?
 *Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
@@ -2343,42 +2154,6 @@ Changes: review phase: one settings sweep per area, from the 2026-11-11 scan.
 
 Questions: `owner-settings-sweep-timing.md`.
 
-### QD-712: May one perfectly hiding commitment to a mail session's keys be public, so that the TLS key schedule is proven once a connection and not in every proof part?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
-
-This reverses QD-144's keeping of D-SMTP-22 as written. Part 1 proves the TLS key schedule (Z1) once per connection and publishes one perfectly hiding Pedersen commitment C, over the curve embedded in BN254's scalar field, to both directions' keys and IVs, plus one such commitment per header or DATA body record after the first to the scan's state between records; every later part opens C (3,261 constraints against Z1's 708,498). C is a uniformly random group element whatever the keys are, so the edge learns nothing from it even with unbounded computation or the setup's trapdoor: D-SMTP-22's purpose, that the edge holds nothing that helps open application data (D-SMTP-21, §2.8 smtp-2), holds in full, and its sentence changes to allow these commitments. Its secrecy rests on a 251-bit blind drawn uniformly from the same source as the TLS keys; soundness (abuse control only) on discrete logs on the embedded curve, about 2^125. It makes one 2^20 domain for every circuit, eleven shapes in two families in place of 22 over four sizes, about 1.3 GiB a proof measured, and any recipient count on one connection with no recipient class (DESIGN-DETAILS 3.2.2, 3.3).
-
-Changes: D-SMTP-22's sentence and §14.5's relation (design-records); SMTP-M9-36 to -39 build the commitment, the unit shapes, the gate and the prover; released from their hold.
-
-Questions: `details-3-key-commitment.md`.
-
-### QD-713: What do D-SMTP-16's m5.large rows become, given that no relation over these circuits proves the gate's send there in 60 s?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
-
-D-SMTP-16's rows are stated in proof units; the M1's numbers stay (met by projection: 2 to 3 s for the first part, 15 to 21 s for the send, about 4 min for DATA); the m5.large's become what SMTP-M9-32's bench measures, about 150 s for the gate's send and 35 min for 100 KiB of DATA by projection until then, as QD-144's rule for a confirmed miss says. No relation over these circuits meets 60 s there: the AES keystream for a 4 KiB header block alone is 2.99M constraints, 73 s at 41,000 a second. A 2 vCPU host takes about two minutes to send to an AES MX and still sends; the client offers ChaCha20 first, five units where the MX follows. With QD-702 the targets are settings with these defaults.
-
-Changes: D-SMTP-16's Speed text (DESIGN-DETAILS 3.8; design-records); SMTP-M9-32's bench sets the m5.large numbers.
-
-Questions: `details-3-speed-bar.md`.
-
-### QD-714: Are many recipients at one domain sent in envelope groups on one connection, each group's replies proven with the next, rather than by a recipient class or by splitting the send?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
-
-Many recipients at one domain go as envelope groups on one connection: the sidecar sends a group of commands (MAIL and 12 RCPT, then 13 a group, under AES; 18 and then 19 under ChaCha20), waits for the group's replies, and proves them with the next group. A send costs one quota unit and is one transaction at the MX, and each further 12 to 19 recipients add one proof part; `smtp_recipients_per_message` caps the connection, as §20.4's comment reads. The sender does not split a domain's recipients over connections, and there is no recipient class of larger shapes: with the key schedule proven once (QD-712) a part is small, which removes the premise of `smtp-m9-22-recipient-classes`. With QD-702 the group sizes are settings with these defaults.
-
-Changes: SMTP-M9-39 builds the envelope groups; SMTP-M9-08 builds no split; no recipient-class shapes (DESIGN-DETAILS 3.1 B, 3.2.4, 3.2.6, 3.9; design-records).
-
-Questions: `details-3-recipient-groups.md`, `smtp-m9-22-recipient-classes.md`.
-
-### QD-715: When is the proofs' setup ceremony run again over unchanged circuits?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
-
-The proofs' Groth16 setup ceremony runs again, and a new key set replaces the old, only when a circuit changes, when the shape catalog changes, or when the ceremony host is suspected exposed; a key set over unchanged circuits is not rotated on a schedule or with each release. A key set may still gain shapes without replacing the rest (DESIGN-DETAILS.md 3.2.7). A leaked ceremony secret lets its holder forge proof parts under that set, which defeats abuse control for forged sends (§14.8's DKIM joins still attribute them) and exposes no mail; prover hosts check every key against the setup's transcript, so a sidecar's privacy does not rest on the ceremony. Who runs the production ceremony, and on which host, stays an external action outside this run.
-
-Changes: DESIGN-DETAILS.md 3.2.7, 3.5 and 3.9 stand as written (design-records).
-
-Questions: `details-3-key-rotation.md`.
-
 ### QD-726: What bytes does a sealed §21.10 record carry, and where in vault do its seal key and MAC key live?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §21 Abuse, safety, and legal process.*
 
@@ -2387,15 +2162,6 @@ A §21.10 record is sealed with HPKE-XWing as smtpedge's sealed report copies ar
 Changes: the production AbuseRecordMailer seals and sends (ABUSE-M5-03, -05); the owner creates abuse-mailbox.yml in vault and keeps the private key offline (an outward action).
 
 Questions: `abuse-m5-03-record-seal.md`.
-
-### QD-729: Which SidecarActionKind and CanonicalAction fields carry §14.4's TL4 allowance for a recipient domain?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §14 The SMTP edge.*
-
-§14.4's TL4 allowance for a recipient domain is its own outward action (I-8): SidecarActionKind 18, mail_tls_unauthenticated, appended to record.proto's enum, whose row in record_action_kinds.go requires host (5) holding the recipient domain, lowercase with no trailing dot, and takes expires_millis (8) for an allowance that ends. Approvers render it from daemon-built fields as "Send mail to <domain> through a mail server that cannot be authenticated: an active URnetwork edge could read it" (§2.8 EX4). The desktop keeps a granted allowance per recipient domain in its SidecarStore, and a phone's message carries the approval's id on its signed o/ entry's tl4_domains (plan-SMTP-small-readings #11). No ordinary mail_send approval counts as TL4 consent. §5.4's list and §16.8's table gain the kind.
-
-Changes: record.proto's SidecarActionKind 18 (fenced by design-records); §5.4's and §16.8's lists (design-records); SmtpTlsPolicy.AllowUnauthenticated authorizes through it.
-
-Questions: `smtp-m9-06-tl4-allowance-action.md`.
 
 ### QD-730: What does `KeyRegister.attestation` hold, given that every attestation format but `none` signs the create ceremony's client data, which the attestation object does not carry?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
