@@ -31,3 +31,23 @@ func (self *SmtpEdgeService) AwaitProbes(ctx context.Context, count int) error {
 func OpenSealedReport(privateKey hpke.PrivateKey, networkId sidecar.Id, arrival time.Time, sealed []byte) ([]byte, error) {
 	return openSmtpSealedReport(privateKey, networkId, arrival, sealed)
 }
+
+// Waits until the breaker has finished count reads of the median.
+func (self *SmtpBreaker) AwaitMedianReads(ctx context.Context, count int) error {
+	for {
+		median, update := self.median.Get()
+		if count <= median.readCount {
+			return nil
+		}
+		select {
+		case <-update:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// The gate's check.
+func CheckSmtpGateForTest(gate SmtpGate, abuse sidecar.AbuseGate, request *SmtpGateRequest, now time.Time, settings *SmtpEdgeSettings) *SmtpGateDecision {
+	return checkSmtpGate(gate, abuse, request, now, settings)
+}

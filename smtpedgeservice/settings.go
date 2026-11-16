@@ -1,6 +1,7 @@
 // config/<env>/smtpedge.yml (§14.14). DefaultSmtpEdgeSettings is the only source of a default
-// (connect/CODESTYLE.md:144), and LoadSmtpEdgeSettings lays a file over it. Protocol and format sizes
-// are not settings: they stay constants beside the code that reads them.
+// (connect/CODESTYLE.md:144), and LoadSmtpEdgeSettings lays a file over it. Protocol and format limits
+// are settings too, with the protocol's value as their default (QD-702), and smtpedge.yml never sets
+// them (yaml "-"): changing one is a protocol change, never a deployment's.
 //
 // One file serves both roles that load it: the edge (SMTP-M9-13 on), and the report intake in
 // mxedge's platform block (plan-SMTP-report-intake-home), which reads the names, the sending
@@ -22,13 +23,6 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-)
-
-const (
-	// RFC 1035's longest name.
-	smtpHostNameMaxByteCount = 253
-	// RFC 1035's longest label.
-	smtpHostLabelMaxByteCount = 63
 )
 
 // An smtpedge.yml that cannot be served from. The wrapping error names the field, never its value.
@@ -97,6 +91,9 @@ type SmtpEdgeSettings struct {
 	ReportInflateRatio int `yaml:"report_inflate_ratio"`
 	// The deepest XML or JSON nesting an aggregate may have (§14.8). Default 32.
 	ReportNestingDepth int `yaml:"report_nesting_depth"`
+	// The longest value an aggregate field may hold. Default 1,024: every field kept is an identifier,
+	// a name, a word or a number, and RFC 1035 bounds a name at 253 octets.
+	ReportAggregateValueMaxByteCount int `yaml:"-"`
 	// The deepest a report's multiparts may nest, the top level being 1. Default 8, deeper than any
 	// report shape needs (RFC 5965's is 2).
 	ReportMimeDepth int `yaml:"report_mime_depth"`
@@ -108,8 +105,90 @@ type SmtpEdgeSettings struct {
 	ReportDkimKeyRecordCount int `yaml:"report_dkim_key_records"`
 	// The largest RSA key a signature may use, in bits, which bounds a verify's cost. Default 4096.
 	ReportDkimRsaKeyBitCount int `yaml:"report_dkim_rsa_key_bits"`
+	// The smallest RSA key a signature may use, in bits. Default 1,024, RFC 8301 §3.2's floor, below which
+	// a verifier must not accept a key.
+	ReportDkimRsaKeyMinBitCount int `yaml:"-"`
+	// The longest reported Message-ID kept. Default 998, RFC 5322 §2.1.1's longest line.
+	ReportMessageIdMaxByteCount int `yaml:"-"`
+	// The longest Feedback-Type token kept. Default 32: RFC 5965's registry's longest is twelve.
+	ReportFeedbackTypeMaxByteCount int `yaml:"-"`
 	// How long one report's DNS reads may take in all. Default 30 s, D-MAIL-14's bound for mail.
 	ReportDnsTimeout time.Duration `yaml:"report_dns_timeout"`
+
+	// The longest name in text form. Default 253, RFC 1035's.
+	HostNameMaxByteCount int `yaml:"-"`
+	// The longest label. Default 63, RFC 1035's.
+	HostLabelMaxByteCount int `yaml:"-"`
+
+	// X-UR-Ref's keys, by key_id (§14.6, §14.14's vault X-UR-Ref keys), which the host reads from its
+	// vault secret file and never from smtpedge.yml. The edge is not ready with none; the intake reads
+	// none.
+	XUrRefKeys []*SmtpXUrRefKey `yaml:"-"`
+	// The key new references are issued under, 1 to 255. Every key held verifies, so a rotation adds the
+	// new key everywhere, then moves this. Default 1.
+	XUrRefIssueKeyId int `yaml:"x_ur_ref_issue_key_id"`
+	// The shortest X-UR-Ref key taken. Default 32, HMAC-SHA256's output (RFC 2104 §3).
+	XUrRefKeyMinByteCount int `yaml:"-"`
+	// The longest Message-ID a preamble may declare. Default 998, RFC 5322 §2.1.1's longest line.
+	PreambleMessageIdMaxByteCount int `yaml:"-"`
+	// How long after POST /mail/enable a network's internet mail starts (§14.7). Default 24 h.
+	MailEnableDelay time.Duration `yaml:"mail_enable_delay"`
+	// retry_after while a fact the gate needs is not loaded, its load asked for (I-12). Default 60 s.
+	GateRetryTimeout time.Duration `yaml:"gate_retry_timeout"`
+	// retry_after for a spent network's QUOTA. Default 1 h.
+	SpentRetryTimeout time.Duration `yaml:"spent_retry_timeout"`
+	// retry_after while §21.5's breaker pauses a network's tier. Default 1 h.
+	BreakerRetryTimeout time.Duration `yaml:"breaker_retry_timeout"`
+
+	// How long {smq_<networkId>} lives after its last write (§14.7). Default 48 h.
+	QuotaKeyTimeout time.Duration `yaml:"quota_key_timeout"`
+	// How long a live connection's member lives unrenewed, so a crashed edge's concurrency and
+	// reservations heal within it. Default 5 min.
+	QuotaMemberTimeout time.Duration `yaml:"quota_member_timeout"`
+	// How often a live connection renews its member, under QuotaMemberTimeout (SMTP-M9-13). Default 2 min.
+	QuotaMemberRenewInterval time.Duration `yaml:"quota_member_renew_interval"`
+	// How long one quota script may take before it reads as Redis not answering. Default 2 s: a preamble
+	// waits on it.
+	QuotaCallTimeout time.Duration `yaml:"quota_call_timeout"`
+	// retry_after for QUOTA when the script names no time: concurrency and the per-message caps.
+	// Default 60 s.
+	QuotaRetryTimeout time.Duration `yaml:"quota_retry_timeout"`
+	// The most networks this process counts in memory while Redis does not answer; past it a network not
+	// yet counted gets QUOTA. Default 100,000, a few megabytes.
+	QuotaFallbackNetworkMaxCount int `yaml:"quota_fallback_networks"`
+	// How long an hour's fleet counter lives after its UTC hour starts (plan-SMTP-shared-counters).
+	// Default 2 h.
+	HourCounterTimeout time.Duration `yaml:"-"`
+	// How often the Community breaker rereads {smg_median}. Default 60 s.
+	BreakerMedianRefreshInterval time.Duration `yaml:"breaker_median_refresh_interval"`
+
+	// The TCP port an MX listens on. Default 25.
+	MxPort int `yaml:"-"`
+	// Ranges the edge never dials, beyond what is not public unicast IPv4 (owner decision 34): private,
+	// loopback, link-local and multicast addresses are refused whatever this holds. Default the other
+	// special-purpose ranges: 0/8, 100.64/10, 192.0.0/24, the three documentation ranges, 192.88.99/24,
+	// 198.18/15 and 240/4.
+	MxRefusedPrefixes []netip.Prefix `yaml:"-"`
+	// The most MX hosts one preamble tries, by preference. Default 8.
+	MxHostMaxCount int `yaml:"mx_hosts"`
+	// The most addresses tried at one MX host. Default 4.
+	MxAddressMaxCount int `yaml:"mx_addresses"`
+	// How long one DNS lookup may take. Default 30 s.
+	MxLookupTimeout time.Duration `yaml:"mx_lookup_timeout"`
+	// retry_after for TRY_LATER when no MX was reached for now. Default 5 min.
+	MxRetryTimeout time.Duration `yaml:"mx_retry_timeout"`
+	// How long a 421 banner backs its MX host off, in this edge's memory (§14.4). Default 5 min.
+	MxBannerBackoffTimeout time.Duration `yaml:"mx_banner_backoff"`
+	// The most MX hosts backed off at once; past it a new one is not. Default 10,000.
+	MxBackoffMaxCount int `yaml:"mx_backoff_max"`
+	// An MX reply's bound before TLS, every line of it. Default 2,048, connect's.
+	MxReplyMaxByteCount int `yaml:"-"`
+	// One reply line's bound without its line end. Default 510, connect's: RFC 5321's 512 with the CRLF.
+	MxReplyLineMaxByteCount int `yaml:"-"`
+	// How often the sending addresses' FCrDNS is checked (§14.6). Default 10 min.
+	FcrdnsCheckInterval time.Duration `yaml:"fcrdns_check_interval"`
+	// How long one address's check may take. Default 30 s.
+	FcrdnsTimeout time.Duration `yaml:"fcrdns_timeout"`
 }
 
 // The defaults every number here is read from. Root and ReportHostName stay empty, so these alone do
@@ -137,6 +216,53 @@ func DefaultSmtpEdgeSettings() *SmtpEdgeSettings {
 		ReportDkimKeyRecordCount: 4,
 		ReportDkimRsaKeyBitCount: 4096,
 		ReportDnsTimeout:         30 * time.Second,
+
+		ReportAggregateValueMaxByteCount: 1024,
+		ReportDkimRsaKeyMinBitCount:      1024,
+		ReportMessageIdMaxByteCount:      998,
+		ReportFeedbackTypeMaxByteCount:   32,
+		HostNameMaxByteCount:             253,
+		HostLabelMaxByteCount:            63,
+
+		XUrRefIssueKeyId:              1,
+		XUrRefKeyMinByteCount:         32,
+		PreambleMessageIdMaxByteCount: 998,
+		MailEnableDelay:               24 * time.Hour,
+		GateRetryTimeout:              60 * time.Second,
+		SpentRetryTimeout:             time.Hour,
+		BreakerRetryTimeout:           time.Hour,
+
+		QuotaKeyTimeout:              48 * time.Hour,
+		QuotaMemberTimeout:           5 * time.Minute,
+		QuotaMemberRenewInterval:     2 * time.Minute,
+		QuotaCallTimeout:             2 * time.Second,
+		QuotaRetryTimeout:            60 * time.Second,
+		QuotaFallbackNetworkMaxCount: 100000,
+		HourCounterTimeout:           2 * time.Hour,
+		BreakerMedianRefreshInterval: 60 * time.Second,
+
+		MxPort: 25,
+		MxRefusedPrefixes: []netip.Prefix{
+			netip.MustParsePrefix("0.0.0.0/8"),
+			netip.MustParsePrefix("100.64.0.0/10"),
+			netip.MustParsePrefix("192.0.0.0/24"),
+			netip.MustParsePrefix("192.0.2.0/24"),
+			netip.MustParsePrefix("192.88.99.0/24"),
+			netip.MustParsePrefix("198.18.0.0/15"),
+			netip.MustParsePrefix("198.51.100.0/24"),
+			netip.MustParsePrefix("203.0.113.0/24"),
+			netip.MustParsePrefix("240.0.0.0/4"),
+		},
+		MxHostMaxCount:          8,
+		MxAddressMaxCount:       4,
+		MxLookupTimeout:         30 * time.Second,
+		MxRetryTimeout:          5 * time.Minute,
+		MxBannerBackoffTimeout:  5 * time.Minute,
+		MxBackoffMaxCount:       10000,
+		MxReplyMaxByteCount:     2048,
+		MxReplyLineMaxByteCount: 510,
+		FcrdnsCheckInterval:     10 * time.Minute,
+		FcrdnsTimeout:           30 * time.Second,
 	}
 }
 
@@ -160,12 +286,12 @@ func LoadSmtpEdgeSettings(data []byte) (*SmtpEdgeSettings, error) {
 }
 
 // Whether name is a dotted LDH name, which also keeps a CR, LF or space out of everything it enters.
-func smtpLdhName(name string) bool {
-	if name == "" || smtpHostNameMaxByteCount < len(name) {
+func (self *SmtpEdgeSettings) ldhName(name string) bool {
+	if name == "" || self.HostNameMaxByteCount < len(name) {
 		return false
 	}
 	for _, label := range strings.Split(name, ".") {
-		if label == "" || smtpHostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || self.HostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := range len(label) {
@@ -183,10 +309,24 @@ func (self *SmtpEdgeSettings) Validate() error {
 	if self == nil {
 		return fmt.Errorf("%w: no settings", ErrSmtpEdgeSettingsRefused)
 	}
-	if !smtpLdhName(self.Root) {
+	value := reflect.ValueOf(self).Elem()
+	for i := range value.NumField() {
+		field := value.Field(i)
+		if (field.Kind() == reflect.Int || field.Kind() == reflect.Int64) && field.Int() <= 0 {
+			name := value.Type().Field(i).Tag.Get("yaml")
+			if name == "" || name == "-" {
+				name = value.Type().Field(i).Name
+			}
+			return fmt.Errorf("%w: %s is not positive", ErrSmtpEdgeSettingsRefused, name)
+		}
+	}
+	if self.ReportDkimRsaKeyBitCount < self.ReportDkimRsaKeyMinBitCount {
+		return fmt.Errorf("%w: report_dkim_rsa_key_bits is under RFC 8301's floor", ErrSmtpEdgeSettingsRefused)
+	}
+	if !self.ldhName(self.Root) {
 		return fmt.Errorf("%w: root is not an LDH name", ErrSmtpEdgeSettingsRefused)
 	}
-	if !smtpLdhName(self.ReportHostName) {
+	if !self.ldhName(self.ReportHostName) {
 		return fmt.Errorf("%w: report_host is not an LDH name", ErrSmtpEdgeSettingsRefused)
 	}
 	seenAddresses := map[netip.Addr]bool{}
@@ -201,7 +341,7 @@ func (self *SmtpEdgeSettings) Validate() error {
 			return fmt.Errorf("%w: sending_addresses repeats an address", ErrSmtpEdgeSettingsRefused)
 		}
 		seenAddresses[address] = true
-		if !smtpLdhName(sendingAddress.HeloName) {
+		if !self.ldhName(sendingAddress.HeloName) {
 			return fmt.Errorf("%w: a sending address's helo is not an LDH name", ErrSmtpEdgeSettingsRefused)
 		}
 		if sendingAddress.Fwmark < 0 {
@@ -209,18 +349,40 @@ func (self *SmtpEdgeSettings) Validate() error {
 		}
 	}
 	for _, domain := range self.LoopAllowlist {
-		if !smtpLdhName(domain) {
+		if !self.ldhName(domain) {
 			return fmt.Errorf("%w: loop_allowlist holds a name that is not LDH", ErrSmtpEdgeSettingsRefused)
 		}
 	}
-	value := reflect.ValueOf(self).Elem()
-	for i := range value.NumField() {
-		field := value.Field(i)
-		if (field.Kind() == reflect.Int || field.Kind() == reflect.Int64) && field.Int() <= 0 {
-			return fmt.Errorf("%w: %s is not positive", ErrSmtpEdgeSettingsRefused, value.Type().Field(i).Tag.Get("yaml"))
+	if 255 < self.XUrRefIssueKeyId {
+		return fmt.Errorf("%w: x_ur_ref_issue_key_id is past one octet", ErrSmtpEdgeSettingsRefused)
+	}
+	seenKeyIds := map[uint8]bool{}
+	issueKeyHeld := false
+	for _, key := range self.XUrRefKeys {
+		if key == nil || key.KeyId == 0 || seenKeyIds[key.KeyId] {
+			return fmt.Errorf("%w: an X-UR-Ref key with no id, or an id twice", ErrSmtpEdgeSettingsRefused)
 		}
+		seenKeyIds[key.KeyId] = true
+		if len(key.Key) < self.XUrRefKeyMinByteCount {
+			return fmt.Errorf("%w: an X-UR-Ref key shorter than its bound", ErrSmtpEdgeSettingsRefused)
+		}
+		issueKeyHeld = issueKeyHeld || int(key.KeyId) == self.XUrRefIssueKeyId
+	}
+	if len(self.XUrRefKeys) != 0 && !issueKeyHeld {
+		return fmt.Errorf("%w: x_ur_ref_issue_key_id names no key held", ErrSmtpEdgeSettingsRefused)
+	}
+	if self.QuotaMemberTimeout <= self.QuotaMemberRenewInterval {
+		return fmt.Errorf("%w: quota_member_renew_interval is not under quota_member_timeout", ErrSmtpEdgeSettingsRefused)
+	}
+	if 65535 < self.MxPort {
+		return fmt.Errorf("%w: MxPort is past a port", ErrSmtpEdgeSettingsRefused)
 	}
 	return nil
+}
+
+// Whether label is one LDH label.
+func (self *SmtpEdgeSettings) ldhLabel(label string) bool {
+	return !strings.Contains(label, ".") && self.ldhName(label)
 }
 
 // Whether address is in the sending set.
