@@ -42,8 +42,9 @@ const mailComponentName = "mail"
 // The sealed directory's file that says mail is on for this device's network.
 const mailEnabledFileName = "enabled.json"
 
-// §15.6's prompt, which `ur status` and the apps show until a mail indexer stands. Product copy, so a fixed text.
-const MailIndexerPrompt = "A phone alone cannot reliably receive mail: an indexer, an always-on device (a desktop `ur daemon`, a NAS or VPS), is needed; time-sensitive codes may not arrive"
+// §15.6's prompt, which `ur status` and the apps show until a mail indexer stands: §15.9's and §18.5's foreground-only
+// copy too (MailCoverageForegroundOnlyCopy), one text. Product copy, so a fixed text.
+const MailIndexerPrompt = "A phone alone cannot reliably receive mail: an indexer, an always-on device (a desktop ur daemon, a NAS or VPS), is needed; time-sensitive codes may not arrive"
 
 var (
 	// No EvsClient, or no engine with a verified state, is there to work on yet.
@@ -81,6 +82,20 @@ type MailBinding struct {
 	Api MailApi
 	// Whether a mail indexer stands for the network (§7.9's IndexerSet for mail, §15.6); nil reads unknown.
 	MailIndexer func() (bool, error)
+	// §7.9's verified config, which the designations and team_mail are read from (mail_indexer.go); nil leaves the
+	// designations unknown, so nothing gates on them or alarms over them.
+	Config func() (*ConfigState, error)
+	// Opens a designation's sealed services; nil opens none, so the designations are unknown (mail_indexer.go).
+	IndexerServices MailIndexerServices
+	// Raises an event on the Sidecar, mail_receiver_alarm's; nil only logs it.
+	Event func(event SidecarEvent)
+	// What SetReceiverEnabled files a designation through, and the config generation's key its services are sealed
+	// to (mail_host.go); nil refuses it, and a nil key refuses the designation itself.
+	Designator MailIndexerDesignator
+	ConfigKey  func(ctx context.Context) (*EvsRepoKey, error)
+	// The labels directly under the network's apex it publishes a host at, which a burner label must not shadow
+	// (mail_burner_labels.go); nil for none.
+	PublishedHosts func() []string
 }
 
 // How a MailClient reaches a repo's parts: over the bound EvsClient, or a test's stand-ins.
@@ -191,11 +206,15 @@ type MailClient struct {
 	views        map[Id]*MailView
 	// the mailbox's store as IMAP sees it, by mailbox, built at first use over the binding (mail_imap_store.go)
 	imapStores map[Id]*MailImapStore
+	// the member's vault, by mailbox, built at first use over the binding (mail_codes.go)
+	vaults map[Id]*MailVault
 	// whether mail is on: this device's enable, kept in the store, or the network's status as last read
 	enabledLoaded  bool
 	enabledLocally bool
 	enabledNetwork bool
 	receiverStatus MailClientReceiverStatus
+	// an app host's app is in the background, where a foreground-only host registers no listener (mail_host.go)
+	background bool
 	// the zone's row as the component last read it, which Network answers where the Sidecar binds
 	zoneRow NetworkLabelRow
 	// closed and replaced at each change the component looks at
@@ -233,6 +252,7 @@ func NewMailClient(args *MailClientArgs) (*MailClient, error) {
 		imapHints:  NewMonitorValue(uint64(0)),
 		views:      map[Id]*MailView{},
 		imapStores: map[Id]*MailImapStore{},
+		vaults:     map[Id]*MailVault{},
 		changed:    make(chan struct{}),
 	}, nil
 }
@@ -303,6 +323,7 @@ func (self *MailClient) Bind(binding *MailBinding) {
 		self.configRepoId = Id{}
 		self.views = map[Id]*MailView{}
 		self.imapStores = map[Id]*MailImapStore{}
+		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()
 	}()
 	if closeConfig != nil {
@@ -421,9 +442,13 @@ func (self *MailClient) mailConfig() (*MailConfig, error) {
 		SidecarId: self.sidecarId,
 		Authority: &MailConfigAclAuthority{Engine: binding.Engine},
 		Gate:      binding.Gate,
-		Clock:     self.clock,
-		Log:       self.log,
-		Settings:  self.settings.Config,
+		Alarm: func(alarm *MailConfigAlarm) {
+			self.raiseReceiverAlarm(SidecarMailReceiverAlarmRecord, alarm.SidecarId, alarm.RepoId)
+		},
+		BurnerLabels: self.burnerLabels(),
+		Clock:        self.clock,
+		Log:          self.log,
+		Settings:     self.settings.Config,
 	})
 	if err != nil {
 		return nil, err
@@ -755,6 +780,7 @@ func (self *MailClient) closeParts() {
 		self.repos = nil
 		self.views = map[Id]*MailView{}
 		self.imapStores = map[Id]*MailImapStore{}
+		self.vaults = map[Id]*MailVault{}
 		self.notifyWithLock()
 		return config
 	}()
