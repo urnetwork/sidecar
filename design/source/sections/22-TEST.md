@@ -157,10 +157,11 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
 §12   (validator; labels; compact denial; CNAME lint) both NS alike at one serial, a drained or failed interface
       dropped from *, @, every copy of *'s records and each mx on both; a key set failing self-check never serves;
       §12.5's label uniqueness; §12.8's verification gate
-§13   (ClientHello parser; 421) §13.9's kill switch and ValidateListen refusals, mta-sts served only as a receiver's
-      system publish; §13.4's bench; tlsedge on 443, 8443, 8883 and 5671 only (owner decision 121); CAA, audiences and
-      custom hosts: FS-32, FS-34, FS-35; custom-host readiness: FS-122; a hello offering ur-route-probe gets
-      unrecognized_name with no lookup or Find
+§13   (ClientHello parser; 421) §13.9's kill switch and ValidateListen refusals, network_verified, the time box, a
+      screened host and an unread fact among them; mta-sts served only as a receiver's system publish; §13.4's
+      bench; tlsedge on 443, 8443, 8883 and 5671 only (owner decision 121); CAA, audiences and custom hosts: FS-32,
+      FS-34, FS-35; custom-host readiness: FS-122; a hello offering ur-route-probe gets unrecognized_name with no
+      lookup or Find
 §14   (X-UR-Ref MAC; header-only report parse) every §14.8 halt row, burner labels included; a report replaying
       network A's X-UR-Ref under network B's verifying d= halts nothing, while a genuine one halts A; Redis loss
       fails open <= 1 day's quota; the preamble proof: FS-31; outbound DATA size outcomes: FS-123

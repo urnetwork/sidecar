@@ -28,7 +28,7 @@ This section owns public naming: the user root (X4), the network label (X5) and 
 
 ### 12.4 Roots: the registrable domain (X4, X17)
 
-A **root** is a user-content zone that `dns` signs and serves (`config/<env>/dns.yml`). v0's one root, `<root>` = ur.network, carries user content only (owner decisions 13, 16): burners live in network zones (owner decision 32), and recurd.dev only redirects to ur.io/recurd (§19; owner decision 15). Platform names, the report, lb and HELO hosts included (owner decision 124), live on bringyour.com; `<root>` keeps only `ns1`, `ns2` (glue), `_psl` (the PSL's proof), `canary` (12.6), `<token>.acme` (certs' challenge targets) and §14.6's `_spf`, keeping SPF checks in the signed zone.
+A **root** is a user-content zone that `dns` signs and serves (`config/<env>/dns.yml`). v0's one root, `<root>` = ur.network, carries user content only (owner decisions 13, 16): burners live in network zones (owner decision 32), and recurd.dev only redirects to ur.io/recurd (§19; owner decision 15). Platform names, the report, lb and HELO hosts included (owner decision 124), live on bringyour.com; `<root>` keeps only `ns1`, `ns2` (glue), `_psl` (the PSL's proof), `canary` (12.6), `<acme_token>.acme` (certs' delegated challenge targets, one a verified custom domain, 12.8) and §14.6's `_spf`, keeping SPF checks in the signed zone.
 
 Until `<root>` is on the Public Suffix List (PSL), its networks share one site (cookies, saved logins), one reputation (§21.6), one Let's Encrypt budget and one DMARC organization ([R:ext-edge] §2.5; mmm/lag.dev/ops/psl.md:51-56). Steps (D-DNS-1):
 1. M0: renew to 2036 under registrar lock; the PSL wants over 2 years of term at listing.
@@ -41,11 +41,11 @@ Until listed: no URnetwork cookies on the root, HSTS preload with `includeSubDom
 
 ### 12.5 The network label (X5)
 
-**Label (owner decision 14).** 10 characters `[a-z][a-z0-9]{9}` from crypto/rand (~51 bits), allocated on first need, immutable, never reassigned, and not derived from network_id, whose ULID exposes creation time ([R:server-identity] §2.11). A draw that hits an existing row or fails `ScreenName`'s reserved or brand rules is redrawn (owner decision 97).
+**Label (owner decision 14).** 10 characters `[a-z][a-z0-9]{9}` from crypto/rand (~51 bits), allocated on first need, immutable, never reassigned, and not derived from network_id, whose ULID exposes creation time ([R:server-identity] §2.11). A draw that hits an existing row or fails `ScreenName`'s reserved or brand rules is redrawn (owner decision 97). A sidecar reads its network's label and alias from api's `GET /sidecar/label` (Client, sidecar-classified, under §7.4's `/sidecar/*`), which answers `{network_id, label, alias}` for its token's own network alone, allocating the label on first need, `alias` empty while there is none, and from M5 from 12.8's `GET /dns/zone` as well (owner decision 421).
 
 **Alias** (opt-in, "public forever (CT)"): the network_name, one per network: a copy of the label's records except challenges, live once §13's certificates name it. Labels and aliases share `dns_label`'s primary key (root, label) across kinds and states, so alias claims and `RenameNetwork` (§7.12) refuse any name a row holds, live, retiring or tombstoned.
 
-**Validation** (aliases and new names, §7.12; every new name through `ScreenName`, §21.6): `ValidateNetworkName`; no edge `-` (Boulder refuses it); no `--` at positions 3-4 (no `xn--` or IDNA homographs); not reserved; not brand-confusable after mapping 0→o, 1→l, 3→e, 5→s and rn→m per `-` token ([R:ext-edge] §5). Team scope labels (v1; owner decisions 40, 58), from the signed projection (§8), also avoid reserved owners, hosts, client names (§7.7) and word-number labels. Reserved, versioned in the sidecar repo:
+**Validation** (aliases and new names, §7.12; every new name through `ScreenName`, §21.6): `ValidateNetworkName`; no edge `-` (Boulder refuses it); no `--` at positions 3-4 (no `xn--` or IDNA homographs); not reserved; not brand-confusable after mapping 0→o, 1→l, 3→e, 5→s and rn→m per `-` token ([R:ext-edge] §5). Team scope labels (v1; owner decisions 40, 58), from the signed projection (§8), also avoid reserved owners, hosts, client names (§7.7) and word-number labels. The reserved block guards only the names directly below `<root>`, labels, aliases and scope labels, where such a word would pass for a platform name: inside a network's own zone a record owner or published host (§13), `<host>.<net>.<root>`, takes §21.6's brand rules and 12.7's owner table instead, so `www` and `api` there are the network's own, and `ScreenName` screens a host apart from a label (owner decision 419). Reserved, versioned in the sidecar repo:
 
 ```text
 www mail mx smtp imap pop dns ns ns1-ns9 edge acme canary rpt out mta-sts autoconfig autodiscover
@@ -77,30 +77,37 @@ write (api or dns route), one transaction: under a decision, §16.6's gate first
   lock the dns_root row (503 while restoring), serial+1, records + dns_zone_journal diff (+ the use's
   result), commit; then raise {dns}serial:<root> to that serial (a script that never lowers it), which
   wakes the feed (PgBouncer's transaction pooling bars LISTEN/NOTIFY)
-dns API blocks (dns.bringyour.com): GET /dns/journal?root=&after=<applied> (long-poll <= 25 s); /dns/snapshot
-  (the rows at one serial); a poll the journal cannot continue (after < serial, no row after+1: a
-  7-day gap, a restore) answers reload, with restore_serial; every answer also names each lb interface's
-  reported custom-host version, with its probe name and the hosts it added, and the map-stale
-  interfaces (§13.4)
+dns API blocks (dns.bringyour.com), every internal route under /dns/internal/ and taking one caller class's
+  bearer (12.8): GET /dns/internal/journal?root=&after=<applied> (long-poll <= 25 s);
+  /dns/internal/snapshot (the rows at one serial); a poll the journal cannot continue (after < serial, no
+  row after+1: a 7-day gap, a restore) answers reload, with restore_serial; every answer also names each
+  lb interface's reported custom-host version, with its probe name and the hosts it added, and the
+  map-stale interfaces (§13.4)
   rows and snapshots stay readable across releases N and N+1: N ignores fields N+1 adds, and writes
   N cannot read wait until N+1 serves 100% (§19.11)
 dnsedge on ns1, ns2 (host-pinned; UDP and TCP 53; no proxy in front, so RRL sees resolver addresses):
   apply each diff atomically, in serial order --> zone in memory + local snapshot; a reload swaps in
-    /dns/snapshot's; a replaced snapshot older than restore_serial is kept only until POST
-    /dns/reload-diff takes its diff, at most 24 h, and any other is deleted at once
+    /dns/internal/snapshot's; a replaced snapshot older than restore_serial is kept only until POST
+    /dns/internal/reload-diff takes its diff, at most 24 h, and any other is deleted at once
   serve a zone build or key set only once its self-check passes, else keep the previous one
   answer from memory, sign online, rate-limit; SOA serial = root serial
   probe each lb interface every 10 s (owner decision 34; server/services_lb_inventory.go:11-17,35):
     tlsedge's alert on 443, 8443, 8883 and 5671 (§13.4; owner decision 121);
     on 443 also the route probe of the custom-host version the interface reported (§13.4), posted
-      to POST /dns/route-probes;
+      to POST /dns/internal/route-probes;
     the 25 banner on §19.5's router interfaces
     drop one after 3 failures, or while the journal names it map-stale (§13.4), never all, and the one
     §19.5's W1 drains
       --> answered from the healthy set at answer time, with no journal write: the A, AAAA at *, @,
           each copy of *'s records and each mx host on router interfaces (12.7)
-certs: GET /dns/ready?serial=s --> stale while restoring or for s <= restore_serial (certs writes again
-  at a new serial, §13.8); else API blocks read each running NS's SOA over TCP --> ready when all >= s
+certs: GET /dns/internal/ready?serial=s, checked in this order --> stale while restoring or for
+  s <= restore_serial (certs writes again at a new serial, §13.8); else API blocks read each running NS's
+  SOA over TCP and hold while any is below s, a running NS that does not answer included; then
+  canary_failing while the canary is not clean (monitor, below), which holds an order with no rewrite and
+  no new serial; else ready
+running NS: dns_ns(root, ns, state running or stopped, stopped_time, reason), seeded from dns.yml; an NS
+  is running whether or not it answers now; the restore step or `sidecarctl dns ns stop|start` writes
+  stopped, and it leaves stopped only once it serves at or above restore_serial (owner decision 418)
 restore (§19.10, after the dumps load and the abuse step, before api's replay; Postgres comes back at dump
   age with an empty journal, while ns1 and ns2 serve newer zones until they reload):
   §19.10 sets dns_root.restoring as the dumps load, before api or the dns blocks serve: every dns write
@@ -108,24 +115,37 @@ restore (§19.10, after the dumps load and the abuse step, before api's replay; 
     deletions (I-15) included, commit after this step; until the transaction below, 12.9's SuspendZone,
     SuspendHost and Restore set only their rows, taking no serial, so the suspensions and lifts
     §19.10's abuse step re-places (§21.10) are in its snapshot
-  read each NS's SOA over TCP; an NS that does not answer is stopped, and serves again only from a
-    reload, its local snapshot taken as the replaced one
+  read each running NS's SOA over TCP; an NS that does not answer is written stopped, and serves again
+    only from a reload, its local snapshot taken as the replaced one
   one transaction: serial := restore_serial := max(restored serial, the SOAs read, {dns}serial:<root>)
     + 2^24, above every serial the lost primary issued, since the key lacks only raises that failed or
     that a Redis failover lost (RFC 1982 allows a jump below 2^31); raise the key
-  each edge reloads at restore_serial and posts its diff (POST /dns/reload-diff); once every running
-    NS answers that SOA, restoring := false; the step lists, by network_id, owner and type, each RRset
-    but challenges' and canaries' in a posted diff, and raises the custom-host map's version 2^24 above
-    the restored one (dns_root.custom_host_map_version), every host's map_version with it, so W1 loads
-    the map from the restored rows (§19.5) and each host stays pending until every interface is current for the new version
-    (§13.4), listing the hosts that adds or drops, in the incident and in each network's admin events
-    (§7.11), both kept 400 d, flagging networks with an open §21 case
-monitor, at the site and on 1 outside host: rewrite canary.<root> TXT each minute through the journal;
-  validate it through each NS against the KSK as a configured trust anchor (Unbound trust-anchor);
+  each edge reloads at restore_serial and posts its diff (POST /dns/internal/reload-diff); once every
+    running NS answers that SOA, restoring := false; the step lists, by network_id, owner and type, each
+    RRset but challenges' and canaries' in a posted diff, and raises the custom-host map's version,
+    dns_root.custom_host_map_version, 2^24 above max(every network_dns_custom_host.map_version, every
+    version in dns_custom_host_map_applied, 0), both tables being in the dump, every host's map_version
+    with it, so W1 loads the map from the restored rows (§19.5) and each host stays pending until every
+    interface is current for the new version (§13.4), listing the hosts that adds or drops, in the
+    incident and in each network's admin events (§7.11), both kept 400 d, flagging networks with an open
+    §21 case
+monitor, at the site and on 1 outside host: the site's copy rewrites canary.<root> TXT each minute
+  through POST /dns/internal/canary {root, value}: value <= 64 printable ASCII bytes, starting with its
+  unix ms; TTL 60; one serial and journal row (model.DnsWriteInTx); answered {serial}, 503 while restoring;
+  each copy validates it through each NS against the KSK as a configured trust anchor (Unbound
+  trust-anchor), the outside copy also checking the value is under 180 s old, and posts POST
+  /dns/internal/canary-report {root, source: site or outside, serial, ok}, ok only if the TXT validated
+  through every running NS; only the site's copy writes, so no write credential leaves the site;
+  dns_canary_verdict(root, source, serial, ok, report_time), primary key (root, source), overwritten in
+  place; clean: the site row ok with report_time under 180 s old, and no outside row not ok under 180 s
+  old; a missing site row reads as failing; a stale outside row alone holds no order and raises a
+  visibility alert;
   2 public resolvers check propagation only until the DS, then validate as well;
   DNSKEY window > 7 d; equal SOA serials
   --> incident alert (server/monitor/alert_classes.go:3-8); from M5, both NS failing or a canary
-      signature failing pages §19.8's rota at any hour, 30 min to acknowledge (owner decision 143)
+      signature failing pages §19.8's rota at any hour, 30 min to acknowledge (owner decision 143), and
+      one running NS failing SOA reads for 1 h pages it in business hours, since orders then wait (owner
+      decision 418)
 ```
 
 ```yaml
@@ -196,7 +216,7 @@ _smtp._tls         TXT "v=TLSRPTv1; rua=mailto:<token>@rpt.bringyour.com"       
 _dmarc             TXT the same policy, adkim=s; aspf=s; + psd=y once company mail leaves   §14.6
                    ; strict, since burner From domains fall back to it (RFC 7489 §6.6.3) until the PSL listing
 ns1, ns2           A, AAAA: the dns edges (glue)                                  §12.6
-_psl, canary, <token>.acme                                                        12.4, 12.6, 12.8
+_psl, canary, <acme_token>.acme                                                   12.4, 12.6, 12.8
 _spf               TXT: the sending lb addresses (owner decision 124)             §14.6
 
 reverse zones of the sending lb addresses (owner decision 124), delegated by HE (M9), unsigned:
@@ -231,13 +251,18 @@ User records:
 | `POST /dns/records` | service token, aud `dns` (§7.8); §8.10's gate for §8 `admin` on `dns:<host>` (I-8) | the same, for sidecars and §16's tools; under a decision rather than a grant, the gate first answers a retry with the stored result of a use committed under its `Idempotency-Key: <effect_key>` while that `approval_use` row lasts, even past `not_after` or with a stale `expect_version`; otherwise it runs §16.6's spend check (D-MCP-12), which needs the request's upserts and deletes to equal its `CanonicalAction`'s `dns_*` fields, and consumes a use in the write's own transaction (§16 D-MCP-11; §2.8 api-10) |
 | `POST /network/dns/alias-claim`, `/alias-release`, `/custom-host-add`, `/custom-host-remove` | Network, DNS permission; custom hosts Team only | alias; map `<host>.<domain>`, or an apex `<domain>`, to a host owner of the network, never a network's, alias's or scope's `@`, a strong-mode host staying `pending` until step 3's checks pass; each change to the active rows raises the custom-host map's version, which §19.5's W1 loads on every lb interface on §13.4's schedule, and a host is ready for TLS-ALPN-01 once every interface that 12.6's probe passes is current for its version (§13.4) |
 | `POST /network/dns/label-reclaim` | Network, DNS permission | after a Postgres restore only: re-binds an ownerless `retiring` name (12.5) to the caller's network, given `("urnetwork-sidecar-v1/label-reclaim", name, network_id, nonce)` signed by the key of a CT-logged certificate naming it, the nonce being the restore's incident id (§19.10) |
-| `POST /dns/acme-challenge`, `/dns/caa-canary`; `GET /dns/ready?serial=` | internal: certs | challenges ≤ 10 per name per hour; canaries per the probe (below); ready long-polls ≤ 25 s, `stale` across a restore (12.6) |
-| `GET /dns/custom-host-map?applied=`; `POST /dns/custom-host-map/applied` | internal: each lb interface's `lbmap` (§19.5 W1) | the newest custom-host map (version, digest, hosts), long-polled ≤ 25 s until it differs from `applied`; then the version the caller's interface loaded, with its nginx master, or a failed render, test or reload (§13.4) |
-| `POST /dns/route-probes` | internal: dns edges | each lb interface's route-probe result for the custom-host version it reported (12.6, §13.4) |
-| `GET /dns/journal`, `/dns/snapshot`; `POST /dns/reload-diff` | internal: dns edges | the feed (12.6); after a reload across a restore, `{root, replaced_serial, serial, rrsets: [(owner, type)]}`, the RRsets that differ between the replaced snapshot and the new one, which 12.6's restore step maps to networks through `dns_label` |
+| `GET /dns/zone` | service token, aud `dns` (§7.8); any admitted sidecar of the network | the label, allocated on first need, the alias, the zone version, and the caller's own view: the RRsets and custom-host states (state, CAA mode, readiness, pending interfaces) of the owners on whose `dns:<host>` it holds publish or admin, by §8's gate; never `GET /network/dns`'s whole body, which stays with the read roles §7.5 gives no Member |
+| `POST /dns/label-reclaim` | service token, aud `dns` | `POST /network/dns/label-reclaim`'s tuple and signature for a sidecar, the token's network equal to the tuple's `network_id` |
+| `POST /dns/internal/acme-challenge`, `/dns/internal/caa-canary`; `GET /dns/internal/ready?serial=` | internal: certs | challenges at most 2 values a name, TTL 60, ≤ 10 per name per hour, gone after 1 h, at `_acme-challenge` owners and a custom domain's `<acme_token>.acme.<root>` (step 3); canaries per the probe (below); ready long-polls ≤ 25 s and answers `stale`, `ready` or `canary_failing` (12.6) |
+| `GET /dns/internal/custom-host-map?applied=`; `POST /dns/internal/custom-host-map/applied` | internal: each lb interface's `lbmap` (§19.5 W1), naming its interface, which the API holds to the lb inventory | the newest custom-host map (version, digest, hosts), long-polled ≤ 25 s until it differs from `applied`; then the version the caller's interface loaded, with its nginx master, or a failed render, test or reload (§13.4) |
+| `POST /dns/internal/route-probes` | internal: dns edges | each lb interface's route-probe result for the custom-host version it reported (12.6, §13.4) |
+| `GET /dns/internal/journal`, `/dns/internal/snapshot`; `POST /dns/internal/reload-diff` | internal: dns edges | the feed (12.6); after a reload across a restore, `{root, replaced_serial, serial, rrsets: [(owner, type)]}`, the RRsets that differ between the replaced snapshot and the new one, which 12.6's restore step maps to networks through `dns_label` |
+| `POST /dns/internal/canary`; `POST /dns/internal/canary-report` | internal: the site's monitor, both; the outside monitor, the report alone | 12.6's canary and its verdicts |
 | `POST /dns/key-record` | service token; §8 `listen` on `sock:smtp/25/mx` or `smtp/25/mx.<scope>`; a member scope takes only its member's consented devices (§8.5; owner decision 126) | TLSA at `_25._tcp.mx` (or `_25._tcp.mx.<scope>`) for the caller's attested key; owners notified |
 
-DKIM comes only through §14's `POST /smtp/dkim-keys`, TLSA only through `/dns/key-record`; user and key writes add a `network_admin_event` (§7.11).
+DKIM comes only through §14's `POST /smtp/dkim-keys`, TLSA only through `/dns/key-record`; user and key writes add a `network_admin_event` (§7.11). Sidecars read their zone through `GET /dns/zone`, for §13.4's and §13.8's readiness, §16.5's `dns_records` and §6.8's `dns` refetch, and file a reclaim through `POST /dns/label-reclaim` (§19.10); `/network/dns*` stay the console's and network credentials'.
+
+**Internal routes (owner decision 417).** Every internal route sits under `/dns/internal/`, where the lb answers 403 unless the source is on dns's allow list, the site's ranges and the off-site monitor host's address (§19.5 W8). Each caller class holds its own bearer, 256 random bits in one vault file per caller, current and previous values so a rotation needs no downtime, read once at start from `secret_files`: `internal-dnsedge-1.yml` and `internal-dnsedge-2.yml` on the dns edges, `internal-monitor.yml` and `internal-monitor-outside.yml` on the two monitors, `internal-certs.yml` in taskworker's and `internal-lbmap.yml` in the lb's (§19.4). The API block holds only their SHA-256, in `internal-verify.yml`, compares in constant time, and lets each route take only its class: the edges the feed, reload-diff and route-probes; the site's monitor canary and canary-report, the outside monitor canary-report alone; certs acme-challenge, caa-canary and ready; lbmap the custom-host map and its applied route. No secret is per interface, since playbook-edges.yml copies the whole vault to every edge host, and §13.4 counts an interface's report only once a dns edge's route probe of that version passes. An edge needs neither the issuer nor Postgres to keep serving (D-DNS-3).
 
 **Gates.** Upserts creating a public name (A, AAAA, CNAME, MX or SRV owners) and alias claims need §21.7's `network_verified`, else `QuotaRefusal{limit_key: verification}` (owner decision 96).
 
@@ -246,18 +271,22 @@ DKIM comes only through §14's `POST /smtp/dkim-keys`, TLSA only through `/dns/k
 Custom domains, Team only (D-DNS-9):
 1. Verify TXT `_urnetwork-challenge.<domain>` (§7.6 `network_domain`).
 2. **Strong mode** (the default, and every apex): `<host>.<domain>` answers A and AAAA itself, statically with the lb addresses (§19.5; these miss 12.6's health drops) or through a customer-side ALIAS (flattening) of the host owner it maps to, `<host>.<net>.<root>` (an apex host's too; never `@`, whose CAA would govern the zone's device certificates, RFC 8659 §3), that keeps the queried name, synthesizes only A and AAAA, and answers every other type, CAA included, from the customer's zone. **Weak mode:** a CNAME into `<root>`, active at once, accepted only with §2.8 EX1's exception disclosed at setup: CAA discovery follows the CNAME and stops at the first non-empty set (RFC 8659 §3), so URnetwork could publish a CAA at the target admitting its own account.
-3. The customer's CAA pins its own ACME account (`accounturi`, RFC 8657; owner decision 39; custody per §13.8); devices pass DNS-01 through a one-time CNAME `_acme-challenge.<domain>` → `<token>.acme.<root>`, where certs writes their challenges, or TLS-ALPN-01. A strong-mode host commits `pending`, unmapped with `effective_caa_chain_ok` false, while a certs taskworker chain walks its CAA discovery and runs the probe below: both passing make it active, and a walk meeting a name in a URnetwork zone, or a failed probe, refuses it (`custom_host_caa_operator_alias`), each as an admin event. certs repeats both on §13.8's schedule; a failure there clears `effective_caa_chain_ok` until a check passes and records §2.8 EX1's exception in an admin event that alarms the network's admins, the host staying mapped, exposed as a weak-mode one is. The ordering desktops repeat the walk before each order (§13.8).
+3. The customer's CAA pins its own ACME account (`accounturi`, RFC 8657; owner decision 39; custody per §13.8); devices pass DNS-01 through a one-time CNAME `_acme-challenge.<domain>` → `<acme_token>.acme.<root>`, where certs writes their challenges, or TLS-ALPN-01. `network_domain.acme_token` is 16 bytes from crypto/rand, lowercase base32 with no padding, minted by api when the domain first verifies (§7.6), fixed for the row's life and shown to admins in `GET /network/dns` as the CNAME's target. An ordering desktop posts the 43-character base64url DNS-01 digest to `POST /tls/custom-challenge` (§13.15), and certs, still the only writer, writes it there through `POST /dns/internal/acme-challenge`; `GET /tls/custom-challenge/<id>` passes on `ready`'s answers, `stale` and `canary_failing` included, so the desktop asks the CA only on `ready` and posts the value again on `stale`. DNS-01 orders never wait on map readiness (§13.4). A strong-mode host commits `pending`, unmapped with `effective_caa_chain_ok` false, while a certs taskworker chain walks its CAA discovery and runs the probe below: both passing make it active, and a walk meeting a name in a URnetwork zone, or a failed probe, refuses it (`custom_host_caa_operator_alias`), each as an admin event. certs repeats both on §13.8's schedule; a failure there clears `effective_caa_chain_ok` until a check passes and records §2.8 EX1's exception in an admin event that alarms the network's admins, the host staying mapped, exposed as a weak-mode one is. The ordering desktops repeat the walk before each order (§13.8).
 4. §13.4's split sends each active custom host's SNI to tlsedge, which maps it via `network_dns_custom_host`; mail uses MX `mx.<net>.<root>`, §14.6's selectors (CNAMEd or delegated to `dns`) and the customer's `_dmarc` with `adkim=s`. In strict mode (§15.4; owner decision 98) the MX is the customer's `<mx>.<domain>` in its own signed zone, with TLSA at `_25._tcp.<mx>.<domain>` and A and AAAA to the router interfaces, mapped in `network_dns_custom_host` for mxedge (§2.8 mx-3). Only this path, with every MX host the recipient domain lists and its TLSA customer-signed, carries strict mode's exclusion of URnetwork; an MX host or TLSA in a URnetwork zone stays under §2.8 EX2.
+5. A downgrade's withholding (§20.7) sets each active TLS web host of a custom domain `withheld`, which takes it out of the custom-host map, raising its version, and out of tlsedge's routing, while its row, verification and CAA mode stay (D-QUOTA-6); a release after a renewal sets it `active` with `map_version` 0, so it re-enters the map at the next version and is pending until every interface is current, as a new host is, with no re-verification and no new CAA walk. certs' result never turns a withheld host active, and a strict-mode MX host is never withheld, mail hosts keeping MX, TLSA and routing; §14's From-domain gate withholds the domain's mail From beside it (owner decision 420).
 
 ```text
 CAA probe (certs, for a strong-mode host once its walk passes; one probe per target at a time):
-  publish  POST /dns/caa-canary: <host>.<net>.<root> CAA = the walk's effective set (the customer's
-           pin) + 0 urcanary "<128-bit nonce>", TTL 60 (12.7), at serial s; then /dns/ready?serial=s
+  publish  POST /dns/internal/caa-canary: <host>.<net>.<root> CAA = the walk's effective set (the
+           customer's pin) + 0 urcanary "<128-bit nonce>", TTL 60 (12.7), at serial s; then
+           /dns/internal/ready?serial=s
   query    repeat the walk's CAA queries at the authoritative servers of each zone it visits, RD=0,
            every 30 s for 10 min (ten times our 60 s negative TTL)
   verdict  the nonce in any answer (the ALIAS flattens CAA), or a canary the lint refuses (a CNAME
-           at <host>) --> fail; else pass, once /dns/ready?serial=s answers ready again after the
-           last query
+           at <host>) --> fail; else pass, once /dns/internal/ready?serial=s answers ready again
+           after the last query
+  canary   canary_failing counts as ready at both ready checks: §13.8 ties 12.6's canary to orders
+           only, and these RD=0 queries validate no DNSSEC
   stale    at either ready (a restore, 12.6, whose edges may lack the canary) --> publish again
            under a new nonce and restart the window
   delete   the canary and its copy in one write, whatever the verdict; taskworker expires one older
@@ -282,7 +311,7 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 
 **Visibility and capabilities:** §2.8's dns-1, dns-2, EX1 and EX2. No third party serves the zone, edges log no query (I-13), and the zone and CT watches detect forgery (D-TRUST-9, D-TLS-8).
 
-**Abuse (§21).** `SuspendZone(networkId, reason, until)`, `SuspendHost(networkId, host)` withhold records, MX included, and `Restore` returns them, within one write plus the TTL (≤ 3600 s), or, before 12.6's restore transaction, through rows its snapshot carries; tlsedge and mxedge read the same state.
+**Abuse (§21).** `SuspendZone(networkId, reason, until)`, `SuspendHost(networkId, host)` withhold records, MX included, and `Restore` returns them, within one write plus the TTL (≤ 3600 s), or, before 12.6's restore transaction, through rows its snapshot carries; tlsedge and mxedge read the same rows. A zone's suspension is its `network_dns_zone` row's reason and until. A host's is no flag on its records but a `network_dns_host_suspension(network_id, host, create_time)` row, carried in the journal and every snapshot as a withheld owner that dnsedge answers NODATA for every qtype, so `*` no longer covers the host. A suspension withholds a record by its `withheld_time`, keeping the row for `Restore`; each record also keeps its `create_time` and, for a challenge or canary, its `expire_time`.
 
 ### 12.10 Alternatives considered
 
@@ -343,13 +372,13 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 
 ### 12.14 Interfaces
 
-- **Provides:** `ResolveNetworkLabel(root, text, interactive) (networkId, kind)` (§8, §9, §13, §15); certs' DNS-01 and canary-CAA routes; §13-§15's records and reverse zones, direct MX and the custom-host map with each host's state and CAA mode (§13.4, §13.8); label reclaim and the restore step, with its edges' diffs and abuse flags (§19.10, §21); suspension (§21); `LocalZone` (§17, §18); entry counts (§20); `model.DnsSyncEdgeRecords`, which api calls after each accepted delta or projection, and taskworker's hourly reconcile of edge address records (12.7).
+- **Provides:** `ResolveNetworkLabel(root, text, interactive) (networkId, kind)` (§8, §9, §13, §15); api's `GET /sidecar/label` and a sidecar's own zone view and reclaim, `GET /dns/zone` and `POST /dns/label-reclaim` (12.5, 12.8); certs' DNS-01, canary-CAA and ready routes, ready answering `stale`, `ready` or `canary_failing`, and the canary's routes and verdicts (12.6); each NS's running state; §13-§15's records and reverse zones, direct MX and the custom-host map with each host's state and CAA mode (§13.4, §13.8); label reclaim and the restore step, with its edges' diffs and abuse flags (§19.10, §21); suspension (§21); `LocalZone` (§17, §18); entry counts (§20); `model.DnsSyncEdgeRecords`, which api calls after each accepted delta or projection, and taskworker's hourly reconcile of edge address records (12.7).
 - **Consumes:** §7's DNS permission, `network_domain`, `RenameNetwork`, admin events, client names; §8 grants, owner consent, scope labels, §8.10's gate; §13 certs and its CAA walk; §14, §15 record content, the direct-MX check; §16 decisions, the spend check and `approval_use` (D-MCP-11, D-MCP-12); §6 topic `dns`; §4 C14; §19 dns edge hosts, router interfaces, W1's reload and drain, the restore (§19.10), the rota (owner decision 143); §20 quotas; §21 `ScreenName`, `network_verified`, probation caps, open cases.
 - **Subprotocol messages:** `DnsZoneChanged` (0x1B01, §6.11) on push topic `dns` (§6.8), versioned by the zone serial.
 - **API routes:** §12.8.
-- **Tables** (migrations 926+): `dns_root` (root, serial, restore_serial, restoring, custom_host_map_version bigint, restore_incident_id), `dns_label` (primary key (root, label); network_id, kind, state; never deleted; a restore's CT rows start without a network), `network_dns_zone`, `network_dns_record`, `dns_zone_journal` (diffs, 7 d), `network_dns_custom_host` (with `state enum{pending,active}`, `caa_mode enum{strong,weak}`, `effective_caa_chain_ok bool`, `map_version` and `ready_time`), `dns_custom_host_map` (version, digest, create time; 7 d) and `dns_custom_host_map_applied` (interface, reported version, digest, nginx master, poll time, the last passing route probe's version and time, and the latest probe result of each added host probed for the reported version; while the interface is in the lb inventory); Redis `{dns}serial:<root>`, the last committed serial.
-- **Services and config:** `dns` (server/cli/dns; `sidecar/dnsservice`): API blocks on `dns.bringyour.com`, `dnsedge` on the dns edge hosts (UDP and TCP 53); `config/<env>/dns.yml`; vault (ZSKs, DNSKEY windows); two offline KSK HSMs; taskworker (challenge and canary-CAA expiry, the restore's CT replay); `monitor` (canary).
-- **Assumptions about other sections:** §19.5 lists the router interfaces, publishes `rpt.bringyour.com`, its `_report` wildcard and the HELO names' A records (owner decision 124), serves recurd.dev's redirect, tells the dns edges which interface W1 drains, runs `lbmap` beside each lb interface's nginx and returns the hosts a restore's regeneration adds or drops (§13.4); §19.10 sets `dns_root.restoring` as the dumps load and runs its abuse step (§21.10), then 12.6's restore step, before api's replay and its labels step, starting a stopped NS only from a reload; §2.8 dns-1 holds the replaced snapshot and the restore's listings to 12.6's ttls; §13.8 re-checks custom hosts on its schedule and writes again on `stale`. §22 tests the zone lint (CNAMEs beside data, `ruf`, `fo`, report mail into `<root>`), cross-network burner DMARC, role mail without SNI, private names per qtype, FCrDNS, the member-scope key-record check, the anchored soak, a replying burner's MX and A across its first and last selector, a drained or failed interface leaving `*`, `@`, every copy and `mx` on both NS, an operator CAA at a custom host's target behind a CNAME or a CAA-flattening ALIAS, an apex host's included, refused while it is still pending (FS-32), a direct MX redirected by operator records (FS-33), a custom host's ClientHello through the split (FS-35), label reclaim after a restore (FS-41, FS-42) and FS-42's dns step: a post-restore write; challenges committed before the loss, above every SOA or not, reading stale; an NS that misses the SOA read reloading, uncounted by `/dns/ready` until it serves restore_serial; custom hosts added or removed after the dump leaving or rejoining the map, listed (M6); and the TLSA and DKIM selectors of sidecars revoked after it gone from both NS once api's replay ends (M7, M9).
+- **Tables** (migrations 926+): `dns_root` (root, serial, restore_serial, restoring, custom_host_map_version bigint, restore_incident_id), `dns_label` (primary key (root, label); network_id, kind, state; never deleted; a restore's CT rows start without a network), `network_dns_zone` (with a zone suspension's reason and until), `network_dns_record` (with `create_time`, `expire_time` and `withheld_time`), `network_dns_host_suspension` (network_id, host, create_time; 12.9), `dns_zone_journal` (diffs, 7 d), `dns_canary_verdict` (root, source, serial, ok, report_time; primary key (root, source); 12.6), `dns_ns` (root, ns, `state enum{running,stopped}`, stopped_time, reason; seeded from dns.yml; owner decision 418), `network_dns_custom_host` (with `state enum{pending,active,withheld}`, `withheld` a web host a downgrade keeps out of the map (owner decision 420), `caa_mode enum{strong,weak}`, `effective_caa_chain_ok bool`, `map_version` and `ready_time`), `dns_custom_host_map` (version, digest, create time; 7 d) and `dns_custom_host_map_applied` (interface, reported version, digest, nginx master, poll time, the last passing route probe's version and time, and the latest probe result of each added host probed for the reported version; while the interface is in the lb inventory); Redis `{dns}serial:<root>`, the last committed serial.
+- **Services and config:** `dns` (server/cli/dns; `sidecar/dnsservice`): API blocks on `dns.bringyour.com`, `dnsedge` on the dns edge hosts (UDP and TCP 53); `config/<env>/dns.yml`; vault (ZSKs, DNSKEY windows, each internal caller class's bearer, and their SHA-256 in `internal-verify.yml`, 12.8); two offline KSK HSMs; taskworker (challenge and canary-CAA expiry, the restore's CT replay); `monitor` (canary); `sidecarctl dns ns stop|start` (12.6; owner decision 274).
+- **Assumptions about other sections:** §19.4 mounts each internal caller class's bearer and the API block's `internal-verify.yml`, and §19.5's W8 answers 403 on `/dns/internal/` outside dns's allow list (12.8); §19.8 pages a running NS that fails SOA reads for 1 h in business hours (12.6); §19.5 lists the router interfaces, publishes `rpt.bringyour.com`, its `_report` wildcard and the HELO names' A records (owner decision 124), serves recurd.dev's redirect, tells the dns edges which interface W1 drains, runs `lbmap` beside each lb interface's nginx and returns the hosts a restore's regeneration adds or drops (§13.4); §19.10 sets `dns_root.restoring` as the dumps load and runs its abuse step (§21.10), then 12.6's restore step, before api's replay and its labels step, starting a stopped NS only from a reload; §2.8 dns-1 holds the replaced snapshot and the restore's listings to 12.6's ttls; §13.8 re-checks custom hosts on its schedule and writes again on `stale`. §22 tests the zone lint (CNAMEs beside data, `ruf`, `fo`, report mail into `<root>`), cross-network burner DMARC, role mail without SNI, private names per qtype, FCrDNS, the member-scope key-record check, the anchored soak, a replying burner's MX and A across its first and last selector, a drained or failed interface leaving `*`, `@`, every copy and `mx` on both NS, an operator CAA at a custom host's target behind a CNAME or a CAA-flattening ALIAS, an apex host's included, refused while it is still pending (FS-32), a direct MX redirected by operator records (FS-33), a custom host's ClientHello through the split (FS-35), label reclaim after a restore (FS-41, FS-42) and FS-42's dns step: a post-restore write; challenges committed before the loss, above every SOA or not, reading stale; an NS that misses the SOA read written stopped and reloading, uncounted by `/dns/internal/ready` until it serves restore_serial; custom hosts added or removed after the dump leaving or rejoining the map, listed (M6); and the TLSA and DKIM selectors of sidecars revoked after it gone from both NS once api's replay ends (M7, M9).
 
 ### 12.15 Risks
 
