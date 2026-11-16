@@ -26,7 +26,7 @@ func Fs73TipCheckOffTwin(t testing.TB, world *World) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		fs73PrunedHistory(recorder, world, func(device *Device) {
+		fs73PrunedHistory(recorder, world, "fs73-twin", func(device *Device) {
 			sidecar.EvsTestSwitchOffLfsTipCheck(device.Mount, true)
 			t.Cleanup(func() { sidecar.EvsTestSwitchOffLfsTipCheck(device.Mount, false) })
 		})

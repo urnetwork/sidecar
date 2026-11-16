@@ -284,19 +284,19 @@ func (self *Device) readFile(t testing.TB, dir string, name string) []byte {
 // The pruned clause: see the file header.
 func Fs73PrunedHistory(t testing.TB, world *World) {
 	t.Helper()
-	fs73PrunedHistory(t, world, nil)
+	fs73PrunedHistory(t, world, "fs73-pruned", nil)
 }
 
-// The pruned clause, adjust called on the pushing device first: the twin switches its tip check off there.
-func fs73PrunedHistory(t testing.TB, world *World, adjust func(device *Device)) {
+// The pruned clause on branch and refs named after it, adjust called on the pushing device first: the twin switches its
+// tip check off there.
+func fs73PrunedHistory(t testing.TB, world *World, branch string, adjust func(device *Device)) {
 	t.Helper()
-	a := world.Device("fs73-pruned-a", &DeviceSettings{Admin: true})
+	a := world.Device(branch+"-a", &DeviceSettings{Admin: true})
 	if adjust != nil {
 		adjust(a)
 	}
-	p, b := world.Device("fs73-pruned-p", nil), world.Device("fs73-pruned-b", nil)
-	const branch = "fs73-pruned"
-	content, oid := fs73Object("fs73 pruned", 3000)
+	p, b := world.Device(branch+"-p", nil), world.Device(branch+"-b", nil)
+	content, oid := fs73Object(branch+" object", 3000)
 	dir := a.Clone()
 	commitA := a.Commit(dir, "A holds O", map[string]*string{".gitattributes": Text(fs73Attributes), "o.bin": fs73Text(content)})
 	if out, ok := a.Push(dir, "origin", "HEAD:refs/heads/"+branch); !ok {
