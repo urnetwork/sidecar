@@ -133,10 +133,11 @@ type searchRemoteSearch struct {
 	pendingDistrust []Id
 }
 
-// One download over repos no indexer answers.
+// One download over repos no indexer answers, and its last progress: the bytes it fetches and any metered wait.
 type searchRemoteFallback struct {
-	stream *SearchStream
-	done   bool
+	stream   *SearchStream
+	done     bool
+	progress SearchProgress
 }
 
 // A remote search over request's scope, or nil where none of it can be asked remotely: a query or filters the wire
@@ -159,6 +160,16 @@ func (self *SearchRemoteClient) newSearch(ctx context.Context, request *SearchRe
 	}
 	scope := self.scopeOf(state, selfId, request)
 	if len(scope) == 0 {
+		return nil, nil
+	}
+	answerable := false
+	for _, repoId := range scope {
+		if 0 < len(state.SearchIndexersFor(selfId, repoId, self.args.Services)) {
+			answerable = true
+			break
+		}
+	}
+	if !answerable {
 		return nil, nil
 	}
 	normalizer, err := indexNewNormalizer(indexLinkedTables())
@@ -344,11 +355,11 @@ func (self *searchRemoteSearch) fallbackPages() ([]searchRemoteMergeKey, error) 
 		if fallback.done {
 			continue
 		}
-		hits, _, done, err := fallback.stream.Next()
+		hits, progress, done, err := fallback.stream.Next()
 		if err != nil && !errors.Is(err, ErrSearchCursorExpired) {
 			return nil, err
 		}
-		fallback.done = done || err != nil
+		fallback.done, fallback.progress = done || err != nil, progress
 		touched = append(touched, self.merge.add(nil, hits)...)
 	}
 	return touched, nil
@@ -378,11 +389,11 @@ func (self *searchRemoteSearch) openFallbacks() ([]searchRemoteMergeKey, error) 
 	}
 	fallback := &searchRemoteFallback{stream: stream}
 	self.fallbacks = append(self.fallbacks, fallback)
-	hits, _, done, err := stream.Next()
+	hits, progress, done, err := stream.Next()
 	if err != nil && !errors.Is(err, ErrSearchCursorExpired) {
 		return nil, err
 	}
-	fallback.done = done || err != nil
+	fallback.done, fallback.progress = done || err != nil, progress
 	return self.merge.add(nil, hits), nil
 }
 
@@ -1034,6 +1045,14 @@ func (self *searchRemoteSearch) mayAsk(view *searchRemoteOrderView, leg *searchR
 // DETAILS 7.2.4's table).
 func (self *searchRemoteSearch) progressNow() SearchProgress {
 	progress := self.progress
+	// the downloads' fetches and metered wait, which the app shows (D-SDK-22)
+	for _, fallback := range self.fallbacks {
+		progress.FetchBytes += fallback.progress.FetchBytes
+		progress.FetchedBytes += fallback.progress.FetchedBytes
+		if progress.Waiting == "" {
+			progress.Waiting = fallback.progress.Waiting
+		}
+	}
 	served := map[Id]int{}
 	servedCount, noticeCount, asking, hadIndexer := 0, 0, false, false
 	reason, notice := "", Id{}

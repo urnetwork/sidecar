@@ -240,14 +240,29 @@ func (self *SearchRemoteClient) Search(ctx context.Context, request *SearchReque
 	if request == nil || request.Scope != SearchAll || request.Remote == SearchRemoteOff || request.Remote == "" {
 		return self.args.Local.Search(ctx, request)
 	}
-	search, err := self.newSearch(ctx, request)
+	stream, err := self.Ask(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	if search == nil {
+	if stream == nil {
 		local := *request
 		local.Remote = SearchRemoteOff
 		return self.args.Local.Search(ctx, &local)
+	}
+	return stream, nil
+}
+
+// One remote search (§11.14's remote search, the plan's Ask): request's "search more", its repos asked of the indexers
+// the order picks and merged with the device's own search of its cache. nil, nil where none of it can be asked: a query
+// or filters past the wire's caps, no repo this device reads, or no repo any indexer may answer, the default (owner
+// decision 177), when the local engine's download alone runs.
+func (self *SearchRemoteClient) Ask(ctx context.Context, request *SearchRequest) (*SearchStream, error) {
+	if request == nil {
+		return nil, ErrSearchRequest
+	}
+	search, err := self.newSearch(ctx, request)
+	if err != nil || search == nil {
+		return nil, err
 	}
 	return NewSearchStream(search), nil
 }

@@ -630,6 +630,9 @@ barrier rpc.witness_refresh rpc_headcheck_witness.go
 barrier search.cache.cut.applied state_search_delete.go
 barrier search.cache.erase.applied state_search_delete.go
 barrier search.cache.lost.applied state_search_delete.go
+barrier search.remote.asked search_remote_search.go
+barrier search.remote.ended search_remote_cursor.go
+barrier search.remote.reply search_remote_serve.go
 barrier search.sync.fetched search_fetch.go
 barrier search.sync.replayed search_sync.go
 barrier search.sync.retired search_sync.go

@@ -425,3 +425,59 @@ func TestModeOffAsksNothing(t *testing.T) {
 		t.Errorf("mode off named warm pairs")
 	}
 }
+
+// An indexer that failed and is seen again (a Hello, Pong or session after its skip) is asked once more for the repos that
+// fell back from it, once a search.
+func TestAnIndexerSeenAgainIsAskedOnce(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteAsker(t, team, team.danaPhone)
+	nas := team.danaNas.sidecarId
+	fixture.serve(t, team.danaNas).corpus.serveText(team.danaVault, 5, testSearchRemoteDocs("vault ", 900)...)
+	fixture.transport.dead[nas] = true
+	fixture.warm(t)
+	stream := fixture.search(t, team.danaVault)
+	page := testSearchRemoteNextLater(stream)
+	fixture.transport.awaitCalls(t, 1)
+	fixture.clock.awaitPending(t, 1)
+	fixture.clock.advance(fixture.settings.RemoteTimeout[0])
+	if got := <-page; got.progress.FallbackReason != SearchFallbackOffline {
+		t.Fatalf("reason %q", got.progress.FallbackReason)
+	}
+	fixture.transport.stateLock.Lock()
+	fixture.transport.dead[nas] = false
+	fixture.transport.seen[nas] = fixture.clock.Now().Add(1)
+	fixture.transport.stateLock.Unlock()
+	fixture.clock.advance(1)
+	got := testSearchRemoteNext(t, stream)
+	if calls := fixture.transport.callsNow(); len(calls) != 2 {
+		t.Fatalf("seen again: %d calls", len(calls))
+	}
+	if got.progress.Remote != SearchRemoteStateAnswered {
+		t.Errorf("remote %q", got.progress.Remote)
+	}
+}
+
+// A third open search at one indexer supersedes the older of the two this device still holds there.
+func TestAThirdSearchSupersedesTheOldest(t *testing.T) {
+	team := newTestConfigSearchTeam(t)
+	fixture := newTestSearchRemoteAsker(t, team, team.danaPhone)
+	docs := []*testSearchRemoteDoc{}
+	for i := 0; i < 50; i += 1 {
+		docs = append(docs, &testSearchRemoteDoc{label: string(rune(0x3b00 + i)), timeMs: int64(9000 - i), version: 1, matches: true, textHeld: true})
+	}
+	fixture.serve(t, team.danaNas).corpus.serveText(team.danaVault, 5, docs...)
+	fixture.warm(t)
+	for i := 0; i < 3; i += 1 {
+		testSearchRemoteNext(t, fixture.search(t, team.danaVault))
+	}
+	calls := fixture.transport.callsNow()
+	if len(calls) != 3 {
+		t.Fatalf("calls %d", len(calls))
+	}
+	if supersedes := calls[2].request.GetSupersedes(); supersedes != calls[0].request.GetSearchId() {
+		t.Errorf("the third superseded %d, not the oldest %d", supersedes, calls[0].request.GetSearchId())
+	}
+	if calls[1].request.GetSupersedes() != 0 {
+		t.Errorf("the second superseded %d", calls[1].request.GetSupersedes())
+	}
+}
