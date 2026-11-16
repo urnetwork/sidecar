@@ -68,6 +68,10 @@ type EvsTier struct {
 	NewHost func(ctx context.Context, host *sidecar.ServiceHost, settings *evsservice.EvsSettings, deps *EvsTierDeps) (EvsTierHost, error)
 	// A token for principal that host's Authenticator verifies.
 	IssueToken func(principal *sidecar.Principal) (string, error)
+	// The engine settings taskworker's evs jobs run with at an instance format, as the tier's taskworker takes them:
+	// server's T3 reads them through taskworker's own loader from a block config that names the format (QD-854).
+	// nil: this code's defaults at the format.
+	JobSettings func(format uint32) (*evsservice.EvsSettings, error)
 }
 
 // The seams a world gives an instance's block.
@@ -192,6 +196,9 @@ type EvsWorldDeviceSettings struct {
 	Instances []string
 	// Whether it writes the repo. Every device reads it.
 	Writer bool
+	// The repo's access log lists it among the repo's admins, as readers judge an ERASE's signer (§11.12): a
+	// record-class world's eraser (fs99_evs.go). evs honors any scope a token carries, admin included, either way.
+	Admin bool
 	// Its own configuration and gkm client say it writes the repo while the world's, which evs and every other device
 	// read, list it as a reader: FS-10's forger (fs10.go).
 	ForgesWriter bool
@@ -334,7 +341,9 @@ type EvsWorld struct {
 	// by path, every write started, in order
 	pathWrites map[string][]*evsWorldWrite
 	// by push id
-	pushes     map[sidecar.Id]*EvsWorldPush
+	pushes map[sidecar.Id]*EvsWorldPush
+	// the ref each push's statement named, where it is not main
+	pushRefIds map[sidecar.Id]sidecar.Id
 	pushIdList []sidecar.Id
 	// each device's next push posts to every instance named, at once
 	duplicates map[string][]string
@@ -400,6 +409,7 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		scopeDenials:    map[string]map[sidecar.Id]bool{},
 		pathWrites:      map[string][]*evsWorldWrite{},
 		pushes:          map[sidecar.Id]*EvsWorldPush{},
+		pushRefIds:      map[sidecar.Id]sidecar.Id{},
 		duplicates:      map[string][]string{},
 		deviceAlarms:    map[string][]string{},
 		placeStatuses:   map[string]int{},
@@ -619,10 +629,16 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 		readerExpiries[name] = at
 	}
 	self.stateLock.Unlock()
+	repoRow := &protocol.AclRepo{
+		RepoId: self.RepoId.Bytes(), Kind: self.settings.Kind, HoldersShrunkAt: shrunkAt, Deletion: deletionRow,
+	}
+	for _, name := range self.deviceNames {
+		if device := self.devices[name]; device.settings.Admin {
+			repoRow.Admins = append(repoRow.Admins, &protocol.AclRepoAdminRow{SidecarId: device.Signer.SidecarId.Bytes()})
+		}
+	}
 	fixture := &sidecartest.FakeGkmAuthFixture{
-		Rows: sidecartest.FakeGkmAuthRows(&protocol.AclRepo{
-			RepoId: self.RepoId.Bytes(), Kind: self.settings.Kind, HoldersShrunkAt: shrunkAt, Deletion: deletionRow,
-		}),
+		Rows:               sidecartest.FakeGkmAuthRows(repoRow),
 		IdentityKeys:       map[sidecar.Id][]byte{},
 		RepoReaders:        map[sidecar.Id][]sidecar.Id{},
 		RepoWriters:        map[sidecar.Id][]sidecar.Id{},
@@ -1184,6 +1200,7 @@ func (self *EvsWorld) roundTrip(device *EvsWorldDevice, request *http.Request) (
 	pushId, isPush := evsWorldPushIdOf(request, body)
 	if isPush {
 		self.notePush(pushId, device.Name)
+		self.notePushRef(pushId, body)
 		self.stateLock.Lock()
 		duplicates := self.duplicates[device.Name]
 		delete(self.duplicates, device.Name)
@@ -1464,6 +1481,38 @@ func (self *EvsWorld) notePush(pushId sidecar.Id, device string) {
 		self.pushes[pushId] = &EvsWorldPush{PushId: pushId, Device: device}
 		self.pushIdList = append(self.pushIdList, pushId)
 	}
+}
+
+// Keeps the ref a push's statement names, where it is not main: a record-class world's devices push their own
+// streams (fs99_evs.go), and a history names each push at its ref.
+func (self *EvsWorld) notePushRef(pushId sidecar.Id, body []byte) {
+	pushRequest := &protocol.EvsPushRequest{}
+	if err := proto.Unmarshal(body, pushRequest); err != nil {
+		return
+	}
+	statement, err := sidecar.ParseEvsStatement(pushRequest.GetStatement())
+	if err != nil {
+		return
+	}
+	refId, err := sidecar.IdFromBytes(statement.Push.GetRefId())
+	if err != nil {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if _, ok := self.pushRefIds[pushId]; !ok && refId != self.refId {
+		self.pushRefIds[pushId] = refId
+	}
+}
+
+// The ref pushId's statement named: main's for a push that named it, or one the world did not see.
+func (self *EvsWorld) pushRefId(pushId sidecar.Id) sidecar.Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if refId, ok := self.pushRefIds[pushId]; ok {
+		return refId
+	}
+	return self.refId
 }
 
 func (self *EvsWorld) noteAnswer(pushId sidecar.Id, answer *EvsWorldAnswer) {
