@@ -3,13 +3,15 @@
 // The edge gates' view on T2's hand-made rows (ACL-M5-01): each publish check with its refusal (a publish without
 // listen, a raw publish under members, a raw link with no pin, a mismatched app_mode, a system publish ended by its
 // listen grant's revocation), a halted network denied, an unloaded network never allowed, an over-limit one refused, an
-// edge Find allowed only under a public publish, dns admin, and the view's checks allocating nothing.
+// edge Find allowed under any audience's publish, the front judging it, and refused with none (QD-852), dns admin, and
+// the view's checks allocating nothing.
 
 package sidecar
 
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/connect"
 
@@ -71,6 +73,9 @@ func newAclGateViewWorld(t testing.TB) *aclGateViewWorld {
 	members, link, public := protocol.AclAudience_ACL_AUDIENCE_MEMBERS, protocol.AclAudience_ACL_AUDIENCE_LINK, protocol.AclAudience_ACL_AUDIENCE_PUBLIC
 	http, raw := protocol.AclAppMode_ACL_APP_MODE_HTTP, protocol.AclAppMode_ACL_APP_MODE_RAW
 	world.publish("app-preview", members, http, nil)
+	world.publish("device-only", protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE, http, nil)
+	world.publish("shared-link", link, http, nil)
+	world.publish("unset-audience", protocol.AclAudience_ACL_AUDIENCE_UNSPECIFIED, http, nil)
 	world.publish("raw-members", members, raw, nil)
 	world.publish("raw-link", link, raw, nil)
 	world.publish("raw-pinned", link, raw, world.pin)
@@ -155,19 +160,143 @@ func slicesDeleteRule(rules []*protocol.AclRule, gone *protocol.AclRule) []*prot
 	return kept
 }
 
-// An edge Find runs as autogroup:public, so a visitor reaches a listener only under its public publish of the host.
-func TestAclGateViewPublicFindNeedsAPublicPublish(t *testing.T) {
+// An edge Find runs as autogroup:public with no listener picked yet, and goes on under any audience's publish of the
+// name (QD-852): the audience and a raw link's pin are the listener's front's to judge, so the gate reads neither.
+func TestAclGateViewEdgeFindPassesUnderAnyAudiencesPublish(t *testing.T) {
 	world := newAclGateViewWorld(t)
-	listener := AclSidecarSubject(world.listener)
-	http := protocol.AclAppMode_ACL_APP_MODE_HTTP
-	if decision := world.view.MayFindPublic(world.networkId, listener, "tls/443/public-site", http, aclTestNow); !decision.Allowed {
-		t.Errorf("a public publish: %s", decision.Reason)
+	cases := []struct {
+		name   string
+		socket string
+	}{
+		{name: "a members publish", socket: "tls/443/app-preview"},
+		{name: "an audience left unset, which reads as members", socket: "tls/443/unset-audience"},
+		{name: "a members-device publish", socket: "tls/443/device-only"},
+		{name: "a link publish", socket: "tls/443/shared-link"},
+		{name: "a public publish", socket: "tls/443/public-site"},
+		{name: "a raw link with its pin", socket: "tls/443/raw-pinned"},
+		{name: "a publish with listen from a rule of its own", socket: "tls/443/split"},
+		{name: "the system publish on a receiver's listen", socket: "tls/443/mta-sts"},
 	}
-	if decision := world.view.MayFindPublic(world.networkId, listener, "tls/443/app-preview", http, aclTestNow); decision.Allowed {
-		t.Error("a members publish took a public Find")
+	for _, c := range cases {
+		decision := world.view.MayEdgeFind(world.networkId, c.socket, aclTestNow)
+		if !decision.Allowed || decision.Rule == nil {
+			t.Errorf("%s: refused (%s)", c.name, decision.Reason)
+		}
 	}
-	if decision := world.view.MayFindPublic(world.networkId, AclSidecarSubject(world.stranger), "tls/443/public-site", http, aclTestNow); decision.Allowed {
-		t.Error("a Find reached a subject with no publish")
+	// the decision carries the grant the name stands on, and judges no audience
+	decision := world.view.MayEdgeFind(world.networkId, "tls/443/device-only", aclTestNow)
+	grant, _ := world.view.PublishGrant(world.networkId, AclSidecarSubject(world.listener), "tls/443/device-only", protocol.AclAppMode_ACL_APP_MODE_HTTP, aclTestNow)
+	if grant == nil || grant.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE || len(grant.GrantIds) != 1 ||
+		!bytes.Equal(decision.Rule.GetRuleId(), grant.GrantIds[0]) {
+		t.Errorf("the edge Find's rule %x, the listener's grant %+v", decision.Rule.GetRuleId(), grant)
+	}
+}
+
+// An edge Find is refused where no publish grant names the host, and where the name's only grants are ones no
+// registration could take.
+func TestAclGateViewEdgeFindNeedsAPublishGrant(t *testing.T) {
+	world := newAclGateViewWorld(t)
+	cases := []struct {
+		name   string
+		socket string
+	}{
+		{name: "no publish grant", socket: "tls/443/elsewhere"},
+		{name: "another port's socket", socket: "tls/8443/app-preview"},
+		{name: "a publish without listen", socket: "tls/443/no-listen"},
+		{name: "a raw publish under members", socket: "tls/443/raw-members"},
+		{name: "a raw link with no pin", socket: "tls/443/raw-link"},
+		{name: "admin of the zone alone", socket: "tls/443/zone-host"},
+		{name: "no tls/ name", socket: "smtp/25/app-preview"},
+		{name: "a name of more segments", socket: "tls/443/app-preview/more"},
+		{name: "a port that is no number", socket: "tls/https/app-preview"},
+		{name: "an empty name", socket: ""},
+	}
+	for _, c := range cases {
+		if decision := world.view.MayEdgeFind(world.networkId, c.socket, aclTestNow); decision.Allowed || decision.Reason != AclReasonNoGrant {
+			t.Errorf("%s: %+v", c.name, decision)
+		}
+	}
+}
+
+// A grant stands for an edge Find only while a sidecar holding it is under no hard deny, and only while it is in
+// force: a parked listener's publish, an expired rule and a receiver whose listen grant is gone each refuse.
+func TestAclGateViewEdgeFindEndsWithItsGrant(t *testing.T) {
+	world := newAclGateViewWorld(t)
+	expiring := world.publish("short-lived", protocol.AclAudience_ACL_AUDIENCE_MEMBERS, protocol.AclAppMode_ACL_APP_MODE_HTTP, nil)
+	expiring.Expires = aclTestNow.UnixMilli() + 1000
+	world.install(t)
+	if decision := world.view.MayEdgeFind(world.networkId, "tls/443/short-lived", aclTestNow); !decision.Allowed {
+		t.Fatalf("a grant in force: %s", decision.Reason)
+	}
+	if decision := world.view.MayEdgeFind(world.networkId, "tls/443/short-lived", aclTestNow.Add(time.Second)); decision.Allowed {
+		t.Error("an edge Find passed under an expired publish")
+	}
+
+	world.fixture.rows.Rules = slicesDeleteRule(world.fixture.rows.Rules, world.mxListen)
+	world.fixture.view.parked[world.listener] = true
+	world.install(t)
+	for _, socket := range []string{"tls/443/app-preview", "tls/443/public-site", "tls/443/mta-sts"} {
+		if decision := world.view.MayEdgeFind(world.networkId, socket, aclTestNow); decision.Allowed || decision.Reason != AclReasonNoGrant {
+			t.Errorf("%s with no standing holder: %+v", socket, decision)
+		}
+	}
+}
+
+// The edge Find sits behind the view's refusals as every check does: a halted network, an unloaded one and a nil view.
+func TestAclGateViewEdgeFindFoldsInTheServersHardDenies(t *testing.T) {
+	world := newAclGateViewWorld(t)
+	halted := NewAclGateView(world.states, hostAbuseGate{networkId: connect.Id(world.networkId), standing: AbuseStandingSuspended}, nil)
+	if decision := halted.MayEdgeFind(world.networkId, "tls/443/public-site", aclTestNow); decision.Allowed || decision.Reason != AclReasonAbuseHalt {
+		t.Errorf("a halted network: %+v", decision)
+	}
+	world.quota.over[world.networkId] = true
+	if decision := world.view.MayEdgeFind(world.networkId, "tls/443/public-site", aclTestNow); decision.Allowed || decision.Reason != AclReasonQuota {
+		t.Errorf("over its limit: %+v", decision)
+	}
+	if decision := world.view.MayEdgeFind(NewId(), "tls/443/public-site", aclTestNow); decision.Allowed || decision.Reason != AclReasonNoState {
+		t.Errorf("an unloaded network: %+v", decision)
+	}
+	var none *AclGateView
+	if decision := none.MayEdgeFind(world.networkId, "tls/443/public-site", aclTestNow); decision.Allowed {
+		t.Error("a nil view allowed")
+	}
+}
+
+// A member scope's host stands for an edge Find only on a grant of that member's consented devices; a tag scope's on
+// any sidecar's.
+func TestAclStateEdgeFindInScopeHoldsAMemberScopeToItsMember(t *testing.T) {
+	fixture := newAclTestFixture()
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	other := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	laptop := fixture.invitedDevice(owner)
+	// a device of the other member with no consent clause
+	unconsented := fixture.device(other)
+	publish := func(sidecarId Id, host string) {
+		fixture.rule([]Id{fixture.sidecarAtom(sidecarId)}, []*protocol.AclTarget{{PublicName: host}, {PublicName: "tls/443/" + host}},
+			protocol.AclAction_ACL_ACTION_PUBLISH, protocol.AclAction_ACL_ACTION_LISTEN)
+	}
+	publish(laptop, "notes.owner")
+	publish(unconsented, "notes.other")
+	state := fixture.state(t)
+	if !state.ConsentedFor(laptop, owner) || state.ConsentedFor(unconsented, other) {
+		t.Fatal("the fixture's consent")
+	}
+	cases := []struct {
+		name    string
+		socket  string
+		scope   AclScope
+		allowed bool
+	}{
+		{name: "the member's consented device in its own scope", socket: "tls/443/notes.owner", scope: AclScope{Label: "owner", MemberId: owner}, allowed: true},
+		{name: "another member's scope", socket: "tls/443/notes.owner", scope: AclScope{Label: "owner", MemberId: other}},
+		{name: "a device with no consent in its member's scope", socket: "tls/443/notes.other", scope: AclScope{Label: "other", MemberId: other}},
+		{name: "a tag scope takes any sidecar's grant", socket: "tls/443/notes.other", scope: AclScope{Label: "other"}, allowed: true},
+		{name: "no grant in the scope", socket: "tls/443/absent.owner", scope: AclScope{Label: "owner", MemberId: owner}},
+	}
+	for _, c := range cases {
+		if decision := state.MayEdgeFindInScope(c.socket, c.scope, aclTestNow); decision.Allowed != c.allowed {
+			t.Errorf("%s: allowed %t (%s)", c.name, decision.Allowed, decision.Reason)
+		}
 	}
 }
 
@@ -243,6 +372,8 @@ func TestAclGateViewAllocatesNothing(t *testing.T) {
 	allocs := testing.AllocsPerRun(100, func() {
 		world.view.MayListen(world.networkId, listener, socket, aclTestNow)
 		world.view.MayPublish(world.networkId, listener, "tls/443/app-preview", protocol.AclAppMode_ACL_APP_MODE_HTTP, aclTestNow)
+		world.view.MayEdgeFind(world.networkId, "tls/443/app-preview", aclTestNow)
+		world.view.MayEdgeFind(world.networkId, "tls/443/elsewhere", aclTestNow)
 	})
 	if allocs != 0 {
 		t.Errorf("%v allocations a check", allocs)

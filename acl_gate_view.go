@@ -13,8 +13,9 @@
 //	publish        AclState.PublishGrant, below: a publish grant for a host whose bound socket the subject holds
 //	               listen on, raw only under public or link and a raw link only with a pin (§13.9), by the
 //	               agreement rule (aclPublishRules) that AclState.PublishedNames lists every name by (QD-770)
-//	public Find    an edge Find runs as autogroup:public (§9.4), so a visitor's dial passes only under a public
-//	               publish of the host by a subject that listens on its socket
+//	edge Find      AclState.MayEdgeFind, below: an edge Find runs as autogroup:public (§9.4) before any listener is
+//	               picked, so a visitor's dial goes on wherever a sidecar of the network holds a publish grant for the
+//	               name, whatever the grant's audience, and is refused where none does (QD-852)
 //	dns admin      dns:<host>'s admin covers a host's zone records (§12.8)
 //
 // Only the listener's front enforces a grant's audience and a raw link's pin (§13.7, §21.4), so the view reports
@@ -134,22 +135,14 @@ func (self *AclGateView) PublishGrant(networkId Id, subject AclSubject, socketNa
 	return state.PublishGrant(subject, socketName, appMode, now)
 }
 
-// Whether an edge Find for a visitor may reach a listener's socket: the Find runs as autogroup:public (§9.4), so it
-// passes only where the listener's publish grant for the socket's host is public.
-func (self *AclGateView) MayFindPublic(networkId Id, listener AclSubject, socketName string, appMode protocol.AclAppMode, now time.Time) AclDecision {
+// Whether an edge Find for a visitor may go on to the listeners of a tls/<port>/<host> name of the network:
+// AclState.MayEdgeFind behind the view's refusals, whatever the audience of the grant it stands on.
+func (self *AclGateView) MayEdgeFind(networkId Id, socketName string, now time.Time) AclDecision {
 	state, deny := self.state(networkId)
 	if deny != 0 {
 		return aclDeny(deny)
 	}
-	grant := AclPublishGrant{}
-	decision := state.publishDecision(listener, socketName, appMode, now, &grant)
-	if !decision.Allowed {
-		return decision
-	}
-	if grant.Audience != protocol.AclAudience_ACL_AUDIENCE_PUBLIC {
-		return aclDeny(AclReasonNoGrant)
-	}
-	return decision
+	return state.MayEdgeFind(socketName, now)
 }
 
 // Whether the subject may write a host's zone records: dns:<host>'s admin (§12.8).
@@ -262,6 +255,72 @@ func (self *AclState) publishDecision(subject AclSubject, socketName string, app
 		grant.ExpiresMs = rules.expiresMs
 	}
 	return aclAllowRule(rules.first)
+}
+
+// Whether an edge Find for a visitor may go on to the listeners of a tls/<port>/<host> name (§9.10, §13.5 step 4;
+// QD-852). The Find runs as autogroup:public before any listener is picked, so no subject is the visitor's to name: it
+// passes where a sidecar the state admits, under no hard deny at now, holds a publish grant for the name by the
+// agreement rule, in the mode its own rules give and whatever its audience, members, members-device, link or public.
+// Only the listener's front judges the audience and a raw link's pin, both from its own evaluation (§8.10, §13.7), so
+// this reads neither: a members visitor with no session must reach the front for §7.8's edge login, and a link's
+// token is traded there. No grant for the name refuses, and so does a name whose only grants no registration could
+// take: a publish without listen, rules that disagree, raw under members, a raw link with no pin. The system publish
+// passes where a receiver holds its smtp/25/mx listen grant (§13.9). The decision carries the first such sidecar's
+// grant, in sidecar id order; each listener a Find then picks is still judged under its own sidecar (§9.6).
+//
+// It reads each sidecar's rules until one holds a grant, a sidecar's check each, and allocates nothing.
+func (self *AclState) MayEdgeFind(socketName string, now time.Time) AclDecision {
+	return self.edgeFindDecision(socketName, Id{}, now.UnixMilli())
+}
+
+// MayEdgeFind for a scope host's name (§13.8): a member scope's host stands only on a grant of its member's consented
+// devices, as MayPublishInScope holds a registration; a tag scope's on any sidecar's.
+func (self *AclState) MayEdgeFindInScope(socketName string, scope AclScope, now time.Time) AclDecision {
+	if scope.MemberId == (Id{}) {
+		return self.MayEdgeFind(socketName, now)
+	}
+	return self.edgeFindDecision(socketName, scope.MemberId, now.UnixMilli())
+}
+
+// MayEdgeFind's decision, over the consented devices of memberId alone when it is not zero.
+func (self *AclState) edgeFindDecision(socketName string, memberId Id, nowMs int64) AclDecision {
+	system := socketName == aclSystemPublishName
+	host := ""
+	if !system {
+		publishHost, ok := aclPublishSocketHost(socketName)
+		if !ok {
+			return aclDeny(AclReasonNoGrant)
+		}
+		host = publishHost
+	}
+	for i := range self.sidecars {
+		sidecar := &self.sidecars[i]
+		if sidecar.hardDeny(nowMs) != 0 {
+			continue
+		}
+		if memberId != (Id{}) && (sidecar.memberId != memberId || !self.sidecarConsented(sidecar)) {
+			continue
+		}
+		subject := AclSidecarSubject(sidecar.id)
+		resolved := self.resolve(&subject, nowMs)
+		if resolved.deny != 0 {
+			continue
+		}
+		if system {
+			if rule := self.publicNameListenRule(&resolved, aclSystemPublishListen, nowMs, false); rule != nil {
+				return aclAllowRule(rule)
+			}
+			continue
+		}
+		rules := self.publishRules(&resolved, socketName, host, nowMs, false)
+		if rules.first == nil || !rules.listens || !rules.agree {
+			continue
+		}
+		if _, _, _, valid := aclPublishGrantFields(rules.first); valid {
+			return aclAllowRule(rules.first)
+		}
+	}
+	return aclDeny(AclReasonNoGrant)
 }
 
 // The host of a tls/<port>/<host> name, the host one segment and the port a number below 65536, or false for any
