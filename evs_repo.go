@@ -142,6 +142,10 @@ type EvsHistoryVersion struct {
 	// kept, or collected for a replaced versionless version whose content evs no longer serves; drop_pending and
 	// dropped are EVS2-M10-22's, refused before they get here (§11.9).
 	State string
+	// The entry_sha256 its statement's change names, a drop's list value (§11.7's action row); empty for a removal.
+	EntrySha256 []byte
+	// The path epoch its statement declares, which a drop's lineage starts from (DESIGN-DETAILS 10.2.4).
+	Epoch uint64
 	// The slots the version's records name, as its entry lists them: in a record-class repo each chain's key slot,
 	// what an erasure names to destroy the version (§11.12's closure row: "each retained version's slot keys"). None
 	// for a general repo's version, whose keys ride its segments, and for a removal.
