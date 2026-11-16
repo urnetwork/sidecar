@@ -5,13 +5,15 @@
 //
 //	start    s, the clock at the start, and N, the store's window at s (evs_lfs_settings.go), never under 7 days
 //	tips     every git-mode ref's head read from evs at s (ur/lfs itself no tip), each held to a tip the mount holds at
-//	         that version, synced first where it lacks one; a ref still lacking its tip refuses the prune
-//	         (ErrEvsLfsPruneRefMissing), since a tip it cannot see could need an object
+//	         that version, synced first where it lacks one (EvsLfsMountTips); a ref still lacking its tip refuses the
+//	         prune (ErrEvsLfsPruneRefMissing), since a tip it cannot see could need an object
 //	required R(tip) for each tip of that read, and R(c) for each commit of the window: one whose committer date, or the
 //	         time_ms of the push that introduced it (reading 9), is after s - N
 //	remove   each object on ur/lfs whose newest version, its last upload or touch, was signed before s - N and that
 //	         nothing above requires, in one push (parts as the sender needs), each naming its version, so a concurrent
-//	         touch wins at path-level CAS: the prune then reruns from its start read, at most LfsPruneRerunCount times
+//	         touch wins at path-level CAS: the prune then reruns from its start read, at most LfsPruneRerunCount times;
+//	         barriers evs.lfs.prune.start, before the start's reads, and evs.lfs.prune.remove, after them and before
+//	         the removal, hold a prune where a schedule races it
 //	purge    deletes the content a minute after the removal commits (§11.13); a repo locked since keeps it, its
 //	         removal a versioned one
 //
@@ -179,6 +181,8 @@ func evsLfsPruneOnce(ctx context.Context, args *EvsLfsPruneArgs, result *EvsLfsP
 			stale = append(stale, object)
 		}
 	}
+	// after every read and before the removal: a schedule holds a prune here while a touch or another prune lands
+	testHookBarrier("evs.lfs.prune.remove", EvsKeyId(store.repo.repoId))
 	if args.beforeRemove != nil {
 		args.beforeRemove(ctx)
 	}
@@ -190,6 +194,54 @@ func evsLfsPruneOnce(ctx context.Context, args *EvsLfsPruneArgs, result *EvsLfsP
 		removed[i] = object.Oid
 	}
 	return removed, nil
+}
+
+// The prune's start read on a mount (EvsLfsPruneArgs.Tips): every git-mode ref evs lists for repo, at its head's version
+// there, held to the tip the mount's sync engine applied at that version, the ref replayed first where the mount has not
+// applied it, as a device holding every ref syncs a tip it lacks. A ref whose replay fails or still leaves it without
+// that version's tip answers no tip, so the prune refuses (ErrEvsLfsPruneRefMissing) rather than remove what that tip
+// could need; a deleted ref has no tip and needs none.
+func EvsLfsMountTips(mount *EvsLocalRepo, repo *EvsRepo) func(ctx context.Context) ([]*EvsLfsPruneTip, error) {
+	return func(ctx context.Context) ([]*EvsLfsPruneTip, error) {
+		engine := mount.Sync()
+		if engine == nil {
+			return nil, fmt.Errorf("%w: a mount with no sync engine", errInvalidSettings)
+		}
+		listing, err := repo.ListRefs(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		tips := []*EvsLfsPruneTip{}
+		for _, summary := range listing.Refs {
+			if summary.GetRefMode() != protocol.EvsRefMode_EVS_REF_GIT || summary.GetDeleted() {
+				continue
+			}
+			refId, err := IdFromBytes(summary.GetRefId())
+			if err != nil {
+				return nil, fmt.Errorf("%w: a listed ref's id", ErrEvsReplyInvalid)
+			}
+			version := summary.GetVersion()
+			tip, held, err := engine.TipAt(ctx, refId, version)
+			if err != nil {
+				return nil, err
+			}
+			if !held && engine.Replay(ctx, refId) == nil {
+				tip, held, err = engine.TipAt(ctx, refId, version)
+				if err != nil {
+					return nil, err
+				}
+			}
+			pruneTip := &EvsLfsPruneTip{Version: version}
+			if ref, err := engine.GitRef(ctx, refId); err == nil && ref != nil {
+				pruneTip.RefName = ref.Name
+			}
+			if held {
+				pruneTip.Tip = &tip
+			}
+			tips = append(tips, pruneTip)
+		}
+		return tips, nil
+	}
 }
 
 // The commits reachable from tips whose committer date is after since: `git rev-list --since`, which stops a walk at
