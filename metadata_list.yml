@@ -1,4 +1,4 @@
-# metadata_list.yml v26; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v27; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -88,6 +88,8 @@
 # evs-17, evs-25 and evs-28 (256); evs-10's segment PUT reports (257); api-14's sign-off ids (259); api-13's tier
 # cache, api-11's creating member and api-3's TXT challenge (260); api-11's enrollment attempt histories (261);
 # and api-7's default evidence channels (252).
+# v27, updated 2026-11-16 for the owner's answer QD-145 (plan-MAIL-dnssec-evidence; owner decision 269), adds to
+# ext-3 the MX, TLSA, DS and DNSKEY lookups by which a mail.strict receiver validates its custom MX hosts' chain.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -718,7 +720,7 @@ ext-2:
 ext-3:
   service: DoH resolvers
   store: external
-  sees: domains, MX, TLSA, DKIM selectors and MTA-STS names sidecars look up; receivers' reception-time lookups for each message, at most 64 (SPF, DKIM and ARC keys, DMARC, the sender's forward-confirmed PTR; D-MAIL-14, §15.5), and any re-check a reader shows apart; the device IP
+  sees: domains, MX, TLSA, DKIM selectors and MTA-STS names sidecars look up; under mail.strict, the MX, TLSA, DS and DNSKEY lookups, asked with EDNS0's DO bit, by which a receiver validates its custom MX hosts' chain to the root (§15.5; owner decision 269); receivers' reception-time lookups for each message, at most 64 (SPF, DKIM and ARC keys, DMARC, the sender's forward-confirmed PTR; D-MAIL-14, §15.5), and any re-check a reader shows apart; the device IP
   why: reception-time evidence for §15.5's labels (D-MAIL-14), independent MX checks (TL3) and the zone watch (§14.4, D-TRUST-9)
   ttl: the provider's
   owner: §14.4

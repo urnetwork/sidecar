@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-262. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-278. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (263 onward)
+## Adding owner decision N (279 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -156,3 +156,24 @@ Left in sidecar/DESIGN-AMENDMENTS.md, each with its reason: QD-242's RECORD.md p
 - **The metadata list** is v26, whose header names what it adds, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
 
 Outside this folder the fold touched only the guard lines owner decision 252 allows: the three `planned` lines, Q-REPO-6's evidence entry, and the additions that left `check/metadata_list_test.go` as the block took their text.
+
+## Validation after owner decisions 263-278 (2026-11-16)
+
+The design-records track for §4 (wave f39d) folded that section's items from sidecar/DESIGN-AMENDMENTS.md, the six "Later decisions" that named it, and the answers since QD-784 queued for it.
+
+- **Owner decisions 263-278**, each citing its ledger id: the mlswg's vector files committed (263: QD-002), releases promoted, not each build signed (264: QD-017), a copy of cli/UI.md in the repository (265: QD-024), proving key sets fetched from ur.io (266: QD-123), the competition's and sn's source graphs taking sidecar (267: QD-128, QD-769, QD-874, QD-875, QD-877), what a Gn-out merges (268: QD-131, QD-929), connect's C20 for `strict_chain` (269: QD-145), minio's place in the merge order (270: QD-238), X11 (271: QD-240), Go 1.27.4 (272: QD-674, QD-697, QD-698), how a proto fence takes a field (273: QD-684), `sidecarctl` in server (274: QD-750), the `ios_extension` leg's seed rule (275: QD-811, QD-866), the page Worker's own `Id` and operator.Id's JSON decode, amending 251, whose row notes it (276: QD-856, QD-887), gomobile's legs (277: QD-908) and `third_party/` at release (278: QD-920). A decision that groups several answers carries its latest answer's date.
+- **As text**, without a number: the defect fixes the owner accepted (QD-113's receive gate on C15, QD-193's go-smtp fork and mox subset, QD-201's statement of what ur.io alone can ship, QD-207's dropped mlswg interop client, QD-282's consumers) and the build's readings, fills and settled items (QD-284, QD-304, QD-326, QD-345, QD-348, QD-358, QD-373, QD-381, QD-385, QD-386, QD-417, QD-431, QD-453, QD-486, QD-507, QD-531, QD-545, QD-580, QD-596). run.sh's VirusTotal and notarize steps are cited by name, since QD-417's line numbers had drifted again.
+- **Elsewhere.** The parts these name went with them: §2.8's EX7 and ext-3 (264, 269), §5.4, §5.10, §5.11 and D-CORE-1 (276, QD-113), §10.4 (263), §11.14's tables row (QD-596), §14.5 (266), §15.5's library and `strict_chain` evidence (QD-193, 269), §17.6's hook comment (QD-113), §18.10 and D-SDK-19 (276), §19.16 (QD-417), §22.4's T1 and §22.8's determinism row (QD-373, 277, QD-531), §23.4's M7 row and §23.9's merges (269, 268, 270), and the front matter's branch policy (270, with the tests repo's branch, QD-580).
+- **Not applied.** QD-246 fell to owner decision 197, as QD-184 and QD-559 did: it moved the push types into `protocol/bridge` for the keyless device role to parse, which owner decision 197 replaced, and `device/` parses none of them. QD-305 is a reading of the plan's task split and changes no design text. QD-841, QD-842 and QD-843 were already owner decision 251.
+- **Left in sidecar/DESIGN-AMENDMENTS.md's "Later decisions"**, each with its reason: §4.6's C20 table row, which waits for check/x9_test.go's ledger entry, since that test holds the table row for row and Appendix E copies it (question `dr2-s4-c20-x9-row.md`); C20 is stated in a paragraph under the table meanwhile. And owner decision 265's file itself, `design/UI.md`, which the owner copies in, since cli/UI.md sits outside every repository.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `8f7ddcbd0572d1bab1e4e1c9ee591dd98b7a0e821d5c98ffb6a369fcb215ce73`) at this fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item, so no guard line was needed, and no proto fence changed.
+- **Owner decisions.** All 278 rows are present and cited; `LATE_DATES` gives each new row its date, and no new day joined the row pattern.
+- **Open owner questions.** Two, as before: Q-BRIDGE-8 and Q-REPO-6.
+- **Superseded options.** 299 grep hits, each with a reading; the three on changed lines (§4.8's weekly merges, twice, and §19.16's services line) were read on 2026-11-16. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v27, whose header names what it adds (ext-3's DNSSEC lookups under `mail.strict`, owner decision 269), copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+
+Outside this folder the fold touched nothing but DESIGN.md, DESIGN-AMENDMENTS.md and `metadata_list.yml`.

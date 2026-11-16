@@ -46,8 +46,8 @@ This section owns `sidecar.Sidecar` (lifecycle, components, events, the outward-
 
 ```go
 // Every leg: sidecar.go, settings.go and the root's id, log and monitor files import no connect package, so
-// §18.10's sidecar_http leg links them (§4.4), reaching connect only through operator-core's Id. Sidecar is
-// safe for concurrent use.
+// §18.10's sidecar_http leg links them (§4.4) and no connect package, its Id being the root's own twin of
+// operator-core's (owner decision 276). Sidecar is safe for concurrent use.
 type Id = operator.Id // operator-core's: server.Id moved, type Id connect.Id with its marshalling (§4.5;
                       // owner decision 251); connect-facing files convert: connect.Id(id); NewId stays here, on
                       // crypto/rand
@@ -772,7 +772,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 | CLI linux | `CGO_ENABLED=0`; files `linux && !android` (GOOS=android satisfies `linux`) | `ur daemon` | socket |
 | CLI windows | `CGO_ENABLED=0` | `ur daemon` | pipe |
 | gomobile | sdk's `sdk_mobile_bind`; the `ios_extension` leg links only §18's forwarding role, `sidecar/device` and the root's forwarding files (D-SDK-20; owner decision 197) | app process; forwarding in the VPN component (§18) | none; forwarding's setup over the device RPC (§18.6) |
-| wasm | `GOOS=js GOARCH=wasm`, `_js.go` files; the page Worker builds `-tags sidecar_http`, leaving out the root's connect-facing files and linking connect only through operator-core's `Id` (owner decision 251): 5.4's every-leg types and `SidecarApi` carry its identity, keychain, token path (bind, DPoP refresh, exchange) and approval views (§18.10) | extension worker, ur.io pages (owner decisions 26, 76) | none |
+| wasm | `GOOS=js GOARCH=wasm`, `_js.go` files; the page Worker builds `-tags sidecar_http`, leaving out the root's connect-facing files and linking no connect package, its `Id` the root's own twin of operator-core's (owner decisions 251, 276): 5.4's every-leg types and `SidecarApi` carry its identity, keychain, token path (bind, DPoP refresh, exchange) and approval views (§18.10) | extension worker, ur.io pages (owner decisions 26, 76) | none |
 
 - **Settings, logs, memory.** `DefaultSidecarSettings()` is the only source of defaults (connect/CODESTYLE.md:144, :151). Logs go through `settings.Log` behind `V(n).Enabled()`, never with secrets, content or peer IPs; `SidecarStats` feeds `ur status --stats`, with no telemetry, and on a search indexer counts remote pages served, refusals by code, CPU seconds and queue waits, with no requester, repo or query label (I-13). The host sets the process limit (`sdk.SetMemoryLimit`; 32 MiB in the iOS app) and the sidecar keeps to `MemoryBudgetByteCount`, §16.10's decoded index state (`Search.MemoryByteCount`) and remote search's working sets and cursors included (≤ 8 MiB a computing search; D-CORE-17).
 
@@ -782,7 +782,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 |---|---|---|---|
 | Each MCP process embeds a Sidecar | no daemon | N child clients or a fight over the resident; an admission and a leaf or wrap per process | rejected |
 | The ClientKey signs everything | already attested | reaped with its client; unlabeled | rejected |
-| Connect's types in every root file | one `Id`, `Logger` and api client | the page Worker links gVisor: a connect-only js/wasm main is 55.0 MB (§18.10) | rejected (5.4; D-SDK-19) for `Logger` and the api client; the `Id` is operator-core's on every leg, composing connect's, which links gVisor there anyway (owner decision 251) |
+| Connect's types in every root file | one `Id`, `Logger` and api client | the page Worker links gVisor: a connect-only js/wasm main is 55.0 MB (§18.10) | rejected (5.4; D-SDK-19) for `Logger` and the api client; the `Id` is operator-core's, composing connect's, on every leg but the page Worker's, which keeps a twin and so links no gVisor (owner decisions 251, 276) |
 | Network credential beside the client token, as in sdk's `.auth_state` (sdk/local_state_auth.go:28-37) | admin from the CLI | an admin credential agents can read | rejected |
 | Share the device's client in process (X10 option (c)) | no second client | Opportunistic (sdk/device_local_provider.go:258); escapes the admin-refused mark (I-6); no sidecar role in the iOS tunnel (D-SDK-1) | ruled out (owner decision 4; owner directive 2026-11-03) |
 | One root key per instance, wrapped to each membership's recovery key | one key | one network's recovery code opens every network's keys (owner decision 23) | rejected (D-CORE-14) |
@@ -790,7 +790,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 
 ### 5.12 Decisions proposed
 
-**D-CORE-1 (proposed).** PLAN.md:14's jwt, client, api and encryption key are the sidecar's own `by_client_jwt`, one `connect.Client` per generation (none in the `sidecar_http` leg), the root's net/http `SidecarApi` plus, outside the `sidecar_http` leg, `BringYourApi`, and its network's keychain root key R_n; files outside `!sidecar_http` use only the root's `Id`, an alias of operator-core's (owner decision 251), and its `Logger`, `MonitorValue` and `CallbackList` (5.4). *Why:* PLAN.md:7; an agent-readable network credential is an admin credential; the page Worker runs no connect client, and importing connect links gVisor (5.3), which operator-core's `Id` brings to every leg.
+**D-CORE-1 (proposed).** PLAN.md:14's jwt, client, api and encryption key are the sidecar's own `by_client_jwt`, one `connect.Client` per generation (none in the `sidecar_http` leg), the root's net/http `SidecarApi` plus, outside the `sidecar_http` leg, `BringYourApi`, and its network's keychain root key R_n; files outside `!sidecar_http` use only the root's `Id`, an alias of operator-core's but in the `sidecar_http` leg, where it is a twin with the same methods and encodings (owner decisions 251, 276), and its `Logger`, `MonitorValue` and `CallbackList` (5.4). Each `connect.Client` sets connect's `GateReceiveOnSignedIdentity` (§4.6 C15), so it opens no frame of a session whose signed-identity check is pending or failed. *Why:* PLAN.md:7; an agent-readable network credential is an admin credential; the page Worker runs no connect client, and importing connect links gVisor (5.3), which operator-core's `Id` brings to every leg that aliases it.
 
 **D-CORE-2 (proposed).** `NewSidecar` returns a running Sidecar with its components attached; there is no `Start`. *Why:* connect/CODESTYLE.md:169.
 

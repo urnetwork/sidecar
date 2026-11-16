@@ -109,7 +109,8 @@ health   a refusal, that is a CreateContract refusal, a failed ContractDestinati
 C5 (§4) gives `LocalUserNatSettings` an `EgressHook`, called once per flow before the dial: at the TCP dial (connect/ip.go:5740), the UDP open (:3589) and ICMP egress (connect/ip_icmp.go:782), which every lane uses (connect/ip_provider_reliable_ingress.go:158-191). Replies are rebuilt from the flow (connect/ip.go:4075-4077, :7289-7291), so a map is DNAT with no checksum or return-path rewrite.
 
 ```go
-// connect (C5, with C13's seals, C15's key and C18's switch); a nil hook keeps today's behavior
+// connect (C5, with C13's seals, C15's key and receive gate, which window clients set on, and C18's switch);
+// a nil hook keeps today's behavior
 type EgressFlow struct {
 	Source        TransferPath
 	ProvideMode   protocol.ProvideMode

@@ -23,6 +23,11 @@
 // was shown, and the prefix reader (evs_prefix.go) then walks back under the versions this device ignores. A repo
 // whose rows hold a rule set is read only by a client that holds such a reader: any other answers EVS_PREFIX_RULE.
 //
+// A read that asks for it (EvsReadArgs.Provenance) gives the version's push's sealed provenance in its EvsFileInfo:
+// the writing run's tainted bit, its agent and whether a signed import brought it in (§11.6's Records; QD-042,
+// QD-851). A path read carries no push's sealed metadata, so the push's record is one more round, after the receipt
+// gate and the content's checks and before any byte reaches the caller's writer (evs_read_provenance.go).
+//
 // On every leg. Safe for concurrent use.
 
 package sidecar
@@ -136,6 +141,15 @@ func (self *EvsRepo) prefixRuled() (evsPrefixReader, error) {
 	}
 	return reader, nil
 }
+
+// How a read gives a version's push provenance: the push's record read by its id and version, its sealed metadata
+// opened and its agent's subkey signature checked (evs_read_provenance.go). Behind a seam, so that the forwarding
+// role's legs, which read no file for an agent, link no agent-subkey check.
+type evsProvenanceReadFunction func(ctx context.Context, repo *EvsRepo, result *evsReadResult, verified *EvsVerifiedPath) (*EvsPushProvenance, error)
+
+// The provenance reader of every leg that links one, which evs_read_provenance.go registers from its init: nil on
+// the forwarding role's legs, where a read gives no provenance. Written only by init.
+var evsProvenanceRead evsProvenanceReadFunction
 
 // Called before any object of a read is decrypted, with the ids of the objects it names (segments and slots): the
 // receipt gate EVS1-M2-29 fills, which deposits a read receipt and awaits evs's 200 (§16.8). An error refuses the
@@ -641,10 +655,30 @@ func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, 
 	case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
 		return nil, fmt.Errorf("%w: a directory, which List reads", ErrEvsTokenInvalid)
 	}
-	info, err := self.reconstruct(ctx, result, verified, out)
+	if !args.Provenance || evsProvenanceRead == nil {
+		info, err := self.reconstruct(ctx, result, verified, out)
+		if err != nil {
+			return nil, err
+		}
+		info.Path = args.Path
+		info.IgnoredAbove, info.RuleState = walk.ignoredAbove, walk.state
+		return info, nil
+	}
+	// reconstruct's steps with the push's provenance read between them: after the receipt gate and the content's
+	// checks, and before a byte reaches out, so a read that cannot say whose words these are returns none of them
+	info := evsFileInfoOf(result.refId, result.head, verified)
+	content, fields, oid, err := self.reconstructContent(ctx, result, verified, nil)
 	if err != nil {
 		return nil, err
 	}
+	defer content.close()
+	if info.Provenance, err = evsProvenanceRead(ctx, self, result, verified); err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(out, content.reader()); err != nil {
+		return nil, err
+	}
+	info.Mode, info.GitOid, info.Size = fields.GetMode(), oid, fields.GetSize()
 	info.Path = args.Path
 	info.IgnoredAbove, info.RuleState = walk.ignoredAbove, walk.state
 	return info, nil

@@ -132,7 +132,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 214,
+  "line": 216,
   "col": 22,
   "match": "Redis holds only rebuildable soft state and verified caches (owner decision 136:",
   "snippet": "# (owner decision 2); Redis holds only rebuildable soft state and verified caches (owner decision 136: evs-8,",
@@ -145,7 +145,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 215,
+  "line": 217,
   "col": 92,
   "match": "off-site",
   "snippet": "# evs-24, gkm-10, api-7's {acl_}e); no backup of key slots or wraps (owner decision 90); no off-site copy",
@@ -158,7 +158,7 @@
  {
   "family": "pools",
   "file": "02-TRUST.md",
-  "line": 216,
+  "line": 218,
   "col": 72,
   "match": "pools",
   "snippet": "# (owner decision 94); the metadata tier grows by whole clusters, never pools, each repo placed on one at",
@@ -171,7 +171,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 218,
+  "line": 220,
   "col": 100,
   "match": "off-site",
   "snippet": "# Postgres: sidecar tables, with the network, user and client rows they name, go to their own daily off-site",
@@ -184,7 +184,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 219,
+  "line": 221,
   "col": 13,
   "match": "14 days",
   "snippet": "# dump, kept 14 days, tables whose ttl here is at most 7 d excluded, so a row outlives its ttl, or its hold,",
@@ -197,7 +197,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 220,
+  "line": 222,
   "col": 13,
   "match": "14 d",
   "snippet": "# by at most 14 d; tables that exist today also sit in the main dumps for about 4 months (ops-2, D-TRUST-7);",
@@ -210,7 +210,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 327,
+  "line": 329,
   "col": 45,
   "match": "7-day window",
   "snippet": "  sees: \"invites (hashed 256-bit code, uses, 7-day window, inviting and accepting networks); bridge shares (share_id, both network ids, target and alias tables sealed under a key the code derives and the server cannot, versions",
@@ -223,7 +223,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 349,
+  "line": 351,
   "col": 311,
   "match": "Redis network_tier_versioned:<network_id> (the tier, cached 60 s); lease",
   "snippet": ", stripe_meter_report (with version, attempts and next_time), team_subscription; Redis {sq_<network_id>} (rates, the connected_sidecar sorted set and the verified flag); Redis network_tier_versioned:<network_id> (the tier, cached 60 s); lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing), and {escrow_<balance_id>",
@@ -236,7 +236,7 @@
  {
   "family": "mib64_trigger",
   "file": "02-TRUST.md",
-  "line": 350,
+  "line": 352,
   "col": 1014,
   "match": "64 MiB",
   "snippet": "ent and connect ({sq_<network_id>}connected_sidecar); each network's network_verified as 0 or 1 ({sq_<network_id>}verified); edge leases (network, meter, reservations of 64 MiB to 1 GiB, 16 to 256 MiB on Community); per relayed contract its reservation, grant and settled bytes; each balance's lowest credit shown in the last 2 min",
@@ -249,7 +249,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 357,
+  "line": 359,
   "col": 713,
   "match": "Redis soft state existing at placement (evs-8's lease fields, gkm",
   "snippet": "e, expiry) and their copied_rows, the in-scope records that drop or are overwritten on their own, namely rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks), in parts of at most 16 MiB of compressed rows, part 0 the hold itself; for each hold it ends, its sweep pass's network, scope's repo ids and placement and en",
@@ -262,7 +262,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 419,
+  "line": 421,
   "col": 66,
   "match": "Redis {evsh_<repo_id>} for 10 min (evs",
   "snippet": "  store: head/<repo>/<ref> (metadata cluster); a verified copy in Redis {evsh_<repo_id>} for 10 min (evs-24)",
@@ -275,7 +275,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 454,
+  "line": 456,
   "col": 9,
   "match": "Redis {evsl_<repo_id>} (holder, ref, path epoch",
   "snippet": "  store: Redis {evsl_<repo_id>} (holder, ref, path epoch, prefix -> expiry) and {evsl_<repo_id>}v; {evsc_<client_id>} (repo ids, by last subscribe or renewal ms)",
@@ -288,7 +288,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 471,
+  "line": 473,
   "col": 101,
   "match": "off-site",
   "snippet": "  ttl: each object's own row; deletes and overwrites keep no prior version (unversioned buckets); no off-site copy (owner decision 94); request logs as ops-1; {nvb_} 15 s, but the write budget's saved bucket level, wallet and counter readings 48 h after the loop's last write; a ",
@@ -301,7 +301,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 561,
+  "line": 563,
   "col": 9,
   "match": "Redis {evsq_<repo_id>} (push sequence), {evsh_<repo_id>} (verified head",
   "snippet": "  store: Redis {evsq_<repo_id>} (push sequence), {evsh_<repo_id>} (verified head cache)",
@@ -314,7 +314,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 669,
+  "line": 671,
   "col": 16,
   "match": "Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch",
   "snippet": "  sees: acks in Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch, time; written at most daily",
@@ -327,7 +327,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 671,
+  "line": 673,
   "col": 174,
   "match": "Redis, after which gkm deletes no epoch",
   "snippet": "l: overwritten by the leaf's next ack; 31 d after its last write; deleted with its group's gkm objects at a shred (§11.12); soft state outside the rdb bundles, lost with Redis, after which gkm deletes no epoch for 30 d; a hold's copy excepted (api-14)",
@@ -340,7 +340,7 @@
  {
   "family": "edge_termination",
   "file": "02-TRUST.md",
-  "line": 677,
+  "line": 679,
   "col": 28,
   "match": "terminating (X1); caps; absorb scans; no plaintext path to tlsedge",
   "snippet": "  why: route by SNI without terminating (X1); caps; absorb scans; no plaintext path to tlsedge (§13.4, §13.5)",
@@ -353,7 +353,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 696,
+  "line": 698,
   "col": 33,
   "match": "Redis {tes_<network_id>} and its trigger {tes_<network_id>}n; lease",
   "snippet": "  store: network_tls_suspension; Redis {tes_<network_id>} and its trigger {tes_<network_id>}n; lease spends (api-13); the published-names list, drawn from api-7",
@@ -366,7 +366,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 816,
+  "line": 818,
   "col": 347,
   "match": "off-site",
   "snippet": "s the ids of networks, members and sidecars newer than the main dump (D-OPS-18); tables that exist today (accounts, networks, clients, contracts) in the main dumps, with off-site copies on planetoid; in the physical working copies, every table of the primary but the UNLOGGED partitions of tls_connection_record and mail_connection_record (tls-3, m",
@@ -379,7 +379,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 818,
+  "line": 820,
   "col": 32,
   "match": "14 d",
   "snippet": "  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; physical working copies of the primary hold every table for at most 7 d, each refre",
@@ -392,7 +392,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 818,
+  "line": 820,
   "col": 75,
   "match": "14 d",
   "snippet": "  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; physical working copies of the primary hold every table for at most 7 d, each refreshed or destroyed within that (owner decisi",
@@ -405,7 +405,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 879,
+  "line": 881,
   "col": 16,
   "match": "off-site",
   "snippet": "  withdrawn: no off-site copy in v0 (owner decision 94)",
@@ -418,7 +418,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 982,
+  "line": 984,
   "col": 148,
   "match": "14-day",
   "snippet": "**D-TRUST-7 (proposed).** Retention follows §2.11 and §2.8's `ttl` column; sidecar tables leave the 4-month main dumps for their own daily off-site 14-day dump, and sidecar Redis families the 8-month bundles (ops-2, ops-3); the primary's physical copies count as backups, each refreshed or destroyed within 7 d, and the 24 h",
@@ -431,7 +431,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 982,
+  "line": 984,
   "col": 139,
   "match": "off-site",
   "snippet": "**D-TRUST-7 (proposed).** Retention follows §2.11 and §2.8's `ttl` column; sidecar tables leave the 4-month main dumps for their own daily off-site 14-day dump, and sidecar Redis families the 8-month bundles (ops-2, ops-3); the primary's physical copies count as backups, each refreshed or destroyed within 7 d, and t",
@@ -444,7 +444,7 @@
  {
   "family": "audit_gate",
   "file": "02-TRUST.md",
-  "line": 1006,
+  "line": 1008,
   "col": 189,
   "match": "audited",
   "snippet": "product copy claim \"end-to-end encrypted\" without external review (owner decision 99)? **Decided by owner 2026-11-04 (owner decision 119):** (a) yes, now, with §2.18's unaudited-cryptography disclosure on the security page; sidecar/design/pitch5.html:931 changes. *Residual:* none.",
@@ -457,7 +457,7 @@
  {
   "family": "audit_gate",
   "file": "02-TRUST.md",
-  "line": 1031,
+  "line": 1033,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited cryptography: in-house MLS on draft ciphersuite 0x0010, post-quantum against passive adversaries only, the key ladder and its Ed25519 authority signatures, which a futur",
@@ -470,7 +470,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 1037,
+  "line": 1039,
   "col": 263,
   "match": "7-day window",
   "snippet": "ritten version's content gone a minute later | Medium | Medium | History written while versioning was on stays (owner decision 158) unless a repo admin drops it, after a 7-day window any repo admin can cancel or at once with `now` (owner decisions 173, 183); config and mailcfg repos and git-mode refs refuse it; a repo admin's lock (§8.8); statements ",
@@ -483,7 +483,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 1038,
+  "line": 1040,
   "col": 69,
   "match": "7-day window",
   "snippet": "| A rogue or compromised repo admin drops history | Low | High | The 7-day window, with notices on every repo admin's devices, any admin's cancel and a lock voiding a pending drop; in owner-bound repos only the owner's consented devices (owner decisio",
@@ -626,7 +626,7 @@
  {
   "family": "pg_redis_durable",
   "file": "04-REPO.md",
-  "line": 112,
+  "line": 119,
   "col": 10,
   "match": "Redis, error)                       // cas, incr, scripts, TTLs, hash-tagged key",
   "snippet": "\tRedis() (Redis, error)                       // cas, incr, scripts, TTLs, hash-tagged keys; evs and gkm keep",
@@ -639,20 +639,33 @@
  {
   "family": "window_14d_weekly",
   "file": "04-REPO.md",
-  "line": 247,
+  "line": 282,
   "col": 143,
   "match": "weekly",
-  "snippet": "- **Merge, never rebase.** A rebase orphans pinned commits and skips the commit-msg hook (connect/.githooks/commit-msg:17-18). Merge `main` in weekly and before each gate, in the order connect, operator-core, sidecar, sdk, sn, server, warp/config/vault/xops/mmm, build, re-pinning each time.",
-  "reading": "weekly merges of main into sidecar branches, operator-core's added by owner decision 251, unrelated",
+  "snippet": "- **Merge, never rebase.** A rebase orphans pinned commits and skips the commit-msg hook (connect/.githooks/commit-msg:17-18). Merge `main` in weekly and before each gate, in the order connect, operator-core, sidecar, sdk, sn, server, warp/config/vault/xops/mmm/minio, build, tests, re-pinning each time. minio's weekly",
+  "reading": "§4.8's weekly merges of main into the sidecar branches, and minio's weekly merge in, a no-op while its upstream stays archived (owner decision 270): branch upkeep, not a storage packing or retention window, so owner decision 136's 24 h packing is untouched.",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-15"
+  "source": "hand-2026-11-16"
+ },
+ {
+  "family": "window_14d_weekly",
+  "file": "04-REPO.md",
+  "line": 282,
+  "col": 313,
+  "match": "weekly",
+  "snippet": "weekly and before each gate, in the order connect, operator-core, sidecar, sdk, sn, server, warp/config/vault/xops/mmm/minio, build, tests, re-pinning each time. minio's weekly merge in is a no-op while its upstream stays archived; xops pins a commit of the fork in place of playbook-minio-clusters.yml's `minio_commit`, and that commit is on the",
+  "reading": "§4.8's weekly merges of main into the sidecar branches, and minio's weekly merge in, a no-op while its upstream stays archived (owner decision 270): branch upkeep, not a storage packing or retention window, so owner decision 136's 24 h packing is untouched.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-16"
  },
  {
   "family": "owner_or_peer_pending",
   "file": "04-REPO.md",
-  "line": 342,
+  "line": 396,
   "col": 693,
   "match": "*Decider:* owner",
   "snippet": "same signed `SHA256SUMS`. *Recommendation:* (a) for v1, the owner deciding at v1's exit review whether Linux users need (b). *Blocks:* nothing before v1's channels (M6). *Decider:* owner.",
@@ -665,7 +678,7 @@
  {
   "family": "decided_q_open",
   "file": "04-REPO.md",
-  "line": 346,
+  "line": 400,
   "col": 319,
   "match": "forwarding files (Q-SDK-5",
   "snippet": "ile or wasm build links them (owner decision 104; Q-REPO-5), and the forwarding role's packet side in the leaf `device/`, so the iOS extension links of the root only its forwarding files (Q-SDK-5, closed by peer review; D-SDK-20; owner decision 197).",
@@ -678,7 +691,7 @@
  {
   "family": "window_14d_weekly",
   "file": "04-REPO.md",
-  "line": 363,
+  "line": 418,
   "col": 72,
   "match": "Weekly",
   "snippet": "| Branches drift from mains that release almost daily | High | Medium | Weekly and per-milestone merges; pending migration groups (D-OPS-6) |",
@@ -2069,7 +2082,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 215,
+  "line": 217,
   "col": 301,
   "match": "pools",
   "snippet": "ingyour.com`, that HELO repeats and whose A record names it (FCrDNS); no address sends before its FCrDNS holds. Every network and burner shares every address, with no IP pools or per-IP warm-up; reputation is per sending domain and per network, through selectors, halts and rate limits (14.7, 14.8). A listed address leaves the sending set, not ",
@@ -2082,7 +2095,7 @@
  {
   "family": "edge_termination",
   "file": "14-SMTP.md",
-  "line": 296,
+  "line": 298,
   "col": 2,
   "match": "Edge-terminated",
   "snippet": "| Edge-terminated submission, an edge-held DKIM key, an SES relay, audit by disclosing the ECDHE secret, parsing enclosed message bodies, vendor report intake, a shared VERP bounce domain",
@@ -2095,7 +2108,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 311,
+  "line": 313,
   "col": 459,
   "match": "pool",
   "snippet": "ttps://support.google.com/a/answer/81126), and old PSL copies still apply the strict `_dmarc.<root>`; a listed address leaves the sending set (14.6), with no separate IP pool (owner decision 124).",
@@ -2108,7 +2121,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 315,
+  "line": 317,
   "col": 124,
   "match": "pools",
   "snippet": "**D-SMTP-7 (withdrawn).** Superseded by owner decisions 34 and 124: smtpedge sends from the shared lb addresses, with no IP pools.",
@@ -2121,7 +2134,7 @@
  {
   "family": "window_14d_weekly",
   "file": "14-SMTP.md",
-  "line": 321,
+  "line": 323,
   "col": 72,
   "match": "14 days",
   "snippet": "**D-SMTP-10 (proposed).** Retention follows §2.8 smtp-1 to smtp-6, plus 14 days of backups; send records keep the MX host, not its IP, and recipients, third-party IPs, subjects, bodies, report plaintext, session ciphertext and record lengths are nev",
@@ -2134,7 +2147,7 @@
  {
   "family": "audit_gate",
   "file": "14-SMTP.md",
-  "line": 351,
+  "line": 353,
   "col": 217,
   "match": "external audit",
   "snippet": "stworthy, and what ships before a sound proof? **Decided by owner 2026-11-03 (owner decisions 35, 99):** nothing ships until 14.5's proofs pass D-SMTP-16's gate, with no external audit; burner email launches receive-only. **Decided by owner 2026-11-04 (owner decision 125):** always fund a DATA circuit, built beside BDAT and part of the gate (D-SMTP-20)",
@@ -2147,7 +2160,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 361,
+  "line": 363,
   "col": 231,
   "match": "pools",
   "snippet": "ses send, under which PTR names? **Decided by owner 2026-11-04 (owner decision 124):** (a), the shared lb addresses, PTR names under bringyour.com, HELO = PTR, and no IP pools or per-IP warm-up (14.6). A listed address leaves the sending set but stays in ingress, with nothing to drain to; a listing that also hits api and connect ingress is an ",
@@ -2160,7 +2173,7 @@
  {
   "family": "audit_gate",
   "file": "14-SMTP.md",
-  "line": 386,
+  "line": 388,
   "col": 53,
   "match": "audited",
   "snippet": "| The BDAT or DATA proofs miss D-SMTP-16's bar, or unaudited circuits are unsound (owner decisions 99, 125) | High | High | Started in M0; `SPEC.md`, non-author analysts, §22's corpus, the RUA check; disclosed as unaudited (owner ",
@@ -2173,7 +2186,7 @@
  {
   "family": "audit_gate",
   "file": "14-SMTP.md",
-  "line": 386,
+  "line": 388,
   "col": 215,
   "match": "audited",
   "snippet": "r, or unaudited circuits are unsound (owner decisions 99, 125) | High | High | Started in M0; `SPEC.md`, non-author analysts, §22's corpus, the RUA check; disclosed as unaudited (owner decision 119); burner email launches receive-only (owner decisions 9, 35) |",
@@ -2186,7 +2199,7 @@
  {
   "family": "pools",
   "file": "14-SMTP.md",
-  "line": 389,
+  "line": 391,
   "col": 103,
   "match": "pool",
   "snippet": "| A mail listing of a shared lb address also blocks api and connect ingress there; with no separate IP pool to drain to and no warm-up (owner decision 124), enough listings degrade sending and the shared ingress together (accepted) | Medium | High | The listed address leaves t",
@@ -2290,7 +2303,7 @@
  {
   "family": "owner_or_peer_pending",
   "file": "17-BRIDGE.md",
-  "line": 600,
+  "line": 601,
   "col": 737,
   "match": "(proposed; Q-",
   "snippet": "rk's untagged sidecars (17.6's rule 3; owner decision 120), a reach the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
@@ -2303,7 +2316,7 @@
  {
   "family": "owner_or_peer_pending",
   "file": "17-BRIDGE.md",
-  "line": 600,
+  "line": 601,
   "col": 802,
   "match": "*Decider:* owner",
   "snippet": "ch the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
@@ -2316,7 +2329,7 @@
  {
   "family": "decided_q_open",
   "file": "17-BRIDGE.md",
-  "line": 634,
+  "line": 635,
   "col": 91,
   "match": "until §22 measures; Q-BRIDGE-2",
   "snippet": "| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; the compile cap of owner decision 216, a network past it keeping its last verified state on that device and alarming; links fail closed meanwhile |",
@@ -3073,12 +3086,12 @@
   "line": 983,
   "col": 451,
   "match": "evs, gkm, taskworker, Redis and storage hosts with the Redis",
-  "snippet": "ret files; D-OPS-20's MinIO build from `urnetwork/minio`; xops's `file-clusters` with 19.6's XFS and MinIO settings, the storage hosts' diskstats exporter, chrony on the evs, gkm, taskworker, Redis and storage hosts with the Redis hosts' offset exporter, the daily sidecar dump, the main dump's exclude list and planetoid's pg-sidecar stream (D-OPS-18), the bundle filter (§4.8); the pager.",
-  "reading": "The Interfaces list names chrony on the evs, gkm, taskworker, Redis and storage hosts and the Redis hosts' offset exporter; this is configuration, not Redis holding durable state. D-OPS-20's build from urnetwork/minio, added by owner decision 195, joins the list and changes nothing here.",
+  "snippet": "ret files; D-OPS-20's MinIO build from `urnetwork/minio`; xops's `file-clusters` with 19.6's XFS and MinIO settings, the storage hosts' diskstats exporter, chrony on the evs, gkm, taskworker, Redis and storage hosts with the Redis hosts' offset exporter, the daily sidecar dump, the main dump's exclude list and planetoid's pg-sidecar stream (D-OPS-18), the bundle filter (D-OPS-16); the pager.",
+  "reading": "§19.16's services and config list names the hosts chrony runs on, the Redis hosts among them with their offset exporter; it states no durable evs or gkm state in Postgres or Redis (owner decision 2). The line changed only in its bundle filter citation, now D-OPS-16.",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-06"
+  "source": "hand-2026-11-16"
  },
  {
   "family": "pools",
@@ -3525,7 +3538,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1263,
+  "line": 1265,
   "col": 39,
   "match": "Redis loss too, and a rotation without a commit",
   "snippet": "              unchanged epoch, after a Redis loss too, and a rotation without a commit raises",
@@ -3538,7 +3551,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1427,
+  "line": 1429,
   "col": 37,
   "match": "Redis loss over-admits at most as for leases",
   "snippet": "              debit per contract_id; Redis loss over-admits at most as for leases",
@@ -3551,7 +3564,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 1478,
+  "line": 1480,
   "col": 34,
   "match": "14 days",
   "snippet": "FS-51  §20    a Team lapse: after 14 days web hosts and From are withheld, MX and TLSA kept,   D-QUOTA-6   T2     M6-out",
@@ -3564,7 +3577,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1595,
+  "line": 1597,
   "col": 28,
   "match": "pools",
   "snippet": "FS-63  §11,19 placement and pools (owner decision 145): two creators race at place/<repo_id>'s FI-1,2,4    T2+T3  M2-out;",
@@ -3577,7 +3590,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1602,
+  "line": 1604,
   "col": 49,
   "match": "pool",
   "snippet": "              segment cluster with more than one pool fails the suite before any write, read",
@@ -3590,7 +3603,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1604,
+  "line": 1606,
   "col": 26,
   "match": "Pools",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3603,7 +3616,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1604,
+  "line": 1606,
   "col": 46,
   "match": "pool",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3616,7 +3629,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1606,
+  "line": 1608,
   "col": 38,
   "match": "R2",
   "snippet": "              streams k by ranges and R2 holds k's locators from a head read, paused; a push",
@@ -3629,7 +3642,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1609,
+  "line": 1611,
   "col": 54,
   "match": "R2",
   "snippet": "              succeed; after it evs1 deletes the two; R2 resumes, gets collected, rereads the",
@@ -3642,7 +3655,7 @@
  {
   "family": "mib64_trigger",
   "file": "22-TEST.md",
-  "line": 1656,
+  "line": 1658,
   "col": 76,
   "match": "64 MiB",
   "snippet": "              no VersioningRules takes the platform rule, versionless above 64 MiB: an honest",
@@ -3655,7 +3668,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2047,
+  "line": 2049,
   "col": 49,
   "match": "R2",
   "snippet": "FS-91  §11    racing reuse copies: a push on ref R2 citing a listed version as reuse source,   FI-2,27     T2+T3  M10-out",
@@ -3668,7 +3681,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2065,
+  "line": 2067,
   "col": 70,
   "match": "R2",
   "snippet": "              Z's chain), Y to X, X edited, a copy of an old X on ref R2: dropping X keeps",
@@ -3681,7 +3694,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2066,
+  "line": 2068,
   "col": 32,
   "match": "R2",
   "snippet": "              what Z's, Y's and R2's versions name; --follow drops X, Y and Z in one push and",
@@ -3694,7 +3707,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2067,
+  "line": 2069,
   "col": 52,
   "match": "R2",
   "snippet": "              one job, freeing what only they name, R2's copy keeping its segments; X live",
@@ -3707,7 +3720,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2107,
+  "line": 2109,
   "col": 26,
   "match": "weekly",
   "snippet": "              re-enrolled weekly for a year, each evicted Worker's leaves removed as stale                        Team at",
@@ -3720,7 +3733,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2258,
+  "line": 2260,
   "col": 14,
   "match": "before the claim",
   "snippet": "              before the claim, and a STAGED one after it; again for a same-generation",
@@ -3733,7 +3746,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 2652,
+  "line": 2654,
   "col": 1248,
   "match": "pool",
   "snippet": "hecksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).",
@@ -3746,7 +3759,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2772,
+  "line": 2774,
   "col": 157,
   "match": "audited",
   "snippet": "**D-TEST-9 (proposed).** Freezes pass 22.10's gates in D-PHASE-7's two steps. *Why:* one conditional write orders storage (owner decision 2), and nothing is audited (owner decision 99).",
@@ -3759,7 +3772,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2774,
+  "line": 2776,
   "col": 787,
   "match": "audited",
   "snippet": "shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).",
@@ -3772,7 +3785,7 @@
  {
   "family": "kib_10_15",
   "file": "22-TEST.md",
-  "line": 2776,
+  "line": 2778,
   "col": 1260,
   "match": "10-15 KiB",
   "snippet": "oduction's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB)",
@@ -3785,7 +3798,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2778,
+  "line": 2780,
   "col": 316,
   "match": "14 days",
   "snippet": "askworker checks that no retained version names one; deletes turn on once FS-64 to FS-71 pass on their rows' tiers and a production soak after the final freeze (at least 14 days and 10,000 candidates) finds none that a retained version names, and until then the gate admits only internal networks and design partners (D-PHASE-10), so later network",
@@ -3798,7 +3811,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2824,
+  "line": 2826,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited novel crypto passes every test, 0x0010 having no vectors (owner decision 99) | Medium | Critical | 22.10's interop artifact; §10.4's mapping and KATs; its disclosure (ow",
