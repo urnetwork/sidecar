@@ -72,20 +72,17 @@ func TestTlsAcmeClientOrdersOnPebble(t *testing.T) {
 	if err := client.Challenge(ctx, accountKey, accountUri, challenge.Url); err != nil {
 		t.Fatal(err)
 	}
+	// Pebble validates and issues on its own goroutines with no sleep (PEBBLE_VA_NOSLEEP): each read is a request,
+	// and the context's deadline fails a run that never gets there
 	poll := func(read func() (string, error), want string) {
 		t.Helper()
-		for range 100 {
+		for ctx.Err() == nil {
 			status, err := read()
 			if err == nil && status == want {
 				return
 			}
-			select {
-			case <-ctx.Done():
-				t.Fatalf("waiting for %s: %v", want, ctx.Err())
-			case <-time.After(50 * time.Millisecond):
-			}
 		}
-		t.Fatalf("never %s", want)
+		t.Fatalf("never %s: %v", want, ctx.Err())
 	}
 	poll(func() (string, error) {
 		read, err := client.Order(ctx, accountKey, accountUri, order.Url)
