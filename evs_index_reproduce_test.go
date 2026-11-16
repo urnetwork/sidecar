@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -391,5 +392,40 @@ func TestIndexCheckWithTextCatchesForgedEntries(t *testing.T) {
 	}
 	if len(raised) == 0 || *raised[0].SidecarId != mallory || !strings.HasPrefix(raised[0].Path, indexFileModePrefix) {
 		t.Fatalf("the mismatch raised: %+v", raised)
+	}
+}
+
+// FS-75's reproduce clause for a roll-up: its runner's push rebuilt at the head after its lock, all's shards, a/m, the
+// runner's head and the freed lock matching, nothing fetched; the same push replayed as signed before the bucket's
+// expiry is a runner rolling early, every output fetched and alarmed (1.5).
+func TestIndexReproduceARollup(t *testing.T) {
+	world, a := testRollupWorld(t)
+	before := world.view(t, a).writeRoot().newestBucket()
+	world.at = testDayTime(before.window.endDay()+before.window.days, time.Hour)
+	var base *indexReproduceBase
+	var rolled *indexPush
+	world.ref.beforeCommit = func(push *indexPush) {
+		if slices.ContainsFunc(push.files, func(file *indexPushFile) bool { return strings.HasSuffix(file.path, "/a/m") }) {
+			base, rolled = testHeldBase(t, world.ref), push
+		}
+	}
+	outcome := world.rollUp(t, evsTestId("runner"))
+	world.ref.beforeCommit = nil
+	push := testReproducePush(rolled, outcome.committed, evsTestId("runner"), 2)
+	reproduced, err := world.reproducer(t, nil, nil).Reproduce(context.Background(), push, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reproduced.kind != indexReproduceRollup || len(reproduced.fetch) != 0 || len(reproduced.events) != 0 || len(reproduced.matched) != len(push.files) {
+		t.Fatalf("a roll-up reproduced: kind %d, %d fetched, %d events, %d of %d matched", reproduced.kind, len(reproduced.fetch), len(reproduced.events), len(reproduced.matched), len(push.files))
+	}
+	early := *push
+	early.signedTimeMs = testDayTime(before.window.endDay(), time.Hour).UnixMilli()
+	reproduced, err = world.reproducer(t, nil, nil).Reproduce(context.Background(), &early, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reproduced.fetch) != len(push.files) || len(reproduced.events) == 0 || *reproduced.events[0].SidecarId != evsTestId("runner") {
+		t.Fatalf("a roll-up signed early: %d fetched of %d, %d events", len(reproduced.fetch), len(push.files), len(reproduced.events))
 	}
 }
