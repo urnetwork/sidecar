@@ -111,7 +111,8 @@ func (self *IndexWriter) Prepare(ctx context.Context, plan *EvsWritePlan) error 
 	changes := []*indexWriterChange{}
 	for _, planned := range plan.Paths {
 		write := plan.writeOf(planned.Path)
-		if write == nil || evsIsIndexWrite(write) || planned.Kind != protocol.EvsEntryKind_EVS_ENTRY_FILE {
+		// the git-lfs store's objects on ur/lfs are no documents (§11.11's store row)
+		if write == nil || evsIsIndexWrite(write) || evsIsLfsWrite(write) || planned.Kind != protocol.EvsEntryKind_EVS_ENTRY_FILE {
 			continue
 		}
 		if indexExcluded(indexPlace{repoKind: plan.repoKind, groupInbox: groupInbox, path: planned.Path}) {

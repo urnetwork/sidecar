@@ -371,7 +371,7 @@ func (self *SocketsService) judgeEntry(
 		return entry
 	}
 	entry.name = name
-	stored, ok := socketStoredRegistration(registration, name, self.settings.Format)
+	stored, ok := socketStoredRegistration(registration, name, self.settings)
 	if !ok {
 		return entry
 	}
@@ -431,6 +431,7 @@ func (self *SocketsService) judgeEntry(
 			Namespace:        name.namespace,
 			Registration:     stored,
 			Listen:           listen,
+			View:             view,
 		})
 		switch {
 		case errors.Is(err, ErrSocketListenRefused):
@@ -444,15 +445,46 @@ func (self *SocketsService) judgeEntry(
 }
 
 // registration with §9.5's defaults applied, or false when one of its values is out of §9.5's bounds: a
-// negative version, in-flight count or max_streams, a weight past format's most, an app_mode or ALPN ids on a
-// name that takes none, or the zero listen id.
-func socketStoredRegistration(registration *sidecar.SocketRegistration, name *socketParsedName, format *sidecar.SocketFormatSettings) (*sidecar.SocketRegistration, bool) {
+// negative version, in-flight count or max_streams, a weight past format's most, an app_mode, ALPN ids,
+// certified names or ACME names on a name that takes none, a list past its count (17.2.10's malformed), a name
+// empty or past its size, an ACME name twice, or the zero listen id.
+func socketStoredRegistration(registration *sidecar.SocketRegistration, name *socketParsedName, settings *SocketsSettings) (*sidecar.SocketRegistration, bool) {
+	format := settings.Format
 	if registration.Version < 0 || registration.Inflight < 0 || registration.MaxStreams < 0 ||
 		registration.Weight < 0 || format.MaxWeight < registration.Weight || *registration.ListenId == (connect.Id{}) {
 		return nil, false
 	}
+	if 0 < len(registration.CertifiedNames) || 0 < len(registration.AcmeNames) {
+		if name.namespace != sidecar.SocketNamespaceTls || settings.CertifiedNameMaxCount < len(registration.CertifiedNames) ||
+			settings.AcmeNameMaxCount < len(registration.AcmeNames) {
+			return nil, false
+		}
+		for _, certifiedName := range registration.CertifiedNames {
+			if certifiedName == "" || settings.ServerNameMaxByteCount < len(certifiedName) {
+				return nil, false
+			}
+		}
+		acmeNames := map[string]bool{}
+		for _, acmeName := range registration.AcmeNames {
+			if acmeName == nil || acmeName.Name == "" || settings.ServerNameMaxByteCount < len(acmeName.Name) || acmeNames[acmeName.Name] {
+				return nil, false
+			}
+			acmeNames[acmeName.Name] = true
+		}
+	}
 	stored := *registration
 	stored.Alpn = append([]string(nil), registration.Alpn...)
+	stored.CertifiedNames = append([]string(nil), registration.CertifiedNames...)
+	stored.AcmeNames = make([]*sidecar.SocketAcmeName, 0, len(registration.AcmeNames))
+	for _, acmeName := range registration.AcmeNames {
+		stored.AcmeNames = append(stored.AcmeNames, &sidecar.SocketAcmeName{Name: acmeName.Name, ClaimSeq: acmeName.ClaimSeq})
+	}
+	if len(stored.CertifiedNames) == 0 {
+		stored.CertifiedNames = nil
+	}
+	if len(stored.AcmeNames) == 0 {
+		stored.AcmeNames = nil
+	}
 	listenId := *registration.ListenId
 	stored.ListenId = &listenId
 	if name.namespace == sidecar.SocketNamespaceTls {

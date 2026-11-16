@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // The gate holds no verified projection for the network yet, or its source is down and it has none to
@@ -76,6 +78,10 @@ type SocketGateView interface {
 	MayDial(request *SocketGateRequest, now time.Time) *SocketGateVerdict
 	// publish on the name's dns host (§13.9) at now.
 	MayPublish(request *SocketGateRequest, now time.Time) *SocketGateVerdict
+	// The request's sidecar's publish grant for its tls/<port>/<host> name at now, registered in appMode (http or
+	// raw), with what the listener's front enforces (§8.4, §8.10), which tls/'s ValidateListen judges (§13.9). nil
+	// for none, which every caller refuses.
+	PublishGrant(request *SocketGateRequest, appMode string, now time.Time) *sidecar.AclPublishGrant
 	// The identity key a sidecar's claims verify under, from the state's SidecarRow (§9.5), and whether the
 	// state holds a live row for it.
 	IdentityKey(sidecarId connect.Id) (publicKey []byte, found bool)

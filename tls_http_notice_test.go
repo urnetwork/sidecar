@@ -84,7 +84,12 @@ func TestTlsHttpNoticeNeverElsewhere(t *testing.T) {
 		{name: "pro", tier: "pro", shown: false},
 		{name: "unknown", tier: "", shown: true},
 		{name: "system publish", tier: "free", shown: false, configure: func(fixture *tlsFrontFixture) {
+			fixture.target.Name = tlsSystemPublishName
 			fixture.target.SystemPublish = true
+			fixture.target.LocalAddress = ""
+			fixture.target.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("policy"))
+			})
 		}},
 		{name: "an API call", tier: "free", shown: false, request: func(t *testing.T) *http.Request {
 			request, err := http.NewRequest(http.MethodGet, "https://"+tlsFrontTestServerName+"/hook", nil)

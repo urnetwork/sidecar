@@ -231,6 +231,26 @@ type EvsSettings struct {
 	// How many times ReadHead reads a versionless file again from a fresh head after its content was replaced
 	// mid-read, before it answers ErrEvsReplacedMidRead (§11.7's reads row), 3. Not negative; 0 never rereads.
 	ReadReplacedRestartCount int
+
+	// §11.11's git-lfs rows (evs_lfs_*.go). A git-lfs pointer is shorter than this, 1,024 bytes, git-lfs's own bound
+	// (docs/spec.md): a longer blob is no pointer and requires nothing (R(c)'s requires row).
+	LfsPointerMaxByteCount int64
+	// The largest object the store and the transfer agent take, refused by name past it (EVS_FILE_TOO_LARGE):
+	// 2,147,483,648 bytes, the file cap through M10 (plan-EVS2-file-cap).
+	LfsObjectMaxByteCount int64
+	// The objects one head read of ur/lfs asks for: 64 (§11.11's store row).
+	LfsHeadReadPathCount int
+	// The newest versions the store keeps in memory, least recently used out: 65,536.
+	LfsNewestCacheCount int
+	// The transfer agent precedes an object's complete event with a progress event when it is at least this large:
+	// 8 MiB, a segment's bound, past which git-lfs's progress bar otherwise sits still.
+	LfsProgressByteCount int64
+	// The tip check (evs_lfs_tipcheck.go): an object whose newest version was signed under LfsFreshAge ago, 5 days,
+	// is fresh; a check over LfsCheckMaxAge old, 1 h, runs again before a push id's first POST; and the hook names up
+	// to LfsMissingShownCount, 20, of the objects it finds missing.
+	LfsFreshAge          time.Duration
+	LfsCheckMaxAge       time.Duration
+	LfsMissingShownCount int
 }
 
 // The desktop daemon's evs settings.
@@ -317,5 +337,13 @@ func DefaultEvsSettings() *EvsSettings {
 		LookupVersionCount:       10000,
 		MaxFormat:                2,
 		ReadReplacedRestartCount: 3,
+		LfsPointerMaxByteCount:   1024,
+		LfsObjectMaxByteCount:    2 * 1024 * 1024 * 1024,
+		LfsHeadReadPathCount:     64,
+		LfsNewestCacheCount:      65536,
+		LfsProgressByteCount:     8 * 1024 * 1024,
+		LfsFreshAge:              5 * 24 * time.Hour,
+		LfsCheckMaxAge:           time.Hour,
+		LfsMissingShownCount:     20,
 	}
 }

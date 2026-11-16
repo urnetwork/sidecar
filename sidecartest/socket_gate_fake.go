@@ -13,7 +13,9 @@
 //   - listen and dial grants name a subject and a name key, exactly or by a byte prefix: listen by the
 //     request's sidecar, else its subject client; dial by its subject client, and an urnetwork-edge caller's
 //     dial by autogroup:public;
-//   - a publish grant names a name key, whoever asks;
+//   - a publish grant names a name key, whoever asks, and answers PublishGrant with the audience, app mode and pin
+//     it states, whatever mode the listener registers, so tls/'s ValidateListen judges a shape §8's agreement rule
+//     would never give;
 //   - a grant has an id and an expiry in milliseconds, 0 for none, and one past its expiry at the time asked
 //     refuses.
 //
@@ -31,6 +33,7 @@ import (
 	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/socketsservice"
 )
 
@@ -41,6 +44,22 @@ type FakeSocketGrant struct {
 	GrantId []byte
 	// In milliseconds. 0: none.
 	ExpireMillis uint64
+	// A publish grant's audience, app mode and raw link pin (§8.4), as PublishGrant reports them. Unspecified reads
+	// as members and http, §8.4's defaults.
+	Audience       protocol.AclAudience
+	AppMode        protocol.AclAppMode
+	LinkSpkiSha256 []byte
+}
+
+// A copy that shares no slice with grant.
+func (self FakeSocketGrant) clone() FakeSocketGrant {
+	return FakeSocketGrant{
+		GrantId:        bytes.Clone(self.GrantId),
+		ExpireMillis:   self.ExpireMillis,
+		Audience:       self.Audience,
+		AppMode:        self.AppMode,
+		LinkSpkiSha256: bytes.Clone(self.LinkSpkiSha256),
+	}
 }
 
 // Who a fake rule is for.
@@ -144,7 +163,7 @@ func (self *FakeSocketGate) addRule(networkId connect.Id, subject fakeSocketGate
 			kept = append(kept, rule)
 		}
 	}
-	grantCopy := FakeSocketGrant{GrantId: bytes.Clone(grant.GrantId), ExpireMillis: grant.ExpireMillis}
+	grantCopy := grant.clone()
 	rules.subjectRules[subject] = append(kept, &fakeSocketGateRule{nameKey: bytes.Clone(nameKey), prefix: prefix, grant: &grantCopy})
 }
 
@@ -397,8 +416,8 @@ func (self *fakeSocketGateView) Position() uint64 {
 	return self.position
 }
 
-// The verdict of subject's rules on the request's name at now.
-func (self *fakeSocketGateView) verdict(subject fakeSocketGateSubject, request *socketsservice.SocketGateRequest, now time.Time) *socketsservice.SocketGateVerdict {
+// The first of subject's rules that takes the request's name at now, nil for none.
+func (self *fakeSocketGateView) rule(subject fakeSocketGateSubject, request *socketsservice.SocketGateRequest, now time.Time) *fakeSocketGateRule {
 	nameKey := []byte(request.Name)
 	if request.Name == "" {
 		nameKey = request.NameToken
@@ -409,14 +428,23 @@ func (self *fakeSocketGateView) verdict(subject fakeSocketGateSubject, request *
 		if !matches || (rule.grant.ExpireMillis != 0 && rule.grant.ExpireMillis <= nowMillis) {
 			continue
 		}
-		return &socketsservice.SocketGateVerdict{
-			Allowed:           true,
-			GrantId:           bytes.Clone(rule.grant.GrantId),
-			PolicyVersion:     self.position,
-			GrantExpireMillis: rule.grant.ExpireMillis,
-		}
+		return rule
 	}
-	return &socketsservice.SocketGateVerdict{}
+	return nil
+}
+
+// The verdict of subject's rules on the request's name at now.
+func (self *fakeSocketGateView) verdict(subject fakeSocketGateSubject, request *socketsservice.SocketGateRequest, now time.Time) *socketsservice.SocketGateVerdict {
+	rule := self.rule(subject, request, now)
+	if rule == nil {
+		return &socketsservice.SocketGateVerdict{}
+	}
+	return &socketsservice.SocketGateVerdict{
+		Allowed:           true,
+		GrantId:           bytes.Clone(rule.grant.GrantId),
+		PolicyVersion:     self.position,
+		GrantExpireMillis: rule.grant.ExpireMillis,
+	}
 }
 
 // See socketsservice.SocketGateView.
@@ -440,6 +468,30 @@ func (self *fakeSocketGateView) MayDial(request *socketsservice.SocketGateReques
 // See socketsservice.SocketGateView.
 func (self *fakeSocketGateView) MayPublish(request *socketsservice.SocketGateRequest, now time.Time) *socketsservice.SocketGateVerdict {
 	return self.verdict(fakeSocketGateSubject{right: "publish"}, request, now)
+}
+
+// See socketsservice.SocketGateView: the publish rule's grant as the test stated it, unspecified read as §8.4's
+// defaults, for any app mode the listener registers.
+func (self *fakeSocketGateView) PublishGrant(request *socketsservice.SocketGateRequest, appMode string, now time.Time) *sidecar.AclPublishGrant {
+	rule := self.rule(fakeSocketGateSubject{right: "publish"}, request, now)
+	if rule == nil {
+		return nil
+	}
+	audience := rule.grant.Audience
+	if audience == protocol.AclAudience_ACL_AUDIENCE_UNSPECIFIED {
+		audience = protocol.AclAudience_ACL_AUDIENCE_MEMBERS
+	}
+	mode := rule.grant.AppMode
+	if mode == protocol.AclAppMode_ACL_APP_MODE_UNSPECIFIED {
+		mode = protocol.AclAppMode_ACL_APP_MODE_HTTP
+	}
+	return &sidecar.AclPublishGrant{
+		GrantIds:       [][]byte{bytes.Clone(rule.grant.GrantId)},
+		Audience:       audience,
+		AppMode:        mode,
+		LinkSpkiSha256: bytes.Clone(rule.grant.LinkSpkiSha256),
+		ExpiresMs:      int64(rule.grant.ExpireMillis),
+	}
 }
 
 // See socketsservice.SocketGateView.
