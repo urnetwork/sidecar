@@ -8,7 +8,10 @@
 // The table is immutable runs. Each fills one slot of the root: a bucket's shards (their doc and tombstone tables), a
 // bucket's other files (sealed slots, heads, large entries), all's shards, or erased keys: the keys an ERASE names,
 // masked at every version until the rewritten files are cached, and the documents a ref's erasure set lists, masked at
-// or below their version (§11.14's epoch row). A run is built by a streaming merge of key-ordered inputs
+// or below their version (§11.14's epoch row). An ERASE's keys and a CUT's documents this device applied at once, ahead
+// of the swap that brings them into a run, are the cache's own masks of the ref (state_search_delete.go), which a probe
+// joins to the runs; a listing by an erasure set wins over an ERASE's mask of the whole key (DESIGN-DETAILS 15.2.10's
+// masks). A run is built by a streaming merge of key-ordered inputs
 // (state_search_versions_merge.go) and never changes; the sync engine's manifest names the runs a snapshot reads, and a
 // run no manifest names goes once no open snapshot holds it, so a running search keeps its snapshot's runs as it keeps
 // its files.
@@ -551,7 +554,9 @@ type SearchVersionProbe struct {
 	Slot      SearchVersionSlot
 	// The highest ref tombstone of the probed ref id: rows of that ref below it are gone. 0 for none.
 	RefTombstoneVersion uint64
-	// The version the key is masked at and below by erased runs: SearchVersionErasedAll under an ERASE; 0 for none.
+	// The version the key is masked at and below (DESIGN-DETAILS 15.2.10's masks): where an erasure set this device
+	// holds lists it, in an erased run or a CUT the cache applied at once, the highest version listed; else, where an
+	// ERASE names it, in an erased run or the cache's mask (CORE-M10-04), SearchVersionErasedAll; 0 for none.
 	ErasedThrough uint64
 }
 
@@ -565,19 +570,30 @@ func (self SearchVersionProbe) Current(version uint64) bool {
 }
 
 // Probes the snapshot for one candidate: its doc key, and its ref id where the index is ur/index's (a row's ref_id), nil
-// in a file-mode ref's. One page a level of each run, through the page LRU; nothing of the runs is collected. An error
-// is a run that failed, which was dropped: the caller masks the candidate.
+// in a file-mode ref's. One page a level of each run, through the page LRU, and the cache's own erasure masks of the
+// ref, which an ERASE's or a CUT's hint applied before a swap brings them into the runs (state_search_delete.go);
+// nothing of the runs is collected. An error is a run that failed, which was dropped, or a ref whose masks overflowed:
+// the caller masks the candidate.
 func (self *SearchVersionSnapshot) Probe(docKey [indexIdByteCount]byte, refId *Id) (SearchVersionProbe, error) {
 	probe := SearchVersionProbe{}
 	newest := SearchVersionRecord{}
+	// DESIGN-DETAILS 15.2.10's masks: a listing by an erasure set wins over an ERASE's mask of the whole key
+	listed := false
+	listedThrough := uint64(0)
+	eraseNamed := false
 	for _, run := range self.runs {
 		if run.slot.Kind == SearchVersionErased {
 			erased, found, err := self.table.lookup(run, searchVersionClassDocument, &docKey)
 			if err != nil {
 				return SearchVersionProbe{}, err
 			}
-			if found {
-				probe.ErasedThrough = max(probe.ErasedThrough, erased.Version)
+			switch {
+			case !found:
+			case erased.Version == SearchVersionErasedAll:
+				eraseNamed = true
+			default:
+				listed = true
+				listedThrough = max(listedThrough, erased.Version)
 			}
 			continue
 		}
@@ -605,6 +621,21 @@ func (self *SearchVersionSnapshot) Probe(docKey [indexIdByteCount]byte, refId *I
 		probe.Version = newest.Version
 		probe.Tombstone = newest.Tombstone
 		probe.File = newest.File
+	}
+	mask, err := self.table.cache.erasedMask(self.table.repoId, self.table.refId, docKey)
+	if err != nil {
+		return SearchVersionProbe{}, err
+	}
+	if 0 < mask.Through {
+		listed = true
+		listedThrough = max(listedThrough, mask.Through)
+	}
+	eraseNamed = eraseNamed || mask.Erase
+	switch {
+	case listed:
+		probe.ErasedThrough = listedThrough
+	case eraseNamed:
+		probe.ErasedThrough = SearchVersionErasedAll
 	}
 	return probe, nil
 }
