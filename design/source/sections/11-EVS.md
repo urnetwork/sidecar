@@ -1398,8 +1398,8 @@ I-EVS-10 no committed version names a kind-5 segment except the version that int
          the rename target of the push that removes it
 I-EVS-11 at a ref version, each document key has at most one version in the all partition and at most one in each
          bucket's shards, and a reader's merged view holds each document's newest indexed version or nothing; the
-         push that removes an expired bucket adds its documents to all or a newer bucket's shards (owner decision
-         385)
+         push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds
+         only older entries of, to that bucket's shards (owner decision 385)
 I-EVS-12 a roll-up commits only from the lock version its runner took, so two roll-ups of one bucket never both
          commit
 I-EVS-13 in a slot-keyed repo, once an erasure completes, no stored index file version holding the document
@@ -2568,9 +2568,8 @@ limit     at the storage limit, and while the network is spent, evs refuses from
           QuotaRefusal) and a cancel, its index rewrites waiting as merges do, and config and mailcfg pushes within
           §7.9's limits, so a full network can still change policy and erase, at the floor within the wait below, a
           record entry's `erasure` note waiting until the network is under the limit and not spent (11.12), and an
-          index re-entry the erasure needs, with the two files it holds back (11.14's limit row; owner decision
-          395); their
-          bytes count as usual; from v1, deleting versionless files adds no payload, so it is accepted at the limit
+          index re-entry the erasure needs, which folds its listed run cards again and holds back no file of the
+          erasure (11.14's limit row; owner decision 584); their bytes count as usual; from v1, deleting versionless files adds no payload, so it is accepted at the limit
           and frees their bytes a minute after it commits; other erased or deleted ciphertext stays until a later
           compaction, unscheduled (11.12; owner decision 247)
 freed     a drop's listed content counts as stored until its job deletes it or moves it to held: each seg/ object's
@@ -2718,9 +2717,10 @@ version   the path's entry version (11.7's versions: known before the commit, ne
           a chunk, for that chunk's key; a ref DELETE is a ref tombstone at the ref version it commits at, above
           every version of the ref's documents before it and below every re-creation's (11.7's versions)
 sniff     a file is text when its first 8,000 bytes hold no NUL and are valid UTF-8 but for a cut final sequence
-          (git's rule), or it opens with a UTF-16 byte-order mark and is decoded; a chunk whose key set would
-          encode past 512 KiB, which nearly every query would match, is skipped; a version that turns binary or
-          skipped is a tombstone at its version
+          (git's rule), or it opens with a UTF-16 byte-order mark and is decoded; a chunk whose key set would encode
+          past 512 KiB, which nearly every query would match, or that alone would not fit a shard by
+          protocol/INDEX-FORMAT.md's D6, is skipped (caps, below); a version that turns binary or skipped is a
+          tombstone at its version
 fields    1 subject, 2 from, 3 to (to and cc), 4 title, 5 body; 6-15 registered per document class, each
           class's numbers and its uses of 4 and 5 where the class is written: §16.8's record entries and run
           cards and §16.11's directory documents; started, expires, private and tainted are the row's
@@ -2733,10 +2733,17 @@ directory the team directory's derived documents (§16.11): one per announcement
           or a revocation does (owner decision 181); the kind's window is 7 days by default (7-90; a window_days
           of 0, or no settings, means 7 there), and it refuses IndexSettings.off (owner decision 171, over owner
           decision 156's general rule, for this repo)
-extract   mail: MIME-decoded (RFC 2045-2047, 2231): From, To, Cc and Subject values, text/plain parts, text/html
-          parts with tags, scripts and styles stripped, and attachment names; never transport headers, attachment
-          bytes or base64; files: title = the first heading or line (at most 80 B), indexed with the path, body =
-          the text; records: §16.8's mapping of an entry's sealed body; the extractor's id is in every file header
+extract   extractor 1, every byte of which protocol/INDEX-FORMAT.md fixes and testdata/index/conformance/ pins; it
+          calls no library parser, reads damaged input by rule and refuses none; mail: the message's own Subject,
+          From, To and Cc values with RFC 2047 words decoded (fields 1, 2 and 3, To before Cc), and in field 5, in
+          the message's order and joined by one space, each part's name and each text/plain and text/html part's
+          text, MIME-decoded (RFC 2045, 2231), HTML with its tags, scripts and styles removed and its character
+          references decoded; every alternative is read, an attachment gives its name alone, a message/rfc822 part
+          is one, and multiparts are read 16 deep; never transport headers, attachment bytes or base64; files: the
+          title is the first line holding a letter or a number, without its heading marks, at most 80 B; field 4 is
+          the title, a space and the path, and field 5 the text; records: §16.8's mapping of an entry's sealed body;
+          every chunk of a document carries its fields 1-4; the extractor's id is in every file header
+          (DESIGN-DETAILS.md section 11)
 own       extractor 1 defines its own base64, quoted-printable, HTML character-reference, header and whitespace
           rules, each a rule of the index format that protocol/INDEX-FORMAT.md writes out, with HTML's reference
           table in the repository (testdata/index/conformance/entities.json) and conformance vectors holding the
@@ -2811,9 +2818,9 @@ slot      one writer's entries, at most 16,208 B, so its record (11.6's 160 B he
           by their 16 B key (doc_key, or ref_id for a ref tombstone), then by kind, one entry a key, a replacing
           entry taking its predecessor's sorted place, so a head is a function of its entry set, and decoders
           refuse out-of-order or repeated keys
-entry     kind (1 full, 2 diff, 3 tombstone, 4 ref tombstone) | doc_key (a ref tombstone: ref_id) | VByte version |
-          VByte time (s) | diff: VByte base version | full and diff: row | full: key set; diff: added and removed
-          key sets against its base's set (commit path's dependency row); encoded from its own document only
+entry     kind (1 full, 3 tombstone, 4 ref tombstone; 2, a diff's, is reserved and a decoder refuses it, since every
+          entry is full or a tombstone: owner decision 584) | doc_key (a ref tombstone: ref_id) | VByte version |
+          VByte time (s) | full: row | key set; encoded from its own document only
 row       doc kind (file, mail, record, derived) | VByte flags (bit 0 tainted, from the push's provenance; bit 1
           outside: mail from outside the network, or an EvsImport's content; bit 2 private, a directory document's;
           bits 3-17 a field cut at its cap) | VByte size | VByte chunk | VByte trigram count | VByte started and
@@ -2826,7 +2833,8 @@ row       doc kind (file, mail, record, derived) | VByte flags (bit 0 tainted, f
           2,048 B leave after the fixed part and the fields before it, cut on a code point, its flag bit set; flag
           bit 18 says the locator is cut, or held a non-UTF-8 path mapped to U+FFFD, so it is not the exact path
 key set   VByte count, then VByte gaps between ascending keys, the first gap key + 1
-large     one entry over 8 KiB, alone, at most 1 MiB, a segment upload
+large     one full entry over 8 KiB, alone, at most 1 MiB, a segment upload; its writer removes it once it is
+          absorbed (commit path's dependency row)
 shard     at most 1,032,192 B before its pad and 1 MiB with it (the Padmé step there is 16 KiB), so every index
           file is one ?closure=1 upload (11.12): "URix" | header | doc table | tombstones | dictionary | postings |
           pad
@@ -2857,13 +2865,13 @@ pad       slots and large entries: none of their own, since their sizes add per 
           IndexFileHeader.body_length, and everything past those bytes is pad, all zero bytes, else index_malformed,
           so a decoder takes any such pad on any file type within the file's size bound and re-encoding keeps the
           file's pad length; a writer's next head rewrite writes no pad
-codes     VByte, bitsets and front coding only; VByte is unsigned LEB128, as encoding/binary.AppendUvarint writes it:
-          7 bits a byte, least significant group first, the high bit set on every byte but the last, minimal, at most
-          10 bytes; an entry's kind, a row's doc kind and a tombstone's kind are one byte each (entry 1-4; doc kind 1
-          file, 2 mail, 3 record, 4 derived, SearchHit.doc_kind's values; tombstone 3-4), any other value
-          non-canonical; doc_key and ref_id are 16 raw bytes; nothing is compressed across documents, since inbound
-          mail and collaborators' commits can inject probes (a compression oracle); a shard's dictionary and lists,
-          the only structures shared across documents, sit under the keyed pad
+codes     VByte, bitsets and front coding only; VByte is unsigned LEB128, as encoding/binary.AppendUvarint writes
+          it: 7 bits a byte, least significant group first, the high bit set on every byte but the last, minimal, at
+          most 10 bytes; an entry's kind, a row's doc kind and a tombstone's kind are one byte each (entry 1, 3 or
+          4, 2 being reserved; doc kind 1 file, 2 mail, 3 record, 4 derived, SearchHit.doc_kind's values; tombstone
+          3-4), any other value non-canonical; doc_key and ref_id are 16 raw bytes; nothing is compressed across
+          documents, since inbound mail and collaborators' commits can inject probes (a compression oracle); a
+          shard's dictionary and lists, the only structures shared across documents, sit under the keyed pad
 determinism a file is a function of its inputs: pinned tables and ids, docids by doc_key, ascending keys, minimal
           VByte, the shorter-list rule, blocks of 64 (or the replaced partition, shrink below; merges and roll-ups
           always re-block by 64, and both outcomes are functions of the inputs, so reproduction holds), no clock,
@@ -2952,46 +2960,44 @@ latest    the window holding today and the one before it: 30 to 60 days at the d
 
 ```text
 in-ref    the sidecar building a push extracts each changed document and appends an entry to its head: a full set,
-          a diff (dependency, below) or a tombstone for a removal; the head's new version, staged, joins the push's
+          or a tombstone for a removal (dependency, below); the head's new version, staged, joins the push's
           statement, so the index commits with the content (owner decision 153); from format 2 a push that changes
           no document carries index_none (coverage, below), so it counts as indexed with no entry
-dependency a diff for version v names its base by version and rests only on a full entry of its document at the
-          version v replaces (v - 1 for a path), the document's newest entry and no tombstone, in another file of its
-          own writer in its own bucket, a sealed slot that is not its head or a large entry, and on nothing else; the
-          writer keeps that file while a diff in its unabsorbed slots rests on it, reusing no such slot and removing
-          no such large entry, so it keeps up to 8 slots (128 KiB) a bucket past their absorption and an absorbed
-          large entry waits for its writer's next push there or the bucket's roll-up; every push that writes a
-          writer's file replaces that writer's head at the version read, so a writer's pushes commit one at a time,
-          and a merge reads no head and removes no writer's file, so no entry rests on another device's file (owner
-          decision 385); anything else is full, a writer's first entry of a document in a bucket among them until
-          the head holding it seals; the base's chain plus one stays under 16 diffs and the delta under half the
-          base's set; a re-applied or rebuilt entry (conflict, below) is chosen anew against what it reread; a DROP
-          writes its kept head full (drop, below), and an erasure removes a document's entries together, a diff
-          resting on an erased version among them (erase, below; owner decision 395)
+dependency every entry is full or a tombstone, encoded from its own document alone, so no entry rests on another and
+          a reader, a merge or a roll-up takes each as it stands (owner decision 584, which ended the diffs owner
+          decision 385 had rested on their writer's own files); every push that writes a writer's file in a bucket
+          replaces that writer's head there at the version its base showed, a head sealed as it stood written again
+          with its own bytes, so a writer's pushes commit one at a time, and a merge reads no head and writes or
+          removes no writer's file (owner decision 385): a writer reuses its absorbed slots and removes its absorbed
+          large entries at its next push in the bucket, the bucket's roll-up removing what a writer that never
+          returns left; a DROP's rewrite of a writer's file replaces that writer's head too (drop, below), and an
+          erasure removes a document's entries together (erase, below)
 seal      when the head cannot take an entry within 16,208 B, the next slot becomes the head: the lowest k whose
           seq the bucket's manifest shows absorbed, else a new k up to 8; with none free the writer merges first
           (merges, below) or, unable to, takes up to 16 slots and alarms; an entry over 8 KiB is a large entry; a
           push's entries past 256 KiB go straight into the bucket's shards, a merge inside that push
-companion for git-mode refs and streams, the committer journals the entries in its sealed store once the content push
-          commits, and pushes its head on ur/index at most once a minute on 1 KiB XFS blocks, else once every 5
+companion for git-mode refs and streams, the committer journals the entries in its sealed store once the content
+          push commits, and pushes its head on ur/index at most once a minute on 1 KiB XFS blocks, else once every 5
           minutes, while it holds any (owner decision 172), at once when its head fills, and before it sleeps or
-          exits; the head's coverage names, per content ref, the newest version whose changes it holds; its own device
-          searches the journal meanwhile; a git FORCE indexes the trees' difference, and a ref DELETE journals a ref
-          tombstone; each entry is encoded when its head push is built (dependency, above), and one whose document an
-          entry at that push's base holds at a higher version, or a ref tombstone of its ref deletes, is dropped as
-          superseded, as a backfill's is; the builder takes its signed time, reads the index head, then each content
-          ref's head from evs, and drops an entry whose document that pin holds at a higher version or removed,
-          sending the push only within 5 min of its signed time (25 min in parts) and never a stored push again after
-          429 TIME_AHEAD, so no entry trailing its content lands below a tombstone a roll-up dropped; hosts with the
-          text check each live entry against its path and backfill a missing tombstone, the accepted residual being a
-          device whose clock ran about a week fast and that stalls that long before sending its stored bytes, which
-          such a host repairs, naming the signer, and an evs counter a roll-up moves the fallback the review phase may
-          take (owner decision 386); at an ERASE or CUT hint the committer drops an erased or listed document's
-          journaled entries, and every companion push and 409 re-apply first applies the ref's erasure set (epoch,
-          below), so a lost hint publishes nothing
-conflict  only an eraser's CLOSURE, a DROP's rewrite or the writer's own other push rewrites a head (owner decision
-          385); on 409 for it the writer rereads it and re-applies its pending entries, less the erasure set's
-          documents: the one versionless path a client rebases (11.7), since it holds what it wrote; a 409 on
+          exits; the head's coverage names, per content ref, the newest version whose changes it holds; its own
+          device searches the journal meanwhile; a git FORCE indexes the trees' difference, and a ref DELETE
+          journals a ref tombstone; a companion push is built in one order: its signed time taken, the head of
+          ur/index read, then each content ref's head read from evs, the pin; it carries, per document of the
+          committer's journaled versions at or below the pin, the newest, and drops one whose path the content ref
+          holds at the pin at a higher version or removed, or whose ref was deleted since, leaving the newer version
+          to its own committer or a backfill, and one whose push a horizon row already reaches; its coverage names
+          the pin; it is sent within 5 min of its signed time (25 min in parts) and otherwise built again, and never
+          sent again as built after a 429 TIME_AHEAD, so no entry trailing its content lands below a tombstone a
+          roll-up dropped; hosts with the text check each live entry against its path and backfill a missing
+          tombstone (the reads' coverage row), the accepted residual being a device whose clock ran about a week
+          fast and that stalls that long before sending its stored bytes, which such a host repairs, naming the
+          signer, and an evs counter a roll-up moves the fallback the review phase may take (owner decision 386); at
+          an ERASE or CUT hint the committer drops an erased or listed document's journaled entries, and every
+          companion push and 409 re-apply first applies the ref's erasure set (epoch, below), so a lost hint
+          publishes nothing
+conflict  only an eraser's CLOSURE, a DROP's rewrite or the writer's own other push rewrites a writer's file (owner
+          decision 385); on 409 for it the writer rereads it and re-applies its pending entries, less the erasure
+          set's documents: the one versionless path a client rebases (11.7), since it holds what it wrote; a 409 on
           content rebuilds the entries with the push
 epoch     every push but a CLOSURE that creates or replaces an index file version (a head, slot, large entry,
           shard, manifest, lock or the erasure set), a CUT, merge, roll-up, build, backfill or DROP rewrite
@@ -3007,14 +3013,15 @@ coverage  a push is indexed when it changes its writer's head (in-ref), a covera
           only .ur-index/ or ur/index, or it carries format 2's index_none mark in its sealed metadata, which an
           index-aware writer sets when its push changes no document (every changed path under the never row, or
           binary or skipped with no prior indexed version; a version that turns binary is already a tombstone);
-          hosts with the text check a marked push as an omitted document (D-EVS-56), raise index_mismatch naming
-          the signer and re-enter it as a backfill, an old client's push having no mark and staying unindexed until
-          backfilled, and a reader may classify a mailbox's non-m/ token prefixes with no fetch; readers
-          derive indexed_through, the newest version up to which every push is indexed, and show later ones as not
-          yet searchable; an indexer serving the repo for search (above), else the next capable writer, backfills a
-          push still unindexed 10 min after its commit into its own head and raises its horizon, holding the
-          buckets and all current at its push's base, dropping superseded entries (companion, above) and skipping
-          the erasure set's documents and any whose content an ERASE left unopenable
+          hosts with the text check a marked push as an omitted document (D-EVS-56), raise index_mismatch naming the
+          signer and re-enter it as a backfill, an old client's push having no mark and staying unindexed until
+          backfilled, and a reader may classify a mailbox's non-m/ token prefixes with no fetch; readers derive
+          indexed_through, the newest version up to which every push is indexed, and show later ones as not yet
+          searchable; an indexer serving the repo for search (above), else the next capable writer, backfills a push
+          still unindexed 10 min after its commit into its own head and raises its horizon, from the content at a
+          pin read as a companion push reads it, each path at its state there, a path changed again after the
+          horizon left to that change's own entry, skipping the erasure set's documents and any whose content an
+          ERASE left unopenable
 devices   desktops, the daemon and indexers index every push they make; phones and wasm index what they write and
           merge only when out of slots or on Wi-Fi while charging
 ```
@@ -3022,34 +3029,37 @@ devices   desktops, the daemon and indexers index every push they make; phones a
 **Merges.**
 
 ```text
-when      a bucket's sealed slots (all but each writer's head) and large entries reach 128 KiB, or a writer is out
-          of slots; an indexer serving the repo for search first, else a desktop or the daemon; never on an
-          expired bucket, judged at the push's signed time, as a roll-up names only an expired one (owner decision
-          386)
-input     the bucket's manifest, shards, sealed slots and large entries at the merge's base version, and no
-          writer's head (owner decision 385); the new manifest's absorbed seqs and the files the push replaces
-          name them, so a reproducer learns its inputs from the push
-output    each document's newest version among the inputs, diffs composed and the erasure set's documents left
-          out (commit path's epoch row); a live version as a doc-table row with its postings, a tombstone in the
-          tombstone table, dropping the bucket's older rows of its key, and a ref tombstone those of its ref below
-          its version, each kept for older partitions until the roll-up; copies of one version are one, a
-          self-contained copy kept; appended in doc_key order to the youngest shard, a next one opening at the
-          cap, its older version dropped from the shard holding it, so a bucket's shards hold one version per
-          document, a row or a tombstone, and an eraser finds a document in one shard of each partition, the lazy
-          alternative (superseded rows masked by version, a shard rewritten under half current) to be measured on
-          FS-76's corpus before M10's exit freezes the bytes (owner decision 387); adjacent shards are joined only
-          where the joined shard encodes within the shard bound, and one a removal left past it gives up rows from
-          its highest doc_key down to the rows appended, so a layout is a function of its inputs that always
-          writes (owner decision 394); absorbed slots and large entries stay their writers' to reuse or remove
-          (dependency, above), their tombstones in the shards
-commit    one push: the shards (uploads with receipts), the manifest and the removals; a 409 means another merge
-          or an erasure landed first, and the merge reruns on the new state; merges take no lock
+when      a bucket's sealed slots (all but each writer's head) and unabsorbed large entries reach 128 KiB, or a
+          writer is out of slots; an indexer serving the repo for search first, else a desktop or the daemon; never
+          on an expired bucket, judged at the push's signed time, as a roll-up names only an expired one (owner
+          decision 386)
+input     the bucket's manifest and shards, and its sealed slots and unabsorbed large entries, at the merge's base
+          version, and no writer's head (owner decision 385); the new manifest's absorbed seqs and the files the
+          push replaces name them, so a reproducer learns its inputs from the push
+output    each document's newest version among the inputs, the erasure set's documents left out (commit path's epoch
+          row); at one version a tombstone, then the shards' own entry, then the copy from the lowest writer id and
+          seq; a live version as a doc-table row with its postings, a tombstone in the tombstone table, dropping the
+          bucket's older rows of its key, and a ref tombstone those of its ref below its version, each kept for
+          older partitions until the roll-up; appended in doc_key order to the youngest shard, which takes the
+          longest run that fits by INDEX-FORMAT.md's search, a next one opening at the cap and taking at least one,
+          since extraction skips a document that alone would not fit a shard (sniff row), its older version dropped
+          from the shard holding it, a shard that this leaves past the cap giving its highest entries to the
+          appended ones, so a bucket's shards hold one version per document, a row or a tombstone, and an eraser
+          finds a document in one shard of each partition, the lazy alternative (superseded rows masked by version,
+          a shard rewritten under half current) to be measured on FS-76's corpus before M10's exit freezes the bytes
+          (owner decision 387); adjacent shards under 512 KiB together are joined only where the joined shard
+          encodes within the shard bound, so a layout is a function of its inputs that always writes (owner decision
+          394); a merge writes and removes no file of any writer's: absorbed slots stay for their writers to reuse
+          and large entries for their writers to remove (dependency, above), their tombstones in the shards
+commit    one push: the shards (uploads with receipts) and the manifest, which every merge replaces or creates; a
+          409 means another merge or an erasure landed first, and the merge reruns on the new state; merges take no
+          lock
 ```
 
 **Roll-up.**
 
 ```text
-trigger   an expired bucket, oldest first (owner decision 153)
+trigger   an expired bucket, oldest first (owner decision 153), judged at the push's signed time, as is the lock
 runner    an indexer serving the repo for search that writes it (owner decision 150); where one exists, any writer
           committing a day past the expiry with no roll-up landed; with none, the first desktop, daemon, or phone
           on Wi-Fi while charging, that commits to the ref after the expiry, in the background (owner decision
@@ -3061,17 +3071,19 @@ steps     1 read the bucket, the newer buckets and all at the head; 2 compute th
           does, writers' heads included: each key's newest version or tombstone and each ref's newest ref tombstone;
           3 per key, the newer of that and all's row stays and the other goes, all's rows of a ref below its ref
           tombstone go, and so does every version the erasure set lists; 4 append the live ones that stay in doc_key
-          order to all's youngest shard, a next opening at the cap, and join adjacent shards as a merge does; a version
-          or tombstone it carries that a newer bucket holds only older entries of, which racing index pushes near
-          a boundary can leave, goes instead into the shards of the newest bucket holding an entry of its document,
-          in the roll-up's push, which replaces or creates that bucket's manifest, nothing being removed from the
-          newer bucket: reads mask its older entries by version, its merges drop them and its own roll-up carries
-          the promoted entry on, a promoted tombstone still taking all's row, and no file is rewritten in place and
-          no writer's file touched, a merge of that bucket conflicting on its manifest's CAS (owner decision 385);
-          every other tombstone then goes, nothing older remaining; 5 upload the changed shards; 6 one push, in
-          parts if large (11.8): the shards and the promoted entries' manifests, a/m
-          with rolled_through_day = S, the removal of b/<S>/ listing each of its files (11.7), and the lock set free
-          from the version the runner holds
+          order to all's youngest shard, a next opening at the cap, and join adjacent shards as a merge does; a
+          version or tombstone it carries that a newer bucket holds only older entries of, which racing index pushes
+          near a boundary can leave, goes instead into the shards of the newest bucket holding an entry of its
+          document, in the roll-up's push, which replaces or creates that bucket's manifest, nothing being removed
+          from the newer bucket: reads mask its older entries by version, its merges drop them and its own roll-up
+          carries the promoted entry on, a promoted tombstone still taking all's row and a ref tombstone above a
+          newer bucket's older entry of its ref promoted likewise, and no file is rewritten in place and no writer's
+          file touched, a merge of that bucket conflicting on its manifest's CAS (owner decision 385); every other
+          tombstone then goes, nothing older remaining; 5 upload the changed shards; 6 one push, in parts if large
+          (11.8): the shards, each promotion's shards and manifest, the runner's own head in the newest bucket where
+          it carries forward, as a horizon row at indexed_through, the coverage that the removed bucket's slots
+          held, a/m with rolled_through_day = S, the removal of b/<S>/ listing each of its files (11.7), and the
+          lock set free from the version the runner holds
 fence     step 6's change to the lock is the fencing token: a runner whose lock lapsed and was taken gets 409 on
           it and stops, its uploads left to 11.13's orphan rule
 crash     nothing shows before step 6's head CAS (11.8): a crash leaves the bucket and all as they were and the
@@ -3086,17 +3098,17 @@ cost      once per bucket length: one merge of the bucket, the changed shards' u
           newer bucket's shards and manifest taking a promoted entry; the purge then deletes the bucket's and the
           replaced shards' content (owner decision 161)
 readings  (owner decision 388) a slot other than the head, or a large entry, at or below its writer's absorbed seq
-          holds nothing for search, merges and roll-ups, only a diff's base; a manifest may exist with no shard,
-          and absorbed holds a row only for a watermark above 0; IndexFileHeader.coverage sorts by ref_id, then
-          horizon false before true, at most one row of each kind a ref; an entry's time is its content push's
-          signed time, and its bucket follows the index push's; a merge's tie at one version takes a tombstone,
-          then the shards' own entry, then the full entry of the lowest writer id and the lowest seq; the youngest
-          shard fills by a fixed binary search over its rows; a merge with nothing to add still commits its
-          manifest; a push past 256 KiB of entries also writes its writer's head; the lock renews at half its
-          term; a companion push that only raises coverage is sent; a writer replacing a multi-chunk text file
-          without its text writes no index entry, and the push is backfilled; a roll-up's runner writes horizon
-          rows at indexed_through into its own head in the newest bucket for each content ref the removed slots
-          named; and a journaled unit at or below its ref's horizon at the companion push's base is dropped
+          holds nothing for search, merges and roll-ups; a manifest may exist with no shard, and absorbed holds a
+          row only for a watermark above 0; IndexFileHeader.coverage sorts by ref_id, then horizon false before
+          true, at most one row of each kind a ref; an entry's time is its content push's signed time, and its
+          bucket follows the index push's; a merge's tie at one version takes a tombstone, then the shards' own
+          entry, then the full entry of the lowest writer id and the lowest seq; the youngest shard fills by a fixed
+          binary search over its rows; a merge with nothing to add still commits its manifest; a push past 256 KiB
+          of entries also writes its writer's head; the lock renews at half its term; a companion push that only
+          raises coverage is sent; a writer replacing a multi-chunk text file without its text writes no index
+          entry, and the push is backfilled; a roll-up's runner writes horizon rows at indexed_through into its own
+          head in the newest bucket for each content ref the removed slots named; and a journaled unit at or below
+          its ref's horizon at the companion push's base is dropped
 ```
 
 **Reads.** Devices sync index files by position and search only their cache:
@@ -3119,25 +3131,28 @@ fetch     whole files by sync position, never a range or file a query chose: eac
           designated search indexer answers, or on Wi-Fi while charging (owner decisions 154, 178; §18.4)
 verify    11.9's checks (signed statement, entry hash), then content_sha256 after decryption; a file that breaks the
           format (past 1 MiB, a dictionary out of order, a docid out of range, a tombstone table out of order or
-          naming a key its doc table holds, a tombstone in an all shard, a non-canonical encoding) is dropped and
-          raises SidecarEvent index_malformed {repo, ref, path, signer} (§5.4); nothing is compressed, so no
-          decoder needs a memory bound; after a CLOSURE a manifest's IndexShard.docs is an upper bound and its
-          first_day to last_day a covering range, which no step compares with the shard's header and the next merge
-          or roll-up recomputes, an eraser still finding a document by a/m's days and the shard's doc table
+          naming a key its doc table holds, a tombstone in an all shard, an entry of the reserved kind 2, a
+          non-canonical encoding) is dropped and raises SidecarEvent index_malformed {repo, ref, path, signer}
+          (§5.4); nothing is compressed, so no decoder needs a memory bound; after a CLOSURE a manifest's
+          IndexShard.docs is an upper bound and its first_day to last_day a covering range, which no step compares
+          with the shard's header and the next merge or roll-up recomputes, an eraser still finding a document by
+          a/m's days and the shard's doc table
 swap      the new manifest replaces the old one atomically once every kept file of the new pin is cached and the
           version table (§5.9) covers it; running searches keep their snapshot; files no manifest names are
           deleted once no search holds them
-reproduce a device holding every input of a merge, roll-up or CLOSURE at its push's base version (the new
-          manifest's absorbed seqs and the files the push replaces name them, the ref's listing there a merge's
-          heads) builds the result and compares content_sha256 with each new file's entry version: equal, it
-          caches its own output and fetches nothing; unequal, it fetches the file and raises SidecarEvent
-          index_mismatch {repo, ref, path, signer: the push's} (§5.4); a device lacking an input downloads,
-          raising nothing; after a CLOSURE it deletes the replaced files (§5.9); a team directory reader (§16.11)
-          holding a writer's previous head and that push's bucket at its base, which the head's encoding follows
-          (dependency, above), derives the new head from the card version the push wrote, fetching the head only
-          if content_sha256 differs and then alarming; merges run at 7.0-9.7 ns a posting natively, 2.5-5x that
-          in wasm, so a bucket merge is sub-second; phones reproduce only in the foreground or a background
-          window, else download
+reproduce a device holding every input of a merge, roll-up or CLOSURE at its push's base version (the new manifest's
+          absorbed seqs and the files the push replaces name them) builds the result and compares content_sha256
+          with each new file's entry version: equal, it caches its own output and fetches nothing; unequal, it
+          fetches the file and raises SidecarEvent index_mismatch {repo, ref, path, signer: the push's} (§5.4); a
+          device lacking an input downloads, raising nothing; after a CLOSURE it deletes the replaced files (§5.9);
+          a team directory reader (§16.11) holding a writer's previous head and that push's bucket at its base,
+          which the head's encoding follows (dependency, above), derives the new head from the card version the push
+          wrote, fetching the head only if content_sha256 differs and then alarming; any writer's head is rebuilt
+          alike from that writer's files in the bucket at the push's base and the documents the push carries: an
+          in-ref push's content changes, a companion push's or a backfill's paths at the pins its coverage rows
+          name, and on a record stream the cards of the runs those versions touched (DESIGN-DETAILS.md sections 1
+          and 15); merges run at 7.0-9.7 ns a posting natively, 2.5-5x that in wasm, so a bucket merge is
+          sub-second; phones reproduce only in the foreground or a background window, else download
 retained  readers search every bucket present, expired ones included, so search stays complete while a roll-up is
           pending; a device keeping all applies the roll-up by reproduction or download, then drops the bucket; one
           keeping only latest drops it, its instant coverage the last W to 2W days; a device searches its cached all
@@ -3170,30 +3185,24 @@ plan      per (repo, ref), newest first: the current bucket, the previous one, a
           then all's shards youngest first (scope latest stops before all); per shard the query's trigrams are
           looked up rarest first, one absent ending that shard, and absent from every shard of a partition, that
           partition; only the query's lists are decoded, in their 64 KiB frames, and intersected rarest first,
-          galloping into VByte runs and ANDing bitsets; heads and unmerged slots are scanned per document, whose key
-          set or composed diff chain (chains, below) must hold every query trigram; a median query touches
-          374-73,000 postings (p90 under 120,000), about a millisecond in wasm, frame decryption dominating, within
-          11.15's 4 MiB working set
-chains    a diff resolves by its doc_key and base version in its bucket's shards, sealed slots and large entries,
-          the base's chain likewise, copies of one version being one and a self-contained copy answering first; a
-          diff below its key's newest entry (newest, below) is no candidate, resolved or not, and alarms nothing,
-          since a merge keeps only a current head entry's base; a current diff's chain that does not resolve, or
-          whose composed set's size is not the diff row's trigram count, breaks the format: index_malformed
-          (verify, above) names its signer, the document reads not yet searchable in coverage, never no match, and
-          a host with the text re-enters that version full, as a backfill
+          galloping into VByte runs and ANDing bitsets; heads, sealed slots and unabsorbed large entries are scanned
+          per document, whose key set must hold every query trigram; a median query touches 374-73,000 postings (p90
+          under 120,000), about a millisecond in wasm, frame decryption dominating, within 11.15's 4 MiB working set
 newest    per doc key, the entry with the highest version over every partition the device holds, tombstones
           included, is current; a hit from partition X counts only if X holds that entry, it is not a tombstone, no
-          ref tombstone of its ref (its row's ref_id) is above its version, and no ERASE names its key; equal
-          versions in two partitions (during a roll-up) are the same content; every all row being older than each
-          bucket entry of its key (roll-up's one row), a device keeping only the buckets masks exactly too; each
-          candidate is answered from the device's version table (§5.9), built as it caches the files, never by
-          collecting the partitions' keys at search time: lazily in rank order, as confirmation is, one probe reading
-          a page of each run through a 256 KiB cache a process, so a search's mask state is its pending candidates
-          (at most 20,000 a partition, too_broad past that) whatever the partitions hold; keys an ERASE names are
-          masked in every partition until the rewritten files are cached, as is each document the ref's erasure set
-          lists, at or below its version, from the CUT on, the version table holding both as erased; a branch's
-          search adds its base ref's documents for paths it has not changed (11.7's overlays), probing the table for
-          the branch's own key of each such path; hits stream as each partition finishes
+          ref tombstone of its ref (its row's ref_id) is above its version, and no erasure mask (below) covers it;
+          equal versions in two partitions (during a roll-up) are the same content; no all row being newer than the
+          newest bucket entry of its key (roll-up's one row), a device keeping only the buckets masks exactly too;
+          each candidate is answered from the device's version table (§5.9), built as it caches the files, never by
+          collecting the partitions' keys at search time: lazily in rank order, as confirmation is, one probe
+          reading a page of each run through a 256 KiB cache a process, so a search's mask state is its pending
+          candidates (at most 20,000 a partition, too_broad past that) whatever the partitions hold; each document
+          the ref's erasure set lists is masked at or below its listed version from the CUT on, whether or not an
+          ERASE names it, and a key an ERASE names that no set version the device holds lists is masked whole in
+          every partition until a set version lists it or the rewritten files are cached, the version table holding
+          both as erased (owner decision 461); a branch's search adds its base ref's documents for paths it has not
+          changed (11.7's overlays), probing the table for the branch's own key of each such path; hits stream as
+          each partition finishes
 confirm   hosts with the document's text (a desktop or indexer mirroring the ref, a mounted working tree, an indexer
           answering a remote search, whose verified hits the phone labels "verified by <device>") verify each
           candidate, decrypted, normalized and checked for every term and phrase, lazily in rank order until a
@@ -3227,11 +3236,13 @@ cjk       UTF-8 lead and continuation bytes are disjoint (RFC 3629), so a trigra
 coverage  a content version newer than the index's coverage is not yet searchable: hosts with the text index it into
           a local overlay at once, an indexer answering a remote search covering it from that overlay and reporting
           the rest as uncovered, and phones show "n recent changes not yet searchable" until the backfill lands;
-          hosts with the text re-extract each document version a delta adds, check each tombstone against its
-          path's history and reproduce merges and roll-ups, on a mismatch using their own result and raising
-          SidecarEvent index_mismatch {repo, ref, path, signer} (§5.4), indexers for every repo they read (owner
-          decision 150); phones compare an opened document with its row; every writer of a ref writes its index,
-          so an agent could otherwise hide a document or plant hits
+          hosts with the text re-extract each document version a delta adds, check each tombstone against its path's
+          history and each live entry against its path, one whose content ref holds the path removed or at a higher
+          version, with nothing above it in the index, being a mismatch they backfill, and reproduce merges and
+          roll-ups, on a mismatch using their own result and raising SidecarEvent index_mismatch {repo, ref, path,
+          signer} (§5.4), indexers for every repo they read (owner decision 150); phones compare an opened document
+          with its row; every writer of a ref writes its index, so an agent could otherwise hide a document or plant
+          hits
 off       a ref with no index: hosts with the text scan it (exact, linear), phones and browsers match names and,
           for mail, i/'s fields, and the result says "index off"; an index in a newer format turns search off for
           that ref, status "update"; no search reaches a secret, config or mailcfg repo; an owner-bound repo's
@@ -3299,7 +3310,7 @@ message SearchRequest {
   bytes pad = 15;                     // zeros, sizing the body to exactly 4,016 B
 }
 message SearchRepo { bytes repo_id = 1; bytes ref_id = 2; }   // ref_id empty: the repo's default ref
-message SearchFilters {
+message SearchFilters {               // <= 768 B as encoded in a SearchRequest
   repeated string agents = 1;         // agent labels, or agent ids in hex
   repeated bytes sidecar_ids = 2;
   repeated bytes member_ids = 3;
@@ -3335,7 +3346,7 @@ message SearchCoverage {
   bytes ref_id = 2;
   uint32 served = 3;                  // SearchServed
   uint64 ref_version = 4;             // the (v, C_v) the cursor pinned (11.9)
-  bytes chain = 5;
+  bytes chain = 5;                    // <= 32 B
   int64 ref_time_ms = 6;              // that version's signed time
   int64 latest_from_ms = 7;           // the oldest bucket day searched
   uint32 uncovered = 8;               // pushes past indexed_through that this indexer's text does not cover
@@ -3354,7 +3365,7 @@ message SearchHit {
   uint32 doc_kind = 6;                // 1 file, 2 mail, 3 record, 4 derived (a run card)
   string locator = 7;                 // the path or derived name, <= 512 B, which the requester opens
   uint32 state = 8;                   // 1 verified, 2 confirmed, 3 possible, 4 near
-  string correction = 9;              // near: the corrected term
+  string correction = 9;              // near: the corrected term, <= 256 B
   uint32 partition = 10;              // 1 current, 2 previous, 3 older or retained, 4 all
   uint32 trust = 11;                  // 1 own, 2 member, 3 untrusted, relative to the requester (§16.10)
   bytes signer = 12;                  // the version's writer sidecar_id
@@ -3375,30 +3386,31 @@ ranking   across SERVED_TEXT repos, candidates go newest first by (time, doc_key
           possible hits follow, ranked as a phone ranks them; near hits come last, when a term has fewer than 3
           exact hits or fuzzy is set; checked_through_ms is the newest candidate not yet checked, so every newer
           one was checked and, if verified, returned; phase 1 inside the buckets, 2 inside all, 3 done
-sizes     every request body exactly 4,016 B, one envelope, timeout_ms always 10,000; every reply body exactly
-          steps x 16,384 B (steps 1-4, 1 in v1), failures after parsing included; nothing compressed, no Cancel,
-          no early or short reply; errors decided before parsing are small envelope Errors that depend on the
-          requester's identity, rate or build, never on a query; a builder rule fills the size with no wire change:
-          every field but pad stops at the body's size less 131 B, so pad is at least 131 B and its length varint
-          two bytes, removing the 1, 2 and 130 B holes, a multi-step reply whose pad would be exactly 16,387 B
-          holds one hit back, and a reply holds hits for the next page; SearchFilters is at most 768 B encoded in a
-          SearchRequest, so page 0 holds at most 2,987 + 3 + 768 = 3,758 B against its 3,885 B budget and every
-          request fits, a search whose filters pass 768 B staying on the device with FallbackReason none, local
-          search keeping no such cap; a body that cannot be sized is never sent short: UNAUTHENTICATED (§6.4's
-          identity check),
-          PERMISSION_DENIED (not an admitted, untagged, non-ephemeral member device, or no search designation or
-          Search.RemoteServe off), RESOURCE_EXHAUSTED (retry_after_ms), UNIMPLEMENTED
+sizes     every request body exactly 4,016 B, one envelope, timeout_ms always 10,000; every reply body exactly steps
+          x 16,384 B (steps 1-4, 1 in v1), failures after parsing included; nothing compressed, no Cancel, no early
+          or short reply; errors decided before parsing are small envelope Errors that depend on the requester's
+          identity, rate or build, never on a query; a builder rule fills the size with no wire change: a body is
+          the one deterministic encoding of its message, pad last; every other field stops at the body's size less
+          131 B, so pad is at least 131 B and its length takes two bytes or three, removing the 1, 2 and 130 B
+          holes, and a reply whose other fields would leave exactly 16,387 B returns the most hits, at most 20, that
+          leave another gap, holding the rest for the next page (DESIGN-DETAILS.md section 11); SearchFilters is at
+          most 768 B encoded in a SearchRequest, so page 0 holds at most 2,987 + 3 + 768 = 3,758 B against its 3,885
+          B budget and every request fits, a search whose filters pass 768 B staying on the device with
+          FallbackReason none, local search keeping no such cap; a body that cannot be sized is never sent short:
+          UNAUTHENTICATED (§6.4's identity check), PERMISSION_DENIED (not an admitted, untagged, non-ephemeral
+          member device, or no search designation or Search.RemoteServe off), RESOURCE_EXHAUSTED (retry_after_ms),
+          UNIMPLEMENTED
 status    OK; PARTIAL (2 s of CPU or 1,000 verifications ended the page, more to come); TOO_BROAD (a partition over
           20,000 candidates: header-confirmed hits and counts, complete); CURSOR_EXPIRED (search_id unknown, idle 10
           min, superseded, a third search of the requester, or an ERASE, CUT or lost read in its scope; the phone
-          reopens once); INVALID (a wrong size, a non-zero pad, a query over 512 B or 16 terms, over 64 repos, a
-          malformed filter or SearchFilters past 768 B, a field the receiver does not know at any depth, or a
-          body that is not the one deterministic marshaling of the message it parses to, checked before its pad's
-          zeros, while a reply failing those is no reply); UNSUPPORTED_VERSION, judged first, so a later version's
-          request is never INVALID, a requester raising search_version to send a new field, SearchRequest's
-          reserved 13 and 14 included, and falling back to version 1's fields for an indexer answering a lower
-          range (owner decision 390); per repo in coverage, SERVED_TEXT, SERVED_INDEX or a refusal, which sends
-          that repo on (failover, above)
+          reopens once); INVALID (a wrong size, a non-zero pad, a query over 512 B or 16 terms, over 64 repos, an id
+          of the wrong length, steps outside 1 to 4, a malformed filter or SearchFilters past 768 B, a field the
+          receiver does not know at any depth, or a body that is not the one deterministic marshaling of the message
+          it parses to, checked before its pad's zeros, while a reply failing those is no reply);
+          UNSUPPORTED_VERSION, judged first, so a later version's request is never INVALID, a requester raising
+          search_version to send a new field, SearchRequest's reserved 13 and 14 included, and falling back to
+          version 1's fields for an indexer answering a lower range (owner decision 390); per repo in coverage,
+          SERVED_TEXT, SERVED_INDEX or a refusal, which sends that repo on (failover, above)
 limits    requester: at most 2 open searches an indexer, a third's page 0 superseding the oldest, 30 requests a
           minute (burst 10), 64 repos a request, a larger scope split by indexer, then by 64; indexer: per requester
           the same, else RESOURCE_EXHAUSTED before parsing; Search.RemoteSearchCount (4) computing beside §16.10's 4
@@ -3481,14 +3493,15 @@ erase     at a head at or after its CUT the eraser lists every index file holdin
           merge, a shard the document left, a bucket a roll-up removed, found from the ref's history), a live one
           rewritten under a fresh key by a CLOSURE first, so no stored version keeps an openable key (owner
           decisions 61, 133; FI-19); a CLOSURE refused 409 for a path another push changed after the list rereads
-          that path's history and rebuilds; no watch follows an ERASE, and no indexer takes part; a diff resting on
-          an erased version is erased content: the eraser composes the surviving edit's version from the diff and
-          its base, reading index files only, and enters it full in its own head by an ordinary index push before
-          any CLOSURE of the base's or the diff's file, the erasure's list takes in every slot holding such a diff,
-          and a CLOSURE removes the diff with the listed entries; in the same re-entry the eraser folds each run
-          card its CUT lists again from its stream's head and enters it full in its own head (§16.8, §16.10; owner
-          decision 459); a merge or roll-up composes such a diff through its listed base while the base stands, and
-          a reader passes over a diff whose base is gone and listed, with no alarm (owner decision 395)
+          that path's history and rebuilds; no watch follows an ERASE, and no indexer takes part; after its CUT the
+          eraser folds each run card the CUT lists again from its stream's head and enters it full in its own head,
+          in a re-entry push built in a companion push's order that carries no other document, since every entry is
+          full and no surviving version rests on an erased one (§16.8, §16.10; owner decisions 459, 584), an eraser
+          that does not mirror the log fetching at most IndexEraseSettings.CardFetchByteCount (16 MiB) of a run's
+          source entries a card and past it entering nothing; a listed card's files are rewritten whether or not it
+          was folded again, and each device that held the stream's entries when it applied the ERASE folds the card
+          again 10 min after the CUT, a backfill's wait, unless the index already holds it above the list (owner
+          decision 461)
 bound     an erasure's cost is the index file versions erase lists, not its document count: one message or entry with
           one version is one document per 1 MiB chunk of its text, each chunk in a writer's slot or a large entry,
           then a bucket shard, then all, and a backfill, a late companion push, an absorbed slot or a hold adds
@@ -3503,22 +3516,21 @@ holds     a hold keeps the index content that existed at its placement, staged c
 limit     at the storage limit or while spent, heads ride content pushes and stop with them; merges, roll-ups and
           builds add payload and wait, search answering from the partitions as they stand; an erasure's CUT is
           maintenance, and its CLOSURE is taken within 11.12's bounds and its eraser's allowance, each index file
-          one ?closure=1 upload; when evs refuses an eraser's re-entry push at the limit or with its allowance
-          spent, only the slot holding the resting diff and the file holding its base wait, with their ERASEs,
-          until evs takes it, the base masked from search from the CUT and every other object of the erasure
-          rewritten and destroyed on schedule; the eraser retries at each turn of its allowance and at least every
-          IndexEraseSettings.ReentryRetryInterval (10 min), and the erasure's event shows it waiting with the count
-          (owner decision 395)
+          one ?closure=1 upload; an eraser's re-entry push adds payload and waits as builds do, holding back no file
+          of its erasure, every object of which is rewritten and destroyed on schedule, and a listed run card stays
+          out of search until a fold of it lands (erase, above; owner decision 584, which reversed owner decision
+          395's hold-back of a resting diff's files)
 drop      a DROP push also rewrites in place, without the listed versions, each index file holding a listed version
-          of a dropped path, padded to the replaced length as erase's rewrite is, with no ERASE or CLOSURE flag; the
-          kept head's entries enter the signer's own head full, since no older version stays as a base; the purge
-          deletes the replaced ciphertext a minute later, and a writer whose head it rewrote re-applies (writers,
-          above); a signer not holding the index leaves the rewrite to an indexer serving the repo for search, else
-          the next capable writer, within 10 min as a backfill, searches masking the older version meanwhile (newest
-          wins); the rewrite lands at commit, so a cancel loses nothing; hosts with the text reproduce it and raise
-          index_mismatch on one that left a listed version's postings; a DROP refused 409 INDEX_EPOCH is rebuilt and
-          signed again by its device under the person's same confirmation, or sent without its index rewrites, left
-          to that backfill
+          of a dropped path, padded to the replaced length as erase's rewrite is, with no ERASE or CLOSURE flag,
+          replacing in the same push the head of each writer whose file it rewrites and the manifest of each bucket
+          whose shards, sealed slots or large entries it rewrites (dependency, above), the kept version's full entry
+          staying where it is; the purge deletes the replaced ciphertext a minute later, and a writer whose head it
+          rewrote re-applies (writers, above); a signer not holding the index leaves the rewrite to an indexer
+          serving the repo for search, else the next capable writer, within 10 min as a backfill, searches masking
+          the older version meanwhile (newest wins); the rewrite lands at commit, so a cancel loses nothing; hosts
+          with the text reproduce it and raise index_mismatch on one that left a listed version's postings; a DROP
+          refused 409 INDEX_EPOCH is rebuilt and signed again by its device under the person's same confirmation, or
+          sent without its index rewrites, left to that backfill
 off       an admin's settings version turns the index off (never the team directory's); that device, or an
           indexer, removes <root> but settings in one push listing each file, whose content the purge deletes,
           the ref's erasure set staying for a later build to apply, and never DELETEing ur/index, which would
@@ -3574,7 +3586,8 @@ never     a query, which documents match it, or which trigrams documents share: 
 | Drive writes per push on the metadata set | ≤ 43 KiB per drive at 2× year one's mix; ≤ 0.8 DWPD and 50% of rated write IOPS at any load but P0 work past the refill, which owner decision 186 exempts (11.13) |
 | Versionless content after its replacement | readable ≥ 60 s; deleted within ~2 min, ≤ ~26 h when its committing process failed (the sweep) |
 | Staged versionless content | ≤ 4 KiB per drive a version; no HDD write when replaced before its batch's evacuation |
-| Index entries per push | proportional to the changed text where 11.14's dependency row allows a diff (an edit in the current bucket onto a base outside every head, or composed onto its own head diff's base), else the document's whole key set, as when another writer's head holds its previous version; a 1 MiB document per changed chunk of a large file (11.14) |
+| Index entries per push | each changed document's whole key set, full (owner decision 584): about 1.9 to 3.5 KiB for a 29 KB to 137 KB source file, a 1 MiB document per changed chunk of a large file (11.14) |
+| Index extraction | one pass in fixed memory on app hosts: at most 150 KiB beyond normalizer 1's buffers and one key bitmap, whatever the message (owner decision 389) |
 | Drive writes per indexed push | in-ref ~7 KiB on 4 KiB blocks, ~4.3 on 1 KiB; a companion push a whole push, at most one a minute per writer on 1 KiB blocks, else one every 5 minutes (11.13; owner decision 172) |
 | Latest buckets, 100 messages a day | both ≤ ~5.4 MB; each file ≤ 1 MiB, decrypted by frame within the working set above |
 | Search masks | one probe per candidate, lazily in rank order, into §5.9's version table through 256 KiB of cached pages a process; no set of the partitions' keys in memory; the table updated at a swap within 1 MiB (11.14) |
@@ -3618,10 +3631,10 @@ never     a query, which documents match it, or which trigrams documents share: 
 | 16 MiB all objects | ~10-25% smaller | Past 11.12's 1,088 KiB closure upload, so an erasure at the floor takes days | Rejected |
 | All shards by doc-key hash range | A document's shard is computable | Every roll-up rewrites every shard | Rejected for roll-up order |
 | Dead-document bitmaps in all | Cheaper roll-ups | Old postings linger; erasure still rewrites | Rejected: one version per document |
-| Diffs on any earlier entry in the bucket | Smaller entries | The head's own replacement, or a merge absorbing a newer copy, drops the base a current diff needs | Rejected: bases outside every head, which merges keep (11.14's dependency row) |
-| Every index entry full, no diffs | Self-contained entries | Each edit of a large file uploads its whole key set again as a large entry | Rejected: diffs onto bases outside every head |
+| Diff entries, on any earlier entry in the bucket or on a full entry their writer keeps in its own files (owner decision 385) | Entries in proportion to the edit: a 1% edit's diff is 92-279 B against a 1,057 B median full entry | A base a merge or another device's push can take away, or kept slots; chains; erasure re-entering an edit resting on an erased version, and the order of its CLOSUREs | Rejected (owner decision 584) |
+| Every index entry full, no diffs | Self-contained entries: nothing resolves through another file | About 3.7 times the entry bytes and merges on edited file-mode and git-mode refs, which phones following them fetch | Chosen (owner decision 584) |
 | Deletions as empty doc-table rows or flag bits | No new table | An empty posting set is also a live document with no trigrams, and names no ref | Rejected: a tombstone table |
-| Tombstones kept in all | Roll-ups never touch a newer bucket | All keeps every deletion for good | Rejected: a roll-up removes an older newer-bucket entry instead |
+| Tombstones kept in all | Roll-ups never touch a newer bucket | All keeps every deletion for good | Rejected: a roll-up promotes the carried entry into the newer bucket's shards instead (owner decision 385) |
 | A mask set of every bucket key, built per search | Simple | ~7.6 MiB of keys alone at 500,000 changed files, past a phone's 4 MiB working set | Rejected: §5.9's version table, probed per candidate |
 | A watch after the ERASE, by the eraser's device or an indexer, re-closing racing copies (the 41ba6670 rule) | No format change | Not a barrier: a crash, or a push delayed past the watch, publishes a copy under a key the ERASE never named; no indexer exists by default (owner decision 177) | Rejected: the CUT and index epoch (11.12) |
 | A per-document erasure check at evs | Exact | evs cannot see documents (owner directive) | Rejected: an opaque epoch and a sealed erasure set |
@@ -3741,17 +3754,17 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-43 (proposed).** A file-mode ref whose documents change in place holds its index under `.ur-index/i1`, changed in the push that changes a document; git-mode refs and streams share `ur/index`, written by companion pushes; every index file but its admin-signed settings is versionless; config, mailcfg and secret repos get none, and an index covers only documents every reader of its ref opens. *Why:* owner decisions 151 and 159; vault entries have narrower readers than their mailbox; it narrows owner decision 156 for secret repos: each holds one credential (11.12), which an index would only copy into postings, and MCP never reads them (§16.6).
 
-**D-EVS-44 (proposed).** Index format 1 is document-level byte trigrams of normalized text on Unicode 17.0.0, one posting set over every field in VByte gaps or bitsets, a front-coded dictionary, doc tables and tombstone tables, with no compression across documents, a keyed pad on shards and byte-exact determinism. *Why:* substring and CJK search at about a word index's size; no compression oracle for injected mail; devices rebuild and verify instead of downloading; a merged deletion must still mask older partitions, and an empty posting set cannot say so.
+**D-EVS-44 (proposed).** Index format 1 is document-level byte trigrams of normalized text on Unicode 17.0.0, one posting set over every field in VByte gaps or bitsets, a front-coded dictionary, doc tables and tombstone tables, with no compression across documents, a keyed pad on shards and byte-exact determinism, extraction included: extractor 1 is specified to the byte and calls no library parser (owner decision 389). *Why:* substring and CJK search at about a word index's size; no compression oracle for injected mail; devices rebuild and verify instead of downloading; a merged deletion must still mask older partitions, and an empty posting set cannot say so.
 
 **D-EVS-45 (proposed).** Buckets are UTC windows of the repo's W days (30, or 7-365) holding entries by signed push time, an entry going instead to the newest bucket already holding its document where that is newer; latest is the current and previous window, and expired buckets roll up oldest first. *Why:* owner decisions 152 and 153; every device computes the same boundaries.
 
-**D-EVS-46 (proposed).** Each writer appends to a head of at most 16,208 B, staged in its push's batch, sealing into a ring of up to 8 reused slots that merges absorb by watermark into bucket shards. A diff rests only on its document's previous version outside every head in the current bucket, or carries over the base of the writer's own head diff it replaces, and merges keep a base a head names. *Why:* no index path per commit or seal: a new path costs ~27-40 KiB a drive, an overwrite one entry rewrite per fold; a head keeping one entry per doc_key would otherwise overwrite its own diff's base, and the purge leaves no older copy.
+**D-EVS-46 (proposed).** Each writer appends to a head of at most 16,208 B, staged in its push's batch, sealing into a ring of up to 8 reused slots that merges absorb by watermark into bucket shards. Every entry is full or a tombstone, encoded from its own document alone, and every push that writes a writer's file replaces that writer's head (owner decisions 385, 584). *Why:* no index path per commit or seal: a new path costs ~27-40 KiB a drive, an overwrite one entry rewrite per fold; a diff's base in a file another device rewrites cannot be fenced by a push that writes only a head, and one its writer keeps still needs kept slots, chains and an erasure's ordering, which the owner traded for about 3.7 times the entry bytes on edited refs (DESIGN-DETAILS.md section 1; owner decision 584).
 
-**D-EVS-47 (proposed).** Merges and roll-ups are functions of their base version's files, a merge's writers' heads included; a roll-up is one push moving its bucket into all under a versionless lock whose path-level CAS fences a stale runner, applying the bucket's tombstones, which its shards keep until then, and removing any older entry racing pushes left in a newer bucket, so all holds no tombstone; readers search every bucket present. *Why:* crash safety and idempotence with no server state (owner decision 157); a deletion must outlive the slot that wrote it until all's row is gone.
+**D-EVS-47 (proposed).** Merges and roll-ups are functions of their base version's files, a merge reading no head; a roll-up is one push moving its bucket into all under a versionless lock whose path-level CAS fences a stale runner, applying the bucket's tombstones, which its shards keep until then, and moving a version or tombstone above an older entry that racing pushes left in a newer bucket into that bucket's shards, so all holds no tombstone; readers search every bucket present. *Why:* crash safety and idempotence with no server state (owner decision 157); a deletion must outlive the slot that wrote it until all's row is gone; a roll-up that rewrote a newer bucket's files in place raced that bucket's merges and its writers (owner decision 385).
 
 **D-EVS-48 (proposed).** Index files are at most 1 MiB; an erasure's CLOSURE rewrites those holding the document, listed at or after its CUT, in place, padded to their replaced lengths, under fresh keys in new slots, the ERASE destroying the old slots' keys, which every stored version shares. *Why:* one closure upload per file within owner decision 146's floor; one destroyed key covers staged copies (owner decision 61).
 
-**D-EVS-49 (proposed).** Companion pushes carry a committer's journaled entries at most once a minute per writer on 1 KiB blocks, else every 5 minutes (owner decision 172), with coverage; an indexer, else the next capable writer, backfills pushes unindexed after 10 min. *Why:* a companion per content push would cost a whole push each.
+**D-EVS-49 (proposed).** Companion pushes carry a committer's journaled entries at most once a minute per writer on 1 KiB blocks, else every 5 minutes (owner decision 172), with coverage, built from the content ref as read after the index and sent within 5 min (owner decision 386); an indexer, else the next capable writer, backfills pushes unindexed after 10 min. *Why:* a companion per content push would cost a whole push each; an entry trailing its content must not land below a tombstone a roll-up dropped.
 
 **D-EVS-50 (proposed).** Devices fetch whole index files only by sync position, and at "search more" every all shard they lack, youngest first; a search reads only the cache; a device holding a merge's, roll-up's or rewrite's inputs reproduces it against `content_sha256`, downloading only on a mismatch, which alarms. *Why:* the server learns when a device syncs, never what it searches (owner decisions 154, 155); reproduction spares most bucket and roll-up traffic.
 
@@ -3771,7 +3784,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-58 (proposed).** A repo is asked first of the requester's own search indexers that read it, an owner-bound repo only of its owner's consented ones, a team repo otherwise of one network-scope search indexer and an `EvsShare`'d repo of its owner's, each other member only after the app has named them once (§18.4); no app host, browser Worker, or ephemeral or read_only sidecar answers. *Why:* owner decisions 126, 150, 175, 177 and 178; queries stay on the member's devices where they can, reach another's only knowingly and where entitled, and never fan out.
 
-**D-EVS-59 (proposed).** Every request body is exactly 4,016 B and every reply the requester's steps × 16,384 B (1 in v1), failures after parsing included; only failures before parsing are small Errors, and nothing is compressed, cancelled or answered early. *Why:* owner decision 175's padding; with every size set by the requester, relays learn when searches and pages run and the indexer's answer time, never what was asked or found.
+**D-EVS-59 (proposed).** Every request body is exactly 4,016 B and every reply the requester's steps × 16,384 B (1 in v1), failures after parsing included, each body the one encoding of its message (owner decision 390); only failures before parsing are small Errors, and nothing is compressed, cancelled or answered early. *Why:* owner decision 175's padding; with every size set by the requester, relays learn when searches and pages run and the indexer's answer time, never what was asked or found.
 
 **D-EVS-60 (proposed).** The phone merges per doc key, the newest version winning and, at one version, a remote verified state; in a repo the indexer verifies by text, a local possible or near hit no page returned collapses into a "not matched" row when it is newer than `checked_through_ms` and at least 10 min older than the pinned version; the phone's confirmed hits, ERASE masks and read checks always apply, and an opened hit is checked. *Why:* pages stream newest first, so only the checked span proves a candidate false; this bounds what a faulty indexer can hide.
 
@@ -3938,7 +3951,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | A build's deadline or settle check fails, so a write lands after a later request on its key and a marker's DELETE removes a live entry | Low | Critical | §22.9's suite and FS-114 per build, upgrade and cluster, and StoreSettle.tla (§19.6, D-OPS-20); until a build passes, taskworker opens no collection window and markers stay |
 | At owner decision 172's cadence the index adds ~2 KiB a push on 4 KiB blocks (~42-45 KiB at 2× year one, at D-TEST-11's 43 KiB) and ~4 KiB on 1 KiB blocks (~34-37 KiB) | Medium on 4 KiB blocks | Medium | 1 KiB blocks, chosen at M2 (D-TEST-11); D-TEST-13's computed gate, confirmed on production after the freeze (owner decision 174); the write budget sheds the heaviest network |
 | A writer corrupts index files others rely on | Low | Medium | Hosts with text verify; indexers re-derive and alarm (owner decision 150); a rebuild from text |
-| A diff's base or a deletion's mask leaves the index before the entries relying on it, so a fresh device misses or resurrects a document | Low | Medium | 11.14's dependency, merge, tombstone and roll-up rules; an unresolvable chain is `index_malformed` and reads not yet searchable; FS-107, FS-108 and IndexRollup.tla |
+| A deletion's mask leaves the index before the entries relying on it, so a fresh device resurrects a document | Low | Medium | 11.14's dependency row (full entries only, the head rule; owner decision 584), merges that read no head, the roll-up's promotion and the companion push's pin; FS-107, FS-108, IndexRollup.tla and details/IndexMerge.tla |
 | A heavily edited corpus's bucket keys outgrow a phone's working set | Medium | Medium | §5.9's version table on disk, probed per candidate in rank order (11.14's newest row); FS-109 |
 | Trigram precision falls as partitions grow, so phones show many possible matches | Certain | Low | Small buckets; overlap ranking; labels; confirmation on open (owner decision 155) |
 | The index is about twice the research's zstd sizes (~110-165 MB for five years at 100 messages a day) | Certain | Low | Phones fetch all only at "search more" or on Wi-Fi while charging; buckets ≤ ~5.4 MB |
