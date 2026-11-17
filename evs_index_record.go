@@ -85,6 +85,9 @@ type IndexRecordSettings struct {
 	CardPathCount int
 	// The tool names a vault card's field 12 holds, by count then name: 32.
 	CardToolCount int
+	// The user prompts a vault card's text carries, its context entries' prompts in the fold's order one a line, cut
+	// on a code point: 2,048 B, §16.10's first 2 KiB (QD-900).
+	CardPromptByteCount int
 	// The session ids field 11 joins, the newest a context entry carries: 4.
 	SessionIdCount int
 }
@@ -92,18 +95,19 @@ type IndexRecordSettings struct {
 // RECORD.md's values, the only source of their defaults. A fresh value each call.
 func DefaultIndexRecordSettings() *IndexRecordSettings {
 	return &IndexRecordSettings{
-		TitleByteCount:    120,
-		CardTextByteCount: 16 * 1024,
-		CardPathCount:     256,
-		CardToolCount:     32,
-		SessionIdCount:    4,
+		TitleByteCount:      120,
+		CardTextByteCount:   16 * 1024,
+		CardPathCount:       256,
+		CardToolCount:       32,
+		CardPromptByteCount: 2 * 1024,
+		SessionIdCount:      4,
 	}
 }
 
 // Refuses a bound that would cut everything.
 func (self *IndexRecordSettings) check() error {
 	if self.TitleByteCount <= 0 || self.CardTextByteCount <= 0 || self.CardPathCount <= 0 || self.CardToolCount <= 0 ||
-		self.SessionIdCount <= 0 {
+		self.CardPromptByteCount <= 0 || self.SessionIdCount <= 0 {
 		return fmt.Errorf("%w: record extractor 1's bounds", errInvalidSettings)
 	}
 	return nil
