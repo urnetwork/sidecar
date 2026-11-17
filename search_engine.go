@@ -12,7 +12,9 @@
 //	scope     SearchCached reads the buckets and all where the snapshot holds it usable; SearchLatest the buckets;
 //	          SearchAll the buckets, then every all shard, fetching what is missing by "search more"
 //	          (search_more.go), whose fixed order reads nothing of the query, a metered fetch past 25 MiB waiting on
-//	          AllowMetered
+//	          AllowMetered; the download runs in a window beside the pages (search_engine_more.go), and a page
+//	          answers as soon as it holds a hit rather than waiting on it, so each landed shard's hits reach the
+//	          caller within §16.10's arrival bound while what is fetched, and when, stays the sync state's (QD-999)
 //	sessions  SearchIn takes the caller's session, for its counts, rate and cursors (search_limits.go,
 //	          search_cursor.go); Search runs in the daemon's own session
 //	never     a search reads only the cache, never evs, api or gkm but for RK_g to open kept records, and writes
@@ -201,9 +203,11 @@ func (self *SearchEngine) open(ctx context.Context, session Id, request *SearchR
 	if kept.PageSize == 0 {
 		kept.PageSize = self.args.Settings.PageHitCount
 	}
+	lifetime, endLifetime := context.WithCancel(context.Background())
 	stream := &searchEngineStream{
 		engine: self, session: session, request: &kept, query: query, filters: filters, normalizer: normalizer,
-		excluded: excluded, joinAsk: searchJoinAskOf(&kept), moreCursors: map[[2]Id]*SearchMoreCursor{},
+		excluded: excluded, joinAsk: searchJoinAskOf(&kept), more: newSearchEngineMore(), lifetime: lifetime,
+		endLifetime: endLifetime,
 	}
 	if err := stream.open(ctx, scoped); err != nil {
 		stream.Close()
@@ -347,7 +351,7 @@ func searchRowFiltersOf(request *SearchRequest, normalizer *indexNormalizer, mem
 }
 
 // One search: its refs' snapshots, its ranker and its phases, which its cursor names. Its pages are computed one at a
-// time; Close is safe beside a page.
+// time; Close is safe beside a page. Scope all's download runs beside the pages (search_engine_more.go).
 type searchEngineStream struct {
 	engine     *SearchEngine
 	session    Id
@@ -358,6 +362,11 @@ type searchEngineStream struct {
 	excluded   []SearchExclusion
 	// What the request asks of mail's joins.
 	joinAsk SearchJoinAsk
+	// "search more"'s download and what it landed, shared with its window's goroutine.
+	more *searchEngineMore
+	// Ends as the search does (Close), and with it any window.
+	lifetime    context.Context
+	endLifetime context.CancelFunc
 
 	// One page at a time.
 	pageLock sync.Mutex
@@ -368,22 +377,25 @@ type searchEngineStream struct {
 	step  int
 	// Phase-2 partitions waiting to be ranked, in the order they were matched.
 	pending []*searchRankInput
-	// "search more" per ref: its cursor, and whether every shard it lacked is searched.
-	moreCursors  map[[2]Id]*SearchMoreCursor
-	moreFinished map[[2]Id]bool
-	more         SearchMoreProgress
-	waiting      string
+	// The window call whose landed shards matchLanded reads together, and the shards it landed so far.
+	landedCall   int
+	landedShards []*searchShardSource
 	// Hits ranked and held back past PageByteCount, or given back past a caller's limit (holdBack), first on the next
 	// page.
 	held []SearchHit
 	// The calling page's progress report, set for that call alone (nextReporting).
 	report func(progress SearchProgress)
-	// The running counts of the phases given, and of the one in progress.
-	finished SearchHitCounts
-	current  searchRankCounts
-	tooBroad bool
-	searched int
-	done     bool
+	// The running counts of the phases given, and of the one in progress; whether the phase in progress is counted
+	// among those given already, so a page that finds it done again counts nothing twice.
+	finished     SearchHitCounts
+	current      searchRankCounts
+	phaseCounted bool
+	tooBroad     bool
+	searched     int
+	done         bool
+	// Runs as a page holding hits answers, under pageLock: where a fake clock's world plants a delay in the page loop
+	// (SearchTestDeviceArgs.AnswerDelay). Nil but there.
+	answerHook func()
 
 	stateLock sync.Mutex
 	closed    bool
@@ -400,7 +412,6 @@ func (self *searchEngineStream) open(ctx context.Context, scoped []*searchScoped
 		return err
 	}
 	self.ranker = ranker
-	self.moreFinished = map[[2]Id]bool{}
 	tables := indexLinkedTables()
 	nowMs := engine.clock.Now().UnixMilli()
 	planScope := map[SearchScope]searchPlanScope{SearchCached: searchPlanCached, SearchLatest: searchPlanLatest, SearchAll: searchPlanAll}[self.request.Scope]
@@ -519,14 +530,15 @@ func (self *searchEngineStream) Next() ([]SearchHit, SearchProgress, bool, error
 }
 
 // The next page, waiting for admission until ctx ends and computing within ctx and Search.PageCpu: phase 1's ranked
-// hits, then phase 2's, a page never revised; done once no later page holds a hit. ErrSearchCursorExpired once the
+// hits, then phase 2's, a page never revised; done once no later page holds a hit. A page holding a hit answers
+// rather than wait on "search more"'s download, which goes on beside it (QD-999). ErrSearchCursorExpired once the
 // search's scope ended it.
 func (self *searchEngineStream) NextContext(ctx context.Context) ([]SearchHit, SearchProgress, bool, error) {
 	return self.nextReporting(ctx, nil)
 }
 
-// NextContext's page, report getting the search's progress while "search more" fetches within it, on this goroutine
-// or the fetch's, and never after this returns; nil reports nothing.
+// NextContext's page, report getting the search's progress while the page waits on "search more", on this goroutine,
+// and never after this returns; nil reports nothing.
 func (self *searchEngineStream) nextReporting(ctx context.Context, report func(progress SearchProgress)) ([]SearchHit, SearchProgress, bool, error) {
 	self.pageLock.Lock()
 	defer self.pageLock.Unlock()
@@ -605,22 +617,29 @@ func (self *searchEngineStream) nextReporting(ctx context.Context, report func(p
 				give(searchHitOf(hit))
 			}
 		}
-		self.current = ranked.counts
+		if !self.phaseCounted {
+			self.current = ranked.counts
+		}
 		if !ranked.phaseDone {
 			// the page is full, or it checked Search.PageCandidateCount, or its time ended: the next page goes on
 			break
 		}
-		self.finishPhase()
-		began, err := self.beginNext(pageCtx)
+		if !self.phaseCounted {
+			self.finishPhase()
+		}
+		began, err := self.beginNext(pageCtx, 0 < len(page))
 		if err != nil {
 			return nil, self.progressNow(), false, err
 		}
 		if !began {
-			if self.waiting == "" && self.allMoreFinished() {
+			if state, _ := self.more.state(); state.waiting == "" && self.allFinished(state.finished) {
 				self.done = true
 			}
 			break
 		}
+	}
+	if 0 < len(page) && self.answerHook != nil {
+		self.answerHook()
 	}
 	return page, self.progressNow(), self.done && len(self.held) == 0, nil
 }
@@ -632,6 +651,7 @@ func (self *searchEngineStream) begin(inputs []*searchRankInput) error {
 		return err
 	}
 	self.phase += 1
+	self.phaseCounted = false
 	self.searched += len(inputs)
 	return self.ranker.settleNear(nil, "", 0)
 }
@@ -644,6 +664,7 @@ func (self *searchEngineStream) beginWithNear(ctx context.Context, inputs []*sea
 		return err
 	}
 	self.phase += 1
+	self.phaseCounted = false
 	self.searched += len(inputs)
 	partitions := make([]*searchNearPartition, 0, len(near))
 	for _, input := range near {
@@ -676,8 +697,9 @@ func (self *searchEngineStream) beginWithNear(ctx context.Context, inputs []*sea
 }
 
 // Phase 2 after phase 1, and each further phase-2 partition after the last: all at once where usable (SearchCached),
-// or each shard "search more" lands (SearchAll). False where nothing more begins now.
-func (self *searchEngineStream) beginNext(ctx context.Context) (bool, error) {
+// or each shard "search more" lands (SearchAll), waited for only while the page holds no hit (holding). False where
+// nothing more begins now.
+func (self *searchEngineStream) beginNext(ctx context.Context, holding bool) (bool, error) {
 	if 0 < len(self.pending) {
 		input := self.pending[0]
 		self.pending = self.pending[1:]
@@ -717,107 +739,17 @@ func (self *searchEngineStream) beginNext(ctx context.Context) (bool, error) {
 			return true, self.begin(inputs)
 		}
 	}
-	for _, ref := range self.refs {
-		key := [2]Id{ref.repoId, ref.refId}
-		if self.moreFinished[key] {
-			continue
-		}
-		if err := self.runMore(ctx, ref); err != nil {
-			return false, err
-		}
-		if 0 < len(self.pending) {
-			input := self.pending[0]
-			self.pending = self.pending[1:]
-			return true, self.begin([]*searchRankInput{input})
-		}
-		if !self.moreFinished[key] {
-			return false, nil
-		}
-	}
-	return false, nil
+	return self.awaitMore(ctx, holding)
 }
 
-// Runs "search more" for one ref within ctx: each shard it lands matched at once and queued as a phase-2 partition,
-// and each of its progress reports passed to the page's report as the search's progress.
-func (self *searchEngineStream) runMore(ctx context.Context, ref *searchOpenedRef) error {
-	engine := self.engine
-	key := [2]Id{ref.repoId, ref.refId}
-	// the search's progress as the fetch starts, which each report takes the fetch's figures into: the page holds the
-	// search's own state until it returns, and a report may come on the fetch's goroutine
-	base := self.progressNow()
-	report := self.report
-	onProgress := func(progress SearchMoreProgress) {
-		if report == nil {
-			return
-		}
-		reported := base
-		reported.Coverage = slices.Clone(base.Coverage)
-		reported.Excluded = slices.Clone(base.Excluded)
-		reported.FetchBytes = progress.MissingByteCount - progress.FetchedByteCount
-		reported.FetchedBytes = progress.MeteredByteCount
-		reported.Waiting = progress.Waiting
-		report(reported)
-	}
-	if engine.args.Policy == nil {
-		// no policy, no fetch: all is searched as held, and coverage says what it lacks
-		self.moreFinished[key] = true
-		return nil
-	}
-	landed := []*searchShardSource{}
-	more, err := NewSearchMore(&SearchMoreArgs{
-		Sync: engine.args.Sync, Policy: engine.args.Policy, Settings: engine.args.Settings, RepoId: ref.repoId, RefId: ref.refId,
-		AllowMetered: self.request.AllowMetered, Cursor: self.moreCursors[key], Clock: engine.clock, OnProgress: onProgress,
-		OnShard: func(ctx context.Context, file *SearchManifestFile) error {
-			source, err := ref.landedSource(ctx, file)
-			if err != nil || source == nil {
-				return err
-			}
-			landed = append(landed, source.shards...)
-			input, err := ref.matchLanded(self.query, source, landed, self.step)
-			if err != nil {
-				return err
-			}
-			self.step += 1
-			self.pending = append(self.pending, input)
-			return nil
-		},
-	})
-	if err != nil {
-		return err
-	}
-	progress, err := more.Run(ctx)
-	self.moreCursors[key] = more.Cursor()
-	self.more = progress
-	self.waiting = progress.Waiting
-	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
-	if progress.Complete {
-		self.moreFinished[key] = true
-	}
-	return nil
-}
-
-// Whether "search more" has finished every ref (or the search does not fetch).
-func (self *searchEngineStream) allMoreFinished() bool {
-	if self.request.Scope != SearchAll {
-		return true
-	}
-	for _, ref := range self.refs {
-		if !self.moreFinished[[2]Id{ref.repoId, ref.refId}] {
-			return false
-		}
-	}
-	return true
-}
-
-// Adds the phase just given to the search's running counts.
+// Adds the phase just given to the search's running counts, once.
 func (self *searchEngineStream) finishPhase() {
 	self.finished.Confirmed += self.current.matches
 	self.finished.Possible += self.current.possible
 	self.finished.Near += self.current.near
 	self.finished.Masked += self.current.masked
 	self.current = searchRankCounts{}
+	self.phaseCounted = true
 }
 
 // The running counts: the phases given, and the one in progress.
@@ -831,19 +763,21 @@ func (self *searchEngineStream) countsNow() SearchHitCounts {
 	return counts
 }
 
-// The progress a page carries (§5.4's SearchProgress; §16.10's coverage and status).
+// The progress a page carries (§5.4's SearchProgress; §16.10's coverage and status): the page's own state, and "search
+// more"'s as its window last reported it.
 func (self *searchEngineStream) progressNow() SearchProgress {
+	more, _ := self.more.state()
 	progress := SearchProgress{
-		Searched: self.searched, FetchBytes: self.more.MissingByteCount - self.more.FetchedByteCount,
-		FetchedBytes: self.more.MeteredByteCount, Waiting: self.waiting, TooBroad: self.tooBroad,
+		Searched: self.searched, FetchBytes: more.progress.MissingByteCount - more.progress.FetchedByteCount,
+		FetchedBytes: more.progress.MeteredByteCount, Waiting: more.waiting, TooBroad: self.tooBroad,
 		Excluded: slices.Clone(self.excluded),
 	}
 	total := 0
 	for _, ref := range self.refs {
 		total += len(ref.plan.steps)
 		coverage := ref.coverage()
-		if !self.moreFinished[[2]Id{ref.repoId, ref.refId}] && self.request.Scope == SearchAll && 0 < self.more.ShardCount {
-			coverage.All, coverage.AllSearched, coverage.AllTotal = SearchAllFetching, self.more.SearchedCount, self.more.ShardCount
+		if !more.finished[[2]Id{ref.repoId, ref.refId}] && self.request.Scope == SearchAll && 0 < more.progress.ShardCount {
+			coverage.All, coverage.AllSearched, coverage.AllTotal = SearchAllFetching, more.progress.SearchedCount, more.progress.ShardCount
 		}
 		progress.Coverage = append(progress.Coverage, coverage)
 		if !coverage.LatestFrom.IsZero() && (progress.CoveredFrom.IsZero() || coverage.LatestFrom.Before(progress.CoveredFrom)) {
@@ -895,7 +829,8 @@ func (self *searchEngineStream) isClosed() bool {
 	return self.closed
 }
 
-// Ends the search: its snapshots released and its reads closed, nothing more asked. Safe to call again.
+// Ends the search: its download stopped first, waited for, then its snapshots released and its reads closed, nothing
+// more asked. Safe to call again, and beside a page; not from a page's report.
 func (self *searchEngineStream) Close() {
 	self.stateLock.Lock()
 	if self.closed {
@@ -907,6 +842,8 @@ func (self *searchEngineStream) Close() {
 	ends := self.ends
 	self.ends = nil
 	self.stateLock.Unlock()
+	self.endLifetime()
+	self.more.join()
 	for _, ref := range refs {
 		ref.close()
 	}
