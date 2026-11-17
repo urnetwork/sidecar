@@ -1,7 +1,9 @@
 // §7.9's KeyRegister and KeyRevoke on the test network, both §16.6 profiles: a presence key registers by its member's
 // consented, approval-capable device with its own proof over the body before field 9, an sshsig key with none, and each
 // refused shape; LiveKeys lists what is not revoked, void or past its not_after. The registrations here are the fixture
-// keys the presence tests countersign with.
+// keys the presence tests countersign with. The KeyRegister rule reads no attestation (QD-924): a key registers alike
+// whether its attestation chains to the test's roots or fails against them, readers of one log under swapped roots hold
+// one state, and only their labels differ, presence (attestation refused) for the statement their roots refuse.
 
 package sidecar
 
@@ -32,14 +34,27 @@ func (self *testConfigNet) signRaw(signer testConfigDevice, signedType bridge.Si
 // A KeyRegister body at the tip registering a presence key for member: fields 1 to 8 deterministically encoded, then
 // the proof the prover key makes over them (QD-086), which is the key itself unless a test spoils it.
 func (self *testConfigNet) presenceRegisterBody(member Id, key *testPresenceKey, prover *testPresenceKey, notAfter int64) []byte {
+	return self.presenceRegisterBodyCarrying(member, key, prover, notAfter, nil)
+}
+
+// presenceRegisterBody with attestation as KeyRegister.attestation, field 6, which the proof covers with the rest of
+// fields 1 to 8.
+func (self *testConfigNet) presenceRegisterBodyCarrying(
+	member Id,
+	key *testPresenceKey,
+	prover *testPresenceKey,
+	notAfter int64,
+	attestation []byte,
+) []byte {
 	register := &protocol.KeyRegister{
-		Header:    self.header(),
-		MemberId:  member.Bytes(),
-		KeyId:     bytes.Clone(key.keyId),
-		Alg:       key.alg,
-		PublicKey: bytes.Clone(key.publicKey),
-		Purpose:   bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
-		NotAfter:  notAfter,
+		Header:      self.header(),
+		MemberId:    member.Bytes(),
+		KeyId:       bytes.Clone(key.keyId),
+		Alg:         key.alg,
+		PublicKey:   bytes.Clone(key.publicKey),
+		Attestation: bytes.Clone(attestation),
+		Purpose:     bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
+		NotAfter:    notAfter,
 	}
 	prefix := testConfigMarshal(self.t, register)
 	proof := prover.sign(self.t, testGoodPresenceAssertion(), PresenceKeyProofPurpose, bridge.SignedType_SIGNED_KEY_REGISTER, prefix)
@@ -56,7 +71,13 @@ func (self *testConfigNet) presenceRegisterBody(member Id, key *testPresenceKey,
 // the one it registered last, since a presence key's KeyRegister is covered; fails the test unless it takes effect.
 func (self *testConfigNet) registerPresenceKey(device testConfigDevice, key *testPresenceKey) ConfigVerdict {
 	self.t.Helper()
-	body := self.presenceRegisterBody(device.memberId, key, key, self.timeMs+30*24*testConfigHourMs)
+	return self.registerPresenceKeyCarrying(device, key, nil)
+}
+
+// registerPresenceKey with attestation as its KeyRegister.attestation.
+func (self *testConfigNet) registerPresenceKeyCarrying(device testConfigDevice, key *testPresenceKey, attestation []byte) ConfigVerdict {
+	self.t.Helper()
+	body := self.presenceRegisterBodyCarrying(device.memberId, key, key, self.timeMs+30*24*testConfigHourMs, attestation)
 	signedBytes := self.signRaw(device, bridge.SignedType_SIGNED_KEY_REGISTER, body)
 	if previous := self.presenceKeys[device.sidecarId]; previous != nil {
 		statements := []*testPresenceActStatement{testConfigActStatement(self.t, signedBytes)}
@@ -182,6 +203,154 @@ func TestAKeyRevokeEndsItsLife(t *testing.T) {
 	if live := net.log.State().LiveKeys(laptop.sidecarId); len(live) != 0 {
 		t.Errorf("%d keys live past their not_after", len(live))
 	}
+}
+
+// A logged key's KeyRegister as the entry at its row's position carries it, and that entry's time: what a reader labels
+// the key from (§16.6's labels row), where the reader retains the entry.
+func testConfigLoggedKeyRegister(t testing.TB, reader *ConfigLog, keyId []byte) (*protocol.KeyRegister, int64) {
+	t.Helper()
+	row := reader.State().RegisteredKey(keyId)
+	if row == nil {
+		t.Fatalf("no key %x", keyId)
+	}
+	kept := reader.keptEntry(row.GetAt())
+	if kept == nil {
+		t.Fatalf("the entry at %d is not retained", row.GetAt())
+	}
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(kept.entry.GetBody(), signed); err != nil {
+		t.Fatal(err)
+	}
+	register := &protocol.KeyRegister{}
+	if err := proto.Unmarshal(signed.GetBody(), register); err != nil {
+		t.Fatal(err)
+	}
+	return register, kept.entry.GetTimeMs()
+}
+
+// A KeyRegister takes effect whatever its attestation (QD-924; owner decision 327). One key registers on two runs of
+// one network, with apple's own statement, which chains to the apple root the test pins, and with a forged one whose
+// chain runs to a software key's CA, which fails against it; both runs take it under the test's pools and stand on the
+// same rows but the replay ring, whose ids are the statements' own bytes: the same key row, the same one live key, and
+// a covered statement of the device's refused alike without that key's countersignature. Nothing reads a pool, the
+// net's reader and every other kind of reader included.
+func TestAKeyRegisterTakesEffectWhateverItsAttestation(t *testing.T) {
+	cas := newTestAttestCas(t)
+	key := newTestPresenceKey(t, "webauthn-es256 key with an apple statement", bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	forged := newTestAttestation(cas, key)
+	forged.issuer = cas.software
+	attestations := [][]byte{newTestAttestation(cas, key).attestation(t, "apple"), forged.attestation(t, "apple")}
+	// under the test's pools the first chains and the second fails, so a rule that read them would split the runs
+	for i, want := range []PresenceLabel{PresenceLabelAttested, 0} {
+		label, err := verifyPresenceAttestation(attestations[i], key.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		if label != want || (want == 0) != errors.Is(err, ErrPresenceAttestation) {
+			t.Fatalf("attestation %d under the test's pools: %s, %v", i, label, err)
+		}
+	}
+
+	reads := testAttestRootsAsRelease(t, cas.roots())
+	states := []*ConfigState{}
+	for i, attestation := range attestations {
+		net := newTestConfigNet(t)
+		_, laptop := net.consentedMember("m")
+		net.registerPresenceKeyCarrying(laptop, key, attestation)
+		live := net.log.State().LiveKeys(laptop.sidecarId)
+		if len(live) != 1 || !bytes.Equal(live[0].GetKeyId(), key.keyId) {
+			t.Errorf("run %d: %d live keys", i, len(live))
+		}
+		// the laptop's next presence registration is covered by the key, whichever statement it carried
+		other := newTestPresenceKey(t, "another webauthn-es256 key", bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+		uncountersigned := net.signRaw(laptop, bridge.SignedType_SIGNED_KEY_REGISTER,
+			net.presenceRegisterBody(laptop.memberId, other, other, net.timeMs+30*24*testConfigHourMs))
+		if verdict := net.log.Check(uncountersigned, net.timeMs+1000); verdict.Accepted() || !errors.Is(verdict.Refusal, ErrConfigPresence) {
+			t.Errorf("run %d: a covered statement without the key's countersignature: %v", i, verdict.Refusal)
+		}
+		net.everyReaderAgrees()
+		states = append(states, net.log.State())
+	}
+	if n := reads.Load(); n != 0 {
+		t.Errorf("the log read the release's pools %d times", n)
+	}
+	rowsBesideTheRing := func(state *ConfigState) []byte {
+		rows := state.Rows()
+		rows.Ring = nil
+		return testConfigMarshal(t, rows)
+	}
+	if !bytes.Equal(rowsBesideTheRing(states[0]), rowsBesideTheRing(states[1])) {
+		t.Errorf("the runs' rows differ:\n%v\n%v", states[0].Rows(), states[1].Rows())
+	}
+	if row := states[0].RegisteredKey(key.keyId); row == nil || !proto.Equal(row, states[1].RegisteredKey(key.keyId)) {
+		t.Errorf("the key's rows %v and %v", row, states[1].RegisteredKey(key.keyId))
+	}
+}
+
+// Readers of one log under swapped pools hold one state (QD-924; owner decision 327). A device registers two
+// webauthn-es256 keys, one with apple's own statement and one with a forged one whose chain runs to a software key's
+// CA, and readers apply the log under three releases' pools: the test's, which pin apple's root and refuse the forged
+// statement; a release's that pin the forging CA as apple's root in its place, which refuse apple's own; and this
+// build's, which pin none. None reads a pool while it applies the log, the net's own reader included, and each reaches
+// the net's verdicts and state, both keys live in it. From the logged KeyRegister at its entry's time each labels the
+// key whose statement its pools refuse presence (attestation refused), never asserted, and the other attested; this
+// build's labels both asserted.
+func TestReadersUnderSwappedRootsHoldOneState(t *testing.T) {
+	cas := newTestAttestCas(t)
+	release := presenceReleaseAttestationRoots()
+	net := newTestConfigNet(t)
+	_, laptop := net.consentedMember("m")
+	genuine := newTestPresenceKey(t, "webauthn-es256 key with apple's statement", bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	forged := newTestPresenceKey(t, "webauthn-es256 key with a forged apple statement", bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	forgedAttestation := newTestAttestation(cas, forged)
+	forgedAttestation.issuer = cas.software
+
+	netReads := testAttestRootsAsRelease(t, cas.roots())
+	net.registerPresenceKeyCarrying(laptop, genuine, newTestAttestation(cas, genuine).attestation(t, "apple"))
+	net.registerPresenceKeyCarrying(laptop, forged, forgedAttestation.attestation(t, "apple"))
+	if n := netReads.Load(); n != 0 {
+		t.Errorf("the net's reader read the release's pools %d times", n)
+	}
+	if live := net.log.State().LiveKeys(laptop.sidecarId); len(live) != 2 {
+		t.Fatalf("%d live keys", len(live))
+	}
+
+	from := net.log.State().Base().GetVersion() + 1
+	for _, reader := range []struct {
+		name    string
+		roots   *presenceAttestationRoots
+		genuine PresenceLabel
+		forged  PresenceLabel
+	}{
+		{name: "the test's pools", roots: cas.roots(), genuine: PresenceLabelAttested, forged: PresenceLabelRefused},
+		{name: "pools pinning the forging CA as apple's root", roots: cas.rootsPinningAsApple(cas.software),
+			genuine: PresenceLabelRefused, forged: PresenceLabelAttested},
+		{name: "this build's pools", roots: release, genuine: PresenceLabelAsserted, forged: PresenceLabelAsserted},
+	} {
+		reads := testAttestRootsAsRelease(t, reader.roots)
+		log := net.newReader()
+		if n := reads.Load(); n != 0 {
+			t.Errorf("%s: the log read the release's pools %d times", reader.name, n)
+		}
+		for n := from; n <= net.n; n += 1 {
+			want, got := net.log.keptEntry(n), log.keptEntry(n)
+			if want == nil || got == nil || want.verdict.Accepted() != got.verdict.Accepted() {
+				t.Errorf("%s: another verdict at %d", reader.name, n)
+			}
+		}
+		testConfigStatesEqual(t, log.State(), net.log.State())
+		for _, labelled := range []struct {
+			key  *testPresenceKey
+			want PresenceLabel
+		}{{key: genuine, want: reader.genuine}, {key: forged, want: reader.forged}} {
+			register, atMillis := testConfigLoggedKeyRegister(t, log, labelled.key.keyId)
+			if label := PresenceKeyLabel(register, atMillis); label != labelled.want {
+				t.Errorf("%s labels the %s %s; want %s", reader.name, labelled.key.seed, label, labelled.want)
+			}
+		}
+		// the labels read the pools the log never did
+		if n := reads.Load(); n != 2 {
+			t.Errorf("%s: %d reads of the pools for two labels", reader.name, n)
+		}
+	}
+	net.everyReaderAgrees()
 }
 
 // A Signed's bytes as one statement of an act, its purpose by its type.

@@ -2,7 +2,8 @@
 
 // §16.6's registration rows and labels (D-MCP-19, I-8; FS-124): what a presence key's KeyRegister.attestation shows of
 // where the key lives, which records and approver screens show as presence (attested) or presence (asserted), both
-// channel presence, the policy grammar unchanged.
+// channel presence, the policy grammar unchanged, or, for a logged key whose attestation this reader's check refuses,
+// as presence (attestation refused) (PresenceKeyLabel; QD-924).
 //
 // A webauthn-es256 key is attested when its attestation is packed with a certificate chain, tpm, android-key or apple,
 // verifies, and chains to a root the release pins for that format. It is asserted for fmt none, for an empty
@@ -48,11 +49,14 @@
 // The map and the object are parsed by record_presence_cbor.go's canonical reader, and certificates by crypto/x509, so
 // the root adds no module. Certificate chains are checked at the time the caller judges the registration at, the
 // carrying entry's for a reader labelling a logged key, so readers of one log under one release label one key alike.
-// Releases pin different roots, so a label, and a single-vendor refusal, can differ between releases: the device about
-// to sign a KeyRegister runs this, refuses a failing attestation and answers the label it read (RegisterPresenceKey).
-// §7.9's rule, which every reader must judge alike, never reads the attestation, and each reader labels a logged key
-// locally (QD-924): a key logged while its single-vendor pool was empty whose chain fails once that root is pinned is
-// refused here from then on, which changes what a reader shows of it and nothing of its state or its authorization.
+// Releases pin different roots, so a label, and a single-vendor refusal, can differ between releases. The refusal is
+// therefore the registering device's alone: the device about to sign a KeyRegister runs this, refuses a failing
+// attestation and answers the label it read (RegisterPresenceKey). §7.9's rule, which every reader must judge alike,
+// never reads the attestation (QD-924; owner decision 327), so a KeyRegister whose attestation fails here still takes
+// effect, and each reader labels a logged key locally with PresenceKeyLabel, which shows that refusal as presence
+// (attestation refused), neither attested nor asserted: a key logged while its single-vendor pool was empty whose chain
+// fails once that root is pinned, or a KeyRegister a client signed without this check. That changes what a reader shows
+// of the key and nothing of its state, its liveness or the demand for its countersignature.
 //
 // No key is created, derived or unwrapped here, so nothing calls testHookSecret. Package-level functions are safe for
 // concurrent use. On every leg: nothing here names a connect type.
@@ -93,6 +97,10 @@ const (
 	PresenceLabelAsserted PresenceLabel = iota + 1
 	// The key's attestation chains to a root the release pins for its format.
 	PresenceLabelAttested
+	// A logged key whose attestation this reader's check refuses (PresenceKeyLabel; QD-924): neither attested nor
+	// asserted, and the key no less live or authorized for it. Never a registration's label, since the device about to
+	// sign refuses such an attestation (RegisterPresenceKey).
+	PresenceLabelRefused
 )
 
 // As records and approver screens show it.
@@ -102,6 +110,8 @@ func (self PresenceLabel) String() string {
 		return "presence (asserted)"
 	case PresenceLabelAttested:
 		return "presence (attested)"
+	case PresenceLabelRefused:
+		return "presence (attestation refused)"
 	}
 	return fmt.Sprintf("presence label %d", int(self))
 }
@@ -203,9 +213,16 @@ type presenceAttestationRoots struct {
 	apple      *x509.CertPool
 }
 
+// A test's hook on the pools this build pins, nil outside tests: a reader whose release pins other roots, which QD-924's
+// tests swap between readers of one log, counting the reads, to show the log's rule reads none.
+var presenceAttestationRootsHook func() *presenceAttestationRoots
+
 // This build's: empty, since no production roots ship until QD-137's release step pins them, so no key labels
-// attested and a statement that verifies labels asserted.
+// attested and a statement that verifies labels asserted. A test's hook, while set, answers in their place.
 func presenceReleaseAttestationRoots() *presenceAttestationRoots {
+	if hook := presenceAttestationRootsHook; hook != nil {
+		return hook()
+	}
 	return &presenceAttestationRoots{
 		packed:     x509.NewCertPool(),
 		tpm:        x509.NewCertPool(),
@@ -231,6 +248,37 @@ func VerifyPresenceAttestation(register *protocol.KeyRegister, atMillis int64) (
 		DefaultPresenceAttestationSettings(),
 		time.UnixMilli(atMillis),
 	)
+}
+
+// The label a reader shows for a logged presence key (§16.6's labels row; QD-924, owner decision 327), register being
+// its KeyRegister as the log carries it and atMillis the carrying entry's time: VerifyPresenceAttestation's label under
+// this reader's roots, or presence (attestation refused) where that check refuses the attestation, never asserted in
+// its place. Never an error: the log took the key whatever its attestation, so this is display alone, for records and
+// approver screens, and changes no state, liveness or authorization. Refusing a failing attestation is the
+// registering device's (RegisterPresenceKey), never a reader's.
+func PresenceKeyLabel(register *protocol.KeyRegister, atMillis int64) PresenceLabel {
+	return presenceKeyLabel(
+		register,
+		presenceReleaseAttestationRoots(),
+		DefaultPresenceAttestationSettings(),
+		time.UnixMilli(atMillis),
+	)
+}
+
+// PresenceKeyLabel against roots, the release's for every caller but a test. Every refusal the check answers is
+// ErrPresenceAttestation's; any error at all labels refused, so nothing the check does not pass shows as attested or
+// asserted.
+func presenceKeyLabel(
+	register *protocol.KeyRegister,
+	roots *presenceAttestationRoots,
+	settings *PresenceAttestationSettings,
+	at time.Time,
+) PresenceLabel {
+	label, err := verifyPresenceRegisterAttestation(register, roots, settings, at)
+	if err != nil {
+		return PresenceLabelRefused
+	}
+	return label
 }
 
 // VerifyPresenceAttestation against roots, the release's for every caller but a test, which pins fixture roots.

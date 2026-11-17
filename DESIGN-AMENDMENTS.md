@@ -462,17 +462,6 @@ Questions: `proposal-kind-restored-cosigned-tail-self-admit.md`.
 
 Waits on: the fix track base-restored-cosigned-ids.
 
-### QD-1015: Where does every verifier read t_s, the time QD-883's second shrink comparison needs, when rows carry holders_shrunk_at only as a position and a verifier that starts at a base holds no entry its rows folded?
-*Decided by the owner on 2026-11-17, asked one question at a time; owner decision 557. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-The list, which waits on the code: §2.8 api-7 gains "and its time" beside `holders_shrunk_at`, which the fix track acl-repo-shrunk-time publishes through `check/`'s additions (owner decision 252); a design-records fold writes the words into the block once that entry has landed, and the entry leaves in that commit. `AclRepo` is held by `testUnfencedFence`, so no DESIGN.md fence takes field 13. The rest is folded (2026-11-17): the decision, §7.9's shrink row and `ProjectionRows` comment, and §8.8's `AclRows` comment and Repo rows, which name `holders_shrunk_time_ms = 13`.
-
-Changes: §2.8 api-7.
-
-Questions: `shrink-two-time-compare-shrunk-time-row.md`.
-
-Waits on: acl-repo-shrunk-time's landing, its additions entry with it.
-
 ### QD-989: How does smtpedge learn which sidecar dialed a ur/smtpedge stream, the subject §8's mail_send is judged for, when the ur/ ticket names only the dialer's network and client?
 *Decided by the owner on 2026-11-16, asked one question at a time; owner decision 560. Folds into §9 Abstract socket listeners and the scheduler.*
 
@@ -487,10 +476,10 @@ Waits on: the fix track ur-ticket-dialer-sidecar.
 ### QD-1013: How does sockets check a team member's Client-class token, which carries member_id and which the revocation record keeps no state for, with no SQL?
 *Decided by the owner on 2026-11-17, asked one question at a time; owner decision 561. Folds into §9 Abstract socket listeners and the scheduler.*
 
-The list and the test, which wait: §2.8's row for the revocation record's family gains member and user ids (I-18), and an FS case covers a membership's removal racing a projection. §2.8 holds no row for that family, `{rv_<network_id>_<k>}` (server/session/REVOKE-FINAL.md), so the words have no row to join; question `dr3-s7-s10-revocation-record-row.md` asks whether a design-records fold adds one. The FS case is the fix track's, and a §22.8 row for it, if it takes one, lands with sidecartest/fault's catalog, which holds §22.8's table row for row. The rest is folded (2026-11-17): the decision, §9.8's client tokens, §7.5's members and §19.10's Postgres row.
+The list and the test, which wait: §2.8's row for the revocation record's family gains member and user ids (I-18), and an FS case covers a membership's removal racing a projection. §2.8 holds no row for that family, `{rv_<network_id>_<k>}` (server/session/REVOKE-FINAL.md), so the words have no row to join. QD-1022 (owner, 2026-11-17; question `dr3-s7-s10-revocation-record-row.md`) has a design-records fold add one, api-16 or the next free api id, with its `planned` line, once the fix track revocation-record-members has settled the record's exact field forms: the fix track revocation-record-row, run in the design-records lane, that track's addition to a row that does not exist dropped. The FS case is the fix track's, and a §22.8 row for it, if it takes one, lands with sidecartest/fault's catalog, which holds §22.8's table row for row. The rest is folded (2026-11-17): the decision, §9.8's client tokens, §7.5's members and §19.10's Postgres row.
 
 Changes: §2.8; §22.8.
 
 Questions: `sock-client-verifier-member-credentials.md`, `dr3-s7-s10-revocation-record-row.md`.
 
-Waits on: the fix track revocation-record-members, and that question's answer.
+Waits on: the fix track revocation-record-members, then the fix track revocation-record-row (QD-1022).
