@@ -23,14 +23,15 @@
 // removal of it or of a prefix after it refutes the reply, with the tamper alarm. The proof of absence is then the
 // walk's signed statements: an inline list's own changes, or under changes_root a present of the path's own change,
 // which the reader takes for a path served absent alone, a write as well as a removal, since the walk's order judges
-// it. evs as built sends nothing for the path's own change (QD-681's reply row), so a rooted statement that changed
-// the path leaves such a reply with no proof, which is refused as before, with no alarm, until evs sends that present
-// (QD-1043, not yet built there). A prefix's removal counts only where the reader can show it: inline, or by a
-// present, which evs as built sends for no removal either; a walked write followed by a rooted statement reaching a
-// strict prefix that evs showed by nothing is refused, but with no alarm, since that prefix's removal is neither shown
-// nor ruled out. The walked removal the reply agrees with is kept on the verified path (WalkedRemoval), which a path
-// this device read a version of needs to read as absent (evs_epoch_read.go's finishRead). A creation on such a reply
-// takes max(b, m) + 1 with no m, b being past any collected removal (§11.8), so the planner is unchanged.
+// it. evs sends that present for such a path, and a strict prefix's removal's, in each rooted statement's absence
+// (QD-1043); a rooted statement that changed the path with no present beside it leaves the reply with no proof, which
+// is refused with no alarm, as a reply evs sent before QD-1043 is. A prefix's removal counts only where the reader can
+// show it: inline, or by a present; a walked write followed by a rooted statement reaching a strict prefix that evs
+// showed by nothing is refused, but with no alarm, since that prefix's removal is neither shown nor ruled out. The
+// walked removal the reply agrees with is kept on the verified path (WalkedRemoval), which a path this device read a
+// version of needs to read as absent (evs_epoch_read.go's finishRead), unless a gap head's re-pin passed its record's
+// pin (QD-1041). A creation on such a reply takes max(b, m) + 1 with no m, b being past any collected removal (§11.8),
+// so the planner is unchanged.
 //
 // What a statement at or below the read's pin says is checked against that statement, signed by a writer, but nothing
 // shows it was the version current at the pin: for a path this device never read, or no longer remembers, that is
@@ -595,8 +596,8 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 			// a statement after the write whose proof the next ask names may show its removal
 			return more, nil
 		case writtenUnshown:
-			// a prefix's removal after the write is neither shown nor ruled out, evs showing it by nothing (QD-681's
-			// reply row, until QD-1043's present): refused as a reply with no proof is, with no alarm
+			// a prefix's removal after the write is neither shown nor ruled out, evs having sent no present of it
+			// (QD-1043): refused as a reply with no proof is, with no alarm
 			return nil, fmt.Errorf("%w: a later statement's change list with no proof whether it removed a prefix of the path", ErrEvsEntryRefused)
 		}
 		return tampered(fmt.Errorf("%w: a later statement writes the path, served as absent", ErrEvsEntryRefused))

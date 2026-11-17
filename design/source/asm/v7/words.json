@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 21644,
-  "code_words": 50593,
+  "words": 21668,
+  "code_words": 50899,
   "ceiling": 5000,
-  "over": 16644,
-  "over_pct": 332.9
+  "over": 16668,
+  "over_pct": 333.4
  },
  {
   "num": 12,
@@ -165,7 +165,7 @@
   "num": 19,
   "code": "OPS",
   "words": 9693,
-  "code_words": 10758,
+  "code_words": 10788,
   "ceiling": 3500,
   "over": 6193,
   "over_pct": 176.9
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7756,
-  "code_words": 37512,
+  "code_words": 37616,
   "ceiling": 2500,
   "over": 5256,
   "over_pct": 210.2
