@@ -189,12 +189,6 @@ type ConfigState struct {
 	delegations map[string]*bridge.DelegationRow
 	keys        map[string]*bridge.KeyRow
 	aclRows     *protocol.AclRows
-	// §7.9's t_s by repo, ms since the epoch (QD-883; config_coverage.go's shrinkTime): the time of the entry at the
-	// repo's holders_shrunk_at, or of the entry that made it while that is 0, for each repo that shrank or was made at
-	// the newest base or an entry its rows did not fold, which every verifier at this state applied or re-applied
-	// alike. A base's rows carry no such time, so they replace this with nothing (question
-	// shrink-two-time-compare-shrunk-time-row). Shared between states as the row maps are, and copied on write.
-	shrinkTimes map[Id]int64
 	// the newest AdminSet's threshold as signed, 0 for the default (§7.9's authority row)
 	threshold uint32
 	// the ServiceSettings values every verifier judges by, from the newest base's rows; nil before base 1
@@ -692,7 +686,6 @@ type configStateBuilder struct {
 	keysOwned        bool
 	proposalsOwned   bool
 	indexersOwned    bool
-	shrinkTimesOwned bool
 	// rows this builder already copied, so a second write changes the copy
 	membersCopied     map[Id]bool
 	sidecarsCopied    map[Id]bool
@@ -716,7 +709,6 @@ func configCopyState(state *ConfigState) *ConfigState {
 		delegations:         state.delegations,
 		keys:                state.keys,
 		aclRows:             state.aclRows,
-		shrinkTimes:         state.shrinkTimes,
 		threshold:           state.threshold,
 		settings:            state.settings,
 		headSettings:        state.headSettings,
@@ -752,7 +744,7 @@ func newConfigStateBuilder(previous *ConfigState, n uint64, chain [sha256.Size]b
 func (self *configStateBuilder) snapshot() *ConfigState {
 	snapshot := configCopyState(self.state)
 	self.membersOwned, self.sidecarsOwned, self.delegationsOwned, self.keysOwned, self.proposalsOwned = false, false, false, false, false
-	self.indexersOwned, self.shrinkTimesOwned = false, false
+	self.indexersOwned = false
 	clear(self.membersCopied)
 	clear(self.sidecarsCopied)
 	clear(self.delegationsCopied)
@@ -921,16 +913,6 @@ func (self *configStateBuilder) closeProposal(proposalId [sha256.Size]byte, n ui
 // Sets the AclRows, which ACL's statement rules write (configAclRules).
 func (self *configStateBuilder) setAclRows(rows *protocol.AclRows) {
 	self.state.aclRows = rows
-}
-
-// Records the time of the entry being built as the repo's t_s (config_coverage.go's shrinkTime), on the builder's own
-// copy of the map.
-func (self *configStateBuilder) setShrinkTime(repoId Id) {
-	if !self.shrinkTimesOwned {
-		self.state.shrinkTimes = configCloneMap(self.state.shrinkTimes)
-		self.shrinkTimesOwned = true
-	}
-	self.state.shrinkTimes[repoId] = self.state.timeMs
 }
 
 // Adds a statement that took effect at n to the replay ring, dropping the ids that fall out of the 4,096 entries

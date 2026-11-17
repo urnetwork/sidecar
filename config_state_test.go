@@ -11,7 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"maps"
+	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -403,7 +403,8 @@ func testConfigRowsBytes(t testing.TB, state *ConfigState) []byte {
 }
 
 // Whether two readers stand on the same state: pin, rows, threshold, open proposals and retention point, and the t_s
-// each holds for a repo's next shrink (QD-883), which no rows carry.
+// each reads for a repo's next shrink (QD-883), which the rows carry (QD-1015) and the config repo's own row, while the
+// rows hold none, reads from the Genesis.
 func testConfigStatesEqual(t testing.TB, a *ConfigState, b *ConfigState) {
 	t.Helper()
 	if !proto.Equal(a.Pin(), b.Pin()) {
@@ -412,8 +413,16 @@ func testConfigStatesEqual(t testing.TB, a *ConfigState, b *ConfigState) {
 	if !bytes.Equal(testConfigRowsBytes(t, a), testConfigRowsBytes(t, b)) {
 		t.Errorf("rows differ at %d", a.n)
 	}
-	if !maps.Equal(a.shrinkTimes, b.shrinkTimes) {
-		t.Errorf("t_s differs at %d: %v and %v", a.n, a.shrinkTimes, b.shrinkTimes)
+	repoIds := configShrinkRepoIds(a)
+	if !slices.Equal(repoIds, configShrinkRepoIds(b)) {
+		t.Errorf("the repos a shrink is judged over differ at %d", a.n)
+	}
+	for _, repoId := range repoIds {
+		aTime, aHeld := a.shrinkTime(repoId)
+		bTime, bHeld := b.shrinkTime(repoId)
+		if aHeld != bHeld || aTime.UnixMilli() != bTime.UnixMilli() {
+			t.Errorf("t_s of repo %s differs at %d: %d and %d", repoId, a.n, aTime.UnixMilli(), bTime.UnixMilli())
+		}
 	}
 	if a.threshold != b.threshold || a.RetentionPoint() != b.RetentionPoint() {
 		t.Errorf("threshold %d and %d, retention %d and %d", a.threshold, b.threshold, a.RetentionPoint(), b.RetentionPoint())

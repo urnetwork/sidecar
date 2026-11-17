@@ -91,11 +91,11 @@ modules:
     leg: [test]
   - module: github.com/go-git/go-billy/v5
     spdx: Apache-2.0
-    reason: go-git's file system layer, linked by its packfile package for mlsinterop's oracle
+    reason: go-git's file system layer, linked by its packfile package for mlsinterop's oracle, and its osfs, through which mlsinterop's FI-9 cross-check opens a repository in go-git's file system storage (QD-861)
     leg: [test]
   - module: github.com/go-git/go-git/v5
     spdx: Apache-2.0
-    reason: mlsinterop's git codec oracle (§22.6)
+    reason: mlsinterop's git codec oracle (§22.6), and the cross-check of FI-9's oracle there, which holds sidecartest/fault's own parse of git's object format equal to go-git's reading of ur's exports and of stock git's repositories (QD-861)
     leg: [test]
   - module: github.com/go-jose/go-jose/v4
     spdx: Apache-2.0 AND BSD-3-Clause

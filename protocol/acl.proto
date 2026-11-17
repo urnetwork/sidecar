@@ -188,6 +188,10 @@ message AclRepo {
                                                      // reordered, a set staying after a later one replaces it, since
                                                      // pushes pinned in its span are judged by it (DESIGN-DETAILS
                                                      // 16.2.3); at most AclPrefixSettings.SetMaxCount
+  int64 holders_shrunk_time_ms = 13;         // ms since the epoch: the time_ms of the entry at holders_shrunk_at, or
+                                             // of the RepoCreate's entry while that is 0, §7.9's t_s, which the
+                                             // shrink row's second comparison reads at every verifier, a new device
+                                             // and a cold gate that start at a base among them (QD-1015)
 }
 
 // A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
