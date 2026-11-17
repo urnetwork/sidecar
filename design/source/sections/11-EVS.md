@@ -514,6 +514,22 @@ http      bodies are evs.proto messages, application/x-protobuf, but a segment P
           of u32 length | EvsReadFrame (11.9)
 ```
 
+```proto
+// sidecar/protocol/evs.proto: what a push's sealed metadata opens to (sealed, above)
+message EvsSealedMetadata {
+  GroupHead group = 1;                  // §10's (group_id, epoch, epoch_authenticator) the writer pins
+  EvsProvenance provenance = 2;
+  repeated EvsSealedCommit commits = 3; // git mode: the carried commits, parents before children (11.7)
+  bytes signed_import = 4;              // a Signed EvsImport over this push's own commits
+  EvsGitUpdate git = 5;                 // git mode, every push but a PATH_EPOCH: the ref's update
+  bytes ref_name = 6;                   // a creating push: payload section 15's signed copy
+  EvsOverlay base = 7;                  // a creating push of an overlay: payload section 16's signed copy
+  bytes erasure_note = 8;               // an ERASE's or a CLOSURE's note (11.12; owner decision 384)
+  repeated bytes written_over = 9;      // a repair form's: the push ids of the ignored versions it writes over,
+                                        //   16 B each, for ur evs log alone (owner decision 415)
+}
+```
+
 ### 11.7 Diffs, checkpoints, index entries, reconstruction
 
 **Mapping to git.** Each ref has a mode: git-mode refs, which the local tier writes, commit only on their tip; file-mode refs land by path (owner decision 141). One evs push carries one git ref update, in parts when large (11.8); its cleartext changes are the net change per path, and its sealed metadata holds every commit with each intermediate commit's sealed changes, and locates each blob its commits name that the net change does not: one sealed history record (a checkpoint, chunks, or a diff against the same path's blob in the commit's first parent) in a segment the push introduces, found by `EvsSealedBlob {git_oid, size, base_oid, file_id, records}` and named by no entry version's chain (owner decision 237), so export rebuilds every original oid and every blob.
@@ -1602,6 +1618,54 @@ budget    a mobile catch-up fetches at most 4 MiB of statements and proofs (4,00
           the reader re-pins at the head and marks the gap, shown as "verified since <time>": the pin record
           holds the time of the newest re-pin past the budget, each such re-pin raises §5.4's evs_gap, and
           EvsRepo.VerifiedSince(refId) answers that time, zero when nothing was skipped (§18.5 mirrors it)
+```
+
+```proto
+// sidecar/protocol/evs.proto: the read reply's frames (reply, above)
+message EvsReadFrame {                  // u32be(length) then this, one part by its set fields, the last with end set
+  EvsHeadSummary head = 1;              // first, and in a streams read first for each ref
+  EvsReadStatement statement = 2;       // each version after the pin, in order
+  uint64 behind = 3;                    // the pin is older than the window: the first missing version
+  uint64 more = 4;                      // a streams read stopped at its 4 MiB: this ref's next version
+  EvsReadPathReply path = 5;            // a path's, then each of a listing's deltas past the first in its own frame
+  EvsReadObject object = 6;
+  bool end = 7;
+  EvsRefusalReply error = 8;            // the reply could not be finished: the last frame, in end's place
+                                        //   (owner decision 378)
+}
+message EvsReadPathReply {              // one path: its version, its listing, or what stands for them
+  repeated bytes token_path = 1;
+  EvsIndexVersion version = 2;
+  bytes statement = 3;                  // the one that wrote it, when not among those this reply returned
+  repeated EvsMerkleProof proof = 4;    // to that statement's changes_root, part level last; empty when inline
+  repeated EvsAbsenceProof absences = 5;  // later statements that left this path and its prefixes alone
+  EvsRemovalMarker removal = 6;         // a removed path's
+  EvsOverlay base = 7;                  // an overlay's path it holds no version of
+  EvsNameTable names = 8;               // a directory's folded table
+  uint64 names_through = 9;
+  repeated EvsIndexVersion deltas = 10; // the directory's deltas after names_through, in version order
+  EvsReadPathState state = 11;          // format 2 (states, above), with the five fields after it
+  bytes drop_id = 12;
+  int64 not_before_ms = 13;             // drop_pending
+  uint64 drop_version = 14;             // dropped: the DROP's ref version
+  bytes drop_statement = 15;            // the DROP's Signed EvsPush, when this reply returns it nowhere else
+  bytes drop_body = 16;                 // its body, which its drop_sha256 covers, on the first path naming the drop
+  uint64 entry_epoch = 17;              // the epoch whose copy served it; 0 the head's current one
+  bool stale_epoch = 18;                // the request named no token path in the head's current epoch
+  repeated EvsDeltaProof delta_proofs = 19;  // one per entry of deltas, in order (owner decision 378)
+  bool continues = 20;                  // the next of the path's deltas after the frame before, with its proof alone
+}
+message EvsDeltaProof {                 // a delta's proof to its own statement's changes_root, part level last
+  repeated EvsMerkleProof proof = 1;    // empty for an inline statement
+}
+message EvsAbsenceProof {               // two adjacent leaves with a path between them (11.6's merkle row)
+  uint64 version = 1;                   // the statement this speaks for
+  repeated bytes token_path = 2;        // the path or the prefix shown absent
+  repeated EvsMerkleProof below = 3;    // the leaf sorting just below it; empty when none does
+  repeated EvsMerkleProof above = 4;    // the leaf sorting just above it; empty when none does
+  repeated EvsMerkleProof present = 5;  // in their place, for a strict prefix the statement changes by a delta:
+                                        //   that change's inclusion proof (owner decision 378)
+}
 ```
 
 ### 11.10 Subscriptions
