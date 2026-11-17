@@ -92,6 +92,7 @@ config_retain.go
 config_rows_only.go
 config_seal.go
 config_settings.go
+config_shrink_span.go
 config_state.go
 config_state_at.go
 config_versioning.go

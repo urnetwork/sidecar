@@ -4,9 +4,11 @@
 //	due     the first push whose generation pin crosses a REMOVE generation records it in head.path_epoch: each
 //	        generation k in (max(the head's generation, its current epoch), the push's] is read from gen/<k>, and the
 //	        newest whose GenRotate cause is REMOVE becomes due_generation. sidecar.EvsClassifyPathEpochDue, which
-//	        clients call too, classes the crossing immediate when the newest state shows a shrink after the pin of
-//	        the generation it crosses from, and batched when only expiries passed (question
-//	        evs1-m2-16-due-classification, option 1). Immediate takes due_by_ms that push's time and, on the refs
+//	        clients call too, classes the crossing on the gate view, from the log between the auth pins of gen/<from>
+//	        and gen/<to>: batched when only expiries passed or every shrink in between was an agent's ordinary
+//	        removal, immediate on a member's or a member device's removal, a compromise retirement, or anything the
+//	        view cannot class (question evs1-m2-16-due-classification, option 3; QD-949), and immediate when
+//	        gen/<from> does not read. Immediate takes due_by_ms that push's time and, on the refs
 //	        sidecar.EvsRefBlocksCreation names, due_blocks_creation (plan-EVS1-epoch-kinds#1); batched takes due_by_ms
 //	        24 h after the first and no block. Deposit and erasure refs record no due and stay at epoch 1 for life
 //	        (plan-EVS1-epoch-kinds#2). A due already recorded keeps its earlier due_by_ms and its block, an immediate
@@ -108,6 +110,7 @@ func (self *pushAttempt) pathEpochDueOver(head *protocol.EvsHead) (*pathEpochDue
 		return nil, err
 	}
 	due := &pathEpochDue{}
+	var toRecord *protocol.GenRotate
 	for generation := from + 1; generation <= to; generation += 1 {
 		record, err := self.engine.generations.Read(self.ctx, self.cluster, groupId, generation, self.gateView)
 		if err != nil {
@@ -119,16 +122,16 @@ func (self *pushAttempt) pathEpochDueOver(head *protocol.EvsHead) (*pathEpochDue
 		if sidecar.GkmCause(record.GetCause()) == sidecar.GkmCauseRemove {
 			due.generation = generation
 		}
+		toRecord = record
 	}
 	if due.generation == 0 {
 		return nil, nil
 	}
-	// immediate unless both the state's shrink and the starting generation's pin are known and say batched
+	// immediate unless the starting generation's record reads and the gate view classes the log between its pin and
+	// the crossed-to generation's batched
 	due.immediate = true
 	if fromRecord, err := self.engine.generations.Read(self.ctx, self.cluster, groupId, from, self.gateView); err == nil && fromRecord != nil {
-		if repo := self.gateView.Repo(self.repoId); repo != nil {
-			due.immediate = sidecar.EvsClassifyPathEpochDue(repo.GetHoldersShrunkAt(), fromRecord.GetAuth().GetVersion())
-		}
+		due.immediate = sidecar.EvsClassifyPathEpochDue(self.gateView, self.repoId, fromRecord.GetAuth(), toRecord.GetAuth())
 	}
 	due.blocks = due.immediate && sidecar.EvsRefBlocksCreation(self.reads.repo.Object.GetKind(), refKind)
 	return due, nil
