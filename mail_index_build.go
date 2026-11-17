@@ -108,6 +108,10 @@ func MailIndexFirstBuild(ctx context.Context, args *MailIndexBuildArgs) (*MailIn
 	if settings == nil {
 		settings = DefaultMailIndexBuildSettings()
 	}
+	log := args.Log
+	if log == nil {
+		log = NewNoopLogger()
+	}
 	refId, err := args.Repo.RefIdOf(ctx, EvsMainRefName)
 	if err != nil {
 		return nil, err
@@ -117,11 +121,11 @@ func MailIndexFirstBuild(ctx context.Context, args *MailIndexBuildArgs) (*MailIn
 		store:    newMailEvsStore(args.Repo, nil, settings.Store),
 		refId:    refId,
 		settings: settings,
-		log:      loggerOrDefault(args.Log),
+		log:      log,
 	}
 	defer content.close()
 	rebuilt, err := args.Repo.IndexRebuild(ctx, &EvsIndexRebuildArgs{contents: []indexContentRef{content}, groupInbox: args.GroupInbox})
-	result := &MailIndexBuildResult{RefId: refId, MessageCount: len(content.messages), LeftOutCount: content.leftOut}
+	result := &MailIndexBuildResult{RefId: refId, MessageCount: content.messageCount(), LeftOutCount: content.leftOut}
 	if rebuilt != nil {
 		result.Version, result.Skipped, result.EntryCount = rebuilt.Version, rebuilt.Skipped, rebuilt.EntryCount
 	}
@@ -130,7 +134,6 @@ func MailIndexFirstBuild(ctx context.Context, args *MailIndexBuildArgs) (*MailIn
 
 // One message of the list, as its m/ entry stands.
 type mailIndexMessage struct {
-	id Id
 	// Its m/ path's version, and the ref version, signed time and signer of the push that wrote it.
 	version       uint64
 	commitVersion uint64
@@ -272,6 +275,17 @@ func (self *mailIndexContent) State(ctx context.Context, path string, refVersion
 	return state, nil
 }
 
+// The messages standing at the pin the last load read.
+func (self *mailIndexContent) messageCount() int {
+	count := 0
+	for _, message := range self.messages {
+		if message.commitVersion <= self.pin {
+			count += 1
+		}
+	}
+	return count
+}
+
 // Closes the text State gave last.
 func (self *mailIndexContent) closeOpen() {
 	if self.open != nil {
@@ -355,7 +369,7 @@ func (self *mailIndexContent) listMessages(ctx context.Context) (map[string]*mai
 				path := MailMessagePath(month, id)
 				if _, ok := listed[path]; !ok {
 					listed[path] = &mailIndexMessage{
-						id: id, outside: MailEntryUntrusted(entry),
+						outside:  MailEntryUntrusted(entry),
 						ingested: entry.GetTlsLabel() != protocol.MailTlsLabel_MAIL_TLS_LABEL_UNSPECIFIED,
 					}
 				}
