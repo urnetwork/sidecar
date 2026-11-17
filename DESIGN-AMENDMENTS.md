@@ -462,17 +462,6 @@ Questions: `proposal-kind-restored-cosigned-tail-self-admit.md`.
 
 Waits on: the fix track base-restored-cosigned-ids.
 
-### QD-1015: Where does every verifier read t_s, the time QD-883's second shrink comparison needs, when rows carry holders_shrunk_at only as a position and a verifier that starts at a base holds no entry its rows folded?
-*Decided by the owner on 2026-11-17, asked one question at a time; owner decision 557. Folds into §7 Networks, teams, members, enrollment, and SSO.*
-
-The list, which waits on the code: §2.8 api-7 gains "and its time" beside `holders_shrunk_at`, which the fix track acl-repo-shrunk-time publishes through `check/`'s additions (owner decision 252); a design-records fold writes the words into the block once that entry has landed, and the entry leaves in that commit. `AclRepo` is held by `testUnfencedFence`, so no DESIGN.md fence takes field 13. The rest is folded (2026-11-17): the decision, §7.9's shrink row and `ProjectionRows` comment, and §8.8's `AclRows` comment and Repo rows, which name `holders_shrunk_time_ms = 13`.
-
-Changes: §2.8 api-7.
-
-Questions: `shrink-two-time-compare-shrunk-time-row.md`.
-
-Waits on: acl-repo-shrunk-time's landing, its additions entry with it.
-
 ### QD-989: How does smtpedge learn which sidecar dialed a ur/smtpedge stream, the subject §8's mail_send is judged for, when the ur/ ticket names only the dialer's network and client?
 *Decided by the owner on 2026-11-16, asked one question at a time; owner decision 560. Folds into §9 Abstract socket listeners and the scheduler.*
 
