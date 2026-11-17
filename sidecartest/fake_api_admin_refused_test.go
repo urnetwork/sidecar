@@ -1,8 +1,10 @@
+//go:build !js && !ios && !android && !sdk_mobile_bind
+
 // The fake api's tokens carry server's admin_refused claim (§7.4; owner decision 291, QD-907), as server/session's
 // by_jwt does: from the client's mark at mint, kept by bind's re-mint, a refresh and a child, and absent from a client
 // with no mark. The daemon's pairing check (sidecar.DaemonPairNetwork, which Sidecar.Pair's check shares) takes a
 // marked strict_exp child's token and refuses an unmarked client's, so a schedule that pairs through this api reads
-// what server's tokens say.
+// what server's tokens say. Built where the daemon's pair file is.
 
 package sidecartest
 
