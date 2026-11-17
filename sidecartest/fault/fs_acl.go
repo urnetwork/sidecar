@@ -1761,12 +1761,12 @@ func aclExpectTaggedAgent(net *sidecartest.AdmissionNet, world *fsTeamWorld, spo
 	return nil
 }
 
-// §8.8's atoms for what a document declares (owner decision 353, QD-901): tagOwners give the Owner tag:ci and
-// group:ops, which holds m, tag:build, and the groups block defines group:ops, while no rule names either tag or the
+// §8.8's atoms for what a document declares (owner decision 353, QD-901): tagOwners give tag:ci to autogroup:admin,
+// the Owner, and tag:build to group:ops, which the groups block defines as m alone, and no rule names either tag or the
 // group. Every reader's rows hold each one's atom all the same, so at api and every reader the Owner's
-// Delegation{tag_ids: [tag:ci]} lands and its key admits a tagged agent, the Owner's laptop admits a tag:ci runner,
-// and m's device a tag:build builder; neither applies the other's tag, by a SidecarAdmit or, for the Owner, a
-// Delegation naming both. At the next base the tags' rows list their sidecars, which hold what autogroup:tagged gives
+// Delegation{tag_ids: [tag:ci]} lands and its key admits a tagged agent, the Owner's laptop admits a tag:ci runner and
+// m's device a tag:build builder, while neither applies the other's tag, by a SidecarAdmit or, for the Owner, a
+// Delegation naming both. At the next base each tag's row lists its sidecars, which hold what autogroup:tagged gives
 // them and nothing of their tag's own.
 func AclDeclaredAtoms(net *Net) *Schedule {
 	world := newFsTeamWorld()
@@ -1800,12 +1800,17 @@ func AclDeclaredAtoms(net *Net) *Schedule {
 				return errors.New("the saved head names no group:ops")
 			}
 			world.ids["group ops"] = opsId.Bytes()
+			declared := func(atom []byte) bool {
+				return bytes.Equal(atom, world.ids["tag ci"]) || bytes.Equal(atom, world.ids["tag build"]) || bytes.Equal(atom, world.ids["group ops"])
+			}
 			for _, rule := range plan.Rows.GetRules() {
-				if slices.ContainsFunc(rule.GetSrcAtoms(), func(atom []byte) bool {
-					return sidecar.Id(atom) == tagId("ci") || sidecar.Id(atom) == tagId("build") || sidecar.Id(atom) == opsId
-				}) {
+				if slices.ContainsFunc(rule.GetSrcAtoms(), declared) || slices.ContainsFunc(slices.Concat(rule.GetTargets(), rule.GetVia()),
+					func(target *protocol.AclTarget) bool { return declared(target.GetAtom()) }) {
 					return errors.New("a rule names a declared tag or group")
 				}
+			}
+			if 0 < len(plan.Rows.GetRequests()) {
+				return errors.New("the document holds a requests rule")
 			}
 			if err := aclExpectWritersRows(net, plan); err != nil {
 				return err
