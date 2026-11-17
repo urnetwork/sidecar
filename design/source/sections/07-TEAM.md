@@ -92,7 +92,9 @@ auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key
             field) of its api answers, as §9.6's registrar reads the sockets service's, and signs iat at its own
             time plus that offset; a refusal for iat refreshes the offset once and retries; the ±60 s window
             and the replay ttl stay as they are, at api and in sidecartest's fake api, so a strict_exp sidecar
-            10 min fast or slow still renews, exchanges and mints (§22.8's skew row; owner decision 316)
+            10 min fast or slow still renews, exchanges and mints (§22.8's skew row; owner decision 316); a
+            page Worker, calling api cross-origin, reads Date because the lb's Access-Control-Expose-Headers
+            names it (§18.15; owner decision 488)
   sdk       Api.SetDpopSigner(func(method, url, ath string) (string, error)), installed by sdk/sidecar.go from
             the core's ClientKey before D-CORE-8's core refresher is switched off on any host; a strict_exp
             refresh without a signer is not sent (unenrolled, not proofless)

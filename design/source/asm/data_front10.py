@@ -838,6 +838,28 @@ INDEX = list(_P9['INDEX']) + [
      "Rule 3's tag names the hosted address, so an old address's drain end closes only its own flows."),
     (484, 'Q-BRIDGE-8',
      "An app device claims its overlay address only on demand; forwarding's setup files none."),
+    # §18's fold (2026-11-16): the build's answers on the SDK and apps.
+    (485, 'The posture overlay',
+     "A VPN component's overlay of checked denials moves to its sealed store; until then a full overlay makes the "
+     "decision pending."),
+    (486, 'Key origin framing',
+     "The lb sends the key origin no X-Frame-Options, so its framing rests on its CSP's frame-ancestors."),
+    (487, 'Overdue alarm backoff',
+     "`narrowing_overdue` backs off to daily while its condition lasts and comes at once for each newly overdue entry."),
+    (488, 'Date for page Workers',
+     "The lb exposes `Date` to cross-origin fetches, so a page Worker signs its DPoP `iat` by api's clock."),
+    (489, 'Remote edge logins',
+     "`tls.edge_login.sign`, a Confirm control method, gives a remote-mode app its device's edge-login statement."),
+    (490, 'Forwarding exports',
+     "Apps hand the sidecar role their VPN component's `Device` at each start, and C ABI services pass a forwarding "
+     "key store."),
+    (491, "The extensions' head reader",
+     "The Apple extensions read config heads with the replaying reader, and the forwarding leg's budget rises to "
+     "7.5 MiB, amending @@OD:215@@."),
+    (492, 'Worker GC mode',
+     "The page Worker's loader starts sidecar.wasm with `GODEBUG=gcstoptheworld=1`."),
+    (493, 'macOS slices',
+     "Desktop behavior selects on gomobile's `macos` tag too, and the leg tables model the macOS slices as GOOS=ios."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -865,13 +887,16 @@ for _n, _old_end, _note in [
         # Owner decision 397 amends 204's 2 min: 12 min past each drop's seen_ms.
         (204, "amending @@OD:183@@'s 25-minute fence.",
          " Amended by @@OD:397@@: 12 min past each drop's seen_ms, so 25 h 12 min to 26 h 12 min."),
+        # Owner decision 491 amends 215's budget: the leg carries the replaying config head reader.
+        (215, "one implementation of the rule table stays.",
+         " Amended by @@OD:491@@: 7.5 MiB, with the replaying config head reader on the leg."),
         # Owner decision 416 narrows 345's reading of the shared refs a set's pin push reaches.
         (345, "at most 256 sets.",
          " Amended by @@OD:416@@: the filer's pin push reaches only shared branches with a tip.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 485))
+assert [r[0] for r in INDEX] == list(range(1, 494))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -938,7 +963,9 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               472: '2026-11-16',
               473: '2026-11-11', 474: '2026-11-11', 475: '2026-11-15', 476: '2026-11-11', 477: '2026-11-12',
               478: '2026-11-12', 479: '2026-11-14', 480: '2026-11-16', 481: '2026-11-14', 482: '2026-11-16',
-              483: '2026-11-15', 484: '2026-11-15'})
+              483: '2026-11-15', 484: '2026-11-15',
+              485: '2026-11-11', 486: '2026-11-11', 487: '2026-11-11', 488: '2026-11-13', 489: '2026-11-14',
+              490: '2026-11-15', 491: '2026-11-16', 492: '2026-11-15', 493: '2026-11-16'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1031,7 +1058,7 @@ OPEN_INTRO = OPEN_INTRO.replace(
     "One: Q-REPO-6 (how Linux users update without apt or yum), which owner decision 213 asked for. The sections "
     "are written to its recommendation, marked \"proposed, Q-REPO-6\". The two raised on 2026-11-09 in designing "
     "owner decision 197's forwarding are decided: Q-SDK-7 (forwarding's budget in the iOS network extension) on "
-    "2026-11-10 (@@OD:215@@, @@OD:216@@), and Q-BRIDGE-8 (an app device's overlay address) on 2026-11-15 "
+    "2026-11-10 (@@OD:215@@, @@OD:216@@), its budget amended on 2026-11-16 (@@OD:491@@), and Q-BRIDGE-8 (an app device's overlay address) on 2026-11-15 "
     "(@@OD:484@@). Every other Q- item whose decider was the owner is decided. ")
 OPEN_OWNER = [
     ("Q-REPO-6", "How do Linux users update `ur`, now that v1 ships no apt or yum repository (owner decision 213)?",
@@ -1051,9 +1078,9 @@ _D197 = "amending @@OD:87@@ and @@OD:12@@. "
 assert DECISIONS_INTRO.count(_D197) == 1
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D197, "amending @@OD:87@@ and @@OD:12@@; designing it raised two owner questions, Q-SDK-7, which @@OD:215@@ "
-    "and @@OD:216@@ decide, and Q-BRIDGE-8, which @@OD:484@@ decides. ")
+    "and @@OD:216@@ decide and @@OD:491@@ amends, and Q-BRIDGE-8, which @@OD:484@@ decides. ")
 # The build's owner answers (2026-11-06 and 2026-11-10), numbered from 198 as the design-records tracks fold them.
-_D198 = "decide, and Q-BRIDGE-8, which @@OD:484@@ decides. "
+_D198 = "amends, and Q-BRIDGE-8, which @@OD:484@@ decides. "
 assert DECISIONS_INTRO.count(_D198) == 1
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D198, _D198 + "From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as "
@@ -1159,7 +1186,11 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "numbers the answers on IP addresses, subnet routing and port forwarding: the bridge ledger (473), the bridge "
     "start gate (474), share activation (475), the share ratchet (476), untagged rows (477), unformed generations "
     "(478), `ur tun`'s own transport (479), carved routes under exits (480), wintun.dll pins (481), IPv6 under "
-    "exits (482), rule 3's tags (483) and an app device's overlay address (484), which decides Q-BRIDGE-8. ")
+    "exits (482), rule 3's tags (483) and an app device's overlay address (484), which decides Q-BRIDGE-8. The "
+    "fold of §18's the same day numbers the answers on the SDK and apps: the posture overlay (485), the key "
+    "origin's framing (486), the overdue alarm's backoff (487), Date for page Workers (488), remote edge logins "
+    "(489), the forwarding exports (490), the extensions' head reader and budget (491), amending @@OD:215@@, the "
+    "Worker's GC mode (492) and the macOS slices (493). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

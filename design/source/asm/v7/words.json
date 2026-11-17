@@ -2,11 +2,11 @@
  {
   "num": 1,
   "code": "CTX",
-  "words": 3832,
+  "words": 3837,
   "code_words": 52,
   "ceiling": 2200,
-  "over": 1632,
-  "over_pct": 74.2
+  "over": 1637,
+  "over_pct": 74.4
  },
  {
   "num": 2,
@@ -20,29 +20,29 @@
  {
   "num": 3,
   "code": "ARCH",
-  "words": 4681,
+  "words": 4686,
   "code_words": 6761,
   "ceiling": 3000,
-  "over": 1681,
-  "over_pct": 56.0
+  "over": 1686,
+  "over_pct": 56.2
  },
  {
   "num": 4,
   "code": "REPO",
-  "words": 8329,
-  "code_words": 1797,
+  "words": 8359,
+  "code_words": 1818,
   "ceiling": 2800,
-  "over": 5529,
-  "over_pct": 197.5
+  "over": 5559,
+  "over_pct": 198.5
  },
  {
   "num": 5,
   "code": "CORE",
-  "words": 11122,
-  "code_words": 8240,
+  "words": 11248,
+  "code_words": 8256,
   "ceiling": 3500,
-  "over": 7622,
-  "over_pct": 217.8
+  "over": 7748,
+  "over_pct": 221.4
  },
  {
   "num": 6,
@@ -57,7 +57,7 @@
   "num": 7,
   "code": "TEAM",
   "words": 12408,
-  "code_words": 12886,
+  "code_words": 12904,
   "ceiling": 3500,
   "over": 8908,
   "over_pct": 254.5
@@ -110,11 +110,11 @@
  {
   "num": 13,
   "code": "TLS",
-  "words": 9048,
+  "words": 9073,
   "code_words": 954,
   "ceiling": 3800,
-  "over": 5248,
-  "over_pct": 138.1
+  "over": 5273,
+  "over_pct": 138.8
  },
  {
   "num": 14,
@@ -146,20 +146,20 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 9104,
+  "words": 9143,
   "code_words": 4977,
   "ceiling": 3800,
-  "over": 5304,
-  "over_pct": 139.6
+  "over": 5343,
+  "over_pct": 140.6
  },
  {
   "num": 18,
   "code": "SDK",
-  "words": 9904,
-  "code_words": 9921,
+  "words": 10342,
+  "code_words": 10551,
   "ceiling": 3000,
-  "over": 6904,
-  "over_pct": 230.1
+  "over": 7342,
+  "over_pct": 244.7
  },
  {
   "num": 19,
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7319,
+  "words": 7320,
   "code_words": 36183,
   "ceiling": 2500,
-  "over": 4819,
+  "over": 4820,
   "over_pct": 192.8
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7086,
-  "code_words": 1136,
+  "words": 7091,
+  "code_words": 1137,
   "ceiling": 2500,
-  "over": 4586,
-  "over_pct": 183.4
+  "over": 4591,
+  "over_pct": 183.6
  }
 ]

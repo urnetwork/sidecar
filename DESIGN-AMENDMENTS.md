@@ -1458,15 +1458,6 @@ Waits on: bridge.proto's share messages (BRIDGE-M6-03 to -05), the fence line la
 
 Not folded (2026-11-16): the ```proto fence for BridgeShareGrant in §17.9. bridge.proto now declares it with fields 1 to 9 (QD-670's 6 to 9 among them), but its declaration, with the share seal's bodies and `BridgeShareAccept`, is held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do. The fields are folded as text, with their numbers, in §17.9's share pins block (owner decision 475), and §17.9's fence comment says what joins it.
 
-### QD-676: What should a VPN component's posture do once its overlay is full and no compile has run to clear it?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-A VPN component's posture overlay moves to the component's sealed store in the review phase, streamed and indexed with only an index and a cache in RAM, as QD-641 directs for bulk state (DESIGN-DETAILS 4.2.4's storage-backed compile is the same move for rows), so its only bound is storage's and the host's per-flow check reads the index. Until it lands, the interim as built stands: past PostureSettings.OverlayMaxCount (4,096) a denial the posture verified and cannot hold sets PostureDecision.OverlayFullThroughN (manifest field 23), the decision is pending until a state at or past it, the posture keeps following the chain, and it alarms malformed once a call. A posture that can no longer hold a denial it can check denies rather than silently stops applying them; QD-621's accepted cost covers only revocations the posture cannot check.
-
-Changes: review-phase task: storage-backed overlay in device/ (QD-641); interim in device/posture_apply.go stands.
-
-Questions: `sdk-m8-17-overlay-bound-without-compiles.md`.
-
 ### QD-677: How should the soak count orphan objects by orphan GC's own definition, when evsservice has no count that deletes nothing?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §22 Testing and verification.*
 
@@ -1475,24 +1466,6 @@ EVSB adds a dry form to evsservice/gc_orphans.go: OrphanGc.CountRepo(ctx, repo *
 Changes: data-lane follow-up: OrphanGc.CountRepo in evsservice/gc_orphans.go; server/local/sidecar-soak's orphanCounter wired to it.
 
 Questions: `test-m2-03-soak-orphan-count.md`.
-
-### QD-678: Should the lb leave X-Frame-Options off the key origin, sidecar.ur.io, when today it adds `SAMEORIGIN` to every service host's responses?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-warp's services.yml gains a list of exact hosts the lb sends no X-Frame-Options for, shaped like no_access_log and checked the same way (an exact host the lb serves); warp/services/sidecar-blocks/mmm.yml adds sidecar.ur.io to it. warpctl's addSecurityHeaders skips the header for a listed host, and a warp config test asserts the key origin's server block has no X-Frame-Options while every other host keeps SAMEORIGIN. The key origin's framing then rests on mmm's CSP frame-ancestors https://ur.io alone, as SDK-M4-06's trap says, and ur.io keeps its own protection. An ops-lane change to warp's addServiceBlocks; it lands before the owner applies mmm.yml.
-
-Changes: ops-lane follow-up: warp services.yml no-frame-options host list, warpctl/config.go addSecurityHeaders, config test; mmm.yml fragment line for sidecar.ur.io.
-
-Questions: `ops-m4-01-lb-frame-options.md`.
-
-### QD-696: Should a VPN component's narrowing_overdue alarm back off while a narrowing entry keeps waiting for a compile that never runs, instead of repeating every 10 minutes forever?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-A VPN component raises bridge_alarm narrowing_overdue when a narrowing entry has waited NarrowingOverdueTimeout (10 min) for a compile, then again at doubling intervals (20 min, 40 min, and so on) up to once a day while the condition lasts, and at once again whenever a further narrowing entry becomes overdue; the condition (the oldest overdue position and its age) stays visible in the posture's status throughout, and the first compile that runs clears it. DESIGN-DETAILS 4.2.5 and 4.3's StalenessBound read 'raised for it, and again at doubling intervals to once a day and for each newly overdue entry', and Fwd.tla's alarm clause follows (the design agent's section 4 amendment); SDK-M8-17's code (device/posture.go and its timer) follows in the core lane. QD-621's accepted cost is unchanged.
-
-Changes: design agent: section 4 amendment, 4.2.5 and 4.3 StalenessBound wording, Fwd.tla alarm clause; core-lane follow-up: device/ posture alarm timer backs off (SDK-M8-17's code).
-
-Questions: `details-4-overdue-alarm-repeat.md`.
 
 ### QD-706: When does the sweep that moves the drafted code's constant tunables into settings objects (QD-702) run?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §23 Phasing, milestones, and rollout.*
@@ -1512,14 +1485,6 @@ Changes: the production AbuseRecordMailer seals and sends (ABUSE-M5-03, -05); th
 
 Questions: `abuse-m5-03-record-seal.md`.
 
-### QD-732: Where does the keyless device role get the base, rows and entries that verify a BridgeState, when §18.6's `SetState(state)` takes the state alone?
-*Decided by the owner on 2026-11-12, asked one question at a time, then withdrawn. Folds into §18 SDK, apps, and extension integration.*
-
-Withdrawn and corrected on 2026-11-12: DESIGN-DETAILS.md section 4 had answered this before it was asked, and the owner confirmed that section 4 stands. Under owner decision 197 the apps' VPN component is self-contained with its own forwarding key and never waits on the app, so it fetches the log itself: the newest base, its rows and the entries a BridgeState rests on are in its own store, and device.Posture.SetState(state, log) keeps the argument SDK-M4-01 built, filled in process. Nothing new crosses the app-to-component channel, and §18.6's SetState(state) and §17.8's persist row read as section 4 writes them. The answer first given (the log travelling with each state over SDK-M8-07's channel) does not stand.
-
-Changes: none; DESIGN-DETAILS section 4 stands as written.
-
-Questions: `sdk-m4-01-state-proof.md`.
 ### QD-744: Should §19.6's rule (3) hold a failed DELETE's key until every commit of it has answered and been reverted, since TLC finds two DELETEs on one key breaking FI-30 under the rule as written?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
 
@@ -1591,15 +1556,6 @@ server's api answers a request whose Postgres connection a restart cut with 503 
 Changes: server/router answers Postgres connection-loss classes 503 with Retry-After; TEST-M2-15's retryable half of the Postgres restart row.
 
 Questions: `test-m2-15-postgres-restart-answer.md`.
-
-### QD-776: How does a page Worker read the api's clock for its DPoP iat, given that the lb exposes no Date header to a cross-origin fetch?
-*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-The load balancer's Access-Control-Expose-Headers list gains Date, so a page Worker reads the api's clock from its answers as every other leg does (QD-757) and signs its DPoP iat by it. §18.15's list, warp's addCorsHeaders and the pagestack fixture's list each gain the one word. No api shape changes and no new metadata row.
-
-Changes: warp/warpctl/config.go addCorsHeaders: Date in Access-Control-Expose-Headers, with its config test; sidecar's pagestack fixture list; TestSkewedSidecarApiWithNoDateStaysRefused keeps holding for an answer with no Date, and a page-leg test shows a skewed Worker renewing; §18.15's Services row text by design-records; the owner applies the lb change with warp's next deploy.
-
-Questions: `dpop-iat-offset-page-worker-date.md`.
 
 ### QD-779: Should a run card's version be the index epoch above the stream version of its run's newest entry, in place of the highest seq folded?
 *Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
