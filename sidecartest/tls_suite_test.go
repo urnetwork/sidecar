@@ -721,6 +721,9 @@ type tlsSuiteEdge struct {
 	accepted  chan *tlsSuiteVisitorConn
 	// the listener's newest page's set_version
 	setVersion uint64
+	// the engine's count of ended sweeps as publish reads it, which a schedule test wraps to see publish wait
+	// (tls_suite_kill_race_test.go)
+	sweeps func() (int, chan struct{})
 }
 
 // The engine's process name on the Net.
@@ -745,6 +748,7 @@ func newTlsSuiteEdgeBare(t *testing.T) *tlsSuiteEdge {
 		tlsSuiteWorld: world,
 		edgeStore:     sidecartest.NewFakeTlsEdgeStore(nil),
 		accepted:      make(chan *tlsSuiteVisitorConn, 64),
+		sweeps:        world.engine.Sweeps,
 	}
 	label, err := edge.edgeStore.AddLabel(tlsSuiteRoot, sidecar.Id(world.networkId))
 	if err != nil {
@@ -830,10 +834,22 @@ func newTlsSuiteEdgeBare(t *testing.T) *tlsSuiteEdge {
 	return edge
 }
 
-// Publishes tls/443/<host> to the public for a day and registers the listener's lease of it.
+// Publishes tls/443/<host> to the public for a day, waits out the revocation sweep the publish's load queued, and
+// registers the listener's lease of it. For a world's first publish: a later one's sweep waits out SweepMinInterval
+// on the clock, which nothing here moves.
+//
+// The sweep judges every lease of the network with Find's listener check, kill set included, and removes a lease it
+// refuses for cause (sweep.go; DESIGN-DETAILS 13.2.3), as the engine must. The publish's policy is an entry that may
+// narrow, so its load queues the network's first sweep, due at once, and publish once returned without it: under
+// make check's load the sweep could still be running when a test killed the host, refuse the killed lease, and leave
+// the lift no listener, as the kill switch test's no_listener at e9a511cd may have been (tls_suite_kill_race_test.go
+// fixes that schedule). Ended before the page, the sweep finds no lease to judge, and nothing judges the lease after
+// it but the test's own pages and Finds and the loads it asks for.
 func (self *tlsSuiteEdge) publish(host string) {
 	self.t.Helper()
+	sweeps, _ := self.sweeps()
 	self.savePublish("public", self.net.Clock().Now().Add(24*time.Hour), host)
+	tlsSuiteAwait(self.t, "the publish's sweep", self.sweeps, sweeps)
 	if status := self.nextStatus("tls/443/" + host); status != sidecar.SocketRegistrationStatusOk {
 		self.t.Fatalf("the listener's tls/443/%s answered %s", host, status)
 	}
@@ -951,9 +967,10 @@ const tlsSuiteKillProbeAlpn = "sidecartest-kill-probe"
 // answers no_listener, so the Find never reaches a listener. That is the point: a Find that picks the listener while
 // the engine's read of the kill lands between its steps 2 and 7 has the listener refused at step 7 and its lease
 // removed for cause (DESIGN-DETAILS 13.2.3's find path), which is the engine's to do, and the lease the test then
-// asserts on is gone. This wait's Find once did just that under make check's load, after a read already under way
-// when the wait took its count ended without the kill (tls_suite_kill_race_test.go fixes that schedule). Each
-// answer is the one meant, exactly: a lift is taken when the Find answers no_listener, not any answer but denied.
+// asserts on is gone. Under make check's load at e9a511cd this wait's Find may have done just that, after a read
+// already under way when the wait took its count ended without the kill; the other schedule that ends the same way
+// is the publish's sweep (publish). tls_suite_kill_race_test.go fixes both. Each answer is the one meant, exactly: a
+// lift is taken when the Find answers no_listener, not any answer but denied.
 //
 // The count is taken once the event has reached the engine. The Find is asked then and after each of the engine's
 // next two kill reads: the read under way when the count was taken may have begun before the event, and the one
