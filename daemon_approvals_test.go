@@ -1253,3 +1253,30 @@ func TestHostPromptEndsWithItsSession(t *testing.T) {
 		}
 	}
 }
+
+// A cosign by the two calls under a host-held live key: devices.cosign.begin answers no bytes, and the second call
+// signs the AuthorityCosign under the daemon's prompt, carrying the host key's countersignature.
+func TestHostKeyCosignsByTwoCalls(t *testing.T) {
+	world := newPresenceActTestWorld(t)
+	host, hostRow := world.addHostKey(t, bridge.SignedType_SIGNED_AUTHORITY_COSIGN)
+	world.authority.edit(func() { world.authority.suspended[world.otherId] = true })
+	proposalId := world.propose(world.otherId, NewId(), bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)
+	begin := &DaemonPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesCosignBegin, &DaemonDevicesProposalParams{ProposalId: hex.EncodeToString(proposalId)}, begin); rpcErr != nil ||
+		begin.ActId == nil || len(begin.Countersigned) != 0 {
+		t.Fatalf("the first call: %+v, %v", begin, rpcErr)
+	}
+	if host.assertCount() != 0 || len(world.deltaApi.postsSoFar()) != 0 {
+		t.Fatal("the first call asked the host or posted")
+	}
+	reply := &DaemonDevicesCosignReply{}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesCosignFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, reply); rpcErr != nil ||
+		reply.Refusal != nil || reply.Position == 0 {
+		t.Fatalf("the second call: %+v, %v", reply, rpcErr)
+	}
+	posts := world.posted(t)
+	if len(posts) != 1 || bridge.SignedType(posts[0].GetType()) != bridge.SignedType_SIGNED_AUTHORITY_COSIGN || host.assertCount() != 1 {
+		t.Fatalf("posted %d statements after %d host prompts", len(posts), host.assertCount())
+	}
+	presenceActTestCountersignedBy(t, posts, hostRow)
+}
