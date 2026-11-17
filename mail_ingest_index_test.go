@@ -8,9 +8,8 @@
 // leaves the erased message out; s/model is versionless in the gate, versioned in a locked mailbox and outside the
 // gate; and a format-1 group inbox's first build covers its old mail, each message in its window or in all.
 //
-// They run on the evs stand-in with format 2 on and §11.8's 5d modeled. The round trips run in a group inbox, a general
-// repo laid out as a mailbox, whose records the stand-in serves by their container keys; a mailbox's own records are
-// slot-keyed, and the push stand-in serves no slot, so the mailbox cases are those one push shows.
+// They run on the evs stand-in with format 2 on, §11.8's 5d modeled and a committed push's staged segments and slots
+// kept, in a mailbox, whose records are slot-keyed, and in a group inbox, a general repo laid out as one.
 
 package sidecar
 
@@ -376,13 +375,18 @@ func TestMailIngestIndexOffWritesNoIndexFileAndStillWritesI(t *testing.T) {
 	}
 }
 
-// A mailbox's never row (§15.7's search index row, §11.14's never row): writes of vault/, o/, or/, forward, ra/, f/,
-// r/, s/model and p/, each holding a canary, add no index file to their push, and the ingest after them writes a head
-// holding the message's document alone; no index file a plan carried holds a canary or any of those paths' doc_keys.
+// A mailbox's never row (§15.7's search index row, §11.14's never row): after one message is ingested, writes of
+// vault/, o/, or/, forward, ra/, f/, r/, s/model and p/, each holding a canary, add no index file to their push; the
+// ingest of a second message reads the head back and writes it holding the two messages' documents alone. No index
+// file a plan carried, or the head as it stands, holds a canary or any of those paths' doc_keys.
 func TestMailIngestIndexVaultCanaryNeverReachesAnIndexFile(t *testing.T) {
 	world := newMailIndexTestWorld(t, protocol.RepoKind_REPO_KIND_MAILBOX)
 	ctx := context.Background()
 	canary := "canary-vault-7f3a9c2e-crimson-heron"
+	_, firstPath := world.deposit(testMailIngestMessage("Receipt", "Thank you for your order of rope and tar."))
+	if pass := world.ingest(); pass.Ingested != 1 {
+		t.Fatalf("the first pass %+v", pass)
+	}
 	effectKey := sha256.Sum256([]byte("an outbox effect"))
 	outboxPath, err := MailOutboxPath(effectKey[:])
 	if err != nil {
@@ -410,36 +414,29 @@ func TestMailIngestIndexVaultCanaryNeverReachesAnIndexFile(t *testing.T) {
 		{Path: MailFlagPath(month, 0), Content: []byte(canary)},
 		{Path: MailGroupRefPath(month, NewId()), Content: []byte(canary)},
 		{Path: MailProverPath(NewId()), Content: []byte(canary)},
+		// bytes no model parses, which the next ingest's scorer reads as an untrained filter
+		{Path: MailSpamModelPath, Content: []byte(canary)},
 	}
-	if _, err := world.store().Write(ctx, never); err != nil {
-		t.Fatal(err)
+	for _, write := range never {
+		if _, err := world.store().Write(ctx, []*mailStoreWrite{write}); err != nil {
+			t.Fatal(err)
+		}
+		if plans := world.seen(); len(plans[len(plans)-1].indexFiles) != 0 {
+			t.Fatal("a write of the never row's families carried an index file")
+		}
 	}
-	plans := world.seen()
-	if len(plans) == 0 || len(plans[len(plans)-1].indexFiles) != 0 {
-		t.Fatal("a write of the never row's families carried an index file")
-	}
-	_, messagePath := world.deposit(testMailIngestMessage("Receipt", "Thank you for your order of rope and tar."))
+	_, secondPath := world.deposit(testMailIngestMessage("Shipping", "Your rope ships on the morning tide."))
 	if pass := world.ingest(); pass.Ingested != 1 {
-		t.Fatalf("pass %+v", pass)
+		t.Fatalf("the second pass %+v", pass)
 	}
-	// s/model after the ingest, whose scorer reads it: a mailbox's records are slot-keyed, which the stand-in serves not
-	model := &mailStoreWrite{Path: MailSpamModelPath, Content: []byte(canary)}
-	if _, err := world.store().Write(ctx, []*mailStoreWrite{model}); err != nil {
-		t.Fatal(err)
-	}
-	plans = world.seen()
-	if len(plans[len(plans)-1].indexFiles) != 0 {
-		t.Fatal("a write of s/model carried an index file")
-	}
-	neverKeys := map[[indexIdByteCount]byte]bool{world.docKey(model.Path): true}
+	neverKeys := map[[indexIdByteCount]byte]bool{}
 	for _, write := range never {
 		neverKeys[world.docKey(write.Path)] = true
 	}
-	held := false
 	for _, plan := range world.seen() {
 		for path, content := range plan.indexFiles {
 			if bytes.Contains(content, []byte(canary)) {
-				t.Fatalf("an index file holds the canary")
+				t.Fatal("an index file holds the canary")
 			}
 			parsed, ok := indexParsePath(path, false)
 			if !ok || (parsed.kind != indexPathSlot && parsed.kind != indexPathLargeEntry) {
@@ -454,12 +451,12 @@ func TestMailIngestIndexVaultCanaryNeverReachesAnIndexFile(t *testing.T) {
 				if neverKeys[entry.key] || (entry.row != nil && !strings.HasPrefix(entry.row.locator, "m/")) {
 					t.Fatalf("an index entry of the never row: %+v", entry.row)
 				}
-				held = held || entry.key == world.docKey(messagePath)
 			}
 		}
 	}
-	if !held {
-		t.Fatal("no index file holds the message's document")
+	entries := testMailIndexHeadEntries(world.view())
+	if len(entries) != 2 || testMailIndexEntryOf(entries, world.docKey(firstPath)) == nil || testMailIndexEntryOf(entries, world.docKey(secondPath)) == nil {
+		t.Fatalf("the head holds %d entries, not the two messages'", len(entries))
 	}
 }
 
@@ -602,12 +599,22 @@ func TestMailSpamModelIsVersionedInALockedRepo(t *testing.T) {
 	})
 }
 
-// §15.7's v1 row and §11.14's on row, FS-72's first build for mail: a group inbox's mail taken under format 1 is in no
+// §15.7's v1 row and §11.14's on row, FS-72's first build for mail: a mailbox's mail taken under format 1 is in no
 // index; the first build, on a device holding the mail, writes the root whole from it, each message in the window of
-// the push that wrote it (the build's own, the one before) or in all, every row outside, and nothing of a file beside
-// the mail. An ingest after it carries its own delta.
-func TestMailIndexFirstBuildCoversAFormat1InboxsOldMail(t *testing.T) {
-	world := newMailIndexTestWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+// the push that wrote it (the build's own, the one before) or in all, every row outside, and nothing of a vault entry
+// beside the mail. An ingest after it carries its own delta.
+func TestMailIndexFirstBuildCoversAFormat1MailboxsOldMail(t *testing.T) {
+	testMailIndexFirstBuildOfOldMail(t, protocol.RepoKind_REPO_KIND_MAILBOX)
+}
+
+// The same for a group inbox, a general repo laid out as a mailbox.
+func TestMailIndexFirstBuildCoversAFormat1GroupInboxsOldMail(t *testing.T) {
+	testMailIndexFirstBuildOfOldMail(t, protocol.RepoKind_REPO_KIND_GENERAL)
+}
+
+// A first build of a repo of kind, a mailbox or a group inbox for a general repo: see the tests above.
+func testMailIndexFirstBuildOfOldMail(t *testing.T, kind protocol.RepoKind) {
+	world := newMailIndexTestWorld(t, kind)
 	ctx := context.Background()
 	gate := false
 	world.writer.test.client.SetFormat2Source(func() bool { return gate })
@@ -637,7 +644,7 @@ func TestMailIndexFirstBuildCoversAFormat1InboxsOldMail(t *testing.T) {
 	}
 
 	gate = true
-	result, err := MailIndexFirstBuild(ctx, &MailIndexBuildArgs{Repo: world.writer.repo, GroupInbox: true})
+	result, err := MailIndexFirstBuild(ctx, &MailIndexBuildArgs{Repo: world.writer.repo, GroupInbox: kind == protocol.RepoKind_REPO_KIND_GENERAL})
 	if err != nil {
 		t.Fatal(err)
 	}
