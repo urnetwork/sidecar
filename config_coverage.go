@@ -7,9 +7,25 @@
 //	         (R, n, A_n). Every verifier advances AclRepo.holders_shrunk_at to n at each such entry, in Apply and in a
 //	         base's re-application alike, on the state being built (DESIGN-DETAILS 5.7), so a new device and a gate
 //	         that started at a base reach a long-running reader's value, and writers compile it into bases
+//	t_s      entry n, a base included, also shrinks R when it drops a holder of KeyHolders(R, n-1, t_s) from
+//	         KeyHolders(R, n, t_s), t_s the time of the entry at R's holders_shrunk_at, or of R's making while that is
+//	         0 (QD-883, owner decision 315): every generation the gate still passes was formed at or after t_s, and a
+//	         holder only leaves as t grows, so the removal of a holder whose access had already ended by time (a
+//	         RepoRevoke or GrantRevoke of a lapsed grant, a SidecarRevoke of an agent past its not_after, or a base that
+//	         drops it) raises holders_shrunk_at, the gate keeps refusing the generation the expiry closed and
+//	         GkmRemoveDue asks the rotation. An expiry moved earlier with both ends after R's last shrink stays open,
+//	         for the review phase
+//	unknown  rows carry no t_s, so a verifier holds it only where every verifier at the same state applied or
+//	         re-applied the entry alike (ConfigState.shrinkTime): a repo whose last shrink or making a base's rows
+//	         folded holds none until it shrinks again (question shrink-two-time-compare-shrunk-time-row). There the
+//	         second comparison is closed: the entry shrinks R when R's holders at S(n-1) differ anywhere in [the epoch,
+//	         t_n], since holders the same over that span make a loss at any t_s in it a loss at t_n too, t_s lying
+//	         before t_n as entry times run. So a repo that holds a lapsed holder shrinks once more after each base, at
+//	         the first entry that touches the rows, until rows carry t_s
 //	base     a base b is an entry too: its own config head change can drop readers by policy, so it shrinks R when
 //	         KeyHolders(R, b-1, t_b) is not a subset of KeyHolders(R, b, t_b), S(b) being b's rows with its tail
-//	         re-applied. A verifier that starts at b holds no S(b-1), so b's header carries those repos,
+//	         re-applied, or by t_s's comparison at S(b-1)'s t_s. A verifier that starts at b holds no S(b-1), so b's
+//	         header carries those repos,
 //	         shrunk_repo_ids (QD-746): its writer computes them from its tip and the state its base gives, at its own
 //	         clock, since only api knows t_b; api computes them again at the time it stamps the entry and answers 409
 //	         to a list that differs, so the writer signs again; a verifier present at b-1 computes them again at t_b
@@ -58,6 +74,53 @@ var errConfigBaseShrinksDiffer = errors.New("shrunk_repo_ids differ")
 // not hold: a generation covers it iff its auth pin is at or past it.
 func (self *ConfigState) ShrunkAt(repoId Id) uint64 {
 	return self.Repo(repoId).GetHoldersShrunkAt()
+}
+
+// t_s of the shrink row's second comparison (QD-883): the time of the entry at the repo's holders_shrunk_at, or of the
+// entry that made it while that is 0, the Genesis's for the config repo, which no entry makes. False where this state
+// holds no such time alike with every verifier at its position: a repo whose last shrink or making a base's rows folded,
+// since rows carry no time (question shrink-two-time-compare-shrunk-time-row).
+func (self *ConfigState) shrinkTime(repoId Id) (time.Time, bool) {
+	if timeMs, found := self.shrinkTimes[repoId]; found {
+		return time.UnixMilli(timeMs), true
+	}
+	if configRepoId, configNamed := configGenesisRepoId(self.genesis); configNamed && repoId == configRepoId && self.ShrunkAt(repoId) == 0 {
+		return time.UnixMilli(self.genesis.GetTimeMs()), true
+	}
+	return time.Time{}, false
+}
+
+// Whether after, the state an entry at time at made from before, shrinks the repo (§7.9's shrink row): before's holders
+// hold one the entry retires for compromise, or KeyHolders(R, before, t) loses a holder in KeyHolders(R, after, t) by
+// Dropped, at the entry's own time or at t_s, before's shrinkTime (QD-883). Where before holds no t_s, the second
+// comparison is closed: a shrink when R's holders at before differ at the epoch and at at, since holders the same
+// there are the same at every time between, where t_s lies, and a loss at t_s is then a loss at at too (a holder only
+// leaves as t grows, and a covered agent appears only as its Delegation leaves). Holders after cannot compute fail
+// closed, as a shrink, and so do before's at the epoch or at t_s; holders before cannot compute at the entry's own time
+// shrink nothing, as they always have, since a verified state never has them.
+func configHoldersShrink(before *ConfigState, after *ConfigState, repoId Id, at time.Time, retirements configCompromiseRetirements) bool {
+	beforeHolders, err := KeyHolders(before, repoId, at)
+	if err != nil {
+		return false
+	}
+	afterHolders, err := KeyHolders(after, repoId, at)
+	if err != nil || 0 < len(beforeHolders.Dropped(afterHolders)) || retirements.heldBy(beforeHolders) {
+		return true
+	}
+	shrinkTime, known := before.shrinkTime(repoId)
+	if !known {
+		earliestHolders, err := KeyHolders(before, repoId, time.UnixMilli(0))
+		return err != nil || !bytes.Equal(earliestHolders.Sha256(), beforeHolders.Sha256())
+	}
+	if shrinkTime.UnixMilli() == at.UnixMilli() {
+		return false
+	}
+	beforeShrinkHolders, err := KeyHolders(before, repoId, shrinkTime)
+	if err != nil {
+		return true
+	}
+	afterShrinkHolders, err := KeyHolders(after, repoId, shrinkTime)
+	return err != nil || 0 < len(beforeShrinkHolders.Dropped(afterShrinkHolders))
 }
 
 // The first authorization expiry of the repo's key holders in (after, through] at this state (§7.9's expiry row), false
@@ -175,8 +238,9 @@ func configShrinkRepoIds(state *ConfigState) []Id {
 }
 
 // Advances holders_shrunk_at on next, the state at entry n being built from before, S(n-1), for each repo the entry
-// shrinks at its time (§7.9's shrink row), the config repo among them. Called once an entry's effects are written, in
-// Apply, in a base's re-application and in StateAt's rebuild alike, so every verifier holds one value.
+// shrinks at its time or at the repo's t_s (§7.9's shrink row, QD-883), the config repo among them, and takes the
+// entry's time as t_s for each repo it shrinks or makes. Called once an entry's effects are written, in Apply, in a
+// base's re-application and in StateAt's rebuild alike, so every verifier holds one value.
 func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects []*configStatement) {
 	touched := 0 < len(next.sidecarsCopied) || 0 < len(next.membersCopied) || 0 < len(next.delegationsCopied) ||
 		next.state.aclRows != before.aclRows
@@ -188,31 +252,31 @@ func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects
 	after := configCopyState(next.state)
 	at := time.UnixMilli(next.state.timeMs)
 	shrunk := map[Id]bool{}
+	madeRepoIds := []Id{}
 	for _, repoId := range configShrinkRepoIds(after) {
 		if before.Repo(repoId) == nil {
-			// a repo the entry made has no holder to lose
+			// a repo the entry made has no holder to lose, and its making is its t_s until it first shrinks
+			madeRepoIds = append(madeRepoIds, repoId)
 			continue
 		}
-		beforeHolders, err := KeyHolders(before, repoId, at)
-		if err != nil {
-			continue
-		}
-		afterHolders, err := KeyHolders(after, repoId, at)
-		if err != nil || 0 < len(beforeHolders.Dropped(afterHolders)) || retirements.heldBy(beforeHolders) {
-			// holders the state cannot compute fail closed, as a shrink
+		if configHoldersShrink(before, after, repoId, at, retirements) {
 			shrunk[repoId] = true
 		}
+	}
+	for _, repoId := range madeRepoIds {
+		next.setShrinkTime(repoId)
 	}
 	configSetShrunkAt(next, func(repoId Id) bool { return shrunk[repoId] })
 }
 
-// Sets holders_shrunk_at to the builder's position for each repo shrink names, on a copy of its acl rows. Where shrink
-// names the Genesis's config repo and the rows hold no row of it, its row joins them here (QD-762), before the first
-// repo whose id is greater, as a base's compile sorts them.
+// Sets holders_shrunk_at to the builder's position for each repo shrink names, on a copy of its acl rows, and the
+// builder's time as each one's t_s. Where shrink names the Genesis's config repo and the rows hold no row of it, its
+// row joins them here (QD-762), before the first repo whose id is greater, as a base's compile sorts them.
 func configSetShrunkAt(next *configStateBuilder, shrink func(repoId Id) bool) {
 	n := next.state.n
 	configRepoId, configNamed := configGenesisRepoId(next.state.genesis)
 	configHeld := false
+	shrunkRepoIds := []Id{}
 	var rows *protocol.AclRows
 	// the builder's rows, copied once
 	rowsForWrite := func() *protocol.AclRows {
@@ -232,10 +296,13 @@ func configSetShrunkAt(next *configStateBuilder, shrink func(repoId Id) bool) {
 		if configNamed && repoId == configRepoId {
 			configHeld = true
 		}
-		if !shrink(repoId) || n <= repo.GetHoldersShrunkAt() {
+		if !shrink(repoId) || n < repo.GetHoldersShrunkAt() {
 			continue
 		}
-		rowsForWrite().Repos[i].HoldersShrunkAt = n
+		shrunkRepoIds = append(shrunkRepoIds, repoId)
+		if repo.GetHoldersShrunkAt() < n {
+			rowsForWrite().Repos[i].HoldersShrunkAt = n
+		}
 	}
 	if configNamed && !configHeld && shrink(configRepoId) {
 		repos := rowsForWrite().Repos
@@ -250,17 +317,22 @@ func configSetShrunkAt(next *configStateBuilder, shrink func(repoId Id) bool) {
 			Kind:            protocol.RepoKind_REPO_KIND_CONFIG,
 			HoldersShrunkAt: n,
 		})
+		shrunkRepoIds = append(shrunkRepoIds, configRepoId)
 	}
 	if rows != nil {
 		next.setAclRows(rows)
+	}
+	for _, repoId := range shrunkRepoIds {
+		next.setShrinkTime(repoId)
 	}
 }
 
 // The repos whose key holders a base's own change shrinks (QD-746), as its shrunk_repo_ids carries them: each repo of
 // after's rows, and the config repo beside them (QD-762), after being the base's state with its tail re-applied, that
-// before, S(b-1), holds, and whose KeyHolders at the time given lose a holder from before to after by Dropped, so an
-// agent its Delegation covers in after is no loss. Holders after's state cannot compute fail closed, as a shrink, as
-// configAdvanceShrinks reads them. Sorted by id bytes, each once.
+// before, S(b-1), holds, and whose KeyHolders lose a holder from before to after by Dropped, so an agent its Delegation
+// covers in after is no loss, at the time given or at the repo's t_s at before (QD-883), as configHoldersShrink judges
+// an entry, with before's closed reading where it holds no t_s. Holders after's state cannot compute fail closed, as a
+// shrink. Sorted by id bytes, each once.
 func configBaseShrunkRepoIds(before *ConfigState, after *ConfigState, at time.Time) [][]byte {
 	repoIds := []Id{}
 	for _, repoId := range configShrinkRepoIds(after) {
@@ -268,12 +340,7 @@ func configBaseShrunkRepoIds(before *ConfigState, after *ConfigState, at time.Ti
 			// a repo the base's state made has no holder to lose
 			continue
 		}
-		beforeHolders, err := KeyHolders(before, repoId, at)
-		if err != nil {
-			continue
-		}
-		afterHolders, err := KeyHolders(after, repoId, at)
-		if err != nil || 0 < len(beforeHolders.Dropped(afterHolders)) {
+		if configHoldersShrink(before, after, repoId, at, configCompromiseRetirements{}) {
 			repoIds = append(repoIds, repoId)
 		}
 	}
