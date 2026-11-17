@@ -460,6 +460,14 @@ func recordContextValidate(body *protocol.ContextBody) error {
 	for _, truncation := range body.GetTruncations() {
 		checks = append(checks, recordBodyRule(len(truncation) <= recordTruncationByteCount, "a truncation of %d bytes", len(truncation)))
 	}
+	// QD-900's prompts: none empty, and together within the cap
+	settings := DefaultRecordBodySettings()
+	promptByteCount := 0
+	for _, prompt := range body.GetPrompts() {
+		promptByteCount += len(prompt)
+		checks = append(checks, recordBodyRule(prompt != "", "an empty prompt"))
+	}
+	checks = append(checks, recordBodyRule(promptByteCount <= settings.ContextPromptByteCount, "prompts of %d bytes", promptByteCount))
 	return errors.Join(checks...)
 }
 
@@ -633,7 +641,7 @@ var recordKindsProjected = []RecordKind{
 // record.proto's V: marks, by message and field name: what T's projection leaves empty. record_body_test.go holds this
 // table to record.proto's comments.
 var recordTeamStrippedFields = map[protoreflect.FullName][]protoreflect.Name{
-	"urnetwork.sidecar.ContextBody":     {"branch", "title", "truncations"},
+	"urnetwork.sidecar.ContextBody":     {"branch", "title", "truncations", "prompts"},
 	"urnetwork.sidecar.InstructionFile": {"name"},
 	"urnetwork.sidecar.ChangedPath":     {"path", "blob_entry_id"},
 	"urnetwork.sidecar.PermissionBody":  {"tool_name", "arguments_sha256"},

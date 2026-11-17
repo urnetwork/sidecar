@@ -60,6 +60,10 @@ func TestRecordBodyCapsAtAndPastEachLimit(t *testing.T) {
 		{name: "agent label", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, AgentLabel: strings.Repeat("a", 64)}, past: &protocol.ContextBody{Stage: 1, AgentLabel: "Agent"}},
 		{name: "branch", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, Branch: strings.Repeat("b", 128)}, past: &protocol.ContextBody{Stage: 1, Branch: strings.Repeat("b", 129)}},
 		{name: "truncations", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, Truncations: testRecordStrings(16, 128)}, past: &protocol.ContextBody{Stage: 1, Truncations: testRecordStrings(17, 128)}},
+		// QD-900's prompts: 2,048 B together, however many, and none empty
+		{name: "prompt", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 2, Prompts: testRecordStrings(1, 2048)}, past: &protocol.ContextBody{Stage: 2, Prompts: testRecordStrings(1, 2049)}},
+		{name: "prompts together", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 2, Prompts: testRecordStrings(8, 256)}, past: &protocol.ContextBody{Stage: 2, Prompts: append(testRecordStrings(7, 256), strings.Repeat("p", 257))}},
+		{name: "empty prompt", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 2, Prompts: []string{"p"}}, past: &protocol.ContextBody{Stage: 2, Prompts: []string{"p", ""}}},
 		{name: "commits", kind: RecordKindChange, at: &protocol.ChangeBody{Commits: testRecordStrings(64, 40)}, past: &protocol.ChangeBody{Commits: testRecordStrings(65, 40)}},
 		{name: "changed paths", kind: RecordKindChange, at: &protocol.ChangeBody{Paths: make([]*protocol.ChangedPath, 4096)}, past: &protocol.ChangeBody{Paths: make([]*protocol.ChangedPath, 4097)}},
 		{name: "tool name", kind: RecordKindPermission, at: &protocol.PermissionBody{ToolName: strings.Repeat("t", 64)}, past: &protocol.PermissionBody{ToolName: strings.Repeat("t", 65)}},
@@ -141,23 +145,24 @@ func TestRecordCoverageCodesCarryNoText(t *testing.T) {
 }
 
 // T's projection is a function of the body: from a fixture run's vault bodies, holding a known title, path, branch,
-// tool name and instruction file name, the projections hold none of them, keep their hashes, and leave the vault's
-// bodies as they were; a private repo's project goes too.
+// tool name, instruction file name and user prompt (QD-900), the projections hold none of them, keep their hashes,
+// and leave the vault's bodies as they were; a private repo's project goes too.
 func TestRecordProjectForTeamHoldsNoVaultField(t *testing.T) {
-	secrets := []string{"Fix the payroll export", "src/payroll/export.go", "feature/payroll-v2", "WebFetchSecretTool", "CLAUDE.private.md", "payroll-svc"}
+	secrets := []string{"Fix the payroll export", "src/payroll/export.go", "feature/payroll-v2", "WebFetchSecretTool", "CLAUDE.private.md", "payroll-svc", "raise every salary in the export"}
 	hash := bytes.Repeat([]byte{0x5a}, 32)
 	bodies := []struct {
 		kind RecordKind
 		body proto.Message
 	}{
 		{kind: RecordKindContext, body: &protocol.ContextBody{
-			Stage:            1,
+			Stage:            2,
 			Harness:          "claude-code",
 			Title:            secrets[0],
 			Branch:           secrets[2],
 			Project:          secrets[5],
 			Truncations:      []string{secrets[1] + " cut at 1 MiB"},
 			InstructionFiles: []*protocol.InstructionFile{{Scope: 3, Name: secrets[4], Sha256: hash, Size: 10}},
+			Prompts:          []string{secrets[6], "and " + secrets[0]},
 		}},
 		{kind: RecordKindChange, body: &protocol.ChangeBody{
 			Project: secrets[5],
