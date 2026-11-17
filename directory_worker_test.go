@@ -3,7 +3,8 @@
 // RECORD-M6-17's worker item on a fake writer and a fake clock: a daily renewal keeping its version; a service added
 // raising it; off, the device's and the team's, withdrawing the item, and on again taking a new id; a phone, a page
 // Worker and a host of no stated class refused; a service list past the 32 cap refused whole; a restart writing no
-// version again; and the item folding as a worker item for another reader.
+// version again; and the item folding as a worker item for another reader, its platform this build's (owner decision
+// 468) as written.
 
 package sidecar_test
 
@@ -12,12 +13,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
+
+// The platform this build's worker item names, by owner decision 468's numbers for the GOOS values the legs build,
+// written out apart from DirectoryPlatformOfGoos, with its name; 0, unknown, on any other GOOS.
+func testWorkerPlatform() (uint32, string) {
+	platforms := map[string]struct {
+		number uint32
+		name   string
+	}{
+		"darwin":  {number: 1, name: "darwin"},
+		"linux":   {number: 2, name: "linux"},
+		"windows": {number: 3, name: "windows"},
+		"android": {number: 4, name: "android"},
+		"ios":     {number: 5, name: "ios"},
+		"js":      {number: 6, name: "wasm"},
+	}
+	platform, ok := platforms[runtime.GOOS]
+	if !ok {
+		return 0, "unknown"
+	}
+	return platform.number, platform.name
+}
 
 // What a test sidecar serves, as its components would say.
 type testWorkerServices struct {
@@ -109,18 +132,19 @@ func (self *testWorkerEnv) mustMaintain(write sidecar.DirectoryWorkerWrite) {
 	}
 }
 
-// The item is announced once at version 1 with what the sidecar serves, renews daily at that version with renewed and
-// expires raised, 26 h on, and an upkeep between renewals writes nothing.
+// The item is announced once at version 1 with what the sidecar serves and the platform it runs on, renews daily at
+// that version with renewed and expires raised, 26 h on, and an upkeep between renewals writes nothing.
 func TestDirectoryWorkerDailyRenewalKeepsItsVersion(t *testing.T) {
 	env := newTestWorkerEnv(t)
 	env.mustMaintain(sidecar.DirectoryWorkerAnnounced)
+	platform, _ := testWorkerPlatform()
 	first := env.writer.items(t)[0]
 	if first.GetVersion() != 1 || first.GetKind() != uint32(sidecar.DirectoryAnnouncementKindWorker) ||
 		first.GetState() != uint32(sidecar.DirectoryAnnouncementStateActive) ||
 		!bytes.Equal(first.GetWho().GetMemberId(), env.memberId.Bytes()) || !bytes.Equal(first.GetWho().GetSidecarId(), env.sidecarId.Bytes()) ||
 		len(first.GetWhat().GetServices()) != 1 || first.GetWhat().GetServices()[0].GetName() != "tcp:8080" ||
 		first.GetWhat().GetRequests() != uint32(sidecar.DirectoryRequestsOpen) || first.GetWhere().GetHostLabel() != "build-box" ||
-		first.GetWhere().GetPlatform() != 0 || first.GetTainted() {
+		first.GetWhere().GetPlatform() != platform || first.GetTainted() {
 		t.Fatalf("item %v", first)
 	}
 	if first.GetExpiresMillis() != first.GetRenewedMillis()+sidecar.DirectoryWorkerExpiry.Milliseconds() {
@@ -141,7 +165,7 @@ func TestDirectoryWorkerDailyRenewalKeepsItsVersion(t *testing.T) {
 	if renewal.GetVersion() != 1 || !bytes.Equal(renewal.GetAnnouncementId(), first.GetAnnouncementId()) ||
 		renewal.GetRenewedMillis() != first.GetRenewedMillis()+(24*time.Hour).Milliseconds() ||
 		renewal.GetExpiresMillis() != renewal.GetRenewedMillis()+sidecar.DirectoryWorkerExpiry.Milliseconds() ||
-		renewal.GetStartedMillis() != first.GetStartedMillis() {
+		renewal.GetStartedMillis() != first.GetStartedMillis() || renewal.GetWhere().GetPlatform() != platform {
 		t.Fatalf("renewal %v after %v", renewal, first)
 	}
 	env.clock.Advance(24 * time.Hour)
@@ -318,8 +342,8 @@ func TestDirectoryWorkerRestartKeepsItsItem(t *testing.T) {
 }
 
 // A device's worker item, written through its record and its directory client, folds as an active worker item for
-// another reader, under its member; SetWorker's off hides it at once; and a read_only client and a client no host
-// bound refuse SetWorker.
+// another reader, under its member and naming the platform it was written with; SetWorker's off hides it at once; and
+// a read_only client and a client no host bound refuse SetWorker.
 func TestDirectoryWorkerItemFoldsForReaders(t *testing.T) {
 	world := newTestDirectoryWorld(t, nil)
 	memberId := sidecar.NewId()
@@ -348,6 +372,10 @@ func TestDirectoryWorkerItemFoldsForReaders(t *testing.T) {
 	if item.Key.Kind != sidecar.DirectoryAnnouncementKindWorker || item.Display != sidecar.DirectoryItemActive ||
 		item.MemberId == nil || *item.MemberId != memberId || len(item.Announcement.GetWhat().GetServices()) != 1 {
 		t.Fatalf("item %+v", item)
+	}
+	platform, platformName := testWorkerPlatform()
+	if shown := item.Announcement.GetWhere().GetPlatform(); shown != platform || sidecar.DirectoryPlatformName(shown) != platformName {
+		t.Fatalf("the reader holds platform %d, shown as %s; written %d", shown, sidecar.DirectoryPlatformName(shown), platform)
 	}
 	off := false
 	if err := device.client.SetWorker(t.Context(), &sidecar.DirectoryWorkerSetting{On: &off}); err != nil {

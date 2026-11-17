@@ -12,8 +12,8 @@
 //	never      on phones, page Workers or the quick burner: the host's class is the daemon's to state, and any class
 //	           but a daemon's, the zero value included, announces nothing and refuses SetWorker's on
 //	what       harnesses, agent labels and services (application sockets, published TLS hosts, bridge ports, each with
-//	           a description), requests open or closed, and a description; who's tags; where's host label and
-//	           ephemeral. Services are what a reach grant may name (FI-26), so they come only from what this sidecar
+//	           a description), requests open or closed, and a description; who's tags; where's host label, platform
+//	           and ephemeral. Services are what a reach grant may name (FI-26), so they come only from what this sidecar
 //	           really serves, read from its components' own state through DirectoryWorkerServices, never from a
 //	           setting: with no services bound the item lists none
 //	version    raised only on a content change; a renewal is a new entry at the same version, renewed and expires
@@ -24,8 +24,9 @@
 //	refused    an item past §16.11's caps, 32 services among them, is refused whole before anything is kept or written
 //	persist    the item's state is kept in the directory's store, worker, before its entry is appended, so a restart
 //	           never writes a version again
-//	platform   AnnounceWhere.platform's numbers wait on question record-m3-01-directory-platform-numbers, so the item
-//	           leaves it 0, which every reader shows as unknown
+//	platform   this build's, DirectoryPlatformOfGoos of its GOOS (owner decision 468); a GOOS §16.11 names no platform
+//	           for leaves the field out, which readers show as unknown. A build that wrote none before sees its
+//	           content change, so its next upkeep raises the version once
 //
 // Barriers: directory.worker.before and .after around each append, keyed by the announcement's id. Safe for concurrent
 // use. Locks: writeLock, then stateLock; stateLock is never held across a call out, an append or a store write.
@@ -41,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -680,7 +682,7 @@ func (self *DirectoryWorker) contentOf(ctx context.Context, state *directoryWork
 		}
 		what.Services = append(what.Services, &protocol.Service{Kind: uint32(service.Kind), Name: service.Name, Description: service.Description})
 	}
-	where := &protocol.AnnounceWhere{}
+	where := &protocol.AnnounceWhere{Platform: uint32(DirectoryPlatformOfGoos(runtime.GOOS))}
 	if self.identity != nil {
 		if identity := self.identity(); identity != nil {
 			where.HostLabel = identity.HostLabel
