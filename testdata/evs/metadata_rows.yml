@@ -1,12 +1,12 @@
 # The protocol/evs.proto fields no design fence prints, for I-18: each field's number and type, which pin what
 # EVS-FORMAT.md proposes, and the §2.8 row that shows it. `sees` quotes that row, so a row that stops saying it fails.
 # A field a row does not yet name says so under `pending`, with what asks for it: those wait on a design-records edit
-# of the row (questions/evs1-m2-01-metadata-rows.md), never on the field, and each stays visible here until the row
-# names it. The fenced messages' fields are testdata/metadata/fields.yml's, but for the three the owner's answers add.
+# of the row, never on the field, and each stays visible here until the row names it. The fenced messages' fields are
+# testdata/metadata/fields.yml's, but for the three the owner's answers add.
 
-EvsPush.consumed_through: {number: 35, type: uint64, row: evs-12, pending: "plan-RECORD-depositor-spool: an ingester's mark in its CONSUME, which evs-3 and evs-12 are to name"}
+EvsPush.consumed_through: {number: 35, type: uint64, row: evs-12, sees: "a CONSUME's consumed_through"}
 EvsPushPart.sections: {number: 8, type: bytes, row: evs-12, sees: "its EvsPushPart"}
-EvsHead.consumed_through: {number: 27, type: uint64, row: evs-3, pending: "plan-RECORD-depositor-spool: evs-3 gains the field"}
+EvsHead.consumed_through: {number: 27, type: uint64, row: evs-3, sees: "an ingester's CONSUME mark (consumed_through, the version through which its deposits are consumed"}
 
 EvsRepoObject.repo_id: {number: 1, type: bytes, row: evs-1, sees: "repo_id"}
 EvsRepoObject.kind: {number: 2, type: RepoKind, row: evs-1, sees: "kind (general"}
@@ -20,16 +20,16 @@ EvsRepoObject.sealed_name: {number: 9, type: bytes, row: evs-1, sees: "sealed di
 EvsRepoObject.network_id: {number: 10, type: bytes, row: evs-1, sees: "its network, from the projection"}
 
 EvsRepoPlacement.cluster_id: {number: 1, type: string, row: evs-25, sees: "which metadata cluster holds a repo's objects"}
-EvsRepoPlacement.creator_sidecar_id: {number: 2, type: bytes, row: evs-25, pending: "11.8's place row writes {cluster id, creator sidecar_id}; evs-25 names only the cluster"}
+EvsRepoPlacement.creator_sidecar_id: {number: 2, type: bytes, row: evs-25, sees: "its creator's sidecar_id, set once at the repo's creation"}
 
 EvsSlotObject.keys: {number: 1, type: repeated EvsSlotKey, row: evs-5, sees: "up to 64 wrapped object keys (ciphertext)"}
 EvsSlotKey.key_index: {number: 1, type: uint32, row: evs-5, sees: "key indexes"}
-EvsSlotKey.generation: {number: 2, type: uint64, row: evs-5, pending: "plan-EVS1-format-bytes#9 keeps each key's generation beside it, so a deposit's reader picks its drop key; evs-5 names the keys and not their generations"}
+EvsSlotKey.generation: {number: 2, type: uint64, row: evs-5, sees: "each wrapped key's generation, in clear beside it"}
 EvsSlotKey.wrapped: {number: 3, type: bytes, row: evs-5, sees: "wrapped object keys (ciphertext)"}
 
 EvsIndexEntry.versions: {number: 1, type: repeated EvsIndexVersion, row: evs-11, sees: "each entry's up to four committed versions"}
 EvsIndexEntry.names: {number: 2, type: EvsNameTable, row: evs-11, sees: "per directory a name table"}
-EvsIndexEntry.names_through: {number: 3, type: uint64, row: evs-11, pending: "11.7's listing row reads a folded table with the version it holds; evs-11 names the table and not that version"}
+EvsIndexEntry.names_through: {number: 3, type: uint64, row: evs-11, sees: "the version the table is folded through (names_through)"}
 EvsIndexEntry.marker: {number: 4, type: EvsRemovalMarker, row: evs-11, sees: "a removed-entry marker"}
 EvsIndexEntry.drop_mark: {number: 5, type: EvsDropMark, row: evs-11, sees: "the drop mark {drop_id, through_version}"}
 EvsIndexEntry.names_leaf_part: {number: 7, type: uint32, row: evs-11, pending: "DESIGN-DETAILS 9.8: evs-11 gains each folded version's, marker's and table's place in its own statement's list, which design-records writes into §2.8 (question details-9-index-leaf)"}
@@ -96,24 +96,24 @@ EvsPushReply.deposit_head: {number: 3, type: EvsDepositHead, row: evs-3, sees: "
 EvsRefusalReply.push_id: {number: 1, type: bytes, row: evs-12, sees: "push_id"}
 EvsRefusalReply.code: {number: 2, type: EvsRefusalCode, row: evs-3, sees: "the refusal's code"}
 EvsRefusalReply.recorded: {number: 3, type: bool, row: evs-3, sees: "up to 8 refusal records"}
-EvsRefusalReply.retry_after_ms: {number: 4, type: uint32, row: evs-7, pending: "11.20's 429s and 503s carry retry_after_ms; evs-7 names each answer's status and not its retry delay"}
+EvsRefusalReply.retry_after_ms: {number: 4, type: uint32, row: evs-7, sees: "each answer's retry delay"}
 EvsRefusalReply.paths: {number: 5, type: repeated EvsTokenPath, row: evs-12, sees: "changes of token path"}
-EvsRefusalReply.outcome: {number: 6, type: EvsPushOutcome, row: evs-7, pending: "11.8's 503 {push_id, outcome: unknown}; evs-7 names the status and not the outcome"}
+EvsRefusalReply.outcome: {number: 6, type: EvsPushOutcome, row: evs-7, sees: "a push's outcome where evs cannot say it committed"}
 EvsRefusalReply.needs_format: {number: 7, type: uint32, row: evs-1, sees: "object format"}
 EvsRefusalReply.quota: {number: 8, type: EvsQuotaRefusal, row: evs-9, sees: "the over-limit list evs reads every 5 s"}
 EvsRefusalReply.deposit_head: {number: 9, type: EvsDepositHead, row: evs-3, sees: "chain C_v"}
 EvsQuotaRefusal.limit_key: {number: 1, type: string, row: evs-9, sees: "the over-limit list evs reads every 5 s"}
 EvsQuotaRefusal.limit: {number: 2, type: int64, row: evs-9, sees: "the over-limit list evs reads every 5 s"}
 EvsQuotaRefusal.used: {number: 3, type: int64, row: evs-9, sees: "the over-limit list evs reads every 5 s"}
-EvsQuotaRefusal.retry_after_ms: {number: 4, type: uint32, row: evs-9, pending: "§20.7's QuotaRefusal carries a window's reset; evs-9 names the list and not the delay"}
-EvsQuotaRefusal.upgrade: {number: 5, type: bool, row: evs-9, pending: "§20.7's QuotaRefusal says whether a purchase lifts the limit; evs-9 does not"}
+EvsQuotaRefusal.retry_after_ms: {number: 4, type: uint32, row: evs-9, sees: "a quota refusal's retry delay"}
+EvsQuotaRefusal.upgrade: {number: 5, type: bool, row: evs-9, sees: "whether a purchase lifts its limit"}
 EvsDepositHead.version: {number: 1, type: uint64, row: evs-3, sees: "version v"}
 EvsDepositHead.chain: {number: 2, type: bytes, row: evs-3, sees: "chain C_v"}
-EvsDepositHead.consumed_through: {number: 3, type: uint64, row: evs-3, pending: "plan-RECORD-depositor-spool: evs-3 gains the field"}
+EvsDepositHead.consumed_through: {number: 3, type: uint64, row: evs-3, sees: "which a deposit's head in a push's answer or refusal repeats"}
 
 EvsReadRequest.ref_id: {number: 1, type: bytes, row: evs-7, sees: "repo and ref ids"}
-EvsReadRequest.pin_version: {number: 2, type: uint64, row: evs-7, pending: "11.9's request carries the reader's pin; evs-7 names what a read asks for and not the pin it reads from"}
-EvsReadRequest.fresh: {number: 3, type: bool, row: evs-7, pending: "11.9's request asks for no cached head; evs-7 does not name it"}
+EvsReadRequest.pin_version: {number: 2, type: uint64, row: evs-7, sees: "a read's pin version"}
+EvsReadRequest.fresh: {number: 3, type: bool, row: evs-7, sees: "whether it asks for a fresh head"}
 EvsReadRequest.paths: {number: 4, type: repeated EvsReadPath, row: evs-11, sees: "tokens t_i"}
 EvsReadRequest.ranges: {number: 5, type: repeated EvsReadRange, row: evs-7, sees: "ranges and slots read"}
 EvsReadRequest.slot_ids: {number: 6, type: repeated bytes, row: evs-7, sees: "ranges and slots read"}
@@ -122,7 +122,7 @@ EvsReadRequest.log_pages: {number: 8, type: repeated uint64, row: evs-14, sees: 
 EvsReadRequest.pushes: {number: 9, type: repeated EvsReadPush, row: evs-7, sees: "ranges and slots read"}
 EvsReadRequest.refs: {number: 10, type: repeated EvsReadRef, row: evs-2, sees: "ref ids"}
 EvsReadPath.token_paths: {number: 1, type: repeated EvsSourcePath, row: evs-11, sees: "tokens t_i"}
-EvsReadPath.version: {number: 2, type: uint64, row: evs-7, pending: "11.9 serves older versions on request; evs-7 does not name which version a read asks for"}
+EvsReadPath.version: {number: 2, type: uint64, row: evs-7, sees: "the version of a path it asks for"}
 EvsReadPath.commit_version: {number: 3, type: uint64, row: evs-7, pending: "DESIGN-DETAILS 9.2.4's history names the ref version an older version's push committed at; evs-7 does not name which version a read asks for"}
 EvsReadRange.segment_id: {number: 1, type: bytes, row: evs-4, sees: "segment id (SHA-256 of its bytes)"}
 EvsReadRange.offset: {number: 2, type: uint32, row: evs-7, sees: "ranges and slots read"}
@@ -134,7 +134,7 @@ EvsReadPush.push_id: {number: 1, type: bytes, row: evs-12, sees: "push_id"}
 EvsReadPush.version: {number: 2, type: uint64, row: evs-3, sees: "version v"}
 EvsReadPush.part: {number: 3, type: uint32, row: evs-12, sees: "per part (up to 1,024)"}
 EvsReadRef.ref_id: {number: 1, type: bytes, row: evs-2, sees: "ref ids"}
-EvsReadRef.pin_version: {number: 2, type: uint64, row: evs-7, pending: "as EvsReadRequest.pin_version"}
+EvsReadRef.pin_version: {number: 2, type: uint64, row: evs-7, sees: "a read's pin version"}
 
 EvsReadFrame.head: {number: 1, type: EvsHeadSummary, row: evs-3, sees: "the commit point"}
 EvsReadFrame.statement: {number: 2, type: EvsReadStatement, row: evs-14, sees: "their Signed EvsPush statements"}
@@ -142,7 +142,7 @@ EvsReadFrame.behind: {number: 3, type: uint64, row: evs-3, sees: "a window of th
 EvsReadFrame.more: {number: 4, type: uint64, row: evs-3, sees: "version v"}
 EvsReadFrame.path: {number: 5, type: EvsReadPathReply, row: evs-11, sees: "path index"}
 EvsReadFrame.object: {number: 6, type: EvsReadObject, row: evs-7, sees: "ranges and slots read"}
-EvsReadFrame.end: {number: 7, type: bool, row: evs-7, pending: "the framed reply's last frame; evs-7 names the status and not the framing"}
+EvsReadFrame.end: {number: 7, type: bool, row: evs-7, sees: "a framed reply's end"}
 EvsReadFrame.error: {number: 8, type: EvsRefusalReply, row: evs-7, pending: "QD-662: a framed reply evs could not finish ends with this refusal in its last frame's place; evs-7 names each answer's status and not the framing"}
 EvsHeadSummary.ref_id: {number: 1, type: bytes, row: evs-2, sees: "ref ids"}
 EvsHeadSummary.version: {number: 2, type: uint64, row: evs-3, sees: "version v"}
@@ -171,12 +171,12 @@ EvsReadPathReply.absences: {number: 5, type: repeated EvsAbsenceProof, row: evs-
 EvsReadPathReply.removal: {number: 6, type: EvsRemovalMarker, row: evs-11, sees: "a removed-entry marker"}
 EvsReadPathReply.base: {number: 7, type: EvsOverlay, row: evs-3, sees: "overlay base"}
 EvsReadPathReply.names: {number: 8, type: EvsNameTable, row: evs-11, sees: "per directory a name table"}
-EvsReadPathReply.names_through: {number: 9, type: uint64, row: evs-11, pending: "as EvsIndexEntry.names_through"}
+EvsReadPathReply.names_through: {number: 9, type: uint64, row: evs-11, sees: "the version the table is folded through (names_through)"}
 EvsReadPathReply.deltas: {number: 10, type: repeated EvsIndexVersion, row: evs-12, sees: "cleartext entry versions"}
-EvsReadPathReply.state: {number: 11, type: EvsReadPathState, row: evs-28, until: M10, pending: "format 2's read states (protos-services-read-states), which format-1 evs never serves; design-records writes them into 11.9, and no row names what a read answers for them"}
-EvsReadPathReply.drop_id: {number: 12, type: bytes, row: evs-28, until: M10, pending: "as EvsReadPathReply.state"}
-EvsReadPathReply.not_before_ms: {number: 13, type: int64, row: evs-28, until: M10, pending: "as EvsReadPathReply.state"}
-EvsReadPathReply.drop_version: {number: 14, type: uint64, row: evs-28, until: M10, pending: "as EvsReadPathReply.state"}
+EvsReadPathReply.state: {number: 11, type: EvsReadPathState, row: evs-28, sees: "its read state (collected, drop pending, dropped)"}
+EvsReadPathReply.drop_id: {number: 12, type: bytes, row: evs-28, sees: "the drop's id, not_before_ms and version"}
+EvsReadPathReply.not_before_ms: {number: 13, type: int64, row: evs-28, sees: "the drop's id, not_before_ms and version"}
+EvsReadPathReply.drop_version: {number: 14, type: uint64, row: evs-28, sees: "the drop's id, not_before_ms and version"}
 EvsReadPathReply.entry_epoch: {number: 17, type: uint64, row: evs-11, pending: "DESIGN-DETAILS 9.2.2: the epoch whose copy served a path, which evs-11's entry states (carried from the source it names) imply and a reply does not name"}
 EvsReadPathReply.stale_epoch: {number: 18, type: bool, row: evs-7, pending: "DESIGN-DETAILS 9.2.4: a read naming no token path in the head's current epoch, answered with nothing read; evs-7 names each answer's status and not this one"}
 EvsReadPathReply.continues: {number: 20, type: bool, row: evs-7, pending: "QD-662: a directory's next delta in a frame of its own after its path frame; evs-7 names each answer's status and not the framing"}
@@ -216,7 +216,7 @@ EvsPidxRecord.version: {number: 1, type: uint64, row: evs-17, sees: "offsets for
 EvsPidxRecord.type: {number: 2, type: EvsBatchRecordType, row: evs-17, sees: "the record kinds it holds"}
 EvsPidxRecord.offset: {number: 3, type: uint64, row: evs-17, sees: "offsets for the versions"}
 EvsPidxRecord.length: {number: 4, type: uint32, row: evs-17, sees: "offsets for the versions"}
-EvsPidxRecord.place: {number: 5, type: EvsPlace, row: evs-17, pending: "EVSB-M2-10 keeps each record's batch place, so a seal finds its named part by place after the batch is gone; evs-17 names offsets and kinds, and evs-3 the place in a window entry, but neither the place in pidx/ (question evsb-m2-07-pidx-place-row)"}
+EvsPidxRecord.place: {number: 5, type: EvsPlace, row: evs-17, sees: "each record's place in the batch it left"}
 EvsPidxLogPage.page: {number: 1, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
 EvsPidxLogPage.offset: {number: 2, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
 EvsPidxLogPage.length: {number: 3, type: uint32, row: evs-17, sees: "offsets for the versions and log pages it holds"}

@@ -1,12 +1,14 @@
 //go:build !ios_extension
 
-// SEARCH-M10-28's run cards (§16.10's run card row; RECORD.md 7.4; DESIGN-DETAILS 15.6's card tests; FS-80's run card
-// and team-record cases): a card per stream, its version E * 2^32 + c and the bound past it, the fold's order, two
-// devices folding one stream alike and a gap filled later moving the version, a rebuild writing the same bytes at the
-// build's epoch, entries erased at the epoch left out while still counting toward c, a builder holding an ERASE before
-// its CUT blocked and one without it folding the entry, a run with every source erased having no card, a team record's
-// card holding nothing only the vault holds, each log's mapping of row and text, all on a fake stream; and the fence
-// on SEARCH-M10-16's CUT, which lists every projection made at the epoch it names and none folded after it.
+// SEARCH-M10-28's run cards (§16.10's run card and group rows; RECORD.md 7.3 and 7.4; DESIGN-DETAILS 15.6's card
+// tests; FS-80's run card and team-record cases; QD-899): a card per stream, its version E * 2^32 + c and the bound
+// past it, the fold's order, two devices folding one stream alike and a gap filled later moving the version, a claim, a
+// handoff and the run's coverage moving it too, a rebuild writing the same bytes at the build's epoch, entries erased
+// at the epoch left out while still counting toward c, a builder holding an ERASE before its CUT blocked and one
+// without it folding the entry, a run with every source erased having no card, a team record's card holding nothing
+// only the vault holds, each log's mapping of row and text, a vault card's claim fields, an ended run's card read
+// inactive through its row, a team card counting what was asked for approval, all on a fake stream; and the fence on
+// SEARCH-M10-16's CUT, which lists every projection made at the epoch it names and none folded after it.
 
 package sidecar
 
@@ -16,12 +18,15 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The card of runId in stream at its head, at epoch, failing on any error but those the caller reads.
@@ -350,7 +355,9 @@ func TestCardTeamRecordHoldsNoVaultTitle(t *testing.T) {
 }
 
 // RECORD.md 7.4's vault mapping: fields 6-12 and the text's lines, tools by count then name, commits once each in fold
-// order, touched paths from tool calls and changes in byte order, the newest four session ids, and no expiry.
+// order, touched paths from tool calls and changes in byte order, the newest four session ids; and, coverage being a
+// vault source since QD-899, c at the coverage entry and the row's expires its time, the run having ended, with no
+// line of text from it.
 func TestCardVaultMapping(t *testing.T) {
 	runId := evsTestId("run")
 	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "vault mapping")
@@ -364,13 +371,13 @@ func TestCardVaultMapping(t *testing.T) {
 	stream.add(t, testRecordEntry(t, "change", RecordKindChange, runId, 5, &protocol.ChangeBody{
 		Commits: []string{"c1", "c2", "c1"}, Paths: []*protocol.ChangedPath{{Path: "docs/m.md"}, {Path: "docs/a.md"}},
 	}))
-	stream.add(t, testRecordEntry(t, "coverage", RecordKindCoverage, runId, 6, &protocol.Coverage{Gaps: []string{"downtime"}}))
+	coverage := stream.add(t, testRecordEntry(t, "coverage", RecordKindCoverage, runId, 6, &protocol.Coverage{Gaps: []string{"downtime"}}))
 	card, c, err := testRunCard(t, stream, runId, 2, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c != 5 {
-		t.Fatalf("c %d: a coverage entry is no vault source", c)
+	if c != 6 {
+		t.Fatalf("c %d: the coverage entry is a vault source", c)
 	}
 	wantFields := map[int]string{
 		indexFieldTitle:               "Tidy the docs",
@@ -391,14 +398,17 @@ func TestCardVaultMapping(t *testing.T) {
 	if got := testRecordField(card, indexFieldBody); got != wantText {
 		t.Fatalf("text %q, want %q", got, wantText)
 	}
-	if card.ExpiresSeconds != 0 || card.Kind != IndexDocDerived || card.ByteCount != uint64(len(wantText)) {
+	if card.ExpiresSeconds != uint64(coverage.header.GetTimeMillis()/1000) || card.Kind != IndexDocDerived || card.ByteCount != uint64(len(wantText)) {
 		t.Fatalf("the card %+v", card)
+	}
+	if testRecordField(card, indexFieldFirstRegistered+7) != "" || testRecordField(card, indexFieldFirstRegistered+8) != "" {
+		t.Fatal("claim fields with no claim folded")
 	}
 }
 
-// RECORD.md 7.4's team mapping: harness, model, project, commits, approved action kinds by count, published hosts,
-// route targets and gap codes; the row's expires the newest coverage's time while the run is ended, and 0 once a later
-// event re-opens it.
+// RECORD.md 7.4's team mapping: harness, model, project, commits, the action kinds asked for approval by count
+// (QD-899), published hosts, route targets and gap codes; the row's expires the newest coverage's time while the run is
+// ended, and 0 once a later event re-opens it.
 func TestCardTeamMapping(t *testing.T) {
 	runId := evsTestId("run")
 	action := func(kind protocol.SidecarActionKind) proto.Message {
@@ -482,5 +492,232 @@ func TestCardRaceAfterTheRead(t *testing.T) {
 	}
 	if view.erased(cardKey, after.Version) || testRecordField(after, indexFieldFirstRegistered+6) != "Later:1" {
 		t.Fatalf("the fold after the CUT: listed %v, tools %q", view.erased(cardKey, after.Version), after.Fields[indexFieldFirstRegistered+6])
+	}
+}
+
+// QD-899's claim fields: a vault card's field 13 is the expires of the newest claim the fold opens, from its opener's
+// newest entry of it, and field 14 that claim's own state as of the fold: active, even long past its expires, since
+// expired is a reader's; released once a claim entry releases it; handed_off once a handoff names it, released or not.
+// Releasing an older claim, by its claim: target alone, or a claim the fold does not open, leaves both fields; each
+// claim and handoff moves c. A team record's card folds neither.
+func TestCardVaultClaimFields(t *testing.T) {
+	runId := evsTestId("run")
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "claims")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Harness: "claude-code"}))
+	check := func(label string, wantC uint64, wantExpires string, wantState string) {
+		t.Helper()
+		card, c, err := testRunCard(t, stream, runId, 1, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotExpires, gotState := testRecordField(card, indexFieldFirstRegistered+7), testRecordField(card, indexFieldFirstRegistered+8)
+		if c != wantC || gotExpires != wantExpires || gotState != wantState {
+			t.Fatalf("%s: c %d, fields 13 %q and 14 %q; want c %d, %q and %q", label, c, gotExpires, gotState, wantC, wantExpires, wantState)
+		}
+	}
+	check("no claim", 1, "", "")
+	longPastMillis := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC).UnixMilli()
+	laterMillis := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	older := stream.add(t, testRecordEntry(t, "older claim", RecordKindClaim, runId, 2, &protocol.CoordinationBody{
+		Text: "the parser", Targets: []string{"parser/"}, ExpiresMillis: laterMillis, ClaimState: recordClaimStateActive,
+	}))
+	newest := stream.add(t, testRecordEntry(t, "newest claim", RecordKindClaim, runId, 3, &protocol.CoordinationBody{
+		Text: "the docs", Targets: []string{"docs/"}, ExpiresMillis: longPastMillis, ClaimState: recordClaimStateActive,
+	}))
+	check("two claims", 3, "2020-01-02T03:04:05Z", "active")
+	stream.add(t, testRecordEntry(t, "older released", RecordKindClaim, runId, 4, &protocol.CoordinationBody{
+		Targets: []string{RecordTargetClaim + recordChainIdText(older.entryId)}, ExpiresMillis: testRecordTimeMillis + 4000,
+		ClaimState: recordClaimStateReleased,
+	}))
+	check("the older released", 4, "2020-01-02T03:04:05Z", "active")
+	elsewhereId := evsTestId("another run's claim")
+	stream.add(t, testRecordEntry(t, "elsewhere released", RecordKindClaim, runId, 5, &protocol.CoordinationBody{
+		Targets: []string{RecordTargetClaim + recordChainIdText(elsewhereId)}, ClaimId: elsewhereId.Bytes(),
+		ExpiresMillis: testRecordTimeMillis + 5000, ClaimState: recordClaimStateReleased,
+	}))
+	check("a claim the fold does not open released", 5, "2020-01-02T03:04:05Z", "active")
+	stream.add(t, testRecordEntry(t, "newest restated", RecordKindClaim, runId, 6, &protocol.CoordinationBody{
+		Text: "the docs", Targets: []string{"docs/"}, ClaimId: newest.entryId.Bytes(), ExpiresMillis: laterMillis,
+		ClaimState: recordClaimStateActive,
+	}))
+	check("the newest restated", 6, "2026-12-01T00:00:00Z", "active")
+	// released as record_append writes it: its claim_id and its one claim: target, expires at the release
+	releaseMillis := testRecordTimeMillis + 7000
+	stream.add(t, testRecordEntry(t, "newest released", RecordKindClaim, runId, 7, &protocol.CoordinationBody{
+		Targets: []string{RecordTargetClaim + recordChainIdText(newest.entryId)}, ClaimId: newest.entryId.Bytes(),
+		ExpiresMillis: releaseMillis, ClaimState: recordClaimStateReleased,
+	}))
+	check("the newest released", 7, indexRecordTime(releaseMillis), "released")
+	stream.add(t, testRecordEntry(t, "handoff", RecordKindHandoff, runId, 8, &protocol.CoordinationBody{
+		Text: "over to the reviewer", Targets: []string{RecordTargetClaim + recordChainIdText(newest.entryId), RecordTargetAgent + "reviewer"},
+	}))
+	check("the newest handed off", 8, indexRecordTime(releaseMillis), "handed_off")
+
+	team := testNewRecordStream(protocol.RepoKind_REPO_KIND_TEAM_RECORD, "team claims")
+	for _, entry := range stream.entries {
+		team.add(t, entry)
+	}
+	card, c, err := testRunCard(t, team, runId, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != 1 || testRecordField(card, indexFieldFirstRegistered+7) != "" || testRecordField(card, indexFieldFirstRegistered+8) != "" {
+		t.Fatalf("a team record's card folded a claim: c %d, fields 13 %q and 14 %q", c, card.Fields[indexFieldFirstRegistered+7], card.Fields[indexFieldFirstRegistered+8])
+	}
+}
+
+// 15.2.8's I12 under QD-899's sources: a claim, a handoff and the run's coverage, landing in that order after the run's
+// newest other entry, each move c, so the card each changes stands at a version of its own; at every pin two builders,
+// one holding the stream's entries in the other's reverse order, write equal cards; and no two cards at one version
+// differ. None of the three adds a line to a vault card's text.
+func TestCardIsAFunctionOfClaimsAndCoverage(t *testing.T) {
+	runId := evsTestId("run")
+	claimExpiresMillis := testRecordTimeMillis + 3600*1000
+	claim := testRecordEntry(t, "claim", RecordKindClaim, runId, 4, &protocol.CoordinationBody{
+		Text: "the parser", Targets: []string{"parser/"}, ExpiresMillis: claimExpiresMillis, ClaimState: recordClaimStateActive,
+	})
+	coverage := testRecordEntry(t, "coverage", RecordKindCoverage, runId, 6, &protocol.Coverage{Sources: []string{"hooks"}})
+	entries := []*indexRecordEntry{
+		testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Harness: "claude-code", Title: "Split the parser"}),
+		testRecordEntry(t, "tool", RecordKindToolCall, runId, 2, &protocol.ToolCallBody{ToolName: "Edit", Paths: []string{"parser/lex.go"}}),
+		testRecordEntry(t, "change", RecordKindChange, runId, 3, &protocol.ChangeBody{Commits: []string{"5eed"}}),
+		claim,
+		testRecordEntry(t, "handoff", RecordKindHandoff, runId, 5, &protocol.CoordinationBody{
+			Text: "over to the reviewer", Targets: []string{RecordTargetClaim + recordChainIdText(claim.entryId)},
+		}),
+		coverage,
+	}
+	one := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "one")
+	for _, entry := range entries {
+		one.add(t, entry)
+	}
+	other := &testRecordStream{logKind: one.logKind, refId: one.refId, readTo: one.readTo, entries: slices.Clone(one.entries)}
+	slices.Reverse(other.entries)
+	cards := map[uint64]*IndexDocument{}
+	pinCards := []*IndexDocument{nil}
+	for pin := uint64(1); pin <= one.readTo; pin += 1 {
+		cardOne, cOne, err := searchRunCard(context.Background(), one, runId, pin, 5, nil, DefaultIndexRecordSettings(), DefaultIndexFormatSettings())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cardOther, cOther, err := searchRunCard(context.Background(), other, runId, pin, 5, nil, DefaultIndexRecordSettings(), DefaultIndexFormatSettings())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cOne != pin || cOther != cOne || !reflect.DeepEqual(cardOne, cardOther) {
+			t.Fatalf("pin %d: c %d and %d, or two builders' cards differ:\n%+v\n%+v", pin, cOne, cOther, cardOne, cardOther)
+		}
+		if held, ok := cards[cardOne.Version]; ok && !reflect.DeepEqual(held, cardOne) {
+			t.Fatalf("two cards at version %d differ", cardOne.Version)
+		}
+		cards[cardOne.Version] = cardOne
+		pinCards = append(pinCards, cardOne)
+	}
+	if len(cards) != len(pinCards)-1 {
+		t.Fatalf("%d versions for %d pins", len(cards), len(pinCards)-1)
+	}
+	claimExpires := indexRecordTime(claimExpiresMillis)
+	coverageSeconds := uint64(one.entries[5].header.GetTimeMillis() / 1000)
+	wants := map[uint64][3]string{
+		3: {"", "", "0"},
+		4: {claimExpires, "active", "0"},
+		5: {claimExpires, "handed_off", "0"},
+		6: {claimExpires, "handed_off", strconv.FormatUint(coverageSeconds, 10)},
+	}
+	for pin, want := range wants {
+		card := pinCards[pin]
+		got := [3]string{
+			testRecordField(card, indexFieldFirstRegistered+7), testRecordField(card, indexFieldFirstRegistered+8),
+			strconv.FormatUint(card.ExpiresSeconds, 10),
+		}
+		if got != want {
+			t.Errorf("pin %d: fields 13 and 14 and expires %q, want %q", pin, got, want)
+		}
+		if testRecordField(card, indexFieldBody) != testRecordField(pinCards[3], indexFieldBody) {
+			t.Errorf("pin %d: the text changed: %q", pin, card.Fields[indexFieldBody])
+		}
+	}
+}
+
+// QD-899's ended run on a vault card, read as §16.10's group row reads it, through the row a push writes and the hit a
+// search returns: a running run's card is active; once the coverage entry ends the run its row's expires is the
+// coverage's time, and the card reads inactive, its run ended, though it moved within the window; a later event
+// re-opens the run.
+func TestCardVaultEndedRunInactive(t *testing.T) {
+	runId := evsTestId("run")
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "ended")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Harness: "codex", Title: "Trim the logs"}))
+	stream.add(t, testRecordEntry(t, "tool", RecordKindToolCall, runId, 2, &protocol.ToolCallBody{ToolName: "Bash"}))
+	settings := DefaultSearchGroupSettings()
+	group := func(label string, wantActive bool, wantEnded time.Time) {
+		t.Helper()
+		card, _, err := testRunCard(t, stream, runId, 1, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := testRunCardPrepared(t, card, stream.refId).row.appendEncoded(nil, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoder := indexDecoder{src: encoded}
+		row := decoder.row(true)
+		if decoder.err != nil {
+			t.Fatal(decoder.err)
+		}
+		// the push carrying the card is signed as the stream's newest entry lands, and read a minute later
+		timeSeconds := uint64(stream.entries[len(stream.entries)-1].header.GetTimeMillis() / 1000)
+		hit := searchHitOf(&searchRankedHit{refId: stream.refId, version: card.Version, timeSeconds: timeSeconds, row: row})
+		now := time.Unix(int64(timeSeconds), 0).Add(time.Minute)
+		groups := searchGroup([]SearchHit{hit}, []SearchHit{hit}, SearchGroupByRun, evsTestId("network"), now, nil, settings)
+		if len(groups) != 1 || len(groups[0].Runs) != 1 {
+			t.Fatalf("%s: %d groups", label, len(groups))
+		}
+		if groups[0].Active != wantActive || !groups[0].Runs[0].Ended.Equal(wantEnded) {
+			t.Fatalf("%s: active %v, ended %v; want %v and %v", label, groups[0].Active, groups[0].Runs[0].Ended, wantActive, wantEnded)
+		}
+	}
+	group("running", true, time.Time{})
+	coverage := stream.add(t, testRecordEntry(t, "coverage", RecordKindCoverage, runId, 3, &protocol.Coverage{Sources: []string{"hooks"}}))
+	group("ended", false, time.Unix(coverage.header.GetTimeMillis()/1000, 0).UTC())
+	stream.add(t, testRecordEntry(t, "later tool", RecordKindToolCall, runId, 4, &protocol.ToolCallBody{ToolName: "Read"}))
+	group("re-opened", true, time.Time{})
+}
+
+// QD-899's team line: a team card counts each action kind asked for approval, the requests whatever was decided; an
+// approval_decision, which stays outside a team record's sources, neither changes the card nor moves c.
+func TestCardTeamCountsApprovalRequests(t *testing.T) {
+	runId := evsTestId("run")
+	request := func(label string, seq uint64, kind protocol.SidecarActionKind) *indexRecordEntry {
+		encoded, err := proto.Marshal(&protocol.CanonicalAction{Kind: uint32(kind)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return testRecordEntry(t, label, RecordKindApproval, runId, seq, &protocol.ApprovalRequest{CanonicalAction: encoded})
+	}
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_TEAM_RECORD, "approvals")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Harness: "codex"}))
+	stream.add(t, request("to deny", 2, protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE))
+	stream.add(t, request("to approve", 3, protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE))
+	stream.add(t, request("undecided", 4, protocol.SidecarActionKind_SIDECAR_ACTION_KIND_SHARE))
+	before, cBefore, err := testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testRecordField(before, indexFieldBody); got != "codex\nexpose:2\nshare:1" {
+		t.Fatalf("text %q", got)
+	}
+	for _, decision := range []uint32{2, 1} {
+		encoded, err := proto.Marshal(&protocol.ApprovalDecision{ApprovalId: evsTestId("approval").Bytes(), Decision: decision})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream.add(t, testRecordEntry(t, "decision "+strconv.FormatUint(uint64(decision), 10), RecordKindApprovalDecision, runId, 4+uint64(decision), &bridge.Signed{Body: encoded}))
+	}
+	after, cAfter, err := testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cBefore != 4 || cAfter != cBefore || !reflect.DeepEqual(before, after) {
+		t.Fatalf("decisions moved the card: c %d then %d", cBefore, cAfter)
 	}
 }
