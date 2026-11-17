@@ -111,9 +111,11 @@ M5       ALPN audience; the custom-SNI map (§13); report parsing (§14);       
                                                                               FS-52; S7's SNI-less abuse@<root>
                                                                               case; FS-41 and FS-42's M5 steps
                                                                               (labels, TLS endpoints, the dns
-                                                                              restore step); FS-66's, FS-69's,
-                                                                              FS-76's, FS-78's and FS-92's hold
-                                                                              cases once M10's Gn-out has passed
+                                                                              restore step); FS-25's gate legs
+                                                                              again through POST /dns/records;
+                                                                              FS-66's, FS-69's, FS-76's, FS-78's
+                                                                              and FS-92's hold cases once M10's
+                                                                              Gn-out has passed
 M6       the CAA chain (§12, §13); the audit reader's receipts and the team   FS-19's Team and invite runs; FS-21
          directory's specification: directory.proto's announcement, request,  on a Team default document; FS-30's
          decision, notice and erasure request messages, the kind and its      audit reader; FS-32, FS-35, FS-38's
@@ -124,8 +126,9 @@ M6       the CAA chain (§12, §13); the audit reader's receipts and the team   
          devices past the first 1,000 (owner decision 144); C18's share       cases; 20.9's benchmark rerun; FS-41
          signers (§17); Stripe meters, downgrade (§20); the escrow order,     and FS-42's M6 steps (meters, custom
          frozen once FS-46 and 20.9's benchmark pass on M4's build            hosts); FS-122; FS-97's, FS-98's and
-         (Q-QUOTA-3's residual); the custom-host map's versions, interface    FS-124's Team cases; FS-76's and
-         reports and readiness (§12, §13, §19)                                FS-80's team-record cases, FS-83's
+         (Q-QUOTA-3's residual); the custom-host map's versions, interface    FS-124's Team cases; FS-126, the P2P
+         reports and readiness (§12, §13, §19)                                schedule (D-PROTO-10); FS-76's and
+                                                                              FS-80's team-record cases, FS-83's
                                                                               team cases, the directory's format-2
                                                                               cases and FS-111's team-record case
                                                                               once M10's Gn-out has passed

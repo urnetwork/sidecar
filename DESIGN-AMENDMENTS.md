@@ -21,8 +21,7 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
 | [§16 The local MCP server and record primitives](#s16) | 6 | 2 |
 | [§19 Server services](#s19) | 0 | 1 |
-| [§22 Testing and verification](#s22) | 1 | 0 |
-| [§23 Phasing, milestones, and rollout](#s23) | 2 | 0 |
+| [§23 Phasing, milestones, and rollout](#s23) | 1 | 0 |
 | [No section named](#s0) | 2 | 0 |
 
 ## DESIGN-DETAILS.md sections to fold
@@ -31,7 +30,7 @@ Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with i
 
 Sections 8 and 9's owner answers are folded as owner decisions (2026-11-10): section 9's QD-607 to QD-610, QD-612, QD-632 and QD-633 as 227-233, with QD-613 (section 6's key prefixes) as 234 and QD-640 as 235, and section 8's QD-598 to QD-606 as 236-244, each stated in §11 where it binds. Their proposed DESIGN.md text (8.8, 9.8) waits for the design agent's amendments above, and is folded only with them.
 
-Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 8.8's evs-4 words; and 9.8's evs-11 ttl. 6.8's gkm-5 pointers went into §2.8's gkm-5 with §10's items (QD-618, owner decision 363).
+Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 8.8's evs-4 words; and 9.8's evs-11 ttl. 6.8's gkm-5 pointers went into §2.8's gkm-5 with §10's items (QD-618, owner decision 363).
 
 <a id="s3"></a>
 ## §3 Architecture overview and end-to-end flows
@@ -315,33 +314,8 @@ Questions: `g0-recheck-2-q-ops-3-records.md`.
 
 Not folded (2026-11-16): the ledger's section 5 entry naming Q-OPS-3's residual beside Q-QUOTA-3's, since the ledger is DESIGN-REVIEW-RESPONSE.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded (the front matter's peer lead names one engineering residual, and §19.14's Q-OPS-3 carries §19.6's bound and "the dumped sidecar rows"; Appendix B's status and the "Closed by peer review 2026-11-04" label stay).
 
-<a id="s22"></a>
-## §22 Testing and verification
-
-### QD-210: "Once C3 is tested" names no test
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23, §6, §20.*
-
-Add FS-126 to §22.8 (§6, T2+T3, M6-out) and to §23.6's M6 schedule: with C3 on, a forged ControlId frame over P2P is dropped; a same-network pair moves from relay to P2P and back under a live RPC and stream, its session key unchanged; Hello and HeadCheck hold across the move; and bytes on P2P debit nothing (§20.6). D-PROTO-10's "P2P is tested" means FS-126 passes.
-
-Changes: §22.8; §23.6.
-
-Questions: `plan-PROTO-p2p-milestone.md#2`.
-
-Not folded (2026-11-16): FS-126's row in §22.8 and its entry in §23.6's M6 schedules, which wait for sidecartest/fault's catalog to take FS-126 in the same commit (catalog.yml, catalogRowCount, and catalog_test.go's cases that hold FS-126 as no such row), since TestCatalogMatchesSection22 and TestCatalogMatchesGateMap hold the table and the gate map to the catalog row for row and gate for gate (question `dr2-s21-s23-fault-catalog-rows.md`). The schedule itself is folded into §22.5's §6 row, which D-PROTO-10 cites as §22's P2P schedule; sidecartest/p2p_test.go runs it on T2.
-
 <a id="s23"></a>
 ## §23 Phasing, milestones, and rollout
-
-### QD-247: FS-25's gate legs are due at M3-out, but the table, the route and the only gated effect arrive at M5
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22, §16, §19, §7.*
-
-Option 1. §16.18's M4-M9 row says `approval_use` and `POST /approval/cancel` are built dark at M3 under `sidecar_pending` and register with MG5 at M5's Gn-out (D-OPS-6 allows it, and T3 sets the tag, §19.7). §23.6's M3 row and FS-25's row say: at M3-out the gate legs (a gate's response lost after COMMIT, two api instances racing) run on real Postgres through `model.ConsumeApprovalUseInTx` with a test effect in the same transaction, and the cancel case runs through the real `POST /approval/cancel` route with §7.4's allowlist on; at M5-out the same legs run again through `POST /dns/records` (MCP-M5-01). §22.8's `real` row names this one exception until M5-out. The test effect pre-authorizes nothing: the spend check and the claim run as in production. §19.7's MG5 stands.
-
-Changes: §23.6 M3; §22.8 FS-25; §22.8 real; §16.18 M4-M9.
-
-Questions: `plan-MCP-fs25-gate-before-dns.md`.
-
-Not folded (2026-11-16): FS-25's M5-out case, its gate legs run again through `POST /dns/records`, in §22.8's gate column and §23.6's M5 schedules, which waits for sidecartest/fault's catalog to take that case in the same commit, as FS-126's row does (question `dr2-s21-s23-fault-catalog-rows.md`). The rest is folded: §16.18's M4-M9 row, §22.8's real rule and FS-25's M3-out legs, and §23.6's M3 row.
 
 ### QD-274: Keep §23.8's no-duplication clause as written, or name the duplication the design keeps on purpose
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22, §7, §9, §11, §17, §2, §3.*
