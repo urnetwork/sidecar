@@ -8,9 +8,11 @@
 //	       of each shrink after from, those after through only to step past them, and none of the entries between
 //	reach  the walk reads only what StateAt serves, the window from the previous base, or from the base a restored
 //	       reader started at, to the tip. A pin the window no longer reaches is held to its number, as §10.6's gate
-//	       holds a generation's (QD-1018), and neither pin's own state is read; a pin off the chain or ahead ends the
-//	       walk, and so does a state or an entry around a shrink after from that the window no longer keeps (a newer
-//	       base moved it on), with ErrConfigPinNotRetained
+//	       holds a generation's (QD-1018), unless a chain value the state still holds there (a kept base's, or one
+//	       from its retention point) contradicts it, and neither pin's own state is read; a pin off the chain or
+//	       ahead ends the walk, and so does a state around a shrink after from that the window no longer keeps (a
+//	       newer base moved it on), with ErrConfigPinNotRetained. A shrink whose entry the window does not keep
+//	       carries none, which the class reads immediate
 //	entry  each shrink's kept entry as it took effect at its position: a statement with its body, a tick with its
 //	       reaps and activations, or a base, whose own change no statement says
 //
@@ -41,14 +43,20 @@ type configShrink struct {
 	after  *ConfigState
 }
 
-// The entries in (from, through] that advanced the repo's holders_shrunk_at, newest first. See the file header. An
-// error for a pin off this state's chain or above it (ErrConfigPinOffChain, ErrConfigPinAhead), a state or entry
-// around a shrink after from that the window no longer keeps (ErrConfigPinNotRetained), or a through below from.
+// The entries in (from, through] that advanced the repo's holders_shrunk_at, newest first, each with the entry the
+// window keeps at its position, nil for none. See the file header. An error for a pin off this state's chain or above
+// it (ErrConfigPinOffChain, ErrConfigPinAhead), a state around a shrink after from that the window no longer keeps
+// (ErrConfigPinNotRetained), or a through below from.
 func (self *ConfigState) shrinksBetween(repoId Id, from *bridge.AuthPin, through *bridge.AuthPin) ([]*configShrink, error) {
 	if through.GetVersion() < from.GetVersion() {
 		return nil, fmt.Errorf("%w: a span from %d to %d", ErrConfigPinOffChain, from.GetVersion(), through.GetVersion())
 	}
+	// where each pin stands, building neither pin's state: a chain value this state holds puts it on the chain, and
+	// StateAt judges the rest, holding a pin before the window that no chain value here contradicts to its number
 	for _, pin := range []*bridge.AuthPin{from, through} {
+		if self.OnChain(pin) {
+			continue
+		}
 		if _, err := self.StateAt(pin); err != nil && !errors.Is(err, ErrConfigPinNotRetained) {
 			return nil, err
 		}
