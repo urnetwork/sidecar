@@ -763,11 +763,12 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 // generation standing there is taken as the sync's refresh takes it: judged by the rotation checks on its parent,
 // opened by its leaf_wrap or a delivery to this device (or held as this device's own claim, where its draft's
 // commitment stands there), with the ladder walked below the newest. taken says the newest is held opened and
-// unpoisoned, so the pass restages the commit under it. Never taken: a generation-0 commit, which gkm holds to no
-// newest generation; a header below this device's newest, which no read here explains; no generation standing past
-// it; or a read that failed: a refusal nothing newer explains, which the caller alarms. An error is a commit that
-// waits, alarming nothing of its own: a newer generation that fails its checks, whose check raised its own alarm;
-// one this device cannot open or judge yet; or a store's failure.
+// unpoisoned, so the pass restages the commit under it. Not taken, with no error, is a refusal nothing newer
+// explains, which the caller alarms: a generation-0 commit, which gkm holds to no newest generation; a commit on a
+// group other than the one this device pins, or under a generation other than the newest it holds; no generation
+// standing past it; or a read that failed. An error is a commit that waits, alarming nothing of its own: a newer
+// generation that fails its checks, whose check raised its own alarm; one this device cannot open or judge yet; or a
+// store's failure.
 func (self *gkmGroupManager) takeNewerGenerationsInFlow(ctx context.Context, state GkmAuthView, groupId Id, generation uint64) (taken bool, err error) {
 	client := self.client
 	if generation == 0 {

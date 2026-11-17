@@ -478,7 +478,10 @@ func (self *evsSubscriber) subscribe(ctx context.Context, repo *EvsRepo, args *E
 		state.refId = &refId
 		epochRefId = refId
 	} else {
-		// every ref: leased in main's current epoch, which a PATH_EPOCH on main moves
+		// every ref: leased in main's current epoch, which a PATH_EPOCH on main moves. evs matches the lease of a
+		// whole repo (no paths, or an empty one) in every epoch, so commits on refs that stand in another epoch than
+		// main's are hinted too; a lease with paths matches only on refs in its own epoch, the others waiting for the
+		// hourly resync (QD-953)
 		mainRefId, err := repo.resolveRefId(ctx, nil, nil)
 		if err != nil {
 			return nil, err
