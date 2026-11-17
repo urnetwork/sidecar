@@ -113,14 +113,22 @@ func (self *Daemon) PresencePrompt(running *Sidecar) SidecarPresenceCheck {
 // The presence prompt of running over provider: the first of the keys running registered for its member, live at its
 // state, that provider holds, asserted over each message within Ingest.PresencePromptTimeout.
 func NewPresencePrompt(running *Sidecar, provider PresenceProvider) SidecarPresenceCheck {
+	return newPresencePromptWithin(context.Background(), running, provider)
+}
+
+// NewPresencePrompt's prompt, each asking ending with ctx too, and the person's wait outside the bound of the control
+// request ctx carries, if any (daemonPersonWait, QD-518).
+func newPresencePromptWithin(ctx context.Context, running *Sidecar, provider PresenceProvider) SidecarPresenceCheck {
 	return func(message []byte) (*bridge.WebAuthnEvidence, error) {
 		key, err := running.heldPresenceKey(provider)
 		if err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), running.settings.Ingest.PresencePromptTimeout)
+		promptCtx, cancel := context.WithTimeout(ctx, running.settings.Ingest.PresencePromptTimeout)
 		defer cancel()
-		evidence, err := provider.Assert(ctx, bytes.Clone(key.GetKeyId()), bytes.Clone(message))
+		resume := daemonPersonWait(ctx)
+		evidence, err := provider.Assert(promptCtx, bytes.Clone(key.GetKeyId()), bytes.Clone(message))
+		resume()
 		if err != nil {
 			return nil, err
 		}

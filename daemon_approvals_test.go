@@ -8,13 +8,22 @@ package sidecar
 // call answers the act's bytes and signs nothing; only the second, with the app's evidence over exactly those bytes,
 // signs; no evidence, evidence of another key or bytes that do not decode sign nothing; and a held act ends unsigned
 // at its bound, with its session, when a later first call supersedes it, and when a call comes out of order.
+//
+// Where the hold decides (owner decision 290, QD-897): with every live presence key on the daemon host's own fake
+// authenticator, a revocation, a decision and the app's own KeyRegister answer no bytes and sign at their last call
+// under the daemon's prompt, no app signature asked; an app key live, alone or beside a host key, keeps the app's path
+// and never asks the host; a declined prompt signs nothing; the person's wait at the prompt is outside the call's
+// request bound (QD-518); and an act that ends mid-prompt signs nothing.
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -778,4 +787,496 @@ func TestTwoCallActsEndWithTheDaemon(t *testing.T) {
 	if revokeCode(act.err) != DeviceRevokeCodeCancelled {
 		t.Errorf("the act's run answered %v", act.err)
 	}
+}
+
+// The daemon host's own authenticator in the host-key tests (owner decision 290): the fake one, its keys from seeds of
+// their own so none is a key an app's fake authenticator makes, and each assertion, where the test asks, sending asked
+// the request bound its context carries, nil for none, then waiting for release, or for its context's end where it is
+// cancellable, as a platform prompt its caller dismisses is, which ended then answers.
+type presenceActTestHostProvider struct {
+	*testPresenceProvider
+	// nil: assertions answer at once
+	asked       chan *daemonRequestBound
+	release     chan struct{}
+	cancellable bool
+	ended       chan error
+}
+
+func newPresenceActTestHostProvider(t *testing.T) *presenceActTestHostProvider {
+	return &presenceActTestHostProvider{testPresenceProvider: newTestPresenceProvider(t, bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256)}
+}
+
+// Holds each assertion until release closes; cancellable ends it with its context too.
+func (self *presenceActTestHostProvider) holdAssertions(cancellable bool) {
+	self.asked = make(chan *daemonRequestBound, 1)
+	self.release = make(chan struct{})
+	self.cancellable = cancellable
+	self.ended = make(chan error, 1)
+}
+
+func (self *presenceActTestHostProvider) Register(ctx context.Context) (*PresenceKeyHandle, error) {
+	inner := self.testPresenceProvider
+	inner.stateLock.Lock()
+	defer inner.stateLock.Unlock()
+	inner.registerCount += 1
+	key := newTestPresenceKey(inner.t, fmt.Sprintf("host key %d", inner.registerCount), inner.alg)
+	inner.keyIdKeys[hex.EncodeToString(key.keyId)] = key
+	return &PresenceKeyHandle{KeyId: bytes.Clone(key.keyId), Alg: key.alg, PublicKey: bytes.Clone(key.publicKey)}, nil
+}
+
+func (self *presenceActTestHostProvider) Assert(ctx context.Context, keyId []byte, message []byte) (*bridge.WebAuthnEvidence, error) {
+	if self.asked != nil {
+		self.asked <- daemonRequestBoundOf(ctx)
+		if self.cancellable {
+			select {
+			case <-self.release:
+			case <-ctx.Done():
+				self.ended <- ctx.Err()
+				return nil, ctx.Err()
+			}
+		} else {
+			<-self.release
+		}
+	}
+	return self.testPresenceProvider.Assert(ctx, keyId, message)
+}
+
+// What the host's authenticator answers in place of an assertion, nil to assert.
+func (self *presenceActTestHostProvider) refuseWith(err error) {
+	self.testPresenceProvider.stateLock.Lock()
+	defer self.testPresenceProvider.stateLock.Unlock()
+	self.testPresenceProvider.refuse = err
+}
+
+// How many assertions the host's authenticator made or refused.
+func (self *presenceActTestHostProvider) assertCount() int {
+	_, asserts := self.counts()
+	return asserts
+}
+
+// A live presence key of this sidecar's on the daemon host's own authenticator, set as the daemon's, with types
+// covered: the authenticator and the key's row.
+func (self *presenceActTestWorld) addHostKey(t *testing.T, signedTypes ...bridge.SignedType) (*presenceActTestHostProvider, *bridge.KeyRow) {
+	t.Helper()
+	host := newPresenceActTestHostProvider(t)
+	handle, err := host.Register(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := host.row(handle.KeyId, self.memberId, self.selfId)
+	self.authority.edit(func() {
+		self.authority.liveKeys = append(self.authority.liveKeys, row)
+		for _, signedType := range signedTypes {
+			self.authority.covered[signedType] = true
+		}
+	})
+	self.daemon.SetPresenceProvider(host)
+	return host, row
+}
+
+// The app's live key's row.
+func (self *presenceActTestWorld) appRow() *bridge.KeyRow {
+	return self.app.row(self.appKeyId, self.memberId, self.selfId)
+}
+
+// One confirmed control call on the app's session as a session runs it, under the daemon's request bound on the
+// test's clock, dispatched on a goroutine of its own: its response comes on the channel.
+func (self *presenceActTestWorld) boundedCall(t *testing.T, method string, params any) <-chan *daemonRpcResponse {
+	t.Helper()
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := json.Marshal(&daemonRpcRequest{JsonRpc: "2.0", Id: json.RawMessage("1"), Method: method, Params: encoded, UrConfirmed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &daemonSession{hello: &DaemonHello{UrLocal: 1, Mode: DaemonModeControl, Version: "synthetic-version"}, done: self.session}
+	answered := make(chan *daemonRpcResponse, 1)
+	go func() {
+		answered <- self.daemon.dispatch(line, session, self.daemon.runBounded)
+	}()
+	return answered
+}
+
+// A response's revocation reply.
+func presenceActTestRevokeReply(t *testing.T, response *daemonRpcResponse) *DaemonDevicesRevokeReply {
+	t.Helper()
+	if response.Error != nil {
+		t.Fatalf("the call: %v", response.Error)
+	}
+	reply := &DaemonDevicesRevokeReply{}
+	if err := json.Unmarshal(response.Result, reply); err != nil {
+		t.Fatal(err)
+	}
+	return reply
+}
+
+// The statements posted so far, each countersigned by key over one act of their count.
+func presenceActTestCountersignedBy(t *testing.T, posts []*bridge.Signed, key *bridge.KeyRow) {
+	t.Helper()
+	for index, signed := range posts {
+		if signed.GetWebauthn() == nil || signed.GetWebauthn().GetActSize() != uint32(len(posts)) {
+			t.Fatalf("statement %d carries no countersignature of the act", index)
+		}
+		if err := VerifyPresenceCountersignature(signed, bridge.SignedPurposeAuthority, key); err != nil {
+			t.Errorf("statement %d's countersignature: %v", index, err)
+		}
+	}
+}
+
+// QD-897's host case (owner decision 290): where the only live presence key is one the daemon host's own
+// authenticator holds, devices.revoke.begin answers no bytes, asking nothing of the person and signing nothing, and
+// devices.revoke.finish, with no app signature, runs the daemon's presence prompt once over the act's bytes, each
+// statement then carrying the host key's countersignature, the selected key's KeyRevoke among them.
+func TestHostKeyRevokesByTwoCalls(t *testing.T) {
+	world := newPresenceActTestWorld(t)
+	host, hostRow := world.addHostKey(t, bridge.SignedType_SIGNED_SIDECAR_REVOKE, bridge.SignedType_SIGNED_KEY_REVOKE)
+	otherKeyId := countingBytes(0x40, 32)
+	world.authority.edit(func() {
+		world.authority.keys[world.otherId] = []*bridge.KeyRow{{KeyId: otherKeyId, Purpose: bridge.KeyPurpose_KEY_PURPOSE_PRESENCE, Signer: world.otherId.Bytes(), At: 8}}
+	})
+	plan := world.previewOther(t)
+	if !plan.Presence {
+		t.Fatalf("the plan sets no Presence: %+v", plan)
+	}
+	begin := world.beginRevoke(t, plan, otherKeyId)
+	if len(begin.Countersigned) != 0 {
+		t.Fatal("the first call answered bytes for the app to sign where the host's authenticator holds every live key")
+	}
+	if host.assertCount() != 0 || len(world.deltaApi.postsSoFar()) != 0 {
+		t.Fatalf("the first call asked the host %d times and posted %d statements", host.assertCount(), len(world.deltaApi.postsSoFar()))
+	}
+	if world.heldAct(*begin.ActId) == nil {
+		t.Fatal("no act waits for the second call")
+	}
+
+	reply := &DaemonDevicesRevokeReply{}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesRevokeFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, reply); rpcErr != nil ||
+		reply.Refusal != nil || reply.Position == 0 {
+		t.Fatalf("the second call: %+v, %v", reply, rpcErr)
+	}
+	if host.assertCount() != 1 {
+		t.Errorf("the act ran %d host prompts, want one", host.assertCount())
+	}
+	if len(reply.RevokedKeyIds) != 1 || reply.RevokedKeyIds[0] != hex.EncodeToString(otherKeyId) {
+		t.Errorf("the keys revoked: %v", reply.RevokedKeyIds)
+	}
+	posts := world.posted(t)
+	if len(posts) != 2 || bridge.SignedType(posts[0].GetType()) != bridge.SignedType_SIGNED_SIDECAR_REVOKE ||
+		bridge.SignedType(posts[1].GetType()) != bridge.SignedType_SIGNED_KEY_REVOKE {
+		t.Fatalf("posted %d statements", len(posts))
+	}
+	presenceActTestCountersignedBy(t, posts, hostRow)
+	if world.heldCount() != 0 {
+		t.Errorf("%d acts held after the second call", world.heldCount())
+	}
+}
+
+// approvals.decide by the two calls under a host-held live key: an admission's SidecarAdmit answers no bytes at the
+// first call and signs at the second under the daemon's prompt.
+func TestHostKeyDecidesByTwoCalls(t *testing.T) {
+	world := newPresenceActTestWorld(t)
+	host, hostRow := world.addHostKey(t, bridge.SignedType_SIGNED_SIDECAR_ADMIT)
+	newDevice := NewId()
+	approvalId, err := world.sidecar.OpenAdmission(&SidecarAdmissionRequest{SidecarId: newDevice, MemberId: world.memberId, IdentityPublicKey: bytes.Repeat([]byte{9}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := &DaemonPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodApprovalsDecideBegin, &DaemonApprovalsDecideParams{ApprovalId: approvalId, Decision: SidecarDecisionApprove}, begin); rpcErr != nil ||
+		begin.Refusal != nil || begin.ActId == nil || len(begin.Countersigned) != 0 {
+		t.Fatalf("the first call: %+v, %v", begin, rpcErr)
+	}
+	if host.assertCount() != 0 || len(world.deltaApi.postsSoFar()) != 0 {
+		t.Fatal("the first call asked the host or posted")
+	}
+	reply := &DaemonApprovalsDecideReply{}
+	if rpcErr := world.appCall(t, DaemonMethodApprovalsDecideFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, reply); rpcErr != nil ||
+		reply.Refusal != nil || reply.Pending {
+		t.Fatalf("the admission: %+v, %v", reply, rpcErr)
+	}
+	posts := world.posted(t)
+	if len(posts) != 1 || bridge.SignedType(posts[0].GetType()) != bridge.SignedType_SIGNED_SIDECAR_ADMIT || host.assertCount() != 1 {
+		t.Fatalf("posted %d statements after %d host prompts", len(posts), host.assertCount())
+	}
+	presenceActTestCountersignedBy(t, posts, hostRow)
+	admit := &protocol.SidecarAdmit{}
+	postedBody(t, posts[0], admit)
+	if !bytes.Equal(admit.GetSidecarId(), newDevice.Bytes()) {
+		t.Errorf("the admission: %+v", admit)
+	}
+}
+
+// An app-held live key keeps the app's path whatever the host holds: where the host has an authenticator but the only
+// live key is the app's, and where a host key and an app key are both live, the first call answers the act's bytes,
+// the second signs with the app's evidence alone, and the host is never asked.
+func TestAppKeyKeepsTheAppsPath(t *testing.T) {
+	for _, hostKeyLive := range []bool{false, true} {
+		world := newPresenceActTestWorld(t)
+		world.addAppKey(t, bridge.SignedType_SIGNED_SIDECAR_REVOKE)
+		host := newPresenceActTestHostProvider(t)
+		if hostKeyLive {
+			host, _ = world.addHostKey(t)
+		} else {
+			// a key the host holds, none of this sidecar's live ones
+			if _, err := host.Register(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			world.daemon.SetPresenceProvider(host)
+		}
+		begin := world.beginRevoke(t, world.previewOther(t))
+		if len(begin.Countersigned) == 0 {
+			t.Fatalf("host key live %t: the first call answered no bytes for the app's live key", hostKeyLive)
+		}
+		reply := &DaemonDevicesRevokeReply{}
+		if rpcErr := world.appCall(t, DaemonMethodDevicesRevokeFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId, Evidence: world.appSign(t, begin.Countersigned)}, reply); rpcErr != nil ||
+			reply.Refusal != nil || reply.Position == 0 {
+			t.Fatalf("host key live %t: the second call: %+v, %v", hostKeyLive, reply, rpcErr)
+		}
+		posts := world.posted(t)
+		if len(posts) != 1 {
+			t.Fatalf("host key live %t: posted %d statements", hostKeyLive, len(posts))
+		}
+		presenceActTestCountersignedBy(t, posts, world.appRow())
+		if !presenceActTestChallengeIs(posts[0].GetWebauthn(), begin.Countersigned) {
+			t.Errorf("host key live %t: the countersignature is over other bytes than the first call's", hostKeyLive)
+		}
+		if host.assertCount() != 0 {
+			t.Errorf("host key live %t: the host was asked %d times on the app's path", hostKeyLive, host.assertCount())
+		}
+	}
+}
+
+// The app's own KeyRegister beside a host-held live key: the first call answers the bytes the app's new key proves
+// itself over, the second takes that proof and answers no bytes, and the third, with no app signature, signs under the
+// daemon's prompt: the KeyRegister carries the new key's proof and the host key's countersignature.
+func TestAppRegistersItsKeyBesideAHostKey(t *testing.T) {
+	world := newPresenceActTestWorld(t)
+	host, hostRow := world.addHostKey(t, bridge.SignedType_SIGNED_KEY_REGISTER)
+	app := newTestPresenceProvider(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	handle, err := app.Register(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.Holds(handle.KeyId) {
+		t.Fatal("the host holds the app's new key")
+	}
+	begin := &DaemonKeysPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodKeysPresenceBegin, &DaemonKeysPresenceBeginParams{
+		KeyId: handle.KeyId, Alg: DaemonPresenceAlgWebAuthnEs256, PublicKey: handle.PublicKey,
+	}, begin); rpcErr != nil || begin.ActId == nil || len(begin.Proof) == 0 {
+		t.Fatalf("the first call: %+v, %v", begin, rpcErr)
+	}
+	proof, err := app.Assert(t.Context(), handle.KeyId, begin.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedProof, err := proto.Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proved := &DaemonPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodKeysPresenceProve, &DaemonPresenceFinishParams{ActId: *begin.ActId, Evidence: encodedProof}, proved); rpcErr != nil ||
+		proved.Refusal != nil || proved.ActId == nil || len(proved.Countersigned) != 0 {
+		t.Fatalf("the second call: %+v, %v", proved, rpcErr)
+	}
+	if host.assertCount() != 0 || len(world.deltaApi.postsSoFar()) != 0 {
+		t.Fatal("the second call asked the host or posted")
+	}
+	reply := &DaemonKeysPresenceReply{}
+	if rpcErr := world.appCall(t, DaemonMethodKeysPresenceFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, reply); rpcErr != nil ||
+		reply.Refusal != nil || reply.Position == 0 || !bytes.Equal(reply.KeyId, handle.KeyId) {
+		t.Fatalf("the third call: %+v, %v", reply, rpcErr)
+	}
+	posts := world.posted(t)
+	if len(posts) != 1 || bridge.SignedType(posts[0].GetType()) != bridge.SignedType_SIGNED_KEY_REGISTER || host.assertCount() != 1 {
+		t.Fatalf("posted %d statements after %d host prompts", len(posts), host.assertCount())
+	}
+	registered := &protocol.KeyRegister{}
+	postedBody(t, posts[0], registered)
+	if err := VerifyPresenceRegistration(registered, posts[0]); err != nil || !bytes.Equal(registered.GetKeyId(), handle.KeyId) {
+		t.Fatalf("the KeyRegister's proof by the app's new key: %v", err)
+	}
+	presenceActTestCountersignedBy(t, posts, hostRow)
+}
+
+// A declined host prompt signs nothing: a revocation, a decision and the app's own KeyRegister each answer
+// REVOKE_CANCELLED at their last call, nothing posted, the act spent and the decision's item still open; the plan
+// stands, and the person's yes at the next prompt signs it.
+func TestDeclinedHostPromptSignsNothing(t *testing.T) {
+	world := newPresenceActTestWorld(t)
+	host, hostRow := world.addHostKey(t, bridge.SignedType_SIGNED_SIDECAR_REVOKE, bridge.SignedType_SIGNED_SIDECAR_ADMIT, bridge.SignedType_SIGNED_KEY_REGISTER)
+	host.refuseWith(errors.New("the person declined"))
+
+	plan := world.previewOther(t)
+	begin := world.beginRevoke(t, plan)
+	reply := &DaemonDevicesRevokeReply{}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesRevokeFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, reply); rpcErr != nil ||
+		reply.Refusal == nil || reply.Refusal.Code != DeviceRevokeCodeCancelled {
+		t.Fatalf("a declined revocation: %+v, %v", reply, rpcErr)
+	}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesRevokeFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, reply); rpcErr == nil ||
+		!strings.Contains(rpcErr.Message, ErrDaemonPresenceActUnknown.Error()) {
+		t.Fatalf("a second answer of a declined act: %v", rpcErr)
+	}
+
+	approvalId, err := world.sidecar.OpenAdmission(&SidecarAdmissionRequest{SidecarId: NewId(), MemberId: world.memberId, IdentityPublicKey: bytes.Repeat([]byte{9}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decide := &DaemonPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodApprovalsDecideBegin, &DaemonApprovalsDecideParams{ApprovalId: approvalId, Decision: SidecarDecisionApprove}, decide); rpcErr != nil ||
+		decide.ActId == nil || len(decide.Countersigned) != 0 {
+		t.Fatalf("the decision's first call: %+v, %v", decide, rpcErr)
+	}
+	decided := &DaemonApprovalsDecideReply{}
+	if rpcErr := world.appCall(t, DaemonMethodApprovalsDecideFinish, &DaemonPresenceFinishParams{ActId: *decide.ActId}, decided); rpcErr != nil ||
+		decided.Refusal == nil || decided.Refusal.Code != DeviceRevokeCodeCancelled {
+		t.Fatalf("a declined decision: %+v, %v", decided, rpcErr)
+	}
+	items, err := world.sidecar.PendingApprovals()
+	if err != nil || !slices.ContainsFunc(items, func(item *SidecarApprovalItem) bool { return item.ApprovalId == approvalId }) {
+		t.Fatalf("a declined admission closed its item: %+v %v", items, err)
+	}
+
+	app := newTestPresenceProvider(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	handle, err := app.Register(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBegin := &DaemonKeysPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodKeysPresenceBegin, &DaemonKeysPresenceBeginParams{
+		KeyId: handle.KeyId, Alg: DaemonPresenceAlgWebAuthnEs256, PublicKey: handle.PublicKey,
+	}, keyBegin); rpcErr != nil || keyBegin.ActId == nil {
+		t.Fatalf("the key's first call: %+v, %v", keyBegin, rpcErr)
+	}
+	proof, err := app.Assert(t.Context(), handle.KeyId, keyBegin.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedProof, _ := proto.Marshal(proof)
+	proved := &DaemonPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodKeysPresenceProve, &DaemonPresenceFinishParams{ActId: *keyBegin.ActId, Evidence: encodedProof}, proved); rpcErr != nil ||
+		proved.Refusal != nil || len(proved.Countersigned) != 0 {
+		t.Fatalf("the key's second call: %+v, %v", proved, rpcErr)
+	}
+	registered := &DaemonKeysPresenceReply{}
+	if rpcErr := world.appCall(t, DaemonMethodKeysPresenceFinish, &DaemonPresenceFinishParams{ActId: *keyBegin.ActId}, registered); rpcErr != nil ||
+		registered.Refusal == nil || registered.Refusal.Code != DeviceRevokeCodeCancelled {
+		t.Fatalf("a declined KeyRegister: %+v, %v", registered, rpcErr)
+	}
+	if posts := world.deltaApi.postsSoFar(); len(posts) != 0 {
+		t.Fatalf("%d statements posted under declined prompts", len(posts))
+	}
+	if host.assertCount() != 3 {
+		t.Errorf("%d host prompts, want one an act", host.assertCount())
+	}
+
+	// the plan stands for the person's next try, and a yes signs it
+	host.refuseWith(nil)
+	begin = world.beginRevoke(t, plan)
+	signed := &DaemonDevicesRevokeReply{}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesRevokeFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, signed); rpcErr != nil ||
+		signed.Refusal != nil || signed.Position == 0 {
+		t.Fatalf("the next try: %+v, %v", signed, rpcErr)
+	}
+	presenceActTestCountersignedBy(t, world.posted(t), hostRow)
+}
+
+// QD-518: the person's wait at the host's prompt is outside the second call's request bound. The prompt asks under
+// that call's bound, which stands still while it is held past twice the bound on the daemon's clock; the call, run as a
+// session runs it, neither times out nor ends its act, and answers the revocation once the person says yes.
+func TestHostPromptWaitsOutsideTheRequestBound(t *testing.T) {
+	world := newPresenceActTestWorld(t)
+	host, hostRow := world.addHostKey(t, bridge.SignedType_SIGNED_SIDECAR_REVOKE)
+	host.holdAssertions(false)
+	begin := world.beginRevoke(t, world.previewOther(t))
+	answered := world.boundedCall(t, DaemonMethodDevicesRevokeFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId})
+	bound := <-host.asked
+	if bound == nil {
+		t.Fatal("the host's prompt asks under no request's bound")
+	}
+	world.clock.advance(2 * world.daemon.settings.Local.RequestTimeout)
+	expired := func() bool {
+		bound.stateLock.Lock()
+		defer bound.stateLock.Unlock()
+		return bound.done
+	}()
+	if expired {
+		t.Fatal("the second call's bound ran out while the person was asked")
+	}
+	close(host.release)
+	reply := presenceActTestRevokeReply(t, <-answered)
+	if reply.Refusal != nil || reply.Position == 0 {
+		t.Fatalf("the second call: %+v", reply)
+	}
+	posts := world.posted(t)
+	if len(posts) != 1 {
+		t.Fatalf("posted %d statements", len(posts))
+	}
+	presenceActTestCountersignedBy(t, posts, hostRow)
+}
+
+// An act that ends while the host's prompt asks the person signs nothing: the app's session ends mid-prompt, and the
+// prompt ends with the act where the authenticator honours that; where it answers yes all the same, nothing is signed
+// either. The second call answers REVOKE_CANCELLED.
+func TestHostPromptEndsWithItsSession(t *testing.T) {
+	for _, cancellable := range []bool{true, false} {
+		world := newPresenceActTestWorld(t)
+		host, _ := world.addHostKey(t, bridge.SignedType_SIGNED_SIDECAR_REVOKE)
+		host.holdAssertions(cancellable)
+		begin := world.beginRevoke(t, world.previewOther(t))
+		act := world.heldAct(*begin.ActId)
+		answered := world.boundedCall(t, DaemonMethodDevicesRevokeFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId})
+		<-host.asked
+		close(world.session)
+		<-act.ended
+		if cancellable {
+			if err := <-host.ended; !errors.Is(err, context.Canceled) {
+				t.Errorf("the prompt ended by %v, not with its act", err)
+			}
+		} else {
+			// the person says yes after the act ended
+			close(host.release)
+		}
+		reply := presenceActTestRevokeReply(t, <-answered)
+		if reply.Refusal == nil || reply.Refusal.Code != DeviceRevokeCodeCancelled {
+			t.Fatalf("cancellable %t: the second call after its session ended: %+v", cancellable, reply)
+		}
+		<-act.done
+		if revokeCode(act.err) != DeviceRevokeCodeCancelled {
+			t.Errorf("cancellable %t: the act's run answered %v", cancellable, act.err)
+		}
+		if posts := world.deltaApi.postsSoFar(); len(posts) != 0 {
+			t.Fatalf("cancellable %t: %d statements posted by an act that ended mid-prompt", cancellable, len(posts))
+		}
+	}
+}
+
+// A cosign by the two calls under a host-held live key: devices.cosign.begin answers no bytes, and the second call
+// signs the AuthorityCosign under the daemon's prompt, carrying the host key's countersignature.
+func TestHostKeyCosignsByTwoCalls(t *testing.T) {
+	world := newPresenceActTestWorld(t)
+	host, hostRow := world.addHostKey(t, bridge.SignedType_SIGNED_AUTHORITY_COSIGN)
+	world.authority.edit(func() { world.authority.suspended[world.otherId] = true })
+	proposalId := world.propose(world.otherId, NewId(), bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)
+	begin := &DaemonPresenceBeginReply{}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesCosignBegin, &DaemonDevicesProposalParams{ProposalId: hex.EncodeToString(proposalId)}, begin); rpcErr != nil ||
+		begin.ActId == nil || len(begin.Countersigned) != 0 {
+		t.Fatalf("the first call: %+v, %v", begin, rpcErr)
+	}
+	if host.assertCount() != 0 || len(world.deltaApi.postsSoFar()) != 0 {
+		t.Fatal("the first call asked the host or posted")
+	}
+	reply := &DaemonDevicesCosignReply{}
+	if rpcErr := world.appCall(t, DaemonMethodDevicesCosignFinish, &DaemonPresenceFinishParams{ActId: *begin.ActId}, reply); rpcErr != nil ||
+		reply.Refusal != nil || reply.Position == 0 {
+		t.Fatalf("the second call: %+v, %v", reply, rpcErr)
+	}
+	posts := world.posted(t)
+	if len(posts) != 1 || bridge.SignedType(posts[0].GetType()) != bridge.SignedType_SIGNED_AUTHORITY_COSIGN || host.assertCount() != 1 {
+		t.Fatalf("posted %d statements after %d host prompts", len(posts), host.assertCount())
+	}
+	presenceActTestCountersignedBy(t, posts, hostRow)
 }
