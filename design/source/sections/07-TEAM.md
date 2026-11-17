@@ -542,22 +542,20 @@ cascade     (D-TEAM-26) SidecarRevoke{reason: compromise, since_n} parks a closu
             person gives, which the person may move earlier, lists for its person and admins what P parks and
             voids, what stands (below) and each device that sealed keychain.wrap to a binding it voids (its
             member's devices live while that binding was current; Recovery's after), and signs on confirmation
-            (§5.6); after a compromise rebind at r, the proposal is clamped to r + 1 for the rebind's signer
-            and for any device whose closure would reach it, so the rebind stands unless the person moves
-            since_n earlier, and the signer goes last, revoked by the replacement it enrolls (§5.9; owner
-            decision 212); a record counts from the entry that carried it (a statement's own, or the base whose config
-            head first holds it), never from its signer's at; in position order from since_n, P holds the
-            revoked sidecar, each sidecar whose admission a sidecar then in P signed or whose park such a
-            sidecar's AdmissionConfirm lifted, each whose consent (§8.5) rests only on such a sidecar's
-            OwnerConfirm, a confirmation of a device then unparked and consented on other signatures adding
-            none, each sidecar a recovery key admitted, alone or in a proposal, under a binding such a sidecar
-            signed, each admitted under a Delegation such a sidecar signed, which is void, and, where a
-            Delegation admitted the revoked sidecar, each sidecar that Delegation admitted from since_n on,
-            the Delegation ending at the revocation's position (delegation); api and readers refuse the
-            revocation if P would hold one of its signers; every RecoveryBind or RecoveryRebind,
-            KeyRegister and EvsShare a sidecar then in P signed is void until a signer outside P signs it
-            again; a void restores the newest earlier binding not void, which is no current binding until a
-            signer outside P signs it again: it takes no wrap (§10.5) and no keychain seal, M's devices
+            (§5.6); after a compromise rebind, §5.9's procedure clamps the proposal so the rebind stands and
+            revokes the rebind's signer last (owner decision 212); a record counts from the entry that carried
+            it (a statement's own, or the base whose config head first holds it), never from its signer's at;
+            in position order from since_n, P holds the revoked sidecar, each sidecar whose admission a sidecar
+            then in P signed or whose park such a sidecar's AdmissionConfirm lifted, each whose consent (§8.5)
+            rests only on such a sidecar's OwnerConfirm, a confirmation of a device then unparked and consented
+            on other signatures adding none, each sidecar a recovery key admitted, alone or in a proposal,
+            under a binding such a sidecar signed, each admitted under a Delegation such a sidecar signed,
+            which is void, and, where a Delegation admitted the revoked sidecar, each sidecar that Delegation
+            admitted from since_n on, the Delegation ending at the revocation's position (delegation); api and
+            readers refuse the revocation if P would hold one of its signers; every RecoveryBind or
+            RecoveryRebind, KeyRegister and EvsShare a sidecar then in P signed is void until a signer outside
+            P signs it again; a void restores the newest earlier binding not void, which is no current binding
+            until a signer outside P signs it again: it takes no wrap (§10.5) and no keychain seal, M's devices
             re-sealing keychain.wrap with no HPKE copy (§5.9), its admissions activate only by Recovery's
             window, and M's devices alarm; grants, approvals, suspensions and unsuspensions, access-log
             statements, SponsorSets, IndexerSets, MemberAdmits and config heads signed in P stand until revoked
@@ -1162,8 +1160,7 @@ cards    from n' (for a reap, its tick's position), every reader masks in the te
          tagged agents (owner decision 83); the directory's network-scope indexer, else any member device
          but a read_only one after 24 h, removes the revoked sidecars' cards and notices in one push that
          lists each (§16.11)
-confirm  the revoking device shows the revocation unwitnessed until a HeadCheck peer holds its position,
-         retrying every 10 min and at each start; the console alarms after 1 h (§6.4)
+confirm  the revoking device shows the revocation unwitnessed as §6.4's revoker row says
 ```
 
 - **No committer online:** the gate refuses writes until any writer, wrapped ones included, claims a covering generation (§10.5); removed devices keep only what they could decrypt (lazy revocation, PLAN.md:47-50). No server transaction changes readers (owner decisions 5, 59).
@@ -1343,7 +1340,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 | After a site loss, one compromised member device pre-empts log positions with a forged TICK (any time_ms), a reordered statement or one it signs, forking every longer tail, or a device's longer tail goes unuploaded | Low | High | uploads only from member devices in reseed mode, matched to the restored `network_acl_head`; api adopts an entry only once devices of two members hold its digest, and checks the newest adopted base against the re-seeded config repo; a forged activation raises `recovery_unseen`; a device whose tail passes the stop sees a FORK and keeps the evidence (7.9) |
 | A compromised device spends its network's daily append limit, delaying admissions and approvals | Low | Medium | revocations, Suspend and vetoes are exempt, so admins revoke it at once; 429s carry `retry_after_ms`, and the day's budget refills within 24 h (7.9) |
 | A thief holding a member's unlocked device that registered no presence key, or who knows its passcode or its security key's PIN, signs what 7.9's presence row covers on a confirmation alone | Low | High | `ur login` and the apps offer a platform presence key (owner decision 142), after which every such statement needs its countersignature (owner decisions 185, 187, 189); every member device sees each revocation and offers to revoke its signer; disclosed (§2.10) |
-| A device's only presence key, a security key, is lost, so the device signs nothing 7.9's presence row covers, a new key's `KeyRegister` included, until another device of its member revokes that key or its `not_after` passes | Low | Medium | `ur keys rm` from another of the member's devices, countersigned by that device's own presence key, which a device with none first registers (§16.6's register and remove rows); a second key registered while the first works; a member with no other device admits one by its recovery code (§5.9), since the lost key also blocks this device's admissions (owner decision 189) |
+| A device's only presence key, a security key, is lost, so the device signs nothing 7.9's presence row covers until that key is revoked or its `not_after` passes (§16.17's row) | Low | Medium | §16.17's row (owner decision 189) |
 | A member whose devices are all page Workers, which §8.5 never consents, or one that never answers its alarms after an admin's device admits its Worker (always so with `self_admit` off), keeps each Worker that no group of the admitting device seated, one admission per eviction toward `config_admissions` (7.10's `stale` row; §20.4) | Low | Medium | admins' devices revoke every Worker they saw stale-removed (D-TEAM-29); the member's next `OwnerConfirm` or alarm answer frees the rest; from 90% of the cap every admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row), so none waits for the cap's refusal; FS-97 |
 
 ### 7.19 Phasing

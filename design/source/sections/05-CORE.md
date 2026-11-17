@@ -1016,7 +1016,7 @@ None: PLAN.md:14 and :59's git identity hold, and D-CORE-1 reads "encryption key
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | A same-user agent uses the sidecar's token or keys (owner decision 47) | High | High | the P0, D-TEAM-14, ClientKey proofs, the gate |
-| A same-uid process, such as a prompt-injected agent's shell, forges a PermissionRequest hook event (owner decisions 47, 75) | Medium | High | §16.6's presence prompt and the presence key `ur login` offers; harness evidence never signs key, consent or authority statements, and in a tainted run counts only where a `requests` rule names it (owner decision 142); records mark `source = hook` |
+| A same-uid process, such as a prompt-injected agent's shell, forges a PermissionRequest hook event (owner decisions 47, 75) | Medium | High | §16.17's row (owner decision 142) |
 | The app's `.auth_state` or the extension's `chrome.storage.local` on the same host holds a network `by_jwt` | Medium | Critical | §7.4's stage 2, before the first desktop sidecar, waits for the app (§18.7) and extension releases that stop persisting it (owner decision 45); until then, preview networks only and 5.6's enrollment refusal (D-TRUST-3) |
 | A sidecar ships before the P0 | Medium | Critical | fail closed (D-CORE-7) |
 | A store loses its item, or a host reports a lock as absence | Medium | High | D-CORE-15: `keystore_lost` and the person's confirmation, never a silent new identity; the pass's wrap of U |
