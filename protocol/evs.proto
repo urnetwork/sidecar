@@ -371,9 +371,10 @@ enum EvsRepoState {
 }
 
 // 11.8's fixed code table: EvsRefusal's code, and EvsRefusalReply's. Each code has one status, which EVS-FORMAT.md
-// gives. Below 64, what the head's refusal records may hold; from 64, refusals the head or a terminal repo/ state
-// settles, which are never recorded; from 128, answers that refuse nothing. Format 2's refusals are numbered from
-// format 1, so a format-1 binary after a rollback answers a recorded one by its code rather than an unknown number.
+// gives, and every answer of evs's but a 200 carries one (owner decision 411). Below 64, what the head's refusal
+// records may hold; from 64, final refusals, which are never recorded; from 128, answers that refuse nothing. Format
+// 2's refusals are numbered from format 1, so a format-1 binary after a rollback answers a recorded one by its code
+// rather than an unknown number.
 enum EvsRefusalCode {
   EVS_REFUSAL_CODE_UNSPECIFIED = 0;
   EVS_REFUSAL_SCOPE = 1;
@@ -416,6 +417,7 @@ enum EvsRefusalCode {
   EVS_REFUSAL_MAP_SOURCE = 75;          // a PATH_EPOCH whose map's source is unknown, under another chain or of an
                                         // epoch no longer current, or a map part whose key holds other bytes: the
                                         // mapper maps again, where MAP_PARTS uploads again (DESIGN-DETAILS 9.2.6)
+  EVS_REFUSAL_REPO_PLACED = 76;         // 409: another creator placed this id; the client picks another
 
   EVS_REFUSAL_INVALID = 128;            // a body, statement or signature that does not parse or verify
   EVS_REFUSAL_NOT_FOUND = 129;
@@ -426,6 +428,8 @@ enum EvsRefusalCode {
   EVS_REFUSAL_RESOURCE_EXHAUSTED = 134;
   EVS_REFUSAL_WAIT = 135;               // 429 for a lease, a fence, or a refusal meeting 8 live records
   EVS_REFUSAL_UNAVAILABLE = 136;        // 503: the store unreachable, evs's clock unsure, or the outcome unknown
+  EVS_REFUSAL_UNAUTHENTICATED = 137;    // 401: a token that does not authenticate, or one a rev/ object voids; the
+                                        // daemon mints a new token
 }
 
 // EvsRefusalReply.outcome: whether an attempt may yet have committed, which only a 503 leaves open.

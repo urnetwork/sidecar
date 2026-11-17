@@ -153,9 +153,10 @@ func TestEvsEnumNumbersStable(t *testing.T) {
 				"EVS_REFUSAL_BASE_STALE": 67, "EVS_REFUSAL_PATH_CONFLICT": 68, "EVS_REFUSAL_PATH_EPOCH": 69,
 				"EVS_REFUSAL_SHREDDING": 70, "EVS_REFUSAL_DROP_KIND": 71, "EVS_REFUSAL_SEGMENT_STALE": 72,
 				"EVS_REFUSAL_STATEMENT_MISSING": 73, "EVS_REFUSAL_GROUP_NOT_READY": 74, "EVS_REFUSAL_MAP_SOURCE": 75,
-				"EVS_REFUSAL_INVALID": 128, "EVS_REFUSAL_NOT_FOUND": 129, "EVS_REFUSAL_PARTS_MISSING": 130,
-				"EVS_REFUSAL_BUSY": 131, "EVS_REFUSAL_FOLD_BEHIND": 132, "EVS_REFUSAL_TIME_AHEAD": 133,
-				"EVS_REFUSAL_RESOURCE_EXHAUSTED": 134, "EVS_REFUSAL_WAIT": 135, "EVS_REFUSAL_UNAVAILABLE": 136,
+				"EVS_REFUSAL_REPO_PLACED": 76, "EVS_REFUSAL_INVALID": 128, "EVS_REFUSAL_NOT_FOUND": 129,
+				"EVS_REFUSAL_PARTS_MISSING": 130, "EVS_REFUSAL_BUSY": 131, "EVS_REFUSAL_FOLD_BEHIND": 132,
+				"EVS_REFUSAL_TIME_AHEAD": 133, "EVS_REFUSAL_RESOURCE_EXHAUSTED": 134, "EVS_REFUSAL_WAIT": 135,
+				"EVS_REFUSAL_UNAVAILABLE": 136, "EVS_REFUSAL_UNAUTHENTICATED": 137,
 			},
 		},
 		{
@@ -195,7 +196,7 @@ func TestEvsRefusalCodesKeepTheirRanges(t *testing.T) {
 		switch {
 		case number < 0 || 1<<16 <= number:
 			t.Errorf("%s is %d, past the record's 2 bytes", name, number)
-		case 25 < number && number < 64, 75 < number && number < 128, 136 < number:
+		case 25 < number && number < 64, 76 < number && number < 128, 137 < number:
 			t.Errorf("%s is %d, outside the ranges EVS-FORMAT.md gives", name, number)
 		case 0 < number && number < 64:
 			recordable++
