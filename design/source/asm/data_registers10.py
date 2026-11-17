@@ -73,3 +73,7 @@ D['D-EVS-33'] = "One write budget per metadata cluster (0.8 DWPD, 50% write IOPS
 assert D['D-QUOTA-8'].startswith('Taskworker rolls usage') and D['D-QUOTA-2'].startswith('Limits and prices'), 'QUOTA rows moved'
 D['D-QUOTA-2'] = "Limits and prices come only from pro.yml with overrides; limits and local pre-checks ship dark; a missing price withholds overage."
 D['D-QUOTA-8'] = "Taskworker rolls usage into daily rows for pre-aggregated daily Stripe meters, and grants each Team period at its anchor."
+# §22's and §23's fold (2026-11-16): Q-OPS-11, the segment placement's home and lead time (owner decision 550).
+assert 'Q-OPS-11' not in Q, 'Q-OPS-11 exists'
+Q['Q-OPS-11'] = ("When does the segment placement get a design and a home, and what is its lead time?",
+                 "(a) a tracked item, 26-week lead; its design due 8 weeks after M3's exit.")

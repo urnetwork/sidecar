@@ -100,6 +100,9 @@ type Sidecar struct {
 	// What an executed drop reaches beside the mirror and the index cache (state_drop_apply.go). Held as any, as search
 	// is: the forwarding leg applies no drop.
 	drops atomic.Value
+	// An app host's approval parts: the approval log installed in place of the record's, and the phone's part
+	// (record_approval_app.go). Held as any, as search is: the forwarding leg decides no approval.
+	approvalApps atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle

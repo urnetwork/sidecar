@@ -279,7 +279,7 @@ type ApprovalWorldRequests struct {
 
 // The world's requests as another device's approver side reads them.
 func (self *ApprovalWorld) Requests() *ApprovalWorldRequests {
-	return &ApprovalWorldRequests{world: self, logId: NewApprovalWorldIdOf("log " + self.name)}
+	return &ApprovalWorldRequests{world: self, logId: self.LogId()}
 }
 
 func (self *ApprovalWorldRequests) Pending(ctx context.Context) ([]*sidecar.RecordPendingApproval, error) {

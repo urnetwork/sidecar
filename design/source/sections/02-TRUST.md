@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v42; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v43; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -268,6 +268,13 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # v42, updated 2026-11-16 for §20's items (owner decision 517 and the build's accepted fixes QD-090 and QD-094),
 # adds no row: api-13's Team overage rows with the transfer overage's two helper rows, and its lease tokens'
 # 15 min ttl beside a carved debit's 24 h; and connect-1's payer_network_id, which marks a relayed contract.
+# v43, updated 2026-11-16 for §21's items (owner decisions 526, 527, 529 and 536, and the build's accepted
+# fixes QD-088 and QD-195), adds no row: api-14's copied rows take connect-1's contract rows, copied at
+# placement, and the rows a held network's deletions remove, copied in their own transaction, evs-7's and
+# ops-1's 7-day logs staying outside every hold; api-14 also takes POST /abuse/report's attempt histories in
+# Redis, the legal-request mailbox's records of a hold's placement, renewal and end, and a case's last close;
+# connect-1's reapers and drops wait for an unfinished hold copy; and evs-19's scope is the network or 1 to 16
+# repo ids.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -285,19 +292,22 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # about 8 months (ops-3).
 # Holds (owner decision 133; api-14, evs-19): a preservation hold keeps one network's in-scope rows and
 # objects that exist at placement until its kind's deadline: 90 d, renewable once, or 1 year for a §2258A
-# report (api-14). TTL sweeps, GC, drop jobs and gkm's reconciler skip them, and copied_rows copies what drops
-# or is overwritten on its own: rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the in-scope Redis
-# soft state existing at placement (evs-8's lease fields, gkm-10's acks). It collects nothing new, and
-# users' shredding (--now, the 7-day timer, per-entry erasure) always proceeds, a hold keeping only the
-# ciphertext a shred leaves (§11.12); a drop is no user's shredding, and its deletions wait with no sign of the
-# hold (owner decision 184; evs-19).
+# report (api-14). Its scope is the network or 1 to 16 repo ids, server rows always held at the network
+# (owner decision 527). TTL sweeps, GC, drop jobs and gkm's reconciler skip them, and copied_rows copies what
+# drops or is overwritten on its own: rows of partitions that drop whole (tls-3, smtp-3, mx-2), connect-1's
+# contract rows naming a client of the network (owner decision 529), the rows a network's or client's deletion
+# removes, in its own transaction, the deletion reading as done (owner decision 526), and the in-scope Redis
+# soft state existing at placement (evs-8's lease fields, gkm-10's acks); evs-7's and ops-1's 7-day logs stay
+# outside every hold. It collects nothing new, and users' shredding (--now, the 7-day timer, per-entry erasure)
+# always proceeds, a hold keeping only the ciphertext a shred leaves (§11.12); a drop is no user's shredding,
+# and its deletions wait with no sign of the hold (owner decision 184; evs-19).
 # gkm rows give §10.6's visible values, as owner decision 115 confirmed them.
 connect-1:
   service: connect (relays, residents) and api's contract service
   store: transfer_contract, contract_close, contract_close_report (existing); the Redis contract-hole projection (existing)
   sees: source and destination client ids; contract ids; a relayed sidecar contract's payer_network_id, which its one INSERT sets (§20.6); ProvideMode (Network, Service, FriendsAndFamily); roles, principal, source subject and source network, the contract class (control or data; §6.4) and the subject's WindowDelegation (subject, window client and key, target, expiry, share, its signer, the subject's identity key or its forwarding Delegation's key, and a share's ShareCert with its config generation, ShareSigner key and expiry, §17.9), all sealed in every mode (C13); per-party close reports (client, contract, bytes and the time each was received, a checkpoint at each idle receive-sequence exit among them), which pair the two clients; the contract-hole projection's client pairs
   why: route, authorize, settle and meter transfers; issue Service only for Find-recorded pairs (§6.10.1), and control contracts only between two admitted sidecars of one network, neither revoked, parked nor suspended, for witnesses (§6.4, §8.10); debit relayed bytes (owner decision 10)
-  ttl: contracts expire within 60 min; resolved ones go at the contract horizon, 35 to 91 d by its runtime control (server/model/contract_horizon_reaper.go, server.ContractRetention), from the partition cutover with their week; while the reaper is off, paid ones (shares) 7 d after payout and unpaid ones (Network, Service) at 300 d (server/model/subscription_model.go:47-52); a contract the reaper's keep rules hold stays until they clear; close-report evidence at the same horizon (server/db_contract_close_evidence_horizon.go); projection keys with their contract, and in ops-3's bundles
+  ttl: contracts expire within 60 min; resolved ones go at the contract horizon, 35 to 91 d by its runtime control (server/model/contract_horizon_reaper.go, server.ContractRetention), from the partition cutover with their week; while the reaper is off, paid ones (shares) 7 d after payout and unpaid ones (Network, Service) at 300 d (server/model/subscription_model.go:47-52); a contract the reaper's keep rules hold stays until they clear; close-report evidence at the same horizon (server/db_contract_close_evidence_horizon.go); projection keys with their contract, and in ops-3's bundles; a hold's copy excepted (api-14), the horizon reaper, the close-evidence horizon and the weekly partition drops waiting only while a hold placed before their range's end has an unfinished copy (owner decision 529)
   owner: §6.10
 connect-2:
   service: connect relays (residents)
@@ -415,10 +425,10 @@ api-13:
   owner: §20.14
 api-14:
   service: api (abuse role), the taskworker abuse worker
-  store: abuse_case, abuse_action, abuse_appeal, network_abuse_state, abuse_legal_hold (keyed by network, case and part), abuse_access_log, legal_request; the task tables pending_task and finished_task (existing), for each hold's end pass; the abuse and legal-request mailboxes' sealed copies, off site (§21.10)
-  sees: abuse cases (category, target host, label or network, join keys, reporter class, and a reported URL's path and query until the case's first review ends), actions (kills, halts, suspensions, cap tightening, and platform-wide breaker levels as rows with no network) and appeals with reviewers' reasons, with a reviewer id, the staff member's opaque id and never a customer's, on each read, review and appeal decision, and the legal and engineering ids that sign a production off; each network's standing; holds (network, case, part, kind, scope, and place, report, renew and expire times) and their copied_rows and copy_state, the in-scope records that drop or are overwritten on their own, namely rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks), in parts of at most 16 MiB of compressed rows, part 0 the hold itself; for each hold it ends, its sweep pass's network, scope's repo ids and placement and end times in the pass's task rows (owner decision 206); legal requests (instrument, country, accounts, productions, sealing orders); every abuse-role read; reporters' third-party data only until the join, never a reporter's address or free text, of which only an appeal's own reason is stored (§21.8; owner decision 207); each action, lift and hold as it commits, sealed to a vault-held HPKE key before it leaves api and mailed to the abuse or the legal-request mailbox at one provider outside URnetwork's Postgres and clusters, which, as SES, sees only each record's sender, time and size (§21.10; owner decision 208)
-  why: abuse handling, legal process and preservation (§21; owner decision 133); reviewers judge the page reported; a restore re-applies what the mailboxes hold (§19.10)
-  ttl: "cases, actions and appeals 13 months after the case closes, a reported URL's path and query only until the case's first review ends, at most its review clock; legal requests, productions and the access log 3 years; holds, with their copied rows, until their kind's deadline: 90 d plus one 90 d renewal, or 1 year for a §2258A report (§21.9); a hold pass's task rows until the pass runs, then 24 h, or 7 d while its post retries, and in ops-2's main dumps about 4 months, as tables that exist today; the mailboxes' records, an action's kept as api-14's actions and a hold's until its expire_time; standing only while current"
+  store: abuse_case, abuse_action, abuse_appeal, network_abuse_state, abuse_legal_hold (keyed by network, case and part), abuse_access_log, legal_request; the task tables pending_task and finished_task (existing), for each hold's end pass; the abuse and legal-request mailboxes' sealed copies, off site (§21.10); Redis {address_<hash>} attempt histories (existing; the ones every Public route's limit uses, under POST /abuse/report's own key prefix)
+  sees: abuse cases (category, target host, label or network, join keys, reporter class, and a reported URL's path and query until the case's first review ends), actions (kills, halts, suspensions, cap tightening, and platform-wide breaker levels as rows with no network) and appeals with reviewers' reasons, with a reviewer id, the staff member's opaque id and never a customer's, on each read, review and appeal decision, and the legal and engineering ids that sign a production off; each network's standing; holds (network, case, part, kind, scope, which is the network or 1 to 16 repo ids, and place, report, renew and expire times) and their copied_rows and copy_state, the in-scope records that drop or are overwritten on their own, namely rows of partitions that drop whole (tls-3, smtp-3, mx-2), connect-1's contract and close rows naming a client of the network, copied at placement (owner decision 529), the api-1, api-4, api-5 and network_acl_head rows a network's or client's deletion removes, copied in that deletion's own transaction (owner decision 526), and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks), never evs-7's or ops-1's 7-day logs, in parts of at most 16 MiB of compressed rows, part 0 the hold itself; for each hold it ends, its sweep pass's network, scope's repo ids and placement and end times in the pass's task rows (owner decision 206); legal requests (instrument, country, accounts, productions, sealing orders); every abuse-role read; reporters' third-party data only until the join, never a reporter's address or free text, of which only an appeal's own reason is stored (§21.8; owner decision 207); report attempts per caller address hash, for the window (POST /abuse/report's per-address limit, 30 an hour, keyed by the address's peppered /29 or /56 hash; no address held; owner decision 536); each action and lift, and each hold's placement, renewal and end, as it commits, MACed under a vault key and sealed to an HPKE key whose private half is kept offline before it leaves api or taskworker, and mailed to the abuse or the legal-request mailbox at one provider outside URnetwork's Postgres and clusters, which, as SES, sees only each record's sender, time and size (§21.10; owner decisions 208, 535)
+  why: abuse handling, legal process and preservation (§21; owner decision 133); reviewers judge the page reported; a restore re-applies what the mailboxes hold (§19.10); the report limit bounds the cases a Public route opens
+  ttl: "cases, actions and appeals 13 months after the case's last close (§21.10), a reported URL's path and query only until the case's first review ends, at most its review clock; legal requests, productions and the access log 3 years; holds, with their copied rows, until their kind's deadline: 90 d plus one 90 d renewal, or 1 year for a §2258A report (§21.9); a hold pass's task rows until the pass runs, then 24 h, or 7 d while its post retries, and in ops-2's main dumps about 4 months, as tables that exist today; the mailboxes' records, an action's kept as api-14's actions and a hold's until its expire_time; report attempt histories the window, 1 h, a family that exists today and so also sits in ops-3's bundles; standing only while current"
   owner: §21.10
 api-15:
   service: api
@@ -591,7 +601,7 @@ evs-18:
 evs-19:
   service: api writes; evs, gkm and taskworker read
   store: hold/<network_id>/<case_id>/_ (the first metadata cluster)
-  sees: preservation holds mirrored from abuse_legal_hold (network, kind, scope, case id, place_time and expiry), as unsigned UTF-8 JSON (§21.9)
+  sees: preservation holds mirrored from abuse_legal_hold (network, kind, scope, case id, place_time and expiry), as unsigned UTF-8 JSON (§21.9), a scope being the network or 1 to 16 repo ids, each covering that repo's objects on every cluster and its gkm group (owner decision 527)
   why: the server's TTL sweeps, retention, GC and gkm's reconciler skip held networks' in-scope objects, and evacuation moves their batch records, a shredding repo's included, into packs and parcels that nothing deletes while the hold stands; user-initiated shredding (--now, the 7-day timer, slot erasure) always proceeds, and the versionless purge keeps in-scope content that existed at placement while purging content created since (owner decision 133); a drop is no user-initiated shredding, and holds keep its deletions waiting, silently (owner decision 184; §21.9)
   ttl: "its kind's deadline: 90 d, renewable once, or 1 year for a §2258A report (api-14)"
   owner: §21.9
