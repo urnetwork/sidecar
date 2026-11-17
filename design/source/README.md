@@ -540,3 +540,18 @@ The design-records track for the second pass over §14 to §23 (wave f41d) finis
 - **The metadata list** is unchanged: no §2.8 row changes.
 
 Outside this folder the piece touched DESIGN.md and DESIGN-AMENDMENTS.md alone.
+
+## Validation after the held fences (2026-11-17)
+
+The design-records track dr4-fences (wave f43d) writes the ```proto fences that earlier folds left as text because protocol/design_unfenced_test.go's `testUnfencedFence` wrote the same declarations, and a fence for a message that list writes fails protocol's fence test until the change that writes the fence takes the message out of the list. This track may make that change: it touches only that list's entries, `testFenceAdditions` and `testFenceValueAdditions` for what it fences, each fence written exactly as the code declares its messages, beside the two code-side files the design's own text needed below. Each piece lands on its own.
+
+- **First piece.** FS-42's row in §22.8 says `/dns/internal/ready`, owner decision 417's prefix, its schedule column rewrapped from that line to the row's end within the column sidecartest/fault's catalog reads by position, so no row, check, tier or gate moved and catalog.go stands; Appendix E's two internal dns rows take the same prefix in `asm/data_appx10.py`. §2.8's api-7 (list v49) calls an admission's tag ids and the rows' tag and group atoms opaque, QD-062's last words, with testdata/config/metadata_rows.yml's nine `sees` lines in the same commit, which the schema guard holds to the row word for word; QD-062 leaves sidecar/DESIGN-AMENDMENTS.md.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `b79ad7a8fab58b8d1c384a94755330e812ff89dc6dcd21ab4dbbf04ebabba379`) at the first piece, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed.
+- **Owner decisions.** All 583 rows are present and cited; none was added, QD-062 being a defect fix the owner accepted, applied as text.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 310 grep hits, each with a reading, carried forward with no changed line raising a new one; the carried file's line numbers follow the sections.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands; 11,641 section references, with the one unresolved as before. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v49, whose header names its change, copied to `metadata_list.yml` by `make metadata`.
