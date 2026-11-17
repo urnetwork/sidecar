@@ -3722,6 +3722,17 @@ The design-records track for §14 to §23's second pass folded the answers below
     - Not taken: (2) keeping the per-round reading, §18.4 and the policy saying that a round started under allowed conditions runs to its end, bounded by the cap and the day's background budget.
     - Raised by the build (the search-window-unmetered track; the build's ledger, QD-1026). It follows owner decision 576.
 
+## The owner's answers on the complexity review of 2026-11-17
+
+On 2026-11-17 a complexity review of the build put to the owner, one question at a time, whether each of its heaviest mechanisms still earns its cost. The answers that change a behavior or a rule are numbered as the design-records tracks fold them: the track that folded DESIGN-DETAILS.md sections 1, 11 and 15 numbered the one below, which bears on those sections.
+
+584. **Every search-index entry is a full key set or a tombstone: the diff kind is reserved and refused, and kept slots, chains, resting diffs, the re-entry of composed edits and the erasure's CLOSURE order go with it (option 1, the recommendation, 2026-11-17).**
+    - Question: an edit's index entry could be a diff resting on its writer's earlier full entry, which that writer kept (owner decision 385), and an erasure re-entered an edit resting on an erased version and ordered its CLOSUREs around it (owner decision 395). Diffs held entries in proportion to an edit, about 1.8 MiB of entries a day against about 6.6 MiB all full on a 20-writer git workload, and about 14 merges a day against 50, but they caused five of DESIGN-DETAILS.md section 1's ten findings and three of section 15's seven, FS-107, about 20 of the 54 IndexMerge and IndexErase configurations, the erasure's ordering rules and the remaining work of two tasks.
+    - Answer: writers emit full entries and tombstones only, and a decoder refuses kind 2, whose number stays reserved in format 2; chains, kept slots, resting diffs, the re-entry of composed edits and the CLOSURE ordering go, and the re-entry push stays for run-card refolds alone, refused at the storage limit as builds are, with nothing of the erasure held back for it; FS-107 is rewritten for full entries, and the IndexMerge and IndexErase models drop their diff, base and re-entry configurations. It reverses owner decision 385's diff clause and its own-bases rule, whose head rule, merges that read no head and roll-up promotion stand, and owner decision 395, which extended diffs to erasure, its storage-limit hold-back and retry included (§11.13's limit row; §11.14's entry, codes, dependency, merges, reads, erase, limit and drop rows; §11.15, §11.16, D-EVS-46 and §11.21; §2.10's index writer row; §22.6, FI-18, FS-107, §22.8's model row and D-TEST-14 and D-TEST-15).
+    - Cost: about 3.7 times the entry bytes and merges on heavily edited file-mode and git-mode refs, so phones following such repos fetch more slot bytes; mail and record entries never diffed, and no trust or privacy goal changes.
+    - Not taken: (2) keeping diff entries as owner decisions 385 and 395 had them.
+    - Raised by the complexity review of 2026-11-17 (the build's ledger, QD-1036).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.
