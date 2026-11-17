@@ -1,5 +1,6 @@
 // FakeQuota's own rules, beside what quotasuite holds it to: what ages out by a ttl a real store keeps on
-// real time, leases that belong to a process, and what a lost or failing Redis does to them.
+// real time, leases that belong to a process, what a lost or failing Redis does to them, and what
+// enforce_sidecar_limits turns dark.
 
 package sidecartest
 
@@ -494,5 +495,79 @@ func TestFakeQuotaGivesNoSeatToAnAskItsAllowanceRefuses(t *testing.T) {
 	otherId := connect.NewId()
 	if refusal, err := quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyClosureUpload(otherId): 1}, connect.NewId()); err != nil || refusal != nil {
 		t.Errorf("the next eraser at the same instant: %+v, %v", refusal, err)
+	}
+}
+
+// enforce_sidecar_limits in the fake (owner decisions 520, 522): on until a test turns it off, Limits answering it
+// beside the limits as set, which a SetLimits never changes. Off, a dark rule neither counts nor refuses, a mixed
+// call counting its live keys alone, and a network over its storage limit is not listed, while each eraser's
+// allowance and the closure pacing refuse and a spent network is listed as before; back on, the dark rule counts
+// from where it stood.
+func TestFakeQuotaFollowsTheSwitch(t *testing.T) {
+	quota, _, _ := newQuotaFixture(t)
+	ctx := t.Context()
+	networkId := connect.NewId()
+	configured := map[string]int64{"evs_drops_per_day": 1, "evs_closure_bytes_per_day": sidecar.QuotaClosureUploadMaxByteCount}
+	quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "free", Limits: configured})
+	limits, err := quota.Limits(ctx, networkId)
+	if err != nil || !limits.Enforced {
+		t.Fatalf("by default: %+v, %v", limits, err)
+	}
+	countRate := func(keyAmounts map[string]int64) *sidecar.QuotaRefusal {
+		t.Helper()
+		refusal, err := quota.CountRate(ctx, networkId, keyAmounts, connect.NewId())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return refusal
+	}
+	drop := map[string]int64{sidecar.QuotaRateKeyDrop: 1}
+	if refusal := countRate(drop); refusal != nil {
+		t.Fatalf("the day's one drop: %+v", refusal)
+	}
+	if refusal := countRate(drop); refusal == nil || refusal.LimitKey != "evs_drops_per_day" || refusal.Used != 1 {
+		t.Fatalf("enforced, past the day's drops: %+v", refusal)
+	}
+
+	quota.SetEnforced(false)
+	// a SetLimits with the switch on in its value does not turn it on
+	quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "free", Limits: configured, Enforced: true})
+	limits, err = quota.Limits(ctx, networkId)
+	if err != nil || limits.Enforced || limits.Limits["evs_drops_per_day"] != 1 {
+		t.Fatalf("dark: %+v, %v", limits, err)
+	}
+	for range 3 {
+		if refusal := countRate(drop); refusal != nil {
+			t.Fatalf("dark, a drop: %+v", refusal)
+		}
+	}
+	eraserId, otherId := connect.NewId(), connect.NewId()
+	if refusal := countRate(map[string]int64{sidecar.QuotaRateKeyDrop: 1, sidecar.QuotaRateKeyClosureBytes(eraserId): sidecar.QuotaClosureUploadMaxByteCount}); refusal != nil {
+		t.Fatalf("dark, a drop beside the allowance: %+v", refusal)
+	}
+	if refusal := countRate(map[string]int64{sidecar.QuotaRateKeyClosureBytes(eraserId): 1}); refusal == nil || refusal.LimitKey != "evs_closure_bytes_per_day" {
+		t.Fatalf("dark, past the eraser's allowance: %+v", refusal)
+	}
+	if refusal := countRate(map[string]int64{sidecar.QuotaRateKeyClosureUpload(otherId): 1}); refusal != nil {
+		t.Fatalf("dark, the first paced upload: %+v", refusal)
+	}
+	if refusal := countRate(map[string]int64{sidecar.QuotaRateKeyClosureUpload(connect.NewId()): 1}); refusal == nil || refusal.LimitKey != "evs_closure_uploads_per_s" {
+		t.Fatalf("dark, a second eraser at the same instant: %+v", refusal)
+	}
+	storageId, spentId := connect.NewId(), connect.NewId()
+	quota.SetStorageRefusal(storageId, &sidecar.QuotaRefusal{LimitKey: "storage", Limit: 1, Used: 1, Upgrade: true})
+	quota.SetSpentRefusal(spentId, &sidecar.QuotaRefusal{LimitKey: "data", Upgrade: true})
+	overLimit, err := quota.OverLimit(ctx)
+	if err != nil || len(overLimit.StorageNetworkIdRefusals) != 0 || overLimit.SpentNetworkIdRefusals[spentId] == nil {
+		t.Fatalf("dark, the over-limit list: %+v, %v", overLimit, err)
+	}
+
+	quota.SetEnforced(true)
+	if refusal := countRate(drop); refusal == nil || refusal.Used != 1 {
+		t.Fatalf("enforced again, a drop: %+v", refusal)
+	}
+	overLimit, err = quota.OverLimit(ctx)
+	if err != nil || overLimit.StorageNetworkIdRefusals[storageId] == nil || overLimit.SpentNetworkIdRefusals[spentId] == nil {
+		t.Fatalf("enforced, the over-limit list: %+v, %v", overLimit, err)
 	}
 }

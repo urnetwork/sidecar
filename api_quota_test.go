@@ -20,7 +20,7 @@ func TestQuotaRefusalJsonNames(t *testing.T) {
 }
 
 func TestQuotaLimitsRoundTrip(t *testing.T) {
-	src := `{"tier":"team","limits":{"directory_requests_pending":20,"mail_burners_active":-1,"storage":214748364800}}`
+	src := `{"tier":"team","limits":{"directory_requests_pending":20,"mail_burners_active":-1,"storage":214748364800},"enforced":true}`
 	var limits QuotaLimits
 	if err := json.Unmarshal([]byte(src), &limits); err != nil {
 		t.Fatal(err)
@@ -32,6 +32,7 @@ func TestQuotaLimitsRoundTrip(t *testing.T) {
 			"mail_burners_active":        -1,
 			"storage":                    200 * 1024 * 1024 * 1024,
 		},
+		Enforced: true,
 	}
 	if !reflect.DeepEqual(limits, want) {
 		t.Errorf("%+v, want %+v", limits, want)
@@ -42,5 +43,13 @@ func TestQuotaLimitsRoundTrip(t *testing.T) {
 	}
 	if string(encoded) != src {
 		t.Errorf("%s, want %s", encoded, src)
+	}
+	// an older api's body, with no enforced, reads off (owner decision 520)
+	var older QuotaLimits
+	if err := json.Unmarshal([]byte(`{"tier":"team","limits":{"storage":214748364800}}`), &older); err != nil {
+		t.Fatal(err)
+	}
+	if older.Enforced {
+		t.Errorf("an older body decoded to %+v", older)
 	}
 }
