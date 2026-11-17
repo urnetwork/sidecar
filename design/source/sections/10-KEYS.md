@@ -475,12 +475,13 @@ checks             the token scopes the repo, whose newest GroupForm names the g
                    evs's guard does over the one rights table (D-ACL-21): a live repo's admin or writer is asked
                    nothing more, and a deleted repo's standing admins, who hold admin alone (§8.8's repo rows),
                    pass only the admin routes (POST /gkm/groups, forms and ladder), which repo/'s state closes
-                   outside a re-seed, and are refused every read and every other write from the moment the
-                   RepoDelete is in the gate's state, before repo/ shows deleted as after (§11.12's refused
-                   row; owner decision 563); sizes; 60 commits per hour per uploader per group (rates);
-                   §11.13's NVMe write budget, which never refuses Removes and REMOVE rotations and queues other
-                   commits, Adds, Welcomes, KeyPackages, ReaderKeys, LATE deliveries and GroupInfo per network,
-                   refusing the heaviest first (429, RESOURCE_EXHAUSTED);
+                   outside a re-seed, and are refused the repo's reads (its forms, the group, its epochs,
+                   Welcomes) and its other writes (KeyPackage claim, Welcome, gen/ claim, epoch commit,
+                   GroupInfo, wrap batches) from the moment the RepoDelete is in the gate's state, before repo/
+                   shows deleted as after (§11.12's refused row; owner decision 563); sizes; 60 commits per hour
+                   per uploader per group (rates); §11.13's NVMe write budget, which never refuses Removes and
+                   REMOVE rotations and queues other commits, Adds, Welcomes, KeyPackages, ReaderKeys, LATE
+                   deliveries and GroupInfo per network, refusing the heaviest first (429, RESOURCE_EXHAUSTED);
                    a staged delivery or claim of g+1 is a REMOVE rotation's only while gkm's newest verified
                    state shows a shrink, an authorization expiry or a compromise retirement since gen/<g>'s
                    auth pin and time (the causes of 10.9's REMOVE that gkm can see, a poisoned parent not among

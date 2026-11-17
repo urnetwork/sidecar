@@ -1198,7 +1198,7 @@
  {
   "family": "window_14d_weekly",
   "file": "10-KEYS.md",
-  "line": 655,
+  "line": 656,
   "col": 9,
   "match": "a week",
   "snippet": "  device a week away lacks ~233 commits (~6 MB) and resyncs from one 2.8 MB GroupInfo (KF5)",
@@ -1211,7 +1211,7 @@
  {
   "family": "decided_q_open",
   "file": "10-KEYS.md",
-  "line": 679,
+  "line": 680,
   "col": 71,
   "match": "confirmed them (Q-KEYS-12",
   "snippet": "**What GKM sees.** §2.8 adopts these rows verbatim; owner decision 115 confirmed them (Q-KEYS-12).",
@@ -1224,7 +1224,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 717,
+  "line": 718,
   "col": 16,
   "match": "Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch",
   "snippet": "  sees: acks in Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch, time; written at most daily",
@@ -1237,7 +1237,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 719,
+  "line": 720,
   "col": 174,
   "match": "Redis, after which gkm deletes no epoch",
   "snippet": "l: overwritten by the leaf's next ack; 31 d after its last write; deleted with its group's gkm objects at a shred (§11.12); soft state outside the rdb bundles, lost with Redis, after which gkm deletes no epoch for 30 d; a hold's copy excepted (api-14)",
@@ -1250,7 +1250,7 @@
  {
   "family": "offsite",
   "file": "10-KEYS.md",
-  "line": 759,
+  "line": 760,
   "col": 64,
   "match": "off-site",
   "snippet": "**Site loss (D-KEYS-13; order in §19.10).** gkm objects have no off-site copy (owner decisions 90, 94), but devices keep each group's MLS state and every RK_g: a device 10.6's GroupForm rules allow, a repo admin's and for owner-bound kinds th",
@@ -1263,7 +1263,7 @@
  {
   "family": "device_cap_1000",
   "file": "10-KEYS.md",
-  "line": 912,
+  "line": 913,
   "col": 2,
   "match": "1,000 member devices",
   "snippet": "| 1,000 member devices per network, or a larger config tree | No member wraps | The cap refuses Teams past ~330 members; 5,000 leaves make a 7.9-14 MB tree and path commits to ~6 MB, past §18.",
@@ -1276,7 +1276,7 @@
  {
   "family": "audit_gate",
   "file": "10-KEYS.md",
-  "line": 935,
+  "line": 936,
   "col": 385,
   "match": "independently audit",
   "snippet": "tifact (10.4), with 10.4's conformance plan, fuzz targets run as Go tests and 10.6's sizes measured (§22.8); the security page says this MLS on draft suite 0x0010 is not independently audited. *Why:* owner decisions 99, 101, 119 (§2.18).",
@@ -1289,7 +1289,7 @@
  {
   "family": "offsite",
   "file": "10-KEYS.md",
-  "line": 941,
+  "line": 942,
   "col": 451,
   "match": "off-site",
   "snippet": "generation, the old Signed GenRotates go up byte for byte from the copies clients keep, and pins follow (g, C_g) only along a verified GroupForm chain. *Why:* gkm has no off-site copy (owner decisions 90, 94); a GenRotate's signature cannot be rebuilt, and GenLink's AAD and C_g hold no group_id.",
@@ -1302,7 +1302,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 957,
+  "line": 958,
   "col": 26,
   "match": "gkm acks are Redis",
   "snippet": "**D-KEYS-21 (proposed).** gkm acks are Redis soft state, and the epoch reconciler deletes only while the ack family is 30 days old; a GroupInfo above 16 leaves is written at most once per epoch, on request. *Why:* ",
@@ -1315,7 +1315,7 @@
  {
   "family": "device_cap_1000",
   "file": "10-KEYS.md",
-  "line": 999,
+  "line": 1000,
   "col": 169,
   "match": "member-device cap",
   "snippet": "**Q-KEYS-15.** How many member devices may one network hold, given the config group's 1,000-leaf cap? **Decided by owner 2026-11-04 (owner decision 144):** (b), with no member-device cap: from the start, member devices past the first 1,000 read the config group by per-generation wraps, as agents do, and stay leaves of their data repos, each still at most",
@@ -1328,7 +1328,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 1062,
+  "line": 1063,
   "col": 228,
   "match": "gkm, which reads no Postgres",
   "snippet": "(owner decisions 2, 21, 145), and Redis `{gka_<group_id>}` holds acks as soft state (owner decision 136). §6.8's per-client hints need a client id for each `sidecar_id`: gkm, which reads no Postgres, resolves them through api's internal `POST /sidecar/identity/clients` behind the `Push.HintSidecars` seam, with a 5-minute map in each process, and counts and passes ov",
@@ -1341,7 +1341,7 @@
  {
   "family": "device_cap_1000",
   "file": "10-KEYS.md",
-  "line": 1068,
+  "line": 1069,
   "col": 519,
   "match": "1,001st",
   "snippet": "x, a recovery self-join with no leaf online, FS-20 also killing KF1's creator before activation and gkm between an epoch 16 past the pointer and the pointer's rewrite, a 1,001st member device reading the config and the team directory by wrap, the directory group's hint audience and rotation wait (10.9) and FS-87's directory Removes and rotation ",
