@@ -62,12 +62,13 @@ local     a Redis Cluster of 3 masters and no replicas, production's shape, on R
           production
 T3 and    the same Redis Cluster; MinIO as 4 nodes x 2 drives at EC:4 (a metadata cluster) and 4 nodes x 4 drives at
 release   EC:8 (the segment cluster), so host loss, QuorumLoss and DriveMiss run for real (FS-1, FS-40), and a second
-          metadata cluster as one 8-drive process (FS-63)
+          metadata cluster of 4 nodes x 2 drives too, since a cluster in settle mode has at least 4 hosts (FS-63;
+          owner decision 504)
 lint      CROSSSLOT: every multi-key command and Lua script in sidecar engines and server's sidecar code runs once
           against keys spread over the 3 masters and fails on CROSSSLOT, and a static check refuses a multi-key call
           whose keys lack one shared hash tag: each key of the call carries the tag, so a bare key beside a
           tagged key whose tag equals its name is refused, and a single key needs none
-not       canary, which has no edges or mail (§19.11); a one-node Redis
+not       canary, which has no hosts (§19.11; owner decision 499); a one-node Redis
 release   build/all/run.sh's rewrite functions on a fixture copy, the tags served through GOPROXY=file:// with
 fixture   GOWORK=off, an empty module cache and no replaces: root, protocol and an engine package import at the tag;
           ur builds from cli/; go list -m all shows one sidecar path; each protocol/<name>.proto registers once; sdk's
@@ -679,13 +680,13 @@ nvme     on 4 KiB and on 1 KiB XFS blocks, every namespace at the 512 B LBA form
          (/sys/block stat), XFS log and file bytes, write and read IOs, p99, and SMART data units written and
          percentage used before and after; bytes and inodes per object class; DWPD at both years and the projected
          fill date; gate (D-TEST-11): at 2x year one, the budget refilled at 0.8 DWPD for the run, <= 43 KiB per push
-         per drive (0.8 DWPD at 400 pushes/s) and <= 50% of rated IOPS, on the block size D-TEST-11 chooses, with no
-         push refused by the budget, no ref at FOLD_BEHIND and evacuation keeping every batch under 26 h, so a push's
-         bytes include the P2 work it causes, charged once from the wallet, after FS-116 passes; P0's bytes by kind
-         against the refill, which set §19.8's P0 warn line, its page silent at that mix, the gate bounding that mix
-         only (owner decision 186; FS-117); the per-operation costs become §11.13's price table, as a code change at
-         M2's exit and again before M3's pilot (owner decision 413); at M10, format 2's mix is priced by this run's
-         per-operation table, its counts from the index row (D-TEST-13)
+         per drive (0.8 DWPD at 400 pushes/s) and <= 50% of rated write IOPS, on the block size D-TEST-11 chooses,
+         with no push refused by the budget, no ref at FOLD_BEHIND and evacuation keeping every batch under 26 h, so
+         a push's bytes include the P2 work it causes, charged once from the wallet, after FS-116 passes; P0's bytes
+         by kind against the refill, which set §19.8's P0 warn line, its page silent at that mix, the gate bounding
+         that mix only (owner decision 186; FS-117); the per-operation costs become §11.13's price table, as a code
+         change at M2's exit and again before M3's pilot (owner decision 413); at M10, format 2's mix is priced by
+         this run's per-operation table, its counts from the index row (D-TEST-13)
 fold     the twenty-agent test and a mailbox stream at §19.6's rates: index writes per push (the fold ratio), records
          per batch per cluster and per parcel, how long a ref stays unfolded, and removal markers standing and their
          age at GC (owner decision 148); at M10, the search index's head-file overwrites, seals and merges per push
@@ -862,8 +863,8 @@ FI-4   one ladder: each generation has one authenticated parent and commitment C
        reader converges on it; none regresses (§10)
 FI-5   lifecycle: restore and shred have one winner; a restored repo holds its whole key closure; a shredded or erased
        object never returns, a stale re-seed included, unless no surviving device holds the ERASE (§11.12's
-       residual), which §19.10's close report names, and a dropped object never returns, a stale re-seed included,
-       except as FI-27 bounds it (§11, §19)
+       residual), which §19.10's close report flags by repo, and a dropped object never returns, a stale re-seed
+       included, except as FI-27 bounds it (§11, §19)
 FI-6   visibility: nothing uncommitted evicts a file's newest committed version, which readers find in its entry or
        the head window, and no directory delta leaves the window before its name table holds it; every uncommitted
        object (a dead record with its slots, an unadopted segment, a staged wrap, an abandoned path map) becomes
@@ -1015,7 +1016,9 @@ FI-30  store settle (D-OPS-20): a PUT or DELETE takes effect, as every request o
        request the store serves on that key, or never; none the store took, or began a drive commit of, past its
        deadline takes effect; no earlier write and no heal undoes a state a later write acknowledged or a read
        returned; a key is held only while a PUT lacking a write quorum could still reach a read quorum, or a
-       DELETE lacking one has a drive commit yet to answer or be reverted (§19.6)
+       DELETE lacking one has a drive commit yet to answer or be reverted, so a DELETE whose commit stalled on a
+       frozen host holds its key until that host answers or its drives are replaced, a cost only background
+       jobs' unconditional DELETEs pay (§19.6; owner decision 501)
 ```
 
 ```text
@@ -1382,10 +1385,12 @@ FS-39  §14,15 report intake: gzip XML and JSON aggregates count once per report
 FS-40  §19    4 nodes x 2 drives at EC:4 and 4 x 4 at EC:8: node A down; a drive of B fails    FI-12       T3     M2-out;
               one PUT; healing held; node C down: that object unreadable, protected ones                          M3 on
               readable, degraded then at_risk raised; C and A return; a full heal makes every                     production
-              object protected; with every node up, a PUT that misses one drive of B
-              (DriveMiss), then nodes C and D down: that object unreadable though its set was
-              protected, objects whose every shard exists readable; for a head, a slot and a
-              segment; the heal throughput is recorded
+              object protected; with every node up and healing held, a PUT that misses one
+              drive of B (DriveMiss) leaves its set degraded at queue depth 1; then nodes C
+              and D down: that object reads 503, never 404 (owner decision 511), objects whose
+              every shard exists readable; a planted queue drop warns and starts one full heal
+              (owner decision 496); for a head, a slot and a segment; the heal throughput is
+              recorded
 FS-41  §19    drives lost past parity first (readers alarm on heads naming missing segments),  FI-5,10,12  T3     M3-out;
               then site loss: buckets wiped and both dumps restored; identities re-register;                      M5 to M8
               the authorization log resumes from member devices' verbatim entries, positions                      per step
@@ -1394,15 +1399,16 @@ FS-41  §19    drives lost past parity first (readers alarm on heads naming miss
               time_ms) or reordered statement takes none, the log stopping there unless two
               members hold the genuine one, and a run whose newest base fails the new-device
               check against the re-seeded config repo is discarded; a Team whose other
-              members' only devices are read_only page Workers resumes too, no device seeing
-              a FORK; a statement no upload holds is re-submitted by its signer, and a device
-              whose tail passes a position filled after resumption sees a FORK; readers
-              accept a head below their pin only under an EvsReseed; an unread record entry
-              comes back from a full mirror; an entry erased after a stale mirror's last sync
-              stays erased once the eraser's device re-seeds; a slot re-seeded with one
-              erased and one live key keeps the live key, which reads, and loses the erased
-              one; with only stale mirrors, the close report names the erasure; a shredded
-              repo is not resurrected; a vault is re-formed by its owner's devices; a
+              members' only devices are read_only page Workers resumes too, no device seeing a
+              FORK; a statement no upload holds is re-submitted by its signer, and a device
+              whose tail passes a position filled after resumption sees a FORK; readers accept
+              a head below their pin only under an EvsReseed; an unread record entry comes
+              back from a full mirror; an entry erased after a stale mirror's last sync stays
+              erased once the eraser's device re-seeds; a slot re-seeded with one erased and
+              one live key keeps the live key, which reads, and loses the erased one; with
+              only stale mirrors, a repo that came back under an EvsReseed is flagged, and
+              with no reader pin above the mirror nothing names it, the stated residual; a
+              shredded repo is not resurrected; a vault is re-formed by its owner's devices; a
               recovery-code-only member keeps access; each later step at its mechanism's
               Gn-out: CT replay re-binds a label allocated after the dump and TLS endpoints
               re-register (M5), meter rows re-send without double-billing (M6), a mailbox is
@@ -1414,33 +1420,36 @@ FS-42  §19    Postgres primary lost, both edge-6 dumps restored, in each order 
               client deactivated and a password reset between the dumps stay so, their old
               tokens refused, and before the token exchange reopens a sidecar and a member
               revoked between the dumps stay revoked: the client inactive, the member's API
-              key, auth codes and network token refused; with the main dump newer, a network
-              and a client deleted between the dumps stay deleted, and a client created after
-              the sidecar dump is deactivated to re-enroll; either way each row both dumps
-              hold equals the newer one's copy, less the incident's list; a network newer than
-              both is lost, its repos marked deleted and shredded after 7 d, its proj/ and
-              projrows/ deleted with the last shred, all listed; identities re-register; a
-              revocation and a first policy document filed after both dumps are honoured once
-              api has replayed proj/ past the restored head, before the token exchange and
-              CreateContract reopen; each later step runs at its mechanism's Gn-out: labels
-              re-bind and TLS endpoints re-register, a kill, a suspension and a lift mailed
-              after the dump hold through the edges' first reloads, and §19.10's dns step
-              (§12.6's restore step) answers dns writes 503 until every running NS serves
-              restore_serial: a record written after it publishes on both, an ACME challenge
-              committed above every SOA just before the loss and one at an older serial read
-              stale and are rewritten, each changed RRset is listed, and an NS that misses the
-              SOA read is stopped, writes reopening once the other serves restore_serial, and
-              serves again only from a reload, its old snapshot taken as the replaced one,
-              /dns/ready not counting it before it serves restore_serial (M5); meter rows
-              re-send, and custom hosts added or removed after the dump leave or return to the
-              regenerated map and are listed, each pending until every lb interface is current
-              for the restore's map version (M6); mail host keys re-register, and a receiver
-              revoked after the dump has no TLSA on either NS once api's replay ends (M7);
-              push tokens re-register, every token row's revision raised past those the lost
-              primary applied, and a client created after the dump re-registering a changed
-              token in a row whose revision passes its lost row's, so no later apply is
-              refused as stale (M8); a sending sidecar revoked after the dump has no DKIM
-              selector on either NS once api's replay ends (M9)
+              key, auth codes and network token refused, and while restore_hold holds, api's
+              public routes and the token exchange answer 503 and CreateContract Setup, so
+              such a client gets no token or contract; with the main dump newer, a network and
+              a client deleted between the dumps stay deleted, and a client created after the
+              sidecar dump is deactivated to re-enroll; either way each row both dumps hold
+              equals the newer one's copy, less the incident's list; a network newer than both
+              is lost, its repos left active and shredded under the incident 7 d 10 min after
+              it, the job cancelling if the network's rows come back, its proj/ and projrows/
+              deleted after the last shred, all listed (owner decision 506); identities
+              re-register; a revocation and a first policy document filed after both dumps are
+              honoured once api has replayed proj/ past the restored head, before the token
+              exchange and CreateContract reopen; each later step runs at its mechanism's
+              Gn-out: labels re-bind and TLS endpoints re-register, a kill, a suspension and a
+              lift mailed after the dump hold through the edges' first reloads, and §19.10's
+              dns step (§12.6's restore step) answers dns writes 503 until every running NS
+              serves restore_serial: a record written after it publishes on both, an ACME
+              challenge committed above every SOA just before the loss and one at an older
+              serial read stale and are rewritten, each changed RRset is listed, and an NS
+              that misses the SOA read is stopped, writes reopening once the other serves
+              restore_serial, and serves again only from a reload, its old snapshot taken as
+              the replaced one, /dns/ready not counting it before it serves restore_serial
+              (M5); meter rows re-send, and custom hosts added or removed after the dump leave
+              or return to the regenerated map and are listed, each pending until every lb
+              interface is current for the restore's map version (M6); mail host keys
+              re-register, and a receiver revoked after the dump has no TLSA on either NS once
+              api's replay ends (M7); push tokens re-register, every token row's revision
+              raised past those the lost primary applied, and a client created after the dump
+              re-registering a changed token in a row whose revision passes its lost row's, so
+              no later apply is refused as stale (M8); a sending sidecar revoked after the
+              dump has no DKIM selector on either NS once api's replay ends (M9)
 FS-43  §20    a fake Stripe accepts an event, then drops the response; the 24 h dedup window   FI-13b      T2     M6-out
               expires; summaries lag; retries arrive in both orders; a correction follows its
               original; a period boundary at 00:00 UTC; finalization at +72 h; a missed row
@@ -2706,7 +2715,7 @@ Beyond the schedules:
 - **git** (2.34, Ubuntu 22.04's, https://ubuntuupdates.org/package/core/jammy/main/base/git; 2.43, Ubuntu 24.04's and Claude Code cloud's; latest; Windows, Xcode; go-git, JGit, libgit2; OpenSSH): through the local tier, and `git-remote-ur` without a prior mount, oids equal a reference; stock non-fast-forward errors, sibling pushes from one base giving one; `git push --atomic` fails before any write; a two-ref push reports per-ref statuses; a daemon killed between the remote commit and update-ref reconciles from its journal; foreign new commits refused, signed imports accepted; a sha256 repository refused, naming it, before any evs write (owner decision 249).
 - **git-lfs** (3.x as Ubuntu 22.04 and 24.04 ship it, and the latest; `lfs.standalonetransferagent`; `GIT_LFS_SKIP_SMUDGE`): FS-73's flows with stock clients, pointer files byte-exact and export's oids equal to git's, its tip check included over http, ssh and `git-remote-ur`, with no skip option set and with `--no-verify` and `GIT_LFS_SKIP_PUSH`.
 - **Restore** (darwin on APFS; linux on ext4, xfs and an NFS mount; windows on NTFS; a FAT volume on each; symlinks on each, Windows with and without the symlink privilege): FS-115's apply through each volume's no-replace rename, its hard-link fallback, and `unsupported` where it has neither, with Windows's in-use refusal.
-- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 (owner decision 226); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
+- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 (owner decision 226); a read answering 404 only on a read quorum's absence: a DriveMiss'd object with two hosts down reads 503, and while a host reconnects every host serves it or answers 503, never 404 (owner decision 511); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
 - **MTAs** (Postfix (may, dane), Exim; Gmail, Outlook.com, Microsoft 365, Yahoo, iCloud, SES, Proton, Fastmail): in, D-MAIL-9's census with nothing lost; out, §14.4 levels, DKIM, strict DMARC, which B's selector fails for A's network and burners, FCrDNS, JMRP and CFL joins; aggregate reports as FS-39, a one-connection, ten-recipient send raising no alarm.
 - **ZK preamble** (`smtpproof`, BDAT and DATA (owner decision 125), on D-SMTP-16's hardware; census MXs): D-SMTP-16's adversarial corpus, FS-31's server-state cases included, fails before any effect; p95 times, coverage, interop.
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
@@ -2833,7 +2842,7 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 **D-TEST-10 (proposed).** Every state machine of §7-§21, and §5.6's device revocation, is tested by deterministic fault schedules (FS-1 to FS-125), each run on the tiers its row names (T2's fakes, T3's real stores) against FI-1 to FI-30, beside TLA+ models of the separate durable objects (`EvsCommit.tla`), of the index roll-up (`IndexRollup.tla`) and of the store's settle rule (`StoreSettle.tla`) and a Porcupine check of T3 histories with unknown outcomes. *Why:* single-object conditional writes order storage (owner decision 2) and no transaction spans objects, so every commit point, retry and cleanup must be shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).
 
-**D-TEST-11 (proposed).** §22.8's `nvme` run on the PM9A3 set gates M2's exit and format 1's freeze: at 2× year one's mix with the write budget on, refilled at 0.8 DWPD for the run, the budget refuses no push, at most 43 KiB is written per push per drive, its P2 work included and charged once from the wallet (FS-116, which runs first, on exact costs), P0's bytes by kind are measured against the refill, setting §19.8's P0 warn line at four times their hourly share, at most half the refill, with the P0 page silent at that mix (P0 past the refill is FS-117's, owner decision 186), and writes stay within 50% of rated IOPS, on 1 KiB XFS blocks, or on 4 KiB only if format 2's projected mix (format 1's measured price table applied to §11.13's per-push index operations, the index on in every eligible repo) also fits there; its per-operation costs become §11.13's price table. *Why:* owner decision 140's binding limits, at most 0.8 DWPD and 50% of rated write IOPS, which the design meets at ~27-43 KiB a push, 43 KiB being 0.8 DWPD at 400 pushes/s; the run refills at that limit, not production's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB), and the default-on index (owner decision 156) adds ~4 on 1 KiB blocks at one companion push a minute per writer, and ~2 on 4 KiB blocks at one every 5 minutes (owner decision 172; §11.13).
+**D-TEST-11 (proposed).** §22.8's `nvme` run on the PM9A3 set gates M2's exit and format 1's freeze: at 2× year one's mix with the write budget on, refilled at 0.8 DWPD for the run, the budget refuses no push, at most 43 KiB is written per push per drive, its P2 work included and charged once from the wallet (FS-116, which runs first, on exact costs), P0's bytes by kind are measured against the refill, setting §19.8's P0 warn line at four times their hourly share, at most half the refill, with the P0 page silent at that mix (P0 past the refill is FS-117's, owner decision 186), and writes stay within 50% of rated write IOPS, on 1 KiB XFS blocks, or on 4 KiB only if format 2's projected mix (format 1's measured price table applied to §11.13's per-push index operations, the index on in every eligible repo) also fits there; its per-operation costs become §11.13's price table. *Why:* owner decision 140's binding limits, at most 0.8 DWPD and 50% of rated write IOPS, which the design meets at ~27-43 KiB a push, 43 KiB being 0.8 DWPD at 400 pushes/s; the run refills at that limit, not production's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB), and the default-on index (owner decision 156) adds ~4 on 1 KiB blocks at one companion push a minute per writer, and ~2 on 4 KiB blocks at one every 5 minutes (owner decision 172; §11.13).
 
 **D-TEST-12 (proposed).** The versionless purge ships in observe mode (§19.11's `purge: observe`), logging candidates and deleting nothing while taskworker checks that no retained version names one; deletes turn on once FS-64 to FS-71 pass on their rows' tiers and a production soak after the final freeze (at least 14 days and 10,000 candidates) finds none that a retained version names, and until then the gate admits only internal networks and design partners (D-PHASE-10), so later networks get owner decision 161's purge from their first format-2 push. *Why:* a purge bug destroys content no other check restores, and only production shows real clients' citations.
 
