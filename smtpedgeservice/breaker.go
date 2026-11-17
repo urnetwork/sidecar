@@ -47,7 +47,7 @@ type smtpBreakerMedian struct {
 	// Whether {smg_median} held a count.
 	found bool
 	value int64
-	// Reads finished, so a test can await one.
+	// Reads finished, each counted once the next read's wait is armed (SmtpBreaker.run), so a test can await one.
 	readCount int
 }
 
@@ -81,20 +81,27 @@ func newSmtpBreaker(ctx context.Context, redis sidecar.Redis, clock sidecar.Cloc
 	return self
 }
 
-// Reads the median now and each BreakerMedianRefreshInterval.
+// Reads the median now and each BreakerMedianRefreshInterval. A read is counted only once the wait for the next is
+// armed, as the engine's probe loop counts its probes, so whoever sees a read counted may move the clock by the
+// interval and reach the next (TestBreakerCountsAMedianReadOnlyOnceTheNextIsArmed).
 func (self *SmtpBreaker) run(ctx context.Context) {
 	defer close(self.released)
 	for {
 		self.refreshMedian(ctx)
+		next := self.clock.After(self.settings.BreakerMedianRefreshInterval)
+		self.median.Update(func(median smtpBreakerMedian) smtpBreakerMedian {
+			median.readCount += 1
+			return median
+		})
 		select {
 		case <-ctx.Done():
 			return
-		case <-self.clock.After(self.settings.BreakerMedianRefreshInterval):
+		case <-next:
 		}
 	}
 }
 
-// One read of {smg_median}. A read that fails keeps what the last found.
+// One read of {smg_median}, which run counts. A read that fails keeps what the last found.
 func (self *SmtpBreaker) refreshMedian(ctx context.Context) {
 	callCtx, cancel := context.WithCancel(ctx)
 	stop := self.clock.AfterFunc(self.settings.QuotaCallTimeout, cancel)
@@ -102,7 +109,6 @@ func (self *SmtpBreaker) refreshMedian(ctx context.Context) {
 	stop()
 	cancel()
 	self.median.Update(func(median smtpBreakerMedian) smtpBreakerMedian {
-		median.readCount += 1
 		if err != nil {
 			return median
 		}
