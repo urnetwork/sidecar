@@ -281,6 +281,105 @@ message AclTarget {                       // exactly one kind set (owner decisio
   bytes client_id = 10;                   // a client no binding names, a legacy client among them: D-ACL-5's
                                           // naming it, under an unrestricted grant
 }
+// The rows above as Atoms, Folded grants and Repo rows below give them, and §8.4's and §11.12's named lists
+message AclAtom {                         // Atoms
+  bytes atom = 1;
+  repeated bytes member_ids = 2;
+  repeated bytes sidecar_ids = 3;
+  repeated bytes tag_owner_member_ids = 4;  // a tag atom's tagOwners, expanded to member_ids at compile
+  repeated bytes client_ids = 5;          // client:<id>, for a client no binding names
+  repeated bytes network_ids = 6;         // network:<net>, resolved at save
+  string role = 7;                        // role:<name>
+  string principal = 8;                   // principal:<name>
+}
+message AclRule {
+  reserved 5; reserved "ports";           // a rule's ports stay in AclLocalPolicy (8.6)
+  bytes rule_id = 1;
+  repeated bytes src_atoms = 2;
+  repeated AclTarget targets = 3;
+  repeated uint32 actions = 4;            // AclAction
+  int64 expires = 6;                      // 0 none
+  AclAudience audience = 7;               // a publish's (8.4)
+  AclAppMode app_mode = 8;
+  bytes link_spki_sha256 = 9;
+  bytes source_rule_id = 10;              // an activated grant's (Folded grants)
+  bool ports_limited = 11;
+  repeated AclTarget via = 12;            // a route rule's via subjects (Via subjects; owner decision 344)
+}
+message AclPortRange {                    // a grant's port range on the device alone, never in rows
+  uint32 protocol = 1;                    // the IP protocol number; 0 any
+  uint32 first = 2;
+  uint32 last = 3;
+}
+message AclSuspension {                   // Folded grants
+  bytes subject = 1;
+  bytes suspend_id = 2;
+  uint32 signer_class = 3;                // 1 owner or sponsor, 2 admin, 3 k of n
+  bytes signer = 4;
+  uint64 at = 5;
+}
+message AclSpentGrant { bytes grant_id = 1; int64 retain_until_ms = 2; }   // Folded grants
+message AclRepo {                         // every row keeps its signer and the position of its entry
+  bytes repo_id = 1;
+  RepoKind kind = 2;
+  bytes owner_member_id = 3;
+  repeated bytes consented_sidecar_ids = 4;
+  repeated AclRepoAdminRow admins = 5;
+  repeated AclRepoGrantRow grants = 6;
+  repeated AclRepoShareRow shares = 7;
+  repeated AclRepoRevokeRow revokes = 8;  // config writers' standing RepoRevokes
+  AclRepoDeletionRow deletion = 9;        // the newest RepoDelete, with any RepoRestore of its deletion_id
+  RepoVersioningLock lock = 10;           // the newest RepoVersioning's
+  uint64 holders_shrunk_at = 11;
+  repeated AclRepoPrefixRulesRow prefix_rules = 12;   // RepoPrefixRules (owner decision 345)
+  int64 holders_shrunk_time_ms = 13;      // §7.9's t_s (owner decision 557)
+}
+message AclRepoAdminRow {
+  bytes sidecar_id = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+  uint64 removed_at = 4;                  // a RepoAdmin{remove}'s position; 0 while the admin stands
+}
+message AclRepoGrantRow {
+  bytes subject = 1;
+  RepoGrantRole role = 2;
+  int64 expires = 3;                      // 0 none
+  bytes signer = 4;
+  uint64 at = 5;
+}
+message AclRepoShareRow { bytes subject = 1; int64 expires = 2; bytes signer = 3; uint64 at = 4; }
+message AclRepoRevokeRow { bytes subject = 1; bytes signer = 2; uint64 at = 3; }
+message AclRepoDeletionRow {
+  bytes deletion_id = 1;
+  bool now = 2;
+  uint64 deleted_at = 3;
+  uint64 restored_at = 4;
+  int64 deleted_time_ms = 5;              // the RepoDelete entry's time_ms (owner decision 343)
+  bytes signer = 6;                       // the RepoDelete's signer
+}
+message AclRepoPrefixRulesRow { bytes signer = 1; uint64 at = 2; }   // one RepoPrefixRules that took effect
+enum AclAutogroup {                       // §8.4; in a *_atoms field fifteen zero bytes, then the value
+  ACL_AUTOGROUP_UNSPECIFIED = 0; ACL_AUTOGROUP_MEMBER = 1; ACL_AUTOGROUP_OWNER = 2; ACL_AUTOGROUP_ADMIN = 3;
+  ACL_AUTOGROUP_AUDITOR = 4; ACL_AUTOGROUP_SIDECAR = 5; ACL_AUTOGROUP_TAGGED = 6; ACL_AUTOGROUP_NETWORK = 7;
+  ACL_AUTOGROUP_UNTAGGED = 8; ACL_AUTOGROUP_EPHEMERAL = 9; ACL_AUTOGROUP_PUBLIC = 10;
+  ACL_AUTOGROUP_INTERNET = 11; ACL_AUTOGROUP_SELF = 12; ACL_AUTOGROUP_SPONSOR = 13;
+  ACL_AUTOGROUP_DST_OWNER = 14;
+}
+enum AclAction {                          // §8.4; AclRule.actions and AclRequestRule.actions
+  ACL_ACTION_UNSPECIFIED = 0; ACL_ACTION_DIAL = 1; ACL_ACTION_LISTEN = 2; ACL_ACTION_ROUTE = 3;
+  ACL_ACTION_READ = 4; ACL_ACTION_WRITE = 5; ACL_ACTION_ADMIN = 6; ACL_ACTION_DEPOSIT = 7;
+  ACL_ACTION_PUBLISH = 8; ACL_ACTION_SEND = 9;
+}
+enum AclAudience {                        // zero reads as members
+  ACL_AUDIENCE_UNSPECIFIED = 0; ACL_AUDIENCE_MEMBERS = 1; ACL_AUDIENCE_MEMBERS_DEVICE = 2;
+  ACL_AUDIENCE_LINK = 3; ACL_AUDIENCE_PUBLIC = 4;
+}
+enum AclAppMode { ACL_APP_MODE_UNSPECIFIED = 0; ACL_APP_MODE_HTTP = 1; ACL_APP_MODE_RAW = 2; }   // zero: http
+enum RepoKind {                           // §11.12's kinds, fixed at creation
+  REPO_KIND_UNSPECIFIED = 0; REPO_KIND_GENERAL = 1; REPO_KIND_RECORD = 2; REPO_KIND_CONFIG = 3;
+  REPO_KIND_DIRECTORY = 4; REPO_KIND_TEAM_RECORD = 5; REPO_KIND_MAILCFG = 6; REPO_KIND_VAULT = 7;
+  REPO_KIND_MAILBOX = 8; REPO_KIND_SECRET = 9;
+}
 ```
 
 **Atoms (owner decisions 339, 353).** A tag's or group's atom id is 16 random bytes that the config's sealed `tags` and `groups` tables hold beside its name (§7.9). compile writes an `AclAtom` for every tag the document declares in `tagOwners` and every group in `groups`, whether or not a grant or request names it, and for every derived atom the policy names: `AclAtom{atom = 1, member_ids = 2, sidecar_ids = 3, tag_owner_member_ids = 4, client_ids = 5, network_ids = 6, role = 7, principal = 8}`. A tag atom's `member_ids` stays empty, its `sidecar_ids` lists the sidecars carrying it, and `tag_owner_member_ids` is its `tagOwners` expanded to member_ids at compile, which `CanApplyTag` reads and subject evaluation never does: applying a tag needs a standing member device (untagged, not ephemeral, not read_only) of a member in that list, and no consent, so a declared tag with no rule of its own can still be applied by a Delegation or a tagged `SidecarAdmit`, its sidecars holding what `autogroup:tagged` and the kind defaults give them. A selector with no table name compiles to a derived atom, id = SHA-256("urnetwork-sidecar-v1/acl-atom" || 0x00 || kind || 0x00 || value)[:16], kind one byte (1 member, 2 sidecar, 3 client, 4 network, 5 role, 6 principal), unkeyed because each value is already server-visible; `network:*` is the kind-4 atom over the one byte `*`, which names no subject until 8.11's shares. Rows name only what a writer can sign and never enumerate app clients: an app device with an owner row matches `user:`, `group:` and autogroups at the gate through `network_client_owner.member_id`, so app clients coming and going change no rows; a legacy client has no owner row and matches only `client:<id>`, `autogroup:untagged`, `autogroup:network` and `*`, D-ACL-5's "naming it" being `AclTarget.client_id` under an unrestricted grant; and `role:` and `principal:` match the identity that `getProvideRelationshipDetails`'s one query loads, never `GetClientIdentity`'s Postgres fallback, so the gate stays under §22.5's `DenyPostgresForTest`. A member that the log's rows no longer hold expands to nothing. A bare `*` dst compiles to `autogroup:network`'s atom, the socket prefix with no token and the wildcard repo, its ip ranges staying on the device. Every group the document defines has a row, and an empty group's, like a tag's with no owners or sidecars, holds only its atom id, so the prefix filer tells a group's atom from a tag's by the head's group atom ids, never by what its row holds: a group's atom names nobody, an empty group's included, and a tag's row names someone (RepoPrefixRules' subjects; owner decision 559).
@@ -443,6 +542,87 @@ outside   a file-mode ref's .ur-index/, the refs ur/index and ur/lfs, and pushes
 void      a set whose seal does not open, whose rules break the format, or whose generation was signed more
           than 1 h after its entry leaves the set below it in force and alarms, naming its filer; a later
           release's set makes a reader that cannot read it hold the repo's later versions and say `update`
+```
+
+**Statement bytes.** The table's statements, each opening with §7.9's `StatementHeader` and its other fields in the order the table writes them, with the named lists they use (§7.9's record bytes):
+
+```proto
+// sidecar/protocol/acl.proto: the grant chains and access logs
+message GrantActivate {
+  StatementHeader header = 1;
+  bytes grant_id = 2;
+  bytes canonical_action = 3;             // §16.8's CanonicalAction, as stored
+  repeated Signed decisions = 4;          // ApprovalDecisions
+}
+message EvsShare {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes subject = 3;
+  int64 expires = 4;                      // 0 none
+}
+message OwnerConfirm { StatementHeader header = 1; bytes sidecar_id = 2; }
+message RepoCreate {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  RepoKind kind = 3;
+  // inbox = 4 (RepoInbox: 0 none, 1 group, 2 admin; the table's RepoCreate row) joins this fence once acl.proto
+  // declares it
+}
+message RepoAdmin {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sidecar_id = 3;
+  RepoAdminChange change = 4;
+}
+message RepoGrant {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes subject = 3;
+  RepoGrantRole role = 4;
+  int64 expires = 5;                      // 0 none
+}
+message RepoRevoke { StatementHeader header = 1; bytes repo_id = 2; bytes subject = 3; }
+message RepoDelete { StatementHeader header = 1; bytes repo_id = 2; bytes deletion_id = 3; bool now = 4; }
+message RepoRestore { StatementHeader header = 1; bytes repo_id = 2; bytes deletion_id = 3; }
+message RepoVersioning {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  RepoVersioningLock lock = 3;
+  bytes sealed_rules = 4;                 // optional: a VersioningRules (RepoVersioning, above)
+}
+message RepoPrefixRules {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sealed_rules = 3;                 // a PrefixRuleSet: 48 B and a multiple of 256 B (RepoPrefixRules, above)
+}
+message PrefixRuleSet { repeated PrefixRule rules = 1; }   // sorted, no rule twice; no server holds it
+message PrefixRule {
+  bytes subject = 1;                      // 16 B, one of the subjects row's
+  repeated bytes path = 2;                // the prefix in whole components; none: every path
+  PrefixAction action = 3;
+}
+message AuditOptIn { StatementHeader header = 1; repeated bytes reader_atoms = 2; int64 not_after = 3; }
+message AuditOptOut { StatementHeader header = 1; }
+enum RepoAdminChange {
+  REPO_ADMIN_CHANGE_UNSPECIFIED = 0; REPO_ADMIN_CHANGE_ADD = 1; REPO_ADMIN_CHANGE_REMOVE = 2;
+}
+enum RepoGrantRole {
+  REPO_GRANT_ROLE_UNSPECIFIED = 0; REPO_GRANT_ROLE_DEPOSIT = 1; REPO_GRANT_ROLE_READER = 2;
+  REPO_GRANT_ROLE_WRITER = 3;
+}
+enum RepoVersioningLock {
+  REPO_VERSIONING_LOCK_UNSPECIFIED = 0; REPO_VERSIONING_LOCK_LOCKED = 1; REPO_VERSIONING_LOCK_UNLOCKED = 2;
+}
+enum PrefixAction { PREFIX_ACTION_UNSPECIFIED = 0; PREFIX_ACTION_WRITE = 1; }
+// sidecar/protocol/bridge/auth.proto: the three statements sidecar/device's posture applies between states
+// (§17.8)
+message GrantRevoke { StatementHeader header = 1; bytes grant_id = 2; }
+message Suspend {
+  StatementHeader header = 1;
+  bytes subject = 2;
+  bytes suspend_id = 3;                   // random; only an Unsuspend naming it lifts this
+}
+message Unsuspend { StatementHeader header = 1; bytes subject = 2; bytes suspend_id = 3; }
 ```
 
 **Access logs (owner decision 8).** A repo's access log, the ordered chain of its RepoCreate, RepoAdmin, RepoGrant, RepoRevoke, RepoDelete, RepoRestore and RepoVersioning statements, rides §7.9 deltas into config heads, which keep it for the repo's life, each statement with the log position of the entry that carried it, so a reader judges a signer's repo admin right at any position, one before its retention point included (§16.11's repo file row); readers replay it, members check Adds and Removes against it (§10.9), and, as a RepoDelete or RepoRestore precedes its §11.12 route, the log never shows a deleted repo live, so a re-seed after a site loss can refuse a repo whose log ends in a RepoDelete past 7 days or with `now` (§19.10). A DROP push rides its ref, not this log, since it changes no reader, writer or key (§11.7). A team directory's decision entry cites the `RepoGrant` or `EvsShare` it approved by hash and log position, or the `ApprovalDecision` a `GrantActivate` spends, as its request's receipt; the statements are unchanged (§16.11). Config writers, who alone write config heads, are the AdminSet members' member devices (untagged, not ephemeral; 8.4) that are not read-only, and only k of n adds one (§7.5, §7.9; owner decisions 110, 112, 128).

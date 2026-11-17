@@ -56,20 +56,20 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12038,
-  "code_words": 12984,
+  "words": 12067,
+  "code_words": 14764,
   "ceiling": 3500,
-  "over": 8538,
-  "over_pct": 243.9
+  "over": 8567,
+  "over_pct": 244.8
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 11895,
-  "code_words": 3857,
+  "words": 11925,
+  "code_words": 5019,
   "ceiling": 3800,
-  "over": 8095,
-  "over_pct": 213.0
+  "over": 8125,
+  "over_pct": 213.8
  },
  {
   "num": 9,
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 9132,
-  "code_words": 4977,
+  "words": 9155,
+  "code_words": 5898,
   "ceiling": 3800,
-  "over": 5332,
-  "over_pct": 140.3
+  "over": 5355,
+  "over_pct": 140.9
  },
  {
   "num": 18,

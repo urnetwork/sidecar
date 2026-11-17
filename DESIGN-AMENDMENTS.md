@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 17 decided items and 6 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 17 decided items and 5 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -14,7 +14,7 @@ Holds 17 decided items and 6 proposed ones, generated from the ledger on 2026-11
 |---|---|---|
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§5 The Sidecar core](#s5) | 2 | 1 |
-| [§7 Networks, teams, members, enrollment, and SSO](#s7) | 3 | 1 |
+| [§7 Networks, teams, members, enrollment, and SSO](#s7) | 3 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
 | [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
@@ -117,17 +117,6 @@ Changes: HANDOFF section 5; owner rule 6 (its reach).
 Questions: `plan-TEAM-consent-page.md`.
 
 Not folded (2026-11-16): the line in HANDOFF section 5's mmm row, since HANDOFF.md is outside design/source/ and so outside a design-records track's files; the decision is folded as owner decision 306, and §7.8's `page` row names the consent page's code and command.
-
-### QD-451: Field numbers of records written as lists
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §8, §17.*
-
-Ratify as landed: numbers follow the order the text writes, StatementHeader at field 1. design-records writes them as fenced blocks in §7.9, §8.8 and §17.8, and TEAM-M2-01 and ACL-M2-01 check them line by line.
-
-Changes: §7.9; §8.8; §17.8.
-
-Questions: `protos-bridge-unwritten-numbers.md#1`.
-
-Not folded (2026-11-16): the fenced blocks in §7.9, §8.8 and §17.8. Those records' declarations are held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a ```proto fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do (it drops only `testFenceAdditions` entries). The rule itself is folded as text: §7.9's record bytes says field numbers follow the order written, with `StatementHeader` at field 1.
 
 <a id="s10"></a>
 ## §10 Group keys for evs: MLS and the GKM service
@@ -318,19 +307,6 @@ Not folded (2026-11-16): it changes only the run's BRIEF.md and a clone's worktr
 Decisions taken after this file was generated, each naming the section it folds into. A design-records track folds the ones that name its sections, with that section's items above, and deletes them here.
 
 §2.8's block holds the published list whole since 2026-11-16 (v26): the track for §2 and §3 wrote into it every line that items here and above had added to metadata_list.yml ahead of a fold through check's additions, list versions v12 to v25 (QD-040, QD-720, QD-724, QD-725, QD-743, QD-746, QD-763, QD-764, QD-765, QD-798, QD-819, QD-828, QD-830, QD-840 and DESIGN-DETAILS 17.2.16), and check's additions list is empty. Those items' §2.8 words are therefore done; their other parts fold with their sections, and a later row change is written in the block and copied by `make metadata`. The §10 fold wrote QD-857's v31 lines (cert-1's name failure backoff), which check's additions had published, into the block the same way on 2026-11-16, its entries leaving check's list, and took v32 for itself; QD-857's §13 parts were folded with §13 (owner decision 430). The §11 fold wrote QD-199's smtp-4 words, which SMTP-M9-16 had published through check's additions, into the block the same way, in the list's v34, after its own v33; QD-199's §14 and §20 parts were folded with §14.
-
-### QD-077: X's pin of Y's ShareKey and Y's pin of each target host's identity key have no signed home
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-The wire, which waits on the code: §17.9's fence takes `message BridgeShareGrant { bytes share_id = 1; bytes grant_id = 2; bytes share_public_key = 3; bytes target_table_sha256 = 4; bytes table_key = 5; }` once bridge.proto declares it, and bridge.proto gains `BridgeAliasBody.host_identity_public_key = 5` with the share seal's `BridgeShareTargets` and `BridgeShareAliases` (QD-108), which no DESIGN.md fence writes. The rest is folded (2026-11-10): §17.8's BridgeAlias, §17.9's share pins, shares paragraph and target row, a comment in §17.9's fence, §8.11, §7.9's repo files and FS-38.
-
-Changes: §17.9's fence; bridge.proto.
-
-Questions: `plan-BRIDGE-share-pins.md`.
-
-Waits on: bridge.proto's share messages (BRIDGE-M6-03 to -05), the fence line landing in one change with them, as protocol's fence test holds the two together.
-
-Not folded (2026-11-16): the ```proto fence for BridgeShareGrant in §17.9. bridge.proto now declares it with fields 1 to 9 (QD-670's 6 to 9 among them), but its declaration, with the share seal's bodies and `BridgeShareAccept`, is held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do. The fields are folded as text, with their numbers, in §17.9's share pins block (owner decision 475), and §17.9's fence comment says what joins it.
 
 ### QD-779: Should a run card's version be the index epoch above the stream version of its run's newest entry, in place of the highest seq folded?
 *Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
