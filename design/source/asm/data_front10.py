@@ -997,6 +997,27 @@ INDEX = list(_P9['INDEX']) + [
     (555, 'Release layout paths',
      "Tests only the release layout broke are fixed where they live, `check/` models run.sh's two path passes, and "
      "sdk's release restores its nested modules' paths."),
+    # The second folds of §7 to §10 (2026-11-17): the answers queued for them after their first folds.
+    (556, "Restored admissions' kinds in a base",
+     "A base's header lists the restored bindings' admissions in its tail filed with `self_admit` off, so "
+     "@@OD:314@@'s kind holds at every base."),
+    (557, "A repo's shrink time in rows",
+     "`AclRepo` carries the time of the entry at its `holders_shrunk_at`, so every verifier reads @@OD:315@@'s t_s "
+     "from the rows."),
+    (558, "Targets at an app host",
+     "At an app's forwarding role §8.9's targets bind revocations; a grant, which only a compile applies, is held to "
+     "the p99 at a quiet moment."),
+    (559, "Group atoms at the prefix filer",
+     "The prefix filer knows a group's atom by the head's group atom ids, so an empty group's atom names nobody."),
+    (560, "The dialer's sidecar in `ur/` tickets",
+     "A `ur/` ticket names its dialer's sidecar, signed at Find, and smtpedge judges `mail_send` for it."),
+    (561, 'Members in the revocation record',
+     "The revocation record keeps memberships and their users' cutoffs, so sockets checks a member's token with no "
+     "SQL."),
+    (562, 'Ticket keys settle from first sight',
+     "A sockets ticket key settles 10 min after the later of its creation and a block's first read of it."),
+    (563, "gkm's guard takes a right set",
+     "gkm honors a route's rights only whole, as evs does, so a deleted repo's admins pass only gkm's admin routes."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -1040,7 +1061,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 556))
+assert [r[0] for r in INDEX] == list(range(1, 564))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1122,7 +1143,9 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               539: '2026-11-06', 540: '2026-11-10', 541: '2026-11-11', 542: '2026-11-12', 543: '2026-11-15',
               544: '2026-11-15', 545: '2026-11-15', 546: '2026-11-15', 547: '2026-11-16', 548: '2026-11-16',
               549: '2026-11-16', 550: '2026-11-06', 551: '2026-11-06', 552: '2026-11-11',
-              553: '2026-11-16', 554: '2026-11-16', 555: '2026-11-16'})
+              553: '2026-11-16', 554: '2026-11-16', 555: '2026-11-16', 556: '2026-11-16', 557: '2026-11-17',
+              558: '2026-11-16', 559: '2026-11-16', 560: '2026-11-16', 561: '2026-11-17', 562: '2026-11-17',
+              563: '2026-11-16'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1405,3 +1428,11 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D552, _D552 + "On 2026-11-17 the second folds of §2's and §4's number the answers queued for them since: what a "
     "presence key registration's attestation statement shows api (553), the macOS slices' two configurations in "
     "§4.7's legs (554), amending @@OD:277@@ and @@OD:493@@, and the paths the release rewrite keeps (555). ")
+# The second folds of §7 to §10 (2026-11-17) number the answers queued for those sections after their first folds.
+_D555 = "and the paths the release rewrite keeps (555). "
+assert DECISIONS_INTRO.count(_D555) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D555, _D555 + "The second folds of §7 to §10 number theirs: the kind of each restored binding's admission a base "
+    "leaves in its tail (556), a repo's shrink time in the rows (557), §8.9's targets at an app host (558), group "
+    "atoms at the prefix filer (559), the dialer's sidecar in `ur/` tickets (560), members in the revocation record "
+    "(561), ticket keys settling from first sight (562) and gkm's guard over a right set (563). ")

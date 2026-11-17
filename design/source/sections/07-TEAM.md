@@ -109,7 +109,7 @@ auth code  auth_code gains api_key_id; /auth/code-login refuses a code whose key
 
 **Networks (owner decisions 23, 55, 59).** A team is one network whose members' sidecars are its clients, beside members' personal networks. `POST /network/team-create` (Q-TEAM-2) adds `network_team` (§20), kept for the network's life, sets `admin_user_id` to a synthetic owner-of-record and makes the caller the first Owner, so every human is removable. That Owner's bootstrapping device (7.9), after the config repo's first base, files the team directory's `RepoCreate{repo_id, kind directory}` (§8.8) and becomes its repo admin, beside every config writer; an admin device that finds a team without one files it, under §8.8's directory row (§16.11; owner decision 171; D-TEAM-28). Right after the directory's, the same device files the team record's `RepoCreate{repo_id, kind team_record}`, and an admin device that finds a team whose access logs hold no `team_record` RepoCreate files it, under §8.8's team_record row. A `RepoDelete` of it stands: only a person's /dev/tty-confirmed admin command files a new one, so a Team may decline the ledger and route as personal networks do (RECORD.md section 4.2; owner decision 303). Team routes (members, invitations, IdPs, domains, SCIM, OAuth clients, admin events and audit webhooks; 7.17) check `NetworkTierOf` (§20.5) and refuse a network outside the `team` tier with §20's `QuotaRefusal` (`upgrade`).
 
-**Members.** `network_member.member_id`, new per join, rides in tokens and `rev/` objects, so a re-invite never revives an old token.
+**Members.** `network_member.member_id`, new per join, rides in tokens and `rev/` objects, so a re-invite never revives an old token. The network's revocation record keeps each joined, admitted membership as `m:<member_id>` and its user's credential cutoff as `u:<user_id>`, and the membership writers write the member's tombstone before a removal, or the end of a membership a re-join replaces, commits, so sockets checks a member's token with no SQL (§9.8's client tokens; owner decision 561).
 
 **Roles.** One per member, signed in the config repo (`AdminSet`, under k of n, for the table's first four, which sign config records; else `MemberAdmit`) and mirrored by the server. `routePermissionByRoute` maps the 75 Network and AppAdmin routes to permissions, unmapped ones owner-only; API keys and OAuth tokens get scopes ∩ their creator's. `MemberRole` numbers the table's rows from 1 in the order written, 0 being unspecified (7.9's record bytes).
 
@@ -535,8 +535,15 @@ self_admit  off: a scoped recovery admission is a proposal by the recovery key t
             decides nothing: ProposalKind is authority (1), recovery_scoped (2), restored (3: activates with
             no counted cosign, owner decision 149) or restored_cosigned (4: a restored binding's scoped
             admission filed while self_admit was off, which activates only if one admission signer's cosign
-            is among its signers); until value 4 is declared, readers take self_admit from rows at the tick,
-            which keeps them agreeing (owner decision 314)
+            is among its signers; owner decision 314); a base carries that kind for the restored bindings'
+            admissions in its tail, in ProjectionHeader.restored_cosigned_ids: the ascending proposal ids,
+            among the tail's entries that took effect, of those filed with self_admit off, which the writer
+            fills from the kinds it judged or took; a verifier present at the tail recomputes the list and
+            forks on a difference, api answering 403, and one that starts at the base takes it, so Reapply
+            opens the listed rows with kind 4 and every other restored binding's admission with kind 3, never
+            by the base's own self_admit, and the rule holds at a base whose own head changes self_admit while
+            keeping its fold (owner decision 556); until that field is declared, such an admission in the tail
+            of a base whose own head changes self_admit takes that base's value, alike at every verifier
 cascade     (D-TEAM-26) SidecarRevoke{reason: compromise, since_n} parks a closure P. since_n is a log position
             with no default: the signing device proposes the first entry timed at or after the loss time its
             person gives, which the person may move earlier, lists for its person and admins what P parks and
@@ -737,6 +744,8 @@ message ProjectionHeader {           // §6 Signed, purpose authority, by a conf
                                      // config head change shrinks (shrink, below), which the writer computes
                                      // from S(version-1) and S(version): 16-byte repo_ids of the rows, in
                                      // ascending byte order, none twice; empty for none
+  // repeated bytes restored_cosigned_ids = 12 (owner decision 556; the self_admit row) joins this fence once
+  // auth.proto declares it
 }
 message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a rows-only verifier's whole
                                      // state at folded_through; for the cascade a *_signer names a
@@ -771,8 +780,8 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a
                                             // position: what the presence row reads
   bytes  acl = 5;                    // §8.8's AclRows (acl.proto), deterministically encoded, so this file
                                      // imports nothing, each EvsShare with its signer and at; with
-                                     // AclRepo.holders_shrunk_at (below); sidecar/device's posture reads
-                                     // only its has_document (field 1)
+                                     // AclRepo.holders_shrunk_at and its time (shrink, below);
+                                     // sidecar/device's posture reads only its has_document (field 1)
                                      // 6 stays unused until M6, when Team scopes define repeated
                                      // TeamScopeRow team_scopes {label, member_id or tag atom}; format-1
                                      // readers skip it
@@ -809,7 +818,8 @@ base       POST /network/config/projection {Signed ProjectionHeader, rows, confi
            only; Bootstrap)}: accepted only if version = tip+1, prev_chain = A_tip, SHA-256(rows) =
            rows_sha256, config_version and folded_through are each at least the newest base's, its config head
            is that base's or a descendant (descent), and its tail_verdicts covers exactly
-           folded_through+1..version-1 and agrees with api's own verdict at each position; api PUTs projrows,
+           folded_through+1..version-1 and agrees with api's own verdict at each position, and its
+           restored_cosigned_ids with api's own list (the self_admit row); api PUTs projrows,
            then the entry; if the tip moved, 409 {tip, A_tip} and the writer re-signs, re-compiling only when an
            intervening base moved the config head or the fold; folded_through may stay at its old m while
            m >= tip - 1,024, so the writer never re-compiles under a stream of statements
@@ -868,7 +878,9 @@ apply(e)   every admitted sidecar: e.n = my.n + 1 and e.prev_chain = my.A, else 
              tail compares the bits with its own, a BASE among them 0, and forks on a difference; a new device
              and a rows-only verifier re-apply the tail by the bits and never re-judge it, so a tail statement
              whose rule reads what the base's head changed, or whose at lies below what the new device holds,
-             gets the verdict the long-running readers gave it
+             gets the verdict the long-running readers gave it; restored_cosigned_ids carries the one part of a
+             restored binding's admission's judgment the bits do not, its kind, compared and taken alike
+             (the self_admit row; owner decision 556)
     ledger   (owner decision 473) a reader that opened the bridge statements folded since the previous base
              checks that the head's bridge ledger (§17.8) equals the fold of the previous head's ledger and
              those statements by the verdicts it judged them, and forks on a difference; a device that starts
@@ -959,17 +971,22 @@ shrink    entry n shrinks repo R if KeyHolders(R, n-1, t_n) is not a subset of K
           t_n its time_ms, or if it retires a holder of R's key for compromise (a SidecarRevoke or
           RecoveryRebind with reason compromise, or a DelegationRevoke with since_n > 0, signed for a
           leaked bundle), though the holder's identity may stay; identity
-          (R, n, A_n); rows carry AclRepo.holders_shrunk_at, the newest such n, which writers compile into
-          bases and readers, api, evs and gkm advance per entry; a base is such an entry for the repos its
-          shrunk_repo_ids lists, those whose holders its own config head change shrinks, so a new device or
-          cold gate that starts there learns them (apply's shrunk row); entry n also shrinks R when it drops
-          a holder of KeyHolders(R, n-1, t_s) from KeyHolders(R, n, t_s), t_s being the time of the entry at
-          R's holders_shrunk_at (R's creation when that is 0): every generation the gate still passes was
-          formed at or after t_s, and a holder only leaves as t grows, so a removal of a holder whose access
-          had already ended by time (a RepoRevoke or GrantRevoke of a lapsed grant, a SidecarRevoke of an
-          agent past its not_after, or a base that drops it) raises holders_shrunk_at, the gate keeps
-          refusing the generation the expiry closed and the rotation is asked; an expiry moved earlier with
-          both ends after R's last shrink stays open, for the review phase (owner decision 315)
+          (R, n, A_n); rows carry AclRepo.holders_shrunk_at, the newest such n, and its time,
+          holders_shrunk_time_ms, which writers compile into bases and readers, api, evs and gkm advance per
+          entry; a base is such an entry for the repos its shrunk_repo_ids lists, those whose holders its own
+          config head change shrinks, so a new device or cold gate that starts there learns them (apply's
+          shrunk row); entry n also shrinks R when it drops a holder of KeyHolders(R, n-1, t_s) from
+          KeyHolders(R, n, t_s), t_s being R's holders_shrunk_time_ms: the time_ms of the entry at R's
+          holders_shrunk_at, or of R's RepoCreate's entry while that is 0, which ACL's fold sets at the
+          RepoCreate and each shrink sets with holders_shrunk_at, the config repo's own row, which no entry
+          makes, reading the Genesis's time_ms until its first shrink writes both; so every verifier, a new
+          device, a cold gate and api after a reload included, computes this comparison exactly at t_s from
+          the rows, with no entry the log has dropped (owner decision 557); every generation the gate still
+          passes was formed at or after t_s, and a holder only leaves as t grows, so a removal of a holder
+          whose access had already ended by time (a RepoRevoke or GrantRevoke of a lapsed grant, a
+          SidecarRevoke of an agent past its not_after, or a base that drops it) raises holders_shrunk_at, the
+          gate keeps refusing the generation the expiry closed and the rotation is asked; an expiry moved
+          earlier with both ends after R's last shrink stays open, for the review phase (owner decision 315)
 expiry    an authorization expiry: a holder whose RepoGrant or requested grant expires, or whose SidecarAdmit
           (an uncovered agent's) or Delegation not_after passes, at T_e, leaves at T_e with no entry; identity
           (R, T_e); a covered agent's own not_after drops no holder where it is covered: an ephemeral one
