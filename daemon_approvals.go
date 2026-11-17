@@ -27,6 +27,16 @@
 // or evidence that does not verify against a live presence key of this sidecar's, signs nothing (REVOKE_CANCELLED).
 // The daemon holds at most Local.PresenceActCount acts.
 //
+// The hold decides where the check runs (§5.6, §5.8; owner decision 290, QD-897): where the log covers the act and
+// every live presence key this sidecar registered is one the daemon host's own authenticator holds
+// (Daemon.PresenceProvider().Holds), none a remote-mode app's, the call answers no bytes, which the app shows as the
+// host's prompt, and the next call, its evidence unread, runs the daemon's presence prompt over the act's bytes before
+// anything is signed: the person's wait is outside that call's request bound (QD-518, daemon_request_bound.go), and an
+// act that ends while the person is asked, its session's end or the daemon's close, signs nothing. Where any live key
+// is another's, a host key and an app key both live among them, the app's evidence is the check as above. So the app's
+// own KeyRegister beside a host-held live key takes its new key's proof from the app at the second call and the
+// daemon's countersignature at the third.
+//
 // The terminal's path stays the one confirmed call (devices.revoke, devices.cosign, approvals.decide, ur keys
 // add-presence) under the daemon's own prompt. ur native-host relays none of these: its allow-list holds no Confirm
 // method, and it answers a revocation REVOKE_NOT_CAPABLE itself. Replies carry ids, bytes to sign and positions, never
@@ -108,7 +118,9 @@ type DaemonPresenceBeginReply struct {
 	// What the next call names the act by. Empty with a refusal.
 	ActId *Id `json:"act_id,omitempty"`
 	// The act's countersigned bytes (§7.9's presence row), which the app's presence key signs by SignWithPresence:
-	// empty for an act the log does not cover, which the next call signs on the person's confirmation alone.
+	// empty for an act the log does not cover, which the next call signs on the person's confirmation alone, and for
+	// one the daemon's own prompt checks at the next call, where every live presence key is the host authenticator's
+	// (owner decision 290).
 	Countersigned []byte `json:"countersigned,omitempty"`
 	// §5.6's refusal before anything was built: nothing was signed and no act waits.
 	Refusal *DaemonDeviceRefusal `json:"refusal,omitempty"`
@@ -119,7 +131,8 @@ type DaemonPresenceFinishParams struct {
 	Network string `json:"network,omitempty"`
 	ActId   Id     `json:"act_id"`
 	// §6.9's WebAuthnEvidence, encoded, as SignWithPresence answered it over the bytes the call before answered;
-	// empty for none.
+	// empty for none, as where that call answered no bytes: evidence sent then goes unused, though evidence that does
+	// not decode still signs nothing.
 	Evidence []byte `json:"evidence,omitempty"`
 }
 
@@ -180,11 +193,13 @@ type daemonPresenceHold struct {
 	proof bool
 }
 
-// What a next call answers a hold.
+// What a next call answers a hold, or why the hold ended unanswered.
 type daemonPresenceAnswer struct {
 	// nil for none
 	evidence *bridge.WebAuthnEvidence
 	err      error
+	// the answering call's request bound, which a wait on the person for that call stands outside; nil for none
+	bound *daemonRequestBound
 }
 
 // Where a call left an act: the hold it waits at, or its run's end.
@@ -211,6 +226,8 @@ type daemonPresenceAct struct {
 	// the family whose later calls take it
 	kind      string
 	networkId Id
+	// the network's Sidecar, whose live presence keys decide where the act's check runs
+	sidecar *Sidecar
 	// the session that began it; nil for a call no session reader watches
 	session <-chan struct{}
 	// what a later first call of the family supersedes it by: a plan, an item, a proposal, a key
@@ -337,44 +354,118 @@ func (self *daemonPresenceAct) armLapse() {
 	}
 }
 
-// Holds the run at hold until a next call answers it or the act ends. testHookBarrier brackets the wait.
-func (self *daemonPresenceAct) holdAt(hold *daemonPresenceHold) (*bridge.WebAuthnEvidence, error) {
+// Holds the run at hold until a next call answers it, or the act ends, which the answer's err says. testHookBarrier
+// brackets the wait.
+func (self *daemonPresenceAct) holdAt(hold *daemonPresenceHold) daemonPresenceAnswer {
 	daemonCtx := self.acts.daemon.ctx
 	testHookBarrier("daemon.presence.hold.before", self.actId.String())
 	defer testHookBarrier("daemon.presence.hold.after", self.actId.String())
 	select {
 	case self.holds <- hold:
 	case <-self.ended:
-		return nil, self.endErr
+		return daemonPresenceAnswer{err: self.endErr}
 	case <-daemonCtx.Done():
-		return nil, daemonCtx.Err()
+		return daemonPresenceAnswer{err: daemonCtx.Err()}
 	}
 	select {
 	case answer := <-self.answers:
-		return answer.evidence, answer.err
+		return answer
 	case <-self.ended:
-		return nil, self.endErr
+		return daemonPresenceAnswer{err: self.endErr}
 	case <-daemonCtx.Done():
-		return nil, daemonCtx.Err()
+		return daemonPresenceAnswer{err: daemonCtx.Err()}
 	}
 }
 
-// The hold a sidecarAct asks under the run's context: its countersigned bytes out where the log covers it, none where
-// it does not, and the next call's evidence back. One act a run: a second asking signs nothing.
+// The hold a sidecarAct asks under the run's context, where the check runs decided as the file's comment says: where
+// the log covers the act and the host's authenticator holds every live presence key of this sidecar's, no bytes out
+// and, once the next call came, the daemon's prompt over the act's bytes; where it covers the act otherwise, its
+// countersigned bytes out and the next call's evidence back; where it does not cover the act, no bytes out and nothing
+// back. One act a run: a second asking signs nothing.
 func (self *daemonPresenceAct) actHold(countersignedBytes []byte, presence bool) (*bridge.WebAuthnEvidence, error) {
 	if !self.actHeld.CompareAndSwap(false, true) {
 		return nil, errDaemonPresenceHeldTwice
 	}
-	hold := &daemonPresenceHold{}
+	var provider PresenceProvider
 	if presence {
+		provider = self.hostProvider()
+	}
+	hold := &daemonPresenceHold{}
+	if presence && provider == nil {
 		hold.message = bytes.Clone(countersignedBytes)
 	}
-	evidence, err := self.holdAt(hold)
+	answer := self.holdAt(hold)
+	if answer.err != nil {
+		return nil, answer.err
+	}
+	if provider != nil {
+		return self.hostPrompt(provider, answer.bound, countersignedBytes)
+	}
+	if presence && answer.evidence == nil {
+		return nil, errDaemonPresenceNoEvidence
+	}
+	return answer.evidence, nil
+}
+
+// The daemon host's own authenticator where it holds every live presence key the act's sidecar registered, at least
+// one, so §5.6's check runs on this host (owner decision 290); nil where any live key is another's, a remote-mode
+// app's, or the host has no authenticator.
+func (self *daemonPresenceAct) hostProvider() PresenceProvider {
+	provider := self.acts.daemon.PresenceProvider()
+	if provider == nil || self.sidecar == nil || !daemonHostHoldsLiveKeys(self.sidecar, provider) {
+		return nil
+	}
+	return provider
+}
+
+// Whether provider holds every live presence key running registered, and running registered at least one.
+func daemonHostHoldsLiveKeys(running *Sidecar, provider PresenceProvider) bool {
+	authority := running.authority()
+	identity := running.currentIdentity()
+	if authority == nil || identity == nil {
+		return false
+	}
+	held := 0
+	for _, key := range authority.LiveKeys(identity.SidecarId) {
+		if key.GetPurpose() != bridge.KeyPurpose_KEY_PURPOSE_PRESENCE {
+			continue
+		}
+		if !provider.Holds(key.GetKeyId()) {
+			return false
+		}
+		held += 1
+	}
+	return 0 < held
+}
+
+// The daemon's presence prompt over provider (daemon_presence.go) over the act's countersigned bytes, once the next
+// call answered the hold that sent none: the person's wait outside bound, that call's request bound, nil for none
+// (QD-518). The prompt ends with the act, at its session's end or the daemon's close, and an act that ended while the
+// person was asked signs nothing whatever the authenticator answered. testHookBarrier brackets the prompt.
+func (self *daemonPresenceAct) hostPrompt(provider PresenceProvider, bound *daemonRequestBound, countersignedBytes []byte) (*bridge.WebAuthnEvidence, error) {
+	daemonCtx := self.acts.daemon.ctx
+	ctx, cancel := context.WithCancel(daemonCtx)
+	defer cancel()
+	go func() {
+		select {
+		case <-self.ended:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	prompt := newPresencePromptWithin(withDaemonRequestBound(ctx, bound), self.sidecar, provider)
+	testHookBarrier("daemon.presence.prompt.before", self.actId.String())
+	evidence, err := prompt(bytes.Clone(countersignedBytes))
+	testHookBarrier("daemon.presence.prompt.after", self.actId.String())
+	select {
+	case <-self.ended:
+		return nil, self.endErr
+	case <-daemonCtx.Done():
+		return nil, daemonCtx.Err()
+	default:
+	}
 	if err != nil {
 		return nil, err
-	}
-	if presence && evidence == nil {
-		return nil, errDaemonPresenceNoEvidence
 	}
 	return evidence, nil
 }
@@ -398,6 +489,7 @@ func (self *daemonPresenceActs) begin(ctx context.Context, call *DaemonCall, kin
 		actId:     NewId(),
 		kind:      kind,
 		networkId: call.NetworkId,
+		sidecar:   call.Sidecar,
 		session:   call.SessionDone,
 		subject:   subject,
 		holds:     make(chan *daemonPresenceHold),
@@ -450,7 +542,8 @@ func (self *daemonPresenceActs) begin(ctx context.Context, call *DaemonCall, kin
 // Answers the hold act actId waits at with evidence, encoded, empty for none, as call, a next call of kind, which
 // answers a new key's proof where proof is set and the act's check otherwise; then answers where the run left the act
 // as begin does. An act whose run ended before any hold answers what it did, its evidence unread. Evidence that does
-// not decode signs nothing.
+// not decode signs nothing. The answer carries ctx's request bound, which the daemon's prompt for this call stands
+// outside.
 func (self *daemonPresenceActs) next(ctx context.Context, call *DaemonCall, kind string, actId Id, evidence []byte, proof bool) (*daemonPresenceStep, error) {
 	var stop func() bool
 	act, completed, err := func() (*daemonPresenceAct, bool, error) {
@@ -485,7 +578,7 @@ func (self *daemonPresenceActs) next(ctx context.Context, call *DaemonCall, kind
 		act.end(errDaemonPresenceActFinished)
 		return &daemonPresenceStep{result: act.result, err: act.err}, nil
 	}
-	answer := daemonPresenceAnswer{}
+	answer := daemonPresenceAnswer{bound: daemonRequestBoundOf(ctx)}
 	if 0 < len(evidence) {
 		answer.evidence = &bridge.WebAuthnEvidence{}
 		if err := proto.Unmarshal(evidence, answer.evidence); err != nil || len(answer.evidence.GetKeyId()) == 0 ||
@@ -617,14 +710,14 @@ func (self *daemonAppPresenceProvider) Assert(ctx context.Context, keyId []byte,
 	if !bytes.Equal(keyId, self.handle.KeyId) {
 		return nil, fmt.Errorf("%w: the app holds no such key", ErrPresenceNoKey)
 	}
-	evidence, err := self.act.holdAt(&daemonPresenceHold{message: bytes.Clone(message), proof: true})
-	if err != nil {
-		return nil, err
+	answer := self.act.holdAt(&daemonPresenceHold{message: bytes.Clone(message), proof: true})
+	if answer.err != nil {
+		return nil, answer.err
 	}
-	if evidence == nil || !bytes.Equal(evidence.GetKeyId(), self.handle.KeyId) {
+	if answer.evidence == nil || !bytes.Equal(answer.evidence.GetKeyId(), self.handle.KeyId) {
 		return nil, errDaemonPresenceNoEvidence
 	}
-	return evidence, nil
+	return answer.evidence, nil
 }
 
 // Nothing: the key is the app's to take off its own authenticator.
@@ -815,10 +908,10 @@ func DaemonApprovalsMethods(daemon *Daemon) []*DaemonMethod {
 
 // One act by §5.8's two calls on this control session, the caller's side of the file's comment: beginMethod with
 // beginParams, confirmed; then, once sign answered §6.9's WebAuthnEvidence, encoded, over the countersigned bytes the
-// daemon answered, or with nothing asked for an act the log does not cover, finishMethod with it, confirmed, its
-// answer decoded into result. A refusal of the first call is answered with nothing sent after it; an error of sign
-// ends it after the first call, and the act the daemon holds lapses unsigned. What the sdk's remote backend does
-// (SDK-M8-05), for a Go caller of the daemon.
+// daemon answered, or with nothing asked where it answered none, for an act the log does not cover or one the daemon's
+// own prompt checks, finishMethod with it, confirmed, its answer decoded into result. A refusal of the first call is
+// answered with nothing sent after it; an error of sign ends it after the first call, and the act the daemon holds
+// lapses unsigned. What the sdk's remote backend does (SDK-M8-05), for a Go caller of the daemon.
 func (self *DaemonClient) CallPresenceAct(ctx context.Context, network string, beginMethod string, beginParams any, finishMethod string,
 	sign func(countersignedBytes []byte) ([]byte, error), result any) (*DaemonDeviceRefusal, error) {
 	begin := &DaemonPresenceBeginReply{}

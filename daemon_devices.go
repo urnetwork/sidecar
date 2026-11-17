@@ -16,7 +16,10 @@
 //	                  a remote-mode app's RevokeDevice by §5.8's two calls (daemon_approvals.go): the first, with
 //	                  devices.revoke's params, builds the act and answers its countersigned bytes and an act id,
 //	                  signing nothing; the second sends the evidence the app's SignWithPresence made over them and
-//	                  answers devices.revoke's reply, the daemon signing only then. Both are Confirm methods
+//	                  answers devices.revoke's reply, the daemon signing only then. Where every live presence key of
+//	                  this sidecar's is one the host's own authenticator holds, the first answers no bytes and the
+//	                  second runs the daemon's presence prompt instead, outside its request bound (owner decision
+//	                  290, QD-518). Both are Confirm methods
 //	devices.proposal  PreviewRevokeProposal: an open revocation proposal's plan, for a cosigner to read
 //	devices.cosign    CosignRevokeProposal: a Confirm method, under the same approval and prompt
 //	devices.cosign.begin, devices.cosign.finish
