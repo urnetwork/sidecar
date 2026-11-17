@@ -6,7 +6,10 @@
 // The cursor is opaque and the server's: the client sends back the last one it was given, which an
 // empty hold leaves unchanged. Anything but a 200 is waited out, from RetryMinInterval doubling to
 // RetryMaxInterval or the server's Retry-After when it asks more, since this file cannot import
-// connect's Reconnect; a 401 ends the poll, since it ends the client generation it polled for.
+// connect's Reconnect; a 401 ends the poll, since it ends the client generation it polled for. The first
+// 200 after a failure is the long-poll's reconnect: once its reply is applied the loop calls Resync,
+// which ends a failed versions refetch's pending retry wait at once, as a connect leg's reconnect does
+// (§6.8). The loop's own backoff paces these reconnects: at most one for each backoff a 200 ends.
 
 package sidecar
 
@@ -200,9 +203,10 @@ func (self *PushPollClient) Reconcile(topic string, version uint64) {
 	self.feed.reconcile(topic, version)
 }
 
-// Asks for a versions refetch now, as at a reconnect.
+// Asks for a versions refetch now, as a reconnect: it also ends a failed refetch's pending retry wait at
+// once (§6.8). The poll loop calls it at its first successful poll after a failure.
 func (self *PushPollClient) Resync() {
-	self.feed.resync()
+	self.feed.reconnect()
 }
 
 // The poll loop of the file header.
@@ -245,10 +249,17 @@ func (self *PushPollClient) run() {
 			}
 			continue
 		}
+		// a backoff stands only after a failure, so this is the first poll answered since one
+		reconnected := retryInterval != 0
 		retryInterval = 0
 		self.feed.applyPoll(response)
 		if 0 < len(response.Cursor) {
 			cursor = response.Cursor
+		}
+		if reconnected {
+			// after the reply's inputs, so the refetch this asks for begins after them and its page
+			// is judged by them
+			self.Resync()
 		}
 	}
 }
