@@ -1455,8 +1455,8 @@ func TestSocketRegistrarVerdictEndsWithTheEntry(t *testing.T) {
 	}
 }
 
-// The route: POST to the sockets service with the client's token as a bearer and no proof, the page as JSON, and the
-// answer read as it came, a page's refusal included; a short answer and a 503 are errors with their wait.
+// The route: POST to the sockets service with a sockets service token as a bearer (QD-1029) and no proof, the page as
+// JSON, and the answer read as it came, a page's refusal included; a short answer and a 503 are errors with their wait.
 func TestSocketRegistrationsRoute(t *testing.T) {
 	transport := &scriptedApiTransport{
 		answer: func(request *http.Request, body []byte) (*http.Response, error) {
@@ -1475,7 +1475,7 @@ func TestSocketRegistrationsRoute(t *testing.T) {
 			return syntheticResponse(request, 503, `{}`, http.Header{"Retry-After": []string{"7"}}), nil
 		},
 	}
-	api := newTestSidecarApi(t, transport)
+	api, _ := newTestSocketsApi(t, transport)
 	listenId := connect.Id(testSocketId("listen"))
 	registration := &SocketRegistration{Name: "tls/443/blog", ListenId: &listenId, Protocol: "tcp", Weight: 100, MaxStreams: 256, Serving: true}
 	result, err := api.SocketRegistrations(context.Background(), &SocketRegistrationsArgs{SetVersion: 5, Registrations: []*SocketRegistration{registration}})
@@ -1484,7 +1484,7 @@ func TestSocketRegistrationsRoute(t *testing.T) {
 	}
 	request, body := transport.onlyRequest(t)
 	if request.Method != "POST" || request.URL.String() != "https://sockets.example/socket/registrations" ||
-		request.Header.Get("Authorization") != "Bearer "+testByJwt || request.Header.Get("DPoP") != "" ||
+		request.Header.Get("Authorization") != "Bearer "+testSocketsToken(1) || request.Header.Get("DPoP") != "" ||
 		request.Header.Get("Content-Type") != "application/json" {
 		t.Errorf("request %s %s", request.Method, request.URL)
 	}

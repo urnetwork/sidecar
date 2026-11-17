@@ -84,8 +84,8 @@ type SocketStorePage struct {
 	// The authorization log position of the gate state the page was judged on (§7.9). Each lease the page
 	// writes keeps the higher of this and the position it stood at, and each refused entry is removed at it.
 	PolicyVersion uint64
-	// The listener's sidecar, the subject a Find's listener check judges (plan-SOCK-client-auth's sidecar_id
-	// claim). nil for a ur/ listener, which has none.
+	// The listener's sidecar, the subject a Find's listener check judges (its service token's ur_sidecar_id).
+	// nil for a ur/ listener, which has none.
 	SidecarId *connect.Id
 	// The page's range of name keys. An empty KeyEnd is unbounded.
 	KeyStart []byte

@@ -1,5 +1,6 @@
 // Sidecar.ServiceToken (§5.4, §7.8, R-CORE-10): a service token for one audience, evs, gkm, dns, certs or mail, from
-// the token exchange, which the sidecar's components present to that service. A token lives 15 minutes (owner
+// the token exchange, which the sidecar's components present to that service. sockets' token, the sixth audience
+// (QD-1029), is SidecarApi's own, which the /socket/* routes keep (api_routes_socket.go). A token lives 15 minutes (owner
 // decision 2), and is kept per audience and scope set for SidecarTokenRefreshSettings.ServiceTokenCacheTimeout,
 // under that life, and never across a client generation, since a new client's exchange names a new subject. A token
 // the service refuses goes at once (ForgetServiceToken), so the caller's one retry exchanges again.

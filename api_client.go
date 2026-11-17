@@ -139,6 +139,17 @@ type SidecarApi struct {
 	// ConnectSettings().DialContext (connect/net_http.go:777, connect/net.go:232), egress-bound as
 	// connect/net_http.go:3663-3668 requires; sidecar_http's is net/http's fetch
 	transport http.RoundTripper
+	// the sockets service token the /socket/* routes present, nil for none yet (api_routes_socket.go)
+	socketsToken *sidecarApiServiceToken
+}
+
+// A service token this api exchanged, and for whom: the sockets token its /socket/* routes keep
+// (api_routes_socket.go), on the legs that call them.
+type sidecarApiServiceToken struct {
+	accessToken string
+	// the client the exchange's subject token named, or that token itself when it names none readable
+	subject   string
+	keepUntil time.Time
 }
 
 // A client of api on settings, which must pass validate, so no route builds a url on an empty or
@@ -308,6 +319,9 @@ type sidecarApiRequest struct {
 	buildBody func(byJwt string) []byte
 	// Presents the jwt as a bearer.
 	bearer bool
+	// Presents this service token as the bearer in place of the jwt, which the request then needs none of: a
+	// service's route on its own audience's token (§7.8), sockets' since QD-1029.
+	serviceBearer string
 	// Carries a DPoP proof over the jwt (§7.4).
 	dpop bool
 	// Reads a refusal's whole body as the route's own, when set: the error it answers stands for the refusal, and nil
@@ -392,7 +406,9 @@ func (self *SidecarApi) sendOnce(ctx context.Context, request *sidecarApiRequest
 	if request.contentType != "" {
 		httpRequest.Header.Set("Content-Type", request.contentType)
 	}
-	if request.bearer {
+	if request.serviceBearer != "" {
+		httpRequest.Header.Set("Authorization", "Bearer "+request.serviceBearer)
+	} else if request.bearer {
 		httpRequest.Header.Set("Authorization", "Bearer "+byJwt)
 	}
 	if proof != "" {

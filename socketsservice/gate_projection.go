@@ -26,9 +26,9 @@
 // one subscriber here, and only for networks this process serves: an event for any other is dropped, so no
 // process loads a network nobody asked it for.
 //
-// Evaluation (§8.10's sock row). A view reads its snapshot's AclState for the sidecar a request's token names,
-// the only subject a sockets caller has outside urnetwork-edge (QD-040): a listener's listen on its token path or
-// tls/ and smtp/ name, a dialer's dial by token path, and a listener's publish on its tls/ name's host, each a
+// Evaluation (§8.10's sock row). A view reads its snapshot's AclState for the sidecar a request's token names in
+// its ur_sidecar_id, the only subject a sockets caller has outside urnetwork-edge: a listener's listen on its token
+// path or tls/ and smtp/ name, a dialer's dial by token path, and a listener's publish on its tls/ name's host, each a
 // grant whose rule id and expiry the verdict carries. An urnetwork-edge caller's tls/ dial and publish is a
 // visitor's Find, which runs as autogroup:public before any listener is picked (§13.5 step 4): it goes on wherever
 // a sidecar of the network holds a publish grant for the name, whatever the grant's audience, and is refused where
@@ -910,8 +910,8 @@ func (self *socketProjectionView) IdentityKey(sidecarId connect.Id) ([]byte, boo
 	return bytes.Clone(publicKey), true
 }
 
-// The sidecar a request's token names as a §8 subject, false for none: the only subject a sockets caller has
-// outside urnetwork-edge (QD-040), and the one a lease stores for Find's listener check.
+// The sidecar a request's token names as a §8 subject in its ur_sidecar_id, false for none: the only subject a
+// sockets caller has outside urnetwork-edge, and the one a lease stores for Find's listener check.
 func socketGateSubject(request *SocketGateRequest) (sidecar.AclSubject, bool) {
 	if request == nil || request.SidecarId == nil || *request.SidecarId == (connect.Id{}) {
 		return sidecar.AclSubject{}, false
