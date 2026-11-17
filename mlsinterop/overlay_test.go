@@ -126,8 +126,11 @@ func TestTmcStacksUnderTheSuitePatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	command := exec.Command(goTool, "test", "-count=1", "-tags", "mlsinterop_tmc", "-run", "^TestTmc", "-v", ".")
-	command.Env = append(os.Environ(), "GOWORK="+workPath)
+	// workspace mode takes -mod=readonly or vendor alone, so the flag goes on the command line, which overrides a -mod
+	// the caller's GOFLAGS holds: the release fixture runs make check under GOFLAGS=-mod=mod, which stopped the stacks
+	// row there (QD-1003). The second go test runs under such a GOFLAGS every time, so the override is what it rests on.
+	command := exec.Command(goTool, "test", "-mod=readonly", "-count=1", "-tags", "mlsinterop_tmc", "-run", "^TestTmc", "-v", ".")
+	command.Env = append(os.Environ(), "GOWORK="+workPath, "GOFLAGS="+strings.TrimSpace(os.Getenv("GOFLAGS")+" -mod=mod"))
 	output, err := command.CombinedOutput()
 	t.Logf("go test -tags mlsinterop_tmc, tmc/mls's wire.go patched:\n%s", output)
 	if err != nil {
