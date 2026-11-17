@@ -5,10 +5,10 @@ package sidecar
 // QD-1007 (FS-109's sync steps under load; SEARCH-M10-19's staging; §5.9's version table): the sync engine stages a
 // shard's documents in one pass over its tables, which decrypts each frame once. The draft read each document by docid
 // through a one-frame cursor whose window, near a frame's end, crossed into the next frame, so the next document read
-// the frame it left again: some 4,100 frame reads to stage FS-109's 15-frame shard of 16,384 documents, about 65 µs a
-// document. Here: a cursor reads what the file holds, a table pass decrypts each frame once, one-pass staging and the
-// per-document path stage the same run and two times for the same shard, staging reads each kept frame a few times
-// whatever the shard's document count, and a benchmark stages a shard of FS-109's documents.
+// the frame it left again: some 4,100 frame reads to stage FS-109's 15-frame shard of 16,384 documents, 65 µs to 120 µs
+// a document on this host. Here: a cursor reads what the file holds, a table pass decrypts each frame once, one-pass
+// staging and the per-document path stage the same run and two times for the same shard, staging reads each kept frame
+// a few times whatever the shard's document count, and a benchmark stages a shard of FS-109's documents.
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// FS-109's update text and the documents a bucket shard of its takes (sidecartest/fault/fs109_test.go).
+// FS-109's update text, and the documents one of its bucket shards takes (sidecartest/fault/fs109_test.go).
 const (
 	testFs109UpdateText    = "1000 2000 3000"
 	testFs109ShardDocCount = 16384
@@ -177,15 +177,15 @@ func (self *testCountingStore) reset() {
 // A source the staging never reads: a round's own steps are search_sync_test.go's.
 type testStageNoSource struct{}
 
-func (testStageNoSource) Replay(ctx context.Context, pin SearchSyncPin) (*searchSyncReplay, error) {
+func (self testStageNoSource) Replay(ctx context.Context, pin SearchSyncPin) (*searchSyncReplay, error) {
 	return nil, errors.New("test stage source: no replay")
 }
 
-func (testStageNoSource) List(ctx context.Context) (*indexListing, error) {
+func (self testStageNoSource) List(ctx context.Context) (*indexListing, error) {
 	return nil, errors.New("test stage source: no listing")
 }
 
-func (testStageNoSource) Fetch(ctx context.Context, files []*indexFileVersion) ([]*searchSyncFetched, error) {
+func (self testStageNoSource) Fetch(ctx context.Context, files []*indexFileVersion) ([]*searchSyncFetched, error) {
 	return nil, errors.New("test stage source: no fetch")
 }
 
