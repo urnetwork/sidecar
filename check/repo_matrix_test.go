@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -149,10 +150,18 @@ func repoIdsInDesign(t *testing.T, repository *repository) []string {
 }
 
 // A path of the repository: the root module's own first, which a release tree holds in v2026/, then
-// the top, where the nested modules and the documents stay.
+// the top, where the nested modules and the documents stay, and smtpproof's, which a release tree holds
+// in smtpproof/v2026/ (QD-1003).
 func (self *repository) repositoryPathExists(relativePath string) bool {
-	for _, directory := range []string{self.moduleDirectory, self.topDirectory} {
-		if _, err := os.Stat(filepath.Join(directory, filepath.FromSlash(relativePath))); err == nil {
+	candidates := []string{
+		filepath.Join(self.moduleDirectory, filepath.FromSlash(relativePath)),
+		filepath.Join(self.topDirectory, filepath.FromSlash(relativePath)),
+	}
+	if rest, nested := strings.CutPrefix(relativePath, "smtpproof/"); nested && self.releaseSuffix != "" {
+		candidates = append(candidates, filepath.Join(self.topDirectory, "smtpproof", strings.TrimPrefix(self.releaseSuffix, "/"), filepath.FromSlash(rest)))
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
 			return true
 		}
 	}

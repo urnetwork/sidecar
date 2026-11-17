@@ -441,22 +441,38 @@ placement (owner decision 145): a group's objects live on the cluster its repo's
   8 × PM9A3 1.92 TB at EC:4, ~7.7 TB usable (§19.6)
 ```
 
-```text
-bodies (protocol/gkm.proto, fields bytes unless typed; a Signed, a KeyPackage, a Welcome and a RecoveryWrap's
-  ciphertext are stored bare)
-GroupForm           repo_id = 1, group_id = 2, previous_group_id = 3, uint64 generation = 4, AuthPin auth = 5;
-                    §6 Signed, purpose group-form, its signer Signed's (owner decision 368)
-GkmGroupOwner       repo_id = 1, network_id = 2 (owner decision 201)
-GkmEpochObject      commit = 1, GkmCommitHeader header = 2, uploader = 3, int64 time_ms = 4, gen_wrap = 5,
-                    sealed_group_info = 6, uint64 group_info_generation = 7, network_id = 8, uint32
-                    cipher_suite = 9; gkm writes header, uploader and time_ms itself, from the commit, the token
-                    and its clock, so an upload has none to state falsely; 8 and 9 only in epoch 0, whose commit
-                    is empty and whose uploader is gkm-1's creator, its header gen/1's generation and auth at a
-                    creation, the form's generation and no auth at a re-form
-GkmGroupInfoObject  uint64 epoch = 1, uint64 generation = 2, sealed_group_info = 3: at most 16 leaves the
-                    pointer {epoch}, that epoch's object holding the sealed GroupInfo; above, all three
-GkmWelcomePointer   group_id = 1, uint64 epoch = 2, key_package_ref = 3 (owner decision 363)
-GkmKeyPackageClaim  group_id = 1, claimer = 2, the target being the sidecar_id in its key
+```proto
+// sidecar/protocol/gkm.proto: the objects' bodies; a Signed, a KeyPackage, a Welcome and a RecoveryWrap's
+// ciphertext are stored bare
+message GroupForm {              // §6 Signed, purpose group-form, its signer Signed's (owner decision 368)
+  bytes repo_id = 1;
+  bytes group_id = 2;
+  bytes previous_group_id = 3;   // the group this one re-forms, or empty
+  uint64 generation = 4;
+  AuthPin auth = 5;              // the signer's state when it signs, at which members judge the signer
+}
+message GkmGroupOwner { bytes repo_id = 1; bytes network_id = 2; }   // owner decision 201
+message GkmEpochObject {         // gkm writes header, uploader and time_ms itself, from the commit, the token
+                                 //   and its clock, so an upload has none to state falsely
+  bytes commit = 1;              // empty at epoch 0
+  GkmCommitHeader header = 2;    // at a creation's epoch 0 gen/1's generation and auth; at a re-form's the
+                                 //   form's generation and no auth
+  bytes uploader = 3;            // at epoch 0 gkm-1's creator
+  int64 time_ms = 4;
+  bytes gen_wrap = 5;
+  bytes sealed_group_info = 6;
+  uint64 group_info_generation = 7;
+  bytes network_id = 8;          // 8 and 9 only in epoch 0
+  uint32 cipher_suite = 9;
+}
+message GkmGroupInfoObject {     // at most 16 leaves the pointer {epoch}, that epoch's object holding the sealed
+                                 //   GroupInfo; above, all three
+  uint64 epoch = 1;
+  uint64 generation = 2;
+  bytes sealed_group_info = 3;
+}
+message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; bytes key_package_ref = 3; }   // owner decision 363
+message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }   // the target is the sidecar_id in its key
 ```
 
 ```text

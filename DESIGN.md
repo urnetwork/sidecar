@@ -329,7 +329,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-199"></a>199 | 2026-11-10 | Team billing | A `team_subscription` row (MG6) records each Team's Stripe subscription, customer, anchor and start, written at the first `invoice.paid` and ended at `customer.subscription.deleted`; only a live row is granted a period. | §2, §19, §20 |
 | <a id="od-200"></a>200 | 2026-11-10 | Path epochs | The fold records each folded version's place in its statement's change list (`leaf_part`, `leaf_index`), so evs serves the proof of a version an older path epoch wrote and the reader checks the leaf names its token. | §2, §11 |
 | <a id="od-201"></a>201 | 2026-11-10 | Group owner | A group's first object is `gkm/<group_id>/owner` (repo and network), created If-None-Match from the token; every group route resolves through it, so no other repo's form can claim the group. | §2, §10 |
-| <a id="od-202"></a>202 | 2026-11-10 | Forwarding keys | A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object `gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB. Amended by [owner decision 370](#od-370): the key is `gkm/dkey/<network_id>/<delegation_id>`. | §2, §10 |
+| <a id="od-202"></a>202 | 2026-11-10 | Forwarding keys | A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object `gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB. Amended by [owner decision 370](#od-370): the key is `gkm/dkey/<network_id>/<delegation_id>`. | §2, §7, §10 |
 | <a id="od-203"></a>203 | 2026-11-10 | Segment GC | An unadopted segment goes once no batch is left from before its upload + 24 h + 2 min, 49 to 75 h, so GC raises no fence; evacuation fences a ref with no head by a placeholder head. | §2, §11, §19, §22 |
 | <a id="od-204"></a>204 | 2026-11-10 | Drop history | A drop job marks only once evacuation's horizon has passed each covered drop's commit by 2 min, so a `now` drop's deletions start about 25 to 26 h after it, amending [owner decision 183](#od-183)'s 25-minute fence. Amended by [owner decision 397](#od-397): 12 min past each drop's seen_ms, so 25 h 12 min to 26 h 12 min. | §2, §11, §22 |
 | <a id="od-205"></a>205 | 2026-11-10 | Settings in rows | `self_admit` and `scim_signer` compile into `ProjectionRows.settings`, which full readers check against the head and api and the gates take, so every verifier judges a self-admission alike. | §2, §7 |
@@ -5609,6 +5609,184 @@ resolve  ConfigResolution{members: [{email, member_id}], networks: [{text, netwo
 
 **Record bytes.** The records above take field numbers in the order written, a statement's `StatementHeader` being field 1, and each named list numbers its values from 1 in the order written, 0 being unspecified: `MemberRole` (7.5), `RepoKind` (§11.12), `AclAction` and `AclAutogroup` (§8.4), and each `a | b` choice; `SIDECAR_CAPABILITY_READ_ONLY` is 2 and `SIDECAR_CAPABILITY_INVITED` is 4. `not_after`, `expires` and `drain_until` are int64 milliseconds since the epoch under the design's names, and `AuthorityProposal.statement` is the proposed type's whole body as signed, only the proposal's own header being judged for replay and expiry. Genesis, ProjectionHeader, ServiceSettings, VersioningRules and BridgeBlock carry no header; every other record, MemberAdmit and Delegation included, carries one and enters the log (Writes). The admitting device sets the `invited` capability bit only after the invite's join MAC verifies (7.5), a JIT member's first device included, from the invite that device issued (7.6); rows carry it in `SidecarRow.capabilities`, and §8.5's invited clause reads it. A presence key's `KeyRegister` carries the new key's own proof in two fields written last and set only for purpose presence, `key_signature = 9` and `key_webauthn = 10` (a `WebAuthnEvidence`): the new key signs the received body bytes before field 9, as `UrMlsCredential` signs its fields 1-7 with its signature last (§10.4), so a verifier slices at field 9's first byte, never re-marshals or empties a field, and refuses a body where anything follows fields 9 and 10; the signed bytes are §6.9's with purpose `key-proof` and type `SIGNED_KEY_REGISTER`, `webauthn-es256` taking their hash as its challenge with UP and UV set and its evidence in `key_webauthn`, and `ecdsa-p256-sha256` putting a DER signature in `key_signature`; the identity key's `Signed` covers the whole body, and any countersignature stays in `Signed.webauthn`. The log's rule for a `KeyRegister` never reads `attestation`: it checks that proof, which needs no roots, so api, evs, gkm and every member device give one verdict on one statement whatever FIDO roots their release pins (D-TEAM-32); the refusal of a failing attestation stays on the device about to sign, which signs no `KeyRegister` whose present attestation fails and never downgrades it to asserted, and each reader computes §16.6's label locally, at the carrying entry's time, for records and approver screens only, so a label can differ between releases while state, the key's liveness and the demand for its countersignature cannot ([owner decision 327](#od-327)).
 
+**Declarations.** The table's records, with the named lists they use, as config.proto and auth.proto declare them; a statement's sealed field opens to the message its comment names (Sealed bodies):
+
+```proto
+// sidecar/protocol/config.proto: the table's config records, each statement's StatementHeader at field 1 and its
+// other fields in the order the table writes them
+message AdminSet {                     // authority
+  StatementHeader header = 1;
+  repeated bytes owners = 2;           // member_ids
+  repeated bytes admins = 3;
+  repeated bytes network_admins = 4;
+  repeated bytes it_admins = 5;
+  uint32 threshold = 6;                // k
+}
+message MemberAdmit {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  MemberRole role = 3;                 // billing_admin, auditor or member
+}
+message SidecarAdmit {
+  StatementHeader header = 1;
+  bytes network_id = 2;
+  bytes sidecar_id = 3;
+  bytes identity_public_key = 4;
+  string identity_alg = 5;             // ed25519 in v0
+  bytes member_id = 6;                 // or tag_ids, opaque ids of 16 B
+  repeated bytes tag_ids = 7;
+  bool ephemeral = 8;
+  int64 not_after = 9;                 // agents only
+  uint32 capabilities = 10;            // SidecarCapability bits
+}
+message AdmissionConfirm { StatementHeader header = 1; bytes sidecar_id = 2; }
+message SponsorSet { StatementHeader header = 1; bytes sidecar_id = 2; bytes sponsor_member_id = 3; }
+message IndexerSet {
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  IndexerScope scope = 3;
+  bool retire = 4;
+  bytes sealed_services = 5;           // IndexerServices
+}
+message IndexerServices { repeated IndexerService services = 1; }
+enum IndexerScope { INDEXER_SCOPE_UNSPECIFIED = 0; INDEXER_SCOPE_NETWORK = 1; INDEXER_SCOPE_MEMBER = 2; }
+enum IndexerService {                  // a reader ignores a value it does not know; embed comes later
+  INDEXER_SERVICE_UNSPECIFIED = 0; INDEXER_SERVICE_MAIL = 1; INDEXER_SERVICE_MIRROR = 2;
+  INDEXER_SERVICE_SEARCH = 3;
+}
+message RecoveryBind {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes prev_sha256 = 3;               // the replaced binding's key hash
+  bytes ed25519_public_key_sha256 = 4;
+  bytes sealed_body = 5;               // RecoveryBindBody
+}
+message RecoveryBindBody {
+  bytes xwing_public_key = 1;
+  bytes ed25519_public_key = 2;
+  bytes genesis_sig = 3;               // Recovery's anchor
+}
+message RecoveryRebind {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes prev_sha256 = 3;
+  bytes ed25519_public_key_sha256 = 4;
+  bytes sealed_body = 5;               // RecoveryBindBody
+  RecoveryRebindReason reason = 6;
+}
+message KeyRegister {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes key_id = 3;
+  KeyAlg alg = 4;
+  bytes public_key = 5;
+  bytes attestation = 6;
+  KeyPurpose purpose = 7;
+  int64 not_after = 8;
+  bytes key_signature = 9;             // 9 and 10: a presence key's own proof, written last (Record bytes)
+  WebAuthnEvidence key_webauthn = 10;
+}
+message KeyRevoke { StatementHeader header = 1; bytes key_id = 2; }
+message Delegation {
+  StatementHeader header = 1;
+  bytes pubkey = 2;
+  bytes reader_xwing_public_key = 3;   // §10.5
+  repeated bytes tag_ids = 4;
+  uint32 max_admits = 5;
+  int64 not_after = 6;                 // required, <= 90 d (7.8)
+  ForwardScope forward = 7;            // set: a forwarding Delegation, with no tag_ids, max_admits 0 and
+                                       //   not_after 0 (forwarding, below; owner decision 197)
+}
+message DelegationRevoke {
+  StatementHeader header = 1;
+  bytes delegation_id = 2;
+  uint64 since_n = 3;                  // 0, or for a leaked bundle the position from which it parks
+}
+message ServiceSettings {              // a head's record, with no header
+  TeamMailMode team_mail = 1;
+  uint32 stale_leaf_days = 2;          // 90
+  SelfAdmitMode self_admit = 3;
+  uint32 witness_bound_hours = 4;      // 72, 24 to 168
+  bytes scim_signer = 5;               // none, or the sidecar_id of an admin's indexer (7.6)
+  ServiceDirectorySettings directory = 6;   // from v1 (M6), reserved at M2
+  // mail_strict = 7 (§15.4), record_cost = 8 (owner decision 302) and record_required = 9 (owner decision
+  // 305), Settings fields' three, join this fence once config.proto declares them
+}
+message ServiceDirectorySettings { DirectoryRunsMode runs = 1; DirectoryWorkersMode workers = 2; }
+enum TeamMailMode {                    // zero reads as indexers (Settings fields; owner decision 304)
+  TEAM_MAIL_MODE_UNSPECIFIED = 0; TEAM_MAIL_MODE_INDEXERS = 1; TEAM_MAIL_MODE_MEMBER_SCOPES = 2;
+}
+enum SelfAdmitMode {                   // zero reads as on
+  SELF_ADMIT_MODE_UNSPECIFIED = 0; SELF_ADMIT_MODE_ON = 1; SELF_ADMIT_MODE_OFF = 2;
+}
+enum DirectoryRunsMode {               // zero reads as auto
+  DIRECTORY_RUNS_MODE_UNSPECIFIED = 0; DIRECTORY_RUNS_MODE_AUTO = 1; DIRECTORY_RUNS_MODE_PROMPT = 2;
+  DIRECTORY_RUNS_MODE_OFF = 3;
+}
+enum DirectoryWorkersMode {            // zero reads as on
+  DIRECTORY_WORKERS_MODE_UNSPECIFIED = 0; DIRECTORY_WORKERS_MODE_ON = 1; DIRECTORY_WORKERS_MODE_OFF = 2;
+}
+message VersioningRules { repeated VersioningRule rules = 1; }   // a head's record, with no header
+message VersioningRule {               // an empty selector matches all
+  repeated uint32 kinds = 1;           // RepoKind
+  repeated bytes repo_ids = 2;
+  string path_glob = 3;
+  uint64 size_above_bytes = 4;
+  VersioningMode versioning = 5;
+}
+enum VersioningMode { VERSIONING_MODE_UNSPECIFIED = 0; VERSIONING_MODE_ON = 1; VERSIONING_MODE_OFF = 2; }
+message AuthorityProposal {            // proposal_id = SHA-256 of the Signed AuthorityProposal
+  StatementHeader header = 1;
+  uint32 statement_type = 2;           // the proposed statement's SignedType
+  bytes statement = 3;                 // its whole body as signed
+}
+message AuthorityCosign { StatementHeader header = 1; bytes proposal_id = 2; }
+message RecoveryVeto { StatementHeader header = 1; bytes proposal_id = 2; }
+// sidecar/protocol/bridge/auth.proto: the records sidecar/device's posture also applies (§17.8, §18.6), and the
+// names the records share
+message Genesis {                      // no header: no position exists yet
+  bytes network_id = 1;
+  bytes config_repo_id = 2;
+  bytes owner_member_id = 3;           // user_id in a personal network
+  bytes owner_sidecar_id = 4;
+  bytes owner_identity_public_key = 5;
+  int64 time_ms = 6;
+}
+message MemberRevoke { StatementHeader header = 1; bytes member_id = 2; }
+message SidecarRevoke {
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  SidecarRevokeReason reason = 3;
+  uint64 since_n = 4;                  // a compromise's position, from which the cascade parks
+}
+message ForwardScope {                 // Delegation.forward, declared here because sidecar/device reads it
+  bytes forward_sidecar_id = 1;        // the forwarding sidecar, which must be the signer
+  bytes host_client_id = 2;            // the device client, in its own network; empty in any other
+  bytes host_client_public_key = 3;    // that client's ClientKey public key (C15), set with host_client_id
+}
+enum MemberRole {                      // 7.5's roles
+  MEMBER_ROLE_UNSPECIFIED = 0; MEMBER_ROLE_OWNER = 1; MEMBER_ROLE_ADMIN = 2; MEMBER_ROLE_NETWORK_ADMIN = 3;
+  MEMBER_ROLE_IT_ADMIN = 4; MEMBER_ROLE_BILLING_ADMIN = 5; MEMBER_ROLE_AUDITOR = 6; MEMBER_ROLE_MEMBER = 7;
+}
+enum SidecarCapability {               // bits of SidecarAdmit's and SidecarRow's capabilities
+  SIDECAR_CAPABILITY_NONE = 0;
+  SIDECAR_CAPABILITY_READ_ONLY = 2;    // bit 1: page Workers (D-TEAM-24)
+  SIDECAR_CAPABILITY_INVITED = 4;      // bit 2: the invite's join MAC verified (7.5)
+}
+enum KeyAlg {
+  KEY_ALG_UNSPECIFIED = 0; KEY_ALG_WEBAUTHN_ES256 = 1; KEY_ALG_ECDSA_P256_SHA256 = 2; KEY_ALG_SSH_ED25519 = 3;
+}
+enum KeyPurpose { KEY_PURPOSE_UNSPECIFIED = 0; KEY_PURPOSE_PRESENCE = 1; KEY_PURPOSE_SSHSIG = 2; }
+enum RecoveryRebindReason {
+  RECOVERY_REBIND_REASON_UNSPECIFIED = 0; RECOVERY_REBIND_REASON_ROUTINE = 1; RECOVERY_REBIND_REASON_LOST = 2;
+  RECOVERY_REBIND_REASON_COMPROMISE = 3;
+}
+enum SidecarRevokeReason {
+  SIDECAR_REVOKE_REASON_UNSPECIFIED = 0; SIDECAR_REVOKE_REASON_LOST = 1; SIDECAR_REVOKE_REASON_REAPED = 2;
+  SIDECAR_REVOKE_REASON_REMOVED = 3; SIDECAR_REVOKE_REASON_COMPROMISE = 4;
+}
+```
+
 **Sealed bodies.** Each statement shows only what §2.8's api-7 lists, the rest in a sealed field that stays `bytes`: a `sealed_body` (IndexerSet's `sealed_services`, RepoVersioning's `sealed_rules`) opens to a `*Body` message, for IndexerSet, RecoveryBind, RecoveryRebind, RepoVersioning and every §17.8 delta but BridgeWithdraw, and BridgeAlias shows only its header. An `ApprovalDelivery` (§8.8) seals its decision or cancel not to a config generation but HPKE-XWing to its requester's current ReaderKey, so only the requester opens it (§16.8; [owner decision 447](#od-447)).
 
 ```text
@@ -5958,6 +6136,111 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a
 message ApiTick {                    // kind TICK: api's own facts, each checked by content
   repeated bytes reaped_sidecar_ids = 1;     // ephemeral admissions only (7.10); coalesced per minute
   repeated bytes activated_proposal_ids = 2; // recovery windows that ended (Recovery)
+}
+// The rows ProjectionRows holds, each field as its comment above describes it
+message MemberRow {                  // for the membership's life
+  bytes member_id = 1;
+  MemberRole role = 2;
+  bytes recovery_key_sha256 = 3;     // the binding in effect, windowed while a newer one below is void
+  repeated RecoveryBindingRow bindings = 4;  // newest first
+}
+message RecoveryBindingRow {
+  bytes key_sha256 = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+  RecoveryRebindReason reason = 4;   // unspecified for a RecoveryBind, which carries none
+}
+message SidecarRow {
+  bytes sidecar_id = 1;
+  bytes admission_sha256 = 2;
+  repeated bytes admission_signers = 3;      // each counted one
+  uint64 admitted_at = 4;
+  bytes confirm_signer = 5;          // its newest AdmissionConfirm's
+  uint64 confirmed_at = 6;
+  bytes owner_confirm_signer = 7;    // its newest OwnerConfirm's
+  uint64 owner_confirmed_at = 8;
+  uint64 revoked_at = 9;
+  uint64 parked_at = 10;
+  bytes sponsor = 11;
+  uint32 capabilities = 12;          // SidecarCapability bits
+  bytes delegation_id = 13;
+  uint64 live_since = 14;            // the config leaf rank (leaves)
+  int64 not_after = 15;              // a revoked row stays a tombstone until then
+  bytes identity_public_key = 16;    // its admission's, or the Genesis's for the owner's first device
+  string identity_alg = 17;
+  bytes member_id = 18;              // an untagged admission's member; else tag_ids
+  repeated bytes tag_ids = 19;
+  bool ephemeral = 20;
+  repeated ConfirmationRow confirmations = 21;   // in position order, for the sidecar's life
+  repeated CascadeSpanRow cascades = 22;         // in position order (owner decision 330)
+  int64 admitted_time_ms = 23;       // owner decision 307
+}
+message ConfirmationRow {
+  uint32 kind = 1;                   // 1 AdmissionConfirm, 2 OwnerConfirm
+  bytes signer = 2;
+  uint64 at = 3;
+  bool lifted_park = 4;              // the device was parked when it landed
+}
+message CascadeSpanRow {             // what the sidecar signed in [from, until) stays void until signed again
+  uint64 from = 1;                   // since_n for the revoked sidecar, else the entry that pulled it into P
+  uint64 until = 2;                  // the revocation's entry
+}
+message DelegationRow {
+  bytes delegation_id = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+  repeated bytes tag_atoms = 4;
+  int64 not_after = 5;
+  uint64 key_dropped_at = 6;         // §10.5
+  uint64 ended_at = 7;
+  uint32 admissions = 8;             // counted in log order for its life
+  bytes pubkey = 9;
+  bytes reader_xwing_public_key = 10;  // empty on a forwarding Delegation's row, its digest in 16
+  uint32 max_admits = 11;
+  bytes forward_sidecar_id = 12;     // 12 to 16: a forwarding Delegation's alone (forwarding; owner decision 202)
+  bytes host_client_id = 13;
+  bytes host_client_public_key = 14;
+  uint64 superseded_at = 15;         // the position of its signer's newer forwarding Delegation; 0 none
+  bytes reader_key_sha256 = 16;      // SHA-256 of its reader key, which gkm holds (§10.6)
+}
+message KeyRow {                     // a KeyRegister, with its KeyRevoke's position
+  bytes key_id = 1;
+  bytes member_id = 2;
+  KeyAlg alg = 3;
+  bytes public_key = 4;
+  KeyPurpose purpose = 5;
+  bytes signer = 6;
+  uint64 at = 7;
+  int64 not_after = 8;
+  uint64 revoked_at = 9;
+}
+message ProposalRow {                // an AuthorityProposal open at folded_through (proposal)
+  bytes proposal_id = 1;
+  uint32 statement_type = 2;
+  bytes statement = 3;               // AuthorityProposal.statement, verbatim
+  uint64 proposed_at = 4;
+  int64 not_after_ms = 5;            // the proposal's own header's
+  repeated ProposalSigner signers = 6;   // the proposer, then each counted cosign, in log order
+  uint64 window_entry = 7;           // the entry of the newest recovery-key signature; 0 with none
+  int64 window_time_ms = 8;          // that entry's time_ms
+  uint32 kind = 9;                   // ProposalKind, fixed at the proposal's entry
+}
+message ProposalSigner { bytes signer = 1; uint64 at = 2; }
+enum ProposalKind {                  // the self_admit row's four kinds
+  PROPOSAL_KIND_UNSPECIFIED = 0; PROPOSAL_KIND_AUTHORITY = 1; PROPOSAL_KIND_RECOVERY_SCOPED = 2;
+  PROPOSAL_KIND_RESTORED = 3; PROPOSAL_KIND_RESTORED_COSIGNED = 4;
+}
+message ProjectionSettings {         // owner decision 205
+  uint32 self_admit = 1;             // SelfAdmitMode's value
+  bytes scim_signer = 2;             // empty for none
+}
+message RingRow { bytes statement_id = 1; uint64 n = 2; }   // a statement id's first 16 B, and its entry
+message IndexerRow {                 // a designation that holds (Indexers)
+  bytes sidecar_id = 1;
+  uint32 scope = 2;                  // IndexerScope's value
+  bytes signer = 3;
+  uint64 at = 4;
+  bytes sealed_services = 5;         // IndexerSet.sealed_services, verbatim
 }
 ```
 
@@ -6814,6 +7097,105 @@ message AclTarget {                       // exactly one kind set (owner decisio
   bytes client_id = 10;                   // a client no binding names, a legacy client among them: D-ACL-5's
                                           // naming it, under an unrestricted grant
 }
+// The rows above as Atoms, Folded grants and Repo rows below give them, and §8.4's and §11.12's named lists
+message AclAtom {                         // Atoms
+  bytes atom = 1;
+  repeated bytes member_ids = 2;
+  repeated bytes sidecar_ids = 3;
+  repeated bytes tag_owner_member_ids = 4;  // a tag atom's tagOwners, expanded to member_ids at compile
+  repeated bytes client_ids = 5;          // client:<id>, for a client no binding names
+  repeated bytes network_ids = 6;         // network:<net>, resolved at save
+  string role = 7;                        // role:<name>
+  string principal = 8;                   // principal:<name>
+}
+message AclRule {
+  reserved 5; reserved "ports";           // a rule's ports stay in AclLocalPolicy (8.6)
+  bytes rule_id = 1;
+  repeated bytes src_atoms = 2;
+  repeated AclTarget targets = 3;
+  repeated uint32 actions = 4;            // AclAction
+  int64 expires = 6;                      // 0 none
+  AclAudience audience = 7;               // a publish's (8.4)
+  AclAppMode app_mode = 8;
+  bytes link_spki_sha256 = 9;
+  bytes source_rule_id = 10;              // an activated grant's (Folded grants)
+  bool ports_limited = 11;
+  repeated AclTarget via = 12;            // a route rule's via subjects (Via subjects; owner decision 344)
+}
+message AclPortRange {                    // a grant's port range on the device alone, never in rows
+  uint32 protocol = 1;                    // the IP protocol number; 0 any
+  uint32 first = 2;
+  uint32 last = 3;
+}
+message AclSuspension {                   // Folded grants
+  bytes subject = 1;
+  bytes suspend_id = 2;
+  uint32 signer_class = 3;                // 1 owner or sponsor, 2 admin, 3 k of n
+  bytes signer = 4;
+  uint64 at = 5;
+}
+message AclSpentGrant { bytes grant_id = 1; int64 retain_until_ms = 2; }   // Folded grants
+message AclRepo {                         // every row keeps its signer and the position of its entry
+  bytes repo_id = 1;
+  RepoKind kind = 2;
+  bytes owner_member_id = 3;
+  repeated bytes consented_sidecar_ids = 4;
+  repeated AclRepoAdminRow admins = 5;
+  repeated AclRepoGrantRow grants = 6;
+  repeated AclRepoShareRow shares = 7;
+  repeated AclRepoRevokeRow revokes = 8;  // config writers' standing RepoRevokes
+  AclRepoDeletionRow deletion = 9;        // the newest RepoDelete, with any RepoRestore of its deletion_id
+  RepoVersioningLock lock = 10;           // the newest RepoVersioning's
+  uint64 holders_shrunk_at = 11;
+  repeated AclRepoPrefixRulesRow prefix_rules = 12;   // RepoPrefixRules (owner decision 345)
+  int64 holders_shrunk_time_ms = 13;      // §7.9's t_s (owner decision 557)
+}
+message AclRepoAdminRow {
+  bytes sidecar_id = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+  uint64 removed_at = 4;                  // a RepoAdmin{remove}'s position; 0 while the admin stands
+}
+message AclRepoGrantRow {
+  bytes subject = 1;
+  RepoGrantRole role = 2;
+  int64 expires = 3;                      // 0 none
+  bytes signer = 4;
+  uint64 at = 5;
+}
+message AclRepoShareRow { bytes subject = 1; int64 expires = 2; bytes signer = 3; uint64 at = 4; }
+message AclRepoRevokeRow { bytes subject = 1; bytes signer = 2; uint64 at = 3; }
+message AclRepoDeletionRow {
+  bytes deletion_id = 1;
+  bool now = 2;
+  uint64 deleted_at = 3;
+  uint64 restored_at = 4;
+  int64 deleted_time_ms = 5;              // the RepoDelete entry's time_ms (owner decision 343)
+  bytes signer = 6;                       // the RepoDelete's signer
+}
+message AclRepoPrefixRulesRow { bytes signer = 1; uint64 at = 2; }   // one RepoPrefixRules that took effect
+enum AclAutogroup {                       // §8.4; in a *_atoms field fifteen zero bytes, then the value
+  ACL_AUTOGROUP_UNSPECIFIED = 0; ACL_AUTOGROUP_MEMBER = 1; ACL_AUTOGROUP_OWNER = 2; ACL_AUTOGROUP_ADMIN = 3;
+  ACL_AUTOGROUP_AUDITOR = 4; ACL_AUTOGROUP_SIDECAR = 5; ACL_AUTOGROUP_TAGGED = 6; ACL_AUTOGROUP_NETWORK = 7;
+  ACL_AUTOGROUP_UNTAGGED = 8; ACL_AUTOGROUP_EPHEMERAL = 9; ACL_AUTOGROUP_PUBLIC = 10;
+  ACL_AUTOGROUP_INTERNET = 11; ACL_AUTOGROUP_SELF = 12; ACL_AUTOGROUP_SPONSOR = 13;
+  ACL_AUTOGROUP_DST_OWNER = 14;
+}
+enum AclAction {                          // §8.4; AclRule.actions and AclRequestRule.actions
+  ACL_ACTION_UNSPECIFIED = 0; ACL_ACTION_DIAL = 1; ACL_ACTION_LISTEN = 2; ACL_ACTION_ROUTE = 3;
+  ACL_ACTION_READ = 4; ACL_ACTION_WRITE = 5; ACL_ACTION_ADMIN = 6; ACL_ACTION_DEPOSIT = 7;
+  ACL_ACTION_PUBLISH = 8; ACL_ACTION_SEND = 9;
+}
+enum AclAudience {                        // zero reads as members
+  ACL_AUDIENCE_UNSPECIFIED = 0; ACL_AUDIENCE_MEMBERS = 1; ACL_AUDIENCE_MEMBERS_DEVICE = 2;
+  ACL_AUDIENCE_LINK = 3; ACL_AUDIENCE_PUBLIC = 4;
+}
+enum AclAppMode { ACL_APP_MODE_UNSPECIFIED = 0; ACL_APP_MODE_HTTP = 1; ACL_APP_MODE_RAW = 2; }   // zero: http
+enum RepoKind {                           // §11.12's kinds, fixed at creation
+  REPO_KIND_UNSPECIFIED = 0; REPO_KIND_GENERAL = 1; REPO_KIND_RECORD = 2; REPO_KIND_CONFIG = 3;
+  REPO_KIND_DIRECTORY = 4; REPO_KIND_TEAM_RECORD = 5; REPO_KIND_MAILCFG = 6; REPO_KIND_VAULT = 7;
+  REPO_KIND_MAILBOX = 8; REPO_KIND_SECRET = 9;
+}
 ```
 
 **Atoms (owner decisions [339](#od-339), [353](#od-353)).** A tag's or group's atom id is 16 random bytes that the config's sealed `tags` and `groups` tables hold beside its name (§7.9). compile writes an `AclAtom` for every tag the document declares in `tagOwners` and every group in `groups`, whether or not a grant or request names it, and for every derived atom the policy names: `AclAtom{atom = 1, member_ids = 2, sidecar_ids = 3, tag_owner_member_ids = 4, client_ids = 5, network_ids = 6, role = 7, principal = 8}`. A tag atom's `member_ids` stays empty, its `sidecar_ids` lists the sidecars carrying it, and `tag_owner_member_ids` is its `tagOwners` expanded to member_ids at compile, which `CanApplyTag` reads and subject evaluation never does: applying a tag needs a standing member device (untagged, not ephemeral, not read_only) of a member in that list, and no consent, so a declared tag with no rule of its own can still be applied by a Delegation or a tagged `SidecarAdmit`, its sidecars holding what `autogroup:tagged` and the kind defaults give them. A selector with no table name compiles to a derived atom, id = SHA-256("urnetwork-sidecar-v1/acl-atom" || 0x00 || kind || 0x00 || value)[:16], kind one byte (1 member, 2 sidecar, 3 client, 4 network, 5 role, 6 principal), unkeyed because each value is already server-visible; `network:*` is the kind-4 atom over the one byte `*`, which names no subject until 8.11's shares. Rows name only what a writer can sign and never enumerate app clients: an app device with an owner row matches `user:`, `group:` and autogroups at the gate through `network_client_owner.member_id`, so app clients coming and going change no rows; a legacy client has no owner row and matches only `client:<id>`, `autogroup:untagged`, `autogroup:network` and `*`, D-ACL-5's "naming it" being `AclTarget.client_id` under an unrestricted grant; and `role:` and `principal:` match the identity that `getProvideRelationshipDetails`'s one query loads, never `GetClientIdentity`'s Postgres fallback, so the gate stays under §22.5's `DenyPostgresForTest`. A member that the log's rows no longer hold expands to nothing. A bare `*` dst compiles to `autogroup:network`'s atom, the socket prefix with no token and the wildcard repo, its ip ranges staying on the device. Every group the document defines has a row, and an empty group's, like a tag's with no owners or sidecars, holds only its atom id, so the prefix filer tells a group's atom from a tag's by the head's group atom ids, never by what its row holds: a group's atom names nobody, an empty group's included, and a tag's row names someone (RepoPrefixRules' subjects; [owner decision 559](#od-559)).
@@ -6976,6 +7358,87 @@ outside   a file-mode ref's .ur-index/, the refs ur/index and ur/lfs, and pushes
 void      a set whose seal does not open, whose rules break the format, or whose generation was signed more
           than 1 h after its entry leaves the set below it in force and alarms, naming its filer; a later
           release's set makes a reader that cannot read it hold the repo's later versions and say `update`
+```
+
+**Statement bytes.** The table's statements, each opening with §7.9's `StatementHeader` and its other fields in the order the table writes them, with the named lists they use (§7.9's record bytes):
+
+```proto
+// sidecar/protocol/acl.proto: the grant chains and access logs
+message GrantActivate {
+  StatementHeader header = 1;
+  bytes grant_id = 2;
+  bytes canonical_action = 3;             // §16.8's CanonicalAction, as stored
+  repeated Signed decisions = 4;          // ApprovalDecisions
+}
+message EvsShare {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes subject = 3;
+  int64 expires = 4;                      // 0 none
+}
+message OwnerConfirm { StatementHeader header = 1; bytes sidecar_id = 2; }
+message RepoCreate {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  RepoKind kind = 3;
+  // inbox = 4 (RepoInbox: 0 none, 1 group, 2 admin; the table's RepoCreate row) joins this fence once acl.proto
+  // declares it
+}
+message RepoAdmin {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sidecar_id = 3;
+  RepoAdminChange change = 4;
+}
+message RepoGrant {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes subject = 3;
+  RepoGrantRole role = 4;
+  int64 expires = 5;                      // 0 none
+}
+message RepoRevoke { StatementHeader header = 1; bytes repo_id = 2; bytes subject = 3; }
+message RepoDelete { StatementHeader header = 1; bytes repo_id = 2; bytes deletion_id = 3; bool now = 4; }
+message RepoRestore { StatementHeader header = 1; bytes repo_id = 2; bytes deletion_id = 3; }
+message RepoVersioning {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  RepoVersioningLock lock = 3;
+  bytes sealed_rules = 4;                 // optional: a VersioningRules (RepoVersioning, above)
+}
+message RepoPrefixRules {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sealed_rules = 3;                 // a PrefixRuleSet: 48 B and a multiple of 256 B (RepoPrefixRules, above)
+}
+message PrefixRuleSet { repeated PrefixRule rules = 1; }   // sorted, no rule twice; no server holds it
+message PrefixRule {
+  bytes subject = 1;                      // 16 B, one of the subjects row's
+  repeated bytes path = 2;                // the prefix in whole components; none: every path
+  PrefixAction action = 3;
+}
+message AuditOptIn { StatementHeader header = 1; repeated bytes reader_atoms = 2; int64 not_after = 3; }
+message AuditOptOut { StatementHeader header = 1; }
+enum RepoAdminChange {
+  REPO_ADMIN_CHANGE_UNSPECIFIED = 0; REPO_ADMIN_CHANGE_ADD = 1; REPO_ADMIN_CHANGE_REMOVE = 2;
+}
+enum RepoGrantRole {
+  REPO_GRANT_ROLE_UNSPECIFIED = 0; REPO_GRANT_ROLE_DEPOSIT = 1; REPO_GRANT_ROLE_READER = 2;
+  REPO_GRANT_ROLE_WRITER = 3;
+}
+enum RepoVersioningLock {
+  REPO_VERSIONING_LOCK_UNSPECIFIED = 0; REPO_VERSIONING_LOCK_LOCKED = 1; REPO_VERSIONING_LOCK_UNLOCKED = 2;
+}
+enum PrefixAction { PREFIX_ACTION_UNSPECIFIED = 0; PREFIX_ACTION_WRITE = 1; }
+// sidecar/protocol/bridge/auth.proto: the three statements sidecar/device's posture applies between states
+// (§17.8)
+message GrantRevoke { StatementHeader header = 1; bytes grant_id = 2; }
+message Suspend {
+  StatementHeader header = 1;
+  bytes subject = 2;
+  bytes suspend_id = 3;                   // random; only an Unsuspend naming it lifts this
+}
+message Unsuspend { StatementHeader header = 1; bytes subject = 2; bytes suspend_id = 3; }
 ```
 
 **Access logs ([owner decision 8](#od-8)).** A repo's access log, the ordered chain of its RepoCreate, RepoAdmin, RepoGrant, RepoRevoke, RepoDelete, RepoRestore and RepoVersioning statements, rides §7.9 deltas into config heads, which keep it for the repo's life, each statement with the log position of the entry that carried it, so a reader judges a signer's repo admin right at any position, one before its retention point included (§16.11's repo file row); readers replay it, members check Adds and Removes against it (§10.9), and, as a RepoDelete or RepoRestore precedes its §11.12 route, the log never shows a deleted repo live, so a re-seed after a site loss can refuse a repo whose log ends in a RepoDelete past 7 days or with `now` (§19.10). A DROP push rides its ref, not this log, since it changes no reader, writer or key (§11.7). A team directory's decision entry cites the `RepoGrant` or `EvsShare` it approved by hash and log position, or the `ApprovalDecision` a `GrantActivate` spends, as its request's receipt; the statements are unchanged (§16.11). Config writers, who alone write config heads, are the AdminSet members' member devices (untagged, not ephemeral; 8.4) that are not read-only, and only k of n adds one (§7.5, §7.9; owner decisions [110](#od-110), [112](#od-112), [128](#od-128)).
@@ -8041,22 +8504,38 @@ placement (owner decision 145): a group's objects live on the cluster its repo's
   8 × PM9A3 1.92 TB at EC:4, ~7.7 TB usable (§19.6)
 ```
 
-```text
-bodies (protocol/gkm.proto, fields bytes unless typed; a Signed, a KeyPackage, a Welcome and a RecoveryWrap's
-  ciphertext are stored bare)
-GroupForm           repo_id = 1, group_id = 2, previous_group_id = 3, uint64 generation = 4, AuthPin auth = 5;
-                    §6 Signed, purpose group-form, its signer Signed's (owner decision 368)
-GkmGroupOwner       repo_id = 1, network_id = 2 (owner decision 201)
-GkmEpochObject      commit = 1, GkmCommitHeader header = 2, uploader = 3, int64 time_ms = 4, gen_wrap = 5,
-                    sealed_group_info = 6, uint64 group_info_generation = 7, network_id = 8, uint32
-                    cipher_suite = 9; gkm writes header, uploader and time_ms itself, from the commit, the token
-                    and its clock, so an upload has none to state falsely; 8 and 9 only in epoch 0, whose commit
-                    is empty and whose uploader is gkm-1's creator, its header gen/1's generation and auth at a
-                    creation, the form's generation and no auth at a re-form
-GkmGroupInfoObject  uint64 epoch = 1, uint64 generation = 2, sealed_group_info = 3: at most 16 leaves the
-                    pointer {epoch}, that epoch's object holding the sealed GroupInfo; above, all three
-GkmWelcomePointer   group_id = 1, uint64 epoch = 2, key_package_ref = 3 (owner decision 363)
-GkmKeyPackageClaim  group_id = 1, claimer = 2, the target being the sidecar_id in its key
+```proto
+// sidecar/protocol/gkm.proto: the objects' bodies; a Signed, a KeyPackage, a Welcome and a RecoveryWrap's
+// ciphertext are stored bare
+message GroupForm {              // §6 Signed, purpose group-form, its signer Signed's (owner decision 368)
+  bytes repo_id = 1;
+  bytes group_id = 2;
+  bytes previous_group_id = 3;   // the group this one re-forms, or empty
+  uint64 generation = 4;
+  AuthPin auth = 5;              // the signer's state when it signs, at which members judge the signer
+}
+message GkmGroupOwner { bytes repo_id = 1; bytes network_id = 2; }   // owner decision 201
+message GkmEpochObject {         // gkm writes header, uploader and time_ms itself, from the commit, the token
+                                 //   and its clock, so an upload has none to state falsely
+  bytes commit = 1;              // empty at epoch 0
+  GkmCommitHeader header = 2;    // at a creation's epoch 0 gen/1's generation and auth; at a re-form's the
+                                 //   form's generation and no auth
+  bytes uploader = 3;            // at epoch 0 gkm-1's creator
+  int64 time_ms = 4;
+  bytes gen_wrap = 5;
+  bytes sealed_group_info = 6;
+  uint64 group_info_generation = 7;
+  bytes network_id = 8;          // 8 and 9 only in epoch 0
+  uint32 cipher_suite = 9;
+}
+message GkmGroupInfoObject {     // at most 16 leaves the pointer {epoch}, that epoch's object holding the sealed
+                                 //   GroupInfo; above, all three
+  uint64 epoch = 1;
+  uint64 generation = 2;
+  bytes sealed_group_info = 3;
+}
+message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; bytes key_package_ref = 3; }   // owner decision 363
+message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }   // the target is the sidecar_id in its key
 ```
 
 ```text
@@ -9213,6 +9692,22 @@ http      bodies are evs.proto messages, application/x-protobuf, but a segment P
           of u32 length | EvsReadFrame (11.9)
 ```
 
+```proto
+// sidecar/protocol/evs.proto: what a push's sealed metadata opens to (sealed, above)
+message EvsSealedMetadata {
+  GroupHead group = 1;                  // §10's (group_id, epoch, epoch_authenticator) the writer pins
+  EvsProvenance provenance = 2;
+  repeated EvsSealedCommit commits = 3; // git mode: the carried commits, parents before children (11.7)
+  bytes signed_import = 4;              // a Signed EvsImport over this push's own commits
+  EvsGitUpdate git = 5;                 // git mode, every push but a PATH_EPOCH: the ref's update
+  bytes ref_name = 6;                   // a creating push: payload section 15's signed copy
+  EvsOverlay base = 7;                  // a creating push of an overlay: payload section 16's signed copy
+  bytes erasure_note = 8;               // an ERASE's or a CLOSURE's note (11.12; owner decision 384)
+  repeated bytes written_over = 9;      // a repair form's: the push ids of the ignored versions it writes over,
+                                        //   16 B each, for ur evs log alone (owner decision 415)
+}
+```
+
 ### 11.7 Diffs, checkpoints, index entries, reconstruction
 
 **Mapping to git.** Each ref has a mode: git-mode refs, which the local tier writes, commit only on their tip; file-mode refs land by path ([owner decision 141](#od-141)). One evs push carries one git ref update, in parts when large (11.8); its cleartext changes are the net change per path, and its sealed metadata holds every commit with each intermediate commit's sealed changes, and locates each blob its commits name that the net change does not: one sealed history record (a checkpoint, chunks, or a diff against the same path's blob in the commit's first parent) in a segment the push introduces, found by `EvsSealedBlob {git_oid, size, base_oid, file_id, records}` and named by no entry version's chain ([owner decision 237](#od-237)), so export rebuilds every original oid and every blob.
@@ -10301,6 +10796,54 @@ budget    a mobile catch-up fetches at most 4 MiB of statements and proofs (4,00
           the reader re-pins at the head and marks the gap, shown as "verified since <time>": the pin record
           holds the time of the newest re-pin past the budget, each such re-pin raises §5.4's evs_gap, and
           EvsRepo.VerifiedSince(refId) answers that time, zero when nothing was skipped (§18.5 mirrors it)
+```
+
+```proto
+// sidecar/protocol/evs.proto: the read reply's frames (reply, above)
+message EvsReadFrame {                  // u32be(length) then this, one part by its set fields, the last with end set
+  EvsHeadSummary head = 1;              // first, and in a streams read first for each ref
+  EvsReadStatement statement = 2;       // each version after the pin, in order
+  uint64 behind = 3;                    // the pin is older than the window: the first missing version
+  uint64 more = 4;                      // a streams read stopped at its 4 MiB: this ref's next version
+  EvsReadPathReply path = 5;            // a path's, then each of a listing's deltas past the first in its own frame
+  EvsReadObject object = 6;
+  bool end = 7;
+  EvsRefusalReply error = 8;            // the reply could not be finished: the last frame, in end's place
+                                        //   (owner decision 378)
+}
+message EvsReadPathReply {              // one path: its version, its listing, or what stands for them
+  repeated bytes token_path = 1;
+  EvsIndexVersion version = 2;
+  bytes statement = 3;                  // the one that wrote it, when not among those this reply returned
+  repeated EvsMerkleProof proof = 4;    // to that statement's changes_root, part level last; empty when inline
+  repeated EvsAbsenceProof absences = 5;  // later statements that left this path and its prefixes alone
+  EvsRemovalMarker removal = 6;         // a removed path's
+  EvsOverlay base = 7;                  // an overlay's path it holds no version of
+  EvsNameTable names = 8;               // a directory's folded table
+  uint64 names_through = 9;
+  repeated EvsIndexVersion deltas = 10; // the directory's deltas after names_through, in version order
+  EvsReadPathState state = 11;          // format 2 (states, above), with the five fields after it
+  bytes drop_id = 12;
+  int64 not_before_ms = 13;             // drop_pending
+  uint64 drop_version = 14;             // dropped: the DROP's ref version
+  bytes drop_statement = 15;            // the DROP's Signed EvsPush, when this reply returns it nowhere else
+  bytes drop_body = 16;                 // its body, which its drop_sha256 covers, on the first path naming the drop
+  uint64 entry_epoch = 17;              // the epoch whose copy served it; 0 the head's current one
+  bool stale_epoch = 18;                // the request named no token path in the head's current epoch
+  repeated EvsDeltaProof delta_proofs = 19;  // one per entry of deltas, in order (owner decision 378)
+  bool continues = 20;                  // the next of the path's deltas after the frame before, with its proof alone
+}
+message EvsDeltaProof {                 // a delta's proof to its own statement's changes_root, part level last
+  repeated EvsMerkleProof proof = 1;    // empty for an inline statement
+}
+message EvsAbsenceProof {               // two adjacent leaves with a path between them (11.6's merkle row)
+  uint64 version = 1;                   // the statement this speaks for
+  repeated bytes token_path = 2;        // the path or the prefix shown absent
+  repeated EvsMerkleProof below = 3;    // the leaf sorting just below it; empty when none does
+  repeated EvsMerkleProof above = 4;    // the leaf sorting just above it; empty when none does
+  repeated EvsMerkleProof present = 5;  // in their place, for a strict prefix the statement changes by a delta:
+                                        //   that change's inclusion proof (owner decision 378)
+}
 ```
 
 ### 11.10 Subscriptions
@@ -13187,9 +13730,24 @@ The `tls` component (§5; files `tls_*.go`) accepts streams for its `tls/` regis
 | Control panels | Refused and recorded for the daemon's API or MCP port and for targets that answer like agent UIs (§16's list) |
 | Interstitial | A one-time browser notice on Community `public` endpoints ([R:ext-edge](design/design-research/ext-edge.md) §2.8), never on 13.9's system publish |
 
-**Link tokens ([owner decision 422](#od-422)).** A link is `TlsLinkToken {bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4;}` in a §6 `Signed` (`SIGNED_TLS_LINK` 0x1503, purpose `tls-link`) by the publishing device's identity key, `expire_time_millis` at most the grant's expires, at `https://<host>/.well-known/ur/link?t=<base64url(Signed)>`. The front verifies the signature against the projection, that the signer is the sidecar the grant names, that `grant_id` is active and that `host` equals the SNI, then sets `__Host-ur-link` (HttpOnly, Secure, SameSite=Lax, 12 h, capped by the token's expiry) holding the same token and answers 302 to `/` with `Referrer-Policy: no-referrer`. Any listener of the grant honors it with no shared state, and a GrantRevoke or the grant's expiry ends every link of the grant.
+**Link tokens ([owner decision 422](#od-422)).** A link is a `TlsLinkToken` (below) in a §6 `Signed` (`SIGNED_TLS_LINK` 0x1503, purpose `tls-link`) by the publishing device's identity key, `expire_time_millis` at most the grant's expires, at `https://<host>/.well-known/ur/link?t=<base64url(Signed)>`. The front verifies the signature against the projection, that the signer is the sidecar the grant names, that `grant_id` is active and that `host` equals the SNI, then sets `__Host-ur-link` (HttpOnly, Secure, SameSite=Lax, 12 h, capped by the token's expiry) holding the same token and answers 302 to `/` with `Referrer-Policy: no-referrer`. Any listener of the grant honors it with no shared state, and a GrantRevoke or the grant's expiry ends every link of the grant.
 
-**Members-device logins ([owner decision 431](#od-431)).** The statement is `TlsEdgeLogin {string origin = 1; bytes nonce = 2;}` (`SIGNED_TLS_EDGE_LOGIN` 0x1502, purpose `edge-login`), `origin` as the front writes it, `https://<sni>` with `:<port>` only where the port is not 443, and `nonce` 32 random bytes the front draws, with no network_id. After the ID token checks out, the callback seals `{nonce, member_id, expiry, return path}` into `__Host-ur-device-pre` (`DeviceLoginLifetime`, 10 min) and answers 302 to `/.well-known/ur/device`, whose GET answers `{origin, nonce}` and whose same-origin POST of field `s`, the base64url `Signed`, completes the login with 303 to where the visitor began; the nonce leaves the pending set only once a statement verifies, so a login completes once. The signer is `AclState.ConsentedFor(signer, member)`, and not read_only, suspended or revoked. `__Host-ur-session` gains the device's sidecar_id: a device session counts on a `members` endpoint, a `members` session never on a `members-device` one, and consent and membership are checked on every request. `Sidecar.SignTlsEdgeLogin(origin, nonce)` answers the encoded `Signed` under the sidecar's consented untagged admission, and §18's `SignEdgeLogin` decodes base64url and passes the asking page's own origin, never one the page names; a remote-mode app reaches it through §5.8's Confirm method `tls.edge_login.sign`, which TLS owns and the daemon answers only for a confirmed call ([owner decision 489](#od-489)). Members reach a service over the overlay by §17's rules alone, as the audience row says.
+**Members-device logins ([owner decision 431](#od-431)).** The statement is a `TlsEdgeLogin` (below; `SIGNED_TLS_EDGE_LOGIN` 0x1502, purpose `edge-login`), `origin` as the front writes it, `https://<sni>` with `:<port>` only where the port is not 443, and `nonce` 32 random bytes the front draws, with no network_id. After the ID token checks out, the callback seals `{nonce, member_id, expiry, return path}` into `__Host-ur-device-pre` (`DeviceLoginLifetime`, 10 min) and answers 302 to `/.well-known/ur/device`, whose GET answers `{origin, nonce}` and whose same-origin POST of field `s`, the base64url `Signed`, completes the login with 303 to where the visitor began; the nonce leaves the pending set only once a statement verifies, so a login completes once. The signer is `AclState.ConsentedFor(signer, member)`, and not read_only, suspended or revoked. `__Host-ur-session` gains the device's sidecar_id: a device session counts on a `members` endpoint, a `members` session never on a `members-device` one, and consent and membership are checked on every request. `Sidecar.SignTlsEdgeLogin(origin, nonce)` answers the encoded `Signed` under the sidecar's consented untagged admission, and §18's `SignEdgeLogin` decodes base64url and passes the asking page's own origin, never one the page names; a remote-mode app reaches it through §5.8's Confirm method `tls.edge_login.sign`, which TLS owns and the daemon answers only for a confirmed call ([owner decision 489](#od-489)). Members reach a service over the overlay by §17's rules alone, as the audience row says.
+
+```proto
+// sidecar/protocol/tls.proto: the front's two statements, each the body of a §6 Signed by a device's identity key;
+// neither reaches a server, each traveling between the visitor and the front inside TLS
+message TlsLinkToken {           // SIGNED_TLS_LINK 0x1503, purpose tls-link, by the publishing device (link tokens)
+  bytes grant_id = 1;            // the publish grant's rule_id
+  string host = 2;               // the link's host, which the front holds to the SNI
+  uint64 expire_time_millis = 3; // at most the grant's expires
+  bytes nonce = 4;               // random, so two links of one grant differ
+}
+message TlsEdgeLogin {           // SIGNED_TLS_EDGE_LOGIN 0x1502, purpose edge-login, by a member's consented device
+  string origin = 1;             // https://<sni>, with :<port> only where the port is not 443, as the front writes it
+  bytes nonce = 2;               // 32 random B the front draws, taken once
+}
+```
 
 ### 13.8 Certificates
 
@@ -13218,6 +13776,24 @@ certs' DNS writes: an order's _acme-challenge TXT, or a strong-mode probe's CAA 
   verdict  a probe's pass counts only if /dns/internal/ready?serial=s still answers ready after its
            last query; stale --> write again and restart the window, since the restored edges may lack
            the canary
+```
+
+```proto
+// sidecar/protocol/tls.proto: the ordering row's attestation, and certs' hint (13.15)
+message TlsKeyAttestation {      // the body of a Signed, SIGNED_TLS_KEY_ATTESTATION 0x1501, purpose tls-key, by the
+                                 //   device's identity key: this key, for these names
+  bytes network_id = 1;
+  bytes sidecar_id = 2;
+  bytes spki_sha256 = 3;         // of the DER SubjectPublicKeyInfo
+  bytes identifier_set_sha256 = 4;  // the ordering row's hash of the identifier set
+  uint64 issue_time_millis = 5;
+}
+message TlsHint {                // §6 0x1502, topic tls: the client refetches GET /tls/certs, so a hint is never
+                                 //   authoritative
+  TlsHintKind kind = 1;
+  bytes cert_id = 2;             // the 16-byte row id
+}
+enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
 ```
 
 **CT watch (D-TLS-8).** Each listening sidecar queries Cert Spotter (`issuances?domain=<net>.<root>&include_subdomains=true&match_wildcards=true`, https://sslmate.com/help/reference/ct_search_api_v1) and crt.sh for its zone and custom domains every ~6 h (jittered; optional Team key), alarming on a certificate no device attested in `GET /tls/certs` or one an identity pinned under 24 h before issuance attested. Failures show "CT watch degraded"; keyless queries are best effort and never ride a URnetwork proxy (§2.8 ext-1).
@@ -13516,13 +14092,45 @@ message SmtpProofResult {        // 0x1606, edge -> sidecar
   uint32 code = 1;                // §6.11: 1 OK; 2 INVALID, and the edge cuts the connection (14.7);
                                   //   0 UNSPECIFIED, a protocol error
 }
+message SmtpOutcome {            // 0x1603, a NO_REPLY envelope to the ticket's listener (14.14), self-reported:
+                                 //   it only tightens (14.8) and never feeds attribution
+  bytes send_id = 1;              // the edge takes it from the connection's dialer for 15 min after the stream ends
+  uint32 tls_level = 2;           // 1-4 for TL1-TL4, 0 if none was reached
+  uint32 mode = 3;                // as SmtpProof.mode, 0 if the send ended before the mode was known
+  repeated uint32 reply_codes = 4;  // the MX's reply codes, as the sidecar read them inside TLS
+  uint32 dsn_count = 5;           // DSNs made or received since the last accepted outcome, so a late bounce
+  uint32 hard_bounce_count = 6;   //   rides the next send
+  bool downgrade_refused = 7;     // the send refused an MX below its pin, or TL4 without an allowance (14.4)
+}
+message SmtpStatus {             // 0x1604, in PushHint.hint on topic mail (14.14)
+  uint32 kind = 1;                // SmtpStatusKind
+  uint32 retry_after_ms = 2;      // when the queue may try again; GET /smtp/status gives a halt's scope
+}
+message SmtpHandshake {          // 0x1607, RPC sidecar -> edge, TLS 1.3 only (the disclosed SHTS, below)
+  bytes send_id = 1;
+  bytes shts = 2;                 // the server handshake traffic secret, which the edge forgets after E2
+}
+message SmtpHandshakeResult {    // 0x1608, edge -> sidecar
+  uint32 code = 1;                // SmtpHandshakeCode
+}
+// §6.11's edge codes, each 0 a protocol error that the receiver answers by resetting the stream or dropping the hint
+enum SmtpPreambleCode {          // SmtpPreambleResult.code
+  SMTP_PREAMBLE_CODE_UNSPECIFIED = 0; SMTP_PREAMBLE_OK = 1; SMTP_PREAMBLE_HALTED = 2; SMTP_PREAMBLE_QUOTA = 3;
+  SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
+  SMTP_PREAMBLE_KEYS = 8;
+}
+enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
+enum SmtpStatusKind {
+  SMTP_STATUS_KIND_UNSPECIFIED = 0; SMTP_STATUS_HALTED = 1; SMTP_STATUS_QUOTA = 2; SMTP_STATUS_CLEAR = 3;
+}
+enum SmtpHandshakeCode { SMTP_HANDSHAKE_CODE_UNSPECIFIED = 0; SMTP_HANDSHAKE_OK = 1; SMTP_HANDSHAKE_INVALID = 2; }
 ```
 
 Recipient addresses, subjects, bodies and the MX's replies inside TLS stay private witnesses; §2.8 smtp-1 to smtp-6 list what the edge sees.
 
 **Frames.** Only `SmtpPreamble` and `SmtpPreambleResult` travel as frames ahead of the raw TLS: u32be body length ‖ u16be `MessageType` ‖ body, the body at most 65,536 B. Raw TLS follows an OK result, any other result ends the stream after its frame, and a bad length or type resets it with PROTOCOL. A `dnssec_chain` that would pass the bound is sent empty, so TL1 is not available on that connection; the sidecar validates the chain to the keys of IANA's current root-anchors file, which it embeds, updated by release. `SmtpProof` and `SmtpHandshake` are RPCs to the edge, and `SmtpOutcome` a NO_REPLY envelope to the ticket's listener (14.14).
 
-**The disclosed SHTS.** In TLS 1.3 the sidecar sends `SmtpHandshake {bytes send_id = 1; bytes shts = 2;}` (`SMTP_HANDSHAKE` 0x1607) as soon as the handshake ends, and the edge answers `SmtpHandshakeResult {uint32 code = 1;}` (0x1608): 1 OK, 2 INVALID, on which the edge ends the connection, 0 a protocol error. TLS 1.2 sends none. The edge forgets the SHTS after E2 (D-SMTP-10).
+**The disclosed SHTS.** In TLS 1.3 the sidecar sends `SmtpHandshake` (`SMTP_HANDSHAKE` 0x1607, above) as soon as the handshake ends, and the edge answers `SmtpHandshakeResult` (0x1608): 1 OK, 2 INVALID, on which the edge ends the connection, 0 a protocol error. TLS 1.2 sends none. The edge forgets the SHTS after E2 (D-SMTP-10).
 
 **Declared bytes.** The preamble declares `message_byte_count` for the expected mode, the pin's (14.4), else BDAT's unstuffed form, and every issued header has a fixed length (14.6), so each length is known first. If the mode the post-TLS EHLO selects cannot meet the declared count, the sidecar ends the connection before MAIL and reconnects once with the other count and `retry_of_send_id` set, costing a burst token and no unit (14.7); a second mismatch is `deferred` on 14.4's retry schedule, so an MX that offers CHUNKING always gets BDAT.
 
@@ -15040,6 +15648,24 @@ message Coverage {                          // at run end, or after 10 min idle 
 message RetentionPolicy {                   // Signed (purpose record-entry) by the log's admin
   bytes log_id = 1; uint32 class = 2;       // a kind class, announce among them (keep_days 30, 16.11)
   uint32 keep_days = 3; uint32 searchable_days = 4; bool archive = 5;
+}
+// The values row's four enums (what freezes, below), whose values CanonicalAction.kind, ApprovalRequest.risk and
+// ApprovalDecision.decision and channel carry as uint32
+enum SidecarActionKind {                    // §5.4's order, new kinds appending
+  SIDECAR_ACTION_KIND_UNSPECIFIED = 0;
+  SIDECAR_ACTION_KIND_PUBLISH = 1; SIDECAR_ACTION_KIND_LISTEN = 2; SIDECAR_ACTION_KIND_FORWARD = 3;
+  SIDECAR_ACTION_KIND_EXPOSE = 4; SIDECAR_ACTION_KIND_EGRESS_CHANGE = 5; SIDECAR_ACTION_KIND_INVITE = 6;
+  SIDECAR_ACTION_KIND_SHARE = 7; SIDECAR_ACTION_KIND_ALIAS_CREATE = 8; SIDECAR_ACTION_KIND_ALIAS_DELETE = 9;
+  SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE = 10; SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE = 11;
+  SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
+  SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
+  SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED = 18;   // §14.4's TL4 allowance (owner decision 436)
+}
+enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
+enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROVE = 1; APPROVAL_VERDICT_DENY = 2; }
+enum ApprovalChannel {                      // ApprovalDecision.channel and AclRequestRule.evidence
+  APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
+  APPROVAL_CHANNEL_HARNESS = 3;
 }
 ```
 
@@ -16573,6 +17199,92 @@ rule id   route_id or map_id: under a decision, SHA-256("urnetwork-sidecar-v1/br
           with its approval_id, until its decision's not_after
 ```
 
+The statements' bytes, a delta's `StatementHeader` first and its sealed part in its `*Body` (Placement, below), with the messages and lists they use:
+
+```proto
+// sidecar/protocol/bridge/bridge.proto: the table's statements, a delta's header first, then the fields api sees
+// in the order the table writes them, and a sealed_body opening to its *Body for the rest
+message BridgeBlock {                     // a head's record, with no header
+  BridgeIpv4Prefix ipv4_prefix = 1;
+  BridgeIpv4Prefix previous_prefix = 2;
+  int64 drain_until = 3;
+}
+message BridgeAddress { StatementHeader header = 1; bytes sidecar_id = 2; bytes sealed_body = 3; }
+message BridgeAddressBody { fixed32 ipv4 = 1; }
+message BridgeRoute {
+  StatementHeader header = 1;
+  bytes route_id = 2;                     // the rule id below
+  bytes advertiser = 3;
+  repeated bytes route_rule_ids = 4;      // the §8 route rules it serves (17.7; owner decision 344)
+  bytes sealed_body = 5;                  // BridgeRouteBody
+}
+message BridgeRouteBody {
+  repeated BridgeIpv4Prefix prefixes = 1;
+  BridgeIpv4Prefix exposed_prefix = 2;
+  bytes site_id = 3;
+  uint32 weight = 4;
+  BridgeRouteKind kind = 5;
+  uint32 drain_seconds = 6;
+  BridgeApproval approval = 7;
+}
+message BridgeMap {
+  StatementHeader header = 1;
+  bytes map_id = 2;                       // the rule id below
+  bytes host = 3;
+  int64 expires = 4;
+  bytes sealed_body = 5;                  // BridgeMapBody
+}
+message BridgeMapBody {
+  BridgeIpv4Prefix match_prefix = 1;
+  uint32 protocol = 2;                    // the IP protocol number
+  repeated BridgePortRange ports = 3;
+  bytes target = 4;                       // the address, 4 or 16 B
+  uint32 target_port = 5;
+  uint32 drain_seconds = 6;
+  BridgeApproval approval = 7;
+}
+message BridgeEgress {
+  StatementHeader header = 1;
+  bytes subject = 2;
+  bytes sealed_body = 3;                  // BridgeEgressBody, under exits only
+  BridgeEgressMode mode = 4;              // in the clear (Placement)
+}
+message BridgeEgressBody {
+  reserved 1; reserved "mode";            // the mode, which BridgeEgress carries in the clear
+  repeated bytes exit_sidecar_ids = 2;    // or exit_tag_id
+  bytes exit_tag_id = 3;
+}
+message BridgeAlias { StatementHeader header = 1; bytes sealed_body = 2; }   // only its header shows
+message BridgeAliasBody {
+  bytes share_id = 1;
+  uint32 target_index = 2;
+  BridgeIpv4Prefix alias_prefix = 3;
+  bytes host = 4;                         // T_i's host's sidecar_id, in the sharing network
+  bytes host_identity_public_key = 5;     // that host's identity key, from the target table (17.9's Y's pin)
+  bytes sharing_network_id = 6;
+  uint32 drain_seconds = 7;               // a release's drain: 300 s when 0, 3,600 s at most
+  bool release = 8;                       // ends this share's alias for target_index
+}
+message BridgeWithdraw { StatementHeader header = 1; bytes rule_id = 2; BridgeWithdrawMode mode = 3; }
+message BridgeApproval {                  // the approval row
+  bytes canonical_action = 1;             // this use's CanonicalAction as stored, whose effect_key derives the id
+  repeated Signed decisions = 2;
+  bytes template_action = 3;              // a multi-use decision's template (owner decision 218)
+}
+message BridgeIpv4Prefix { fixed32 address = 1; uint32 length = 2; }
+message BridgePortRange { uint32 first = 1; uint32 last = 2; }
+enum BridgeRouteKind {
+  BRIDGE_ROUTE_KIND_UNSPECIFIED = 0; BRIDGE_ROUTE_KIND_SUBNET = 1; BRIDGE_ROUTE_KIND_EXIT = 2;
+}
+enum BridgeEgressMode {
+  BRIDGE_EGRESS_MODE_UNSPECIFIED = 0; BRIDGE_EGRESS_MODE_AUTO = 1; BRIDGE_EGRESS_MODE_EXITS = 2;
+  BRIDGE_EGRESS_MODE_NONE = 3;
+}
+enum BridgeWithdrawMode {
+  BRIDGE_WITHDRAW_MODE_UNSPECIFIED = 0; BRIDGE_WITHDRAW_MODE_RESET = 1; BRIDGE_WITHDRAW_MODE_DRAIN = 2;
+}
+```
+
 - **Placement** ([owner decision 5](#od-5)). Admin-signed heads carry the block, standing rules and 17.9's `BridgeShareSigner` files; sidecars file statements about themselves, and owners or sponsors about their subjects, as deltas entering §7.9's authorization log, verified at their position until a writer folds them in. Rule bodies are sealed to the config's current key generation (§10) in §7.9's sealed-body bytes, each delta but `BridgeWithdraw` opening to its `*Body` message and `BridgeAlias` showing only its header, with `expires` and `drain_until` int64 milliseconds since the epoch and an IPv4 prefix a `BridgeIpv4Prefix{fixed32 address, uint32 length}`, so §8.12's invariant and D-TRUST-10's witness stop can delay them; a bodiless `BridgeWithdraw` never waits, nor does a `BridgeEgress` of mode `none` or `auto`, whose `sealed_body` is empty. Only ids show (kind, signer, subject, rule id, expiry, an egress statement's mode and, for an approved route, the advertiser and the `route` rules it serves), which readers check; gates and api apply each egress entry's mode in log order over `BridgeRows.egress`, as §8.9's entries after a base, and rows carry the same value at the fold. A requested `dial` or `route` grant keeps only ids in the clear too: its CanonicalAction's `rule_id`, `subject`, `grant_allow`, `expires_millis` and a subject-only `grant_dst`, while its prefixes and ports, `cidrs`, `target_port` and any `ip:` or port text in `grant_dst`, ride in `sealed_detail`, sealed as rule bodies are, under a raised version; `payload_sha256` still covers the stored bytes, so api's `match` checks ids only, and approvers and readers open the detail to render and enforce it, while a publish keeps its clear fields, which are public anyway ([owner decision 220](#od-220); §8.8, §16.8). Gates see only §8's reach rules between sidecar ids and `BridgeRows`' egress modes (§8.10), never prefixes, addresses, ports, maps or aliases (§2.8, api-12).
 - **Ledger** ([owner decision 473](#od-473)). A sealed body is judged by every reader that holds its generation, on the state its entry lands on, a base's tail on that base's rows with the tail re-applied (§7.9), as a signer already is; when a writer folds a statement it freezes the verdict it holds into the config head's bridge ledger, files of rows by kind: `bridge/ledger/addresses` with their tombstones, `bridge/ledger/rules/<xx>` shards by rule id with each rule's body and disposition, `bridge/ledger/egress` and `bridge/ledger/aliases`, and `bridge/ledger/manifest` holding their hashes. Every full reader standing under the previous base computes the same files and forks on a difference, and a device that starts at the base, a VPN component included, takes them, so no reader re-opens a folded statement and a compile does not grow with the log. They are ciphertext at evs, so no §2.8 row: about 600 KB at 5,000 devices. Writers fold through their tip whenever a bridge statement is unfolded, so the one case that differs from a verdict at the entry's own position, a head landing within seconds of an approved filing whose policy disqualifies that approval, turns the verdict at every reader alike and fails closed, and the requester files again under a new decision.
 - **Unformed generations** ([owner decision 478](#od-478)). A body sealed to a generation gkm does not name is pending. A config writer whose whole read of gkm's generation listing, made inside the plan, names G as the newest while it holds keys 1 to G freezes a body sealed above G void (Refused, no such generation) once the entry at its tip is `UnformedVoidWait` (24 h) past the filing's own entry in log time, and folds past it; every reader that holds keys refuses, void and with no alarm, a body whose generation's GenRotate is signed more than `GenerationFormGrace` (1 h) after the entry that carries it, so a generation claimed after the void changes no reader's verdict and no device forks; a checker never voids and, lacking the generation, takes the head's rows unchecked. Both are `BridgeLedgerSettings` fields, the wait raised to a floor of the grace plus 30 min. A member device that keeps filing such bodies can hold the fold while it files, an accepted bound: the writer's `config_key_waiting` line names the filer on every plan, and revoking the filer, a statement that needs no base, ends it one wait after its last filing, as a network can shorten by lowering the wait. The id level and the rows are unchanged, and no server sees anything new.
@@ -16618,6 +17330,12 @@ message BridgeRows {                      // bridge.proto; acl.proto's AclRows.b
                                           // verifier in log order after a base, as the egress mode is; a route
                                           // rule with no via takes those advertisers as its via subjects
                                           // (§8.8; owner decision 344)
+}
+message BridgeEgressRow { bytes subject = 1; BridgeEgressMode mode = 2; }   // a sidecar_id or opaque atom
+message BridgeRouteRow {                  // never a prefix, site, weight or kind
+  bytes route_id = 1;                     // the route's rule id, 32 B
+  bytes advertiser = 2;                   // the sidecar_id that filed it
+  repeated bytes route_rule_ids = 3;      // the §8 route rules it serves: a policy rule's 16 B, a grant's 32
 }
 ```
 
@@ -16689,8 +17407,17 @@ message BridgeShareSigner {            // Y's config file per accepted share; si
   bytes signer_seed = 3;               // g's ShareSigner: a fresh 32-byte Ed25519 seed
   bytes share_cert = 4;                // its Signed ShareCert
 }
-// share pins' BridgeShareGrant (below), which bridge.proto declares with fields 1 to 9, joins this fence once
-// protocol's fence test stops writing it among its unfenced declarations
+message BridgeShareGrant {             // X's config file bridge/share-grant/<share_id hex> (share pins, below)
+  bytes share_id = 1;
+  bytes grant_id = 2;                  // the share's GrantActivate; the file counts only while that grant is live
+  bytes share_public_key = 3;          // Y's ShareKey, Ed25519
+  bytes target_table_sha256 = 4;       // of the sealed target table as network_bridge_share stores it
+  bytes table_key = 5;                 // K
+  bytes accepting_network_id = 6;      // Y
+  bytes alias_table_sha256 = 7;        // of the BridgeShareAccept X's approving admin opened
+  uint64 target_table_version = 8;
+  uint64 alias_table_version = 9;
+}
 ```
 
 ```text
@@ -16746,6 +17473,39 @@ accept     the accept's seals ride together as BridgeShareAccept{aliases, share_
 open       a failed open refuses the share and alarms, with no fallback
 holders    a multi-use code's accepters all hold K, so a seal proves only a code holder; X's approving admin
            is what pins one ShareKey to one share (share pins)
+```
+
+```proto
+// sidecar/protocol/bridge/bridge.proto: the share seal's bodies, each sealed under K with its label and padded by
+// pad to a multiple of 256 B, and the accepting side's sealed column
+message BridgeShareTargets { repeated BridgeShareTarget targets = 1; bytes pad = 15; }   // label targets
+message BridgeShareTarget {
+  uint32 index = 1;                    // from 0, dense
+  bytes host_sidecar_id = 2;
+  bytes host_identity_public_key = 3;  // what Y's BridgeAlias copies (share pins)
+  BridgeIpv4Prefix prefix = 4;         // a hosted address as a /32, or a served prefix
+  uint32 protocol = 5;                 // 0 every protocol; 6 or 17 with ports
+  repeated BridgePortRange ports = 6;
+}
+message BridgeShareAliases { repeated BridgeShareAlias aliases = 1; bytes pad = 15; }   // label aliases
+message BridgeShareAlias {
+  uint32 index = 1;
+  uint32 alias_host_bits = 2;          // A_i's low 16 bits, since Y's block is not X's to know
+  uint32 length = 3;                   // its target's
+}
+message BridgeShareKeyBody { bytes share_public_key = 1; bytes pad = 15; }   // label share-key
+message BridgeShareShortfall {         // label shortfall: refused_no_space's figures
+  uint32 index = 1;                    // the first target that found no room
+  uint32 length = 2;                   // its prefix length
+  uint32 free_address_count = 3;       // the upper /17's free addresses at the preflight
+  uint32 largest_free_length = 4;      // the shortest prefix length with an aligned free block; 33 for none
+  bytes pad = 15;
+}
+message BridgeShareAccept {            // the accepting side's sealed column, whose SHA-256 X's pin names
+  bytes aliases = 1;                   // the sealed BridgeShareAliases; empty on a refusal
+  bytes share_key = 2;                 // the sealed BridgeShareKeyBody; empty on a refusal
+  bytes shortfall = 3;                 // the sealed BridgeShareShortfall, under refused_no_space alone
+}
 ```
 
 ```text

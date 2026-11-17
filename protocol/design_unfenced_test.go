@@ -27,160 +27,9 @@ message HeadCheckResult {
   repeated UnverifiedPin unverified = 8;
 }
 
-// sidecar/protocol/acl.proto
-// §8.8's rows, which its AclRows comments list. AclAtom's fields 4 to 8 are plan-ACL-atom-and-rule-ids #4's and
-// plan-ACL-nonsidecar-subjects', AclRule's source_rule_id plan-ACL-folded-grant-state #2's, its ports' move to devices
-// and ports_limited plan-BRIDGE-gate-row-prefixes #1's, and AclSuspension and AclSpentGrant
-// plan-ACL-folded-grant-state #1's and #3's, each decided by the owner with its number.
-message AclAtom {
-  bytes atom = 1; repeated bytes member_ids = 2; repeated bytes sidecar_ids = 3;
-  repeated bytes tag_owner_member_ids = 4; repeated bytes client_ids = 5; repeated bytes network_ids = 6;
-  string role = 7; string principal = 8;
-}
-message AclPortRange { uint32 protocol = 1; uint32 first = 2; uint32 last = 3; }
-message AclRule {
-  reserved 5; reserved "ports";
-  bytes rule_id = 1; repeated bytes src_atoms = 2; repeated AclTarget targets = 3; repeated uint32 actions = 4;
-  int64 expires = 6; AclAudience audience = 7; AclAppMode app_mode = 8;
-  bytes link_spki_sha256 = 9; bytes source_rule_id = 10; bool ports_limited = 11;
-}
-message AclSuspension {
-  bytes subject = 1; bytes suspend_id = 2; uint32 signer_class = 3; bytes signer = 4; uint64 at = 5;
-}
-message AclSpentGrant { bytes grant_id = 1; int64 retain_until_ms = 2; }
-message AclRepo {
-  bytes repo_id = 1; RepoKind kind = 2; bytes owner_member_id = 3; repeated bytes consented_sidecar_ids = 4;
-  repeated AclRepoAdminRow admins = 5; repeated AclRepoGrantRow grants = 6; repeated AclRepoShareRow shares = 7;
-  repeated AclRepoRevokeRow revokes = 8; AclRepoDeletionRow deletion = 9; RepoVersioningLock lock = 10;
-  uint64 holders_shrunk_at = 11;
-}
-message AclRepoAdminRow { bytes sidecar_id = 1; bytes signer = 2; uint64 at = 3; }
-message AclRepoGrantRow {
-  bytes subject = 1; RepoGrantRole role = 2; int64 expires = 3; bytes signer = 4; uint64 at = 5;
-}
-message AclRepoShareRow { bytes subject = 1; int64 expires = 2; bytes signer = 3; uint64 at = 4; }
-message AclRepoRevokeRow { bytes subject = 1; bytes signer = 2; uint64 at = 3; }
-message AclRepoDeletionRow {
-  bytes deletion_id = 1; bool now = 2; uint64 deleted_at = 3; uint64 restored_at = 4;
-}
-// §8.8's statements, as its table lists them.
-message GrantActivate {
-  StatementHeader header = 1; bytes grant_id = 2; bytes canonical_action = 3; repeated Signed decisions = 4;
-}
-message EvsShare { StatementHeader header = 1; bytes repo_id = 2; bytes subject = 3; int64 expires = 4; }
-message OwnerConfirm { StatementHeader header = 1; bytes sidecar_id = 2; }
-message RepoCreate { StatementHeader header = 1; bytes repo_id = 2; RepoKind kind = 3; }
-message RepoAdmin {
-  StatementHeader header = 1; bytes repo_id = 2; bytes sidecar_id = 3; RepoAdminChange change = 4;
-}
-message RepoGrant {
-  StatementHeader header = 1; bytes repo_id = 2; bytes subject = 3; RepoGrantRole role = 4; int64 expires = 5;
-}
-message RepoRevoke { StatementHeader header = 1; bytes repo_id = 2; bytes subject = 3; }
-message RepoDelete { StatementHeader header = 1; bytes repo_id = 2; bytes deletion_id = 3; bool now = 4; }
-message RepoRestore { StatementHeader header = 1; bytes repo_id = 2; bytes deletion_id = 3; }
-message RepoVersioning {
-  StatementHeader header = 1; bytes repo_id = 2; RepoVersioningLock lock = 3; bytes sealed_rules = 4;
-}
-// QD-212's statement as DESIGN-DETAILS 16.2.2 writes it, with the plaintext its sealed_rules opens to and the row
-// AclRepo.prefix_rules folds (16.2.3), which design-records writes into §8.8 (16.8).
-message RepoPrefixRules { StatementHeader header = 1; bytes repo_id = 2; bytes sealed_rules = 3; }
-message PrefixRuleSet { repeated PrefixRule rules = 1; }
-message PrefixRule { bytes subject = 1; repeated bytes path = 2; PrefixAction action = 3; }
-enum PrefixAction { PREFIX_ACTION_UNSPECIFIED = 0; PREFIX_ACTION_WRITE = 1; }
-message AclRepoPrefixRulesRow { bytes signer = 1; uint64 at = 2; }
-message AuditOptIn { StatementHeader header = 1; repeated bytes reader_atoms = 2; int64 not_after = 3; }
-message AuditOptOut { StatementHeader header = 1; }
-// §8.4's autogroups, actions, audiences and modes, §11.12's kinds, and §8.8's names, in the order written.
-enum AclAutogroup {
-  ACL_AUTOGROUP_UNSPECIFIED = 0; ACL_AUTOGROUP_MEMBER = 1; ACL_AUTOGROUP_OWNER = 2; ACL_AUTOGROUP_ADMIN = 3;
-  ACL_AUTOGROUP_AUDITOR = 4; ACL_AUTOGROUP_SIDECAR = 5; ACL_AUTOGROUP_TAGGED = 6; ACL_AUTOGROUP_NETWORK = 7;
-  ACL_AUTOGROUP_UNTAGGED = 8; ACL_AUTOGROUP_EPHEMERAL = 9; ACL_AUTOGROUP_PUBLIC = 10;
-  ACL_AUTOGROUP_INTERNET = 11; ACL_AUTOGROUP_SELF = 12; ACL_AUTOGROUP_SPONSOR = 13;
-  ACL_AUTOGROUP_DST_OWNER = 14;
-}
-enum AclAction {
-  ACL_ACTION_UNSPECIFIED = 0; ACL_ACTION_DIAL = 1; ACL_ACTION_LISTEN = 2; ACL_ACTION_ROUTE = 3;
-  ACL_ACTION_READ = 4; ACL_ACTION_WRITE = 5; ACL_ACTION_ADMIN = 6; ACL_ACTION_DEPOSIT = 7;
-  ACL_ACTION_PUBLISH = 8; ACL_ACTION_SEND = 9;
-}
-enum AclAudience {
-  ACL_AUDIENCE_UNSPECIFIED = 0; ACL_AUDIENCE_MEMBERS = 1; ACL_AUDIENCE_MEMBERS_DEVICE = 2;
-  ACL_AUDIENCE_LINK = 3; ACL_AUDIENCE_PUBLIC = 4;
-}
-enum AclAppMode { ACL_APP_MODE_UNSPECIFIED = 0; ACL_APP_MODE_HTTP = 1; ACL_APP_MODE_RAW = 2; }
-enum RepoKind {
-  REPO_KIND_UNSPECIFIED = 0; REPO_KIND_GENERAL = 1; REPO_KIND_RECORD = 2; REPO_KIND_CONFIG = 3;
-  REPO_KIND_DIRECTORY = 4; REPO_KIND_TEAM_RECORD = 5; REPO_KIND_MAILCFG = 6; REPO_KIND_VAULT = 7;
-  REPO_KIND_MAILBOX = 8; REPO_KIND_SECRET = 9;
-}
-enum RepoGrantRole {
-  REPO_GRANT_ROLE_UNSPECIFIED = 0; REPO_GRANT_ROLE_DEPOSIT = 1; REPO_GRANT_ROLE_READER = 2;
-  REPO_GRANT_ROLE_WRITER = 3;
-}
-enum RepoVersioningLock {
-  REPO_VERSIONING_LOCK_UNSPECIFIED = 0; REPO_VERSIONING_LOCK_LOCKED = 1; REPO_VERSIONING_LOCK_UNLOCKED = 2;
-}
-enum RepoAdminChange {
-  REPO_ADMIN_CHANGE_UNSPECIFIED = 0; REPO_ADMIN_CHANGE_ADD = 1; REPO_ADMIN_CHANGE_REMOVE = 2;
-}
-
 // sidecar/protocol/config.proto
-// §7.9's record table.
-message AdminSet {
-  StatementHeader header = 1; repeated bytes owners = 2; repeated bytes admins = 3;
-  repeated bytes network_admins = 4; repeated bytes it_admins = 5; uint32 threshold = 6;
-}
-message MemberAdmit { StatementHeader header = 1; bytes member_id = 2; MemberRole role = 3; }
-message SidecarAdmit {
-  StatementHeader header = 1; bytes network_id = 2; bytes sidecar_id = 3; bytes identity_public_key = 4;
-  string identity_alg = 5; bytes member_id = 6; repeated bytes tag_ids = 7; bool ephemeral = 8;
-  int64 not_after = 9; uint32 capabilities = 10;
-}
-message AdmissionConfirm { StatementHeader header = 1; bytes sidecar_id = 2; }
-message SponsorSet { StatementHeader header = 1; bytes sidecar_id = 2; bytes sponsor_member_id = 3; }
-message IndexerSet {
-  StatementHeader header = 1; bytes sidecar_id = 2; IndexerScope scope = 3; bool retire = 4;
-  bytes sealed_services = 5;
-}
-message IndexerServices { repeated IndexerService services = 1; }
-message RecoveryBind {
-  StatementHeader header = 1; bytes member_id = 2; bytes prev_sha256 = 3; bytes ed25519_public_key_sha256 = 4;
-  bytes sealed_body = 5;
-}
-message RecoveryBindBody { bytes xwing_public_key = 1; bytes ed25519_public_key = 2; bytes genesis_sig = 3; }
-message RecoveryRebind {
-  StatementHeader header = 1; bytes member_id = 2; bytes prev_sha256 = 3; bytes ed25519_public_key_sha256 = 4;
-  bytes sealed_body = 5; RecoveryRebindReason reason = 6;
-}
-// KeyRegister's fields 9 and 10 are protos-bridge-presence-gaps #3's, decided by the owner with their numbers.
-message KeyRegister {
-  StatementHeader header = 1; bytes member_id = 2; bytes key_id = 3; KeyAlg alg = 4; bytes public_key = 5;
-  bytes attestation = 6; KeyPurpose purpose = 7; int64 not_after = 8; bytes key_signature = 9;
-  WebAuthnEvidence key_webauthn = 10;
-}
-message KeyRevoke { StatementHeader header = 1; bytes key_id = 2; }
-// Delegation's forward is §7.9's forwarding row's, its number DESIGN-DETAILS 4.2.2's (owner decision 197).
-message Delegation {
-  StatementHeader header = 1; bytes pubkey = 2; bytes reader_xwing_public_key = 3; repeated bytes tag_ids = 4;
-  uint32 max_admits = 5; int64 not_after = 6; ForwardScope forward = 7;
-}
-message DelegationRevoke { StatementHeader header = 1; bytes delegation_id = 2; uint64 since_n = 3; }
-message ServiceDirectorySettings { DirectoryRunsMode runs = 1; DirectoryWorkersMode workers = 2; }
-message ServiceSettings {
-  TeamMailMode team_mail = 1; uint32 stale_leaf_days = 2; SelfAdmitMode self_admit = 3;
-  uint32 witness_bound_hours = 4; bytes scim_signer = 5; ServiceDirectorySettings directory = 6;
-}
-message VersioningRule {
-  repeated uint32 kinds = 1; repeated bytes repo_ids = 2; string path_glob = 3; uint64 size_above_bytes = 4;
-  VersioningMode versioning = 5;
-}
-message VersioningRules { repeated VersioningRule rules = 1; }
 // plan-SOCK-ksock-rotation #2's K_sock file, which the owner's answer gives with its numbers.
 message SocketKeyFile { bytes current_key = 1; bytes previous_key = 2; int64 rotated_at_ms = 3; }
-message AuthorityProposal { StatementHeader header = 1; uint32 statement_type = 2; bytes statement = 3; }
-message AuthorityCosign { StatementHeader header = 1; bytes proposal_id = 2; }
-message RecoveryVeto { StatementHeader header = 1; bytes proposal_id = 2; }
 // plan-TEAM-config-head-format #1's fold records, which the owner's answer gives with their numbers.
 message ConfigRecord { bytes id = 1; uint64 n = 2; int64 time_ms = 3; uint32 kind = 4; bytes body = 5; }
 message ConfigFold { uint64 after = 1; uint64 folded_through = 2; repeated ConfigRecord records = 3; }
@@ -242,118 +91,14 @@ message AuthKeyBundle {
   uint32 version = 1; bytes genesis_sha256 = 2; AuthPin head = 3; bytes delegation_id = 4;
   bytes delegation_signing_seed = 5; bytes delegation_reader_seed = 6; repeated bytes tag_ids = 7;
 }
-// §7.9's and §16.11's settings, in the order written.
-enum IndexerScope { INDEXER_SCOPE_UNSPECIFIED = 0; INDEXER_SCOPE_NETWORK = 1; INDEXER_SCOPE_MEMBER = 2; }
-enum IndexerService {
-  INDEXER_SERVICE_UNSPECIFIED = 0; INDEXER_SERVICE_MAIL = 1; INDEXER_SERVICE_MIRROR = 2;
-  INDEXER_SERVICE_SEARCH = 3;
-}
-enum TeamMailMode {
-  TEAM_MAIL_MODE_UNSPECIFIED = 0; TEAM_MAIL_MODE_INDEXERS = 1; TEAM_MAIL_MODE_MEMBER_SCOPES = 2;
-}
-enum SelfAdmitMode { SELF_ADMIT_MODE_UNSPECIFIED = 0; SELF_ADMIT_MODE_ON = 1; SELF_ADMIT_MODE_OFF = 2; }
-enum DirectoryRunsMode {
-  DIRECTORY_RUNS_MODE_UNSPECIFIED = 0; DIRECTORY_RUNS_MODE_AUTO = 1; DIRECTORY_RUNS_MODE_PROMPT = 2;
-  DIRECTORY_RUNS_MODE_OFF = 3;
-}
-enum DirectoryWorkersMode {
-  DIRECTORY_WORKERS_MODE_UNSPECIFIED = 0; DIRECTORY_WORKERS_MODE_ON = 1; DIRECTORY_WORKERS_MODE_OFF = 2;
-}
-enum VersioningMode { VERSIONING_MODE_UNSPECIFIED = 0; VERSIONING_MODE_ON = 1; VERSIONING_MODE_OFF = 2; }
 
 // sidecar/protocol/bridge/auth.proto
-// §7.9's rows, as ProjectionRows' comments list them, with what protos-bridge-row-fields #1 and #2 add:
-// SidecarRow's fields 16 to 20 and DelegationRow's 9 to 11, decided by the owner with their numbers; and
-// SidecarRow's admitted_time_ms, 23, which the owner gave its number in QD-646.
-message MemberRow {
-  bytes member_id = 1; MemberRole role = 2; bytes recovery_key_sha256 = 3;
-  repeated RecoveryBindingRow bindings = 4;
-}
-message RecoveryBindingRow {
-  bytes key_sha256 = 1; bytes signer = 2; uint64 at = 3; RecoveryRebindReason reason = 4;
-}
-message SidecarRow {
-  bytes sidecar_id = 1; bytes admission_sha256 = 2; repeated bytes admission_signers = 3;
-  uint64 admitted_at = 4; bytes confirm_signer = 5; uint64 confirmed_at = 6; bytes owner_confirm_signer = 7;
-  uint64 owner_confirmed_at = 8; uint64 revoked_at = 9; uint64 parked_at = 10; bytes sponsor = 11;
-  uint32 capabilities = 12; bytes delegation_id = 13; uint64 live_since = 14; int64 not_after = 15;
-  bytes identity_public_key = 16; string identity_alg = 17; bytes member_id = 18; repeated bytes tag_ids = 19;
-  bool ephemeral = 20; repeated ConfirmationRow confirmations = 21; repeated CascadeSpanRow cascades = 22;
-  int64 admitted_time_ms = 23;
-}
-// DESIGN-DETAILS 5.2.2's rows, its proto block's own numbers (complete 2026-11-09, pending its fold into §7.9 and the
-// owner's details-5-settings-in-rows), with the cascade's spans and the indexer rows that questions
-// team-m2-04-cascade-spans and team-m2-07-indexer-rows ask for.
-message ProposalRow {
-  bytes proposal_id = 1; uint32 statement_type = 2; bytes statement = 3; uint64 proposed_at = 4;
-  int64 not_after_ms = 5; repeated ProposalSigner signers = 6; uint64 window_entry = 7; int64 window_time_ms = 8;
-  uint32 kind = 9;
-}
-message ProposalSigner { bytes signer = 1; uint64 at = 2; }
-// RESTORED_COSIGNED, a restored binding's admission filed with self_admit off, is question
-// team-m2-05-restored-kind-self-admit's answer (QD-952, owner decision 314), which §7.9's prose writes and no fence does.
-enum ProposalKind {
-  PROPOSAL_KIND_UNSPECIFIED = 0; PROPOSAL_KIND_AUTHORITY = 1; PROPOSAL_KIND_RECOVERY_SCOPED = 2;
-  PROPOSAL_KIND_RESTORED = 3; PROPOSAL_KIND_RESTORED_COSIGNED = 4;
-}
-message ProjectionSettings { uint32 self_admit = 1; bytes scim_signer = 2; }
-message RingRow { bytes statement_id = 1; uint64 n = 2; }
-message ConfirmationRow { uint32 kind = 1; bytes signer = 2; uint64 at = 3; bool lifted_park = 4; }
-message CascadeSpanRow { uint64 from = 1; uint64 until = 2; }
-message IndexerRow { bytes sidecar_id = 1; uint32 scope = 2; bytes signer = 3; uint64 at = 4; bytes sealed_services = 5; }
-// DelegationRow's fields 12 to 16 and ForwardScope are DESIGN-DETAILS 4.2.2's proto block's own numbers (complete
-// 2026-11-10, pending its fold into §7.9 and the owner's details-4-forwarding-reader-key-in-rows).
-message DelegationRow {
-  bytes delegation_id = 1; bytes signer = 2; uint64 at = 3; repeated bytes tag_atoms = 4; int64 not_after = 5;
-  uint64 key_dropped_at = 6; uint64 ended_at = 7; uint32 admissions = 8; bytes pubkey = 9;
-  bytes reader_xwing_public_key = 10; uint32 max_admits = 11; bytes forward_sidecar_id = 12;
-  bytes host_client_id = 13; bytes host_client_public_key = 14; uint64 superseded_at = 15;
-  bytes reader_key_sha256 = 16;
-}
-message ForwardScope { bytes forward_sidecar_id = 1; bytes host_client_id = 2; bytes host_client_public_key = 3; }
-message KeyRow {
-  bytes key_id = 1; bytes member_id = 2; KeyAlg alg = 3; bytes public_key = 4; KeyPurpose purpose = 5;
-  bytes signer = 6; uint64 at = 7; int64 not_after = 8; uint64 revoked_at = 9;
-}
-// §7.9's and §8.8's statements the device role applies between states.
-message Genesis {
-  bytes network_id = 1; bytes config_repo_id = 2; bytes owner_member_id = 3; bytes owner_sidecar_id = 4;
-  bytes owner_identity_public_key = 5; int64 time_ms = 6;
-}
-message MemberRevoke { StatementHeader header = 1; bytes member_id = 2; }
-message SidecarRevoke {
-  StatementHeader header = 1; bytes sidecar_id = 2; SidecarRevokeReason reason = 3; uint64 since_n = 4;
-}
-message GrantRevoke { StatementHeader header = 1; bytes grant_id = 2; }
-message Suspend { StatementHeader header = 1; bytes subject = 2; bytes suspend_id = 3; }
-message Unsuspend { StatementHeader header = 1; bytes subject = 2; bytes suspend_id = 3; }
 // §5.5's identity binding, as plan-CORE-binding-wire #1 numbers it.
 message SidecarIdentityBinding {
   bytes network_id = 1; bytes sidecar_id = 2; bytes client_id = 3; int64 generation = 4;
   bytes client_public_key = 5; bytes identity_public_key = 6; int64 issued_at_ms = 7;
 }
 message SignedSidecarIdentityBinding { bytes body = 1; bytes client_signature = 2; bytes identity_signature = 3; }
-// §7.5's roles and §7.9's names, in the order written.
-enum MemberRole {
-  MEMBER_ROLE_UNSPECIFIED = 0; MEMBER_ROLE_OWNER = 1; MEMBER_ROLE_ADMIN = 2; MEMBER_ROLE_NETWORK_ADMIN = 3;
-  MEMBER_ROLE_IT_ADMIN = 4; MEMBER_ROLE_BILLING_ADMIN = 5; MEMBER_ROLE_AUDITOR = 6; MEMBER_ROLE_MEMBER = 7;
-}
-// SIDECAR_CAPABILITY_INVITED is plan-ACL-invited-consent-evidence's, decided by the owner with its bit.
-enum SidecarCapability {
-  SIDECAR_CAPABILITY_NONE = 0; SIDECAR_CAPABILITY_READ_ONLY = 2; SIDECAR_CAPABILITY_INVITED = 4;
-}
-enum KeyAlg {
-  KEY_ALG_UNSPECIFIED = 0; KEY_ALG_WEBAUTHN_ES256 = 1; KEY_ALG_ECDSA_P256_SHA256 = 2; KEY_ALG_SSH_ED25519 = 3;
-}
-enum KeyPurpose { KEY_PURPOSE_UNSPECIFIED = 0; KEY_PURPOSE_PRESENCE = 1; KEY_PURPOSE_SSHSIG = 2; }
-enum RecoveryRebindReason {
-  RECOVERY_REBIND_REASON_UNSPECIFIED = 0; RECOVERY_REBIND_REASON_ROUTINE = 1; RECOVERY_REBIND_REASON_LOST = 2;
-  RECOVERY_REBIND_REASON_COMPROMISE = 3;
-}
-enum SidecarRevokeReason {
-  SIDECAR_REVOKE_REASON_UNSPECIFIED = 0; SIDECAR_REVOKE_REASON_LOST = 1; SIDECAR_REVOKE_REASON_REAPED = 2;
-  SIDECAR_REVOKE_REASON_REMOVED = 3; SIDECAR_REVOKE_REASON_COMPROMISE = 4;
-}
 
 // sidecar/protocol/bridge/bridge.proto
 // Forwarding's setup messages between an app's VPN component and its sidecar role, DESIGN-DETAILS 4.2.2's proto
@@ -366,57 +111,6 @@ message ForwardingHandOff {
   Pending pending = 1; bytes key_set_id = 2; bytes forward_client_id = 3; string forward_client_jwt = 4;
   int64 strict_exp_ms = 5; bytes config_repo_id = 6; bytes config_group_id = 7; bytes signed_delegation = 8;
   AuthPin delegation_at = 9;
-}
-
-// sidecar/protocol/bridge/bridge.proto
-// §17.8's statements and their rows, each statement's sealed part in its *Body. BridgeRouteRow is
-// acl-m2-17-no-via-route-advertisers' (QD-764): an approved route's ids, which BridgeRows.routes carries.
-message BridgeEgressRow { bytes subject = 1; BridgeEgressMode mode = 2; }
-message BridgeRouteRow { bytes route_id = 1; bytes advertiser = 2; repeated bytes route_rule_ids = 3; }
-message BridgeIpv4Prefix { fixed32 address = 1; uint32 length = 2; }
-message BridgePortRange { uint32 first = 1; uint32 last = 2; }
-message BridgeApproval { bytes canonical_action = 1; repeated Signed decisions = 2; bytes template_action = 3; }
-message BridgeBlock {
-  BridgeIpv4Prefix ipv4_prefix = 1; BridgeIpv4Prefix previous_prefix = 2; int64 drain_until = 3;
-}
-message BridgeAddress { StatementHeader header = 1; bytes sidecar_id = 2; bytes sealed_body = 3; }
-message BridgeAddressBody { fixed32 ipv4 = 1; }
-message BridgeRoute {
-  StatementHeader header = 1; bytes route_id = 2; bytes advertiser = 3; repeated bytes route_rule_ids = 4;
-  bytes sealed_body = 5;
-}
-message BridgeRouteBody {
-  repeated BridgeIpv4Prefix prefixes = 1; BridgeIpv4Prefix exposed_prefix = 2; bytes site_id = 3;
-  uint32 weight = 4; BridgeRouteKind kind = 5; uint32 drain_seconds = 6; BridgeApproval approval = 7;
-}
-message BridgeMap {
-  StatementHeader header = 1; bytes map_id = 2; bytes host = 3; int64 expires = 4; bytes sealed_body = 5;
-}
-message BridgeMapBody {
-  BridgeIpv4Prefix match_prefix = 1; uint32 protocol = 2; repeated BridgePortRange ports = 3; bytes target = 4;
-  uint32 target_port = 5; uint32 drain_seconds = 6; BridgeApproval approval = 7;
-}
-message BridgeEgress {
-  StatementHeader header = 1; bytes subject = 2; bytes sealed_body = 3; BridgeEgressMode mode = 4;
-}
-message BridgeEgressBody {
-  reserved 1; reserved "mode"; repeated bytes exit_sidecar_ids = 2; bytes exit_tag_id = 3;
-}
-message BridgeAlias { StatementHeader header = 1; bytes sealed_body = 2; }
-message BridgeAliasBody {
-  bytes share_id = 1; uint32 target_index = 2; BridgeIpv4Prefix alias_prefix = 3; bytes host = 4;
-  bytes host_identity_public_key = 5; bytes sharing_network_id = 6; uint32 drain_seconds = 7; bool release = 8;
-}
-message BridgeWithdraw { StatementHeader header = 1; bytes rule_id = 2; BridgeWithdrawMode mode = 3; }
-enum BridgeRouteKind {
-  BRIDGE_ROUTE_KIND_UNSPECIFIED = 0; BRIDGE_ROUTE_KIND_SUBNET = 1; BRIDGE_ROUTE_KIND_EXIT = 2;
-}
-enum BridgeEgressMode {
-  BRIDGE_EGRESS_MODE_UNSPECIFIED = 0; BRIDGE_EGRESS_MODE_AUTO = 1; BRIDGE_EGRESS_MODE_EXITS = 2;
-  BRIDGE_EGRESS_MODE_NONE = 3;
-}
-enum BridgeWithdrawMode {
-  BRIDGE_WITHDRAW_MODE_UNSPECIFIED = 0; BRIDGE_WITHDRAW_MODE_RESET = 1; BRIDGE_WITHDRAW_MODE_DRAIN = 2;
 }
 
 // sidecar/protocol/bridge/bridge.proto
@@ -454,10 +148,9 @@ message BridgeRuleReach {
   int64 expires = 5;
 }
 message BridgeRuleEgress { BridgeEgressMode mode = 1; repeated BridgeRuleLink exits = 2; }
-// §17.9's shares, as DESIGN-DETAILS 12.2.2 writes them (QD-077, QD-108, QD-670): X's pin, the share seal's four
-// bodies, and the rows a host compiles a share to, landing with BridgeAliasBody's fields 5 to 8 and BridgeRules'
-// shares. BridgeShareAccept is this repository's: the accepting side's one sealed column holds its seals together
-// (question bridge-m6-03-accept-seals). Config files, seals and in-process rows: none reaches a server in the clear.
+// §17.9's shares as the rows a host compiles a share to, as DESIGN-DETAILS 12.2.2 writes them (QD-077, QD-108,
+// QD-670), landing with BridgeRules' shares; §17.9's fences write X's pin and the share seal's bodies. In-process
+// rows: none reaches a server.
 message BridgeRuleShare {
   bytes share_id = 1; bytes accepting_network_id = 2; bytes share_public_key = 3; bytes grant_id = 4;
   int64 expires = 5; repeated BridgeRuleShareTarget targets = 6;
@@ -466,24 +159,6 @@ message BridgeRuleShareTarget {
   uint32 index = 1; uint32 alias_host_bits = 2; uint32 length = 3; BridgeIpv4Prefix target = 4;
   uint32 protocol = 5; repeated BridgePortRange ports = 6;
 }
-message BridgeShareGrant {
-  bytes share_id = 1; bytes grant_id = 2; bytes share_public_key = 3; bytes target_table_sha256 = 4;
-  bytes table_key = 5; bytes accepting_network_id = 6; bytes alias_table_sha256 = 7;
-  uint64 target_table_version = 8; uint64 alias_table_version = 9;
-}
-message BridgeShareTargets { repeated BridgeShareTarget targets = 1; bytes pad = 15; }
-message BridgeShareTarget {
-  uint32 index = 1; bytes host_sidecar_id = 2; bytes host_identity_public_key = 3; BridgeIpv4Prefix prefix = 4;
-  uint32 protocol = 5; repeated BridgePortRange ports = 6;
-}
-message BridgeShareAliases { repeated BridgeShareAlias aliases = 1; bytes pad = 15; }
-message BridgeShareAlias { uint32 index = 1; uint32 alias_host_bits = 2; uint32 length = 3; }
-message BridgeShareKeyBody { bytes share_public_key = 1; bytes pad = 15; }
-message BridgeShareShortfall {
-  uint32 index = 1; uint32 length = 2; uint32 free_address_count = 3; uint32 largest_free_length = 4;
-  bytes pad = 15;
-}
-message BridgeShareAccept { bytes aliases = 1; bytes share_key = 2; bytes shortfall = 3; }
 enum BridgeRuleEntryKind {
   BRIDGE_RULE_ENTRY_KIND_UNSPECIFIED = 0; BRIDGE_RULE_ENTRY_KIND_LINK = 1; BRIDGE_RULE_ENTRY_KIND_UNASSIGNED = 2;
   BRIDGE_RULE_ENTRY_KIND_CARVED = 3; BRIDGE_RULE_ENTRY_KIND_SERVICE = 4;
@@ -492,25 +167,12 @@ enum BridgeRuleEntryKind {
 // sidecar/protocol/gkm.proto
 // §10.5's list; not_after holds ms, so it stays 64 bits.
 message ReaderKey { bytes sidecar_id = 1; bytes xwing_public_key = 2; int64 not_after = 3; }
-// §2.8's gkm-1 with QD-643's pin, the signer's state when it signs; its signer is Signed's.
-message GroupForm { bytes repo_id = 1; bytes group_id = 2; bytes previous_group_id = 3; uint64 generation = 4; AuthPin auth = 5; }
 // §10.14's list and kinds.
 message GkmHint { bytes group_id = 1; uint64 epoch = 2; GkmHintKind kind = 3; bytes recipient = 4; }
 enum GkmHintKind {
   GKM_HINT_KIND_UNSPECIFIED = 0; GKM_HINT_COMMIT = 1; GKM_HINT_PENDING = 2; GKM_HINT_WELCOME = 3;
   GKM_HINT_KEY_PACKAGES_LOW = 4; GKM_HINT_WRAP_PENDING = 5;
 }
-// §10.6's objects: the epoch/<n> row with gkm-1's epoch 0, the group-info row, the welcome/<sidecar_id>/<group_id>/<n> row and
-// the <ref>.claim row, which §10 names and gives no bytes.
-message GkmEpochObject {
-  bytes commit = 1; GkmCommitHeader header = 2; bytes uploader = 3; int64 time_ms = 4; bytes gen_wrap = 5;
-  bytes sealed_group_info = 6; uint64 group_info_generation = 7; bytes network_id = 8; uint32 cipher_suite = 9;
-}
-message GkmGroupInfoObject { uint64 epoch = 1; uint64 generation = 2; bytes sealed_group_info = 3; }
-message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; bytes key_package_ref = 3; }
-// DESIGN-DETAILS 6.2.2: the group owner marker gkm/<group_id>/owner.
-message GkmGroupOwner { bytes repo_id = 1; bytes network_id = 2; }
-message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }
 // §10.14's routes: POST /gkm/key-packages and .../claim; POST /gkm/groups, as KF1 writes it; POST
 // /gkm/repos/<id>/forms, with 10.8's epoch 0; GET /gkm/groups/<id>; POST .../epochs/<n>; GET .../epochs, with sizes.
 message GkmKeyPackagesRequest { repeated bytes key_packages = 1; }
@@ -685,18 +347,12 @@ message EvsDropMark { bytes drop_id = 1; uint64 through_version = 2; }
 message EvsLogPage {
   uint64 page = 1; bytes first_chain = 2; bytes last_chain = 3; bytes window = 4; repeated bytes statements = 5;
 }
-// What EvsEntryVersion.sealed_fields and a push's sealed metadata open to: the former's comment, by
-// plan-EVS1-format-bytes#9; the latter's from EvsPush.sealed_metadata_sha256's comment, 11.6's records row and 11.7's
-// mapping to git.
+// What EvsEntryVersion.sealed_fields opens to, by its comment and plan-EVS1-format-bytes#9, and the messages a push's
+// sealed metadata holds, from EvsPush.sealed_metadata_sha256's comment, 11.6's records row and 11.7's mapping to git;
+// §11.6's fence writes EvsSealedMetadata itself.
 message EvsSealedFields {
   bytes file_id = 1; uint32 mode = 2; bytes git_oid = 3; EvsOidKind oid_kind = 4; uint64 size = 5;
   bytes content_sha256 = 6;
-}
-message EvsSealedMetadata {
-  GroupHead group = 1; EvsProvenance provenance = 2; repeated EvsSealedCommit commits = 3; bytes signed_import = 4;
-  // DESIGN-DETAILS 8.2.2: a git-mode push's update, and a creating push's signed copies of payload sections 15
-  // and 16
-  EvsGitUpdate git = 5; bytes ref_name = 6; EvsOverlay base = 7;
 }
 message EvsGitUpdate {
   EvsGitShape shape = 1; bytes old_tip = 2; bytes new_tip = 3; repeated bytes tags = 4;
@@ -759,16 +415,12 @@ message EvsReadRequest {
   repeated uint64 log_pages = 8; repeated EvsReadPush pushes = 9; repeated EvsReadRef refs = 10;
   repeated uint64 held_drops = 11;
 }
-// DESIGN-DETAILS 9.2.2: a read's commit_version, and a reply's entry_epoch and stale_epoch.
+// DESIGN-DETAILS 9.2.2: a read's commit_version.
 message EvsReadPath { repeated EvsSourcePath token_paths = 1; uint64 version = 2; uint64 commit_version = 3; }
 message EvsReadRange { bytes segment_id = 1; uint32 offset = 2; uint32 length = 3; }
 message EvsReadMap { uint64 path_epoch = 1; bytes map_sha256 = 2; uint32 part = 3; }
 message EvsReadPush { bytes push_id = 1; uint64 version = 2; uint32 part = 3; }
 message EvsReadRef { bytes ref_id = 1; uint64 pin_version = 2; }
-message EvsReadFrame {
-  EvsHeadSummary head = 1; EvsReadStatement statement = 2; uint64 behind = 3; uint64 more = 4;
-  EvsReadPathReply path = 5; EvsReadObject object = 6; bool end = 7;
-}
 message EvsHeadSummary {
   bytes ref_id = 1; uint64 version = 2; bytes chain = 3; bytes push_id = 4; EvsRefKind ref_kind = 5;
   EvsRefMode ref_mode = 6; bytes owner_sidecar_id = 7; bytes sealed_ref_name = 8; EvsOverlay base = 9;
@@ -776,20 +428,7 @@ message EvsHeadSummary {
   EvsPathEpoch path_epoch = 14; uint64 index_epoch = 15; bool deleted = 16; uint64 push_sequence = 17;
 }
 message EvsReadStatement { uint64 version = 1; bytes statement = 2; }
-message EvsReadPathReply {
-  repeated bytes token_path = 1; EvsIndexVersion version = 2; bytes statement = 3;
-  repeated EvsMerkleProof proof = 4; repeated EvsAbsenceProof absences = 5; EvsRemovalMarker removal = 6;
-  EvsOverlay base = 7; EvsNameTable names = 8; uint64 names_through = 9; repeated EvsIndexVersion deltas = 10;
-  EvsReadPathState state = 11; bytes drop_id = 12; int64 not_before_ms = 13; uint64 drop_version = 14;
-  bytes drop_statement = 15; bytes drop_body = 16; uint64 entry_epoch = 17; bool stale_epoch = 18;
-}
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
-// QD-681 (question evs1-m2-28-rooted-delta-proofs): a directory delta's proof to its own statement's changes_root.
-message EvsDeltaProof { repeated EvsMerkleProof proof = 1; }
-message EvsAbsenceProof {
-  uint64 version = 1; repeated bytes token_path = 2; repeated EvsMerkleProof below = 3;
-  repeated EvsMerkleProof above = 4;
-}
 message EvsReadObject {
   EvsReadObjectKind kind = 1; bytes id = 2; uint64 number = 3; uint32 offset = 4; bytes body = 5; bool missing = 6;
 }
@@ -834,28 +473,6 @@ message EvsDropPreviewReply {
 }
 message EvsDropPreviewPath { bool list_match = 1; uint32 count = 2; repeated uint32 map_parts = 3; bool linked = 4; }
 
-// sidecar/protocol/smtp.proto
-// §6.11's edge codes, numbers as written, and DESIGN-DETAILS 3.2.5's KEYS (QD-712).
-enum SmtpPreambleCode {
-  SMTP_PREAMBLE_CODE_UNSPECIFIED = 0; SMTP_PREAMBLE_OK = 1; SMTP_PREAMBLE_HALTED = 2; SMTP_PREAMBLE_QUOTA = 3;
-  SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
-  SMTP_PREAMBLE_KEYS = 8;
-}
-enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
-// §14.8's self-report and §14.14's status, as plan-SMTP-wire-gaps#1 and #2 number them.
-message SmtpOutcome {
-  bytes send_id = 1; uint32 tls_level = 2; uint32 mode = 3; repeated uint32 reply_codes = 4; uint32 dsn_count = 5;
-  uint32 hard_bounce_count = 6; bool downgrade_refused = 7;
-}
-message SmtpStatus { uint32 kind = 1; uint32 retry_after_ms = 2; }
-enum SmtpStatusKind {
-  SMTP_STATUS_KIND_UNSPECIFIED = 0; SMTP_STATUS_HALTED = 1; SMTP_STATUS_QUOTA = 2; SMTP_STATUS_CLEAR = 3;
-}
-// E2's disclosed SHTS, as smtpproof-start-shts-wire numbers it.
-message SmtpHandshake { bytes send_id = 1; bytes shts = 2; }
-message SmtpHandshakeResult { uint32 code = 1; }
-enum SmtpHandshakeCode { SMTP_HANDSHAKE_CODE_UNSPECIFIED = 0; SMTP_HANDSHAKE_OK = 1; SMTP_HANDSHAKE_INVALID = 2; }
-
 // sidecar/protocol/socket.proto
 // §9.5's Claim, the tuple its comment lists, in that order, its name or token path written as SocketTicket's two.
 message SocketRegistrationClaim {
@@ -872,19 +489,6 @@ enum CoreHintKind {
   CORE_HINT_KIND_MIN_SECURE = 4; CORE_HINT_KIND_GATES = 5;
 }
 message AgentCert { bytes sidecar_id = 1; bytes agent_id = 2; bytes public_key = 3; int64 not_after_ms = 4; }
-
-// sidecar/protocol/tls.proto
-// plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, #2's attestation body, M6's
-// members-device statement over origin and nonce as §13.7 and TLS-M6-06 name it, and #8's link token as the owner
-// decided it (QD-134), in its order.
-message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; }
-enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
-message TlsKeyAttestation {
-  bytes network_id = 1; bytes sidecar_id = 2; bytes spki_sha256 = 3; bytes identifier_set_sha256 = 4;
-  uint64 issue_time_millis = 5;
-}
-message TlsEdgeLogin { string origin = 1; bytes nonce = 2; }
-message TlsLinkToken { bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4; }
 
 // sidecar/protocol/mail.proto
 // MailAuthEvidence's comments, which name each result's fields in this order.
@@ -1007,23 +611,6 @@ message MailProverRecord {
 message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }
 
 // sidecar/protocol/record.proto
-// plan-MCP-wire-enum-numbers' four enums, whose values §16.8's uint32 fields carry. RECORD.md's own messages are its
-// fences, which testReadFences reads beside DESIGN.md's.
-enum SidecarActionKind {
-  SIDECAR_ACTION_KIND_UNSPECIFIED = 0;
-  SIDECAR_ACTION_KIND_PUBLISH = 1; SIDECAR_ACTION_KIND_LISTEN = 2; SIDECAR_ACTION_KIND_FORWARD = 3;
-  SIDECAR_ACTION_KIND_EXPOSE = 4; SIDECAR_ACTION_KIND_EGRESS_CHANGE = 5; SIDECAR_ACTION_KIND_INVITE = 6;
-  SIDECAR_ACTION_KIND_SHARE = 7; SIDECAR_ACTION_KIND_ALIAS_CREATE = 8; SIDECAR_ACTION_KIND_ALIAS_DELETE = 9;
-  SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE = 10; SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE = 11;
-  SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
-  SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
-}
-enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
-enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROVE = 1; APPROVAL_VERDICT_DENY = 2; }
-enum ApprovalChannel {
-  APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
-  APPROVAL_CHANNEL_HARNESS = 3;
-}
 // record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
 // route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
 message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
@@ -1043,47 +630,6 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "agent_cert", number: 5, typeName: "bytes"},
 		question: "plan-CORE-agent-revoke",
 	},
-	// QD-764: a rule's via subjects apart from its targets, and an approved route's ids in the rows, whose advertisers
-	// a route rule with no via takes as its via subjects (QD-004's second half)
-	{
-		message:  "AclRule",
-		field:    testFenceField{name: "via", number: 12, typeName: "AclTarget", repeated: true},
-		question: "acl-m2-17-no-via-route-advertisers",
-	},
-	// QD-743: the folded access log keeps a RepoDelete's entry time and a removed admin's removal position, which
-	// readers need once those entries leave the log's retention
-	{
-		message:  "AclRepoAdminRow",
-		field:    testFenceField{name: "removed_at", number: 4, typeName: "uint64"},
-		question: "acl-m2-06-access-log-positions",
-	},
-	{
-		message:  "AclRepoDeletionRow",
-		field:    testFenceField{name: "deleted_time_ms", number: 5, typeName: "int64"},
-		question: "acl-m2-06-access-log-positions",
-	},
-	// QD-798: the deletion row keeps its RepoDelete's signer, as every access-log row keeps its signer, which repo/'s
-	// deleted state names once the entry leaves the log's retention
-	{
-		message:  "AclRepoDeletionRow",
-		field:    testFenceField{name: "signer", number: 6, typeName: "bytes"},
-		question: "acl-repo-delete-times-deletion-signer",
-	},
-	// QD-212: every RepoPrefixRules that took effect, {signer, at} in position order for the repo's life, which a
-	// verifier started at any base judges a push's pin by (DESIGN-DETAILS 16.2.2, 16.2.3; 5.2.2's amendment 16-C)
-	{
-		message:  "AclRepo",
-		field:    testFenceField{name: "prefix_rules", number: 12, typeName: "AclRepoPrefixRulesRow", repeated: true},
-		question: "DESIGN-DETAILS 16.2.2 (QD-212)",
-	},
-	// QD-1015: the time of the entry at holders_shrunk_at, or of the RepoCreate's while that is 0, so every verifier,
-	// a new device and a cold gate that start at a base among them, reads t_s for the shrink row's second comparison
-	// (owner decision 315, QD-883)
-	{
-		message:  "AclRepo",
-		field:    testFenceField{name: "holders_shrunk_time_ms", number: 13, typeName: "int64"},
-		question: "shrink-two-time-compare-shrunk-time-row",
-	},
 	{
 		message:  "Pending",
 		field:    testFenceField{name: "forward_delegation_id", number: 5, typeName: "bytes"},
@@ -1098,38 +644,6 @@ var testFenceAdditions = []struct {
 		message:  "BridgeIdentity",
 		field:    testFenceField{name: "forward_public_key", number: 7, typeName: "bytes"},
 		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
-	{
-		message:  "EvsReadFrame",
-		field:    testFenceField{name: "error", number: 8, typeName: "EvsRefusalReply"},
-		question: "evs1-m2-40-unfolded-listing-frame",
-	},
-	{
-		message:  "EvsReadPathReply",
-		field:    testFenceField{name: "continues", number: 20, typeName: "bool"},
-		question: "evs1-m2-40-unfolded-listing-frame",
-	},
-	{
-		message:  "EvsReadPathReply",
-		field:    testFenceField{name: "delta_proofs", number: 19, typeName: "EvsDeltaProof", repeated: true},
-		question: "evs1-m2-28-rooted-delta-proofs",
-	},
-	{
-		message:  "EvsAbsenceProof",
-		field:    testFenceField{name: "present", number: 5, typeName: "EvsMerkleProof", repeated: true},
-		question: "evs1-m2-28-rooted-delta-proofs",
-	},
-	{
-		message:  "EvsSealedMetadata",
-		field:    testFenceField{name: "erasure_note", number: 8, typeName: "bytes"},
-		question: "evs1-m2-30-erasure-note-format",
-	},
-	// QD-833: a repair form names the push ids of the ignored versions it writes over, sealed with its metadata, for
-	// `ur evs log` (DESIGN-DETAILS 16.2.7's metadata row)
-	{
-		message:  "EvsSealedMetadata",
-		field:    testFenceField{name: "written_over", number: 9, typeName: "bytes", repeated: true},
-		question: "evs1-m6-04-repair-written-over",
 	},
 	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
 	// whether body is the kind's message or the AgentSignedBody holding it
@@ -1174,6 +688,4 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
-	// §14.4's TL4 allowance for a recipient domain (QD-729), appended to the enum testUnfencedFence writes
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED", number: 18, question: "smtp-m9-06-tl4-allowance-action"},
 }
