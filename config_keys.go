@@ -7,6 +7,11 @@
 //	               key ssh-ed25519, 32 bytes, with no such proof; a not_after after the entry's time
 //	KeyRevoke    a consented, approval-capable device of the key's member; a revoked key takes it again as nothing
 //
+// The KeyRegister rule never reads attestation (QD-924; owner decision 327): the key's own proof needs no roots, so api,
+// evs, gkm and every member device give one verdict on one statement whatever FIDO roots their release pins, and a
+// KeyRegister whose attestation a reader's roots refuse takes effect as any other. The device about to sign refuses a
+// failing attestation (RegisterPresenceKey), and each reader labels a logged key for display alone (PresenceKeyLabel).
+//
 // A presence key is live for its signer, the device whose KeyRegister it is, while it is not revoked, not void (a
 // cascade's P held that device when it registered it, config_cascade.go) and before its not_after: what the presence
 // row reads (config_presence.go). That a device registers after a device or presence decision, never on a harness's
@@ -66,7 +71,7 @@ func (self *ConfigState) approvalCapableSigner(signers []ConfigSigner, memberId 
 
 // A KeyRegister: a member of this state; a key_id of 1 to 64 bytes no key held before; the purpose's algorithm and key
 // form, a presence key's own proof and an sshsig key's lack of one; a not_after after the entry's time; and its
-// member's consented, approval-capable device as its one signer.
+// member's consented, approval-capable device as its one signer. Never its attestation (the file header).
 func configCheckKeyRegister(state *ConfigState, statement *configStatement) error {
 	register := statement.body.(*protocol.KeyRegister)
 	memberId, err := IdFromBytes(register.GetMemberId())
