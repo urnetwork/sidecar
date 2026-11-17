@@ -6,9 +6,10 @@
 // (nothing here fetches one, so a host without a matching image reads not run); windows/amd64 compiled, with no
 // attested runner; js/wasm and the sidecar_http page Worker in Node; and the gomobile legs by SDK-M10-06's cells. A
 // leg passes only when every vector test it compiles passed there, so a test that stopped compiling on a leg does not
-// pass by its absence. `make index-vectors` runs it.
+// pass by its absence. `make index-vectors` runs it. It sits in this package, not sidecartest, since a parent imports no
+// child of its own (R-REPO-5).
 
-package sidecartest
+package legs
 
 import (
 	"context"
@@ -19,8 +20,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/urnetwork/sidecar/sidecartest/legs"
 )
 
 // The runner's own tests beside the table's: the directory against the table, the runtimes, and the headers.
@@ -72,10 +71,10 @@ func indexVectorTableTests(t *testing.T, top string) []string {
 
 // The legs the vectors run on: the every-leg table's root legs narrowed to the root package, with linux/arm64's root
 // added beside its engines, and no cgo leg, whose code here is the same.
-func indexVectorLegs() []*legs.Leg {
-	vectorLegs := []*legs.Leg{}
-	for _, leg := range legs.DefaultLegs() {
-		if leg.Module != "." || leg.Cgo && leg.Runner != legs.RunnerCells || leg.HasTag("ios_extension") {
+func indexVectorLegs() []*Leg {
+	vectorLegs := []*Leg{}
+	for _, leg := range DefaultLegs() {
+		if leg.Module != "." || leg.Cgo && leg.Runner != RunnerCells || leg.HasTag("ios_extension") {
 			continue
 		}
 		copied := *leg
@@ -89,7 +88,7 @@ func indexVectorLegs() []*legs.Leg {
 }
 
 // The legs cover every target §22.9's row names: darwin/arm64, linux amd64 and arm64, windows/amd64, js/wasm and the
-// Worker, and the gomobile legs.
+// Worker, and the gomobile 
 func TestIndexVectorLegsCoverEveryTarget(t *testing.T) {
 	targets := map[string]bool{}
 	for _, leg := range indexVectorLegs() {
@@ -121,8 +120,8 @@ func indexVectorEnded(output string, name string, want string) bool {
 }
 
 // One leg's processes as one result: a pass only when every one passed, the outputs together.
-func indexVectorJoin(results [][]*legs.Result, index int) (*legs.Result, string) {
-	joined := &legs.Result{Leg: results[0][index].Leg, Outcome: legs.OutcomePass}
+func indexVectorJoin(results [][]*Result, index int) (*Result, string) {
+	joined := &Result{Leg: results[0][index].Leg, Outcome: OutcomePass}
 	output := ""
 	for _, pass := range results {
 		result := pass[index]
@@ -130,7 +129,7 @@ func indexVectorJoin(results [][]*legs.Result, index int) (*legs.Result, string)
 		for _, packageResult := range result.Packages {
 			output += packageResult.Output
 		}
-		if result.Outcome != legs.OutcomePass && joined.Outcome == legs.OutcomePass {
+		if result.Outcome != OutcomePass && joined.Outcome == OutcomePass {
 			joined.Outcome, joined.Why = result.Outcome, result.Why
 		}
 	}
@@ -140,10 +139,7 @@ func indexVectorJoin(results [][]*legs.Result, index int) (*legs.Result, string)
 // Every leg this host has runs the vector tests: each it compiles passes, the runtimes' runner skipping only where no
 // process starts. A leg that cannot run here reads not run with its reason, which is no pass.
 func TestIndexVectorsOnEveryLeg(t *testing.T) {
-	top, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	top := repositoryTop(t)
 	tableTests := indexVectorTableTests(t, top)
 	tests := slices.Concat(tableTests, indexVectorRunnerTests)
 	together := slices.DeleteFunc(slices.Clone(tests), func(name string) bool { return slices.Contains(indexVectorTestsApart, name) })
@@ -155,24 +151,24 @@ func TestIndexVectorsOnEveryLeg(t *testing.T) {
 		processes = append(processes, []string{name})
 	}
 	vectorLegs := indexVectorLegs()
-	results := [][]*legs.Result{}
+	results := [][]*Result{}
 	for _, pattern := range processes {
-		settings := legs.DefaultRunSettings(top)
+		settings := DefaultRunSettings(top)
 		if image := os.Getenv("SIDECAR_LEGS_IMAGE"); image != "" {
 			settings.ContainerImage = image
 		}
 		settings.RunPattern = "^(" + strings.Join(pattern, "|") + ")$"
-		results = append(results, legs.Run(context.Background(), settings, vectorLegs))
+		results = append(results, Run(context.Background(), settings, vectorLegs))
 	}
 	passed := 0
 	for index := range vectorLegs {
 		result, output := indexVectorJoin(results, index)
 		switch result.Outcome {
-		case legs.OutcomePass:
-		case legs.OutcomeFail:
+		case OutcomePass:
+		case OutcomeFail:
 			t.Errorf("%s", result)
 			for _, packageResult := range result.Packages {
-				if packageResult.Outcome == legs.OutcomeFail {
+				if packageResult.Outcome == OutcomeFail {
 					t.Logf("%s on %s:\n%s", packageResult.ImportPath, result.Leg.Name, packageResult.Output)
 				}
 			}

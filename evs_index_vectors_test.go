@@ -3,8 +3,8 @@
 // The index vectors' runner (§22.9's Index determinism row, §4.7; D-TEST-15, FI-22; SEARCH-M10-41): every file under
 // testdata/index/ is reproduced byte for byte, plaintext and hashes, by the tests this file names, and those tests run
 // again under GOMAXPROCS 1 and 16, twice each, and under other time zones and locales, so nothing a build's runtime
-// chooses reaches an index object's bytes. sidecartest/legs_search_test.go runs the same tests on each leg this host
-// has. The header a writer records is held to the linked build and to normalizer 1, so a toolchain or x/text bump
+// chooses reaches an index object's bytes. sidecartest/legs/legs_search_test.go runs the same tests on each leg this
+// host has. The header a writer records is held to the linked build and to normalizer 1, so a toolchain or x/text bump
 // fails here until a new normalizer is assigned (§11.14's tables row).
 
 package sidecar

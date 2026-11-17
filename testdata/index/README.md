@@ -46,7 +46,7 @@ exist.
 - **The linked build.** `TestIndexHeadersRecordTheLinkedBuild` holds the header a writer records to normalizer 1's
   versions and to the headers the vectors carry, and fails a planted other module version.
 - **On every leg.** `make index-vectors` runs the table's tests through the every-leg runner
-  (`sidecartest/legs_search_test.go`, tag `sidecar_legs`): darwin/arm64 natively, linux/arm64 and linux/amd64 in a
+  (`sidecartest/legs/legs_search_test.go`, tag `sidecar_legs`): darwin/arm64 natively, linux/arm64 and linux/amd64 in a
   container of `SIDECAR_LEGS_IMAGE`, windows/amd64 compiled, js/wasm and the `sidecar_http` page Worker in Node, and
   the gomobile legs by SDK-M10-06's cells, each one-pass conformance test in a process of its own (on js/wasm, in one
   process, the tests after them ran out of wasm's 4 GiB). A leg that cannot run here says so, and never reads as a pass.

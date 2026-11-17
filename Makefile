@@ -61,7 +61,7 @@ ios-extension-leg:
 # cells. It compiles the root's tests for each leg, so make check leaves it out; make check's own index rules, the
 # x/text one among them, are check/'s, and go test runs the vectors under every runtime on this host.
 index-vectors:
-	$(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -tags sidecar_legs -run '^(TestIndexVectorLegsCoverEveryTarget|TestIndexVectorsOnEveryLeg)$$' ./sidecartest
+	$(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -tags sidecar_legs -run '^(TestIndexVectorLegsCoverEveryTarget|TestIndexVectorsOnEveryLeg)$$' ./sidecartest/legs
 
 proto:
 	$(MAKE) -C protocol GO="$(GO)"
