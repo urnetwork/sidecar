@@ -81,8 +81,9 @@ type MailWorldSettings struct {
 	// mxedge.yml's banner name and published deviation.
 	BannerHostName string
 	DeviationUrl   string
-	// The engine's probe interval, apart from every other timer the world sets, so its first probe is seen by its
-	// timer alone.
+	// The engine's probe interval: 1,000 h, so after its first probe the router probes again only at the UTC date change,
+	// which no test reaches. A probe whose 1 s store timeout a test's clock jump passes would mark the router not ready
+	// for the next session, and the router's readiness is MAIL-M7-19's to test, not the composed path's.
 	ProbeInterval time.Duration
 	// The balance the network's Quota holds.
 	QuotaBalanceByteCount int64
@@ -102,7 +103,7 @@ func DefaultMailWorldSettings() *MailWorldSettings {
 		},
 		BannerHostName:        "mx.banner.example",
 		DeviationUrl:          "https://deviation.example/rfc3207",
-		ProbeInterval:         7 * time.Second,
+		ProbeInterval:         1000 * time.Hour,
 		QuotaBalanceByteCount: 1 << 40,
 		StepTimeout:           30 * time.Second,
 	}
@@ -162,6 +163,8 @@ type MailWorld struct {
 	gkmClients []sidecar.GkmClient
 	// what each open carried and what each side of its stream moved, in order
 	opens []*MailWorldOpen
+	// each sender's socket, under its MTA's TLS once STARTTLS runs, by its MTA
+	senderConns map[*sidecartest.ScriptedMta]net.Conn
 }
 
 // One stream the router opened to the receiver: its MailIngress and the bytes each side wrote, as each end saw them.
@@ -218,6 +221,17 @@ type mailWorldVerbose struct {
 func (self *mailWorldVerbose) Enabled() bool                    { return true }
 func (self *mailWorldVerbose) Info(args ...any)                 { self.log.Info(args...) }
 func (self *mailWorldVerbose) Infof(format string, args ...any) { self.log.Infof(format, args...) }
+
+// The host's urnetwork_mxedge_ metric lines.
+func (self *MailWorld) mxedgeMetrics() []string {
+	lines := []string{}
+	for _, line := range self.Host.Metrics.Dump() {
+		if strings.Contains(line, "mxedge") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
 
 // Every line the router and the session logged.
 func (self *MailWorld) LogLines() []string {
@@ -778,7 +792,12 @@ func (self *MailWorld) buildRouter() {
 	}
 	t.Cleanup(self.Router.Close)
 	// the first probe has found the store and made today's k once its next wait is armed
-	self.AwaitTimerAt(start.Add(self.settings.ProbeInterval))
+	// at the interval, or the UTC date change if that comes first
+	nextProbe := start.Add(self.settings.ProbeInterval)
+	if dayChange := start.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour); dayChange.Before(nextProbe) {
+		nextProbe = dayChange
+	}
+	self.AwaitTimerAt(nextProbe)
 	if !self.Router.Ready() {
 		t.Fatal("the router is not ready")
 	}
@@ -813,14 +832,57 @@ func (self *MailWorld) AwaitTimerAt(at time.Time) {
 // A sender's connection through the lb to the router, from sender.
 func (self *MailWorld) Connect(sender netip.Addr) *sidecartest.ScriptedMta {
 	self.t.Helper()
-	return sidecartest.NewScriptedMta(self.connect(sender))
+	return self.keepSender(self.connect(sender))
 }
 
 // A sender's connection as Connect makes it, every byte it writes and reads kept, as the sender's socket saw them.
 func (self *MailWorld) ConnectRecorded(sender netip.Addr) (*sidecartest.ScriptedMta, *MailWorldRecording) {
 	self.t.Helper()
 	recording := &MailWorldRecording{Conn: self.connect(sender)}
-	return sidecartest.NewScriptedMta(recording), recording
+	return self.keepSender(recording), recording
+}
+
+// An MTA on conn, its socket kept for Finish.
+func (self *MailWorld) keepSender(conn net.Conn) *sidecartest.ScriptedMta {
+	mta := sidecartest.NewScriptedMta(conn)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.senderConns == nil {
+		self.senderConns = map[*sidecartest.ScriptedMta]net.Conn{}
+	}
+	self.senderConns[mta] = conn
+	return mta
+}
+
+// Ends mta's session as a sender does after its last reply: QUIT, then its TLS read to the receiver's close_notify,
+// then its socket read until the router closes it, which the router does only once the session has ended, its lease
+// and caps given back and its record queued. So a test that moves the clock next moves it past no live session.
+func (self *MailWorld) Finish(mta *sidecartest.ScriptedMta) {
+	self.t.Helper()
+	conn := func() net.Conn {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		conn := self.senderConns[mta]
+		delete(self.senderConns, mta)
+		return conn
+	}()
+	if quit, err := mta.Quit(); err == nil && quit.Is(221) {
+		// the receiver's close_notify and the stream's end, so everything the receiver wrote has crossed
+		io.Copy(io.Discard, mta.Conn())
+	}
+	if conn == nil {
+		return
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		io.Copy(io.Discard, conn)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(self.settings.StepTimeout):
+		self.t.Fatal("the router never closed the sender's socket")
+	}
 }
 
 func (self *MailWorld) connect(sender netip.Addr) net.Conn {
@@ -925,7 +987,7 @@ type MailWorldSend struct {
 }
 
 // One transaction as send says, through the router: the reply to its end of DATA, or the first reply before it that
-// was not 250. The sender then quits and reads its socket to its end.
+// was not 250. The sender then ends its session (Finish).
 func (self *MailWorld) SendWith(send *MailWorldSend) *sidecartest.MailReply {
 	self.t.Helper()
 	mta, refused := self.begin(send)
@@ -937,16 +999,13 @@ func (self *MailWorld) SendWith(send *MailWorldSend) *sidecartest.MailReply {
 	if err != nil {
 		self.t.Fatalf("DATA: %v", err)
 	}
-	if quit, err := mta.Quit(); err == nil && quit.Is(221) {
-		// the receiver's close_notify and the stream's end, so everything the receiver wrote has crossed
-		io.Copy(io.Discard, mta.Conn())
-	}
+	self.Finish(mta)
 	return reply
 }
 
 // A transaction as send says, up to its DATA: the dialog, STARTTLS, EHLO, MAIL and every RCPT, each answered 250, the
 // sender's MTA returned for the test to send DATA itself, as a test that moves the clock during the checks does. A
-// reply that is not 250 fails the test. The caller closes the MTA.
+// reply that is not 250 fails the test. The caller ends the session with Finish, or closes the MTA.
 func (self *MailWorld) Begin(send *MailWorldSend) *sidecartest.ScriptedMta {
 	self.t.Helper()
 	mta, refused := self.begin(send)
@@ -968,7 +1027,8 @@ func (self *MailWorld) begin(send *MailWorldSend) (*sidecartest.ScriptedMta, *si
 	}
 	self.Greet(mta, "relay.sender.example")
 	if _, err := self.StartTls(mta, sidecartest.MailMtaTlsConfig(send.Sni, tls.VersionTLS13)); err != nil {
-		self.t.Fatalf("STARTTLS: %v", err)
+		// the router's result words say why it closed the handshake; its log and metrics hold no address (I-13)
+		self.t.Fatalf("STARTTLS: %v; the router's metrics: %s; its log: %s", err, strings.Join(self.mxedgeMetrics(), " | "), strings.Join(self.LogLines(), " | "))
 	}
 	if reply, err := mta.Ehlo("relay.sender.example"); err != nil || !reply.Is(250) {
 		self.t.Fatalf("EHLO inside TLS: %s %v", reply, err)
