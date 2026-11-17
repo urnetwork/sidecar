@@ -94,7 +94,7 @@ func TestApprovalsAppMethodsDecideAsTheRemoteRow(t *testing.T) {
 	for _, call := range []struct {
 		mode      string
 		confirmed bool
-	}{{DaemonModeControl, false}, {DaemonModeMcp, true}, {DaemonModeHook, true}} {
+	}{{mode: DaemonModeControl, confirmed: false}, {mode: DaemonModeMcp, confirmed: true}, {mode: DaemonModeHook, confirmed: true}} {
 		if refusal := decide(call.mode, call.confirmed, approveOther); refusal == nil || refusal.Code != DaemonRpcConfirmationRequired {
 			t.Errorf("mode %s, confirmed %t: %+v", call.mode, call.confirmed, refusal)
 		}

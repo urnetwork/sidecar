@@ -270,18 +270,21 @@ func (self *Sidecar) ApprovalPhone() *ApprovalPhone {
 	return apps.phone
 }
 
+// Replaces the args a later Resync and hint read.
 func (self *ApprovalPhone) setArgs(args *ApprovalPhoneArgs) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.args = args
 }
 
+// The args bound last.
 func (self *ApprovalPhone) currentArgs() *ApprovalPhoneArgs {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.args
 }
 
+// Whether Close ended this part.
 func (self *ApprovalPhone) isClosed() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
