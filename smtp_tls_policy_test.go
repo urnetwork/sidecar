@@ -7,8 +7,10 @@
 // command after it; PKIX for the wrong name is no authentication; TL4 is refused with a DSN reason
 // until a message's own approval, or the domain's allowance, lets it through, labeled; the allowance is
 // its own action through the gate (QD-729), for its domain alone, until it ends, and no approval of a
-// mail_send stands in for it; pins rise, hold 90 days, lapse and survive a restart. The TLS-level
-// checks then run on their own against a fake DoH for the lookups' edges.
+// mail_send stands in for it; pins rise, hold 90 days, lapse and survive a restart, each one a recipient
+// domain's on its MX host (owner decision 438), so a host shared with a domain that reached TL1 or TL2
+// refuses no domain that publishes less, and no TL4 allowance lifts one. The TLS-level checks then run
+// on their own against a fake DoH for the lookups' edges.
 //
 // Names are .example and addresses RFC 5737's. The web PKI is a synthetic root of the test's own.
 
@@ -37,11 +39,13 @@ import (
 )
 
 const (
-	testTlsDomain    = "mail.example"
-	testTlsHost      = "mx.mail.example"
-	testTlsOtherZone = "other.example"
-	testTlsOtherHost = "mx.other.example"
-	testTlsPolicy    = "version: STSv1\r\nmode: enforce\r\nmx: mx.mail.example\r\nmax_age: 604800\r\n"
+	testTlsDomain       = "mail.example"
+	testTlsHost         = "mx.mail.example"
+	testTlsOtherZone    = "other.example"
+	testTlsOtherHost    = "mx.other.example"
+	testTlsUnsignedZone = "unsigned.example"
+	testTlsPolicy       = "version: STSv1\r\nmode: enforce\r\nmx: mx.mail.example\r\nmax_age: 604800\r\n"
+	testTlsPolicyMaxAge = 604800 * time.Second
 )
 
 var (
@@ -222,9 +226,19 @@ func (self *testTlsWorld) publishPolicy(t *testing.T, id string, policy string) 
 	self.zone.AddTxt("_mta-sts."+testTlsDomain, "v=STSv1; id="+id)
 }
 
+// Makes domain, a zone of the world, a second domain whose only MX is mail.example's host, at the edge's
+// resolver and in the device's DoH alike.
+func (self *testTlsWorld) shareHost(t *testing.T, domain string) {
+	t.Helper()
+	if err := self.world.SetMx(domain, &sidecar.SmtpMxHost{Preference: 10, Host: testTlsHost}); err != nil {
+		t.Fatal(err)
+	}
+	self.zone.AddMx(domain, 10, testTlsHost)
+}
+
 // A sender's policy over the world's store, built fresh each call, as after a restart.
 func (self *testTlsWorld) policy() *sidecar.SmtpTlsPolicy {
-	pins := sidecar.NewSmtpPinStore(self.store.Root(), self.settings, self.clock)
+	pins := sidecar.NewSmtpPinStore(self.store.Root(), self.settings, self.clock, nil)
 	mtaSts := sidecar.NewSmtpMtaSts(self.zone, self.world.MtaStsTransport(), self.store.Root(), self.settings, self.clock)
 	dane := sidecar.NewSmtpDane(self.anchors, self.clock, nil)
 	allowances := sidecar.NewSmtpTlsAllowanceStore(self.store.Root(), self.settings, self.clock)
@@ -269,17 +283,18 @@ func (self *testLyingResolver) LookupMx(ctx context.Context, domain string) (*si
 	return &sidecar.SmtpMxAnswer{Hosts: []*sidecar.SmtpMxHost{{Preference: 10, Host: self.host}}}, nil
 }
 
-// One message to bob@mail.example under flags, as SmtpProofJob carries it before the edge's values.
-func testTlsJob(flags uint32) *sidecar.SmtpProofJob {
+// One message to bob at recipientDomain under flags, as SmtpProofJob carries it before the edge's
+// values.
+func testTlsJob(recipientDomain string, flags uint32) *sidecar.SmtpProofJob {
 	message := []byte("From: Alice Example <alice@n1.root.example>\r\n" +
-		"To: <bob@" + testTlsDomain + ">\r\n" +
+		"To: <bob@" + recipientDomain + ">\r\n" +
 		"Subject: A synthetic message\r\n" +
 		"Message-ID: <qvsc2zbwd5c3m5rbnvzxjzpnay@n1.root.example>\r\n" +
 		"\r\n" +
 		"A body line.\r\n")
 	return &sidecar.SmtpProofJob{
 		Preamble: &sidecar.SmtpProofPreamble{
-			RecipientDomain:  testTlsDomain,
+			RecipientDomain:  recipientDomain,
 			RecipientCount:   1,
 			MessageId:        "qvsc2zbwd5c3m5rbnvzxjzpnay@n1.root.example",
 			HeaderFromDomain: "n1.root.example",
@@ -301,9 +316,15 @@ type testTlsSend struct {
 	err            error
 }
 
-// One send through edge under policy, as SMTP-M9-07's driver will run it, returning once the edge and
-// every MX are done.
+// One send to mail.example through edge under policy, as SMTP-M9-07's driver will run it, returning once
+// the edge and every MX are done.
 func (self *testTlsWorld) send(t *testing.T, edge *sidecartest.StubSmtpEdge, policy *sidecar.SmtpTlsPolicy, flags uint32, messageTl4Domains ...string) *testTlsSend {
+	t.Helper()
+	return self.sendTo(t, testTlsDomain, edge, policy, flags, messageTl4Domains...)
+}
+
+// One send to recipientDomain, as send.
+func (self *testTlsWorld) sendTo(t *testing.T, recipientDomain string, edge *sidecartest.StubSmtpEdge, policy *sidecar.SmtpTlsPolicy, flags uint32, messageTl4Domains ...string) *testTlsSend {
 	t.Helper()
 	ctx := context.Background()
 	sidecarConn, edgeConn := sidecartest.NewMxPipe(&net.TCPAddr{}, &net.TCPAddr{})
@@ -314,7 +335,7 @@ func (self *testTlsWorld) send(t *testing.T, edge *sidecartest.StubSmtpEdge, pol
 		<-served
 		self.world.Wait()
 	}()
-	job := testTlsJob(flags)
+	job := testTlsJob(recipientDomain, flags)
 	err := sidecar.WriteSmtpPreamble(sidecarConn, &protocol.SmtpPreamble{
 		Version:          1,
 		RecipientDomain:  job.Preamble.RecipientDomain,
@@ -335,7 +356,7 @@ func (self *testTlsWorld) send(t *testing.T, edge *sidecartest.StubSmtpEdge, pol
 		t.Fatalf("the preamble: %+v", result)
 	}
 	authentication, err := policy.Authenticate(ctx, &sidecar.SmtpTlsRequest{
-		RecipientDomain:   testTlsDomain,
+		RecipientDomain:   recipientDomain,
 		MxHost:            result.MxHost,
 		DnssecChain:       result.DnssecChain,
 		Flags:             flags,
@@ -399,9 +420,10 @@ func testTlsExpectRefused(t *testing.T, send *testTlsSend, kind sidecar.SmtpTlsR
 	}
 }
 
-func testTlsPinLevel(t *testing.T, world *testTlsWorld, host string) sidecar.SmtpTlsLevel {
+// The level recipientDomain's pin on host holds now, read as after a restart.
+func testTlsPinLevel(t *testing.T, world *testTlsWorld, recipientDomain string, host string) sidecar.SmtpTlsLevel {
 	t.Helper()
-	pin, err := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock).Pin(host)
+	pin, err := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock, nil).Pin(recipientDomain, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +449,7 @@ func TestSmtpTlsReachesTl1ByDane(t *testing.T) {
 	if _, transactions := testTlsMxSaw(mx); transactions != 1 {
 		t.Errorf("%d transactions", transactions)
 	}
-	if level := testTlsPinLevel(t, world, testTlsHost); level != sidecar.SmtpTlsLevelDane {
+	if level := testTlsPinLevel(t, world, testTlsDomain, testTlsHost); level != sidecar.SmtpTlsLevelDane {
 		t.Errorf("pin %d", level)
 	}
 	if label := send.authentication.Level().Label(); label != "" {
@@ -443,7 +465,7 @@ func TestSmtpTlsReachesTl2ByAnEnforcedPolicy(t *testing.T) {
 	world.publishPolicy(t, "20261108", testTlsPolicy)
 	send := world.send(t, world.edge(nil), world.policy(), 0)
 	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelMtaSts)
-	if level := testTlsPinLevel(t, world, testTlsHost); level != sidecar.SmtpTlsLevelMtaSts {
+	if level := testTlsPinLevel(t, world, testTlsDomain, testTlsHost); level != sidecar.SmtpTlsLevelMtaSts {
 		t.Errorf("pin %d", level)
 	}
 }
@@ -455,7 +477,7 @@ func TestSmtpTlsReachesTl3ByTheDevicesOwnMxLookup(t *testing.T) {
 	world.addMx(t, testTlsHost, testTlsAddress, world.pki.leaf(t, testTlsHost))
 	send := world.send(t, world.edge(nil), world.policy(), 0)
 	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelIndependentMx)
-	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock)
+	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock, nil)
 	if mode, err := pins.DomainMode(testTlsDomain); err != nil || mode != sidecar.SmtpModeBdat {
 		t.Errorf("the domain's mode: %d %v", mode, err)
 	}
@@ -687,7 +709,7 @@ func (self testTlsNoEffect) Run(ctx context.Context, effectKey []byte) ([]byte, 
 func TestSmtpTlsAllowanceNeedsTheGateAndItsEffect(t *testing.T) {
 	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
 	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
-	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock)
+	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock, nil)
 	mtaSts := sidecar.NewSmtpMtaSts(world.zone, world.world.MtaStsTransport(), world.store.Root(), world.settings, world.clock)
 	dane := sidecar.NewSmtpDane(world.anchors, world.clock, nil)
 	allowances := sidecar.NewSmtpTlsAllowanceStore(world.store.Root(), world.settings, world.clock)
@@ -752,7 +774,7 @@ func TestSmtpTlsStrippedTlsaUnderATl1PinSendsNoData(t *testing.T) {
 	if _, transactions := testTlsMxSaw(mx); transactions != 1 {
 		t.Errorf("%d transactions", transactions)
 	}
-	if level := testTlsPinLevel(t, world, testTlsHost); level != sidecar.SmtpTlsLevelDane {
+	if level := testTlsPinLevel(t, world, testTlsDomain, testTlsHost); level != sidecar.SmtpTlsLevelDane {
 		t.Errorf("the refusal moved the pin to %d", level)
 	}
 	// a message allowed to go unauthenticated is still held to the pin
@@ -762,7 +784,7 @@ func TestSmtpTlsStrippedTlsaUnderATl1PinSendsNoData(t *testing.T) {
 
 	world.clock.Advance(world.settings.PinTimeout)
 	testTlsExpectSent(t, world.send(t, stripping, policy, 0), sidecar.SmtpTlsLevelIndependentMx)
-	if level := testTlsPinLevel(t, world, testTlsHost); level != sidecar.SmtpTlsLevelIndependentMx {
+	if level := testTlsPinLevel(t, world, testTlsDomain, testTlsHost); level != sidecar.SmtpTlsLevelIndependentMx {
 		t.Errorf("after the lapse, pin %d", level)
 	}
 }
@@ -776,6 +798,112 @@ func TestSmtpTlsPinSurvivesARestart(t *testing.T) {
 	secure, _ := testTlsMxSaw(mx)
 	send := world.send(t, world.edge(&testStrippingResolver{SmtpMxResolver: world.world}), world.policy(), 0)
 	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalBelowPin, mx, secure)
+}
+
+// One MX host serves two domains (owner decision 438). mail.example's enforced MTA-STS policy takes it to
+// TL2 there; other.example publishes none and reaches TL3 on the same host, which goes, since the TL2
+// pin is mail.example's alone. Once mail.example's policy has expired and the device can fetch none, its
+// own TL3 send on that host is below its pin: refused inside the handshake, no data sent. other.example's
+// next send still goes.
+func TestSmtpTlsSharedHostPinnedAtTl2ForOneDomainRefusesNoOther(t *testing.T) {
+	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, world.pki.leaf(t, testTlsHost))
+	world.publishPolicy(t, "20261108", testTlsPolicy)
+	world.shareHost(t, testTlsOtherZone)
+	policy := world.policy()
+
+	testTlsExpectSent(t, world.send(t, world.edge(nil), policy, 0), sidecar.SmtpTlsLevelMtaSts)
+	testTlsExpectSent(t, world.sendTo(t, testTlsOtherZone, world.edge(nil), policy, 0), sidecar.SmtpTlsLevelIndependentMx)
+	if level := testTlsPinLevel(t, world, testTlsOtherZone, testTlsHost); level != sidecar.SmtpTlsLevelIndependentMx {
+		t.Errorf("other.example's pin: %d", level)
+	}
+
+	world.zone.Fail("_mta-sts."+testTlsDomain, dnsmessage.TypeTXT, sidecartest.FakeMailZoneServFail)
+	world.clock.Advance(testTlsPolicyMaxAge + time.Minute)
+	secure, _ := testTlsMxSaw(mx)
+	send := world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalBelowPin, mx, secure)
+	refusal := send.authentication.Refusal()
+	if refusal.Level != sidecar.SmtpTlsLevelIndependentMx || refusal.PinLevel != sidecar.SmtpTlsLevelMtaSts || !send.authentication.DowngradeRefused() {
+		t.Errorf("%+v", refusal)
+	}
+	testTlsExpectSent(t, world.sendTo(t, testTlsOtherZone, world.edge(nil), policy, 0), sidecar.SmtpTlsLevelIndependentMx)
+	if _, transactions := testTlsMxSaw(mx); transactions != 3 {
+		t.Errorf("%d transactions", transactions)
+	}
+	if level := testTlsPinLevel(t, world, testTlsDomain, testTlsHost); level != sidecar.SmtpTlsLevelMtaSts {
+		t.Errorf("the refusal moved mail.example's pin to %d", level)
+	}
+}
+
+// A host with TLSA reaches TL1 for mail.example, whose zone is signed, and only TL3 for unsigned.example,
+// whose MX RRset does not validate, so the host's TLSA cannot count for it (RFC 7672 §2.2.1) and an
+// honest edge sends no chain for it at all: the same send a stripping edge makes for mail.example. The
+// TL1 pin is mail.example's: unsigned.example's sends go at TL3, through the stripping edge too, while
+// mail.example's send without TLSA is refused below its pin.
+func TestSmtpTlsDanePinForOneDomainLeavesAnUnsignedOneAlone(t *testing.T) {
+	world := newTestTlsWorld(t, nil)
+	certificate := world.pki.leaf(t, testTlsHost)
+	mx := world.addMx(t, testTlsHost, testTlsAddress, certificate, sidecartest.MxTlsaFor(certificate.Leaf))
+	if err := world.world.AddZone(testTlsUnsignedZone, &sidecartest.MxWorldZoneOptions{Unsigned: true}); err != nil {
+		t.Fatal(err)
+	}
+	world.shareHost(t, testTlsUnsignedZone)
+	policy := world.policy()
+
+	testTlsExpectSent(t, world.send(t, world.edge(nil), policy, 0), sidecar.SmtpTlsLevelDane)
+	unsignedSend := world.sendTo(t, testTlsUnsignedZone, world.edge(nil), policy, 0)
+	testTlsExpectSent(t, unsignedSend, sidecar.SmtpTlsLevelIndependentMx)
+	if len(unsignedSend.result.DnssecChain) != 0 {
+		t.Error("the honest edge sent a chain for an unsigned domain")
+	}
+
+	stripping := world.edge(&testStrippingResolver{SmtpMxResolver: world.world})
+	secure, _ := testTlsMxSaw(mx)
+	send := world.send(t, stripping, policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalBelowPin, mx, secure)
+	if refusal := send.authentication.Refusal(); refusal.Level != sidecar.SmtpTlsLevelIndependentMx || refusal.PinLevel != sidecar.SmtpTlsLevelDane {
+		t.Errorf("%+v", refusal)
+	}
+	testTlsExpectSent(t, world.sendTo(t, testTlsUnsignedZone, stripping, policy, 0), sidecar.SmtpTlsLevelIndependentMx)
+	for domain, want := range map[string]sidecar.SmtpTlsLevel{testTlsDomain: sidecar.SmtpTlsLevelDane, testTlsUnsignedZone: sidecar.SmtpTlsLevelIndependentMx} {
+		if level := testTlsPinLevel(t, world, domain, testTlsHost); level != want {
+			t.Errorf("%s's pin: %d, want %d", domain, level, want)
+		}
+	}
+}
+
+// A TL4 allowance lifts no pin: a domain that reached TL3 on a host, and then the user's allowance, is
+// refused at TL4 there as a downgrade while the pin holds, the allowance kept; once the pin lapses the
+// allowance lets TL4 through, labeled.
+func TestSmtpTlsAllowanceLiftsNoPin(t *testing.T) {
+	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, world.pki.leaf(t, testTlsHost))
+	policy := world.policy()
+	testTlsExpectSent(t, world.send(t, world.edge(nil), policy, 0), sidecar.SmtpTlsLevelIndependentMx)
+	world.allow(t, policy, testTlsDomain, time.Time{})
+
+	// the device's own MX lookup now fails, so TL3 is out of reach and the send reaches only TL4
+	world.zone.Fail(testTlsDomain, dnsmessage.TypeMX, sidecartest.FakeMailZoneServFail)
+	secure, _ := testTlsMxSaw(mx)
+	send := world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalBelowPin, mx, secure)
+	if refusal := send.authentication.Refusal(); refusal.Level != sidecar.SmtpTlsLevelUnauthenticated || refusal.PinLevel != sidecar.SmtpTlsLevelIndependentMx {
+		t.Errorf("%+v", refusal)
+	}
+	if allowance, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || allowance == nil {
+		t.Errorf("the allowance: %+v %v", allowance, err)
+	}
+	if level := testTlsPinLevel(t, world, testTlsDomain, testTlsHost); level != sidecar.SmtpTlsLevelIndependentMx {
+		t.Errorf("the allowance moved the pin to %d", level)
+	}
+
+	world.clock.Advance(world.settings.PinTimeout)
+	send = world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelUnauthenticated)
+	if label := send.authentication.Level().Label(); label != "readable by an active URnetwork edge" {
+		t.Errorf("label %q", label)
+	}
 }
 
 // A malicious edge splices to a host of its own, with a valid certificate for that host's own name and no
@@ -861,7 +989,7 @@ func TestSmtpTlsRequireTlsTakesOnlyTl1OrTl2(t *testing.T) {
 // mx.mail.example with no chain.
 func newTestTlsCheck(t *testing.T, world *testTlsWorld, doh sidecar.SmtpDohForwarder, mxHost string) *sidecar.SmtpTlsAuthentication {
 	t.Helper()
-	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock)
+	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock, nil)
 	mtaSts := sidecar.NewSmtpMtaSts(doh, world.world.MtaStsTransport(), world.store.Root(), world.settings, world.clock)
 	allowances := sidecar.NewSmtpTlsAllowanceStore(world.store.Root(), world.settings, world.clock)
 	policy := sidecar.NewSmtpTlsPolicy(sidecar.NewSmtpDane(world.anchors, world.clock, nil), mtaSts, pins, allowances, world.gate, doh, world.pki.roots, world.settings, world.clock)
