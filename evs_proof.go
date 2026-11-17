@@ -16,6 +16,20 @@
 // nothing a statement does to a strict prefix makes such a path stand, so its strict prefixes need none: a proof evs
 // sends for one is still checked, a present of a prefix's removal taken, and the path itself still needs its own.
 //
+// A path served plain absent, with no version, removal or base, is held to the walk's order rather than to its
+// silence (QD-979): once a collection took a removal's marker and the window paged the removal out, evs names nothing
+// of it, and a reader pinned below it walks the removal's statement. The reply agrees with the walk when the walk's
+// newest change of the path, or of a prefix holding it, is a removal; only a walked write of the path with no walked
+// removal of it or of a prefix after it refutes the reply, with the tamper alarm. The proof of absence is then the
+// walk's signed statements: an inline list's own changes, or under changes_root a present of the path's own change,
+// which the reader takes for a path served absent alone, a write as well as a removal, since the walk's order judges
+// it. evs as built sends nothing for the path's own change (QD-681's reply row), so a rooted statement that changed
+// the path leaves such a reply with no proof, which is refused as before, with no alarm (question
+// evs-absent-walked-removal-own-present). A prefix's removal counts only where the reader can show it: inline, or by a
+// present. The walked removal the reply agrees with is kept on the verified path (WalkedRemoval), which a path this
+// device read a version of needs to read as absent (evs_epoch_read.go's finishRead). A creation on such a reply takes
+// max(b, m) + 1 with no m, b being past any collected removal (§11.8), so the planner is unchanged.
+//
 // What a statement at or below the read's pin says is checked against that statement, signed by a writer, but nothing
 // shows it was the version current at the pin: for a path this device never read, or no longer remembers, that is
 // evs's word (Q-EVS-6, §2.8, g0-recheck-0-head-reader-read-paths#2). A read record moves the pin back to the path's
@@ -68,8 +82,12 @@ type EvsVerifiedPath struct {
 	Removal *protocol.EvsRemovalMarker
 	// An overlay's path it holds no version of: the base ref and version to read instead (§11.7).
 	Base *protocol.EvsOverlay
-	// A path the ref never wrote, or none evs holds a version or removal of, unchanged through the walk.
+	// A path the ref never wrote, or none evs holds a version or removal of, whose walk's newest change, if any, is a
+	// removal of it or of a prefix holding it (QD-979).
 	Absent bool
+	// For a path served absent: that removal, the walk's newest change of the path, when the walk holds one; nil for
+	// a walk that changes neither the path nor a prefix holding it in a way the reader can show.
+	WalkedRemoval *EvsWalkedRemoval
 	// A directory's folded table as of NamesThrough, and its deltas after it, each verified as a version is.
 	Names        *protocol.EvsNameTable
 	NamesThrough uint64
@@ -93,6 +111,29 @@ type EvsVerifiedPath struct {
 	// alarmed. The path reads as Absent.
 	Ignored bool
 }
+
+// A removal of a path, or of a prefix holding it, that the reader's own walk holds and evs no longer names: the
+// statement, the ref version it committed at, and its change with that change's token path in the statement's epoch,
+// the path's or a prefix's (QD-979).
+type EvsWalkedRemoval struct {
+	CommitVersion uint64
+	Statement     *EvsStatement
+	Change        *protocol.EvsChange
+	ChangePath    EvsTokenPath
+}
+
+// What a reply served of a path, which each walked statement after it is held to (verifyUnchangedSince).
+type evsServedAs int
+
+const (
+	// A version: the path's own later change, or a prefix's later removal, contradicts it.
+	evsServedStanding evsServedAs = iota
+	// Its own removal or a prefix's: a prefix's later removal leaves it as served, and the path's own later change
+	// contradicts it (QD-978).
+	evsServedRemoved
+	// No version, removal or base: the walk's newest change of the path, if any, must be a removal (QD-979).
+	evsServedAbsent
+)
 
 // A path as the verifier checks it: its token path in any epoch, derived by the reader from its name, never taken from
 // a reply (DESIGN-DETAILS 9.2.4's reader), and the epochs the request named it in.
@@ -197,20 +238,15 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 		len(reply.GetStatement()) != 0 || len(reply.GetProof()) != 0:
 		return nil, nil, fmt.Errorf("%w: a reply with no version, removal or base beside what only those carry", ErrEvsEntryRefused)
 	default:
-		// a path never written: no walked statement may change it (below); before the walk it is evs's word, which a
-		// writer's push meets at evs's own CAS (§11.8's 5g) and which a read record of a version refutes (evs_read.go)
+		// a path never written, or one whose removal evs no longer names: the walk's newest change of it, if any, must
+		// be a removal (below, QD-979); before the walk it is evs's word, which a writer's push meets at evs's own CAS
+		// (§11.8's 5g) and which a read record of a version refutes unless the walk holds the removal (finishRead)
 		verified.Absent = true
 	}
 	if epochs.History {
 		return verified, nil, nil
 	}
-	// a directory's own later writes are its deltas, each of which the walk must account for
-	deltaVersions := map[uint64]bool{}
-	for _, delta := range verified.Deltas {
-		deltaVersions[delta.CommitVersion] = true
-	}
-	standing := !verified.Absent && verified.Removal == nil
-	more, err := self.verifyUnchangedSince(head, epochs, verified.CommitVersion, reply.GetAbsences(), deltaVersions, standing)
+	more, err := self.verifyUnchangedSince(head, epochs, reply.GetAbsences(), verified)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -436,24 +472,48 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 	return nil
 }
 
-// Checks that no walked statement after version since changes the path or a prefix holding it, each under the path's
-// token path in its own epoch: an inline list by its changes, a change list under changes_root by the adjacent-leaf
-// proofs evs sent for each path its covering prefixes reach (EvsAbsencePaths). A directory's own later writes are its
-// deltas, at deltaVersions, already verified; any other is a delta evs left out. A rooted statement with no proof, of
-// an epoch the request did not name, adds that epoch to the epochs answered: the reader asks once more naming it.
-// A rooted statement that changed a prefix of the path by a delta, which does not end the path, has no adjacent
-// leaves around that prefix: its absence carries the delta's inclusion proof in present (QD-681), taken only for a
-// strict prefix whose change writes an entry, as an inline list's own delta is, and refused for the path itself or a
-// removal, either of which ends what the reply served.
+// Checks each walked statement after the version the reply served, and after the path's own pin, against what it
+// served, each under the path's token path in its own epoch: an inline list by its changes, a change list under
+// changes_root by the adjacent-leaf proofs evs sent for each path its covering prefixes reach (EvsAbsencePaths). A
+// directory's own later writes are its deltas, already verified; any other is a delta evs left out. A rooted statement
+// with no proof, of an epoch the request did not name, adds that epoch to the epochs answered: the reader asks once
+// more naming it. A rooted statement that changed a prefix of the path by a delta, which does not end the path, has no
+// adjacent leaves around that prefix: its absence carries the delta's inclusion proof in present (QD-681), taken for
+// a strict prefix whose change writes an entry, as an inline list's own delta is.
 //
-// standing is false for a path the reply served holding no version, never written or removed: a prefix's removal
-// leaves it so, inline or in present, and a strict prefix needs no proof at all, since evs shows a prefix's removal by
-// none and nothing a statement does to a strict prefix makes the path stand (QD-978; see the file header). The path's
-// own change still refutes the reply, and its absence is still needed.
-func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *EvsPathEpochs, since uint64, absences []*protocol.EvsAbsenceProof, deltaVersions map[uint64]bool, standing bool) ([]uint64, error) {
+// What a statement may do to the path turns on what the reply served (evsServedAs). A version: no change of the path
+// and no removal of a prefix holding it. A removal: a prefix's removal leaves it so, and a strict prefix needs no proof
+// at all, since evs shows a prefix's removal by none and nothing a statement does to a strict prefix makes the path
+// stand (QD-978; see the file header); the path's own change refutes it. Absent: as a removal, and the path's own
+// change, inline or in a present, is taken in the walk's order, the reply refuted only where a write of the path is
+// the newest change the walk shows, no removal of it or of a prefix after it (QD-979). Its removal, the newest change
+// where the walk ends on one, goes to verified.WalkedRemoval, a removal of the path's own token path lowering the
+// floor (E1). The path's own absence is needed in every case where the statement did not change it.
+func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *EvsPathEpochs, absences []*protocol.EvsAbsenceProof, verified *EvsVerifiedPath) ([]uint64, error) {
+	served := evsServedStanding
+	switch {
+	case verified.Absent:
+		served = evsServedAbsent
+	case verified.Removal != nil:
+		served = evsServedRemoved
+	}
+	// a directory's own later writes are its deltas, each of which the walk must account for
+	deltaVersions := map[uint64]bool{}
+	for _, delta := range verified.Deltas {
+		deltaVersions[delta.CommitVersion] = true
+	}
+	tampered := func(err error) ([]uint64, error) {
+		self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
+		return nil, err
+	}
 	more := []uint64{}
+	// for a path served absent: the walk's newest write of the path, where no removal came after it, and its newest
+	// removal of the path or a prefix, where no write came after it
+	var written *EvsVerifiedStatement
+	var removal *EvsWalkedRemoval
+	removalEpoch := uint64(0)
 	for _, walked := range head.Statements {
-		if walked.Version <= max(since, epochs.Since) || deltaVersions[walked.Version] {
+		if walked.Version <= max(verified.CommitVersion, epochs.Since) || deltaVersions[walked.Version] {
 			continue
 		}
 		push := walked.Statement.Push
@@ -461,78 +521,113 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 		if err != nil {
 			return nil, err
 		}
+		// what the statement does to the path, as far as the reader can show it: the path's own change, and the
+		// removal of a strict prefix holding it, which ends every path below it; a prefix's delta does not change the
+		// path (§11.7's newest row)
+		var own, prefixRemoval *EvsCheckedChange
 		if len(push.GetChangesRoot()) == 0 {
 			for _, change := range walked.Statement.Changes {
-				// the path itself, or a prefix's removal, which ends every path below it; a prefix's delta does not
-				// change the path (§11.7's newest row), and a path served holding no version, never written or
-				// removed, stays so through a prefix's removal, which only a standing path contradicts (QD-978)
-				removesPrefix := standing && tokenPath.HasPrefix(change.TokenPath) && len(change.Change.GetEntrySha256()) == 0
-				if change.TokenPath.Equal(tokenPath) || removesPrefix {
-					self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
-					return nil, fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
+				switch {
+				case change.TokenPath.Equal(tokenPath):
+					own = change
+				case prefixRemoval == nil && tokenPath.HasPrefix(change.TokenPath) && !change.WritesEntry():
+					prefixRemoval = change
 				}
 			}
-			continue
-		}
-		for _, absentPath := range EvsAbsencePaths(walked.Statement.ChangedPrefixes, tokenPath) {
-			proven := false
-			for _, absence := range absences {
-				absencePath, err := ParseEvsTokenPath(absence.GetTokenPath())
-				if absence.GetVersion() != walked.Version || err != nil || !absencePath.Equal(absentPath) {
-					continue
-				}
-				if len(absence.GetPresent()) != 0 {
-					if err := evsVerifyPrefixDelta(push, tokenPath, absentPath, absence, standing); err != nil {
-						self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
-						return nil, err
+		} else {
+			for _, absentPath := range EvsAbsencePaths(walked.Statement.ChangedPrefixes, tokenPath) {
+				absence := evsAbsenceAt(absences, walked.Version, absentPath)
+				switch {
+				case absence != nil && len(absence.GetPresent()) != 0:
+					change, err := evsVerifyPresent(push, tokenPath, absentPath, absence, served)
+					if err != nil {
+						return tampered(err)
 					}
-					proven = true
-					break
+					shown := &EvsCheckedChange{Change: change, TokenPath: absentPath}
+					switch {
+					case len(absentPath) == len(tokenPath):
+						own = shown
+					case prefixRemoval == nil && !shown.WritesEntry():
+						prefixRemoval = shown
+					}
+				case absence != nil:
+					if err := EvsVerifyChangeAbsence(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), absentPath, absence); err != nil {
+						return tampered(fmt.Errorf("%w: %w", ErrEvsEntryRefused, err))
+					}
+				case served != evsServedStanding && len(absentPath) < len(tokenPath):
+					// a strict prefix of a path served holding no version needs no proof: whether the statement left it
+					// alone, wrote it or removed it, which evs shows by nothing, the path stands no more than served,
+					// and a removal it does not show is one the walk does not count
+				case epochs.Named[epoch]:
+					return nil, fmt.Errorf("%w: a later statement's change list with no proof the path is absent", ErrEvsEntryRefused)
+				case !slices.Contains(more, epoch):
+					more = append(more, epoch)
 				}
-				if err := EvsVerifyChangeAbsence(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), absentPath, absence); err != nil {
-					self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
-					return nil, fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
-				}
-				proven = true
-				break
 			}
-			if proven || (!standing && len(absentPath) < len(tokenPath)) {
-				// a strict prefix of a path served holding no version needs no proof: whether the statement left it
-				// alone, wrote it or removed it, which evs shows by nothing, the path stands no more than served
-				continue
-			}
-			if epochs.Named[epoch] {
-				return nil, fmt.Errorf("%w: a later statement's change list with no proof the path is absent", ErrEvsEntryRefused)
-			}
-			if !slices.Contains(more, epoch) {
-				more = append(more, epoch)
-			}
+		}
+		switch {
+		case own != nil && served != evsServedAbsent, prefixRemoval != nil && served == evsServedStanding:
+			// the path's own change ends a version or removal served, and a prefix's removal a version
+			return tampered(fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused))
+		case own != nil && own.WritesEntry():
+			written, removal = walked, nil
+		case own != nil:
+			written, removal, removalEpoch = nil, &EvsWalkedRemoval{CommitVersion: walked.Version, Statement: walked.Statement, Change: own.Change, ChangePath: own.TokenPath}, epoch
+		case prefixRemoval != nil:
+			written, removal, removalEpoch = nil, &EvsWalkedRemoval{CommitVersion: walked.Version, Statement: walked.Statement, Change: prefixRemoval.Change, ChangePath: prefixRemoval.TokenPath}, 0
+		}
+	}
+	if written != nil {
+		if 0 < len(more) {
+			// a statement after the write whose proof the next ask names may show its removal
+			return more, nil
+		}
+		return tampered(fmt.Errorf("%w: a later statement writes the path, served as absent", ErrEvsEntryRefused))
+	}
+	if removal != nil && served == evsServedAbsent {
+		verified.WalkedRemoval = removal
+		if removalEpoch != 0 {
+			// E1: a verified removal of the path names its token path in the statement's epoch
+			verified.Floor = evsLowerFloor(verified.Floor, removalEpoch)
 		}
 	}
 	return more, nil
 }
 
-// Checks an absence's present (QD-681): the inclusion proof, to push's changes_root, of the change push makes to
-// prefix, which must be a strict prefix of tokenPath and whose change must write an entry, a directory's delta, while
-// the reply served the path standing. For a path served holding no version, never written or removed (standing
-// false), a prefix's removal is taken too, which leaves such a path as served (QD-978). The path's own change, a
-// removal of a prefix of a standing path, a proof of another path, or one beside below or above is refused.
-func evsVerifyPrefixDelta(push *protocol.EvsPush, tokenPath EvsTokenPath, prefix EvsTokenPath, absence *protocol.EvsAbsenceProof, standing bool) error {
-	if len(absence.GetBelow()) != 0 || len(absence.GetAbove()) != 0 {
-		return fmt.Errorf("%w: a present change beside the leaves around it", ErrEvsEntryRefused)
+// The first absence evs sent for path at version, nil for none.
+func evsAbsenceAt(absences []*protocol.EvsAbsenceProof, version uint64, path EvsTokenPath) *protocol.EvsAbsenceProof {
+	for _, absence := range absences {
+		absencePath, err := ParseEvsTokenPath(absence.GetTokenPath())
+		if absence.GetVersion() == version && err == nil && absencePath.Equal(path) {
+			return absence
+		}
 	}
-	if len(tokenPath) <= len(prefix) || !tokenPath.HasPrefix(prefix) {
-		return fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
+	return nil
+}
+
+// Checks an absence's present (QD-681): the inclusion proof, to push's changes_root, of the change push makes to
+// absentPath, with below and above empty, and what that change may be beside what the reply served: a strict prefix's
+// delta for any reply; a strict prefix's removal for a path served holding no version, which leaves it as served
+// (QD-978); and the path's own change, a write or a removal, for a path served absent alone, which the walk's order
+// then judges (QD-979). The proven change, or the refusal: the path's own change beside a version or a removal
+// served, a removal of a prefix of a standing path, a proof of another path's change, a path that is neither the one
+// read nor a prefix of it, or a present beside below or above.
+func evsVerifyPresent(push *protocol.EvsPush, tokenPath EvsTokenPath, absentPath EvsTokenPath, absence *protocol.EvsAbsenceProof, served evsServedAs) (*protocol.EvsChange, error) {
+	if len(absence.GetBelow()) != 0 || len(absence.GetAbove()) != 0 {
+		return nil, fmt.Errorf("%w: a present change beside the leaves around it", ErrEvsEntryRefused)
+	}
+	if !tokenPath.HasPrefix(absentPath) || (len(tokenPath) == len(absentPath) && served != evsServedAbsent) {
+		return nil, fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
 	}
 	change, changedPath, err := EvsVerifyChangeInclusion(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), absence.GetPresent())
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
+		return nil, fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
 	}
-	if !changedPath.Equal(prefix) {
-		return fmt.Errorf("%w: a proof of another path's change", ErrEvsEntryRefused)
+	if !changedPath.Equal(absentPath) {
+		return nil, fmt.Errorf("%w: a proof of another path's change", ErrEvsEntryRefused)
 	}
-	if len(change.GetEntrySha256()) == 0 && standing {
-		return fmt.Errorf("%w: a later statement removes a prefix of the path, served as unchanged", ErrEvsEntryRefused)
+	if len(change.GetEntrySha256()) == 0 && served == evsServedStanding {
+		return nil, fmt.Errorf("%w: a later statement removes a prefix of the path, served as unchanged", ErrEvsEntryRefused)
 	}
-	return nil
+	return change, nil
 }
