@@ -26,7 +26,10 @@
 //	            old, reads the logs and raises approval_pending once for each request newly waiting for this
 //	            device's decision, so SidecarApprovals' listener reads GetPending again. Close releases nothing:
 //	            evs keeps each lease until it lapses, so a closed app is still woken, and the next process takes them
-//	            again. A device that is no approval-capable device of its member leases nothing and raises nothing
+//	            again. A device that is no approval-capable device of its member leases nothing and raises nothing.
+//	            No app host binds it yet: its leaser over EvsRepo.Subscribe and a record with its streams bound are
+//	            RECORD-M3-12's binding, which no composition makes, so until then no approval wakes a phone, the
+//	            closed direction, and an open app hears a request at SidecarApprovals' refresh
 //
 // The phone's leases name whole logs, so every push to a log wakes it, a capture's too: §18.7's per-client coalescing
 // and the vendors' caps bound the wakes, and a wake spent on another push still brings the phone to its resync, which
