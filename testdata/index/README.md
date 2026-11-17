@@ -48,8 +48,8 @@ exist.
 - **On every leg.** `make index-vectors` runs the table's tests through the every-leg runner
   (`sidecartest/legs_search_test.go`, tag `sidecar_legs`): darwin/arm64 natively, linux/arm64 and linux/amd64 in a
   container of `SIDECAR_LEGS_IMAGE`, windows/amd64 compiled, js/wasm and the `sidecar_http` page Worker in Node, and
-  the gomobile legs by SDK-M10-06's cells, the one-pass conformance in a process of its own (on js/wasm the merge vectors
-  after it ran out of wasm's 4 GiB in one process). A leg that cannot run here says so, and never reads as a pass.
+  the gomobile legs by SDK-M10-06's cells, each one-pass conformance test in a process of its own (on js/wasm, in one
+  process, the tests after them ran out of wasm's 4 GiB). A leg that cannot run here says so, and never reads as a pass.
 - **Under the sdk's module graph.** `sdk/sidecar_index_vectors_test.go` reproduces the normalize, slot and shard
   vectors through `TestHookIndexVectorFindings` in the binary the sdk builds, where the apps' x/text is selected.
 - **make check.** `check/` fails a leg that selects another x/text (the deps row), an `ios_extension` leg that compiles

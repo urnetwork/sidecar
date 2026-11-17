@@ -174,6 +174,11 @@ func TestIndexVectorFilesAreAllReproduced(t *testing.T) {
 		}
 	}
 	declared := testDeclaredTestNames(t)
+	if len(declared) == 0 {
+		// a page Worker has no file system: the source tree is read where it is, on every other leg
+		t.Log("no test file is readable here, so the table's test names are checked on the legs that read the source")
+		return
+	}
 	for _, name := range testIndexVectorTestNames(true, true) {
 		if !declared[name] {
 			t.Errorf("the table names %s, which no test file here declares", name)

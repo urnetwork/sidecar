@@ -38,8 +38,10 @@ var indexVectorTestsOffLeg = map[string][]string{
 // Tests that skip where no process can be started: the runtimes' runner on js/wasm.
 var indexVectorTestsSkippedOnJs = []string{"TestIndexVectorsUnderEveryRuntime"}
 
-// The one-pass extractor's conformance, which runs in a process of its own: on js/wasm the merge vectors after it ran
-// out of wasm's 4 GiB in one process (2026-11-16), and pass alone, so a leg runs the table in two processes.
+// The one-pass extractor's conformance, each test in a process of its own: on js/wasm, in one process with the others,
+// the merge vectors after them ran out of wasm's 4 GiB, and so did the file case after the mail case (2026-11-16), each
+// passing alone; the stream extractor's 2 MiB key buffers a document, taken again for every split of every vector, are
+// what fill it. A leg runs the table in three processes.
 var indexVectorTestsApart = []string{"TestIndexStreamConformanceMail", "TestIndexStreamConformanceFile"}
 
 // The tests the README's table names, read from its rows, which the root's TestIndexVectorFilesAreAllReproduced holds
@@ -118,7 +120,7 @@ func indexVectorEnded(output string, name string, want string) bool {
 	return strings.Contains(output, "--- "+want+": "+name+" ")
 }
 
-// One leg's two processes as one result: a pass only when both passed, the outputs together.
+// One leg's processes as one result: a pass only when every one passed, the outputs together.
 func indexVectorJoin(results [][]*legs.Result, index int) (*legs.Result, string) {
 	joined := &legs.Result{Leg: results[0][index].Leg, Outcome: legs.OutcomePass}
 	output := ""
@@ -145,16 +147,16 @@ func TestIndexVectorsOnEveryLeg(t *testing.T) {
 	tableTests := indexVectorTableTests(t, top)
 	tests := slices.Concat(tableTests, indexVectorRunnerTests)
 	together := slices.DeleteFunc(slices.Clone(tests), func(name string) bool { return slices.Contains(indexVectorTestsApart, name) })
-	apart := []string{}
+	processes := [][]string{together}
 	for _, name := range indexVectorTestsApart {
 		if !slices.Contains(tableTests, name) {
 			t.Fatalf("%s is run apart and the README's table does not name it", name)
 		}
-		apart = append(apart, name)
+		processes = append(processes, []string{name})
 	}
 	vectorLegs := indexVectorLegs()
 	results := [][]*legs.Result{}
-	for _, pattern := range [][]string{together, apart} {
+	for _, pattern := range processes {
 		settings := legs.DefaultRunSettings(top)
 		if image := os.Getenv("SIDECAR_LEGS_IMAGE"); image != "" {
 			settings.ContainerImage = image
