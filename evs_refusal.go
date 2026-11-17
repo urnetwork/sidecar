@@ -6,7 +6,10 @@
 //
 // EvsRefusalCode is §11.8's fixed code table (EVS-FORMAT.md): codes below 64 are what a record may hold, 64 to 127
 // final answers never recorded, and from 128 answers that refuse nothing, which a client retries with the same
-// statement. Each code has one status. The codecs' errors map onto the table through EvsRefusalCodeOf.
+// statement. Each code has one status, and every answer of evs's but a 200 carries its code (owner decision 411), so a
+// client tells each apart by the code alone: 409 REPO_PLACED, the placement another creator holds, from a lifecycle
+// 409 such as STATEMENT_MISSING, and 401 UNAUTHENTICATED, a token to mint again, from 403 SCOPE, a right the state no
+// longer grants. The codecs' errors map onto the table through EvsRefusalCodeOf.
 //
 // On every leg. Package-level functions are safe for concurrent use.
 
@@ -126,6 +129,7 @@ var evsRefusalStatuses = map[protocol.EvsRefusalCode]int{
 	protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING:  409,
 	protocol.EvsRefusalCode_EVS_REFUSAL_GROUP_NOT_READY:    409,
 	protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE:         409,
+	protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED:        409,
 	protocol.EvsRefusalCode_EVS_REFUSAL_INVALID:            400,
 	protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND:          404,
 	protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING:      409,
@@ -135,6 +139,7 @@ var evsRefusalStatuses = map[protocol.EvsRefusalCode]int{
 	protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED: 429,
 	protocol.EvsRefusalCode_EVS_REFUSAL_WAIT:               429,
 	protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE:        503,
+	protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED:    401,
 }
 
 // The HTTP status code answers with, and false for a code the table does not have.
@@ -176,6 +181,13 @@ func EvsRefusalCodeOf(err error) protocol.EvsRefusalCode {
 // mapper builds its map again on the head as it now stands; MAP_PARTS, recorded, asks only for the parts again.
 func IsEvsMapSource(err error) bool {
 	return IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE)
+}
+
+// Whether err is evs's 409 REPO_PLACED (§11.8's place row; QD-927): final, PUT /evs/v1/repos/<id> finding the id
+// placed by another creator, or holding a repo/ other than the one this create makes. The creator picks another id
+// and files its RepoCreate again; a lifecycle 409 such as STATEMENT_MISSING keeps the id and waits for the statement.
+func IsEvsRepoPlaced(err error) bool {
+	return IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
 }
 
 // One refusal record of the head.

@@ -5,10 +5,11 @@
 //
 // Lifecycle calls stay thin (§11.12's log first row): CreateRepo, Delete, Restore and Shred each file §8.8's statement
 // first, through the core's statement poster, then call the route, which evs refuses without that statement in its
-// projection (409 STATEMENT_MISSING); CreateRepo runs KF1's GkmClient.CreateGroup and activation between the create
-// and the first write, and asks EvsClientArgs.PrivateCreate before it files a create marked private (QD-748). A device
-// killed between the statement and the route leaves a state the log records, which taskworker's reconciler applies,
-// so a retry is safe.
+// projection (409 STATEMENT_MISSING); a create whose id another creator placed first (409 REPO_PLACED) files and places
+// again under another id. CreateRepo runs KF1's GkmClient.CreateGroup and activation between the create and the first
+// write, and asks EvsClientArgs.PrivateCreate before it files a create marked private (QD-748). A device killed
+// between the statement and the route leaves a state the log records, which taskworker's reconciler applies, so a
+// retry is safe.
 //
 // The config kind's first head is the exception to sealing on a repo that stands: its push is sealed and signed before
 // its network's base 1, under generation 1 as KF1's bootstrap draft holds it, and sent once the repo is active
@@ -73,6 +74,10 @@ type EvsClientArgs struct {
 	Transport http.RoundTripper
 	// Sidecar.ServiceToken.
 	ServiceToken EvsServiceTokenFunction
+	// Sidecar.ForgetServiceToken: drops the token evs answered 401 UNAUTHENTICATED, so the call's one retry presents a
+	// new one (evs_http.go). Nil for a ServiceToken that keeps no token, as an exchange each call does, whose retry
+	// mints a new one anyway; beside a ServiceToken that keeps one, nil retries with the token refused.
+	ForgetServiceToken EvsForgetServiceTokenFunction
 	// Sidecar.Sign: the identity key, which signs every statement.
 	Sign EvsSignFunction
 	// This sidecar's ids and current client now.
@@ -216,11 +221,12 @@ func NewEvsClient(args *EvsClientArgs) (*EvsClient, error) {
 		clock:    clock,
 		log:      loggerOrDefault(args.Log),
 		http: &evsHttp{
-			baseUrl:      args.EvsUrl,
-			transport:    wrapSidecarApiTransport(args.Transport),
-			serviceToken: args.ServiceToken,
-			settings:     args.Settings,
-			clock:        clock,
+			baseUrl:            args.EvsUrl,
+			transport:          wrapSidecarApiTransport(args.Transport),
+			serviceToken:       args.ServiceToken,
+			forgetServiceToken: args.ForgetServiceToken,
+			settings:           args.Settings,
+			clock:              clock,
 		},
 		pins:           NewEvsPinStore(args.Store, args.Settings),
 		hintedVersions: map[evsRefKey]uint64{},
@@ -334,10 +340,11 @@ func NewEvsRepoId() Id {
 
 // §11.12's creation: a create marked private asks EvsClientArgs.PrivateCreate first, which refuses while the network's
 // directory does not stand (QD-748); files RepoCreate, becoming the repo's admin; PUT /evs/v1/repos/<id> places it and
-// writes repo/, keying; KF1's GkmClient.CreateGroup makes its group and generation 1; activation moves repo/ to active,
-// after which the first write may go; then EvsClientArgs.RepoCreated, which a team network's directory announces it
-// by. Each step resumes: evs answers a retried create and activation as the first, and gkm resumes KF1 after a crash.
-// A failure of RepoCreated answers the repo with its error.
+// writes repo/, keying, both going again under another id when evs answers 409 REPO_PLACED (placeRepo); KF1's
+// GkmClient.CreateGroup makes its group and generation 1; activation moves repo/ to active, after which the first
+// write may go; then EvsClientArgs.RepoCreated, which a team network's directory announces it by. Each step resumes:
+// evs answers a retried create and activation as the first, and gkm resumes KF1 after a crash. A failure of
+// RepoCreated answers the repo with its error.
 func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) (*EvsRepo, error) {
 	if args == nil || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a repo of no kind", errInvalidSettings)
@@ -348,34 +355,20 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	if self.args.FileStatement == nil {
 		return nil, ErrEvsNoStatementPoster
 	}
-	repoId := NewEvsRepoId()
-	if args.ResumeRepoId != nil {
-		repoId = *args.ResumeRepoId
-	} else {
-		if args.Private {
-			// the choice lives only in the private marker, which the directory holds: asked before anything is filed
-			if self.args.PrivateCreate == nil {
-				return nil, ErrEvsPrivateUnchecked
-			}
-			if err := self.args.PrivateCreate(ctx, self, args); err != nil {
-				return nil, fmt.Errorf("evs: --private: %w", err)
-			}
+	if args.ResumeRepoId == nil && args.Private {
+		// the choice lives only in the private marker, which the directory holds: asked before anything is filed
+		if self.args.PrivateCreate == nil {
+			return nil, ErrEvsPrivateUnchecked
 		}
-		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind}
-		if err := self.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_CREATE, create); err != nil {
-			return nil, fmt.Errorf("evs: RepoCreate: %w", err)
+		if err := self.args.PrivateCreate(ctx, self, args); err != nil {
+			return nil, fmt.Errorf("evs: --private: %w", err)
 		}
 	}
-	repo := self.Repo(repoId)
-	if err := repo.callLifecycle(ctx, &evsCall{
-		route:  "PUT /evs/v1/repos/{repo_id}",
-		method: http.MethodPut,
-		path:   "/evs/v1/repos/" + evsUrlId(repoId),
-		repoId: repoId,
-		role:   evsScopeAdmin,
-	}); err != nil {
+	repoId, err := self.placeRepo(ctx, args)
+	if err != nil {
 		return nil, err
 	}
+	repo := self.Repo(repoId)
 	if self.holdsNoLeaf() {
 		// QD-638: a member device forms the group of a repo this sidecar creates, and wraps generation 1 to it;
 		// activation waits for that wrap, as KF1's waits for its deliveries
@@ -412,6 +405,42 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 		}
 	}
 	return repo, nil
+}
+
+// CreateRepo's filing and placement, answering the id placed: RepoCreate for a new random id, then PUT
+// /evs/v1/repos/<id>. On 409 REPO_PLACED, the id another creator placed first (§11.8's place row; QD-927), both go
+// again under another id, at most RepoPlacedRetryCount times, the id given up keeping only its RepoCreate; a lifecycle
+// 409 such as STATEMENT_MISSING keeps the id, as callLifecycle waits it out. A create resuming ResumeRepoId filed its
+// RepoCreate before and places that id alone, so its REPO_PLACED is the caller's error, as is the last past the
+// retries.
+func (self *EvsClient) placeRepo(ctx context.Context, args *EvsCreateRepoArgs) (Id, error) {
+	if args.ResumeRepoId != nil {
+		repoId := *args.ResumeRepoId
+		return repoId, self.Repo(repoId).callLifecycle(ctx, evsPlaceCall(repoId))
+	}
+	for retryCount := 0; ; retryCount += 1 {
+		repoId := NewEvsRepoId()
+		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind}
+		if err := self.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_CREATE, create); err != nil {
+			return Id{}, fmt.Errorf("evs: RepoCreate: %w", err)
+		}
+		err := self.Repo(repoId).callLifecycle(ctx, evsPlaceCall(repoId))
+		if !IsEvsRepoPlaced(err) || self.settings.RepoPlacedRetryCount <= retryCount {
+			return repoId, err
+		}
+		self.log.Warningf("[evs]repo %s is placed by another creator: creating under another id", repoId)
+	}
+}
+
+// PUT /evs/v1/repos/<id>: places repoId and writes its repo/ (§11.8's place row).
+func evsPlaceCall(repoId Id) *evsCall {
+	return &evsCall{
+		route:  "PUT /evs/v1/repos/{repo_id}",
+		method: http.MethodPut,
+		path:   "/evs/v1/repos/" + evsUrlId(repoId),
+		repoId: repoId,
+		role:   evsScopeAdmin,
+	}
 }
 
 // Whether this sidecar holds no leaf at its verified state, a tagged or an ephemeral one, so a member device forms
