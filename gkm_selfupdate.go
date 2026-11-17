@@ -91,7 +91,7 @@ func (self *GkmGroupClient) SelfUpdateDue(repoId Id) (bool, error) {
 
 // The repo's self-update, if one is due: see the file header. Nil when none is due or it landed;
 // ErrGkmDroppedLeafStands, wrapped in ErrGkmCommitRefused, while it waits under R3; ErrGkmWait when another's commit
-// took its epoch, after which it is due again.
+// took its epoch, or a newer generation outran its header at gkm (QD-956), after which it is due again.
 func (self *GkmGroupClient) RunSelfUpdate(ctx context.Context, repoId Id) error {
 	manager := self.manager(repoId)
 	manager.flowLock.Lock()
@@ -138,8 +138,8 @@ func (self *GkmGroupClient) RunSelfUpdate(ctx context.Context, repoId Id) error 
 		}
 		return err
 	}
-	if outcome == gkmCommitLost {
-		return fmt.Errorf("%w: the self-update lost its epoch", ErrGkmWait)
+	if outcome != gkmCommitAdopted {
+		return fmt.Errorf("%w: the self-update lost its epoch or its generation", ErrGkmWait)
 	}
 	return nil
 }

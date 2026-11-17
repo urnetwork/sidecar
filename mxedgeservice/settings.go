@@ -120,6 +120,10 @@ type MxEdgeSettings struct {
 	// gets 452 4.3.1, so 50 senders at the cap cannot take 800 MiB. Default 256 MiB, sixteen messages
 	// at the cap, tuned at T5.
 	PlatformBufferByteCount int `yaml:"platform_buffer_max_bytes"`
+	// How much of a message one read takes as a session's buffer grows. No bound: the two above are,
+	// and a buffer reaches at most the message cap and one read past it. Default 64 KiB, the receiver's
+	// chunk (§15.5).
+	PlatformReadByteCount int `yaml:"platform_read_bytes"`
 	// Recipients one transaction may name, past which 452 4.5.3 and the sender sends the rest later.
 	// Default 100, RFC 5321 §4.5.3.1.8's least.
 	PlatformRecipientCount int `yaml:"platform_recipients"`
@@ -254,6 +258,7 @@ func DefaultMxEdgeSettings() *MxEdgeSettings {
 		RecordBatchCount:            10000,
 		PlatformMessageByteCount:    16 * 1024 * 1024,
 		PlatformBufferByteCount:     256 * 1024 * 1024,
+		PlatformReadByteCount:       64 * 1024,
 		PlatformRecipientCount:      100,
 		PlatformHandshakeTimeout:    10 * time.Second,
 		PlatformIdleTimeout:         5 * time.Minute,

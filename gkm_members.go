@@ -19,14 +19,21 @@
 //	         Removes and the Adds of devices whose admission it signed (owner decisions 128, 182); a wrapped writer
 //	         commits nothing and rotates
 //
-//	Run(c)   while something is pending that c may commit: process what gkm holds past c's epoch; commit removes and
-//	         adds in one commit; write each owed Welcome and its pointers; rotate if due; look again
+//	Run(c)   while something is pending that c may commit: take gkm's newest generation, so a rotation that committed
+//	         nothing, a wrapped writer's, is what the commit carries (QD-956); process what gkm holds past c's epoch;
+//	         commit removes and adds in one commit; write each owed Welcome and its pointers; rotate if due; look
+//	         again
 //
 // Commit is 6.2.4's machine: the commit is staged, its GenWrap sealed under the new epoch's KEK, and the committer
 // runs CheckCommit on it before it uploads it; a 200 adopts it and owes its Welcome, a 409 discards it and the
-// winner is processed (KF6), a 403 is alarmed, and an outcome it cannot learn is read back from epoch/<n>. Process is
-// the same check on a commit another made, at its header's pin: a refusal is alarmed naming the committer and the
-// epoch, the commit is never adopted, and a roster refusal poisons the generation its GenWrap carried.
+// winner is processed (KF6), and an outcome it cannot learn is read back from epoch/<n>. A 403 is read against gen/
+// once (QD-956): gkm's epoch PUT check refuses a header whose generation is not gen/'s newest, so a generation
+// standing past the commit's is that check working, not a refusal of this device's statement. It is taken as a sync
+// takes it, under the rotation checks and the ladder, and the commit is discarded for the pass to restage under it,
+// with no alarm; one that fails its checks raises its own check's alarm and the commit waits; and a 403 that nothing
+// newer explains is alarmed refused. Process is the same check on a commit another made, at its header's pin: a
+// refusal is alarmed naming the committer and the epoch, the commit is never adopted, and a roster refusal poisons
+// the generation its GenWrap carried.
 //
 // A leaf that may not commit the Remove its tree needs, a read_only one, commits nothing while that leaf stands
 // (R3's wait): its own check refuses the commit before any upload, and a writer leaf's Remove releases it.
@@ -354,7 +361,8 @@ func (self *GkmGroupClient) RunPending(ctx context.Context, repoId Id) error {
 	return manager.runPendingInFlow(ctx)
 }
 
-// RunPending with the group's flow held.
+// RunPending with the group's flow held. Each pass is one of PendingPassCount: one that loses its epoch to another's
+// commit (KF6), or whose commit a newer generation outran at gkm (QD-956), leaves the next to commit what remains.
 func (self *gkmGroupManager) runPendingInFlow(ctx context.Context) error {
 	client := self.client
 	for passCount := 0; passCount < max(1, client.settings.PendingPassCount); passCount += 1 {
@@ -370,7 +378,16 @@ func (self *gkmGroupManager) runPendingInFlow(ctx context.Context) error {
 		if err := self.writeOwedWelcomes(ctx, pins.groupId); err != nil {
 			return err
 		}
+		// gkm's newest generation before any commit (QD-956): a rotation that committed nothing reaches a leaf by no
+		// epoch, and gkm refuses a header below gen/'s newest, so it is taken here as a sync takes it
+		if err := self.refreshGenerationsInFlow(ctx, state); err != nil && !errors.Is(err, ErrGkmKeyMissing) {
+			return err
+		}
 		if _, err := self.catchUpInFlow(ctx, state); err != nil {
+			return err
+		}
+		// a leaf_wrap of the newest generation opens once its epoch is adopted
+		if err := self.openNewestInFlow(ctx, state); err != nil {
 			return err
 		}
 		pins, err = client.repoPins(self.repoId)
@@ -400,6 +417,9 @@ func (self *gkmGroupManager) runPendingInFlow(ctx context.Context) error {
 				case gkmCommitLost:
 					// KF6: the winner is processed at the next pass, and what remains is committed after
 					lost = true
+				case gkmCommitStale:
+					// QD-956: the generation that outran it is held, and the next pass restages under it
+					lost = true
 				case gkmCommitNothing:
 					// no Remove to make and no KeyPackage to add with: the joiners wait
 				}
@@ -424,7 +444,7 @@ func (self *gkmGroupManager) runPendingInFlow(ctx context.Context) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("%w: the commit was lost %d times", ErrGkmWait, max(1, client.settings.PendingPassCount))
+	return fmt.Errorf("%w: the commit lost its epoch or its generation %d times", ErrGkmWait, max(1, client.settings.PendingPassCount))
 }
 
 // How a commit of this device ended.
@@ -437,6 +457,9 @@ const (
 	gkmCommitLost
 	// Nothing was committed: no Remove was due and no device to add had a KeyPackage.
 	gkmCommitNothing
+	// gkm answered 403 to a header a newer generation outran (QD-956): this device now holds that generation, opened
+	// and judged, and the commit is discarded to be staged again under it.
+	gkmCommitStale
 )
 
 // One KeyPackage claimed for an Add.
@@ -511,9 +534,10 @@ func (self *GkmGroupClient) SelfUpdate(ctx context.Context, repoId Id) error {
 	if err != nil {
 		return err
 	}
-	if outcome == gkmCommitLost {
-		// another's commit took the epoch: the next pass processes it, and the self-update is due again after
-		return fmt.Errorf("%w: the self-update lost its epoch", ErrGkmWait)
+	if outcome != gkmCommitAdopted {
+		// another's commit took the epoch, or a newer generation outran it (QD-956): the next pass processes the
+		// one or carries the other, and the self-update is due again after
+		return fmt.Errorf("%w: the self-update lost its epoch or its generation", ErrGkmWait)
 	}
 	return nil
 }
@@ -643,13 +667,17 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 			return 0, err
 		}
 	}
-	lose := func() (gkmCommitOutcome, error) {
+	// a commit that never stands owes nothing
+	discard := func(outcome gkmCommitOutcome) (gkmCommitOutcome, error) {
 		if owes {
 			if err := self.dropOwedWelcome(epoch); err != nil {
 				return 0, err
 			}
 		}
-		return gkmCommitLost, nil
+		return outcome, nil
+	}
+	lose := func() (gkmCommitOutcome, error) {
+		return discard(gkmCommitLost)
 	}
 	barrierKey := gkmPathId(groupId) + ":" + strconv.FormatUint(epoch, 10)
 	landed := false
@@ -667,7 +695,15 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 		case refused && gkmError.Status == http.StatusConflict:
 			return lose()
 		case refused && gkmError.Status == http.StatusForbidden:
-			// its rate, pin or header check, where this device's own passed
+			// its rate, pin or header check, where this device's own passed. A generation that outran the header is
+			// the header check working (QD-956): taken, it is what the next pass restages under, with no alarm
+			taken, err := self.takeNewerGenerationsInFlow(ctx, state, groupId, stagedHeader.GetGeneration())
+			if err != nil {
+				return 0, err
+			}
+			if taken {
+				return discard(gkmCommitStale)
+			}
 			client.alarm(&GkmAlarm{Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: groupId, Epoch: epoch, SidecarId: client.args.SidecarId, Detail: "gkm refused a commit this device's checks passed"})
 			return 0, fmt.Errorf("%w: gkm refused the commit of epoch %d", ErrGkmWait, epoch)
 		case refused:
@@ -719,6 +755,94 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 		}
 	}
 	return gkmCommitAdopted, nil
+}
+
+// QD-956's one read on a 403 (DESIGN-DETAILS 6.2.4's Commit row): gkm's epoch PUT check refuses a header whose
+// generation is not gen/'s newest, so a rotation claimed since the commit was staged, a wrapped writer's that commits
+// nothing above all, explains the refusal. gen/ is read once past generation, the refused header's, and each
+// generation standing there is taken as the sync's refresh takes it: judged by the rotation checks on its parent,
+// opened by its leaf_wrap or a delivery to this device (or held as this device's own claim, where its draft's
+// commitment stands there), with the ladder walked below the newest. taken says the newest is held opened and
+// unpoisoned, so the pass restages the commit under it. Never taken: a generation-0 commit, which gkm holds to no
+// newest generation; a header below this device's newest, which no read here explains; no generation standing past
+// it; or a read that failed: a refusal nothing newer explains, which the caller alarms. An error is a commit that
+// waits, alarming nothing of its own: a newer generation that fails its checks, whose check raised its own alarm;
+// one this device cannot open or judge yet; or a store's failure.
+func (self *gkmGroupManager) takeNewerGenerationsInFlow(ctx context.Context, state GkmAuthView, groupId Id, generation uint64) (taken bool, err error) {
+	client := self.client
+	if generation == 0 {
+		return false, nil
+	}
+	pins, err := client.repoPins(self.repoId)
+	if err != nil {
+		return false, err
+	}
+	top, err := client.newestHeldGeneration(self.repoId)
+	if err != nil {
+		return false, err
+	}
+	if pins.groupId != groupId || top.generation.Rotate.GetGeneration() != generation {
+		return false, nil
+	}
+	page, err := self.generationsPage(ctx, groupId, generation)
+	if err != nil {
+		if client.log.V(1).Enabled() {
+			client.log.Infof("[gkm]gen/ past %d was not read after a refused commit: %v", generation, err)
+		}
+		return false, nil
+	}
+	if len(page) == 0 {
+		return false, nil
+	}
+	now := client.clock.Now()
+	yield := client.newYield()
+	for _, winner := range page {
+		yield.step()
+		top, err = client.newestHeldGeneration(self.repoId)
+		if err != nil {
+			return false, err
+		}
+		next := top.generation.Rotate.GetGeneration() + 1
+		// this device's own claim, landed before a kill took its answer: the draft's commitment stands there
+		if draft := self.storedDraft(); draft != nil && draft.generation.Rotate.GetGeneration() == next {
+			body := &protocol.GenRotate{}
+			if err := proto.Unmarshal(winner.GetBody(), body); err == nil && bytes.Equal(body.GetCommitment(), draft.generation.Rotate.GetCommitment()) {
+				if _, err := self.claimed(draft); err != nil {
+					return false, err
+				}
+				continue
+			}
+		}
+		// held whatever its verdict, poisoned and alarmed by its own check where it fails; one held without its key
+		// may still open from a newer one's link below
+		if _, err := self.takeWinner(ctx, state, pins, top, winner, now); err != nil && !errors.Is(err, ErrGkmKeyMissing) {
+			return false, err
+		}
+		held, err := client.newestHeldGeneration(self.repoId)
+		if err != nil {
+			return false, err
+		}
+		if held.generation.Rotate.GetGeneration() != next {
+			return false, fmt.Errorf("%w: gen/%d was not held", ErrGkmReplyInvalid, next)
+		}
+	}
+	self.walkLadderForLater(ctx, state, groupId)
+	newest, err := client.newestHeldGeneration(self.repoId)
+	if err != nil {
+		return false, err
+	}
+	newestNumber := newest.generation.Rotate.GetGeneration()
+	switch {
+	case newestNumber <= generation:
+		return false, nil
+	case newest.poisoned:
+		// R1: nothing is sealed to it, and the rotation past it comes first
+		return false, fmt.Errorf("%w: gen/%d, past the refused commit's generation %d, failed its checks", ErrGkmWait, newestNumber, generation)
+	case newest.key == nil:
+		// asked for late as it was taken
+		return false, fmt.Errorf("%w: %w: no delivery of gen/%d, past the refused commit's generation %d, reached this device yet", ErrGkmWait, ErrGkmKeyMissing, newestNumber, generation)
+	}
+	return true, nil
 }
 
 // gen/<g> as this device may build on it: its own record where it holds one, else fetched, verified and judged by

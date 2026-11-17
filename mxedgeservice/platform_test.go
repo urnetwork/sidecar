@@ -345,6 +345,119 @@ func TestPlatformTakesOnlyItsOwnRecipients(t *testing.T) {
 	}
 }
 
+// RFC 5321's bare RCPT TO:<Postmaster>, in any ASCII case, is taken as postmaster@<root> (owner decision
+// 446): answered 250, counted taken and handed to the intake under that address, as the full address
+// is. Another path with no domain still gets go-smtp's 501, and so does a bare MAIL FROM:<Postmaster>.
+func TestPlatformTakesABarePostmasterAsPostmasterAtTheRoot(t *testing.T) {
+	platform := newTestPlatform(t, nil)
+	client := platform.openTls(testSender, "")
+	client.ehlo()
+	if message := client.expectReply("MAIL FROM:<Postmaster>", 501); !strings.HasPrefix(message, "5.5.2 ") {
+		t.Errorf("MAIL FROM:<Postmaster>: %q", message)
+	}
+	client.expectReply("MAIL FROM:<reporter@isp.example>", 250)
+	for _, path := range []string{"<Postmaster>", "<postmaster>", "<POSTMASTER>"} {
+		client.expectReply("RCPT TO:"+path, 250)
+	}
+	for _, path := range []string{"<Postmaster@>", "<Postmasters>", "<abuse>"} {
+		client.expectReply("RCPT TO:"+path, 501)
+	}
+	body := "Subject: bare\r\n\r\nto the postmaster\r\n"
+	if code, message, err := client.data(body); err != nil || code != 250 {
+		t.Fatalf("DATA: %d %s %v", code, message, err)
+	}
+	client.quit()
+
+	got := []string{}
+	for _, message := range platform.intake.Messages() {
+		got = append(got, message.Recipient)
+		if string(message.Raw) != body {
+			t.Errorf("raw %q", message.Raw)
+		}
+	}
+	want := "postmaster@" + testRootDomainName
+	if strings.Join(got, " ") != strings.Join([]string{want, want, want}, " ") {
+		t.Errorf("the intake took %v, want %s three times", got, want)
+	}
+	if value := platform.host.Metrics.Value("urnetwork_mxedge_platform_recipients_total", "taken"); value != 3 {
+		t.Errorf("taken counted %v", value)
+	}
+}
+
+// The bare form counts against PlatformRecipientCount as the full address does: one of each fills a
+// transaction of two, after which either form gets 452 4.5.3.
+func TestPlatformCountsABarePostmasterAsTheFullAddress(t *testing.T) {
+	settings := testPlatformSettings()
+	settings.PlatformRecipientCount = 2
+	platform := newTestPlatform(t, &testPlatformOptions{settings: settings})
+	client := platform.openTls(testSender, "")
+	client.ehlo()
+	full := "<postmaster@" + testRootDomainName + ">"
+	for _, paths := range [][]string{{"<Postmaster>", full}, {full, "<Postmaster>"}} {
+		client.expectReply("MAIL FROM:<reporter@isp.example>", 250)
+		for _, path := range paths {
+			client.expectReply("RCPT TO:"+path, 250)
+		}
+		for _, path := range paths {
+			if message := client.expectReply("RCPT TO:"+path, 452); !strings.HasPrefix(message, "4.5.3 ") {
+				t.Errorf("%s past the bound: %q", path, message)
+			}
+		}
+		client.expectReply("RSET", 250)
+	}
+	client.quit()
+	if value := platform.host.Metrics.Value("urnetwork_mxedge_platform_recipients_total", "too_many"); value != 4 {
+		t.Errorf("too_many counted %v", value)
+	}
+}
+
+// Where the full address gets 451 4.3.0 at RCPT, with no intake wired or with the gate closed, so does
+// the bare form, and nothing reaches the intake.
+func TestPlatformAnswersABarePostmasterAs451WhereTheFullAddressIs(t *testing.T) {
+	cases := []struct {
+		name      string
+		options   *testPlatformOptions
+		closeGate bool
+	}{
+		{name: "no intake", options: &testPlatformOptions{noIntake: true}},
+		{name: "gate closed", options: &testPlatformOptions{}, closeGate: true},
+	}
+	for _, c := range cases {
+		platform := newTestPlatform(t, c.options)
+		client := platform.openTls(testSender, "")
+		if c.closeGate {
+			platform.gateOpen.Store(false)
+		}
+		client.ehlo()
+		client.expectReply("MAIL FROM:<sender@isp.example>", 250)
+		for _, path := range []string{"<Postmaster>", "<postmaster@" + testRootDomainName + ">"} {
+			if message := client.expectReply("RCPT TO:"+path, 451); !strings.HasPrefix(message, "4.3.0 ") {
+				t.Errorf("%s, %s: %q", c.name, path, message)
+			}
+		}
+		client.quit()
+		if messages := platform.intake.Messages(); len(messages) != 0 {
+			t.Errorf("%s: the intake took %d messages", c.name, len(messages))
+		}
+	}
+}
+
+// The bare form is role mail as postmaster@<root> is: when the intake leaves it unread, the message gets
+// plan-ABUSE-auto-reply's 550 5.7.1.
+func TestPlatformRefusesUnreadBarePostmasterMailWith550(t *testing.T) {
+	platform := newTestPlatform(t, nil)
+	platform.intake.SetOutcome("postmaster@"+testRootDomainName, mxedgeservice.PlatformOutcomeUnread)
+	client := platform.openTls(testSender, "")
+	client.ehlo()
+	client.expectReply("MAIL FROM:<person@isp.example>", 250)
+	client.expectReply("RCPT TO:<Postmaster>", 250)
+	code, message, err := client.data("Subject: help\r\n\r\nplease\r\n")
+	if err != nil || code != 550 || message != "5.7.1 Not read. Report abuse at "+testAbuseUrl {
+		t.Fatalf("DATA: %d %q %v", code, message, err)
+	}
+	client.quit()
+}
+
 // The router's front holds here too: a plaintext transaction gets 530 with no closed handshake behind
 // it, and nothing reaches the intake.
 func TestPlatformRefusesPlaintextWith530(t *testing.T) {
