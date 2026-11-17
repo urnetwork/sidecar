@@ -84,6 +84,7 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				PayloadByteCount:       1024 * 1024,
 				FileByteCount:          8 * 1024 * 1024,
 				RunHourByteCount:       256 * 1024 * 1024,
+				RunHourInterval:        1 * time.Hour,
 				SpoolByteCount:         1024 * 1024 * 1024,
 				SpoolSegmentByteCount:  16 * 1024 * 1024,
 				SpoolCursorRecordCount: 64,
@@ -121,6 +122,20 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ChangePathCount:          4096,
 				RunCardPromptByteCount:   2 * 1024,
 				RunCardPathCount:         256,
+				// RECORD.md section 6.4's ContextBody caps, ingest_context.go's constants before QD-702's move, the
+				// harness version's 64 B a reading and a truncation's file name 100 B of its 128
+				ContextTitleByteCount:               120,
+				ContextSessionIdCount:               4,
+				ContextSessionIdByteCount:           64,
+				ContextHarnessVersionByteCount:      64,
+				ContextModelByteCount:               64,
+				ContextPermissionModeByteCount:      32,
+				ProjectByteCount:                    128,
+				ContextBranchByteCount:              128,
+				ContextInstructionFileCount:         64,
+				ContextInstructionFileNameByteCount: 128,
+				ContextTruncationCount:              16,
+				ContextTruncationNameByteCount:      100,
 				// §16.5's agent-config files, and MCP-M3-16's and MCP-M3-10's readings of §16.6 and §16.7
 				AgentConfigPaths: []string{
 					"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".cursorrules",

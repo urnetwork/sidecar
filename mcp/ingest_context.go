@@ -40,11 +40,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// ContextBody's caps that this file applies before the writer checks them: format values of RECORD.md section 6.4.
+// RECORD.md section 6.4's identifiers this file writes: an instruction file's scope and a change's capture bits. The
+// caps it cuts a context or change entry to are Ingest's settings (QD-702).
 const (
-	ingestTitleByteCount          = 120
-	ingestSessionIdCount          = 4
-	ingestInstructionFileMax      = 64
 	ingestInstructionScopeManaged = 1
 	ingestInstructionScopeUser    = 2
 	ingestInstructionScopeProject = 3
@@ -134,7 +132,8 @@ func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, r
 			run.dirty = true
 		}
 	}
-	harnessVersion, _ := ingestCut([]byte(state.HarnessVersion), 64)
+	settings := self.settings
+	harnessVersion, _ := ingestCut([]byte(state.HarnessVersion), settings.ContextHarnessVersionByteCount)
 	sessionIds := []string{}
 	if runs, err := run.network.Runs(); err == nil {
 		if file, err := runs.Get(run.runId); err == nil {
@@ -144,20 +143,21 @@ func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, r
 	if len(sessionIds) == 0 && state.SessionId != "" {
 		sessionIds = []string{state.SessionId}
 	}
-	if ingestSessionIdCount < len(sessionIds) {
-		sessionIds = sessionIds[len(sessionIds)-ingestSessionIdCount:]
+	// the newest, a non-positive count keeping none
+	if sessionIdCount := max(settings.ContextSessionIdCount, 0); sessionIdCount < len(sessionIds) {
+		sessionIds = sessionIds[len(sessionIds)-sessionIdCount:]
 	}
 	for i, sessionId := range sessionIds {
-		cut, _ := ingestCut([]byte(sessionId), 64)
+		cut, _ := ingestCut([]byte(sessionId), settings.ContextSessionIdByteCount)
 		sessionIds[i] = string(cut)
 	}
-	model, _ := ingestCut([]byte(state.Model), 64)
-	mode, _ := ingestCut([]byte(state.PermissionMode), 32)
-	project, _ := ingestCut([]byte(state.Project), 128)
-	branch, _ := ingestCut([]byte(state.Branch), 128)
+	model, _ := ingestCut([]byte(state.Model), settings.ContextModelByteCount)
+	mode, _ := ingestCut([]byte(state.PermissionMode), settings.ContextPermissionModeByteCount)
+	project, _ := ingestCut([]byte(state.Project), settings.ProjectByteCount)
+	branch, _ := ingestCut([]byte(state.Branch), settings.ContextBranchByteCount)
 	loaded := (*protocol.InstructionFile)(nil)
 	if event.HarnessEvent == ingestInstructionsLoadedEvent {
-		loaded = ingestLoadedInstructionFile(payload)
+		loaded = ingestLoadedInstructionFile(payload, settings.ContextInstructionFileNameByteCount)
 	}
 	files, truncations := self.instructionFiles(event.Cwd, loaded)
 	self.appendWithLock(ctx, run, &ingestEntry{
@@ -182,14 +182,14 @@ func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, r
 	})
 }
 
-// Sets the run's title once: 120 B after redaction, its first line.
+// Sets the run's title once: its first line, ContextTitleByteCount (120 B) after redaction.
 func (self *Ingest) setTitleWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, title string) {
 	if run.state.Title != "" {
 		return
 	}
 	line, _, _ := strings.Cut(strings.TrimSpace(title), "\n")
 	redacted := self.redact(ctx, run, redactor, []byte(line))
-	cut, _ := ingestCut(redacted, ingestTitleByteCount)
+	cut, _ := ingestCut(redacted, self.settings.ContextTitleByteCount)
 	if len(cut) == 0 {
 		return
 	}
@@ -279,9 +279,10 @@ func (self *Ingest) agentLabel(cwd string) string {
 	return found.Agent
 }
 
-// The file an InstructionsLoaded names, by hash and size: its file_path read for the hash alone, its scope from
-// memory_type (Managed, User, else the project's). Nil where the payload names no readable regular file.
-func ingestLoadedInstructionFile(payload []byte) *protocol.InstructionFile {
+// The file an InstructionsLoaded names, by hash and size, its base name cut to nameByteCount: its file_path read for
+// the hash alone, its scope from memory_type (Managed, User, else the project's). Nil where the payload names no
+// readable regular file.
+func ingestLoadedInstructionFile(payload []byte, nameByteCount int64) *protocol.InstructionFile {
 	path := ingestPayloadString(payload, "file_path")
 	if path == "" || !filepath.IsAbs(path) {
 		return nil
@@ -297,13 +298,15 @@ func ingestLoadedInstructionFile(payload []byte) *protocol.InstructionFile {
 	case "User":
 		scope = ingestInstructionScopeUser
 	}
-	return ingestHashFile(scope, path)
+	return ingestHashFile(scope, path, nameByteCount)
 }
 
-// The instruction files under cwd and the home, by scope, base name, hash and size, at most 64, with a truncation
-// warning for each past it. A directory among the names lists its files. loaded, the file an InstructionsLoaded
-// named, goes first when the lists do not already hold it.
+// The instruction files under cwd and the home, by scope, base name, hash and size, at most
+// ContextInstructionFileCount (64), with a truncation warning for each past it, up to ContextTruncationCount (16). A
+// directory among the names lists its files. loaded, the file an InstructionsLoaded named, goes first when the lists
+// do not already hold it.
 func (self *Ingest) instructionFiles(cwd string, loaded *protocol.InstructionFile) ([]*protocol.InstructionFile, []string) {
+	settings := self.settings
 	files := []*protocol.InstructionFile{}
 	truncations := []string{}
 	add := func(scope uint32, absolute string) {
@@ -318,7 +321,7 @@ func (self *Ingest) instructionFiles(cwd string, loaded *protocol.InstructionFil
 			}
 			for _, entry := range entries {
 				if entry.Type().IsRegular() {
-					if hashed := ingestHashFile(scope, filepath.Join(absolute, entry.Name())); hashed != nil {
+					if hashed := ingestHashFile(scope, filepath.Join(absolute, entry.Name()), settings.ContextInstructionFileNameByteCount); hashed != nil {
 						files = append(files, hashed)
 					}
 				}
@@ -328,7 +331,7 @@ func (self *Ingest) instructionFiles(cwd string, loaded *protocol.InstructionFil
 		if !info.Mode().IsRegular() {
 			return
 		}
-		if hashed := ingestHashFile(scope, absolute); hashed != nil {
+		if hashed := ingestHashFile(scope, absolute, settings.ContextInstructionFileNameByteCount); hashed != nil {
 			files = append(files, hashed)
 		}
 	}
@@ -347,20 +350,20 @@ func (self *Ingest) instructionFiles(cwd string, loaded *protocol.InstructionFil
 	}) {
 		files = append([]*protocol.InstructionFile{loaded}, files...)
 	}
-	if ingestInstructionFileMax < len(files) {
-		for _, file := range files[ingestInstructionFileMax:] {
-			if len(truncations) < 16 {
-				name, _ := ingestCut([]byte(file.Name), 100)
+	if fileCount := max(settings.ContextInstructionFileCount, 0); fileCount < len(files) {
+		for _, file := range files[fileCount:] {
+			if len(truncations) < settings.ContextTruncationCount {
+				name, _ := ingestCut([]byte(file.Name), settings.ContextTruncationNameByteCount)
 				truncations = append(truncations, string(name)+": not listed")
 			}
 		}
-		files = files[:ingestInstructionFileMax]
+		files = files[:fileCount]
 	}
 	return files, truncations
 }
 
-// One instruction file by hash and size, its text never kept.
-func ingestHashFile(scope uint32, absolute string) *protocol.InstructionFile {
+// One instruction file by hash and size, its text never kept, its base name cut to nameByteCount.
+func ingestHashFile(scope uint32, absolute string, nameByteCount int64) *protocol.InstructionFile {
 	file, err := os.Open(absolute)
 	if err != nil {
 		return nil
@@ -371,7 +374,7 @@ func ingestHashFile(scope uint32, absolute string) *protocol.InstructionFile {
 	if err != nil {
 		return nil
 	}
-	name, _ := ingestCut([]byte(filepath.Base(absolute)), 128)
+	name, _ := ingestCut([]byte(filepath.Base(absolute)), nameByteCount)
 	return &protocol.InstructionFile{Scope: scope, Name: string(name), Sha256: hash.Sum(nil), Size: uint64(size)}
 }
 
@@ -510,11 +513,11 @@ func (self *Ingest) captureBlobWithLock(ctx context.Context, run *ingestRun, red
 	return entryId
 }
 
-// Charges byteCount to the run's hour: false, and an oversize gap, past RunHourByteCount.
+// Charges byteCount to the run's hour, RunHourInterval: false, and an oversize gap, past RunHourByteCount.
 func (self *Ingest) budgetWithLock(ctx context.Context, run *ingestRun, byteCount int64) bool {
 	state := run.state
 	now := self.clock.Now().UnixMilli()
-	if state.HourStartMillis == 0 || now-state.HourStartMillis >= 60*60*1000 {
+	if state.HourStartMillis == 0 || now-state.HourStartMillis >= self.settings.RunHourInterval.Milliseconds() {
 		state.HourStartMillis = now
 		state.HourByteCount = 0
 		run.dirty = true
