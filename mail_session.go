@@ -16,6 +16,10 @@
 //	          mail_inbound_repos_per_message, read at most each LimitsInterval at EHLO; a limit not there to read, or
 //	          not above 0, answers the EHLO 451 4.3.0, never an unbounded SIZE
 //	mail      MAIL follows the handshake within MailTimeout (60 s), or the stream closes
+//	bare      RFC 5321's bare RCPT TO:<Postmaster>, which go-smtp's fork hands Rcpt as postmaster alone
+//	          (MailSmtpBarePostmaster), is postmaster at the domain the session serves before mailcfg's rules (owner
+//	          decision 446): the domain of the MX host the sender reached, its SNI less the host's first label, or with
+//	          no SNI the receiver's own zone (PostmasterDomain). Every answer below is then the full address's
 //	rcpt      §15.8's grammar and the signed mailcfg (MailConfig.Resolve): unknown, burned or paused 550 5.1.1; GET
 //	          /mail/status's storage_full, read at most each StatusInterval, 452 4.2.2; past mail_inbound_recipients
 //	          452 4.5.3; a repo past mail_inbound_repos_per_message 452 4.5.3 (QD-208), a group counting once;
@@ -42,6 +46,7 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,6 +106,11 @@ type MailSessionArgs struct {
 	// An RCPT's address: §15.8's grammar, then mailcfg (MailConfig.Resolve). An error is temporary: mailcfg not
 	// synced, or a read that failed.
 	Resolve func(ctx context.Context, address string) (*MailSessionRecipient, error)
+	// The domain whose postmaster a bare RCPT TO:<Postmaster> names in a session whose SNI names no MX host, as a
+	// direct-MX sender may send none: this receiver's own zone, <net>.<root>, or a scope receiver's
+	// <scope>.<net>.<root> (owner decision 446). An error is temporary, as Resolve's is. Nil, or an empty answer,
+	// leaves such a bare postmaster unknown (550 5.1.1).
+	PostmasterDomain func(ctx context.Context) (string, error)
 	// GET /mail/status (SidecarApi.MailStatus).
 	Status func(ctx context.Context) (*MailNetworkStatus, error)
 	// GET /sidecar/limits (SidecarApi.Limits).
@@ -394,7 +404,8 @@ func (self *MailSession) Mail(from string, options *smtp.MailOptions) error {
 	return nil
 }
 
-// See the file header's rcpt row.
+// See the file header's bare and rcpt rows. The two checks before the bare form's mapping read no address, so the
+// bare form meets them as the full address does.
 func (self *MailSession) Rcpt(to string, options *smtp.RcptOptions) error {
 	mailTaken, recipientCount := func() (bool, int) {
 		self.stateLock.Lock()
@@ -407,7 +418,18 @@ func (self *MailSession) Rcpt(to string, options *smtp.RcptOptions) error {
 	if self.limits.recipientCount <= recipientCount {
 		return mailSessionReplyTooMany
 	}
-	recipient, err := self.server.args.Resolve(self.ctx, to)
+	address := to
+	if to == MailSmtpBarePostmaster {
+		domain, err := self.postmasterDomain()
+		if err != nil {
+			return mailSessionReplyTryLater
+		}
+		if domain == "" {
+			return mailSessionReplyUnknown
+		}
+		address = MailSmtpBarePostmaster + "@" + domain
+	}
+	recipient, err := self.server.args.Resolve(self.ctx, address)
 	if err != nil {
 		return mailSessionReplyTryLater
 	}
@@ -438,6 +460,28 @@ func (self *MailSession) Rcpt(to string, options *smtp.RcptOptions) error {
 	target.Recipients = append(target.Recipients, recipient.Address)
 	transaction.recipientCount += 1
 	return nil
+}
+
+// The domain the session serves, whose postmaster a bare RCPT TO:<Postmaster> names (RFC 5321 §4.5.1; owner decision
+// 446). A sender's SNI names the MX host it looked up, which is <mx>.<domain>: mx.<net>.<root> serves <net>.<root>
+// and every burner under its wildcard, an alias's or a scope's mx host its zone, and a custom MX host its domain
+// (§12.8 step 4, as MailStrictPolicy reads it). So a receiver serving several domains picks the one this sender
+// reached. With no SNI, or one of a single label, it is the receiver's own zone from PostmasterDomain, and empty
+// when that names none. Either way the address then meets every rule the full address meets, Resolve's grammar
+// first, so a strange SNI only picks an address the sender could have written whole.
+func (self *MailSession) postmasterDomain() (string, error) {
+	host := mailStrictHost(self.stream.Tls.ConnectionState().ServerName)
+	if _, domain, ok := strings.Cut(host, "."); ok && domain != "" {
+		return domain, nil
+	}
+	if self.server.args.PostmasterDomain == nil {
+		return "", nil
+	}
+	domain, err := self.server.args.PostmasterDomain(self.ctx)
+	if err != nil {
+		return "", err
+	}
+	return mailStrictHost(domain), nil
 }
 
 // See the file header's data and reply rows. go-smtp reads on to the message's end after a refusal, so a sender

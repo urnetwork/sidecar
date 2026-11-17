@@ -81,6 +81,18 @@ func newMailSidecarReceiverFactory(sidecar *Sidecar) mailReceiverFactory {
 				}
 				return &MailSessionRecipient{Known: lookup.Known, Address: recipient.Address(), RepoId: lookup.MailboxRepoId}, nil
 			},
+			// a bare RCPT TO:<Postmaster> with no SNI: this network receiver's own zone, <label>.<root>, under the root
+			// Resolve parses with, from GET /dns/zone as the certificate's names are (owner decision 446)
+			PostmasterDomain: func(ctx context.Context) (string, error) {
+				zone, err := dns.Zone(ctx)
+				if err != nil {
+					return "", err
+				}
+				if zone.Label == "" {
+					return "", nil
+				}
+				return MailZone{Root: canonicalNetworkLabelRoot(root), Net: zone.Label}.Domain(), nil
+			},
 			Status:      args.Api.MailStatus,
 			Limits:      args.Api.Limits,
 			Checker:     NewMailAuthChecker(stub, args.Clock, receive.Auth),
