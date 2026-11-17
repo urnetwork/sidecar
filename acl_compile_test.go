@@ -293,7 +293,8 @@ const aclWorkedExampleSource = `{
   "tagOwners": { "tag:recurd": ["group:eng"], "tag:db": ["autogroup:admin"],
                  "tag:api": ["autogroup:admin"], "tag:audit": ["autogroup:admin"] },
   "grants": [
-    { "src": ["autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] },
+    { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"],
+      "via": ["autogroup:self"], "allow": ["dial", "route"] },
     { "src": ["tag:recurd"], "dst": ["evs:repo-x"], "allow": ["write"] },
     { "src": ["group:eng"], "dst": ["sock:db"], "allow": ["dial"] },
     { "src": ["tag:db"],    "dst": ["sock:db"], "allow": ["listen"] },
@@ -538,7 +539,10 @@ func TestCompileAclWorkedExample(t *testing.T) {
 		{name: "the owner dials sock:db", decision: state.MayDialSocket(AclSidecarSubject(example.ownerDevice), dbToken, aclTestNow), allowed: false},
 		{name: "tag:db listens on sock:db", decision: state.MayListen(AclSidecarSubject(example.dbAgent), AclSocketName{NameToken: dbToken}, aclTestNow), allowed: true},
 		{name: "dana reaches the db listener", decision: state.Reach(AclSidecarSubject(example.danaLaptop), AclSidecarSubject(example.dbAgent), aclTestNow), allowed: true},
-		{name: "dana's laptop reaches her phone", decision: state.Reach(AclSidecarSubject(example.danaLaptop), AclSidecarSubject(example.danaPhone), aclTestNow), allowed: false},
+		// grant 1 names autogroup:member beside autogroup:untagged, which D-ACL-20 narrowed to app devices, so a member's
+		// own sidecars reach each other (owner decision 344), and autogroup:self keeps another member's out
+		{name: "dana's laptop reaches her phone", decision: state.Reach(AclSidecarSubject(example.danaLaptop), AclSidecarSubject(example.danaPhone), aclTestNow), allowed: true},
+		{name: "amir's laptop reaches dana's phone", decision: state.Reach(AclSidecarSubject(example.amirLaptop), AclSidecarSubject(example.danaPhone), aclTestNow), allowed: false},
 		{name: "partner-y dials tag:api", decision: state.Reach(AclRemoteSubject(example.partnerY), AclSidecarSubject(example.dbAgent), aclTestNow), allowed: false},
 		{name: "the recurd agent reaches its sponsor", decision: state.Reach(AclSidecarSubject(example.recurdAgent), AclSidecarSubject(example.danaPhone), aclTestNow), allowed: true},
 	}
@@ -547,7 +551,6 @@ func TestCompileAclWorkedExample(t *testing.T) {
 			t.Errorf("%s: allowed %t (%s)", c.name, c.decision.Allowed, c.decision.Reason)
 		}
 	}
-	// grant 1 names autogroup:untagged, app devices, which a member's sidecars are not (D-ACL-20)
 	if access := state.EvsAccess(AclSidecarSubject(example.recurdAgent), example.repoX, AclTokenAudienceEvs, aclTestNow); !access.Rights.Has(AclEvsWrite) {
 		t.Errorf("tag:recurd's write on repo-x: %b", access.Rights)
 	}
