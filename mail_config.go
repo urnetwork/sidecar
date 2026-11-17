@@ -72,7 +72,8 @@ var (
 	ErrMailConfigNoGate = errors.New("mail config: no gate")
 	// An outward action whose effect may or may not have happened: the same call again completes it.
 	ErrMailConfigUncertain = errors.New("mail config: the effect's outcome is uncertain")
-	// A path with more versions than a reader replays: its record is unknown.
+	// A path with more versions than a reader replays, or one whose versions below a creation or a removal evs could
+	// not read (History's BelowUnknown; QD-1006): its record is unknown.
 	ErrMailConfigReplayBound = errors.New("mail config: a record past the replay bound")
 )
 
