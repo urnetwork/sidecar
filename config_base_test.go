@@ -1,7 +1,9 @@
 // DESIGN-DETAILS 5.6's reader tests on the test network: a base carries its tail's verdicts, which a reader present at
 // the tail compares with its own and a new device takes, so both reach one S(b); the fold rule and the tail cap; the
 // replay ring carried in rows; a fold's BASE records and the chain recomputed through them; and re-application
-// recomputing what effects derive on the rebuilt rows.
+// recomputing what effects derive on the rebuilt rows, an acl statement's from its body's verdict and those rows alone
+// (QD-954): a Suspend past a moved tag owner, a stale Unsuspend, a k-of-n Suspend a cosign completes in the tail, and a
+// GrantActivate whose requests rule a head deleted or whose check a reader could not pass.
 
 package sidecar
 
@@ -10,6 +12,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -352,6 +355,307 @@ func TestReapplyRecomputesRowSignersOnTheNewRows(t *testing.T) {
 		t.Errorf("the re-applied rows differ from the reader's own:\n%v\n%v", before.SidecarRow(agent.sidecarId), after.SidecarRow(agent.sidecarId))
 	}
 	net.everyReaderAgrees()
+}
+
+// Whether readers of every kind hold the net's verdict at each position after the newest base, and its state, as
+// everyReaderAgrees asks, each reader under the settings its kind takes here: another long-running reader, which judges
+// every entry at its own position, under present, and a new device and a rows-only gate started at the newest base from
+// what the net's reader retains, which judge nothing of its tail, under started.
+func (self *testConfigNet) everyReaderAgreesUnder(present *ConfigLogSettings, started *ConfigLogSettings) {
+	self.t.Helper()
+	longRunning, err := NewConfigLog(present, self.signedGenesis)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	for _, entryBytes := range self.entries {
+		if _, err := longRunning.Apply(entryBytes, self.source); err != nil {
+			self.t.Fatal(err)
+		}
+	}
+	retained := self.log.Retained()
+	restored, err := RestoreConfigLog(started, retained, self.source)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	gate, err := RestoreConfigLogRowsOnly(started, retained, self.rowsOnlySource(), nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	from := self.log.State().Base().GetVersion() + 1
+	for i, reader := range []*ConfigLog{longRunning, restored, gate} {
+		for n := from; n <= self.n; n += 1 {
+			want, got := self.log.keptEntry(n), reader.keptEntry(n)
+			if want == nil || got == nil {
+				self.t.Fatalf("reader %d: no verdict at %d", i, n)
+			}
+			if want.verdict.Accepted() != got.verdict.Accepted() ||
+				testConfigRefusalClass(want.verdict.Refusal) != testConfigRefusalClass(got.verdict.Refusal) {
+				self.t.Errorf("reader %d at %d: %v, the net's reader %v", i, n, got.verdict.Refusal, want.verdict.Refusal)
+			}
+		}
+		testConfigStatesEqual(self.t, reader.State(), self.log.State())
+	}
+}
+
+// The settings of a log that runs §16.6's spend check as the test's, as newAclTestGrantNet's does.
+func testConfigSpendingLogSettings() *ConfigLogSettings {
+	settings := testConfigLogSettings()
+	settings.AclSpendCheck = &aclTestSpendCheck{}
+	return settings
+}
+
+// QD-954's first case: a base's tail holds a tagged agent's admission and its sponsor's Suspend, class 1, and the base's
+// head moves the tag to another member, so the admission's check refuses on the rebuilt rows. Neither is judged again:
+// the agent stays admitted with its sponsor, and the Suspend folds from its body's verdict and the rebuilt rows to the
+// row it had at its own position, its class, signer and position, at a long-running reader, a new device and a rows-only
+// gate alike.
+func TestReapplyFoldsASuspendAlikePastAMovedTagOwner(t *testing.T) {
+	net := newTestConfigNet(t)
+	tagId := testConfigId("tag t")
+	tagOwner, ownerDevice := net.consentedMember("tag owner")
+	net.withTagOwner(tagId, tagOwner)
+	previousBase := net.log.State().Base()
+	agent := net.device("agent", Id{})
+	net.mustPost(ownerDevice, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(agent, []Id{tagId}, false, net.timeMs+60*60*1000, 0))
+	net.mustPost(ownerDevice, bridge.SignedType_SIGNED_SUSPEND, &bridge.Suspend{Header: net.header(), Subject: agent.sidecarId.Bytes(), SuspendId: aclTestSuspendId("sponsor")})
+	before := net.log.State().aclRows.GetSuspensions()
+	if len(before) != 1 || before[0].GetSignerClass() != AclSuspendClassOwner || !bytes.Equal(before[0].GetSigner(), ownerDevice.sidecarId.Bytes()) {
+		t.Fatalf("the sponsor's Suspend at its own position: %+v", before)
+	}
+
+	// the next head moves t to another member; the fold stays where the previous base left it
+	rows := proto.Clone(net.log.baseRowsOf(t, previousBase)).(*bridge.ProjectionRows)
+	aclRows := &protocol.AclRows{}
+	if err := proto.Unmarshal(rows.GetAcl(), aclRows); err != nil {
+		t.Fatal(err)
+	}
+	for _, atom := range aclRows.GetAtoms() {
+		if bytes.Equal(atom.GetAtom(), tagId.Bytes()) {
+			atom.TagOwnerMemberIds = [][]byte{testConfigId("member m3").Bytes()}
+		}
+	}
+	rows.Acl = testConfigMarshal(t, aclRows)
+	if verdict := net.pushBase(net.owner, rows, previousBase.GetFoldedThrough(), previousBase.GetConfigVersion()+1, 0); !verdict.Accepted() {
+		t.Fatal(verdict.Refusal)
+	}
+	state := net.log.State()
+	acl, err := state.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acl.CanApplyTag(ownerDevice.sidecarId, tagId) {
+		t.Fatal("the head left the tag with its owner")
+	}
+	if sponsor, ok := state.Sponsor(agent.sidecarId); !ok || sponsor != tagOwner {
+		t.Errorf("the re-applied admission's sponsor: %s, %v", sponsor, ok)
+	}
+	if after := state.aclRows.GetSuspensions(); len(after) != 1 || !proto.Equal(after[0], before[0]) {
+		t.Errorf("the re-applied Suspend %+v, at its own position %+v", after, before)
+	}
+	if !state.Suspended(agent.sidecarId) {
+		t.Error("the agent stands again past the base")
+	}
+	net.everyReaderAgrees()
+}
+
+// An Unsuspend with a stale id in a base's tail, a no-op at its own position, lifts nothing re-applied either: the
+// Suspend of another id before it and the Suspend of its own id after it stay in force, at a long-running reader, a new
+// device and a rows-only gate alike.
+func TestReapplyOfAStaleUnsuspendLiftsNothingAlike(t *testing.T) {
+	net := newTestConfigNet(t)
+	member, laptop := net.consentedMember("m")
+	phone := net.device("m phone", member)
+	net.admitDevice(laptop, phone, 0)
+	foldedThrough := net.n
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SUSPEND, &bridge.Suspend{Header: net.header(), Subject: phone.sidecarId.Bytes(), SuspendId: aclTestSuspendId("other")})
+	stale := net.mustPost(net.owner, bridge.SignedType_SIGNED_UNSUSPEND, &bridge.Unsuspend{Header: net.header(), Subject: phone.sidecarId.Bytes(), SuspendId: aclTestSuspendId("stale")})
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SUSPEND, &bridge.Suspend{Header: net.header(), Subject: phone.sidecarId.Bytes(), SuspendId: aclTestSuspendId("stale")})
+	before := testConfigMarshal(t, &protocol.AclRows{Suspensions: net.log.State().aclRows.GetSuspensions()})
+	if len(net.log.State().aclRows.GetSuspensions()) != 2 {
+		t.Fatalf("the Suspends in force: %+v", net.log.State().aclRows.GetSuspensions())
+	}
+
+	net.fold(net.owner, foldedThrough, 2)
+	state := net.log.State()
+	if kept := net.log.keptEntry(stale.Pin.GetVersion()); kept == nil || !kept.verdict.Accepted() {
+		t.Error("the stale Unsuspend's own verdict changed at the base")
+	}
+	if after := testConfigMarshal(t, &protocol.AclRows{Suspensions: state.aclRows.GetSuspensions()}); !bytes.Equal(after, before) {
+		t.Errorf("the Suspends past the base: %+v", state.aclRows.GetSuspensions())
+	}
+	if !state.Suspended(phone.sidecarId) {
+		t.Error("the stale Unsuspend lifted a Suspend")
+	}
+	net.everyReaderAgrees()
+}
+
+// A k-of-n Suspend whose cosign completes it in a base's tail reaches its fold through the cosign, which applies the
+// proposed statement rather than re-applying it: its verdict is the body's still, so ReapplyStatement derives its
+// class, k of n, on the rebuilt rows, and it folds to the row it had at its own position at a long-running reader, a
+// new device and a rows-only gate alike.
+func TestReapplyOfACompletedKOfNSuspendKeepsItsClass(t *testing.T) {
+	team := newTestConfigTeam(t)
+	foldedThrough := team.n
+	subject := team.adminC.sidecarId
+	_, proposalId := team.propose(team.owner, bridge.SignedType_SIGNED_SUSPEND, &bridge.Suspend{Header: team.header(), Subject: subject.Bytes(), SuspendId: aclTestSuspendId("k of n")})
+	if verdict := team.cosign(team.adminB, proposalId); !verdict.Accepted() || !verdict.Completed() {
+		t.Fatalf("the completing cosign: %v", verdict.Refusal)
+	}
+	before := team.log.State().aclRows.GetSuspensions()
+	if len(before) != 1 || before[0].GetSignerClass() != AclSuspendClassAuthority {
+		t.Fatalf("the k-of-n Suspend at its own position: %+v", before)
+	}
+
+	team.fold(team.owner, foldedThrough, 2)
+	state := team.log.State()
+	if after := state.aclRows.GetSuspensions(); len(after) != 1 || !proto.Equal(after[0], before[0]) {
+		t.Errorf("the re-applied Suspend %+v, at its own position %+v", after, before)
+	}
+	if !state.Suspended(subject) {
+		t.Error("the subject stands again past the base")
+	}
+	team.everyReaderAgrees()
+}
+
+// The same through a tick: a k-of-n Suspend that an AdminSet member's recovery key cosigns, so Recovery's window holds
+// it, activated by a tick 72 h on, all in a base's tail. The tick applies the proposed statement rather than
+// re-applying it, on the body's verdict, so ReapplyStatement derives its class there, and it folds to the row it had
+// at the tick at a long-running reader, a new device and a rows-only gate alike.
+func TestReapplyOfATickActivatedSuspendKeepsItsClass(t *testing.T) {
+	team := newTestConfigTeam(t)
+	key := testConfigRecovery(team.adminB.memberId, "admin b")
+	// an AdminSet member's binding is itself k of n
+	_, bindId := team.propose(team.adminB, bridge.SignedType_SIGNED_RECOVERY_BIND, team.recoveryBind(key))
+	if bound := team.cosign(team.owner, bindId); !bound.Accepted() || !bound.Completed() {
+		t.Fatalf("the binding: %v", bound.Refusal)
+	}
+	foldedThrough := team.n
+	subject := team.adminC.sidecarId
+	proposed := team.mustPost(team.owner, bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, team.longProposal(bridge.SignedType_SIGNED_SUSPEND,
+		&bridge.Suspend{Header: team.header(), Subject: subject.Bytes(), SuspendId: aclTestSuspendId("windowed")}))
+	proposalId := proposed.StatementId[:]
+	if cosigned := team.postByRecovery(key, bridge.SignedType_SIGNED_AUTHORITY_COSIGN, &protocol.AuthorityCosign{Header: team.header(), ProposalId: proposalId}); !cosigned.Accepted() || cosigned.Completed() {
+		t.Fatalf("the recovery key's cosign: %v, completed %v", cosigned.Refusal, cosigned.Completed())
+	}
+	if team.log.State().Suspended(subject) {
+		t.Fatal("a recovery key's cosign completed the Suspend")
+	}
+	team.wait(72 * testConfigHourMs)
+	if activated := team.activate(proposalId); !activated.Accepted() {
+		t.Fatalf("the activation: %v", activated.Refusal)
+	}
+	before := team.log.State().aclRows.GetSuspensions()
+	if len(before) != 1 || before[0].GetSignerClass() != AclSuspendClassAuthority {
+		t.Fatalf("the activated Suspend at the tick: %+v", before)
+	}
+
+	team.fold(team.owner, foldedThrough, 2)
+	state := team.log.State()
+	if after := state.aclRows.GetSuspensions(); len(after) != 1 || !proto.Equal(after[0], before[0]) {
+		t.Errorf("the re-applied Suspend %+v, at the tick %+v", after, before)
+	}
+	if !state.Suspended(subject) {
+		t.Error("the subject stands again past the base")
+	}
+	team.everyReaderAgrees()
+}
+
+// A grant activated under the requests rule a GrantActivate's action names, on a network whose log runs the test's
+// spend check: the activation sequenced, and its position.
+func testConfigGrantActivation(t *testing.T, requestId []byte) (*testConfigNet, *protocol.GrantActivate, testConfigDevice, uint64) {
+	request := &protocol.AclRequestRule{
+		RuleId:        requestId,
+		SrcAtoms:      [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER).Bytes()},
+		Targets:       []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)},
+		Actions:       []uint32{uint32(protocol.AclAction_ACL_ACTION_DIAL)},
+		ApproverAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF).Bytes()},
+	}
+	net := newAclTestGrantNet(t, request)
+	phone := net.device("owner phone", net.ownerMemberId)
+	net.admitDevice(net.owner, phone, 0)
+	activate := newAclTestGrant(t, requestId, net.owner.sidecarId, []string{aclTestDst(phone.sidecarId)}, []string{"dial"}, 0).
+		approve(t, net.ownerMemberId, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, net.timeMs+60*60*1000).activate()
+	activate.Header = net.header()
+	activatedAt := net.mustPost(net.owner, bridge.SignedType_SIGNED_GRANT_ACTIVATE, activate).Pin.GetVersion()
+	return net, activate, phone, activatedAt
+}
+
+// Whether the network's owner device reaches the phone at state.
+func testConfigReaches(t *testing.T, net *testConfigNet, state *ConfigState, phone testConfigDevice) bool {
+	t.Helper()
+	acl, err := state.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return acl.Reach(AclSidecarSubject(net.owner.sidecarId), AclSidecarSubject(phone.sidecarId), time.UnixMilli(net.timeMs)).Allowed
+}
+
+// QD-954's GrantActivate whose source rule is gone: a base below the activation whose head deleted its requests rule
+// ends the grant there, as the base's compile would (FS-14), and keeps its grant_id spent with its activation's
+// retention, so a re-signed copy under a fresh header is refused as a replay; a long-running reader, a new device and
+// a rows-only gate fold it alike.
+func TestReapplyEndsAGrantWhoseRequestsRuleIsGoneAndKeepsItSpent(t *testing.T) {
+	net, activate, phone, activatedAt := testConfigGrantActivation(t, testConfigId("gone requests rule").Bytes())
+	spent := net.log.State().aclRows.GetSpentGrants()
+	if !testConfigReaches(t, net, net.log.State(), phone) || len(spent) != 1 {
+		t.Fatalf("the activated grant: %d spent rows", len(spent))
+	}
+
+	folded := net.statesAt[activatedAt-1]
+	rows := folded.Rows()
+	aclRows := proto.Clone(folded.aclRows).(*protocol.AclRows)
+	aclRows.Requests = nil
+	rows.Acl = testConfigMarshal(t, aclRows)
+	if verdict := net.pushBase(net.owner, rows, activatedAt-1, folded.Base().GetConfigVersion()+1, folded.threshold); !verdict.Accepted() {
+		t.Fatal(verdict.Refusal)
+	}
+	state := net.log.State()
+	if testConfigReaches(t, net, state, phone) || 0 < len(state.aclRows.GetRules()) {
+		t.Errorf("the grant outlived its requests rule: %d rules", len(state.aclRows.GetRules()))
+	}
+	if after := state.aclRows.GetSpentGrants(); len(after) != 1 || !proto.Equal(after[0], spent[0]) {
+		t.Errorf("the spent rows past the base %+v, at the activation %+v", after, spent)
+	}
+	if kept := net.log.keptEntry(activatedAt); kept == nil || !kept.verdict.Accepted() {
+		t.Error("the activation's own verdict changed at the base")
+	}
+
+	resigned := proto.Clone(activate).(*protocol.GrantActivate)
+	resigned.Header = net.header()
+	net.mustRefuse(net.owner, bridge.SignedType_SIGNED_GRANT_ACTIVATE, resigned, ErrConfigReplay)
+	net.everyReaderAgreesUnder(testConfigSpendingLogSettings(), testConfigSpendingLogSettings())
+}
+
+// A GrantActivate re-applied where its check would refuse folds as it took effect: a base below the activation whose
+// head keeps its requests rule, re-applied by a new device and a rows-only gate that install no spend check, so §8.8's
+// check would refuse every decision there (AclSpendCheckUnbuilt), folds the grant's rule, atom and spent row as the
+// long-running reader that judged it does, and the grant reaches at all three alike (QD-954: the grant no longer ends
+// at a base for that reason alone).
+func TestReapplyFoldsAGrantWhereItsCheckWouldRefuse(t *testing.T) {
+	net, activate, phone, activatedAt := testConfigGrantActivation(t, testConfigId("kept requests rule").Bytes())
+	folded := net.statesAt[activatedAt-1]
+	acl, err := folded.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := &AclStatement{Type: bridge.SignedType_SIGNED_GRANT_ACTIVATE, Body: activate,
+		Signers: []ConfigSigner{{Kind: ConfigSignerSidecar, SidecarId: net.owner.sidecarId}}, N: activatedAt, TimeMs: net.timeMs}
+	if _, err := acl.CheckStatement(statement, AclSpendCheckUnbuilt{}); !errors.Is(err, ErrConfigAuthority) {
+		t.Fatalf("the activation judged with no spend check: %v", err)
+	}
+	activated := testConfigMarshal(t, net.log.State().aclRows)
+
+	if verdict := net.pushBase(net.owner, folded.Rows(), activatedAt-1, folded.Base().GetConfigVersion()+1, folded.threshold); !verdict.Accepted() {
+		t.Fatal(verdict.Refusal)
+	}
+	state := net.log.State()
+	if !testConfigReaches(t, net, state, phone) {
+		t.Error("the re-applied grant does not reach")
+	}
+	if !bytes.Equal(testConfigMarshal(t, state.aclRows), activated) {
+		t.Error("the re-applied grant folds other rows than its activation did")
+	}
+	net.everyReaderAgreesUnder(testConfigSpendingLogSettings(), testConfigLogSettings())
 }
 
 // DESIGN-DETAILS 5.6's TestAFoldHoldsItsBaseRecords: a reader's head check needs the BASE entries among a fold's

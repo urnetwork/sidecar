@@ -67,6 +67,9 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ApprovalRequestTimeout:  24 * time.Hour,
 				ApprovalCompleteTimeout: 10 * time.Minute,
 				ApprovalPollInterval:    30 * time.Second,
+				// §11.10's renew row, for a phone's approval leases (MCP-M8-01)
+				ApprovalPhoneLeaseRenewAge: 24 * time.Hour,
+				ApprovalPhoneLeaseExpiry:   7 * 24 * time.Hour,
 				// MCP-M3-09's reading: §7.9 requires a presence key's not_after and states none
 				PresenceKeyLifetime: 365 * 24 * time.Hour,
 				// I-7's matcher (record_secret_match.go)

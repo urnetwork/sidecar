@@ -337,9 +337,9 @@ func TestAclRepoPrefixRulesMovesNoRightAndReappliesAlike(t *testing.T) {
 		t.Errorf("a set moved the row: %v", stripped)
 	}
 
-	// a re-application's verdict is the body's first signer and nothing the check found (config_base.go's
-	// configAclBodyVerdict), and it appends the same row
-	reapplied, _, err := state.ReapplyStatement(statement, &AclStatementVerdict{Signer: cast.adminDevice})
+	// a re-application passes the verdict the body and signers give, its first signer and nothing the check found
+	// (config_base.go's configAclBodyVerdict), and ReapplyStatement, deriving nothing more for a set, appends the same row
+	reapplied, _, err := state.ReapplyStatement(statement, aclBodyVerdict(statement))
 	if err != nil {
 		t.Fatal(err)
 	}

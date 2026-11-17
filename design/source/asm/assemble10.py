@@ -19,7 +19,7 @@ design = pathlib.Path(sys.argv[1])
 asm = pathlib.Path(sys.argv[2])
 out_path = pathlib.Path(sys.argv[3])
 research_rel = sys.argv[4].rstrip('/')
-MAXD = 524
+MAXD = 552
 VDIR = asm / 'v7'
 
 

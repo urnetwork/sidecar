@@ -62,14 +62,14 @@ type testSearchRecord struct {
 	plaintext []byte
 }
 
-func newTestSearchRecord(t *testing.T, key SearchCacheKey, partition SearchCachePartition, plaintext []byte) *testSearchRecord {
+func newTestSearchRecord(t testing.TB, key SearchCacheKey, partition SearchCachePartition, plaintext []byte) *testSearchRecord {
 	t.Helper()
 	return newTestSearchRecordAt(t, key, partition, plaintext, 1)
 }
 
 // newTestSearchRecord's record under generation g of evsTestRepoKey, as a general repo's kind-5 segment carries one:
 // its header sealed under manifest_g and its object key's 72 B block wrapped under fek_g (QD-524).
-func newTestSearchRecordAt(t *testing.T, key SearchCacheKey, partition SearchCachePartition, plaintext []byte, generation uint64) *testSearchRecord {
+func newTestSearchRecordAt(t testing.TB, key SearchCacheKey, partition SearchCachePartition, plaintext []byte, generation uint64) *testSearchRecord {
 	t.Helper()
 	repoKey := evsTestRepoKey(key.RepoId, generation)
 	manifestKey, err := NewEvsManifestKey(repoKey)
