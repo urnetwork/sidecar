@@ -13,7 +13,9 @@
 //	reply    the head summary; every statement after pin_version, or `behind` with the first missing version when
 //	         the pin is older than the window, beside those the window holds; per path the newest version by the
 //	         newest rule (an older one by number from its entry or the window, a removed path's below its removal's
-//	         path version as a standing path's, QD-672), the statement that wrote it when not
+//	         path version as a standing path's, QD-672; a number the path holds no version at its newest version or
+//	         removal below it, into the removal before a creation and the life that removal ended, owner decision
+//	         380, QD-888: by number below), the statement that wrote it when not
 //	         among those returned, its Merkle proof when the list is not inline, and the adjacent-leaf proofs of
 //	         each later statement whose list is not inline and whose prefixes reach the path, with the inclusion
 //	         proof of a prefix's delta in place of them where the statement changed that prefix so (QD-681); a
@@ -53,6 +55,19 @@
 // versions after folded_through are all the current epoch's (9.3's W1) and keep the current token path. evs never
 // asks a client for a token.
 //
+// By number (§11.9's reply row; owner decision 380; QD-888). A read naming a version is answered by the path's
+// newest when that is a file version at or below the number, a removal at or below it, or a standing directory;
+// else by the version at exactly that number from the entry's folded versions, the window or, with commit_version,
+// that push's record (olderVersion); else by the path's newest version or removal below the number (belowVersion):
+// the newest rule's own sources first, each event below the last one read, then, once the entry and the window
+// after its horizon hold no more, which is so below a creation whose fold replaced what the entry held, the ref's
+// statements below them, newest first, the window's and then their log pages' (scanBelow). So History walks from a
+// creation into the removal before it and the life that removal ended. A path with nothing at or below the number
+// answers with no version. The scan finds the path only in the epochs the request names it in, and ends at a
+// statement of another, answering none below it; it reads at most ReadVersionScanCount versions below the window,
+// past which the read answers 503, unfinished, rather than a path that may hold an earlier life read as holding
+// none (question evs-read-earlier-lives-scan-bound).
+//
 // A placeholder head reads as absent (§11.8's first row). The route takes r, so a deposit-only principal is refused
 // at the guard (FS-23). The {refs} streams form is read_streams.go's and GET .../refs?moved_after= refs_moved.go's
 // (EVS1-M6-01).
@@ -87,6 +102,10 @@ const (
 
 // Every read route takes r, which rw and admin imply; deposit alone is refused.
 const evsReadRights = sidecar.AclEvsRead | sidecar.AclEvsWrite | sidecar.AclEvsAdmin
+
+// A read by number whose scan below the window passed EvsSettings.ReadVersionScanCount versions with nothing found:
+// answered 503, the read unfinished (see the file header).
+var errReadScanBound = errors.New("evs: a read by number past its scan bound")
 
 // The read routes: the read, GET .../refs (refs.go) and GET .../log (log.go), each refused while the repo is deleted,
 // shredding or shredded (see the file header).
@@ -563,40 +582,23 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 	since := uint64(0)
 	deltaVersions := map[uint64]bool{}
 	switch {
-	case path.version != 0 && ((newest.Exists && !newest.Directory && newest.Version != path.version) ||
-		(!newest.Exists && path.version < newest.RemovalVersion)):
-		// an older version by number: from its entry's folded versions, each of which its own push committed. A
-		// removed path's versions below its removal are served so as a standing path's are, so History walks a
-		// removed path's life rather than meeting its removal again (QD-672); the removal's own path version and any
-		// past it still answer the removal
-		if err := self.olderVersion(path, reply); err != nil {
-			return nil, err
-		}
-		// format 2: a replaced versionless version answers `collected` from its T (read_collected.go)
-		if err := self.answerCollected(path, reply); err != nil {
-			return nil, err
-		}
-		// format 2: a version a DROP lists answers its drop's state (read_drop.go)
-		if err := self.answerDropped(path, reply); err != nil {
+	case path.version != 0 && !newestAnswersNumber(newest, path.version):
+		// a version by number the newest does not answer (see the file header): a removed path's versions below its
+		// removal are served so as a standing path's are, so History walks a removed path's life rather than meeting
+		// its removal again (QD-672), and a number the path holds no version at answers the newest below it
+		if err := self.versionByNumber(path, reply); err != nil {
 			return nil, err
 		}
 		return reply, nil
 	case newest.Exists:
-		version, located, err := self.versionReply(path, newest)
+		located, err := self.answerVersion(path, reply, newest)
 		if err != nil {
 			return nil, err
 		}
 		if !located {
-			return reply, self.statementAlone(reply, newest.CommitVersion)
+			return reply, nil
 		}
-		reply.Version = version
 		since = newest.CommitVersion
-		if located, err := self.attachStatement(reply, path, newest.CommitVersion, evsLeafPlaceOfVersion(version), false); err != nil || !located {
-			if err != nil {
-				return nil, err
-			}
-			return reply, self.statementAlone(reply, newest.CommitVersion)
-		}
 		if listing := path.listing; listing != nil {
 			// the folded table alone, which the reader opens under entry_epoch, and the deltas each under its own
 			// statement's: the rows the deltas add never ride twice, nor under a table's epoch that is not theirs
@@ -614,22 +616,14 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 			}
 		}
 	case newest.RemovalVersion != 0:
-		removal := &protocol.EvsRemovalMarker{
-			PushId:         newest.PushId.Bytes(),
-			RemovalVersion: newest.CommitVersion,
-			PathVersion:    newest.RemovalVersion,
+		located, err := self.answerRemoval(path, reply, newest)
+		if err != nil {
+			return nil, err
 		}
-		if marker := newest.Marker; marker != nil {
-			removal.LeafPart, removal.LeafIndex = marker.GetLeafPart(), marker.GetLeafIndex()
+		if !located {
+			return reply, nil
 		}
-		reply.Removal = removal
 		since = newest.CommitVersion
-		if located, err := self.attachStatement(reply, path, newest.CommitVersion, evsLeafPlaceOfMarker(removal), true); err != nil || !located {
-			if err != nil {
-				return nil, err
-			}
-			return reply, self.statementAlone(reply, newest.CommitVersion)
-		}
 	case head.GetBase() != nil:
 		reply.Base = head.GetBase()
 	}
@@ -639,6 +633,71 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 	}
 	reply.Absences = absences
 	return reply, nil
+}
+
+// Whether the path's newest at the head answers a read by number (see the file header): a file version at or below
+// the number, a removal at or below it, or a standing directory, which a read by number answers as it stands.
+func newestAnswersNumber(newest *EvsNewest, number uint64) bool {
+	switch {
+	case newest.Exists:
+		return newest.Directory || newest.Version <= number
+	case newest.RemovalVersion != 0:
+		return newest.RemovalVersion <= number
+	}
+	return false
+}
+
+// The number of the version or removal newest names: a version's own, a removal's one past the path's last.
+func evsNewestNumber(newest *EvsNewest) uint64 {
+	if newest.Exists {
+		return newest.Version
+	}
+	return newest.RemovalVersion
+}
+
+// Puts newest's version in reply with the statement that wrote it, when not among those returned, and its proof;
+// else, where its change cannot be placed, that statement alone (see the file header), false and the reply
+// finished.
+func (self *readAttempt) answerVersion(path *readPath, reply *protocol.EvsReadPathReply, newest *EvsNewest) (bool, error) {
+	version, located, err := self.versionReply(path, newest)
+	if err != nil {
+		return false, err
+	}
+	if !located {
+		return false, self.statementAlone(reply, newest.CommitVersion)
+	}
+	reply.Version = version
+	located, err = self.attachStatement(reply, path, newest.CommitVersion, evsLeafPlaceOfVersion(version), false)
+	if err != nil {
+		return false, err
+	}
+	if !located {
+		return false, self.statementAlone(reply, newest.CommitVersion)
+	}
+	return true, nil
+}
+
+// Puts newest's removal in reply, its push id, version and path version, with its statement and proof as
+// answerVersion puts a version's: the change removing the path, or the prefix holding it, found by the marker's leaf
+// place or the path's token path in the statement's epoch.
+func (self *readAttempt) answerRemoval(path *readPath, reply *protocol.EvsReadPathReply, newest *EvsNewest) (bool, error) {
+	removal := &protocol.EvsRemovalMarker{
+		PushId:         newest.PushId.Bytes(),
+		RemovalVersion: newest.CommitVersion,
+		PathVersion:    newest.RemovalVersion,
+	}
+	if marker := newest.Marker; marker != nil {
+		removal.LeafPart, removal.LeafIndex = marker.GetLeafPart(), marker.GetLeafIndex()
+	}
+	reply.Removal = removal
+	located, err := self.attachStatement(reply, path, newest.CommitVersion, evsLeafPlaceOfMarker(removal), true)
+	if err != nil {
+		return false, err
+	}
+	if !located {
+		return false, self.statementAlone(reply, newest.CommitVersion)
+	}
+	return true, nil
 }
 
 // A path's reply as the statement committed at commitVersion alone: what evs answers for a version or removal whose
@@ -845,12 +904,34 @@ func (self *readAttempt) absences(path *readPath, since uint64, deltaVersions ma
 	return absences, nil
 }
 
+// A read by number the newest does not answer (see the file header): the version at that number (olderVersion), else
+// the path's newest version or removal below it (belowVersion), and a served version's format-2 states.
+func (self *readAttempt) versionByNumber(path *readPath, reply *protocol.EvsReadPathReply) error {
+	served, err := self.olderVersion(path, reply)
+	if err != nil {
+		return err
+	}
+	if !served {
+		if err := self.belowVersion(path, reply); err != nil {
+			if errors.Is(err, errReadScanBound) && self.engine.log.V(1).Enabled() {
+				self.engine.log.Infof("[evs] read: repo %s ref %s: a read by number past its scan bound", sidecar.EvsKeyId(self.repoId), sidecar.EvsKeyId(self.refId))
+			}
+			return err
+		}
+	}
+	// format 2: a replaced versionless version answers `collected` from its T (read_collected.go)
+	if err := self.answerCollected(path, reply); err != nil {
+		return err
+	}
+	// format 2: a version a DROP lists answers its drop's state (read_drop.go)
+	return self.answerDropped(path, reply)
+}
+
 // An older version by number (§11.9's "older ones on request"; DESIGN-DETAILS 9.2.4's history): from the entry's
 // folded versions, by their leaf places, with the statement that wrote it and its proof; else from the window; else,
 // with commit_version, from that push's record by the path's token path in its epoch, or the statement alone when the
-// request names none there. One none of these holds answers the path with no version, which a reader takes as absent
-// at that number.
-func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPathReply) error {
+// request names none there. Whether one of these served it; one none of them holds is belowVersion's.
+func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPathReply) (bool, error) {
 	tokenPath := path.tokens.Current
 	if entry := path.read.Entry; entry != nil {
 		for _, version := range entry.GetVersions() {
@@ -866,24 +947,24 @@ func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPat
 			if version.GetElided() {
 				push, err := self.pushes.at(version.GetCommitVersion())
 				if err != nil {
-					return err
+					return false, err
 				}
 				if served.EntryVersion, err = self.entryVersionIn(push, path, place, version); err != nil {
-					return err
+					return false, err
 				}
 				if served.EntryVersion == nil {
-					return self.statementAlone(reply, version.GetCommitVersion())
+					return true, self.statementAlone(reply, version.GetCommitVersion())
 				}
 			}
 			reply.Version = served
 			located, err := self.attachStatement(reply, path, version.GetCommitVersion(), place, false)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if !located {
-				return self.statementAlone(reply, version.GetCommitVersion())
+				return true, self.statementAlone(reply, version.GetCommitVersion())
 			}
-			return nil
+			return true, nil
 		}
 	}
 	// the window's versions of the path after the entry's horizon, the current epoch's, newest first
@@ -895,11 +976,11 @@ func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPat
 		}
 		push, err := self.pushes.at(version)
 		if err != nil {
-			return err
+			return false, err
 		}
 		change, _, _, err := self.pushes.changeOf(push, tokenPath)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if change == nil || !change.WritesEntry() {
 			continue
@@ -910,36 +991,169 @@ func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPat
 		}
 		reply.Version = &protocol.EvsIndexVersion{PushId: push.statement.Push.GetPushId(), CommitVersion: version, EntryVersion: change.EntryVersion}
 		_, err = self.attachStatement(reply, path, version, evsLeafPlace{}, false)
-		return err
+		return true, err
 	}
 	return self.versionAtCommit(path, reply)
 }
 
 // History by commit_version (DESIGN-DETAILS 9.2.4): the version asked for, from the push the request says committed
-// it, located by the path's token path in that push's epoch; the statement alone when the request names none there,
-// and nothing when the push did not write that version of the path.
-func (self *readAttempt) versionAtCommit(path *readPath, reply *protocol.EvsReadPathReply) error {
+// it, located by the path's token path in that push's epoch; the statement alone when the request names none there.
+// Whether it served one: not when the request names no commit_version or that push did not write that version.
+func (self *readAttempt) versionAtCommit(path *readPath, reply *protocol.EvsReadPathReply) (bool, error) {
 	commitVersion := path.commitVersion
 	if commitVersion == 0 || self.head.Head.GetVersion() < commitVersion {
-		return nil
+		return false, nil
 	}
 	push, err := self.pushes.at(commitVersion)
 	if err != nil {
-		return err
+		return false, err
 	}
 	tokenPath := path.tokens.In(push.statement.Push.GetPathEpoch(), EvsHeadCurrentEpoch(self.head.Head))
 	if tokenPath == nil {
-		return self.statementAlone(reply, commitVersion)
+		return true, self.statementAlone(reply, commitVersion)
 	}
 	change, _, _, err := self.pushes.changeOf(push, tokenPath)
 	if err != nil || change == nil || !change.WritesEntry() {
-		return err
+		return false, err
 	}
 	entryVersion, err := parseEvsEntryVersion(change.EntryVersion)
 	if err != nil || entryVersion.GetVersion() != path.version {
-		return nil
+		return false, nil
 	}
 	reply.Version = &protocol.EvsIndexVersion{PushId: push.statement.Push.GetPushId(), CommitVersion: commitVersion, EntryVersion: change.EntryVersion}
 	_, err = self.attachStatement(reply, path, commitVersion, evsLeafPlace{}, false)
+	return true, err
+}
+
+// The path's newest version or removal below path.version, which it holds no version at (see the file header):
+// first the newest rule's own sources, the window after the entry's horizon and the entry, each event below the
+// last one read until one is at or below the number; then the ref's statements below what those hold (scanBelow).
+// None at or below the number answers with no version, which a reader takes as absent there, as does a directory
+// the entry holds as its folded table, which keeps no number of its own.
+func (self *readAttempt) belowVersion(path *readPath, reply *protocol.EvsReadPathReply) error {
+	scan, err := newNewestScan(self.ctx, path.read.EvsEntryRead, self.head.Head, self.source)
+	if err != nil {
+		return err
+	}
+	limit := self.head.Head.GetVersion() + 1
+	for {
+		event, err := scan.below(limit)
+		if err != nil {
+			return err
+		}
+		if event.CommitVersion == 0 {
+			break
+		}
+		if event.Directory && event.Change == nil && event.IndexVersion == nil {
+			return nil
+		}
+		if evsNewestNumber(event) <= path.version {
+			return self.answerNumbered(path, reply, event)
+		}
+		limit = event.CommitVersion
+	}
+	// below holds every window version after the horizon and every version the entry holds below limit, so what is
+	// left is at or below both
+	event, err := self.scanBelow(path, min(limit-1, path.read.FoldedThrough))
+	if err != nil || event == nil {
+		return err
+	}
+	return self.answerNumbered(path, reply, event)
+}
+
+// Puts a version or removal a read by number found in reply, as the newest's are put.
+func (self *readAttempt) answerNumbered(path *readPath, reply *protocol.EvsReadPathReply, event *EvsNewest) error {
+	if event.Exists {
+		_, err := self.answerVersion(path, reply, event)
+		return err
+	}
+	_, err := self.answerRemoval(path, reply, event)
 	return err
+}
+
+// The path's newest version or removal at or below path.version among the ref's statements from version from down:
+// the window's records, then those their log pages place (readPushes.at), each by its digest and then its change list
+// under the path's token path in its own epoch, an inline list from its statement and only a write's entry version
+// from its payload. A prefix's removal ends the path one past the version below it, when one stood there. nil where
+// nothing stands at or below the number down to version 1, or down to a statement of an epoch the request names the
+// path in none of, where evs cannot find it; errReadScanBound past ReadVersionScanCount versions below the window.
+func (self *readAttempt) scanBelow(path *readPath, from uint64) (*EvsNewest, error) {
+	head := self.head.Head
+	current := EvsHeadCurrentEpoch(head)
+	windowFirst := EvsHeadWindowFirstVersion(head)
+	// the lowest prefix removal met since the last change of the path itself: it ended the path only if one stood
+	var prefixRemoval *EvsNewest
+	for version := from; 1 <= version; version -= 1 {
+		if version < windowFirst && uint64(self.settings.ReadVersionScanCount) < windowFirst-version {
+			return nil, errReadScanBound
+		}
+		push, err := self.pushes.at(version)
+		if err != nil {
+			return nil, err
+		}
+		tokenPath := path.tokens.In(max(1, push.statement.Push.GetPathEpoch()), current)
+		if tokenPath == nil {
+			// an epoch the request names the path in none of: evs cannot find the path there
+			return nil, nil
+		}
+		if !push.entry.PathsDigest.MayChange(tokenPath) {
+			continue
+		}
+		var own *sidecar.EvsCheckedChange
+		prefixRemoved := false
+		if !push.rooted() {
+			for _, change := range push.statement.Changes {
+				switch {
+				case change.TokenPath.Equal(tokenPath):
+					own = change
+				case tokenPath.HasPrefix(change.TokenPath) && !change.WritesEntry():
+					prefixRemoved = true
+				}
+			}
+			if own != nil && own.WritesEntry() {
+				// the statement lists the change; its entry version rides in the payload
+				if own, _, _, err = self.pushes.changeOf(push, tokenPath); err != nil {
+					return nil, err
+				}
+				if own == nil {
+					return nil, fmt.Errorf("%w: version %d's payload lacks a change its statement lists", ErrEvsStatementMismatch, version)
+				}
+			}
+		} else {
+			if own, _, _, err = self.pushes.changeOf(push, tokenPath); err != nil {
+				return nil, err
+			}
+			if own == nil {
+				removal, _, _, err := self.pushes.removalOf(push, tokenPath)
+				if err != nil {
+					return nil, err
+				}
+				prefixRemoved = removal != nil
+			}
+		}
+		pushId := sidecar.Id(push.statement.Push.GetPushId())
+		if own == nil {
+			if prefixRemoved {
+				prefixRemoval = &EvsNewest{CommitVersion: version, PushId: pushId, RemovedByPrefix: true}
+			}
+			continue
+		}
+		event, err := newestOfChange(version, pushId, committedChanges([]*sidecar.EvsCheckedChange{own})[0])
+		if err != nil {
+			return nil, err
+		}
+		if event.Exists && prefixRemoval != nil {
+			// the path stood here, and the lowest prefix removal above ended it, one past this version
+			prefixRemoval.RemovalVersion = event.Version + 1
+			prefixRemoval.Directory = event.Directory
+			if prefixRemoval.RemovalVersion <= path.version {
+				return prefixRemoval, nil
+			}
+		}
+		prefixRemoval = nil
+		if evsNewestNumber(event) <= path.version {
+			return event, nil
+		}
+	}
+	return nil, nil
 }

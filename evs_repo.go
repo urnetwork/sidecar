@@ -70,6 +70,9 @@ type EvsReadArgs struct {
 	// EvsHistoryVersion.Provenance), one more round per push, since a path read carries no push's sealed metadata
 	// (evs_read_provenance.go). A read that does not ask gives none.
 	Provenance bool
+	// History: walks the newest life alone, ending at its creation with no read below it, as Lookup under a
+	// base_version of 0 does (evs_lookup.go); else History walks every life (evs_history.go).
+	NewestLife bool
 }
 
 // One file version as a read shows it, verified against its signed statement (§11.9).
@@ -148,12 +151,18 @@ type EvsListEntry struct {
 	Versioning uint32
 }
 
-// One path's versions, newest first, as History walks them (§11.7's history row).
+// One path's versions, newest first, as History walks them (§11.7's history row): across each creation into the
+// removal before it and the life that removal ended (owner decision 380; QD-888).
 type EvsHistory struct {
 	RefId       Id
 	Path        string
 	HeadVersion uint64
 	Versions    []*EvsHistoryVersion
+	// The walk stopped below its oldest listed version, a creation or a removal, because evs answered the read of
+	// the number below it with a refusal that refuses nothing (a 429 or a 503, as a read past evs's scan bound is
+	// answered): an earlier life may stand there unlisted. A caller that judges every life, as mailcfg's reader
+	// does, takes the path's history as unread.
+	BelowUnknown bool
 }
 
 // One version of a path.
@@ -166,6 +175,9 @@ type EvsHistoryVersion struct {
 	Time            time.Time
 	// The removal that ended the path at this version, if it is one.
 	Removed bool
+	// A creation, which names no version it replaces and starts a life of the path: the first version, or one made
+	// again after a removal (§11.7's versions row).
+	Created bool
 	// The repo's prefix write rules do not allow the version's signer its path, so this device does not follow it
 	// (`ignored: prefix rule`, DESIGN-DETAILS 16.2.5); a version nobody can judge is shown as evs has it.
 	Ignored bool
