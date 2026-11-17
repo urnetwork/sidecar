@@ -268,10 +268,16 @@ func (self *readAttempt) answerDropped(path *readPath, reply *protocol.EvsReadPa
 		return err
 	}
 	epoch := push.statement.Push.GetPathEpoch()
+	// the served version's own number, which below a number the path holds none at is not the one asked (read.go's
+	// belowVersion; QD-888)
+	number := path.version
+	if entryVersion, err := parseEvsEntryVersion(version.GetEntryVersion()); err == nil {
+		number = entryVersion.GetVersion()
+	}
 	target := &readDropTarget{
 		epoch:         epoch,
 		tokenPath:     path.tokens.In(epoch, EvsHeadCurrentEpoch(self.head.Head)),
-		version:       path.version,
+		version:       number,
 		commitVersion: version.GetCommitVersion(),
 		entrySha256:   sha256.Sum256(version.GetEntryVersion()),
 	}

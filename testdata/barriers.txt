@@ -485,6 +485,8 @@ barrier mail.ingest.push.after mail_ingest.go
 barrier mail.ingest.push.before mail_ingest.go
 barrier mail.receiver.publish.after mail_receiver.go
 barrier mail.receiver.publish.before mail_receiver.go
+barrier mail.receiver.retire.after mail_receiver.go
+barrier mail.receiver.retire.before mail_receiver.go
 barrier mail.send.copy.after mail_send.go
 barrier mail.send.copy.before mail_send.go
 barrier mail.send.deposit.after mail_send_local.go

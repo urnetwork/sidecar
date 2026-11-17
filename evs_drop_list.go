@@ -6,14 +6,15 @@
 //
 //	pages    History answers at most HistoryVersionCount versions a call; the walk asks again below the last one
 //	         until version 1, or until nothing stands at the number below it
-//	lives    History follows each version's prev pointers, so a creation over a standing removal walks on into the
-//	         life that removal ended. That life shares the lineage's token path when its removal committed in the
-//	         creation's epoch, and its versions are walked and listed too; one whose removal is in an older epoch was
-//	         removed before a cut-over, another lineage, and the walk stops. A creation with no removal standing
-//	         under it took max(b, m) + 1 (§11.6's version, I-EVS-8), which may be past 1 with nothing below it: evs
-//	         answers the number below absent, and the walk ends there. A walk that misses a version evs holds, as
-//	         one cut at a page's end between a creation and the removal it names, leaves a list the dry run answers
-//	         list_match false, which stops the command (10.2.4's head-mode signer)
+//	lives    History walks below each creation into the removal that ended the life before it, and on into that
+//	         life (owner decision 380; QD-888). That life shares the lineage's token path when its removal committed
+//	         in the creation's epoch, and its versions are walked and listed too; one whose removal is in an older
+//	         epoch was removed before a cut-over, another lineage, and the walk stops at the creation, within a page
+//	         as at a page's end. A creation with no removal standing under it took max(b, m) + 1 (§11.6's version,
+//	         I-EVS-8), which may be past 1 with nothing below it: evs answers the number below absent, and the walk
+//	         ends there. A walk that evs could not read below a creation or removal (History's BelowUnknown) fails, as
+//	         its list would lack what lies below; one that misses a version evs holds leaves a list the dry run
+//	         answers list_match false, which stops the command (10.2.4's head-mode signer)
 //	budget   a head-mode device (one holding no local tier) walks at most HeadDropFetchByteCount, counted at
 //	         StatementMaxByteCount a version, past which it answers ErrEvsDropTooLarge naming `ur history drop` on a
 //	         device that mirrors the repo; a device with a local tier walks as far as History goes
@@ -57,22 +58,31 @@ func (self *EvsRepo) dropWalk(ctx context.Context, refName []byte, path string) 
 		if len(history.Versions) == 0 {
 			break
 		}
-		first := history.Versions[0]
-		if 0 < len(walk.versions) {
-			last := walk.versions[len(walk.versions)-1]
-			// below a creation: the earlier life's removal, which joins the lineage only in the creation's epoch
-			if first.Removed && first.Epoch != last.Epoch {
-				break
-			}
-		}
-		walk.versions = append(walk.versions, history.Versions...)
 		if headMode {
 			spent += int64(len(history.Versions)) * versionCost
 			if budget < spent {
 				return nil, fmt.Errorf("%w: past %d bytes of history on this device; run ur history drop on a device that mirrors the repo", ErrEvsDropTooLarge, budget)
 			}
 		}
+		lineageEnds := false
+		for _, read := range history.Versions {
+			if 0 < len(walk.versions) {
+				above := walk.versions[len(walk.versions)-1]
+				// below a creation: the earlier life's removal, which joins the lineage only in the creation's epoch
+				if above.Created && read.Removed && read.Epoch != above.Epoch {
+					lineageEnds = true
+					break
+				}
+			}
+			walk.versions = append(walk.versions, read)
+		}
 		oldest := walk.versions[len(walk.versions)-1]
+		if lineageEnds {
+			break
+		}
+		if history.BelowUnknown {
+			return nil, fmt.Errorf("evs: a drop's walk stopped below version %d, which evs could not read", oldest.Version)
+		}
 		if oldest.Version <= 1 {
 			break
 		}

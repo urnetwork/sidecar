@@ -333,8 +333,9 @@ var ErrEvsSlotKeysIncomplete = errors.New("evs: a path's history not walked to i
 // chain's, holding its one key at index 0 as Write seals it; a caller whose slots hold several keys, as RECORD's
 // entry slots do, names its own. refName nil is main.
 //
-// It fails closed: History walks at most HistoryVersionCount versions and never past a creation into a path's
-// earlier, removed life, so a walk that ends above the path's version 1 is ErrEvsSlotKeysIncomplete, with no list.
+// It fails closed: History walks at most HistoryVersionCount versions, across each creation into the life before it
+// (QD-888), and may end above version 1, below a first creation past 1 or where evs could not read below it
+// (BelowUnknown), so a walk that ends above the path's version 1 is ErrEvsSlotKeysIncomplete, with no list.
 func (self *EvsRepo) SlotKeysOf(ctx context.Context, refName []byte, paths []string) ([]*EvsErasedKey, error) {
 	keys := []*EvsErasedKey{}
 	named := map[Id]bool{}
