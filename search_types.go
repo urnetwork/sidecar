@@ -140,6 +140,10 @@ func searchHitOf(hit *searchRankedHit) SearchHit {
 		result.DocKind = int(hit.row.docKind)
 		result.Tainted = hit.row.flags&indexRowTainted != 0
 		result.Outside = hit.row.flags&indexRowOutside != 0
+		result.Cut = hit.row.flags&indexRowInexact != 0
+		for field := indexFieldSubject; field <= indexFieldLast; field += 1 {
+			result.Cut = result.Cut || hit.row.flags&indexRowCutFlag(field) != 0
+		}
 		if hit.row.startedSeconds != 0 {
 			result.Started = time.Unix(int64(hit.row.startedSeconds), 0).UTC()
 		}

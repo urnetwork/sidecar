@@ -88,6 +88,9 @@ type searchOpenedRef struct {
 	local   *SearchLocalLayer
 	// Kept records opened for this search, closed at its end.
 	reads []*SearchCacheRecordRead
+	// Where RK_g comes from in place of the engine's GkmClient: an indexer's serving, which asks gkm for nothing
+	// (search_remote_corpus.go). Nil asks the engine's.
+	keys GkmClient
 }
 
 // What a snapshot offers a plan: its buckets, the retained ones among them, and all's shards held where all is usable.
@@ -174,7 +177,11 @@ func searchRegistryOf(kind protocol.RepoKind) *IndexFieldRegistry {
 // Opens one kept file for reading: RK_g of its generation asked of gkm.
 func (self *searchOpenedRef) openRead(ctx context.Context, file *SearchManifestFile) (*SearchCacheRecordRead, error) {
 	key := SearchCacheKey{RepoId: self.repoId, RefId: self.refId, Path: file.Path, Version: file.Version}
-	read, err := self.engine.args.Cache.OpenRecordRead(ctx, key, self.engine.args.Gkm)
+	keys := self.keys
+	if keys == nil {
+		keys = self.engine.args.Gkm
+	}
+	read, err := self.engine.args.Cache.OpenRecordRead(ctx, key, keys)
 	if err != nil {
 		return nil, err
 	}

@@ -152,6 +152,9 @@ type SearchHit struct {
 	Trust SearchTrust
 	// A stub (§16.10's withhold row): an untrusted hit with its text withheld, or one whose text held a credential.
 	Withheld bool
+	// A display field or the locator lost bytes to its cap (the row's cut flags, §11.14's row): a confirmation from
+	// the row may rest on a cut field, so remote search's omission is never raised over it (DESIGN-DETAILS 7.2.6).
+	Cut bool
 }
 
 // §5.4's progress, which each page carries.
@@ -289,9 +292,11 @@ type SidecarSearchConditions struct {
 	Reported bool
 }
 
-// A Sidecar's search: the network the state and cache are of, the engine, and the host's conditions.
+// A Sidecar's search: the network the state and cache are of, the engine, and the host's conditions and foreground.
 type sidecarSearch struct {
 	conditions *MonitorValue[SidecarSearchConditions]
+	// whether the app is in the foreground, as SetSearchForeground last reported it (search_foreground.go)
+	foreground *MonitorValue[bool]
 
 	stateLock sync.Mutex
 	networkId Id
@@ -305,7 +310,7 @@ func (self *Sidecar) searchOf() *sidecarSearch {
 	if search, ok := self.search.Load().(*sidecarSearch); ok {
 		return search
 	}
-	self.search.CompareAndSwap(nil, &sidecarSearch{conditions: NewMonitorValue(SidecarSearchConditions{})})
+	self.search.CompareAndSwap(nil, &sidecarSearch{conditions: NewMonitorValue(SidecarSearchConditions{}), foreground: NewMonitorValue(false)})
 	return self.search.Load().(*sidecarSearch)
 }
 
