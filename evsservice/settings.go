@@ -300,6 +300,15 @@ type EvsSettings struct {
 	PathEpochMaxCrossingCount int
 	// The keys one LIST of a map's parts returns, 1,000. Positive.
 	PathMapListPageCount int
+	// §11.6's block row, the format's values: a block only this long past due_by_ms, 10 min, for at most 2 min, and at
+	// most once each 10 min. All positive.
+	PathEpochBlockAfterDue    time.Duration
+	PathEpochBlockMaxDuration time.Duration
+	PathEpochBlockInterval    time.Duration
+	// A map part request's bytes beyond the part, its hash and its framing, 1,024; and a block request's, 1,024.
+	// Positive.
+	PathMapRequestOverheadByteCount   int64
+	PathEpochBlockRequestMaxByteCount int64
 
 	// §11.8's 5b: a one-part push's time_ms within this of evs's clock, 10 min, and a part's and a seal's within
 	// SealTimeBound, 30 min; further ahead 429 TIME_AHEAD. Both positive.
@@ -425,13 +434,18 @@ func DefaultEvsSettings() *EvsSettings {
 		CopyLogPageCount:            16,
 		MapSourcePageCount:          1,
 
-		PathEpochMaxSourceCount:        sidecar.DefaultEvsFormatSettings().PathEpochMaxSourceCount,
-		PathEpochBatchedMaxSourceCount: sidecar.DefaultEvsFormatSettings().PathEpochBatchedMaxSourceCount,
-		PathEpochBatchedDelay:          sidecar.DefaultEvsFormatSettings().PathEpochBatchedDelay,
-		PathMapMaxAge:                  sidecar.DefaultEvsFormatSettings().PathMapMaxAge,
-		ReadPathMaxEpochCount:          sidecar.DefaultEvsFormatSettings().ReadPathMaxEpochCount,
-		PathEpochMaxCrossingCount:      1024,
-		PathMapListPageCount:           1000,
+		PathEpochMaxSourceCount:           sidecar.DefaultEvsFormatSettings().PathEpochMaxSourceCount,
+		PathEpochBatchedMaxSourceCount:    sidecar.DefaultEvsFormatSettings().PathEpochBatchedMaxSourceCount,
+		PathEpochBatchedDelay:             sidecar.DefaultEvsFormatSettings().PathEpochBatchedDelay,
+		PathMapMaxAge:                     sidecar.DefaultEvsFormatSettings().PathMapMaxAge,
+		ReadPathMaxEpochCount:             sidecar.DefaultEvsFormatSettings().ReadPathMaxEpochCount,
+		PathEpochMaxCrossingCount:         1024,
+		PathMapListPageCount:              1000,
+		PathEpochBlockAfterDue:            sidecar.DefaultEvsFormatSettings().PathEpochBlockAfterDue,
+		PathEpochBlockMaxDuration:         sidecar.DefaultEvsFormatSettings().PathEpochBlockMaxDuration,
+		PathEpochBlockInterval:            sidecar.DefaultEvsFormatSettings().PathEpochBlockInterval,
+		PathMapRequestOverheadByteCount:   1024,
+		PathEpochBlockRequestMaxByteCount: 1024,
 
 		PushTimeBound:                10 * time.Minute,
 		SealTimeBound:                30 * time.Minute,
@@ -566,6 +580,10 @@ func (self *EvsSettings) Validate() error {
 	if self.PathEpochMaxSourceCount <= 0 || self.PathEpochBatchedMaxSourceCount <= 0 || self.PathEpochBatchedDelay <= 0 ||
 		self.PathMapMaxAge <= 0 || self.ReadPathMaxEpochCount <= 0 || self.PathEpochMaxCrossingCount <= 0 || self.PathMapListPageCount <= 0 {
 		return fmt.Errorf("%w: a path epoch's sources, batched delay, map age, read epochs, crossing or map list page not positive", ErrEvsSettings)
+	}
+	if self.PathEpochBlockAfterDue <= 0 || self.PathEpochBlockMaxDuration <= 0 || self.PathEpochBlockInterval <= 0 ||
+		self.PathMapRequestOverheadByteCount <= 0 || self.PathEpochBlockRequestMaxByteCount <= 0 {
+		return fmt.Errorf("%w: a block's bounds or a map or block request's bytes not positive", ErrEvsSettings)
 	}
 	return nil
 }

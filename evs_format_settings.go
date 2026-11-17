@@ -88,6 +88,11 @@ type EvsFormatSettings struct {
 	PathEpochBatchedDelay time.Duration
 	// §11.6's map row: a PATH_EPOCH commits only on map parts each uploaded under this long ago, 24 h.
 	PathMapMaxAge time.Duration
+	// §11.6's block row: a mapper may stop creation on a ref only this long past due_by_ms, 10 min, for at most
+	// PathEpochBlockMaxDuration, 2 min, and at most once each PathEpochBlockInterval, 10 min.
+	PathEpochBlockAfterDue    time.Duration
+	PathEpochBlockMaxDuration time.Duration
+	PathEpochBlockInterval    time.Duration
 }
 
 // The protocol's values, the only source of their defaults.
@@ -123,6 +128,9 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		PathEpochBatchedMaxSourceCount: 2,
 		PathEpochBatchedDelay:          24 * time.Hour,
 		PathMapMaxAge:                  24 * time.Hour,
+		PathEpochBlockAfterDue:         10 * time.Minute,
+		PathEpochBlockMaxDuration:      2 * time.Minute,
+		PathEpochBlockInterval:         10 * time.Minute,
 	}
 }
 

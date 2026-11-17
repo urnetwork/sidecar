@@ -165,6 +165,13 @@ type EvsSettings struct {
 	PathEpochMaxSourceCount        int
 	PathEpochBatchedMaxSourceCount int
 	PathEpochBatchedDelay          time.Duration
+	// §11.6's block row as the format sets it: a mapper whose tail evs refused MapTailRefusalCount times asks evs to
+	// stop creation on the ref this long past due_by_ms, 10 min, for this long, 2 min, the most evs grants.
+	MapBlockAfterDue time.Duration
+	MapBlockDuration time.Duration
+	// The ticks the mapper's loop holds asked and not yet run before a further ask is dropped, which its timer then
+	// covers: 64.
+	MapperWakeCount int
 
 	// DESIGN-DETAILS 9.2.2's mapper settings (evs_epoch_map.go). A mapper that did not rotate starts within a random
 	// delay below this, 10 min, so two do not upload one map at once.
@@ -351,6 +358,9 @@ func DefaultEvsSettings() *EvsSettings {
 		PathEpochMaxSourceCount:        DefaultEvsFormatSettings().PathEpochMaxSourceCount,
 		PathEpochBatchedMaxSourceCount: DefaultEvsFormatSettings().PathEpochBatchedMaxSourceCount,
 		PathEpochBatchedDelay:          DefaultEvsFormatSettings().PathEpochBatchedDelay,
+		MapBlockAfterDue:               DefaultEvsFormatSettings().PathEpochBlockAfterDue,
+		MapBlockDuration:               DefaultEvsFormatSettings().PathEpochBlockMaxDuration,
+		MapperWakeCount:                64,
 
 		MapperSpread:             10 * time.Minute,
 		MapperBatchedLead:        2 * time.Hour,

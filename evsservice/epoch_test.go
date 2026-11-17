@@ -370,7 +370,7 @@ func TestPathEpochBlock(t *testing.T) {
 	commitment := fixture2.crossRemove(false)
 	block.RefId = fixture2.check.refId.Bytes()
 	requireRefusal(t, fixture2.postRoute("/path-epoch/block", block), http.StatusTooManyRequests, protocol.EvsRefusalCode_EVS_REFUSAL_WAIT)
-	fixture2.clock.Advance(fixture2.settings.PathEpochBatchedDelay + evsPathEpochBlockAfterDue)
+	fixture2.clock.Advance(fixture2.settings.PathEpochBatchedDelay + fixture2.settings.PathEpochBlockAfterDue)
 	before := fixture2.head()
 	if recorder := fixture2.postRoute("/path-epoch/block", block); recorder.Code != http.StatusOK {
 		t.Fatalf("block answered %d (%s)", recorder.Code, refusalOf(t, recorder).GetCode())

@@ -30,14 +30,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §11.6's block row's bounds.
-const (
-	evsPathEpochBlockMaxDuration = 2 * time.Minute
-	// a block only 10 min past due_by_ms, and at most once each 10 min
-	evsPathEpochBlockAfterDue = 10 * time.Minute
-	evsPathEpochBlockInterval = 10 * time.Minute
-)
-
 // The route templates.
 const (
 	evsPathEpochMapTemplate   = "POST /evs/v1/repos/{repo_id}/path-epoch"
@@ -112,7 +104,7 @@ func (self *EvsEngine) admitOne(request *EvsRequest, kind WriteOperationKind, ob
 // POST .../path-epoch: see the file header.
 func (self *EvsEngine) servePathMapPart(request *EvsRequest) {
 	body := &protocol.EvsPathMapRequest{}
-	if !request.ReadMessage(body, int64(sidecar.DefaultEvsFormatSettings().PathMapMaxByteCount)+evsPathMapRequestOverhead) {
+	if !request.ReadMessage(body, int64(sidecar.DefaultEvsFormatSettings().PathMapMaxByteCount)+self.settings.PathMapRequestOverheadByteCount) {
 		return
 	}
 	if len(body.GetPathMapSha256()) != 32 {
@@ -161,18 +153,15 @@ func (self *EvsEngine) servePathMapPart(request *EvsRequest) {
 	}
 }
 
-// A map part request's bytes beyond the part: the hash and the framing.
-const evsPathMapRequestOverhead = 1024
-
 // POST .../path-epoch/block: see the file header.
 func (self *EvsEngine) servePathEpochBlock(request *EvsRequest) {
 	body := &protocol.EvsPathEpochBlockRequest{}
-	if !request.ReadMessage(body, 1024) {
+	if !request.ReadMessage(body, self.settings.PathEpochBlockRequestMaxByteCount) {
 		return
 	}
 	refId, err := sidecar.IdFromBytes(body.GetRefId())
 	duration := time.Duration(body.GetMs()) * time.Millisecond
-	if err != nil || duration <= 0 || evsPathEpochBlockMaxDuration < duration {
+	if err != nil || duration <= 0 || self.settings.PathEpochBlockMaxDuration < duration {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
 	}
@@ -201,9 +190,9 @@ func (self *EvsEngine) servePathEpochBlock(request *EvsRequest) {
 			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL)
 			return
 		}
-		wait := time.UnixMilli(pathEpoch.GetDueByMs()).Add(evsPathEpochBlockAfterDue).Sub(now)
+		wait := time.UnixMilli(pathEpoch.GetDueByMs()).Add(self.settings.PathEpochBlockAfterDue).Sub(now)
 		if blockUntil := pathEpoch.GetBlockUntilMs(); blockUntil != 0 {
-			wait = max(wait, time.UnixMilli(blockUntil).Add(evsPathEpochBlockInterval-evsPathEpochBlockMaxDuration).Sub(now))
+			wait = max(wait, time.UnixMilli(blockUntil).Add(self.settings.PathEpochBlockInterval-self.settings.PathEpochBlockMaxDuration).Sub(now))
 		}
 		if 0 < wait {
 			request.Refuse(&protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_WAIT, RetryAfterMs: uint32(max(1, wait.Milliseconds()))})
