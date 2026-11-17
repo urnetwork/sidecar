@@ -142,6 +142,10 @@ type EvsPathWrite struct {
 	// row; evs_lfs_store.go), and only its writer's: the path must stand, its chain hold no staged or inline record,
 	// and the repo be general. Content is nil.
 	Touch bool
+	// The version's content came from outside the network: a received message as ingest writes it (§15.7), or an
+	// import's. The in-ref index's rows of its documents carry the outside bit (§11.14's row, bit 1), so a search hit
+	// on them reads untrusted (§16.10). Only the index writer reads it; nothing of it reaches evs.
+	Outside bool
 }
 
 // What decides a written version's versioning on a plan's own read of its path: *EvsWriteOptions, on every leg that

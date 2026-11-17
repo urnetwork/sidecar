@@ -28,6 +28,18 @@
 //	          message's i/ row go in one push (MailIndexWriter.Append), m/ created only while absent. The deposit id
 //	          is the message id and <yyyymm> the sealed receive time's, so racing readers write one path: a conflict
 //	          on m/ means another reader, or this one before a crash, wrote it, and the deposit is only consumed
+//	index     where the repo's search index is on (§15.7's search index row; R-MAIL-17, D-MAIL-16, I-19; MAIL-M10-01),
+//	          that push carries the message's index delta too: the client's in-ref writer (evs_index_writer.go) sees
+//	          the push's plan, extracts m/ by indexExtractMail's rule and adds this device's head to it, so one head
+//	          CAS commits m/, i/ and the delta. Only m/ is a document, keyed by its path, which names the message id;
+//	          i/, f/, s/model, vault/ and every other family stay out (indexExcluded), so seen, labels, trash and spam
+//	          never reach the index, and the doc table holds subject, from, to and date. The m/ write carries the
+//	          outside mark (EvsPathWrite.Outside) for every message MailEntryUntrusted marks, which its rows keep, so a
+//	          search hit on outside mail reads untrusted and taints the run that takes its text (I-9). A CUT landing
+//	          between the build and the push gets the push 409 INDEX_EPOCH, and the sender plans it again from a fresh
+//	          read, its head without what the erasure set lists (§11.14's epoch row). With the index off, outside the
+//	          format2 gate or in a format-1 repo the push is m/ and i/ alone: i/ stays the message list, which search
+//	          never replaces
 //	receipt   the reader whose push wrote the message notes §16.8's reach receipt (RecordReach.Note), Used at for a
 //	          burner's recipient (MailVault.NoteUsedAt) and its caller's Message, in that order, before the CONSUME;
 //	          none of them holds the CONSUME back, and a crash between the push and them loses those notes, never
@@ -45,8 +57,9 @@
 // due, which EvsRepo.WritePaths does (evs_write.go's waitPathEpoch); a mailbox keeps creating. Slot ids are evs's,
 // drawn per statement (evs_upload.go), never from a deposit or message id.
 //
-// Not built here: the message's search-index delta in the same push, which is MAIL-M10-01's; and the judging of a
-// same-network deposit's From beyond MailIngestAuthority.MaySendAs, which MAIL-M7-18 completes.
+// Not built here: the judging of a same-network deposit's From beyond MailIngestAuthority.MaySendAs, which MAIL-M7-18
+// completes. A mailbox's or group repo's mail from before its index is indexed by one first build
+// (mail_index_build.go).
 //
 // On every leg but the extension's. A MailIngestor is safe for concurrent use: one pass runs at a time.
 
@@ -709,7 +722,8 @@ func (self *MailIngestor) ingestDeposit(ctx context.Context, depositorId Id, dep
 		return true, nil
 	}
 	testHookBarrier("mail.ingest.push.before", "")
-	_, err = self.index.Append(ctx, entry, &mailStoreWrite{Path: messagePath, Content: content})
+	// the m/ write's mark: where the search index is on, its rows of the message carry the outside bit (search's)
+	_, err = self.index.Append(ctx, entry, &mailStoreWrite{Path: messagePath, Content: content, Outside: MailEntryUntrusted(entry)})
 	testHookBarrier("mail.ingest.push.after", "")
 	if mailStoreConflictOn(err, messagePath) {
 		// another reader won, or this one did before a crash: only the CONSUME is left
