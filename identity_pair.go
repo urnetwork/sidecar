@@ -5,9 +5,10 @@
 // device client D, POST /network/auth-client {source_client_id: D, admin_refused: true}, and hands the daemon C's jwt
 // alone, so the daemon never holds the device's token:
 //
-//	pair     C's token must name this sidecar's network, or, unenrolled, the one it then enrolls in, and carry
-//	         strict_exp, which confines it to §7.4's allowlist with no admin route; its admin_refused is the app's mint's
-//	         to confirm (question core-m6-02-pair-admin-refused). Then, in Enroll's order and failing closed
+//	pair     C's token must name this sidecar's network, or, unenrolled, the one it then enrolls in, and carry both
+//	         marks D-CORE-7 asks of a token the daemon did not mint (owner decision 291; QD-907): strict_exp, which
+//	         confines it to §7.4's allowlist with no admin route, and admin_refused, which api sets from C's owner row
+//	         at mint; one without either is refused before anything is sent. Then, in Enroll's order and failing closed
 //	         (D-CORE-7): a new ClientKey, the identity key and sidecar_id kept or, unenrolled, new; POST /sidecar/bind
 //	         at generation n+1 on C; the keychain, holding bind's re-mint of C's token with the sidecar_id in place of
 //	         the one handed over (QD-797), and last sidecar.json's record marked a child; then the previous client
@@ -35,20 +36,25 @@ import (
 )
 
 var (
-	// The child's token names no client, another network than this sidecar's, or no strict_exp: nothing was sent.
-	ErrSidecarPairToken = errors.New("the pairing token is not a strict_exp child of this network")
+	// The child's token names no client, another network than this sidecar's, or lacks the strict_exp or the
+	// admin_refused claim: nothing was sent.
+	ErrSidecarPairToken = errors.New("the pairing token is not a strict_exp, admin_refused child of this network")
 	// The child is the client this sidecar runs already.
 	ErrSidecarPairSame = errors.New("this sidecar runs on that client already")
 )
 
-// Whether byJwt's claims mark it strict_exp (§7.4), read without verifying it: api verifies it at the binding.
-func sidecarJwtStrictExp(byJwt string) bool {
+// Whether byJwt's claims carry both marks a pairing requires (§5.4, D-CORE-7; owner decision 291), each true as a JSON
+// boolean: strict_exp, which confines the token to §7.4's allowlist with no admin route, and admin_refused, which api
+// sets from the client's owner row at mint, so a daemon handed a token it did not mint reads the row's mark. Read
+// without verifying the token: api verifies it at the binding, where a token whose claims were changed fails.
+func sidecarJwtPairMarks(byJwt string) bool {
 	parse := parseSidecarJwt(byJwt)
 	if !parse.ok {
 		return false
 	}
 	strictExp, _ := parse.claims["strict_exp"].(bool)
-	return strictExp
+	adminRefused, _ := parse.claims["admin_refused"].(bool)
+	return strictExp && adminRefused
 }
 
 // Why this sidecar cannot pair now, or nil: closed, revoked, locked, its key store lost, or its instance failed. A
@@ -121,7 +127,7 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 		return 0, err
 	}
 	networkId, clientId, ok := sidecarJwtClient(childJwt)
-	if !ok || !sidecarJwtStrictExp(childJwt) {
+	if !ok || !sidecarJwtPairMarks(childJwt) {
 		return 0, ErrSidecarPairToken
 	}
 	knownNetworkId := self.enrolledNetworkId()

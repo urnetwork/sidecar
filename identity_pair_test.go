@@ -14,11 +14,21 @@ import (
 	"time"
 )
 
-// A child's token as an app's POST /network/auth-client mints it under its device client: strict_exp, of networkId.
+// A child's token as an app's POST /network/auth-client mints it under its device client: of networkId, strict_exp as
+// given, and with the admin_refused claim api sets from the child's owner row (owner decision 291).
 func testPairChildToken(networkId Id, clientId Id, strictExp bool) string {
+	return testPairChildTokenMarked(networkId, clientId, fmt.Sprintf(`"strict_exp":%t,"admin_refused":true`, strictExp))
+}
+
+// A child's token of networkId whose marks are the JSON members given, as written, "" for none: api's mint of a client
+// whose owner row has no admin_refused mark leaves that claim out.
+func testPairChildTokenMarked(networkId Id, clientId Id, marks string) string {
 	now := time.Now()
-	return testClientJwt(fmt.Sprintf(`{"jti":%q,"iat":%d,"exp":%d,"network_id":%q,"client_id":%q,"device_id":%q,"strict_exp":%t}`,
-		NewId().String(), now.Unix(), now.Add(7*24*time.Hour).Unix(), networkId, clientId, NewId(), strictExp))
+	if marks != "" {
+		marks = "," + marks
+	}
+	return testClientJwt(fmt.Sprintf(`{"jti":%q,"iat":%d,"exp":%d,"network_id":%q,"client_id":%q,"device_id":%q%s}`,
+		NewId().String(), now.Unix(), now.Add(7*24*time.Hour).Unix(), networkId, clientId, NewId(), marks))
 }
 
 // A world enrolled top-level by ur login, its first generation Online.
@@ -74,13 +84,15 @@ func TestPairBindsNextGeneration(t *testing.T) {
 		t.Fatalf("the kept token names sidecar %s, %+v", claimed, keptIdentity)
 	}
 
-	// refusals send nothing: no strict_exp, another network, no client, the client it runs on
+	// refusals send nothing: no strict_exp, no admin_refused, another network, no client, the client it runs on
 	sent := len(world.api.requestedPaths())
 	for name, token := range map[string]string{
-		"no strict_exp":   testPairChildToken(world.api.networkId, NewId(), false),
-		"another network": testPairChildToken(NewId(), NewId(), true),
-		"no client":       testClientJwt(`{"network_id":"` + world.api.networkId.String() + `","strict_exp":true}`),
-		"not a token":     "synthetic",
+		"no strict_exp":    testPairChildToken(world.api.networkId, NewId(), false),
+		"no admin_refused": testPairChildTokenMarked(world.api.networkId, NewId(), `"strict_exp":true`),
+		"no marks":         testPairChildTokenMarked(world.api.networkId, NewId(), ""),
+		"another network":  testPairChildToken(NewId(), NewId(), true),
+		"no client":        testClientJwt(`{"network_id":"` + world.api.networkId.String() + `","strict_exp":true,"admin_refused":true}`),
+		"not a token":      "synthetic",
 	} {
 		if err := world.sidecar.Pair(context.Background(), token); !errors.Is(err, ErrSidecarPairToken) {
 			t.Errorf("%s: %v", name, err)

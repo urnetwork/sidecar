@@ -211,8 +211,9 @@ func (self *FakeApi) RouteCount(route string) int {
 }
 
 // Mints client's token, as server signs a by_jwt: client_id, device_id, session_id, network_id, create_time,
-// strict_exp, sidecar_id when client carries the claim, iat, exp and a random jti. exp is ClientTokenTimeout from now,
-// §7.4's 7 days. The token maps to a copy of client.
+// strict_exp and admin_refused when client carries the mark (owner decision 291), sidecar_id when client carries the
+// claim, iat, exp and a random jti. exp is ClientTokenTimeout from now, §7.4's 7 days. The token maps to a copy of
+// client.
 func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
 	now := self.clock.Now()
 	return self.mintClientTokenAt(client, now, now.Add(self.settings.ClientTokenTimeout))
@@ -236,6 +237,9 @@ func (self *FakeApi) mintClientTokenAt(client *fakeApiClient, issuedAt time.Time
 	}
 	if minted.strictExp {
 		claims["strict_exp"] = true
+	}
+	if minted.adminRefused {
+		claims["admin_refused"] = true
 	}
 	if minted.sidecarClaim != (sidecar.Id{}) {
 		claims["sidecar_id"] = minted.sidecarClaim.String()

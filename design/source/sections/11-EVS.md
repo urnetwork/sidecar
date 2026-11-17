@@ -998,7 +998,7 @@ resolve   evs and gkm read a repo's place/ once and cache it for the process's l
           cluster, so each ref keeps one commit point
 first     the first cluster also holds §7's proj/, projrows/ and rev/, §10.6's per-sidecar gkm/ objects (KeyPackages
           and their claims, ReaderKeys, Welcome pointers) and §21's hold/
-form      each cluster is one homogeneous 8-drive set at EC:4 in one pool (owner decisions 116, 139); a repo's
+form      each cluster's drives and erasure set are §19.6's and §19.9's (owner decisions 116, 139); a repo's
           cluster changes only with a later move tool that keeps one commit point
 ```
 
@@ -1505,8 +1505,8 @@ reply     one framed stream of u32 length | EvsReadFrame, each frame one of thes
           reader keeping the record unknown to Resolve, as one past its replay bound; the scan ends at the newest
           cut-over below the creation, a request naming the path only in epochs at or above its floor, so a fresh
           reader judges a re-creation across a cut-over on its new life alone, and from the review phase
-          mailcfg's readers replay the ref from genesis, judging each life from its statements, so no evs answer
-          below a creation decides a mail record (§15.16; owner decision 568); a replaced versionless version
+          mailcfg's readers replay as §15.16's row says, so no evs answer below a creation decides a mail
+          record (owner decision 568); a replaced versionless version
           answering `collected` for its content, a listed one `drop_pending` {drop_id, not_before_ms} or
           `dropped` {drop_id, version} with the DROP's statement and body, from which a head reader decides
           membership alone (owner decision 396): V is listed iff some EvsDropPath's lineage holds V's token path
@@ -2657,15 +2657,11 @@ sniff     a file is text when its first 8,000 bytes hold no NUL and are valid UT
           (git's rule), or it opens with a UTF-16 byte-order mark and is decoded; a chunk whose key set would
           encode past 512 KiB, which nearly every query would match, is skipped; a version that turns binary or
           skipped is a tombstone at its version
-fields    1 subject, 2 from, 3 to (to and cc), 4 title, 5 body; 6-15 registered per document class: §16.8's record
-          entries and run cards (6 kind, 7 writer sidecar_id, 8 agent_id, 9 agent label, 10 run_id, 11 session ids,
-          12 tools, 13 claim expires, 14 claim state, 15 reserved; title in 4, text in 5) and §16.11's directory
-          documents (6 announcement or entry kind, 7 sidecar_id, 8 agent_id, 9 agent label, 10 run_id, 11
-          member_id, 12 project, 13 branch, 14 repo_id, 15 state; a run's title or a repo's display name in 4,
-          prose and the harness, host label, service names, topics and claim targets in 5); started, expires,
-          private and tainted are the row's attributes, not fields; one posting set covers every field, and a
-          field-scoped query is
-          confirmed against the doc table row (at most 2 KiB, 256 B a field), which costs nothing for header fields
+fields    1 subject, 2 from, 3 to (to and cc), 4 title, 5 body; 6-15 registered per document class, each
+          class's numbers and its uses of 4 and 5 where the class is written: §16.8's record entries and run
+          cards and §16.11's directory documents; started, expires, private and tainted are the row's
+          attributes, not fields; one posting set covers every field, and a field-scoped query is confirmed
+          against the doc table row (at most 2 KiB, 256 B a field), which costs nothing for header fields
           (12.6-17.3% less index than per-field postings)
 directory the team directory's derived documents (§16.11): one per announcement, from the card or repo file holding
           it, its version the Announcement's, and one per stream entry; a renewal keeps the version and writes no

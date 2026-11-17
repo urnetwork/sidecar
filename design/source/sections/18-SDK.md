@@ -43,7 +43,7 @@ Two roles (owner decisions 87, 197). The forwarding role is all of sidecar that 
 | CLI, cloud VM | none | `ur daemon` | top-level, §20.8 (cloud: tagged, ephemeral, by ReaderWraps) | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
 | Extension, ur.io pages | none | Worker (18.8) | top-level, declared no-egress (§20.8) | non-extractable WebCrypto key and IndexedDB, in 18.8's key origin (quick burner: memory) | 64 MiB heap above wasm data |
 
-Phones mirror `mailcfg`, `vault/` and `i/` in full and head-read `m/` (§11.13), and keep MLS trees on disk, one loaded at a time (≤2.83 MB at 1,000 leaves; D-KEYS-14). Of §7.9's authorization log, every sidecar, phones, page Workers and agents included, keeps the digests A_k, its newest entries' bytes up to a `HeadCheckProof`'s 64 KiB (bases as headers) and, while it sends `proven`, the proof it verified, so any witness answers §6.4's `HeadCheckProofRequest`; member devices running `ur daemon` (desktop and CLI hosts) also keep every entry from api's retention point, which a site loss resumes from (§19.10). A config writer folds once the unfolded tail spans 1,024 entries or 24 h, at its next start if it was offline (§7.9's fold), so while one runs, kept tails stay within about 2,048 entries and a new device, a page Worker included, re-applies at most about 1,024. Marks: fg, foreground; VPN, whenever the app's VPN component runs (owner decision 197); awake, Firefox event page alive; outbox, D-SMTP-18; C4, §4's browser carrier.
+Phones mirror `mailcfg`, `vault/` and `i/` in full and head-read `m/` (§11.13), and keep MLS trees on disk, one loaded at a time (≤2.83 MB at 1,000 leaves; D-KEYS-14). Of §7.9's authorization log, every sidecar, phones, page Workers and agents included, keeps what §7.9's `retain` row says, every entry from api's retention point included on member devices running `ur daemon` (desktop and CLI hosts), which a site loss resumes from (§19.10). A config writer folds once the unfolded tail spans 1,024 entries or 24 h, at its next start if it was offline (§7.9's fold), so while one runs, kept tails stay within about 2,048 entries and a new device, a page Worker included, re-applies at most about 1,024. Marks: fg, foreground; VPN, whenever the app's VPN component runs (owner decision 197); awake, Firefox event page alive; outbox, D-SMTP-18; C4, §4's browser carrier.
 
 | Feature | iOS app | Android | Desktop daemon | Extension: Chrome / Firefox |
 |---|---|---|---|---|
@@ -1024,8 +1024,8 @@ excluded    the root's connect-dependent files (client generations and SidecarEn
 kept        identity, keychain, config verification and ACL evaluation, mls_ and the key ladder, evs head
             reads and writes over HTTPS, records and approval views, search (x/text normalization, about 0.6
             MB unstripped; no zstd), the long-poll, and the token path over SidecarApi: POST /sidecar/bind,
-            GET /auth/refresh with a DPoP proof that crypto/ed25519 signs by the ClientKey (§7.4), and the
-            token exchange for evs and gkm (§7.8)
+            GET /auth/refresh with §5.6's DPoP proof (crypto/ed25519), and the token exchange for evs and gkm
+            (§7.8)
 types       §5.4's every-leg types: the root's Id (here its own twin of operator-core's, owner decision 276),
             Logger, MonitorValue and CallbackList, and the net/http SidecarApi (bearer plus DPoP signer), so its
             events, actions, binding and Sign link here; connect-facing files convert at that boundary
