@@ -14,9 +14,11 @@
 //	          beside it: the member, the code's key hash, the statement's id and whether it is a proposal, which with
 //	          the identity key and sidecar_id that enrollment kept is what §7.9's restart row names. A restart resumes
 //	          from it and never files a second admission
-//	pending   a proposal waits on one admission signer's cosign or on Recovery's 72 h window and its veto. The device
-//	          polls the log as before; the code is asked for again once the admission has landed, since no device
-//	          keeps a code or the keys it derives (§5.9), and RecoverWithCode erases them before it answers
+//	pending   a proposal waits on one admission signer's cosign or on Recovery's 72 h window and its veto, or on both
+//	          under a binding a void restored when it was filed with self_admit off (the kind the log fixed at its
+//	          entry, QD-952). The device polls the log as before; the code is asked for again once the admission has
+//	          landed, since no device keeps a code or the keys it derives (§5.9), and RecoverWithCode erases them
+//	          before it answers
 //	anchor    once admitted, before any commit, wrap, sealed write or further statement: KEYS-M2-24's AnchorRecovery
 //	          opens the config group's RK_g, from M's RecoveryWrap against gen/<g>'s C_g or, under a binding a void
 //	          restored, from the late ReaderWrap a config writer gives the device, and hands it to this file's check
@@ -384,11 +386,15 @@ func (self *Sidecar) recoveryResult(record *sidecarRecoveryRecord, authority Sid
 	switch result.ProposalKind {
 	case bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED:
 		result.Waiting = "the admission waits for one admin's cosign: ur approve on an admin's device"
-	case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY, bridge.ProposalKind_PROPOSAL_KIND_RESTORED:
+	case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY, bridge.ProposalKind_PROPOSAL_KIND_RESTORED, bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED:
 		result.ActivatesAfter = time.UnixMilli(row.GetWindowTimeMs() + sidecarAuthorityRecoverySettings(authority).Window.Milliseconds())
 		result.Waiting = "the admission waits out the recovery window, in which an admin may veto it"
-		if result.ProposalKind == bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY {
+		switch result.ProposalKind {
+		case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY:
 			result.Waiting += ", and for its cosigns where the network needs more than one admin"
+		case bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED:
+			// filed with self_admit off, so its activation needs one admission signer's cosign (QD-952)
+			result.Waiting += ", and for one admin's cosign: ur approve on an admin's device"
 		}
 	}
 	return result

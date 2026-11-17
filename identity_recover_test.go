@@ -1009,6 +1009,48 @@ func TestRestoredBindingUploadsNoKeyPackageBeforeAnchor(t *testing.T) {
 	}
 }
 
+// §7.9's restored row with self_admit off (QD-952): the code's AuthorityProposal is PROPOSAL_KIND_RESTORED_COSIGNED,
+// and the device shows it waiting out the window and for one admin's cosign. A tick 72 h on with no cosign leaves it
+// pending; once an admin's device cosigns, the tick admits it.
+func TestARestoredRecoveryFiledWithSelfAdmitOffWaitsForTheWindowAndACosign(t *testing.T) {
+	world := newRecoverTestWorld(t, false)
+	net := world.net
+	stolen := net.device("m stolen", world.memberId)
+	net.admitDevice(world.laptop, stolen, 0)
+	sinceN := net.n + 1
+	genesisSha256 := sha256.Sum256(net.signedGenesis)
+	world.bindBy(stolen, recoverTestWords(t, 0x70), genesisSha256[:])
+	net.mustPost(world.laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(stolen, sinceN))
+	world.selfAdmitOff()
+	if state := net.log.State(); !state.BindingRestored(world.memberId) || state.SelfAdmit() {
+		t.Fatal("the world's code is not a restored binding's with self_admit off")
+	}
+	world.groups.key = nil
+
+	result := world.mustRecover(SidecarRecoveryPending)
+	if !result.Proposal || !result.Restored || result.ProposalKind != bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED || result.ActivatesAfter.IsZero() ||
+		!strings.Contains(result.Waiting, "recovery window") || !strings.Contains(result.Waiting, "cosign") {
+		t.Fatalf("the filing: %+v", result)
+	}
+	world.wait(72 * testConfigHourMs)
+	if refused := net.activate(result.StatementId); refused.Accepted() || !errors.Is(refused.Refusal, ErrConfigAuthority) || world.row() != nil {
+		t.Fatalf("the activation with no cosign: %v", refused.Refusal)
+	}
+	if pending, err := world.sidecar.Recovery(); err != nil || pending.Phase != SidecarRecoveryPending ||
+		pending.ProposalKind != bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED || !strings.Contains(pending.Waiting, "cosign") {
+		t.Fatalf("after the refused tick: %+v %v", pending, err)
+	}
+	if cosigned := net.cosign(net.owner, result.StatementId); !cosigned.Accepted() || world.row() != nil {
+		t.Fatalf("the admin's cosign: %v", cosigned.Refusal)
+	}
+	if activated := net.activate(result.StatementId); !activated.Accepted() || world.row() == nil {
+		t.Fatalf("the activation after the cosign: %v", activated.Refusal)
+	}
+	if admitted, err := world.sidecar.Recovery(); err != nil || admitted.Phase != SidecarRecoveryAdmitted {
+		t.Errorf("once activated: %+v %v", admitted, err)
+	}
+}
+
 // §7.9's restart row: the device keeps its identity, sidecar_id and the statement's id, and a restart resumes the
 // admission it filed. A post whose answer was lost goes again with the same bytes, which api answers with the entry it
 // holds, so the log carries it once; a call after the restart files nothing new, refuses another code, and anchors
