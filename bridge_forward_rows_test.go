@@ -6,7 +6,9 @@
 // MemberRow, SidecarRow, DelegationRow or AclRows that makes a loaded row cost more than the rule counts fails here, in
 // every make check, rather than as a tunnel killed on a phone. The figures are logged in 4.2.4's shape; they are this
 // host's, no surrogate's or device's. Until the review phase's storage-backed compile retires the factor (4.2.4, QD-641)
-// this is what holds it to the code.
+// this is what holds it to the code. sidecartest/forwardcell builds the same rows with a copy of this generator, since
+// the root's tests import no sidecartest package (§4.4), and compiles a network on them with a real Forwarder for T4's
+// cells; both copies are held to one digest of their six-device rows.
 
 package sidecar
 
@@ -14,6 +16,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"runtime"
 	"testing"
 
@@ -184,5 +187,20 @@ func TestTheCompileEstimateCoversTheLoadedRows(t *testing.T) {
 	undercounting.CompileEstimateRowsFactor = 3
 	if rowsByteCount, loaded, counted := testRowsFixtureMeasure(t, undercounting, 5_000); loaded <= counted {
 		t.Errorf("a rows factor of 3 counts %d B for %d B of rows holding %d B: the check could not fail", counted, rowsByteCount, loaded)
+	}
+}
+
+// The six-device rows' SHA-256, which sidecartest/forwardcell holds its copy of the generator to as well
+// (forward_cell_test.go), so the two copies of 4.2.4's mix cannot drift apart.
+const testRowsFixtureSixSha256 = "032b2dbcd53a97393e0f3bac4c4c1efe174a65e9e57243d5c35790c749fa3ba2"
+
+// The rows are forwardcell's mix, byte for byte.
+func TestTheRowsFixtureIsForwardcellsMix(t *testing.T) {
+	rowsBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(testRowsFixture(t, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest := sha256.Sum256(rowsBytes); hex.EncodeToString(digest[:]) != testRowsFixtureSixSha256 {
+		t.Fatalf("the six-device rows hash to %x, forwardcell's copy to %s", digest, testRowsFixtureSixSha256)
 	}
 }
