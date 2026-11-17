@@ -3715,6 +3715,13 @@ The design-records track for §14 to §23's second pass folded the answers below
     - Not taken: (2) counting each request, as built, bringyour.yml and §21.16 then saying requests, up to 600 reports an hour per caller.
     - Raised by the build (the abuse-report-limit-redis track; the build's ledger, QD-1024). It follows owner decision 536.
 
+583. **A sync round other than "search more"'s asks the windows rule again before each read of all, so a window or foreground round stops fetching all once its link turns metered, its charger is unplugged or Low Power Mode turns on (option 1, the recommendation, 2026-11-17).**
+    - Question: owner decision 576 made the search policy's windows rule (in a window or foregrounded) and unmetered and charging and not paused, but the sync engine read the rule once a round, before its read of the all set, and the fetch loop checked only the round's context and the day's background budget before each read, so a phone that started a window or foreground round on Wi-Fi while charging and then left Wi-Fi, was unplugged or entered Low Power Mode read the rest of all under the new conditions until the round or the window's budget ended, up to its all cap, 256 MiB on phones; §18.7 has a window do §18.4's work "while the reported conditions allow it", and owner decision 576's reason, that a phone's metered data is the person's money, applies to the rest of a round as much as to its start.
+    - Answer: before each read of the all set in a sync round that is not "search more"'s, the fetch loop asks the ref's rule again; where it no longer allows all, the round ends its fetch of all, what landed stays staged in the plan, and the next window or foreground round the rule allows resumes from there, as a window's end does. A "search more" keeps its own metered wait at the call and is unchanged. FS-77 gains a case: a window on Wi-Fi while charging whose link turns metered after its first shard reads no further shard of all, and the next allowed window resumes (§18.4's windows row, §18.7's window row, FS-77).
+    - Cost: one policy read a read of all.
+    - Not taken: (2) keeping the per-round reading, §18.4 and the policy saying that a round started under allowed conditions runs to its end, bounded by the cap and the day's background budget.
+    - Raised by the build (the search-window-unmetered track; the build's ledger, QD-1026). It follows owner decision 576.
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

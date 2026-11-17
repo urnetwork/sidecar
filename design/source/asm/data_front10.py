@@ -1071,6 +1071,9 @@ INDEX = list(_P9['INDEX']) + [
     (582, 'Reports counted each',
      "`POST /abuse/report` counts each URL and header block toward its 30 an hour, refusing a request whole past "
      "it."),
+    (583, 'Search windows checked each read',
+     "A sync round other than \"search more\"'s asks the windows rule again before each read of all, stopping once "
+     "it no longer allows all."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -1131,7 +1134,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 583))
+assert [r[0] for r in INDEX] == list(range(1, 584))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1218,7 +1221,8 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               563: '2026-11-16', 564: '2026-11-16', 565: '2026-11-16', 566: '2026-11-16', 567: '2026-11-16',
               568: '2026-11-16', 569: '2026-11-17', 570: '2026-11-17', 571: '2026-11-16', 572: '2026-11-16',
               573: '2026-11-16', 574: '2026-11-16', 575: '2026-11-17', 576: '2026-11-16', 577: '2026-11-17',
-              578: '2026-11-17', 579: '2026-11-17', 580: '2026-11-17', 581: '2026-11-17', 582: '2026-11-17'})
+              578: '2026-11-17', 579: '2026-11-17', 580: '2026-11-17', 581: '2026-11-17', 582: '2026-11-17',
+              583: '2026-11-17'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1528,4 +1532,4 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "rules (575), search windows only on an unmetered link while charging (576), edge client slots over a "
     "service's processes (577), amending @@OD:428@@, `sidecarctl jwt export-jwks` (578), filecluster-wear's job "
     "label (579), a mail receiver's session keys while dark (580), amending @@OD:520@@, a review refusal's case "
-    "id (581) and reports counted each (582). ")
+    "id (581), reports counted each (582) and the windows rule asked before each read of all (583). ")

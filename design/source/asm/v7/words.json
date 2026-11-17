@@ -156,7 +156,7 @@
   "num": 18,
   "code": "SDK",
   "words": 10431,
-  "code_words": 10601,
+  "code_words": 10672,
   "ceiling": 3000,
   "over": 7431,
   "over_pct": 247.7
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7665,
-  "code_words": 37270,
+  "code_words": 37300,
   "ceiling": 2500,
   "over": 5165,
   "over_pct": 206.6

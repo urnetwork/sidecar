@@ -84,7 +84,10 @@ windows     wifi_charging syncs all only while the host is on an unmetered link 
             window's budget, else a capable writer runs it; Low Power Mode or power saving pauses it; a window
             on cellular or unplugged fetches no all, since an iOS BGProcessingTask can require power and a
             network but not Wi-Fi, and the core gates every window itself rather than relying on each host
-            (owner decision 576)
+            (owner decision 576); a sync round other than "search more"'s asks this rule again before each
+            read of all, and once it no longer allows all (the link metered, the charger unplugged or Low Power
+            Mode on) the round ends its fetch there, what landed staying staged for the next round the rule
+            allows to resume, as at a window's budget (owner decision 583)
 conditions  hosts report unmetered, charging and low power (18.7); a condition not yet reported, or one the
             browser hides, counts as metered and not charging; ur daemon hosts report none and count as
             unmetered; the Go core reads no platform API
@@ -703,7 +706,8 @@ window      iOS: a BGProcessingTaskRequest with requiresExternalPower and requir
             setRequiresCharging(true) and NetworkType.UNMETERED
             (https://developer.android.com/reference/androidx/work/Constraints.Builder); each calls
             RunBackgroundSync(budget), which does 18.4's window work while the reported conditions allow it,
-            stops at the budget and resumes next time
+            asking again before each read of all (owner decision 583), stops at the budget and resumes next
+            time
 conditions  SetConditions(unmetered, charging, lowPower) on each change: iOS NWPathMonitor (unmetered =
             neither isExpensive nor isConstrained), UIDevice batteryState, ProcessInfo
             isLowPowerModeEnabled; Android NET_CAPABILITY_NOT_METERED, BatteryManager.isCharging,

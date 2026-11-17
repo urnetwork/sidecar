@@ -1930,12 +1930,14 @@ FS-77  §11,18 an ios32 and an Android surrogate cell and a page Worker, each ho
               while open, while Safari and Firefox, which hide them, count as metered and not
               charging: all waits for "search more", and one over 25 MiB for AllowMetered; an
               app that has not yet called SetConditions counts as metered; an iOS
-              BGProcessingTask window on cellular fetches no all; ur search sync --evict,
-              DropCache and the caps' eviction keep §5.9's non-derived search state (policy
-              overrides, remote mode, notice answers and served records), while a browser's
-              whole-origin eviction loses it with the keychain, the next Worker starting from
-              defaults (§5.9's rebuild row); a phone runs its merges and roll-ups only in
-              windows, within its cap (FS-75)
+              BGProcessingTask window on cellular fetches no all; a window on Wi-Fi while
+              charging whose link turns metered after its first shard reads no further shard
+              of all, and the next allowed window resumes there (owner decision 583); ur
+              search sync --evict, DropCache and the caps' eviction keep §5.9's non-derived
+              search state (policy overrides, remote mode, notice answers and served records),
+              while a browser's whole-origin eviction loses it with the keychain, the next
+              Worker starting from defaults (§5.9's rebuild row); a phone runs its merges and
+              roll-ups only in windows, within its cap (FS-75)
 FS-78  §11,15 a mailbox and a vault, both indexed, at the exact storage limit and spent, the   FI-5,13c,19 T2+T3  M10-out;
               eraser at evs_closure_bytes_floor: an admin's erasure of one email first                            mailbox
               commits its CUT and an ERASE of the email's own keys, both at once, the email                       M7, holds
