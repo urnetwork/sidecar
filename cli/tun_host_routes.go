@@ -1,21 +1,25 @@
 //go:build darwin || windows
 
-// The carved addresses' host routes under exits on macOS and Windows (§17.4, §17.11; QD-869), the part the two
-// platforms share (tun_darwin.go, tun_windows.go). There the exits ride IPv4's two halves in the host's main table,
-// so an address the bridge carves, this host's interface addresses, gateways and resolvers, that the host reaches
-// only by its default route matches a half and enters the tun, where the bridge sends it to today's route, which a
-// tun can only drop: an off-link resolver above all. Each such address takes a host route by the default route's
-// gateway and interface, as wg-quick on macOS and WireGuard for Windows route an endpoint's /32, so the host's own
-// traffic to it leaves outside the exits, as Linux's throw routes have it (QD-808).
+// The carved addresses' host routes under exits on macOS and Windows (§17.4, §17.11; owner decision 480: QD-869,
+// QD-971), the part the two platforms share (tun_darwin.go, tun_windows.go). There the exits ride IPv4's two halves and
+// IPv6's in the host's main table, so an address the bridge carves, this host's interface addresses, gateways and
+// resolvers, that the host reaches only by its default route of that family matches a half and enters the tun, where
+// the bridge sends an IPv4 one to today's route, which a tun can only drop, and rejects an IPv6 one (QD-970): an
+// off-link resolver above all. Each such address takes a host route by its family's default route's gateway and
+// interface, as wg-quick on macOS and WireGuard for Windows route an endpoint's /32, so the host's own traffic to it
+// leaves outside the exits, as Linux's throw routes have it (QD-808).
 //
-//	which    the IPv4 addresses of the carve SetCarved last gave that no route of the host's own but its default
-//	         route holds. One an on-link or local route reaches takes none, since a /32 by the gateway would move it
-//	         off its own link; nor does one inside a route of the tun's own, which stays the bridge's to judge, as on
-//	         Linux, where the throws sit in the exits table alone; nor the gateway itself, a loopback or a multicast
-//	         address. Nothing is added by the platform's addresses (QD-800): only the bridge's carve names one
-//	when     while a half is on: before the halves go on, at each SetCarved, and at each sync's SetExits, which reads
-//	         the default route again, so a route that moved takes them with it, the old ones off and new ones on by
-//	         the gateway it has now. They come off once no half is left, and at close
+//	which    the addresses of the carve SetCarved last gave, of either family, that no route of the host's own but
+//	         its default route of that family holds. One an on-link or local route reaches takes none, since a host
+//	         route by the gateway would move it off its own link; nor does one inside a route of the tun's own, which
+//	         stays the bridge's to judge, as on Linux, where the throws sit in the exits table alone; nor the gateway
+//	         itself, a loopback or a multicast address, nor a link-local IPv6 one, which never leaves its link, as
+//	         IPv6's gateways do not. A family with no default route of its own takes none. Nothing is added by the
+//	         platform's addresses (QD-800): only the bridge's carve names one
+//	when     while a half of the address's family is on: before the halves go on, at each SetCarved, and at each
+//	         sync's SetExits, which reads the default routes again, so a route that moved takes them with it, the old
+//	         ones off and new ones on by the gateway it has now. A family's come off once no half of that family is
+//	         left, and all of them at close
 //	whose    only a route this interface put on is ever removed. One whose address another route already holds is
 //	         left to that route. A host route leaves by an interface that outlives the tun, so one a daemon that
 //	         died left behind stays until the host restarts or a person removes it, and reads here as another
@@ -32,8 +36,9 @@ import (
 	"slices"
 )
 
-// The host route of one carved address: the next hop it goes by, the host's own IPv4 default route's, not valid
-// where that route names none, and the interface it leaves by, its index on macOS and its luid on Windows.
+// The host route of one carved address: the next hop it goes by, the host's own default route's of the address's
+// family, not valid where that route names none, and the interface it leaves by, its index on macOS and its luid on
+// Windows.
 type urTunHostRoute struct {
 	address netip.Addr
 	gateway netip.Addr
@@ -50,16 +55,17 @@ type urTunHostRouteCalls struct {
 	gone func(err error) bool
 }
 
-// The host routes the carved addresses take: one for each IPv4 address of carvedAddrs that reached does not hold,
-// by gateway through link, the host's own default route's. reached answers whether a route of the host's own other
-// than its default route holds an address. None for an address inside ownRoutes, the tun's own, for gateway itself,
-// or for an unspecified, loopback or multicast address.
-func urTunHostRoutes(carvedAddrs []netip.Addr, gateway netip.Addr, link uint64, ownRoutes []netip.Prefix,
+// The host routes the carved addresses of one family take, IPv4's where ipv4 and IPv6's otherwise (QD-971): one for
+// each address of carvedAddrs of that family that reached does not hold, by gateway through link, the host's own
+// default route's of that family. reached answers whether a route of the host's own other than its default routes
+// holds an address. None for an address inside ownRoutes, the tun's own, for gateway itself, for an unspecified,
+// loopback or multicast address, or for an IPv6 one no route takes off the host (urTunCarvedIpv6Leaves).
+func urTunHostRoutes(carvedAddrs []netip.Addr, ipv4 bool, gateway netip.Addr, link uint64, ownRoutes []netip.Prefix,
 	reached func(address netip.Addr) bool) []urTunHostRoute {
 	hostRoutes := []urTunHostRoute{}
 	for _, address := range carvedAddrs {
-		if !address.Is4() || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() ||
-			address == gateway {
+		if address.Is4() != ipv4 || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() ||
+			address == gateway || (!ipv4 && !urTunCarvedIpv6Leaves(address)) {
 			continue
 		}
 		if slices.ContainsFunc(ownRoutes, func(prefix netip.Prefix) bool { return prefix.Contains(address) }) {
@@ -127,14 +133,19 @@ func urTunSetHostRoutes(onRoutes []urTunHostRoute, wanted []urTunHostRoute, call
 	return kept, setErr
 }
 
-// The IPv4 addresses of addresses, unmapped, sorted, with no repeats: the carve as the host routes follow it.
-func urTunCarvedIpv4Addrs(addresses []netip.Addr) []netip.Addr {
-	carvedAddrs := []netip.Addr{}
-	for _, address := range addresses {
-		if address = address.Unmap(); address.Is4() && !slices.Contains(carvedAddrs, address) {
-			carvedAddrs = append(carvedAddrs, address)
+// Those of hostRoutes in the families that stand, IPv4's where ipv4 and IPv6's where ipv6, in their order: what a
+// clear keeps of a family whose halves have not all come off, since a lookup of its addresses still needs them.
+func urTunStandingHostRoutes(hostRoutes []urTunHostRoute, ipv4 bool, ipv6 bool) []urTunHostRoute {
+	standing := []urTunHostRoute{}
+	for _, hostRoute := range hostRoutes {
+		if (hostRoute.address.Is4() && ipv4) || (!hostRoute.address.Is4() && ipv6) {
+			standing = append(standing, hostRoute)
 		}
 	}
-	slices.SortFunc(carvedAddrs, netip.Addr.Compare)
-	return carvedAddrs
+	return standing
+}
+
+// The carve as the host routes follow it, both families: IPv4's addresses, then IPv6's (urTunCarvedAddrs).
+func urTunCarvedHostAddrs(addresses []netip.Addr) []netip.Addr {
+	return append(urTunCarvedAddrs(addresses, true), urTunCarvedAddrs(addresses, false)...)
 }
