@@ -17,6 +17,16 @@
 //     state reads to fail closed. A clock version's fall (sock, gkm, evs:, core, mail, tls) is a gap:
 //     the subscribers refetch, check what they fetch against their pins, and the fall is adopted.
 //   - A topic a reset omits keeps the client's version.
+//   - A versions page is judged by what it could have seen (owner decision 299). The machine counts the
+//     inputs the push gives it, each reset part and hint, a poll's reset included, and a refetch notes
+//     the count as it begins, since nothing orders api's read of a page against a resident's read of
+//     what it sends. A page begun after every input taken keeps the rules above. A late page, begun
+//     before an input since taken, takes only its rises: a durable topic it shows lower raises no alarm
+//     and an open run it would end stays open, either sending the client to versions again; a clock
+//     topic it shows lower waits for the next page; and it keeps the seq baseline, since it covers no
+//     hint after the one that set it. Late pages ask for at most MaxLateRefetchCount refetches in a
+//     row, one by default, so a late page costs one more refetch at most, and what the page answering
+//     that ask leaves, late again, waits for the next.
 //
 // Every version is a uint64 on every leg. What the machine applied is kept in the store, so a restart
 // neither re-fetches what it has nor forgets a durable floor.
@@ -55,6 +65,11 @@ type PushClientSettings struct {
 	RetryMinInterval time.Duration
 	// The longest wait between failed refetches: 5 min.
 	RetryMaxInterval time.Duration
+	// The most versions refetches in a row late pages ask for, each page answering the ask of the one
+	// before: 1, the one more refetch owner decision 299 gives a late page, so pages a busy push keeps
+	// late never loop. A late page past it takes its rises and leaves a durable fall or an open run to
+	// the next page. Zero or less: a late page never asks.
+	MaxLateRefetchCount int
 }
 
 // The defaults.
@@ -64,6 +79,7 @@ func DefaultPushClientSettings() *PushClientSettings {
 		MaxTopicCount:       64 * 1024,
 		RetryMinInterval:    1 * time.Second,
 		RetryMaxInterval:    5 * time.Minute,
+		MaxLateRefetchCount: 1,
 	}
 }
 
@@ -118,6 +134,11 @@ type pushMachine struct {
 	// the last hint's seq, once one has set the baseline since the last reset
 	lastSeq uint64
 	hasSeq  bool
+	// the reset parts and hints taken, a poll's reset counting as a part: what a refetch notes as it
+	// begins, to judge its page by
+	inputCount uint64
+	// the refetches in a row late pages asked for, each page answering the one before's ask
+	lateRefetchCount int
 }
 
 // A machine starting from topicVersions, what a client applied before, nil for none.
@@ -145,6 +166,7 @@ func (self *pushMachine) resetPart(part *protocol.PushReset) *pushAction {
 	if part == nil {
 		return action
 	}
+	self.inputCount += 1
 	if self.runOpen && part.Epoch != self.runEpoch {
 		self.abandonRun()
 		action.refetchVersions = true
@@ -172,22 +194,46 @@ func (self *pushMachine) resetPart(part *protocol.PushReset) *pushAction {
 	}
 	union := self.runVersions
 	self.abandonRun()
-	self.applyReset(union, action)
+	self.applyReset(union, false, action)
 	return action
 }
 
-// A whole reset at once, every part's versions together: a versions refetch, or a poll's complete part.
-func (self *pushMachine) reset(topicVersions map[string]uint64) *pushAction {
+// A poll's complete part, whole: an input, as a resident's part is, applied by the file header's rules.
+func (self *pushMachine) pollReset(topicVersions map[string]uint64) *pushAction {
 	action := &pushAction{}
+	self.inputCount += 1
 	self.abandonRun()
-	self.applyReset(topicVersions, action)
+	self.applyReset(topicVersions, false, action)
 	return action
 }
 
-// Applies a complete reset's union by the file header's rules, into action. Every topic named gets its
+// A versions refetch's run of pages, every page's versions together, from a refetch begun when the
+// machine had taken inputCount inputs. Begun after every input since, it ends any open run and applies
+// by the file header's rules; begun before an input since taken, it is late and takes only its rises,
+// as the file header says, asking for versions again while MaxLateRefetchCount allows.
+func (self *pushMachine) reset(topicVersions map[string]uint64, inputCount uint64) *pushAction {
+	action := &pushAction{}
+	if self.inputCount <= inputCount {
+		self.lateRefetchCount = 0
+		self.abandonRun()
+		self.applyReset(topicVersions, false, action)
+		return action
+	}
+	durableFell := self.applyReset(topicVersions, true, action)
+	if (durableFell || self.runOpen) && self.lateRefetchCount < self.settings.MaxLateRefetchCount {
+		self.lateRefetchCount += 1
+		action.refetchVersions = true
+	} else {
+		self.lateRefetchCount = 0
+	}
+	return action
+}
+
+// Applies a complete reset's union by the file header's rules, into action, or, for a late page, only
+// its rises, returning whether it showed a durable topic lower than held. Every topic named gets its
 // subscribers' resync notice when it moves, and core gets one whatever it shows, since a client fetches
 // core at every resync (plan-CORE-core-hint-body #3).
-func (self *pushMachine) applyReset(topicVersions map[string]uint64, action *pushAction) {
+func (self *pushMachine) applyReset(topicVersions map[string]uint64, late bool, action *pushAction) (durableFell bool) {
 	topics := slices.Sorted(func(yield func(string) bool) {
 		for topic := range topicVersions {
 			if !yield(topic) {
@@ -216,6 +262,11 @@ func (self *pushMachine) applyReset(topicVersions map[string]uint64, action *pus
 			}
 			action.notices = append(action.notices, PushNotice{Topic: topic, Version: version, Resync: true})
 			coreNoticed = coreNoticed || topic == PushTopicCore
+		case late && class == PushTopicDurable:
+			// below a rise the page may not have seen: no alarm, and versions again
+			durableFell = true
+		case late:
+			// a clock's fall waits for the next page
 		case class == PushTopicDurable:
 			// never lowered: an alarm, and the topic fails closed until its owner reconciles it
 			self.alarmTopics[topic] = true
@@ -231,8 +282,11 @@ func (self *pushMachine) applyReset(topicVersions map[string]uint64, action *pus
 	if !coreNoticed {
 		action.notices = append(action.notices, PushNotice{Topic: PushTopicCore, Version: self.topicVersions[PushTopicCore], Resync: true})
 	}
-	// a reset is the new baseline: the next hint's seq sets it
-	self.hasSeq = false
+	if !late {
+		// a reset is the new baseline: the next hint's seq sets it
+		self.hasSeq = false
+	}
+	return durableFell
 }
 
 // One hint by the file header's rules.
@@ -241,6 +295,7 @@ func (self *pushMachine) hint(hint *protocol.PushHint) *pushAction {
 	if hint == nil {
 		return action
 	}
+	self.inputCount += 1
 	if self.runOpen {
 		self.abandonRun()
 		action.refetchVersions = true
@@ -557,7 +612,7 @@ func (self *pushFeed) applyPoll(response *protocol.PollResponse) {
 				topicVersions[topicVersion.Topic] = topicVersion.Version
 			}
 			self.apply(func(machine *pushMachine) *pushAction {
-				return machine.reset(topicVersions)
+				return machine.pollReset(topicVersions)
 			})
 		} else {
 			// a part of a run the poll never finishes: applies nothing, and versions puts it right
@@ -591,8 +646,15 @@ func (self *pushFeed) reconcile(topic string, version uint64) {
 	}
 }
 
-// Fetches every page of one versions run and applies it whole, or applies nothing.
+// Fetches every page of one versions run and applies it whole, or applies nothing, judged by the inputs
+// the machine had taken before the first page was asked for.
 func (self *pushFeed) refetchVersions() error {
+	var inputCount uint64
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		inputCount = self.machine.inputCount
+	}()
 	topicVersions := map[string]uint64{}
 	cursor := []byte(nil)
 	epoch := uint64(0)
@@ -621,7 +683,7 @@ func (self *pushFeed) refetchVersions() error {
 		cursor = response.Cursor
 	}
 	self.apply(func(machine *pushMachine) *pushAction {
-		return machine.reset(topicVersions)
+		return machine.reset(topicVersions, inputCount)
 	})
 	return nil
 }
