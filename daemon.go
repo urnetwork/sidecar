@@ -518,16 +518,18 @@ func (self *Daemon) serveRpc(reader *bufio.Reader, conn net.Conn, session *daemo
 }
 
 // Runs handler under SidecarLocalSettings.RequestTimeout on the daemon's clock, reporting whether it timed out. The
-// handler's context ends at the timeout, and a handler that does not return by then is left to finish on its own.
+// handler's context ends at the timeout, and a handler that does not return by then is left to finish on its own. The
+// time it waits on a person, daemonPersonWait's, is outside the bound (QD-518; daemon_request_bound.go).
 func (self *Daemon) runBounded(handler func(ctx context.Context) (any, error)) (any, error, bool) {
 	ctx, cancel := context.WithCancel(self.ctx)
 	defer cancel()
 	timedOut := make(chan struct{})
-	stop := self.clock.AfterFunc(self.settings.Local.RequestTimeout, func() {
+	bound := newDaemonRequestBound(self.clock, self.settings.Local.RequestTimeout, func() {
 		close(timedOut)
 		cancel()
 	})
-	defer stop()
+	defer bound.end()
+	ctx = withDaemonRequestBound(ctx, bound)
 	type outcome struct {
 		result any
 		err    error
