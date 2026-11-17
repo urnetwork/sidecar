@@ -168,6 +168,37 @@ func awaitGkmReconcilerPasses(t *testing.T, ctx context.Context, reconciler *Gkm
 	}
 }
 
+// Moves the clock by step once the loop waits, then waits for the pass the move starts. step is at most the gate's hint
+// interval, so the loop's timer falls within it, and the clock never moves while a pass runs (GkmReconciler.Idle).
+func stepGkmReconciler(t *testing.T, ctx context.Context, clock *sidecartest.FakeClock, reconciler *GkmReconciler, step time.Duration) {
+	t.Helper()
+	for {
+		idle, changed := reconciler.Idle()
+		if idle {
+			break
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatal("the reconciler never waited")
+		}
+	}
+	count, changed := reconciler.Passes()
+	clock.Advance(step)
+	for {
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatal("no pass after the clock moved")
+		}
+		var passed int
+		passed, changed = reconciler.Passes()
+		if count < passed {
+			return
+		}
+	}
+}
+
 // Waits until the listing has read count pages.
 func awaitGkmListing(t *testing.T, ctx context.Context, reconciler *GkmReconciler, count int) GkmNetworkListing {
 	t.Helper()
@@ -369,8 +400,9 @@ func TestGkmReconcilerAsksForAnEvictedNetworkAtItsWakeAndKeepsTheWake(t *testing
 	}
 
 	state.evict(world.networkId)
-	world.awaitIdle()
-	fixture.clock.AdvanceTo(expiry)
+	for fixture.clock.Now().Before(expiry) {
+		stepGkmReconciler(t, fixture.ctx, fixture.clock, world.reconciler, world.reconciler.settings.PendingHintInterval)
+	}
 	awaitGkmReconcilerPasses(t, fixture.ctx, world.reconciler, "hint the expiry", func() bool { return world.pendingHints(writer) == 1 })
 	if loads := state.loads(); !slices.Equal(loads, []sidecar.Id{world.networkId}) {
 		t.Errorf("asked for %v at the wake", loads)
@@ -434,50 +466,44 @@ func TestGkmReconcilerBacksOffAStateThatDoesNotLoad(t *testing.T) {
 	state.store(networkId, views[networkId], nil)
 	state.setFailing(true)
 	settings := DefaultGkmReconcilerSettings()
-	settings.StateRetryMaxInterval = 4 * settings.PendingHintInterval
+	interval := settings.PendingHintInterval
+	settings.StateRetryMaxInterval = 4 * interval
 	reconciler, err := NewGkmReconciler(ctx, fixture.host.ServiceHost(), settings, &GkmReconcilerDeps{State: state, Networks: pages.page})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reconciler.Close()
 	awaitGkmListing(t, ctx, reconciler, 1)
-	asked := func(count int) func() bool {
-		return func() bool { return len(state.loads()) == count }
+	listedAt := fixture.clock.Now()
+	// the loop's first pass, and the one the listing's wake brings
+	awaitGkmReconcilerPasses(t, ctx, reconciler, "pass after the listing", func() bool {
+		count, _ := reconciler.Passes()
+		return 2 <= count
+	})
+	if loads := state.loads(); len(loads) != 1 {
+		t.Fatalf("the listing asked %v", loads)
 	}
-	if !asked(1)() {
-		t.Fatalf("the listing asked %v", state.loads())
-	}
-	idle := func() {
-		t.Helper()
-		for {
-			idle, changed := reconciler.idle.Get()
-			if idle {
-				return
-			}
-			select {
-			case <-changed:
-			case <-ctx.Done():
-				t.Fatal("the reconciler never waited")
+	// asked again PendingHintInterval after the listing, then after waits doubling to StateRetryMaxInterval and held
+	// there: at 1, 2, 4, 8, 12 and 16 intervals, and at no step between
+	askedAfter := []time.Duration{interval, 2 * interval, 4 * interval, 8 * interval, 12 * interval, 16 * interval}
+	for step := 1; step <= 16; step += 1 {
+		if step == 13 {
+			// the store recovers: the ask at 16 intervals installs
+			state.setFailing(false)
+		}
+		stepGkmReconciler(t, ctx, fixture.clock, reconciler, interval)
+		elapsed := fixture.clock.Now().Sub(listedAt)
+		want := 1
+		for _, after := range askedAfter {
+			if after <= elapsed {
+				want += 1
 			}
 		}
-	}
-	// the waits after the listing's ask: PendingHintInterval, then doubling, held at StateRetryMaxInterval
-	interval := settings.PendingHintInterval
-	waits := []time.Duration{interval, interval, 2 * interval, 4 * interval, 4 * interval}
-	for i, wait := range waits {
-		idle()
-		fixture.clock.Advance(wait - time.Second)
-		idle()
-		if loads := state.loads(); len(loads) != i+1 {
-			t.Fatalf("asked %d times a second before wait %d of %s", len(loads), i, wait)
+		if loads := state.loads(); len(loads) != want {
+			t.Fatalf("asked %d times %s after the listing, want %d", len(loads), elapsed, want)
 		}
-		fixture.clock.Advance(time.Second)
-		awaitGkmReconcilerPasses(t, ctx, reconciler, "ask again", asked(i+2))
 	}
-	// the store recovers: the next ask installs, the read holds the state and the failures end
-	state.setFailing(false)
-	idle()
-	fixture.clock.Advance(4 * interval)
+	// the install's change is read, which holds the state and ends the failures
 	awaitGkmReconcilerPasses(t, ctx, reconciler, "read the recovered network", func() bool { return reconciler.holdsNetworkState(networkId) })
 	if _, failureCount, wakeOwed := reconciler.networkReads(networkId); failureCount != 0 || wakeOwed {
 		t.Errorf("after the install: %d failures, wake owed %t", failureCount, wakeOwed)

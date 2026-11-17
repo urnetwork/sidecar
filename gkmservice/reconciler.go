@@ -494,6 +494,14 @@ func (self *GkmReconciler) Passes() (count int, changed chan struct{}) {
 	return self.passCount.Get()
 }
 
+// Whether the hint loop waits with its timer set, and a channel that closes when that changes: what a test waits on
+// before it moves a fake clock. The loop sets its timer from the clock's time when the pass ends, so a move made while
+// a pass runs may set that timer up to the move's length late; a test that moves the clock only while the loop waits,
+// by at most the gate's hint interval, then waits for the pass the move starts, reaches every wake.
+func (self *GkmReconciler) Idle() (idle bool, changed chan struct{}) {
+	return self.idle.Get()
+}
+
 // How far the start's listing has come, and a channel that closes when it moves: what a test waits on. A page is
 // counted once the wait for the next is set, so a fake clock moved after the count reaches that wait.
 func (self *GkmReconciler) NetworkListing() (listing GkmNetworkListing, changed chan struct{}) {
