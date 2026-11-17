@@ -66,7 +66,7 @@ From M9 (owner decision 35), all networks and burners send from the shared lb ad
 | Trigger (trailing 24 h) | Action | Clears |
 |---|---|---|
 | `<root>` Postmaster spam rate ≥0.10% two days running, or feedback-loop complaints ≥0.10% of recipients | restricted networks pause; Community caps halve | 3 days below 0.08% |
-| Either measure ≥0.20%, or a sending address on Spamhaus SBL/CSS or SNDS red | Community pauses (HALTED, queues held); the listed address leaves the sending set, not ingress, within the feed refresh, with no drain target (§14.6; owner decision 124) | delisting, then 3 clean days |
+| Either measure ≥0.20%, or a sending address on Spamhaus SBL/CSS or SNDS red | Community pauses (HALTED, queues held); the listed address leaves the sending set as §14.6 says, with no drain target (owner decision 124) | delisting, then 3 clean days |
 | ≥0.30% | Community and Pro pause; trusted Team continues | owner |
 
 Breakers act early: `<root>` cannot be replaced, and listings also block platform ingress (21.17).
@@ -305,7 +305,7 @@ also                    Web Risk, reviewer and pager routing, and counsel's out-
 | A drop used to destroy evidence before a hold arrives | Low | Medium | the 7-day window keeps every byte for a hold to cover (owner decision 183); `now` drops stay visible in push history (evs-12); held drops delete nothing (owner decision 184) |
 | False reports | Medium | Medium | reporter classes, host-level first, appeals |
 | Free Sybil networks | High | High | probation, verification, the send gate, creation limits, label-scoped halts |
-| A shared lb address is listed, for mail or a user name's phishing (§13.16), also blocking api and connect ingress there; with no separate mail pool to drain to and no warm-up (owner decision 124), enough listings degrade sending and the shared api and connect ingress together (accepted) | Medium | High | breakers; the address leaves the sending set (§14.6); per-domain and per-network reputation; 1 h kills; delisting |
+| A shared lb address is listed for a user name's phishing (§13.16), as for mail (§14.15's row), also blocking api and connect ingress there (accepted; owner decision 124) | Medium | High | §14.15's row; 1 h kills |
 | Without a policy, untagged sidecars and their agents reach providers' LAN and loopback (accepted, disclosed; owner decisions 50, 120) | High | High | §2.18's disclosure; policies on any tier (owner decision 73); suspension |
 
 ### 21.18 Phasing

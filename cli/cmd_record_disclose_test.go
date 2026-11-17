@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -151,10 +152,51 @@ func TestRecordDiscloseMethodsConfirm(t *testing.T) {
 	}
 }
 
+// A require of the root module by its versioned path, which only a version branch's go.mod holds: the release moves
+// the root into v2026/ beside this module and sidecar_cli_release_edit requires it there (§4.9). smtpproof's
+// versioned path, which goes on past the root's, does not match.
+var testUrVersionedRootRequirePattern = regexp.MustCompile(`(?m)^\s*(?:require\s+)?github\.com/urnetwork/sidecar/(v[0-9]+)\s`)
+
+// The root module's directory from this module's, by this module's go.mod: its parent in development, and on a
+// version branch the v2026/ beside it, which the root's testdata/ moves into with it.
+func testUrRootDirectory(goMod []byte) string {
+	if match := testUrVersionedRootRequirePattern.FindSubmatch(goMod); match != nil {
+		return filepath.Join("..", string(match[1]))
+	}
+	return ".."
+}
+
+// The root's directory in each layout, by the go.mod sidecar_cli_release_edit leaves: on a version branch the
+// release's make check found no ../testdata, where the committed vectors had been (QD-1003).
+func TestRootDirectoryInEitherLayout(t *testing.T) {
+	development := "module github.com/urnetwork/sidecar/cli\n\ngo 1.27.4\n\nrequire (\n" +
+		"\tgithub.com/urnetwork/sidecar v0.0.0\n\tgithub.com/urnetwork/sidecar/smtpproof v0.0.0\n)\n"
+	release := "module github.com/urnetwork/sidecar/cli\n\ngo 1.27.4\n\nrequire (\n" +
+		"\tgithub.com/urnetwork/sidecar/smtpproof/v2026 v2026.11.6-1234567\n\tgithub.com/urnetwork/sidecar/v2026 v2026.11.6-1234567\n)\n"
+	single := "module github.com/urnetwork/sidecar/cli\n\nrequire github.com/urnetwork/sidecar/v2026 v2026.11.6-1234567\n"
+	cases := []struct {
+		goMod string
+		want  string
+	}{
+		{goMod: development, want: ".."},
+		{goMod: release, want: filepath.Join("..", "v2026")},
+		{goMod: single, want: filepath.Join("..", "v2026")},
+	}
+	for _, c := range cases {
+		if got := testUrRootDirectory([]byte(c.goMod)); got != c.want {
+			t.Errorf("the root's directory reads as %q, want %q, from:\n%s", got, c.want, c.goMod)
+		}
+	}
+}
+
 // ur record verify needs no daemon: exit 0 for the committed vector under its log key, 1 under another key or with a
 // byte changed, and 2 for a file that cannot be read.
 func TestRecordVerifyExitCodes(t *testing.T) {
-	content, err := os.ReadFile("../testdata/record/packets/approval.json")
+	goMod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(testUrRootDirectory(goMod), "testdata", "record", "packets", "approval.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

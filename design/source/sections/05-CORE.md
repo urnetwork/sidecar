@@ -460,9 +460,8 @@ func (self *Sidecar) SetSearchRemote(mode string) error                       //
 func (self *Sidecar) AcknowledgeSearchIndexer(memberId *Id, allow bool) error // the notice; false sets own
 
 // !sidecar_http files only, with the client generations, streams, sockets, bridge, tls and smtp listeners and
-// the engine host interfaces (host_*.go), since no hosted server engine runs in the page Worker, whose search
-// engine needs none (§4.4); the sidecar_http leg declares SidecarConnectSettings empty and NewSidecar without
-// components.
+// the engine host interfaces (host_*.go), as §4.4 says; the sidecar_http leg declares SidecarConnectSettings
+// empty and NewSidecar without components.
 type SidecarConnectSettings struct {
 	ClientStrategySettings    *connect.ClientStrategySettings
 	ClientSettings            *connect.ClientSettings // Required, no P2P; provides Network, plus Service while on tls/ or smtp/ (§13.6) and FriendsAndFamily while sharing (§8.11); never Public (§6)
@@ -762,11 +761,9 @@ unpair  ur login -> top-level client as the next generation -> remove C
                     statements signed and not yet landed, such as a revocation
                     and its KeyRevokes (5.6) or an admission and §7.10's stale revocations, each stale
                     one re-checked before a retry (§7.10), §10's key cache, which from v0's first
-                    generation keeps each verified GenRotate's Signed bytes beside its RK_g, since a
-                    signature cannot be rebuilt later and a re-formed group's ladder carries them (§10.8)
-    authlog/        §7.9's retained log: A_k digests; the newest entries' bytes, up to HeadCheckProof's
-                    64 KiB (bases as headers), and while it sends proven the proof it verified (§6.4);
-                    on a member device, every entry from api's retention point on, for a site loss (§19.10)
+                    generation keeps each verified GenRotate's Signed bytes beside its RK_g (§10.5)
+    authlog/        §7.9's retained log, as its retain row says: on a member device, every entry from
+                    api's retention point on, for a site loss (§19.10)
     approvals/ runs/ restore/ <component>/   §16's approval ledger, run taint and restore points, and
                     each component's state, under keys derived from R_n, evs's with §11.9's pins and a
                     head reader's read records: one per path read (ref_id, path, entry version, pin at
@@ -1023,7 +1020,7 @@ None: PLAN.md:14 and :59's git identity hold, and D-CORE-1 reads "encryption key
 | An approver skips the safety-number comparison | Medium | High | invites and auth keys carry the genesis; every device sees admissions; HeadCheck (§6) |
 | A paired daemon's parent client is removed or reaped (5.3), ending its child | Medium | Medium | identity and admission survive; `ur login` re-binds (5.8) |
 | Losing every device and the code loses data | Low | High | recovery wraps; admin re-add (owner decision 62) |
-| A rogue or compromised admin admits a device under a member | Medium | High | owner-bound repos refuse it without consent; the member's devices alarm (owner decision 126) |
+| A rogue or compromised admin admits a device under a member | Medium | High | §8.18's row (owner decision 126) |
 | A thief holding an unlocked device that registered no presence key, or a same-uid process speaking control mode for a remote-mode app whose daemon registered none (owner decision 47), revokes or suspends the member's other devices, as `compromise` parking what they admitted; in a personal network the thief's device is then the member's only AdminSet device and can veto every recovery window (§7.9's Recovery) | Low | High | wherever this sidecar registered a live presence key, as `ur login` and the apps offer (owner decision 142), 5.6's presence check, set from the log so no caller skips it, puts its countersignature on each statement of the act, which api and every member device verify, so modified software cannot skip it either (owner decisions 185, 187); with none, the person's confirmation alone, which a same-uid process can forge (disclosed; owner decision 47); every member device sees each revocation; P never holds its signer; a parked device returns by an AdmissionConfirm or OwnerConfirm from outside P, and a revoked one enrolls anew |
 | An AdminSet member's lost device stays admitted, and what P would park and void stands, while its revocation's AuthorityProposal waits for another admin's cosign (k > 1; owner decision 110) | Medium | Medium | the proposer's Suspend ends its access within 5 s meanwhile (§8.8); other AdminSet devices cosign by `ur approve <proposal_id>` on `/dev/tty`, or list the proposal in `GetPending` and cosign through `Decide` (§18.5); an admin's remove-client denies at the server at once (§7.10) |
 | A stolen recovery code, or the code a stolen device rebinds its member to, with that member's login or the operator's help, reads its wraps at once, whatever the window or a veto, until a compromise rebind or §7.9's cascade voids its binding, and opens keychain backups sealed to it; with `self_admit` on, for a member outside the AdminSet, it also admits a device at once, which reads the member's repos until revoked (owner decisions 112, 126, 127, 149) | Low | High | the member's devices alarm (`recovery_rebind` at the rebind and at its void) and revoke it; `ur keychain recovery-rotate --compromise`, then revoking for compromise and enrolling anew each device whose backups may hold a sealing to it (5.9); no device stores the code |
