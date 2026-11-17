@@ -1473,6 +1473,162 @@ func TestRecordEvsStreamsRefusesADeltaOffTheNewestVersion(t *testing.T) {
 	}
 }
 
+// sidecarId's EvsRepo of repoId, on the client its For reaches.
+func (self *recordEvsWorld) evsRepo(sidecarId sidecar.Id, repoId sidecar.Id) *sidecar.EvsRepo {
+	self.For(sidecarId)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.clients[sidecarId].Repo(repoId)
+}
+
+// QD-926: a stream's ref name is the owned ref name every ur/ name takes, ur/<Id.String()>/record, which reads back
+// its writer under the check a conflict ref's name passes; the 32 hex digits it once spelled read as no one's.
+func TestRecordStreamRefNameIsTheOwnedRefName(t *testing.T) {
+	vectorId := sidecar.Id{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}
+	if name := sidecar.RecordStreamRefName(vectorId); string(name) != "ur/01234567-89ab-cdef-fedc-ba9876543210/record" {
+		t.Errorf("the vector's stream is named %q", name)
+	}
+	if _, ok := sidecar.EvsOwnedRefOwner([]byte("ur/0123456789abcdeffedcba9876543210/record")); ok {
+		t.Error("the 32 hex digits read as an owner")
+	}
+	for _, sidecarId := range []sidecar.Id{vectorId, sidecar.NewId(), sidecar.NewId()} {
+		name := sidecar.RecordStreamRefName(sidecarId)
+		if !bytes.Equal(name, sidecar.EvsOwnedRefName(sidecarId, "record")) || string(name) != "ur/"+sidecarId.String()+"/record" {
+			t.Errorf("%s's stream is named %q", sidecarId, name)
+		}
+		owner, ok := sidecar.EvsOwnedRefOwner(name)
+		if !ok || owner != sidecarId {
+			t.Errorf("%q reads back as %s's: %v", name, owner, ok)
+		}
+		conflict := sidecar.EvsConflictRefName(sidecarId, []byte("main"), time.Unix(1767225600, 0))
+		if conflictOwner, ok := sidecar.EvsOwnedRefOwner(conflict); !ok || conflictOwner != owner {
+			t.Errorf("the conflict ref %q reads back as %s's: %v", conflict, conflictOwner, ok)
+		}
+	}
+}
+
+// QD-926 on T2, as RECORD-M6-19's requester reads a decision: from a DecisionRef alone, the requester derives the
+// decider's stream from decider_sidecar_id, its ref id the one the decider's own push created and the decider's own
+// device derives, its head owned by the decider, and reads back the entry the decider wrote at the ref's seq.
+func TestRecordEvsStreamsRequesterDerivesADecidersStream(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// each writes the repo, as a directory's every member device writes its own stream
+	deciderId, requesterId := sidecar.NewId(), sidecar.NewId()
+	for _, sidecarId := range []sidecar.Id{deciderId, requesterId} {
+		if err := world.Grant(repoId, sidecarId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a stream that holds no ingested entry, so an entry's counter is its seq: the decision is the third
+	decision := recordEvsWorldCounterPush(world, deciderId, 1, 3)
+	if _, err := world.For(deciderId).Append(t.Context(), repoId, decision); err != nil {
+		t.Fatal(err)
+	}
+	ref := &protocol.DecisionRef{DeciderSidecarId: deciderId.Bytes(), Seq: 3}
+
+	derivedId, err := sidecar.IdFromBytes(ref.GetDeciderSidecarId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := sidecar.RecordStreamRefName(derivedId)
+	if owner, ok := sidecar.EvsOwnedRefOwner(name); !ok || owner != deciderId {
+		t.Fatalf("%q reads back as %s's: %v", name, owner, ok)
+	}
+	refId, err := world.evsRepo(requesterId, repoId).RefIdOf(t.Context(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deciderRefId, err := world.evsRepo(deciderId, repoId).RefIdOf(t.Context(), sidecar.RecordStreamRefName(deciderId))
+	if err != nil || deciderRefId != refId {
+		t.Fatalf("the decider derives its stream's ref id apart: %v", err)
+	}
+	requester := world.For(requesterId)
+	heads, err := requester.Streams(t.Context(), repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := slices.IndexFunc(heads, func(head *sidecar.RecordStreamHead) bool { return head.RefId == refId })
+	if listed < 0 || heads[listed].SidecarId != deciderId || heads[listed].Version != 1 {
+		t.Fatalf("the requester lists %+v", heads)
+	}
+	versions, err := requester.ReadStream(t.Context(), repoId, derivedId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := sidecar.RecordStreamPath(ref.GetSeq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 || versions[0].PushId != decision.PushId || len(versions[0].Entries) != 3 {
+		t.Fatalf("the decider's stream reads back %d versions", len(versions))
+	}
+	read := versions[0].Entries[2]
+	if read.Path != path || !bytes.Equal(read.Entry, decision.Entries[2].Entry) {
+		t.Fatalf("the decision reads back at %s", read.Path)
+	}
+}
+
+// QD-926: a stream push goes only to this sidecar's own stream, which the planner reads from the new ref's name.
+// Another writer's stream, and the 32 hex digits a stream's name once spelled, which name no owner, are refused before
+// anything is sealed or sent, so no device takes another's stream id; the other writer's first push then makes its
+// stream, and the device's own commits.
+func TestRecordEvsStreamsBuildRefusesAStreamNotItsOwn(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId, otherId := sidecar.NewId(), sidecar.NewId()
+	for _, sidecarId := range []sidecar.Id{writerId, otherId} {
+		if err := world.Grant(repoId, sidecarId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo := world.evsRepo(writerId, repoId)
+	sentBefore := len(world.sent())
+	for _, refName := range [][]byte{
+		sidecar.RecordStreamRefName(otherId),
+		[]byte("ur/" + strings.ReplaceAll(writerId.String(), "-", "") + "/record"),
+	} {
+		push := recordEvsWorldCounterPush(world, writerId, 1, 1)
+		_, err := repo.BuildStreamPush(t.Context(), &sidecar.EvsStreamPushArgs{
+			RefName: refName,
+			PushId:  push.PushId,
+			SlotId:  push.SlotId,
+			SlotKeys: func(fek *sidecar.EvsFekKey) ([]*protocol.EvsSlotKey, error) {
+				wrapped, err := sidecar.EvsWrapRecordSlotRow(fek, push.SlotRows[0].Row)
+				if err != nil {
+					return nil, err
+				}
+				return []*protocol.EvsSlotKey{{KeyIndex: 0, Generation: fek.Generation(), Wrapped: wrapped}}, nil
+			},
+			Files:   []*sidecar.EvsStreamFile{{Path: push.Entries[0].Path, Content: push.Entries[0].Entry}},
+			AuthPin: push.AuthPin,
+		})
+		if !errors.Is(err, sidecar.ErrEvsWriteInvalid) {
+			t.Fatalf("a stream push on %q: %v", refName, err)
+		}
+	}
+	for _, request := range world.sent()[sentBefore:] {
+		if strings.HasPrefix(request, http.MethodPut+" ") || strings.HasSuffix(request, "/push") {
+			t.Errorf("a refused stream push sent %s", request)
+		}
+	}
+	if commit, err := world.For(otherId).Append(t.Context(), repoId, recordEvsWorldCounterPush(world, otherId, 1, 1)); err != nil || commit.Version != 1 {
+		t.Fatalf("the other writer's first push: %+v %v", commit, err)
+	}
+	if commit, err := world.For(writerId).Append(t.Context(), repoId, recordEvsWorldCounterPush(world, writerId, 1, 1)); err != nil || commit.Version != 1 {
+		t.Fatalf("the writer's own first push: %+v %v", commit, err)
+	}
+	if world.streamRefId(repoId, otherId) == world.streamRefId(repoId, writerId) {
+		t.Fatal("two writers' streams share a ref id")
+	}
+}
+
 // The world's verified state as the record reads it, for the vault rule: the world's member, and its vault the live
 // vault repo whose RepoCreate landed first.
 type recordEvsWorldAuth struct {

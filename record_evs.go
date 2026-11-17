@@ -4,8 +4,9 @@
 // surface of evs (record_seam.go) bound to real streams, deposit refs and the erasure ref, so the record's writer,
 // reader, ingester, receipts and eraser reach evs with nothing of evs in their own code.
 //
-//	stream    a writer's stream is its owned ref ur/<sidecar_id as 32 lowercase hex>/record (plan-RECORD-stream-names#1,
-//	          RecordStreamRefName), whose id is that name under K_ref, so a reader derives any writer's; a push is
+//	stream    a writer's stream is its owned ref ur/<sidecar_id>/record, <sidecar_id> as Id.String() as in every ur/
+//	          name (RecordStreamRefName, through EvsOwnedRefName; QD-926, QD-485), whose id is that name under K_ref,
+//	          so a reader derives any writer's, and a requester a decider's from decider_sidecar_id; a push is
 //	          EvsRepo.BuildStreamPush and PostStreamPush (evs_stream_append.go), its entry files at the paths the caller
 //	          names and its slot object the caller's rows; a push for another writer's stream is REF_MODE here, as evs
 //	          answers another's owned ref, so no binding squats on a stream's id before its writer's first push
@@ -86,8 +87,8 @@ const (
 	recordEvsJournalPush      = "push"
 	recordEvsJournalDeposit   = "deposit"
 	recordEvsJournalErase     = "erase"
-	// a stream's ref name: ur/<sidecar_id as 32 lowercase hex>/record (plan-RECORD-stream-names#1)
-	recordStreamRefNameRest = "/record"
+	// a stream's ref name after its writer's ur/<Id.String()>/, the dashed id every ur/ name spells (QD-926, QD-485)
+	recordStreamRefNameRest = "record"
 	// the repo/ format whose streams this binding reads, format 1's (§11.6's format row); repo/'s own constant lives
 	// off the sidecar_http leg
 	evsRecordStreamsFormat = 1
@@ -220,10 +221,13 @@ func NewRecordEvsStreams(args *RecordEvsStreamsArgs) (*RecordEvsStreams, error) 
 	}, nil
 }
 
-// A writer's stream's ref name: ur/<sidecar_id as 32 lowercase hex>/record, in ASCII (plan-RECORD-stream-names#1),
-// one function, since question record-m3-01-owned-ref-id-text asks whether the id takes Id.String()'s form instead.
+// A writer's stream's ref name: ur/<sidecar_id>/record in ASCII, <sidecar_id> as Id.String(), 36 characters in the
+// 8-4-4-4-12 form, as in every ur/ name (QD-926, QD-485; ids in paths inside a repo stay 32 lowercase hex, QD-298).
+// It is the owned ref name EvsOwnedRefName gives, so the writer naming its own stream, a requester deriving a
+// decider's from decider_sidecar_id, and the planner and EvsOwnedRefOwner reading the owner from it all take one
+// text, and the ref's id under K_ref is one for all.
 func RecordStreamRefName(sidecarId Id) []byte {
-	return []byte(evsOwnedRefPrefix + hex.EncodeToString(sidecarId[:]) + recordStreamRefNameRest)
+	return EvsOwnedRefName(sidecarId, recordStreamRefNameRest)
 }
 
 // This sidecar.

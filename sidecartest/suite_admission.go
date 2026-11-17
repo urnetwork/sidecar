@@ -57,9 +57,13 @@ import (
 
 // Tunables of the admission suite.
 type AdmissionSuiteSettings struct {
-	// How long, in real time, one row may wait on a store or a follower before it fails: only ever a failure's bound,
-	// since every wait is a monitor's. 120 s, past a T3 row's store round trips.
+	// How long, in real time, one row may wait on a store or a follower before it fails: the world's context ends once
+	// this passes with no progress, no page read, entry applied or follower caught up (admission_watchdog.go), so a
+	// wait that stalls fails the row while a row that keeps moving runs as long as its work takes, however loaded the
+	// host. Only ever a failure's bound, since every wait is a monitor's. 120 s, past a T3 row's store round trips.
 	RowTimeout time.Duration
+	// The clock RowTimeout runs on: nil for real time, which nothing in a row moves; a FakeClock for a test of the bound.
+	RowClock Clock
 	// Whether api appends a tick that activates a recovery window its verifier holds due (§7.9's Recovery). T2's
 	// FakeApi appends every tick and leaves the judgment to readers; server's sequencer judges one as readers do
 	// (ConfigLog.CheckTick; TEAM-M2-14), appends it when due and refuses it before. Both are true; a tier whose api
@@ -269,9 +273,10 @@ type admissionReader struct {
 
 // One network on a tier's api, and every verifier of it.
 type AdmissionNet struct {
-	t        AdmissionT
-	ctx      context.Context
-	cancel   context.CancelFunc
+	t   AdmissionT
+	ctx context.Context
+	// ends ctx once the row makes no progress for RowTimeout
+	watchdog *admissionWatchdog
 	settings *AdmissionSuiteSettings
 	clock    *FakeClock
 	cluster  sidecar.BlobCluster
@@ -326,7 +331,11 @@ func NewAdmissionNet(t AdmissionT, tier *AdmissionTier) *AdmissionNet {
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, settings.RowTimeout)
+	rowClock := settings.RowClock
+	if rowClock == nil {
+		rowClock = sidecar.RealClock{}
+	}
+	ctx, watchdog := newAdmissionWatchdog(parent, rowClock, settings.RowTimeout)
 	clock := tier.Clock
 	if clock == nil {
 		clock = NewFakeClock(DefaultClockStart())
@@ -334,7 +343,7 @@ func NewAdmissionNet(t AdmissionT, tier *AdmissionTier) *AdmissionNet {
 	self := &AdmissionNet{
 		t:            t,
 		ctx:          ctx,
-		cancel:       cancel,
+		watchdog:     watchdog,
 		settings:     settings,
 		clock:        clock,
 		cluster:      tier.Cluster,
@@ -395,7 +404,7 @@ func (self *AdmissionNet) Close() {
 		self.follower.Close()
 	}
 	self.restoreAcl()
-	self.cancel()
+	self.watchdog.end()
 }
 
 // The tunables of every log of this world: admissionLogSettings with the tier's spend check.
@@ -636,8 +645,19 @@ func (self *AdmissionNet) catchUpFollower() {
 		if self.allowForks {
 			return
 		}
-		self.t.Fatalf("the writer's follower at %d: %v", self.applied, err)
+		self.t.Fatalf("the writer's follower at %d: %v", self.applied, self.waitError(err))
 	}
+	self.watchdog.progressed()
+}
+
+// err with why the world's context ended, once it has, so a wait the row's bound cut short names the bound
+// (ErrAdmissionRowStalled) beside what the wait saw, a closed client or a canceled call.
+func (self *AdmissionNet) waitError(err error) error {
+	cause := context.Cause(self.ctx)
+	if cause == nil || errors.Is(err, cause) {
+		return err
+	}
+	return fmt.Errorf("%w (the row's context: %w)", err, cause)
 }
 
 // The newest pin every reader stands at.
@@ -759,7 +779,7 @@ func (self *AdmissionNet) MustLand(signedBytes []byte) sidecar.ConfigVerdict {
 	self.t.Helper()
 	pin, err := self.Post(signedBytes)
 	if err != nil {
-		self.t.Fatalf("api refused a statement that should land: %v", err)
+		self.t.Fatalf("api refused a statement that should land: %v", self.waitError(err))
 	}
 	verdict := self.VerdictAt(pin.GetVersion())
 	if !verdict.Accepted() {
@@ -865,7 +885,7 @@ func (self *AdmissionNet) FoldIfAny(fold bool) *bridge.AuthPin {
 		return nil
 	}
 	if err != nil {
-		self.t.Fatalf("a base: %v", err)
+		self.t.Fatalf("a base: %v", self.waitError(err))
 	}
 	self.Sync()
 	return pin
@@ -877,7 +897,7 @@ func (self *AdmissionNet) SaveHead(edit func(head *sidecar.ConfigHead) (*sidecar
 	self.catchUpFollower()
 	pin, err := self.writer.SaveHead(self.ctx, edit)
 	if err != nil {
-		self.t.Fatalf("a head: %v", err)
+		self.t.Fatalf("a head: %v", self.waitError(err))
 	}
 	self.Sync()
 	return pin
@@ -998,8 +1018,9 @@ func (self *AdmissionNet) Sync() {
 	for {
 		projection, err := self.api.ReadConfigProjection(self.ctx, self.networkId, self.applied)
 		if err != nil {
-			self.t.Fatalf("reading the log after %d: %v", self.applied, err)
+			self.t.Fatalf("reading the log after %d: %v", self.applied, self.waitError(err))
 		}
+		self.watchdog.progressed()
 		for _, rows := range projection.Rows {
 			self.rows[sha256.Sum256(rows)] = bytes.Clone(rows)
 		}
@@ -1066,6 +1087,7 @@ func (self *AdmissionNet) applyEntry(entryBytes []byte) {
 	for _, reader := range self.everyReader() {
 		apply(reader)
 	}
+	self.watchdog.progressed()
 	if !self.allowForks {
 		for _, reader := range self.everyReader() {
 			if reader.fork != nil {
@@ -1078,6 +1100,7 @@ func (self *AdmissionNet) applyEntry(entryBytes []byte) {
 	}
 	if entry.GetKind() == bridge.AuthEntryKindBase && self.everyBase {
 		self.startReadersAt(n)
+		self.watchdog.progressed()
 	}
 	if !self.everyEntry && entry.GetKind() != bridge.AuthEntryKindBase {
 		return
