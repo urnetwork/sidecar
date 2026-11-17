@@ -250,6 +250,45 @@ func TestANewDeviceJudgesARestoredAdmissionsTickByTheRowsKind(t *testing.T) {
 	}
 }
 
+// The cosign a PROPOSAL_KIND_RESTORED_COSIGNED admission needs rides the row's signers through a base: an Owner's
+// device cosigns before a base that folds the proposal and turns self_admit on, and a new device and a rows-only gate
+// that start there count that cosign from the row alone, taking the tick 72 h on as the long-running reader does.
+func TestANewDeviceCountsARestoredAdmissionsCosignFromTheRow(t *testing.T) {
+	net, member, _, keyOne := newTestConfigRestoredNet(t)
+	net.foldSelfAdmit(2, false)
+	proposalId, phone := testConfigProposeRestored(t, net, member, keyOne, bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED)
+	if cosigned := net.cosign(net.owner, proposalId); !cosigned.Accepted() {
+		t.Fatalf("the owner's cosign: %v", cosigned.Refusal)
+	}
+	net.foldSelfAdmit(3, true)
+	retained := net.log.Retained()
+	device, err := RestoreConfigLog(testConfigLogSettings(), retained, net.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := RestoreConfigLogRowsOnly(testConfigLogSettings(), retained, net.rowsOnlySource(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	net.wait(72 * testConfigHourMs)
+	tick := &bridge.ApiTick{ActivatedProposalIds: [][]byte{proposalId}}
+	for name, log := range map[string]*ConfigLog{"the long-running reader": net.log, "a new device": device, "a rows-only gate": gate} {
+		state := log.State()
+		testConfigExpectProposalKind(t, name, state, proposalId, bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED)
+		window, _ := state.RecoveryWindow(proposalId)
+		if signers := window.Row.GetSigners(); len(signers) != 2 || !bytes.Equal(signers[1].GetSigner(), net.owner.sidecarId.Bytes()) {
+			t.Fatalf("%s: the row's signers %v", name, signers)
+		}
+		if err := log.CheckTick(tick, net.timeMs+1000); err != nil {
+			t.Errorf("%s: the tick after the cosign: %v", name, err)
+		}
+	}
+	if activated := net.activate(proposalId); !activated.Accepted() || net.log.State().SidecarRow(phone.sidecarId) == nil {
+		t.Fatalf("the activation: %v", activated.Refusal)
+	}
+	net.everyReaderAgrees()
+}
+
 // A base that keeps both its fold and its self_admit, as a head edit's base does (ConfigWriter.SaveHead), leaves a
 // restored binding's admission in its tail, where every reader re-opens it on the base's rows (DESIGN-DETAILS 5.2.4's
 // Reapply) with the kind its entry fixed, of either value: filed with self_admit off it still needs the cosign at its
