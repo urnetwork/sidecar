@@ -15,10 +15,12 @@
 //     opportunistic, with an evidence alarm; one whose trailer names another receiver than its push's signer the same,
 //     with a wrong_signer alarm;
 //   - a bound cut: a message carrying 64 DKIM signatures is deposited and answered 250, its evidence's limits naming the
-//     count bound, and labeled from what was verified, checks incomplete, never validated.
+//     count bound, and labeled from what was verified, checks incomplete, never validated;
+//   - at the router's close one mail_connection_record a spliced session, of mx-2's four fields, and no log line, metric
+//     or record holding a sender's address or EHLO name; the fleet's daily key k in Redis passes as mx-1 declares it.
 //
-// SNI-less abuse@<root> reaching the platform listener is S7's M5 part, mail_platform_scenario_test.go's, which the
-// registrations below name, as server's T3 runs do.
+// SNI-less abuse@<root> reaching the platform listener is S7's M5 part, mail_platform_scenario_test.go's, which
+// mail_registrations.go names beside this test and server's T3 runs.
 
 package sidecartest_test
 
