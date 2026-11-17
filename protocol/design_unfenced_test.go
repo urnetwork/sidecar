@@ -167,25 +167,12 @@ enum BridgeRuleEntryKind {
 // sidecar/protocol/gkm.proto
 // §10.5's list; not_after holds ms, so it stays 64 bits.
 message ReaderKey { bytes sidecar_id = 1; bytes xwing_public_key = 2; int64 not_after = 3; }
-// §2.8's gkm-1 with QD-643's pin, the signer's state when it signs; its signer is Signed's.
-message GroupForm { bytes repo_id = 1; bytes group_id = 2; bytes previous_group_id = 3; uint64 generation = 4; AuthPin auth = 5; }
 // §10.14's list and kinds.
 message GkmHint { bytes group_id = 1; uint64 epoch = 2; GkmHintKind kind = 3; bytes recipient = 4; }
 enum GkmHintKind {
   GKM_HINT_KIND_UNSPECIFIED = 0; GKM_HINT_COMMIT = 1; GKM_HINT_PENDING = 2; GKM_HINT_WELCOME = 3;
   GKM_HINT_KEY_PACKAGES_LOW = 4; GKM_HINT_WRAP_PENDING = 5;
 }
-// §10.6's objects: the epoch/<n> row with gkm-1's epoch 0, the group-info row, the welcome/<sidecar_id>/<group_id>/<n> row and
-// the <ref>.claim row, which §10 names and gives no bytes.
-message GkmEpochObject {
-  bytes commit = 1; GkmCommitHeader header = 2; bytes uploader = 3; int64 time_ms = 4; bytes gen_wrap = 5;
-  bytes sealed_group_info = 6; uint64 group_info_generation = 7; bytes network_id = 8; uint32 cipher_suite = 9;
-}
-message GkmGroupInfoObject { uint64 epoch = 1; uint64 generation = 2; bytes sealed_group_info = 3; }
-message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; bytes key_package_ref = 3; }
-// DESIGN-DETAILS 6.2.2: the group owner marker gkm/<group_id>/owner.
-message GkmGroupOwner { bytes repo_id = 1; bytes network_id = 2; }
-message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }
 // §10.14's routes: POST /gkm/key-packages and .../claim; POST /gkm/groups, as KF1 writes it; POST
 // /gkm/repos/<id>/forms, with 10.8's epoch 0; GET /gkm/groups/<id>; POST .../epochs/<n>; GET .../epochs, with sizes.
 message GkmKeyPackagesRequest { repeated bytes key_packages = 1; }
@@ -360,18 +347,12 @@ message EvsDropMark { bytes drop_id = 1; uint64 through_version = 2; }
 message EvsLogPage {
   uint64 page = 1; bytes first_chain = 2; bytes last_chain = 3; bytes window = 4; repeated bytes statements = 5;
 }
-// What EvsEntryVersion.sealed_fields and a push's sealed metadata open to: the former's comment, by
-// plan-EVS1-format-bytes#9; the latter's from EvsPush.sealed_metadata_sha256's comment, 11.6's records row and 11.7's
-// mapping to git.
+// What EvsEntryVersion.sealed_fields opens to, by its comment and plan-EVS1-format-bytes#9, and the messages a push's
+// sealed metadata holds, from EvsPush.sealed_metadata_sha256's comment, 11.6's records row and 11.7's mapping to git;
+// §11.6's fence writes EvsSealedMetadata itself.
 message EvsSealedFields {
   bytes file_id = 1; uint32 mode = 2; bytes git_oid = 3; EvsOidKind oid_kind = 4; uint64 size = 5;
   bytes content_sha256 = 6;
-}
-message EvsSealedMetadata {
-  GroupHead group = 1; EvsProvenance provenance = 2; repeated EvsSealedCommit commits = 3; bytes signed_import = 4;
-  // DESIGN-DETAILS 8.2.2: a git-mode push's update, and a creating push's signed copies of payload sections 15
-  // and 16
-  EvsGitUpdate git = 5; bytes ref_name = 6; EvsOverlay base = 7;
 }
 message EvsGitUpdate {
   EvsGitShape shape = 1; bytes old_tip = 2; bytes new_tip = 3; repeated bytes tags = 4;
@@ -434,16 +415,12 @@ message EvsReadRequest {
   repeated uint64 log_pages = 8; repeated EvsReadPush pushes = 9; repeated EvsReadRef refs = 10;
   repeated uint64 held_drops = 11;
 }
-// DESIGN-DETAILS 9.2.2: a read's commit_version, and a reply's entry_epoch and stale_epoch.
+// DESIGN-DETAILS 9.2.2: a read's commit_version.
 message EvsReadPath { repeated EvsSourcePath token_paths = 1; uint64 version = 2; uint64 commit_version = 3; }
 message EvsReadRange { bytes segment_id = 1; uint32 offset = 2; uint32 length = 3; }
 message EvsReadMap { uint64 path_epoch = 1; bytes map_sha256 = 2; uint32 part = 3; }
 message EvsReadPush { bytes push_id = 1; uint64 version = 2; uint32 part = 3; }
 message EvsReadRef { bytes ref_id = 1; uint64 pin_version = 2; }
-message EvsReadFrame {
-  EvsHeadSummary head = 1; EvsReadStatement statement = 2; uint64 behind = 3; uint64 more = 4;
-  EvsReadPathReply path = 5; EvsReadObject object = 6; bool end = 7;
-}
 message EvsHeadSummary {
   bytes ref_id = 1; uint64 version = 2; bytes chain = 3; bytes push_id = 4; EvsRefKind ref_kind = 5;
   EvsRefMode ref_mode = 6; bytes owner_sidecar_id = 7; bytes sealed_ref_name = 8; EvsOverlay base = 9;
@@ -451,20 +428,7 @@ message EvsHeadSummary {
   EvsPathEpoch path_epoch = 14; uint64 index_epoch = 15; bool deleted = 16; uint64 push_sequence = 17;
 }
 message EvsReadStatement { uint64 version = 1; bytes statement = 2; }
-message EvsReadPathReply {
-  repeated bytes token_path = 1; EvsIndexVersion version = 2; bytes statement = 3;
-  repeated EvsMerkleProof proof = 4; repeated EvsAbsenceProof absences = 5; EvsRemovalMarker removal = 6;
-  EvsOverlay base = 7; EvsNameTable names = 8; uint64 names_through = 9; repeated EvsIndexVersion deltas = 10;
-  EvsReadPathState state = 11; bytes drop_id = 12; int64 not_before_ms = 13; uint64 drop_version = 14;
-  bytes drop_statement = 15; bytes drop_body = 16; uint64 entry_epoch = 17; bool stale_epoch = 18;
-}
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
-// QD-681 (question evs1-m2-28-rooted-delta-proofs): a directory delta's proof to its own statement's changes_root.
-message EvsDeltaProof { repeated EvsMerkleProof proof = 1; }
-message EvsAbsenceProof {
-  uint64 version = 1; repeated bytes token_path = 2; repeated EvsMerkleProof below = 3;
-  repeated EvsMerkleProof above = 4;
-}
 message EvsReadObject {
   EvsReadObjectKind kind = 1; bytes id = 2; uint64 number = 3; uint32 offset = 4; bytes body = 5; bool missing = 6;
 }
@@ -509,28 +473,6 @@ message EvsDropPreviewReply {
 }
 message EvsDropPreviewPath { bool list_match = 1; uint32 count = 2; repeated uint32 map_parts = 3; bool linked = 4; }
 
-// sidecar/protocol/smtp.proto
-// §6.11's edge codes, numbers as written, and DESIGN-DETAILS 3.2.5's KEYS (QD-712).
-enum SmtpPreambleCode {
-  SMTP_PREAMBLE_CODE_UNSPECIFIED = 0; SMTP_PREAMBLE_OK = 1; SMTP_PREAMBLE_HALTED = 2; SMTP_PREAMBLE_QUOTA = 3;
-  SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
-  SMTP_PREAMBLE_KEYS = 8;
-}
-enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
-// §14.8's self-report and §14.14's status, as plan-SMTP-wire-gaps#1 and #2 number them.
-message SmtpOutcome {
-  bytes send_id = 1; uint32 tls_level = 2; uint32 mode = 3; repeated uint32 reply_codes = 4; uint32 dsn_count = 5;
-  uint32 hard_bounce_count = 6; bool downgrade_refused = 7;
-}
-message SmtpStatus { uint32 kind = 1; uint32 retry_after_ms = 2; }
-enum SmtpStatusKind {
-  SMTP_STATUS_KIND_UNSPECIFIED = 0; SMTP_STATUS_HALTED = 1; SMTP_STATUS_QUOTA = 2; SMTP_STATUS_CLEAR = 3;
-}
-// E2's disclosed SHTS, as smtpproof-start-shts-wire numbers it.
-message SmtpHandshake { bytes send_id = 1; bytes shts = 2; }
-message SmtpHandshakeResult { uint32 code = 1; }
-enum SmtpHandshakeCode { SMTP_HANDSHAKE_CODE_UNSPECIFIED = 0; SMTP_HANDSHAKE_OK = 1; SMTP_HANDSHAKE_INVALID = 2; }
-
 // sidecar/protocol/socket.proto
 // §9.5's Claim, the tuple its comment lists, in that order, its name or token path written as SocketTicket's two.
 message SocketRegistrationClaim {
@@ -547,19 +489,6 @@ enum CoreHintKind {
   CORE_HINT_KIND_MIN_SECURE = 4; CORE_HINT_KIND_GATES = 5;
 }
 message AgentCert { bytes sidecar_id = 1; bytes agent_id = 2; bytes public_key = 3; int64 not_after_ms = 4; }
-
-// sidecar/protocol/tls.proto
-// plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, #2's attestation body, M6's
-// members-device statement over origin and nonce as §13.7 and TLS-M6-06 name it, and #8's link token as the owner
-// decided it (QD-134), in its order.
-message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; }
-enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
-message TlsKeyAttestation {
-  bytes network_id = 1; bytes sidecar_id = 2; bytes spki_sha256 = 3; bytes identifier_set_sha256 = 4;
-  uint64 issue_time_millis = 5;
-}
-message TlsEdgeLogin { string origin = 1; bytes nonce = 2; }
-message TlsLinkToken { bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4; }
 
 // sidecar/protocol/mail.proto
 // MailAuthEvidence's comments, which name each result's fields in this order.
@@ -682,23 +611,6 @@ message MailProverRecord {
 message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }
 
 // sidecar/protocol/record.proto
-// plan-MCP-wire-enum-numbers' four enums, whose values §16.8's uint32 fields carry. RECORD.md's own messages are its
-// fences, which testReadFences reads beside DESIGN.md's.
-enum SidecarActionKind {
-  SIDECAR_ACTION_KIND_UNSPECIFIED = 0;
-  SIDECAR_ACTION_KIND_PUBLISH = 1; SIDECAR_ACTION_KIND_LISTEN = 2; SIDECAR_ACTION_KIND_FORWARD = 3;
-  SIDECAR_ACTION_KIND_EXPOSE = 4; SIDECAR_ACTION_KIND_EGRESS_CHANGE = 5; SIDECAR_ACTION_KIND_INVITE = 6;
-  SIDECAR_ACTION_KIND_SHARE = 7; SIDECAR_ACTION_KIND_ALIAS_CREATE = 8; SIDECAR_ACTION_KIND_ALIAS_DELETE = 9;
-  SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE = 10; SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE = 11;
-  SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
-  SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
-}
-enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
-enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROVE = 1; APPROVAL_VERDICT_DENY = 2; }
-enum ApprovalChannel {
-  APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
-  APPROVAL_CHANNEL_HARNESS = 3;
-}
 // record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
 // route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
 message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
@@ -732,38 +644,6 @@ var testFenceAdditions = []struct {
 		message:  "BridgeIdentity",
 		field:    testFenceField{name: "forward_public_key", number: 7, typeName: "bytes"},
 		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
-	},
-	{
-		message:  "EvsReadFrame",
-		field:    testFenceField{name: "error", number: 8, typeName: "EvsRefusalReply"},
-		question: "evs1-m2-40-unfolded-listing-frame",
-	},
-	{
-		message:  "EvsReadPathReply",
-		field:    testFenceField{name: "continues", number: 20, typeName: "bool"},
-		question: "evs1-m2-40-unfolded-listing-frame",
-	},
-	{
-		message:  "EvsReadPathReply",
-		field:    testFenceField{name: "delta_proofs", number: 19, typeName: "EvsDeltaProof", repeated: true},
-		question: "evs1-m2-28-rooted-delta-proofs",
-	},
-	{
-		message:  "EvsAbsenceProof",
-		field:    testFenceField{name: "present", number: 5, typeName: "EvsMerkleProof", repeated: true},
-		question: "evs1-m2-28-rooted-delta-proofs",
-	},
-	{
-		message:  "EvsSealedMetadata",
-		field:    testFenceField{name: "erasure_note", number: 8, typeName: "bytes"},
-		question: "evs1-m2-30-erasure-note-format",
-	},
-	// QD-833: a repair form names the push ids of the ignored versions it writes over, sealed with its metadata, for
-	// `ur evs log` (DESIGN-DETAILS 16.2.7's metadata row)
-	{
-		message:  "EvsSealedMetadata",
-		field:    testFenceField{name: "written_over", number: 9, typeName: "bytes", repeated: true},
-		question: "evs1-m6-04-repair-written-over",
 	},
 	// QD-864: the RecordEntry.version of the entry an Opening was made from, absent reading 1, so its reader knows
 	// whether body is the kind's message or the AgentSignedBody holding it
@@ -808,6 +688,4 @@ type testFenceValueAddition struct {
 // that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
 // to write fails until its line here leaves.
 var testFenceValueAdditions = []testFenceValueAddition{
-	// §14.4's TL4 allowance for a recipient domain (QD-729), appended to the enum testUnfencedFence writes
-	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED", number: 18, question: "smtp-m9-06-tl4-allowance-action"},
 }

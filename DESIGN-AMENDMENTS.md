@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 17 decided items and 5 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 17 decided items and 4 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -15,7 +15,7 @@ Holds 17 decided items and 5 proposed ones, generated from the ledger on 2026-11
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§5 The Sidecar core](#s5) | 2 | 1 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 3 | 0 |
-| [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
+| [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 0 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
 | [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
 | [§16 The local MCP server and record primitives](#s16) | 6 | 2 |
@@ -131,17 +131,6 @@ Changes: §10.5 Ladder bullet; §2.18 unaudited-cryptography row; ledger row for
 Questions: `g0-recheck-0-readerkey-forgery.md#1`, `g0-recheck-0-readerkey-forgery.md#2`.
 
 Not folded (2026-11-16): the ledger's row for R3's HNDL major, whose "Nothing" becomes this residual, since that row is in DESIGN-REVIEW-RESPONSE.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded as owner decision 358 (§10.5's Ladder and readerkey rows, §10.15's active clone row, §5.4's `key_changed`, §2.18's unaudited-cryptography row).
-
-### QD-471: Numbers for GroupForm, which only §2.8's gkm-1 lists
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §2.*
-
-As landed: GroupForm{repo_id = 1, group_id = 2, previous_group_id = 3, generation = 4}, its signer being Signed's, and design-records adds the fence to §10.6. These are numbers only: what a re-form checks, and any field that adds, is plan-KEYS-reform-ladder's.
-
-Changes: §10.6.
-
-Questions: `protos-services-unwritten-numbers.md#3`.
-
-Not folded (2026-11-16): the ```proto fence for GroupForm in §10.6. GroupForm's declaration is held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do; the numbers are folded as text, with QD-643's `auth = 5` (owner decision 368), in §10.6's bodies block.
 
 <a id="s11"></a>
 ## §11 Encrypted versioned storage

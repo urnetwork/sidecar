@@ -126,13 +126,45 @@ message SmtpProofResult {        // 0x1606, edge -> sidecar
   uint32 code = 1;                // §6.11: 1 OK; 2 INVALID, and the edge cuts the connection (14.7);
                                   //   0 UNSPECIFIED, a protocol error
 }
+message SmtpOutcome {            // 0x1603, a NO_REPLY envelope to the ticket's listener (14.14), self-reported:
+                                 //   it only tightens (14.8) and never feeds attribution
+  bytes send_id = 1;              // the edge takes it from the connection's dialer for 15 min after the stream ends
+  uint32 tls_level = 2;           // 1-4 for TL1-TL4, 0 if none was reached
+  uint32 mode = 3;                // as SmtpProof.mode, 0 if the send ended before the mode was known
+  repeated uint32 reply_codes = 4;  // the MX's reply codes, as the sidecar read them inside TLS
+  uint32 dsn_count = 5;           // DSNs made or received since the last accepted outcome, so a late bounce
+  uint32 hard_bounce_count = 6;   //   rides the next send
+  bool downgrade_refused = 7;     // the send refused an MX below its pin, or TL4 without an allowance (14.4)
+}
+message SmtpStatus {             // 0x1604, in PushHint.hint on topic mail (14.14)
+  uint32 kind = 1;                // SmtpStatusKind
+  uint32 retry_after_ms = 2;      // when the queue may try again; GET /smtp/status gives a halt's scope
+}
+message SmtpHandshake {          // 0x1607, RPC sidecar -> edge, TLS 1.3 only (the disclosed SHTS, below)
+  bytes send_id = 1;
+  bytes shts = 2;                 // the server handshake traffic secret, which the edge forgets after E2
+}
+message SmtpHandshakeResult {    // 0x1608, edge -> sidecar
+  uint32 code = 1;                // SmtpHandshakeCode
+}
+// §6.11's edge codes, each 0 a protocol error that the receiver answers by resetting the stream or dropping the hint
+enum SmtpPreambleCode {          // SmtpPreambleResult.code
+  SMTP_PREAMBLE_CODE_UNSPECIFIED = 0; SMTP_PREAMBLE_OK = 1; SMTP_PREAMBLE_HALTED = 2; SMTP_PREAMBLE_QUOTA = 3;
+  SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
+  SMTP_PREAMBLE_KEYS = 8;
+}
+enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
+enum SmtpStatusKind {
+  SMTP_STATUS_KIND_UNSPECIFIED = 0; SMTP_STATUS_HALTED = 1; SMTP_STATUS_QUOTA = 2; SMTP_STATUS_CLEAR = 3;
+}
+enum SmtpHandshakeCode { SMTP_HANDSHAKE_CODE_UNSPECIFIED = 0; SMTP_HANDSHAKE_OK = 1; SMTP_HANDSHAKE_INVALID = 2; }
 ```
 
 Recipient addresses, subjects, bodies and the MX's replies inside TLS stay private witnesses; §2.8 smtp-1 to smtp-6 list what the edge sees.
 
 **Frames.** Only `SmtpPreamble` and `SmtpPreambleResult` travel as frames ahead of the raw TLS: u32be body length ‖ u16be `MessageType` ‖ body, the body at most 65,536 B. Raw TLS follows an OK result, any other result ends the stream after its frame, and a bad length or type resets it with PROTOCOL. A `dnssec_chain` that would pass the bound is sent empty, so TL1 is not available on that connection; the sidecar validates the chain to the keys of IANA's current root-anchors file, which it embeds, updated by release. `SmtpProof` and `SmtpHandshake` are RPCs to the edge, and `SmtpOutcome` a NO_REPLY envelope to the ticket's listener (14.14).
 
-**The disclosed SHTS.** In TLS 1.3 the sidecar sends `SmtpHandshake {bytes send_id = 1; bytes shts = 2;}` (`SMTP_HANDSHAKE` 0x1607) as soon as the handshake ends, and the edge answers `SmtpHandshakeResult {uint32 code = 1;}` (0x1608): 1 OK, 2 INVALID, on which the edge ends the connection, 0 a protocol error. TLS 1.2 sends none. The edge forgets the SHTS after E2 (D-SMTP-10).
+**The disclosed SHTS.** In TLS 1.3 the sidecar sends `SmtpHandshake` (`SMTP_HANDSHAKE` 0x1607, above) as soon as the handshake ends, and the edge answers `SmtpHandshakeResult` (0x1608): 1 OK, 2 INVALID, on which the edge ends the connection, 0 a protocol error. TLS 1.2 sends none. The edge forgets the SHTS after E2 (D-SMTP-10).
 
 **Declared bytes.** The preamble declares `message_byte_count` for the expected mode, the pin's (14.4), else BDAT's unstuffed form, and every issued header has a fixed length (14.6), so each length is known first. If the mode the post-TLS EHLO selects cannot meet the declared count, the sidecar ends the connection before MAIL and reconnects once with the other count and `retry_of_send_id` set, costing a burst token and no unit (14.7); a second mismatch is `deferred` on 14.4's retry schedule, so an MX that offers CHUNKING always gets BDAT.
 

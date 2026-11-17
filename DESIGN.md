@@ -8504,22 +8504,38 @@ placement (owner decision 145): a group's objects live on the cluster its repo's
   8 × PM9A3 1.92 TB at EC:4, ~7.7 TB usable (§19.6)
 ```
 
-```text
-bodies (protocol/gkm.proto, fields bytes unless typed; a Signed, a KeyPackage, a Welcome and a RecoveryWrap's
-  ciphertext are stored bare)
-GroupForm           repo_id = 1, group_id = 2, previous_group_id = 3, uint64 generation = 4, AuthPin auth = 5;
-                    §6 Signed, purpose group-form, its signer Signed's (owner decision 368)
-GkmGroupOwner       repo_id = 1, network_id = 2 (owner decision 201)
-GkmEpochObject      commit = 1, GkmCommitHeader header = 2, uploader = 3, int64 time_ms = 4, gen_wrap = 5,
-                    sealed_group_info = 6, uint64 group_info_generation = 7, network_id = 8, uint32
-                    cipher_suite = 9; gkm writes header, uploader and time_ms itself, from the commit, the token
-                    and its clock, so an upload has none to state falsely; 8 and 9 only in epoch 0, whose commit
-                    is empty and whose uploader is gkm-1's creator, its header gen/1's generation and auth at a
-                    creation, the form's generation and no auth at a re-form
-GkmGroupInfoObject  uint64 epoch = 1, uint64 generation = 2, sealed_group_info = 3: at most 16 leaves the
-                    pointer {epoch}, that epoch's object holding the sealed GroupInfo; above, all three
-GkmWelcomePointer   group_id = 1, uint64 epoch = 2, key_package_ref = 3 (owner decision 363)
-GkmKeyPackageClaim  group_id = 1, claimer = 2, the target being the sidecar_id in its key
+```proto
+// sidecar/protocol/gkm.proto: the objects' bodies; a Signed, a KeyPackage, a Welcome and a RecoveryWrap's
+// ciphertext are stored bare
+message GroupForm {              // §6 Signed, purpose group-form, its signer Signed's (owner decision 368)
+  bytes repo_id = 1;
+  bytes group_id = 2;
+  bytes previous_group_id = 3;   // the group this one re-forms, or empty
+  uint64 generation = 4;
+  AuthPin auth = 5;              // the signer's state when it signs, at which members judge the signer
+}
+message GkmGroupOwner { bytes repo_id = 1; bytes network_id = 2; }   // owner decision 201
+message GkmEpochObject {         // gkm writes header, uploader and time_ms itself, from the commit, the token
+                                 //   and its clock, so an upload has none to state falsely
+  bytes commit = 1;              // empty at epoch 0
+  GkmCommitHeader header = 2;    // at a creation's epoch 0 gen/1's generation and auth; at a re-form's the
+                                 //   form's generation and no auth
+  bytes uploader = 3;            // at epoch 0 gkm-1's creator
+  int64 time_ms = 4;
+  bytes gen_wrap = 5;
+  bytes sealed_group_info = 6;
+  uint64 group_info_generation = 7;
+  bytes network_id = 8;          // 8 and 9 only in epoch 0
+  uint32 cipher_suite = 9;
+}
+message GkmGroupInfoObject {     // at most 16 leaves the pointer {epoch}, that epoch's object holding the sealed
+                                 //   GroupInfo; above, all three
+  uint64 epoch = 1;
+  uint64 generation = 2;
+  bytes sealed_group_info = 3;
+}
+message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; bytes key_package_ref = 3; }   // owner decision 363
+message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }   // the target is the sidecar_id in its key
 ```
 
 ```text
@@ -9676,6 +9692,22 @@ http      bodies are evs.proto messages, application/x-protobuf, but a segment P
           of u32 length | EvsReadFrame (11.9)
 ```
 
+```proto
+// sidecar/protocol/evs.proto: what a push's sealed metadata opens to (sealed, above)
+message EvsSealedMetadata {
+  GroupHead group = 1;                  // §10's (group_id, epoch, epoch_authenticator) the writer pins
+  EvsProvenance provenance = 2;
+  repeated EvsSealedCommit commits = 3; // git mode: the carried commits, parents before children (11.7)
+  bytes signed_import = 4;              // a Signed EvsImport over this push's own commits
+  EvsGitUpdate git = 5;                 // git mode, every push but a PATH_EPOCH: the ref's update
+  bytes ref_name = 6;                   // a creating push: payload section 15's signed copy
+  EvsOverlay base = 7;                  // a creating push of an overlay: payload section 16's signed copy
+  bytes erasure_note = 8;               // an ERASE's or a CLOSURE's note (11.12; owner decision 384)
+  repeated bytes written_over = 9;      // a repair form's: the push ids of the ignored versions it writes over,
+                                        //   16 B each, for ur evs log alone (owner decision 415)
+}
+```
+
 ### 11.7 Diffs, checkpoints, index entries, reconstruction
 
 **Mapping to git.** Each ref has a mode: git-mode refs, which the local tier writes, commit only on their tip; file-mode refs land by path ([owner decision 141](#od-141)). One evs push carries one git ref update, in parts when large (11.8); its cleartext changes are the net change per path, and its sealed metadata holds every commit with each intermediate commit's sealed changes, and locates each blob its commits name that the net change does not: one sealed history record (a checkpoint, chunks, or a diff against the same path's blob in the commit's first parent) in a segment the push introduces, found by `EvsSealedBlob {git_oid, size, base_oid, file_id, records}` and named by no entry version's chain ([owner decision 237](#od-237)), so export rebuilds every original oid and every blob.
@@ -10764,6 +10796,54 @@ budget    a mobile catch-up fetches at most 4 MiB of statements and proofs (4,00
           the reader re-pins at the head and marks the gap, shown as "verified since <time>": the pin record
           holds the time of the newest re-pin past the budget, each such re-pin raises §5.4's evs_gap, and
           EvsRepo.VerifiedSince(refId) answers that time, zero when nothing was skipped (§18.5 mirrors it)
+```
+
+```proto
+// sidecar/protocol/evs.proto: the read reply's frames (reply, above)
+message EvsReadFrame {                  // u32be(length) then this, one part by its set fields, the last with end set
+  EvsHeadSummary head = 1;              // first, and in a streams read first for each ref
+  EvsReadStatement statement = 2;       // each version after the pin, in order
+  uint64 behind = 3;                    // the pin is older than the window: the first missing version
+  uint64 more = 4;                      // a streams read stopped at its 4 MiB: this ref's next version
+  EvsReadPathReply path = 5;            // a path's, then each of a listing's deltas past the first in its own frame
+  EvsReadObject object = 6;
+  bool end = 7;
+  EvsRefusalReply error = 8;            // the reply could not be finished: the last frame, in end's place
+                                        //   (owner decision 378)
+}
+message EvsReadPathReply {              // one path: its version, its listing, or what stands for them
+  repeated bytes token_path = 1;
+  EvsIndexVersion version = 2;
+  bytes statement = 3;                  // the one that wrote it, when not among those this reply returned
+  repeated EvsMerkleProof proof = 4;    // to that statement's changes_root, part level last; empty when inline
+  repeated EvsAbsenceProof absences = 5;  // later statements that left this path and its prefixes alone
+  EvsRemovalMarker removal = 6;         // a removed path's
+  EvsOverlay base = 7;                  // an overlay's path it holds no version of
+  EvsNameTable names = 8;               // a directory's folded table
+  uint64 names_through = 9;
+  repeated EvsIndexVersion deltas = 10; // the directory's deltas after names_through, in version order
+  EvsReadPathState state = 11;          // format 2 (states, above), with the five fields after it
+  bytes drop_id = 12;
+  int64 not_before_ms = 13;             // drop_pending
+  uint64 drop_version = 14;             // dropped: the DROP's ref version
+  bytes drop_statement = 15;            // the DROP's Signed EvsPush, when this reply returns it nowhere else
+  bytes drop_body = 16;                 // its body, which its drop_sha256 covers, on the first path naming the drop
+  uint64 entry_epoch = 17;              // the epoch whose copy served it; 0 the head's current one
+  bool stale_epoch = 18;                // the request named no token path in the head's current epoch
+  repeated EvsDeltaProof delta_proofs = 19;  // one per entry of deltas, in order (owner decision 378)
+  bool continues = 20;                  // the next of the path's deltas after the frame before, with its proof alone
+}
+message EvsDeltaProof {                 // a delta's proof to its own statement's changes_root, part level last
+  repeated EvsMerkleProof proof = 1;    // empty for an inline statement
+}
+message EvsAbsenceProof {               // two adjacent leaves with a path between them (11.6's merkle row)
+  uint64 version = 1;                   // the statement this speaks for
+  repeated bytes token_path = 2;        // the path or the prefix shown absent
+  repeated EvsMerkleProof below = 3;    // the leaf sorting just below it; empty when none does
+  repeated EvsMerkleProof above = 4;    // the leaf sorting just above it; empty when none does
+  repeated EvsMerkleProof present = 5;  // in their place, for a strict prefix the statement changes by a delta:
+                                        //   that change's inclusion proof (owner decision 378)
+}
 ```
 
 ### 11.10 Subscriptions
@@ -13650,9 +13730,24 @@ The `tls` component (§5; files `tls_*.go`) accepts streams for its `tls/` regis
 | Control panels | Refused and recorded for the daemon's API or MCP port and for targets that answer like agent UIs (§16's list) |
 | Interstitial | A one-time browser notice on Community `public` endpoints ([R:ext-edge](design/design-research/ext-edge.md) §2.8), never on 13.9's system publish |
 
-**Link tokens ([owner decision 422](#od-422)).** A link is `TlsLinkToken {bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4;}` in a §6 `Signed` (`SIGNED_TLS_LINK` 0x1503, purpose `tls-link`) by the publishing device's identity key, `expire_time_millis` at most the grant's expires, at `https://<host>/.well-known/ur/link?t=<base64url(Signed)>`. The front verifies the signature against the projection, that the signer is the sidecar the grant names, that `grant_id` is active and that `host` equals the SNI, then sets `__Host-ur-link` (HttpOnly, Secure, SameSite=Lax, 12 h, capped by the token's expiry) holding the same token and answers 302 to `/` with `Referrer-Policy: no-referrer`. Any listener of the grant honors it with no shared state, and a GrantRevoke or the grant's expiry ends every link of the grant.
+**Link tokens ([owner decision 422](#od-422)).** A link is a `TlsLinkToken` (below) in a §6 `Signed` (`SIGNED_TLS_LINK` 0x1503, purpose `tls-link`) by the publishing device's identity key, `expire_time_millis` at most the grant's expires, at `https://<host>/.well-known/ur/link?t=<base64url(Signed)>`. The front verifies the signature against the projection, that the signer is the sidecar the grant names, that `grant_id` is active and that `host` equals the SNI, then sets `__Host-ur-link` (HttpOnly, Secure, SameSite=Lax, 12 h, capped by the token's expiry) holding the same token and answers 302 to `/` with `Referrer-Policy: no-referrer`. Any listener of the grant honors it with no shared state, and a GrantRevoke or the grant's expiry ends every link of the grant.
 
-**Members-device logins ([owner decision 431](#od-431)).** The statement is `TlsEdgeLogin {string origin = 1; bytes nonce = 2;}` (`SIGNED_TLS_EDGE_LOGIN` 0x1502, purpose `edge-login`), `origin` as the front writes it, `https://<sni>` with `:<port>` only where the port is not 443, and `nonce` 32 random bytes the front draws, with no network_id. After the ID token checks out, the callback seals `{nonce, member_id, expiry, return path}` into `__Host-ur-device-pre` (`DeviceLoginLifetime`, 10 min) and answers 302 to `/.well-known/ur/device`, whose GET answers `{origin, nonce}` and whose same-origin POST of field `s`, the base64url `Signed`, completes the login with 303 to where the visitor began; the nonce leaves the pending set only once a statement verifies, so a login completes once. The signer is `AclState.ConsentedFor(signer, member)`, and not read_only, suspended or revoked. `__Host-ur-session` gains the device's sidecar_id: a device session counts on a `members` endpoint, a `members` session never on a `members-device` one, and consent and membership are checked on every request. `Sidecar.SignTlsEdgeLogin(origin, nonce)` answers the encoded `Signed` under the sidecar's consented untagged admission, and §18's `SignEdgeLogin` decodes base64url and passes the asking page's own origin, never one the page names; a remote-mode app reaches it through §5.8's Confirm method `tls.edge_login.sign`, which TLS owns and the daemon answers only for a confirmed call ([owner decision 489](#od-489)). Members reach a service over the overlay by §17's rules alone, as the audience row says.
+**Members-device logins ([owner decision 431](#od-431)).** The statement is a `TlsEdgeLogin` (below; `SIGNED_TLS_EDGE_LOGIN` 0x1502, purpose `edge-login`), `origin` as the front writes it, `https://<sni>` with `:<port>` only where the port is not 443, and `nonce` 32 random bytes the front draws, with no network_id. After the ID token checks out, the callback seals `{nonce, member_id, expiry, return path}` into `__Host-ur-device-pre` (`DeviceLoginLifetime`, 10 min) and answers 302 to `/.well-known/ur/device`, whose GET answers `{origin, nonce}` and whose same-origin POST of field `s`, the base64url `Signed`, completes the login with 303 to where the visitor began; the nonce leaves the pending set only once a statement verifies, so a login completes once. The signer is `AclState.ConsentedFor(signer, member)`, and not read_only, suspended or revoked. `__Host-ur-session` gains the device's sidecar_id: a device session counts on a `members` endpoint, a `members` session never on a `members-device` one, and consent and membership are checked on every request. `Sidecar.SignTlsEdgeLogin(origin, nonce)` answers the encoded `Signed` under the sidecar's consented untagged admission, and §18's `SignEdgeLogin` decodes base64url and passes the asking page's own origin, never one the page names; a remote-mode app reaches it through §5.8's Confirm method `tls.edge_login.sign`, which TLS owns and the daemon answers only for a confirmed call ([owner decision 489](#od-489)). Members reach a service over the overlay by §17's rules alone, as the audience row says.
+
+```proto
+// sidecar/protocol/tls.proto: the front's two statements, each the body of a §6 Signed by a device's identity key;
+// neither reaches a server, each traveling between the visitor and the front inside TLS
+message TlsLinkToken {           // SIGNED_TLS_LINK 0x1503, purpose tls-link, by the publishing device (link tokens)
+  bytes grant_id = 1;            // the publish grant's rule_id
+  string host = 2;               // the link's host, which the front holds to the SNI
+  uint64 expire_time_millis = 3; // at most the grant's expires
+  bytes nonce = 4;               // random, so two links of one grant differ
+}
+message TlsEdgeLogin {           // SIGNED_TLS_EDGE_LOGIN 0x1502, purpose edge-login, by a member's consented device
+  string origin = 1;             // https://<sni>, with :<port> only where the port is not 443, as the front writes it
+  bytes nonce = 2;               // 32 random B the front draws, taken once
+}
+```
 
 ### 13.8 Certificates
 
@@ -13681,6 +13776,24 @@ certs' DNS writes: an order's _acme-challenge TXT, or a strong-mode probe's CAA 
   verdict  a probe's pass counts only if /dns/internal/ready?serial=s still answers ready after its
            last query; stale --> write again and restart the window, since the restored edges may lack
            the canary
+```
+
+```proto
+// sidecar/protocol/tls.proto: the ordering row's attestation, and certs' hint (13.15)
+message TlsKeyAttestation {      // the body of a Signed, SIGNED_TLS_KEY_ATTESTATION 0x1501, purpose tls-key, by the
+                                 //   device's identity key: this key, for these names
+  bytes network_id = 1;
+  bytes sidecar_id = 2;
+  bytes spki_sha256 = 3;         // of the DER SubjectPublicKeyInfo
+  bytes identifier_set_sha256 = 4;  // the ordering row's hash of the identifier set
+  uint64 issue_time_millis = 5;
+}
+message TlsHint {                // §6 0x1502, topic tls: the client refetches GET /tls/certs, so a hint is never
+                                 //   authoritative
+  TlsHintKind kind = 1;
+  bytes cert_id = 2;             // the 16-byte row id
+}
+enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
 ```
 
 **CT watch (D-TLS-8).** Each listening sidecar queries Cert Spotter (`issuances?domain=<net>.<root>&include_subdomains=true&match_wildcards=true`, https://sslmate.com/help/reference/ct_search_api_v1) and crt.sh for its zone and custom domains every ~6 h (jittered; optional Team key), alarming on a certificate no device attested in `GET /tls/certs` or one an identity pinned under 24 h before issuance attested. Failures show "CT watch degraded"; keyless queries are best effort and never ride a URnetwork proxy (§2.8 ext-1).
@@ -13979,13 +14092,45 @@ message SmtpProofResult {        // 0x1606, edge -> sidecar
   uint32 code = 1;                // §6.11: 1 OK; 2 INVALID, and the edge cuts the connection (14.7);
                                   //   0 UNSPECIFIED, a protocol error
 }
+message SmtpOutcome {            // 0x1603, a NO_REPLY envelope to the ticket's listener (14.14), self-reported:
+                                 //   it only tightens (14.8) and never feeds attribution
+  bytes send_id = 1;              // the edge takes it from the connection's dialer for 15 min after the stream ends
+  uint32 tls_level = 2;           // 1-4 for TL1-TL4, 0 if none was reached
+  uint32 mode = 3;                // as SmtpProof.mode, 0 if the send ended before the mode was known
+  repeated uint32 reply_codes = 4;  // the MX's reply codes, as the sidecar read them inside TLS
+  uint32 dsn_count = 5;           // DSNs made or received since the last accepted outcome, so a late bounce
+  uint32 hard_bounce_count = 6;   //   rides the next send
+  bool downgrade_refused = 7;     // the send refused an MX below its pin, or TL4 without an allowance (14.4)
+}
+message SmtpStatus {             // 0x1604, in PushHint.hint on topic mail (14.14)
+  uint32 kind = 1;                // SmtpStatusKind
+  uint32 retry_after_ms = 2;      // when the queue may try again; GET /smtp/status gives a halt's scope
+}
+message SmtpHandshake {          // 0x1607, RPC sidecar -> edge, TLS 1.3 only (the disclosed SHTS, below)
+  bytes send_id = 1;
+  bytes shts = 2;                 // the server handshake traffic secret, which the edge forgets after E2
+}
+message SmtpHandshakeResult {    // 0x1608, edge -> sidecar
+  uint32 code = 1;                // SmtpHandshakeCode
+}
+// §6.11's edge codes, each 0 a protocol error that the receiver answers by resetting the stream or dropping the hint
+enum SmtpPreambleCode {          // SmtpPreambleResult.code
+  SMTP_PREAMBLE_CODE_UNSPECIFIED = 0; SMTP_PREAMBLE_OK = 1; SMTP_PREAMBLE_HALTED = 2; SMTP_PREAMBLE_QUOTA = 3;
+  SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
+  SMTP_PREAMBLE_KEYS = 8;
+}
+enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
+enum SmtpStatusKind {
+  SMTP_STATUS_KIND_UNSPECIFIED = 0; SMTP_STATUS_HALTED = 1; SMTP_STATUS_QUOTA = 2; SMTP_STATUS_CLEAR = 3;
+}
+enum SmtpHandshakeCode { SMTP_HANDSHAKE_CODE_UNSPECIFIED = 0; SMTP_HANDSHAKE_OK = 1; SMTP_HANDSHAKE_INVALID = 2; }
 ```
 
 Recipient addresses, subjects, bodies and the MX's replies inside TLS stay private witnesses; §2.8 smtp-1 to smtp-6 list what the edge sees.
 
 **Frames.** Only `SmtpPreamble` and `SmtpPreambleResult` travel as frames ahead of the raw TLS: u32be body length ‖ u16be `MessageType` ‖ body, the body at most 65,536 B. Raw TLS follows an OK result, any other result ends the stream after its frame, and a bad length or type resets it with PROTOCOL. A `dnssec_chain` that would pass the bound is sent empty, so TL1 is not available on that connection; the sidecar validates the chain to the keys of IANA's current root-anchors file, which it embeds, updated by release. `SmtpProof` and `SmtpHandshake` are RPCs to the edge, and `SmtpOutcome` a NO_REPLY envelope to the ticket's listener (14.14).
 
-**The disclosed SHTS.** In TLS 1.3 the sidecar sends `SmtpHandshake {bytes send_id = 1; bytes shts = 2;}` (`SMTP_HANDSHAKE` 0x1607) as soon as the handshake ends, and the edge answers `SmtpHandshakeResult {uint32 code = 1;}` (0x1608): 1 OK, 2 INVALID, on which the edge ends the connection, 0 a protocol error. TLS 1.2 sends none. The edge forgets the SHTS after E2 (D-SMTP-10).
+**The disclosed SHTS.** In TLS 1.3 the sidecar sends `SmtpHandshake` (`SMTP_HANDSHAKE` 0x1607, above) as soon as the handshake ends, and the edge answers `SmtpHandshakeResult` (0x1608): 1 OK, 2 INVALID, on which the edge ends the connection, 0 a protocol error. TLS 1.2 sends none. The edge forgets the SHTS after E2 (D-SMTP-10).
 
 **Declared bytes.** The preamble declares `message_byte_count` for the expected mode, the pin's (14.4), else BDAT's unstuffed form, and every issued header has a fixed length (14.6), so each length is known first. If the mode the post-TLS EHLO selects cannot meet the declared count, the sidecar ends the connection before MAIL and reconnects once with the other count and `retry_of_send_id` set, costing a burst token and no unit (14.7); a second mismatch is `deferred` on 14.4's retry schedule, so an MX that offers CHUNKING always gets BDAT.
 
@@ -15503,6 +15648,24 @@ message Coverage {                          // at run end, or after 10 min idle 
 message RetentionPolicy {                   // Signed (purpose record-entry) by the log's admin
   bytes log_id = 1; uint32 class = 2;       // a kind class, announce among them (keep_days 30, 16.11)
   uint32 keep_days = 3; uint32 searchable_days = 4; bool archive = 5;
+}
+// The values row's four enums (what freezes, below), whose values CanonicalAction.kind, ApprovalRequest.risk and
+// ApprovalDecision.decision and channel carry as uint32
+enum SidecarActionKind {                    // §5.4's order, new kinds appending
+  SIDECAR_ACTION_KIND_UNSPECIFIED = 0;
+  SIDECAR_ACTION_KIND_PUBLISH = 1; SIDECAR_ACTION_KIND_LISTEN = 2; SIDECAR_ACTION_KIND_FORWARD = 3;
+  SIDECAR_ACTION_KIND_EXPOSE = 4; SIDECAR_ACTION_KIND_EGRESS_CHANGE = 5; SIDECAR_ACTION_KIND_INVITE = 6;
+  SIDECAR_ACTION_KIND_SHARE = 7; SIDECAR_ACTION_KIND_ALIAS_CREATE = 8; SIDECAR_ACTION_KIND_ALIAS_DELETE = 9;
+  SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE = 10; SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE = 11;
+  SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
+  SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
+  SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED = 18;   // §14.4's TL4 allowance (owner decision 436)
+}
+enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
+enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROVE = 1; APPROVAL_VERDICT_DENY = 2; }
+enum ApprovalChannel {                      // ApprovalDecision.channel and AclRequestRule.evidence
+  APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
+  APPROVAL_CHANNEL_HARNESS = 3;
 }
 ```
 
