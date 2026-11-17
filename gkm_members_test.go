@@ -609,9 +609,9 @@ func TestANewerGenerationThatFailsItsChecksHoldsTheCommit(t *testing.T) {
 	world.revoke(world.x)
 	third := world.stateFor()
 	// gkm, which reads no holders, takes a REQUEST that the state's shrink refuses
-	request := world.generation(third, world.b, world.gen1, sidecar.GkmCauseRequest, nil)
+	requestGeneration := world.generation(third, world.b, world.gen1, sidecar.GkmCauseRequest, nil)
 	world.store.plantHook("a", "CommitEpoch", func() {
-		world.store.groupGenerations[world.groupId] = append(world.store.groupGenerations[world.groupId], request.signed)
+		world.store.groupGenerations[world.groupId] = append(world.store.groupGenerations[world.groupId], requestGeneration.signed)
 		world.store.refuseOnce("CommitEpoch", http.StatusForbidden)
 	})
 	if err := a.client.RunPending(world.ctx, world.repoId); !errors.Is(err, sidecar.ErrGkmWait) {
