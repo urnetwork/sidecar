@@ -2,10 +2,11 @@
 
 // Search's background windows and triggers (§18.5's RunBackgroundSync; §18.4's windows row; §11.14's trigger row;
 // SEARCH-M10-20): an OS-granted window, ctx's deadline its budget, in which a wifi_charging host keeps all and runs its
-// background index work, stopping at the budget and resuming at the next; and the app coming to the foreground, which
-// runs a round of every followed ref. A window runs the rounds the sync engine has due, each of every followed ref
-// asked for once, until none is due or the budget ends; what a round staged stays for the next window. Phones then
-// evict all shards no search used for Search.UnusedAllAge, search.state kept.
+// background index work while its conditions allow, on an unmetered link while charging and not in Low Power Mode
+// (SearchPolicy's windows rule; QD-1000), stopping at the budget and resuming at the next; and the app coming to the
+// foreground, which runs a round of every followed ref. A window runs the rounds the sync engine has due, each of every
+// followed ref asked for once, until none is due or the budget ends; what a round staged stays for the next window.
+// Phones then evict all shards no search used for Search.UnusedAllAge, search.state kept.
 //
 // Safe for concurrent use.
 

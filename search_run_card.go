@@ -1,8 +1,9 @@
 //go:build !ios_extension
 
 // Run cards (§16.10's run card and group rows; §11.14's version row; RECORD.md 7.3 and 7.4; DESIGN-DETAILS 15.2.8 to
-// 15.2.10 and 15.7's note; QD-779, QD-780, QD-783, QD-899; SEARCH-M10-28): the derived document of one run in one
-// stream of a vault or a team record, which a rebuild reproduces and an erasure folds again without the erased entry.
+// 15.2.10 and 15.7's note; QD-779, QD-780, QD-783, QD-899, QD-900; SEARCH-M10-28): the derived document of one run in
+// one stream of a vault or a team record, which a rebuild reproduces and an erasure folds again without the erased
+// entry.
 //
 //	identity  card (R, r): doc kind derived, named run/ || run_id (the id in lowercase hex, as every id in a name is),
 //	          chunk 0, under stream R's ref_id; one card a run a stream, so two ingesters' streams holding one run
@@ -27,12 +28,15 @@
 //	ended     the row's expires, on a vault's card and a team record's alike: the newest coverage's time while it is
 //	          newer than the run's last other entry (RECORD.md 4.3's re-open row), else 0, which §16.10's group row
 //	          reads for active
+//	prompts   a vault card's user prompts (QD-900): the prompts its folded context entries carry, which ingest writes in
+//	          stage 2 entries as they arrive, in the fold's order and each entry's own, one a line, cut on a code point
+//	          at IndexRecordSettings.CardPromptByteCount (2 KiB) as the text's last part; its title is the newest
+//	          context's, else first(the first of those prompts). A prompt moves c as the context entry carrying it does
 //
 // The mapping is RECORD.md 7.4's: a team record's card holds no title, prompt, branch, tool or path, which only the
-// vault holds (FS-80), and counts each action kind asked for approval, approval_decision staying outside its sources
-// (QD-899). The run's user prompts wait on QD-900's ContextBody prompts (question search-m10-28-transcript-prompts),
-// so a vault's card has no prompt text and takes its title from its newest context alone. Card text and titles are
-// this device's plaintext and go into no log or error (I-13). Package-level functions are safe for concurrent use.
+// vault holds (FS-80), so it reads no prompt even where a context entry carries one, and counts each action kind
+// asked for approval, approval_decision staying outside its sources (QD-899). Card text and titles are this device's
+// plaintext and go into no log or error (I-13). Package-level functions are safe for concurrent use.
 
 package sidecar
 
@@ -238,6 +242,8 @@ func indexRunCardMap(args *indexRunCardArgs, folded []*indexRecordEntry) *IndexD
 	}
 	claimEntries := []*runCardClaimEntry{}
 	handedOffClaimIds := map[Id]bool{}
+	// a vault card's user prompts, in the fold's order and each context entry's own (QD-900)
+	prompts := []string{}
 	var newestCoverage *indexRecordEntry
 	lastEventMillis := int64(0)
 	for _, entry := range folded {
@@ -250,6 +256,18 @@ func indexRunCardMap(args *indexRunCardArgs, folded []*indexRecordEntry) *IndexD
 			lastEventMillis = max(lastEventMillis, entry.header.GetTimeMillis())
 		}
 		switch entry.kind() {
+		case RecordKindContext:
+			// only the vault holds prompts: T's projection leaves them empty, and a team card reads none it finds
+			if !vault {
+				break
+			}
+			if body, ok := indexRunCardBody(entry, &protocol.ContextBody{}); ok {
+				for _, prompt := range body.GetPrompts() {
+					if prompt != "" {
+						prompts = append(prompts, prompt)
+					}
+				}
+			}
 		case RecordKindToolCall:
 			if body, ok := indexRunCardBody(entry, &protocol.ToolCallBody{}); ok {
 				if body.GetToolName() != "" {
@@ -372,7 +390,12 @@ func indexRunCardMap(args *indexRunCardArgs, folded []*indexRecordEntry) *IndexD
 
 	lines := []string{indexRecordPair(contextBody.GetHarness(), contextBody.GetHarnessVersion()), contextBody.GetModel()}
 	if vault {
-		document.Fields[indexFieldTitle] = []byte(indexCutUtf8(indexRowText(contextBody.GetTitle()), settings.TitleByteCount))
+		// the newest context's title, else first(the run's first user prompt) (RECORD.md 7.4; QD-900)
+		title := contextBody.GetTitle()
+		if title == "" && 0 < len(prompts) {
+			title = indexRecordFirst(prompts[0], settings)
+		}
+		document.Fields[indexFieldTitle] = []byte(indexCutUtf8(indexRowText(title), settings.TitleByteCount))
 		tools := indexRunCardCounts(toolCounts)
 		document.Fields[indexFieldFirstRegistered+6] = []byte(strings.Join(tools[:min(len(tools), settings.CardToolCount)], " "))
 		lines = append(lines, indexRecordPair(contextBody.GetProject(), contextBody.GetBranch()))
@@ -384,6 +407,8 @@ func indexRunCardMap(args *indexRunCardArgs, folded []*indexRecordEntry) *IndexD
 		}
 		slices.SortFunc(touched, func(a string, b string) int { return bytes.Compare([]byte(a), []byte(b)) })
 		lines = append(lines, touched[:min(len(touched), settings.CardPathCount)]...)
+		// the user prompts in order, one a line, cut at 2 KiB (RECORD.md 7.4; QD-900)
+		lines = append(lines, indexCutUtf8(indexRowText(strings.Join(prompts, "\n")), settings.CardPromptByteCount))
 	} else {
 		lines = append(lines, contextBody.GetProject())
 		lines = append(lines, commits...)

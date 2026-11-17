@@ -7,8 +7,10 @@
 // at the epoch left out while still counting toward c, a builder holding an ERASE before its CUT blocked and one
 // without it folding the entry, a run with every source erased having no card, a team record's card holding nothing
 // only the vault holds, each log's mapping of row and text, a vault card's claim fields, an ended run's card read
-// inactive through its row, a team card counting what was asked for approval, all on a fake stream; and the fence on
-// SEARCH-M10-16's CUT, which lists every projection made at the epoch it names and none folded after it.
+// inactive through its row, a team card counting what was asked for approval, a vault card's prompts in the fold's
+// order and cut at 2 KiB, its title falling back to the first prompt, two builders and a rebuild agreeing on them and an
+// erased prompt left out (QD-900), all on a fake stream; and the fence on SEARCH-M10-16's CUT, which lists every
+// projection made at the epoch it names and none folded after it.
 
 package sidecar
 
@@ -22,6 +24,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 
@@ -317,15 +320,20 @@ func TestCardLastEntryErased(t *testing.T) {
 }
 
 // FS-80's team-record case: a team record's card is built only from its own entries and holds no title, prompt, branch,
-// tool or path, even where a context entry carries the vault's fields; the vault's card of the same entries holds them.
+// tool or path, even where a context entry carries the vault's fields, its prompts included (QD-900); the vault's card
+// of the same entries holds them.
 func TestCardTeamRecordHoldsNoVaultTitle(t *testing.T) {
 	runId := evsTestId("run")
 	entries := []*indexRecordEntry{
 		testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{
 			Harness: "claude-code", Title: "Vault only title", Branch: "feature/vault-only", Project: "atlas",
 		}),
-		testRecordEntry(t, "tool", RecordKindToolCall, runId, 2, &protocol.ToolCallBody{ToolName: "Bash", Paths: []string{"vault/only/path.md"}}),
-		testRecordEntry(t, "change", RecordKindChange, runId, 3, &protocol.ChangeBody{Commits: []string{"0badc0de"}}),
+		testRecordEntry(t, "prompt", RecordKindContext, runId, 2, &protocol.ContextBody{
+			Stage: 2, Harness: "claude-code", Title: "Vault only title", Branch: "feature/vault-only", Project: "atlas",
+			Prompts: []string{"Vault only prompt"},
+		}),
+		testRecordEntry(t, "tool", RecordKindToolCall, runId, 3, &protocol.ToolCallBody{ToolName: "Bash", Paths: []string{"vault/only/path.md"}}),
+		testRecordEntry(t, "change", RecordKindChange, runId, 4, &protocol.ChangeBody{Commits: []string{"0badc0de"}}),
 	}
 	team := testNewRecordStream(protocol.RepoKind_REPO_KIND_TEAM_RECORD, "team")
 	vault := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "vault")
@@ -349,8 +357,195 @@ func TestCardTeamRecordHoldsNoVaultTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if testRecordField(vaultCard, indexFieldTitle) != "Vault only title" || !strings.Contains(testRecordField(vaultCard, indexFieldBody), "vault/only/path.md") {
-		t.Fatal("the vault's card lost its title or paths")
+	if testRecordField(vaultCard, indexFieldTitle) != "Vault only title" || !strings.Contains(testRecordField(vaultCard, indexFieldBody), "vault/only/path.md") ||
+		!strings.HasSuffix(testRecordField(vaultCard, indexFieldBody), "\nVault only prompt") {
+		t.Fatalf("the vault's card lost its title, paths or prompt: %q", vaultCard.Fields[indexFieldBody])
+	}
+}
+
+// QD-900's prompts on a vault card, as RECORD.md 7.4 maps them: the context entries' prompts in the fold's order, each
+// entry's in its own order, one a line after the touched paths, whatever order the stream holds the entries in; an
+// entry with no prompts adds none, and a context entry is a source, so each prompt's entry moves c and the version.
+func TestCardPromptsInFoldOrder(t *testing.T) {
+	runId := evsTestId("run")
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "prompts")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Stage: 1, Harness: "codex", Title: "Split the parser"}))
+	stream.add(t, testRecordEntry(t, "edit", RecordKindToolCall, runId, 3, &protocol.ToolCallBody{ToolName: "Edit", Paths: []string{"parser/lex.go"}}))
+	// the third prompt's entry lands before the first's, at a lower stream version: the fold reads by seq
+	stream.add(t, testRecordEntry(t, "prompt 3", RecordKindContext, runId, 6, &protocol.ContextBody{Stage: 2, Harness: "codex", Model: "model-b", Title: "Split the parser", Prompts: []string{"and add the tests"}}))
+	stream.add(t, testRecordEntry(t, "prompt 1", RecordKindContext, runId, 2, &protocol.ContextBody{Stage: 2, Harness: "codex", Title: "Split the parser", Prompts: []string{"Split the parser", "into lexer and parser files"}}))
+	// a restatement with no prompt adds none
+	stream.add(t, testRecordEntry(t, "model", RecordKindContext, runId, 4, &protocol.ContextBody{Stage: 2, Harness: "codex", Model: "model-b", Title: "Split the parser"}))
+	before, cBefore, err := testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "codex\nmodel-b\nEdit:1\nparser/lex.go\nSplit the parser\ninto lexer and parser files\nand add the tests"; testRecordField(before, indexFieldBody) != want {
+		t.Fatalf("text %q, want %q", before.Fields[indexFieldBody], want)
+	}
+	stream.add(t, testRecordEntry(t, "prompt 2", RecordKindContext, runId, 5, &protocol.ContextBody{Stage: 2, Harness: "codex", Model: "model-b", Title: "Split the parser", Prompts: []string{"keep the old names"}}))
+	after, cAfter, err := testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "codex\nmodel-b\nEdit:1\nparser/lex.go\nSplit the parser\ninto lexer and parser files\nkeep the old names\nand add the tests"; testRecordField(after, indexFieldBody) != want {
+		t.Fatalf("text %q, want %q", after.Fields[indexFieldBody], want)
+	}
+	if cBefore != 5 || cAfter != 6 || after.Version <= before.Version {
+		t.Fatalf("c %d then %d, versions %d then %d", cBefore, cAfter, before.Version, after.Version)
+	}
+}
+
+// 15.2.8's I12 under QD-900's prompts: two builders, one holding the stream's entries in the other's reverse order,
+// write equal cards from the same entries at every pin, prompts and title included, and a rebuild at a later epoch
+// writes the same bytes.
+func TestCardPromptsAreAFunctionOfTheEntries(t *testing.T) {
+	runId := evsTestId("run")
+	one := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "one")
+	one.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Stage: 1, Harness: "cursor"}))
+	one.add(t, testRecordEntry(t, "prompt 1", RecordKindContext, runId, 2, &protocol.ContextBody{Stage: 2, Harness: "cursor", Prompts: []string{"Trim the logs\nin every service"}}))
+	one.add(t, testRecordEntry(t, "tool", RecordKindToolCall, runId, 3, &protocol.ToolCallBody{ToolName: "Bash"}))
+	one.add(t, testRecordEntry(t, "prompt 2", RecordKindContext, runId, 4, &protocol.ContextBody{Stage: 2, Harness: "cursor", Prompts: []string{"then rotate them"}}))
+	other := &testRecordStream{logKind: one.logKind, refId: one.refId, readTo: one.readTo, entries: slices.Clone(one.entries)}
+	slices.Reverse(other.entries)
+	for pin := uint64(1); pin <= one.readTo; pin += 1 {
+		cardOne, cOne, err := searchRunCard(context.Background(), one, runId, pin, 3, nil, DefaultIndexRecordSettings(), DefaultIndexFormatSettings())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cardOther, cOther, err := searchRunCard(context.Background(), other, runId, pin, 3, nil, DefaultIndexRecordSettings(), DefaultIndexFormatSettings())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cOne != cOther || !reflect.DeepEqual(cardOne, cardOther) {
+			t.Fatalf("pin %d: two builders' cards differ:\n%+v\n%+v", pin, cardOne, cardOther)
+		}
+		preparedOne, preparedOther := testRunCardPrepared(t, cardOne, one.refId), testRunCardPrepared(t, cardOther, other.refId)
+		if !slices.Equal(preparedOne.keys, preparedOther.keys) || !reflect.DeepEqual(preparedOne.row, preparedOther.row) {
+			t.Fatalf("pin %d: two builders' key sets or rows differ", pin)
+		}
+	}
+	card, _, err := testRunCard(t, one, runId, 3, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if testRecordField(card, indexFieldTitle) != "Trim the logs" || !strings.HasSuffix(testRecordField(card, indexFieldBody), "\nTrim the logs\nin every service\nthen rotate them") {
+		t.Fatalf("title %q, text %q", card.Fields[indexFieldTitle], card.Fields[indexFieldBody])
+	}
+	first := testRecordDocuments(t, testRecordSource(t, one, 3, nil, nil), one.readTo)
+	rebuilt := testRecordDocuments(t, testRecordSource(t, other, 8, nil, nil), other.readTo)
+	if len(first) != 1 || len(rebuilt) != 1 {
+		t.Fatalf("cards %d and %d", len(first), len(rebuilt))
+	}
+	rebuiltAtFirst := *rebuilt[0]
+	rebuiltAtFirst.Version = first[0].Version
+	if !reflect.DeepEqual(first[0], &rebuiltAtFirst) {
+		t.Fatal("a rebuild wrote other bytes")
+	}
+}
+
+// RECORD.md 7.4's "user prompts in order, cut at 2 KiB": the prompts' lines are cut at CardPromptByteCount on a code
+// point, so a rune across the cut goes whole and nothing past it shows, while the lines before them stand; prompts that
+// fit are not cut.
+func TestCardPromptsCutAt2KiB(t *testing.T) {
+	runId := evsTestId("run")
+	settings := DefaultIndexRecordSettings()
+	if settings.CardPromptByteCount != 2*1024 {
+		t.Fatalf("the card's prompt bound %d", settings.CardPromptByteCount)
+	}
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "cut")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Stage: 1, Harness: "claude-code", Title: "Long prompts"}))
+	stream.add(t, testRecordEntry(t, "edit", RecordKindToolCall, runId, 2, &protocol.ToolCallBody{ToolName: "Edit", Paths: []string{"a.md"}}))
+	// 2,000 B, a line, then 46 B of "x" and a 3-byte rune from byte 2,047: the rune crosses the cut
+	firstPrompt := strings.Repeat("a", 2000)
+	secondPrompt := strings.Repeat("x", 46) + "€" + "never shown"
+	stream.add(t, testRecordEntry(t, "prompt 1", RecordKindContext, runId, 3, &protocol.ContextBody{Stage: 2, Harness: "claude-code", Title: "Long prompts", Prompts: []string{firstPrompt}}))
+	stream.add(t, testRecordEntry(t, "prompt 2", RecordKindContext, runId, 4, &protocol.ContextBody{Stage: 2, Harness: "claude-code", Title: "Long prompts", Prompts: []string{secondPrompt}}))
+	card, _, err := testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrompts := firstPrompt + "\n" + strings.Repeat("x", 46)
+	if len(wantPrompts) != 2047 {
+		t.Fatalf("the fixture's cut is at %d", len(wantPrompts))
+	}
+	text := testRecordField(card, indexFieldBody)
+	if want := "claude-code\nEdit:1\na.md\n" + wantPrompts; text != want {
+		t.Fatalf("text of %d bytes ends %q", len(text), text[max(len(text)-64, 0):])
+	}
+	if strings.Contains(text, "never shown") || !utf8.ValidString(text) {
+		t.Fatal("the text holds what passed the cut, or a broken rune")
+	}
+	// prompts within the bound go whole
+	short := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "short")
+	short.add(t, testRecordEntry(t, "prompt", RecordKindContext, runId, 1, &protocol.ContextBody{Stage: 2, Prompts: []string{strings.Repeat("s", 2048)}}))
+	card, _, err = testRunCard(t, short, runId, 1, nil, nil)
+	if err != nil || testRecordField(card, indexFieldBody) != strings.Repeat("s", 2048) {
+		t.Fatalf("a prompt at the bound: %v", err)
+	}
+}
+
+// RECORD.md 7.4's title: the newest context's title, else first(the run's first user prompt): its first line, trailing
+// spaces dropped, cut at 120 B on a code point. A newest context with no title falls back even where an older one had
+// one, and a newest context's title wins over the prompts.
+func TestCardTitleFallsBackToTheFirstPrompt(t *testing.T) {
+	runId := evsTestId("run")
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "title")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Stage: 1, Harness: "codex"}))
+	firstLine := strings.Repeat("é", 70) + "   "
+	stream.add(t, testRecordEntry(t, "prompt 1", RecordKindContext, runId, 2, &protocol.ContextBody{Stage: 2, Harness: "codex", Prompts: []string{firstLine + "\nthe rest of the first prompt"}}))
+	stream.add(t, testRecordEntry(t, "prompt 2", RecordKindContext, runId, 3, &protocol.ContextBody{Stage: 2, Harness: "codex", Prompts: []string{"A later prompt"}}))
+	card, _, err := testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 70 two-byte runes are 140 B: cut at 120 B is 60 of them, and the trailing spaces go first
+	if got := testRecordField(card, indexFieldTitle); got != strings.Repeat("é", 60) {
+		t.Fatalf("the fallback title %q", got)
+	}
+	// the newest context's title wins
+	stream.add(t, testRecordEntry(t, "titled", RecordKindContext, runId, 4, &protocol.ContextBody{Stage: 2, Harness: "codex", Title: "Named by the person"}))
+	card, _, err = testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil || testRecordField(card, indexFieldTitle) != "Named by the person" {
+		t.Fatalf("the newest context's title: %q, %v", card.Fields[indexFieldTitle], err)
+	}
+	// a newest context with none falls back again, to the run's first prompt
+	stream.add(t, testRecordEntry(t, "untitled", RecordKindContext, runId, 5, &protocol.ContextBody{Stage: 2, Harness: "codex"}))
+	card, _, err = testRunCard(t, stream, runId, 1, nil, nil)
+	if err != nil || testRecordField(card, indexFieldTitle) != strings.Repeat("é", 60) {
+		t.Fatalf("the newest context untitled: %q, %v", card.Fields[indexFieldTitle], err)
+	}
+	// no prompt and no title: no title
+	bare := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "bare")
+	bare.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Stage: 1, Harness: "codex"}))
+	card, _, err = testRunCard(t, bare, runId, 1, nil, nil)
+	if err != nil || testRecordField(card, indexFieldTitle) != "" {
+		t.Fatalf("a run with no title and no prompt: %q, %v", card.Fields[indexFieldTitle], err)
+	}
+}
+
+// 15.2.8's fold under an erasure (§16.8): the context entry holding the run's first prompt erased at the epoch leaves
+// the card without that prompt, its title falling back to the next one, while the entry still counts toward c.
+func TestCardPromptErasedAtEpoch(t *testing.T) {
+	runId := evsTestId("run")
+	stream := testNewRecordStream(protocol.RepoKind_REPO_KIND_VAULT, "erased prompt")
+	stream.add(t, testRecordEntry(t, "context", RecordKindContext, runId, 1, &protocol.ContextBody{Stage: 1, Harness: "codex"}))
+	erased := stream.add(t, testRecordEntry(t, "prompt 1", RecordKindContext, runId, 2, &protocol.ContextBody{Stage: 2, Harness: "codex", Prompts: []string{"Erase me later"}}))
+	stream.add(t, testRecordEntry(t, "prompt 2", RecordKindContext, runId, 3, &protocol.ContextBody{Stage: 2, Harness: "codex", Prompts: []string{"Keep this one"}}))
+	for _, entry := range stream.entries {
+		if entry.entryId == erased.entryId {
+			entry.keyGone, entry.body = true, nil
+		}
+	}
+	erasureId := evsTestId("prompt erasure")
+	erasures := []*RecordStreamErasure{testRecordErase(t, erasureId, false, 1, nil, erased.entryId)}
+	card, c, err := testRunCard(t, stream, runId, 4, erasures, testRecordErasureSet(erasureId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := testRecordField(card, indexFieldBody)
+	if c != 3 || strings.Contains(text, "Erase me") || testRecordField(card, indexFieldTitle) != "Keep this one" || !strings.HasSuffix(text, "\nKeep this one") {
+		t.Fatalf("c %d, title %q, text %q", c, card.Fields[indexFieldTitle], text)
 	}
 }
 

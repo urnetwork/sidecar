@@ -14,7 +14,9 @@
 // log reaches it. A pin before what the verifier retains is not judged and counts against no one (GkmAuthView's
 // rule): §7.9 keeps A_k only from the retention point on, a day or two of entries, while a generation lives for up to
 // 30 days, so reading such a pin as off the chain would shut every repo's gate a day or two after its last shrink.
-// The members' rotation checks judged its chain when it was new, and its number still has to reach n_r.
+// The members' rotation checks judged its chain when it was new, and its number still has to reach n_r. §11.6's due
+// class holds the pins of a crossing it classes by the same rule (evs_epoch.go; QD-1018), so a change here is one
+// there.
 //
 // holders_shrunk_at is TEAM's to advance at each entry (TEAM-M2-17, by GkmHoldersDropped); the expiry half is
 // computed here from KeyHolders.

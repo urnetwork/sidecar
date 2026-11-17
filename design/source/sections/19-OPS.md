@@ -544,7 +544,8 @@ a file-cluster key held over 1 min by a write    M3     30 min        19.10's he
   that cannot settle (19.6's settle row)                              its drives replaced
 a drop job's list file failing its trailer or    M10    30 min        `sidecarctl evs drop-reindex <repo_id>
   layout (drop_index_corrupt)                                         <job_id>` rewrites the job's list files
-                                                                      (owner decision 512)
+                                                                      from its snap-0, kept for the repo's
+                                                                      life (owner decisions 512, 570)
 rota       two people on one pager service; the second is paged when the first has not acknowledged in 30 min;
            registrar, registry and law-enforcement notices page both at once; a page class carries its hours,
            any or business, and a business-hours page waits until the business calendar opens (model's
@@ -949,8 +950,9 @@ repos      devices        first the ERASE pushes (§11.12) each device signed in
                           re-seeds only for repos the projection lists live or restorable, refusing one whose
                           access log ends in RepoDelete past 7 d or with now and re-seeding one whose log ends in
                           an unrestored RepoDelete without now, under 7 d old, as deleted{deletion_id, its entry's
-                          time}: placed so, it takes its history, group and slots through /reseed and its
-                          GroupForm, which re-seed mode alone admits while deleted (§11.12), so access stays
+                          time}: placed so, it takes its history, group and slots through /reseed, its segment
+                          uploads and its GroupForm, which re-seed mode alone admits while deleted (§11.12's
+                          re-seed exception; owner decision 565), so access stays
                           refused while restore and the timer resume; it serves and accepts slots as §11.13's
                           re-seed row says; where every copy ends
                           below a reader's pin, a repo admin's EvsReseed {repo, ref, version, C_v, incident}
