@@ -903,6 +903,30 @@ INDEX = list(_P9['INDEX']) + [
      "`sidecarctl evs drop-reindex` rebuilds a drop job's corrupt list files."),
     (513, '`evs observe-report`',
      "`sidecarctl evs observe-report` prints the purge and drop soaks; drop jobs record renames and cross-ref copies."),
+    # §20's fold (2026-11-16): the build's answers on tiers, quotas, metering and billing.
+    (514, 'Team periods',
+     "`RefreshTeamTransferBalances` writes each Team period's grant and credit line at its anchor; `invoice.paid` writes "
+     "the first."),
+    (515, 'Active seats',
+     "A member is active while any client under its `member_id` has an `auth_time` within 30 days."),
+    (516, 'Pacing by seat',
+     "Closure pacing admits by seat, each seat good only in its own second, and a refusal records nothing."),
+    (517, 'Lease lapse',
+     "No lease byte is debited without its carve; a lease's own tokens live 15 min, extended while it lives."),
+    (518, 'Lease draw size',
+     "A lease draws 64 MiB, or 4 s of its own rate when that is more, at most 16 times it."),
+    (519, 'Read-receipt keys',
+     "The read-receipt budget's keys are `evs_read_receipts_per_repo_day` and `evs_read_receipt_bytes`."),
+    (520, '`QuotaLimits.enforced`',
+     "`QuotaLimits` carries `enforced`, and local pre-checks refuse only while it is true."),
+    (521, "The flush's claim share",
+     "`FlushServiceDebits` takes no claim share until service debits carry production volume."),
+    (522, 'Quota readings',
+     "Twelve readings of the quota path stand as built."),
+    (523, 'The downgrade clock',
+     "The downgrade clock starts when the balance that conferred the tier it left ended."),
+    (524, 'Rate key grammar',
+     "CountRate's key grammar stands as built; the two 60-a-minute erasure rates become pro.yml rows."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -939,7 +963,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 514))
+assert [r[0] for r in INDEX] == list(range(1, 525))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1012,7 +1036,10 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               494: '2026-11-06', 495: '2026-11-16', 496: '2026-11-12', 497: '2026-11-16', 498: '2026-11-12',
               499: '2026-11-06', 500: '2026-11-10', 501: '2026-11-12', 502: '2026-11-12', 503: '2026-11-12',
               504: '2026-11-12', 505: '2026-11-12', 506: '2026-11-14', 507: '2026-11-15', 508: '2026-11-15',
-              509: '2026-11-15', 510: '2026-11-15', 511: '2026-11-15', 512: '2026-11-15', 513: '2026-11-16'})
+              509: '2026-11-15', 510: '2026-11-15', 511: '2026-11-15', 512: '2026-11-15', 513: '2026-11-16',
+              514: '2026-11-06', 515: '2026-11-06', 516: '2026-11-10', 517: '2026-11-10', 518: '2026-11-10',
+              519: '2026-11-15', 520: '2026-11-15', 521: '2026-11-15', 522: '2026-11-15', 523: '2026-11-15',
+              524: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1244,7 +1271,10 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "(503), settle clusters of 4 hosts (504), api's 503 on a cut connection (505), an orphaned log's repos (506), "
     "observe's retained count (507), flow families out of the rdb bundles (508), the storage hosts' Fluent Bit "
     "(509), `p0_enforce` retired (510), 503 never 404 (511), `evs drop-reindex` (512) and `evs observe-report` "
-    "(513). ")
+    "(513). The fold of §20's the same day numbers the answers on tiers, quotas, metering and billing: Team periods "
+    "(514), active seats (515), pacing by seat (516), lease lapse (517), lease draw size (518), read-receipt keys "
+    "(519), `QuotaLimits.enforced` (520), the flush's claim share (521), the quota readings (522), the downgrade "
+    "clock (523) and the rate key grammar (524). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

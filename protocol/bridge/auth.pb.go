@@ -37,7 +37,9 @@ const (
 	ProposalKind_PROPOSAL_KIND_AUTHORITY       ProposalKind = 1 // k of n (7.9's several row)
 	ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED ProposalKind = 2 // a scoped recovery admission filed with self_admit off: completes on one
 	//   cosign by an admission signer (7.9's self_admit row)
-	ProposalKind_PROPOSAL_KIND_RESTORED ProposalKind = 3 // a restored binding's scoped admission: activates at the window with no
+	ProposalKind_PROPOSAL_KIND_RESTORED ProposalKind = 3 // a restored binding's scoped admission filed with self_admit on: activates
+	//   at the window with no counted cosign (owner decision 149)
+	ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED ProposalKind = 4 // a restored binding's scoped admission filed with self_admit off: activates
 )
 
 // Enum value maps for ProposalKind.
@@ -47,12 +49,14 @@ var (
 		1: "PROPOSAL_KIND_AUTHORITY",
 		2: "PROPOSAL_KIND_RECOVERY_SCOPED",
 		3: "PROPOSAL_KIND_RESTORED",
+		4: "PROPOSAL_KIND_RESTORED_COSIGNED",
 	}
 	ProposalKind_value = map[string]int32{
-		"PROPOSAL_KIND_UNSPECIFIED":     0,
-		"PROPOSAL_KIND_AUTHORITY":       1,
-		"PROPOSAL_KIND_RECOVERY_SCOPED": 2,
-		"PROPOSAL_KIND_RESTORED":        3,
+		"PROPOSAL_KIND_UNSPECIFIED":       0,
+		"PROPOSAL_KIND_AUTHORITY":         1,
+		"PROPOSAL_KIND_RECOVERY_SCOPED":   2,
+		"PROPOSAL_KIND_RESTORED":          3,
+		"PROPOSAL_KIND_RESTORED_COSIGNED": 4,
 	}
 )
 
@@ -2839,12 +2843,13 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x1cSignedSidecarIdentityBinding\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\fR\x04body\x12)\n" +
 	"\x10client_signature\x18\x02 \x01(\fR\x0fclientSignature\x12-\n" +
-	"\x12identity_signature\x18\x03 \x01(\fR\x11identitySignature*\x89\x01\n" +
+	"\x12identity_signature\x18\x03 \x01(\fR\x11identitySignature*\xae\x01\n" +
 	"\fProposalKind\x12\x1d\n" +
 	"\x19PROPOSAL_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17PROPOSAL_KIND_AUTHORITY\x10\x01\x12!\n" +
 	"\x1dPROPOSAL_KIND_RECOVERY_SCOPED\x10\x02\x12\x1a\n" +
-	"\x16PROPOSAL_KIND_RESTORED\x10\x03*\xe0\x01\n" +
+	"\x16PROPOSAL_KIND_RESTORED\x10\x03\x12#\n" +
+	"\x1fPROPOSAL_KIND_RESTORED_COSIGNED\x10\x04*\xe0\x01\n" +
 	"\n" +
 	"MemberRole\x12\x1b\n" +
 	"\x17MEMBER_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +
