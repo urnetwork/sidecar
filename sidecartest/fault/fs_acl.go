@@ -31,8 +31,9 @@
 //     stale and short.
 //
 // And, holding no FS row, schedules for §22.5's §8 row (AclRowsEqualTheWriters, AclRowsALyingWriter,
-// AclVersionsRefused, AclNoDocumentRules), §22.7's revocation suite's acl clause (AclRevocationTaggedAgents), and S3a's
-// and S4a's acl checks (AclAddsOnlyForReaders, AclRemovalDropsEveryRight).
+// AclVersionsRefused, AclNoDocumentRules), §22.7's revocation suite's acl clause (AclRevocationTaggedAgents), S3a's
+// and S4a's acl checks (AclAddsOnlyForReaders, AclRemovalDropsEveryRight), and §8.8's atoms for the tags and groups a
+// document declares but no rule names, applied at api and every reader (AclDeclaredAtoms, owner decision 353).
 
 package fault
 
@@ -325,16 +326,13 @@ func fs19CheckHeadWriters(net *sidecartest.AdmissionNet, world *fs19World) error
 // the config through the Delegation's key, not as a holder of its own; after the DelegationRevoke the Delegation holds
 // no key and the agent, still admitted, holds the config as an agent, so the next generation reaches it by its own
 // ReaderWrap. A Delegation needs a tag its signer may apply, so the network takes a document whose tagOwners give the
-// Owner tag:ci, whose first rule keeps the implicit document's member reach, and whose second, the implicit document's
-// tagged dial, names the tag, since the compile writes a tag's atom only for a tag a rule names (acl-m2-16-tag-atoms).
+// Owner tag:ci, which no rule names, the compile writing its atom all the same (owner decision 353), and whose one
+// rule keeps the implicit document's member reach.
 func fs19DelegationRevoked(net *sidecartest.AdmissionNet, world *fs19World) error {
 	owner := net.Owner()
 	plan, _ := net.SaveAclPolicy([]byte(`{
 		"tagOwners": { "tag:ci": ["autogroup:admin"] },
-		"grants": [
-			{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["*"], "allow": ["*"] },
-			{ "src": ["tag:ci"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
-		],
+		"grants": [ { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["*"], "allow": ["*"] } ],
 	}`), nil)
 	tagId, found := sidecartest.AclTagAtom(plan, "ci")
 	if !found {
@@ -1757,6 +1755,168 @@ func aclExpectTaggedAgent(net *sidecartest.AdmissionNet, world *fsTeamWorld, spo
 		}
 		if approvers.HasAutogroup(protocol.AclAutogroup_ACL_AUTOGROUP_ADMIN) || !slices.Equal(approvers.MemberIds, []sidecar.Id{sponsor}) {
 			return fmt.Errorf("the approvers are %v and autogroups %b, want the sponsor %s", approvers.MemberIds, approvers.Autogroups, sponsor)
+		}
+		return nil
+	})
+	return nil
+}
+
+// §8.8's atoms for what a document declares (owner decision 353, QD-901): tagOwners give tag:ci to autogroup:admin,
+// the Owner, and tag:build to group:ops, which the groups block defines as m alone, and no rule names either tag or the
+// group. Every reader's rows hold each one's atom all the same, so at api and every reader the Owner's
+// Delegation{tag_ids: [tag:ci]} lands and its key admits a tagged agent, the Owner's laptop admits a tag:ci runner and
+// m's device a tag:build builder, while neither applies the other's tag, by a SidecarAdmit or, for the Owner, a
+// Delegation naming both. At the next base each tag's row lists its sidecars, which hold what autogroup:tagged gives
+// them and nothing of their tag's own.
+func AclDeclaredAtoms(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	tagId := func(name string) sidecar.Id {
+		return sidecar.Id(world.ids["tag "+name])
+	}
+	return fsTeamSchedule("§8.8 declared atoms", world,
+		aclSetup(world, func(net *sidecartest.AdmissionNet) error {
+			_, first := net.ConsentedMember("m")
+			world.devices["m first"] = first
+			world.ids["notes"] = aclCreateRepo(net, net.Owner(), "notes", protocol.RepoKind_REPO_KIND_GENERAL).Bytes()
+			// the compile expands tagOwners and groups over the folded members, so the member is folded before the save
+			net.Fold(true)
+			plan, _ := net.SaveAclPolicy([]byte(`{
+				"groups": { "group:ops": ["m@acme.example"] },
+				"tagOwners": { "tag:ci": ["autogroup:admin"], "tag:build": ["group:ops"] },
+				"grants": [
+					{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["*"], "allow": ["*"] },
+					{ "src": ["autogroup:tagged"], "dst": ["evs:*"], "allow": ["deposit"] },
+				],
+			}`), aclRowMember(net, world))
+			for _, name := range []string{"ci", "build"} {
+				atomId, found := sidecartest.AclTagAtom(plan, name)
+				if !found {
+					return fmt.Errorf("the saved head names no tag:%s", name)
+				}
+				world.ids["tag "+name] = atomId.Bytes()
+			}
+			opsId, found := sidecartest.AclGroupAtom(plan, "ops")
+			if !found {
+				return errors.New("the saved head names no group:ops")
+			}
+			world.ids["group ops"] = opsId.Bytes()
+			declared := func(atom []byte) bool {
+				return bytes.Equal(atom, world.ids["tag ci"]) || bytes.Equal(atom, world.ids["tag build"]) || bytes.Equal(atom, world.ids["group ops"])
+			}
+			for _, rule := range plan.Rows.GetRules() {
+				if slices.ContainsFunc(rule.GetSrcAtoms(), declared) || slices.ContainsFunc(slices.Concat(rule.GetTargets(), rule.GetVia()),
+					func(target *protocol.AclTarget) bool { return declared(target.GetAtom()) }) {
+					return errors.New("a rule names a declared tag or group")
+				}
+			}
+			if 0 < len(plan.Rows.GetRequests()) {
+				return errors.New("the document holds a requests rule")
+			}
+			if err := aclExpectWritersRows(net, plan); err != nil {
+				return err
+			}
+			return aclExpectDeclaredAtoms(net, world, nil)
+		}),
+		fsTeamDo("owner", world, func(net *sidecartest.AdmissionNet) error {
+			now := net.Clock().Now()
+			delegation := net.Delegate(net.Owner(), "ci", []sidecar.Id{tagId("ci")}, 4, now.Add(7*24*time.Hour).UnixMilli())
+			agent := net.Device("ci agent", sidecar.Id{})
+			world.devices["agent"] = agent
+			net.MustLand(net.SignByDelegation(delegation, bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(agent, []sidecar.Id{tagId("ci")}, true, now.Add(24*time.Hour).UnixMilli(), 0)))
+			runner := net.Device("ci runner", sidecar.Id{})
+			world.devices["runner"] = runner
+			net.MustLand(net.Sign(net.Owner(), bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(runner, []sidecar.Id{tagId("ci")}, false, now.Add(7*24*time.Hour).UnixMilli(), 0)))
+			// the Owner, autogroup:admin and outside group:ops, applies tag:build by neither a SidecarAdmit nor a Delegation
+			net.MustRefuse(net.Sign(net.Owner(), bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(net.Device("owner's builder", sidecar.Id{}), []sidecar.Id{tagId("build")}, false, now.Add(7*24*time.Hour).UnixMilli(), 0)),
+				sidecar.ErrConfigAuthority)
+			both, _ := net.DelegationStatement("ci and build", []sidecar.Id{tagId("ci"), tagId("build")}, 4, now.Add(7*24*time.Hour).UnixMilli())
+			net.MustRefuse(net.Sign(net.Owner(), bridge.SignedType_SIGNED_DELEGATION, both), sidecar.ErrConfigAuthority)
+			return nil
+		}),
+		fsTeamDo("mFirst", world, func(net *sidecartest.AdmissionNet) error {
+			first, now := world.devices["m first"], net.Clock().Now()
+			builder := net.Device("m builder", sidecar.Id{})
+			world.devices["builder"] = builder
+			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(builder, []sidecar.Id{tagId("build")}, false, now.Add(7*24*time.Hour).UnixMilli(), 0)))
+			// m, a member and no admin, applies tag:ci by no SidecarAdmit
+			net.MustRefuse(net.Sign(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(net.Device("m ci agent", sidecar.Id{}), []sidecar.Id{tagId("ci")}, true, now.Add(24*time.Hour).UnixMilli(), 0)),
+				sidecar.ErrConfigAuthority)
+			return nil
+		}),
+		fsTeamDo("writer", world, func(net *sidecartest.AdmissionNet) error {
+			net.Fold(true)
+			return aclExpectDeclaredAtoms(net, world, map[string][]sidecar.Id{
+				"ci":    {world.devices["agent"].SidecarId, world.devices["runner"].SidecarId},
+				"build": {world.devices["builder"].SidecarId},
+			})
+		}),
+	)
+}
+
+// Fails unless every reader's rows hold the declared tags' and group's atoms: tag:ci's owner the Owner, tag:build's
+// and group:ops's m, and, with carriers given, each tag's sidecars exactly those; the Owner applies tag:ci alone and
+// m tag:build alone; and each standing tag:ci runner or tag:build builder holds autogroup:tagged's deposit on notes
+// and reaches neither the Owner's laptop nor m's device.
+func aclExpectDeclaredAtoms(net *sidecartest.AdmissionNet, world *fsTeamWorld, carriers map[string][]sidecar.Id) error {
+	owner, first := net.Owner(), world.devices["m first"]
+	ci, build, ops := sidecar.Id(world.ids["tag ci"]), sidecar.Id(world.ids["tag build"]), sidecar.Id(world.ids["group ops"])
+	notes, now := sidecar.Id(world.ids["notes"]), net.Clock().Now()
+	idBytes := func(ids ...sidecar.Id) [][]byte {
+		list := [][]byte{}
+		for _, id := range slices.SortedFunc(slices.Values(ids), sidecar.Id.Cmp) {
+			list = append(list, id.Bytes())
+		}
+		return list
+	}
+	net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+		atoms := map[sidecar.Id]*protocol.AclAtom{}
+		for _, atom := range acl.Rows().GetAtoms() {
+			atoms[sidecar.Id(atom.GetAtom())] = atom
+		}
+		for name, want := range map[string]struct {
+			atomId sidecar.Id
+			owners [][]byte
+			member [][]byte
+		}{
+			"tag:ci":    {atomId: ci, owners: idBytes(owner.MemberId)},
+			"tag:build": {atomId: build, owners: idBytes(first.MemberId)},
+			"group:ops": {atomId: ops, member: idBytes(first.MemberId)},
+		} {
+			atom := atoms[want.atomId]
+			if atom == nil {
+				return fmt.Errorf("the rows hold no atom of %s, which no rule names", name)
+			}
+			if !slices.EqualFunc(atom.GetTagOwnerMemberIds(), want.owners, bytes.Equal) || !slices.EqualFunc(atom.GetMemberIds(), want.member, bytes.Equal) {
+				return fmt.Errorf("%s's row: owners %x, members %x", name, atom.GetTagOwnerMemberIds(), atom.GetMemberIds())
+			}
+		}
+		for name, sidecarIds := range carriers {
+			if got, want := atoms[sidecar.Id(world.ids["tag "+name])].GetSidecarIds(), idBytes(sidecarIds...); !slices.EqualFunc(got, want, bytes.Equal) {
+				return fmt.Errorf("tag:%s's row lists %x, want %x", name, got, want)
+			}
+		}
+		if !acl.CanApplyTag(owner.SidecarId, ci) || acl.CanApplyTag(owner.SidecarId, build) ||
+			!acl.CanApplyTag(first.SidecarId, build) || acl.CanApplyTag(first.SidecarId, ci) {
+			return errors.New("CanApplyTag gives a declared tag to another than its owners")
+		}
+		for _, label := range []string{"runner", "builder"} {
+			device := world.devices[label]
+			if device == nil {
+				continue
+			}
+			if rights := aclRights(net, acl, device.SidecarId, notes, sidecar.AclTokenAudienceEvs); rights != sidecar.AclEvsDeposit {
+				return fmt.Errorf("the %s's rights on notes, autogroup:tagged's deposit alone: %04b", label, rights)
+			}
+			for _, member := range []*sidecartest.AdmissionDevice{owner, first} {
+				if decision := acl.MayDial(sidecar.AclSidecarSubject(device.SidecarId), sidecar.AclSidecarSubject(member.SidecarId), now); decision.Allowed {
+					return fmt.Errorf("the %s dials %s by a rule its tag does not have", label, member.Name)
+				}
+			}
 		}
 		return nil
 	})

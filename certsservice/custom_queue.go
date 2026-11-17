@@ -47,8 +47,10 @@ type CertsCustomSettings struct {
 	LockLease time.Duration
 	// How often the sweep runs. Positive.
 	SweepInterval time.Duration
-	// How long a spend is kept: 15 d (QD-990), all a bucket's replay reads, which starts full at its key's newest quiet
-	// window within it and else empty at its start (QD-994). At least each bucket's window, so a quiet one fits in it.
+	// How long a spend is kept: 16 d (QD-996), all a bucket's replay reads, which starts full at its key's newest quiet
+	// window within it and else empty at its start (QD-994). So the replay paces a host's devices while the host's busy
+	// stretch is under the retention less one window: 214 h at 16 d, which reaches 17.4's tenth device, 204 h after a
+	// burst of four, where 15 d's 190 h stopped at the ninth. At least each bucket's window, so a quiet one fits in it.
 	SpendRetention time.Duration
 	// A CA's 429: the hold it sets, clamped to [HoldDefault, HoldMax]. Positive.
 	HoldDefault time.Duration
@@ -98,7 +100,7 @@ func DefaultCertsCustomSettings() *CertsCustomSettings {
 	return &CertsCustomSettings{
 		LockLease:               120 * time.Second,
 		SweepInterval:           10 * time.Minute,
-		SpendRetention:          15 * 24 * time.Hour,
+		SpendRetention:          16 * 24 * time.Hour,
 		HoldDefault:             1 * time.Hour,
 		HoldMax:                 7 * 24 * time.Hour,
 		RenewalLifetimeFraction: 2.0 / 3.0,
@@ -195,7 +197,7 @@ func (self *CertsCustomSettings) OrderBucket() CertsCustomBucket {
 type CertsCustomBucket struct {
 	Capacity int
 	Refill   time.Duration
-	// How far back the replay reads spends: CertsCustomSettings.SpendRetention, all the store keeps (QD-990, QD-994).
+	// How far back the replay reads spends: CertsCustomSettings.SpendRetention, all the store keeps (QD-994, QD-996).
 	Retention time.Duration
 }
 
@@ -366,7 +368,9 @@ type CertsCustomStore interface {
 	QueueCustomSuccessor(ctx context.Context, predecessorCertId sidecar.Id, successorCertId sidecar.Id, now time.Time) (bool, error)
 	// custom_issued and custom_revoking rows past not_after go to expired. How many.
 	ExpireCustomRows(ctx context.Context, now time.Time) (int, error)
-	// Spends older than before go. How many.
+	// Spends older than before go: the sweep's now less SpendRetention, 16 d, where every replay starts reading, so no
+	// spend a replay reads is gone and a host's busy stretch of up to 214 h keeps the quiet window before it, which
+	// paces its tenth device (QD-994, QD-996). How many.
 	PurgeCustomSpends(ctx context.Context, before time.Time) (int, error)
 	// 17.2.14's warnings at now, each at most once a host or account in settings' EventRepeatInterval. How many it
 	// raised.
@@ -402,6 +406,7 @@ func (self *CertsService) RunCustomSweep(ctx context.Context, store CertsCustomS
 	if report.ExpiredCount, err = store.ExpireCustomRows(ctx, now); err != nil {
 		return report, err
 	}
+	// only the spends no replay reads: each bucket's replay starts SpendRetention back
 	if report.PurgedCount, err = store.PurgeCustomSpends(ctx, now.Add(-settings.SpendRetention)); err != nil {
 		return report, err
 	}

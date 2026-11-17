@@ -102,7 +102,7 @@ Until the reload, tlsedge answers a host that left the active rows `unrecognized
 ### 13.5 tlsedge: the connection path
 
 1. Read the PROXY header and TLS records until the ClientHello completes; a bounds-checked parser (`tlsedgeservice/clienthello.go`, after connect/ip_sni.go:331-462) extracts SNI, ALPN and ECH presence; a hello that does not parse gets `decode_error` and a close. `ReadClientHello`, `ParseClientHello`, `NormalizeSni` and `WriteTlsAlert` export from `tlsedgeservice`, and server/mxedgehost passes them into `MxEdgeDeps` as functions, so no engine imports another (§15.4). A hello whose ALPN list includes `ur-route-probe` gets `unrecognized_name` at once, whatever its SNI, with no lookup, Find or record: it is 13.4's route probe.
-2. Normalize the SNI (lowercase, no trailing dot, LDH) and map it with the listener's port to `(network_id, tls/<port>/<host>)` through §12's cached label map (`<host>.<x>.<root>`, or `<x>.<root>` as `@`, `<x>` a label or live alias) or custom-host map; deeper names match only v1 scope hosts, `<label>.<scope>` (Q-TLS-3).
+2. Normalize the SNI (lowercase, no trailing dot, LDH) and map it with the listener's port to `(network_id, tls/<port>/<host>)` through §12's label map, held in memory by `TlsEdgeStore`: a full snapshot at start, then `model.DnsLabelMapSince` every 5 s, so a withdrawn name stops mapping within 10 s, read through tlsedge's restricted Postgres role off the path (§19.4), a process that cannot load its first snapshot staying not ready and a running one keeping its last through a Postgres outage, so no connection path touches Postgres (I-12; owner decision 495); (`<host>.<x>.<root>`, or `<x>.<root>` as `@`, `<x>` a label or live alias) or custom-host map; deeper names match only v1 scope hosts, `<label>.<scope>` (Q-TLS-3).
 3. Check, in memory, the kill switch, the caps (13.9) and a 30 s negative cache of `no_listener` and `denied`, which absorbs scans, keyed on (name, port, sorted offered ALPN set), so one scanner's bogus ALPN cannot refuse every visitor to a name. A network's limits load in the background through `ServiceHost.Quota.Limits`, cached per network; until they arrive it gets Community's caps, never a refusal, and the kill switch waits on none of it.
 4. Call Find (§9.6) as `autogroup:public` with the offered ALPN ids in hello order, as many as keep the encoded `TlsEdgeOpen` within 512 B, the list `TlsEdgeOpen` carries, an affinity key and the process's K client ids; Find applies §8 `MayPublish` (for 13.9's system publish, the receiver's `smtp/25/mx` listen grant, §9.10) and `MayDial` and returns primary and backup tickets, each naming the tlsedge client that opens it.
 5. From that client, send `StreamOpen{target, metadata: TlsEdgeOpen, ticket, early_data}` with the hello's first 2,048 B (§6.7), the rest of a longer (PQ) hello following at once in StreamData within the initial window, not after the accept. §9's retries finish before the visitor's first byte, showing only as delay; tlsedge blames a listener only for an accept timeout, never for a visitor's reset.
@@ -129,6 +129,10 @@ A listener trusts `TlsEdgeOpen` only when admission step 3 passes and the ticket
 # config/<env>/tlsedge.yml (sketch; endpoint and visitor caps are pro.yml's, 13.9)
 clients: 4                                          # K (13.6)
 max_connections: 50000                              # per process (13.9)
+blocks: 4                                           # required, >= 1: the lb hosts running tlsedge, each host's
+                                                    #   g1 block once and its beta block not at all; caps divide
+                                                    #   by it (13.9); it has no default, and tlsedge refuses to
+                                                    #   start without it
 proxy_header: {timeout_s: 2, max_bytes: 2048}
 client_hello: {timeout_s: 10, max_bytes: 16384}
 find: {timeout_s: 2, max_finds: 3}                  # D-SOCK-6
@@ -244,9 +248,9 @@ Caps protect the devices, which do the handshakes: endpoint caps are tier quotas
 
 | Cap | Community / Pro / Team | Where |
 |---|---|---|
-| Concurrent per endpoint | 256 / 2,048 / 8,192 | cap ÷ blocks per process, no shared counter |
+| Concurrent per endpoint | 256 / 2,048 / 8,192 | ⌈cap ÷ blocks⌉, at least 1, per process, no shared counter, blocks being tlsedge.yml's count of lb hosts running it (13.5) |
 | New per endpoint | 50 / 200 / 1,000 per s | token bucket per process |
-| Bandwidth per endpoint | 20 / 200 / 1,000 Mbit/s | token bucket in the splice, cap ÷ blocks |
+| Bandwidth per endpoint | 20 / 200 / 1,000 Mbit/s | token bucket in the splice, ⌈cap ÷ blocks⌉ |
 | Per visitor /64 (IPv6) or /32 (IPv4), per process | 64 concurrent, 20 per s; 4× those per /48 or /24 | HMAC under a per-process key rotated daily |
 
 **Visitor hashes.** Cap keys stay per process (§2.8 tls-2). tls-3's visitor hash and Find's affinity key use a fleet-shared daily key: 32 random bytes in Redis `{vhk}tls:<yyyymmdd>` (UTC), created by the first process with `SET NX EX 90000` and read by every process each minute and at the date change. `k_record` and `k_affinity` derive from it by HKDF-SHA256 with infos `urnetwork-sidecar-v1/tls-visitor-record` and `urnetwork-sidecar-v1/tls-visitor-affinity`, and the hash is HMAC-SHA256(k, family byte ‖ the /24 or /48 prefix)[:16], so one visitor links across processes for a day. A process that cannot reach Redis uses a random key of its own for that day, the closed direction. mxedge's daily key has the same shape under `{vhk}mx:<yyyymmdd>` (§15.4), so tls-3's rows and `{mxc_}` keys never join.

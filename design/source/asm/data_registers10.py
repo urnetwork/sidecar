@@ -55,3 +55,16 @@ assert D['D-SDK-19'].startswith('The page Worker builds the root') and Q['Q-SDK-
 D['D-SDK-19'] = ("The page Worker builds the root `-tags sidecar_http`, linking no connect, its `Id` a twin; its loader "
                  "sets gcstoptheworld=1.")
 Q['Q-SDK-7'] = (Q['Q-SDK-7'][0], "(a), amended by owner decision 491: +7.5 MiB stripped, 54 MiB ceiling, 10 MiB compiles.")
+# §19's fold (2026-11-16): lego v4.35.2 runs and W5's swap waits (owner decisions 494, 502), the report intake in
+# mxedge-platform (QD-151), the restore hold in sidecar.yml (QD-076), the pager service (498), the rdb filter's scratch
+# server (QD-357), the read rule (511), and the limit read as rated write IOPS (QD-414).
+assert D['D-OPS-12'].startswith('A builder job renews') and D['D-SMTP-11'].startswith('The engine is smtpedgeservice'), 'OPS rows moved'
+D['D-OPS-9'] = "Adopt 19.8's SLOs and page classes, paging out of hours from M3 through a commercial pager; budget burn stops rollouts."
+D['D-OPS-10'] = "Gates, the placement target, the restore hold and the owner's switches live in `config/<env>/sidecar.yml`."
+D['D-OPS-12'] = "Platform certificates renew at two thirds of lifetime by ARI on lego v4.35.2, v5 the target; W5's swap waits."
+D['D-OPS-16'] = "Redis backup bundles leave out sidecar key families, filtered from each node's rdb in a scratch server before sealing."
+D['D-OPS-20'] = ("Both clusters run an in-house `urnetwork/minio` build: commits only before deadlines, keys released once settled, "
+                 "503 without a read quorum.")
+D['D-SMTP-11'] = ("The engine is smtpedgeservice in server/cli/smtpedge, its report intake in mxedge-platform from M5; provers are "
+                  "smtpproof.")
+D['D-EVS-33'] = "One write budget per metadata cluster (0.8 DWPD, 50% write IOPS) but P0; P1 prepays P2's wallet; heaviest refused first."

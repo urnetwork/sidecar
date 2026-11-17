@@ -503,6 +503,10 @@ func TestCompileAclWorkedExample(t *testing.T) {
 	if db := atoms[world.tag("db")]; db == nil || len(db.GetTagOwnerMemberIds()) != 1 || Id(db.GetTagOwnerMemberIds()[0]) != example.owner {
 		t.Fatalf("tag:db's owners: %v", db)
 	}
+	// tag:audit, which no rule names once the example's audit block is left out, has its atom all the same (QD-901)
+	if audit := atoms[world.tag("audit")]; audit == nil || len(audit.GetTagOwnerMemberIds()) != 1 || Id(audit.GetTagOwnerMemberIds()[0]) != example.owner {
+		t.Fatalf("tag:audit's owners: %v", audit)
+	}
 	partner := atoms[AclDerivedAtom(AclDerivedAtomNetwork, example.partnerY.Bytes())]
 	if partner == nil || len(partner.GetNetworkIds()) != 1 {
 		t.Fatalf("network:partner-y: %v", partner)
@@ -549,6 +553,95 @@ func TestCompileAclWorkedExample(t *testing.T) {
 	}
 	if access := state.EvsAccess(AclSidecarSubject(example.danaLaptop), example.secretsRepo, AclTokenAudienceEvs, aclTestNow); access.Allowed {
 		t.Errorf("dana reads secrets: %b", access.Rights)
+	}
+}
+
+// Every tag tagOwners declares and every group the groups block defines compiles to its atom, named by a rule or not
+// (§8.8's Atoms, owner decision 353, QD-901): the row a rule naming it would give, its owners for CanApplyTag and the
+// sidecars carrying it, so a tag with no rule of its own is applied by its owners and no one else, and its sidecars hold
+// what autogroup:tagged gives them and nothing of the tag's own.
+func TestCompileAclWritesAnAtomForEveryDeclaredTagAndGroup(t *testing.T) {
+	type declaredWorld struct {
+		world                                         *aclCompileWorld
+		owner, dana, ownerLaptop, danaLaptop, ciAgent Id
+		notes                                         Id
+	}
+	build := func(extraGrants string) *declaredWorld {
+		world := newAclCompileWorld("declared atoms")
+		declared := &declaredWorld{world: world}
+		declared.owner = world.member("owner@acme.example", bridge.MemberRole_MEMBER_ROLE_OWNER)
+		declared.dana = world.member("dana@acme.example", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+		declared.ownerLaptop = world.device("owner laptop", declared.owner)
+		declared.danaLaptop = world.device("dana laptop", declared.dana)
+		declared.ciAgent = world.agent("ci agent", declared.owner, "ci")
+		declared.notes = world.repo("notes", protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+		world.tag("build")
+		world.group("ops")
+		world.setPolicy(t, `{
+  "groups":    { "group:ops": ["dana@acme.example"] },
+  "tagOwners": { "tag:ci": ["autogroup:admin"], "tag:build": ["group:ops"] },
+  "grants": [
+    { "src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["dial"] },
+    { "src": ["autogroup:tagged"], "dst": ["evs:notes"], "allow": ["read"] },`+extraGrants+`
+  ],
+}`)
+		return declared
+	}
+	atomsOf := func(rows *protocol.AclRows) map[Id]*protocol.AclAtom {
+		atoms := map[Id]*protocol.AclAtom{}
+		for _, atom := range rows.GetAtoms() {
+			atoms[Id(atom.GetAtom())] = atom
+		}
+		return atoms
+	}
+
+	unnamed := build("")
+	world := unnamed.world
+	atoms := atomsOf(world.compile(t))
+	ci, buildTag, ops := atoms[world.tag("ci")], atoms[world.tag("build")], atoms[world.group("ops")]
+	if ci == nil || len(ci.GetMemberIds()) != 0 || !slices.EqualFunc(ci.GetTagOwnerMemberIds(), [][]byte{unnamed.owner.Bytes()}, bytes.Equal) ||
+		!slices.EqualFunc(ci.GetSidecarIds(), [][]byte{unnamed.ciAgent.Bytes()}, bytes.Equal) {
+		t.Fatalf("tag:ci, which no rule names: %v", ci)
+	}
+	if buildTag == nil || !slices.EqualFunc(buildTag.GetTagOwnerMemberIds(), [][]byte{unnamed.dana.Bytes()}, bytes.Equal) || len(buildTag.GetSidecarIds()) != 0 {
+		t.Fatalf("tag:build, which no rule names: %v", buildTag)
+	}
+	if ops == nil || !slices.EqualFunc(ops.GetMemberIds(), [][]byte{unnamed.dana.Bytes()}, bytes.Equal) {
+		t.Fatalf("group:ops, which no rule names: %v", ops)
+	}
+
+	// a rule naming them gives each the same row
+	named := build(`
+    { "src": ["group:ops"], "dst": ["tag:ci", "tag:build"], "allow": ["dial"] },`)
+	namedAtoms := atomsOf(named.world.compile(t))
+	for name, atomId := range map[string]Id{"tag:ci": world.tag("ci"), "tag:build": world.tag("build"), "group:ops": world.group("ops")} {
+		if !proto.Equal(atoms[atomId], namedAtoms[atomId]) {
+			t.Errorf("%s with no rule %v, named by a rule %v", name, atoms[atomId], namedAtoms[atomId])
+		}
+	}
+
+	state := world.state(t)
+	for _, c := range []struct {
+		name     string
+		signerId Id
+		tagId    Id
+		applies  bool
+	}{
+		{name: "the Owner's laptop applies tag:ci, autogroup:admin's", signerId: unnamed.ownerLaptop, tagId: world.tag("ci"), applies: true},
+		{name: "dana's laptop applies tag:build, group:ops's", signerId: unnamed.danaLaptop, tagId: world.tag("build"), applies: true},
+		{name: "dana's laptop applies tag:ci", signerId: unnamed.danaLaptop, tagId: world.tag("ci"), applies: false},
+		{name: "the Owner's laptop applies tag:build", signerId: unnamed.ownerLaptop, tagId: world.tag("build"), applies: false},
+		{name: "the tagged agent applies its own tag", signerId: unnamed.ciAgent, tagId: world.tag("ci"), applies: false},
+	} {
+		if got := state.CanApplyTag(c.signerId, c.tagId); got != c.applies {
+			t.Errorf("%s: %t", c.name, got)
+		}
+	}
+	if access := state.EvsAccess(AclSidecarSubject(unnamed.ciAgent), unnamed.notes, AclTokenAudienceEvs, aclTestNow); access.Rights != AclEvsRead {
+		t.Errorf("the tagged agent's rights on notes, autogroup:tagged's read alone: %04b", access.Rights)
+	}
+	if decision := state.Reach(AclSidecarSubject(unnamed.ciAgent), AclSidecarSubject(unnamed.ownerLaptop), aclTestNow); decision.Allowed {
+		t.Error("the tagged agent reaches its sponsor's laptop by a rule its tag does not have")
 	}
 }
 
@@ -620,6 +713,12 @@ func TestCompileAclRefusesWhatTheHeadDoesNotHold(t *testing.T) {
 	}{
 		{name: "a tag with no row", policy: `{"grants": [{"src": ["tag:missing"], "dst": ["*"], "allow": ["dial"]}]}`},
 		{name: "a group with no row", policy: `{"grants": [{"src": ["group:missing"], "dst": ["*"], "allow": ["dial"]}]}`},
+		// a declared tag or a defined group has its atom whether or not a rule names it (QD-901), so it needs its row
+		{name: "a declared tag with no row", policy: `{"tagOwners": {"tag:missing": ["autogroup:admin"]}}`},
+		{name: "a defined group with no row", policy: `{"groups": {"group:missing": []}}`},
+		{name: "a defined group's email with no row", policy: `{"groups": {"group:eng": ["nobody@acme.example"]}}`, edit: func(world *aclCompileWorld) {
+			world.group("eng")
+		}},
 		{name: "an email with no row", policy: `{"grants": [{"src": ["user:nobody@acme.example"], "dst": ["*"], "allow": ["dial"]}]}`},
 		{name: "a network with no row", policy: `{"grants": [{"src": ["network:nowhere"], "dst": ["*"], "allow": ["dial"]}]}`},
 		{name: "a client with no row", policy: `{"grants": [{"src": ["*"], "dst": ["client:01234567-89ab-cdef-0123-456789abcdef"], "allow": ["dial"]}]}`},

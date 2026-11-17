@@ -19,7 +19,8 @@
 //
 // What it writes: has_document; evidence_default, the document's effective evidenceDefault as channel values, all
 // three where it names none, the implicit document's included, which every verifier reads for an action no requests
-// rule names (QD-727); an AclAtom for every tag, group and derived atom the policy names, autogroups being
+// rule names (QD-727); an AclAtom for every tag tagOwners declares and every group the groups block defines, whether
+// or not a rule names it (owner decision 353), and for every derived atom the policy names, autogroups being
 // fixed constants with no row; the policy's grants, each grant's via subjects in AclRule.via apart from its
 // destinations (QD-764), and requests, then §8.5's kind-default rules that need the head
 // (acl_kind.go), then the log's activated grants whose requests rule this head still holds (FS-14); the log's repos,
@@ -630,6 +631,21 @@ func (self *aclCompiler) compile() error {
 	keys, err := AclPolicyRuleKeys(self.policy)
 	if err != nil {
 		return err
+	}
+
+	// every tag tagOwners declares and every group the groups block defines, named by a rule or not (§8.8's Atoms,
+	// owner decision 353): CanApplyTag reads a tag's owners from its row alone, so a tag with no rule of its own still
+	// needs one for a Delegation or a tagged SidecarAdmit to apply it. A rule naming one finds its row built, the same
+	// row, and the rows list atoms in id order, so where a document names them changes no byte.
+	for i := range self.policy.TagOwners {
+		if _, err := self.atom(self.policy.TagOwners[i].Tag); err != nil {
+			return fmt.Errorf("tagOwners[%d]: %w", i, err)
+		}
+	}
+	for i := range self.policy.Groups {
+		if _, err := self.atom(self.policy.Groups[i].Group); err != nil {
+			return fmt.Errorf("groups[%d]: %w", i, err)
+		}
 	}
 
 	ruleIds := map[Id]bool{}
