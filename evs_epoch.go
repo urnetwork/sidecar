@@ -3,10 +3,10 @@
 //
 //	classify  a push whose generation pin crosses a REMOVE generation records a due classed from the log between the
 //	          auth pins of the generation it crosses from and the one it crosses to (§11.6's due row; question
-//	          evs1-m2-16-due-classification, option 3; QD-949): batched when the party's newest state, or else its
-//	          state at the later pin, shows the repo's holders last shrank at or below the earlier pin, so only
-//	          expiries passed in between; otherwise each entry in between that shrank them (config_shrink_span.go) is
-//	          classed by its statement, and one immediate shrink makes the crossing immediate:
+//	          evs1-m2-16-due-classification, option 3; QD-949): batched when nothing in between shrank the repo's
+//	          holders, so only expiries passed (the party's newest state shows no shrink after the earlier pin, or the
+//	          walk back from it finds none at or below the later pin); otherwise each entry in between that shrank them
+//	          (config_shrink_span.go) is classed by its statement, and one immediate shrink makes the crossing immediate:
 //	            batched    an agent's ordinary removal: a tagged sidecar's SidecarRevoke whose reason is not
 //	                       compromise or a tick's reap of one, a DelegationRevoke with since_n 0, and a RepoRevoke,
 //	                       GrantRevoke or Suspend; each only when every holder it dropped (KeyHolders before and after
@@ -17,14 +17,14 @@
 //	                       statement that drops a leaf), and a compromise retirement, a SidecarRevoke whose reason is
 //	                       compromise, agents included, or a DelegationRevoke with since_n > 0; a RecoveryRebind too
 //	          A party that cannot read what the class needs reads immediate, as for a crossing it cannot judge: either
-//	          pin off its chain or above its state, the earlier above the later, and once the holders shrank since the
-//	          earlier pin, a later pin or an earlier one its window no longer reaches, a state or entry of the span it
-//	          no longer keeps, a base whose own change shrank them, an entry the shrink row's closed reading flagged
-//	          where a base folded the repo's t_s, which says nothing of whom it dropped, a statement type not named
-//	          above, or holders it cannot compute. A pin before what the party retains is held to its number alone, as
-//	          the gate holds a generation's (gkm_gate.go), and only to find that nothing shrank the holders since the
-//	          earlier pin, which is how option 1 read every crossing. A view that is no ConfigState reads no entry, so
-//	          any shrink in between reads immediate there, as option 1 had every shrink
+//	          pin off its chain or above its state, the earlier above the later, a state or entry around a shrink in
+//	          between that its window no longer keeps, a base whose own change shrank them, an entry the shrink row's
+//	          closed reading flagged where a base folded the repo's t_s, which says nothing of whom it dropped, a
+//	          statement type not named above, or holders it cannot compute. A pin before what the party retains is
+//	          held to its number alone, as the gate holds a generation's (gkm_gate.go; QD-1018): the walk needs only
+//	          the states around each shrink after the earlier pin, so an agent's ordinary removal reads batched on a
+//	          repo whose generation was rotated before the party's window. A view that is no ConfigState reads no
+//	          entry, so any shrink in between reads immediate there, as option 1 had every shrink
 //	blocks    an immediate due blocks creation only on shared and owned refs of general, config and mailcfg repos,
 //	          whose names carry meaning; deposit and erasure refs hold random ids under no path key and stay at
 //	          epoch 1, and the other kinds name entries by id or sequence (plan-EVS1-epoch-kinds #1 and #2)
@@ -78,24 +78,19 @@ func EvsClassifyPathEpochDue(view GkmAuthView, repoId Id, fromAuth *bridge.AuthP
 		// still reaches either pin
 		return false
 	}
-	through, err := view.At(toAuth)
-	if err != nil {
-		return true
-	}
-	repo := through.Repo(repoId)
-	if repo == nil {
-		return true
-	}
-	if repo.GetHoldersShrunkAt() <= fromAuth.GetVersion() {
-		// no entry in between shrank the holders, a later shrink being a later crossing's: only expiries passed
-		return false
-	}
 	spanView, ok := view.(evsShrinkSpanView)
 	if !ok {
-		return true
+		// a view that reads no entry: immediate on any shrink in between, as its state at the later pin shows one
+		through, err := view.At(toAuth)
+		if err != nil {
+			return true
+		}
+		repo := through.Repo(repoId)
+		return repo == nil || fromAuth.GetVersion() < repo.GetHoldersShrunkAt()
 	}
+	// with no shrink in between, only shrinks after the later pin, a later crossing's, only expiries passed
 	shrinks, err := spanView.shrinksBetween(repoId, fromAuth, toAuth)
-	if err != nil || len(shrinks) == 0 {
+	if err != nil {
 		return true
 	}
 	for _, shrink := range shrinks {
