@@ -225,6 +225,8 @@ type evsTestWorld struct {
 	// the auth version the world's pushes pin, 0 for 1, and the next push's index_epoch, which builds it as format 2
 	authVersion    uint64
 	nextIndexEpoch uint64
+	// the head's index_epoch, which a CUT the push stand-in commits moves to its version (evsTestPushServer.indexEpochs)
+	indexEpoch uint64
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -655,7 +657,7 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 		RefId: self.refId.Bytes(), RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: self.mode,
 		GroupId: evsTestId("world group").Bytes(), Generation: self.generation,
 		PathEpoch:     &protocol.EvsPathEpoch{Current: max(1, self.currentEpoch)},
-		SealedRefName: self.sealedRefName, Base: self.base, Deleted: self.deleted,
+		SealedRefName: self.sealedRefName, Base: self.base, Deleted: self.deleted, IndexEpoch: self.indexEpoch,
 	}
 	for _, source := range self.sourceEpochs {
 		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})
