@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"maps"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -401,7 +402,8 @@ func testConfigRowsBytes(t testing.TB, state *ConfigState) []byte {
 	return testConfigMarshal(t, state.Rows())
 }
 
-// Whether two readers stand on the same state: pin, rows, threshold, open proposals and retention point.
+// Whether two readers stand on the same state: pin, rows, threshold, open proposals and retention point, and the t_s
+// each holds for a repo's next shrink (QD-883), which no rows carry.
 func testConfigStatesEqual(t testing.TB, a *ConfigState, b *ConfigState) {
 	t.Helper()
 	if !proto.Equal(a.Pin(), b.Pin()) {
@@ -409,6 +411,9 @@ func testConfigStatesEqual(t testing.TB, a *ConfigState, b *ConfigState) {
 	}
 	if !bytes.Equal(testConfigRowsBytes(t, a), testConfigRowsBytes(t, b)) {
 		t.Errorf("rows differ at %d", a.n)
+	}
+	if !maps.Equal(a.shrinkTimes, b.shrinkTimes) {
+		t.Errorf("t_s differs at %d: %v and %v", a.n, a.shrinkTimes, b.shrinkTimes)
 	}
 	if a.threshold != b.threshold || a.RetentionPoint() != b.RetentionPoint() {
 		t.Errorf("threshold %d and %d, retention %d and %d", a.threshold, b.threshold, a.RetentionPoint(), b.RetentionPoint())
