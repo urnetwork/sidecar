@@ -302,10 +302,7 @@ cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Pos
 **Stored bytes and maintenance at the limit (D-QUOTA-3).**
 
 ```text
-stored   a repo's stored bytes are the sizes of its seg/, pack/ and hp/ objects as LIST returns them, plus the
-         record lengths its head windows and log pages give for versions still in shared batches (no payload reads),
-         minus objects only a hold keeps (owner decision 133) and any pack or parcel whose every record a newer
-         container's pidx/ entry names, which the nightly pass deletes unless held (§11.13): ciphertext as stored,
+stored   a repo's stored bytes are those §11.13's bytes row counts, with no payload reads: ciphertext as stored,
          padding and history included, the search index's files too (§11.14), in GiB (20.4); a deleted repo counts
          until shredded (§11.12), group mail once (§15.7), and a replaced versionless version's content only until
          the purge deletes it, a minute after its replacement, or while its batch lives when staged (at most 26 h;
@@ -370,20 +367,13 @@ wait     an allowance covers ⌊allowance / 1,088 KiB⌋ full i/ segment or inde
          default and 3 at the floor; an eraser sizes each CLOSURE, with its ERASE, to what remains of its
          allowance (QuotaLimits gives the allowance, and only its own closures spend it), splitting a larger
          erasure into such pairs, since a push adopts an upload only within 24 h (§11.13); the pacing seats each
-         asking eraser once every k/R s (~21 min with all 5,000 of a Team's admissions asking, still 69
-         turns a day, above the default allowance's 60 re-keys); so at the floor a backlog re-keying n full
-         segments, refused for bytes, commits its last pair within three turns of the ⌈n/3⌉-th 00:00 UTC after the
-         refusal, under ⌈n/3⌉ days and three turns however many erasers wait, since none spends another's
-         allowance or turns (closure row; §11.12's rekey row), and at once when the network is below the limit and
-         not spent; in general an erasure with B closure bytes left when its allowance first refuses it commits
-         its last pair after at most the ⌈B / (A - 1,088 KiB)⌉-th 00:00 UTC that follows, A its allowance, plus
-         one turn per upload of that day (§11.13's wait row), B summing every i/ segment and index file version it
-         re-keys: with the search index on, one message or record entry is one document per 1 MiB chunk of its
-         text, each with its slots, large entry or shards and any copy a backfill, late companion push or hold
-         made (§11.14's bound), so only a one-document entry with no copy waits at most for the next 00:00 UTC and
-         two turns; its first ERASE takes the entry's own keys at once, its CUT is maintenance, and each pair's
-         entries keep their index fields and postings openable to key holders, masked in search, until its ERASE
-         commits; the eraser's device shows the estimate (§5.4's erasure event)
+         asking eraser once every k/R s (~21 min with all 5,000 of a Team's admissions asking, still 69 turns a
+         day, above the default allowance's 60 re-keys); so at the floor a backlog re-keying n full segments,
+         refused for bytes, commits its last pair within three turns of the ⌈n/3⌉-th 00:00 UTC after the refusal,
+         under ⌈n/3⌉ days and three turns however many erasers wait, since none spends another's allowance or
+         turns (closure row; §11.12's rekey row), and at once when the network is below the limit and not spent;
+         in general an erasure waits as §11.13's wait row bounds it from its rekey objects, its CUT being
+         maintenance, and the eraser's device shows the estimate (§5.4's erasure event)
 note     §16.8's erasure entry, a new record, waits until the network is below the limit and not spent, the
          committed ERASE standing as the record until then
 ```
