@@ -9,9 +9,9 @@
 //	            cards while a view is open and its buckets and all only for "search more"
 //	modes       all is kept by §18.4's mode in force: this device's override for the repo, else its override for
 //	            every repo, sealed in search.state and never in the config repo, else the host's Search.AllPolicy;
-//	            background keeps all at each roll-up and rewrite; wifi_charging in an OS-granted window, or while the
-//	            app is in the foreground on an unmetered link and charging, never in Low Power Mode; on_demand only
-//	            for "search more"; never not at all
+//	            background keeps all at each roll-up and rewrite; wifi_charging in an OS-granted window or while the
+//	            app is in the foreground, in both only on an unmetered link while charging and never in Low Power
+//	            Mode (QD-1000); on_demand only for "search more"; never not at all
 //	caps        a host with Search.AllCacheByteCount keeps all only while the repo's all fits it, else on demand;
 //	            Search.UnusedAllAge evicts all shards no search used that long, search.state kept
 //	windows     background index work (merges, roll-ups) runs on a background host always, on a wifi_charging host
@@ -65,6 +65,9 @@ type SearchPolicy struct {
 	clock      Clock
 
 	stateLock sync.Mutex
+	// §18.4's windows rule over the host's conditions and whether an OS window is open: searchWindowsAllow, which only
+	// a sidecar_testhooks build replaces, planting a broken rule a schedule must catch (PlantSearchWindowsRule).
+	windowsRule func(conditions SearchConditions, inWindow bool) bool
 	// OS windows in progress (RunSearchBackgroundSync), each until its deadline.
 	windows map[*searchPolicyWindow]bool
 	// The UTC day the background counts are of, its downloads, and by repo what the last read it refused wanted.
@@ -98,6 +101,7 @@ func NewSearchPolicy(args *SearchPolicyArgs) (*SearchPolicy, error) {
 		state:       args.State,
 		conditions:  args.Conditions,
 		clock:       clockOrReal(args.Clock),
+		windowsRule: searchWindowsAllow,
 		windows:     map[*searchPolicyWindow]bool{},
 		heldBack:    map[Id]int64{},
 		refreshedAt: map[Id]time.Time{},
@@ -116,9 +120,7 @@ func (self *SearchPolicy) Mode(repoId Id) string {
 }
 
 // Whether an OS window is open now.
-func (self *SearchPolicy) inWindow() bool {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
+func (self *SearchPolicy) inWindowWithLock() bool {
 	now := self.clock.Now()
 	for window := range self.windows {
 		if now.Before(window.deadline) {
@@ -128,14 +130,25 @@ func (self *SearchPolicy) inWindow() bool {
 	return false
 }
 
-// §18.4's windows rule for a wifi_charging host: in an OS window, or in the foreground on an unmetered link and
-// charging; never while Low Power Mode or power saving pauses it.
+// §18.4's windows rule for a wifi_charging host (QD-1000): in an OS window or in the foreground, and in both only on an
+// unmetered link while charging, never while Low Power Mode or power saving pauses it. A window alone allows nothing:
+// an iOS BGProcessingTask can require power and a network but not Wi-Fi, so one can open on cellular, and the core
+// does not rely on each host to gate its windows, since a phone's metered data is the person's money (§16.10 debits
+// every byte).
+func searchWindowsAllow(conditions SearchConditions, inWindow bool) bool {
+	return (inWindow || conditions.Foreground) && !conditions.Metered() && conditions.OnCharge() && !conditions.Paused()
+}
+
+// Whether the windows rule allows a wifi_charging host's window work now, by the host's conditions and the windows
+// open.
 func (self *SearchPolicy) windowsAllow() bool {
 	conditions := self.conditions()
-	if conditions.Paused() {
-		return false
-	}
-	return self.inWindow() || (conditions.Foreground && !conditions.Metered() && conditions.OnCharge())
+	inWindow, windowsRule := func() (bool, func(conditions SearchConditions, inWindow bool) bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.inWindowWithLock(), self.windowsRule
+	}()
+	return windowsRule(conditions, inWindow)
 }
 
 // Whether this device keeps repoId's all synced now (the sync engine's keepAll), all being allByteCount bytes as the
@@ -183,8 +196,8 @@ func (self *SearchPolicy) MayRollUp(allHeld bool, allByteCount int64) bool {
 	return allCap == 0 || allByteCount <= allCap
 }
 
-// Opens an OS window until deadline, its budget: wifi_charging syncs all and runs background work inside it. The
-// answer ends it early.
+// Opens an OS window until deadline, its budget: wifi_charging syncs all and runs background work inside it while the
+// windows rule allows, on an unmetered link while charging and not in Low Power Mode. The answer ends it early.
 func (self *SearchPolicy) BeginWindow(deadline time.Time) func() {
 	window := &searchPolicyWindow{deadline: deadline}
 	self.stateLock.Lock()

@@ -189,8 +189,8 @@ type searchSyncRefArgs struct {
 	// The index rides ur/index, whose rows carry their ref_id; else the ref's own .ur-index/.
 	companion bool
 	source    searchSyncSource
-	// Whether this device keeps the ref's all set: background hosts always, phones in a window (SEARCH-M10-20's
-	// policy). Nil keeps it.
+	// Whether this device keeps the ref's all set: background hosts always, phones by SEARCH-M10-20's windows rule (in
+	// a window or the foreground, on an unmetered link while charging). Nil keeps it.
 	keepAll func() bool
 	// Read for search by a device that is not one of the owner-bound repo's owner's consented devices.
 	nonWriter bool
