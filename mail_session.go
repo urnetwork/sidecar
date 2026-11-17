@@ -15,10 +15,9 @@
 //	limits    GET /sidecar/limits' mail_inbound_message_bytes, mail_inbound_recipients and
 //	          mail_inbound_repos_per_message, read at most each LimitsInterval at EHLO; a limit not there to read, or
 //	          not above 0, answers the EHLO 451 4.3.0, never an unbounded SIZE. They hold whatever the answer's
-//	          enforced says, unlike the other local pre-checks (owner decision 520), since read as none while dark
-//	          they would refuse every EHLO: what bounds a session while enforcement is dark is question
-//	          quota-limits-enforced-mail-session-dark, and until it is answered they bound it as configured, the
-//	          closed direction
+//	          enforced says, as the closure floor and pacing do, unlike the other local pre-checks (owner decision
+//	          520; QD-1023): they size a session rather than refuse a creation, read as none while dark they would
+//	          refuse every EHLO, and mxedge cuts each splice at the same message cap whatever the switch
 //	mail      MAIL follows the handshake within MailTimeout (60 s), or the stream closes
 //	bare      RFC 5321's bare RCPT TO:<Postmaster>, which go-smtp's fork hands Rcpt as postmaster alone
 //	          (MailSmtpBarePostmaster), is postmaster at the domain the session serves before mailcfg's rules (owner

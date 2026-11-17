@@ -490,13 +490,13 @@ The design-records track for the second pass over §11, §12 and §13 (wave f41d
 - **Elsewhere.** The parts these name outside §11 and §13 went with them: §2.8's evs-28 (570), §15.16's two risk rows on readers that start fresh on a mailcfg ref (568), §19.8's `drop-reindex` page row (570) and §19.10's repos row, which names the segment uploads of a repo re-seeded as deleted (565).
 - **Not applied as section text.** Each answer's code parts, its fix track's (reseed-parts-seal-fence, reseed-segments-deleted-admin, evs-prefix-removal-after-removal, evs-absent-walked-removal, config-place-any-writer and drop-reindex-snap0-source had not landed at this fold; QD-994's, QD-996's, QD-1006's and QD-1018's code had); 570's FILE-CLUSTERS.md runbook row in xops; 568's replaying mailcfg reader, MAIL-M7-04's in the review phase; and DESIGN-DETAILS 17.2.8 and 17.4 (571), which are the design agent's. cert-1's 16 d was already in §2.8's block, list v41. QD-1011, whose changes name §13.6 but which folds into §19, is left to §19's pass.
 
-`build.sh` on this folder reproduced DESIGN.md (SHA-256 `c8390f98fc9da40203ae6931c5a7ecb86f9e1af5251807e93f38684f38ff28c1`) at this fold, and the validation shows:
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `153346b7bbb337b92e093979439701738413ca544209a4a6cfa43d455319247c`) at this fold, and the validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed, so no guard entry moved.
 - **Owner decisions.** All 571 rows are present and cited; `LATE_DATES` gives each new row its date, and no new day joined the row pattern; rows 414, 424 and 512 note decisions 569's, 571's and 570's amendments.
 - **Open owner questions.** One, Q-REPO-6.
 - **Superseded options.** 312 grep hits, each with a reading, carried forward with no changed line raising a new one; the carried file's line numbers follow the sections.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
-- **The metadata list** is v47, whose header names what it changes in evs-28 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+- **The metadata list** is v48, whose header names what it changes in evs-28 and that it adds no row. The block also took v47, QD-950's words for evs-8's sees, each lease's expiry (owner decision 408, whose first fold had written the expiry into evs-8's store alone), which a code track published through check's additions while this fold ran; as owner decision 252's rule has it, those three entries left `check/metadata_list_test.go` once the block wrote their text. `make metadata` copied the block to `metadata_list.yml`; the block and the file are the same bytes.
 
-Outside this folder the fold touched DESIGN.md and `metadata_list.yml` alone.
+Outside this folder the fold touched DESIGN.md, `metadata_list.yml` and QD-950's three entries in `check/metadata_list_test.go`'s additions, which left as the block took their text.

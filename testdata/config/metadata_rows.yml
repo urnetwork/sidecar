@@ -203,13 +203,13 @@ RecoveryVeto.header: {number: 1, type: StatementHeader, row: api-7, sees: "heade
 RecoveryVeto.proposal_id: {number: 2, type: bytes, row: api-7, sees: "authority proposals, cosigns and vetoes"}
 
 # DESIGN-DETAILS 5.2.2's fields (section 5, complete 2026-11-09), whose api-7 words its 5.8 proposes and the owner's
-# details-5-settings-in-rows holds, and the cascade spans and indexer rows questions team-m2-04-cascade-spans and
-# team-m2-07-indexer-rows ask for: each pending until api-7 names it.
+# details-5-settings-in-rows holds, each pending until api-7 names it; the cascade spans and indexer rows quote the
+# words owner decision 330 gave api-7.
 ProjectionHeader.tail_verdicts: {number: 10, type: bytes, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains each base header's tail verdicts"}
 ProjectionRows.proposals: {number: 7, type: repeated ProposalRow, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains open authority proposals with their signers, windows and kinds"}
 ProjectionRows.settings: {number: 8, type: ProjectionSettings, row: api-7, pending: "details-5-settings-in-rows: api-7 gains the id-level settings self_admit and scim_signer"}
 ProjectionRows.ring: {number: 9, type: repeated RingRow, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains the applied-id ring"}
-ProjectionRows.indexers: {number: 10, type: repeated IndexerRow, row: api-7, pending: "team-m2-07-indexer-rows: api-7's indexer designations, folded into rows"}
+ProjectionRows.indexers: {number: 10, type: repeated IndexerRow, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
 ProposalRow.proposal_id: {number: 1, type: bytes, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains open authority proposals with their signers, windows and kinds"}
 ProposalRow.statement_type: {number: 2, type: uint32, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains open authority proposals with their signers, windows and kinds"}
 ProposalRow.statement: {number: 3, type: bytes, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains open authority proposals with their signers, windows and kinds"}
@@ -226,15 +226,15 @@ ProjectionSettings.scim_signer: {number: 2, type: bytes, row: api-7, pending: "d
 RingRow.statement_id: {number: 1, type: bytes, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains the applied-id ring"}
 RingRow.n: {number: 2, type: uint64, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains the applied-id ring"}
 SidecarRow.confirmations: {number: 21, type: repeated ConfirmationRow, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains every confirmation's signer and position"}
-SidecarRow.cascades: {number: 22, type: repeated CascadeSpanRow, row: api-7, pending: "team-m2-04-cascade-spans: api-7 gains the span each compromise cascade held a sidecar in P"}
+SidecarRow.cascades: {number: 22, type: repeated CascadeSpanRow, row: api-7, sees: "the span each compromise cascade held a sidecar in P (from and until positions)"}
 ConfirmationRow.kind: {number: 1, type: uint32, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains every confirmation's signer and position"}
 ConfirmationRow.signer: {number: 2, type: bytes, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains every confirmation's signer and position"}
 ConfirmationRow.at: {number: 3, type: uint64, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains every confirmation's signer and position"}
 ConfirmationRow.lifted_park: {number: 4, type: bool, row: api-7, pending: "DESIGN-DETAILS 5.8: api-7 gains every confirmation's signer and position"}
-CascadeSpanRow.from: {number: 1, type: uint64, row: api-7, pending: "team-m2-04-cascade-spans: api-7 gains the span each compromise cascade held a sidecar in P"}
-CascadeSpanRow.until: {number: 2, type: uint64, row: api-7, pending: "team-m2-04-cascade-spans: api-7 gains the span each compromise cascade held a sidecar in P"}
-IndexerRow.sidecar_id: {number: 1, type: bytes, row: api-7, pending: "team-m2-07-indexer-rows: api-7's indexer designations, folded into rows"}
-IndexerRow.scope: {number: 2, type: uint32, row: api-7, pending: "team-m2-07-indexer-rows: api-7's indexer designations, folded into rows"}
-IndexerRow.signer: {number: 3, type: bytes, row: api-7, pending: "team-m2-07-indexer-rows: api-7's indexer designations, folded into rows"}
-IndexerRow.at: {number: 4, type: uint64, row: api-7, pending: "team-m2-07-indexer-rows: api-7's indexer designations, folded into rows"}
-IndexerRow.sealed_services: {number: 5, type: bytes, row: api-7, pending: "team-m2-07-indexer-rows: api-7's indexer designations, folded into rows"}
+CascadeSpanRow.from: {number: 1, type: uint64, row: api-7, sees: "the span each compromise cascade held a sidecar in P (from and until positions)"}
+CascadeSpanRow.until: {number: 2, type: uint64, row: api-7, sees: "the span each compromise cascade held a sidecar in P (from and until positions)"}
+IndexerRow.sidecar_id: {number: 1, type: bytes, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
+IndexerRow.scope: {number: 2, type: uint32, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
+IndexerRow.signer: {number: 3, type: bytes, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
+IndexerRow.at: {number: 4, type: uint64, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}
+IndexerRow.sealed_services: {number: 5, type: bytes, row: api-7, sees: "each indexer designation folded into the projection rows while it holds, with its signer and position"}

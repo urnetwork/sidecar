@@ -22,7 +22,10 @@
 // (owner decision 220), at version 4, as a version-3 access_request's port does. The answer to
 // canonical-action-detail-listen-socket-name (QD-772) moves a socket_listen's socket name the same way: socket_name
 // leaves CanonicalAction, 23 reserved, for ApprovalRequest's 17, and a listen's action names its socket by its one
-// grant_dst entry alone, in the form a server may see. design_unfenced_test.go lists each.
+// grant_dst entry alone, in the form a server may see. The answer to search-m10-28-transcript-prompts (QD-900) is
+// declared here ahead of RECORD.md section 6.4's fence: ContextBody gains prompts = 17, the run's redacted user
+// prompts in stage 2 entries as they arrive, which a vault's run card reads (RECORD.md 7.4) and T's projection leaves
+// empty. design_unfenced_test.go lists each.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -234,6 +237,8 @@ message ContextBody {                       // context
   repeated string truncations = 13;         // V: <= 16 warnings, each <= 128 B: a base name and its cut
   bytes config_sha256 = 14;                 // the harness config hash §16.6 checks
   bytes continues_run_id = 15; bytes continues_entry_id = 16;
+  repeated string prompts = 17;             // V: QD-900: user prompts as they arrive (§16.7), each redacted and
+                                            // none empty, in order, <= 2,048 B together; stage 2 entries carry them
 }
 message InstructionFile {
   uint32 scope = 1;                         // 1 managed, 2 user, 3 project

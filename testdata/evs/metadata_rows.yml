@@ -87,7 +87,7 @@ EvsSubscriptionRequest.prefixes: {number: 4, type: repeated EvsTokenPath, row: e
 EvsSubscription.ref_id: {number: 1, type: bytes, row: evs-8, sees: "refs"}
 EvsSubscription.path_epoch: {number: 2, type: uint64, row: evs-8, sees: "path epochs"}
 EvsSubscription.prefix: {number: 3, type: EvsTokenPath, row: evs-8, sees: "up to 16 token prefixes it follows"}
-EvsSubscription.expires_ms: {number: 4, type: int64, row: evs-8, pending: "11.10's lease row keeps each lease's expiry, which evs-8's store names (prefix -> expiry) and its sees does not"}
+EvsSubscription.expires_ms: {number: 4, type: int64, row: evs-8, sees: "each lease's expiry"}
 EvsSubscriptionsReply.subscriptions: {number: 1, type: repeated EvsSubscription, row: evs-8, sees: "per client, the repos, refs, path epochs and up to 16 token prefixes it follows"}
 
 EvsPushReply.version: {number: 1, type: uint64, row: evs-3, sees: "version v"}

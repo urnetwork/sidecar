@@ -1068,7 +1068,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v47; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v48; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -1237,7 +1237,9 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # each repo's holders_shrunk_at with its time, the time_ms of the entry at that position, or of the repo's
 # RepoCreate's while it is 0, a time api stamped itself, which the fix track had published through check's
 # additions ahead of this fold (owner decision 252).
-# v47, updated 2026-11-17 for the owner's answer QD-1021 (owner decision 570), adds no row: evs-28's drop job keeps
+# v47, updated 2026-11-17 for the owner's answer QD-950 (owner decision 408), adds no row: evs-8's sees names each
+# lease's expiry, as that answer has it, which the row's store keeps and GET /evs/v1/subscriptions returns.
+# v48, updated 2026-11-17 for the owner's answer QD-1021 (owner decision 570), adds no row: evs-28's drop job keeps
 # its first snapshot file, snap-0, for the repo's life, as it keeps its list files, so each covered drop's place and
 # seen_ms stay beside the ids the list files hold, and `sidecarctl evs drop-reindex` rebuilds an older job's corrupt
 # list file from it.
@@ -1490,7 +1492,7 @@ evs-7:
 evs-8:
   service: evs
   store: Redis {evsl_<repo_id>} (holder, ref, path epoch, prefix -> expiry) and {evsl_<repo_id>}v; {evsc_<client_id>} (repo ids, by last subscribe or renewal ms); each lease's expiry, which GET /evs/v1/subscriptions returns as EvsSubscription.expires_ms (owner decision 408)
-  sees: per client, the repos, refs, path epochs and up to 16 token prefixes it follows, and which repos it subscribed to or renewed in the last 7 d, with when
+  sees: per client, the repos, refs, path epochs and up to 16 token prefixes it follows, each lease's expiry, and which repos it subscribed to or renewed in the last 7 d, with when
   why: change notification (PLAN.md:55; owner decision 2); the per-client repo cap (§11.10)
   ttl: 7 d after the last renewal, each lease renewed once it is over 24 h old, never on a reconnect (§11.10); {evsc_} members dropped 7 d after their last subscribe or renewal, or at a DELETE of the client's last lease on the repo, the key expiring 8 d after its last write; soft state outside the rdb bundles, re-created by holders after a loss (owner decision 136); a hold's copy of the lease fields excepted (api-14), {evsc_} needing none since the lease fields hold the same facts
   owner: §11.10
@@ -24944,7 +24946,7 @@ Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections th
 
 ## Appendix G. Server-visible metadata list
 
-§2.8 holds `metadata_list.yml` (v47, updated 2026-11-17 for the owner's answer QD-1021), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 100 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-13; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
+§2.8 holds `metadata_list.yml` (v48, updated 2026-11-17 for the owner's answer QD-1021), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 100 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-13; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
 
 ## Appendix H. Research sources
 

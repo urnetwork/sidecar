@@ -31,7 +31,8 @@ import (
 // A synthetic secret the redactor's ur_sk_ rule matches. Never a real one.
 const ingestTestSecret = "ur_sk_0123456789abcdef0123456789abcdef"
 
-// A record writer that keeps each draft, checking its body as the real one does, and answers a growing seq.
+// A record writer that keeps each draft, checking its body as the real one does, its caps and its marshaling, which
+// refuses a string field that is no UTF-8, and answers a growing seq.
 type testRecordWriter struct {
 	stateLock sync.Mutex
 	drafts    []*sidecar.RecordDraft
@@ -46,6 +47,9 @@ func newTestRecordWriter() *testRecordWriter {
 
 func (self *testRecordWriter) Append(draft *sidecar.RecordDraft) ([]*sidecar.RecordEntryRef, error) {
 	if err := sidecar.RecordBodyValidate(draft.Kind, draft.Body); err != nil {
+		return nil, err
+	}
+	if _, err := (proto.MarshalOptions{Deterministic: true}).Marshal(draft.Body); err != nil {
 		return nil, err
 	}
 	self.stateLock.Lock()
@@ -217,6 +221,18 @@ func TestScriptedRunPerHarness(t *testing.T) {
 		if harnessName := contexts[0].Body.(*protocol.ContextBody).Harness; harnessName != kind {
 			t.Errorf("%s: the context names harness %q", kind, harnessName)
 		}
+		// each harness's prompt event writes the prompt, whole, in a stage 2 entry of its own carrying the title it set
+		// (QD-900)
+		prompted := []*protocol.ContextBody{}
+		for _, draft := range contexts {
+			if body := draft.Body.(*protocol.ContextBody); len(body.Prompts) != 0 {
+				prompted = append(prompted, body)
+			}
+		}
+		if len(prompted) != 1 || prompted[0].Stage != 2 || !slices.Equal(prompted[0].Prompts, []string{"Fix the build\nand then more"}) ||
+			prompted[0].Title != "Fix the build" || prompted[0].Harness != kind {
+			t.Errorf("%s: the prompt's context entries %+v", kind, prompted)
+		}
 		toolCalls := env.writer.of(sidecar.RecordKindToolCall)
 		if len(toolCalls) != 2 {
 			t.Fatalf("%s: %d tool calls", kind, len(toolCalls))
@@ -271,7 +287,8 @@ func TestScriptedRunPerHarness(t *testing.T) {
 		if file := env.runFile(runId); file.CoverageMillis == 0 || file.FirstSeq != coverage.FirstSeq || file.LastSeq != coverage.LastSeq {
 			t.Errorf("%s: the run file after coverage %+v", kind, file)
 		}
-		if capture := env.ingest.Capture(env.networkId, runId); capture == nil || capture.Title != "Fix the build" || capture.ToolCounts["Edit"]+capture.ToolCounts["edit"] != 1 || capture.EndedMillis == 0 {
+		if capture := env.ingest.Capture(env.networkId, runId); capture == nil || capture.Title != "Fix the build" || capture.ToolCounts["Edit"]+capture.ToolCounts["edit"] != 1 || capture.EndedMillis == 0 ||
+			capture.Prompts != "Fix the build\nand then more" {
 			t.Errorf("%s: the run capture %+v", kind, capture)
 		}
 	}
@@ -647,8 +664,10 @@ func TestInstructionsLoadedRestatesContext(t *testing.T) {
 	if err := cursor.Hook(cursor.Payload("c1", "beforeSubmitPrompt", map[string]any{"prompt": "hello", "cursor_version": "9.9.9-test"})); err != nil {
 		t.Fatal(err)
 	}
+	// Cursor reports no start: its first event, a prompt, opens the run at stage 1, and the prompt follows at stage 2
+	// (QD-900), both naming Cursor's version
 	contexts = cursorEnv.writer.of(sidecar.RecordKindContext)
-	if len(contexts) != 1 || contexts[0].Body.(*protocol.ContextBody).HarnessVersion != "9.9.9-test" {
+	if len(contexts) != 2 || contexts[0].Body.(*protocol.ContextBody).HarnessVersion != "9.9.9-test" || contexts[1].Body.(*protocol.ContextBody).HarnessVersion != "9.9.9-test" {
 		t.Errorf("Cursor's version: %+v", contexts)
 	}
 }
@@ -825,7 +844,8 @@ func TestIngestOnRecordStreams(t *testing.T) {
 		}
 	}
 	for kind, want := range map[sidecar.RecordKind][]sidecar.RecordSource{
-		sidecar.RecordKindContext:    {sidecar.RecordSourceHook},
+		// SessionStart's, and the prompt's stage 2 entry (QD-900)
+		sidecar.RecordKindContext:    {sidecar.RecordSourceHook, sidecar.RecordSourceHook},
 		sidecar.RecordKindTranscript: {sidecar.RecordSourceHook},
 		sidecar.RecordKindToolCall:   {sidecar.RecordSourceHook, sidecar.RecordSourceObserved},
 		sidecar.RecordKindPermission: {sidecar.RecordSourceHook},
@@ -837,6 +857,17 @@ func TestIngestOnRecordStreams(t *testing.T) {
 	}
 	if len(sources[sidecar.RecordKindHookEvent]) == 0 {
 		t.Error("no hook_event entries")
+	}
+	// the prompt, sealed and read back from the vault, in its stage 2 context entry with the title it set
+	prompted := []*protocol.ContextBody{}
+	for _, entry := range entries {
+		body := &protocol.ContextBody{}
+		if entry.Header.Kind() == sidecar.RecordKindContext && proto.Unmarshal(entry.Body, body) == nil && len(body.GetPrompts()) != 0 {
+			prompted = append(prompted, body)
+		}
+	}
+	if len(prompted) != 1 || prompted[0].GetStage() != 2 || !slices.Equal(prompted[0].GetPrompts(), []string{"Fix the build"}) || prompted[0].GetTitle() != "Fix the build" {
+		t.Errorf("the prompt's context entries as read: %v", prompted)
 	}
 	if coverage == nil {
 		t.Fatal("no coverage entry")
