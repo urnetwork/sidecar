@@ -1,8 +1,7 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
 // The fake api's tokens carry server's admin_refused claim (§7.4; owner decision 291, QD-907), as server/session's
-// by_jwt does: from the client's mark at mint, kept by bind's re-mint, a refresh and a child, and absent from a client
-// with no mark. The daemon's pairing check (sidecar.DaemonPairNetwork, which Sidecar.Pair's check shares) takes a
+// by_jwt does: from the client's mark at mint, kept by a refresh and a child, and absent from a client with no mark. The daemon's pairing check (sidecar.DaemonPairNetwork, which Sidecar.Pair's check shares) takes a
 // marked strict_exp child's token and refuses an unmarked client's, so a schedule that pairs through this api reads
 // what server's tokens say. Built where the daemon's pair file is.
 
@@ -26,8 +25,8 @@ func requireFakeApiAdminRefusedClaim(t *testing.T, name string, token string, ad
 	}
 }
 
-// An enrolled sidecar's token, its re-mint, the re-mint's refresh and the child it mints carry the claim, and the
-// child pairs; a client enrolled while the api drops the marks carries none, and does not pair.
+// An enrolled sidecar's token, its refresh once bound and the child it mints carry the claim, and the child pairs; a
+// client enrolled while the api drops the marks carries none, and does not pair.
 func TestFakeApiTokensCarryAdminRefused(t *testing.T) {
 	world := newFakeApiTestWorld(t)
 	networkId := sidecar.NewId()
@@ -37,8 +36,6 @@ func TestFakeApiTokensCarryAdminRefused(t *testing.T) {
 	if status, code, _ := laptop.bind(laptop.binding(1)); status != http.StatusOK {
 		t.Fatalf("bind: %d %s", status, code)
 	}
-	requireFakeApiAdminRefusedClaim(t, "bind's re-mint", laptop.reminted, true)
-	laptop.token = laptop.reminted
 	status, code, refreshed := laptop.refresh(laptop.proof(laptop.clientKey, http.MethodGet, "/auth/refresh"))
 	if status != http.StatusOK || refreshed == "" {
 		t.Fatalf("refresh: %d %s", status, code)

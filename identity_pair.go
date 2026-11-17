@@ -10,10 +10,9 @@
 //	         confines it to §7.4's allowlist with no admin route, and admin_refused, which api sets from C's owner row
 //	         at mint; one without either is refused before anything is sent. Then, in Enroll's order and failing closed
 //	         (D-CORE-7): a new ClientKey, the identity key and sidecar_id kept or, unenrolled, new; POST /sidecar/bind
-//	         at generation n+1 on C; the keychain, holding bind's re-mint of C's token with the sidecar_id in place of
-//	         the one handed over (QD-797), and last sidecar.json's record marked a child; then the previous client
-//	         goes with its own token, a top-level one or an earlier child alike. The SidecarAdmit stands, since it
-//	         names the sidecar_id, and so does every grant (D-CORE-5)
+//	         at generation n+1 on C; the keychain, and last sidecar.json's record marked a child; then the previous
+//	         client goes with its own token, a top-level one or an earlier child alike. The SidecarAdmit stands, since
+//	         it names the sidecar_id, and so does every grant (D-CORE-5)
 //	lost     D removed or reaped ends C: a confirmed rejection of the paired generation reads parent_lost by the child
 //	         mark (plan-CORE-parent-lost-signal; sidecarTokenManager.refusedReason), and Unenrolled keeps identity and
 //	         admission until ur login or a re-pair binds the next generation
@@ -203,7 +202,7 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 		return abandon(err)
 	}
 	testHookBarrier("identity.pair.bind.before", sidecarId.String())
-	bound, err := childApi.Bind(ctx, signedBinding)
+	boundGeneration, err := childApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.pair.bind.after", sidecarId.String())
 	if err != nil {
 		if previous != nil && isSidecarRevokedRefusal(err) {
@@ -213,12 +212,11 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 		}
 		return abandon(err)
 	}
-	if err := checkSidecarBound(bound, generation, sidecarId); err != nil {
-		return abandon(err)
+	if boundGeneration != generation {
+		return abandon(fmt.Errorf("%w: api bound generation %d, not %d", ErrSidecarApiReply, boundGeneration, generation))
 	}
 
-	// the binding recorded: the keychain first, sidecar.json last of all; the token kept is api's re-mint of C's,
-	// which names the sidecar, in place of the one the app handed over (QD-797)
+	// the binding recorded: the keychain first, sidecar.json last of all
 	if previous == nil {
 		if _, err := self.instance.createKeychain(networkId); err != nil {
 			return abandon(err)
@@ -228,7 +226,7 @@ func (self *Sidecar) pair(ctx context.Context, childJwt string) (int64, error) {
 	if _, err := persistSidecarIdentity(secrets, keys, signedBinding); err != nil {
 		return abandon(err)
 	}
-	if err := persistSidecarByJwt(secrets, bound.ByClientJwt); err != nil {
+	if err := persistSidecarByJwt(secrets, childJwt); err != nil {
 		return abandon(err)
 	}
 	if readerKeySeed != nil {

@@ -5,12 +5,10 @@
 //	POST /network/auth-client               Client, with the ClientKey's proof: a reissue of the bearer's own client,
 //	                                        or a child of it, which inherits both marks
 //	POST /network/remove-client             OwnClient: the bearer's own client or one of its children
-//	POST /sidecar/bind                      Client: the bearer's own binding, under plan-CORE-binding-wire's rules,
-//	                                        answering the bearer re-minted with the bound sidecar_id
+//	POST /sidecar/bind                      Client: the bearer's own binding, under plan-CORE-binding-wire's rules
 //	GET  /sidecar/identity/<sidecar_id>     Client: a sidecar of the caller's network, with a page of its bindings
 //	GET  /sidecar/identity?client_id=<id>   Client: the sidecar a client of any generation binds
-//	GET  /auth/refresh                      Client, with the ClientKey's proof: a new token, same client and device,
-//	                                        and the sidecar_id claim the presented token carries, if any
+//	GET  /auth/refresh                      Client, with the ClientKey's proof: a new token, same client and device
 //
 // Each copies server's route step for step where server has one (server/controller/sidecar_identity_controller.go,
 // model/sidecar_identity_model.go, controller/auth_controller.go's RefreshToken), and §7.8's text where it has none
@@ -18,10 +16,6 @@
 // fake_api_dpop.go checks it, by the client's newest bound key, else the key its enrollment recorded
 // (plan-TEAM-enroll-client-key); a bind must carry that recorded key. A refresh's refusals are server's: a client
 // with no binding in its network is restore_required (model.SidecarRestoreRequired), a removed one 401.
-//
-// The sidecar_id claim is server's (plan-SOCK-client-auth, QD-040, QD-797): only bind's re-mint sets it, a refresh
-// keeps it as presented and never adds it from the binding, and a reissue or a child carries none, so
-// ClientTokenAuthenticator reads sockets' subject from the token alone, as server's Client-class verifier does.
 //
 // A schedule scripts what the fault queue cannot: EndSession (a 401 with session_revoked), RefuseRefresh (a refused
 // credential, 401), ForgetSidecarIdentities (a Postgres restore that lost the identity tables, so refresh answers
@@ -34,7 +28,6 @@ package sidecartest
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
@@ -42,14 +35,11 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -211,19 +201,12 @@ func (self *FakeApi) RouteCount(route string) int {
 }
 
 // Mints client's token, as server signs a by_jwt: client_id, device_id, session_id, network_id, create_time,
-// strict_exp and admin_refused when client carries the mark (owner decision 291), sidecar_id when client carries the
-// claim, iat, exp and a random jti. exp is ClientTokenTimeout from now, §7.4's 7 days. The token maps to a copy of
-// client.
+// strict_exp and admin_refused when client carries the mark (owner decision 291), iat, exp and a random jti. exp is
+// ClientTokenTimeout from now, §7.4's 7 days. The token maps to a copy of client.
 func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
-	now := self.clock.Now()
-	return self.mintClientTokenAt(client, now, now.Add(self.settings.ClientTokenTimeout))
-}
-
-// Mints client's token as mintClientToken does, issued at issuedAt and expiring at expireTime: bind's re-mint keeps the
-// lifetime of the token it replaces (server's RemintSidecarCredential).
-func (self *FakeApi) mintClientTokenAt(client *fakeApiClient, issuedAt time.Time, expireTime time.Time) string {
+	issuedAt := self.clock.Now()
+	expireTime := issuedAt.Add(self.settings.ClientTokenTimeout)
 	minted := *client
-	minted.issuedAt = issuedAt
 	minted.expireTime = expireTime
 	claims := map[string]any{
 		"network_id":  minted.networkId.String(),
@@ -240,9 +223,6 @@ func (self *FakeApi) mintClientTokenAt(client *fakeApiClient, issuedAt time.Time
 	}
 	if minted.adminRefused {
 		claims["admin_refused"] = true
-	}
-	if minted.sidecarClaim != (sidecar.Id{}) {
-		claims["sidecar_id"] = minted.sidecarClaim.String()
 	}
 	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
 	if err != nil {
@@ -618,8 +598,6 @@ func (self *FakeApi) handleAuthClient(writer http.ResponseWriter, request *http.
 		}
 		reissued := *client
 		reissued.createTime = now
-		// a reissue is derived as a child is (server's ByJwt.Renew), so it names no sidecar
-		reissued.sidecarClaim = sidecar.Id{}
 		token := self.mintClientToken(&reissued)
 		clientId := client.clientId
 		fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{
@@ -676,7 +654,6 @@ func (self *FakeApi) handleAuthClient(writer http.ResponseWriter, request *http.
 			if held != nil {
 				reissued := *held
 				reissued.createTime = now
-				reissued.sidecarClaim = sidecar.Id{}
 				token := self.mintClientToken(&reissued)
 				clientId := held.clientId
 				fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{ByClientJwt: token, ClientId: &clientId, AdminRefused: true, StrictExp: true, ForwardOnly: true})
@@ -751,8 +728,7 @@ type fakeApiBindArgs struct {
 }
 
 type fakeApiBindResult struct {
-	Generation  int64  `json:"generation"`
-	ByClientJwt string `json:"by_client_jwt"`
+	Generation int64 `json:"generation"`
 }
 
 // POST /sidecar/bind (§5.5, §5.6), as server's SidecarBind and BindSidecarIdentity: both signatures verify over the
@@ -761,9 +737,8 @@ type fakeApiBindResult struct {
 // generation; a sidecar_id's first binding is generation 1, each later one the newest plus one under the same
 // identity key, and a re-registration after a restore, its identity row gone, is admitted at any generation, as
 // server's seam admits it until TEAM-M2-16. A bind maps the client's tokens to the sidecar, which the log's routes
-// read as its admission's subject. Both a bind and its retry answer the bearer re-minted with the binding's sidecar as
-// its sidecar_id claim, every other claim as presented, its lifetime included (server's RemintSidecarCredential;
-// QD-040, QD-797): the tokens the client held before name no sidecar, so sockets denies them.
+// read as its admission's subject and the exchange names as a service token's ur_sidecar_id. Both a bind and its
+// retry answer the generation alone, as server's does since QD-1029.
 func (self *FakeApi) handleBind(writer http.ResponseWriter, request *http.Request) {
 	client, _ := self.requireClient(writer, request)
 	if client == nil {
@@ -835,12 +810,7 @@ func (self *FakeApi) handleBind(writer http.ResponseWriter, request *http.Reques
 	}()
 	switch code {
 	case "":
-		// the bearer as presented, its lifetime kept, now naming the binding's sidecar: what the sidecar keeps
-		reminted := *client
-		reminted.sidecarId = binding.SidecarId
-		reminted.sidecarClaim = binding.SidecarId
-		byClientJwt := self.mintClientTokenAt(&reminted, client.issuedAt, client.expireTime)
-		fakeApiWriteJson(writer, http.StatusOK, &fakeApiBindResult{Generation: generation, ByClientJwt: byClientJwt})
+		fakeApiWriteJson(writer, http.StatusOK, &fakeApiBindResult{Generation: generation})
 	case fakeApiCodeBindingInvalid:
 		invalid("The binding does not carry the client's enrolled key.")
 	case fakeApiCodeSidecarRevoked:
@@ -1034,67 +1004,12 @@ func (self *FakeApi) ClientTokenCount(clientId sidecar.Id) int {
 	return len(self.core.clientTokens[clientId])
 }
 
-// Every token this api has minted for the client, oldest first: its enrollment's or mint's, then each re-mint, refresh
-// and reissue. A test's view of what the client was given; no route answers it.
+// Every token this api has minted for the client, oldest first: its enrollment's or mint's, then each refresh and
+// reissue. A test's view of what the client was given; no route answers it.
 func (self *FakeApi) ClientTokens(clientId sidecar.Id) []string {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return slices.Clone(self.core.clientTokens[clientId])
-}
-
-// sidecar.Authenticator for audience's Client-class tokens, as server's sidecarhost.NewClientTokenAuthenticator
-// verifies them for sockets (plan-SOCK-client-auth, QD-040): a client token this api minted, refused once past its exp,
-// its client removed or its session ended, whose principal names the token's network and client and, as SidecarId,
-// the token's own sidecar_id claim, nil for a token without one, such as each a client held before bind's re-mint, which
-// sockets denies. A token for any other audience goes to next, as server's verifies service tokens beside the block's
-// Client-class ones; with no next it is refused. Fault plans on authenticator.Authenticate apply, as FakeAuthenticator's
-// do.
-func (self *FakeApi) ClientTokenAuthenticator(audience string, next sidecar.Authenticator) sidecar.Authenticator {
-	return &fakeApiClientTokenAuthenticator{api: self, audience: audience, next: next}
-}
-
-// See ClientTokenAuthenticator.
-type fakeApiClientTokenAuthenticator struct {
-	api      *FakeApi
-	audience string
-	next     sidecar.Authenticator
-}
-
-// See sidecar.Authenticator.
-func (self *fakeApiClientTokenAuthenticator) Authenticate(ctx context.Context, audience string, jwt string) (*sidecar.Principal, error) {
-	if audience == "" {
-		return nil, fmt.Errorf("%w: no audience", sidecar.ErrAuthenticationRefused)
-	}
-	if audience != self.audience {
-		if self.next == nil {
-			return nil, fmt.Errorf("%w: no verifier for this audience", sidecar.ErrAuthenticationRefused)
-		}
-		return self.next.Authenticate(ctx, audience, jwt)
-	}
-	var principal *sidecar.Principal
-	err := hostCall(ctx, self.api.faults, "authenticator.Authenticate", func() error {
-		client := self.api.clientOfToken(jwt)
-		if client == nil {
-			return fmt.Errorf("%w: no client token of this api's that still authenticates", sidecar.ErrAuthenticationRefused)
-		}
-		principal = &sidecar.Principal{
-			NetworkId: connect.Id(client.networkId),
-			ClientId:  connect.Id(client.clientId),
-			Audience:  audience,
-			IssuedAt:  client.issuedAt,
-			ExpiresAt: client.expireTime,
-		}
-		// the claim the token carries, never the binding api holds for its client
-		if client.sidecarClaim != (sidecar.Id{}) {
-			sidecarId := connect.Id(client.sidecarClaim)
-			principal.SidecarId = &sidecarId
-		}
-		return principal.Validate()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return principal, nil
 }
 
 // How many tokens this api has minted, and a channel that closes at the next, armed before the read, so a test waits
