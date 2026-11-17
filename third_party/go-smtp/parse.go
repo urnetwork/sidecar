@@ -152,8 +152,9 @@ func (p *parser) parseReversePath() (string, error) {
 // no domain, which section 4.5.1 says a server MUST take, as a
 // case-insensitive name: it is returned as "postmaster", and what follows its
 // bracket is left for RCPT's parameters, as a path leaves it. Anything else is
-// upstream's path. The prefix is ASCII, so only ASCII case folds: a byte past
-// ASCII leaves fewer runes than the prefix has (see URNETWORK.md).
+// upstream's path. Only ASCII case folds: the prefix is compared over its own
+// byte length, and a rune that folds to one of its letters, such as U+017F to
+// s, takes more bytes than the letter (see URNETWORK.md).
 func (p *parser) parsePath() (string, error) {
 	if rest, ok := cutPrefixFold(p.s, "<postmaster>"); ok {
 		p.s = rest
