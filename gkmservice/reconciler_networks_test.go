@@ -404,11 +404,16 @@ func TestGkmReconcilerAsksForAnEvictedNetworkAtItsWakeAndKeepsTheWake(t *testing
 		stepGkmReconciler(t, fixture.ctx, fixture.clock, world.reconciler, world.reconciler.settings.PendingHintInterval)
 	}
 	awaitGkmReconcilerPasses(t, fixture.ctx, world.reconciler, "hint the expiry", func() bool { return world.pendingHints(writer) == 1 })
+	// the hint goes within the read's pass, which then keeps the state and takes the owed wake
+	awaitGkmReconcilerPasses(t, fixture.ctx, world.reconciler, "end the read's failures", func() bool {
+		held, failureCount, wakeOwed := world.reconciler.networkReads(world.networkId)
+		return held && failureCount == 0 && !wakeOwed
+	})
 	if loads := state.loads(); !slices.Equal(loads, []sidecar.Id{world.networkId}) {
 		t.Errorf("asked for %v at the wake", loads)
 	}
-	if held, failureCount, wakeOwed := world.reconciler.networkReads(world.networkId); !held || failureCount != 0 || wakeOwed {
-		t.Errorf("after the install's read: held %t, %d failures, wake owed %t", held, failureCount, wakeOwed)
+	if count := world.pendingHints(writer); count != 1 {
+		t.Errorf("pending hints after the install's read: %d", count)
 	}
 }
 
