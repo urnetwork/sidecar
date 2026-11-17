@@ -408,6 +408,28 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		}
 		world.stateLock.Unlock()
 	}
+	func() {
+		// and its new slots, each body in its slot item's order, until an ERASE names the slot: the stand-in drops it
+		// whole, as one-key slots, a mail message's among them, are destroyed
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		if world.slots == nil {
+			world.slots = map[string][]byte{}
+		}
+		slotIndex := 0
+		for _, object := range checked.NewObjects {
+			if object.Kind != protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT {
+				continue
+			}
+			if slotIndex < len(checked.SlotBodies) {
+				world.slots[string(object.Id)] = checked.SlotBodies[slotIndex]
+			}
+			slotIndex += 1
+		}
+		for _, erased := range checked.Erased {
+			delete(world.slots, string(erased.SlotId.Bytes()))
+		}
+	}()
 	self.stateLock.Lock()
 	self.committed[pushId] = version
 	drop := 0 < self.dropAnswers
