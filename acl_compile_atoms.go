@@ -2,8 +2,10 @@
 //
 //	autogroup:<name>     its fixed atom, fifteen zero bytes then its value, with no row (plan-ACL-atom-and-rule-ids #2)
 //	tag:<name>           the tags file's id; its row lists the standing sidecars carrying it and, in
-//	                     tag_owner_member_ids, its tagOwners expanded to members (#4), which only CanApplyTag reads
-//	group:<name>         the groups file's id; its row lists its members, each email through resolve
+//	                     tag_owner_member_ids, its tagOwners expanded to members (#4), which only CanApplyTag reads;
+//	                     every tag tagOwners declares has its row, named by a rule or not (owner decision 353)
+//	group:<name>         the groups file's id; its row lists its members, each email through resolve; every group
+//	                     the groups block defines has its row, named by a rule or not
 //	user:<email>         the member resolve names, as a derived atom of kind 1 over the member_id
 //	sidecar:<id>         a derived atom of kind 2 over the id, listing it
 //	client:<id>          a derived atom of kind 3, listing the sidecar resolve's binding names, or with none the client
