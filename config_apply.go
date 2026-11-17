@@ -151,7 +151,8 @@ type configStatement struct {
 	// the signer a row keeps as the one that did it, as the check found it: an admission's sponsor, a confirmation's
 	// confirm_signer
 	rowSigner ConfigSigner
-	// an acl statement's check, which its apply folds and a base's re-application keeps (configAclRules)
+	// an acl statement's verdict: its check's, which its apply folds, or on a base's re-application the body's
+	// (configAclBodyVerdict), from which ACL's ReapplyStatement derives the rest (configAclRules)
 	aclVerdict *AclStatementVerdict
 	// an AuthorityProposal's kind, fixed at its entry (DESIGN-DETAILS 5.2.2's ProposalKind)
 	proposalKind bridge.ProposalKind

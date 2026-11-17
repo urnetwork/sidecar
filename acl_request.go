@@ -323,17 +323,7 @@ func MatchAclRequest(state *AclState, ask *AclGrantAsk, now time.Time) (*AclRequ
 		if !state.requestTakes(rule, requester, ask) {
 			continue
 		}
-		defaultMs, maxMs := aclRequestDefaultExpiryMs, aclRequestMaxExpiryMs
-		if seconds := rule.GetDefaultExpirySeconds(); 0 < seconds {
-			defaultMs = seconds * 1000
-		}
-		if seconds := rule.GetMaxExpirySeconds(); 0 < seconds {
-			maxMs = seconds * 1000
-		}
-		expiresMs := ask.ExpiresMs
-		if expiresMs == 0 {
-			expiresMs = nowMs + min(defaultMs, maxMs)
-		}
+		expiresMs, maxMs := aclRequestGrantEnd(rule, ask.ExpiresMs, nowMs)
 		switch {
 		case expiresMs <= nowMs:
 			return nil, fmt.Errorf("%w: a grant already expired", ErrAclRequestNoMatch)
@@ -343,6 +333,25 @@ func MatchAclRequest(state *AclState, ask *AclGrantAsk, now time.Time) (*AclRequ
 		return &AclRequestMatch{Rule: rule, ExpiresMs: expiresMs}, nil
 	}
 	return nil, ErrAclRequestNoMatch
+}
+
+// A grant's end under a requests rule, ms since the epoch, and the longest the rule lets a grant run, in ms: the end
+// asked, else nowMs plus the rule's default lifetime, a rule that leaves a lifetime 0 taking the format's (§8.5's
+// expiresDefault and maxExpiry). MatchAclRequest judges the end against the longest; a GrantActivate's fold takes the
+// end as it is, at its check and at a base's re-application alike (acl_grant.go).
+func aclRequestGrantEnd(rule *protocol.AclRequestRule, askedMs int64, nowMs int64) (endMs int64, maxMs int64) {
+	defaultMs, maxMs := aclRequestDefaultExpiryMs, aclRequestMaxExpiryMs
+	if seconds := rule.GetDefaultExpirySeconds(); 0 < seconds {
+		defaultMs = seconds * 1000
+	}
+	if seconds := rule.GetMaxExpirySeconds(); 0 < seconds {
+		maxMs = seconds * 1000
+	}
+	endMs = askedMs
+	if endMs == 0 {
+		endMs = nowMs + min(defaultMs, maxMs)
+	}
+	return endMs, maxMs
 }
 
 // Whether a requests rule's src names a share's network (QD-820): network:*, whose atom has no row and names every

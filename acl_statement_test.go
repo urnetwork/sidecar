@@ -1,14 +1,16 @@
 // §8.8's statement rules on the fake view (T1): a table per statement of each allowed and refused signer, §22.5's
 // non-admin RepoGrant and a config writer's RepoRevoke winning, an admin's vault EvsShare refused by a reader, Suspend
-// and Unsuspend in both orders, FS-95's format-1 lock. Then the same rules through TEAM's ConfigLog: a k-of-n Suspend
-// by proposal, effects on §7's rows, and ReapplyStatement keeping a revocation past an authority change. Pure, on every
-// leg.
+// and Unsuspend in both orders, FS-95's format-1 lock, and ReapplyStatement folding every statement type as
+// ApplyStatement does from the body's verdict alone (QD-954). Then the same rules through TEAM's ConfigLog: a k-of-n
+// Suspend by proposal, effects on §7's rows, and ReapplyStatement keeping a revocation past an authority change at
+// every kind of reader, and folding one alike where its check refuses on the rebuilt rows. Pure, on every leg.
 
 package sidecar
 
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -789,6 +791,134 @@ func TestAclStatementShapeRefusals(t *testing.T) {
 	}
 }
 
+// ReapplyStatement, given only what a statement's body and signers give (aclBodyVerdict), reaches the AclRows and the
+// effect ApplyStatement reaches on the check's verdict, byte for byte, for every statement type and each place a fold
+// input is derived: a GrantActivate's fold at the rule's default end and at its own, a GrantRevoke's retention, each
+// Suspend class, an Unsuspend that lifts and a stale one, an owner-bound RepoCreate's owner and consented devices, an
+// OwnerConfirm's member, and a config writer's RepoGrant and RepoRevoke beside a repo admin's (QD-954). Where a derived
+// input matters, the body's verdict taken as it is folds otherwise or not at all, as TEAM's fallback did, and
+// ApplyStatement refuses it.
+func TestAclReapplyFoldsAsApplyForEveryStatementType(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	member := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)
+	selfRule := fixture.requestRule([]Id{member}, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)},
+		[]protocol.AclAction{protocol.AclAction_ACL_ACTION_DIAL}, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}, 0)
+	activatedId, _ := cast.activatedGrant(t)
+	vaultId, _ := cast.vault()
+	adminAdmitted := fixture.device(cast.member, cast.adminDevice.Bytes())
+	repoId, repo := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: cast.laptop.Bytes(), Signer: cast.laptop.Bytes(), At: 1}}
+	repo.Grants = []*protocol.AclRepoGrantRow{{Subject: cast.phone.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_READER, Signer: cast.laptop.Bytes(), At: 1}}
+	repo.Revokes = []*protocol.AclRepoRevokeRow{{Subject: cast.stranger.Bytes(), Signer: cast.adminDevice.Bytes(), At: 1}}
+	deletionId := NewId()
+	deletedId, deleted := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	deleted.Admins = repo.Admins
+	deleted.Deletion = &protocol.AclRepoDeletionRow{DeletionId: deletionId.Bytes(), DeletedAt: fixture.next(), DeletedTimeMs: aclTestNow.Add(-time.Hour).UnixMilli(),
+		Signer: cast.laptop.Bytes()}
+	suspended := fixture.device(cast.member, cast.laptop.Bytes())
+	fixture.rows.Suspensions = []*protocol.AclSuspension{{Subject: suspended.Bytes(), SuspendId: aclTestSuspendId("lift"),
+		SignerClass: AclSuspendClassAdmin, Signer: cast.adminDevice.Bytes(), At: fixture.next()}}
+	auditReader := fixture.tag(cast.admin)
+	fixture.rows.Audit = &protocol.AclAudit{AuditOptIn: testConfigMarshal(t, &protocol.AuditOptIn{
+		ReaderAtoms: [][]byte{auditReader.Bytes()}, NotAfter: aclTestNow.Add(time.Hour).UnixMilli()})}
+	state := fixture.state(t)
+
+	device := protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE
+	grant := func(expiresMs int64) *protocol.GrantActivate {
+		return newAclTestGrant(t, selfRule, cast.laptop, []string{aclTestDst(cast.phone) + ":tcp:22"}, []string{"dial"}, expiresMs).
+			approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+	}
+	suspend := func(subject Id, label string) *bridge.Suspend {
+		return &bridge.Suspend{Subject: subject.Bytes(), SuspendId: aclTestSuspendId(label)}
+	}
+	unsuspend := func(subject Id, label string) *bridge.Unsuspend {
+		return &bridge.Unsuspend{Subject: subject.Bytes(), SuspendId: aclTestSuspendId(label)}
+	}
+	reader := protocol.RepoGrantRole_REPO_GRANT_ROLE_READER
+	cases := []struct {
+		name      string
+		statement *AclStatement
+		// whether a fold input is derived beyond the signer, so the body's verdict as it is folds otherwise
+		derives bool
+	}{
+		{name: "GrantActivate at the rule's default end", statement: fixture.statement(bridge.SignedType_SIGNED_GRANT_ACTIVATE, grant(0), cast.laptop), derives: true},
+		{name: "GrantActivate at its own end", statement: fixture.statement(bridge.SignedType_SIGNED_GRANT_ACTIVATE, grant(aclTestNow.Add(30*time.Minute).UnixMilli()), cast.laptop), derives: true},
+		{name: "GrantRevoke of an activated grant", statement: fixture.statement(bridge.SignedType_SIGNED_GRANT_REVOKE, &bridge.GrantRevoke{GrantId: activatedId}, cast.laptop), derives: true},
+		{name: "GrantRevoke of an id no grant carries", statement: fixture.statement(bridge.SignedType_SIGNED_GRANT_REVOKE, &bridge.GrantRevoke{GrantId: bytes.Repeat([]byte{9}, 32)}, cast.adminDevice)},
+		{name: "Suspend by an admin", statement: fixture.statement(bridge.SignedType_SIGNED_SUSPEND, suspend(cast.phone, "admin"), cast.adminDevice), derives: true},
+		{name: "Suspend by the subject's owner", statement: fixture.statement(bridge.SignedType_SIGNED_SUSPEND, suspend(cast.phone, "owner"), cast.laptop), derives: true},
+		{name: "Suspend by its sponsor", statement: fixture.statement(bridge.SignedType_SIGNED_SUSPEND, suspend(cast.agent, "sponsor"), cast.laptop), derives: true},
+		{name: "Suspend by k of n", statement: fixture.authorityStatement(bridge.SignedType_SIGNED_SUSPEND, suspend(cast.ownerDevice, "k of n"), cast.adminDevice, cast.laptop), derives: true},
+		{name: "Unsuspend that lifts", statement: fixture.statement(bridge.SignedType_SIGNED_UNSUSPEND, unsuspend(suspended, "lift"), cast.ownerDevice)},
+		{name: "Unsuspend with a stale id", statement: fixture.statement(bridge.SignedType_SIGNED_UNSUSPEND, unsuspend(suspended, "stale"), cast.adminDevice)},
+		{name: "Unsuspend by k of n", statement: fixture.authorityStatement(bridge.SignedType_SIGNED_UNSUSPEND, unsuspend(suspended, "lift"), cast.ownerDevice, cast.adminDevice)},
+		{name: "EvsShare", statement: fixture.statement(bridge.SignedType_SIGNED_EVS_SHARE, &protocol.EvsShare{RepoId: vaultId.Bytes(), Subject: cast.stranger.Bytes()}, cast.laptop)},
+		{name: "OwnerConfirm", statement: fixture.statement(bridge.SignedType_SIGNED_OWNER_CONFIRM, &protocol.OwnerConfirm{SidecarId: adminAdmitted.Bytes()}, cast.laptop), derives: true},
+		{name: "RepoCreate of a general repo", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}, cast.phone)},
+		{name: "RepoCreate of a vault", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{RepoId: NewId().Bytes(), Kind: protocol.RepoKind_REPO_KIND_VAULT}, cast.laptop), derives: true},
+		{name: "RepoAdmin", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_ADMIN, &protocol.RepoAdmin{RepoId: repoId.Bytes(), SidecarId: cast.phone.Bytes(),
+			Change: protocol.RepoAdminChange_REPO_ADMIN_CHANGE_ADD}, cast.laptop)},
+		{name: "a config writer's RepoGrant lifting a standing revoke", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{RepoId: repoId.Bytes(),
+			Subject: cast.stranger.Bytes(), Role: reader}, cast.adminDevice), derives: true},
+		{name: "a repo admin's RepoGrant lifting none", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{RepoId: repoId.Bytes(),
+			Subject: cast.stranger.Bytes(), Role: reader}, cast.laptop)},
+		{name: "a config writer's RepoRevoke, standing", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_REVOKE, &protocol.RepoRevoke{RepoId: repoId.Bytes(),
+			Subject: cast.phone.Bytes()}, cast.adminDevice), derives: true},
+		{name: "a repo admin's RepoRevoke", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_REVOKE, &protocol.RepoRevoke{RepoId: repoId.Bytes(),
+			Subject: cast.phone.Bytes()}, cast.laptop)},
+		{name: "RepoDelete", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{RepoId: repoId.Bytes(), DeletionId: NewId().Bytes()}, cast.laptop)},
+		{name: "RepoRestore", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, &protocol.RepoRestore{RepoId: deletedId.Bytes(), DeletionId: deletionId.Bytes()}, cast.laptop)},
+		{name: "RepoVersioning", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_VERSIONING, &protocol.RepoVersioning{RepoId: repoId.Bytes(),
+			Lock: protocol.RepoVersioningLock_REPO_VERSIONING_LOCK_LOCKED}, cast.laptop)},
+		{name: "RepoPrefixRules", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_PREFIX_RULES, aclTestPrefixRules(repoId), cast.laptop)},
+		{name: "AuditOptIn", statement: fixture.authorityStatement(bridge.SignedType_SIGNED_AUDIT_OPT_IN, &protocol.AuditOptIn{ReaderAtoms: [][]byte{auditReader.Bytes()},
+			NotAfter: aclTestNow.Add(2 * time.Hour).UnixMilli()}, cast.ownerDevice, cast.adminDevice)},
+		{name: "AuditOptOut", statement: fixture.authorityStatement(bridge.SignedType_SIGNED_AUDIT_OPT_OUT, &protocol.AuditOptOut{}, cast.ownerDevice, cast.adminDevice)},
+	}
+	signedTypes := map[bridge.SignedType]bool{}
+	for _, c := range cases {
+		signedTypes[c.statement.Type] = true
+		verdict, err := state.CheckStatement(c.statement, &aclTestSpendCheck{})
+		if err != nil {
+			t.Errorf("%s: the check: %v", c.name, err)
+			continue
+		}
+		applied, appliedEffect, err := state.ApplyStatement(c.statement, verdict)
+		if err != nil {
+			t.Errorf("%s: ApplyStatement: %v", c.name, err)
+			continue
+		}
+		body := aclBodyVerdict(c.statement)
+		reapplied, reappliedEffect, err := state.ReapplyStatement(c.statement, body)
+		if err != nil {
+			t.Errorf("%s: ReapplyStatement: %v", c.name, err)
+			continue
+		}
+		if !bytes.Equal(testConfigMarshal(t, applied), testConfigMarshal(t, reapplied)) {
+			t.Errorf("%s: ReapplyStatement's rows differ from ApplyStatement's", c.name)
+		}
+		if !reflect.DeepEqual(appliedEffect, reappliedEffect) {
+			t.Errorf("%s: the effects %+v and %+v", c.name, appliedEffect, reappliedEffect)
+		}
+		if _, _, err := state.ApplyStatement(c.statement, body); !errors.Is(err, ErrConfigRule) {
+			t.Errorf("%s: ApplyStatement on the body's verdict: %v", c.name, err)
+		}
+		// the body's verdict taken as it is, as TEAM's fallback did where the check refused on rebuilt rows
+		asIs := *body
+		asIs.bodyOnly = false
+		naive, _, err := state.ApplyStatement(c.statement, &asIs)
+		if differs := err != nil || !bytes.Equal(testConfigMarshal(t, naive), testConfigMarshal(t, applied)); differs != c.derives {
+			t.Errorf("%s: the body's verdict as it is folds otherwise: %v, want %v (%v)", c.name, differs, c.derives, err)
+		}
+	}
+	for signedType := bridge.SignedType_SIGNED_GRANT_ACTIVATE; signedType <= bridge.SignedType_SIGNED_REPO_PREFIX_RULES; signedType += 1 {
+		if _, ok := ConfigStatementPurpose(signedType); ok && !signedTypes[signedType] {
+			t.Errorf("no case of %s", signedType)
+		}
+	}
+}
+
 // A member made an Admin by an AdminSet of the owner and it, at k = 1, and its one device, a config writer.
 func (self *testConfigNet) admitAdmin(label string) testConfigDevice {
 	self.t.Helper()
@@ -893,9 +1023,9 @@ func TestAclSuspendDropsTheDelegationsKey(t *testing.T) {
 
 // ReapplyStatement keeps a revocation past an authority change: a config writer's standing RepoRevoke still stands
 // once a base folds below it and re-applies its tail, the AdminSet that then took its signer's role among it, where a
-// fresh check refuses the same signer; a second reader reaches the same rows. The authority change is the log's own,
-// since a re-application recomputes what an effect derives on the rows it rebuilds (DESIGN-DETAILS 5.2.3), and rows at
-// the fold are the log's there.
+// fresh check refuses the same signer; a second long-running reader, a new device and a rows-only gate started at the
+// base reach the same rows. The authority change is the log's own, since a re-application derives what an effect needs
+// on the rows it rebuilds (DESIGN-DETAILS 5.2.3), and rows at the fold are the log's there.
 func TestAclReapplyKeepsARevocationPastAnAuthorityChange(t *testing.T) {
 	net := newTestConfigNet(t)
 	writer := net.admitAdmin("revoking")
@@ -946,6 +1076,59 @@ func TestAclReapplyKeepsARevocationPastAnAuthorityChange(t *testing.T) {
 	if !bytes.Equal(testConfigRowsBytes(t, state), testConfigRowsBytes(t, net.newReader().State())) {
 		t.Error("a second reader holds other rows")
 	}
+	net.everyReaderAgrees()
+}
+
+// The variant whose check refuses on the rebuilt rows: a base below a config writer's RepoRevoke whose rows already
+// hold its signer's member out of the AdminSet, so the revoke's check refuses on the rows it re-applies on. The
+// revocation still takes effect, judged nothing: the subject's grant leaves at every reader. Its standing is what the
+// rows give at its position, where its signer writes no config heads, so no standing row folds, and a long-running
+// reader, a new device and a rows-only gate fold it alike (QD-954).
+func TestAclReapplyFoldsARevocationAlikeWhereItsCheckRefuses(t *testing.T) {
+	net := newTestConfigNet(t)
+	writer := net.admitAdmin("revoking")
+	reader := net.admitMemberDevice("revoked reader")
+	repoId := testConfigId("general repo")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{Header: net.header(), RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL})
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{
+		Header: net.header(), RepoId: repoId.Bytes(), Subject: reader.sidecarId.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_READER,
+	})
+	revoke := &protocol.RepoRevoke{Header: net.header(), RepoId: repoId.Bytes(), Subject: reader.sidecarId.Bytes()}
+	revokedAt := net.mustPost(writer, bridge.SignedType_SIGNED_REPO_REVOKE, revoke).Pin.GetVersion()
+	if len(net.log.State().Repo(repoId).GetRevokes()) != 1 {
+		t.Fatal("the config writer's revoke does not stand at its own position")
+	}
+
+	folded := net.statesAt[revokedAt-1]
+	rows := folded.Rows()
+	for _, member := range rows.GetMembers() {
+		if bytes.Equal(member.GetMemberId(), writer.memberId.Bytes()) {
+			member.Role = bridge.MemberRole_MEMBER_ROLE_MEMBER
+		}
+	}
+	if verdict := net.pushBase(net.owner, rows, revokedAt-1, folded.Base().GetConfigVersion()+1, folded.threshold); !verdict.Accepted() {
+		t.Fatal(verdict.Refusal)
+	}
+	state := net.log.State()
+	acl, err := state.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := &AclStatement{Type: bridge.SignedType_SIGNED_REPO_REVOKE, Body: revoke, Signers: []ConfigSigner{{Kind: ConfigSignerSidecar, SidecarId: writer.sidecarId}},
+		N: net.n + 1, TimeMs: net.timeMs}
+	if _, err := acl.CheckStatement(fresh, nil); !errors.Is(err, ErrConfigAuthority) {
+		t.Fatalf("the revoke judged on the rebuilt rows: %v", err)
+	}
+	if kept := net.log.keptEntry(revokedAt); kept == nil || !kept.verdict.Accepted() {
+		t.Error("the revoke's own verdict changed at the base")
+	}
+	if acl.EvsAccess(AclSidecarSubject(reader.sidecarId), repoId, AclTokenAudienceEvs, time.UnixMilli(net.timeMs)).Rights.Has(AclEvsRead) {
+		t.Error("the re-applied revocation let the reader back")
+	}
+	if revokes := acl.Repo(repoId).GetRevokes(); len(revokes) != 0 {
+		t.Errorf("a revoke stands by a signer the rows hold no config writer: %+v", revokes)
+	}
+	net.everyReaderAgrees()
 }
 
 // api alone refuses a directory RepoCreate outside the team tier: AclStatementNeedsTeamTier names exactly that

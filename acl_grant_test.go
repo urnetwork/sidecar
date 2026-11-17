@@ -662,7 +662,8 @@ func TestAclGrantEndsWithItsRequestsRuleAtABase(t *testing.T) {
 		t.Error("the grant outlived its requests rule at the base")
 	}
 
-	// a base below the activation re-applies it over rows without the rule, and it folds nothing
+	// a base below the activation re-applies it over rows without the rule, and it folds no rule, only its grant_id
+	// spent (config_base_test.go's TestReapplyEndsAGrantWhoseRequestsRuleIsGoneAndKeepsItSpent)
 	other := newAclTestGrantNet(t, request)
 	other.admitDevice(other.owner, phone, 0)
 	second := newAclTestGrant(t, requestId, other.owner.sidecarId, []string{aclTestDst(phone.sidecarId)}, []string{"dial"}, 0).

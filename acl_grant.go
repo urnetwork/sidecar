@@ -42,6 +42,13 @@
 // latest of its decisions' not_after_millis plus 60 s, so a re-signed GrantActivate under a fresh header is refused
 // for as long as any of its decisions could spend.
 //
+// A base's re-application of a GrantActivate that took effect judges none of the four checks again (§7.9's base row;
+// QD-954): its fold is built from its body as the check builds it (aclGrantFoldOf), its expiry from the requests rule
+// its action names in the rows it folds into, so a grant re-applied where its check would now refuse, a decision's
+// approver no longer eligible under a new head or a reader with no spend check installed, folds as it did. Where those
+// rows hold that requests rule no more, or cannot take its src atom, the grant ends at that base, as a compile ends it
+// (FS-14), and its grant_id is still spent, so no re-signed copy of it activates (aclReapplyGrantFold).
+//
 // A share's grant (§8.11; the owner's answer to acl-m6-03-share-grant-subject, QD-820) names the other network in its
 // action's share_network_id, and stays its requesting sidecar's: the action's subject, every decision's requester and
 // the spender are that sidecar, as for any grant. Its inbound half, which gives the other network reach to this
@@ -63,7 +70,6 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -116,13 +122,45 @@ func (self AclSpendCheckUnbuilt) Spendable(state *AclState, decision *StoredAppr
 // What a GrantActivate folds to.
 type aclGrantFold struct {
 	grantId []byte
-	// the AclRule, rule_id the grant_id
+	// the AclRule, rule_id the grant_id; nil for a grant a base's re-application ends at that base, which folds its
+	// grant_id spent and nothing else (aclReapplyGrantFold)
 	rule *protocol.AclRule
 	// the rule's src atom, its subject's sidecar atom or an inbound share's network atom, which rows lacking it gain,
-	// a new base's included
+	// a new base's included; nil with no rule
 	atom *protocol.AclAtom
 	// AclSpentGrant.retain_until_ms
 	retainUntilMs int64
+}
+
+// A GrantActivate's body as the checks and its fold read it, a function of the body alone: its canonical action, the
+// ask the action carries, its decisions, each an approval naming the action's bytes and its subject (match), all of
+// one approval and one request, and the grant_id that approval fixes.
+type aclGrantBody struct {
+	action    *StoredCanonicalAction
+	ask       *AclGrantAsk
+	decisions []*StoredApprovalDecision
+	grantId   [sha256.Size]byte
+}
+
+// Parses a GrantActivate's body as CheckGrantActivate and a base's re-application both read it, refusing one that
+// does not parse or whose decisions do not match its action (aclGrantDecisions).
+func aclParseGrantActivate(activate *protocol.GrantActivate) (*aclGrantBody, error) {
+	action, err := ParseStoredCanonicalAction(activate.GetCanonicalAction())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	if err := CheckCanonicalActionForServer(action); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	ask, err := ParseAclGrantAction(action.Action)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	decisions, approvalId, err := aclGrantDecisions(activate, action, ask.Subject)
+	if err != nil {
+		return nil, err
+	}
+	return &aclGrantBody{action: action, ask: ask, decisions: decisions, grantId: AclGrantId(approvalId, action.PayloadSha256())}, nil
 }
 
 // §8.8's four checks on a GrantActivate at this state, S(n-1), and what it folds to. spendCheck nil refuses every
@@ -139,40 +177,43 @@ func (self *AclState) CheckGrantActivate(statement *AclStatement, spendCheck Acl
 	if err != nil {
 		return nil, err
 	}
-	action, err := ParseStoredCanonicalAction(activate.GetCanonicalAction())
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
-	}
-	if err := CheckCanonicalActionForServer(action); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
-	}
-	ask, err := ParseAclGrantAction(action.Action)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
-	}
-	decisions, approvalId, err := aclGrantDecisions(activate, action, ask.Subject)
+	body, err := aclParseGrantActivate(activate)
 	if err != nil {
 		return nil, err
 	}
 
 	// grant_id, then refuse
-	grantId := AclGrantId(approvalId, action.PayloadSha256())
-	if !bytes.Equal(activate.GetGrantId(), grantId[:]) {
+	if !bytes.Equal(activate.GetGrantId(), body.grantId[:]) {
 		return nil, fmt.Errorf("%w: a grant_id the approval does not fix", ErrConfigRule)
 	}
-	if self.spentGrant(grantId[:]) != nil || self.grantRule(grantId[:]) != nil {
+	if self.spentGrant(body.grantId[:]) != nil || self.grantRule(body.grantId[:]) != nil {
 		return nil, fmt.Errorf("%w: a grant_id already in the log", ErrConfigReplay)
 	}
 
 	now := aclTime(statement.TimeMs)
-	match, err := MatchAclRequest(self, ask, now)
+	match, err := MatchAclRequest(self, body.ask, now)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConfigAuthority, err)
 	}
-	if err := self.grantQuorum(statement, match.Rule, ask, action, decisions, spendCheck); err != nil {
+	if err := self.grantQuorum(statement, match.Rule, body.ask, body.action, body.decisions, spendCheck); err != nil {
 		return nil, err
 	}
 
+	fold, err := aclGrantFoldOf(body, match.ExpiresMs)
+	if err != nil {
+		return nil, err
+	}
+	if !aclRowsTakeAtom(self.rows, fold.atom) {
+		return nil, fmt.Errorf("%w: the rows hold %d atoms already", ErrConfigRule, aclRowsMaxAtomCount)
+	}
+	return &AclStatementVerdict{Signer: signer.id, grant: fold}, nil
+}
+
+// What a GrantActivate whose body is body folds to, its rule ending at endMs: CheckGrantActivate's, with the end the
+// matching requests rule gives, and a base's re-application's, with the end that rule gives in the rows it folds into
+// (aclReapplyGrantFold), so the two build one fold from one body. Refuses a share whose ask mixes its halves.
+func aclGrantFoldOf(body *aclGrantBody, endMs int64) (*aclGrantFold, error) {
+	ask, action := body.ask, body.action
 	// the rule's src: the subject, or for a share's inbound half the other network (QD-820)
 	atomId := AclDerivedAtom(AclDerivedAtomSidecar, ask.Subject.Bytes())
 	atom := &protocol.AclAtom{Atom: atomId.Bytes(), SidecarIds: [][]byte{ask.Subject.Bytes()}}
@@ -187,15 +228,18 @@ func (self *AclState) CheckGrantActivate(statement *AclStatement, spendCheck Acl
 		}
 	}
 	fold := &aclGrantFold{
-		grantId: grantId[:],
+		grantId: bytes.Clone(body.grantId[:]),
 		rule: &protocol.AclRule{
-			RuleId:       grantId[:],
+			RuleId:       bytes.Clone(body.grantId[:]),
 			SrcAtoms:     [][]byte{atomId.Bytes()},
 			Targets:      ask.Dst,
 			PortsLimited: 0 < len(ask.Ports) || 0 < len(action.Action.GetSealedDetail()),
-			Expires:      match.ExpiresMs,
-			SourceRuleId: bytes.Clone(match.Rule.GetRuleId()),
+			Expires:      endMs,
+			// the requests rule the action names, the only one MatchAclRequest asks
+			SourceRuleId: bytes.Clone(ask.RuleId),
 		},
+		atom:          atom,
+		retainUntilMs: aclGrantRetainUntilMs(body.decisions),
 	}
 	for _, allow := range ask.Allow {
 		fold.rule.Actions = append(fold.rule.Actions, uint32(allow))
@@ -214,14 +258,55 @@ func (self *AclState) CheckGrantActivate(statement *AclStatement, spendCheck Acl
 		fold.rule.AppMode = protocol.AclAppMode(action.Action.GetAppMode())
 		fold.rule.LinkSpkiSha256 = bytes.Clone(action.Action.GetLinkSpkiSha256())
 	}
-	if _, found := self.atomIndexes[atomId]; !found && aclRowsMaxAtomCount <= len(self.rows.GetAtoms()) {
-		return nil, fmt.Errorf("%w: the rows hold %d atoms already", ErrConfigRule, aclRowsMaxAtomCount)
-	}
-	fold.atom = atom
+	return fold, nil
+}
+
+// The retain_until_ms a GrantActivate's spent row keeps (plan-ACL-folded-grant-state #3): the latest of its
+// decisions' not_after_millis plus §8.6's skew, so a re-signed copy is refused while any of them could spend.
+func aclGrantRetainUntilMs(decisions []*StoredApprovalDecision) int64 {
+	retainUntilMs := int64(0)
 	for _, decision := range decisions {
-		fold.retainUntilMs = max(fold.retainUntilMs, decision.Decision.GetNotAfterMillis()+aclDecisionSkewMs)
+		retainUntilMs = max(retainUntilMs, decision.Decision.GetNotAfterMillis()+aclDecisionSkewMs)
 	}
-	return &AclStatementVerdict{Signer: signer.id, grant: fold}, nil
+	return retainUntilMs
+}
+
+// Whether rows can take a grant's src atom: they hold it already, or hold fewer atoms than §8.8's bound. A derived
+// atom never takes an autogroup's form, so the rows' atoms are every atom it could already be.
+func aclRowsTakeAtom(rows *protocol.AclRows, atom *protocol.AclAtom) bool {
+	if atom == nil || len(rows.GetAtoms()) < aclRowsMaxAtomCount {
+		return true
+	}
+	return slices.ContainsFunc(rows.GetAtoms(), func(held *protocol.AclAtom) bool { return bytes.Equal(held.GetAtom(), atom.GetAtom()) })
+}
+
+// The fold a GrantActivate that took effect at its own position re-applies with over rows, the base's with the tail
+// before it re-applied (§7.9's base row), judging nothing: the fold its check built, from its body, its expiry the end
+// the requests rule its action names gives in these rows (aclRequestGrantEnd, MatchAclRequest's), so a grant re-applied
+// where nothing changed folds exactly as it did. Where the rows hold that requests rule no more, or cannot take its
+// src atom, the grant ends at this base, as a base's compile ends it (FS-14; plan-ACL-folded-grant-state #2): its rule
+// and atom fold nothing, and its grant_id is still spent until its decisions' latest not_after plus the skew (#3). An
+// error is a body that does not parse, which no GrantActivate that took effect has.
+func aclReapplyGrantFold(rows *protocol.AclRows, statement *AclStatement, activate *protocol.GrantActivate) (*aclGrantFold, error) {
+	body, err := aclParseGrantActivate(activate)
+	if err != nil {
+		return nil, err
+	}
+	index := slices.IndexFunc(rows.GetRequests(), func(request *protocol.AclRequestRule) bool {
+		return bytes.Equal(request.GetRuleId(), body.ask.RuleId)
+	})
+	if index < 0 {
+		return &aclGrantFold{grantId: bytes.Clone(body.grantId[:]), retainUntilMs: aclGrantRetainUntilMs(body.decisions)}, nil
+	}
+	endMs, _ := aclRequestGrantEnd(rows.GetRequests()[index], body.ask.ExpiresMs, statement.TimeMs)
+	fold, err := aclGrantFoldOf(body, endMs)
+	if err != nil {
+		return nil, err
+	}
+	if !aclRowsTakeAtom(rows, fold.atom) {
+		fold.rule, fold.atom = nil, nil
+	}
+	return fold, nil
 }
 
 // The decisions a GrantActivate embeds, parsed, each an approval naming the action's bytes and its subject (match),
@@ -383,27 +468,21 @@ func (self *AclState) dstOwnerApproved(rule *protocol.AclRequestRule, ask *AclGr
 	return ok && len(touchedMemberIds) == 1 && touchedMemberIds[0] == owner && slices.Contains(counted, owner)
 }
 
-// Why a GrantActivate's fold does not take over a new base: the requests rule it came from is gone (FS-14).
-var errAclGrantRuleGone = errors.New("the grant's requests rule is gone")
-
-// GrantActivate's fold: its AclRule, its subject's atom when the rows lack one, and its grant_id spent. Over a new base
-// whose head deleted the requests rule, the grant ends there and folds nothing.
-func aclFoldGrantActivate(rows *protocol.AclRows, verdict *AclStatementVerdict, reapply bool) (*protocol.AclRows, error) {
+// GrantActivate's fold: its AclRule and its src atom when the rows lack one, and its grant_id spent. A grant a base's
+// re-application ended there, its requests rule gone (FS-14), has no rule and folds its grant_id alone.
+func aclFoldGrantActivate(rows *protocol.AclRows, verdict *AclStatementVerdict) (*protocol.AclRows, error) {
 	fold := verdict.grant
 	if fold == nil {
 		return nil, fmt.Errorf("%w: a GrantActivate folded without its check", ErrConfigRule)
 	}
-	if reapply && !slices.ContainsFunc(rows.GetRequests(), func(request *protocol.AclRequestRule) bool {
-		return bytes.Equal(request.GetRuleId(), fold.rule.GetSourceRuleId())
-	}) {
-		return nil, fmt.Errorf("%w: %w", ErrConfigRule, errAclGrantRuleGone)
-	}
 	next := aclRowsCopy(rows)
-	if !slices.ContainsFunc(rows.GetRules(), func(rule *protocol.AclRule) bool { return bytes.Equal(rule.GetRuleId(), fold.grantId) }) {
-		next.Rules = append(slices.Clone(rows.GetRules()), fold.rule)
-	}
-	if fold.atom != nil && !slices.ContainsFunc(rows.GetAtoms(), func(atom *protocol.AclAtom) bool { return bytes.Equal(atom.GetAtom(), fold.atom.GetAtom()) }) {
-		next.Atoms = append(slices.Clone(rows.GetAtoms()), fold.atom)
+	if fold.rule != nil {
+		if !slices.ContainsFunc(rows.GetRules(), func(rule *protocol.AclRule) bool { return bytes.Equal(rule.GetRuleId(), fold.grantId) }) {
+			next.Rules = append(slices.Clone(rows.GetRules()), fold.rule)
+		}
+		if fold.atom != nil && !slices.ContainsFunc(rows.GetAtoms(), func(atom *protocol.AclAtom) bool { return bytes.Equal(atom.GetAtom(), fold.atom.GetAtom()) }) {
+			next.Atoms = append(slices.Clone(rows.GetAtoms()), fold.atom)
+		}
 	}
 	next.SpentGrants = aclSpendGrant(rows.GetSpentGrants(), fold.grantId, fold.retainUntilMs)
 	return next, nil
