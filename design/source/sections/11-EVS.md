@@ -103,9 +103,13 @@ leaks    K_path is per repo, so one path has one token on every ref of a repo in
 due      the first commit whose generation pin crosses a REMOVE generation (§10.5: it covers a shrink, an
          authorization expiry or a compromise retirement, §7.9), or the refusal of a creation in such a push (below),
          records it in head.path_epoch.due; evs classifies it by what it covers, on its own verified state, never by a
-         member-checked field (owner decision 414): with §7.9's state at the earlier pin, from the log's entries
-         between the two pins that shrank the repo's key holders, any immediate one making the whole crossing
-         immediate, a party that cannot reach that state or class an entry reading immediate, and until that judgment
+         member-checked field (owner decision 414): from the log's entries between the two pins that shrank the
+         repo's key holders, each judged on §7.9's states just before and at it, any immediate one making the whole
+         crossing immediate; an earlier pin the party no longer retains is held to its number, as §10.6's gate holds
+         a generation's, its chain checked when it was new by members' rotation checks and evs's gate, so the walk
+         needs only that number and the states around each shrink after it (owner decision 569); a pin off the chain
+         or ahead, or above the later one, and a party that cannot reach the states around a shrink in between, or a
+         kept entry the walk needs, or class an entry, reading immediate, and until that judgment
          lands, immediate whenever the newest state shows the holders shrank after the auth pin of the generation it
          crosses from and batched only when expiries alone passed, which fails closed; and it sets due_by_ms; writers
          alarm 1 h past due_by_ms, but not while the commit row defers a batched epoch, which §19.8 reports, nor
@@ -945,8 +949,9 @@ pack/<repo>/<pack_id>                      records and log pages older than 24 h
                                            segments
 dropscan/<repo>/<id>/<f>                   a drop job's or dry run's file: snap, cand,      If-None-Match                  30 d after its job
                                            mark, del, held, list, ask or res (11.13)                                       or dry run ends;
-                                                                                                                           list files the
-                                                                                                                           repo's life
+                                                                                                                           list files and
+                                                                                                                           snap-0 the repo's
+                                                                                                                           life
 Redis (soft state, owner decision 136)     {evsq_} push sequence, {evsl_} leases, {evsh_} head cache, {evsd_} drop hints
                                            (11.9, 11.10, 11.13)
 C_0 = SHA-256("UR evs 1.0 ref" || repo_id || ref_id);  C_v = SHA-256(C_{v-1} || push_id_v || SHA-256(Signed EvsPush_v))
@@ -980,9 +985,14 @@ keys      no key is a path prefix of another, an existing key followed by / at t
 ```text
 place     PUT /evs/v1/repos/<id> first creates place/<repo_id> {cluster id, creator sidecar_id} on the first
           metadata cluster (If-None-Match), naming the cluster that takes new repos (§19.9); on 412 it reads the
-          object: the same creator continues on the cluster it names, any other gets 409 REPO_PLACED and picks
+          object: the same creator continues on the cluster it names, and for the config kind alone, whose id the
+          Genesis fixes, so does any sidecar whose config admin evs's guard honored (every config writer, owner
+          decision 352), place/ keeping the cluster and creator it names, so another config writer places a config
+          repo whose creator is gone with its repo/ unwritten, its create stopped between place/ and repo/ or a
+          restore having brought back place/ alone (owner decision 567); any other gets 409 REPO_PLACED and picks
           another id (owner decision 411); only then does it write
-          repo/<id> there, so of two racing creates exactly one places the repo, and a retry never moves it
+          repo/<id> there (If-None-Match), so of two racing creates exactly one places the repo, and a retry never
+          moves it
 resolve   evs and gkm read a repo's place/ once and cache it for the process's life, since it never changes (a 404
           for 5 s); every metadata object of the repo and its gkm group, batch records included, lives on that
           cluster, so each ref keeps one commit point
@@ -1216,7 +1226,8 @@ parts     a push over 1 MiB or 1,024 entry writes goes in n <= 1,024 parts withi
           EvsPushPart k, receipts}, at most 4 at once; evs runs steps 4, 5 (a-e, g, h) for that part's entries,
           appends the part, its receipts and the head version it checked as a batch record (a batch alone above
           256 KiB) and answers 200 {place}, a re-seeded part being an EVS_BATCH_RESEED record read where a part is
-          (owner decision 402); a part posted twice is two records, and the seal names one; git mode
+          (owner decision 402), which, as its seal, Resolve judges by the fence alone (below; owner decision 564); a
+          part posted twice is two records, and the seal names one; git mode
           first takes the seal lease
 lease     git mode: POST .../push/P/lease {ref_id, base_version, ms <= 120,000} (rw), after the push's segments and
           before its parts: it reads the head as step 4 does, and one head CAS sets lease {P, until} and raises the
@@ -1232,7 +1243,9 @@ seal      POST .../push {Signed EvsPush, the parts' places, its slot bodies} wit
           400): evs reads the parts at their
           places and, in that round, the head from the cluster, since a git-mode push's own lease left the cached
           ETag stale (one part missing -> 409 PARTS_MISSING, which records and refuses nothing: the client posts
-          that part again and seals P again), checks them against
+          that part again and seals P again, as it does, in 11.13's reseed mode, for a part place whose batch minute
+          is older than an EvsSettings bound, 24 h by default, under the 25 h after which evacuation can judge a
+          part, so no seal names a part evacuation may have judged; owner decision 564), checks them against
           parts_sha256 and runs step 5 (a-f, h's age check on every part's receipts, and h's DROPPED check of each
           part's bases and sources against their refs' heads, reread from the cluster) against that head; in file
           mode, if the head moved after the earliest version a part was checked at, it reruns 5g's rules for each
@@ -1323,7 +1336,10 @@ evacuate  hourly, 11.13's evacuation resolves every record of batches over 25 h 
 Resolve   head window, then at most two log pages of (b, b+64]: P is committed at u, with its place, iff they name P
           at a version u in (b, b+64] (file mode) or at b+1 (git mode); dead iff not committed and the head is at or
           past b+64 (git mode: b+1), or its statement can no longer pass the time checks (time_ms + 35 min) and the
-          head's fence_ms is later than that; otherwise pending; log pages never change, so evs caches them
+          head's fence_ms is later than that; otherwise pending; log pages never change, so evs caches them; a
+          re-seed's records, a one-part push's, a re-seeded part's and a reseed seal's, take the fence in place of
+          the time clause, dead by it only on a head whose fence_ms is at or past the time the evacuation run held
+          the record, never because time_ms + 35 min has passed (11.13's resolve row; owner decisions 404, 564)
 ```
 
 Invariants (§22 model-checks them):
@@ -1482,14 +1498,25 @@ reply     one framed stream of u32 length | EvsReadFrame, each frame one of thes
           path, the newest committed version (older ones on request, by number, a removed path's too, a number the
           path holds no version at answering its newest version below it, so History walks a removed path's
           versions and, across a removal, the life it ended, and stops with an alarm on a walk that does not
-          descend (owner decision 380); a replaced versionless version answering
-          `collected` for its content, a listed one `drop_pending` {drop_id, not_before_ms} or `dropped` {drop_id,
-          version} with the DROP's statement and body, from which a head reader decides membership alone (owner
-          decision 396): V is listed iff some EvsDropPath's lineage holds V's token path in V's epoch, V is below
+          descend (owner decision 380); below a re-created path's entry and the window evs reads the ref's
+          statements, newest first through their log pages, in the epochs the request names the path in, at most
+          EvsSettings.ReadVersionScanCount versions (16,384, about 256 log pages), past which it answers 503,
+          unfinished, never "nothing", History then ending with BelowUnknown, Lookup answering unknown and a mailcfg
+          reader keeping the record unknown to Resolve, as one past its replay bound; the scan ends at the newest
+          cut-over below the creation, a request naming the path only in epochs at or above its floor, so a fresh
+          reader judges a re-creation across a cut-over on its new life alone, and from the review phase
+          mailcfg's readers replay the ref from genesis, judging each life from its statements, so no evs answer
+          below a creation decides a mail record (§15.16; owner decision 568); a replaced versionless version
+          answering `collected` for its content, a listed one `drop_pending` {drop_id, not_before_ms} or
+          `dropped` {drop_id, version} with the DROP's statement and body, from which a head reader decides
+          membership alone (owner decision 396): V is listed iff some EvsDropPath's lineage holds V's token path
+          in V's epoch, V is below
           through_version and V has an entry, every reader checking drop_sha256 over the body; for a removed path,
           its removal's push id, version and path version, from its marker or the window, and once its marker is
           collected from the window version at or below folded_through that removed it, which the read scans for a
-          path it would serve absent (owner decision 380); on an overlay, `base` for a
+          path it would serve absent (owner decision 380), and plain absent once that version has paged out of the
+          window, which the reader checks against its own walk (reader, below; owner decision 566); on an overlay,
+          `base` for a
           path it holds no version of; 11.7), with the statement
           that wrote it (when not among those returned) and its Merkle proof,
           and for each later statement whose change list is not inline and whose covering prefixes match the path,
@@ -1518,15 +1545,25 @@ rounds    the head first, from the cache; then the entries and, for a path a ver
           change-list ranges its proofs need and one range GET per uncached statement after the pin in the next:
           2-3 GETs, plus those statements, in two store round trips, 20-50 ms (owner decision 2); one more round
           when the head is not cached, its cluster GET preceding the entries; plus at most two cached log-page GETs
-          when an entry's push is older than the window; segments up to 256 KiB are read whole and larger ones in
-          64 KiB-aligned ranges
+          when an entry's push is older than the window, and a read by number below a re-created path its scan's
+          log pages, at most about 256 (reply, above; owner decision 568); segments up to 256 KiB are read whole and
+          larger ones in 64 KiB-aligned ranges
 reader    checks each returned statement's signature against its config's writer set and the ref rules, and the chain
           from its pin to C_v; for each entry version, that it hashes to its statement's entry_sha256 (directly, or by
           its proof to changes_root), and for a removal, that its statement removes the path or a prefix holding it;
           that no statement after the version's own changes the path, or a prefix holding it, again (a prefix sends it
           to that push's change list: inline, or by its adjacent-leaf proofs, never the whole list, taking a present
           proof only for a strict prefix whose change writes an entry, a delta, which leaves the path standing, and
-          refusing it for the path itself or a removal; owner decision 378); then it pins (ref, v, C_v) durably, and
+          refusing it for the path itself or a removal; owner decision 378), a removed path staying removed through
+          a later removal of a prefix holding it: after a served removal of the path, a walked removal of a prefix
+          agrees with the reply, in the inline form and the rooted one, and only a walked write of the path, or of a
+          prefix that writes an entry over it, refutes it; a path served plain absent, a collected removal paged out
+          of the window among them, agrees with the walk when the newest walked change of the path, or of a prefix
+          holding it, is a removal, so the walk's signed statements prove the absence, at any distance behind the
+          window and with no further read, and only a walked write of the path with no walked removal of it or of a
+          prefix after it refutes absent; a refuted reply raises the tamper alarm, and a creation on an absent reply
+          takes max(b, m) + 1 with no m, b being past any collected removal (11.8; owner decision 566); then it pins
+          (ref, v, C_v) durably, and
           keeps, sealed under §5's AEAD, one record per path read (ref_id, path, entry version, pin at last read), at
           most HeadReadRecordCount = 16,384 a network, least recently used out (§5.9), each also keeping the commit
           version of the entry it read, which a verified EvsReseed reads (11.13's re-seed row; owner decision 403); a
@@ -1954,10 +1991,21 @@ delete     DELETE /evs/v1/repos/<id> (admin; ur evs delete): active -> deleted; 
            and stored bytes count until the shred (§20.7); with now (?now=1, --now): active, or deleted under a
            newer RepoDelete{now}, -> shredding at once, never restorable
 refused    evs and gkm refuse every route but restore and DELETE with now while deleted, reads and subscriptions
-           included (11.9; owner decision 379), except /reseed and gkm's
-           GroupForm in §19.10's re-seed mode for a repo re-seeded as deleted (11.13), and all while shredding or
-           shredded; the token exchange mints only admin for a deleted repo, whose standing admins keep that
-           right alone, which evs's guard honors for DELETE with and without now (§8.8; owner decision 351)
+           included (11.9; owner decision 379), except /reseed, its segment uploads and gkm's
+           GroupForm in §19.10's re-seed mode for a repo re-seeded as deleted (the re-seed exception, below; 11.13),
+           and all while shredding or shredded; the token exchange mints only admin for a deleted repo, whose
+           standing admins keep that right alone, which evs's guard honors for DELETE with and without now (§8.8;
+           owner decision 351), each guard honoring a route's rights only whole, so that admin passes only the
+           routes that take admin alone (§8.8's Repo rows, §10.6's checks row) and evs's one marked pass below
+re-seed    PUT .../segments, the one route of the exception that takes more than admin, says so in its route entry;
+           on it, when the
+           state refuses the whole right set evs's guard asks, the host's reseed gate is on and the state honors the
+           bare admin right, the guard passes the request holding admin alone, marked as admitted by the exception,
+           and the upload takes a marked request only while reseed is on and repo/ shows deleted under the
+           unrestored RepoDelete the projection ends in, inside the 7 d restore window, the request holding admin,
+           else 403 SCOPE, as the guard would, a keying or active repo/ before repo/ shows deleted included; every
+           other route keeps the whole-set rule, so that admin reads, writes and deposits nothing, and a repo
+           re-seeded as deleted takes its segments back in a recovery (11.13; owner decision 565)
 restore    POST /evs/v1/repos/<id>/restore (admin; ur evs restore): deleted -> active by If-Match on the deleted
            object read; a repo past deleted answers 409 SHREDDING
 start      taskworker, 7 d 10 min after the RepoDelete's entry, once the newest projection holds no RepoRestore of its
@@ -2214,10 +2262,14 @@ resolve   per batch, GET it whole; per record, Resolve its push id on its ref (1
           after every process writes them, a dead record's slots staying meanwhile, at most 8 KiB each (owner
           decision 399); pending -> raise the ref's fence (one head CAS, or for a ref with no head one
           placeholder head created with its fence raised, 11.8's first row), then Resolve again; parts follow
-          their seal; a reseed record resolves by its statement as a push record does, the fence in place of the
-          time clause: committed at this place -> keep, at another -> drop as a duplicate, else pending, the ref's
-          fence raised, and dead -> drop if the push is still not committed on the fenced head, a reseed record
-          listing no slot (owner decision 404)
+          their seal; a reseed record, a one-part push's, a re-seeded part's or a reseed seal's (re-seed, below),
+          resolves by its statement as a push record does, the fence in place of the time clause: committed at
+          this place -> keep, at another -> drop as a duplicate, else pending, the ref's fence raised, and dead ->
+          drop if the push is still not committed on the fenced head, a head whose fence_ms is at or past the time
+          this run held the record, never because the statement's time_ms + 35 min has passed, a reseed record
+          listing no slot (owner decisions 404, 564); Resolve tells a reseed seal from a pushed one by its parts'
+          record type, or takes the fence rule for every seal, which only moves a pushed seal's drop from its time
+          clause to a fence, and FI-6's oracle takes the same rule
 move      per repo, the kept records, one pack or parcel per repo a run across all the minute directories it
           evacuates: once its aged material (these, its parcels, and its log pages older than 24 h, which wait at
           log/ until a pack takes them) reaches 256 KiB, one pack/<repo>/<pack_id> on the segment cluster
@@ -2342,7 +2394,12 @@ table     drops/<repo>/_ holds fixed-size records within 64 KiB: a drop at most 
           overwriting; the job's resolve writes its exact listed set sorted by entry hash to list files with a small
           index and a bloom filter, kept for the repo's life, 36.5 B a listed version on the segment cluster outside
           any network's stored bytes, so evs finds a listed version by its entry hash wherever it serves one and
-          answers dropped for it, after the table forgets the drop too (owner decision 398); an entry leaves 30 d
+          answers dropped for it, after the table forgets the drop too (owner decision 398); the job's snap-0, each
+          covered drop's ids, version, place and seen_ms (84 B a drop), is kept for the repo's life too, every
+          other dropscan/ file going 30 d after its job or dry run ends, so `sidecarctl evs drop-reindex` rebuilds
+          an older job's corrupt list file from it: with no drop named and no list file reading whole it takes
+          snap-0's drops, printing their ids, and it refuses named drops that differ from snap-0's, writing
+          nothing (§19.8; owner decision 570); an entry leaves 30 d
           after its ended_day, or sooner when a write would pass 64 KiB, ended entries oldest first but never one
           whose DROP committed under 27 h ago, since evacuation re-appends a committed DROP the table lacks; pending,
           executing and observed entries never leave; a held entry occupies, lists and leaves the table exactly as its
@@ -2518,7 +2575,12 @@ re-seed   by §19.10's runbook (POST .../reseed): config first, then groups, the
           base_chain the chain at that base and no conflicting path, as 5f and 5g judge it, so a shared file-mode
           ref re-seeds as far as its mirror holds statements; 5a keeps a version from committing twice, and the
           device sends in version order and checks the version each lands at); parts written before a seal that
-          never comes are evacuation's once their push is dead; it takes segments only once PUT seg/ holds them, and
+          never comes are evacuation's once their push is dead, which a re-seed's records are only by the fence
+          (resolve, above); the mode's seal refuses 409 PARTS_MISSING, refusing and recording nothing, any part
+          place whose batch minute is older than an EvsSettings bound, 24 h by default, the push route's receipt
+          figure, well under the 25 h after which evacuation can judge a part, so the device sends those parts
+          again, no seal names a part evacuation may have judged, and I-EVS-2 holds for re-seeded pushes in parts
+          whatever the device's timing (owner decision 564); it takes segments only once PUT seg/ holds them, and
           the Signed EvsReseed statements it keeps at reseed/<repo>/<ref> (§2.8's evs-29) it serves with the head,
           from which a reader's AcceptReseed takes them (owner decision 402); evs
           applies every ERASE before it serves a slot, accepts a slot only if a re-seeded version names it, its slot

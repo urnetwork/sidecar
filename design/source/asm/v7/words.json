@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9433,
-  "code_words": 20187,
+  "code_words": 20267,
   "ceiling": 3000,
   "over": 6433,
   "over_pct": 214.4
@@ -93,7 +93,7 @@
   "num": 11,
   "code": "EVS",
   "words": 21467,
-  "code_words": 48670,
+  "code_words": 49725,
   "ceiling": 5000,
   "over": 16467,
   "over_pct": 329.3
@@ -110,11 +110,11 @@
  {
   "num": 13,
   "code": "TLS",
-  "words": 9155,
+  "words": 9272,
   "code_words": 986,
   "ceiling": 3800,
-  "over": 5355,
-  "over_pct": 140.9
+  "over": 5472,
+  "over_pct": 144.0
  },
  {
   "num": 14,
@@ -128,11 +128,11 @@
  {
   "num": 15,
   "code": "MAIL",
-  "words": 10620,
+  "words": 10822,
   "code_words": 2125,
   "ceiling": 4500,
-  "over": 6120,
-  "over_pct": 136.0
+  "over": 6322,
+  "over_pct": 140.5
  },
  {
   "num": 16,
@@ -165,7 +165,7 @@
   "num": 19,
   "code": "OPS",
   "words": 9605,
-  "code_words": 10642,
+  "code_words": 10659,
   "ceiling": 3500,
   "over": 6105,
   "over_pct": 174.4
