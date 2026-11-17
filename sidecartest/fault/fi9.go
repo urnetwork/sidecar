@@ -13,7 +13,9 @@
 //	         export result or the root's evs_git_* code: every object is inflated and hashed again, so an export that
 //	         names an object by an oid its bytes do not hash to fails, and the client's oids are checked against
 //	         those hashes. go-git, §22.6's git codec oracle, is linked only by the mlsinterop module (dependencies.yml),
-//	         so the root's oracle reads with its own code, which shares none with what it checks
+//	         so the root's oracle reads with its own code, which shares none with what it checks, and mlsinterop's
+//	         fi9_go_git_test.go holds that code's reading of exports and of stock git's repositories equal to go-git's
+//	         (QD-861): refs, commits, trees and blobs
 //	check    each push is held to the first export recorded after it: an ok update's commit is on its ref, with the
 //	         declared tree and parents, its whole tree stored and hashing right, and the newest ok update of each ref
 //	         is that ref's tip; an ok deletion leaves no ref; a refused update's commit is not on its ref unless a
@@ -467,6 +469,22 @@ type GitCommit struct {
 	Oid     string
 	Tree    string
 	Parents []string
+	// The author and committer lines past their keys, "A U Thor <author@example.com> 1112911993 -0700", each where git
+	// reads it: the author line right after the parents, the committer line right after the author line or where it
+	// would be. Empty where the commit holds none there.
+	Author    string
+	Committer string
+	// Everything after the blank line that ends the headers, as stored; empty when the commit ends with its headers.
+	Message string
+}
+
+// One entry of a tree as the parse read it.
+type GitTreeEntry struct {
+	// The mode as the tree holds it: "40000", "100644", "100755", "120000", "160000", or "100664", the group-writable
+	// file early git wrote, which fsck and ur's codec still take and git reads as a plain file.
+	Mode string
+	Name string
+	Oid  string
 }
 
 // One git object as the parse read it: its kind and content, its bytes hashed to its oid.
@@ -622,7 +640,17 @@ func (self *GitRepository) object(oid string) (*gitObject, error) {
 	return object, nil
 }
 
-// The commit oid names: its tree and its parents, in order.
+// The kind of the object oid names, "blob", "tree", "commit" or "tag", and its content, read as every object here
+// is: inflated and hashed again. The content is the caller's.
+func (self *GitRepository) Object(oid string) (string, []byte, error) {
+	object, err := self.object(oid)
+	if err != nil {
+		return "", nil, err
+	}
+	return object.kind, bytes.Clone(object.content), nil
+}
+
+// The commit oid names: its tree, its parents in order, its author and committer lines and its message.
 func (self *GitRepository) Commit(oid string) (*GitCommit, error) {
 	object, err := self.object(oid)
 	if err != nil {
@@ -632,7 +660,11 @@ func (self *GitRepository) Commit(oid string) (*GitCommit, error) {
 		return nil, fmt.Errorf("%s is a %s, not a commit", oid, object.kind)
 	}
 	commit := &GitCommit{Oid: oid}
-	headers, _, _ := bytes.Cut(object.content, []byte("\n\n"))
+	headers, message, _ := bytes.Cut(object.content, []byte("\n\n"))
+	commit.Message = string(message)
+	// the line after the parents is the author's if it is an author line; the committer's line follows the author's,
+	// or stands in its place when there is none
+	authorRead := false
 	for i, line := range strings.Split(string(headers), "\n") {
 		key, value, _ := strings.Cut(line, " ")
 		switch {
@@ -645,9 +677,46 @@ func (self *GitRepository) Commit(oid string) (*GitCommit, error) {
 				return nil, fmt.Errorf("commit %s has a parent line out of place: %q", oid, line)
 			}
 			commit.Parents = append(commit.Parents, value)
+		case key == "author" && i == len(commit.Parents)+1:
+			commit.Author = value
+			authorRead = true
+		case key == "committer" && (i == len(commit.Parents)+1 || (authorRead && i == len(commit.Parents)+2)):
+			commit.Committer = value
 		}
 	}
 	return commit, nil
+}
+
+// The entries of the tree oid names, in the order it holds them. An entry cut short, with no name or of a mode git
+// does not write is an error.
+func (self *GitRepository) Tree(oid string) ([]*GitTreeEntry, error) {
+	object, err := self.object(oid)
+	if err != nil {
+		return nil, err
+	}
+	if object.kind != "tree" {
+		return nil, fmt.Errorf("%s is a %s, not a tree", oid, object.kind)
+	}
+	entries := []*GitTreeEntry{}
+	rest := object.content
+	for 0 < len(rest) {
+		header, after, ok := bytes.Cut(rest, []byte{0})
+		if !ok || len(after) < sha1.Size {
+			return nil, fmt.Errorf("tree %s ends inside an entry", oid)
+		}
+		mode, name, ok := strings.Cut(string(header), " ")
+		if !ok || name == "" {
+			return nil, fmt.Errorf("tree %s has an entry with no name", oid)
+		}
+		switch mode {
+		case "40000", "100644", "100664", "100755", "120000", "160000":
+		default:
+			return nil, fmt.Errorf("tree %s has an entry of mode %q", oid, mode)
+		}
+		entries = append(entries, &GitTreeEntry{Mode: mode, Name: name, Oid: hex.EncodeToString(after[:sha1.Size])})
+		rest = after[sha1.Size:]
+	}
+	return entries, nil
 }
 
 // Every commit oid reaches through its parents, itself included.
@@ -689,41 +758,25 @@ func (self *GitRepository) CheckTree(oid string) error {
 		return checked
 	}
 	err := func() error {
-		object, err := self.object(oid)
+		entries, err := self.Tree(oid)
 		if err != nil {
 			return err
 		}
-		if object.kind != "tree" {
-			return fmt.Errorf("%s is a %s, not a tree", oid, object.kind)
-		}
-		rest := object.content
-		for 0 < len(rest) {
-			header, after, ok := bytes.Cut(rest, []byte{0})
-			if !ok || len(after) < sha1.Size {
-				return fmt.Errorf("tree %s ends inside an entry", oid)
-			}
-			mode, name, ok := strings.Cut(string(header), " ")
-			if !ok || name == "" {
-				return fmt.Errorf("tree %s has an entry with no name", oid)
-			}
-			entryOid := hex.EncodeToString(after[:sha1.Size])
-			rest = after[sha1.Size:]
-			switch mode {
+		for _, entry := range entries {
+			switch entry.Mode {
 			case "40000":
-				if err := self.CheckTree(entryOid); err != nil {
-					return fmt.Errorf("%s/: %w", name, err)
+				if err := self.CheckTree(entry.Oid); err != nil {
+					return fmt.Errorf("%s/: %w", entry.Name, err)
 				}
 			case "160000":
-			case "100644", "100755", "120000":
-				entry, err := self.object(entryOid)
-				if err != nil {
-					return fmt.Errorf("%s: %w", name, err)
-				}
-				if entry.kind != "blob" {
-					return fmt.Errorf("%s is a %s, not a blob", name, entry.kind)
-				}
 			default:
-				return fmt.Errorf("tree %s has an entry of mode %q", oid, mode)
+				blob, err := self.object(entry.Oid)
+				if err != nil {
+					return fmt.Errorf("%s: %w", entry.Name, err)
+				}
+				if blob.kind != "blob" {
+					return fmt.Errorf("%s is a %s, not a blob", entry.Name, blob.kind)
+				}
 			}
 		}
 		return nil
