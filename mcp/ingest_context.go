@@ -10,6 +10,10 @@
 //	          names among them
 //	title     Claude Code's session_title at SessionStart or UserPromptSubmit when set, else the first user
 //	          prompt's first line, 120 B after redaction, for the run card and the context entry
+//	prompts   each UserPromptSubmit's prompt, redacted, in a stage 2 entry's prompts as it arrives (QD-900), while
+//	          the run's prompts, joined one a line, stay within RunCardPromptByteCount (2 KiB): what a vault's run
+//	          card reads of them (RECORD.md 7.4), so a card is a function of the record and no transcript format
+//	          enters it; a prompt past that is cut, then writes nothing
 //	change    each hook's scan of MCP-M3-20's restore point: the commits since the last scan, the counts by
 //	          attribution and each changed path with its hashes, mode and attribution
 //	blob      the after bytes of each changed file within Ingest.FileByteCount, redacted, with the hash of the bytes
@@ -77,7 +81,7 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 		state.Model = event.Model
 		state.PermissionMode = event.PermissionMode
 		run.dirty = true
-		self.appendContextWithLock(ctx, run, redactor, stage, event, payload)
+		self.appendContextWithLock(ctx, run, redactor, stage, event, payload, nil)
 		if stage == 1 {
 			self.lifecycleStartWithLock(ctx, run)
 		}
@@ -97,7 +101,7 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 		}
 		if changed {
 			run.dirty = true
-			self.appendContextWithLock(ctx, run, redactor, 2, event, payload)
+			self.appendContextWithLock(ctx, run, redactor, 2, event, payload, nil)
 		}
 	}
 }
@@ -120,8 +124,9 @@ func (self *Ingest) lifecycleStartWithLock(ctx context.Context, run *ingestRun) 
 	})
 }
 
-// One context entry of stage.
-func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, stage uint32, event *HookEvent, payload []byte) {
+// One context entry of stage, carrying prompts, the redacted user prompts that arrived with it (stage 2 alone), nil
+// for none.
+func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, stage uint32, event *HookEvent, payload []byte, prompts []string) {
 	state := run.state
 	if event.Harness == cursorHookHarness {
 		if version := ingestPayloadString(payload, ingestCursorVersionField); version != "" && version != state.HarnessVersion {
@@ -171,6 +176,7 @@ func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, r
 			Title:            state.Title,
 			InstructionFiles: files,
 			Truncations:      truncations,
+			Prompts:          prompts,
 		},
 		coverageSource: sidecar.RecordCoverageSourceHooks,
 	})
@@ -195,8 +201,12 @@ func (self *Ingest) setTitleWithLock(ctx context.Context, run *ingestRun, redact
 	}
 }
 
-// A UserPromptSubmit: the title from the first prompt when none is set, and the run card's prompts.
-func (self *Ingest) capturePromptWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, payload []byte) {
+// A UserPromptSubmit: the title from the first prompt when none is set, and the prompt itself, redacted, in a stage 2
+// context entry of its own as it arrives (§16.7's context row; QD-900), which a vault's run card reads (RECORD.md
+// 7.4) and RunCapture.Prompts mirrors. Only the run's first RunCardPromptByteCount of prompts is written, joined one a
+// line as a card joins them, since a card reads no more; past it a prompt writes nothing. The prompt is redacted whole
+// before it is cut, so no cut splits a secret the redactor would have matched, and nothing unredacted is written.
+func (self *Ingest) capturePromptWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, event *HookEvent, payload []byte) {
 	prompt := ingestPayloadString(payload, "prompt")
 	if prompt == "" {
 		return
@@ -204,16 +214,24 @@ func (self *Ingest) capturePromptWithLock(ctx context.Context, run *ingestRun, r
 	self.setTitleWithLock(ctx, run, redactor, prompt)
 	state := run.state
 	room := self.settings.RunCardPromptByteCount - len(state.Prompts)
+	if len(state.Prompts) != 0 {
+		// the line that joins it to the prompts before
+		room -= 1
+	}
 	if room <= 0 {
 		return
 	}
 	redacted := self.redact(ctx, run, redactor, []byte(prompt))
 	cut, _ := ingestCut(redacted, int64(room))
+	if len(cut) == 0 {
+		return
+	}
 	if len(state.Prompts) != 0 {
 		state.Prompts += "\n"
 	}
 	state.Prompts += string(cut)
 	run.dirty = true
+	self.appendContextWithLock(ctx, run, redactor, 2, event, payload, []string{string(cut)})
 }
 
 // §16.11's project key and git's branch for a worktree: `.ur`'s project where one is set, else the top level's base
