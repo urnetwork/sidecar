@@ -253,7 +253,10 @@ func (self *MailSpamScorer) Score(ctx context.Context, parsed *MailParsed, depos
 
 // Teaches s/model that a person's verdict on one message went from before to after: it unlearns the old verdict and
 // learns the new, in one write by a path CAS, reading again on another device's write. The device that wrote the
-// verdict's op teaches it, once, so each act counts once. Teaching the same verdict again changes nothing.
+// verdict's op teaches it, once, so each act counts once. Teaching the same verdict again changes nothing. s/model is
+// versionless (mail_spam_model.go), and a write another device's won comes back a conflict that is
+// ErrEvsVersionlessConflict too: the retry applies this verdict to the winner's model as read again, never this
+// device's older bytes over it, so nothing §11.7's writers row protects is lost.
 func (self *MailSpamScorer) Teach(ctx context.Context, parsed *MailParsed, before MailSpamClass, after MailSpamClass) error {
 	if before == after {
 		return nil
@@ -278,7 +281,7 @@ func (self *MailSpamScorer) Teach(ctx context.Context, parsed *MailParsed, befor
 			return err
 		}
 		testHookBarrier("mail.spam.teach.before", "")
-		versions, err := self.store.Write(ctx, []*mailStoreWrite{{Path: MailSpamModelPath, Content: content, IfVersion: version}})
+		versions, err := self.store.Write(ctx, []*mailStoreWrite{mailSpamModelWrite(content, version)})
 		testHookBarrier("mail.spam.teach.after", "")
 		if err == nil {
 			self.stateLock.Lock()

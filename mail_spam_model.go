@@ -9,8 +9,11 @@
 // trained than the settings keep, so it follows a mailbox's mail as it changes.
 //
 // The bytes are MailSpamModel (mail.proto): version 1, then counts as MAIL-FORMAT.md's s/model section states. The
-// file is sealed under §11 like every mailbox file, so a bucket's count says nothing to a server. Versioned for now,
-// as every format-1 file is; MAIL-M10-01 makes it versionless at format 2 (§15.7's s/model row).
+// file is sealed under §11 like every mailbox file, so a bucket's count says nothing to a server. Only its newest
+// version is ever used, so it is written versionless, versioning 1, by the mail component's reserved writer (§15.7's
+// s/model row, §11.7's choose row; MAIL-M10-01): each write is mailSpamModelWrite's, which the store over evs writes
+// "off" in the format2 gate, so a model a format-1 writer left versioned turns versionless at its next write, and
+// versioned (0) in a locked mailbox, where §11.7 refuses a 1; outside the gate every version is 0, as format 1 writes.
 //
 // Features are the subject's and the first text part's words, the From domain and the attachments' media types,
 // lowercased, each counted once a message. A feature's bucket is FNV-1a over its text, so every leg puts it in the
@@ -96,6 +99,12 @@ func ParseMailSpamModel(content []byte) (*MailSpamModel, error) {
 		return nil, fmt.Errorf("%w: a count past its limit", ErrMailSpamModelInvalid)
 	}
 	return model, nil
+}
+
+// The write of s/model's content held to the version its writer read, 0 where it read none: the reserved writer's, so
+// its version is versionless where §11.7 lets it be (see the file header).
+func mailSpamModelWrite(content []byte, ifVersion uint64) *mailStoreWrite {
+	return &mailStoreWrite{Path: MailSpamModelPath, Content: content, IfVersion: ifVersion, Reserved: EvsReservedMailModel}
 }
 
 // s/model's bytes, the same for the same counts on every leg.
