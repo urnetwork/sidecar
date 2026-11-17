@@ -5,8 +5,9 @@ v0.25.1` (module zip `h1:y6nzefT6PtFeMItFw97GX/ZCkVbh0rqSXG8b3ang8/w=`,
 fetched through proxy.golang.org and checked against Go's checksum database),
 except for the changes to `server.go`, `conn.go` and `parse.go` below, the
 added `urnetwork_serve_conn_test.go`, `urnetwork_bdat_reset_test.go`,
-`urnetwork_bare_postmaster_test.go` and this file, and the removed upstream `.github/`, `.build.yml` and `.gitignore` (upstream's
-CI and repository settings). The upstream MIT license is kept in `LICENSE`. The module path
+`urnetwork_bare_postmaster_test.go` and this file, and the removed upstream
+`.github/`, `.build.yml` and `.gitignore` (upstream's CI and repository
+settings). The upstream MIT license is kept in `LICENSE`. The module path
 stays `github.com/emersion/go-smtp`, so a module replaces it here (QD-193,
 RESOLUTIONS.md's plan-MAIL-go-smtp-fork).
 
