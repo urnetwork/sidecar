@@ -9,12 +9,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/evsservice"
 	"github.com/urnetwork/sidecar/protocol"
 )
 
@@ -159,6 +161,185 @@ func TestFi6TakesAPendingPushsSlotPastTheDeadline(t *testing.T) {
 		{Actor: "clock", Advance: 27 * time.Hour},
 	}
 	fiRequirePass(t, Run(t.Context(), &Schedule{Id: "fi6-listed-slot", Steps: steps, Check: []Invariant{FI(6)}}, world.net))
+}
+
+// Step 6 of a push on refId creating one file whose version names a new slot of two keys, as evs runs it in QD-806's
+// order: the slot created If-None-Match carrying its statement's origin, encoded as evsservice encodes it (DESIGN-
+// DETAILS 14.2.2), then, if recorded, the record, which keeps no slot body. One not recorded is an attempt that died
+// between its slot round and its record. Returns the slot id and the push.
+func (self *fiHandWorld) originSlotPush(ctx context.Context, refId sidecar.Id, recorded bool) (sidecar.Id, *fiHandPush, error) {
+	slotId := sidecar.NewEvsSlotId()
+	body, err := self.slotBody(2)
+	if err != nil {
+		return slotId, nil, err
+	}
+	pushId := sidecar.NewId()
+	change, err := self.fileChange(pushId, slotId)
+	if err != nil {
+		return slotId, nil, err
+	}
+	push, err := self.build(refId, protocol.EvsRefKind_EVS_REF_SHARED, 0, self.admin, pushId, []*sidecar.EvsPlannedChange{change},
+		[]*sidecar.EvsNewObject{{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT, Id: slotId.Bytes()}}, [][]byte{body}, nil)
+	if err != nil {
+		return slotId, nil, err
+	}
+	origin, err := evsservice.EvsSlotOriginOf(push.statement)
+	if err != nil {
+		return slotId, nil, err
+	}
+	metadata, err := origin.Metadata(evsservice.DefaultEvsSettings().SlotOriginMaxByteCount)
+	if err != nil {
+		return slotId, nil, err
+	}
+	if _, err := self.cluster.PutIfNoneMatch(ctx, evsOracleSlotKey(self.repoId, slotId.Bytes()), body, &sidecar.BlobPutOptions{Metadata: metadata}); err != nil {
+		return slotId, nil, err
+	}
+	if !recorded {
+		return slotId, push, nil
+	}
+	return slotId, push, self.writeRecord(ctx, push)
+}
+
+// QD-870's leak, which FI-6 excuses: an attempt writes its slot under its statement's origin and dies before its
+// record (QD-806's order), and its statement is never sent again, so no batch, container or head ever names it and
+// nothing reclaims the slot. FI-6 reads the run clean past the 26 h deadline, beside a committed push's slot, and the
+// slot still stands, so the pass is the excuse's and not the slot's absence.
+func TestFi6TakesTheSlotOfAnAttemptThatDiedBeforeItsRecord(t *testing.T) {
+	world := newFiHandWorld(t)
+	main := sidecar.NewId()
+	var slotId sidecar.Id
+	steps := []*Step{
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			_, _, err := world.slotPush(ctx, main, false)
+			return err
+		}},
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			var err error
+			slotId, _, err = world.originSlotPush(ctx, main, false)
+			return err
+		}},
+		{Actor: "clock", Advance: 25 * time.Hour},
+		{Actor: "clock", Advance: 2 * time.Hour},
+	}
+	fiRequirePass(t, Run(t.Context(), &Schedule{Id: "fi6-died-before-record", Steps: steps, Check: []Invariant{FI(6)}}, world.net))
+	if _, err := world.cluster.Head(t.Context(), evsOracleSlotKey(world.repoId, slotId.Bytes())); err != nil {
+		t.Fatalf("the dead attempt's slot is not there to excuse: %v", err)
+	}
+}
+
+// The twin: the same slot under its statement's origin, but the attempt reached its record, so a batch held its
+// statement and evacuation had the record to judge. Once the push is dead (the fence after its 35 min), a buggy
+// evacuation drops the record's batch and leaves the slot; past the deadline FI-6 reports it, though the batch that
+// held the statement is gone, since it remembers the statement from the check that saw the batch.
+func TestFi6CatchesAnOrphanSlotWhoseStatementABatchHeld(t *testing.T) {
+	world := newFiHandWorld(t)
+	main := sidecar.NewId()
+	var pending *fiHandPush
+	steps := []*Step{
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			_, _, err := world.slotPush(ctx, main, false)
+			return err
+		}},
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			var err error
+			_, pending, err = world.originSlotPush(ctx, main, true)
+			return err
+		}},
+		{Actor: "clock", Advance: 36 * time.Minute},
+		{Actor: "evacuator", Action: func(ctx context.Context, net *Net) error {
+			if _, err := world.heads.RaiseFence(ctx, world.cluster, world.repoId, main); err != nil {
+				return err
+			}
+			// the dead record goes with its batch, and its own slot is left behind
+			return world.cluster.Delete(ctx, evsservice.BatchKey(pending.place.GetMinute(), pending.place.GetInstance(), pending.place.GetSeq()))
+		}},
+		{Actor: "clock", Advance: 25 * time.Hour},
+		{Actor: "clock", Advance: 2 * time.Hour},
+	}
+	result := Run(t.Context(), &Schedule{Id: "fi6-held-orphan-slot", Steps: steps, Check: []Invariant{FI(6)}}, world.net)
+	fiRequireViolation(t, result, 5, "FI-6", "which no committed version names", "no reclaimer finds it",
+		"a batch held its origin's statement, push "+sidecar.Id(pending.statement.Push.GetPushId()).String())
+}
+
+// The excuse reads the origin as DESIGN-DETAILS 14.2.2 gives it, in FI-6's own code: what evsservice writes for a
+// push's slot names that statement, and a re-seed's origin, no origin, a value past the bound and every malformed one
+// name none, as evs reads them, so an orphan carrying any of them is still reported. Each case is held to evsservice's
+// own reading too.
+func TestFi6ReadsASlotOriginAsStepSixWritesIt(t *testing.T) {
+	world := newFiHandWorld(t)
+	_, push, err := world.originSlotPush(t.Context(), sidecar.NewId(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxByteCount := DefaultFi6Settings().SlotOriginMaxByteCount
+	origin, err := evsservice.EvsSlotOriginOf(push.statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := origin.Metadata(maxByteCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, ok := fi6SlotOriginStatement(metadata, maxByteCount)
+	if want := fi6StatementOf(sidecar.Id(push.statement.Push.GetPushId()), push.statement.Sha256); !ok || statement != want {
+		t.Fatalf("read %v %t from %q, not the push's statement", statement, ok, metadata[fi6SlotOriginMetadataKey])
+	}
+
+	value := metadata[fi6SlotOriginMetadataKey]
+	fields := strings.Split(value, ".")
+	with := func(index int, field string) map[string]string {
+		changed := append([]string{}, fields...)
+		changed[index] = field
+		return map[string]string{fi6SlotOriginMetadataKey: strings.Join(changed, ".")}
+	}
+	cases := []map[string]string{
+		nil,
+		{"origin-other": value},
+		{fi6SlotOriginMetadataKey: evsservice.EvsSlotOriginReseeded().Encode()},
+		{fi6SlotOriginMetadataKey: value + ".f"},
+		{fi6SlotOriginMetadataKey: strings.Join(fields[:8], ".")},
+		with(0, "2"),
+		with(1, "r"),
+		with(2, "A"+fields[2][1:]),
+		with(3, fields[3][:30]),
+		with(4, "zz"+fields[4][2:]),
+		with(6, "0"+fields[6]),
+		with(7, "-1"),
+		with(8, "x"),
+	}
+	for i, metadata := range cases {
+		if _, ok := fi6SlotOriginStatement(metadata, maxByteCount); ok {
+			t.Errorf("case %d, %q, read as a statement's origin", i, metadata)
+		}
+		if evsservice.ParseEvsSlotOrigin(metadata, maxByteCount).Kind == evsservice.EvsSlotOriginPush {
+			t.Errorf("case %d, %q, evs reads as a push's origin", i, metadata)
+		}
+	}
+	if _, ok := fi6SlotOriginStatement(metadata, len(value)-1); ok {
+		t.Error("an origin past the bound read as a statement's")
+	}
+}
+
+// FI-6 judges an orphan by the deadline its settings name: narrowed to an hour, a slot no committed version names and
+// no batch lists, with no origin, is reported two hours on, where the 26 h default would wait.
+func TestFi6HoldsAnOrphanSlotToItsSettingsDeadline(t *testing.T) {
+	world := newFiHandWorld(t)
+	settings := DefaultFi6Settings()
+	settings.DeadSlotDeadline = time.Hour
+	SetFi6Settings(world.net, settings)
+	steps := []*Step{
+		{Actor: "evacuator", Action: func(ctx context.Context, net *Net) error {
+			body, err := world.slotBody(1)
+			if err != nil {
+				return err
+			}
+			_, err = world.cluster.PutIfNoneMatch(ctx, evsOracleSlotKey(world.repoId, sidecar.NewEvsSlotId().Bytes()), body, nil)
+			return err
+		}},
+		{Actor: "clock", Advance: 2 * time.Hour},
+	}
+	result := Run(t.Context(), &Schedule{Id: "fi6-settings-deadline", Steps: steps, Check: []Invariant{FI(6)}}, world.net)
+	fiRequireViolation(t, result, 1, "FI-6", "is 2h0m0s old and no batch record lists it", "it carries no push's origin")
 }
 
 // A pending push's new slot deleted while its push may still commit: FI-6 finds an unknown outcome reclaimed.

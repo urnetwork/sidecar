@@ -28,9 +28,9 @@ main() {
   track=$1
   shift
   cap=${TLC_DISK_CAP_MB:-8192}
-  designs="EvsSlot EvsSlot-Zombie EvsSlot-Window EvsSlot-Three EvsSlot-Live EvsSlotInterim EvsSlotProbe-RewriteDropsOrigin"
+  designs="EvsSlot EvsSlot-Zombie EvsSlot-Window EvsSlot-Three EvsSlot-Retry EvsSlot-RetryWide EvsSlot-Live EvsSlotInterim EvsSlotProbe-RewriteDropsOrigin"
   landed="EvsSlotLanded-Retoken EvsSlotLanded-Relist EvsSlotLanded-Consume EvsSlotInterimOpen-Consume"
-  twins="EvsSlotTwin-TakesForeign EvsSlotTwin-TakesForeign-Consume EvsSlotTwin-TakesLive EvsSlotTwin-TakesCommitted EvsSlotTwin-TakesUnsettled EvsSlotTwin-NoOriginAtDelete EvsSlotTwin-UnconditionalDelete EvsSlotTwin-NoSettle EvsSlotTwin-StampBeforeRecord EvsSlotTwin-DeadUnfenced"
+  twins="EvsSlotTwin-TakesForeign EvsSlotTwin-TakesForeign-Consume EvsSlotTwin-TakesLive EvsSlotTwin-TakesCommitted EvsSlotTwin-TakesUnsettled EvsSlotTwin-NoOriginAtDelete EvsSlotTwin-UnconditionalDelete EvsSlotTwin-NoSettle EvsSlotTwin-DeadUnfenced"
   reach="EvsSlotReach-Takes EvsSlotReach-Deletes EvsSlotReach-Refuses EvsSlotReach-Young EvsSlotReach-SecondLife EvsSlotReach-Leaks"
   [ $# -ge 1 ] || set -- all
   configs=

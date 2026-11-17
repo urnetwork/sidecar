@@ -1021,7 +1021,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v41; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v42; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -1166,7 +1166,11 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # QD-151), adds ext-13, the pager service the owner picks (owner decision 498), and changes three rows: tls-1's
 # snapshot of the label and custom-host maps, read through tlsedge's restricted role; smtp-5's report intake in
 # mxedge's platform listener from M5; and evs-28's two booleans a drop job records for the observe report.
-# v41, updated 2026-11-16 for §20's items (owner decision 517 and the build's accepted fixes QD-090 and QD-094),
+# v41, updated 2026-11-16 for the owner's answer QD-996 (tls-m6-04-custom-spend-retention), keeps cert-1's Team
+# custom-domain spends 16 d, not 15, so a budget's replay paces a host's devices while the host's busy stretch is
+# under the retention less one window, through the tenth device: certs sees the times of orders, certificates and
+# failed authorizations of the last 16 days.
+# v42, updated 2026-11-16 for §20's items (owner decision 517 and the build's accepted fixes QD-090 and QD-094),
 # adds no row: api-13's Team overage rows with the transfer overage's two helper rows, and its lease tokens'
 # 15 min ttl beside a carved debit's 24 h; and connect-1's payer_network_id, which marks a relayed contract.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
@@ -1664,9 +1668,9 @@ tls-4:
 cert-1:
   service: certs (taskworker), api
   store: network_tls_cert, network_tls_account, network_tls_custom_spend, network_tls_name_backoff; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
-  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 15 days; per URnetwork-zone name and CA, its failure backoff (the count of consecutive failed authorizations since its last success there and the next allowed attempt time). Never the account key
+  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days; per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and next key's thumbprints (public) and the ids of the secret repos holding the key file; the lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last poll time; per custom host and registered domain the times of orders, certificates and failed authorizations of the last 16 days; per URnetwork-zone name and CA, its failure backoff (the count of consecutive failed authorizations since its last success there and the next allowed attempt time). Never the account key
   why: order, renew and revoke certificates for device-held keys (owner decision 39; §13.8)
-  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 15 d; poll times 7 d; a name's failure backoff until a success at its CA, or 8 d past its next allowed attempt
+  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss; the account row with its domain; spends 16 d; poll times 7 d; a name's failure backoff until a success at its CA, or 8 d past its next allowed attempt
   owner: §13.8
 cert-2:
   service: CAs (Let's Encrypt, GTS, ZeroSSL) and public CT logs
@@ -24621,7 +24625,7 @@ Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections th
 
 ## Appendix G. Server-visible metadata list
 
-§2.8 holds `metadata_list.yml` (v41, updated 2026-11-16 for §20's items), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 100 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-13; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
+§2.8 holds `metadata_list.yml` (v42, updated 2026-11-16 for §20's items), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 100 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-30, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-7, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-13; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
 
 ## Appendix H. Research sources
 

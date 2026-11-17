@@ -4,8 +4,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
+
+// DefaultSettle's tunables on now and delayed, as a caller builds one.
+func newTestSettle(now func() time.Time, delayed sidecar.BlobCluster) *Settle {
+	settle := DefaultSettle()
+	settle.Now = now
+	settle.Delayed = delayed
+	return settle
+}
 
 func newFakeTarget(t *testing.T) (*sidecartest.FakeBlobs, *Target) {
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
@@ -17,7 +26,7 @@ func newFakeTarget(t *testing.T) (*sidecartest.FakeBlobs, *Target) {
 	return store, &Target{
 		Cluster: cluster,
 		Now:     clock.Now,
-		Settle:  &Settle{Now: clock.Now, Delayed: cluster},
+		Settle:  newTestSettle(clock.Now, cluster),
 	}
 }
 
@@ -40,7 +49,28 @@ func TestFakeBlobsConformOnEveryCluster(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		Run(t, &Target{Cluster: cluster, Now: clock.Now, Settle: &Settle{Now: clock.Now, Delayed: cluster}})
+		Run(t, &Target{Cluster: cluster, Now: clock.Now, Settle: newTestSettle(clock.Now, cluster)})
+	}
+}
+
+// FakeBlobs judges a deadline by its own clock, which the suite reads from another (QD-892): with that
+// clock 100 ms behind the suite's, the most §19.6's clock rule lets two clocks differ, DefaultSettle's
+// late requests are still late to it, and it passes the settle cases.
+func TestFakeBlobsPassTheSettleCasesOnAClockBehindTheSuites(t *testing.T) {
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	store := sidecartest.NewFakeBlobs(clock, nil, nil, nil)
+	cluster, err := store.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	suiteNow := func() time.Time {
+		return clock.Now().Add(100 * time.Millisecond)
+	}
+	target := &Target{Cluster: cluster, Now: clock.Now, Settle: newTestSettle(suiteNow, cluster)}
+	for _, c := range settleCases() {
+		if err := c.run(t.Context(), target, &keySpace{prefix: "settle/" + c.name + "/"}); err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		}
 	}
 }
 
