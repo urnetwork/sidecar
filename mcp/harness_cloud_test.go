@@ -17,8 +17,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -34,8 +37,8 @@ import (
 // A key of the format's shape that admits nothing: test data, no real key.
 const testCloudKey = harnessCloudKeyPrefix + "aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-// The files of ur's own source that may read the environment, by path under the module. A new reader is added here
-// by the change that adds it, which is when someone looks at what it reads.
+// The files of ur's own source that may read the environment, by path in the development layout, where cli/ is under
+// the module. A new reader is added here by the change that adds it, which is when someone looks at what it reads.
 var testCloudEnvironmentReaders = []string{
 	"cli/cmd_connect_cloud.go",
 	"cli/commands.go",
@@ -47,27 +50,60 @@ var testCloudEnvironmentReaders = []string{
 	"state_dir.go",
 }
 
-// Every non-test Go file of ur's own packages under root, the module's: the root package, mcp and cli.
-func testCloudSourceFiles(t *testing.T, root string) []string {
-	t.Helper()
-	files := []string{}
-	for _, directory := range []string{".", "mcp", "cli"} {
-		entries, err := os.ReadDir(filepath.Join(root, directory))
+// A directory the release puts a tagged module in, such as v2026 (§4.9).
+var testCloudVersionDirectoryPattern = regexp.MustCompile(`^v[0-9]+$`)
+
+// The repository's top, which holds cli/, from root, the module's directory: root itself in development, and on a
+// version branch, where the release moves the root module into v2026/ and leaves cli, which it never tags, in place
+// (§4.9), the directory above it.
+func testCloudRepositoryTop(root string) (string, error) {
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	if testCloudVersionDirectoryPattern.MatchString(filepath.Base(absoluteRoot)) {
+		return filepath.Dir(absoluteRoot), nil
+	}
+	return absoluteRoot, nil
+}
+
+// Every non-test Go file of ur's own packages, the root package and mcp in root, the module's directory, and cli at
+// the repository's top, from its path in the development layout, as testCloudEnvironmentReaders names it, to where it
+// is read.
+func testCloudSourceFilePaths(root string) (map[string]string, error) {
+	top, err := testCloudRepositoryTop(root)
+	if err != nil {
+		return nil, err
+	}
+	packageDirectories := map[string]string{".": root, "mcp": filepath.Join(root, "mcp"), "cli": filepath.Join(top, "cli")}
+	sourceFilePaths := map[string]string{}
+	for packageName, directory := range packageDirectories {
+		entries, err := os.ReadDir(directory)
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		for _, entry := range entries {
 			name := entry.Name()
 			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 				continue
 			}
-			files = append(files, filepath.ToSlash(filepath.Join(directory, name)))
+			sourceFilePaths[path.Join(packageName, name)] = filepath.Join(directory, name)
 		}
 	}
-	if len(files) < 100 {
-		t.Fatalf("only %d source files under %s: the scan is not reading ur's source", len(files), root)
+	return sourceFilePaths, nil
+}
+
+// testCloudSourceFilePaths, failing a scan that reads too few files to be ur's source.
+func testCloudSourceFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	sourceFilePaths, err := testCloudSourceFilePaths(root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return files
+	if len(sourceFilePaths) < 100 {
+		t.Fatalf("only %d source files under %s: the scan is not reading ur's source", len(sourceFilePaths), root)
+	}
+	return sourceFilePaths
 }
 
 // CC4, and QD-041's rule: nothing reads a key from the agent's environment. An environment holding an auth key's
@@ -98,11 +134,11 @@ func TestNoKeyInAgentEnv(t *testing.T) {
 	}
 
 	// the source: every read of the environment in ur's own packages
-	root := ".."
+	sourceFilePaths := testCloudSourceFiles(t, "..")
 	readers := map[string]bool{}
 	fileSet := token.NewFileSet()
-	for _, file := range testCloudSourceFiles(t, root) {
-		parsed, err := parser.ParseFile(fileSet, filepath.Join(root, filepath.FromSlash(file)), nil, parser.SkipObjectResolution)
+	for _, file := range slices.Sorted(maps.Keys(sourceFilePaths)) {
+		parsed, err := parser.ParseFile(fileSet, sourceFilePaths[file], nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,6 +183,45 @@ func TestNoKeyInAgentEnv(t *testing.T) {
 	slices.Sort(found)
 	if !slices.Equal(found, testCloudEnvironmentReaders) {
 		t.Errorf("the files reading the environment:\n%s\nlisted:\n%s", strings.Join(found, "\n"), strings.Join(testCloudEnvironmentReaders, "\n"))
+	}
+}
+
+// The scan reads cli where each layout keeps it: under the module in development, and on a version branch at the
+// repository's top beside the module's v2026/ (§4.9), where the release's make check stopped at "open ../cli"
+// (QD-1003). Each file keeps its development name, as testCloudEnvironmentReaders gives it, and the repository's top,
+// beside which server is read, is the same directory in both.
+func TestCloudSourceFilesReadCliInEitherLayout(t *testing.T) {
+	write := func(filePath string) {
+		if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filePath, []byte("package planted\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, moduleDirectory := range []string{"sidecar", filepath.Join("sidecar", "v2026")} {
+		siblings := t.TempDir()
+		top := filepath.Join(siblings, "sidecar")
+		root := filepath.Join(siblings, moduleDirectory)
+		write(filepath.Join(root, "state_dir.go"))
+		write(filepath.Join(root, "state_dir_test.go"))
+		write(filepath.Join(root, "mcp", "restore_point.go"))
+		write(filepath.Join(top, "cli", "commands.go"))
+		sourceFilePaths, err := testCloudSourceFilePaths(root)
+		if err != nil {
+			t.Fatalf("%s: %v", moduleDirectory, err)
+		}
+		want := map[string]string{
+			"state_dir.go":         filepath.Join(root, "state_dir.go"),
+			"mcp/restore_point.go": filepath.Join(root, "mcp", "restore_point.go"),
+			"cli/commands.go":      filepath.Join(top, "cli", "commands.go"),
+		}
+		if !maps.Equal(sourceFilePaths, want) {
+			t.Errorf("%s: read %v, want %v", moduleDirectory, sourceFilePaths, want)
+		}
+		if got, err := testCloudRepositoryTop(root); err != nil || got != top {
+			t.Errorf("%s: the repository's top reads as %q, %v, want %q", moduleDirectory, got, err, top)
+		}
 	}
 }
 
@@ -396,9 +471,17 @@ func TestProjectCloudProfileRefusals(t *testing.T) {
 }
 
 // D-MCP-7: no URnetwork-hosted MCP serves sidecar tools, so server/mcp imports no sidecar package. The server
-// repository is this one's sibling in every checkout that builds both; where it is absent there is nothing to read.
+// repository is this one's sibling in every checkout that builds both, beside the repository's top, which on a version
+// branch is above the module's v2026/ (§4.9); where it is absent there is nothing to read.
 func TestServerMcpImportsNoSidecar(t *testing.T) {
-	directory := filepath.Join("..", "..", "server", "mcp")
+	top, err := testCloudRepositoryTop("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// this repository's path in either spelling, development's or the release's with its /vN, put together so the
+	// release's rewrite of quoted paths leaves it as it is
+	sidecarPath := "github.com/urnetwork/" + "sidecar"
+	directory := filepath.Join(filepath.Dir(top), "server", "mcp")
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		t.Skip("no server repository beside this one")
@@ -419,7 +502,7 @@ func TestServerMcpImportsNoSidecar(t *testing.T) {
 		read += 1
 		for _, spec := range parsed.Imports {
 			path, _ := strconv.Unquote(spec.Path.Value)
-			if path == "github.com/urnetwork/sidecar" || strings.HasPrefix(path, "github.com/urnetwork/sidecar/") {
+			if path == sidecarPath || strings.HasPrefix(path, sidecarPath+"/") {
 				t.Errorf("server/mcp/%s imports %s", entry.Name(), path)
 			}
 		}
