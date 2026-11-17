@@ -161,10 +161,10 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
        Unicode 17.0.0 pinned; trigram completeness: every substring of three or more normalized bytes of a document
        yields only trigrams in its set; one- and two-character CJK queries; codec, doc-table, tombstone-table, entry,
        slot and shard vectors in testdata/index/, byte-equal on every leg; canonical decoding) entries ride the
-       content push on file-mode refs and the companion push on git-mode refs and record streams; diff dependencies,
-       deletion masks, mask memory and cold downloads: FS-107 to FS-110; head files, seals, merges, roll-ups,
-       coverage, exclusions, erasure cuts and rewrites: FS-74 to FS-79, FS-111 and FS-112; remote search's
-       serving side: FS-83
+       content push on file-mode refs and the companion push on git-mode refs and record streams; full entries
+       (owner decision 584), deletion masks, mask memory and cold downloads: FS-107 to FS-110; head files, seals,
+       merges, roll-ups, coverage, exclusions, erasure cuts and rewrites: FS-74 to FS-79, FS-111 and FS-112;
+       remote search's serving side: FS-83
 §12   (validator; labels; compact denial; CNAME lint) both NS alike at one serial, a drained or failed interface
       dropped from *, @, every copy of *'s records and each mx on both; a key set failing self-check never serves;
       §12.5's label uniqueness; §12.8's verification gate
@@ -245,10 +245,10 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
 - **DNS feed, synthesis, validator; `dnssec_chain`:** no non-public or refused record; broken chains refused.
 - **HuJSON compiler; `BridgeEgressPolicy`:** equal the reference.
 - **Daemon hello, `.ur`, `ur hook` payloads, MCP arguments:** no secret echoed.
-- **Index files** (slots, large entries, bucket and all shards, doc and tombstone tables, manifests, settings, the lock): decoding total and memory-bounded; tampering fails AEAD or the plaintext hash before use; re-encoding reproduces the bytes; non-minimal VByte, unsorted or repeated keys and docids, an empty dictionary block or one past 64 keys, a pad past IndexFileHeader.body_length that is not all zero bytes (index_malformed), bitsets off their threshold, a key in both of a shard's tables and a tombstone in an all shard refused (FI-22); a current diff's chain that does not resolve leaves its document not yet searchable, never a miss, and a superseded diff's raises nothing.
-- **Normalizer and trigram extractor:** idempotent; output within a fixed multiple of input; invalid UTF-8 mapped by one rule; trigram sets equal to a reference extractor's written apart.
+- **Index files** (slots, large entries, bucket and all shards, doc and tombstone tables, manifests, settings, the lock): decoding total and memory-bounded; tampering fails AEAD or the plaintext hash before use; re-encoding reproduces the bytes; non-minimal VByte, unsorted or repeated keys and docids, an empty dictionary block or one past 64 keys, a pad past IndexFileHeader.body_length that is not all zero bytes (index_malformed), bitsets off their threshold, a key in both of a shard's tables, a tombstone in an all shard and an entry of the reserved kind 2 refused (FI-22; owner decision 584).
+- **Normalizer and trigram extractor:** idempotent; output within a fixed multiple of input; invalid UTF-8 mapped by one rule; trigram sets equal to a reference extractor's written apart; extractor 1, on messages and files, total, its fields within four times the input, the index's, the oracle's and the one-pass form's output equal on every input, and no attachment byte in a field.
 - **Search arguments and cursors** (`ur search` and `ur agents` flags, MCP search arguments, §16.10's parser, planner and cursor decoder): bounded postings touched; forged or foreign cursors refused; no panic; no secret echoed.
-- **`SearchRequest` and `SearchReply`** (pads, sizes, coverage, hits past their caps, unknown codes, repeated pages): decoding total and memory-bounded; the indexer answers a body off 4,016 B or with a non-zero pad as INVALID and a repeated page with its cursor's last reply; the phone refuses a reply off its steps × 16,384 B, drops hits and fields past their caps before the merge, and never reads an unknown status or served code as OK or served.
+- **`SearchRequest` and `SearchReply`** (pads, sizes, coverage, hits past their caps, unknown codes, repeated pages): decoding total and memory-bounded; the indexer answers a body off 4,016 B, with a non-zero pad or not its message's one encoding as INVALID and a repeated page with its cursor's last reply; the phone refuses a reply off its steps × 16,384 B, drops hits and fields past their caps before the merge, and never reads an unknown status or served code as OK or served.
 - **The remote-search merge**, against adversarial replies: it never adds a hit from a repo the request did not name or the requester does not read, never removes the phone's own confirmed hits, and collapses possible matches only inside the stated span (D-EVS-60).
 - **`directory.proto`'s card, repo file, notice, request, decision and erasure request decoders:** decoding total and memory-bounded; a version past its caps (a card's 16 items in 16,208 B, a 4 KiB repo file, a 256 B notice) is ignored with an alarm, never shown; signatures verify over the received bytes (FI-25).
 
@@ -854,17 +854,26 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             held or refused while no hold stands (weak fairness);
             IndexRollup.tla keeps one ref's head (its version, its index_epoch and the index files each version
             names), its erasure set, its current, previous and expired buckets, all, each writer's head and sealed
-            slots with their entries (full, a diff and its base, a tombstone), the roll-up lock with its expiry, and
-            each document's newest version and erasure state as variables, with two rollers (either may crash at any
-            step, lose its lock at expiry or have its push apply late by §19.6's request deadline), a merger that
-            reuses absorbed slots, a writer whose companion push, merge or backfill is built at any epoch and delayed
-            past any number of commits, a backfiller, an eraser whose CUT, ERASE and CLOSURE steps may each be its
-            last before a crash, and a finishing device as processes, and TLC checks I-EVS-11 to I-EVS-13 and
-            I-EVS-17, FI-18's result-set equality across a seal, merge, slot reuse and roll-up, FI-19 and FI-20
-            over three bucket lengths with 3 documents, one erased, one edited by diffs across a boundary, one deleted
-            while all holds its old row, that every current diff's chain resolves and no tombstoned version counts,
-            and that every expired bucket is rolled while a roller is live and every erasure whose CUT committed
-            finishes while a finishing device is live (weak fairness);
+            slots with their entries (full, a tombstone, and a diff with its base, as §11.14 had them before owner
+            decision 584), the roll-up lock with its expiry, and each document's newest version and erasure state as
+            variables, with two rollers (either may crash at any step, lose its lock at expiry or have its push
+            apply late by §19.6's request deadline), a merger that reuses absorbed slots, a writer whose companion
+            push, merge or backfill is built at any epoch and delayed past any number of commits, a backfiller, an
+            eraser whose CUT, ERASE and CLOSURE steps may each be its last before a crash, and a finishing device as
+            processes, and TLC checks I-EVS-11 to I-EVS-13 and I-EVS-17, FI-18's result-set equality across a seal,
+            merge, slot reuse and roll-up, FI-19 and FI-20 over three bucket lengths with 3 documents, one erased,
+            one edited by diffs across a boundary, one deleted while all holds its old row, that every current
+            diff's chain resolves and no tombstoned version counts, and that every expired bucket is rolled while a
+            roller is live and every erasure whose CUT committed finishes while a finishing device is live (weak
+            fairness);
+            details/IndexMerge.tla (DESIGN-DETAILS.md section 1, run by run-indexmerge.sh beside it) keeps one index
+            ref's writers' heads, sealed slots and large entries, merges, the roll-up under its lock and the journal
+            behind companion pushes and backfills, and TLC checks the head rule, merges that read no head, the
+            roll-up's promotion and the companion push's pin, with §11.14's rules as first written as failing
+            configurations; details/IndexErase.tla (section 15, run by run-indexerase.sh) checks an erasure's run
+            cards, their version by epoch, the CUT's fence and their second fold, with the rules as landed before
+            them as failing configurations; neither keeps the diff, base and re-entry configurations owner decision
+            584 retired;
             StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
             its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
             step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
@@ -978,8 +987,8 @@ FI-18  index results: for every scope, device and sync state, the candidates for
        no hit rests only on a masked older version; an uncovered document is searched from the device's own text where
        it holds it, else reported not yet searchable, never silently absent; a seal, merge, slot reuse or roll-up
        changes no search's result set, nor does a fresh cache once the purge has taken every replaced index version,
-       since every diff's chain and every tombstone a result needs stays in the committed index; a search's mask
-       state stays within its working set whatever the partitions hold (§11, §16, §18)
+       since every tombstone a result needs stays in the committed index and no entry rests on another (owner decision
+       584); a search's mask state stays within its working set whatever the partitions hold (§11, §16, §18)
 FI-19  index erasure: once the erasure of a document completes, no committed version of an index file that a current
        reader's keys open holds its postings or display fields; every stored version that held them shares a key its
        ERASEs destroyed (one key per index path in slot-keyed repos), its ciphertext purged under FI-16 or kept
@@ -990,17 +999,18 @@ FI-19  index erasure: once the erasure of a document completes, no committed ver
        a search or a cache (§11, §15, §16)
 FI-20  roll-up: each expired bucket of a ref is rolled into all by at most one committed roll-up, whose plaintext
        equals the deterministic merge of its inputs; the bucket's files leave the index only in the push that commits
-       all, or a newer bucket's shards, holding their postings (owner decision 385); a rerun after any crash converges
-       to that result; until it commits, searches merge the expired bucket (§11)
+       all, or for a promoted document a newer bucket's shards, holding their postings (owner decision 385); a rerun
+       after any crash converges to that result; until it commits, searches merge the expired bucket (§11)
 FI-21  search scope and taint: every hit is from a repo the caller's subject may read by §8's local evaluation and
        §8.5's consent, an EvsShare or audit reader having deposited, and evs having acknowledged, a read receipt
        naming each index object before decrypting it; no hit, snippet or display field comes from a secret, config or
        mailcfg repo; an untrusted hit returns as a text-free stub unless its text is asked for, and a result carrying
        any field from untrusted content returns only after the run's taint is fsynced (I-9); no query, hit or cursor
        leaves the device except a remote search's, sealed end to end to an indexer FI-24 allows (§16, §2)
-FI-22  determinism: every index object's plaintext is a function of its format version, normalization version and
-       inputs alone, byte-equal on every build leg; decoders accept only canonical encodings, so re-encoding what one
-       decoded reproduces its bytes; plaintext hashes are taken before encryption, and nothing is compressed (§11)
+FI-22  determinism: every index object's plaintext is a function of its format version, normalization version,
+       extractor version and inputs alone, byte-equal on every build leg; decoders accept only canonical encodings, so
+       re-encoding what one decoded reproduces its bytes; plaintext hashes are taken before encryption, and nothing is
+       compressed (§11)
 FI-23  fetch privacy: the index objects a search fetches, and their order, depend only on the device's sync state, its
        fetch rule and the results the user opens, never on the query; only a fetch's time shows that a search ran
        (§2.8, §11, §18)
@@ -1844,20 +1854,21 @@ FS-74  §11    two writers' pushes to one file-mode ref, each changing only its 
               in the current bucket, land at v+1 and v+2, both documents found; one sidecar's
               two concurrent pushes race on its head file: one commits, the other gets 409,
               and its index code merges its delta into the winner's file and retries, losing
-              and duplicating nothing, where a user's versionless file is never retried this
-              way; a seal, only at 16,208 B and never on idle, racing the writer's next
-              commit: the commit lands in the next slot or the seal reruns; two mergers of
-              one bucket's seals race: equal plaintext, one commits, the other's uploads
-              become orphans (§11.13); on a git-mode ref, a writer killed between its git
-              push and its companion index push: that commit's documents are searched from
-              local text where a device holds it, else reported not yet searchable, until a
-              companion push or a backfill covers them; a commit from a client that skips the
-              index, an old client or a phone, likewise until an indexer designated for
-              search, else the next capable writer, backfills it; a commit just past a bucket
-              boundary by its signed time writes its first slot in the new current bucket; a
-              push changing no document carries index_none and counts toward indexed_through,
-              and a host with the text that finds such a push changed a document raises
-              index_mismatch naming the signer and backfills it
+              and duplicating nothing, whether both append or one seals the head, where a
+              user's versionless file is never retried this way; a seal, only at 16,208 B and
+              never on idle, racing the writer's next commit: the commit lands in the next
+              slot or the seal reruns; two mergers of one bucket's seals race: equal
+              plaintext, one commits, the other's uploads become orphans (§11.13); on a
+              git-mode ref, a writer killed between its git push and its companion index push:
+              that commit's documents are searched from local text where a device holds it,
+              else reported not yet searchable, until a companion push or a backfill covers
+              them; a commit from a client that skips the index, an old client or a phone,
+              likewise until an indexer designated for search, else the next capable writer,
+              backfills it; a commit just past a bucket boundary by its signed time writes its
+              first slot in the new current bucket; a push changing no document carries
+              index_none and counts toward indexed_through, and a host with the text that
+              finds such a push changed a document raises index_mismatch naming the signer and
+              backfills it
 FS-75  §11    the indexer designated for search rolls an expired bucket and is killed at each  FI-18,19,20 T2+T3  M10-out
               barrier (the lock taken, the merge built, its uploads, its batch write, its head
               CAS with the response dropped, after the commit before the purge): each rerun
@@ -1881,31 +1892,34 @@ FS-75  §11    the indexer designated for search rolls an expired bucket and is 
               file current keys open; a roll-up built before an erasure's CUT gets 409
               INDEX_EPOCH at its push and reruns from step 1 without the listed documents; a
               window change applies from the next bucket (§11.14), every document staying
-              searchable
+              searchable; a roll-up carrying a tombstone or a version above an older entry in
+              a newer bucket writes it into that bucket's shards with its manifest, a merge of
+              that bucket racing it in both orders, one of the two getting 409; a roll-up
+              signed before its bucket's expiry is index_mismatch at every reproducer
 FS-76  §11,16 a generated corpus of mail and notes (ASCII, CJK, combining marks, NFKC and      FI-18,19,22 T2+T3  M10-out;
               case-folding edge cases, punctuation runs; MIME with base64, quoted-printable                       team record
-              and HTML parts) written over 200 days of fake clock by four writers, with edits,                    M6, mailbox
-              renames, deletions, re-creations and commits that skip the index; at every                          M7, holds
-              bucket boundary +- 1 s, every roll-up barrier and after each erasure, a query                       M5 (23.6)
-              set (words, five-letter prefixes, four-letter infixes, two-word phrases, one-
-              and two-character CJK, addresses with punctuation) runs on the buckets and on
-              buckets plus all, on a desktop and a phone, against SearchOracle: the desktop's
-              hits checked against its own text equal the oracle's; the phone's candidates
-              include every covered oracle hit and none resting only on a version hidden by
-              newest-version masking, a tombstone or the ERASE mask; an uncovered document is
-              found from the device's own text where it holds it, else reported not yet
-              searchable; buckets follow the commits' signed time, a reader 10 min skewed
-              computing the same ones, and instant coverage spans 30-60 days; a writer's delta
-              that omits a document or drops or adds trigrams, and a rebuild or roll-up whose
-              uploaded bytes differ from what its inputs give, are caught by hosts holding the
-              text (the indexer designated for search checking every repo it reads), which use
-              their own result and raise index_mismatch; in the team record, an entry past
-              searchable_days (90) is masked from every search at query time, all included,
-              and is still readable by id; scopes network and all merge repos as the oracle
-              does; erasing a document whose postings sit in an index file a hold kept from
-              before a REMOVE generation re-keyed its path, and one that a merge and a roll-up
-              moved after a hold's placement, leaves no stored version holding either under a
-              readable key
+              and HTML parts, and the conformance vectors' damaged messages) written over 200                     M6, mailbox
+              days of fake clock by four writers, with edits, renames, deletions, re-creations                    M7, holds
+              and commits that skip the index; at every bucket boundary +- 1 s, every roll-up                     M5 (23.6)
+              barrier and after each erasure, a query set (words, five-letter prefixes,
+              four-letter infixes, two-word phrases, one- and two-character CJK, addresses
+              with punctuation) runs on the buckets and on buckets plus all, on a desktop and
+              a phone, against SearchOracle: the desktop's hits checked against its own text
+              equal the oracle's; the phone's candidates include every covered oracle hit and
+              none resting only on a version hidden by newest-version masking, a tombstone or
+              the ERASE mask; an uncovered document is found from the device's own text where
+              it holds it, else reported not yet searchable; buckets follow the commits'
+              signed time, a reader 10 min skewed computing the same ones, and instant
+              coverage spans 30-60 days; a writer's delta that omits a document or drops or
+              adds trigrams, and a rebuild or roll-up whose uploaded bytes differ from what
+              its inputs give, are caught by hosts holding the text (the indexer designated
+              for search checking every repo it reads), which use their own result and raise
+              index_mismatch; in the team record, an entry past searchable_days (90) is masked
+              from every search at query time, all included, and is still readable by id;
+              scopes network and all merge repos as the oracle does; erasing a document whose
+              postings sit in an index file a hold kept from before a REMOVE generation
+              re-keyed its path, and one that a merge and a roll-up moved after a hold's
+              placement, leaves no stored version holding either under a readable key
 FS-77  §11,18 an ios32 and an Android surrogate cell and a page Worker, each holding the       FI-18,23    T2+T4  M10-out;
               buckets and not all: a search answers from the buckets at once; with no indexer                     app hosts
               designated, the default (owner decision 177), "search more" fetches every all                       M8 (23.6)
@@ -1969,10 +1983,10 @@ FS-79  §11    a repo admin turns the index on: one full build by a device holdi
               every index file, purged after the allowance, and searches answer index off; a
               format-1 repo's migration ends with its first build; config, mailcfg and secret
               repos hold no index, honest writers write none there and readers ignore a forged
-              one; content sniffed as binary, and chunks whose key set would pass 512 KiB, are
-              skipped, text past 1 MiB indexed by 1 MiB chunk, and a versionless file above
-              the network rule indexed only if text; a repo whose index is off takes no delta
-              from an honest writer
+              one; content sniffed as binary, and chunks whose key set would pass 512 KiB or
+              that alone would not fit a shard, are skipped, text past 1 MiB indexed by 1 MiB
+              chunk, and a versionless file above the network rule indexed only if text; a
+              repo whose index is off takes no delta from an honest writer
 FS-80  §16    a team network with its directory (owner decision 171) instead of a coordination FI-21,23    T2+T3  M10-out;
               log, the team record, two members' vaults and a mailbox; agents A, B and C claim                    team record
               tasks, run and hand off: ur agents and search_agents for a task's words return                      M6 (23.6)
@@ -2036,25 +2050,26 @@ FS-83  §11,18 remote search (owner decisions 175, 178), with the member's index
               own, and a new answering member asks again; sizes: every request body is 4,016
               B, filters past 768 B answered INVALID and searched locally with FallbackReason
               none, and every reply steps x 16,384 B in one frame sequence, for queries with
-              0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR_EXPIRED and UNSUPPORTED_VERSION,
-              and no Cancel is sent; connect: the pair's close reports follow C19's windows
-              in both directions whatever ran in them (FS-125), and a pair whose Hellos
-              carried no bit 1 reports its bytes exactly; evs: both devices' evs request logs
-              are identical with and without the remote search, the indexer issuing no read
-              at search time even with a hint pending; merge: against SearchOracle, the
-              merged list equals the oracle's verified set over SERVED_TEXT repos, a local
-              possible match inside the checked span that no page returned collapses, one
-              outside it or newer than the pinned version stays, an ERASE mid-cursor answers
-              CURSOR_EXPIRED and the erased document never shows; a fabricated hit is dropped
-              on open with search_alarm{mismatch}, and a display-field match the indexer
-              omits inside its span raises search_alarm{omission}; failover: the first own
-              indexer killed before and after page 0, the second answers; both killed, the
-              network indexer is never asked for the vault, which falls back to the download
-              under the metered rule; limits: a fifth concurrent search queues or is refused,
-              a requester past 30 requests a minute gets RESOURCE_EXHAUSTED, and 100
-              requesters at once never push local searches past §16.10's targets; logs: the
-              query canary is in no log, metric, trace, crash report or state file on either
-              device, and the served record names no query
+              0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR_EXPIRED, UNSUPPORTED_VERSION and a
+              two-step reply whose content sits on the 16,387 B gap, and no Cancel is sent;
+              connect: the pair's close reports follow C19's windows in both directions
+              whatever ran in them (FS-125), and a pair whose Hellos carried no bit 1 reports
+              its bytes exactly; evs: both devices' evs request logs are identical with and
+              without the remote search, the indexer issuing no read at search time even with
+              a hint pending; merge: against SearchOracle, the merged list equals the oracle's
+              verified set over SERVED_TEXT repos, a local possible match inside the checked
+              span that no page returned collapses, one outside it or newer than the pinned
+              version stays, an ERASE mid-cursor answers CURSOR_EXPIRED and the erased
+              document never shows; a fabricated hit is dropped on open with
+              search_alarm{mismatch}, and a display-field match the indexer omits inside its
+              span raises search_alarm{omission}; failover: the first own indexer killed
+              before and after page 0, the second answers; both killed, the network indexer is
+              never asked for the vault, which falls back to the download under the metered
+              rule; limits: a fifth concurrent search queues or is refused, a requester past
+              30 requests a minute gets RESOURCE_EXHAUSTED, and 100 requesters at once never
+              push local searches past §16.10's targets; logs: the query canary is in no log,
+              metric, trace, crash report or state file on either device, and the served
+              record names no query
 FS-84  §16,11 directory writers: a card signed or pushed by another sidecar, by a parked,      FI-25       T2     M6-out
               revoked, reaped or suspended one, with a seq not above the last or an auth pin                      (entries);
               out of range; a repo announcement by a non-admin, or for an owner-bound repo by                     later of
@@ -2422,23 +2437,20 @@ FS-106 §10,7  key upkeep under r (§7.9's read_only row, §10.6's scopes) throu
               its wraps, claims, Welcomes and any commit carrying a proposal (members
               refusing what gkm cannot see); an agent's epoch PUT is refused; a parked
               device's ReaderKey waits for its lift
-FS-107 §11    diff dependency (11.14's dependency, merges and chains rows), every cache        FI-18,22    T2+T3  M10-out
-              discarded before each search, the purge and evacuation run between: D created
-              and edited twice in one unsealed head, small (each full entry replacing the
-              last) and large (a large entry, then diffs composed onto it), then a fresh phone
-              holding only the current index searches an unchanged trigram and each added and
-              removed one; again with D's base in a sealed slot that a merge absorbs and the
-              writer then reuses, and with each edit by another writer; a merge based before a
-              composed diff's push and committing after it, a backfilled copy of D's previous
-              version sealed between, keeps the base the head names, and with the copy sealed
-              before the merge's base the writer's next edit, pushed before the merge commits
-              while its head holds its diff of that version, is full, and the merge keeps the
-              base the head names; a diff that another writer's full edit superseded raises
-              nothing once a merge drops its base; a DROP listing the base writes the kept
-              head full; an entry late into the previous or an expired bucket is full; a
-              forged diff whose base no file holds raises index_malformed and reads not yet
-              searchable until a host with the text re-enters it, never no match; no body is
-              fetched, and every search equals SearchOracle's
+FS-107 §11    full entries (11.14's dependency, merges and reads rows; owner decision 584),    FI-18,22    T2+T3  M10-out
+              every cache discarded before each search, the purge and evacuation run between:
+              D created and edited twice in one unsealed head (each full entry replacing the
+              last), then, the head sealed, edited again, small and large (a large entry, then
+              another replacing it), and a fresh phone holding only the current index searches
+              an unchanged trigram and each added and removed one; again after a merge absorbs
+              the slot holding D's older version and the writer reuses it, removing its
+              absorbed large entry at its next push, and with each edit by another writer; a
+              merge landing between an entry's build and its commit, and a backfilled copy of
+              D's version beside it: both read, one version found; the writer's two pushes on
+              one base, one appending and one sealing: one gets 409; a DROP listing D's older
+              version replaces the writer's head and leaves the kept version's entry where it
+              is; an entry of the reserved kind 2 is refused, its file index_malformed naming
+              the signer; no body is fetched, and every search equals SearchOracle's
 FS-108 §11    deletion masks (11.14's tombstones, merges and roll-up rows): D's old version    FI-18,20,22 T2+T3  M10-out
               rolled into all; D removed in the current bucket, its head sealed, merged into
               the bucket's shards and its slot reused, every replaced index version purged and
@@ -2449,10 +2461,13 @@ FS-108 §11    deletion masks (11.14's tombstones, merges and roll-up rows): D's
               document of the ref, a re-created ref's documents staying; two writers' clocks
               10 min apart at a bucket boundary leave a newer version, and then a tombstone,
               in the older bucket: searches mask the newer bucket's older entry, and the older
-              bucket's roll-up removes it, rewriting its file in place; a late companion entry
-              below an indexed version is dropped; every file passes the canonical decoder,
-              which refuses a tombstone table out of order, a key in both of a shard's tables
-              and a tombstone in an all shard; every search equals SearchOracle's
+              bucket's roll-up writes the tombstone into the newer bucket's shards, where it
+              masks that entry until that bucket rolls; a late companion entry whose document
+              its content ref holds removed or at a higher version is dropped at the pin, with
+              the tombstone's bucket already rolled up and nothing of the document left in the
+              index; every file passes the canonical decoder, which refuses a tombstone table
+              out of order, a key in both of a shard's tables and a tombstone in an all shard;
+              every search equals SearchOracle's
 FS-109 §11    mask memory (11.14's newest row; §5.9's version table): a ref with 500,000, then FI-18,23    T2+T4  M10-out;
               1,000,000, recent nonmatching file updates in its latest buckets and a retained                     app hosts
               expired one, and one all row that a newer nonmatching version masks; a fresh                        M8 (23.6)
@@ -2789,7 +2804,7 @@ Beyond the schedules:
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, at least one, and no other, a Worker no group of that device seated never being revoked in that act, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), the check `ur tun ip auto` waits for, and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
 - **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions 215, 216 and 491's on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions 197, 216), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
-- **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/ reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
+- **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/, its extraction (mail, files, the character-reference table, the charset labels) and search body sizes included, reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 
 ### 22.10 Internal review gates
 
@@ -2915,9 +2930,9 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 **D-TEST-13 (proposed).** Format 2's bytes freeze only when its drive-write cost, projected from §22.8's M2 price table (D-TEST-11) and the M10 `index` row's T3 operation counts, with the index on in every eligible repo, purges and staging on and each companion push charged to the content pushes it indexes, meets D-TEST-11's gate; after the freeze, while §19.11's `format2` gate holds format 2 to internal networks and design partners, production's write budget must show measured over priced drive bytes within 10%, and a larger ratio holds the gate there until §19.9's next cluster or a later format change restores the fit; runs with the index off attribute each increment. *Why:* owner decision 174, which buys no staging drives and accepts that a miss found after the freeze costs more clusters sooner (owner decision 145) or a format change; owner decision 140 binds format 2 too, and at owner decision 172's cadence §11.13's costs put a push, with the default-on index, at ~34-37 KiB at 2× year one on 1 KiB blocks but ~42-45 KiB on 4 KiB blocks, against the gate's 43.
 
-**D-TEST-14 (proposed).** Every search schedule checks its results against `SearchOracle` (22.4), which shares no index code: a desktop's text-verified hits equal its set, every device's candidates include its covered set, and each uncovered document is found from local text or reported not yet searchable; the index schedules also search from a fresh cache after the purge has taken every replaced index version. *Why:* completeness needs extraction, masking, coverage and roll-ups all correct, and an oracle sharing their code shares their bugs; a warm cache or an uncollected version can hide a lost diff base or tombstone.
+**D-TEST-14 (proposed).** Every search schedule checks its results against `SearchOracle` (22.4), which shares no index code: a desktop's text-verified hits equal its set, every device's candidates include its covered set, and each uncovered document is found from local text or reported not yet searchable; the index schedules also search from a fresh cache after the purge has taken every replaced index version. The oracle's extractor and the index's are held to one set of conformance vectors and to equality under a fuzz target, since on damaged mail two readings of the same rule are the likeliest way for the two to differ (DESIGN-DETAILS.md section 11). *Why:* completeness needs extraction, masking, coverage and roll-ups all correct, and an oracle sharing their code shares their bugs; a warm cache or an uncollected version can hide a lost tombstone.
 
-**D-TEST-15 (proposed).** testdata/index/ fixes vectors with plaintext hashes (normalization, trigram sets, deltas, head files, seals, merges, roll-ups, doc and tombstone tables, a merge keeping a head's base, a roll-up removing an older newer-bucket entry) that every test.sh reproduces byte for byte on every leg, js/wasm and gomobile included; decoders accept only canonical encodings; every leg builds with one Go toolchain, since x/text picks its Unicode 15.0.0 or 17.0.0 tables by toolchain (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, `//go:build !go1.27`; connect/go.mod:3 and sdk/go.mod:3, `go 1.27.4`), and the vectors check the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` and x/text's module version (`IndexFileHeader` field 14), and include examples of the 19,960 two-rune strings that v0.40.0's and v0.41.0's NFC compose wrongly under go1.27.3: the four Hebrew pairs (U+05D2 U+0307, U+05DA U+0307, U+FB32 U+0307, U+FB3A U+0307) and a supplementary letter, U+10044 U+0307, which v0.40.0 composes to U+1E0A (§4.7); v0.40.0, which connect/go.mod:33 requires, keys recomposition on runes clipped to 16 bits (.gomodcache/golang.org/x/text@v0.40.0/unicode/norm/forminfo.go:217; tables17.0.0.go:8070-8071 map 0x05D20307 to U+105C9 and 0x05DA0307 to U+105E4), while v0.43.0, which server/go.mod:59 requires, keys full runes (forminfo.go:217), and both report Unicode 17.0.0. *Why:* convergent roll-ups, local reproduction and the indexer's checks rest on determinism (FI-22), which map order, a toolchain or x/text's tables and code break silently.
+**D-TEST-15 (proposed).** testdata/index/ fixes vectors with plaintext hashes (normalization, extraction (mail, files, the character-reference table, the charset labels), trigram sets, head files, seals, merges, roll-ups, doc and tombstone tables, a roll-up promoting a carried entry into a newer bucket's shards, and search body sizes) that every test.sh reproduces byte for byte on every leg, js/wasm and gomobile included; decoders accept only canonical encodings; every leg builds with one Go toolchain, since x/text picks its Unicode 15.0.0 or 17.0.0 tables by toolchain (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, `//go:build !go1.27`; connect/go.mod:3 and sdk/go.mod:3, `go 1.27.4`), and the vectors check the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` and x/text's module version (`IndexFileHeader` field 14), and include examples of the 19,960 two-rune strings that v0.40.0's and v0.41.0's NFC compose wrongly under go1.27.3: the four Hebrew pairs (U+05D2 U+0307, U+05DA U+0307, U+FB32 U+0307, U+FB3A U+0307) and a supplementary letter, U+10044 U+0307, which v0.40.0 composes to U+1E0A (§4.7); v0.40.0, which connect/go.mod:33 requires, keys recomposition on runes clipped to 16 bits (.gomodcache/golang.org/x/text@v0.40.0/unicode/norm/forminfo.go:217; tables17.0.0.go:8070-8071 map 0x05D20307 to U+105C9 and 0x05DA0307 to U+105E4), while v0.43.0, which server/go.mod:59 requires, keys full runes (forminfo.go:217), and both report Unicode 17.0.0. *Why:* convergent roll-ups, local reproduction and the indexer's checks rest on determinism (FI-22), which map order, a toolchain or x/text's tables and code break silently.
 
 **D-TEST-16 (proposed).** Remote search is checked against `SearchOracle` as local search is, and its privacy by a relay capture: one frame-size sequence per kind whatever the query, results or post-parse failure, and equal evs request logs on both devices with and without it (FS-83, FI-24). Its stored accounting is checked by FS-125's sweep: a window's reports are the same for zero to five exchanges over every background within its allowance, both directions, across its contracts. *Why:* fixed sizes and evs's blindness are owner decision 175's whole privacy claim, and one optimization would break either silently: an early short reply, or a sync before answering. Owner decision 176's claim fails just as silently when a fixture's background sits far from a multiple of 128 KiB (meta review F18).
 

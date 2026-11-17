@@ -486,14 +486,18 @@ func TestReadAbsentPastAPagedOutRemovalVerifiesByTheWalk(t *testing.T) {
 		}
 		walked := verified.WalkedRemoval
 		if pin == removed {
-			if walked != nil {
-				t.Fatalf("pinned at the removal: a walked removal %+v", walked)
+			if walked != nil || verified.Floor != 0 {
+				t.Fatalf("pinned at the removal: a walked removal %+v, floor %d", walked, verified.Floor)
 			}
 			continue
 		}
 		if walked == nil || walked.CommitVersion != removed || !walked.ChangePath.Equal(path) || len(walked.Change.GetEntrySha256()) != 0 ||
 			!bytes.Equal(walked.Statement.Push.GetPushId(), removalId.Bytes()) {
 			t.Fatalf("pinned at %d: the walked removal %+v, not x.txt's at %d", pin, walked, removed)
+		}
+		// E1: the removal's statement, verified, names x.txt's token path in epoch 1
+		if verified.Floor != 1 {
+			t.Fatalf("pinned at %d: floor %d after the walked removal", pin, verified.Floor)
 		}
 	}
 	if alarms := reader.raised(); len(alarms) != 0 {

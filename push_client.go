@@ -118,9 +118,10 @@ func (self *PushClient) Reconcile(topic string, version uint64) {
 	self.feed.reconcile(topic, version)
 }
 
-// Asks for a versions refetch now: what the generation calls at each reconnect.
+// Asks for a versions refetch now: what the generation calls at each reconnect. A reconnect also ends a
+// failed refetch's pending retry wait at once (§6.8).
 func (self *PushClient) Resync() {
-	self.feed.resync()
+	self.feed.reconnect()
 }
 
 // The version applied for topic, 0 when none.

@@ -28,6 +28,15 @@
 //     row, one by default, so a late page costs one more refetch at most, and what the page answering
 //     that ask leaves, late again, waits for the next.
 //
+// The feed around the machine refetches versions at start, at each ask and hourly. A refetch that fails
+// waits out a backoff doubling from RetryMinInterval to RetryMaxInterval, and only a reconnect ends that
+// wait early: the connect generation's when its client connects again, or the long-poll's first
+// successful poll after a failure, a changed input connect's transport or the poll's own backoff already
+// paces. Every other ask (a seq gap, an abandoned run, an undecodable frame, a poll's incomplete reset)
+// is kept and served when the wait ends, so during an outage the asks fold into one request per backoff
+// step, and the wait after a reconnect's refetch fails again doubles from the one it ended (§6.8,
+// QD-906).
+//
 // Every version is a uint64 on every leg. What the machine applied is kept in the store, so a restart
 // neither re-fetches what it has nor forgets a durable floor.
 
@@ -61,7 +70,8 @@ type PushClientSettings struct {
 	// completes costs a bound: 65,536, past every repo and group a member reads. A run past it is
 	// abandoned for versions, and a topic past it is not tracked.
 	MaxTopicCount int
-	// The first wait after a versions refetch fails, doubling to the next: 1 s.
+	// The first wait after a versions refetch fails, doubling to the next: 1 s. Only a reconnect ends a
+	// wait early, and the wait after its refetch fails again doubles from the one it ended.
 	RetryMinInterval time.Duration
 	// The longest wait between failed refetches: 5 min.
 	RetryMaxInterval time.Duration
@@ -406,6 +416,16 @@ func storePushVersions(store SidecarStore, topicVersions map[string]uint64) erro
 // GET /sidecar/sync/versions, one page at a time: SidecarApi.SyncVersions, or a test's.
 type pushVersionsFunction func(ctx context.Context, cursor []byte) (*protocol.PollResponse, error)
 
+// The resyncs asked of a feed so far, counted by kind in one value, so the resync loop reads both at
+// once.
+type pushAsks struct {
+	// every ask, a reconnect included: its rise is what wakes the loop, since the value notifies only
+	// when it changes
+	askCount uint64
+	// the reconnects alone, the asks that end a failed refetch's retry wait
+	reconnectCount uint64
+}
+
 // The machine with what feeds it and what it tells: the subscribers, the store, the head_alarm sink
 // and the resync loop, on every leg. The resident's frames and the long-poll both feed one. Safe for
 // concurrent use; a subscriber's callback runs on the goroutine that fed the input, with no lock held.
@@ -424,9 +444,9 @@ type pushFeed struct {
 	// subscribers by exact topic, and by family prefix (gkm:, evs:)
 	topicSubscribers  map[string]map[*pushSubscriber]bool
 	familySubscribers map[string]map[*pushSubscriber]bool
-	// raised for every resync asked for, which run coalesces
-	resyncs *MonitorValue[uint64]
-	done    chan struct{}
+	// raised for every resync asked for, which run coalesces, its reconnects counted apart
+	asks *MonitorValue[pushAsks]
+	done chan struct{}
 }
 
 // One Subscribe.
@@ -454,7 +474,7 @@ func newPushFeed(ctx context.Context, settings *PushClientSettings, store Sideca
 		machine:           newPushMachine(settings, topicVersions),
 		topicSubscribers:  map[string]map[*pushSubscriber]bool{},
 		familySubscribers: map[string]map[*pushSubscriber]bool{},
-		resyncs:           NewMonitorValue[uint64](0),
+		asks:              NewMonitorValue(pushAsks{}),
 		done:              make(chan struct{}),
 	}
 	go self.run()
@@ -467,10 +487,24 @@ func (self *pushFeed) close() {
 	<-self.done
 }
 
-// Asks the loop for a versions refetch now: at reconnect, a gap, an abandoned run.
+// Asks the loop for a versions refetch: at a seq gap, an abandoned run, an undecodable frame or a poll's
+// incomplete reset. Asked while a failed refetch's retry wait runs, it is kept and served when the wait
+// ends.
 func (self *pushFeed) resync() {
-	self.resyncs.Update(func(count uint64) uint64 {
-		return count + 1
+	self.asks.Update(func(asks pushAsks) pushAsks {
+		asks.askCount += 1
+		return asks
+	})
+}
+
+// Asks the loop for a versions refetch at a reconnect, which, unlike resync, also ends a failed
+// refetch's retry wait at once (§6.8). The wait after its refetch fails again doubles from the one it
+// ended.
+func (self *pushFeed) reconnect() {
+	self.asks.Update(func(asks pushAsks) pushAsks {
+		asks.askCount += 1
+		asks.reconnectCount += 1
+		return asks
 	})
 }
 
@@ -689,17 +723,19 @@ func (self *pushFeed) refetchVersions() error {
 }
 
 // The resync loop: a versions refetch at start, at each resync asked for and each SyncRefetchInterval,
-// a failed one tried again after a wait that doubles from RetryMinInterval to RetryMaxInterval.
+// a failed one tried again after a wait that doubles from RetryMinInterval to RetryMaxInterval, which
+// only a reconnect ends early, as the file header says.
 func (self *pushFeed) run() {
 	defer close(self.done)
 	retryInterval := time.Duration(0)
 	for {
-		// read before the refetch, so a resync asked for while it runs is the next one
-		_, notify := self.resyncs.Get()
+		// read before the refetch, so an ask made while it runs is the next one
+		asks, notify := self.asks.Get()
 		if err := self.refetchVersions(); err != nil {
 			if self.ctx.Err() != nil {
 				return
 			}
+			// a wait a reconnect ended doubles too: only a success starts the backoff over
 			if retryInterval == 0 {
 				retryInterval = self.settings.RetryMinInterval
 			} else {
@@ -708,10 +744,19 @@ func (self *pushFeed) run() {
 			if self.log.V(1).Enabled() {
 				self.log.Infof("[push]versions refetch = %s\n", err)
 			}
-			select {
-			case <-self.ctx.Done():
-				return
-			case <-self.clock.After(retryInterval):
+			retry := self.clock.After(retryInterval)
+			// a reconnect asked since the refetch began ends the wait; any other ask is kept for its end
+			for waiting := true; waiting; {
+				select {
+				case <-self.ctx.Done():
+					return
+				case <-retry:
+					waiting = false
+				case <-notify:
+					var nextAsks pushAsks
+					nextAsks, notify = self.asks.Get()
+					waiting = nextAsks.reconnectCount == asks.reconnectCount
+				}
 			}
 			continue
 		}
