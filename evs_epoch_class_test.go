@@ -96,15 +96,23 @@ func (self *evsDueClassWorld) revokeGrant(device testConfigDevice) {
 	})
 }
 
-// The expiring agent's not_after passes, and an entry that shrinks nothing lands after it.
+// The expiring agent's not_after passes, and an entry that touches no row lands after it: an empty tick, as api's
+// ticks go on whether or not anything is due.
 func (self *evsDueClassWorld) expire() {
 	self.t.Helper()
 	fromTime := time.UnixMilli(self.net.timeMs)
-	self.net.wait(2 * 60 * 60 * 1000)
-	self.net.admitMemberDevice("bystander")
+	self.lapse()
+	if verdict := self.net.tick(&bridge.ApiTick{}); !verdict.Accepted() {
+		self.t.Fatalf("an empty tick: %v", verdict.Refusal)
+	}
 	if expired, err := GkmHolderExpired(self.net.log.State(), self.repoId, fromTime, time.UnixMilli(self.net.timeMs)); err != nil || !expired {
 		self.t.Fatalf("no holder expired: %v", err)
 	}
+}
+
+// Time passes the expiring agent's not_after, and no entry lands.
+func (self *evsDueClassWorld) lapse() {
+	self.net.wait(2 * 60 * 60 * 1000)
 }
 
 // One reader of the world's log as it stands now, and what it is.
@@ -168,6 +176,24 @@ func TestEvsDueClassFromTheLog(t *testing.T) {
 		{name: "an agent's revocation and an expiry", shrinks: true, span: func(world *evsDueClassWorld) {
 			world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
 			world.expire()
+		}},
+		{name: "a lapsed agent's revocation after a shrink kept t_s", shrinks: true, span: func(world *evsDueClassWorld) {
+			// QD-883's second comparison: dropped at t_s, the time of the second agent's revocation, not at its own
+			world.revoke(world.second, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+			world.lapse()
+			world.revoke(world.expiring, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+		}},
+		{name: "a lapsed agent's grant revoked where the base folded t_s", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
+			// the closed reading's shrink, which names no holder it dropped
+			world.lapse()
+			world.revokeGrant(world.expiring)
+		}},
+		{name: "an expiry and then a base", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
+			// the base's closed reading flags the lapsed holder (QD-883), and a base's shrink says no statement
+			world.expire()
+			if verdict := world.net.fold(world.net.owner, world.net.n, world.net.log.State().Base().GetConfigVersion()); !verdict.Accepted() {
+				world.t.Fatalf("the later base: %v", verdict.Refusal)
+			}
 		}},
 		{name: "the agent revoked for compromise", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
 			world.compromise(world.agent)
@@ -245,6 +271,43 @@ func TestEvsDueClassOfAPinTheViewCannotReachIsImmediate(t *testing.T) {
 
 	forked := &bridge.AuthPin{Version: later.GetVersion(), Chain: bytes.Repeat([]byte{0x5a}, sha256.Size)}
 	world.expectClass("an earlier pin on another chain", forked, true)
+}
+
+// Two later bases move every reader's window past both pins of a crossing: with nothing shrunk since the earlier pin,
+// every reader still classes it batched, by the pins' numbers as option 1 did; after an agent's ordinary revocation in
+// between, every reader reads it immediate, reaching neither pin's state. (An expiry before those bases would read
+// immediate too: each base's closed reading flags the lapsed holder, QD-883, which TestEvsDueClassFromTheLog shows.)
+func TestEvsDueClassOfPinsBeforeTheWindow(t *testing.T) {
+	cases := []struct {
+		name      string
+		span      func(world *evsDueClassWorld)
+		immediate bool
+	}{
+		{name: "an entry that shrinks nothing", span: func(world *evsDueClassWorld) {
+			world.net.admitMemberDevice("bystander")
+		}},
+		{name: "an agent's ordinary revocation", immediate: true, span: func(world *evsDueClassWorld) {
+			world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+		}},
+	}
+	for _, c := range cases {
+		world := newEvsDueClassWorld(t)
+		c.span(world)
+		to := world.net.log.Pin()
+		for range 2 {
+			if verdict := world.net.fold(world.net.owner, world.net.n, world.net.log.State().Base().GetConfigVersion()); !verdict.Accepted() {
+				t.Fatalf("%s: a later base: %v", c.name, verdict.Refusal)
+			}
+		}
+		for _, reader := range world.readers() {
+			if _, err := reader.state.StateAt(to); !errors.Is(err, ErrConfigPinNotRetained) {
+				t.Fatalf("%s: %s still reaches the later pin: %v", c.name, reader.name, err)
+			}
+			if immediate := EvsClassifyPathEpochDue(reader.state, world.repoId, world.from, to); immediate != c.immediate {
+				t.Errorf("%s at %s: immediate %t", c.name, reader.name, immediate)
+			}
+		}
+	}
 }
 
 // Each fail-closed branch of a shrink's class: no entry, a refused one, a base, a statement or a tick with nothing
