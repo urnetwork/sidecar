@@ -476,10 +476,10 @@ Waits on: the fix track ur-ticket-dialer-sidecar.
 ### QD-1013: How does sockets check a team member's Client-class token, which carries member_id and which the revocation record keeps no state for, with no SQL?
 *Decided by the owner on 2026-11-17, asked one question at a time; owner decision 561. Folds into §9 Abstract socket listeners and the scheduler.*
 
-The list and the test, which wait: §2.8's row for the revocation record's family gains member and user ids (I-18), and an FS case covers a membership's removal racing a projection. §2.8 holds no row for that family, `{rv_<network_id>_<k>}` (server/session/REVOKE-FINAL.md), so the words have no row to join; question `dr3-s7-s10-revocation-record-row.md` asks whether a design-records fold adds one. The FS case is the fix track's, and a §22.8 row for it, if it takes one, lands with sidecartest/fault's catalog, which holds §22.8's table row for row. The rest is folded (2026-11-17): the decision, §9.8's client tokens, §7.5's members and §19.10's Postgres row.
+The list and the test, which wait: §2.8's row for the revocation record's family gains member and user ids (I-18), and an FS case covers a membership's removal racing a projection. §2.8 holds no row for that family, `{rv_<network_id>_<k>}` (server/session/REVOKE-FINAL.md), so the words have no row to join. QD-1022 (owner, 2026-11-17; question `dr3-s7-s10-revocation-record-row.md`) has a design-records fold add one, api-16 or the next free api id, with its `planned` line, once the fix track revocation-record-members has settled the record's exact field forms: the fix track revocation-record-row, run in the design-records lane, that track's addition to a row that does not exist dropped. The FS case is the fix track's, and a §22.8 row for it, if it takes one, lands with sidecartest/fault's catalog, which holds §22.8's table row for row. The rest is folded (2026-11-17): the decision, §9.8's client tokens, §7.5's members and §19.10's Postgres row.
 
 Changes: §2.8; §22.8.
 
 Questions: `sock-client-verifier-member-credentials.md`, `dr3-s7-s10-revocation-record-row.md`.
 
-Waits on: the fix track revocation-record-members, and that question's answer.
+Waits on: the fix track revocation-record-members, then the fix track revocation-record-row (QD-1022).
