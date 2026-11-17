@@ -34,7 +34,8 @@
 //
 // The phone's leases name whole logs, so every push to a log wakes it, a capture's too: §18.7's per-client coalescing
 // and the vendors' caps bound the wakes, and a wake spent on another push still brings the phone to its resync, which
-// reads the requests that wait.
+// reads the requests that wait. QD-1009 keeps them whole until T4's wake counts show capture pushes spending a phone's
+// wake budget, when the vault gains a notice per pending request for phones to lease alone.
 //
 // Nothing here creates, derives or unwraps a key. Safe for concurrent use. On every leg but the ios_extension legs.
 
