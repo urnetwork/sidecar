@@ -1,11 +1,14 @@
-// Team's starting document (D-ACL-2, D-ACL-23, R-ACL-3; owner decisions 74, 179, 180; plan-ACL-team-grant1-src):
-// the first Owner's device saves it as the network's first document after team-create, so has_document holds from
-// then on. A Team narrows any rule, gives one two approvers or removes it, as its own document.
+// Team's starting document (D-ACL-2, D-ACL-23, R-ACL-3; owner decisions 74, 179, 180, 344; plan-ACL-team-grant1-src,
+// route-rows-via-team-grant1-via): the first Owner's device saves it as the network's first document after
+// team-create, so has_document holds from then on. A Team narrows any rule, gives one two approvers or removes it, as
+// its own document.
 {
   "tagOwners": { "tag:recurd": ["autogroup:member"] },
   "grants": [
-    // §8.5's grant 1: a member's own devices and apps reach each other
-    { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] },
+    // §8.5's grant 1: a member's own devices and apps reach each other, and route through each other to the prefixes
+    // their approved routes serve
+    { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "via": ["autogroup:self"],
+      "allow": ["dial", "route"] },
     // R-ACL-3's default: a recURd agent reaches its owner's or sponsor's devices on 443
     { "src": ["tag:recurd"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
   ],
@@ -16,9 +19,8 @@
       "approver": ["autogroup:dst-owner"], "evidence": ["device", "presence"], "maxExpiry": "30d" },
   ],
   "tests": [
-    // grant 1 names no via, so it routes through the advertisers of approved routes that name it alone (QD-764), and a
-    // new network files none: its own devices are what it dials
-    { "src": "autogroup:member", "accept": ["autogroup:self#dial"],
+    // a member dials its own devices and routes through them, and dials no other member's device or tagged one
+    { "src": "autogroup:member", "accept": ["autogroup:self#dial", "autogroup:self#route"],
       "deny": ["autogroup:member#dial", "autogroup:tagged#dial"] },
     { "src": "tag:recurd", "deny": ["autogroup:member#dial", "autogroup:tagged#dial"] },
   ],
