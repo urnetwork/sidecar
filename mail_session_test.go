@@ -247,11 +247,18 @@ type mailSessionTestSender struct {
 // A sender on a fresh stream from the edge, opened with metadata.
 func (self *mailSessionTestWorld) open(metadata []byte) *mailSessionTestSender {
 	self.t.Helper()
+	return self.openNaming(metadata, testMailReceiverServerName)
+}
+
+// A sender on a fresh stream from the edge, opened with metadata, whose ClientHello names serverName as its SNI, or
+// sends none when it is empty.
+func (self *mailSessionTestWorld) openNaming(metadata []byte, serverName string) *mailSessionTestSender {
+	self.t.Helper()
 	listenerEnd, senderEnd := newSocketStreamPipe(1024 * 1024)
 	ticket := &protocol.SocketTicket{DialerNetworkId: self.edgeNetworkId.Bytes(), Name: "smtp/25/mx"}
 	self.listener.conns <- newSocketConn(listenerEnd, &SocketAddr{}, &SocketAddr{}, ticket, metadata)
 	conn := tls.Client(newSocketConn(senderEnd, &SocketAddr{}, &SocketAddr{}, nil, nil), &tls.Config{
-		ServerName:         testMailReceiverServerName,
+		ServerName:         serverName,
 		InsecureSkipVerify: true,
 	})
 	if err := conn.HandshakeContext(self.ctx); err != nil {
@@ -483,6 +490,221 @@ func TestMailSessionRcptRefusals(t *testing.T) {
 	if message := sender.expect("RCPT TO:<"+testMailSessionCarol+">", 452); !strings.HasPrefix(message, "4.5.3") {
 		t.Errorf("a third repo: %s", message)
 	}
+}
+
+// The network's postmaster@, which §15.8 makes an alias of admin's mailbox: the full address of the bare form under the
+// test's SNI, mx.lbl0000001.root.example.
+const testMailSessionPostmaster = "postmaster@lbl0000001.root.example"
+
+// A session world whose mailcfg knows postmaster@ in each of zones, a repo for them all, and which keeps every address
+// Resolve is asked about; mutate changes its args further.
+func newMailSessionPostmasterTestWorld(t *testing.T, zones []string, mutate func(args *MailSessionArgs)) (*mailSessionTestWorld, func() []string) {
+	t.Helper()
+	resolvedLock := sync.Mutex{}
+	resolved := []string{}
+	world := newMailSessionTestWorld(t, func(args *MailSessionArgs) {
+		resolve := args.Resolve
+		args.Resolve = func(ctx context.Context, address string) (*MailSessionRecipient, error) {
+			func() {
+				resolvedLock.Lock()
+				defer resolvedLock.Unlock()
+				resolved = append(resolved, address)
+			}()
+			return resolve(ctx, address)
+		}
+		if mutate != nil {
+			mutate(args)
+		}
+	})
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		adminRepoId := NewId()
+		for _, zone := range zones {
+			address := "postmaster@" + zone
+			world.recipients[address] = &MailSessionRecipient{Known: true, Address: address, RepoId: adminRepoId}
+		}
+	}()
+	return world, func() []string {
+		resolvedLock.Lock()
+		defer resolvedLock.Unlock()
+		return slices.Clone(resolved)
+	}
+}
+
+// RFC 5321's bare RCPT TO:<Postmaster>, in any ASCII case, is postmaster at the domain of the MX host the sender
+// reached, its SNI less the host's first label (owner decision 446). A receiver serving several domains picks the one
+// the sender's SNI names: the network's zone for mx.<net>.<root>, an alias's for the alias's mx host and a scope's for
+// the scope's. Resolve is asked for that full address, the RCPT answered 250 and the deposit's trailer names it, as
+// when the sender writes the address whole, and the receiver's own zone is never asked for.
+func TestMailSessionTakesABarePostmasterAtTheDomainTheSenderReached(t *testing.T) {
+	for _, zone := range []string{"lbl0000001.root.example", "alias000001.root.example", "ops.lbl0000001.root.example"} {
+		postmaster := "postmaster@" + zone
+		world, resolved := newMailSessionPostmasterTestWorld(t, []string{zone}, func(args *MailSessionArgs) {
+			args.PostmasterDomain = func(ctx context.Context) (string, error) {
+				return "", errors.New("the receiver's own zone was asked for in a session with an SNI")
+			}
+		})
+		sender := world.openNaming(testMailSessionIngress(t), "mx."+zone)
+		sender.envelope("Postmaster", "postmaster", "POSTMASTER", postmaster)
+		codes, messages := sender.data(testMailSessionMessage("bare"))
+		if code := <-codes; code != 250 {
+			t.Fatalf("%s: reply %d %s", zone, code, <-messages)
+		}
+		want := []string{postmaster, postmaster, postmaster, postmaster}
+		if got := resolved(); !slices.Equal(got, want) {
+			t.Errorf("%s: Resolve was asked for %q", zone, got)
+		}
+		deposits := world.takenDeposits()
+		if len(deposits) != 1 || !slices.Equal(deposits[0].trailer.GetRecipients(), want) {
+			t.Fatalf("%s: deposits %+v", zone, deposits)
+		}
+	}
+}
+
+// The bare form counts against mail_inbound_recipients and mail_inbound_repos_per_message as the full address does:
+// with room for two recipients, one of each fills a transaction, after which either gets 452 4.5.3; with room for one
+// repo, after alice's either form of postmaster gets 452 4.5.3 for its repo.
+func TestMailSessionCountsABarePostmasterAsTheFullAddress(t *testing.T) {
+	full := "<" + testMailSessionPostmaster + ">"
+	world, _ := newMailSessionPostmasterTestWorld(t, []string{"lbl0000001.root.example"}, nil)
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.limits[mailLimitInboundRecipients] = 2
+	}()
+	sender := world.open(testMailSessionIngress(t))
+	sender.expect("EHLO mail.sender.example", 250)
+	for _, paths := range [][]string{{"<Postmaster>", full}, {full, "<Postmaster>"}} {
+		sender.expect("MAIL FROM:<bounce@sender.example>", 250)
+		for _, path := range paths {
+			sender.expect("RCPT TO:"+path, 250)
+		}
+		for _, path := range paths {
+			if message := sender.expect("RCPT TO:"+path, 452); !strings.HasPrefix(message, "4.5.3") {
+				t.Errorf("%s past the recipients: %s", path, message)
+			}
+		}
+		sender.expect("RSET", 250)
+	}
+
+	world, _ = newMailSessionPostmasterTestWorld(t, []string{"lbl0000001.root.example"}, nil)
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.limits[mailLimitInboundReposPerMessage] = 1
+	}()
+	sender = world.open(testMailSessionIngress(t))
+	sender.envelope(testMailSessionAlice)
+	for _, path := range []string{"<Postmaster>", full} {
+		if message := sender.expect("RCPT TO:"+path, 452); !strings.HasPrefix(message, "4.5.3") {
+			t.Errorf("%s past the repos: %s", path, message)
+		}
+	}
+}
+
+// Every other answer RCPT gives the full address, the bare form gets too: 550 5.1.1 while mailcfg knows no
+// postmaster@, 451 4.3.0 while mailcfg is not synced, and 452 4.2.2 for a full network.
+func TestMailSessionAnswersABarePostmasterAsTheFullAddress(t *testing.T) {
+	full := "<" + testMailSessionPostmaster + ">"
+	world, _ := newMailSessionPostmasterTestWorld(t, nil, nil)
+	sender := world.open(testMailSessionIngress(t))
+	sender.expect("EHLO mail.sender.example", 250)
+	sender.expect("MAIL FROM:<bounce@sender.example>", 250)
+	for _, path := range []string{"<Postmaster>", full} {
+		if message := sender.expect("RCPT TO:"+path, 550); !strings.HasPrefix(message, "5.1.1") {
+			t.Errorf("%s unknown: %s", path, message)
+		}
+	}
+
+	world, _ = newMailSessionPostmasterTestWorld(t, []string{"lbl0000001.root.example"}, nil)
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.resolveErr = ErrMailConfigNotSynced
+	}()
+	sender = world.open(testMailSessionIngress(t))
+	sender.expect("EHLO mail.sender.example", 250)
+	sender.expect("MAIL FROM:<bounce@sender.example>", 250)
+	for _, path := range []string{"<Postmaster>", full} {
+		if message := sender.expect("RCPT TO:"+path, 451); !strings.HasPrefix(message, "4.3.0") {
+			t.Errorf("%s not synced: %s", path, message)
+		}
+	}
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.resolveErr = nil
+		world.status = &MailNetworkStatus{Enabled: true, StorageFull: true}
+	}()
+	for _, path := range []string{"<Postmaster>", full} {
+		if message := sender.expect("RCPT TO:"+path, 452); !strings.HasPrefix(message, "4.2.2") {
+			t.Errorf("%s full: %s", path, message)
+		}
+	}
+}
+
+// With no SNI, as a direct-MX sender may send none, the bare form is postmaster at the receiver's own zone from
+// PostmasterDomain, its answer lowercased and its final dot dropped. An error there answers 451 4.3.0, as Resolve's
+// does, and an empty answer, or no PostmasterDomain at all, leaves the bare form unknown, 550 5.1.1, while the full
+// address is still taken.
+func TestMailSessionTakesABarePostmasterWithNoSniAtTheReceiversZone(t *testing.T) {
+	noSni, err := proto.Marshal(&protocol.MailIngress{
+		Version:    mailFormatVersion,
+		SenderIp:   []byte{192, 0, 2, 25},
+		SenderPort: 40000,
+		EhloName:   "mail.sender.example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		domain string
+		err    error
+	}
+	answerLock := sync.Mutex{}
+	current := answer{}
+	world, resolved := newMailSessionPostmasterTestWorld(t, []string{"lbl0000001.root.example"}, func(args *MailSessionArgs) {
+		args.PostmasterDomain = func(ctx context.Context) (string, error) {
+			answerLock.Lock()
+			defer answerLock.Unlock()
+			return current.domain, current.err
+		}
+	})
+	setAnswer := func(next answer) {
+		answerLock.Lock()
+		defer answerLock.Unlock()
+		current = next
+	}
+	sender := world.openNaming(noSni, "")
+	sender.expect("EHLO mail.sender.example", 250)
+	sender.expect("MAIL FROM:<bounce@sender.example>", 250)
+	setAnswer(answer{domain: "LBL0000001.Root.Example."})
+	sender.expect("RCPT TO:<Postmaster>", 250)
+	if got := resolved(); !slices.Equal(got, []string{testMailSessionPostmaster}) {
+		t.Errorf("Resolve was asked for %q", got)
+	}
+	setAnswer(answer{err: errors.New("the zone is not there to read")})
+	if message := sender.expect("RCPT TO:<Postmaster>", 451); !strings.HasPrefix(message, "4.3.0") {
+		t.Errorf("a zone not there to read: %s", message)
+	}
+	setAnswer(answer{})
+	if message := sender.expect("RCPT TO:<Postmaster>", 550); !strings.HasPrefix(message, "5.1.1") {
+		t.Errorf("no zone: %s", message)
+	}
+	sender.expect("RCPT TO:<"+testMailSessionPostmaster+">", 250)
+	if got := resolved(); !slices.Equal(got, []string{testMailSessionPostmaster, testMailSessionPostmaster}) {
+		t.Errorf("Resolve was asked for %q", got)
+	}
+
+	world, _ = newMailSessionPostmasterTestWorld(t, []string{"lbl0000001.root.example"}, nil)
+	sender = world.openNaming(noSni, "")
+	sender.expect("EHLO mail.sender.example", 250)
+	sender.expect("MAIL FROM:<bounce@sender.example>", 250)
+	if message := sender.expect("RCPT TO:<Postmaster>", 550); !strings.HasPrefix(message, "5.1.1") {
+		t.Errorf("no PostmasterDomain: %s", message)
+	}
+	sender.expect("RCPT TO:<"+testMailSessionPostmaster+">", 250)
 }
 
 // EHLO's answer: SIZE at the network's limit, 8BITMIME, SMTPUTF8, PIPELINING, CHUNKING, ENHANCEDSTATUSCODES and

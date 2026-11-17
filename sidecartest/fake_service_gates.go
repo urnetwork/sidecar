@@ -42,8 +42,8 @@ type fakeSwitchYaml struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// The keys of §19.11's file the gates read. p0_enforce, preview_networks and restore_hold are
-// server's own and are not read here.
+// The keys of §19.11's file the gates read. preview_networks and restore_hold are server's own and
+// are not read here.
 type fakeSidecarYaml struct {
 	Sidecar struct {
 		Evs               *fakeGateYaml   `yaml:"evs"`

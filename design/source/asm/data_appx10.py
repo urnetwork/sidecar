@@ -403,7 +403,7 @@ SERVICES = _replace(SERVICES, 'xops',
 
 # ------------------------------------------------------------------ Appendix E: connect changes (§4.6, verbatim)
 def connect_rows(t4):
-    """§4.6's C1-C19 rows as (id, change, disposition), cells verbatim, from 04-REPO.md's text."""
+    """§4.6's C1-C20 rows as (id, change, disposition), cells verbatim, from 04-REPO.md's text."""
     rows, on = [], False
     for l in t4.split('\n'):
         if l.startswith('### 4.6 '):
@@ -422,7 +422,7 @@ def connect_rows(t4):
 _T4 = _section(4)
 CONNECT = connect_rows(_T4)
 assert [r[0] for r in CONNECT] == ['C1', 'C2', 'C3', 'C4', 'C5', 'C6a', 'C6b', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12',
-                                   'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19'], [r[0] for r in CONNECT]
+                                   'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19', 'C20'], [r[0] for r in CONNECT]
 assert 'Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18) and 176 (C19), under D-REPO-5' in _T4, \
     "§4.6's lead changed: update INTRO['E_CONNECT']"
 

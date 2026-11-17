@@ -3,17 +3,18 @@
 This directory is the source distribution of `github.com/emersion/go-smtp
 v0.25.1` (module zip `h1:y6nzefT6PtFeMItFw97GX/ZCkVbh0rqSXG8b3ang8/w=`,
 fetched through proxy.golang.org and checked against Go's checksum database),
-except for the changes to `server.go` and `conn.go` below, the added
-`urnetwork_serve_conn_test.go`, `urnetwork_bdat_reset_test.go` and this file,
-and the removed upstream `.github/`, `.build.yml` and `.gitignore` (upstream's
-CI and repository settings). The upstream MIT license is kept in `LICENSE`. The module path
+except for the changes to `server.go`, `conn.go` and `parse.go` below, the
+added `urnetwork_serve_conn_test.go`, `urnetwork_bdat_reset_test.go`,
+`urnetwork_bare_postmaster_test.go` and this file, and the removed upstream
+`.github/`, `.build.yml` and `.gitignore` (upstream's CI and repository
+settings). The upstream MIT license is kept in `LICENSE`. The module path
 stays `github.com/emersion/go-smtp`, so a module replaces it here (QD-193,
 RESOLUTIONS.md's plan-MAIL-go-smtp-fork).
 
 v0.25.1 differs from v0.25.0, which DESIGN.md §15.3 read, only in the
 client's recipient list across LMTP transactions. The server is the same.
 
-## The change
+## The first change: ServeConn
 
 D-MAIL-3 needs a session on a connection whose STARTTLS exchange already
 happened elsewhere: mxedge answers the plaintext EHLO and STARTTLS, and the
@@ -73,6 +74,39 @@ at once. The race detector reports the field (MAIL-M7-14's receiver met it).
 `Close` is unchanged: `Server.Close` may call it while the connection's own
 goroutine waits on the same channel at a LAST.
 
+## The third change: RCPT's bare <Postmaster>
+
+RFC 5321 section 4.5.1 says a server that delivers mail MUST take the
+reserved mailbox postmaster as a case-insensitive local name, and that "the
+special case of `RCPT TO:<Postmaster>` (with no domain specification), MUST be
+supported"; section 4.1.1.3's grammar writes it as an alternative to RCPT's
+path. Upstream's path parser needs an `@` after the local part, so it answers
+`501 5.5.2` before a session sees the recipient (QD-921, owner decision 446).
+
+`parse.go` changes, each marked `URNETWORK`:
+
+- `parsePath`, which only RCPT calls, returns `postmaster` for a path that
+  begins `<Postmaster>`, matched without regard to ASCII case, and leaves what
+  follows the bracket for RCPT's parameters, as a path leaves it;
+- any other path goes to upstream's `parsePath`, renamed `parseMailboxPath`;
+- `parseReversePath` calls `parseMailboxPath`, so MAIL's reverse-path keeps
+  upstream's rules and `MAIL FROM:<Postmaster>` still answers 501.
+
+Only the bracketed name with nothing before its closing bracket matches:
+`<Postmaster@>`, `<Postmasters>`, `Postmaster` without brackets,
+`<"Postmaster">`, a source route before it and a name that folds to it only
+under Unicode keep upstream's 501. A session gets the bare form as
+`postmaster`, with no domain, and maps it to its own domain's postmaster
+before its recipient rules: the platform listener to `postmaster@<root>`
+(`sidecar/mxedgeservice/platform_session.go`), a receiver's session to
+postmaster at the domain it serves (`sidecar/mail_session.go`). Against
+upstream the parser never hands a session the bare form, so that mapping is
+never reached and the sender gets upstream's 501.
+
+The change is about ten lines and stands alone: it touches neither
+`ServeConn` nor the BDAT change, so it can be offered upstream by itself,
+which is an outward action for the owner.
+
 ## Tests
 
 `urnetwork_serve_conn_test.go`, run with `go test -run Urnetwork ./` in this
@@ -96,6 +130,14 @@ then a new transaction sent as one BDAT LAST, which must answer its own 250,
 with `Reset` never running beside a `Data` and no two `Data` at once. Upstream's
 `conn.go` fails it every run.
 
+`urnetwork_bare_postmaster_test.go`, the third change: `RCPT TO:<Postmaster>`,
+`<postmaster>` and `<POSTMASTER>` reach `Rcpt` as `postmaster`, and a full
+address keeps its case; parameters after the bare form's bracket are parsed
+as after any path; `<Postmaster@>`, `<Postmasters>`, `<other>` and the other
+paths above with no domain still answer 501; `MAIL FROM:<Postmaster>` still
+answers 501. Upstream's `parse.go` fails its two tests that take the bare
+form.
+
 Upstream's own tests run with `go test ./...` here and still pass.
 
 ## Who replaces it
@@ -110,5 +152,7 @@ root repeats one:
   level further up in the nested sdk modules.
 
 `sidecar/check`'s hygiene rule fails a module whose replace is missing or
-points elsewhere. If upstream takes the change, delete this directory, the
-replaces and the interface assertion in `mail_smtp_serve.go`.
+points elsewhere. Once upstream holds all three changes, delete this
+directory, the replaces and the interface assertion in `mail_smtp_serve.go`.
+The sessions' mapping of a bare postmaster stays, since upstream's parser then
+hands them the bare form.
