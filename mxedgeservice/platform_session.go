@@ -4,6 +4,10 @@
 //
 // A recipient is checked at RCPT: one the listener does not answer for gets 550 5.1.1, and with no
 // intake, or the mxedge gate closed, a recipient it does answer for gets 451 4.3.0, so nothing is read.
+// RFC 5321's bare RCPT TO:<Postmaster>, which go-smtp's fork hands Rcpt as postmaster alone
+// (sidecar.MailSmtpBarePostmaster), is taken as postmaster@<root> before any of that (owner decision
+// 446), so it is answered, counted against PlatformRecipientCount and handed to the intake exactly as
+// the full address is.
 // At DATA or BDAT the message is read into memory, up to PlatformMessageByteCount (552 5.3.4 past it)
 // and within the process's PlatformBufferByteCount (452 4.3.1), then handed to the intake once per
 // recipient. Any intake error answers 451 4.3.0 for the whole message, and the sender's retry repeats it
@@ -21,11 +25,9 @@ import (
 	"io"
 
 	"github.com/emersion/go-smtp"
-)
 
-// How much of a message one read takes, as the buffer grows. Not a bound: PlatformMessageByteCount and
-// PlatformBufferByteCount are.
-const mxPlatformReadByteCount = 64 * 1024
+	"github.com/urnetwork/sidecar"
+)
 
 // How a recipient was answered.
 const (
@@ -88,6 +90,9 @@ func (self *mxPlatformSession) Mail(from string, options *smtp.MailOptions) erro
 func (self *mxPlatformSession) Rcpt(to string, options *smtp.RcptOptions) error {
 	platform := self.platform
 	metrics := platform.service.metrics
+	if to == sidecar.MailSmtpBarePostmaster {
+		to = sidecar.MailSmtpBarePostmaster + "@" + platform.recipients.rootDomainName
+	}
 	recipient, ok := platform.recipients.take(to)
 	if !ok {
 		metrics.platformRecipients.Add(1, mxPlatformRecipientResultUnknown)
@@ -159,14 +164,16 @@ func (self *mxPlatformSession) Data(reader io.Reader) error {
 // cannot go on: too large, the process's buffers full, or a message that ended other than at its end.
 func (self *mxPlatformSession) read(reader io.Reader) (raw []byte, heldByteCount int64, result string) {
 	buffers := self.platform.buffers
-	messageByteCount := self.platform.service.settings.PlatformMessageByteCount
-	chunk := make([]byte, mxPlatformReadByteCount)
+	settings := self.platform.service.settings
+	messageByteCount := settings.PlatformMessageByteCount
+	readByteCount := settings.PlatformReadByteCount
+	chunk := make([]byte, readByteCount)
 	for {
 		byteCount, err := reader.Read(chunk)
 		if 0 < byteCount {
 			if cap(raw) < len(raw)+byteCount {
 				// at most the cap and one read past it, which go-smtp refuses before this sees more
-				grownCapacity := min(max(2*cap(raw), len(raw)+byteCount), messageByteCount+mxPlatformReadByteCount)
+				grownCapacity := min(max(2*cap(raw), len(raw)+byteCount), messageByteCount+readByteCount)
 				grownCapacity = max(grownCapacity, len(raw)+byteCount)
 				if !buffers.reserve(int64(grownCapacity - cap(raw))) {
 					return nil, heldByteCount, mxPlatformMessageResultBufferFull

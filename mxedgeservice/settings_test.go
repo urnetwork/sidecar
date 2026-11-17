@@ -81,6 +81,7 @@ platform_root: root.example
 platform_abuse_url: https://abuse.example/form
 platform_message_max_bytes: 1024
 platform_buffer_max_bytes: 4096
+platform_read_bytes: 512
 platform_recipients: 3
 platform_handshake_timeout: 7s
 platform_idle_timeout: 2m
@@ -144,6 +145,7 @@ listing_prefixes: 14
 		PlatformAbuseUrl:            "https://abuse.example/form",
 		PlatformMessageByteCount:    1024,
 		PlatformBufferByteCount:     4096,
+		PlatformReadByteCount:       512,
 		PlatformRecipientCount:      3,
 		PlatformHandshakeTimeout:    7 * time.Second,
 		PlatformIdleTimeout:         2 * time.Minute,
@@ -321,6 +323,7 @@ func TestValidateRefusesEveryNumberAtZero(t *testing.T) {
 		"record_batch":               func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordBatchCount = 0 },
 		"platform_message_max_bytes": func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformMessageByteCount = 0 },
 		"platform_buffer_max_bytes":  func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformBufferByteCount = 0 },
+		"platform_read_bytes":        func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformReadByteCount = 0 },
 		"platform_recipients":        func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformRecipientCount = 0 },
 		"platform_handshake_timeout": func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformHandshakeTimeout = 0 },
 		"platform_idle_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformIdleTimeout = 0 },
