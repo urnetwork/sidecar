@@ -471,19 +471,33 @@ func testConfigConfigRepoRows(t testing.TB, state *ConfigState) ([]*protocol.Acl
 	return configRows, repoIds
 }
 
-// Fails unless the config's holders_shrunk_at is shrunkAt at a reader's state: its rows hold no row of the config while
-// it is 0, else exactly AclRepo{repo_id, kind: config, holders_shrunk_at: shrunkAt}, which every repo the rows hold
-// before it sorts below and the one after it above; and the state's own row, of kind config with no admins, answers
-// the same.
-func testConfigExpectConfigShrunkAt(t testing.TB, label string, state *ConfigState, shrunkAt uint64) {
+// The config repo's t_s at a state of the net's log whose config holders_shrunk_at is shrunkAt: the time of the entry
+// there, or the Genesis's while it is 0, since no entry makes the config repo (QD-1015).
+func (self *testConfigNet) configShrunkTimeMs(shrunkAt uint64) int64 {
+	if shrunkAt == 0 {
+		return self.log.State().Genesis().GetTimeMs()
+	}
+	return self.statesAt[shrunkAt].TimeMs()
+}
+
+// Fails unless the config's holders_shrunk_at is shrunkAt at a reader's state of the net's log: its rows hold no row of
+// the config while it is 0, else exactly AclRepo{repo_id, kind: config, holders_shrunk_at: shrunkAt,
+// holders_shrunk_time_ms: the time of the entry at shrunkAt}, which every repo the rows hold before it sorts below and
+// the one after it above; the state's own row, of kind config with no admins, answers the same; and the state reads
+// the config's t_s as that time, or the Genesis's while shrunkAt is 0 (QD-1015).
+func (self *testConfigNet) expectConfigShrunkAt(label string, state *ConfigState, shrunkAt uint64) {
+	t := self.t
 	t.Helper()
 	configRepoId := Id(state.Genesis().GetConfigRepoId())
+	shrunkTimeMs := self.configShrunkTimeMs(shrunkAt)
 	configRows, repoIds := testConfigConfigRepoRows(t, state)
 	if shrunkAt == 0 && len(configRows) != 0 {
 		t.Errorf("%s: the rows hold the config's row before its first shrink: %v", label, configRows)
 	}
-	if want := (&protocol.AclRepo{RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: shrunkAt}); shrunkAt != 0 &&
-		(len(configRows) != 1 || !proto.Equal(configRows[0], want)) {
+	want := &protocol.AclRepo{
+		RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: shrunkAt, HoldersShrunkTimeMs: shrunkTimeMs,
+	}
+	if shrunkAt != 0 && (len(configRows) != 1 || !proto.Equal(configRows[0], want)) {
 		t.Errorf("%s: the rows' config rows %v, want %v", label, configRows, want)
 	}
 	if index := slices.Index(repoIds, configRepoId); 0 <= index {
@@ -497,6 +511,9 @@ func testConfigExpectConfigShrunkAt(t testing.TB, label string, state *ConfigSta
 	if row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || len(row.GetAdmins()) != 0 || row.GetHoldersShrunkAt() != shrunkAt ||
 		state.ShrunkAt(configRepoId) != shrunkAt {
 		t.Errorf("%s: the state's config row %v, want holders_shrunk_at %d", label, row, shrunkAt)
+	}
+	if shrinkTime, held := state.shrinkTime(configRepoId); !held || shrinkTime.UnixMilli() != shrunkTimeMs {
+		t.Errorf("%s: the config's t_s %d, want %d", label, shrinkTime.UnixMilli(), shrunkTimeMs)
 	}
 }
 
@@ -524,7 +541,7 @@ func TestTheConfigsRowJoinsTheRowsAtItsFirstShrink(t *testing.T) {
 	a, b := net.admitMemberDevice("a"), net.admitMemberDevice("b")
 	state := net.log.State()
 	aclBytes := bytes.Clone(state.Rows().GetAcl())
-	testConfigExpectConfigShrunkAt(t, "before any shrink", state, 0)
+	net.expectConfigShrunkAt("before any shrink", state, 0)
 	if !bytes.Equal(state.Rows().GetAcl(), aclBytes) {
 		t.Error("the state adding the config's row changed the rows")
 	}
@@ -532,19 +549,19 @@ func TestTheConfigsRowJoinsTheRowsAtItsFirstShrink(t *testing.T) {
 	if !bytes.Equal(net.log.State().Rows().GetAcl(), aclBytes) {
 		t.Error("an admission, which shrinks nothing, changed the acl rows")
 	}
-	testConfigExpectConfigShrunkAt(t, "an admission", net.log.State(), 0)
+	net.expectConfigShrunkAt("an admission", net.log.State(), 0)
 
 	first := net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(a, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
-	testConfigExpectConfigShrunkAt(t, "the first revocation", net.log.State(), first.Pin.GetVersion())
+	net.expectConfigShrunkAt("the first revocation", net.log.State(), first.Pin.GetVersion())
 	if _, repoIds := testConfigConfigRepoRows(t, net.log.State()); !slices.Equal(repoIds, []Id{below, configRepoId, above}) {
 		t.Errorf("the rows' repos %v, want the config's between %s and %s", repoIds, below, above)
 	}
 	net.admitMemberDevice("d")
-	testConfigExpectConfigShrunkAt(t, "an admission after it", net.log.State(), first.Pin.GetVersion())
+	net.expectConfigShrunkAt("an admission after it", net.log.State(), first.Pin.GetVersion())
 	second := net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(b, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
-	testConfigExpectConfigShrunkAt(t, "the second revocation", net.log.State(), second.Pin.GetVersion())
+	net.expectConfigShrunkAt("the second revocation", net.log.State(), second.Pin.GetVersion())
 	for i, reader := range net.everyReaderAndApi() {
-		testConfigExpectConfigShrunkAt(t, fmt.Sprintf("reader %d", i), reader.State(), second.Pin.GetVersion())
+		net.expectConfigShrunkAt(fmt.Sprintf("reader %d", i), reader.State(), second.Pin.GetVersion())
 	}
 	net.everyReaderAgrees()
 }
@@ -600,13 +617,13 @@ func TestEachShrinkOfTheConfigsHoldersPutsItsRowInTheRows(t *testing.T) {
 		shrunk := c.shrink(net, tagId)
 		n := shrunk.Pin.GetVersion()
 		before := net.statesAt[n-1]
-		testConfigExpectConfigShrunkAt(t, c.name+", before it", before, 0)
+		net.expectConfigShrunkAt(c.name+", before it", before, 0)
 		at := time.UnixMilli(net.timeMs)
 		dropped, err := GkmHoldersDropped(before, net.log.State(), configRepoId, at)
 		if err != nil || len(dropped) == 0 {
 			t.Errorf("%s: no holder of the config left: %v", c.name, err)
 		}
-		testConfigExpectConfigShrunkAt(t, c.name, net.log.State(), n)
+		net.expectConfigShrunkAt(c.name, net.log.State(), n)
 		net.everyReaderAgrees()
 	}
 }
@@ -707,7 +724,7 @@ func TestABaseCarriesTheConfigsRowToEveryReader(t *testing.T) {
 	everyReaderHolds := func(label string) {
 		t.Helper()
 		for i, reader := range net.everyReaderAndApi() {
-			testConfigExpectConfigShrunkAt(t, fmt.Sprintf("%s, reader %d", label, i), reader.State(), revoked.Pin.GetVersion())
+			net.expectConfigShrunkAt(fmt.Sprintf("%s, reader %d", label, i), reader.State(), revoked.Pin.GetVersion())
 		}
 	}
 
@@ -733,7 +750,10 @@ func TestABaseCarriesTheConfigsRowToEveryReader(t *testing.T) {
 	if err := proto.Unmarshal(rowsBytes, rows); err != nil || proto.Unmarshal(rows.GetAcl(), acl) != nil {
 		t.Fatalf("the base's rows: %v", err)
 	}
-	want := &protocol.AclRepo{RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: revoked.Pin.GetVersion()}
+	want := &protocol.AclRepo{
+		RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: revoked.Pin.GetVersion(),
+		HoldersShrunkTimeMs: net.configShrunkTimeMs(revoked.Pin.GetVersion()),
+	}
 	if !slices.ContainsFunc(acl.GetRepos(), func(repo *protocol.AclRepo) bool { return proto.Equal(repo, want) }) {
 		t.Errorf("the base's own rows hold no %v: %v", want, acl.GetRepos())
 	}
@@ -778,7 +798,7 @@ func TestABaseWhoseOwnChangeShrinksTheConfigNamesIt(t *testing.T) {
 		t.Fatalf("the base names %x, want the config repo alone", shrunkRepoIds)
 	}
 	for i, reader := range net.everyReaderAndApi() {
-		testConfigExpectConfigShrunkAt(t, fmt.Sprintf("reader %d", i), reader.State(), shrinking.Pin.GetVersion())
+		net.expectConfigShrunkAt(fmt.Sprintf("reader %d", i), reader.State(), shrinking.Pin.GetVersion())
 	}
 	net.everyReaderAgrees()
 }

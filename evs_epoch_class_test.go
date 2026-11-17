@@ -145,9 +145,11 @@ func (self *evsDueClassWorld) expectClass(label string, from *bridge.AuthPin, im
 	}
 }
 
-// Each span after the base, classed alike by every reader: an agent's ordinary removals and an expiry alone batched;
-// a compromise of the same agent, a member device's removal and a member's removal immediate; one of each immediate;
-// and, while a base's rows carry no t_s (QD-1015), an expiry and then an entry that touches the rows immediate.
+// Each span after the base, classed alike by every reader: an agent's ordinary removals and an expiry alone batched,
+// and so are an expiry followed by an entry that touches the rows or by a later base, which shrink nothing at the
+// repo's t_s, its making, which the base folded and the repo's row carries (QD-1015), and a lapsed agent's grant revoked
+// after the base, which drops that agent at t_s; a compromise of the same agent, a member device's removal and a
+// member's removal immediate; one of each immediate.
 func TestEvsDueClassFromTheLog(t *testing.T) {
 	cases := []struct {
 		name string
@@ -175,11 +177,10 @@ func TestEvsDueClassFromTheLog(t *testing.T) {
 		{name: "an expiry alone", span: func(world *evsDueClassWorld) {
 			world.expire()
 		}},
-		{name: "an expiry and then an entry that touches the rows", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
-			// the shrink row's interim closed reading (QD-883), the base having folded the repo's t_s: the first entry
-			// after the lapse that touches the rows shrinks the repo, here a member's admission, which no statement the
-			// class names explains, so every reader fails closed; QD-1015's exact comparison at t_s restores
-			// shrinks: false here, and the batched class of an expiry alone
+		{name: "an expiry and then an entry that touches the rows", span: func(world *evsDueClassWorld) {
+			// QD-883's second comparison at t_s, the repo's making, which the base folded and the repo's row carries
+			// (QD-1015): a member's admission after the lapse drops none of the repo's holders there or at its own
+			// time, so it shrinks nothing, and the crossing reads as an expiry alone
 			world.expire()
 			world.net.admitMemberDevice("bystander")
 		}},
@@ -193,13 +194,15 @@ func TestEvsDueClassFromTheLog(t *testing.T) {
 			world.lapse()
 			world.revoke(world.expiring, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
 		}},
-		{name: "a lapsed agent's grant revoked where the base folded t_s", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
-			// the closed reading's shrink, which names no holder it dropped
+		{name: "a lapsed agent's grant revoked where the base folded t_s", shrinks: true, span: func(world *evsDueClassWorld) {
+			// QD-883's second comparison at t_s, the repo's making, which the base folded and the repo's row carries
+			// (QD-1015): the revoke drops the lapsed agent there, an agent, as an agent's grant revoked does
 			world.lapse()
 			world.revokeGrant(world.expiring)
 		}},
-		{name: "an expiry and then a base", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
-			// the base's closed reading flags the lapsed holder (QD-883), and a base's shrink says no statement
+		{name: "an expiry and then a base", span: func(world *evsDueClassWorld) {
+			// a base drops no lapsed holder's row, and at t_s, the repo's making that its row carries (QD-1015), the
+			// base's holders are its tip's, so its own change shrinks nothing and the crossing reads as an expiry alone
 			world.expire()
 			if verdict := world.net.fold(world.net.owner, world.net.n, world.net.log.State().Base().GetConfigVersion()); !verdict.Accepted() {
 				world.t.Fatalf("the later base: %v", verdict.Refusal)
@@ -284,10 +287,9 @@ func TestEvsDueClassOfAShrinkTheViewCannotReachIsImmediate(t *testing.T) {
 }
 
 // Two later bases move every reader's window past both pins of a crossing: with nothing shrunk since the earlier pin,
-// every reader still classes it batched, by the pins' numbers as option 1 did; after an agent's ordinary revocation in
-// between, every reader reads it immediate, reaching neither state around the shrink. (An expiry before those bases
-// would read immediate too: each base's closed reading flags the lapsed holder, QD-883, which TestEvsDueClassFromTheLog
-// shows.)
+// every reader still classes it batched, by the pins' numbers as option 1 did, an expiry before those bases among
+// them, since neither base shrinks the repo at the t_s its row carries (QD-1015); after an agent's ordinary
+// revocation in between, every reader reads it immediate, reaching neither state around the shrink.
 func TestEvsDueClassOfPinsBeforeTheWindow(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -296,6 +298,9 @@ func TestEvsDueClassOfPinsBeforeTheWindow(t *testing.T) {
 	}{
 		{name: "an entry that shrinks nothing", span: func(world *evsDueClassWorld) {
 			world.net.admitMemberDevice("bystander")
+		}},
+		{name: "an expiry", span: func(world *evsDueClassWorld) {
+			world.expire()
 		}},
 		{name: "an agent's ordinary revocation", immediate: true, span: func(world *evsDueClassWorld) {
 			world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)

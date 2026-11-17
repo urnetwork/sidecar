@@ -21,6 +21,10 @@
 //	             nothing (D-PHASE-9; DESIGN-DETAILS 16.2.3)
 //	consented    an owner-bound repo's owner's devices consented at its RepoCreate, and each its owner's
 //	             OwnerConfirm adds; a device consented any other way between bases waits for the next base's compile
+//	shrunk time  RepoCreate's entry time_ms as holders_shrunk_time_ms, the repo's t_s while holders_shrunk_at is 0,
+//	             which §7.9's shrink row compares its holders at (QD-883); TEAM's configSetShrunkAt writes both
+//	             fields at each shrink after, and bases carry them, so a verifier that starts at a base reads the
+//	             time however old the making is (QD-1015)
 //
 // FoldAclRepos is one pure fold, which ApplyStatement runs per entry and a writer's compile may run over the
 // statements a base folds; it judges nothing, so it takes only statements that took effect, each with its verdict.
@@ -92,6 +96,8 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 				RepoId: bytes.Clone(body.GetRepoId()),
 				Kind:   body.GetKind(),
 				Admins: []*protocol.AclRepoAdminRow{{SidecarId: signer, Signer: signer, At: at}},
+				// the making is the repo's t_s until its first shrink (QD-1015)
+				HoldersShrunkTimeMs: statement.TimeMs,
 			}
 			if aclRepoKindOwnerBound(body.GetKind()) {
 				repo.OwnerMemberId = verdict.MemberId.Bytes()
