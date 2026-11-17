@@ -7,8 +7,9 @@
 //
 //	wait     60 s, the readers' allowance, on this process's clock, which must stay sure from the certainty to each
 //	         DELETE: a clock unsure at any point, or a candidate not reached within 10 min, is left to the sweep
-//	gates    nothing deletes while §19.11's purge mode is observe, which logs each candidate, nor on a cluster whose
-//	         build has not passed §19.6's settle cases (SettlePassed)
+//	gates    nothing deletes while §19.11's purge mode is observe, which logs each candidate and counts its ids in
+//	         urnetwork_evs_versionless_observed_total (QD-855), nor on a cluster whose build has not passed §19.6's
+//	         settle cases (SettlePassed)
 //	reread   X's newest version from the cluster (PurgeNewestReader) and the network's hold/ objects, cached at most
 //	         5 s and read again before each DELETE: a candidate the newest version names stays, and a hold covering
 //	         the repo keeps each candidate that existed at its placement, an uploaded segment or a slot by its
@@ -46,13 +47,23 @@ import (
 // §11.13's floor, which no setting passes: the readers' allowance.
 const evsPurgeMinAllowance = 60 * time.Second
 
-// The series the purge exports, with no network or repo label (D-OPS-8; §19.8's versionless row).
+// The series the purge exports, with no network or repo label (D-OPS-8; §19.8's versionless row), the observed one
+// with the sweep (QD-855).
 const (
 	versionlessPurgedBytesMetricName = "urnetwork_evs_versionless_purged_bytes_total"
 	versionlessPurgeQueueMetricName  = "urnetwork_evs_versionless_purge_queue"
+	versionlessObservedMetricName    = "urnetwork_evs_versionless_observed_total"
 	versionlessPurgedByCommit        = "commit"
 	versionlessPurgedBySweep         = "sweep"
 )
+
+// urnetwork_evs_versionless_observed_total, which the purge and the sweep each declare alike (QD-855): the candidate
+// ids each keeps under §19.11's purge: observe, so an id the purge kept and evacuation's sweep kept again counts
+// twice, and a marked list, which names no ids, counts one. It rises only while observe keeps content, and §19.8's
+// turn-on row reads a rise that no turn_on pass followed as `sidecarctl evs purge-turn-on` not run. No label.
+func newVersionlessObservedCounter(metrics sidecar.Metrics) sidecar.MetricsCounter {
+	return metrics.Counter(versionlessObservedMetricName, "Replaced versionless candidate ids purge: observe kept, counted by the purge and the sweep alike; a marked list counts one.")
+}
 
 // Settings that break §11.13's floors.
 var ErrPurgerSettings = errors.New("evs purger settings invalid")
@@ -209,8 +220,9 @@ type Purger struct {
 	blobs      sidecar.BlobStore
 	priceTable *PriceTable
 
-	purgedCounter sidecar.MetricsCounter
-	queueGauge    sidecar.MetricsGauge
+	purgedCounter   sidecar.MetricsCounter
+	queueGauge      sidecar.MetricsGauge
+	observedCounter sidecar.MetricsCounter
 
 	stateLock sync.Mutex
 	queue     []*purgeItem
@@ -285,6 +297,7 @@ func newPurger(ctx context.Context, host *sidecar.ServiceHost, deps *PurgerDeps)
 	if host.Metrics != nil {
 		self.purgedCounter = host.Metrics.Counter(versionlessPurgedBytesMetricName, "Replaced versionless content deleted, stored bytes, by who deleted it.", "by")
 		self.queueGauge = host.Metrics.Gauge(versionlessPurgeQueueMetricName, "Purge candidate ids this process holds in memory.")
+		self.observedCounter = newVersionlessObservedCounter(host.Metrics)
 	}
 	return self, nil
 }
@@ -486,12 +499,16 @@ func (self *Purger) purgeItem(item *purgeItem) int {
 		return leftAll("the clock unsure")
 	}
 	if self.format2.PurgeMode() != sidecar.Format2On {
-		// D-TEST-12's observe mode: each candidate logged, nothing deleted; the turn-on pass deletes what it kept
+		// D-TEST-12's observe mode: each candidate logged, nothing deleted; the turn-on pass deletes what it kept, and
+		// §19.8's turn-on row reads the count (QD-855)
 		for _, candidate := range commit.List.GetCandidates() {
 			self.log.Infof("[evs] purge observe: %s version %d leaves %d segments, %d staged, %d slots", refKey,
 				candidate.GetReplacedVersion(), len(candidate.GetSegmentIds()), len(candidate.GetStagedSegmentIds()), len(candidate.GetSlotIds()))
 		}
 		self.count(func(stats *PurgeStats) { stats.ObservedCount += item.idCount })
+		if self.observedCounter != nil {
+			self.observedCounter.Add(float64(item.idCount))
+		}
 		return 0
 	}
 	cluster, err := self.blobs.Cluster(commit.ClusterId)
