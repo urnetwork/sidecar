@@ -352,7 +352,7 @@ Changes: §23.8; §22; §7.17; §9.15; §11.20; §17.16.
 
 Questions: `g0-density-rule-direction.md`.
 
-Not folded (2026-11-16): turning the design's accidental restatements into citations (the stored-bytes rule in §11.13 and §20.7, the Delegation key-drop triggers stated in about twelve places, and the like), an editorial pass across most sections that no item names line by line, due before M2's Gn-in. The rest is folded as owner decision 551: §23.8's clause, and the four Interfaces test lists (§7.17's, §9.15's, §11.20's and §17.16's), which §22 already held and which now cite it.
+Not folded (2026-11-17): the rest of the pass turning the design's accidental restatements into citations, an editorial pass across most sections that no item names line by line, due before M2's Gn-in. Its first piece is folded (design/source/README.md, "Validation after QD-274's citation pass"): the rules stated in three or more sections, the Delegation key drops and the stored-bytes rule among them. The rest is folded as owner decision 551: §23.8's clause, and the four Interfaces test lists (§7.17's, §9.15's, §11.20's and §17.16's), which §22 already held and which now cite it.
 
 <a id="s0"></a>
 ## No section named
