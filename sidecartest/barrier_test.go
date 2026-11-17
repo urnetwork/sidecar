@@ -627,48 +627,56 @@ func TestABlockedActorKeepsTheBatonShortOfTheReadingsItTakes(t *testing.T) {
 	awaitEnded(t, writerA)
 }
 
+// A dump reads back to each goroutine's id, state, top function and creator. Its frames and the wanted functions name
+// this package from one value, since the release's rewrite of quoted paths (§4.9) reaches a path that opens a string
+// and not one inside it, and versions both or neither so (QD-1003); and the dump reads alike under the release's
+// spelling of the path.
 func TestParseGoroutineDump(t *testing.T) {
-	dump := strings.Join([]string{
-		"goroutine 41 [running]:",
-		"github.com/urnetwork/sidecar/sidecartest.dumpGoroutines(0x100000)",
-		"\t/src/sidecartest/barrier_stall.go:68 +0x34",
-		"created by testing.(*T).Run in goroutine 1",
-		"\t/go/src/testing/testing.go:2101 +0x3a8",
-		"",
-		"goroutine 1 [chan receive, 3 minutes]:",
-		"testing.(*T).Run(0x14000102a80, {0x1029d2f4b, 0x2a}, 0x102b5d2c0)",
-		"\t/go/src/testing/testing.go:2102 +0x3c4",
-		"",
-		"goroutine 57 gp=0x14000503dc0 m=nil [select, locked to thread] {actor: writerA, \"a key\": \"[x]:\"}:",
-		"github.com/urnetwork/sidecar/sidecartest.(*BarrierDriver).awaitBaton(0x140001a2000, 0x14000196000)",
-		"\t/src/sidecartest/barrier.go:590 +0x1a0",
-		"created by github.com/urnetwork/sidecar/sidecartest.(*BarrierDriver).Start in goroutine 41",
-		"\t/src/sidecartest/barrier.go:652 +0x2c0",
-		"",
-		"goroutine 58 [IO wait]:",
-		"internal/poll.runtime_pollWait(0x1034c8a00, 0x72)",
-		"\t/go/src/runtime/netpoll.go:351 +0xa0",
-		"created by net/http.(*Server).Serve in goroutine 57",
-		"\t/go/src/net/http/server.go:3454 +0x3d8",
-		"",
-		"goroutine 59 [sync.Mutex.Lock (scan)]:",
-		"sync.(*Mutex).Lock(...)",
-		"",
-	}, "\n")
-	states := parseGoroutineDump([]byte(dump))
-	got := []string{}
-	for _, state := range states {
-		got = append(got, fmt.Sprintf("%d|%s|%s|%d", state.id, state.state, state.function, state.creatorId))
-	}
-	want := []string{
-		"41|running|github.com/urnetwork/sidecar/sidecartest.dumpGoroutines|1",
-		"1|chan receive|testing.(*T).Run|0",
-		"57|select|github.com/urnetwork/sidecar/sidecartest.(*BarrierDriver).awaitBaton|41",
-		"58|IO wait|internal/poll.runtime_pollWait|57",
-		"59|sync.Mutex.Lock (scan)|sync.(*Mutex).Lock|0",
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("states %q", got)
+	packagePath := "github.com/urnetwork/sidecar/sidecartest"
+	releasePackagePath := "github.com/urnetwork/sidecar/v2026/sidecartest"
+	for _, framePath := range []string{packagePath, releasePackagePath} {
+		dump := strings.Join([]string{
+			"goroutine 41 [running]:",
+			framePath + ".dumpGoroutines(0x100000)",
+			"\t/src/sidecartest/barrier_stall.go:68 +0x34",
+			"created by testing.(*T).Run in goroutine 1",
+			"\t/go/src/testing/testing.go:2101 +0x3a8",
+			"",
+			"goroutine 1 [chan receive, 3 minutes]:",
+			"testing.(*T).Run(0x14000102a80, {0x1029d2f4b, 0x2a}, 0x102b5d2c0)",
+			"\t/go/src/testing/testing.go:2102 +0x3c4",
+			"",
+			"goroutine 57 gp=0x14000503dc0 m=nil [select, locked to thread] {actor: writerA, \"a key\": \"[x]:\"}:",
+			framePath + ".(*BarrierDriver).awaitBaton(0x140001a2000, 0x14000196000)",
+			"\t/src/sidecartest/barrier.go:590 +0x1a0",
+			"created by " + framePath + ".(*BarrierDriver).Start in goroutine 41",
+			"\t/src/sidecartest/barrier.go:652 +0x2c0",
+			"",
+			"goroutine 58 [IO wait]:",
+			"internal/poll.runtime_pollWait(0x1034c8a00, 0x72)",
+			"\t/go/src/runtime/netpoll.go:351 +0xa0",
+			"created by net/http.(*Server).Serve in goroutine 57",
+			"\t/go/src/net/http/server.go:3454 +0x3d8",
+			"",
+			"goroutine 59 [sync.Mutex.Lock (scan)]:",
+			"sync.(*Mutex).Lock(...)",
+			"",
+		}, "\n")
+		states := parseGoroutineDump([]byte(dump))
+		got := []string{}
+		for _, state := range states {
+			got = append(got, fmt.Sprintf("%d|%s|%s|%d", state.id, state.state, state.function, state.creatorId))
+		}
+		want := []string{
+			"41|running|" + framePath + ".dumpGoroutines|1",
+			"1|chan receive|testing.(*T).Run|0",
+			"57|select|" + framePath + ".(*BarrierDriver).awaitBaton|41",
+			"58|IO wait|internal/poll.runtime_pollWait|57",
+			"59|sync.Mutex.Lock (scan)|sync.(*Mutex).Lock|0",
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: states %q", framePath, got)
+		}
 	}
 }
 

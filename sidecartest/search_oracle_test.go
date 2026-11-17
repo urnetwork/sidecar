@@ -729,7 +729,11 @@ func searchOracleIndexFindings(t *testing.T, sources map[string][]byte, indexNam
 		case !strings.Contains(strings.Split(path, "/")[0], "."):
 			// the standard library
 			return true
-		case path == "github.com/urnetwork/sidecar", path == "github.com/urnetwork/sidecar/protocol",
+		// one path a line: the release's rewrite versions the root's exact path first, and then skips a
+		// line holding /vN, which would leave a subpackage beside it in its development spelling
+		// (QD-1003)
+		case path == "github.com/urnetwork/sidecar",
+			path == "github.com/urnetwork/sidecar/protocol",
 			path == "github.com/urnetwork/sidecar/protocol/bridge":
 			return true
 		case strings.HasPrefix(path, "golang.org/x/text/"):

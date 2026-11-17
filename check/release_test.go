@@ -33,18 +33,21 @@ const releaseSuffix = "/v2026"
 var releaseDocumentPattern = regexp.MustCompile(`^(design|research_notes|third_party|DESIGN.*|HANDOFF\.md|FEEDBACK-SYSTEM\.md)$`)
 
 // The go_mod_fork steps, in the order §4.9 gives them, on connect, glog and operator-core as earlier
-// release steps leave them and on this repository: every module's quoted paths rewritten, smtpproof's
-// before the root's and coretest's before operator-core's, each tree moved into v2026/ beside its
-// nested modules, and the relative replaces rebased. connect, glog and operator-core keep a local
-// replace here, where a release has their tags in a proxy. QD-193's forks stay at the top, so a moved
-// module's replace of one climbs out of its version directory, and cli's and mlsinterop's stand.
+// release steps leave them and on this repository: every module's quoted paths rewritten in run.sh's
+// order, smtpproof's before the root's and coretest's before operator-core's, each module's exact
+// pass before its subpackage pass, and the nested modules' own passes after (releaseRewriteRepository);
+// each tree moved into v2026/ beside its nested modules, and the relative replaces rebased. connect,
+// glog and operator-core keep a local replace here, where a release has their tags in a proxy.
+// QD-193's forks stay at the top, so a moved module's replace of one climbs out of its version
+// directory, and cli's and mlsinterop's stand.
 func (self *fixture) toRelease() {
 	self.t.Helper()
 	top := filepath.Join(self.directory, "sidecar")
 	smtpproofPath := sidecarBasePath + "/smtpproof"
 	version := "@v2026.11.6"
 
-	rewrite := func(directory string, modulePaths ...string) {
+	// each .go file and Makefile below directory through edit, which takes the file's slash path from it
+	rewrite := func(directory string, edit func(relativePath string, content string) string) {
 		err := filepath.WalkDir(directory, func(walkPath string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil || entry.IsDir() {
 				return walkErr
@@ -56,20 +59,33 @@ func (self *fixture) toRelease() {
 			if err != nil {
 				return err
 			}
-			content := string(data)
-			for _, modulePath := range modulePaths {
-				content = releaseRewritePath(content, modulePath, releaseSuffix)
+			relativePath, err := filepath.Rel(directory, walkPath)
+			if err != nil {
+				return err
 			}
-			return os.WriteFile(walkPath, []byte(content), 0o600)
+			return os.WriteFile(walkPath, []byte(edit(filepath.ToSlash(relativePath), string(data))), 0o600)
 		})
 		if err != nil {
 			self.t.Fatal(err)
 		}
 	}
-	rewrite(filepath.Join(self.directory, "glog"), glogBasePath)
-	rewrite(filepath.Join(self.directory, "connect"), connectBasePath, glogBasePath)
-	rewrite(filepath.Join(self.directory, "operator-core"), operatorCoreTestBasePath, operatorCoreBasePath, connectBasePath, glogBasePath)
-	rewrite(top, smtpproofPath, sidecarBasePath, connectBasePath, glogBasePath, operatorCoreTestBasePath, operatorCoreBasePath)
+	// the siblings' release edits, each module's exact pass then its subpackage pass, in run.sh's order
+	rewrite(filepath.Join(self.directory, "glog"), func(relativePath string, content string) string {
+		return releaseRewritePath(content, glogBasePath, releaseSuffix)
+	})
+	rewrite(filepath.Join(self.directory, "connect"), func(relativePath string, content string) string {
+		return releaseRewritePath(releaseRewritePath(content, connectBasePath, releaseSuffix), glogBasePath, releaseSuffix)
+	})
+	rewrite(filepath.Join(self.directory, "operator-core"), func(relativePath string, content string) string {
+		content = releaseRewriteSubpackages(content, operatorCoreTestBasePath, releaseSuffix)
+		for _, modulePath := range []string{operatorCoreBasePath, connectBasePath, glogBasePath} {
+			content = releaseRewritePath(content, modulePath, releaseSuffix)
+		}
+		return content
+	})
+	rewrite(top, func(relativePath string, content string) string {
+		return releaseRewriteRepository(content, relativePath, releaseSuffix)
+	})
 
 	// moves a tree into v2026/, leaving what holds its own go.mod where it is, and the documents. As
 	// go_mod_fork_prepare's zsh `for f in *` does, a dotfile stays, so a checkout's .git keeps its place.
