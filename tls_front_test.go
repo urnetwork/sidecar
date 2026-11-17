@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -36,12 +37,28 @@ const (
 const tlsFrontTestGuard = 10 * time.Second
 
 // A clock a test moves by hand: timers fire as advance passes them, on advance's goroutine.
+//
+// Each look of runUpdates reads the clock first and arms the timer for the next name's margin last, from that reading,
+// after the update it sends, if any. A move in between finds no timer of the loop's, and the loop then arms it from
+// the moved clock, a whole distance past the margin (QD-1002), so a test moves the clock to a time the loop waits for
+// with advanceToLoopTimer, which waits until the loop has armed that timer. The fixture's custom source notes each look
+// the loop begins (look), and the loop arms at most one timer a look, so the one armed since the latest look is the
+// one it waits on. Earlier looks' timers stay armed, since the loop stops none, and fire on channels it no longer
+// reads; and a look that sends nothing, as the second of two wakes for one change makes, arms one too.
 type tlsFrontTestClock struct {
 	stateLock sync.Mutex
 	now       time.Time
 	timers    []*tlsFrontTestTimer
+	// the latest timer's seq
+	timerSeq uint64
+	// timerSeq when runUpdates began its latest look
+	lookTimerSeq uint64
 	// closed and replaced as a timer is armed
 	changed chan struct{}
+
+	// called each time advanceToLoopTimer finds the loop's timer not armed yet and waits, on the goroutine moving the
+	// clock, which sets it; nil for none
+	loopTimerWaiting func()
 }
 
 // One armed timer.
@@ -50,6 +67,8 @@ type tlsFrontTestTimer struct {
 	timeout  time.Duration
 	function func()
 	done     bool
+	// where it comes in the order timers were armed in, from 1
+	seq uint64
 }
 
 var _ Clock = (*tlsFrontTestClock)(nil)
@@ -87,7 +106,8 @@ func (self *tlsFrontTestClock) AfterFunc(timeout time.Duration, function func())
 	timer := func() *tlsFrontTestTimer {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		timer := &tlsFrontTestTimer{at: self.now.Add(timeout), timeout: timeout, function: function}
+		self.timerSeq += 1
+		timer := &tlsFrontTestTimer{at: self.now.Add(timeout), timeout: timeout, function: function, seq: self.timerSeq}
 		self.timers = append(self.timers, timer)
 		close(self.changed)
 		self.changed = make(chan struct{})
@@ -109,24 +129,106 @@ func (self *tlsFrontTestClock) advance(by time.Duration) {
 	due := func() []*tlsFrontTestTimer {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.now = self.now.Add(by)
-		due := []*tlsFrontTestTimer{}
-		live := []*tlsFrontTestTimer{}
-		for _, timer := range self.timers {
-			switch {
-			case timer.done:
-			case !self.now.Before(timer.at):
-				timer.done = true
-				due = append(due, timer)
-			default:
-				live = append(live, timer)
-			}
-		}
-		self.timers = live
-		return due
+		return self.moveWithLock(by)
 	}()
 	for _, timer := range due {
 		timer.function()
+	}
+}
+
+// Moves the clock by by and takes out every timer it passes, for the caller to run once the lock is released.
+func (self *tlsFrontTestClock) moveWithLock(by time.Duration) []*tlsFrontTestTimer {
+	self.now = self.now.Add(by)
+	due := []*tlsFrontTestTimer{}
+	live := []*tlsFrontTestTimer{}
+	for _, timer := range self.timers {
+		switch {
+		case timer.done:
+		case !self.now.Before(timer.at):
+			timer.done = true
+			due = append(due, timer)
+		default:
+			live = append(live, timer)
+		}
+	}
+	self.timers = live
+	return due
+}
+
+// Notes that runUpdates began a look, before the loop reads the clock for it.
+func (self *tlsFrontTestClock) look() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.lookTimerSeq = self.timerSeq
+}
+
+// The live timers armed since runUpdates' latest look, in the order they were armed: the loop's, once it has armed
+// it, and any that other parts of the front armed meanwhile.
+func (self *tlsFrontTestClock) loopTimersWithLock() []*tlsFrontTestTimer {
+	timers := []*tlsFrontTestTimer{}
+	for _, timer := range self.timers {
+		if !timer.done && self.lookTimerSeq < timer.seq {
+			timers = append(timers, timer)
+		}
+	}
+	return timers
+}
+
+// Waits until runUpdates has armed a timer since its latest look, and answers when it is due, for a test whose front
+// arms no other timer meanwhile.
+func (self *tlsFrontTestClock) waitLoopTimer(t *testing.T) time.Time {
+	t.Helper()
+	for {
+		at, armed, changed := func() (time.Time, bool, chan struct{}) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if timers := self.loopTimersWithLock(); 0 < len(timers) {
+				return timers[0].at, true, nil
+			}
+			return time.Time{}, false, self.changed
+		}()
+		if armed {
+			return at
+		}
+		select {
+		case <-changed:
+		case <-time.After(tlsFrontTestGuard):
+			t.Fatal("runUpdates armed no timer since its latest look")
+		}
+	}
+}
+
+// Moves the clock to at, running every timer it passes, once runUpdates has armed a timer due at at since its latest
+// look. The check and the move are one hold of the lock, and a look takes the lock before the loop reads the clock, so
+// a look begun after the check reads the moved clock, and one begun before it has armed its timer or the move waits.
+// The move never comes before the loop's timer, which it would then miss.
+func (self *tlsFrontTestClock) advanceToLoopTimer(t *testing.T, at time.Time) {
+	t.Helper()
+	for {
+		due, moved, changed := func() ([]*tlsFrontTestTimer, bool, chan struct{}) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			for _, timer := range self.loopTimersWithLock() {
+				if timer.at.Equal(at) {
+					return self.moveWithLock(at.Sub(self.now)), true, nil
+				}
+			}
+			return nil, false, self.changed
+		}()
+		if moved {
+			for _, timer := range due {
+				timer.function()
+			}
+			return
+		}
+		if self.loopTimerWaiting != nil {
+			self.loopTimerWaiting()
+		}
+		select {
+		case <-changed:
+		case <-time.After(tlsFrontTestGuard):
+			t.Fatalf("runUpdates armed no timer due at %s since its latest look", at)
+		}
 	}
 }
 
@@ -580,7 +682,36 @@ type tlsFrontFixture struct {
 	// updates
 	custom  TlsFrontCustomSource
 	updates chan *TlsFrontUpdate
-	front   *TlsFront
+	// runs on runUpdates once each update has landed in updates, before the loop arms its next timer, when set before
+	// the front starts
+	onUpdate func(update *TlsFrontUpdate)
+	// runs first in each CustomCertificates call the front makes, when set before the front starts: runUpdates makes
+	// one in each look, after it has read the clock and before it arms its timer
+	onCustomCertificates func()
+	front                *TlsFront
+}
+
+// The fixture's custom source as the front reads it. runUpdates begins each look with CustomChanged and only then
+// reads the clock, so each call notes a look on the clock (tlsFrontTestClock.look); nothing else calls it.
+type tlsFrontTestLookSource struct {
+	TlsFrontCustomSource
+	clock *tlsFrontTestClock
+	// runs first in each CustomCertificates call; nil for none
+	onCertificates func()
+}
+
+// See TlsFrontCustomSource.
+func (self *tlsFrontTestLookSource) CustomCertificates() []*TlsFrontCustomCertificate {
+	if self.onCertificates != nil {
+		self.onCertificates()
+	}
+	return self.TlsFrontCustomSource.CustomCertificates()
+}
+
+// See TlsFrontCustomSource.
+func (self *tlsFrontTestLookSource) CustomChanged() <-chan struct{} {
+	self.clock.look()
+	return self.TlsFrontCustomSource.CustomChanged()
 }
 
 // A fixture whose front serves tls/443/app over http to an http backend, its grant public, configure changing any
@@ -629,11 +760,16 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 	if configure != nil {
 		configure(fixture)
 	}
+	var custom TlsFrontCustomSource
 	var updateTls func(update *TlsFrontUpdate) error
 	if fixture.custom != nil {
+		custom = &tlsFrontTestLookSource{TlsFrontCustomSource: fixture.custom, clock: clock, onCertificates: fixture.onCustomCertificates}
 		fixture.updates = make(chan *TlsFrontUpdate, 64)
 		updateTls = func(update *TlsFrontUpdate) error {
 			fixture.updates <- update
+			if fixture.onUpdate != nil {
+				fixture.onUpdate(update)
+			}
 			return nil
 		}
 	}
@@ -659,7 +795,7 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 			fixture.alpnChanges <- struct{}{}
 		},
 		Record:    fixture.record,
-		Custom:    fixture.custom,
+		Custom:    custom,
 		UpdateTls: updateTls,
 		Clock:     clock,
 		Log:       fixture.log,
@@ -1300,8 +1436,10 @@ func TestTlsFrontKeepsItsRegistrationsListsInStep(t *testing.T) {
 	if slices.Contains(update.Alpn, tlsAlpnAcme) || len(update.AcmeNames) != 0 {
 		t.Fatalf("after the challenge ended %+v", update)
 	}
-	// the clock reaches the margin: the name leaves the list, while the certificate still serves
-	fixture.clock.advance(notAfter.Sub(fixture.clock.Now()) - fixture.settings.CertifiedMargin)
+	// the clock reaches the margin: the name leaves the list, while the certificate still serves; the move waits for the
+	// loop's timer, which the loop arms only after the update just read, and again in a look that sends nothing
+	// (QD-1002)
+	fixture.clock.advanceToLoopTimer(t, notAfter.Add(-fixture.settings.CertifiedMargin))
 	update = fixture.nextUpdate()
 	if len(update.CertifiedNames) != 0 {
 		t.Fatalf("inside the margin the name is still listed: %+v", update)
@@ -1317,5 +1455,123 @@ func TestTlsFrontKeepsItsRegistrationsListsInStep(t *testing.T) {
 	source.set()
 	if update = fixture.nextUpdate(); len(update.CertifiedNames) != 0 {
 		t.Fatalf("after the row changed %+v", update)
+	}
+}
+
+// Where a forced interleaving holds runUpdates, inside a look, between its reading of the clock and its arming of the
+// margin's timer.
+type tlsFrontTestLoopHold string
+
+const (
+	// the first look, after its update's send
+	tlsFrontTestHeldAfterSend tlsFrontTestLoopHold = "after its update's send"
+	// a later look that sends nothing, as the second of two wakes for one change makes, while it reads the custom names
+	tlsFrontTestHeldInQuietLook tlsFrontTestLoopHold = "in a look that sends nothing"
+)
+
+// A front listing one custom name, with runUpdates held where hold says before it arms the margin's timer, until
+// release closes or the test ends. The clock has not moved. Answers the margin.
+func newTlsFrontHeldMarginFixture(t *testing.T, hold tlsFrontTestLoopHold) (*tlsFrontFixture, time.Time, chan struct{}) {
+	t.Helper()
+	release := make(chan struct{})
+	ended := make(chan struct{})
+	t.Cleanup(func() { close(ended) })
+	wait := func() {
+		select {
+		case <-release:
+		case <-ended:
+		}
+	}
+	var holdQuietLook atomic.Bool
+	quietLookHeld := make(chan struct{}, 1)
+	var notAfter time.Time
+	fixture := newTlsFrontFixture(t, func(fixture *tlsFrontFixture) {
+		custom := tlsFrontTestCustomCertificate(t, fixture.clock, tlsFrontTestCustomName)
+		notAfter = fixture.clock.Now().Add(3 * time.Hour)
+		fixture.custom = newTestTlsFrontCustomSource(&TlsFrontCustomCertificate{Name: tlsFrontTestCustomName, Certificate: custom, NotAfter: notAfter})
+		var afterSendOnce sync.Once
+		fixture.onUpdate = func(update *TlsFrontUpdate) {
+			if hold == tlsFrontTestHeldAfterSend {
+				afterSendOnce.Do(wait)
+			}
+		}
+		fixture.onCustomCertificates = func() {
+			if holdQuietLook.CompareAndSwap(true, false) {
+				quietLookHeld <- struct{}{}
+				wait()
+			}
+		}
+	})
+	if update := fixture.nextUpdate(); !slices.Equal(update.CertifiedNames, []string{tlsFrontTestCustomName}) {
+		t.Fatalf("the first update %+v", update)
+	}
+	if hold == tlsFrontTestHeldInQuietLook {
+		// once the first look has armed its timer, a wake with nothing changed, like the second of the two wakes
+		// SetCustomAlpnChallenge and ClearAlpnChallenge make as the pending set fills or empties: ClearAlpnChallenge for
+		// a name with no challenge, which makes only that one
+		fixture.clock.waitLoopTimer(t)
+		holdQuietLook.Store(true)
+		fixture.front.ClearAlpnChallenge(tlsFrontTestCustomName)
+		select {
+		case <-quietLookHeld:
+		case <-time.After(tlsFrontTestGuard):
+			t.Fatal("runUpdates began no look")
+		}
+	}
+	return fixture, notAfter.Add(-fixture.settings.CertifiedMargin), release
+}
+
+// QD-1002's race, forced: a look of runUpdates reads the clock, sends its update if it has one, and only then arms the
+// next margin's timer, from that reading. A move to the margin between the reading and the arming, as
+// TestTlsFrontKeepsItsRegistrationsListsInStep made before it waited, finds no timer of the loop's, and the loop arms
+// the margin's timer from the moved clock, a whole distance late: no update comes at the margin, and the name stays
+// listed past its not_after.
+func TestTlsFrontMarginMovedBeforeItsTimerComesLate(t *testing.T) {
+	for _, hold := range []tlsFrontTestLoopHold{tlsFrontTestHeldAfterSend, tlsFrontTestHeldInQuietLook} {
+		fixture, margin, release := newTlsFrontHeldMarginFixture(t, hold)
+		distance := margin.Sub(fixture.clock.Now())
+		fixture.clock.advance(distance)
+		close(release)
+		if at := fixture.clock.waitLoopTimer(t); !at.Equal(margin.Add(distance)) {
+			t.Fatalf("held %s: the margin's timer is due %s past the margin, not %s", hold, at.Sub(margin), distance)
+		}
+		// the loop waits on that timer alone, so nothing comes before it
+		select {
+		case update := <-fixture.updates:
+			t.Fatalf("held %s: an update at the margin %+v", hold, update)
+		default:
+		}
+		fixture.clock.advanceToLoopTimer(t, margin.Add(distance))
+		if update := fixture.nextUpdate(); len(update.CertifiedNames) != 0 {
+			t.Fatalf("held %s: the name is still listed a distance past the margin: %+v", hold, update)
+		}
+	}
+}
+
+// The same interleavings with the wait that closes QD-1002's race: advanceToLoopTimer, called while runUpdates is held
+// between its reading of the clock and its arming, moves nothing until the loop has armed the margin's timer, and the
+// name leaves the list at the margin. In the look that sends nothing, the first look's timer is due at the margin and
+// armed after the update the test read, so a wait for any timer the loop armed after its send would move here.
+func TestTlsFrontMarginMoveWaitsForItsTimer(t *testing.T) {
+	for _, hold := range []tlsFrontTestLoopHold{tlsFrontTestHeldAfterSend, tlsFrontTestHeldInQuietLook} {
+		fixture, margin, release := newTlsFrontHeldMarginFixture(t, hold)
+		// the loop goes on once the move has found no timer of the loop's and waits
+		waitCount := 0
+		fixture.clock.loopTimerWaiting = func() {
+			waitCount += 1
+			if waitCount == 1 {
+				close(release)
+			}
+		}
+		fixture.clock.advanceToLoopTimer(t, margin)
+		if waitCount == 0 {
+			t.Fatalf("held %s: the move found the loop's timer before the loop armed it", hold)
+		}
+		if now := fixture.clock.Now(); !now.Equal(margin) {
+			t.Fatalf("held %s: the clock is %s past the margin", hold, now.Sub(margin))
+		}
+		if update := fixture.nextUpdate(); len(update.CertifiedNames) != 0 {
+			t.Fatalf("held %s: at the margin the name is still listed: %+v", hold, update)
+		}
 	}
 }

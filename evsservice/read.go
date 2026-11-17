@@ -234,7 +234,7 @@ func (self *EvsEngine) newReadAttempt(request *EvsRequest, body *protocol.EvsRea
 	}
 	for _, path := range body.GetPaths() {
 		tokenPaths := path.GetTokenPaths()
-		if len(tokenPaths) == 0 || sidecar.EvsReadPathMaxEpochCount < len(tokenPaths) {
+		if len(tokenPaths) == 0 || settings.ReadPathMaxEpochCount < len(tokenPaths) {
 			return nil, fmt.Errorf("%w: a path of %d token paths", sidecar.ErrEvsPushInvalid, len(tokenPaths))
 		}
 		readPath := &readPath{named: map[uint64]sidecar.EvsTokenPath{}, version: path.GetVersion(), commitVersion: path.GetCommitVersion()}
