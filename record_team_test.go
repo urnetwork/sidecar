@@ -159,9 +159,9 @@ func testTeamRunDrafts(runId *sidecar.Id) []*sidecar.RecordDraft {
 	}
 }
 
-// RECORD.md section 20's projection case: from a run with a known title, path, branch, project and tool name, T's
-// entries hold none of them, each names its vault entry by one ContentRef, and the vault holds them whole, each
-// deposit to T copied there.
+// RECORD.md section 20's projection case: from a run with a known title, path, branch, project, tool name and user
+// prompt (QD-900's stage 2 context entry), T's entries hold none of them, each names its vault entry by one ContentRef,
+// and the vault holds them whole, each deposit to T copied there.
 func TestRecordTeamProjectionHoldsNoRunText(t *testing.T) {
 	world := newTestTeamWorld(t)
 	device := world.memberDevice(true)
@@ -170,7 +170,13 @@ func TestRecordTeamProjectionHoldsNoRunText(t *testing.T) {
 	runId := sidecar.NewId()
 	world.runs.StartRun(runId)
 	vaultEntries := map[sidecar.Id][]byte{}
-	for _, draft := range testTeamRunDrafts(&runId) {
+	drafts := append(testTeamRunDrafts(&runId), &sidecar.RecordDraft{
+		Kind: sidecar.RecordKindContext, Source: sidecar.RecordSourceHook, RunId: &runId, Body: &protocol.ContextBody{
+			Stage: 2, Harness: "claude-code", HarnessVersion: "2.0.1", AgentLabel: "builder",
+			Title: "Fix the frobnicator in widget.go", Prompts: []string{"Rename the quarterly-forecast flag"},
+		},
+	})
+	for _, draft := range drafts {
 		refs, err := record.Writer().Append(draft)
 		if err != nil {
 			t.Fatal(err)
@@ -184,11 +190,11 @@ func TestRecordTeamProjectionHoldsNoRunText(t *testing.T) {
 		t.Fatal(err)
 	}
 	deposited := world.teamDeposits(device.sidecarId, admin.sidecarId)
-	if len(deposited) != 3 {
+	if len(deposited) != 4 {
 		t.Fatalf("%d entries in T", len(deposited))
 	}
 	for _, entry := range deposited {
-		for _, text := range []string{"widget.go", "frobnicator", "secret-branch", "Bash", "AGENTS.md", "notes.md"} {
+		for _, text := range []string{"widget.go", "frobnicator", "secret-branch", "Bash", "AGENTS.md", "notes.md", "quarterly-forecast"} {
 			if bytes.Contains(entry.body, []byte(text)) {
 				t.Errorf("T's %s entry holds %q", entry.header.Kind(), text)
 			}
@@ -204,11 +210,15 @@ func TestRecordTeamProjectionHoldsNoRunText(t *testing.T) {
 	}
 	// the vault holds the run whole, and a copy of each T entry, which opens it
 	stored := world.storedEntries(device.sidecarId)
-	if len(stored) != 6 {
+	if len(stored) != 8 {
 		t.Fatalf("%d entries in the vault", len(stored))
 	}
 	copies := 0
+	vaultPrompt := false
 	for _, entry := range stored {
+		if sidecar.RecordKind(entry.header.GetKind()) == sidecar.RecordKindContext && bytes.Contains(entry.body, []byte("quarterly-forecast")) {
+			vaultPrompt = true
+		}
 		if sidecar.RecordKind(entry.header.GetKind()) != sidecar.RecordKindCopy {
 			continue
 		}
@@ -222,11 +232,14 @@ func TestRecordTeamProjectionHoldsNoRunText(t *testing.T) {
 			t.Errorf("a copy's opening: %v", err)
 		}
 	}
-	if copies != 3 {
+	if copies != 4 {
 		t.Errorf("%d copies", copies)
 	}
 	if !bytes.Contains(stored[0].body, []byte("Fix the frobnicator")) {
 		t.Error("the vault's context entry lost its title")
+	}
+	if !vaultPrompt {
+		t.Error("the vault's stage 2 context entry lost its prompt")
 	}
 }
 
