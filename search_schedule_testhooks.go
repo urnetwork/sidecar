@@ -93,11 +93,12 @@ func (self *SearchTestWorld) RepoKey() *EvsRepoKey {
 	return self.repoKey
 }
 
-// The world's repo and ref.
+// The world's repo.
 func (self *SearchTestWorld) RepoId() Id {
 	return self.repoId
 }
 
+// The world's ref.
 func (self *SearchTestWorld) RefId() Id {
 	return self.refId
 }
@@ -458,17 +459,20 @@ type searchTestRef struct {
 	removed   map[string]uint64
 }
 
+// One ref version: its head, the push's signer, and every path's readable version.
 type searchTestState struct {
 	head   *indexRefHead
 	signer Id
 	files  map[string]*searchTestStored
 }
 
+// One stored version and its plaintext.
 type searchTestStored struct {
 	version   *indexFileVersion
 	plaintext []byte
 }
 
+// An empty ref at version 0.
 func newSearchTestRef() *searchTestRef {
 	return &searchTestRef{
 		states:  []*searchTestState{{head: &indexRefHead{}, files: map[string]*searchTestStored{}}},
@@ -482,10 +486,12 @@ type searchTestStore struct {
 	signer Id
 }
 
+// A handle whose pushes signer signs.
 func (self *searchTestRef) store(signer Id) *searchTestStore {
 	return &searchTestStore{ref: self, signer: signer}
 }
 
+// The state at refVersion, 0 being the head, the lock held.
 func (self *searchTestRef) stateAtWithLock(refVersion uint64) (*searchTestState, error) {
 	if refVersion == 0 {
 		return self.states[len(self.states)-1], nil
@@ -496,6 +502,7 @@ func (self *searchTestRef) stateAtWithLock(refVersion uint64) (*searchTestState,
 	return self.states[refVersion], nil
 }
 
+// See indexRefStore.
 func (self *searchTestStore) Head(ctx context.Context) (*indexRefHead, error) {
 	self.ref.stateLock.Lock()
 	defer self.ref.stateLock.Unlock()
@@ -503,6 +510,7 @@ func (self *searchTestStore) Head(ctx context.Context) (*indexRefHead, error) {
 	return &head, nil
 }
 
+// See indexRefStore.
 func (self *searchTestStore) List(ctx context.Context, refVersion uint64) (*indexListing, error) {
 	self.ref.stateLock.Lock()
 	defer self.ref.stateLock.Unlock()
@@ -520,6 +528,7 @@ func (self *searchTestStore) List(ctx context.Context, refVersion uint64) (*inde
 	return listing, nil
 }
 
+// See indexRefStore: a path keeps its newest version alone, as a versionless path does.
 func (self *searchTestStore) History(ctx context.Context, path string, refVersion uint64) ([]*indexFileVersion, error) {
 	self.ref.stateLock.Lock()
 	defer self.ref.stateLock.Unlock()
@@ -535,6 +544,7 @@ func (self *searchTestStore) History(ctx context.Context, path string, refVersio
 	return []*indexFileVersion{&file}, nil
 }
 
+// See indexRefStore: a version the head no longer keeps is collected.
 func (self *searchTestStore) Read(ctx context.Context, file *indexFileVersion) ([]byte, error) {
 	self.ref.stateLock.Lock()
 	defer self.ref.stateLock.Unlock()
@@ -883,12 +893,14 @@ type searchWorldSource struct {
 	fetches   []SearchTestFetch
 }
 
+// What the source fetched so far, in order.
 func (self *searchWorldSource) fetched() []SearchTestFetch {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return slices.Clone(self.fetches)
 }
 
+// See searchSyncSource: each version after pin diffed against the one before.
 func (self *searchWorldSource) Replay(ctx context.Context, pin SearchSyncPin) (*searchSyncReplay, error) {
 	ref := self.world.ref
 	ref.stateLock.Lock()
@@ -930,10 +942,12 @@ func (self *searchWorldSource) Replay(ctx context.Context, pin SearchSyncPin) (*
 	return replay, nil
 }
 
+// See searchSyncSource.
 func (self *searchWorldSource) List(ctx context.Context) (*indexListing, error) {
 	return self.world.ref.store(Id{}).List(ctx, 0)
 }
 
+// See searchSyncSource: each file sealed as evs seals it, the read taking its bytes at the source's rate.
 func (self *searchWorldSource) Fetch(ctx context.Context, files []*indexFileVersion) ([]*searchSyncFetched, error) {
 	ref := self.world.ref
 	ref.stateLock.Lock()
@@ -1028,10 +1042,12 @@ type searchTestGkm struct {
 	onRecord func()
 }
 
+// See GkmClient: RK_1, the world's one generation.
 func (self *searchTestGkm) CurrentRepoKey(ctx context.Context, repoId Id) (*EvsRepoKey, error) {
 	return self.RepoKey(ctx, repoId, 1)
 }
 
+// See GkmClient: RK_1 of the world's repo, the record hook told first; any other repo or generation is missing.
 func (self *searchTestGkm) RepoKey(ctx context.Context, repoId Id, generation uint64) (*EvsRepoKey, error) {
 	if repoId != self.repoKey.repoId || generation != 1 {
 		return nil, ErrGkmKeyMissing
@@ -1048,6 +1064,7 @@ type searchTestScope struct {
 	refId  Id
 }
 
+// See SearchScopeSource.
 func (self *searchTestScope) Repos(ctx context.Context) ([]*SearchScopeRepo, error) {
 	return []*SearchScopeRepo{{
 		RepoId: self.repoId, Kind: protocol.RepoKind_REPO_KIND_GENERAL, Readable: true,
