@@ -12,21 +12,28 @@ package fault
 // MeteredMoreByteCount on a metered link waits, reporting waiting=metered and fetching nothing, until the host repeats
 // it with AllowMetered, and a host that has reported no conditions counts as metered; each search stays within §18.4's
 // working set, the heap sampled at each record a search opens and each page (a "search more"'s, whose download's staging
-// runs inside it, measured and reported rather than failed).
+// runs inside it, measured and reported rather than failed). The windows (QD-1000): an iOS BGProcessingTask window on
+// cellular, which can require power and a network but never Wi-Fi, and a window in Low Power Mode each bring the
+// latest set and fetch no all; on Wi-Fi while charging in the background a phone syncs all only in an OS-granted
+// window, which stops at its budget and resumes in the next, from the first shard it did not keep and fetching none it
+// kept, until all is held and a cached search reads it with no fetch.
 //
 // Readings: MeteredMoreByteCount stands at 64 KiB here, under this all's size, for §18.4's 25 MiB over a larger one;
 // the candidates a phone lists, possible ones included, are held to SearchOracle's matches, since a phone holds no
 // text to verify; the Worker here is the Worker's settings on this host, not wasm. The heap is the process's, so the
 // row runs in a search heap process of its own (sidecartest's), where nothing another test left running allocates
-// beside its searches, each of which runs alone.
+// beside its searches, each of which runs alone. A window's budget is a deadline on the world's clock, which a timer
+// there keeps as Sidecar.RunSearchBackgroundSync's keeps its own: the device's reads move the clock at a rate, a file a
+// read, so the timer fires inside the read that reaches the deadline, and the round stops before its next read. The
+// next window resumes through the sync's plan, where each read's files are staged as it lands (search_fetch.go): the
+// read in flight at the end is not staged, since its staging sees the ended ctx, so the next window reads it again,
+// and what the row holds is that no shard read before the end is read again.
 //
-// Not here, each listed for the review phase in SEARCH-M10-38's report: an OS window on cellular (the policy keeps all
-// in any window, which FS-77 says fetches none: question search-m10-38-window-on-cellular), a window's budget and
-// resumption, Low Power Mode, device overrides and the key origin's policy request, search.state across DropCache and
-// eviction (the world's devices hold no SidecarSearchState), the quick burner, an erasure hint dropping a cached
-// document, a replaced file answering collected, the Worker's key-origin conditions and Safari's and Firefox's hidden
-// ones, phone merges in windows (FS-75), the T4 surrogates (sdk/sidecar_search_t4_test.go), and the app-host case at
-// the later of M10-out and M8-out.
+// Not here, each listed for the review phase in SEARCH-M10-38's report: device overrides and the key origin's policy
+// request, search.state across DropCache and eviction (the world's devices hold no SidecarSearchState), the quick
+// burner, an erasure hint dropping a cached document, a replaced file answering collected, the Worker's key-origin
+// conditions and Safari's and Firefox's hidden ones, phone merges in windows (FS-75), the T4 surrogates
+// (sdk/sidecar_search_t4_test.go), and the app-host case at the later of M10-out and M8-out.
 
 import (
 	"context"
@@ -197,20 +204,12 @@ func (self *fs77State) phone(host *searchHost, query string, label string) func(
 		self.stateLock.Lock()
 		self.traces[label] = searchTraceOf(device.Fetches())
 		self.stateLock.Unlock()
-		shards := []sidecar.SearchTestFile{}
-		for _, file := range world.index.Files() {
-			if file.AllShard {
-				shards = append(shards, file)
-			}
-		}
-		slices.SortFunc(shards, func(a sidecar.SearchTestFile, b sidecar.SearchTestFile) int {
-			return fs110ShardNumber(b.Path) - fs110ShardNumber(a.Path)
-		})
+		shards := fs77AllShards(world)
 		if len(trace) != len(shards) {
 			self.breaks("%s's search more fetched %d all shards of %d", label, len(trace), len(shards))
 		}
 		for index := range min(len(trace), len(shards)) {
-			if want := fmt.Sprintf("%s@%d:%d", shards[index].Path, shards[index].Version, shards[index].ByteCount); trace[index] != want {
+			if want := fs77TraceLine(shards[index]); trace[index] != want {
 				self.breaks("%s's fetch %d of all was %s, not %s, whole, youngest first", label, index, trace[index], want)
 				break
 			}
@@ -289,6 +288,214 @@ func (self *fs77State) metered(host *searchHost, conditions sidecar.SearchCondit
 	}
 }
 
+// All's shards at the head in the order a phone fetches them, youngest first.
+func fs77AllShards(world *searchWorld) []sidecar.SearchTestFile {
+	shards := []sidecar.SearchTestFile{}
+	for _, file := range world.index.Files() {
+		if file.AllShard {
+			shards = append(shards, file)
+		}
+	}
+	slices.SortFunc(shards, func(a sidecar.SearchTestFile, b sidecar.SearchTestFile) int {
+		return fs110ShardNumber(b.Path) - fs110ShardNumber(a.Path)
+	})
+	return shards
+}
+
+// A file as a fetch trace's line names it (searchTraceOf).
+func fs77TraceLine(file sidecar.SearchTestFile) string {
+	return fmt.Sprintf("%s@%d:%d", file.Path, file.Version, file.ByteCount)
+}
+
+// The bytes a second a window's reads take on the world's clock: what moves the clock to a window's end.
+const fs77ReadByteRate = 1000 * 1000
+
+// FS-77's iOS BGProcessingTask window on cellular, whose name its failure carries.
+const fs77CellularWindowLabel = "ios32 in a BGProcessingTask window on cellular"
+
+// A window's ctx: the deadline it carries is on the world's clock, where only a timer of that clock ends it, since a
+// ctx's own deadline reads real time, which the world's clock does not keep.
+type fs77WindowContext struct {
+	context.Context
+	deadline time.Time
+}
+
+// The window's end, on the world's clock.
+func (self *fs77WindowContext) Deadline() (time.Time, bool) {
+	return self.deadline, true
+}
+
+// Runs one OS window of budget on device, as Sidecar.RunSearchBackgroundSync runs one on its own clock: a timer on the
+// world's clock ends the window's ctx at the deadline, fired inside the read that moves the clock there, so the round
+// stops before its next read. Answers the deadline, with nil where the window ran to its budget or out of work.
+func fs77Window(ctx context.Context, net *Net, device *sidecar.SearchTestDevice, budget time.Duration) (time.Time, error) {
+	clock := net.Clock()
+	deadline := clock.Now().Add(budget)
+	windowCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := clock.AfterFunc(budget, cancel)
+	defer stop()
+	err := device.RunBackgroundSync(&fs77WindowContext{Context: windowCtx, deadline: deadline})
+	if windowCtx.Err() != nil && ctx.Err() == nil {
+		// the window reached its budget: what it did not reach, the next one does
+		return deadline, nil
+	}
+	return deadline, err
+}
+
+// A phone's OS window whose conditions allow no all: its round brings the latest set and fetches nothing of all.
+// windowsRule, where given, is planted in the device's policy first.
+func (self *fs77State) windowWithoutAll(host *searchHost, conditions sidecar.SearchConditions, label string, windowsRule func(conditions sidecar.SearchConditions, inWindow bool) bool) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		device, err := self.world.device(ctx, host, nil, func() sidecar.SearchConditions { return conditions }, 0, nil)
+		if err != nil {
+			return err
+		}
+		defer self.world.done(device)
+		if windowsRule != nil {
+			device.PlantSearchWindowsRule(windowsRule)
+		}
+		// no read moves the clock here: the window ends when its round does
+		if _, err := fs77Window(ctx, net, device, time.Hour); err != nil {
+			return err
+		}
+		fetches := device.Fetches()
+		if len(fetches) == 0 {
+			self.breaks("%s fetched nothing, not even the latest set", label)
+		}
+		for _, fetch := range fetches {
+			if fs77AllShard(fetch.Path) {
+				self.breaks("%s fetched all's %s", label, fetch.Path)
+			}
+		}
+		return nil
+	}
+}
+
+// An iOS BGProcessingTask window on cellular: one can require power and a network, never Wi-Fi, so it opens while
+// charging on any link, and fetches no all (QD-1000).
+func (self *fs77State) cellularWindow(windowsRule func(conditions sidecar.SearchConditions, inWindow bool) bool) func(ctx context.Context, net *Net) error {
+	conditions := sidecar.SearchConditions{Reported: true, Charging: true}
+	return self.windowWithoutAll(searchHostNamed("ios32"), conditions, fs77CellularWindowLabel, windowsRule)
+}
+
+// A phone in the background on Wi-Fi while charging, reading a file at a time at fs77ReadByteRate: a round outside a
+// window brings the latest set and nothing of all, since such a phone syncs all only in an OS-granted window; a window
+// whose budget ends partway through all stops at it, reading nothing after it; and the next window resumes from the
+// first shard the last did not keep, reading again none that landed before the last one's end, youngest first, until
+// all is held, which a cached search then reads with no fetch.
+func (self *fs77State) wifiChargingWindows(host *searchHost, label string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		world := self.world
+		conditions := sidecar.SearchConditions{Reported: true, Unmetered: true, Charging: true}
+		device, err := world.index.NewDevice(ctx, &sidecar.SearchTestDeviceArgs{
+			Settings: host.settings(), Conditions: func() sidecar.SearchConditions { return conditions },
+			// a file a read, so a window's end falls between two of all's shards
+			ReadByteRate: fs77ReadByteRate, ReadByteCount: 1,
+		})
+		if err != nil {
+			return err
+		}
+		defer device.Close()
+		if err := device.Sync(ctx); err != nil {
+			return err
+		}
+		outside := device.Fetches()
+		if len(outside) == 0 {
+			self.breaks("%s's round outside a window fetched nothing, not even the latest set", label)
+		}
+		for _, fetch := range outside {
+			if fs77AllShard(fetch.Path) {
+				self.breaks("%s fetched all's %s in a round outside a window", label, fetch.Path)
+			}
+		}
+		shards := fs77AllShards(world)
+		if len(shards) < 3 {
+			return fmt.Errorf("all holds %d shards, too few for a window to stop partway", len(shards))
+		}
+		// a read's time on the world's clock, as the world's source takes it
+		readTime := func(file sidecar.SearchTestFile) time.Duration {
+			return time.Duration(int64(file.ByteCount) * int64(time.Second) / fs77ReadByteRate)
+		}
+		order := []string{}
+		allTime := time.Duration(0)
+		for _, shard := range shards {
+			order = append(order, fs77TraceLine(shard))
+			allTime += readTime(shard)
+		}
+
+		// the first window's budget ends halfway through its second read of all
+		before := len(device.Fetches())
+		deadline, err := fs77Window(ctx, net, device, readTime(shards[0])+readTime(shards[1])/2)
+		if err != nil {
+			return err
+		}
+		fetches := device.Fetches()[before:]
+		lines := searchTraceOf(fetches)
+		first := []string{}
+		// the shards whose reads ended before the window's end, and how many ended at it or past it
+		landed := map[string]bool{}
+		pastEnd := 0
+		for index, fetch := range fetches {
+			if !fs77AllShard(fetch.Path) {
+				continue
+			}
+			first = append(first, lines[index])
+			if fetch.At.Before(deadline) {
+				landed[lines[index]] = true
+			} else {
+				pastEnd += 1
+			}
+		}
+		switch {
+		case len(landed) == 0:
+			self.breaks("%s's first window read none of all before its end: %v", label, first)
+		case 1 < pastEnd:
+			self.breaks("%s's first window read %d shards past its end, not at most the one in flight then: %v", label, pastEnd, first)
+		case len(order) <= len(first):
+			self.breaks("%s's first window read all, %v, past its budget", label, first)
+		case !slices.Equal(first, order[:len(first)]):
+			self.breaks("%s's first window read all as %v, not youngest first, %v", label, first, order)
+		}
+
+		// the next window, with the budget to finish: it reads on from the first shard that had not landed at the last
+		// one's end, youngest first, never one that had, and the one in flight then again unless that read was kept
+		before = len(device.Fetches())
+		deadline, err = fs77Window(ctx, net, device, allTime+time.Minute)
+		if err != nil {
+			return err
+		}
+		if !net.Clock().Now().Before(deadline) {
+			self.breaks("%s's second window ran to its budget, not until all was held", label)
+		}
+		second := searchAllShardsOf(searchTraceOf(device.Fetches()[before:]))
+		pending := []string{}
+		for _, line := range order {
+			if !landed[line] {
+				pending = append(pending, line)
+			}
+		}
+		resumes := slices.Equal(second, pending) || (pastEnd == 1 && 0 < len(pending) && slices.Equal(second, pending[1:]))
+		if !resumes {
+			self.breaks("%s's second window read all as %v, not on from where the first, %v, ended: %v", label, second, first, pending)
+		}
+
+		// all is held: a cached search reads it, fetching nothing
+		before = len(device.Fetches())
+		cached, err := device.Search(ctx, &sidecar.SearchRequest{Text: fs77Query, Scope: sidecar.SearchCached, Remote: "off"}, 64, nil)
+		if err != nil {
+			return err
+		}
+		if fetched := len(device.Fetches()) - before; fetched != 0 {
+			self.breaks("%s's cached search after the windows fetched %d files", label, fetched)
+		}
+		if got, want := searchHitNames(cached.Hits()), self.oracle(fs77Query, sidecartest.SearchScopeAll); !slices.Equal(got, want) {
+			self.breaks("%s's cached search after the windows found %v, and SearchOracle over all %v", label, got, want)
+		}
+		return nil
+	}
+}
+
 // FI-23 as FS-77 holds it: two different queries from equal sync states give the same requests.
 func (self *fs77State) fi23() Invariant {
 	return NewInvariant("FI-23 (FS-77's equal requests)", func(ctx context.Context, oracle *Oracle) error {
@@ -324,6 +531,13 @@ func Fs77PhoneSearch(net *Net) *Schedule {
 	steps = append(steps, &Step{Actor: "ios32", Action: state.phone(searchHostNamed("ios32"), fs77OtherQuery, "ios32 "+fs77OtherQuery)})
 	steps = append(steps, &Step{Actor: "ios32", Action: state.metered(searchHostNamed("ios32"), sidecar.SearchConditions{Reported: true, Foreground: true}, "ios32 on cellular")})
 	steps = append(steps, &Step{Actor: "android", Action: state.metered(searchHostNamed("android"), sidecar.SearchConditions{}, "android reporting nothing")})
+	// the windows (QD-1000)
+	lowPower := sidecar.SearchConditions{Reported: true, Unmetered: true, Charging: true, LowPower: true}
+	steps = append(steps,
+		&Step{Actor: "ios32", Action: state.cellularWindow(nil)},
+		&Step{Actor: "ios32", Action: state.windowWithoutAll(searchHostNamed("ios32"), lowPower, "ios32 in a window in Low Power Mode", nil)},
+		&Step{Actor: "android", Action: state.wifiChargingWindows(searchHostNamed("android"), "android on Wi-Fi while charging")},
+	)
 	steps = append(steps, &Step{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
 		state.world.close()
 		return nil
@@ -341,4 +555,40 @@ func TestFs77(t *testing.T) {
 			t.Logf("measured: %s", line)
 		}
 	})
+}
+
+// FS-77's BGProcessingTask window on cellular catches a windows rule that ignores the link: planted in the phone's
+// policy, a rule that keeps all in a window or the foreground on any link while charging fails FI-18 naming an all
+// shard the window fetched, where the same case unplanted passes it. Nothing here samples the heap, so it runs in the
+// test's own process.
+func TestFs77FailsAWindowRuleIgnoringTheLink(t *testing.T) {
+	ignoringLink := func(conditions sidecar.SearchConditions, inWindow bool) bool {
+		return (inWindow || conditions.Foreground) && conditions.OnCharge() && !conditions.Paused()
+	}
+	for _, planted := range []bool{false, true} {
+		state := &fs77State{traces: map[string][]string{}}
+		var windowsRule func(conditions sidecar.SearchConditions, inWindow bool) bool
+		if planted {
+			windowsRule = ignoringLink
+		}
+		steps := []*Step{
+			{Actor: "writer", Action: state.write},
+			{Actor: "ios32", Action: state.cellularWindow(windowsRule)},
+			{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
+				state.world.close()
+				return nil
+			}},
+		}
+		net := sidecartest.NewNet(t.Context(), nil)
+		result := Run(t.Context(), &Schedule{Id: "FS-77 window on cellular", Steps: steps, Check: []Invariant{state.fi18()}}, net)
+		net.Close()
+		switch {
+		case !planted && result.Err != nil:
+			t.Fatalf("unplanted: %s", result)
+		case planted && result.Err == nil:
+			t.Fatal("a windows rule ignoring the link passed FS-77's window on cellular")
+		case planted && !strings.Contains(result.Err.Error(), fs77CellularWindowLabel+" fetched all's "):
+			t.Fatalf("a windows rule ignoring the link failed, but not on the all it fetched on cellular: %s", result)
+		}
+	}
 }
