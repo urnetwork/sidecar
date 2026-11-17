@@ -12,8 +12,10 @@
 //	          Search.MoreProgressInterval and at each shard: the bytes fetched of the missing total, the shards searched,
 //	          and complete false; every byte the call reads, the latest set's included, is reported as metered bytes,
 //	          which the reads debit from the transfer balance (owner decision 10)
-//	arrival   each shard is handed to the engine (OnShard) the moment it is staged, before the next read: the engine's
-//	          search of it is what §16.10 holds within 100 ms on a desktop and 300 ms on a phone or page Worker
+//	arrival   each shard is handed to the engine (OnShard) the moment it is staged, before the next read; §16.10's
+//	          bound, 100 ms on a desktop and 300 ms on a phone or page Worker, holds on the hits reaching the caller
+//	          (QD-999), which the engine's pages give as soon as they rank while this call goes on
+//	          (search_engine_more.go)
 //	complete  only once every missing shard is searched; a call's download stops at Search.MoreByteCount, partial,
 //	          and a call with its cursor fetches on from the first shard it has not searched, in the same fixed order,
 //	          never restarting it: the round's plan keeps every shard staged, and the cursor names those searched
@@ -177,8 +179,8 @@ type SearchMoreArgs struct {
 	AllowMetered bool
 	// A partial call's cursor: this call fetches on from where it stopped. Nil starts.
 	Cursor *SearchMoreCursor
-	// Each all shard as it lands and verifies, staged in the cache: the engine searches it now (SEARCH-M10-26's).
-	// Nil searches nothing.
+	// Each all shard as it lands and verifies, staged in the cache: the engine queues it for its pages, which search it
+	// at once (SEARCH-M10-26's; QD-999). Nil searches nothing.
 	OnShard func(ctx context.Context, file *SearchManifestFile) error
 	// Each progress report, the first at once. Nil reports nothing.
 	OnProgress func(progress SearchMoreProgress)

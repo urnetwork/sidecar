@@ -136,7 +136,9 @@ type mailSessionTestWorld struct {
 	status     *MailNetworkStatus
 	limits     map[string]int64
 	limitsErr  error
-	deposits   []*mailSessionTestDeposit
+	// the limits' enforced, false as an older api answers
+	enforced bool
+	deposits []*mailSessionTestDeposit
 	// a deposit waits on it while set, as evs holding a push would
 	hold       chan struct{}
 	depositErr error
@@ -192,7 +194,7 @@ func newMailSessionTestWorld(t *testing.T, mutate func(args *MailSessionArgs)) *
 			if world.limitsErr != nil {
 				return nil, world.limitsErr
 			}
-			limits := &QuotaLimits{Tier: "pro", Limits: map[string]int64{}}
+			limits := &QuotaLimits{Tier: "pro", Limits: map[string]int64{}, Enforced: world.enforced}
 			for key, value := range world.limits {
 				limits.Limits[key] = value
 			}
@@ -722,6 +724,30 @@ func TestMailSessionEhloAdvertisesTheReceiversExtensions(t *testing.T) {
 	for _, line := range lines {
 		if strings.HasPrefix(line, "AUTH") || strings.HasPrefix(line, "STARTTLS") || strings.HasPrefix(line, "LIMITS") {
 			t.Errorf("EHLO offers %s", line)
+		}
+	}
+}
+
+// The receiver's bounds hold whatever the answer's enforced says, as the closure floor and pacing do (QD-1023, beside
+// owner decision 520): dark or enforced, EHLO advertises SIZE at mail_inbound_message_bytes and a RCPT past
+// mail_inbound_recipients answers 452 4.5.3.
+func TestMailSessionBoundsHoldWhateverEnforcedSays(t *testing.T) {
+	for _, enforced := range []bool{false, true} {
+		world := newMailSessionTestWorld(t, nil)
+		func() {
+			world.stateLock.Lock()
+			defer world.stateLock.Unlock()
+			world.enforced = enforced
+			world.limits[mailLimitInboundRecipients] = 1
+		}()
+		sender := world.open(testMailSessionIngress(t))
+		if lines := strings.Split(sender.expect("EHLO mail.sender.example", 250), "\n"); !slices.Contains(lines, "SIZE 52428800") {
+			t.Errorf("enforced %t: EHLO %q", enforced, lines)
+		}
+		sender.expect("MAIL FROM:<bounce@sender.example>", 250)
+		sender.expect("RCPT TO:<"+testMailSessionAlice+">", 250)
+		if message := sender.expect("RCPT TO:<"+testMailSessionBob+">", 452); !strings.HasPrefix(message, "4.5.3") {
+			t.Errorf("enforced %t: a second recipient past one: %s", enforced, message)
 		}
 	}
 }

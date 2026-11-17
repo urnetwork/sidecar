@@ -2,15 +2,17 @@
 
 package fault
 
-// FS-110 on T2 (§22.8; §16.10's cold contract, §18.4's caps row; D-EVS-50, D-MCP-20, FI-18, FI-23; SEARCH-M10-38): a
-// cold "search more" with no indexer, at 10 MB/s on the fake clock, over one all partition (16.5 MB here, the row's
-// 165 MB at a tenth, below), with four queries
-// whose sole exact match is in the first, the middle or the last shard fetched, or in none. On a desktop, a phone and a
-// page Worker, each query on a fresh device in the same sync state: the four fetch traces are equal in order and
-// bytes, every all shard fetched whole, once, youngest first; the first progress lands within 500 ms, then at least
-// once a second and at each shard; a shard's hit is never given before the shard lands; the search is not complete
-// until the last shard is searched, then complete, with its hit or with none, within B / R + 1 s. Again past a
-// MoreByteCount boundary, the next call fetching on from the first unsearched shard and never again a searched one.
+// FS-110 on T2 (§22.8; §16.10's cold contract, §18.4's caps row; D-EVS-50, D-MCP-20, FI-18, FI-23; SEARCH-M10-38,
+// QD-999): a cold "search more" with no indexer, at 10 MB/s on the fake clock, over one all partition (16.5 MB here,
+// the row's 165 MB at a tenth, below), with four queries whose sole exact match is in the first, the middle or the last
+// shard fetched, or in none. On a desktop, a phone and a page Worker, each query on a fresh device in the same sync
+// state: the four fetch traces are equal in order and bytes, every all shard fetched whole, once, youngest first; the
+// first progress lands within 500 ms, then at least once a second and at each shard; a shard's hit reaches the caller
+// within the host's arrival bound after the shard lands, 100 ms on the desktop and 300 ms on the phone and the Worker,
+// and never before it (QD-999: the bound is on delivery); the search is not complete until the last shard is searched,
+// then complete, with its hit or with none, within B / R + 1 s. Again past a MoreByteCount boundary, the next call
+// fetching on from the first unsearched shard and never again a searched one. A delay planted in the page loop past
+// the bound fails the arrival clause (TestFs110FailsAHitPastTheArrivalBound).
 //
 // Scale: the sync engine stages each shard by reading every document through a one-frame cursor, so 165 MB of all, some
 // 235,000 documents, takes some 15 s a search on this host, past §22.8's 10 s for a step; the partition here is 16.5 MB
@@ -20,9 +22,11 @@ package fault
 // Readings: a desktop here holds all on demand (AllPolicy on_demand), standing for a desktop before its first round
 // of all, since a desktop that keeps all has nothing to fetch; the boundary is MoreByteCount at 4 MiB, under this
 // partition's size, standing for 1 GiB under a larger one; phones and the Worker are on Wi-Fi in the foreground and
-// unplugged, so all is theirs on demand. A hit's
-// time is when the page carrying it returns on the fake clock; how long after its shard's landing that may be is the
-// question search-m10-38-shard-hit-arrival, so it is measured and reported here, never failed, while "none before" is.
+// unplugged, so all is theirs on demand. A hit's time is when the page carrying it returns on the fake clock, and a
+// shard's landing when its read ends. The fake clock moves by reads alone, and the device's reads take their turns
+// (SearchTestDevice's turns): each goes only while a page waits on the download with nothing left to take, so a hit's
+// delay after its shard landed is the page loop's own, which the engine keeps at none, and a read never charges the
+// search's work with time the work does not take.
 //
 // Not here: the cache cap under all's size, which fails today (the Worker's cap at 8 MiB under this all: the page reads
 // a hit's row from a shard the call dropped once searched, answering "the kept file was dropped"; SEARCH-M10-38's
@@ -41,6 +45,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 var Fs110 = Register("FS-110", "", []Tier{TierT2}, Fs110ColdSearchMore)
@@ -74,12 +79,14 @@ type fs110State struct {
 	// each match's path and the shard it sits in
 	matchShard map[string]string
 	matchPath  map[string]string
+	// what each page holding hits spends before it answers, planted in the page loop; zero plants none
+	answerDelay time.Duration
+	// all's size in bytes; zero is the row's, fs110AllByteCount
+	allByteCount int64
 
 	stateLock sync.Mutex
 	// every query's fetch trace of all, by host and query
 	traces map[string][]string
-	// the most a hit was given after its shard landed, by host and query, reported and never failed (the question's)
-	late []string
 	// what broke the contract
 	broken []string
 }
@@ -124,8 +131,12 @@ func (self *fs110State) placedPath(place string) (string, error) {
 	return best, nil
 }
 
-// The index: a current bucket of a few documents, and all of fs110AllByteCount, each match in its place.
+// The index: a current bucket of a few documents, and all of the state's size, each match in its place.
 func (self *fs110State) write(ctx context.Context, net *Net) error {
+	allByteCount := self.allByteCount
+	if allByteCount == 0 {
+		allByteCount = fs110AllByteCount
+	}
 	world, err := newSearchWorld(net, "fs110")
 	if err != nil {
 		return err
@@ -160,7 +171,7 @@ func (self *fs110State) write(ctx context.Context, net *Net) error {
 	}
 	// rows of some 700 B, 1,400 a shard of about 1 MB: the partition's size in shards of a merge's size
 	prefix := "archive/" + strings.Repeat("x", 480) + "/"
-	filler := &sidecar.SearchTestBulk{Prefix: prefix, Count: int(fs110AllByteCount / 700), Version: 1, Document: &sidecar.SearchTestDocument{
+	filler := &sidecar.SearchTestBulk{Prefix: prefix, Count: int(allByteCount / 700), Version: 1, Document: &sidecar.SearchTestDocument{
 		Path: prefix + "template", Version: 1, Title: strings.Repeat("7", 150), Text: fs110FillerText, Time: old,
 	}}
 	rolledThrough := sidecar.SearchTestBucketStartDay(now) - 60
@@ -180,8 +191,8 @@ func (self *fs110State) write(ctx context.Context, net *Net) error {
 	for _, path := range self.shards {
 		total += int64(self.shardSize[path])
 	}
-	if total < fs110AllByteCount*9/10 {
-		return fmt.Errorf("all holds %d B in %d shards, not the row's %d", total, len(self.shards), fs110AllByteCount)
+	if total < allByteCount*9/10 {
+		return fmt.Errorf("all holds %d B in %d shards, not the %d asked", total, len(self.shards), allByteCount)
 	}
 	self.matchShard = map[string]string{}
 	for word, path := range self.matchPath {
@@ -209,11 +220,14 @@ func (self *fs110State) searchMore(ctx context.Context, net *Net, host *searchHo
 	// on Wi-Fi in the foreground and unplugged, so a phone keeps all on demand and its "search more" finds it missing
 	conditions := host.conditions
 	conditions.Charging = false
-	device, err := world.device(ctx, host, settings, func() sidecar.SearchConditions { return conditions }, fs110ReadByteRate, nil)
+	device, err := world.index.NewDevice(ctx, &sidecar.SearchTestDeviceArgs{
+		Settings: settings, Conditions: func() sidecar.SearchConditions { return conditions }, ReadByteRate: fs110ReadByteRate,
+		ReadByteCount: world.readByteCount, AnswerDelay: self.answerDelay,
+	})
 	if err != nil {
 		return err
 	}
-	defer world.done(device)
+	defer device.Close()
 	if err := device.Sync(ctx); err != nil {
 		return err
 	}
@@ -267,7 +281,8 @@ func (self *fs110State) searchMore(ctx context.Context, net *Net, host *searchHo
 		self.breaks("%s reported %d times over %d shards", label, len(reports), len(self.shards))
 	}
 
-	// the hit: present only where the match is, never given before its shard landed, and how long after
+	// the hit: present only where the match is, reaching the caller within the arrival bound after its shard landed and
+	// never before
 	matchPath, hasMatch := self.matchPath[word]
 	found := false
 	for _, page := range search.Pages {
@@ -282,9 +297,7 @@ func (self *fs110State) searchMore(ctx context.Context, net *Net, host *searchHo
 				self.breaks("%s gave its hit at %v, before its shard %s landed at %v", label, page.At, shard, landed[shard])
 			}
 			if delay := page.At.Sub(landed[shard]); host.arrival < delay {
-				self.stateLock.Lock()
-				self.late = append(self.late, fmt.Sprintf("%s: %s after its shard landed, past %s", label, delay, host.arrival))
-				self.stateLock.Unlock()
+				self.breaks("%s gave its hit %s after its shard %s landed, past the arrival bound %s", label, delay, shard, host.arrival)
 			}
 		}
 	}
@@ -364,12 +377,6 @@ func fs110Hosts() []*searchHost {
 	return []*searchHost{desktop, searchHostNamed("ios32"), searchHostNamed("worker")}
 }
 
-// The late hits FS-110's last run measured, for its test's log.
-var fs110Late = struct {
-	stateLock sync.Mutex
-	late      []string
-}{}
-
 // FS-110's schedule.
 func Fs110ColdSearchMore(net *Net) *Schedule {
 	state := &fs110State{traces: map[string][]string{}}
@@ -389,11 +396,6 @@ func Fs110ColdSearchMore(net *Net) *Schedule {
 		return state.searchMore(ctx, net, host, settings, "desktop past MoreByteCount", fs110Queries[1].word)
 	}})
 	steps = append(steps, &Step{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
-		fs110Late.stateLock.Lock()
-		defer fs110Late.stateLock.Unlock()
-		state.stateLock.Lock()
-		defer state.stateLock.Unlock()
-		fs110Late.late = slices.Clone(state.late)
 		state.world.close()
 		return nil
 	}})
@@ -401,15 +403,47 @@ func Fs110ColdSearchMore(net *Net) *Schedule {
 }
 
 // FS-110 on T2, with one explorer seed: its steps hold no barrier and no background action, so a seed reorders nothing,
-// and each run downloads all fourteen times. The hits given late are logged for question
-// search-m10-38-shard-hit-arrival.
+// and each run downloads all fourteen times.
 func TestFs110(t *testing.T) {
 	settings := DefaultRuleSettings()
 	settings.Seeds = settings.Seeds[:1]
 	RunRow(t, "FS-110", "", settings)
-	fs110Late.stateLock.Lock()
-	defer fs110Late.stateLock.Unlock()
-	for _, late := range fs110Late.late {
-		t.Logf("late: %s", late)
+}
+
+// FS-110's arrival clause holds the page loop to the bound: on the desktop and on the phone, a page that spends a
+// planted delay just past the host's bound before it answers its hit, the match in the first shard fetched, fails
+// FI-18 naming the late hit, where the same search unplanted passes it. All is 4.4 MB here, four shards, which is all
+// the first shard's match needs.
+func TestFs110FailsAHitPastTheArrivalBound(t *testing.T) {
+	for _, host := range fs110Hosts()[:2] {
+		for _, planted := range []bool{false, true} {
+			state := &fs110State{traces: map[string][]string{}, allByteCount: 4400 * 1000}
+			if planted {
+				state.answerDelay = host.arrival + 10*time.Millisecond
+			}
+			label := host.name + " " + fs110Queries[0].word
+			steps := []*Step{
+				{Actor: "writer", Action: state.write},
+				{Actor: host.name, Action: func(ctx context.Context, net *Net) error {
+					return state.searchMore(ctx, net, host, host.settings(), label, fs110Queries[0].word)
+				}},
+				{Actor: "writer", Action: func(ctx context.Context, net *Net) error {
+					state.world.close()
+					return nil
+				}},
+			}
+			net := sidecartest.NewNet(t.Context(), nil)
+			result := Run(t.Context(), &Schedule{Id: "FS-110 arrival " + label, Steps: steps, Check: []Invariant{state.fi18()}}, net)
+			net.Close()
+			late := fmt.Sprintf("%s gave its hit %s after its shard ", label, state.answerDelay)
+			switch {
+			case !planted && result.Err != nil:
+				t.Fatalf("%s unplanted failed: %s", label, result)
+			case planted && result.Err == nil:
+				t.Fatalf("%s with %s planted in the page loop passed FS-110's arrival clause", label, state.answerDelay)
+			case planted && !strings.Contains(result.Err.Error(), late):
+				t.Fatalf("%s with %s planted in the page loop failed, but not on its late hit: %s", label, state.answerDelay, result)
+			}
+		}
 	}
 }
