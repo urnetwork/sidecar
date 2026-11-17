@@ -10,9 +10,9 @@
 // 1,000 / (1 + e^-L) for log odds L: the filter's prior and its most telling features once each class has been
 // trained MinTrainedCount times, else PriorLogOdds, plus a rule's weight for a DMARC fail under p=quarantine, for an
 // SPF or DKIM fail with no DKIM pass, and against spam for a DMARC pass. A check that was cut or failed to look up
-// is no result and moves nothing. Each term is rounded to 1/1024 before the sum, so legs that differ in a log's last
-// bit still agree on the score. A person's own verdict on the message outranks the score where a list shows it
-// (MailView, MAIL-FORMAT.md), and teaches the filter through MailSpamScorer.Teach.
+// is no result and moves nothing. Each term is rounded to 1/LogOddsScale, 1/1,024, before the sum, so legs that differ
+// in a log's last bit still agree on the score. A person's own verdict on the message outranks the score where a list
+// shows it (MailView, MAIL-FORMAT.md), and teaches the filter through MailSpamScorer.Teach.
 //
 // On every leg. Package-level functions are safe for concurrent use, and so is MailSpamScorer.
 
@@ -29,11 +29,13 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// The units a term is rounded to before the sum.
-const mailSpamLogOddsScale = 1024
-
 // What the scorer and the filter are tuned by.
 type MailSpamSettings struct {
+	// The units a term is rounded to before the sum, per unit of log odds: 1,024, so legs that differ in a log's last
+	// bit still sum the same terms. Non-positive takes 1.
+	LogOddsScale int64
+	// s/model's format; nil takes DefaultMailSpamModelSettings.
+	Model *MailSpamModelSettings
 	// spam_score, parts per thousand, from which a message with no person's verdict files as spam.
 	ScoreThreshold uint32
 	// The messages each class must have been trained on before the filter speaks: below it one verdict would swing
@@ -69,6 +71,8 @@ type MailSpamSettings struct {
 // The one default.
 func DefaultMailSpamSettings() *MailSpamSettings {
 	return &MailSpamSettings{
+		LogOddsScale:            1024,
+		Model:                   DefaultMailSpamModelSettings(),
 		ScoreThreshold:          500,
 		MinTrainedCount:         10,
 		TrainedMaxCount:         4000,
@@ -117,14 +121,27 @@ func MailSpamClassOf(flags *MailFlags) MailSpamClass {
 	return MailSpamClassNone
 }
 
-// A term rounded to the sum's units.
-func mailSpamTerm(logOdds float64) int64 {
-	return int64(math.Round(logOdds * mailSpamLogOddsScale))
+// s/model's format, the default where none is set.
+func (self *MailSpamSettings) model() *MailSpamModelSettings {
+	if self.Model == nil {
+		return DefaultMailSpamModelSettings()
+	}
+	return self.Model
+}
+
+// The units a term is rounded to, at least 1.
+func (self *MailSpamSettings) logOddsScale() int64 {
+	return max(self.LogOddsScale, 1)
 }
 
 // The score of one message: see the file header. model may be nil, an untrained filter. deposit is the message's
 // sealed trailer, nil or a same-network deposit with no evidence to weigh.
 func MailSpamScore(model *MailSpamModel, parsed *MailParsed, deposit *protocol.MailDeposit, settings *MailSpamSettings) *MailSpamVerdict {
+	scale := settings.logOddsScale()
+	// a term rounded to the sum's units
+	mailSpamTerm := func(logOdds float64) int64 {
+		return int64(math.Round(logOdds * float64(scale)))
+	}
 	verdict := &MailSpamVerdict{}
 	terms := []int64{}
 	evidence := deposit.GetEvidence()
@@ -163,6 +180,10 @@ func MailSpamScore(model *MailSpamModel, parsed *MailParsed, deposit *protocol.M
 		terms = append(terms, mailSpamTerm(math.Log((spamCount+1)/(hamCount+1))))
 		pulls := []int64{}
 		for _, bucket := range mailSpamFeatures(parsed, settings) {
+			if len(model.spamBuckets) <= int(bucket) {
+				// a model of another format than these settings': the feature has no bucket there
+				continue
+			}
 			// Laplace's rule: a feature neither class has met pulls neither way
 			spamRate := (float64(model.spamBuckets[bucket]) + 1) / (spamCount + 2)
 			hamRate := (float64(model.hamBuckets[bucket]) + 1) / (hamCount + 2)
@@ -181,7 +202,7 @@ func MailSpamScore(model *MailSpamModel, parsed *MailParsed, deposit *protocol.M
 	for _, term := range terms {
 		sum += term
 	}
-	probability := 1 / (1 + math.Exp(-float64(sum)/mailSpamLogOddsScale))
+	probability := 1 / (1 + math.Exp(-float64(sum)/float64(scale)))
 	verdict.Score = uint32(min(mailSpamScoreMax, max(0, math.Round(probability*mailSpamScoreMax))))
 	verdict.Spam = settings.ScoreThreshold <= verdict.Score
 	return verdict
@@ -215,9 +236,10 @@ func (self *MailSpamScorer) Refresh() {
 // s/model and its version, read now; a model that learned nothing where none stands. A model that does not parse is
 // ErrMailSpamModelInvalid, which a score takes as an untrained filter and a teach refuses to write over.
 func (self *MailSpamScorer) read(ctx context.Context) (*MailSpamModel, uint64, error) {
-	content, version, err := self.store.Read(ctx, MailSpamModelPath, MailSpamModelMaxByteCount)
+	format := self.settings.model()
+	content, version, err := self.store.Read(ctx, MailSpamModelPath, format.MaxByteCount)
 	if errors.Is(err, ErrEvsPathAbsent) {
-		return NewMailSpamModel(), 0, nil
+		return NewMailSpamModel(format), 0, nil
 	}
 	if errors.Is(err, ErrMailStoreTooLarge) {
 		return nil, version, ErrMailSpamModelInvalid
@@ -225,7 +247,7 @@ func (self *MailSpamScorer) read(ctx context.Context) (*MailSpamModel, uint64, e
 	if err != nil {
 		return nil, 0, err
 	}
-	model, err := ParseMailSpamModel(content)
+	model, err := ParseMailSpamModel(content, format)
 	if err != nil {
 		return nil, version, err
 	}

@@ -5,8 +5,9 @@
 // database, which neither a page Worker nor a single s/model file can hold (plan-MAIL-mox-subset#2), so this is a small
 // filter of its own: a message's features hash into 4,096 buckets, and the model counts, per bucket, the spam and the
 // not-spam messages trained that held a feature there, beside how many of each were trained. Its size is fixed, so
-// it stays under MailSpamModelMaxByteCount however much it learns, and its counts are halved once more messages are
-// trained than the settings keep, so it follows a mailbox's mail as it changes.
+// it stays under the format's MaxByteCount however much it learns, and its counts are halved once more messages are
+// trained than the settings keep, so it follows a mailbox's mail as it changes. The format's limits are
+// MailSpamModelSettings' fields, their defaults the format's values (QD-702).
 //
 // The bytes are MailSpamModel (mail.proto): version 1, then counts as MAIL-FORMAT.md's s/model section states. The
 // file is sealed under §11 like every mailbox file, so a bucket's count says nothing to a server. Only its newest
@@ -35,17 +36,30 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// MAIL-FORMAT.md's s/model. Format values.
-const (
-	MailSpamModelBucketCount = 4096
-	// version 1's counts: the two message counts, then the buckets' spam counts, then their not-spam counts
-	mailSpamModelCountCount = 2 + 2*MailSpamModelBucketCount
-	mailSpamModelVersion    = 1
-	// A count is held below this, three varint bytes, so a model takes at most about 24 KiB.
-	mailSpamCountLimit = 1024 * 1024
-	// What a reader takes of s/model.
-	MailSpamModelMaxByteCount = 64 * 1024
-)
+// MAIL-FORMAT.md's s/model version, the one a reader takes.
+const mailSpamModelVersion = 1
+
+// s/model's format limits (MAIL-FORMAT.md's s/model section): the format's own values, every reader's and writer's
+// alike, so changing one is a format change that no device makes alone (QD-702).
+type MailSpamModelSettings struct {
+	// The buckets a model's features hash into: 4,096, at most 2^32. Its counts are the two message counts, then each
+	// bucket's spam count, then each one's not-spam count.
+	BucketCount int
+	// Every count is held below it: 2^20, three varint bytes, so a model takes at most about 24 KiB.
+	CountLimit uint32
+	// The most bytes of s/model a reader takes: 64 KiB, past the most a model of the format's counts encodes to.
+	MaxByteCount int
+}
+
+// The format's values, a fresh value each call.
+func DefaultMailSpamModelSettings() *MailSpamModelSettings {
+	return &MailSpamModelSettings{BucketCount: 4096, CountLimit: 1024 * 1024, MaxByteCount: 64 * 1024}
+}
+
+// version 1's counts: the two message counts, then the buckets' spam counts, then their not-spam counts.
+func (self *MailSpamModelSettings) countCount() int {
+	return 2 + 2*max(self.BucketCount, 0)
+}
 
 // Bytes that are no s/model a reader can use: not a MailSpamModel, another version, counts of another length, or a
 // bucket counting more messages than were trained.
@@ -53,23 +67,31 @@ var ErrMailSpamModelInvalid = errors.New("mail spam model invalid")
 
 // One mailbox's filter. Not safe for concurrent use.
 type MailSpamModel struct {
+	settings         *MailSpamModelSettings
 	spamMessageCount uint32
 	hamMessageCount  uint32
 	spamBuckets      []uint32
 	hamBuckets       []uint32
 }
 
-// A filter that has learned nothing.
-func NewMailSpamModel() *MailSpamModel {
+// A filter that has learned nothing, of the format settings give; nil takes DefaultMailSpamModelSettings.
+func NewMailSpamModel(settings *MailSpamModelSettings) *MailSpamModel {
+	if settings == nil {
+		settings = DefaultMailSpamModelSettings()
+	}
 	return &MailSpamModel{
-		spamBuckets: make([]uint32, MailSpamModelBucketCount),
-		hamBuckets:  make([]uint32, MailSpamModelBucketCount),
+		settings:    settings,
+		spamBuckets: make([]uint32, max(settings.BucketCount, 0)),
+		hamBuckets:  make([]uint32, max(settings.BucketCount, 0)),
 	}
 }
 
-// A filter from s/model's bytes, or ErrMailSpamModelInvalid.
-func ParseMailSpamModel(content []byte) (*MailSpamModel, error) {
-	if MailSpamModelMaxByteCount < len(content) {
+// A filter from s/model's bytes held to the format settings give, nil the default, or ErrMailSpamModelInvalid.
+func ParseMailSpamModel(content []byte, settings *MailSpamModelSettings) (*MailSpamModel, error) {
+	if settings == nil {
+		settings = DefaultMailSpamModelSettings()
+	}
+	if settings.MaxByteCount < len(content) {
 		return nil, fmt.Errorf("%w: %d bytes", ErrMailSpamModelInvalid, len(content))
 	}
 	message := &protocol.MailSpamModel{}
@@ -80,22 +102,23 @@ func ParseMailSpamModel(content []byte) (*MailSpamModel, error) {
 		return nil, fmt.Errorf("%w: version %d", ErrMailSpamModelInvalid, message.GetVersion())
 	}
 	counts := message.GetCounts()
-	if len(counts) != mailSpamModelCountCount {
+	if settings.BucketCount <= 0 || len(counts) != settings.countCount() {
 		return nil, fmt.Errorf("%w: %d counts", ErrMailSpamModelInvalid, len(counts))
 	}
 	model := &MailSpamModel{
+		settings:         settings,
 		spamMessageCount: counts[0],
 		hamMessageCount:  counts[1],
-		spamBuckets:      slices.Clone(counts[2 : 2+MailSpamModelBucketCount]),
-		hamBuckets:       slices.Clone(counts[2+MailSpamModelBucketCount:]),
+		spamBuckets:      slices.Clone(counts[2 : 2+settings.BucketCount]),
+		hamBuckets:       slices.Clone(counts[2+settings.BucketCount:]),
 	}
-	for bucket := range MailSpamModelBucketCount {
+	for bucket := range settings.BucketCount {
 		// a feature is counted once a message, so a bucket never counts more messages than were trained
 		if model.spamMessageCount < model.spamBuckets[bucket] || model.hamMessageCount < model.hamBuckets[bucket] {
 			return nil, fmt.Errorf("%w: bucket %d past its class", ErrMailSpamModelInvalid, bucket)
 		}
 	}
-	if mailSpamCountLimit <= model.spamMessageCount || mailSpamCountLimit <= model.hamMessageCount {
+	if settings.CountLimit <= model.spamMessageCount || settings.CountLimit <= model.hamMessageCount {
 		return nil, fmt.Errorf("%w: a count past its limit", ErrMailSpamModelInvalid)
 	}
 	return model, nil
@@ -109,7 +132,7 @@ func mailSpamModelWrite(content []byte, ifVersion uint64) *mailStoreWrite {
 
 // s/model's bytes, the same for the same counts on every leg.
 func (self *MailSpamModel) Marshal() ([]byte, error) {
-	counts := make([]uint32, 0, mailSpamModelCountCount)
+	counts := make([]uint32, 0, 2+len(self.spamBuckets)+len(self.hamBuckets))
 	counts = append(counts, self.spamMessageCount, self.hamMessageCount)
 	counts = append(counts, self.spamBuckets...)
 	counts = append(counts, self.hamBuckets...)
@@ -123,8 +146,9 @@ func (self *MailSpamModel) MessageCounts() (spamCount uint32, hamCount uint32) {
 
 // Learns, or with retract unlearns, one message of its class from its buckets, each counted once. Counts stay at or
 // above 0 and below their limit, and once more than trainedMaxCount messages are counted every count is halved, so
-// what was learned long ago weighs less. Unlearning after a halving takes away what is left, never more.
-func (self *MailSpamModel) learn(buckets []uint16, spam bool, retract bool, trainedMaxCount uint32) {
+// what was learned long ago weighs less. Unlearning after a halving takes away what is left, never more. A bucket past
+// the model's, which only another format's features name, is passed over.
+func (self *MailSpamModel) learn(buckets []uint32, spam bool, retract bool, trainedMaxCount uint32) {
 	messageCount, bucketCounts := &self.hamMessageCount, self.hamBuckets
 	if spam {
 		messageCount, bucketCounts = &self.spamMessageCount, self.spamBuckets
@@ -133,12 +157,15 @@ func (self *MailSpamModel) learn(buckets []uint16, spam bool, retract bool, trai
 		switch {
 		case retract && 0 < *count:
 			*count -= 1
-		case !retract && *count < mailSpamCountLimit-1:
+		case !retract && uint64(*count)+1 < uint64(self.settings.CountLimit):
 			*count += 1
 		}
 	}
 	step(messageCount)
 	for _, bucket := range buckets {
+		if len(bucketCounts) <= int(bucket) {
+			continue
+		}
 		step(&bucketCounts[bucket])
 		// a bucket never counts more messages than its class, as after a halving and a retraction
 		bucketCounts[bucket] = min(bucketCounts[bucket], *messageCount)
@@ -146,32 +173,33 @@ func (self *MailSpamModel) learn(buckets []uint16, spam bool, retract bool, trai
 	if 0 < trainedMaxCount && trainedMaxCount < self.spamMessageCount+self.hamMessageCount {
 		self.spamMessageCount /= 2
 		self.hamMessageCount /= 2
-		for bucket := range MailSpamModelBucketCount {
+		for bucket := range self.spamBuckets {
 			self.spamBuckets[bucket] = min(self.spamBuckets[bucket]/2, self.spamMessageCount)
 			self.hamBuckets[bucket] = min(self.hamBuckets[bucket]/2, self.hamMessageCount)
 		}
 	}
 }
 
-// A feature's bucket.
-func mailSpamBucket(feature string) uint16 {
+// A feature's bucket among bucketCount.
+func mailSpamBucket(feature string, bucketCount int) uint32 {
 	hash := fnv.New32a()
 	hash.Write([]byte(feature))
-	return uint16(hash.Sum32() % MailSpamModelBucketCount)
+	return hash.Sum32() % uint32(max(bucketCount, 1))
 }
 
 // A message's distinct feature buckets, in the order first met, from its walk: the subject's and the first text
 // part's words, the From domain and the attachments' media types. Words are runs of letters and digits, lowercased;
 // those under 2 or past TokenMaxByteCount bytes, and those of digits alone, which vary message by message, are
-// passed over. At most FeatureMaxCount, from the first TextMaxByteCount bytes of text.
-func mailSpamFeatures(parsed *MailParsed, settings *MailSpamSettings) []uint16 {
-	buckets := []uint16{}
-	seen := make(map[uint16]bool, settings.FeatureMaxCount)
+// passed over. At most FeatureMaxCount, from the first TextMaxByteCount bytes of text, among the format's buckets.
+func mailSpamFeatures(parsed *MailParsed, settings *MailSpamSettings) []uint32 {
+	bucketCount := settings.model().BucketCount
+	buckets := []uint32{}
+	seen := make(map[uint32]bool, settings.FeatureMaxCount)
 	add := func(feature string) bool {
 		if settings.FeatureMaxCount <= len(buckets) {
 			return false
 		}
-		bucket := mailSpamBucket(feature)
+		bucket := mailSpamBucket(feature, bucketCount)
 		if !seen[bucket] {
 			seen[bucket] = true
 			buckets = append(buckets, bucket)

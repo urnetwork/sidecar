@@ -160,7 +160,7 @@ func TestMailSpamModelSurvivesARestart(t *testing.T) {
 		t.Fatalf("before %+v, after %+v, %v", before, after, err)
 	}
 	content := store.file(MailSpamModelPath).content
-	model, err := ParseMailSpamModel(content)
+	model, err := ParseMailSpamModel(content, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,11 +171,12 @@ func TestMailSpamModelSurvivesARestart(t *testing.T) {
 }
 
 // However much is taught, s/model stays under its bound: counts halve past TrainedMaxCount and every count stays
-// below its limit, and the bytes never pass MailSpamModelMaxByteCount.
+// below its limit, and the bytes never pass the format's MaxByteCount.
 func TestMailSpamModelStaysUnderItsBound(t *testing.T) {
 	settings := DefaultMailSpamSettings()
 	settings.TrainedMaxCount = 1000
-	model := NewMailSpamModel()
+	format := settings.Model
+	model := NewMailSpamModel(format)
 	for n := range 5000 {
 		parsed := &MailParsed{Subject: fmt.Sprintf("w%dx w%dy w%dz", n, n*7, n*13), Text: fmt.Sprintf("body%d word%d text%d", n%97, n%89, n%83)}
 		model.learn(mailSpamFeatures(parsed, settings), n%3 == 0, false, settings.TrainedMaxCount)
@@ -185,19 +186,19 @@ func TestMailSpamModelStaysUnderItsBound(t *testing.T) {
 		t.Errorf("counts %d and %d", spamCount, hamCount)
 	}
 	content, err := model.Marshal()
-	if err != nil || MailSpamModelMaxByteCount < len(content) {
+	if err != nil || format.MaxByteCount < len(content) {
 		t.Fatalf("%d bytes, %v", len(content), err)
 	}
-	if _, err := ParseMailSpamModel(content); err != nil {
+	if _, err := ParseMailSpamModel(content, format); err != nil {
 		t.Error(err)
 	}
 	// the widest a model can be: every count at its limit
-	widest := NewMailSpamModel()
-	widest.spamMessageCount, widest.hamMessageCount = mailSpamCountLimit-1, mailSpamCountLimit-1
-	for bucket := range MailSpamModelBucketCount {
-		widest.spamBuckets[bucket], widest.hamBuckets[bucket] = mailSpamCountLimit-1, mailSpamCountLimit-1
+	widest := NewMailSpamModel(format)
+	widest.spamMessageCount, widest.hamMessageCount = format.CountLimit-1, format.CountLimit-1
+	for bucket := range format.BucketCount {
+		widest.spamBuckets[bucket], widest.hamBuckets[bucket] = format.CountLimit-1, format.CountLimit-1
 	}
-	if content, err := widest.Marshal(); err != nil || MailSpamModelMaxByteCount < len(content) {
+	if content, err := widest.Marshal(); err != nil || format.MaxByteCount < len(content) {
 		t.Errorf("the widest model takes %d bytes", len(content))
 	}
 }
@@ -207,7 +208,8 @@ func TestMailSpamModelStaysUnderItsBound(t *testing.T) {
 // will not write over it.
 func TestMailSpamModelRefusesWhatItCannotUse(t *testing.T) {
 	ctx := context.Background()
-	counts := make([]uint32, mailSpamModelCountCount)
+	format := DefaultMailSpamModelSettings()
+	counts := make([]uint32, format.countCount())
 	encode := func(version uint32, counts []uint32) []byte {
 		content, err := proto.Marshal(&protocol.MailSpamModel{Version: version, Counts: counts})
 		if err != nil {
@@ -218,9 +220,9 @@ func TestMailSpamModelRefusesWhatItCannotUse(t *testing.T) {
 	overBucket := append([]uint32{}, counts...)
 	overBucket[0], overBucket[2] = 1, 2
 	atLimit := append([]uint32{}, counts...)
-	atLimit[1] = mailSpamCountLimit
+	atLimit[1] = format.CountLimit
 	for name, content := range map[string][]byte{
-		"too large":      make([]byte, MailSpamModelMaxByteCount+1),
+		"too large":      make([]byte, format.MaxByteCount+1),
 		"version 2":      encode(2, counts),
 		"version 0":      encode(0, counts),
 		"short counts":   encode(1, counts[:10]),
@@ -228,7 +230,7 @@ func TestMailSpamModelRefusesWhatItCannotUse(t *testing.T) {
 		"count at limit": encode(1, atLimit),
 		"not a message":  {0xff, 0xff},
 	} {
-		if _, err := ParseMailSpamModel(content); !errors.Is(err, ErrMailSpamModelInvalid) {
+		if _, err := ParseMailSpamModel(content, format); !errors.Is(err, ErrMailSpamModelInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -258,7 +260,7 @@ func TestMailSpamTeachReadsAgainAfterAnotherDevicesWrite(t *testing.T) {
 	if err := scorer.Teach(ctx, testMailSpamMessage(true, 1), MailSpamClassNone, MailSpamClassSpam); err != nil {
 		t.Fatal(err)
 	}
-	model, err := ParseMailSpamModel(store.file(MailSpamModelPath).content)
+	model, err := ParseMailSpamModel(store.file(MailSpamModelPath).content, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
