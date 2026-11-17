@@ -47,6 +47,9 @@ free:                                   # pro: and team: carry the same sidecar:
   sidecar:
     storage: 1gib                       # and the table's other keys
     sidecar_clients: 20                 # 20 / 200 / 2,000 connected at once (20.8)
+    top_level_client_limit: 100         # 100 / 100 / 100: 20.8's create cap on top-level clients, read in place
+                                        # of LimitTopLevelClientIdsPerNetwork; network_top_level_client_limit
+                                        # rows still override it
     config_admissions: 50               # 50 / 500 / 5,000 admissions in the config (§7.9), member devices
                                         # and agents alike, with no member-device cap; whichever device
                                         # admits a page Worker, an admin's included, revokes its member's
@@ -76,7 +79,8 @@ free:                                   # pro: and team: carry the same sidecar:
     smtp_recipients_per_message: 5      # 5 / 50 / 100 per message (one message per connection)
     smtp_recipients_per_day: 25         # 25 / 1,000 / 100,000: five per counted connection (§14.7)
     smtp_message_bytes: 5mib            # 5 / 25 / 35 MiB, per connection
-    smtp_burst: 5                       # 5 / 50 per 10 min / 2,000 per h
+    smtp_burst: 5                       # 5 / 50 / 2,000 ...
+    smtp_burst_window: 10m              # ... per 10 min / 10 min / 1 h, the window smtp_burst counts in (§14.7)
     smtp_concurrent_connections: 1      # 1 / 4 / 32
     mail_inbound_message_bytes: 25mib   # 25 / 50 / 50 MiB (§15.7)
     mail_burners_active: 10             # 10 / 500 / none; the sidecar applies both burner
@@ -107,7 +111,28 @@ sidecar_abuse:                          # every tier; owners set defaults, §21 
                                         # and a floor under 1,088 KiB, one full i/ re-key, counts as 1,088 KiB
   evs_closure_uploads_per_s: 4          # fixed: a network's ?closure=1 uploads at the limit or while spent, in
                                         # equal turns per asking eraser (20.7)
+  evs_closure_uploads_per_min: 60       # fixed, read with a floor of 60: each eraser's own ?closure=1 uploads
+  evs_erasure_pushes_per_min: 60        # fixed, floor 60: a network's ERASE, CUT and CLOSURE pushes, P0 within
+                                        # it and P1 past it (§11.12; owner decision 524)
   evs_drop_previews_per_day: 20         # a repo's drop dry runs a UTC day, each a P2 queue entry (§11.13)
+  evs_subscribers_per_repo: 1000        # subscribed clients per repo, distinct holders of {evsl_<repo_id>} counted
+                                        # in the lease script; the team directory's cap is the network's
+                                        # config_admissions instead (§11.10)
+  evs_repos_per_client: 500             # repos one client subscribes to (§11.10)
+  evs_read_receipts_per_repo_day: 256   # a repo's read receipts a UTC day from readers that are not its writer,
+  evs_read_receipt_bytes: 4kib          # each at most this; past either, 429 to the next 00:00 UTC (§11.12;
+                                        # owner decision 519)
+  dns_changes_per_hour: 60              # §12.7's abuse caps
+  dns_challenges_per_name_hour: 10
+  dns_dkim_selectors: 64                # device selectors under _domainkey, burners' excluded (§14.6)
+  tls_visitor_concurrent: 64            # per visitor /64 or /32, per process (§13.9)
+  tls_visitor_new_per_s: 20
+  tls_visitor_aggregate_multiple: 4     # both visitor caps times this per /48 or /24
+  smtp_community_connections_per_hour: 500  # §14.7's breaker: Community connections an hour, at least this and
+  smtp_community_median_multiple: 3         # this multiple of the trailing 7-day hourly median
+  smtp_destination_connections_per_hour: 200  # Community connections per destination domain (§14.7)
+  smtp_destination_concurrency: 10      # per (sending address, destination /24), in edge memory; tuned on M9's
+                                        # first runs (§14.7)
   directory_requests_pending: 20        # §16.11's access requests per requesting sidecar: pending, a day and
   directory_requests_per_day: 50        # a run; its daemon refuses past them, and the directory's readers
   directory_requests_per_run: 5         # ignore the excess and alarm
@@ -115,8 +140,8 @@ sidecar_abuse:                          # every tier; owners set defaults, §21 
   directory_card_bytes: 16kib           # a card's padded record: <= 16 items in 16,208 B (§16.11)
   smtp_hard_bounce_percent: 10          # §14.8: a network halts once its self-reported hard bounces pass this
   smtp_hard_bounce_floor: 10            # share of the trailing 24 h's recipients and at least this many were sent
-  # with the caps of §11.10, §12.7, §13.9 (per visitor) and §14.7;
-  # forwarding and sockets have none (owner decision 66)
+  # each key is one row of server/model/pro_sidecar.go's table, which GET /sidecar/limits serves, and an
+  # area adds a key with one row; forwarding and sockets have none (owner decision 66)
 ```
 
 ### 20.5 Entitlement model
@@ -129,15 +154,15 @@ func NetworkTierOf(ctx context.Context, networkId server.Id) NetworkTier // high
 func NetworkSidecarLimits(ctx context.Context, networkId server.Id) *ProSidecarLimits // tier, then overrides
 ```
 
-**Source.** The Team grant writes an in-window balance with `pro=true` and a new nullable `tier='team'`, so `pro` readers stay correct.
+**Source.** The Team grant writes an in-window balance with `pro=true` and a new nullable `tier='team'`, so `pro` readers stay correct. Its renewal is `subscription_renewal`'s `SubscriptionTypeTeam` ("team"), its grant kinds `team` and `team_credit` join `grantGrace`, and the credit line carries `pro=false` and no `tier`, so it never confers the tier. A network's downgrade clock, `NetworkDowngradeTime`, is when its entitlement ended: the end_time of the newest window, already ended, of a `transfer_balance` whose `tier` conferred the tier the network left (MG6), for a Team its last `team` grant's end with its one-day grace and for Pro its last `pro` grant's, so one rule serves both (owner decision 523).
 
 **Overrides.** `network_sidecar_limit` rows raise a limit (ops) or tighten one (§21), snapshotted only for networks with rows, like Embed-plan rows (server/model/network_client_limit_model.go:13-25). A row never takes `evs_closure_bytes_per_day` below `evs_closure_bytes_floor`, and none overrides the floor or `evs_closure_uploads_per_s`: §21's `POST /abuse/action` refuses such a row, and `NetworkSidecarLimits` clamps to the floor (owner decision 146) and ignores a pacing row, which every eraser's turn needs (20.7).
 
-**Switch and zero.** Refusals ship dark behind `enforce_sidecar_limits`, like `enforce_concurrent_clients` (config/all/pro.yml:46-57), though an empty balance refuses as escrow does. Enforced, zero means "not included": it refuses creation, never activation, reads, deletes, erasure, export or maintenance pushes (20.7; :23-30); a missing price withholds its overage (:17-21). server/model/pro_absent_test.go pins both states.
+**Switch and zero.** Refusals ship dark behind `enforce_sidecar_limits`, like `enforce_concurrent_clients` (config/all/pro.yml:46-57), though an empty balance refuses as escrow does. `QuotaLimits` carries `enforced`, which api sets from the switch while the body keeps reporting the plan's tier and limits, so `ur status` and an app show them before enforcement starts; a daemon or reader that applies limits locally (§16.11's `directory_*` keys, §7.10's cleanup row, any other local pre-check) refuses only while `enforced` is true, an absent field reading false, and applies the closure floor and pacing whatever it says, since they hold while a network is spent, which is never dark (owner decision 520). While the switch is off, a rate whose limit only pro.yml sets, with no floor (`evs_drops_per_day`, `evs_drop_previews_per_day`, `evs_read_receipts_per_repo_day`), neither counts nor refuses and makes no Redis call (owner decision 522). Enforced, zero means "not included": it refuses creation, never activation, reads, deletes, erasure, export or maintenance pushes (20.7; :23-30); a missing price withholds its overage (:17-21). server/model/pro_absent_test.go pins both states.
 
-**Seats** are `network_member` rows (§7) active within 30 days, except Auditor and Billing admin.
+**Seats** are `network_member` rows (§7) active within 30 days, except Auditor and Billing admin: a member is active while any client under its `member_id` has an `auth_time` within 30 days, as the billing terms state, so an always-on device or a member's agent keeps its seat billed (owner decision 515).
 
-**Becoming Team.** `POST /network/team-create` (§7), then `POST /network/team-checkout`; `invoice.paid` writes the `team` renewal, grant and credit line and calls `UpdateProNetwork`. Invoiced teams use market `manual`; lapse follows Pro.
+**Becoming Team.** `POST /network/team-create` (§7), then `POST /network/team-checkout`; the first `invoice.paid` writes the `team` renewal and the first period's grant and credit line and calls `UpdateProNetwork`, and each later period's `team` grant and `team_credit` line are `RefreshTeamTransferBalances`'s, at the period's anchor (20.9; owner decision 514). Invoiced teams use market `manual`; lapse follows Pro.
 
 ### 20.6 X11: what counts toward the transfer balance
 
@@ -151,19 +176,46 @@ Decided (Q-QUOTA-2, Q-QUOTA-5, Q-QUOTA-6).
 | evs transfer (HTTPS) | — | caller's network, by usage batches |
 | Cross-network share | FriendsAndFamily | dialer's network, escrowed as Public |
 
-**Leases**, one per edge process and active (network, meter), draw on escrow's per-balance Redis reservations, so both see one balance; they name no host or peer (§13.9 keeps per-host bytes 24 h).
+**Leases**, one per edge process and active (network, meter), draw on escrow's per-balance Redis reservations, so both see one balance; they name no host or peer (§13.9 keeps per-host bytes 24 h). `Quota.Lease` handles are ref-counted over that one lease, and the last `Close` settles.
 
 ```text
 edge (tlsedge, mxedge, smtpedge)   Redis: per-balance reservations      taskworker
- Lease(network, meter) --------> reserve 64 MiB (16 MiB on Community) in 20.9's draw order
+ Lease(network, meter) --------> reserve a draw (below) in 20.9's draw order
  Spend(n): atomic add, no I/O
- at 75% used: renew -----------> reserve the next 64 MiB
- every 60 s: a UsageBatch -------------------------------------------> service_debit_journal
- Close or expiry: release -----> return the unused rest, in reverse     a FlushTransferDebits-style
-                                 draw order                             worker debits, no payout
+ renew ------------------------> reserve the next draw
+ every 60 s: carve, then a UsageBatch ------------------------------> service_debit_journal
+ Close or expiry: release -----> return the unused rest, in reverse     FlushServiceDebits debits, no
+                                 draw order                             payout, and releases each token
+draw     64 MiB (16 MiB on Community), or, when that is more, 4 s of the lease's own measured rate rounded up to a
+         multiple of it, at most 16 times it (1 GiB; 256 MiB on Community), renewed with a quarter of the draw or
+         2 s of traffic left, whichever is more: a slow lease draws as before and a fast one renews about once
+         per 4 s with 2 s to do it, holding up to 4 s of its traffic unspent, which a Redis loss can over-admit
+         (owner decision 518)
+tokens   a lease's are lease/<lease_id>/<n>, each a reservation, living 15 min and extended every 5 min while the
+         lease lives, the host spending none of a token's bytes 30 s before it could lapse; a carved debit's is
+         svc/<usage_id>, living 24 h until its flush releases it (owner decision 517)
+grant    a reservation is granted against the lower of the caller's reading of the balance and the balance's
+         floor in Redis, {escrow_<balance_id>}approx_floor, the lowest credit shown in the last 2 min, which each
+         flush lowers to the balance its debit left in the script that releases the debit's token; a host uses a
+         reading for at most 30 s
+carve    at each 60 s window one branch of the reservation script moves the window's used bytes, per balance in
+         draw order, out of the lease's tokens into svc/<usage_id>, the journal row's usage id, a no-op if that
+         token exists, so a carve runs once; the host sends (usage_id, balance_id, bytes) with the batch on the
+         internal wire, so UsageEvent stays as engines see it, and posts a batch only once its carves answered;
+         bytes whose reservation was gone are dropped from the event, counted in
+         urnetwork_quota_lease_unbilled_bytes_total and alerted, and ApplyUsageBatch refuses a lease meter's event
+         its carves do not cover (owner decision 517); no new table, column or Redis family
+flush    FlushServiceDebits debits the journal with no payout and releases what each row reserved: evs rows
+         nothing, relay rows their contract id, which is their usage id, and tls, mx and smtp rows svc/<usage_id>,
+         releasing a token that is gone being a no-op; it takes no claim share in taskworker's claim admission,
+         its chains registered in the production workload profile only and running on the ordinary queue and
+         their function's lane, since the four existing shares at period 8 already spend the half of ordinary
+         claim turns the scheduler allows; once service debits carry production volume (M5's tls leases at the
+         earliest), the shares are rebalanced from a measurement, FlushTransferDebits, AdvancePayment and
+         FlushServiceDebits at period 12 each and the totals lane and its drain at 8 (owner decisions 521, 522)
 ```
 
-**Usage batches** (§11.13, edges' leases): every 60 s each producer sends one `UsageBatch` (20.7), applied once by `batch_id` and flushed on SIGTERM; its stored-byte deltas move 20.7's nightly count; evs re-reads `OverLimit` every 5 s, so writes overshoot by about a minute.
+**Usage batches** (§11.13, edges' leases): every 60 s each producer sends one `UsageBatch` (20.7) of at most 1,000 events, a larger window splitting into several batches each under its own id, applied once by `batch_id` and flushed on SIGTERM; its stored-byte deltas move 20.7's nightly count; evs re-reads `OverLimit` every 5 s, so writes overshoot by about a minute, an answer past 200,000 networks (a setting) being cut and counted, the rest reading as not over (owner decisions 522, 524).
 
 ```text
 adds     an upload adds its segment's size, a committed push its record's length; evacuation moves records into
@@ -179,13 +231,21 @@ drop     from format 2, taskworker's drop job subtracts each seg/ object it dele
          owner decision 247)
 apply    api inserts service_usage_batch(batch_id) with the batch's service_debit_journal rows and
          network_quota_state deltas in one transaction, the linearization point; a batch_id already present is
-         a no-op answering 200
+         a no-op answering 200; a batch naming meter relay is refused whole, relayed bytes settling by contract;
+         a debit draws, in draw order, in-window balances (start_time <= now < end_time by the batch's caller's
+         clock, depleted ones included), each up to its room, its balance_byte_count less the unapplied rows of
+         both journals, Redis reservations not subtracted, and the rest overdraws the last in-window balance,
+         or, with none in window, goes unbilled, counted in urnetwork_quota_unbilled_bytes_total; a carve names a
+         network and meter the batch's events name, never passes its event's transfer bytes, leaves the rest to
+         draw at apply, and is the carve already journaled under its (balance, usage id) (owner decision 522)
 retry    a producer retries an unanswered batch for at most 10 min, then drops it, counted and alerting
          (under-billing only); batch rows live 24 h, past that horizon: one row per producer a minute, not one
          per network
-loss     bytes are lost only by an unclean exit (its open window, <= 60 s of that process's metered bytes) and
-         by any batch dropped after 10 min unanswered, as in a Postgres outage over 10 min (§19.10); no byte counts
-         twice; an edge's reserve behind lost bytes returns within its 24 h lease; 20.7's count corrects stored bytes
+loss     bytes are lost only by an unclean exit (its open window, <= 60 s of that process's metered bytes), by
+         any batch dropped after 10 min unanswered, as in a Postgres outage over 10 min (§19.10), and by bytes a
+         lease spent under a reservation that lapsed, at most one window's a host while Redis is lost to it; no
+         byte counts twice; a lease's reserve behind lost bytes returns within 15 min, a carved window's within
+         24 h (owner decision 517); 20.7's count corrects stored bytes
 ```
 
 **Relayed bytes (owner decision 10).**
@@ -193,6 +253,10 @@ loss     bytes are lost only by an unclean exit (its open window, <= 60 s of tha
 ```text
 when     CreateContract for a Network-mode contract between two marked sidecar clients of one network, unless
          the pair already rides a P2P stream (server/model/contract_stream_binding.go); P2P bytes never count
+mark     the contract's one INSERT sets payer_network_id: a payer, no transfer_escrow row and positive bytes
+         name a relayed contract, since zero-escrow contracts set no payer; at close the payer's balances and
+         each one's token are read before the close transaction, and the reservation's fence recovery and
+         free-settlement check take that shape (§2.8 connect-1)
 reserve  before the contract transaction, from the network's balances in 20.9's draw order, through the
          per-balance Redis reservations escrow and edge leases use (server/model/subscription_redis_admission.go);
          grant = min(requested, MaxContractTransferByteCount, max(MinContractTransferByteCount,
@@ -212,14 +276,15 @@ round    a pair that a Hello's requester bit marks (feature bit 1, §6.4) is rep
          warmed indexer doubling it, against Community's 30 GiB daily grant (config/all/pro.yml:88-89)
 bound    overshoot past the balance is only what Redis loss over-admits, as for leases (20.15); grants shrink as
          the balance nears zero, so 380 pairs at Community's 20 sidecars cannot overdraw 30 GiB
-cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Postgres round trip added
+cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Postgres round trip added on a warm
+         cache, credit read from a per-process draw-order cache of 5 s, and one read on a cold one
 ```
 
-**Empty balance.** A failed lease or relayed reservation, or an evs debit that finds no balance, marks the network *spent*: new streams get `quota` (§9.6), open ones reset as leases run out (§6.7), mxedge answers temporary failures (§15.6), evs refuses payload-adding uploads and pushes (20.7), and CreateContract refuses relayed sidecar contracts, so remote searches over them fail and phones search what they hold (§11.14); the network reads its own repos at `evs_unpaid_read_rate`, a per-process token bucket per network at that rate divided by evs's blocks, so the network as a whole stays at the published rate, as §13.9's caps divide by blocks, a phone's fallback download of all included, others' not at all.
+**Empty balance.** A failed lease or relayed reservation, or an evs debit that finds no balance, marks the network *spent*: new streams get `quota` (§9.6), open ones reset as leases run out (§6.7), mxedge answers temporary failures (§15.6), evs refuses payload-adding uploads and pushes (20.7), and CreateContract refuses relayed sidecar contracts, so remote searches over them fail and phones search what they hold (§11.14); a taskworker pass every 60 s (a setting), registered in the production workload profile only, clears the mark once an active in-window balance has room past its pending debits, Redis reservations aside, so a new grant reopens the network within about a minute, and a lease refused while Postgres shows room marks it again; the refusal carries `limit_key` `data`, `upgrade` true and limit and used 0, whatever the cause (owner decision 522); the network reads its own repos at `evs_unpaid_read_rate`, a per-process token bucket per network at that rate divided by evs's blocks, so the network as a whole stays at the published rate, as §13.9's caps divide by blocks, a phone's fallback download of all included, others' not at all.
 
 ### 20.7 Enforcement points, counters, downgrade
 
-**Counters.** Capacity other than storage is exact, recounted nightly: rows (entries, custom domains, clients, members) count in their transaction under a transaction-scoped per-network lock (PgBouncer-safe), and grants, admissions and ACL heads as api verifies them (§7.9). Storage counts from objects, below. Rates use one all-or-none Lua script per `{sq_<network_id>}` and `debit_id` (48 h keys), failing open for one window if Redis is lost. Producers cache limits 5 s.
+**Counters.** Capacity other than storage is exact, recounted nightly: rows (entries, custom domains, clients, members) count in their transaction under a transaction-scoped per-network lock (PgBouncer-safe), and grants, admissions and ACL heads as api verifies them (§7.9). Storage counts from objects, below. Rates use one all-or-none Lua script per `{sq_<network_id>}` and `debit_id` (48 h keys), failing open for one window if Redis is lost: a call Redis does not answer, or whose answer cannot be read, passes and counts `urnetwork_quota_rate_fail_open_total`, and a caller whose own context ended gets that error. A debit id that passed answers pass again and counts nothing, and one that was refused recorded nothing and is judged afresh, so a caller asking again after a refusal's `retry_after_ms` keeps its debit id (owner decision 516); a key names no day, the Quota windowing each count by its own clock, and a class-only key, as §11.12's erasure push rate, is counted in a call of its own, since under all-or-none its refusal would stop the call's other keys (owner decision 524). `ReconcileSidecarCounters`, nightly, recomputes `storage_over`, the connected set and spent marks, and reports row-counted capacities over their limits as a metric, refusing nothing. Producers cache limits 5 s.
 
 | Limit | Checked at | At the limit | On downgrade |
 |---|---|---|---|
@@ -231,6 +296,8 @@ cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Pos
 | `smtp_*` | smtpedge `{smq_}` script (§14.7) | QUOTA; mail stays queued | next preamble |
 | `sidecar_clients`: connected | enrollment and connect, as `concurrent_clients` (server/connect/resident.go:1170-1187), by one ZCOUNT from now to +inf of `{sq_<network_id>}connected_sidecar`, a sorted set of every marked client scored by its expiry ms, written and refreshed on the resident poll as `{np_}connected` is, its 48 h ttl refreshed at each write | refused; 4001 at connect | connected clients stay |
 | members, SSO (§7.5, §7.6) | §7.5's Team routes, by `NetworkTierOf` | Team only | frozen: sign-in, data kept; invites, roles, IdP, SCIM refused |
+
+**Downgrade clock.** A downgrade's 14 days count from `NetworkDowngradeTime` (20.5): a Team whose cycle invoice never pays keeps `team` for the period `RefreshTeamTransferBalances` granted at its anchor plus the grace, and its 14 days of withholding, and with them DNS's (§12), count from the moment `NetworkTierOf` drops, so day 13 changes nothing for a Team as for Pro (owner decision 523).
 
 **Stored bytes and maintenance at the limit (D-QUOTA-3).**
 
@@ -256,36 +323,43 @@ count    taskworker's nightly pass over each repo's prefixes on its metadata clu
          next pass corrects it; the pass runs as shard jobs, each replacing its per-network sums for the night in
          Redis {evsn_<night>} (48 h), and a closing job, once every shard of every metadata cluster has reported,
          writes each network's sum, zero for a network with a count and no sums, while a night that some shard
-         never finished, or whose sums Redis lost, leaves the old count (owner decision 198); usage batches move
-         the count between passes (20.6); §11.13 gives its cost
-limit    at the storage limit (Team: past storage_overage_max, or past storage while storage_gib_month is unset)
-         and while spent, evs refuses new payload, segment uploads and pushes naming a new segment or inline
-         record alike; it accepts maintenance pushes, which add no payload (CONSUME, BASE, ERASE, PATH_EPOCH and
-         its maps, DELETE, deletion and restore, EvsReseed), a CUT, whose one staged record only replaces its
-         ref's erasure set (§11.12), and re-seed uploads; an erasure's CLOSURE push, bound
-         to its ERASE and re-keying existing derived-field chains under §11.12's rekey rule, each new chain within
-         Padmé of the one it replaces, with its payload and its ?closure=1 segment uploads, within the closure
-         bounds below; and config and mailcfg pushes within §7.9's limits; so a full network can still erase and
-         change policy; the search index's heads stop with the content pushes they ride, and its merges, roll-ups
-         and builds add payload and wait until the network is under the limit and not spent, search answering from
-         its partitions as they stand; removing its files is a deletion, accepted, and the settings version that
-         turns it off, a new record, lands once under the limit and not spent (§11.14); accepted bytes count and
-         debit as usual; in v0 an erasure frees no stored bytes; from format 2 (v1), deleting versionless files
-         adds no payload, so it is accepted at the limit and frees their bytes a minute later, staged ones with
-         their batch, and a DROP push that uploads no segment (its written checkpoints inline within §11.12's
-         rekey bound, chunk sets re-cited, or boundaries removed) is accepted as maintenance, its index rewrites
-         waiting as merges do, while one whose written checkpoint needs an upload gets QuotaRefusal and a cancel,
-         adding no payload, is accepted (§11.13); other ciphertext stays until a later compaction, unscheduled
-         (§11.12; owner decision 247)
+         never finished, or whose sums Redis lost, leaves the old count (owner decision 198); the pass writes an
+         absolute count, deltas landing during it are not replayed, and the next pass corrects them; usage
+         batches move the count between passes (20.6); §11.13 gives its cost
+limit    at the storage limit, a network being over once its count reaches it (count >= limit, so a zero refuses the
+         first upload; Team's limit is storage_overage_max while storage_gib_month is priced, or a larger storage a
+         row sets, and storage while it is unpriced; owner decision 522), and while spent, evs refuses new payload,
+         segment uploads and pushes naming a new segment or inline record alike; it accepts maintenance pushes, which
+         add no payload (CONSUME, BASE, ERASE, PATH_EPOCH and its maps, DELETE, deletion and restore, EvsReseed), a
+         CUT, whose one staged record only replaces its ref's erasure set (§11.12), and re-seed uploads; an erasure's
+         CLOSURE push, bound to its ERASE and re-keying existing derived-field chains under §11.12's rekey rule, each
+         new chain within Padmé of the one it replaces, with its payload and its ?closure=1 segment uploads, within
+         the closure bounds below; and config and mailcfg pushes within §7.9's limits; so a full network can still
+         erase and change policy; the search index's heads stop with the content pushes they ride, and its merges,
+         roll-ups and builds add payload and wait until the network is under the limit and not spent, search
+         answering from its partitions as they stand; removing its files is a deletion, accepted, and the settings
+         version that turns it off, a new record, lands once under the limit and not spent (§11.14); accepted bytes
+         count and debit as usual; in v0 an erasure frees no stored bytes; from format 2 (v1), deleting versionless
+         files adds no payload, so it is accepted at the limit and frees their bytes a minute later, staged ones with
+         their batch, and a DROP push that uploads no segment (its written checkpoints inline within §11.12's rekey
+         bound, chunk sets re-cited, or boundaries removed) is accepted as maintenance, its index rewrites waiting as
+         merges do, while one whose written checkpoint needs an upload gets QuotaRefusal and a cancel, adding no
+         payload, is accepted (§11.13); other ciphertext stays until a later compaction, unscheduled (§11.12; owner
+         decision 247)
 closure  at the limit and while spent, §11.12's rekey row takes an eraser's ?closure=1 uploads, each at most
-         1,088 KiB, one padded §15.7 i/ segment or §11.14 index file (else QuotaRefusal), only within its own 60 a
-         minute, which {sq_} counts per eraser (the erasing sidecar, its token's ur_sidecar_id, §11.8), and within
-         its turn of the network's pacing, which takes at most R uploads a second however many erasers ask at
-         once, R being evs_closure_uploads_per_s (4), in equal turns: with k of the network's erasers asking for
-         one, a refused one counting until its turn, each takes one at most every k/R s; past either it answers
-         that upload 429 with retry_after_ms; {sq_} counts the network's ERASE, CUT and CLOSURE pushes against
-         the network's 60 a minute only to class them: P0 within it, and past it a push queues as P1 and commits
-         (§11.12's push row, §11.13)
+         1,088 KiB, one padded §15.7 i/ segment or §11.14 index file (else QuotaRefusal), only within its own
+         evs_closure_uploads_per_min (60, fixed, read with a floor of 60), which {sq_} counts per eraser (the
+         erasing sidecar, its token's ur_sidecar_id, §11.8), and within its turn of the network's pacing, R being
+         evs_closure_uploads_per_s (4): each asking eraser holds a seat, a cell 1/R s wide at the tail of the
+         network's seats, good from its instant to the end of its second; a seat is handed out only in a second
+         with a free cell, so the network takes at most R uploads a second whatever asks arrive and in whatever
+         order; with k erasers asking, each takes one every k/R s; an eraser that misses its seat's second is
+         seated again, at once while the second has a free cell and else one round later (owner decision 516);
+         past either it answers that upload 429 with retry_after_ms, the pacing's refusal naming
+         evs_closure_uploads_per_s with its limit, the uploads the network took in that second and the wait to its
+         seat or the next second; {sq_} counts the network's ERASE, CUT and CLOSURE pushes against
+         evs_erasure_pushes_per_min (60, fixed, floor 60) only to class them: P0 within it, and past it a push
+         queues as P1 and commits (§11.12's push row, §11.13; owner decision 524)
 allow    each erasing sidecar has its own evs_closure_bytes_per_day a UTC day (20.4), never below
          evs_closure_bytes_floor whatever a row (20.5), §21 or an unusable value sets; {sq_} counts against it
          that sidecar's closure bytes, each of its ?closure=1 uploads and its CLOSURE pushes' inline records, and
@@ -295,8 +369,8 @@ allow    each erasing sidecar has its own evs_closure_bytes_per_day a UTC day (2
 wait     an allowance covers ⌊allowance / 1,088 KiB⌋ full i/ segment or index file re-keys a UTC day, 60 by
          default and 3 at the floor; an eraser sizes each CLOSURE, with its ERASE, to what remains of its
          allowance (QuotaLimits gives the allowance, and only its own closures spend it), splitting a larger
-         erasure into such pairs, since a push adopts an upload only within 24 h (§11.13); the pacing gives each
-         asking eraser a turn at least every k/R s (~21 min with all 5,000 of a Team's admissions asking, still 69
+         erasure into such pairs, since a push adopts an upload only within 24 h (§11.13); the pacing seats each
+         asking eraser once every k/R s (~21 min with all 5,000 of a Team's admissions asking, still 69
          turns a day, above the default allowance's 60 re-keys); so at the floor a backlog re-keying n full
          segments, refused for bytes, commits its last pair within three turns of the ⌈n/3⌉-th 00:00 UTC after the
          refusal, under ⌈n/3⌉ days and three turns however many erasers wait, since none spends another's
@@ -325,7 +399,9 @@ note     §16.8's erasure entry, a new record, waits until the network is below 
 // A refusal maps to 402 when a purchase lifts the limit, with x402 terms on api-hosted routes and upgrade:
 // true and no terms at evs, which cannot quote them (§11.20), 429 with Retry-After when a
 // window resets (server/controller/x402_controller.go:849; server/router/handler_utils.go:604-609),
-// else Error{RESOURCE_EXHAUSTED} (§6.5) or stream quota.
+// else Error{RESOURCE_EXHAUSTED} (§6.5), which over HTTP is 429 with the QuotaRefusal body and no
+// Retry-After, or stream quota. QuotaLimits also carries `enforced`, enforce_sidecar_limits's state,
+// which local pre-checks follow (20.5; owner decision 520).
 type QuotaRefusal struct {
 	LimitKey     string `json:"limit_key"`
 	Limit        int64  `json:"limit"`
@@ -339,11 +415,12 @@ type QuotaRefusal struct {
 type UsageBatch struct {
 	BatchId     connect.Id    // first 16 B of SHA-256(producerInstanceId || windowSeq): the retry identity;
 	                          // producerInstanceId is 16 random bytes drawn at process start; a drop job's
-	                          // batch: of SHA-256(scanId || cursor range) instead (20.6)
+	                          // batch: of SHA-256(scanId || cursor range) instead, each cursor after its length
+	                          // as 4 bytes big-endian (20.6)
 	Producer    string        // "evs", "tlsedge", "mxedge", "smtpedge"; "taskworker" for evacuation's staged
 	                          // frees and the drop job's deletes and holds
 	WindowStart time.Time     // 60 s windows
-	Events      []*UsageEvent // per network and meter: transfer bytes, or a repo's stored-byte delta
+	Events      []*UsageEvent // per network and meter: transfer bytes, or a repo's stored-byte delta; at most 1,000
 }
 type Quota interface {
 	Limits(ctx context.Context, networkId connect.Id) (*QuotaLimits, error)
@@ -372,11 +449,11 @@ Owner decision 4: one client per sidecar, a child of the device client in its ne
 
 **Declaration** (§5.6, §7.7). A sidecar declares no-egress unless `ur proxy` or a public exit is set; the client JWT carries it, so connect needs no query, and window clients inherit it. `CreateContract` refuses such clients Public contracts (§8.10).
 
-**Peer list.** Declared clients get a new peer category, unlisted and without peer subscriptions like isolated clients (server/model/peer_model.go:59-76), which the create cap's and peer valve's `NOT EXISTS` clauses (20.3) also skip. Other clients' create cap moves into pro.yml per tier.
+**Peer list.** Declared clients get a new peer category, unlisted and without peer subscriptions like isolated clients (server/model/peer_model.go:59-76), which the create cap's and peer valve's `NOT EXISTS` clauses (20.3) also skip. Other clients' create cap moves into pro.yml per tier, as `top_level_client_limit` (20.4), read in place of `LimitTopLevelClientIdsPerNetwork`, a `network_top_level_client_limit` row still overriding it.
 
 ### 20.9 Team billing and abuse limits
 
-**Post-paid (owner decisions 92, 122).** One Stripe subscription per Team network prices the base, seats (graduated above `included_seats`; meter `team_seats`, formula `last`) and overage at 20.4's `team:` prices; Stripe holds only price ids, in `config/<env>/stripe.yml` as for Pro (server/controller/subscription_stripe_controller.go:64-65), and checkout refuses one whose amount differs. Transfer overage draws a 10 TiB credit line (`grant_kind` `team_credit`) that every draw uses last (D-QUOTA-9), metered as its daily GiB (pre-aggregated daily, `sum`; Meters below) at the data-pack rate, $3 per TiB (config/all/pro.yml:221-222). Settlement pays providers from balance revenue, so the line carries `net_revenue_nano_cents` at that rate, a per-period risk for URnetwork. Storage over 200 GiB is metered as daily GiB-days (pre-aggregated daily, `sum`), a GiB-day at 12/365 of the GiB-month price. `invoice.payment_failed`, like an exhausted line, stops renewal and refuses as an empty balance; `invoice.paid` renews. `team_subscription` (MG6) records each Team's Stripe subscription and customer ids, billing anchor and start: the first `invoice.paid` writes it, `customer.subscription.deleted` ends it, and the hourly reconciler can repair it from Stripe. `RefreshTeamTransferBalances` grants a period only to a Team whose row is live, with no unresolved payment failure, at the row's anchor, and the meter reports, which only such Teams get, take their customer and start from it (owner decision 199).
+**Post-paid (owner decisions 92, 122).** One Stripe subscription per Team network prices the base, seats (graduated above `included_seats`; meter `team_seats`, formula `last`) and overage at 20.4's `team:` prices; Stripe holds only price ids, in `config/<env>/stripe.yml` as for Pro (server/controller/subscription_stripe_controller.go:64-65), and checkout refuses one whose amount differs. Transfer overage draws a 10 TiB credit line (`grant_kind` `team_credit`) that every draw uses last (D-QUOTA-9), metered as its daily GiB (pre-aggregated daily, `sum`; Meters below) at the data-pack rate, $3 per TiB (config/all/pro.yml:221-222). Settlement pays providers from balance revenue, so the line carries `net_revenue_nano_cents` at that rate, a per-period risk for URnetwork. Storage over 200 GiB is metered as daily GiB-days (pre-aggregated daily, `sum`), a GiB-day at 12/365 of the GiB-month price. `RefreshTeamTransferBalances` writes each period's `team` grant and `team_credit` line at its 00:00:00 UTC anchor for every Team whose subscription is live with no unresolved payment failure, since a cycle's `invoice.paid` arrives at least 72 h into its period: `invoice.paid` writes only the first period, and on a cycle invoice records the renewal's revenue, clears dunning and restores a line a failure ended; `invoice.payment_failed` stops the next grant and ends the current line, so overage refuses at once while included bytes run out, an exhausted line refusing likewise as an empty balance. Exposure per unpaid Team is one period: its base, its seats and up to 10 TiB of line paid out at $3 per TiB (owner decision 514). `team_subscription` (MG6) records each Team's Stripe subscription and customer ids, billing anchor and start: the first `invoice.paid` writes it, `customer.subscription.deleted` ends it, and the hourly reconciler can repair it from Stripe. `RefreshTeamTransferBalances` grants a period only to a Team whose row is live, with no unresolved payment failure, at the row's anchor, and the meter reports, which only such Teams get, take their customer and start from it (owner decision 199).
 
 **Draw order (D-QUOTA-9).** One comparator orders every draw of a payer's transfer balances and, reversed, every return:
 
@@ -397,14 +474,21 @@ sites    contract escrow's sort (server/model/subscription_model.go:1782-1796); 
          index (network_id, flag, end_time, start_time, balance_id) WHERE active beside today's
          (server/db_migrations.go:9339-9350), so a page stays one index scan; settlement's escrow read
          (subscription_model.go:3967-3987), ordered by all four keys; edge leases and relayed reservations
-         (20.6); returns in reverse; the spread over large free grants (subscription_redis_selection.go:51-54)
-         never takes the line, which carries revenue
+         (20.6); the deadline close's escrow rows (deadlineEscrowRowsSql,
+         server/model/subscription_contract_scheduled_close.go:49-59), the grant exhaustion proof
+         (proveRedisGrantExhaustion, subscription_redis_exhaustion.go:179-185) and the zero-escrow contract's
+         priority (zeroEscrowContractPriorityInTx, subscription_zero_escrow.go:514), all following escrowDrawLess
+         behind escrow_draw_order; before M4, the debit path's LoadDrawOrderBalances orders by the same four keys
+         with no gate, identical to escrow's order until a team_credit balance exists (owner decision 522);
+         returns in reverse; the spread over large free grants (subscription_redis_selection.go:51-54) never takes
+         the line, which carries revenue
 E-a      a team_credit balance is drawn only when every other in-window balance of the payer has nothing available
 E-b      a settlement keeps bytes in draw order and returns the rest in reverse, so the line pays only for bytes
          beyond the included balances
 E-c      each byte the line pays appears once in that day's transfer-overage row (Meters, below)
-E-d      a reservation on the line ends as a debit, or returns within its 24 h lease
-         (server/model/subscription_redis_admission.go:38), so nothing holds the line without a debit
+E-d      a reservation on the line ends as a debit, or returns within its lease: 15 min for a lease's own tokens,
+         24 h for carved ones and contracts (server/model/subscription_redis_admission.go:38; owner decision 517), so
+         nothing holds the line without a debit
 E-e      providers are paid at settlement from the line's net_revenue_nano_cents, the overage rate
 ```
 
@@ -413,6 +497,9 @@ E-e      providers are paid at settlement from the line's net_revenue_nano_cents
 **Meters** (taskworker, daily):
 
 ```text
+names      network_service_usage's meters are mx, smtp, evs, relay, tls, team_seats, team_transfer_overage and
+           team_storage_overage, the last three also Stripe's event_names; team_credit_window and
+           team_credit_running are the overage's helper rows, which GET /network/usage hides
 meters     transfer overage (GiB, sum) and storage overage (GiB-days, sum), each with event ingestion
            pre-aggregated daily (event_time_window day; stripe-go v82.5.1 billing_meter.go:24-35): Stripe keeps a
            day's most recently received event per customer, so a re-send replaces and never adds; seats (last);
@@ -426,8 +513,15 @@ grace      an invoice rule ("has a metered price" and "from a subscription cycle
            change drops grace-period usage
 row        stripe_meter_report(network_id, meter, usage_day, version, identifier, value, state, attempts,
            next_time), primary key (network_id, meter, usage_day, version); value is the day's canonical quantity,
-           fixed by RollupServiceUsage after the UTC day closes (a debit counts on the day it was applied);
-           identifier = SHA-256(network_id || meter || usage_day || version)
+           fixed by RollupServiceUsage after the UTC day closes; identifier = SHA-256(network_id || meter ||
+           usage_day || version)
+overage    RollupServiceUsage derives the transfer overage from the line, so every debit path feeds it and no
+           settlement code changes: at each UTC day's close it takes the network's team_credit balances ending
+           within 7 d of that day, used = start_balance_byte_count - balance_byte_count; the day's bytes are the
+           sum of used now over yesterday's set and today's, less yesterday's stored total, and today's total over
+           today's set is stored as team_credit_window; C, the running sum of days' bytes, stored as
+           team_credit_running, gives team_transfer_overage = round(C(d) / 2^30) - round(C(d-1) / 2^30), whole
+           GiB, so rounding never accumulates; a debit counts on the day the pass first sees it
 states     queued -> sending -> sent | uncertain | failed | missed
 send       timestamp: the later of 12:00:00 UTC of usage_day and 1 s after the subscription's start, so the
            first, partial day's event lies inside the first period; at most one send in flight per (customer,
@@ -461,7 +555,7 @@ cost       year two's ~1,000 Team networks x 3 meters: ~3,000 events a day; hour
 
 **D-QUOTA-1 (proposed).** Tiers `free` (Community), `pro` and `team` resolve only in pro_model.go from in-window balances (`team` implies `pro`), with per-tier `sidecar:` blocks. *Why:* one entitlement source, Pro's cache and grace.
 
-**D-QUOTA-2 (proposed).** Limits and prices come only from pro.yml, with `network_sidecar_limit` overrides; limits ship dark, unusable values refuse only creation, and a missing price withholds its overage (20.5). *Why:* R-QUOTA-5; owner decision 122.
+**D-QUOTA-2 (proposed).** Limits and prices come only from pro.yml, with `network_sidecar_limit` overrides; limits ship dark, local pre-checks too by `QuotaLimits.enforced` (owner decision 520), unusable values refuse only creation, and a missing price withholds its overage (20.5). *Why:* R-QUOTA-5; owner decision 122.
 
 **D-QUOTA-3 (proposed).** Capacity other than storage counts exactly; storage counts nightly from stored object sizes and batch-resident record lengths, moved between passes by usage batches, and at the limit only payload-adding uploads and pushes stop, except re-seeding, an erasure's CLOSURE push and its uploads within the erasing sidecar's own rate, daily allowance (never below its fixed floor; owner decision 146) and equal turn of the network's closure pacing, an upload-free DROP push (D-QUOTA-12), an erasure's CUT (§11.12), and config and mailcfg pushes within §7.9's limits; rates use one atomic Lua script per network (20.7). *Why:* exact counts survive Redis loss; stateless evs has no counter to lock (owner decision 2); maintenance and erasure must work in a full network, no eraser can spend another's allowance or turns, and paced closures stay within the HDD sets' rates (20.15).
 
@@ -473,7 +567,7 @@ cost       year two's ~1,000 Team networks x 3 meters: ~3,000 events a day; hour
 
 **D-QUOTA-7 (proposed).** Abuse limits (`sidecar_abuse:`) are separate from quotas, never sold, equal on every tier and tightened per network by §21; limits derived from a quota grow with it. *Why:* reputation and platform risk do not scale with payment.
 
-**D-QUOTA-8 (proposed).** Taskworker rolls producers' usage into daily `network_service_usage` rows for `GET /network/usage`, invoices and meters; each day's row is sent to a pre-aggregated daily Stripe meter, so a re-send replaces it. *Why:* one record for display, billing and reconciliation, and a lost response must never bill twice.
+**D-QUOTA-8 (proposed).** Taskworker rolls producers' usage into daily `network_service_usage` rows for `GET /network/usage`, invoices and meters; each day's row is sent to a pre-aggregated daily Stripe meter, so a re-send replaces it; and `RefreshTeamTransferBalances` writes each Team period's grant and credit line at its anchor, `invoice.paid` writing only the first (owner decision 514). *Why:* one record for display, billing and reconciliation, and a lost response must never bill twice.
 
 **D-QUOTA-9 (proposed).** One comparator, `escrowDrawLess`, orders every draw and return of transfer balances, with `team_credit` last (20.9). *Why:* owner decision 92 draws the line last; any site with its own order would bill overage while a data pack remains.
 
@@ -509,7 +603,7 @@ cost       year two's ~1,000 Team networks x 3 meters: ~3,000 events a day; hour
 - **Provides:** `NetworkTierOf`, `ProConfig.TierFor`, `NetworkSidecarLimits`; `ServiceHost.Quota`, `UsageBatch`, and every leg's `QuotaRefusal` and `QuotaLimits`; 20.4's limits and prices; the stored-byte count; usage rollups; 20.8's counting; `escrowDrawLess`; Team checkout and meters.
 - **Consumes:** §4 `ServiceHost`, C9, C19; §5.6, §7.7 the declaration; §6 modes, stream codes, Hello's requester bit; §7 Team tables, deltas, admissions; §8 grant activation, contract gate, `acl_*` checks; §9 `ValidateListen`; §11.13 usage batches (the purge's, evacuation's and drop job's frees included), the nightly pass and fair share; §11.14's index files; §12 entry counts; §13-§15 leases; §16 approvals; §19.6's cost per usable TB; §21 overrides; server/model/subscription_redis_admission.go's reservations.
 - **Subprotocol messages:** none new; reuses `Error{RESOURCE_EXHAUSTED}` (§6.5), the stream codes and topic `team` (§6.8), whose version is the authorization log position, so a limit change raises none and reaches clients at the hourly resync.
-- **API routes:** `GET /network/usage` (Network, read roles; usage and limits); `GET /sidecar/limits` (Client; `QuotaLimits` for local pre-checks); `POST /network/team-checkout` (Network, Owner or Billing admin). Internal, on §8.9's `/internal/gate/` surface under each service's own credential, all off the inline path and cached (I-12): read a network's limits; read the over-limit list, spent networks apart; post a usage batch; read a payer's draw-ordered balances with credit; mark a network spent. `CountRate` and reservations go straight to Redis through `ServiceHost.Redis`. `quotahost.NewApiQuota` serves evs, gkm, sockets, tlsedge and mxedge, and api, connect and taskworker keep `NewLocalQuota`; in a Postgres outage batches retry and drop as 20.6 states, and the lists go stale.
+- **API routes:** `GET /network/usage` (Network, read roles: `QuotaLimits`, `stored_byte_count`, `storage_over`, `spent`, and day rows `{usage_day, meter, quantity}` for up to 13 months, paged, the overage's helper meters hidden); `GET /sidecar/limits` (Client; `QuotaLimits`, with `enforced`, for local pre-checks, which refuse only while it is true; owner decision 520); `POST /network/team-checkout` (Network, Owner or Billing admin). Internal, on §8.9's `/internal/gate/` surface under each service's own credential, all off the inline path and cached (I-12): read a network's limits; read the over-limit list, spent networks apart; post a usage batch; read a payer's draw-ordered balances with credit; mark a network spent. `CountRate` and reservations go straight to Redis through `ServiceHost.Redis`. `quotahost.NewApiQuota` serves evs, gkm, sockets, tlsedge and mxedge, and api, connect and taskworker keep `NewLocalQuota`; in a Postgres outage batches retry and drop as 20.6 states, and the lists go stale.
 - **Tables** (api; additive; §2.8 api-13):
 
 ```text
@@ -522,22 +616,23 @@ network_quota_state(network_id, stored_byte_count, storage_over,         until i
   spent_time)
 network_service_usage(network_id, usage_day, meter, quantity)            13 months
 service_debit_journal(usage_id, balance_id, meter, debit_byte_count,     deleted once applied, with
-  batch_id, applied)                                                     transfer_debit_journal's delete guard
-                                                                         (server/db_transfer_debit_journal.go:3-6);
-                                                                         its batch's id lives 24 h
+  batch_id, applied); usage_id: a relayed row's contract_id, a batch     transfer_debit_journal's delete guard
+  row's the first 16 B of SHA-256(batch_id || network_id || meter ||     (server/db_transfer_debit_journal.go:3-6);
+  balance_id)                                                            its batch's id lives 24 h
 service_usage_batch(batch_id PK, producer, window_start, applied_time)   24 h
 stripe_meter_report(network_id, meter, usage_day, version, identifier,   13 months
   value, state, attempts, next_time)
 team_subscription(network_id, subscription_id, customer_id,              until its network is deleted
   anchor_time, start_time, end_time NULL)
 Redis {sq_<network_id>}: rates, and each erasing sidecar's closure       48 h
-  uploads a minute, closure bytes a UTC day, last closure ask and next
-  turn, which give k (20.7); connected_sidecar, every connected marked
+  uploads a minute and closure bytes a UTC day; the closure pacing's
+  seats: each asking eraser's seat, the tail, the second's count and
+  the network's clock (20.7); connected_sidecar, every connected marked
   client by its expiry ms (20.7); verified, network_verified as 0 or 1   60 s
   (§21.7)
 ```
 
-- **Services and config:** the 20.4 keys in pro.yml; sidecar.yml's `escrow_draw_order` gate (§19.11, 20.9); Team price ids in `config/<env>/stripe.yml`; the three meters, created once before M6; a Stripe invoice-finalization rule (72 h, metered subscription-cycle invoices); `POST /network/team-checkout`'s 1 h session with `subscription_data.billing_cycle_anchor` at 00:00:00 UTC (20.9); taskworker jobs `RefreshTeamTransferBalances`, `RollupServiceUsage`, `ReportStripeMeters`, `ReconcileSidecarCounters`.
+- **Services and config:** the 20.4 keys in pro.yml; sidecar.yml's `escrow_draw_order` gate (§19.11, 20.9); Team price ids in `config/<env>/stripe.yml`; the three meters, created once before M6; a Stripe invoice-finalization rule (72 h, metered subscription-cycle invoices); `POST /network/team-checkout`'s 1 h session with `subscription_data.billing_cycle_anchor` at 00:00:00 UTC (20.9); taskworker jobs `RefreshTeamTransferBalances`, `RollupServiceUsage`, `ReportStripeMeters`, `ReconcileSidecarCounters`, `FlushServiceDebits` and the 60 s spent pass, the last two in the production workload profile only.
 - **Assumptions about other sections:** §14 and §15 bill by lease. §7.5's Team routes check `NetworkTierOf`; §7 carries the declaration in the client JWT and bounds admissions by `config_admissions`, with no member-device cap (§7.9; owner decision 144). §11.13 derives pack and parcel ids from their bytes, and its nightly pass lists each repo's prefixes for 20.7's count and deletes a pack or parcel whose every record a newer container's entries name; held-only objects and such containers never count, as FI-13(c) and FS-60 check; its fair share weighs networks by `store_weight`. §18.10's excluded list names the `host_` files, as §4.4 does. §2.8's api-13 and §19.7's migration groups carry these tables (`service_usage_batch` in MG2; the `team_credit` index, built concurrently, in MG6, pending under `sidecar_pending` from M4's dark build until M6's Gn-out registers it, the comparator's `escrow_draw_order` gate off in main until then; §19.7, §23.4, D-PHASE-7). FS-46 and 20.9's benchmark gate M6's entry in §22.8, §22.10, §23.6 and §23.8; FI-13(a) and FS-44 cover 20.6's 10-min drop; FS-47 covers 20.7's closure bounds (an ERASE or CLOSURE push past the network's rate committing as P1; 429 for an eraser's closure uploads past its own rate or turn and for its bytes past its own allowance, another eraser's passing; k erasers asking each served every k/4 s, none starved, the network at most 4 a second; no row below the floor or changing the pacing) and the waiting `erasure` entry; §11.12, §11.13 and §11.20 cite 20.7's allowance, pacing and 429, and §11.13 and §15.7 its wait at the floor, stated from an erasure's closure bytes, not per message (FS-112). §11.13's purge and evacuation report the versionless content they free, as 20.6 says and FS-71 tests, and its drop job the seg/ objects it deletes or holds, once, as FS-90 and FS-92 test; §11.8 answers a drop past `evs_drops_per_day` 429, never a cancel; §16.11's daemons and readers apply 20.4's `directory_*` keys, read through `QuotaLimits`; §11.14's files count as any file (D-QUOTA-10).
 
 ### 20.15 Risks

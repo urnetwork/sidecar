@@ -14,7 +14,9 @@
 // an older read gets a conflict naming its path instead of replacing what another writer committed in between. A 409
 // PATH_CONFLICT comes back as ErrMailStoreConflict with the store's paths its token paths are; one that names none
 // of the write's paths, evs refusing only a parent directory's delta that another writer's creation raced, moved
-// nothing the writer read, so the store plans the write again, at most DirectoryRetryCount times.
+// nothing the writer read, so the store plans the write again, at most DirectoryRetryCount times. A write carries
+// ingest's outside mark on m/, which the in-ref search index's rows take (MAIL-M10-01), and s/model's reserved writer,
+// whose versions are versionless in the format2 gate (reservedOptions).
 //
 // Paths are a mail repo's own, as mail_paths.go spells them, and are never logged (I-13). On every leg, sidecar_http
 // included: a page Worker reads mail through the same store.
@@ -107,6 +109,13 @@ type mailStoreWrite struct {
 	Content []byte
 	// The path's version its writer read, 0 for a path it read as absent.
 	IfVersion uint64
+	// The content came from outside the network, a received message: the in-ref search index's rows of it carry the
+	// outside bit (EvsPathWrite.Outside; §11.14), which ingest sets on m/ for every message MailEntryUntrusted marks.
+	Outside bool
+	// The reserved writer the write is (§11.7's choose row): EvsReservedMailModel for s/model, whose versions are
+	// versionless in the format2 gate and versioned in a locked mailbox; EvsReservedNone, the rest, keeping each path's
+	// setting.
+	Reserved EvsReservedWriter
 }
 
 // One mail repo's file-mode ref, by path. Implementations are safe for concurrent use.
@@ -181,7 +190,10 @@ func (self *mailEvsStore) List(ctx context.Context, directory string) ([]string,
 func (self *mailEvsStore) Write(ctx context.Context, writes []*mailStoreWrite) ([]uint64, error) {
 	pathWrites := make([]*EvsPathWrite, len(writes))
 	for i, write := range writes {
-		pathWrites[i] = &EvsPathWrite{Path: write.Path, Content: bytes.NewReader(write.Content), IfVersion: &write.IfVersion}
+		pathWrites[i] = &EvsPathWrite{Path: write.Path, Content: bytes.NewReader(write.Content), IfVersion: &write.IfVersion, Outside: write.Outside}
+		if write.Reserved != EvsReservedNone {
+			pathWrites[i].Options = self.reservedOptions(write.Reserved)
+		}
 	}
 	for attempt := 0; ; attempt += 1 {
 		result, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.refName, Writes: pathWrites})
@@ -204,4 +216,17 @@ func (self *mailEvsStore) Write(ctx context.Context, writes []*mailStoreWrite) (
 			return nil, err
 		}
 	}
+}
+
+// What a reserved writer's write asks of its version (§11.7's choose and refused rows). s/model's setting is 1 whatever
+// stands there, so in the format2 gate its write says "off" outright: a writer changes an existing path's setting only
+// explicitly, and an s/model a format-1 writer left versioned turns versionless at its next write. EvsVersioningFor
+// still writes 0 in a locked mailbox, and outside the gate the write asks nothing, since "off" there is
+// ErrEvsFormatUnsupported and every version is 0 anyway. Any other reserved writer keeps EvsVersioningFor's rule.
+func (self *mailEvsStore) reservedOptions(reserved EvsReservedWriter) *EvsWriteOptions {
+	options := &EvsWriteOptions{Reserved: reserved}
+	if reserved == EvsReservedMailModel && self.repo.client.Format2Admitted() {
+		options.Versioning = EvsVersioningOff
+	}
+	return options
 }
