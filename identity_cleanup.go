@@ -9,7 +9,9 @@
 //	cap      config_admissions from GET /sidecar/limits (QD-250), which no reader derives from the log: read at an
 //	         entry the log applies once the last read is SidecarAlarmSettings.AdmissionCapTimeout old, off the
 //	         follower's goroutine, and afresh by every preview and revoke. The watcher compares the count with it
-//	         (identity_alarms.go); a key the answer lacks (0, not included) and none (-1) put nothing near a cap
+//	         (identity_alarms.go); a key the answer lacks (0, not included) and none (-1) put nothing near a cap, and
+//	         while the answer's enforced is false the cap reads none, since api refuses no admission at it then
+//	         (§20.5; owner decision 520), so nothing is raised or listed until enforcement starts
 //	raise    on an admin device, admissions_near_cap from 90% of the cap, once each time the count rises past the count
 //	         it was raised at, opening one cleanup item while none is open; the item closes when the count falls
 //	         below 90%, since the list is then gone
@@ -220,9 +222,9 @@ func (self *Sidecar) knownAdmissionCap() int {
 
 // Reads config_admissions from GET /sidecar/limits now, keeps it as the cap admissions_near_cap compares with, and
 // judges admissions_near_cap at once at the newest verified state, so a cap read after the entries that reached it
-// still raises (identity_alarms.go). Answers the cap: 0 for a tier that does not include admissions, -1 for none. On an
-// error it answers the cap read before, 0 if none, beside the error. A host may call it at start; previews and revokes
-// do, and the watcher does when its read is due.
+// still raises (identity_alarms.go). Answers the cap: 0 for a tier that does not include admissions, -1 for none, as
+// while enforce_sidecar_limits is off. On an error it answers the cap read before, 0 if none, beside the error. A host
+// may call it at start; previews and revokes do, and the watcher does when its read is due.
 func (self *Sidecar) RefreshAdmissionCap(ctx context.Context) (int, error) {
 	if self.sidecarApi == nil {
 		return self.knownAdmissionCap(), errSidecarCleanupNoApi
@@ -236,8 +238,9 @@ func (self *Sidecar) RefreshAdmissionCap(ctx context.Context) (int, error) {
 	if err != nil {
 		return self.knownAdmissionCap(), err
 	}
-	// a key the answer lacks reads 0, not included (§20.5), so nothing is near a cap this build cannot read
-	limit := min(max(limits.Limits[sidecarAdmissionsLimitKey], -1), math.MaxInt32)
+	// a key the answer lacks reads 0, not included (§20.5), so nothing is near a cap this build cannot read; while the
+	// limits are dark the cap reads none, so nothing is near one either
+	limit := min(max(quotaLocalLimit(limits, sidecarAdmissionsLimitKey), -1), math.MaxInt32)
 	admissionCap := int(limit)
 
 	count, position, judged, memberId := 0, uint64(0), false, Id{}

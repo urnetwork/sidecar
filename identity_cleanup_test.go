@@ -35,6 +35,8 @@ type testCleanupApi struct {
 
 	stateLock    sync.Mutex
 	admissionCap int64
+	// whether enforce_sidecar_limits is off, which the answer's enforced says
+	dark bool
 	// whether the limits route answers at all
 	limitsDown  bool
 	limitsReads int
@@ -54,7 +56,7 @@ func (self *testCleanupApi) RoundTrip(request *http.Request) (*http.Response, er
 		if self.limitsDown {
 			return nil, errors.New("api is unreachable")
 		}
-		return respond(http.StatusOK, map[string]any{"tier": "team", "limits": map[string]int64{sidecarAdmissionsLimitKey: self.admissionCap}}), nil
+		return respond(http.StatusOK, map[string]any{"tier": "team", "limits": map[string]int64{sidecarAdmissionsLimitKey: self.admissionCap}, "enforced": !self.dark}), nil
 	case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/network/config/delta"):
 		body, err := io.ReadAll(request.Body)
 		request.Body.Close()
@@ -440,6 +442,53 @@ func TestCleanupClearsBelowNinetyPercent(t *testing.T) {
 	}
 }
 
+// While enforce_sidecar_limits is off api refuses no admission at config_admissions, so the cap reads none: past 90%
+// of the plan's cap nothing is raised and nothing listed (owner decision 520). Once it is on, the next read of the cap
+// raises at once at the count already reached, and the list is the one an enforced cap gives.
+func TestCleanupIsDarkWhileTheLimitsAre(t *testing.T) {
+	var memberM Id
+	var laptopM testConfigDevice
+	world := newTestCleanupWorld(t, 10, func(world *testCleanupWorld) {
+		memberM, laptopM = world.net.consentedMember("m")
+		world.net.admitWorker(laptopM, "m worker a", memberM)
+	})
+	world.api.stateLock.Lock()
+	world.api.dark = true
+	world.api.stateLock.Unlock()
+	if admissionCap, err := world.sidecar.RefreshAdmissionCap(context.Background()); err != nil || admissionCap != -1 {
+		t.Fatalf("a dark cap reads %d, %v", admissionCap, err)
+	}
+	// 9 of the plan's 10
+	for _, label := range []string{"m worker b", "m worker c", "m worker d", "m worker e", "m worker f"} {
+		world.net.admitWorker(laptopM, label, memberM)
+	}
+	world.catchUp()
+	world.refreshCap()
+	if count := world.net.log.State().AdmissionCount(); count != 9 {
+		t.Fatalf("count %d", count)
+	}
+	if raised := world.events.of(SidecarEventAdmissionsNearCap); len(raised) != 0 || len(world.cleanupItems()) != 0 {
+		t.Fatal("raised while the limits are dark")
+	}
+
+	world.api.stateLock.Lock()
+	world.api.dark = false
+	world.api.stateLock.Unlock()
+	if admissionCap, err := world.sidecar.RefreshAdmissionCap(context.Background()); err != nil || admissionCap != 10 {
+		t.Fatalf("an enforced cap reads %d, %v", admissionCap, err)
+	}
+	if raised := world.events.of(SidecarEventAdmissionsNearCap); len(raised) != 1 {
+		t.Fatalf("%d raised once the limits are enforced", len(raised))
+	}
+	list, err := world.sidecar.PreviewCleanup(context.Background(), world.cleanupItem().ApprovalId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.AdmissionCount != 9 || list.AdmissionCap != 10 || len(list.Members) != 1 || len(list.Members[0].Workers) != 5 {
+		t.Fatalf("count %d of %d, listed %+v", list.AdmissionCount, list.AdmissionCap, list.Members)
+	}
+}
+
 // A revoke signs only the list this device showed for the item: with none shown, and after a Worker admitted since
 // changes it, it answers ErrSidecarCleanupStale with nothing posted and the item open; shown again, it signs what it
 // lists then. A cap api cannot read now falls back to the one read before.
@@ -693,7 +742,7 @@ type testCleanupLimitsApi struct {
 
 func (self *testCleanupLimitsApi) RoundTrip(request *http.Request) (*http.Response, error) {
 	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/sidecar/limits") {
-		encoded, _ := json.Marshal(map[string]any{"tier": "team", "limits": map[string]int64{sidecarAdmissionsLimitKey: self.admissionCap}})
+		encoded, _ := json.Marshal(map[string]any{"tier": "team", "limits": map[string]int64{sidecarAdmissionsLimitKey: self.admissionCap}, "enforced": true})
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(encoded)), Header: http.Header{"Content-Type": {"application/json"}}, Request: request}, nil
 	}
 	return self.deltaApi.RoundTrip(request)
