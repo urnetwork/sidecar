@@ -5,8 +5,10 @@
 //
 //	method     pair: the app's own control call, no person act, its one param the child's jwt, which the app minted
 //	           under its device client and gives up here; its reply is the network and the generation bound, never a
-//	           token (I-7). A host picks the Sidecar that takes it: the hosted one of the token's network, else its
-//	           unenrolled one, as an enrollment does (CORE-M6-01)
+//	           token (I-7). A token Pair refuses on its claims alone, one naming no network or client or lacking the
+//	           strict_exp or the admin_refused claim (owner decision 291), reaches no host. A host picks the Sidecar
+//	           that takes the rest: the hosted one of the token's network, else its unenrolled one, as an enrollment
+//	           does (CORE-M6-01)
 //	app group  a sandboxed macOS app reaches the daemon through a short-named socket in each app-group container ur
 //	           claims, 6BGU69Q742.group.network.ur and the direct build's 6BGU69Q742.group.com.bringyour.urnetwork
 //	           (QD-345), served as the main socket is: the same peer check, hello and protocol, so it opens nothing
@@ -48,10 +50,14 @@ type DaemonPairTarget interface {
 }
 
 // The network a child's token names, read without verifying it, for a host choosing the Sidecar that takes it: false
-// for a token naming none.
+// for a token Pair refuses on its claims alone, one naming no network or client, or lacking either mark a pairing
+// requires (sidecarJwtPairMarks).
 func DaemonPairNetwork(childJwt string) (Id, bool) {
 	networkId, _, ok := sidecarJwtClient(childJwt)
-	return networkId, ok
+	if !ok || !sidecarJwtPairMarks(childJwt) {
+		return Id{}, false
+	}
+	return networkId, true
 }
 
 // The pair method over target.
@@ -64,6 +70,11 @@ func DaemonPairMethod(target DaemonPairTarget) *DaemonMethod {
 				return nil, errors.New("pair takes the child's token")
 			}
 			testHookSecret("by_client_jwt", []byte(params.ChildJwt))
+			// refused before any host, which then starts no Sidecar for it; Pair checks the token again
+			if _, ok := DaemonPairNetwork(params.ChildJwt); !ok {
+				params.ChildJwt = ""
+				return nil, ErrSidecarPairToken
+			}
 			reply, err := target.PairChild(ctx, params.ChildJwt)
 			params.ChildJwt = ""
 			return reply, err

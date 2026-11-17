@@ -2,7 +2,9 @@
 // changed after the pin refused; a never-read path's older version accepted, as §2.8 publishes; a reader far behind
 // re-pinning with a gap mark; a fork and a rollback of the head refused and alarmed; a statement by a non-writer, a
 // broken chain and a git-mode push off its tip refused; adjacent-leaf proofs for a large push; a reseed lowering a pin
-// as a loss, and the ref's read records with it (QD-816); and HeadCheck's ref source.
+// as a loss, and the ref's read records with it (QD-816); HeadCheck's ref source; and a removed path read through a
+// prefix's later removal, inline and under changes_root, created again by a writer pinned before both removals, and a
+// write after them served as removed still refused (QD-978).
 
 package sidecar
 
@@ -1032,13 +1034,18 @@ func TestEvsPrefixDeltaInARootedPushLeavesThePathStanding(t *testing.T) {
 
 // A name never written in a directory reads as absent across a rooted push that added other names there, by the
 // name's adjacent leaves and the directory's delta in present (QD-681): what a writer's plan of a second push into
-// the directory reads for each new name. With present dropped it is refused.
+// the directory reads for each new name. With present dropped it is refused. The directory, a strict prefix of a name
+// served holding no version, needs no proof (QD-978): with its absence left out the name still reads absent, to a
+// second reader pinned below the push as the first is, and with the name's own left out it is refused.
 func TestEvsAbsentNameInADirectoryARootedPushChanged(t *testing.T) {
 	world := newEvsTestWorld(t)
 	world.push(&evsTestChange{path: "d", children: []string{"keep.txt"}}, &evsTestChange{path: "d/keep.txt", content: []byte("kept")})
 	reader := world.reader(t, evsTestId("reader"))
-	if _, _, err := evsTestRead(t, reader, world, "d/keep.txt"); err != nil {
-		t.Fatal(err)
+	second := world.reader(t, evsTestId("second reader"))
+	for _, pinned := range []*evsTestClient{reader, second} {
+		if _, _, err := evsTestRead(t, pinned, world, "d/keep.txt"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	directory := &evsTestChange{path: "d"}
 	changes := []*evsTestChange{directory}
@@ -1059,6 +1066,30 @@ func TestEvsAbsentNameInADirectoryARootedPushChanged(t *testing.T) {
 	if _, _, err := evsTestRead(t, reader, world, "d/next0"); !errors.Is(err, ErrEvsEntryRefused) {
 		t.Errorf("the directory's delta with no proof: %v", err)
 	}
+	// the absence of one path left out: the name's own refuses, before any read moved a pin past the push
+	leaveOut := func(left string) {
+		leftPath := world.tokens(left)
+		world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+			kept := []*protocol.EvsAbsenceProof{}
+			for _, absence := range reply.GetAbsences() {
+				if tokenPath, err := ParseEvsTokenPath(absence.GetTokenPath()); err == nil && !tokenPath.Equal(leftPath) {
+					kept = append(kept, absence)
+				}
+			}
+			if len(kept) == len(reply.GetAbsences()) {
+				t.Errorf("no absence of %s served", left)
+			}
+			reply.Absences = kept
+		}
+	}
+	leaveOut("d/next0")
+	if _, _, err := evsTestRead(t, reader, world, "d/next0"); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("the name's own absence left out: %v", err)
+	}
+	leaveOut("d")
+	if _, _, err := evsTestRead(t, second, world, "d/next0"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Errorf("the directory's absence left out: %v", err)
+	}
 	world.mutatePath = nil
 	if _, _, err := evsTestRead(t, reader, world, "d/next0"); !errors.Is(err, ErrEvsPathAbsent) {
 		t.Errorf("a name never written: %v", err)
@@ -1067,6 +1098,8 @@ func TestEvsAbsentNameInADirectoryARootedPushChanged(t *testing.T) {
 
 // An absence's present stands only for a strict prefix whose change writes an entry (QD-681): the path's own change,
 // a prefix's removal, a proof of another path, a proof to another root, and one beside adjacent leaves are refused.
+// For a path served holding no version, never written or removed, a strict prefix's removal stands too (QD-978), and
+// every other refusal holds, the path's own change, a removal included, first among them.
 func TestEvsPresentIsRefusedForThePathItselfOrARemoval(t *testing.T) {
 	directory := EvsTokenPath{evsTestToken("d")}
 	file := EvsTokenPath{evsTestToken("d"), evsTestToken("keep")}
@@ -1117,38 +1150,270 @@ func TestEvsPresentIsRefusedForThePathItselfOrARemoval(t *testing.T) {
 		return writes
 	}
 
-	push, present := build(written(directory, sibling, other), directory, sibling, other)
-	if err := evsVerifyPrefixDelta(push, file, directory, present(directory)); err != nil {
-		t.Fatalf("a strict prefix's delta: %v", err)
+	// the path served standing, then served holding no version
+	for _, standing := range []bool{true, false} {
+		push, present := build(written(directory, sibling, other), directory, sibling, other)
+		if err := evsVerifyPrefixDelta(push, file, directory, present(directory), standing); err != nil {
+			t.Fatalf("standing %t: a strict prefix's delta: %v", standing, err)
+		}
+		// a proof of another path's change where the prefix's is asked
+		if err := evsVerifyPrefixDelta(push, file, directory, present(other), standing); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("standing %t: another path's change: %v", standing, err)
+		}
+		// beside adjacent leaves
+		both := present(directory)
+		both.Above = both.GetPresent()
+		if err := evsVerifyPrefixDelta(push, file, directory, both, standing); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("standing %t: present beside a leaf above: %v", standing, err)
+		}
+		// to another statement's root
+		elsewhere, _ := build(written(directory), directory, other)
+		if err := evsVerifyPrefixDelta(elsewhere, file, directory, present(directory), standing); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("standing %t: a proof to another root: %v", standing, err)
+		}
+		// the path itself, written again by the statement
+		push, present = build(written(directory, file), directory, file)
+		if err := evsVerifyPrefixDelta(push, file, file, present(file), standing); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("standing %t: the path's own change: %v", standing, err)
+		}
+		// a path that is no prefix of the one read
+		if err := evsVerifyPrefixDelta(push, other, directory, present(directory), standing); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("standing %t: a change of a path that holds nothing of the one read: %v", standing, err)
+		}
+		// the path's own removal
+		push, present = build(written(directory), directory, file)
+		if err := evsVerifyPrefixDelta(push, file, file, present(file), standing); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("standing %t: the path's own removal: %v", standing, err)
+		}
+		// the prefix's removal, which ends every path below it that stands, and leaves one served holding no version
+		// as it was served
+		push, present = build(written(other), directory, other)
+		err := evsVerifyPrefixDelta(push, file, directory, present(directory), standing)
+		if standing && !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("a prefix's removal of a path served standing: %v", err)
+		}
+		if !standing && err != nil {
+			t.Errorf("a prefix's removal of a path served holding no version: %v", err)
+		}
 	}
-	// a proof of another path's change where the prefix's is asked
-	if err := evsVerifyPrefixDelta(push, file, directory, present(other)); !errors.Is(err, ErrEvsEntryRefused) {
-		t.Errorf("another path's change: %v", err)
+}
+
+// Beside changes, twelve file creations under prefix, which put a statement's list under changes_root.
+func evsTestRootedChanges(prefix string, changes ...*evsTestChange) []*evsTestChange {
+	for i := range 12 {
+		changes = append(changes, &evsTestChange{path: fmt.Sprint(prefix, i), content: []byte("m")})
 	}
-	// beside adjacent leaves
-	both := present(directory)
-	both.Above = both.GetPresent()
-	if err := evsVerifyPrefixDelta(push, file, directory, both); !errors.Is(err, ErrEvsEntryRefused) {
-		t.Errorf("present beside a leaf above: %v", err)
+	return changes
+}
+
+// The world's d holding d/a.txt, which reader reads at version 1, then d/a.txt removed and d removed, each by a
+// statement of its own whose list goes under changes_root when rooted: the version d/a.txt's removal committed at.
+func evsTestRemoveFileThenDirectory(t *testing.T, world *evsTestWorld, reader *evsTestClient, rooted bool) uint64 {
+	t.Helper()
+	world.push(&evsTestChange{path: "d", children: []string{"a.txt"}}, &evsTestChange{path: "d/a.txt", content: []byte("a")})
+	if content, _, err := evsTestRead(t, reader, world, "d/a.txt"); err != nil || string(content) != "a" {
+		t.Fatalf("d/a.txt before its removal: %q %v", content, err)
 	}
-	// to another statement's root
-	elsewhere, _ := build(written(directory), directory, other)
-	if err := evsVerifyPrefixDelta(elsewhere, file, directory, present(directory)); !errors.Is(err, ErrEvsEntryRefused) {
-		t.Errorf("a proof to another root: %v", err)
+	removeFile := []*evsTestChange{{path: "d/a.txt"}}
+	removeDirectory := []*evsTestChange{{path: "d"}}
+	if rooted {
+		removeFile = evsTestRootedChanges("e/many", removeFile...)
+		removeDirectory = evsTestRootedChanges("f/many", removeDirectory...)
 	}
-	// the path itself, written again by the statement
-	push, present = build(written(directory, file), directory, file)
-	if err := evsVerifyPrefixDelta(push, file, file, present(file)); !errors.Is(err, ErrEvsEntryRefused) {
-		t.Errorf("the path's own change: %v", err)
+	removed := world.push(removeFile...)
+	world.push(removeDirectory...)
+	for _, version := range []uint64{removed, removed + 1} {
+		if (world.commits[version-1].built.ChangeTree != nil) != rooted {
+			t.Fatalf("version %d's list under changes_root: %t, want %t", version, !rooted, rooted)
+		}
 	}
-	// a path that is no prefix of the one read
-	if err := evsVerifyPrefixDelta(push, other, directory, present(directory)); !errors.Is(err, ErrEvsEntryRefused) {
-		t.Errorf("a change of a path that holds nothing of the one read: %v", err)
+	return removed
+}
+
+// QD-978 (question evs-removal-from-window-prefix-removal-after-removal, option 1): d/a.txt removed and then d removed
+// is served d/a.txt's own removal, as evs's newest rule answers a path already absent when a prefix holding it is
+// removed (§11.7's removal row), and a reader pinned below both removals, whose walk holds d's removal, verifies it: a
+// removed path stays removed through a prefix's removal, which contradicts only a reply serving the path standing. No
+// fold or collection runs; evs's side is evsservice's read_walked_test.go.
+func TestEvsRemovalStandsThroughAPrefixsLaterRemoval(t *testing.T) {
+	world := newEvsTestWorld(t)
+	reader := world.reader(t, evsTestId("reader"))
+	removed := evsTestRemoveFileThenDirectory(t, world, reader, false)
+	requestPins := []uint64{}
+	world.beforeRead = func(read *protocol.EvsReadRequest) {
+		requestPins = append(requestPins, read.GetPinVersion())
 	}
-	// the prefix's removal, which ends every path below it
-	push, present = build(written(other), directory, other)
-	if err := evsVerifyPrefixDelta(push, file, directory, present(directory)); !errors.Is(err, ErrEvsEntryRefused) {
-		t.Errorf("a prefix's removal: %v", err)
+	var served *protocol.EvsReadPathReply
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		served = proto.Clone(reply).(*protocol.EvsReadPathReply)
+	}
+	if _, _, err := evsTestRead(t, reader, world, "d/a.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Fatalf("d/a.txt after d's removal: %v", err)
+	}
+	if removal := served.GetRemoval(); removal == nil || removal.GetRemovalVersion() != removed || removal.GetPathVersion() != 2 {
+		t.Fatalf("served %v, not d/a.txt's own removal at %d", served, removed)
+	}
+	if len(requestPins) != 1 || removed <= requestPins[0] {
+		t.Fatalf("read from pins %v, which walk neither removal", requestPins)
+	}
+	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
+		t.Errorf("alarms %v", alarms)
+	}
+	if pin, ok, _ := reader.client.pins.Pin(world.repoId, world.refId); !ok || pin.Version != removed+1 {
+		t.Errorf("pin %+v, not d's removal", pin)
+	}
+}
+
+// The same with both removals in statements whose lists go under changes_root. evs shows d/a.txt left alone by d's
+// removal with its adjacent leaves and sends nothing for d, a removal being shown by no proof (§11.9's reply row); the
+// reader takes a strict prefix of a path served holding no version with no proof, since nothing a statement does to
+// such a prefix makes the path stand. The path's own absence is still needed: with it dropped the read is refused.
+func TestEvsRemovalStandsThroughARootedPrefixRemoval(t *testing.T) {
+	world := newEvsTestWorld(t)
+	reader := world.reader(t, evsTestId("reader"))
+	removed := evsTestRemoveFileThenDirectory(t, world, reader, true)
+	file, directory := world.tokens("d/a.txt"), world.tokens("d")
+	var served *protocol.EvsReadPathReply
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		served = proto.Clone(reply).(*protocol.EvsReadPathReply)
+		kept := []*protocol.EvsAbsenceProof{}
+		for _, absence := range reply.GetAbsences() {
+			if tokenPath, err := ParseEvsTokenPath(absence.GetTokenPath()); err == nil && !tokenPath.Equal(file) {
+				kept = append(kept, absence)
+			}
+		}
+		reply.Absences = kept
+	}
+	if _, _, err := evsTestRead(t, reader, world, "d/a.txt"); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Fatalf("the path's own absence dropped: %v", err)
+	}
+	fileAbsences, directoryAbsences := 0, 0
+	for _, absence := range served.GetAbsences() {
+		tokenPath, err := ParseEvsTokenPath(absence.GetTokenPath())
+		switch {
+		case err != nil || absence.GetVersion() != removed+1:
+			t.Fatalf("an absence %v", absence)
+		case tokenPath.Equal(file) && len(absence.GetPresent()) == 0 && (len(absence.GetBelow()) != 0 || len(absence.GetAbove()) != 0):
+			fileAbsences += 1
+		case tokenPath.Equal(directory):
+			directoryAbsences += 1
+		}
+	}
+	if fileAbsences != 1 || directoryAbsences != 0 || served.GetRemoval().GetRemovalVersion() != removed || len(served.GetProof()) == 0 {
+		t.Fatalf("served %d absences of d/a.txt and %d of d beside %v", fileAbsences, directoryAbsences, served.GetRemoval())
+	}
+	world.mutatePath = nil
+	if _, _, err := evsTestRead(t, reader, world, "d/a.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Fatalf("d/a.txt after d's rooted removal: %v", err)
+	}
+	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
+		t.Errorf("alarms %v", alarms)
+	}
+}
+
+// A second device of the world's signer on writer's stand-in: a client and store of its own, so its pins and read
+// records are its own.
+func (self *evsTestWriter) otherDevice(t *testing.T, label string) *evsTestWriter {
+	t.Helper()
+	test := newEvsTestClient(t, self.server, newEvsTestStore(t))
+	test.client.args.Gkm = self.gkm
+	test.client.args.Config = func() GkmAuthView { return self.world.config }
+	test.client.args.Sign = self.world.signer.sign
+	identity := &SidecarIdentity{NetworkId: testNetworkId, SidecarId: self.world.signer.sidecarId, ClientId: evsTestId(label)}
+	test.client.args.Identity = func() *SidecarIdentity { return identity }
+	return &evsTestWriter{world: self.world, server: self.server, gkm: self.gkm, test: test, repo: test.client.Repo(self.world.repoId)}
+}
+
+// QD-978: a writer pinned before both removals, its read record of d/a.txt at version 1, creates d/a.txt again once
+// another device removed it and then d: its plan reads d/a.txt as its own removal through d's, and the creation takes
+// max(b, m) + 1 (§11.7's versions row), d created again beside it.
+func TestEvsWriterPinnedBeforeBothRemovalsCreatesThePathAgain(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	if _, err := writer.write(t, "d/a.txt", []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	pinned := writer.otherDevice(t, "pinned client")
+	out := &bytes.Buffer{}
+	if _, err := pinned.repo.ReadHead(context.Background(), &EvsReadArgs{Path: "d/a.txt"}, out); err != nil || out.String() != "first" {
+		t.Fatalf("the pinned device's read: %q %v", out.String(), err)
+	}
+	pin, _, _ := pinned.test.client.pins.Pin(writer.world.repoId, writer.world.refId)
+	removed, err := writer.write(t, "d/a.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryRemoved, err := writer.write(t, "d", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.Version <= pin.Version || directoryRemoved.Version != removed.Version+1 {
+		t.Fatalf("pinned at %d, d/a.txt removed at %d and d at %d", pin.Version, removed.Version, directoryRemoved.Version)
+	}
+	created, err := pinned.write(t, "d/a.txt", []byte("again"))
+	if err != nil {
+		t.Fatalf("the pinned device's creation: %v", err)
+	}
+	if want := max(directoryRemoved.Version, removed.PathVersion) + 1; created.Version != directoryRemoved.Version+1 || created.PathVersion != want {
+		t.Errorf("created at %d with version %d, want version %d", created.Version, created.PathVersion, want)
+	}
+	if d := writer.entry(t, "d"); d.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) || len(d.GetNames().GetNames()) != 1 {
+		t.Errorf("d created again: %v", d)
+	}
+	if content, _, err := writer.read(t, "d/a.txt"); err != nil || string(content) != "again" {
+		t.Errorf("read back: %q %v", content, err)
+	}
+	if alarms := pinned.test.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
+		t.Errorf("the pinned device's alarms %v", alarms)
+	}
+}
+
+// QD-978's limit: a removal served after the path was written again still contradicts that walked write, which is
+// refused and alarmed as tampering, whether the write's list is inline or under changes_root and evs passes the
+// path's own change off as a prefix's present (QD-681).
+func TestEvsWriteAfterThePrefixsRemovalServedAsRemovedIsRefused(t *testing.T) {
+	for _, rooted := range []bool{false, true} {
+		world := newEvsTestWorld(t)
+		reader := world.reader(t, evsTestId("reader"))
+		removed := evsTestRemoveFileThenDirectory(t, world, reader, false)
+		world.stateLock.Lock()
+		marker := proto.Clone(world.paths["d/a.txt"].removals[2]).(*protocol.EvsRemovalMarker)
+		world.stateLock.Unlock()
+		create := []*evsTestChange{{path: "d", children: []string{"a.txt"}}, {path: "d/a.txt", content: []byte("again")}}
+		if rooted {
+			create = evsTestRootedChanges("e/many", create...)
+		}
+		created := world.push(create...)
+		if (world.commits[created-1].built.ChangeTree != nil) != rooted {
+			t.Fatalf("rooted %t: the creation's list under changes_root: %t", rooted, !rooted)
+		}
+		file := world.tokens("d/a.txt")
+		world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+			// the removal in place of the version created since
+			reply.Version, reply.Removal, reply.Proof, reply.Statement = nil, marker, nil, nil
+			reply.Names, reply.NamesThrough, reply.Absences = nil, 0, nil
+			if rooted {
+				tree := world.commits[created-1].built.ChangeTree
+				part, index, present := evsTestTreePosition(tree, file)
+				if !present {
+					t.Fatalf("d/a.txt is not in its creation's list")
+				}
+				proofs, err := tree.InclusionProof(part, index)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reply.Absences = []*protocol.EvsAbsenceProof{{Version: created, TokenPath: file.Components(), Present: proofs}}
+			}
+		}
+		if _, _, err := evsTestRead(t, reader, world, "d/a.txt"); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Fatalf("rooted %t: the removal at %d served over the write at %d: %v", rooted, removed, created, err)
+		}
+		if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) == 0 || alarms[0].EvsAlarm != SidecarEvsAlarmTamper {
+			t.Errorf("rooted %t: alarms %v", rooted, alarms)
+		}
+		world.mutatePath = nil
+		if content, _, err := evsTestRead(t, reader, world, "d/a.txt"); err != nil || string(content) != "again" {
+			t.Errorf("rooted %t: the honest read: %q %v", rooted, content, err)
+		}
 	}
 }
 
