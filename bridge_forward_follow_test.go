@@ -757,6 +757,37 @@ func TestTwoHintsDuringACompileMakeOneMoreCompile(t *testing.T) {
 	}
 }
 
+// A restart over a sink that took an opening no compile judged before the process ended compiles it at once: the
+// sink's pin stands past its state's, which the store's compile record matches, and the follow hands the sink nothing
+// it holds, so with no compile at start the opening would wait for the next entry that wants one (BRIDGE-M8-07's app
+// host schedules found a grant waiting so).
+func TestARestartCompilesWhatTheSinkTookPastItsState(t *testing.T) {
+	world := newTestForwarderWorld(t)
+	net := world.net
+	world.settings.CompileDelay = time.Hour
+	forwarder := world.forwarderIn(context.Background())
+	world.settle(forwarder)
+	world.advance(forwarder, time.Hour)
+	if world.stateCount() != 1 {
+		t.Fatalf("the first compile: %v", world.events.list())
+	}
+	net.consentedMember("an opening the process ends before compiling")
+	opened := net.n
+	world.hint(forwarder)
+	if status := forwarder.Status(); status.Decision.Pin.GetVersion() != opened || status.CompiledPin.GetVersion() == opened || status.CompileCount != 1 {
+		t.Fatalf("the opening before the restart: %+v", status)
+	}
+	forwarder.Close()
+	world.settings.CompileDelay = 0
+	restarted := world.forwarder()
+	if status := restarted.Status(); status.CompileCount != 1 || status.CompiledPin.GetVersion() != opened || status.Decision.StatePin.GetVersion() != opened {
+		t.Fatalf("the restart left the opening unjudged: %+v", status)
+	}
+	if events := world.events.list(); events[len(events)-1] != fmt.Sprintf("state %d of %d entries", opened, opened) {
+		t.Errorf("the sink's calls: %v", events)
+	}
+}
+
 // A follow that cannot reach api is retried after FollowRetryInterval, doubling, and raises forward_client_lapsed only
 // when the forwarding client's credential lapsed; the alarm clears at the next follow that reaches api.
 func TestAFailedFollowRetriesAndALapsedClientAlarms(t *testing.T) {

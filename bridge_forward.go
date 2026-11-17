@@ -748,9 +748,16 @@ func (self *Forwarder) start() {
 	}()
 	self.followWanted = true
 	self.followAt = self.clock.Now().Add(self.settings.FollowInterval)
-	if decision := self.readDecision(); decision.State == BridgeSinkEnforcing && !self.compiledInForce() {
+	decision := self.readDecision()
+	switch {
+	case decision.State == BridgeSinkEnforcing && !self.compiledInForce():
 		// a state in force with no record of its compile, as a kill between the two leaves: compiled again, so the
 		// signer has a state to sign by
+		self.wantCompile()
+	case decision.State == BridgeSinkEnforcing && decision.StatePin.GetVersion() < decision.Pin.GetVersion():
+		// entries the sink took past its state before the restart: whether one wanted a compile went with the
+		// process, and the next follow hands the sink nothing it holds, so an opening among them would wait for the
+		// next entry that wants one (BRIDGE-M8-07's schedules found a grant waiting so)
 		self.wantCompile()
 	}
 }

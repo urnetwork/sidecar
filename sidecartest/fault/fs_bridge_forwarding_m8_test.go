@@ -42,3 +42,45 @@ func TestFs38ForwardingRevokeEndsItsFlows(t *testing.T) {
 func TestFs38ForwardingSupersessionEndsItsFlows(t *testing.T) {
 	fsForwardingRun(t, "FS-38's forwarding supersession", Fs38ForwardingSupersedeCase)
 }
+
+// The app host's twin: the subject's forwarding key admitted where only the host's own Forwarder feeds its device role.
+func TestFwdAppHostAdmits(t *testing.T) {
+	fsForwardingRun(t, "an app host's forwarding twin", FwdAppHostAdmits)
+}
+
+// A grant at the Forwarder's CompileDelay after its hint and a revocation at once, with no compile.
+func TestFwdAppWithinTargets(t *testing.T) {
+	fsForwardingRun(t, "an app host within §8.9's targets", FwdAppWithinTargetsCase)
+}
+
+func TestFwdAppRevokeRacesCompile(t *testing.T) {
+	fsForwardingRun(t, "a DelegationRevoke racing an app host's compile", FwdAppRevokeRacesCompileCase)
+}
+
+func TestFwdAppSupersedeRacesContract(t *testing.T) {
+	fsForwardingRun(t, "a supersession racing a contract at an app host", FwdAppSupersedeRacesContractCase)
+}
+
+// Fwd.tla's LowerStateAccepted and StateDropsOverlay as schedules.
+func TestFwdAppCompileBelowANewerState(t *testing.T) {
+	fsForwardingRun(t, "a compile below the state in force", FwdAppLowerStateDroppedCase)
+	fsForwardingRun(t, "a compile below an overlay revocation", FwdAppStateKeepsOverlayCase)
+}
+
+// Fwd.tla's OverlayLifts as schedules: a valid Unsuspend waits for its compile, and a refused one lifts nothing.
+func TestFwdAppUnsuspend(t *testing.T) {
+	fsForwardingRun(t, "an Unsuspend no compile judged", FwdAppUnsuspendWaitsCase)
+	fsForwardingRun(t, "a refused Unsuspend", FwdAppRefusedUnsuspendCase)
+}
+
+// FwdReach-NoCompile and Fwd.tla's RepeatsOnly as schedules, under the heap ceiling and over the memory cap.
+func TestFwdAppNoCompile(t *testing.T) {
+	fsForwardingRun(t, "an uncheckable revocation with compiles deferred", FwdAppNoCompileCase)
+	fsForwardingRun(t, "an uncheckable revocation over the memory cap", FwdAppOverCapCase)
+}
+
+// Fwd.tla's NoFloor as a schedule, beside its twin.
+func TestFwdAppRollback(t *testing.T) {
+	fsForwardingRun(t, "a restart with no rollback", FwdAppRestartKeepsTheState)
+	fsForwardingRun(t, "a rolled-back posture store", FwdAppRollbackCase)
+}
