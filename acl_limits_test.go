@@ -3,7 +3,8 @@ package sidecar
 // QUOTA-M4-04: §20.7's tls_endpoints row at grant activation, the one table the writer and api's verifier
 // both run (AclCheckTlsEndpoints): the 2nd endpoint on Community refused, a Team's custom-domain alias
 // counted, the mta-sts system publish uncounted, an expired grant freeing its unit, an endpoint already
-// active taking none, and a downgrade judging only the next activation.
+// active taking none, a downgrade judging only the next activation, and the writer's check dark while
+// enforce_sidecar_limits is off.
 
 import (
 	"testing"
@@ -90,5 +91,35 @@ func TestAclCheckGrantActivateQuotaReadsTheWritersLimits(t *testing.T) {
 	}
 	if _, err := AclCheckGrantActivateQuota(state, &protocol.GrantActivate{}, nowMs, nil); err == nil {
 		t.Error("a GrantActivate with no canonical action")
+	}
+}
+
+// The writer applies tls_endpoints only while its limits' enforced is true (owner decision 520): enforced, a
+// Community network's second endpoint is refused as api's verifier refuses it; dark, the writer signs what the
+// verifier then passes, a key a dark answer lacks refusing nothing either. No answer at all refuses, and an
+// activation whose action does not read is an error, whatever the switch.
+func TestAclCheckGrantActivateQuotaFollowsEnforced(t *testing.T) {
+	state := testingRowsState(testingPublishRule(0, "tls/443/a.example"))
+	activate := newAclTestGrant(t, NewId().Bytes(), NewId(), []string{"sock:tls/443/b.example"}, []string{"publish"}, 0).activate()
+	const nowMs = int64(1_800_000_000_000)
+	community := &QuotaLimits{Tier: "free", Limits: map[string]int64{AclTlsEndpointsLimitKey: 1}, Enforced: true}
+	refusal, err := AclCheckGrantActivateQuota(state, activate, nowMs, community)
+	if err != nil || refusal == nil || refusal.LimitKey != AclTlsEndpointsLimitKey || refusal.Limit != 1 || refusal.Used != 1 || !refusal.Upgrade {
+		t.Fatalf("enforced: refusal %+v, %v", refusal, err)
+	}
+	community.Enforced = false
+	if refusal, err := AclCheckGrantActivateQuota(state, activate, nowMs, community); err != nil || refusal != nil {
+		t.Errorf("dark: refusal %+v, %v", refusal, err)
+	}
+	if refusal, err := AclCheckGrantActivateQuota(state, activate, nowMs, &QuotaLimits{Tier: "team", Limits: map[string]int64{}}); err != nil || refusal != nil {
+		t.Errorf("dark with no tls_endpoints key: refusal %+v, %v", refusal, err)
+	}
+	if refusal, err := AclCheckGrantActivateQuota(state, activate, nowMs, nil); err != nil || refusal == nil || refusal.Limit != 0 || !refusal.Upgrade {
+		t.Errorf("no answer: refusal %+v, %v", refusal, err)
+	}
+	for _, limits := range []*QuotaLimits{nil, community, {Tier: "free", Limits: map[string]int64{}, Enforced: true}} {
+		if _, err := AclCheckGrantActivateQuota(state, &protocol.GrantActivate{}, nowMs, limits); err == nil {
+			t.Errorf("%+v: a GrantActivate with no canonical action", limits)
+		}
 	}
 }

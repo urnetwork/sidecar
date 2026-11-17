@@ -18,5 +18,6 @@ type QuotaRefusal = operator.QuotaRefusal
 
 // A network's effective limits after its network_sidecar_limit rows (NetworkSidecarLimits, §20.5):
 // Quota.Limits's result and GET /sidecar/limits's body. A key absent from Limits reads 0, so a limit
-// this build does not know fails closed.
+// this build does not know fails closed. Enforced is enforce_sidecar_limits's state, which a local
+// pre-check follows through quotaLocalLimit (api_limits.go).
 type QuotaLimits = operator.QuotaLimits

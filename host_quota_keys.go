@@ -8,7 +8,10 @@
 // too, as plain state a Quota keeps per network, so the fake runs it and the script can be held to it.
 //
 // Nothing here reads a clock: each rule takes the time it is asked at, which is the Quota's own clock,
-// so a fake clock moves every window.
+// so a fake clock moves every window. Nor does anything here read QuotaLimits.Enforced: a rule's limit,
+// the closure allowance with its floor, and the pacing read the limits as configured whatever the switch
+// says (owner decision 520), and which rules go dark while it is off is Dark's to say and the Quota's to
+// apply.
 
 package sidecar
 
@@ -167,9 +170,6 @@ const (
 	quotaLimitKeyDropsPerDay            = "evs_drops_per_day"
 	quotaLimitKeyDropPreviewsPerDay     = "evs_drop_previews_per_day"
 	quotaLimitKeyReadReceiptsPerRepoDay = "evs_read_receipts_per_repo_day"
-
-	// QuotaLimits' none (§20.4's `none`).
-	quotaLimitNone = int64(-1)
 
 	// The top tier, which no purchase lifts.
 	quotaTierTeam = "team"
@@ -394,6 +394,16 @@ func (self *QuotaRateRule) Limit(limits *QuotaLimits) int64 {
 // Whether a purchase or a higher tier lifts a refusal under limits.
 func (self *QuotaRateRule) Upgrade(limits *QuotaLimits) bool {
 	return self.Tiered && limits != nil && limits.Tier != quotaTierTeam
+}
+
+// Whether the rule ships dark behind enforce_sidecar_limits (R-QUOTA-5, §20.5; owner decision 522): a
+// limit only pro.yml sets, with no floor and no least value, which an absent pro.yml reads as 0, so that
+// while the switch is off a Quota neither counts nor refuses it and makes no Redis call for it, and an
+// absent pro.yml locks nobody out. The closure rates, allowance and pacing are never dark: they read a
+// fixed number or a floor, and they bound what passes at the storage limit and while spent, which is never
+// dark (owner decision 520). Nor is the erasure push class, which refuses nothing.
+func (self *QuotaRateRule) Dark() bool {
+	return self.LimitKey != "" && self.FloorLimitKey == "" && self.MinLimit <= 0
 }
 
 // The refusal for a count that would pass the limit, used being what the window holding now has

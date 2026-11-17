@@ -32,4 +32,10 @@ type QuotaLimits struct {
 	// none, as `none` does in §20.4. A key absent here reads 0, which §20.5 defines as not included,
 	// so a limit this build does not know fails closed.
 	Limits map[string]int64 `json:"limits"`
+	// enforce_sidecar_limits's state, which api sets from pro.yml's switch while Tier and Limits keep
+	// reporting the plan as configured (§20.5's switch; owner decision 520). A local pre-check, a daemon's
+	// or a reader's, refuses on a limit only while it is true, so its refusals ship dark as api's do; the
+	// closure floor and pacing apply whatever it says, since they hold while a network is spent, which is
+	// never dark. Absent reads false, so an older api's answer refuses nothing locally.
+	Enforced bool `json:"enforced"`
 }

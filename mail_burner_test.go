@@ -27,6 +27,10 @@ type mailBurnerTestApi struct {
 	stateLock  sync.Mutex
 	limits     map[string]int64
 	limitCalls int
+	// enforce_sidecar_limits off, which the answer's enforced says
+	dark bool
+	// the route does not answer
+	down bool
 }
 
 func (self *mailBurnerTestApi) Limits(ctx context.Context) (*QuotaLimits, error) {
@@ -37,9 +41,13 @@ func (self *mailBurnerTestApi) Limits(ctx context.Context) (*QuotaLimits, error)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.limitCalls += 1
+	if self.down {
+		return nil, errors.New("the limits did not answer")
+	}
 	for key, value := range self.limits {
 		answer.Limits[key] = value
 	}
+	answer.Enforced = !self.dark
 	return answer, nil
 }
 
@@ -318,6 +326,57 @@ func TestMailBurnerLimitsAreRefusedLocally(t *testing.T) {
 	world.api.set(mailLimitBurnersActive, -1)
 	if _, err := create("echo.example"); err != nil {
 		t.Fatalf("unbounded: %v", err)
+	}
+}
+
+// While enforce_sidecar_limits is off the local burner limits are dark (owner decision 520): a creation past
+// mail_burners_active and past the day's mail_burner_creates_per_day goes on, and a key the dark answer lacks bounds
+// nothing either; once it is on, the next creation is refused at the active limit as before. Limits that do not
+// answer refuse whatever the switch said, reaching no gate.
+func TestMailBurnerLimitsAreDarkWhileNotEnforced(t *testing.T) {
+	world := newMailBurnerTestWorld(t)
+	ctx := context.Background()
+	world.api.set(mailLimitBurnersActive, 1)
+	world.api.set(mailLimitBurnerCreatesPerDay, 1)
+	world.api.stateLock.Lock()
+	world.api.dark = true
+	world.api.stateLock.Unlock()
+	create := func(site string) (*MailBurnerCreated, error) {
+		return world.client.CreateBurner(ctx, &MailBurnerCreateArgs{Site: site})
+	}
+	for _, site := range []string{"alpha.example", "bravo.example", "charlie.example"} {
+		if _, err := create(site); err != nil {
+			t.Fatalf("%s while dark: %v", site, err)
+		}
+	}
+	world.api.stateLock.Lock()
+	delete(world.api.limits, mailLimitBurnersActive)
+	delete(world.api.limits, mailLimitBurnerCreatesPerDay)
+	world.api.stateLock.Unlock()
+	if _, err := create("delta.example"); err != nil {
+		t.Fatalf("with no burner keys while dark: %v", err)
+	}
+
+	world.api.set(mailLimitBurnersActive, 1)
+	world.api.set(mailLimitBurnerCreatesPerDay, 50)
+	world.api.stateLock.Lock()
+	world.api.dark = false
+	world.api.stateLock.Unlock()
+	var limit *MailBurnerLimitError
+	if _, err := create("echo.example"); !errors.As(err, &limit) || limit.Limit != mailLimitBurnersActive || limit.Value != 1 || limit.Count != 4 {
+		t.Fatalf("past the active limit once enforced: %v", err)
+	}
+
+	world.api.stateLock.Lock()
+	world.api.dark = true
+	world.api.down = true
+	world.api.stateLock.Unlock()
+	actions, _ := world.gate.counts()
+	if _, err := create("foxtrot.example"); !errors.Is(err, ErrMailBurnerLimit) {
+		t.Fatalf("with no limits answering: %v", err)
+	}
+	if after, _ := world.gate.counts(); after != actions {
+		t.Fatal("a creation with no limits reached the gate")
 	}
 }
 
