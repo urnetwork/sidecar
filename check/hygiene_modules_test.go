@@ -9,9 +9,7 @@
 package check
 
 import (
-	"io/fs"
 	"maps"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -209,8 +207,9 @@ func (self *repository) workFileFindings(t testing.TB) []string {
 var untaggedModuleNames = []string{"cli", "mlsinterop"}
 
 // A quoted path of this repository, as the release's rewrite finds one, up to what ends a path: a
-// Makefile's go install path@version, say, or a second word in the quotes.
-var quotedRepositoryPathPattern = regexp.MustCompile(`"(` + regexp.QuoteMeta(sidecarBasePath) + `[^"\s@]*)`)
+// Makefile's go install path@version, say, a second word in the quotes, or the backslash of an
+// escaped quote, which the subpackage pass keeps after the /vN it adds.
+var quotedRepositoryPathPattern = regexp.MustCompile(`"(` + regexp.QuoteMeta(sidecarBasePath) + `[^"\\\s@]*)`)
 
 // cli and mlsinterop each stay one package, and no file names one by its path. The release
 // rewrites every quoted path under the root's to .../sidecar/v2026 in every .go file and Makefile
@@ -222,9 +221,7 @@ var quotedRepositoryPathPattern = regexp.MustCompile(`"(` + regexp.QuoteMeta(sid
 func (self *repository) untaggedSubpackageFindings(t testing.TB) []string {
 	t.Helper()
 	packageNames := map[string]bool{}
-	filePaths := []string{}
 	for _, file := range self.sourceFiles(t) {
-		filePaths = append(filePaths, file.path)
 		for _, name := range untaggedModuleNames {
 			if strings.HasPrefix(file.packageName, name+"/") {
 				packageNames[file.packageName] = true
@@ -236,44 +233,14 @@ func (self *repository) untaggedSubpackageFindings(t testing.TB) []string {
 		module, _, _ := strings.Cut(packageName, "/")
 		findings = append(findings, findingf("%s: a package beside %s's own, which the release's rewrite would import as one under .../sidecar/v2026 that nothing provides", packageName, module))
 	}
-	// the rewrite's other files, which find(1) names by -iname 'Makefile'
-	err := filepath.WalkDir(self.topDirectory, func(walkPath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if skippedDirectoryNames[entry.Name()] && walkPath != self.topDirectory {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.EqualFold(entry.Name(), "Makefile") {
-			filePaths = append(filePaths, walkPath)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	suffix := self.releaseSuffix
-	if suffix == "" {
-		suffix = releaseSuffix
-	}
-	for _, filePath := range filePaths {
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// smtpproof's pass runs before the root's, as sidecar_release_edit has it
-		rewritten := releaseRewritePath(string(data), sidecarBasePath+"/smtpproof", suffix)
-		rewritten = releaseRewritePath(rewritten, sidecarBasePath, suffix)
-		for index, line := range strings.Split(rewritten, "\n") {
+	for _, file := range self.releaseRewrittenFiles(t) {
+		for index, line := range strings.Split(file.rewritten, "\n") {
 			for _, match := range quotedRepositoryPathPattern.FindAllStringSubmatch(line, -1) {
 				quotedPath := match[1]
 				base := firstPartyBase(quotedPath)
 				for _, name := range untaggedModuleNames {
 					if underPath(base, sidecarBasePath+"/"+name) && quotedPath != base {
-						findings = append(findings, findingf("%s:%d: the release's rewrite makes this %q, which nothing provides: %s keeps its unversioned path", self.displayPath(filePath), index+1, quotedPath, name))
+						findings = append(findings, findingf("%s:%d: the release's rewrite makes this %q, which nothing provides: %s keeps its unversioned path", file.displayPath, index+1, quotedPath, name))
 					}
 				}
 			}
