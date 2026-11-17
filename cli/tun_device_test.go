@@ -5,9 +5,9 @@
 // zones, and follows each change; the local addresses reach the bridge without the bridge's own resolvers and only when
 // they change; close removes everything on each path; the default route rides the tun under exits and leaves it off
 // exits, a platform's refusal holding the exits with its reason and the tun up; the status counts the IPv6 the bridge
-// drops under exits since the tun came up, and the output says IPv6 goes nowhere there; and the daemon refuses a
-// platform with no tun, a network with no bridge, a second network and an app's held block. Every wait is on a
-// channel, bounded by urTestTimeout.
+// rejects under exits since the tun came up, the rejects it writes back reach the device, and the output says IPv6 goes
+// nowhere there, refused at once; and the daemon refuses a platform with no tun, a network with no bridge, a second
+// network and an app's held block. Every wait is on a channel, bounded by urTestTimeout.
 
 package main
 
@@ -818,13 +818,14 @@ func TestTunStartsWithTheExitsHeld(t *testing.T) {
 	}
 }
 
-// The status counts, beside default_count, the IPv6 the network's bridge dropped under exits since the tun came up
-// (QD-881): the bridge's own count less what it had dropped before, so a tun that comes up again starts from none.
-func TestTunCountsTheIpv6TheBridgeDrops(t *testing.T) {
+// The status counts, beside default_count, the IPv6 the network's bridge rejected under exits since the tun came up
+// (owner decision 482, QD-970), as ipv6_rejected_count: the bridge's own count less what it had rejected before, so a
+// tun that comes up again starts from none.
+func TestTunCountsTheIpv6TheBridgeRejects(t *testing.T) {
 	system := newTestTunSystem()
 	tunBridge := newTestTunBridge()
 	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
-	tunBridge.status.Ipv6DroppedCount = 5
+	tunBridge.status.Ipv6RejectedCount = 5
 	tun, err := startUrTun(context.Background(), &urTunArgs{
 		Name:      "ur-test",
 		NetworkId: sidecar.NewId(),
@@ -837,19 +838,92 @@ func TestTunCountsTheIpv6TheBridgeDrops(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(tun.close)
-	if status := tun.status(); status.Ipv6DroppedCount != 0 {
-		t.Fatalf("up: %d dropped", status.Ipv6DroppedCount)
+	if status := tun.status(); status.Ipv6RejectedCount != 0 {
+		t.Fatalf("up: %d rejected", status.Ipv6RejectedCount)
 	}
 	tunBridge.stateLock.Lock()
-	tunBridge.status.Ipv6DroppedCount = 12
+	tunBridge.status.Ipv6RejectedCount = 12
 	tunBridge.stateLock.Unlock()
 	status := tun.status()
-	if status.Ipv6DroppedCount != 7 {
-		t.Fatalf("after drops: %d dropped", status.Ipv6DroppedCount)
+	if status.Ipv6RejectedCount != 7 {
+		t.Fatalf("after rejects: %d rejected", status.Ipv6RejectedCount)
 	}
 	encoded, err := json.Marshal(status)
-	if err != nil || !strings.Contains(string(encoded), `"default_count":0,"ipv6_dropped_count":7,`) {
+	if err != nil || !strings.Contains(string(encoded), `"default_count":0,"ipv6_rejected_count":7,`) ||
+		strings.Contains(string(encoded), "ipv6_dropped") {
 		t.Fatalf("the reply %s %v", encoded, err)
+	}
+}
+
+// An IPv6 TCP SYN and UDP datagram the device hands over under exits come back as the bridge's rejects (QD-970): the
+// run the bridge gives its reject client is taken, counted among those sent, and the reset and the ICMPv6 1/1 it
+// answers with are written into the device behind its headroom, counted as written; nothing is left to the default
+// route or refused.
+func TestTunWritesTheBridgesIpv6RejectsIntoTheDevice(t *testing.T) {
+	tun, system, tunBridge, _, _ := startTestUrTun(t)
+	_, bridgeReceive := tunBridge.lastLocal()
+	if bridgeReceive == nil {
+		t.Fatal("the tun took no replies")
+	}
+	reject := device.NewBridgeRejectClient(bridgeReceive, device.DefaultBridgeSettings())
+	tunBridge.stateLock.Lock()
+	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.route = func(packet []byte) connect.UserNatClient {
+		if packet[0]>>4 == 6 {
+			return reject
+		}
+		return nil
+	}
+	tunBridge.stateLock.Unlock()
+	ipv6Packet := func(nextHeader byte, transport []byte) []byte {
+		packet := make([]byte, 40+len(transport))
+		packet[0] = 0x60
+		packet[4] = byte(len(transport) >> 8)
+		packet[5] = byte(len(transport))
+		packet[6] = nextHeader
+		packet[7] = 64
+		source := netip.MustParseAddr("2001:db8::2").As16()
+		destination := netip.MustParseAddr("2001:db8:1::9").As16()
+		copy(packet[8:24], source[:])
+		copy(packet[24:40], destination[:])
+		copy(packet[40:], transport)
+		return packet
+	}
+	// a SYN from port 40000 to 443, and a datagram between the same ports
+	syn := ipv6Packet(6, []byte{0x9c, 0x40, 0x01, 0xbb, 0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x02, 0xff, 0xff, 0, 0, 0, 0})
+	datagram := ipv6Packet(17, []byte{0x9c, 0x40, 0x01, 0xbb, 0, 12, 0, 0, 'q', 'u', 'i', 'c'})
+	system.iface.reads <- testTunRead{packets: [][]byte{syn, datagram}}
+	// a second read follows only once the first batch has gone through the bridge
+	system.iface.reads <- testTunRead{}
+	system.iface.stateLock.Lock()
+	writes := slices.Clone(system.iface.writes)
+	offsets := slices.Clone(system.iface.writeOffsets)
+	system.iface.stateLock.Unlock()
+	if len(writes) != 2 {
+		t.Fatalf("the device was written %d packets", len(writes))
+	}
+	for i, packet := range [][]byte{syn, datagram} {
+		reply := writes[i]
+		if len(reply) < 48 || reply[0]>>4 != 6 || !bytes.Equal(reply[8:24], packet[24:40]) || !bytes.Equal(reply[24:40], packet[8:24]) {
+			t.Fatalf("write %d %x does not answer its packet's source", i, reply)
+		}
+		if offsets[i] != tun.settings.WriteHeadroomByteCount {
+			t.Fatalf("write %d left %d bytes of headroom", i, offsets[i])
+		}
+	}
+	if writes[0][6] != 6 || writes[0][40+13]&0x04 == 0 {
+		t.Fatalf("the SYN's answer %x is no reset", writes[0])
+	}
+	if writes[1][6] != 58 || writes[1][40] != 1 || writes[1][41] != 1 || !bytes.Equal(writes[1][48:], datagram) {
+		t.Fatalf("the datagram's answer %x is no ICMPv6 1/1 quoting it", writes[1])
+	}
+	status := tun.status()
+	if status.ReadCount != 2 || status.SentCount != 2 || status.WrittenCount != 2 || status.DefaultCount != 0 ||
+		status.RefusedCount != 0 {
+		t.Fatalf("counts %+v", status)
+	}
+	if sentCount, unsentCount := reject.Counts(); sentCount != 2 || unsentCount != 0 {
+		t.Fatalf("the reject client sent %d and kept back %d", sentCount, unsentCount)
 	}
 }
 
@@ -1062,7 +1136,8 @@ func TestTunIpShowsAndClaims(t *testing.T) {
 }
 
 // The commands against a daemon whose tun methods a test stands in for: ur tun prints the device, the block, the
-// address, each route and the names, that under exits IPv6 goes nowhere (QD-881), and ur tun ip what it shows.
+// address, each route and the names, that under exits IPv6 goes nowhere, refused at once (QD-881, QD-970), and ur tun
+// ip what it shows.
 func TestTunCommandsPrintWhatTheDaemonHolds(t *testing.T) {
 	previous := urTunPlatform
 	t.Cleanup(func() { urTunPlatform = previous })
@@ -1094,7 +1169,7 @@ func TestTunCommandsPrintWhatTheDaemonHolds(t *testing.T) {
 	printed := stdout.String()
 	for _, want := range []string{"ur-test carries network", "100.70.0.0/16", "100.70.9.9", "100.70.1.2/32",
 		"net.example through 100.70.0.53", "exits      the default route rides ur tun",
-		"IPv6 goes nowhere, since no exit carries it", "the host falls back to IPv4"} {
+		"IPv6 goes nowhere, since no exit carries it", "ur tun refuses it at once", "the host falls back to IPv4"} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("ur tun printed no %q:\n%s", want, printed)
 		}

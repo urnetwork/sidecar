@@ -127,6 +127,8 @@ barrier daemon.events.add.before daemon_events.go
 barrier daemon.events.wait daemon_events.go
 barrier daemon.presence.hold.after daemon_approvals.go
 barrier daemon.presence.hold.before daemon_approvals.go
+barrier daemon.presence.prompt.after daemon_approvals.go
+barrier daemon.presence.prompt.before daemon_approvals.go
 barrier directory.announce.after directory_repo.go
 barrier directory.announce.before directory_repo.go
 barrier directory.cancel.entry.after directory_decide.go
