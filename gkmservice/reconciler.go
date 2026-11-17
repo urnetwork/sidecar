@@ -36,12 +36,25 @@
 //     process and every DelegationKeySweepInterval after, and hands the deleter at once each object that no
 //     forwarding row in the state's rows and no tracked end names: its row has left, so its retention has passed and
 //     nothing a rotator seals still needs it. A network whose state it does not hold is never listed, and gkm/dkey/
-//     never whole, so such a network's objects stand until a process reads it (question
-//     gkm-auth-state-reconciler-networks): every doubt keeps data. An object written at or after the time of the
-//     state's newest entry, less DelegationKeySweepClockSkew, stays too, since its sidecar uploads it once gkm's own
-//     state holds its row, which this state may not have reached; so does every object when that time is unknown.
-//     One pass lists at most DelegationKeySweepNetworkCount networks, the longest due first, and the next pass comes
-//     at once while more are due, so a resync's many first sights do not list in one pass.
+//     never whole, so such a network's objects stand until the reconciler reads it, which a start's listing (the
+//     networks row below) brings about for every gkm network: every doubt keeps data. An object written at or after
+//     the time of the state's newest entry, less DelegationKeySweepClockSkew, stays too, since its sidecar uploads it
+//     once gkm's own state holds its row, which this state may not have reached; so does every object when that time
+//     is unknown. One pass lists at most DelegationKeySweepNetworkCount networks, the longest due first, and the next
+//     pass comes at once while more are due, so a resync's many first sights do not list in one pass.
+//   - §10.6's networks row (owner decision 371; QD-893): the gate cache holds a network from the first {acl_}v event
+//     it hears on, so after a restart a network whose log is quiet would get no hint, expiry wake, key deletion or
+//     sweep until its log moved. A host that lists the networks with a config log and a gkm-gated service
+//     (GkmReconcilerDeps.Networks: taskworker's network_acl_head under sidecar.yml's gkm gate) has the reconciler
+//     take them a page of NetworkPageCount at once and the next page NetworkPageInterval later, which spreads the
+//     cold loads they cost (§8.18's fan-out risk). Each listed network the reconciler holds nothing of is asked of
+//     the state (GkmReconcilerStateLoader.Load, which tells the gate cache, whose loads run under its
+//     LoadConcurrency) and given a wake PendingHintInterval on, should its load fail; its install's change reads it
+//     as a first sight. A read at a wake that finds no state, a network the bounded cache evicted among them, asks
+//     for it again and owes the network that wake, which its next read with a state takes: an expiry passed while
+//     it was out still has its gate checked. A read a change woke that finds the network evicted already asks at its
+//     retry wake instead, so networks a cache too small for them loads in turn do not load each other out in a ring.
+//     A network whose state keeps failing is read again PendingHintInterval on, doubling to StateRetryMaxInterval.
 //
 // The hint loop runs on the reconciler's own goroutine, started by its constructor, and the key objects' deleter on
 // another; hints go out through ServiceHost.Push.HintSidecars, lossy, a lost one covered by the next interval or the
@@ -99,6 +112,31 @@ type GkmReconcilerState interface {
 	// The network that admits a sidecar and whether its newest state revoked it; known false for a sidecar no loaded
 	// state admits, whose objects the sweeps then keep.
 	SidecarStanding(ctx context.Context, sidecarId sidecar.Id) (networkId sidecar.Id, revoked bool, known bool, err error)
+}
+
+// A GkmReconcilerState that loads a network's state when asked: AclGkmReconcilerState, which tells its gate cache. The
+// reconciler asks for each network a start lists that it holds nothing of, and for one a read at a wake finds not
+// loaded (the file header's networks row). A state that is no loader is asked nothing, and holds what it holds.
+type GkmReconcilerStateLoader interface {
+	// Starts loading the network's state and returns at once, never blocking; Watch tells its install as any other
+	// change.
+	Load(networkId sidecar.Id)
+}
+
+// One page of the networks a start has the reconciler read (§10.6's networks row): of at most limit networks with a
+// config log after afterNetworkId, nil from the first, in id order, those a gkm-gated service is enabled for; and
+// next, past the last network the page looked at, where the following page starts, nil once none is left. An error
+// leaves the cursor where it was.
+type GkmNetworkPages func(ctx context.Context, afterNetworkId *sidecar.Id, limit int) (networkIds []sidecar.Id, next *sidecar.Id, err error)
+
+// How far a start's listing has come: what a test waits on.
+type GkmNetworkListing struct {
+	// Pages read, a failed one among them.
+	PageCount int
+	// Pages that failed, each read again from the same cursor at the next interval.
+	FailureCount int
+	// No network is left past the last page, or nothing is listed.
+	Done bool
 }
 
 // What tunes the reconciler (connect/CODESTYLE.md's settings rule).
@@ -172,6 +210,19 @@ type GkmReconcilerSettings struct {
 	// state's newest entry, less this, may answer a row the state has not reached, and the sweep keeps it. 5 min,
 	// well past what NTP keeps servers' clocks within.
 	DelegationKeySweepClockSkew time.Duration
+
+	// The networks one page of a start's listing reads (§10.6's networks row; owner decision 371): 100. Each the
+	// reconciler holds nothing of costs the gate cache one cold load, which runs under the cache's LoadConcurrency,
+	// and the reconciler a first sight of each of its repos once it installs.
+	NetworkPageCount int
+	// How long after one page of the listing the next is read: 10 s, so a start's cold loads come at most
+	// NetworkPageCount a NetworkPageInterval, some 17 minutes for 10,000 networks (§8.18's fan-out risk).
+	NetworkPageInterval time.Duration
+	// The longest a network whose state keeps failing to load waits before it is read and asked for again: the wait
+	// starts at PendingHintInterval and doubles at each read in a row that finds no state, up to this. 1 h, a sweep's
+	// interval, so a store that fails for long costs a load a network an hour, while a network the gate cache evicted
+	// waits PendingHintInterval at most, its load at the first ask installing within it.
+	StateRetryMaxInterval time.Duration
 }
 
 // The production defaults.
@@ -206,6 +257,10 @@ func DefaultGkmReconcilerSettings() *GkmReconcilerSettings {
 		DelegationKeySweepInterval:     1 * time.Hour,
 		DelegationKeySweepNetworkCount: 64,
 		DelegationKeySweepClockSkew:    5 * time.Minute,
+
+		NetworkPageCount:      100,
+		NetworkPageInterval:   10 * time.Second,
+		StateRetryMaxInterval: 1 * time.Hour,
 	}
 }
 
@@ -240,6 +295,9 @@ func (self *GkmReconcilerSettings) Validate() error {
 		{name: "DelegationKeyDeleteQueueCount", value: int64(self.DelegationKeyDeleteQueueCount)},
 		{name: "DelegationKeySweepInterval", value: int64(self.DelegationKeySweepInterval)},
 		{name: "DelegationKeySweepNetworkCount", value: int64(self.DelegationKeySweepNetworkCount)},
+		{name: "NetworkPageCount", value: int64(self.NetworkPageCount)},
+		{name: "NetworkPageInterval", value: int64(self.NetworkPageInterval)},
+		{name: "StateRetryMaxInterval", value: int64(self.StateRetryMaxInterval)},
 	} {
 		if value.value <= 0 {
 			return fmt.Errorf("%w: %s must be positive", ErrGkmSettings, value.name)
@@ -260,6 +318,10 @@ type GkmReconcilerDeps struct {
 	Holds *sidecar.HoldSet
 	// Alarms and lifecycle. nil discards.
 	Log sidecar.Logger
+	// The networks a start reads (§10.6's networks row): every one with a config log and a gkm-gated service, which
+	// taskworker lists from network_acl_head under sidecar.yml's gkm gate. nil lists none, and each network is read
+	// from its first change on.
+	Networks GkmNetworkPages
 }
 
 // One network as the reconciler last read it.
@@ -270,6 +332,10 @@ type gkmReconcilerNetwork struct {
 	// When this process last swept its key objects' prefix, zero for never: its next sweep is due
 	// DelegationKeySweepInterval after.
 	delegationKeySweptAt time.Time
+	// Reads in a row that found no state, which set how long the next waits (StateRetryMaxInterval).
+	stateFailureCount int
+	// A wake's read found no state, so the next read that finds one checks every repo's gate as that wake would have.
+	wakeOwed bool
 }
 
 // A forwarding Delegation that ended or was superseded, whose reader key object goes DelegationKeyRetention after,
@@ -313,11 +379,13 @@ type GkmReconciler struct {
 	host     *sidecar.ServiceHost
 	settings *GkmReconcilerSettings
 	state    GkmReconcilerState
-	clock    sidecar.Clock
-	log      sidecar.Logger
-	blobs    sidecar.BlobStore
-	places   *sidecar.EvsRepoPlaceResolver
-	holds    *sidecar.HoldSet
+	// state, when it loads what it is asked for; nil asks nothing
+	loader GkmReconcilerStateLoader
+	clock  sidecar.Clock
+	log    sidecar.Logger
+	blobs  sidecar.BlobStore
+	places *sidecar.EvsRepoPlaceResolver
+	holds  *sidecar.HoldSet
 
 	stateLock      sync.Mutex
 	networkEntries map[sidecar.Id]*gkmReconcilerNetwork
@@ -343,10 +411,13 @@ type GkmReconciler struct {
 	// whether the loop waits, its timer set: a test moves a fake clock only then, so the move reaches the timer
 	idle      *sidecar.MonitorValue[bool]
 	stopWatch func()
+	// how far the start's listing has come
+	listing *sidecar.MonitorValue[GkmNetworkListing]
 }
 
 // Starts the reconciler's hint loop on host, which needs Blobs and Budget, since every sweep's delete spends §11.13's
-// P2 (budget.go); its sweeps run once RegisterSweep has registered them. It runs until ctx ends or Close.
+// P2 (budget.go), and the start's listing of deps.Networks; its sweeps run once RegisterSweep has registered them. It
+// runs until ctx ends or Close.
 func NewGkmReconciler(ctx context.Context, host *sidecar.ServiceHost, settings *GkmReconcilerSettings, deps *GkmReconcilerDeps) (*GkmReconciler, error) {
 	if host == nil || host.Blobs == nil {
 		return nil, errors.New("gkm's reconciler needs a host with Blobs")
@@ -373,12 +444,14 @@ func NewGkmReconciler(ctx context.Context, host *sidecar.ServiceHost, settings *
 		holds = sidecar.NewHoldSet(host.Blobs, clock, nil)
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
+	loader, _ := deps.State.(GkmReconcilerStateLoader)
 	self := &GkmReconciler{
 		ctx:            cancelCtx,
 		cancel:         cancel,
 		host:           host,
 		settings:       settings,
 		state:          deps.State,
+		loader:         loader,
 		clock:          clock,
 		log:            log,
 		blobs:          host.Blobs,
@@ -390,6 +463,7 @@ func NewGkmReconciler(ctx context.Context, host *sidecar.ServiceHost, settings *
 		wake:           make(chan struct{}, 1),
 		passCount:      sidecar.NewMonitorValue(0),
 		idle:           sidecar.NewMonitorValue(false),
+		listing:        sidecar.NewMonitorValue(GkmNetworkListing{Done: deps.Networks == nil}),
 
 		delegationKeyEnds:        map[sidecar.Id]map[string]*gkmDelegationKeyEnd{},
 		delegationKeySweeps:      map[sidecar.Id]map[string]bool{},
@@ -404,6 +478,9 @@ func NewGkmReconciler(ctx context.Context, host *sidecar.ServiceHost, settings *
 	self.stopWatch = stopWatch
 	go self.run()
 	go self.runDelegationKeyDeletes()
+	if deps.Networks != nil {
+		go self.listNetworks(deps.Networks)
+	}
 	return self, nil
 }
 
@@ -415,6 +492,86 @@ func (self *GkmReconciler) Close() {
 // Passes of the hint loop finished, and a channel that closes at the next: what a test waits on.
 func (self *GkmReconciler) Passes() (count int, changed chan struct{}) {
 	return self.passCount.Get()
+}
+
+// How far the start's listing has come, and a channel that closes when it moves: what a test waits on. A page is
+// counted once the wait for the next is set, so a fake clock moved after the count reaches that wait.
+func (self *GkmReconciler) NetworkListing() (listing GkmNetworkListing, changed chan struct{}) {
+	return self.listing.Get()
+}
+
+// The start's listing (the file header's networks row): pages from the first, NetworkPageCount networks a page, one at
+// once and the next NetworkPageInterval after, until a page leaves none or the reconciler ends. A page that fails is
+// read again from the same cursor at the next interval.
+func (self *GkmReconciler) listNetworks(pages GkmNetworkPages) {
+	var afterNetworkId *sidecar.Id
+	for {
+		networkIds, next, err := pages(self.ctx, afterNetworkId, self.settings.NetworkPageCount)
+		if err != nil {
+			if self.ctx.Err() != nil {
+				return
+			}
+			self.log.Warningf("[gkm reconciler] a page of the networks to read did not list, read again in %s: %v", self.settings.NetworkPageInterval, err)
+		} else {
+			now := self.clock.Now()
+			listedCount := 0
+			for _, networkId := range networkIds {
+				if self.listNetwork(networkId, now) {
+					listedCount += 1
+				}
+			}
+			if 0 < listedCount {
+				// the loop's next wait counts the listed networks' wakes
+				select {
+				case self.wake <- struct{}{}:
+				default:
+				}
+			}
+			afterNetworkId = next
+		}
+		done := err == nil && afterNetworkId == nil
+		var timeout <-chan time.Time
+		if !done {
+			// set before the page is counted, so a test that moves the clock once it sees the count reaches it
+			timeout = self.clock.After(self.settings.NetworkPageInterval)
+		}
+		self.listing.Update(func(listing GkmNetworkListing) GkmNetworkListing {
+			listing.PageCount += 1
+			if err != nil {
+				listing.FailureCount += 1
+			}
+			listing.Done = done
+			return listing
+		})
+		if done {
+			return
+		}
+		select {
+		case <-self.ctx.Done():
+			return
+		case <-timeout:
+		}
+	}
+}
+
+// One network the listing gives, unless the reconciler holds it already, read or waiting for a retry: asked of the
+// state, and woken PendingHintInterval on should its load fail, its install's change reading it before that. true
+// when it was listed.
+func (self *GkmReconciler) listNetwork(networkId sidecar.Id, now time.Time) bool {
+	listed := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if _, ok := self.networkEntries[networkId]; ok {
+			return false
+		}
+		// the entry first, so the install's change finds it
+		self.networkEntryWithLock(networkId).nextWake = now.Add(self.settings.PendingHintInterval)
+		return true
+	}()
+	if listed && self.loader != nil {
+		self.loader.Load(networkId)
+	}
+	return listed
 }
 
 // Notes a change and wakes the loop, never blocking: the state's watch calls it.
@@ -535,7 +692,8 @@ func (self *GkmReconciler) earliestWake() (time.Time, bool) {
 
 // Reads a network's state and judges each repo against the state last read: holders changed, or a gate closed,
 // hints pending; a closed gate is kept for its interval; the next holder expiry sets the network's wake. wake is an
-// expiry's wake, which checks every repo's gate though nothing in the log moved.
+// expiry's wake, which checks every repo's gate though nothing in the log moved. A read with no state is read again
+// later (failNetwork), and a wake's asks the state for it (the file header's networks row).
 func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 	networkId := change.NetworkId
 	state, err := self.state.State(self.ctx, networkId)
@@ -544,8 +702,11 @@ func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 		if self.log.V(1).Enabled() {
 			self.log.Infof("[gkm reconciler] a network's state did not load: %v", err)
 		}
-		// read it again at the next interval
-		self.setNetwork(networkId, nil, now.Add(self.settings.PendingHintInterval))
+		if wake && self.loader != nil {
+			// a wake needs the state: an evicted network's is asked for again, and its install's change reads it
+			self.loader.Load(networkId)
+		}
+		self.failNetwork(networkId, wake, now)
 		return
 	}
 	var previous *GkmNetworkState
@@ -554,6 +715,8 @@ func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 		defer self.stateLock.Unlock()
 		if entry, ok := self.networkEntries[networkId]; ok {
 			previous = entry.state
+			// a wake whose read found no state: this read checks what that wake would have
+			wake = wake || entry.wakeOwed
 		}
 	}()
 	configWriterIds := gkmConfigWriters(state)
@@ -602,10 +765,41 @@ func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 	self.setNetwork(networkId, state, nextWake)
 }
 
-// Keeps a network's state and wake, a nil state keeping the one held, forgetting another network first when full.
+// Keeps a network's state and wake, a nil state keeping the one held. A state ends the reads in a row that found
+// none, and takes any wake one of them owed.
 func (self *GkmReconciler) setNetwork(networkId sidecar.Id, state *GkmNetworkState, nextWake time.Time) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	entry := self.networkEntryWithLock(networkId)
+	if state != nil {
+		entry.state = state
+		entry.stateFailureCount = 0
+		entry.wakeOwed = false
+	}
+	entry.nextWake = nextWake
+}
+
+// Notes a read that found no state of the network, keeping the state held: the next read PendingHintInterval on,
+// doubling with each such read in a row up to StateRetryMaxInterval, or at a wake set sooner that is still ahead; and
+// a wake's read owed to the next read that finds a state.
+func (self *GkmReconciler) failNetwork(networkId sidecar.Id, wake bool, now time.Time) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	entry := self.networkEntryWithLock(networkId)
+	entry.stateFailureCount += 1
+	retry := self.settings.PendingHintInterval
+	for i := 1; i < entry.stateFailureCount && retry < self.settings.StateRetryMaxInterval; i += 1 {
+		retry *= 2
+	}
+	retryAt := now.Add(min(retry, self.settings.StateRetryMaxInterval))
+	if entry.nextWake.IsZero() || !entry.nextWake.After(now) || retryAt.Before(entry.nextWake) {
+		entry.nextWake = retryAt
+	}
+	entry.wakeOwed = entry.wakeOwed || wake
+}
+
+// The network's entry, made when the reconciler holds none, forgetting another network first when full.
+func (self *GkmReconciler) networkEntryWithLock(networkId sidecar.Id) *gkmReconcilerNetwork {
 	entry, ok := self.networkEntries[networkId]
 	if !ok {
 		if self.settings.NetworkCount <= len(self.networkEntries) {
@@ -617,10 +811,7 @@ func (self *GkmReconciler) setNetwork(networkId sidecar.Id, state *GkmNetworkSta
 		entry = &gkmReconcilerNetwork{}
 		self.networkEntries[networkId] = entry
 	}
-	if state != nil {
-		entry.state = state
-	}
-	entry.nextWake = nextWake
+	return entry
 }
 
 // Notes each forwarding Delegation of the network's state that ended or was superseded, and queues for the deleter

@@ -11,15 +11,19 @@
 //	                 the time of each entry the gate's log keeps
 //	SidecarStanding  the cache's index from a sidecar to the one loaded network whose state holds its row, and that
 //	                 row's revoked_at
+//	Load             AclGateCache.Changed: the cache tracks the network and starts its load, under its
+//	                 LoadConcurrency, and its install is told through Watch (GkmReconcilerStateLoader)
 //
 // The cache loads what its host tells it of: a host calls AclGateCache.Watch on the process's Redis, so each
 // {acl_<networkId>}v INCR loads that network and a resubscription loads every held one again. A lost subscription
 // therefore needs no nil change: the networks whose state moved in the gap install, and are told like any other.
 // Watch tells one nil change as it starts, so the networks loaded before the reconciler are read once.
 //
-// What the cache does not hold, the reconciler does not see: a network whose log has not moved since this process
-// started, and one the cache's byte budget evicted, answer State with an error and SidecarStanding with not known,
-// which keep every object and send no hint (question gkm-auth-state-reconciler-networks).
+// What the cache does not hold answers State with an error and SidecarStanding with not known, which keep every
+// object and send no hint: a network whose log has not moved since this process started, until the reconciler asks
+// for it, as it does for every network a taskworker start lists (owner decision 371), and one the cache's byte budget
+// evicted, until the reconciler's next wake for it asks again. State itself asks for nothing, so a read never starts
+// a load; Load does, when the reconciler calls it.
 //
 // Safe for concurrent use. Nothing here does I/O or holds a lock across a call out.
 
@@ -44,6 +48,8 @@ type GkmReconcilerAclGate interface {
 	SidecarNetwork(sidecarId sidecar.Id) (networkId sidecar.Id, found bool)
 	// Runs callback after each new snapshot is installed; returns what stops it.
 	AddInstallCallback(callback sidecar.AclGateInstallFunction) (remove func())
+	// Tracks the network and starts its load, or marks one due after the load running; never blocks or reads.
+	Changed(networkId sidecar.Id)
 }
 
 // The real GkmReconcilerState. See the file header.
@@ -57,6 +63,17 @@ func NewAclGkmReconcilerState(gate GkmReconcilerAclGate) *AclGkmReconcilerState 
 }
 
 var _ GkmReconcilerState = (*AclGkmReconcilerState)(nil)
+
+var _ GkmReconcilerStateLoader = (*AclGkmReconcilerState)(nil)
+
+// See GkmReconcilerStateLoader: tells the gate cache, whose install of the network's state Watch tells. A nil gate is
+// told nothing.
+func (self *AclGkmReconcilerState) Load(networkId sidecar.Id) {
+	if self.gate == nil {
+		return
+	}
+	self.gate.Changed(networkId)
+}
 
 // A network the cache holds no loaded state of.
 var errGkmNetworkNotLoaded = errors.New("gkm: the gate cache holds no loaded state of the network")
