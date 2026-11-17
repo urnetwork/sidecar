@@ -584,3 +584,22 @@ The design-records track dr4-details-a (wave f43d) folded DESIGN-DETAILS.md sect
 - **The metadata list** is v50, whose header names what it changes in evs-26 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes, and the list's first line names v50, where v49's fold had left v48.
 
 Outside this folder the fold touched DESIGN.md, `metadata_list.yml`, DESIGN-AMENDMENTS.md's note on the sections to fold and DESIGN-DETAILS.md's three Status cells.
+
+## Validation after DESIGN-DETAILS.md sections 2, 10 and 14 (2026-11-17)
+
+The design-records track dr4-details-b (wave f43d) folds DESIGN-DETAILS.md sections 2, 10 and 14 (storage's segment GC and settle rules; DROP lists a phone can check; slot objects that a dead record and a committed push both list), whose owner questions were already owner decisions 203, 204, 225, 226 and 501 (section 2), 396 to 398 with 570's snap-0 (section 10), and 399 and 400 (section 14): each section's proposed text (its N.8) went, as amended since, into the places it names, citing the section where no decision does, and what earlier folds had carried was skipped. No owner answer that DESIGN.md lacks decides anything in these sections, so no owner decision is added. Each piece lands on its own.
+
+- **First piece: sections 2 and 14.** Owner decisions 203, 204, 225, 226 and 501 had carried section 2's §11.3, §11.6, §11.8, §11.13, §11.17, §19.6, §19.10, §19.13, §19.17, §22.8 and §2.8 parts, so its fold adds D-EVS-25's and D-EVS-34's register summaries, which still read as GC fencing idle refs, in `asm/data_registers10.py`, and details/Settle.tla and details/EvsGc.tla in §22.8's model row. Owner decisions 399 and 400 had carried section 14's step 6, 5h, slot/ lifetime, evs-5 and FI-6 parts; its fold adds §11.6's object key row (a retoken keeps its slot ids, and a slot object carries its origin), §11.8's slot/ write rule, fences row, cleanup row and I-EVS-2, a new I-EVS-18 (a slot object's one origin; section 1's proposed I-EVS-18 was never folded, owner decision 584), §11.12's ERASE rewrite keeping the origin, §11.13's resolve row with Amendment 14-A to 2.2.3 (a HEAD, the settle age and a DELETE naming the LastModified) and its operation budget's HEAD per slot of a dead record, D-EVS-25, §19.6's MinIO row, FS-8 rewrapped inside its schedule column, and details/EvsSlot.tla in §22.8's model row.
+- **Not folded**, each with its reason: section 14's new schedule rows (14.6's A to D, two retokens of one statement, a stalled evacuation run and an attempt held between its slot round and its record), which wait for sidecartest/fault's catalog to take them in the same commit, since its tests hold §22.8's table to the catalog row for row, as FS-126 did; Amendments 14-B and 14-C, which change DESIGN-DETAILS section 9's own text and go with that section's fold; each section's Plan item, the plans'; and DESIGN-DETAILS.md's sections themselves, which stay as written beside their Status cells' fold mark.
+- **In text, ahead of the code.** EvsCommit.tla as landed keeps segment GC's fence and second check (`GcFence`, `GcCheck`) and the drop job's 25 h age check (`DropNoAgeCheck`), where §22.8's row has had the horizon rules since owner decisions 203 and 397; DESIGN-DETAILS 2.6 and 10.6 give the model's changes to its owners (EVS1-M2-02, EVSB-M10-07).
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `b6e14e89a6af830b2ea3e22732cd428b2ec7b600e2a70e998940f919accbc2eb`) at the first piece, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no §2.8 row change, so no guard line was needed; I-EVS-18 is new, which no check reads. No proto fence changed. §22.8's FS table reads, column for column, as sidecartest/fault's catalog holds it, FS-8 rewrapped inside its schedule column.
+- **Owner decisions.** All 584 rows are present and cited; none was added.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 310 grep hits, each with a reading, carried forward with no changed line raising a new one; the carried file's line numbers follow the sections.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is unchanged: no §2.8 row changes.
+
+Outside this folder the piece touched DESIGN.md, DESIGN-AMENDMENTS.md's note on the sections to fold and DESIGN-DETAILS.md's two Status cells.
