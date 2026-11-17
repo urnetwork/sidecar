@@ -225,6 +225,11 @@ type evsTestWorld struct {
 	// the auth version the world's pushes pin, 0 for 1, and the next push's index_epoch, which builds it as format 2
 	authVersion    uint64
 	nextIndexEpoch uint64
+	// the head's index_epoch, which a CUT the push stand-in commits moves to its version (evsTestPushServer.indexEpochs)
+	indexEpoch uint64
+	// each slot a push the stand-in committed introduced, by its 16-byte id, until an ERASE names it: what a read
+	// naming its id is served, a record-class repo's records being keyed by them
+	slots map[string][]byte
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -655,7 +660,7 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 		RefId: self.refId.Bytes(), RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: self.mode,
 		GroupId: evsTestId("world group").Bytes(), Generation: self.generation,
 		PathEpoch:     &protocol.EvsPathEpoch{Current: max(1, self.currentEpoch)},
-		SealedRefName: self.sealedRefName, Base: self.base, Deleted: self.deleted,
+		SealedRefName: self.sealedRefName, Base: self.base, Deleted: self.deleted, IndexEpoch: self.indexEpoch,
 	}
 	for _, source := range self.sourceEpochs {
 		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})
@@ -980,6 +985,12 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 						Body: segment[at:end],
 					}})
 				}
+			}
+		}
+		for _, slotId := range read.GetSlotIds() {
+			// a slot the stand-in's pushes introduced and no ERASE named; for any other the reply carries nothing
+			if slot, ok := self.slots[string(slotId)]; ok && !self.missingObjects {
+				frames = append(frames, &protocol.EvsReadFrame{Object: &protocol.EvsReadObject{Kind: protocol.EvsReadObjectKind_EVS_READ_OBJECT_SLOT, Id: slotId, Body: slot}})
 			}
 		}
 		frames = append(frames, &protocol.EvsReadFrame{End: true})

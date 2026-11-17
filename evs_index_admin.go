@@ -616,7 +616,7 @@ func (self *EvsRepo) indexRepoKind() (protocol.RepoKind, error) {
 	if err != nil {
 		return 0, err
 	}
-	if indexExcluded(indexPlace{repoKind: kind}) {
+	if indexRepoExcluded(kind) {
 		return kind, ErrEvsIndexExcluded
 	}
 	return kind, nil

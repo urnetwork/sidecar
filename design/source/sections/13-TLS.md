@@ -251,7 +251,7 @@ Caps protect the devices, which do the handshakes: endpoint caps are tier quotas
 | Concurrent per endpoint | 256 / 2,048 / 8,192 | ⌈cap ÷ blocks⌉, at least 1, per process, no shared counter, blocks being tlsedge.yml's count of lb hosts running it (13.5) |
 | New per endpoint | 50 / 200 / 1,000 per s | token bucket per process |
 | Bandwidth per endpoint | 20 / 200 / 1,000 Mbit/s | token bucket in the splice, ⌈cap ÷ blocks⌉ |
-| Per visitor /64 (IPv6) or /32 (IPv4), per process | 64 concurrent, 20 per s; 4× those per /48 or /24 | HMAC under a per-process key rotated daily |
+| Per visitor /64 (IPv6) or /32 (IPv4), per process | 64 concurrent (`tls_visitor_concurrent`), 20 per s (`tls_visitor_new_per_s`); `tls_visitor_aggregate_multiple` (4) times those per /48 or /24 | HMAC under a per-process key rotated daily |
 
 **Visitor hashes.** Cap keys stay per process (§2.8 tls-2). tls-3's visitor hash and Find's affinity key use a fleet-shared daily key: 32 random bytes in Redis `{vhk}tls:<yyyymmdd>` (UTC), created by the first process with `SET NX EX 90000` and read by every process each minute and at the date change. `k_record` and `k_affinity` derive from it by HKDF-SHA256 with infos `urnetwork-sidecar-v1/tls-visitor-record` and `urnetwork-sidecar-v1/tls-visitor-affinity`, and the hash is HMAC-SHA256(k, family byte ‖ the /24 or /48 prefix)[:16], so one visitor links across processes for a day. A process that cannot reach Redis uses a random key of its own for that day, the closed direction. mxedge's daily key has the same shape under `{vhk}mx:<yyyymmdd>` (§15.4), so tls-3's rows and `{mxc_}` keys never join.
 | Per process | 50,000 connections | tlsedge.yml; §19 derives §9's platform Find limit from it |

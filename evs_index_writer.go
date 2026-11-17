@@ -28,7 +28,7 @@
 // alike, since a push's entries ride it; who may merge is mayMerge's. Index files take versioning 2 through
 // EvsWriteOptions.Reserved, staged under 16 KiB; at the storage limit they ride content pushes and stop with them.
 // The tainted bit rides the push's provenance as the plan has it; outside's comes from mail or an EvsImport (QD-042),
-// whose writers set it on the documents they write.
+// whose writers mark the writes they make (EvsPathWrite.Outside), and a document takes its write's mark.
 //
 // Paths are this device's plaintext and go into no log or error (I-13). Safe for concurrent use: each Prepare is one
 // plan's.
@@ -272,7 +272,7 @@ func (self *indexWriterDocuments) enter(ctx context.Context, change *indexWriter
 			return 0, false, nil
 		}
 		defer previous.close()
-		extraction, err := self.extract(planned.Path, planned.BaseEntryVersion, previous)
+		extraction, err := self.extract(planned.Path, planned.BaseEntryVersion, previous, false)
 		if err != nil {
 			return 0, false, err
 		}
@@ -286,7 +286,7 @@ func (self *indexWriterDocuments) enter(ctx context.Context, change *indexWriter
 		// a removal's version is the one past what it removes
 		return true, tombstones(0, count, planned.BaseEntryVersion+1)
 	}
-	extraction, err := self.extract(planned.Path, planned.Version, change.write.Content)
+	extraction, err := self.extract(planned.Path, planned.Version, change.write.Content, change.write.Outside)
 	if err != nil {
 		return false, err
 	}
@@ -321,13 +321,13 @@ func (self *indexWriterDocuments) enter(ctx context.Context, change *indexWriter
 }
 
 // One pass over a version's content: its documents as key sets and rows, by the mail extractor for a mailbox's m/ and
-// the file extractor for the rest.
-func (self *indexWriterDocuments) extract(path string, version uint64, content EvsGitDeltaSource) (*indexWriterExtraction, error) {
+// the file extractor for the rest. outside is the write's mark, which each document's row carries.
+func (self *indexWriterDocuments) extract(path string, version uint64, content EvsGitDeltaSource, outside bool) (*indexWriterExtraction, error) {
 	settings := self.writer.args.settings
 	extraction := &indexWriterExtraction{text: true}
 	kind := indexExtractorKind(indexPlace{repoKind: self.plan.repoKind, groupInbox: self.groupInbox, path: path})
 	streamArgs := &indexStreamArgs{
-		template:   &IndexDocument{Kind: kind, Name: []byte(path), Version: version, Tainted: self.plan.Tainted},
+		template:   &IndexDocument{Kind: kind, Name: []byte(path), Version: version, Tainted: self.plan.Tainted, Outside: outside},
 		byteCount:  uint64(content.Size()),
 		normalizer: self.normalizer,
 		refId:      self.plan.RefId,

@@ -206,7 +206,7 @@ func (self *IndexBuilder) FirstBuild(ctx context.Context) (*indexBuildOutcome, e
 // after each refusal it reruns, at most AttemptCount builds.
 func (self *IndexBuilder) Build(ctx context.Context) (*indexBuildOutcome, error) {
 	outcome := &indexBuildOutcome{}
-	if indexExcluded(indexPlace{repoKind: self.args.repoKind}) {
+	if indexRepoExcluded(self.args.repoKind) {
 		return outcome, errIndexBuildExcluded
 	}
 	lockTime := self.clock.Now()
