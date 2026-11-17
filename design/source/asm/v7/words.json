@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9433,
-  "code_words": 20052,
+  "code_words": 20119,
   "ceiling": 3000,
   "over": 6433,
   "over_pct": 214.4
@@ -56,35 +56,35 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 11984,
-  "code_words": 12726,
+  "words": 12038,
+  "code_words": 12984,
   "ceiling": 3500,
-  "over": 8484,
-  "over_pct": 242.4
+  "over": 8538,
+  "over_pct": 243.9
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 11583,
-  "code_words": 3845,
+  "words": 11854,
+  "code_words": 3900,
   "ceiling": 3800,
-  "over": 7783,
-  "over_pct": 204.8
+  "over": 8054,
+  "over_pct": 211.9
  },
  {
   "num": 9,
   "code": "SOCK",
-  "words": 5247,
-  "code_words": 1628,
+  "words": 5641,
+  "code_words": 1647,
   "ceiling": 3000,
-  "over": 2247,
-  "over_pct": 74.9
+  "over": 2641,
+  "over_pct": 88.0
  },
  {
   "num": 10,
   "code": "KEYS",
   "words": 11088,
-  "code_words": 9290,
+  "code_words": 9426,
   "ceiling": 4500,
   "over": 6588,
   "over_pct": 146.4
@@ -119,11 +119,11 @@
  {
   "num": 14,
   "code": "SMTP",
-  "words": 9671,
+  "words": 9725,
   "code_words": 1396,
   "ceiling": 4500,
-  "over": 5171,
-  "over_pct": 114.9
+  "over": 5225,
+  "over_pct": 116.1
  },
  {
   "num": 15,
@@ -165,7 +165,7 @@
   "num": 19,
   "code": "OPS",
   "words": 9605,
-  "code_words": 10636,
+  "code_words": 10642,
   "ceiling": 3500,
   "over": 6105,
   "over_pct": 174.4

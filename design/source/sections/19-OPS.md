@@ -770,12 +770,13 @@ a dns edge, or a signing   resolvers retry the other NS; an edge keeps its      
   fault                    previous key set
 Postgres primary           the token exchange stops, so evs and gkm refuse     repair, or restore the newest dumps, then
                            new sessions within 15 min; sockets runs about an   the reconcile steps below
-                           hour, its clients' projected fields then lapsing
-                           with nothing to re-project them, and answers
-                           unavailable (owner decision 497); the edges run
-                           from memory and Redis, one started meanwhile
-                           staying not ready until Postgres returns (owner
-                           decision 495)
+                           hour, its clients' projected fields, team
+                           members' included (owner decision 561), then
+                           lapsing with nothing to re-project them, and
+                           answers unavailable (owner decision 497); the
+                           edges run from memory and Redis, one started
+                           meanwhile staying not ready until Postgres
+                           returns (owner decision 495)
 Postgres or PgBouncer      api answers a request whose connection it cut       none: a route whose effect may have
   restart                  (SQLSTATE 08000, 08003, 08006, 57P01-57P03) 503     committed before the cut relies on its
                            with Retry-After: 1, as a lock timeout, the cause   own idempotency (admin-token claims,

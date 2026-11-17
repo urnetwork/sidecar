@@ -450,3 +450,47 @@ RECORD.md's part, which waits on RECORD.md and record.proto: section 5's `Contex
 Changes: RECORD.md 5's ContextBody and 7.4; record.proto.
 
 Questions: `search-m10-28-transcript-prompts.md`.
+
+### QD-1005: Which kind should a restored binding's admission hold when the base that changes self_admit leaves it unfolded in its tail?
+*Decided by the owner on 2026-11-16, asked one question at a time; owner decision 556. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+The wire and the list, which wait on the code: §7.9's `ProjectionHeader` fence takes `repeated bytes restored_cosigned_ids = 12` once auth.proto declares it, a design-records fold writing the line and dropping its `testFenceAdditions` entry in one commit (owner decision 273); and §2.8 api-7's phrase names the field, which the fix track publishes through `check/`'s additions and a design-records fold then writes into the block, the entry leaving in that commit (owner decision 252). DESIGN-DETAILS 5.2.3 and 5.2.4 are the design agent's. The rest is folded (2026-11-17): the decision, §7.9's self_admit, base and verdicts rows, and a comment in the fence naming what joins it.
+
+Changes: §7.9's fence; §2.8 api-7; auth.proto.
+
+Questions: `proposal-kind-restored-cosigned-tail-self-admit.md`.
+
+Waits on: the fix track base-restored-cosigned-ids.
+
+### QD-1015: Where does every verifier read t_s, the time QD-883's second shrink comparison needs, when rows carry holders_shrunk_at only as a position and a verifier that starts at a base holds no entry its rows folded?
+*Decided by the owner on 2026-11-17, asked one question at a time; owner decision 557. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+The list, which waits on the code: §2.8 api-7 gains "and its time" beside `holders_shrunk_at`, which the fix track acl-repo-shrunk-time publishes through `check/`'s additions (owner decision 252); a design-records fold writes the words into the block once that entry has landed, and the entry leaves in that commit. `AclRepo` is held by `testUnfencedFence`, so no DESIGN.md fence takes field 13. The rest is folded (2026-11-17): the decision, §7.9's shrink row and `ProjectionRows` comment, and §8.8's `AclRows` comment and Repo rows, which name `holders_shrunk_time_ms = 13`.
+
+Changes: §2.8 api-7.
+
+Questions: `shrink-two-time-compare-shrunk-time-row.md`.
+
+Waits on: acl-repo-shrunk-time's landing, its additions entry with it.
+
+### QD-989: How does smtpedge learn which sidecar dialed a ur/smtpedge stream, the subject §8's mail_send is judged for, when the ur/ ticket names only the dialer's network and client?
+*Decided by the owner on 2026-11-16, asked one question at a time; owner decision 560. Folds into §9 Abstract socket listeners and the scheduler.*
+
+The wire, which waits on the code: §9.6's `SocketTicket` fence takes `bytes dialer_sidecar_id = 16` once socket.proto declares it, a design-records fold writing the line and dropping its `testFenceAdditions` entry in one commit (owner decision 273). The rest is folded (2026-11-17): the decision, §9.6's `ur/` tickets paragraph and a comment in the fence naming what joins it, §14.5's Authorization, and §2.8's sock-2 (list v45).
+
+Changes: §9.6's fence; socket.proto.
+
+Questions: `smtp-m9-13-dialer-sidecar.md`.
+
+Waits on: the fix track ur-ticket-dialer-sidecar.
+
+### QD-1013: How does sockets check a team member's Client-class token, which carries member_id and which the revocation record keeps no state for, with no SQL?
+*Decided by the owner on 2026-11-17, asked one question at a time; owner decision 561. Folds into §9 Abstract socket listeners and the scheduler.*
+
+The list and the test, which wait: §2.8's row for the revocation record's family gains member and user ids (I-18), and an FS case covers a membership's removal racing a projection. §2.8 holds no row for that family, `{rv_<network_id>_<k>}` (server/session/REVOKE-FINAL.md), so the words have no row to join; question `dr3-s7-s10-revocation-record-row.md` asks whether a design-records fold adds one. The FS case is the fix track's, and a §22.8 row for it, if it takes one, lands with sidecartest/fault's catalog, which holds §22.8's table row for row. The rest is folded (2026-11-17): the decision, §9.8's client tokens, §7.5's members and §19.10's Postgres row.
+
+Changes: §2.8; §22.8.
+
+Questions: `sock-client-verifier-member-credentials.md`, `dr3-s7-s10-revocation-record-row.md`.
+
+Waits on: the fix track revocation-record-members, and that question's answer.
