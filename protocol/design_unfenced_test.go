@@ -1076,6 +1076,14 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "prefix_rules", number: 12, typeName: "AclRepoPrefixRulesRow", repeated: true},
 		question: "DESIGN-DETAILS 16.2.2 (QD-212)",
 	},
+	// QD-1015: the time of the entry at holders_shrunk_at, or of the RepoCreate's while that is 0, so every verifier,
+	// a new device and a cold gate that start at a base among them, reads t_s for the shrink row's second comparison
+	// (owner decision 315, QD-883)
+	{
+		message:  "AclRepo",
+		field:    testFenceField{name: "holders_shrunk_time_ms", number: 13, typeName: "int64"},
+		question: "shrink-two-time-compare-shrunk-time-row",
+	},
 	{
 		message:  "Pending",
 		field:    testFenceField{name: "forward_delegation_id", number: 5, typeName: "bytes"},

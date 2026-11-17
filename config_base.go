@@ -410,9 +410,6 @@ func configLoadRows(state *ConfigState, rows *bridge.ProjectionRows) error {
 	// rows hold no bridge statement, only BridgeRows' egress modes and approved routes' ids in their acl part (QD-764):
 	// the fold starts empty at a base and the base's tail re-applies (bridge_statement.go)
 	state.bridge = nil
-	// nor a repo's t_s, which no verifier that starts here holds for what the rows fold: the tail's re-application and
-	// the base's own shrinks write it again (QD-883, config_coverage.go's shrinkTime)
-	state.shrinkTimes = nil
 	state.members = make(map[Id]*bridge.MemberRow, len(rows.GetMembers()))
 	for i, member := range rows.GetMembers() {
 		memberId, err := IdFromBytes(member.GetMemberId())
