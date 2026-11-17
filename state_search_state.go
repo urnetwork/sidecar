@@ -11,13 +11,15 @@
 //	policies  this device's policy overrides (§18.4's modes), by repo and one for every repo
 //	served    the asker's memory of which repos each indexer served, kept Search.RemoteServedTimeout
 //	distrust  an indexer's distrust deadline (DESIGN-DETAILS 7.2.6)
-//	records   on an owner's indexer, the served record {requester, repo, time} of each remote search an EvsShare
-//	          reader made in an owner-bound repo, kept Search.ServedRecordTimeout, at most Search.ServedRecordCount,
-//	          the oldest going first
+//	records   on an owner's indexer, the served record (owner decision 294, QD-961): one row per (requester, repo,
+//	          UTC day) of the remote searches an EvsShare reader made in an owner-bound repo that day, with their
+//	          count and the first and last of their times; a row is kept until its day ended
+//	          Search.ServedRecordTimeout ago, and Search.ServedRecordCount bounds the number of these rows, one per
+//	          (requester, repo, day), beneath that, the oldest days going first and a day's by requester then repo
 //
 // None of it names a query, hit, snippet, cursor, result count or verdict (§5.9's never row): no call here takes one,
-// and the encoding has no field that could hold one. The mismatch counts and the refused and skip memories are in RAM
-// only (DESIGN-DETAILS 7.2.3), the asker's.
+// and the encoding has no field that could hold one; a row's count is of searches, never of results. The mismatch
+// counts and the refused and skip memories are in RAM only (DESIGN-DETAILS 7.2.3), the asker's.
 //
 // Each change is written through, whole and atomically, before its call returns, and what has expired is pruned as it
 // is. A read loads the file once and keeps it in memory while the instance is open; a lock drops that copy, and while
@@ -83,12 +85,19 @@ func isSearchPolicy(policy string) bool {
 	return false
 }
 
-// The served record (§5.9's state row, D-CORE-17): one remote search an EvsShare reader made in an owner-bound repo, as
-// the owner's indexer keeps it. It names no query.
+// The served record (§5.9's state row, D-CORE-17; owner decision 294, QD-961): the remote searches one EvsShare reader
+// made in one owner-bound repo on one UTC day, as the owner's indexer keeps them, one row a requester, repo and day. It
+// names no query.
 type SidecarServedRecord struct {
 	RequesterId Id
 	RepoId      Id
-	At          time.Time
+	// the UTC day, as its first instant
+	Day time.Time
+	// the searches made that day, each counted once, at its page 0
+	Count int64
+	// the first and the last of them
+	First time.Time
+	Last  time.Time
 }
 
 // One network's search state. Construct with newSidecarSearchState.
@@ -151,11 +160,50 @@ type searchStateDistrustWire struct {
 	UntilMs int64  `json:"until_ms"`
 }
 
-// One served record.
+// One served row: the searches a requester made in a repo on one UTC day. A record of the old one-search form carries
+// at_ms alone; it reads as a row of count 1 on its time's day (foldRecords) and is never written.
 type searchStateRecordWire struct {
 	Requester string `json:"requester"`
 	Repo      string `json:"repo"`
-	AtMs      int64  `json:"at_ms"`
+	// the UTC day, counted from 1970-01-01
+	Day     int64 `json:"day"`
+	Count   int64 `json:"count"`
+	FirstMs int64 `json:"first_ms"`
+	LastMs  int64 `json:"last_ms"`
+	// the old form's one search
+	AtMs int64 `json:"at_ms,omitempty"`
+}
+
+// Whether a record is a row of at least one search whose times fall on its day, in order, or one of the old form.
+func (self searchStateRecordWire) wellFormed() bool {
+	if self.Count == 0 {
+		return self.Day == 0 && self.FirstMs == 0 && self.LastMs == 0
+	}
+	return 0 < self.Count && self.AtMs == 0 && self.FirstMs <= self.LastMs &&
+		servedRowDayOf(self.FirstMs) == self.Day && servedRowDayOf(self.LastMs) == self.Day
+}
+
+// The served rows' order: the oldest day first, a day's by requester then repo. It is the order the bound drops them
+// in and ServedRecords answers them in.
+func compareServedRows(a searchStateRecordWire, b searchStateRecordWire) int {
+	return cmp.Or(cmp.Compare(a.Day, b.Day), cmp.Compare(a.Requester, b.Requester), cmp.Compare(a.Repo, b.Repo))
+}
+
+// A served row's day: the UTC day timeMs falls on, counted from 1970-01-01. The day is the calendar's, the 86,400 s
+// Unix time counts, so no setting moves it.
+func servedRowDayOf(timeMs int64) int64 {
+	dayMs := (24 * time.Hour).Milliseconds()
+	// floored, so a time before 1970 falls on its own day as well
+	day := timeMs / dayMs
+	if timeMs%dayMs < 0 {
+		day -= 1
+	}
+	return day
+}
+
+// The first instant of a served row's day, in ms; the next day's is when it ends.
+func servedRowDayStartMs(day int64) int64 {
+	return day * (24 * time.Hour).Milliseconds()
 }
 
 // The search state of the network store is of: store must be a SidecarInstance's for one network, so a lock is seen.
@@ -256,6 +304,7 @@ func (self *SidecarSearchState) read() (*searchStateWire, error) {
 	if json.Unmarshal(content, wire) != nil || wire.Version != searchStateVersion || !wire.wellFormed() {
 		return nil, fmt.Errorf("%w: the search state does not decode", ErrSidecarStoreFailed)
 	}
+	wire.foldRecords()
 	return wire, nil
 }
 
@@ -289,11 +338,47 @@ func (self *searchStateWire) wellFormed() bool {
 		}
 	}
 	for _, record := range self.Records {
-		if !isId(record.Requester) || !isId(record.Repo) {
+		if !isId(record.Requester) || !isId(record.Repo) || !record.wellFormed() {
 			return false
 		}
 	}
 	return true
+}
+
+// Reads each record as a row, one of the old form as a row of count 1 on its time's day, and folds the rows of one
+// requester, repo and day into one, their counts summed and their times spanned, in the rows' order. A file written in
+// the old one-search form so reads as rows, and the next write leaves only rows.
+func (self *searchStateWire) foldRecords() {
+	type servedRowKey struct {
+		requester string
+		repo      string
+		day       int64
+	}
+	keyIndexes := map[servedRowKey]int{}
+	rows := []searchStateRecordWire{}
+	for _, record := range self.Records {
+		if record.Count == 0 {
+			record = searchStateRecordWire{
+				Requester: record.Requester,
+				Repo:      record.Repo,
+				Day:       servedRowDayOf(record.AtMs),
+				Count:     1,
+				FirstMs:   record.AtMs,
+				LastMs:    record.AtMs,
+			}
+		}
+		key := servedRowKey{requester: record.Requester, repo: record.Repo, day: record.Day}
+		if index, ok := keyIndexes[key]; ok {
+			rows[index].Count += record.Count
+			rows[index].FirstMs = min(rows[index].FirstMs, record.FirstMs)
+			rows[index].LastMs = max(rows[index].LastMs, record.LastMs)
+			continue
+		}
+		keyIndexes[key] = len(rows)
+		rows = append(rows, record)
+	}
+	slices.SortFunc(rows, compareServedRows)
+	self.Records = rows
 }
 
 // A deep copy, for a change to edit while readers hold the old one.
@@ -309,17 +394,19 @@ func (self *searchStateWire) clone() *searchStateWire {
 	}
 }
 
-// Drops what has expired at now and what passes the records' bound, the oldest first, and sorts every list.
+// Drops what has expired at now and the served rows past their bound, the oldest days first, and sorts every list. A
+// row goes once its day ended more than Search.ServedRecordTimeout ago.
 func (self *SidecarSearchState) prune(wire *searchStateWire, now time.Time) {
 	servedSince := now.Add(-self.settings.RemoteServedTimeout).UnixMilli()
 	wire.Served = slices.DeleteFunc(wire.Served, func(served searchStateServedWire) bool { return served.AtMs < servedSince })
 	wire.Distrust = slices.DeleteFunc(wire.Distrust, func(distrust searchStateDistrustWire) bool { return distrust.UntilMs <= now.UnixMilli() })
 	recordsSince := now.Add(-self.settings.ServedRecordTimeout).UnixMilli()
-	wire.Records = slices.DeleteFunc(wire.Records, func(record searchStateRecordWire) bool { return record.AtMs < recordsSince })
-	slices.SortStableFunc(wire.Records, func(a searchStateRecordWire, b searchStateRecordWire) int {
-		return cmp.Or(cmp.Compare(a.AtMs, b.AtMs), cmp.Compare(a.Requester, b.Requester), cmp.Compare(a.Repo, b.Repo))
+	wire.Records = slices.DeleteFunc(wire.Records, func(record searchStateRecordWire) bool {
+		return servedRowDayStartMs(record.Day+1) < recordsSince
 	})
-	if excess := len(wire.Records) - self.settings.ServedRecordCount; 0 < excess {
+	slices.SortFunc(wire.Records, compareServedRows)
+	// a bound of zero or less keeps no row
+	if excess := len(wire.Records) - max(self.settings.ServedRecordCount, 0); 0 < excess {
 		wire.Records = slices.Delete(wire.Records, 0, excess)
 	}
 	slices.SortFunc(wire.Answers, func(a searchStateAnswerWire, b searchStateAnswerWire) int { return cmp.Compare(a.Member, b.Member) })
@@ -333,8 +420,8 @@ func (self *SidecarSearchState) prune(wire *searchStateWire, now time.Time) {
 }
 
 // One change: edit a copy of the state, prune it and write it whole, then keep it and raise Changes. Nothing is written
-// while locked or over a failed file.
-func (self *SidecarSearchState) change(edit func(wire *searchStateWire)) error {
+// while locked, over a failed file, or where kept, nil for none, refuses the pruned copy.
+func (self *SidecarSearchState) change(edit func(wire *searchStateWire), kept func(wire *searchStateWire) error) error {
 	self.writeLock.Lock()
 	defer self.writeLock.Unlock()
 	current, err := self.current()
@@ -344,6 +431,11 @@ func (self *SidecarSearchState) change(edit func(wire *searchStateWire)) error {
 	next := current.clone()
 	edit(next)
 	self.prune(next, self.clock.Now())
+	if kept != nil {
+		if err := kept(next); err != nil {
+			return err
+		}
+	}
 	encoded, err := json.Marshal(next)
 	if err != nil {
 		return err
@@ -390,7 +482,7 @@ func (self *SidecarSearchState) SetMode(mode string) error {
 	}
 	return self.change(func(wire *searchStateWire) {
 		wire.Mode = mode
-	})
+	}, nil)
 }
 
 // The notice's answer for memberId: whether it was answered, and whether it allowed.
@@ -422,7 +514,7 @@ func (self *SidecarSearchState) SetAnswer(memberId *Id, allow bool) error {
 		if !allow {
 			wire.Mode = SearchRemoteOwn
 		}
-	})
+	}, nil)
 }
 
 // This device's policy override for repoId: its own, else the one for every repo, else "", the host's default.
@@ -463,7 +555,7 @@ func (self *SidecarSearchState) SetPolicy(repoId *Id, policy string) error {
 		if policy != "" {
 			wire.Policies = append(wire.Policies, searchStatePolicyWire{Repo: repo, Mode: policy})
 		}
-	})
+	}, nil)
 }
 
 // Notes that indexerId served repoId now: the asker's served memory, kept Search.RemoteServedTimeout.
@@ -475,7 +567,7 @@ func (self *SidecarSearchState) NoteServed(indexerId Id, repoId Id) error {
 			return served.Indexer == indexer && served.Repo == repo
 		})
 		wire.Served = append(wire.Served, searchStateServedWire{Indexer: indexer, Repo: repo, AtMs: now.UnixMilli()})
-	})
+	}, nil)
 }
 
 // The repos indexerId served within Search.RemoteServedTimeout, each with when it last did, by repo id.
@@ -520,27 +612,49 @@ func (self *SidecarSearchState) SetDistrustUntil(indexerId Id, until time.Time) 
 		indexer := hex.EncodeToString(indexerId[:])
 		wire.Distrust = slices.DeleteFunc(wire.Distrust, func(distrust searchStateDistrustWire) bool { return distrust.Indexer == indexer })
 		wire.Distrust = append(wire.Distrust, searchStateDistrustWire{Indexer: indexer, UntilMs: until.UnixMilli()})
-	})
+	}, nil)
 }
 
 // Writes the served record of one remote search requesterId made in owner-bound repoId by an EvsShare, now: what an
-// owner's indexer keeps at page 0, once a search (DESIGN-DETAILS 7.2.5). It takes no query, and returns once the record
-// is on the medium; an error means none was written, which the server answers fail-closed.
+// owner's indexer keeps at page 0, once a search (DESIGN-DETAILS 7.2.5). The row of requesterId, repoId and now's UTC
+// day takes it, its count raised and its times spanned to now, or a row of count 1 is added (owner decision 294,
+// QD-961). It takes no query, and returns once the row is on the medium; an error means nothing was written, which the
+// server answers fail-closed, as it is for a row Search.ServedRecordCount would drop at once.
 func (self *SidecarSearchState) RecordServed(requesterId Id, repoId Id) error {
 	if requesterId == (Id{}) || repoId == (Id{}) {
 		return fmt.Errorf("%w: a served record names its requester and repo", ErrSearchStateArgs)
 	}
-	now := self.clock.Now()
+	nowMs := self.clock.Now().UnixMilli()
+	requester, repo, day := hex.EncodeToString(requesterId[:]), hex.EncodeToString(repoId[:]), servedRowDayOf(nowMs)
+	isRow := func(record searchStateRecordWire) bool {
+		return record.Requester == requester && record.Repo == repo && record.Day == day
+	}
 	return self.change(func(wire *searchStateWire) {
+		if index := slices.IndexFunc(wire.Records, isRow); 0 <= index {
+			row := &wire.Records[index]
+			row.Count += 1
+			row.FirstMs = min(row.FirstMs, nowMs)
+			row.LastMs = max(row.LastMs, nowMs)
+			return
+		}
 		wire.Records = append(wire.Records, searchStateRecordWire{
-			Requester: hex.EncodeToString(requesterId[:]),
-			Repo:      hex.EncodeToString(repoId[:]),
-			AtMs:      now.UnixMilli(),
+			Requester: requester,
+			Repo:      repo,
+			Day:       day,
+			Count:     1,
+			FirstMs:   nowMs,
+			LastMs:    nowMs,
 		})
+	}, func(wire *searchStateWire) error {
+		if !slices.ContainsFunc(wire.Records, isRow) {
+			return fmt.Errorf("%w: the served rows' bound keeps no row for this search", ErrSearchStateArgs)
+		}
+		return nil
 	})
 }
 
-// The served records kept, oldest first: those within Search.ServedRecordTimeout.
+// The served rows kept, the oldest day first and a day's by requester then repo: those whose day ended within
+// Search.ServedRecordTimeout.
 func (self *SidecarSearchState) ServedRecords() ([]SidecarServedRecord, error) {
 	wire, err := self.current()
 	if err != nil {
@@ -549,7 +663,7 @@ func (self *SidecarSearchState) ServedRecords() ([]SidecarServedRecord, error) {
 	since := self.clock.Now().Add(-self.settings.ServedRecordTimeout).UnixMilli()
 	records := []SidecarServedRecord{}
 	for _, record := range wire.Records {
-		if record.AtMs < since {
+		if servedRowDayStartMs(record.Day+1) < since {
 			continue
 		}
 		requesterId, requesterErr := searchCacheIdOfHex(record.Requester)
@@ -557,7 +671,14 @@ func (self *SidecarSearchState) ServedRecords() ([]SidecarServedRecord, error) {
 		if requesterErr != nil || repoErr != nil {
 			continue
 		}
-		records = append(records, SidecarServedRecord{RequesterId: requesterId, RepoId: repoId, At: time.UnixMilli(record.AtMs)})
+		records = append(records, SidecarServedRecord{
+			RequesterId: requesterId,
+			RepoId:      repoId,
+			Day:         time.UnixMilli(servedRowDayStartMs(record.Day)).UTC(),
+			Count:       record.Count,
+			First:       time.UnixMilli(record.FirstMs).UTC(),
+			Last:        time.UnixMilli(record.LastMs).UTC(),
+		})
 	}
 	return records, nil
 }

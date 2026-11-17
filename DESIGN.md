@@ -423,7 +423,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-293"></a>293 | 2026-11-15 | `git-hook` mode | §5.8's hello gains a fifth mode that relays a mount's pre-receive and proc-receive hooks to the daemon; a protocol, never a privilege. | §5 |
 | <a id="od-294"></a>294 | 2026-11-15 | Served record | An owner's indexer keeps one row per requester, repo and UTC day, with a count and first and last times, for 30 days; `Search.ServedRecordCount` is a last bound. | §5 |
 | <a id="od-295"></a>295 | 2026-11-06 | Minimum-version raise | An unsigned raise of the minimum secure version is a live denial a device bounds by its own compiled version and never persists. | §2, §5, §6 |
-| <a id="od-296"></a>296 | 2026-11-06 | Same-network P2P | Built at M6 behind `SidecarProtocolSettings.EnablePeerP2p`, default off; relay-only stays until a later owner call. | §2, §6, §17 |
+| <a id="od-296"></a>296 | 2026-11-06 | Same-network P2P | Built at M6 behind `SidecarProtocolSettings.EnablePeerP2p`, default off; relay-only stays until a later owner call. | §2, §6, §17, §22 |
 | <a id="od-297"></a>297 | 2026-11-15 | Settings objects | Every limit, protocol and format limits included, is a field of a settings object; only identifiers stay constants, and legacy constants move when the function that reads them is edited. | §6, §23 |
 | <a id="od-298"></a>298 | 2026-11-15 | `ur/` pairs and Service | A Service pair is keyed by its non-edge end in every namespace, and a sidecar dialing a `ur/` name holds Service while its `ur/` stream lives. | §2, §6, §13 |
 | <a id="od-299"></a>299 | 2026-11-15 | Late pages, retry waits | A `versions` page that arrives late takes only its rises, and a reconnect ends a failed refetch's retry wait at once. | §6 |
@@ -21483,14 +21483,15 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target
-FS-25  §16    two callers barriered on uses = 1; kills after the reservation, after the        FI-2,7      T2+T3  M3-out
-              outbox commit and before completion; a retry through a new MCP session; a
-              gate's response lost after COMMIT; two api instances racing; uses = 2,
+FS-25  §16    two callers barriered on uses = 1; kills after the reservation, after the        FI-2,7      T2+T3  M3-out;
+              outbox commit and before completion; a retry through a new MCP session; a                           dns route
+              gate's response lost after COMMIT; two api instances racing; uses = 2,                              at M5-out
               cancellation and expiry on a fake clock; at M3-out on T3, a gate's lost
               response and the two racing api instances run on real Postgres through
               model.ConsumeApprovalUseInTx with a test effect in the gate's transaction
               (22.8's real rule), and the cancellation through the real POST /approval/cancel
-              with §7.4's allowlist on
+              with §7.4's allowlist on; at M5-out on T3 the same two legs run again through
+              the real POST /dns/records, its zone write the gated effect
 FS-26  §16    two runs and a hand edit interleaved, hooks firing around B's edits: restoring   FI-8        T2     M3-out
               A leaves B and the hand edit intact, or names the ambiguity; a hand edit of a
               path that A then edits in one scan interval, under each harness's edit hook:
@@ -21769,7 +21770,7 @@ FS-58  §11    a path changed in unfolded versions read, listed and CAS-checked,
               fold write held at a drive barrier past it, a fold that read the window's head
               writing over the marker only 150 ms past until_ms by its clock, and a push
               based before the removal is refused by 5f's base range (owner decision 148)
-FS-59  §11    a segment uploaded; a push checked 23 h 59 min later pauses before its head CAS  FI-6        T2+T3  M2-out
+FS-59  §11    a segment uploaded; a push checked 23 h 59 min later pauses before its head CAS  FI-1,6      T2+T3  M2-out
               on an idle ref; at 25 h GC deletes nothing; at 49 h evacuation fences the ref
               for the push's record and drops it; the push fails its CAS and answers 503
               unknown, and its retry gets 409 SEGMENT_GONE; GC then deletes the segment by a
@@ -22910,6 +22911,11 @@ FS-125 §4,6   C19's windows (owner decisions 176, 188) on a fake clock, with a 
               Hellos carried no bit 1 reports its bytes exactly. Sizes: every frame kind's
               counted bytes are at most §6.10's table, a HeadCheck at its list caps (four
               vetoes, four unverified pins with 8-hop paths) within two envelopes
+FS-126 §6     D-PROTO-10's P2P schedule (owner decision 296), with C3 on and                   I-3,FI-10,  T2+T3  M6-out
+              SidecarProtocolSettings.EnablePeerP2p set: a forged ControlId frame over P2P is  13a,
+              dropped; a same-network pair moves from relay to P2P and back under a live RPC   D-PROTO-8
+              and a live stream, its session key unchanged, Hello and HeadCheck holding
+              across each move; and bytes on P2P debit nothing (§20.6)
 ```
 
 Beyond the schedules:
@@ -23235,9 +23241,11 @@ M5       ALPN audience; the custom-SNI map (§13); report parsing (§14);       
                                                                               FS-52; S7's SNI-less abuse@<root>
                                                                               case; FS-41 and FS-42's M5 steps
                                                                               (labels, TLS endpoints, the dns
-                                                                              restore step); FS-66's, FS-69's,
-                                                                              FS-76's, FS-78's and FS-92's hold
-                                                                              cases once M10's Gn-out has passed
+                                                                              restore step); FS-25's gate legs
+                                                                              again through POST /dns/records;
+                                                                              FS-66's, FS-69's, FS-76's, FS-78's
+                                                                              and FS-92's hold cases once M10's
+                                                                              Gn-out has passed
 M6       the CAA chain (§12, §13); the audit reader's receipts and the team   FS-19's Team and invite runs; FS-21
          directory's specification: directory.proto's announcement, request,  on a Team default document; FS-30's
          decision, notice and erasure request messages, the kind and its      audit reader; FS-32, FS-35, FS-38's
@@ -23248,8 +23256,9 @@ M6       the CAA chain (§12, §13); the audit reader's receipts and the team   
          devices past the first 1,000 (owner decision 144); C18's share       cases; 20.9's benchmark rerun; FS-41
          signers (§17); Stripe meters, downgrade (§20); the escrow order,     and FS-42's M6 steps (meters, custom
          frozen once FS-46 and 20.9's benchmark pass on M4's build            hosts); FS-122; FS-97's, FS-98's and
-         (Q-QUOTA-3's residual); the custom-host map's versions, interface    FS-124's Team cases; FS-76's and
-         reports and readiness (§12, §13, §19)                                FS-80's team-record cases, FS-83's
+         (Q-QUOTA-3's residual); the custom-host map's versions, interface    FS-124's Team cases; FS-126, the P2P
+         reports and readiness (§12, §13, §19)                                schedule (D-PROTO-10); FS-76's and
+                                                                              FS-80's team-record cases, FS-83's
                                                                               team cases, the directory's format-2
                                                                               cases and FS-111's team-record case
                                                                               once M10's Gn-out has passed

@@ -8,8 +8,9 @@
 #             running sidecartest base already holds it). That task binds the check with
 #             fault.RegisterInvariant, so fault.FI(n) answers its check, and until it does fault.FI(n)
 #             fails closed.
-# rows        FS-1 to FS-125, each with §22.8's owning sections, checks (FI ids with their clause letter,
-#             invariants, and named checks such as "hint SLO" and WK1-WK4) and tiers, and its cases.
+# rows        FS-1 to FS-126, each with §22.8's owning sections, checks (FI ids with their clause letter,
+#             invariants, and named checks such as "hint SLO", WK1-WK4 and D-PROTO-8) and tiers, and its
+#             cases.
 # cases       the parts of a row a gate reports one by one, so a gate can report one part without
 #             implying another (§23.6). The row's main part has no name; a later part has one.
 #   gates     where the case must pass: Mn-out at milestone n's exit review, M6-in at M6's entry
@@ -119,7 +120,14 @@ rows:
       - {gates: [M2-out]}
       - {name: mailbox, gates: [M7-out]}
   - {id: FS-24, sections: [10], checks: ["gate SLO"], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
-  - {id: FS-25, sections: [16], checks: [FI-2, FI-7], tiers: [T2, T3], unknown: true, cases: [{gates: [M3-out]}]}
+  - id: FS-25
+    sections: [16]
+    checks: [FI-2, FI-7]
+    tiers: [T2, T3]
+    unknown: true
+    cases:
+      - {gates: [M3-out]}
+      - {name: dns-route, gates: [M5-out], tiers: [T3]}
   - {id: FS-26, sections: [16], checks: [FI-8], tiers: [T2], cases: [{gates: [M3-out]}]}
   - {id: FS-27, sections: [16], checks: [FI-7], tiers: [T2], cases: [{gates: [M3-out]}]}
   - {id: FS-28, sections: [16], checks: [FI-7], tiers: [T2], cases: [{gates: [M3-out]}]}
@@ -211,7 +219,7 @@ rows:
   - {id: FS-56, sections: [17], checks: [FI-11], tiers: [T2, T3], cases: [{gates: [M4-out]}]}
   - {id: FS-57, sections: [11], checks: [FI-1, FI-2, FI-6], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
   - {id: FS-58, sections: [11], checks: [FI-1, FI-6, FI-15], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
-  - {id: FS-59, sections: [11], checks: [FI-6], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
+  - {id: FS-59, sections: [11], checks: [FI-1, FI-6], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-60, sections: [11], checks: [FI-1, FI-13c], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-61, sections: [11, 19], checks: [FI-14], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-62, sections: [11, 10], checks: [FI-1, FI-2, FI-3, FI-10], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
@@ -476,3 +484,10 @@ rows:
     cases:
       - {gates: [M10-out], tiers: [T2, T3]}
       - {name: app-host, gates: [M8-out, M10-out], later_of: true}
+  - id: FS-126
+    sections: [6]
+    checks: [I-3, FI-10, FI-13a, D-PROTO-8]
+    tiers: [T2, T3]
+    fake_issuer: true
+    cases:
+      - {gates: [M6-out]}

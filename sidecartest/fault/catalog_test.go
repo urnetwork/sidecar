@@ -257,6 +257,10 @@ func TestCatalogMatchesSection22(t *testing.T) {
 	if checks := catalog.Row("FS-96").Checks; len(checks) != 5 || checks[4] != "FI-27" {
 		t.Errorf("FS-96's wrapped fifth check: %q", checks)
 	}
+	// FS-126's checks wrap over three lines, the last a D- item after a bare clause number (QD-1008)
+	if checks := catalog.Row("FS-126").Checks; !slices.Equal(checks, []string{"I-3", "FI-10", "FI-13a", "D-PROTO-8"}) {
+		t.Errorf("FS-126's wrapped checks: %q", checks)
+	}
 }
 
 func mapsEqual(a map[string]bool, b map[string]bool) bool {
@@ -466,6 +470,10 @@ func TestCatalogMatchesGateMap(t *testing.T) {
 		{rowId: "FS-47", caseName: "mail", gates: []string{"M7-out"}},
 		{rowId: "FS-69", caseName: "", gates: []string{"M5-out", "M10-out"}},
 		{rowId: "FS-92", caseName: "", gates: []string{"M5-out", "M10-out"}},
+		// QD-1008: FS-25's gate legs again through POST /dns/records, and D-PROTO-10's P2P schedule
+		{rowId: "FS-25", caseName: "", gates: []string{"M3-out"}},
+		{rowId: "FS-25", caseName: "dns-route", gates: []string{"M5-out"}},
+		{rowId: "FS-126", caseName: "", gates: []string{"M6-out"}},
 	} {
 		testCase := catalog.Case(want.rowId, want.caseName)
 		if testCase == nil || !slices.Equal(testCase.Gates, want.gates) {
@@ -479,20 +487,48 @@ func TestCatalogMatchesGateMap(t *testing.T) {
 	}
 }
 
-func TestCatalogHolds125RowsAnd30Invariants(t *testing.T) {
+func TestCatalogHolds126RowsAnd30Invariants(t *testing.T) {
 	catalog := DefaultCatalog()
-	if len(catalog.Rows) != 125 || len(catalog.Invariants) != 30 {
+	if len(catalog.Rows) != 126 || len(catalog.Invariants) != 30 {
 		t.Fatalf("%d rows, %d invariants", len(catalog.Rows), len(catalog.Invariants))
 	}
-	for n := 1; n <= 125; n += 1 {
+	for n := 1; n <= 126; n += 1 {
 		if row := catalog.Row(fmt.Sprintf("FS-%d", n)); row == nil || row.Number != n {
 			t.Errorf("FS-%d: %v", n, row)
 		}
 	}
-	for _, rowId := range []string{"FS-0", "FS-126", "FS-01", "FS-x", "fs-1"} {
+	for _, rowId := range []string{"FS-0", "FS-127", "FS-01", "FS-x", "fs-1"} {
 		if catalog.Row(rowId) != nil {
 			t.Errorf("%s resolved", rowId)
 		}
+	}
+}
+
+// QD-1008's three changes, as the gates read them: FS-126 is §6's one case at M6-out on T2 and T3, its peers on the
+// fake contract issuer and ControlId sink; FS-25's second case runs its gate legs at M5-out on T3 alone, through the
+// real dns route, its main case staying at M3-out on both tiers; and FS-59 checks closure beside visibility.
+func TestCatalogHoldsQd1008sRows(t *testing.T) {
+	catalog := DefaultCatalog()
+	fs126 := catalog.Row("FS-126")
+	if fs126 == nil || !slices.Equal(fs126.Sections, []int{6}) || !slices.Equal(fs126.Tiers, []Tier{TierT2, TierT3}) ||
+		!fs126.FakeIssuer || fs126.Unknown || fs126.Forged || len(fs126.Cases) != 1 {
+		t.Fatalf("FS-126: %+v", fs126)
+	}
+	if main := fs126.Cases[0]; main.Name != "" || !slices.Equal(main.Gates, []string{"M6-out"}) || !slices.Equal(main.Tiers(), []Tier{TierT2, TierT3}) || main.StoreClock || main.Open != "" {
+		t.Errorf("FS-126's case: %+v", main)
+	}
+	fs25 := catalog.Row("FS-25")
+	if len(fs25.Cases) != 2 || !fs25.Unknown {
+		t.Fatalf("FS-25: %+v", fs25)
+	}
+	if main := catalog.Case("FS-25", ""); !slices.Equal(main.Tiers(), []Tier{TierT2, TierT3}) {
+		t.Errorf("FS-25's main case runs on %v", main.Tiers())
+	}
+	if dnsRoute := catalog.Case("FS-25", "dns-route"); dnsRoute == nil || !slices.Equal(dnsRoute.Tiers(), []Tier{TierT3}) || dnsRoute.LaterOf || dnsRoute.Forged() {
+		t.Errorf("FS-25's dns-route case: %+v", dnsRoute)
+	}
+	if checks := catalog.Row("FS-59").Checks; !slices.Equal(checks, []string{"FI-1", "FI-6"}) {
+		t.Errorf("FS-59's checks: %q", checks)
 	}
 }
 
@@ -541,7 +577,8 @@ func TestRegistrationRefusesWhatTheCatalogDoesNotHold(t *testing.T) {
 		builder  Builder
 		want     string
 	}{
-		{rowId: "FS-126", tiers: both, builder: build, want: "no such row"},
+		{rowId: "FS-127", tiers: both, builder: build, want: "no such row"},
+		{rowId: "FS-25", caseName: "dns-route", tiers: []Tier{TierT2}, builder: build, want: "the case runs on [T3]"},
 		{rowId: "FS-19", caseName: "", tiers: both, builder: build, want: "no case \"\""},
 		{rowId: "FS-19", caseName: "grnat", tiers: both, builder: build, want: "no case \"grnat\""},
 		{rowId: "FS-5", tiers: []Tier{TierT2}, builder: build, want: "the case runs on [T3]"},
@@ -564,6 +601,13 @@ func TestRegistrationRefusesWhatTheCatalogDoesNotHold(t *testing.T) {
 	// a forged case's twin runs on T3 too, so its builder may register there
 	if _, err := registry.register("FS-102", "forged", []Tier{TierT2, TierT3}, build); err != nil {
 		t.Errorf("forged twin on T3: %v", err)
+	}
+	// QD-1008's rows take a builder on their tiers
+	if _, err := registry.register("FS-126", "", both, build); err != nil {
+		t.Errorf("FS-126: %v", err)
+	}
+	if _, err := registry.register("FS-25", "dns-route", []Tier{TierT3}, build); err != nil {
+		t.Errorf("FS-25's dns-route on T3: %v", err)
 	}
 	// Register panics where register errs, since it runs from a package-level var
 	func() {

@@ -572,31 +572,74 @@ func TestALeafTakesTheGenerationThatOutranItsRemoveAndCommitsAgain(t *testing.T)
 
 // A 403 to a commit whose checks passed, with no generation past its header standing at gkm, is a refusal nothing
 // explains: one read of gen/, then refused alarmed once, naming this device and the epoch, and ErrGkmWait; nothing
-// lands.
+// lands. So too when that read fails.
 func TestA403NothingNewerExplainsIsAlarmedRefused(t *testing.T) {
-	world := newGkmEngineWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	for _, readFails := range []bool{false, true} {
+		world := newGkmEngineWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+		a := world.flows[world.a]
+		world.revoke(world.x)
+		world.stateFor()
+		generationReads := 0
+		world.store.plantHook("a", "CommitEpoch", func() {
+			world.store.refuseOnce("CommitEpoch", http.StatusForbidden)
+			if readFails {
+				world.store.plant("Generations", true)
+			}
+			generationReads = world.store.callCount("Generations")
+		})
+		if err := a.client.RunPending(world.ctx, world.repoId); !errors.Is(err, sidecar.ErrGkmWait) {
+			t.Fatalf("read fails %t: the refused run: %v", readFails, err)
+		}
+		if newest, _ := world.store.newestEpoch(world.groupId); newest != 1 || world.store.callCount("CommitEpoch") != 1 {
+			t.Fatalf("read fails %t: gkm at epoch %d after %d commits", readFails, newest, world.store.callCount("CommitEpoch"))
+		}
+		if reads := world.store.callCount("Generations") - generationReads; reads != 1 {
+			t.Errorf("read fails %t: %d reads of gen/ after the 403", readFails, reads)
+		}
+		if len(a.alarms) != 1 || a.alarms[0].Kind != sidecar.GkmAlarmRefused || a.alarms[0].SidecarId != world.a.id || a.alarms[0].Epoch != 2 || a.alarms[0].Generation != 0 {
+			t.Errorf("read fails %t: the alarms: %+v", readFails, a.alarms)
+		}
+		if _, _, found, err := a.client.TestHeldGeneration(world.repoId, 2); err != nil || found {
+			t.Errorf("read fails %t: a holds a generation 2 gkm never served: %v", readFails, err)
+		}
+	}
+}
+
+// A generation that outran the refused header at a pin above the leaf's state: a cannot judge it yet (R2), so it
+// holds nothing of it, raises no alarm, and its commit waits on ErrGkmAuthAhead; once its state reaches that pin,
+// its next run takes generation 2 and commits the Remove under it.
+func TestACommitOutrunAtAPinAboveTheStateWaitsForIt(t *testing.T) {
+	world, wrapped := newGkmOutranWorld(t)
 	a := world.flows[world.a]
-	world.revoke(world.x)
-	world.stateFor()
-	generationReads := 0
+	// the agent's state moves on past a's, and its rotation is pinned there
+	world.stateFor(world.a)
 	world.store.plantHook("a", "CommitEpoch", func() {
+		if err := wrapped.client.RunPending(world.ctx, world.repoId); err != nil {
+			t.Errorf("the wrapped writer's rotation: %v", err)
+		}
 		world.store.refuseOnce("CommitEpoch", http.StatusForbidden)
-		generationReads = world.store.callCount("Generations")
 	})
-	if err := a.client.RunPending(world.ctx, world.repoId); !errors.Is(err, sidecar.ErrGkmWait) {
-		t.Fatalf("the refused run: %v", err)
+	if err := a.client.RunPending(world.ctx, world.repoId); !errors.Is(err, sidecar.ErrGkmAuthAhead) {
+		t.Fatalf("a commit outrun above its state: %v", err)
 	}
-	if newest, _ := world.store.newestEpoch(world.groupId); newest != 1 || world.store.callCount("CommitEpoch") != 1 {
-		t.Fatalf("gkm at epoch %d after %d commits", newest, world.store.callCount("CommitEpoch"))
+	if newest, _ := world.store.newestEpoch(world.groupId); newest != 1 || world.store.newestGeneration(world.groupId) != 2 || world.store.callCount("CommitEpoch") != 1 {
+		t.Fatalf("gkm at epoch %d and generation %d after %d commits", newest, world.store.newestGeneration(world.groupId), world.store.callCount("CommitEpoch"))
 	}
-	if reads := world.store.callCount("Generations") - generationReads; reads != 1 {
-		t.Errorf("%d reads of gen/ after the 403", reads)
-	}
-	if len(a.alarms) != 1 || a.alarms[0].Kind != sidecar.GkmAlarmRefused || a.alarms[0].SidecarId != world.a.id || a.alarms[0].Epoch != 2 || a.alarms[0].Generation != 0 {
-		t.Errorf("the alarms: %+v", a.alarms)
+	if len(a.alarms) != 0 {
+		t.Errorf("a generation a cannot judge yet alarmed: %+v", a.alarms[0])
 	}
 	if _, _, found, err := a.client.TestHeldGeneration(world.repoId, 2); err != nil || found {
-		t.Errorf("a holds a generation 2 gkm never served: %v", err)
+		t.Errorf("a holds generation 2 above its state: %v", err)
+	}
+	world.stateFor()
+	if err := a.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if newest, _ := world.store.newestEpoch(world.groupId); newest != 2 || world.epochGeneration(2) != 2 || world.store.callCount("CommitEpoch") != 2 {
+		t.Errorf("gkm at epoch %d, carrying generation %d, after %d commits", newest, world.epochGeneration(newest), world.store.callCount("CommitEpoch"))
+	}
+	if len(a.alarms) != 0 {
+		t.Errorf("a's run at the newer state alarmed: %+v", a.alarms[0])
 	}
 }
 
