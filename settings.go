@@ -327,16 +327,19 @@ type SidecarSearchSettings struct {
 	RemoteCursorCount int
 	// Per requester at an indexer, and per indexer at a requester: 30 a minute, burst 10 (§11.14).
 	RemoteRequesterRate SidecarRate
-	// How long an owner's indexer keeps 5.9's served records: 30 d (D-CORE-17).
+	// How long an owner's indexer keeps 5.9's served records, by their day: a row goes once its UTC day ended longer
+	// ago than this: 30 d (D-CORE-17).
 	ServedRecordTimeout time.Duration
-	// The most served records an owner's indexer keeps a network, the oldest going first: 8,192, a reading, since the
-	// design bounds them only by ServedRecordTimeout and RemoteRequesterRate, which would let one reader grow search.state
-	// past StateByteCount (state_search_state.go).
+	// The most served rows an owner's indexer keeps a network, each the searches of one (requester, repo, UTC day), so
+	// the count bounds rows per (requester, repo, day), not searches: 8,192, the oldest days going first and a day's by
+	// requester then repo. A last bound beneath ServedRecordTimeout's 30 days that ordinary use and one abusive reader
+	// never reach, since a reader's rate raises a row's count rather than adding rows (owner decision 294, QD-961).
+	// Zero or less keeps no row, so no EvsShare reader's remote search is served (state_search_state.go).
 	ServedRecordCount int
 	// How long the asker remembers which repos each indexer served, in search.state: 24 h (DESIGN-DETAILS 7.2.1's
 	// RemoteServedTimeout, §5.9's state row).
 	RemoteServedTimeout time.Duration
-	// The most search.state may hold: 4 MiB, a reading, above ServedRecordCount's records and a phone's served memory
+	// The most search.state may hold: 4 MiB, a reading, above ServedRecordCount's rows and a phone's served memory
 	// of a few thousand repos. A file past it reads as failed, and a change that would pass it is refused.
 	StateByteCount int64
 	// Hits a page when a request names none: 50 (§5.4's SearchRequest.PageSize, §11.14's confirm row).
