@@ -8,8 +8,8 @@
 //	         longer carries, under any covering hold), one HEAD, staged ones at seg/, slots on the metadata cluster
 //	delete   only a present one, naming that HEAD's LastModified (sidecar.WithBlobUnmodified), so a later upload of
 //	         the same id is never taken; a 404, or a 412 for a newer object, counts absent, and only a 204 counts
-//	         deleted (§19.8's urnetwork_evs_versionless_sweep_deletes_total and purged_bytes_total{by="sweep"}, whose
-//	         deleted share warns past 1% a day)
+//	         deleted (§19.8's urnetwork_evs_versionless_sweep_deletes_total{pass,result} and
+//	         purged_bytes_total{by="sweep"}; evacuation's deleted share warns past 1% a day)
 //	report   nothing: the nightly pass counts what it frees
 //
 // A marked list names no ids, and the sweep recomputes it from the replaced versions (sweep_recompute.go); a path
@@ -26,6 +26,12 @@
 // observe mode kept (TurnOnPass). Both need SettlePassed and delete with the header, as the sweep does; taskworker
 // runs them as evs.sweep jobs (sweep_task.go).
 //
+// The deletes series names the pass that judged each candidate (QD-855): pass="evacuation" for evacuation's sweep of
+// a record before its batch goes (SweepList), "hold_end" and "turn_on" for the two passes. What observe mode keeps
+// counts in urnetwork_evs_versionless_observed_total, as the purge's does (newVersionlessObservedCounter): the
+// candidate ids each run keeps, a marked list one. §19.8's turn-on row reads the two: observe kept content, purge has
+// read on for a day, and no turn_on pass has deleted any of it.
+//
 // Safe for concurrent use: a call keeps its own state.
 
 package evsservice
@@ -41,11 +47,15 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// The sweep's series (§19.8's versionless row), with no network or repo label.
+// The sweep's series (§19.8's versionless row; QD-855), with no network or repo label: its result label, what the
+// HEAD before each DELETE found, and its pass label, which of the sweep's runs judged the candidate.
 const (
 	versionlessSweepDeletesMetricName = "urnetwork_evs_versionless_sweep_deletes_total"
 	versionlessSweepDeleted           = "deleted"
 	versionlessSweepAbsent            = "absent"
+	versionlessSweepPassEvacuation    = "evacuation"
+	versionlessSweepPassHoldEnd       = "hold_end"
+	versionlessSweepPassTurnOn        = "turn_on"
 )
 
 // A sweep that must be tried again: a key held, a store that did not answer, a clock unsure. Nothing was decided on it.
@@ -168,8 +178,9 @@ type Sweep struct {
 	logPages   *LogPageCache
 	locator    *RecordLocator
 
-	deletesCounter sidecar.MetricsCounter
-	purgedCounter  sidecar.MetricsCounter
+	deletesCounter  sidecar.MetricsCounter
+	purgedCounter   sidecar.MetricsCounter
+	observedCounter sidecar.MetricsCounter
 }
 
 // A sweep on host, which needs Blobs and a write budget, since a slot's DELETE is a metadata write.
@@ -235,8 +246,9 @@ func NewSweep(host *sidecar.ServiceHost, deps *SweepDeps) (*Sweep, error) {
 		locator:     NewRecordLocator(blobs, nil),
 	}
 	if host.Metrics != nil {
-		self.deletesCounter = host.Metrics.Counter(versionlessSweepDeletesMetricName, "Sweep DELETEs of replaced versionless content, by what the HEAD before each found.", "result")
+		self.deletesCounter = host.Metrics.Counter(versionlessSweepDeletesMetricName, "Sweep DELETEs of replaced versionless content, by the pass that judged each and what the HEAD before it found.", "pass", "result")
 		self.purgedCounter = host.Metrics.Counter(versionlessPurgedBytesMetricName, "Replaced versionless content deleted, stored bytes, by who deleted it.", "by")
+		self.observedCounter = newVersionlessObservedCounter(host.Metrics)
 	}
 	return self, nil
 }
@@ -254,10 +266,15 @@ func (self *Sweep) clockSure() bool {
 	return self.host.ClockCheck != nil && self.host.ClockCheck.Sure()
 }
 
-// One committed record's list, as evacuation sweeps it before its batch goes and a pass after it reread the
-// record: see the file header. funded says whether a slot's DELETE spends the wallet, as evacuation's does, and due
-// orders it among P2. ErrSweepRetry, with what it did, when a retry is owed.
+// One committed record's list, as evacuation sweeps it before its batch goes: see the file header. funded says
+// whether a slot's DELETE spends the wallet, as evacuation's does, and due orders it among P2. ErrSweepRetry, with
+// what it did, when a retry is owed. Its DELETEs count under pass="evacuation".
 func (self *Sweep) SweepList(ctx context.Context, cluster sidecar.BlobCluster, target *SweepTarget, rank sidecar.WriteP2Rank, funded bool, due time.Time) (*SweepResult, error) {
+	return self.sweepList(ctx, cluster, target, rank, funded, due, versionlessSweepPassEvacuation)
+}
+
+// SweepList for the run passLabel names: evacuation's, or a pass that reread the record after it.
+func (self *Sweep) sweepList(ctx context.Context, cluster sidecar.BlobCluster, target *SweepTarget, rank sidecar.WriteP2Rank, funded bool, due time.Time, passLabel string) (*SweepResult, error) {
 	result := &SweepResult{}
 	list := target.List
 	if list == nil || list.GetReplaced() {
@@ -282,7 +299,12 @@ func (self *Sweep) SweepList(ctx context.Context, cluster sidecar.BlobCluster, t
 		if self.deps.Observe != nil && self.format2.PurgeMode() == sidecar.Format2Observe {
 			self.deps.Observe.Check(ctx, cluster, target)
 		}
-		return keep()
+		kept, err := keep()
+		// what observe kept, for §19.8's turn-on row (QD-855): its ids, a marked list one
+		if self.observedCounter != nil && 0 < kept.KeptCount {
+			self.observedCounter.Add(float64(kept.KeptCount))
+		}
+		return kept, err
 	}
 	segmentCluster, err := self.blobs.SegmentCluster()
 	if err != nil {
@@ -314,13 +336,13 @@ func (self *Sweep) SweepList(ctx context.Context, cluster sidecar.BlobCluster, t
 		result.CandidateCount = purgeListIdCount(recomputed)
 		candidates = recomputed.GetCandidates()
 	}
-	err = self.sweepCandidates(ctx, cluster, segmentCluster, target, networkId, candidates, rank, funded, due, result)
+	err = self.sweepCandidates(ctx, cluster, segmentCluster, target, networkId, candidates, rank, funded, due, passLabel, result)
 	return result, err
 }
 
-// Each candidate's ids judged and, when present, deleted: see the file header.
+// Each candidate's ids judged and, when present, deleted, each counted under passLabel: see the file header.
 func (self *Sweep) sweepCandidates(ctx context.Context, cluster sidecar.BlobCluster, segmentCluster sidecar.BlobCluster, target *SweepTarget,
-	networkId sidecar.Id, candidates []*protocol.EvsPurgeCandidate, rank sidecar.WriteP2Rank, funded bool, due time.Time, result *SweepResult) error {
+	networkId sidecar.Id, candidates []*protocol.EvsPurgeCandidate, rank sidecar.WriteP2Rank, funded bool, due time.Time, passLabel string, result *SweepResult) error {
 	refKey := barrierRefKey(target.RepoId, target.RefId)
 	for index, candidate := range candidates {
 		tokenPath, err := sidecar.ParseEvsTokenPath(candidate.GetTokenPath())
@@ -383,7 +405,7 @@ func (self *Sweep) sweepCandidates(ctx context.Context, cluster sidecar.BlobClus
 				result.HeldCount += 1
 			}
 			if outcome != "" && self.deletesCounter != nil {
-				self.deletesCounter.Add(1, outcome)
+				self.deletesCounter.Add(1, passLabel, outcome)
 			}
 		}
 	}
@@ -478,16 +500,17 @@ func (self *Sweep) sweepSlot(ctx context.Context, cluster sidecar.BlobCluster, r
 }
 
 // At a hold's end (§11.13's sweep row): the repo's versions flagged with window bit 4 whose minute falls from 26 h
-// before placeTime to endTime, each record's list swept again, deleting what the hold kept.
+// before placeTime to endTime, each record's list swept again, deleting what the hold kept. Its DELETEs count under
+// pass="hold_end".
 func (self *Sweep) HoldEndPass(ctx context.Context, clusterId string, repoId sidecar.Id, placeTime time.Time, endTime time.Time) (*SweepResult, error) {
-	return self.pass(ctx, clusterId, repoId, placeTime.Add(-self.settings.HoldEndLead), endTime)
+	return self.pass(ctx, clusterId, repoId, placeTime.Add(-self.settings.HoldEndLead), endTime, versionlessSweepPassHoldEnd)
 }
 
 // When §19.11's purge turns on from observe: the repo's versions flagged with window bit 4 since its migration to
 // format 2, each record's list swept, deleting what observe mode kept. A zero migrationTime takes every flagged
-// version, which only format 2 sets.
+// version, which only format 2 sets. Its DELETEs count under pass="turn_on", which §19.8's turn-on row looks for.
 func (self *Sweep) TurnOnPass(ctx context.Context, clusterId string, repoId sidecar.Id, migrationTime time.Time) (*SweepResult, error) {
-	return self.pass(ctx, clusterId, repoId, migrationTime, self.clock.Now())
+	return self.pass(ctx, clusterId, repoId, migrationTime, self.clock.Now(), versionlessSweepPassTurnOn)
 }
 
 // The batch minute of at, minute 0 for a time before the Unix epoch, such as the zero time.
@@ -530,9 +553,9 @@ func (self *Sweep) entryAt(ctx context.Context, cluster sidecar.BlobCluster, rep
 
 // Every flagged version of the repo's refs whose record's minute falls in [from, to]: the heads listed, then each
 // ref's versions oldest first, from its log pages and its window, each flagged record read by its place (its batch,
-// else through pidx/) and its list swept. Nothing deletes while a build has not passed the settle cases or the clock
-// is unsure.
-func (self *Sweep) pass(ctx context.Context, clusterId string, repoId sidecar.Id, from time.Time, to time.Time) (*SweepResult, error) {
+// else through pidx/) and its list swept, its DELETEs counted under passLabel. Nothing deletes while a build has not
+// passed the settle cases or the clock is unsure.
+func (self *Sweep) pass(ctx context.Context, clusterId string, repoId sidecar.Id, from time.Time, to time.Time, passLabel string) (*SweepResult, error) {
 	result := &SweepResult{}
 	cluster, err := self.blobs.Cluster(clusterId)
 	if err != nil {
@@ -614,10 +637,10 @@ func (self *Sweep) pass(ctx context.Context, clusterId string, repoId sidecar.Id
 				return result, err
 			}
 			result.RecordCount += 1
-			swept, err := self.SweepList(ctx, cluster, &SweepTarget{
+			swept, err := self.sweepList(ctx, cluster, &SweepTarget{
 				RepoId: repoId, RefId: refId, Repo: repoRead.Object, PathEpoch: statement.Push.GetPathEpoch(),
 				Record: record, CommitVersion: version, List: list,
-			}, sidecar.WriteP2RankGc, false, self.clock.Now())
+			}, sidecar.WriteP2RankGc, false, self.clock.Now(), passLabel)
 			result.add(swept)
 			if err != nil {
 				return result, err
