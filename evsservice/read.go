@@ -18,7 +18,8 @@
 //	         380, QD-888: by number below), the statement that wrote it when not
 //	         among those returned, its Merkle proof when the list is not inline, and the adjacent-leaf proofs of
 //	         each later statement whose list is not inline and whose prefixes reach the path, with the inclusion
-//	         proof of a prefix's delta in place of them where the statement changed that prefix so (QD-681); a
+//	         proof of a prefix's delta in place of them where the statement changed that prefix so (QD-681), and
+//	         for a path served plain absent that of the path's own change or a prefix's removal (QD-1043); a
 //	         removed path its
 //	         removal's push id, version and path version from its marker or the window, a window version at or
 //	         below folded_through among them once the marker's collection took it, for a reader whose pin is below
@@ -42,7 +43,9 @@
 //	absent   each statement w after max(u, pin_version) whose list is under changes_root: the adjacent-leaf proofs
 //	         under the path's token path in e(w) when the request names one, nothing for w when it names none; a
 //	         strict prefix w changed by a delta has no adjacent leaves, and its absence carries that delta's
-//	         inclusion proof in present, never the path's own change or a removal (QD-681)
+//	         inclusion proof in present (QD-681); for a path served plain absent, with no version, removal or base,
+//	         so does w's change of the path itself, a write or a removal, and its removal of a strict prefix, which
+//	         the reader judges in its walk's order (QD-979, QD-1043); for any other reply, never those
 //	history  an older version by number from the entry's folded versions by their leaf places, or with
 //	         commit_version from that push's record by the path's token path in its epoch
 //
@@ -581,6 +584,7 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 	reply := &protocol.EvsReadPathReply{TokenPath: path.tokens.Current.Components(), EntryEpoch: path.read.SourceEpoch}
 	since := uint64(0)
 	deltaVersions := map[uint64]bool{}
+	absent := false
 	switch {
 	case path.version != 0 && !newestAnswersNumber(newest, path.version):
 		// a version by number the newest does not answer (see the file header): a removed path's versions below its
@@ -626,8 +630,13 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 		since = newest.CommitVersion
 	case head.GetBase() != nil:
 		reply.Base = head.GetBase()
+	default:
+		// nothing of the path, which was never written or whose removal was collected and paged out: the reader holds
+		// it to its walk's order (QD-979), so each rooted statement's own change of it, and its removal of a prefix,
+		// is shown (QD-1043)
+		absent = true
 	}
-	absences, err := self.absences(path, since, deltaVersions)
+	absences, err := self.absences(path, since, deltaVersions, absent)
 	if err != nil {
 		return nil, err
 	}
@@ -858,9 +867,10 @@ func (self *readAttempt) attachStatement(reply *protocol.EvsReadPathReply, path 
 // prefixes reach the path or a prefix holding it, the adjacent-leaf proofs for each such path the push did not
 // change, under the path's token path in that statement's epoch, and nothing for a statement of an epoch the request
 // names none in; a directory's own deltas are its reply's. A strict prefix the push changed by a delta is shown by
-// that delta's inclusion proof in the absence's present (QD-681); the path's own change and a prefix's removal are
-// shown by nothing here, since either ends the version served.
-func (self *readAttempt) absences(path *readPath, since uint64, deltaVersions map[uint64]bool) ([]*protocol.EvsAbsenceProof, error) {
+// that delta's inclusion proof in the absence's present (QD-681). For a path served plain absent (absent), the path's
+// own change, a write or a removal, and a strict prefix's removal are shown so too, from the record and part these
+// absences read already (QD-1043); beside a version or removal served they are shown by nothing, since either ends it.
+func (self *readAttempt) absences(path *readPath, since uint64, deltaVersions map[uint64]bool, absent bool) ([]*protocol.EvsAbsenceProof, error) {
 	head := self.head.Head
 	current := EvsHeadCurrentEpoch(head)
 	absences := []*protocol.EvsAbsenceProof{}
@@ -890,8 +900,9 @@ func (self *readAttempt) absences(path *readPath, since uint64, deltaVersions ma
 		}
 		for _, absentPath := range sidecar.EvsAbsencePaths(push.statement.ChangedPrefixes, tokenPath) {
 			absence, err := self.pushes.absenceProof(push, absentPath)
-			if err == nil && absence == nil && len(absentPath) < len(tokenPath) {
-				absence, err = self.pushes.presentProof(push, absentPath)
+			if err == nil && absence == nil {
+				// the push changed absentPath
+				absence, err = self.pushes.presentProof(push, absentPath, len(absentPath) < len(tokenPath), absent)
 			}
 			if err != nil {
 				return nil, err
