@@ -1,6 +1,7 @@
 // Reads a walk decides, on T2's fakes through the engine: a removal whose marker a collection took, served from the
-// window to a reader pinned below it (QD-879), and with no fold and no collection, a removal served through a prefix's
-// later removal, held to the client's own reader (QD-978).
+// window to a reader pinned below it (QD-879); with no fold and no collection, a removal served through a prefix's
+// later removal, held to the client's own reader (QD-978); and once the window paged a collected removal out, the path
+// served plain absent, which the client's reader verifies by the removal its own walk holds (QD-979).
 
 package evsservice
 
@@ -437,6 +438,79 @@ func TestReadOfARemovalServedOverALaterCreationIsRefused(t *testing.T) {
 	reply.paths[0] = removal
 	if _, err := reader.verify(reply, 1, chainAtOne, 1, file); !errors.Is(err, sidecar.ErrEvsEntryRefused) {
 		t.Fatalf("the removal served over the creation: %v", err)
+	}
+	if alarms := reader.raised(); len(alarms) != 1 || alarms[0] != sidecar.SidecarEvsAlarmTamper {
+		t.Errorf("alarms %v", alarms)
+	}
+}
+
+// QD-979 (question evs-removal-from-window-removal-paged-out, option 2) on evs: x.txt written at 1 and 2 and removed at
+// 3, 70 versions, a fold, the collection of x.txt's marker, and 60 more versions, the head at 133 and the window from
+// 64. NewestWalked finds the removal nowhere, so evs serves x.txt plain absent, with behind, to a reader pinned below
+// it (QD-879's window case passed); the client's reader, paging the log, verifies it absent by its walk's newest change
+// of x.txt, the removal at 3, whether its walk holds both writes before it, the second, or neither, with no alarm. A
+// reader pinned past the removal walks no change of x.txt. x.txt's creation commits at b + 1, and the absent reply in
+// place of the version it reads contradicts the walked creation, which the reader refuses and alarms as tampering.
+// evs's own answer here is TestNewestWalkedReadsNoRemovalTheWindowPagedOut's.
+func TestReadAbsentPastAPagedOutRemovalVerifiesByTheWalk(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	reader := newWalkedTestReader(fixture)
+	path := checkTestPath("x.txt")
+	chains := [][]byte{nil}
+	fixture.commitOne(protocol.EvsRefMode_EVS_REF_FILE, "x.txt")
+	chains = append(chains, fixture.head().Head.GetChain())
+	fixture.commitChange(path, 1, 2, 0)
+	chains = append(chains, fixture.head().Head.GetChain())
+	removalId, removed := fixture.commitChange(path, 2, 0, 0)
+	chains = append(chains, fixture.head().Head.GetChain())
+	fixture.commitOthers("n", 70)
+	fixture.foldRef()
+	if marked := fixture.readPath(token, 0, true, path).paths[0].GetRemoval(); marked == nil || marked.GetRemovalVersion() != removed {
+		t.Fatalf("the marker's removal %v", marked)
+	}
+	fixture.deleteEntry("x.txt")
+	fixture.commitOthers("m", 60)
+	head := fixture.head().Head
+	if removed != 3 || head.GetVersion() != 133 || head.GetFoldedThrough() != 73 || EvsHeadWindowFirstVersion(head) != 64 {
+		t.Fatalf("removed at %d, head %d folded through %d, the window from %d", removed, head.GetVersion(), head.GetFoldedThrough(), EvsHeadWindowFirstVersion(head))
+	}
+	for pin := uint64(0); pin <= 3; pin += 1 {
+		reply := fixture.readPath(token, pin, true, path)
+		if !readReplyPlainAbsent(reply.paths[0]) || reply.behind != pin+1 {
+			t.Fatalf("pinned at %d: %v, behind %d", pin, reply.paths[0], reply.behind)
+		}
+		verified, err := reader.verify(reply, pin, chains[pin], pin, path)
+		if err != nil || !verified.Absent {
+			t.Fatalf("pinned at %d: the reader's check: %+v %v", pin, verified, err)
+		}
+		walked := verified.WalkedRemoval
+		if pin == removed {
+			if walked != nil {
+				t.Fatalf("pinned at the removal: a walked removal %+v", walked)
+			}
+			continue
+		}
+		if walked == nil || walked.CommitVersion != removed || !walked.ChangePath.Equal(path) || len(walked.Change.GetEntrySha256()) != 0 ||
+			!bytes.Equal(walked.Statement.Push.GetPushId(), removalId.Bytes()) {
+			t.Fatalf("pinned at %d: the walked removal %+v, not x.txt's at %d", pin, walked, removed)
+		}
+	}
+	if alarms := reader.raised(); len(alarms) != 0 {
+		t.Errorf("alarms %v", alarms)
+	}
+	// created again at max(b, m) + 1 with no m: b + 1
+	absent := fixture.readPath(token, 2, true, path).paths[0]
+	_, created := fixture.commitChange(path, 0, 0, 0)
+	reply := fixture.readPath(token, 2, true, path)
+	requireVersionProven(t, reply, reply.paths[0], path)
+	verified, err := reader.verify(reply, 2, chains[2], 2, path)
+	if err != nil || created != head.GetVersion()+1 || verified.CommitVersion != created || verified.Entry.GetVersion() != head.GetVersion()+1 {
+		t.Fatalf("the creation at %d: %+v %v", created, verified, err)
+	}
+	reply.paths[0] = absent
+	if _, err := reader.verify(reply, 2, chains[2], 2, path); !errors.Is(err, sidecar.ErrEvsEntryRefused) {
+		t.Fatalf("absent served over the creation: %v", err)
 	}
 	if alarms := reader.raised(); len(alarms) != 1 || alarms[0] != sidecar.SidecarEvsAlarmTamper {
 		t.Errorf("alarms %v", alarms)
