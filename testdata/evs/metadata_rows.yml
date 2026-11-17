@@ -216,7 +216,7 @@ EvsPidxRecord.version: {number: 1, type: uint64, row: evs-17, sees: "offsets for
 EvsPidxRecord.type: {number: 2, type: EvsBatchRecordType, row: evs-17, sees: "the record kinds it holds"}
 EvsPidxRecord.offset: {number: 3, type: uint64, row: evs-17, sees: "offsets for the versions"}
 EvsPidxRecord.length: {number: 4, type: uint32, row: evs-17, sees: "offsets for the versions"}
-EvsPidxRecord.place: {number: 5, type: EvsPlace, row: evs-17, pending: "EVSB-M2-10 keeps each record's batch place, so a seal finds its named part by place after the batch is gone; evs-17 names offsets and kinds, and evs-3 the place in a window entry, but neither the place in pidx/ (question evsb-m2-07-pidx-place-row)"}
+EvsPidxRecord.place: {number: 5, type: EvsPlace, row: evs-17, sees: "each record's place in the batch it left"}
 EvsPidxLogPage.page: {number: 1, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
 EvsPidxLogPage.offset: {number: 2, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
 EvsPidxLogPage.length: {number: 3, type: uint32, row: evs-17, sees: "offsets for the versions and log pages it holds"}
