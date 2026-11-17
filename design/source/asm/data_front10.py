@@ -1018,6 +1018,29 @@ INDEX = list(_P9['INDEX']) + [
      "A sockets ticket key settles 10 min after the later of its creation and a block's first read of it."),
     (563, "gkm's guard takes a right set",
      "gkm honors a route's rights only whole, as evs does, so a deleted repo's admins pass only gkm's admin routes."),
+    # The second folds of §11 and §13 (2026-11-17): the answers queued for them after their first folds.
+    (564, 'Re-seeded parts and seals',
+     "A re-seeded push in parts' part and seal records die only by the fence, and the reseed seal refuses a part "
+     "older than 24 h."),
+    (565, "A deleted repo's re-seeded segments",
+     "evs's guard passes a deleted repo's admin to PUT .../segments, marked, while reseed is on, for §11.12's "
+     "re-seed exception alone."),
+    (566, "Removals a reader's walk holds",
+     "A served removal agrees with a later prefix removal, and plain absent with a walk whose newest change of the "
+     "path is a removal."),
+    (567, 'Placing the config repo',
+     "Any config writer continues the config repo's standing placement; every other kind keeps REPO_PLACED."),
+    (568, 'Reads below a re-creation',
+     "evs scans at most 16,384 versions below a re-created path, to the newest cut-over, then answers 503; mailcfg's "
+     "readers replay from genesis in the review phase."),
+    (569, 'Unretained earlier pins',
+     "A due class holds an earlier pin its reader no longer retains to its number, reading the states around each "
+     "shrink after it."),
+    (570, '`drop-reindex` from snap-0',
+     "`evs drop-reindex` takes a job's drops from its snap-0, kept for the repo's life, and refuses named drops that "
+     "differ."),
+    (571, 'Custom budgets from a quiet window',
+     "Each custom-domain budget replays from its key's latest quiet window, its spends kept 16 d."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -1057,11 +1080,22 @@ for _n, _old_end, _note in [
          "the compile's as GOOS=darwin without it."),
         (493, "model the macOS slices as GOOS=ios.",
          " Amended by @@OD:554@@: that is gomobile's binding step; the archive compiles as GOOS=darwin, and the "
-         "tables hold both.")]:
+         "tables hold both."),
+        # Owner decision 569 amends 414's reading of a pin the party cannot reach: it is held to its number.
+        (414, "until it judges from the log.",
+         " Amended by @@OD:569@@: an earlier pin the reader no longer retains is held to its number, as §10.6's "
+         "gate holds it."),
+        # Owner decision 570 amends 512's command: it reads the job's snap-0, which the job now keeps.
+        (512, "rebuilds a drop job's corrupt list files.",
+         " Amended by @@OD:570@@: from the job's snap-0, kept for the repo's life, where no list file reads whole, "
+         "refusing named drops that differ."),
+        # Owner decision 571 amends 424's replay: from the key's latest quiet window, spends kept 16 d.
+        (424, "budgets replayed from two windows back.",
+         " Amended by @@OD:571@@: from the key's latest quiet window, its spends kept 16 d.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 564))
+assert [r[0] for r in INDEX] == list(range(1, 572))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1145,7 +1179,8 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               549: '2026-11-16', 550: '2026-11-06', 551: '2026-11-06', 552: '2026-11-11',
               553: '2026-11-16', 554: '2026-11-16', 555: '2026-11-16', 556: '2026-11-16', 557: '2026-11-17',
               558: '2026-11-16', 559: '2026-11-16', 560: '2026-11-16', 561: '2026-11-17', 562: '2026-11-17',
-              563: '2026-11-16'})
+              563: '2026-11-16', 564: '2026-11-16', 565: '2026-11-16', 566: '2026-11-16', 567: '2026-11-16',
+              568: '2026-11-16', 569: '2026-11-17', 570: '2026-11-17', 571: '2026-11-16'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1436,3 +1471,13 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "leaves in its tail (556), a repo's shrink time in the rows (557), §8.9's targets at an app host (558), group "
     "atoms at the prefix filer (559), the dialer's sidecar in `ur/` tickets (560), members in the revocation record "
     "(561), ticket keys settling from first sight (562) and gkm's guard over a right set (563). ")
+# The second folds of §11 and §13 (2026-11-17) number the answers queued for those sections after their first folds.
+_D563 = "and gkm's guard over a right set (563). "
+assert DECISIONS_INTRO.count(_D563) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D563, _D563 + "The second folds of §11 and §13 number theirs: re-seeded parts and seals dying only by the fence "
+    "(564), a deleted repo's re-seeded segments (565), removals a reader's walk holds (566), the config repo's "
+    "placement continued by any config writer (567), reads below a re-created path, bounded (568), unretained "
+    "earlier pins in a due class (569), amending @@OD:414@@, `drop-reindex` from a job's snap-0 (570), amending "
+    "@@OD:512@@, and the custom-domain budgets' replay from a quiet window with spends kept 16 d (571), amending "
+    "@@OD:424@@. ")

@@ -121,6 +121,7 @@ func rateCases() []*suiteCase {
 		{name: "an-erasers-allowance-is-its-own", run: caseAnErasersAllowanceIsItsOwn},
 		{name: "the-allowance-never-reads-below-the-floor", run: caseTheAllowanceReadsTheFloor},
 		{name: "an-eraser-past-its-minute-leaves-another-passing", run: caseAnEraserPastItsMinute},
+		{name: "the-erasure-rates-read-their-rows", run: caseTheErasureRatesReadTheirRows},
 		{name: "the-pacing-gives-equal-turns", run: casePacingGivesEqualTurns},
 		{name: "a-waiting-eraser-keeps-its-place", run: caseAWaitingEraserKeepsItsPlace},
 		{name: "erasers-returning-together-take-their-seats", run: caseErasersReturningTogether},
@@ -548,6 +549,56 @@ func caseAnEraserPastItsMinute(ctx context.Context, target *Target) error {
 		return fmt.Errorf("refusal %+v", refusal)
 	}
 	return expectNoRefusal("B's upload", answered(countPacedUpload(ctx, target, networkId, connect.NewId())))
+}
+
+// The two erasure rates read their sidecar_abuse: rows, never below 60 (owner decision 524): a network whose
+// rows raise them to 70 takes 70 pushes and an eraser 70 uploads in a minute, one whose rows set 10 takes 60
+// of each, and each refusal names its key with the limit it read.
+func caseTheErasureRatesReadTheirRows(ctx context.Context, target *Target) error {
+	for _, c := range []struct {
+		configured int64
+		limit      int64
+	}{
+		{configured: 70, limit: 70},
+		{configured: 10, limit: 60},
+	} {
+		networkId, err := newNetwork(target, "free", map[string]int64{
+			limitKeyClosureUploadsPerMin: c.configured,
+			limitKeyErasurePushesPerMin:  c.configured,
+		})
+		if err != nil {
+			return err
+		}
+		// start at a minute's top, so every paced upload fits in one minute
+		now := target.Clock.Now()
+		target.Clock.AdvanceTo(sidecar.QuotaRateWindowMinute.End(sidecar.QuotaRateWindowMinute.Index(now)))
+		for i := range c.limit {
+			if err := expectNoRefusal(fmt.Sprintf("configured %d: push %d", c.configured, i), answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyErasurePush, 1))); err != nil {
+				return err
+			}
+		}
+		refusal, err := countOnce(ctx, target, networkId, sidecar.QuotaRateKeyErasurePush, 1)
+		if err := expectRefusal(fmt.Sprintf("configured %d: the push past the limit", c.configured), answered(refusal, err), limitKeyErasurePushesPerMin); err != nil {
+			return err
+		}
+		if refusal.Limit != c.limit || refusal.Used != c.limit || refusal.Upgrade {
+			return fmt.Errorf("configured %d: the push refusal %+v", c.configured, refusal)
+		}
+		eraserId := connect.NewId()
+		for i := range c.limit {
+			if err := expectNoRefusal(fmt.Sprintf("configured %d: upload %d", c.configured, i), answered(countPacedUpload(ctx, target, networkId, eraserId))); err != nil {
+				return err
+			}
+		}
+		refusal, err = countPacedUpload(ctx, target, networkId, eraserId)
+		if err := expectRefusal(fmt.Sprintf("configured %d: the upload past the limit", c.configured), answered(refusal, err), limitKeyClosureUploadsPerMin); err != nil {
+			return err
+		}
+		if refusal.Limit != c.limit || refusal.Used != c.limit || refusal.Upgrade {
+			return fmt.Errorf("configured %d: the upload refusal %+v", c.configured, refusal)
+		}
+	}
+	return nil
 }
 
 // k erasers asking all the while each take one upload every k/R s, none starved, and the network at
