@@ -8,7 +8,12 @@
 // and on server's Quota, so the two cannot drift apart unseen.
 //
 // What a real Quota reads from pro.yml, Postgres and the nightly count, a test sets by hand: limits,
-// balances and the storage refusal. Money moves as §20.6 and DESIGN-DETAILS 13.2.2 have it (QD-653): a
+// balances and the storage refusal, and enforce_sidecar_limits (SetEnforced), on until a test turns it off,
+// so a test that sets no switch refuses as an enforcing api does. While it is off the fake does what
+// server's Quota does then: Limits answers enforced false with the limits as set, CountRate neither counts
+// nor refuses a dark rule (QuotaRateRule.Dark; owner decision 522), and OverLimit names no network over
+// its storage limit, while the closure rates, allowance and pacing, the erasure push class and a spent
+// network hold whatever it says (owner decision 520). Money moves as §20.6 and DESIGN-DETAILS 13.2.2 have it (QD-653): a
 // lease reserves and spends with no I/O, the batches of the lease's process carve its spent bytes into
 // debits, evs's bytes debit when their batch applies, and a lease's reservation lives while its process
 // does, as the real lease extends its tokens, and lapses LeaseTokenLifetime after a killed process was
@@ -153,6 +158,8 @@ type FakeQuota struct {
 
 	stateLock sync.Mutex
 	networks  map[connect.Id]*fakeQuotaNetwork
+	// enforce_sidecar_limits, which pro.yml sets for every network at once
+	enforced bool
 	// applied batches' ids, with when they applied
 	batchIdApplyTimes map[connect.Id]time.Time
 	batches           []*sidecar.UsageBatch
@@ -182,6 +189,7 @@ func NewFakeQuota(clock Clock, faults *FaultQueue, settings *FakeQuotaSettings) 
 		faults:            faults,
 		settings:          settings,
 		networks:          map[connect.Id]*fakeQuotaNetwork{},
+		enforced:          true,
 		batchIdApplyTimes: map[connect.Id]time.Time{},
 	}
 }
@@ -201,11 +209,20 @@ func (self *FakeQuota) networkWithLock(networkId connect.Id) *fakeQuotaNetwork {
 	return network
 }
 
-// What Limits answers. A key not set here reads 0, not included, as §20.5 defines it.
+// What Limits answers. A key not set here reads 0, not included, as §20.5 defines it. limits' Enforced is
+// not taken: the switch is every network's at once, SetEnforced's.
 func (self *FakeQuota) SetLimits(networkId connect.Id, limits *sidecar.QuotaLimits) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.networkWithLock(networkId).limits = &sidecar.QuotaLimits{Tier: limits.Tier, Limits: maps.Clone(limits.Limits)}
+}
+
+// Turns enforce_sidecar_limits on or off for every network, as pro.yml's switch does: on until set. See the
+// file header for what the fake does while it is off.
+func (self *FakeQuota) SetEnforced(enforced bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.enforced = enforced
 }
 
 // Replaces the network's balances with one open, non-credit balance of byteCount.
@@ -357,7 +374,7 @@ func (self *FakeQuota) Limits(ctx context.Context, networkId connect.Id) (*sidec
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		network := self.networkWithLock(networkId)
-		limits = &sidecar.QuotaLimits{Tier: network.limits.Tier, Limits: maps.Clone(network.limits.Limits)}
+		limits = &sidecar.QuotaLimits{Tier: network.limits.Tier, Limits: maps.Clone(network.limits.Limits), Enforced: self.enforced}
 		return nil
 	})
 	if err != nil {
@@ -389,7 +406,8 @@ func cloneQuotaRefusal(refusal *sidecar.QuotaRefusal) *sidecar.QuotaRefusal {
 }
 
 // An unknown key, a negative amount, or a paced key counted other than once, is the caller's bug: an
-// error, with nothing counted. A paced key belongs in a call with no other paced key.
+// error, with nothing counted, whatever the switch says. A paced key belongs in a call with no other paced
+// key. While the switch is off a dark rule neither counts nor refuses.
 func (self *FakeQuota) CountRate(ctx context.Context, networkId connect.Id, keyAmounts map[string]int64, debitId connect.Id) (*sidecar.QuotaRefusal, error) {
 	if err := checkQuotaId("network", networkId); err != nil {
 		return nil, err
@@ -424,6 +442,15 @@ func (self *FakeQuota) CountRate(ctx context.Context, networkId connect.Id, keyA
 	err := hostCall(ctx, self.faults, "quota.CountRate", func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		keys := keys
+		if !self.enforced {
+			// a dark rule neither counts nor refuses, and a call of dark rules alone reaches no Redis, as
+			// server's script is then never run (owner decision 522)
+			keys = slices.DeleteFunc(slices.Clone(keys), func(key string) bool { return keyRules[key].Dark() })
+			if len(keys) == 0 {
+				return nil
+			}
+		}
 		if self.redisFailing {
 			self.rateFailOpenCount += 1
 			return nil
@@ -819,7 +846,8 @@ func (self *FakeQuota) OverLimit(ctx context.Context) (*sidecar.QuotaOverLimit, 
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		for networkId, network := range self.networks {
-			if network.storageRefusal != nil {
+			// over the storage limit refuses only while enforced; spent is never dark
+			if network.storageRefusal != nil && self.enforced {
 				overLimit.StorageNetworkIdRefusals[networkId] = cloneQuotaRefusal(network.storageRefusal)
 			}
 			if network.spentRefusal != nil {
