@@ -29,6 +29,8 @@ import (
 	"testing"
 	"time"
 
+	operator "github.com/urnetwork/operator-core"
+
 	"github.com/urnetwork/sidecar"
 )
 
@@ -875,11 +877,12 @@ func caseMetadataRefusedCreate(ctx context.Context, target *Target, keys *keySpa
 	return nil
 }
 
-// The store takes 2 KiB of metadata, each key with the header prefix it travels under, and the two
-// sides agree where that ends: a store refusing what Validate passed would fail only at T3.
+// The store takes the protocol's limit of metadata, 2 KiB with each key counted under the header prefix
+// it travels under, and the two sides agree where that ends: a store refusing what Validate passed would
+// fail only at T3. The limit is read where Validate reads it, so it has one default.
 func caseMetadataLimit(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
-	const limit = 2 * 1024
+	limit := operator.DefaultBlobPutSettings().MetadataMaxByteCount
 	name := "state"
 	value := strings.Repeat("x", limit-len("x-amz-meta-")-len(name))
 	key := keys.key("entry")
