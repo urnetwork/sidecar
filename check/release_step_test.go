@@ -103,12 +103,20 @@ func releaseStepSed(t testing.TB) string {
 }
 
 // What both twins start from beyond the fixture: the declaration the sed fills, a file naming
-// operator-core and coretest, whose paths take separate tags (owner decision 251), and the documents
-// that stay out of the module.
+// operator-core and coretest, whose paths take separate tags (owner decision 251), lines the order of
+// the passes decides, and the documents that stay out of the module. A line naming the root beside a
+// subpackage keeps the subpackage's development path, since the root's exact pass gives the line the
+// /vN its subpackage pass skips (QD-1003). smtpproof's path beside a /vN keeps it in the root module,
+// and below smtpproof/ and cli/ takes the tag from smtpproof_release_edit's and
+// sidecar_cli_release_edit's exact passes.
 func (self *fixture) writeReleaseInputs() {
 	self.t.Helper()
 	self.write("sidecar.go", "package sidecar\n\nvar Version string = \"\"\n\nfunc Sidecar() {}\n")
 	self.write("host_test.go", "package sidecar\n\nimport (\n\t_ \"@operator-core@\"\n\t_ \"@operator-core@/coretest\"\n)\n")
+	smtpproofPaths := "var smtpproofPaths = []string{\"@module@/smtpproof\", \"example.com/x/v2\"}\n"
+	self.write("release_paths.go", "package sidecar\n\nvar releasePaths = []string{\"@module@\", \"@module@/protocol\"}\n\n"+smtpproofPaths)
+	self.write("smtpproof/release_paths.go", "package smtpproof\n\n"+smtpproofPaths)
+	self.write("cli/release_paths.go", "package main\n\n"+smtpproofPaths)
 	self.write("LICENSE", fixtureMplLicense)
 	for _, name := range []string{"DESIGN.md", "DESIGN-REVIEW1.md", "HANDOFF.md", "FEEDBACK-SYSTEM.md", "design/source/a.md", "research_notes/a.md"} {
 		self.write(name, "a document\n")
