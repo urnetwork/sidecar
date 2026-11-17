@@ -41,6 +41,51 @@ func TestSidecarApiLimitsReadsItsBody(t *testing.T) {
 	}
 }
 
+// The body's enforced, enforce_sidecar_limits's state, is read beside the plan's limits, which the body reports
+// whatever it says; a body that leaves it out, an older api's, reads off (owner decision 520).
+func TestSidecarApiLimitsReadsEnforced(t *testing.T) {
+	for _, c := range []struct {
+		body     string
+		enforced bool
+	}{
+		{body: `{"tier":"free","limits":{"directory_requests_pending":20},"enforced":true}`, enforced: true},
+		{body: `{"tier":"free","limits":{"directory_requests_pending":20},"enforced":false}`, enforced: false},
+		{body: `{"tier":"free","limits":{"directory_requests_pending":20}}`, enforced: false},
+	} {
+		limits, err := newTestSidecarApi(t, answerWith(http.StatusOK, c.body)).Limits(context.Background())
+		if err != nil {
+			t.Fatalf("%s: %v", c.body, err)
+		}
+		if limits.Enforced != c.enforced || limits.Tier != "free" || limits.Limits["directory_requests_pending"] != 20 {
+			t.Errorf("%s: %+v", c.body, limits)
+		}
+	}
+}
+
+// What a local pre-check holds a count to: the answer's limit while it is enforced, a key it lacks reading 0, not
+// included; none for every key while it is not, whatever the plan says; and 0 for no answer at all, which refuses.
+func TestQuotaLocalLimitFollowsEnforced(t *testing.T) {
+	enforced := &QuotaLimits{Tier: "free", Limits: map[string]int64{"directory_requests_pending": 20, "mail_burners_active": -1}, Enforced: true}
+	dark := &QuotaLimits{Tier: "free", Limits: map[string]int64{"directory_requests_pending": 20, "mail_burners_active": -1}}
+	for _, c := range []struct {
+		limits   *QuotaLimits
+		limitKey string
+		want     int64
+	}{
+		{limits: enforced, limitKey: "directory_requests_pending", want: 20},
+		{limits: enforced, limitKey: "mail_burners_active", want: -1},
+		{limits: enforced, limitKey: "a_limit_from_later", want: 0},
+		{limits: dark, limitKey: "directory_requests_pending", want: -1},
+		{limits: dark, limitKey: "mail_burners_active", want: -1},
+		{limits: dark, limitKey: "a_limit_from_later", want: -1},
+		{limits: nil, limitKey: "directory_requests_pending", want: 0},
+	} {
+		if limit := quotaLocalLimit(c.limits, c.limitKey); limit != c.want {
+			t.Errorf("%+v %s: %d, want %d", c.limits, c.limitKey, limit, c.want)
+		}
+	}
+}
+
 // An answer that is not the route's is refused whole, never taken in part.
 func TestSidecarApiLimitsRefusesAnAnswerThatIsNotItsShape(t *testing.T) {
 	for _, body := range []string{
@@ -50,6 +95,8 @@ func TestSidecarApiLimitsRefusesAnAnswerThatIsNotItsShape(t *testing.T) {
 		`{"tier":"free","limits":{"Storage":1}}`,
 		`{"tier":"free","limits":{"storage":-2}}`,
 		`{"tier":"free","limits":{"storage":"1gib"}}`,
+		`{"tier":"free","limits":{"storage":1},"enforced":"yes"}`,
+		`{"tier":"free","limits":{"storage":1},"enforced":1}`,
 		`[]`,
 	} {
 		api := newTestSidecarApi(t, answerWith(http.StatusOK, body))

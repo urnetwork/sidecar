@@ -201,7 +201,7 @@ func (self *s13World) open(device *s13Device) {
 			return &sidecar.QuotaLimits{Tier: "team", Limits: map[string]int64{
 				sidecar.DirectoryLimitRequestsPending: 20, sidecar.DirectoryLimitRequestsPerDay: 50,
 				sidecar.DirectoryLimitRequestsPerRun: 5, sidecar.DirectoryLimitTargetPending: 100,
-			}}, nil
+			}, Enforced: true}, nil
 		},
 		Events: device, Land: func(ctx context.Context) error { return record.Flush(ctx) }, Journal: ledger, Statements: device, Receipts: device,
 	})

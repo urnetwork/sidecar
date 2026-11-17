@@ -13,7 +13,9 @@
 //	         write one, and a burner another device creates has none
 //	limits   with no server burner state, mail_burners_active and mail_burner_creates_per_day apply here, from GET
 //	         /sidecar/limits (§20.4), over the network's burner records: those not burned, and those created within
-//	         BurnerSettings.CreatesWindow. A limit not there to read refuses, never an unbounded creation; -1 is none
+//	         BurnerSettings.CreatesWindow. A limit not there to read refuses, never an unbounded creation; -1 is none,
+//	         as both read while the answer's enforced is false, so their refusals ship dark as api's do (§20.5;
+//	         owner decision 520), the limits still read so that an answer that does not come still refuses
 //	copy     before this member's first burner, CreateBurner answers §15.9's foreground-only copy while coverage is
 //	         foreground-only or none (mail_coverage.go). It never refuses for coverage (owner decision 12)
 //	burn     local, with no approval (owner decision 32): the record's next version marks the label burned, so
@@ -205,11 +207,12 @@ func (self *MailClient) checkBurnerLimits(ctx context.Context, api MailApi, burn
 		key   string
 		count int
 	}{{key: mailLimitBurnersActive, count: active}, {key: mailLimitBurnerCreatesPerDay, count: createdRecently}} {
-		value := limits.Limits[limit.key]
+		// none while the limits are dark
+		value := quotaLocalLimit(limits, limit.key)
 		switch {
 		case value == mailBurnerLimitUnboundedValue:
 		case value <= 0 || value <= int64(limit.count):
-			// a key the answer lacks reads 0, not included: refused, never unbounded
+			// a key an enforced answer lacks reads 0, not included: refused, never unbounded
 			return &MailBurnerLimitError{Limit: limit.key, Value: value, Count: limit.count}
 		}
 	}

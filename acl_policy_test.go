@@ -101,9 +101,10 @@ func TestParseAclPolicyWorkedExample(t *testing.T) {
 		},
 		Grants: []AclGrant{
 			{
-				Src:   []AclSelector{testAutogroupUntagged},
+				Src:   []AclSelector{testAutogroupMember, testAutogroupUntagged},
 				Dst:   []AclResource{testSubject(testAutogroupSelf)},
 				Allow: []protocol.AclAction{testActionDial, testActionRoute},
+				Via:   []AclSelector{testAutogroupSelf},
 			},
 			{
 				Src:   []AclSelector{testTag("recurd")},

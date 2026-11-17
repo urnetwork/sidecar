@@ -29,6 +29,8 @@ type testRequestsEnv struct {
 	repoId          sidecar.Id
 	// what GET /sidecar/limits answers every device; nil answers an error
 	limits map[string]int64
+	// the answer's enforced: true unless a test turns the switch off
+	enforced bool
 	// what the gate answers an agent's request, and how often it was asked
 	endorsed     *sidecar.DirectoryEndorsed
 	endorseErr   error
@@ -67,7 +69,8 @@ func newTestRequestsEnv(t *testing.T) *testRequestsEnv {
 			sidecar.DirectoryLimitRequestsPerRun:  5,
 			sidecar.DirectoryLimitTargetPending:   100,
 		},
-		events: map[sidecar.Id][]string{},
+		enforced: true,
+		events:   map[sidecar.Id][]string{},
 	}
 	requesterWriter := world.memberWriter(env.requesterMember)
 	approverWriter := world.memberWriter(env.approverMember)
@@ -93,7 +96,7 @@ func (self *testRequestsEnv) binding(device *testDirectoryDevice) *sidecar.Direc
 			if self.limits == nil {
 				return nil, errors.New("limits did not answer")
 			}
-			return &sidecar.QuotaLimits{Tier: "team", Limits: self.limits}, nil
+			return &sidecar.QuotaLimits{Tier: "team", Limits: self.limits, Enforced: self.enforced}, nil
 		},
 		Endorse: func(ctx context.Context, endorsement *sidecar.DirectoryEndorsement) (*sidecar.DirectoryEndorsed, error) {
 			self.endorseCount += 1
@@ -395,6 +398,59 @@ func TestDirectoryRequestOlderPendingShownFirst(t *testing.T) {
 	shown = env.requests(env.approver, &sidecar.DirectoryRequestFilter{Decidable: true})
 	if len(shown) != 2 || shown[0].RequestId != filed[1].RequestId || shown[1].RequestId != filed[2].RequestId {
 		t.Fatalf("%d requests shown once the oldest expired", len(shown))
+	}
+}
+
+// While enforce_sidecar_limits is off the request limits are dark at both ends (owner decision 520): the requesting
+// daemon files past directory_requests_pending and the repo's admin shows every request. Once it is on, the requester
+// refuses as before and the admin ignores the requests past the limit, the requester still seeing its own; and a
+// target's requests past directory_target_pending wait only while it is on. Limits that do not answer refuse whatever
+// the switch said last.
+func TestDirectoryRequestLimitsAreDarkWhileNotEnforced(t *testing.T) {
+	env := newTestRequestsEnv(t)
+	env.limits[sidecar.DirectoryLimitRequestsPending] = 2
+	env.limits[sidecar.DirectoryLimitTargetPending] = 1
+	env.enforced = false
+	filed := []*sidecar.DirectoryRequestFiled{}
+	for range 3 {
+		filed = append(filed, env.mustFile(env.requester, env.ask()))
+		env.world.clock.Advance(time.Minute)
+	}
+	if shown := env.requests(env.approver, &sidecar.DirectoryRequestFilter{Decidable: true}); len(shown) != 3 {
+		t.Fatalf("a dark reader shows %d of 3 requests", len(shown))
+	}
+
+	env.enforced = true
+	_, err := env.requester.client.Request(t.Context(), env.ask())
+	var limitErr *sidecar.DirectoryLimitError
+	if !errors.As(err, &limitErr) || limitErr.Key != sidecar.DirectoryLimitRequestsPending || limitErr.Limit != 2 || limitErr.Used != 3 {
+		t.Fatalf("an enforced requester's 4th pending request answered %v", err)
+	}
+	// the third is past the requester's pending limit, and the second waits behind the first for the target
+	shown := env.requests(env.approver, &sidecar.DirectoryRequestFilter{Decidable: true})
+	if len(shown) != 1 || shown[0].RequestId != filed[0].RequestId {
+		t.Fatalf("an enforced reader shows %d requests", len(shown))
+	}
+	if mine := env.requests(env.requester, &sidecar.DirectoryRequestFilter{Mine: true}); len(mine) != 3 {
+		t.Fatalf("the requester sees %d of its own requests", len(mine))
+	}
+	env.limits[sidecar.DirectoryLimitTargetPending] = 100
+	if shown := env.requests(env.approver, &sidecar.DirectoryRequestFilter{Decidable: true}); len(shown) != 2 ||
+		shown[0].RequestId != filed[0].RequestId || shown[1].RequestId != filed[1].RequestId {
+		t.Fatalf("an enforced reader under the target's limit shows %d requests", len(shown))
+	}
+
+	env.enforced = false
+	env.mustFile(env.requester, env.ask())
+	if shown := env.requests(env.approver, &sidecar.DirectoryRequestFilter{Decidable: true}); len(shown) != 4 {
+		t.Fatalf("a dark reader shows %d of 4 requests", len(shown))
+	}
+	env.limits = nil
+	if _, err := env.requester.client.Request(t.Context(), env.ask()); !errors.Is(err, sidecar.ErrDirectoryLimitsUnavailable) {
+		t.Fatalf("a request with no limits while dark answered %v", err)
+	}
+	if views, err := env.approver.client.GetRequests(t.Context(), nil); !errors.Is(err, sidecar.ErrDirectoryLimitsUnavailable) || len(views) != 0 {
+		t.Fatalf("a reader with no limits while dark showed %d requests, %v", len(views), err)
 	}
 }
 
