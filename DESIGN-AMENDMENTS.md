@@ -1456,68 +1456,7 @@ Questions: `plan-BRIDGE-share-pins.md`.
 
 Waits on: bridge.proto's share messages (BRIDGE-M6-03 to -05), the fence line landing in one change with them, as protocol's fence test holds the two together.
 
-### QD-211: The device role cannot tell a SidecarRevoke is its own sign-out
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-The fence, which waits: §17.8's `Pending` fence takes `bytes sidecar_id = 3; bytes identity_public_key = 4;`, which bridge.proto already declares and protocol/design_unfenced_test.go's `testFenceAdditions` holds (plan-SDK-pending-sidecar-id). The fence line and the dropped additions must land in one commit, which a design-records track, editing no code, cannot make alone (question `dr-s17-s18-fence-additions.md`). The rest is folded (2026-11-10): §17.8's legacy -> pending and any -> legacy rows with a comment in the fence, and §18.6's transitions.
-
-Changes: §17.8 Pending's fence; protocol/design_unfenced_test.go's testFenceAdditions.
-
-Questions: `plan-SDK-pending-sidecar-id.md`.
-
-### QD-667: Should the config head carry a bridge ledger, the frozen body-level state of every folded bridge statement, checked by every full reader as rows are?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-The config head carries a bridge ledger: files of rows by kind (bridge/ledger/addresses with tombstones, rules/<xx> shards by id with their bodies and dispositions, egress, aliases) and a manifest of their hashes. A writer writes them at each fold from the verdicts it holds; every full reader standing under the previous base computes the same files and forks on a difference; a device that starts at the base, and a VPN component, take them. The files are ciphertext at evs, so no §2.8 row; about 600 KB at 5,000 devices. This carries section 5's rule (a verdict judged once by the verifiers present, taken from the base after) to bodies the server cannot read, and bounds every compile. DESIGN-DETAILS.md section 12 is built on it; BRIDGE-M4-23 builds it with seams in TEAM's writer and head check.
-
-Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M4-23 and BRIDGE-M4-16 build it; §17.8 and §7.9 text (design-records).
-
-Questions: `details-12-ledger-in-head.md`.
-
-### QD-668: What judges a bridge filing's approval after a base that did not fold it: the new base's rows, or a verdict carried from the entry's own position?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-A bridge filing in a base's tail is judged by every reader that holds its body's key on the new base's rows with the tail re-applied (section 5), as BRIDGE-M2-01 already judges a signer; the writer freezes the verdict into the head's bridge ledger when it folds the entry, and writers fold through their tip whenever a bridge statement is unfolded. The one case that differs from a verdict at the entry's own position (a head landing within seconds of an approved filing whose policy disqualifies that approval) turns the verdict at every reader alike and fails closed; the requester files again under a new decision. No format beyond the ledger (QD-667). DESIGN-DETAILS.md section 12 is built on it.
-
-Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M4-23 builds it.
-
-Questions: `details-12-unfolded-verdicts.md`.
-
-### QD-669: After a restart, should a daemon host serve bridge flows before its judge has replayed the denials it had applied?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-At a daemon's start, and at each new client generation, the bridge provider is built only after every entry above the restored state that the ConfigClient holds has been replayed to the bridge (and a compile at the tip has run if one can), from local stores alone, given section 12's rule that an entry is in the ConfigClient's store before any entry callback runs. If the client's store is behind the posture's pin, the provider waits for the follow to reach it, with bridge_alarm after 30 s. A host whose config store lagged its posture at a crash serves no bridge flow until it reaches api again. Nothing a restart does lowers enforcement. An app's VPN component has no resident judge and is unchanged (section 4; QD-621). BRIDGE-M4-17 builds it; until the core lane reverses ConfigClient.publish's order, the gate's wait for the follow covers that gap.
-
-Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M4-17 builds the start gate; core-lane follow-up: ConfigClient.publish stores entries before running entry callbacks.
-
-Questions: `details-12-start-gate.md`.
-
-### QD-670: How do the sharing network's hosts trust the accepting network's alias table: by a hash their approving admin pinned, or by the seal alone?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-X's approving admin pins the accepting network's alias table as QD-077 pins the target table: BridgeShareGrant gains the accepting network's id and each table's hash and version (fields 6 to 9), written in the act that files the share's GrantActivate. A host compiles a share only from tables that hash to the pins. The alias table holds each alias's host bits (the low 16 bits) and length, and X's host matches a destination's low 16 bits, so a block change in Y changes nothing X pinned. If Y ever re-aliases a share, X's admin activates again. The fields join QD-077's message before bridge.proto declares it. DESIGN-DETAILS.md section 12 is built on it; BRIDGE-M6-03 builds it.
-
-Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M6-03 builds it (bridge.proto BridgeShareGrant 6 to 9); §17.9 share pins (design-records).
-
-Questions: `details-12-alias-table-pin.md`.
-
-### QD-671: When does a host store a share's raised config generation: before it admits the contract that carried it, or after?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-When a share-link contract's ShareCert names a generation above the host's ratchet for that share, the host commits the raise to §17.8's persisted posture store and then admits the contract. One store commit per share per rotation of Y, a few milliseconds, in that one contract's VerifyPrincipal sequence before the dial, never a packet's, a flow's or a later contract's; R-BRIDGE-9's no-I/O-per-packet rule is untouched. A removed sidecar stays refused after a host restart, as FS-38 asks. DESIGN-DETAILS.md section 12 is built on it; BRIDGE-M6-04 builds it.
-
-Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M6-04 builds it; §17.9 admit row (design-records).
-
-Questions: `details-12-ratchet-commit.md`.
-
-### QD-676: What should a VPN component's posture do once its overlay is full and no compile has run to clear it?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-A VPN component's posture overlay moves to the component's sealed store in the review phase, streamed and indexed with only an index and a cache in RAM, as QD-641 directs for bulk state (DESIGN-DETAILS 4.2.4's storage-backed compile is the same move for rows), so its only bound is storage's and the host's per-flow check reads the index. Until it lands, the interim as built stands: past PostureSettings.OverlayMaxCount (4,096) a denial the posture verified and cannot hold sets PostureDecision.OverlayFullThroughN (manifest field 23), the decision is pending until a state at or past it, the posture keeps following the chain, and it alarms malformed once a call. A posture that can no longer hold a denial it can check denies rather than silently stops applying them; QD-621's accepted cost covers only revocations the posture cannot check.
-
-Changes: review-phase task: storage-backed overlay in device/ (QD-641); interim in device/posture_apply.go stands.
-
-Questions: `sdk-m8-17-overlay-bound-without-compiles.md`.
+Not folded (2026-11-16): the ```proto fence for BridgeShareGrant in §17.9. bridge.proto now declares it with fields 1 to 9 (QD-670's 6 to 9 among them), but its declaration, with the share seal's bodies and `BridgeShareAccept`, is held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do. The fields are folded as text, with their numbers, in §17.9's share pins block (owner decision 475), and §17.9's fence comment says what joins it.
 
 ### QD-677: How should the soak count orphan objects by orphan GC's own definition, when evsservice has no count that deletes nothing?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §22 Testing and verification.*
@@ -1527,24 +1466,6 @@ EVSB adds a dry form to evsservice/gc_orphans.go: OrphanGc.CountRepo(ctx, repo *
 Changes: data-lane follow-up: OrphanGc.CountRepo in evsservice/gc_orphans.go; server/local/sidecar-soak's orphanCounter wired to it.
 
 Questions: `test-m2-03-soak-orphan-count.md`.
-
-### QD-678: Should the lb leave X-Frame-Options off the key origin, sidecar.ur.io, when today it adds `SAMEORIGIN` to every service host's responses?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-warp's services.yml gains a list of exact hosts the lb sends no X-Frame-Options for, shaped like no_access_log and checked the same way (an exact host the lb serves); warp/services/sidecar-blocks/mmm.yml adds sidecar.ur.io to it. warpctl's addSecurityHeaders skips the header for a listed host, and a warp config test asserts the key origin's server block has no X-Frame-Options while every other host keeps SAMEORIGIN. The key origin's framing then rests on mmm's CSP frame-ancestors https://ur.io alone, as SDK-M4-06's trap says, and ur.io keeps its own protection. An ops-lane change to warp's addServiceBlocks; it lands before the owner applies mmm.yml.
-
-Changes: ops-lane follow-up: warp services.yml no-frame-options host list, warpctl/config.go addSecurityHeaders, config test; mmm.yml fragment line for sidecar.ur.io.
-
-Questions: `ops-m4-01-lb-frame-options.md`.
-
-### QD-696: Should a VPN component's narrowing_overdue alarm back off while a narrowing entry keeps waiting for a compile that never runs, instead of repeating every 10 minutes forever?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-A VPN component raises bridge_alarm narrowing_overdue when a narrowing entry has waited NarrowingOverdueTimeout (10 min) for a compile, then again at doubling intervals (20 min, 40 min, and so on) up to once a day while the condition lasts, and at once again whenever a further narrowing entry becomes overdue; the condition (the oldest overdue position and its age) stays visible in the posture's status throughout, and the first compile that runs clears it. DESIGN-DETAILS 4.2.5 and 4.3's StalenessBound read 'raised for it, and again at doubling intervals to once a day and for each newly overdue entry', and Fwd.tla's alarm clause follows (the design agent's section 4 amendment); SDK-M8-17's code (device/posture.go and its timer) follows in the core lane. QD-621's accepted cost is unchanged.
-
-Changes: design agent: section 4 amendment, 4.2.5 and 4.3 StalenessBound wording, Fwd.tla alarm clause; core-lane follow-up: device/ posture alarm timer backs off (SDK-M8-17's code).
-
-Questions: `details-4-overdue-alarm-repeat.md`.
 
 ### QD-706: When does the sweep that moves the drafted code's constant tunables into settings objects (QD-702) run?
 *Decided by the owner on 2026-11-11, asked one question at a time. Folds into §23 Phasing, milestones, and rollout.*
@@ -1563,25 +1484,6 @@ A §21.10 record is sealed with HPKE-XWing as smtpedge's sealed report copies ar
 Changes: the production AbuseRecordMailer seals and sends (ABUSE-M5-03, -05); the owner creates abuse-mailbox.yml in vault and keeps the private key offline (an outward action).
 
 Questions: `abuse-m5-03-record-seal.md`.
-
-### QD-732: Where does the keyless device role get the base, rows and entries that verify a BridgeState, when §18.6's `SetState(state)` takes the state alone?
-*Decided by the owner on 2026-11-12, asked one question at a time, then withdrawn. Folds into §18 SDK, apps, and extension integration.*
-
-Withdrawn and corrected on 2026-11-12: DESIGN-DETAILS.md section 4 had answered this before it was asked, and the owner confirmed that section 4 stands. Under owner decision 197 the apps' VPN component is self-contained with its own forwarding key and never waits on the app, so it fetches the log itself: the newest base, its rows and the entries a BridgeState rests on are in its own store, and device.Posture.SetState(state, log) keeps the argument SDK-M4-01 built, filled in process. Nothing new crosses the app-to-component channel, and §18.6's SetState(state) and §17.8's persist row read as section 4 writes them. The answer first given (the log travelling with each state over SDK-M8-07's channel) does not stand.
-
-Changes: none; DESIGN-DETAILS section 4 stands as written.
-
-Questions: `sdk-m4-01-state-proof.md`.
-### QD-733: Where in BridgeRules do `autogroup:untagged`'s rows live, which an sdk provider gives a sealed subject that no row binds?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-BridgeRules gains BridgeRuleSubject untagged = 10: the dial, route and exit rows autogroup:untagged holds at this host, with no sidecar_id, member_id or client_ids. An sdk provider before C16 gives those rows to any sealed subject no row binds (an other client, §8.4, untagged for rule 4 as owner decision 105 keeps for app devices), so under an ACL document an app device keeps the exits its policy grants the group. The compiler (BRIDGE-M4-16) fills it from §8.5's expansion; ParseBridgeRules checks it as a subject's rows. Per-subject rows stay as they are, and every such client still shares the zero subject id in its rule tags. BridgeRules is in-process, so no §2.8 row.
-
-Changes: bridge.proto's BridgeRules.untagged = 10 (fenced by design-records); BRIDGE-M4-06's parser and fixture, BRIDGE-M4-16's compiler and BRIDGE-M4-09's hook use it.
-
-
-DESIGN-DETAILS 12.9 had answered it on this option (BridgeRules.untagged = 10, filled by the compile's reach pass), and section 12's tasks built it; this confirms it.
-Questions: `bridge-m4-09-other-client-rows.md`.
 
 ### QD-744: Should §19.6's rule (3) hold a failed DELETE's key until every commit of it has answered and been reverted, since TLC finds two DELETEs on one key breaking FI-30 under the rule as written?
 *Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
@@ -1654,42 +1556,6 @@ server's api answers a request whose Postgres connection a restart cut with 503 
 Changes: server/router answers Postgres connection-loss classes 503 with Retry-After; TEST-M2-15's retryable half of the Postgres restart row.
 
 Questions: `test-m2-15-postgres-restart-answer.md`.
-
-### QD-761: What ends the fold's stop below a bridge body sealed to a generation that never forms?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-A config writer that has held every generation the config repo's gkm head names for a set time (a settings field, 24 h by default) freezes a bridge body sealed above all of them as void (Refused, no such generation) and folds past it; a checker that lacks that generation too takes the head's rows unchecked, as now. The id level and the rows stay as they are, and no server sees anything new. The design agent amends DESIGN-DETAILS 12.2.3 with the exact rule (when the time starts, what a checker does, the fork argument) before FoldBridgeLedger changes.
-
-Changes: DESIGN-DETAILS 12.2.3: the stop below an Unopened filing is bounded; a short amendment by the design agent; FoldBridgeLedger and BridgeLedgerFold.Stopped (BRIDGE-M4-23), with the wait as a settings field; then a fix track in the lane holding BRIDGE.
-
-Questions: `bridge-m2-02-unopened-generation-stall.md`.
-
-### QD-773: What does a reader that comes to hold a generation make of a bridge body sealed to it before it formed, once a fold has voided that body?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-Completes QD-761. Every reader that holds keys refuses (void, no alarm) a bridge body whose generation's GenRotate time is more than GenerationFormGrace (a settings field, 1 h by default) after the entry that carries the body, so a generation claimed after a writer's void changes no reader's verdict and no device forks. UnformedVoidWait (a settings field, 24 h by default) runs from the filing's own entry in log time, not from when the writer came to hold every generation, and is raised to a floor of the grace plus 30 min. A writer voids only on a whole read of gkm made inside the plan that names G as newest while it holds keys 1..G; a checker never voids and, lacking the generation, takes the head's rows unchecked. The void at the fold and the readers' rule land together.
-
-Changes: DESIGN-DETAILS 12.2.3 stands as amended (commit 8526a95); details/BridgeVoid.tla and its 14 configurations; BridgeLedgerSettings: UnformedVoidWait, GenerationFormGrace; BridgeLedgerReader and BridgeBodyJudge: FormedThrough; Judge and openBody apply the grace test before opening the seal; BridgeLedgerFold gains Voided and Stopped becomes the first entry still waiting; bridgeFold logs config_key_void and names the filer (12.7); the gkm whole read is a few lines in a core-lane file: take G from the listing and test keys 1..G, since SyncRepo returns nil with a named generation unopened.
-
-Questions: `details-amend-2-late-generation.md`.
-
-### QD-774: Is it enough that a sidecar which keeps filing bridge bodies sealed to unformed generations holds the fold until it is revoked?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
-
-A member device that keeps filing bridge bodies sealed above every formed generation can hold the config fold for as long as it files; the design accepts this liveness bound. The remedy is revoking the filer, which is a statement and needs no base: the first plan whose tip is one UnformedVoidWait past the filer's last filing folds through. The writer's config_key_waiting line names the filer on every plan, and the wait is a settings field a network can lower. The id-level bound on the generation stays the complete answer if one is wanted later.
-
-Changes: DESIGN-DETAILS 12.2.3's 'What is left' stands as written; operations text: the alarm and the revocation as the remedy; BRIDGE-M4-23's fix track builds the log lines that name the filer.
-
-Questions: `details-amend-2-fold-holds.md`.
-
-### QD-776: How does a page Worker read the api's clock for its DPoP iat, given that the lb exposes no Date header to a cross-origin fetch?
-*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
-
-The load balancer's Access-Control-Expose-Headers list gains Date, so a page Worker reads the api's clock from its answers as every other leg does (QD-757) and signs its DPoP iat by it. §18.15's list, warp's addCorsHeaders and the pagestack fixture's list each gain the one word. No api shape changes and no new metadata row.
-
-Changes: warp/warpctl/config.go addCorsHeaders: Date in Access-Control-Expose-Headers, with its config test; sidecar's pagestack fixture list; TestSkewedSidecarApiWithNoDateStaysRefused keeps holding for an answer with no Date, and a page-leg test shows a skewed Worker renewing; §18.15's Services row text by design-records; the owner applies the lb change with warp's next deploy.
-
-Questions: `dpop-iat-offset-page-worker-date.md`.
 
 ### QD-779: Should a run card's version be the index epoch above the stream version of its run's newest entry, in place of the highest seq folded?
 *Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*

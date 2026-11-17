@@ -3,10 +3,12 @@ package evsservice
 // EVSB-M10-02's sweep on T2: a committed record's list swept before its batch goes, each candidate HEADed and
 // deleted only when present, by a DELETE naming its LastModified; the newest version's names and a hold's placement
 // keeping theirs; a re-upload between the HEAD and the DELETE staying; the gates; the retries; the one-off passes'
-// gates and their walk of a repo's refs.
+// gates and their walk of a repo's refs; and QD-855's series: each run's DELETEs under its pass, and what observe
+// keeps counted in ids.
 
 import (
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -85,10 +87,10 @@ func TestSweepDeletesPresentCandidatesOnly(t *testing.T) {
 	if result.DeletedCount != 3 || result.AbsentCount != 1 || result.NamedCount != 1 || result.FreedByteCount != 1000 {
 		t.Fatalf("result %+v", result)
 	}
-	if got := fixture.host.Metrics.Value(versionlessSweepDeletesMetricName, versionlessSweepDeleted); got != 3 {
+	if got := fixture.host.Metrics.Value(versionlessSweepDeletesMetricName, versionlessSweepPassEvacuation, versionlessSweepDeleted); got != 3 {
 		t.Fatalf("deleted %v", got)
 	}
-	if got := fixture.host.Metrics.Value(versionlessSweepDeletesMetricName, versionlessSweepAbsent); got != 1 {
+	if got := fixture.host.Metrics.Value(versionlessSweepDeletesMetricName, versionlessSweepPassEvacuation, versionlessSweepAbsent); got != 1 {
 		t.Fatalf("absent %v", got)
 	}
 	if got := fixture.host.Metrics.Value(versionlessPurgedBytesMetricName, versionlessPurgedBySweep); got != 1000 {
@@ -254,5 +256,153 @@ func TestSweepIgnoresAPartRecordsList(t *testing.T) {
 	result, err = fixture.sweepList(sealList)
 	if err != nil || result.DeletedCount != 1 || fixture.segmentStored(kept) {
 		t.Fatalf("the seal's list: %+v %v", result, err)
+	}
+}
+
+// The sweep's DELETEs by pass and result, for a test's reading of QD-855's label.
+func sweepTestDeletes(host *sidecartest.FakeHost) map[string]float64 {
+	counts := map[string]float64{}
+	for _, passLabel := range []string{versionlessSweepPassEvacuation, versionlessSweepPassHoldEnd, versionlessSweepPassTurnOn} {
+		for _, outcome := range []string{versionlessSweepDeleted, versionlessSweepAbsent} {
+			if value := host.Metrics.Value(versionlessSweepDeletesMetricName, passLabel, outcome); value != 0 {
+				counts[passLabel+" "+outcome] = value
+			}
+		}
+	}
+	return counts
+}
+
+// QD-855: each run counts its DELETEs under its own pass, so §19.8's turn-on row tells the turn-on pass from the
+// ordinary sweep: evacuation's sweep of u's record, a hold's end pass and the purge's turn-on pass each delete the same
+// content once it is back, and a rerun of the turn-on finds it absent, under turn_on. A turn-on pass on a host that
+// still reads observe deletes nothing and counts what it keeps as observed, never as a turn_on DELETE.
+func TestSweepCountsEachRunsDeletesUnderItsPass(t *testing.T) {
+	fixture := newEvacuateFixture(t, nil)
+	ref := newRecomputeRef(fixture)
+	x, y := checkTestPath("x"), checkTestPath("y")
+	s1, s2, y1 := fixture.recomputeSegment("s1", 300), fixture.recomputeSegment("s2", 300), fixture.recomputeSegment("y1", 500)
+	ref.push(func(plan *sidecar.EvsPushPlan) []*sidecar.EvsPlannedChange {
+		return []*sidecar.EvsPlannedChange{
+			{TokenPath: x, EntryVersion: recomputeTestEntry(t, plan, 1, true, nil, 0, recomputeTestKind5(s1))},
+			{TokenPath: y, EntryVersion: recomputeTestEntry(t, plan, 1, true, nil, 0, recomputeTestKind5(y1))},
+		}
+	}, nil)
+	vPushId := ref.pushIds[0]
+	list := &protocol.EvsPurgeList{Candidates: []*protocol.EvsPurgeCandidate{
+		{TokenPath: x.Components(), ReplacedVersion: 1, SegmentIds: [][]byte{s1}},
+		{TokenPath: y.Components(), ReplacedVersion: 1, SegmentIds: [][]byte{y1}},
+	}}
+	u := ref.push(func(plan *sidecar.EvsPushPlan) []*sidecar.EvsPlannedChange {
+		return []*sidecar.EvsPlannedChange{
+			{TokenPath: x, BaseEntryVersion: 1, EntryVersion: recomputeTestEntry(t, plan, 2, true, &vPushId, 1, recomputeTestKind5(s2))},
+			{TokenPath: y, BaseEntryVersion: 1},
+		}
+	}, list)
+	newest := &fakePurgeNewest{}
+	newest.name(x, s2)
+	restore := func() {
+		fixture.recomputeSegment("s1", 300)
+		fixture.recomputeSegment("y1", 500)
+	}
+
+	lagging, err := NewSweep(fixture.host.ServiceHost(), &SweepDeps{
+		Format2: &testFormat2Gate{purge: sidecar.Format2Observe}, Newest: newest, EvsSettings: fixture.settings2(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := lagging.TurnOnPass(fixture.ctx, "meta-1", fixture.check.repoId, time.Time{})
+	if err != nil || kept.RecordCount != 1 || kept.KeptCount != 2 || kept.DeletedCount != 0 {
+		t.Fatalf("a turn-on pass under observe: %+v %v", kept, err)
+	}
+	if got := sweepTestDeletes(fixture.host); len(got) != 0 || fixture.host.Metrics.Value(versionlessObservedMetricName) != 2 {
+		t.Fatalf("a turn-on pass under observe counted DELETEs %v, observed %v", got, fixture.host.Metrics.Value(versionlessObservedMetricName))
+	}
+
+	sweep := fixture.recomputeSweep(newest, nil)
+	evacuated, err := sweep.SweepList(fixture.ctx, fixture.cluster, ref.target(u, ref.records[u-1], list), sidecar.WriteP2RankEvacuation, true, fixture.clock.Now())
+	if err != nil || evacuated.DeletedCount != 2 {
+		t.Fatalf("evacuation's sweep: %+v %v", evacuated, err)
+	}
+	restore()
+	held, err := sweep.HoldEndPass(fixture.ctx, "meta-1", fixture.check.repoId, fixture.clock.Now().Add(-time.Hour), fixture.clock.Now())
+	if err != nil || held.RecordCount != 1 || held.DeletedCount != 2 {
+		t.Fatalf("a hold's end pass: %+v %v", held, err)
+	}
+	restore()
+	turnedOn, err := sweep.TurnOnPass(fixture.ctx, "meta-1", fixture.check.repoId, time.Time{})
+	if err != nil || turnedOn.RecordCount != 1 || turnedOn.DeletedCount != 2 {
+		t.Fatalf("the turn-on pass: %+v %v", turnedOn, err)
+	}
+	rerun, err := sweep.TurnOnPass(fixture.ctx, "meta-1", fixture.check.repoId, time.Time{})
+	if err != nil || rerun.DeletedCount != 0 || rerun.AbsentCount != 2 {
+		t.Fatalf("the turn-on pass again: %+v %v", rerun, err)
+	}
+	if fixture.recomputeStored(s1) || fixture.recomputeStored(y1) || !fixture.recomputeStored(s2) {
+		t.Fatal("the passes' deletes are not what they judged")
+	}
+	want := map[string]float64{
+		versionlessSweepPassEvacuation + " " + versionlessSweepDeleted: 2,
+		versionlessSweepPassHoldEnd + " " + versionlessSweepDeleted:    2,
+		versionlessSweepPassTurnOn + " " + versionlessSweepDeleted:     2,
+		versionlessSweepPassTurnOn + " " + versionlessSweepAbsent:      2,
+	}
+	if got := sweepTestDeletes(fixture.host); !maps.Equal(got, want) {
+		t.Fatalf("the deletes series %v, want %v", got, want)
+	}
+	if got := fixture.host.Metrics.Value(versionlessObservedMetricName); got != 2 {
+		t.Fatalf("observed %v, want only the observe pass's 2: purge on counts none", got)
+	}
+}
+
+// QD-855: under purge: observe the sweep keeps its candidates and counts them in observed_total, in ids, a marked list
+// one, a part's list none, deleting nothing and counting no DELETE. Once purge reads on, nothing more is counted
+// there.
+func TestSweepObserveCountsWhatItKeeps(t *testing.T) {
+	fixture := newSweepFixture(t)
+	path := checkTestPath("x")
+	segment := fixture.segment("observed segment", 100)
+	staged := fixture.segment("observed staged", 100)
+	slot := fixture.slot("observed slot")
+	list := sweepTestList(path, [][]byte{segment}, [][]byte{staged}, [][]byte{slot})
+	observed := func() float64 {
+		return fixture.host.Metrics.Value(versionlessObservedMetricName)
+	}
+
+	fixture.gate.set(sidecar.Format2Observe)
+	result, err := fixture.sweepList(list)
+	if err != nil || result.KeptCount != 3 || result.DeletedCount != 0 {
+		t.Fatalf("observe: %+v %v", result, err)
+	}
+	if !fixture.segmentStored(segment) || !fixture.segmentStored(staged) || !fixture.slotStored(slot) {
+		t.Fatal("observe mode deleted content")
+	}
+	if got := observed(); got != 3 {
+		t.Fatalf("observed %v, want the list's 3 ids", got)
+	}
+	result, err = fixture.sweepList(&protocol.EvsPurgeList{Marked: true})
+	if err != nil || result.KeptCount != 1 {
+		t.Fatalf("a marked list: %+v %v", result, err)
+	}
+	if got := observed(); got != 4 {
+		t.Fatalf("observed %v after a marked list, want one more", got)
+	}
+	// a part's list is never a candidate list, so observe keeps nothing of it
+	partList := sweepTestList(path, [][]byte{segment}, nil, nil)
+	partList.Replaced = true
+	if _, err := fixture.sweepList(partList); err != nil || observed() != 4 {
+		t.Fatalf("a part's list: observed %v, %v", observed(), err)
+	}
+	if got := sweepTestDeletes(fixture.host); len(got) != 0 {
+		t.Fatalf("observe counted DELETEs %v", got)
+	}
+
+	fixture.gate.set(sidecar.Format2On)
+	result, err = fixture.sweepList(list)
+	if err != nil || result.DeletedCount != 3 {
+		t.Fatalf("on: %+v %v", result, err)
+	}
+	if got := observed(); got != 4 {
+		t.Fatalf("observed %v once purge reads on", got)
 	}
 }
