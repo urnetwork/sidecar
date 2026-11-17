@@ -25,7 +25,7 @@ require (
 	github.com/emersion/go-smtp v0.25.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.8 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -33,7 +33,7 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/letsencrypt/challtestsrv v1.4.2 // indirect
-	github.com/letsencrypt/pebble/v2 v2.10.1 // indirect
+	github.com/letsencrypt/pebble/v2 v2.10.3 // indirect
 	github.com/mholt/acmez/v3 v3.1.7 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mjl-/adns v0.0.0-20260809141028-22f885debe71 // indirect

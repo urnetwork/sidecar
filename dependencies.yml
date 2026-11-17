@@ -99,7 +99,7 @@ modules:
     leg: [test]
   - module: github.com/go-jose/go-jose/v4
     spdx: Apache-2.0 AND BSD-3-Clause
-    reason: through Pebble, sidecartest's ACME server for certs' T2 rows (§22.9), at v4.1.6 as server requires it; its json package keeps Go's BSD-3-Clause, read from json/LICENSE
+    reason: through Pebble, sidecartest's ACME server for certs' T2 rows (§22.9), at v4.1.8 as Pebble v2.10.3 requires it, with server at the same version (QD-903); its json package keeps Go's BSD-3-Clause, read from json/LICENSE
     leg: [test]
   - module: github.com/godbus/dbus/v5
     spdx: BSD-2-Clause
@@ -143,7 +143,7 @@ modules:
     leg: [test]
   - module: github.com/letsencrypt/pebble/v2
     spdx: MPL-2.0
-    reason: v2.10.1 is sidecartest.StartPebble's in-process ACME server, §22.9's Pebble with 5% bad nonces, for certs' T2 rows (TLS-M5-15); read from its LICENSE
+    reason: v2.10.3 is sidecartest.StartPebble's in-process ACME server, §22.9's Pebble with 5% bad nonces, for certs' T2 rows (TLS-M5-15); it files and looks up an issued certificate's order by one form of its serial, so a replaces finds every certificate it issued (QD-903); read from its LICENSE
     leg: [test]
   - module: github.com/mattn/go-colorable
     spdx: MIT
