@@ -764,15 +764,16 @@ func TestAclConfigRepoRowIsAlikeInEveryReader(t *testing.T) {
 }
 
 // QD-762 on the admission world's real writer and every reader it runs: the config's row joins the rows at a
-// revocation, the writer's next base compiles it into the base's own rows, which the new device and the gate started at
-// that base take with no tail to re-apply, and a later revocation advances it alike at every reader, none forking.
+// revocation, with that entry's time as its t_s (QD-1015), the writer's next base compiles it into the base's own rows,
+// which the new device and the gate started at that base take with no tail to re-apply, and a later revocation advances
+// both alike at every reader, none forking.
 func TestAclConfigRepoRowJoinsTheRowsAndRidesTheWritersBase(t *testing.T) {
 	world := newAclConfigRepoWorld(t)
 	admission := world.admission
 	owner := admission.Owner()
 	_, phone := admission.ConsentedMember("config row rides")
 	_, laptop := admission.ConsentedMember("config row rides later")
-	everyReaderHolds := func(label string, shrunkAt uint64) {
+	everyReaderHolds := func(label string, shrunkAt uint64, shrunkTimeMs int64) {
 		t.Helper()
 		readers := 0
 		admission.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
@@ -783,7 +784,9 @@ func TestAclConfigRepoRowJoinsTheRowsAndRidesTheWritersBase(t *testing.T) {
 					held = append(held, repo)
 				}
 			}
-			want := &protocol.AclRepo{RepoId: world.configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: shrunkAt}
+			want := &protocol.AclRepo{
+				RepoId: world.configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: shrunkAt, HoldersShrunkTimeMs: shrunkTimeMs,
+			}
 			if (shrunkAt == 0 && len(held) != 0) || (shrunkAt != 0 && (len(held) != 1 || !proto.Equal(held[0], want))) {
 				return fmt.Errorf("%s: the rows hold %v", label, held)
 			}
@@ -797,16 +800,17 @@ func TestAclConfigRepoRowJoinsTheRowsAndRidesTheWritersBase(t *testing.T) {
 			t.Errorf("%s: %d readers answered", label, readers)
 		}
 	}
-	everyReaderHolds("before any shrink", 0)
+	everyReaderHolds("before any shrink", 0, 0)
 	revoked := admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
-	everyReaderHolds("the revocation", revoked.Pin.GetVersion())
+	revokedTimeMs := admission.State().TimeMs()
+	everyReaderHolds("the revocation", revoked.Pin.GetVersion(), revokedTimeMs)
 	base := admission.Fold(true)
 	if header := admission.State().Base(); header.GetVersion() != base.GetVersion() || header.GetFoldedThrough() != base.GetVersion()-1 {
 		t.Fatalf("the writer's base at %d folds through %d", header.GetVersion(), header.GetFoldedThrough())
 	}
-	everyReaderHolds("the writer's base", revoked.Pin.GetVersion())
+	everyReaderHolds("the writer's base", revoked.Pin.GetVersion(), revokedTimeMs)
 	later := admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
-	everyReaderHolds("a later revocation", later.Pin.GetVersion())
+	everyReaderHolds("a later revocation", later.Pin.GetVersion(), admission.State().TimeMs())
 	if forks := admission.Forks(); len(forks) != 0 {
 		t.Errorf("readers forked: %v", forks)
 	}
