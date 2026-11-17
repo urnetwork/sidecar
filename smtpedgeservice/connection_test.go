@@ -493,6 +493,13 @@ func (silentMx) ServeMx(conn net.Conn) {
 func TestConnectionStopsReadingWhileTheSessionHolds(t *testing.T) {
 	w := newEdgeWorld(t, func(world *edgeWorld) {
 		world.settings.ConnectionHeldMaxByteCount = 4096
+		// no renewal before the idle limit, so the connection's one timer is that limit, at a time no other timer of
+		// the world's shares, as in the idle limit's own test. With a renewal every 2 min inside the move, each wake
+		// re-armed the connection's timer from a read of the clock the move then carried past, and a timer armed
+		// beyond the move's end never fired: the test hung at the move under make check's load
+		world.settings.QuotaMemberTimeout = 2 * time.Hour
+		world.settings.QuotaMemberRenewInterval = time.Hour
+		world.settings.ClientIdleTimeout = 7*time.Minute + 11*time.Second
 		world.mustWorld(world.world.SetMx("quiet.example", &sidecar.SmtpMxHost{Preference: 10, Host: "mx.quiet.example"}))
 		world.mustWorld(world.world.AddMx("mx.quiet.example", netip.MustParseAddr("192.0.2.26"), silentMx{}))
 	})
@@ -538,7 +545,21 @@ func TestConnectionStopsReadingWhileTheSessionHolds(t *testing.T) {
 	if count := countRecords(); count != 5 {
 		t.Fatalf("the engine read %d records while the session held its bound", count)
 	}
-	// a reader waiting for room hears no close: the client idle limit ends the connection
+	// a reader waiting for room hears no close: the client idle limit ends the connection. The clock has not moved
+	// since the connection started, so its records left the limit where it began; the move lands on its timer, found
+	// by that deadline first
+	deadline := w.clock.Now().Add(w.settings.ClientIdleTimeout)
+	for {
+		pending, added := w.clock.WatchTimers()
+		if slices.ContainsFunc(pending, func(at time.Time) bool { return at.Equal(deadline) }) {
+			break
+		}
+		select {
+		case <-added:
+		case <-w.ctx.Done():
+			t.Fatal("the idle timer was never armed")
+		}
+	}
 	w.clock.Advance(w.settings.ClientIdleTimeout)
 	<-served
 	sidecarEnd.Close()
