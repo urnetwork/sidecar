@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"sync"
 	"testing"
@@ -72,7 +73,9 @@ func TestEvsPushContentReadsPartsInRoundsOfTheSetting(t *testing.T) {
 	world.stateLock.Unlock()
 
 	var first *EvsCheckedPayload
-	for _, readCount := range []int{64, 2, 1, 0, -3, 1 << 40} {
+	// the last, more than any push holds, is the largest an int holds, so the test compiles where int is 32 bits
+	// (android/arm's slice)
+	for _, readCount := range []int{64, 2, 1, 0, -3, math.MaxInt} {
 		reader := world.reader(t, evsTestId("part reader"))
 		reader.client.settings.PushPartReadCount = readCount
 		repo := reader.client.Repo(world.repoId)

@@ -130,7 +130,7 @@ func (self *repository) iosExtensionHeadReaderFindings(t testing.TB, leg *buildL
 	return findings
 }
 
-// Both extension legs compile the push record reads and none of the git export, and compile the root with the head
+// Every extension leg compiles the push record reads and none of the git export, and compiles the root with the head
 // reader on it.
 func TestIosExtensionLegsCompileTheConfigHeadReader(t *testing.T) {
 	repository := openThisCheckout(t)
