@@ -40,6 +40,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -308,7 +309,8 @@ func (self *ApprovalWorldState) AdminClauseMet(memberIds []sidecar.Id) bool {
 }
 
 // The approval family's log as the world keeps it: requests the router filed, by approval, in order; decisions and
-// cancels a test delivered; and the approval_use entries filed.
+// cancels a test delivered; and the approval_use entries filed. Each is one commit, as one push of the log is at evs,
+// which moves the log's push sequence on and calls each commit listener (a FakeApprovalPhone's hints) with it.
 type ApprovalWorldLog struct {
 	stateLock   sync.Mutex
 	approvalIds []sidecar.Id
@@ -316,26 +318,71 @@ type ApprovalWorldLog struct {
 	decisions   map[sidecar.Id]*sidecar.StoredApprovalDecision
 	cancels     map[sidecar.Id][]byte
 	useCount    int
+	// commits so far, and who hears each
+	pushSequence    uint64
+	commitListeners map[int]func(sequence uint64)
+	nextListener    int
 }
 
 var _ sidecar.ApprovalLog = (*ApprovalWorldLog)(nil)
 
 func newApprovalWorldLog() *ApprovalWorldLog {
 	return &ApprovalWorldLog{
-		requests:  map[sidecar.Id]*sidecar.StoredApprovalRequest{},
-		decisions: map[sidecar.Id]*sidecar.StoredApprovalDecision{},
-		cancels:   map[sidecar.Id][]byte{},
+		requests:        map[sidecar.Id]*sidecar.StoredApprovalRequest{},
+		decisions:       map[sidecar.Id]*sidecar.StoredApprovalDecision{},
+		cancels:         map[sidecar.Id][]byte{},
+		commitListeners: map[int]func(sequence uint64){},
 	}
 }
 
-func (self *ApprovalWorldLog) FileRequest(request *sidecar.StoredApprovalRequest) (*sidecar.RecordEntryRef, error) {
+// Applies change under the log's lock as one commit, its push sequence one more, then calls each commit listener with
+// that sequence, in the order added, with no lock held.
+func (self *ApprovalWorldLog) commit(change func()) {
+	sequence, listeners := func() (uint64, []func(sequence uint64)) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		change()
+		self.pushSequence += 1
+		listeners := []func(sequence uint64){}
+		for _, listenerId := range slices.Sorted(maps.Keys(self.commitListeners)) {
+			listeners = append(listeners, self.commitListeners[listenerId])
+		}
+		return self.pushSequence, listeners
+	}()
+	for _, listener := range listeners {
+		listener(sequence)
+	}
+}
+
+// Calls listener with the log's push sequence after each commit, with no lock held, until the answer removes it.
+func (self *ApprovalWorldLog) AddCommitListener(listener func(sequence uint64)) func() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	approvalId := request.ApprovalId()
-	if _, ok := self.requests[approvalId]; !ok {
-		self.approvalIds = append(self.approvalIds, approvalId)
+	self.nextListener += 1
+	listenerId := self.nextListener
+	self.commitListeners[listenerId] = listener
+	return func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		delete(self.commitListeners, listenerId)
 	}
-	self.requests[approvalId] = request
+}
+
+// The log's push sequence: one a commit, 0 before any.
+func (self *ApprovalWorldLog) PushSequence() uint64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.pushSequence
+}
+
+func (self *ApprovalWorldLog) FileRequest(request *sidecar.StoredApprovalRequest) (*sidecar.RecordEntryRef, error) {
+	self.commit(func() {
+		approvalId := request.ApprovalId()
+		if _, ok := self.requests[approvalId]; !ok {
+			self.approvalIds = append(self.approvalIds, approvalId)
+		}
+		self.requests[approvalId] = request
+	})
 	return &sidecar.RecordEntryRef{LogId: sidecar.NewId(), EntryId: sidecar.NewId()}, nil
 }
 
@@ -361,9 +408,9 @@ func (self *ApprovalWorldLog) Cancel(ctx context.Context, approvalId sidecar.Id)
 }
 
 func (self *ApprovalWorldLog) FileUse(use *protocol.ApprovalUseBody, runId *sidecar.Id, actionId []byte) (*sidecar.RecordEntryRef, error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.useCount += 1
+	self.commit(func() {
+		self.useCount += 1
+	})
 	return &sidecar.RecordEntryRef{LogId: sidecar.NewId(), EntryId: sidecar.NewId()}, nil
 }
 
@@ -610,6 +657,11 @@ func (self *ApprovalWorld) Log() *ApprovalWorldLog {
 	return self.log
 }
 
+// The log's repo id, as another device's approver side and a phone's lease name it: the member's vault.
+func (self *ApprovalWorld) LogId() sidecar.Id {
+	return NewApprovalWorldIdOf("log " + self.name)
+}
+
 // Moves P to P' at the next version, its chain new and the last one's kept, as the authorization log's next position
 // does: with dropApprover the member is no longer eligible and its phone no longer approval-capable (FS-29), else
 // nothing else changes.
@@ -720,11 +772,9 @@ func (self *ApprovalWorld) Deliver(ctx context.Context, approvalId sidecar.Id, d
 	if err != nil {
 		return err
 	}
-	func() {
-		self.log.stateLock.Lock()
-		defer self.log.stateLock.Unlock()
+	self.log.commit(func() {
 		self.log.decisions[approvalId] = parsed
-	}()
+	})
 	return self.Gate().Inbox().Poll(ctx)
 }
 
@@ -771,11 +821,9 @@ func (self *ApprovalWorld) Cancel(ctx context.Context, approvalId sidecar.Id) er
 	if err != nil {
 		return err
 	}
-	func() {
-		self.log.stateLock.Lock()
-		defer self.log.stateLock.Unlock()
+	self.log.commit(func() {
 		self.log.cancels[approvalId] = cancel
-	}()
+	})
 	return self.Gate().Inbox().Poll(ctx)
 }
 
