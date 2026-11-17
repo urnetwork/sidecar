@@ -954,6 +954,39 @@ INDEX = list(_P9['INDEX']) + [
      "makes."),
     (536, 'Report limit in Redis',
      "`POST /abuse/report` counts 30 an hour per keyed address hash in Redis, which api-14 lists."),
+    # §22's and §23's fold (2026-11-16): the build's answers on testing, verification and phasing.
+    (537, "T3's Redis attestation",
+     "server/test-env.sh's portable mode attests each master of T3's Redis Cluster by address."),
+    (538, 'The PROXY differential',
+     "§22.6's PROXY differential runs against a reader written from haproxy's specification."),
+    (539, 'The nightly runner',
+     "A launchd job on a host the owner names runs `sidecar/test.sh --cadence nightly`."),
+    (540, 'Git-mode rekeys',
+     "A rekey of a git-mode ref is a git-mode push with no commit that keeps the tip."),
+    (541, "The soak's orphan count",
+     "The soak counts orphan objects by orphan GC's own dry count, deleting nothing."),
+    (542, 'Nonces unhooked',
+     "The MLS subset stops handing its AEAD nonces to `testHookSecret`."),
+    (543, "FI-9's oracle",
+     "FI-9's oracle keeps its own git parse, which a go-git differential in mlsinterop checks."),
+    (544, 'The restarted-host schedule',
+     "FS-114's restarted host runs on one process outside the settle rules; a held-commit drive test follows."),
+    (545, 'Late requests by the margin',
+     "blobsuite's late-request cases send a deadline late by the clock rule's margin, 200 ms by default."),
+    (546, 'Pebble replacements',
+     "The test leg takes a Pebble that finds its own certificates for replacement, else the harness works around it."),
+    (547, "FS-99's push refusal",
+     "FS-99's push-route refusal comes at step 5c, as §11.12 says; arrival refusals bind the slot routes."),
+    (548, 'Gate sweeps in evshost',
+     "The gate sweeps name FS-5's and FS-73's T3 tests where they run, in server's evshost."),
+    (549, 'Armed timers',
+     "A test that advances a fake clock past a timer armed after a step first waits for that timer."),
+    (550, 'The segment placement',
+     "The segment placement is a tracked item with a 26-week lead time, its design Q-OPS-11's residual."),
+    (551, 'The density rule',
+     "§23.8's density rule names the duplication kept on purpose, and test lists move into §22."),
+    (552, 'The settings sweep',
+     "Drafted code's constant limits move into settings objects in the review phase, area by area."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -990,7 +1023,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 537))
+assert [r[0] for r in INDEX] == list(range(1, 553))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1068,7 +1101,10 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               519: '2026-11-15', 520: '2026-11-15', 521: '2026-11-15', 522: '2026-11-15', 523: '2026-11-15',
               524: '2026-11-15', 525: '2026-11-06', 526: '2026-11-06', 527: '2026-11-06', 528: '2026-11-06',
               529: '2026-11-06', 530: '2026-11-06', 531: '2026-11-06', 532: '2026-11-15', 533: '2026-11-06',
-              534: '2026-11-06', 535: '2026-11-15', 536: '2026-11-15'})
+              534: '2026-11-06', 535: '2026-11-15', 536: '2026-11-15', 537: '2026-11-06', 538: '2026-11-06',
+              539: '2026-11-06', 540: '2026-11-10', 541: '2026-11-11', 542: '2026-11-12', 543: '2026-11-15',
+              544: '2026-11-15', 545: '2026-11-15', 546: '2026-11-15', 547: '2026-11-16', 548: '2026-11-16',
+              549: '2026-11-16', 550: '2026-11-06', 551: '2026-11-06', 552: '2026-11-11'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1307,7 +1343,12 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "safety and legal process: urgent report clocks (525), deletions under a hold (526), hold scope (527), strike "
     "counts (528), what holds reach (529), notice intake (530), suspension effects (531), the abuse staff route "
     "(532), role mail refused (533), names in review (534), sealed abuse records (535) and the report limit in "
-    "Redis (536). ")
+    "Redis (536). The fold of §22's and §23's the same day numbers the answers on testing, verification and "
+    "phasing: T3's Redis attestation (537), the PROXY differential (538), the nightly runner (539), git-mode "
+    "rekeys (540), the soak's orphan count (541), nonces unhooked (542), FI-9's oracle (543), the restarted-host "
+    "schedule (544), late requests by the margin (545), Pebble replacements (546), FS-99's push refusal (547), "
+    "gate sweeps in evshost (548), armed timers (549), the segment placement (550), which decides Q-OPS-11, the "
+    "density rule (551) and the settings sweep (552). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
@@ -1331,3 +1372,9 @@ _PI_OLD = ("Decided items leave two engineering residuals: Q-SDK-1's size spike,
 assert PEER_INTRO.count(_PI_OLD) == 1, 'PEER_INTRO moved'
 PEER_INTRO = PEER_INTRO.replace(_PI_OLD, "Decided items leave one engineering residual: Q-SDK-1's size spike, which decides C17 "
                                 "(Q-REPO-2). ")
+# Owner decision 550 (§23's fold, 2026-11-16) decides Q-OPS-11 and leaves the segment placement's design to engineering.
+_PI_ONE = "Decided items leave one engineering residual: Q-SDK-1's size spike, which decides C17 (Q-REPO-2). "
+assert PEER_INTRO.count(_PI_ONE) == 1, 'PEER_INTRO moved'
+PEER_INTRO = PEER_INTRO.replace(_PI_ONE, "Decided items leave two engineering residuals: Q-SDK-1's size spike, which "
+                                "decides C17 (Q-REPO-2), and Q-OPS-11's segment placement design, due within 8 weeks "
+                                "of M3's exit (§23.7). ")

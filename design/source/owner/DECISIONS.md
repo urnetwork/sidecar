@@ -3373,6 +3373,122 @@ The design-records track for §21, §22 and §23 folded the answers below on 202
     - Not taken: (2) the in-process count, a caller's limit N times the setting.
     - Raised by the build (ABUSE-M5-11; the build's ledger, QD-895).
 
+## The build's owner questions on testing, verification and phasing (2026-11-06 to 2026-11-16)
+
+The design-records track for §21, §22 and §23 folded the answers below on 2026-11-16, each citing its ledger id: the owner-class items the owner accepted in bulk on 2026-11-06, the answers it decided one at a time from 2026-11-10 to 2026-11-15, and the recommendations of 2026-11-16 that the owner's instruction of that day accepted. A decision that groups several answers carries its latest answer's date. The sections' other items, the defect fixes the owner accepted on 2026-11-06 (§22's QD-200, QD-210 and QD-264, §23's QD-247) and the build's readings, fills and settled items, went into §22, §23 and the sections they name as text with no number.
+
+537. **T3 attests each master of its private Redis Cluster by address (option 1, the recommendation, 2026-11-06).**
+    - Question: §22.4 and Q-TEST-2 put T3 on a 3-master Redis Cluster, never one node, and §22.8's real rule needs server's real client, yet server/test-env.sh's preflight attested one Redis endpoint, so a MOVED to a second master was refused, and editing the file that protects production data needed the owner's word.
+    - Answer: server/test-env.sh's portable mode takes a list of Redis authorities. Each must be loopback on a port above 50000, pass `test_env_refuse_loopback_tunnel_endpoint` and the probe, and be attested by address in `WARP_TEST_ENV_ATTESTED_ADDRS`, which has room for 8. test_env_dial_guard.go stays as strict, no other mode changes, and the list stays private to the sidecar stack (§22.4).
+    - Cost: an edit to the file that protects production data.
+    - Not taken: (2) T3 on one Redis node, relying on the CROSSSLOT lints, against Q-TEST-2; (3) T3's engines through sidecartest's local-stack client, so T3 no longer runs server's real Redis path.
+    - Raised by the build (the TEST plan; the build's ledger, QD-028).
+
+538. **§22.6's PROXY differential runs against a reader written from haproxy's specification (option 1, the recommendation, 2026-11-06).**
+    - Question: §22.6 had pires/go-proxyproto agree with mailgun/proxyproto, which carries no license, so §4.7's refusal of unlicensed modules, which check/ applies to every leg, test legs included, kept the bullet from being built as written; and server's connect links that module in production, outside §4.7's reach.
+    - Answer: §22.6's PROXY bullet names a second reader written from haproxy's proxy-protocol.txt, which is what landed, agreement running both ways; a one-off comparison against mailgun's parser, outside every repository, found it takes every header tlsedge takes, with the same address, port and length, and much that pires refuses. Separately the owner decides what to do about server/connect/transport_pp.go, which links the unlicensed module in production: a request to mailgun for a license, or a replacement, an owner's step outside this design. §4.7 is unchanged (§22.6).
+    - Cost: no standing check against the parser server's connect runs, which tlsedge does not run.
+    - Not taken: (2) the mailgun leg in server, a fuzz target outside sidecar waiting for server to require it; (3) admitting mailgun by exception, a §4.7 and check/ change putting an unlicensed module in a public repository's go.mod; (4) asking mailgun for a license first, an unknown wait.
+    - Raised by the build (TLS-M5-07; the build's ledger, QD-135).
+
+539. **The nightly form runs as one launchd job on a host the owner names (option 1, the recommendation, 2026-11-06).**
+    - Question: §22.8's cadence runs T3 rows nightly, but there is no CI and no nightly job (§4.3), RUN-ALL runs under a suite lock agents may not take, and the build's only merge point is its landing tool.
+    - Answer: a launchd job runs `sidecar/test.sh --cadence nightly` on a host the owner names, with T3's private stores on that host. During the build each gate sweep runs that form. It never takes tests/network-intensive-suite-lock.sh (§22.15, §22.8).
+    - Cost: one host and one job; a race only T3 shows surfaces up to a day late.
+    - Not taken: (2) T3's FS rows on every merge, hours a merge at 100 seeds; (3) no nightly, T3 rows only at gate sweeps, so a T3 regression surfaces a milestone late.
+    - Raised by the build (the TEST plan; the build's ledger, QD-239).
+
+540. **A rekey of a git-mode ref is a git-mode push with no commit that keeps the tip (option 1, the recommendation, 2026-11-10).**
+    - Question: `ur evs rekey` re-checkpoints a repo's files under the current generation, but a git-mode ref takes writes only as git pushes through the local tier, so the job skipped git-mode refs and §22.7's row held for file-mode refs alone.
+    - Answer: a rekey of a git-mode ref is a git-mode push with no commit, DESIGN-DETAILS.md 8.2's REKEY shape: it keeps the tip, and its changes only re-checkpoint files under the current generation, each new entry's sealed mode, oid and name equal to the standing one's. Any writer's device can send it, a head-mode one included. The rekey job's git-mode skip goes, after which §22.7's row holds for git-mode refs too; DESIGN-DETAILS.md section 8 stands as written (§22.7).
+    - Cost: a rule in the git-mode push checks, and the readers' and export's handling of a push that seals no commit.
+    - Not taken: (2) a rekey through the local tier's mount, re-pushing the tree with every blob forced to a checkpoint, which a head-mode device, a phone or a page Worker cannot do and which needs option 1's shape underneath; (3) no rekey of git-mode refs, so a removed reader keeps opening their untouched files until someone changes them.
+    - Raised by the build (KEYS-M2-26; the build's ledger, QD-634).
+
+541. **The soak counts orphan objects by orphan GC's own dry count (option 1, the recommendation, 2026-11-11).**
+    - Question: §22.8's soak checks that orphan objects return to baseline, but evsservice had no count that deletes nothing, and orphan GC's definition lives in its own code.
+    - Answer: evsservice/gc_orphans.go gains a dry form, `OrphanGc.CountRepo(ctx, repo *OrphanGcRepo) (*OrphanGcResult, error)`, which runs steps 0 to 4 and step 5's selection, issues no DELETE and reports `CandidateCount` and the count of those no pidx/ entry introduces, sharing orphan GC's one definition. The soak counts orphans through it per repo over the nightly pass's listings and compares what GC would judge orphan, past the horizon, at the baseline and at the end; until it lands the orphan signal reads open (§22.8's soak row).
+    - Cost: about forty lines in the data lane's file.
+    - Not taken: (2) counting the nightly pass's deletes, which measures what GC reclaimed, not what stands, and reads nothing in a soak under 49 h; (3) dropping the orphan signal until §22.8's full run exists.
+    - Raised by the build (TEST-M2-03; the build's ledger, QD-677).
+
+542. **The MLS subset stops handing its AEAD nonces to `testHookSecret` (option 1, the recommendation, 2026-11-12).**
+    - Question: `mls_*` passed its 12-byte AEAD nonces to `testHookSecret`, and the privacy capture refuses a secret under 16 bytes as a finding, since it cannot search one reliably, so S3a and S4a failed on values that are no keys.
+    - Answer: the subset's label expansion takes a hook flag, false for the three nonce derivations RFC 9420 makes (the ratchet nonce, the sender-data nonce and the Welcome nonce), and every secret a nonce is derived from stays hooked. The capture's rule stands: a secret under 16 bytes is refused as a finding, so no test passes on a value it could not search for. §22.4's "at every key creation, derivation and unwrap" reads keys, which a nonce is not (§22.4).
+    - Cost: a small change in the MLS files.
+    - Not taken: (2) the capture searching a 12- to 15-byte secret in its raw and hex forms alone, its base64 and base32 forms unsearched; (3) both.
+    - Raised by the build (TEST-M2-11; the build's ledger, QD-755).
+
+543. **FI-9's oracle keeps its own parse of git's object format, and go-git checks it from mlsinterop (option 1, the recommendation, 2026-11-15).**
+    - Question: FI-9's oracle read exports with a parse of its own, while go-git, the reader the plan named, is linked only by mlsinterop.
+    - Answer: FI-9's oracle keeps its own parse of git's object format in sidecartest/fault, independent of ur's evs_git_* and export code, as FI-9's trap asks, and a differential test in the nested mlsinterop module, where §4.4 already places go-git, holds the oracle's reading of exports and of stock git repositories equal to go-git's. No new root dependency; mlsinterop imports the fault package and carries its requires (§22.6).
+    - Cost: one test file in mlsinterop and the fault package's requires in its go.mod.
+    - Not taken: (2) moving the parse to go-git on the root module's test leg, a shared dependency change for every importer of the fault package; (3) the own parse alone, checked only against git's documented format and hand-written objects.
+    - Raised by the build (TEST-M2-06; the build's ledger, QD-861).
+
+544. **FS-114's restarted-host schedule stays on one process outside the settle rules, and a drive-level test with a held commit follows in the review phase (option 1 now, option 3 later, the recommendation, 2026-11-15).**
+    - Question: the schedule held a commit in the old process of a one-process cluster, but owner decision 504 refuses to start a one-process cluster under the settle rules, so that shape cannot run under them in any build.
+    - Answer: FS-114's restarted-host schedule stays as built on one process outside the settle rules: the new process is refused every drive while the old one lives and serves them once it exits. Owner decision 504's refusal gets no way around it in any build. In the review phase, the minio fork's cmd tests gain a drive-level test with a real held commit: a helper process holds a rename past its check and is killed while a second process opens the drive, showing a commit past its check dying with its process while a successor waits, the flock being per drive and per process (§22.8's FS-114).
+    - Cost: until the review phase the held commit and the restart are shown only apart.
+    - Not taken: (2) a settle_testhooks build starting one process under the settle rules on a test variable, a way around owner decision 504's refusal in the build T3 runs.
+    - Raised by the build (the minio fork's settle track; the build's ledger, QD-891).
+
+545. **blobsuite's late-request cases send a deadline late by the clock rule's margin (option 1, the recommendation, 2026-11-15).**
+    - Question: blobsuite's two late-request cases sent `x-ur-deadline-ms` 1 ms late by the caller's clock, which a store host's clock, within §19.6's bound, may not yet have passed.
+    - Answer: blobsuite's `Settle` gains `LateBy`, 200 ms by default, twice the 100 ms a settler waits past a deadline under §19.6's clock rule, which server's T3 suite passes through, and the two late-request cases send `x-ur-deadline-ms` as `Settle.Now()` minus `LateBy`. The rule under test is that a request late by the store's clock is refused, and a caller can know it is late only by the margin the clock rule gives; a store that takes a request 200 ms late still fails the case (§22.9's file-cluster suite, FS-114).
+    - Cost: one settings field and the two cases.
+    - Not taken: (2) keeping 1 ms with T3's suite reading the store's clock over NTP, a published port and an offset carried through the suite; (3) rerunning a failed case, so a real late take and a clock's noise read the same.
+    - Raised by the build (the minio fork's settle track; the build's ledger, QD-892).
+
+546. **The test leg moves to a Pebble release that finds its own certificates for replacement, or else the workaround moves into sidecartest's Pebble harness (option 3, else option 2, the recommendation, 2026-11-15).**
+    - Question: Pebble v2.10.1 cannot replace about 1 in 255 of its own certificates, filing and looking up an issued certificate's order by two forms of its serial, and certs' tests worked around it by taking a certificate it can replace.
+    - Answer: a track fetches github.com/letsencrypt/pebble/v2 v2.10.3 through the module proxy and reads its replacement-order check and its order lookup by issued serial: if they file and look up by one form of the serial, the test leg moves to v2.10.3, with its dependencies.yml row and the go.mod and go.sum of the modules that require it, and certsservice's test-side step goes. If no listed release fixes it, the workaround moves into sidecartest's Pebble harness, a method that issues a replaceable leaf or says whether it can replace one, so tlsedgeservice's, the local stack's and T3's tests share it. Reporting the bug upstream stays the owner's outward step (§22.9's ACME row).
+    - Cost: a fetch and a dependency row, or a harness method.
+    - Not taken: (1) the test-side step as landed, each later Pebble user having to know it; (4) a patched Pebble fork, against patching fetched modules. (5), the upstream report, stays the owner's to make beside either.
+    - Raised by the build (the certs ARI track; the build's ledger, QD-903).
+
+547. **FS-99's refusal on the push route comes at step 5c, as §11.12 says (option 1, the recommendation, 2026-11-16).**
+    - Question: FS-99's row had a caller below admin refused "before any slot GET" on every route, while §11.12's directory row and I-EVS-16 refuse an ERASE, CUT or CLOSURE sent to `POST .../push` at step 5c, after step 4 may GET the slots it names.
+    - Answer: §11.12's directory row and I-EVS-16 stand: a caller below admin that sends an ERASE, CUT or CLOSURE to `POST .../push` is refused 403 SCOPE at step 5c, before any commit or slot rewrite, every slot's ETag unchanged, though step 4 may first GET the slots it names; those reads are bounded by the refusal fence, at most one recorded refusal a second a ref, and their bytes never reach the caller. FS-99's row is reworded to match: its "before any slot GET" binds `POST .../slots/delete` and a `?closure=1` upload, which refuse a caller below admin at arrival. No engine or test changes: FS-99's evs clause already holds the push route that way (§22.8's FS-99).
+    - Cost: a caller below admin can still make evs read the slots it names.
+    - Not taken: (2) evs refusing such a statement before step 4 from the token's rights and the statement's flags alone, a change to the push path and an open question of whether that refusal is recorded.
+    - Raised by the build (RECORD-M6-24; the build's ledger, QD-985).
+
+548. **The gate sweeps name FS-5's and FS-73's T3 tests where they run, in server's evshost (option 1, the recommendation, 2026-11-16).**
+    - Question: FS-5's and FS-73's T3 tests drive stock git and git-lfs through evsgit's world, which needs a testing.TB, so neither is a registered fault builder, and they run in server's evshost package, not in sidecart3, where the convention looks.
+    - Answer: the gate sweeps name those tests where they run, as M1's sweep names FS-54's: M2's exit sweep names TestFs5OnT3 and M10's names TestFs73OnT3, each as {repo: server, package: ./evshost, tags: 'sidecar_testhooks,sidecar_pending,sidecar_localstack', stores: true}, and FS-72's rollback case, TestFs72RollbackOnT3, which also runs in ./evshost, takes the same entry at M10. No test moves, and gates.yml is regenerated. A gate keeps reading a row missing until a sweep names its test, so nothing passes early (§22.8, §22.9, §23.8).
+    - Cost: three sweep entries.
+    - Not taken: (2) moving both tests into server's sidecart3 package, a cross-area move; (3) making evsgit's world buildable from a fault.Net, a rework of the shared git world, whose rows would still need stock git and git-lfs on the host.
+    - Raised by the build (EVS2-M10-09; the build's ledger, QD-995).
+
+549. **A test that advances a fake clock past a timer the code arms after a step first waits for that timer to be armed (option 1, the recommendation, 2026-11-16).**
+    - Question: TestTlsFrontKeepsItsRegistrationsListsInStep raced: the TLS front sends an update and then arms its next margin's timer, and an advance between the two left no timer to fire.
+    - Answer: the test waits for the front's update loop to arm its margin timer before it advances the fake clock: the test clock counts its live timers and the test waits until one is due at the margin, as the receipt loop's clock tests wait for theirs. Production code is unchanged, since a real clock only delays the margin's update by the send's duration. Every test in that file that advances after an update takes the same wait, and §22.8's determinism rule states it for every fake-clock test (§22.8).
+    - Cost: a timer-count helper on the test clock and a wait before each advance after an update.
+    - Not taken: (2) arming the timer before the send, a production change for a test's race, which still races a test that advances before reading the update.
+    - Raised by the build (the ACL atoms track; the build's ledger, QD-1002).
+
+550. **The segment placement is a tracked item with a 26-week lead time, its design held by Q-OPS-11 (option 1, the recommendation, 2026-11-06).**
+    - Question: §19.9 and D-OPS-17 say the segment placement and added HDD capacity land before year two's load, but §11.22 and §19.18 left them under Later, §23.4 omitted them and §23.7 gave neither due nor start, so no lead time could exist for undesigned work with no milestone.
+    - Answer: a tracked item now, as the next metadata cluster has: §23.7 gives it (due: before the projected crossing; start: M3's exit, when the hdd run first gives an admitted throughput) and a lead time of 26 weeks, monitor's setting `hdd_trigger_lead_days` = 182. A new Q-OPS item, Q-OPS-11, holds the placement's design, due within 8 weeks of M3's exit; §23.4's Later list and §19.18 name it, and the rota owns the page (§23.7, §23.4, §19.14, §19.18, §11.22, Q-OPS-2's residual).
+    - Cost: design time and HDD spend committed about two quarters ahead of a crossing that may come soon after M3.
+    - Not taken: (2) deciding at M3's exit on the measured rate, which by the model fires and commits the schedule early; (3) operators' judgment, the first hard signal staying refused uploads.
+    - Raised by the build (the G0 re-check of §19.9's hdd trigger; the build's ledger, QD-132).
+
+551. **§23.8's density rule names the duplication the design keeps on purpose, and test lists move into §22 (option 2, the recommendation, 2026-11-06).**
+    - Question: §23.8's "no content duplicated across sections" failed on the design as written: 4.1% of its words near-duplicate another section, some on purpose (§2.8's published list, §3.7's flows, Requirements rows), some harmfully (Interfaces subsections carrying test lists that repeat §22's rows) and some by accident (one rule stated in many places).
+    - Answer: §23.8's clause reads "no content duplicated across sections (each item in its owning section, cited elsewhere), except §2.8's published list, §3.7's flows and Requirements rows". design-records moves the test lists out of the Interfaces subsections into §22 first, §7.17's, §9.15's, §11.20's and §17.16's, and turns accidental restatements into citations, before M2's Gn-in (§23.8, §22, §7.17, §9.15, §11.20, §17.16).
+    - Cost: an edit pass, starting with the most dangerous copies.
+    - Not taken: (1) the rule as written with all duplication removed, a large edit across nearly every section before M2 freezes text; (3) the rule and the text left alone, every re-check reporting the same failure.
+    - Raised by the build (the G0 density review; the build's ledger, QD-274).
+
+552. **The sweep that moves drafted code's constant tunables into settings objects runs in the review phase (option 1, the recommendation, 2026-11-11).**
+    - Question: owner decision 297 puts every limit in a settings object, and on 2026-11-11 a scan found about 801 constants in 351 sidecar files that no remaining task names.
+    - Answer: the sweep that moves the drafted code's constant tunables and limits into settings objects runs in the review phase, area by area as the review reads each area, not during the draft phase. Until then new code follows owner decision 297 and every track moves the constants in the files it touches; the remaining constants stay in drafted code, and the review phase also sweeps the build's code in server, connect and sdk (§6's bounds, §23.8).
+    - Cost: drafted code keeps constants until its area's review.
+    - Not taken: (2) sweep tracks beside features now, 25 to 80 lane-hours before the draft surface is done; (3) a sweep before features, pausing them about a day in four lanes.
+    - Raised by the orchestrator (the build's ledger, QD-706).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

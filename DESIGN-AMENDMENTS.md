@@ -21,8 +21,8 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
 | [§16 The local MCP server and record primitives](#s16) | 6 | 2 |
 | [§19 Server services](#s19) | 0 | 1 |
-| [§22 Testing and verification](#s22) | 7 | 15 |
-| [§23 Phasing, milestones, and rollout](#s23) | 3 | 2 |
+| [§22 Testing and verification](#s22) | 1 | 0 |
+| [§23 Phasing, milestones, and rollout](#s23) | 2 | 0 |
 | [No section named](#s0) | 2 | 0 |
 
 ## DESIGN-DETAILS.md sections to fold
@@ -318,33 +318,6 @@ Not folded (2026-11-16): the ledger's section 5 entry naming Q-OPS-3's residual 
 <a id="s22"></a>
 ## §22 Testing and verification
 
-### QD-028: May `server/test-env.sh` attest all three masters of T3's private Redis Cluster?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Extend portable mode to take a list of Redis authorities. Each must be loopback on a port above 50000, pass `test_env_refuse_loopback_tunnel_endpoint` and the probe, and be attested by address in `WARP_TEST_ENV_ATTESTED_ADDRS`, which has room for 8. test_env_dial_guard.go stays as strict, and no other mode changes. The list stays private to the sidecar stack.
-
-Changes: server/test-env.sh; the brief's guard limit.
-
-Questions: `plan-TEST-t3-redis-attestation.md`.
-
-### QD-135: §22.6 names mailgun/proxyproto, which has no license and which §4.7 refuses, and server links it in production
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §4.*
-
-Recommended: change §22.6's PROXY bullet to name a second reader written from haproxy's proxy-protocol.txt, which is what landed, and record the one-off comparison in `.stack/scratch/tls-hello/proxydiff/`. Separately the owner decides what to do about `server/connect/transport_pp.go`, which links the unlicensed module in production: one email asking mailgun for a license, or a replacement.
-
-Changes: §22.6; §4.7 under option 3.
-
-Questions: `tls-hello-mailgun-proxyproto-license.md`.
-
-### QD-200: §22.8's hdd run measures what one offered load achieved, not capacity
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-§22.8's hdd row gains a capacity step before the mix. At year two's 1:4 PUT to GET ratio, drop the page cache on every host before each step and read no object twice within a step; offer load in 10-minute steps, each 25% above the last, until achieved drive operations rise under 5% from the step before. Capacity is that plateau, by the same /sys/block stat fields 1 and 5, and it is what §19.6 publishes, with p99 at the plateau recorded. The 1 h runs at year one's and year two's mix with admission on follow unchanged.
-
-Changes: §22.8 hdd row; §19.6 hdd row.
-
-Questions: `g0-recheck-0-hdd-trigger.md#2`.
-
 ### QD-210: "Once C3 is tested" names no test
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23, §6, §20.*
 
@@ -354,161 +327,10 @@ Changes: §22.8; §23.6.
 
 Questions: `plan-PROTO-p2p-milestone.md#2`.
 
-### QD-239: What runs the nightly form, with no CI and no nightly job?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-A launchd job running `sidecar/test.sh --cadence nightly` on a host the owner names, with T3's private stores on that host. During this build each gate sweep runs that form. It never takes `tests/network-intensive-suite-lock.sh`.
-
-Changes: §22.15.
-
-Questions: `plan-TEST-cadence-runner.md#2`.
-
-### QD-264: How does a T3 row move time on stores that keep real time?
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-T3 keeps each row whole and translates time in one reviewed file, server/sidecart3/clock.go. The Blobs wrapper records each key's write on the schedule's clock and returns it as `LastModified`. `Advance` shortens Redis TTLs by `PEXPIRE` over the families a row names. api takes the clock through a test seam beside `DenyPostgresForTest`. A clause that depends on Postgres `now()` or a script's Redis `TIME` after an `Advance` runs on T2 only, since neither can be moved. The catalog's `store-clock` flag marks every translated clause, gate reports say so, and FS-114 and §22.9's file-cluster suite never use the wrapper. §22.8's `real` rule gains that sentence.
-
-Changes: §22.8; D-TEST-10.
-
-Questions: `plan-TEST-clock-seam.md#2`.
-
-### QD-634: How does `ur evs rekey` re-checkpoint the files of a git-mode ref, which takes writes only as git pushes through the local tier?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A rekey of a git-mode ref is a git-mode push with no commit, the REKEY shape of DESIGN-DETAILS 8.2: it keeps the tip, and its changes only re-checkpoint files under the current generation, each new entry's sealed mode, oid and name equal to the standing one's. Any writer's device can send it, a head-mode one included. EVS1-M2-48 builds the push rules and removes gkm_rekey.go's git-mode skip, after which §22.7's row holds for git-mode refs too.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-48 builds it and removes the skip.
-
-Questions: `keys-m2-26-rekey-git-mode-refs.md`.
-
-### QD-303: Porcupine stays out of the sidecar module
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The import sits in server's tests, and `sidecartest/fault` keeps a plain recorded history. EVS1-M2-42's `dependencies.yml` row is not needed.
-
-Questions: `plan-TEST-small-readings.md#2`.
-
-### QD-311: A statement's id sits at field 2, behind its header
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-StatementHeader stays field 1 and ids follow at field 2. §22.6's target reads 'with equal bodies': both statements carry one header and one id, so the whole bodies match and only the type refuses them, as TestGrantRevokePresentedAsOwnerConfirmIsRefused does.
-
-Changes: §22.6.
-
-Questions: `protos-bridge-statement-field-one.md`.
-
-### QD-338: `evs's gate off`
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §4.*
-
-The engine's gate-off seam and `Net.SetEvsGate` exist only under build tag `sidecar_testhooks`, so release builds carry neither the setting nor a config key, and §4.7's hygiene row fails a release leg that links the tag. §22 picks up the name.
-
-Changes: §22.7.
-
-Questions: `plan-TEST-small-readings.md#9`.
-
-### QD-340: Forging clauses inside T2+T3 rows
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Those clauses of FS-38, FS-102 and FS-124 run on T2, their honest clauses and twins on T3, and the catalog flags each.
-
-Questions: `plan-TEST-small-readings.md#6`.
-
-### QD-342: §22.10's ladder row omits wrap_aad, which §10.4's ladder row requires
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §10.*
-
-The artifact's ladder row reproduces KeyDelivery's wrap_aad as well as GenWrap's, LeafWrap's and GenLink's AAD, as §10.4 says. KEYS-M2-11 already plans it; design-records aligns §22.10's row.
-
-Changes: §22.10 ladder row, wording only.
-
-Questions: `g0-recheck-0-readerkey-forgery.md#3`.
-
-### QD-346: §22.7's actions row omits evs_drop_preview on a secret repo
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §16.*
-
-§16.5 and §16.6 refuse every evs tool on kind secret, so §22.7's actions row covers all of them: add evs_drop_preview on a secret repo and on the config. The case lands with MCP-M10-01, when the tool exists.
-
-Changes: §22.7.
-
-Questions: `g0-recheck-2-mcp-config-read-scope.md#2`.
-
-### QD-347: A row's purpose
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A row's purpose is its `why`, and a withdrawn row's single `withdrawn` key passes.
-
-Questions: `plan-TEST-small-readings.md#4`.
-
-### QD-363: Schedules live in non-test files
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A row on T2 and T3 is one exported `fault.Builder` in a non-test file. Other plans' `sidecartest/fault/fsN_test.go` names hold only the thin T2 test.
-
-Questions: `plan-TEST-small-readings.md#1`.
-
-### QD-372: §22.9 and FS-97 drop D-TEAM-29's "at least one"
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-D-TEAM-29's "at least one" holds: a Worker no group of the admitting device seated is never revoked in that act. Add the words at 22-TEST.md:2603 and at FS-97 (22-TEST.md:2065), which the question missed, and assert the empty case.
-
-Changes: §22.9; FS-97.
-
-Questions: `g0-density-text-alignments.md#6`.
-
-### QD-374: Does D-TEST-1 mean T3's schedules gate every merge?
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-T1, T2, T4 and T3's store suites gate merges. T3's FS rows run nightly and at each Gn-out, and the explorer takes 10 seeds a merge on T2 rows and 100 a night on T3 rows.
-
-Questions: `plan-TEST-cadence-runner.md#1`.
-
-### QD-423: A `+T4` row
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-It is T4's when the SDK cell exists. Until M8 its T2 and T3 parts gate, and the gate report shows T4 as open.
-
-Questions: `plan-TEST-small-readings.md#10`.
-
-### QD-424: `ur tun ip auto` waits for its §22 evidence
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`auto` refuses behind `BridgeComponentSettings.AutoAddressEnabled`, false, until §22.9's Browsers check shows no ICE candidate in the overlay block. An explicit `<ip>` and an admin's assignment work.
-
-Questions: `plan-BRIDGE-small-readings.md#18`.
-
-### QD-536: `metadata_list.yml` location
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §2.*
-
-At the sidecar repo root, generated byte for byte from §2.8's fenced block by `make metadata`. A row changes only through design-records.
-
-Changes: §22.7.
-
-Questions: `plan-TEST-small-readings.md#3`.
-
-### QD-587: Classify is in-repo, not bart
-*Settled by the agents from the design; work builds on it.*
-
-Build an in-repo table in `device/`: prefixes flattened at build time into sorted disjoint ranges with a binary search, held to §22.5's ≤50 ns at 1,000 prefixes.
-
-Questions: `plan-BRIDGE-small-readings.md#1`.
-
-### QD-594: D-TEST-5's synthetic main network
-*Settled by the agents from the design; work builds on it.*
-
-No task builds it: it is Later.
-
-Questions: `plan-TEST-small-readings.md#8`.
+Not folded (2026-11-16): FS-126's row in §22.8 and its entry in §23.6's M6 schedules, which wait for sidecartest/fault's catalog to take FS-126 in the same commit (catalog.yml, catalogRowCount, and catalog_test.go's cases that hold FS-126 as no such row), since TestCatalogMatchesSection22 and TestCatalogMatchesGateMap hold the table and the gate map to the catalog row for row and gate for gate (question `dr2-s21-s23-fault-catalog-rows.md`). The schedule itself is folded into §22.5's §6 row, which D-PROTO-10 cites as §22's P2P schedule; sidecartest/p2p_test.go runs it on T2.
 
 <a id="s23"></a>
 ## §23 Phasing, milestones, and rollout
-
-### QD-132: When does the segment placement get a design and a home, and what is its lead time?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19, §11.*
-
-Recommended: open a tracked item now, as the next metadata cluster has. §23.7 gives it (due: before the projected crossing; start: M3's exit, when the hdd run first gives an admitted throughput) and a lead time of 26 weeks, monitor's setting hdd_trigger_lead_days = 182. A new Q-OPS item holds the placement's design, due within 8 weeks of M3's exit, §23.4's Later list and §19.18 name it, and the rota owns the page.
-
-Changes: §23.7; §23.4 Later list; §19.18; §11.22; Q-OPS-2 residual.
-
-Questions: `g0-recheck-0-hdd-trigger.md#3`.
 
 ### QD-247: FS-25's gate legs are due at M3-out, but the table, the route and the only gated effect arrive at M5
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22, §16, §19, §7.*
@@ -519,6 +341,8 @@ Changes: §23.6 M3; §22.8 FS-25; §22.8 real; §16.18 M4-M9.
 
 Questions: `plan-MCP-fs25-gate-before-dns.md`.
 
+Not folded (2026-11-16): FS-25's M5-out case, its gate legs run again through `POST /dns/records`, in §22.8's gate column and §23.6's M5 schedules, which waits for sidecartest/fault's catalog to take that case in the same commit, as FS-126's row does (question `dr2-s21-s23-fault-catalog-rows.md`). The rest is folded: §16.18's M4-M9 row, §22.8's real rule and FS-25's M3-out legs, and §23.6's M3 row.
+
 ### QD-274: Keep §23.8's no-duplication clause as written, or name the duplication the design keeps on purpose
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22, §7, §9, §11, §17, §2, §3.*
 
@@ -528,21 +352,7 @@ Changes: §23.8; §22; §7.17; §9.15; §11.20; §17.16.
 
 Questions: `g0-density-rule-direction.md`.
 
-### QD-401: Which milestone owns gen packs
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §19, §22.*
-
-[g0-recheck-2-gen-pack-trigger#2] Gen packs are not in this build and have no task or FS row. Add "gen packs at §19.9's gen trigger" to §23.4's Later paragraph. If §22.8's M2 count projects the trigger inside a year, raise that at M2's exit. [plan-coverage-section-later-rows] Every section's Later row stays out of M0-M10, recorded in OUT-OF-SCOPE.md, C7 and gen packs included. A section's Later uses the word as §23.4 does, and §23.16 makes work after M9 and M10 §23.4's Later.
-
-Changes: §23.4.
-
-Questions: `g0-recheck-2-gen-pack-trigger.md#2`, `plan-coverage-section-later-rows.md`.
-
-### QD-482: Enums that give names to values fields already carry as uint32
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Keep EvsPushFlag, EvsLocatorKind, EvsVersioning, EvsWindowFlag, SmtpPreambleCode and SmtpProofCode as landed. Their fields stay uint32 on the wire, they add no number, and D-PHASE-9's lint reads them.
-
-Questions: `protos-services-unwritten-numbers.md#6`.
+Not folded (2026-11-16): turning the design's accidental restatements into citations (the stored-bytes rule in §11.13 and §20.7, the Delegation key-drop triggers stated in about twelve places, and the like), an editorial pass across most sections that no item names line by line, due before M2's Gn-in. The rest is folded as owner decision 551: §23.8's clause, and the four Interfaces test lists (§7.17's, §9.15's, §11.20's and §17.16's), which §22 already held and which now cite it.
 
 <a id="s0"></a>
 ## No section named
@@ -588,33 +398,6 @@ Questions: `plan-BRIDGE-share-pins.md`.
 Waits on: bridge.proto's share messages (BRIDGE-M6-03 to -05), the fence line landing in one change with them, as protocol's fence test holds the two together.
 
 Not folded (2026-11-16): the ```proto fence for BridgeShareGrant in §17.9. bridge.proto now declares it with fields 1 to 9 (QD-670's 6 to 9 among them), but its declaration, with the share seal's bodies and `BridgeShareAccept`, is held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do. The fields are folded as text, with their numbers, in §17.9's share pins block (owner decision 475), and §17.9's fence comment says what joins it.
-
-### QD-677: How should the soak count orphan objects by orphan GC's own definition, when evsservice has no count that deletes nothing?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §22 Testing and verification.*
-
-EVSB adds a dry form to evsservice/gc_orphans.go: OrphanGc.CountRepo(ctx, repo *OrphanGcRepo) (*OrphanGcResult, error) runs steps 0 to 4 and step 5's selection, issues no DELETE, and reports CandidateCount and the count of those no pidx/ entry introduces, sharing orphan GC's one definition. The soak (server/local/sidecar-soak) implements its orphanCounter through it per repo over the nightly pass's listings and compares what GC would judge orphan, past the horizon, at the baseline and at the end. Until it lands the orphan signal reads open, as built. A data-lane follow-up of about forty lines.
-
-Changes: data-lane follow-up: OrphanGc.CountRepo in evsservice/gc_orphans.go; server/local/sidecar-soak's orphanCounter wired to it.
-
-Questions: `test-m2-03-soak-orphan-count.md`.
-
-### QD-706: When does the sweep that moves the drafted code's constant tunables into settings objects (QD-702) run?
-*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §23 Phasing, milestones, and rollout.*
-
-The sweep that moves the drafted code's constant tunables and limits into settings objects (QD-702) runs in the review phase, area by area as the review reads each area, not during the draft phase. Until then new code follows QD-702 and every track moves the constants in the files it touches (BRIEF.md); the remaining constants stay in drafted code. The 2026-11-11 scan (.stack/scratch/settings-sweep-scan-2026-11-11.json) lists about 801 constants in 351 sidecar files that no remaining task names; the review phase also sweeps the run's code in server, connect and sdk.
-
-Changes: review phase: one settings sweep per area, from the 2026-11-11 scan.
-
-Questions: `owner-settings-sweep-timing.md`.
-
-### QD-755: MLS hands its 12-byte AEAD nonces to testHookSecret, which the privacy capture refuses as findings: should mls_* stop hooking nonces, or should the capture search a 12-byte secret?
-*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §22 Testing and verification.*
-
-The MLS subset stops passing its 12-byte AEAD nonces to testHookSecret: mlsCipherSuite.expandWithLabel (mls_ciphersuite.go) takes a hook flag, false for the three nonce derivations RFC 9420 makes (ratchet_nonce in mls_secrettree.go, sender_data_nonce in mls_secrettree.go, welcome_nonce in mls_keyschedule.go), and every secret a nonce is derived from stays hooked. The privacy capture's rule stands: a secret under 16 bytes is refused as a finding, so no test passes on a value it could not search for (TEST-M1-05). §22.4's 'at every key creation, derivation and unwrap' reads keys, which a nonce is not.
-
-Changes: the MLS subset's nonce derivations unhooked (mls_ciphersuite.go, mls_secrettree.go, mls_keyschedule.go); TEST-M2-11's S3a and S4a run whole under sidecar_testhooks.
-
-Questions: `test-m2-11-mls-nonce-hooks.md`.
 
 ### QD-779: Should a run card's version be the index epoch above the stream version of its run's newest entry, in place of the highest seq folded?
 *Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*

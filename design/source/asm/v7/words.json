@@ -47,20 +47,20 @@
  {
   "num": 6,
   "code": "PROTO",
-  "words": 9335,
+  "words": 9377,
   "code_words": 5153,
   "ceiling": 3800,
-  "over": 5535,
-  "over_pct": 145.7
+  "over": 5577,
+  "over_pct": 146.8
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 12449,
+  "words": 12148,
   "code_words": 12914,
   "ceiling": 3500,
-  "over": 8949,
-  "over_pct": 255.7
+  "over": 8648,
+  "over_pct": 247.1
  },
  {
   "num": 8,
@@ -74,11 +74,11 @@
  {
   "num": 9,
   "code": "SOCK",
-  "words": 5329,
+  "words": 5247,
   "code_words": 1628,
   "ceiling": 3000,
-  "over": 2329,
-  "over_pct": 77.6
+  "over": 2247,
+  "over_pct": 74.9
  },
  {
   "num": 10,
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 22902,
+  "words": 21687,
   "code_words": 48670,
   "ceiling": 5000,
-  "over": 17902,
-  "over_pct": 358.0
+  "over": 16687,
+  "over_pct": 333.7
  },
  {
   "num": 12,
@@ -137,20 +137,20 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 14874,
+  "words": 14899,
   "code_words": 19224,
   "ceiling": 3500,
-  "over": 11374,
-  "over_pct": 325.0
+  "over": 11399,
+  "over_pct": 325.7
  },
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 9143,
+  "words": 9033,
   "code_words": 4977,
   "ceiling": 3800,
-  "over": 5343,
-  "over_pct": 140.6
+  "over": 5233,
+  "over_pct": 137.7
  },
  {
   "num": 18,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 9621,
-  "code_words": 10664,
+  "words": 9802,
+  "code_words": 10666,
   "ceiling": 3500,
-  "over": 6121,
-  "over_pct": 174.9
+  "over": 6302,
+  "over_pct": 180.1
  },
  {
   "num": 20,
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7357,
-  "code_words": 36401,
+  "words": 7665,
+  "code_words": 37154,
   "ceiling": 2500,
-  "over": 4857,
-  "over_pct": 194.3
+  "over": 5165,
+  "over_pct": 206.6
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7229,
-  "code_words": 1137,
+  "words": 7488,
+  "code_words": 1160,
   "ceiling": 2500,
-  "over": 4729,
-  "over_pct": 189.2
+  "over": 4988,
+  "over_pct": 199.5
  }
 ]

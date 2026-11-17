@@ -43,8 +43,13 @@ func (self *Net) SetLink(a connect.Id, b connect.Id, link *LinkConditions) // lo
 func (self *Net) Capture() *PrivacyCapture
 
 // empty without build tag sidecar_testhooks, and make check fails a release leg that links it
-func testHookSecret(kind string, secret []byte) // at every key creation, derivation and unwrap
+func testHookSecret(kind string, secret []byte) // at every key creation, derivation and unwrap; never an AEAD
+	// nonce, which follows from a hooked secret and is too short for the capture to search (owner decision 542)
 func testHookBarrier(name string, key string)   // at each named protocol step (22.8's schedules)
+
+// only under build tag sidecar_testhooks, so a release build carries neither the seam nor a config key, and §4.7's
+// hygiene row fails a release leg that links the tag: evs's gate off, for 22.7's revocation suite (D-TEST-6)
+func (self *Net) SetEvsGate(on bool) error
 
 // sidecartest, from M10: the search oracle (D-TEST-14), written apart from the index; it decrypts each repo's
 // newest committed versions and scans their text under the index's published normalization tables, sharing no
@@ -63,7 +68,9 @@ local     a Redis Cluster of 3 masters and no replicas, production's shape, on R
 T3 and    the same Redis Cluster; MinIO as 4 nodes x 2 drives at EC:4 (a metadata cluster) and 4 nodes x 4 drives at
 release   EC:8 (the segment cluster), so host loss, QuorumLoss and DriveMiss run for real (FS-1, FS-40), and a second
           metadata cluster of 4 nodes x 2 drives too, since a cluster in settle mode has at least 4 hosts (FS-63;
-          owner decision 504)
+          owner decision 504); server/test-env.sh's portable mode attests each of the 3 masters by address, each
+          on loopback above port 50000, past its tunnel refusal and probe, in WARP_TEST_ENV_ATTESTED_ADDRS (room
+          for 8), its dial guard as strict and the list private to the sidecar stack (owner decision 537)
 lint      CROSSSLOT: every multi-key command and Lua script in sidecar engines and server's sidecar code runs once
           against keys spread over the 3 masters and fails on CROSSSLOT, and a static check refuses a multi-key call
           whose keys lack one shared hash tag: each key of the call carries the tag, so a bare key beside a
@@ -91,7 +98,10 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       empty in v0) lossy streams; PEER_TIMEOUT; nothing before a verified Hello; ControlId push dropped over p2p, kept
       over h1; team hints to acl_enforcing device clients; long-poll hints within 25 s, the 200 body round-tripping; a
       complete=false reset followed by a dropped tail applies nothing until versions are refetched; receive allocs;
-      witnesses: FS-17, FS-21; C19's remote-search windows: FS-125
+      witnesses: FS-17, FS-21; C19's remote-search windows: FS-125; the P2P schedule D-PROTO-10 waits on, at
+      M6-out with C3 on and EnablePeerP2p set: a forged ControlId frame over P2P dropped, a same-network pair moving
+      from relay to P2P and back under a live RPC and stream, its session key unchanged, Hello and HeadCheck holding
+      across each move, and bytes on P2P debiting nothing (§20.6)
 §7    (config-repo replay) 403 for marked tokens on §7.4's 37 routes, for unmarked device tokens on stage 2's six,
       and for a strict_exp bearer on each payment route; strict_exp only on sidecar-held tokens
       (owner decision 131), an expired one refused by api, the exchange and connect's transport auth with
@@ -222,14 +232,14 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
 ### 22.6 Fuzzing
 
 - **Envelope, chunks, every `sidecar/protocol` body:** the decoded message is `proto.Equal` to `proto.Unmarshal`'s, and its encoding equals `proto.MarshalOptions{Deterministic: true}`'s and decodes back equal; seeds hold reordered, repeated, unknown, packed and unpacked fields and non-minimal varints; signatures verify over the received bytes, never a re-marshal.
-- **Typed `Signed` statements:** every registered type pair is refused as another type, a `GrantRevoke{grant_id}` presented as `OwnerConfirm{sidecar_id}` with equal field-1 bytes included.
+- **Typed `Signed` statements:** every registered type pair is refused as another type, a `GrantRevoke{grant_id}` presented as `OwnerConfirm{sidecar_id}` with equal bodies included: each carries its `StatementHeader` at field 1 and its id at field 2, so the whole bodies match and only the type refuses it.
 - **`record.proto` headers:** a v1 reader verifies one with an unknown field and kind; re-encoding changes nothing a verifier checks; two writers' entries in one push order deterministically.
 - **Stream, push and config-delta state machines:** nothing past `max_offset`; bounded memory; converge or resync.
 - **tlsedge ClientHello, split across records:** SNI and ALPN equal `crypto/tls`'s.
-- **PROXY v1 and v2:** pires/go-proxyproto agrees with mailgun/proxyproto.
+- **PROXY v1 and v2:** pires/go-proxyproto agrees, both ways, with a second reader written from haproxy's proxy-protocol.txt; mailgun/proxyproto, which carries no license, is linked by no sidecar module (§4.7), a one-off comparison having found that it takes every header tlsedge takes, with the same address, port and length, and much that pires refuses (owner decision 538).
 - **SMTP at mxedge (pre-TLS), smtpedge (MX replies) and receivers:** §15.4 holds; nothing forwarded before STARTTLS's 220.
 - **go-message, mox, ARF, RUA, TLS-RPT, DSN:** bounded expansion; no enclosed ARF body decoded.
-- **Git pkt-line, pack, delta; head-mode codec:** equals go-git.
+- **Git pkt-line, pack, delta; head-mode codec:** equals go-git. FI-9's oracle parses git's object format itself, apart from ur's `evs_git_*` and export code, and a differential test in the nested mlsinterop module, where §4.4 places go-git, holds its reading of exports and of stock repositories equal to go-git's (owner decision 543).
 - **`EvsPush`, `EvsPushPart`, a DROP's `EvsDropHistory` and its lists, batch records, window entries, upload receipts, index entries, name tables, path maps, segments:** tampering fails before plaintext or adoption.
 - **MLS messages, Welcome, GroupInfo, tree, `GkmCommitHeader`:** `mls_*` agrees with thomas-vilte/mls-go (0x0001) and tmc/mls (0x004F as 0x0010).
 - **DNS feed, synthesis, validator; `dnssec_chain`:** no non-public or refused record; broken chains refused.
@@ -280,18 +290,20 @@ CC4 logs, metrics, edge records, report parse output, Find calls, dns edge queri
     devices' logs, metrics, traces, crash reports and state directories
 scan CC1-CC4 (raw, hex, base64/32, QP, percent, UTF-16, decompressed)
   for canaries and every testHookSecret key  =>  zero hits
-declared values pass only if metadata_list.yml, generated from §2.8 and parsed by a strict
-  YAML parser whose every parse error fails the build, names them; the guard carries v8's
-  rows, connect-5, evs-26, evs-27 and evs-28 included
+declared values pass only if metadata_list.yml, at the repository's root, generated from
+  §2.8's block by make metadata and parsed by a strict YAML parser whose every parse error
+  fails the build, names them; the guard carries v8's rows, connect-5, evs-26, evs-27 and
+  evs-28 included
 schema guard (I-18): every server-visible column (helo_name, network_client_lease and
   mail_connection_record included), Redis key family ({evsq_} {evsl_} {evsh_} {gka_} {evsd_}
   {nvb_} {dpop_} {tcb_} {acl_}e among them), object key family (place/ repo/ head/ log/ pb/
   hp/ idx/ slot/ pmap/ pidx/ spidx/ hold/ seg/ pack/ proj/ projrows/ rev/ gkm/ drops/
   dropscan/) and proto field maps to a list row and back, format 2's included (each
   version's versioning setting, kind-5 and staged locators, window bits 4 and 5, the DROP
-  flag and drop_sha256, purge times), and a row without a purpose or a TTL fails; a proto
-  field is one reachable from a message a service engine or a server decodes, the walk
-  stopping at bytes the design seals; testdata/metadata/fields.yml and each area's
+  flag and drop_sha256, purge times), and a row without a purpose, its why, or a TTL fails,
+  a withdrawn row's single withdrawn key passing; a proto field is one reachable from a
+  message a service engine or a server decodes, the walk stopping at bytes the design
+  seals; testdata/metadata/fields.yml and each area's
   metadata_rows.yml map each to its row, and "and back" holds for a row once its owning
   milestone has landed, a row ahead of it carrying planned: Mn there, never in
   metadata_list.yml, which stays §2.8's block byte for byte, but for the additions an owner's
@@ -546,8 +558,9 @@ presence   each profile refuses a wrong key or another key's attestation, a repl
 actions    an admin sidecar's agent calling any evs tool, or reading or subscribing to ur://evs, on the config
            repo, which evs_repos alone names, and ur acl push from a non-terminal caller, are refused, while
            team_members, team_agents, acl_grants and acl_check answer; on a secret repo holding a fixture ACME
-           account key, evs_repos omits it and evs_list, evs_history, evs_read, evs_write, evs_delete and
-           ur://evs reads and subscriptions are refused, CC4 finding no testHookSecret key in any of these
+           account key, evs_repos omits it and evs_list, evs_history, evs_read, evs_write, evs_delete, from
+           M10 evs_drop_preview, refused on the config repo too, and ur://evs reads and subscriptions are
+           refused, CC4 finding no testHookSecret key in any of these
            results; every MCP evs tool and ur://evs read and subscription on the search index's files (.ur-index/
            on file-mode refs, the ur/index ref) is refused, evs_list naming them only when asked, as is every one
            on the team directory (§16.5, §16.6, D-MCP-17); deciding a directory_request (its RepoGrant, EvsShare
@@ -581,7 +594,8 @@ X loses access by member remove, SCIM active=false, device revoke (an admin's, o
   member's through §5.6's RevokeDevice as lost or compromise, FS-98), read loss, a grant's
   expiry, suspension or ephemeral reap, keeping its local state and raw store access, as a
   malicious server allows
-writers seal nothing to an epoch or generation X holds, even with evs's gate off (§8.12)
+writers seal nothing to an epoch or generation X holds, even with evs's gate off (Net.SetEvsGate,
+  22.4; §8.12)
 once the projection drops X, or X's grant expires, heads and deposits whose generation does
   not cover it get 412 GATE_CLOSED, and receivers 451, until a generation covering it is
   claimed (§7.9, §10.5), gkm down or not (D-KEYS-6), a writer paused between its checks and
@@ -603,7 +617,9 @@ after members write at generation g+1:
     readable (FS-4); after other drops and expiries, a path epoch is due within 24 h, or, while
     two sources stand, once one drops (§11.6)
   each file's first write is a full checkpoint (owner decision 64), and after ur evs rekey
-    every file of the repo opens only under the current generation
+    every file of the repo opens only under the current generation, git-mode refs included,
+    whose rekey is a git-mode push with no commit that keeps the tip and only re-checkpoints
+    files, each new entry's sealed mode, oid and name the standing one's (owner decision 540)
   X's sockets, publishes, forwards, DKIM selector and certificate end; a removed member's
     tagged agents keep their tags' grants, and autogroup:sponsor resolves to autogroup:admin
     until an admin's SponsorSet (owner decision 83)
@@ -636,7 +652,7 @@ a server withholding the Remove from writers it lets reach its holders, directly
 - **push, config:** 10,000 networks save a config head in 1 min; 2× §19.6's Y2 hint rate, leases, push sequence and the head and projection caches included, at ≤ 50% Redis CPU per master; §8.9.
 - **escrow:** §20.9's benchmark and FS-46 at M6's entry on M4's dark build (§23.4); the benchmark again at its exit.
 - **smtpedge:** Team quota on many networks; halts ≤ 60 s, no overrun.
-- **soak:** 72 h at 30%; heap, goroutines, Redis keys and orphan objects back to baseline.
+- **soak:** 72 h at 30%; heap, goroutines, Redis keys and orphan objects back to baseline, orphans counted as orphan GC itself judges them, past the horizon, by evsservice's dry `OrphanGc.CountRepo` over the nightly pass's listings, which deletes nothing, the signal reading open until it lands (owner decision 541).
 
 ```text
 storage benchmark (M2's exit on the staging cluster, the production hosts' PM9A3 set, rebuilt empty and
@@ -663,11 +679,14 @@ hosts    on the production clusters before M3's pilot: with a second host down (
          writes get 503 until the cold spare returns a host within §19.6's RTO, out of hours too
          (owner decisions 116, 143); a write that misses a drive while a host is out, then a second host: as §19.6
          states (FS-40); heal throughput and times recorded
-hdd      on the production segment cluster before it holds data (M3): small PUTs and GETs at year two's mix (~400 and
-         ~1,600 a second, §19.6) for 1 h, recording achieved drive operations a second, by the HDDs' /sys/block reads
-         and writes completed (stat fields 1 and 5), the counters from which §19.6 publishes each segment cluster's
-         capacity, with p99 and the page-cache hit rate; that capacity is what §11.13's HDD admission and the drop
-         job's 50% pause read, beside Q-OPS-2's packing switch; then 1 h each at year one's mix and at year two's with
+hdd      on the production segment cluster before it holds data (M3): first a capacity step at year two's 1:4 PUT to
+         GET ratio of small objects (~400 and ~1,600 a second, §19.6), the page cache dropped on every host before
+         each step and no object read twice within one, offering load in 10-minute steps, each 25% above the last,
+         until achieved drive operations rise under 5% from the step before: that plateau, by the HDDs' /sys/block
+         reads and writes completed (stat fields 1 and 5), is the capacity §19.6 publishes for each segment cluster,
+         with p99 at the plateau and the page-cache hit rate recorded; that capacity is what §11.13's HDD admission
+         and the drop job's 50% pause read, beside Q-OPS-2's packing switch; then 1 h each at year one's mix and at
+         year two's with
          §11.13's HDD admission on at 50% of that capacity, reporting admitted PUTs and GETs a second, the foreground
          refusal rate and p99: year one's mix admits every upload, and the highest year-two PUT rate admitted with
          refusals under 0.1% is §19.9's hdd trigger's admitted throughput, neither a higher line nor refused uploads
@@ -779,10 +798,22 @@ unknown     ApplyThenDrop applies a write and shows the caller a transport error
 determinism fake clocks and barriers only, no sleeps; a schedule waiting over 10 s of real time for a barrier fails
             with its trace; WARP_TEST_ENV_FAIL_FAST=1, so a failed attempt fails the run (R-TEST-9); the clock
             is §4.5's Clock, which ServiceHost.Clock and SidecarSettings.Clock carry into the engines and the
-            core, nil meaning real time, and make check refuses a wall-clock call outside it (§4.7)
+            core, nil meaning real time, and make check refuses a wall-clock call outside it (§4.7); a test that
+            advances the fake clock past a timer the code arms after a step first waits until the clock holds
+            that timer, since an advance between the step and the arming leaves nothing to fire (owner decision
+            549)
 twins       every refusal schedule has a twin that must succeed, so a disabled feature fails
 real        T3 runs each T3 row through server's real handlers and stores (api, evs, gkm, the token exchange,
-            Postgres, the 3-master Redis Cluster, D-OPS-20's MinIO build), never fixtures that pre-authorize
+            Postgres, the 3-master Redis Cluster, D-OPS-20's MinIO build), never fixtures that pre-authorize; the
+            one exception is FS-25's gate legs before M5, whose route and only gated effect arrive with §12: at
+            M3-out they run on real Postgres through model.ConsumeApprovalUseInTx with a test effect in the gate's
+            own transaction, the spend check and the claim running as in production, so the effect pre-authorizes
+            nothing; T3 keeps each row whole and moves time in one reviewed file, server/sidecart3/clock.go: its
+            Blobs wrapper records each key's write on the schedule's clock and returns it as LastModified, Advance
+            shortens by PEXPIRE the Redis TTLs of the families a row names, and api takes the clock through a test
+            seam beside DenyPostgresForTest; a clause that depends on Postgres now() or a script's Redis TIME after
+            an Advance runs on T2 alone, since neither moves; the catalog's store_clock flag marks each translated
+            clause, gate reports say so, and FS-114 and 22.9's file-cluster suite never use the wrapper
 explorer    each schedule also runs with seeded random barrier orders: 10 seeds a merge for T2 rows, 100 a night for
             T3 rows; a failing seed becomes a fixed schedule
 model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlaplus) keeps head (its fence, refusal
@@ -841,12 +872,20 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             checks FI-30 with PUTs and DELETEs mixed, breadth-first at 4 drives on 2 hosts and at 6 on 3 with 2 and
             3 writes, a coordinator crash and a host failure, and by simulation at 8 drives with 3 writes and 2
             coordinators, and that every held key is released once its stalled commits answer (weak fairness)
-history     Porcupine (https://github.com/anishathalye/porcupine) checks T3 histories per ref with §11.8's commit
-            rule; an unknown outcome has an open end time and matches any result
+history     Porcupine (https://github.com/anishathalye/porcupine), in server's tests, checks T3 histories per ref
+            with §11.8's commit rule, sidecartest/fault keeping a plain recorded history, so the sidecar module
+            takes no Porcupine dependency; an unknown outcome has an open end time and matches any result
 cadence     each FS runs on the tiers its row names: T2 rows on each merge, T3 rows nightly and at each Gn-out; a row
             using sidecartest's fake contract issuer or ControlId sink names T3 too, a divergence failing (Q-TEST-1),
             and a row in which the server forges, withholds or forks state names only T2, its success twin running on
-            T3; model and history checks run at each Gn-out of a milestone that changes a modelled object
+            T3, as do the forging clauses of a T2+T3 row (FS-38, FS-102, FS-124), their honest clauses and twins
+            running on T3 and the catalog flagging each; a +T4 row's T4 part is T4's once the SDK cell exists, its
+            T2 and T3 parts gating until M8 while the gate report shows T4 open; model and history checks run at
+            each Gn-out of a milestone that changes a modelled object
+builders    a row on T2 and T3 is one exported fault.Builder in a non-test file, which server's T3 suite runs, a
+            row's fsN_test.go holding only the thin T2 test; a T3 test that drives stock git and git-lfs through
+            evsgit's world, which needs a testing.TB, runs in server's evshost rather than sidecart3 (FS-5's,
+            FS-73's and FS-72's rollback case), and each gate's sweep names it there (owner decision 548)
 ```
 
 ```text
@@ -1293,10 +1332,14 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target
-FS-25  §16    two callers barriered on uses = 1; kills after the reservation, after the outbox FI-2,7      T2+T3  M3-out
-              commit and before completion; a retry through a new MCP session; a gate's
-              response lost after COMMIT; two api instances racing; uses = 2, cancellation and
-              expiry on a fake clock
+FS-25  §16    two callers barriered on uses = 1; kills after the reservation, after the        FI-2,7      T2+T3  M3-out
+              outbox commit and before completion; a retry through a new MCP session; a
+              gate's response lost after COMMIT; two api instances racing; uses = 2,
+              cancellation and expiry on a fake clock; at M3-out on T3, a gate's lost
+              response and the two racing api instances run on real Postgres through
+              model.ConsumeApprovalUseInTx with a test effect in the gate's transaction
+              (22.8's real rule), and the cancellation through the real POST /approval/cancel
+              with §7.4's allowlist on
 FS-26  §16    two runs and a hand edit interleaved, hooks firing around B's edits: restoring   FI-8        T2     M3-out
               A leaves B and the hand edit intact, or names the ambiguity; a hand edit of a
               path that A then edits in one scan interval, under each harness's edit hook:
@@ -2172,30 +2215,32 @@ FS-97  §7,18  stale page Workers (D-TEAM-29) on a fake clock: a member's page W
               re-enrolled weekly for a year, each evicted Worker's leaves removed as stale                        Team at
               about 90 days on (§10.9); with self_admit on, each admission's signer revokes,                      M6-out
               as removed, every Worker that §10.9 removed as stale from every group it is a
-              leaf of that seated it and lists the rest with their last change, so the
-              member's admitted Workers stop growing after 13 weeks; in a Team with self_admit
-              off, an admin's device admits each Worker and in that act revokes only the
-              Workers it saw so removed from every group it is a leaf of that seated them,
-              revoking and listing no live one; Workers ranked past the config and directory
-              groups' first 1,000, which read both by wraps and no repo that device reads,
-              stay until the member's consented device, at its OwnerConfirm or its answer to
-              the admission alarm, revokes those its own groups saw removed and offers the
-              others; that device offline for 60 days: their admissions stand until its next
-              answer frees them; a member with only page Workers, in a Team past 1,000 member
-              devices with self_admit off: Workers no admin's group seated stay, one admission
-              per eviction, until at 90% of config_admissions every admin device raises
-              admissions_near_cap, listing each member's page Workers but its newest, oldest
-              first, and an admin's revoke frees them before any admission meets the cap; a
-              Worker that resynced by KF5 or was re-added by KF2 after its stale Remove is
-              never revoked; an AdminSet member's stale Workers at k = 2 go only by proposals
-              of their own beside the admission's, which its cosigner also cosigns, and one
-              whose cosign never comes expires at its not_after, the next admission proposing
-              it again; a kill between an admission and its revocations: the restart re-checks
-              and posts the same statements, one entry each; a Worker that resyncs after its
-              admitting device last fetched the group, during a retry, or before a k = 2
-              proposal's cosign is not revoked; a Remove of a leaf whose credential shows a
-              change inside the window, from a dishonest writer leaf, is refused by a member
-              one day old, which judges it from the tree alone (§10.9)
+              leaf of that seated it, at least one, and no other, a Worker no group of the
+              signer's device seated never being revoked in that act, and lists the rest with
+              their last change, so the member's admitted Workers stop growing after 13
+              weeks; in a Team with self_admit off, an admin's device admits each Worker and
+              in that act revokes only the Workers it saw so removed from every group it is a
+              leaf of that seated them, revoking and listing no live one; Workers ranked past
+              the config and directory groups' first 1,000, which read both by wraps and no
+              repo that device reads, stay until the member's consented device, at its
+              OwnerConfirm or its answer to the admission alarm, revokes those its own groups
+              saw removed and offers the others; that device offline for 60 days: their
+              admissions stand until its next answer frees them; a member with only page
+              Workers, in a Team past 1,000 member devices with self_admit off: Workers no
+              admin's group seated stay, one admission per eviction, until at 90% of
+              config_admissions every admin device raises admissions_near_cap, listing each
+              member's page Workers but its newest, oldest first, and an admin's revoke frees
+              them before any admission meets the cap; a Worker that resynced by KF5 or was
+              re-added by KF2 after its stale Remove is never revoked; an AdminSet member's
+              stale Workers at k = 2 go only by proposals of their own beside the
+              admission's, which its cosigner also cosigns, and one whose cosign never comes
+              expires at its not_after, the next admission proposing it again; a kill between
+              an admission and its revocations: the restart re-checks and posts the same
+              statements, one entry each; a Worker that resyncs after its admitting device
+              last fetched the group, during a retry, or before a k = 2 proposal's cosign is
+              not revoked; a Remove of a leaf whose credential shows a change inside the
+              window, from a dishonest writer leaf, is refused by a member one day old, which
+              judges it from the tree alone (§10.9)
 FS-98  §5,18  a member revokes another of its own devices (D-CORE-20) in a personal network    I-4,15,FI-2 T2+T3  M3-out;
               and a Team with self_admit on and off, from a phone app with a presence signer,              +T4    Team at
               a remote-mode desktop app signing the first call's bytes, and ur devices revoke                     M6-out;
@@ -2234,28 +2279,29 @@ FS-98  §5,18  a member revokes another of its own devices (D-CORE-20) in a pers
 FS-99  §16,11 directory erasure authority (meta review F01): writers A and B with entries      FI-25       T2+T3  M6-out
        ,7,8   (requests, decisions, coordination and, at M6, announce entries; from M10 cards                     (entries);
               and index files), no mirror, and an ordinary agent X with rw that caches no key                     later of
-              or plaintext of theirs beyond its reads; X's ERASE naming A's entry slots, a                        M6-out and
-              CLOSURE rewriting index files, a ?closure=1 upload and a POST .../slots/delete                      M10-out
-              each get 403 before any slot GET, PUT or rewrite, every slot's ETag unchanged,                      (cards)
-              as does a list mixing a slot X's own push introduced with one of A's; again
-              under a preservation hold, from a device parked for consent under an ordinary
-              member and under an AdminSet member, whose exchange mints rw and no admin, and
-              from a read_only sidecar; positives: a directory admin's ERASE of A's entry
-              destroys its keys, under the hold too; repo owner R revokes repo P with no
-              directory admin daemon running: the marker hides P's name from every honest
-              reader at once, nothing is erased, R's device, ur directory revoke and ur status
-              show erasure pending with its age, and at 24 h directory_erasure raises on the
-              admins' devices; an admin's daemon then starts and erases exactly the copies
-              naming P (its announce entries and its runs', from M10 the cards' old versions
-              and index documents by CLOSURE), each ERASE naming the request; a request by a
-              non-admin of P, or after P is announced again, erases nothing and alarms; in
-              one repo, revoke P (request 1), announce P again (request 1 lapses) and revoke
-              P again (request 2): the runner's next pass works request 2 alone, its ERASEs
-              naming request 2, and the second revocation reads complete, request 1 staying
-              lapsed (owner decision 472); the runner killed between its CLOSURE and its
-              ERASE, and two runners racing: one
-              ERASE commits and the other skips; a fresh member device with an empty cache
-              then opens every historical entry of A and B that names no P
+              or plaintext of theirs beyond its reads; X's ?closure=1 upload and POST                             M6-out and
+              .../slots/delete each get 403 at arrival, before any slot GET, PUT or rewrite,                      M10-out
+              and X's ERASE naming A's entry slots and CLOSURE rewriting index files get 403                      (cards)
+              SCOPE on POST .../push at step 5c, before any commit or slot rewrite, as does a
+              list mixing a slot X's own push introduced with one of A's, every slot's ETag
+              unchanged (owner decision 547); again under a preservation hold, from a device
+              parked for consent under an ordinary member and under an AdminSet member, whose
+              exchange mints rw and no admin, and from a read_only sidecar; positives: a
+              directory admin's ERASE of A's entry destroys its keys, under the hold too;
+              repo owner R revokes repo P with no directory admin daemon running: the marker
+              hides P's name from every honest reader at once, nothing is erased, R's device,
+              ur directory revoke and ur status show erasure pending with its age, and at
+              24 h directory_erasure raises on the admins' devices; an admin's daemon then
+              starts and erases exactly the copies naming P (its announce entries and its
+              runs', from M10 the cards' old versions and index documents by CLOSURE), each
+              ERASE naming the request; a request by a non-admin of P, or after P is
+              announced again, erases nothing and alarms; in one repo, revoke P (request 1),
+              announce P again (request 1 lapses) and revoke P again (request 2): the
+              runner's next pass works request 2 alone, its ERASEs naming request 2, and the
+              second revocation reads complete, request 1 staying lapsed (owner decision
+              472); the runner killed between its CLOSURE and its ERASE, and two runners
+              racing: one ERASE commits and the other skips; a fresh member device with an
+              empty cache then opens every historical entry of A and B that names no P
 FS-100 §16,18 directory decisions reach requesters (meta review F16): requester R a surrogate  FI-26       T2+T3  M6-out
               that leases only its own notice's path, with no directory view open, no indexer              +T4    (format 1);
               designated and no stream sync; approver A denies R's repo request: R gets                           M8-out
@@ -2484,33 +2530,38 @@ FS-113 §11,8  stable refusals (D-EVS-23) on identical clocks: attempt A of push
               record
 FS-114 §19,11 the store's settle rule (D-OPS-20) on T3's 4 × 2 EC:4 and 4 × 4 EC:8 sets, per   FI-30,1,2,6 T3     M2-out;
               build, upgrade and cluster: a head If-Match PUT's drive commits held at a                           purge and
-              barrier after their checks past the 30 s drive timeout, on one host and on                          drop cases
-              two; the request cancelled, and again with its coordinator killed and                               M10-out
-              restarted; a newer same-key PUT and a GET: with one host held they commit and
-              read at once, and once the held commits are released the newer acknowledged
-              head stays, read through every host and after a full heal; with two hosts
-              held they wait, then fail 503, until the held commits are released and the
-              settle reverts them, the old write never read; again for a marker DELETE
-              racing a fold's re-creation of the path, v1's kind-5 and slot purge DELETEs
-              and a drop job's DELETE; a request delayed in the network past its
-              x-ur-deadline-ms is refused, and a drive commit that would begin past it never
-              begins; a storage host's clock unsure: it takes no request with a deadline; a
-              drive host restarted mid-commit serves its drive only once the old process
-              has exited; heal never spreads a version under a read quorum; a head written
-              while a host was down, then a PUT to it short of its write quorum as a second
-              host stalls mid-commit: every drive that took the PUT reverted, that head read
-              throughout and after both hosts return and a full heal; two DELETEs of one key,
-              each with a commit held past its deadline, on one host and with a host then
-              down: the key is held until the held commits are released and reverted, and the
-              object reads throughout and after; a create whose last drive commit is held
-              before its check across an acknowledged DELETE of the key: released, it answers
-              stale, and the key reads 404 through every host and after a full heal; a DELETE
-              naming an older object's LastModified: 412, and the object stays (owner
-              decision 225); a drive host restarted between a write's read of it and its
-              commit: stale; a LIST with three drives of a set stopped, or one stopped while
-              another heals: 503, and with two stopped it lists every acknowledged key (owner
-              decision 226); twin: with no barrier every write releases at its write quorum
-              and no key is held
+              barrier after their checks past the 30 s drive timeout, on one host and on two;                     drop cases
+              the request cancelled, and again with its coordinator killed and restarted; a                       M10-out
+              newer same-key PUT and a GET: with one host held they commit and read at once,
+              and once the held commits are released the newer acknowledged head stays, read
+              through every host and after a full heal; with two hosts held they wait, then
+              fail 503, until the held commits are released and the settle reverts them, the
+              old write never read; again for a marker DELETE racing a fold's re-creation of
+              the path, v1's kind-5 and slot purge DELETEs and a drop job's DELETE; a request
+              delayed in the network past its x-ur-deadline-ms, by the clock rule's margin
+              (blobsuite's Settle.LateBy, 200 ms by default; owner decision 545), is refused,
+              and a drive commit that would begin past it never begins; a storage host's
+              clock unsure: it takes no request with a deadline; a drive host restarted
+              serves its drive only once the old process has exited, the new process refused
+              every drive while the old one lives, run on one process outside the settle
+              rules, which owner decision 504 keeps from a one-process cluster, a drive-level
+              test of a commit held past its check, its process killed while a second opens
+              the drive, following in the review phase (owner decision 544); heal never
+              spreads a version under a read quorum; a head written while a host was down,
+              then a PUT to it short of its write quorum as a second host stalls mid-commit:
+              every drive that took the PUT reverted, that head read throughout and after
+              both hosts return and a full heal; two DELETEs of one key, each with a commit
+              held past its deadline, on one host and with a host then down: the key is held
+              until the held commits are released and reverted, and the object reads
+              throughout and after; a create whose last drive commit is held before its check
+              across an acknowledged DELETE of the key: released, it answers stale, and the
+              key reads 404 through every host and after a full heal; a DELETE naming an
+              older object's LastModified: 412, and the object stays (owner decision 225); a
+              drive host restarted between a write's read of it and its commit: stale; a LIST
+              with three drives of a set stopped, or one stopped while another heals: 503,
+              and with two stopped it lists every acknowledged key (owner decision 226);
+              twin: with no barrier every write releases at its write quorum and no key is
+              held
 FS-115 §16    apply barriered after its stage, after its aside's hash check and after its      FI-8        T2     M3-out
               install; there a process taking no daemon lock writes distinct bytes to the
               path in place, saves them by a temporary file and rename, deletes it, or
@@ -2719,14 +2770,14 @@ Beyond the schedules:
 ### 22.9 Conformance and platform budgets
 
 - **git** (2.34, Ubuntu 22.04's, https://ubuntuupdates.org/package/core/jammy/main/base/git; 2.43, Ubuntu 24.04's and Claude Code cloud's; latest; Windows, Xcode; go-git, JGit, libgit2; OpenSSH): through the local tier, and `git-remote-ur` without a prior mount, oids equal a reference; stock non-fast-forward errors, sibling pushes from one base giving one; `git push --atomic` fails before any write; a two-ref push reports per-ref statuses; a daemon killed between the remote commit and update-ref reconciles from its journal; foreign new commits refused, signed imports accepted; a sha256 repository refused, naming it, before any evs write (owner decision 249).
-- **git-lfs** (3.x as Ubuntu 22.04 and 24.04 ship it, and the latest; `lfs.standalonetransferagent`; `GIT_LFS_SKIP_SMUDGE`): FS-73's flows with stock clients, pointer files byte-exact and export's oids equal to git's, its tip check included over http, ssh and `git-remote-ur`, with no skip option set and with `--no-verify` and `GIT_LFS_SKIP_PUSH`.
+- **git-lfs** (3.x as Ubuntu 22.04 and 24.04 ship it, and the latest; `lfs.standalonetransferagent`; `GIT_LFS_SKIP_SMUDGE`): FS-73's flows with stock clients, whose T3 test runs in server's evshost (owner decision 548), pointer files byte-exact and export's oids equal to git's, its tip check included over http, ssh and `git-remote-ur`, with no skip option set and with `--no-verify` and `GIT_LFS_SKIP_PUSH`.
 - **Restore** (darwin on APFS; linux on ext4, xfs and an NFS mount; windows on NTFS; a FAT volume on each; symlinks on each, Windows with and without the symlink privilege): FS-115's apply through each volume's no-replace rename, its hard-link fallback, and `unsupported` where it has neither, with Windows's in-use refusal.
-- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 (owner decision 226); a read answering 404 only on a read quorum's absence: a DriveMiss'd object with two hosts down reads 503, and while a host reconnects every host serves it or answers 503, never 404 (owner decision 511); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
+- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms, sent late by the clock rule's margin (sidecartest/blobsuite's `Settle.LateBy`, 200 ms by default; owner decision 545), refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 (owner decision 226); a read answering 404 only on a read quorum's absence: a DriveMiss'd object with two hosts down reads 503, and while a host reconnects every host serves it or answers 503, never 404 (owner decision 511); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
 - **MTAs** (Postfix (may, dane), Exim; Gmail, Outlook.com, Microsoft 365, Yahoo, iCloud, SES, Proton, Fastmail): in, D-MAIL-9's census with nothing lost; out, §14.4 levels, DKIM, strict DMARC, which B's selector fails for A's network and burners, FCrDNS, JMRP and CFL joins; aggregate reports as FS-39, a one-connection, ten-recipient send raising no alarm.
 - **ZK preamble** (`smtpproof`, BDAT and DATA (owner decision 125), on D-SMTP-16's hardware; census MXs): D-SMTP-16's adversarial corpus, FS-31's server-state cases included, fails before any effect; p95 times, coverage, interop.
-- **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
+- **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble, the test leg's release one that finds its own certificates for replacement, else sidecartest's Pebble harness issuing a leaf it can replace (owner decision 546); LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
-- **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
+- **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, at least one, and no other, a Worker no group of that device seated never being revoked in that act, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), the check `ur tun ip auto` waits for, and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
 - **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions 215, 216 and 491's on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions 197, 216), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
 - **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/ reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 
@@ -2806,8 +2857,8 @@ stacks    mls_* and tmc/mls (its provisional 0x004F, patched to 0x0010 by a buil
           create, Add with Welcome, path commits, Remove, an external commit with ExternalInit, at least 10 epochs, a
           PrivateMessage decrypted per epoch; both compute equal epoch_authenticator and exporter outputs at every
           epoch, the "UR evs 1.0 kek" label included
-ladder    mlsinterop/ (D-REPO-2) derives GenWrap, LeafWrap and GenLink from the exported secret with §10.5's AAD in
-          code of its own, byte-equal to mls_*'s
+ladder    mlsinterop/ (D-REPO-2) derives GenWrap, LeafWrap and GenLink from the exported secret with §10.5's AAD, and
+          KeyDelivery's wrap_aad, in code of its own, byte-equal to mls_*'s (§10.4's ladder row)
 vectors   the transcript is checked in as 0x0010 vectors (testdata/mls/0x0010/, mlswg's format) and runs in every
           test.sh
 required  Welcome, path commit, Remove, external commit with ExternalInit and PrivateMessage are never gaps: one that
@@ -2828,7 +2879,7 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 ### 22.12 Decisions proposed
 
-**D-TEST-1 (proposed).** T1-T4 gate merges, `sidecar/test.sh` running in RUN-ALL after connect; server tests of sidecar engines set `WARP_TEST_ENV_FAIL_FAST=1`; sidecar tests follow connect/CODESTYLE.md:200-217. *Why:* R-TEST-1, R-TEST-9.
+**D-TEST-1 (proposed).** T1, T2, T4 and T3's store suites gate merges, T3's FS rows running nightly and at each Gn-out (22.8's cadence), `sidecar/test.sh` running in RUN-ALL after connect; server tests of sidecar engines set `WARP_TEST_ENV_FAIL_FAST=1`; sidecar tests follow connect/CODESTYLE.md:200-217. *Why:* R-TEST-1, R-TEST-9.
 
 **D-TEST-2 (proposed).** `sidecartest` rebuilds connect's helpers from exported API and ships fakes whose store suites server also runs on real stores. *Why:* the helpers are unimportable (Q-TEST-1); shared suites keep fakes honest.
 
@@ -2836,9 +2887,9 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 **D-TEST-4 (proposed).** Every 22.6 target ships seeds and, given a second implementation, a differential oracle. *Why:* parsers face hostile peers, and protobuf encoding is not canonical (https://protobuf.dev/programming-guides/encoding/#field-order).
 
-**D-TEST-5 (proposed).** Every scenario runs 22.7's harness and guard; later, a synthetic main network repeats S2 and S5-S7 hourly. *Why:* R-TEST-3 is a system property.
+**D-TEST-5 (proposed).** Every scenario runs 22.7's harness and guard; later (22.17's Later, beyond M0-M10), a synthetic main network repeats S2 and S5-S7 hourly. *Why:* R-TEST-3 is a system property.
 
-**D-TEST-6 (proposed).** The revocation suite runs with evs's gate off. *Why:* server refusal is defense in depth (I-5).
+**D-TEST-6 (proposed).** The revocation suite runs with evs's gate off, through `Net.SetEvsGate`, which only a sidecar_testhooks build carries (22.4). *Why:* server refusal is defense in depth (I-5).
 
 **D-TEST-7 (proposed).** 22.8 runs per milestone and its soak before each release; conformance peers are pinned and rerun per pin change. *Why:* fan-out fails only under load; peers change silently.
 
@@ -2846,7 +2897,7 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 **D-TEST-9 (proposed).** Freezes pass 22.10's gates in D-PHASE-7's two steps. *Why:* one conditional write orders storage (owner decision 2), and nothing is audited (owner decision 99).
 
-**D-TEST-10 (proposed).** Every state machine of §7-§21, and §5.6's device revocation, is tested by deterministic fault schedules (FS-1 to FS-125), each run on the tiers its row names (T2's fakes, T3's real stores) against FI-1 to FI-30, beside TLA+ models of the separate durable objects (`EvsCommit.tla`), of the index roll-up (`IndexRollup.tla`) and of the store's settle rule (`StoreSettle.tla`) and a Porcupine check of T3 histories with unknown outcomes. *Why:* single-object conditional writes order storage (owner decision 2) and no transaction spans objects, so every commit point, retry and cleanup must be shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).
+**D-TEST-10 (proposed).** Every state machine of §7-§21, and §5.6's device revocation, is tested by deterministic fault schedules (FS-1 to FS-125), each run on the tiers its row names (T2's fakes, T3's real stores) against FI-1 to FI-30, beside TLA+ models of the separate durable objects (`EvsCommit.tla`), of the index roll-up (`IndexRollup.tla`) and of the store's settle rule (`StoreSettle.tla`) and a Porcupine check, in server's tests, of T3 histories with unknown outcomes, T3 moving stores' time in one reviewed file (22.8's real rule). *Why:* single-object conditional writes order storage (owner decision 2) and no transaction spans objects, so every commit point, retry and cleanup must be shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).
 
 **D-TEST-11 (proposed).** §22.8's `nvme` run on the PM9A3 set gates M2's exit and format 1's freeze: at 2× year one's mix with the write budget on, refilled at 0.8 DWPD for the run, the budget refuses no push, at most 43 KiB is written per push per drive, its P2 work included and charged once from the wallet (FS-116, which runs first, on exact costs), P0's bytes by kind are measured against the refill, setting §19.8's P0 warn line at four times their hourly share, at most half the refill, with the P0 page silent at that mix (P0 past the refill is FS-117's, owner decision 186), and writes stay within 50% of rated write IOPS, on 1 KiB XFS blocks, or on 4 KiB only if format 2's projected mix (format 1's measured price table applied to §11.13's per-push index operations, the index on in every eligible repo) also fits there; its per-operation costs become §11.13's price table. *Why:* owner decision 140's binding limits, at most 0.8 DWPD and 50% of rated write IOPS, which the design meets at ~27-43 KiB a push, 43 KiB being 0.8 DWPD at 400 pushes/s; the run refills at that limit, not production's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB), and the default-on index (owner decision 156) adds ~4 on 1 KiB blocks at one companion push a minute per writer, and ~2 on 4 KiB blocks at one every 5 minutes (owner decision 172; §11.13).
 
@@ -2889,7 +2940,7 @@ None. PLAN.md says nothing about testing.
 - **Provides:** `sidecartest` (harness, fakes, store suites, `PrivacyCapture`, `SearchOracle`, `DirectoryCostOracle`, which computes FS-86's expected reads and bytes from a schedule's events and sync times alone) and `sidecartest/fault` (schedules, faults, barriers); `sidecar/test.sh`; fuzz corpora; the `metadata_list.yml` guard; 22.7's suites; FI-1 to FI-30 and FS-1 to FS-125; the drop oracle (D-TEST-18); the storage benchmark, whose `nvme` costs become §11.13's price table (D-TEST-11); model checks (`EvsCommit.tla`, `IndexRollup.tla`, `StoreSettle.tla`); testdata/index/; the ZK corpus; the 0x0010 interop artifact.
 - **Consumes:** §2.8's list; `make check` (§4); `testHookSecret` sites (§5, §9's `K_sock`, `K_tok` and `K_seal`, §10, §11, §13-§15, §17's ShareKey and ShareSigner seeds) and `testHookBarrier` sites at every linearization point (§7-§21, and §5.6's revocation posts); §5-§21's targets; §19's environments, W2, drive counters and M2's staging cluster (§19.11); §23's milestones and gate map; from M6, §16.11's directory; from M10, the barriers of the purge, the sweep, evacuation's staged decision, seals, merges, the roll-up lock, the migration and the drop job (§11), §11.14's remote search, §16's search tools, §18's injected network and charging state, RECORD.md's search fields and, after format 2's freeze, production's write-budget counters (owner decision 174).
 - **Subprotocol messages, API routes, tables:** none; release builds carry no test route.
-- **Services and config:** server/local's 3-master Redis Cluster and 8-drive MinIO, T3's MinIO clusters (22.4); RUN-ALL, TEST-PERF and test-main cells.
+- **Services and config:** server/local's 3-master Redis Cluster and 8-drive MinIO, T3's MinIO clusters (22.4); RUN-ALL, TEST-PERF and test-main cells; the nightly form, `sidecar/test.sh --cadence nightly`, run by a launchd job on a host the owner names, with T3's private stores on that host, each gate sweep of the build running that form, and never taking tests/network-intensive-suite-lock.sh (owner decision 539).
 - **Assumptions about other sections:** §19 runs T6 with test roots and LE staging, runs M2's staging cluster on the production hosts' PM9A3 set with §19.6's settings and counters, rebuilt empty and SMART-rechecked before M3 (§19.11), runs 22.9's file-cluster suite on every new cluster before `place_new` names it, and gives §19.11's format2 gate a purge mode and a `drop` mode (observe, on) that admit only internal networks and design partners while observing (D-TEST-12, D-TEST-18); §23.8 gates freezes in D-PHASE-7's two steps, the escrow order at M6's entry on FS-46 and 20.9's benchmark, and burners on D-MAIL-9; §23.4's M2 exit names FS-57 to FS-63, FS-113, FS-114's head and marker cases, FS-116 to FS-118 and FS-72's and FS-95's format-1 cases, and §23.6's gate map lists each FS at every gate its row names, later parts included (FS-19, FS-23, FS-30, FS-38, FS-39, FS-41, FS-42, FS-47, FS-66, FS-69, FS-76 to FS-78, FS-80, FS-83 to FS-88, FS-92, FS-97 to FS-101, FS-106, FS-109 to FS-112, FS-114, FS-124 and FS-125; FS-82's mail and coverage cases at M7 and M8), FS-63 and FS-119 again at each next metadata cluster, FS-119 first at M3-out, M10's schedules, and S7's SNI-less abuse@`<root>` case at M5; every index file an erasure rewrites fits §11.12's closure upload bound; each owning section names a barrier at each linearization point (22.8's rules).
 
 ### 22.16 Risks
