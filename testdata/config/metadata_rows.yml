@@ -54,16 +54,16 @@ SidecarRow.owner_confirm_signer: {number: 7, type: bytes, row: api-7, sees: "the
 SidecarRow.owner_confirmed_at: {number: 8, type: uint64, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
 SidecarRow.revoked_at: {number: 9, type: uint64, row: api-7, sees: "admission, revocation and park positions"}
 SidecarRow.parked_at: {number: 10, type: uint64, row: api-7, sees: "admission, revocation and park positions"}
-SidecarRow.sponsor: {number: 11, type: bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.sponsor: {number: 11, type: bytes, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
 SidecarRow.capabilities: {number: 12, type: uint32, row: api-7, sees: "capabilities"}
 SidecarRow.delegation_id: {number: 13, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
 SidecarRow.live_since: {number: 14, type: uint64, row: api-7, sees: "live_since"}
-SidecarRow.not_after: {number: 15, type: int64, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.not_after: {number: 15, type: int64, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
 SidecarRow.identity_public_key: {number: 16, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
 SidecarRow.identity_alg: {number: 17, type: string, row: api-7, sees: "sidecar admissions with identity keys"}
-SidecarRow.member_id: {number: 18, type: bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
-SidecarRow.tag_ids: {number: 19, type: repeated bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
-SidecarRow.ephemeral: {number: 20, type: bool, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.member_id: {number: 18, type: bytes, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.tag_ids: {number: 19, type: repeated bytes, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.ephemeral: {number: 20, type: bool, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
 
 DelegationRow.delegation_id: {number: 1, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 DelegationRow.signer: {number: 2, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
@@ -130,10 +130,10 @@ SidecarAdmit.network_id: {number: 2, type: bytes, row: api-7, sees: "the authori
 SidecarAdmit.sidecar_id: {number: 3, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
 SidecarAdmit.identity_public_key: {number: 4, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
 SidecarAdmit.identity_alg: {number: 5, type: string, row: api-7, sees: "sidecar admissions with identity keys"}
-SidecarAdmit.member_id: {number: 6, type: bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
-SidecarAdmit.tag_ids: {number: 7, type: repeated bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
-SidecarAdmit.ephemeral: {number: 8, type: bool, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
-SidecarAdmit.not_after: {number: 9, type: int64, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.member_id: {number: 6, type: bytes, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.tag_ids: {number: 7, type: repeated bytes, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.ephemeral: {number: 8, type: bool, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.not_after: {number: 9, type: int64, row: api-7, sees: "member or opaque tag ids, ephemeral flags, expiry and sponsors"}
 SidecarAdmit.capabilities: {number: 10, type: uint32, row: api-7, sees: "capabilities"}
 
 AdmissionConfirm.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}

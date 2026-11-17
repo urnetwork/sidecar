@@ -562,3 +562,11 @@ TABLES = _insert_after(TABLES, '`sidecar_push_token`',
     ('`network_client_owner.forward_only`', 'api',
      "A sidecar's forwarding client's mark, which narrows its routes and its exchange to the config's read "
      "(§7.4; owner decision 197)", 'MG8', '§7.17'))
+
+# 2026-11-17 (dr4-fences): §12.8 puts every internal dns route under /dns/internal/ (owner decision 417), which §12,
+# §13, §19 and §22.8's FS-42 write; these two rows had kept the earlier paths.
+ROUTES = _replace(ROUTES, '`POST /dns/acme-challenge`; `GET /dns/ready?serial=`',
+    ('`POST /dns/internal/acme-challenge`, `/dns/internal/caa-canary`; `GET /dns/internal/ready?serial=`',
+     'Internal (certs)', 'Set or clear DNS-01 challenges and canary CAA records; wait for propagation', '§12.8'))
+ROUTES = _replace(ROUTES, '`GET /dns/journal`, `/dns/snapshot`',
+    ('`GET /dns/internal/journal`, `/dns/internal/snapshot`', 'Internal (dns edges)', 'The zone feed', '§12.8'))
