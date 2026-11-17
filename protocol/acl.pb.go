@@ -1104,8 +1104,13 @@ type AclRepo struct {
 	Lock            RepoVersioningLock       `protobuf:"varint,10,opt,name=lock,proto3,enum=urnetwork.sidecar.RepoVersioningLock" json:"lock,omitempty"`      // the newest RepoVersioning's
 	HoldersShrunkAt uint64                   `protobuf:"varint,11,opt,name=holders_shrunk_at,json=holdersShrunkAt,proto3" json:"holders_shrunk_at,omitempty"` // the newest log position that dropped a key holder (§7.9)
 	PrefixRules     []*AclRepoPrefixRulesRow `protobuf:"bytes,12,rep,name=prefix_rules,json=prefixRules,proto3" json:"prefix_rules,omitempty"`                // every RepoPrefixRules that took effect on this repo, in
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// position order, for the repo's life: never shortened or
+	// reordered, a set staying after a later one replaces it, since
+	// pushes pinned in its span are judged by it (DESIGN-DETAILS
+	// 16.2.3); at most AclPrefixSettings.SetMaxCount
+	HoldersShrunkTimeMs int64 `protobuf:"varint,13,opt,name=holders_shrunk_time_ms,json=holdersShrunkTimeMs,proto3" json:"holders_shrunk_time_ms,omitempty"` // ms since the epoch: the time_ms of the entry at holders_shrunk_at, or
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AclRepo) Reset() {
@@ -1220,6 +1225,13 @@ func (x *AclRepo) GetPrefixRules() []*AclRepoPrefixRulesRow {
 		return x.PrefixRules
 	}
 	return nil
+}
+
+func (x *AclRepo) GetHoldersShrunkTimeMs() int64 {
+	if x != nil {
+		return x.HoldersShrunkTimeMs
+	}
+	return 0
 }
 
 // A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
@@ -2928,7 +2940,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\tapprovers\x18\x06 \x01(\rR\tapprovers\x124\n" +
 	"\x16default_expiry_seconds\x18\a \x01(\x03R\x14defaultExpirySeconds\x12,\n" +
 	"\x12max_expiry_seconds\x18\b \x01(\x03R\x10maxExpirySeconds\x12\x1a\n" +
-	"\bevidence\x18\t \x03(\rR\bevidence\"\x99\x05\n" +
+	"\bevidence\x18\t \x03(\rR\bevidence\"\xce\x05\n" +
 	"\aAclRepo\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\fR\x06repoId\x12/\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\x04kind\x12&\n" +
@@ -2942,7 +2954,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x04lock\x18\n" +
 	" \x01(\x0e2%.urnetwork.sidecar.RepoVersioningLockR\x04lock\x12*\n" +
 	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\x12K\n" +
-	"\fprefix_rules\x18\f \x03(\v2(.urnetwork.sidecar.AclRepoPrefixRulesRowR\vprefixRules\"w\n" +
+	"\fprefix_rules\x18\f \x03(\v2(.urnetwork.sidecar.AclRepoPrefixRulesRowR\vprefixRules\x123\n" +
+	"\x16holders_shrunk_time_ms\x18\r \x01(\x03R\x13holdersShrunkTimeMs\"w\n" +
 	"\x0fAclRepoAdminRow\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x16\n" +

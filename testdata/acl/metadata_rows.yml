@@ -39,3 +39,7 @@ BridgeRows.routes: {number: 2, type: repeated BridgeRouteRow, row: api-7, sees: 
 BridgeRouteRow.route_id: {number: 1, type: bytes, row: api-7, sees: "(route id, advertiser and the route rules it serves; QD-764)"}
 BridgeRouteRow.advertiser: {number: 2, type: bytes, row: api-7, sees: "(route id, advertiser and the route rules it serves; QD-764)"}
 BridgeRouteRow.route_rule_ids: {number: 3, type: repeated bytes, row: api-7, sees: "(route id, advertiser and the route rules it serves; QD-764)"}
+
+# QD-1015 (shrink-two-time-compare-shrunk-time-row): the time of the entry at a repo's holders_shrunk_at, or of its
+# RepoCreate's while that is 0, which api-7's rows name ahead of design-records' fold of §2.8.
+AclRepo.holders_shrunk_time_ms: {number: 13, type: int64, row: api-7, sees: "holders_shrunk_at and its time"}

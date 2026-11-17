@@ -67,10 +67,18 @@ type metadataListAddition struct {
 	list     string
 }
 
-// None waits now: design-records wrote every entry's text into §2.8's block with the folds of 2026-11-16 (owner
-// decision 252), QD-857's with §10's, QD-199's with §11's, QD-990's with §13's (owner decision 424) and QD-996's
-// with §20's, so the list is the block alone until the next answer.
-var metadataListAdditions = []metadataListAddition{}
+// design-records wrote every earlier entry's text into §2.8's block with the folds of 2026-11-16 (owner decision
+// 252), QD-857's with §10's, QD-199's with §11's, QD-990's with §13's (owner decision 424) and QD-996's with §20's.
+var metadataListAdditions = []metadataListAddition{
+	{
+		// QD-1015: api-7's rows carry the time of the entry at each repo's holders_shrunk_at, or of its RepoCreate's
+		// while that is 0, a time api stamped itself, so every verifier reads t_s for owner decision 315's second
+		// comparison
+		question: "shrink-two-time-compare-shrunk-time-row",
+		block:    "each EvsShare's signer, position and expiry, holders_shrunk_at, and for each general repo",
+		list:     "each EvsShare's signer, position and expiry, holders_shrunk_at and its time, and for each general repo",
+	},
+}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {
