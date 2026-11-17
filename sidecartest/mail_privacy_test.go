@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar/sidecartest"
+	"github.com/urnetwork/sidecar/sidecartest/mailworld"
 )
 
 // Through the router's splice (MAIL-M7-19), every byte the sender wrote after STARTTLS's 220 reaches the receiver as
@@ -25,8 +26,8 @@ func TestMailSpliceIsByteIdentical(t *testing.T) {
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
-	settings := sidecartest.DefaultMailWorldSettings()
-	world := sidecartest.NewMailWorld(t, host, clock, settings)
+	settings := mailworld.DefaultMailWorldSettings()
+	world := mailworld.NewMailWorld(t, host, clock, settings)
 	recipient := settings.Addresses[0]
 	random := make([]byte, 48*1024)
 	if _, err := rand.Read(random); err != nil {
@@ -40,7 +41,7 @@ func TestMailSpliceIsByteIdentical(t *testing.T) {
 		encoded = encoded[take:]
 	}
 	message := []byte(strings.Join(append(lines, ""), "\r\n"))
-	send := &sidecartest.MailWorldSend{Sender: s7Sender, Sni: settings.MxHost(), From: "sender@sender.example", Recipients: []string{recipient}, Message: message, Record: true}
+	send := &mailworld.MailWorldSend{Sender: s7Sender, Sni: settings.MxHost(), From: "sender@sender.example", Recipients: []string{recipient}, Message: message, Record: true}
 	if reply := world.SendWith(send); !reply.Is(250) {
 		t.Fatalf("the message: %s", reply)
 	}

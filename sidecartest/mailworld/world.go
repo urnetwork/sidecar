@@ -26,9 +26,10 @@
 // timer it saw armed, or the session's reply.
 //
 // What a world names is synthetic: .example names and RFC 5737 and 3849 addresses (connect/CODESTYLE.md's test data
-// rule). Only the sidecar_testhooks build has it, since the front's test listener is a testhooks type.
+// rule). Only the sidecar_testhooks build has it, since the front's test listener is a testhooks type. It is a package of
+// its own, not sidecartest's, since evs's engine's own tests import sidecartest and this world imports the engine.
 
-package sidecartest
+package mailworld
 
 import (
 	"bytes"
@@ -64,6 +65,7 @@ import (
 	"github.com/urnetwork/sidecar/mxedgeservice"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
+	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/tlsedgeservice"
 )
 
@@ -117,10 +119,10 @@ type MailWorld struct {
 	ctx      context.Context
 	settings *MailWorldSettings
 
-	Clock *FakeClock
+	Clock *sidecartest.FakeClock
 	// The session's own clock, which a test moves only on purpose.
-	SessionClock *FakeClock
-	Host         *FakeHost
+	SessionClock *sidecartest.FakeClock
+	Host         *sidecartest.FakeHost
 	Cluster      sidecar.BlobCluster
 
 	NetworkId sidecar.Id
@@ -130,18 +132,18 @@ type MailWorld struct {
 	// The urnetwork-edge network the router's tickets name.
 	EdgeNetworkId sidecar.Id
 
-	Owner    *FakeGkmSigner
-	Receiver *FakeGkmSigner
+	Owner    *sidecartest.FakeGkmSigner
+	Receiver *sidecartest.FakeGkmSigner
 	// The receiver's deposit-only client, which the session's depositor writes through.
 	ReceiverEvs *sidecar.EvsClient
-	View        *FakeGkmAuthView
-	Gkm         *FakeGkm
+	View        *sidecartest.FakeGkmAuthView
+	Gkm         *sidecartest.FakeGkm
 	Engine      *evsservice.EvsEngine
 
-	Zone    *FakeMailZone
+	Zone    *sidecartest.FakeMailZone
 	Session *sidecar.MailSessionServer
 	Router  *mxedgeservice.MxEdgeService
-	Records *FakeMxEdgeStore
+	Records *sidecartest.FakeMxEdgeStore
 	// The receiver's certificate's SPKI SHA-256.
 	SpkiSha256 [sha256.Size]byte
 
@@ -150,12 +152,12 @@ type MailWorld struct {
 	serverTls *tls.Config
 	log       *mailWorldLog
 
-	authLog *FakeGkmAuthLog
+	authLog *sidecartest.FakeGkmAuthLog
 
 	stateLock sync.Mutex
 	// every reader device's id, the owner's first, and the signers of those admitted after it
 	readerIds     []sidecar.Id
-	readerSigners []*FakeGkmSigner
+	readerSigners []*sidecartest.FakeGkmSigner
 	// every gkm client a device of the world holds, each advanced to every newer view
 	gkmClients []sidecar.GkmClient
 	// what each open carried and what each side of its stream moved, in order
@@ -264,7 +266,7 @@ func (self *mailWorldGateViews) View(networkId sidecar.Id) (sidecar.GkmAuthView,
 	return self.world.view(), evsservice.EvsAuthAllowed
 }
 
-func (self *MailWorld) view() *FakeGkmAuthView {
+func (self *MailWorld) view() *sidecartest.FakeGkmAuthView {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.View
@@ -454,7 +456,7 @@ func mailWorldCertificate(names []string, now time.Time) (*tls.Certificate, [sha
 // The world on host and clock: evs's engine, the mailbox's group and place, the receiver's session over its depositor
 // and checks, and the router serving the world's listener, ready once its first probe has found the store and today's
 // k. A nil settings takes the defaults.
-func NewMailWorld(t testing.TB, host *FakeHost, clock *FakeClock, settings *MailWorldSettings) *MailWorld {
+func NewMailWorld(t testing.TB, host *sidecartest.FakeHost, clock *sidecartest.FakeClock, settings *MailWorldSettings) *MailWorld {
 	t.Helper()
 	if settings == nil {
 		settings = DefaultMailWorldSettings()
@@ -462,9 +464,9 @@ func NewMailWorld(t testing.TB, host *FakeHost, clock *FakeClock, settings *Mail
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	world := &MailWorld{
-		t: t, ctx: ctx, settings: settings, Clock: clock, SessionClock: NewFakeClock(clock.Now()), Host: host,
+		t: t, ctx: ctx, settings: settings, Clock: clock, SessionClock: sidecartest.NewFakeClock(clock.Now()), Host: host,
 		NetworkId: sidecar.NewId(), RepoId: sidecar.NewId(), MemberId: sidecar.NewId(), ClientId: sidecar.NewId(), EdgeNetworkId: sidecar.NewId(),
-		Owner: NewFakeGkmSigner(), Receiver: NewFakeGkmSigner(), Zone: NewFakeMailZone(clock), Records: NewFakeMxEdgeStore(nil),
+		Owner: sidecartest.NewFakeGkmSigner(), Receiver: sidecartest.NewFakeGkmSigner(), Zone: sidecartest.NewFakeMailZone(clock), Records: sidecartest.NewFakeMxEdgeStore(nil),
 		log: &mailWorldLog{}, listener: &mailWorldListener{conns: make(chan net.Conn), closed: make(chan struct{})},
 	}
 	world.readerIds = []sidecar.Id{world.Owner.SidecarId}
@@ -474,11 +476,11 @@ func NewMailWorld(t testing.TB, host *FakeHost, clock *FakeClock, settings *Mail
 	return world
 }
 
-// evs's engine on the host, the mailbox's group in FakeGkm and its place and repo objects.
+// evs's engine on the host, the mailbox's group in sidecartest.FakeGkm and its place and repo objects.
 func (self *MailWorld) buildEvs() {
 	t := self.t
 	host := self.Host
-	RegisterEvsTwins(host.Redis)
+	sidecartest.RegisterEvsTwins(host.Redis)
 	host.Gates.OpenService(sidecar.ServiceGateEvs, connect.Id(self.NetworkId))
 	host.Quota.SetBalance(connect.Id(self.NetworkId), self.settings.QuotaBalanceByteCount)
 	cluster, err := host.Blobs.Cluster(host.Blobs.MetadataClusterIds()[0])
@@ -486,9 +488,9 @@ func (self *MailWorld) buildEvs() {
 		t.Fatal(err)
 	}
 	self.Cluster = cluster
-	self.authLog = NewFakeGkmAuthLog()
+	self.authLog = sidecartest.NewFakeGkmAuthLog()
 	self.View = self.authLog.Append(self.fixture())
-	self.Gkm = NewFakeGkm(self.Clock, host.Blobs, nil)
+	self.Gkm = sidecartest.NewFakeGkm(self.Clock, host.Blobs, nil)
 	ownerGkm := self.Gkm.Client(self.Owner.SidecarId, self.Owner.Sign)
 	ownerGkm.AuthAdvanced(self.View)
 	self.gkmClients = append(self.gkmClients, ownerGkm)
@@ -524,7 +526,7 @@ func (self *MailWorld) buildEvs() {
 		t.Fatal(err)
 	}
 	t.Cleanup(self.Engine.Close)
-	inspect := InspectContext(self.ctx)
+	inspect := sidecartest.InspectContext(self.ctx)
 	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: cluster.ClusterId(), CreatorSidecarId: self.Owner.SidecarId}).Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -546,16 +548,16 @@ func (self *MailWorld) buildEvs() {
 
 // The rows the world's view compiles: the mailbox, its owner's devices, every reader one, the owner its admin and the
 // receiver a device of the member that only deposits.
-func (self *MailWorld) fixture() *FakeGkmAuthFixture {
+func (self *MailWorld) fixture() *sidecartest.FakeGkmAuthFixture {
 	self.stateLock.Lock()
 	readerIds := slices.Clone(self.readerIds)
 	readerSigners := slices.Clone(self.readerSigners)
 	self.stateLock.Unlock()
-	rows := FakeGkmAuthRows(&protocol.AclRepo{
+	rows := sidecartest.FakeGkmAuthRows(&protocol.AclRepo{
 		RepoId: self.RepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_MAILBOX, OwnerMemberId: self.MemberId.Bytes(),
 		Admins: []*protocol.AclRepoAdminRow{{SidecarId: self.Owner.SidecarId.Bytes()}},
 	})
-	sidecarRows, member := FakeGkmAuthMemberDevices(self.MemberId, append(slices.Clone(readerIds), self.Receiver.SidecarId)...)
+	sidecarRows, member := sidecartest.FakeGkmAuthMemberDevices(self.MemberId, append(slices.Clone(readerIds), self.Receiver.SidecarId)...)
 	rows.Sidecars = sidecarRows
 	rows.Members = []*bridge.MemberRow{member}
 	identityKeys := map[sidecar.Id][]byte{self.Receiver.SidecarId: self.Receiver.PublicKey()}
@@ -563,7 +565,7 @@ func (self *MailWorld) fixture() *FakeGkmAuthFixture {
 		identityKeys[signer.SidecarId] = signer.PublicKey()
 	}
 	identityKeys[self.Owner.SidecarId] = self.Owner.PublicKey()
-	return &FakeGkmAuthFixture{
+	return &sidecartest.FakeGkmAuthFixture{
 		Rows:         rows,
 		IdentityKeys: identityKeys,
 		RepoReaders:  map[sidecar.Id][]sidecar.Id{self.RepoId: readerIds},
@@ -600,7 +602,7 @@ func (self *MailWorld) RoundTrip(request *http.Request) (*http.Response, error) 
 
 // An evs client of signer on the world, its tokens holding the scopes it asks for, or deposit alone, as the exchange
 // mints a deposit-only sidecar's, on clock, the world's when nil, over store.
-func (self *MailWorld) Device(signer *FakeGkmSigner, depositOnly bool, store sidecar.SidecarStore, clock sidecar.Clock) *sidecar.EvsClient {
+func (self *MailWorld) Device(signer *sidecartest.FakeGkmSigner, depositOnly bool, store sidecar.SidecarStore, clock sidecar.Clock) *sidecar.EvsClient {
 	self.t.Helper()
 	if clock == nil {
 		clock = self.Clock
@@ -647,7 +649,7 @@ func (self *MailWorld) Device(signer *FakeGkmSigner, depositOnly bool, store sid
 // deposits on a deposit-only client, and the test front that ends TLS and hands it each stream.
 func (self *MailWorld) buildSession() {
 	t := self.t
-	self.ReceiverEvs = self.Device(self.Receiver, true, NewFakeStore().Root(), nil)
+	self.ReceiverEvs = self.Device(self.Receiver, true, sidecartest.NewFakeStore().Root(), nil)
 	depositor, err := sidecar.NewMailDepositor(&sidecar.MailDepositorArgs{Repo: self.ReceiverEvs.Repo, ReceiverSidecarId: self.Receiver.SidecarId})
 	if err != nil {
 		t.Fatal(err)
@@ -680,7 +682,7 @@ func (self *MailWorld) buildSession() {
 		Checker:    sidecar.NewMailAuthChecker(sidecar.NewMailDnsStub(self.Zone, self.Clock, authSettings), self.Clock, authSettings),
 		Slots:      sidecar.NewMailAuthSlots(authSettings),
 		Depositor:  depositor,
-		SpoolStore: NewFakeStore().Root(),
+		SpoolStore: sidecartest.NewFakeStore().Root(),
 		Clock:      self.SessionClock,
 		Log:        self.log,
 	})
@@ -738,7 +740,7 @@ func (self *MailWorld) buildRouter() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := host.Redis.Set(InspectContext(self.ctx), mxedgeservice.MailRouteKey(self.settings.Label), routeValue, 0); err != nil {
+	if err := host.Redis.Set(sidecartest.InspectContext(self.ctx), mxedgeservice.MailRouteKey(self.settings.Label), routeValue, 0); err != nil {
 		t.Fatal(err)
 	}
 	serviceHost := host.ServiceHost()
@@ -809,16 +811,16 @@ func (self *MailWorld) AwaitTimerAt(at time.Time) {
 }
 
 // A sender's connection through the lb to the router, from sender.
-func (self *MailWorld) Connect(sender netip.Addr) *ScriptedMta {
+func (self *MailWorld) Connect(sender netip.Addr) *sidecartest.ScriptedMta {
 	self.t.Helper()
-	return NewScriptedMta(self.connect(sender))
+	return sidecartest.NewScriptedMta(self.connect(sender))
 }
 
 // A sender's connection as Connect makes it, every byte it writes and reads kept, as the sender's socket saw them.
-func (self *MailWorld) ConnectRecorded(sender netip.Addr) (*ScriptedMta, *MailWorldRecording) {
+func (self *MailWorld) ConnectRecorded(sender netip.Addr) (*sidecartest.ScriptedMta, *MailWorldRecording) {
 	self.t.Helper()
 	recording := &MailWorldRecording{Conn: self.connect(sender)}
-	return NewScriptedMta(recording), recording
+	return sidecartest.NewScriptedMta(recording), recording
 }
 
 func (self *MailWorld) connect(sender netip.Addr) net.Conn {
@@ -866,7 +868,7 @@ func (self *MailWorldRecording) Bytes() (written []byte, read []byte) {
 }
 
 // The banner and the pre-TLS EHLO.
-func (self *MailWorld) Greet(mta *ScriptedMta, ehloName string) {
+func (self *MailWorld) Greet(mta *sidecartest.ScriptedMta, ehloName string) {
 	self.t.Helper()
 	if reply, err := mta.Banner(); err != nil || !reply.Is(220) {
 		self.t.Fatalf("the banner: %s %v", reply, err)
@@ -877,7 +879,7 @@ func (self *MailWorld) Greet(mta *ScriptedMta, ehloName string) {
 }
 
 // STARTTLS, its 220 once the router's quiet time has passed on the world's clock, and the handshake under config.
-func (self *MailWorld) StartTls(mta *ScriptedMta, config *tls.Config) (*tls.ConnectionState, error) {
+func (self *MailWorld) StartTls(mta *sidecartest.ScriptedMta, config *tls.Config) (*tls.ConnectionState, error) {
 	self.t.Helper()
 	quietAt := self.Clock.Now().Add(mxedgeservice.DefaultMxEdgeSettings().StartTlsQuietTimeout)
 	type outcome struct {
@@ -902,7 +904,7 @@ func (self *MailWorld) StartTls(mta *ScriptedMta, config *tls.Config) (*tls.Conn
 
 // One message from sender through the router to the receiver over TLS naming sni, a whole transaction: the reply to
 // its end of DATA, or the first reply before it that was not 250.
-func (self *MailWorld) Send(sender netip.Addr, sni string, from string, recipients []string, message []byte) *MailReply {
+func (self *MailWorld) Send(sender netip.Addr, sni string, from string, recipients []string, message []byte) *sidecartest.MailReply {
 	self.t.Helper()
 	return self.SendWith(&MailWorldSend{Sender: sender, Sni: sni, From: from, Recipients: recipients, Message: message})
 }
@@ -924,40 +926,12 @@ type MailWorldSend struct {
 
 // One transaction as send says, through the router: the reply to its end of DATA, or the first reply before it that
 // was not 250. The sender then quits and reads its socket to its end.
-func (self *MailWorld) SendWith(send *MailWorldSend) *MailReply {
+func (self *MailWorld) SendWith(send *MailWorldSend) *sidecartest.MailReply {
 	self.t.Helper()
-	var mta *ScriptedMta
-	if send.Record {
-		mta, send.Recording = self.ConnectRecorded(send.Sender)
-	} else {
-		mta = self.Connect(send.Sender)
-	}
+	mta, refused := self.begin(send)
 	defer mta.Close()
-	self.Greet(mta, "relay.sender.example")
-	if _, err := self.StartTls(mta, MailMtaTlsConfig(send.Sni, tls.VersionTLS13)); err != nil {
-		self.t.Fatalf("STARTTLS: %v", err)
-	}
-	if reply, err := mta.Ehlo("relay.sender.example"); err != nil || !reply.Is(250) {
-		self.t.Fatalf("EHLO inside TLS: %s %v", reply, err)
-	}
-	mailCommand := "MAIL FROM:<" + send.From + ">"
-	if send.FromParameters != "" {
-		mailCommand += " " + send.FromParameters
-	}
-	if reply, err := mta.Command(mailCommand); err != nil || !reply.Is(250) {
-		if err != nil {
-			self.t.Fatalf("MAIL: %v", err)
-		}
-		return reply
-	}
-	for _, recipient := range send.Recipients {
-		reply, err := mta.RcptTo(recipient)
-		if err != nil {
-			self.t.Fatalf("RCPT: %v", err)
-		}
-		if !reply.Is(250) {
-			return reply
-		}
+	if refused != nil {
+		return refused
 	}
 	reply, err := mta.Data(send.Message)
 	if err != nil {
@@ -970,10 +944,86 @@ func (self *MailWorld) SendWith(send *MailWorldSend) *MailReply {
 	return reply
 }
 
+// A transaction as send says, up to its DATA: the dialog, STARTTLS, EHLO, MAIL and every RCPT, each answered 250, the
+// sender's MTA returned for the test to send DATA itself, as a test that moves the clock during the checks does. A
+// reply that is not 250 fails the test. The caller closes the MTA.
+func (self *MailWorld) Begin(send *MailWorldSend) *sidecartest.ScriptedMta {
+	self.t.Helper()
+	mta, refused := self.begin(send)
+	if refused != nil {
+		mta.Close()
+		self.t.Fatalf("the transaction before DATA: %s", refused)
+	}
+	return mta
+}
+
+// The transaction up to DATA, and the first reply to MAIL or RCPT that was not 250, nil when each was.
+func (self *MailWorld) begin(send *MailWorldSend) (*sidecartest.ScriptedMta, *sidecartest.MailReply) {
+	self.t.Helper()
+	var mta *sidecartest.ScriptedMta
+	if send.Record {
+		mta, send.Recording = self.ConnectRecorded(send.Sender)
+	} else {
+		mta = self.Connect(send.Sender)
+	}
+	self.Greet(mta, "relay.sender.example")
+	if _, err := self.StartTls(mta, sidecartest.MailMtaTlsConfig(send.Sni, tls.VersionTLS13)); err != nil {
+		self.t.Fatalf("STARTTLS: %v", err)
+	}
+	if reply, err := mta.Ehlo("relay.sender.example"); err != nil || !reply.Is(250) {
+		self.t.Fatalf("EHLO inside TLS: %s %v", reply, err)
+	}
+	mailCommand := "MAIL FROM:<" + send.From + ">"
+	if send.FromParameters != "" {
+		mailCommand += " " + send.FromParameters
+	}
+	reply, err := mta.Command(mailCommand)
+	if err != nil {
+		self.t.Fatalf("MAIL: %v", err)
+	}
+	if !reply.Is(250) {
+		return mta, reply
+	}
+	for _, recipient := range send.Recipients {
+		reply, err := mta.RcptTo(recipient)
+		if err != nil {
+			self.t.Fatalf("RCPT: %v", err)
+		}
+		if !reply.Is(250) {
+			return mta, reply
+		}
+	}
+	return mta, nil
+}
+
+// Erase's authority over the world's rows: the owner's device administers the mailbox, as its RepoAdmin row says.
+type mailWorldEraseAuthority struct {
+	world *MailWorld
+}
+
+func (self *mailWorldEraseAuthority) Erases(repoId sidecar.Id, sidecarId sidecar.Id) bool {
+	return repoId == self.world.RepoId && sidecarId == self.world.Owner.SidecarId
+}
+
+// An eraser of the mailbox on client, a device's, on the world's clock.
+func (self *MailWorld) Eraser(client *sidecar.EvsClient, sidecarId sidecar.Id) *sidecar.MailEraser {
+	self.t.Helper()
+	eraser, err := sidecar.NewMailEraser(&sidecar.MailEraserArgs{
+		Repo:      client.Repo(self.RepoId),
+		SidecarId: sidecarId,
+		Authority: &mailWorldEraseAuthority{world: self},
+		Clock:     self.Clock,
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return eraser
+}
+
 // Adds a reader device to the mailbox, as a consented device admitted later would be: a new view naming it, which
 // every client and the engine then read. Its signer.
-func (self *MailWorld) AdmitReader() *FakeGkmSigner {
-	signer := NewFakeGkmSigner()
+func (self *MailWorld) AdmitReader() *sidecartest.FakeGkmSigner {
+	signer := sidecartest.NewFakeGkmSigner()
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

@@ -39,6 +39,7 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
+	"github.com/urnetwork/sidecar/sidecartest/mailworld"
 )
 
 // The flow's sender and its sibling in the same /24, RFC 5737's.
@@ -54,7 +55,7 @@ const (
 )
 
 // A message from sender@sender.example to recipient, DKIM-signed by s7's key, with subject and body.
-func s7Message(t testing.TB, world *sidecartest.MailWorld, signer *sidecartest.MailDkimSigner, recipient string, subject string, body string) []byte {
+func s7Message(t testing.TB, world *mailworld.MailWorld, signer *sidecartest.MailDkimSigner, recipient string, subject string, body string) []byte {
 	t.Helper()
 	message := []byte(strings.Join([]string{
 		"From: Sender <sender@" + s7SenderDomain + ">",
@@ -74,7 +75,7 @@ func s7Message(t testing.TB, world *sidecartest.MailWorld, signer *sidecartest.M
 }
 
 // The sender's DNS: SPF passing the /24, DMARC p=reject and the selector's key.
-func s7PublishSender(world *sidecartest.MailWorld, signer *sidecartest.MailDkimSigner) {
+func s7PublishSender(world *mailworld.MailWorld, signer *sidecartest.MailDkimSigner) {
 	world.Zone.AddTxt(s7SenderDomain, "v=spf1 ip4:203.0.113.0/24 -all")
 	world.Zone.AddTxt("_dmarc."+s7SenderDomain, "v=DMARC1; p=reject")
 	world.Zone.AddTxt(sidecartest.MailDkimKeyName(s7Selector, s7SenderDomain), signer.KeyRecord())
@@ -97,10 +98,10 @@ func s7Run(t *testing.T) func(ctx context.Context, run *sidecartest.ScenarioRun)
 		localPart := run.CanaryText("mail local part")
 		subject := run.CanaryText("mail subject")
 		bodyCanary := run.CanaryText("mail body")
-		settings := sidecartest.DefaultMailWorldSettings()
+		settings := mailworld.DefaultMailWorldSettings()
 		recipient := localPart + "@" + settings.Label + "." + settings.Root
 		settings.Addresses = []string{recipient}
-		world := sidecartest.NewMailWorld(t, run.Net.Fakes(), run.Net.Clock(), settings)
+		world := mailworld.NewMailWorld(t, run.Net.Fakes(), run.Net.Clock(), settings)
 		owner := world.Device(world.Owner, false, sidecartest.NewFakeStore().Root(), nil)
 
 		// plaintext: 530 linking the deviation, since no handshake closed for this /24
@@ -305,8 +306,8 @@ func TestFs39LabelsAsStatedThroughTheReceiver(t *testing.T) {
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
-	settings := sidecartest.DefaultMailWorldSettings()
-	world := sidecartest.NewMailWorld(t, host, clock, settings)
+	settings := mailworld.DefaultMailWorldSettings()
+	world := mailworld.NewMailWorld(t, host, clock, settings)
 	owner := world.Device(world.Owner, false, sidecartest.NewFakeStore().Root(), nil)
 	recipient := settings.Addresses[0]
 
@@ -338,7 +339,7 @@ func TestFs39LabelsAsStatedThroughTheReceiver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply := world.SendWith(&sidecartest.MailWorldSend{
+	reply := world.SendWith(&mailworld.MailWorldSend{
 		Sender: s7OtherSender, Sni: settings.MxHost(), From: "forwarder@hop.example", FromParameters: "REQUIRETLS",
 		Recipients: []string{recipient}, Message: hopMessage,
 	})
