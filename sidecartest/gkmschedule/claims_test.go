@@ -38,3 +38,7 @@ func TestFsKeysClaimsALastResortKeyPackageServesTwoGroups(t *testing.T) {
 func TestFsKeysClaimsAKillAroundTheWrapGenAndEpochWritesResumes(t *testing.T) {
 	FsKeysScheduleKillsBetweenWrites(t, FsKeysT2(t))
 }
+
+func TestFsKeysClaimsARemoveOutrunByARotationIsCommittedUnderIt(t *testing.T) {
+	FsKeysScheduleRemoveOutrunByARotation(t, FsKeysT2(t))
+}

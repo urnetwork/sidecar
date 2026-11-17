@@ -15,9 +15,10 @@ import (
 )
 
 // One classification for evs and its clients, on a view that reads no entry, which is no ConfigState: batched when the
-// state at the later pin shows no shrink after the earlier pin, so only expiries passed, and immediate on any shrink
-// after it, which such a view cannot class (option 1's reading, which option 3 keeps for such a view; QD-949);
-// immediate too for pins out of order, a pin missing, no view, and a later pin the view does not reach.
+// state shows no shrink after the earlier pin, so only expiries passed, and immediate on any shrink after it, which such
+// a view cannot class (option 1's reading, which option 3 keeps for such a view; QD-949); immediate too for pins out of
+// order, a pin missing and no view, and once the holders shrank since the earlier pin, for a later pin the view does
+// not reach, which it need not reach when nothing shrank.
 func TestEvsClassifyPathEpochDue(t *testing.T) {
 	pin := func(version uint64) *bridge.AuthPin {
 		return &bridge.AuthPin{Version: version, Chain: evsTestBytes("auth chain", 32)}
@@ -48,9 +49,13 @@ func TestEvsClassifyPathEpochDue(t *testing.T) {
 	if !EvsClassifyPathEpochDue(view, evsTestId("repo"), nil, pin(6)) || !EvsClassifyPathEpochDue(nil, evsTestId("repo"), pin(6), pin(7)) {
 		t.Error("a missing pin or no view classes batched")
 	}
-	view.atErr = ErrGkmAuthAhead
+	view.atErr = ErrGkmAuthNotRetained
+	if EvsClassifyPathEpochDue(view, evsTestId("repo"), pin(6), pin(7)) {
+		t.Error("a later pin the view does not reach, nothing shrunk since the earlier one, classes immediate")
+	}
+	view.repo.HoldersShrunkAt = 7
 	if !EvsClassifyPathEpochDue(view, evsTestId("repo"), pin(6), pin(7)) {
-		t.Error("a later pin the view does not reach classes batched")
+		t.Error("a later pin the view does not reach, the holders shrunk since the earlier one, classes batched")
 	}
 }
 

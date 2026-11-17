@@ -1,7 +1,8 @@
 // §11.6's due row classed from the log (question evs1-m2-16-due-classification, option 3; QD-949) on a real network: an
 // agent's ordinary revocation, its other removals and an expiry alone are batched; a compromise revocation of the same
 // agent, a member device's removal, a member's removal and a base's own shrink are immediate, and so is any span holding
-// one of them; a view that cannot reach the earlier pin, or holds it on another chain, reads immediate. Every reader of
+// one of them; a view that cannot reach the states around a shrink in between, or holds a pin on another chain, reads
+// immediate, while an earlier pin no window reaches is held to its number (QD-1018). Every reader of
 // one log classes alike: the network's own long-running reader and one walked from the genesis, as a client holds the
 // log, and a new device and a rows-only gate restored at the newest base, as evs's gate cache holds it. The client's
 // pressure and status on that log follow the same class, and the fail-closed branches of a shrink's class read
@@ -186,6 +187,24 @@ func TestEvsDueClassFromTheLog(t *testing.T) {
 			world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
 			world.expire()
 		}},
+		{name: "a lapsed agent's revocation after a shrink kept t_s", shrinks: true, span: func(world *evsDueClassWorld) {
+			// QD-883's second comparison: dropped at t_s, the time of the second agent's revocation, not at its own
+			world.revoke(world.second, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+			world.lapse()
+			world.revoke(world.expiring, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+		}},
+		{name: "a lapsed agent's grant revoked where the base folded t_s", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
+			// the closed reading's shrink, which names no holder it dropped
+			world.lapse()
+			world.revokeGrant(world.expiring)
+		}},
+		{name: "an expiry and then a base", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
+			// the base's closed reading flags the lapsed holder (QD-883), and a base's shrink says no statement
+			world.expire()
+			if verdict := world.net.fold(world.net.owner, world.net.n, world.net.log.State().Base().GetConfigVersion()); !verdict.Accepted() {
+				world.t.Fatalf("the later base: %v", verdict.Refusal)
+			}
+		}},
 		{name: "the agent revoked for compromise", shrinks: true, immediate: true, span: func(world *evsDueClassWorld) {
 			world.compromise(world.agent)
 		}},
@@ -236,11 +255,11 @@ func TestEvsDueClassOfABasesOwnShrinkIsImmediate(t *testing.T) {
 	world.expectClass("the base's other repo", from, false)
 }
 
-// A view that cannot reach the earlier pin reads immediate: after a later base, a new device and a rows-only gate
-// start past it and read the agent's ordinary revocation immediate, where the long-running readers, which still reach
-// it, read it batched; from that base on, every reader classes a later span alike. An earlier pin on another chain reads
-// immediate at every reader.
-func TestEvsDueClassOfAPinTheViewCannotReachIsImmediate(t *testing.T) {
+// A view that cannot reach the states around a shrink reads immediate: after a later base, a new device and a
+// rows-only gate start past the agent's ordinary revocation and read it immediate, where the long-running readers,
+// which still reach it, read it batched; from that base on, every reader classes a later span alike. An earlier pin on
+// another chain reads immediate at every reader.
+func TestEvsDueClassOfAShrinkTheViewCannotReachIsImmediate(t *testing.T) {
 	world := newEvsDueClassWorld(t)
 	world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
 	if verdict := world.net.fold(world.net.owner, world.net.n, world.net.log.State().Base().GetConfigVersion()); !verdict.Accepted() {
@@ -262,6 +281,81 @@ func TestEvsDueClassOfAPinTheViewCannotReachIsImmediate(t *testing.T) {
 
 	forked := &bridge.AuthPin{Version: later.GetVersion(), Chain: bytes.Repeat([]byte{0x5a}, sha256.Size)}
 	world.expectClass("an earlier pin on another chain", forked, true)
+}
+
+// Two later bases move every reader's window past both pins of a crossing: with nothing shrunk since the earlier pin,
+// every reader still classes it batched, by the pins' numbers as option 1 did; after an agent's ordinary revocation in
+// between, every reader reads it immediate, reaching neither state around the shrink. (An expiry before those bases
+// would read immediate too: each base's closed reading flags the lapsed holder, QD-883, which TestEvsDueClassFromTheLog
+// shows.)
+func TestEvsDueClassOfPinsBeforeTheWindow(t *testing.T) {
+	cases := []struct {
+		name      string
+		span      func(world *evsDueClassWorld)
+		immediate bool
+	}{
+		{name: "an entry that shrinks nothing", span: func(world *evsDueClassWorld) {
+			world.net.admitMemberDevice("bystander")
+		}},
+		{name: "an agent's ordinary revocation", immediate: true, span: func(world *evsDueClassWorld) {
+			world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+		}},
+	}
+	for _, c := range cases {
+		world := newEvsDueClassWorld(t)
+		c.span(world)
+		to := world.net.log.Pin()
+		for range 2 {
+			if verdict := world.net.fold(world.net.owner, world.net.n, world.net.log.State().Base().GetConfigVersion()); !verdict.Accepted() {
+				t.Fatalf("%s: a later base: %v", c.name, verdict.Refusal)
+			}
+		}
+		for _, reader := range world.readers() {
+			if _, err := reader.state.StateAt(to); !errors.Is(err, ErrConfigPinNotRetained) {
+				t.Fatalf("%s: %s still reaches the later pin: %v", c.name, reader.name, err)
+			}
+			if immediate := EvsClassifyPathEpochDue(reader.state, world.repoId, world.from, to); immediate != c.immediate {
+				t.Errorf("%s at %s: immediate %t", c.name, reader.name, immediate)
+			}
+		}
+	}
+}
+
+// QD-1018: an earlier pin no reader's window reaches any longer is held to its number, as §10.6's gate holds a
+// generation's. Two later bases with nothing shrunk move every window past it, and an agent's ordinary revocation after
+// them still reads batched at every reader, which needs only the states around it; the same agent revoked for
+// compromise reads immediate.
+func TestEvsDueClassHoldsAnUnretainedEarlierPinToItsNumber(t *testing.T) {
+	cases := []struct {
+		name      string
+		span      func(world *evsDueClassWorld)
+		immediate bool
+	}{
+		{name: "an agent's ordinary revocation", span: func(world *evsDueClassWorld) {
+			world.revoke(world.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+		}},
+		{name: "the agent revoked for compromise", immediate: true, span: func(world *evsDueClassWorld) {
+			world.net.mustPost(world.net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, world.net.compromise(world.agent, world.net.n))
+		}},
+	}
+	for _, c := range cases {
+		world := newEvsDueClassWorld(t)
+		for range 2 {
+			if verdict := world.net.fold(world.net.owner, world.net.n, world.net.log.State().Base().GetConfigVersion()); !verdict.Accepted() {
+				t.Fatalf("%s: a later base: %v", c.name, verdict.Refusal)
+			}
+		}
+		c.span(world)
+		to := world.net.log.Pin()
+		for _, reader := range world.readers() {
+			if _, err := reader.state.StateAt(world.from); !errors.Is(err, ErrConfigPinNotRetained) {
+				t.Fatalf("%s: %s still reaches the earlier pin: %v", c.name, reader.name, err)
+			}
+			if immediate := EvsClassifyPathEpochDue(reader.state, world.repoId, world.from, to); immediate != c.immediate {
+				t.Errorf("%s at %s: immediate %t", c.name, reader.name, immediate)
+			}
+		}
+	}
 }
 
 // Each fail-closed branch of a shrink's class: no entry, a refused one, a base, a statement or a tick with nothing

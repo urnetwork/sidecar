@@ -1174,7 +1174,9 @@ SCOPE = SCOPE.replace(_SC251, "`sdk/sidecar.go`; operator-core, the module of co
 _ID_FIX = [("FI-1 to FI-27 (", "FI-1 to FI-30 ("), ("FS-1 to FS-98 (", "FS-1 to FS-125 ("),
            ("I-EVS-1 to I-EVS-15 (", "I-EVS-1 to I-EVS-17 ("),
            ("RV1-RV3 (restore invariants", "RV1-RV4 (restore invariants"),
-           ("WK1-WK4 (wake invariants", "WK1-WK5 (wake invariants")]
+           ("WK1-WK4 (wake invariants", "WK1-WK5 (wake invariants"),
+           # C20 joined §4.6's table with its X9 ledger entry (QD-980, owner decision 269)
+           ("C1-C19 (connect changes", "C1-C20 (connect changes")]
 for _a, _b in _ID_FIX:
     assert sum(_v.count(_a) for _k, _v in globals().items() if not _k.startswith('_') and isinstance(_v, str)) == 1, _a
 for _k, _v in list(globals().items()):
