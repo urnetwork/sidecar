@@ -30,6 +30,8 @@ Sections 8 and 9's owner answers are folded as owner decisions (2026-11-10): sec
 
 Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 8.8's evs-4 words; and 9.8's evs-11 ttl. 6.8's gkm-5 pointers went into §2.8's gkm-5 with §10's items (QD-618, owner decision 363).
 
+Sections 1, 11 and 15 are folded whole (2026-11-17, track dr4-details-a): their proposed DESIGN.md text as amended, their owner answers being owner decisions 385-395 and 459-461 already, with the diff entries both sections built on removed by owner decision 584 (QD-1036, the complexity review of 2026-11-17). Their parts for protocol/INDEX-FORMAT.md and RECORD.md stay with the tracks that edit those files, and QD-779, QD-780, QD-782 and QD-783 below keep their RECORD.md parts.
+
 <a id="s3"></a>
 ## §3 Architecture overview and end-to-end flows
 

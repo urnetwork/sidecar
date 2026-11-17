@@ -77,3 +77,9 @@ D['D-QUOTA-8'] = "Taskworker rolls usage into daily rows for pre-aggregated dail
 assert 'Q-OPS-11' not in Q, 'Q-OPS-11 exists'
 Q['Q-OPS-11'] = ("When does the segment placement get a design and a home, and what is its lead time?",
                  "(a) a tracked item, 26-week lead; its design due 8 weeks after M3's exit.")
+# The fold of DESIGN-DETAILS.md sections 1, 11 and 15 (2026-11-17): full index entries only (owner decision 584), and
+# merges that read no head beside the roll-up's promotion (385).
+assert D['D-EVS-46'].startswith('Each writer appends to a staged head') and D['D-EVS-47'].startswith(
+    'Merges and roll-ups are functions of base files'), 'EVS index rows moved'
+D['D-EVS-46'] = "Writers append full entries to a staged head ≤16,208 B, sealing into ≤8 reused slots that merges absorb into shards."
+D['D-EVS-47'] = "Merges, reading no head, and roll-ups are functions of base files; a lock-fenced roll-up moves its bucket into all."
