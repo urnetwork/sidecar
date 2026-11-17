@@ -15,7 +15,9 @@
 (* The design (Twin "none"):                                                *)
 (*                                                                          *)
 (*   stamp     step 6 creates a new slot If-None-Match with its statement   *)
-(*             as the object's origin, after its record is written          *)
+(*             as the object's origin, before its record is written: the    *)
+(*             slot round, then the record, which keeps no slot body        *)
+(*             (QD-806, QD-870)                                             *)
 (*   own       an attempt that finds the slot there takes it only under its *)
 (*             own statement's origin                                       *)
 (*   take      it takes over the object of another statement only when that *)
@@ -30,21 +32,31 @@
 (*                                                                          *)
 (* So a slot object is its creator's for as long as it stands, an object    *)
 (* goes only once its creator can no longer commit or its version is        *)
-(* removed, and no two committed pushes introduce one object.               *)
+(* removed, and no two committed pushes introduce one object. An attempt    *)
+(* that dies between its slot round and its record leaves its object under  *)
+(* its origin with no record naming it: a retry of the statement finds it   *)
+(* its own, and a statement never retried leaves it, a leak and never a     *)
+(* loss (S4 as QD-870 words it).                                            *)
 (*                                                                          *)
-(* Twin "Landed" is the code as it stood on 2026-11-12: step 6 takes any    *)
-(* object of equal bytes, and evacuation deletes every slot a dead record   *)
-(* lists, unconditionally. Twin "Interim" is the fix that lands first:      *)
-(* evacuation keeps every dead record's slots, and step 6 is as landed.     *)
+(* Twin "Landed" is the code as it stood on 2026-11-12: step 6 writes the   *)
+(* record and then takes any object of equal bytes, and evacuation deletes  *)
+(* every slot a dead record lists, unconditionally. Twin "Interim" is the   *)
+(* fix that landed first: evacuation keeps every dead record's slots, and   *)
+(* step 6 is as landed, the record first.                                   *)
 (*                                                                          *)
 (* What the model abstracts:                                                *)
 (* - Bytes are equal throughout: a statement that lists the id with other   *)
 (*   bytes is refused by the design whoever it is, as it is today.          *)
-(* - Each statement has one attempt, which may read the head again. Another *)
-(*   attempt of a dead statement that arrives later is refused by the       *)
-(*   statement's time checks (§11.8's Resolve row), which the model does    *)
-(*   not hold; an attempt stopped at any step is held: no step is ever      *)
-(*   forced, and time passes under every stage.                             *)
+(* - Each statement has one attempt, which may read the head again, and in  *)
+(*   the runs that allow one, a retry: after its attempt died before it     *)
+(*   answered, the statement is sent again within its time checks (the tick *)
+(*   it arrived in), a new attempt from step 4 whose slot round and record  *)
+(*   are its own. The attempt it replaces never wakes; one that sleeps is   *)
+(*   held in place instead. Another attempt of a dead statement that        *)
+(*   arrives later is refused by the statement's time checks (§11.8's       *)
+(*   Resolve row), which the model does not hold; an attempt stopped at any *)
+(*   step is held: no step is ever forced, and time passes under every      *)
+(*   stage.                                                                 *)
 (* - Time is ticks, each longer than the settle age and than the second of  *)
 (*   slack the store's conditional DELETE allows: a DELETE that names a     *)
 (*   LastModified takes any object stored in that tick, and a HEAD finds an *)
@@ -79,14 +91,15 @@ CONSTANTS
     MaxCrashes,   \* evacuation runs killed at a step
     MaxConsumes,  \* committed versions removed with the slots they name
     MaxRewrites,  \* ERASE rewrites of the slot
+    MaxRetries,   \* statements sent again after their attempt died before it answered
     Twin          \* "none", or the rule a twin config breaks
 
 ASSUME
     /\ Window >= 1
     /\ EvacAge >= 1
+    /\ MaxRetries >= 0
     /\ Twin \in {"none", "Landed", "Interim", "TakesForeign", "TakesLive", "TakesCommitted", "TakesUnsettled",
-                 "NoOriginAtDelete", "UnconditionalDelete", "NoSettle", "StampBeforeRecord", "DeadUnfenced",
-                 "RewriteDropsOrigin"}
+                 "NoOriginAtDelete", "UnconditionalDelete", "NoSettle", "DeadUnfenced", "RewriteDropsOrigin"}
 
 NoOne == "no one"
 
@@ -100,13 +113,15 @@ VARIABLES
     commitAt,     \* commitAt[p]: the version p committed at, or 0
     consumed,     \* committed pushes whose version was removed with its slots
     evac,         \* evac[e]: one evacuation run
-    left,         \* what the behavior may still do: moves, cuts, stalls, crashes, consumes, rewrites
+    left,         \* what the behavior may still do: moves, cuts, stalls, crashes, consumes, rewrites, retries
     seen          \* ghost: what the behavior did
 
 vars == <<now, head, held, slot, att, rec, commitAt, consumed, evac, left, seen>>
 
+\* born is the tick the statement arrived in, which its time checks end in; it is kept only where a retry may come,
+\* so a run without one counts no state twice for it.
 NoAttempt == [stage |-> "idle", base |-> 0, epoch |-> 0, view |-> [version |-> 0, epoch |-> 0, fence |-> 0],
-              fenced |-> FALSE, recorded |-> FALSE, slotted |-> FALSE, saw |-> 0]
+              fenced |-> FALSE, recorded |-> FALSE, slotted |-> FALSE, saw |-> 0, born |-> 0]
 NoSlot == [stored |-> FALSE, origin |-> NoOne, at |-> 0]
 NoEvac == [stage |-> "idle", push |-> NoOne, minute |-> 0, fenced |-> FALSE, at |-> 0]
 
@@ -119,6 +134,9 @@ Losses(by, pushes) == {[push |-> q, made |-> slot.origin, by |-> by] : q \in pus
 \* Step 6 as landed: any object of equal bytes is the attempt's own.
 TakesAny == Twin \in {"Landed", "Interim", "TakesForeign"}
 
+\* Step 6 as it stood on 2026-11-12 and in the interim's release: the record first, then the slot round.
+RecordFirst == Twin \in {"Landed", "Interim"}
+
 Init ==
     /\ now = 0
     /\ head = [version |-> 1, epoch |-> 1, fence |-> 0]
@@ -130,7 +148,7 @@ Init ==
     /\ consumed = {}
     /\ evac = [e \in Evacs |-> NoEvac]
     /\ left = [moves |-> MaxMoves, cuts |-> MaxCuts, stalls |-> MaxStalls, crashes |-> MaxCrashes,
-               consumes |-> MaxConsumes, rewrites |-> MaxRewrites]
+               consumes |-> MaxConsumes, rewrites |-> MaxRewrites, retries |-> MaxRetries]
     /\ seen = [lost |-> {}, refused |-> {}, judged |-> {}, took |-> {}, deleted |-> FALSE, young |-> FALSE]
 
 (***************************************************************************)
@@ -141,7 +159,8 @@ Init ==
 Arrive(p) ==
     /\ att[p].stage = "idle"
     /\ held = NoOne
-    /\ att' = [att EXCEPT ![p].stage = "read", ![p].base = head.version, ![p].epoch = head.epoch, ![p].view = head]
+    /\ att' = [att EXCEPT ![p].stage = "read", ![p].base = head.version, ![p].epoch = head.epoch, ![p].view = head,
+                          ![p].born = IF MaxRetries > 0 THEN now ELSE 0]
     /\ UNCHANGED <<now, head, held, slot, rec, commitAt, consumed, evac, left, seen>>
 
 \* The record, filed under this tick's minute, once per attempt.
@@ -150,31 +169,48 @@ Recorded(p, attempts) ==
 
 RecordOf(p) == IF att[p].recorded THEN rec ELSE rec \cup {[push |-> p, minute |-> now]}
 
-\* Step 5 on the head as read, then step 6's record: a head past the statement's window, or in a
-\* later path epoch than it declares (412 PATH_EPOCH), refuses it for good. A rerun keeps the record
-\* and the slot (once per attempt).
+\* Step 5 on the head as read: a head past the statement's window, or in a later path epoch than it
+\* declares (412 PATH_EPOCH), refuses it for good, before step 6, so it leaves no record. Then step 6:
+\* the slot round, and the record after it (QD-806). A rerun keeps the slot and the record (once per
+\* attempt). The code as landed and the interim wrote the record here, before the slot round.
 Check(p) ==
     /\ att[p].stage = "read"
     /\ IF att[p].view.version < att[p].base + Window /\ att[p].view.epoch = att[p].epoch
-       THEN IF Twin = "StampBeforeRecord"
-            THEN /\ att' = [att EXCEPT ![p].stage = IF att[p].slotted THEN "ready" ELSE "slot"]
-                 /\ UNCHANGED rec
-            ELSE /\ att' = [Recorded(p, att) EXCEPT ![p].stage = IF att[p].slotted THEN "ready" ELSE "slot"]
+       THEN IF RecordFirst
+            THEN /\ att' = [Recorded(p, att) EXCEPT ![p].stage = IF att[p].slotted THEN "ready" ELSE "slot"]
                  /\ rec' = RecordOf(p)
+            ELSE /\ att' = [att EXCEPT ![p].stage = IF att[p].slotted THEN "ready" ELSE "slot"]
+                 /\ UNCHANGED rec
        ELSE /\ att' = [att EXCEPT ![p].stage = "done"]
             /\ UNCHANGED rec
     /\ UNCHANGED <<now, head, held, slot, commitAt, consumed, evac, left, seen>>
 
-\* The slot is the attempt's: step 7 is next. The twin's record is still to write.
+\* The slot is the attempt's: the record is next, or step 7 where the record came first.
 Slotted(p) ==
-    att' = [att EXCEPT ![p].stage = IF Twin = "StampBeforeRecord" THEN "late" ELSE "ready", ![p].slotted = TRUE]
+    att' = [att EXCEPT ![p].stage = IF RecordFirst THEN "ready" ELSE "record", ![p].slotted = TRUE]
 
-\* Twin StampBeforeRecord: the record after the slots.
-LateRecord(p) ==
-    /\ att[p].stage = "late"
+\* Step 6's record, after the slot round: it lists the slot and keeps no slot body (QD-806). An
+\* attempt held here for good, one that died between its slot round and its record, leaves its object
+\* to no record unless its statement is sent again (S4).
+Record(p) ==
+    /\ att[p].stage = "record"
     /\ att' = [Recorded(p, att) EXCEPT ![p].stage = "ready"]
     /\ rec' = RecordOf(p)
     /\ UNCHANGED <<now, head, held, slot, commitAt, consumed, evac, left, seen>>
+
+\* The client sends the statement again after its attempt died before it answered, within the
+\* statement's time checks: a new attempt reads the head at step 4, and its slot round and record are
+\* its own (once per attempt), so its slot round finds the object the dead attempt left as its own.
+\* A committed or refused attempt answered; a stalled head write is the store's to settle.
+Retry(p) ==
+    /\ att[p].stage \in {"read", "slot", "found", "take", "record", "ready", "reread"}
+    /\ held = NoOne
+    /\ now = att[p].born
+    /\ left.retries > 0
+    /\ left' = [left EXCEPT !.retries = @ - 1]
+    /\ att' = [att EXCEPT ![p] = [NoAttempt EXCEPT !.stage = "read", !.base = att[p].base, !.epoch = att[p].epoch,
+                                                    !.view = head, !.born = att[p].born]]
+    /\ UNCHANGED <<now, head, held, slot, rec, commitAt, consumed, evac, seen>>
 
 \* Step 6's PUT If-None-Match, the statement as the object's origin: it creates the slot, or 412.
 SlotPut(p) ==
@@ -197,8 +233,8 @@ Takeable(p) ==
 
 \* The 412's GET: the attempt's own origin is success. Another statement's object that can no
 \* longer commit is taken over once it has settled: the attempt waits out the settle age. Any other
-\* object is 409 SLOT_STALE, recorded, and the client seals again with new ids. A 404 is the create
-\* again.
+\* object is 409 SLOT_STALE, before any record of the attempt (QD-806), and the client seals again
+\* with new ids. A 404 is the create again.
 SlotGet(p) ==
     /\ att[p].stage = "found"
     /\ CASE ~slot.stored ->
@@ -354,7 +390,7 @@ EvacFence(e) ==
     /\ held = NoOne
     /\ head' = [head EXCEPT !.fence = @ + 1]
     /\ att' = [p \in Pushes |->
-           IF att[p].stage \in {"read", "slot", "found", "take", "late", "ready", "reread"}
+           IF att[p].stage \in {"read", "slot", "found", "take", "record", "ready", "reread"}
            THEN [att[p] EXCEPT !.fenced = TRUE] ELSE att[p]]
     /\ evac' = [evac EXCEPT ![e].stage = "resolve", ![e].fenced = TRUE]
     /\ UNCHANGED <<now, held, slot, rec, commitAt, consumed, left, seen>>
@@ -433,7 +469,8 @@ Next ==
            \/ SlotPut(p)
            \/ SlotGet(p)
            \/ SlotTake(p)
-           \/ LateRecord(p)
+           \/ Record(p)
+           \/ Retry(p)
            \/ Land(p)
            \/ Stall(p)
            \/ StallLands(p)
@@ -478,7 +515,7 @@ TypeOk ==
     /\ now \in 0..MaxTime
     /\ held \in Pushes \cup {NoOne}
     /\ slot.origin \in Pushes \cup {NoOne}
-    /\ \A p \in Pushes : att[p].stage \in {"idle", "read", "slot", "found", "take", "late", "ready", "stalled",
+    /\ \A p \in Pushes : att[p].stage \in {"idle", "read", "slot", "found", "take", "record", "ready", "stalled",
                                            "reread", "done"}
     /\ \A e \in Evacs : evac[e].stage \in {"idle", "resolve", "fence", "keep", "dead", "delete", "drop"}
     /\ consumed \subseteq Pushes
@@ -500,8 +537,13 @@ OriginStands == \A p \in Standing : slot.stored /\ slot.origin = p
 \* No two committed versions that stand introduce the one slot.
 OneIntroducer == Cardinality(Standing) <= 1
 
-\* A statement's origin is on a slot only after its record was written.
-StampHasRecord == slot.stored /\ slot.origin \in Pushes => att[slot.origin].recorded
+\* S4 as QD-870 words it: a statement that is an object's origin has a record, unless its attempt died
+\* between its slot round and its record and it was never retried. Here an attempt that died there is
+\* one held at "record" for good; a retry of the statement holds the object as its own while its slot
+\* round runs, and one refused before its record writes none either.
+StampHasRecord ==
+    slot.stored /\ slot.origin \in Pushes =>
+        att[slot.origin].recorded \/ att[slot.origin].stage = "record" \/ ~att[slot.origin].slotted
 
 \* A statement resolved dead, by evacuation or by a takeover of its slot, is dead for good.
 DeadIsFinal == \A p \in seen.judged : commitAt[p] = 0
@@ -518,12 +560,14 @@ NeverRefuses == seen.refused = {}
 NeverYoung == ~seen.young
 NeverSecondLife == ~(seen.deleted /\ Standing # {})
 NeverTakes == \A p \in seen.took : commitAt[p] = 0
-\* A slot left for good: its statement is dead and ended, and no record of it is left.
+\* A slot left for good (14.5's first leak, QD-870): its statement's attempt stopped between its slot
+\* round and its record and was never sent again, so no batch holds a record of it for evacuation to
+\* judge, past the age at which evacuation judges one.
 NeverLeaks ==
     ~(/\ slot.stored
       /\ slot.origin \in Pushes
-      /\ commitAt[slot.origin] = 0
-      /\ att[slot.origin].stage = "done"
-      /\ \A r \in rec : r.push # slot.origin)
+      /\ att[slot.origin].stage = "record"
+      /\ \A r \in rec : r.push # slot.origin
+      /\ slot.at + EvacAge <= now)
 
 =============================================================================

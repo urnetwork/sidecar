@@ -29,13 +29,15 @@ import (
 	"testing"
 	"time"
 
+	operator "github.com/urnetwork/operator-core"
+
 	"github.com/urnetwork/sidecar"
 )
 
 // What a settle-capable store lets the suite do: read its clock, and reach it as a request the network
-// held past its deadline does.
+// held past its deadline does. DefaultSettle sets its tunables, and the caller sets Now and Delayed.
 type Settle struct {
-	// The store's clock, as the suite must read it to set a deadline in the past of it.
+	// The store's clock as the suite reads it, which a late request's deadline is set in the past of.
 	Now func() time.Time
 	// Target.Cluster through a client that sends each request's x-ur-deadline-ms and never cancels at
 	// it, as a request the network held past its deadline reaches the store (FS-114). A client that
@@ -43,6 +45,22 @@ type Settle struct {
 	// passes whatever the store does. nil fails the settle cases. A fake judging deadlines in the store
 	// itself, with no cancel of its own, is its own.
 	Delayed sidecar.BlobCluster
+	// How far before Now a late request's x-ur-deadline-ms is set. The store judges it by its host's
+	// clock, which §19.6's clock rule holds within 50 ms of true time, and Now is another clock, so a
+	// request a little late by Now can be on time by the store's, which is then right to take it
+	// (QD-892: T3's hosts run on docker's VM clock, not the suite's). 200 ms by default, twice the
+	// 100 ms the fork's settler waits past a deadline for two clocks the rule holds: a store that takes
+	// a request this late fails the settle cases, as does a suite whose clock runs further ahead of the
+	// store's than this. Not positive: the late-request cases fail, since a request sent on time proves
+	// nothing of the store's deadline check.
+	LateBy time.Duration
+}
+
+// Settle's tunables at their defaults, Now and Delayed left for the caller to set.
+func DefaultSettle() *Settle {
+	return &Settle{
+		LateBy: 200 * time.Millisecond,
+	}
 }
 
 type Target struct {
@@ -52,7 +70,8 @@ type Target struct {
 	Now func() time.Time
 	// How far LastModified may sit from Now: real stores round it to the second.
 	ClockTolerance time.Duration
-	// Non-nil on a store that keeps D-OPS-20's deadline and settle rules. nil: those cases wait.
+	// Non-nil, from DefaultSettle, on a store that keeps D-OPS-20's deadline and settle rules. nil: those
+	// cases wait.
 	Settle *Settle
 }
 
@@ -875,11 +894,12 @@ func caseMetadataRefusedCreate(ctx context.Context, target *Target, keys *keySpa
 	return nil
 }
 
-// The store takes 2 KiB of metadata, each key with the header prefix it travels under, and the two
-// sides agree where that ends: a store refusing what Validate passed would fail only at T3.
+// The store takes the protocol's limit of metadata, 2 KiB with each key counted under the header prefix
+// it travels under, and the two sides agree where that ends: a store refusing what Validate passed would
+// fail only at T3. The limit is read where Validate reads it, so it has one default.
 func caseMetadataLimit(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
-	const limit = 2 * 1024
+	limit := operator.DefaultBlobPutSettings().MetadataMaxByteCount
 	name := "state"
 	value := strings.Repeat("x", limit-len("x-amz-meta-")-len(name))
 	key := keys.key("entry")
@@ -1143,7 +1163,8 @@ func casePutImmutableLostCreate(ctx context.Context, target *Target, keys *keySp
 	return wantBody(ctx, target.Cluster, key, body)
 }
 
-// The way to the store a late request takes: Settle.Delayed, on Target.Cluster's cluster.
+// The way to the store a late request takes: Settle.Delayed, on Target.Cluster's cluster, with a
+// positive Settle.LateBy to send it that late. Checked before a case writes anything.
 func delayedCluster(target *Target) (sidecar.BlobCluster, error) {
 	delayed := target.Settle.Delayed
 	if delayed == nil {
@@ -1152,12 +1173,21 @@ func delayedCluster(target *Target) (sidecar.BlobCluster, error) {
 	if delayed.ClusterId() != target.Cluster.ClusterId() {
 		return nil, fmt.Errorf("the delayed path reaches cluster %q, not %q", delayed.ClusterId(), target.Cluster.ClusterId())
 	}
+	if target.Settle.LateBy <= 0 {
+		return nil, fmt.Errorf("a LateBy of %v sends no request past its deadline: one on time proves nothing of the store's deadline check", target.Settle.LateBy)
+	}
 	return delayed, nil
+}
+
+// ctx with a deadline Settle.LateBy before the store's clock as the suite reads it now: past by the
+// store host's own clock too, which is the margin LateBy is chosen for.
+func lateContext(ctx context.Context, settle *Settle) context.Context {
+	return sidecar.WithBlobDeadline(ctx, settle.Now().Add(-settle.LateBy))
 }
 
 // A request that reaches the store past its deadline takes no effect, and its caller cannot tell that
 // from a lost response, so a write reports unknown and a read fails. Then the store reads as if it
-// never came. Each late request goes the delayed way, so it reaches the store.
+// never came. Each late request goes the delayed way, so it reaches the store, Settle.LateBy late.
 func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
 	delayed, err := delayedCluster(target)
@@ -1169,7 +1199,7 @@ func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) er
 	if err != nil {
 		return err
 	}
-	past := sidecar.WithBlobDeadline(ctx, target.Settle.Now().Add(-1*time.Millisecond))
+	past := lateContext(ctx, target.Settle)
 	var unknown *sidecar.BlobUnknownError
 	_, err = delayed.PutIfMatch(past, key, etag, []byte("v2"), nil)
 	if !errors.As(err, &unknown) {
@@ -1194,7 +1224,7 @@ func caseDeadlineDelete(ctx context.Context, target *Target, keys *keySpace) err
 	if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("v1"), nil); err != nil {
 		return err
 	}
-	past := sidecar.WithBlobDeadline(ctx, target.Settle.Now().Add(-1*time.Millisecond))
+	past := lateContext(ctx, target.Settle)
 	var unknown *sidecar.BlobUnknownError
 	if err := delayed.Delete(past, key); !errors.As(err, &unknown) {
 		return fmt.Errorf("a late DELETE: got %v, want an unknown outcome", err)

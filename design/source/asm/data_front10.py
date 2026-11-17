@@ -860,6 +860,49 @@ INDEX = list(_P9['INDEX']) + [
      "The page Worker's loader starts sidecar.wasm with `GODEBUG=gcstoptheworld=1`."),
     (493, 'macOS slices',
      "Desktop behavior selects on gomobile's `macos` tag too, and the leg tables model the macOS slices as GOOS=ios."),
+    # §19's fold (2026-11-16): the build's answers on server services.
+    (494, 'Versioned certificate paths',
+     "The lb keeps reading platform certificates from versioned paths; W5's `tls/current` swap stays built but unused."),
+    (495, "The edges' Postgres roles",
+     "tlsedge and mxedge's router read Postgres through restricted roles in `pg-<service>.yml`, their maps in memory."),
+    (496, 'Degraded-write debt',
+     "The minio fork exports each set's partial-write queue, drops and unclean starts, by which a set leaves "
+     "`degraded`."),
+    (497, "sockets' Client tokens",
+     "sockets verifies Client tokens with no Postgres for about an hour and reads `revocation_record_enabled` from "
+     "sidecar.yml."),
+    (498, 'The pager service',
+     "A commercial pager owns rotas, acknowledgment and escalation; business-hours pages wait for the calendar."),
+    (499, 'No canary hosts',
+     "Only canary's cheap parts are built, and no canary deploy counts as evidence."),
+    (500, "evs's block count",
+     "evs reads its block count from sidecar.yml to divide `evs_unpaid_read_rate`."),
+    (501, 'A failed DELETE held',
+     "A failed DELETE holds its key until each drive commit has answered and each that landed is reverted."),
+    (502, 'lego v4.35.2',
+     "Certificate renewal stays on lego v4.35.2, with v5 as D-OPS-12's target."),
+    (503, 'The competition migration',
+     "The competition's migration for @@OD:267@@ lands in MG0's pending part, permissive first and tightened later."),
+    (504, 'Settle clusters of 4 hosts',
+     "A cluster in settle mode has at least 4 hosts; T3's second metadata cluster becomes 4 × 2."),
+    (505, "api's 503 on a cut connection",
+     "api answers a request whose Postgres connection a restart cut with 503 and `Retry-After: 1`."),
+    (506, "An orphaned log's repos",
+     "After a restore an orphaned log's repos stay active 7 days, then are shredded under the incident."),
+    (507, "Observe's retained count",
+     "evs counts what observe kept, and monitor warns when purge is on a day with no turn-on pass."),
+    (508, 'Flow families out of rdb',
+     "`{sso_}`, `{oauthdev_}` and `{oauthuser_}` join §19.7's tags and the rdb bundles' filter."),
+    (509, "Storage hosts' Fluent Bit",
+     "xops's file-cluster playbook owns the storage hosts' Fluent Bit; the 5 s counters run in a process of their own."),
+    (510, '`p0_enforce` retired',
+     "sidecar.yml's `p0_enforce` is retired; stage 1 and D-TEAM-14 refuse in code from M1."),
+    (511, '503, never 404',
+     "The minio fork answers 404 only on a read quorum's absence, else 503."),
+    (512, '`evs drop-reindex`',
+     "`sidecarctl evs drop-reindex` rebuilds a drop job's corrupt list files."),
+    (513, '`evs observe-report`',
+     "`sidecarctl evs observe-report` prints the purge and drop soaks; drop jobs record renames and cross-ref copies."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -896,7 +939,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 494))
+assert [r[0] for r in INDEX] == list(range(1, 514))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -965,7 +1008,11 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               478: '2026-11-12', 479: '2026-11-14', 480: '2026-11-16', 481: '2026-11-14', 482: '2026-11-16',
               483: '2026-11-15', 484: '2026-11-15',
               485: '2026-11-11', 486: '2026-11-11', 487: '2026-11-11', 488: '2026-11-13', 489: '2026-11-14',
-              490: '2026-11-15', 491: '2026-11-16', 492: '2026-11-15', 493: '2026-11-16'})
+              490: '2026-11-15', 491: '2026-11-16', 492: '2026-11-15', 493: '2026-11-16',
+              494: '2026-11-06', 495: '2026-11-16', 496: '2026-11-12', 497: '2026-11-16', 498: '2026-11-12',
+              499: '2026-11-06', 500: '2026-11-10', 501: '2026-11-12', 502: '2026-11-12', 503: '2026-11-12',
+              504: '2026-11-12', 505: '2026-11-12', 506: '2026-11-14', 507: '2026-11-15', 508: '2026-11-15',
+              509: '2026-11-15', 510: '2026-11-15', 511: '2026-11-15', 512: '2026-11-15', 513: '2026-11-16'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1190,7 +1237,14 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "fold of §18's the same day numbers the answers on the SDK and apps: the posture overlay (485), the key "
     "origin's framing (486), the overdue alarm's backoff (487), Date for page Workers (488), remote edge logins "
     "(489), the forwarding exports (490), the extensions' head reader and budget (491), amending @@OD:215@@, the "
-    "Worker's GC mode (492) and the macOS slices (493). ")
+    "Worker's GC mode (492) and the macOS slices (493). The fold of §19's the same day numbers the answers on "
+    "server services: versioned certificate paths (494), the edges' Postgres roles (495), degraded-write debt "
+    "(496), sockets' Client tokens and the revocation switch (497), the pager service (498), no canary hosts "
+    "(499), evs's block count (500), a failed DELETE held (501), lego v4.35.2 (502), the competition migration "
+    "(503), settle clusters of 4 hosts (504), api's 503 on a cut connection (505), an orphaned log's repos (506), "
+    "observe's retained count (507), flow families out of the rdb bundles (508), the storage hosts' Fluent Bit "
+    "(509), `p0_enforce` retired (510), 503 never 404 (511), `evs drop-reindex` (512) and `evs observe-report` "
+    "(513). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
@@ -1202,3 +1256,15 @@ assert PEER[_i_ctx4][2].count("while `ur share` runs") == 1, 'Q-CTX-4 moved'
 PEER = list(PEER)
 PEER[_i_ctx4] = (PEER[_i_ctx4][0], PEER[_i_ctx4][1],
                  PEER[_i_ctx4][2].replace("while `ur share` runs", "while the sharing sidecar runs")) + tuple(PEER[_i_ctx4][3:])
+# QD-400 (§19's fold, 2026-11-16): gkm's gen/ takes §10.16's gen packs at §19.9's trigger (§19.14, §10.16).
+_i_ops2 = [r[0] for r in PEER].index("Q-OPS-2")
+assert PEER[_i_ops2][2].count("`gen/` stays unpacked") == 1, 'Q-OPS-2 moved'
+PEER[_i_ops2] = (PEER[_i_ops2][0], PEER[_i_ops2][1],
+                 PEER[_i_ops2][2].replace("`gen/` stays unpacked", "`gen/` takes §10.16's gen packs at §19.9's trigger")) + tuple(PEER[_i_ops2][3:])
+# QD-411 (§19's fold, 2026-11-16): Q-OPS-3's residual is closed (§19.14), so the lead names one residual.
+_PI_OLD = ("Decided items leave two engineering residuals: Q-SDK-1's size spike, which decides C17 (Q-REPO-2), and Q-OPS-3's, "
+           "which leaves the Postgres-held sidecar rows to peer review: D-OPS-18's daily off-site dump, whose design closure "
+           "M0's entry review needs (§23.6), and 19.10's reconcile. ")
+assert PEER_INTRO.count(_PI_OLD) == 1, 'PEER_INTRO moved'
+PEER_INTRO = PEER_INTRO.replace(_PI_OLD, "Decided items leave one engineering residual: Q-SDK-1's size spike, which decides C17 "
+                                "(Q-REPO-2). ")
