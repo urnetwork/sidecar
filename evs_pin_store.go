@@ -10,10 +10,10 @@
 // A read record is (ref_id, path, entry version, pin at last read), one per path a head reader read, at most
 // EvsSettings.HeadReadRecordCount for the network, least recently used out (g0-recheck-0-head-reader-read-paths#1). A
 // path whose record was evicted counts as never read, as does one whose record a gap head dropped, its pin passed by
-// the re-pin and the path served absent (QD-1041). Paths are this device's own plaintext, held only in the sealed
-// store and never logged (I-13). A record also keeps the path's floor and the ref's current epoch at its pin
-// (DESIGN-DETAILS 9.2.2, 9.2.3): a floor only falls, and a record stored without them reads as no floor, which only
-// sends less.
+// the re-pin and the path served absent or its removal (QD-1041, QD-1055). Paths are this device's own plaintext,
+// held only in the sealed store and never logged (I-13). A record also keeps the path's floor and the ref's current
+// epoch at its pin (DESIGN-DETAILS 9.2.2, 9.2.3): a floor only falls, and a record stored without them reads as no
+// floor, which only sends less.
 //
 // A record also keeps the ref version its entry was committed at (QD-816): exact where the read walked the statement
 // that wrote it, else evs's word, as what a never-read path holds below a pin is (Q-EVS-6). A verified EvsReseed,
@@ -780,8 +780,8 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 
 // Drops the read records a read loaded, each only while the store holds it as loaded, at the same entry version and
 // pin: one a later read raised, or a reseed lowered, since then stays. A gap head drops the record of a path it
-// served absent whose pin the gap passed, so the path reads as a never-read one does (QD-1041; evs_epoch_read.go's
-// finishRead).
+// served absent or its removal whose pin the gap passed, so the path reads as a never-read one does (QD-1041,
+// QD-1055; evs_epoch_read.go's finishRead).
 func (self *EvsPinStore) DropReadRecords(repoId Id, records []*EvsReadRecord) error {
 	if len(records) == 0 {
 		return nil

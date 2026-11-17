@@ -21,8 +21,8 @@
 //	          epoch state once it has pinned it; it verifies each path in each statement's own epoch, asks once more
 //	          for an epoch a rooted statement needs a proof in, takes a miss as absent only when every listed source
 //	          was asked or the parent's table has no row for the name, holds each recorded path to its record (a gap
-//	          head that passed the record's pin drops it for a path served absent, QD-1041; finishRead), and then
-//	          pins and writes the records' floors
+//	          head that passed the record's pin drops it for a path served absent or its removal, QD-1041, QD-1055;
+//	          finishRead), and then pins and writes the records' floors
 //	pressure  on a blocking ref (a shared or owned ref of a general, config or mailcfg repo), a head that records a due
 //	          above cur, else the newest generation this device holds above max(the head's generation, cur) whose
 //	          GenRotate cause is REMOVE, the crossing from that generation to the newest one held classed by evs's own
@@ -1154,17 +1154,19 @@ func (self *EvsRepo) statementNames(ctx context.Context, keys *evsReadKeys, stat
 	return false, nil
 }
 
-// Ends a read: the records' rule over each path, the pin, each record a gap head passed of a path served absent
-// dropped, and each record raised with the ref version its entry committed at, its floor and the epoch it is pinned
-// in. A path a lookup settled absent was never asked, so its record, which a lookup never consults, keeps.
+// Ends a read: the records' rule over each path, the pin, each record a gap head passed of a path served absent or
+// its removal dropped, and each record raised with the ref version its entry committed at, its floor and the epoch it
+// is pinned in. A path a lookup settled absent was never asked, so its record, which a lookup never consults, keeps.
 //
 // The records' rule, for a path read at its newest (an older version asked for by number is history, not a rollback):
 // a path this device read a version of is never served a version below it, gap or not, and never absent, removed at
 // most, which a path served absent is where the walk from the record's pin ends on its removal (QD-979). On a gap
 // head whose re-pin passed the record's pin, the walk holds nothing from before the re-pin, which is evs's word: such
 // a path served absent is taken as evs serves it, with no alarm, and its record dropped, so it reads as a never-read
-// path does (QD-1041; Q-EVS-6). A record pinned at or past where the gap's walk starts has its whole walk, and keeps
-// the rule. A version format 2 ignores is no absence evs served, and keeps it too.
+// path does (QD-1041; Q-EVS-6); so is the record of a path served its removal, own or a prefix's, which a record kept
+// at its old pin would send every later read of the path through the same gap again (QD-1055). A record pinned at or
+// past where the gap's walk starts has its whole walk, and keeps the rule. A version format 2 ignores is no absence
+// evs served, and keeps it too.
 func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys, round *evsReadRound, paths []*evsReadPath) (*evsReadResult, error) {
 	head := round.head
 	current := evsCurrentEpoch(head.Head.GetPathEpoch())
@@ -1193,7 +1195,7 @@ func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys
 			switch {
 			case verified.Entry != nil && verified.Entry.GetVersion() < path.record.EntryVersion:
 				return refuse("a version below the one this device read")
-			case absent && gapPassed:
+			case (absent || verified.Removal != nil) && gapPassed:
 				dropped = append(dropped, path.record)
 			case verified.Absent && verified.WalkedRemoval == nil:
 				return refuse("absent where this device read a version, with no removal of it walked")

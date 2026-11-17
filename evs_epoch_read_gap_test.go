@@ -1,8 +1,9 @@
-// QD-1041 (question evs-absent-walked-removal-past-catch-up, option 1) on the stand-in evs (evs_world_test.go): a
-// reader whose read re-pins at the head past EvsSettings.CatchUpByteCount, the gap passing a path's record, takes that
-// path served plain absent with no alarm and drops its record, so it reads as a never-read path does (Q-EVS-6); a
-// version served below the record is refused and alarmed, gap or not; and a record pinned inside the window the gap
-// walks keeps the records' rule (finishRead).
+// QD-1041 (question evs-absent-walked-removal-past-catch-up, option 1) and QD-1055 on the stand-in evs
+// (evs_world_test.go): a reader whose read re-pins at the head past EvsSettings.CatchUpByteCount, the gap passing a
+// path's record, takes that path served plain absent with no alarm and drops its record, so it reads as a never-read
+// path does (Q-EVS-6), and drops the record of a path served its removal the same way; a version served below the
+// record is refused and alarmed, gap or not; and a record pinned inside the window the gap walks keeps the records'
+// rule (finishRead).
 
 package sidecar
 
@@ -188,6 +189,44 @@ func TestEvsGapHeadKeepsTheRuleForARecordItsWalkCovers(t *testing.T) {
 		t.Fatalf("x.txt's record kept past the gap: %+v", record)
 	}
 	evsTestRequireTamper(t, "x.txt alone", reader, 1)
+}
+
+// QD-1055 (question absent-walked-removal-followups-gap-removal-record, option 1): x.txt written at 1, which a reader
+// reads, holding its record at 1; 40 versions; x.txt removed at 42; two versions more, the window holding the last
+// 4, from 41. Past the reader's catch-up budget its read of x.txt re-pins at the head with the gap marked, and evs
+// serves x.txt's removal, which the walk holds: the reader takes it and drops the record, whose pin the gap passed,
+// so the next read of x.txt starts from the head, paging no log and gapping no more, where a record kept at 1 would
+// send every read through the same gap again.
+func TestEvsGapHeadDropsTheRecordOfAPathServedItsRemoval(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.window = 4
+	world.push(&evsTestChange{path: "x.txt", content: []byte("first")})
+	reader := world.reader(t, evsTestId("reader"))
+	if _, _, err := evsTestRead(t, reader, world, "x.txt"); err != nil {
+		t.Fatal(err)
+	}
+	evsTestPushOthers(world, "f", 40)
+	removed := world.push(&evsTestChange{path: "x.txt"})
+	evsTestPushOthers(world, "g", 2)
+	reader.client.settings.CatchUpByteCount = 2 * 1024
+	pages := world.logPageCount
+	if _, _, err := evsTestRead(t, reader, world, "x.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Fatalf("x.txt's removal at %d past the gap: %v", removed, err)
+	}
+	if world.logPageCount == pages || len(reader.eventsOf(SidecarEventEvsGap)) != 1 {
+		t.Fatalf("%d log pages, gap events %v: no gap", world.logPageCount-pages, reader.eventsOf(SidecarEventEvsGap))
+	}
+	if record := evsGapTestRecord(t, reader, world, "x.txt"); record != nil {
+		t.Fatalf("x.txt's record kept past the gap: %+v", record)
+	}
+	pages = world.logPageCount
+	if _, _, err := evsTestRead(t, reader, world, "x.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Fatalf("x.txt read again: %v", err)
+	}
+	if world.logPageCount != pages || len(reader.eventsOf(SidecarEventEvsGap)) != 1 {
+		t.Fatalf("x.txt read again: %d log pages, gap events %v", world.logPageCount-pages, reader.eventsOf(SidecarEventEvsGap))
+	}
+	evsTestRequireNoAlarm(t, "the removal past the gap", reader)
 }
 
 // The gap's walk as the reader keeps it: the window's statements, the first after FromVersion, which the records'
