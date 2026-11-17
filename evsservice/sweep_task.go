@@ -14,11 +14,18 @@
 // and every DELETE names the LastModified its HEAD read. A hold that still covers the repo, or another hold, keeps what
 // it keeps, since each DELETE rereads hold/.
 //
-// What queues a start is not yet settled (questions/evsb-m3-02-sweep-pass-triggers.md): a hold ends in api's
-// AbuseHoldPass (ABUSE-M5-14), and the purge turns on by an operator's act. Until one does, nothing queues a start, and
-// what a hold or observe mode kept stays, alarming nowhere: content is kept, never lost. A hold's start carries the
-// hold's network, scope and times into server/task's rows, which §2.8's holds row does not list yet; the question
-// says so.
+// The side that ends each condition queues its start (owner decision 206; QD-635): server's AbuseHoldPass
+// (ABUSE-M5-14) a hold's end, for each hold it ends and before it deletes the hold/ object, carrying the hold's
+// network, scope and times into server/task's rows as §2.8's holds row lists them; and `sidecarctl evs purge-turn-on`,
+// run in the runbook step that sets format2.purge to on, the turn-on.
+//
+// The turn-on start waits for on (owner decision 412; QD-960). Before it queues anything it reads the purge mode of the
+// taskworker that runs it, and while that host reads anything but on (a run given no gate reads observe) it returns
+// ErrSweepRetry, so server/task's backoff reruns it, reading nothing but the gate, until the host's sidecar.yml reads
+// on (§19.11's 60 s reread once the config push reaches it); only then does it queue one scan per metadata cluster. A
+// turn-on therefore never finishes under observe having deleted nothing, and one scheduled and then abandoned, purge
+// set back to observe, waits the same way until purge reads on again. A repo's pass keeps its own rule, keeping every
+// candidate under observe and returning nil (sweep.go), and a hold's end start reads no gate.
 //
 // Safe for concurrent use.
 
@@ -186,8 +193,9 @@ func EvsSweepHoldEndTaskRequest(record *sidecar.HoldRecord, endTime time.Time) (
 	return request, nil
 }
 
-// The start of the turn-on pass (§11.13's sweep row), for whatever turns §19.11's purge on from observe: every repo at
-// format 2 on every metadata cluster, reread whole, deleting what observe mode kept.
+// The start of the turn-on pass (§11.13's sweep row), for what turns §19.11's purge on from observe (`sidecarctl evs
+// purge-turn-on`): every repo at format 2 on every metadata cluster, reread whole, deleting what observe mode kept. Its
+// run waits, retrying, until the taskworker running it reads purge on (see the file header).
 func EvsSweepTurnOnTaskRequest() *sidecar.TaskRequest {
 	return (&evsSweepArgs{run: evsSweepRunStart, kind: evsSweepKindTurnOn}).request()
 }
@@ -221,6 +229,12 @@ func RunSweepTask(ctx context.Context, host *sidecar.ServiceHost, deps *SweepDep
 	}
 	switch parsed.run {
 	case evsSweepRunStart:
+		if parsed.kind == evsSweepKindTurnOn {
+			// before anything is queued: scans under observe would keep everything and finish (see the file header)
+			if purgeMode := sweep.format2.PurgeMode(); purgeMode != sidecar.Format2On {
+				return result, fmt.Errorf("%w: the turn-on waits: this taskworker reads purge %s", ErrSweepRetry, purgeMode)
+			}
+		}
 		if parsed.kind == evsSweepKindHoldEnd && 0 < len(parsed.repoIds) {
 			places := sidecar.NewEvsRepoPlaceResolver(host.Blobs, sweep.clock, nil)
 			for _, repoId := range parsed.repoIds {
