@@ -108,7 +108,8 @@ func (self *fs121World) deliver(message *sidecartest.MailCorpusMessage, slowCoun
 	if result.err != nil || !result.reply.Is(250) {
 		self.t.Fatalf("%s: %s %v", message.Name, result.reply, result.err)
 	}
-	mta.Quit()
+	// the session ends before the clock moves again
+	world.Finish(mta)
 	deposits, err := world.StandingDeposits(self.owner)
 	if err != nil || len(deposits) != 1 {
 		self.t.Fatalf("%s: %d deposits standing after its 250, %v", message.Name, len(deposits), err)
