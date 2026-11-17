@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -1217,6 +1218,76 @@ func TestMailReceiverRetirementBodyNamesOnlyTheRotatedOutKeysHash(t *testing.T) 
 	for _, held := range [][]byte{old.Spki(), []byte(base64.StdEncoding.EncodeToString(old.Spki())), oldScalar, []byte(base64.StdEncoding.EncodeToString(oldScalar))} {
 		if bytes.Contains(block.bodies[1], held) {
 			t.Fatal("the retirement holds more of the old key than its hash")
+		}
+	}
+}
+
+// The receiver's store file as a test writes it.
+func testMailReceiverWriteTlsaFile(t *testing.T, store SidecarStore, data string) {
+	t.Helper()
+	writer, err := store.Create(mailReceiverTlsaFileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Write([]byte(data)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A store file from before retirements were kept reads with none; one that keeps them reads each, unconfirmed at
+// zero and confirmed at its time; a retirement whose hash is not a SHA-256's hex fails the read, never taken as none,
+// so nothing is served or retired on records that do not decode.
+func TestMailReceiverTlsaRecordsReadRetirementsAndRefuseAMalformedOne(t *testing.T) {
+	clock := newMailReceiverTestClock()
+	held := newMailReceiverTestKey(t, clock)
+	unconfirmed := newMailReceiverTestKey(t, clock)
+	confirmed := newMailReceiverTestKey(t, clock)
+	publishMillis := clock.Now().Add(-time.Hour).UnixMilli()
+	retireMillis := clock.Now().Add(-time.Minute).UnixMilli()
+
+	before := newTestMemoryStore()
+	testMailReceiverWriteTlsaFile(t, before, fmt.Sprintf(`{"format":1,"records":[{"host":"mx","spki_sha256":%q,"publish_time_ms":%d}]}`,
+		testMailReceiverSpkiHex(held), publishMillis))
+	records := newMailReceiverTlsaRecords(before, "mx")
+	if err := records.load(); err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := records.publishTime(held); !ok || at.UnixMilli() != publishMillis || 0 < len(records.retireTimes) {
+		t.Fatalf("a file from before retirements: %v %v %v", at, ok, records.retireTimes)
+	}
+
+	kept := newTestMemoryStore()
+	testMailReceiverWriteTlsaFile(t, kept, fmt.Sprintf(
+		`{"format":1,"records":[],"retirements":[{"host":"mx","spki_sha256":%q,"retire_time_ms":0},{"host":"mx","spki_sha256":%q,"retire_time_ms":%d},{"host":"mx.other","spki_sha256":%q,"retire_time_ms":0}]}`,
+		testMailReceiverSpkiHex(unconfirmed), testMailReceiverSpkiHex(confirmed), retireMillis, testMailReceiverSpkiHex(held)))
+	records = newMailReceiverTlsaRecords(kept, "mx")
+	if err := records.load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(records.retireTimes) != 2 || !records.retireTimes[testMailReceiverSpkiHex(unconfirmed)].IsZero() ||
+		records.retireTimes[testMailReceiverSpkiHex(confirmed)].UnixMilli() != retireMillis {
+		t.Fatalf("retirements read %v", records.retireTimes)
+	}
+	if list := records.retireList(false); !slices.Equal(list, [][sha256.Size]byte{unconfirmed.SpkiSha256()}) {
+		t.Fatalf("the unconfirmed list %x", list)
+	}
+	if list := records.retireList(true); len(list) != 2 {
+		t.Fatalf("every retirement kept %x", list)
+	}
+
+	for _, malformed := range []string{
+		`{"format":1,"records":[],"retirements":[{"host":"mx","spki_sha256":"00ff","retire_time_ms":0}]}`,
+		`{"format":1,"records":[],"retirements":[{"host":"mx","spki_sha256":"not hex","retire_time_ms":0}]}`,
+		fmt.Sprintf(`{"format":1,"records":[],"retirements":[{"host":"mx","spki_sha256":%q,"retire_time_ms":-1}]}`, testMailReceiverSpkiHex(held)),
+	} {
+		store := newTestMemoryStore()
+		testMailReceiverWriteTlsaFile(t, store, malformed)
+		if err := newMailReceiverTlsaRecords(store, "mx").load(); !errors.Is(err, ErrSidecarStoreFailed) {
+			t.Errorf("%s read as %v", malformed, err)
 		}
 	}
 }
