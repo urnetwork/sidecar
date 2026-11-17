@@ -1487,17 +1487,18 @@ FS-42  §19    Postgres primary lost, both edge-6 dumps restored, in each order 
               challenge committed above every SOA just before the loss and one at an older
               serial read stale and are rewritten, each changed RRset is listed, and an NS
               that misses the SOA read is stopped, writes reopening once the other serves
-              restore_serial, and serves again only from a reload, its old snapshot taken as
-              the replaced one, /dns/ready not counting it before it serves restore_serial
-              (M5); meter rows re-send, and custom hosts added or removed after the dump leave
-              or return to the regenerated map and are listed, each pending until every lb
-              interface is current for the restore's map version (M6); mail host keys
-              re-register, and a receiver revoked after the dump has no TLSA on either NS once
-              api's replay ends (M7); push tokens re-register, every token row's revision
-              raised past those the lost primary applied, and a client created after the dump
-              re-registering a changed token in a row whose revision passes its lost row's, so
-              no later apply is refused as stale (M8); a sending sidecar revoked after the
-              dump has no DKIM selector on either NS once api's replay ends (M9)
+              restore_serial, and serves again only from a reload, its old snapshot taken
+              as the replaced one, /dns/internal/ready not counting it before it serves
+              restore_serial (M5); meter rows re-send, and custom hosts added or removed
+              after the dump leave or return to the regenerated map and are listed, each
+              pending until every lb interface is current for the restore's map version
+              (M6); mail host keys re-register, and a receiver revoked after the dump has
+              no TLSA on either NS once api's replay ends (M7); push tokens re-register,
+              every token row's revision raised past those the lost primary applied, and a
+              client created after the dump re-registering a changed token in a row whose
+              revision passes its lost row's, so no later apply is refused as stale (M8);
+              a sending sidecar revoked after the dump has no DKIM selector on either NS
+              once api's replay ends (M9)
 FS-43  §20    a fake Stripe accepts an event, then drops the response; the 24 h dedup window   FI-13b      T2     M6-out
               expires; summaries lag; retries arrive in both orders; a correction follows its
               original; a period boundary at 00:00 UTC; finalization at +72 h; a missed row
