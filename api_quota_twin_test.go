@@ -29,6 +29,7 @@ func TestQuotaTwinEncodesAsOperatorCoresDoes(t *testing.T) {
 		`Used int64 json:"used"`,
 		`RetryAfterMs uint32 json:"retry_after_ms"`,
 		`Upgrade bool json:"upgrade"`,
+		`CaseId string json:"case_id,omitempty"`,
 	}
 	if fields := quotaTwinFields(reflect.TypeFor[QuotaRefusal]()); !slices.Equal(fields, refusalFields) {
 		t.Errorf("QuotaRefusal's fields are %q, want %q", fields, refusalFields)
@@ -56,6 +57,21 @@ func TestQuotaTwinEncodesAsOperatorCoresDoes(t *testing.T) {
 	}
 	if decodedRefusal != refusal {
 		t.Errorf("refusal decoded to %+v", decodedRefusal)
+	}
+
+	// a screen review's refusal carries its case (QD-1014), and every other leaves the field out, as above
+	review := QuotaRefusal{LimitKey: "screen_review", CaseId: "0195a6b8-1c2d-7e3f-8a9b-0c1d2e3f4a5b"}
+	reviewJson := `{"limit_key":"screen_review","limit":0,"used":0,"retry_after_ms":0,"upgrade":false,"case_id":"0195a6b8-1c2d-7e3f-8a9b-0c1d2e3f4a5b"}`
+	encoded, err = json.Marshal(review)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != reviewJson {
+		t.Errorf("review refusal %s, want %s", encoded, reviewJson)
+	}
+	var decodedReview QuotaRefusal
+	if err := json.Unmarshal([]byte(reviewJson), &decodedReview); err != nil || decodedReview != review {
+		t.Errorf("review refusal decoded to %+v, %v", decodedReview, err)
 	}
 
 	limits := QuotaLimits{Tier: "team", Limits: map[string]int64{"directory_cards": 16, "evs_stored_bytes": -1, "public_names": 0}}
