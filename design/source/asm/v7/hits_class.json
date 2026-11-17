@@ -756,7 +756,7 @@
  {
   "family": "decided_q_open",
   "file": "05-CORE.md",
-  "line": 708,
+  "line": 706,
   "col": 242,
   "match": "until `exp` (Q-CORE-4",
   "snippet": "s, or any file but the keychain (I-7) | a same-user process reading the keychain; a token copied alone renews, exchanges and mints nothing, but authenticates a transport until `exp` (Q-CORE-4 (c)) |",
@@ -769,7 +769,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 871,
+  "line": 869,
   "col": 79,
   "match": "64 MiB",
   "snippet": "          dictionaries and doc tables in an LRU within Search.MemoryByteCount (64 MiB on the daemon, inside",
@@ -782,7 +782,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 881,
+  "line": 879,
   "col": 42,
   "match": "64 MiB",
   "snippet": "- **Pass (cli/UI.md:82-85).** Argon2id at 64 MiB, t=3, p=4 (RFC 9106 §4), or 19 MiB, t=2, p=1 on mobile and wasm (OWASP). The pass or the OS keystore yields U, which opens every R_n (owner decision 23's shared unlock);",
@@ -1042,7 +1042,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1129,
+  "line": 1120,
   "col": 67,
   "match": "weekly",
   "snippet": "         to the member (owner decision 126); together these hold a weekly re-enroller near 14 admitted",
@@ -1055,7 +1055,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1203,
+  "line": 1194,
   "col": 118,
   "match": "14 days",
   "snippet": "**D-TEAM-1 (proposed).** P0 stage 1 refuses child and admin-refused tokens on all 37 routes before any sidecar, after 14 days log-only, confines `strict_exp` bearers to 7.4's route allowlist and closes AUTH.md:202. *Why:* owner decision 45.",
@@ -1068,7 +1068,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1259,
+  "line": 1250,
   "col": 1178,
   "match": "weekly",
   "snippet": "ry admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf ",
@@ -1081,7 +1081,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 1331,
+  "line": 1322,
   "col": 4011,
   "match": "member-device cap",
   "snippet": "ed, consent, recovery and cascade rows, and its approval suite a cancel under §7.4's allowlist (owner decision 551); §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener",
@@ -1628,14 +1628,14 @@
   "family": "sizing_145",
   "file": "11-EVS.md",
   "line": 2087,
-  "col": 1071,
+  "col": 1008,
   "match": "490-650",
-  "snippet": "rocess and cluster (11.8), so at ~8 evs processes a set near its capacity sees ~1-1.6 records a batch and sustains ~400-450 pushes/s (~530-600 on 1 KiB blocks), not the ~490-650 owner decision 145 records, which assumed batches shared across the whole load; year two needs five to six sets, sized from §22.8's records per batch per cluster. Each n",
-  "reading": "STATED: owner decision 145's recorded ~490-650 pushes/s a set and four to five sets in year two assumed batches shared across the whole load, which its per-cluster placement rules out; the text sizes ~400-450 a set and five to six sets, keeping the decision (clusters, never pools) (§11.13)",
+  "snippet": "e refill writes past it (owner decision 186). Batches are per process and cluster (11.8), so a set near its capacity sustains the pushes §19.9's sets row gives, not the ~490-650 owner decision 145 records, which assumed batches shared across the whole load; §19.9 sizes year two's sets from §22.8's records per batch per cluster. Each next cluster",
+  "reading": "STATED: owner decision 145's recorded ~490-650 pushes/s a set and four to five sets in year two assumed batches shared across the whole load, which its per-cluster placement rules out; the text names that figure only to set it aside and cites §19.9's sets row for a set's pushes and year two's sets (~400-450 a set, five to six sets), keeping the decision (clusters, never pools); read 2026-11-17 after QD-274's citation pass moved the snippet",
   "live": false,
   "gap": false,
   "stated": true,
-  "source": "hand"
+  "source": "hand-2026-11-17"
  },
  {
   "family": "mib64_trigger",
@@ -2121,7 +2121,7 @@
  {
   "family": "edge_termination",
   "file": "13-TLS.md",
-  "line": 281,
+  "line": 280,
   "col": 2,
   "match": "Edge termination",
   "snippet": "| Edge termination, in a TEE or not, and edge interstitials (PLAN.md:84) | WAF, edge auth, warnings | Plaintext and keys on servers | Ruled out (owner directive 2026-11-03) |",
@@ -2134,7 +2134,7 @@
  {
   "family": "edge_termination",
   "file": "13-TLS.md",
-  "line": 334,
+  "line": 333,
   "col": 35,
   "match": "edge can do its own certificate termination",
   "snippet": "- **PLAN.md:84** (\"so that the tls edge can do its own certificate termination\"): superseded by owner directive 2026-11-03. Certificates stay automatic but go to the listening sidecar (D-TLS-1, D-TLS-6).",
@@ -2147,7 +2147,7 @@
  {
   "family": "offsite",
   "file": "13-TLS.md",
-  "line": 351,
+  "line": 350,
   "col": 1681,
   "match": "off-site",
   "snippet": "on each interface loaded (13.4); §12.6's edges route-probe each interface's reported version and drop map-stale interfaces; §19.10's abuse step re-applies, from §21.10's off-site record, the kills and lifts mailed after a restored dump; §19.7 and §2.8 cert-1 name `{tcb_}`.",
@@ -2472,7 +2472,7 @@
  {
   "family": "pools",
   "file": "18-SDK.md",
-  "line": 1075,
+  "line": 1073,
   "col": 92,
   "match": "pools",
   "snippet": "**D-SDK-5 (proposed).** 18.4's budgets are carved out of each process limit. *Why:* message pools and the soft limit are process-wide (sdk/sdk.go:554-571).",
@@ -2485,7 +2485,7 @@
  {
   "family": "pg_redis_durable",
   "file": "18-SDK.md",
-  "line": 1097,
+  "line": 1095,
   "col": 831,
   "match": "Postgres commit",
   "snippet": "nsactions, a stale live marker must not drop the only wake, and masters have no replicas and restart from their last RDB dump; a post-commit SET lands in no order that a Postgres commit or row lock sets, so an older POST's SET could replace a newer token or revive a removed one until the next launch (meta review F15).",
@@ -2498,7 +2498,7 @@
  {
   "family": "decided_q_open",
   "file": "18-SDK.md",
-  "line": 1151,
+  "line": 1149,
   "col": 171,
   "match": "forwarding (Q-SDK-2",
   "snippet": " **PLAN.md:28 (\"used directly by the apps\").** Desktop apps use the `ur daemon`; iOS runs the sidecar in the app, not the tunnel, and every app's VPN component runs only forwarding (Q-SDK-2; owner decisions 87, 197).",
@@ -2511,7 +2511,7 @@
  {
   "family": "pg_redis_durable",
   "file": "18-SDK.md",
-  "line": 1163,
+  "line": 1161,
   "col": 1336,
   "match": "Redis-write assertion admits the `{wakeq_}` entries evs",
   "snippet": "1); §19.7 lists `network_client_lease` in MG1; §7.9's fold bounds the log tails 18.4 keeps, and FS-17's phone holder answers a `HeadCheckProofRequest` from them; §22.7's Redis-write assertion admits the `{wakeq_}` entries evs writes (18.7); §19.4's token row defers to 18.7's steps 0, 5 and 6, and its sender tombstones a token on a vendor 410 only while the row still holds the revision it read",
@@ -3253,27 +3253,27 @@
   "family": "offsite",
   "file": "19-OPS.md",
   "line": 1149,
-  "col": 679,
+  "col": 554,
   "match": "second site",
-  "snippet": "onitor's `hdd_trigger_lead_days` = 182 (§23.7), whose design Q-OPS-11 leaves to engineering within 8 weeks of M3's exit, the rota owning the page (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
-  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); owner decision 550's tracked segment placement just before it moved the snippet.",
+  "snippet": "nt before any HDD set, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
+  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); QD-274's citation pass shortened the tracked segment placement just before it, which moved the snippet (read 2026-11-17).",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-16"
+  "source": "hand-2026-11-17"
  },
  {
   "family": "offsite",
   "file": "19-OPS.md",
   "line": 1149,
-  "col": 697,
+  "col": 572,
   "match": "off-site",
-  "snippet": "ger_lead_days` = 182 (§23.7), whose design Q-OPS-11 leaves to engineering within 8 weeks of M3's exit, the rota owning the page (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
-  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); owner decision 550's tracked segment placement just before it moved the snippet.",
+  "snippet": "set, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
+  "reading": "The off-site copy is listed as a later option decided from operating data (owner decisions 89, 94), not as the v0 design, which keeps one site and no off-site copy (19.6); QD-274's citation pass shortened the tracked segment placement just before it, which moved the snippet (read 2026-11-17).",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-16"
+  "source": "hand-2026-11-17"
  },
  {
   "family": "pg_redis_durable",
@@ -3447,7 +3447,7 @@
  {
   "family": "pg_redis_durable",
   "file": "20-QUOTA.md",
-  "line": 461,
+  "line": 451,
   "col": 76,
   "match": "Redis reservations, leases",
   "snippet": "// server/model: the only order of a payer's transfer balances, for escrow, Redis reservations, leases and settlement",
@@ -3460,7 +3460,7 @@
  {
   "family": "pg_redis_durable",
   "file": "20-QUOTA.md",
-  "line": 560,
+  "line": 550,
   "col": 666,
   "match": "Redis loss; stateless evs",
   "snippet": "QUOTA-12), an erasure's CUT (§11.12), and config and mailcfg pushes within §7.9's limits; rates use one atomic Lua script per network (20.7). *Why:* exact counts survive Redis loss; stateless evs has no counter to lock (owner decision 2); maintenance and erasure must work in a full network, no eraser can spend another's allowance or turns, and paced closures stay",
@@ -3473,7 +3473,7 @@
  {
   "family": "device_cap_1000",
   "file": "20-QUOTA.md",
-  "line": 636,
+  "line": 626,
   "col": 208,
   "match": "member-device cap",
   "snippet": "* §14 and §15 bill by lease. §7.5's Team routes check `NetworkTierOf`; §7 carries the declaration in the client JWT and bounds admissions by `config_admissions`, with no member-device cap (§7.9; owner decision 144). §11.13 derives pack and parcel ids from their bytes, and its nightly pass lists each repo's prefixes for 20.7's count and deletes a pack or p",
@@ -3486,7 +3486,7 @@
  {
   "family": "pg_redis_durable",
   "file": "20-QUOTA.md",
-  "line": 643,
+  "line": 633,
   "col": 2,
   "match": "Redis loss over-admits leases",
   "snippet": "| Redis loss over-admits leases, relayed reservations and rates, or reservations confuse the contract reconciler | Medium | Medium | lease size; grants that shrink near zero; own namespace; nightly rec",
@@ -3499,7 +3499,7 @@
  {
   "family": "mib64_trigger",
   "file": "20-QUOTA.md",
-  "line": 645,
+  "line": 635,
   "col": 371,
   "match": "64 MiB",
   "snippet": "ne bound), and CLOSURE pushes' inline records and staged index files ride their NVMe batch until evacuation moves or drops them; unpaced, an eraser could spend its day's 64 MiB in a minute, 5,000 uploads a second for a Team's 5,000 erasers, 12-20× the HDD sets' ~8,000-12,800 drive operations a second (§19.6), though that day's ~312.5 GiB averag",
@@ -3512,7 +3512,7 @@
  {
   "family": "device_cap_1000",
   "file": "20-QUOTA.md",
-  "line": 654,
+  "line": 644,
   "col": 392,
   "match": "member-device cap",
   "snippet": "rk and FS-46 on built code; then the `team` tier and its prices, seats, checkout, meters, credit line, downgrade jobs and share escrow; 5,000 `config_admissions` with no member-device cap (owner decision 144); the team directory's request limits and accounting at M6 (D-QUOTA-11), its card cap with cards at M10 (D-PHASE-11); at M10 (owner decision 169), wi",

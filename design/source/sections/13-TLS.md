@@ -239,8 +239,7 @@ system publish tls/443/mta-sts (§15.5): AppMode http, audience public, no tls/ 
   only     a receiver (an approved smtp/25/mx listen grant, §15.4) holding an unexpired certificate row
            for the network's pair, in a network with network_verified (§21.7) and a mail_network row
            (§15.15)
-  grant    that listen grant stands in for the tls/ listen and publish grants at registration, Find
-           and admission (§9.10); its expiry or revocation ends that receiver's publish
+  grant    that listen grant stands in for the tls/ listen and publish grants as §9.10's gates say
   serving  the receiver's mail component answers; no interstitial, tls_endpoints unit or expiry of its own
 ```
 

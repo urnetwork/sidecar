@@ -43,11 +43,17 @@ runs, which stays up while a share lives (§5.8). `ur status` says so.
 ur share                                every live share, its uses left and its expiry; never a link
 ur share add <path> [--count=<n>] [--expires=<d>] [--network=<name>]
 ur share get <link> <out>
+ur share get - <out>                    the same, the link read from stdin
 ur share rm <token> [--network=<name>]
 ```
 
 - `add` hashes the file, prints the link `<net>:share/<token>#<k>`, once, and then its uses and expiry. The fragment
   `k` carries the secret: it never reaches a server or a log.
+- `get -` reads the link from stdin, one line, as in `ur share get - <out> < link.txt`, so the link's reusable secret
+  stays out of argv, `ps` and shell history (owner decision 336). When stdin is a terminal, the link is typed or
+  pasted with echo off, as a pass is. A line that is empty, too long or no link is refused, and nothing repeats it.
+  The plain form puts the link in argv: while the get runs another user of the host reads it through `ps` or
+  `/proc/<pid>/cmdline`, and the shell keeps it in its history.
 - `--count` omitted is one use, `--count=0` unlimited until the expiry, `--count=n` n uses (QD-241).
 - `--expires` takes a duration such as `36h` or whole days as `7d`: 24 h by default, at most 30 days (owner decision 74).
 - `get` writes `<out>.part`, keeping the get's id beside it in `<out>.part.id` until it completes, so a get cut short
