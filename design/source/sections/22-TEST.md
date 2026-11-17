@@ -731,9 +731,9 @@ phone    on T4's ios32 and Android surrogate cells, and wasm in Node and, throug
 search   desktop p50 and p99 over the buckets and over all at five years of 100 and 300 messages a day, local
          verification included, and §16.10's warm targets on the desktop matrix and the surrogates; its cold
          contract with a 165 MB all at 10 MB/s, the sole match in the first, middle or last shard or none: first
-         progress, each shard's arrival delay and completion time, and the median and p90 first all hit over
-         FS-76's query set; phone p50 and p99 over the buckets on the surrogates, an iOS simulator (owner decision
-         100) and Safari's wasm;
+         progress, each shard's delay to its hits reaching the caller and the completion time, and the median
+         and p90 first all hit over FS-76's query set, each a delivery time (owner decision 572); phone p50 and
+         p99 over the buckets on the surrogates, an iOS simulator (owner decision 100) and Safari's wasm;
          ranking and typo quality on 20 Newsgroups (rare-word P@5 at least 0.40, top-1 at least 0.6 with confirmation;
          typo top-5 at least 0.9 on desktops and 0.8 on phones); Japanese and Chinese corpora and an HTML-heavy
          mailbox; one roll-up's time, natively and in wasm
@@ -2466,8 +2466,9 @@ FS-110 §16    cold "search more" (16.10's cold contract) at a fake-clock 10 MB/
               indexer: one 165 MB all partition and four queries, the sole exact match in its                     app hosts
               first, middle or last shard, or in none: the four fetch traces are equal in                         M8 (23.6)
               order and bytes; the first progress lands within 500 ms, then at least once a
-              second and at each shard; each shard's hits within the arrival bound after it
-              lands, none before; complete false until the last shard is searched, then
+              second and at each shard; each shard's hits reaching the caller within the
+              arrival bound after it lands, none before, a late hit failing as an early one
+              does (owner decision 572); complete false until the last shard is searched, then
               complete, with a hit or with none, within B / R + 1 s; again across a 1 GiB
               MoreByteCount boundary, the next call's cursor fetching on from the first
               unsearched shard and never refetching a searched one, and with a cache cap under
