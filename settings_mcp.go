@@ -38,6 +38,13 @@ type SidecarMcpSettings struct {
 	// behind ur://approval/{id} until the record's hints reach the inbox: 30 s, a reading, since §16.8 names
 	// hints and no poll.
 	ApprovalPollInterval time.Duration
+	// How old a phone's lease of an approval log is when its next resync renews it: 24 h, evs's renewal age (§11.10's
+	// renew row), renewed at once rather than within the hour since a phone may not run an hour
+	// (record_approval_app.go).
+	ApprovalPhoneLeaseRenewAge time.Duration
+	// How long a phone's lease of an approval log lasts at evs past its last renewal: 7 days (§11.10's renew row). One
+	// held this long had lapsed, so its log is read again once it is held.
+	ApprovalPhoneLeaseExpiry time.Duration
 	// How long a presence key ur keys add-presence or ur login registers lasts, its KeyRegister's not_after from now:
 	// 365 days, a reading, since §7.9 requires a not_after and states no value. A key past it countersigns nothing and
 	// is registered again.
@@ -266,18 +273,20 @@ type SidecarRecordSettings struct {
 // A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarMcpSettings() *SidecarMcpSettings {
 	return &SidecarMcpSettings{
-		SessionCallCount:        8,
-		SessionWriteRate:        SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
-		ResultByteCount:         256 * 1024,
-		CallTimeout:             30 * time.Second,
-		ResourceByteCount:       16 * 1024 * 1024,
-		ApprovalFileRetention:   30 * 24 * time.Hour,
-		ApprovalRequestTimeout:  24 * time.Hour,
-		ApprovalCompleteTimeout: 10 * time.Minute,
-		ApprovalPollInterval:    30 * time.Second,
-		PresenceKeyLifetime:     365 * 24 * time.Hour,
-		RunFileRetention:        30 * 24 * time.Hour,
-		SecretMatch:             DefaultSecretMatchSettings(),
+		SessionCallCount:           8,
+		SessionWriteRate:           SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
+		ResultByteCount:            256 * 1024,
+		CallTimeout:                30 * time.Second,
+		ResourceByteCount:          16 * 1024 * 1024,
+		ApprovalFileRetention:      30 * 24 * time.Hour,
+		ApprovalRequestTimeout:     24 * time.Hour,
+		ApprovalCompleteTimeout:    10 * time.Minute,
+		ApprovalPollInterval:       30 * time.Second,
+		ApprovalPhoneLeaseRenewAge: 24 * time.Hour,
+		ApprovalPhoneLeaseExpiry:   7 * 24 * time.Hour,
+		PresenceKeyLifetime:        365 * 24 * time.Hour,
+		RunFileRetention:           30 * 24 * time.Hour,
+		SecretMatch:                DefaultSecretMatchSettings(),
 	}
 }
 
