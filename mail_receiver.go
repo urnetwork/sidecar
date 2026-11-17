@@ -22,12 +22,16 @@
 //	          served key: §13's issued chain once the device holds one on that key, a self-signed leaf until then,
 //	          asked again at each handshake so the issued chain follows the self-signed leaf with no gap; while a
 //	          rotation keeps an older key serving, the certificate last presented on it, or a self-signed leaf on it
+//	retire    once a key serves, a key the receiver neither holds nor serves, a rotation's old key at the swap above
+//	          all, has its TLSA retired by a repeat of the served key's post naming it (mail_receiver_keys.go's retire
+//	          row; owner decision 443)
 //	stop      the listen's end, a revocation's above all (the registrar resets every stream RST_REVOKED and closes the
 //	          listener), stops the receiver at once: nothing serves until a listen goes through §5.4's gate again,
 //	          which a revoked grant refuses. Server side, the removal drops the receiver's TLSA (DNS-M7-02)
 //
 // A restore_required answer re-registers the host key (§19.10): Reregister posts each held key's TLSA again, which
-// the route takes as a repeat, keeping the times this device recorded.
+// the route takes as a repeat, keeping the times this device recorded, then the served key's again naming every
+// retirement the store keeps, since the restored rows may hold a key it retired published again.
 //
 // No URnetwork component or evs repo holds the mail host key: the keychain holds it, and only certificates reach a
 // handshake and only the TLSA times the component's store. Nothing here logs a host, a name, an address or a key
@@ -75,8 +79,13 @@ type MailReceiverSettings struct {
 	ApprovalRetryInterval time.Duration
 	// After a listen that failed for another reason, or that ended, the wait before the next.
 	ListenRetryInterval time.Duration
-	// After a POST /dns/key-record, a key read or a names read that failed, the wait before the next pass.
+	// After a POST /dns/key-record, a key read or a names read that failed, the wait before the next pass: a key's
+	// publication and a rotated-out key's retirement alike.
 	PublishRetryInterval time.Duration
+	// How long a rotated-out key's retirement is kept once the route confirmed it, for a restore's re-registration to
+	// name it again (§19.10): a restore brings back any of the 14 daily generations D-OPS-18 keeps, which skipped
+	// runs spread over more days, so 30 days.
+	RetiredKeyRetention time.Duration
 	// With nothing else due, how often the key pass reads the keychain again for a rotation's successor.
 	KeyCheckInterval time.Duration
 	// A stream's TLS handshake, from its admission: past it the stream closes, so a stalled sender holds none of
@@ -93,6 +102,7 @@ func DefaultMailReceiverSettings() *MailReceiverSettings {
 		ApprovalRetryInterval: time.Minute,
 		ListenRetryInterval:   30 * time.Second,
 		PublishRetryInterval:  30 * time.Second,
+		RetiredKeyRetention:   30 * 24 * time.Hour,
 		KeyCheckInterval:      10 * time.Minute,
 		HandshakeTimeout:      60 * time.Second,
 	}
@@ -102,7 +112,7 @@ func DefaultMailReceiverSettings() *MailReceiverSettings {
 func (self *MailReceiverSettings) valid() bool {
 	return self != nil && 0 < self.MaxStreams && 0 < self.TlsaTtl && 0 < self.TlsaLiveTtlCount &&
 		0 < self.ApprovalRetryInterval && 0 < self.ListenRetryInterval && 0 < self.PublishRetryInterval &&
-		0 < self.KeyCheckInterval && 0 < self.HandshakeTimeout
+		0 < self.RetiredKeyRetention && 0 < self.KeyCheckInterval && 0 < self.HandshakeTimeout
 }
 
 // How long after its publication a key goes live.
@@ -524,8 +534,9 @@ func (self *MailReceiver) runKeys(ctx context.Context, listener MailReceiverList
 }
 
 // One key pass (mail_receiver_keys.go's file header): publishes what lacks a TLSA, decides the key to serve and sets
-// serving to match, and answers when the next pass is due. With republish, each held key is posted again whatever
-// its record says, as a restore asks, keeping the times recorded.
+// serving to match, rotates out what is neither held nor served and, once a key serves, retires the TLSA of what was
+// rotated out, and answers when the next pass is due. With republish, each held key is posted again whatever its
+// record says, as a restore asks, keeping the times recorded, and the retirement names every one kept.
 func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverListener, republish bool) time.Duration {
 	self.passLock.Lock()
 	defer self.passLock.Unlock()
@@ -571,7 +582,7 @@ func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverList
 			continue
 		}
 		testHookBarrier("mail.receiver.publish.before", "")
-		err := self.args.Publisher.PublishKeyRecord(ctx, self.args.Host, key, names)
+		err := self.args.Publisher.PublishKeyRecord(ctx, self.args.Host, key, names, nil)
 		testHookBarrier("mail.receiver.publish.after", "")
 		if err != nil {
 			fail("key record", err)
@@ -621,8 +632,26 @@ func (self *MailReceiver) keyPass(ctx context.Context, listener MailReceiverList
 		}
 	}
 	self.setServed(listener, serve, names)
-	if err := self.tlsa.keepOnly(current, pending, serve); err != nil {
+	if err := self.tlsa.rotateOut(current, pending, serve); err != nil {
 		fail("tlsa records", err)
+	}
+	if err := self.tlsa.forgetRetired(now, self.settings.RetiredKeyRetention); err != nil {
+		fail("tlsa records", err)
+	}
+	// once a key serves, a repeat of its post retires what was rotated out: at a rotation the old key, from the swap
+	// on and never while it serves; a restore names every retirement kept (mail_receiver_keys.go's retire row)
+	if serve != nil {
+		if retire := self.tlsa.retireList(republish); 0 < len(retire) {
+			testHookBarrier("mail.receiver.retire.before", "")
+			err := self.args.Publisher.PublishKeyRecord(ctx, self.args.Host, serve, names, retire)
+			testHookBarrier("mail.receiver.retire.after", "")
+			if err != nil {
+				// tried again with the next pass's writes, after PublishRetryInterval
+				fail("key record", err)
+			} else if err := self.tlsa.confirmRetired(retire, self.clock.Now()); err != nil {
+				fail("tlsa records", err)
+			}
+		}
 	}
 	return max(nextWait, 0)
 }
@@ -658,8 +687,9 @@ func (self *MailReceiver) setServed(listener MailReceiverListener, key *TlsDevic
 }
 
 // restore_required's step for the receiver (§19.10): posts each held key's TLSA again, which the route takes as a
-// repeat of what it holds, then serves as the key pass decides. Nil when no listen is held, since the next listen's
-// pass publishes what lacks a record.
+// repeat of what it holds, then serves as the key pass decides and, once a key serves, posts it again naming every
+// retirement kept, so a key the restored rows hold published again leaves TLSA. Nil when no listen is held, since the
+// next listen's pass publishes what lacks a record.
 func (self *MailReceiver) Reregister(ctx context.Context) error {
 	listener := func() MailReceiverListener {
 		self.stateLock.Lock()

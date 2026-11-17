@@ -224,14 +224,24 @@ type indexPlace struct {
 // The mailbox families §15.7 lays out, of which only m/ messages are documents.
 const indexMailMessagePrefix = "m/"
 
-// Whether §11.14's never row keeps the version out of the index: config, mailcfg and secret repos, and any repo of no
-// kind; .ur-index/ paths and every file on ur/index; a mailbox's or group inbox's every path but m/ (its i/, r/,
-// vault/, o/, or/, p/, forward, ra/, f/ and s/model); and deposits before their ingest. Binaries are the sniff's to
-// find, once the version is read.
-func indexExcluded(place indexPlace) bool {
-	switch place.repoKind {
+// Whether a repo of kind holds no index at all (§11.14's never row, D-EVS-43): config, mailcfg and secret repos, and
+// any repo of no kind. A mailbox holds one, of its m/ messages, so a repo-wide question asks this and never
+// indexExcluded with no path, which a mailbox's layout answers for the path.
+func indexRepoExcluded(kind protocol.RepoKind) bool {
+	switch kind {
 	case protocol.RepoKind_REPO_KIND_CONFIG, protocol.RepoKind_REPO_KIND_MAILCFG, protocol.RepoKind_REPO_KIND_SECRET,
 		protocol.RepoKind_REPO_KIND_UNSPECIFIED:
+		return true
+	}
+	return false
+}
+
+// Whether §11.14's never row keeps the version out of the index: config, mailcfg and secret repos, and any repo of no
+// kind (indexRepoExcluded); .ur-index/ paths and every file on ur/index; a mailbox's or group inbox's every path but
+// m/ (its i/, r/, vault/, o/, or/, p/, forward, ra/, f/ and s/model); and deposits before their ingest. Binaries are
+// the sniff's to find, once the version is read.
+func indexExcluded(place indexPlace) bool {
+	if indexRepoExcluded(place.repoKind) {
 		return true
 	}
 	if place.deposit || place.indexRef {

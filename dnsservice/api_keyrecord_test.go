@@ -1,6 +1,7 @@
 package dnsservice_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -15,8 +16,8 @@ import (
 )
 
 // POST /dns/key-record (DNS-M7-02) and POST /dns/label-reclaim (DNS-M5-16) on the block, on fakes: the receiver gate
-// before the model, a scope's host unjudged and so unavailable, the model's refusals answered as they are; a reclaim
-// for another network refused before the model.
+// before the model, a scope's host unjudged and so unavailable, the model's refusals answered as they are, a
+// rotation's retire_spki_sha256 handed to the model as posted; a reclaim for another network refused before the model.
 
 // The key and reclaim stores the block hands writes to.
 type fakeKeyRecordStore struct {
@@ -131,6 +132,38 @@ func TestDnsKeyRecordRouteGatesTheReceiver(t *testing.T) {
 	}
 	if len(store.keyCalls) != 1 || len(denied.keyCalls) != 0 {
 		t.Fatalf("calls %d %d", len(store.keyCalls), len(denied.keyCalls))
+	}
+}
+
+// A repeat naming rotated-out keys in retire_spki_sha256 reaches the model with the list as posted, for the model to
+// judge which are the caller's (owner decision 443); a body with none hands it none.
+func TestDnsKeyRecordRouteHandsTheRetireListToTheModel(t *testing.T) {
+	store := &fakeKeyRecordStore{}
+	api, token, _, _ := newTestKeyRecordApi(t, store, true)
+	retire := [][]byte{bytes.Repeat([]byte{0x11}, 32), bytes.Repeat([]byte{0x22}, 32)}
+	body, err := json.Marshal(&sidecar.DnsKeyRecordRequest{Host: "mx", Spki: []byte("synthetic spki"), Attestation: []byte("synthetic attestation"), RetireSpkiSha256s: retire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte(`"retire_spki_sha256":[`)) {
+		t.Fatalf("the body's field: %s", body)
+	}
+	if recorder := api.serve(api.withToken(http.MethodPost, sidecar.DnsKeyRecordPath, token, string(body))); recorder.Code != http.StatusOK {
+		t.Fatalf("a repeat with a list: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := api.serve(api.withToken(http.MethodPost, sidecar.DnsKeyRecordPath, token, testKeyRecordBody(t, "mx"))); recorder.Code != http.StatusOK {
+		t.Fatalf("a post with no list: %d", recorder.Code)
+	}
+	store.stateLock.Lock()
+	defer store.stateLock.Unlock()
+	if len(store.keyCalls) != 2 {
+		t.Fatalf("%d calls", len(store.keyCalls))
+	}
+	if listed := store.keyCalls[0].Request.RetireSpkiSha256s; len(listed) != 2 || !bytes.Equal(listed[0], retire[0]) || !bytes.Equal(listed[1], retire[1]) {
+		t.Fatalf("the model's list %x", listed)
+	}
+	if listed := store.keyCalls[1].Request.RetireSpkiSha256s; len(listed) != 0 {
+		t.Fatalf("a post with no list handed %x", listed)
 	}
 }
 

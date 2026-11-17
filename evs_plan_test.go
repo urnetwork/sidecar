@@ -118,6 +118,23 @@ type evsTestPushServer struct {
 	// checks pushes as a format-2 evs does, taking versionless versions, kind-5 uploads and staged bytes; parts carry
 	// no staged bytes here
 	format2 bool
+	// models §11.8's 5d and step 7 for the search index: a CUT, and a push other than a CLOSURE that writes an index
+	// file, must name the head's index_epoch, else 409 INDEX_EPOCH, and a CUT moves the epoch to its own version
+	indexEpochs bool
+}
+
+// Whether a push creates or replaces an index file: an entry version of versioning 2, which 5d holds to the epoch.
+func evsTestWritesIndexFile(checked *EvsCheckedPayload) bool {
+	for _, change := range checked.Changes {
+		if !change.WritesEntry() {
+			continue
+		}
+		entry := &protocol.EvsEntryVersion{}
+		if proto.Unmarshal(change.EntryVersion, entry) == nil && entry.GetVersioning() == uint32(protocol.EvsVersioning_EVS_VERSIONING_INDEX) {
+			return true
+		}
+	}
+	return false
 }
 
 func newEvsTestPushServer(t *testing.T, world *evsTestWorld) *evsTestPushServer {
@@ -247,7 +264,12 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	statement, err := ParseEvsStatement(pushRequest.GetStatement())
+	parse := ParseEvsStatement
+	if self.format2 {
+		// a CUT and an index push's index_epoch are format 2's
+		parse = ParseEvsStatementFormat2
+	}
+	statement, err := parse(pushRequest.GetStatement())
 	if err != nil {
 		self.t.Errorf("a push whose statement does not parse: %v", err)
 		writer.WriteHeader(http.StatusBadRequest)
@@ -378,6 +400,36 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		evsTestRefuse(writer, refusal)
 		return
 	}
+	if 0 < len(checked.Staged) {
+		// a format-2 evs keeps a committed push's staged segments, which a read serves beside the version naming them
+		world.stateLock.Lock()
+		for _, staged := range checked.Staged {
+			world.segments[string(staged.Id[:])] = staged.Bytes
+		}
+		world.stateLock.Unlock()
+	}
+	func() {
+		// and its new slots, each body in its slot item's order, until an ERASE names the slot: the stand-in drops it
+		// whole, as one-key slots, a mail message's among them, are destroyed
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		if world.slots == nil {
+			world.slots = map[string][]byte{}
+		}
+		slotIndex := 0
+		for _, object := range checked.NewObjects {
+			if object.Kind != protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT {
+				continue
+			}
+			if slotIndex < len(checked.SlotBodies) {
+				world.slots[string(object.Id)] = checked.SlotBodies[slotIndex]
+			}
+			slotIndex += 1
+		}
+		for _, erased := range checked.Erased {
+			delete(world.slots, string(erased.SlotId.Bytes()))
+		}
+	}()
 	self.stateLock.Lock()
 	self.committed[pushId] = version
 	drop := 0 < self.dropAnswers
@@ -450,6 +502,12 @@ func (self *evsTestPushServer) commit(world *evsTestWorld, statement *EvsStateme
 		return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE}}
 	}
 	flags := push.GetFlags()
+	cut := flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CUT) != 0
+	closure := flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) != 0
+	if self.indexEpochs && (cut || (!closure && evsTestWritesIndexFile(checked))) && push.GetIndexEpoch() != world.indexEpoch {
+		// 5d: a CUT, and a push other than a CLOSURE that writes an index file, names the head's index_epoch
+		return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH}}
+	}
 	if gitMode {
 		if push.GetBaseVersion() != head {
 			return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_NON_FAST_FORWARD}}
@@ -530,6 +588,10 @@ func (self *evsTestPushServer) commit(world *evsTestWorld, statement *EvsStateme
 		statement: statement.Bytes, parsed: statement, chain: chain,
 		built: &EvsBuiltPush{Statement: statement, Payload: payload, Parts: parts, ChangeTree: tree},
 	})
+	if self.indexEpochs && cut {
+		// step 7: a CUT's head carries index_epoch = its own version
+		world.indexEpoch = version
+	}
 	if gitMode {
 		world.deleted = flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) != 0
 		if flags&uint32(protocol.EvsPushFlag_EVS_PUSH_IMMUTABLE) != 0 {
