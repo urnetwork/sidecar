@@ -112,6 +112,7 @@ func newSearchEngineMore() *searchEngineMore {
 	}
 }
 
+// Wakes every waiter on the state, stateLock held: each change calls it in the critical section that made it.
 func (self *searchEngineMore) notifyWithLock() {
 	close(self.notify)
 	self.notify = make(chan struct{})
@@ -124,6 +125,7 @@ func (self *searchEngineMore) state() (searchEngineMoreState, chan struct{}) {
 	return self.stateWithLock(), self.notify
 }
 
+// The state as a page reads it, stateLock held; the finished set is a copy.
 func (self *searchEngineMore) stateWithLock() searchEngineMoreState {
 	return searchEngineMoreState{
 		progress: self.progress, waiting: self.waiting, finished: maps.Clone(self.finished), running: self.running,
