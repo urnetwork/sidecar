@@ -299,11 +299,26 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 }
 
 // What the bridge enforces: the posture's decision it last adopted, a copy whose BridgeState and pins the caller must
-// not change. A producer reads its pins to hand the entries above them (BRIDGE-M4-17's catch-up).
+// not change. A producer reads its pins to hand the entries above them (BRIDGE-M4-17's catch-up). Its Overdue is the
+// one that adoption read: DecisionNow reads the clock's.
 func (self *Bridge) Decision() PostureDecision {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.decision
+}
+
+// The posture's decision at the clock's now, adopted: its Overdue at now and, where a point of the overdue alarm's
+// schedule has passed since the posture last raised one, PostureAlarmCompileOverdue among its Alarms (Posture.Decision;
+// DESIGN-DETAILS 4.2.5, QD-696). A forwarding role's producer reads its sink at each NextAlarmAt, which is where the
+// alarm is raised, so it reads this rather than Decision, whose Overdue is as old as the last adoption. Publishes only
+// what changed, as a link's change does, and answers the decision this call adopted.
+func (self *Bridge) DecisionNow() PostureDecision {
+	var decision PostureDecision
+	self.apply(func() (PostureDecision, bool, error) {
+		decision = self.posture.Decision()
+		return decision, false, nil
+	})
+	return decision
 }
 
 // The sidecar role, a full reader, found a base that does not compile from its head, or found it again: the posture

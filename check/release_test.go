@@ -2,18 +2,23 @@
 
 // make check also runs at release (§4.7), from a tree that does not look like this one: the root
 // module is .../sidecar/v2026 in v2026/, smtpproof is .../sidecar/smtpproof/v2026 in smtpproof/v2026/,
-// cli and mlsinterop stay put, and every quoted path of ours has been rewritten (§4.9). These apply
-// build/all/run.sh's transformation to a fixture and read the result, so the rules are shown to work
-// where they will next be run. release_step_test.go holds this to run.sh's own functions, and a real
-// dry run of them over this tree is the release fixture's job (§22.4): build/all's
-// TestSidecarReleaseFixture.
+// cli and mlsinterop stay put, third_party/'s forks stay at the top beside v2026/, and every quoted
+// path of ours has been rewritten (§4.9). These apply build/all/run.sh's transformation to a fixture
+// and read the result, so the rules are shown to work where they will next be run.
+// release_step_test.go holds this to run.sh's own functions, and a real dry run of them over this
+// tree is the release fixture's job (§22.4): build/all's TestSidecarReleaseFixture.
 
 package check
 
 import (
+	"errors"
+	"io/fs"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -21,15 +26,18 @@ import (
 // The year in the release's module paths.
 const releaseSuffix = "/v2026"
 
-// What stays beside the module on a version branch, out of every consumer's module cache. These are
-// the arguments run.sh's sidecar_release_edit gives go_mod_fork.
-var releaseDocumentPattern = regexp.MustCompile(`^(design|research_notes|DESIGN.*|HANDOFF\.md|FEEDBACK-SYSTEM\.md)$`)
+// What stays beside the module on a version branch, out of every consumer's module cache: the
+// documents, and third_party/, whose forks are modules of their own that every development replace
+// names at the top (QD-920, owner decision 278). These are the arguments run.sh's
+// sidecar_release_edit gives go_mod_fork.
+var releaseDocumentPattern = regexp.MustCompile(`^(design|research_notes|third_party|DESIGN.*|HANDOFF\.md|FEEDBACK-SYSTEM\.md)$`)
 
 // The go_mod_fork steps, in the order §4.9 gives them, on connect, glog and operator-core as earlier
 // release steps leave them and on this repository: every module's quoted paths rewritten, smtpproof's
 // before the root's and coretest's before operator-core's, each tree moved into v2026/ beside its
 // nested modules, and the relative replaces rebased. connect, glog and operator-core keep a local
-// replace here, where a release has their tags in a proxy.
+// replace here, where a release has their tags in a proxy. QD-193's forks stay at the top, so a moved
+// module's replace of one climbs out of its version directory, and cli's and mlsinterop's stand.
 func (self *fixture) toRelease() {
 	self.t.Helper()
 	top := filepath.Join(self.directory, "sidecar")
@@ -127,10 +135,26 @@ func (self *fixture) toRelease() {
 			"-require="+operatorCoreBasePath+releaseSuffix+version,
 			"-replace="+operatorCoreBasePath+releaseSuffix+"="+climbs+"operator-core/v2026")
 	}
-	edit(filepath.Join(top, "v2026", "go.mod"), append(siblings("../../"), "-module="+sidecarBasePath+releaseSuffix)...)
-	edit(filepath.Join(top, "smtpproof", "v2026", "go.mod"), append(siblings("../../../"),
-		"-module="+smtpproofPath+releaseSuffix, "-droprequire="+sidecarBasePath, "-dropreplace="+sidecarBasePath,
-		"-require="+sidecarBasePath+releaseSuffix+version, "-replace="+sidecarBasePath+releaseSuffix+"=../../v2026")...)
+	// each fork a module replaces, reached from its go.mod's directory by climbs to the repository's top
+	forks := func(goModPath string, climbs string) []string {
+		file, err := readModuleFile(goModPath)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		arguments := []string{}
+		for _, replace := range file.Replace {
+			if directory, fork := forkReplaces[replace.Old.Path]; fork {
+				arguments = append(arguments, "-replace="+replace.Old.Path+"="+climbs+directory)
+			}
+		}
+		return arguments
+	}
+	rootGoMod := filepath.Join(top, "v2026", "go.mod")
+	edit(rootGoMod, slices.Concat(siblings("../../"), forks(rootGoMod, "../"), []string{"-module=" + sidecarBasePath + releaseSuffix})...)
+	smtpproofGoMod := filepath.Join(top, "smtpproof", "v2026", "go.mod")
+	edit(smtpproofGoMod, slices.Concat(siblings("../../../"), forks(smtpproofGoMod, "../../"), []string{
+		"-module=" + smtpproofPath + releaseSuffix, "-droprequire=" + sidecarBasePath, "-dropreplace=" + sidecarBasePath,
+		"-require=" + sidecarBasePath + releaseSuffix + version, "-replace=" + sidecarBasePath + releaseSuffix + "=../../v2026"})...)
 	edit(filepath.Join(top, "mlsinterop", "go.mod"), append(siblings("../../"),
 		"-dropreplace="+sidecarBasePath, "-replace="+sidecarBasePath+releaseSuffix+"=../v2026")...)
 	edit(filepath.Join(top, "cli", "go.mod"), append(siblings("../../"),
@@ -148,6 +172,102 @@ func (self *fixture) openRelease() *repository {
 	}
 	repository.report = self.t.Logf
 	return repository
+}
+
+// QD-193's forks as this repository holds them (§4.7): each a module of its own under its upstream
+// path in third_party/, which the root requires and every module of this repository replaces, a
+// nested one from one level up, since Go does not inherit a replace.
+func (self *fixture) writeForks() {
+	self.t.Helper()
+	appendTo := func(name string, text string) {
+		data, err := os.ReadFile(filepath.Join(self.directory, "sidecar", filepath.FromSlash(name)))
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		self.write(name, string(data)+text)
+	}
+	for _, old := range slices.Sorted(maps.Keys(forkReplaces)) {
+		directory := forkReplaces[old]
+		self.write(directory+"/go.mod", "module "+old+"\n\ngo 1.27.4\n")
+		self.write(directory+"/fork.go", "package fork\n")
+		appendTo("go.mod", "\nrequire "+old+" v0.0.0\n\nreplace "+old+" => ./"+directory+"\n")
+		for _, nested := range []string{"cli", "smtpproof", "mlsinterop"} {
+			appendTo(nested+"/go.mod", "\nreplace "+old+" => ../"+directory+"\n")
+		}
+	}
+}
+
+// run.sh's release step over the fixture, as release_step_test.go's twin runs it, tidy and get
+// skipped. patch, when given, changes the functions' text first.
+func (self *fixture) runReleaseStep(patch func(string) string) {
+	self.t.Helper()
+	functions := releaseStepFunctions(self.t)
+	if patch != nil {
+		functions = patch(functions)
+	}
+	command := exec.Command("zsh", "-c", releaseStepHarness, "release-step", functions, releaseStepSed(self.t),
+		releaseStepInternalVersion, releaseStepVersion, releaseStepGvisorVersion)
+	command.Dir = filepath.Join(self.directory, "sidecar")
+	command.Env = goEnvironment()
+	if output, err := command.CombinedOutput(); err != nil {
+		self.t.Fatalf("run.sh's functions failed on the fixture: %v\n%s", err, output)
+	}
+}
+
+// Where a release tree's replaces of QD-193's forks miss them, top being the repository's top on the
+// version branch. Each module of this repository replaces each fork with the climb from its own
+// directory to the top, then third_party/X: the root's in v2026/ and cli's and mlsinterop's read
+// ../third_party/X, smtpproof's in smtpproof/v2026/ ../../third_party/X, and each reaches a go.mod
+// that declares the fork's upstream path.
+func releaseForkFindings(top string) []string {
+	findings := []string{}
+	modules := []struct {
+		name   string
+		climbs string
+	}{
+		{name: "v2026", climbs: "../"},
+		{name: "smtpproof/v2026", climbs: "../../"},
+		{name: "cli", climbs: "../"},
+		{name: "mlsinterop", climbs: "../"},
+	}
+	for _, module := range modules {
+		directory := filepath.Join(top, filepath.FromSlash(module.name))
+		file, err := readModuleFile(filepath.Join(directory, "go.mod"))
+		if err != nil {
+			findings = append(findings, findingf("%s: %v", module.name, err))
+			continue
+		}
+		_, replaces := moduleTerms(file)
+		for _, old := range slices.Sorted(maps.Keys(forkReplaces)) {
+			want := module.climbs + forkReplaces[old]
+			target, found := replaces[old]
+			if !found {
+				findings = append(findings, findingf("%s: no replace of %s", module.name, old))
+				continue
+			}
+			if target != want {
+				findings = append(findings, findingf("%s: replace %s => %s, and the release's is %s", module.name, old, target, want))
+			}
+			forkGoMod := filepath.Join(directory, filepath.FromSlash(target), "go.mod")
+			if _, err := os.Stat(forkGoMod); err != nil {
+				findings = append(findings, findingf("%s: replace %s => %s reaches no go.mod", module.name, old, target))
+				continue
+			}
+			forkFile, err := readModuleFile(forkGoMod)
+			if err != nil {
+				findings = append(findings, findingf("%s: replace %s => %s: %v", module.name, old, target, err))
+			} else if forkFile.Module.Path != old {
+				findings = append(findings, findingf("%s: replace %s => %s reaches the module %s", module.name, old, target, forkFile.Module.Path))
+			}
+		}
+	}
+	switch _, err := os.Stat(filepath.Join(top, "v2026", "third_party")); {
+	case err == nil:
+		findings = append(findings, "v2026/third_party: the forks moved into the root module's tree")
+	case !errors.Is(err, fs.ErrNotExist):
+		findings = append(findings, findingf("v2026/third_party: %v", err))
+	}
+	return findings
 }
 
 // Every rule still reads a clean release tree as clean, with the legs on the rewritten paths.
@@ -273,4 +393,54 @@ func TestHygieneFailsOnAStalePbGoOnAReleaseBranch(t *testing.T) {
 
 	fixture.edit("v2026/protocol/bridge/signed.proto", "bytes body = 1;", "bytes body = 1;\n  bytes more = 2;")
 	wantFindings(t, fixture.openRelease().staleGeneratedFindings(t), "protocol/bridge/signed.pb.go is stale")
+}
+
+// QD-193's forks stay at the repository's top beside v2026/, as the documents do (QD-920, owner
+// decision 278), so every module's replace of one reaches it after the step: the root's and
+// smtpproof's climb out of their version directories, and cli's and mlsinterop's stand, which is what
+// sidecar_cli_release_edit's tidy needs. toRelease and run.sh's functions each leave that layout, and
+// leave it alike, and the release layout's replace rule reads both as clean.
+func TestReleaseKeepsTheForksBesideTheModule(t *testing.T) {
+	described := newFixture(t)
+	described.writeReleaseInputs()
+	described.writeForks()
+	described.toRelease()
+	released := newFixture(t)
+	released.writeReleaseInputs()
+	released.writeForks()
+	released.runReleaseStep(nil)
+	describedTop := filepath.Join(described.directory, "sidecar")
+	releasedTop := filepath.Join(released.directory, "sidecar")
+	failFindings(t, "toRelease", releaseForkFindings(describedTop))
+	failFindings(t, "run.sh", releaseForkFindings(releasedTop))
+	failFindings(t, "release step", releaseStepFindings(t, describedTop, releasedTop))
+	wantFindings(t, described.openRelease().replaceFindings(t))
+	wantFindings(t, released.openRelease().replaceFindings(t))
+}
+
+// The step as it stood before QD-920, which moved third_party/ into v2026/ with the rest of the tree:
+// the root's replace still reaches its fork, which moved with it, and smtpproof's walks to
+// v2026/third_party/, but cli's and mlsinterop's reach nothing, which is where their tidy stopped the
+// release.
+func TestReleaseForkFindingsFireWhenTheForksMoveIntoTheModule(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.writeReleaseInputs()
+	fixture.writeForks()
+	kept := " 'third_party'"
+	fixture.runReleaseStep(func(functions string) string {
+		if strings.Count(functions, kept) != 1 {
+			t.Fatal("sidecar_release_edit's go_mod_fork arguments changed, so this plants nothing")
+		}
+		return strings.Replace(functions, kept, "", 1)
+	})
+	wantFindings(t, releaseForkFindings(filepath.Join(fixture.directory, "sidecar")),
+		"v2026: replace github.com/emersion/go-smtp => ./third_party/go-smtp, and the release's is ../third_party/go-smtp",
+		"v2026: replace github.com/mjl-/mox => ./third_party/mox, and the release's is ../third_party/mox",
+		"smtpproof/v2026: replace github.com/emersion/go-smtp => ../../v2026/third_party/go-smtp, and the release's is ../../third_party/go-smtp",
+		"smtpproof/v2026: replace github.com/mjl-/mox => ../../v2026/third_party/mox, and the release's is ../../third_party/mox",
+		"cli: replace github.com/emersion/go-smtp => ../third_party/go-smtp reaches no go.mod",
+		"cli: replace github.com/mjl-/mox => ../third_party/mox reaches no go.mod",
+		"mlsinterop: replace github.com/emersion/go-smtp => ../third_party/go-smtp reaches no go.mod",
+		"mlsinterop: replace github.com/mjl-/mox => ../third_party/mox reaches no go.mod",
+		"v2026/third_party: the forks moved into the root module's tree")
 }

@@ -302,6 +302,51 @@ func TestPurgerGatesDeleteNothing(t *testing.T) {
 	}
 }
 
+// QD-855: observe mode counts each candidate id it keeps in observed_total, the series §19.8's turn-on row reads; a
+// list left to the sweep at its certainty counts nothing here, the sweep counting it as it keeps it, and a list the
+// purge deletes with purge on counts nothing.
+func TestPurgerObserveCountsItsKeptIds(t *testing.T) {
+	fixture := newPurgeFixture(t, nil)
+	path := checkTestPath("x")
+	segment := fixture.segment("observed segment", 4096)
+	staged := fixture.segment("observed staged", 4096)
+	slot := fixture.slot("observed slot")
+	observed := func() float64 {
+		return fixture.host.Metrics.Value(versionlessObservedMetricName)
+	}
+
+	fixture.gate.set(sidecar.Format2Observe)
+	fixture.purger.Certain(fixture.commit(path, fixture.clock.Now().Add(-24*time.Hour), [][]byte{segment}, [][]byte{staged}, [][]byte{slot}))
+	fixture.clock.Advance(time.Minute)
+	fixture.purger.runDue()
+	if got := observed(); got != 3 || fixture.purger.Stats().ObservedCount != 3 {
+		t.Fatalf("observed %v, stats %+v", got, fixture.purger.Stats())
+	}
+	if !fixture.segmentStored(segment) || !fixture.segmentStored(staged) || !fixture.slotStored(slot) {
+		t.Fatal("observe mode deleted content")
+	}
+
+	fixture.host.ClockCheck.SetUnknown()
+	fixture.purger.Certain(fixture.commit(path, fixture.clock.Now().Add(-24*time.Hour), [][]byte{segment}, nil, nil))
+	fixture.host.ClockCheck.SetOffset(time.Millisecond)
+	fixture.clock.Advance(time.Minute)
+	fixture.purger.runDue()
+	if got := observed(); got != 3 || fixture.purger.Stats().SweepCount != 1 {
+		t.Fatalf("a list left to the sweep: observed %v, stats %+v", got, fixture.purger.Stats())
+	}
+
+	fixture.gate.set(sidecar.Format2On)
+	fixture.purger.Certain(fixture.commit(path, fixture.clock.Now().Add(-24*time.Hour), [][]byte{segment}, [][]byte{staged}, [][]byte{slot}))
+	fixture.clock.Advance(time.Minute)
+	fixture.purger.runDue()
+	if fixture.segmentStored(segment) || fixture.segmentStored(staged) || fixture.slotStored(slot) || fixture.purger.Stats().DeletedCount != 3 {
+		t.Fatalf("purge on: %+v", fixture.purger.Stats())
+	}
+	if got := observed(); got != 3 {
+		t.Fatalf("observed %v once purge reads on", got)
+	}
+}
+
 // FS-65's clock clauses: an offset unknown or 150 ms fast at the certainty queues nothing; a clock that turns unsure
 // inside the allowance deletes nothing, whatever it reads at the due time; each is the sweep's.
 func TestPurgerUnsureClockDeletesNothing(t *testing.T) {

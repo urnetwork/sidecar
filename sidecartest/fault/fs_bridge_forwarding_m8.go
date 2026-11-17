@@ -24,11 +24,9 @@
 //     open with no revocation.
 //
 // None of these is in the fault catalog: §23.6's M8 row names §22.5's forwarding cases, not an FS-38 case, so each runs
-// as a schedule of its own until a design-records fold of DESIGN-DETAILS 4.6 gives FS-38 its M8-out case. What the
-// forwarding rows still lack, each in BRIDGE-M8-07's report: an app host fed by its own Forwarder with the app's
-// sidecar stopped, and the schedules that need one (a grant and a revocation within §8.9's targets, a DelegationRevoke
-// racing a compile, a supersession racing a contract, a compile finishing below a newer state, a refused Unsuspend,
-// FwdReach-NoCompile and Fwd.tla's twins as schedules).
+// as a schedule of its own until a design-records fold of DESIGN-DETAILS 4.6 gives FS-38 its M8-out case. The host here
+// is a sidecar role's; the rows that need an app host fed by its own Forwarder with the app's sidecar stopped, §22.5's
+// forwarding cases and Fwd.tla's twins as schedules, are fs_bridge_forwarding_app_m8.go's.
 
 package fault
 

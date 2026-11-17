@@ -1073,16 +1073,6 @@ var testFenceAdditions = []struct {
 	},
 	{
 		message:  "Pending",
-		field:    testFenceField{name: "sidecar_id", number: 3, typeName: "bytes"},
-		question: "plan-SDK-pending-sidecar-id",
-	},
-	{
-		message:  "Pending",
-		field:    testFenceField{name: "identity_public_key", number: 4, typeName: "bytes"},
-		question: "plan-SDK-pending-sidecar-id",
-	},
-	{
-		message:  "Pending",
 		field:    testFenceField{name: "forward_delegation_id", number: 5, typeName: "bytes"},
 		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
 	},
