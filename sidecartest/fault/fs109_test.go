@@ -26,6 +26,13 @@ package fault
 // is sampled at each record (gkm asked for RK_g) rather than each 64 KiB frame, since the frame read is the cache's
 // (CORE-M10-01's) and has no hook; a page Worker here is the Worker's settings on this host, not wasm.
 //
+// The heap is the process's, so the row runs in a search heap process of its own (sidecartest's), where nothing another
+// test left running allocates beside it; and the searches at once share a sampler of searches at once, which collects
+// only with every search holding an engine slot parked at a sample of its own, since a sibling still reading frames
+// through another's forced collection counted its frame buffers there: 8 MB to 58 MB at 80,000 on the desktop with
+// nothing else in the process, and 111 MB under load (tip-check at abd1bdee), past Search.MemoryByteCount. The oracle's
+// answer is taken before a sampler begins, so its work counts in no search's heap.
+//
 // Not here: the retained expired bucket the row also names, the T4 surrogates (sdk/sidecar_search_t4_test.go runs the
 // phones' cells), and the app-host case at the later of M10-out and M8-out.
 
@@ -146,18 +153,33 @@ type fs109Device struct {
 	sampler     *sidecartest.SearchHeapSampler
 }
 
-func (self *fs109Device) sample(label string) {
+func (self *fs109Device) current() *sidecartest.SearchHeapSampler {
 	self.samplerLock.Lock()
-	current := self.sampler
-	self.samplerLock.Unlock()
-	if current != nil {
+	defer self.samplerLock.Unlock()
+	return self.sampler
+}
+
+// A sample at a record a search opens: inside its page, holding one of the engine's slots.
+func (self *fs109Device) sampleRecord() {
+	if current := self.current(); current != nil {
+		current.SampleHoldingSlot("record")
+	}
+}
+
+// A sample between a search's pages, or before its first: holding no slot.
+func (self *fs109Device) sample(label string) {
+	if current := self.current(); current != nil {
 		current.Sample(label)
 	}
 }
 
-// A fresh sampler, its start the heap now, the device's cache left out as its disk.
-func (self *fs109Device) startSampler() *sidecartest.SearchHeapSampler {
+// A fresh sampler of one search, or with atOnce of the searches at once of the device's engine, its start the heap now,
+// the device's cache left out as its disk.
+func (self *fs109Device) startSampler(atOnce bool) *sidecartest.SearchHeapSampler {
 	sampler := sidecartest.NewSearchHeapSamplerLeavingOut(self.device.CacheByteCount)
+	if atOnce {
+		sampler = sidecartest.NewSearchHeapSamplerOfSearches(self.device.CacheByteCount, self.device)
+	}
 	self.samplerLock.Lock()
 	self.sampler = sampler
 	self.samplerLock.Unlock()
@@ -175,7 +197,7 @@ func (self *fs109State) deviceOf(key string) *fs109Device {
 func (self *fs109State) sync(host *searchHost, updates int, key string) func(ctx context.Context, net *Net) error {
 	return func(ctx context.Context, net *Net) error {
 		device := &fs109Device{settings: host.settings()}
-		made, err := self.world.device(ctx, host, device.settings, nil, 0, func() { device.sample("record") })
+		made, err := self.world.device(ctx, host, device.settings, nil, 0, device.sampleRecord)
 		if err != nil {
 			return err
 		}
@@ -200,8 +222,8 @@ func (self *fs109State) sync(host *searchHost, updates int, key string) func(ctx
 	}
 }
 
-// One search of the row's query on device, its result recorded.
-func (self *fs109State) search(ctx context.Context, device *fs109Device, label string) error {
+// One search of the row's query on device, its result recorded beside oracle, SearchOracle's answer taken before.
+func (self *fs109State) search(ctx context.Context, device *fs109Device, label string, oracle []string) error {
 	fetchedBefore := len(device.device.Fetches())
 	result, err := device.device.Search(ctx, &sidecar.SearchRequest{Text: fs109Query, Scope: sidecar.SearchCached, Remote: "off"}, 64, func(page *sidecar.SearchTestPage) {
 		device.sample("page")
@@ -209,19 +231,21 @@ func (self *fs109State) search(ctx context.Context, device *fs109Device, label s
 	if err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}
-	self.add(&fs109Result{label: label, hits: searchHitNames(result.Hits()), oracle: self.world.oracleMatches(fs109Query), fetched: len(device.device.Fetches()) - fetchedBefore})
+	self.add(&fs109Result{label: label, hits: searchHitNames(result.Hits()), oracle: oracle, fetched: len(device.device.Fetches()) - fetchedBefore})
 	return nil
 }
 
 // The device at key searches alone within its host's working set; with collect, the search holds every bucket row as
-// the forbidden build would, and the step expects the working set to fail.
+// the forbidden build would, and the step expects the working set to fail: by the budget, since a check that could not
+// answer at all proves nothing about the build.
 func (self *fs109State) alone(host *searchHost, key string, collect bool) func(ctx context.Context, net *Net) error {
 	return func(ctx context.Context, net *Net) error {
 		device := self.deviceOf(key)
 		if device == nil {
 			return fmt.Errorf("no device %s", key)
 		}
-		sampler := device.startSampler()
+		oracle := self.world.oracleMatches(fs109Query)
+		sampler := device.startSampler(false)
 		var collected map[[16]byte]string
 		if collect {
 			var err error
@@ -230,11 +254,11 @@ func (self *fs109State) alone(host *searchHost, key string, collect bool) func(c
 			}
 			device.sample("rows collected")
 		}
-		if err := self.search(ctx, device, key+" alone"); err != nil {
+		if err := self.search(ctx, device, key+" alone", oracle); err != nil {
 			return err
 		}
 		withinErr := sampler.CheckWithin(key+"'s search alone", host.workingSetByteCount)
-		if !collect {
+		if !collect || errors.Is(withinErr, sidecartest.ErrSearchHeapRefused) {
 			return withinErr
 		}
 		if withinErr == nil {
@@ -244,7 +268,8 @@ func (self *fs109State) alone(host *searchHost, key string, collect bool) func(c
 	}
 }
 
-// The device at key runs DaemonSearchCount searches at once within Search.MemoryByteCount, then ends.
+// The device at key runs DaemonSearchCount searches at once within Search.MemoryByteCount, then ends. They share a
+// sampler of searches at once, each telling it when it ends.
 func (self *fs109State) atOnce(key string) func(ctx context.Context, net *Net) error {
 	return func(ctx context.Context, net *Net) error {
 		device := self.deviceOf(key)
@@ -252,13 +277,15 @@ func (self *fs109State) atOnce(key string) func(ctx context.Context, net *Net) e
 			return fmt.Errorf("no device %s", key)
 		}
 		defer self.world.done(device.device)
-		sampler := device.startSampler()
+		oracle := self.world.oracleMatches(fs109Query)
+		sampler := device.startSampler(true)
 		count := device.settings.DaemonSearchCount
 		errs := make([]error, count)
 		waitGroup := sync.WaitGroup{}
 		for index := range count {
 			waitGroup.Go(func() {
-				errs[index] = self.search(ctx, device, fmt.Sprintf("%s at once %d of %d", key, index+1, count))
+				defer sampler.SearchEnded()
+				errs[index] = self.search(ctx, device, fmt.Sprintf("%s at once %d of %d", key, index+1, count), oracle)
 			})
 		}
 		waitGroup.Wait()
@@ -355,9 +382,12 @@ func Fs109MaskMemory(net *Net) *Schedule {
 }
 
 // FS-109 on T2, with one explorer seed: its steps hold no barrier and no background action, so a seed reorders
-// nothing, and each run builds a million updates' index again.
+// nothing, and each run builds a million updates' index again. In a search heap process of its own, where its heap
+// checks answer.
 func TestFs109(t *testing.T) {
-	settings := DefaultRuleSettings()
-	settings.Seeds = settings.Seeds[:1]
-	RunRow(t, "FS-109", "", settings)
+	sidecartest.RunSearchHeapProcess(t, nil, func(t *testing.T) {
+		settings := DefaultRuleSettings()
+		settings.Seeds = settings.Seeds[:1]
+		RunRow(t, "FS-109", "", settings)
+	})
 }
