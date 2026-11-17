@@ -54,27 +54,14 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// §11.6's due row: a batched epoch is due 24 h after the first commit crossing it.
-const evsPathEpochBatchedDelay = 24 * time.Hour
-
-// §11.6's map row: a PATH_EPOCH commits on parts each under 24 h old.
-const evsPathMapMaxAge = 24 * time.Hour
-
-// §11.6's commit row: at most 3 sources stand, and a batched epoch waits while 2 do.
-const (
-	evsPathEpochMaxSourceCount        = 3
-	evsPathEpochBatchedMaxSourceCount = 2
-)
-
-// The most generations one commit's crossing reads, gen/<k> by gen/<k>: past it, 503, refusing nothing.
-const evsPathEpochMaxCrossing = 1024
-
 // What a commit crossing REMOVE generations records: the newest one, and whether the crossing is immediate.
 type pathEpochDue struct {
 	generation uint64
 	immediate  bool
 	// on a shared or owned ref of a general, config or mailcfg repo: an immediate due blocks creation
 	blocks bool
+	// how long after the commit a batched due falls due (EvsSettings.PathEpochBatchedDelay, 24 h)
+	batchedDelay time.Duration
 }
 
 // What step 4 read for a PATH_EPOCH push: whether its map's parts stand, and the token paths window versions after
@@ -102,14 +89,14 @@ func (self *pushAttempt) pathEpochDueOver(head *protocol.EvsHead) (*pathEpochDue
 	if to <= from {
 		return nil, nil
 	}
-	if evsPathEpochMaxCrossing < to-from {
+	if uint64(self.settings.PathEpochMaxCrossingCount) < to-from {
 		return nil, fmt.Errorf("a crossing of %d generations", to-from)
 	}
 	groupId, err := sidecar.IdFromBytes(push.GetGroupId())
 	if err != nil {
 		return nil, err
 	}
-	due := &pathEpochDue{}
+	due := &pathEpochDue{batchedDelay: self.settings.PathEpochBatchedDelay}
 	var toRecord *protocol.GenRotate
 	for generation := from + 1; generation <= to; generation += 1 {
 		record, err := self.engine.generations.Read(self.ctx, self.cluster, groupId, generation, self.gateView)
@@ -142,7 +129,7 @@ func applyPathEpochDue(prior *protocol.EvsPathEpoch, due *pathEpochDue, now time
 	next := &protocol.EvsPathEpoch{Current: max(1, prior.GetCurrent()), Sources: prior.GetSources(),
 		DueGeneration: prior.GetDueGeneration(), DueBlocksCreation: prior.GetDueBlocksCreation(), DueByMs: prior.GetDueByMs(),
 		BlockUntilMs: prior.GetBlockUntilMs()}
-	dueByMs := now.Add(evsPathEpochBatchedDelay).UnixMilli()
+	dueByMs := now.Add(due.batchedDelay).UnixMilli()
 	if due.immediate {
 		dueByMs = now.UnixMilli()
 	}
@@ -252,7 +239,7 @@ func (self *pushAttempt) pathMapPartsPresent(push *protocol.EvsPush) (bool, erro
 	prefix := PathMapPrefix(self.repoId, self.refId, pNew, mapSha256)
 	startAfter := ""
 	for {
-		objects, more, err := self.cluster.List(self.ctx, prefix, startAfter, 1000)
+		objects, more, err := self.cluster.List(self.ctx, prefix, startAfter, self.settings.PathMapListPageCount)
 		if err != nil {
 			return false, err
 		}
@@ -267,7 +254,7 @@ func (self *pushAttempt) pathMapPartsPresent(push *protocol.EvsPush) (bool, erro
 	now := self.engine.clock.Now()
 	for part := uint32(1); part <= pathMap.GetParts(); part += 1 {
 		uploaded, ok := listed[PathMapKey(self.repoId, self.refId, pNew, mapSha256, part)]
-		if !ok || evsPathMapMaxAge <= now.Sub(uploaded) {
+		if !ok || self.settings.PathMapMaxAge <= now.Sub(uploaded) {
 			return false, nil
 		}
 	}
@@ -288,7 +275,7 @@ func (self *pushAttempt) pathEpochRules(view *PushView) *EvsCheckRefusal {
 	}
 	pathEpoch := head.GetPathEpoch()
 	sourceCount := len(pathEpoch.GetSources())
-	if evsPathEpochMaxSourceCount <= sourceCount || (evsPathEpochBatchedMaxSourceCount <= sourceCount && !pathEpoch.GetDueBlocksCreation()) {
+	if self.settings.PathEpochMaxSourceCount <= sourceCount || (self.settings.PathEpochBatchedMaxSourceCount <= sourceCount && !pathEpoch.GetDueBlocksCreation()) {
 		return newEvsCheckRefusal(EvsCheckReasonEpochSourcesFull, fmt.Sprintf("%d sources standing", sourceCount))
 	}
 	reads := self.pathEpoch

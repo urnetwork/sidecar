@@ -75,6 +75,19 @@ type EvsFormatSettings struct {
 	// A Signed EvsReseed, as a repo admin files it, evs keeps it at reseed/<repo>/<ref> and a read reply carries it:
 	// 4 KiB (§11.13's re-seed row; QD-725). evs refuses one past it and a reader refuses a reply carrying one.
 	ReseedStatementMaxByteCount int
+	// The epochs one read names a path in, one token path an epoch, which evs matches by the epoch field: 8
+	// (DESIGN-DETAILS 9.2.2's EvsReadPath). evs refuses a path naming more.
+	ReadPathMaxEpochCount int
+	// §11.6's commit row: the source epochs a head lists at most, 3, a PATH_EPOCH committing only while fewer stand;
+	// and the ones a batched epoch waits while, 2, keeping the third for an immediate one. The client's status, alarm
+	// and mapper wait by the same values.
+	PathEpochMaxSourceCount        int
+	PathEpochBatchedMaxSourceCount int
+	// §11.6's due row: a batched due falls due this long after the first commit crossing it, 24 h, and a client
+	// counts a REMOVE generation no head records as due this long after it first held it.
+	PathEpochBatchedDelay time.Duration
+	// §11.6's map row: a PATH_EPOCH commits only on map parts each uploaded under this long ago, 24 h.
+	PathMapMaxAge time.Duration
 }
 
 // The protocol's values, the only source of their defaults.
@@ -104,6 +117,12 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		ReadFrameMaxByteCount:       1024*1024 + 64*1024,
 		ReadPathDeltaMaxCount:       255,
 		ReseedStatementMaxByteCount: 4 * 1024,
+
+		ReadPathMaxEpochCount:          8,
+		PathEpochMaxSourceCount:        3,
+		PathEpochBatchedMaxSourceCount: 2,
+		PathEpochBatchedDelay:          24 * time.Hour,
+		PathMapMaxAge:                  24 * time.Hour,
 	}
 }
 

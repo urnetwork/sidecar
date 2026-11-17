@@ -197,7 +197,7 @@ func (self *EvsEngine) servePathEpochBlock(request *EvsRequest) {
 			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH)
 			return
 		}
-		if !pathEpoch.GetDueBlocksCreation() && evsPathEpochBatchedMaxSourceCount <= len(pathEpoch.GetSources()) {
+		if !pathEpoch.GetDueBlocksCreation() && self.settings.PathEpochBatchedMaxSourceCount <= len(pathEpoch.GetSources()) {
 			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL)
 			return
 		}

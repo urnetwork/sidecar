@@ -285,6 +285,21 @@ type EvsSettings struct {
 	// counted down from the one just below it, of which its check reads the one holding the source, a cached GET
 	// of at most 70 KiB: 1. Non-positive reads none, so only a source the window holds commits.
 	MapSourcePageCount int
+	// §11.6's commit, due and map rows and DESIGN-DETAILS 9.2.2's EvsReadPath, the format's values
+	// (sidecar.EvsFormatSettings), which the client reads too: the sources a head lists at most, 3, and those a
+	// batched epoch waits while, 2; how long after the first commit crossing it a batched due falls due, 24 h; how
+	// old a map's parts may be when its PATH_EPOCH commits, under 24 h; and the epochs one read names a path in, 8.
+	// All positive.
+	PathEpochMaxSourceCount        int
+	PathEpochBatchedMaxSourceCount int
+	PathEpochBatchedDelay          time.Duration
+	PathMapMaxAge                  time.Duration
+	ReadPathMaxEpochCount          int
+	// The generations one commit's crossing reads, gen/<k> by gen/<k>, 1,024: past it, 503, refusing nothing.
+	// Positive.
+	PathEpochMaxCrossingCount int
+	// The keys one LIST of a map's parts returns, 1,000. Positive.
+	PathMapListPageCount int
 
 	// §11.8's 5b: a one-part push's time_ms within this of evs's clock, 10 min, and a part's and a seal's within
 	// SealTimeBound, 30 min; further ahead 429 TIME_AHEAD. Both positive.
@@ -409,6 +424,14 @@ func DefaultEvsSettings() *EvsSettings {
 		CopyRunMoveCount:            10 * 1000,
 		CopyLogPageCount:            16,
 		MapSourcePageCount:          1,
+
+		PathEpochMaxSourceCount:        sidecar.DefaultEvsFormatSettings().PathEpochMaxSourceCount,
+		PathEpochBatchedMaxSourceCount: sidecar.DefaultEvsFormatSettings().PathEpochBatchedMaxSourceCount,
+		PathEpochBatchedDelay:          sidecar.DefaultEvsFormatSettings().PathEpochBatchedDelay,
+		PathMapMaxAge:                  sidecar.DefaultEvsFormatSettings().PathMapMaxAge,
+		ReadPathMaxEpochCount:          sidecar.DefaultEvsFormatSettings().ReadPathMaxEpochCount,
+		PathEpochMaxCrossingCount:      1024,
+		PathMapListPageCount:           1000,
 
 		PushTimeBound:                10 * time.Minute,
 		SealTimeBound:                30 * time.Minute,
@@ -539,6 +562,10 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.CopyHeadRereadInterval <= 0 || evsCopyMaxHeadRereadInterval < self.CopyHeadRereadInterval {
 		return fmt.Errorf("%w: a copy's head reread %s, outside (0, %s]", ErrEvsSettings, self.CopyHeadRereadInterval, evsCopyMaxHeadRereadInterval)
+	}
+	if self.PathEpochMaxSourceCount <= 0 || self.PathEpochBatchedMaxSourceCount <= 0 || self.PathEpochBatchedDelay <= 0 ||
+		self.PathMapMaxAge <= 0 || self.ReadPathMaxEpochCount <= 0 || self.PathEpochMaxCrossingCount <= 0 || self.PathMapListPageCount <= 0 {
+		return fmt.Errorf("%w: a path epoch's sources, batched delay, map age, read epochs, crossing or map list page not positive", ErrEvsSettings)
 	}
 	return nil
 }

@@ -121,7 +121,7 @@ func TestPathEpochDueBatchedOnExpiriesAlone(t *testing.T) {
 	commitment := fixture.crossRemove(false)
 	pathEpoch := fixture.head().Head.GetPathEpoch()
 	if pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() ||
-		pathEpoch.GetDueByMs() != fixture.clock.Now().Add(evsPathEpochBatchedDelay).UnixMilli() {
+		pathEpoch.GetDueByMs() != fixture.clock.Now().Add(fixture.settings.PathEpochBatchedDelay).UnixMilli() {
 		t.Fatalf("due %v", pathEpoch)
 	}
 	creation := fixture.planAtTwo(commitment)
@@ -370,7 +370,7 @@ func TestPathEpochBlock(t *testing.T) {
 	commitment := fixture2.crossRemove(false)
 	block.RefId = fixture2.check.refId.Bytes()
 	requireRefusal(t, fixture2.postRoute("/path-epoch/block", block), http.StatusTooManyRequests, protocol.EvsRefusalCode_EVS_REFUSAL_WAIT)
-	fixture2.clock.Advance(evsPathEpochBatchedDelay + evsPathEpochBlockAfterDue)
+	fixture2.clock.Advance(fixture2.settings.PathEpochBatchedDelay + evsPathEpochBlockAfterDue)
 	before := fixture2.head()
 	if recorder := fixture2.postRoute("/path-epoch/block", block); recorder.Code != http.StatusOK {
 		t.Fatalf("block answered %d (%s)", recorder.Code, refusalOf(t, recorder).GetCode())

@@ -207,7 +207,7 @@ func TestPathEpochDueBatchedOnAnAgentsOrdinaryRevocation(t *testing.T) {
 	}
 	pathEpoch := fixture.head().Head.GetPathEpoch()
 	if pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() ||
-		pathEpoch.GetDueByMs() != fixture.clock.Now().Add(evsPathEpochBatchedDelay).UnixMilli() {
+		pathEpoch.GetDueByMs() != fixture.clock.Now().Add(fixture.settings.PathEpochBatchedDelay).UnixMilli() {
 		t.Fatalf("due %v", pathEpoch)
 	}
 	creation := fixture.planPinned(2, commitment, to)

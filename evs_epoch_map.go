@@ -397,7 +397,7 @@ func (self *EvsRepo) TickMapper(ctx context.Context, refId Id) error {
 	sourceCount := len(epoch.GetSources())
 	if job == nil {
 		switch {
-		case batched && evsPathEpochBatchedMaxSourceCount <= sourceCount, evsPathEpochMaxSourceCount <= sourceCount:
+		case batched && self.client.settings.PathEpochBatchedMaxSourceCount <= sourceCount, self.client.settings.PathEpochMaxSourceCount <= sourceCount:
 			return errEvsMapperWait
 		}
 		if start := self.mapperStart(refId, epoch, removal, batched); self.client.clock.Now().Before(start) {
@@ -509,7 +509,7 @@ func (self *EvsRepo) mapperStart(refId Id, epoch *protocol.EvsPathEpoch, removal
 		return time.Time{}
 	}
 	if batched {
-		dueBy := self.client.epochs.dueBy(self.repoId, epoch, removal, true)
+		dueBy := self.client.epochs.dueBy(self.repoId, epoch, removal, true, self.client.settings.PathEpochBatchedDelay)
 		return dueBy.Add(-self.client.settings.MapperBatchedLead).Add(spread)
 	}
 	return firstSeen.Add(spread)
@@ -1044,7 +1044,7 @@ func (self *EvsRepo) commitMap(ctx context.Context, refId Id, job *EvsMapJob, in
 			if head != nil {
 				headEpoch = head.Head.GetPathEpoch()
 			}
-			dueBy := self.client.epochs.dueBy(self.repoId, headEpoch, job.PNew, false)
+			dueBy := self.client.epochs.dueBy(self.repoId, headEpoch, job.PNew, false, self.client.settings.PathEpochBatchedDelay)
 			if self.client.settings.MapTailRefusalCount <= job.TailRefusals && !dueBy.IsZero() &&
 				dueBy.Add(10*time.Minute).Before(self.client.clock.Now()) {
 				if err := self.blockCreation(ctx, refId); err != nil {

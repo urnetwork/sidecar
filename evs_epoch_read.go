@@ -1012,7 +1012,7 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 			}
 			path.epochs = epochs
 		}
-		if min(self.client.settings.ReadEpochCount, EvsReadPathMaxEpochCount) < len(path.epochs) {
+		if min(self.client.settings.ReadEpochCount, self.client.settings.ReadPathMaxEpochCount) < len(path.epochs) {
 			return nil, false, fmt.Errorf("%w: a path named in %d epochs", ErrEvsReplyInvalid, len(path.epochs))
 		}
 		path.epochPaths = nil

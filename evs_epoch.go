@@ -49,10 +49,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// DESIGN-DETAILS 9.2.2's EvsReadPath: a read names a path in at most 8 epochs, one token path an epoch, which evs
-// matches by the epoch field.
-const EvsReadPathMaxEpochCount = 8
-
 // What a view shows of the entries between two pins that shrank a repo's holders, beside GkmAuthView: a ConfigState's
 // window (config_shrink_span.go).
 type evsShrinkSpanView interface {
@@ -246,15 +242,6 @@ const (
 	EvsPathEpochStateOverdue        = "overdue"
 )
 
-// §11.6's commit row: at most 3 sources stand, and a batched epoch waits while 2 do.
-const (
-	evsPathEpochMaxSourceCount        = 3
-	evsPathEpochBatchedMaxSourceCount = 2
-)
-
-// §11.6's due row: a batched epoch is due 24 h after the first commit crossing it.
-const evsPathEpochBatchedDelay = 24 * time.Hour
-
 // What a mapper on this device says of a ref's job (evs_epoch_map.go), nil while none runs: its state and its parts.
 type evsMapperStatusFunction func(repoId Id, refId Id) (state string, partsUploaded int, partCount int, ok bool)
 
@@ -293,7 +280,8 @@ func (self *EvsRepo) pathEpochStatusOf(ctx context.Context, refId Id) (*EvsPathE
 	if pressure == evsPressureBatched {
 		status.Class = "batched"
 	}
-	status.DueBy = self.client.epochs.dueBy(self.repoId, epoch, generation, pressure == evsPressureBatched)
+	settings := self.client.settings
+	status.DueBy = self.client.epochs.dueBy(self.repoId, epoch, generation, pressure == evsPressureBatched, settings.PathEpochBatchedDelay)
 	now := self.client.clock.Now()
 	if mapperStatus := self.client.epochs.mapperStatusFunction(); mapperStatus != nil {
 		if state, uploaded, count, ok := mapperStatus(self.repoId, refId); ok {
@@ -302,8 +290,8 @@ func (self *EvsRepo) pathEpochStatusOf(ctx context.Context, refId Id) (*EvsPathE
 		}
 	}
 	switch {
-	case evsPathEpochMaxSourceCount <= len(status.Sources),
-		pressure == evsPressureBatched && evsPathEpochBatchedMaxSourceCount <= len(status.Sources):
+	case settings.PathEpochMaxSourceCount <= len(status.Sources),
+		pressure == evsPressureBatched && settings.PathEpochBatchedMaxSourceCount <= len(status.Sources):
 		status.State = EvsPathEpochStateWaitingSources
 	case !status.DueBy.IsZero() && status.DueBy.Add(self.client.settings.EpochOverdueAfter).Before(now):
 		status.State = EvsPathEpochStateOverdue
@@ -322,8 +310,9 @@ func (self *EvsPathEpochStatus) StatusLine(repoLabel string, refLabel string) st
 }
 
 // When a due falls due: the head's due_by_ms when it records the due, else from when this device first held the
-// generation, immediate at once and batched 24 h after; zero when neither is known.
-func (self *evsClientEpochs) dueBy(repoId Id, epoch *protocol.EvsPathEpoch, generation uint64, batched bool) time.Time {
+// generation, immediate at once and batched batchedDelay after (EvsSettings.PathEpochBatchedDelay, 24 h); zero when
+// neither is known.
+func (self *evsClientEpochs) dueBy(repoId Id, epoch *protocol.EvsPathEpoch, generation uint64, batched bool, batchedDelay time.Duration) time.Time {
 	if evsCurrentEpoch(epoch) < epoch.GetDueGeneration() && epoch.GetDueByMs() != 0 {
 		return time.UnixMilli(epoch.GetDueByMs())
 	}
@@ -331,7 +320,7 @@ func (self *evsClientEpochs) dueBy(repoId Id, epoch *protocol.EvsPathEpoch, gene
 	if held.IsZero() || !batched {
 		return held
 	}
-	return held.Add(evsPathEpochBatchedDelay)
+	return held.Add(batchedDelay)
 }
 
 // One ref's overdue-alarm bookkeeping (DESIGN-DETAILS 9.2.8's alarm).
@@ -358,10 +347,10 @@ func (self *evsClientEpochs) mapperWakeFunction() func(repoId Id, refId Id, head
 }
 
 // A verified head of a ref: the overdue alarm it calls for, on a device that writes the repo (DESIGN-DETAILS 9.2.8):
-// a due whose due_by_ms, or for a REMOVE generation the head has not recorded the time this device first held it (24 h
-// after that when pressure classed the crossing batched), is over EpochOverdueAfter past, at most once per ref and due
-// generation in 24 h; not while the due is batched and the head lists two sources, nor within EpochOverdueAfter of the
-// first head after that with fewer. A head showing such a due asks the mapper a tick (DESIGN-DETAILS 9.2.7's verified
+// a due whose due_by_ms, or for a REMOVE generation the head has not recorded the time this device first held it
+// (PathEpochBatchedDelay after that when pressure classed the crossing batched), is over EpochOverdueAfter past, at most
+// once per ref and due generation in EpochOverdueAlarmInterval; not while the due is batched and the head lists
+// PathEpochBatchedMaxSourceCount sources, nor within EpochOverdueAfter of the first head after that with fewer. A head showing such a due asks the mapper a tick (DESIGN-DETAILS 9.2.7's verified
 // head), once per version. Then wakes whatever waits on the ref's epoch.
 func (self *evsClientEpochs) noteHead(client *EvsClient, repoId Id, refId Id, head *protocol.EvsHeadSummary) {
 	defer self.wake(repoId, refId)
@@ -381,10 +370,10 @@ func (self *evsClientEpochs) noteHead(client *EvsClient, repoId Id, refId Id, he
 		generation, dueBy = epoch.GetDueGeneration(), time.UnixMilli(epoch.GetDueByMs())
 	} else if held, since, heldBatched := self.newestHeldRemoval(repoId, max(current, head.GetGeneration())); held != 0 {
 		// a removal this device holds that no head records yet, as pressure last classed the crossing to it: due at
-		// once when immediate, 24 h after it was first held when batched, as evs would record it
+		// once when immediate, PathEpochBatchedDelay after it was first held when batched, as evs would record it
 		generation, dueBy, batched = held, since, heldBatched
 		if heldBatched {
-			dueBy = since.Add(evsPathEpochBatchedDelay)
+			dueBy = since.Add(client.settings.PathEpochBatchedDelay)
 		}
 	}
 	if generation != 0 {
@@ -402,7 +391,7 @@ func (self *evsClientEpochs) noteHead(client *EvsClient, repoId Id, refId Id, he
 			self.refAlarms[key] = alarm
 		}
 		sourceCount := len(epoch.GetSources())
-		if evsPathEpochBatchedMaxSourceCount <= sourceCount {
+		if client.settings.PathEpochBatchedMaxSourceCount <= sourceCount {
 			alarm.sawTwoSources, alarm.fewerSince = true, time.Time{}
 		} else if alarm.sawTwoSources && alarm.fewerSince.IsZero() {
 			alarm.fewerSince = now
@@ -410,14 +399,14 @@ func (self *evsClientEpochs) noteHead(client *EvsClient, repoId Id, refId Id, he
 		switch {
 		case generation == 0 || dueBy.IsZero():
 			return false
-		case batched && evsPathEpochBatchedMaxSourceCount <= sourceCount:
+		case batched && client.settings.PathEpochBatchedMaxSourceCount <= sourceCount:
 			return false
 		case !alarm.fewerSince.IsZero() && now.Before(alarm.fewerSince.Add(client.settings.EpochOverdueAfter)):
 			return false
 		case now.Before(dueBy.Add(client.settings.EpochOverdueAfter)):
 			return false
 		}
-		if last, ok := alarm.alarmedAt[generation]; ok && now.Before(last.Add(24*time.Hour)) {
+		if last, ok := alarm.alarmedAt[generation]; ok && now.Before(last.Add(client.settings.EpochOverdueAlarmInterval)) {
 			return false
 		}
 		alarm.alarmedAt[generation] = now
