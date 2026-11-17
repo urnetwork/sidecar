@@ -824,37 +824,29 @@ func configSignerOf(signed *bridge.Signed) (ConfigSigner, error) {
 }
 
 // Recomputes on view, the state rebuilt through the entry before, what a statement's apply reads that its check
-// derives: a row's signer, an acl statement's fold inputs. The check's own verdict counts for nothing here, the base's
-// does: where it refuses on the rebuilt state, a row's signer falls back to the statement's first signer and an acl
-// statement's inputs to what its body names (configAclBodyVerdict).
+// derives. The check's own verdict counts for nothing here, the base's does. A row's signer keeps its rule: its type's
+// check finds it on the rebuilt state, and where that check refuses there it falls back to the statement's first
+// signer. An acl statement runs no check (QD-954): it takes the verdict its body and signers give
+// (configAclBodyVerdict), and ACL's ReapplyStatement derives every other fold input on the rows it folds into, so a
+// head change that would make ACL's check refuse on the rebuilt rows changes no fold but through those rows.
 func configDeriveStatement(view *ConfigState, statement *configStatement) {
 	statement.rowSigner, statement.aclVerdict = ConfigSigner{}, nil
-	_ = configCheckStatement(view, statement)
+	if statement.signedType>>8 == 0x11 {
+		statement.aclVerdict = configAclBodyVerdict(statement)
+	} else {
+		_ = configCheckStatement(view, statement)
+	}
 	if statement.rowSigner.Kind == 0 && 0 < len(statement.signers) {
 		statement.rowSigner = statement.signers[0]
 	}
-	if statement.signedType>>8 == 0x11 && statement.aclVerdict == nil {
-		statement.aclVerdict = configAclBodyVerdict(statement)
-	}
 }
 
-// An acl statement's fold inputs as its body and signers give them, for a re-application whose check refuses on the
-// rebuilt rows: the signer, its first sidecar signer; an OwnerConfirm's target. What ACL's check derives from state
-// beyond these is left zero, which ACL's ReapplyStatement must not need (DESIGN-DETAILS 5.7's acl_statement.go line).
+// An acl statement's verdict as its body and signers give it, which a re-application passes ACL's ReapplyStatement in
+// place of a check (DESIGN-DETAILS 5.7's acl_statement.go line): the signer the rows keep, its first signer's
+// sidecar_id as ACL's check keeps it, and an OwnerConfirm's target (ACL's aclBodyVerdict). ReapplyStatement reads
+// nothing else of it and derives the rest.
 func configAclBodyVerdict(statement *configStatement) *AclStatementVerdict {
-	verdict := &AclStatementVerdict{}
-	for _, signer := range statement.signers {
-		if signer.Kind == ConfigSignerSidecar {
-			verdict.Signer = signer.SidecarId
-			break
-		}
-	}
-	if confirm, ok := statement.body.(*protocol.OwnerConfirm); ok {
-		if sidecarId, err := IdFromBytes(confirm.GetSidecarId()); err == nil {
-			verdict.TargetId = sidecarId
-		}
-	}
-	return verdict
+	return aclBodyVerdict(configAclStatement(statement))
 }
 
 // The kind an AuthorityProposal that took effect and stayed open takes on the rebuilt state (DESIGN-DETAILS 5.2.3: fixed
