@@ -728,7 +728,8 @@ type GkmSettings struct {
 	// §8.12: the most leaves a committer seats in a data repo's tree: 1,000, never past MLS's bound
 	// (GkmSeatCount), which every member holds alike.
 	SeatCount int
-	// How many times one run of the pending engine commits again after losing an epoch to another's commit (KF6): 4.
+	// How many times one run of the pending engine commits again after losing an epoch to another's commit (KF6), or
+	// after gkm refused a header a newer generation outran, which it then took (QD-956): 4.
 	PendingPassCount int
 	// How many times a commit, or a group's creation, whose answer was lost is sent again with the same bytes: 3.
 	CommitSendCount int
