@@ -469,10 +469,18 @@ checks             the token scopes the repo, whose newest GroupForm names the g
                    wraps), or deleted for a repo re-seeded as deleted in §19.10's re-seed mode; so a write in
                    flight at a shred lands before §11.12 repeats the group's deletion; an external commit names
                    the uploader; the header passes the epoch PUT check, gen/ claims the claim checks and wraps
-                   the wrap checks below, each route under its scope (scopes, below); sizes; 60 commits per
-                   hour per uploader per group (rates); §11.13's NVMe write budget, which never refuses Removes and
-                   REMOVE rotations and queues other commits, Adds, Welcomes, KeyPackages, ReaderKeys, LATE
-                   deliveries and GroupInfo per network, refusing the heaviest first (429, RESOURCE_EXHAUSTED);
+                   the wrap checks below, each route under its scope (scopes, below), the guard asking the
+                   state for the strongest right the token holds of those the route's scope row takes together
+                   with each weaker right of its role that the row takes, which the state honors only whole, as
+                   evs's guard does over the one rights table (D-ACL-21): a live repo's admin or writer is asked
+                   nothing more, and a deleted repo's standing admins, who hold admin alone (§8.8's repo rows),
+                   pass only the admin routes (POST /gkm/groups, forms and ladder), which repo/'s state closes
+                   outside a re-seed, and are refused every read and every other write from the moment the
+                   RepoDelete is in the gate's state, before repo/ shows deleted as after (§11.12's refused
+                   row; owner decision 563); sizes; 60 commits per hour per uploader per group (rates);
+                   §11.13's NVMe write budget, which never refuses Removes and REMOVE rotations and queues other
+                   commits, Adds, Welcomes, KeyPackages, ReaderKeys, LATE deliveries and GroupInfo per network,
+                   refusing the heaviest first (429, RESOURCE_EXHAUSTED);
                    a staged delivery or claim of g+1 is a REMOVE rotation's only while gkm's newest verified
                    state shows a shrink, an authorization expiry or a compromise retirement since gen/<g>'s
                    auth pin and time (the causes of 10.9's REMOVE that gkm can see, a poisoned parent not among

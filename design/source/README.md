@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-555. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-563. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (556 onward)
+## Adding owner decision N (564 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -453,3 +453,24 @@ The design-records track for the second pass over §2, §3 and §4 (wave f41d) f
 - **The metadata list** is v44, whose header names what it adds to api-7 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
 
 Outside this folder the fold touched DESIGN.md and `metadata_list.yml` alone.
+
+## Validation after owner decisions 556-563 (2026-11-17)
+
+The design-records track for the second pass over §7, §8, §9 and §10 (wave f41d) folded the owner's answers queued for those sections after their first folds, each the recommendation that the owner's instruction of 2026-11-16 accepted.
+
+- **Owner decisions 556-563**, each citing its ledger id: the kind of each restored binding's admission a base leaves in its tail, carried in `ProjectionHeader.restored_cosigned_ids` (556: QD-1005, following 314); `AclRepo.holders_shrunk_time_ms`, so every verifier reads owner decision 315's t_s from the rows (557: QD-1015); §8.9's targets at an app host's forwarding role, revocations within both and a grant at a quiet moment within the p99 (558: QD-998); the prefix filer knowing a group's atom by the head's group atom ids (559: QD-1001, following 345 and 353); the dialer's sidecar in a `ur/` ticket, which smtpedge judges `mail_send` for (560: QD-989); memberships in the revocation record, so sockets checks a team member's token with no SQL (561: QD-1013, following 347 and 497); ticket keys settling from a block's first sight (562: QD-1016, following 354); and gkm's guard honoring a route's rights only whole, as evs's does (563: QD-975, following 351). Each carries its answer's date, and none amends an earlier numbered decision, so no row of the index gained a note.
+- **Elsewhere.** The parts these name outside §7 to §10 went with them: §2.8's sock-2 (560), §14.5's Authorization (560) and §19.10's Postgres row (561). §8.8's Repo rows, which restated gkm's guard for a deleted repo, cite 563, and its `AclRows` comment and the config repo's synthesized row name 557's time.
+- **In text, ahead of the code.** `ProjectionHeader.restored_cosigned_ids = 12` and `SocketTicket.dialer_sidecar_id = 16` are written in prose and as comments in §7.9's and §9.6's fences, which take the lines once auth.proto and socket.proto declare them (owner decision 273); `AclRepo.holders_shrunk_time_ms = 13` is written in §8.8's `AclRows` comment and §7.9's shrink row, `AclRepo` being held by `testUnfencedFence`. §7.9's self_admit row trades owner decision 314's interim, value 4 being declared, for 556's: until the field is declared, a restored binding's admission in the tail of a base whose own head changes `self_admit` takes that base's value, alike at every verifier.
+- **Not applied as section text.** DESIGN-DETAILS 4.6's row (558) and 5.2.3 and 5.2.4 (556), which are the design agent's; and each answer's code parts, its fix track's.
+- **Left in sidecar/DESIGN-AMENDMENTS.md's "Later decisions"**, each with what it waits on: §7.9's fence line and api-7's phrase for 556 (the fix track base-restored-cosigned-ids); api-7's "and its time" for 557, which acl-repo-shrunk-time publishes through `check/`'s additions; §9.6's fence line for 560 (ur-ticket-dialer-sidecar); and §2.8's words for 561 with its FS case, §2.8 holding no row for the record's family, `{rv_<network_id>_<k>}` (question `dr3-s7-s10-revocation-record-row.md`). QD-1020, which has a design-records pass move line 1 of §8.5's worked example in one commit with the root package's fixture and two tests, is left to the queued fix track worked-example-grant1, whose brief allows those test files; QD-265's note stays until then.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `021d3a647f813a0d138b25c1113ddcb5847f9704383efa01c4655578565fb6d2`) at this fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed but in comments (§7.9's `ProjectionHeader` and `ProjectionRows`, §8.8's `AclRows`, §9.6's `SocketTicket`), so no guard entry moved.
+- **Owner decisions.** All 563 rows are present and cited; `LATE_DATES` gives each new row its date, and 2026-11-17 joined the row pattern with 557, 561 and 562.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 312 grep hits, each with a reading, carried forward with no changed line raising a new one; the carried file's line numbers follow the sections.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v45, whose header names what it adds to sock-2 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+
+Outside this folder the fold touched DESIGN.md, DESIGN-AMENDMENTS.md and `metadata_list.yml` alone.

@@ -116,7 +116,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v44; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v45; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -278,6 +278,9 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # v44, updated 2026-11-17 for the owner's answer QD-983 (owner decision 553), adds no row: api-7's presence key
 # registrations show their attestation object beside the create ceremony's client data, with the authenticator's
 # model (aaguid) and its vendor's batch attestation certificate chain where the authenticator gave a statement.
+# v45, updated 2026-11-17 for the owner's answer QD-989 (owner decision 560), adds no row: sock-2's issued ur/
+# tickets name the dialer's sidecar id, which sockets already sees at Find and signs into the ticket, so the
+# listener reads its subject from it, smtpedge's being smtp-2's sidecar from the ticket.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -450,7 +453,7 @@ sock-1:
 sock-2:
   service: sockets
   store: memory; per-dialer fields in sock-1's hash
-  sees: each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, the server name of a dial that came by a custom host or an alias, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
+  sees: each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, the server name of a dial that came by a custom host or an alias, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets, a ur/ ticket naming its dialer's sidecar id for the listener's subject (owner decision 560), and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
   why: admission, scheduling and outlier ejection (§9.6, §9.7)
   ttl: the request; tickets 30 s; dialer shares and exclusions at most 300 s; no per-dial record (D-SOCK-9)
   owner: §9.6
