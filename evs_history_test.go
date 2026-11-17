@@ -205,6 +205,14 @@ func TestEvsHistoryEndsBelowACreationEvsCannotRead(t *testing.T) {
 	if _, err := repo.History(context.Background(), &EvsReadArgs{Path: "a.txt", Version: 6}); !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE) {
 		t.Fatalf("from inside the earlier life: %v", err)
 	}
+	// an erasure's list of a walk that stopped there is no list (evs_erase.go's SlotKeysOf)
+	if keys, err := repo.SlotKeysOf(context.Background(), nil, []string{"a.txt"}); !errors.Is(err, ErrEvsSlotKeysIncomplete) || keys != nil {
+		t.Fatalf("slot keys of a walk stopped below: %v %v", keys, err)
+	}
+	world.belowRefused = false
+	if keys, err := repo.SlotKeysOf(context.Background(), nil, []string{"a.txt"}); err != nil || len(keys) != 0 {
+		t.Fatalf("slot keys of the whole walk: %v %v", keys, err)
+	}
 }
 
 // A version asked for by number that the path holds none at reads absent, though evs answers its newest version or
