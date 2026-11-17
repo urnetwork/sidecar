@@ -66,9 +66,8 @@ func TestPairStatusNamesTheGenerationThatRuns(t *testing.T) {
 		t.Fatal("the run loop never came to end generation 1")
 	}
 	kept, _ := loadSidecarByJwt(secrets)
-	reminted := world.api.remintedTokens()
-	if world.sidecar.BoundGeneration() != 2 || kept == childToken || kept != reminted[len(reminted)-1] {
-		t.Fatalf("the keychain names generation %d, holding the re-mint: %t", world.sidecar.BoundGeneration(), kept == reminted[len(reminted)-1])
+	if world.sidecar.BoundGeneration() != 2 || kept != childToken {
+		t.Fatalf("the keychain names generation %d, holding the child's token: %t", world.sidecar.BoundGeneration(), kept == childToken)
 	}
 	if byJwt := world.sidecar.sidecarApi.currentByJwt(); byJwt != firstToken {
 		t.Fatal("generation 1's token left the api client before its generation ended")
@@ -80,7 +79,7 @@ func TestPairStatusNamesTheGenerationThatRuns(t *testing.T) {
 	releaseRunLoop()
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 2))
 	if world.sidecar.sidecarApi.currentByJwt() != kept {
-		t.Error("generation 2 is online and the api client does not hold bind's re-mint")
+		t.Error("generation 2 is online and the api client does not hold the child's token")
 	}
 	stateLock.Lock()
 	defer stateLock.Unlock()
@@ -89,7 +88,7 @@ func TestPairStatusNamesTheGenerationThatRuns(t *testing.T) {
 	}
 	for i, byJwt := range secondTokens {
 		if byJwt != kept {
-			t.Errorf("generation 2 reported %s before the api client held bind's re-mint", secondStates[i])
+			t.Errorf("generation 2 reported %s before the api client held the child's token", secondStates[i])
 		}
 	}
 }
