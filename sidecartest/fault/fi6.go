@@ -853,8 +853,27 @@ func fi6CheckOrphanSlots(ctx context.Context, oracle *Oracle, settings *Fi6Setti
 	errs := []error{}
 	for _, repo := range repos {
 		named := fi6NamedObjects(repo)
-		// the statements the repo's committed history names, read at its first orphan; nil where some ref's history
-		// could not be read whole
+		// the statements the repo's committed history names, each ref's window and log pages; nil where any of it
+		// could not be read, so no statement can be ruled out
+		committedOf := func() map[fi6Statement]bool {
+			if 0 < len(repo.missing) {
+				return nil
+			}
+			statements := map[fi6Statement]bool{}
+			for _, ref := range repo.refs {
+				if !ref.complete {
+					return nil
+				}
+				for _, version := range ref.versions {
+					if version == nil || version.entry == nil {
+						return nil
+					}
+					statements[fi6Statement{pushId: version.entry.PushId, prefix: version.entry.StatementPrefix}] = true
+				}
+			}
+			return statements
+		}
+		// read at the repo's first orphan
 		var committed map[fi6Statement]bool
 		committedRead := false
 		for key, info := range repo.slotInfos {
@@ -863,19 +882,7 @@ func fi6CheckOrphanSlots(ctx context.Context, oracle *Oracle, settings *Fi6Setti
 			}
 			if !committedRead {
 				committedRead = true
-				committed = map[fi6Statement]bool{}
-				if 0 < len(repo.missing) {
-					committed = nil
-				}
-				for _, ref := range repo.refs {
-					if committed == nil || !ref.complete {
-						committed = nil
-						break
-					}
-					for _, version := range ref.versions {
-						committed[fi6Statement{pushId: version.entry.PushId, prefix: version.entry.StatementPrefix}] = true
-					}
-				}
+				committed = committedOf()
 			}
 			object, err := oracle.View.Object(ctx, repo.clusterId, key)
 			if err != nil {
