@@ -18,13 +18,17 @@
 //	                       statement that drops a leaf), and a compromise retirement, a SidecarRevoke whose reason is
 //	                       compromise, agents included, or a DelegationRevoke with since_n > 0; a RecoveryRebind too
 //	          A party that cannot read what the class needs reads immediate, as for a crossing it cannot judge: either
-//	          pin off its chain or above its state, the earlier above the later, a state or entry around a shrink in
-//	          between that its window no longer keeps, a base whose own change shrank them, a shrink no holder it
-//	          dropped explains, a statement type not named above, or holders it cannot compute. A pin before what the
-//	          party retains is held to its number alone, as the gate holds a generation's (gkm_gate.go; QD-1018): the
-//	          walk needs only the states around each shrink after the earlier pin, so an agent's ordinary removal
-//	          reads batched on a repo whose generation was rotated before the party's window. A view that is no
-//	          ConfigState reads no entry, so any shrink in between reads immediate there, as option 1 had every shrink
+//	          pin off its chain or above its state, the earlier above the later, a state or kept entry the walk needs
+//	          that its window no longer keeps (S(s-1), S(s) and the entry at s for each shrink s in between, §11.6's
+//	          "a party that cannot reach the states around a shrink in between", and S(s-1) for a shrink after the
+//	          later pin, to step past it), a base whose own change shrank them, a shrink no holder it dropped explains,
+//	          a statement type not named above, or holders it cannot compute. A pin before what the party retains is
+//	          held to its number alone, as the gate holds a generation's (gkm_gate.go; QD-1018): its chain was checked
+//	          when it was new, and the party judges it only where it still holds a chain value there, a kept base's or
+//	          one from its retention point on. The walk then needs only the states around each shrink after the earlier
+//	          pin, so an agent's ordinary removal reads batched on a repo whose generation was rotated before the
+//	          party's window. A view that is no ConfigState reads no entry, so any shrink in between reads immediate
+//	          there, as option 1 had every shrink
 //	blocks    an immediate due blocks creation only on shared and owned refs of general, config and mailcfg repos,
 //	          whose names carry meaning; deposit and erasure refs hold random ids under no path key and stay at
 //	          epoch 1, and the other kinds name entries by id or sequence (plan-EVS1-epoch-kinds #1 and #2)
@@ -59,11 +63,15 @@ type evsShrinkSpanView interface {
 
 // Whether a crossing of a REMOVE generation is immediate, false for batched, as view classes it from the log between
 // fromAuth, the auth pin of the generation the crossing starts from, and toAuth, that of the generation it crosses to.
-// evs passes its gate view and a client its verified state, so the two class one log alike. See the file header.
+// evs passes its gate view and a client its verified state, so the two class one log alike. A pin before what the view
+// retains is held to its number, and the class needs only the states around each shrink after fromAuth (QD-1018). See
+// the file header.
 func EvsClassifyPathEpochDue(view GkmAuthView, repoId Id, fromAuth *bridge.AuthPin, toAuth *bridge.AuthPin) bool {
 	if view == nil || fromAuth == nil || toAuth == nil || toAuth.GetVersion() < fromAuth.GetVersion() {
 		return true
 	}
+	// a pin off the chain or above the state reads immediate; one before what the view retains, which it cannot judge,
+	// is held to its number, as the gate holds a generation's
 	for _, pin := range []*bridge.AuthPin{fromAuth, toAuth} {
 		if standing := gkmPinStanding(view, pin); standing != nil && !errors.Is(standing, ErrGkmAuthNotRetained) {
 			return true

@@ -3,9 +3,10 @@
 // tun down or its own end, as it holds a socket (§5.8).
 //
 //	read     the device's packets, a batch at a time, copied into the message pool and split by Bridge.RouteBurst: a
-//	         link, an exit, the reject client, the resolver or, for IPv6 under exits, the bridge's drop takes each run,
-//	         and a building link refuses its run, which is counted and dropped for TCP to retransmit; a nil route,
-//	         today's route, is dropped and counted, since the tun cannot hand a packet back to the host's own route
+//	         link, an exit, the reject client, the resolver or, for IPv6 under exits, the bridge's IPv6 reject takes
+//	         each run, and a building link refuses its run, which is counted and dropped for TCP to retransmit; a nil
+//	         route, today's route, is dropped and counted, since the tun cannot hand a packet back to the host's own
+//	         route
 //	write    each packet the bridge answers, a link's reply, a reject or the resolver's answer, written into the device
 //	         at once on the caller's goroutine, the packet the caller's again after the call
 //	sync     on each change the bridge reports, coalesced: the device's addresses are this host's overlay addresses,
@@ -33,9 +34,11 @@
 //
 // IPv6's default route rides the tun beside IPv4's under exits (QD-881): on Linux ::/0 in the same table with IPv6's
 // copies of the two rules, on macOS and Windows IPv6's two halves (urTunExitsIpv6Halves). No exit carries IPv6 (§17.4),
-// so the bridge drops what reaches it and counts it, and a dual-stack host's IPv6 goes nowhere rather than past the
-// exits, its connections falling back to IPv4; the daemon's own IPv6 sockets keep today's route by their mark or
-// binding, as its IPv4 ones do. Where the host routes no IPv6 off itself and the platform will not take IPv6's half,
+// so the bridge answers what reaches it through its rejects, a TCP reset or an ICMPv6 administratively prohibited
+// written back into the device within the source's bucket, past which a packet is dropped, and counts it (owner
+// decision 482, QD-970): a dual-stack host's IPv6 goes nowhere rather than past the exits, and its connections hear at
+// once and fall back to IPv4 rather than waiting out a connect timeout; the daemon's own IPv6 sockets keep today's
+// route by their mark or binding, as its IPv4 ones do. Where the host routes no IPv6 off itself and the platform will not take IPv6's half,
 // IPv4's stands alone, since no IPv6 leaves to begin with; where the host does route IPv6, a refusal of IPv6's half
 // holds the exits as any other does.
 //
@@ -131,7 +134,7 @@ func urTunExitsHalves() []netip.Prefix {
 
 // The two halves of IPv6's space, which macOS and Windows put IPv6's default route on as under exits, after IPv4's
 // halves (QD-881): each more specific than the host's own IPv6 default route, which stays, as urTunExitsHalves IPv4's.
-// The bridge drops what they carry, since no exit carries IPv6.
+// The bridge rejects what they carry, since no exit carries IPv6 (QD-970).
 func urTunExitsIpv6Halves() []netip.Prefix {
 	return []netip.Prefix{netip.MustParsePrefix("::/1"), netip.MustParsePrefix("8000::/1")}
 }
@@ -361,16 +364,17 @@ type urTunStatus struct {
 	WithheldCount uint64          `json:"withheld_count,omitempty"`
 	// How many local addresses the bridge carves; -1 while unknown.
 	LocalAddressCount int `json:"local_address_count"`
-	// Packets since the tun came up: read, taken by a route, dropped for the default route, IPv6 the bridge dropped under
-	// exits, which no exit carries (QD-881; taken by the bridge's drop, so among those taken too), refused by a building
-	// link or a full window, written back, and writes that failed.
-	ReadCount        uint64 `json:"read_count"`
-	SentCount        uint64 `json:"sent_count"`
-	DefaultCount     uint64 `json:"default_count"`
-	Ipv6DroppedCount uint64 `json:"ipv6_dropped_count"`
-	RefusedCount     uint64 `json:"refused_count"`
-	WrittenCount     uint64 `json:"written_count"`
-	WriteErrorCount  uint64 `json:"write_error_count,omitempty"`
+	// Packets since the tun came up: read, taken by a route, dropped for the default route, IPv6 the bridge rejected
+	// under exits, which no exit carries (owner decision 482, QD-970; taken by the bridge's IPv6 reject, so among those
+	// taken too, and each reject its source's bucket let go among those written back), refused by a building link or a
+	// full window, written back, and writes that failed.
+	ReadCount         uint64 `json:"read_count"`
+	SentCount         uint64 `json:"sent_count"`
+	DefaultCount      uint64 `json:"default_count"`
+	Ipv6RejectedCount uint64 `json:"ipv6_rejected_count"`
+	RefusedCount      uint64 `json:"refused_count"`
+	WrittenCount      uint64 `json:"written_count"`
+	WriteErrorCount   uint64 `json:"write_error_count,omitempty"`
 	// Why the last sync failed, when it did; it is tried again.
 	SyncError string `json:"sync_error,omitempty"`
 }
@@ -426,8 +430,8 @@ type urTun struct {
 	writtenCount    atomic.Uint64
 	writeErrorCount atomic.Uint64
 	withheldCount   atomic.Uint64
-	// the IPv6 the bridge had dropped under exits when the tun came up, which the status counts from
-	ipv6DroppedBase uint64
+	// the IPv6 the bridge had rejected under exits when the tun came up, which the status counts from
+	ipv6RejectedBase uint64
 
 	stateLock sync.Mutex
 	// what the last sync applied
@@ -504,7 +508,7 @@ func startUrTun(ctx context.Context, args *urTunArgs) (*urTun, error) {
 		localWake:  make(chan struct{}, 1),
 		writeBufs:  make([][]byte, 1),
 		// before the read loop hands the bridge a packet
-		ipv6DroppedBase: args.Bridge.Status().Ipv6DroppedCount,
+		ipv6RejectedBase: args.Bridge.Status().Ipv6RejectedCount,
 	}
 	if self.log == nil {
 		self.log = sidecar.NewNoopLogger()
@@ -943,8 +947,8 @@ func (self *urTun) status() *urTunStatus {
 		WriteErrorCount: self.writeErrorCount.Load(),
 		WithheldCount:   self.withheldCount.Load(),
 	}
-	if self.ipv6DroppedBase < bridgeStatus.Ipv6DroppedCount {
-		status.Ipv6DroppedCount = bridgeStatus.Ipv6DroppedCount - self.ipv6DroppedBase
+	if self.ipv6RejectedBase < bridgeStatus.Ipv6RejectedCount {
+		status.Ipv6RejectedCount = bridgeStatus.Ipv6RejectedCount - self.ipv6RejectedBase
 	}
 	if bridgeStatus.Block.IsValid() {
 		status.Block = bridgeStatus.Block.String()
