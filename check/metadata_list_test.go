@@ -67,10 +67,38 @@ type metadataListAddition struct {
 	list     string
 }
 
-// None waits now: design-records wrote every earlier entry's text into §2.8's block with the folds of 2026-11-16
-// (owner decision 252), QD-857's with §10's and QD-199's with §11's, so the list is the block alone until the next
-// answer.
-var metadataListAdditions = []metadataListAddition{}
+// Design-records wrote every entry before these into §2.8's block with the folds of 2026-11-16 (owner decision 252),
+// QD-857's with §10's, QD-199's with §11's and QD-990's with §13's (owner decision 424); each here waits for the next
+// fold.
+var metadataListAdditions = []metadataListAddition{
+	{
+		// QD-996: the list's v40, for cert-1's custom-domain spends kept 16 d
+		question: "tls-m6-04-custom-spend-retention",
+		block:    "# metadata_list.yml v39;",
+		list:     "# metadata_list.yml v40;",
+	},
+	{
+		question: "tls-m6-04-custom-spend-retention",
+		block:    "# server-gated action and approval_use's expiry.\n",
+		list: "# server-gated action and approval_use's expiry.\n" +
+			"# v40, updated 2026-11-16 for the owner's answer QD-996 (tls-m6-04-custom-spend-retention), keeps cert-1's Team\n" +
+			"# custom-domain spends 16 d, not 15, so a budget's replay paces a host's devices while the host's busy stretch is\n" +
+			"# under the retention less one window, through the tenth device: certs sees the times of orders, certificates and\n" +
+			"# failed authorizations of the last 16 days.\n",
+	},
+	{
+		// QD-996: the replay paces a host's devices while its busy stretch is under the retention less a window, 214 h at
+		// 16 d, which reaches 17.4's tenth device at 204 h; at 15 d, 190 h, it stopped at the ninth
+		question: "tls-m6-04-custom-spend-retention",
+		block:    "certificates and failed authorizations of the last 15 days;",
+		list:     "certificates and failed authorizations of the last 16 days;",
+	},
+	{
+		question: "tls-m6-04-custom-spend-retention",
+		block:    "the account row with its domain; spends 15 d;",
+		list:     "the account row with its domain; spends 16 d;",
+	},
+}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {
