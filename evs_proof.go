@@ -26,9 +26,11 @@
 // it. evs as built sends nothing for the path's own change (QD-681's reply row), so a rooted statement that changed
 // the path leaves such a reply with no proof, which is refused as before, with no alarm (question
 // evs-absent-walked-removal-own-present). A prefix's removal counts only where the reader can show it: inline, or by a
-// present. The walked removal the reply agrees with is kept on the verified path (WalkedRemoval), which a path this
-// device read a version of needs to read as absent (evs_epoch_read.go's finishRead). A creation on such a reply takes
-// max(b, m) + 1 with no m, b being past any collected removal (§11.8), so the planner is unchanged.
+// present, which evs as built sends for no removal either; a walked write followed by a rooted statement reaching a
+// strict prefix that evs showed by nothing is refused, but with no alarm, since that prefix's removal is neither shown
+// nor ruled out. The walked removal the reply agrees with is kept on the verified path (WalkedRemoval), which a path
+// this device read a version of needs to read as absent (evs_epoch_read.go's finishRead). A creation on such a reply
+// takes max(b, m) + 1 with no m, b being past any collected removal (§11.8), so the planner is unchanged.
 //
 // What a statement at or below the read's pin says is checked against that statement, signed by a writer, but nothing
 // shows it was the version current at the pin: for a path this device never read, or no longer remembers, that is
@@ -486,9 +488,11 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 // at all, since evs shows a prefix's removal by none and nothing a statement does to a strict prefix makes the path
 // stand (QD-978; see the file header); the path's own change refutes it. Absent: as a removal, and the path's own
 // change, inline or in a present, is taken in the walk's order, the reply refuted only where a write of the path is
-// the newest change the walk shows, no removal of it or of a prefix after it (QD-979). Its removal, the newest change
-// where the walk ends on one, goes to verified.WalkedRemoval, a removal of the path's own token path lowering the
-// floor (E1). The path's own absence is needed in every case where the statement did not change it.
+// the newest change the walk shows, no removal of it or of a prefix after it (QD-979): with the tamper alarm where no
+// later statement could have removed a prefix unseen, and with none where a later rooted statement reached a strict
+// prefix that evs showed by nothing, its removal neither shown nor ruled out. Its removal, the newest change where the
+// walk ends on one, goes to verified.WalkedRemoval, a removal of the path's own token path lowering the floor (E1).
+// The path's own absence is needed in every case where the statement did not change it.
 func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *EvsPathEpochs, absences []*protocol.EvsAbsenceProof, verified *EvsVerifiedPath) ([]uint64, error) {
 	served := evsServedStanding
 	switch {
@@ -507,9 +511,11 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 		return nil, err
 	}
 	more := []uint64{}
-	// for a path served absent: the walk's newest write of the path, where no removal came after it, and its newest
-	// removal of the path or a prefix, where no write came after it
+	// for a path served absent: the walk's newest write of the path, where no removal came after it, with whether a
+	// later rooted statement reached a strict prefix of it that evs showed by nothing, and so may have removed it; and
+	// the walk's newest removal of the path or a prefix, where no write came after it
 	var written *EvsVerifiedStatement
+	writtenUnshown := false
 	var removal *EvsWalkedRemoval
 	removalEpoch := uint64(0)
 	for _, walked := range head.Statements {
@@ -525,6 +531,7 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 		// removal of a strict prefix holding it, which ends every path below it; a prefix's delta does not change the
 		// path (§11.7's newest row)
 		var own, prefixRemoval *EvsCheckedChange
+		unshown := false
 		if len(push.GetChangesRoot()) == 0 {
 			for _, change := range walked.Statement.Changes {
 				switch {
@@ -558,6 +565,7 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 					// a strict prefix of a path served holding no version needs no proof: whether the statement left it
 					// alone, wrote it or removed it, which evs shows by nothing, the path stands no more than served,
 					// and a removal it does not show is one the walk does not count
+					unshown = true
 				case epochs.Named[epoch]:
 					return nil, fmt.Errorf("%w: a later statement's change list with no proof the path is absent", ErrEvsEntryRefused)
 				case !slices.Contains(more, epoch):
@@ -570,17 +578,25 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 			// the path's own change ends a version or removal served, and a prefix's removal a version
 			return tampered(fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused))
 		case own != nil && own.WritesEntry():
-			written, removal = walked, nil
+			written, writtenUnshown, removal = walked, false, nil
 		case own != nil:
 			written, removal, removalEpoch = nil, &EvsWalkedRemoval{CommitVersion: walked.Version, Statement: walked.Statement, Change: own.Change, ChangePath: own.TokenPath}, epoch
 		case prefixRemoval != nil:
 			written, removal, removalEpoch = nil, &EvsWalkedRemoval{CommitVersion: walked.Version, Statement: walked.Statement, Change: prefixRemoval.Change, ChangePath: prefixRemoval.TokenPath}, 0
+		case unshown && written != nil:
+			writtenUnshown = true
 		}
 	}
 	if written != nil {
-		if 0 < len(more) {
+		switch {
+		case 0 < len(more):
 			// a statement after the write whose proof the next ask names may show its removal
 			return more, nil
+		case writtenUnshown:
+			// a prefix's removal after the write is neither shown nor ruled out, evs showing it by nothing (QD-681's
+			// reply row): refused as a reply with no proof is, with no alarm (question
+			// evs-absent-walked-removal-own-present)
+			return nil, fmt.Errorf("%w: a later statement's change list with no proof whether it removed a prefix of the path", ErrEvsEntryRefused)
 		}
 		return tampered(fmt.Errorf("%w: a later statement writes the path, served as absent", ErrEvsEntryRefused))
 	}

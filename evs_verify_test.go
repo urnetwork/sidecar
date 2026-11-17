@@ -1437,9 +1437,10 @@ func TestEvsWriteAfterThePrefixsRemovalServedAsRemovedIsRefused(t *testing.T) {
 // Has world serve path plain absent, as evs serves it once a collection took its removal's marker and the window paged
 // the removal out (QD-879's window case passed; QD-979): no version, removal, statement or proof, and for each
 // statement whose list is under changes_root the absences evs sends a path it holds nothing of, nothing for the
-// path's own change. With own, beside them the present of the path's own change in each such statement that made
-// one, which evs as built does not send (question evs-absent-walked-removal-own-present).
-func evsTestServeAbsent(world *evsTestWorld, path string, own bool) {
+// path's own change or a prefix's removal. With presents, beside them the present of the path's own change and of a
+// strict prefix's removal in each such statement that made one, which evs as built does not send (question
+// evs-absent-walked-removal-own-present).
+func evsTestServeAbsent(world *evsTestWorld, path string, presents bool) {
 	tokenPath := world.tokens(path)
 	world.stateLock.Lock()
 	defer world.stateLock.Unlock()
@@ -1458,16 +1459,30 @@ func evsTestServeAbsent(world *evsTestWorld, path string, own bool) {
 			}
 			version := uint64(i + 1)
 			reply.Absences = append(reply.Absences, evsTestAbsences(tree, commit.parsed.ChangedPrefixes, version, tokenPath)...)
-			part, index, present := evsTestTreePosition(tree, tokenPath)
-			if !own || !present {
+			if !presents {
 				continue
 			}
-			proofs, err := tree.InclusionProof(part, index)
-			if err != nil {
-				world.t.Error(err)
-				return
+			for _, absentPath := range EvsAbsencePaths(commit.parsed.ChangedPrefixes, tokenPath) {
+				part, index, present := evsTestTreePosition(tree, absentPath)
+				if !present {
+					continue
+				}
+				change, _, err := parseEvsChangeLeaf(tree.runs[part].leaves[index])
+				if err != nil {
+					world.t.Error(err)
+					return
+				}
+				if len(absentPath) < len(tokenPath) && len(change.GetEntrySha256()) != 0 {
+					// a strict prefix's delta, whose present evsTestAbsences sends
+					continue
+				}
+				proofs, err := tree.InclusionProof(part, index)
+				if err != nil {
+					world.t.Error(err)
+					return
+				}
+				reply.Absences = append(reply.Absences, &protocol.EvsAbsenceProof{Version: version, TokenPath: absentPath.Components(), Present: proofs})
 			}
-			reply.Absences = append(reply.Absences, &protocol.EvsAbsenceProof{Version: version, TokenPath: tokenPath.Components(), Present: proofs})
 		}
 	}
 }
@@ -1610,6 +1625,48 @@ func TestEvsAbsentAgreesWithAPrefixsWalkedRemoval(t *testing.T) {
 		t.Fatalf("absent served over d/a.txt's creation: %v", err)
 	}
 	evsTestRequireTamper(t, "over the creation", reader, 1)
+}
+
+// A write of d/a.txt walked before d's removal, d/a.txt served plain absent. Inline, the walk shows the removal after
+// the write and the reply agrees with it. Under changes_root evs as built shows d's removal by nothing, so the reader
+// can neither count it nor rule it out: it refuses the reply with no alarm, and takes it once the removal's present is
+// beside it (question evs-absent-walked-removal-own-present).
+func TestEvsAbsentAfterAWriteAndAPrefixsRemoval(t *testing.T) {
+	for _, rooted := range []bool{false, true} {
+		world := newEvsTestWorld(t)
+		world.push(&evsTestChange{path: "d", children: []string{"a.txt"}}, &evsTestChange{path: "d/a.txt", content: []byte("a")})
+		reader := world.reader(t, evsTestId("reader"))
+		if _, _, err := evsTestRead(t, reader, world, "d/a.txt"); err != nil {
+			t.Fatal(err)
+		}
+		world.push(&evsTestChange{path: "d/a.txt", content: []byte("b")})
+		removeDirectory := []*evsTestChange{{path: "d"}}
+		if rooted {
+			removeDirectory = evsTestRootedChanges("e/many", removeDirectory...)
+		}
+		removed := world.push(removeDirectory...)
+		if (world.commits[removed-1].built.ChangeTree != nil) != rooted {
+			t.Fatalf("rooted %t: d's removal's list under changes_root: %t", rooted, !rooted)
+		}
+		evsTestPushOthers(world, "n", 3)
+		evsTestServeAbsent(world, "d/a.txt", false)
+		_, _, err := evsTestRead(t, reader, world, "d/a.txt")
+		if !rooted && !errors.Is(err, ErrEvsPathAbsent) {
+			t.Fatalf("an inline removal of d after the write: %v", err)
+		}
+		if rooted && (!errors.Is(err, ErrEvsEntryRefused) || errors.Is(err, ErrEvsPathAbsent)) {
+			t.Fatalf("a rooted removal of d, shown by nothing, after the write: %v", err)
+		}
+		evsTestRequireNoAlarm(t, fmt.Sprint("rooted ", rooted), reader)
+		if !rooted {
+			continue
+		}
+		evsTestServeAbsent(world, "d/a.txt", true)
+		if _, _, err := evsTestRead(t, reader, world, "d/a.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+			t.Fatalf("the rooted removal of d with its present: %v", err)
+		}
+		evsTestRequireNoAlarm(t, "the rooted removal's present", reader)
+	}
 }
 
 // The rooted form: x.txt removed by a statement whose list is under changes_root. evs as built sends nothing for the
