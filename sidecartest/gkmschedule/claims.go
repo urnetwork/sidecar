@@ -27,12 +27,17 @@ package gkmschedule
 //     reaching nothing of it;
 //   - 6.6's added rows: a rotator at a stale tip refuses to claim past a generation pinned above its state, and gkm
 //     refuses a claim whose auth is below gen/<g>'s; one device's last-resort KeyPackage serves two Adds in two
-//     groups, and it joins both.
+//     groups, and it joins both;
+//   - QD-956: a wrapped writer's rotation that commits nothing outruns a leaf's Remove on its way, and gkm's epoch PUT
+//     check refuses its header 403; the leaf takes the newer generation and commits under it with no alarm, and one
+//     that landed before the leaf's run is taken by the run's own read of gen/, with no 403.
 
 import (
 	"bytes"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 
 	"github.com/urnetwork/sidecar"
@@ -547,8 +552,9 @@ func FsKeysScheduleLastResortInTwoGroups(t FsKeysT, newWorld FsKeysNewWorld) {
 // REMOVE rotation past x's revocation and a's Remove carrying it, the writer of that write killed there: from then on
 // every request of its process fails, as a dead process's does, and gkm dies with it. Their restarts, gkm's on
 // another instance over the same stores, resume from the keychain: one REMOVE generation, the Remove carrying gen/'s
-// newest as it lands, b converging, x reaching nothing of either. a learns of w's rotation, which commits nothing, by
-// gkm:<group_id>'s hint (FS-24), whose work, SyncRepo, runs before its pending run.
+// newest as it lands, b converging, x reaching nothing of either. a's pending run takes w's rotation, which commits
+// nothing, by its own read of gen/ at each pass (QD-956), with no hint's SyncRepo first; only where a's own Remove
+// stood at gkm as its process died does its restart resync before its pending run.
 func FsKeysScheduleKillsBetweenWrites(t FsKeysT, newWorld FsKeysNewWorld) {
 	for _, kill := range []struct {
 		segment string
@@ -597,7 +603,6 @@ func FsKeysScheduleKillsBetweenWrites(t FsKeysT, newWorld FsKeysNewWorld) {
 		}
 		// the flows up to the kill, each failing once its process is dead
 		w.Client.EnsureWritable(world.Ctx, world.RepoId)
-		a.Client.SyncRepo(world.Ctx, world.RepoId)
 		a.Client.RunPending(world.Ctx, world.RepoId)
 		if !dead {
 			t.Fatalf("%s: the kill never came", name)
@@ -609,7 +614,11 @@ func FsKeysScheduleKillsBetweenWrites(t FsKeysT, newWorld FsKeysNewWorld) {
 			_, err := w.Client.EnsureWritable(world.Ctx, world.RepoId)
 			return err
 		})
-		world.Again(name+": a's sync after the kill", func() error { return a.Client.SyncRepo(world.Ctx, world.RepoId) })
+		if kill.segment == "epochs" && kill.after {
+			// a's own Remove stands at gkm, and its process died holding it staged: a member never processes its own
+			// commit, so its restart resyncs (KF5), the commit hint's work, which no pending run does
+			world.Again(name+": a's resync after the kill", func() error { return a.Client.SyncRepo(world.Ctx, world.RepoId) })
+		}
 		world.Again(name+": a's Remove after the kill", func() error { return a.Client.RunPending(world.Ctx, world.RepoId) })
 		if count := world.GenerationCount(); count != 2 || sidecar.GkmCause(world.Generation(2).Rotate.GetCause()) != sidecar.GkmCauseRemove {
 			t.Errorf("%s: %d generations past the kill", name, count)
@@ -631,6 +640,101 @@ func FsKeysScheduleKillsBetweenWrites(t FsKeysT, newWorld FsKeysNewWorld) {
 		if key, err := b.Client.CurrentRepoKey(world.Ctx, world.RepoId); err != nil || key.Generation() != 2 {
 			t.Errorf("%s: b does not hold generation 2: %v", name, err)
 		}
+		if reached := world.RemovedReach(x); reached != 1 {
+			t.Errorf("%s: the revoked leaf reaches generation %d", name, reached)
+		}
+	}
+}
+
+// QD-956 on gkmservice: in the race, a's Remove carrying generation 1 leaves a while the agent w, a wrapped writer,
+// rotates REMOVE past x's revocation and commits nothing, so gkm's epoch PUT check, reading gen/2, refuses its header
+// 403. a reads gen/ once, takes generation 2 by its ReaderWrap under the rotation checks, and its next pass commits the
+// Remove carrying it, alarming nothing. In the twin w's rotation lands before a's run, which takes it by its own read
+// of gen/: one PUT, answered 200. Either way one REMOVE generation, b converging and x reaching nothing of it.
+func FsKeysScheduleRemoveOutrunByARotation(t FsKeysT, newWorld FsKeysNewWorld) {
+	for _, raced := range []bool{true, false} {
+		name := "a rotation before the run"
+		if raced {
+			name = "a rotation in the race"
+		}
+		world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
+		a := world.AddMember("a", false)
+		b := world.AddMember("b", false)
+		x := world.AddMember("x", false)
+		w := world.AddAgent("w")
+		world.Grant(true, a, b, x, w)
+		world.Admin(a)
+		world.Advance()
+		world.Publish()
+		world.Create(a)
+		world.AddPending(a)
+		world.Again("w's first wrap", func() error {
+			_, err := w.Client.CurrentRepoKey(world.Ctx, world.RepoId)
+			return err
+		})
+		world.Revoke(x)
+		x.Offline = true
+		world.Advance()
+		epochBefore := world.NewestEpoch()
+		rotate := func() {
+			if _, err := w.Client.EnsureWritable(world.Ctx, world.RepoId); err != nil {
+				t.Errorf("%s: w's rotation: %v", name, err)
+			}
+		}
+		// each epoch PUT of a's as gkm answers it; in the race, w rotates as the first leaves a
+		statuses := []int{}
+		a.Transport.Before = func(request *http.Request) FsKeysFault {
+			if raced && FsKeysEpochCommit(request) && len(statuses) == 0 {
+				rotate()
+			}
+			return FsKeysFaultNone
+		}
+		a.Transport.Respond = func(request *http.Request) *http.Response {
+			if !FsKeysEpochCommit(request) {
+				return nil
+			}
+			recorder := httptest.NewRecorder()
+			world.Engine.Handler().ServeHTTP(recorder, request)
+			statuses = append(statuses, recorder.Code)
+			return recorder.Result()
+		}
+		if !raced {
+			rotate()
+		}
+		if count := world.GenerationCount(); !raced && count != 2 {
+			t.Fatalf("%s: %d generations before a's run", name, count)
+		}
+		err := a.Client.RunPending(world.Ctx, world.RepoId)
+		a.Transport.Before, a.Transport.Respond = nil, nil
+		if err != nil {
+			t.Fatalf("%s: a's Remove: %v", name, err)
+		}
+		want := []int{http.StatusOK}
+		if raced {
+			want = []int{http.StatusForbidden, http.StatusOK}
+		}
+		if !slices.Equal(statuses, want) {
+			t.Errorf("%s: gkm answered a's epoch PUTs %v", name, statuses)
+		}
+		for _, alarm := range a.Alarms {
+			if alarm.Kind == sidecar.GkmAlarmRefused {
+				t.Errorf("%s: a raised a refusal: %+v", name, alarm)
+			}
+		}
+		if count := world.GenerationCount(); count != 2 || sidecar.GkmCause(world.Generation(2).Rotate.GetCause()) != sidecar.GkmCauseRemove {
+			t.Fatalf("%s: %d generations past the revocation", name, count)
+		}
+		if removeEpoch := world.NewestEpoch(); removeEpoch != epochBefore+1 || world.EpochObject(removeEpoch).GetHeader().GetGeneration() != 2 {
+			t.Errorf("%s: epoch %d after %d, carrying generation %d", name, removeEpoch, epochBefore, world.EpochObject(removeEpoch).GetHeader().GetGeneration())
+		}
+		if labels := world.Roster(a); labels != "ab" {
+			t.Errorf("%s: the tree after the Remove: %s", name, labels)
+		}
+		world.Again("b's sync", func() error { return b.Client.SyncRepo(world.Ctx, world.RepoId) })
+		if key, err := b.Client.CurrentRepoKey(world.Ctx, world.RepoId); err != nil || key.Generation() != 2 {
+			t.Errorf("%s: b does not hold generation 2: %v", name, err)
+		}
+		world.AgreeOnEpoch(a, b)
 		if reached := world.RemovedReach(x); reached != 1 {
 			t.Errorf("%s: the revoked leaf reaches generation %d", name, reached)
 		}
