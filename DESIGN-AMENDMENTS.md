@@ -443,15 +443,6 @@ Questions: `details-15-small-readings.md`.
 
 Not folded (2026-11-16): RECORD.md 7.4's cadence and section 8's expiry row, which DESIGN-DETAILS.md 15.8 proposes, outside design/source/; the DESIGN.md parts are folded as owner decision 461 (§16.8's retention bullet and §16.10's run card row).
 
-### QD-145: `strict_chain` claims a customer-signed chain that connect's DoH path cannot show
-*Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 269. Folds into §4 Repositories, code placement, branches, and build.*
-
-Owner decision 269's table row, which waits on the code: §4.6's table gains the row `| C20 | DohCache.ForwardDnssec ... | M7 |` in the change that gives check/x9_test.go's x9Rows its C20 entry (marker `ForwardDnssec`, milestone 7, the connect task that builds it and its default-off test), since TestX9RowsAreSection46 holds the table to that ledger row for row and a design-records track writes no such entry. The rest is folded (2026-11-16): the decision, a paragraph under §4.6's table that states C20, §2.8's ext-3 (list v27), §15.5's `strict_chain` evidence, §23.4's M7 row and §4.18.
-
-Changes: §4.6's table; check/x9_test.go x9Rows.
-
-Questions: `plan-MAIL-dnssec-evidence.md`, `dr2-s4-c20-x9-row.md`.
-
 ### QD-024: cli/UI.md is on no path this run can read
 *Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 265. Folds into §4 Repositories, code placement, branches, and build.*
 

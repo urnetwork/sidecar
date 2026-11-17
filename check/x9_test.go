@@ -174,6 +174,12 @@ var x9Rows = []x9Row{
 		defaultOffTests: []string{"TestPeerWindowOffReportsAreIdentical", "TestPeerWindowUnmarkedPairIsUnchanged"},
 		sweepTestFile:   "transfer_peer_window_sweep_test.go",
 	},
+	{
+		// owner decision 269; the ledger entry landed with the row (QD-980)
+		id: "C20", disposition: x9Lands, milestone: 7, task: "connect-c20-forward-dnssec; consumed by DNS-M7-04's strict_chain validator",
+		marker: "ForwardDnssec", markerKind: x9MarkerName,
+		defaultOffTests: []string{"TestDohForwardQuerySetsNoDoBit", "TestDohForwardAnswersAsBeforeDnssec"},
+	},
 }
 
 // The row with that id, or nil.
@@ -862,7 +868,7 @@ func TestX9ReadyForMain(t *testing.T) {
 
 // Every row of §4.6 is in the table once, with the fields its disposition needs.
 func TestX9RowsAreSection46(t *testing.T) {
-	want := []string{"C1", "C2", "C3", "C4", "C5", "C6a", "C6b", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19"}
+	want := []string{"C1", "C2", "C3", "C4", "C5", "C6a", "C6b", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20"}
 	got := []string{}
 	for _, row := range x9Rows {
 		got = append(got, row.id)
