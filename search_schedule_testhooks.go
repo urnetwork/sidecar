@@ -1,4 +1,4 @@
-//go:build sidecar_testhooks && !ios_extension
+//go:build sidecar_testhooks && !ios_extension && !js
 
 // A search world for sidecartest's fault schedules and the sdk's T4 cells (SEARCH-M10-38; FS-77, FS-109, FS-110): one
 // ref's index on an in-memory store standing for evs, and devices that each sync it into a SearchCache of their own
