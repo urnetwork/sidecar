@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -98,7 +99,13 @@ func TestPlaceCreatesPlaceThenRepoOnTheNewRepoCluster(t *testing.T) {
 	}
 }
 
-// FS-63: two creators race at place/'s If-None-Match: one places the repo, the other gets 409.
+// PUT /evs/v1/repos/<id> by sidecarId, its whole answer.
+func (self *evsFixture) putRepoAnswer(repoId sidecar.Id, sidecarId sidecar.Id) *httptest.ResponseRecorder {
+	return self.serve(http.MethodPut, "/evs/v1/repos/"+sidecar.EvsKeyId(repoId), self.token(sidecarId, repoScope(repoId, "admin")), nil)
+}
+
+// FS-63: two creators race at place/'s If-None-Match: one places the repo, the other gets 409 REPO_PLACED (QD-927),
+// final, its own code apart from STATEMENT_MISSING's, while the first creator's repeat answers 200 as before.
 func TestPlaceTwoCreatorsRaceAndOnePlaces(t *testing.T) {
 	fixture := newEvsFixture(t)
 	repoId := testId("repo")
@@ -109,24 +116,61 @@ func TestPlaceTwoCreatorsRaceAndOnePlaces(t *testing.T) {
 	if status := fixture.putRepo(repoId, creatorA); status != http.StatusOK {
 		t.Fatalf("A: %d", status)
 	}
-	if status := fixture.putRepo(repoId, creatorB); status != http.StatusConflict {
-		t.Errorf("B: %d, want 409", status)
+	repoBytes := fixture.object("meta-1", RepoKey(repoId))
+	refused := fixture.putRepoAnswer(repoId, creatorB)
+	requireRefusal(t, refused, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
+	if reply := refusalOf(t, refused); reply.GetRecorded() || reply.GetOutcome() != protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_SETTLED {
+		t.Errorf("REPO_PLACED answered %v", reply)
+	}
+	if entry := fixture.serviceLog.last(); entry.Status != http.StatusConflict || entry.Code != protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED {
+		t.Errorf("evs-7 logged %d %s", entry.Status, entry.Code)
 	}
 	if place := fixture.placement(repoId); place.CreatorSidecarId != creatorA {
 		t.Errorf("placed by %v", place.CreatorSidecarId)
 	}
-	// and the other order on another id: B's create landed first, so A gets 409, whatever place_new says
+	// the first creator's repeat answers as before, and B's refusal changed nothing
+	if status := fixture.putRepo(repoId, creatorA); status != http.StatusOK {
+		t.Errorf("A's repeat: %d", status)
+	}
+	if string(fixture.object("meta-1", RepoKey(repoId))) != string(repoBytes) {
+		t.Error("repo/ was rewritten")
+	}
+	requireRefusal(t, fixture.putRepoAnswer(repoId, creatorB), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
+	// and the other order on another id: B's create landed first, so A gets REPO_PLACED, whatever place_new says
 	otherRepoId := testId("repo-2")
 	fixture.projectRepo(otherRepoId, creatorA, creatorB)
 	if status := fixture.putRepo(otherRepoId, creatorB); status != http.StatusOK {
 		t.Fatalf("B: %d", status)
 	}
 	fixture.host.Blobs.SetNewRepoClusterId("meta-2")
-	if status := fixture.putRepo(otherRepoId, creatorA); status != http.StatusConflict {
-		t.Errorf("A: %d", status)
-	}
+	requireRefusal(t, fixture.putRepoAnswer(otherRepoId, creatorA), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
 	if keys := fixture.keysUnder("meta-2", "repo/"); len(keys) != 0 {
 		t.Errorf("a refused creator wrote %v", keys)
+	}
+	if status := fixture.putRepo(otherRepoId, creatorB); status != http.StatusOK {
+		t.Errorf("B's repeat: %d", status)
+	}
+}
+
+// A repo/ that stands as another repo than the creator's own create makes, its kind or network not the
+// projection's, is a fault that alarms, and the creator's PUT answers 409 REPO_PLACED: the id is not one it can
+// create, so it picks another, and nothing is written over what stands.
+func TestPlaceRepoObjectOfAnotherRepoAnswersRepoPlaced(t *testing.T) {
+	fixture := newEvsFixture(t)
+	repoId := testId("repo")
+	creator := testId("sidecar-a")
+	fixture.projectRepo(repoId, creator)
+	if status := fixture.putRepo(repoId, creator); status != http.StatusOK {
+		t.Fatal(status)
+	}
+	repoBytes := fixture.object("meta-1", RepoKey(repoId))
+	fixture.auth.setRepo(repoId, &EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_RECORD, NetworkId: sidecar.Id(fixture.networkId)})
+	requireRefusal(t, fixture.putRepoAnswer(repoId, creator), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
+	if fixture.host.Metrics.Value("urnetwork_evs_alarms_total", "repo_mismatch") != 1 {
+		t.Error("no alarm")
+	}
+	if string(fixture.object("meta-1", RepoKey(repoId))) != string(repoBytes) {
+		t.Error("repo/ was rewritten")
 	}
 }
 
@@ -244,7 +288,7 @@ func TestPlaceNewUnreachableAnswers503AndWritesNothing(t *testing.T) {
 	if fixture.placement(repoId) != nil {
 		t.Error("place/ names an unreachable cluster")
 	}
-	// a repo placed before continues on its own cluster, and another creator still gets 409
+	// a repo placed before continues on its own cluster, and another creator still gets 409 REPO_PLACED
 	placedRepoId := testId("repo-placed")
 	fixture.projectRepo(placedRepoId, creator, testId("sidecar-b"))
 	fixture.host.Blobs.SetNewRepoClusterId("meta-1")
@@ -255,9 +299,7 @@ func TestPlaceNewUnreachableAnswers503AndWritesNothing(t *testing.T) {
 	if status := fixture.putRepo(placedRepoId, creator); status != http.StatusOK {
 		t.Errorf("its creator's retry with place_new unreachable: %d", status)
 	}
-	if status := fixture.putRepo(placedRepoId, testId("sidecar-b")); status != http.StatusConflict {
-		t.Errorf("another creator with place_new unreachable: %d", status)
-	}
+	requireRefusal(t, fixture.putRepoAnswer(placedRepoId, testId("sidecar-b")), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REPO_PLACED)
 }
 
 // FS-63: a cached 404 clears within 5 s.

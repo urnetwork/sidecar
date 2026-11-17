@@ -1,7 +1,8 @@
 // Sidecar.ServiceToken (§5.4, §7.8, R-CORE-10): a service token for one audience, evs, gkm, dns, certs or mail, from
 // the token exchange, which the sidecar's components present to that service. A token lives 15 minutes (owner
 // decision 2), and is kept per audience and scope set for SidecarTokenRefreshSettings.ServiceTokenCacheTimeout,
-// under that life, and never across a client generation, since a new client's exchange names a new subject.
+// under that life, and never across a client generation, since a new client's exchange names a new subject. A token
+// the service refuses goes at once (ForgetServiceToken), so the caller's one retry exchanges again.
 //
 // A service token goes only to in-process callers: never into a reply, an environment or a log (I-7, §5.7). It is
 // held here and in the caller's request, and nothing here prints one. This file is in both legs, the page Worker's
@@ -76,6 +77,28 @@ func (self *sidecarServiceTokens) clear() {
 	self.entries = nil
 }
 
+// Drops the token kept for key, if any.
+func (self *sidecarServiceTokens) forget(key sidecarServiceTokenKey) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.entries, key)
+}
+
+// The key a token for resource with scopes is kept under: the scopes sorted, so one set has one key whatever its
+// order.
+func newSidecarServiceTokenKey(resource string, scopes []string) sidecarServiceTokenKey {
+	sortedScopes := slices.Clone(scopes)
+	slices.Sort(sortedScopes)
+	return sidecarServiceTokenKey{resource: resource, scopes: strings.Join(sortedScopes, " ")}
+}
+
+// Drops the token kept for resource with scopes, so the next ServiceToken for them exchanges again: what a service's
+// 401 asks of its caller (evs's UNAUTHENTICATED, §11.20), the token no longer authenticating there. The tokens of
+// other audiences and scope sets stay.
+func (self *Sidecar) ForgetServiceToken(resource string, scopes []string) {
+	self.serviceTokens.forget(newSidecarServiceTokenKey(resource, scopes))
+}
+
 // A service token for resource, a service's url, with scopes, for an in-process caller only: never a reply, an
 // environment or a log (I-7). A token cached for the same audience and scope set in this client generation, and kept
 // under ServiceTokenCacheTimeout and its own expires_in, is answered again; otherwise one exchange runs. Refuses
@@ -100,7 +123,7 @@ func (self *Sidecar) ServiceToken(ctx context.Context, resource string, scopes [
 	}
 	sortedScopes := slices.Clone(scopes)
 	slices.Sort(sortedScopes)
-	key := sidecarServiceTokenKey{resource: resource, scopes: strings.Join(sortedScopes, " ")}
+	key := newSidecarServiceTokenKey(resource, sortedScopes)
 	clock := self.settings.ClockOrReal()
 	if accessToken, ok := self.serviceTokens.get(key, generation, clock.Now()); ok {
 		return accessToken, nil

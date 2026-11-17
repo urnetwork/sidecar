@@ -16,6 +16,11 @@
 // 503 that refuses nothing, after retry_after_ms; nothing else retries here, since a push's retries are the push
 // sender's, under its one push id, and the uploads', each with its same bytes (§11.8's retry id row).
 //
+// The one exception is 401 UNAUTHENTICATED, which refuses nothing on any route (§11.20, owner decision 411): the
+// token does not authenticate, or a rev/ object voids its client, sidecar or member. Every call drops that token
+// (EvsClientArgs.ForgetServiceToken) and goes once more with a new one; a second 401, or no new token, is
+// ErrEvsUnauthorized, never an *EvsError, so no caller reads it as 403 SCOPE's state no longer granting the right.
+//
 // The read reply is a stream of u32be(length) | EvsReadFrame (plan-EVS1-format-bytes#8), which EvsReadFrames reads one
 // frame at a time, so a reply of 32 MiB of ranges is never held whole (R-EVS-14), a directory's delta frames folded
 // back into its path and an error frame answered as its refusal (QD-662).
@@ -56,7 +61,9 @@ var (
 	// A method this draft of the client does not build yet: the task that builds it is named in the error, and the
 	// call does nothing.
 	ErrEvsNotBuilt = errors.New("evs: not built")
-	// evs refused the call's token (401): the token exchange's subject is revoked, or the token is past its life.
+	// evs refused the call's token (401 UNAUTHENTICATED) and the new one minted for it too, or no new one could be
+	// minted: the token exchange's subject is revoked, or its tokens do not authenticate at evs. Each call has already
+	// dropped the refused token and gone once more (the file's comment).
 	ErrEvsUnauthorized = errors.New("evs: token refused")
 	// An answer that does not hold §11.20's form: a body that does not parse, a frame past its bound, a stream cut
 	// short. Never read as a refusal.
@@ -65,6 +72,13 @@ var (
 
 // A service token for an audience url with scopes, Sidecar.ServiceToken's shape: for an in-process caller only.
 type EvsServiceTokenFunction func(ctx context.Context, resource string, scopes []string) (string, error)
+
+// Drops the token an EvsServiceTokenFunction keeps for an audience url and scopes, so its next call mints a new one:
+// Sidecar.ForgetServiceToken's shape.
+type EvsForgetServiceTokenFunction func(resource string, scopes []string)
+
+// A call's token could not be had, which after a 401 ends the call as ErrEvsUnauthorized.
+var errEvsNoServiceToken = errors.New("no service token")
 
 // Every answer of evs's but a 200 (§11.20), as EvsRefusalReply carries it. Its text names the status and code and
 // never a path, an id or a token.
@@ -153,8 +167,10 @@ type evsHttp struct {
 	baseUrl      string
 	transport    http.RoundTripper
 	serviceToken EvsServiceTokenFunction
-	settings     *EvsSettings
-	clock        Clock
+	// nil for a serviceToken that keeps nothing, whose next call mints a new token anyway
+	forgetServiceToken EvsForgetServiceTokenFunction
+	settings           *EvsSettings
+	clock              Clock
 }
 
 // An id as a route's path and query name it: 32 lowercase hex characters with no dashes, as evs parses them and as
@@ -166,6 +182,11 @@ func evsUrlId(id Id) string {
 // The repo scope one call presents.
 func evsRepoScope(repoId Id, role string) string {
 	return sidecarExchangeRepoScopePrefix + repoId.String() + ":" + role
+}
+
+// The scopes one call's token carries: its repo's, at its route's role.
+func evsCallScopes(call *evsCall) []string {
+	return []string{evsRepoScope(call.repoId, call.role)}
 }
 
 // Sends call and answers the 200's body, at most limit bytes, or an *EvsError for any other answer.
@@ -201,15 +222,21 @@ func (self *evsHttp) callMessage(ctx context.Context, call *evsCall, reply proto
 }
 
 // Sends call, retrying as call.retry allows, and answers a 200's response with its body unread, or an *EvsError.
-// The caller closes the body.
+// The first 401 of a call takes a new token (sendWithNewToken); a second is ErrEvsUnauthorized. The caller closes the
+// body.
 func (self *evsHttp) send(ctx context.Context, call *evsCall) (*http.Response, error) {
 	attempts := 1
 	if call.retry {
 		attempts += self.settings.ReadRetryCount
 	}
+	tokenRenewed := false
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt += 1 {
 		response, err := self.sendOnce(ctx, call)
+		if errors.Is(err, ErrEvsUnauthorized) && !tokenRenewed {
+			tokenRenewed = true
+			response, err = self.sendWithNewToken(ctx, call)
+		}
 		if err == nil {
 			return response, nil
 		}
@@ -234,6 +261,21 @@ func (self *evsHttp) send(ctx context.Context, call *evsCall) (*http.Response, e
 	return nil, lastErr
 }
 
+// 401 UNAUTHENTICATED's answer (§11.20): the refused token goes and call goes once more, under a token minted for it.
+// Nothing was refused, so the same request, a push's same push id and bytes included, goes as it went. A token that
+// cannot be minted, as for a client, sidecar or member a rev/ object voids, whose exchange api refuses, ends the call
+// as the 401 did: ErrEvsUnauthorized, with the reason.
+func (self *evsHttp) sendWithNewToken(ctx context.Context, call *evsCall) (*http.Response, error) {
+	if self.forgetServiceToken != nil {
+		self.forgetServiceToken(self.baseUrl, evsCallScopes(call))
+	}
+	response, err := self.sendOnce(ctx, call)
+	if errors.Is(err, errEvsNoServiceToken) {
+		return nil, fmt.Errorf("%w, and no new one: %w", ErrEvsUnauthorized, err)
+	}
+	return response, err
+}
+
 // One attempt.
 func (self *evsHttp) sendOnce(ctx context.Context, call *evsCall) (*http.Response, error) {
 	var body []byte
@@ -247,9 +289,9 @@ func (self *evsHttp) sendOnce(ctx context.Context, call *evsCall) (*http.Respons
 	case call.rawBody != nil:
 		body = call.rawBody
 	}
-	token, err := self.serviceToken(ctx, self.baseUrl, []string{evsRepoScope(call.repoId, call.role)})
+	token, err := self.serviceToken(ctx, self.baseUrl, evsCallScopes(call))
 	if err != nil {
-		return nil, fmt.Errorf("evs %s: no service token: %w", call.route, err)
+		return nil, fmt.Errorf("evs %s: %w: %w", call.route, errEvsNoServiceToken, err)
 	}
 	callCtx, cancel := context.WithCancel(ctx)
 	stop := self.clock.AfterFunc(self.settings.RequestTimeout, cancel)
@@ -288,6 +330,8 @@ func (self *evsHttp) sendOnce(ctx context.Context, call *evsCall) (*http.Respons
 		cancel()
 	}()
 	if response.StatusCode == http.StatusUnauthorized {
+		// 401 UNAUTHENTICATED, as every 401 is, the lb answering none: an older evs sent it with no code, so the status
+		// decides it alone
 		return nil, fmt.Errorf("%w: %s", ErrEvsUnauthorized, call.route)
 	}
 	refusalBody, _ := io.ReadAll(io.LimitReader(response.Body, self.settings.ReplyMaxByteCount))
