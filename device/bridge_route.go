@@ -14,8 +14,9 @@
 //	revoked     an entry left with no advertiser rejects for RejectEntryHoldTimeout, then leaves the table (§17.8's
 //	            revocation row): a link the rules dropped with no drain was revoked, so its pins drop at once
 //	default     no entry: today's route under the egress spec's auto, or with none set; under exits, the pins pick one
-//	            of the approved exits for an IPv4 packet, and an IPv6 packet goes nowhere, dropped and counted, since
-//	            the overlay and the exits carry no IPv6 (§17.4; QD-881); under none, a reject (§17.9's egress spec)
+//	            of the approved exits for an IPv4 packet, and an IPv6 packet goes nowhere, answered by a reject and
+//	            counted, since the overlay and the exits carry no IPv6 (§17.4, §17.5's rejects row; owner decision
+//	            482); under none, a reject (§17.9's egress spec)
 //
 // RouteBurst splits a burst by route in place, keeping flow order. What Route reads is rebuilt off the packet path from
 // the state the bridge adopts, the overlay narrowing it, the links Retain names and this device's local addresses, and
@@ -100,31 +101,36 @@ func (self bridgeRefusalClient) SecurityPolicyStats(reset bool) connect.Security
 
 func (self bridgeRefusalClient) SetLocalSecurityBypass(localSecurityBypass bool) {}
 
-// What Route hands an IPv6 packet under the egress spec's exits (QD-881): the overlay and the exits carry IPv4 alone
-// (§17.4), so the packet goes nowhere, never to an exit's pins, and its source, which hears nothing back, falls back
-// to IPv4. It takes each packet, returns it to the pool and counts it. Safe for concurrent use.
-type bridgeDropClient struct {
-	droppedCount atomic.Uint64
+// What Route hands an IPv6 packet under the egress spec's exits (§17.5's rejects row, §17.9's egress spec; owner
+// decision 482, QD-970): the overlay and the exits carry IPv4 alone (§17.4), so the packet goes nowhere, never to an
+// exit's pins, and the bridge's reject client answers it, a TCP reset or an ICMPv6 destination unreachable,
+// administratively prohibited (1/1), through its source's bucket, so a dual-stack source hears at once and falls back
+// to IPv4 rather than waiting out a connect timeout. Past the bucket the reject client drops the packet and counts it
+// unsent, as it does every reject. This client counts each packet it takes, IPv6's count under exits beside the reject
+// client's own, and is a value of its own so a burst's IPv6 run under exits stays apart from its other rejects. Safe
+// for concurrent use.
+type bridgeIpv6RejectClient struct {
+	reject        *BridgeRejectClient
+	rejectedCount atomic.Uint64
 }
 
-var _ connect.UserNatClient = (*bridgeDropClient)(nil)
+var _ connect.UserNatClient = (*bridgeIpv6RejectClient)(nil)
 
-// Takes packet and drops it: always true, since the packet is disposed of here.
-func (self *bridgeDropClient) SendPacket(source connect.TransferPath, provideMode protocol.ProvideMode, packet []byte, timeout time.Duration) bool {
-	self.droppedCount.Add(1)
-	connect.MessagePoolReturn(packet)
-	return true
+// Takes packet, counts it and hands it to the reject client, which disposes of it: always true.
+func (self *bridgeIpv6RejectClient) SendPacket(source connect.TransferPath, provideMode protocol.ProvideMode, packet []byte, timeout time.Duration) bool {
+	self.rejectedCount.Add(1)
+	return self.reject.SendPacket(source, provideMode, packet, timeout)
 }
 
-func (self *bridgeDropClient) Close() {}
+func (self *bridgeIpv6RejectClient) Close() {}
 
-func (self *bridgeDropClient) Shuffle() {}
+func (self *bridgeIpv6RejectClient) Shuffle() {}
 
-func (self *bridgeDropClient) SecurityPolicyStats(reset bool) connect.SecurityPolicyStats {
+func (self *bridgeIpv6RejectClient) SecurityPolicyStats(reset bool) connect.SecurityPolicyStats {
 	return connect.SecurityPolicyStats{}
 }
 
-func (self *bridgeDropClient) SetLocalSecurityBypass(localSecurityBypass bool) {}
+func (self *bridgeIpv6RejectClient) SetLocalSecurityBypass(localSecurityBypass bool) {}
 
 // §18.6's deviceBridge.Route: what carries packet, by the file's rows; nil is the default route. Lock- and
 // allocation-free.
@@ -175,14 +181,14 @@ func (self *Bridge) routeLink(entryState *BridgeEntryState, packet []byte) conne
 }
 
 // A packet no entry holds, by the egress spec: today's route, an exit, or a reject. A carved address keeps the default
-// route under every mode, since the physical path needs it. Under exits an IPv6 packet goes nowhere, dropped and
-// counted (QD-881): no exit carries IPv6, and `ur tun` puts the host's IPv6 default route through the tun beside IPv4's
-// so it does not leave by today's route instead.
+// route under every mode, since the physical path needs it. Under exits an IPv6 packet goes nowhere, answered through
+// the rejects row and counted (owner decision 482): no exit carries IPv6, and `ur tun` puts the host's IPv6 default
+// route through the tun beside IPv4's so it does not leave by today's route instead.
 func (self *Bridge) routeDefault(state *bridgeRouteState, packet []byte) connect.UserNatClient {
 	switch state.egressMode {
 	case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
 		if bridgeRouteIpv6(packet) {
-			return self.ipv6Drop
+			return self.ipv6Reject
 		}
 		if state.carved(packet) {
 			return nil

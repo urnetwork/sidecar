@@ -46,8 +46,8 @@ type Bridge struct {
 	reject     *BridgeRejectClient
 	resolver   *BridgeResolverClient
 	routeState atomic.Pointer[bridgeRouteState]
-	// what Route hands an IPv6 packet under exits, which drops and counts it (QD-881)
-	ipv6Drop *bridgeDropClient
+	// what Route hands an IPv6 packet under exits, which counts it and hands it to reject (owner decision 482)
+	ipv6Reject *bridgeIpv6RejectClient
 	// §12.9's names of the state in force, nil for none, and the LocalZone that reads them
 	zone     atomic.Pointer[BridgeZone]
 	zoneView *bridgeZoneView
@@ -110,6 +110,7 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 	}
 	posture, decision := NewPosture(store, settings.PostureSettings)
 	cancelCtx, cancel := context.WithCancel(ctx)
+	reject := NewBridgeRejectClient(nil, settings)
 	self := &Bridge{
 		ctx:               cancelCtx,
 		cancel:            cancel,
@@ -119,8 +120,8 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		posture:           posture,
 		pins:              NewBridgePinTable(settings),
 		links:             NewBridgeLinkManager(cancelCtx, host, settings),
-		reject:            NewBridgeRejectClient(nil, settings),
-		ipv6Drop:          &bridgeDropClient{},
+		reject:            reject,
+		ipv6Reject:        &bridgeIpv6RejectClient{reject: reject},
 		policy:            NewBridgeEgressPolicy(settings.PolicyProfile, settings),
 		closers:           connect.NewCallbackList[connect.EgressFlowCloser](),
 		changeCallbacks:   connect.NewCallbackList[func()](),
@@ -230,7 +231,7 @@ func (self *Bridge) Status() BridgeStatus {
 		LinkBuildingCount:      linkBuildingCount,
 		RejectSentCount:        rejectSentCount,
 		RejectUnsentCount:      rejectUnsentCount,
-		Ipv6DroppedCount:       self.ipv6Drop.droppedCount.Load(),
+		Ipv6RejectedCount:      self.ipv6Reject.rejectedCount.Load(),
 		HeldRejectCount:        self.routeFindings.heldCount,
 		RouteConflictCount:     self.routeFindings.conflictCount,
 		EgressMode:             self.egressMode,
