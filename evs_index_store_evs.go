@@ -6,11 +6,17 @@
 //
 //	Head     the ref's verified head: its version, chain and index_epoch, and its push's signed time where the
 //	         read's walk holds that statement (0 where it does not, which nothing in the index reads)
-//	List     the index's directories walked at a ref version, one verified read a directory, then every file's entry
+//	List     the index's directories walked at the head, one verified read a directory, then every file's entry
 //	         version a ReadMaxPathCount at a time: its version, its push's commit version, signer and signed time,
 //	         and its plaintext's length and content_sha256 from its sealed fields. The settings, the one versioned
-//	         file, carry no content_sha256, so its content is read and hashed, which is what Read holds it to
-//	History  a path's versions at a ref version, newest first, each read and hashed the same way
+//	         file, carry no content_sha256, so its content is read and hashed, which is what Read holds it to.
+//	         EvsRepo reads a directory or a file at the ref's head, or at a version of the path itself, never at an
+//	         older ref version, so a listing asked at a ref version is the head's, and where the head is no longer
+//	         that version, or moves while the walk reads, the index moved under its reader: errIndexCollected, on
+//	         which a builder reruns from its read, and errEvsIndexMoved, on which a hooked push is planned again,
+//	         never a state other than the one asked for under its name
+//	History  a path's versions at the head, newest first, those a push after the ref version asked for wrote left
+//	         out, each read and hashed the same way
 //	Read     one version's plaintext, reconstructed and verified by evs's reader, then held to its content_sha256;
 //	         a replaced versionless version answers errIndexCollected
 //	Commit   one push of index files and removals through EvsRepo's sender, each write the index's reserved
@@ -88,23 +94,42 @@ func (self *indexEvsStore) Head(ctx context.Context) (*indexRefHead, error) {
 	return indexHeadOfEvs(result.head), nil
 }
 
-// See indexRefStore.
+// The index moved under a read asked at a ref version that is no longer the head (see the file header).
+func indexEvsMoved(refVersion uint64, headVersion uint64) error {
+	return fmt.Errorf("%w: %w: read at %d, the head at %d", errIndexCollected, errEvsIndexMoved, refVersion, headVersion)
+}
+
+// See indexRefStore, and the file header's List row.
 func (self *indexEvsStore) List(ctx context.Context, refVersion uint64) (*indexListing, error) {
 	refId, err := self.refId(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// the head every read of the walk must show, the one asked for where one was
+	walkVersion := refVersion
+	held := func(headVersion uint64) error {
+		if walkVersion == 0 {
+			walkVersion = headVersion
+		}
+		if headVersion != walkVersion {
+			return indexEvsMoved(walkVersion, headVersion)
+		}
+		return nil
 	}
 	directories := []string{self.rootDirectory()}
 	filePaths := []string{}
 	for 0 < len(directories) {
 		directory := directories[0]
 		directories = directories[1:]
-		listing, err := self.repo.List(ctx, &EvsReadArgs{RefId: &refId, Path: directory, Version: refVersion, IndexFiles: true})
+		listing, err := self.repo.List(ctx, &EvsReadArgs{RefId: &refId, Path: directory, IndexFiles: true})
 		if errors.Is(err, ErrEvsPathAbsent) && directory == self.rootDirectory() {
 			// no index on the ref yet
 			break
 		}
 		if err != nil {
+			return nil, err
+		}
+		if err := held(listing.HeadVersion); err != nil {
 			return nil, err
 		}
 		for _, entry := range listing.Entries {
@@ -128,8 +153,11 @@ func (self *indexEvsStore) List(ctx context.Context, refVersion uint64) (*indexL
 			// the head alone, for an index with no file
 			batch = []string{self.rootDirectory()}
 		}
-		files, head, err := self.fileVersions(ctx, refId, batch, refVersion)
+		files, head, err := self.fileVersions(ctx, refId, batch)
 		if err != nil {
+			return nil, err
+		}
+		if err := held(head.version); err != nil {
 			return nil, err
 		}
 		if indexListing.head == nil {
@@ -143,10 +171,10 @@ func (self *indexEvsStore) List(ctx context.Context, refVersion uint64) (*indexL
 	return indexListing, nil
 }
 
-// The entry versions of paths at refVersion, each with its sealed fields' length and content_sha256, and the head the
+// The entry versions of paths at the head, each with its sealed fields' length and content_sha256, and the head the
 // read verified. A path that does not stand, a directory among them, is left out.
-func (self *indexEvsStore) fileVersions(ctx context.Context, refId Id, paths []string, refVersion uint64) ([]*indexFileVersion, *indexRefHead, error) {
-	result, err := self.repo.read(ctx, refId, paths, refVersion, false)
+func (self *indexEvsStore) fileVersions(ctx context.Context, refId Id, paths []string) ([]*indexFileVersion, *indexRefHead, error) {
+	result, err := self.repo.read(ctx, refId, paths, 0, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -220,19 +248,23 @@ func (self *indexEvsStore) readVerified(ctx context.Context, refId Id, path stri
 	return buffer.Bytes(), nil
 }
 
-// See indexRefStore.
+// See indexRefStore, and the file header's History row.
 func (self *indexEvsStore) History(ctx context.Context, path string, refVersion uint64) ([]*indexFileVersion, error) {
 	refId, err := self.refId(ctx)
 	if err != nil {
 		return nil, err
 	}
-	history, err := self.repo.History(ctx, &EvsReadArgs{RefId: &refId, Path: path, Version: refVersion})
+	history, err := self.repo.History(ctx, &EvsReadArgs{RefId: &refId, Path: path})
 	if err != nil {
 		return nil, err
 	}
 	files := []*indexFileVersion{}
 	for _, version := range history.Versions {
 		if version.Removed || version.State != "" && version.State != "kept" {
+			continue
+		}
+		if 0 < refVersion && refVersion < version.CommitVersion {
+			// written after the version asked for
 			continue
 		}
 		plaintext, err := self.readVerified(ctx, refId, path, version.Version)
