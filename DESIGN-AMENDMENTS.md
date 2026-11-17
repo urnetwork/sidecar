@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 19 decided items and 6 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -15,7 +15,6 @@ Holds 169 decided items and 194 proposed ones, generated from the ledger on 2026
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§5 The Sidecar core](#s5) | 2 | 1 |
 | [§7 Networks, teams, members, enrollment, and SSO](#s7) | 4 | 1 |
-| [§8 Access control](#s8) | 1 | 0 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 1 | 1 |
 | [§11 Encrypted versioned storage](#s11) | 1 | 0 |
 | [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
@@ -141,20 +140,6 @@ Changes: §7.9; §8.8; §17.8.
 Questions: `protos-bridge-unwritten-numbers.md#1`.
 
 Not folded (2026-11-16): the fenced blocks in §7.9, §8.8 and §17.8. Those records' declarations are held by `testUnfencedFence` in protocol/design_unfenced_test.go, and a ```proto fence for a message listed there fails protocol's fence test until a code track moves the message out of that list in the same change, which a design-records track may not do (it drops only `testFenceAdditions` entries). The rule itself is folded as text: §7.9's record bytes says field numbers follow the order written, with `StatementHeader` at field 1.
-
-<a id="s8"></a>
-## §8 Access control
-
-### QD-265: §8.5's grant 1 lost its sidecars when D-ACL-20 narrowed autogroup:untagged
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-§8.5's grant 1 and `acl_team_start.hujson` read { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] }. FS-21's Team case uses peers of two members, since a member's own devices now reach each other.
-
-Changes: §8.5.
-
-Questions: `plan-ACL-team-grant1-src.md`.
-
-Not folded (2026-11-16): line 1 of the worked example's ```hujson block in §8.5. The root package's `TestAclPolicyFixturesAreTheDesigns` holds that block byte for byte to testdata/acl/policy/worked_example.hujson, which is test data and a code track's: fix track team-grant1-via-self moves it with `acl_team_start.hujson`, and the block follows in the same change. The decision is folded as owner decision 344 and stated in §8.5's Grant 1 paragraph, with QD-867's `"via": ["autogroup:self"]`, which amends this item's text.
 
 <a id="s10"></a>
 ## §10 Group keys for evs: MLS and the GKM service

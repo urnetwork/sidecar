@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 11854,
-  "code_words": 3900,
+  "words": 11823,
+  "code_words": 3903,
   "ceiling": 3800,
-  "over": 8054,
-  "over_pct": 211.9
+  "over": 8023,
+  "over_pct": 211.1
  },
  {
   "num": 9,

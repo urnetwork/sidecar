@@ -3,7 +3,8 @@
   "tagOwners": { "tag:recurd": ["group:eng"], "tag:db": ["autogroup:admin"],
                  "tag:api": ["autogroup:admin"], "tag:audit": ["autogroup:admin"] },
   "grants": [
-    { "src": ["autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] }, // 1 laptop→phone
+    { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"],           // 1 laptop→phone
+      "via": ["autogroup:self"], "allow": ["dial", "route"] },
     { "src": ["tag:recurd"], "dst": ["evs:repo-x"], "allow": ["write"] },                     // 2
     { "src": ["group:eng"], "dst": ["sock:db"], "allow": ["dial"] },                          // 3
     { "src": ["tag:db"],    "dst": ["sock:db"], "allow": ["listen"] },
