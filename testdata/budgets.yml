@@ -157,12 +157,12 @@ budgets:
     kind: path
     owner: MAIL-M7-27
     module: server
-    package: ""
+    package: cli/mxedge
     name: mxedge.route
     settings: "§15.4's dialog to the splice, on server's host"
-    limits: {postgres: 0}
+    limits: {postgres: 0, redis_calls: 1}
     reviewed: ""
-    note: "redis_calls is MAIL-M7-27's to set; until it does, the row reads missing"
+    note: "one GET, the route's {mxr_} read, on a session whose name the engine's cache does not hold, and none once it does (§15.15); the closed-handshake memory is read only by a plaintext transaction and written only by a closed handshake, so a splice reaches neither. server/cli/mxedge's TestT3MxedgeRouteHoldsToItsInlinePathRow runs it on the private stack's Redis and Postgres"
   - id: smtp-preamble-gate
     spec: "§22.5: the preamble inline, no PostgreSQL, with an op-counting Redis"
     kind: path
