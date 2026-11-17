@@ -16,6 +16,9 @@ type QuotaRefusal struct {
 	RetryAfterMs uint32 `json:"retry_after_ms"`
 	// A purchase or a higher tier lifts it.
 	Upgrade bool `json:"upgrade"`
+	// For limit_key screen_review alone: the review case, in its canonical uuid form, that the refusal opened or
+	// joined, so the network can name it (QD-235, QD-1014). Empty, and left out, for every other limit.
+	CaseId string `json:"case_id,omitempty"`
 }
 
 // A network's effective limits after its network_sidecar_limit rows (NetworkSidecarLimits, §20.5):

@@ -33,7 +33,7 @@ type evsTestWriteGkm struct {
 	stateLock sync.Mutex
 	newest    uint64
 	causes    map[uint64]GkmCause
-	// each generation's GenRotate auth pin version, 0 unset
+	// each generation's GenRotate auth pin version, 0 unset, on the chain the world's config view holds
 	auths   map[uint64]uint64
 	ensured int
 }
@@ -49,7 +49,7 @@ func (self *evsTestWriteGkm) key(repoId Id, generation uint64) *EvsRepoKey {
 	key.groupId = evsTestId("world group")
 	key.commitment = evsTestBytes(fmt.Sprint("commitment ", generation), 32)
 	key.cause = self.causes[generation]
-	key.auth = &bridge.AuthPin{Version: self.auths[generation]}
+	key.auth = &bridge.AuthPin{Version: self.auths[generation], Chain: evsTestBytes("auth chain", 32)}
 	return key
 }
 

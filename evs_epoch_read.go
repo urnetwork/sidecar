@@ -23,10 +23,12 @@
 //	          was asked or the parent's table has no row for the name, and then pins and writes the records' floors
 //	pressure  on a blocking ref (a shared or owned ref of a general, config or mailcfg repo), a head that records a due
 //	          above cur, else the newest generation this device holds above max(the head's generation, cur) whose
-//	          GenRotate cause is REMOVE, classed by evs's own rule (EvsClassifyPathEpochDue): immediate holds new
-//	          names. A ref with no head is read as holding nothing, and no token of it is sent (DESIGN-DETAILS 9.2.3); its
-//	          first push names the epoch firstEpoch gives, so on a ref that is no overlay no REMOVE lies above it and
-//	          there is no pressure, and an overlay's creator is held by its base ref's pressure
+//	          GenRotate cause is REMOVE, the crossing from that generation to the newest one held classed by evs's own
+//	          rule on this device's verified state (EvsClassifyPathEpochDue, from the log between the two generations'
+//	          auth pins; QD-949): immediate holds new names, and the class is noted with the held generation for the
+//	          overdue alarm. A ref with no head is read as holding nothing, and no token of it is sent (DESIGN-DETAILS
+//	          9.2.3); its first push names the epoch firstEpoch gives, so on a ref that is no overlay no REMOVE lies
+//	          above it and there is no pressure, and an overlay's creator is held by its base ref's pressure
 //	first     a ref with no head starts in the epoch its first push names (QD-632): the newest generation at or below
 //	          the one the push seals to whose cause is REMOVE, 1 when none; an overlay's base ref's current epoch, from
 //	          its head verified within EpochFreshFor; 1 on a deposit or erasure ref
@@ -343,15 +345,15 @@ func (self *EvsRepo) pressure(ctx context.Context, state *evsRefEpoch) (evsPress
 	if removal == 0 {
 		return evsPressureNone, 0, nil
 	}
-	self.client.epochs.noteHeldRemoval(self.repoId, removal, self.client.clock.Now())
+	// the crossing a push at the newest generation would make, classed as evs classes it, from this device's
+	// verified state between the two generations' auth pins
 	immediate := true
 	if fromKey, err := self.client.args.Gkm.RepoKey(ctx, self.repoId, from); err == nil {
 		if config, err := self.client.verifier.config(); err == nil {
-			if repo := config.Repo(self.repoId); repo != nil {
-				immediate = EvsClassifyPathEpochDue(repo.GetHoldersShrunkAt(), fromKey.Auth().GetVersion())
-			}
+			immediate = EvsClassifyPathEpochDue(config, self.repoId, fromKey.Auth(), newest.Auth())
 		}
 	}
+	self.client.epochs.noteHeldRemoval(self.repoId, removal, self.client.clock.Now(), !immediate)
 	if immediate {
 		return evsPressureImmediate, removal, nil
 	}
@@ -462,8 +464,9 @@ type evsClientEpochs struct {
 	// (repo, ref, directory) to its newest cached listings by head version, oldest first in order
 	listings map[evsListingKey]*evsListedDirectory
 	order    []evsListingKey
-	// the first time this device held each REMOVE generation of a repo, which the overdue alarm counts from
-	heldRemovals map[evsHeldRemovalKey]time.Time
+	// each REMOVE generation of a repo this device held: the first time, which the overdue alarm counts from, and the
+	// class pressure last gave the crossing to it
+	heldRemovals map[evsHeldRemovalKey]evsHeldRemoval
 	// per ref: when it first showed fewer than two sources after showing two, and the last alarm per due generation
 	refAlarms map[evsRefKey]*evsRefAlarm
 	// per ref, closed at its next verified head (evs_epoch.go's moved)
@@ -495,11 +498,19 @@ type evsHeldRemovalKey struct {
 	generation uint64
 }
 
+// What this device noted of a held REMOVE generation.
+type evsHeldRemoval struct {
+	// when it first held it
+	since time.Time
+	// whether the newest crossing to it pressure classed was batched
+	batched bool
+}
+
 // A new client's epoch state.
 func newEvsClientEpochs() *evsClientEpochs {
 	return &evsClientEpochs{
 		listings:     map[evsListingKey]*evsListedDirectory{},
-		heldRemovals: map[evsHeldRemovalKey]time.Time{},
+		heldRemovals: map[evsHeldRemovalKey]evsHeldRemoval{},
 		refAlarms:    map[evsRefKey]*evsRefAlarm{},
 		waiters:      map[evsRefKey]chan struct{}{},
 		committed:    map[evsRefKey]uint64{},
@@ -603,21 +614,25 @@ func (self *evsClientEpochs) cachedRowFloor(repoId Id, refId Id, path string) ui
 	return floor
 }
 
-// Notes that this device holds a REMOVE generation of a repo, the first time it does.
-func (self *evsClientEpochs) noteHeldRemoval(repoId Id, generation uint64, now time.Time) {
+// Notes that this device holds a REMOVE generation of a repo, from now the first time it does, and the class pressure
+// gave the crossing to it this time.
+func (self *evsClientEpochs) noteHeldRemoval(repoId Id, generation uint64, now time.Time, batched bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	key := evsHeldRemovalKey{repoId: repoId, generation: generation}
-	if _, held := self.heldRemovals[key]; !held {
-		self.heldRemovals[key] = now
+	held, found := self.heldRemovals[key]
+	if !found {
+		held.since = now
 	}
+	held.batched = batched
+	self.heldRemovals[key] = held
 }
 
 // When this device first held a REMOVE generation of a repo, zero when it never noted one.
 func (self *evsClientEpochs) heldRemovalSince(repoId Id, generation uint64) time.Time {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.heldRemovals[evsHeldRemovalKey{repoId: repoId, generation: generation}]
+	return self.heldRemovals[evsHeldRemovalKey{repoId: repoId, generation: generation}].since
 }
 
 // The listing of directory at the ref's head: cached for the head version this client verified last, else read and
@@ -997,7 +1012,7 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 			}
 			path.epochs = epochs
 		}
-		if min(self.client.settings.ReadEpochCount, EvsReadPathMaxEpochCount) < len(path.epochs) {
+		if min(self.client.settings.ReadEpochCount, self.client.settings.ReadPathMaxEpochCount) < len(path.epochs) {
 			return nil, false, fmt.Errorf("%w: a path named in %d epochs", ErrEvsReplyInvalid, len(path.epochs))
 		}
 		path.epochPaths = nil

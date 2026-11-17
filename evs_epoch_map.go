@@ -96,10 +96,6 @@ type EvsNameIndexPublisher interface {
 	LockPublish(ctx context.Context) (func(), error)
 }
 
-// How many ticks the component's loop holds asked and not yet run before a further ask is dropped, which the timer
-// then covers.
-const evsMapperWakeCount = 64
-
 // A map job on disk: evs/epoch/<repo>/<ref>/job, its parts at part/<k> beside it (DESIGN-DETAILS 9.2.2).
 type EvsMapJob struct {
 	PNew          uint64   `json:"p_new"`
@@ -145,7 +141,7 @@ func (self *EvsClient) mapper() *evsMapper {
 		return mapper
 	}
 	mapper := &evsMapper{
-		client: self, wakeups: make(chan evsRefKey, evsMapperWakeCount), indexes: map[evsRefKey]EvsNameIndex{},
+		client: self, wakeups: make(chan evsRefKey, self.settings.MapperWakeCount), indexes: map[evsRefKey]EvsNameIndex{},
 		running: map[evsRefKey]bool{}, firstSeen: map[evsRefKey]time.Time{}, states: map[evsRefKey]*EvsMapJob{},
 		wokenAt: map[evsRefKey]uint64{}, refusedThrough: map[evsRefKey]uint64{}, listed: map[evsRefKey]*evsListedNameIndex{},
 	}
@@ -397,7 +393,7 @@ func (self *EvsRepo) TickMapper(ctx context.Context, refId Id) error {
 	sourceCount := len(epoch.GetSources())
 	if job == nil {
 		switch {
-		case batched && evsPathEpochBatchedMaxSourceCount <= sourceCount, evsPathEpochMaxSourceCount <= sourceCount:
+		case batched && self.client.settings.PathEpochBatchedMaxSourceCount <= sourceCount, self.client.settings.PathEpochMaxSourceCount <= sourceCount:
 			return errEvsMapperWait
 		}
 		if start := self.mapperStart(refId, epoch, removal, batched); self.client.clock.Now().Before(start) {
@@ -509,7 +505,7 @@ func (self *EvsRepo) mapperStart(refId Id, epoch *protocol.EvsPathEpoch, removal
 		return time.Time{}
 	}
 	if batched {
-		dueBy := self.client.epochs.dueBy(self.repoId, epoch, removal, true)
+		dueBy := self.client.epochs.dueBy(self.repoId, epoch, removal, true, self.client.settings.PathEpochBatchedDelay)
 		return dueBy.Add(-self.client.settings.MapperBatchedLead).Add(spread)
 	}
 	return firstSeen.Add(spread)
@@ -1044,9 +1040,9 @@ func (self *EvsRepo) commitMap(ctx context.Context, refId Id, job *EvsMapJob, in
 			if head != nil {
 				headEpoch = head.Head.GetPathEpoch()
 			}
-			dueBy := self.client.epochs.dueBy(self.repoId, headEpoch, job.PNew, false)
+			dueBy := self.client.epochs.dueBy(self.repoId, headEpoch, job.PNew, false, self.client.settings.PathEpochBatchedDelay)
 			if self.client.settings.MapTailRefusalCount <= job.TailRefusals && !dueBy.IsZero() &&
-				dueBy.Add(10*time.Minute).Before(self.client.clock.Now()) {
+				dueBy.Add(self.client.settings.MapBlockAfterDue).Before(self.client.clock.Now()) {
 				if err := self.blockCreation(ctx, refId); err != nil {
 					return err
 				}
@@ -1174,7 +1170,8 @@ func (self *EvsRepo) postMapCommit(ctx context.Context, refId Id, job *EvsMapJob
 	return evsMapCommitDone, nil
 }
 
-// POST .../path-epoch/block {ref_id, ms: 120,000}: creation stops on the ref while the mapper commits.
+// POST .../path-epoch/block {ref_id, ms: MapBlockDuration's, 120,000}: creation stops on the ref while the mapper
+// commits.
 func (self *EvsRepo) blockCreation(ctx context.Context, refId Id) error {
 	call := &evsCall{
 		route:  "POST /evs/v1/repos/{repo_id}/path-epoch/block",
@@ -1182,10 +1179,7 @@ func (self *EvsRepo) blockCreation(ctx context.Context, refId Id) error {
 		path:   "/evs/v1/repos/" + evsUrlId(self.repoId) + "/path-epoch/block",
 		repoId: self.repoId,
 		role:   evsScopeWrite,
-		body:   &protocol.EvsPathEpochBlockRequest{RefId: refId.Bytes(), Ms: uint32(evsPathEpochBlockMs)},
+		body:   &protocol.EvsPathEpochBlockRequest{RefId: refId.Bytes(), Ms: uint32(self.client.settings.MapBlockDuration.Milliseconds())},
 	}
 	return self.client.retryRefusingNothing(ctx, func() error { return self.client.http.callMessage(ctx, call, nil) })
 }
-
-// §11.6's block row: a block holds creation 120 s at most.
-const evsPathEpochBlockMs = 120 * 1000
