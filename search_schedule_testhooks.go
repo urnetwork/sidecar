@@ -15,6 +15,11 @@
 //	               the point a heap sampler takes (OnRecord)
 //	slots          a device's engine admits its searches by Search.DaemonSearchCount's slots, which a heap sampler of
 //	               searches at once holds through each collection (HoldSearchSlots)
+//	turns          while a device's "search more" runs (Search, scope all), each of its reads waits until a page of the
+//	               search waits on the download with nothing left to take: the fake clock moves by reads alone, so a
+//	               read that went while a page worked, or between two pages, would charge the search's work with a
+//	               read's time it does not take; so a hit's delay after its shard lands is what the page loop itself
+//	               spends
 //
 // Only the sidecar_testhooks build has it, which no release leg is (§22.4). Safe for concurrent use but where a method
 // says otherwise.
@@ -654,6 +659,9 @@ type SearchTestDeviceArgs struct {
 	StateDirectory string
 	// At every record a search opens, gkm being asked for its RK_g: the heap sampler's frame point.
 	OnRecord func()
+	// A delay each page holding hits spends on the world's clock before it answers: what FS-110 plants in the page loop
+	// to show that its arrival clause fails a hit past the bound. Zero plants none.
+	AnswerDelay time.Duration
 }
 
 // One device following the world's ref for search.
@@ -872,18 +880,30 @@ func (self *SearchTestSearch) Last() SearchProgress {
 }
 
 // Runs request to its last page, or to a page that waits (metered, offline, update), within pageCount pages, recording
-// each page and each progress report with the world's time. onPage runs after each page, on this goroutine.
+// each page and each progress report with the world's time. onPage runs after each page, on this goroutine. Meanwhile
+// the device's reads take their turns (the file header).
 func (self *SearchTestDevice) Search(ctx context.Context, request *SearchRequest, pageCount int, onPage func(page *SearchTestPage)) (*SearchTestSearch, error) {
 	search := &SearchTestSearch{Started: self.world.clock.Now()}
 	stream, err := self.engine.Search(ctx, request)
 	if err != nil {
 		return search, err
 	}
-	defer stream.Close()
 	source, ok := stream.source.(*searchEngineStream)
 	if !ok {
+		stream.Close()
 		return search, errors.New("search test device: the engine's stream is not its own")
 	}
+	if delay := self.args.AnswerDelay; 0 < delay {
+		source.answerHook = func() {
+			self.world.clock.Advance(delay)
+		}
+	}
+	if request.Scope == SearchAll {
+		// the turns end after the search does, so no read of its download goes outside them
+		self.source.takeTurns(source)
+		defer self.source.takeTurns(nil)
+	}
+	defer stream.Close()
 	reportLock := sync.Mutex{}
 	report := func(progress SearchProgress) {
 		reportLock.Lock()
@@ -909,13 +929,16 @@ func (self *SearchTestDevice) Search(ctx context.Context, request *SearchRequest
 }
 
 // A source over the world's ref: replay by diffing versions, a listing of the head, and fetches sealed as evs seals a
-// record, each read taking its bytes at the device's rate on the world's clock.
+// record, each read taking its bytes at the device's rate on the world's clock, in its turn while a search runs.
 type searchWorldSource struct {
 	world *SearchTestWorld
 	rate  int64
 
 	stateLock sync.Mutex
 	fetches   []SearchTestFetch
+	// The search whose pages a read waits its turn for, nil while none runs, and a channel closed as it changes.
+	turns        *searchEngineStream
+	turnsChanged chan struct{}
 }
 
 // What the source fetched so far, in order.
@@ -923,6 +946,40 @@ func (self *searchWorldSource) fetched() []SearchTestFetch {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return slices.Clone(self.fetches)
+}
+
+// Makes each read wait its turn on stream's pages from now, or, nil, on none, waking every read that waits.
+func (self *searchWorldSource) takeTurns(stream *searchEngineStream) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.turns = stream
+	if self.turnsChanged != nil {
+		close(self.turnsChanged)
+	}
+	self.turnsChanged = make(chan struct{})
+}
+
+// Waits until a page of the running search, if one runs, waits on "search more" with nothing left to take, the search
+// ends, or ctx does: a read's turn.
+func (self *searchWorldSource) awaitTurn(ctx context.Context) error {
+	for {
+		self.stateLock.Lock()
+		stream, turnsChanged := self.turns, self.turnsChanged
+		self.stateLock.Unlock()
+		if stream == nil {
+			return nil
+		}
+		idle, changed := stream.more.idle()
+		if idle {
+			return nil
+		}
+		select {
+		case <-changed:
+		case <-turnsChanged:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // See searchSyncSource: each version after pin diffed against the one before.
@@ -972,8 +1029,11 @@ func (self *searchWorldSource) List(ctx context.Context) (*indexListing, error) 
 	return self.world.ref.store(Id{}).List(ctx, 0)
 }
 
-// See searchSyncSource: each file sealed as evs seals it, the read taking its bytes at the source's rate.
+// See searchSyncSource: each file sealed as evs seals it, the read taking its bytes at the source's rate, in its turn.
 func (self *searchWorldSource) Fetch(ctx context.Context, files []*indexFileVersion) ([]*searchSyncFetched, error) {
+	if err := self.awaitTurn(ctx); err != nil {
+		return nil, err
+	}
 	ref := self.world.ref
 	ref.stateLock.Lock()
 	head := ref.states[len(ref.states)-1]
