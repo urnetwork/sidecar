@@ -2,10 +2,12 @@
 
 // What engines and the hosted Quota share (§20.6, §20.7): the meters a lease or a usage batch counts on,
 // the producers that send batches, how a batch's retry identity is made, and the grammar of CountRate's
-// keys. CountRate takes a plain map, so a key's family, window and limit are fixed here, and
+// keys. CountRate takes a plain map, so a key's family, window and the limit it reads are fixed here, and
 // sidecartest.FakeQuota and server's {sq_<network_id>} script both resolve a key through
-// ParseQuotaRateKey, so neither counts a key the other reads differently. The closure pacing is here
-// too, as plain state a Quota keeps per network, so the fake runs it and the script can be held to it.
+// ParseQuotaRateKey, so neither counts a key the other reads differently. Every limit is a pro.yml row
+// that QuotaLimits carries (R-QUOTA-5), the two 60-a-minute erasure rates included, which read at least
+// QuotaRateKeySettings' floors (owner decision 524). The closure pacing is here too, as plain state a
+// Quota keeps per network, so the fake runs it and the script can be held to it.
 //
 // Nothing here reads a clock: each rule takes the time it is asked at, which is the Quota's own clock,
 // so a fake clock moves every window. Nor does anything here read QuotaLimits.Enforced: a rule's limit,
@@ -118,18 +120,19 @@ func NewDropUsageBatchId(scanId connect.Id, cursorFrom []byte, cursorTo []byte) 
 // (DESIGN-DETAILS 13.2.1, QD-652), so a caller asking again after a refusal's retry_after_ms keeps its
 // debit id, and an upload whose answer was lost is charged once.
 const (
-	// The network's ERASE, CUT and CLOSURE pushes, 60 a minute. A refusal only classes the push: past
-	// the rate it queues as P1 and still commits (§11.12's push row). Count it in a call of its own, since
-	// under all-or-none its refusal would also stop the call's other keys.
+	// The network's ERASE, CUT and CLOSURE pushes, against its evs_erasure_pushes_per_min: 60 a minute,
+	// and never less (owner decision 524). A refusal only classes the push: past the rate it queues as P1
+	// and still commits (§11.12's push row). Count it in a call of its own, since under all-or-none its
+	// refusal would also stop the call's other keys.
 	QuotaRateKeyErasurePush = "evs_erasure_pushes"
 	// The network's drop-history actions, evs_drops_per_day a UTC day (§11.7). A cancel never counts,
 	// and a drop spends no closure allowance (owner decision 146).
 	QuotaRateKeyDrop = "evs_drops"
 )
 
-// One eraser's ?closure=1 uploads, the sidecar its token's ur_sidecar_id names: its own 60 a minute,
-// and each upload takes its turn of the network's closure pacing (§20.7's closure row). Count 1 per
-// upload.
+// One eraser's ?closure=1 uploads, the sidecar its token's ur_sidecar_id names: its own
+// evs_closure_uploads_per_min, 60 a minute and never less (owner decision 524), and each upload takes its
+// turn of the network's closure pacing (§20.7's closure row). Count 1 per upload.
 func QuotaRateKeyClosureUpload(sidecarId connect.Id) string {
 	return quotaRateFamilyClosureUploads + ":" + sidecarId.String()
 }
@@ -159,8 +162,7 @@ const (
 	quotaRateFamilyReadReceipts   = "evs_read_receipts"
 )
 
-// The QuotaLimits keys the grammar reads (§20.4), and the names its refusals give rates no pro.yml key
-// sets.
+// The QuotaLimits keys the grammar reads (§20.4), each a pro.yml row, which a refusal names.
 const (
 	quotaLimitKeyClosureUploadsPerS     = "evs_closure_uploads_per_s"
 	quotaLimitKeyClosureUploadsPerMin   = "evs_closure_uploads_per_min"
@@ -174,6 +176,27 @@ const (
 	// The top tier, which no purchase lifts.
 	quotaTierTeam = "team"
 )
+
+// The grammar's floors (§20.7; owner decision 524): the least the two fixed erasure rates read, whatever
+// pro.yml sets, so pro.yml may raise either and nothing takes it lower. A rate is part of CountRate's
+// contract, so FakeQuota and server's {sq_} script resolve under the defaults (ParseQuotaRateKey), and
+// server's pro.yml table holds the same rows to the same floors.
+type QuotaRateKeySettings struct {
+	// The least an eraser's evs_closure_uploads_per_min reads, a smaller, unusable or absent value and none
+	// included: §20.7's 60 a minute, so no configured value slows erasure. Must be positive.
+	ClosureUploadsMinPerMin int64
+	// The least a network's evs_erasure_pushes_per_min reads, likewise: §11.12's 60 a minute, so no
+	// configured value sends more of a network's erasure pushes to P1. Must be positive.
+	ErasurePushesMinPerMin int64
+}
+
+// §20.7's and §11.12's 60 a minute. A fresh value each call.
+func DefaultQuotaRateKeySettings() *QuotaRateKeySettings {
+	return &QuotaRateKeySettings{
+		ClosureUploadsMinPerMin: 60,
+		ErasurePushesMinPerMin:  60,
+	}
+}
 
 // One ?closure=1 upload's most: a padded segment of one padded record of a 1 MiB file, §15.7's largest
 // i/ segment and §11.14's largest index file (§11.12's rekey row). It is also the least an eraser's
@@ -258,17 +281,18 @@ type QuotaRateRule struct {
 	SubjectId connect.Id
 	// The window a count lands in.
 	Window QuotaRateWindow
-	// The QuotaLimits key holding one window's limit. Empty: FixedLimit is the limit.
+	// The QuotaLimits key holding one window's limit, a pro.yml row (§20.4), which a refusal names.
 	LimitKey string
-	// The limit no pro.yml key sets: §20.7's 60 a minute.
-	FixedLimit int64
-	// What a refusal's limit_key names: LimitKey, or the fixed rate's own name.
-	RefusalLimitKey string
 	// The limit reads at least this key's value: the closure floor, which no row or §21 action lowers
 	// (owner decision 146).
 	FloorLimitKey string
-	// The limit reads at least this, so an unusable value never stops erasure.
+	// The limit reads at least this, so an unusable value never stops erasure: an eraser's allowance one
+	// full re-key, and a fixed rate its floor from QuotaRateKeySettings. Only a fixed rate's none reads it.
 	MinLimit int64
+	// A fixed rate (owner decisions 146 and 524): pro.yml alone sets it, no network's row (§20.5), and it
+	// reads at least MinLimit whatever is configured, none included, as the pacing's R does, so no
+	// configured value slows erasure. Never dark.
+	Fixed bool
 	// Each count also takes a turn of the network's closure pacing (QuotaClosurePacing), so its amount
 	// is 1 and one call counts at most one such key.
 	Paced bool
@@ -283,6 +307,8 @@ type quotaRateFamily struct {
 	// the key names an id after its ':'
 	subject bool
 	rule    QuotaRateRule
+	// a fixed rate's floor, which becomes its rule's MinLimit
+	fixedMinLimit func(settings *QuotaRateKeySettings) int64
 }
 
 // §20.7's counters, row by row.
@@ -290,52 +316,50 @@ var quotaRateFamilies = map[string]*quotaRateFamily{
 	quotaRateFamilyClosureUploads: {
 		subject: true,
 		rule: QuotaRateRule{
-			Window:          QuotaRateWindowMinute,
-			FixedLimit:      60,
-			RefusalLimitKey: quotaLimitKeyClosureUploadsPerMin,
-			Paced:           true,
+			Window:   QuotaRateWindowMinute,
+			LimitKey: quotaLimitKeyClosureUploadsPerMin,
+			Fixed:    true,
+			Paced:    true,
 		},
+		fixedMinLimit: func(settings *QuotaRateKeySettings) int64 { return settings.ClosureUploadsMinPerMin },
 	},
 	quotaRateFamilyClosureBytes: {
 		subject: true,
 		rule: QuotaRateRule{
-			Window:          QuotaRateWindowUtcDay,
-			LimitKey:        quotaLimitKeyClosureBytesPerDay,
-			RefusalLimitKey: quotaLimitKeyClosureBytesPerDay,
-			FloorLimitKey:   quotaLimitKeyClosureBytesFloor,
-			MinLimit:        QuotaClosureUploadMaxByteCount,
+			Window:        QuotaRateWindowUtcDay,
+			LimitKey:      quotaLimitKeyClosureBytesPerDay,
+			FloorLimitKey: quotaLimitKeyClosureBytesFloor,
+			MinLimit:      QuotaClosureUploadMaxByteCount,
 		},
 	},
 	QuotaRateKeyErasurePush: {
 		rule: QuotaRateRule{
-			Window:          QuotaRateWindowMinute,
-			FixedLimit:      60,
-			RefusalLimitKey: quotaLimitKeyErasurePushesPerMin,
-			ClassOnly:       true,
+			Window:    QuotaRateWindowMinute,
+			LimitKey:  quotaLimitKeyErasurePushesPerMin,
+			Fixed:     true,
+			ClassOnly: true,
 		},
+		fixedMinLimit: func(settings *QuotaRateKeySettings) int64 { return settings.ErasurePushesMinPerMin },
 	},
 	QuotaRateKeyDrop: {
 		rule: QuotaRateRule{
-			Window:          QuotaRateWindowUtcDay,
-			LimitKey:        quotaLimitKeyDropsPerDay,
-			RefusalLimitKey: quotaLimitKeyDropsPerDay,
-			Tiered:          true,
+			Window:   QuotaRateWindowUtcDay,
+			LimitKey: quotaLimitKeyDropsPerDay,
+			Tiered:   true,
 		},
 	},
 	quotaRateFamilyDropPreviews: {
 		subject: true,
 		rule: QuotaRateRule{
-			Window:          QuotaRateWindowUtcDay,
-			LimitKey:        quotaLimitKeyDropPreviewsPerDay,
-			RefusalLimitKey: quotaLimitKeyDropPreviewsPerDay,
+			Window:   QuotaRateWindowUtcDay,
+			LimitKey: quotaLimitKeyDropPreviewsPerDay,
 		},
 	},
 	quotaRateFamilyReadReceipts: {
 		subject: true,
 		rule: QuotaRateRule{
-			Window:          QuotaRateWindowUtcDay,
-			LimitKey:        quotaLimitKeyReadReceiptsPerRepoDay,
-			RefusalLimitKey: quotaLimitKeyReadReceiptsPerRepoDay,
+			Window:   QuotaRateWindowUtcDay,
+			LimitKey: quotaLimitKeyReadReceiptsPerRepoDay,
 		},
 	},
 }
@@ -344,9 +368,15 @@ var quotaRateFamilies = map[string]*quotaRateFamily{
 // caller's bug, with an error and nothing counted.
 var ErrQuotaRateKey = errors.New("not a quota rate key")
 
-// Resolves a CountRate key. A key naming an id must spell it as connect.Id.String does, so two
-// spellings never count apart, and the id is never zero.
+// Resolves a CountRate key under the grammar's default floors, as every Quota does
+// (ParseQuotaRateKeyWithSettings).
 func ParseQuotaRateKey(key string) (*QuotaRateRule, error) {
+	return ParseQuotaRateKeyWithSettings(key, DefaultQuotaRateKeySettings())
+}
+
+// Resolves a CountRate key, a fixed rate reading at least settings' floor. A key naming an id must spell
+// it as connect.Id.String does, so two spellings never count apart, and the id is never zero.
+func ParseQuotaRateKeyWithSettings(key string, settings *QuotaRateKeySettings) (*QuotaRateRule, error) {
 	familyName, subject, hasSubject := strings.Cut(key, ":")
 	family, ok := quotaRateFamilies[familyName]
 	if !ok {
@@ -365,6 +395,9 @@ func ParseQuotaRateKey(key string) (*QuotaRateRule, error) {
 		}
 		rule.SubjectId = subjectId
 	}
+	if family.fixedMinLimit != nil {
+		rule.MinLimit = family.fixedMinLimit(settings)
+	}
 	return &rule, nil
 }
 
@@ -378,9 +411,10 @@ func quotaLimitsValue(limits *QuotaLimits, limitKey string) int64 {
 
 // One window's limit under limits, or -1 for none.
 func (self *QuotaRateRule) Limit(limits *QuotaLimits) int64 {
-	limit := self.FixedLimit
-	if self.LimitKey != "" {
-		limit = quotaLimitsValue(limits, self.LimitKey)
+	limit := quotaLimitsValue(limits, self.LimitKey)
+	if self.Fixed {
+		// none, an absent row and a value under the floor all read the floor (owner decision 524)
+		return max(limit, self.MinLimit)
 	}
 	if limit == quotaLimitNone {
 		return limit
@@ -400,17 +434,18 @@ func (self *QuotaRateRule) Upgrade(limits *QuotaLimits) bool {
 // limit only pro.yml sets, with no floor and no least value, which an absent pro.yml reads as 0, so that
 // while the switch is off a Quota neither counts nor refuses it and makes no Redis call for it, and an
 // absent pro.yml locks nobody out. The closure rates, allowance and pacing are never dark: they read a
-// fixed number or a floor, and they bound what passes at the storage limit and while spent, which is never
-// dark (owner decision 520). Nor is the erasure push class, which refuses nothing.
+// floor, and they bound what passes at the storage limit and while spent, which is never dark (owner
+// decision 520). Nor is the erasure push class, which refuses nothing. A fixed rate is never dark whatever
+// its floor reads.
 func (self *QuotaRateRule) Dark() bool {
-	return self.LimitKey != "" && self.FloorLimitKey == "" && self.MinLimit <= 0
+	return !self.Fixed && self.LimitKey != "" && self.FloorLimitKey == "" && self.MinLimit <= 0
 }
 
 // The refusal for a count that would pass the limit, used being what the window holding now has
 // counted. It lifts when the window turns.
 func (self *QuotaRateRule) Refusal(limits *QuotaLimits, used int64, now time.Time) *QuotaRefusal {
 	return &QuotaRefusal{
-		LimitKey:     self.RefusalLimitKey,
+		LimitKey:     self.LimitKey,
 		Limit:        self.Limit(limits),
 		Used:         used,
 		RetryAfterMs: QuotaRetryAfterMs(now, self.Window.End(self.Window.Index(now))),

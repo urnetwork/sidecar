@@ -104,27 +104,28 @@ func TestNewDropUsageBatchIdVectors(t *testing.T) {
 	}
 }
 
-// Each constructor's key resolves to §20.7's row for it.
+// Each constructor's key resolves to §20.7's row for it, every limit a pro.yml row (owner decision 524).
 func TestQuotaRateKeysResolveToTheirRows(t *testing.T) {
 	sidecarId := connect.NewId()
 	repoId := connect.NewId()
 	cases := []struct {
-		key             string
-		subjectId       connect.Id
-		window          QuotaRateWindow
-		limitKey        string
-		fixedLimit      int64
-		refusalLimitKey string
-		paced           bool
-		classOnly       bool
-		tiered          bool
+		key           string
+		subjectId     connect.Id
+		window        QuotaRateWindow
+		limitKey      string
+		floorLimitKey string
+		minLimit      int64
+		fixed         bool
+		paced         bool
+		classOnly     bool
+		tiered        bool
 	}{
-		{key: QuotaRateKeyClosureUpload(sidecarId), subjectId: sidecarId, window: QuotaRateWindowMinute, fixedLimit: 60, refusalLimitKey: "evs_closure_uploads_per_min", paced: true},
-		{key: QuotaRateKeyClosureBytes(sidecarId), subjectId: sidecarId, window: QuotaRateWindowUtcDay, limitKey: "evs_closure_bytes_per_day", refusalLimitKey: "evs_closure_bytes_per_day"},
-		{key: QuotaRateKeyErasurePush, window: QuotaRateWindowMinute, fixedLimit: 60, refusalLimitKey: "evs_erasure_pushes_per_min", classOnly: true},
-		{key: QuotaRateKeyDrop, window: QuotaRateWindowUtcDay, limitKey: "evs_drops_per_day", refusalLimitKey: "evs_drops_per_day", tiered: true},
-		{key: QuotaRateKeyDropPreview(repoId), subjectId: repoId, window: QuotaRateWindowUtcDay, limitKey: "evs_drop_previews_per_day", refusalLimitKey: "evs_drop_previews_per_day"},
-		{key: QuotaRateKeyReadReceipt(repoId), subjectId: repoId, window: QuotaRateWindowUtcDay, limitKey: "evs_read_receipts_per_repo_day", refusalLimitKey: "evs_read_receipts_per_repo_day"},
+		{key: QuotaRateKeyClosureUpload(sidecarId), subjectId: sidecarId, window: QuotaRateWindowMinute, limitKey: "evs_closure_uploads_per_min", minLimit: 60, fixed: true, paced: true},
+		{key: QuotaRateKeyClosureBytes(sidecarId), subjectId: sidecarId, window: QuotaRateWindowUtcDay, limitKey: "evs_closure_bytes_per_day", floorLimitKey: "evs_closure_bytes_floor", minLimit: QuotaClosureUploadMaxByteCount},
+		{key: QuotaRateKeyErasurePush, window: QuotaRateWindowMinute, limitKey: "evs_erasure_pushes_per_min", minLimit: 60, fixed: true, classOnly: true},
+		{key: QuotaRateKeyDrop, window: QuotaRateWindowUtcDay, limitKey: "evs_drops_per_day", tiered: true},
+		{key: QuotaRateKeyDropPreview(repoId), subjectId: repoId, window: QuotaRateWindowUtcDay, limitKey: "evs_drop_previews_per_day"},
+		{key: QuotaRateKeyReadReceipt(repoId), subjectId: repoId, window: QuotaRateWindowUtcDay, limitKey: "evs_read_receipts_per_repo_day"},
 	}
 	for _, c := range cases {
 		rule, err := ParseQuotaRateKey(c.key)
@@ -133,8 +134,8 @@ func TestQuotaRateKeysResolveToTheirRows(t *testing.T) {
 			continue
 		}
 		if rule.Key != c.key || rule.SubjectId != c.subjectId || rule.Window != c.window || rule.LimitKey != c.limitKey ||
-			rule.FixedLimit != c.fixedLimit || rule.RefusalLimitKey != c.refusalLimitKey || rule.Paced != c.paced ||
-			rule.ClassOnly != c.classOnly || rule.Tiered != c.tiered {
+			rule.FloorLimitKey != c.floorLimitKey || rule.MinLimit != c.minLimit || rule.Fixed != c.fixed ||
+			rule.Paced != c.paced || rule.ClassOnly != c.classOnly || rule.Tiered != c.tiered {
 			t.Errorf("%s: %+v", c.key, rule)
 		}
 		if family, _, _ := strings.Cut(c.key, ":"); rule.Family != family {
@@ -294,6 +295,161 @@ func TestQuotaRateRefusalLiftsWhenItsWindowTurns(t *testing.T) {
 	}
 	if closureBytes.Refusal(&QuotaLimits{Tier: "free"}, 0, now).Upgrade {
 		t.Error("an abuse allowance says a purchase lifts it")
+	}
+}
+
+// The two erasure rates read their sidecar_abuse: rows (owner decision 524): a row above 60 raises its rate,
+// and a configured 10, any value under 60, zero, none, an absent row or no limits at all reads 60, whatever
+// enforced says. Each reads its own row and never the other's.
+func TestQuotaErasureRatesReadTheirRows(t *testing.T) {
+	closureUploads, err := ParseQuotaRateKey(QuotaRateKeyClosureUpload(connect.NewId()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	erasures, err := ParseQuotaRateKey(QuotaRateKeyErasurePush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rate := range []struct {
+		rule     *QuotaRateRule
+		limitKey string
+	}{
+		{rule: closureUploads, limitKey: "evs_closure_uploads_per_min"},
+		{rule: erasures, limitKey: "evs_erasure_pushes_per_min"},
+	} {
+		for _, c := range []struct {
+			limits map[string]int64
+			want   int64
+		}{
+			{limits: map[string]int64{rate.limitKey: 60}, want: 60},
+			{limits: map[string]int64{rate.limitKey: 61}, want: 61},
+			{limits: map[string]int64{rate.limitKey: 90}, want: 90},
+			{limits: map[string]int64{rate.limitKey: 10}, want: 60},
+			{limits: map[string]int64{rate.limitKey: 59}, want: 60},
+			{limits: map[string]int64{rate.limitKey: 0}, want: 60},
+			{limits: map[string]int64{rate.limitKey: -1}, want: 60},
+			{limits: map[string]int64{}, want: 60},
+			{limits: nil, want: 60},
+		} {
+			for _, enforced := range []bool{false, true} {
+				limits := &QuotaLimits{Tier: "free", Limits: c.limits, Enforced: enforced}
+				if got := rate.rule.Limit(limits); got != c.want {
+					t.Errorf("%s under %v, enforced %t: %d, want %d", rate.limitKey, c.limits, enforced, got, c.want)
+				}
+			}
+		}
+		if got := rate.rule.Limit(nil); got != 60 {
+			t.Errorf("%s with no limits at all: %d", rate.limitKey, got)
+		}
+	}
+	both := &QuotaLimits{Tier: "team", Limits: map[string]int64{"evs_closure_uploads_per_min": 90, "evs_erasure_pushes_per_min": 120}}
+	if closureUploads.Limit(both) != 90 || erasures.Limit(both) != 120 {
+		t.Errorf("each its own row: uploads %d, pushes %d", closureUploads.Limit(both), erasures.Limit(both))
+	}
+}
+
+// Their refusals name the two keys with the limit each read, configured or the floor, lift at the minute's
+// end, and never say a purchase lifts them: they are abuse rates, equal on every tier.
+func TestQuotaErasureRateRefusalsNameTheirKeys(t *testing.T) {
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	closureUploads, err := ParseQuotaRateKey(QuotaRateKeyClosureUpload(connect.NewId()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	erasures, err := ParseQuotaRateKey(QuotaRateKeyErasurePush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range []string{"free", "pro", "team"} {
+		limits := &QuotaLimits{Tier: tier, Limits: map[string]int64{"evs_closure_uploads_per_min": 90, "evs_erasure_pushes_per_min": 10}}
+		refusal := closureUploads.Refusal(limits, 90, now)
+		want := QuotaRefusal{LimitKey: "evs_closure_uploads_per_min", Limit: 90, Used: 90, RetryAfterMs: 55000}
+		if *refusal != want {
+			t.Errorf("%s: %+v, want %+v", tier, refusal, want)
+		}
+		refusal = erasures.Refusal(limits, 60, now)
+		want = QuotaRefusal{LimitKey: "evs_erasure_pushes_per_min", Limit: 60, Used: 60, RetryAfterMs: 55000}
+		if *refusal != want {
+			t.Errorf("%s: %+v, want %+v", tier, refusal, want)
+		}
+	}
+}
+
+// The floors are the grammar's settings: ParseQuotaRateKey resolves under the defaults, 60 each, and resolving
+// under other settings holds each fixed rate to its own floor and leaves every other family as it was. A fixed
+// rate is never dark, whatever its floor.
+func TestQuotaRateKeySettingsSetTheErasureFloors(t *testing.T) {
+	defaults := DefaultQuotaRateKeySettings()
+	if defaults.ClosureUploadsMinPerMin != 60 || defaults.ErasurePushesMinPerMin != 60 {
+		t.Errorf("defaults %+v", defaults)
+	}
+	sidecarId, repoId := connect.NewId(), connect.NewId()
+	mib := int64(1024 * 1024)
+	limits := &QuotaLimits{Tier: "free", Limits: map[string]int64{
+		"evs_closure_uploads_per_min":    100,
+		"evs_erasure_pushes_per_min":     100,
+		"evs_closure_bytes_per_day":      64 * mib,
+		"evs_closure_bytes_floor":        4 * mib,
+		"evs_drops_per_day":              7,
+		"evs_drop_previews_per_day":      20,
+		"evs_read_receipts_per_repo_day": 256,
+	}}
+	settings := &QuotaRateKeySettings{ClosureUploadsMinPerMin: 90, ErasurePushesMinPerMin: 120}
+	for _, c := range []struct {
+		key string
+		// the limit under the defaults and under settings
+		defaultsWant int64
+		settingsWant int64
+	}{
+		{key: QuotaRateKeyClosureUpload(sidecarId), defaultsWant: 100, settingsWant: 100},
+		{key: QuotaRateKeyErasurePush, defaultsWant: 100, settingsWant: 120},
+		{key: QuotaRateKeyClosureBytes(sidecarId), defaultsWant: 64 * mib, settingsWant: 64 * mib},
+		{key: QuotaRateKeyDrop, defaultsWant: 7, settingsWant: 7},
+		{key: QuotaRateKeyDropPreview(repoId), defaultsWant: 20, settingsWant: 20},
+		{key: QuotaRateKeyReadReceipt(repoId), defaultsWant: 256, settingsWant: 256},
+	} {
+		rule, err := ParseQuotaRateKey(c.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		underDefaults, err := ParseQuotaRateKeyWithSettings(c.key, DefaultQuotaRateKeySettings())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *rule != *underDefaults {
+			t.Errorf("%s: %+v, and under the defaults %+v", c.key, rule, underDefaults)
+		}
+		underSettings, err := ParseQuotaRateKeyWithSettings(c.key, settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rule.Limit(limits); got != c.defaultsWant {
+			t.Errorf("%s under the defaults: %d, want %d", c.key, got, c.defaultsWant)
+		}
+		if got := underSettings.Limit(limits); got != c.settingsWant {
+			t.Errorf("%s under %+v: %d, want %d", c.key, settings, got, c.settingsWant)
+		}
+		if underSettings.Dark() != rule.Dark() {
+			t.Errorf("%s: dark %t under settings, %t under the defaults", c.key, underSettings.Dark(), rule.Dark())
+		}
+	}
+	// under a floor of 90 a configured 10 reads 90
+	underSettings, err := ParseQuotaRateKeyWithSettings(QuotaRateKeyClosureUpload(sidecarId), settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := underSettings.Limit(&QuotaLimits{Tier: "free", Limits: map[string]int64{"evs_closure_uploads_per_min": 10}}); got != 90 {
+		t.Errorf("a configured 10 under a floor of 90: %d", got)
+	}
+	// floors of zero leave the rows as configured, and the rates out of the dark
+	for _, key := range []string{QuotaRateKeyClosureUpload(sidecarId), QuotaRateKeyErasurePush} {
+		rule, err := ParseQuotaRateKeyWithSettings(key, &QuotaRateKeySettings{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rule.Dark() || rule.Limit(limits) != 100 {
+			t.Errorf("%s under floors of zero: dark %t, limit %d", key, rule.Dark(), rule.Limit(limits))
+		}
 	}
 }
 
