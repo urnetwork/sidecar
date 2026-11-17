@@ -1499,16 +1499,20 @@ func evsTestRequireTamper(t *testing.T, label string, reader *evsTestClient, cou
 // QD-979 (question evs-removal-from-window-removal-paged-out, option 2) on the stand-in: x.txt written at 1 and 2 and
 // removed at 3, then 70 versions and 60 more, the window holding the last 70 (from 64 at head 133), and evs serving
 // x.txt plain absent, as it does once a collection took the removal's marker and the window paged the removal out. A
-// reader holding a record of x.txt pinned at 2 walks the removal from the log pages and reads x.txt absent, its record
-// no refusal, with no alarm, and so does a reader pinned before the first write; once x.txt is created again, the same
-// absent reply contradicts the walked creation, which the reader refuses and alarms as tampering.
+// reader holding a record of x.txt pinned at 1 walks the second write and then the removal from the log pages, one
+// pinned at 2 the removal alone, and each reads x.txt absent, its record no refusal, with no alarm; once x.txt is
+// created again, the same absent reply contradicts the walked creation, which the reader refuses and alarms as
+// tampering.
 func TestEvsAbsentAgreesWithTheWalksRemoval(t *testing.T) {
 	world := newEvsTestWorld(t)
-	world.push(&evsTestChange{path: "x.txt", content: []byte("first")})
-	world.push(&evsTestChange{path: "x.txt", content: []byte("second")})
-	reader := world.reader(t, evsTestId("reader"))
-	if content, _, err := evsTestRead(t, reader, world, "x.txt"); err != nil || string(content) != "second" {
-		t.Fatalf("x.txt at 2: %q %v", content, err)
+	readers := []*evsTestClient{}
+	for i, content := range []string{"first", "second"} {
+		world.push(&evsTestChange{path: "x.txt", content: []byte(content)})
+		reader := world.reader(t, evsTestId(fmt.Sprint("reader ", i)))
+		if read, _, err := evsTestRead(t, reader, world, "x.txt"); err != nil || string(read) != content {
+			t.Fatalf("x.txt at %d: %q %v", i+1, read, err)
+		}
+		readers = append(readers, reader)
 	}
 	removed := world.push(&evsTestChange{path: "x.txt"})
 	evsTestPushOthers(world, "n", 70)
@@ -1521,26 +1525,26 @@ func TestEvsAbsentAgreesWithTheWalksRemoval(t *testing.T) {
 	world.window = 70
 	world.stateLock.Unlock()
 	evsTestServeAbsent(world, "x.txt", false)
-	requestPins := []uint64{}
-	world.beforeRead = func(read *protocol.EvsReadRequest) {
-		requestPins = append(requestPins, read.GetPinVersion())
+	for i, reader := range readers {
+		requestPins := []uint64{}
+		world.beforeRead = func(read *protocol.EvsReadRequest) {
+			requestPins = append(requestPins, read.GetPinVersion())
+		}
+		pages := world.logPageCount
+		if _, _, err := evsTestRead(t, reader, world, "x.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+			t.Fatalf("pinned at %d: x.txt served absent past its removal: %v", i+1, err)
+		}
+		if len(requestPins) != 1 || requestPins[0] != uint64(i+1) || world.logPageCount == pages {
+			t.Fatalf("pinned at %d: read from pins %v with %d log pages, which walk no removal from the log", i+1, requestPins, world.logPageCount-pages)
+		}
+		evsTestRequireNoAlarm(t, fmt.Sprint("pinned at ", i+1), reader)
+		if pin, ok, _ := reader.client.pins.Pin(world.repoId, world.refId); !ok || pin.Version != head {
+			t.Errorf("pinned at %d: pin %+v, not the head %d", i+1, pin, head)
+		}
 	}
-	if _, _, err := evsTestRead(t, reader, world, "x.txt"); !errors.Is(err, ErrEvsPathAbsent) {
-		t.Fatalf("x.txt served absent past its removal: %v", err)
-	}
-	if len(requestPins) != 1 || removed <= requestPins[0] || world.logPageCount == 0 {
-		t.Fatalf("read from pins %v with %d log pages, which walk no removal from the log", requestPins, world.logPageCount)
-	}
-	evsTestRequireNoAlarm(t, "the reader", reader)
-	if pin, ok, _ := reader.client.pins.Pin(world.repoId, world.refId); !ok || pin.Version != head {
-		t.Errorf("pin %+v, not the head %d", pin, head)
-	}
-	first := world.reader(t, evsTestId("first reader"))
-	if _, _, err := evsTestRead(t, first, world, "x.txt"); !errors.Is(err, ErrEvsPathAbsent) {
-		t.Fatalf("a reader whose walk holds both writes and the removal: %v", err)
-	}
-	evsTestRequireNoAlarm(t, "the first reader", first)
+	world.beforeRead = nil
 
+	reader := readers[0]
 	created := world.push(&evsTestChange{path: "x.txt", content: []byte("again")})
 	if _, _, err := evsTestRead(t, reader, world, "x.txt"); !errors.Is(err, ErrEvsEntryRefused) {
 		t.Fatalf("absent served over the creation at %d: %v", created, err)
@@ -1652,21 +1656,22 @@ func TestEvsAbsentAgreesWithARootedWalkedRemoval(t *testing.T) {
 	}
 }
 
-// QD-979's writer on the stand-in: writerA writes x.txt twice, a device of its signer reads it, writerA removes it,
-// and 130 versions pass with the window holding the last 70. evs serves x.txt plain absent: the device, its record
-// pinned below the removal, and writerA, whose record is its removal's plan read, each read it absent with no alarm;
-// and writerA's creation of x.txt commits at b + 1, the planner's max(b, m) + 1 with no m.
+// QD-979's writer on the stand-in: writerA writes x.txt, a device of its signer reads it, writerA writes it again and
+// removes it, and 130 versions pass with the window holding the last 70. evs serves x.txt plain absent: the device,
+// its record pinned below the second write, and writerA, whose record is its removal's plan read, each read it absent
+// with no alarm; and writerA's creation of x.txt commits at b + 1, the planner's max(b, m) + 1 with no m.
 func TestEvsWriterCreatesAPathAgainPastItsPagedOutRemoval(t *testing.T) {
 	writer := newEvsTestWriter(t)
-	for _, content := range []string{"first", "second"} {
-		if _, err := writer.write(t, "x.txt", []byte(content)); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := writer.write(t, "x.txt", []byte("first")); err != nil {
+		t.Fatal(err)
 	}
 	pinned := writer.otherDevice(t, "pinned client")
 	out := &bytes.Buffer{}
-	if _, err := pinned.repo.ReadHead(context.Background(), &EvsReadArgs{Path: "x.txt"}, out); err != nil || out.String() != "second" {
+	if _, err := pinned.repo.ReadHead(context.Background(), &EvsReadArgs{Path: "x.txt"}, out); err != nil || out.String() != "first" {
 		t.Fatalf("the pinned device's read: %q %v", out.String(), err)
+	}
+	if _, err := writer.write(t, "x.txt", []byte("second")); err != nil {
+		t.Fatal(err)
 	}
 	removed, err := writer.write(t, "x.txt", nil)
 	if err != nil {
