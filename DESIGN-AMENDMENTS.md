@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 19 decided items and 6 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
+Holds 18 decided items and 6 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded, and QD-336 went into §4.5 with owner decision 251 (QD-841 to QD-843), which DESIGN.md carries directly.
 
 ## Index
 
@@ -20,7 +20,6 @@ Holds 19 decided items and 6 proposed ones, generated from the ledger on 2026-11
 | [§15 The local email server, inbound mail, and burner email](#s15) | 1 | 0 |
 | [§16 The local MCP server and record primitives](#s16) | 6 | 2 |
 | [§19 Server services](#s19) | 0 | 1 |
-| [§23 Phasing, milestones, and rollout](#s23) | 1 | 0 |
 | [No section named](#s0) | 2 | 0 |
 
 ## DESIGN-DETAILS.md sections to fold
@@ -298,20 +297,6 @@ Changes: front matter PEER_INTRO; ledger section 5; Q-OPS-3 text.
 Questions: `g0-recheck-2-q-ops-3-records.md`.
 
 Not folded (2026-11-16): the ledger's section 5 entry naming Q-OPS-3's residual beside Q-QUOTA-3's, since the ledger is DESIGN-REVIEW-RESPONSE.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md parts are folded (the front matter's peer lead names one engineering residual, and §19.14's Q-OPS-3 carries §19.6's bound and "the dumped sidecar rows"; Appendix B's status and the "Closed by peer review 2026-11-04" label stay).
-
-<a id="s23"></a>
-## §23 Phasing, milestones, and rollout
-
-### QD-274: Keep §23.8's no-duplication clause as written, or name the duplication the design keeps on purpose
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22, §7, §9, §11, §17, §2, §3.*
-
-Recommended: amend §23.8's clause to "no content duplicated across sections (each item in its owning section, cited elsewhere), except §2.8's published list, §3.7's flows and Requirements rows". design-records then moves the test lists out of Interfaces subsections into §22 first (11-EVS.md:3098, 17-BRIDGE.md:528, 09-SOCK.md:393, 07-TEAM.md:990) and turns accidental restatements into citations, before M2's Gn-in.
-
-Changes: §23.8; §22; §7.17; §9.15; §11.20; §17.16.
-
-Questions: `g0-density-rule-direction.md`.
-
-Not folded (2026-11-17): the rest of the pass turning the design's accidental restatements into citations, due before M2's Gn-in. Its first two pieces are folded (design/source/README.md, "Validation after QD-274's citation pass"): every rule the pass found stated in three or more sections, the Delegation key drops and the stored-bytes rule among them, and 29 rules and risk rows a second section restated. What remains is about 600 words of short body passages that a second section restates (a field list's numbers in §11.14 and §16.8, I-20's vault contents in §16.11, a page Worker's DPoP refresh in §18.10, a mailbox's vault readers in §15.8 and the like) and some 400 words in risk rows that name a shared risk with each section's own mitigations; the passages kept on purpose (§22's test statements, D- items in their own sections, decided Q- records, Interfaces assumptions, phasing lists, alternatives rows) stay. The rest is folded as owner decision 551: §23.8's clause, and the four Interfaces test lists (§7.17's, §9.15's, §11.20's and §17.16's), which §22 already held and which now cite it.
 
 <a id="s0"></a>
 ## No section named
