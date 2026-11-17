@@ -153,9 +153,11 @@ var failsOnRows = []failsOnRow{
 	},
 
 	{
-		row: "legs", item: "an sdk leg with no leg here",
-		rule:         (*repository).sdkLegRowFindings,
-		plantedTests: []string{"TestLegsFailsOnAnSdkLegWithNoLegHere", "TestLegsFailsOnAnSdkTableItCannotFind"},
+		row: "legs", item: "an sdk leg with no leg here, or a gomobile leg here that is no leg of sdk's (QD-908)",
+		rule: (*repository).sdkLegRowFindings,
+		plantedTests: []string{
+			"TestLegsFailsOnAnSdkLegWithNoLegHere", "TestLegsFailsOnAGomobileLegSdkDoesNotList", "TestLegsFailsOnAnSdkTableItCannotFind",
+		},
 	},
 	{
 		row: "legs", item: "the ios_extension legs compiling a root or protocol file their list does not name, or linking any other package of this repository but device and protocol/bridge (D-SDK-20, DESIGN-DETAILS 4.2.3)",

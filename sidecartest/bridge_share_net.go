@@ -134,7 +134,7 @@ type BridgeShareNet struct {
 	// the one port the second target admits, the upstream's TCP port, sealed into the immutable target table
 	portTargetPort uint16
 	// the host's posture store, which a restart restores from
-	postureStore *bridgeNetPostureStore
+	postureStore *BridgeNetPostureStore
 	// Y's verified state, which the platform takes beside X's
 	acceptingState *sidecar.AclGateSnapshot
 	// each reader's own client on the platform, by sidecar
@@ -188,7 +188,7 @@ func NewBridgeShareNet(t AdmissionT, net *Net, settings *BridgeShareNetSettings)
 	self.accepting()
 	self.activate()
 	self.pin()
-	self.postureStore = newBridgeNetPostureStore()
+	self.postureStore = NewBridgeNetPostureStore()
 	self.Host = self.X.StartHost(self.HostDevice, &BridgeNetHostSettings{
 		Address:                 settings.HostAddress,
 		ProvideFriendsAndFamily: true,

@@ -47,6 +47,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hpke"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -54,7 +55,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"slices"
@@ -701,6 +701,9 @@ type BridgeNet struct {
 	// the config repo's generation 1, which every bridge body is sealed under and every host's compile opens with
 	configKey *sidecar.EvsRepoKey
 	rows      *bridgeNetRows
+	// the config group at gkm as a forwarding client reads it: generation 1's GenRotate and its DelegationWraps
+	// (bridge_net_forwarding.go)
+	gkm *bridgeNetGkm
 
 	stateLock sync.Mutex
 	devices   []*BridgeNetDevice
@@ -748,12 +751,16 @@ func NewBridgeNet(t AdmissionT, net *Net, settings *BridgeNetSettings) *BridgeNe
 	self.rows = &bridgeNetRows{bridgeNet: self, rows: map[[sha256.Size]byte][]byte{}}
 	var groupId sidecar.Id
 	rand.Read(groupId[:])
-	self.configKey, _, err = sidecar.NewGkmFirstGeneration(admission.ConfigRepoId(), groupId, &sidecar.GkmGenerationArgs{
+	var rotate *sidecarprotocol.GenRotate
+	self.configKey, rotate, err = sidecar.NewGkmFirstGeneration(admission.ConfigRepoId(), groupId, &sidecar.GkmGenerationArgs{
 		Cause:         sidecar.GkmCauseRequest,
 		Auth:          admission.Tip(),
 		Time:          net.Clock().Now(),
 		HoldersSha256: make([]byte, sha256.Size),
 	})
+	if err == nil {
+		self.gkm, err = newBridgeNetGkm(groupId, self.configKey, rotate, admission.Owner())
+	}
 	if err != nil {
 		admission.Close()
 		t.Fatal(err)
@@ -1020,24 +1027,38 @@ type BridgeNetForwarding struct {
 	Subject      *BridgeNetDevice
 	DelegationId []byte
 	Key          ed25519.PrivateKey
-	At           uint64
+	// The X-Wing reader key the Delegation names, which each DelegationWrap of the config's generations is sealed to.
+	ReaderKey hpke.PrivateKey
+	At        uint64
 }
 
 // Files device's forwarding Delegation, signed by its own identity key as §18.6's setup signs it, for a forwarding key
-// from label and no host client, which must land; a newer one of the same device supersedes the one live before it. A
-// host compiles it into the device's BridgeIdentity at its next adoption (Follow).
+// and an X-Wing reader key from label and no host client, which must land, and then the DelegationWrap of the
+// config's generation to its reader key, setup's step 4 (DESIGN-DETAILS 4.2.6); a newer one of the same device
+// supersedes the one live before it. A host compiles it into the device's BridgeIdentity at its next adoption
+// (Follow).
 func (self *BridgeNet) FileForwarding(device *BridgeNetDevice, label string) *BridgeNetForwarding {
 	self.t.Helper()
 	statement, key := self.admission.DelegationStatement("bridge forwarding "+label, nil, 0, 0)
+	readerKey, err := bridgeNetReaderKey(self.NetworkId(), label)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	statement.ReaderXwingPublicKey = readerKey.PublicKey().Bytes()
 	statement.Forward = &bridge.ForwardScope{ForwardSidecarId: device.SidecarId().Bytes()}
 	signed := self.admission.Sign(device.Device, bridge.SignedType_SIGNED_DELEGATION, statement)
 	self.admission.MustLand(signed)
-	return &BridgeNetForwarding{
+	forwarding := &BridgeNetForwarding{
 		Subject:      device,
 		DelegationId: AdmissionStatementId(signed),
 		Key:          key,
+		ReaderKey:    readerKey,
 		At:           self.admission.Tip().GetVersion(),
 	}
+	if err := self.gkm.wrap(forwarding.DelegationId, readerKey); err != nil {
+		self.t.Fatalf("the DelegationWrap of %s's forwarding Delegation: %v", device.Name, err)
+	}
+	return forwarding
 }
 
 // A DelegationRevoke of forwarding with since_n 0, signed by signer, its own sidecar's device or an admin's (§7.9's
@@ -1163,55 +1184,6 @@ func (self *bridgeNetRows) CheckHead(check *sidecar.ConfigHeadCheck) (*sidecar.C
 		return nil, err
 	}
 	return sidecar.CheckConfigBase(head, check, check.CompileRows)
-}
-
-// A posture store in memory, as an app's sealed store would hold one network's records.
-type bridgeNetPostureStore struct {
-	stateLock sync.Mutex
-	records   map[string][]byte
-}
-
-func newBridgeNetPostureStore() *bridgeNetPostureStore {
-	return &bridgeNetPostureStore{records: map[string][]byte{}}
-}
-
-func (self *bridgeNetPostureStore) Open(name string) (io.ReadCloser, error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	record, found := self.records[name]
-	if !found {
-		return nil, device.ErrPostureStoreAbsent
-	}
-	return io.NopCloser(bytes.NewReader(bytes.Clone(record))), nil
-}
-
-func (self *bridgeNetPostureStore) Write(name string, write func(writer io.Writer) error) error {
-	buffer := &bytes.Buffer{}
-	if err := write(buffer); err != nil {
-		return err
-	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.records[name] = buffer.Bytes()
-	return nil
-}
-
-func (self *bridgeNetPostureStore) Remove(name string) error {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	delete(self.records, name)
-	return nil
-}
-
-func (self *bridgeNetPostureStore) List() ([]string, error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	names := []string{}
-	for name := range self.records {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	return names, nil
 }
 
 // device.Bridge as the component's sink, as cli/'s urBridgeSink is: each call through, a log run converted to the
@@ -1578,7 +1550,7 @@ type BridgeNetHostSettings struct {
 }
 
 // A host sidecar: its device role, the component that feeds it, its connect client and its upstream. See the file's
-// comment.
+// comment. An app host (StartAppHost) is fed by its own Forwarder in place of the component.
 type BridgeNetHost struct {
 	bridgeNet *BridgeNet
 	Device    *BridgeNetDevice
@@ -1586,7 +1558,8 @@ type BridgeNetHost struct {
 	Client    *NetClient
 	Bridge    *device.Bridge
 	Upstream  *BridgeNetUpstream
-	// The loopback listener standing for the daemon's own (§17.6's rule 0), which the component names.
+	// The loopback listener standing for the daemon's own (§17.6's rule 0), which the component names; nil on an app
+	// host, which runs no daemon.
 	Daemon net.Listener
 
 	ctx       context.Context
@@ -1594,6 +1567,8 @@ type BridgeNetHost struct {
 	follower  *sidecar.ConfigClient
 	component *sidecar.BridgeComponent
 	dials     *bridgeNetDials
+	// what an app host holds in the component's place (bridge_net_forwarding.go); nil for a sidecar-fed host
+	app *bridgeNetAppHost
 
 	stateLock   sync.Mutex
 	principals  []*BridgeNetPrincipal
@@ -1675,7 +1650,7 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 	}
 	postureStore := settings.PostureStore
 	if postureStore == nil {
-		postureStore = newBridgeNetPostureStore()
+		postureStore = NewBridgeNetPostureStore()
 	}
 	host.Bridge, err = device.NewBridge(ctx, postureStore, nil, bridgeSettings)
 	if err != nil {
@@ -1797,15 +1772,24 @@ func bridgeNetDaemonListener(upstream *BridgeNetUpstream, listen func(upstream *
 	return nil, fmt.Errorf("each of %d offers took a port of the upstream's, %d or %d", len(refused), upstream.TcpPort(), upstream.UdpPort())
 }
 
-// Ends the host's generation, its component, its role and its upstream. Idempotent.
+// Ends the host's generation, its component or its Forwarder, its role and its upstream, and takes it off the hosts
+// Follow waits for, so a restart's next host stands in its place. Idempotent.
 func (self *BridgeNetHost) Close() {
 	self.cancel()
+	func() {
+		self.bridgeNet.stateLock.Lock()
+		defer self.bridgeNet.stateLock.Unlock()
+		self.bridgeNet.hosts = slices.DeleteFunc(self.bridgeNet.hosts, func(host *BridgeNetHost) bool { return host == self })
+	}()
 	for _, remove := range self.removeCallbacks {
 		remove()
 	}
 	self.removeCallbacks = nil
 	if self.component != nil {
 		self.component.Close()
+	}
+	if self.app != nil {
+		self.app.close()
 	}
 	if self.Bridge != nil {
 		self.Bridge.Close()
@@ -1824,11 +1808,15 @@ func (self *BridgeNetHost) Close() {
 
 // Waits until the host's follower stands at n, the role has published what it holds at or past n, the component has
 // compiled at or past the newest entry through n that wants a compile (all but a pure denial, which reaches the role
-// as a delta and through Bridge.Revoke), and the generation's provider serves: then a flow meets what n holds. Fails
-// the test past WaitTimeout.
+// as a delta and through Bridge.Revoke), and the generation's provider serves: then a flow meets what n holds. On an
+// app host, hints its Forwarder and waits as waitAppAdopted says. Fails the test past WaitTimeout.
 func (self *BridgeNetHost) WaitAdopted(n uint64) {
 	t := self.bridgeNet.t
 	t.Helper()
+	if self.app != nil {
+		self.waitAppAdopted(n)
+		return
+	}
 	ctx, cancel := context.WithTimeout(self.ctx, self.bridgeNet.settings.WaitTimeout)
 	defer cancel()
 	if _, err := self.follower.WaitFor(ctx, n); err != nil {
@@ -1876,8 +1864,12 @@ func (self *BridgeNetHost) Rules() *bridge.BridgeRules {
 	return rules
 }
 
-// What the host's component reports: its compiles and the alarms they raised.
+// What the host's component reports: its compiles and the alarms they raised. An app host runs none, and reports
+// nothing.
 func (self *BridgeNetHost) ComponentStatus() sidecar.BridgeComponentStatus {
+	if self.component == nil {
+		return sidecar.BridgeComponentStatus{}
+	}
 	return self.component.Status()
 }
 
@@ -2921,7 +2913,7 @@ func (self *BridgeNet) StartSender(senderDevice *BridgeNetDevice, settings *Brid
 		settings.Bridge(bridgeSettings)
 	}
 	var err error
-	sender.Bridge, err = device.NewBridge(ctx, newBridgeNetPostureStore(), &bridgeNetLinkHost{sender: sender, settings: bridgeSettings}, bridgeSettings)
+	sender.Bridge, err = device.NewBridge(ctx, NewBridgeNetPostureStore(), &bridgeNetLinkHost{sender: sender, settings: bridgeSettings}, bridgeSettings)
 	if err != nil {
 		fail("the device role: %v", err)
 	}

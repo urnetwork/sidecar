@@ -208,10 +208,15 @@ func (self *repository) measureSizeProbe(t testing.TB, leg *buildLeg, environmen
 }
 
 // The leg's environment with the C toolchain ios needs: the linker refuses ios/arm64 without cgo,
-// so a build needs Xcode's clang, and a host without it fails the gate rather than skipping it.
+// so a build needs Xcode's clang, and a host without it fails the gate rather than skipping it. The
+// SDK is the slice's (iosSdk).
 func (self *repository) iosBuildEnvironment(leg *buildLeg) ([]string, error) {
+	sdk, versionFlag, clangArch, err := leg.iosSdk()
+	if err != nil {
+		return nil, err
+	}
 	xcrun := func(arguments ...string) (string, error) {
-		output, err := exec.Command("xcrun", append([]string{"--sdk", "iphoneos"}, arguments...)...).Output()
+		output, err := exec.Command("xcrun", append([]string{"--sdk", sdk}, arguments...)...).Output()
 		if err != nil {
 			return "", fmt.Errorf("xcrun %v: %w", arguments, err)
 		}
@@ -225,8 +230,27 @@ func (self *repository) iosBuildEnvironment(leg *buildLeg) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	flags := "-isysroot " + sdkPath + " -arch arm64 -miphoneos-version-min=" + self.settings.iosMinimumVersion
+	flags := "-isysroot " + sdkPath + " -arch " + clangArch + " " + versionFlag + self.settings.iosMinimumVersion
 	return append(leg.environment(), "CC="+clang, "CGO_CFLAGS="+flags, "CGO_LDFLAGS="+flags), nil
+}
+
+// The Apple SDK an ios leg's cgo builds against, the clang flag that sets its minimum version, and
+// clang's name for its GOARCH, as gomobile builds the slice (cmd/gomobile/env.go): the simulator's SDK
+// for an iossimulator slice, the iPhone's for any other. A GOARCH clang is not named for here is an
+// error, rather than a build for another arch.
+func (self *buildLeg) iosSdk() (sdk string, versionFlag string, clangArch string, err error) {
+	switch self.goarch {
+	case "arm64":
+		clangArch = "arm64"
+	case "amd64":
+		clangArch = "x86_64"
+	default:
+		return "", "", "", fmt.Errorf("%s: no clang arch for an ios leg on GOARCH=%s", self.name, self.goarch)
+	}
+	if self.iosSimulator {
+		return "iphonesimulator", "-mios-simulator-version-min=", clangArch, nil
+	}
+	return "iphoneos", "-miphoneos-version-min=", clangArch, nil
 }
 
 // True for a root file of the VPN component's entry points, the Forwarder and its signer (BRIDGE-M8-05), whose
