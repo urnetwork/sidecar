@@ -60,7 +60,7 @@ func TestCgoFailsOnAKeychainFileInAnotherPackageOnTheFallbackLeg(t *testing.T) {
 
 func TestCgoAllowsTheKeychainFileOnTheFallbackLeg(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.keepLegs("cli darwin/arm64 keychain fallback", "cli darwin/arm64", "cgo linux/amd64", "gomobile macos/arm64")
+	fixture.keepLegs("cli darwin/arm64 keychain fallback", "cli darwin/arm64", "cgo linux/amd64", "gomobile macos/arm64 compile")
 	fixture.write("cli/keychain_darwin.go", "//go:build darwin && !ios && !sdk_mobile_bind\n\npackage main\n\nimport \"C\"\n")
 	repository := fixture.open()
 	wantFindings(t, repository.cgoSourceFindings(t))

@@ -52,6 +52,9 @@ type buildLeg struct {
 	ships bool
 	// §5.10's darwin fallback leg, the one place keychain_darwin.go may be a cgo file
 	keychainFallback bool
+	// an ios leg whose cgo builds against the iOS simulator's SDK, as gomobile builds an iossimulator
+	// slice; its GOOS, GOARCH and tags are the iPhone slice's
+	iosSimulator bool
 }
 
 // True for the tag.
@@ -79,10 +82,19 @@ var iosExtensionPatterns = []string{".", "./protocol", "./protocol/bridge", "./d
 // Everything in a module, for the legs that build or test all of it.
 var allPatterns = []string{"./..."}
 
-// Every leg. This mirrors sdk/dependency_boundary_test.go:81-92, which
-// sdkLegRowFindings holds, and adds §4.7's sidecar_http js leg and the CLI's six release
-// targets, then a leg for each module nothing else reads. Each row's cgo is
-// explicit where sdk leaves it to the host, because a leg is what it names on any machine.
+// The tag gomobile adds for the iPhone and simulator slices beside a bind's own (golang.org/x/mobile's
+// cmd/gomobile/env.go, platformTags). Android's is android, which GOOS=android sets itself, so the
+// Android legs carry none, and the macOS compile legs carry none, their archives compiling without it.
+const gomobileIosTag = "ios"
+
+// Every leg. This mirrors sdk/dependency_boundary_test.go:97-118, which
+// sdkLegRowFindings holds both ways for the gomobile legs, and adds §4.7's sidecar_http js leg and
+// the CLI's six release targets, then a leg for each module nothing else reads. The gomobile legs are
+// every target sdk/build/Makefile binds (QD-908): the Android bind's, the Apple bind's and the network
+// extension's, each with gomobile's tag for its platform. A macOS slice builds in two configurations
+// (QD-997), and its legs here are the compile's, named so: GOOS=darwin with the bind's tags alone, as
+// its archive compiles. Each row's cgo is explicit where sdk leaves it to the host, because a leg is
+// what it names on any machine.
 func defaultBuildLegs() []*buildLeg {
 	clientLeg := func(name string, goos string, goarch string, cgoEnabled bool, tags ...string) *buildLeg {
 		return &buildLeg{
@@ -90,12 +102,16 @@ func defaultBuildLegs() []*buildLeg {
 			patterns: clientPatterns, class: classClient, ships: true,
 		}
 	}
-	deviceLeg := func(name string, goos string) *buildLeg {
+	deviceLeg := func(name string, goos string, goarch string, platformTags ...string) *buildLeg {
 		return &buildLeg{
-			name: name, moduleName: ".", goos: goos, goarch: "arm64", cgoEnabled: true,
-			tags:     []string{mobileBindTag, iosExtensionTag},
+			name: name, moduleName: ".", goos: goos, goarch: goarch, cgoEnabled: true,
+			tags:     slices.Concat([]string{mobileBindTag, iosExtensionTag}, platformTags),
 			patterns: iosExtensionPatterns, class: classClient, ships: true,
 		}
+	}
+	simulatorLeg := func(leg *buildLeg) *buildLeg {
+		leg.iosSimulator = true
+		return leg
 	}
 	cliLeg := func(goos string, goarch string) *buildLeg {
 		return &buildLeg{
@@ -125,11 +141,16 @@ func defaultBuildLegs() []*buildLeg {
 		clientLeg("cgo windows/amd64", "windows", "amd64", true),
 		clientLeg("cgo darwin/arm64", "darwin", "arm64", true),
 		clientLeg("gomobile android/arm64", "android", "arm64", true, mobileBindTag),
-		clientLeg("gomobile ios/arm64", "ios", "arm64", true, mobileBindTag),
-		deviceLeg("gomobile ios/arm64 extension", "ios"),
-		clientLeg("gomobile macos/arm64", "darwin", "arm64", true, mobileBindTag),
-		// sdk/build/Makefile:153 builds the extension's macOS slices too
-		deviceLeg("gomobile macos/arm64 extension", "darwin"),
+		clientLeg("gomobile android/arm", "android", "arm", true, mobileBindTag),
+		clientLeg("gomobile android/amd64", "android", "amd64", true, mobileBindTag),
+		clientLeg("gomobile ios/arm64", "ios", "arm64", true, mobileBindTag, gomobileIosTag),
+		simulatorLeg(clientLeg("gomobile iossimulator/arm64", "ios", "arm64", true, mobileBindTag, gomobileIosTag)),
+		clientLeg("gomobile macos/arm64 compile", "darwin", "arm64", true, mobileBindTag),
+		clientLeg("gomobile macos/amd64 compile", "darwin", "amd64", true, mobileBindTag),
+		deviceLeg("gomobile ios/arm64 extension", "ios", "arm64", gomobileIosTag),
+		simulatorLeg(deviceLeg("gomobile iossimulator/arm64 extension", "ios", "arm64", gomobileIosTag)),
+		deviceLeg("gomobile macos/arm64 extension compile", "darwin", "arm64"),
+		deviceLeg("gomobile macos/amd64 extension compile", "darwin", "amd64"),
 
 		// §4.7's page Worker leg, over the root and protocol, which §18.10's main imports
 		{
@@ -488,10 +509,12 @@ func (self *repository) sdkLegRowFindings(t testing.TB) []string {
 }
 
 // Each sdk leg with no leg here that builds the same GOOS, GOARCH and tags, with cgo where sdk's row
-// says.
+// says; and each gomobile leg here, one built with sdk_mobile_bind, that is no row of sdk's by name
+// building as it does, since sdk's table is the one list of what gomobile binds and check/ adds no
+// gomobile target of its own (QD-908). The name is what tells a simulator slice from the iPhone's,
+// which build alike.
 func sdkLegFindings(sdkLegs []sdkLeg, legs []*buildLeg) []string {
-	findings := []string{}
-	for _, sdkRow := range sdkLegs {
+	builds := func(sdkRow sdkLeg, leg *buildLeg) bool {
 		values := map[string]string{}
 		for _, entry := range sdkRow.environment {
 			key, value, _ := strings.Cut(entry, "=")
@@ -502,17 +525,26 @@ func sdkLegFindings(sdkLegs []sdkLeg, legs []*buildLeg) []string {
 			wantedTags = strings.Split(sdkRow.tags, ",")
 		}
 		slices.Sort(wantedTags)
-		covered := slices.ContainsFunc(legs, func(leg *buildLeg) bool {
-			legTags := slices.Clone(leg.tags)
-			slices.Sort(legTags)
-			if leg.goos != values["GOOS"] || leg.goarch != values["GOARCH"] || !slices.Equal(legTags, wantedTags) {
-				return false
-			}
-			cgo, cgoNamed := values["CGO_ENABLED"]
-			return !cgoNamed || (cgo == "1") == leg.cgoEnabled
-		})
-		if !covered {
+		legTags := slices.Clone(leg.tags)
+		slices.Sort(legTags)
+		if leg.goos != values["GOOS"] || leg.goarch != values["GOARCH"] || !slices.Equal(legTags, wantedTags) {
+			return false
+		}
+		cgo, cgoNamed := values["CGO_ENABLED"]
+		return !cgoNamed || (cgo == "1") == leg.cgoEnabled
+	}
+	findings := []string{}
+	for _, sdkRow := range sdkLegs {
+		if !slices.ContainsFunc(legs, func(leg *buildLeg) bool { return builds(sdkRow, leg) }) {
 			findings = append(findings, findingf("sdk's leg %q has no leg here", sdkRow.name))
+		}
+	}
+	for _, leg := range legs {
+		if !leg.hasTag(mobileBindTag) {
+			continue
+		}
+		if !slices.ContainsFunc(sdkLegs, func(sdkRow sdkLeg) bool { return sdkRow.name == leg.name && builds(sdkRow, leg) }) {
+			findings = append(findings, findingf("the gomobile leg %q is no leg of sdk's table building as it does, and check/ adds no gomobile target of its own", leg.name))
 		}
 	}
 	return findings

@@ -17,7 +17,7 @@ import (
 
 const (
 	iosExtensionLegName = "gomobile ios/arm64 extension"
-	macExtensionLegName = "gomobile macos/arm64 extension"
+	macExtensionLegName = "gomobile macos/arm64 extension compile"
 	sidecarHttpLegName  = "sidecar_http js/wasm"
 )
 
@@ -676,15 +676,18 @@ func TestLegsFailsOnALegTheReflectRuleCannotCompile(t *testing.T) {
 	}
 }
 
-// A marker package behind each part of a leg's configuration: a runner that dropped GOOS, a tag,
-// cgo or -test would read the wrong set, and the caller's own environment must not reach the leg.
+// A marker package behind each part of a leg's configuration: a runner that dropped GOOS, GOARCH, a
+// tag, cgo or -test would read the wrong set, and the caller's own environment must not reach the leg.
+// The iPhone and simulator slices read ios and the macOS ones do not; no leg reads macos, not even from
+// the caller's GOFLAGS, the macOS legs being their archives' compile (QD-997); and the 32-bit Android
+// slice reads what only arm builds.
 func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {
 	t.Setenv("CGO_ENABLED", "1")
 	t.Setenv("GOOS", "plan9")
-	t.Setenv("GOFLAGS", "-tags=sdk_mobile_bind")
+	t.Setenv("GOFLAGS", "-tags=sdk_mobile_bind,macos")
 	fixture := newFixture(t)
 	fixture.writeSibling("marks/go.mod", "module example.com/marks\n\ngo 1.27.4\n")
-	for _, mark := range []string{"browser", "mobile", "native", "testonly"} {
+	for _, mark := range []string{"browser", "mobile", "native", "testonly", "macos", "arm", "ios"} {
 		fixture.writeSibling("marks/"+mark+"/"+mark+".go", "package "+mark+"\n")
 	}
 	fixture.requireLocal("example.com/marks", "v1.0.0", "marks")
@@ -692,15 +695,24 @@ func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {
 	fixture.write("mark_mobile.go", "//go:build sdk_mobile_bind\n\npackage sidecar\n\nimport _ \"example.com/marks/mobile\"\n")
 	fixture.write("mark_cgo.go", "//go:build cgo\n\npackage sidecar\n\nimport _ \"example.com/marks/native\"\n")
 	fixture.write("mark_test.go", "package sidecar\n\nimport _ \"example.com/marks/testonly\"\n")
+	fixture.write("mark_macos.go", "//go:build macos\n\npackage sidecar\n\nimport _ \"example.com/marks/macos\"\n")
+	fixture.write("mark_arm.go", "//go:build arm\n\npackage sidecar\n\nimport _ \"example.com/marks/arm\"\n")
+	fixture.write("mark_ios.go", "//go:build ios\n\npackage sidecar\n\nimport _ \"example.com/marks/ios\"\n")
 	repository := fixture.open()
 	for _, c := range []struct {
 		name string
 		want []string
 	}{
 		{name: "root linux/amd64", want: []string{}},
+		{name: "root darwin/arm64", want: []string{}},
 		{name: "js/wasm", want: []string{"example.com/marks/browser"}},
 		{name: "cgo linux/amd64", want: []string{"example.com/marks/native"}},
 		{name: "gomobile android/arm64", want: []string{"example.com/marks/mobile", "example.com/marks/native"}},
+		{name: "gomobile android/arm", want: []string{"example.com/marks/arm", "example.com/marks/mobile", "example.com/marks/native"}},
+		{name: "gomobile ios/arm64", want: []string{"example.com/marks/ios", "example.com/marks/mobile", "example.com/marks/native"}},
+		{name: "gomobile iossimulator/arm64", want: []string{"example.com/marks/ios", "example.com/marks/mobile", "example.com/marks/native"}},
+		{name: "gomobile macos/amd64 compile", want: []string{"example.com/marks/mobile", "example.com/marks/native"}},
+		{name: "gomobile macos/arm64 extension compile", want: []string{"example.com/marks/mobile", "example.com/marks/native"}},
 		{name: "tests linux/amd64", want: []string{"example.com/marks/testonly"}},
 		{name: "tests js/wasm", want: []string{"example.com/marks/browser", "example.com/marks/testonly"}},
 	} {
@@ -877,21 +889,90 @@ func TestLegsPickUpAnEngineWhenItLands(t *testing.T) {
 	}
 }
 
+// sdk's gomobile rows as its table writes them, one per target sdk/build/Makefile binds, each with gomobile's tag for its
+// platform (QD-908) and the macOS slices' as their archives compile (QD-997), in the table's order: a fixture table
+// holding them all covers every gomobile leg here, and the clean tree's does.
+var fixtureSdkGomobileRows = []string{
+	`{name: "gomobile android/arm64", environment: []string{"GOOS=android", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind"},`,
+	`{name: "gomobile android/arm", environment: []string{"GOOS=android", "GOARCH=arm", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind"},`,
+	`{name: "gomobile android/amd64", environment: []string{"GOOS=android", "GOARCH=amd64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind"},`,
+	`{name: "gomobile ios/arm64", environment: []string{"GOOS=ios", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,ios"},`,
+	`{name: "gomobile iossimulator/arm64", environment: []string{"GOOS=ios", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,ios"},`,
+	`{name: "gomobile macos/arm64 compile", environment: []string{"GOOS=darwin", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind"},`,
+	`{name: "gomobile macos/amd64 compile", environment: []string{"GOOS=darwin", "GOARCH=amd64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind"},`,
+	`{name: "gomobile ios/arm64 extension", environment: []string{"GOOS=ios", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,ios_extension,ios"},`,
+	`{name: "gomobile iossimulator/arm64 extension", environment: []string{"GOOS=ios", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,ios_extension,ios"},`,
+	`{name: "gomobile macos/arm64 extension compile", environment: []string{"GOOS=darwin", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,ios_extension"},`,
+	`{name: "gomobile macos/amd64 extension compile", environment: []string{"GOOS=darwin", "GOARCH=amd64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,ios_extension"},`,
+}
+
+// sdk's dependency_boundary_test.go holding a table of these rows.
+func sdkLegTableSource(rows ...string) string {
+	return "package sdk\n\nvar messagingBoundaryLegs = []messagingBoundaryLeg{\n\t" + strings.Join(rows, "\n\t") + "\n}\n"
+}
+
+// The clean tree's sdk table: a desktop row and sdk's gomobile rows, which the clean tree's gomobile legs mirror both
+// ways.
+var fixtureSdkLegTable = sdkLegTableSource(slices.Concat(
+	[]string{`{name: "root linux/amd64", environment: []string{"GOOS=linux", "GOARCH=amd64"}},`}, fixtureSdkGomobileRows)...)
+
+// Writes the fixture's sibling sdk table with these rows.
+func writeSdkLegTable(fixture *fixture, rows ...string) {
+	fixture.t.Helper()
+	fixture.writeSibling("sdk/dependency_boundary_test.go", sdkLegTableSource(rows...))
+}
+
+// A row of sdk's with no leg here building as it does: a new system, a cgo sdk's row names otherwise, a tag no leg has,
+// a bound target check/ lacks, a gomobile row that drops its platform's tag, a macOS compile row carrying the macos its
+// archive compiles without, and a macOS row as gomobile's binding step reads it, which no leg here builds yet. sdk's rows
+// for every bound target, the new ones beside the first four, each find their leg.
 func TestLegsFailsOnAnSdkLegWithNoLegHere(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.writeSibling("sdk/dependency_boundary_test.go", `package sdk
-
-var messagingBoundaryLegs = []messagingBoundaryLeg{
-	{name: "root linux/amd64", environment: []string{"GOOS=linux", "GOARCH=amd64"}, patterns: []string{"./..."}},
-	{name: "new freebsd", environment: []string{"GOOS=freebsd", "GOARCH=amd64"}, patterns: []string{"./..."}},
-	{name: "wrong cgo", environment: []string{"GOOS=js", "GOARCH=wasm", "CGO_ENABLED=1"}, patterns: []string{"./..."}},
-	{name: "new tag", environment: []string{"GOOS=linux", "GOARCH=amd64"}, tags: "sdk_new_tag"},
-}
-`)
+	writeSdkLegTable(fixture, slices.Concat(fixtureSdkGomobileRows, []string{
+		`{name: "root linux/amd64", environment: []string{"GOOS=linux", "GOARCH=amd64"}, patterns: []string{"./..."}},`,
+		`{name: "new freebsd", environment: []string{"GOOS=freebsd", "GOARCH=amd64"}, patterns: []string{"./..."}},`,
+		`{name: "wrong cgo", environment: []string{"GOOS=js", "GOARCH=wasm", "CGO_ENABLED=1"}, patterns: []string{"./..."}},`,
+		`{name: "new tag", environment: []string{"GOOS=linux", "GOARCH=amd64"}, tags: "sdk_new_tag"},`,
+		`{name: "gomobile android/386", environment: []string{"GOOS=android", "GOARCH=386", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind"},`,
+		`{name: "ios without its tag", environment: []string{"GOOS=ios", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind"},`,
+		`{name: "macos compile with macos", environment: []string{"GOOS=darwin", "GOARCH=arm64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,macos"},`,
+		`{name: "macos as gobind reads it", environment: []string{"GOOS=ios", "GOARCH=amd64", "CGO_ENABLED=1"}, tags: "sdk_mobile_bind,macos"},`,
+	})...)
 	wantFindings(t, fixture.open().sdkLegRowFindings(t),
 		"sdk's leg \"new freebsd\" has no leg here",
 		"sdk's leg \"wrong cgo\" has no leg here",
-		"sdk's leg \"new tag\" has no leg here")
+		"sdk's leg \"new tag\" has no leg here",
+		"sdk's leg \"gomobile android/386\" has no leg here",
+		"sdk's leg \"ios without its tag\" has no leg here",
+		"sdk's leg \"macos compile with macos\" has no leg here",
+		"sdk's leg \"macos as gobind reads it\" has no leg here")
+}
+
+// Its other direction: a gomobile leg here that sdk's table does not list is a target check/ added of its own, whether
+// sdk lacks it outright or holds only a row that builds alike under another name: the iPhone slice's for the
+// simulator's, or a macOS row whose name says no step for the compile's.
+func TestLegsFailsOnAGomobileLegSdkDoesNotList(t *testing.T) {
+	fixture := newFixture(t)
+	rows := slices.DeleteFunc(slices.Clone(fixtureSdkGomobileRows), func(row string) bool {
+		return strings.Contains(row, `"gomobile android/arm"`) || strings.Contains(row, `"gomobile iossimulator/arm64"`) ||
+			strings.Contains(row, `"gomobile macos/amd64 extension compile"`)
+	})
+	if len(rows) != len(fixtureSdkGomobileRows)-3 {
+		t.Fatalf("CONTROL FAILED: %d of sdk's rows dropped, want 3", len(fixtureSdkGomobileRows)-len(rows))
+	}
+	for index, row := range rows {
+		rows[index] = strings.Replace(row, `"gomobile macos/arm64 compile"`, `"gomobile macos/arm64"`, 1)
+	}
+	writeSdkLegTable(fixture, rows...)
+	wantFindings(t, fixture.open().sdkLegRowFindings(t),
+		"the gomobile leg \"gomobile android/arm\" is no leg of sdk's table building as it does",
+		"the gomobile leg \"gomobile iossimulator/arm64\" is no leg of sdk's table building as it does",
+		"the gomobile leg \"gomobile macos/arm64 compile\" is no leg of sdk's table building as it does",
+		"the gomobile leg \"gomobile macos/amd64 extension compile\" is no leg of sdk's table building as it does")
+
+	// every row back, each leg is sdk's
+	writeSdkLegTable(fixture, fixtureSdkGomobileRows...)
+	wantFindings(t, fixture.open().sdkLegRowFindings(t))
 }
 
 // sdk's file is sdk's to change, and the mirror fails rather than pass when it cannot read the table.
