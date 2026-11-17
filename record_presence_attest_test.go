@@ -6,8 +6,10 @@
 // same bytes once a release pins the root; a statement that does not verify refused against any pool;
 // KeyRegister.attestation's map of the
 // object and its create ceremony's client data (QD-730), with a wrong origin, type or credential key refused, the object
-// alone refused for every format but none, and a map that is not canonical refused; and the canonical CBOR reader
-// refusing every non-canonical form. Fixture roots and certificates are made here from fixed seeds, deterministically, and
+// alone refused for every format but none, and a map that is not canonical refused; the canonical CBOR reader
+// refusing every non-canonical form; and a reader's label for a logged key (QD-924), the check's label or presence
+// (attestation refused) where the check refuses, never asserted in its place and never an error, a label that differs
+// between releases as their roots do. Fixture roots and certificates are made here from fixed seeds, deterministically, and
 // testdata/presence/attestation/vectors.json holds the bytes they give, embedded for the Worker leg. A format change
 // regenerates it:
 //
@@ -35,6 +37,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -318,6 +321,27 @@ func (self *testAttestCas) roots() *presenceAttestationRoots {
 		androidKey: pool(self.androidKey),
 		apple:      pool(self.apple),
 	}
+}
+
+// The test's fixture roots, but ca alone as apple's: a release that pins another apple root than the test's, under
+// which the test's apple statements fail and ca's chain.
+func (self *testAttestCas) rootsPinningAsApple(ca *testAttestCa) *presenceAttestationRoots {
+	roots := self.roots()
+	roots.apple = x509.NewCertPool()
+	roots.apple.AddCert(ca.certificate)
+	return roots
+}
+
+// Installs roots as the pools this build pins, as a reader whose release pins them holds them, until the test ends,
+// and answers a count of every read of them from now on.
+func testAttestRootsAsRelease(t testing.TB, roots *presenceAttestationRoots) *atomic.Int64 {
+	reads := &atomic.Int64{}
+	presenceAttestationRootsHook = func() *presenceAttestationRoots {
+		reads.Add(1)
+		return roots
+	}
+	t.Cleanup(func() { presenceAttestationRootsHook = nil })
+	return reads
 }
 
 // The credential's authenticator data, rp ur.io, with UP, UV and attested credential data unless flags says otherwise.
@@ -1220,7 +1244,9 @@ func TestPresenceAttestationMapRefusesNonCanonicalAndOtherShapes(t *testing.T) {
 // packed self attestation label a webauthn-es256 key asserted, and an ecdsa-p256-sha256 key is asserted and carries
 // none. Every chained format that verifies is asserted too, since no production root ships and an empty pool labels
 // asserted (QD-137, QD-885), and one that does not verify is refused. So are the raw attestation object the field held
-// before QD-730, a chained format without its client data, and client data from another origin.
+// before QD-730, a chained format without its client data, and client data from another origin. A reader labelling
+// each as a logged key (PresenceKeyLabel, QD-924) shows asserted for the first and presence (attestation refused) for
+// every refusal.
 func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 	cas := newTestAttestCas(t)
 	credential, other := testAttestCredentials(t)
@@ -1252,6 +1278,9 @@ func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 		label, err := VerifyPresenceAttestation(keyRegister, atMillis)
 		if err != nil || label != PresenceLabelAsserted {
 			t.Errorf("asserted %d, %s with %d bytes: %s, %v", i, keyRegister.GetAlg(), len(keyRegister.GetAttestation()), label, err)
+		}
+		if shown := PresenceKeyLabel(keyRegister, atMillis); shown != PresenceLabelAsserted {
+			t.Errorf("asserted %d as a reader labels it: %s", i, shown)
 		}
 	}
 	refused := []*protocol.KeyRegister{
@@ -1291,9 +1320,81 @@ func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
 			t.Errorf("refusal %d: %s, %v", i, label, err)
 		}
+		// a reader shows the refusal, never asserted in its place
+		if shown := PresenceKeyLabel(keyRegister, atMillis); shown != PresenceLabelRefused {
+			t.Errorf("refusal %d as a reader labels it: %s", i, shown)
+		}
 	}
-	if PresenceLabelAsserted.String() != "presence (asserted)" || PresenceLabelAttested.String() != "presence (attested)" {
-		t.Errorf("labels %q and %q", PresenceLabelAsserted, PresenceLabelAttested)
+	if PresenceLabelAsserted.String() != "presence (asserted)" || PresenceLabelAttested.String() != "presence (attested)" ||
+		PresenceLabelRefused.String() != "presence (attestation refused)" {
+		t.Errorf("labels %q, %q and %q", PresenceLabelAsserted, PresenceLabelAttested, PresenceLabelRefused)
+	}
+}
+
+// A reader's label for a logged key (QD-924): the check's label where it passes and presence (attestation refused)
+// where it refuses, never asserted in its place. Under the test's roots a forged apple statement, a software key's CA
+// in its chain, shows refused and apple's own attested; under a release that pins that CA as apple's root the two swap;
+// under one that pins no apple root both show asserted. A forged android-key statement shows refused under the test's
+// roots. A statement that does not verify, another key's attestation, the raw object and an ecdsa-p256-sha256 key with
+// an attestation show refused, and fmt none, a packed statement off the vendor list and a key with no attestation
+// asserted.
+func TestPresenceKeyLabelShowsARefusedAttestation(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, other := testAttestCredentials(t)
+	register := func(alg bridge.KeyAlg, attestation []byte) *protocol.KeyRegister {
+		return &protocol.KeyRegister{
+			KeyId:       bytes.Clone(credential.keyId),
+			Alg:         alg,
+			PublicKey:   bytes.Clone(credential.publicKey),
+			Attestation: attestation,
+			Purpose:     bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
+		}
+	}
+	webauthn := func(attestation []byte) *protocol.KeyRegister {
+		return register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, attestation)
+	}
+	bySoftware := newTestAttestation(cas, credential)
+	bySoftware.issuer = cas.software
+	spoiled := newTestAttestation(cas, credential)
+	spoiled.signedClientDataHash = bytes.Repeat([]byte{0x5a}, sha256.Size)
+	appleOwn := webauthn(newTestAttestation(cas, credential).attestation(t, "apple"))
+	appleForged := webauthn(bySoftware.attestation(t, "apple"))
+	swapped := cas.rootsPinningAsApple(cas.software)
+	release := presenceReleaseAttestationRoots()
+	cases := []struct {
+		name     string
+		register *protocol.KeyRegister
+		roots    *presenceAttestationRoots
+		want     PresenceLabel
+	}{
+		{name: "apple's own statement under the test's roots", register: appleOwn, roots: cas.roots(), want: PresenceLabelAttested},
+		{name: "a forged apple statement under the test's roots", register: appleForged, roots: cas.roots(), want: PresenceLabelRefused},
+		{name: "apple's own statement pinning the forging CA", register: appleOwn, roots: swapped, want: PresenceLabelRefused},
+		{name: "a forged apple statement pinning the forging CA", register: appleForged, roots: swapped, want: PresenceLabelAttested},
+		{name: "apple's own statement pinning no apple root", register: appleOwn, roots: cas.rootsWithout("apple"), want: PresenceLabelAsserted},
+		{name: "a forged apple statement pinning no apple root", register: appleForged, roots: cas.rootsWithout("apple"), want: PresenceLabelAsserted},
+		{name: "a forged android-key statement", register: webauthn(bySoftware.attestation(t, "android-key")), roots: cas.roots(), want: PresenceLabelRefused},
+		{name: "a packed statement off the vendor list", register: webauthn(bySoftware.attestation(t, "packed")), roots: cas.roots(), want: PresenceLabelAsserted},
+		{name: "a packed statement that does not verify", register: webauthn(spoiled.attestation(t, "packed")), roots: cas.roots(), want: PresenceLabelRefused},
+		{name: "an apple statement that does not verify, no root pinned", register: webauthn(spoiled.attestation(t, "apple")), roots: release, want: PresenceLabelRefused},
+		{name: "another key's attestation", register: webauthn(newTestAttestation(cas, other).attestation(t, "none")), roots: release, want: PresenceLabelRefused},
+		{name: "the raw attestation object", register: webauthn(newTestAttestation(cas, credential).none()), roots: release, want: PresenceLabelRefused},
+		{name: "fmt none", register: webauthn(newTestAttestation(cas, credential).attestation(t, "none")), roots: cas.roots(), want: PresenceLabelAsserted},
+		{name: "a webauthn-es256 key with no attestation", register: webauthn(nil), roots: cas.roots(), want: PresenceLabelAsserted},
+		{name: "an ecdsa-p256-sha256 key", register: register(bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256, nil), roots: cas.roots(), want: PresenceLabelAsserted},
+		{name: "an ecdsa-p256-sha256 key with an attestation", register: register(bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256,
+			newTestAttestation(cas, credential).attestation(t, "none")), roots: cas.roots(), want: PresenceLabelRefused},
+	}
+	for _, c := range cases {
+		label := presenceKeyLabel(c.register, c.roots, testAttestSettings(), testAttestAt)
+		if label != c.want {
+			t.Errorf("%s: %s; want %s", c.name, label, c.want)
+		}
+		// the check's own label, or refused exactly where the check refuses
+		checked, err := verifyPresenceRegisterAttestation(c.register, c.roots, testAttestSettings(), testAttestAt)
+		if err == nil && label != checked || err != nil && (!errors.Is(err, ErrPresenceAttestation) || label != PresenceLabelRefused) {
+			t.Errorf("%s: shows %s where the check answers %s, %v", c.name, label, checked, err)
+		}
 	}
 }
 
@@ -1448,7 +1549,8 @@ func testPresenceAttestationVectorFormat(attestation []byte) (string, bool) {
 	return string(format.content), true
 }
 
-// Each checked-in vector gets its label or refusal from its bytes and the file's roots alone.
+// Each checked-in vector gets its label or refusal from its bytes and the file's roots alone, and a reader labelling a
+// logged webauthn-es256 key that carries it shows that label, or presence (attestation refused) for a refusal (QD-924).
 func TestPresenceAttestationVectorsVerify(t *testing.T) {
 	file := &presenceAttestationVectorFile{}
 	if err := json.Unmarshal(presenceAttestationVectorsJson, file); err != nil {
@@ -1466,6 +1568,19 @@ func TestPresenceAttestationVectorsVerify(t *testing.T) {
 			roots = presenceReleaseAttestationRoots()
 		}
 		label, err := verifyPresenceAttestation(vector.Attestation, vector.PublicKey, roots, testAttestSettings(), at)
+		logged := &protocol.KeyRegister{
+			Alg:         bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256,
+			PublicKey:   vector.PublicKey,
+			Attestation: vector.Attestation,
+			Purpose:     bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
+		}
+		shown, want := presenceKeyLabel(logged, roots, testAttestSettings(), at).String(), vector.Label
+		if vector.Refused {
+			want = PresenceLabelRefused.String()
+		}
+		if shown != want {
+			t.Errorf("%s as a reader labels it: %s; want %s", vector.Name, shown, want)
+		}
 		if vector.Refused {
 			if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
 				t.Errorf("%s: %s, %v; want a refusal", vector.Name, label, err)
