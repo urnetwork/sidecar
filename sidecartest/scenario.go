@@ -106,7 +106,10 @@ func scenarioRows() []*ScenarioRow {
 		}},
 		{Id: "S5", Flow: "F4", Tiers: t2t3t6, Gates: []string{"M5-out"}, Owners: []string{"TLS-M5-25"}},
 		{Id: "S6", Flow: "F5", Tiers: t2t3t6, Gates: []string{"M9-out"}, Owners: []string{"SMTP-M9-31"}},
-		{Id: "S7", Flow: "F6", Tiers: t2t3t6, Gates: []string{"M7-out"}, Owners: []string{"MAIL-M7-27"}},
+		{Id: "S7", Flow: "F6", Tiers: t2t3t6, Gates: []string{"M7-out"}, Owners: []string{"MAIL-M7-27"}, Clauses: []string{
+			"plaintext-530", "unroutable-temporary-failure", "sni-less-abuse-reaches-the-platform-listener",
+			"reception-time-dns-kept", "tampered-evidence-fails", "bound-cut-labeled-from-what-was-verified",
+		}},
 		{Id: "S8", Flow: "F7", Tiers: t2t3t6, Gates: []string{"M4-out"}, Owners: []string{"BRIDGE-M4-22"}},
 		{Id: "S9", Flow: "F8", Tiers: t2t3, Gates: []string{"M3-out"}, Owners: []string{"MCP-M3-26"}},
 		{Id: "S10", Flow: "F10", Tiers: t2t3t6, Gates: []string{"M9-out"}, Owners: []string{"MAIL-M9-06"}},
