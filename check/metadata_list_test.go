@@ -67,32 +67,11 @@ type metadataListAddition struct {
 	list     string
 }
 
-// Design-records wrote every entry before these into §2.8's block with the folds of 2026-11-16 (owner decision 252),
-// QD-857's with §10's, QD-199's with §11's, QD-990's with §13's (owner decision 424), QD-996's with §20's and
-// QD-1015's with the second fold of §7 (owner decision 557); each here waits for the next fold.
-var metadataListAdditions = []metadataListAddition{
-	{
-		// QD-950: the list's v47, for evs-8's sees
-		question: "evs1-m2-15-route-bodies",
-		block:    "# metadata_list.yml v46;",
-		list:     "# metadata_list.yml v47;",
-	},
-	{
-		question: "evs1-m2-15-route-bodies",
-		block:    "# additions ahead of this fold (owner decision 252).\n",
-		list: "# additions ahead of this fold (owner decision 252).\n" +
-			"# v47, updated 2026-11-17 for the owner's answer QD-950 (owner decision 408), adds no row: evs-8's sees names each\n" +
-			"# lease's expiry, as that answer has it, which the row's store keeps and GET /evs/v1/subscriptions returns.\n",
-	},
-	{
-		// QD-950: evs-8's sees gains each lease's expiry, which the answer puts beside the store that keeps it, so
-		// EvsSubscription.expires_ms is named where the schema guard reads a row's words; §11's fold (owner decision
-		// 408, v34) wrote the expiry into evs-8's store alone
-		question: "evs1-m2-15-route-bodies",
-		block:    "up to 16 token prefixes it follows, and which repos it subscribed to",
-		list:     "up to 16 token prefixes it follows, each lease's expiry, and which repos it subscribed to",
-	},
-}
+// None waits now: design-records wrote every entry's text into §2.8's block with the folds of 2026-11-16 (owner
+// decision 252), QD-857's with §10's, QD-199's with §11's, QD-990's with §13's (owner decision 424), QD-996's with
+// §20's, QD-1015's with the second fold of §7 (owner decision 557) and QD-950's with the second fold of §11 (owner
+// decision 408), so the list is the block alone until the next answer.
+var metadataListAdditions = []metadataListAddition{}
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
 func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {
