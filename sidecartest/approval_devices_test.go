@@ -671,20 +671,30 @@ func TestPhoneReachedByHintElseWake(t *testing.T) {
 	phoneId := phone.Sidecar().Identity().SidecarId
 	surrogate := NewFakeApprovalPhone(devices.net.Clock(), nil)
 	defer surrogate.Follow(world.LogId(), world.Log())()
-	var eventsLock sync.Mutex
-	events := []sidecar.SidecarEvent{}
+	// approval_pending as the app hears it: an event raised while another is delivered reaches the callbacks on the
+	// delivering goroutine, so each is awaited, never read at once
+	pendingEvents := make(chan sidecar.SidecarEvent, 16)
 	defer phone.Sidecar().AddEventCallback(func(event sidecar.SidecarEvent) {
-		if event.Kind != sidecar.SidecarEventApprovalPending {
-			return
+		if event.Kind == sidecar.SidecarEventApprovalPending {
+			pendingEvents <- event
 		}
-		eventsLock.Lock()
-		defer eventsLock.Unlock()
-		events = append(events, event)
 	})()
-	raised := func() []sidecar.SidecarEvent {
-		eventsLock.Lock()
-		defer eventsLock.Unlock()
-		return slices.Clone(events)
+	awaitRaised := func(approvalIds ...sidecar.Id) {
+		t.Helper()
+		got := []sidecar.Id{}
+		for range approvalIds {
+			select {
+			case event := <-pendingEvents:
+				got = append(got, *event.ApprovalId)
+			case <-time.After(testSidecarOnlineTimeout):
+				t.Fatalf("approval_pending raised for %v of %v", got, approvalIds)
+			}
+		}
+		slices.SortFunc(got, sidecar.Id.Cmp)
+		want := slices.SortedFunc(slices.Values(approvalIds), sidecar.Id.Cmp)
+		if !slices.Equal(got, want) {
+			t.Fatalf("approval_pending raised for %v, not %v", got, want)
+		}
 	}
 	var hints atomic.Int32
 	bind := func() *sidecar.ApprovalPhone {
@@ -708,9 +718,10 @@ func TestPhoneReachedByHintElseWake(t *testing.T) {
 		t.Fatalf("the open app: %d hints, %d wakes", hints.Load(), len(surrogate.Wakes()))
 	}
 	resynced, err := part.Resync(t.Context())
-	if err != nil || !slices.Equal(resynced.Raised, []sidecar.Id{firstId}) || len(raised()) != 1 || *raised()[0].ApprovalId != firstId {
-		t.Fatalf("the hinted resync: %+v, %v, raised %+v", resynced, err, raised())
+	if err != nil || !slices.Equal(resynced.Raised, []sidecar.Id{firstId}) {
+		t.Fatalf("the hinted resync: %+v, %v", resynced, err)
 	}
+	awaitRaised(firstId)
 
 	// the app closes: its part releases nothing, and the process ends
 	part.Close()
@@ -733,9 +744,8 @@ func TestPhoneReachedByHintElseWake(t *testing.T) {
 	if err != nil || resynced.LeasesTaken != 1 || !slices.Equal(resynced.Pending, []sidecar.Id{firstId, secondId}) {
 		t.Fatalf("the woken app's resync: %+v, %v", resynced, err)
 	}
-	if count := len(raised()); count != 3 {
-		t.Fatalf("%d approval_pending events: one at the open app, two at the next process", count)
-	}
+	// the next process raises what waits, once each
+	awaitRaised(firstId, secondId)
 	if leases := surrogate.Leases(); len(leases) != 1 || leases[0].Holders != 1 || surrogate.Counts().LeasesRenewed != 1 {
 		t.Fatalf("the lease taken again: %+v, %+v", leases, surrogate.Counts())
 	}
@@ -753,6 +763,12 @@ func TestPhoneReachedByHintElseWake(t *testing.T) {
 	action := world.Action(stored)
 	if err := world.Authorize(t.Context(), action); err != nil || action.Outcome == nil || action.Outcome.State != sidecar.ApprovalOutcomeDone {
 		t.Fatalf("the CLI's spend of the woken phone's decision: %v %+v", err, action.Outcome)
+	}
+
+	select {
+	case event := <-pendingEvents:
+		t.Fatalf("approval_pending raised again for %s", event.ApprovalId)
+	default:
 	}
 
 	// a lease left to lapse: the process ends, a week passes, a request wakes nothing
