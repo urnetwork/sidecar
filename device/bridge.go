@@ -239,6 +239,7 @@ func (self *Bridge) Status() BridgeStatus {
 		ResolverPassedCount:    resolverPassedCount,
 		ResolverDroppedCount:   resolverDroppedCount,
 		PostureAlarms:          append([]PostureAlarm(nil), self.decision.Alarms...),
+		Overdue:                bridgeOverdueCopy(self.decision.Overdue),
 		Alarms:                 append([]BridgeAlarm(nil), self.alarms...),
 	}
 	if 0 < self.routeFindings.carvedAddressCount {
@@ -378,4 +379,13 @@ func scanBridgeRulesTimes(rules *bridge.BridgeRules, now time.Time, settings *Br
 		}
 	}
 	return times
+}
+
+// A copy of overdue, nil for none, so a status shares nothing with the decision in force.
+func bridgeOverdueCopy(overdue *PostureOverdue) *PostureOverdue {
+	if overdue == nil {
+		return nil
+	}
+	copied := *overdue
+	return &copied
 }
