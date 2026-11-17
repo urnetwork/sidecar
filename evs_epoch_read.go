@@ -1163,10 +1163,10 @@ func (self *EvsRepo) statementNames(ctx context.Context, keys *evsReadKeys, stat
 // most, which a path served absent is where the walk from the record's pin ends on its removal (QD-979). On a gap
 // head whose re-pin passed the record's pin, the walk holds nothing from before the re-pin, which is evs's word: such
 // a path served absent is taken as evs serves it, with no alarm, and its record dropped, so it reads as a never-read
-// path does (QD-1041; Q-EVS-6); so is the record of a path served its removal, own or a prefix's, which a record kept
-// at its old pin would send every later read of the path through the same gap again (QD-1055). A record pinned at or
-// past where the gap's walk starts has its whole walk, and keeps the rule. A version format 2 ignores is no absence
-// evs served, and keeps it too.
+// path does (QD-1041; Q-EVS-6). The record of a path served its removal, its own or a prefix's, is dropped there too:
+// kept at its old pin, it would send every later read of the path through the same gap (QD-1055). A record pinned at
+// or past where the gap's walk starts has its whole walk, and keeps the rule. A version format 2 ignores is no
+// absence evs served, and keeps it too.
 func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys, round *evsReadRound, paths []*evsReadPath) (*evsReadResult, error) {
 	head := round.head
 	current := evsCurrentEpoch(head.Head.GetPathEpoch())
