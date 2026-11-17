@@ -174,9 +174,24 @@ The `tls` component (§5; files `tls_*.go`) accepts streams for its `tls/` regis
 | Control panels | Refused and recorded for the daemon's API or MCP port and for targets that answer like agent UIs (§16's list) |
 | Interstitial | A one-time browser notice on Community `public` endpoints ([R:ext-edge] §2.8), never on 13.9's system publish |
 
-**Link tokens (owner decision 422).** A link is `TlsLinkToken {bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4;}` in a §6 `Signed` (`SIGNED_TLS_LINK` 0x1503, purpose `tls-link`) by the publishing device's identity key, `expire_time_millis` at most the grant's expires, at `https://<host>/.well-known/ur/link?t=<base64url(Signed)>`. The front verifies the signature against the projection, that the signer is the sidecar the grant names, that `grant_id` is active and that `host` equals the SNI, then sets `__Host-ur-link` (HttpOnly, Secure, SameSite=Lax, 12 h, capped by the token's expiry) holding the same token and answers 302 to `/` with `Referrer-Policy: no-referrer`. Any listener of the grant honors it with no shared state, and a GrantRevoke or the grant's expiry ends every link of the grant.
+**Link tokens (owner decision 422).** A link is a `TlsLinkToken` (below) in a §6 `Signed` (`SIGNED_TLS_LINK` 0x1503, purpose `tls-link`) by the publishing device's identity key, `expire_time_millis` at most the grant's expires, at `https://<host>/.well-known/ur/link?t=<base64url(Signed)>`. The front verifies the signature against the projection, that the signer is the sidecar the grant names, that `grant_id` is active and that `host` equals the SNI, then sets `__Host-ur-link` (HttpOnly, Secure, SameSite=Lax, 12 h, capped by the token's expiry) holding the same token and answers 302 to `/` with `Referrer-Policy: no-referrer`. Any listener of the grant honors it with no shared state, and a GrantRevoke or the grant's expiry ends every link of the grant.
 
-**Members-device logins (owner decision 431).** The statement is `TlsEdgeLogin {string origin = 1; bytes nonce = 2;}` (`SIGNED_TLS_EDGE_LOGIN` 0x1502, purpose `edge-login`), `origin` as the front writes it, `https://<sni>` with `:<port>` only where the port is not 443, and `nonce` 32 random bytes the front draws, with no network_id. After the ID token checks out, the callback seals `{nonce, member_id, expiry, return path}` into `__Host-ur-device-pre` (`DeviceLoginLifetime`, 10 min) and answers 302 to `/.well-known/ur/device`, whose GET answers `{origin, nonce}` and whose same-origin POST of field `s`, the base64url `Signed`, completes the login with 303 to where the visitor began; the nonce leaves the pending set only once a statement verifies, so a login completes once. The signer is `AclState.ConsentedFor(signer, member)`, and not read_only, suspended or revoked. `__Host-ur-session` gains the device's sidecar_id: a device session counts on a `members` endpoint, a `members` session never on a `members-device` one, and consent and membership are checked on every request. `Sidecar.SignTlsEdgeLogin(origin, nonce)` answers the encoded `Signed` under the sidecar's consented untagged admission, and §18's `SignEdgeLogin` decodes base64url and passes the asking page's own origin, never one the page names; a remote-mode app reaches it through §5.8's Confirm method `tls.edge_login.sign`, which TLS owns and the daemon answers only for a confirmed call (owner decision 489). Members reach a service over the overlay by §17's rules alone, as the audience row says.
+**Members-device logins (owner decision 431).** The statement is a `TlsEdgeLogin` (below; `SIGNED_TLS_EDGE_LOGIN` 0x1502, purpose `edge-login`), `origin` as the front writes it, `https://<sni>` with `:<port>` only where the port is not 443, and `nonce` 32 random bytes the front draws, with no network_id. After the ID token checks out, the callback seals `{nonce, member_id, expiry, return path}` into `__Host-ur-device-pre` (`DeviceLoginLifetime`, 10 min) and answers 302 to `/.well-known/ur/device`, whose GET answers `{origin, nonce}` and whose same-origin POST of field `s`, the base64url `Signed`, completes the login with 303 to where the visitor began; the nonce leaves the pending set only once a statement verifies, so a login completes once. The signer is `AclState.ConsentedFor(signer, member)`, and not read_only, suspended or revoked. `__Host-ur-session` gains the device's sidecar_id: a device session counts on a `members` endpoint, a `members` session never on a `members-device` one, and consent and membership are checked on every request. `Sidecar.SignTlsEdgeLogin(origin, nonce)` answers the encoded `Signed` under the sidecar's consented untagged admission, and §18's `SignEdgeLogin` decodes base64url and passes the asking page's own origin, never one the page names; a remote-mode app reaches it through §5.8's Confirm method `tls.edge_login.sign`, which TLS owns and the daemon answers only for a confirmed call (owner decision 489). Members reach a service over the overlay by §17's rules alone, as the audience row says.
+
+```proto
+// sidecar/protocol/tls.proto: the front's two statements, each the body of a §6 Signed by a device's identity key;
+// neither reaches a server, each traveling between the visitor and the front inside TLS
+message TlsLinkToken {           // SIGNED_TLS_LINK 0x1503, purpose tls-link, by the publishing device (link tokens)
+  bytes grant_id = 1;            // the publish grant's rule_id
+  string host = 2;               // the link's host, which the front holds to the SNI
+  uint64 expire_time_millis = 3; // at most the grant's expires
+  bytes nonce = 4;               // random, so two links of one grant differ
+}
+message TlsEdgeLogin {           // SIGNED_TLS_EDGE_LOGIN 0x1502, purpose edge-login, by a member's consented device
+  string origin = 1;             // https://<sni>, with :<port> only where the port is not 443, as the front writes it
+  bytes nonce = 2;               // 32 random B the front draws, taken once
+}
+```
 
 ### 13.8 Certificates
 
@@ -205,6 +220,24 @@ certs' DNS writes: an order's _acme-challenge TXT, or a strong-mode probe's CAA 
   verdict  a probe's pass counts only if /dns/internal/ready?serial=s still answers ready after its
            last query; stale --> write again and restart the window, since the restored edges may lack
            the canary
+```
+
+```proto
+// sidecar/protocol/tls.proto: the ordering row's attestation, and certs' hint (13.15)
+message TlsKeyAttestation {      // the body of a Signed, SIGNED_TLS_KEY_ATTESTATION 0x1501, purpose tls-key, by the
+                                 //   device's identity key: this key, for these names
+  bytes network_id = 1;
+  bytes sidecar_id = 2;
+  bytes spki_sha256 = 3;         // of the DER SubjectPublicKeyInfo
+  bytes identifier_set_sha256 = 4;  // the ordering row's hash of the identifier set
+  uint64 issue_time_millis = 5;
+}
+message TlsHint {                // §6 0x1502, topic tls: the client refetches GET /tls/certs, so a hint is never
+                                 //   authoritative
+  TlsHintKind kind = 1;
+  bytes cert_id = 2;             // the 16-byte row id
+}
+enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
 ```
 
 **CT watch (D-TLS-8).** Each listening sidecar queries Cert Spotter (`issuances?domain=<net>.<root>&include_subdomains=true&match_wildcards=true`, https://sslmate.com/help/reference/ct_search_api_v1) and crt.sh for its zone and custom domains every ~6 h (jittered; optional Team key), alarming on a certificate no device attested in `GET /tls/certs` or one an identity pinned under 24 h before issuance attested. Failures show "CT watch degraded"; keyless queries are best effort and never ride a URnetwork proxy (§2.8 ext-1).

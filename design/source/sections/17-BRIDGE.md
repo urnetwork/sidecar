@@ -265,6 +265,92 @@ rule id   route_id or map_id: under a decision, SHA-256("urnetwork-sidecar-v1/br
           with its approval_id, until its decision's not_after
 ```
 
+The statements' bytes, a delta's `StatementHeader` first and its sealed part in its `*Body` (Placement, below), with the messages and lists they use:
+
+```proto
+// sidecar/protocol/bridge/bridge.proto: the table's statements, a delta's header first, then the fields api sees
+// in the order the table writes them, and a sealed_body opening to its *Body for the rest
+message BridgeBlock {                     // a head's record, with no header
+  BridgeIpv4Prefix ipv4_prefix = 1;
+  BridgeIpv4Prefix previous_prefix = 2;
+  int64 drain_until = 3;
+}
+message BridgeAddress { StatementHeader header = 1; bytes sidecar_id = 2; bytes sealed_body = 3; }
+message BridgeAddressBody { fixed32 ipv4 = 1; }
+message BridgeRoute {
+  StatementHeader header = 1;
+  bytes route_id = 2;                     // the rule id below
+  bytes advertiser = 3;
+  repeated bytes route_rule_ids = 4;      // the §8 route rules it serves (17.7; owner decision 344)
+  bytes sealed_body = 5;                  // BridgeRouteBody
+}
+message BridgeRouteBody {
+  repeated BridgeIpv4Prefix prefixes = 1;
+  BridgeIpv4Prefix exposed_prefix = 2;
+  bytes site_id = 3;
+  uint32 weight = 4;
+  BridgeRouteKind kind = 5;
+  uint32 drain_seconds = 6;
+  BridgeApproval approval = 7;
+}
+message BridgeMap {
+  StatementHeader header = 1;
+  bytes map_id = 2;                       // the rule id below
+  bytes host = 3;
+  int64 expires = 4;
+  bytes sealed_body = 5;                  // BridgeMapBody
+}
+message BridgeMapBody {
+  BridgeIpv4Prefix match_prefix = 1;
+  uint32 protocol = 2;                    // the IP protocol number
+  repeated BridgePortRange ports = 3;
+  bytes target = 4;                       // the address, 4 or 16 B
+  uint32 target_port = 5;
+  uint32 drain_seconds = 6;
+  BridgeApproval approval = 7;
+}
+message BridgeEgress {
+  StatementHeader header = 1;
+  bytes subject = 2;
+  bytes sealed_body = 3;                  // BridgeEgressBody, under exits only
+  BridgeEgressMode mode = 4;              // in the clear (Placement)
+}
+message BridgeEgressBody {
+  reserved 1; reserved "mode";            // the mode, which BridgeEgress carries in the clear
+  repeated bytes exit_sidecar_ids = 2;    // or exit_tag_id
+  bytes exit_tag_id = 3;
+}
+message BridgeAlias { StatementHeader header = 1; bytes sealed_body = 2; }   // only its header shows
+message BridgeAliasBody {
+  bytes share_id = 1;
+  uint32 target_index = 2;
+  BridgeIpv4Prefix alias_prefix = 3;
+  bytes host = 4;                         // T_i's host's sidecar_id, in the sharing network
+  bytes host_identity_public_key = 5;     // that host's identity key, from the target table (17.9's Y's pin)
+  bytes sharing_network_id = 6;
+  uint32 drain_seconds = 7;               // a release's drain: 300 s when 0, 3,600 s at most
+  bool release = 8;                       // ends this share's alias for target_index
+}
+message BridgeWithdraw { StatementHeader header = 1; bytes rule_id = 2; BridgeWithdrawMode mode = 3; }
+message BridgeApproval {                  // the approval row
+  bytes canonical_action = 1;             // this use's CanonicalAction as stored, whose effect_key derives the id
+  repeated Signed decisions = 2;
+  bytes template_action = 3;              // a multi-use decision's template (owner decision 218)
+}
+message BridgeIpv4Prefix { fixed32 address = 1; uint32 length = 2; }
+message BridgePortRange { uint32 first = 1; uint32 last = 2; }
+enum BridgeRouteKind {
+  BRIDGE_ROUTE_KIND_UNSPECIFIED = 0; BRIDGE_ROUTE_KIND_SUBNET = 1; BRIDGE_ROUTE_KIND_EXIT = 2;
+}
+enum BridgeEgressMode {
+  BRIDGE_EGRESS_MODE_UNSPECIFIED = 0; BRIDGE_EGRESS_MODE_AUTO = 1; BRIDGE_EGRESS_MODE_EXITS = 2;
+  BRIDGE_EGRESS_MODE_NONE = 3;
+}
+enum BridgeWithdrawMode {
+  BRIDGE_WITHDRAW_MODE_UNSPECIFIED = 0; BRIDGE_WITHDRAW_MODE_RESET = 1; BRIDGE_WITHDRAW_MODE_DRAIN = 2;
+}
+```
+
 - **Placement** (owner decision 5). Admin-signed heads carry the block, standing rules and 17.9's `BridgeShareSigner` files; sidecars file statements about themselves, and owners or sponsors about their subjects, as deltas entering §7.9's authorization log, verified at their position until a writer folds them in. Rule bodies are sealed to the config's current key generation (§10) in §7.9's sealed-body bytes, each delta but `BridgeWithdraw` opening to its `*Body` message and `BridgeAlias` showing only its header, with `expires` and `drain_until` int64 milliseconds since the epoch and an IPv4 prefix a `BridgeIpv4Prefix{fixed32 address, uint32 length}`, so §8.12's invariant and D-TRUST-10's witness stop can delay them; a bodiless `BridgeWithdraw` never waits, nor does a `BridgeEgress` of mode `none` or `auto`, whose `sealed_body` is empty. Only ids show (kind, signer, subject, rule id, expiry, an egress statement's mode and, for an approved route, the advertiser and the `route` rules it serves), which readers check; gates and api apply each egress entry's mode in log order over `BridgeRows.egress`, as §8.9's entries after a base, and rows carry the same value at the fold. A requested `dial` or `route` grant keeps only ids in the clear too: its CanonicalAction's `rule_id`, `subject`, `grant_allow`, `expires_millis` and a subject-only `grant_dst`, while its prefixes and ports, `cidrs`, `target_port` and any `ip:` or port text in `grant_dst`, ride in `sealed_detail`, sealed as rule bodies are, under a raised version; `payload_sha256` still covers the stored bytes, so api's `match` checks ids only, and approvers and readers open the detail to render and enforce it, while a publish keeps its clear fields, which are public anyway (owner decision 220; §8.8, §16.8). Gates see only §8's reach rules between sidecar ids and `BridgeRows`' egress modes (§8.10), never prefixes, addresses, ports, maps or aliases (§2.8, api-12).
 - **Ledger** (owner decision 473). A sealed body is judged by every reader that holds its generation, on the state its entry lands on, a base's tail on that base's rows with the tail re-applied (§7.9), as a signer already is; when a writer folds a statement it freezes the verdict it holds into the config head's bridge ledger, files of rows by kind: `bridge/ledger/addresses` with their tombstones, `bridge/ledger/rules/<xx>` shards by rule id with each rule's body and disposition, `bridge/ledger/egress` and `bridge/ledger/aliases`, and `bridge/ledger/manifest` holding their hashes. Every full reader standing under the previous base computes the same files and forks on a difference, and a device that starts at the base, a VPN component included, takes them, so no reader re-opens a folded statement and a compile does not grow with the log. They are ciphertext at evs, so no §2.8 row: about 600 KB at 5,000 devices. Writers fold through their tip whenever a bridge statement is unfolded, so the one case that differs from a verdict at the entry's own position, a head landing within seconds of an approved filing whose policy disqualifies that approval, turns the verdict at every reader alike and fails closed, and the requester files again under a new decision.
 - **Unformed generations** (owner decision 478). A body sealed to a generation gkm does not name is pending. A config writer whose whole read of gkm's generation listing, made inside the plan, names G as the newest while it holds keys 1 to G freezes a body sealed above G void (Refused, no such generation) once the entry at its tip is `UnformedVoidWait` (24 h) past the filing's own entry in log time, and folds past it; every reader that holds keys refuses, void and with no alarm, a body whose generation's GenRotate is signed more than `GenerationFormGrace` (1 h) after the entry that carries it, so a generation claimed after the void changes no reader's verdict and no device forks; a checker never voids and, lacking the generation, takes the head's rows unchecked. Both are `BridgeLedgerSettings` fields, the wait raised to a floor of the grace plus 30 min. A member device that keeps filing such bodies can hold the fold while it files, an accepted bound: the writer's `config_key_waiting` line names the filer on every plan, and revoking the filer, a statement that needs no base, ends it one wait after its last filing, as a network can shorten by lowering the wait. The id level and the rows are unchanged, and no server sees anything new.
@@ -310,6 +396,12 @@ message BridgeRows {                      // bridge.proto; acl.proto's AclRows.b
                                           // verifier in log order after a base, as the egress mode is; a route
                                           // rule with no via takes those advertisers as its via subjects
                                           // (§8.8; owner decision 344)
+}
+message BridgeEgressRow { bytes subject = 1; BridgeEgressMode mode = 2; }   // a sidecar_id or opaque atom
+message BridgeRouteRow {                  // never a prefix, site, weight or kind
+  bytes route_id = 1;                     // the route's rule id, 32 B
+  bytes advertiser = 2;                   // the sidecar_id that filed it
+  repeated bytes route_rule_ids = 3;      // the §8 route rules it serves: a policy rule's 16 B, a grant's 32
 }
 ```
 
@@ -381,8 +473,17 @@ message BridgeShareSigner {            // Y's config file per accepted share; si
   bytes signer_seed = 3;               // g's ShareSigner: a fresh 32-byte Ed25519 seed
   bytes share_cert = 4;                // its Signed ShareCert
 }
-// share pins' BridgeShareGrant (below), which bridge.proto declares with fields 1 to 9, joins this fence once
-// protocol's fence test stops writing it among its unfenced declarations
+message BridgeShareGrant {             // X's config file bridge/share-grant/<share_id hex> (share pins, below)
+  bytes share_id = 1;
+  bytes grant_id = 2;                  // the share's GrantActivate; the file counts only while that grant is live
+  bytes share_public_key = 3;          // Y's ShareKey, Ed25519
+  bytes target_table_sha256 = 4;       // of the sealed target table as network_bridge_share stores it
+  bytes table_key = 5;                 // K
+  bytes accepting_network_id = 6;      // Y
+  bytes alias_table_sha256 = 7;        // of the BridgeShareAccept X's approving admin opened
+  uint64 target_table_version = 8;
+  uint64 alias_table_version = 9;
+}
 ```
 
 ```text
@@ -438,6 +539,39 @@ accept     the accept's seals ride together as BridgeShareAccept{aliases, share_
 open       a failed open refuses the share and alarms, with no fallback
 holders    a multi-use code's accepters all hold K, so a seal proves only a code holder; X's approving admin
            is what pins one ShareKey to one share (share pins)
+```
+
+```proto
+// sidecar/protocol/bridge/bridge.proto: the share seal's bodies, each sealed under K with its label and padded by
+// pad to a multiple of 256 B, and the accepting side's sealed column
+message BridgeShareTargets { repeated BridgeShareTarget targets = 1; bytes pad = 15; }   // label targets
+message BridgeShareTarget {
+  uint32 index = 1;                    // from 0, dense
+  bytes host_sidecar_id = 2;
+  bytes host_identity_public_key = 3;  // what Y's BridgeAlias copies (share pins)
+  BridgeIpv4Prefix prefix = 4;         // a hosted address as a /32, or a served prefix
+  uint32 protocol = 5;                 // 0 every protocol; 6 or 17 with ports
+  repeated BridgePortRange ports = 6;
+}
+message BridgeShareAliases { repeated BridgeShareAlias aliases = 1; bytes pad = 15; }   // label aliases
+message BridgeShareAlias {
+  uint32 index = 1;
+  uint32 alias_host_bits = 2;          // A_i's low 16 bits, since Y's block is not X's to know
+  uint32 length = 3;                   // its target's
+}
+message BridgeShareKeyBody { bytes share_public_key = 1; bytes pad = 15; }   // label share-key
+message BridgeShareShortfall {         // label shortfall: refused_no_space's figures
+  uint32 index = 1;                    // the first target that found no room
+  uint32 length = 2;                   // its prefix length
+  uint32 free_address_count = 3;       // the upper /17's free addresses at the preflight
+  uint32 largest_free_length = 4;      // the shortest prefix length with an aligned free block; 33 for none
+  bytes pad = 15;
+}
+message BridgeShareAccept {            // the accepting side's sealed column, whose SHA-256 X's pin names
+  bytes aliases = 1;                   // the sealed BridgeShareAliases; empty on a refusal
+  bytes share_key = 2;                 // the sealed BridgeShareKeyBody; empty on a refusal
+  bytes shortfall = 3;                 // the sealed BridgeShareShortfall, under refused_no_space alone
+}
 ```
 
 ```text

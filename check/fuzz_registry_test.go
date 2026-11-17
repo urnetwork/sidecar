@@ -470,6 +470,12 @@ func (self *repository) fuzzRegistryFindings(t testing.TB) []string {
 			named := map[string]bool{}
 			for _, seeds := range target.Seeds {
 				seedDirectory := filepath.Clean(filepath.Join(directory, filepath.FromSlash(seeds)))
+				// cli's and mlsinterop's seeds above their own directory are the root module's, which a version
+				// branch moves into v2026/ beside them (§4.9), where their tests read them too (QD-1003)
+				module, _, _ := strings.Cut(declaration.file.packageName, "/")
+				if self.releaseSuffix != "" && slices.Contains(untaggedModuleNames, module) && strings.HasPrefix(seeds, "../") {
+					seedDirectory = filepath.Join(self.moduleDirectory, filepath.FromSlash(strings.TrimPrefix(seeds, "../")))
+				}
 				named[seedDirectory] = true
 				files, err := fuzzDirectoryFiles(seedDirectory)
 				switch {

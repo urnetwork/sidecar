@@ -449,6 +449,184 @@ resolve  ConfigResolution{members: [{email, member_id}], networks: [{text, netwo
 
 **Record bytes.** The records above take field numbers in the order written, a statement's `StatementHeader` being field 1, and each named list numbers its values from 1 in the order written, 0 being unspecified: `MemberRole` (7.5), `RepoKind` (§11.12), `AclAction` and `AclAutogroup` (§8.4), and each `a | b` choice; `SIDECAR_CAPABILITY_READ_ONLY` is 2 and `SIDECAR_CAPABILITY_INVITED` is 4. `not_after`, `expires` and `drain_until` are int64 milliseconds since the epoch under the design's names, and `AuthorityProposal.statement` is the proposed type's whole body as signed, only the proposal's own header being judged for replay and expiry. Genesis, ProjectionHeader, ServiceSettings, VersioningRules and BridgeBlock carry no header; every other record, MemberAdmit and Delegation included, carries one and enters the log (Writes). The admitting device sets the `invited` capability bit only after the invite's join MAC verifies (7.5), a JIT member's first device included, from the invite that device issued (7.6); rows carry it in `SidecarRow.capabilities`, and §8.5's invited clause reads it. A presence key's `KeyRegister` carries the new key's own proof in two fields written last and set only for purpose presence, `key_signature = 9` and `key_webauthn = 10` (a `WebAuthnEvidence`): the new key signs the received body bytes before field 9, as `UrMlsCredential` signs its fields 1-7 with its signature last (§10.4), so a verifier slices at field 9's first byte, never re-marshals or empties a field, and refuses a body where anything follows fields 9 and 10; the signed bytes are §6.9's with purpose `key-proof` and type `SIGNED_KEY_REGISTER`, `webauthn-es256` taking their hash as its challenge with UP and UV set and its evidence in `key_webauthn`, and `ecdsa-p256-sha256` putting a DER signature in `key_signature`; the identity key's `Signed` covers the whole body, and any countersignature stays in `Signed.webauthn`. The log's rule for a `KeyRegister` never reads `attestation`: it checks that proof, which needs no roots, so api, evs, gkm and every member device give one verdict on one statement whatever FIDO roots their release pins (D-TEAM-32); the refusal of a failing attestation stays on the device about to sign, which signs no `KeyRegister` whose present attestation fails and never downgrades it to asserted, and each reader computes §16.6's label locally, at the carrying entry's time, for records and approver screens only, so a label can differ between releases while state, the key's liveness and the demand for its countersignature cannot (owner decision 327).
 
+**Declarations.** The table's records, with the named lists they use, as config.proto and auth.proto declare them; a statement's sealed field opens to the message its comment names (Sealed bodies):
+
+```proto
+// sidecar/protocol/config.proto: the table's config records, each statement's StatementHeader at field 1 and its
+// other fields in the order the table writes them
+message AdminSet {                     // authority
+  StatementHeader header = 1;
+  repeated bytes owners = 2;           // member_ids
+  repeated bytes admins = 3;
+  repeated bytes network_admins = 4;
+  repeated bytes it_admins = 5;
+  uint32 threshold = 6;                // k
+}
+message MemberAdmit {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  MemberRole role = 3;                 // billing_admin, auditor or member
+}
+message SidecarAdmit {
+  StatementHeader header = 1;
+  bytes network_id = 2;
+  bytes sidecar_id = 3;
+  bytes identity_public_key = 4;
+  string identity_alg = 5;             // ed25519 in v0
+  bytes member_id = 6;                 // or tag_ids, opaque ids of 16 B
+  repeated bytes tag_ids = 7;
+  bool ephemeral = 8;
+  int64 not_after = 9;                 // agents only
+  uint32 capabilities = 10;            // SidecarCapability bits
+}
+message AdmissionConfirm { StatementHeader header = 1; bytes sidecar_id = 2; }
+message SponsorSet { StatementHeader header = 1; bytes sidecar_id = 2; bytes sponsor_member_id = 3; }
+message IndexerSet {
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  IndexerScope scope = 3;
+  bool retire = 4;
+  bytes sealed_services = 5;           // IndexerServices
+}
+message IndexerServices { repeated IndexerService services = 1; }
+enum IndexerScope { INDEXER_SCOPE_UNSPECIFIED = 0; INDEXER_SCOPE_NETWORK = 1; INDEXER_SCOPE_MEMBER = 2; }
+enum IndexerService {                  // a reader ignores a value it does not know; embed comes later
+  INDEXER_SERVICE_UNSPECIFIED = 0; INDEXER_SERVICE_MAIL = 1; INDEXER_SERVICE_MIRROR = 2;
+  INDEXER_SERVICE_SEARCH = 3;
+}
+message RecoveryBind {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes prev_sha256 = 3;               // the replaced binding's key hash
+  bytes ed25519_public_key_sha256 = 4;
+  bytes sealed_body = 5;               // RecoveryBindBody
+}
+message RecoveryBindBody {
+  bytes xwing_public_key = 1;
+  bytes ed25519_public_key = 2;
+  bytes genesis_sig = 3;               // Recovery's anchor
+}
+message RecoveryRebind {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes prev_sha256 = 3;
+  bytes ed25519_public_key_sha256 = 4;
+  bytes sealed_body = 5;               // RecoveryBindBody
+  RecoveryRebindReason reason = 6;
+}
+message KeyRegister {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes key_id = 3;
+  KeyAlg alg = 4;
+  bytes public_key = 5;
+  bytes attestation = 6;
+  KeyPurpose purpose = 7;
+  int64 not_after = 8;
+  bytes key_signature = 9;             // 9 and 10: a presence key's own proof, written last (Record bytes)
+  WebAuthnEvidence key_webauthn = 10;
+}
+message KeyRevoke { StatementHeader header = 1; bytes key_id = 2; }
+message Delegation {
+  StatementHeader header = 1;
+  bytes pubkey = 2;
+  bytes reader_xwing_public_key = 3;   // §10.5
+  repeated bytes tag_ids = 4;
+  uint32 max_admits = 5;
+  int64 not_after = 6;                 // required, <= 90 d (7.8)
+  ForwardScope forward = 7;            // set: a forwarding Delegation, with no tag_ids, max_admits 0 and
+                                       //   not_after 0 (forwarding, below; owner decision 197)
+}
+message DelegationRevoke {
+  StatementHeader header = 1;
+  bytes delegation_id = 2;
+  uint64 since_n = 3;                  // 0, or for a leaked bundle the position from which it parks
+}
+message ServiceSettings {              // a head's record, with no header
+  TeamMailMode team_mail = 1;
+  uint32 stale_leaf_days = 2;          // 90
+  SelfAdmitMode self_admit = 3;
+  uint32 witness_bound_hours = 4;      // 72, 24 to 168
+  bytes scim_signer = 5;               // none, or the sidecar_id of an admin's indexer (7.6)
+  ServiceDirectorySettings directory = 6;   // from v1 (M6), reserved at M2
+  // mail_strict = 7 (§15.4), record_cost = 8 (owner decision 302) and record_required = 9 (owner decision
+  // 305), Settings fields' three, join this fence once config.proto declares them
+}
+message ServiceDirectorySettings { DirectoryRunsMode runs = 1; DirectoryWorkersMode workers = 2; }
+enum TeamMailMode {                    // zero reads as indexers (Settings fields; owner decision 304)
+  TEAM_MAIL_MODE_UNSPECIFIED = 0; TEAM_MAIL_MODE_INDEXERS = 1; TEAM_MAIL_MODE_MEMBER_SCOPES = 2;
+}
+enum SelfAdmitMode {                   // zero reads as on
+  SELF_ADMIT_MODE_UNSPECIFIED = 0; SELF_ADMIT_MODE_ON = 1; SELF_ADMIT_MODE_OFF = 2;
+}
+enum DirectoryRunsMode {               // zero reads as auto
+  DIRECTORY_RUNS_MODE_UNSPECIFIED = 0; DIRECTORY_RUNS_MODE_AUTO = 1; DIRECTORY_RUNS_MODE_PROMPT = 2;
+  DIRECTORY_RUNS_MODE_OFF = 3;
+}
+enum DirectoryWorkersMode {            // zero reads as on
+  DIRECTORY_WORKERS_MODE_UNSPECIFIED = 0; DIRECTORY_WORKERS_MODE_ON = 1; DIRECTORY_WORKERS_MODE_OFF = 2;
+}
+message VersioningRules { repeated VersioningRule rules = 1; }   // a head's record, with no header
+message VersioningRule {               // an empty selector matches all
+  repeated uint32 kinds = 1;           // RepoKind
+  repeated bytes repo_ids = 2;
+  string path_glob = 3;
+  uint64 size_above_bytes = 4;
+  VersioningMode versioning = 5;
+}
+enum VersioningMode { VERSIONING_MODE_UNSPECIFIED = 0; VERSIONING_MODE_ON = 1; VERSIONING_MODE_OFF = 2; }
+message AuthorityProposal {            // proposal_id = SHA-256 of the Signed AuthorityProposal
+  StatementHeader header = 1;
+  uint32 statement_type = 2;           // the proposed statement's SignedType
+  bytes statement = 3;                 // its whole body as signed
+}
+message AuthorityCosign { StatementHeader header = 1; bytes proposal_id = 2; }
+message RecoveryVeto { StatementHeader header = 1; bytes proposal_id = 2; }
+// sidecar/protocol/bridge/auth.proto: the records sidecar/device's posture also applies (§17.8, §18.6), and the
+// names the records share
+message Genesis {                      // no header: no position exists yet
+  bytes network_id = 1;
+  bytes config_repo_id = 2;
+  bytes owner_member_id = 3;           // user_id in a personal network
+  bytes owner_sidecar_id = 4;
+  bytes owner_identity_public_key = 5;
+  int64 time_ms = 6;
+}
+message MemberRevoke { StatementHeader header = 1; bytes member_id = 2; }
+message SidecarRevoke {
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  SidecarRevokeReason reason = 3;
+  uint64 since_n = 4;                  // a compromise's position, from which the cascade parks
+}
+message ForwardScope {                 // Delegation.forward, declared here because sidecar/device reads it
+  bytes forward_sidecar_id = 1;        // the forwarding sidecar, which must be the signer
+  bytes host_client_id = 2;            // the device client, in its own network; empty in any other
+  bytes host_client_public_key = 3;    // that client's ClientKey public key (C15), set with host_client_id
+}
+enum MemberRole {                      // 7.5's roles
+  MEMBER_ROLE_UNSPECIFIED = 0; MEMBER_ROLE_OWNER = 1; MEMBER_ROLE_ADMIN = 2; MEMBER_ROLE_NETWORK_ADMIN = 3;
+  MEMBER_ROLE_IT_ADMIN = 4; MEMBER_ROLE_BILLING_ADMIN = 5; MEMBER_ROLE_AUDITOR = 6; MEMBER_ROLE_MEMBER = 7;
+}
+enum SidecarCapability {               // bits of SidecarAdmit's and SidecarRow's capabilities
+  SIDECAR_CAPABILITY_NONE = 0;
+  SIDECAR_CAPABILITY_READ_ONLY = 2;    // bit 1: page Workers (D-TEAM-24)
+  SIDECAR_CAPABILITY_INVITED = 4;      // bit 2: the invite's join MAC verified (7.5)
+}
+enum KeyAlg {
+  KEY_ALG_UNSPECIFIED = 0; KEY_ALG_WEBAUTHN_ES256 = 1; KEY_ALG_ECDSA_P256_SHA256 = 2; KEY_ALG_SSH_ED25519 = 3;
+}
+enum KeyPurpose { KEY_PURPOSE_UNSPECIFIED = 0; KEY_PURPOSE_PRESENCE = 1; KEY_PURPOSE_SSHSIG = 2; }
+enum RecoveryRebindReason {
+  RECOVERY_REBIND_REASON_UNSPECIFIED = 0; RECOVERY_REBIND_REASON_ROUTINE = 1; RECOVERY_REBIND_REASON_LOST = 2;
+  RECOVERY_REBIND_REASON_COMPROMISE = 3;
+}
+enum SidecarRevokeReason {
+  SIDECAR_REVOKE_REASON_UNSPECIFIED = 0; SIDECAR_REVOKE_REASON_LOST = 1; SIDECAR_REVOKE_REASON_REAPED = 2;
+  SIDECAR_REVOKE_REASON_REMOVED = 3; SIDECAR_REVOKE_REASON_COMPROMISE = 4;
+}
+```
+
 **Sealed bodies.** Each statement shows only what §2.8's api-7 lists, the rest in a sealed field that stays `bytes`: a `sealed_body` (IndexerSet's `sealed_services`, RepoVersioning's `sealed_rules`) opens to a `*Body` message, for IndexerSet, RecoveryBind, RecoveryRebind, RepoVersioning and every §17.8 delta but BridgeWithdraw, and BridgeAlias shows only its header. An `ApprovalDelivery` (§8.8) seals its decision or cancel not to a config generation but HPKE-XWing to its requester's current ReaderKey, so only the requester opens it (§16.8; owner decision 447).
 
 ```text
@@ -798,6 +976,111 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a
 message ApiTick {                    // kind TICK: api's own facts, each checked by content
   repeated bytes reaped_sidecar_ids = 1;     // ephemeral admissions only (7.10); coalesced per minute
   repeated bytes activated_proposal_ids = 2; // recovery windows that ended (Recovery)
+}
+// The rows ProjectionRows holds, each field as its comment above describes it
+message MemberRow {                  // for the membership's life
+  bytes member_id = 1;
+  MemberRole role = 2;
+  bytes recovery_key_sha256 = 3;     // the binding in effect, windowed while a newer one below is void
+  repeated RecoveryBindingRow bindings = 4;  // newest first
+}
+message RecoveryBindingRow {
+  bytes key_sha256 = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+  RecoveryRebindReason reason = 4;   // unspecified for a RecoveryBind, which carries none
+}
+message SidecarRow {
+  bytes sidecar_id = 1;
+  bytes admission_sha256 = 2;
+  repeated bytes admission_signers = 3;      // each counted one
+  uint64 admitted_at = 4;
+  bytes confirm_signer = 5;          // its newest AdmissionConfirm's
+  uint64 confirmed_at = 6;
+  bytes owner_confirm_signer = 7;    // its newest OwnerConfirm's
+  uint64 owner_confirmed_at = 8;
+  uint64 revoked_at = 9;
+  uint64 parked_at = 10;
+  bytes sponsor = 11;
+  uint32 capabilities = 12;          // SidecarCapability bits
+  bytes delegation_id = 13;
+  uint64 live_since = 14;            // the config leaf rank (leaves)
+  int64 not_after = 15;              // a revoked row stays a tombstone until then
+  bytes identity_public_key = 16;    // its admission's, or the Genesis's for the owner's first device
+  string identity_alg = 17;
+  bytes member_id = 18;              // an untagged admission's member; else tag_ids
+  repeated bytes tag_ids = 19;
+  bool ephemeral = 20;
+  repeated ConfirmationRow confirmations = 21;   // in position order, for the sidecar's life
+  repeated CascadeSpanRow cascades = 22;         // in position order (owner decision 330)
+  int64 admitted_time_ms = 23;       // owner decision 307
+}
+message ConfirmationRow {
+  uint32 kind = 1;                   // 1 AdmissionConfirm, 2 OwnerConfirm
+  bytes signer = 2;
+  uint64 at = 3;
+  bool lifted_park = 4;              // the device was parked when it landed
+}
+message CascadeSpanRow {             // what the sidecar signed in [from, until) stays void until signed again
+  uint64 from = 1;                   // since_n for the revoked sidecar, else the entry that pulled it into P
+  uint64 until = 2;                  // the revocation's entry
+}
+message DelegationRow {
+  bytes delegation_id = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+  repeated bytes tag_atoms = 4;
+  int64 not_after = 5;
+  uint64 key_dropped_at = 6;         // §10.5
+  uint64 ended_at = 7;
+  uint32 admissions = 8;             // counted in log order for its life
+  bytes pubkey = 9;
+  bytes reader_xwing_public_key = 10;  // empty on a forwarding Delegation's row, its digest in 16
+  uint32 max_admits = 11;
+  bytes forward_sidecar_id = 12;     // 12 to 16: a forwarding Delegation's alone (forwarding; owner decision 202)
+  bytes host_client_id = 13;
+  bytes host_client_public_key = 14;
+  uint64 superseded_at = 15;         // the position of its signer's newer forwarding Delegation; 0 none
+  bytes reader_key_sha256 = 16;      // SHA-256 of its reader key, which gkm holds (§10.6)
+}
+message KeyRow {                     // a KeyRegister, with its KeyRevoke's position
+  bytes key_id = 1;
+  bytes member_id = 2;
+  KeyAlg alg = 3;
+  bytes public_key = 4;
+  KeyPurpose purpose = 5;
+  bytes signer = 6;
+  uint64 at = 7;
+  int64 not_after = 8;
+  uint64 revoked_at = 9;
+}
+message ProposalRow {                // an AuthorityProposal open at folded_through (proposal)
+  bytes proposal_id = 1;
+  uint32 statement_type = 2;
+  bytes statement = 3;               // AuthorityProposal.statement, verbatim
+  uint64 proposed_at = 4;
+  int64 not_after_ms = 5;            // the proposal's own header's
+  repeated ProposalSigner signers = 6;   // the proposer, then each counted cosign, in log order
+  uint64 window_entry = 7;           // the entry of the newest recovery-key signature; 0 with none
+  int64 window_time_ms = 8;          // that entry's time_ms
+  uint32 kind = 9;                   // ProposalKind, fixed at the proposal's entry
+}
+message ProposalSigner { bytes signer = 1; uint64 at = 2; }
+enum ProposalKind {                  // the self_admit row's four kinds
+  PROPOSAL_KIND_UNSPECIFIED = 0; PROPOSAL_KIND_AUTHORITY = 1; PROPOSAL_KIND_RECOVERY_SCOPED = 2;
+  PROPOSAL_KIND_RESTORED = 3; PROPOSAL_KIND_RESTORED_COSIGNED = 4;
+}
+message ProjectionSettings {         // owner decision 205
+  uint32 self_admit = 1;             // SelfAdmitMode's value
+  bytes scim_signer = 2;             // empty for none
+}
+message RingRow { bytes statement_id = 1; uint64 n = 2; }   // a statement id's first 16 B, and its entry
+message IndexerRow {                 // a designation that holds (Indexers)
+  bytes sidecar_id = 1;
+  uint32 scope = 2;                  // IndexerScope's value
+  bytes signer = 3;
+  uint64 at = 4;
+  bytes sealed_services = 5;         // IndexerSet.sealed_services, verbatim
 }
 ```
 
