@@ -410,8 +410,11 @@ func (self *Ingest) captureScanResultWithLock(ctx context.Context, run *ingestRu
 	if scan.Truncated {
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapTruncation)
 	}
+	// cut as the context entry's is: a worktree's base name can pass the format's 128 B, and the writer would refuse
+	// the whole change
+	project, _ := ingestCut([]byte(run.state.Project), self.settings.ProjectByteCount)
 	body := &protocol.ChangeBody{
-		Project:    run.state.Project,
+		Project:    string(project),
 		BaseCommit: scan.HeadCommit,
 		Commits:    scan.Commits,
 		PathCount:  uint32(scan.PathCount),

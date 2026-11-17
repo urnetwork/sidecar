@@ -1,7 +1,7 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
 // ingest_context.go's caps as Ingest's settings (QD-702): a context entry is cut to what the instance holds, set
-// lower than the format's.
+// lower than the format's; and the change entry's project is cut as the context entry's is, its regression test.
 
 package mcp
 
@@ -70,5 +70,44 @@ func TestContextCapsAreSettings(t *testing.T) {
 	call("toolu_3")
 	if calls := hourEnv.writer.of(sidecar.RecordKindToolCall); len(calls) != 2 || calls[1].Body.(*protocol.ToolCallBody).ToolUseId != "toolu_3" {
 		t.Errorf("a ten-minute run-hour: %d tool calls", len(calls))
+	}
+}
+
+// The regression: a worktree whose base name passes the format's 128 B gave its change entries an uncut project,
+// which the writer refused whole, each a missed_event and the change lost; the change entry's project is now cut on a
+// code point as the context entry's is.
+func TestChangeEntryProjectIsCut(t *testing.T) {
+	long := filepath.Join(t.TempDir(), strings.Repeat("p", 200))
+	if err := os.Mkdir(long, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	restoreEnv := newRestoreTestEnvIn(t, long)
+	env := newIngestTestEnv(t)
+	env.cwd = restoreEnv.dir
+	env.restore = NewRestorePoints(&RestorePointsArgs{Clock: env.clock, Ingest: env.server.settings.Ingest})
+	env.install()
+	harness := env.harnessIn(sidecartest.FakeHarnessClaudeCode)
+	if err := harness.SessionStart("s1", "startup"); err != nil {
+		t.Fatal(err)
+	}
+	runId := env.runOf("claude-code", "s1")
+	input := map[string]any{"file_path": filepath.Join(env.cwd, "committed.txt"), "old_string": "two", "new_string": "2"}
+	if err := harness.ToolCall("s1", true, "Edit", input); err != nil {
+		t.Fatal(err)
+	}
+	restoreEnv.write("committed.txt", "one\n2\nthree\n")
+	if err := harness.ToolCall("s1", false, "Edit", input); err != nil {
+		t.Fatal(err)
+	}
+	if env.hasGap(runId, sidecar.RecordCoverageGapMissedEvent) {
+		t.Fatal("an entry was refused")
+	}
+	want := strings.Repeat("p", 128)
+	changes := env.writer.of(sidecar.RecordKindChange)
+	if len(changes) != 1 || changes[0].Body.(*protocol.ChangeBody).Project != want {
+		t.Fatalf("%d change entries", len(changes))
+	}
+	if contexts := env.writer.of(sidecar.RecordKindContext); len(contexts) == 0 || contexts[0].Body.(*protocol.ContextBody).Project != want {
+		t.Errorf("the context's project: %+v", contexts)
 	}
 }
