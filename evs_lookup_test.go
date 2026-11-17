@@ -2,8 +2,9 @@
 // sidecar's own write or removal as the first version after base_version, by git oid and by SHA-256 of the bytes, and
 // calls another sidecar's version, or another content, the action's never; FS-25's evs owner case, a crash after the
 // effect, where the restarted Run finds it and pushes nothing; the effect's refusals, a final one not_done and a lost
-// answer uncertain; the gate's restart Lookup from the stored CanonicalAction alone; and base_version as the write's
-// CAS. The git-mode half is evs_local_write_test.go's; the receipt gate's binding is evs_receipt_gate_test.go's.
+// answer uncertain; the gate's restart Lookup from the stored CanonicalAction alone; base_version as the write's
+// CAS; and the walk across every life of a path made again since its base (QD-888). The git-mode half is
+// evs_local_write_test.go's; the receipt gate's binding is evs_receipt_gate_test.go's.
 
 package sidecar
 
@@ -392,5 +393,52 @@ func TestEvsReceiptGateDepositsWithTheReadsContextBeforeDecrypting(t *testing.T)
 	reader.client.SetRecordReceipts(nil)
 	if _, _, err := evsTestRead(t, reader, world, "notes.md"); !errors.Is(err, ErrEvsReceiptGate) {
 		t.Fatalf("no receipts bound: %v", err)
+	}
+}
+
+// A path removed and made again more than once since base_version (QD-888; owner decision 380): the walk crosses
+// each creation into the life before it, so a delete's own removal, the first version after its base, is found
+// under two later lives, another sidecar's removal there is not its, and a write on that base is not the action's
+// either. Under a base_version of 0 the action is judged at the newest life's creation alone: its creator's write is
+// found there, and an earlier life's creation, which a read showing nothing cannot place before or after it, is not.
+func TestEvsLookupWalksEveryLifeSinceTheBase(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	other := writer.otherWriter(t, "other agent host")
+	first, err := writer.write(t, "AGENTS.md", []byte("agents\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	removal, err := writer.write(t, "AGENTS.md", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range [][]byte{[]byte("second life\n"), nil} {
+		if _, err := other.write(t, "AGENTS.md", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	third, err := other.write(t, "AGENTS.md", []byte("third life\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	found, err := writer.repo.Lookup(ctx, &EvsLookupArgs{Path: "AGENTS.md", BaseVersion: first.PathVersion, Remove: true})
+	if err != nil || found.State != EvsLookupFound || !found.Version.Removed || found.Version.Version != removal.PathVersion ||
+		found.Version.PushId != removal.PushId {
+		t.Fatalf("its own removal under two later lives: %+v %v", found, err)
+	}
+	if found, err := other.repo.Lookup(ctx, &EvsLookupArgs{Path: "AGENTS.md", BaseVersion: first.PathVersion, Remove: true}); err != nil || found.State != EvsLookupOther {
+		t.Fatalf("another's: %+v %v", found, err)
+	}
+	if found, err := writer.repo.Lookup(ctx, &EvsLookupArgs{Path: "AGENTS.md", BaseVersion: first.PathVersion, GitOid: evsTestBlobOid(t, []byte("agents\n"))}); err != nil || found.State != EvsLookupOther {
+		t.Fatalf("a write on the base: %+v %v", found, err)
+	}
+	found, err = other.repo.Lookup(ctx, &EvsLookupArgs{Path: "AGENTS.md", GitOid: evsTestBlobOid(t, []byte("third life\n"))})
+	if err != nil || found.State != EvsLookupFound || found.Version.Version != third.PathVersion {
+		t.Fatalf("the newest life's creation under nothing: %+v %v", found, err)
+	}
+	found, err = writer.repo.Lookup(ctx, &EvsLookupArgs{Path: "AGENTS.md", GitOid: evsTestBlobOid(t, []byte("agents\n"))})
+	if err != nil || found.State != EvsLookupOther || found.Version.Version != third.PathVersion {
+		t.Fatalf("an earlier life's creation under nothing: %+v %v", found, err)
 	}
 }

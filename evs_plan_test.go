@@ -550,6 +550,10 @@ func (self *evsTestPushServer) commit(world *evsTestWorld, statement *EvsStateme
 		if !change.WritesEntry() {
 			state.newest = change.Change.GetBaseEntryVersion() + 1
 			state.removal = &protocol.EvsRemovalMarker{PushId: push.GetPushId(), RemovalVersion: version, PathVersion: state.newest}
+			if state.removals == nil {
+				state.removals = map[uint64]*protocol.EvsRemovalMarker{}
+			}
+			state.removals[state.newest] = state.removal
 			state.rows = nil
 			continue
 		}

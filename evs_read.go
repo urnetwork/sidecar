@@ -640,6 +640,11 @@ func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, 
 		}
 	}
 	defer result.objects.close()
+	if entry := result.replies[0].Entry; args.Version != 0 && entry != nil && entry.GetVersion() != args.Version {
+		// evs answers a number the path holds no version at with its newest version below it (§11.9's reply row;
+		// owner decision 380): there is none at the number asked
+		return nil, ErrEvsPathAbsent
+	}
 	if ruled != nil && args.Version != 0 {
 		// a version asked for by number that this device ignores is not shown
 		ignored, err := ruled.ignored(ctx, self, result, 0)

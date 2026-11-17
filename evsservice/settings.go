@@ -217,6 +217,13 @@ type EvsSettings struct {
 	// How many times a read goes to a newer head from the cluster when an entry holds a version past the head it
 	// read (§11.9's newest row), 2. Positive.
 	ReadHeadRetryCount int
+	// A read by number that the path holds no version at answers its newest version or removal below it (§11.9's
+	// reply row; owner decision 380; QD-888): past what its entry and the window hold, evs reads the ref's older
+	// statements through their log pages, newest first, at most this many versions below the window's first, past
+	// which it answers 503, the read unfinished, rather than read a path that may hold a version there as holding
+	// none. 16,384, 256 log pages: a reading (question evs-read-earlier-lives-scan-bound). Non-negative: 0 reads
+	// no log page.
+	ReadVersionScanCount int
 	// Format 2: how long past the end of the replacing record's batch minute a replaced versionless version still
 	// reads before it answers `collected` (§11.7's reads row; plan-EVS2-small-readings#5), 60 s. Positive.
 	ReadCollectedAfter time.Duration
@@ -376,6 +383,7 @@ func DefaultEvsSettings() *EvsSettings {
 		ReadSegmentWholeByteCount:       256 * 1024,
 		ReadSegmentRangeAlign:           64 * 1024,
 		ReadHeadRetryCount:              2,
+		ReadVersionScanCount:            16 * 1024,
 		ReadCollectedAfter:              60 * time.Second,
 		LogReplyStatementCount:          evsLogReplyMaxStatementCount,
 		RefsListPageCount:               1000,
@@ -506,6 +514,9 @@ func (self *EvsSettings) Validate() error {
 	if self.ReadPathMaxCount <= 0 || self.ReadRangeMaxCount <= 0 || self.ReadRangeMaxByteCount <= 0 || self.ReadObjectMaxCount <= 0 ||
 		self.ReadSegmentWholeByteCount <= 0 || self.ReadSegmentRangeAlign <= 0 || self.ReadHeadRetryCount <= 0 || self.ReadCollectedAfter <= 0 || self.RefsListPageCount <= 0 {
 		return fmt.Errorf("%w: a read's bounds, segment sizes, head retries and refs page must be positive", ErrEvsSettings)
+	}
+	if self.ReadVersionScanCount < 0 {
+		return fmt.Errorf("%w: a read by number's scan of %d versions", ErrEvsSettings, self.ReadVersionScanCount)
 	}
 	if frameMax := sidecar.DefaultEvsFormatSettings().ReadFrameMaxByteCount; self.ReadFrameByteCount <= 0 || frameMax <= self.ReadFrameByteCount {
 		return fmt.Errorf("%w: a read frame's body %d, outside (0, %d)", ErrEvsSettings, self.ReadFrameByteCount, frameMax)

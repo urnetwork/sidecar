@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -135,6 +136,8 @@ type evsTestPath struct {
 	versions map[uint64]*evsTestVersion
 	newest   uint64
 	removal  *protocol.EvsRemovalMarker
+	// every removal the path took, by its path version, each life's end, which a read by number answers below it
+	removals map[uint64]*protocol.EvsRemovalMarker
 	// a directory's folded rows, each with the epoch it is sealed in as its epoch field, 0 for 1
 	rows []*protocol.EvsName
 	// the epoch whose idx/ holds its entry, 0 for 1
@@ -220,6 +223,14 @@ type evsTestWorld struct {
 	due *protocol.EvsPathEpoch
 	// a removed path answers its removal whatever version a read asks for by number, as evs did before QD-672
 	repeatRemoval bool
+	// a read by number answers only a version at exactly that number, or a removed path's standing removal at or
+	// below it, and nothing below a creation, as evs did before QD-888; or it answers a number the path holds no
+	// version at 503, as evs answers a read past its scan bound
+	exactNumbers bool
+	belowRefused bool
+	// the base version the next push names in place of the head's, with that version's chain value: a writer that
+	// read an older head, as a file-mode push may (base_version >= v - 63)
+	nextBaseVersion uint64
 	// the ref is its signer's owned ref, as a record-class stream is, rather than the shared main
 	owned bool
 	// the auth version the world's pushes pin, 0 for 1, and the next push's index_epoch, which builds it as format 2
@@ -493,8 +504,15 @@ func (self *evsTestWorld) segmentRecord(keys *evsTestGenerationKeys, fileId Id, 
 // Commits one push of changes on the head, as its signer builds it, and answers its version.
 func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	self.t.Helper()
-	baseVersion, baseChain := self.head()
-	version := baseVersion + 1
+	headVersion, headChain := self.head()
+	version := headVersion + 1
+	baseVersion, baseChain := headVersion, headChain
+	self.stateLock.Lock()
+	if self.nextBaseVersion != 0 {
+		baseVersion, baseChain = self.nextBaseVersion, self.commits[self.nextBaseVersion-1].chain
+		self.nextBaseVersion = 0
+	}
+	self.stateLock.Unlock()
 	pushId := evsTestId(fmt.Sprint("world push ", version, " ", self.generation))
 	keys := evsTestKeys(self.t, self.repoId, self.generation)
 	self.stateLock.Lock()
@@ -608,7 +626,7 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 		self.t.Fatal(err)
 	}
 	statement := built.Statement
-	chain := EvsChainNext(baseChain, pushId, statement.Sha256)
+	chain := EvsChainNext(headChain, pushId, statement.Sha256)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	// what this push showed evs
@@ -631,6 +649,10 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 		if p.removal != nil {
 			state.removal = p.removal
 			state.newest = p.version
+			if state.removals == nil {
+				state.removals = map[uint64]*protocol.EvsRemovalMarker{}
+			}
+			state.removals[p.version] = p.removal
 			continue
 		}
 		state.removal = nil
@@ -713,6 +735,9 @@ func evsTestAbsences(tree *EvsChangeTree, changedPrefixes []EvsTokenPath, versio
 	return absences
 }
 
+// What pathReplyWithLock answers a read below a number under belowRefused, which the read answers 503 UNAVAILABLE.
+var errEvsTestBelowRefused = errors.New("a read by number past the scan bound")
+
 // The reply for one path at its newest version, or version, with the proofs a reader needs from pin on: named holds
 // the token path the request names in each epoch, the current one's among them, and each statement's change is found
 // under the path's token path in that statement's epoch (see the file header).
@@ -783,21 +808,51 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 	if served, ok := self.serveVersion[key]; ok && version == 0 {
 		version = served
 	}
-	if state.removal != nil && (version == 0 || self.repeatRemoval) {
-		reply.Removal = state.removal
-		commitVersion = state.removal.GetRemovalVersion()
+	var removal *protocol.EvsRemovalMarker
+	switch {
+	case state.removal != nil && (version == 0 || self.repeatRemoval):
+		removal = state.removal
+	case version != 0:
+		// by number (§11.9's reply row; owner decision 380): the path's newest version or removal at or below it, a
+		// removal ending each earlier life, as evsservice's belowVersion answers
+		number := uint64(0)
+		var numbered *protocol.EvsRemovalMarker
+		for held := range state.versions {
+			if held <= version && number < held {
+				number, numbered = held, nil
+			}
+		}
+		for held, marker := range state.removals {
+			if held <= version && number < held {
+				number, numbered = held, marker
+			}
+		}
+		exact := numbered == nil && number == version
+		standingRemoval := numbered != nil && numbered == state.removal
+		newestFile := numbered == nil && state.removal == nil && number == state.newest
+		switch {
+		case self.exactNumbers && !exact && !standingRemoval:
+			// as evs answered before QD-888
+			return reply, nil, nil
+		case self.belowRefused && !exact && !standingRemoval && !newestFile:
+			return nil, nil, errEvsTestBelowRefused
+		case number == 0:
+			// nothing at or below the number, as below a first creation at max(b, m) + 1: the path with no version,
+			// which a reader takes as absent there
+			return reply, nil, nil
+		}
+		removal, version = numbered, number
+	}
+	if removal != nil {
+		reply.Removal = removal
+		commitVersion = removal.GetRemovalVersion()
 	} else {
 		if version == 0 {
 			version = state.newest
 		}
 		held := state.versions[version]
-		if held == nil && version == state.newest {
-			return nil, nil, fmt.Errorf("no such version")
-		}
 		if held == nil {
-			// an older version by number that nothing holds, as below a creation at max(b, m) + 1: the path with no
-			// version, which a reader takes as absent at that number (evsservice's olderVersion)
-			return reply, nil, nil
+			return nil, nil, fmt.Errorf("no such version")
 		}
 		reply.Version = &protocol.EvsIndexVersion{PushId: held.pushId, CommitVersion: held.commitVersion, EntryVersion: held.entryBytes}
 		commitVersion = held.commitVersion
@@ -929,6 +984,10 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 				continue
 			}
 			reply, pathLocators, err := self.pathReplyWithLock(named, path.GetVersion(), read.GetPinVersion())
+			if errors.Is(err, errEvsTestBelowRefused) {
+				evsTestRefuse(writer, &evsTestRefusal{status: http.StatusServiceUnavailable, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE}})
+				return
+			}
 			if err != nil {
 				writer.WriteHeader(http.StatusNotFound)
 				return

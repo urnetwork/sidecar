@@ -1,17 +1,28 @@
 //go:build !ios_extension
 
-// History (§11.7's history row, §18.5): a path's versions, newest first, each read as an older version (§11.9's
-// request row) and verified against its own statement as a head read's is. The walk follows each version's
-// prev_push_id and prev_commit_version: a write replaces the version one below it, so the walk asks for that one by
-// number with commit_version (DESIGN-DETAILS 9.2.4's history) and checks the entry it gets names the push and commit
-// the newer one said it replaced; a creation ends the walk, its path's earlier life being a removed one this draft
-// does not walk past (§11.7's versions row keeps the numbers apart). At most EvsSettings.HistoryVersionCount versions.
+// History (§11.7's history row, §18.5): a path's versions, newest first, across its lives, each read as an older
+// version (§11.9's request row) and verified against its own statement as a head read's is. The walk follows each
+// version's prev_push_id and prev_commit_version: a write replaces the version one below it, so the walk asks for
+// that one by number with commit_version (DESIGN-DETAILS 9.2.4's history) and checks the entry it gets names the push
+// and commit the newer one said it replaced. At most EvsSettings.HistoryVersionCount versions.
 //
-// A removed path's walk asks for the version below its removal by number, which evs serves from the entry's folded
-// versions as a standing path's (QD-672), so History lists the removed life's versions and their slot keys. Every
-// read by number must answer that version or one below it: an answer that does not descend, such as the removal again,
-// is a server repeating itself, which is the bug QD-672 fixed or a tamper, so the walk stops there with an alarm and
+// Lives (§11.9's reply row; owner decision 380; QD-888). A creation names no version it replaces, and a removal names
+// only the number one past the path's last, so below each the walk asks by number alone, which evs answers with the
+// path's newest version or removal at or below it: below a creation, the removal that ended the path's earlier life,
+// then that life's versions, and so on down to the path's first creation, below which evs answers nothing and the
+// walk ends. So a removed path's walk lists the removed life's versions and their slot keys (QD-672), and a
+// re-created path's every life; a History that asks for the newest life alone (EvsReadArgs.NewestLife) ends at its
+// creation. Every read by number must answer that version or one below it, and one by number
+// alone one committed below the version listed above it: an answer that does not descend, such as the removal again,
+// is a server repeating itself, which is the bug QD-672 fixed, or a tamper, so the walk stops there with an alarm and
 // History gives the versions walked before it.
+//
+// A creation whose number passes its push's base by more than one took max(b, m) + 1 over a removal at the number
+// just below it (§11.7's versions row, I-EVS-8): on a ref that is no overlay, an answer below it that is not that
+// removal raises the version-rule alarm, the walk listing what evs served. Below an overlay's creation evs may answer
+// `base`, which ends the walk, its base ref's history being another ref's. A read below a creation or a removal that
+// evs refuses with a 429 or a 503, as it answers one past its scan bound, ends the walk with BelowUnknown set; any other
+// failure fails History, as a read's anywhere.
 //
 // Across path epochs: a version written in an epoch the request names no token path in is answered with its
 // statement alone, which the reader takes as E4 when its push id is the prev_push_id the newer version names, and
@@ -61,6 +72,12 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 	version := args.Version
 	var expectPushId []byte
 	var expectCommit uint64
+	// a read below a creation or a removal, by number alone (see the file header): the ref version of the one listed
+	// above it, which the answer must be committed below, and the number of the removal a creation's own number names
+	// below it, 0 for none
+	below := false
+	belowCommit := uint64(0)
+	impliedRemoval := uint64(0)
 	// each listed version's statement, beside history.Versions, and the first read's head and keys: what a repair's
 	// sealed metadata is read and opened with (markWrittenOver)
 	statements := []*EvsVerifiedStatement{}
@@ -73,6 +90,10 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		}
 		result, err := self.readPaths(ctx, refId, []*evsReadPath{path}, args.Fresh && version == args.Version)
 		if err != nil {
+			if evsError, ok := EvsErrorOf(err); below && ok && evsError.RefusesNothing() {
+				history.BelowUnknown = true
+				break
+			}
 			return nil, err
 		}
 		result.objects.close()
@@ -84,9 +105,16 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		}
 		verified := result.replies[0]
 		if verified.Base != nil {
-			return nil, ErrEvsOverlayBase
+			if len(history.Versions) == 0 {
+				return nil, ErrEvsOverlayBase
+			}
+			break
 		}
 		if verified.Absent {
+			if impliedRemoval != 0 {
+				// the creation's number names a removal below it that evs does not show
+				self.client.alarm(self.repoId, refId, SidecarEvsAlarmVersionRule, args.Path, nil)
+			}
 			if len(history.Versions) == 0 {
 				return nil, ErrEvsPathAbsent
 			}
@@ -98,9 +126,10 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 				return nil, err
 			}
 		}
-		// a read by number answers that version or one below it; anything else does not descend (see the file header)
-		descends := func(served uint64) bool {
-			if version == 0 || served <= version {
+		// a read by number answers that version or one below it, and one by number alone a version committed below
+		// the one listed above it; anything else does not descend (see the file header)
+		descends := func(served uint64, commitVersion uint64) bool {
+			if version == 0 || (served <= version && (!below || commitVersion < belowCommit)) {
 				return true
 			}
 			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, args.Path, nil)
@@ -108,8 +137,11 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		}
 		if verified.Removal != nil {
 			removal := verified.Removal
-			if !descends(removal.GetPathVersion()) {
+			if !descends(removal.GetPathVersion(), removal.GetRemovalVersion()) {
 				break
+			}
+			if impliedRemoval != 0 && removal.GetPathVersion() != impliedRemoval {
+				self.client.alarm(self.repoId, refId, SidecarEvsAlarmVersionRule, args.Path, nil)
 			}
 			pushId, _ := IdFromBytes(removal.GetPushId())
 			signerId, _ := IdFromBytes(verified.Statement.Push.GetSignerSidecarId())
@@ -130,13 +162,19 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			if removal.GetPathVersion() <= 1 {
 				break
 			}
+			// the life the removal ended: its last version, by number alone
 			version = removal.GetPathVersion() - 1
 			expectPushId, expectCommit = nil, 0
+			below, belowCommit, impliedRemoval = true, removal.GetRemovalVersion(), 0
 			continue
 		}
 		entry := verified.Entry
-		if !descends(entry.GetVersion()) {
+		if !descends(entry.GetVersion(), verified.CommitVersion) {
 			break
+		}
+		if impliedRemoval != 0 {
+			// a version where the creation's number names a removal: evs serves the life it ended as standing
+			self.client.alarm(self.repoId, refId, SidecarEvsAlarmVersionRule, args.Path, nil)
 		}
 		if expectPushId != nil && (!bytes.Equal(entry.GetPushId(), expectPushId) || verified.CommitVersion != expectCommit) {
 			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, args.Path, nil)
@@ -160,6 +198,8 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			}
 			slotIds = append(slotIds, slotId)
 		}
+		// a creation, base_entry_version 0, which its verified change shows
+		created := verified.Change.GetBaseEntryVersion() == 0
 		history.Versions = append(history.Versions, &EvsHistoryVersion{
 			Version:         entry.GetVersion(),
 			CommitVersion:   verified.CommitVersion,
@@ -167,6 +207,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			SignerSidecarId: info.SignerSidecarId,
 			ClientId:        info.ClientId,
 			Time:            info.Time,
+			Created:         created,
 			Versioning:      entry.GetVersioning(),
 			Ignored:         ignored,
 			State:           state,
@@ -175,11 +216,29 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			Epoch:           verified.Statement.Push.GetPathEpoch(),
 		})
 		statements = append(statements, &EvsVerifiedStatement{Version: verified.CommitVersion, Statement: verified.Statement})
-		if len(entry.GetPrevPushId()) == 0 || entry.GetVersion() <= 1 {
+		if entry.GetVersion() <= 1 {
+			break
+		}
+		if created && args.NewestLife {
+			break
+		}
+		if created {
+			// below a creation, by number alone: the removal that ended the path's earlier life, if one did
+			version = entry.GetVersion() - 1
+			expectPushId, expectCommit = nil, 0
+			below, belowCommit, impliedRemoval = true, verified.CommitVersion, 0
+			if result.head.Head.GetBase() == nil && verified.Statement.Push.GetBaseVersion()+1 < entry.GetVersion() {
+				impliedRemoval = entry.GetVersion() - 1
+			}
+			continue
+		}
+		if len(entry.GetPrevPushId()) == 0 {
+			// a write that names no version it replaces, which no honest writer makes: the walk ends with it
 			break
 		}
 		expectPushId, expectCommit = entry.GetPrevPushId(), entry.GetPrevCommitVersion()
 		version = entry.GetVersion() - 1
+		below, belowCommit, impliedRemoval = false, 0, 0
 	}
 	self.markWrittenOver(ctx, history, statements, head, keys)
 	if args.Provenance && head != nil {
@@ -191,6 +250,14 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		}
 	}
 	return history, nil
+}
+
+// Whether a caller paging History, whose last page ended at below (a creation or a removal), reads the next page's
+// error as History's BelowUnknown: evs refused the read of the number below it with a refusal that refuses nothing,
+// as History itself reads such a step within a page.
+func evsHistoryBelowUnread(below *EvsHistoryVersion, err error) bool {
+	evsError, ok := EvsErrorOf(err)
+	return below != nil && (below.Created || below.Removed) && ok && evsError.RefusesNothing()
 }
 
 // Marks each listed version a later listed repair names in its sealed written_over with that repair's path version
