@@ -889,11 +889,12 @@ FI-12  recovery: after a Postgres or site loss, the newest copy a device or dump
        network name, a login left for a reset) or keeps at the main dump's age (rows the sidecar dump does not
        name), and nothing erased or dropped (but as FI-5 allows), shredded or revoked returns; an object whose every
        shard exists survives a second host (§19)
-FI-13  accounting: (a) every metered byte debits at most once and, barring an unclean producer exit or a batch dropped
-       past its 10-min retry horizon, exactly once; (b) a period's billed quantity equals its rows' newest values; (c)
-       after each nightly pass, stored bytes equal the seg/, pack/ and hp/ objects' sizes plus the lengths heads and
-       log pages give for records still in batches, less objects only a hold keeps, objects held for a drop included,
-       and containers whose every record a newer container's pidx/ entry names (20.7); (d) 20.9's E-a to E-e (§20)
+FI-13  accounting: (a) every metered byte debits at most once and, barring an unclean producer exit, a batch dropped
+       past its 10-min retry horizon, or a network with no in-window balance, exactly once; (b) a period's billed
+       quantity equals its rows' newest values; (c) after each nightly pass, stored bytes equal the seg/, pack/ and
+       hp/ objects' sizes plus the lengths heads and log pages give for records still in batches, less objects only a
+       hold keeps, objects held for a drop included, and containers whose every record a newer container's pidx/
+       entry names (20.7); (d) 20.9's E-a to E-e (§20)
 FI-14  write budget: (a) with the budget on, on each metadata set's busiest drive not under heal (§19.6's governor
        skips one), the writes of classes other than P0 over any 24 h stay within 24 h of refill plus the bucket's
        depth (0.8 DWPD) and one 5 s interval's issue times the pricing error, less the P0 writes the bucket held in
@@ -1462,8 +1463,10 @@ FS-45  §20    a network near empty with N relayed pairs: grants shrink and spen
               debit per contract_id; Redis loss over-admits at most as for leases
 FS-46  §20    a data pack ending in a year and a team_credit ending in 30 days: escrow takes   FI-13d      T2+T3  M6-in
               the pack first; a partial settlement returns to the line first; a lease on the
-              line, the edge killed, 24 h later the reservation is gone with no debit; the
-              provider is paid at the line's rate
+              line, the edge killed, its lease token gone 15 min after the kill and the line's
+              reservation with it, with no debit (owner decision 517); a contract closed at
+              its deadline keeps bytes on the pack before the line; the provider is paid at
+              the line's rate
 FS-47  §20    at the exact storage limit, and spent: each maintenance push kind (DELETE,       FI-13c      T2+T3  M2-out;
               CONSUME, ERASE, BASE, PATH_EPOCH, config, re-seed) passes; a 1-byte ordinary                        §21 case
               push and a maintenance push naming a new segment are refused; on a synthetic                        at M5-out;

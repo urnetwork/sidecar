@@ -107,8 +107,11 @@ enum ProposalKind {
   PROPOSAL_KIND_AUTHORITY = 1;           // k of n (7.9's several row)
   PROPOSAL_KIND_RECOVERY_SCOPED = 2;     // a scoped recovery admission filed with self_admit off: completes on one
                                          //   cosign by an admission signer (7.9's self_admit row)
-  PROPOSAL_KIND_RESTORED = 3;            // a restored binding's scoped admission: activates at the window with no
-                                         //   counted cosign (owner decision 149)
+  PROPOSAL_KIND_RESTORED = 3;            // a restored binding's scoped admission filed with self_admit on: activates
+                                         //   at the window with no counted cosign (owner decision 149)
+  PROPOSAL_KIND_RESTORED_COSIGNED = 4;   // a restored binding's scoped admission filed with self_admit off: activates
+                                         //   at the window only with one admission signer's cosign among its signers
+                                         //   (owner decision 314; QD-952)
 }
 
 message ProjectionSettings {

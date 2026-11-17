@@ -858,9 +858,13 @@ func configAclBodyVerdict(statement *configStatement) *AclStatementVerdict {
 }
 
 // The kind an AuthorityProposal that took effect and stayed open takes on the rebuilt state (DESIGN-DETAILS 5.2.3: fixed
-// when it takes effect, from the signer's kind, the member's AdminSet standing and whether its binding is one a void
-// restored): a device's is k of n; a recovery key's is k of n for an AdminSet member, restored under a restored
-// binding, and otherwise recovery-scoped, since it took effect only with self_admit off.
+// when it takes effect, from the signer's kind, the member's AdminSet standing, whether its binding is one a void
+// restored and self_admit then): a device's is k of n; a recovery key's is k of n for an AdminSet member, under a
+// restored binding restored or, with self_admit off on the rebuilt rows, restored-cosigned (QD-952), and otherwise
+// recovery-scoped, since it took effect only with self_admit off. A tail entry's own self_admit is not in the rows a
+// base rebuilds from, so a proposal a base leaves in its tail takes that base's self_admit, at every reader alike: one
+// whose base's own head turns self_admit off or on changes kind there (question
+// proposal-kind-restored-cosigned-tail-self-admit).
 func configReapplyProposalKind(view *ConfigState, proposer ConfigSigner, proposed *configStatement) bridge.ProposalKind {
 	if proposer.Kind != ConfigSignerRecovery {
 		return bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY
@@ -872,8 +876,10 @@ func configReapplyProposalKind(view *ConfigState, proposer ConfigSigner, propose
 	switch {
 	case member != nil && configRoleInAdminSet(member.GetRole()):
 		return bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY
-	case view.BindingRestored(proposer.MemberId):
+	case view.BindingRestored(proposer.MemberId) && view.SelfAdmit():
 		return bridge.ProposalKind_PROPOSAL_KIND_RESTORED
+	case view.BindingRestored(proposer.MemberId):
+		return bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED
 	}
 	return bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED
 }
