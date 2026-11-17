@@ -1,14 +1,15 @@
 //go:build !ios_extension
 
-// Team's documents (ACL-M6-01; D-ACL-2, D-ACL-23, R-ACL-3, R-ACL-11; owner decisions 40, 74, 126, 179, 180):
+// Team's documents (ACL-M6-01; D-ACL-2, D-ACL-23, R-ACL-3, R-ACL-11; owner decisions 40, 74, 126, 179, 180, 344):
 //
 //	start        D-ACL-2 makes a tier's defaults a starting document. Team's, acl_team_start.hujson, holds §8.5's
-//	             grant 1 with plan-ACL-team-grant1-src's src, R-ACL-3's tag:recurd default, owned by every member so a
-//	             member's agents may carry it, and the implicit document's last rule, the team directory's reach
-//	             requests with autogroup:dst-owner. The first Owner's device saves it as the network's first document
-//	             through AclSave (acl_save.go's SaveAclTeamStart), so has_document holds from then on; a Team
-//	             narrows any rule, gives one two approvers or removes it as its own document, the starting one never
-//	             written again
+//	             grant 1 with plan-ACL-team-grant1-src's src and its via, autogroup:self, so a member's devices route
+//	             through each other as well as dial each other (owner decision 344), R-ACL-3's tag:recurd default,
+//	             owned by every member so a member's agents may carry it, and the implicit document's last rule, the
+//	             team directory's reach requests with autogroup:dst-owner. The first Owner's device saves it as the
+//	             network's first document through AclSave (acl_save.go's SaveAclTeamStart), so has_document holds
+//	             from then on; a Team narrows any rule, gives one two approvers or removes it as its own document, the
+//	             starting one never written again
 //	approvers    a requests rule's approvers: 2 lights up on Team: ACL-M2-07's quorum counts k, and validation takes
 //	             it only under acl_approvers_two
 //	scope hosts  Q-TLS-3's <host>.<scope> and *.<scope> as dns: hosts, the matching tls/<port>/ names and

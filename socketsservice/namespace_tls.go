@@ -194,7 +194,7 @@ type TlsListenFacts struct {
 	// may be (D-TLS-1). Empty in every network but one a hosted device was admitted to by mistake.
 	HostedSidecarIds []connect.Id `json:"hosted_sidecar_ids,omitempty"`
 	// What ScreenHost reads of the network beside its standing (§21.6): its verified domains (§7.6), its Team scope
-	// labels, and the hosts a reviewer allowed it (abuse_action screen_allow, ABUSE-M5-08), none before that lands.
+	// labels, and the hosts a reviewer allowed it (abuse_action screen_allow, ABUSE-M5-08's model).
 	VerifiedDomains    []string `json:"verified_domains,omitempty"`
 	ScopeLabels        []string `json:"scope_labels,omitempty"`
 	ScreenAllowedHosts []string `json:"screen_allowed_hosts,omitempty"`
