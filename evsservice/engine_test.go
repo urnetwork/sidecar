@@ -184,9 +184,24 @@ func newEvsFixtureWith(t *testing.T, adjust func(hostSettings *sidecartest.FakeH
 		t.Fatal(err)
 	}
 	t.Cleanup(engine.Close)
+	// owner decision 411: no request this engine answered left evs-7 a refusal without its code
+	t.Cleanup(func() {
+		serviceLog.stateLock.Lock()
+		defer serviceLog.stateLock.Unlock()
+		for _, entry := range serviceLog.entries {
+			if !testStatusSucceeded(entry.Status) && entry.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED {
+				t.Errorf("%s answered %d with no code", entry.Route, entry.Status)
+			}
+		}
+	})
 	return &evsFixture{
 		t: t, ctx: ctx, clock: clock, host: host, auth: auth, serviceLog: serviceLog, engine: engine, networkId: networkId,
 	}
+}
+
+// A 2xx, the only answers that carry no refusal.
+func testStatusSucceeded(status int) bool {
+	return 200 <= status && status < 300
 }
 
 // A sidecar's evs token for scopes, each repo:<id>:<role>.
@@ -208,7 +223,8 @@ func repoScope(repoId sidecar.Id, role string) string {
 	return "repo:" + repoId.String() + ":" + role
 }
 
-// One request through the engine's handler.
+// One request through the engine's handler. Every answer but a 2xx must be a refusal carrying its code, whose
+// status is the code's own (owner decision 411), which each request is held to here.
 func (self *evsFixture) serve(method string, path string, token string, body []byte) *httptest.ResponseRecorder {
 	request := httptest.NewRequestWithContext(self.ctx, method, path, strings.NewReader(string(body)))
 	if token != "" {
@@ -216,6 +232,14 @@ func (self *evsFixture) serve(method string, path string, token string, body []b
 	}
 	recorder := httptest.NewRecorder()
 	self.engine.Handler().ServeHTTP(recorder, request)
+	if !testStatusSucceeded(recorder.Code) {
+		reply := &protocol.EvsRefusalReply{}
+		if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil {
+			self.t.Errorf("%s %s answered %d with no refusal: %v", method, path, recorder.Code, err)
+		} else if status, ok := sidecar.EvsRefusalStatus(reply.GetCode()); !ok || status != recorder.Code {
+			self.t.Errorf("%s %s answered %d with code %s", method, path, recorder.Code, reply.GetCode())
+		}
+	}
 	return recorder
 }
 
@@ -291,12 +315,8 @@ func TestEvsEngineAnswersAMissingOrUnknownToken401(t *testing.T) {
 	fixture := newEvsFixture(t, probe.route)
 	repoId := testId("repo")
 	path := "/evs/v1/repos/" + sidecar.EvsKeyId(repoId) + "/probe"
-	if recorder := fixture.serve(http.MethodGet, path, "", nil); recorder.Code != http.StatusUnauthorized {
-		t.Errorf("no token: %d", recorder.Code)
-	}
-	if recorder := fixture.serve(http.MethodGet, path, "not-a-token", nil); recorder.Code != http.StatusUnauthorized {
-		t.Errorf("a guessed token: %d", recorder.Code)
-	}
+	requireRefusal(t, fixture.serve(http.MethodGet, path, "", nil), http.StatusUnauthorized, protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
+	requireRefusal(t, fixture.serve(http.MethodGet, path, "not-a-token", nil), http.StatusUnauthorized, protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
 	// a token for another audience verifies under the shared keys but is not evs's
 	sidecarId := testId("sidecar-a")
 	connectSidecarId := connect.Id(sidecarId)
@@ -305,12 +325,124 @@ func TestEvsEngineAnswersAMissingOrUnknownToken401(t *testing.T) {
 		Audience: "gkm", Scopes: []string{repoScope(repoId, "r")}, IssuedAt: fixture.clock.Now(),
 		ExpiresAt: fixture.clock.Now().Add(time.Minute),
 	})
-	if recorder := fixture.serve(http.MethodGet, path, gkmToken, nil); recorder.Code != http.StatusUnauthorized {
-		t.Errorf("a gkm token: %d", recorder.Code)
-	}
+	requireRefusal(t, fixture.serve(http.MethodGet, path, gkmToken, nil), http.StatusUnauthorized, protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
 	if probe.calls != 0 {
 		t.Errorf("the route ran %d times", probe.calls)
 	}
+	// each answer's evs-7 line names its code
+	if entry := fixture.serviceLog.last(); entry.Status != http.StatusUnauthorized || entry.Code != protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED {
+		t.Errorf("evs-7 logged %d %s", entry.Status, entry.Code)
+	}
+}
+
+// QD-927's 401 on the real routes: a token that does not authenticate (none, one guessed, one expired, another
+// audience's) answers 401 UNAUTHENTICATED on a read, a push and the placement before anything is read; a token whose
+// sidecar a rev/ object voids answers it on the push and the placement, which read rev/, while a read goes on for the
+// token's life and reads no rev/ (owner decision 377), here to the 404 of a repo never placed. A token the state no
+// longer grants is 403 SCOPE, told apart by its code.
+func TestEvsEngineAnswersUnauthenticatedOnTheRoutes(t *testing.T) {
+	fixture := newEvsFixture(t)
+	repoId := testId("repo")
+	sidecarId := testId("sidecar-a")
+	fixture.projectRepo(repoId, sidecarId)
+	repoPath := "/evs/v1/repos/" + sidecar.EvsKeyId(repoId)
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		role   string
+	}{
+		{name: "read", method: http.MethodPost, path: repoPath + "/read", role: "r"},
+		{name: "push", method: http.MethodPost, path: repoPath + "/push", role: "rw"},
+		{name: "placement", method: http.MethodPut, path: repoPath, role: "admin"},
+	}
+	connectSidecarId := connect.Id(sidecarId)
+	expired := fixture.host.Authenticator.Issue(&sidecar.Principal{
+		NetworkId: fixture.networkId, ClientId: connect.Id(testId("client-side")), SidecarId: &connectSidecarId,
+		Audience: EvsAudience, Scopes: []string{repoScope(repoId, "admin")}, IssuedAt: fixture.clock.Now().Add(-time.Hour),
+		ExpiresAt: fixture.clock.Now().Add(-time.Minute),
+	})
+	gkmToken := fixture.host.Authenticator.Issue(&sidecar.Principal{
+		NetworkId: fixture.networkId, ClientId: connect.Id(testId("client-side")), SidecarId: &connectSidecarId,
+		Audience: "gkm", Scopes: []string{repoScope(repoId, "admin")}, IssuedAt: fixture.clock.Now(),
+		ExpiresAt: fixture.clock.Now().Add(time.Minute),
+	})
+	for _, route := range routes {
+		for name, token := range map[string]string{"no": "", "a guessed": "not-a-token", "an expired": expired, "a gkm": gkmToken} {
+			recorder := fixture.serve(route.method, route.path, token, nil)
+			if recorder.Code != http.StatusUnauthorized || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED {
+				t.Errorf("%s with %s token: %d %s", route.name, name, recorder.Code, refusalOf(t, recorder).GetCode())
+			}
+		}
+	}
+	if fixture.auth.revocationCount != 0 || fixture.placement(repoId) != nil {
+		t.Fatalf("a token that does not authenticate reached rev/ (%d reads) or placed the repo", fixture.auth.revocationCount)
+	}
+
+	// a removed sidecar's unexpired token: void at evs through rev/ on every write
+	fixture.auth.revokedSidecarIds[sidecarId] = true
+	for _, route := range routes {
+		recorder := fixture.serve(route.method, route.path, fixture.token(sidecarId, repoScope(repoId, route.role)), nil)
+		switch route.name {
+		case "read":
+			requireRefusal(t, recorder, http.StatusNotFound, protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
+		default:
+			requireRefusal(t, recorder, http.StatusUnauthorized, protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
+		}
+	}
+	if fixture.auth.revocationCount != 2 || fixture.placement(repoId) != nil {
+		t.Errorf("%d rev/ reads, want the push's and the placement's; placed %t", fixture.auth.revocationCount, fixture.placement(repoId) != nil)
+	}
+	delete(fixture.auth.revokedSidecarIds, sidecarId)
+
+	// the state no longer granting the right is 403 SCOPE, which a new token does not change
+	fixture.auth.grant(sidecarId, repoId, 0)
+	requireRefusal(t, fixture.serve(http.MethodPut, repoPath, fixture.token(sidecarId, repoScope(repoId, "admin")), nil),
+		http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+}
+
+// Owner decision 411's rule at the engine: no answer but a 2xx goes out without its code. A handler refusing with a
+// code §11.8's table does not have, code 0 among them, alarms and answers 503 UNAVAILABLE, and a path or method no
+// route takes answers 404 NOT_FOUND, each with its evs-7 line.
+func TestEvsEngineAnswersNoRefusalWithoutItsCode(t *testing.T) {
+	refusing := func(pattern string, reply func() *protocol.EvsRefusalReply) *EvsRoute {
+		return &EvsRoute{
+			Method: http.MethodGet, Pattern: pattern, Name: "GET " + pattern, Rights: sidecar.AclEvsRead,
+			Serve: func(request *EvsRequest) { request.Refuse(reply()) },
+		}
+	}
+	fixture := newEvsFixture(t,
+		refusing("/evs/v1/repos/{repo_id}/uncoded", func() *protocol.EvsRefusalReply { return &protocol.EvsRefusalReply{RetryAfterMs: 2000} }),
+		refusing("/evs/v1/repos/{repo_id}/unknown", func() *protocol.EvsRefusalReply { return &protocol.EvsRefusalReply{Code: 999} }),
+	)
+	repoId := testId("repo")
+	sidecarId := testId("sidecar-a")
+	fixture.auth.grant(sidecarId, repoId, sidecar.AclEvsRead)
+	token := fixture.token(sidecarId, repoScope(repoId, "r"))
+	repoPath := "/evs/v1/repos/" + sidecar.EvsKeyId(repoId)
+	uncoded := fixture.serve(http.MethodGet, repoPath+"/uncoded", token, nil)
+	requireRefusal(t, uncoded, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	if refusalOf(t, uncoded).GetRetryAfterMs() != 2000 || uncoded.Header().Get("Retry-After") != "2" {
+		t.Errorf("the reply's other fields were not kept: %v, Retry-After %q", refusalOf(t, uncoded), uncoded.Header().Get("Retry-After"))
+	}
+	requireRefusal(t, fixture.serve(http.MethodGet, repoPath+"/unknown", token, nil), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	if count := fixture.host.Metrics.Value("urnetwork_evs_alarms_total", "refusal_code"); count != 2 {
+		t.Errorf("%v refusal_code alarms, want 2", count)
+	}
+	// no route: neither a path evs does not serve, nor a route's path under another method
+	for _, unrouted := range []struct{ method, path string }{
+		{method: http.MethodGet, path: "/evs/v1/nothing"},
+		{method: http.MethodGet, path: "/"},
+		{method: http.MethodPatch, path: repoPath},
+		{method: http.MethodGet, path: repoPath + "/push"},
+	} {
+		requireRefusal(t, fixture.serve(unrouted.method, unrouted.path, token, nil), http.StatusNotFound, protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
+		if entry := fixture.serviceLog.last(); entry.Route != evsUnroutedRouteName || entry.Code != protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND {
+			t.Errorf("%s %s: evs-7 logged %s %s", unrouted.method, unrouted.path, entry.Route, entry.Code)
+		}
+	}
+	// and a route's own pattern still wins over the catch-all
+	requireRefusal(t, fixture.serve(http.MethodPost, repoPath+"/push", "", nil), http.StatusUnauthorized, protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
 }
 
 func TestEvsEngineAnswersAnAuthenticatorThatCannotTell503(t *testing.T) {
@@ -494,9 +626,7 @@ func TestEvsEngineReadsRevocationOnWritesOnly(t *testing.T) {
 	}
 	// a removed sidecar's unexpired token: void at evs through rev/
 	fixture.auth.revokedSidecarIds[sidecarId] = true
-	if recorder := fixture.serve(http.MethodPost, writePath, token, nil); recorder.Code != http.StatusUnauthorized {
-		t.Errorf("a revoked subject's write: %d", recorder.Code)
-	}
+	requireRefusal(t, fixture.serve(http.MethodPost, writePath, token, nil), http.StatusUnauthorized, protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
 	delete(fixture.auth.revokedSidecarIds, sidecarId)
 	fixture.auth.revocationErr = errors.New("rev/ unreadable")
 	requireRefusal(t, fixture.serve(http.MethodPost, writePath, token, nil), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)

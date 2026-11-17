@@ -5,6 +5,7 @@
 //	ur share add <path> [--count=<n>] [--expires=<d>] [--network=<name>]
 //	                                                hashes the file, prints <net>:share/<token>#<k>
 //	ur share get <link> <out>                       redeems a link into <out>, resuming <out>.part
+//	ur share get - <out>                            the same, the link read from stdin
 //	ur share rm <token> [--network=<name>]          ends a share early, resetting its live streams
 //
 // This process draws the token and the 256-bit secret (sidecar.NewShareCredentials) and hashes the file, so the daemon's
@@ -16,11 +17,18 @@
 // ur share get dials the share through the daemon's socket hello mode holding the link's sidecar_id, so the daemon's
 // dial refuses before OPEN a listener whose verified Hello names another sidecar, within the sharer's network only, and
 // runs the getter's half here (sidecar.SharePart). The link is an argument, as §9.9 writes it, so on a shared host
-// another user's ps can read it while the get runs.
+// another user reads it through ps or /proc/<pid>/cmdline while the get runs, and the shell keeps it in its history.
+// `-` in its place keeps it out of all three (owner decision 336): the link is then one line of stdin or, when stdin
+// is a terminal, a line typed or pasted on /dev/tty with echo off, as a pass is (tty.go), so it never shows on the
+// screen either. A line that is empty, too long or no link is refused before anything is dialed or written, and no
+// refusal repeats it (I-13). The line read is zeroed once it parses and the secret once the get ends; the parse's
+// copy of the text is a string, which nothing can zero.
 
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -37,6 +45,9 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
+// What ur share get takes in place of <link> to read the link from stdin (owner decision 336).
+const urShareLinkFromStdin = "-"
+
 func init() {
 	registerUrCommand(&urCommand{
 		name: "share",
@@ -44,6 +55,7 @@ func init() {
 			"  ur share",
 			"  ur share add <path> [--count=<n>] [--expires=<d>] [--network=<name>]",
 			"  ur share get <link> <out>",
+			"  ur share get " + urShareLinkFromStdin + " <out>",
 			"  ur share rm <token> [--network=<name>]",
 		}, "\n"),
 		summary: "share a file by a link that redeems a set number of times before it expires",
@@ -74,8 +86,19 @@ func runUrShare(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		expires, _ := options.String("--expires")
 		return runUrShareAdd(ctx, cli, path, count, expires, network)
 	case options["get"] == true:
-		link, _ := options.String("<link>")
+		linkText, _ := options.String("<link>")
 		out, _ := options.String("<out>")
+		var link *sidecar.ShareLink
+		var err error
+		// a lone - matches both get lines, and docopt hands it to whichever comes first
+		if options[urShareLinkFromStdin] == true || linkText == urShareLinkFromStdin {
+			link, err = readUrShareLink(cli)
+		} else {
+			link, err = sidecar.ParseShareLink(linkText)
+		}
+		if err != nil {
+			return err
+		}
 		return runUrShareGet(ctx, cli, link, out)
 	case options["rm"] == true:
 		token, _ := options.String("<token>")
@@ -189,11 +212,57 @@ func runUrShareAdd(ctx context.Context, cli *urCli, path string, countText strin
 	return nil
 }
 
-func runUrShareGet(ctx context.Context, cli *urCli, linkText string, out string) error {
-	link, err := sidecar.ParseShareLink(linkText)
-	if err != nil {
-		return err
+// The link of `ur share get -`: one line of stdin or, when stdin is a terminal, one typed on /dev/tty with echo off,
+// refused where /dev/tty does not open rather than read echoed. The line's ending and the blanks around the link are
+// dropped. A line that is empty, longer than ShareLinkByteCount or no link is refused, and no refusal repeats what
+// was read (I-13).
+func readUrShareLink(cli *urCli) (*sidecar.ShareLink, error) {
+	var line []byte
+	if cli.stdinIsTerminal() {
+		tty, err := cli.openTty()
+		if err != nil {
+			return nil, fmt.Errorf("stdin is a terminal, and a link typed there is read only from /dev/tty with echo off, which did not open (%w): pipe the link in instead", err)
+		}
+		defer tty.Close()
+		fmt.Fprint(tty, "share link (not echoed): ")
+		line, err = tty.readSecretLine()
+		fmt.Fprint(tty, "\n")
+		if err != nil {
+			return nil, fmt.Errorf("no link was read from the terminal: %w", err)
+		}
+	} else {
+		// ReadSlice answers a slice of the reader's own buffer, so zeroing the line zeroes the buffer's copy too
+		reader := bufio.NewReaderSize(cli.stdin, cli.settings.ShareLinkByteCount+1)
+		var err error
+		line, err = reader.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			clear(line)
+			return nil, errors.New("stdin's first line is longer than any share link")
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			clear(line)
+			return nil, fmt.Errorf("no link was read from stdin: %w", err)
+		}
 	}
+	defer clear(line)
+	text := bytes.TrimSpace(line)
+	if len(text) == 0 {
+		return nil, errors.New("no link was read: ur share get - <out> takes one line, the link ur share add printed")
+	}
+	if cli.settings.ShareLinkByteCount < len(text) {
+		return nil, errors.New("the line read is longer than any share link")
+	}
+	link, err := sidecar.ParseShareLink(string(text))
+	if err != nil {
+		// the parse's error repeats nothing of the text, and this names only the sentinel, so neither can
+		return nil, fmt.Errorf("the line read is %w", sidecar.ErrShareLink)
+	}
+	return link, nil
+}
+
+// Redeems link into out. The secret is zeroed once the get ends.
+func runUrShareGet(ctx context.Context, cli *urCli, link *sidecar.ShareLink, out string) error {
+	defer clear(link.Secret)
 	absolute, err := filepath.Abs(out)
 	if err != nil {
 		return err

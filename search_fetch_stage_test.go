@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand"
 	"slices"
 	"strconv"
@@ -500,6 +501,48 @@ func TestAFrameCursorReadsWhatTheFileHolds(t *testing.T) {
 	}
 	if err := cursor.read(len(file)-10, make([]byte, 11)); !errors.Is(err, errIndexMalformed) {
 		t.Fatalf("a read past the file: %v", err)
+	}
+}
+
+// A window that crosses into the next frame keeps what it took of the frame it leaves as the tail: the windows that
+// start back in that tail, wholly inside it or reaching into the frame held, come from what the cursor holds with no
+// frame read again, and one that starts before the tail reads its frame again, whole.
+func TestAFrameCursorServesItsTail(t *testing.T) {
+	file := make([]byte, 2*EvsRecordFrameByteCount+100)
+	for index := range file {
+		file[index] = byte(index*7 + index/251)
+	}
+	source := &testCountingFrames{file: file, reads: map[int]int{}}
+	cursor := indexNewFrameCursor(source)
+	frameEnd := EvsRecordFrameByteCount
+	crossing := frameEnd - 100
+	steps := []struct {
+		label    string
+		position int
+		end      int
+		max      int
+		// each frame's reads after the step
+		reads map[int]int
+	}{
+		{label: "a window crossing into frame 1", position: crossing, end: len(file), max: 300, reads: map[int]int{0: 1, 1: 1}},
+		{label: "a window inside the tail", position: crossing + 10, end: frameEnd, max: 50, reads: map[int]int{0: 1, 1: 1}},
+		{label: "a window from the tail into frame 1", position: crossing + 20, end: len(file), max: 200, reads: map[int]int{0: 1, 1: 1}},
+		{label: "a window inside frame 1", position: frameEnd + 10, end: len(file), max: 100, reads: map[int]int{0: 1, 1: 1}},
+		{label: "a window before the tail", position: crossing - 50, end: frameEnd, max: 20, reads: map[int]int{0: 2, 1: 1}},
+		{label: "an empty window", position: 5, end: 5, max: 10, reads: map[int]int{0: 2, 1: 1}},
+	}
+	for _, step := range steps {
+		window, err := cursor.window(step.position, step.end, step.max)
+		if err != nil {
+			t.Fatalf("%s: %v", step.label, err)
+		}
+		want := file[step.position:min(step.end, step.position+step.max)]
+		if !bytes.Equal(window, want) {
+			t.Fatalf("%s: %d B that differ from the file's %d", step.label, len(window), len(want))
+		}
+		if !maps.Equal(source.reads, step.reads) {
+			t.Fatalf("%s: frame reads %v, not %v", step.label, source.reads, step.reads)
+		}
 	}
 }
 
