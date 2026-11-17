@@ -68,3 +68,8 @@ D['D-OPS-20'] = ("Both clusters run an in-house `urnetwork/minio` build: commits
 D['D-SMTP-11'] = ("The engine is smtpedgeservice in server/cli/smtpedge, its report intake in mxedge-platform from M5; provers are "
                   "smtpproof.")
 D['D-EVS-33'] = "One write budget per metadata cluster (0.8 DWPD, 50% write IOPS) but P0; P1 prepays P2's wallet; heaviest refused first."
+# §20's fold (2026-11-16): Team periods granted at their anchor (owner decision 514) and local pre-checks dark by
+# QuotaLimits.enforced (520).
+assert D['D-QUOTA-8'].startswith('Taskworker rolls usage') and D['D-QUOTA-2'].startswith('Limits and prices'), 'QUOTA rows moved'
+D['D-QUOTA-2'] = "Limits and prices come only from pro.yml with overrides; limits and local pre-checks ship dark; a missing price withholds overage."
+D['D-QUOTA-8'] = "Taskworker rolls usage into daily rows for pre-aggregated daily Stripe meters, and grants each Team period at its anchor."

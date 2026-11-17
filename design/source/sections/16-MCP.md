@@ -1636,7 +1636,8 @@ endorse     directory_request is O: §5.4's Authorize builds a CanonicalAction o
             (16.8)
 limits      §20.4's sidecar_abuse keys (D-QUOTA-11), which the requesting daemon and the directory's readers read
             through QuotaLimits (GET /sidecar/limits; §20.7), so a §21 tightening by network_sidecar_limit rows
-            reaches both (§21.7): per requester directory_requests_pending 20, directory_requests_per_day 50 and
+            reaches both (§21.7), and which they apply only while its enforced is true (§20.5; owner decision
+            520): per requester directory_requests_pending 20, directory_requests_per_day 50 and
             directory_requests_per_run 5, past which the daemon refuses and readers ignore and alarm; per target
             directory_target_pending 100, older pending requests showing first; directory_card_bytes 16 KiB;
             approvals are §7.9 statements inside config_statements_per_day; a request counts as pending while its

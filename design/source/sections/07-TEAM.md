@@ -1131,14 +1131,14 @@ stale    (D-TEAM-29) the device that admits a member's page Worker (§18.8), the
          until the member's consented device answers, without bound for a member with none, such as one
          with only page Workers, which §8.5 never consents, or one that never answers (7.18)
 cleanup  (D-TEAM-29) from 90% of the network's config_admissions, which an admin's device reads from GET
-         /sidecar/limits, where it also sees §21.7's rows (§20.4), until the count falls below it, every
-         admin device raises admissions_near_cap (§5.4) and lists, per member, its admitted page Workers
-         but its newest, oldest first, each with its admission time, rows' admitted_time_ms beside its
-         position (owner decision 307), and its leaf's last change, read from its credential as §10.9 reads
-         it, where a group the device is a leaf of shows one; an admin's revoke signs
-         SidecarRevoke{reason: removed} for those listed (signer row; an AdminSet member's at k > 1 as
-         proposals; 7.9's presence row), so Workers no member device answers for are freed before api
-         refuses an admission at the cap (§20.7); one still in use signs out and is enrolled again
+         /sidecar/limits, where it also sees §21.7's rows (§20.4), while the body's enforced is true (§20.5;
+         owner decision 520), until the count falls below it, every admin device raises admissions_near_cap
+         (§5.4) and lists, per member, its admitted page Workers but its newest, oldest first, each with its
+         admission time, rows' admitted_time_ms beside its position (owner decision 307), and its leaf's last
+         change, read from its credential as §10.9 reads it, where a group the device is a leaf of shows one; an
+         admin's revoke signs SidecarRevoke{reason: removed} for those listed (signer row; an AdminSet member's
+         at k > 1 as proposals; 7.9's presence row), so Workers no member device answers for are freed before
+         api refuses an admission at the cap (§20.7); one still in use signs out and is enrolled again
 agents   (D-TEAM-31) an admin's or tag owner's device revokes a tagged sidecar, and an admin's or its
          sponsor's suspends or unsuspends it (§8.8's signers), by ur admin agents revoke|suspend|unsuspend
          <name|sidecar_id> [--compromise [--since <time|position>]], confirmed on /dev/tty and never

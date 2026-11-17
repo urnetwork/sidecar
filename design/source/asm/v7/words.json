@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9716,
-  "code_words": 19389,
+  "code_words": 19495,
   "ceiling": 3000,
   "over": 6716,
   "over_pct": 223.9
@@ -57,7 +57,7 @@
   "num": 7,
   "code": "TEAM",
   "words": 12449,
-  "code_words": 12904,
+  "code_words": 12914,
   "ceiling": 3500,
   "over": 8949,
   "over_pct": 255.7
@@ -74,11 +74,11 @@
  {
   "num": 9,
   "code": "SOCK",
-  "words": 5270,
+  "words": 5329,
   "code_words": 1628,
   "ceiling": 3000,
-  "over": 2270,
-  "over_pct": 75.7
+  "over": 2329,
+  "over_pct": 77.6
  },
  {
   "num": 10,
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 22859,
-  "code_words": 48622,
+  "words": 22902,
+  "code_words": 48647,
   "ceiling": 5000,
-  "over": 17859,
-  "over_pct": 357.2
+  "over": 17902,
+  "over_pct": 358.0
  },
  {
   "num": 12,
@@ -110,20 +110,20 @@
  {
   "num": 13,
   "code": "TLS",
-  "words": 9151,
+  "words": 9155,
   "code_words": 996,
   "ceiling": 3800,
-  "over": 5351,
-  "over_pct": 140.8
+  "over": 5355,
+  "over_pct": 140.9
  },
  {
   "num": 14,
   "code": "SMTP",
-  "words": 9617,
+  "words": 9632,
   "code_words": 1396,
   "ceiling": 4500,
-  "over": 5117,
-  "over_pct": 113.7
+  "over": 5132,
+  "over_pct": 114.0
  },
  {
   "num": 15,
@@ -138,7 +138,7 @@
   "num": 16,
   "code": "MCP",
   "words": 14874,
-  "code_words": 19210,
+  "code_words": 19224,
   "ceiling": 3500,
   "over": 11374,
   "over_pct": 325.0
@@ -173,11 +173,11 @@
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 4737,
-  "code_words": 3994,
+  "words": 5505,
+  "code_words": 5310,
   "ceiling": 2500,
-  "over": 2237,
-  "over_pct": 89.5
+  "over": 3005,
+  "over_pct": 120.2
  },
  {
   "num": 21,
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7357,
-  "code_words": 36323,
+  "code_words": 36354,
   "ceiling": 2500,
   "over": 4857,
   "over_pct": 194.3
