@@ -302,6 +302,14 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{
 			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop",
 			"TestHygieneFailsOnAnExternalTestImportingMlsinterop", "TestHygieneFailsOnAQuotedPathOfCliOutsideAnImport",
+			"TestHygieneFailsOnAnEscapedQuotedPathOfCli",
+		},
+	},
+	{
+		row: "hygiene", item: "a path of this repository that the release's rewrite leaves without its /vN, such as one on a line naming the root beside a subpackage (§4.9; QD-1003)",
+		rule: (*repository).unversionedReleasePathFindings,
+		plantedTests: []string{
+			"TestHygieneFailsOnALineNamingTheRootBesideASubpackage", "TestHygieneFailsOnASubpackageOnALineHoldingAVersion",
 		},
 	},
 	{

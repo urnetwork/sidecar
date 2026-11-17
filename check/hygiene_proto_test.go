@@ -280,10 +280,24 @@ func (self *repository) unregeneratedFindings(t testing.TB) []string {
 	return findings
 }
 
-// build/all/run.sh:1560-1566 as this repository's release applies them to one module path: its
-// exact quoted path and each subpackage, on a line not already carrying /vN. smtpproof's go first in
-// the release, so a line naming it is skipped by the root's pass that follows.
+// build/all/run.sh's rewrite of a module path the release tags, as go_mod_edit_module or
+// go_mod_edit_require and then go_edit_require_subpackages apply it: go_edit_require's exact quoted
+// path on every line first, then the subpackage pass. The first can give a line the /vN that the
+// second then skips, so a line naming the root beside a subpackage keeps the subpackage's development
+// path, as run.sh leaves it (QD-1003).
 func releaseRewritePath(content string, modulePath string, suffix string) string {
+	return releaseRewriteSubpackages(releaseRewriteExact(content, modulePath, suffix), modulePath, suffix)
+}
+
+// build/all/run.sh's go_edit_require: the exact quoted path, wherever it stands.
+func releaseRewriteExact(content string, modulePath string, suffix string) string {
+	return strings.ReplaceAll(content, `"`+modulePath+`"`, `"`+modulePath+suffix+`"`)
+}
+
+// build/all/run.sh's go_edit_require_subpackages: the quoted path and each subpackage, on a line not
+// already carrying /vN. smtpproof's and coretest's paths take this pass alone, ahead of their roots',
+// so a line naming one is skipped by the root's that follows.
+func releaseRewriteSubpackages(content string, modulePath string, suffix string) string {
 	quotedPathPattern := regexp.MustCompile(`"` + regexp.QuoteMeta(modulePath) + `([^"]*)"`)
 	lines := strings.Split(content, "\n")
 	for index, line := range lines {
@@ -292,6 +306,30 @@ func releaseRewritePath(content string, modulePath string, suffix string) string
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// build/all/run.sh's rewrites of one .go file or Makefile of this repository, in its order.
+// sidecar_release_edit runs over the whole tree: smtpproof's subpackage pass, before the root's so that
+// smtpproof's paths take its own tag; the root's, connect's and glog's paths; then coretest's
+// subpackage pass, before operator-core's. Below smtpproof/, smtpproof_release_edit then runs the
+// exact pass of each module path it requires, and below cli/ and mlsinterop/ sidecar_cli_release_edit
+// does the same, which can still reach smtpproof's exact path there. relativePath is the file's slash
+// path from the repository's top, in either layout.
+func releaseRewriteRepository(content string, relativePath string, suffix string) string {
+	smtpproofPath := sidecarBasePath + "/smtpproof"
+	content = releaseRewriteSubpackages(content, smtpproofPath, suffix)
+	content = releaseRewritePath(content, sidecarBasePath, suffix)
+	content = releaseRewritePath(content, connectBasePath, suffix)
+	content = releaseRewritePath(content, glogBasePath, suffix)
+	content = releaseRewriteSubpackages(content, operatorCoreTestBasePath, suffix)
+	content = releaseRewritePath(content, operatorCoreBasePath, suffix)
+	nestedModule, _, _ := strings.Cut(relativePath, "/")
+	if nestedModule == "smtpproof" || slices.Contains(untaggedModuleNames, nestedModule) {
+		for _, modulePath := range []string{smtpproofPath, sidecarBasePath, connectBasePath, glogBasePath, operatorCoreBasePath} {
+			content = releaseRewriteExact(content, modulePath, suffix)
+		}
+	}
+	return content
 }
 
 // The rewrite of this repository's root path, which is all a generated file here names.

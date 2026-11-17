@@ -8,10 +8,11 @@
 // refuses them, the resolver's rule follows the zones, and close removes everything. Under exits the carved addresses
 // take their host routes (QD-869): an off-link resolver one by the default route's next hop and an on-link one none,
 // a carve that changes adds and removes them, a default route that moves takes them with it, and leaving exits and
-// closing remove them all. IPv6's halves go on after IPv4's and come off after them (QD-881), a refusal of them holding
-// the exits where the host has an IPv6 default route and leaving IPv4's standing where it has none, and a row of
-// either family on link names that family's unspecified next hop. A real adapter, which takes an elevated run on
-// Windows, is not run here.
+// closing remove them all; an off-link IPv6 resolver takes one by the IPv6 default route's link-local next hop the same
+// way, beside IPv4's, which stand by IPv4's halves as IPv6's stand by IPv6's (QD-971). IPv6's halves go on after
+// IPv4's and come off after them (QD-881), a refusal of them holding the exits where the host has an IPv6 default
+// route and leaving IPv4's standing where it has none, and a row of either family on link names that family's
+// unspecified next hop. A real adapter, which takes an elevated run on Windows, is not run here.
 
 package main
 
@@ -121,12 +122,15 @@ func (self *testWindowsIpHelper) DeleteHostRoute(luid uint64, address netip.Addr
 	return nil
 }
 
-// A host route as the table shows it: on link, the unspecified next hop.
+// A host route of either family as the table shows it: on link, the unspecified next hop of its family.
 func testWindowsHostRoute(luid uint64, address netip.Addr, nextHop netip.Addr) urTunWindowsRoute {
 	if !nextHop.IsValid() {
 		nextHop = netip.IPv4Unspecified()
+		if address.Is6() {
+			nextHop = netip.IPv6Unspecified()
+		}
 	}
-	return urTunWindowsRoute{dst: netip.PrefixFrom(address, 32), luid: luid, nextHop: nextHop,
+	return urTunWindowsRoute{dst: netip.PrefixFrom(address, address.BitLen()), luid: luid, nextHop: nextHop,
 		protocol: windows.MIB_IPPROTO_NETMGMT}
 }
 
@@ -527,8 +531,9 @@ func TestTunWindowsExitsTakeIpv6sHalves(t *testing.T) {
 	}
 }
 
-// A route row on link names the unspecified next hop of its prefix's family, an IPv6 half's IPv6's; one by a next hop
-// names it.
+// A route row on link names the unspecified next hop of its prefix's family, an IPv6 half's and an IPv6 host route's
+// IPv6's; one by a next hop names it, an IPv6 host route's link-local one among them (QD-971), and a next hop of
+// another family is none.
 func TestTunWindowsRouteRowsNameTheirFamilysNextHop(t *testing.T) {
 	for _, c := range []struct {
 		prefix  netip.Prefix
@@ -539,6 +544,11 @@ func TestTunWindowsRouteRowsNameTheirFamilysNextHop(t *testing.T) {
 		{prefix: urTunExitsIpv6Halves()[1], want: netip.IPv6Unspecified()},
 		{prefix: netip.MustParsePrefix("203.0.113.53/32"), nextHop: netip.MustParseAddr("192.0.2.1"),
 			want: netip.MustParseAddr("192.0.2.1")},
+		{prefix: netip.MustParsePrefix("2001:db8:ffff::53/128"), nextHop: netip.MustParseAddr("fe80::1"),
+			want: netip.MustParseAddr("fe80::1")},
+		{prefix: netip.MustParsePrefix("2001:db8:ffff::53/128"), want: netip.IPv6Unspecified()},
+		{prefix: netip.MustParsePrefix("2001:db8:ffff::53/128"), nextHop: netip.MustParseAddr("192.0.2.1"),
+			want: netip.IPv6Unspecified()},
 	} {
 		row, err := urTunWindowsRouteRow(0x99, c.prefix, c.nextHop, 0)
 		if err != nil {
@@ -552,12 +562,14 @@ func TestTunWindowsRouteRowsNameTheirFamilysNextHop(t *testing.T) {
 }
 
 // The table of a host on 192.0.2.0/24 by Ethernet, the adapter Windows chooses, with Wi-Fi beside it: each adapter's
-// default route by its gateway, its subnet on link, Ethernet's own address local, and loopback's.
+// default route by its gateway, Wi-Fi's IPv6 one too, which names no next hop, its subnet on link, Wi-Fi's IPv6 prefix
+// among them, Ethernet's own address local, and loopback's.
 func testWindowsHostTable() []urTunWindowsRoute {
 	return []urTunWindowsRoute{
 		{dst: netip.MustParsePrefix("0.0.0.0/0"), luid: 0x20, index: 20, nextHop: netip.MustParseAddr("198.51.100.1")},
 		{dst: netip.MustParsePrefix("0.0.0.0/0"), luid: 0x10, index: 10, nextHop: netip.MustParseAddr("192.0.2.1")},
 		{dst: netip.MustParsePrefix("::/0"), luid: 0x20, index: 21},
+		{dst: netip.MustParsePrefix("2001:db8::/64"), luid: 0x20, index: 21, nextHop: netip.IPv6Unspecified()},
 		{dst: netip.MustParsePrefix("192.0.2.0/24"), luid: 0x10, index: 10, nextHop: netip.IPv4Unspecified()},
 		{dst: netip.MustParsePrefix("192.0.2.10/32"), luid: 0x10, index: 10, nextHop: netip.IPv4Unspecified(),
 			protocol: windows.MIB_IPPROTO_LOCAL},
@@ -566,8 +578,8 @@ func testWindowsHostTable() []urTunWindowsRoute {
 	}
 }
 
-// The carve of that host: its own address, its gateway, a resolver on its link, loopback, an IPv6 address, and
-// resolvers beyond its networks.
+// The carve of that host: its own address, its gateway, a resolver on its link, loopback, an IPv6 resolver on Wi-Fi's
+// link, and resolvers beyond its networks.
 func testWindowsCarve(offLink ...string) []netip.Addr {
 	carve := []netip.Addr{netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.1"),
 		netip.MustParseAddr("192.0.2.53"), netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("2001:db8::53")}
@@ -579,9 +591,9 @@ func testWindowsCarve(offLink ...string) []netip.Addr {
 
 // Under exits a carved address the host reaches only by its default route, an off-link resolver, takes a host route
 // by that route's next hop on its adapter, before the halves go on; the host's own address, its gateway, an on-link
-// resolver, loopback and an IPv6 address take none. Off exits the carve waits. A sync that changed nothing writes
-// nothing, though the host route now reads in the table; a carve that changes adds and removes them; and leaving exits
-// takes them off after the halves and before the binding.
+// resolver, loopback and an on-link IPv6 resolver take none. Off exits the carve waits. A sync that changed nothing
+// writes nothing, though the host route now reads in the table; a carve that changes adds and removes them; and
+// leaving exits takes them off after the halves and before the binding.
 func TestTunWindowsCarvedHostRoutesFollowTheCarve(t *testing.T) {
 	world := newTestWindowsWorld(t)
 	world.ipHelper.table = testWindowsHostTable()
@@ -906,6 +918,329 @@ func TestTunWindowsCarvedHostRoutesReadTheTable(t *testing.T) {
 	}
 	if hostRoutes := urTunWindowsHostRoutes([]netip.Addr{address}, table, adapters, 0x10, nil, nil); 0 < len(hostRoutes) {
 		t.Errorf("no default route but the tun's: %v", hostRoutes)
+	}
+}
+
+// The IPv6 routes of the host testWindowsHostTable holds, whose IPv6 default route Windows chooses is Ethernet's, by a
+// link-local router as a router advertisement leaves it, ahead of Wi-Fi's: Ethernet's prefix on link, its own address
+// local, its link-local prefix, and IPv6's loopback.
+func testWindowsIpv6HostTable() []urTunWindowsRoute {
+	return []urTunWindowsRoute{
+		{dst: netip.MustParsePrefix("::/0"), luid: 0x10, index: 10, nextHop: netip.MustParseAddr("fe80::1")},
+		{dst: netip.MustParsePrefix("2001:db8:10::/64"), luid: 0x10, index: 10, nextHop: netip.IPv6Unspecified()},
+		{dst: netip.MustParsePrefix("2001:db8:10::10/128"), luid: 0x10, index: 10, nextHop: netip.IPv6Unspecified(),
+			protocol: windows.MIB_IPPROTO_LOCAL},
+		{dst: netip.MustParsePrefix("fe80::/64"), luid: 0x10, index: 10, nextHop: netip.IPv6Unspecified()},
+		{dst: netip.MustParsePrefix("::1/128"), luid: 0x1, index: 1, nextHop: netip.IPv6Unspecified(), loopback: true},
+	}
+}
+
+// A dual-stack world: testWindowsHostTable's host with testWindowsIpv6HostTable's IPv6 routes.
+func newTestWindowsDualWorld(t *testing.T) *testWindowsWorld {
+	t.Helper()
+	world := newTestWindowsWorld(t)
+	world.ipHelper.table = append(testWindowsHostTable(), testWindowsIpv6HostTable()...)
+	return world
+}
+
+// The carve of that host: testWindowsCarve's with ipv4OffLink, then Ethernet's own IPv6 address and router and IPv6's
+// loopback, and the IPv6 resolvers beyond its links ipv6OffLink names.
+func testWindowsDualCarve(ipv4OffLink string, ipv6OffLink ...string) []netip.Addr {
+	carve := append(testWindowsCarve(ipv4OffLink), netip.MustParseAddr("2001:db8:10::10"), netip.MustParseAddr("fe80::1"),
+		netip.MustParseAddr("::1"))
+	for _, address := range ipv6OffLink {
+		carve = append(carve, netip.MustParseAddr(address))
+	}
+	return carve
+}
+
+// Under exits an IPv6 address of the carve the host reaches only by its IPv6 default route, an off-link resolver,
+// takes a host route by that route's link-local next hop on its adapter beside IPv4's, before the halves go on
+// (QD-971); Ethernet's own IPv6 address, its router, a resolver on Wi-Fi's prefix and loopback take none. Off exits the
+// carve waits. A sync that changed nothing writes nothing; a carve that changes adds and removes them, IPv4's left as
+// they are; a route of the host's own that comes to hold one takes its host route off; and leaving exits takes both
+// families' off after the halves and before the binding.
+func TestTunWindowsCarvedIpv6HostRoutesFollowTheCarve(t *testing.T) {
+	world := newTestWindowsDualWorld(t)
+	iface := world.open(t)
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::53")); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.ipHelper.take(); 0 < len(calls) {
+		t.Fatalf("off exits: %v", calls)
+	}
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("exits: %v %v", defaultRoute, err)
+	}
+	want := append([]string{"add host route 203.0.113.53 by 192.0.2.1 on 0x10", "add host route 2001:db8:ffff::53 by fe80::1 on 0x10"},
+		testWindowsHalvesCalls("add")...)
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("exits: %v", calls)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{10, 10} {
+		t.Fatalf("bound to %v", binding)
+	}
+	<-world.kicks
+	// the halves of both families read in the table from here, on the tun's adapter
+	halves := []urTunWindowsRoute{}
+	for _, half := range append(urTunExitsHalves(), urTunExitsIpv6Halves()...) {
+		nextHop := netip.IPv4Unspecified()
+		if half.Addr().Is6() {
+			nextHop = netip.IPv6Unspecified()
+		}
+		halves = append(halves, urTunWindowsRoute{dst: half, luid: 0x99, index: 99, nextHop: nextHop})
+	}
+	world.ipHelper.replaceRoutes(func(held urTunWindowsRoute) bool { return false }, halves...)
+	// a sync with nothing changed
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::53")); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.ipHelper.take(); 0 < len(calls) || 0 < len(world.bindings) || 0 < len(world.kicks) {
+		t.Fatalf("nothing changed: %v", calls)
+	}
+	// the carve changes: one IPv6 resolver leaves it and another joins
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::54")); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"delete host route 2001:db8:ffff::53 by fe80::1 on 0x10", "add host route 2001:db8:ffff::54 by fe80::1 on 0x10"}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("a changed carve: %v", calls)
+	}
+	// a route of the host's own comes to hold the address: its host route would move it off that link
+	world.ipHelper.replaceRoutes(func(held urTunWindowsRoute) bool { return false },
+		urTunWindowsRoute{dst: netip.MustParsePrefix("2001:db8:ffff::/64"), luid: 0x20, index: 21, nextHop: netip.IPv6Unspecified()})
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::54", "2001:db8:fffe::53")); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"delete host route 2001:db8:ffff::54 by fe80::1 on 0x10", "add host route 2001:db8:fffe::53 by fe80::1 on 0x10"}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("an address a route came to hold: %v", calls)
+	}
+	defaultRoute, err := iface.SetExits(false)
+	if err != nil || defaultRoute {
+		t.Fatalf("off: %v %v", defaultRoute, err)
+	}
+	want = append(testWindowsHalvesCalls("delete"), "delete host route 203.0.113.53 by 192.0.2.1 on 0x10",
+		"delete host route 2001:db8:fffe::53 by fe80::1 on 0x10")
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("off: %v", calls)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{0, 0} {
+		t.Fatalf("unbound to %v", binding)
+	}
+	// off exits the carve waits again
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::53")); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.ipHelper.take(); 0 < len(calls) {
+		t.Fatalf("off exits again: %v", calls)
+	}
+}
+
+// IPv6's default route that moves takes IPv6's host routes with it (QD-971): to another router on the same adapter
+// with no new binding, and to Wi-Fi's IPv6 default route once Ethernet's goes, which names no next hop, on link on
+// Wi-Fi's adapter, bound again. Where the host has no IPv6 default route left, IPv6's host routes come off while
+// IPv4's stay; and one that comes back puts them on again.
+func TestTunWindowsCarvedIpv6HostRoutesFollowTheIpv6DefaultRoute(t *testing.T) {
+	world := newTestWindowsDualWorld(t)
+	iface := world.open(t)
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::53")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	<-world.bindings
+	<-world.kicks
+	world.ipHelper.take()
+	isEthernetIpv6Default := func(held urTunWindowsRoute) bool {
+		return held.dst == netip.MustParsePrefix("::/0") && held.luid == 0x10
+	}
+	// another router on the same adapter
+	world.ipHelper.replaceRoutes(isEthernetIpv6Default, urTunWindowsRoute{dst: netip.MustParsePrefix("::/0"), luid: 0x10,
+		index: 10, nextHop: netip.MustParseAddr("fe80::2")})
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"delete host route 2001:db8:ffff::53 by fe80::1 on 0x10", "add host route 2001:db8:ffff::53 by fe80::2 on 0x10"}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("another router: %v", calls)
+	}
+	if 0 < len(world.bindings) || 0 < len(world.kicks) {
+		t.Fatal("bound again on the same adapter")
+	}
+	// Ethernet's IPv6 default route goes: Wi-Fi's is the host's, on link
+	world.ipHelper.replaceRoutes(isEthernetIpv6Default)
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{10, 21} {
+		t.Fatalf("bound again to %v", binding)
+	}
+	<-world.kicks
+	want = []string{"delete host route 2001:db8:ffff::53 by fe80::2 on 0x10", "add host route 2001:db8:ffff::53 by the link on 0x20"}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("Wi-Fi's IPv6 default route: %v", calls)
+	}
+	// no IPv6 default route is left: IPv6's host route comes off and IPv4's stays
+	world.ipHelper.replaceRoutes(func(held urTunWindowsRoute) bool { return held.dst == netip.MustParsePrefix("::/0") })
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("no IPv6 default route: %v %v", defaultRoute, err)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{10, 0} {
+		t.Fatalf("bound with no IPv6 default route to %v", binding)
+	}
+	<-world.kicks
+	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"delete host route 2001:db8:ffff::53 by the link on 0x20"}) {
+		t.Fatalf("no IPv6 default route: %v", calls)
+	}
+	if !slices.Equal(iface.hostRoutes, []urTunHostRoute{{address: netip.MustParseAddr("203.0.113.53"),
+		gateway: netip.MustParseAddr("192.0.2.1"), link: 0x10}}) {
+		t.Fatalf("no IPv6 default route: host routes %v", iface.hostRoutes)
+	}
+	// Ethernet's comes back
+	world.ipHelper.replaceRoutes(func(held urTunWindowsRoute) bool { return false }, urTunWindowsRoute{
+		dst: netip.MustParsePrefix("::/0"), luid: 0x10, index: 10, nextHop: netip.MustParseAddr("fe80::1")})
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if binding := <-world.bindings; binding != [2]uint32{10, 10} {
+		t.Fatalf("bound again to %v", binding)
+	}
+	<-world.kicks
+	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"add host route 2001:db8:ffff::53 by fe80::1 on 0x10"}) {
+		t.Fatalf("IPv6's default route back: %v", calls)
+	}
+}
+
+// Each family's host routes stand by that family's halves (QD-971): an IPv6 half that will not come off keeps IPv6's
+// host routes on, still following the carve, while IPv4's come off with IPv4's halves; an IPv6 one IP Helper refuses is
+// counted with no address in the words and tried again; and once the adapter is closed, which takes the stuck half
+// with it, they come off: none outlives the tun.
+func TestTunWindowsCarvedIpv6HostRoutesStandByIpv6sHalves(t *testing.T) {
+	world := newTestWindowsDualWorld(t)
+	iface := world.open(t)
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::53")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	world.ipHelper.deleteErrs = map[netip.Prefix]error{urTunExitsIpv6Halves()[1]: windows.ERROR_NOT_ENOUGH_MEMORY}
+	world.ipHelper.take()
+	if defaultRoute, err := iface.SetExits(false); err == nil || !defaultRoute {
+		t.Fatalf("an IPv6 half that stays: %v %v", defaultRoute, err)
+	}
+	want := append(testWindowsHalvesCalls("delete")[:3], "delete host route 203.0.113.53 by 192.0.2.1 on 0x10")
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("an IPv6 half that stays: %v", calls)
+	}
+	// IPv6's follow the carve while its half stands, IPv4's waiting; one IP Helper refuses is counted and tried again
+	moved := netip.MustParseAddr("2001:db8:ffff::54")
+	world.ipHelper.hostAddErrs[moved] = windows.ERROR_NOT_ENOUGH_MEMORY
+	err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", moved.String()))
+	if err == nil || strings.Contains(err.Error(), "2001:db8") ||
+		!strings.Contains(err.Error(), "1 host routes of carved addresses did not go on") {
+		t.Fatalf("a refused IPv6 host route: %v", err)
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"delete host route 2001:db8:ffff::53 by fe80::1 on 0x10"}) {
+		t.Fatalf("the carve with IPv6's half alone: %v", calls)
+	}
+	delete(world.ipHelper.hostAddErrs, moved)
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", moved.String())); err != nil {
+		t.Fatal(err)
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"add host route 2001:db8:ffff::54 by fe80::1 on 0x10"}) {
+		t.Fatalf("tried again: %v", calls)
+	}
+	// the close takes the adapter and the stuck half with it, then IPv6's host route
+	if err := iface.Close(); err == nil {
+		t.Fatal("close answered nothing of the half that would not come off")
+	}
+	if calls := world.ipHelper.take(); !slices.Equal(calls, []string{"delete host route 2001:db8:ffff::54 by fe80::1 on 0x10"}) {
+		t.Fatalf("close: %v", calls)
+	}
+	for _, held := range world.ipHelper.table {
+		if held.protocol == windows.MIB_IPPROTO_NETMGMT && held.dst.IsSingleIP() {
+			t.Fatalf("a host route stayed: %+v", held)
+		}
+	}
+}
+
+// Close takes both families' host routes off with the exits, after the halves.
+func TestTunWindowsCloseRemovesTheCarvedIpv6HostRoutes(t *testing.T) {
+	world := newTestWindowsDualWorld(t)
+	iface := world.open(t)
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := iface.SetCarved(testWindowsDualCarve("203.0.113.53", "2001:db8:ffff::53", "2001:db8:fffe::53")); err != nil {
+		t.Fatal(err)
+	}
+	world.ipHelper.take()
+	if err := iface.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := append(testWindowsHalvesCalls("delete"), "delete host route 203.0.113.53 by 192.0.2.1 on 0x10",
+		"delete host route 2001:db8:fffe::53 by fe80::1 on 0x10", "delete host route 2001:db8:ffff::53 by fe80::1 on 0x10")
+	if calls := world.ipHelper.take(); !slices.Equal(calls, want) {
+		t.Fatalf("close: %v", calls)
+	}
+	for _, held := range world.ipHelper.table {
+		if held.protocol == windows.MIB_IPPROTO_NETMGMT && held.dst.IsSingleIP() {
+			t.Fatalf("a host route stayed: %+v", held)
+		}
+	}
+}
+
+// Which routes of the table reach a carved IPv6 address (QD-971): a route on the tun's adapter, IPv4's default route
+// and an IPv6 default route Windows ranks after do not, so the address takes a host route by the IPv6 default route
+// Windows chooses; a route of the host's own does; another program's IPv6 host route is the host's way to it and this
+// interface's own is not; with IPv4's default route alone it takes none; and a next hop of another family is no next
+// hop, so it goes on link.
+func TestTunWindowsCarvedIpv6HostRoutesReadTheTable(t *testing.T) {
+	world := newTestWindowsWorld(t)
+	adapters := world.ipHelper.adapters
+	address := netip.MustParseAddr("2001:db8:ffff::53")
+	gateway := netip.MustParseAddr("fe80::1")
+	ipv6Default := urTunWindowsRoute{dst: netip.MustParsePrefix("::/0"), luid: 0x10, index: 10, nextHop: gateway}
+	want := []urTunHostRoute{{address: address, gateway: gateway, link: 0x10}}
+	inside := netip.MustParsePrefix("2001:db8:ffff::/64")
+	for name, held := range map[string]urTunWindowsRoute{
+		"a route on the tun's adapter": {dst: inside, luid: 0x99},
+		"IPv4's default route": {dst: netip.MustParsePrefix("0.0.0.0/0"), luid: 0x20,
+			nextHop: netip.MustParseAddr("198.51.100.1")},
+		"an IPv6 default route Windows ranks after": {dst: netip.MustParsePrefix("::/0"), luid: 0x20,
+			nextHop: netip.MustParseAddr("fe80::20")},
+	} {
+		table := []urTunWindowsRoute{ipv6Default, held}
+		if hostRoutes := urTunWindowsHostRoutes([]netip.Addr{address}, table, adapters, 0x99, nil, nil); !slices.Equal(hostRoutes, want) {
+			t.Errorf("%s: %v", name, hostRoutes)
+		}
+	}
+	table := []urTunWindowsRoute{ipv6Default, {dst: inside, luid: 0x20, nextHop: netip.IPv6Unspecified()}}
+	if hostRoutes := urTunWindowsHostRoutes([]netip.Addr{address}, table, adapters, 0x99, nil, nil); 0 < len(hostRoutes) {
+		t.Errorf("a route of the host's own: %v", hostRoutes)
+	}
+	table = []urTunWindowsRoute{ipv6Default, testWindowsHostRoute(0x10, address, gateway)}
+	if hostRoutes := urTunWindowsHostRoutes([]netip.Addr{address}, table, adapters, 0x99, nil, nil); 0 < len(hostRoutes) {
+		t.Errorf("another's IPv6 host route: %v", hostRoutes)
+	}
+	if hostRoutes := urTunWindowsHostRoutes([]netip.Addr{address}, table, adapters, 0x99, nil, want); !slices.Equal(hostRoutes, want) {
+		t.Errorf("its own IPv6 host route: %v", hostRoutes)
+	}
+	table = []urTunWindowsRoute{{dst: netip.MustParsePrefix("0.0.0.0/0"), luid: 0x10, index: 10,
+		nextHop: netip.MustParseAddr("192.0.2.1")}}
+	if hostRoutes := urTunWindowsHostRoutes([]netip.Addr{address}, table, adapters, 0x99, nil, nil); 0 < len(hostRoutes) {
+		t.Errorf("no IPv6 default route: %v", hostRoutes)
+	}
+	odd := urTunWindowsRoute{dst: netip.MustParsePrefix("::/0"), luid: 0x10, index: 10, nextHop: netip.MustParseAddr("192.0.2.1")}
+	if hostRoutes := urTunWindowsHostRoutes([]netip.Addr{address}, []urTunWindowsRoute{odd}, adapters, 0x99, nil, nil); !slices.Equal(hostRoutes,
+		[]urTunHostRoute{{address: address, link: 0x10}}) {
+		t.Errorf("a next hop of another family: %v", hostRoutes)
 	}
 }
 
