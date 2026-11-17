@@ -439,8 +439,9 @@ type testTunNetlink struct {
 	kickCount int
 	// the answer to each request, numbered from 0; nil answers success
 	fail func(n int, messageType uint16) error
-	// what each add of a throw route answers ahead of fail, nil for none
-	throwErr error
+	// what each add of a throw route answers ahead of fail, nil for none, and ahead of it what one of a family answers
+	throwErr        error
+	familyThrowErrs map[uint8]error
 	// what a request answers by its family and type ahead of fail, nil for none
 	refuse func(family uint8, messageType uint16) error
 	routes []urTunLinuxRoute
@@ -459,8 +460,13 @@ func (self *testTunNetlink) Request(messageType uint16, flags uint16, body []byt
 	self.events = append(self.events, testTunNetlinkEvent{messageType: messageType, flags: flags, body: slices.Clone(body)})
 	n := self.sent
 	self.sent += 1
-	if self.throwErr != nil && messageType == unix.RTM_NEWROUTE && unix.SizeofRtMsg <= len(body) && body[7] == unix.RTN_THROW {
-		return self.throwErr
+	if messageType == unix.RTM_NEWROUTE && unix.SizeofRtMsg <= len(body) && body[7] == unix.RTN_THROW {
+		if err := self.familyThrowErrs[body[0]]; err != nil {
+			return err
+		}
+		if self.throwErr != nil {
+			return self.throwErr
+		}
 	}
 	if self.refuse != nil && 0 < len(body) {
 		if err := self.refuse(body[0], messageType); err != nil {
@@ -478,6 +484,23 @@ func (self *testTunNetlink) setThrowErr(throwErr error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.throwErr = throwErr
+}
+
+// Sets what each add of a throw route of family answers, nil for what the rest do.
+func (self *testTunNetlink) setFamilyThrowErr(family uint8, throwErr error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.familyThrowErrs == nil {
+		self.familyThrowErrs = map[uint8]error{}
+	}
+	self.familyThrowErrs[family] = throwErr
+}
+
+// Adds routes to what a dump lists, and takes out those that match.
+func (self *testTunNetlink) replaceRoutes(match func(route urTunLinuxRoute) bool, routes ...urTunLinuxRoute) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.routes = append(slices.DeleteFunc(self.routes, match), routes...)
 }
 
 // Sets what a request answers by its family and type.
@@ -662,8 +685,9 @@ func testTunParseRouteBody(body []byte) testTunRouteMessage {
 	return message
 }
 
-// The throw routes events add and take off, in order, each checked for the shape the kernel takes: ur's, IPv4, a /32 in
-// table, naming no device or gateway, added exclusively in the universe's scope and taken off in any.
+// The throw routes events add and take off, in order, each checked for the shape the kernel takes: ur's, a whole
+// address of its family in table, an IPv4 /32 or an IPv6 /128, naming no device or gateway, added exclusively in the
+// universe's scope and taken off in any.
 func testTunThrows(t *testing.T, events []testTunNetlinkEvent, table uint32) ([]netip.Addr, []netip.Addr) {
 	t.Helper()
 	addedAddrs := []netip.Addr{}
@@ -676,8 +700,10 @@ func testTunThrows(t *testing.T, events []testTunNetlinkEvent, table uint32) ([]
 		if message.routeType != unix.RTN_THROW {
 			continue
 		}
-		if message.family != unix.AF_INET || message.dstBits != 32 || !message.hasDst || !message.dst.Is4() ||
-			message.table != table || message.protocol != urTunRouteProtocol || message.hasOif || message.hasGateway {
+		whole := (message.family == unix.AF_INET && message.dstBits == 32 && message.dst.Is4()) ||
+			(message.family == unix.AF_INET6 && message.dstBits == 128 && message.dst.Is6())
+		if !whole || !message.hasDst || message.table != table || message.protocol != urTunRouteProtocol ||
+			message.hasOif || message.hasGateway {
 			t.Fatalf("a throw's message %+v", message)
 		}
 		if event.messageType == unix.RTM_NEWROUTE {
@@ -1086,6 +1112,30 @@ func TestTunLinuxExitsRefuseWhatTheHostHolds(t *testing.T) {
 			},
 		},
 		{
+			name: "ur's own leftover IPv6 throw, which the kernel shows through loopback",
+			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
+				netlink.routes = append(netlink.routes, urTunLinuxRoute{family: unix.AF_INET6, table: iface.system.settings.ExitsTable,
+					protocol: urTunRouteProtocol, routeType: unix.RTN_THROW, dst: netip.MustParsePrefix("2001:db8:ffff::53/128"),
+					oifs: []int{1}})
+			},
+		},
+		{
+			name: "ur's IPv6 throw in the table, wider than a carve's /128",
+			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
+				netlink.routes = append(netlink.routes, urTunLinuxRoute{family: unix.AF_INET6, table: iface.system.settings.ExitsTable,
+					protocol: urTunRouteProtocol, routeType: unix.RTN_THROW, dst: netip.MustParsePrefix("2001:db8:ffff::/64")})
+			},
+			refusal: errUrTunExitsTableInUse,
+		},
+		{
+			name: "another program's IPv6 throw in the table",
+			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
+				netlink.routes = append(netlink.routes, urTunLinuxRoute{family: unix.AF_INET6, table: iface.system.settings.ExitsTable,
+					protocol: unix.RTPROT_BOOT, routeType: unix.RTN_THROW, dst: netip.MustParsePrefix("2001:db8:ffff::53/128")})
+			},
+			refusal: errUrTunExitsTableInUse,
+		},
+		{
 			name: "a rule on the mark",
 			change: func(iface *urTunLinuxInterface, netlink *testTunNetlink) {
 				netlink.rules = append(netlink.rules, urTunLinuxRule{family: unix.AF_INET, table: 100, priority: 1000,
@@ -1256,8 +1306,8 @@ func TestTunLinuxCloseTakesTheExitsOff(t *testing.T) {
 // Under exits each carved IPv4 address takes a throw route in the exits table, after the table's default route and
 // before the rule that sends lookups there (QD-808): an off-link resolver, whose lookup would meet the default route
 // otherwise, and an on-link gateway and the host's own address, which the main and local tables answer first, take one
-// alike; an IPv6 address takes none, the table being IPv4's. Off exits the carve only waits, and the same carve once the
-// exits stand sends nothing more.
+// alike; an IPv6 address on the host's own prefix takes none (QD-971). Off exits the carve only waits, and the same
+// carve once the exits stand sends nothing more.
 func TestTunLinuxExitsThrowEachCarvedAddress(t *testing.T) {
 	iface, netlink := newTestTunLinuxExits(t)
 	settings := iface.system.settings
@@ -1511,6 +1561,392 @@ func TestTunLinuxExitsTakeTheirOwnLeftoverThrows(t *testing.T) {
 	}
 }
 
+// The addresses of family a throw holds on iface now.
+func testTunThrowAddrsOf(iface *urTunLinuxInterface, family uint8) []netip.Addr {
+	throwAddrs := []netip.Addr{}
+	for _, address := range testTunThrowAddrs(iface) {
+		if address.Is4() == (family == unix.AF_INET) {
+			throwAddrs = append(throwAddrs, address)
+		}
+	}
+	return throwAddrs
+}
+
+// An interface on newTestTunLinuxExits's recorded system whose host holds its own IPv6 address too, a /128 off any
+// prefix of its links in the local table, as DHCPv6 hands one out.
+func newTestTunLinuxDualExits(t *testing.T) (*urTunLinuxInterface, *testTunNetlink) {
+	t.Helper()
+	iface, netlink := newTestTunLinuxExits(t)
+	netlink.routes = append(netlink.routes, urTunLinuxRoute{family: unix.AF_INET6, table: unix.RT_TABLE_LOCAL,
+		protocol: unix.RTPROT_KERNEL, routeType: unix.RTN_LOCAL, dst: netip.MustParsePrefix("2001:db8:10::10/128"),
+		oifs: []int{2}})
+	return iface, netlink
+}
+
+// The carve of the recorded system: an off-link IPv4 resolver and the on-link gateway, then its IPv6 addresses: the
+// host's own, its link-local router, zoned as a resolver file may name it, a resolver on its prefix, IPv6's loopback,
+// and the off-link IPv6 resolvers offLink names.
+func testTunLinuxDualCarve(offLink ...string) []netip.Addr {
+	carve := []netip.Addr{netip.MustParseAddr("198.51.100.53"), netip.MustParseAddr("192.0.2.1"),
+		netip.MustParseAddr("2001:db8:10::10"), netip.MustParseAddr("fe80::1%eth0"), netip.MustParseAddr("2001:db8::53"),
+		netip.MustParseAddr("::1")}
+	for _, address := range offLink {
+		carve = append(carve, netip.MustParseAddr(address))
+	}
+	return carve
+}
+
+// Under exits each carved IPv6 address the host reaches only by its IPv6 default route, an off-link resolver, takes an
+// IPv6 throw in the exits table after IPv6's default route there and before IPv6's rules, beside IPv4's throws, which
+// are as they were (QD-971); the host's own IPv6 address, which the local table answers, a resolver on the host's
+// prefix, which the main table does, its link-local router and loopback take none. The same carve once the exits stand
+// sends nothing more.
+func TestTunLinuxExitsThrowEachOffLinkIpv6Address(t *testing.T) {
+	iface, netlink := newTestTunLinuxDualExits(t)
+	settings := iface.system.settings
+	resolver := netip.MustParseAddr("2001:db8:ffff::53")
+	carve := testTunLinuxDualCarve(resolver.String())
+	if err := iface.SetCarved(carve); err != nil {
+		t.Fatal(err)
+	}
+	if events, _ := netlink.take(); len(events) != 0 {
+		t.Fatalf("off exits the carve sent %d", len(events))
+	}
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("on: %t %v", defaultRoute, err)
+	}
+	events, kickCount := netlink.take()
+	want := []uint16{0, unix.RTM_NEWROUTE, unix.RTM_NEWROUTE, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE,
+		unix.RTM_NEWROUTE, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE}
+	if types := testTunEventTypes(events); !slices.Equal(types, want) || kickCount != 1 {
+		t.Fatalf("events %v, %d kicks", types, kickCount)
+	}
+	if message := testTunParseRouteBody(events[6].body); message.family != unix.AF_INET6 || message.routeType != unix.RTN_UNICAST ||
+		message.dstBits != 0 || message.oif != 7 {
+		t.Fatalf("IPv6's default route did not go on before its throw: %+v", message)
+	}
+	if testTunEventFamily(events[8]) != unix.AF_INET6 || testTunEventFamily(events[9]) != unix.AF_INET6 {
+		t.Fatal("IPv6's rules did not follow its throw")
+	}
+	addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable)
+	if !slices.Equal(addedAddrs, []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("198.51.100.53"), resolver}) ||
+		len(removedAddrs) != 0 {
+		t.Fatalf("throws on %v, off %v", addedAddrs, removedAddrs)
+	}
+	if message := testTunParseRouteBody(events[7].body); message.routeType != unix.RTN_THROW || message.dst != resolver {
+		t.Fatalf("IPv6's throw did not follow its default route: %+v", message)
+	}
+	if err := iface.SetCarved(carve); err != nil {
+		t.Fatal(err)
+	}
+	if events, _ := netlink.take(); len(events) != 0 {
+		t.Fatalf("the same carve again sent %d", len(events))
+	}
+	if throwAddrs := testTunThrowAddrsOf(iface, unix.AF_INET6); !slices.Equal(throwAddrs, []netip.Addr{resolver}) {
+		t.Fatalf("IPv6's throws held %v", throwAddrs)
+	}
+}
+
+// Under exits IPv6's throws follow the carve and the host's IPv6 routes at each SetCarved, IPv4's left as they are
+// (QD-971): a carve that changes takes the throw of an address no longer carved off before a new one's goes on; a route
+// of the host's own that comes to hold an address takes its throw off; where the main table's IPv6 default route goes,
+// so the host reaches none of them, they all come off, and they come back with it; and a carve that empties takes
+// them off with the exits standing.
+func TestTunLinuxExitsKeepTheIpv6ThrowsInStep(t *testing.T) {
+	iface, netlink := newTestTunLinuxDualExits(t)
+	settings := iface.system.settings
+	first := netip.MustParseAddr("2001:db8:ffff::53")
+	moved := netip.MustParseAddr("2001:db8:ffff::54")
+	other := netip.MustParseAddr("2001:db8:fffe::53")
+	ipv4Throws := []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("198.51.100.53")}
+	if err := iface.SetCarved(testTunLinuxDualCarve(first.String(), other.String())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	netlink.take()
+	step := func(what string, carve []netip.Addr, wantTypes []uint16, wantOn []netip.Addr, wantOff []netip.Addr,
+		wantHeld []netip.Addr) {
+		t.Helper()
+		if err := iface.SetCarved(carve); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		events, _ := netlink.take()
+		addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable)
+		if types := testTunEventTypes(events); !slices.Equal(types, wantTypes) || !slices.Equal(addedAddrs, wantOn) ||
+			!slices.Equal(removedAddrs, wantOff) {
+			t.Fatalf("%s: events %v, on %v, off %v", what, types, addedAddrs, removedAddrs)
+		}
+		if held := testTunThrowAddrsOf(iface, unix.AF_INET6); !slices.Equal(held, wantHeld) {
+			t.Fatalf("%s: IPv6's throws held %v", what, held)
+		}
+		if held := testTunThrowAddrsOf(iface, unix.AF_INET); !slices.Equal(held, ipv4Throws) {
+			t.Fatalf("%s: IPv4's throws held %v", what, held)
+		}
+	}
+	none := []netip.Addr{}
+	step("a changed carve", testTunLinuxDualCarve(moved.String(), other.String()),
+		[]uint16{unix.RTM_DELROUTE, unix.RTM_NEWROUTE}, []netip.Addr{moved}, []netip.Addr{first},
+		[]netip.Addr{other, moved})
+	// a route of the host's own comes to hold one: the main table answers it ahead of the exits table
+	netlink.replaceRoutes(func(route urTunLinuxRoute) bool { return false }, urTunLinuxRoute{family: unix.AF_INET6,
+		table: unix.RT_TABLE_MAIN, protocol: unix.RTPROT_BOOT, routeType: unix.RTN_UNICAST,
+		dst: netip.MustParsePrefix("2001:db8:ffff::/64"), oifs: []int{3}})
+	step("an address a route came to hold", testTunLinuxDualCarve(moved.String(), other.String()),
+		[]uint16{unix.RTM_DELROUTE}, none, []netip.Addr{moved}, []netip.Addr{other})
+	// the main table's IPv6 default route goes: the host reaches none of them, and the exits stand
+	netlink.dropIpv6DefaultRoute()
+	step("no IPv6 default route", testTunLinuxDualCarve(moved.String(), other.String()),
+		[]uint16{unix.RTM_DELROUTE}, none, []netip.Addr{other}, none)
+	// it comes back, through the tun's own device: still none
+	netlink.replaceRoutes(func(route urTunLinuxRoute) bool { return false }, urTunLinuxRoute{family: unix.AF_INET6,
+		table: unix.RT_TABLE_MAIN, protocol: unix.RTPROT_BOOT, routeType: unix.RTN_UNICAST,
+		dst: netip.MustParsePrefix("::/0"), oifs: []int{7}})
+	step("an IPv6 default route through the tun", testTunLinuxDualCarve(moved.String(), other.String()),
+		[]uint16{}, none, none, none)
+	// it comes back by eth0's router
+	netlink.replaceRoutes(func(route urTunLinuxRoute) bool { return false }, testTunLinuxIpv6DefaultRoute())
+	step("IPv6's default route back", testTunLinuxDualCarve(moved.String(), other.String()),
+		[]uint16{unix.RTM_NEWROUTE}, []netip.Addr{other}, none, []netip.Addr{other})
+	// a carve with no IPv6 address off the host takes IPv6's off, and IPv4's stay
+	step("an emptied IPv6 carve", testTunLinuxDualCarve(), []uint16{unix.RTM_DELROUTE}, none, []netip.Addr{other}, none)
+	if !iface.exitsIpv6Route || !iface.exitsIpv6MarkRule {
+		t.Fatal("the exits fell")
+	}
+}
+
+// Off exits IPv6's throws come off after IPv6's rule that sends lookups to the table and its default route, before its
+// rule that keeps the main table's routes ahead and before the mark, as IPv4's come off in IPv4's half; off exits the
+// carve sends nothing, the next exits put them on again, and Close takes them off too, so no throw outlives the tun.
+func TestTunLinuxExitsTakeTheirIpv6ThrowsOff(t *testing.T) {
+	iface, netlink := newTestTunLinuxDualExits(t)
+	settings := iface.system.settings
+	resolvers := []netip.Addr{netip.MustParseAddr("2001:db8:fffe::53"), netip.MustParseAddr("2001:db8:ffff::53")}
+	carve := testTunLinuxDualCarve(resolvers[1].String(), resolvers[0].String())
+	if err := iface.SetCarved(carve); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	netlink.take()
+	want := []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELRULE,
+		unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELROUTE, unix.RTM_DELRULE, 0}
+	checkOff := func(what string, events []testTunNetlinkEvent) {
+		t.Helper()
+		if types := testTunEventTypes(events); !slices.Equal(types, want) {
+			t.Fatalf("%s: events %v", what, types)
+		}
+		// IPv6's half comes off in its order: its rule, its default route, its throws, its other rule
+		for i, family := range []uint8{unix.AF_INET6, unix.AF_INET6, unix.AF_INET6, unix.AF_INET6, unix.AF_INET6} {
+			if testTunEventFamily(events[5+i]) != family {
+				t.Fatalf("%s: event %d of family %d", what, 5+i, testTunEventFamily(events[5+i]))
+			}
+		}
+		if _, removedAddrs := testTunThrows(t, events[5:], settings.ExitsTable); !slices.Equal(removedAddrs, resolvers) {
+			t.Fatalf("%s: IPv6's throws off %v", what, removedAddrs)
+		}
+		if held := testTunThrowAddrs(iface); 0 < len(held) {
+			t.Fatalf("%s: throws held %v", what, held)
+		}
+	}
+	if defaultRoute, err := iface.SetExits(false); err != nil || defaultRoute {
+		t.Fatalf("off: %t %v", defaultRoute, err)
+	}
+	events, _ := netlink.take()
+	checkOff("off", events)
+	if err := iface.SetCarved(carve); err != nil {
+		t.Fatal(err)
+	}
+	if events, _ := netlink.take(); len(events) != 0 {
+		t.Fatalf("off exits the carve sent %d", len(events))
+	}
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = netlink.take()
+	if addedAddrs, _ := testTunThrows(t, events, settings.ExitsTable); !slices.Equal(addedAddrs,
+		[]netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("198.51.100.53"), resolvers[0], resolvers[1]}) {
+		t.Fatalf("on again: throws on %v", addedAddrs)
+	}
+	device := &testTunClosingDevice{events: make(chan tun.Event)}
+	iface.device = device
+	iface.eventsDone = make(chan struct{})
+	close(iface.eventsDone)
+	if err := iface.Close(); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = netlink.take()
+	checkOff("close", events)
+	if !device.closed {
+		t.Fatal("the device stayed open")
+	}
+}
+
+// While IPv6's rule that sends lookups to the table and its default route there will not come off, IPv6's throws stay,
+// since a lookup of a carved address still meets that route; once the route is off they go, and the stuck rule finds
+// a table that answers nothing. IPv4's half comes off meanwhile with its own throws.
+func TestTunLinuxExitsKeepTheIpv6ThrowsWhileTheTableAnswers(t *testing.T) {
+	iface, netlink := newTestTunLinuxDualExits(t)
+	settings := iface.system.settings
+	resolver := netip.MustParseAddr("2001:db8:ffff::53")
+	if err := iface.SetCarved(testTunLinuxDualCarve(resolver.String())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iface.SetExits(true); err != nil {
+		t.Fatal(err)
+	}
+	netlink.take()
+	// IPv6's rule and route both stick: its throw stays, and IPv4's go
+	netlink.setRefuse(func(family uint8, messageType uint16) error {
+		if family == unix.AF_INET6 && (messageType == unix.RTM_DELRULE || messageType == unix.RTM_DELROUTE) {
+			return unix.EBUSY
+		}
+		return nil
+	})
+	if _, err := iface.SetExits(false); err == nil {
+		t.Fatal("stuck: no error")
+	}
+	events, _ := netlink.take()
+	if _, removedAddrs := testTunThrows(t, events, settings.ExitsTable); !slices.Equal(removedAddrs,
+		[]netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("198.51.100.53")}) ||
+		!slices.Equal(testTunThrowAddrs(iface), []netip.Addr{resolver}) {
+		t.Fatalf("stuck: throws off %v, held %v", removedAddrs, testTunThrowAddrs(iface))
+	}
+	// the route comes off, the rule still sticks: the throw goes with the route
+	netlink.setRefuse(func(family uint8, messageType uint16) error {
+		if family == unix.AF_INET6 && messageType == unix.RTM_DELRULE {
+			return unix.EBUSY
+		}
+		return nil
+	})
+	if _, err := iface.SetExits(false); err == nil {
+		t.Fatal("rule stuck: no error")
+	}
+	events, _ = netlink.take()
+	want := []uint16{unix.RTM_DELRULE, unix.RTM_DELROUTE, unix.RTM_DELROUTE}
+	if _, removedAddrs := testTunThrows(t, events, settings.ExitsTable); !slices.Equal(testTunEventTypes(events), want) ||
+		!slices.Equal(removedAddrs, []netip.Addr{resolver}) || len(testTunThrowAddrs(iface)) != 0 || !iface.exitsMark {
+		t.Fatalf("rule stuck: events %v, throws held %v", testTunEventTypes(events), testTunThrowAddrs(iface))
+	}
+}
+
+// An IPv6 throw the kernel refuses holds nothing: the exits stand and are kicked, IPv4's throws go on, and the address
+// meets the table's default route until SetCarved, which answers the refusal without the address (I-13), puts it on
+// once the kernel takes it; one the kernel already holds is taken as on.
+func TestTunLinuxExitsStandWhenAnIpv6ThrowIsRefused(t *testing.T) {
+	iface, netlink := newTestTunLinuxDualExits(t)
+	resolver := netip.MustParseAddr("2001:db8:ffff::53")
+	carve := testTunLinuxDualCarve(resolver.String())
+	if err := iface.SetCarved(carve); err != nil {
+		t.Fatal(err)
+	}
+	netlink.setFamilyThrowErr(unix.AF_INET6, unix.ENOBUFS)
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("a refused IPv6 throw held the exits: %t %v", defaultRoute, err)
+	}
+	if _, kickCount := netlink.take(); kickCount != 1 || !iface.exitsIpv6MarkRule || !iface.exitsIpv6SuppressRule ||
+		len(testTunThrowAddrsOf(iface, unix.AF_INET6)) != 0 || len(testTunThrowAddrsOf(iface, unix.AF_INET)) != 2 {
+		t.Fatalf("on: %d kicks, throws held %v", kickCount, testTunThrowAddrs(iface))
+	}
+	err := iface.SetCarved(carve)
+	if err == nil || !strings.Contains(err.Error(), "did not go on") || strings.Contains(err.Error(), "2001:db8") {
+		t.Fatalf("a refused IPv6 throw answered %v", err)
+	}
+	netlink.setFamilyThrowErr(unix.AF_INET6, nil)
+	if err := iface.SetCarved(carve); err != nil {
+		t.Fatal(err)
+	}
+	if held := testTunThrowAddrsOf(iface, unix.AF_INET6); !slices.Equal(held, []netip.Addr{resolver}) {
+		t.Fatalf("tried again: held %v", held)
+	}
+	other := netip.MustParseAddr("2001:db8:fffe::53")
+	netlink.setFamilyThrowErr(unix.AF_INET6, unix.EEXIST)
+	if err := iface.SetCarved(testTunLinuxDualCarve(resolver.String(), other.String())); err != nil {
+		t.Fatalf("an IPv6 throw already there: %v", err)
+	}
+	if held := testTunThrowAddrsOf(iface, unix.AF_INET6); !slices.Equal(held, []netip.Addr{resolver, other}) {
+		t.Fatalf("held %v", held)
+	}
+}
+
+// An IPv6 throw of ur's that the table kept past an end the daemon did not see neither refuses the exits nor outlives
+// the carve: the one of an address still carved is taken as on and sent again by nothing, and the one of an address no
+// longer carved comes off after IPv6's default route goes on and before its rules.
+func TestTunLinuxExitsTakeTheirOwnLeftoverIpv6Throws(t *testing.T) {
+	iface, netlink := newTestTunLinuxExits(t)
+	settings := iface.system.settings
+	kept := netip.MustParseAddr("2001:db8:ffff::53")
+	stale := netip.MustParseAddr("2001:db8:ffff::99")
+	for _, address := range []netip.Addr{kept, stale} {
+		netlink.routes = append(netlink.routes, urTunLinuxRoute{family: unix.AF_INET6, table: settings.ExitsTable,
+			protocol: urTunRouteProtocol, routeType: unix.RTN_THROW, dst: netip.PrefixFrom(address, 128), oifs: []int{1}})
+	}
+	if err := iface.SetCarved([]netip.Addr{kept}); err != nil {
+		t.Fatal(err)
+	}
+	if defaultRoute, err := iface.SetExits(true); err != nil || !defaultRoute {
+		t.Fatalf("on over leftovers: %t %v", defaultRoute, err)
+	}
+	events, _ := netlink.take()
+	addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable)
+	want := []uint16{0, unix.RTM_NEWROUTE, unix.RTM_NEWRULE, unix.RTM_NEWRULE, unix.RTM_NEWROUTE, unix.RTM_DELROUTE,
+		unix.RTM_NEWRULE, unix.RTM_NEWRULE}
+	if !slices.Equal(testTunEventTypes(events), want) || len(addedAddrs) != 0 ||
+		!slices.Equal(removedAddrs, []netip.Addr{stale}) || !slices.Equal(testTunThrowAddrs(iface), []netip.Addr{kept}) {
+		t.Fatalf("events %v: on %v, off %v, held %v", testTunEventTypes(events), addedAddrs, removedAddrs,
+			testTunThrowAddrs(iface))
+	}
+}
+
+// Which carved IPv6 addresses take a throw over the host's routes (QD-971): one the host reaches only by the main
+// table's IPv6 default route through another interface, once; none that a more specific route of the main table holds,
+// whatever its type but a throw, or one of the local table; none that is link-local, loopback, multicast or IPv4; and
+// none where the main table has no IPv6 default route off the host, through the tun's own device or of another table.
+func TestTunLinuxIpv6ThrowsReadTheRoutes(t *testing.T) {
+	address := netip.MustParseAddr("2001:db8:ffff::53")
+	ipv6Default := testTunLinuxIpv6DefaultRoute()
+	inside := netip.MustParsePrefix("2001:db8:ffff::/64")
+	route := func(table uint32, routeType uint8, dst netip.Prefix, oifs ...int) urTunLinuxRoute {
+		return urTunLinuxRoute{family: unix.AF_INET6, table: table, protocol: unix.RTPROT_BOOT, routeType: routeType, dst: dst,
+			oifs: oifs}
+	}
+	carve := []netip.Addr{address, address, netip.MustParseAddr("fe80::53"), netip.MustParseAddr("::1"),
+		netip.MustParseAddr("ff02::1:3"), netip.MustParseAddr("198.51.100.53")}
+	for name, c := range map[string]struct {
+		routes []urTunLinuxRoute
+		want   []netip.Addr
+	}{
+		"the default route alone": {routes: []urTunLinuxRoute{ipv6Default}, want: []netip.Addr{address}},
+		"an IPv4 route that holds it": {routes: []urTunLinuxRoute{ipv6Default, {family: unix.AF_INET, table: unix.RT_TABLE_MAIN,
+			routeType: unix.RTN_UNICAST, dst: netip.MustParsePrefix("198.51.100.0/24"), oifs: []int{2}}}, want: []netip.Addr{address}},
+		"a route of another table": {routes: []urTunLinuxRoute{ipv6Default, route(100, unix.RTN_UNICAST, inside, 3)},
+			want: []netip.Addr{address}},
+		"a throw of the main table's": {routes: []urTunLinuxRoute{ipv6Default, route(unix.RT_TABLE_MAIN, unix.RTN_THROW, inside)},
+			want: []netip.Addr{address}},
+		"an on-link prefix": {routes: []urTunLinuxRoute{ipv6Default, route(unix.RT_TABLE_MAIN, unix.RTN_UNICAST, inside, 2)},
+			want: []netip.Addr{}},
+		"an unreachable route": {routes: []urTunLinuxRoute{ipv6Default, route(unix.RT_TABLE_MAIN, unix.RTN_UNREACHABLE, inside)},
+			want: []netip.Addr{}},
+		"a route through the tun": {routes: []urTunLinuxRoute{ipv6Default, route(unix.RT_TABLE_MAIN, unix.RTN_UNICAST, inside, 7)},
+			want: []netip.Addr{}},
+		"the local table": {routes: []urTunLinuxRoute{ipv6Default, route(unix.RT_TABLE_LOCAL, unix.RTN_LOCAL,
+			netip.PrefixFrom(address, 128), 2)}, want: []netip.Addr{}},
+		"no default route": {routes: []urTunLinuxRoute{}, want: []netip.Addr{}},
+		"a default route through the tun": {routes: []urTunLinuxRoute{route(unix.RT_TABLE_MAIN, unix.RTN_UNICAST,
+			netip.MustParsePrefix("::/0"), 7)}, want: []netip.Addr{}},
+		"a default route of another table": {routes: []urTunLinuxRoute{route(100, unix.RTN_UNICAST,
+			netip.MustParsePrefix("::/0"), 2)}, want: []netip.Addr{}},
+		"an unreachable default route": {routes: []urTunLinuxRoute{route(unix.RT_TABLE_MAIN, unix.RTN_UNREACHABLE,
+			netip.MustParsePrefix("::/0"))}, want: []netip.Addr{}},
+	} {
+		if throwAddrs := urTunLinuxIpv6Throws(carve, c.routes, 7); !slices.Equal(throwAddrs, c.want) {
+			t.Errorf("%s: %v", name, throwAddrs)
+		}
+	}
+}
+
 // A device whose read waits for its close, for an interface under a running tun's loops.
 type testTunIdleDevice struct {
 	closed    chan struct{}
@@ -1672,6 +2108,122 @@ func TestTunLinuxSyncKeepsTheCarveInTheExitsTable(t *testing.T) {
 	events, _ = netlink.take()
 	if addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable); len(addedAddrs) != 0 ||
 		!slices.Equal(removedAddrs, []netip.Addr{gateway, resolver}) || len(testTunThrowAddrs(iface)) != 0 {
+		t.Fatalf("close: throws on %v, off %v", addedAddrs, removedAddrs)
+	}
+}
+
+// Through the tun's own sync, over the Linux interface and a recorder (QD-971): the off-link IPv6 resolvers among the
+// local addresses the tun hands the bridge reach the exits table as IPv6 throws once the exits stand, beside IPv4's
+// gateway, while the host's own IPv6 address and a resolver on its prefix take none; a local read that drops one has
+// the next sync take its throw off; a sync that finds the IPv6 default route gone takes the rest off, the exits
+// standing; and the close takes every throw off.
+func TestTunLinuxSyncKeepsTheIpv6CarveInTheExitsTable(t *testing.T) {
+	iface, netlink := newTestTunLinuxDualExits(t)
+	settings := iface.system.settings
+	iface.device = newTestTunIdleDevice()
+	iface.eventsDone = make(chan struct{})
+	close(iface.eventsDone)
+	gateway := netip.MustParseAddr("192.0.2.1")
+	resolver := netip.MustParseAddr("2001:db8:ffff::53")
+	other := netip.MustParseAddr("2001:db8:fffe::53")
+	// the host's own addresses, its link-local router, which goes with its IPv6 default route, among them
+	host := []netip.Addr{gateway, netip.MustParseAddr("2001:db8:10::10"), netip.MustParseAddr("2001:db8::53")}
+	router := netip.MustParseAddr("fe80::1")
+	system := &testTunRecordedSystem{testTunSystem: newTestTunSystem(), linux: iface}
+	system.setLocal(append(slices.Clone(host), router, resolver, other))
+	tunBridge := newTestTunBridge()
+	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	// no zones, so no sync reaches the host's resolver
+	tunBridge.zones = nil
+	syncs := make(chan testTunCarveSync, 1024)
+	tun, err := startUrTun(context.Background(), &urTunArgs{
+		Name:      "ur-test",
+		NetworkId: sidecar.NewId(),
+		System:    system,
+		Bridge:    tunBridge,
+		Links:     &testTunLinks{},
+		Settings:  settings,
+		OnSync: func(err error) {
+			select {
+			case syncs <- testTunCarveSync{err: err, throwAddrs: testTunThrowAddrs(iface)}:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tun.close)
+	waitSync := func(what string, done func(carveSync testTunCarveSync) bool) {
+		t.Helper()
+		deadline := time.After(urTestTimeout)
+		for {
+			select {
+			case carveSync := <-syncs:
+				if done(carveSync) {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("waited too long for %s", what)
+			}
+		}
+	}
+	// the local read handing the bridge its addresses again, on the platform's watch
+	readLocal := func(localAddrs []netip.Addr) {
+		t.Helper()
+		want := slices.Clone(localAddrs)
+		slices.SortFunc(want, netip.Addr.Compare)
+		system.setLocal(localAddrs)
+		tun.wantLocal()
+		waitTunEvents(t, tunBridge.events, "the local read", func() bool {
+			localSets, _ := tunBridge.lastLocal()
+			return slices.Equal(localSets[len(localSets)-1], want)
+		})
+		// the bridge's own SetLocalAddresses calls its change callbacks; the fake's are called here
+		tunBridge.changed()
+	}
+
+	// the first sync runs before the first local read, so the one after it puts the throws on
+	waitSync("the carve's throws", func(carveSync testTunCarveSync) bool {
+		return carveSync.err == nil && slices.Equal(carveSync.throwAddrs, []netip.Addr{gateway, other, resolver})
+	})
+	events, _ := netlink.take()
+	if addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable); !slices.Equal(addedAddrs,
+		[]netip.Addr{gateway, other, resolver}) || len(removedAddrs) != 0 {
+		t.Fatalf("throws on %v, off %v", addedAddrs, removedAddrs)
+	}
+	if status := tun.status(); !status.DefaultRoute || status.ExitsHeld || status.SyncError != "" {
+		t.Fatalf("on: %+v", status)
+	}
+
+	// a resolver dropped from the host's addresses: the next sync takes its throw off
+	readLocal(append(slices.Clone(host), router, other))
+	waitSync("the dropped IPv6 address's throw to come off", func(carveSync testTunCarveSync) bool {
+		return slices.Equal(carveSync.throwAddrs, []netip.Addr{gateway, other})
+	})
+	events, _ = netlink.take()
+	if addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable); len(addedAddrs) != 0 ||
+		!slices.Equal(removedAddrs, []netip.Addr{resolver}) {
+		t.Fatalf("dropped: throws on %v, off %v", addedAddrs, removedAddrs)
+	}
+
+	// the IPv6 default route goes, and its router with it from the host's addresses: the next sync takes IPv6's throws
+	// off, and the exits stand
+	netlink.dropIpv6DefaultRoute()
+	readLocal(append(slices.Clone(host), other))
+	waitSync("IPv6's throws to come off with its default route", func(carveSync testTunCarveSync) bool {
+		return carveSync.err == nil && slices.Equal(carveSync.throwAddrs, []netip.Addr{gateway})
+	})
+	if status := tun.status(); !status.DefaultRoute || status.ExitsHeld || status.SyncError != "" {
+		t.Fatalf("no IPv6 default route: %+v", status)
+	}
+
+	// the close takes every throw off
+	netlink.take()
+	tun.close()
+	events, _ = netlink.take()
+	if addedAddrs, removedAddrs := testTunThrows(t, events, settings.ExitsTable); len(addedAddrs) != 0 ||
+		!slices.Equal(removedAddrs, []netip.Addr{gateway}) || len(testTunThrowAddrs(iface)) != 0 {
 		t.Fatalf("close: throws on %v, off %v", addedAddrs, removedAddrs)
 	}
 }
@@ -2301,6 +2853,223 @@ func TestTunLinuxExitsTakeIpv6InTheKernel(t *testing.T) {
 		}
 		if slices.ContainsFunc(rules, func(rule urTunLinuxRule) bool { return rule.protocol == urTunRouteProtocol }) {
 			t.Fatalf("a rule of ur's of family %d outlived the close", family)
+		}
+	}
+}
+
+// In the kernel, in a container's own network namespace with IPv6 on and no network but what the test makes, so nothing
+// leaves the host (QD-971): a tun of the test's stands for the physical path, with an IPv4 and an IPv6 address, its
+// IPv6 prefix on link, and the main table's default route of each family. Under exits ur tun's sync puts an IPv6 throw
+// in the exits table for a carved off-link IPv6 resolver and none for a carved resolver on the prefix or the host's own
+// IPv6 address; a datagram an unmarked socket sends to the off-link resolver leaves by the physical path and never
+// rides ur tun, one to the on-link resolver leaves by it too, and one to an address not carved rides ur tun; a local
+// read that drops the resolver takes its throw off at the next sync, after which its datagrams ride ur tun; and the
+// close leaves nothing of ur's in the exits table.
+func TestTunLinuxExitsPassTheIpv6CarveBackInTheKernel(t *testing.T) {
+	requireTunContainer(t, "isolated")
+	if content, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6"); err != nil || strings.TrimSpace(string(content)) != "0" {
+		t.Skip("IPv6 is off in this namespace: run the container with net.ipv6.conf.all.disable_ipv6=0")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	settings := testUrTunSettings()
+	linux := newUrTunLinuxSystem(settings, nil).(*urTunLinuxSystem)
+	physAddress := netip.MustParseAddr("2001:db8::2")
+	resolver := netip.MustParseAddr("2001:db8:ffff::53")
+	onLink := netip.MustParseAddr("2001:db8::53")
+	uncarved := netip.MustParseAddr("2001:db8:ffff::54")
+
+	// the physical path, and the IPv6 destinations it carries in the order it reads them
+	phys, err := linux.Open("ur-phys6c", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physIndex := urTunLinuxIndex("ur-phys6c")
+	physAddrs := make(chan netip.Addr, 64)
+	physDone := make(chan struct{})
+	go func() {
+		defer close(physDone)
+		bufs := [][]byte{make([]byte, settings.ReadHeadroomByteCount+settings.ReadPacketByteCount)}
+		sizes := []int{0}
+		for {
+			n, err := phys.Read(bufs, sizes, settings.ReadHeadroomByteCount)
+			packet := bufs[0][settings.ReadHeadroomByteCount:]
+			if n == 1 && 40 <= sizes[0] && packet[0]>>4 == 6 {
+				select {
+				case physAddrs <- netip.AddrFrom16([16]byte(packet[24:40])):
+				default:
+				}
+			}
+			if err != nil && !errors.Is(err, errUrTunSegmentsDropped) {
+				return
+			}
+		}
+	}()
+	defer func() {
+		phys.Close()
+		<-physDone
+	}()
+	if err := phys.SetAddresses([]netip.Addr{netip.MustParseAddr("192.0.2.2")}); err != nil {
+		t.Fatal(err)
+	}
+	physRoutes := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("192.0.2.0/24")}
+	if conflictCount, err := phys.SetRoutes(physRoutes); err != nil || conflictCount != 0 {
+		t.Fatalf("the physical path's routes: %d %v", conflictCount, err)
+	}
+	// its IPv6 address on its /64, with no duplicate detection so it is a source at once, which puts the prefix on link,
+	// and the main table's IPv6 default route
+	addressBody := make([]byte, unix.SizeofIfAddrmsg)
+	addressBody[0] = unix.AF_INET6
+	addressBody[1] = 64
+	addressBody[2] = unix.IFA_F_NODAD
+	addressBody[3] = unix.RT_SCOPE_UNIVERSE
+	binary.NativeEndian.PutUint32(addressBody[4:8], uint32(physIndex))
+	physOctets := physAddress.As16()
+	addressBody = append(addressBody, urNetlinkAttribute(unix.IFA_LOCAL, physOctets[:])...)
+	addressBody = append(addressBody, urNetlinkAttribute(unix.IFA_ADDRESS, physOctets[:])...)
+	if err := linux.request(unix.RTM_NEWADDR, unix.NLM_F_CREATE|unix.NLM_F_EXCL, addressBody); err != nil {
+		t.Fatalf("the physical path's IPv6 address: %v", err)
+	}
+	ipv6Default := urTunLinuxRouteBody(physIndex, netip.PrefixFrom(netip.IPv6Unspecified(), 0), unix.RT_TABLE_MAIN, 0, true)
+	if err := linux.request(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, ipv6Default); err != nil {
+		t.Fatalf("the physical path's IPv6 default route: %v", err)
+	}
+
+	system := &testTunCarvingSystem{urTunLinuxSystem: linux, extraAddrs: []netip.Addr{resolver, onLink}}
+	tunBridge := newTestTunBridge()
+	tunBridge.status.EgressMode = bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	tunBridge.zones = nil
+	// every packet ur tun reads goes to a link that takes it, the IPv6 destinations noted in order
+	sink := &testTunLink{}
+	tunAddrs := make(chan netip.Addr, 64)
+	tunBridge.route = func(packet []byte) connect.UserNatClient {
+		if 40 <= len(packet) && packet[0]>>4 == 6 {
+			select {
+			case tunAddrs <- netip.AddrFrom16([16]byte(packet[24:40])):
+			default:
+			}
+		}
+		return sink
+	}
+	synced := make(chan struct{}, 1024)
+	tun, err := startUrTun(ctx, &urTunArgs{
+		Name:      "ur-ipv6c",
+		NetworkId: sidecar.NewId(),
+		System:    system,
+		Bridge:    tunBridge,
+		Links:     &testTunLinks{},
+		Settings:  settings,
+		OnSync: func(err error) {
+			select {
+			case synced <- struct{}{}:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.close()
+	ipv6ThrowsInTable := func() []netip.Addr {
+		t.Helper()
+		routes, err := urTunLinuxRoutes(unix.AF_INET6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		throwAddrs := []netip.Addr{}
+		for _, route := range routes {
+			if urTunLinuxOwnThrow(route, settings.ExitsTable) {
+				throwAddrs = append(throwAddrs, route.dst.Addr())
+			}
+		}
+		return throwAddrs
+	}
+	waitSync := func(what string, done func() bool) {
+		t.Helper()
+		deadline := time.After(urTestTimeout)
+		for !done() {
+			select {
+			case <-synced:
+			case <-deadline:
+				t.Fatalf("waited too long for %s", what)
+			}
+		}
+	}
+	send := func(destination netip.Addr) {
+		t.Helper()
+		conn, err := net.DialUDP("udp6", nil, net.UDPAddrFromAddrPort(netip.AddrPortFrom(destination, 53)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.Write([]byte("ur tun ipv6 carve")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// what one of the devices carries until want, in order: a device reads what the kernel queued it in the order it was
+	// queued, so a datagram sent before want that took that device comes before it
+	until := func(addrs chan netip.Addr, want netip.Addr, what string) []netip.Addr {
+		t.Helper()
+		seen := []netip.Addr{}
+		deadline := time.After(urTestTimeout)
+		for !slices.Contains(seen, want) {
+			select {
+			case address := <-addrs:
+				seen = append(seen, address)
+			case <-deadline:
+				t.Fatalf("%s carried %v, not %v", what, seen, want)
+			}
+		}
+		return seen
+	}
+
+	// the off-link resolver's throw, and none for the on-link resolver or the host's own address
+	waitSync("the off-link IPv6 resolver's throw", func() bool {
+		return slices.Contains(ipv6ThrowsInTable(), resolver)
+	})
+	if throwAddrs := ipv6ThrowsInTable(); slices.Contains(throwAddrs, onLink) || slices.Contains(throwAddrs, physAddress) {
+		t.Fatalf("IPv6's throws %v", throwAddrs)
+	}
+	if status := tun.status(); !status.DefaultRoute || status.ExitsHeld {
+		t.Fatalf("on: %+v", status)
+	}
+
+	// the carved ones leave by the physical path, the on-link one by its prefix; the one not carved rides ur tun, and ur
+	// tun, which reads in order, never read a carved one before it
+	send(resolver)
+	send(onLink)
+	if physSeen := until(physAddrs, onLink, "the physical path"); !slices.Contains(physSeen, resolver) {
+		t.Fatalf("the physical path carried %v, not the resolver", physSeen)
+	}
+	send(uncarved)
+	if tunSeen := until(tunAddrs, uncarved, "ur tun"); slices.Contains(tunSeen, resolver) || slices.Contains(tunSeen, onLink) {
+		t.Fatalf("ur tun carried a carved datagram: %v", tunSeen)
+	}
+
+	// a local read that drops the resolver takes its throw off at the next sync, and its datagrams ride ur tun
+	system.setExtra([]netip.Addr{onLink})
+	tun.wantLocal()
+	waitTunEvents(t, tunBridge.events, "the local read without the resolver", func() bool {
+		localSets, _ := tunBridge.lastLocal()
+		return !slices.Contains(localSets[len(localSets)-1], resolver)
+	})
+	// the bridge's own SetLocalAddresses calls its change callbacks; the fake's are called here
+	tunBridge.changed()
+	waitSync("the resolver's throw to come off", func() bool {
+		return !slices.Contains(ipv6ThrowsInTable(), resolver)
+	})
+	send(resolver)
+	until(tunAddrs, resolver, "ur tun")
+
+	// the close leaves nothing of ur's in the exits table
+	tun.close()
+	routes, err := urTunLinuxRoutes(unix.AF_UNSPEC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range routes {
+		if route.table == settings.ExitsTable {
+			t.Fatalf("a route outlived the close in the exits table: %+v", route)
 		}
 	}
 }
