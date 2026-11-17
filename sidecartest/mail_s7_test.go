@@ -230,8 +230,8 @@ func s7Run(t *testing.T) func(ctx context.Context, run *sidecartest.ScenarioRun)
 		if err != nil {
 			return err
 		}
-		maximalBytes := bytes.Replace(maximal.Bytes, []byte("receiver@mx.network.root.example"), []byte(recipient), 1)
-		if reply := world.Send(s7OtherSender, settings.MxHost(), "sender@"+maximal.FromDomain, []string{recipient}, maximalBytes); !reply.Is(250) {
+		// sent as signed: RCPT routes it, and its To field stays the one its signatures cover
+		if reply := world.Send(s7OtherSender, settings.MxHost(), "sender@"+maximal.FromDomain, []string{recipient}, maximal.Bytes); !reply.Is(250) {
 			return fmt.Errorf("a message whose checks a bound cuts: %s", reply)
 		}
 		deposits, err = world.StandingDeposits(owner)
@@ -239,8 +239,14 @@ func s7Run(t *testing.T) func(ctx context.Context, run *sidecartest.ScenarioRun)
 			return fmt.Errorf("deposits after the cut message: %d, %v", len(deposits), err)
 		}
 		limits := deposits[0].Trailer.GetEvidence().GetLimits()
-		if limits.GetReason()&1 == 0 || limits.GetDkimSeen() != 64 || 8 < limits.GetDkimChecked() || 8 < len(deposits[0].Trailer.GetEvidence().GetDkim()) {
+		if limits.GetReason()&1 == 0 || limits.GetDkimSeen() != 64 || limits.GetDkimChecked() != 8 || len(deposits[0].Trailer.GetEvidence().GetDkim()) != 8 {
 			return fmt.Errorf("the cut message's limits %v", limits)
+		}
+		// what was verified: the 8 selected signatures, each valid, none aligned with From
+		for _, dkim := range deposits[0].Trailer.GetEvidence().GetDkim() {
+			if dkim.GetResult() != protocol.DkimVerdict_DKIM_PASS {
+				return fmt.Errorf("a selected valid signature sealed %v", dkim.GetResult())
+			}
 		}
 		messages = messages[:0]
 		if pass, err := ingestor.Ingest(ctx); err != nil || pass.Ingested != 1 || len(messages) != 1 {
