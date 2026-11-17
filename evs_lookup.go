@@ -5,15 +5,22 @@
 // idempotent through the path's own versions rather than a key evs keeps, since §11.20's per-path version, signer and
 // git oid answer Lookup:
 //
-//	lookup   the path's first version after the action's base_version, read fresh and walked back from its newest:
-//	         versions only rise (a write is v + 1, a removal the version past the one it removes, a creation
-//	         max(its push's base, a standing removal's) + 1, I-EVS-8), so it is the smallest the walk sees above
-//	         base_version. base_version is the path's newest version as the action read it, a standing file's or a
-//	         removal's, 0 for a path evs showed nothing of. Found when this sidecar signed that version and it is the
-//	         action's (its content, or for a delete a removal); other when anything else holds it, so the action's
-//	         push, which evs holds to base_version (5g), can never commit; none while the path's newest is still
-//	         base_version. The walk stops at a creation, whose removed past History does not read, so a path removed
-//	         and made again more than once since base_version reads as its newest life
+//	lookup   the path's first version after the action's base_version, read fresh and walked back from its newest
+//	         across each creation into the life before it (History; owner decision 380, QD-888): versions only rise
+//	         (a write is v + 1, a removal the version past the one it removes, a creation max(its push's base, a
+//	         standing removal's) + 1, I-EVS-8), so it is the smallest the walk sees above base_version, in whichever
+//	         life, however often the path was removed and made again since. base_version is the path's newest version
+//	         as the action read it, a standing file's or a removal's, 0 for a path evs showed nothing of. Found when
+//	         this sidecar signed that version and it is the action's (its content, or for a delete a removal); other
+//	         when anything else holds it, so the action's push, which evs holds to base_version (5g), can never
+//	         commit; none while the path's newest is still base_version
+//	nothing  a base_version of 0 places the action's read among none of the path's lives, any of which it may not
+//	         have seen (a removal whose marker a collection took reads as nothing, QD-879), so a life older than the
+//	         newest cannot be told from one made after the read: the action, a creation, is judged at the newest
+//	         life's creation alone, and the walk stops there. A life this sidecar created and that was removed and made
+//	         again by another since reads other, never found for an earlier action's equal write
+//	unread   a walk that stops below a creation or a removal evs could not read (History's BelowUnknown) before it
+//	         reached base_version leaves the first version unknown
 //	effect   EvsWriteEffect pushes only while Lookup finds none, and looks again after any refusal: found is done,
 //	         other is not_done, and none after a refusal that refused every attempt for good (an evs refusal that is
 //	         not a 429 or a 503, or a refusal before anything was sent) is not_done too; anything that leaves an
@@ -57,8 +64,9 @@ var (
 	// A Lookup that names no path, both or neither of a write's content hashes, or content for a removal, or a stored
 	// action that is not an evs effect's.
 	ErrEvsLookupInvalid = errors.New("evs: lookup invalid")
-	// Lookup cannot tell whose the path's first version after base_version is: its removal's marker is gone, or the
-	// walk passed LookupVersionCount. The use it reconciles stays uncertain.
+	// Lookup cannot tell whose the path's first version after base_version is: its removal's marker is gone, the
+	// walk passed LookupVersionCount, or evs could not read below a creation or removal it reached. The use it
+	// reconciles stays uncertain.
 	ErrEvsLookupUnknown = errors.New("evs: the first version after base_version cannot be read")
 	// A git-mode write the local tier refused for good: the tip moved on each of WriteAtTipTryCount tries, or the
 	// receive path refused the update with no attempt of it left open.
@@ -152,15 +160,24 @@ func (self *EvsRepo) Lookup(ctx context.Context, args *EvsLookupArgs) (*EvsLooku
 		return nil, err
 	}
 	result := &EvsLookupResult{}
-	// the walk from the newest version down: versions only rise (I-EVS-8), so the smallest it sees above
-	// base_version is the first after it; it stops at or below base_version, or where History reads no further, a
-	// creation, whose removed past it does not walk
+	// the walk from the newest version down, across each creation: versions only rise (I-EVS-8), so the smallest it
+	// sees above base_version is the first after it; it stops at or below base_version, below the path's first
+	// creation, or at version 1, and under base_version 0 at the newest life's creation (see the file header)
 	var first *EvsHistoryVersion
+	var last *EvsHistoryVersion
 	version := uint64(0)
 	walked := 0
 	newest := uint64(0)
+	reached := false
+	unread := false
 	for {
-		history, err := self.History(ctx, &EvsReadArgs{RefName: refName, Path: args.Path, Version: version, Fresh: version == 0})
+		history, err := self.History(ctx, &EvsReadArgs{
+			RefName: refName, Path: args.Path, Version: version, Fresh: version == 0, NewestLife: args.BaseVersion == 0,
+		})
+		if evsHistoryBelowUnread(last, err) {
+			unread = true
+			break
+		}
 		if errors.Is(err, ErrEvsPathAbsent) {
 			break
 		}
@@ -176,17 +193,24 @@ func (self *EvsRepo) Lookup(ctx context.Context, args *EvsLookupArgs) (*EvsLooku
 		if newest == 0 {
 			newest = history.Versions[0].Version
 		}
-		reached := false
 		for _, read := range history.Versions {
-			if read.Version <= args.BaseVersion {
+			if args.BaseVersion != 0 && read.Version <= args.BaseVersion {
 				reached = true
 				break
 			}
 			first = read
+			if args.BaseVersion == 0 && read.Created {
+				reached = true
+				break
+			}
 		}
 		walked += len(history.Versions)
-		last := history.Versions[len(history.Versions)-1]
-		// History stops short of its count only at a creation or at version 1
+		last = history.Versions[len(history.Versions)-1]
+		if history.BelowUnknown {
+			unread = !reached
+			break
+		}
+		// History stops short of its count only below the path's first creation, at version 1, or at an alarm
 		if reached || len(history.Versions) < self.client.settings.HistoryVersionCount || last.Version <= 1 {
 			break
 		}
@@ -203,6 +227,8 @@ func (self *EvsRepo) Lookup(ctx context.Context, args *EvsLookupArgs) (*EvsLooku
 	case newest == 0:
 		// a path that stood at base_version reads absent with no removal: whose its removal was is gone
 		return nil, fmt.Errorf("%w: the path's removal is no longer shown", ErrEvsLookupUnknown)
+	case unread:
+		return nil, fmt.Errorf("%w: evs could not read below version %d", ErrEvsLookupUnknown, last.Version)
 	case first == nil && newest == args.BaseVersion:
 		result.State = EvsLookupNone
 		return result, nil

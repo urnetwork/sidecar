@@ -3,21 +3,23 @@
 // How a reader takes mailcfg (MAIL-M7-04; I-4, D-ACL-12, reading 15 of plan-MAIL-small-readings, QD-106): the
 // store seam, the replay that judges each version of a record, the Sync that keeps the table, and Resolve.
 //
-//	replay    one path's life, oldest first: its creation, the versions after it, and its removal if it ends in
-//	          one. The creation counts only when it decodes as its path's record and, for an address, names its
+//	replay    each life of one path, oldest first: its creation, the versions after it, and its removal if it ends
+//	          in one. The creation counts only when it decodes as its path's record and, for an address, names its
 //	          push's signer as creator; a burner's creator is that signer. Each later version counts only from a
 //	          signer that may change the record (a consented device of the member who owns its mailbox, a group
 //	          repo's admin) and only when it keeps the kind, the mailbox, the creator and the effect key; a burned
 //	          label never changes again. An owner's removal ends an address and burns a label for good; another
 //	          signer's removal is passed over and the record stands as it was. A versionless version counts for
 //	          nothing. Every version passed over raises one alarm
-//	lives     evs reads a path's standing life, or a removed path's last one: History stops at a creation, so a
-//	          path removed and made again shows a fresh reader only its newest life (evs_history.go, evs_lookup.go's
-//	          header). So a reader holds the record it honored across syncs: a life that replaces it without this
-//	          reader having judged the removal between counts only when its creator may change the record it
-//	          replaces, and is otherwise passed over with an alarm while this process lives. A reader that starts
-//	          after such a re-creation cannot see the earlier life (question
-//	          mail-m7-04-recreated-record-history)
+//	lives     History walks every life of the path, below each creation into the removal that ended the life
+//	          before it (owner decision 380; QD-888), so each creation is judged against the record the lives before
+//	          it left standing: a later life counts only when its creator may change the record it replaces, and is
+//	          otherwise passed over with an alarm, and a label kept forever or burned is never made again (reading
+//	          15, QD-106; §15.7). A reader that starts fresh so judges a re-created record as a running one does. A
+//	          record this reader honored from a life evs no longer shows stands against the lives shown, as a running
+//	          reader holds it. Where evs could not read below a creation or a removal (History's BelowUnknown), the
+//	          replay is unread, as one past its bound: the record is unknown until the path moves (question
+//	          evs-read-earlier-lives-scan-bound)
 //	sync      one fresh read of the ref, then addr/ and burner/ listed, each record's head read and the paths whose
 //	          version moved replayed, then the paths that no longer stand; a name that is no address or label of
 //	          this zone is passed over
@@ -49,6 +51,8 @@ type mailConfigVersion struct {
 	SignerSidecarId Id
 	// The removal that ended the path at this version.
 	Removed bool
+	// A creation, which starts a life of the path: its first version, or one made again after a removal.
+	Created bool
 	// 0 kept; anything else is passed over.
 	Versioning uint32
 }
@@ -60,8 +64,9 @@ type mailConfigStore interface {
 	RepoId() Id
 	// Brings this device's view of the ref up to its newest committed head, so the reads after it are no older.
 	Refresh(ctx context.Context) error
-	// The versions of path's standing life, or of a removed path's last life with its removal, newest first;
-	// ErrEvsPathAbsent where the path never stood, ErrMailConfigReplayBound past maxCount of them.
+	// The versions of every life of path, newest first, each creation marked and each removal that ended a life
+	// between them; ErrEvsPathAbsent where the path never stood, ErrMailConfigReplayBound past maxCount of them or
+	// where evs could not read below a creation or a removal (History's BelowUnknown).
 	Versions(ctx context.Context, path string, maxCount int) ([]*mailConfigVersion, error)
 	// The content of one written version of path, refusing with ErrMailStoreTooLarge past maxByteCount bytes.
 	ReadVersion(ctx context.Context, path string, version uint64, maxByteCount int) ([]byte, error)
@@ -93,12 +98,21 @@ func (self *mailConfigEvsStore) Refresh(ctx context.Context) error {
 	return err
 }
 
-// History's walk, page by page: see mailConfigStore.
+// History's walk across every life, page by page: see mailConfigStore.
 func (self *mailConfigEvsStore) Versions(ctx context.Context, path string, maxCount int) ([]*mailConfigVersion, error) {
 	versions := []*mailConfigVersion{}
 	pageCount := self.repo.client.settings.HistoryVersionCount
+	unread := func(below uint64) error {
+		return fmt.Errorf("%w: evs could not read below version %d", ErrMailConfigReplayBound, below)
+	}
+	// the oldest version the last page listed, whose next page reads by number alone below it, as History's own
+	// steps below a creation or a removal do
+	var pageEnd *EvsHistoryVersion
 	for next := uint64(0); ; {
 		history, err := self.repo.History(ctx, &EvsReadArgs{RefName: self.refName, Path: path, Version: next, Fresh: next == 0})
+		if evsHistoryBelowUnread(pageEnd, err) {
+			return nil, unread(pageEnd.Version)
+		}
 		if errors.Is(err, ErrEvsPathAbsent) && 0 < len(versions) {
 			return versions, nil
 		}
@@ -114,12 +128,16 @@ func (self *mailConfigEvsStore) Versions(ctx context.Context, path string, maxCo
 				Version:         version.Version,
 				SignerSidecarId: version.SignerSidecarId,
 				Removed:         version.Removed,
+				Created:         version.Created,
 				Versioning:      version.Versioning,
 			})
 			descended = true
 		}
 		if maxCount < len(versions) {
 			return nil, ErrMailConfigReplayBound
+		}
+		if history.BelowUnknown {
+			return nil, unread(history.Versions[len(history.Versions)-1].Version)
 		}
 		if !descended {
 			return versions, nil
@@ -128,6 +146,7 @@ func (self *mailConfigEvsStore) Versions(ctx context.Context, path string, maxCo
 		if len(history.Versions) < pageCount || last.Version <= 1 {
 			return versions, nil
 		}
+		pageEnd = history.Versions[len(history.Versions)-1]
 		next = last.Version - 1
 	}
 }
@@ -314,7 +333,8 @@ type mailConfigReplay struct {
 	everStood   bool
 	standing    bool
 	headVersion uint64
-	// The life read: its creating version, that version's signer and content.
+	// The newest life, the one standing or the one the newest removal ended: its creating version, that version's
+	// signer and content.
 	lifeVersion  uint64
 	lifeSignerId Id
 	lifeContent  []byte
@@ -322,7 +342,7 @@ type mailConfigReplay struct {
 	record *mailConfigRecord
 }
 
-// Whether the life read was created by sidecarId under effectKey: what a creation's retry and a restart's Lookup
+// Whether the newest life was created by sidecarId under effectKey: what a creation's retry and a restart's Lookup
 // look for. An empty key matches only content equal to want, a standing grant's creation having no key to tell it
 // by.
 func (self *mailConfigReplay) createdBy(sidecarId Id, effectKey []byte, want []byte, decode func(content []byte) *mailConfigRecord) bool {
@@ -342,8 +362,9 @@ func (self *mailConfigReplay) createdBy(sidecarId Id, effectKey []byte, want []b
 	return bytes.Equal(record.address.GetEffectKey(), effectKey)
 }
 
-// Reads and judges one path's life: see the file header. held is the record this reader honored there before, nil
-// for none, which a life this reader did not see replace it must be allowed to change.
+// Reads and judges each life of one path: see the file header. held is the record this reader honored there before,
+// nil for none: where evs shows none of the life it came from, it stands against the oldest life shown, which must be
+// allowed to change it.
 func (self *MailConfig) replay(ctx context.Context, name *mailConfigName, held *mailConfigRecord) (*mailConfigReplay, error) {
 	versions, err := self.store.Versions(ctx, name.path, max(self.settings.ReplayVersionMaxCount, 1))
 	if errors.Is(err, ErrEvsPathAbsent) {
@@ -375,16 +396,30 @@ func (self *MailConfig) replay(ctx context.Context, name *mailConfigName, held *
 		return self.decodeRecord(name, content), content, nil
 	}
 
+	// a life starts at the oldest version shown and at each creation after it; the newest life is the one standing,
+	// or the one the newest removal ended
+	starts := func(index int) bool {
+		return index == 0 || versions[index].Created
+	}
+	newestLife := 0
+	for index, version := range versions {
+		if starts(index) && !version.Removed {
+			newestLife = index
+		}
+	}
 	replay.headVersion = versions[len(versions)-1].Version
 	replay.standing = !versions[len(versions)-1].Removed
-	replay.lifeVersion = versions[0].Version
-	replay.lifeSignerId = versions[0].SignerSidecarId
+	replay.lifeVersion = versions[newestLife].Version
+	replay.lifeSignerId = versions[newestLife].SignerSidecarId
 
-	// the record that stands as the replay goes, and whether the life being read is its own
+	// the record that stands as the replay goes, and whether the life being read is its own: none before the oldest
+	// life shown, unless this reader honored a record from a life evs shows none of
 	record := held
-	if record != nil && record.createdVersion == replay.lifeVersion && record.creatorSidecarId == replay.lifeSignerId {
-		// the same life this reader honored before: judged again from its creation
-		record = nil
+	for index, version := range versions {
+		if held != nil && starts(index) && version.Version == held.createdVersion && version.SignerSidecarId == held.creatorSidecarId {
+			// the life this reader honored is shown: every life is judged again from the oldest
+			record = nil
+		}
 	}
 	lifeHonored := false
 	for index, version := range versions {
@@ -409,6 +444,10 @@ func (self *MailConfig) replay(ctx context.Context, name *mailConfigName, held *
 			}
 			continue
 		}
+		if starts(index) {
+			// a life's creation: the life before it, if any, ended at a removal or is passed over
+			lifeHonored = false
+		}
 		if version.Versioning != 0 {
 			alarm(version, MailConfigAlarmVersioning)
 			continue
@@ -417,8 +456,10 @@ func (self *MailConfig) replay(ctx context.Context, name *mailConfigName, held *
 		if err != nil {
 			return nil, err
 		}
-		if index == 0 {
-			replay.lifeContent = content
+		if starts(index) {
+			if index == newestLife {
+				replay.lifeContent = content
+			}
 			if next == nil {
 				alarm(version, MailConfigAlarmInvalid)
 				continue
@@ -430,9 +471,9 @@ func (self *MailConfig) replay(ctx context.Context, name *mailConfigName, held *
 				}
 			}
 			if record != nil {
-				// a life this reader did not see replace the record it holds: only a device that may change that
-				// record replaces it, with what a later version of it could hold, and a label kept forever or
-				// burned is never made again
+				// a life over a record the lives before it left standing, or one this reader holds from a life evs
+				// no longer shows: only a device that may change that record replaces it, with what a later version
+				// of it could hold, and a label kept forever or burned is never made again
 				replaces := !record.removedForever && mayChange(version.SignerSidecarId, record) &&
 					record.mailboxRepoId == next.mailboxRepoId && (record.address != nil) == (next.address != nil)
 				if replaces && record.burner != nil {

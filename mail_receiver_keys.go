@@ -17,9 +17,16 @@
 //	         receiver served before, which it holds in memory past the keychain's promotion with the certificate it
 //	         last presented on it; a restart inside that window serves nothing until the new key is live (§9.9's
 //	         serving=false), the closed direction, so senders retry
-//	retire   a key neither held nor served has its record dropped. Its TLSA stays until the receiver's removal
-//	         retires every key of it (DNS-M7-02, I-15): no route retires one key alone, which question
-//	         mail-m7-13-rotated-key-tlsa raises
+//	retire   a key neither held nor served is rotated out: its publication record becomes a retirement, and once a
+//	         key serves, the receiver posts the served key again, which the route takes as a repeat, with each
+//	         rotated-out key's SPKI hash in retire_spki_sha256; the route retires those of the caller's own published
+//	         keys of the host in the same write and rebuilds its TLSA (§15.5, §12.8; owner decision 443). At a
+//	         rotation that is the swap at 600 s, so a key rotated on suspicion leaves TLSA as soon as its successor
+//	         serves, and never while it still serves. A post that fails is tried again with the receiver's other DNS
+//	         writes, after PublishRetryInterval, and the retirement waits in the store until the route answers, a
+//	         restart included. A confirmed retirement stays RetiredKeyRetention, which a restore's re-registration
+//	         (§19.10) names again, since a dump restored from before it holds the key published. A removal retires
+//	         every key of the receiver server side (DNS-M7-02, I-15)
 //
 // Nothing here logs a host, a name or a key (I-13). The store's records are public values, and the private key is
 // reached only as a crypto.Signer, by crypto/tls and by a self-signed leaf's signature.
@@ -27,6 +34,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -36,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -70,8 +79,10 @@ type MailReceiverKeys interface {
 // POST /dns/key-record (§12.8) as a receiver calls it. Safe for concurrent use.
 type MailReceiverKeyPublisher interface {
 	// Publishes key's TLSA 3 1 1 at _25._tcp.<host> under the network's zone, with the identity key's attestation for
-	// key and identifierSet; nil once the zone's TLSA holds it, which a key published before answers too.
-	PublishKeyRecord(ctx context.Context, host string, key *TlsDeviceKey, identifierSet []string) error
+	// key and identifierSet, and in the same write retires each of the caller's own published keys of host whose SPKI
+	// SHA-256 retireSpkiSha256s names, which must not name key (owner decision 443); nil once the zone's TLSA holds key
+	// and none of those, which a key published before, and a retirement made before, answer too.
+	PublishKeyRecord(ctx context.Context, host string, key *TlsDeviceKey, identifierSet []string, retireSpkiSha256s [][sha256.Size]byte) error
 }
 
 // MailReceiverKeys over a Sidecar's device key.
@@ -111,7 +122,7 @@ func newMailReceiverDnsPublisher(dns *DnsClient, sign TlsKeyAttestationSignFunct
 }
 
 // See MailReceiverKeyPublisher.
-func (self *mailReceiverDnsPublisher) PublishKeyRecord(ctx context.Context, host string, key *TlsDeviceKey, identifierSet []string) error {
+func (self *mailReceiverDnsPublisher) PublishKeyRecord(ctx context.Context, host string, key *TlsDeviceKey, identifierSet []string, retireSpkiSha256s [][sha256.Size]byte) error {
 	if self.dns == nil || self.sign == nil || key == nil {
 		return ErrMailReceiverKeys
 	}
@@ -130,7 +141,11 @@ func (self *mailReceiverDnsPublisher) PublishKeyRecord(ctx context.Context, host
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(&DnsKeyRecordRequest{Host: host, Spki: key.Spki(), Attestation: attestation})
+	request := &DnsKeyRecordRequest{Host: host, Spki: key.Spki(), Attestation: attestation}
+	for _, retireSpkiSha256 := range retireSpkiSha256s {
+		request.RetireSpkiSha256s = append(request.RetireSpkiSha256s, bytes.Clone(retireSpkiSha256[:]))
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("dns POST %s: a body that does not marshal", DnsKeyRecordPath)
 	}
@@ -179,25 +194,38 @@ type mailReceiverTlsaRecord struct {
 	PublishTimeMillis int64  `json:"publish_time_ms"`
 }
 
-// The store file's form.
-type mailReceiverTlsaFile struct {
-	Format  int                       `json:"format"`
-	Records []*mailReceiverTlsaRecord `json:"records"`
+// One rotated-out key's retirement as the store keeps it: public values only.
+type mailReceiverTlsaRetirement struct {
+	Host       string `json:"host"`
+	SpkiSha256 string `json:"spki_sha256"`
+	// When the route last confirmed the key retired, 0 until it has.
+	RetireTimeMillis int64 `json:"retire_time_ms"`
 }
 
-// The receiver's TLSA publications: in memory, and in the store when one is given, so a restart knows when each key
-// went out and serves none early. Not safe for concurrent use: the receiver's key pass alone reads and writes it.
+// The store file's form. A file written before retirements were kept has none, which reads as none, so the format
+// stays 1.
+type mailReceiverTlsaFile struct {
+	Format      int                           `json:"format"`
+	Records     []*mailReceiverTlsaRecord     `json:"records"`
+	Retirements []*mailReceiverTlsaRetirement `json:"retirements,omitempty"`
+}
+
+// The receiver's TLSA publications and its rotated-out keys' retirements: in memory, and in the store when one is
+// given, so a restart knows when each key went out and serves none early, and still retires what it rotated out. Not
+// safe for concurrent use: the receiver's key pass alone reads and writes it.
 type mailReceiverTlsaRecords struct {
 	store  SidecarStore
 	host   string
 	loaded bool
 	// by the SPKI's SHA-256 in hex
 	publishTimes map[string]time.Time
+	// the rotated-out keys by the SPKI's SHA-256 in hex: when the route confirmed each retired, zero until it has
+	retireTimes map[string]time.Time
 }
 
 // Records of host's keys in store, which may be nil.
 func newMailReceiverTlsaRecords(store SidecarStore, host string) *mailReceiverTlsaRecords {
-	return &mailReceiverTlsaRecords{store: store, host: host, publishTimes: map[string]time.Time{}}
+	return &mailReceiverTlsaRecords{store: store, host: host, publishTimes: map[string]time.Time{}, retireTimes: map[string]time.Time{}}
 }
 
 // Reads the store once. A file that does not decode is a failure, never absence (D-CORE-15), so nothing is taken as
@@ -231,6 +259,19 @@ func (self *mailReceiverTlsaRecords) load() error {
 				}
 				self.publishTimes[record.SpkiSha256] = time.UnixMilli(record.PublishTimeMillis)
 			}
+			for _, retirement := range file.Retirements {
+				if retirement == nil || retirement.Host != self.host {
+					continue
+				}
+				if decoded, err := hex.DecodeString(retirement.SpkiSha256); err != nil || len(decoded) != sha256.Size || retirement.RetireTimeMillis < 0 {
+					return errMailReceiverTlsaFormat
+				}
+				retireTime := time.Time{}
+				if 0 < retirement.RetireTimeMillis {
+					retireTime = time.UnixMilli(retirement.RetireTimeMillis)
+				}
+				self.retireTimes[retirement.SpkiSha256] = retireTime
+			}
 		}
 	}
 	self.loaded = true
@@ -247,43 +288,111 @@ func (self *mailReceiverTlsaRecords) publishTime(key *TlsDeviceKey) (time.Time, 
 // Keeps key's publication at publishTime, durably before it counts.
 func (self *mailReceiverTlsaRecords) put(key *TlsDeviceKey, publishTime time.Time) error {
 	spkiSha256 := key.SpkiSha256()
-	publishTimes := map[string]time.Time{}
-	for spki, at := range self.publishTimes {
-		publishTimes[spki] = at
-	}
+	publishTimes := maps.Clone(self.publishTimes)
 	publishTimes[hex.EncodeToString(spkiSha256[:])] = publishTime
-	if err := self.write(publishTimes); err != nil {
+	if err := self.write(publishTimes, self.retireTimes); err != nil {
 		return err
 	}
 	self.publishTimes = publishTimes
 	return nil
 }
 
-// Drops the records of every key but those in keys, which may hold nils.
-func (self *mailReceiverTlsaRecords) keepOnly(keys ...*TlsDeviceKey) error {
-	kept := map[string]time.Time{}
+// Rotates out every key with a publication record that keys, which may hold nils, does not hold: its record becomes
+// an unconfirmed retirement, durably before it counts. A key keys holds leaves the retirements, should one ever come
+// back, so no retirement names a key the receiver holds or serves.
+func (self *mailReceiverTlsaRecords) rotateOut(keys ...*TlsDeviceKey) error {
+	held := map[string]bool{}
 	for _, key := range keys {
 		if key == nil {
 			continue
 		}
 		spkiSha256 := key.SpkiSha256()
-		spki := hex.EncodeToString(spkiSha256[:])
-		if at, ok := self.publishTimes[spki]; ok {
-			kept[spki] = at
+		held[hex.EncodeToString(spkiSha256[:])] = true
+	}
+	changed := false
+	publishTimes := map[string]time.Time{}
+	retireTimes := maps.Clone(self.retireTimes)
+	for spki, at := range self.publishTimes {
+		if held[spki] {
+			publishTimes[spki] = at
+			continue
+		}
+		changed = true
+		if _, retiring := retireTimes[spki]; !retiring {
+			retireTimes[spki] = time.Time{}
 		}
 	}
-	if len(kept) == len(self.publishTimes) {
+	for spki := range self.retireTimes {
+		if held[spki] {
+			changed = true
+			delete(retireTimes, spki)
+		}
+	}
+	if !changed {
 		return nil
 	}
-	if err := self.write(kept); err != nil {
+	if err := self.write(publishTimes, retireTimes); err != nil {
 		return err
 	}
-	self.publishTimes = kept
+	self.publishTimes = publishTimes
+	self.retireTimes = retireTimes
+	return nil
+}
+
+// Forgets each retirement the route confirmed retention or longer before now.
+func (self *mailReceiverTlsaRecords) forgetRetired(now time.Time, retention time.Duration) error {
+	retireTimes := maps.Clone(self.retireTimes)
+	maps.DeleteFunc(retireTimes, func(spki string, retireTime time.Time) bool {
+		return !retireTime.IsZero() && !now.Before(retireTime.Add(retention))
+	})
+	if len(retireTimes) == len(self.retireTimes) {
+		return nil
+	}
+	if err := self.write(self.publishTimes, retireTimes); err != nil {
+		return err
+	}
+	self.retireTimes = retireTimes
+	return nil
+}
+
+// The SPKI SHA-256s a retirement names, in order: those the route has not confirmed, or with all every retirement
+// kept.
+func (self *mailReceiverTlsaRecords) retireList(all bool) [][sha256.Size]byte {
+	spkis := []string{}
+	for spki, retireTime := range self.retireTimes {
+		if all || retireTime.IsZero() {
+			spkis = append(spkis, spki)
+		}
+	}
+	slices.Sort(spkis)
+	list := [][sha256.Size]byte{}
+	for _, spki := range spkis {
+		// each was checked to be a SHA-256's hex where it came in
+		if decoded, err := hex.DecodeString(spki); err == nil && len(decoded) == sha256.Size {
+			list = append(list, [sha256.Size]byte(decoded))
+		}
+	}
+	return list
+}
+
+// Keeps the retirements of list's keys confirmed at now, durably before it counts.
+func (self *mailReceiverTlsaRecords) confirmRetired(list [][sha256.Size]byte, now time.Time) error {
+	retireTimes := maps.Clone(self.retireTimes)
+	for _, spkiSha256 := range list {
+		spki := hex.EncodeToString(spkiSha256[:])
+		if _, retiring := retireTimes[spki]; retiring {
+			retireTimes[spki] = now
+		}
+	}
+	if err := self.write(self.publishTimes, retireTimes); err != nil {
+		return err
+	}
+	self.retireTimes = retireTimes
 	return nil
 }
 
 // The records as the store's file, replacing what it held.
-func (self *mailReceiverTlsaRecords) write(publishTimes map[string]time.Time) error {
+func (self *mailReceiverTlsaRecords) write(publishTimes map[string]time.Time, retireTimes map[string]time.Time) error {
 	if self.store == nil {
 		return nil
 	}
@@ -292,6 +401,16 @@ func (self *mailReceiverTlsaRecords) write(publishTimes map[string]time.Time) er
 		file.Records = append(file.Records, &mailReceiverTlsaRecord{Host: self.host, SpkiSha256: spki, PublishTimeMillis: at.UnixMilli()})
 	}
 	slices.SortFunc(file.Records, func(a *mailReceiverTlsaRecord, b *mailReceiverTlsaRecord) int {
+		return strings.Compare(a.SpkiSha256, b.SpkiSha256)
+	})
+	for spki, at := range retireTimes {
+		retirement := &mailReceiverTlsaRetirement{Host: self.host, SpkiSha256: spki}
+		if !at.IsZero() {
+			retirement.RetireTimeMillis = at.UnixMilli()
+		}
+		file.Retirements = append(file.Retirements, retirement)
+	}
+	slices.SortFunc(file.Retirements, func(a *mailReceiverTlsaRetirement, b *mailReceiverTlsaRetirement) int {
 		return strings.Compare(a.SpkiSha256, b.SpkiSha256)
 	})
 	data, err := json.Marshal(file)

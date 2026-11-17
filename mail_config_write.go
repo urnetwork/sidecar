@@ -323,7 +323,7 @@ func (self *MailConfig) CreateAddress(ctx context.Context, args *MailCreateAddre
 }
 
 // What the path's first version after baseVersion is: this sidecar's removal (found, with its version), anything
-// else (other), or nothing yet (none). It reads the path's newest life, as EvsRepo.Lookup does.
+// else (other), or nothing yet (none). It reads every life since baseVersion, as EvsRepo.Lookup does (QD-888).
 func (self *MailConfig) removalLookup(ctx context.Context, name *mailConfigName, baseVersion uint64) (EvsLookupState, uint64, error) {
 	versions, err := self.store.Versions(ctx, name.path, max(self.settings.ReplayVersionMaxCount, 1))
 	if errors.Is(err, ErrEvsPathAbsent) {

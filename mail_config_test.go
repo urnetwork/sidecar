@@ -1,6 +1,8 @@
 // MAIL-M7-04's tests: mailcfg's records replayed per version on an in-memory repo with evs's path CAS, versions
 // and signers, the outward actions through a stand-in gate that spends as §16.6's does, and the same paths over the
-// evs stand-in, where every server-visible byte is scanned for an alias.
+// evs stand-in, where every server-visible byte is scanned for an alias. Every life of a re-created record is
+// replayed (QD-888), so a reader that starts fresh refuses a takeover and a reissued burner as a running one does,
+// and keeps a record unknown where evs cannot read below its creation (QD-1006).
 
 package sidecar
 
@@ -33,10 +35,11 @@ type mailConfigTestVersion struct {
 	content    []byte
 }
 
-// A mailcfg repo in memory: every version of every path with its signer, evs's path CAS, and History's reach, a
-// standing life or a removed path's last one. beforeWrite, when set, runs once with no lock held at the start of the
-// next write, so a test lands a racing write between a writer's read and its write; loseAnswer commits the next
-// write and answers it with an error, as a lost reply does.
+// A mailcfg repo in memory: every version of every path with its signer, evs's path CAS, and History's reach, every
+// life of a path since QD-888. beforeWrite, when set, runs once with no lock held at the start of the next write, so a
+// test lands a racing write between a writer's read and its write; loseAnswer commits the next write and answers it
+// with an error, as a lost reply does; a path in unreadBelow reads as evs answers one it cannot read below the newest
+// life's creation of (History's BelowUnknown).
 type mailConfigTestRepo struct {
 	repoId Id
 
@@ -49,6 +52,7 @@ type mailConfigTestRepo struct {
 	nextFollower int
 	writeCount   int
 	failReads    error
+	unreadBelow  map[string]bool
 }
 
 func newMailConfigTestRepo() *mailConfigTestRepo {
@@ -242,15 +246,17 @@ func (self *mailConfigTestStore) Versions(ctx context.Context, path string, maxC
 	if len(all) == 0 {
 		return nil, ErrEvsPathAbsent
 	}
-	// newest first, back to the creation of the newest life: History's reach
+	// newest first, through every life to the first creation: History's reach, each creation marked
 	versions := []*mailConfigVersion{}
 	for index := len(all) - 1; 0 <= index; index -= 1 {
 		version := all[index]
+		created := !version.removed && (index == 0 || all[index-1].removed)
 		versions = append(versions, &mailConfigVersion{
-			Version: version.version, SignerSidecarId: version.signerId, Removed: version.removed, Versioning: version.versioning,
+			Version: version.version, SignerSidecarId: version.signerId, Removed: version.removed, Created: created,
+			Versioning: version.versioning,
 		})
-		if !version.removed && (index == 0 || all[index-1].removed) {
-			break
+		if created && 0 < index && self.repo.unreadBelow[path] {
+			return nil, fmt.Errorf("%w: evs could not read below version %d", ErrMailConfigReplayBound, version.version)
 		}
 	}
 	if maxCount < len(versions) {
@@ -900,7 +906,9 @@ func TestMailConfigAReleasedNameRoutesNothingToANewOwner(t *testing.T) {
 		t.Fatalf("alarms %v", reasons)
 	}
 
-	// both land between two Syncs of another reader, which never saw the removal
+	// both land between two Syncs of another reader, which never saw the removal: it reads every life (QD-888), so it
+	// passes over the first takeover's removal and creation as the receiver did, takes the owner's own creation over
+	// the record they left standing, and passes over the second takeover too
 	late := newMailConfigTestDevice(t, repo, authority, testMailConfigPhoneId, nil)
 	repo.commit(path, testMailConfigOtherId, nil)
 	repo.commit(path, testMailConfigPhoneId, testMailConfigAddressBytes(t, protocol.MailAddressKind_MAIL_ADDRESS_ID, testMailConfigMailboxId, testMailConfigPhoneId))
@@ -911,7 +919,9 @@ func TestMailConfigAReleasedNameRoutesNothingToANewOwner(t *testing.T) {
 	if lookup := late.resolve(t, "ada@acme.root.example"); !lookup.Known || lookup.MailboxRepoId != testMailConfigMailboxId {
 		t.Fatalf("a removal and re-creation between two syncs: %+v", lookup)
 	}
-	if reasons := late.alarmReasons(); !slices.Equal(reasons, []MailConfigAlarmReason{MailConfigAlarmRecreated}) {
+	if reasons := late.alarmReasons(); !slices.Equal(reasons, []MailConfigAlarmReason{
+		MailConfigAlarmSigner, MailConfigAlarmRecreated, MailConfigAlarmSigner, MailConfigAlarmRecreated,
+	}) {
 		t.Fatalf("alarms %v", reasons)
 	}
 
@@ -1819,5 +1829,170 @@ func TestMailConfigAclAuthorityReadsTheInstalledState(t *testing.T) {
 		if empty.HonorsRecord(laptop, "ops-pager", aclTestNow) || empty.MayChangeRecord(laptop, mailboxId) {
 			t.Error("an authority with nothing installed allowed something")
 		}
+	}
+}
+
+// A reader that starts fresh judges a re-created address as a running one does (QD-888; reading 15, QD-106): under a
+// policy that grants every member mail:*, another member's removal of the owner's address and creation of its own is
+// passed over, the address still routing to the owner's mailbox, with the alarms a running reader raises; and so for
+// every fresh reader, whenever it starts.
+func TestMailConfigAFreshReaderRefusesAnotherMembersRecreation(t *testing.T) {
+	repo, authority := newMailConfigTestWorld(t)
+	phone := newMailConfigTestDevice(t, repo, authority, testMailConfigPhoneId, nil)
+	phone.createId(t, "ada")
+	path := testMailConfigAddressPath(t, "ada@acme.root.example")
+	repo.commit(path, testMailConfigOtherId, nil)
+	repo.commit(path, testMailConfigOtherId, testMailConfigAddressBytes(t, protocol.MailAddressKind_MAIL_ADDRESS_ID, testMailConfigOtherBoxId, testMailConfigOtherId))
+	for _, sidecarId := range []Id{testMailConfigDesktopId, testMailConfigOtherId} {
+		fresh := newMailConfigTestDevice(t, repo, authority, sidecarId, nil)
+		fresh.sync(t)
+		lookup := fresh.resolve(t, "ada@acme.root.example")
+		if !lookup.Known || lookup.MailboxRepoId != testMailConfigMailboxId || lookup.CreatorSidecarId != testMailConfigPhoneId {
+			t.Fatalf("a fresh reader of the takeover: %+v", lookup)
+		}
+		if reasons := fresh.alarmReasons(); !slices.Equal(reasons, []MailConfigAlarmReason{MailConfigAlarmSigner, MailConfigAlarmRecreated}) {
+			t.Fatalf("alarms %v", reasons)
+		}
+	}
+}
+
+// A burned label is never reissued, whatever reader reads it (§15.7; QD-888): another member's creation of a label its
+// owner burned, then removed, is passed over by a reader that starts after it, which lists the label as burned under
+// its first creator; and one the owner removed outright is burned for good the same way.
+func TestMailConfigAFreshReaderNeverReissuesABurnedLabel(t *testing.T) {
+	repo, authority := newMailConfigTestWorld(t)
+	burned := testMailConfigBurnerPath(t, "otter-4821")
+	repo.commit(burned, testMailConfigPhoneId, testMailConfigBurnerBytes(t, testMailConfigMailboxId, protocol.MailBurnerState_MAIL_BURNER_LIVE))
+	repo.commit(burned, testMailConfigPhoneId, testMailConfigBurnerBytes(t, testMailConfigMailboxId, protocol.MailBurnerState_MAIL_BURNER_BURNED))
+	repo.commit(burned, testMailConfigPhoneId, nil)
+	repo.commit(burned, testMailConfigOtherId, testMailConfigBurnerBytes(t, testMailConfigOtherBoxId, protocol.MailBurnerState_MAIL_BURNER_LIVE))
+	removed := testMailConfigBurnerPath(t, "heron-0007")
+	repo.commit(removed, testMailConfigPhoneId, testMailConfigBurnerBytes(t, testMailConfigMailboxId, protocol.MailBurnerState_MAIL_BURNER_LIVE))
+	repo.commit(removed, testMailConfigDesktopId, nil)
+	repo.commit(removed, testMailConfigOtherId, testMailConfigBurnerBytes(t, testMailConfigOtherBoxId, protocol.MailBurnerState_MAIL_BURNER_LIVE))
+	fresh := newMailConfigTestDevice(t, repo, authority, testMailConfigOtherId, nil)
+	fresh.sync(t)
+	for _, address := range []string{"shop@otter-4821.acme.root.example", "shop@heron-0007.acme.root.example"} {
+		if lookup := fresh.resolve(t, address); lookup.Known {
+			t.Fatalf("%s reissued: %+v", address, lookup)
+		}
+	}
+	burners, err := fresh.config.Burners()
+	if err != nil || len(burners) != 2 {
+		t.Fatalf("burners %+v, %v", burners, err)
+	}
+	for _, burner := range burners {
+		if burner.State != protocol.MailBurnerState_MAIL_BURNER_BURNED || burner.CreatorSidecarId != testMailConfigPhoneId ||
+			burner.MailboxRepoId != testMailConfigMailboxId {
+			t.Errorf("burner %+v", burner)
+		}
+	}
+	if reasons := fresh.alarmReasons(); !slices.Equal(reasons, []MailConfigAlarmReason{MailConfigAlarmRecreated, MailConfigAlarmRecreated}) {
+		t.Fatalf("alarms %v", reasons)
+	}
+}
+
+// A path made again by a device that may change the record it replaces is honored by a fresh reader: the owner's
+// other device's creation over a record another member's removal left standing takes it, with that device as
+// creator; and after the owner's own removal, which ends the address, any member's creation is a new record.
+func TestMailConfigAFreshReaderHonorsAnOwnersRecreation(t *testing.T) {
+	repo, authority := newMailConfigTestWorld(t)
+	path := testMailConfigAddressPath(t, "ada@acme.root.example")
+	repo.commit(path, testMailConfigPhoneId, testMailConfigAddressBytes(t, protocol.MailAddressKind_MAIL_ADDRESS_ID, testMailConfigMailboxId, testMailConfigPhoneId))
+	repo.commit(path, testMailConfigOtherId, nil)
+	repo.commit(path, testMailConfigDesktopId, testMailConfigAddressBytes(t, protocol.MailAddressKind_MAIL_ADDRESS_ID, testMailConfigMailboxId, testMailConfigDesktopId))
+	fresh := newMailConfigTestDevice(t, repo, authority, testMailConfigOtherId, nil)
+	fresh.sync(t)
+	if lookup := fresh.resolve(t, "ada@acme.root.example"); !lookup.Known || lookup.CreatorSidecarId != testMailConfigDesktopId || lookup.MailboxRepoId != testMailConfigMailboxId {
+		t.Fatalf("the owner's re-creation: %+v", lookup)
+	}
+	if reasons := fresh.alarmReasons(); !slices.Equal(reasons, []MailConfigAlarmReason{MailConfigAlarmSigner}) {
+		t.Fatalf("alarms %v", reasons)
+	}
+	repo.commit(path, testMailConfigPhoneId, nil)
+	repo.commit(path, testMailConfigOtherId, testMailConfigAddressBytes(t, protocol.MailAddressKind_MAIL_ADDRESS_ID, testMailConfigOtherBoxId, testMailConfigOtherId))
+	later := newMailConfigTestDevice(t, repo, authority, testMailConfigPhoneId, nil)
+	later.sync(t)
+	if lookup := later.resolve(t, "ada@acme.root.example"); !lookup.Known || lookup.CreatorSidecarId != testMailConfigOtherId || lookup.MailboxRepoId != testMailConfigOtherBoxId {
+		t.Fatalf("a name its owner released: %+v", lookup)
+	}
+}
+
+// Where evs cannot read below a re-created record's creation (History's BelowUnknown, past its scan bound; QD-1006),
+// a fresh reader keeps the record unknown rather than judge the new life alone, as a record past the replay bound,
+// and a running reader that held it reads it unknown the same way; a record with one life reads as ever.
+func TestMailConfigAnEarlierLifeEvsCannotReadLeavesTheRecordUnknown(t *testing.T) {
+	repo, authority := newMailConfigTestWorld(t)
+	phone := newMailConfigTestDevice(t, repo, authority, testMailConfigPhoneId, nil)
+	phone.createId(t, "ada")
+	phone.createId(t, "grace")
+	path := testMailConfigAddressPath(t, "ada@acme.root.example")
+	repo.commit(path, testMailConfigOtherId, nil)
+	repo.commit(path, testMailConfigOtherId, testMailConfigAddressBytes(t, protocol.MailAddressKind_MAIL_ADDRESS_ID, testMailConfigOtherBoxId, testMailConfigOtherId))
+	func() {
+		repo.stateLock.Lock()
+		defer repo.stateLock.Unlock()
+		repo.unreadBelow = map[string]bool{path: true, testMailConfigAddressPath(t, "grace@acme.root.example"): true}
+	}()
+	fresh := newMailConfigTestDevice(t, repo, authority, testMailConfigOtherId, nil)
+	fresh.sync(t)
+	if lookup := fresh.resolve(t, "ada@acme.root.example"); lookup.Known {
+		t.Fatalf("a record whose earlier life is unread: %+v", lookup)
+	}
+	if lookup := fresh.resolve(t, "grace@acme.root.example"); !lookup.Known || lookup.CreatorSidecarId != testMailConfigPhoneId {
+		t.Fatalf("a record of one life: %+v", lookup)
+	}
+	if reasons := fresh.alarmReasons(); len(reasons) != 0 {
+		t.Fatalf("alarms %v", reasons)
+	}
+	phone.sync(t)
+	if lookup := phone.resolve(t, "ada@acme.root.example"); lookup.Known {
+		t.Fatalf("the running reader's: %+v", lookup)
+	}
+}
+
+// End to end over evs (QD-888): another member's removal and re-creation of the owner's address, written through evs,
+// is passed over by a device whose MailConfig starts after it, History walking below the takeover's creation into the
+// removal and the owner's life, with the alarms a running reader raises.
+func TestMailConfigOverEvsAFreshReaderRefusesATakeover(t *testing.T) {
+	const address = "ada@acme.root.example"
+	ownerWriter := newEvsTestWriter(t)
+	otherWriter := ownerWriter.otherWriter(t, "mailcfg other member")
+	path := testMailConfigAddressPath(t, address)
+	ownerWriter.server.know(path)
+	capture := &mailConfigTestCapture{handler: ownerWriter.server}
+	ownerId := ownerWriter.test.client.args.Identity().SidecarId
+	otherId := otherWriter.test.client.args.Identity().SidecarId
+	authority := newMailConfigTestAuthority()
+	authority.grant(ownerId, "*")
+	authority.grant(otherId, "*")
+	authority.own(testMailConfigMailboxId, ownerId)
+	authority.own(testMailConfigOtherBoxId, otherId)
+	owner := newMailConfigEvsDevice(t, ownerWriter, capture, authority)
+	ctx := context.Background()
+	owner.createId(t, "ada")
+	otherStore := &mailConfigEvsStore{mailEvsStore: newMailEvsStore(otherWriter.repo, nil, nil)}
+	_, version, err := otherStore.Read(ctx, path, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := otherStore.Remove(ctx, path, version); err != nil {
+		t.Fatal(err)
+	}
+	takeover := testMailConfigAddressBytes(t, protocol.MailAddressKind_MAIL_ADDRESS_ID, testMailConfigOtherBoxId, otherId)
+	if _, err := otherStore.Write(ctx, []*mailStoreWrite{{Path: path, Content: takeover}}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := newMailConfigEvsDevice(t, otherWriter, capture, authority)
+	fresh.sync(t)
+	if lookup := fresh.resolve(t, address); !lookup.Known || lookup.MailboxRepoId != testMailConfigMailboxId || lookup.CreatorSidecarId != ownerId {
+		t.Fatalf("a fresh reader of the takeover: %+v", lookup)
+	}
+	if reasons := fresh.alarmReasons(); !slices.Equal(reasons, []MailConfigAlarmReason{MailConfigAlarmSigner, MailConfigAlarmRecreated}) {
+		t.Fatalf("alarms %v", reasons)
+	}
+	versions, err := fresh.config.store.Versions(ctx, path, 16)
+	if err != nil || len(versions) != 3 || !versions[0].Created || !versions[1].Removed || !versions[2].Created {
+		t.Fatalf("the address's versions: %v, %v", versions, err)
 	}
 }
