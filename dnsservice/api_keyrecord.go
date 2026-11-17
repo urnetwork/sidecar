@@ -2,8 +2,10 @@
 // _25._tcp.mx, the only TLSA writer. It takes a service token of aud dns from a sidecar, §8.10's gate first: listen on
 // sock:smtp/25/mx for the network's own mx, or smtp/25/mx.<scope> for a scope's, a member scope's only from its
 // member's consented devices (AclGateView.MayReceive; owner decision 126), through DnsKeyRecordGate. Then the model
-// (DnsKeyRecordStore) checks the key is the caller's by its identity key's attestation, writes the key's row and the
-// host's TLSA in one write, and notifies the owners by an admin event and a hint.
+// (DnsKeyRecordStore) checks the key is the caller's by its identity key's attestation, writes the key's row, retires
+// the caller's own published keys of the host the body's retire_spki_sha256 names, and rebuilds the host's TLSA, in
+// one write, and notifies the owners by an admin event and a hint (§15.5; owner decision 443). The block hands the
+// body on as it parsed it: the model alone judges the list, so a hash naming another receiver's key retires nothing.
 //
 // A scope's host answers 503 until the gate can name the scope's member (the scope rows of §8's state), the closed
 // direction; Team scopes are v1's. A block with no store or gate answers 503.

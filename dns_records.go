@@ -368,12 +368,18 @@ func CanonicalDnsRecordName(owner string) string {
 
 // The body of POST /dns/key-record (§12.8, DNS-M7-02): a receiver's key for host, its DER SubjectPublicKeyInfo, and
 // the TlsKeyAttestation its identity key signed for that key and the host's identifier set (§13.8), so the TLSA the
-// write publishes names only a key the caller holds.
+// write publishes names only a key the caller holds. Once a rotation's new key serves, the receiver posts that key
+// again with the rotated-out keys' hashes in RetireSpkiSha256s, which the same write retires (§15.5; owner decision
+// 443).
 type DnsKeyRecordRequest struct {
 	// mx, or mx.<scope> for a Team scope's receiver.
 	Host        string `json:"host"`
 	Spki        []byte `json:"spki"`
 	Attestation []byte `json:"attestation"`
+	// The SHA-256 of each DER SubjectPublicKeyInfo, as TLSA 3 1 1 carries it, of the caller's own published keys of
+	// host to retire in the same write. A hash naming no published key of the caller's at host is ignored, so another
+	// receiver's key is never retired; one that is not 32 bytes, or names the key the body publishes, is refused.
+	RetireSpkiSha256s [][]byte `json:"retire_spki_sha256,omitempty"`
 }
 
 // The answer of POST /dns/key-record: the zone's version once the host's TLSA holds the key.
