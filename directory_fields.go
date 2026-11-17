@@ -21,7 +21,8 @@
 //
 // Identifier fields can still carry short words, a disclosed residual: the charset is the limit, never a content
 // filter. Every cap here is directory.proto's, a format value and not a tunable, and no error here carries a field's
-// value.
+// value. A worker's platform holds any number, which a reader names or shows as unknown and never refuses (owner
+// decision 468).
 //
 // Package-level functions are safe for concurrent use.
 
@@ -568,8 +569,8 @@ func directoryItemOnlyFields(item *protocol.Announcement, fields map[protoreflec
 // only who, repo_id, repo_kind and requests; a repo item's announcement_id derived from its repo_id; roles, requests
 // and repo kinds by their numbers; each identifier in its class and each prose field in its class, within its cap;
 // and the pad zero bytes. Who signed it, and whether its ids name what §7.9's state holds, are the reader's
-// (RECORD-M6-12, RECORD-M6-14); AnnounceWhere.platform's numbers wait on record-m3-01-directory-platform-numbers, so
-// no value of it is refused here.
+// (RECORD-M6-12, RECORD-M6-14). A worker's AnnounceWhere.platform may hold any number: one §16.11 does not name, 0
+// included, shows as unknown (DirectoryPlatformName), and nothing is refused for it (owner decision 468).
 func DirectoryCheckItem(item *protocol.Announcement) error {
 	if item == nil {
 		return directoryRefusal("no item")
@@ -797,6 +798,27 @@ func directoryRequestsValid(requests uint32) bool {
 		return true
 	}
 	return false
+}
+
+// What a reader shows for whatever number AnnounceWhere.platform holds: 1 to 6 by §16.11's names, and any other, 0
+// and a platform appended after this release included, as unknown, so an item never fails to read for its platform
+// (owner decision 468).
+func DirectoryPlatformName(platform uint32) string {
+	switch DirectoryPlatform(platform) {
+	case DirectoryPlatformDarwin:
+		return "darwin"
+	case DirectoryPlatformLinux:
+		return "linux"
+	case DirectoryPlatformWindows:
+		return "windows"
+	case DirectoryPlatformAndroid:
+		return "android"
+	case DirectoryPlatformIos:
+		return "ios"
+	case DirectoryPlatformWasm:
+		return "wasm"
+	}
+	return "unknown"
 }
 
 // Holds a request entry's body to §16.11's form and caps: request_id and subject at their lengths; exactly one

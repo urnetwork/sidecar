@@ -136,6 +136,41 @@ const (
 	DirectoryRequestsClosed DirectoryRequests = 2
 )
 
+// AnnounceWhere.platform: what a worker's sidecar runs on, numbered in the order §16.11 names them (owner decision
+// 468). Unknown is never written, so a worker whose build names none leaves the field out; new platforms are appended,
+// and a reader shows a number it does not know as unknown and refuses nothing for it (DirectoryPlatformName).
+type DirectoryPlatform uint32
+
+const (
+	DirectoryPlatformUnknown DirectoryPlatform = 0
+	DirectoryPlatformDarwin  DirectoryPlatform = 1
+	DirectoryPlatformLinux   DirectoryPlatform = 2
+	DirectoryPlatformWindows DirectoryPlatform = 3
+	DirectoryPlatformAndroid DirectoryPlatform = 4
+	DirectoryPlatformIos     DirectoryPlatform = 5
+	DirectoryPlatformWasm    DirectoryPlatform = 6
+)
+
+// The platform a build for goos runs on: each GOOS §16.11 names by its own name, and js, the browser's, as wasm. Any
+// other GOOS, wasip1 among them, is unknown.
+func DirectoryPlatformOfGoos(goos string) DirectoryPlatform {
+	switch goos {
+	case "darwin":
+		return DirectoryPlatformDarwin
+	case "linux":
+		return DirectoryPlatformLinux
+	case "windows":
+		return DirectoryPlatformWindows
+	case "android":
+		return DirectoryPlatformAndroid
+	case "ios":
+		return DirectoryPlatformIos
+	case "js":
+		return DirectoryPlatformWasm
+	}
+	return DirectoryPlatformUnknown
+}
+
 // Claim.state.
 type DirectoryClaimState uint32
 

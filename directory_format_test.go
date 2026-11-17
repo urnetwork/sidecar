@@ -1,7 +1,8 @@
-// directory_format.go's values: a repo item's announcement_id and every path as fixed vectors, computed apart from
-// this code; each path's ids in lowercase hex under the shard of their own text; a request target naming exactly one
-// thing and the roles it may ask; expiry by kind and the withdrawn state's kinds; repo announce entries padding alike
-// to 2,048 B; and a notice of two decisions at their widest within its 256 B.
+// directory_format.go's values: a repo item's announcement_id, every path and a worker item naming its platform as
+// fixed vectors, computed apart from this code; each path's ids in lowercase hex under the shard of their own text;
+// the platform of each GOOS the legs build; a request target naming exactly one thing and the roles it may ask; expiry
+// by kind and the withdrawn state's kinds; repo announce entries padding alike to 2,048 B; and a notice of two
+// decisions at their widest within its 256 B.
 
 package sidecar
 
@@ -69,6 +70,92 @@ func TestDirectoryPathVectors(t *testing.T) {
 		prefix, err := DirectoryNoticePrefix(c.target)
 		if err != nil || prefix+hex.EncodeToString(requestId[:]) != path {
 			t.Errorf("prefix %s is not the notice's: %v", prefix, err)
+		}
+	}
+}
+
+// A worker item naming its platform, windows, as its announce entry carries it, in the bytes a program that reads only
+// the wire rules computed, so the platform sits at AnnounceWhere's field 6 as a varint and a reader takes it back; and
+// AnnounceWhere alone for each of owner decision 468's numbers, where unknown, 0, writes nothing.
+func TestDirectoryWorkerItemVector(t *testing.T) {
+	const renewedMillis int64 = 1762387200000
+	const golden = "0a1031313131313131313131313131313131100218012080" +
+		"90dab3a533288090dab3a533308082abe0a53338014a240a10212121212121" +
+		"212121212121212121211210323232323232323232323232323232325210320c" +
+		"080312087463703a3830383038015a0d2a096275696c642d626f783003"
+	item := &protocol.Announcement{
+		AnnouncementId: bytes.Repeat([]byte{0x31}, 16),
+		Kind:           uint32(DirectoryAnnouncementKindWorker),
+		Version:        1,
+		StartedMillis:  renewedMillis,
+		RenewedMillis:  renewedMillis,
+		ExpiresMillis:  renewedMillis + 26*60*60*1000,
+		State:          uint32(DirectoryAnnouncementStateActive),
+		Who:            &protocol.AnnounceWho{MemberId: bytes.Repeat([]byte{0x21}, 16), SidecarId: bytes.Repeat([]byte{0x32}, 16)},
+		What: &protocol.AnnounceWhat{
+			Services: []*protocol.Service{{Kind: uint32(DirectoryServiceKindBridgePort), Name: "tcp:8080"}},
+			Requests: uint32(DirectoryRequestsOpen),
+		},
+		Where: &protocol.AnnounceWhere{HostLabel: "build-box", Platform: uint32(DirectoryPlatformWindows)},
+	}
+	if err := DirectoryCheckItem(item); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(encoded) != golden {
+		t.Errorf("worker item %x", encoded)
+	}
+	goldenBytes, err := hex.DecodeString(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DirectoryDecodeAnnouncement(goldenBytes)
+	if err != nil || !proto.Equal(decoded, item) || DirectoryPlatformName(decoded.GetWhere().GetPlatform()) != "windows" {
+		t.Errorf("the vector read back as %v: %v", decoded, err)
+	}
+
+	for _, c := range []struct {
+		platform DirectoryPlatform
+		want     string
+	}{
+		{platform: DirectoryPlatformUnknown, want: ""},
+		{platform: DirectoryPlatformDarwin, want: "3001"},
+		{platform: DirectoryPlatformLinux, want: "3002"},
+		{platform: DirectoryPlatformWindows, want: "3003"},
+		{platform: DirectoryPlatformAndroid, want: "3004"},
+		{platform: DirectoryPlatformIos, want: "3005"},
+		{platform: DirectoryPlatformWasm, want: "3006"},
+	} {
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.AnnounceWhere{Platform: uint32(c.platform)})
+		if err != nil || hex.EncodeToString(encoded) != c.want {
+			t.Errorf("platform %d wrote %x, want %s: %v", c.platform, encoded, c.want, err)
+		}
+	}
+}
+
+// Owner decision 468's number for each GOOS the legs build (check/legs_test.go's darwin, linux, windows, android, ios
+// and js, whose wasm is the browser's), and unknown for any GOOS §16.11 names no platform for.
+func TestDirectoryPlatformOfEachLegsGoos(t *testing.T) {
+	for _, c := range []struct {
+		goos string
+		want uint32
+	}{
+		{goos: "darwin", want: 1},
+		{goos: "linux", want: 2},
+		{goos: "windows", want: 3},
+		{goos: "android", want: 4},
+		{goos: "ios", want: 5},
+		{goos: "js", want: 6},
+		{goos: "wasip1", want: 0},
+		{goos: "freebsd", want: 0},
+		{goos: "plan9", want: 0},
+		{goos: "", want: 0},
+	} {
+		if got := uint32(DirectoryPlatformOfGoos(c.goos)); got != c.want {
+			t.Errorf("GOOS %q: platform %d, want %d", c.goos, got, c.want)
 		}
 	}
 }

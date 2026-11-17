@@ -579,7 +579,7 @@ type AnnounceWhere struct {
 	Private bool                   `protobuf:"varint,4,opt,name=private,proto3" json:"private,omitempty"`            // runs: the run's repo has no live announcement; repos: a private
 	// marker, holding only who, repo_id, repo_kind and requests
 	HostLabel     string `protobuf:"bytes,5,opt,name=host_label,json=hostLabel,proto3" json:"host_label,omitempty"` // the sidecar's config name (§7.7), for the index
-	Platform      uint32 `protobuf:"varint,6,opt,name=platform,proto3" json:"platform,omitempty"`                   // workers: darwin, linux, windows, android, ios, wasm
+	Platform      uint32 `protobuf:"varint,6,opt,name=platform,proto3" json:"platform,omitempty"`                   // workers: 1 darwin, 2 linux, 3 windows, 4 android, 5 ios, 6 wasm; 0 unknown
 	Ephemeral     bool   `protobuf:"varint,7,opt,name=ephemeral,proto3" json:"ephemeral,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -5,8 +5,9 @@
 // and answers either a refusal wrapping ErrDirectoryFormatInvalid or what it took; it refuses bytes past its bound,
 // whatever they hold; and what it takes passes its check again, keeps the bytes as received, and decodes again, equal,
 // from its own canonical encoding. Seeds in testdata/fuzz/FuzzDirectoryDecode, run in every test run, hold each fixture
-// of directory_fields_test.go, one past a cap and cut ones; those in code add one past each bound and a card and a
-// repo file signed by the fuzz's key. A long campaign is the review phase's.
+// of directory_fields_test.go, a worker naming a platform no release names yet, which is taken (owner decision 468),
+// one past a cap and cut ones; those in code add one past each bound and a card and a repo file signed by the fuzz's
+// key. A long campaign is the review phase's.
 
 package sidecar
 

@@ -82,7 +82,7 @@ message AnnounceWhere {
   bool private = 4;                         // runs: the run's repo has no live announcement; repos: a private
                                             // marker, holding only who, repo_id, repo_kind and requests
   string host_label = 5;                    // the sidecar's config name (§7.7), for the index
-  uint32 platform = 6;                      // workers: darwin, linux, windows, android, ios, wasm
+  uint32 platform = 6;                      // workers: 1 darwin, 2 linux, 3 windows, 4 android, 5 ios, 6 wasm; 0 unknown
   bool ephemeral = 7;
 }
 message Service {

@@ -1,9 +1,10 @@
 // §16.11's field classes and caps (directory_fields.go) and §22.6's directory.proto decoders (directory_decode.go):
 // a charset table per identifier class, bidi and control stripping in prose, every cap at its value and one past it,
-// each kind holding only its fields, the redactor turning a matching field into [REDACTED:<rule>] whole after
-// normalizing, the request, decision, notice and erasure request rules, each decoder refusing past its bound before it
-// parses, and hashes and signatures over the bytes as received. Tests whose subject is a reader in a world of streams
-// are directory_decode_reader_test.go's; FuzzDirectoryDecode is directory_fuzz_test.go's.
+// each kind holding only its fields, a worker's platform shown by name or as unknown and never refused, the redactor
+// turning a matching field into [REDACTED:<rule>] whole after normalizing, the request, decision, notice and erasure
+// request rules, each decoder refusing past its bound before it parses, and hashes and signatures over the bytes as
+// received. Tests whose subject is a reader in a world of streams are directory_decode_reader_test.go's;
+// FuzzDirectoryDecode is directory_fuzz_test.go's.
 
 package sidecar
 
@@ -12,6 +13,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"math"
 	mathrand "math/rand/v2"
 	"slices"
 	"strings"
@@ -95,7 +97,7 @@ func testDirectoryWorkerItem() *protocol.Announcement {
 			},
 			Requests: uint32(DirectoryRequestsOpen),
 		},
-		Where: &protocol.AnnounceWhere{HostLabel: "build-box", Platform: 2, Ephemeral: true},
+		Where: &protocol.AnnounceWhere{HostLabel: "build-box", Platform: uint32(DirectoryPlatformLinux), Ephemeral: true},
 	}
 }
 
@@ -869,6 +871,44 @@ func TestDirectoryItemsHoldOnlyTheirFields(t *testing.T) {
 		c.mutate(item)
 		if err := DirectoryCheckItem(item); !errors.Is(err, ErrDirectoryFormatInvalid) {
 			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}
+
+// Owner decision 468 on a reader's side: platforms 1 to 6 show by §16.11's names, and any other number, 0, 7 and the
+// widest among them, as unknown, while the worker item carrying it passes its check and its decoder all the same and
+// keeps the number it was written with.
+func TestDirectoryPlatformShownAndNeverRefused(t *testing.T) {
+	for _, c := range []struct {
+		platform uint32
+		want     string
+	}{
+		{platform: 0, want: "unknown"},
+		{platform: 1, want: "darwin"},
+		{platform: 2, want: "linux"},
+		{platform: 3, want: "windows"},
+		{platform: 4, want: "android"},
+		{platform: 5, want: "ios"},
+		{platform: 6, want: "wasm"},
+		{platform: 7, want: "unknown"},
+		{platform: math.MaxUint32, want: "unknown"},
+	} {
+		if got := DirectoryPlatformName(c.platform); got != c.want {
+			t.Errorf("platform %d shows as %q, want %q", c.platform, got, c.want)
+		}
+		item := testDirectoryWorkerItem()
+		item.Where.Platform = c.platform
+		if err := DirectoryCheckItem(item); err != nil {
+			t.Errorf("platform %d refused: %v", c.platform, err)
+			continue
+		}
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DirectoryDecodeAnnouncement(encoded)
+		if err != nil || !proto.Equal(decoded, item) || DirectoryPlatformName(decoded.GetWhere().GetPlatform()) != c.want {
+			t.Errorf("platform %d did not read back: %v", c.platform, err)
 		}
 	}
 }
