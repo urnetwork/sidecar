@@ -5,8 +5,8 @@
 // One router serves §11.20's /evs/v1 routes. Each task adds its own route list to routes(), and every route runs
 // behind one guard, in this order, so no handler sees a request the guard would refuse:
 //
-//  1. the bearer token, verified offline for aud evs (ServiceHost.Authenticate): 401 when it does not
-//     authenticate, 503 when the host cannot tell;
+//  1. the bearer token, verified offline for aud evs (ServiceHost.Authenticate): 401 UNAUTHENTICATED when it does
+//     not authenticate, 503 when the host cannot tell;
 //  2. a sidecar's token only, since only a sidecar holds evs scopes: else 403 SCOPE;
 //  3. §19.11's evs gate: a network it does not admit, or a write while `writes: false` holds, answers 503 with
 //     Retry-After, and the engine stays ready;
@@ -16,16 +16,19 @@
 //     honored only while the newest verified state agrees (D-ACL-21): 403 SCOPE, or 503; then, on one that does not
 //     write, §20.6's spent row: a spent network's reply is paced on its own repo and refused on another's
 //     (quota_read_gate.go);
-//  6. on a write, rev/ for the token's three subjects: 401 when one voids it, 503 when evs cannot tell;
+//  6. on a write, rev/ for the token's three subjects: 401 UNAUTHENTICATED when one voids it, 503 when evs cannot
+//     tell; a read goes on for the token's life (owner decision 377);
 //  7. on a route that may issue a head CAS, a process whose clock §19.6 finds unknown or over 50 ms off answers
 //     503 before step 4 (§11.8's fence row);
 //  8. on a placed repo's route, place/ resolved once per process (a 404 cached 5 s): 404 for a repo never placed,
 //     503 for a cluster this process holds no credentials for.
 //
-// Every answer but a 200 is an EvsRefusalReply (EVS-FORMAT.md), and every request leaves one line in evs-7's 7-day
-// service log, opaque ids only (I-13). Every metadata write passes the write budget first: the engine wraps its
-// host's Blobs in BudgetedBlobs, so a write that never spent fails before it is sent, and it refuses to start
-// without a budget.
+// Every answer but a 200 is an EvsRefusalReply carrying its code, which decides its status from §11.8's table
+// (EVS-FORMAT.md; owner decision 411): a 401 is UNAUTHENTICATED, which the daemon answers by minting a new token, a
+// code outside the table is a fault that alarms and answers 503 UNAVAILABLE, and a path or method no route takes is 404
+// NOT_FOUND. Every request leaves one line in evs-7's 7-day service log, opaque ids only (I-13). Every metadata write
+// passes the write budget first: the engine wraps its host's Blobs in BudgetedBlobs, so a write that never spent fails
+// before it is sent, and it refuses to start without a budget.
 //
 // Safe for concurrent use. No lock is held across I/O or a barrier.
 
@@ -62,6 +65,9 @@ const evsRepoIdPathValue = "repo_id"
 
 // What a body travels as (EVS-FORMAT.md's HTTP bodies).
 const evsContentType = "application/x-protobuf"
+
+// The route name evs-7 and the metrics give a request no route takes: one closed label, never its path (I-13).
+const evsUnroutedRouteName = "unrouted"
 
 // One route: what it takes and how the guard holds it. Each later task builds its own and adds its list to
 // routes().
@@ -260,6 +266,8 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	for _, route := range self.servedRoutes {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))
 	}
+	// every other path and method, the least specific pattern, so a route's own always wins
+	mux.HandleFunc("/", self.serveUnrouted)
 	// every request's and reply's body bytes count as the caller's transfer (transfer_meter.go)
 	var usage *UsageBatcher
 	if deps.Uploads != nil {
@@ -486,17 +494,35 @@ func (self *EvsEngine) guard(route *EvsRoute) http.HandlerFunc {
 	}
 }
 
-// Steps 1 to 4 of the guard: the token, a sidecar's, the gate and the binding.
+// A request no route takes: 404 NOT_FOUND, through no guard and before any read, so no near miss of a route reaches
+// a handler and even this answer carries its code. It leaves its evs-7 line as every request does.
+func (self *EvsEngine) serveUnrouted(writer http.ResponseWriter, httpRequest *http.Request) {
+	request := &EvsRequest{
+		engine:  self,
+		route:   &EvsRoute{Name: evsUnroutedRouteName},
+		Writer:  writer,
+		Http:    httpRequest,
+		Ctx:     httpRequest.Context(),
+		started: self.clock.Now(),
+	}
+	self.inFlightCount.Update(func(count int) int { return count + 1 })
+	defer self.inFlightCount.Update(func(count int) int { return count - 1 })
+	defer request.finish()
+	request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
+}
+
+// Steps 1 to 4 of the guard: the token, a sidecar's, the gate and the binding. A token that does not authenticate is
+// 401 UNAUTHENTICATED, which refuses nothing: the daemon mints a new one and asks again (§11.20).
 func (self *EvsEngine) authenticate(request *EvsRequest) bool {
 	jwt, ok := strings.CutPrefix(request.Http.Header.Get("Authorization"), "Bearer ")
 	if !ok || jwt == "" {
-		request.refuseStatus(http.StatusUnauthorized, &protocol.EvsRefusalReply{})
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
 		return false
 	}
 	principal, err := self.host.Authenticate(request.Ctx, EvsAudience, jwt)
 	switch {
 	case errors.Is(err, sidecar.ErrAuthenticationRefused):
-		request.refuseStatus(http.StatusUnauthorized, &protocol.EvsRefusalReply{})
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
 		return false
 	case err != nil:
 		request.Unavailable(nil)
@@ -653,7 +679,9 @@ func (self *EvsRequest) RequireRights(right sidecar.AclEvsRights) bool {
 	return false
 }
 
-// rev/ for the token's subjects. false once it has answered the refusal.
+// rev/ for the token's subjects: 401 UNAUTHENTICATED when one voids the token, as for one that does not authenticate,
+// since the daemon's answer to both is a new token, whose exchange a voided subject cannot pass. false once it has
+// answered the refusal.
 func (self *EvsRequest) checkRevocation() bool {
 	err := self.engine.deps.AuthState.CheckRevocation(self.Ctx, self.Principal)
 	switch {
@@ -661,7 +689,7 @@ func (self *EvsRequest) checkRevocation() bool {
 		self.revocationCheckedAt = self.Now()
 		return true
 	case errors.Is(err, ErrEvsTokenRevoked):
-		self.refuseStatus(http.StatusUnauthorized, &protocol.EvsRefusalReply{})
+		self.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED)
 		return false
 	}
 	self.Unavailable(nil)
@@ -771,14 +799,30 @@ func (self *EvsRequest) Reply(message proto.Message) {
 	self.write(http.StatusOK, body)
 }
 
-// The refusal reply's code decides its status, from the fixed table; a 429 or 503 with retry_after_ms carries
-// Retry-After too.
+// The refusal reply's code decides its status, from the fixed table, so every answer but a 200 carries its code; a
+// 429 or 503 with retry_after_ms carries Retry-After too. A code the table does not have, code 0 among them, is a
+// handler's fault that alarms, and answers 503 UNAVAILABLE in its place, which refuses nothing.
 func (self *EvsRequest) Refuse(reply *protocol.EvsRefusalReply) {
+	if self.answered {
+		return
+	}
 	status, ok := sidecar.EvsRefusalStatus(reply.GetCode())
 	if !ok {
+		self.engine.alarm("refusal_code", "route %s refused with code %d, which §11.8's table does not have", self.route.Name, reply.GetCode())
+		reply = proto.CloneOf(reply)
+		reply.Code = protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE
 		status = http.StatusServiceUnavailable
 	}
-	self.refuseStatus(status, reply)
+	self.code = reply.GetCode()
+	if 0 < reply.GetRetryAfterMs() {
+		self.retryAfter = time.Duration(reply.GetRetryAfterMs()) * time.Millisecond
+	}
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(reply)
+	if err != nil {
+		// a reply whose other fields do not marshal still says why, by its code alone
+		body, _ = proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsRefusalReply{Code: reply.GetCode()})
+	}
+	self.write(status, body)
 }
 
 // A refusal with only its code.
@@ -793,23 +837,7 @@ func (self *EvsRequest) Unavailable(reply *protocol.EvsRefusalReply) {
 		reply = &protocol.EvsRefusalReply{}
 	}
 	reply.Code = protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE
-	self.refuseStatus(http.StatusServiceUnavailable, reply)
-}
-
-// A refusal at status, the code's own or one the table has no code for (401).
-func (self *EvsRequest) refuseStatus(status int, reply *protocol.EvsRefusalReply) {
-	if self.answered {
-		return
-	}
-	self.code = reply.GetCode()
-	if 0 < reply.GetRetryAfterMs() {
-		self.retryAfter = time.Duration(reply.GetRetryAfterMs()) * time.Millisecond
-	}
-	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(reply)
-	if err != nil {
-		body = []byte{}
-	}
-	self.write(status, body)
+	self.Refuse(reply)
 }
 
 // Writes the answer once. A 503 always carries Retry-After: a closed gate's interval, the reply's, or
@@ -916,7 +944,8 @@ type evsMetrics struct {
 	refusals   sidecar.MetricsCounter
 	gateClosed sidecar.MetricsCounter
 	seconds    sidecar.MetricsHistogram
-	// faults the design says alarm: an immutable key holding other bytes, a placement that does not parse
+	// faults the design says alarm: an immutable key holding other bytes, a placement that does not parse, and a
+	// handler's refusal with a code the table does not have
 	alarms sidecar.MetricsCounter
 	// step 6's slot_foreign: a new slot another statement holds, or no statement, refused 409 SLOT_STALE
 	// (DESIGN-DETAILS 14.2.3), which no alarm follows since an honest retry meets one after a rollout

@@ -36,7 +36,7 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 
 ## Refusal codes
 
-`EvsRefusalCode` is §11.8's fixed code table. The head's 16 B `EvsRefusal` record holds a code in 2 bytes, and `EvsRefusalReply.code` names why evs answered anything but a 200, on every route. A code has one status, and its range says how it lives:
+`EvsRefusalCode` is §11.8's fixed code table. The head's 16 B `EvsRefusal` record holds a code in 2 bytes, and `EvsRefusalReply.code` names why evs answered anything but a 200, on every route: every such answer carries a code, so a client tells each apart by its code alone (owner decision 411). A code has one status, and its range says how it lives:
 
 - **1 to 63: recordable.** What §11.8's refuse row records in the head before answering, which every later attempt of the push id then gets with `recorded: true`. Some of these codes are also final in a case the refuse row names, such as 5c's VERSIONING from a kind or ref rule and 5d's INDEX_EPOCH below the head's (plan-EVS1-format-unsupported). 1 to 25 are plan-EVS1-format-bytes#6's. Format 2's refusals are numbered from format 1, so a format-1 binary after a rollback answers a recorded one by its code.
 - **64 to 127: final.** Refusals the head or a terminal `repo/` state settles for good, which are never recorded.
@@ -81,8 +81,9 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 | 73 | STATEMENT_MISSING | 409 | DELETE and restore without their projected statement |
 | 74 | GROUP_NOT_READY | 409 | the activate route (plan-EVS1-repo-activate-route) |
 | 75 | MAP_SOURCE | 409 | 5e, a PATH_EPOCH: its map's source unknown, under another chain or of an epoch no longer current, and a map part whose key holds other bytes (DESIGN-DETAILS 9.2.6) |
+| 76 | REPO_PLACED | 409 | `PUT /evs/v1/repos/<id>`: `place/` names another creator, or `repo/` holds another repo than this create's, which alarms; the client picks another id and files its RepoCreate again, where STATEMENT_MISSING keeps the id (owner decision 411) |
 | 128 | INVALID | 400 | a body, statement or signature that does not parse or verify, or a statement over 1 KiB |
-| 129 | NOT_FOUND | 404 | a repo, ref or object evs holds no record of |
+| 129 | NOT_FOUND | 404 | a repo, ref or object evs holds no record of, and a path or method no route takes |
 | 130 | PARTS_MISSING | 409 | a seal's part missing at its place |
 | 131 | BUSY | 429 | 8 lost head races |
 | 132 | FOLD_BEHIND | 429 | step 6 |
@@ -90,6 +91,7 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 | 134 | RESOURCE_EXHAUSTED | 429 | the write budget, and a quota's window (§20.7) |
 | 135 | WAIT | 429 | another push's lease, a fence wait, or a refusal meeting 8 live records or a refusal fence under 1 s old |
 | 136 | UNAVAILABLE | 503 | the store unreachable, evs's clock unsure, the HDD share, or the outcome unknown |
+| 137 | UNAUTHENTICATED | 401 | every route: a token that does not authenticate, or one whose client, sidecar or member a `rev/` object voids (§7.8); the daemon mints a new token and retries once, where 403 SCOPE means the state no longer grants the right (owner decision 411) |
 
 A 429 and a 503 carry `retry_after_ms` and a Retry-After header of the same delay rounded up to whole seconds. A 503 whose attempt may still have committed sets `outcome` to unknown, and the client's retry with the same push id and statement resolves it (§11.8's outcomes). A refusal past a quota carries `quota`, §20.7's QuotaRefusal. A route that meets a refusal no row above names takes the next free code in the range its refusal belongs to, here and in `evs.proto` at once.
 
@@ -249,7 +251,7 @@ A container is a 16 B header, "URpk" for a pack or "URhp" for a parcel \| format
 
 ## HTTP bodies
 
-Bodies are `evs.proto` messages, `application/x-protobuf`, except a segment PUT's raw bytes (#8). Every answer but a 200 is an `EvsRefusalReply`.
+Bodies are `evs.proto` messages, `application/x-protobuf`, except a segment PUT's raw bytes (#8). Every answer but a 200 is an `EvsRefusalReply` carrying its code (Refusal codes, above).
 
 | Route | Request | 200 |
 |---|---|---|
@@ -345,7 +347,7 @@ For design-records, each is a reading that changes no D- item:
 
 | Item | Chosen |
 |---|---|
-| Refusal codes past 25 | Ranges by how a refusal lives; 64 to 74 the final ones §11.20 and the answers name, 128 to 136 the answers that refuse nothing; PATH_CONFLICT for every 409 naming paths, INVALID, NOT_FOUND and WAIT where §11 names no code |
+| Refusal codes past 25 | Ranges by how a refusal lives; 64 to 76 the final ones §11.20 and the answers name, 128 to 137 the answers that refuse nothing; PATH_CONFLICT for every 409 naming paths, INVALID, NOT_FOUND and WAIT where §11 names no code |
 | `EvsRefusalReply.outcome` | The `EvsPushOutcome` enum, 0 settled and 1 unknown |
 | Segment public header | "URvs" \| format u8 \| flags u8 \| 2 zero bytes \| repo_id \| u64 generation; flags 0 |
 | Frame AAD widths | u64 generation, u32 frame index |

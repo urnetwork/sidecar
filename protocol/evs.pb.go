@@ -953,9 +953,10 @@ func (EvsRepoState) EnumDescriptor() ([]byte, []int) {
 }
 
 // 11.8's fixed code table: EvsRefusal's code, and EvsRefusalReply's. Each code has one status, which EVS-FORMAT.md
-// gives. Below 64, what the head's refusal records may hold; from 64, refusals the head or a terminal repo/ state
-// settles, which are never recorded; from 128, answers that refuse nothing. Format 2's refusals are numbered from
-// format 1, so a format-1 binary after a rollback answers a recorded one by its code rather than an unknown number.
+// gives, and every answer of evs's but a 200 carries one (owner decision 411). Below 64, what the head's refusal
+// records may hold; from 64, final refusals, which are never recorded; from 128, answers that refuse nothing. Format
+// 2's refusals are numbered from format 1, so a format-1 binary after a rollback answers a recorded one by its code
+// rather than an unknown number.
 type EvsRefusalCode int32
 
 const (
@@ -996,7 +997,10 @@ const (
 	EvsRefusalCode_EVS_REFUSAL_SEGMENT_STALE      EvsRefusalCode = 72
 	EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING  EvsRefusalCode = 73
 	EvsRefusalCode_EVS_REFUSAL_GROUP_NOT_READY    EvsRefusalCode = 74
-	EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE         EvsRefusalCode = 75  // a PATH_EPOCH whose map's source is unknown, under another chain or of an
+	EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE         EvsRefusalCode = 75 // a PATH_EPOCH whose map's source is unknown, under another chain or of an
+	// epoch no longer current, or a map part whose key holds other bytes: the
+	// mapper maps again, where MAP_PARTS uploads again (DESIGN-DETAILS 9.2.6)
+	EvsRefusalCode_EVS_REFUSAL_REPO_PLACED        EvsRefusalCode = 76  // 409: another creator placed this id; the client picks another
 	EvsRefusalCode_EVS_REFUSAL_INVALID            EvsRefusalCode = 128 // a body, statement or signature that does not parse or verify
 	EvsRefusalCode_EVS_REFUSAL_NOT_FOUND          EvsRefusalCode = 129
 	EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING      EvsRefusalCode = 130
@@ -1006,6 +1010,7 @@ const (
 	EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED EvsRefusalCode = 134
 	EvsRefusalCode_EVS_REFUSAL_WAIT               EvsRefusalCode = 135 // 429 for a lease, a fence, or a refusal meeting 8 live records
 	EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE        EvsRefusalCode = 136 // 503: the store unreachable, evs's clock unsure, or the outcome unknown
+	EvsRefusalCode_EVS_REFUSAL_UNAUTHENTICATED    EvsRefusalCode = 137 // 401: a token that does not authenticate, or one a rev/ object voids; the
 )
 
 // Enum value maps for EvsRefusalCode.
@@ -1049,6 +1054,7 @@ var (
 		73:  "EVS_REFUSAL_STATEMENT_MISSING",
 		74:  "EVS_REFUSAL_GROUP_NOT_READY",
 		75:  "EVS_REFUSAL_MAP_SOURCE",
+		76:  "EVS_REFUSAL_REPO_PLACED",
 		128: "EVS_REFUSAL_INVALID",
 		129: "EVS_REFUSAL_NOT_FOUND",
 		130: "EVS_REFUSAL_PARTS_MISSING",
@@ -1058,6 +1064,7 @@ var (
 		134: "EVS_REFUSAL_RESOURCE_EXHAUSTED",
 		135: "EVS_REFUSAL_WAIT",
 		136: "EVS_REFUSAL_UNAVAILABLE",
+		137: "EVS_REFUSAL_UNAUTHENTICATED",
 	}
 	EvsRefusalCode_value = map[string]int32{
 		"EVS_REFUSAL_CODE_UNSPECIFIED":   0,
@@ -1098,6 +1105,7 @@ var (
 		"EVS_REFUSAL_STATEMENT_MISSING":  73,
 		"EVS_REFUSAL_GROUP_NOT_READY":    74,
 		"EVS_REFUSAL_MAP_SOURCE":         75,
+		"EVS_REFUSAL_REPO_PLACED":        76,
 		"EVS_REFUSAL_INVALID":            128,
 		"EVS_REFUSAL_NOT_FOUND":          129,
 		"EVS_REFUSAL_PARTS_MISSING":      130,
@@ -1107,6 +1115,7 @@ var (
 		"EVS_REFUSAL_RESOURCE_EXHAUSTED": 134,
 		"EVS_REFUSAL_WAIT":               135,
 		"EVS_REFUSAL_UNAVAILABLE":        136,
+		"EVS_REFUSAL_UNAUTHENTICATED":    137,
 	}
 )
 
@@ -8853,8 +8862,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x0fEVS_REPO_ACTIVE\x10\x02\x12\x14\n" +
 	"\x10EVS_REPO_DELETED\x10\x03\x12\x16\n" +
 	"\x12EVS_REPO_SHREDDING\x10\x04\x12\x15\n" +
-	"\x11EVS_REPO_SHREDDED\x10\x05*\xff\n" +
-	"\n" +
+	"\x11EVS_REPO_SHREDDED\x10\x05*\xbe\v\n" +
 	"\x0eEvsRefusalCode\x12 \n" +
 	"\x1cEVS_REFUSAL_CODE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11EVS_REFUSAL_SCOPE\x10\x01\x12\x1a\n" +
@@ -8894,7 +8902,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x19EVS_REFUSAL_SEGMENT_STALE\x10H\x12!\n" +
 	"\x1dEVS_REFUSAL_STATEMENT_MISSING\x10I\x12\x1f\n" +
 	"\x1bEVS_REFUSAL_GROUP_NOT_READY\x10J\x12\x1a\n" +
-	"\x16EVS_REFUSAL_MAP_SOURCE\x10K\x12\x18\n" +
+	"\x16EVS_REFUSAL_MAP_SOURCE\x10K\x12\x1b\n" +
+	"\x17EVS_REFUSAL_REPO_PLACED\x10L\x12\x18\n" +
 	"\x13EVS_REFUSAL_INVALID\x10\x80\x01\x12\x1a\n" +
 	"\x15EVS_REFUSAL_NOT_FOUND\x10\x81\x01\x12\x1e\n" +
 	"\x19EVS_REFUSAL_PARTS_MISSING\x10\x82\x01\x12\x15\n" +
@@ -8903,7 +8912,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x16EVS_REFUSAL_TIME_AHEAD\x10\x85\x01\x12#\n" +
 	"\x1eEVS_REFUSAL_RESOURCE_EXHAUSTED\x10\x86\x01\x12\x15\n" +
 	"\x10EVS_REFUSAL_WAIT\x10\x87\x01\x12\x1c\n" +
-	"\x17EVS_REFUSAL_UNAVAILABLE\x10\x88\x01*L\n" +
+	"\x17EVS_REFUSAL_UNAVAILABLE\x10\x88\x01\x12 \n" +
+	"\x1bEVS_REFUSAL_UNAUTHENTICATED\x10\x89\x01*L\n" +
 	"\x0eEvsPushOutcome\x12\x1c\n" +
 	"\x18EVS_PUSH_OUTCOME_SETTLED\x10\x00\x12\x1c\n" +
 	"\x18EVS_PUSH_OUTCOME_UNKNOWN\x10\x01*\x8f\x01\n" +
