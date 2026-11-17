@@ -921,7 +921,10 @@ spidx/<repo>/<n>/_                         reserved (11.13): offsets of segments
 hold/<network_id>/<case_id>/_              §21.9's preservation hold, written by api;       api                 <= 1 KiB   its kind's (§21.9):
                                            first cluster only; UTF-8 JSON {version,                                        90 d, renewable
                                            network_id, case_id, kind, scope,                                               once, or 1 year for
-                                           place_time_ms, expire_time_ms}, unsigned                                        report_2258a
+                                           place_time_ms, expire_time_ms}, unsigned;                                       report_2258a
+                                           scope "network" or 1 to 16 repo ids, each
+                                           covering its repo's objects on every cluster and
+                                           its gkm group (owner decision 527)
 drops/<repo>/_                             the repo's drop table, running drop job and dry  If-Match; created   <= 64 KiB  the repo; an entry
                                            runs (11.13)                                     If-None-Match                  at most 30 d after
                                                                                                                            its drop or dry run

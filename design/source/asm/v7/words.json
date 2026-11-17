@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9716,
-  "code_words": 19556,
+  "code_words": 19945,
   "ceiling": 3000,
   "over": 6716,
   "over_pct": 223.9
@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 11627,
+  "words": 11674,
   "code_words": 3845,
   "ceiling": 3800,
-  "over": 7827,
-  "over_pct": 206.0
+  "over": 7874,
+  "over_pct": 207.2
  },
  {
   "num": 9,
@@ -93,7 +93,7 @@
   "num": 11,
   "code": "EVS",
   "words": 22902,
-  "code_words": 48647,
+  "code_words": 48670,
   "ceiling": 5000,
   "over": 17902,
   "over_pct": 358.0
@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 5936,
+  "words": 5989,
   "code_words": 1933,
   "ceiling": 3000,
-  "over": 2936,
-  "over_pct": 97.9
+  "over": 2989,
+  "over_pct": 99.6
  },
  {
   "num": 13,
@@ -119,20 +119,20 @@
  {
   "num": 14,
   "code": "SMTP",
-  "words": 9632,
+  "words": 9671,
   "code_words": 1396,
   "ceiling": 4500,
-  "over": 5132,
-  "over_pct": 114.0
+  "over": 5171,
+  "over_pct": 114.9
  },
  {
   "num": 15,
   "code": "MAIL",
-  "words": 10635,
+  "words": 10703,
   "code_words": 2125,
   "ceiling": 4500,
-  "over": 6135,
-  "over_pct": 136.3
+  "over": 6203,
+  "over_pct": 137.8
  },
  {
   "num": 16,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 9565,
-  "code_words": 10610,
+  "words": 9621,
+  "code_words": 10664,
   "ceiling": 3500,
-  "over": 6065,
-  "over_pct": 173.3
+  "over": 6121,
+  "over_pct": 174.9
  },
  {
   "num": 20,
@@ -182,17 +182,17 @@
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 4028,
-  "code_words": 456,
+  "words": 5458,
+  "code_words": 1403,
   "ceiling": 2500,
-  "over": 1528,
-  "over_pct": 61.1
+  "over": 2958,
+  "over_pct": 118.3
  },
  {
   "num": 22,
   "code": "TEST",
   "words": 7357,
-  "code_words": 36354,
+  "code_words": 36401,
   "ceiling": 2500,
   "over": 4857,
   "over_pct": 194.3
@@ -200,10 +200,10 @@
  {
   "num": 23,
   "code": "PHASE",
-  "words": 7143,
+  "words": 7229,
   "code_words": 1137,
   "ceiling": 2500,
-  "over": 4643,
-  "over_pct": 185.7
+  "over": 4729,
+  "over_pct": 189.2
  }
 ]

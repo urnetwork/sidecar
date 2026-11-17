@@ -927,6 +927,33 @@ INDEX = list(_P9['INDEX']) + [
      "The downgrade clock starts when the balance that conferred the tier it left ended."),
     (524, 'Rate key grammar',
      "CountRate's key grammar stands as built; the two 60-a-minute erasure rates become pro.yml rows."),
+    # §21's fold (2026-11-16): the build's answers on abuse, safety and legal process.
+    (525, 'Urgent report clocks',
+     "A stranger's report of CSAM or a threat to life comes due in 4 business hours on every tier."),
+    (526, 'Deletions under a hold',
+     "A held network's deletion reads as done and copies the rows the hold covers in its own transaction."),
+    (527, 'Hold scope',
+     "A hold's scope is the network or 1 to 16 repo ids, server rows always held at the network."),
+    (528, 'Strike counts',
+     "Strikes count the network's halts of any category and copyright notices per network; a killed host adds none."),
+    (529, 'What holds reach',
+     "Holds copy connect-1's contract rows at placement; evs-7's and ops-1's 7-day logs stay outside."),
+    (530, 'Notice intake',
+     "Registrar, registry and law-enforcement notices page through a company mailbox and `notice_senders`; the "
+     "rota kills."),
+    (531, 'Suspension effects',
+     "A §21 suspension is server state: no new sidecar contracts, names or mail; evs and gkm untouched."),
+    (532, 'The abuse staff route',
+     "Staff act through `POST /abuse/action` on per-person hashed bearers, with `sidecarctl abuse` as client."),
+    (533, 'Role mail refused',
+     "Unattributable role mail gets `550 5.7.1` with the form's link at the end of DATA; no auto-reply."),
+    (534, 'Names in review',
+     "A name sent to review is refused with a case; a reviewer's `screen_allow` lets the retry pass."),
+    (535, 'Sealed abuse records',
+     "Mailed records are HPKE-XWing sealed, their MAC inside, to an offline seed `sidecarctl abuse mailbox-keygen` "
+     "makes."),
+    (536, 'Report limit in Redis',
+     "`POST /abuse/report` counts 30 an hour per keyed address hash in Redis, which api-14 lists."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -963,7 +990,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 525))
+assert [r[0] for r in INDEX] == list(range(1, 537))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1039,7 +1066,9 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               509: '2026-11-15', 510: '2026-11-15', 511: '2026-11-15', 512: '2026-11-15', 513: '2026-11-16',
               514: '2026-11-06', 515: '2026-11-06', 516: '2026-11-10', 517: '2026-11-10', 518: '2026-11-10',
               519: '2026-11-15', 520: '2026-11-15', 521: '2026-11-15', 522: '2026-11-15', 523: '2026-11-15',
-              524: '2026-11-15'})
+              524: '2026-11-15', 525: '2026-11-06', 526: '2026-11-06', 527: '2026-11-06', 528: '2026-11-06',
+              529: '2026-11-06', 530: '2026-11-06', 531: '2026-11-06', 532: '2026-11-15', 533: '2026-11-06',
+              534: '2026-11-06', 535: '2026-11-15', 536: '2026-11-15'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1274,7 +1303,11 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "(513). The fold of §20's the same day numbers the answers on tiers, quotas, metering and billing: Team periods "
     "(514), active seats (515), pacing by seat (516), lease lapse (517), lease draw size (518), read-receipt keys "
     "(519), `QuotaLimits.enforced` (520), the flush's claim share (521), the quota readings (522), the downgrade "
-    "clock (523) and the rate key grammar (524). ")
+    "clock (523) and the rate key grammar (524). The fold of §21's the same day numbers the answers on abuse, "
+    "safety and legal process: urgent report clocks (525), deletions under a hold (526), hold scope (527), strike "
+    "counts (528), what holds reach (529), notice intake (530), suspension effects (531), the abuse staff route "
+    "(532), role mail refused (533), names in review (534), sealed abuse records (535) and the report limit in "
+    "Redis (536). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

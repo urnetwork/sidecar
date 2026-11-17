@@ -213,7 +213,10 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       Public contract, only sidecar_clients
 §21   TTL sweeps on an injected clock; an access-log row per read; holds pause only sweeps, GC and a drop's deletions,
       the last silently (owner decision 184; FS-92), each kind to its deadline (FS-48); abuse clocks on a fake clock
-      across a weekend, every registrar or registry notice paging (FS-49)
+      across a weekend, every registrar or registry notice paging (FS-49); FS-48's and FS-49's T2 are pure tests of
+      server's abuse policy and clock on an injected clock, whose schedules also run against Postgres; a held
+      network's deletion copies what it removes and reads as done; a forged, unMACed or MAC-failing mailed record
+      refused at the restore step
 ```
 
 ### 22.6 Fuzzing
