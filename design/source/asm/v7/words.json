@@ -12,7 +12,7 @@
   "num": 2,
   "code": "TRUST",
   "words": 9433,
-  "code_words": 19945,
+  "code_words": 20052,
   "ceiling": 3000,
   "over": 6433,
   "over_pct": 214.4
@@ -29,20 +29,20 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 8307,
-  "code_words": 1807,
+  "words": 8275,
+  "code_words": 2111,
   "ceiling": 2800,
-  "over": 5507,
-  "over_pct": 196.7
+  "over": 5475,
+  "over_pct": 195.5
  },
  {
   "num": 5,
   "code": "CORE",
-  "words": 11149,
+  "words": 11159,
   "code_words": 8225,
   "ceiling": 3500,
-  "over": 7649,
-  "over_pct": 218.5
+  "over": 7659,
+  "over_pct": 218.8
  },
  {
   "num": 6,
@@ -155,11 +155,11 @@
  {
   "num": 18,
   "code": "SDK",
-  "words": 10342,
+  "words": 10431,
   "code_words": 10514,
   "ceiling": 3000,
-  "over": 7342,
-  "over_pct": 244.7
+  "over": 7431,
+  "over_pct": 247.7
  },
  {
   "num": 19,
@@ -192,7 +192,7 @@
   "num": 22,
   "code": "TEST",
   "words": 7665,
-  "code_words": 37154,
+  "code_words": 37242,
   "ceiling": 2500,
   "over": 5165,
   "over_pct": 206.6
@@ -201,7 +201,7 @@
   "num": 23,
   "code": "PHASE",
   "words": 7474,
-  "code_words": 1160,
+  "code_words": 1172,
   "ceiling": 2500,
   "over": 4974,
   "over_pct": 199.0

@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-552. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-555. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (553 onward)
+## Adding owner decision N (556 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -432,3 +432,24 @@ At the second piece `build.sh` reproduced DESIGN.md (SHA-256 `fae8561f6709c435b0
 Measured as the passages that share a run of 12 or more words with another section, outside §2.8, §3.7 and Requirements rows, the accidental duplication stood at 4,795 words in 134 groups before the pass, 3,375 in 104 after the first piece and 2,395 in 76 after the second; at G0's 8-word measure the share of words in near-duplicate passages, deliberate ones included, fell from 4.1% to 3.4%. Most of what remains is kept on purpose: §22's statements of what its tests check, D- items in their own sections, decided Q- items' records of their answers, Interfaces assumptions, phasing lists and alternatives rows. The rest, about 600 words of short body passages and some 400 in risk rows that name a shared risk with each section's own mitigations, is QD-274's remaining part, which sidecar/DESIGN-AMENDMENTS.md keeps.
 
 Outside this folder the pass touched DESIGN.md and DESIGN-AMENDMENTS.md alone.
+
+## Validation after owner decisions 553-555 (2026-11-17)
+
+The design-records track for the second pass over §2, §3 and §4 (wave f41d) folded the owner's answers queued for those sections after their first folds, each the recommendation that the owner's instruction of 2026-11-16 accepted.
+
+- **Owner decisions 553-555**, each citing its ledger id: what a presence key registration's attestation statement shows api, in api-7's words (553: QD-983); the macOS slices' two configurations in §4.7's legs, gomobile's binding step as GOOS=ios with `macos` and its compile as GOOS=darwin with the bind's tags alone, amending 277 and 493, whose rows note it (554: QD-997); and the paths the release rewrite keeps: the tests only the release layout broke, fixed in their owners' files, `check/`'s model of run.sh's two passes in run.sh's order with a rule failing a line they leave unversioned, and sdk's restore of its nested modules' own paths, with the fixture's sdk tree and TMPDIR (555: QD-1003, QD-1004). Each carries its answer's date, 2026-11-16.
+- **Elsewhere.** §18.10's tags bullet, which QD-997 names, now states both configurations and that the archive the macOS slices link already selected the desktop dial and the daemon client, so their remote mode works as linked; owner decision 493's closed direction until its tags were built went with that finding, and its question for a separate GOOS=darwin bind now reads as a build under GOOS=ios. §5.10's gomobile row, which restated the macOS slices' build, names both configurations too (554).
+- **Citations.** §4.9's root and smtpproof rows cite run.sh's steps by function name (go_mod_edit_module, go_edit_require, go_edit_require_subpackages, go_mod_fork, git_tag), since the line numbers they gave had drifted; the branch and version rows' line numbers (:1302, :1964) have drifted too, and are left for a pass that rereads run.sh.
+- **Not applied.** QD-980, §4.6's C20 row, which the fix track connect-c20-forward-dnssec wrote with check/'s X9 ledger entry before this pass; QD-841, QD-842 and QD-843, which are owner decision 251.
+- **Left in sidecar/DESIGN-AMENDMENTS.md**, each with its reason: QD-242's RECORD.md parts (§3), which no design-records track edits, and QD-024's file (§4), `design/UI.md`, which the owner copies in and which is still absent.
+
+`build.sh` on this folder reproduced DESIGN.md (SHA-256 `6bc6607ee50643997c88c6756e39542de04c478721beaa95eaf60013d91a7042`) at this fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new R-, D-, Q- or FS- item and no new §2.8 row, so no guard line was needed. No proto fence changed, and none of §4.6's rows, which check/'s X9 ledger holds.
+- **Owner decisions.** All 555 rows are present and cited; `LATE_DATES` gives each new row its date, and no new day joined the row pattern; rows 277 and 493 note decision 554's amendment.
+- **Open owner questions.** One, Q-REPO-6.
+- **Superseded options.** 312 grep hits, each with a reading, carried forward with no changed line raising a new one; the carried file's line numbers follow the sections again, §22's and §23's having moved with the fault catalog's FS-126 commit after the file was last written.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is v44, whose header names what it adds to api-7 and that it adds no row, copied to `metadata_list.yml` by `make metadata`; the block and the file are the same bytes.
+
+Outside this folder the fold touched DESIGN.md and `metadata_list.yml` alone.
