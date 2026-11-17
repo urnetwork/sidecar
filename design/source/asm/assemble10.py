@@ -481,7 +481,7 @@ appe = ['## Appendix E. API routes, tables, services, and connect changes',
         table(['Table, key or object family', 'Owner service', 'Purpose', 'Migration group', '§'], [list(r) for r in A['TABLES']]),
         '### Services and config',
         table(['Service', 'Hosted as', 'Role', '§'], [list(r) for r in A['SERVICES']]),
-        '### Connect changes (C1-C19)',
+        '### Connect changes (C1-C20)',
         gen(INTRO['E_CONNECT']),
         '\n'.join(conn_table)]
 parts.append('\n\n'.join(appe))

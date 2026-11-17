@@ -28,6 +28,13 @@ import (
 // is never given and a second 220 is never written.
 var errMailSmtpServeRefused = errors.New("mail smtp session refused")
 
+// What the fork's parser hands a session's Rcpt for RFC 5321's bare RCPT TO:<Postmaster>, in whatever ASCII case
+// it was written: the local part alone, with no domain (third_party/go-smtp/URNETWORK.md's third change; owner
+// decision 446). Each session maps it to its own domain's postmaster before its recipient rules, the platform
+// listener to postmaster@<root> and a receiver to postmaster at the domain it serves. Upstream's parser answers
+// 501 itself and never hands it, so against upstream the mapping is never reached.
+const MailSmtpBarePostmaster = "postmaster"
+
 // What the fork adds to *smtp.Server, over its ServeConn(conn, ServeConnOptions{AfterStartTls: true}):
 // a session on a connection whose handshake is done, with no greeting first. Returns when the session
 // ends, on Server.Close and Shutdown as Serve's connections do, and refuses with smtp.ErrServerClosed
