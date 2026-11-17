@@ -322,59 +322,60 @@ func (self *searchEngineStream) allFinished(finished map[[2]Id]bool) bool {
 // Phase 2's next partitions from "search more", on the page, within ctx: each shard landed since, searched now and
 // queued in landing order, the first begun; else, where the page holds a hit, false at once, so no hit waits on the
 // download (QD-999); else waits for the next landing, the window's end or ctx's. A window is begun where none runs, so
-// the download goes on whatever the page answers. False where nothing begins now: every ref finished, a wait, a
-// stall, ctx's end or the search's.
-func (self *searchEngineStream) awaitMore(ctx context.Context, holding bool) (bool, error) {
+// the download goes on whatever the page answers. Where nothing begins now (every ref finished, a hit held, a wait, a
+// stall, ctx's end or the search's), whether every ref is finished, read in the same step that took the last landed
+// shards, so no shard a window lands as it finishes is left out of a search that says it is done.
+func (self *searchEngineStream) awaitMore(ctx context.Context, holding bool) (bool, bool, error) {
 	more := self.more
 	if self.engine.args.Policy == nil {
 		// no policy, no fetch: all is searched as held, and coverage says what it lacks
 		more.finishAll(self.refKeys())
-		return false, nil
+		return false, true, nil
 	}
 	begun := false
 	for {
 		if ctx.Err() != nil {
 			// what landed waits for the next page
-			return false, nil
+			return false, false, nil
 		}
 		landed, state, notify := more.take()
 		for index, item := range landed {
 			if err := self.searchLanded(item); err != nil {
 				more.giveBack(landed[index:])
-				return false, err
+				return false, false, err
 			}
 		}
 		if 0 < len(self.pending) {
 			input := self.pending[0]
 			self.pending = self.pending[1:]
-			return true, self.begin([]*searchRankInput{input})
+			return true, false, self.begin([]*searchRankInput{input})
 		}
 		if state.err != nil {
-			return false, state.err
+			return false, false, state.err
 		}
 		if self.allFinished(state.finished) {
-			return false, nil
+			return false, true, nil
 		}
 		if !state.running {
 			if self.lifetime.Err() != nil || (begun && state.ended != searchMoreEndTime) {
 				// the window this page began ended in its answer: a wait, a stall or the search's end
-				return false, nil
+				return false, false, nil
 			}
 			if !self.beginWindow() {
-				return false, nil
+				return false, false, nil
 			}
 			begun = true
 			continue
 		}
 		if holding {
 			// a hit waits on no download: the page answers it, the window going on without the page
-			return false, nil
+			return false, false, nil
 		}
 		if self.report != nil && more.takeRelay() {
 			self.report(self.progressNow())
 		}
 		if err := more.waitIdle(ctx, self.lifetime, notify); err != nil {
-			return false, nil
+			return false, false, nil
 		}
 	}
 }

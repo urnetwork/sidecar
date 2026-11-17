@@ -627,14 +627,12 @@ func (self *searchEngineStream) nextReporting(ctx context.Context, report func(p
 		if !self.phaseCounted {
 			self.finishPhase()
 		}
-		began, err := self.beginNext(pageCtx, 0 < len(page))
+		began, finished, err := self.beginNext(pageCtx, 0 < len(page))
 		if err != nil {
 			return nil, self.progressNow(), false, err
 		}
 		if !began {
-			if state, _ := self.more.state(); state.waiting == "" && self.allFinished(state.finished) {
-				self.done = true
-			}
+			self.done = finished
 			break
 		}
 	}
@@ -697,33 +695,33 @@ func (self *searchEngineStream) beginWithNear(ctx context.Context, inputs []*sea
 }
 
 // Phase 2 after phase 1, and each further phase-2 partition after the last: all at once where usable (SearchCached),
-// or each shard "search more" lands (SearchAll), waited for only while the page holds no hit (holding). False where
-// nothing more begins now.
-func (self *searchEngineStream) beginNext(ctx context.Context, holding bool) (bool, error) {
+// or each shard "search more" lands (SearchAll), waited for only while the page holds no hit (holding). Whether one
+// began, and where none did, whether none ever will: the search is done.
+func (self *searchEngineStream) beginNext(ctx context.Context, holding bool) (bool, bool, error) {
 	if 0 < len(self.pending) {
 		input := self.pending[0]
 		self.pending = self.pending[1:]
-		return true, self.begin([]*searchRankInput{input})
+		return true, false, self.begin([]*searchRankInput{input})
 	}
 	switch self.request.Scope {
 	case SearchLatest:
-		return false, nil
+		return false, true, nil
 	case SearchCached:
 		if self.phase != 1 {
-			return false, nil
+			return false, true, nil
 		}
 		inputs := []*searchRankInput{}
 		for _, ref := range self.refs {
 			refInputs, err := ref.phaseTwo(ctx, self.query, &self.step)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			inputs = append(inputs, refInputs...)
 		}
 		if len(inputs) == 0 {
-			return false, nil
+			return false, true, nil
 		}
-		return true, self.begin(inputs)
+		return true, false, self.begin(inputs)
 	}
 	// SearchAll: what is held usable first, then "search more" ref by ref, each shard ranked as it lands
 	if self.phase == 1 {
@@ -731,12 +729,12 @@ func (self *searchEngineStream) beginNext(ctx context.Context, holding bool) (bo
 		for _, ref := range self.refs {
 			refInputs, err := ref.phaseTwo(ctx, self.query, &self.step)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			inputs = append(inputs, refInputs...)
 		}
 		if 0 < len(inputs) {
-			return true, self.begin(inputs)
+			return true, false, self.begin(inputs)
 		}
 	}
 	return self.awaitMore(ctx, holding)
