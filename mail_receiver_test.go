@@ -20,6 +20,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -127,6 +129,24 @@ func (self *mailReceiverTestClock) Advance(by time.Duration) {
 	})
 }
 
+// How many waits have been armed so far.
+func (self *mailReceiverTestClock) armed() int {
+	count, _ := self.waitCount.Get()
+	return count
+}
+
+// Blocks until more than count waits have been armed: with no handshake under way, a key pass woken after armed
+// answered has ended once this returns, since the loop arms its next wait after each pass.
+func (self *mailReceiverTestClock) awaitArmedPast(count int) {
+	for {
+		armed, notify := self.waitCount.Get()
+		if count < armed {
+			return
+		}
+		<-notify
+	}
+}
+
 // Blocks until a wait due exactly at stands.
 func (self *mailReceiverTestClock) awaitWaitAt(at time.Time) {
 	for {
@@ -219,7 +239,13 @@ func newMailReceiverTestKeys(t *testing.T, clock Clock) *mailReceiverTestKeys {
 
 func newMailReceiverTestKey(t *testing.T, clock Clock) *TlsDeviceKey {
 	t.Helper()
-	key, err := newTlsDeviceKey(clock.Now(), TlsKeyRotationNone)
+	return newMailReceiverTestKeyFor(t, clock, TlsKeyRotationNone)
+}
+
+// A key made at clock's now for reason.
+func newMailReceiverTestKeyFor(t *testing.T, clock Clock, reason TlsKeyRotationReason) *TlsDeviceKey {
+	t.Helper()
+	key, err := newTlsDeviceKey(clock.Now(), reason)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +273,13 @@ func (self *mailReceiverTestKeys) TlsDeviceCertificate(names []string) (*tls.Cer
 // A rotation's successor, as the cert manager's rotation sets it.
 func (self *mailReceiverTestKeys) rotate(t *testing.T) *TlsDeviceKey {
 	t.Helper()
-	pending := newMailReceiverTestKey(t, self.clock)
+	return self.rotateFor(t, TlsKeyRotationNone)
+}
+
+// A rotation's successor made for reason.
+func (self *mailReceiverTestKeys) rotateFor(t *testing.T, reason TlsKeyRotationReason) *TlsDeviceKey {
+	t.Helper()
+	pending := newMailReceiverTestKeyFor(t, self.clock, reason)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.pending = pending
@@ -315,27 +347,48 @@ func (self *mailReceiverTestKeys) issue(t *testing.T, key *TlsDeviceKey, names [
 type mailReceiverTestPublish struct {
 	host       string
 	spkiSha256 [sha256.Size]byte
-	at         time.Time
+	// the hashes its retire_spki_sha256 named
+	retire [][sha256.Size]byte
+	at     time.Time
 }
 
-// POST /dns/key-record, recorded.
+// POST /dns/key-record, recorded, over the TLSA the route keeps for one receiver: a post adds its key, and its list
+// retires the keys it names, as the route retires the caller's own.
 type mailReceiverTestPublisher struct {
 	clock Clock
 
 	stateLock sync.Mutex
 	published []*mailReceiverTestPublish
 	err       error
+	// fails only the posts that name keys to retire
+	retireErr error
+	tlsa      map[[sha256.Size]byte]bool
 	count     *MonitorValue[int]
 }
 
-func (self *mailReceiverTestPublisher) PublishKeyRecord(ctx context.Context, host string, key *TlsDeviceKey, identifierSet []string) error {
+func (self *mailReceiverTestPublisher) PublishKeyRecord(ctx context.Context, host string, key *TlsDeviceKey, identifierSet []string, retireSpkiSha256s [][sha256.Size]byte) error {
 	err := func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.err != nil {
 			return self.err
 		}
-		self.published = append(self.published, &mailReceiverTestPublish{host: host, spkiSha256: key.SpkiSha256(), at: self.clock.Now()})
+		if 0 < len(retireSpkiSha256s) && self.retireErr != nil {
+			return self.retireErr
+		}
+		spkiSha256 := key.SpkiSha256()
+		if slices.Contains(retireSpkiSha256s, spkiSha256) {
+			// the route refuses a write that retires the key it publishes
+			return errors.New("synthetic refusal: the write retires the key it publishes")
+		}
+		self.published = append(self.published, &mailReceiverTestPublish{host: host, spkiSha256: spkiSha256, retire: slices.Clone(retireSpkiSha256s), at: self.clock.Now()})
+		if self.tlsa == nil {
+			self.tlsa = map[[sha256.Size]byte]bool{}
+		}
+		self.tlsa[spkiSha256] = true
+		for _, retired := range retireSpkiSha256s {
+			delete(self.tlsa, retired)
+		}
 		return nil
 	}()
 	self.count.Update(func(count int) int { return count + 1 })
@@ -346,6 +399,68 @@ func (self *mailReceiverTestPublisher) publishes() []*mailReceiverTestPublish {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return slices.Clone(self.published)
+}
+
+// Whether the TLSA names exactly keys.
+func (self *mailReceiverTestPublisher) tlsaHolds(keys ...*TlsDeviceKey) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if len(self.tlsa) != len(keys) {
+		return false
+	}
+	for _, key := range keys {
+		if !self.tlsa[key.SpkiSha256()] {
+			return false
+		}
+	}
+	return true
+}
+
+// Sets the error posts that name keys to retire answer, nil for none.
+func (self *mailReceiverTestPublisher) failRetirements(err error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.retireErr = err
+}
+
+// The TLSA as a restore from a dump older than key's retirement leaves it: key published again.
+func (self *mailReceiverTestPublisher) restoreKey(key *TlsDeviceKey) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.tlsa[key.SpkiSha256()] = true
+}
+
+// The hex of key's SPKI SHA-256, as the receiver's store names it.
+func testMailReceiverSpkiHex(key *TlsDeviceKey) string {
+	spkiSha256 := key.SpkiSha256()
+	return hex.EncodeToString(spkiSha256[:])
+}
+
+// A rotation on a serving receiver whose passes have ended: the successor made for reason and its TLSA posted, then
+// the keychain's promotion, each seen by a pass woken for it that has ended before the next step, so none is under
+// way when the caller moves the clock. Its waits are counted, not matched by time, since the serving pass's next
+// check falls due at the swap too. Answers the old key, the successor and the swap's time, 600 s on.
+func (self *mailReceiverTestWorld) rotateAndPromote(reason TlsKeyRotationReason) (*TlsDeviceKey, *TlsDeviceKey, time.Time) {
+	self.t.Helper()
+	old, _, _ := self.keys.TlsKeys()
+	armed := self.clock.armed()
+	next := self.keys.rotateFor(self.t, reason)
+	rotated := self.clock.Now()
+	self.receiver.wakeKeys()
+	self.clock.awaitArmedPast(armed)
+	self.keys.promote()
+	armed = self.clock.armed()
+	self.receiver.wakeKeys()
+	self.clock.awaitArmedPast(armed)
+	return old, next, rotated.Add(600 * time.Second)
+}
+
+// rotateAndPromote, with the clock then a second short of the swap.
+func (self *mailReceiverTestWorld) rotateToTheSwap(reason TlsKeyRotationReason) (*TlsDeviceKey, *TlsDeviceKey, time.Time) {
+	self.t.Helper()
+	old, next, swapped := self.rotateAndPromote(reason)
+	self.clock.Advance(599 * time.Second)
+	return old, next, swapped
 }
 
 // Blocks until the publisher has been called count times.
@@ -457,7 +572,9 @@ func (self *mailReceiverTestWorld) start() error {
 	return self.receiver.Start(self.ctx)
 }
 
-// Starts and waits until the current key serves, 2 TTLs after its TLSA went out.
+// Starts and waits until the current key serves, 2 TTLs after its TLSA went out, and the pass that made it serve has
+// ended: no pass is under way when the caller moves the clock, which a pass that read the time before the move would
+// otherwise arm its next wait from.
 func (self *mailReceiverTestWorld) startServing() {
 	self.t.Helper()
 	start := self.clock.Now()
@@ -465,8 +582,10 @@ func (self *mailReceiverTestWorld) startServing() {
 		self.t.Fatal(err)
 	}
 	self.clock.awaitWaitAt(start.Add(600 * time.Second))
+	armed := self.clock.armed()
 	self.clock.Advance(600 * time.Second)
 	self.listener.awaitServing(true)
+	self.clock.awaitArmedPast(armed)
 }
 
 // Hands the receiver a stream from dialerNetworkId and answers the leaf the handshake presented, or the client's
@@ -569,15 +688,8 @@ func TestMailReceiverPresentsSelfSignedThenTheIssuedChainWithNoGap(t *testing.T)
 func TestMailReceiverRotationKeepsTheOldKeyUntilTheNewTlsaIsLive(t *testing.T) {
 	world := newMailReceiverTestWorld(t, nil)
 	world.startServing()
-	old, _, _ := world.keys.TlsKeys()
-	next := world.keys.rotate(t)
-	rotated := world.clock.Now()
-	world.receiver.wakeKeys()
-	world.publisher.awaitCount(2)
-	world.clock.awaitWaitAt(rotated.Add(600 * time.Second))
-	world.keys.promote()
-	world.receiver.wakeKeys()
-	world.clock.awaitWaitAt(rotated.Add(600 * time.Second))
+	old, next, swapped := world.rotateAndPromote(TlsKeyRotationNone)
+	rotated := swapped.Add(-600 * time.Second)
 	for range 2 {
 		presented, err := world.handshake(world.edgeNetworkId)
 		if err != nil {
@@ -605,9 +717,12 @@ func TestMailReceiverRotationKeepsTheOldKeyUntilTheNewTlsaIsLive(t *testing.T) {
 	if err != nil || testMailReceiverLeafSpki(presented) != next.SpkiSha256() {
 		t.Fatalf("the new key does not serve once live: %v", err)
 	}
+	// the swap's pass also retires the old key's TLSA by a repeat naming it, which the retirement tests below hold
+	world.publisher.awaitCount(3)
 	publishes := world.publisher.publishes()
-	if len(publishes) != 2 || publishes[0].spkiSha256 != old.SpkiSha256() || publishes[1].spkiSha256 != next.SpkiSha256() ||
-		!publishes[1].at.Equal(rotated) {
+	if len(publishes) != 3 || publishes[0].spkiSha256 != old.SpkiSha256() || publishes[1].spkiSha256 != next.SpkiSha256() ||
+		!publishes[1].at.Equal(rotated) || 0 < len(publishes[0].retire) || 0 < len(publishes[1].retire) ||
+		publishes[2].spkiSha256 != next.SpkiSha256() {
 		t.Fatalf("publishes %+v", publishes)
 	}
 }
@@ -659,6 +774,199 @@ func TestMailReceiverRestartServesNothingBeforeTheNewKeyIsLive(t *testing.T) {
 	}
 	if at, ok := reloaded.publishTime(next); !ok || !at.Equal(published) {
 		t.Fatal("the new key's record moved")
+	}
+}
+
+// Once a rotation's new key serves, the receiver posts it again naming the old key's hash, which leaves exactly the
+// new key's TLSA: nothing named a second before the swap at 600 s, the retirement at it, and once; the store keeps it
+// confirmed at the swap.
+func TestMailReceiverRotationRetiresTheOldKeysTlsaOnceTheNewKeyServes(t *testing.T) {
+	world := newMailReceiverTestWorld(t, nil)
+	world.startServing()
+	old, next, swapped := world.rotateToTheSwap(TlsKeyRotationScheduled)
+	if publishes := world.publisher.publishes(); len(publishes) != 2 || !world.publisher.tlsaHolds(old, next) {
+		t.Fatalf("a second before the swap: %+v", publishes)
+	}
+	world.clock.Advance(time.Second)
+	world.publisher.awaitCount(3)
+	retirement := world.publisher.publishes()[2]
+	if retirement.spkiSha256 != next.SpkiSha256() || !slices.Equal(retirement.retire, [][sha256.Size]byte{old.SpkiSha256()}) ||
+		!retirement.at.Equal(swapped) {
+		t.Fatalf("the retirement %+v", retirement)
+	}
+	if !world.publisher.tlsaHolds(next) {
+		t.Fatal("after the swap the TLSA names more than the new key")
+	}
+	world.clock.awaitWaitAt(swapped.Add(10 * time.Minute))
+	world.clock.Advance(10 * time.Minute)
+	world.clock.awaitWaitAt(swapped.Add(20 * time.Minute))
+	if count, _ := world.publisher.count.Get(); count != 3 {
+		t.Fatalf("%d posts by the pass after the swap's", count)
+	}
+	reloaded := newMailReceiverTlsaRecords(world.store, "mx")
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := reloaded.retireTimes[testMailReceiverSpkiHex(old)]; !ok || !at.Equal(swapped) {
+		t.Fatalf("the store's retirement of the old key: %v %v", at, ok)
+	}
+	if _, ok := reloaded.publishTime(old); ok {
+		t.Fatal("the old key's publication was kept beside its retirement")
+	}
+}
+
+// A key rotated on suspicion keeps its TLSA only while it still serves, the successor's not yet live, and leaves it
+// in the pass in which the successor starts serving: the repeat naming it goes out at the swap, with the successor
+// already serving.
+func TestMailReceiverSuspicionRotationRetiresTheSuspectKeyAsSoonAsTheNewKeyServes(t *testing.T) {
+	world := newMailReceiverTestWorld(t, nil)
+	world.startServing()
+	suspect, successor, swapped := world.rotateToTheSwap(TlsKeyRotationSuspicion)
+	if successor.Reason() != TlsKeyRotationSuspicion {
+		t.Fatal("the successor is not a suspicion's")
+	}
+	presented, err := world.handshake(world.edgeNetworkId)
+	if err != nil || testMailReceiverLeafSpki(presented) != suspect.SpkiSha256() {
+		t.Fatalf("a second before the swap the suspect key must still serve: %v", err)
+	}
+	if !world.publisher.tlsaHolds(suspect, successor) {
+		t.Fatal("the suspect key's TLSA went while it still served")
+	}
+	world.clock.Advance(time.Second)
+	world.publisher.awaitCount(3)
+	retirement := world.publisher.publishes()[2]
+	if retirement.spkiSha256 != successor.SpkiSha256() || !slices.Equal(retirement.retire, [][sha256.Size]byte{suspect.SpkiSha256()}) ||
+		!retirement.at.Equal(swapped) {
+		t.Fatalf("the retirement %+v", retirement)
+	}
+	successorSpkiSha256 := successor.SpkiSha256()
+	if status := world.receiver.Status(); !status.Serving || !bytes.Equal(status.SpkiSha256, successorSpkiSha256[:]) {
+		t.Fatalf("status after the retirement %+v", status)
+	}
+	if !world.publisher.tlsaHolds(successor) {
+		t.Fatal("the suspect key's TLSA stayed once its successor served")
+	}
+	presented, err = world.handshake(world.edgeNetworkId)
+	if err != nil || testMailReceiverLeafSpki(presented) != successor.SpkiSha256() {
+		t.Fatalf("the successor once live: %v", err)
+	}
+}
+
+// A retirement the route fails leaves the new key serving, says so in the problem, and is tried again after
+// PublishRetryInterval with the receiver's other DNS writes, landing once the route takes it.
+func TestMailReceiverRetriesAFailedRetirement(t *testing.T) {
+	world := newMailReceiverTestWorld(t, nil)
+	world.startServing()
+	old, next, swapped := world.rotateToTheSwap(TlsKeyRotationScheduled)
+	world.publisher.failRetirements(errors.New("synthetic dns block refusal"))
+	world.clock.Advance(time.Second)
+	world.clock.awaitWaitAt(swapped.Add(30 * time.Second))
+	nextSpkiSha256 := next.SpkiSha256()
+	status := world.receiver.Status()
+	if !status.Serving || !bytes.Equal(status.SpkiSha256, nextSpkiSha256[:]) || !strings.Contains(status.Problem, "key record") {
+		t.Fatalf("status after a failed retirement %+v", status)
+	}
+	if !world.publisher.tlsaHolds(old, next) || len(world.publisher.publishes()) != 2 {
+		t.Fatal("a failed retirement retired")
+	}
+	world.publisher.failRetirements(nil)
+	world.clock.Advance(30 * time.Second)
+	world.clock.awaitWaitAt(swapped.Add(30*time.Second + 10*time.Minute))
+	publishes := world.publisher.publishes()
+	if len(publishes) != 3 || !slices.Equal(publishes[2].retire, [][sha256.Size]byte{old.SpkiSha256()}) ||
+		!publishes[2].at.Equal(swapped.Add(30*time.Second)) {
+		t.Fatalf("publishes after the retry %+v", publishes)
+	}
+	if !world.publisher.tlsaHolds(next) {
+		t.Fatal("the retry left the old key's TLSA")
+	}
+	if status := world.receiver.Status(); status.Problem != "" {
+		t.Fatalf("the problem stayed: %q", status.Problem)
+	}
+}
+
+// A retirement the last run had not landed waits in the store: after a restart, the first pass whose key serves names
+// it, and the store then holds it confirmed.
+func TestMailReceiverRestartRetiresWhatTheLastRunRotatedOut(t *testing.T) {
+	store := newTestMemoryStore()
+	world := newMailReceiverTestWorld(t, store)
+	current, _, _ := world.keys.TlsKeys()
+	old := newMailReceiverTestKey(t, world.clock)
+	// what the run before kept: the current key's TLSA long live, and the key it replaced rotated out unretired
+	records := newMailReceiverTlsaRecords(store, "mx")
+	if err := records.put(old, world.clock.Now().Add(-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.put(current, world.clock.Now().Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.rotateOut(current); err != nil {
+		t.Fatal(err)
+	}
+	start := world.clock.Now()
+	if err := world.start(); err != nil {
+		t.Fatal(err)
+	}
+	world.publisher.awaitCount(1)
+	world.listener.awaitServing(true)
+	retirement := world.publisher.publishes()[0]
+	if retirement.spkiSha256 != current.SpkiSha256() || !slices.Equal(retirement.retire, [][sha256.Size]byte{old.SpkiSha256()}) ||
+		!retirement.at.Equal(start) {
+		t.Fatalf("the retirement after the restart %+v", retirement)
+	}
+	world.clock.awaitWaitAt(start.Add(10 * time.Minute))
+	reloaded := newMailReceiverTlsaRecords(store, "mx")
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := reloaded.retireTimes[testMailReceiverSpkiHex(old)]; !ok || !at.Equal(start) {
+		t.Fatalf("the store's retirement %v %v", at, ok)
+	}
+}
+
+// A restore's re-registration posts the held key again and then names every retirement kept, a confirmed one
+// included, so a key the restored rows hold published again leaves TLSA; once RetiredKeyRetention has passed since
+// the route confirmed it, the retirement is forgotten and a re-registration names none.
+func TestMailReceiverReregisterNamesKeptRetirementsAgain(t *testing.T) {
+	world := newMailReceiverTestWorld(t, nil)
+	world.startServing()
+	old, next, swapped := world.rotateToTheSwap(TlsKeyRotationScheduled)
+	world.clock.Advance(time.Second)
+	world.publisher.awaitCount(3)
+	world.clock.awaitWaitAt(swapped.Add(10 * time.Minute))
+
+	world.publisher.restoreKey(old)
+	if err := world.receiver.Reregister(world.ctx); err != nil {
+		t.Fatal(err)
+	}
+	publishes := world.publisher.publishes()
+	if len(publishes) != 5 || publishes[3].spkiSha256 != next.SpkiSha256() || 0 < len(publishes[3].retire) ||
+		publishes[4].spkiSha256 != next.SpkiSha256() || !slices.Equal(publishes[4].retire, [][sha256.Size]byte{old.SpkiSha256()}) {
+		t.Fatalf("the re-registration's posts %+v", publishes[3:])
+	}
+	if !world.publisher.tlsaHolds(next) {
+		t.Fatal("the re-registration left the restored old key's TLSA")
+	}
+
+	world.clock.Advance(30 * 24 * time.Hour)
+	if err := world.receiver.Reregister(world.ctx); err != nil {
+		t.Fatal(err)
+	}
+	publishes = world.publisher.publishes()
+	if len(publishes) < 6 || publishes[len(publishes)-1].spkiSha256 != next.SpkiSha256() {
+		t.Fatalf("the re-registration past the retention did not post the held key: %+v", publishes[5:])
+	}
+	for _, publish := range publishes[5:] {
+		if 0 < len(publish.retire) {
+			t.Fatalf("a post past the retention named a retirement: %+v", publish)
+		}
+	}
+	reloaded := newMailReceiverTlsaRecords(world.store, "mx")
+	if err := reloaded.load(); err != nil {
+		t.Fatal(err)
+	}
+	if 0 < len(reloaded.retireTimes) {
+		t.Fatalf("retirements kept past the retention: %v", reloaded.retireTimes)
 	}
 }
 
@@ -843,6 +1151,72 @@ func TestMailReceiverKeyRecordCarriesOnlyTheSpkiAndItsAttestation(t *testing.T) 
 	for name, content := range world.store.shared.files {
 		if bytes.Contains(content, scalar) || bytes.Contains(content, current.Spki()) {
 			t.Fatalf("%s holds key material beyond the SPKI's hash", name)
+		}
+	}
+}
+
+// A retirement's body names each rotated-out key by its SPKI's SHA-256 under retire_spki_sha256, beside the served
+// key's SPKI and the attestation for it, and holds no byte of the old key beyond that hash; a post retiring nothing
+// leaves the field out, so the route takes it as the plain repeat it is.
+func TestMailReceiverRetirementBodyNamesOnlyTheRotatedOutKeysHash(t *testing.T) {
+	clock := newMailReceiverTestClock()
+	networkId, sidecarId := NewId(), NewId()
+	seed := bytes.Repeat([]byte{0x5b}, ed25519.SeedSize)
+	identityPublicKey := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	block := &mailReceiverTestDnsBlock{}
+	dns, err := NewDnsClient(&DnsClientArgs{
+		DnsUrl:    "https://dns.test.example",
+		Transport: block,
+		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
+			return "synthetic-dns-token", nil
+		},
+		NetworkId: networkId,
+		Clock:     clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(dns.Close)
+	publisher := newMailReceiverDnsPublisher(dns, testTlsSign(seed, sidecarId[:]), networkId, sidecarId, clock)
+	served := newMailReceiverTestKey(t, clock)
+	old := newMailReceiverTestKey(t, clock)
+	if err := publisher.PublishKeyRecord(t.Context(), "mx", served, testMailReceiverNames, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.PublishKeyRecord(t.Context(), "mx", served, testMailReceiverNames, [][sha256.Size]byte{old.SpkiSha256()}); err != nil {
+		t.Fatal(err)
+	}
+
+	block.stateLock.Lock()
+	defer block.stateLock.Unlock()
+	if len(block.bodies) != 2 {
+		t.Fatalf("%d requests", len(block.bodies))
+	}
+	if bytes.Contains(block.bodies[0], []byte("retire_spki_sha256")) {
+		t.Fatalf("a post retiring nothing carries the field: %s", block.bodies[0])
+	}
+	request := &DnsKeyRecordRequest{}
+	if err := json.Unmarshal(block.bodies[1], request); err != nil {
+		t.Fatal(err)
+	}
+	oldSpkiSha256 := old.SpkiSha256()
+	if len(request.RetireSpkiSha256s) != 1 || !bytes.Equal(request.RetireSpkiSha256s[0], oldSpkiSha256[:]) {
+		t.Fatalf("retire_spki_sha256 %x", request.RetireSpkiSha256s)
+	}
+	if request.Host != "mx" || !bytes.Equal(request.Spki, served.Spki()) {
+		t.Fatal("the retirement does not post the served key")
+	}
+	identifierSetSha256, err := TlsIdentifierSetHash(testMailReceiverNames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyTlsKeyAttestation(request.Attestation, identityPublicKey, networkId, sidecarId, served.SpkiSha256(), identifierSetSha256); err != nil {
+		t.Fatalf("the attestation does not verify: %v", err)
+	}
+	oldScalar := old.privateKey.D.FillBytes(make([]byte, tlsDeviceKeyScalarSize))
+	for _, held := range [][]byte{old.Spki(), []byte(base64.StdEncoding.EncodeToString(old.Spki())), oldScalar, []byte(base64.StdEncoding.EncodeToString(oldScalar))} {
+		if bytes.Contains(block.bodies[1], held) {
+			t.Fatal("the retirement holds more of the old key than its hash")
 		}
 	}
 }
