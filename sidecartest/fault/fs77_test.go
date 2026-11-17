@@ -16,7 +16,9 @@ package fault
 //
 // Readings: MeteredMoreByteCount stands at 64 KiB here, under this all's size, for §18.4's 25 MiB over a larger one;
 // the candidates a phone lists, possible ones included, are held to SearchOracle's matches, since a phone holds no
-// text to verify; the Worker here is the Worker's settings on this host, not wasm.
+// text to verify; the Worker here is the Worker's settings on this host, not wasm. The heap is the process's, so the
+// row runs in a search heap process of its own (sidecartest's), where nothing another test left running allocates
+// beside its searches, each of which runs alone.
 //
 // Not here, each listed for the review phase in SEARCH-M10-38's report: an OS window on cellular (the policy keeps all
 // in any window, which FS-77 says fetches none: question search-m10-38-window-on-cellular), a window's budget and
@@ -329,11 +331,14 @@ func Fs77PhoneSearch(net *Net) *Schedule {
 	return &Schedule{Id: "FS-77", Steps: steps, Check: []Invariant{state.fi23(), state.fi18()}, Tiers: []Tier{TierT2}}
 }
 
+// FS-77 on T2, in a search heap process of its own, where its heap checks answer.
 func TestFs77(t *testing.T) {
-	RunRow(t, "FS-77", "", nil)
-	fs77Measured.stateLock.Lock()
-	defer fs77Measured.stateLock.Unlock()
-	for _, line := range fs77Measured.lines {
-		t.Logf("measured: %s", line)
-	}
+	sidecartest.RunSearchHeapProcess(t, nil, func(t *testing.T) {
+		RunRow(t, "FS-77", "", nil)
+		fs77Measured.stateLock.Lock()
+		defer fs77Measured.stateLock.Unlock()
+		for _, line := range fs77Measured.lines {
+			t.Logf("measured: %s", line)
+		}
+	})
 }
