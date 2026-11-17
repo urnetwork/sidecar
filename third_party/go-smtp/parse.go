@@ -144,10 +144,26 @@ func (p *parser) parseReversePath() (string, error) {
 		p.s = strings.TrimPrefix(p.s, "<>")
 		return "", nil
 	}
-	return p.parsePath()
+	// URNETWORK: upstream's path, so MAIL never takes RCPT's bare <Postmaster> (see URNETWORK.md)
+	return p.parseMailboxPath()
 }
 
+// URNETWORK: RCPT's path. RFC 5321 section 4.1.1.3 adds "<Postmaster>" with
+// no domain, which section 4.5.1 says a server MUST take, as a
+// case-insensitive name: it is returned as "postmaster", and what follows its
+// bracket is left for RCPT's parameters, as a path leaves it. Anything else is
+// upstream's path. The prefix is ASCII, so only ASCII case folds: a byte past
+// ASCII leaves fewer runes than the prefix has (see URNETWORK.md).
 func (p *parser) parsePath() (string, error) {
+	if rest, ok := cutPrefixFold(p.s, "<postmaster>"); ok {
+		p.s = rest
+		return "postmaster", nil
+	}
+	return p.parseMailboxPath()
+}
+
+// URNETWORK: upstream's parsePath, renamed so that MAIL's reverse-path keeps it.
+func (p *parser) parseMailboxPath() (string, error) {
 	hasBracket := p.acceptByte('<')
 	if p.acceptByte('@') {
 		i := strings.IndexByte(p.s, ':')
