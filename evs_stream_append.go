@@ -10,9 +10,9 @@
 //	plan      EnsureWritable first, so nothing is sealed to a generation a non-reader holds (§8.12); then the write
 //	          planner's plan of each file as a creation on the ref's verified head, with the directory deltas its
 //	          paths need (evs_plan.go, evs_directory.go), in the head's path epoch, or the epoch a ref with no head
-//	          starts in; a ref with no head is owned by this sidecar whatever its name, since the ref's name is
-//	          ur/<sidecar_id as 32 lowercase hex>/record (plan-RECORD-stream-names#1) and the planner tells an owned
-//	          ref only by Id.String()'s form (question record-m3-01-owned-ref-id-text)
+//	          starts in; the ref must be this sidecar's owned ref, which the planner reads from a new ref's name,
+//	          ur/<Id.String()>/record for a stream (RecordStreamRefName; QD-926), so another sidecar's stream, or a
+//	          name that says no owner, is refused before anything is sealed
 //	creates   every file a creation: a path that stands, or a removal, is 409 PATH_CONFLICT before anything is
 //	          sealed, as evs's creates-only rule would answer; each directory the files land in takes the planner's
 //	          creation or, standing, its delta on its newest version, adding the new names' rows, which the rule takes
@@ -130,12 +130,8 @@ func (self *EvsRepo) BuildStreamPush(ctx context.Context, args *EvsStreamPushArg
 	if !plan.slotKeyed {
 		return nil, fmt.Errorf("%w: a stream outside a record-class repo", ErrEvsWriteInvalid)
 	}
-	switch {
-	case plan.firstPush && plan.RefKind == protocol.EvsRefKind_EVS_REF_SHARED && plan.OwnerSidecarId == nil:
-		// a ref with no head takes this sidecar as its owner: its name's form is not Id.String()'s (file header)
-		plan.RefKind = protocol.EvsRefKind_EVS_REF_OWNED
-		plan.OwnerSidecarId = &sidecarId
-	case plan.RefKind != protocol.EvsRefKind_EVS_REF_OWNED || plan.OwnerSidecarId == nil || *plan.OwnerSidecarId != sidecarId:
+	if plan.RefKind != protocol.EvsRefKind_EVS_REF_OWNED || plan.OwnerSidecarId == nil || *plan.OwnerSidecarId != sidecarId {
+		// a ref with no head is owned only as its name says (file header)
 		return nil, fmt.Errorf("%w: a stream that is not this sidecar's owned ref", ErrEvsWriteInvalid)
 	}
 	conflicts := []EvsTokenPath{}
