@@ -573,7 +573,8 @@ func TestNoQueryPersisted(t *testing.T) {
 	if _, err := component.handle(t.Context(), searchServeTestRequest(NewId(), canary)); err != nil {
 		t.Fatal(err)
 	}
-	if records, err := state.ServedRecords(); err != nil || len(records) != 1 {
+	// one row, of the one search (owner decision 294, QD-961)
+	if records, err := state.ServedRecords(); err != nil || len(records) != 1 || records[0].Count != 1 {
 		t.Fatalf("records %v %v", records, err)
 	}
 	store := world.instance.Store(&world.networkId)
