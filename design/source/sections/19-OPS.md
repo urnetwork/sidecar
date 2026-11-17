@@ -950,10 +950,8 @@ repos      devices        first the ERASE pushes (§11.12) each device signed in
                           an unrestored RepoDelete without now, under 7 d old, as deleted{deletion_id, its entry's
                           time}: placed so, it takes its history, group and slots through /reseed and its
                           GroupForm, which re-seed mode alone admits while deleted (§11.12), so access stays
-                          refused while restore and the timer resume; it applies every ERASE it holds before it
-                          serves a slot, accepts a slot only if a re-seeded version names it, and strips from it
-                          every key an applied erasure covers, key indexes unchanged, storing none left with no
-                          key; where every copy ends
+                          refused while restore and the timer resume; it serves and accepts slots as §11.13's
+                          re-seed row says; where every copy ends
                           below a reader's pin, a repo admin's EvsReseed {repo, ref, version, C_v, incident}
                           (§11.6) lets the reader accept the shorter history, showing the loss; a search index
                           (v1) that no device's mirror holds is rebuilt from text once its repo is re-seeded, by
@@ -1138,7 +1136,7 @@ None: owner decisions 18, 94 and 145 keep MinIO, in new clusters (PLAN.md:61).
 | The Postgres primary is lost: the token exchange, and with it new evs and gkm sessions, stops until the platform's restore and 19.10's reconcile end, with no RTO target, and a few hours of that spend many months of the 99.9% SLOs' 43 min per 30 days (19.8) | Low | High | paged at any hour (19.8); FS-42 drills the reconcile per Gn-out from M3; sockets keeps running about an hour and the edges from memory and Redis, an edge restarted meanwhile waiting for Postgres (19.10; owner decisions 495, 497) |
 | The out-of-hours rota misses a page | Low | High | two-person rota with escalation at 30 min; FS-50's drill per Gn-out from M3 |
 | The split slows connect's H1 path or fails fleet-wide | Low | High | §13.4's bench, drained per-interface rollout, probes |
-| A site or HE outage, or a flood, stops both NS, ACME DNS-01, DANE and inbound mail; paged out of hours, it can still outlast senders' retries (14 h to 5 d, §15.3) (accepted, owner decisions 123, 143) | Medium | Critical | separate blocks and hosts, RRL |
+| A site or HE outage, or a flood, stops both NS, with what §12.15's row states (accepted, owner decisions 123, 143) | Medium | Critical | §12.15's row |
 | A sending address's listing also hits api and connect ingress (accepted, owner decision 124) | Medium | High | per-domain and per-network reputation (§14, §21); delisting |
 
 ### 19.18 Phasing

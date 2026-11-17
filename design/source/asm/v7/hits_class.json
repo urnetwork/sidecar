@@ -1042,7 +1042,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1120,
+  "line": 1118,
   "col": 67,
   "match": "weekly",
   "snippet": "         to the member (owner decision 126); together these hold a weekly re-enroller near 14 admitted",
@@ -1055,7 +1055,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1194,
+  "line": 1191,
   "col": 118,
   "match": "14 days",
   "snippet": "**D-TEAM-1 (proposed).** P0 stage 1 refuses child and admin-refused tokens on all 37 routes before any sidecar, after 14 days log-only, confines `strict_exp` bearers to 7.4's route allowlist and closes AUTH.md:202. *Why:* owner decision 45.",
@@ -1068,7 +1068,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 1250,
+  "line": 1247,
   "col": 1178,
   "match": "weekly",
   "snippet": "ry admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf ",
@@ -1081,7 +1081,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 1322,
+  "line": 1319,
   "col": 4011,
   "match": "member-device cap",
   "snippet": "ed, consent, recovery and cascade rows, and its approval suite a cancel under §7.4's allowlist (owner decision 551); §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener",
@@ -1103,19 +1103,6 @@
   "gap": false,
   "stated": false,
   "source": "carried"
- },
- {
-  "family": "pg_redis_durable",
-  "file": "08-ACL.md",
-  "line": 455,
-  "col": 1038,
-  "match": "gkm:` networks), listed from Postgres",
-  "snippet": "e n, with an alarm. Taskworker's gkm reconciler tells its cache at its runtime's start of every network with a config log and a gkm-gated service enabled (sidecar.yml's `gkm:` networks), listed from Postgres a page at a time under the cache's load concurrency and page rate, both settings, and again of a network the bounded cache evicted when it next reads it, so a quiet netw",
-  "reading": "§8.9's gates paragraph: at its runtime's start taskworker's gkm reconciler lists the networks that have a config log from Postgres, a page at a time, and tells its gate cache of each (owner decision 371); that is a read of api's network and log tables by taskworker, not gkm state, and gkm keeps no durable state in Postgres or Redis (owner decisions 2, 136).",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-16"
  },
  {
   "family": "window_14d_weekly",
@@ -2015,19 +2002,6 @@
   "source": "carried"
  },
  {
-  "family": "offsite",
-  "file": "12-DNS.md",
-  "line": 266,
-  "col": 185,
-  "match": "off-site",
-  "snippet": "es (owner decision 417).** Every internal route sits under `/dns/internal/`, where the lb answers 403 unless the source is on dns's allow list, the site's ranges and the off-site monitor host's address (§19.5 W8). Each caller class holds its own bearer, 256 random bits in one vault file per caller, current and previous values so a rotation needs ",
-  "reading": "The off-site monitor host is §12.6's outside monitor, whose address joins dns's allow list for /dns/internal/canary-report (owner decision 417); it holds no copy of any data, which is what owner decision 94 bars.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-16"
- },
- {
   "family": "window_14d_weekly",
   "file": "12-DNS.md",
   "line": 337,
@@ -2381,7 +2355,7 @@
  {
   "family": "device_cap_1000",
   "file": "16-MCP.md",
-  "line": 1826,
+  "line": 1824,
   "col": 86,
   "match": "1,000 member devices",
   "snippet": "| Data-repo seats for the directory | no change to owner decision 144 | members past ~1,000 member devices wait keyless | not taken (owner decision 182) |",
@@ -2966,7 +2940,7 @@
  {
   "family": "pg_redis_durable",
   "file": "19-OPS.md",
-  "line": 1025,
+  "line": 1023,
   "col": 33,
   "match": "evs, gkm, taskworker, Redis",
   "snippet": "2. M1-M4: MG1-MG4; chrony on the evs, gkm, taskworker, Redis and storage hosts before evs serves (19.6); evs and gkm dark at M2 on a staging cluster on the production hosts, so they and their PM9A3 set arrive before M2's exit (D-T",
@@ -2979,7 +2953,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1034,
+  "line": 1032,
   "col": 8,
   "match": "pools",
   "snippet": "| MinIO pools for metadata growth | one endpoint; rebalance | a PUT checks its precondition only in the pool it picks (§11.3) | rejected (owner decision 145) |",
@@ -2992,7 +2966,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1034,
+  "line": 1032,
   "col": 104,
   "match": "pool",
   "snippet": "| MinIO pools for metadata growth | one endpoint; rebalance | a PUT checks its precondition only in the pool it picks (§11.3) | rejected (owner decision 145) |",
@@ -3005,7 +2979,7 @@
  {
   "family": "rebalance",
   "file": "19-OPS.md",
-  "line": 1034,
+  "line": 1032,
   "col": 50,
   "match": "rebalance",
   "snippet": "| MinIO pools for metadata growth | one endpoint; rebalance | a PUT checks its precondition only in the pool it picks (§11.3) | rejected (owner decision 145) |",
@@ -3018,7 +2992,7 @@
  {
   "family": "offsite",
   "file": "19-OPS.md",
-  "line": 1049,
+  "line": 1047,
   "col": 61,
   "match": "off-site",
   "snippet": "**D-OPS-5 (withdrawn).** Superseded by owner decision 94: no off-site copy of the file clusters; D-OPS-18 covers Postgres-held sidecar rows.",
@@ -3031,7 +3005,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1073,
+  "line": 1071,
   "col": 624,
   "match": "pool",
   "snippet": "ction (19.9's cohorts row), which dates the move tool. HDD sets join only through a segment placement that keeps §11.13's receipt check and moves upload load, never as a pool, ordered by 19.9's hdd trigger, monitor's trends of `hdd_ops` and `hdd_puts`, ahead of year two's HDD load, whose PUTs alone fill the 50% admission line by 19.6's model.",
@@ -3044,7 +3018,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1073,
+  "line": 1071,
   "col": 889,
   "match": "pool",
   "snippet": "r two's HDD load, whose PUTs alone fill the 50% admission line by 19.6's model. *Why:* every drive takes every write, endurance binds before IOPS (owner decision 140), a pool checks preconditions only inside itself (19.9), and placed repos never move without the tool (owner decision 145), so free space elsewhere relieves no cohort; refused up",
@@ -3057,7 +3031,7 @@
  {
   "family": "window_14d_weekly",
   "file": "19-OPS.md",
-  "line": 1075,
+  "line": 1073,
   "col": 667,
   "match": "weekly",
   "snippet": "buse or billing, out of Postgres; owner decision 94 bars an off-site copy of the file clusters, not of these rows; and the named rows keep a network newer than the twice-weekly main dump attached to its rows, log and repos.",
@@ -3070,7 +3044,7 @@
  {
   "family": "offsite",
   "file": "19-OPS.md",
-  "line": 1075,
+  "line": 1073,
   "col": 122,
   "match": "off-site",
   "snippet": "**D-OPS-18 (proposed).** The tables 19.7's groups create, with the network, user and client rows they name, have a daily, off-site dump from MG0's Gn-out, and the main dumps exclude those tables (19.6); the primary's physical working copies, edge-6's `pg-base` and edge-5's `main-pgbase-<date>`, are ",
@@ -3083,7 +3057,7 @@
  {
   "family": "offsite",
   "file": "19-OPS.md",
-  "line": 1075,
+  "line": 1073,
   "col": 557,
   "match": "off-site",
   "snippet": "GED (owner decision 210). *Why:* owner decisions 2 and 18 moved storage, not identity, naming, mail routing, abuse or billing, out of Postgres; owner decision 94 bars an off-site copy of the file clusters, not of these rows; and the named rows keep a network newer than the twice-weekly main dump attached to its rows, log and repos.",
@@ -3096,7 +3070,7 @@
  {
   "family": "decided_q_open",
   "file": "19-OPS.md",
-  "line": 1077,
+  "line": 1075,
   "col": 395,
   "match": "fore their space (Q-OPS-2",
   "snippet": "et and its HDD share (19.6). *Why:* the drives' endurance is the binding budget, and only drive counters measure it (owner decision 140); the HDD sets' operations bind before their space (Q-OPS-2).",
@@ -3109,7 +3083,7 @@
  {
   "family": "offsite",
   "file": "19-OPS.md",
-  "line": 1091,
+  "line": 1089,
   "col": 358,
   "match": "off-site",
   "snippet": "Closed by peer review 2026-11-04:** D-OPS-18 and 19.10's reconcile: the sidecar rows, which are not storage, and the network, user and client rows they name take a daily off-site dump, so the dumped sidecar rows (a table whose ttl is at most 7 d is in no dump) come back to ≤ 24 h plus the run (≤ 20 min) at a primary's loss and ≤ 26 h at the site'",
@@ -3122,7 +3096,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1105,
+  "line": 1103,
   "col": 97,
   "match": "multi-pool",
   "snippet": "**Q-OPS-10.** Cross-cutting (§10.6, §11.8). How does the metadata tier grow past one set, when a multi-pool PUT checks If-Match and If-None-Match only in the pool it picks by free space (§11.3)? **Decided by owner 2026-11-04 (owner decision 145):** (b), only by adding metadata",
@@ -3135,7 +3109,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1105,
+  "line": 1103,
   "col": 158,
   "match": "pool",
   "snippet": "**Q-OPS-10.** Cross-cutting (§10.6, §11.8). How does the metadata tier grow past one set, when a multi-pool PUT checks If-Match and If-None-Match only in the pool it picks by free space (§11.3)? **Decided by owner 2026-11-04 (owner decision 145):** (b), only by adding metadata clusters, never pools: each new repo and its gkm group",
@@ -3148,7 +3122,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1105,
+  "line": 1103,
   "col": 294,
   "match": "pools",
   "snippet": "tch and If-None-Match only in the pool it picks by free space (§11.3)? **Decided by owner 2026-11-04 (owner decision 145):** (b), only by adding metadata clusters, never pools: each new repo and its gkm group are placed at creation by a create-only `place/<repo_id>` on the first cluster, whose If-None-Match decides a race (§11.8), and all thei",
@@ -3161,7 +3135,7 @@
  {
   "family": "sizing_145",
   "file": "19-OPS.md",
-  "line": 1105,
+  "line": 1103,
   "col": 820,
   "match": "490-650",
   "snippet": "-1.6 records a batch and sustains ~400-450 pushes/s (~530-600 on 1 KiB blocks) at ~27-43 KiB of drive writes a push (Q-EVS-9); owner decision 145's record first carried ~490-650 a set and four to five sets, which assumed batches shared across the whole load; per-cluster placement rules that out (19.9), and the record was corrected on 2026-11-05 ",
@@ -3174,7 +3148,7 @@
  {
   "family": "sizing_145",
   "file": "19-OPS.md",
-  "line": 1105,
+  "line": 1103,
   "col": 838,
   "match": "four to five sets",
   "snippet": "ch and sustains ~400-450 pushes/s (~530-600 on 1 KiB blocks) at ~27-43 KiB of drive writes a push (Q-EVS-9); owner decision 145's record first carried ~490-650 a set and four to five sets, which assumed batches shared across the whole load; per-cluster placement rules that out (19.9), and the record was corrected on 2026-11-05 to this sizing. *Residual:* ",
@@ -3187,7 +3161,7 @@
  {
   "family": "pg_redis_durable",
   "file": "19-OPS.md",
-  "line": 1118,
+  "line": 1116,
   "col": 687,
   "match": "evs, gkm, taskworker, Redis and storage hosts with the Redis",
   "snippet": "MinIO build from `urnetwork/minio`; xops's `file-clusters` with 19.6's XFS and MinIO settings, the storage hosts' Fluent Bit and their 5 s counter process, chrony on the evs, gkm, taskworker, Redis and storage hosts with the Redis hosts' offset exporter, the daily sidecar dump, the main dump's exclude list and planetoid's pg-sidecar stream (D-OPS-18), the bundle filter (D-OPS-16); the pager servic",
@@ -3200,7 +3174,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1132,
+  "line": 1130,
   "col": 4,
   "match": "pool",
   "snippet": "| A pool on a metadata cluster breaks conditional writes (§11.3) | Low | Critical | no pools (owner decision 145); §22's suite refuses one (FS-63); monitor warns |",
@@ -3213,7 +3187,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1132,
+  "line": 1130,
   "col": 87,
   "match": "pools",
   "snippet": "| A pool on a metadata cluster breaks conditional writes (§11.3) | Low | Critical | no pools (owner decision 145); §22's suite refuses one (FS-63); monitor warns |",
@@ -3226,7 +3200,7 @@
  {
   "family": "pools",
   "file": "19-OPS.md",
-  "line": 1136,
+  "line": 1134,
   "col": 160,
   "match": "pools",
   "snippet": "| Y2's HDD load passes the 50% admission line: by 19.6's model its PUTs alone (~6,400 drive operations a second) fill it before any GET, and HDD sets cannot be pools (19.9) | High by the model | High | §22.8's hdd row runs the mix with admission on, reporting admitted throughput and refusals (M3); 19.9's hdd trigger lands the segment",
@@ -3239,7 +3213,7 @@
  {
   "family": "pg_redis_durable",
   "file": "19-OPS.md",
-  "line": 1138,
+  "line": 1136,
   "col": 6,
   "match": "Postgres primary is lost: the token exchange, and with it new evs and gkm",
   "snippet": "| The Postgres primary is lost: the token exchange, and with it new evs and gkm sessions, stops until the platform's restore and 19.10's reconcile end, with no RTO target, and a few hours of that spend many months of the 99.9% SLOs' 43 min per 30 da",
@@ -3252,7 +3226,7 @@
  {
   "family": "offsite",
   "file": "19-OPS.md",
-  "line": 1149,
+  "line": 1147,
   "col": 554,
   "match": "second site",
   "snippet": "nt before any HDD set, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
@@ -3265,7 +3239,7 @@
  {
   "family": "offsite",
   "file": "19-OPS.md",
-  "line": 1149,
+  "line": 1147,
   "col": 572,
   "match": "off-site",
   "snippet": "set, ordered by 19.9's hdd trigger, a tracked item whose lead time and page §23.7 gives and whose design is Q-OPS-11's residual (owner decision 550); a second site or an off-site copy, from operating data (owner decisions 89, 94).",
