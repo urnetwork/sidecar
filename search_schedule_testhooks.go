@@ -13,6 +13,8 @@
 //	               IndexDocument's prepare, keyed by doc_key under K_ref of the world's RK_1
 //	keys           the world's repo key stands in for gkm's RK_1, which a device's gkm answers at every record it opens,
 //	               the point a heap sampler takes (OnRecord)
+//	slots          a device's engine admits its searches by Search.DaemonSearchCount's slots, which a heap sampler of
+//	               searches at once holds through each collection (HoldSearchSlots)
 //
 // Only the sidecar_testhooks build has it, which no release leg is (§22.4). Safe for concurrent use but where a method
 // says otherwise.
@@ -782,6 +784,29 @@ func (self *SearchTestDevice) VersionMergeHeldMax() int64 {
 		return 0
 	}
 	return ref.table.MergeHeldMax()
+}
+
+// Holds every free slot of the engine's Search.DaemonSearchCount, so no search of the device is admitted to an open or
+// a page until release gives them back, and answers how many searches hold one meanwhile: what a heap sampler of
+// searches at once (sidecartest.NewSearchHeapSamplerOfSearches) holds through each collection, so that no search works
+// during it but one parked at a sample of its own. A slot frees at a page's end with no word to anyone, so the count
+// may name a search letting its slot go as it is taken, which only makes a sampler wait for that search's next sample.
+func (self *SearchTestDevice) HoldSearchSlots() (int, func()) {
+	daemon := self.engine.limits.daemon
+	takenCount := 0
+	for full := false; !full; {
+		select {
+		case daemon <- struct{}{}:
+			takenCount += 1
+		default:
+			full = true
+		}
+	}
+	return cap(daemon) - takenCount, func() {
+		for range takenCount {
+			<-daemon
+		}
+	}
 }
 
 // The records of the version table's runs, as their metas count them.
