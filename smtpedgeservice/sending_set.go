@@ -52,9 +52,10 @@ type SmtpSendingSet struct {
 
 	stateLock     sync.Mutex
 	addressStates map[netip.Addr]*smtpSendingAddressState
-	checkCount    *sidecar.MonitorValue[int]
-	cancel        context.CancelFunc
-	released      chan struct{}
+	// Checks finished, each counted once the next check's wait is armed (run).
+	checkCount *sidecar.MonitorValue[int]
+	cancel     context.CancelFunc
+	released   chan struct{}
 }
 
 // The set over settings' sending addresses, checking their FCrDNS through ptr and resolver now and each
@@ -81,15 +82,20 @@ func NewSmtpSendingSet(ctx context.Context, settings *SmtpEdgeSettings, clock si
 	return self
 }
 
-// Checks now and each FcrdnsCheckInterval.
+// Checks now and each FcrdnsCheckInterval. A check is counted only once the wait for the next is armed, as the
+// engine's probe loop counts its probes, so whoever sees a check counted may move the clock by the interval and reach
+// the next. Counted before the wait was armed, a test's move could pass no timer, and the next check then waited an
+// interval the test never moved (TestSendingSetCountsACheckOnlyOnceTheNextIsArmed).
 func (self *SmtpSendingSet) run(ctx context.Context) {
 	defer close(self.released)
 	for {
 		self.check(ctx)
+		next := self.clock.After(self.settings.FcrdnsCheckInterval)
+		self.checkCount.Update(func(count int) int { return count + 1 })
 		select {
 		case <-ctx.Done():
 			return
-		case <-self.clock.After(self.settings.FcrdnsCheckInterval):
+		case <-next:
 		}
 	}
 }
@@ -115,7 +121,6 @@ func (self *SmtpSendingSet) check(ctx context.Context) {
 		}()
 	}
 	self.reportGauge()
-	self.checkCount.Update(func(count int) int { return count + 1 })
 }
 
 // Whether address's FCrDNS holds for heloName, and false for decided when a lookup failed for now.
