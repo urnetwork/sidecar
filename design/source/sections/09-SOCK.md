@@ -394,7 +394,7 @@ Served uses never exceed `uses`, counted by Reserves, and no get starts, resumes
   - §4.5's engine stores include `SocketStore`, with field TTLs and an atomic pick-and-increment.
   - §7.9's projection lists Team scopes (9.4); §11.6 keeps the path-epoch triggers 9.4 cites, authorization expiries batched with shrinks.
   - §13.7 dispatches on `AppMode` (D-TLS-13) and defines a raw endpoint's `link` check; §20.7's `OverLimit` lists spent networks within 5 s.
-  - §22.5 tests 9.5's pages (a 3,000-name set as three pages, range-scoped unlisten, out-of-range and stale pages refused, one interval rebuilding the set after Redis loss); fixed vectors for 9.4's `K_tok` and `K_seal`, tokens and 152 B seals, a moved or mismatched seal dropped; and 9.9's share: no get or resume at or past `expire_millis`, a live stream reset there, a sharer restarted past it serving nothing, `--expires` over 30 days refused, and uses never exceeded across a crash after a Reserve; and 9.7's clamp: one dialer's short connections to a 256-stream listener, none refused or delayed by it.
+  - §22.5's §9 row tests 9.5's pages, 9.4's vectors, 9.9's share and 9.7's clamp (owner decision 551).
 
 ### 9.16 Risks
 

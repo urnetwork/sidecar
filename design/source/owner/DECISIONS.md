@@ -3285,6 +3285,210 @@ The design-records track for §19 and §20 folded the answers below on 2026-11-1
     - Not taken: (2) correcting any point by number; for point 1, the rates kept as fixed grammar rows with no pro.yml key, against R-QUOTA-5.
     - Raised by the build (QUOTA-M2-01; the build's ledger, QD-966).
 
+## The build's owner questions on abuse, safety and legal process (2026-11-06 to 2026-11-15)
+
+The design-records track for §21, §22 and §23 folded the answers below on 2026-11-16, each citing its ledger id: the owner-class items the owner accepted in bulk on 2026-11-06, the one it decided alone that day (QD-008), and the answers it decided one at a time on 2026-11-12 and 2026-11-15. A decision that groups several answers carries its latest answer's date. The section's other items, the defect fixes the owner accepted on 2026-11-06 (QD-067, QD-078, QD-088, QD-111, QD-194, QD-195) and the build's readings and fills, went into §21 and the sections they name as text with no number.
+
+525. **A stranger's report of CSAM or a threat to life comes due in 4 business hours on every tier (option 2, the recommendation, 2026-11-06).**
+    - Question: §21.4's row for CSAM and threat to life needs a person to read the report first, and §21.8 gave such a report no row of its own, so it fell to Other: 4 business hours on probation, 72 h paid, 7 days on Community, though §21.9's reporting duty runs from actual knowledge (18 U.S.C. §2258A(a)).
+    - Answer: §21.8's fourth row takes both categories at 4 business hours on every tier, one line of the abuse worker's signal mapping; counsel is asked whether the weekend gap is acceptable, and the pager stays as owner decision 134 set it (§21.8, §21.17, §23.7).
+    - Cost: reviewer time on false reports; a report filed on a Friday night still waits out the weekend.
+    - Not taken: (1) the table as it stood, a threat to life against a Community network past probation waiting a week; (3) the same and paging the rota, which closes the weekend but lets anyone page both rota members at 03:00 through a public form, reopening owner decision 134.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-006).
+
+526. **A network's or client's deletion on a held network reads as done and copies the rows the hold covers in its own transaction (silent deferral, as proposed, 2026-11-06).**
+    - Question: owner decision 133 protects `--now`, the 7-day timer and per-entry erasure, not account deletion, so a §2703(f) target could delete its account the day a hold lands, while refusing the deletion would reveal a sealed hold, the reason owner decision 184 rejected refusing drops.
+    - Answer: `RemoveNetwork` and `RemoveNetworkClient` on a held network read as done to the user and, in the deletion's own transaction, copy the in-scope rows they delete (api-1, api-4, api-5, `network_acl_head`) into the hold's `copied_rows`, with no refusal, hint or admin event. The repo shreds a deletion starts still run under owner decision 133, and the idle client reaper, a TTL sweep, skips held rows. Counsel sees this beside owner decision 133's condition (§21.9, R-ABUSE-5, §2.8's api-14, §23.7).
+    - Cost: a hook in the deletion's transaction; identity rows outlive an account until the hold ends.
+    - Not taken: (2) treating account deletion as a user's shredding, so a target erases its identity rows and counsel must accept that; (3) refusing the deletion while a hold stands, which tells the user a hold exists, against owner decisions 93 and 184.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-008, which the owner decided alone on 2026-11-06).
+
+527. **A hold's scope is the network or 1 to 16 repo ids (option 1, the recommendation, 2026-11-06).**
+    - Question: `scope` stood in §21.9's table, api-14, evs-19 and §11.13, and no section gave its values, while R-ABUSE-5 says holds name accounts and a narrow order may name one repo.
+    - Answer: `scope` is the string `network` or a list of 1 to 16 repo ids. A repo scope covers that repo's objects on every cluster and its gkm group, and server rows (tls-3, mx-2, smtp-3, connect-1's and api's) are covered at the network whatever the scope. Counsel sets the scope from the order, `network` by default. Scopes compare by containment, a repo staying until the latest `expire_time` of any hold that covers it, and a reader takes an unknown or unparsed scope as the whole network (§21.9, §11.8, §2.8's api-14 and evs-19).
+    - Cost: repo-scoped readers parse a list.
+    - Not taken: (2) always the whole network, readers ignoring the field, so a hold on one repo keeps everything, which may exceed what an order asks.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-026).
+
+528. **Strikes count the network's halts of any category and copyright notices per network, and a hit on a killed host adds no strike (option 1, the recommendation, 2026-11-06).**
+    - Question: §21.4 gave no rule for which halts count toward a suspension, a copyright count's unit or what a new hit on a host already killed adds, and each decides when a network is suspended.
+    - Answer: readings 3, 5 and 7 of the abuse policy stand as landed. "3 halts" counts the network's `mail_halt`, of any category, never a burner label's, and §14.8's rule reads it the same way. Both copyright counts are per network, as a repeat-infringer policy is per subscriber (17 U.S.C. §512(i)), so a second valid notice about another host kills the host it names; "valid" is any copyright row not lifted as wrong, "upheld" a case in review state `upheld`. While a kill stands on a host, a threat case adds nothing and a copyright notice is forwarded with no second kill; a kill that ended or was lifted stops this. Counsel reads the copyright counts beside §23.7's list (§21.4, §14.8, §23.7).
+    - Cost: three halts of mixed categories suspend a network.
+    - Not taken: (2) counting per category or per host, so a network spreads abuse across categories or hosts and §512(i)'s policy reads weaker; (3) counting every hit on a killed host, so an hourly Web Risk pass over a stale listing climbs to a suspension with no new act by the customer.
+    - Raised by the build (ABUSE-M5-04; the build's ledger, QD-033).
+
+529. **Holds copy connect-1's contract rows at placement and leave the 7-day logs outside (option 1 of each, the recommendations, 2026-11-06).**
+    - Question: §21.9 listed connect-1 in what a production reaches and said TTL sweeps skip held rows, but connect-1's reaper, its close-evidence deletes and its weekly partition drops have no per-network rule; and §21.9 named evs-7 while `copied_rows` listed only partition rows and Redis soft state, a log store having no sweep to skip.
+    - Answer: connect-1 joins `copied_rows`. At placement the hold's copy takes the `transfer_contract`, `contract_close` and `contract_close_report` rows naming a client of the held network that exist then, as compressed parts; the contract horizon reaper, the close-evidence horizon and the weekly partition drops first ask for pending copies and wait only while a hold placed before their range's end has an unfinished copy, so no keep rule is added and every drop stays whole. evs-7's and ops-1's logs, which go at 7 d, stay outside holds, though a production reaches them while they are retained. Counsel sees connect-1's rows beside §23.7's item (§21.9, §2.8's api-14 and connect-1, §23.7).
+    - Cost: the largest copy a hold makes, one busy network's 35 to 91 days of contracts possibly millions of rows; a hold keeps none of the last 7 days of request logs.
+    - Not taken: for contracts, (2) a per-network keep rule that blocks a partition drop while a held network has rows in its week, pinning every network's rows for up to a year, and (3) leaving connect-1 outside holds, narrowing owner decision 133's scope; for the logs, copying evs-7's lines at placement, a scan of 7 days of every network's logs per hold, since ops-1 carries no network label.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-036, QD-133).
+
+530. **Registrar, registry and law-enforcement notices reach the rota through a company mailbox and `notice_senders`, and only the rota kills (option 1, the recommendation, 2026-11-06).**
+    - Question: §21.8 listed the channels and the 1 h clock but no arrival path; role mail is parsed for headers or dropped unread (owner decision 78), so a notice mailed to abuse@ was never read, and a machine kill on unauthenticated text would let anyone kill a customer's host.
+    - Answer: both routes. Registrar, registry and law-enforcement contacts name a company mailbox off the platform, which the owner names (legal@ur.io, say), whose provider rule fires the page, and the rota files the case through the staff route; `abuse.yml` gains `notice_senders`, domain to class, so mail to abuse@ or postmaster@ whose DKIM verifies under a listed domain pages both rota members and opens a case, reading no body. No mail or form text drives a kill: §21.8's machine host kill for a registrar's or registry's URL becomes a rota action inside the same 1 h, and the public form offers no registrar or law-enforcement class (§21.8, §21.16, D-ABUSE-3, D-ABUSE-5, §23.7).
+    - Cost: a sender list to keep, a third party holding notices, a paging path outside the pager service's own, and a person's kill where a machine's stood.
+    - Not taken: (2) the DKIM sender list alone, missing an unlisted registrar; (3) the mailbox alone, losing a notice sent to abuse@; (4) private intake URLs per registrar, which registrars will not use.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-038).
+
+531. **A §21 suspension is one fan-out of server state that refuses new contracts for sidecar subjects only and leaves evs and gkm open (option 1, the recommendation, 2026-11-06).**
+    - Question: §21.7 said "no reach, publishing or sending; data kept, readable and exportable", while §8.6 had evs refuse "as for §21's halts" and §8.8's `Suspend` needs a customer's signature.
+    - Answer: a §21 suspension is server state feeding §8.6's `hardDeny`, never a signed `Suspend` (I-4). One `abuse_action` fans out: `network_abuse_state = suspended`; a `*` kill; `SuspendZone`, so MX goes and senders retry; a mail halt from M9; every open contract closed; new contracts refused for sidecar subjects only, shares included; no `rev/` entry; evs and gkm untouched, so reads, writes, erasure and export continue; certificates kept unless the case orders revocation, so a lift restores service at once. §8.6's sentence no longer reaches evs under a suspension (§21.7, §21.10, §8.6).
+    - Cost: a suspended network keeps evs writes, and its ordinary VPN clients keep working.
+    - Not taken: (2) every contract refused and `rev/` written for every subject, cutting a paying VPN user over a sidecar case and forcing re-enrollment after a lift; (3) only the hard deny and the kill, each gate deciding for itself, so gates disagree and §21.10's restore has no single action to re-apply.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-049).
+
+532. **Abuse staff act through one `x-internal` route on per-person bearers hashed in vault, with `sidecarctl abuse` as their client (option 1 of each, the recommendations, 2026-11-15).**
+    - Question: §21.16's one staff route covered only actions and limit rows, while §21.8 to §21.10 give the abuse role lookups, reviews, appeals, holds and restore work with no route; the access log and the second-reviewer rule need a credential naming a person; and the client the plan named, `bringyourctl abuse`, had no task once operations commands moved to `sidecarctl` (owner decision 274).
+    - Answer: one staff route, `POST /abuse/action`, `x-internal`, its kind covering lookup, review, an appeal's decision, a limit row, a hold's placement and renewal, a legal request, a production's sign-off, a restore flag's clear and a mailed action's re-apply. Each staff member holds a bearer of their own, kept hashed in vault's `abuse-staff.yml` as {reviewer_id, sha256, roles (reviewer, legal, engineering), expires}, at most 90 days old, compared in constant time; the lb refuses the route from outside the operators' addresses; each read writes `abuse_access_log` before it answers, an appeal's reviewer differs from the action's, and a production needs one legal and one engineering id. "Separate from ops" stays a process rule in v0, since nothing stops someone holding vault or Postgres. The client is `sidecarctl abuse <kind> [flags]`, in server/sidecarctl/cmd_abuse.go, one subcommand per kind, posting `{kind, ...}` to the route with the bearer read from a file a flag or `UR_ABUSE_STAFF_BEARER_FILE` names, never an argument, and printing the answer's JSON, the api URL from a flag that defaults to the env `WARP_ENV` names; later kinds add a subcommand each, and the role keeps a command-line client and no web UI (§21.10, §21.16, §19.4).
+    - Cost: a vault file and its rotation, and one lb rule; ops can still read the file.
+    - Not taken: for the route, (2) staff signing in as allowlisted URnetwork users on a fresh admin token, so a compromised login reaches abuse reads, and (3) no route, a client on an ops host under a Postgres role, so a 03:00 kill needs a host login; for the client, another lane writing the same command after the route landed.
+    - Raised by the build (the ABUSE plan and ABUSE-M5-11; the build's ledger, QD-126, QD-896).
+
+533. **Role mail no report attributes is refused at the end of DATA with the form's link, and no auto-reply is sent (option 1, the recommendation, 2026-11-06).**
+    - Question: §21.8 named an auto-reply and no sender for it, the platform listener holds no mail credential, and mx-4 keeps the envelope in memory.
+    - Answer: for mail to abuse@ and postmaster@ that §14.8's header-only parse cannot attribute, the platform listener answers at the end of DATA `550 5.7.1 Not read. Report abuse at https://ur.io/abuse` in place of 250 and drops the message unread; attributed mail keeps its 250 and sealed copy, and report-token mail is unchanged. The sender's own MTA returns that text to the person as a bounce, so the pointer arrives with no credential on the TCP 25 block, no backscatter from URnetwork, no third party and no stored address (§21.8, D-ABUSE-5, §15.4, §14.8).
+    - Cost: role mail is refused rather than silently accepted, and 250 against 550 shows a sender whether attribution matched.
+    - Not taken: (2) sending through a narrow SES credential in the platform block, a credential on the exposed block, reporters' addresses shown to a provider and backscatter on the account that sends sign-in mail; (3) a 250 carrying the link, which no person sees; (4) no auto-reply and the form published only in the RFC 2142 contact pages, so a reporter who mails abuse@ hears nothing.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-142).
+
+534. **A name sent to review is refused with a case, and a reviewer's allow lets the caller's retry pass (option 1, the recommendation, 2026-11-06).**
+    - Question: §21.6 sends brand-plus-keyword names to review and §21.7 spoke of names held for review, yet §12's tables have no pending state.
+    - Answer: review is a refusal with a case. The route answers `QuotaRefusal{limit_key: screen_review}` with the case id and stores nothing in §12's tables. A reviewer's allow is an `abuse_action` of kind `screen_allow`, naming the network and the name, which `ScreenFacts` reads, so the caller's retry passes. On probation a review verdict is refused with no case, and nothing reserves the name meanwhile (§21.6, §21.7, §12.8).
+    - Cost: the user retries, and the name is not reserved while it waits.
+    - Not taken: (2) a pending state in §12's record and label tables, through the journal and the restore step, which does nothing for published hosts; (3) refusing until the network verifies the brand's domain, so legitimate names such as `acme-support` lose.
+    - Raised by the build (the ABUSE plan; the build's ledger, QD-235).
+
+535. **Mailed records are HPKE-XWing sealed, their MAC inside, to an offline key that `sidecarctl abuse mailbox-keygen` makes (option 1 of each, the recommendations, 2026-11-15).**
+    - Question: §21.10 sealed each record "to a vault-held HPKE key", and the accepted fix QD-078 gave it a MAC, but nothing said what bytes a record carries, where its keys live, what makes them, or in what form the private key is kept.
+    - Answer: a record is sealed with HPKE-XWing as smtpedge's sealed report copies are (KEM 0x647a, HKDF-SHA256, AES-128-GCM, base mode), info "UR abuse 1.0 record", body u8(1) || enc (1,120 B) || ct, the plaintext the record's canonical JSON with its HMAC-SHA-256 MAC inside. Vault file `abuse-mailbox.yml` holds `abuse_mailbox_mac_key` (32 random bytes, base64) and `abuse_mailbox_seal_public_key` (1,216 B, base64), mounted on api and taskworker only; the private key is held offline beside §19.10's restore runbook and is reachable by no running service. The mail is a text/plain body of the base64, through api's and taskworker's SES path, and the legal-request mailbox takes the same seal and key file. `sidecarctl abuse mailbox-keygen -out <abuse-mailbox.yml> -private-out <file>` draws the pair with `hpke.MLKEM768X25519().GenerateKey()` and the 32 MAC bytes from crypto/rand and writes the vault file and, to the separate private file, `abuse_mailbox_seal_private_key: <base64 of the 32-byte seed>`, draft-connolly-cfrg-xwing's private key, which `hpke.MLKEM768X25519().NewPrivateKey(seed)` reads back, both 0600, printing neither key; the restore reads that private file. A rotation is the same command with a new pair; records sealed before it open only with the old seed, so §19.10's runbook keeps every seed until its last record's ttl ends. The owner runs it to create the vault file, an outward step, and keeps the private file offline (§21.10, §19.10, §2.8's api-14).
+    - Cost: one vault file and one command; the owner creates the file and keeps the seed offline.
+    - Not taken: for the seal, (2) DHKEM(X25519) with ChaCha20-Poly1305, a second suite to review and no post-quantum margin on records kept as long as the actions they describe; for the keys, (2) the owner writing the pair by hand with a short program, an unchecked manual step and a key form the restore would have to guess.
+    - Raised by the build (ABUSE-M5-03 and the record seal's track; the build's ledger, QD-726, QD-832).
+
+536. **`POST /abuse/report` counts reports per keyed address hash in Redis, which api-14 lists (option 1, the recommendation, 2026-11-15).**
+    - Question: the report form's per-address limit counted inside each api process, so a caller's limit was N times its setting, and a shared count needs a Redis family §2.8's api-14 did not list.
+    - Answer: api-14 gains "report attempts per caller address hash, for the window (POST /abuse/report's per-address limit, 30 an hour, keyed by the address's peppered /29 or /56 hash; no address held)", ttl the window, matching api-3's wording for the SSO discovery limit; the route counts each report through server.CheckIpRateLimitAttempt per keyed /29 or /56 hash (server.ClientIpHashForAddr, peppered) under `AbuseRouteSettings`' window and count, a refused report counting too and `WARP_LIMIT_EXCLUDE_SUBNETS`' infrastructure addresses counting nothing, so §21.16's limit holds across api processes. It keeps no more than the in-process count did, only shared (§2.8's api-14, §21.16).
+    - Cost: a Redis call per report.
+    - Not taken: (2) the in-process count, a caller's limit N times the setting.
+    - Raised by the build (ABUSE-M5-11; the build's ledger, QD-895).
+
+## The build's owner questions on testing, verification and phasing (2026-11-06 to 2026-11-16)
+
+The design-records track for §21, §22 and §23 folded the answers below on 2026-11-16, each citing its ledger id: the owner-class items the owner accepted in bulk on 2026-11-06, the answers it decided one at a time from 2026-11-10 to 2026-11-15, and the recommendations of 2026-11-16 that the owner's instruction of that day accepted. A decision that groups several answers carries its latest answer's date. The sections' other items, the defect fixes the owner accepted on 2026-11-06 (§22's QD-200, QD-210 and QD-264, §23's QD-247) and the build's readings, fills and settled items, went into §22, §23 and the sections they name as text with no number.
+
+537. **T3 attests each master of its private Redis Cluster by address (option 1, the recommendation, 2026-11-06).**
+    - Question: §22.4 and Q-TEST-2 put T3 on a 3-master Redis Cluster, never one node, and §22.8's real rule needs server's real client, yet server/test-env.sh's preflight attested one Redis endpoint, so a MOVED to a second master was refused, and editing the file that protects production data needed the owner's word.
+    - Answer: server/test-env.sh's portable mode takes a list of Redis authorities. Each must be loopback on a port above 50000, pass `test_env_refuse_loopback_tunnel_endpoint` and the probe, and be attested by address in `WARP_TEST_ENV_ATTESTED_ADDRS`, which has room for 8. test_env_dial_guard.go stays as strict, no other mode changes, and the list stays private to the sidecar stack (§22.4).
+    - Cost: an edit to the file that protects production data.
+    - Not taken: (2) T3 on one Redis node, relying on the CROSSSLOT lints, against Q-TEST-2; (3) T3's engines through sidecartest's local-stack client, so T3 no longer runs server's real Redis path.
+    - Raised by the build (the TEST plan; the build's ledger, QD-028).
+
+538. **§22.6's PROXY differential runs against a reader written from haproxy's specification (option 1, the recommendation, 2026-11-06).**
+    - Question: §22.6 had pires/go-proxyproto agree with mailgun/proxyproto, which carries no license, so §4.7's refusal of unlicensed modules, which check/ applies to every leg, test legs included, kept the bullet from being built as written; and server's connect links that module in production, outside §4.7's reach.
+    - Answer: §22.6's PROXY bullet names a second reader written from haproxy's proxy-protocol.txt, which is what landed, agreement running both ways; a one-off comparison against mailgun's parser, outside every repository, found it takes every header tlsedge takes, with the same address, port and length, and much that pires refuses. Separately the owner decides what to do about server/connect/transport_pp.go, which links the unlicensed module in production: a request to mailgun for a license, or a replacement, an owner's step outside this design. §4.7 is unchanged (§22.6).
+    - Cost: no standing check against the parser server's connect runs, which tlsedge does not run.
+    - Not taken: (2) the mailgun leg in server, a fuzz target outside sidecar waiting for server to require it; (3) admitting mailgun by exception, a §4.7 and check/ change putting an unlicensed module in a public repository's go.mod; (4) asking mailgun for a license first, an unknown wait.
+    - Raised by the build (TLS-M5-07; the build's ledger, QD-135).
+
+539. **The nightly form runs as one launchd job on a host the owner names (option 1, the recommendation, 2026-11-06).**
+    - Question: §22.8's cadence runs T3 rows nightly, but there is no CI and no nightly job (§4.3), RUN-ALL runs under a suite lock agents may not take, and the build's only merge point is its landing tool.
+    - Answer: a launchd job runs `sidecar/test.sh --cadence nightly` on a host the owner names, with T3's private stores on that host. During the build each gate sweep runs that form. It never takes tests/network-intensive-suite-lock.sh (§22.15, §22.8).
+    - Cost: one host and one job; a race only T3 shows surfaces up to a day late.
+    - Not taken: (2) T3's FS rows on every merge, hours a merge at 100 seeds; (3) no nightly, T3 rows only at gate sweeps, so a T3 regression surfaces a milestone late.
+    - Raised by the build (the TEST plan; the build's ledger, QD-239).
+
+540. **A rekey of a git-mode ref is a git-mode push with no commit that keeps the tip (option 1, the recommendation, 2026-11-10).**
+    - Question: `ur evs rekey` re-checkpoints a repo's files under the current generation, but a git-mode ref takes writes only as git pushes through the local tier, so the job skipped git-mode refs and §22.7's row held for file-mode refs alone.
+    - Answer: a rekey of a git-mode ref is a git-mode push with no commit, DESIGN-DETAILS.md 8.2's REKEY shape: it keeps the tip, and its changes only re-checkpoint files under the current generation, each new entry's sealed mode, oid and name equal to the standing one's. Any writer's device can send it, a head-mode one included. The rekey job's git-mode skip goes, after which §22.7's row holds for git-mode refs too; DESIGN-DETAILS.md section 8 stands as written (§22.7).
+    - Cost: a rule in the git-mode push checks, and the readers' and export's handling of a push that seals no commit.
+    - Not taken: (2) a rekey through the local tier's mount, re-pushing the tree with every blob forced to a checkpoint, which a head-mode device, a phone or a page Worker cannot do and which needs option 1's shape underneath; (3) no rekey of git-mode refs, so a removed reader keeps opening their untouched files until someone changes them.
+    - Raised by the build (KEYS-M2-26; the build's ledger, QD-634).
+
+541. **The soak counts orphan objects by orphan GC's own dry count (option 1, the recommendation, 2026-11-11).**
+    - Question: §22.8's soak checks that orphan objects return to baseline, but evsservice had no count that deletes nothing, and orphan GC's definition lives in its own code.
+    - Answer: evsservice/gc_orphans.go gains a dry form, `OrphanGc.CountRepo(ctx, repo *OrphanGcRepo) (*OrphanGcResult, error)`, which runs steps 0 to 4 and step 5's selection, issues no DELETE and reports `CandidateCount` and the count of those no pidx/ entry introduces, sharing orphan GC's one definition. The soak counts orphans through it per repo over the nightly pass's listings and compares what GC would judge orphan, past the horizon, at the baseline and at the end; until it lands the orphan signal reads open (§22.8's soak row).
+    - Cost: about forty lines in the data lane's file.
+    - Not taken: (2) counting the nightly pass's deletes, which measures what GC reclaimed, not what stands, and reads nothing in a soak under 49 h; (3) dropping the orphan signal until §22.8's full run exists.
+    - Raised by the build (TEST-M2-03; the build's ledger, QD-677).
+
+542. **The MLS subset stops handing its AEAD nonces to `testHookSecret` (option 1, the recommendation, 2026-11-12).**
+    - Question: `mls_*` passed its 12-byte AEAD nonces to `testHookSecret`, and the privacy capture refuses a secret under 16 bytes as a finding, since it cannot search one reliably, so S3a and S4a failed on values that are no keys.
+    - Answer: the subset's label expansion takes a hook flag, false for the three nonce derivations RFC 9420 makes (the ratchet nonce, the sender-data nonce and the Welcome nonce), and every secret a nonce is derived from stays hooked. The capture's rule stands: a secret under 16 bytes is refused as a finding, so no test passes on a value it could not search for. §22.4's "at every key creation, derivation and unwrap" reads keys, which a nonce is not (§22.4).
+    - Cost: a small change in the MLS files.
+    - Not taken: (2) the capture searching a 12- to 15-byte secret in its raw and hex forms alone, its base64 and base32 forms unsearched; (3) both.
+    - Raised by the build (TEST-M2-11; the build's ledger, QD-755).
+
+543. **FI-9's oracle keeps its own parse of git's object format, and go-git checks it from mlsinterop (option 1, the recommendation, 2026-11-15).**
+    - Question: FI-9's oracle read exports with a parse of its own, while go-git, the reader the plan named, is linked only by mlsinterop.
+    - Answer: FI-9's oracle keeps its own parse of git's object format in sidecartest/fault, independent of ur's evs_git_* and export code, as FI-9's trap asks, and a differential test in the nested mlsinterop module, where §4.4 already places go-git, holds the oracle's reading of exports and of stock git repositories equal to go-git's. No new root dependency; mlsinterop imports the fault package and carries its requires (§22.6).
+    - Cost: one test file in mlsinterop and the fault package's requires in its go.mod.
+    - Not taken: (2) moving the parse to go-git on the root module's test leg, a shared dependency change for every importer of the fault package; (3) the own parse alone, checked only against git's documented format and hand-written objects.
+    - Raised by the build (TEST-M2-06; the build's ledger, QD-861).
+
+544. **FS-114's restarted-host schedule stays on one process outside the settle rules, and a drive-level test with a held commit follows in the review phase (option 1 now, option 3 later, the recommendation, 2026-11-15).**
+    - Question: the schedule held a commit in the old process of a one-process cluster, but owner decision 504 refuses to start a one-process cluster under the settle rules, so that shape cannot run under them in any build.
+    - Answer: FS-114's restarted-host schedule stays as built on one process outside the settle rules: the new process is refused every drive while the old one lives and serves them once it exits. Owner decision 504's refusal gets no way around it in any build. In the review phase, the minio fork's cmd tests gain a drive-level test with a real held commit: a helper process holds a rename past its check and is killed while a second process opens the drive, showing a commit past its check dying with its process while a successor waits, the flock being per drive and per process (§22.8's FS-114).
+    - Cost: until the review phase the held commit and the restart are shown only apart.
+    - Not taken: (2) a settle_testhooks build starting one process under the settle rules on a test variable, a way around owner decision 504's refusal in the build T3 runs.
+    - Raised by the build (the minio fork's settle track; the build's ledger, QD-891).
+
+545. **blobsuite's late-request cases send a deadline late by the clock rule's margin (option 1, the recommendation, 2026-11-15).**
+    - Question: blobsuite's two late-request cases sent `x-ur-deadline-ms` 1 ms late by the caller's clock, which a store host's clock, within §19.6's bound, may not yet have passed.
+    - Answer: blobsuite's `Settle` gains `LateBy`, 200 ms by default, twice the 100 ms a settler waits past a deadline under §19.6's clock rule, which server's T3 suite passes through, and the two late-request cases send `x-ur-deadline-ms` as `Settle.Now()` minus `LateBy`. The rule under test is that a request late by the store's clock is refused, and a caller can know it is late only by the margin the clock rule gives; a store that takes a request 200 ms late still fails the case (§22.9's file-cluster suite, FS-114).
+    - Cost: one settings field and the two cases.
+    - Not taken: (2) keeping 1 ms with T3's suite reading the store's clock over NTP, a published port and an offset carried through the suite; (3) rerunning a failed case, so a real late take and a clock's noise read the same.
+    - Raised by the build (the minio fork's settle track; the build's ledger, QD-892).
+
+546. **The test leg moves to a Pebble release that finds its own certificates for replacement, or else the workaround moves into sidecartest's Pebble harness (option 3, else option 2, the recommendation, 2026-11-15).**
+    - Question: Pebble v2.10.1 cannot replace about 1 in 255 of its own certificates, filing and looking up an issued certificate's order by two forms of its serial, and certs' tests worked around it by taking a certificate it can replace.
+    - Answer: a track fetches github.com/letsencrypt/pebble/v2 v2.10.3 through the module proxy and reads its replacement-order check and its order lookup by issued serial: if they file and look up by one form of the serial, the test leg moves to v2.10.3, with its dependencies.yml row and the go.mod and go.sum of the modules that require it, and certsservice's test-side step goes. If no listed release fixes it, the workaround moves into sidecartest's Pebble harness, a method that issues a replaceable leaf or says whether it can replace one, so tlsedgeservice's, the local stack's and T3's tests share it. Reporting the bug upstream stays the owner's outward step (§22.9's ACME row).
+    - Cost: a fetch and a dependency row, or a harness method.
+    - Not taken: (1) the test-side step as landed, each later Pebble user having to know it; (4) a patched Pebble fork, against patching fetched modules. (5), the upstream report, stays the owner's to make beside either.
+    - Raised by the build (the certs ARI track; the build's ledger, QD-903).
+
+547. **FS-99's refusal on the push route comes at step 5c, as §11.12 says (option 1, the recommendation, 2026-11-16).**
+    - Question: FS-99's row had a caller below admin refused "before any slot GET" on every route, while §11.12's directory row and I-EVS-16 refuse an ERASE, CUT or CLOSURE sent to `POST .../push` at step 5c, after step 4 may GET the slots it names.
+    - Answer: §11.12's directory row and I-EVS-16 stand: a caller below admin that sends an ERASE, CUT or CLOSURE to `POST .../push` is refused 403 SCOPE at step 5c, before any commit or slot rewrite, every slot's ETag unchanged, though step 4 may first GET the slots it names; those reads are bounded by the refusal fence, at most one recorded refusal a second a ref, and their bytes never reach the caller. FS-99's row is reworded to match: its "before any slot GET" binds `POST .../slots/delete` and a `?closure=1` upload, which refuse a caller below admin at arrival. No engine or test changes: FS-99's evs clause already holds the push route that way (§22.8's FS-99).
+    - Cost: a caller below admin can still make evs read the slots it names.
+    - Not taken: (2) evs refusing such a statement before step 4 from the token's rights and the statement's flags alone, a change to the push path and an open question of whether that refusal is recorded.
+    - Raised by the build (RECORD-M6-24; the build's ledger, QD-985).
+
+548. **The gate sweeps name FS-5's and FS-73's T3 tests where they run, in server's evshost (option 1, the recommendation, 2026-11-16).**
+    - Question: FS-5's and FS-73's T3 tests drive stock git and git-lfs through evsgit's world, which needs a testing.TB, so neither is a registered fault builder, and they run in server's evshost package, not in sidecart3, where the convention looks.
+    - Answer: the gate sweeps name those tests where they run, as M1's sweep names FS-54's: M2's exit sweep names TestFs5OnT3 and M10's names TestFs73OnT3, each as {repo: server, package: ./evshost, tags: 'sidecar_testhooks,sidecar_pending,sidecar_localstack', stores: true}, and FS-72's rollback case, TestFs72RollbackOnT3, which also runs in ./evshost, takes the same entry at M10. No test moves, and gates.yml is regenerated. A gate keeps reading a row missing until a sweep names its test, so nothing passes early (§22.8, §22.9, §23.8).
+    - Cost: three sweep entries.
+    - Not taken: (2) moving both tests into server's sidecart3 package, a cross-area move; (3) making evsgit's world buildable from a fault.Net, a rework of the shared git world, whose rows would still need stock git and git-lfs on the host.
+    - Raised by the build (EVS2-M10-09; the build's ledger, QD-995).
+
+549. **A test that advances a fake clock past a timer the code arms after a step first waits for that timer to be armed (option 1, the recommendation, 2026-11-16).**
+    - Question: TestTlsFrontKeepsItsRegistrationsListsInStep raced: the TLS front sends an update and then arms its next margin's timer, and an advance between the two left no timer to fire.
+    - Answer: the test waits for the front's update loop to arm its margin timer before it advances the fake clock: the test clock counts its live timers and the test waits until one is due at the margin, as the receipt loop's clock tests wait for theirs. Production code is unchanged, since a real clock only delays the margin's update by the send's duration. Every test in that file that advances after an update takes the same wait, and §22.8's determinism rule states it for every fake-clock test (§22.8).
+    - Cost: a timer-count helper on the test clock and a wait before each advance after an update.
+    - Not taken: (2) arming the timer before the send, a production change for a test's race, which still races a test that advances before reading the update.
+    - Raised by the build (the ACL atoms track; the build's ledger, QD-1002).
+
+550. **The segment placement is a tracked item with a 26-week lead time, its design held by Q-OPS-11 (option 1, the recommendation, 2026-11-06).**
+    - Question: §19.9 and D-OPS-17 say the segment placement and added HDD capacity land before year two's load, but §11.22 and §19.18 left them under Later, §23.4 omitted them and §23.7 gave neither due nor start, so no lead time could exist for undesigned work with no milestone.
+    - Answer: a tracked item now, as the next metadata cluster has: §23.7 gives it (due: before the projected crossing; start: M3's exit, when the hdd run first gives an admitted throughput) and a lead time of 26 weeks, monitor's setting `hdd_trigger_lead_days` = 182. A new Q-OPS item, Q-OPS-11, holds the placement's design, due within 8 weeks of M3's exit; §23.4's Later list and §19.18 name it, and the rota owns the page (§23.7, §23.4, §19.14, §19.18, §11.22, Q-OPS-2's residual).
+    - Cost: design time and HDD spend committed about two quarters ahead of a crossing that may come soon after M3.
+    - Not taken: (2) deciding at M3's exit on the measured rate, which by the model fires and commits the schedule early; (3) operators' judgment, the first hard signal staying refused uploads.
+    - Raised by the build (the G0 re-check of §19.9's hdd trigger; the build's ledger, QD-132).
+
+551. **§23.8's density rule names the duplication the design keeps on purpose, and test lists move into §22 (option 2, the recommendation, 2026-11-06).**
+    - Question: §23.8's "no content duplicated across sections" failed on the design as written: 4.1% of its words near-duplicate another section, some on purpose (§2.8's published list, §3.7's flows, Requirements rows), some harmfully (Interfaces subsections carrying test lists that repeat §22's rows) and some by accident (one rule stated in many places).
+    - Answer: §23.8's clause reads "no content duplicated across sections (each item in its owning section, cited elsewhere), except §2.8's published list, §3.7's flows and Requirements rows". design-records moves the test lists out of the Interfaces subsections into §22 first, §7.17's, §9.15's, §11.20's and §17.16's, and turns accidental restatements into citations, before M2's Gn-in (§23.8, §22, §7.17, §9.15, §11.20, §17.16).
+    - Cost: an edit pass, starting with the most dangerous copies.
+    - Not taken: (1) the rule as written with all duplication removed, a large edit across nearly every section before M2 freezes text; (3) the rule and the text left alone, every re-check reporting the same failure.
+    - Raised by the build (the G0 density review; the build's ledger, QD-274).
+
+552. **The sweep that moves drafted code's constant tunables into settings objects runs in the review phase (option 1, the recommendation, 2026-11-11).**
+    - Question: owner decision 297 puts every limit in a settings object, and on 2026-11-11 a scan found about 801 constants in 351 sidecar files that no remaining task names.
+    - Answer: the sweep that moves the drafted code's constant tunables and limits into settings objects runs in the review phase, area by area as the review reads each area, not during the draft phase. Until then new code follows owner decision 297 and every track moves the constants in the files it touches; the remaining constants stay in drafted code, and the review phase also sweeps the build's code in server, connect and sdk (§6's bounds, §23.8).
+    - Cost: drafted code keeps constants until its area's review.
+    - Not taken: (2) sweep tracks beside features now, 25 to 80 lane-hours before the draft surface is done; (3) a sweep before features, pausing them about a day in four lanes.
+    - Raised by the orchestrator (the build's ledger, QD-706).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

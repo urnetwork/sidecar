@@ -3,8 +3,12 @@
 // verdict at S(n-1), the state the entry lands on, with what it found there; ApplyStatement folds a statement that
 // took effect into the next state's AclRows and names its effect on §7's rows (owner_confirm_signer and
 // owner_confirmed_at, live_since, key_dropped_at), which TEAM's rows take; ReapplyStatement folds it again over a new
-// base, keeping the verdict it got at its own position, so a later authority change never undoes an earlier
-// revocation, while an effect the new rows no longer allow drops.
+// base, judging nothing (DESIGN-DETAILS 5.2.3; QD-954). It took effect at its own position, so a later authority change
+// never undoes an earlier revocation; of what the check found there it takes only what the statement's body and signers
+// give, the signer and an OwnerConfirm's target (aclBodyVerdict), and derives every other fold input on the rows it
+// folds into by the functions the check derives it with, so a new device, a gate that started at the base and a
+// long-running reader fold it alike, a head change that would make the check refuse it there changes its fold only
+// through the rows it changed, and an effect the new rows no longer allow drops.
 //
 // Signers (§8.8's signer column, §7.9's read_only and authority rows):
 //
@@ -64,8 +68,9 @@ type AclStatement struct {
 	TimeMs int64
 }
 
-// What CheckStatement found at a statement's own position, which ApplyStatement folds and ReapplyStatement keeps over
-// a new base, so neither judges the signer again.
+// What CheckStatement found at a statement's own position, which ApplyStatement folds. Over a new base
+// ReapplyStatement reads only its Signer and an OwnerConfirm's TargetId, which the body and signers give, and derives
+// the rest on the rows it folds into, so neither judges the signer again.
 type AclStatementVerdict struct {
 	// The sidecar the rows keep as the one that signed it: the signer, or a k-of-n statement's proposer.
 	Signer Id
@@ -86,6 +91,9 @@ type AclStatementVerdict struct {
 	RetainUntilMs int64
 	// GrantActivate: what it folds to (acl_grant.go).
 	grant *aclGrantFold
+	// Whether it holds only what the statement's body and signers give (aclBodyVerdict), as a base's re-application
+	// passes it: only ReapplyStatement folds it, deriving the rest, and aclFoldStatement refuses it.
+	bodyOnly bool
 }
 
 // What a statement that took effect does to §7's rows, which the AclRows do not hold: TEAM's rows take it.
@@ -193,16 +201,123 @@ func (self *AclState) ApplyStatement(statement *AclStatement, verdict *AclStatem
 	return aclFoldStatement(self.rows, statement, verdict, false)
 }
 
-// ApplyStatement over a new base: this state's rows are the base's with the tail before the statement re-applied. The
-// verdict is kept, never judged again, so a revocation stays one whatever authority changed since; an effect the new
-// rows no longer allow, such as a grant on a repo they do not hold, is an error, and the statement's effect ends at
-// this base (§7.9's base row).
+// ApplyStatement over a new base (§7.9's base row; DESIGN-DETAILS 5.2.3): this state's rows are the base's with the
+// tail before the statement re-applied, and the statement took effect at its own position, which nothing here judges
+// again, so a revocation stays one whatever authority changed since. Of verdict it reads only what the statement's
+// body and signers give, its Signer and an OwnerConfirm's TargetId (aclBodyVerdict); every other fold input it derives
+// on this state from the body, by the functions CheckStatement derives it with (reapplyVerdict), so where nothing
+// changed it folds exactly as ApplyStatement did. An effect the rows no longer allow, such as a grant on a repo they do
+// not hold, is an error, and the statement's effect ends at this base.
 func (self *AclState) ReapplyStatement(statement *AclStatement, verdict *AclStatementVerdict) (*protocol.AclRows, AclStatementEffect, error) {
-	return aclFoldStatement(self.rows, statement, verdict, true)
+	if statement == nil || verdict == nil {
+		return nil, AclStatementEffect{}, fmt.Errorf("%w: a statement re-applied without its verdict", ErrConfigRule)
+	}
+	derived, err := self.reapplyVerdict(statement, verdict)
+	if err != nil {
+		return nil, AclStatementEffect{}, err
+	}
+	return aclFoldStatement(self.rows, statement, derived, true)
 }
 
-// One statement's fold into rows, which are not changed: ApplyStatement's and ReapplyStatement's, and TEAM's apply
-// path's, which folds on the rows of the state being built without indexing them.
+// What a statement's body and signers give of its verdict, with nothing a check finds: the sidecar the rows keep as
+// its signer, its first signer's sidecar_id as CheckStatement keeps it (the one signer's, or a k-of-n statement's
+// proposer's, the zero id where that signer is no sidecar), and an OwnerConfirm's target. A base's re-application
+// passes it to ReapplyStatement, which derives the rest; aclFoldStatement refuses it.
+func aclBodyVerdict(statement *AclStatement) *AclStatementVerdict {
+	verdict := &AclStatementVerdict{bodyOnly: true}
+	if 0 < len(statement.Signers) && statement.Signers[0].Kind == ConfigSignerSidecar {
+		verdict.Signer = statement.Signers[0].SidecarId
+	}
+	if confirm, ok := statement.Body.(*protocol.OwnerConfirm); ok {
+		if sidecarId, err := IdFromBytes(confirm.GetSidecarId()); err == nil {
+			verdict.TargetId = sidecarId
+		}
+	}
+	return verdict
+}
+
+// The fold inputs of a statement that took effect at its own position, derived on this state, the rows rebuilt through
+// the entry before, with nothing judged: from verdict its Signer and an OwnerConfirm's TargetId, and from the body and
+// these rows what CheckStatement derives at the position, by the functions it derives them with:
+//
+//	GrantActivate   its fold, built from the body as the check builds it, its expiry from the requests rule its
+//	                action names in these rows (aclReapplyGrantFold)
+//	GrantRevoke     retain_until_ms: the spent row's these rows hold (spentGrant), else 0, the network's life
+//	Suspend         the class: k of n for a completed proposal, else the signer's over the subject (suspendClass)
+//	Unsuspend       the class, as a Suspend's, and whether it lifts: a Suspend of its id these rows hold
+//	RepoGrant       whether the signer writes config heads here
+//	RepoRevoke      the same
+//	RepoCreate      of an owner-bound kind: the owner, the signer's member, and that member's devices consented here
+//	OwnerConfirm    the confirmed sidecar's member
+//
+// A Suspend whose signer holds no class over its subject here still folds, at class 0: the statement took effect, so
+// it never ends at a base for want of its signer's standing, and class 0 is lifted by just what lifts class 1, since
+// every Unsuspend that takes effect has a class. An error is an input these rows cannot give: an owner-bound RepoCreate
+// whose signer, or an OwnerConfirm whose target, they hold no member device of, or a body that does not parse.
+func (self *AclState) reapplyVerdict(statement *AclStatement, verdict *AclStatementVerdict) (*AclStatementVerdict, error) {
+	derived := &AclStatementVerdict{Signer: verdict.Signer}
+	signer := self.sidecarState(verdict.Signer)
+	switch body := statement.Body.(type) {
+	case *protocol.GrantActivate:
+		grant, err := aclReapplyGrantFold(self.rows, statement, body)
+		if err != nil {
+			return nil, err
+		}
+		derived.grant = grant
+	case *bridge.GrantRevoke:
+		if spent := self.spentGrant(body.GetGrantId()); spent != nil {
+			derived.RetainUntilMs = spent.GetRetainUntilMs()
+		}
+	case *bridge.Suspend:
+		subjectId, err := aclSuspendIds(body.GetSubject(), body.GetSuspendId())
+		if err != nil {
+			return nil, err
+		}
+		derived.Class = self.reapplySuspendClass(statement, signer, subjectId)
+	case *bridge.Unsuspend:
+		subjectId, err := aclSuspendIds(body.GetSubject(), body.GetSuspendId())
+		if err != nil {
+			return nil, err
+		}
+		derived.Class = self.reapplySuspendClass(statement, signer, subjectId)
+		derived.Lifts = aclRowsSuspension(self.rows, body.GetSubject(), body.GetSuspendId()) != nil
+	case *protocol.RepoGrant, *protocol.RepoRevoke:
+		derived.ConfigWriter = signer != nil && signer.configWriter
+	case *protocol.RepoCreate:
+		if aclRepoKindOwnerBound(body.GetKind()) {
+			if signer == nil || signer.tagged || signer.memberId == (Id{}) {
+				return nil, fmt.Errorf("%w: an owner-bound RepoCreate whose signer these rows hold no member device of", ErrConfigRule)
+			}
+			derived.MemberId = signer.memberId
+			derived.ConsentedSidecarIds = self.consentedSidecarIds(signer.memberId)
+		}
+	case *protocol.OwnerConfirm:
+		derived.TargetId = verdict.TargetId
+		target := self.sidecarState(verdict.TargetId)
+		if target == nil || target.tagged || target.memberId == (Id{}) {
+			return nil, fmt.Errorf("%w: an OwnerConfirm of a sidecar these rows hold no member device of", ErrConfigRule)
+		}
+		derived.MemberId = target.memberId
+	}
+	return derived, nil
+}
+
+// The class a Suspend or Unsuspend that took effect acts in on this state: k of n for a completed proposal, whose
+// signers TEAM counted (suspendSigner's), else the class its signer holds over the subject here (suspendClass), 0 for
+// a signer this state does not hold or one holding none.
+func (self *AclState) reapplySuspendClass(statement *AclStatement, signer *aclSidecarState, subjectId Id) uint32 {
+	if statement.Authority {
+		return AclSuspendClassAuthority
+	}
+	if signer == nil {
+		return 0
+	}
+	return self.suspendClass(signer, subjectId)
+}
+
+// One statement's fold into rows, which are not changed, on what its check found, or for reapply what ReapplyStatement
+// derived: ApplyStatement's and ReapplyStatement's, and TEAM's apply path's, which folds on the rows of the state being
+// built without indexing them. A verdict of the body alone is refused: only ReapplyStatement folds one.
 func aclFoldStatement(rows *protocol.AclRows, statement *AclStatement, verdict *AclStatementVerdict, reapply bool) (*protocol.AclRows, AclStatementEffect, error) {
 	effect := AclStatementEffect{}
 	if rows == nil {
@@ -211,9 +326,12 @@ func aclFoldStatement(rows *protocol.AclRows, statement *AclStatement, verdict *
 	if statement == nil || verdict == nil {
 		return nil, effect, fmt.Errorf("%w: a statement folded without its verdict", ErrConfigRule)
 	}
+	if verdict.bodyOnly {
+		return nil, effect, fmt.Errorf("%w: %s folded on its body's verdict, without its check", ErrConfigRule, statement.Type)
+	}
 	switch body := statement.Body.(type) {
 	case *protocol.GrantActivate:
-		next, err := aclFoldGrantActivate(rows, verdict, reapply)
+		next, err := aclFoldGrantActivate(rows, verdict)
 		return next, effect, err
 	case *bridge.GrantRevoke:
 		return aclFoldGrantRevoke(rows, body, verdict), effect, nil
@@ -333,9 +451,10 @@ func (self *AclState) View() AclAuthView {
 	return self.view
 }
 
-// TEAM's configAclRules, implemented by ACL's rules (C-05): each 0x11xx entry checked at S(n-1), the verdict kept on
-// the statement so a base's re-application keeps it, the fold written to the state being built and its effect to
-// TEAM's rows there.
+// TEAM's configAclRules, implemented by ACL's rules (C-05): each 0x11xx entry checked at S(n-1), its check's verdict
+// kept on the statement, which its apply folds; a base's re-application passes the body's verdict instead
+// (config_base.go's configAclBodyVerdict), and ReapplyStatement derives the rest on the state being rebuilt. The fold
+// is written to the state being built and its effect to TEAM's rows there.
 type configAclStatementRules struct{}
 
 // Replaces TEAM's unwired rules, which refuse every acl statement.
@@ -375,17 +494,34 @@ func (self configAclStatementRules) apply(next *configStateBuilder, statement *c
 	return self.fold(next, statement, false)
 }
 
-// The fold and its effect over a new base, the verdict kept.
+// The fold and its effect over a new base: ReapplyStatement's, on the body's verdict.
 func (self configAclStatementRules) reapply(next *configStateBuilder, statement *configStatement) error {
 	return self.fold(next, statement, true)
 }
 
-// Writes a statement's fold to next's AclRows and its effect to next's rows.
+// Writes a statement's fold to next's AclRows and its effect to next's rows: ApplyStatement's fold on the verdict its
+// check found, or, over a new base, ReapplyStatement's on the state being rebuilt, which derives there what the body's
+// verdict lacks. A statement a base's re-application reaches through a proposal, a cosign or a tick that completes or
+// activates it applies rather than re-applies, so its verdict, the body's, says which.
 func (self configAclStatementRules) fold(next *configStateBuilder, statement *configStatement, reapply bool) error {
-	if statement.aclVerdict == nil {
+	verdict := statement.aclVerdict
+	if verdict == nil {
 		return fmt.Errorf("%w: %s applied without its check", ErrConfigRule, statement.signedType)
 	}
-	rows, effect, err := aclFoldStatement(next.state.aclRows, configAclStatement(statement), statement.aclVerdict, reapply)
+	var rows *protocol.AclRows
+	var effect AclStatementEffect
+	var err error
+	if reapply || verdict.bodyOnly {
+		// the acl part of the rows being rebuilt, through the entry before this one's effect; a snapshot leaves the
+		// state being built as it is
+		acl, aclErr := next.snapshot().Acl()
+		if aclErr != nil {
+			return fmt.Errorf("%w: the rebuilt acl rows do not build", ErrConfigRule)
+		}
+		rows, effect, err = acl.ReapplyStatement(configAclStatement(statement), verdict)
+	} else {
+		rows, effect, err = aclFoldStatement(next.state.aclRows, configAclStatement(statement), verdict, false)
+	}
 	if err != nil {
 		return err
 	}
