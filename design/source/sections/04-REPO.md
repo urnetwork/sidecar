@@ -259,15 +259,20 @@ fails on
   cgo       CgoFiles, except keychain_darwin.go in §5.10's darwin fallback leg
   hygiene   replaces other than 4.7's; registry conflicts; stale generated code; a release leg built with
             sidecar_testhooks (§22.4); a direct wall-clock call in a non-test file of the root, a <svc>service,
-            mcp/ or device/, outside a dated exception list, id.go first (§22.8); govulncheck findings
+            mcp/ or device/, outside a dated exception list, id.go first (§22.8); a .go or Makefile line that
+            4.9's rewrite, as check/ models run.sh's two passes in their order, leaves holding an unversioned
+            path of this repository (owner decision 555); govulncheck findings
 legs        sdk's table (sdk/dependency_boundary_test.go's messagingBoundaryLegs), which lists every target
             sdk/build/Makefile binds, each with the tags gomobile adds for it: android/arm and android/amd64
             beside android/arm64, iossimulator/arm64 beside ios/arm64 (gomobile's ios tag), macos/amd64 beside
-            macos/arm64, each built as gomobile builds the macOS slices, GOOS=ios with its macos tag, on which
-            desktop files also select (§18.10's tags; owner decision 493), the extension bind's slices
-            likewise, gomobile's CGO_ENABLED=1, sdk_mobile_bind and ios_extension included; check/ mirrors the
-            table and fails a row of sdk's with no leg here, adding no gomobile target of its own (owner
-            decision 277); the sidecar_http js leg (GOOS=js GOARCH=wasm -tags sidecar_http over the root and
+            macos/arm64, each macOS slice in both configurations gomobile runs it in, its bind failing if
+            either fails: a row for the binding step, gobind's type-check, GOOS=ios with the bind's tags plus
+            macos, on which desktop files also select (§18.10's tags; owner decision 493), and a row for the
+            compile of the archive the slice links, GOOS=darwin with the bind's tags alone, each row's name
+            saying which step it models (owner decision 554); the extension bind's slices likewise,
+            gomobile's CGO_ENABLED=1, sdk_mobile_bind and ios_extension included; check/ mirrors the table
+            and fails a row of sdk's with no leg here, adding no gomobile target of its own (owner decision
+            277); the sidecar_http js leg (GOOS=js GOARCH=wasm -tags sidecar_http over the root and
             protocol, which §18.10's main imports); the CLI's six release targets, from cli/
 runs        every leg compiles, 32-bit android/arm among them; tests run on each leg the host can run, and a
             leg it cannot run reports as §22.4's T1 says
@@ -294,9 +299,13 @@ runs        every leg compiles, 32-bit android/arm among them; tests run on each
 branch     v<version> in each repo (:1302)
 operator-core  its own repository's step, after connect's and before sidecar's, rewritten to
            .../operator-core/v2026 and tagged as connect is, coretest with it (owner decision 251)
-root       go mod edit -module .../sidecar/v2026 (:1540-1543); quoted import paths in Go files and Makefiles
-           rewritten (:1560-1566); the tree moved into v2026/, nested modules left in place (go_mod_fork,
-           :1639-1683); tag v2026.M.D-<code> (:1781-1786)
+root       go mod edit -module .../sidecar/v2026 (go_mod_edit_module); quoted import paths in Go files and
+           Makefiles rewritten in two passes, the root's exact path on every line (go_edit_require), then its
+           subpackages on each line not already carrying /vN (go_edit_require_subpackages), so a line naming
+           the root beside a subpackage keeps the subpackage unversioned: check/ models both passes in the
+           order run.sh keeps for every repository and fails such a line, so code names the two on separate
+           lines (4.7; owner decision 555); the tree moved into v2026/, nested modules left in place
+           (go_mod_fork); tag v2026.M.D-<code> (git_tag)
 kept       go_mod_fork's named arguments stay at the repository's top beside v2026/, as server's
            connect/sim-latency/baseline does: the documents (design/, research_notes/, DESIGN*.md, HANDOFF.md,
            FEEDBACK-SYSTEM.md) and third_party/, whose two forks are modules of their own (owner decision 278);
@@ -306,15 +315,27 @@ kept       go_mod_fork's named arguments stay at the repository's top beside v20
            check/'s release pattern mirrors the names. The root's module zip leaves the forks out either way
 smtpproof  the same as its own module: .../sidecar/smtpproof/v2026, tag smtpproof/v2026.M.D-<code>; in every
            repo its paths are rewritten before the root's subpackage pass, which skips lines already carrying
-           /vN (:1564-1566)
+           /vN (go_edit_require_subpackages)
 cli        requires both tags, builds ur, never tagged as a module
+sdk        sdk's own step restores each untagged nested module's path after the root's rewrite: for build,
+           cgo and js, github.com/urnetwork/sdk/v2026/<module>/... goes back to .../sdk/<module>/... in every
+           .go file and Makefile, since those modules keep their unversioned paths, so sdk/cgo's tests keep
+           importing .../sdk/cgo/abitest and any later subpackage of a nested module is covered (owner
+           decision 555); this repository's cli/ and mlsinterop/ stay one package each instead, which check/
+           holds
+make check run.sh's, in v2026/ once both tags exist, so each test holds in the release layout: one that reads
+           the tree finds cli/ at the repository's top when the module root is a version directory, and one
+           that compares a path builds both sides from one value, so the rewrite reaches both or neither
+           (owner decision 555)
 version    the release sed fills Version with ${WARP_VERSION}, as for sdk (sdk/sdk.go:737; :1964), so
            ur --version prints the + form; artifact names and tags use ${EXTERNAL_WARP_VERSION}
 generated  .pb.go files are committed, never regenerated on the release branch; descriptors keep
            protocol/<name>.proto and protocol/bridge/<name>.proto, so one module identity registers each
            descriptor once
 fixture    the tags, operator-core's among them, served through GOPROXY=file:// with GOWORK=off, an empty
-           module cache and no replaces, over a tree that holds third_party/:
+           module cache and no replaces, over a tree that holds third_party/ and an sdk tree whose nested
+           module holds a subpackage, sdk's restore also tested by build/all over a synthetic sdk tree, and
+           with a TMPDIR of about 70 bytes or less for the socket tests' sun_path limit (owner decision 555):
            root, protocol and an engine package, the first <svc>service it finds, import at the tag, ur
            builds from cli/, go list -m all shows one sidecar path, each descriptor registers once, and
            sdk's go mod graph holds no smtpproof or prover dependency. Stripping every replace proves module

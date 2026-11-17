@@ -987,6 +987,16 @@ INDEX = list(_P9['INDEX']) + [
      "§23.8's density rule names the duplication kept on purpose, and test lists move into §22."),
     (552, 'The settings sweep',
      "Drafted code's constant limits move into settings objects in the review phase, area by area."),
+    # The second folds of §2 and §4 (2026-11-17): the answers queued for them after their first folds.
+    (553, 'Attestation statements in api-7',
+     "api-7 says a presence key registration shows its attestation object, with the authenticator's model and its "
+     "vendor's batch certificate chain where it gave a statement."),
+    (554, "The macOS slices' two configurations",
+     "Amends @@OD:277@@ and @@OD:493@@: §4.7's legs hold each macOS slice twice, gomobile's binding step as GOOS=ios "
+     "with `macos` and its compile as GOOS=darwin without it."),
+    (555, 'Release layout paths',
+     "Tests only the release layout broke are fixed where they live, `check/` models run.sh's two path passes, and "
+     "sdk's release restores its nested modules' paths."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -1019,11 +1029,18 @@ for _n, _old_end, _note in [
          " Amended by @@OD:491@@: 7.5 MiB, with the replaying config head reader on the leg."),
         # Owner decision 416 narrows 345's reading of the shared refs a set's pin push reaches.
         (345, "at most 256 sets.",
-         " Amended by @@OD:416@@: the filer's pin push reaches only shared branches with a tip.")]:
+         " Amended by @@OD:416@@: the filer's pin push reaches only shared branches with a tip."),
+        # Owner decision 554 amends 277's and 493's macOS rows: gomobile compiles the slices' archive as darwin.
+        (277, "with gomobile's tags.",
+         " Amended by @@OD:554@@: each macOS slice takes two rows, the binding step's as GOOS=ios with `macos` and "
+         "the compile's as GOOS=darwin without it."),
+        (493, "model the macOS slices as GOOS=ios.",
+         " Amended by @@OD:554@@: that is gomobile's binding step; the archive compiles as GOOS=darwin, and the "
+         "tables hold both.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 553))
+assert [r[0] for r in INDEX] == list(range(1, 556))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1104,7 +1121,8 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               534: '2026-11-06', 535: '2026-11-15', 536: '2026-11-15', 537: '2026-11-06', 538: '2026-11-06',
               539: '2026-11-06', 540: '2026-11-10', 541: '2026-11-11', 542: '2026-11-12', 543: '2026-11-15',
               544: '2026-11-15', 545: '2026-11-15', 546: '2026-11-15', 547: '2026-11-16', 548: '2026-11-16',
-              549: '2026-11-16', 550: '2026-11-06', 551: '2026-11-06', 552: '2026-11-11'})
+              549: '2026-11-16', 550: '2026-11-06', 551: '2026-11-06', 552: '2026-11-11',
+              553: '2026-11-16', 554: '2026-11-16', 555: '2026-11-16'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1380,3 +1398,10 @@ assert PEER_INTRO.count(_PI_ONE) == 1, 'PEER_INTRO moved'
 PEER_INTRO = PEER_INTRO.replace(_PI_ONE, "Decided items leave two engineering residuals: Q-SDK-1's size spike, which "
                                 "decides C17 (Q-REPO-2), and Q-OPS-11's segment placement design, due within 8 weeks "
                                 "of M3's exit (§23.7). ")
+# The second folds of §2 and §4 (2026-11-17) number the answers queued for those sections after their first folds.
+_D552 = "density rule (551) and the settings sweep (552). "
+assert DECISIONS_INTRO.count(_D552) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D552, _D552 + "On 2026-11-17 the second folds of §2's and §4's number the answers queued for them since: what a "
+    "presence key registration's attestation statement shows api (553), the macOS slices' two configurations in "
+    "§4.7's legs (554), amending @@OD:277@@ and @@OD:493@@, and the paths the release rewrite keeps (555). ")
