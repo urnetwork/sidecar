@@ -16,10 +16,10 @@
 //   - TL4: nothing.
 //
 // Then what may refuse the level reached, in this order: a level below the pin the recipient domain
-// holds on the MX host (SmtpPinStore, which keys pins by the pair, owner decision 438), a refused
-// downgrade that neither kind of TL4 consent below lifts, while a pin the host holds for another domain
-// refuses nothing here; a REQUIRETLS message at neither TL1 nor TL2 (plan-SMTP-small-readings#12); and
-// TL4 for a recipient domain the user has not allowed (owner decision 38, an outward action under I-8).
+// holds on the MX host (SmtpPinStore, keyed by the pair, owner decision 438), a refused downgrade, which
+// no TL4 consent below lifts and which a pin the host holds for another domain never causes; a
+// REQUIRETLS message at neither TL1 nor TL2 (plan-SMTP-small-readings#12); and TL4 for a recipient
+// domain the user has not allowed (owner decision 38, an outward action under I-8).
 // The allowance is its own action, mail_tls_unauthenticated with the domain as host (QD-729):
 // AllowUnauthenticated passes it through Sidecar.Authorize, and its effect keeps the allowance in the
 // desktop's store until it ends (smtp_tls_allowance.go). TL4 then passes for a domain with an allowance
