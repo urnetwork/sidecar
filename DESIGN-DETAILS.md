@@ -21,7 +21,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760) |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
-| 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
+| 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12; amended 2026-11-16, QD-870) |
 | 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12; §22.8 row added 2026-11-13) |
 | 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13; amended 2026-11-13, QD-801, QD-802 and QD-803) |
 | 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13; §22.8 row added 2026-11-13) |
@@ -12077,7 +12077,7 @@ Questions this section builds on, with the option taken: plan-QUOTA-lease-debits
 
 ## 14. Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13)
 
-Status: complete (2026-11-12)
+Status: complete (2026-11-12; amended 2026-11-16, QD-870, to QD-806's order, the slots and then the record: 14.2.1, 14.2.3, 14.2.5, 14.2.7, 14.3, 14.5, 14.6 and 14.8, each place marked, and the model rerun)
 
 Tasks held until complete: none. The fix returns to landed code as two fix tracks (14.7), the first an interim that stops the loss before the rest is built. EVS2-M10-12 and EVS2-M10-16 build against the slot rules as they stand, and 14.7 says what each must keep.
 
@@ -12123,7 +12123,7 @@ Three ideas.
 
 **A slot is deleted only on its owner's fate.** Evacuation deletes a dead record's slot only when the object's origin is that record's own statement: the object of a statement that is dead for good. It no longer deletes "the slots the record lists", which was a claim about ids, never about objects. The deleters of a committed version's slots (CONSUME, the purge, a marker's collection, the drop job, a shred) are unchanged, and are right again because of the second idea, with one rule added at 5h for deposits (D, 14.2.6).
 
-What does not change: `EvsPush`, `EvsSlotObject`, `EvsPidxEntry`, the payload and its sections, batch records and every other format-1 message; the client, the retoken and the rebuild; the order of step 6 (record, then slots, once per attempt); Resolve and its fence (2.2.3); the 23 h rule; an ERASE's rewrite and its erased list; refusal codes and alarms; the routes that read a slot.
+What does not change: `EvsPush`, `EvsSlotObject`, `EvsPidxEntry`, the payload and its sections, batch records and every other format-1 message; the client, the retoken and the rebuild; Resolve and its fence (2.2.3); the 23 h rule; an ERASE's rewrite and its erased list; refusal codes and alarms; the routes that read a slot. Step 6's order is QD-806's (amended 2026-11-16, QD-870): the slot round, then the record (14.2.3).
 
 #### 14.2.2 The origin
 
@@ -12143,7 +12143,7 @@ The value is versioned by its first field. A reader of an origin it cannot parse
 #### 14.2.3 Step 6's slot round
 
 ```text
-per new slot S of statement st, after st's record is appended, at most SlotWriteRoundCount (4) rounds:
+per new slot S of statement st, before st's record is appended (QD-806), at most SlotWriteRoundCount (4) rounds:
   1  PUT S If-None-Match, origin = st                   200: written
   2  on 412, or an outcome it does not know: GET S
        404                                              round 1 again
@@ -12160,7 +12160,7 @@ per new slot S of statement st, after st's record is appended, at most SlotWrite
   rounds spent, or a store error                        503 unknown, as today
 ```
 
-"Anything else" is another statement's object that is not taken over, a re-seeded slot, and an object with no origin. Bytes are not compared for it: whose the object is decides, and a statement that lists another's id gets the same answer whatever it sends. The cluster read and 5a come first, as they do for other bytes, so that an attempt of a push that has committed is answered its 200 and never a refusal (I-EVS-3): its slot may since have been deleted with its version and the id created again. The client's answer to SLOT_STALE is the rebuild it has today, which seals again and so draws new ids. The record is appended first, as today, so every origin on a slot names a statement whose record a batch held (S4): evacuation will resolve that record and, if it is dead, delete the slot.
+"Anything else" is another statement's object that is not taken over, a re-seeded slot, and an object with no origin. Bytes are not compared for it: whose the object is decides, and a statement that lists another's id gets the same answer whatever it sends. The cluster read and 5a come first, as they do for other bytes, so that an attempt of a push that has committed is answered its 200 and never a refusal (I-EVS-3): its slot may since have been deleted with its version and the id created again. The client's answer to SLOT_STALE is the rebuild it has today, which seals again and so draws new ids. The slots come before the record (QD-806, QD-870): step 6 runs the slot round from the request's bodies, then appends the record, which keeps no slot body, so the slot objects are the one stored copy of the push's keys. A refusal in the round appends no record, so a statement refused SLOT_STALE leaves nothing for evacuation to judge. An attempt that dies between its round and its record leaves its objects under its statement's origin with no record naming them: a retry of the statement carries its bodies again, finds the objects its own and appends the record, which evacuation resolves and, if the statement is dead, deletes them with; a statement never retried leaves them, a leak and never a loss (S4, 14.5).
 
 The slot round stays once per attempt (`slotsWritten`). An attempt that reruns step 7 on a reread head does not look at its slots again, and need not: its object can go only by evacuation of its own dead record or by a takeover, and each happens only once the statement can never commit (S2, S3).
 
@@ -12208,7 +12208,7 @@ The record's statement is in the record: `EvsBatchRecordStatement` gives it for 
 
 **The fence.** Three things make the DELETE safe, and each is needed (14.3's twins). The ref's fence, or the head past the window, made st dead for good before the HEAD (2.2.3): no attempt of st commits after it. The origin says the object is st's, so no other statement holds it or will: step 6 gives another statement this object only by a takeover, which deletes it first. And the DELETE names the LastModified the HEAD read, on an object the settle age has passed, so a run that stalled between its HEAD and its DELETE, beside a successor that deleted the object and a later statement that created the id again, deletes nothing: the new object is more than a second younger.
 
-An unsettled slot is kept, not waited for: a dead statement's slot stored within 2 s of its record's evacuation, a day after the record, is an attempt that slept that day, and holding a minute back for it would hold the horizon (2.2.4) and with it orphan GC and the drop job. The object stays (14.5).
+An unsettled slot is kept, not waited for: a dead statement's slot stored within 2 s of its record's evacuation, a day after the record, is a later attempt of that statement that slept that day before its slot round (in QD-806's order no attempt stores its slot after its own record), and holding a minute back for it would hold the horizon (2.2.4) and with it orphan GC and the drop job. The object stays, and goes with that attempt's own record, or is 14.5's first leak if the attempt died before it.
 
 #### 14.2.6 Rewrites, the other deleters, re-seed and holds
 
@@ -12229,8 +12229,8 @@ An unsettled slot is kept, not waited for: a dead statement's slot stored within
 ```text
 list as new   any statement may list any id; a client draws 16 random bytes per sealed write, keeps them across
               a retry and a retoken, and draws new ones at a rebuild (§11.6, unchanged)
-create        step 6, after the record: PUT If-None-Match with the statement as origin; the object is that
-              statement's for as long as it stands
+create        step 6, before the record (QD-806): PUT If-None-Match with the statement as origin; the object is
+              that statement's for as long as it stands; the record follows, keeping no slot body
 take          only its own origin, under 23 h old; a retoken takes over its refused statement's object by a
               settled DELETE naming LastModified and a create of its own (14.2.4); all else 409 SLOT_STALE
 cite          a later version of the path, by its base (5h, unchanged); on a deposit ref, never
@@ -12265,93 +12265,102 @@ An *object* below is one stored incarnation of a slot key, from its create to it
 
 **S3, no delete takes another object than the one it judged.** Evacuation's and the takeover's DELETE name the LastModified their HEAD or GET read, and are sent only for an object `SlotSettleAge` old by a checked clock. The store refuses the DELETE if the object it finds was stored a second or more after that LastModified. Any object created after the judged one was deleted is stored after that delete was sent, which is at least `SlotSettleAge` less the clocks' error after the judged LastModified; with 2 s and clocks within 50 ms that is more than a second. An ERASE's rewrite of the judged object applies only to a slot a committed version names, which neither party judges.
 
-**S4, an origin has a record.** Step 6 appends the record before the slot round, and the takeover's DELETE and create are part of that round. So every statement that is an object's origin has a record that a batch held, and evacuation resolves it. If the statement is dead the object is deleted then, unless it is unsettled or held, or was stored after its record left (14.5's leaks).
+**S4, an origin has a record, unless its attempt died before it.** Every statement that is an object's origin has a record a batch held, unless its attempt died between its slot round and its record and it was never retried (QD-870). Step 6 runs the slot round, the takeover's DELETE and create among it, and appends the record after it (QD-806). An attempt that dies between the two leaves its objects under its origin and no record naming them; a retry of the statement finds them its own (S1) and appends its record, and one refused before its record writes none, so the statement stays as one never retried. Evacuation resolves every record a batch holds, and if the statement is dead its own objects are deleted then, unless unsettled or held (14.5's leaks). An object a later attempt of the statement stored after that record left goes with the later attempt's own record, or stays as 14.5's first leak if that attempt died before it. S4 decides what is reclaimed, never what is lost: S1, S2, S3 and S5 do not rest on it.
 
 **S5, one introducer.** From S1 and S2: a committed push st introduced slot id S on an object it held. A second statement that lists S as new and passes step 6 does so on an object of its own, created after st's was deleted, which S2 allows only once st's version is removed. So no two committed versions that stand introduce one slot id on one object, and a deleter that removes a version's slots removes no other introducing version's. With 5h's deposit rule (14.2.6), a deposit names only slots it introduced.
 
 **I-EVS-1 for slots.** A committed version names a slot by introducing it or by citing its path's base. For an introducing version, S2 and S3 keep its object until its version is removed. A citing version rests on the deleter's own rule for its path, which S5 restores: the purge and the collection take a slot only that path's versions name, and the drop job scans. A, B, C and D are each the failure of one of these: A and B of S2 (evacuation deleted for a statement that was not the holder), C of S1 and S5, D of the deposit rule.
 
-**The model.** `EvsSlot.tla` holds one ref's head (version, path epoch, fence) with a stalled head write, one slot id with its object (stored, origin, LastModified tick), statements that all list that id as new with equal bytes, each with one attempt (steps 4 to 7, the record, the create, the GET, the takeover's DELETE), other commits and PATH_EPOCH commits, the evacuator as one or two runs (Resolve, the fence, the HEAD, the DELETE, a kill at any step), a deleter that removes a committed version with its slot, and an ERASE's rewrite. Every attempt and every run may stop for any time at any step. A tick is longer than the settle age and the DELETE's second: a DELETE naming a LastModified takes any object stored in that tick, and a HEAD finds an object stored in its own tick unsettled. Its invariants: `ClosureHolds` (no committed version that stands names a deleted slot), `OriginStands` (a committed push's object stands under its own origin until its version is removed; S1 and S2), `OneIntroducer` (S5), `StampHasRecord` (S4), `DeadIsFinal` (a statement that evacuation or a takeover judged unable to commit never commits; S2) and, under fairness for the evacuator, `RecordsLeave` (a slot never holds a minute back).
+**The model.** `EvsSlot.tla` holds one ref's head (version, path epoch, fence) with a stalled head write, one slot id with its object (stored, origin, LastModified tick), statements that all list that id as new with equal bytes, each with one attempt (steps 4 to 7: the create, the GET, the takeover's DELETE, then the record, in QD-806's order; the code as landed and the interim keep the record first, as they stood) and, in the runs that allow one, a retry sent after that attempt died, within the statement's time checks, other commits and PATH_EPOCH commits, the evacuator as one or two runs (Resolve, the fence, the HEAD, the DELETE, a kill at any step), a deleter that removes a committed version with its slot, and an ERASE's rewrite. Every attempt and every run may stop for any time at any step. A tick is longer than the settle age and the DELETE's second: a DELETE naming a LastModified takes any object stored in that tick, and a HEAD finds an object stored in its own tick unsettled. Its invariants: `ClosureHolds` (no committed version that stands names a deleted slot), `OriginStands` (a committed push's object stands under its own origin until its version is removed; S1 and S2), `OneIntroducer` (S5), `StampHasRecord` (S4: a record, or an attempt held between its slot round and its record, or a retry that has not finished its round), `DeadIsFinal` (a statement that evacuation or a takeover judged unable to commit never commits; S2) and, under fairness for the evacuator, `RecordsLeave` (a slot never holds a minute back).
 
-It abstracts: bytes are equal throughout (a statement with other bytes is refused whoever it is); a statement has one attempt, and a later attempt of a dead statement is left to the time checks; any statement may take over, which is weaker than 14.2.4's first condition; the 23 h rule, holds, parts and re-seeds are left out, each of which only keeps an object or refuses a push.
+It abstracts: bytes are equal throughout (a statement with other bytes is refused whoever it is); a statement has one attempt and at most one retry, which replaces it (the attempt it replaces never wakes; one that sleeps is held in place instead), and a later attempt of a dead statement is left to the time checks; any statement may take over, which is weaker than 14.2.4's first condition; the 23 h rule, holds, parts and re-seeds are left out, each of which only keeps an object or refuses a push.
 
-Runs, by `run-slot.sh` on TLC master `d8fb231`, 2026-11-12, breadth-first, each complete at its bounds:
+Runs, by `run-slot.sh` on TLC master `d8fb231`, rerun on 2026-11-16 in QD-806's order (QD-870), breadth-first, each complete at its bounds:
 
 ```text
                                        result                                              distinct states depth        time
 EvsSlot.tla, the design (Twin none)
 EvsSlot                                two statements, 1 evacuation run, a window of 1, 1 other commit, 1 PATH_EPOCH commit, 1 stalled
                                        head write, 1 killed run, 1 version removed with its slot, 1 ERASE rewrite, 2 ticks
-                                       pass, every invariant                                     6,048,416    38  4 min 18 s
+                                       pass, every invariant                                     1,590,595    40         8 s
 EvsSlot-Zombie                         two statements, a stalled evacuation run beside its successor, 1 other commit, 1 PATH_EPOCH
                                        commit, 1 version removed, 2 ticks
-                                       pass, every invariant                                     8,951,410    45 10 min 14 s
+                                       pass, every invariant                                     1,629,531    47         9 s
 EvsSlot-Window                         two statements, a window of 2, 1 other commit, 1 PATH_EPOCH commit, 1 stalled head write, 1
                                        version removed, 3 ticks
-                                       pass, every invariant                                     3,210,617    37  2 min 10 s
+                                       pass, every invariant                                       944,696    39        10 s
 EvsSlot-Three                          three statements, so two may take over one refused statement's slot at once; 1 PATH_EPOCH
                                        commit, 2 ticks
-                                       pass, every invariant                                     3,227,506    44   4 min 1 s
+                                       pass, every invariant                                       232,556    41         2 s
+EvsSlot-Retry                          two statements, 1 retry of one whose first attempt died, a stalled evacuation run beside its
+                                       successor, 1 killed run, 1 tick: NoSettle's bounds, and 1 PATH_EPOCH commit
+                                       pass, every invariant                                       605,028    40         4 s
+EvsSlot-RetryWide                      EvsSlot's bounds and 1 retry
+                                       pass, every invariant                                    14,842,698    48  2 min 21 s
 EvsSlot-Live                           RecordsLeave under weak fairness, no symmetry: two statements, 1 PATH_EPOCH commit, 1
                                        stalled head write, 2 ticks
-                                       pass, the property                                          274,387    32  5 min 19 s
-EvsSlot.tla, the interim (evacuation keeps every dead record's slots, step 6 as landed)
+                                       pass, the property                                           66,186    34         8 s
+EvsSlot.tla, the interim (evacuation keeps every dead record's slots, step 6 as landed, the record first)
 EvsSlotInterim                         two statements, 1 other commit, 1 PATH_EPOCH commit, 1 stalled head write, 1 killed run, 1
                                        ERASE rewrite, no version removed; ClosureHolds, StampHasRecord and DeadIsFinal
-                                       pass, those three                                         5,169,822    35  4 min 16 s
+                                       pass, those three                                         5,169,822    35        26 s
 EvsSlotInterimOpen-Consume             a second introducer commits and is removed (C)
-                                       ConsumeKeeps violated, a trace of 11 states                   6,786    11         3 s
-EvsSlot.tla, the code as landed
+                                       ConsumeKeeps violated, a trace of 11 states                   6,786    11      < 1 s
+EvsSlot.tla, the code as landed (the record first)
 EvsSlotLanded-Retoken                  a push takes a dead statement's slot and commits; the dead record is evacuated (A)
-                                       AdopterKept violated, a trace of 14 states                   40,960    14         6 s
+                                       AdopterKept violated, a trace of 14 states                   40,960    14         2 s
 EvsSlotLanded-Relist                   a statement lists a committed push's slot and dies; its record is evacuated (B)
-                                       CreatorKept violated, a trace of 12 states                   12,928    12         4 s
+                                       CreatorKept violated, a trace of 12 states                   12,928    12         1 s
 EvsSlotLanded-Consume                  a statement lists a committed push's slot and commits; its version is removed (C)
-                                       ConsumeKeeps violated, a trace of 11 states                   1,983    11         3 s
+                                       ConsumeKeeps violated, a trace of 11 states                   1,983    11      < 1 s
 EvsSlot.tla, one rule of the design broken
 EvsSlotTwin-TakesForeign               step 6 takes another statement's object as it stands; evacuation checks the origin
-                                       AdopterKept violated, a trace of 14 states                   41,777    14         7 s
+                                       AdopterKept violated, a trace of 16 states                   23,436    16         1 s
 EvsSlotTwin-TakesForeign-Consume       the same, with a version removed
-                                       OneIntroducer violated, a trace of 10 states                  1,239    10         2 s
+                                       OneIntroducer violated, a trace of 12 states                  1,913    12      < 1 s
 EvsSlotTwin-TakesLive                  a takeover of a statement in the same path epoch
-                                       DeadIsFinal violated, a trace of 10 states                      401    10         2 s
+                                       DeadIsFinal violated, a trace of 11 states                      214    11      < 1 s
 EvsSlotTwin-TakesCommitted             a takeover that does not look for the statement in the head
-                                       ClosureHolds violated, a trace of 12 states                   4,122    12         2 s
+                                       ClosureHolds violated, a trace of 13 states                   1,640    13      < 1 s
 EvsSlotTwin-TakesUnsettled             a takeover that does not wait out the settle age; three statements
-                                       OriginStands violated, a trace of 17 states                 189,872    17        26 s
-EvsSlotTwin-NoOriginAtDelete           evacuation deletes a dead record's slot whatever its origin
-                                       CreatorKept violated, a trace of 12 states                   12,775    12         3 s
+                                       OriginStands violated, a trace of 18 states                  31,451    18         1 s
+EvsSlotTwin-NoOriginAtDelete           evacuation deletes a dead record's slot whatever its origin: a refused statement's
+                                       record, whose slot a retoken took over and committed
+                                       CreatorKept violated, a trace of 20 states                   41,151    20         1 s
 EvsSlotTwin-UnconditionalDelete        evacuation's DELETE names no LastModified; two runs
-                                       ClosureHolds violated, a trace of 18 states                 134,516    18        17 s
-EvsSlotTwin-NoSettle                   evacuation deletes an unsettled slot; two runs
-                                       ClosureHolds violated, a trace of 18 states                 149,578    18        17 s
-EvsSlotTwin-StampBeforeRecord          the slots before the record
-                                       StampHasRecord violated, a trace of 4 states                      7     4         2 s
+                                       ClosureHolds violated, a trace of 20 states                  30,068    20         1 s
+EvsSlotTwin-NoSettle                   evacuation deletes an unsettled slot, a retry's stored again after its first attempt's
+                                       record was evacuated; two runs, 1 killed
+                                       ClosureHolds violated, a trace of 33 states                  75,543    33         3 s
 EvsSlotTwin-DeadUnfenced               a pending record taken for dead with no fence (2.2.3)
-                                       ClosureHolds violated, a trace of 10 states                     100    10         3 s
+                                       ClosureHolds violated, a trace of 11 states                      64    11      < 1 s
 EvsSlot.tla, a rule the design does not rest on, broken
 EvsSlotProbe-RewriteDropsOrigin        an ERASE rewrite that drops the origin, at EvsSlot's bounds; every invariant but
                                        OriginStands
-                                       pass, those four                                          6,063,424    38  4 min 38 s
+                                       pass, those four                                          1,597,443    40         8 s
 EvsSlot.tla, states the design must reach, each stated as an invariant that says it never does
 EvsSlotReach-Takes                     a retoken takes over its refused statement's slot and commits
-                                       NeverTakes violated, a trace of 13 states                     7,266    13         6 s
+                                       NeverTakes violated, a trace of 14 states                     2,661    14      < 1 s
 EvsSlotReach-Deletes                   evacuation deletes a dead statement's own slot
-                                       NeverDeletes violated, a trace of 10 states                   1,319    10         4 s
+                                       NeverDeletes violated, a trace of 11 states                     820    11      < 1 s
 EvsSlotReach-Refuses                   a statement that lists another's slot is refused 409 SLOT_STALE
-                                       NeverRefuses violated, a trace of 8 states                      271     8         4 s
-EvsSlotReach-Young                     a dead statement's unsettled slot is kept
-                                       NeverYoung violated, a trace of 9 states                        822     9         4 s
+                                       NeverRefuses violated, a trace of 8 states                      168     8      < 1 s
+EvsSlotReach-Young                     a dead statement's unsettled slot is kept: a retry's, stored again in the tick a killed
+                                       run's restart HEADs it
+                                       NeverYoung violated, a trace of 21 states                       546    21      < 1 s
 EvsSlotReach-SecondLife                after evacuation deleted a dead statement's slot, a later statement creates the id
                                        again and commits
-                                       NeverSecondLife violated, a trace of 14 states               11,024    14         5 s
-EvsSlotReach-Leaks                     a slot stored late outlives its statement's record
-                                       NeverLeaks violated, a trace of 13 states                       729    13         3 s
+                                       NeverSecondLife violated, a trace of 16 states                4,063    16      < 1 s
+EvsSlotReach-Leaks                     an attempt held between its slot round and its record, never retried, leaves its
+                                       slot with no record past the evacuation age (QD-870)
+                                       NeverLeaks violated, a trace of 5 states                         21     5      < 1 s
 ```
 
-Every design run, the interim's and the probe pass, and every landed, open, twin and reach run ends on the one invariant its configuration names. The seven runs that pass used four workers and the others one, on a shared host; the largest state directory was 363 MB. `EvsSlot-Live` runs at smaller bounds than the safety runs, since a liveness run takes no symmetry: it has no other push's commit, no killed run and no removed version.
+Every design run, the interim's and the probe pass, and every landed, open, twin and reach run ends on the one invariant its configuration names. The runs that pass used four workers and the others one, on a shared host; the largest state directory was 461 MB. `EvsSlot-Live` runs at smaller bounds than the safety runs, since a liveness run takes no symmetry: it has no other push's commit, no killed run and no removed version.
 
-The three runs of the code as landed are the brief's requirement in the negative: the code as landed loses a committed version's slot to a retoken's dead record (A), to a re-lister's dead record (B) and to the removal of a second introducer (C). `EvsSlotInterimOpen-Consume` shows that keeping dead records' slots leaves C. Each twin removes one rule and loses a slot or the property that rule carries: taking another's object as it stands, a takeover of a statement in the same epoch or of one not looked for in the head or of an unsettled object, evacuation's delete without the origin, without the condition or without the settle age, the record after the slots, and a dead verdict without the fence. D is not in the model: it is a missing check at 5h, not a schedule.
+QD-806's order changes two things in the model. The twin that wrote the slots before the record, `EvsSlotTwin-StampBeforeRecord`, is the design now and is retired, and `StampHasRecord` holds S4 as QD-870 weakens it. And since one attempt's record never comes before its own slot round, an object of a dead statement stored within the settle age of its record's evacuation is a later attempt's: the model gains a retry (a statement sent again within its time checks after its attempt died), and `EvsSlotTwin-NoSettle` and `EvsSlotReach-Young` reach that object through one, with a killed run, where without a retry neither can. The design runs find fewer states than on 2026-11-12, since a statement refused in its slot round no longer leaves a record for evacuation to judge; the landed and interim runs keep the record first and find what they found then, state for state on one worker.
+
+The three runs of the code as landed are the brief's requirement in the negative: the code as landed loses a committed version's slot to a retoken's dead record (A), to a re-lister's dead record (B) and to the removal of a second introducer (C). `EvsSlotInterimOpen-Consume` shows that keeping dead records' slots leaves C. Each twin removes one rule and loses a slot or the property that rule carries: taking another's object as it stands, a takeover of a statement in the same epoch or of one not looked for in the head or of an unsettled object, evacuation's delete without the origin, without the condition or without the settle age, and a dead verdict without the fence. D is not in the model: it is a missing check at 5h, not a schedule.
 
 ### 14.4 Cost
 
@@ -12369,7 +12378,7 @@ The three runs of the code as landed are the brief's requirement in the negative
 
 ### 14.5 Failure modes and recovery
 
-**evs dies in step 6.** After the record and before the create: no object; the record resolves dead and its HEAD answers 404. After the create: the record resolves dead and the object, its statement's own, is deleted. A create whose answer is lost is read back: the attempt finds its own origin and goes on.
+**evs dies in step 6** (QD-806's order: the slot round, then the record). After the create and before the record: the object stands under its statement's origin and no record names it; a retry of the statement finds it its own and goes on to its record, and a statement never retried leaves it, the first leak below. After the record: the record resolves dead and the object, its statement's own, is deleted. A create whose answer is lost is read back: the attempt finds its own origin and goes on.
 
 **A takeover is cut short.** After the DELETE and before the create: no object stands, and the retoken's retry, or its next round, creates it. A DELETE whose answer is lost is not read back: round 1 decides, by creating or by a 412 and a GET. The refused statement's own late attempt may create the id again between the DELETE and the create; the retoken's create then gets a 412, finds that statement's origin again, and takes over again after the settle age. Rounds are bounded by `SlotWriteRoundCount`; past them the answer is 503 unknown and the client retries the same statement.
 
@@ -12381,7 +12390,7 @@ The three runs of the code as landed are the brief's requirement in the negative
 
 **Leaks.** Each is an object of at most 8 KiB that nothing deletes until the repo is shredded, and each is counted where it is decided:
 
-- a dead statement's slot that was unsettled when its record was evacuated, or stored after its record left its batch: an attempt that slept about a day between its record and its slot PUT (`EvsSlotReach-Leaks`);
+- the slots of a statement whose attempt died between its slot round and its record and that was never retried (QD-870): at most 8 KiB a slot, collected by the later pass over slot/ below if it is built (`EvsSlotReach-Leaks`); no process sees it, so none counts it, and FI-6 excuses such a slot, whose origin names a statement no batch, container or head names;
 - a slot created again by a late attempt of a push that committed and whose version was since removed with its slot;
 - a slot a dead part lists when the part's new-objects slice does not parse (as today, alarm `evacuate_dead_record`);
 - a dead record's slot under a hold, whose record goes while the object stays (as today);
@@ -12403,12 +12412,12 @@ A later pass over slot/ can remove those that carry an origin and no hold: an ob
 **Schedules, on the barriers the push route and evacuation already have** (`BarrierPushSlotPutBefore`, `BarrierPushSlotPutAfter`, the head CAS's, evacuation's delete barriers), T2 and T3, each ending with every committed version's slots read back:
 
 - A, the retoken: a push passes step 6; a PATH_EPOCH commits; the push is refused; its retoken waits out the settle age, takes over and commits; the fake clock passes 26 h; evacuation drops the refused statement's record and keeps the slot. Again with a CLOSURE, whose closure upload is counted once.
-- B, the re-listing: a second principal lists a committed version's slot as new, with its bytes and with others, young and past 23 h; each is 409 SLOT_STALE; at 26 h its records are dropped and the slot stands.
+- B, the re-listing: a second principal lists a committed version's slot as new, with its bytes and with others, young and past 23 h; each is 409 SLOT_STALE in its slot round, before any record of its own (QD-806's order); at 26 h evacuation finds no record of them and the slot stands.
 - C, the second introduction: a depositor lists another ref's young slot with its bytes in a deposit: refused. A deposit that introduces its own slot commits, is consumed, and only its slot goes.
 - D, the citing deposit: refused at 5h.
 - two retokens of one refused statement, held at the takeover's DELETE: one commits, the other is refused, and the committed one's slot stands at 26 h.
 - a stalled evacuation run: held between its HEAD and its DELETE while a second run deletes the dead statement's slot and a later push creates the id again and commits; the first run's DELETE answers 412.
-- an attempt held between its record and its slot PUT past 26 h: its record is dropped with a 404, the slot it then writes is kept as unsettled or as stored after its record, and its step 7 fails on the fence.
+- an attempt held between its slot round and its record past 25 h (QD-870): evacuation finds no record of it and its slot stands under its origin; released, it appends its record, its step 7 fails, the statement past its time checks, and 26 h on evacuation deletes the dead record's own settled slot. Held there for good and never retried, its slot is 14.5's first leak, which FI-6 excuses; a retry instead finds the slot its own and appends the record.
 - FS-8, as amended (14.8): the dead records' own slots are gone at 26 h, and a slot a dead record listed and did not create stands.
 
 **The interim.** FS-8's slots clause reads "and its slots stay" while it stands; A and B's schedules pass on it; C's and D's are skipped until the full fix.
@@ -12452,7 +12461,7 @@ For a design-records track. Each item replaces the words it quotes and leaves th
 
 **§11.8, 5h.** After the slot rule ("one this push introduces or one a version step 4 read names"): "; on a deposit ref, only one this push introduces".
 
-**§11.8, step 6.** For "one more round PUTs each slot (If-None-Match; equal bytes on 412 are success, from M2 (11.22) only if a HEAD shows that object under 23 h old, else 409 SLOT_STALE, as a re-upload gets SEGMENT_STALE; unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE rewrote it, else alarm), so a record names every slot written": "at most four rounds PUT each slot If-None-Match with the statement as its origin (object metadata: push id, statement hash prefix, ref, signer, base version, path epoch, mode). On a 412 the object's origin decides. The statement's own: equal bytes are success while the object is under 23 h old (else 409 SLOT_STALE), and unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE rewrote it, else alarm. A push's on this ref, by this signer, with equal bytes and under no hold, whose statement declared a lower path epoch than this one and which the head does not show committed: that statement can never commit, and evs takes the slot over, waiting until the object is 2 s old, deleting it by a DELETE that names its LastModified, and creating its own. Any other object, one with no origin among them: a cluster read of the head and 5a, then 409 SLOT_STALE. So a record names every slot written, and a slot object is held by one statement".
+**§11.8, step 6.** For "one more round PUTs each slot (If-None-Match; equal bytes on 412 are success, from M2 (11.22) only if a HEAD shows that object under 23 h old, else 409 SLOT_STALE, as a re-upload gets SEGMENT_STALE; unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE rewrote it, else alarm), so a record names every slot written": "at most four rounds PUT each slot If-None-Match with the statement as its origin (object metadata: push id, statement hash prefix, ref, signer, base version, path epoch, mode). On a 412 the object's origin decides. The statement's own: equal bytes are success while the object is under 23 h old (else 409 SLOT_STALE), and unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE rewrote it, else alarm. A push's on this ref, by this signer, with equal bytes and under no hold, whose statement declared a lower path epoch than this one and which the head does not show committed: that statement can never commit, and evs takes the slot over, waiting until the object is 2 s old, deleting it by a DELETE that names its LastModified, and creating its own. Any other object, one with no origin among them: a cluster read of the head and 5a, then 409 SLOT_STALE. Then the record, which keeps no slot body (QD-806, QD-870). So a slot object is held by one statement". (Folded as owner decisions 399 and 400.)
 
 **§11.8, the cleanup row.** For "a refused or unknown push's record and new slots stay until evacuation's Resolve finds it dead": "a refused or unknown push's record and the slots it created stay until evacuation's Resolve finds it dead; a slot it listed and did not create is not its to clean up".
 
@@ -12470,7 +12479,7 @@ For a design-records track. Each item replaces the words it quotes and leaves th
 
 **D-EVS-25.** For "which names every slot its push wrote": "which names every slot its push listed". After "(owner decision 203)": "A dead record's slots are deleted only as that record's own, by the origin each slot object carries (DESIGN-DETAILS 14)."
 
-**§22, FS-8.** For "evacuation has dropped every dead record and its slots at 26 h": "evacuation has dropped every dead record and the slots it created at 26 h, and a slot a dead record listed and did not create stands". New schedule rows for 14.6's A to D, the two retokens, the stalled run and the late slot PUT, numbered by design-records, each under FI-1 and FI-6.
+**§22, FS-8.** For "evacuation has dropped every dead record and its slots at 26 h": "evacuation has dropped every dead record and the slots it created at 26 h, and a slot a dead record listed and did not create stands". New schedule rows for 14.6's A to D, the two retokens, the stalled run and the attempt held between its slot round and its record (QD-870), numbered by design-records, each under FI-1 and FI-6.
 
 **§22.8, the model row.** `details/EvsSlot.tla` beside `EvsCommit.tla`, with `run-slot.sh`.
 
