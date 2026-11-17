@@ -17,6 +17,9 @@
 //	         payload_sha256 over the stored bytes, not_after the request's, uses 1, or for a template the person's
 //	         choice of 2 or more, evidence_sha256 empty (QD-261)
 //	cancel   ApprovalCancel{approval_id} by the identity key, after the same confirmation, filed in the request's log
+//	host     the row of §16.6's host table the approver side decides as (ApprovalApprover.ForHost,
+//	         record_approval_app.go): the daemon's by default, as above; an app in local mode's alike; a remote-mode
+//	         app's signs no decision on this sidecar's own request (D-SDK-9); an app host's template takes deny alone
 //	sealed   a request whose action carries a sealed_detail, a dial or route grant's prefixes and ports (QD-740), is
 //	         rendered with what the detail opens to on this device: Sidecar.OpenActionDetail, with the config repo's
 //	         keys under the context the action's own clear fields derive (QD-771), never one a caller makes; where the
@@ -116,13 +119,14 @@ type SidecarRequestDecision struct {
 }
 
 // An approver's device's side of §16.6's requests: its sidecar, for its standing and keys, its approval log, what
-// opens an action's sealed_detail, nil where the device opens none, and what reads a listen's application name, nil
-// where the device holds no K_sock.
+// opens an action's sealed_detail, nil where the device opens none, what reads a listen's application name, nil
+// where the device holds no K_sock, and the row of §16.6's host table it decides as (record_approval_app.go).
 type ApprovalApprover struct {
 	sidecar *Sidecar
 	log     ApproverLog
 	details CanonicalActionDetailOpener
 	sockets ApprovalSocketKeys
+	host    ApprovalHost
 }
 
 // The approver side of sidecar over log, opening each action's sealed_detail on sidecar (Sidecar.OpenActionDetail)
@@ -141,13 +145,13 @@ func NewApprovalApprover(sidecar *Sidecar, log ApproverLog) *ApprovalApprover {
 // The same approver side, opening each action's sealed_detail with opener before it renders or approves it, nil
 // opening none. The receiver is not changed.
 func (self *ApprovalApprover) WithDetailOpener(opener CanonicalActionDetailOpener) *ApprovalApprover {
-	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: opener, sockets: self.sockets}
+	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: opener, sockets: self.sockets, host: self.host}
 }
 
 // The same approver side, reading a listen's application name with sockets' K_sock ring before it approves it, nil
 // reading none. The receiver is not changed.
 func (self *ApprovalApprover) WithSocketKeys(sockets ApprovalSocketKeys) *ApprovalApprover {
-	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: self.details, sockets: sockets}
+	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: self.details, sockets: sockets, host: self.host}
 }
 
 // Whether request's socket_name reads as its action's grant_dst on this device (QD-772): nil for a request of a kind
@@ -197,8 +201,12 @@ func (self *ApprovalApprover) openDetail(request *StoredApprovalRequest) (*proto
 	return detail, nil
 }
 
-// The approver side over this sidecar's record (Sidecar.Record's approvals).
+// The approver side over this sidecar's record (Sidecar.Record's approvals), or over the log InstallApproverLog
+// installed in their place (record_approval_app.go).
 func (self *Sidecar) ApprovalApprover() (*ApprovalApprover, error) {
+	if log := self.installedApproverLog(); log != nil {
+		return NewApprovalApprover(self, log), nil
+	}
 	record, err := self.Record()
 	if err != nil {
 		return nil, err
@@ -224,20 +232,21 @@ func (self *ApprovalApprover) standing() (SidecarAuthority, *SidecarIdentity, *A
 	return authority, identity, own, nil
 }
 
-// The channel this device signs request on, and what it may answer: none where its approvers do not name this
-// device's member; presence for this sidecar's own request; else device.
-func approverChannel(request *StoredApprovalRequest, identity *SidecarIdentity, own *AclSidecar) (protocol.ApprovalChannel, []string) {
+// The channel this device signs request on as host, and what it may answer: none where its approvers do not name this
+// device's member, or where host signs none of this sidecar's own requests; else host's channel for it, presence for
+// this sidecar's own, device for another's (ApprovalHostChannel), with host's answers (approvalHostDecisions).
+func approverChannel(host ApprovalHost, request *StoredApprovalRequest, identity *SidecarIdentity, own *AclSidecar) (protocol.ApprovalChannel, []string) {
 	named := slices.ContainsFunc(request.Request.GetApprovers(), func(approver []byte) bool {
 		return bytes.Equal(approver, own.MemberId.Bytes())
 	})
 	if !named {
 		return protocol.ApprovalChannel_APPROVAL_CHANNEL_UNSPECIFIED, []string{}
 	}
-	decisions := []string{SidecarDecisionApprove, SidecarDecisionDeny}
-	if recordIdOf(request.Request.GetRequesterSidecarId()) == identity.SidecarId {
-		return protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE, decisions
+	channel := ApprovalHostChannel(host, recordIdOf(request.Request.GetRequesterSidecarId()) == identity.SidecarId)
+	if channel == protocol.ApprovalChannel_APPROVAL_CHANNEL_UNSPECIFIED {
+		return channel, []string{}
 	}
-	return protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, decisions
+	return channel, approvalHostDecisions(host, request)
 }
 
 // The requests waiting for this device's decision, each rendered, or shown refused. Empty on a device that is no
@@ -271,7 +280,7 @@ func (self *ApprovalApprover) Pending(ctx context.Context) ([]*SidecarRequestIte
 		item.Render = RenderApprovalRequestDetail(waiting.Request, detail)
 		item.Render.Flagged = waiting.Flagged
 		item.Render.NameUnread = nameErr != nil
-		item.Channel, item.Decisions = approverChannel(waiting.Request, identity, own)
+		item.Channel, item.Decisions = approverChannel(self.host, waiting.Request, identity, own)
 		if (detailErr != nil || nameErr != nil) && 0 < len(item.Decisions) {
 			// what it could not show or check it may only refuse
 			item.Decisions = []string{SidecarDecisionDeny}
@@ -314,9 +323,16 @@ func (self *ApprovalApprover) Decide(ctx context.Context, approvalId Id, decisio
 		return err
 	}
 	request := waiting.Request
-	channel, _ := approverChannel(request, identity, own)
+	channel, decisions := approverChannel(self.host, request, identity, own)
 	if channel == protocol.ApprovalChannel_APPROVAL_CHANNEL_UNSPECIFIED {
+		if self.host == ApprovalHostAppRemote && recordIdOf(request.Request.GetRequesterSidecarId()) == identity.SidecarId {
+			return ErrApprovalRemoteOwnRequest
+		}
 		return fmt.Errorf("%w: the request's approvers do not name this device's member", ErrSidecarApprovalNotEligible)
+	}
+	if !slices.Contains(decisions, decision.Decision) {
+		// an app host's template takes deny alone
+		return fmt.Errorf("%w: this host answers the request only with %v", ErrSidecarApprovalDecision, decisions)
 	}
 	if channel == protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE && check == nil {
 		return ErrApprovalOwnRequest
