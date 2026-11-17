@@ -1041,6 +1041,39 @@ INDEX = list(_P9['INDEX']) + [
      "differ."),
     (571, 'Custom budgets from a quiet window',
      "Each custom-domain budget replays from its key's latest quiet window, its spends kept 16 d."),
+    # The second folds of §14 to §23 (2026-11-17): the answers queued for them after their first folds.
+    (572, 'Cold hits delivered in bound',
+     "§16.10's arrival bound times a shard's hits reaching the caller; the engine answers a page once a landed "
+     "shard queues one."),
+    (573, 'Approval wakes',
+     "Phones lease each approval log whole; per-request vault notices follow in the review phase if T4 shows the "
+     "wake budget spent."),
+    (574, "A template's requested uses",
+     "`ApprovalRequest` names the uses an agent asks for a template, rendered and signed, so an app approves it as "
+     "shown."),
+    (575, 'Prefixless route rules',
+     "A route rule with no `ip:` or internet destination reaches its subject destinations' routes in force through "
+     "the vias holding them."),
+    (576, 'Search windows unmetered',
+     "A wifi_charging phone keeps all only unmetered, charging and not in Low Power Mode, in a window or the "
+     "foreground."),
+    (577, 'Edge client slots by service',
+     "An edge client's slot is one of 4 that no other process of its service on the host holds."),
+    (578, '`sidecarctl jwt export-jwks`',
+     "The export writes sockets' `jwt-jwks.json`, and each change adding a jwt key version writes it in the same "
+     "commit."),
+    (579, "filecluster-wear's job",
+     'Monitor selects the storage hosts\' SMART series by `job="node"`, the shared Fluent Bit input\'s label.'),
+    (580, 'Mail session keys while dark',
+     "A mail receiver's three session keys hold whatever `enforced` says, as the closure floor and pacing do."),
+    (581, "A review refusal's case",
+     "`QuotaRefusal` gains an optional `case_id`, set only for `screen_review`, naming the review case."),
+    (582, 'Reports counted each',
+     "`POST /abuse/report` counts each URL and header block toward its 30 an hour, refusing a request whole past "
+     "it."),
+    (583, 'Search windows checked each read',
+     "A sync round other than \"search more\"'s asks the windows rule again before each read of all, stopping once "
+     "it no longer allows all."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -1091,11 +1124,17 @@ for _n, _old_end, _note in [
          "refusing named drops that differ."),
         # Owner decision 571 amends 424's replay: from the key's latest quiet window, spends kept 16 d.
         (424, "budgets replayed from two windows back.",
-         " Amended by @@OD:571@@: from the key's latest quiet window, its spends kept 16 d.")]:
+         " Amended by @@OD:571@@: from the key's latest quiet window, its spends kept 16 d."),
+        # Owner decision 577 amends 428's slots: one of 4, taken over the edge service's processes on a host.
+        (428, "slot and index.",
+         " Amended by @@OD:577@@: slots 0 to 3, none held by another process of the block's service on the host."),
+        # Owner decision 580 amends 520's local pre-checks: a mail receiver's session keys hold while dark.
+        (520, "refuse only while it is true.",
+         " Amended by @@OD:580@@: a mail receiver's three session keys hold whatever it says.")]:
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 572))
+assert [r[0] for r in INDEX] == list(range(1, 584))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -1180,7 +1219,10 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               553: '2026-11-16', 554: '2026-11-16', 555: '2026-11-16', 556: '2026-11-16', 557: '2026-11-17',
               558: '2026-11-16', 559: '2026-11-16', 560: '2026-11-16', 561: '2026-11-17', 562: '2026-11-17',
               563: '2026-11-16', 564: '2026-11-16', 565: '2026-11-16', 566: '2026-11-16', 567: '2026-11-16',
-              568: '2026-11-16', 569: '2026-11-17', 570: '2026-11-17', 571: '2026-11-16'})
+              568: '2026-11-16', 569: '2026-11-17', 570: '2026-11-17', 571: '2026-11-16', 572: '2026-11-16',
+              573: '2026-11-16', 574: '2026-11-16', 575: '2026-11-17', 576: '2026-11-16', 577: '2026-11-17',
+              578: '2026-11-17', 579: '2026-11-17', 580: '2026-11-17', 581: '2026-11-17', 582: '2026-11-17',
+              583: '2026-11-17'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -1481,3 +1523,13 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "earlier pins in a due class (569), amending @@OD:414@@, `drop-reindex` from a job's snap-0 (570), amending "
     "@@OD:512@@, and the custom-domain budgets' replay from a quiet window with spends kept 16 d (571), amending "
     "@@OD:424@@. ")
+# The second folds of §14 to §23 (2026-11-17) number the answers queued for those sections after their first folds.
+_D571 = "and the custom-domain budgets' replay from a quiet window with spends kept 16 d (571), amending @@OD:424@@. "
+assert DECISIONS_INTRO.count(_D571) == 1, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D571, _D571 + "The second folds of §14 to §23 number theirs: a cold search's hits delivered within its arrival "
+    "bound (572), approval wakes by whole-log leases (573), a template's requested uses (574), prefixless route "
+    "rules (575), search windows only on an unmetered link while charging (576), edge client slots over a "
+    "service's processes (577), amending @@OD:428@@, `sidecarctl jwt export-jwks` (578), filecluster-wear's job "
+    "label (579), a mail receiver's session keys while dark (580), amending @@OD:520@@, a review refusal's case "
+    "id (581), reports counted each (582) and the windows rule asked before each read of all (583). ")
