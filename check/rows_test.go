@@ -208,6 +208,21 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestLegsFailsOnAHostFileWithoutTheTag"},
 	},
 	{
+		row: "legs", item: "a search_remote_ file on the sidecar_http leg, whose page Worker asks no indexer (§11.14, §18.4)",
+		rule:         (*repository).searchRemoteWorkerFindings,
+		plantedTests: []string{"TestLegsFailsOnASearchRemoteFileOnTheWorkerLeg"},
+	},
+	{
+		row: "legs", item: "from M10, the ios_extension legs compiling an index or search file, or evsindex.proto's or search.proto's descriptors (§18.10, §22.5's §18 row; QD-988)",
+		rule: func(self *repository, t testing.TB) []string {
+			return rowOff(self.report, self.settings.switches.iosExtensionLinksNoIndex, "iosExtensionLinksNoIndex", self.iosExtensionIndexFindings(t))
+		},
+		switched: func(switches *rowSwitches) *bool {
+			return &switches.iosExtensionLinksNoIndex
+		},
+		plantedTests: []string{"TestLegsFailsOnAnIndexFileOnTheIosExtensionLeg", "TestLegsFailsOnSearchsProtoOnTheIosExtensionLeg"},
+	},
+	{
 		row: "legs", item: "net/rpc or template packages on ios, android or js",
 		rule: (*repository).pruningFindings,
 		plantedTests: []string{
@@ -691,8 +706,8 @@ func TestRowsThatStartLaterHoldNow(t *testing.T) {
 			t.Errorf("%s holds, so its switch should be on", entry.item)
 		}
 	}
-	if switched != 4 {
-		t.Errorf("%d rows stand behind a switch; §4.18 starts three in make check, the ios_extension one as two rows (DESIGN-DETAILS 4.2.3)", switched)
+	if switched != 5 {
+		t.Errorf("%d rows stand behind a switch; §4.18 starts three in make check, the ios_extension one as two rows (DESIGN-DETAILS 4.2.3), and QD-988's index split one more", switched)
 	}
 }
 
@@ -731,6 +746,13 @@ func TestEachSwitchGovernsItsRow(t *testing.T) {
 				fixture.writeSibling("sdk/js/go.mod", "module @sdk@/js\n\ngo 1.27.4\n\nrequire golang.org/x/text v0.41.0\n")
 			},
 			legs: []string{"root linux/amd64"},
+		},
+		{
+			item: "from M10, the ios_extension legs compiling an index or search file, or evsindex.proto's or search.proto's descriptors (§18.10, §22.5's §18 row; QD-988)",
+			plant: func(fixture *fixture) {
+				fixture.write("evs_index_planted.go", "package sidecar\n")
+			},
+			legs: []string{iosExtensionLegName},
 		},
 	} {
 		index := slices.IndexFunc(failsOnRows, func(entry failsOnRow) bool { return entry.item == c.item })

@@ -15,7 +15,7 @@ else
 modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop
 endif
 
-.PHONY: check leaktest size ios-extension-leg proto metadata stack-test
+.PHONY: check leaktest size ios-extension-leg index-vectors proto metadata stack-test
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
@@ -54,6 +54,14 @@ size:
 # written. With SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1 in the environment it rewrites the list.
 ios-extension-leg:
 	$(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -tags sidecar_check,sidecar_size -run '^TestIosExtensionLeg' ./check
+
+# The search index's vectors on every leg this host has (SEARCH-M10-41; §22.9's Index determinism row, D-TEST-15):
+# testdata/index/README.md's tests through the every-leg runner, darwin/arm64 natively, linux in a container of
+# SIDECAR_LEGS_IMAGE, windows/amd64 compiled, js/wasm and the sidecar_http Worker in Node, the gomobile legs by the
+# cells. It compiles the root's tests for each leg, so make check leaves it out; make check's own index rules, the
+# x/text one among them, are check/'s, and go test runs the vectors under every runtime on this host.
+index-vectors:
+	$(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -tags sidecar_legs -run '^(TestIndexVectorLegsCoverEveryTarget|TestIndexVectorsOnEveryLeg)$$' ./sidecartest
 
 proto:
 	$(MAKE) -C protocol GO="$(GO)"
