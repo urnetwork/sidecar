@@ -25,6 +25,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"runtime"
@@ -207,11 +208,11 @@ type testPebbleSerials struct {
 
 	stateLock sync.Mutex
 	// the octets of the serials Pebble draws next, in order
-	queued [][]byte
+	queuedSerials [][]byte
 }
 
-// A testPebbleSerials in crypto/rand.Reader's place until the test ends. A test takes it before
-// StartPebble, so the reader comes back only once Pebble has stopped.
+// Puts one in crypto/rand.Reader's place until the test ends. A test takes it before StartPebble, so
+// the reader comes back only once Pebble has stopped.
 func newTestPebbleSerials(t *testing.T) *testPebbleSerials {
 	t.Helper()
 	serials := &testPebbleSerials{base: rand.Reader}
@@ -225,57 +226,59 @@ func newTestPebbleSerials(t *testing.T) *testPebbleSerials {
 // Queues serial as the next one Pebble issues a certificate under.
 func (self *testPebbleSerials) next(t *testing.T, serial *big.Int) {
 	t.Helper()
-	// rand.Int's 8 octets, read as a serial below 2^63 - 1 with the first octet's top bit clear
-	octets := make([]byte, 8)
-	if serial.Sign() <= 0 || 63 <= serial.BitLen() {
+	// Pebble draws below 2^63 - 1, for which rand.Int reads 8 octets and clears the first one's top bit
+	if serial.Sign() <= 0 || 0 <= serial.Cmp(big.NewInt(math.MaxInt64)) {
 		t.Fatalf("Pebble draws no serial %s", serial.Text(16))
 	}
-	serial.FillBytes(octets)
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.queued = append(self.queued, octets)
+	octets := serial.FillBytes(make([]byte, 8))
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.queuedSerials = append(self.queuedSerials, octets)
+	}()
 }
 
 // How many queued serials Pebble has not drawn yet.
 func (self *testPebbleSerials) pending() int {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return len(self.queued)
+	return len(self.queuedSerials)
 }
 
+// The next queued serial when this read is Pebble's draw of one, and crypto/rand's octets otherwise. A
+// draw is a read with makeSerial on its stack, inlined frames included, and takes a serial only when
+// its octets fill the read.
 func (self *testPebbleSerials) Read(buffer []byte) (int, error) {
-	if octets := self.take(len(buffer)); octets != nil {
-		return copy(buffer, octets), nil
-	}
-	return self.base.Read(buffer)
-}
-
-// The next queued serial's octets when this read of byteCount octets is Pebble's draw of one, and nil
-// otherwise.
-func (self *testPebbleSerials) take(byteCount int) []byte {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if len(self.queued) == 0 || byteCount != len(self.queued[0]) || !testCalledFrom(testPebbleMakeSerial) {
-		return nil
-	}
-	octets := self.queued[0]
-	self.queued = self.queued[1:]
-	return octets
-}
-
-// Whether function is on the caller's stack, inlined frames included.
-func testCalledFrom(function string) bool {
+	drawn := false
 	callers := make([]uintptr, 64)
-	frames := runtime.CallersFrames(callers[:runtime.Callers(2, callers)])
+	frames := runtime.CallersFrames(callers[:runtime.Callers(1, callers)])
 	for {
 		frame, more := frames.Next()
-		if frame.Function == function {
-			return true
+		if frame.Function == testPebbleMakeSerial {
+			drawn = true
+			break
 		}
 		if !more {
-			return false
+			break
 		}
 	}
+	if !drawn {
+		return self.base.Read(buffer)
+	}
+	octets := func() []byte {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if len(self.queuedSerials) == 0 || len(self.queuedSerials[0]) != len(buffer) {
+			return nil
+		}
+		octets := self.queuedSerials[0]
+		self.queuedSerials = self.queuedSerials[1:]
+		return octets
+	}()
+	if octets == nil {
+		return self.base.Read(buffer)
+	}
+	return copy(buffer, octets), nil
 }
 
 // Verifies chain under pebble's roots for its names, and returns its leaf.
@@ -418,9 +421,9 @@ func TestCertsAcmeRenewsSerialsWithTheTopBitSet(t *testing.T) {
 		// the serial octets of its certificate id, in hex
 		idOctets string
 	}{
-		{"80223344556677", "0080223344556677"},
-		{"ff223344556677", "00ff223344556677"},
-		{"80", "0080"},
+		{serial: "80223344556677", idOctets: "0080223344556677"},
+		{serial: "ff223344556677", idOctets: "00ff223344556677"},
+		{serial: "80", idOctets: "0080"},
 	} {
 		// a set of its own each, under the DNS routes' writes a name an hour
 		device := newTestDevice(t, "k6topbit0"+string(rune('a'+index)))
