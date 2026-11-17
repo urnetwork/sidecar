@@ -159,9 +159,14 @@ func (self *configProposal) open(timeMs int64) bool {
 	return self.closedAt == 0 && timeMs <= self.row.GetNotAfterMs()
 }
 
-// Whether Recovery's window holds it: a recovery key signed it, or it is a restored binding's admission.
+// Whether Recovery's window holds it: a recovery key signed it, or it is a restored binding's admission, of either
+// restored kind.
 func (self *configProposal) windowed() bool {
-	return self.row.GetWindowEntry() != 0 || self.row.GetKind() == uint32(bridge.ProposalKind_PROPOSAL_KIND_RESTORED)
+	switch bridge.ProposalKind(self.row.GetKind()) {
+	case bridge.ProposalKind_PROPOSAL_KIND_RESTORED, bridge.ProposalKind_PROPOSAL_KIND_RESTORED_COSIGNED:
+		return true
+	}
+	return self.row.GetWindowEntry() != 0
 }
 
 // §7.9's S(n).

@@ -290,9 +290,11 @@ message ProposalRow {
   uint32 kind = 9;
 }
 message ProposalSigner { bytes signer = 1; uint64 at = 2; }
+// RESTORED_COSIGNED, a restored binding's admission filed with self_admit off, is question
+// team-m2-05-restored-kind-self-admit's answer (QD-952, owner decision 314), which §7.9's prose writes and no fence does.
 enum ProposalKind {
   PROPOSAL_KIND_UNSPECIFIED = 0; PROPOSAL_KIND_AUTHORITY = 1; PROPOSAL_KIND_RECOVERY_SCOPED = 2;
-  PROPOSAL_KIND_RESTORED = 3;
+  PROPOSAL_KIND_RESTORED = 3; PROPOSAL_KIND_RESTORED_COSIGNED = 4;
 }
 message ProjectionSettings { uint32 self_admit = 1; bytes scim_signer = 2; }
 message RingRow { bytes statement_id = 1; uint64 n = 2; }
