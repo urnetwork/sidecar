@@ -6,8 +6,9 @@ package sidecar
 // what the cache holds through the kept records' wrapped keys and never reads evs; repo and network breadth and every
 // exclusion; a receipt that cannot land skipping its repo; cursor_expired after an erasure ends the snapshot; a third
 // search of a session busy once its wait ends; too_broad; pages within Search.PageByteCount; forged and foreign cursors
-// refused (§22.6's cursor target); phase 2 over all as "search more" lands each shard; the candidate iterator after a
-// watermark; and no query canary in anything stored.
+// refused (§22.6's cursor target); phase 2 over all as "search more" lands each shard; a first shard's hit given before
+// a long download ends and the rest through the cursor, none lost or repeated, the download going on without a page
+// (QD-999); the candidate iterator after a watermark; and no query canary in anything stored.
 
 import (
 	"bytes"
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -466,6 +468,227 @@ func TestSearchEngineSearchMoreRanksEachShardAsItLands(t *testing.T) {
 	}
 	if progress.FetchedBytes == 0 {
 		t.Fatal("the fetched bytes were not reported")
+	}
+}
+
+// A source whose reads, once held, each wait for a token the test gives, so a test says how far a download has got.
+type testHeldSyncSource struct {
+	*testSyncSource
+	stateLock sync.Mutex
+	held      bool
+	tokens    chan struct{}
+}
+
+func (self *testHeldSyncSource) Fetch(ctx context.Context, files []*indexFileVersion) ([]*searchSyncFetched, error) {
+	self.stateLock.Lock()
+	held, tokens := self.held, self.tokens
+	self.stateLock.Unlock()
+	if held {
+		select {
+		case <-tokens:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return self.testSyncSource.Fetch(ctx, files)
+}
+
+// Holds every read from now, but the first count.
+func (self *testHeldSyncSource) hold(count int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.held, self.tokens = true, make(chan struct{}, count)
+	for range count {
+		self.tokens <- struct{}{}
+	}
+}
+
+// Lets every read go from now, the held ones included.
+func (self *testHeldSyncSource) free() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.held = false
+	close(self.tokens)
+}
+
+// A ref whose latest set is synced and whose all, shardCount shards of text's documents, is not, an engine reading it
+// one file a read through a held source.
+type testEngineMoreWorld struct {
+	sync   *testSyncWorld
+	source *testHeldSyncSource
+	engine *SearchEngine
+	// all's shards in fetch order, youngest first
+	order []string
+}
+
+func newTestEngineMoreWorld(t *testing.T, shardCount int, text func(n int, index int) string) *testEngineMoreWorld {
+	t.Helper()
+	world := newTestSyncWorld(t, false)
+	world.head.push(t, evsTestId("writer"), testEngineDocument(t, "doc", 1, 1, "notes/new.md", "harbor today"))
+	testWriteTextAll(t, world, shardCount, text)
+	source := &testHeldSyncSource{testSyncSource: world.source}
+	moreSync, err := newSearchSync(&searchSyncArgs{
+		cache: world.cache.cache, settings: world.cache.settings, format: DefaultIndexFormatSettings(), clock: world.cache.clock,
+		log: NewNoopLogger(), readPathCount: 1, readByteCount: 32 * 1024 * 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(moreSync.Close)
+	err = moreSync.Follow(&searchSyncRefArgs{
+		repoId: world.repoId, refId: world.refId, repoKind: protocol.RepoKind_REPO_KIND_GENERAL, source: source,
+		keepAll: func() bool { return false }, mayErase: func(Id, int64) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := moreSync.RunRound(context.Background(), world.repoId, world.refId, false); err != nil {
+		t.Fatal(err)
+	}
+	scope := &testSearchScope{repos: []*SearchScopeRepo{{RepoId: world.repoId, Kind: protocol.RepoKind_REPO_KIND_GENERAL, Readable: true,
+		Refs: []*SearchScopeRef{{RefId: world.refId, Default: true}}}}}
+	engine, err := NewSearchEngine(&SearchEngineArgs{
+		Settings: world.cache.settings, Cache: world.cache.cache, Sync: moreSync, Scope: scope, Gkm: &evsTestReadGkm{newest: 1},
+		Policy: testNewSearchPolicy(t, world.cache.settings, nil, world.cache.clock, &SearchConditions{DaemonHost: true}),
+		Clock:  world.cache.clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(engine.Close)
+	more := &testEngineMoreWorld{sync: world, source: source, engine: engine}
+	paths := indexNewPaths(false, indexRootNumber)
+	for n := shardCount - 1; 0 <= n; n -= 1 {
+		more.order = append(more.order, fmt.Sprintf("%s@", paths.allShard(uint32(n))))
+	}
+	world.source.stateLock.Lock()
+	world.source.fetches = nil
+	world.source.stateLock.Unlock()
+	return more
+}
+
+// The all shards read so far, in order, as path@.
+func (self *testEngineMoreWorld) fetchedShards() []string {
+	shards := []string{}
+	for _, fetched := range self.sync.source.fetched() {
+		path, _, _ := strings.Cut(fetched, "@")
+		if strings.Contains(path, "/a/") && !strings.HasSuffix(path, "/a/m") {
+			shards = append(shards, path+"@")
+		}
+	}
+	return shards
+}
+
+// The paths of hits, in their order.
+func testHitPathsInOrder(hits []SearchHit) []string {
+	paths := []string{}
+	for _, hit := range hits {
+		paths = append(paths, hit.Path)
+	}
+	return paths
+}
+
+// Every page of stream until it is done, with the last page's progress.
+func testPagesToTheEnd(t *testing.T, stream *SearchStream) ([]SearchHit, SearchProgress) {
+	t.Helper()
+	hits := []SearchHit{}
+	for range 1000 {
+		page, progress, done, err := stream.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hits = append(hits, page...)
+		if done {
+			return hits, progress
+		}
+	}
+	t.Fatal("a search never finished")
+	return nil, SearchProgress{}
+}
+
+// The three shards of six whose first document holds "lantern": the first, a middle and the last fetched.
+func testLanternText(n int, index int) string {
+	if index == 0 && (n == 5 || n == 2 || n == 0) {
+		return fmt.Sprintf("lantern of shard %d", n)
+	}
+	return fmt.Sprintf("garden of shard %d", n)
+}
+
+// QD-999 (§16.10's arrival row on delivery): a match in the first shard of a long download is given the moment its
+// shard lands, before the download reads another, and the rest come through the cursor's next pages as their shards
+// land, each hit once, in fetch order, every shard read once, youngest first, and the counts counting each hit once.
+func TestSearchEngineGivesAFirstShardHitBeforeTheDownloadEnds(t *testing.T) {
+	world := newTestEngineMoreWorld(t, 6, testLanternText)
+	session := evsTestId("session")
+	world.source.hold(1)
+	stream, token, err := world.engine.SearchIn(context.Background(), session, &SearchRequest{Text: "lantern", Scope: SearchAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, progress, done, err := stream.Next()
+	if err != nil || done || !slices.Equal(testHitPathsInOrder(first), []string{"old/5/0.md"}) {
+		t.Fatalf("the first page %v, done %t, %v", testHitPathsInOrder(first), done, err)
+	}
+	if fetched := world.fetchedShards(); !slices.Equal(fetched, world.order[:1]) {
+		t.Fatalf("the first shard's hit came after the download read %v", fetched)
+	}
+	if progress.FetchBytes <= 0 || progress.Counts.Confirmed+progress.Counts.Possible != 1 {
+		t.Fatalf("the first page's progress %+v", progress)
+	}
+	world.source.free()
+	resumed, err := world.engine.Resume(session, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rest, last := testPagesToTheEnd(t, resumed)
+	hits := testHitPathsInOrder(append(first, rest...))
+	if !slices.Equal(hits, []string{"old/5/0.md", "old/2/0.md", "old/0/0.md"}) {
+		t.Fatalf("the search gave %v, want each match once in fetch order", hits)
+	}
+	if fetched := world.fetchedShards(); !slices.Equal(fetched, world.order) {
+		t.Fatalf("the download read %v, want each shard once in %v", fetched, world.order)
+	}
+	if last.FetchBytes != 0 || last.Counts.Confirmed+last.Counts.Possible != 3 {
+		t.Fatalf("the last progress %+v", last)
+	}
+}
+
+// QD-999 with I-19 and D-MCP-20: the download goes on whatever the pages do, so a page answering at a hit stops
+// nothing a server could see: with no page asking, the window reads every shard left, and the next page gives every
+// hit they hold at once.
+func TestSearchEngineDownloadGoesOnWithoutAPage(t *testing.T) {
+	world := newTestEngineMoreWorld(t, 6, testLanternText)
+	world.source.hold(1)
+	stream, err := world.engine.Search(context.Background(), &SearchRequest{Text: "lantern", Scope: SearchAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	first, _, _, err := stream.Next()
+	if err != nil || !slices.Equal(testHitPathsInOrder(first), []string{"old/5/0.md"}) {
+		t.Fatalf("the first page %v, %v", testHitPathsInOrder(first), err)
+	}
+	engineStream := world.engine.openStreams()[0]
+	world.source.free()
+	for {
+		state, changed := engineStream.more.state()
+		if !state.running {
+			if state.ended != searchMoreEndFinished {
+				t.Fatalf("the window ended as %d", state.ended)
+			}
+			break
+		}
+		<-changed
+	}
+	if fetched := world.fetchedShards(); !slices.Equal(fetched, world.order) {
+		t.Fatalf("with no page asking the download read %v, want every shard %v", fetched, world.order)
+	}
+	page, progress, done, err := stream.Next()
+	if err != nil || !done || !slices.Equal(testHitPathsInOrder(page), []string{"old/2/0.md", "old/0/0.md"}) {
+		t.Fatalf("the next page %v, done %t, %v", testHitPathsInOrder(page), done, err)
+	}
+	if progress.Counts.Confirmed+progress.Counts.Possible != 3 {
+		t.Fatalf("the counts %+v", progress.Counts)
 	}
 }
 
