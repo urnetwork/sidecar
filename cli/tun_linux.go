@@ -31,7 +31,11 @@
 //	           that can only drop it (QD-808). They go on before the rule that reaches the table, follow each SetCarved,
 //	           and come off once nothing reaches the table's default route. Nothing is carved by the platform's
 //	           addresses (QD-800), and an address the local table or an on-link route reaches takes one harmlessly,
-//	           since the rules ahead of the table answer it first
+//	           since the rules ahead of the table answer it first. IPv6's carve takes an IPv6 throw beside IPv6's
+//	           default route for each address the host reaches only by its IPv6 default route, an off-link IPv6
+//	           resolver above all (QD-971): none for one the main or the local table reaches, for a link-local one, or
+//	           on a host with no IPv6 default route, which each SetCarved reads again; they go on and come off with
+//	           IPv6's half as IPv4's do with IPv4's
 //
 // Only what this interface added is removed: routes and rules by ur's protocol, routes by the device or as throws too,
 // addresses by the device. Close takes the exits and their throws off, removes the routes and addresses, reverts the
@@ -719,15 +723,17 @@ func urTunLinuxRouteBody(index int, prefix netip.Prefix, table uint32, metric ui
 	return body
 }
 
-// The route message of a throw route for an IPv4 address's /32 in table, ur's, at metric, as `ip route add throw
-// <address>/32 table <table>` writes it: a lookup that reaches it leaves the table for the next rule's. It names no
-// device or gateway, which the kernel refuses on a throw. A delete matches only ur's throw at that /32, whatever its
-// scope.
+// The route message of a throw route for an address's whole prefix in table, an IPv4 /32 or an IPv6 /128 (QD-971),
+// ur's, at metric, as `ip route add throw <address>/32 table <table>` writes it: a lookup that reaches it leaves the
+// table for the next rule's. It names no device or gateway, which the kernel refuses on a throw. A delete matches only
+// ur's throw at that prefix, whatever its scope, which IPv6's routes do not have.
 func urTunLinuxThrowBody(address netip.Addr, table uint32, metric uint32, add bool) []byte {
-	octets := address.As4()
 	body := make([]byte, unix.SizeofRtMsg)
 	body[0] = unix.AF_INET
-	body[1] = 32
+	if address.Is6() {
+		body[0] = unix.AF_INET6
+	}
+	body[1] = uint8(address.BitLen())
 	// the header's one byte names a table under 256; RTA_TABLE names any, and wins
 	if table < 256 {
 		body[4] = uint8(table)
@@ -739,17 +745,66 @@ func urTunLinuxThrowBody(address netip.Addr, table uint32, metric uint32, add bo
 		body[6] = unix.RT_SCOPE_NOWHERE
 	}
 	body[7] = unix.RTN_THROW
-	body = append(body, urNetlinkAttribute(unix.RTA_DST, octets[:])...)
+	body = append(body, urNetlinkAttribute(unix.RTA_DST, address.AsSlice())...)
 	body = append(body, urNetlinkAttribute(unix.RTA_PRIORITY, urNetlinkUint32(metric))...)
 	body = append(body, urNetlinkAttribute(unix.RTA_TABLE, urNetlinkUint32(table))...)
 	return body
 }
 
-// Whether route is a throw of ur's in the exits table for a carved address: this end's, or a past end's the kernel kept,
-// since a throw names no device and outlives the one whose end deleted the table's default route.
+// Whether route is a throw of ur's in the exits table for a carved address, of either family: this end's, or a past
+// end's the kernel kept, since a throw names no device and outlives the one whose end deleted the table's default
+// route.
 func urTunLinuxOwnThrow(route urTunLinuxRoute, table uint32) bool {
-	return route.table == table && route.family == unix.AF_INET && route.protocol == urTunRouteProtocol &&
-		route.routeType == unix.RTN_THROW && route.dst.Bits() == 32
+	if route.table != table || route.protocol != urTunRouteProtocol || route.routeType != unix.RTN_THROW {
+		return false
+	}
+	switch route.family {
+	case unix.AF_INET:
+		return route.dst.Addr().Is4() && route.dst.Bits() == 32
+	case unix.AF_INET6:
+		return route.dst.Addr().Is6() && route.dst.Bits() == 128
+	}
+	return false
+}
+
+// The carved IPv6 addresses that take a throw in the exits table over routes, the host's (QD-971): each of carvedAddrs
+// the host reaches only by its default route, where the main table has an IPv6 default route through an interface
+// other than index's, the tun's. An address a route of the main table more specific than its default holds, or one of
+// the local table's, which the rules ahead of the exits table answer first, takes none, a resolver on the host's own
+// prefix among them; nor does one no route takes off the host (urTunCarvedIpv6Leaves), a link-local gateway's among
+// them. With no such default route, none: the host reaches none of them, and a throw would only trade the bridge's
+// rejection for the main table's unreachable.
+func urTunLinuxIpv6Throws(carvedAddrs []netip.Addr, routes []urTunLinuxRoute, index int) []netip.Addr {
+	throwAddrs := []netip.Addr{}
+	defaultRoute := slices.ContainsFunc(routes, func(route urTunLinuxRoute) bool {
+		return route.family == unix.AF_INET6 && route.table == unix.RT_TABLE_MAIN && route.routeType == unix.RTN_UNICAST &&
+			route.dst.Bits() == 0 && slices.ContainsFunc(route.oifs, func(oif int) bool { return oif != 0 && oif != index })
+	})
+	if !defaultRoute {
+		return throwAddrs
+	}
+	for _, address := range carvedAddrs {
+		if !urTunCarvedIpv6Leaves(address) || slices.Contains(throwAddrs, address) {
+			continue
+		}
+		reached := slices.ContainsFunc(routes, func(route urTunLinuxRoute) bool {
+			if route.family != unix.AF_INET6 || !route.dst.Contains(address) {
+				return false
+			}
+			switch route.table {
+			case unix.RT_TABLE_LOCAL:
+				return true
+			case unix.RT_TABLE_MAIN:
+				// a throw of the main table's own passes the lookup on rather than answering it
+				return 0 < route.dst.Bits() && route.routeType != unix.RTN_THROW
+			}
+			return false
+		})
+		if !reached {
+			throwAddrs = append(throwAddrs, address)
+		}
+	}
+	return throwAddrs
 }
 
 // One open device and what this interface set on it. Its configuration calls are serialized.
@@ -774,10 +829,12 @@ type urTunLinuxInterface struct {
 	exitsIpv6Route        bool
 	exitsIpv6SuppressRule bool
 	exitsIpv6MarkRule     bool
-	// the IPv4 addresses the bridge carves, sorted (SetCarved), and those a throw route in the exits table holds now
-	carvedAddrs []netip.Addr
-	throwAddrs  []netip.Addr
-	closed      bool
+	// the addresses the bridge carves, IPv4's and IPv6's, each sorted (SetCarved), and those of either family a throw
+	// route in the exits table holds now
+	carvedAddrs     []netip.Addr
+	carvedIpv6Addrs []netip.Addr
+	throwAddrs      []netip.Addr
+	closed          bool
 }
 
 var _ urTunCarvedInterface = (*urTunLinuxInterface)(nil)
@@ -896,9 +953,10 @@ func (self *urTunLinuxInterface) SetResolver(resolver netip.Addr, zones []string
 }
 
 // Under exits, marks the daemon's own connect sockets, then puts the default route through the device in the exits table,
-// a throw beside it for each carved address SetCarved last gave, and wg-quick's two rules ahead of the main table's (the
-// file's comment), then IPv6's default route and rules the same way (QD-881), and has connect's transports dial again
-// once a rule that sends traffic to the tun first stands, so no socket made before the mark stays in the tun's way. It
+// a throw beside it for each carved IPv4 address SetCarved last gave, and wg-quick's two rules ahead of the main table's
+// (the file's comment), then IPv6's default route, a throw for each carved IPv6 address the host reaches only by its
+// IPv6 default route (QD-971), and IPv6's rules the same way (QD-881), and has connect's transports dial again once a
+// rule that sends traffic to the tun first stands, so no socket made before the mark stays in the tun's way. It
 // refuses, and leaves nothing on, where another program holds the table or the mark, a strict reverse path filter would
 // drop the daemon's replies, or the main table routes IPv6 off the host and IPv6's half will not go on; a throw that
 // will not go on refuses nothing, and is SetCarved's to try again. Off exits, takes them off. Answers whether a default
@@ -930,7 +988,7 @@ func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
 		}
 		// the mark has stood since the first rule went on, so a rule that joins it later needs no new dial
 		marked := self.exitsMarkRule || self.exitsIpv6MarkRule
-		if err := self.setExitsWithLock(host.ipv6Routed); err != nil {
+		if err := self.setExitsWithLock(host); err != nil {
 			// nothing of a partial set stays on behind a refusal
 			return false, false, errors.Join(err, self.clearExitsWithLock())
 		}
@@ -944,12 +1002,12 @@ func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
 }
 
 // Puts on what the exits need that is not on yet: the mark first, so every socket connect makes from here keeps
-// today's route, then the default route in the exits table and a throw beside it for each carved address, the rule that
-// keeps the main table's other routes ahead of it, and last the rule that sends the rest to it; then IPv6's half
-// (setIpv6ExitsWithLock), whose refusal refuses the whole where ipv6Routed. A throw that will not go on refuses nothing:
-// its address meets the table's default route, and the tun drops it, until the SetCarved that follows each sync tries
-// it again and answers why.
-func (self *urTunLinuxInterface) setExitsWithLock(ipv6Routed bool) error {
+// today's route, then the default route in the exits table and a throw beside it for each carved IPv4 address, the
+// rule that keeps the main table's other routes ahead of it, and last the rule that sends the rest to it; then IPv6's
+// half (setIpv6ExitsWithLock) over host's routes, whose refusal refuses the whole where host routes IPv6 off itself. A
+// throw that will not go on refuses nothing: its address meets the table's default route, and the tun drops or
+// rejects it, until the SetCarved that follows each sync tries it again and answers why.
+func (self *urTunLinuxInterface) setExitsWithLock(host *urTunLinuxExitsHost) error {
 	if !self.exitsMark {
 		self.system.setEgressMark(self.system.settings.ExitsMark)
 		self.exitsMark = true
@@ -961,7 +1019,7 @@ func (self *urTunLinuxInterface) setExitsWithLock(ipv6Routed bool) error {
 		self.exitsRoute = true
 	}
 	// before the rule that reaches the table, so no lookup of a carved address meets its default route
-	_ = self.setThrowsWithLock(self.carvedAddrs)
+	_ = self.setThrowsWithLock(true, self.carvedAddrs)
 	if !self.exitsSuppressRule {
 		if err := self.requestExitsRuleWithLock(unix.AF_INET, true, true); err != nil {
 			return fmt.Errorf("the rule that keeps the main table's routes ahead did not go on (%v)", err)
@@ -974,18 +1032,20 @@ func (self *urTunLinuxInterface) setExitsWithLock(ipv6Routed bool) error {
 		}
 		self.exitsMarkRule = true
 	}
-	return self.setIpv6ExitsWithLock(ipv6Routed)
+	return self.setIpv6ExitsWithLock(host)
 }
 
 // Puts on what of IPv6's half of the exits is not on yet, in IPv4's order (QD-881): its default route in the exits
-// table, then its rule that keeps the main table's other routes ahead, then its rule that sends the rest to the table.
-// The host's IPv6 then reaches the tun, where the bridge drops it, and the daemon's marked IPv6 sockets keep today's
-// route. Where a part will not go on and ipv6Routed, the main table routing IPv6 off the host by a default route, it
-// refuses, since the host's IPv6 would leave outside the exits. Where the main table routes none, no IPv6 leaves the
-// host to begin with: what of the half went on comes off, IPv4's stands alone, and the next SetExits tries again.
-func (self *urTunLinuxInterface) setIpv6ExitsWithLock(ipv6Routed bool) error {
+// table, a throw beside it for each carved IPv6 address the host reaches only by its IPv6 default route over host's
+// routes (urTunLinuxIpv6Throws; QD-971), then its rule that keeps the main table's other routes ahead, then its rule
+// that sends the rest to the table. The host's IPv6 then reaches the tun, where the bridge rejects it, and the daemon's
+// marked IPv6 sockets keep today's route. Where a part will not go on and host routes IPv6 off itself by a default
+// route, it refuses, since the host's IPv6 would leave outside the exits. Where the main table routes none, no IPv6
+// leaves the host to begin with: what of the half went on comes off, IPv4's stands alone, and the next SetExits tries
+// again.
+func (self *urTunLinuxInterface) setIpv6ExitsWithLock(host *urTunLinuxExitsHost) error {
 	refused := func(what string, err error) error {
-		if ipv6Routed {
+		if host.ipv6Routed {
 			return fmt.Errorf("%s did not go on, and the host's IPv6 would leave outside the exits (%v)", what, err)
 		}
 		// what would not come off stays this interface's, which the next clear tries again
@@ -998,6 +1058,8 @@ func (self *urTunLinuxInterface) setIpv6ExitsWithLock(ipv6Routed bool) error {
 		}
 		self.exitsIpv6Route = true
 	}
+	// before the rule that reaches the table, as IPv4's
+	_ = self.setThrowsWithLock(false, urTunLinuxIpv6Throws(self.carvedIpv6Addrs, host.routes, self.index))
 	if !self.exitsIpv6SuppressRule {
 		if err := self.requestExitsRuleWithLock(unix.AF_INET6, true, true); err != nil {
 			return refused("IPv6's rule that keeps the main table's routes ahead", err)
@@ -1017,8 +1079,8 @@ func (self *urTunLinuxInterface) setIpv6ExitsWithLock(ipv6Routed bool) error {
 // would not come off, so a later call tries it again; then IPv6's half the same way (clearIpv6ExitsWithLock); and the
 // mark last, once neither family's rule that sends traffic to the tun stands. While such a rule stays, the main table's
 // rule ahead of it stays too, and its default route goes anyway, so a stuck rule finds an empty table and leaves the
-// rest to the main table. The carved addresses' throws go once IPv4's rule or default route has: until then a lookup of
-// one still needs its throw.
+// rest to the main table. The carved IPv4 addresses' throws go once IPv4's rule or default route has: until then a
+// lookup of one still needs its throw. IPv6's go the same way by IPv6's.
 func (self *urTunLinuxInterface) clearExitsWithLock() error {
 	var clearErr error
 	if self.exitsMarkRule {
@@ -1036,7 +1098,7 @@ func (self *urTunLinuxInterface) clearExitsWithLock() error {
 		}
 	}
 	if !self.exitsMarkRule || !self.exitsRoute {
-		clearErr = errors.Join(clearErr, self.setThrowsWithLock(nil))
+		clearErr = errors.Join(clearErr, self.setThrowsWithLock(true, nil))
 	}
 	if self.exitsSuppressRule && !self.exitsMarkRule {
 		if err := self.requestExitsRuleWithLock(unix.AF_INET, true, false); err != nil {
@@ -1054,8 +1116,8 @@ func (self *urTunLinuxInterface) clearExitsWithLock() error {
 }
 
 // Takes IPv6's half of the exits off as clearExitsWithLock takes IPv4's: its rule that sends traffic to the tun first,
-// then its default route, then, once that rule is off, its rule that keeps the main table's routes ahead. The mark is
-// clearExitsWithLock's.
+// then its default route, then the carved IPv6 addresses' throws once that rule or that route is off (QD-971), then,
+// once that rule is off, its rule that keeps the main table's routes ahead. The mark is clearExitsWithLock's.
 func (self *urTunLinuxInterface) clearIpv6ExitsWithLock() error {
 	var clearErr error
 	if self.exitsIpv6MarkRule {
@@ -1071,6 +1133,9 @@ func (self *urTunLinuxInterface) clearIpv6ExitsWithLock() error {
 		} else {
 			self.exitsIpv6Route = false
 		}
+	}
+	if !self.exitsIpv6MarkRule || !self.exitsIpv6Route {
+		clearErr = errors.Join(clearErr, self.setThrowsWithLock(false, nil))
 	}
 	if self.exitsIpv6SuppressRule && !self.exitsIpv6MarkRule {
 		if err := self.requestExitsRuleWithLock(unix.AF_INET6, true, false); err != nil {
@@ -1124,43 +1189,54 @@ func (self *urTunLinuxInterface) requestExitsRuleWithLock(family int, suppress b
 	return nil
 }
 
-// Sets the addresses the bridge carves (§17.4), the IPv4 ones counting, since the throws are IPv4's (QD-808): the
-// table's IPv6 side holds none, and the host's IPv6 to a carved address goes nowhere with the rest of its IPv6 (QD-881).
-// While IPv4's rule that reaches the exits table and its default route are both on, the throws follow at once: one for
-// each address that holds none, and those of addresses no longer carved off. Otherwise the list waits for
-// SetExits(true), and a throw a clear left on is tried off again. Answers what would not go on or come off, which the
-// next call tries again.
+// Sets the addresses the bridge carves (§17.4), of both families (QD-808, QD-971). While IPv4's rule that reaches the
+// exits table and its default route are both on, IPv4's throws follow at once: one for each carved IPv4 address that
+// holds none, and those of addresses no longer carved off. While IPv6's are both on, IPv6's follow the same way over
+// the host's IPv6 routes as they read now (urTunLinuxIpv6Throws): the throw of an address a route of the host's own has
+// come to reach comes off, as every one does where the IPv6 default route has gone, and one goes on for an address no
+// such route reaches any more. A family whose rule or route is off keeps no throw: its list waits for SetExits(true),
+// and a throw a clear left on is tried off again. Answers what would not go on or come off, which the next call tries
+// again; routes that do not read leave IPv6's throws as they are for the next call.
 func (self *urTunLinuxInterface) SetCarved(addresses []netip.Addr) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.closed {
 		return errUrTunClosed
 	}
-	carvedAddrs := []netip.Addr{}
-	for _, address := range addresses {
-		if address = address.Unmap(); address.Is4() && !slices.Contains(carvedAddrs, address) {
-			carvedAddrs = append(carvedAddrs, address)
-		}
-	}
-	slices.SortFunc(carvedAddrs, netip.Addr.Compare)
-	self.carvedAddrs = carvedAddrs
+	self.carvedAddrs = urTunCarvedAddrs(addresses, true)
+	self.carvedIpv6Addrs = urTunCarvedAddrs(addresses, false)
+	var setErr error
 	if self.exitsMarkRule && self.exitsRoute {
-		return self.setThrowsWithLock(carvedAddrs)
+		setErr = self.setThrowsWithLock(true, self.carvedAddrs)
+	} else {
+		setErr = self.setThrowsWithLock(true, nil)
 	}
-	return self.setThrowsWithLock(nil)
+	if !self.exitsIpv6MarkRule || !self.exitsIpv6Route {
+		return errors.Join(setErr, self.setThrowsWithLock(false, nil))
+	}
+	ipv6Throws := slices.ContainsFunc(self.throwAddrs, func(held netip.Addr) bool { return held.Is6() })
+	if !ipv6Throws && !slices.ContainsFunc(self.carvedIpv6Addrs, urTunCarvedIpv6Leaves) {
+		return setErr
+	}
+	routes, err := self.system.routes(unix.AF_INET6)
+	if err != nil {
+		return errors.Join(setErr, fmt.Errorf("the routes did not read (%v)", err))
+	}
+	return errors.Join(setErr, self.setThrowsWithLock(false, urTunLinuxIpv6Throws(self.carvedIpv6Addrs, routes, self.index)))
 }
 
-// Takes off the throw of each address it put one on for that wantedAddrs no longer holds, then puts one on for each of
-// wantedAddrs that holds none. One already there is taken as on, a past end's of ur's that the table kept; one already
-// gone, as off. What would not go on or come off is counted in the answer, and kept as it is for the next call. No
-// address reaches the answer (I-13).
-func (self *urTunLinuxInterface) setThrowsWithLock(wantedAddrs []netip.Addr) error {
+// Takes off the throw of each address of a family, IPv4's where ipv4 and IPv6's otherwise, that it put one on for and
+// wantedAddrs, of that family, no longer holds, then puts one on for each of wantedAddrs that holds none; the other
+// family's throws stay as they are. One already there is taken as on, a past end's of ur's that the table kept; one
+// already gone, as off. What would not go on or come off is counted in the answer, and kept as it is for the next call.
+// No address reaches the answer (I-13).
+func (self *urTunLinuxInterface) setThrowsWithLock(ipv4 bool, wantedAddrs []netip.Addr) error {
 	settings := self.system.settings
 	removeCount := 0
 	var removeErr error
 	keptAddrs := []netip.Addr{}
 	for _, held := range self.throwAddrs {
-		if slices.Contains(wantedAddrs, held) {
+		if held.Is4() != ipv4 || slices.Contains(wantedAddrs, held) {
 			keptAddrs = append(keptAddrs, held)
 			continue
 		}
@@ -1205,26 +1281,28 @@ func (self *urTunLinuxInterface) setThrowsWithLock(wantedAddrs []netip.Addr) err
 
 // What the host holds that the exits go on beside, as exitsRefusal reads it.
 type urTunLinuxExitsHost struct {
-	// the carved addresses whose throw of ur's the exits table already holds, a past end's among them
+	// the carved addresses of either family whose throw of ur's the exits table already holds, a past end's among them
 	throwAddrs []netip.Addr
 	// whether the main table routes IPv6 off the host by a default route through another interface, so that IPv6's
 	// half of the exits must go on, or the host's IPv6 would leave outside them (QD-881)
 	ipv6Routed bool
+	// every route of both families, which IPv6's throws are chosen over (urTunLinuxIpv6Throws)
+	routes []urTunLinuxRoute
 }
 
 // Why the exits' default route may not go on now, nil when it may: another program's route in the exits table, or rule
 // of either family on the exits mark or table, which ur tun's would mix with; or a strict reverse path filter on an
 // interface the main table's IPv4 default route leaves by, which would drop the daemon's own replies there, since a
 // reply arrives unmarked and the filter's lookup of its way back finds the tun. A setting that does not read refuses
-// too. Where it may, answers the addresses whose throw of ur's the table already holds, a past end's among them, and
-// whether the host routes IPv6 off itself.
+// too. Where it may, answers the addresses whose throw of ur's the table already holds, of either family, a past end's
+// among them, whether the host routes IPv6 off itself, and the routes it read.
 func (self *urTunLinuxSystem) exitsRefusal(index int) (*urTunLinuxExitsHost, error) {
 	settings := self.settings
 	routes, err := self.routes(unix.AF_UNSPEC)
 	if err != nil {
 		return nil, fmt.Errorf("the routes did not read (%v)", err)
 	}
-	host := &urTunLinuxExitsHost{throwAddrs: []netip.Addr{}}
+	host := &urTunLinuxExitsHost{throwAddrs: []netip.Addr{}, routes: routes}
 	defaultIndexes := []int{}
 	for _, route := range routes {
 		if urTunLinuxOwnThrow(route, settings.ExitsTable) {
