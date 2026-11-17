@@ -11,9 +11,9 @@ import (
 )
 
 // A pairing's move from generation 1 to 2, held where the run loop has read the keychain's new identity and is about
-// to end generation 1's client: the keychain names generation 2 and holds bind's re-mint, and Status still names
+// to end generation 1's client: the keychain names generation 2 and holds the child's token, and Status still names
 // generation 1, whose client is the one up, never Online at a generation that has not started. Every state the
-// sidecar then reports at generation 2 finds the re-mint in the api client already (QD-797).
+// sidecar then reports at generation 2 finds generation 2's token in the api client already.
 func TestPairStatusNamesTheGenerationThatRuns(t *testing.T) {
 	world := newPairTestWorld(t)
 	first := world.sidecar.currentIdentity()
