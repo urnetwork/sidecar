@@ -6,8 +6,11 @@
 //	match     the commit's changes, or its covering prefixes when its list is not inline, against the repo's leases,
 //	          from a copy this process keeps until a GET of {evsl_<repo_id>}v after the commit shows a new value; a lease
 //	          on the commit's ref, or on every ref, in the ref's current path epoch matches when its prefix and a
-//	          changed path are on one branch of the tree; a PATH_EPOCH commit matches every lease holder of the ref,
-//	          whatever its epoch, which then re-creates its leases in the new epoch (§11.6's leases row)
+//	          changed path are on one branch of the tree; a lease on every ref with no prefix, the whole repo, names no
+//	          token, so its epoch carries no meaning and it matches a commit on any ref whatever that ref's epoch
+//	          (§11.10's epochs row; QD-953, owner decision 409), the expiry and reader skips still applying; a
+//	          PATH_EPOCH commit matches every lease holder of the ref, whatever its epoch, which then re-creates its
+//	          leases in the new epoch (§11.6's leases row)
 //	skip      holders the newest projection no longer lists as the repo's readers are skipped, and so is everyone
 //	          while that state is not loaded: a hint missed costs only latency
 //	hint      §6.8's PushHint per matching client: topic evs:<repo_id>, version the push sequence, kind EVS_HEAD_CHANGED
@@ -208,7 +211,10 @@ func (self *EvsHintNotifier) match(committed *EvsCommitted, leases []*EvsLease) 
 		if !now.Before(lease.ExpiresAt) || (!lease.EveryRef && lease.RefId != committed.RefId) || !readers[lease.SidecarId] {
 			continue
 		}
-		if pathEpochCommit || (lease.PathEpoch == epoch && evsLeaseMatches(lease.Prefix, changed)) {
+		// the whole repo names no token, so it matches in every epoch (QD-953); every other lease's tokens are its
+		// epoch's
+		wholeRepo := lease.EveryRef && len(lease.Prefix) == 0
+		if wholeRepo || pathEpochCommit || (lease.PathEpoch == epoch && evsLeaseMatches(lease.Prefix, changed)) {
 			clients[lease.ClientId] = true
 		}
 	}

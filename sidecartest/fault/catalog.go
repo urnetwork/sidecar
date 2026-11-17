@@ -29,9 +29,10 @@ import (
 //go:embed catalog.yml
 var catalogYaml []byte
 
-// §22.8's counts: FS-1 to FS-125 and FI-1 to FI-30, numbered without gaps.
+// §22.8's counts: FS-1 to FS-126 and FI-1 to FI-30, numbered without gaps. Each is a fact of the design's table,
+// as a format's version is, which only a change to §22.8 moves, so neither is a setting.
 const (
-	catalogRowCount       = 125
+	catalogRowCount       = 126
 	catalogInvariantCount = 30
 )
 

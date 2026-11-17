@@ -1,6 +1,7 @@
 // EVS1-M2-15's tests: the push sequence's script and FS-62's exact vectors, the subscription routes and their cap,
-// step 8's matching over a token tree with a holder the projection drops, the coalescing of hints to 10 a second a
-// repo, the sweep, and §22.4's CROSSSLOT lint over every evs script.
+// step 8's matching over a token tree with a holder the projection drops, a whole repo's lease matched in every path
+// epoch (QD-953), the coalescing of hints to 10 a second a repo, the sweep, and §22.4's CROSSSLOT lint over every evs
+// script.
 
 package evsservice
 
@@ -8,8 +9,10 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +23,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/sidecartest/crossslot"
 )
@@ -138,6 +142,44 @@ func (self *pushFixture) hints(clientId sidecar.Id) []*sidecar.ClientHint {
 	return hints
 }
 
+// One POST /evs/v1/subscriptions of body by sidecarId under a token of clientId's that reads the fixture's repo,
+// answering 200: a holder of its own, whose hints go to clientId alone.
+func (self *pushFixture) leaseAs(clientId sidecar.Id, sidecarId sidecar.Id, body *protocol.EvsSubscriptionRequest) {
+	self.t.Helper()
+	bodyBytes, err := proto.Marshal(body)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	connectSidecarId := connect.Id(sidecarId)
+	token := self.host.Authenticator.Issue(&sidecar.Principal{
+		NetworkId: connect.Id(self.check.networkId), ClientId: connect.Id(clientId), SidecarId: &connectSidecarId,
+		Audience: EvsAudience, Scopes: []string{repoScope(self.check.repoId, "r")},
+		IssuedAt: self.clock.Now(), ExpiresAt: self.clock.Now().Add(15 * time.Minute),
+	})
+	request := httptest.NewRequestWithContext(self.ctx, http.MethodPost, "/evs/v1/subscriptions", bytes.NewReader(bodyBytes))
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	self.engine.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		self.t.Fatalf("lease answered %d (%s)", recorder.Code, refusalOf(self.t, recorder).GetCode())
+	}
+}
+
+// Whether clientId was hinted of refId's commit at version: a hint on the fixture's repo whose delta names both.
+func (self *pushFixture) hintedOf(clientId sidecar.Id, refId sidecar.Id, version uint64) bool {
+	self.t.Helper()
+	for _, hint := range self.hints(clientId) {
+		delta := &protocol.EvsHeadChanged{}
+		if err := proto.Unmarshal(hint.Body, delta); err != nil {
+			self.t.Fatal(err)
+		}
+		if sidecar.Id(delta.GetRefId()) == refId && delta.GetVersion() == version {
+			return true
+		}
+	}
+	return false
+}
+
 // §11.10's match on a token tree: a lease on a prefix gets the hint of a commit below it or above it, not one on
 // another branch; a whole-ref lease every one; the hint's version is the push sequence and its delta the commit's
 // EvsHeadChanged.
@@ -220,6 +262,121 @@ func TestSubscriptionsSkipAHolderTheProjectionDrops(t *testing.T) {
 	if clients := notifier.match(committed, leases); len(clients) != 0 {
 		t.Fatalf("a dropped holder matched: %v", clients)
 	}
+}
+
+// §11.10's epochs row (QD-953, owner decision 409) end to end, through the lease route and step 8: a lease on every
+// ref with no prefix, the whole repo, names no token, so it is hinted for a commit on any ref whatever that ref's path
+// epoch, while every other lease keeps the epoch rule. The fixture's ref, standing for main, crosses a batched removal
+// and moves to epoch 2 by a PATH_EPOCH, and an idle ref created before the removal stands in epoch 1 when it next
+// commits. Each lease is a client of its own, so each one's hints are its own: the whole repo in epoch 1; the whole
+// repo in epoch 2, leased after the cut-over as a client re-leases on main's PATH_EPOCH; every ref with a prefix in
+// epoch 1, its tokens the ones the epoch-2 commit creates under, so that only its epoch keeps it from matching; main
+// alone with no prefix in epoch 1; and the whole repo in epoch 1 for a holder the projection then stops listing as a
+// reader.
+func TestSubscriptionsHintAWholeRepoLeaseInEveryEpoch(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.allowSubscribers(1000)
+	repoId, mainRefId, idleRefId := fixture.check.repoId, fixture.check.refId, testId("idle ref")
+	wholeRepo := "whole repo in epoch 1"
+	wholeRepoLater := "whole repo in epoch 2"
+	prefixed := "every ref with a prefix in epoch 1"
+	oneRef := "main alone in epoch 1"
+	dropped := "dropped holder's whole repo in epoch 1"
+	// hashed, since testId keeps a label's first 16 bytes, which two of these share
+	clientIdOf := func(lease string) sidecar.Id {
+		return testIdFrom(lease + " client")
+	}
+	leaseBody := func(refId *sidecar.Id, epoch uint64, prefixes ...sidecar.EvsTokenPath) *protocol.EvsSubscriptionRequest {
+		body := &protocol.EvsSubscriptionRequest{RepoId: repoId.Bytes(), PathEpoch: epoch}
+		if refId != nil {
+			body.RefId = refId.Bytes()
+		}
+		for _, prefix := range prefixes {
+			body.Prefixes = append(body.Prefixes, prefix.Proto())
+		}
+		return body
+	}
+	// whether each lease's client was hinted of refId's commit at version
+	requireHinted := func(commit string, refId sidecar.Id, version uint64, leaseHinted map[string]bool) {
+		t.Helper()
+		for _, lease := range slices.Sorted(maps.Keys(leaseHinted)) {
+			if hinted := fixture.hintedOf(clientIdOf(lease), refId, version); hinted != leaseHinted[lease] {
+				t.Errorf("%s: lease %q hinted %t, not %t", commit, lease, hinted, leaseHinted[lease])
+			}
+		}
+	}
+
+	fixture.leaseAs(clientIdOf(wholeRepo), fixture.check.signerId, leaseBody(nil, 1))
+	fixture.leaseAs(clientIdOf(prefixed), fixture.check.signerId, leaseBody(nil, 1, epochPath(2, "d")))
+	fixture.leaseAs(clientIdOf(oneRef), fixture.check.signerId, leaseBody(&mainRefId, 1))
+	fixture.leaseAs(clientIdOf(dropped), fixture.check.otherId, leaseBody(nil, 1))
+
+	// epoch 1 on both refs. Each commit comes a second after the last, and its step 8, which runs off the reply path,
+	// finishes before the clock moves on, so each hint goes at once with its own commit's delta, never coalesced
+	first := fixture.plan()
+	fixture.create(first, "a")
+	fixture.requireCommitted(fixture.push(first), 1)
+	requireHinted("main in epoch 1", mainRefId, 1, map[string]bool{wholeRepo: true, prefixed: false, oneRef: true, dropped: true})
+	fixture.clock.Advance(time.Second)
+	fixture.requireCommitted(fixture.push(fixture.gitPlanOn(idleRefId, "b", 1)), 1)
+	requireHinted("the idle ref in epoch 1", idleRefId, 1, map[string]bool{wholeRepo: true, prefixed: false, oneRef: false, dropped: true})
+
+	// a batched removal, crossed on main by a write of a, and main's cut-over to epoch 2
+	fixture.clock.Advance(time.Second)
+	fixture.check.appendState(0, nil)
+	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
+	crossing := fixture.planAtTwo(commitment)
+	fixture.write(crossing, 1, "a")
+	fixture.requireCommitted(fixture.push(crossing), 2)
+	fixture.awaitStepEights()
+	fixture.clock.Advance(time.Second)
+	source := fixture.head()
+	parts, mapSha256 := fixture.mapPartsAt(2, source.Version(), source.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, "a")})
+	fixture.uploadParts(parts, mapSha256)
+	fixture.requireCommitted(fixture.push(fixture.pathEpochPlanAt(2, 2, commitment, mapSha256, source.Version(), source.Head.GetChain())), 3)
+	if epoch := EvsHeadCurrentEpoch(fixture.head().Head); epoch != 2 {
+		t.Fatalf("main stands in epoch %d after its PATH_EPOCH", epoch)
+	}
+	// a PATH_EPOCH reaches every lease holder of the ref, whatever its epoch or prefix
+	requireHinted("main's PATH_EPOCH", mainRefId, 3, map[string]bool{wholeRepo: true, prefixed: true, oneRef: true, dropped: true})
+
+	fixture.leaseAs(clientIdOf(wholeRepoLater), fixture.check.signerId, leaseBody(nil, 2))
+	// the projection's newest state no longer lists the dropped holder's sidecar as a reader of the repo, or a writer;
+	// nothing else changes, holders_shrunk_at included, so no due changes for the pushes below
+	rows := sidecartest.FakeGkmAuthRows(&protocol.AclRepo{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL})
+	sidecarRows, member := sidecartest.FakeGkmAuthMemberDevices(testId("check member"), fixture.check.signerId, fixture.check.otherId)
+	rows.Sidecars = sidecarRows
+	rows.Members = []*bridge.MemberRow{member}
+	fixture.check.auth = fixture.check.authLog.Append(&sidecartest.FakeGkmAuthFixture{
+		Rows: rows,
+		IdentityKeys: map[sidecar.Id][]byte{
+			fixture.check.signerId: fixture.check.signingKey.Public().(ed25519.PublicKey),
+			fixture.check.otherId:  fixture.check.otherKey.Public().(ed25519.PublicKey),
+		},
+		RepoReaders: map[sidecar.Id][]sidecar.Id{repoId: {fixture.check.signerId}},
+		RepoWriters: map[sidecar.Id][]sidecar.Id{repoId: {fixture.check.signerId}},
+	})
+
+	// epoch 2 on main: a creation under the prefixed lease's prefix by its tokens
+	fixture.clock.Advance(time.Second)
+	creation := fixture.planOnHead(2, commitment)
+	fixture.create(creation, "epoch 2", "d", "x")
+	fixture.requireCommitted(fixture.push(creation), 4)
+	requireHinted("main in epoch 2", mainRefId, 4, map[string]bool{
+		wholeRepo: true, wholeRepoLater: true, prefixed: false, oneRef: false, dropped: false,
+	})
+
+	// epoch 1 on the idle ref, which crosses the removal and records its due, standing in epoch 1 until a writer maps it
+	fixture.clock.Advance(time.Second)
+	idle := fixture.gitPlanOn(idleRefId, "c", 2)
+	idle.Generation, idle.GenerationCommitment, idle.Auth = 2, commitment, fixture.check.auth.Pin()
+	fixture.requireCommitted(fixture.push(idle), 2)
+	if pathEpoch := fixture.headOf(idleRefId).Head.GetPathEpoch(); pathEpoch.GetCurrent() != 1 || pathEpoch.GetDueGeneration() != 2 {
+		t.Fatalf("the idle ref's path epoch %v", pathEpoch)
+	}
+	requireHinted("the idle ref in epoch 1, main in epoch 2", idleRefId, 2, map[string]bool{
+		wholeRepo: true, wholeRepoLater: true, prefixed: false, oneRef: false, dropped: false,
+	})
 }
 
 // Gate views of one fixed state.
