@@ -880,11 +880,9 @@ admission   a page Worker or quick burner needs a consented device of its member
             and the quick burner also to sign its EvsShare; with self_admit off, an admin admits a page
             Worker, which stays parked in owner-bound repos until OwnerConfirm; a Worker enrolling after an
             eviction is a new sidecar_id, adding a config_admissions entry (§20.4); the device admitting it,
-            an admin's included, revokes that member's page Workers §10.9 removed as stale from every
-            group it is a leaf of that seated it, at least one, and the member's consented device, in its
-            admission or else at its OwnerConfirm or admission alarm, revokes those its groups show and
-            offers to revoke the others (§7.10's stale row; D-TEAM-29), so evictions pile up only as that
-            row bounds, and from 90% of the cap admins' devices list the rest to revoke (§7.10's cleanup)
+            an admin's included, and the member's consented device revoke the member's stale page Workers as
+            §7.10's stale row says (D-TEAM-29), so evictions pile up only as that row bounds, and from 90%
+            of the cap admins' devices list the rest to revoke (§7.10's cleanup)
 leaves      each page Worker is a read_only MLS leaf of each group it reads, within D-KEYS-2's 1,000 per
             group; in the config and directory groups, unless §7.9's rank makes it one of the 1,000
             leaf-entitled, it reads by wraps (owner decisions 144, 182); sign-out removes it, and an unused

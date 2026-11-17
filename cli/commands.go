@@ -9,9 +9,14 @@
 //
 // Nothing here writes a log to stdout, which an MCP relay owns: a command's output is for the person and its logs go
 // to stderr. Nothing here takes a secret from argv, the environment or stdin: a pass comes only from the terminal
-// (tty.go), and the credentials argv carries are two: `ur connect --token`, a single-use auth key spent by the
-// enrollment it starts, and `ur share get`'s link, whose fragment is a share's secret, as §9.9 spells the command
-// (question sock-m5-14-share-link-argv).
+// (tty.go). Two credentials are the exceptions. `ur connect --token` carries a single-use auth key in argv, spent by
+// the enrollment it starts. `ur share get <link> <out>` carries a share's link in argv, as §9.9 spells the command,
+// and the link's fragment is the share's 256-bit secret, which redeems until the share's uses are spent or it expires,
+// up to 30 days. That is the plain form's residual: while a get runs, another user of the host reads the link through
+// ps or /proc/<pid>/cmdline, and the shell keeps it in its history. `ur share get - <out>` takes the link from stdin
+// instead, one line, or from /dev/tty with echo off when stdin is a terminal, and so out of all three (owner decision
+// 336). A link only redeems a get and approves nothing, so taking it from stdin, which an agent driving ur could
+// fill, gives no one an authority a person's terminal gives.
 
 package main
 
@@ -103,6 +108,10 @@ type urSettings struct {
 	// How long ur daemon waits at its end for each Sidecar, and for the ingest, to close: 30 s, a generation's
 	// components joining and the ingest's last flush on a slow disk.
 	CloseTimeout time.Duration
+	// The longest line `ur share get -` takes as the link, from stdin or the terminal (cmd_share.go): 1 KiB, far past
+	// the longest link's 161 B (a 63-character label, share/, a 26-character token and a 64-character fragment), so a
+	// file piped in by mistake is not read whole. A longer line is refused; zero or less refuses every line.
+	ShareLinkByteCount int
 }
 
 // The defaults, a fresh value each call.
@@ -120,6 +129,7 @@ func defaultUrSettings() *urSettings {
 		RelayAnswerByteCount:       64 * 1024 * 1024,
 		RelayReconnectInterval:     1 * time.Second,
 		CloseTimeout:               30 * time.Second,
+		ShareLinkByteCount:         1024,
 	}
 }
 

@@ -352,7 +352,7 @@ Changes: §23.8; §22; §7.17; §9.15; §11.20; §17.16.
 
 Questions: `g0-density-rule-direction.md`.
 
-Not folded (2026-11-16): turning the design's accidental restatements into citations (the stored-bytes rule in §11.13 and §20.7, the Delegation key-drop triggers stated in about twelve places, and the like), an editorial pass across most sections that no item names line by line, due before M2's Gn-in. The rest is folded as owner decision 551: §23.8's clause, and the four Interfaces test lists (§7.17's, §9.15's, §11.20's and §17.16's), which §22 already held and which now cite it.
+Not folded (2026-11-17): the rest of the pass turning the design's accidental restatements into citations, due before M2's Gn-in. Its first two pieces are folded (design/source/README.md, "Validation after QD-274's citation pass"): every rule the pass found stated in three or more sections, the Delegation key drops and the stored-bytes rule among them, and 29 rules and risk rows a second section restated. What remains is about 600 words of short body passages that a second section restates (a field list's numbers in §11.14 and §16.8, I-20's vault contents in §16.11, a page Worker's DPoP refresh in §18.10, a mailbox's vault readers in §15.8 and the like) and some 400 words in risk rows that name a shared risk with each section's own mitigations; the passages kept on purpose (§22's test statements, D- items in their own sections, decided Q- records, Interfaces assumptions, phasing lists, alternatives rows) stay. The rest is folded as owner decision 551: §23.8's clause, and the four Interfaces test lists (§7.17's, §9.15's, §11.20's and §17.16's), which §22 already held and which now cite it.
 
 <a id="s0"></a>
 ## No section named
