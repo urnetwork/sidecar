@@ -1332,14 +1332,15 @@ FS-23  §10    a deposit-only principal, an agent depositing into a vault and, a
 FS-24  §10    an idle writer gets pending and wrap-pending on its per-client topic at an       gate SLO    T2+T3  M2-out
               unchanged epoch, after a Redis loss too, and a rotation without a commit raises
               gkm:<group_id>: work completes within the gate's target
-FS-25  §16    two callers barriered on uses = 1; kills after the reservation, after the        FI-2,7      T2+T3  M3-out
-              outbox commit and before completion; a retry through a new MCP session; a
-              gate's response lost after COMMIT; two api instances racing; uses = 2,
+FS-25  §16    two callers barriered on uses = 1; kills after the reservation, after the        FI-2,7      T2+T3  M3-out;
+              outbox commit and before completion; a retry through a new MCP session; a                           dns route
+              gate's response lost after COMMIT; two api instances racing; uses = 2,                              at M5-out
               cancellation and expiry on a fake clock; at M3-out on T3, a gate's lost
               response and the two racing api instances run on real Postgres through
               model.ConsumeApprovalUseInTx with a test effect in the gate's transaction
               (22.8's real rule), and the cancellation through the real POST /approval/cancel
-              with §7.4's allowlist on
+              with §7.4's allowlist on; at M5-out on T3 the same two legs run again through
+              the real POST /dns/records, its zone write the gated effect
 FS-26  §16    two runs and a hand edit interleaved, hooks firing around B's edits: restoring   FI-8        T2     M3-out
               A leaves B and the hand edit intact, or names the ambiguity; a hand edit of a
               path that A then edits in one scan interval, under each harness's edit hook:
@@ -1618,7 +1619,7 @@ FS-58  §11    a path changed in unfolded versions read, listed and CAS-checked,
               fold write held at a drive barrier past it, a fold that read the window's head
               writing over the marker only 150 ms past until_ms by its clock, and a push
               based before the removal is refused by 5f's base range (owner decision 148)
-FS-59  §11    a segment uploaded; a push checked 23 h 59 min later pauses before its head CAS  FI-6        T2+T3  M2-out
+FS-59  §11    a segment uploaded; a push checked 23 h 59 min later pauses before its head CAS  FI-1,6      T2+T3  M2-out
               on an idle ref; at 25 h GC deletes nothing; at 49 h evacuation fences the ref
               for the push's record and drops it; the push fails its CAS and answers 503
               unknown, and its retry gets 409 SEGMENT_GONE; GC then deletes the segment by a
@@ -2759,6 +2760,11 @@ FS-125 §4,6   C19's windows (owner decisions 176, 188) on a fake clock, with a 
               Hellos carried no bit 1 reports its bytes exactly. Sizes: every frame kind's
               counted bytes are at most §6.10's table, a HeadCheck at its list caps (four
               vetoes, four unverified pins with 8-hop paths) within two envelopes
+FS-126 §6     D-PROTO-10's P2P schedule (owner decision 296), with C3 on and                   I-3,FI-10,  T2+T3  M6-out
+              SidecarProtocolSettings.EnablePeerP2p set: a forged ControlId frame over P2P is  13a,
+              dropped; a same-network pair moves from relay to P2P and back under a live RPC   D-PROTO-8
+              and a live stream, its session key unchanged, Hello and HeadCheck holding
+              across each move; and bytes on P2P debit nothing (§20.6)
 ```
 
 Beyond the schedules:
